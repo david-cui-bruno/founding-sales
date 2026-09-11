@@ -232,6 +232,37 @@ export class AccountRepository implements AccountResearchStore {
       return projectAccountEvidence(account, claims, routes);
     });
   }
+  /** Company context only. A relationship never grants contact or send authority. */
+  readDraftCompanyDetail(personId: string, asOf: string): LocalCompanyDetail | null {
+    accountIdSchema.parse(personId); accountInstantSchema.parse(asOf);
+    return this.readSnapshot(() => {
+      const person = this.raw.prepare(`SELECT 1 FROM persons p WHERE p.id=?
+        AND p.deleted_at IS NULL AND p.opted_out=0
+        AND NOT EXISTS(SELECT 1 FROM opt_out_tombstones t WHERE t.person_id=p.id)`).get(personId);
+      if (!person) return null;
+      // Count all current identities before checking suppression or evidence. An
+      // unsafe second match must not turn ambiguity into apparent certainty.
+      const matches = this.raw.prepare(`SELECT DISTINCT account_id FROM pm_account_links
+        WHERE kind='person_role' AND person_id=? AND admitted_at<=? AND valid_from<=?
+        AND (valid_to IS NULL OR valid_to>?) ORDER BY account_id LIMIT 2`)
+        .all(personId, asOf, asOf, asOf) as { account_id: string }[];
+      if (matches.length !== 1) return null;
+      const accountId = matches[0]!.account_id;
+      if (this.raw.prepare('SELECT 1 FROM pm_account_suppression_tombstones WHERE account_id=? LIMIT 1').get(accountId)) return null;
+      const supported = this.raw.prepare(`SELECT 1 FROM pm_account_links l
+        WHERE l.account_id=? AND l.kind='person_role' AND l.person_id=?
+        AND l.admitted_at<=? AND l.valid_from<=? AND (l.valid_to IS NULL OR l.valid_to>?)
+        AND EXISTS(SELECT 1 FROM pm_account_link_evidence e
+          WHERE e.account_id=l.account_id AND e.link_id=l.id AND e.purpose='relationship')
+        AND NOT EXISTS(SELECT 1 FROM pm_account_link_evidence e
+          LEFT JOIN pm_account_sources s ON s.account_id=e.account_id AND s.id=e.source_id
+          WHERE e.account_id=l.account_id AND e.link_id=l.id AND e.purpose='relationship'
+          AND (s.id IS NULL OR s.permitted<>1 OR s.fetched_at>? OR s.admitted_at>?)) LIMIT 1`)
+        .get(accountId, personId, asOf, asOf, asOf, asOf, asOf);
+      if (!supported) return null;
+      return this.readLocalCompanyDetail(accountId, asOf);
+    });
+  }
   /** Complete selected evidence in one read snapshot, including a caller-owned transaction. */
   readLocalCompanyDetail(accountId: string, asOf: string): LocalCompanyDetail {
     accountIdSchema.parse(accountId); accountInstantSchema.parse(asOf);

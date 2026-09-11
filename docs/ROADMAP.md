@@ -12,11 +12,12 @@ A founder should arrive at a useful queue of calls, messages worth reviewing, an
 - Preserve local work, selected records, and in-progress edits across navigation and temporary readiness failures.
 - Create and reopen a company, run explicitly selected company research, inspect attributed source evidence, import a named person, and review the link to that saved identity.
 - Open the exact saved contact, edit and save an unsent email draft, and reopen its persisted contents. Send stays held when setup or exact draft authority is unavailable.
+- When a model is configured, the existing first-draft flow includes admitted company facts for one unambiguous current saved-person link. Conflicting claims, hypotheses, personal-role claims, and raw source excerpts are excluded. Source references travel in the model context, not a new persisted draft-citation record. Reopening an edited draft does not regenerate it.
 - Expose guarded Phone and Worker connection settings. Pairing is not worker activation, a phone configuration is not a completed call, and company evidence is not verified contact authority.
 - Edit local call capacity with revision checks. Unconfigured and zero are different values, and retained obligations are not silently discarded to satisfy a limit.
 - Separate saved draft continuations from saved reply history. Campaign versions are explicitly read-only capability previews, without a fake Approve or Activate action.
 
-The integrated first-use regression uses the real App, preload/IPC, domain, and an encrypted disposable database. Its research pages, OS services, and identities are fictional. It validates a saved manual draft, not live research quality, automated first-draft quality, email delivery, a process crash, or a packaged first-use journey.
+The integrated first-use regression uses the real App, preload/IPC, domain, and an encrypted disposable database. Its research pages, OS services, identities, and model responses are fictional. It validates both manual drafting and automatic generation through the real provider adapter, including company-context attribution and preservation of edited drafts. It does not establish live research/model quality, durable per-draft citations, email delivery, a process crash, or a packaged first-use journey.
 
 These new changes are not installed merely because their PRs merge. The installed app remains the previously approved cleanup build until a separate installation decision.
 
@@ -24,8 +25,8 @@ These new changes are not installed merely because their PRs merge. The installe
 
 | Priority | Outcome | Remaining work / honest limit |
 | --- | --- | --- |
-| 1 | Deliver a coherent candidate | Integrate the reviewed PRs, pass the combined source/browser/signed-package gate, then offer a backed-up installation and one real-company walkthrough. Do not rerun every historical checkpoint. |
-| 2 | Remove founder preparation homework | Connect the existing research/contact/draft capabilities into a genuinely useful first-draft flow. Measure whether the founder reaches a relevant editable draft without routine per-person investigation. The current explicit import/link/manual-draft path is a foundation, not that final experience. |
+| 1 | Deliver a coherent candidate | The initial ten PRs are merged, and their combined source/browser/signed-package gate passed. Installation and one real-company walkthrough still require a separate backed-up installation decision. Subsequent PRs need their own affected checks, not reruns of every historical checkpoint. |
+| 2 | Remove founder preparation homework | Saved company research now feeds the existing automatic draft. The explicit research/import/reviewed-link steps still require founder effort. Measure relevance with an approved real workflow before adding more automation. This is not yet an automatically prepared daily queue. |
 | 3 | Make small campaigns usable | Add one bounded campaign creation/review/enrollment path against the existing versioned backend. Until then, keep the campaign screen a truthful preview. No pretend approval, enrollment, or activation. |
 | 4 | Prove live operation, separately authorized | Configure and qualify the real worker, scoped mailbox/calendar access, phone handoff, delivery/reply stops, and meeting flow. Test a tiny explicitly approved cohort before expanding. Local pairing and synthetic tests do not establish these outcomes. |
 | 5 | Improve observed daily use | Fix friction, performance, and recovery issues seen in the actual walkthrough. Prefer measured user impact to additional generalized infrastructure. |

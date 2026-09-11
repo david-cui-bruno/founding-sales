@@ -2,6 +2,7 @@ import { assertLocalEmailAuthority } from '../delegation/executionRouter';
 import { randomUUID } from 'node:crypto';
 import type { AppDatabase } from '../db/database';
 import type { FounderSalesDomain } from '../domain/founderSalesDomain';
+import { AccountRepository } from '../domain/accounts/accountRepository';
 import { contactSnapshot } from '../communications/contactSnapshot';
 import { configureOutreachSchema,draftRevisionSchema,openDraftSchema,saveDraftSchema,sendDraftSchema,
   type EmailDraft,type LocalEmailAuthorityRead,type OutreachApi,type OutreachStatus,type SendDraftRequest } from '../../shared/contracts/outreachContract';
@@ -9,6 +10,7 @@ import type { EmailSendResult,OutreachProviders } from './providers/providerType
 import { EmailRepository,publicDraft,type EmailReservation } from './emailRepository';
 import { authorizeEmail,emailDomain,readEmailAction,recordEmailAcceptance } from './emailEvidence';
 import { EMAIL_PLAYBOOK } from './emailPlaybook';
+import { companyDraftFacts } from './companyDraftContext';
 
 export type EmailDatabaseGate = {
   withDatabase<T>(operation:(database:AppDatabase)=>T|Promise<T>):Promise<T>;
@@ -109,7 +111,13 @@ export function createEmailService(options:{databaseGate:EmailDatabaseGate;provi
         const detail=await gate.withDomain(domain=>domain.getLeadDetail({personId:draft.personId}));
         assertCurrent(startEpoch);
         if(detail.salesCycleId!==draft.salesCycleId)throw new Error('email_cycle_changed');
-        const facts=[...(detail.portfolio?.facts??[])];
+        const companyFacts=await gate.withDatabase(db=>{
+          assertCurrent(startEpoch);
+          const accounts=new AccountRepository({database:db,clock:{now},ids:{next:id}});
+          return companyDraftFacts(accounts.readDraftCompanyDetail(draft.personId,now()));
+        });
+        assertCurrent(startEpoch);
+        const facts=[...(detail.portfolio?.facts??[]),...companyFacts];
         // Local-only notes, raw activity summaries and transcripts are deliberately excluded.
         const result=await providers.generate({personName:detail.personName,organizationLabel:detail.organizationLabel,
           segment:detail.segment,stage:detail.stage,actionLabel:detail.nextAction?.label??null,facts:facts.slice(0,40),playbook:EMAIL_PLAYBOOK},controller.signal);
