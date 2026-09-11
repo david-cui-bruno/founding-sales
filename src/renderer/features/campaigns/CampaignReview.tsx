@@ -20,7 +20,8 @@ export function CampaignReview({
   );
   return (
     <section className="native-desk__campaign">
-      <p className="native-desk__eyebrow">Frozen version {version.version}</p>
+      <p className="native-desk__eyebrow">Saved campaign version {version.version} / capability preview</p>
+      <p>Read-only preview. Campaign creation, editing, approval, enrollment and activation are not available here.</p>
       <h2>{version.campaignId}</h2>
       <h3>Offer</h3>
       <p>{version.offer}</p>
@@ -28,7 +29,7 @@ export function CampaignReview({
       <h3>Audience</h3>
       <p className="native-desk__hold">
         Audience definition unavailable. Review the source audience and its hash
-        mapping before approval.
+        mapping in the source system. A hash is not an audience definition.
       </p>
       <h4>Stored cohort</h4>
       <ul>
@@ -75,11 +76,6 @@ export function CampaignReview({
       ) : (
         <p>No exact campaign-bound samples available.</p>
       )}
-      <div className="native-desk__actions">
-        <button className="native-desk__primary" disabled>
-          Approve campaign
-        </button>
-      </div>
       <p>
         {version.approvedAt
           ? `Frozen approval recorded: ${version.approvedAt}. This does not activate new work.`

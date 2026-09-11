@@ -324,7 +324,7 @@ test('P1: packaged company draft and reviewed intent survive real routes and Imp
 
     await navigateFounderRoute(page, 'Campaigns');
     await expect(page.getByTestId('native-desk')).toHaveAttribute('data-workflow-mode', 'meeting_first');
-    const nativeCampaigns = page.getByRole('heading', { name: /^Worker campaigns\s/u, level: 2 });
+    const nativeCampaigns = page.getByRole('heading', { name: /^Saved campaign versions\s/u, level: 2 });
     await expect(nativeCampaigns).toBeVisible();
     await expect(nativeCampaigns.locator('span')).toHaveText('Unavailable');
     await expect(page.getByText('Campaign scope is unavailable.', { exact: true })).toBeVisible();

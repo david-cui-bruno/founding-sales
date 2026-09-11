@@ -9,7 +9,7 @@ afterEach(cleanup);
 it.each([
   ['today', 'No conversations queued.'],
   ['accounts', 'Your account library starts here.'],
-  ['campaigns', 'No frozen campaigns to review.'],
+  ['campaigns', 'No saved campaign versions to preview.'],
 ] as const)('gives an empty %s surface a relevant welcome without asking for nonexistent work', async (surface, title) => {
   const f = nativeDeskFixture(dailyFixture({ workspaceId: null, accounts: [], calls: { accountIds: [], workloadConflict: false }, answers: [] }));
   render(<PresentationRoot><NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} surface={surface} onOpenLead={vi.fn()} /></PresentationRoot>);
@@ -36,7 +36,7 @@ it('labels the queue and renders small decorative lane icons with real count bad
   render(<PresentationRoot><NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} /></PresentationRoot>);
   const root = await screen.findByTestId('native-desk');
   expect(screen.getByRole('heading', { name: 'Your next conversations' })).toBeTruthy();
-  const approvals = screen.getByRole('heading', { name: 'Needs your approval 2' });
+  const approvals = screen.getByRole('heading', { name: 'Saved draft continuations 2' });
   expect(approvals.querySelector('.native-desk__count')?.textContent).toBe('2');
   for (const lane of root.querySelectorAll('.native-desk__lane')) {
     expect(lane.querySelector('h2 svg')?.getAttribute('width')).toBe('14');

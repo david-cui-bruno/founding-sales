@@ -161,7 +161,7 @@ describe('Native Desk actual route', () => {
       />,
     );
     await screen.findByText('Legacy today');
-    expect(screen.queryByText('Needs your approval')).toBeNull();
+    expect(screen.queryByText('Saved draft continuations')).toBeNull();
     view.unmount();
     f.set(dailyFixture({ workflowMode: 'unknown' }));
     render(
@@ -183,7 +183,7 @@ describe('Native Desk actual route', () => {
     expect(screen.getByText('12 managed buildings')).toBeTruthy();
     expect(screen.getByText(/Hypothesis: Unconfirmed workflow/)).toBeTruthy();
     expect(screen.getByText(/Call handoff unavailable/)).toBeTruthy();
-    expect(screen.getByRole('heading', { name: 'Needs your approval 0' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Saved draft continuations 0' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Upcoming meetings 0' })).toBeTruthy();
   });
 });

@@ -207,9 +207,9 @@ for (const size of [0, 1] as const) for (const mode of ['known', 'partial', 'rea
     expect(screen.getByRole('heading', { name: /^Calls/ }).querySelector('.native-desk__count')?.textContent).toBe(expected);
     expect(screen.getByRole('heading', { name: /^Local commitments/ }).querySelector('.native-desk__count')?.textContent).toBe('0+ · partial');
     expect(screen.queryAllByRole('button', { name: /^Call ·/ })).toHaveLength(count);
-    for (const [surface, label] of [['accounts', 'Worker accounts'], ['campaigns', 'Worker campaigns']] as const) {
+    for (const [surface, label] of [['accounts', 'Worker accounts'], ['campaigns', 'Saved campaign versions']] as const) {
       view.rerender(<NativeDesk onOpenImport={(): void => undefined} firstUse={f.firstUse} {...props} surface={surface} />);
-      const heading = screen.getByRole('heading', { name: new RegExp(`^${label}`) });
+      const heading = screen.getByRole('heading', { name: new RegExp(`^${label}\\s`) });
       expect(heading.querySelector('span')?.textContent).toBe(expected);
       expect(within(heading.closest('section')!).queryAllByRole('button')).toHaveLength(count);
       if (surface === 'accounts') expect(screen.getAllByRole('button', { name: /^Local account ·/ })).toHaveLength(2);

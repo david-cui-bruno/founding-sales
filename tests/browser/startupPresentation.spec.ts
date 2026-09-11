@@ -215,7 +215,7 @@ for (const width of [1440, 1050]) for (const theme of ['light', 'dark'] as const
     await assertRail(page, width, theme);
     const headings = await page.locator('.native-desk__lane h2').evaluateAll(elements => elements.map(element => ({ text: element.textContent, bottom: element.getBoundingClientRect().bottom })));
     expect(headings).toHaveLength(4);
-    await expect(page.locator('.native-desk__lane h2 .native-desk__lane-label')).toHaveText(['Local commitments', 'Calls', 'Needs your approval', 'Upcoming meetings']);
+    await expect(page.locator('.native-desk__lane h2 .native-desk__lane-label')).toHaveText(['Local commitments', 'Calls', 'Saved draft continuations', 'Upcoming meetings']);
     for (const heading of headings) expect(heading.bottom, heading.text ?? '').toBeLessThan(width === 1440 ? 900 : 700);
     await checkpoint(page, info, '10-ready-native-a');
     await page.evaluate(() => window.startupPresentation.setLocalMode('legacy'));

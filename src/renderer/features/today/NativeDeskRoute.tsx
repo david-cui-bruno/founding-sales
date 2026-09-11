@@ -1,3 +1,4 @@
+import { partitionFirstUseAnswers } from './firstUseCapabilities';
 import { openSettingsSection } from '../../foundation/settingsNavigation';
 import type { FirstUseContinuation } from './localCompanyContinuation';
 import { useOverlayLayers } from '../../app/overlayLayers';
@@ -223,7 +224,7 @@ export function NativeDeskRoute({
   const refresh = () => { local.refresh(); load(); };
   const localOnly = surface === 'accounts'
     ? <LocalOnlyAccountLibrary api={api.localWorkspace} contactApi={api} onOpenImport={onOpenImport} onOpenLead={onOpenLead} firstUse={firstUse} intake={intake} selectionRequest={intakeRequest} onSelectionHandled={onIntakeSelectionHandled} read={local.read.overview} onSelectionChange={key => viewSelection(api.daily).set(JSON.stringify([snapshot?.workspaceId ?? null, surface]), key)} />
-    : surface === 'today' ? <LocalOnlyCalls read={local.read.retained} onOpenLead={onOpenLead} initialSelected={viewSelection(api.daily).get(JSON.stringify([snapshot?.workspaceId ?? null, surface]))} onSelectionChange={key => viewSelection(api.daily).set(JSON.stringify([snapshot?.workspaceId ?? null, surface]), key)} /> : <p>Campaign scope unavailable. No worker actions are enabled.</p>;
+    : surface === 'today' ? <LocalOnlyCalls read={local.read.retained} onOpenLead={onOpenLead} initialSelected={viewSelection(api.daily).get(JSON.stringify([snapshot?.workspaceId ?? null, surface]))} onSelectionChange={key => viewSelection(api.daily).set(JSON.stringify([snapshot?.workspaceId ?? null, surface]), key)} /> : <p>Campaign scope unavailable. This is a read-only capability preview. Creation, editing, enrollment and activation are not available here.</p>;
   if (!snapshot)
     return (
       <section className="native-desk native-desk--pending" data-presentation="native-a">
@@ -566,12 +567,14 @@ export function NativeDesk({
             : owner.pendingCommands.length
               ? 'Owner command pending. Wait for its applied receipt before continuing.'
               : undefined;
+  const { continuations, history } = partitionFirstUseAnswers(snapshot.answers);
   const keys =
     surface === 'today'
       ? [
           ...(localRead?.retained.value?.items.map(retainedKey) ?? []),
           ...snapshot.calls.accountIds.map((id) => `call:${id}`),
-          ...snapshot.answers.map(answerKey),
+          ...continuations.map(answerKey),
+          ...history.map(answerKey),
           ...snapshot.meetings.map(meetingKey),
         ]
       : surface === 'accounts'
@@ -656,7 +659,7 @@ export function NativeDesk({
               ? 'Calls, replies and the next conversation.'
               : surface === 'accounts'
                 ? 'Company context, from stored evidence.'
-                : 'Review the exact frozen plan.'}
+                : 'Saved campaign versions / capability preview. Read-only, with no creation, editing, enrollment or activation here.'}
           </p>
         </div>
         <div className="native-desk__header-status">
@@ -695,7 +698,7 @@ export function NativeDesk({
       {incomplete && (!unavailableScope || snapshot.issues.some(issue => issue.code !== 'scope_unknown' && issue.code !== 'scope_mismatch')) && <p role="status">The daily snapshot is incomplete. Account work may be missing. Existing owner checks still apply.</p>}
       <div className="native-desk__layout">
         <nav className={`native-desk__queue${surface === 'today' ? ' native-desk__queue--today' : ''}`} aria-label={`${title} queue`} tabIndex={0}>
-          <div className="native-desk__queue-title"><h2>{surface === 'today' ? 'Your next conversations' : surface === 'accounts' ? 'Your accounts' : 'Your campaigns'}</h2><p className="native-desk__hint" title="j / k to move · Enter to review">j / k · ↵</p></div>
+          <div className="native-desk__queue-title"><h2>{surface === 'today' ? 'Your next conversations' : surface === 'accounts' ? 'Your accounts' : 'Saved campaign versions'}</h2><p className="native-desk__hint" title="j / k to move · Enter to review">j / k · ↵</p></div>
           {surface === 'today' ? (
             <>
               <section className="native-desk__lane" aria-label="Local commitments" tabIndex={0}>
@@ -709,7 +712,7 @@ export function NativeDesk({
                   <Phone size={14} aria-hidden="true" /><span className="native-desk__lane-label">Calls</span><span className="native-desk__count">{formatVisibleCount(callCount)}</span>
                 </h2>
                 {!snapshot.calls.accountIds.length ? (
-                  null
+                  <details><summary>About queued calls</summary><p>Calls require saved contact and phone-route evidence and applicable owner permission. <a href="#/settings" onClick={() => openSettingsSection('phone')}>Phone settings</a> configure calling, not permission. <a href="#/settings" onClick={() => openSettingsSection('worker')}>Worker settings</a> configure worker access. Setup alone does not queue or place a call.</p></details>
                 ) : (
                   snapshot.calls.accountIds.map((id) => (
                     <button
@@ -772,7 +775,7 @@ export function NativeDesk({
           ) : (
             <section className="native-desk__lane">
               <h2>
-                Worker campaigns <span>{formatVisibleCount(workerCount(snapshot.campaigns.length))}</span>
+                Saved campaign versions <span>{formatVisibleCount(workerCount(snapshot.campaigns.length))}</span>
               </h2>
               {snapshot.campaigns.map((c) => (
                 <button
@@ -789,11 +792,11 @@ export function NativeDesk({
                     Version {c.version.version} ·{' '}
                     {c.version.approvedAt
                       ? 'approval recorded'
-                      : 'review required'}
+                      : 'not approved'}
                   </span>
                 </button>
               ))}
-              {!snapshot.campaigns.length && <p>{unavailableScope ? 'Campaign scope is unavailable.' : 'No frozen campaigns.'}</p>}
+              {!snapshot.campaigns.length && <><p>{unavailableScope ? 'Campaign scope is unavailable.' : 'No saved campaign versions. This read-only preview cannot create, edit, enroll or activate campaigns.'}</p><p><a href="#/settings" onClick={() => openSettingsSection('worker')}>Worker settings</a> configure worker access, not campaign creation or enrollment.</p></>}
             </section>
           )}
         </nav>
@@ -804,11 +807,11 @@ export function NativeDesk({
                 {retained
                   ? 'Existing commitments and relationships'
                   : answer
-                  ? 'Needs your approval'
+                  ? answer.kind === 'reply' ? 'Saved reply history' : 'Saved draft continuations'
                   : meeting
                     ? 'Upcoming meeting'
                     : campaign
-                      ? 'Campaign review'
+                      ? 'Read-only campaign preview'
                       : 'Company context'}
               </span>
               <button aria-label="Close details" onClick={closeDetails}>
@@ -875,10 +878,10 @@ export function NativeDesk({
               <h2>
                 {selected
                   ? 'This item is no longer in the local queue.'
-                  : keys.length ? 'Make room for a good conversation.' : surface === 'today' ? 'No conversations queued.' : surface === 'accounts' ? 'Your account library starts here.' : 'No frozen campaigns to review.'}
+                  : keys.length ? 'Make room for a good conversation.' : surface === 'today' ? 'No conversations queued.' : surface === 'accounts' ? 'Your account library starts here.' : 'No saved campaign versions to preview.'}
               </h2>
               <p>
-                {selected ? 'Your selection is retained. Refresh to check its saved work.' : keys.length ? 'Select an item to review its company context and exact saved work.' : surface === 'today' ? unavailableScope ? 'Local work remains available. Worker-scoped calls, approvals and meetings are unavailable until a workspace is connected.' : 'No work in this local snapshot. Refresh to check for saved conversations and local commitments.' : surface === 'accounts' ? 'Local company evidence will appear here. Local records do not establish worker ownership.' : 'Saved campaign plans will appear here for review. No campaign actions are enabled by this view.'}
+                {selected ? 'Your selection is retained. Refresh to check its saved work.' : keys.length ? 'Select an item to review its company context and exact saved work.' : surface === 'today' ? unavailableScope ? 'Local work remains available. Worker-scoped calls, saved drafts and meetings are unavailable until a workspace is connected.' : 'No work in this local snapshot. Refresh to check for saved conversations and local commitments.' : surface === 'accounts' ? 'Local company evidence will appear here. Local records do not establish worker ownership.' : 'Saved campaign versions appear here as a read-only capability preview. Creation, editing, enrollment and activation are not available here.'}
               </p>
               {!selected && unavailableScope && <a href="#/settings" onClick={() => openSettingsSection('worker')}>Review Settings</a>}
             </div>
