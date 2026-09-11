@@ -52,8 +52,10 @@ jobs:
           npm run typecheck
           npm run lint:tracked
           npm test
+          npm run verify:secrets
           npm run test:browser:native-desk
           npm run test:helpers:node
+          npm run verify:secrets
           npm run verify:lambdas
           npm run build:operational-tools
           npm run verify:secrets

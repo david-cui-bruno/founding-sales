@@ -8,9 +8,10 @@ import { selectPackagedApp } from './verifyPackage.mjs';
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const fail = () => { throw new Error('SECRET_VERIFICATION_FAILED'); };
 const phases = new Set(['scanner-version', 'temporary-directory', 'history-readiness', 'history-scan', 'context-staging', 'context-scan', 'package-staging', 'package-scan', 'cleanup']);
+const historyReasons = new Set(['git-unavailable', 'git-interrupted', 'repository-unavailable', 'unsafe-ownership', 'git-command-failed', 'shallow-history', 'unexpected-history-response']);
 function inPhase(phase, operation) {
   try { return operation(); }
-  catch { throw Object.assign(new Error('SECRET_VERIFICATION_FAILED'), { phase }); }
+  catch (error) { throw Object.assign(new Error('SECRET_VERIFICATION_FAILED'), { phase }, historyReasons.has(error?.reason) ? { reason: error.reason } : {}); }
 }
 const safeEnv = () => Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(?:GITLEAKS_|GIT_)/.test(key)));
 function execute(command, args, root, run) {
@@ -20,6 +21,20 @@ function checked(command, args, root, run) {
   const result = execute(command, args, root, run);
   if (result.error || result.signal || result.status !== 0 || typeof result.stdout !== 'string') fail();
   return result.stdout;
+}
+function requireFullHistory(root, run) {
+  const result = execute('git', ['rev-parse', '--is-shallow-repository'], root, run);
+  let reason;
+  if (result.error) reason = result.error.code === 'ENOENT' ? 'git-unavailable' : 'git-interrupted';
+  else if (result.signal) reason = 'git-interrupted';
+  else if (result.status !== 0) {
+    const stderr = typeof result.stderr === 'string' ? result.stderr : '';
+    reason = stderr.includes('not a git repository') ? 'repository-unavailable'
+      : stderr.includes('dubious ownership') ? 'unsafe-ownership' : 'git-command-failed';
+  } else if (typeof result.stdout !== 'string' || result.stdout.trim() !== 'false') {
+    reason = typeof result.stdout === 'string' && result.stdout.trim() === 'true' ? 'shallow-history' : 'unexpected-history-response';
+  }
+  if (reason) throw Object.assign(new Error('SECRET_VERIFICATION_FAILED'), { reason });
 }
 const within = (parent, child) => { const path = relative(parent, child); return path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path); };
 function privateDirectory(path) { mkdirSync(path, { recursive: true, mode: 0o700 }); chmodSync(path, 0o700); }
@@ -114,7 +129,7 @@ export function verifySecrets({ root = projectRoot, mode = 'source', outDirector
   try {
     const stage = join(temporary, 'input'); inPhase('temporary-directory', () => privateDirectory(stage));
     if (mode === 'source') {
-      inPhase('history-readiness', () => { if (checked('git', ['rev-parse', '--is-shallow-repository'], root, run).trim() !== 'false') fail(); });
+      inPhase('history-readiness', () => requireFullHistory(root, run));
       results.push(inPhase('history-scan', () => scanWithGitleaks({ root, target: root, kind: 'history', temporary, run })));
       const files = inPhase('context-staging', () => stageBuildContext(root, stage, run));
       results.push({ ...inPhase('context-scan', () => scanWithGitleaks({ root, target: stage, kind: 'context', temporary, run })), files });
@@ -132,7 +147,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     console.log(JSON.stringify({ scanner: 'gitleaks-8.30.1', results }));
     if (results.some(result => result.status !== 'passed')) process.exitCode = 1;
   } catch (error) {
-    console.error(JSON.stringify({ error: 'SECRET_VERIFICATION_FAILED', phase: phases.has(error?.phase) ? error.phase : 'unexpected' }));
+    console.error(JSON.stringify({ error: 'SECRET_VERIFICATION_FAILED', phase: phases.has(error?.phase) ? error.phase : 'unexpected', ...(historyReasons.has(error?.reason) ? { reason: error.reason } : {}) }));
     process.exitCode = 1;
   }
 }

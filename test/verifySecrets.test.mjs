@@ -57,9 +57,31 @@ it.each([
   if (missing) rmSync(join(root, 'src/code.ts'));
   const result = run();
   expect(result.status).not.toBe(0);
-  expect(JSON.parse(result.stderr)).toEqual({ error: 'SECRET_VERIFICATION_FAILED', phase });
+  expect(JSON.parse(result.stderr)).toEqual({ error: 'SECRET_VERIFICATION_FAILED', phase, ...(shallow ? { reason: 'shallow-history' } : {}) });
   expect(result.stderr + result.stdout).not.toContain('SYNTHETIC-RAW-SECRET');
   expect(result.stderr + result.stdout).not.toContain(root);
+});
+it.each([
+  [{ status: 128, stderr: 'fatal: not a git repository: SYNTHETIC-RAW-SECRET' }, 'repository-unavailable'],
+  [{ status: 128, stderr: 'fatal: detected dubious ownership in SYNTHETIC-RAW-SECRET' }, 'unsafe-ownership'],
+  [{ status: 128, stderr: 'SYNTHETIC-RAW-SECRET' }, 'git-command-failed'],
+  [{ status: 0, stdout: 'SYNTHETIC-RAW-SECRET' }, 'unexpected-history-response'],
+  [{ status: null, error: { code: 'ENOENT', message: 'SYNTHETIC-RAW-SECRET' } }, 'git-unavailable'],
+  [{ status: null, signal: 'SIGTERM' }, 'git-interrupted'],
+])('classifies Git preflight failure without copying raw output: %s', async (gitResult, reason) => {
+  const { root } = await fixture();
+  const calls = [];
+  try {
+    verifySecrets({ root, run: (command, args) => {
+      calls.push([command, args]);
+      return command === 'gitleaks' ? { status: 0, stdout: '8.30.1\n' } : gitResult;
+    } });
+    expect.unreachable('Git preflight must fail before scanning');
+  } catch (error) {
+    expect(error).toMatchObject({ message: 'SECRET_VERIFICATION_FAILED', phase: 'history-readiness', reason });
+    expect(JSON.stringify(error)).not.toContain('SYNTHETIC-RAW-SECRET');
+  }
+  expect(calls).toEqual([['gitleaks', ['version']], ['git', ['rev-parse', '--is-shallow-repository']]]);
 });
 it.each(['timeout', 'parent-signal', 'empty-success-report', 'findings-with-zero', 'clean-with-one'])('rejects scanner protocol failure: %s', async mode => {
   const { root } = await fixture(); const temporary = join(root, 'reports'); mkdirSync(temporary, { mode: 0o700 });
