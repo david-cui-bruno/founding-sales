@@ -56,7 +56,7 @@ export async function assertActualDestination(page: Page, route: AppRoute, mode:
         if (route === 'accounts') {
           await expect(page.getByRole('navigation', { name: 'Local accounts', exact: true })).toBeVisible();
           await expect(page.getByRole('button', { name: 'Add company', exact: true })).toBeVisible();
-        } else await expect(page.getByText('Campaign scope unavailable. No worker actions are enabled.', { exact: true })).toBeVisible();
+        } else await expect(page.getByText('Campaign scope unavailable. This is a read-only capability preview. Creation, editing, enrollment and activation are not available here.', { exact: true })).toBeVisible();
       } else {
         const queue = page.getByRole('navigation', { name: `${routeProofs[route].label} queue`, exact: true });
         await expect(queue).toBeVisible();
