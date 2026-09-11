@@ -99,7 +99,9 @@ describe('source-only workflow policy', () => {
       expect(source).toContain('npm ci --prefix cloud/lambdas/shared'); expect(source).toContain('cloud/lambdas/*/package-lock.json');
       expect(source).toContain('b40ab0ae55c505963e365f271a8d3846efbc170aa17f2607f13df610a9aeb6a5');
       expect(source).not.toMatch(/pull_request_target|npm run publish|backup:pre-release|aws |tofu /);
-      for (const line of source.split('\n').filter(line => /^\s*(?:npm|npx) /.test(line))) expect(line).toContain('export PATH=');
+      // setup-node owns PATH on hosted and release runners. A developer's
+      // Homebrew prefix can silently select a different Node installation.
+      expect(source).not.toMatch(/export\s+PATH=|^\s+PATH:/m);
     }
   });
   it('keeps PRs on disposable hosted runners and release dispatch on approved exact tag/ref with external approvals', () => {

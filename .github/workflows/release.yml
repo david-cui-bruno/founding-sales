@@ -56,7 +56,7 @@ jobs:
           node-version: '24.20.0'
       - name: Assert supported Node and architecture
         run: |
-          export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; node -e "if (process.versions.node !== '24.20.0' || process.platform !== 'darwin' || process.arch !== 'arm64') process.exit(1)"
+          node -e "if (process.versions.node !== '24.20.0' || process.platform !== 'darwin' || process.arch !== 'arm64') process.exit(1)"
       - name: Install integrity-pinned Gitleaks 8.30.1
         run: |
           set -euo pipefail
@@ -70,21 +70,21 @@ jobs:
       - name: Install root and independent pinned Lambda packages
         run: |
           set -euo pipefail
-          export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm ci
-          export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm ci --prefix cloud/lambdas/shared
+          npm ci
+          npm ci --prefix cloud/lambdas/shared
           while IFS= read -r -d '' lock; do
             test "$lock" = cloud/lambdas/shared/package-lock.json && continue
-            export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm ci --prefix "${lock%/package-lock.json}"
+            npm ci --prefix "${lock%/package-lock.json}"
           done < <(git ls-files -z -- 'cloud/lambdas/*/package-lock.json')
-          export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npx playwright install chromium
+          npx playwright install chromium
       - name: Require supported macOS and SDK
         run: |
-          export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; node --input-type=module -e "import {execFileSync} from 'node:child_process'; for (const [command,args] of [['sw_vers',['-productVersion']],['xcrun',['--sdk','macosx','--show-sdk-version']]]) { const [major,minor] = execFileSync(command,args,{encoding:'utf8'}).trim().split('.').map(Number); if (!(major > 26 || (major === 26 && minor >= 4))) process.exit(1); }"
+          node --input-type=module -e "import {execFileSync} from 'node:child_process'; for (const [command,args] of [['sw_vers',['-productVersion']],['xcrun',['--sdk','macosx','--show-sdk-version']]]) { const [major,minor] = execFileSync(command,args,{encoding:'utf8'}).trim().split('.').map(Number); if (!(major > 26 || (major === 26 && minor >= 4))) process.exit(1); }"
       # verify:release owns test:swift and test:backup:electron serially on this
       # supported host, plus browser/Node helper lanes and one selected artifact.
       - name: Exact ref and single-artifact full release gates
         run: |
-          export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; node scripts/writeReleaseMarker.mjs --verify-ref
-          export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm run verify:release
-          export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; node scripts/writeReleaseMarker.mjs --verify-ref
+          node scripts/writeReleaseMarker.mjs --verify-ref
+          npm run verify:release
+          node scripts/writeReleaseMarker.mjs --verify-ref
           printf 'Verified exact SHA `%s`, tag `%s`. Package, scans, E2E and final ASAR marker gates passed.\n' "$AUDITED_SHA" "$RELEASE_TAG" >> "$GITHUB_STEP_SUMMARY"
