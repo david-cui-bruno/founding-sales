@@ -90,7 +90,7 @@ test('unpaired A uses one coherent inset state and does not mislabel unavailable
     const detail = page.locator('.native-desk__detail');
     await expect(detail.getByRole('link', { name: /settings/i })).toBeVisible();
     await expect(page.getByRole('heading', { name: /^Local commitments/ }).locator('.native-desk__count')).toHaveText('0');
-    for (const label of ['Calls', 'Needs your approval', 'Upcoming meetings']) {
+    for (const label of ['Calls', 'Saved draft continuations', 'Upcoming meetings']) {
       await expect(page.getByRole('heading', { name: new RegExp(`^${label}`) }).locator('.native-desk__count')).toHaveText('Unavailable');
     }
     await expect(page.locator('.native-desk__lane .native-desk__count')).toHaveCount(4);

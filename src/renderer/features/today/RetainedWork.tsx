@@ -31,7 +31,7 @@ export function LocalOnlyCalls({ read, onOpenLead, initialSelected = null, onSel
   return <div className="native-desk__layout">
     <section className="native-desk__queue">
       <section className="native-desk__lane"><h2>Local commitments <span className="native-desk__count">{formatVisibleCount(localCommitmentsCount(read))}</span></h2><RetainedWork read={read} selected={selected} onSelect={select} /></section>
-      {['Calls', 'Needs your approval', 'Upcoming meetings'].map(label => <section className="native-desk__lane" key={label}><h2>{label} <span className="native-desk__count">Unavailable</span></h2></section>)}
+      {['Calls', 'Saved draft continuations', 'Upcoming meetings'].map(label => <section className="native-desk__lane" key={label}><h2>{label} <span className="native-desk__count">Unavailable</span></h2></section>)}
     </section>
     <aside className="native-desk__detail" aria-label="Selected work">{entry ? <RetainedWorkDetail entry={entry} stale={read.error || read.pending} onOpenLead={onOpenLead} /> : selected ? <p>This work is no longer in the local queue.</p> : <div className="native-desk__welcome"><h2>Local work, separate from worker actions.</h2><p>Local work remains available. Worker-scoped work is unavailable until the daily workspace can be checked.</p><a href="#/settings">Review Settings</a></div>}</aside>
   </div>;

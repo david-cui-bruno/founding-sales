@@ -45,7 +45,7 @@ export async function assertActualDestination(page: Page, route: AppRoute, mode:
       if (mode === 'meeting_first') {
         const queue = page.getByRole('navigation', { name: 'Today queue', exact: true });
         await expect(queue.getByRole('region', { name: 'Calls', exact: true }).getByRole('button', { name: 'Call · Account A', exact: true })).toBeVisible();
-        await expect(queue.getByRole('region', { name: /^Needs your approval/ }).locator('[data-row-key]')).toHaveCount(3);
+        await expect(queue.getByRole('region', { name: /^Saved draft continuations/ }).locator('[data-row-key]')).toHaveCount(3);
         await expect(queue.getByRole('region', { name: /^Upcoming meetings/ }).getByRole('button', { name: 'Meeting · Account A · booked', exact: true })).toBeVisible();
       }
       break;
@@ -56,7 +56,7 @@ export async function assertActualDestination(page: Page, route: AppRoute, mode:
         if (route === 'accounts') {
           await expect(page.getByRole('navigation', { name: 'Local accounts', exact: true })).toBeVisible();
           await expect(page.getByRole('button', { name: 'Add company', exact: true })).toBeVisible();
-        } else await expect(page.getByText('Campaign scope unavailable. No worker actions are enabled.', { exact: true })).toBeVisible();
+        } else await expect(page.getByText('Campaign scope unavailable. This is a read-only capability preview. Creation, editing, enrollment and activation are not available here.', { exact: true })).toBeVisible();
       } else {
         const queue = page.getByRole('navigation', { name: `${routeProofs[route].label} queue`, exact: true });
         await expect(queue).toBeVisible();

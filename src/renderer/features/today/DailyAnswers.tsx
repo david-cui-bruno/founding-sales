@@ -1,3 +1,5 @@
+import { openSettingsSection } from '../../foundation/settingsNavigation';
+import { partitionFirstUseAnswers } from './firstUseCapabilities';
 import { dailyAnswerPresentationMatches } from '../../../shared/contracts/dailyAnswerPresentationContract';
 import type { ReactNode } from 'react';
 import { AnswerIdentity, OriginalCallContext, revealMessageFocus } from './AnswerPresentation';
@@ -47,15 +49,27 @@ export function DailyAnswers({
   unavailable?: boolean;
   workspaceId?: string | null;
 }) {
-  return (
-    <section className="native-desk__lane" aria-labelledby="daily-answers" tabIndex={0}>
-      <h2 id="daily-answers">
-        <span className="native-desk__lane-label"><ClipboardCheck size={14} aria-hidden="true" />Needs your approval</span> <span className="native-desk__count">{unavailable ? 'Unavailable' : items.length}</span>
+  const { continuations, history } = partitionFirstUseAnswers(items);
+  const groups = [
+    { id: 'daily-answers', label: 'Saved draft continuations', answers: continuations },
+    ...(history.length ? [{ id: 'daily-reply-history', label: 'Saved reply history', answers: history }] : []),
+  ];
+  return <>{groups.map(group => (
+    <section key={group.id} className="native-desk__lane" aria-labelledby={group.id} tabIndex={0}>
+      <h2 id={group.id}>
+        <span className="native-desk__lane-label"><ClipboardCheck size={14} aria-hidden="true" />{group.label}</span> <span className="native-desk__count">{unavailable ? 'Unavailable' : group.answers.length}</span>
       </h2>
-      {items.length === 0 ? (
-        null
-      ) : (
-        items.map((a) => {
+      {group.id === 'daily-answers' && (!continuations.some(a => a.kind === 'requested_followup') || !continuations.some(a => a.kind === 'manual_linkedin')) && (
+        <details>
+          <summary>About saved draft continuations</summary>
+          <p>This view continues saved drafts only. It cannot prepare first worker drafts.</p>
+          {!continuations.some(a => a.kind === 'requested_followup') && <p>Requested email requires an eligible saved owner call, its exact saved call reference, the recipient’s request for information by email, current account and recipient context, and authenticated worker mailbox proof. Manual preparation does not bypass these checks.</p>}
+          {!continuations.some(a => a.kind === 'manual_linkedin') && <p>LinkedIn requires an approved campaign version, real enrollment at its current eligible step, exact route and context, and an available preparation provider. This view cannot enroll or prepare. Opening or copying is not sending.</p>}
+          <p><a href="#/settings" onClick={() => openSettingsSection('worker')}>Worker settings</a> configure worker access, not eligibility. <a href="#/campaigns">Saved campaign versions</a> are read-only.</p>
+          <p>For a separate local unsent email draft, open a saved company in <a href="#/accounts">Accounts</a>, review its named-person link, then Open saved contact and choose its saved email method. <a href="#/settings" onClick={() => openSettingsSection('connections')}>Connections settings</a> provide local model and Gmail setup, not worker mailbox proof. Own-text draft saving does not require those connections.</p>
+        </details>
+      )}
+      {group.answers.map((a) => {
           const contact = a.kind !== 'reply' && a.presentation && workspaceId && dailyAnswerPresentationMatches(a.presentation, a.draft, workspaceId) ? a.presentation.contact : null;
           return (
           <button
@@ -83,10 +97,9 @@ export function DailyAnswers({
                     : 'Review saved email'}
             </span>
           </button>
-        );})
-      )}
+        );})}
     </section>
-  );
+  ))}</>;
 }
 function RequestedEditor({
   item,

@@ -70,7 +70,7 @@ test('real Native Desk themes, geometry, selection and unchanged editor DOM', as
         const geometry = await page.evaluate(() => ({ overflow: document.documentElement.scrollWidth > innerWidth, headings:[...document.querySelectorAll('.native-desk__lane h2')].map(el=>({text:el.textContent,y:el.getBoundingClientRect().bottom})),height:innerHeight }));
         expect(geometry.overflow).toBe(false);
         expect(geometry.headings).toHaveLength(4);
-        await expect(page.locator('.native-desk__lane h2 .native-desk__lane-label')).toHaveText(['Local commitments', 'Calls', 'Needs your approval', 'Upcoming meetings']);
+        await expect(page.locator('.native-desk__lane h2 .native-desk__lane-label')).toHaveText(['Local commitments', 'Calls', 'Saved draft continuations', 'Upcoming meetings']);
         for (const heading of geometry.headings) expect(heading.y,`${heading.text} visible at ${width}/${theme}/${density}`).toBeLessThan(geometry.height);
         const axe = await new AxeBuilder({page}).analyze();
         expect(axe.violations.filter(item=>item.impact==='serious'||item.impact==='critical')).toEqual([]);
@@ -298,7 +298,8 @@ test('two saved replies in one thread keep exact independent row identities', as
     fixture.setSnapshot(snapshot);
     window.nativeDeskBrowser.refresh();
   });
-  const replies = page.getByRole('button',{name:'Reply · Account A',exact:true});
+  await expect(page.getByRole('region', { name: 'Saved draft continuations 3', exact: true }).locator('[data-row-key]')).toHaveCount(3);
+  const replies = page.getByRole('region', { name: 'Saved reply history 2', exact: true }).getByRole('button',{name:'Reply · Account A',exact:true});
   await expect(replies).toHaveCount(2);
   await replies.nth(0).click();
   await expect(page.getByText('First exact saved reply',{exact:true})).toBeVisible();
@@ -601,7 +602,7 @@ test('unpaired local records remain selectable without worker authority or autom
     await page.setViewportSize({width, height: width === 1440 ? 900 : 700});
     const positions = await page.locator('.native-desk__lane h2').evaluateAll(headings => headings.map(el => el.getBoundingClientRect().bottom));
     expect(positions).toHaveLength(4);
-    await expect(page.locator('.native-desk__lane h2 .native-desk__lane-label')).toHaveText(['Local commitments', 'Calls', 'Needs your approval', 'Upcoming meetings']);
+    await expect(page.locator('.native-desk__lane h2 .native-desk__lane-label')).toHaveText(['Local commitments', 'Calls', 'Saved draft continuations', 'Upcoming meetings']);
     for (const y of positions) expect(y).toBeLessThan(width === 1440 ? 900 : 700);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
     const heading = await page.locator('.native-desk__lane h2').first().evaluate(el => {
@@ -762,7 +763,7 @@ test('approved A presentation matches the unchanged reference in both themes and
       expect.soft(await page.getByText('Your next conversations', {exact: true}).count()).toBe(1);
       expect.soft(await page.locator('.native-desk__lane h2 svg').count()).toBe(4);
       expect.soft(await page.locator('.native-desk__lane h2 .native-desk__count').count()).toBe(4);
-      await expect.soft(page.locator('.native-desk__lane h2 .native-desk__lane-label')).toHaveText(['Local commitments', 'Calls', 'Needs your approval', 'Upcoming meetings']);
+      await expect.soft(page.locator('.native-desk__lane h2 .native-desk__lane-label')).toHaveText(['Local commitments', 'Calls', 'Saved draft continuations', 'Upcoming meetings']);
       expect.soft(await page.getByRole('button', {name: 'Refresh', exact: true}).innerText()).toBe('');
       await page.screenshot({path: testInfo.outputPath(`restored-A-${width}-${theme}.png`), animations: 'disabled'});
     }
@@ -807,7 +808,7 @@ test('approved A empty unpaired surfaces stay coherent and truthful without inve
         if (surface === 'today') {
           const headings = await page.locator('.native-desk__lane h2').evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().bottom));
           expect(headings).toHaveLength(4);
-          await expect(page.locator('.native-desk__lane h2 .native-desk__lane-label')).toHaveText(['Local commitments', 'Calls', 'Needs your approval', 'Upcoming meetings']);
+          await expect(page.locator('.native-desk__lane h2 .native-desk__lane-label')).toHaveText(['Local commitments', 'Calls', 'Saved draft continuations', 'Upcoming meetings']);
           for (const bottom of headings) expect(bottom).toBeLessThan(width === 1440 ? 900 : 700);
         }
         const axe = await new AxeBuilder({page}).analyze();
