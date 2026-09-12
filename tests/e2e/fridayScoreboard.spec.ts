@@ -26,13 +26,23 @@ test('creates four job requests, fills three, shows 3 / 4 and 75%, and opens dri
     await expect(period).toHaveText(currentPeriod);
     await expect(page.getByRole('button', { name: 'Next week' })).toBeDisabled();
 
-    // Use the actual reporting clock, not a calendar date that expires next Monday.
+    // Use the actual reporting window. On weekends, asOf is beyond its exclusive
+    // Saturday end, so choose its final reportable minute instead.
     const jobTime = await page.evaluate(async () => {
-      const at = new Date((await window.callie.friday.getCurrent()).asOf);
+      const report = await window.callie.friday.getCurrent();
+      const at = new Date(Math.min(Date.parse(report.asOf), Date.parse(report.periodEndsAt) - 60_000));
       const pad = (value: number) => String(value).padStart(2, '0');
-      return { date: `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}`,
-        time: `${pad(at.getHours())}:${pad(at.getMinutes())}` };
+      const date = `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}`;
+      const time = `${pad(at.getHours())}:${pad(at.getMinutes())}`;
+      return { date, time, requestedAt: new Date(`${date}T${time}`).toISOString(),
+        asOf: report.asOf, periodStartsAt: report.periodStartsAt, periodEndsAt: report.periodEndsAt };
     });
+    await test.info().attach('reporting-window.json', {
+      body: JSON.stringify(jobTime), contentType: 'application/json',
+    });
+    expect(Date.parse(jobTime.requestedAt)).toBeGreaterThanOrEqual(Date.parse(jobTime.periodStartsAt));
+    expect(Date.parse(jobTime.requestedAt)).toBeLessThan(Date.parse(jobTime.periodEndsAt));
+    expect(Date.parse(jobTime.requestedAt)).toBeLessThanOrEqual(Date.parse(jobTime.asOf));
     // Four distinct requests and three acceptances within the same reporting minute.
     for (let index = 0; index < 4; index += 1) {
       await page.getByLabel('Requested date').fill(jobTime.date);
