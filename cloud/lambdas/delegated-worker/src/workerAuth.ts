@@ -3,7 +3,7 @@ import { TransactWriteItemsCommand } from '@aws-sdk/client-dynamodb';
 import { z } from 'zod';
 import { authorityStateSchema, delegationCommandSchema, type DelegationCommand } from '../../../../src/shared/contracts/delegationContract';
 import { accountIdSchema } from '../../../../src/shared/contracts/accountContract';
-import { DynamoStore, fingerprint, keyPart, type RepositoryOptions, type DynamoAdapter } from './dynamoStore';
+import { DynamoStore, fingerprint, keyPart, withDynamoReadErrors, type RepositoryOptions, type DynamoAdapter } from './dynamoStore';
 export const workerScopeSchema = z.enum(['commands:write', 'events:read', 'google:grant', 'pairing:revoke', 'emergency:stop']);
 export type WorkerScope = z.infer<typeof workerScopeSchema>;
 export type WorkerPrincipal = { pairingId: string; workspaceId: string; generation: number; kind: 'device' | 'emergency'; scopes: WorkerScope[]; credentialHash: string };
@@ -18,7 +18,10 @@ export const pairingKey = (id: string): string => `PAIRING#${keyPart(id)}`;
 /** No default client, profile, network or operator bootstrap on construction. */
 export class WorkerAuth {
   readonly store: DynamoStore;
-  constructor(readonly options: RepositoryOptions) { this.store = new DynamoStore(options); }
+  constructor(readonly options: RepositoryOptions) {
+    this.options = { ...options, dynamo: withDynamoReadErrors(options.dynamo) };
+    this.store = new DynamoStore(this.options);
+  }
   /** Trusted operator composition only. Never exposed on the public HTTP handler. */
   async issuePairing(input: { scopes: WorkerScope[]; expiresInSeconds: number }): Promise<{ code: string; pairingId: string }> {
     const scopes = scopesSchema.parse(input.scopes);

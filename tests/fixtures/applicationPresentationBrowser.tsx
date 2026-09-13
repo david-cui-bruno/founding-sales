@@ -36,6 +36,7 @@ const healthValue: AppHealth = {
 const desk = nativeDeskFixture(nativeDeskReviewFixture());
 let localMode: 'meeting_first' | 'legacy' = new URLSearchParams(location.search).get('mode') === 'legacy' ? 'legacy' : 'meeting_first';
 let detailMode: 'ready' | 'pending' | 'failed' = 'ready';
+let connectionStatusUnavailable = false;
 const read = <T,>(method: string, value: () => T) => async (...args: unknown[]): Promise<T> => {
   calls.push({ method, kind: 'read', args: structuredClone(args) });
   return structuredClone(value());
@@ -91,7 +92,10 @@ const api: CalliePreloadApi = {
   },
   linkedin: { prepare: forbidden('linkedin.prepare'), get: forbidden('linkedin.get'), recover: forbidden('linkedin.recover'), save: forbidden('linkedin.save'), begin: forbidden('linkedin.begin'), open: forbidden('linkedin.open'), copy: forbidden('linkedin.copy'), reportOutcome: forbidden('linkedin.reportOutcome') },
   phoneSetup: { status: forbidden('phoneSetup.status'), confirm: forbidden('phoneSetup.confirm'), clear: forbidden('phoneSetup.clear') },
-  outreach: { status: read<Awaited<ReturnType<CalliePreloadApi['outreach']['status']>>>('outreach.status', () => ({ model: 'unconfigured', modelName: '', gmail: 'unconfigured', accountEmail: null, senderName: '', postalAddress: '' })), connectGmail: forbidden('outreach.connectGmail'), disconnectGmail: forbidden('outreach.disconnectGmail'), configure: forbidden('outreach.configure'), openDraft: forbidden('outreach.openDraft'), saveDraft: forbidden('outreach.saveDraft'), generateDraft: forbidden('outreach.generateDraft'), sendDraft: forbidden('outreach.sendDraft'), inspectLocalAuthority: forbidden('outreach.inspectLocalAuthority') },
+  outreach: { status: read<Awaited<ReturnType<CalliePreloadApi['outreach']['status']>>>('outreach.status', () => {
+    if (connectionStatusUnavailable) throw Error('Synthetic private connection failure');
+    return { model: 'unconfigured', modelName: '', gmail: 'unconfigured', accountEmail: null, senderName: '', postalAddress: '' };
+  }), connectGmail: forbidden('outreach.connectGmail'), disconnectGmail: forbidden('outreach.disconnectGmail'), configure: forbidden('outreach.configure'), openDraft: forbidden('outreach.openDraft'), saveDraft: forbidden('outreach.saveDraft'), generateDraft: forbidden('outreach.generateDraft'), sendDraft: forbidden('outreach.sendDraft'), inspectLocalAuthority: forbidden('outreach.inspectLocalAuthority') },
   leads: { list: read<Awaited<ReturnType<CalliePreloadApi['leads']['list']>>>('leads.list', () => ({ rows: [row], nextCursor: null, total: 1, revision: 1 })), updateField: forbidden('leads.updateField'), bulkUpdate: forbidden('leads.bulkUpdate') },
   leadDetail: { get: async (input) => {
     calls.push({ method: 'leadDetail.get', kind: 'read', args: [structuredClone(input)] });
@@ -209,6 +213,7 @@ const controls = {
   ...(modalScenario ? { modal: modalScenario.controller } : {}),
   ...(leadsScenario ? { leads: leadsScenario.controller } : {}),
   calls,
+  setConnectionStatusUnavailable(unavailable: boolean) { connectionStatusUnavailable = unavailable; },
   setMode(mode: typeof localMode) { localMode = mode; window.dispatchEvent(new Event('focus')); },
   setDetailMode(mode: typeof detailMode) { detailMode = mode; },
   resolvePendingDetails() { for (const resolve of pendingDetails.splice(0)) resolve(structuredClone(detail)); },

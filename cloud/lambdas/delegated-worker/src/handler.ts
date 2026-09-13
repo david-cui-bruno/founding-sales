@@ -12,7 +12,7 @@ import { WorkerAuth } from './workerAuth';
 import { DynamoExecutionRepository } from './executionRepository';
 import { RemoteGoogleAuthorization, type RemoteGoogleConfig } from './remoteGoogleAuthorization';
 import { googleCalendarSelectionSchema, googleCapabilitySchema, googleGrantDisclosure } from './googleGrantCapabilities';
-import type { DynamoAdapter } from './dynamoStore';
+import { DynamoReadUnavailable, type DynamoAdapter } from './dynamoStore';
 export type WorkerHttpResponse = { statusCode: number; body: string; headers: Record<string, string> };
 const headers = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer',
   'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'", 'Strict-Transport-Security': 'max-age=31536000', 'X-Content-Type-Options': 'nosniff' };
@@ -108,6 +108,7 @@ export function createWorkerHandler(input: { auth: WorkerAuth; host: string; goo
       return response(404, { error: 'worker_route_unavailable' });
     } catch (error) {
       // Deliberately never interpolate exception, provider payload, URL or event.
+      if (error instanceof DynamoReadUnavailable) return response(503, { error: 'worker_unavailable' });
       const code = error instanceof Error ? error.message : '';
       if (code === 'worker_unauthorized') return response(401, { error: 'worker_unauthorized' });
       if (code === 'worker_scope_denied') return response(403, { error: 'worker_scope_denied' });

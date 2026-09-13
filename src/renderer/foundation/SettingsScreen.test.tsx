@@ -533,6 +533,13 @@ it('renders a safe setup error instead of raw provider secrets', async () => {
   const api = connectionsApi(); api.status.mockRejectedValueOnce(new Error('fixture-secret-that-must-not-render'));
   renderSettings({ outreachApi: api }); fireEvent.click(screen.getByRole('button', { name: 'Connections' }));
   expect(await screen.findByRole('alert')).toBeTruthy(); expect(screen.queryByText(/fixture-secret/)).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh connection status' }));
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Save connections' }) as HTMLButtonElement).disabled).toBe(false));
+  expect(api.status).toHaveBeenCalledTimes(2);
+  expect(screen.queryByRole('alert')).toBeNull();
+  expect(api.configure).not.toHaveBeenCalled();
+  expect(api.connectGmail).not.toHaveBeenCalled();
+  expect(api.disconnectGmail).not.toHaveBeenCalled();
 });
 it('never erases existing sender settings when credentials are entered during a slow status read', async () => {
   const api = connectionsApi(); let resolve!: (value: typeof outreachStatus) => void;
