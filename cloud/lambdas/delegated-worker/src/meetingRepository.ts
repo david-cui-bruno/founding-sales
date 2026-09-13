@@ -279,6 +279,7 @@ export class DynamoMeetingRepository {
     const { rules, checks, mixed, validUntil, auth, current } = await this.evidence(input);
     const grantRecord = await this.store.get<{ grant: unknown }>(`GOOGLE_GRANT#${keyPart(intent.pairingId)}`);
     const grant = googleGrantSchema.parse(grantRecord?.data.grant);
+    if (grant.purpose !== 'permitted_correspondence') throw new Error('calendar_not_selected');
     if (grant.calendars) [grant.calendars.ownedCalendarId, ...grant.calendars.conflictCalendarIds].forEach(requireExplicitCalendarId);
     if (grant.subject !== intent.mailboxSubject || grant.owner !== 'remote' || grant.calendars?.ownedCalendarId !== calendarId
       || rules.conflictCalendarIds.some(id => !grant.calendars?.conflictCalendarIds.includes(id))) throw new Error('calendar_not_selected');

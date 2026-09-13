@@ -11,7 +11,8 @@ import { OwnerCommandCoordinator } from './ownerCommandCoordinator';
 import { WorkerAuth } from './workerAuth';
 import { DynamoExecutionRepository } from './executionRepository';
 import { RemoteGoogleAuthorization, type RemoteGoogleConfig } from './remoteGoogleAuthorization';
-import { googleCalendarSelectionSchema, googleCapabilitySchema, googleGrantDisclosure } from './googleGrantCapabilities';
+import { googleGrantDisclosure, googleGrantPurposeSchema, personalGoogleGrantDisclosure } from './googleGrantCapabilities';
+import { remoteGoogleGrantBeginSchema, remoteGoogleGrantSelectorSchema } from '../../../../src/shared/contracts/remoteGoogleGrantContract';
 import { DynamoReadUnavailable, type DynamoAdapter } from './dynamoStore';
 export type WorkerHttpResponse = { statusCode: number; body: string; headers: Record<string, string> };
 const headers = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer',
@@ -20,7 +21,6 @@ const response = (statusCode: number, body: unknown): WorkerHttpResponse => ({ s
 const eventSchema = z.object({ version: z.literal('2.0'), rawPath: z.string().max(100), rawQueryString: z.string().max(8192),
   headers: z.record(z.string(), z.string().max(16384)), body: z.string().max(204096).refine(value => Buffer.byteLength(value, 'utf8') <= 204096).optional(), isBase64Encoded: z.literal(false).optional(),
   requestContext: z.object({ domainName: z.string(), http: z.object({ method: z.enum(['POST', 'GET']), sourceIp: z.string().min(1).max(256) }) }) });
-const beginSchema = z.strictObject({ capabilities: z.array(googleCapabilitySchema).min(1).max(4), disclosureVersion: z.literal(googleGrantDisclosure.version), calendars: googleCalendarSelectionSchema.optional() });
 /** API Gateway v2 HTTPS only. No authorizer cache, event logging, query bearer,
  * operator bootstrap issuance, token-returning route or mail dispatch endpoint. */
 export function createWorkerHandler(input: { auth: WorkerAuth; host: string; google?: RemoteGoogleAuthorization }) {
@@ -37,7 +37,7 @@ export function createWorkerHandler(input: { auth: WorkerAuth; host: string; goo
         if (Buffer.byteLength(JSON.stringify(selected.payload), 'utf8') > 200000) return response(400, { error: 'worker_request_rejected' });
       }
       const query = new URLSearchParams(event.rawQueryString);
-      const allowed = path === '/oauth/callback' ? ['state', 'code', 'error', 'scope', 'authuser', 'prompt', 'hd'] : path === '/events' ? ['cursor'] : [];
+      const allowed = path === '/oauth/callback' ? ['state', 'code', 'error', 'scope', 'authuser', 'prompt', 'hd'] : path === '/events' ? ['cursor'] : ['/google/status', '/google/disclosure'].includes(path) ? ['purpose'] : [];
       for (const key of query.keys()) if (!allowed.includes(key) || query.getAll(key).length !== 1) return response(400, { error: 'worker_invalid_request' });
       const body = () => JSON.parse(event.body ?? '{}') as unknown;
       if (path === '/pairing/redeem' && method === 'POST') {
@@ -96,14 +96,17 @@ export function createWorkerHandler(input: { auth: WorkerAuth; host: string; goo
       }
       if (['/google/begin', '/google/status', '/google/revoke', '/google/disclosure'].includes(path)) {
         const principal = await input.auth.authenticate(event.headers.authorization, ['google:grant']);
-        if (path === '/google/disclosure' && method === 'GET') return response(200, googleGrantDisclosure);
+        const purpose = googleGrantPurposeSchema.parse(query.get('purpose') ?? 'permitted_correspondence');
+        if (path === '/google/disclosure' && method === 'GET') return response(200, purpose === 'personal_availability' ? personalGoogleGrantDisclosure : googleGrantDisclosure);
         if (!input.google) return response(503, { error: 'google_unconfigured' });
         if (path === '/google/begin' && method === 'POST') {
-          const parsed = beginSchema.parse(body());
-          return response(200, await input.google.beginGoogleGrant(principal.pairingId, parsed.capabilities, parsed.calendars));
+          const parsed = remoteGoogleGrantBeginSchema.parse(body());
+          return response(200, parsed.purpose === 'personal_availability'
+            ? await input.google.beginGoogleGrant(principal.pairingId, parsed.capabilities, undefined, { purpose: parsed.purpose, availabilityCalendars: parsed.availabilityCalendars })
+            : await input.google.beginGoogleGrant(principal.pairingId, parsed.capabilities, parsed.calendars, { purpose: 'permitted_correspondence', ...(parsed.expectedEmail ? { expectedEmail: parsed.expectedEmail } : {}) }));
         }
-        if (path === '/google/status' && method === 'GET') return response(200, await input.google.status(principal.pairingId));
-        if (path === '/google/revoke' && method === 'POST') { z.strictObject({}).parse(body()); return response(200, await input.google.revokeGoogleGrant(principal.pairingId)); }
+        if (path === '/google/status' && method === 'GET') return response(200, await input.google.status(principal.pairingId, purpose));
+        if (path === '/google/revoke' && method === 'POST') { const selected = remoteGoogleGrantSelectorSchema.parse(body()); return response(200, await input.google.revokeGoogleGrant(principal.pairingId, selected.purpose ?? 'permitted_correspondence')); }
       }
       return response(404, { error: 'worker_route_unavailable' });
     } catch (error) {

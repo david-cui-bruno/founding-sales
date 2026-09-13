@@ -1,6 +1,6 @@
 /* eslint-disable no-control-regex -- These schemas intentionally reject NUL in secrets and content. */
 import { z } from 'zod';
-import { googleGrantSchema } from '../../../../cloud/lambdas/delegated-worker/src/googleGrantCapabilities';
+import { legacyGoogleGrantSchema as googleGrantSchema } from '../../../shared/contracts/googleGrantCapabilities';
 
 export type ProviderErrorCode =
   | 'credentials_locked' | 'credentials_corrupt' | 'credentials_unavailable'

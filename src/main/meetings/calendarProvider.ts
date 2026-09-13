@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
-import { requireCapabilities, googleCalendarSelectionSchema, type GoogleGrant } from '../../../cloud/lambdas/delegated-worker/src/googleGrantCapabilities';
+import { requireCapabilities, googleCalendarSelectionSchema, type GoogleGrant } from '../../shared/contracts/googleGrantCapabilities';
 import { meetingInstantSchema, type CalendarPort, type CalendarResult, type CalendarWrite, type MeetingIdentity, type ProviderMeeting } from '../../shared/contracts/meetingContract';
 import { requestJsonOnce } from '../outreach/providers/providerHttp';
 const id = z.string().min(1).max(255);
@@ -23,6 +23,7 @@ export function requireExplicitCalendarId(value: string): void {
 }
 /** Fetch is mandatory: construction never silently selects a live network boundary. */
 export function createCalendarProvider(input: { grant: GoogleGrant; accessToken: string; fetch: typeof globalThis.fetch }): CalendarPort {
+  if (input.grant.purpose !== 'permitted_correspondence') throw new Error('calendar_not_selected');
   requireCapabilities(input.grant, ['availability', 'event_write']);
   const selected = googleCalendarSelectionSchema.parse(input.grant.calendars);
   [selected.ownedCalendarId, ...selected.conflictCalendarIds].forEach(requireExplicitCalendarId);
