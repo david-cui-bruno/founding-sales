@@ -33,7 +33,7 @@ export class WorkerPolicyConfiguration {
     // Parse metadata only. Never open, return or log the encrypted token envelope.
     const metadata = z.object({ grant: googleGrantSchema, revoked: z.literal(false), revocationInFlight: z.literal(false).optional(), providerRevocation: z.enum(['confirmed', 'pending']).optional() }).parse(row?.data);
     const grant = metadata.grant;
-    if (!row || grant.owner !== 'remote' || grant.subject !== request.mailboxSubject || metadata.providerRevocation) throw Error('policy_grant_unavailable');
+    if (!row || grant.purpose !== 'permitted_correspondence' || grant.owner !== 'remote' || grant.subject !== request.mailboxSubject || metadata.providerRevocation) throw Error('policy_grant_unavailable');
     if (request.kind === 'sender-caps') {
       requireCapabilities(grant, ['send']);
       if (request.policy.sender !== grant.email) throw Error('policy_sender_mismatch');

@@ -2,6 +2,8 @@ import {requestedFollowupDraftSchema,type RequestedFollowupDraft,prepareRequeste
 import {workerPolicyRequestSchema,workerPolicyReceiptSchema} from '../../shared/contracts/workerPolicyContract';
 import { requestedOwnerContextSchema, ownerCheckpointSchema, configureResearchSourceSchema, ownerResearchSourceSchema } from '../../shared/contracts/ownerCommandContract';
 import { z } from 'zod';
+import { googleGrantPurposeSchema, googleScopes, googleGrantDisclosure, personalGoogleGrantDisclosure, type GoogleGrantPurpose } from '../../shared/contracts/googleGrantCapabilities';
+import { remoteGoogleGrantAuthorizationSchema, remoteGoogleGrantBeginSchema, remoteGoogleGrantDisclosureSchema, remoteGoogleGrantStatusSchema, type RemoteGoogleGrantBegin, type RemoteGoogleGrantStatus } from '../../shared/contracts/remoteGoogleGrantContract';
 import type { DelegationRepository } from './delegationRepository';
 import { commandReceiptSchema, delegationCommandSchema, eventPageSchema, type CommandReceipt, type DelegationCommand } from '../../shared/contracts/delegationContract';
 import { synchronizeDelegation, type SqlDelegationTransport, type SyncReport } from './delegationSync';
@@ -35,6 +37,46 @@ export class ExecutionClient {
     signal.throwIfAborted();
     if (text.length > 4 * 1024 * 1024) throw new Error('Worker response too large');
     return JSON.parse(text) as unknown;
+  }
+  private grantStatus(raw: unknown, purpose: GoogleGrantPurpose): RemoteGoogleGrantStatus {
+    const status = remoteGoogleGrantStatusSchema.parse(raw);
+    if (status.grant && status.grant.purpose !== purpose) throw Error('Worker grant purpose mismatch');
+    return status;
+  }
+  async googleGrantStatus(rawPurpose: GoogleGrantPurpose, signal: AbortSignal): Promise<RemoteGoogleGrantStatus> {
+    const purpose = googleGrantPurposeSchema.parse(rawPurpose);
+    return this.grantStatus(await this.request(`/google/status?purpose=${purpose}`, signal), purpose);
+  }
+  async googleGrantDisclosure(rawPurpose: GoogleGrantPurpose, signal: AbortSignal) {
+    const purpose = googleGrantPurposeSchema.parse(rawPurpose);
+    const result = remoteGoogleGrantDisclosureSchema.parse(await this.request(`/google/disclosure?purpose=${purpose}`, signal));
+    const expected = purpose === 'personal_availability' ? personalGoogleGrantDisclosure : googleGrantDisclosure;
+    if (result.version !== expected.version) throw Error('Worker disclosure purpose mismatch');
+    return result;
+  }
+  async beginGoogleGrant(raw: RemoteGoogleGrantBegin, signal: AbortSignal): Promise<{ authorizationUrl: string }> {
+    const input = remoteGoogleGrantBeginSchema.parse(raw);
+    const result = remoteGoogleGrantAuthorizationSchema.parse(await this.request('/google/begin', signal, input));
+    const url = new URL(result.authorizationUrl);
+    const expectedScopes = ['openid', 'email', ...input.capabilities.map(capability => googleScopes[capability])].sort();
+    const scopes = (url.searchParams.get('scope') ?? '').split(' ').sort();
+    const redirect = new URL(url.searchParams.get('redirect_uri') ?? 'https://invalid.invalid');
+    const allowedParameters = ['client_id', 'redirect_uri', 'response_type', 'scope', 'state', 'code_challenge', 'code_challenge_method', 'access_type', 'prompt', 'include_granted_scopes'];
+    if (url.origin !== 'https://accounts.google.com' || url.pathname !== '/o/oauth2/v2/auth' || url.username || url.password || url.hash ||
+      Array.from(url.searchParams.keys()).some(key => !allowedParameters.includes(key) || url.searchParams.getAll(key).length !== 1) ||
+      url.searchParams.get('include_granted_scopes') !== 'false' || url.searchParams.get('access_type') !== 'offline' || url.searchParams.get('prompt') !== 'consent select_account' ||
+      redirect.origin !== this.pairing.endpoint || redirect.pathname !== '/oauth/callback' || redirect.search || redirect.hash || redirect.username || redirect.password ||
+      url.searchParams.get('response_type') !== 'code' || url.searchParams.get('code_challenge_method') !== 'S256' ||
+      !/^[A-Za-z0-9_-]{43}$/.test(url.searchParams.get('state') ?? '') || !/^[A-Za-z0-9_-]{43}$/.test(url.searchParams.get('code_challenge') ?? '') ||
+      !/^[a-zA-Z0-9._-]+\.apps\.googleusercontent\.com$/.test(url.searchParams.get('client_id') ?? '') ||
+      JSON.stringify(scopes) !== JSON.stringify(expectedScopes)) throw Error('Worker authorization URL invalid');
+    return result;
+  }
+  async revokeGoogleGrant(rawPurpose: GoogleGrantPurpose, signal: AbortSignal): Promise<RemoteGoogleGrantStatus> {
+    const purpose = googleGrantPurposeSchema.parse(rawPurpose);
+    const result = this.grantStatus(await this.request('/google/revoke', signal, { purpose }), purpose);
+    if (result.state !== 'revoked') throw Error('Worker revocation outcome unverified');
+    return result;
   }
   async submit(input: DelegationCommand): Promise<CommandReceipt> {
     this.signal.throwIfAborted();

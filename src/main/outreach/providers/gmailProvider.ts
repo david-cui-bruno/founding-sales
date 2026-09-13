@@ -1,6 +1,6 @@
 /* eslint-disable no-control-regex -- MIME inputs must reject NUL before serialization. */
 import { z } from 'zod';
-import { capabilitiesForScopes, googleScopes } from '../../../../cloud/lambdas/delegated-worker/src/googleGrantCapabilities';
+import { capabilitiesForScopes, googleScopes } from '../../../shared/contracts/googleGrantCapabilities';
 import type { EmailSendResult, FrozenEmail, PreparedGmailSender, GmailCredentials } from './providerTypes';
 import { requestJsonOnce } from './providerHttp';
 import { fail, gmailCredentialsSchema, mailboxSchema, secretSchema } from './providerValidation';
