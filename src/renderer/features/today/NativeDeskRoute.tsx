@@ -77,26 +77,50 @@ export function NativeDeskRoute({
   const sequence = useRef(0);
   const load = useCallback(() => {
     const request = ++sequence.current;
+    // Retain the mounted content, but invalidate admission before either read.
+    setDailySessionScope(api.delegation, null);
+    setDailySessionScope(api.linkedin, null);
+    updateRequestedSessionHolds(api.delegation, () => 'Daily configuration pending');
+    updateLinkedInSessionHolds(api.linkedin, () => 'Daily configuration pending');
+    setState((previous) => previous.api === api
+      ? { ...previous, config: null }
+      : { api, snapshot: null, config: null, error: false });
+    let validated: DailySnapshot | null = null;
+    let local: Config | null = null;
+    const matchingConfig = (snapshot: DailySnapshot) =>
+      snapshot.workspaceId !== null && local?.workspaceId === snapshot.workspaceId
+        ? local
+        : null;
     const daily = Promise.resolve().then(() => api.daily.get());
-    const config = Promise.resolve()
+    void Promise.resolve()
       .then(() => api.delegation.status())
-      .catch((): Config | null => null);
-    void Promise.all([daily, config])
-      .then(([raw, local]) => {
+      .catch((): Config | null => null)
+      .then((config) => {
+        if (request !== sequence.current) return;
+        local = config;
+        const snapshot = validated;
+        if (!snapshot) return;
+        setState((previous) =>
+          request === sequence.current && previous.api === api &&
+          previous.snapshot === snapshot && !previous.error
+            ? { ...previous, config: matchingConfig(snapshot) }
+            : previous,
+        );
+      });
+    void daily
+      .then((raw) => {
         if (request !== sequence.current) return;
         const snapshot = dailySnapshotSchema.parse(raw);
+        validated = snapshot;
         setState({
           api,
           snapshot,
-          config:
-            local?.workspaceId === snapshot.workspaceId &&
-            snapshot.workspaceId !== null
-              ? local
-              : null,
+          config: matchingConfig(snapshot),
           error: false,
         });
       })
       .catch(() => {
+        validated = null;
         if (request === sequence.current) {
           setDailySessionScope(api.delegation, null);
           setDailySessionScope(api.linkedin, null);
