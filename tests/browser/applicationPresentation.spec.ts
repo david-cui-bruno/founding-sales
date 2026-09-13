@@ -60,6 +60,30 @@ test.afterEach(async ({ page }, info) => {
 });
 
 for (const theme of ['light', 'dark'] as const) for (const width of [1440, 1050] as const) {
+  test(`actual Settings recovers Connections in place without commands ${theme} ${width}`, async ({ page }, info) => {
+    const observed = await mount(page, { mode: 'meeting_first', theme, density: 'comfortable', width }, 'settings');
+    await page.evaluate(() => window.applicationPresentation.setConnectionStatusUnavailable(true));
+    await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Connections', exact: true }).click();
+    const section = page.getByRole('region', { name: 'Connections', exact: true });
+    await expect(section.getByRole('alert')).toContainText('Connection status unavailable');
+    await expect(section.getByText('Synthetic private connection failure')).toHaveCount(0);
+    await expect(section.getByRole('button', { name: 'Save connections' })).toBeDisabled();
+    await section.getByLabel('Sender name', { exact: true }).fill('Edited Founder');
+    await section.getByLabel('OpenAI API key', { exact: true }).fill('fictional-unsubmitted-secret');
+    const before = (await calls(page)).filter(call => call.method === 'outreach.status').length;
+    await page.evaluate(() => window.applicationPresentation.setConnectionStatusUnavailable(false));
+    const retry = section.getByRole('button', { name: 'Refresh connection status' });
+    await retry.focus(); await retry.press('Enter');
+    await expect(section.getByRole('button', { name: 'Save connections' })).toBeEnabled();
+    await expect(section.getByRole('alert')).toHaveCount(0);
+    await expect(section.getByLabel('Sender name', { exact: true })).toHaveValue('Edited Founder');
+    await expect(section.getByLabel('OpenAI API key', { exact: true })).toHaveValue('fictional-unsubmitted-secret');
+    expect((await calls(page)).filter(call => call.method === 'outreach.status')).toHaveLength(before + 1);
+    expect((await calls(page)).filter(call => call.kind !== 'read')).toEqual([]);
+    expect(observed.errors).toEqual([]); expect(observed.requests).toEqual([]);
+    await page.screenshot({ path: info.outputPath('connections-recovered.png'), fullPage: true });
+  });
+
   test(`actual navigation keyboard focus preserves selection and More hover ${theme} ${width}`, async ({ page }, info) => {
     const observed = await mount(page, { mode: 'meeting_first', theme, density: 'comfortable', width });
     const rail = page.getByRole('navigation', { name: 'Primary', exact: true });
