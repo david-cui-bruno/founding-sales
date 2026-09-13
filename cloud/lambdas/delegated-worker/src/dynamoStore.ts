@@ -8,6 +8,19 @@ export { accountFingerprint as fingerprint };
 export type DynamoCommand = GetItemCommand | QueryCommand | TransactWriteItemsCommand;
 export type DynamoResult = GetItemCommandOutput & QueryCommandOutput & TransactWriteItemsCommandOutput;
 export interface DynamoAdapter { send(command: DynamoCommand): Promise<DynamoResult>; }
+/** Fixed, non-sensitive failure identity. Never retain SDK messages or causes. */
+export class DynamoReadUnavailable extends Error {
+  constructor() { super('worker_unavailable'); this.name = 'DynamoReadUnavailable'; }
+}
+/** Apply only to the raw SDK boundary, before auth/revocation decorators.
+ * Transaction failures retain their original identity and existing CAS handling. */
+export function withDynamoReadErrors(dynamo: DynamoAdapter): DynamoAdapter {
+  return { send: async command => {
+    if (!(command instanceof GetItemCommand || command instanceof QueryCommand)) return dynamo.send(command);
+    try { return await dynamo.send(command); }
+    catch { throw new DynamoReadUnavailable(); }
+  } };
+}
 export type RepositoryOptions = { dynamo: DynamoAdapter; tableName: string; workspaceId: string; clock: { now(): string }; publish?: (event: WorkerEvent) => Promise<void> };
 export type Stored<T> = { data: T; rev: number };
 export type Scalars = Record<string, string | number | boolean>;
