@@ -169,6 +169,15 @@
   font-size: var(--text-dense);
 }
 
+.workspace-access .settings__counters > div {
+  min-width: 0;
+}
+
+.workspace-access .settings__counters dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 /* Diagnostics: one StatusBadge per foundation fact. */
 .settings__status-rows {
   display: flex;
