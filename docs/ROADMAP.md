@@ -1,6 +1,6 @@
 # FSS delivery roadmap
 
-Updated 2026-09-11. This is the active product roadmap. Older design documents are historical context, not a required Superpowers execution process.
+Updated 2026-09-13. This is the active product roadmap. Older design documents are historical context, not a required Superpowers execution process.
 
 ## The outcome
 
@@ -25,15 +25,24 @@ The campaign-draft regression separately uses the real Campaigns route, delegati
 
 These new changes are not installed merely because their PRs merge. The installed app remains the previously approved cleanup build until a separate installation decision.
 
+## Delivered checkpoint
+
+- Product delivery through [PR 15](https://github.com/david-cui-bruno/founding-sales/pull/15) is merged in the public repository. The September 12 checkpoint is `48e0ab1`; its [postmerge main check](https://github.com/david-cui-bruno/founding-sales/actions/runs/34705288424) passed. Later documentation-only changes do not change that product checkpoint.
+- The signed candidate built from `4044245` contains the research-grounded draft, manual-call campaign saving, separate approval and enrollment. Product code is unchanged from that candidate. PR 15 corrected only an external Friday test fixture, and all 31 maintained signed-app workflows passed against the same candidate with the corrected test.
+- The candidate is **not installed**. Its qualification does not establish a positive packaged campaign journey, real-profile acceptance, live research/model quality, a working phone handoff or useful daily automation.
+
 ## What still matters next
 
 | Priority | Outcome | Remaining work / honest limit |
 | --- | --- | --- |
-| 1 | Deliver a coherent candidate | The first twelve PRs are merged. Main `6bb305e` passed hosted checks for campaign drafting. The signed `5dd96d5` candidate passed 31 packaged workflows and does not include subsequent campaign-draft or enrollment changes. Installation and one real-company walkthrough still require a separate backed-up installation decision. Subsequent PRs need their own affected checks, not reruns of every historical checkpoint. |
-| 2 | Remove founder preparation homework | Saved company research now feeds the existing automatic draft. The explicit research/import/reviewed-link steps still require founder effort. Measure relevance with an approved real workflow before adding more automation. This is not yet an automatically prepared daily queue. |
-| 3 | Make small campaigns usable | The bounded unapproved call-draft path uses the existing versioned owner-command backend, with a readable exact company audience and offer. This branch adds separate reviewed approval and manual-call enrollment for that exact template. Real worker setup/ownership, an installed walkthrough and phone handoff qualification remain prerequisites for use. This is not a whole-sequence activation path. Qualify the small path before adding multi-step/email/LinkedIn campaign editing. |
-| 4 | Prove live operation, separately authorized | Configure and qualify the real worker, scoped mailbox/calendar access, phone handoff, delivery/reply stops, and meeting flow. Test a tiny explicitly approved cohort before expanding. Local pairing and synthetic tests do not establish these outcomes. |
-| 5 | Improve observed daily use | Fix friction, performance, and recovery issues seen in the actual walkthrough. Prefer measured user impact to additional generalized infrastructure. |
+| 1 | Put the qualified candidate in front of the founder | With separate installation approval, normally quit the old app, take and verify a fresh profile/prior-app backup, install the exact signed candidate and confirm preserved data. Do not launch a scratch candidate against the real profile first. |
+| 2 | Complete one useful real-company journey | Use an explicitly approved property-management company and contact. With any required provider authorization, review relevant research, create a useful unsent draft, edit it, navigate away and reopen it. Record elapsed time, unnecessary clicks and confusing holds. This is the next product acceptance milestone, not another infrastructure project. |
+| 3 | Qualify one small manual-call campaign | Separately configure and verify real worker ownership and phone setup. Save, explicitly approve and separately enroll the supported template, confirm the intended Today item, then separately authorize the actual phone handoff. Enrollment alone does not place a call. Qualify this path before expanding campaigns. |
+| 4 | Remove founder preparation homework | Saved research feeds the existing automatic draft, but research/import/reviewed-link steps still require founder effort. Use the real walkthrough to choose which preparation steps should become automatic and which genuinely need review. Measure relevance and time saved. A useful automatic daily queue remains the biggest product gap. |
+| 5 | Prove ongoing live operation | With separate authorization, qualify scoped mailbox/calendar access, permitted email follow-ups, reply stops, scheduling and meeting briefs, including worker operation while the Mac sleeps. Start with a tiny approved cohort. Local pairing and synthetic tests do not establish these outcomes. |
+| 6 | Improve observed use before expanding | Fix friction, performance and recovery issues actually seen in the walkthrough. Consider broader sequences and manual-final-send LinkedIn support only after the small path is useful. Prefer measured user impact to generalized infrastructure. |
+
+The next milestone is complete when the backed-up installation preserves existing data and one approved real-company journey produces relevant research and a useful unsent draft that survives edit/reopen. Record the remaining manual work. Do not count installation alone, a green test suite or an enrollment receipt as proof of an operational sales system.
 
 ## Where we overbuilt
 
