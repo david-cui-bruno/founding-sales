@@ -1073,11 +1073,12 @@ describe('Task9 real Settings destination integration', () => {
     await waitFor(() => expect(f.worker.status).toHaveBeenCalledTimes(1));
     const before = f.worker.status.mock.calls.length;
     await task9Hold(which);
-    expect(f.worker.status).toHaveBeenCalledTimes(before + 1); expect(f.worker.status.mock.calls.every(call => call.length === 0)).toBe(true);
+    // Pairing and workspace access each perform one status read, never a command.
+    expect(f.worker.status).toHaveBeenCalledTimes(before + 2); expect(f.worker.status.mock.calls.every(call => call.length === 0)).toBe(true);
     expect(screen.getByRole('button', { name: 'Pair worker' }).hasAttribute('disabled')).toBe(false);
     expect(f.worker.pair).not.toHaveBeenCalled(); f.assertNoActivation();
     fireEvent.click(screen.getByRole('button', { name: 'Refresh worker status' }));
-    await waitFor(() => expect(f.worker.status).toHaveBeenCalledTimes(before + 2)); await task9Controls(); f.assertNoActivation();
+    await waitFor(() => expect(f.worker.status).toHaveBeenCalledTimes(before + 3)); await task9Controls(); f.assertNoActivation();
   }), 10_000);
 
   it('S03 successful explicit Pair on actual reached Worker controls stores no code and causes no activation', async () => task9Isolated(async () => {
@@ -1161,7 +1162,7 @@ describe('Task9 real Settings destination integration', () => {
       await task9Settle(pendingRead); await task9Settle(pendingPair);
       expect(f.worker.status).toHaveBeenCalledTimes(absentReads); expect(screen.queryByText('Worker paired', { exact: true })).toBeNull();
       await task9Hold('welcome'); expect(task9Field('Pairing code').value).toBe('');
-      expect(f.worker.status).toHaveBeenCalledTimes(absentReads + 1);
+      expect(f.worker.status).toHaveBeenCalledTimes(absentReads + 2);
       task9Fill('B'.repeat(43)); fireEvent.click(screen.getByRole('button', { name: 'Pair worker' }));
       await screen.findByText('Worker paired', { exact: true }); f.assertNoActivation();
     } finally { await task9Settle(pendingRead); await task9Settle(pendingPair); }

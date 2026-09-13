@@ -60,6 +60,33 @@ test.afterEach(async ({ page }, info) => {
 });
 
 for (const theme of ['light', 'dark'] as const) for (const width of [1440, 1050] as const) {
+  test(`actual Settings workspace access remains explicit and keyboard reachable ${theme} ${width}`, async ({ page }, info) => {
+    const observed = await mount(page, { mode: 'meeting_first', theme, density: 'comfortable', width }, 'settings');
+    const sections = page.getByRole('navigation', { name: 'Settings sections' });
+    await sections.getByRole('button', { name: 'Worker connection', exact: true }).click();
+    const access = page.getByRole('region', { name: 'Workspace access', exact: true });
+    await expect(access).toBeVisible();
+    const refresh = access.getByRole('button', { name: 'Refresh setup status', exact: true });
+    await expect(refresh).toBeEnabled();
+    await expect(access.getByText('Sync saved cloud work is not read-only.', { exact: false })).toBeVisible();
+    await refresh.scrollIntoViewIfNeeded(); await refresh.focus();
+    const before = (await calls(page)).filter(call => call.method === 'delegation.status').length;
+    await refresh.press('Enter');
+    await expect.poll(async () => (await calls(page)).filter(call => call.method === 'delegation.status').length).toBe(before + 1);
+    await expect(refresh).toBeEnabled();
+    const sync = access.getByRole('button', { name: 'Sync saved cloud work', exact: true });
+    await sync.scrollIntoViewIfNeeded(); await expect(sync).toBeInViewport();
+    expect(await access.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+    expect(await access.locator('dd').evaluateAll(elements => elements.every(element => {
+      const cell = element.parentElement!.getBoundingClientRect();
+      const range = document.createRange(); range.selectNodeContents(element);
+      return Array.from(range.getClientRects()).every(rect => rect.right <= cell.right + 1 && rect.left >= cell.left - 1);
+    }))).toBe(true);
+    expect((await calls(page)).filter(call => call.kind !== 'read')).toEqual([]);
+    expect(observed.errors).toEqual([]); expect(observed.requests).toEqual([]);
+    await page.screenshot({ path: info.outputPath('workspace-access.png'), fullPage: true });
+  });
+
   test(`actual Settings recovers Connections in place without commands ${theme} ${width}`, async ({ page }, info) => {
     const observed = await mount(page, { mode: 'meeting_first', theme, density: 'comfortable', width }, 'settings');
     await page.evaluate(() => window.applicationPresentation.setConnectionStatusUnavailable(true));

@@ -144,6 +144,7 @@ export function WorkerSetupSection({ api }: { api?: Api }) {
   return (
     <section className="settings__section" aria-label="Worker connection">
       <h2 className="settings__section-title">Worker connection</h2>
+      <p>Last explicit local status read. These facts may predate changes in Workspace access. Use Refresh worker status to update them.</p>
       <p role="status">{visible.status ? labels[visible.status.state] : visible.busy ? 'Checking worker status…' : 'Unavailable'}</p>
       {visible.status && (
         <dl className="settings__counters">

@@ -11,6 +11,7 @@ import type { PhoneSetupApi } from '../../shared/contracts/phoneSetupContract';
 import { PhoneSetupSection } from './PhoneSetupSection';
 import type { CalliePreloadApi } from '../../shared/preload';
 import { WorkerSetupSection } from './WorkerSetupSection';
+import { WorkspaceAccessSection } from './WorkspaceAccessSection';
 
 import type { AppHealth } from '../../shared/healthContract';
 import type { DensityPreference, DensityState } from '../app/useDensity';
@@ -380,6 +381,13 @@ function AboutSection({ health }: { health: AppHealth | null }) {
   );
 }
 
+type SettingsDelegationApi = Pick<CalliePreloadApi['delegation'], 'status' | 'pair'> &
+  Partial<Pick<CalliePreloadApi['delegation'], 'configure' | 'sync'>>;
+
+function hasWorkspaceAccess(api: SettingsDelegationApi | undefined): api is SettingsDelegationApi & Pick<CalliePreloadApi['delegation'], 'configure' | 'sync'> {
+  return typeof api?.configure === 'function' && typeof api.sync === 'function';
+}
+
 export type SettingsScreenProps = {
   state: DiagnosticsState;
   onRetry: () => void;
@@ -391,7 +399,7 @@ export type SettingsScreenProps = {
   localWorkspaceApi?: LocalWorkspaceApi;
   outreachApi?: OutreachApi;
   phoneSetupApi?: PhoneSetupApi;
-  delegationApi?: Pick<CalliePreloadApi['delegation'], 'status' | 'pair'>;
+  delegationApi?: SettingsDelegationApi;
   /** Sourcing status rows, rendered inside the Sourcing section. */
   sourcing?: ReactNode;
   /** Extra diagnostics panels (Apple spike), rendered with Diagnostics. */
@@ -479,7 +487,10 @@ export function SettingsScreen({
           {active === 'call-capacity' && <CallCapacitySection api={localWorkspaceApi} onSaved={notifyCallCapacitySaved} />}
           {active === 'connections' && <ConnectionsSection api={outreachApi} />}
           {active === 'phone' && <PhoneSetupSection api={phoneSetupApi} />}
-          {active === 'worker' && <WorkerSetupSection api={delegationApi} />}
+          {active === 'worker' && <>
+            <WorkerSetupSection api={delegationApi} />
+            <WorkspaceAccessSection api={hasWorkspaceAccess(delegationApi) ? delegationApi : undefined} onChanged={notifyCallCapacitySaved} />
+          </>}
           {active === 'appearance' && (
             <AppearanceSection theme={theme} density={density} />
           )}
