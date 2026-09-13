@@ -122,17 +122,19 @@ describe('preload workflow bridge', () => {
     ]);
     expect(Object.keys(api.delegation).sort()).toEqual([
       'approveRequestedFollowup', 'beginPhone', 'bootstrap', 'configure', 'configurePolicy', 'configureResearch',
-      'editRequestedFollowup', 'getRequestedFollowup', 'pair', 'policyImport', 'prepareRequestedFollowup', 'status', 'submit', 'sync',
+      'editRequestedFollowup', 'getRequestedFollowup', 'googleConnections', 'pair', 'policyImport', 'prepareRequestedFollowup', 'status', 'submit', 'sync',
     ]);
     expect(Object.keys(api.linkedin).sort()).toEqual([
       'begin', 'copy', 'get', 'open', 'prepare', 'recover', 'reportOutcome', 'save',
     ]);
     expect(Object.keys(api.delegation.policyImport).sort()).toEqual(['confirm', 'resume', 'selectAndPreview', 'status']);
-    const { policyImport, ...delegationMethods } = api.delegation;
-    for (const namespace of [delegationMethods, api.linkedin, policyImport]) {
+    const { policyImport, googleConnections, ...delegationMethods } = api.delegation;
+    if (!googleConnections) throw new Error('Current preload must expose Google connections');
+    expect(Object.keys(googleConnections).sort()).toEqual(['begin', 'disclosure', 'revoke', 'status']);
+    for (const namespace of [delegationMethods, api.linkedin, policyImport, googleConnections]) {
       for (const method of Object.values(namespace)) expect(method).toBeTypeOf('function');
     }
-    for (const namespace of [api.delegation, api.linkedin, policyImport]) {
+    for (const namespace of [api.delegation, api.linkedin, policyImport, googleConnections]) {
       expect(namespace).not.toHaveProperty('invoke');
       expect(namespace).not.toHaveProperty('run');
       expect(namespace).not.toHaveProperty('dispatch');

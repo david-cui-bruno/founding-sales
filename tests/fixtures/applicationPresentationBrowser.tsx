@@ -1,3 +1,5 @@
+import { googleGrantDisclosure, googleScopes, personalGoogleGrantDisclosure } from '../../src/shared/contracts/googleGrantCapabilities';
+import { googleConnectionSelectorSchema } from '../../src/shared/contracts/remoteGoogleConnectionsContract';
 /** Actual-App, complete typed read-only all-route fixture. No preload/client or production API factory. */
 import { StrictMode } from 'react';
 import { installApplicationModalScenario } from './applicationModalScenario';
@@ -37,6 +39,7 @@ const desk = nativeDeskFixture(nativeDeskReviewFixture());
 let localMode: 'meeting_first' | 'legacy' = new URLSearchParams(location.search).get('mode') === 'legacy' ? 'legacy' : 'meeting_first';
 let detailMode: 'ready' | 'pending' | 'failed' = 'ready';
 let connectionStatusUnavailable = false;
+let googleConnectionReady = false;
 const read = <T,>(method: string, value: () => T) => async (...args: unknown[]): Promise<T> => {
   calls.push({ method, kind: 'read', args: structuredClone(args) });
   return structuredClone(value());
@@ -82,6 +85,14 @@ const api: CalliePreloadApi = {
     transition: forbidden('localWorkspace.transition'),
   },
   delegation: {
+    googleConnections: {
+      status: async (input): Promise<import('../../src/shared/contracts/remoteGoogleGrantContract').RemoteGoogleGrantStatus> => { const request = googleConnectionSelectorSchema.parse(input); calls.push({ method: 'googleConnections.status', kind: 'read', args: [request] });
+        if (!googleConnectionReady || request.purpose !== 'personal_availability') return { state: 'unconfigured' as const, grant: null };
+        return { state: 'ready' as const, grant: { provider: 'google' as const, owner: 'remote' as const, purpose: 'personal_availability' as const, subject: 'fixture-personal', email: 'founder@gmail.com', grantedScopes: ['openid', 'email', googleScopes.availability], capabilities: ['availability' as const], availabilityCalendars: { calendarIds: [`calendar@${'a'.repeat(60)}.${'b'.repeat(60)}.${'c'.repeat(60)}.example.test`], confirmed: true as const } } };
+      },
+      disclosure: async input => { const request = googleConnectionSelectorSchema.parse(input); calls.push({ method: 'googleConnections.disclosure', kind: 'read', args: [request] }); return structuredClone(request.purpose === 'personal_availability' ? personalGoogleGrantDisclosure : googleGrantDisclosure); },
+      begin: forbidden('googleConnections.begin'), revoke: forbidden('googleConnections.revoke'),
+    },
     status: async () => { calls.push({ method: 'delegation.status', kind: 'read' }); return desk.api.delegation.status(); },
     policyImport: { selectAndPreview: forbidden('policyImport.selectAndPreview'), confirm: forbidden('policyImport.confirm'), resume: forbidden('policyImport.resume'), status: forbidden('policyImport.status') },
     prepareRequestedFollowup: forbidden('delegation.prepareRequestedFollowup'), getRequestedFollowup: forbidden('delegation.getRequestedFollowup'),
@@ -213,6 +224,7 @@ const controls = {
   ...(modalScenario ? { modal: modalScenario.controller } : {}),
   ...(leadsScenario ? { leads: leadsScenario.controller } : {}),
   calls,
+  setGoogleConnectionReady(ready: boolean) { googleConnectionReady = ready; },
   setConnectionStatusUnavailable(unavailable: boolean) { connectionStatusUnavailable = unavailable; },
   setMode(mode: typeof localMode) { localMode = mode; window.dispatchEvent(new Event('focus')); },
   setDetailMode(mode: typeof detailMode) { detailMode = mode; },

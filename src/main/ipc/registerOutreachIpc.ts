@@ -1,3 +1,5 @@
+import {googleConnectionSelectorSchema,googleConsentOpenedSchema} from '../../shared/contracts/remoteGoogleConnectionsContract';
+import {remoteGoogleGrantBeginSchema,remoteGoogleGrantDisclosureSchema,remoteGoogleGrantStatusSchema} from '../../shared/contracts/remoteGoogleGrantContract';
 import {policyImportConfirmSchema,policyImportResumeSchema,policyImportStatusSchema,policyImportPreviewSchema,policyImportReportSchema} from '../../shared/contracts/accountRoutePolicyImportContract';
 import {prepareRequestedFollowupSchema,getRequestedFollowupSchema,editRequestedFollowupSchema,approveRequestedFollowupSchema,savedRequestedFollowupSchema,requestedApprovalStatusSchema} from '../../shared/contracts/requestedFollowupContract';
 import {workerPolicyRequestSchema,workerPolicyReceiptSchema} from '../../shared/contracts/workerPolicyContract';
@@ -35,6 +37,13 @@ export function registerOutreachIpc(options:{provider:OutreachApi;delegation?:De
       }}));
     if(options.delegation){
       const d=options.delegation;
+      if(d.googleConnections){
+        const google=d.googleConnections;
+        add('google-connection-status',googleConnectionSelectorSchema,remoteGoogleGrantStatusSchema,input=>google.status(input));
+        add('google-connection-disclosure',googleConnectionSelectorSchema,remoteGoogleGrantDisclosureSchema,input=>google.disclosure(input));
+        add('google-connection-begin',remoteGoogleGrantBeginSchema,googleConsentOpenedSchema,input=>google.begin(input));
+        add('google-connection-revoke',googleConnectionSelectorSchema,remoteGoogleGrantStatusSchema,input=>google.revoke(input));
+      }
       if(d.policyImport){
         const p=d.policyImport;
         add('policy-import-select-preview',null,policyImportPreviewSchema.nullable(),()=>p.selectAndPreview());

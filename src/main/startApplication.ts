@@ -326,6 +326,7 @@ function createStartupCompanyResearch(input: { runtime: FoundationRuntime; provi
 
 export type ApplicationStartupDependencies = FoundationRuntimeDependencies & {
   createEmailService?(runtime:FoundationRuntime,userDataPath:string,providers?:ReturnType<typeof createOutreachProviders>,expectedWorkspaceId?:string):ReturnType<typeof createEmailService>;
+  openGoogleConsent?(url:string):Promise<void>;
   createPairingStore?(userDataPath:string):Pick<PairingStore,'load'|'redeem'>;
   createResearchProviders?(userDataPath:string):ReturnType<typeof createOutreachProviders>;
   companyResearchHttp?: PageHttp;
@@ -597,6 +598,7 @@ const defaultDependencies: ApplicationStartupDependencies = {
   createRequestedFollowupModel:userDataPath=>async()=>{const credentials=await new CredentialStore({directory:join(userDataPath,'outreach'),safeStorage}).load();return credentials?.model.apiKey?{credentials:credentials.model,fetch:globalThis.fetch}:undefined;},
   createLinkedInAdapters:userDataPath=>({provider:createLinkedInDraftProvider({credentials:new CredentialStore({directory:join(userDataPath,'outreach'),safeStorage}),fetch:globalThis.fetch}),shell:{openExternal:url=>shell.openExternal(url)},clipboard:{writeText:text=>clipboard.writeText(text)}}),
   createResearchProviders: userDataPath => createOutreachProviders({directory:join(userDataPath,'outreach'),safeStorage,openExternal:url=>shell.openExternal(url)}),
+  openGoogleConsent:url=>shell.openExternal(url),
   createPairingStore:userDataPath=>new PairingStore({directory:join(userDataPath,'delegation'),safeStorage}),
   createEmailService: (runtime,userDataPath,providers,expectedWorkspaceId) => createEmailService({databaseGate:runtime,expectedWorkspaceId,
     providers:providers ?? createOutreachProviders({directory:join(userDataPath,'outreach'),safeStorage,openExternal:url=>shell.openExternal(url)})}),
@@ -813,7 +815,7 @@ export async function startApplication(
       domain, phone: phoneBindings.phone, readiness: phoneBindings.readiness,
     });
     phoneBindings.onSetupChanged?.(() => { if (!outboundClosed) outbound.invalidate('wake'); });
-    delegation=createDelegationRuntime({databaseGate:runtime,pairing:paired,clock:domainClock,phone:phoneBindings.phone,inboundRegistry:startupInboundRegistry,policyImportNative:dependencies.createPolicyImportNative?.(),requestedModel:dependencies.createRequestedFollowupModel?.(options.userDataPath),linkedIn:paired?dependencies.createLinkedInAdapters?.(options.userDataPath):undefined,configurationChanged:async()=>{
+    delegation=createDelegationRuntime({openGoogleConsent:dependencies.openGoogleConsent,databaseGate:runtime,pairing:paired,clock:domainClock,phone:phoneBindings.phone,inboundRegistry:startupInboundRegistry,policyImportNative:dependencies.createPolicyImportNative?.(),requestedModel:dependencies.createRequestedFollowupModel?.(options.userDataPath),linkedIn:paired?dependencies.createLinkedInAdapters?.(options.userDataPath):undefined,configurationChanged:async()=>{
       await companyResearch?.dispose();companyResearch=undefined;
       const state=paired?await runtime.withDatabase(database=>new SqlDelegationConfiguration({database,workspaceId:paired.workspaceId,pairingId:paired.pairingId,clock:domainClock}).read()):null;
       if(state?.configuration.state==='active'&&state.configuration.research&&dependencies.createResearchProviders&&!outboundClosed){

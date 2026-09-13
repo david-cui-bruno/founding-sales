@@ -1,3 +1,5 @@
+import {googleConnectionSelectorSchema,googleConsentOpenedSchema,selectedGooglePurpose,type RemoteGoogleConnectionsApi} from '../../shared/contracts/remoteGoogleConnectionsContract';
+import {remoteGoogleGrantBeginSchema} from '../../shared/contracts/remoteGoogleGrantContract';
 import {createAccountRoutePolicyImport,type AccountRoutePolicyImportDependencies} from './accountRoutePolicyImport';
 import {SqlRequestedFollowupRepository} from '../outreach/requestedFollowupRepository';
 import {createRequestedFollowupService} from '../outreach/requestedFollowupService';
@@ -17,7 +19,7 @@ import {approveRequestedFollowupCommandSchema,delegatedPhoneHandoffRequestSchema
 import {publicDelegationCommandSchema,type DelegatedPhoneHandoffResult} from '../../shared/contracts/delegationContract';
 /** Every repository belongs to a live FoundationRuntime operation lease. No DB
  * handle survives its callback. Local lock aborts work, never revokes the owner. */
-export function createDelegationRuntime(input:{databaseGate:{withDatabase<T>(fn:(database:AppDatabase)=>T|Promise<T>):Promise<T>};pairing:StoredPairing|null;clock:{now():string};fetch?:typeof globalThis.fetch;phone?:Parameters<typeof createDelegatedPhoneHandoff>[0]['phone'];inboundRegistry?:InboundRegistry;linkedIn?:Pick<Parameters<typeof createRuntimeLinkedInApi>[0],'provider'|'productFacts'|'shell'|'clipboard'>;policyImportNative?:AccountRoutePolicyImportDependencies['native'];requestedModel?:()=>Promise<NonNullable<Parameters<typeof createRequestedFollowupService>[0]['model']>|undefined>;configurationChanged?:()=>void|Promise<void>}) {
+export function createDelegationRuntime(input:{databaseGate:{withDatabase<T>(fn:(database:AppDatabase)=>T|Promise<T>):Promise<T>};pairing:StoredPairing|null;clock:{now():string};fetch?:typeof globalThis.fetch;phone?:Parameters<typeof createDelegatedPhoneHandoff>[0]['phone'];inboundRegistry?:InboundRegistry;linkedIn?:Pick<Parameters<typeof createRuntimeLinkedInApi>[0],'provider'|'productFacts'|'shell'|'clipboard'>;policyImportNative?:AccountRoutePolicyImportDependencies['native'];requestedModel?:()=>Promise<NonNullable<Parameters<typeof createRequestedFollowupService>[0]['model']>|undefined>;configurationChanged?:()=>void|Promise<void>;openGoogleConsent?:(url:string)=>Promise<void>}) {
  const pairing=input.pairing?Object.freeze({...input.pairing,scopes:Object.freeze([...input.pairing.scopes])}):null;
  let lifetime=new AbortController();let locked=false;let closed=false;
  const flights=new Set<Promise<unknown>>();
@@ -38,6 +40,38 @@ export function createDelegationRuntime(input:{databaseGate:{withDatabase<T>(fn:
   const client=new ExecutionClient({repository,transport,pairing:{endpoint:pairing.endpoint,workspaceId:pairing.workspaceId,credential:pairing.credential},fetch:input.fetch,signal});
   return {repository,transport,client,configuration};
  }
+ // Google reads never synchronize/configure delegation or acquire sending authority.
+ function googleRun<T>(fn:(client:ExecutionClient,signal:AbortSignal)=>Promise<T>):Promise<T>{
+  return run(async(database,signal)=>{
+   const active=AbortSignal.any([signal,AbortSignal.timeout(15000)]);
+   assertCurrent(active);const {client}=services(database,active);
+   const value=await fn(client,active);assertCurrent(active);return value;
+  });
+ }
+ // Native opening has no AbortSignal API. Bound our wait and lease, even if the
+ // platform opener never settles. A late completion cannot publish success.
+ async function openConsent(url:string,signal:AbortSignal):Promise<void>{
+  assertCurrent(signal);
+  let abort!:()=>void;
+  const cancelled=new Promise<never>((_resolve,reject)=>{abort=()=>reject(Error('delegation_inactive'));signal.addEventListener('abort',abort,{once:true});});
+  try{await Promise.race([input.openGoogleConsent!(url),cancelled]);assertCurrent(signal);}
+  finally{signal.removeEventListener('abort',abort);}
+ }
+ const googleConnections:RemoteGoogleConnectionsApi={
+  status:async raw=>{const request=googleConnectionSelectorSchema.parse(raw);return googleRun((client,signal)=>client.googleGrantStatus(request.purpose,signal));},
+  disclosure:async raw=>{const request=googleConnectionSelectorSchema.parse(raw);return googleRun((client,signal)=>client.googleGrantDisclosure(request.purpose,signal));},
+  begin:async raw=>{
+   const request=remoteGoogleGrantBeginSchema.parse(raw);
+   if(!input.openGoogleConsent)throw Error('google_consent_opener_unavailable');
+   invalidate();
+   return googleRun(async(client,signal)=>{
+    const result=await client.beginGoogleGrant(request,signal);
+    assertCurrent(signal);await openConsent(result.authorizationUrl,signal);assertCurrent(signal);
+    return googleConsentOpenedSchema.parse({state:'consent_opened',purpose:selectedGooglePurpose(request.purpose)});
+   });
+  },
+  revoke:async raw=>{const request=googleConnectionSelectorSchema.parse(raw);invalidate();return googleRun((client,signal)=>client.revokeGoogleGrant(request.purpose,signal));},
+ };
  const contextInput=(draft:RequestedFollowupDraft):PrepareRequestedFollowup=>({accountId:draft.accountId,originalCall:draft.originalCall,recipientBinding:draft.recipientBinding,expectedAccountVersion:draft.accountVersion,mode:'manual'});
  function savedDraft(database:AppDatabase,accountId:string,draftId:string){
   const row=database.raw.prepare('SELECT draft_json FROM delegated_requested_followup_drafts WHERE workspace_id=? AND account_id=? AND id=?').get(pairing!.workspaceId,accountId,draftId) as {draft_json:string}|undefined;
@@ -113,6 +147,7 @@ export function createDelegationRuntime(input:{databaseGate:{withDatabase<T>(fn:
  const adapter=createAdapter();
  const readinessForHandoff=(handoffId:string)=>{const scoped=createAdapter(handoffId);return createInboundReadiness({snapshot:()=>{const snapshot=input.inboundRegistry?.snapshot();if(!snapshot||!snapshot.adapters.includes(adapter))return {initialized:false,revision:snapshot?.revision??0,adapters:[]};return {...snapshot,adapters:snapshot.adapters.map(current=>current===adapter?scoped:current)};}});};
  return {
+  googleConnections,
   prepareRequestedFollowup:(raw:PrepareRequestedFollowup)=>{const request=prepareRequestedFollowupSchema.parse(raw);return run(async(database,signal)=>{const {service}=await requestedServices(database,signal,request);return service.prepareRequestedFollowup(request,signal);});},
   getRequestedFollowup:(raw:GetRequestedFollowup)=>{const request=getRequestedFollowupSchema.parse(raw);return run(async(database,signal)=>{
    if(!pairing)throw Error('pairing_unconfigured');const draft=savedDraft(database,request.accountId,request.draftId);if(!draft)return null;
