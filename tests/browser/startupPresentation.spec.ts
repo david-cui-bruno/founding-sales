@@ -273,11 +273,12 @@ for (const storage of ['system', 'invalid', 'throwing', 'missing', 'unset'] as c
     await page.evaluate(() => window.startupPresentation.resolveHealth());
     await pendingReads(page, 2);
     await page.evaluate(() => window.startupPresentation.resolveDaily('meeting_first'));
-    await expect(page.getByText('Loading daily workspace…', { exact: true })).toBeVisible();
-    await expect(page.locator('[data-workflow-mode]')).toHaveCount(0);
+    await expect(page.getByText('Loading daily workspace…', { exact: true })).toHaveCount(0);
+    await expect(page.getByTestId('native-desk')).toHaveAttribute('data-workflow-mode', 'meeting_first');
+    expect(await page.evaluate(() => window.startupPresentation.pending().delegation)).toBe(2);
     await checkpoint(page, info, `${storage}-daily-ready-config-pending`);
-    await expect(page.locator('[data-workflow-mode]')).toHaveCount(0);
-    await expect(page.getByText('Loading daily workspace…', { exact: true })).toBeVisible();
+    await expect(page.getByTestId('native-desk')).toBeVisible();
+    await expect(page.getByText('Loading daily workspace…', { exact: true })).toHaveCount(0);
     await page.evaluate(() => window.startupPresentation.resolveDelegation());
     await expect(page.getByTestId('native-desk')).toBeVisible();
     await page.emulateMedia({ colorScheme: 'light' });
@@ -317,6 +318,26 @@ for (const width of [1440, 1050]) {
     await expect(page.getByText('Workflow mode unavailable or inconsistent. Refresh to check local status. Worker actions are held.')).toBeVisible();
     await checkpoint(page, info, 'geometry-unknown');
     assertPendingGeometry(await page.evaluate(() => window.startupPresentation.samples.at(-1)!), width);
+    await clean(page, state, info);
+  });
+}
+
+for (const width of [1440, 1050]) for (const theme of ['light', 'dark'] as const) {
+  test(`saved daily content appears while configuration remains unresolved ${width}/${theme}`, async ({ page }, info) => {
+    const state = await mount(page, width, { theme, density: 'compact' });
+    await page.evaluate(() => window.startupPresentation.resolveHealth());
+    await pendingReads(page, 2);
+    await page.evaluate(() => window.startupPresentation.resolveDaily('meeting_first'));
+    const desk = page.getByTestId('native-desk');
+    await expect(desk).toHaveAttribute('data-workflow-mode', 'meeting_first');
+    await expect(page.locator('.native-desk__lane h2 .native-desk__lane-label')).toHaveText(['Local commitments', 'Calls', 'Saved draft continuations', 'Upcoming meetings']);
+    expect(await page.evaluate(() => window.startupPresentation.pending().delegation)).toBe(2);
+    await expect(page.getByText('Loading daily workspace…', { exact: true })).toHaveCount(0);
+    await desk.evaluate(element => element.setAttribute('data-publication-retained', 'yes'));
+    await checkpoint(page, info, 'daily-visible-config-pending');
+    await page.evaluate(() => window.startupPresentation.resolveDelegation());
+    await expect(desk).toHaveAttribute('data-publication-retained', 'yes');
+    await expect(desk).toHaveAttribute('data-workflow-mode', 'meeting_first');
     await clean(page, state, info);
   });
 }
