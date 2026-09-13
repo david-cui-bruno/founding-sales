@@ -1,3 +1,4 @@
+import { RemoteGoogleConnectionsSection } from './RemoteGoogleConnectionsSection';
 import { CallCapacitySection } from './CallCapacitySection';
 import type { LocalWorkspaceApi } from '../../shared/contracts/localWorkspaceContract';
 import { WorkflowSection } from './WorkflowSection';
@@ -382,7 +383,7 @@ function AboutSection({ health }: { health: AppHealth | null }) {
 }
 
 type SettingsDelegationApi = Pick<CalliePreloadApi['delegation'], 'status' | 'pair'> &
-  Partial<Pick<CalliePreloadApi['delegation'], 'configure' | 'sync'>>;
+  Partial<Pick<CalliePreloadApi['delegation'], 'configure' | 'sync' | 'googleConnections'>>;
 
 function hasWorkspaceAccess(api: SettingsDelegationApi | undefined): api is SettingsDelegationApi & Pick<CalliePreloadApi['delegation'], 'configure' | 'sync'> {
   return typeof api?.configure === 'function' && typeof api.sync === 'function';
@@ -485,7 +486,10 @@ export function SettingsScreen({
         </nav>
         <div className="settings__detail">
           {active === 'call-capacity' && <CallCapacitySection api={localWorkspaceApi} onSaved={notifyCallCapacitySaved} />}
-          {active === 'connections' && <ConnectionsSection api={outreachApi} />}
+          {active === 'connections' && <>
+            <RemoteGoogleConnectionsSection api={delegationApi?.googleConnections} />
+            <ConnectionsSection api={outreachApi} />
+          </>}
           {active === 'phone' && <PhoneSetupSection api={phoneSetupApi} />}
           {active === 'worker' && <>
             <WorkerSetupSection api={delegationApi} />

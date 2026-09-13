@@ -1,3 +1,5 @@
+import { createRemoteGoogleConnectionsApi } from './apis/remoteGoogleConnectionsApi';
+import type { RemoteGoogleConnectionsApi } from '../shared/contracts/remoteGoogleConnectionsContract';
 import { createLocalWorkspaceApi } from './apis/localWorkspaceApi';
 import { createDailyApi } from './apis/dailyApi';
 import {policyImportConfirmSchema,policyImportResumeSchema,policyImportStatusSchema,policyImportPreviewSchema,policyImportReportSchema} from '../shared/contracts/accountRoutePolicyImportContract';
@@ -32,12 +34,15 @@ import { createIpcClient, type IpcInvoker } from './ipcClient';
  */
 export const createCallieApi = (invoker: IpcInvoker) => {
   const client = createIpcClient(invoker);
+  // Optional in consumers for compatibility with older bridges. This bridge always supplies it.
+  const googleExtension: { googleConnections?: RemoteGoogleConnectionsApi } = { googleConnections: createRemoteGoogleConnectionsApi(client) };
   return {
     health: {
       get: (): Promise<AppHealth> =>
         client.requestNoInput('health:get', appHealthSchema),
     },
     delegation: {
+      ...googleExtension,
       policyImport:{
         selectAndPreview:()=>client.requestNoInput('outreach:policy-import-select-preview',policyImportPreviewSchema.nullable()),
         confirm:(input:z.infer<typeof policyImportConfirmSchema>)=>client.request('outreach:policy-import-confirm',policyImportConfirmSchema,policyImportReportSchema,input),

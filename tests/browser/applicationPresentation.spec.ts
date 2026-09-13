@@ -60,6 +60,44 @@ test.afterEach(async ({ page }, info) => {
 });
 
 for (const theme of ['light', 'dark'] as const) for (const width of [1440, 1050] as const) {
+  test(`actual Settings separates remote grant controls without automatic consent ${theme} ${width}`, async ({ page }, info) => {
+    const observed = await mount(page, { mode: 'meeting_first', theme, density: 'comfortable', width }, 'settings');
+    await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Connections', exact: true }).click();
+    const work = page.getByRole('region', { name: 'Work email', exact: true });
+    const personal = page.getByRole('region', { name: 'Personal calendar availability', exact: true });
+    await expect(work.getByText('No cloud grant configured', { exact: true })).toBeVisible();
+    await expect(personal.getByText('No cloud grant configured', { exact: true })).toBeAttached();
+    const email = work.getByLabel('Named work email (@usecali.com)', { exact: true });
+    await email.fill('founder@usecali.com');
+    await work.getByLabel('I confirm this named work mailbox', { exact: true }).check();
+    await work.getByLabel('I have reviewed and acknowledge this disclosure', { exact: true }).check();
+    await expect(work.getByRole('button', { name: 'Continue to Google', exact: true })).toBeEnabled();
+    const fields = page.locator('[aria-label="Remote Google connections"] input:not([type="checkbox"]), [aria-label="Remote Google connections"] textarea');
+    expect(await fields.evaluateAll(elements => elements.every(element => element.getBoundingClientRect().height >= 30))).toBe(true);
+    const pane = page.locator('.foundation-workspace');
+    const scrollBefore = await pane.evaluate(element => element.scrollTop);
+    await pane.hover(); await page.mouse.wheel(0, 1800);
+    await expect.poll(() => pane.evaluate(element => element.scrollTop)).toBeGreaterThan(scrollBefore);
+    const calendars = personal.getByLabel('Calendar IDs, one per line', { exact: true });
+    await calendars.fill('founder@gmail.com');
+    await personal.getByLabel('I confirm these exact calendar IDs', { exact: true }).check();
+    const ack = personal.getByLabel('I have reviewed and acknowledge this disclosure', { exact: true });
+    await ack.check(); await ack.focus(); await page.keyboard.press('Tab');
+    const next = personal.getByRole('button', { name: 'Continue to Google', exact: true });
+    await expect(next).toBeFocused(); await expect(next).toBeInViewport();
+    await page.evaluate(() => window.applicationPresentation.setGoogleConnectionReady(true));
+    await personal.getByRole('button', { name: 'Refresh', exact: true }).click();
+    await expect(personal.getByText('Cloud grant ready (last verified status)', { exact: true })).toBeVisible();
+    expect(await personal.locator('dd').evaluateAll(elements => elements.every(element => {
+      const box = element.getBoundingClientRect(), range = document.createRange(); range.selectNodeContents(element);
+      return Array.from(range.getClientRects()).every(rect => rect.left >= box.left - 1 && rect.right <= box.right + 1);
+    }))).toBe(true);
+    expect(await personal.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+    expect((await calls(page)).filter(call => call.kind !== 'read')).toEqual([]);
+    expect(observed.errors).toEqual([]); expect(observed.requests).toEqual([]);
+    await page.screenshot({ path: info.outputPath('remote-google-controls.png'), fullPage: true });
+  });
+
   test(`actual Settings workspace access remains explicit and keyboard reachable ${theme} ${width}`, async ({ page }, info) => {
     const observed = await mount(page, { mode: 'meeting_first', theme, density: 'comfortable', width }, 'settings');
     const sections = page.getByRole('navigation', { name: 'Settings sections' });

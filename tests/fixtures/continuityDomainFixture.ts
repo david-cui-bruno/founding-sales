@@ -83,6 +83,7 @@ export const RETAINED_UI_REGISTERED_CHANNELS = [...CONTINUITY_UI_REGISTERED_CHAN
   ...['status', 'configure', 'connect-gmail', 'disconnect-gmail', 'open-draft', 'save-draft', 'generate-draft', 'send-draft', 'inspect-local-authority',
     'requested-followup-prepare', 'requested-followup-get', 'requested-followup-edit', 'requested-followup-approve',
     'delegation-begin-phone', 'delegation-bootstrap', 'delegation-policy', 'delegation-research', 'delegation-status',
+    'google-connection-status', 'google-connection-disclosure', 'google-connection-begin', 'google-connection-revoke',
     'delegation-configure', 'delegation-submit', 'delegation-sync'].map(name => `outreach:${name}`),
 ] as const;
 const RETAINED_UI_CHANNELS = [...CONTINUITY_READ_CHANNELS, 'daily:get', 'review:list', 'outreach:delegation-status',
