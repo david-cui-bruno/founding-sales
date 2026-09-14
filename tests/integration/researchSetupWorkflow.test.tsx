@@ -213,7 +213,7 @@ it('reopens a separately admitted cycle, explicitly resumes via Settings, and re
   const discovery = vi.fn<typeof fetch>().mockRejectedValueOnce(new Error('Fictional lost response')).mockRejectedValueOnce(new Error('Second fictional lost response')).mockImplementation(async () => Response.json({
     status: 'completed', model: 'fictional-reviewed-model', output: [
       { type: 'web_search_call', status: 'completed', action: { type: 'search', sources: [{ url: 'https://fictional-pm.example/' }] } },
-      { type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: JSON.stringify({ companies: [{ name: 'Fictional PM', domain: 'fictional-pm.example', sourceUrl: 'https://fictional-pm.example/' }] }), annotations: [{ type: 'url_citation', url: 'https://fictional-pm.example/' }] }] },
+      { type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: '```json\n{"name":"Fictional PM","domain":"fictional-pm.example"}\n```\nSource for selected company. \uE200cite\uE202turn0search0\uE201', annotations: [{ type: 'url_citation', url: 'https://fictional-pm.example/' }] }] },
     ],
   }));
   const pageHttp = vi.fn(async () => new Response('<p>We manage 240 residential units.</p>', { headers: { 'content-type': 'text/html' } }));

@@ -1,3 +1,5 @@
+import { createDiscoveryReservationStore } from '../src/discoveryReservationStore';
+import { discoveryInputFingerprint } from '../../../../src/main/research/companyResearchWorker';
 import type { ResearchCycleAdmission, ResearchCycleReceipt, ResearchCycleReference } from '../src/researchCycleContract';
 import { researchCycleKey, researchCycleHeadKey } from '../src/researchCycle';
 import { describe, expect, it, vi } from 'vitest';
@@ -11,7 +13,7 @@ import { fingerprint, type DynamoCommand } from '../src/dynamoStore';
 import { ownerResearchSourceSchema, ownerResearchSourceKey } from '../../../../src/shared/contracts/ownerCommandContract';
 import type { ResearchOnceRequest, ResearchOnceResult, ResearchOnceNextRequest } from '../src/researchOnceContract';
 const env = () => ({ DELEGATED_WORKER_SCHEDULE_ARN: '', DELEGATED_WORKER_ENABLED: 'true', DELEGATED_WORKER_RESEARCH_ONCE_ENABLED: 'true', DELEGATED_WORKSPACE_ID: 'ws', DELEGATED_WORKER_TABLE: 'table', AWS_REGION: 'us-east-1' });
-async function admitted(maxCompanies = 1, providerCost = 40) {
+async function admitted(maxCompanies = 1, providerCost = 40, permittedSources = ['https://fictional.example/']) {
   const now = new Date().toISOString();
   const descriptor = { capability: { model: 'fixture', webSearch: true, searchCostMicros: providerCost, modelCostMicros: providerCost }, reviewedAt: new Date(Date.now() - 10000).toISOString(), expiresAt: new Date(Date.now() + 3600000).toISOString(), provenance: 'Fictional review only.', researchReservationMicros: 100, currency: 'USD' };
   const db = new ConditionalCommandHarness(); const commands: DynamoCommand[] = [];
@@ -21,7 +23,7 @@ async function admitted(maxCompanies = 1, providerCost = 40) {
   const pair = await auth.redeemPairing((await auth.issuePairing({ scopes: ['commands:write', 'events:read'], expiresInSeconds: 300 })).code, 'fixture');
   const setup = new ResearchSetupService({ auth, profile: { reviewedCapability: descriptor, credentialParameterDeclared: true } });
   await setup.apply({ version: 1, kind: 'approve', requestId: randomUUID(), workspaceId: 'ws', pairingId: pair.pairingId, input: {
-    expectedRevision: 0, descriptorFingerprint: fingerprint(descriptor), audience: { residential: true, regions: ['Fictional region'], terms: ['property management'] }, permittedSources: ['https://fictional.example/'], maxCompanies, maxPages: 1, maxBytes: 10000, discoveryCeilingMicros: providerCost * 2, researchCeilingMicros: 100, disclosureAcknowledged: true,
+    expectedRevision: 0, descriptorFingerprint: fingerprint(descriptor), audience: { residential: true, regions: ['Fictional region'], terms: ['property management'] }, permittedSources, maxCompanies, maxPages: 1, maxBytes: 10000, discoveryCeilingMicros: providerCost * 2, researchCeilingMicros: 100, disclosureAcknowledged: true,
   } }, `Bearer ${pair.credential}`);
   const source = ownerResearchSourceSchema.parse(db.inspect(ownerResearchSourceKey()));
   const request: ResearchOnceRequest = { version: 1, kind: 'research.once', workspaceId: 'ws', pairingId: pair.pairingId, expectedSourceRevision: 1, researchFingerprint: fingerprint(source.research) };
@@ -40,8 +42,8 @@ async function admitted(maxCompanies = 1, providerCost = 40) {
   return { db, auth, pair, setup, source, request, environment, boundaries, commands, fetch, pageHttp, ssm, companies, invoke, status, hook: (value?: typeof hook) => { hook = value; } };
 }
 
-async function nextFixture(providerCost = 40) {
-  const f = await admitted(1, providerCost); const originalFetch = f.fetch.getMockImplementation()!;
+async function nextFixture(providerCost = 40, permittedSources?: string[]) {
+  const f = await admitted(1, providerCost, permittedSources); const originalFetch = f.fetch.getMockImplementation()!;
   f.fetch.mockRejectedValue(new Error('fixture lost original response'));
   const original = await f.invoke(); expect(original.state).toBe('uncertain');
   f.fetch.mockImplementation(originalFetch); f.fetch.mockClear(); f.ssm.send.mockClear();
@@ -61,10 +63,10 @@ async function nextFixture(providerCost = 40) {
   f.commands.length = 0;
   return { ...f, original, admission, invokeNext, nextStatus, resume };
 }
-async function cycleFixture(providerCost = 40) {
-  const f = await nextFixture(providerCost);
+async function cycleFixture(providerCost = 40, permittedSources?: string[]) {
+  const f = await nextFixture(providerCost, permittedSources);
   const next = await f.invokeNext();
-  const successfulFetch = f.fetch.getMockImplementation()!;
+  const successfulFetch: typeof globalThis.fetch = async () => Response.json(citedCycleResponse());
   await f.resume(); f.fetch.mockRejectedValue(new Error('fixture lost successor response'));
   const successor = await f.invoke({ ...f.request, expectedSourceRevision: 3, successor: { parentRunId: f.original.runId!, admissionFingerprint: next.receipt!.fingerprint } });
   await f.setup.apply({ version: 1, kind: 'set-state', requestId: randomUUID(), workspaceId: 'ws', pairingId: f.pair.pairingId,
@@ -98,8 +100,8 @@ async function transition(f: Fixture, state: 'active' | 'paused') {
   await f.setup.apply({ version: 1, kind: 'set-state', requestId: randomUUID(), workspaceId: 'ws', pairingId: f.pair.pairingId,
     input: { expectedRevision: source.revision, state, disclosureAcknowledged: true } }, `Bearer ${f.pair.credential}`);
 }
-async function ready() {
-  const f = await cycleFixture(); const admission = await proposal(f); const result = await f.native(admission); expect(result.state).toBe('applied');
+async function ready(permittedSources?: string[]) {
+  const f = await cycleFixture(40, permittedSources); const admission = await proposal(f); const result = await f.native(admission); expect(result.state).toBe('applied');
   const receipt = result.receipt!; await transition(f, 'active'); f.fetch.mockImplementation(f.successfulFetch);
   const execute = (context?: { getRemainingTimeInMillis(): number }) => f.native({ ...f.identity, kind: 'research.cycle.execute', reference: ref(receipt) }, context);
   return { ...f, admission, receipt, execute };
@@ -114,15 +116,13 @@ it.each([false, true])('keeps citation diagnostics invocation-local and uncertai
   const before = keys.map(key => f.db.inspect(key));
   f.fetch.mockImplementation(async () => Response.json({ status: 'completed', model: 'fixture', output: [
     { type: 'web_search_call', status: 'completed', action: { type: 'search', sources: [{ url: 'https://fictional.example/' }] } },
-    { type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: JSON.stringify({ companies: f.companies }), annotations: [] }] },
+    { type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: citedCycleResponse().output[1]!.content![0]!.text, annotations: [] }] },
   ] }));
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => { if (throws) throw new Error('fictional console failure'); });
   try {
     const result = await f.execute();
     expect(result.outcome).toMatchObject({ state: 'uncertain', accountId: null, jobId: null, evidenceReceiptId: null, settlementReceiptId: null, settled: false });
-    expect(warn).toHaveBeenCalledWith({ event: 'research_discovery_uncertain', reason: 'citation_missing', citationSummary: {
-      candidateCount: 1, annotationCount: 0, exactMatchCount: 0, serializedMatchCount: 0, consultedMatchCount: 1,
-    } });
+    expect(warn).toHaveBeenCalledWith({ event: 'research_discovery_uncertain', reason: 'citation_missing' });
     expect(JSON.stringify(result)).not.toContain('citationSummary');
     expect(JSON.stringify(f.db.inspect(`DISCOVERY#${f.receipt.runId}`))).not.toContain('citationSummary');
     expect(result.discoveryBudget).toMatchObject({ limit: 240, spent: 240 });
@@ -154,8 +154,20 @@ it.each(['uncertain', 'empty', 'never-reserved'] as const)('allows later nonlite
   const f = await ready();
   if (kind === 'uncertain') { f.fetch.mockRejectedValue(new Error('lost response')); expect(await f.execute()).toMatchObject({ outcome: { state: 'uncertain' } }); }
   if (kind === 'empty') {
-    f.fetch.mockImplementation(async () => Response.json({ status: 'completed', model: 'fixture', output: [{ type: 'web_search_call', status: 'completed', action: { type: 'search', sources: [] } }, { type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: '{"companies":[]}', annotations: [] }] }] }));
+    // A historical completed empty receipt remains valid after a transport change.
+    // Use the actual reservation API to construct that pre-existing state, not a
+    // new uncited response which the selected-company protocol must reject.
+    const settings = f.source.research!;
+    const reservations = createDiscoveryReservationStore({ ...f.auth.options, researchOnceBinding: {
+      pairingId: f.pair.pairingId, researchFingerprint: f.request.researchFingerprint, sourceRevision: 5,
+    } });
+    const input = { commandId: f.receipt.runId, workspaceId: settings.workspaceId, budgetId: settings.budgetId,
+      inputFingerprint: discoveryInputFingerprint(settings), searchCostMicros: settings.capability.searchCostMicros, modelCostMicros: settings.capability.modelCostMicros };
+    await reservations.reserveOnce(input);
+    await reservations.complete({ commandId: input.commandId, workspaceId: input.workspaceId, budgetId: input.budgetId,
+      inputFingerprint: input.inputFingerprint, candidates: [], costMicros: null });
     expect(await f.execute()).toMatchObject({ outcome: { state: 'empty' } });
+    expect(f.fetch).not.toHaveBeenCalled();
   }
   await transition(f, 'paused'); await transition(f, 'paused'); // supported nonliteral revision 7, not a hardcoded pause6 case
   const next = await proposal(f); const result = await f.native(next);
@@ -515,4 +527,59 @@ it.each([{ state: 'completed', receiptCommitted: false }, { state: 'parked', rec
   const f = await ready(); const result = await f.execute();
   await change(f, `JOB#${result.outcome!.jobId}`, data => ({ ...data, ...defect }));
   await expect(f.cycleStatus()).rejects.toThrow('research_cycle_unavailable');
+});
+
+function citedCycleResponse(url = 'https://fictional.example/') {
+  return { status: 'completed', model: 'fixture', output: [
+    { type: 'web_search_call', status: 'completed', action: { type: 'search', sources: [{ url }] } },
+    { type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text',
+      text: '```json\n{"name":"Fictional PM","domain":"fictional.example"}\n```\nSource for selected company. \uE200cite\uE202turn0search0\uE201',
+      annotations: [{ type: 'url_citation', url }] }] },
+  ] };
+}
+it('uses one cited native cycle response, retains the selected company name and admits only fetched page evidence', async () => {
+  const f = await ready();
+  const result = await f.execute();
+  expect(result.outcome).toMatchObject({ state: 'completed', settled: true });
+  const account = f.db.inspect(`ACCOUNT#${result.outcome!.accountId}`) as { account: { name: string; domain: string }; sources: unknown[]; claims: unknown[] };
+  expect(account.account).toMatchObject({ name: 'Fictional PM', domain: 'fictional.example' });
+  expect(account.sources).toHaveLength(1); expect(account.claims.length).toBeGreaterThan(0);
+  const sent = JSON.parse(f.fetch.mock.calls[0]![1]!.body as string);
+  expect(sent).not.toHaveProperty('text');
+  expect(sent.tools).toEqual([{ type: 'web_search', filters: { allowed_domains: ['fictional.example'] } }]);
+  expect(sent.max_tool_calls).toBe(1); expect(sent.max_output_tokens).toBe(2000);
+  expect(f.fetch).toHaveBeenCalledTimes(1); expect(f.pageHttp).toHaveBeenCalledTimes(1);
+  expect(await f.execute()).toMatchObject({ outcome: result.outcome });
+  expect(f.fetch).toHaveBeenCalledTimes(1); expect(f.pageHttp).toHaveBeenCalledTimes(1);
+});
+it('refuses a deep-page-only cycle scope before reservation, credentials or HTTP', async () => {
+  const f = await ready(['https://fictional.example/services']);
+  const before = f.db.transactions.length;
+  const budget = f.db.inspect('BUDGET#discovery#guided-research-v1');
+  await expect(f.execute()).rejects.toThrow('research_cycle_unavailable');
+  expect(f.db.inspect(`DISCOVERY#${f.receipt.runId}`)).toBeUndefined();
+  expect(f.db.inspect('BUDGET#discovery#guided-research-v1')).toEqual(budget);
+  expect(f.db.transactions.slice(before).flatMap(tx => tx.TransactItems ?? []).every(item => item.ConditionCheck && !item.Put && !item.Update && !item.Delete)).toBe(true);
+  expect(f.ssm.send).not.toHaveBeenCalled(); expect(f.fetch).not.toHaveBeenCalled(); expect(f.pageHttp).not.toHaveBeenCalled();
+});
+it.each(['https://directory.example/', 'https://www.fictional.example/', 'https://sub.fictional.example/'])('never promotes an unapproved or widened cited host: %s', async url => {
+  const f = await ready(); f.fetch.mockImplementation(async () => Response.json(citedCycleResponse(url)));
+  const result = await f.execute();
+  expect(result.outcome).toMatchObject({ state: 'uncertain', accountId: null, jobId: null, settled: false });
+  expect(f.pageHttp).not.toHaveBeenCalled();
+  expect(await f.execute()).toMatchObject({ outcome: result.outcome });
+  expect(f.fetch).toHaveBeenCalledTimes(1);
+});
+it('keeps the observed one-candidate zero-citation and zero-consulted-match shape uncertain without account promotion', async () => {
+  const f = await ready();
+  f.fetch.mockImplementation(async () => Response.json({ status: 'completed', model: 'fixture', output: [
+    { type: 'web_search_call', status: 'completed', action: { type: 'search', sources: [{ url: 'https://unrelated.example/' }] } },
+    { type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: JSON.stringify({ companies: f.companies }), annotations: [] }] },
+  ] }));
+  const result = await f.execute();
+  expect(result.outcome).toMatchObject({ state: 'uncertain', accountId: null, jobId: null, evidenceReceiptId: null, settlementReceiptId: null, settled: false });
+  expect(f.pageHttp).not.toHaveBeenCalled(); expect(f.boundaries.resolve).not.toHaveBeenCalled();
+  expect(await f.execute()).toMatchObject({ outcome: result.outcome });
+  expect(f.fetch).toHaveBeenCalledTimes(1);
+  expect(f.db.inspect(`DISCOVERY#${f.receipt.runId}`)).toMatchObject({ candidates: null, costMicros: null, completed: false });
 });
