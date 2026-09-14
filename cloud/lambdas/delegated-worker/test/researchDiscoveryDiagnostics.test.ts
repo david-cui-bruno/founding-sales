@@ -182,3 +182,121 @@ it('researchCompanies consumer preserves network uncertainty without retry or cr
     expect(fetch).toHaveBeenCalledTimes(1); expect(load).toHaveBeenCalledTimes(1); expect(forbidden).not.toHaveBeenCalled();
   } finally { manager.dispose(); load.mockRestore(); }
 });
+
+describe('bounded citation failure summary (diagnosis only)', () => {
+  const summary = () => ({ candidateCount: 2, annotationCount: 1, exactMatchCount: 1, serializedMatchCount: 1, consultedMatchCount: 2 });
+  it.each([
+    ['missing', [], 0, 0],
+    ['partial', [company.sourceUrl], 1, 1],
+    ['different page', ['https://example.invalid/about'], 0, 0],
+    ['root slash', ['https://example.invalid'], 0, 1],
+    ['host case', ['https://EXAMPLE.invalid/'], 0, 1],
+    ['default port', ['https://example.invalid:443/'], 0, 1],
+    ['query differs', ['https://example.invalid/?q=1'], 0, 0],
+    ['scheme differs', ['http://example.invalid/'], 0, 0],
+  ] as const)('%s preserves refusal and reports candidate matches', async (_label, urls, exact, serialized) => {
+    const body = envelope();
+    body.output[1]!.content![0]!.text = JSON.stringify({ companies: [company, { ...company, sourceUrl: 'https://example.invalid/second' }] });
+    body.output[1]!.content![0]!.annotations = urls.map(url => ({ type: 'url_citation', url }));
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => Response.json(body));
+    const error = await requestCompanyDiscovery({ ...input(), fetch }).catch(error => error);
+    expect(error).toMatchObject({ reason: 'citation_missing', message: 'citation_missing', code: 'provider_response_invalid' });
+    expect(researchDiscoveryDiagnostic(error)).toEqual({ reason: 'citation_missing', citationSummary: {
+      candidateCount: 2, annotationCount: urls.length, exactMatchCount: exact, serializedMatchCount: serialized, consultedMatchCount: 1,
+    } });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+  it('counts candidates rather than distinct URLs, and annotations rather than distinct citations', async () => {
+    const body = envelope();
+    body.output[1]!.content![0]!.text = JSON.stringify({ companies: [company, company, { ...company, sourceUrl: 'https://example.invalid/other' }] });
+    body.output[1]!.content![0]!.annotations.push({ type: 'url_citation', url: company.sourceUrl });
+    body.output[0]!.action!.sources = [];
+    const error = await requestCompanyDiscovery({ ...input(), fetch: async () => Response.json(body) }).catch(error => error);
+    expect(researchDiscoveryDiagnostic(error)).toEqual({ reason: 'citation_missing', citationSummary: {
+      candidateCount: 3, annotationCount: 2, exactMatchCount: 2, serializedMatchCount: 2, consultedMatchCount: 0,
+    } });
+  });
+  it('keeps empty company output valid', async () => {
+    const body = envelope(); body.output[1]!.content![0]!.text = JSON.stringify({ companies: [] });
+    body.output[1]!.content![0]!.annotations = []; body.output[0]!.action!.sources = [];
+    expect(await requestCompanyDiscovery({ ...input(), fetch: async () => Response.json(body) })).toEqual([]);
+  });
+  it('copies constructor input without retaining extras or serialization hooks', () => {
+    const raw = Object.assign(summary(), { private: secret, toJSON: () => secret });
+    const error = new ResearchDiscoveryError('citation_missing', undefined, raw);
+    raw.candidateCount = 50;
+    expect(researchDiscoveryDiagnostic(error)).toEqual({ reason: 'citation_missing', citationSummary: summary() });
+    expect(JSON.stringify(error)).not.toContain(secret);
+  });
+  it.each(['candidateCount', 'annotationCount', 'exactMatchCount', 'serializedMatchCount', 'consultedMatchCount'] as const)('rejects hostile %s as a whole at construction and emission', field => {
+    for (const value of [-1, 101, NaN, Infinity, 0.5, '1', null, {}, { toJSON: () => secret }]) {
+      const raw = Object.assign(summary(), { [field]: value });
+      const constructed = new ResearchDiscoveryError('citation_missing', undefined, raw);
+      expect(researchDiscoveryDiagnostic(constructed)).toEqual({ reason: 'citation_missing' });
+      expect(JSON.stringify(constructed)).not.toContain(secret);
+      const mutated = new ResearchDiscoveryError('citation_missing'); Object.assign(mutated, { citationSummary: raw });
+      expect(researchDiscoveryDiagnostic(mutated)).toEqual({ reason: 'citation_missing' });
+    }
+    const reads = vi.fn(() => { throw new Error(secret); });
+    const raw = Object.defineProperty(summary(), field, { get: reads });
+    expect(researchDiscoveryDiagnostic(new ResearchDiscoveryError('citation_missing', undefined, raw))).toEqual({ reason: 'citation_missing' });
+    const error = new ResearchDiscoveryError('citation_missing'); Object.assign(error, { citationSummary: raw });
+    expect(researchDiscoveryDiagnostic(error)).toEqual({ reason: 'citation_missing' });
+    expect(reads).toHaveBeenCalledTimes(2);
+  });
+  it.each([
+    { candidateCount: 0 }, { candidateCount: 51 }, { annotationCount: 101 }, { exactMatchCount: 2 },
+    { serializedMatchCount: 0 }, { serializedMatchCount: 3 }, { consultedMatchCount: 3 },
+  ])('rejects inconsistent bounds %j', patch => {
+    const error = new ResearchDiscoveryError('citation_missing', undefined, Object.assign(summary(), patch));
+    expect(researchDiscoveryDiagnostic(error)).toEqual({ reason: 'citation_missing' });
+  });
+  it('captures every allowlisted summary property once and never reads extras', () => {
+    const raw = {}; const reads: Record<string, number> = {};
+    for (const [key, value] of Object.entries(summary())) Object.defineProperty(raw, key, { get: () => { reads[key] = (reads[key] ?? 0) + 1; return reads[key] === 1 ? value : secret; } });
+    Object.defineProperty(raw, 'toJSON', { get: () => { throw new Error(secret); } });
+    const error = new ResearchDiscoveryError('citation_missing'); Object.assign(error, { citationSummary: raw });
+    expect(researchDiscoveryDiagnostic(error)).toEqual({ reason: 'citation_missing', citationSummary: summary() });
+    expect(Object.values(reads)).toEqual([1, 1, 1, 1, 1]);
+  });
+  it('catches hostile outer summary accessors and omits summary for unrelated reasons', () => {
+    const error = new ResearchDiscoveryError('citation_missing');
+    Object.defineProperty(error, 'citationSummary', { get: () => { throw new Error(secret); } });
+    expect(researchDiscoveryDiagnostic(error)).toEqual({ reason: 'citation_missing' });
+    for (const reason of ['http_rejected', 'consulted_source_missing', 'output_invalid'] as const) {
+      const other = new ResearchDiscoveryError(reason, undefined, summary());
+      expect(JSON.stringify(other)).not.toContain('candidateCount');
+      Object.assign(other, { citationSummary: summary() });
+      expect(researchDiscoveryDiagnostic(other)).toEqual({ reason });
+    }
+  });
+});
+
+it.each([
+  { candidateCount: 1, annotationCount: 0, exactMatchCount: 0, serializedMatchCount: 0, consultedMatchCount: 0 },
+  { candidateCount: 50, annotationCount: 100, exactMatchCount: 49, serializedMatchCount: 50, consultedMatchCount: 50 },
+])('accepts inclusive summary boundaries without retaining identities %j', raw => {
+  const error = new ResearchDiscoveryError('citation_missing', undefined, raw);
+  const diagnostic = researchDiscoveryDiagnostic(error);
+  expect(diagnostic).toEqual({ reason: 'citation_missing', citationSummary: raw });
+  expect(error.citationSummary).not.toBe(raw);
+  expect(diagnostic.citationSummary).not.toBe(error.citationSummary);
+});
+it('rejects impossible zero-annotation matches both initially and after mutation', () => {
+  const raw = { candidateCount: 2, annotationCount: 0, exactMatchCount: 0, serializedMatchCount: 1, consultedMatchCount: 0 };
+  expect(researchDiscoveryDiagnostic(new ResearchDiscoveryError('citation_missing', undefined, raw))).toEqual({ reason: 'citation_missing' });
+  const error = new ResearchDiscoveryError('citation_missing'); Object.assign(error, { citationSummary: raw });
+  expect(researchDiscoveryDiagnostic(error)).toEqual({ reason: 'citation_missing' });
+});
+it('constructor captures allowlisted accessors once and emission ignores added hooks', () => {
+  const values = { candidateCount: 1, annotationCount: 1, exactMatchCount: 0, serializedMatchCount: 1, consultedMatchCount: 1 };
+  const raw = {}; const reads = vi.fn();
+  for (const [key, value] of Object.entries(values)) Object.defineProperty(raw, key, { get: () => { reads(key); return value; } });
+  Object.defineProperty(raw, 'private', { get: () => { throw new Error(secret); } });
+  const error = new ResearchDiscoveryError('citation_missing', undefined, raw);
+  expect(reads.mock.calls).toEqual(Object.keys(values).map(key => [key]));
+  Object.assign(error.citationSummary!, { toJSON: () => secret, private: secret });
+  const diagnostic = researchDiscoveryDiagnostic(error);
+  expect(diagnostic).toEqual({ reason: 'citation_missing', citationSummary: values });
+  expect(JSON.stringify(diagnostic)).not.toContain(secret);
+});

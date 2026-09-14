@@ -333,3 +333,31 @@ Historical settlement across changed authority is not supported. Each native
 operation retains the 45-second maximum and 5-second Lambda margin, one SDK
 attempt, abort propagation and conservative late-commit behavior. A local deadline
 cannot recall an already-sent provider request or prove its billing outcome.
+
+### Citation failure summary (local diagnostic only)
+
+`citation_missing` retains its original reason, message and provider error code.
+Only that reason may include an optional `citationSummary` of bounded integers:
+`candidateCount` (1–50), `annotationCount` (0–100), `exactMatchCount`
+(0–candidateCount minus one), `serializedMatchCount`
+(exactMatchCount–candidateCount), and `consultedMatchCount` (0–candidateCount).
+Counts cover validated candidates before filtering or limiting. Matches count
+candidates, including repeated URLs, against the existing exact citation and
+consulted-source sets. Annotation count includes duplicate annotations.
+Zero annotations means no citation matches. Nonzero annotations with zero exact
+matches differs from partial exact coverage. A larger serialized match count
+indicates potential serialization-only differences, not acceptable evidence.
+
+Serialization uses only WHATWG `new URL(url).href` for this diagnosis. Root slash,
+host case and default port differences may serialize equally. Query differences
+and HTTP versus HTTPS are not collapsed. Serialized equality is **not
+authorization**, evidence acceptance, or fetch authority. Exact URL checks, source
+policy, request payload, budgets, retries and status behavior remain unchanged.
+
+Constructor input and emitted summaries are separately copied through a numeric
+allowlist. Invalid/inconsistent fields or throwing accessors drop the whole
+summary. No URLs, text, company data, requests, secrets or serialization hooks
+are retained in the summary. This is diagnosis only: a historic missing payload
+is unrecoverable, and these counts cannot reconstruct or explain that payload.
+No replay, resume, deployment or additional provider call is authorized by this
+local diagnostic change.
