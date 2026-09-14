@@ -7,6 +7,44 @@ const envelope = () => ({ status: 'completed', model: 'fixture', output: [
   { type: 'web_search_call', status: 'completed', action: { type: 'search', sources: [{ url: company.sourceUrl }] } },
   { type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: JSON.stringify({ companies: [company] }), annotations: [{ type: 'url_citation', url: company.sourceUrl }] }] },
 ] });
+it('requests a strict candidate JSON shape in the same single bounded search call', async () => {
+  const fetch = vi.fn<typeof globalThis.fetch>(async () => Response.json(envelope()));
+  expect(await requestCompanyDiscovery({ ...input(), fetch })).toEqual([company]);
+  expect(fetch).toHaveBeenCalledTimes(1);
+  const [url, init] = fetch.mock.calls[0]!;
+  expect(url).toBe('https://api.openai.com/v1/responses');
+  const request = JSON.parse(String(init?.body));
+  expect(request.text).toEqual({ format: {
+    type: 'json_schema', name: 'company_discovery', strict: true,
+    schema: { type: 'object', additionalProperties: false, required: ['companies'], properties: {
+      companies: { type: 'array', maxItems: 50, items: {
+        type: 'object', additionalProperties: false, required: ['name', 'domain', 'sourceUrl'],
+        properties: { name: { type: 'string' }, domain: { type: 'string' }, sourceUrl: { type: 'string' } },
+      } },
+    } },
+  } });
+  expect(request).toMatchObject({ model: 'fixture', store: false, max_output_tokens: 2000, max_tool_calls: 1,
+    tools: [{ type: 'web_search' }], tool_choice: 'required', include: ['web_search_call.action.sources'], input: JSON.stringify(input().query) });
+  expect(request.instructions).toContain('matching the supplied schema');
+  expect(request.instructions).not.toContain('{companies:');
+});
+it('does not fall back or retry when the provider rejects the structured request', async () => {
+  const fetch = vi.fn<typeof globalThis.fetch>(async () => Response.json({ error: secret }, { status: 400 }));
+  await expect(requestCompanyDiscovery({ ...input(), fetch })).rejects.toMatchObject({ reason: 'http_rejected', httpStatus: 400 });
+  expect(fetch).toHaveBeenCalledTimes(1);
+});
+it.each([
+  '```json\n{"companies":[]}\n```',
+  JSON.stringify({ companies: [{ ...company, domain: 'https://example.invalid' }] }),
+  JSON.stringify({ companies: [{ ...company, name: '   ' }] }),
+  JSON.stringify({ companies: [{ ...company, sourceUrl: 'not a URL' }] }),
+  JSON.stringify({ companies: [company], instructions: secret }),
+])('still rejects invalid candidate output without salvage or another request (%#)', async text => {
+  const body = envelope(); body.output[1]!.content![0]!.text = text;
+  const fetch = vi.fn<typeof globalThis.fetch>(async () => Response.json(body));
+  await expect(requestCompanyDiscovery({ ...input(), fetch })).rejects.toMatchObject({ reason: 'candidate_json_invalid' });
+  expect(fetch).toHaveBeenCalledTimes(1);
+});
 describe('safe discovery stage diagnostics (pure provider)', () => {
   it.each(['transport_uncertain', 'response_body_invalid', 'http_rejected', 'envelope_invalid', 'search_receipt_invalid', 'output_invalid', 'candidate_json_invalid', 'citation_missing', 'consulted_source_missing'])('classifies %s without secrets or retries', async reason => {
     const body = envelope();
