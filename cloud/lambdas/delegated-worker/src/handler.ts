@@ -162,9 +162,11 @@ export async function createProductionServices(env: NodeJS.ProcessEnv, boundarie
 }
 export function createProductionHandler(env: NodeJS.ProcessEnv, boundaries: ProductionBoundaries = {}) {
   return async (event: unknown): Promise<WorkerHttpResponse> => {
+    let recognizedSchedule = false;
     try {
       const scheduled=z.object({source:z.literal('aws.events'),'detail-type':z.literal('Scheduled Event'),resources:z.array(z.string()).length(1)}).safeParse(event);
       if(scheduled.success && env.DELEGATED_WORKER_ENABLED==='true' && env.DELEGATED_WORKER_SCHEDULE_ARN && scheduled.data.resources[0]===env.DELEGATED_WORKER_SCHEDULE_ARN) {
+        recognizedSchedule = true;
         const services=await createProductionServices(env,boundaries);
         if(!services) return response(503,{error:'worker_disabled'});
         return response(200,await services.source.tick(AbortSignal.timeout(45000)));
@@ -177,7 +179,12 @@ export function createProductionHandler(env: NodeJS.ProcessEnv, boundaries: Prod
       const scopedEnv = needsGoogle ? env : { ...env, DELEGATED_GOOGLE_CLIENT_ID: '', DELEGATED_GOOGLE_SECRET_PARAMETER: '', DELEGATED_GOOGLE_KEY_PARAMETER: '' };
       const services = await createProductionServices(scopedEnv, boundaries);
       return services ? services.handle(event) : response(503, { error: 'worker_disabled' });
-    } catch { return response(503, { error: 'worker_unavailable' }); }
+    } catch {
+      // Async Lambda invocation must fail on thrown errors, not HTTP status codes.
+      // Returned tick holds remain results. Never retain the exception or event.
+      if (recognizedSchedule) throw new Error('worker_unavailable');
+      return response(503, { error: 'worker_unavailable' });
+    }
   };
 }
 export async function handler(event: unknown): Promise<WorkerHttpResponse> {
