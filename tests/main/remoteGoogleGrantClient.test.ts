@@ -10,7 +10,7 @@ import { ConditionalCommandHarness } from '../../cloud/lambdas/delegated-worker/
 import { googleGrantDisclosure, googleScopes, personalGoogleGrantDisclosure } from '../../src/shared/contracts/googleGrantCapabilities';
 import type { RemoteGoogleGrantBegin } from '../../src/shared/contracts/remoteGoogleGrantContract';
 
-const work: RemoteGoogleGrantBegin = { purpose: 'permitted_correspondence', capabilities: ['send', 'relevant_read'], disclosureVersion: googleGrantDisclosure.version, expectedEmail: 'founder@usecali.com' };
+const work: RemoteGoogleGrantBegin = { purpose: 'permitted_correspondence', capabilities: ['send', 'relevant_read'], disclosureVersion: googleGrantDisclosure.version, expectedEmail: 'founder@usecallie.com' };
 const personal: RemoteGoogleGrantBegin = { purpose: 'personal_availability', capabilities: ['availability'], disclosureVersion: personalGoogleGrantDisclosure.version, availabilityCalendars: { calendarIds: ['founder@gmail.com'], confirmed: true } };
 const signal = () => new AbortController().signal;
 async function fixture() {
@@ -29,7 +29,7 @@ async function fixture() {
       if (url === 'https://openidconnect.googleapis.com/v1/userinfo') {
         const account = new Headers(init?.headers).get('authorization')?.replace('Bearer ', '');
         if (account !== 'work' && account !== 'personal') throw Error('Unexpected synthetic bearer');
-        return new Response(JSON.stringify({ sub: `${account}-subject`, email: account === 'work' ? 'founder@usecali.com' : 'founder@gmail.com', email_verified: true }));
+        return new Response(JSON.stringify({ sub: `${account}-subject`, email: account === 'work' ? 'founder@usecallie.com' : 'founder@gmail.com', email_verified: true }));
       }
       if (url === 'https://oauth2.googleapis.com/revoke') return new Response('');
       throw Error('Unexpected provider operation');
@@ -67,7 +67,7 @@ it('uses actual paired client and authenticated routes for distinct work and per
     expect(await f.client.googleGrantStatus('personal_availability', signal())).toEqual({ state: 'unconfigured', grant: null });
     expect(await f.client.googleGrantDisclosure('personal_availability', signal())).toEqual(personalGoogleGrantDisclosure);
     expect(await f.client.googleGrantDisclosure('permitted_correspondence', signal())).toEqual(googleGrantDisclosure);
-    expect((await f.authorize(work, 'work')).grant).toMatchObject({ subject: 'work-subject', purpose: 'permitted_correspondence', email: 'founder@usecali.com' });
+    expect((await f.authorize(work, 'work')).grant).toMatchObject({ subject: 'work-subject', purpose: 'permitted_correspondence', email: 'founder@usecallie.com' });
     const before = await f.auth.store.list('GOOGLE_GRANT#'); expect(before).toHaveLength(1);
     const result = await f.authorize(personal, 'personal');
     expect(result.grant).toMatchObject({ subject: 'personal-subject', purpose: 'personal_availability', capabilities: ['availability'] });

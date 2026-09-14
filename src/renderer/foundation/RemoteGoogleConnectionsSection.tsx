@@ -32,7 +32,7 @@ const connectionInstruction = 'Connect or pair your Worker in Worker connection,
 function requestFor(purpose: GoogleGrantPurpose, panel: Panel) {
   if (purpose === 'permitted_correspondence') {
     // Named company mailbox only. No pre-filled identity or implicit domain conversion.
-    if (!/^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@usecali\.com$/.test(panel.input)) return null;
+    if (!/^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@usecallie\.com$/.test(panel.input)) return null;
     const parsed = remoteGoogleGrantBeginSchema.safeParse({ purpose,
       expectedEmail: panel.input, capabilities: ['send', 'relevant_read'],
       disclosureVersion: googleGrantDisclosure.version });
@@ -143,7 +143,7 @@ export function RemoteGoogleConnectionsSection({ api }: { api?: RemoteGoogleConn
         };
         return <section key={purpose} className="settings__section" aria-label={personal ? 'Personal calendar availability' : 'Work email'}>
           <h3>{personal ? 'Personal calendar availability' : 'Work email'}</h3>
-          <p>{personal ? 'Availability only. No personal mail, event details, or event edits.' : 'Send and relevant read only for your named @usecali.com mailbox. No calendar permission requested.'}</p>
+          <p>{personal ? 'Availability only. No personal mail, event details, or event edits.' : 'Send and relevant read only for your named @usecallie.com mailbox. No calendar permission requested.'}</p>
           <p role="status">{panel.status?.state === 'ready' ? 'Cloud grant ready (last verified status)' : panel.status?.state === 'revoked' ? 'Cloud grant revocation requested' : panel.status?.state === 'unconfigured' ? 'No cloud grant configured' : 'Cloud grant status unverified'}</p>
           {panel.status?.state === 'revoked' && <p>{panel.status.providerRevocation === 'confirmed'
             ? 'Provider revocation confirmed.' : 'Provider revocation pending or unconfirmed. Provider access may remain. Refresh, then explicitly retry cleanup if needed. Cleanup may remain held for operational reconciliation.'}</p>}
@@ -156,11 +156,11 @@ export function RemoteGoogleConnectionsSection({ api }: { api?: RemoteGoogleConn
           {personal ? <label className="settings__row">Calendar IDs, one per line
             <textarea value={panel.input} autoComplete="off" spellCheck={false} disabled={!editable}
               onChange={event => change({ input: event.target.value, ...resetAcknowledgments })} />
-          </label> : <label className="settings__row">Named work email (@usecali.com)
+          </label> : <label className="settings__row">Named work email (@usecallie.com)
             <input type="email" required value={panel.input} autoComplete="off" spellCheck={false} disabled={!editable}
               onChange={event => change({ input: event.target.value, ...resetAcknowledgments })} />
           </label>}
-          {!valid && <p>{personal ? 'Enter 1–20 distinct explicit lowercase calendar email IDs. Aliases such as primary, blank lines and duplicates are not accepted.' : 'Enter a named lowercase @usecali.com email address. This field is required.'}</p>}
+          {!valid && <p>{personal ? 'Enter 1–20 distinct explicit lowercase calendar email IDs. Aliases such as primary, blank lines and duplicates are not accepted.' : 'Enter a named lowercase @usecallie.com email address. This field is required.'}</p>}
           {panel.disclosure ? <div><h4>{personal ? 'Personal availability disclosure' : 'Legacy work email disclosure'}</h4><p>{panel.disclosure}</p></div>
             : <p>Disclosure unavailable. Refresh to verify it before continuing.</p>}
           <label className="settings__row"><input type="checkbox" checked={panel.confirmed} disabled={busy || !valid || !panel.fresh}

@@ -23,6 +23,12 @@ Status meanings:
 5. The adapter requests `store: false` and a strict subject/body/evidence-ID response. This does not override OpenAI's applicable abuse-monitoring or account-level retention policy. Do not include information you are not authorized to share with the provider.
 6. Review and edit the result. Evidence-ID checks prevent unknown source references, but cannot prove that every generated sentence is true. There is no automatic template pretending to be model output if generation is unavailable.
 
+## Delegated Google work mailbox selection
+
+Callie's delegated **Work email** panel requires a named lowercase `@usecallie.com` mailbox, such as `founder@usecallie.com`. The former misspelling `@usecali.com`, subdomains and lookalike domains are rejected. Editing the address resets both the mailbox confirmation and disclosure acknowledgement, which must be renewed before continuing.
+
+This panel requests only `send` and `relevant_read` for `permitted_correspondence`, with no calendar permission. The separate personal-calendar panel remains availability-only and requires explicit calendar IDs. A valid address or an opened consent screen is not a connected grant, live mailbox verification or permission to execute outreach. This domain correction does not create grants or perform provider calls. The local Desktop OAuth flow below is separate from this delegated mailbox selection.
+
 ## Your Google Desktop OAuth client
 
 Use a Google Cloud project you control. This application does not bundle a shared OAuth client.

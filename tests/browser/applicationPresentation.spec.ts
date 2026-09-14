@@ -97,8 +97,8 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 1050]
     const personal = page.getByRole('region', { name: 'Personal calendar availability', exact: true });
     await expect(work.getByText('No cloud grant configured', { exact: true })).toBeVisible();
     await expect(personal.getByText('No cloud grant configured', { exact: true })).toBeAttached();
-    const email = work.getByLabel('Named work email (@usecali.com)', { exact: true });
-    await email.fill('founder@usecali.com');
+    const email = work.getByLabel('Named work email (@usecallie.com)', { exact: true });
+    await email.fill('founder@usecallie.com');
     await work.getByLabel('I confirm this named work mailbox', { exact: true }).check();
     await work.getByLabel('I have reviewed and acknowledge this disclosure', { exact: true }).check();
     await expect(work.getByRole('button', { name: 'Continue to Google', exact: true })).toBeEnabled();
