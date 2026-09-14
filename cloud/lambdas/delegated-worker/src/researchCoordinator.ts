@@ -1,5 +1,5 @@
 import { ResearchDiscoveryError } from '../../../../src/main/research/researchDiscoveryError';
-import { assertGuidedResearch, guardGuidedResearch, guidedResearchMarkerKey, type ResearchSetupProfile } from './researchSetup';
+import { assertGuidedResearch, guardGuidedResearch, reviewedResearchProfile, guidedResearchMarkerKey, type ResearchSetupProfile } from './researchSetup';
 import { TransactWriteItemsCommand } from '@aws-sdk/client-dynamodb';
 import { ownerResearchSourceSchema, ownerResearchSourceKey } from '../../../../src/shared/contracts/ownerCommandContract';
 import { pairingKey, type WorkerAuth } from './workerAuth';
@@ -16,7 +16,8 @@ import type { ResearchOnceRequest, ResearchOnceNextReceipt } from './researchOnc
 export type SourceResearchBoundaries = { loadCredentials(workspaceId: string, signal: AbortSignal): Promise<{ apiKey: string; model: string }>;
   pageHttp: PageHttp; resolve(hostname: string): Promise<string[]> };
 export type ResolvedResearchSuccessor = { runId: string; receipt: { key: string; rev: number; fingerprint: string }; parent: { key: string; rev: number; fingerprint: string } };
-export type ResearchCoordinatorOptions = { auth: WorkerAuth; fetch: typeof globalThis.fetch; research?: SourceResearchBoundaries; researchSetupProfile?: ResearchSetupProfile; resolvedSuccessor?: ResolvedResearchSuccessor };
+export type ResolvedResearchCycle = { runId: string; descriptorFingerprint: string; receipt: { key: string; rev: number; fingerprint: string }; head: { key: string; rev: number; fingerprint: string } };
+export type ResearchCoordinatorOptions = { auth: WorkerAuth; fetch: typeof globalThis.fetch; research?: SourceResearchBoundaries; researchSetupProfile?: ResearchSetupProfile; resolvedSuccessor?: ResolvedResearchSuccessor; resolvedCycle?: ResolvedResearchCycle };
 export function researchRunId(workspaceId: string, pairingId: string, research: unknown): string {
   const identity = fingerprint({ workspaceId, pairingId, research });
   return `${identity.slice(0,8)}-${identity.slice(8,12)}-4${identity.slice(13,16)}-a${identity.slice(17,20)}-${identity.slice(20,32)}`;
@@ -39,7 +40,7 @@ export async function runResearch(input: ResearchCoordinatorOptions, signal: Abo
     if (once && (!guided || config.pairingId !== once.pairingId || config.revision !== once.expectedSourceRevision
       || fingerprint(settings) !== once.researchFingerprint || settings.discoveryLimits.maxCompanies !== 1)) return;
     // Refuse missing page budget BEFORE reserving discovery/provider spend.
-    const runId = input.resolvedSuccessor?.runId ?? researchRunId(config.workspaceId, config.pairingId, settings);
+    const runId = input.resolvedCycle?.runId ?? input.resolvedSuccessor?.runId ?? researchRunId(config.workspaceId, config.pairingId, settings);
     if (once) {
       const row = await store.get('BUDGET#research');
       if (!row) return;
@@ -61,6 +62,13 @@ export async function runResearch(input: ResearchCoordinatorOptions, signal: Abo
           if (!row || row.rev !== expected.rev || fingerprint(row.data) !== expected.fingerprint) throw new Error('research_next_binding_changed');
         }
       }
+      if (input.resolvedCycle) {
+        if (reviewedResearchProfile(input.researchSetupProfile ?? {}, store.now()).descriptorFingerprint !== input.resolvedCycle.descriptorFingerprint) throw new Error('research_cycle_binding_changed');
+        for (const expected of [input.resolvedCycle.receipt, input.resolvedCycle.head]) {
+          const row = await store.get<unknown>(expected.key);
+          if (!row || row.rev !== expected.rev || fingerprint(row.data) !== expected.fingerprint) throw new Error('research_cycle_binding_changed');
+        }
+      }
       const current = await store.get<unknown>(ownerResearchSourceKey());
       if (!current || current.rev !== row!.rev || fingerprint(current.data) !== fingerprint(config)) throw new Error('research_source_changed');
       const active = await input.auth.activePairing(config.pairingId);
@@ -75,7 +83,8 @@ export async function runResearch(input: ResearchCoordinatorOptions, signal: Abo
       await guard();
       return store.options.dynamo.send(new TransactWriteItemsCommand({ ...command.input, TransactItems: [...(command.input.TransactItems ?? []),
         store.check(ownerResearchSourceKey(), row.rev), store.check(pairingKey(config.pairingId), pairing.rev), guided ? store.check(guidedResearchMarkerKey, guided.rev) : store.absent(guidedResearchMarkerKey),
-        ...(input.resolvedSuccessor ? [store.check(input.resolvedSuccessor.receipt.key, input.resolvedSuccessor.receipt.rev), store.check(input.resolvedSuccessor.parent.key, input.resolvedSuccessor.parent.rev)] : [])] }));
+        ...(input.resolvedSuccessor ? [store.check(input.resolvedSuccessor.receipt.key, input.resolvedSuccessor.receipt.rev), store.check(input.resolvedSuccessor.parent.key, input.resolvedSuccessor.parent.rev)] : []),
+        ...(input.resolvedCycle ? [store.check(input.resolvedCycle.receipt.key, input.resolvedCycle.receipt.rev), store.check(input.resolvedCycle.head.key, input.resolvedCycle.head.rev)] : [])] }));
     } };
     const options = { ...store.options, dynamo, ...(once ? { researchOnceBinding: {
       pairingId: config.pairingId, researchFingerprint: fingerprint(settings), sourceRevision: config.revision,

@@ -205,8 +205,8 @@ Successor reservation retains the second descriptor-sized discovery amount
 normally, including evidence-to-settlement crash recovery when both budgets are
 fully reserved. Admission's old free-budget snapshots are not perpetual execution
 conditions. Only the immutable original parent and admission receipt are added
-to existing execution guards. One successor is the hard limit: uncertain or empty
-successor output stops again without a third attempt. Keep both histories and
+to existing execution guards. For these v1 operations, one successor is the hard
+limit: uncertain or empty successor output stops again without a third attempt. Keep both histories and
 reconcile supported receipts rather than editing tables, retransferring a key or
 widening policy. Admission success and logs are neither billing proof nor proof
 of useful researched-account completion. Closed-app execution and supported app
@@ -231,3 +231,105 @@ are not live proof of the combined web-search, schema and citation behavior.
 validation failed; it does not identify which field or recover historical output.
 Changing the request shape does not authorize another attempt, reset retained
 spend or change the immutable successor admission limit above.
+
+
+### Explicit unsuccessful-discovery cycles (native version 2)
+
+This local source feature is a separate application capability, not a deployment,
+current third-attempt admission, automatic retry, schedule, or general repeat-after-success
+facility. V1 requests, receipts, deterministic IDs and behavior remain unchanged.
+V2 intentionally replaces the lifetime two-attempt capability only through new,
+explicitly reviewed admissions. It does **not** preserve a lifetime two-attempt cap.
+Every subsequent admission requires its own exact new-work review and cumulative
+ceiling. An acknowledgement boolean is disclosure, not proof of a fresh human decision.
+
+All three operations use native operator IAM and the existing worker/research-once
+enable gates. No HTTP body is promoted. Requests are strict and limited to 4 KiB.
+They never accept caller run IDs, arbitrary request UUIDs, budget IDs, models,
+credentials, expiry fields or page-ceiling amendments:
+
+- `research.cycle.status`: `version: 2`, `workspaceId`, `pairingId`, and optional
+  `reference: {ordinal, admissionFingerprint}`. Without a reference, reads the
+  current head and bounded predecessor. With one, reads that exact historical
+  receipt/run. Status performs only strong reads and condition-only snapshot
+  transactions, with no credentials, preparation, claims, publication or settlement.
+- `research.cycle.admit`: the same identity, plus `expectedSourceRevision`,
+  `researchFingerprint`, `descriptorFingerprint`, `predecessor`,
+  `observationFingerprint`, `expectedDiscoveryBudget`, `expectedResearchBudget`,
+  `proposedDiscoveryLimitMicros`, and `disclosureAcknowledged: true`.
+  Predecessor is `{kind: "legacy", anchorFingerprint}` for initial adoption or
+  `{kind: "cycle", ordinal, admissionFingerprint}` for the exact current head.
+  Both budgets are exact `{limit, spent, approvedAt}` before-images.
+- `research.cycle.execute`: the same identity and required exact `reference` only.
+  The server resolves the stored run and binding. Admission does not execute or
+  Resume. Use existing Settings Refresh, inspect the cumulative ledger, and
+  separately Resume to exactly `receipt.expectedExecutionRevision`, which is the
+  admitted paused revision plus one. Resume/Refresh alone executes nothing.
+
+Use the actual status fields `source.revision`, `source.researchFingerprint`,
+`descriptorFingerprint`, `predecessor`, `observationFingerprint`, `discoveryBudget`
+and `researchBudget` to construct the reviewed proposal. Do not fabricate a history
+fingerprint or silently refresh an already-reviewed proposal. The only possible
+ceiling is `max(discoveryBudget.limit, discoveryBudget.spent + D)`, where `D` is the
+unchanged descriptor search-plus-model reservation. All arithmetic must be safe.
+The page ledger is unchanged byte-for-byte and needs enough remaining capacity
+for one existing page reservation at admission. Retained spend and original
+`approvedAt` are preserved, including when the required discovery delta is zero.
+This is cumulative capacity, not escrow, a refund, a provider invoice or another budget.
+
+Admission returns `{version: 2, kind: "research.cycle.admit.result", state,
+receipt}`, with `state` equal to `applied` or a definite preflight `held`.
+An applied immutable receipt includes the request/fingerprint, server-derived
+ordinal/run ID, expected execution revision, legacy anchor fingerprint, bounded
+row observations, discovery delta and recorded time. The execution reference is
+`{ordinal: receipt.ordinal, admissionFingerprint: receipt.fingerprint}`.
+Retain the exact proposal and receipt. The receipt slot is derived from the
+proposal's predecessor before checking current eligibility. An exact admission
+replay returns its original receipt after head advancement, pause, revocation or
+descriptor expiry, without another ceiling change. A conflicting same-slot payload
+never moves to another ordinal. Read/CAS failures are sanitized unavailable errors,
+not empty/zero state or cancellation. An already-sent transaction may commit late.
+Reconcile that exact identity, never a replacement identity.
+
+Status and execute both return `research.cycle.status.result` with fixed fields:
+`admissionState` (`applied` or `not-observed`), `receipt`, `head`, `source`, both
+budget before-images, `descriptorFingerprint`, `predecessor`,
+`observationFingerprint`, `authorityState` (`ready`, `paused`, `superseded`, `held`),
+`outcome`, `checkedAt`, and bounded `blockers`. Outcome uses the existing v1
+run/job/account/evidence/settlement fields, or null when no reservation was
+observed. `not-observed` is a coherent observation, not a guarantee that a late
+commit cannot appear. Applied admission, current authority, committed evidence,
+and settlement are separate facts. Missing/corrupt state is not fresh bootstrap.
+An exact historical receipt can remain readable without current authority.
+
+Initial adoption requires the real original reservation and validates any fixed
+v1 successor receipt against that original row's exact revision/fingerprint.
+Every represented reservation must have correct identity, input, cost and binding,
+and consistent incomplete/null or completed/array state. The source must be
+paused later than the represented legacy execution revisions. Both legacy runs
+must have no nonempty candidates. Later admission checks the immediate v2
+predecessor and a later paused revision, establishing the invariant without a
+chain scan. Nonempty candidates block a new cycle even when unusable, no account
+or job exists, or page work is parked. This does not claim global domain deduplication.
+No old source/marker/fence/reservation/receipt is rewritten or refunded.
+
+Execution reuses the existing preparation, idempotent account/enqueue, exact
+page claim, evidence and settlement implementation:
+
+- Incomplete discovery replay starts neither discovery nor page work.
+- Completed discovery replay reuses candidates and may obtain the **first** exact
+  page claim. It never repeats discovery.
+- A running unreceipted or parked page claim never restarts page HTTP. Lost
+  reservation/claim acknowledgements are never provider permission.
+- Committed evidence can settle without provider restart, including when both
+  budgets are fully reserved. Fresh page capacity is checked before an absent
+  discovery reservation, not on every exact replay.
+
+The immutable receipt/current head and current source/pairing/marker/descriptor
+fence execution, not admission-time mutable snapshots of the current run's outcome.
+There is no additional 15-minute expiry. Existing descriptor validity, exact source
+revision, head and pairing stops remain, including for evidence settlement.
+Historical settlement across changed authority is not supported. Each native
+operation retains the 45-second maximum and 5-second Lambda margin, one SDK
+attempt, abort propagation and conservative late-commit behavior. A local deadline
+cannot recall an already-sent provider request or prove its billing outcome.
