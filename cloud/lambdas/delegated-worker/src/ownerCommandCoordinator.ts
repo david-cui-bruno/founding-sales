@@ -102,12 +102,13 @@ export class OwnerCommandCoordinator {
     const config=command.configuration;
     if(command.pairingId!==principal.pairingId||config.pairingId!==principal.pairingId||config.workspaceId!==command.workspaceId||config.revision!==command.expectedRevision+1) throw new Error('research_configuration_mismatch');
     const store=new DynamoStore({...this.input.auth.options,dynamo:this.input.auth.fencedDynamo(principal)});
+    if (await store.get('GUIDED_RESEARCH_SETUP')) throw new Error('research_guided_configuration_owned');
     const receiptKey=`RESEARCH_CONFIGURATION_COMMAND#${keyPart(command.commandId)}`;
     const fp=fingerprint(command); const prior=await store.get<{fingerprint:string;configuration:unknown}>(receiptKey);
     if(prior) {if(prior.data.fingerprint!==fp) throw new Error('command_fingerprint_conflict');return ownerResearchSourceSchema.parse(prior.data.configuration);}
     const key=ownerResearchSourceKey(); const current=await store.get<unknown>(key);
     if((current?ownerResearchSourceSchema.parse(current.data).revision:0)!==command.expectedRevision) throw new Error('research_configuration_conflict');
-    await store.transact([store.put(key,config,current?.rev??null),store.put(receiptKey,{fingerprint:fp,configuration:config},null)]);
+    await store.transact([store.put(key,config,current?.rev??null),store.put(receiptKey,{fingerprint:fp,configuration:config},null),store.absent('GUIDED_RESEARCH_SETUP')]);
     return config;
   }
   async apply(raw: unknown, authorization: string): Promise<CommandReceipt> {

@@ -8,18 +8,19 @@ module "delegated_worker" {
     archive = archive
   }
 
-  aws_region                           = var.aws_region
-  aws_account_id                       = var.aws_account_id
-  name_prefix                          = var.name_prefix
-  iam_path                             = var.iam_path
-  delegated_worker_enabled             = var.delegated_worker_enabled
-  delegated_worker_activation_reviewed = var.delegated_worker_activation_reviewed
-  delegated_workspace_id               = var.delegated_workspace_id
-  delegated_google_client_id           = var.delegated_google_client_id
-  delegated_research_enabled           = var.delegated_research_enabled
-  delegated_worker_schedule_enabled    = var.delegated_worker_schedule_enabled
-  worker_source_dir                    = "${path.module}/../lambdas/delegated-worker/dist"
-  worker_output_path                   = "${path.module}/.build/delegated-worker.zip"
+  aws_region                             = var.aws_region
+  aws_account_id                         = var.aws_account_id
+  name_prefix                            = var.name_prefix
+  iam_path                               = var.iam_path
+  delegated_worker_enabled               = var.delegated_worker_enabled
+  delegated_worker_activation_reviewed   = var.delegated_worker_activation_reviewed
+  delegated_workspace_id                 = var.delegated_workspace_id
+  delegated_google_client_id             = var.delegated_google_client_id
+  delegated_research_enabled             = var.delegated_research_enabled
+  delegated_research_reviewed_capability = var.delegated_research_reviewed_capability
+  delegated_worker_schedule_enabled      = var.delegated_worker_schedule_enabled
+  worker_source_dir                      = "${path.module}/../lambdas/delegated-worker/dist"
+  worker_output_path                     = "${path.module}/.build/delegated-worker.zip"
 }
 
 output "delegated_worker_endpoint" {

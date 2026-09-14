@@ -53,6 +53,10 @@ mock_provider "archive" {
 run "isolated_root_disabled_by_default" {
   command = plan
   assert {
+    condition     = var.delegated_research_reviewed_capability == ""
+    error_message = "Reviewed metadata must be absent by default, never invented model or pricing settings."
+  }
+  assert {
     condition     = output.delegated_worker_endpoint == null
     error_message = "The isolated root must expose no endpoint by default."
   }
@@ -135,14 +139,14 @@ run "enabled_bounded_schedule_google_research_off" {
       length(aws_lambda_function.delegated_worker) == 1,
       length(aws_apigatewayv2_api.delegated_worker) == 1,
       length(aws_apigatewayv2_integration.delegated_worker) == 1,
-      length(aws_apigatewayv2_route.delegated_worker) == 16,
+      length(aws_apigatewayv2_route.delegated_worker) == 18,
       length(aws_apigatewayv2_stage.delegated_worker) == 1,
       length(aws_lambda_permission.delegated_worker_api) == 1,
       length(aws_cloudwatch_event_rule.delegated_worker) == 0,
       length(aws_cloudwatch_event_target.delegated_worker) == 0,
       length(aws_lambda_permission.delegated_worker_schedule) == 0
     ])
-    error_message = "Enabled unscheduled worker must have exactly 27 managed resources and one mocked archive read."
+    error_message = "Enabled unscheduled worker must have exactly 29 managed resources and one mocked archive read."
   }
   assert {
     condition = (
@@ -165,10 +169,20 @@ run "enabled_bounded_schedule_google_research_off" {
       aws_lambda_function.delegated_worker[0].environment[0].variables.DELEGATED_GOOGLE_SECRET_PARAMETER == "" &&
       aws_lambda_function.delegated_worker[0].environment[0].variables.DELEGATED_GOOGLE_KEY_PARAMETER == "" &&
       aws_lambda_function.delegated_worker[0].environment[0].variables.DELEGATED_RESEARCH_CREDENTIAL_PARAMETER == "" &&
+      aws_lambda_function.delegated_worker[0].environment[0].variables.DELEGATED_RESEARCH_REVIEWED_CAPABILITY == "" &&
       length(jsondecode(aws_iam_role_policy.delegated_worker[0].policy).Statement[1].Resource) == 2 &&
       !strcontains(aws_iam_role_policy.delegated_worker[0].policy, "research-model-credentials")
     )
-    error_message = "Schedule, Google configuration and research credentials must remain off without separate opt-ins."
+    error_message = "Schedule, Google configuration, research credentials and reviewed metadata must remain off without separate opt-ins."
+  }
+  assert {
+    condition = toset(keys(aws_apigatewayv2_route.delegated_worker)) == toset([
+      "POST /pairing/redeem", "POST /pairing/revoke", "POST /commands", "POST /commands/reconcile", "POST /emergency",
+      "POST /readiness", "POST /research/configure", "POST /policies/configure", "POST /requested-followup/context", "POST /requested-followup/draft",
+      "POST /research/setup/status", "POST /research/setup",
+      "GET /events", "POST /google/begin", "GET /google/status", "GET /google/disclosure", "POST /google/revoke", "GET /oauth/callback"
+    ])
+    error_message = "Preserve all sixteen existing routes and add only the two POST research setup routes."
   }
   assert {
     condition = (
@@ -285,4 +299,93 @@ run "workspace_format_rejected" {
     delegated_workspace_id = "../invalid workspace"
   }
   expect_failures = [var.delegated_workspace_id]
+}
+
+# Fictional transport fixtures only, not runtime-valid capability or pricing proof.
+run "reviewed_metadata_passes_through_without_enabling_credentials_or_schedule" {
+  command = plan
+  module {
+    source = "../terraform/modules/delegated-worker"
+  }
+  variables {
+    worker_source_dir                      = "./nonexistent-mocked-dist"
+    worker_output_path                     = "./nonexistent-mocked-worker.zip"
+    delegated_worker_enabled               = true
+    delegated_worker_activation_reviewed   = true
+    delegated_workspace_id                 = "mock-workspace"
+    aws_account_id                         = "123456789012"
+    name_prefix                            = "mock"
+    delegated_research_reviewed_capability = "{ \"provenance\": \"fictional operator review, transport test only\", \"units\": \"USD\" }"
+  }
+  assert {
+    condition     = aws_lambda_function.delegated_worker[0].environment[0].variables.DELEGATED_RESEARCH_REVIEWED_CAPABILITY == var.delegated_research_reviewed_capability
+    error_message = "Non-secret reviewed metadata must pass through byte-for-byte without injected defaults."
+  }
+  assert {
+    condition = (
+      aws_lambda_function.delegated_worker[0].environment[0].variables.DELEGATED_RESEARCH_CREDENTIAL_PARAMETER == "" &&
+      aws_lambda_function.delegated_worker[0].environment[0].variables.DELEGATED_WORKER_SCHEDULE_ARN == "" &&
+      length(jsondecode(aws_iam_role_policy.delegated_worker[0].policy).Statement[1].Resource) == 2 &&
+      !strcontains(aws_iam_role_policy.delegated_worker[0].policy, "research-model-credentials") &&
+      length(aws_apigatewayv2_route.delegated_worker) == 18 &&
+      length(aws_cloudwatch_event_rule.delegated_worker) == 0 &&
+      length(aws_cloudwatch_event_target.delegated_worker) == 0 &&
+      length(aws_lambda_permission.delegated_worker_schedule) == 0
+    )
+    error_message = "Reviewed metadata is not a credential grant or schedule activation."
+  }
+}
+
+run "isolated_root_reviewed_metadata_accepts_boundary_json" {
+  command = plan
+  variables {
+    # JSON string with exactly 3000 characters including its two quote characters.
+    delegated_research_reviewed_capability = jsonencode(format("%sx", join("", [for i in range(3) : join("", [for j in range(999) : "x"])])))
+  }
+  assert {
+    condition     = length(var.delegated_research_reviewed_capability) == 3000 && output.delegated_worker_endpoint == null
+    error_message = "The inclusive JSON size boundary must be accepted without activating a worker."
+  }
+}
+
+run "isolated_root_reviewed_metadata_invalid_json_rejected" {
+  command = plan
+  variables {
+    delegated_research_reviewed_capability = "{not-json}"
+  }
+  expect_failures = [var.delegated_research_reviewed_capability]
+}
+
+run "isolated_root_reviewed_metadata_oversize_rejected" {
+  command = plan
+  variables {
+    delegated_research_reviewed_capability = jsonencode(join("", [for i in range(3) : join("", [for j in range(1000) : "x"])]))
+  }
+  expect_failures = [var.delegated_research_reviewed_capability]
+}
+
+run "module_reviewed_metadata_invalid_json_rejected" {
+  command = plan
+  module {
+    source = "../terraform/modules/delegated-worker"
+  }
+  variables {
+    worker_source_dir                      = "./nonexistent-mocked-dist"
+    worker_output_path                     = "./nonexistent-mocked-worker.zip"
+    delegated_research_reviewed_capability = "{not-json}"
+  }
+  expect_failures = [var.delegated_research_reviewed_capability]
+}
+
+run "module_reviewed_metadata_oversize_rejected" {
+  command = plan
+  module {
+    source = "../terraform/modules/delegated-worker"
+  }
+  variables {
+    worker_source_dir                      = "./nonexistent-mocked-dist"
+    worker_output_path                     = "./nonexistent-mocked-worker.zip"
+    delegated_research_reviewed_capability = jsonencode(join("", [for i in range(3) : join("", [for j in range(1000) : "x"])]))
+  }
+  expect_failures = [var.delegated_research_reviewed_capability]
 }

@@ -63,6 +63,7 @@ const defaults: Record<string, string> = {
   delegated_workspace_id: '""',
   delegated_google_client_id: '""',
   delegated_research_enabled: "false",
+  delegated_research_reviewed_capability: '""',
   delegated_worker_schedule_enabled: "false",
 };
 const implementation = tf(moduleDir);
@@ -111,6 +112,25 @@ describe("delegated-worker Terraform source isolation", () => {
     expect(moduleNames.sort()).toEqual([...Object.keys(defaults), "worker_source_dir", "worker_output_path"].sort());
     const referenced = [...new Set([...implementation.matchAll(/\bvar\.([A-Za-z0-9_]+)/g)].map((match) => match[1]))];
     expect(referenced.sort()).toEqual(moduleNames.sort());
+  });
+
+  it("bounds optional non-secret reviewed metadata without treating it as provider or pricing proof", () => {
+    for (const dir of [legacyDir, workerDir, moduleDir]) {
+      const input = compact(block(read(dir, "variables.tf"), 'variable "delegated_research_reviewed_capability"'));
+      expect(input).toContain('type = string');
+      expect(input).toContain('default = ""');
+      expect(input).toContain('nullable = false');
+      expect(input).toContain('length(var.delegated_research_reviewed_capability) <= 3000');
+      expect(input).toContain('(var.delegated_research_reviewed_capability == "" || can(jsondecode(var.delegated_research_reviewed_capability)))');
+      expect(input).toContain("non-secret operator-reviewed");
+      expect(input).toContain("Not readiness, provider connectivity or verified pricing proof");
+      expect(input).toContain("No credentials, model defaults or default rates");
+    }
+    const lambda = compact(block(implementation, 'resource "aws_lambda_function" "delegated_worker"'));
+    expect(lambda).toContain("DELEGATED_RESEARCH_REVIEWED_CAPABILITY = var.delegated_research_reviewed_capability");
+    expect(compact(block(implementation, 'resource "aws_iam_role_policy" "delegated_worker"')))
+      .not.toContain("delegated_research_reviewed_capability");
+    expect(implementation).not.toContain('resource "aws_lambda_function_event_invoke_config"');
   });
 
   it("retains provider constraints, account allowlist and legacy tags without child provider configuration", () => {
@@ -177,11 +197,13 @@ describe("delegated-worker Terraform source isolation", () => {
       'DELEGATED_GOOGLE_SECRET_PARAMETER = var.delegated_google_client_id == "" ? "" : local.delegated_secret_parameter',
       'DELEGATED_GOOGLE_KEY_PARAMETER = var.delegated_google_client_id == "" ? "" : local.delegated_key_parameter',
       'DELEGATED_RESEARCH_CREDENTIAL_PARAMETER = var.delegated_research_enabled ? local.delegated_research_parameter : ""',
+      'DELEGATED_RESEARCH_REVIEWED_CAPABILITY = var.delegated_research_reviewed_capability',
     ]) expect(source).toContain(invariant);
     expect([...implementation.matchAll(/retention_in_days\s*=\s*(\d+)/g)].map((match) => match[1])).toEqual(["7", "7"]);
     expect([...implementation.matchAll(/"((?:GET|POST) \/[^"\n]+)"/g)].map((match) => match[1])).toEqual([
       "POST /pairing/redeem", "POST /pairing/revoke", "POST /commands", "POST /commands/reconcile", "POST /emergency",
       "POST /readiness", "POST /research/configure", "POST /policies/configure", "POST /requested-followup/context", "POST /requested-followup/draft",
+      "POST /research/setup/status", "POST /research/setup",
       "GET /events", "POST /google/begin", "GET /google/status", "GET /google/disclosure", "POST /google/revoke", "GET /oauth/callback",
     ]);
     // Authentication stays in the existing handler. Do not silently add/change API auth in an extraction.

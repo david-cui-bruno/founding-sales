@@ -1,3 +1,4 @@
+import { ResearchSetupService, type ResearchSetupProfile } from './researchSetup';
 import {WorkerPolicyConfiguration} from './policyConfiguration';
 import { lookup } from 'node:dns/promises';
 import { createPinnedPageHttp, type PageHttp } from '../../../../src/main/research/companyPageProvider';
@@ -23,7 +24,7 @@ const eventSchema = z.object({ version: z.literal('2.0'), rawPath: z.string().ma
   requestContext: z.object({ domainName: z.string(), http: z.object({ method: z.enum(['POST', 'GET']), sourceIp: z.string().min(1).max(256) }) }) });
 /** API Gateway v2 HTTPS only. No authorizer cache, event logging, query bearer,
  * operator bootstrap issuance, token-returning route or mail dispatch endpoint. */
-export function createWorkerHandler(input: { auth: WorkerAuth; host: string; google?: RemoteGoogleAuthorization }) {
+export function createWorkerHandler(input: { auth: WorkerAuth; host: string; google?: RemoteGoogleAuthorization; researchSetupProfile?: ResearchSetupProfile }) {
   return async (raw: unknown): Promise<WorkerHttpResponse> => {
     try {
       const event = eventSchema.parse(raw);
@@ -65,6 +66,10 @@ export function createWorkerHandler(input: { auth: WorkerAuth; host: string; goo
       if(path==='/readiness' && method==='POST') {
         const owner=new OwnerCommandCoordinator({auth:input.auth,authorization:input.google??new RemoteGoogleAuthorization({auth:input.auth})});
         return response(200,await owner.checkpoint(body(),event.headers.authorization??'',AbortSignal.timeout(15000)));
+      }
+      if (method === 'POST' && ['/research/setup/status', '/research/setup'].includes(path)) {
+        const setup = new ResearchSetupService({ auth: input.auth, profile: input.researchSetupProfile });
+        return response(200, path === '/research/setup/status' ? await setup.status(body(), event.headers.authorization ?? '') : await setup.apply(body(), event.headers.authorization ?? ''));
       }
       if(path==='/research/configure' && method==='POST') {
         const owner=new OwnerCommandCoordinator({auth:input.auth,authorization:input.google??new RemoteGoogleAuthorization({auth:input.auth})});
@@ -148,7 +153,8 @@ export async function createProductionServices(env: NodeJS.ProcessEnv, boundarie
     googleConfig = { clientId: env.DELEGATED_GOOGLE_CLIENT_ID!, clientSecret, encryptionKey: Buffer.from(encodedKey, 'base64'), redirectUri: `https://${config.DELEGATED_WORKER_HOST}/oauth/callback` };
   }
   const google = new RemoteGoogleAuthorization({ auth, config: googleConfig, fetch: boundaries.fetch });
-  const source=createSourceCoordinator({auth,authorization:google,fetch:boundaries.fetch??globalThis.fetch,
+  const researchSetupProfile: ResearchSetupProfile = { reviewedCapability: env.DELEGATED_RESEARCH_REVIEWED_CAPABILITY, credentialParameterDeclared: typeof env.DELEGATED_RESEARCH_CREDENTIAL_PARAMETER === 'string' && env.DELEGATED_RESEARCH_CREDENTIAL_PARAMETER.startsWith(`/delegated-worker/${config.DELEGATED_WORKSPACE_ID}/`) && env.DELEGATED_RESEARCH_CREDENTIAL_PARAMETER.length > `/delegated-worker/${config.DELEGATED_WORKSPACE_ID}/`.length };
+  const source=createSourceCoordinator({auth,authorization:google,researchSetupProfile,fetch:boundaries.fetch??globalThis.fetch,
     research:{pageHttp:boundaries.pageHttp??createPinnedPageHttp(),resolve:boundaries.resolve??(async hostname=>(await lookup(hostname,{all:true})).map(item=>item.address)),
       loadCredentials:async(workspaceId,signal)=>{
         signal.throwIfAborted(); if(workspaceId!==config.DELEGATED_WORKSPACE_ID) throw new Error('research_workspace_mismatch');
@@ -158,7 +164,7 @@ export async function createProductionServices(env: NodeJS.ProcessEnv, boundarie
         if(result.Parameter?.Type!=='SecureString'||!result.Parameter.Value) throw new Error('research_unconfigured');
         return z.strictObject({apiKey:z.string().min(1).max(16384),model:z.string().min(1).max(255)}).parse(JSON.parse(result.Parameter.Value));
       }}});
-  return { auth, google, source, handle: createWorkerHandler({ auth, google, host: config.DELEGATED_WORKER_HOST }) };
+  return { auth, google, source, researchSetup: new ResearchSetupService({ auth, profile: researchSetupProfile }), handle: createWorkerHandler({ auth, google, researchSetupProfile, host: config.DELEGATED_WORKER_HOST }) };
 }
 export function createProductionHandler(env: NodeJS.ProcessEnv, boundaries: ProductionBoundaries = {}) {
   return async (event: unknown): Promise<WorkerHttpResponse> => {

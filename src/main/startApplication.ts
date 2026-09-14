@@ -5,6 +5,7 @@ import {registerLinkedInIpc} from './linkedin/registerLinkedInIpc';
 import {createLinkedInDraftProvider} from './linkedin/linkedInDraftProvider';
 import {CredentialStore} from './outreach/providers/credentialStore';
 import { PairingStore, type StoredPairing } from './delegation/pairingStore';
+import { ResearchSetupRequestStore } from './delegation/researchSetupRequestStore';
 import { createDelegationRuntime, type DelegationRuntime } from './delegation/delegationRuntime';
 import { SqlDelegationConfiguration } from './delegation/delegationSync';
 import type { AppDatabase } from './db/database';
@@ -328,6 +329,7 @@ export type ApplicationStartupDependencies = FoundationRuntimeDependencies & {
   createEmailService?(runtime:FoundationRuntime,userDataPath:string,providers?:ReturnType<typeof createOutreachProviders>,expectedWorkspaceId?:string):ReturnType<typeof createEmailService>;
   openGoogleConsent?(url:string):Promise<void>;
   createPairingStore?(userDataPath:string):Pick<PairingStore,'load'|'redeem'>;
+  createResearchSetupStore?(userDataPath:string):ResearchSetupRequestStore;
   createResearchProviders?(userDataPath:string):ReturnType<typeof createOutreachProviders>;
   companyResearchHttp?: PageHttp;
   companyResearchResolve?: (hostname: string) => Promise<string[]>;
@@ -600,6 +602,7 @@ const defaultDependencies: ApplicationStartupDependencies = {
   createResearchProviders: userDataPath => createOutreachProviders({directory:join(userDataPath,'outreach'),safeStorage,openExternal:url=>shell.openExternal(url)}),
   openGoogleConsent:url=>shell.openExternal(url),
   createPairingStore:userDataPath=>new PairingStore({directory:join(userDataPath,'delegation'),safeStorage}),
+  createResearchSetupStore:userDataPath=>new ResearchSetupRequestStore({directory:join(userDataPath,'research-setup'),safeStorage}),
   createEmailService: (runtime,userDataPath,providers,expectedWorkspaceId) => createEmailService({databaseGate:runtime,expectedWorkspaceId,
     providers:providers ?? createOutreachProviders({directory:join(userDataPath,'outreach'),safeStorage,openExternal:url=>shell.openExternal(url)})}),
   createSourcingPoller: createProductionSourcingPoller,
@@ -815,7 +818,7 @@ export async function startApplication(
       domain, phone: phoneBindings.phone, readiness: phoneBindings.readiness,
     });
     phoneBindings.onSetupChanged?.(() => { if (!outboundClosed) outbound.invalidate('wake'); });
-    delegation=createDelegationRuntime({openGoogleConsent:dependencies.openGoogleConsent,databaseGate:runtime,pairing:paired,clock:domainClock,phone:phoneBindings.phone,inboundRegistry:startupInboundRegistry,policyImportNative:dependencies.createPolicyImportNative?.(),requestedModel:dependencies.createRequestedFollowupModel?.(options.userDataPath),linkedIn:paired?dependencies.createLinkedInAdapters?.(options.userDataPath):undefined,configurationChanged:async()=>{
+    delegation=createDelegationRuntime({researchSetupStore:dependencies.createResearchSetupStore?.(options.userDataPath),openGoogleConsent:dependencies.openGoogleConsent,databaseGate:runtime,pairing:paired,clock:domainClock,phone:phoneBindings.phone,inboundRegistry:startupInboundRegistry,policyImportNative:dependencies.createPolicyImportNative?.(),requestedModel:dependencies.createRequestedFollowupModel?.(options.userDataPath),linkedIn:paired?dependencies.createLinkedInAdapters?.(options.userDataPath):undefined,configurationChanged:async()=>{
       await companyResearch?.dispose();companyResearch=undefined;
       const state=paired?await runtime.withDatabase(database=>new SqlDelegationConfiguration({database,workspaceId:paired.workspaceId,pairingId:paired.pairingId,clock:domainClock}).read()):null;
       if(state?.configuration.state==='active'&&state.configuration.research&&dependencies.createResearchProviders&&!outboundClosed){

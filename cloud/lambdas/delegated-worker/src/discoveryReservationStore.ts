@@ -9,16 +9,23 @@ const inputSchema = z.strictObject({ commandId: z.uuid(), workspaceId: accountId
 const candidatesSchema = z.array(z.strictObject({ name: accountSchema.shape.name, domain: accountSchema.shape.domain.unwrap(), sourceUrl: z.url().max(2048) })).max(50);
 const reservationSchema = inputSchema.extend({ reserved: integer.positive(), candidates: candidatesSchema.nullable(), costMicros: integer.nullable(), completed: z.boolean() });
 type Record = z.infer<typeof reservationSchema>;
-const budgetKey = (id: string) => `BUDGET#discovery#${keyPart(id)}`;
+export const budgetKey = (id: string) => `BUDGET#discovery#${keyPart(id)}`;
 const reservationKey = (id: string) => `DISCOVERY#${keyPart(id)}`;
+export const researchAdmissionKey = 'RESEARCH_ADMISSION_FENCE';
+/** Pure immutable budget planning shared by authenticated atomic admission. */
+export function planDiscoveryBudget(store: DynamoStore, input: { budgetId: string; limitMicros: number }) {
+  const budget = budgetSchema.parse({ limit: input.limitMicros, spent: 0, approvedAt: store.now() });
+  return store.put(budgetKey(input.budgetId), budget, null, { limit: budget.limit, spent: 0 });
+}
 export class DynamoDiscoveryReservationStore implements DiscoveryReservationStore {
   private readonly store: DynamoStore;
   constructor(options: RepositoryOptions) { this.store = new DynamoStore(options); }
   /** Operator/authenticated configuration capability, never invoked by preparation
    * or a constructor. Immutable ceiling: new UUIDs cannot reset spent. */
   async approveBudget(input: { budgetId: string; limitMicros: number }): Promise<void> {
-    const budget = budgetSchema.parse({ limit: input.limitMicros, spent: 0, approvedAt: this.store.now() });
-    await this.store.transact([this.store.put(budgetKey(input.budgetId), budget, null, { limit: budget.limit, spent: 0 })]);
+    const source = await this.store.get('OWNER_RESEARCH_SOURCE');
+    const admission = await this.store.get(researchAdmissionKey);
+    await this.store.transact([this.store.put(researchAdmissionKey, { version: 1, kind: 'legacy' }, admission?.rev ?? null), planDiscoveryBudget(this.store, input), this.store.absent('GUIDED_RESEARCH_SETUP'), source ? this.store.check('OWNER_RESEARCH_SOURCE', source.rev) : this.store.absent('OWNER_RESEARCH_SOURCE')]);
   }
   private replay(record: Stored<Record>, input: DiscoveryReservationInput): DiscoveryReservationResult {
     const prior = reservationSchema.parse(record.data);

@@ -2,6 +2,8 @@ import {requestedFollowupDraftSchema,type RequestedFollowupDraft,prepareRequeste
 import {workerPolicyRequestSchema,workerPolicyReceiptSchema} from '../../shared/contracts/workerPolicyContract';
 import { requestedOwnerContextSchema, ownerCheckpointSchema, configureResearchSourceSchema, ownerResearchSourceSchema } from '../../shared/contracts/ownerCommandContract';
 import { z } from 'zod';
+import { researchSetupStatusRequestSchema, researchSetupRemoteStatusSchema, researchSetupWriteRequestSchema, type ResearchSetupStatusRequest, type ResearchSetupRequest, type ResearchSetupCancelRequest } from '../../shared/contracts/researchSetupContract';
+import { matchResearchSetupReceipt } from './researchSetupRequestStore';
 import { googleGrantPurposeSchema, googleScopes, googleGrantDisclosure, personalGoogleGrantDisclosure, type GoogleGrantPurpose } from '../../shared/contracts/googleGrantCapabilities';
 import { remoteGoogleGrantAuthorizationSchema, remoteGoogleGrantBeginSchema, remoteGoogleGrantDisclosureSchema, remoteGoogleGrantStatusSchema, type RemoteGoogleGrantBegin, type RemoteGoogleGrantStatus } from '../../shared/contracts/remoteGoogleGrantContract';
 import type { DelegationRepository } from './delegationRepository';
@@ -9,6 +11,34 @@ import { commandReceiptSchema, delegationCommandSchema, eventPageSchema, type Co
 import { synchronizeDelegation, type SqlDelegationTransport, type SyncReport } from './delegationSync';
 export type { SyncReport } from './delegationSync';
 export type ExecutionPairing = Readonly<{ endpoint: string; workspaceId: string; credential: string }>;
+/** No repositories/DB handles: research setup is only a paired owner HTTP path. */
+export function createResearchSetupTransport(options: { pairing: ExecutionPairing & { pairingId: string }; fetch?: typeof globalThis.fetch }) {
+  const pairing = Object.freeze({ ...options.pairing });
+  const endpoint = new URL(pairing.endpoint);
+  if (endpoint.protocol !== 'https:' || endpoint.username || endpoint.password || endpoint.search || endpoint.hash || endpoint.pathname !== '/' || !/^[A-Za-z0-9_-]{43}$/.test(pairing.credential)) throw Error('research_setup_unavailable');
+  const request = async (path: string, body: unknown, signal: AbortSignal): Promise<unknown> => {
+    signal.throwIfAborted();
+    const response = await (options.fetch ?? globalThis.fetch)(`${endpoint.origin}${path}`, { method: 'POST', headers: { authorization: `Bearer ${pairing.credential}`, 'content-type': 'application/json' }, body: JSON.stringify(body), redirect: 'error', cache: 'no-store', signal });
+    signal.throwIfAborted();
+    if (!response.ok) throw Error('research_setup_unavailable');
+    const text = await response.text(); signal.throwIfAborted();
+    if (text.length > 4 * 1024 * 1024) throw Error('research_setup_unavailable');
+    return JSON.parse(text) as unknown;
+  };
+  const bound = (value: { workspaceId: string; pairingId: string }) => { if (value.workspaceId !== pairing.workspaceId || value.pairingId !== pairing.pairingId) throw Error('research_setup_unavailable'); };
+  return {
+    async status(raw: ResearchSetupStatusRequest, signal: AbortSignal) {
+      const input = researchSetupStatusRequestSchema.parse(raw); bound(input);
+      const status = researchSetupRemoteStatusSchema.parse(await request('/research/setup/status', input, signal)); bound(status);
+      if (status.receipt && (status.receipt.requestId !== input.requestId || status.receipt.workspaceId !== input.workspaceId || status.receipt.pairingId !== input.pairingId)) throw Error('research_setup_unavailable');
+      return status;
+    },
+    async write(raw: ResearchSetupRequest | ResearchSetupCancelRequest, signal: AbortSignal) {
+      const input = researchSetupWriteRequestSchema.parse(raw), original = input.kind === 'cancel' ? input.originalRequest : input; bound(original);
+      return matchResearchSetupReceipt(original, await request('/research/setup', input, signal));
+    },
+  };
+}
 export class ExecutionClient {
   private readonly pairing: ExecutionPairing;
   private readonly http: typeof globalThis.fetch;

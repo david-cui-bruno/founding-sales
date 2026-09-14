@@ -183,12 +183,12 @@ it('pausing persisted configuration after submission prevents any provider work'
 import { createWorkerAccountRepository } from '../src/workerAccountRepository';
 import { createDiscoveryReservationStore } from '../src/discoveryReservationStore';
 import { rankAccount } from '../../../../src/shared/accounts/accountRanking';
-async function researchFixture() {
+async function researchFixture(budgetId = 'approved-budget') {
   const f = fixture(); let modelCalls = 0; let pageCalls = 0; let credentialCalls = 0; let uncertain = false; let credentialHook: (() => Promise<void>) | undefined;
   const pair = await f.auth.redeemPairing((await f.auth.issuePairing({ scopes: ['commands:write'], expiresInSeconds: 300 })).code, 'fictional');
   const limits = { maxCompanies: 1, maxPages: 1, maxBytes: 10000, maxCostMicros: 100 };
   const config = ownerResearchSourceSchema.parse({ version: 1, workspaceId: 'ws', pairingId: pair.pairingId, revision: 1, state: 'active', research: {
-    workspaceId: 'ws', budgetId: 'approved-budget', audience: { residential: true, regions: ['Fictional region'], terms: ['property management'] }, audienceRevision: 1,
+    workspaceId: 'ws', budgetId, audience: { residential: true, regions: ['Fictional region'], terms: ['property management'] }, audienceRevision: 1,
     sourceRevision: 1, budgetRevision: 1, discoveryLimits: limits, researchLimits: limits, capability: { model: 'fixture', webSearch: true, searchCostMicros: 40, modelCostMicros: 40 },
     maxAccountBudgetMicros: 100, permittedSources: ['https://fictional.example/'], preparationCommandId: randomUUID(),
   } });
@@ -202,11 +202,11 @@ async function researchFixture() {
     pageHttp: async () => { pageCalls++; return new Response('<p>We manage 240 residential units.</p>', { headers: { 'content-type': 'text/html' } }); } };
   const accounts = createWorkerAccountRepository(f.auth.options); const reservations = createDiscoveryReservationStore(f.auth.options);
   return { ...f, pair, config, accounts, reservations, source: () => createSourceCoordinator({ auth: f.auth, authorization: f.authorization, fetch, research }),
-    approve: async () => { await reservations.approveBudget({ budgetId: 'approved-budget', limitMicros: 80 }); await accounts.approveResearchBudget(100); },
+    approve: async () => { await reservations.approveBudget({ budgetId, limitMicros: 80 }); await accounts.approveResearchBudget(100); },
     onCredentials: (hook: () => Promise<void>) => { credentialHook = hook; }, counts: () => ({ modelCalls, pageCalls, credentialCalls }), uncertain: () => { uncertain = true; } };
 }
-it('composes actual empty-workspace discovery and research with durable budgets and no outbound authority', async () => {
-  const f = await researchFixture(); await f.approve();
+it.each(['approved-budget', 'guided-research-v1'])('composes actual empty-workspace discovery and research with durable budgets and no outbound authority: %s', async budgetId => {
+  const f = await researchFixture(budgetId); await f.approve();
   expect(await f.source().tick(new AbortController().signal)).toMatchObject({ researchPrepared: 1, researchCompleted: 1 });
   expect(f.counts()).toEqual({ modelCalls: 1, pageCalls: 1, credentialCalls: 1 });
   expect(await f.auth.store.list('AUTH#')).toEqual([]);

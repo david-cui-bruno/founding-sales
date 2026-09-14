@@ -30,6 +30,7 @@ locals {
   delegated_routes = toset([
     "POST /pairing/redeem", "POST /pairing/revoke", "POST /commands", "POST /commands/reconcile", "POST /emergency",
     "POST /readiness", "POST /research/configure", "POST /policies/configure", "POST /requested-followup/context", "POST /requested-followup/draft",
+    "POST /research/setup/status", "POST /research/setup",
     "GET /events", "POST /google/begin", "GET /google/status", "GET /google/disclosure",
     "POST /google/revoke", "GET /oauth/callback"
   ])
@@ -142,6 +143,7 @@ resource "aws_lambda_function" "delegated_worker" {
       DELEGATED_WORKER_TABLE                  = aws_dynamodb_table.delegated_worker[0].name
       DELEGATED_WORKSPACE_ID                  = var.delegated_workspace_id
       DELEGATED_RESEARCH_CREDENTIAL_PARAMETER = var.delegated_research_enabled ? local.delegated_research_parameter : ""
+      DELEGATED_RESEARCH_REVIEWED_CAPABILITY  = var.delegated_research_reviewed_capability
       DELEGATED_WORKER_SCHEDULE_ARN           = local.delegated_schedule_enabled ? aws_cloudwatch_event_rule.delegated_worker[0].arn : ""
       DELEGATED_WORKER_HOST                   = replace(aws_apigatewayv2_api.delegated_worker[0].api_endpoint, "https://", "")
       DELEGATED_GOOGLE_CLIENT_ID              = var.delegated_google_client_id

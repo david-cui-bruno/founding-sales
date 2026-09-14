@@ -1,4 +1,6 @@
 import { createRemoteGoogleConnectionsApi } from './apis/remoteGoogleConnectionsApi';
+import { createResearchSetupApi } from './apis/researchSetupApi';
+import type { ResearchSetupApi } from '../shared/contracts/researchSetupContract';
 import type { RemoteGoogleConnectionsApi } from '../shared/contracts/remoteGoogleConnectionsContract';
 import { createLocalWorkspaceApi } from './apis/localWorkspaceApi';
 import { createDailyApi } from './apis/dailyApi';
@@ -36,6 +38,7 @@ export const createCallieApi = (invoker: IpcInvoker) => {
   const client = createIpcClient(invoker);
   // Optional in consumers for compatibility with older bridges. This bridge always supplies it.
   const googleExtension: { googleConnections?: RemoteGoogleConnectionsApi } = { googleConnections: createRemoteGoogleConnectionsApi(client) };
+  const researchExtension: { researchSetup?: ResearchSetupApi } = { researchSetup: createResearchSetupApi(client) };
   return {
     health: {
       get: (): Promise<AppHealth> =>
@@ -43,6 +46,7 @@ export const createCallieApi = (invoker: IpcInvoker) => {
     },
     delegation: {
       ...googleExtension,
+      ...researchExtension,
       policyImport:{
         selectAndPreview:()=>client.requestNoInput('outreach:policy-import-select-preview',policyImportPreviewSchema.nullable()),
         confirm:(input:z.infer<typeof policyImportConfirmSchema>)=>client.request('outreach:policy-import-confirm',policyImportConfirmSchema,policyImportReportSchema,input),
