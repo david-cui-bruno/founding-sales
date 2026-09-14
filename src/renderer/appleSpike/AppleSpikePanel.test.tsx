@@ -437,6 +437,7 @@ describe('AppleSpikePanel', () => {
       target: { value: 'I CONSENT TO THIS TEST CALL' },
     });
 
+    await waitFor(() => expect(start.hasAttribute('disabled')).toBe(false));
     fireEvent.click(start);
 
     await screen.findByText('The Apple feasibility operation could not be completed safely.');
