@@ -99,6 +99,25 @@ jobs, replenish budgets or restart providers. If no run ID was received, derive
 only the existing deterministic identity from the exact admitted settings. Do
 not substitute a fresh transport UUID or widen configuration to retry.
 
+Discovery diagnostics are **invocation-local**, not durable receipts. When a
+provider failure reaches the production research-once boundary, it emits one
+structured console warning with `event: research_discovery_uncertain` and an
+allowlisted `reason`: `transport_uncertain`, `response_body_invalid`,
+`http_rejected`, `envelope_invalid`, `search_receipt_invalid`, `output_invalid`,
+`candidate_json_invalid`, `citation_missing`, or `consulted_source_missing`.
+Only `http_rejected` may also include an integer `httpStatus` in 100–599,
+excluding successful 2xx statuses. No raw cause, message, body, prompt, key or
+URL is emitted. Lambda supplies invocation correlation. Result objects are
+unchanged. Replay and status reads do not emit or reconstruct the past reason,
+including historical failures predating these diagnostics. Admission/preflight
+refusals are not classified as provider failures, even if they occur after a
+reservation and leave an uncertain result. Console emission is best-effort and
+its failure does not alter the result or start retries. A deadline can end the wait
+before a provider classification reaches this boundary, so absence of a warning
+is not evidence that a provider request did not start. Timeout/cancellation and
+transport loss remain uncertain. Logs are not billing proof and do not justify
+retrying, reclaiming reservations or claiming uncharged spend.
+
 The same durable identity retains discovery and page reservations after an
 unknown outcome. Abort does not prove a remote request was cancelled or unbilled.
 Application reservations are conservative cumulative accounting, not an AWS or

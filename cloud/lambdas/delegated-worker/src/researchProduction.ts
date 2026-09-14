@@ -1,3 +1,4 @@
+import { ResearchDiscoveryError, researchDiscoveryDiagnostic } from '../../../../src/main/research/researchDiscoveryError';
 import { lookup } from 'node:dns/promises';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { GetParameterCommand, SSMClient } from '@aws-sdk/client-ssm';
@@ -89,9 +90,13 @@ export async function executeResearchOnce(env: NodeJS.ProcessEnv, boundaries: Pr
       research: { ...research, resolve: hostname => researchWait(signal, () => research.resolve(hostname)), pageHttp: value => researchWait(signal, () => research.pageHttp(value)) } }, signal,
     { status: 'inactive', researchPrepared: 0, researchCompleted: 0, held: 0, mailPolls: 0, dispatches: 0, sendReconciliations: 0, meetings: 0 }, request));
   } catch (error) {
+    if (error instanceof ResearchDiscoveryError) {
+      // Diagnostics are best-effort and must never change the durable outcome.
+      try { console.warn({ event: 'research_discovery_uncertain', ...researchDiscoveryDiagnostic(error) }); } catch { /* no fallback logging */ }
+    }
     // Only known admission refusals are held. SDK/unexpected failures propagate
     // to sanitized Lambda FunctionError. Durable reservations survive either way.
-    if (!(error instanceof Error) || !['research_once_binding_conflict', 'research_discovery_uncertain', 'worker_unauthorized', 'research_setup_binding_conflict', 'research_setup_descriptor_unavailable', 'research_setup_marker_missing', 'research_source_changed', 'research_pairing_changed', 'research_setup_marker_changed', 'research_model_mismatch'].includes(error.message)) throw error;
+    if (!(error instanceof ResearchDiscoveryError) && (!(error instanceof Error) || !['research_once_binding_conflict', 'research_discovery_uncertain', 'worker_unauthorized', 'research_setup_binding_conflict', 'research_setup_descriptor_unavailable', 'research_setup_marker_missing', 'research_source_changed', 'research_pairing_changed', 'research_setup_marker_changed', 'research_model_mismatch'].includes(error.message))) throw error;
   }
   return readResult(auth, request, runId);
 }

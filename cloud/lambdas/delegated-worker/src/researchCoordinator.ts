@@ -1,3 +1,4 @@
+import { ResearchDiscoveryError } from '../../../../src/main/research/researchDiscoveryError';
 import { assertGuidedResearch, guardGuidedResearch, guidedResearchMarkerKey, type ResearchSetupProfile } from './researchSetup';
 import { TransactWriteItemsCommand } from '@aws-sdk/client-dynamodb';
 import { ownerResearchSourceSchema, ownerResearchSourceKey } from '../../../../src/shared/contracts/ownerCommandContract';
@@ -72,7 +73,7 @@ export async function runResearch(input: ResearchCoordinatorOptions, signal: Abo
       if (credentials.model !== settings.capability.model) throw new Error('research_model_mismatch');
       try { return await requestCompanyDiscovery({ query, limits, capability: settings.capability, credentials, signal: requestSignal, fetch: input.fetch }); }
       catch (error) {
-        if (!once || signal.aborted) throw error;
+        if (!once || signal.aborted || error instanceof ResearchDiscoveryError) throw error;
         throw new Error('research_discovery_uncertain');
       }
     } });

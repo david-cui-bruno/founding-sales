@@ -242,3 +242,76 @@ it('refuses changed revision continuation before writes while retaining original
   expect(await f.invoke({ ...f.request, expectedSourceRevision: 3 })).toMatchObject({ state: 'held', runId: null });
   expect(f.db.transactions).toHaveLength(before); expect(f.fetch).toHaveBeenCalledTimes(1); expect(f.pageHttp).not.toHaveBeenCalled();
 });
+
+it('logs one safe invocation-local discovery diagnostic through the production handler, never on replay/status', async () => {
+  const f = await admitted(); const secret = 'HOSTILE-api-key-prompt-https://private.invalid/';
+  const log = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    f.fetch.mockRejectedValue(new Error(secret));
+    const result = await f.invoke();
+    expect(result.state).toBe('uncertain');
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(log).toHaveBeenCalledWith({ event: 'research_discovery_uncertain', reason: 'transport_uncertain' });
+    expect(JSON.stringify(log.mock.calls)).not.toContain(secret);
+    expect(await f.invoke()).toEqual(result);
+    const writes = f.db.transactions.length;
+    expect(await f.status(result)).toEqual(result);
+    expect(f.db.transactions).toHaveLength(writes);
+    expect(log).toHaveBeenCalledTimes(1); expect(f.fetch).toHaveBeenCalledTimes(1);
+    expect(f.pageHttp).not.toHaveBeenCalled();
+  } finally { log.mockRestore(); }
+});
+
+import * as discoveryProvider from '../../../../src/main/research/companyDiscoveryProvider';
+import { ResearchDiscoveryError } from '../../../../src/main/research/researchDiscoveryError';
+it.each(['valid status', 'hostile fields', 'invalid status'])('sanitizes %s at the actual production emission boundary', async variant => {
+  const f = await admitted(); const secret = 'HOSTILE-key-prompt-https://private.invalid/';
+  const error = new ResearchDiscoveryError('http_rejected', 429);
+  Object.assign(error, { message: secret, stack: secret, cause: secret, body: secret, apiKey: secret });
+  if (variant === 'hostile fields') Object.assign(error, { reason: secret, httpStatus: secret });
+  if (variant === 'invalid status') Object.assign(error, { httpStatus: 999 });
+  const provider = vi.spyOn(discoveryProvider, 'requestCompanyDiscovery').mockRejectedValue(error);
+  const log = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    expect(await f.invoke()).toMatchObject({ state: 'uncertain' });
+    expect(log.mock.calls).toEqual([[{ event: 'research_discovery_uncertain', reason: variant === 'hostile fields' ? 'transport_uncertain' : 'http_rejected', ...(variant === 'valid status' ? { httpStatus: 429 } : {}) }]]);
+    expect(JSON.stringify(log.mock.calls)).not.toContain(secret);
+    expect(provider).toHaveBeenCalledTimes(1);
+  } finally { provider.mockRestore(); log.mockRestore(); }
+});
+it.each(['invalid body', 'http rejection'])('logs %s from the real provider through production without retry', async variant => {
+  const f = await admitted(); const log = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  f.fetch.mockImplementation(async () => new Response('HOSTILE-key-prompt', { status: variant === 'invalid body' ? 200 : 503 }));
+  try {
+    const result = await f.invoke(); expect(result.state).toBe('uncertain');
+    expect(log.mock.calls).toEqual([[{ event: 'research_discovery_uncertain', reason: variant === 'invalid body' ? 'response_body_invalid' : 'http_rejected', ...(variant === 'http rejection' ? { httpStatus: 503 } : {}) }]]);
+    expect(await f.invoke()).toEqual(result); expect(await f.status(result)).toEqual(result);
+    expect(log).toHaveBeenCalledTimes(1); expect(f.fetch).toHaveBeenCalledTimes(1);
+    expect(f.pageHttp).not.toHaveBeenCalled();
+  } finally { log.mockRestore(); }
+});
+it('does not emit discovery diagnostics for success, empty output, admission refusal or their status reads', async () => {
+  const log = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    for (const state of ['completed', 'empty', 'held']) {
+      const f = await admitted(state === 'held' ? 2 : 1);
+      if (state === 'empty') f.companies.length = 0;
+      const result = await f.invoke(); expect(result.state).toBe(state);
+      expect(await f.invoke()).toEqual(result);
+      if (result.runId && state !== 'held') expect(await f.status(result)).toEqual(result);
+      else if (result.runId) expect(await f.status(result)).toMatchObject({ state: 'held', runId: null });
+      expect(result).not.toHaveProperty('diagnostic');
+    }
+    expect(log).not.toHaveBeenCalled();
+  } finally { log.mockRestore(); }
+});
+it('a failing console observer cannot replace uncertainty or cause another request', async () => {
+  const f = await admitted(); f.fetch.mockRejectedValue(new Error('fixture transport loss'));
+  const log = vi.spyOn(console, 'warn').mockImplementation(() => { throw new Error('HOSTILE-observer-secret'); });
+  try {
+    const result = await f.invoke(); expect(result.state).toBe('uncertain');
+    expect(await f.invoke()).toEqual(result); expect(await f.status(result)).toEqual(result);
+    expect(f.fetch).toHaveBeenCalledTimes(1); expect(log).toHaveBeenCalledTimes(1);
+    expect(f.db.inspect('BUDGET#discovery#guided-research-v1')).toMatchObject({ spent: 80 });
+  } finally { log.mockRestore(); }
+});
