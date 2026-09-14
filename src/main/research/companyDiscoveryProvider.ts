@@ -77,7 +77,20 @@ export async function requestCompanyDiscovery(input: { query: AudienceQuery; lim
   if (!content) throw new ResearchDiscoveryError('output_invalid');
   const parsed = parseStage('candidate_json_invalid', () => z.strictObject({ companies: z.array(candidateSchema).max(50) }).parse(JSON.parse(content.text)));
   const citations = new Set(content.annotations.map(a => a.url));
-  if (parsed.companies.some(c => !citations.has(c.sourceUrl))) throw new ResearchDiscoveryError('citation_missing');
+  if (parsed.companies.some(c => !citations.has(c.sourceUrl))) {
+    // Serialization is diagnostic only, never acceptance or fetch authority.
+    const serializedCitations = new Set([...citations].map(url => new URL(url).href));
+    let exactMatchCount = 0; let serializedMatchCount = 0; let consultedMatchCount = 0;
+    for (const candidate of parsed.companies) {
+      if (citations.has(candidate.sourceUrl)) exactMatchCount++;
+      if (serializedCitations.has(new URL(candidate.sourceUrl).href)) serializedMatchCount++;
+      if (consulted.has(candidate.sourceUrl)) consultedMatchCount++;
+    }
+    throw new ResearchDiscoveryError('citation_missing', undefined, {
+      candidateCount: parsed.companies.length, annotationCount: content.annotations.length,
+      exactMatchCount, serializedMatchCount, consultedMatchCount,
+    });
+  }
   if (parsed.companies.some(c => !consulted.has(c.sourceUrl))) throw new ResearchDiscoveryError('consulted_source_missing');
   return filterCandidates(parsed.companies, input.limits.maxCompanies);
 }

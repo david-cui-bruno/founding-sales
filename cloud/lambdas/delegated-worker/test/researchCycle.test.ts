@@ -108,6 +108,31 @@ async function change(f: Fixture, key: string, update: (data: Record<string, unk
   const row = (await f.auth.store.get<Record<string, unknown>>(key))!;
   await f.auth.store.transact([f.auth.store.put(key, update(row.data), row.rev, scalars)]);
 }
+it.each([false, true])('keeps citation diagnostics invocation-local and uncertainty durable when console throws=%s', async throws => {
+  const f = await ready();
+  const keys = [`DISCOVERY#${f.original.runId}`, `DISCOVERY#${f.successor.runId}`, `RESEARCH_ONCE_NEXT#${f.original.runId}`, 'BUDGET#research'];
+  const before = keys.map(key => f.db.inspect(key));
+  f.fetch.mockImplementation(async () => Response.json({ status: 'completed', model: 'fixture', output: [
+    { type: 'web_search_call', status: 'completed', action: { type: 'search', sources: [{ url: 'https://fictional.example/' }] } },
+    { type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: JSON.stringify({ companies: f.companies }), annotations: [] }] },
+  ] }));
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => { if (throws) throw new Error('fictional console failure'); });
+  try {
+    const result = await f.execute();
+    expect(result.outcome).toMatchObject({ state: 'uncertain', accountId: null, jobId: null, evidenceReceiptId: null, settlementReceiptId: null, settled: false });
+    expect(warn).toHaveBeenCalledWith({ event: 'research_discovery_uncertain', reason: 'citation_missing', citationSummary: {
+      candidateCount: 1, annotationCount: 0, exactMatchCount: 0, serializedMatchCount: 0, consultedMatchCount: 1,
+    } });
+    expect(JSON.stringify(result)).not.toContain('citationSummary');
+    expect(JSON.stringify(f.db.inspect(`DISCOVERY#${f.receipt.runId}`))).not.toContain('citationSummary');
+    expect(result.discoveryBudget).toMatchObject({ limit: 240, spent: 240 });
+    expect(keys.map(key => f.db.inspect(key))).toEqual(before);
+    const status = await f.native({ ...f.identity, kind: 'research.cycle.status', reference: ref(f.receipt) });
+    expect(status.outcome).toEqual(result.outcome);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(f.fetch).toHaveBeenCalledTimes(1); expect(f.pageHttp).not.toHaveBeenCalled();
+  } finally { warn.mockRestore(); }
+});
 it('admits one immutable slot, preserves old rows/page/source and executes only after separate Resume5', async () => {
   const f = await cycleFixture(); const admission = await proposal(f);
   const keys = ['OWNER_RESEARCH_SOURCE', 'GUIDED_RESEARCH_SETUP', 'RESEARCH_ADMISSION_FENCE', 'BUDGET#research', `DISCOVERY#${f.original.runId}`, `DISCOVERY#${f.successor.runId}`, `RESEARCH_ONCE_NEXT#${f.original.runId}`];
