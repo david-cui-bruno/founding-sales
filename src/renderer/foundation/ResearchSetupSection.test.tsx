@@ -39,6 +39,12 @@ function fill() {
   values.forEach(([name, value]) => fireEvent.change(input(name), { target: { value } }));
 }
 function pendingStatus() { const value = status(); value.pending = { requestId, kind: 'approve', createdAt: '2026-09-14T00:00:00.000Z', state: 'unknown' }; value.blockers = ['local_pending']; return value; }
+function policyStatus(state: 'active' | 'paused' = 'active', revision = 1) {
+  const value = status();
+  value.remote!.selector = { version: 1, workspaceId: identity.workspaceId, pairingId, revision, state, research: null };
+  value.remote!.discoveryLedger = { limitMicros: 2000000, reservedOrSpentMicros: 1000000, remainingMicros: 1000000 };
+  return value;
+}
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe('bounded Cloud research settings', () => {
@@ -152,7 +158,77 @@ describe('bounded Cloud research settings', () => {
     remote.discoveryLedger = { limitMicros: 2000000, reservedOrSpentMicros: 2000000, remainingMicros: 0 };
     fireEvent.click(button('Refresh')); await idle();
     expect(screen.getByText('Discovery balance: cumulative ceiling $2 USD, reserved-or-spent $2 USD, remaining $0 USD.')).toBeTruthy();
-    expect(a.status).toHaveBeenCalledTimes(3); expect(a.setState).toHaveBeenCalledTimes(1);
+    expect(a.status).toHaveBeenCalledTimes(4); expect(a.setState).toHaveBeenCalledTimes(1);
     expect(a.approve).not.toHaveBeenCalled(); expect(a.retry).not.toHaveBeenCalled(); expect(a.cancelPending).not.toHaveBeenCalled();
   });
+  it.each(['active', 'paused'] as const)('follow-read after %s state command retains stale policy and serializes repeated clicks', async state => {
+    const next = state === 'active' ? 'paused' : 'active';
+    const a = api(policyStatus(state)); const receipt = deferred<ResearchSetupReceipt>(); const follow = deferred<ResearchSetupStatus>();
+    a.setState.mockReturnValue(receipt.promise); a.status.mockResolvedValueOnce(policyStatus(state)).mockReturnValueOnce(follow.promise);
+    await mount(a); fireEvent.click(ack()); const command = button(state === 'active' ? 'Pause research' : 'Resume research');
+    act(() => { fireEvent.click(command); fireEvent.click(command); fireEvent.click(button('Refresh')); });
+    expect(a.setState).toHaveBeenCalledTimes(1); expect(a.status).toHaveBeenCalledTimes(1);
+    await act(async () => receipt.resolve({ ...applied, kind: 'set-state', revision: 2, state: next }));
+    expect(a.status).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole('heading', { name: `Last observed policy (stale, read-only): ${state}` })).toBeTruthy();
+    expect(screen.queryByText('First-use research policy')).toBeNull();
+    expect(screen.getByText('Discovery balance: cumulative ceiling $2 USD, reserved-or-spent $1 USD, remaining $1 USD.')).toBeTruthy();
+    expect(screen.getByText(/Research policy request applied\./)).toBeTruthy(); expect(ack().checked).toBe(false); expect(ack().disabled).toBe(true);
+    act(() => { fireEvent.click(command); fireEvent.click(button('Refresh')); });
+    expect(a.status).toHaveBeenCalledTimes(2); expect(a.setState).toHaveBeenCalledTimes(1);
+    const actual = policyStatus(next, 2); actual.remote!.discoveryLedger!.reservedOrSpentMicros = 2000000; actual.remote!.discoveryLedger!.remainingMicros = 0;
+    await act(async () => follow.resolve(actual)); await idle();
+    expect(screen.getByRole('heading', { name: `Existing policy (read-only): ${next}` })).toBeTruthy();
+    expect(screen.getByText(/Research policy request applied\./)).toBeTruthy();
+    expect(screen.getByText('Discovery balance: cumulative ceiling $2 USD, reserved-or-spent $2 USD, remaining $0 USD.')).toBeTruthy();
+    expect(button(next === 'active' ? 'Pause research' : 'Resume research').disabled).toBe(true);
+    fireEvent.click(ack()); expect(button(next === 'active' ? 'Pause research' : 'Resume research').disabled).toBe(false);
+    for (const method of [a.approve, a.retry, a.cancelPending]) expect(method).not.toHaveBeenCalled();
+  });
+  it('follow-read rejects failed, missing, mismatched, older and equal-revision conflicting status until explicit Refresh', async () => {
+    const wrongWorkspace = policyStatus('paused', 2); wrongWorkspace.remote!.workspaceId = 'other-workspace';
+    const wrongPairing = policyStatus('paused', 2); wrongPairing.remote!.pairingId = requestId;
+    const wrongSelector = policyStatus('paused', 2); wrongSelector.remote!.selector!.pairingId = requestId;
+    for (const result of [new Error('offline'), { ...status(), remote: null }, status(), wrongWorkspace, wrongPairing, wrongSelector, policyStatus('paused', 1), policyStatus('active', 2)]) {
+      const a = api(policyStatus());
+      a.status.mockResolvedValueOnce(policyStatus());
+      if (result instanceof Error) a.status.mockRejectedValueOnce(result); else a.status.mockResolvedValueOnce(result);
+      await mount(a); fireEvent.click(ack()); fireEvent.click(button('Pause research')); await idle();
+      expect(a.status).toHaveBeenCalledTimes(2);
+      expect(screen.getByRole('heading', { name: 'Last observed policy (stale, read-only): active' })).toBeTruthy();
+      expect(screen.getByText(/Research policy request applied\./)).toBeTruthy(); expect(screen.getByText(/Follow-up status could not be verified/)).toBeTruthy();
+      expect(ack().disabled).toBe(true); expect(button('Pause research').disabled).toBe(true);
+      expect(screen.queryByRole('button', { name: 'Retry exact pending request' })).toBeNull();
+      a.status.mockResolvedValue(policyStatus('paused', 2)); fireEvent.click(button('Refresh')); await idle();
+      expect(screen.getByText('Existing policy (read-only): paused')).toBeTruthy(); expect(button('Resume research').disabled).toBe(true);
+      expect(a.status).toHaveBeenCalledTimes(3); expect(a.setState).toHaveBeenCalledTimes(1); cleanup();
+    }
+  });
+  it('follow-read accepts later actual state instead of projecting the applied receipt', async () => {
+    const a = api(policyStatus()); a.status.mockResolvedValueOnce(policyStatus()).mockResolvedValueOnce(policyStatus('active', 3));
+    await mount(a); fireEvent.click(ack()); fireEvent.click(button('Pause research')); await idle();
+    expect(a.status).toHaveBeenCalledTimes(2); expect(screen.getByText('Existing policy (read-only): active')).toBeTruthy();
+    expect(screen.getByText(/Research policy request applied\./)).toBeTruthy(); expect(button('Pause research').disabled).toBe(true);
+  });
+  it('follow-read never starts from a stale receipt through API A→B→A or unmount', async () => {
+    const a = api(policyStatus()); const b = api(); const receipt = deferred<ResearchSetupReceipt>(); a.setState.mockReturnValue(receipt.promise);
+    const view = await mount(a); fireEvent.click(ack()); fireEvent.click(button('Pause research'));
+    view.rerender(<ResearchSetupSection api={b} />); await idle(); view.rerender(<ResearchSetupSection api={a} />); await idle();
+    await act(async () => receipt.resolve({ ...applied, kind: 'set-state', revision: 2, state: 'paused' }));
+    expect(a.status).toHaveBeenCalledTimes(2); expect(screen.queryByText(/Research policy request applied\./)).toBeNull();
+    const late = deferred<ResearchSetupReceipt>(); a.setState.mockReturnValue(late.promise); fireEvent.click(ack()); fireEvent.click(button('Pause research')); view.unmount();
+    await act(async () => late.resolve({ ...applied, kind: 'set-state', revision: 2, state: 'paused' })); expect(a.status).toHaveBeenCalledTimes(2);
+  });
+  it('follow-read completion cannot cross API A→B→A or unmount fences', async () => {
+    const a = api(policyStatus()); const follow = deferred<ResearchSetupStatus>(); a.status.mockResolvedValueOnce(policyStatus()).mockReturnValueOnce(follow.promise);
+    const view = await mount(a); fireEvent.click(ack()); fireEvent.click(button('Pause research'));
+    await waitFor(() => expect(a.status).toHaveBeenCalledTimes(2));
+    view.rerender(<ResearchSetupSection api={api()} />); await idle(); view.rerender(<ResearchSetupSection api={a} />); await idle();
+    await act(async () => follow.resolve(policyStatus('paused', 2)));
+    expect(screen.getByText('Existing policy (read-only): active')).toBeTruthy(); expect(screen.queryByText(/Research policy request applied\./)).toBeNull();
+    const late = deferred<ResearchSetupStatus>(); a.status.mockReturnValueOnce(late.promise); fireEvent.click(ack()); fireEvent.click(button('Pause research'));
+    await waitFor(() => expect(a.status).toHaveBeenCalledTimes(4)); view.unmount(); await act(async () => late.resolve(policyStatus('paused', 2)));
+    expect(a.status).toHaveBeenCalledTimes(4); expect(document.body.textContent).not.toContain('Research policy request applied.');
+  });
+
 });

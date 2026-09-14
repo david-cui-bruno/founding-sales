@@ -307,8 +307,14 @@ it('reopens a separately admitted cycle, explicitly resumes via Settings, and re
     await region.findByText('Existing policy (read-only): paused');
     expect(discovery).toHaveBeenCalledTimes(2);
     expect(f.requests.filter(value => value.path === '/research/setup')).toHaveLength(4);
+    const readsBeforeResume = f.requests.filter(value => value.path === '/research/setup/status').length;
     fireEvent.click(region.getByLabelText('I have reviewed the targeting, cumulative ceilings, operator assertions and limitations above'));
     fireEvent.click(region.getByRole('button', { name: 'Resume research' })); await region.findByText(/Research policy request applied/);
+    await region.findByText('Existing policy (read-only): active');
+    expect(region.queryByRole('group', { name: 'First-use research policy' })).toBeNull();
+    expect((region.getByRole('button', { name: 'Pause research' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(f.requests.filter(value => value.path === '/research/setup/status')).toHaveLength(readsBeforeResume + 1);
+    expect(f.requests.filter(value => value.path === '/research/setup')).toHaveLength(5);
     expect(ownerResearchSourceSchema.parse(f.dynamo.inspect(ownerResearchSourceKey()))).toMatchObject({ state: 'active', revision: 5, research: source.research });
     expect(discovery).toHaveBeenCalledTimes(2); await f.unmount();
     const completed = await native(execute);
