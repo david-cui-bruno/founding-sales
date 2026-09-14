@@ -1,3 +1,4 @@
+import { assertGuidedResearch, guardGuidedResearch, guidedResearchMarkerKey, type ResearchSetupProfile } from './researchSetup';
 import { QueryCommand, TransactWriteItemsCommand, type TransactWriteItem } from '@aws-sdk/client-dynamodb';
 import { z } from 'zod';
 import { ownerCommandSchema, ownerResearchSourceSchema, ownerResearchSourceKey, ownerSourceConfigurationSchema, ownerSourceKey, type OwnerSourceConfiguration } from '../../../../src/shared/contracts/ownerCommandContract';
@@ -31,7 +32,7 @@ import { mailScopeFingerprint } from '../../../../src/main/outreach/providers/gm
 
 export type SourceResearchBoundaries = { loadCredentials(workspaceId: string, signal: AbortSignal): Promise<{ apiKey: string; model: string }>;
   pageHttp: PageHttp; resolve(hostname: string): Promise<string[]> };
-export type SourceCoordinatorOptions = { auth: WorkerAuth; authorization: RemoteGoogleAuthorization; fetch: typeof globalThis.fetch; research?: SourceResearchBoundaries };
+export type SourceCoordinatorOptions = { auth: WorkerAuth; authorization: RemoteGoogleAuthorization; fetch: typeof globalThis.fetch; research?: SourceResearchBoundaries; researchSetupProfile?: ResearchSetupProfile };
 export type SourceTickReport = { status: 'inactive' | 'completed' | 'aborted'; researchPrepared: number; researchCompleted: number;
   mailPolls: number; dispatches: number; sendReconciliations: number; meetings: number; held: number };
 const PAGE_LIMIT = 25;
@@ -107,15 +108,20 @@ export function createSourceCoordinator(input: SourceCoordinatorOptions) {
     const row = await store.get<unknown>(ownerResearchSourceKey()); if (!row) return;
     const config = ownerResearchSourceSchema.parse(row.data);
     if (config.workspaceId !== store.options.workspaceId || config.state !== 'active' || !config.research) return;
+    const guided = await guardGuidedResearch(store, config, input.researchSetupProfile ?? {});
     const settings = config.research;
     if (settings.workspaceId !== config.workspaceId || settings.researchLimits.maxCostMicros > settings.maxAccountBudgetMicros) throw new Error('research_config_mismatch');
     const pairing = await input.auth.activePairing(config.pairingId);
     async function guard() {
       signal.throwIfAborted();
+      const marker = await guardGuidedResearch(store, config, input.researchSetupProfile ?? {});
+      if (marker?.rev !== guided?.rev) throw new Error('research_setup_marker_changed');
       const current = await store.get<unknown>(ownerResearchSourceKey());
       if (!current || current.rev !== row!.rev || fingerprint(current.data) !== fingerprint(config)) throw new Error('research_source_changed');
       const active = await input.auth.activePairing(config.pairingId);
       if (active.rev !== pairing.rev) throw new Error('research_pairing_changed');
+      // No await after this freshness/binding check before releasing the guard.
+      if (marker) assertGuidedResearch(marker.data, config, input.researchSetupProfile ?? {}, store.now());
     }
     // The SDK boundary adds actual config and pairing CAS to every C1 mutation.
     // Reading a selector cannot approve budget, grant AUTH, or reset unknown spend.
@@ -123,7 +129,7 @@ export function createSourceCoordinator(input: SourceCoordinatorOptions) {
       if (!(command instanceof TransactWriteItemsCommand)) return store.options.dynamo.send(command);
       await guard();
       return store.options.dynamo.send(new TransactWriteItemsCommand({ ...command.input, TransactItems: [...(command.input.TransactItems ?? []),
-        store.check(ownerResearchSourceKey(), row.rev), store.check(pairingKey(config.pairingId), pairing.rev)] }));
+        store.check(ownerResearchSourceKey(), row.rev), store.check(pairingKey(config.pairingId), pairing.rev), guided ? store.check(guidedResearchMarkerKey, guided.rev) : store.absent(guidedResearchMarkerKey)] }));
     } };
     const options = { ...store.options, dynamo };
     const accounts = createWorkerAccountRepository(options);

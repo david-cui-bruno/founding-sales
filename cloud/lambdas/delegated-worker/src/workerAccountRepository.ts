@@ -7,7 +7,7 @@ import { projectAccountEvidence } from '../../../../src/main/domain/accounts/acc
 import { rankAccount } from '../../../../src/shared/accounts/accountRanking';
 import { researchLimitsSchema, type AccountResearchStore, type ResearchClaim, type ResearchJob } from '../../../../src/main/research/companyResearchTypes';
 import { DynamoStore, fingerprint, integer, keyPart, type RepositoryOptions, type Stored } from './dynamoStore';
-import { budgetSchema, type Budget } from './discoveryReservationStore';
+import { budgetSchema, researchAdmissionKey, type Budget } from './discoveryReservationStore';
 import { accountRecordSchema, type AccountRecord } from '../../../../src/shared/contracts/accountRecordContract';
 export { projectionSchema, accountRecordSchema, type AccountRecord } from '../../../../src/shared/contracts/accountRecordContract';
 const jobSchema = z.strictObject({ id: z.uuid(), accountId: accountIdSchema, limits: researchLimitsSchema, attempt: integer.positive().max(3),
@@ -19,6 +19,11 @@ export const accountKey = (id: string) => `ACCOUNT#${keyPart(id)}`;
 const jobKey = (id: string) => `JOB#${keyPart(id)}`;
 const receiptKey = (id: string) => `ACCOUNT_COMMAND#${keyPart(id)}`;
 const jobFields = (job: JobRecord) => ({ accountId: job.accountId, state: job.state, claimToken: job.claimToken, receiptCommitted: job.receiptCommitted });
+/** Pure immutable budget planning shared by authenticated atomic admission. */
+export function planResearchBudget(store: DynamoStore, limitMicros: number) {
+  const budget = budgetSchema.parse({ limit: limitMicros, spent: 0, approvedAt: store.now() });
+  return store.put('BUDGET#research', budget, null, { limit: budget.limit, spent: 0 });
+}
 export class DynamoWorkerAccountRepository implements AccountResearchStore {
   private readonly store: DynamoStore;
   constructor(options: RepositoryOptions) { this.store = new DynamoStore(options); }
@@ -158,8 +163,9 @@ export class DynamoWorkerAccountRepository implements AccountResearchStore {
   }
   /** Explicit immutable workspace research ceiling. Missing budget is deny. */
   async approveResearchBudget(limitMicros: number): Promise<void> {
-    const budget = budgetSchema.parse({ limit: limitMicros, spent: 0, approvedAt: this.store.now() });
-    await this.store.transact([this.store.put('BUDGET#research', budget, null, { limit: budget.limit, spent: 0 })]);
+    const source = await this.store.get('OWNER_RESEARCH_SOURCE');
+    const admission = await this.store.get(researchAdmissionKey);
+    await this.store.transact([this.store.put(researchAdmissionKey, { version: 1, kind: 'legacy' }, admission?.rev ?? null), planResearchBudget(this.store, limitMicros), this.store.absent('GUIDED_RESEARCH_SETUP'), source ? this.store.check('OWNER_RESEARCH_SOURCE', source.rev) : this.store.absent('OWNER_RESEARCH_SOURCE')]);
   }
   async enqueue(input: Parameters<AccountResearchStore['enqueue']>[0]): Promise<void> {
     const parsed = z.strictObject({ commandId: z.uuid(), accountId: accountIdSchema, limits: researchLimitsSchema }).parse(input);

@@ -1,5 +1,6 @@
 import { googleGrantDisclosure, googleScopes, personalGoogleGrantDisclosure } from '../../src/shared/contracts/googleGrantCapabilities';
 import { googleConnectionSelectorSchema } from '../../src/shared/contracts/remoteGoogleConnectionsContract';
+import { researchSetupStatusSchema } from '../../src/shared/contracts/researchSetupContract';
 /** Actual-App, complete typed read-only all-route fixture. No preload/client or production API factory. */
 import { StrictMode } from 'react';
 import { installApplicationModalScenario } from './applicationModalScenario';
@@ -85,6 +86,18 @@ const api: CalliePreloadApi = {
     transition: forbidden('localWorkspace.transition'),
   },
   delegation: {
+    ...(new URLSearchParams(location.search).has('researchScenario') ? { researchSetup: {
+      status: read('researchSetup.status', () => researchSetupStatusSchema.parse({ pending: null, blockers: [], remote: {
+        workspaceId: 'fictional-research', pairingId: '12345678-1234-4234-8234-123456789012', selector: null,
+        discoveryLedger: null, researchLedger: null, descriptorFingerprint: 'a'.repeat(64), credentialParameterDeclared: true,
+        blockers: [], checkedAt: new Date().toISOString(), receipt: null,
+        descriptor: { capability: { model: `fictional-${'model'.repeat(30)}`, webSearch: true, searchCostMicros: 40, modelCostMicros: 40 },
+          reviewedAt: new Date(Date.now() - 3600000).toISOString(), expiresAt: new Date(Date.now() + 86400000).toISOString(),
+          provenance: `Fictional operator assertion ${'long-provenance'.repeat(20)}`, researchReservationMicros: 100, currency: 'USD' },
+      } })),
+      approve: forbidden('researchSetup.approve'), setState: forbidden('researchSetup.setState'),
+      retry: forbidden('researchSetup.retry'), cancelPending: forbidden('researchSetup.cancelPending'),
+    } } : {}),
     googleConnections: {
       status: async (input): Promise<import('../../src/shared/contracts/remoteGoogleGrantContract').RemoteGoogleGrantStatus> => { const request = googleConnectionSelectorSchema.parse(input); calls.push({ method: 'googleConnections.status', kind: 'read', args: [request] });
         if (!googleConnectionReady || request.purpose !== 'personal_availability') return { state: 'unconfigured' as const, grant: null };

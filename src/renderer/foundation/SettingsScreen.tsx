@@ -1,3 +1,4 @@
+import { ResearchSetupSection } from './ResearchSetupSection';
 import { RemoteGoogleConnectionsSection } from './RemoteGoogleConnectionsSection';
 import { CallCapacitySection } from './CallCapacitySection';
 import type { LocalWorkspaceApi } from '../../shared/contracts/localWorkspaceContract';
@@ -383,7 +384,7 @@ function AboutSection({ health }: { health: AppHealth | null }) {
 }
 
 type SettingsDelegationApi = Pick<CalliePreloadApi['delegation'], 'status' | 'pair'> &
-  Partial<Pick<CalliePreloadApi['delegation'], 'configure' | 'sync' | 'googleConnections'>>;
+  Partial<Pick<CalliePreloadApi['delegation'], 'configure' | 'sync' | 'googleConnections' | 'researchSetup'>>;
 
 function hasWorkspaceAccess(api: SettingsDelegationApi | undefined): api is SettingsDelegationApi & Pick<CalliePreloadApi['delegation'], 'configure' | 'sync'> {
   return typeof api?.configure === 'function' && typeof api.sync === 'function';
@@ -508,6 +509,7 @@ export function SettingsScreen({
               aria-label="Sourcing"
             >
               <h2 className="settings__section-title">Sourcing</h2>
+              <ResearchSetupSection api={delegationApi?.researchSetup} />
               {sourcing ?? (
                 <p className="settings__quiet">Sourcing inbox: not configured</p>
               )}

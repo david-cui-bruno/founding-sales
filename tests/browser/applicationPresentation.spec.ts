@@ -12,10 +12,10 @@ test.beforeAll(async () => {
   javascript = bundle.outputFiles.find(file => file.path.endsWith('.js'))!.text;
   css = bundle.outputFiles.find(file => file.path.endsWith('.css'))!.text;
 });
-async function mount(page: Page, context: PresentationContext, initialRoute: typeof appRoutes[number] = 'today', healthScenario = false) {
+async function mount(page: Page, context: PresentationContext, initialRoute: typeof appRoutes[number] = 'today', healthScenario = false, researchScenario = false) {
   const errors: string[] = [], requests: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
-  const url = `http://127.0.0.1:41838/application-presentation?mode=${context.mode}${healthScenario ? '&healthScenario=1' : ''}`;
+  const url = `http://127.0.0.1:41838/application-presentation?mode=${context.mode}${healthScenario ? '&healthScenario=1' : ''}${researchScenario ? '&researchScenario=1' : ''}`;
   await page.addInitScript(context => {
     if (localStorage.getItem('callie.theme') === null) localStorage.setItem('callie.theme', context.theme);
     if (localStorage.getItem('callie.density') === null) localStorage.setItem('callie.density', context.density);
@@ -60,6 +60,36 @@ test.afterEach(async ({ page }, info) => {
 });
 
 for (const theme of ['light', 'dark'] as const) for (const width of [1440, 1050] as const) {
+  test(`actual Settings research setup is readable and explicit ${theme} ${width}`, async ({ page }, info) => {
+    const observed = await mount(page, { mode: 'meeting_first', theme, density: 'comfortable', width }, 'settings', false, true);
+    await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Sourcing', exact: true }).click();
+    const section = page.getByRole('region', { name: 'Cloud research', exact: true });
+    await expect(section.getByRole('heading', { name: 'Operator-reviewed settings' })).toBeAttached();
+    const fields = [
+      ['Residential regions, one per line', 'Fictional region\nAdjacent fictional region'], ['Targeting terms, one per line', 'property management\nresidential'],
+      ['Official website URLs, one per line', 'https://fictional.example/\nhttps://other-fictional.example/'], ['Maximum companies (1–50)', '1'],
+      ['Maximum pages (1–10)', '1'], ['Maximum bytes (1–1,000,000)', '10000'],
+      ['Discovery cumulative ceiling (USD)', '0.01'], ['Research cumulative ceiling (USD)', '0.02'],
+    ];
+    for (const [label, value] of fields) await section.getByLabel(label, { exact: true }).fill(value);
+    const ack = section.getByLabel('I have reviewed the targeting, cumulative ceilings, operator assertions and limitations above', { exact: true });
+    await ack.check(); await ack.focus(); await page.keyboard.press('Tab');
+    const approve = section.getByRole('button', { name: 'Approve research', exact: true });
+    await expect(approve).toBeEnabled(); await expect(approve).toBeFocused(); await expect(approve).toBeInViewport();
+    expect(await section.locator('input:not([type="checkbox"]), textarea').evaluateAll(elements => elements.every(element => element.getBoundingClientRect().height >= 30))).toBe(true);
+    expect(await section.locator('dd').evaluateAll(elements => elements.every(element => {
+      const box = element.getBoundingClientRect(), range = document.createRange(); range.selectNodeContents(element);
+      return Array.from(range.getClientRects()).every(rect => rect.left >= box.left - 1 && rect.right <= box.right + 1);
+    }))).toBe(true);
+    expect(await section.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+    await section.getByRole('button', { name: 'Refresh', exact: true }).click();
+    await expect(section.getByLabel('Official website URLs, one per line', { exact: true })).toHaveValue(fields[2][1]);
+    await expect(approve).toBeDisabled();
+    expect((await calls(page)).filter(call => call.kind !== 'read')).toEqual([]);
+    expect(observed.errors).toEqual([]); expect(observed.requests).toEqual([]);
+    await section.scrollIntoViewIfNeeded(); await page.screenshot({ path: info.outputPath('research-setup-controls.png'), fullPage: true });
+  });
+
   test(`actual Settings separates remote grant controls without automatic consent ${theme} ${width}`, async ({ page }, info) => {
     const observed = await mount(page, { mode: 'meeting_first', theme, density: 'comfortable', width }, 'settings');
     await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Connections', exact: true }).click();

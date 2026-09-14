@@ -14,12 +14,15 @@ import type {AppDatabase} from '../db/database';
 import type {StoredPairing} from './pairingStore';
 import {DelegationRepository} from './delegationRepository';
 import {SqlDelegationConfiguration,SqlDelegationTransport} from './delegationSync';
-import {ExecutionClient} from './executionClient';
+import {ExecutionClient,createResearchSetupTransport} from './executionClient';
+import {createResearchSetupService,awaitResearchSetupOperation} from './researchSetupService';
+import type {ResearchSetupRequestStore} from './researchSetupRequestStore';
+import type {ResearchSetupApi} from '../../shared/contracts/researchSetupContract';
 import {approveRequestedFollowupCommandSchema,delegatedPhoneHandoffRequestSchema,bootstrapSelectedAccountSchema,bootstrapSelectedAccountCommandSchema,configureLocalDelegationSchema,localDelegationStatusSchema} from '../../shared/contracts/ownerCommandContract';
 import {publicDelegationCommandSchema,type DelegatedPhoneHandoffResult} from '../../shared/contracts/delegationContract';
 /** Every repository belongs to a live FoundationRuntime operation lease. No DB
  * handle survives its callback. Local lock aborts work, never revokes the owner. */
-export function createDelegationRuntime(input:{databaseGate:{withDatabase<T>(fn:(database:AppDatabase)=>T|Promise<T>):Promise<T>};pairing:StoredPairing|null;clock:{now():string};fetch?:typeof globalThis.fetch;phone?:Parameters<typeof createDelegatedPhoneHandoff>[0]['phone'];inboundRegistry?:InboundRegistry;linkedIn?:Pick<Parameters<typeof createRuntimeLinkedInApi>[0],'provider'|'productFacts'|'shell'|'clipboard'>;policyImportNative?:AccountRoutePolicyImportDependencies['native'];requestedModel?:()=>Promise<NonNullable<Parameters<typeof createRequestedFollowupService>[0]['model']>|undefined>;configurationChanged?:()=>void|Promise<void>;openGoogleConsent?:(url:string)=>Promise<void>}) {
+export function createDelegationRuntime(input:{databaseGate:{withDatabase<T>(fn:(database:AppDatabase)=>T|Promise<T>):Promise<T>};pairing:StoredPairing|null;clock:{now():string};fetch?:typeof globalThis.fetch;phone?:Parameters<typeof createDelegatedPhoneHandoff>[0]['phone'];inboundRegistry?:InboundRegistry;linkedIn?:Pick<Parameters<typeof createRuntimeLinkedInApi>[0],'provider'|'productFacts'|'shell'|'clipboard'>;policyImportNative?:AccountRoutePolicyImportDependencies['native'];requestedModel?:()=>Promise<NonNullable<Parameters<typeof createRequestedFollowupService>[0]['model']>|undefined>;configurationChanged?:()=>void|Promise<void>;openGoogleConsent?:(url:string)=>Promise<void>;researchSetupStore?:ResearchSetupRequestStore}) {
  const pairing=input.pairing?Object.freeze({...input.pairing,scopes:Object.freeze([...input.pairing.scopes])}):null;
  let lifetime=new AbortController();let locked=false;let closed=false;
  const flights=new Set<Promise<unknown>>();
@@ -72,6 +75,16 @@ export function createDelegationRuntime(input:{databaseGate:{withDatabase<T>(fn:
   },
   revoke:async raw=>{const request=googleConnectionSelectorSchema.parse(raw);invalidate();return googleRun((client,signal)=>client.revokeGoogleGrant(request.purpose,signal));},
  };
+ const researchExtension:{researchSetup?:ResearchSetupApi}={researchSetup:createResearchSetupService({
+  identity:pairing?{endpoint:pairing.endpoint,workspaceId:pairing.workspaceId,pairingId:pairing.pairingId}:null,
+  store:input.researchSetupStore,clock:input.clock,
+  transport:()=>{if(!pairing)throw Error('pairing_unconfigured');return createResearchSetupTransport({pairing:{endpoint:pairing.endpoint,workspaceId:pairing.workspaceId,pairingId:pairing.pairingId,credential:pairing.credential},fetch:input.fetch});},
+  withOperation:operation=>run(async(_database,signal)=>{
+   const active=AbortSignal.any([signal,AbortSignal.timeout(15000)]);assertCurrent(active);
+   // No repository or database handle enters the abortable continuation.
+   return awaitResearchSetupOperation(()=>operation(active),active);
+  }),
+ })};
  const contextInput=(draft:RequestedFollowupDraft):PrepareRequestedFollowup=>({accountId:draft.accountId,originalCall:draft.originalCall,recipientBinding:draft.recipientBinding,expectedAccountVersion:draft.accountVersion,mode:'manual'});
  function savedDraft(database:AppDatabase,accountId:string,draftId:string){
   const row=database.raw.prepare('SELECT draft_json FROM delegated_requested_followup_drafts WHERE workspace_id=? AND account_id=? AND id=?').get(pairing!.workspaceId,accountId,draftId) as {draft_json:string}|undefined;
@@ -147,6 +160,7 @@ export function createDelegationRuntime(input:{databaseGate:{withDatabase<T>(fn:
  const adapter=createAdapter();
  const readinessForHandoff=(handoffId:string)=>{const scoped=createAdapter(handoffId);return createInboundReadiness({snapshot:()=>{const snapshot=input.inboundRegistry?.snapshot();if(!snapshot||!snapshot.adapters.includes(adapter))return {initialized:false,revision:snapshot?.revision??0,adapters:[]};return {...snapshot,adapters:snapshot.adapters.map(current=>current===adapter?scoped:current)};}});};
  return {
+  ...researchExtension,
   googleConnections,
   prepareRequestedFollowup:(raw:PrepareRequestedFollowup)=>{const request=prepareRequestedFollowupSchema.parse(raw);return run(async(database,signal)=>{const {service}=await requestedServices(database,signal,request);return service.prepareRequestedFollowup(request,signal);});},
   getRequestedFollowup:(raw:GetRequestedFollowup)=>{const request=getRequestedFollowupSchema.parse(raw);return run(async(database,signal)=>{

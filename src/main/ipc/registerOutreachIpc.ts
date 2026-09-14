@@ -1,4 +1,5 @@
 import {googleConnectionSelectorSchema,googleConsentOpenedSchema} from '../../shared/contracts/remoteGoogleConnectionsContract';
+import {researchSetupApproveInputSchema,researchSetupSetStateInputSchema,researchSetupReceiptSchema,researchSetupStatusSchema} from '../../shared/contracts/researchSetupContract';
 import {remoteGoogleGrantBeginSchema,remoteGoogleGrantDisclosureSchema,remoteGoogleGrantStatusSchema} from '../../shared/contracts/remoteGoogleGrantContract';
 import {policyImportConfirmSchema,policyImportResumeSchema,policyImportStatusSchema,policyImportPreviewSchema,policyImportReportSchema} from '../../shared/contracts/accountRoutePolicyImportContract';
 import {prepareRequestedFollowupSchema,getRequestedFollowupSchema,editRequestedFollowupSchema,approveRequestedFollowupSchema,savedRequestedFollowupSchema,requestedApprovalStatusSchema} from '../../shared/contracts/requestedFollowupContract';
@@ -37,6 +38,14 @@ export function registerOutreachIpc(options:{provider:OutreachApi;delegation?:De
       }}));
     if(options.delegation){
       const d=options.delegation;
+      if(d.researchSetup){
+        const research=d.researchSetup;
+        add('research-setup-status',null,researchSetupStatusSchema,()=>research.status());
+        add('research-setup-approve',researchSetupApproveInputSchema,researchSetupReceiptSchema,input=>research.approve(input));
+        add('research-setup-set-state',researchSetupSetStateInputSchema,researchSetupReceiptSchema,input=>research.setState(input));
+        add('research-setup-retry',null,researchSetupReceiptSchema,()=>research.retry());
+        add('research-setup-cancel-pending',null,researchSetupReceiptSchema,()=>research.cancelPending());
+      }
       if(d.googleConnections){
         const google=d.googleConnections;
         add('google-connection-status',googleConnectionSelectorSchema,remoteGoogleGrantStatusSchema,input=>google.status(input));
