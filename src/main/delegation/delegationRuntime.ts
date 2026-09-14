@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import {googleConnectionSelectorSchema,googleConsentOpenedSchema,selectedGooglePurpose,type RemoteGoogleConnectionsApi} from '../../shared/contracts/remoteGoogleConnectionsContract';
 import {remoteGoogleGrantBeginSchema} from '../../shared/contracts/remoteGoogleGrantContract';
 import {createAccountRoutePolicyImport,type AccountRoutePolicyImportDependencies} from './accountRoutePolicyImport';
@@ -183,7 +184,8 @@ export function createDelegationRuntime(input:{databaseGate:{withDatabase<T>(fn:
    await current.client.submit(command);await current.client.sync(signal);
    return requestedApprovalStatusSchema.parse(current.repository.requestedApprovalStatus(command.commandId));
   });},
-  policyImport:pairing&&input.policyImportNative?createAccountRoutePolicyImport({workspaceId:pairing.workspaceId,clock:input.clock,databaseGate:{withDatabase:run},native:input.policyImportNative}):null,
+  // Migration 24 and the importer require UUID workspaces. Other paired capabilities accept opaque IDs.
+  policyImport:pairing&&input.policyImportNative&&z.uuid().safeParse(pairing.workspaceId).success?createAccountRoutePolicyImport({workspaceId:pairing.workspaceId,clock:input.clock,databaseGate:{withDatabase:run},native:input.policyImportNative}):null,
   adapter,
   readinessForHandoff,
   beginPhone:(raw:unknown):Promise<DelegatedPhoneHandoffResult>=>{const request=delegatedPhoneHandoffRequestSchema.parse(raw);return run((database,signal)=>{if(!input.phone||!pairing)return {status:'held',reason:'phone_unconfigured'};return createDelegatedPhoneHandoff({database,...services(database,signal),phone:input.phone,readinessForHandoff,clock:input.clock,signal,expectedWorkspaceId:pairing.workspaceId}).begin(request);});},
