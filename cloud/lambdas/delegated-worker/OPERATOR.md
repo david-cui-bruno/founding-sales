@@ -131,3 +131,83 @@ durable result, then reopen and synchronize the resulting account/evidence
 through the supported app workflow. A local harness, an accepted Invoke or an
 empty queue does not prove useful closed-app completion. Do not enable mail,
 calendar, calls, outreach or a continuous schedule for this check.
+
+### One bounded successor of the original guided run
+
+The private native boundary also supports `research.once.admit-next` and
+`research.once.admit-next.status`. These are not public HTTP routes, schedules,
+new grants, a reset facility or a general research-cycle service. Admission
+requires the original deterministic run bound to source revision **1**, unchanged
+settings and reviewed descriptor, a currently paused source revision **2**, one
+company, and an incomplete original reservation with null candidates and cost.
+The original row and retained discovery spend are never cleared or rewritten.
+
+Review and retain the exact admission payload before invoking it. The strict
+mutation fields are `version: 1`, `kind: research.once.admit-next`, `workspaceId`,
+`pairingId`, `parentRunId`, `parentSourceRevision: 1`, `researchFingerprint`,
+`expectedSourceRevision: 2`, `descriptorFingerprint`, `expectedDiscoveryBudget`,
+`expectedResearchBudget`, and `proposedDiscoveryLimitMicros`. Each expected budget
+is the exact `{limit, spent, approvedAt}` snapshot. The original discovery limit
+and retained spend must both equal one reviewed descriptor discovery reservation.
+The proposed cumulative limit must add exactly one more such reservation. All
+amounts and the combined discovery/page ceiling must remain safe integers.
+No caller-selected successor ID, model, URLs, request UUID or budget ID is accepted.
+
+For a $1 reviewed discovery reservation, admission changes the cumulative
+ledger from `$1 limit / $1 retained` to `$2 limit / $1 retained / $1 remaining`.
+The original `approvedAt` remains unchanged. The page ledger remains unchanged,
+must have zero retained spend and sufficient capacity for one reviewed page
+reservation. Admission does not load credentials, invoke research, enqueue work
+or activate the source. One transaction updates only the discovery ceiling and
+creates the immutable `RESEARCH_ONCE_NEXT#<parentRunId>` receipt, with distinct
+CAS checks on the parent, source, marker, admission fence, pairing and page ledger.
+
+The result kind is `research.once.admit-next.result` with `state` of `applied`,
+`held` or `not-observed`, and `receipt` or null. An applied receipt contains the
+validated request, `fingerprint`, server-derived `successorRunId`,
+`expectedExecutionRevision: 3`, original parent revision/fingerprint, exact
+`deltaMicros` and `recordedAt`. Exact replay reads that same immutable receipt
+without another increment, including after Resume, later spend, expiry or pairing
+revocation. A different payload cannot take the same slot. Historical readback
+does not authorize new work after revocation.
+
+After any unknown admission acknowledgement, reconcile using the exact status
+request: `version: 1`, `kind: research.once.admit-next.status`, `workspaceId`,
+`pairingId`, `parentRunId`, `parentSourceRevision: 1`, `researchFingerprint` and
+`admissionFingerprint` (the fingerprint of the original saved mutation, also
+returned as `receipt.fingerprint`). Status performs only an exact strong receipt
+read. **`not-observed` means absent at that read, not cancelled or guaranteed not
+to commit later.** A read failure remains unavailable/unknown. Do not generate a
+new identity or automatically retry. A separately reviewed exact resubmission
+uses the identical payload and fixed slot, so a late transaction and exact retry
+can create at most one receipt/allowance. A deadline stops waiting but cannot
+undo an already-dispatched transaction.
+
+Use existing **Settings → Cloud research → Refresh**, inspect the unchanged
+paused policy and amended cumulative ledger, then explicitly **Resume** to
+revision **3**. Execute the existing native `research.once` request at revision 3
+with the original settings fingerprint and the additional all-or-nothing field:
+
+```json
+{"successor":{"parentRunId":"<original-run-uuid>","admissionFingerprint":"<receipt-fingerprint>"}}
+```
+
+This is a selector only. The worker validates the immutable receipt and original
+parent, then resolves the derived run internally. Repeated pause/resume that
+skips revision 3 cannot rebind this receipt. Normal original execution never
+silently selects a successor. Existing `research.once.status` can inspect the
+returned successor UUID at revision 3, while original historical status uses the
+original UUID and revision 1. These exact historical reads remain available under
+the private IAM read boundary after pause, expiry or revocation.
+
+Successor reservation retains the second descriptor-sized discovery amount
+($2 retained total in the $1 example). Its receipt, job and page ledger evolve
+normally, including evidence-to-settlement crash recovery when both budgets are
+fully reserved. Admission's old free-budget snapshots are not perpetual execution
+conditions. Only the immutable original parent and admission receipt are added
+to existing execution guards. One successor is the hard limit: uncertain or empty
+successor output stops again without a third attempt. Keep both histories and
+reconcile supported receipts rather than editing tables, retransferring a key or
+widening policy. Admission success and logs are neither billing proof nor proof
+of useful researched-account completion. Closed-app execution and supported app
+synchronization remain separate acceptance steps.

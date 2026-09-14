@@ -12,7 +12,7 @@ type ReservationOptions = RepositoryOptions & { researchOnceBinding?: z.infer<ty
 const reservationSchema = inputSchema.extend({ reserved: integer.positive(), candidates: candidatesSchema.nullable(), costMicros: integer.nullable(), completed: z.boolean(), researchOnceBinding: researchOnceBindingSchema.optional() });
 type Record = z.infer<typeof reservationSchema>;
 export const budgetKey = (id: string) => `BUDGET#discovery#${keyPart(id)}`;
-const reservationKey = (id: string) => `DISCOVERY#${keyPart(id)}`;
+export const reservationKey = (id: string) => `DISCOVERY#${keyPart(id)}`;
 export const researchAdmissionKey = 'RESEARCH_ADMISSION_FENCE';
 /** Pure immutable budget planning shared by authenticated atomic admission. */
 export function planDiscoveryBudget(store: DynamoStore, input: { budgetId: string; limitMicros: number }) {
@@ -22,13 +22,14 @@ export function planDiscoveryBudget(store: DynamoStore, input: { budgetId: strin
 export class DynamoDiscoveryReservationStore implements DiscoveryReservationStore {
   private readonly store: DynamoStore;
   constructor(private readonly options: ReservationOptions) { this.store = new DynamoStore(options); }
-  async readRun(id: string) {
+  async readRunWithRevision(id: string) {
     const row = await this.store.get<unknown>(reservationKey(z.uuid().parse(id)));
     if (!row) return null;
     const data = reservationSchema.parse(row.data);
     if (data.commandId !== id || data.workspaceId !== this.store.options.workspaceId) throw new Error('discovery_fingerprint_conflict');
-    return data;
+    return { data, rev: row.rev };
   }
+  async readRun(id: string) { return (await this.readRunWithRevision(id))?.data ?? null; }
   /** Operator/authenticated configuration capability, never invoked by preparation
    * or a constructor. Immutable ceiling: new UUIDs cannot reset spent. */
   async approveBudget(input: { budgetId: string; limitMicros: number }): Promise<void> {
