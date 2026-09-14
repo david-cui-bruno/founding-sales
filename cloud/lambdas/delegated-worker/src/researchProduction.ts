@@ -119,7 +119,7 @@ export async function executeResearchOnce(env: NodeJS.ProcessEnv, boundaries: Pr
 }
 
 export const researchOnceNextKey = (parentRunId: string) => `RESEARCH_ONCE_NEXT#${z.uuid().parse(parentRunId)}`;
-async function readNextReceipt(auth: WorkerAuth, request: ResearchOnceNextRequest) {
+export async function readNextReceipt(auth: WorkerAuth, request: ResearchOnceNextRequest) {
   const row = await auth.store.get<unknown>(researchOnceNextKey(request.parentRunId));
   if (!row) return null;
   const receipt = researchOnceNextReceiptSchema.parse(row.data);
