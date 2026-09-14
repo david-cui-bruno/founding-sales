@@ -39,7 +39,7 @@ async function fixture() {
       if (String(input) === 'https://openidconnect.googleapis.com/v1/userinfo') {
         const account = new Headers(init?.headers).get('authorization')?.replace('Bearer ', '');
         if (account !== 'work' && account !== 'personal') throw Error('Unexpected synthetic identity');
-        return new Response(JSON.stringify({ sub: `${account}-subject`, email: account === 'work' ? 'founder@usecali.com' : 'founder@gmail.com', email_verified: true }));
+        return new Response(JSON.stringify({ sub: `${account}-subject`, email: account === 'work' ? 'founder@usecallie.com' : 'founder@gmail.com', email_verified: true }));
       }
       if (String(input) === 'https://oauth2.googleapis.com/revoke') return new Response('');
       throw Error('Forbidden provider action');
@@ -94,7 +94,7 @@ it('connects separate work and personal grants through actual Settings and only 
     await personal.findByText('No cloud grant configured', { exact: false });
     expect(f.opened).toEqual([]); expect(f.provider).not.toHaveBeenCalled();
     expect(f.requests.every(path => ['/google/status', '/google/disclosure'].includes(path))).toBe(true);
-    fireEvent.change(work.getByLabelText('Named work email (@usecali.com)'), { target: { value: 'founder@usecali.com' } });
+    fireEvent.change(work.getByLabelText('Named work email (@usecallie.com)'), { target: { value: 'founder@usecallie.com' } });
     fireEvent.click(work.getByLabelText('I confirm this named work mailbox'));
     fireEvent.click(work.getByLabelText('I have reviewed and acknowledge this disclosure'));
     fireEvent.click(work.getByRole('button', { name: 'Continue to Google' }));

@@ -13,11 +13,13 @@ import { createDelegationRuntime } from '../../src/main/delegation/delegationRun
 import { ResearchSetupRequestStore } from '../../src/main/delegation/researchSetupRequestStore';
 import { SettingsScreen } from '../../src/renderer/foundation/SettingsScreen';
 import { WorkerAuth } from '../../cloud/lambdas/delegated-worker/src/workerAuth';
-import { createWorkerHandler } from '../../cloud/lambdas/delegated-worker/src/handler';
+import { createProductionHandler, createWorkerHandler } from '../../cloud/lambdas/delegated-worker/src/handler';
 import { ConditionalCommandHarness } from '../../cloud/lambdas/delegated-worker/test/sdkHarness';
 import { guidedResearchBudgetId } from '../../cloud/lambdas/delegated-worker/src/researchSetup';
-import { budgetKey } from '../../cloud/lambdas/delegated-worker/src/discoveryReservationStore';
-import { ownerResearchSourceKey } from '../../src/shared/contracts/ownerCommandContract';
+import { budgetKey, budgetSchema } from '../../cloud/lambdas/delegated-worker/src/discoveryReservationStore';
+import { ownerResearchSourceKey, ownerResearchSourceSchema } from '../../src/shared/contracts/ownerCommandContract';
+import { fingerprint } from '../../cloud/lambdas/delegated-worker/src/dynamoStore';
+import type { ResearchOnceRequest, ResearchOnceNextRequest } from '../../cloud/lambdas/delegated-worker/src/researchOnceContract';
 
 const ipc = vi.hoisted(() => ({ handlers: new Map<string, RegisteredIpcHandler>() }));
 vi.mock('electron', () => ({ ipcMain: {
@@ -26,10 +28,11 @@ vi.mock('electron', () => ({ ipcMain: {
 } }));
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); expect(ipc.handlers.size).toBe(0); });
 
-async function fixture() {
+async function fixture(options: { now?: string; discoveryCostMicros?: number; researchReservationMicros?: number } = {}) {
+  const now = options.now ?? PM_NOW;
   const forbidden = vi.fn(async (): Promise<never> => { throw Error('Unexpected external action'); });
   vi.stubGlobal('fetch', forbidden);
-  vi.spyOn(Date, 'now').mockReturnValue(Date.parse(PM_NOW));
+  vi.spyOn(Date, 'now').mockReturnValue(Date.parse(now));
   const scratch = process.env.JCODE_SCRATCH_DIR ?? tmpdir();
   const directory = await mkdtemp(join(scratch, 'research-workflow-'));
   const f = await createPmFixture();
@@ -43,9 +46,9 @@ async function fixture() {
   let runtime: ReturnType<typeof createDelegationRuntime> | undefined;
   try {
     const db = new ConditionalCommandHarness();
-    const auth = new WorkerAuth({ dynamo: db, tableName: 'research-workflow', workspaceId: 'research-workflow', clock: { now: () => PM_NOW } });
+    const auth = new WorkerAuth({ dynamo: db, tableName: 'research-workflow', workspaceId: 'research-workflow', clock: { now: () => now } });
     const pairing = { ...await auth.redeemPairing((await auth.issuePairing({ scopes: ['commands:write', 'events:read'], expiresInSeconds: 300 })).code, 'fictional'), endpoint: 'https://research.example.test' };
-    const descriptor = { capability: { model: 'fictional-reviewed-model', webSearch: true as const, searchCostMicros: 40, modelCostMicros: 40 }, reviewedAt: new Date(Date.parse(PM_NOW) - 3600000).toISOString(), expiresAt: new Date(Date.parse(PM_NOW) + 86400000).toISOString(), provenance: 'Fictional review, not verified provider access or invoice cost.', researchReservationMicros: 100, currency: 'USD' as const };
+    const descriptor = { capability: { model: 'fictional-reviewed-model', webSearch: true as const, searchCostMicros: 40, modelCostMicros: (options.discoveryCostMicros ?? 80) - 40 }, reviewedAt: new Date(Date.parse(now) - 3600000).toISOString(), expiresAt: new Date(Date.parse(now) + 86400000).toISOString(), provenance: 'Fictional review, not verified provider access or invoice cost.', researchReservationMicros: options.researchReservationMicros ?? 100, currency: 'USD' as const };
     const handler = createWorkerHandler({ auth, host: 'research.example.test', researchSetupProfile: { reviewedCapability: descriptor, credentialParameterDeclared: true } });
     const requests: { path: string; body: unknown }[] = [];
     let loseNextWrite = false;
@@ -59,7 +62,7 @@ async function fixture() {
       return new Response(reply.body, { status: reply.statusCode });
     };
     const mount = () => {
-      runtime = createDelegationRuntime({ databaseGate: { withDatabase: async fn => fn(f.db) }, pairing, clock: { now: () => PM_NOW }, fetch: http, researchSetupStore: new ResearchSetupRequestStore({ directory: join(directory, 'journal'), safeStorage }) });
+      runtime = createDelegationRuntime({ databaseGate: { withDatabase: async fn => fn(f.db) }, pairing, clock: { now: () => now }, fetch: http, researchSetupStore: new ResearchSetupRequestStore({ directory: join(directory, 'journal'), safeStorage }) });
       unregister = registerOutreachIpc({ provider: { status: forbidden, configure: forbidden, connectGmail: forbidden, disconnectGmail: forbidden, openDraft: forbidden, saveDraft: forbidden, generateDraft: forbidden, sendDraft: forbidden, inspectLocalAuthority: forbidden }, delegation: runtime, isTrustedRendererUrl: url => url === 'app://research' });
       const api = createCallieApi({ invoke: async (channel, ...args) => { const registered = ipc.handlers.get(channel); if (!registered) throw Error('Unregistered IPC'); return registered({ senderFrame: { url: 'app://research' } }, ...args); } });
       render(<SettingsScreen state={{ status: 'loading' }} onRetry={() => undefined} theme={{ preference: 'light', resolvedTheme: 'light', setPreference: () => undefined }} density={{ density: 'comfortable', setDensity: () => undefined }} delegationApi={api.delegation} />);
@@ -67,7 +70,7 @@ async function fixture() {
       return api;
     };
     const unmount = async () => { cleanup(); unregister(); unregister = () => undefined; await runtime?.dispose(); runtime = undefined; };
-    return { ...f, dynamo: db, auth, requests, mount, unmount, loseNextWrite: () => { loseNextWrite = true; },
+    return { ...f, dynamo: db, auth, pairing, descriptor, requests, mount, unmount, loseNextWrite: () => { loseNextWrite = true; },
       async assertEncrypted() { for (const name of await readdir(join(directory, 'journal'))) { const bytes = await readFile(join(directory, 'journal', name)); expect(bytes.toString('utf8')).not.toMatch(/fictional-reviewed-model|research-workflow|fictional-pm\.example/); } },
       async finish() { try { await unmount(); expect(forbidden).not.toHaveBeenCalled(); } finally { key.fill(0); f.close(); await rm(directory, { recursive: true, force: true }); } },
     };
@@ -131,3 +134,75 @@ it('reopens an encrypted uncertain request without replay and reconciles its exa
     expect(f.requests.some(request => request.path === '/research/setup/status' && !!(request.body as { requestId?: string }).requestId)).toBe(true);
   } finally { await f.finish(); }
 }, 15000);
+
+it('reopens an amended paused policy, explicitly resumes once, and retains the original uncertain reservation after successor completion', async () => {
+  const f = await fixture({ now: new Date().toISOString(), discoveryCostMicros: 1000000, researchReservationMicros: 10000 });
+  const discovery = vi.fn<typeof fetch>().mockRejectedValueOnce(new Error('Fictional lost response')).mockImplementation(async () => Response.json({
+    status: 'completed', model: 'fictional-reviewed-model', output: [
+      { type: 'web_search_call', status: 'completed', action: { type: 'search', sources: [{ url: 'https://fictional-pm.example/' }] } },
+      { type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: JSON.stringify({ companies: [{ name: 'Fictional PM', domain: 'fictional-pm.example', sourceUrl: 'https://fictional-pm.example/' }] }), annotations: [{ type: 'url_citation', url: 'https://fictional-pm.example/' }] }] },
+    ],
+  }));
+  const pageHttp = vi.fn(async () => new Response('<p>We manage 240 residential units.</p>', { headers: { 'content-type': 'text/html' } }));
+  const ssm = { send: vi.fn(async () => ({ $metadata: {}, Parameter: { Type: 'SecureString' as const, Value: JSON.stringify({ apiKey: 'fictional', model: 'fictional-reviewed-model' }) } })) };
+  const native = createProductionHandler({ DELEGATED_WORKER_ENABLED: 'true', DELEGATED_WORKER_RESEARCH_ONCE_ENABLED: 'true', DELEGATED_WORKER_SCHEDULE_ARN: '',
+    DELEGATED_WORKSPACE_ID: 'research-workflow', DELEGATED_WORKER_TABLE: 'research-workflow', AWS_REGION: 'us-east-1',
+    DELEGATED_RESEARCH_REVIEWED_CAPABILITY: JSON.stringify(f.descriptor), DELEGATED_RESEARCH_CREDENTIAL_PARAMETER: '/delegated-worker/research-workflow/research' },
+  { dynamo: f.dynamo, ssm, fetch: discovery, pageHttp, resolve: async () => ['93.184.216.34'] });
+  try {
+    f.mount(); let region = within(await screen.findByRole('region', { name: 'Cloud research' })); await region.findByText('fictional-reviewed-model');
+    fillPolicy(region);
+    fireEvent.change(region.getByLabelText('Discovery cumulative ceiling (USD)'), { target: { value: '1' } });
+    fireEvent.change(region.getByLabelText('Research cumulative ceiling (USD)'), { target: { value: '0.01' } });
+    fireEvent.click(region.getByLabelText('I have reviewed the targeting, cumulative ceilings, operator assertions and limitations above'));
+    fireEvent.click(region.getByRole('button', { name: 'Approve research' })); await region.findByText(/Research policy request applied/);
+    const source = ownerResearchSourceSchema.parse(f.dynamo.inspect(ownerResearchSourceKey()));
+    const request: ResearchOnceRequest = { version: 1, kind: 'research.once', workspaceId: 'research-workflow', pairingId: f.pairing.pairingId,
+      expectedSourceRevision: 1, researchFingerprint: fingerprint(source.research) };
+    await f.unmount(); const original = await native(request);
+    expect(original).toMatchObject({ state: 'uncertain', settled: false }); expect(discovery).toHaveBeenCalledTimes(1);
+    expect(pageHttp).not.toHaveBeenCalled();
+    f.mount(); region = within(await screen.findByRole('region', { name: 'Cloud research' })); await region.findByText('Existing policy (read-only): active');
+    fireEvent.click(region.getByLabelText('I have reviewed the targeting, cumulative ceilings, operator assertions and limitations above'));
+    fireEvent.click(region.getByRole('button', { name: 'Pause research' })); await region.findByText(/Research policy request applied/);
+    await f.unmount();
+    const parentBefore = f.dynamo.inspect(`DISCOVERY#${original.runId}`);
+    const researchBefore = f.dynamo.inspect('BUDGET#research');
+    const admission: ResearchOnceNextRequest = { version: 1, kind: 'research.once.admit-next', workspaceId: request.workspaceId, pairingId: request.pairingId,
+      parentRunId: original.runId!, parentSourceRevision: 1 as const, researchFingerprint: request.researchFingerprint,
+      expectedSourceRevision: 2 as const, descriptorFingerprint: fingerprint(f.descriptor),
+      expectedDiscoveryBudget: budgetSchema.parse(f.dynamo.inspect(budgetKey(guidedResearchBudgetId))),
+      expectedResearchBudget: budgetSchema.parse(researchBefore), proposedDiscoveryLimitMicros: 2000000 };
+    const admitted = await native(admission);
+    expect(admitted).toMatchObject({ kind: 'research.once.admit-next.result', state: 'applied' });
+    if (admitted.kind !== 'research.once.admit-next.result' || !admitted.receipt) throw Error('Expected exact admission receipt');
+    expect(f.dynamo.inspect(`DISCOVERY#${original.runId}`)).toEqual(parentBefore);
+    expect(f.dynamo.inspect('BUDGET#research')).toEqual(researchBefore);
+    expect(discovery).toHaveBeenCalledTimes(1); expect(ssm.send).toHaveBeenCalledTimes(1);
+    f.mount(); region = within(await screen.findByRole('region', { name: 'Cloud research' }));
+    await region.findByText('Existing policy (read-only): paused');
+    expect(region.getByText('Discovery balance: cumulative ceiling $2 USD, reserved-or-spent $1 USD, remaining $1 USD.')).toBeTruthy();
+    expect(region.getByText('Research balance: cumulative ceiling $0.01 USD, reserved-or-spent $0 USD, remaining $0.01 USD.')).toBeTruthy();
+    expect(f.requests.filter(request => request.path === '/research/setup')).toHaveLength(2);
+    const successor = { ...request, expectedSourceRevision: 3, successor: { parentRunId: original.runId!, admissionFingerprint: admitted.receipt.fingerprint } };
+    expect(await native(successor)).toMatchObject({ state: 'held' }); expect(discovery).toHaveBeenCalledTimes(1);
+    fireEvent.click(region.getByRole('button', { name: 'Refresh' })); await region.findByText('Existing policy (read-only): paused');
+    await waitFor(() => expect((region.getByRole('button', { name: 'Refresh' }) as HTMLButtonElement).disabled).toBe(false));
+    expect(f.requests.filter(request => request.path === '/research/setup')).toHaveLength(2);
+    fireEvent.click(region.getByLabelText('I have reviewed the targeting, cumulative ceilings, operator assertions and limitations above'));
+    fireEvent.click(region.getByRole('button', { name: 'Resume research' })); await region.findByText(/Research policy request applied/);
+    expect(ownerResearchSourceSchema.parse(f.dynamo.inspect(ownerResearchSourceKey()))).toMatchObject({ revision: 3, state: 'active', research: source.research });
+    await f.unmount(); const completed = await native(successor);
+    expect(completed).toMatchObject({ state: 'completed', settled: true, evidenceReceiptId: expect.any(String), settlementReceiptId: expect.any(String) });
+    expect(await native(successor)).toEqual(completed);
+    expect(await native({ ...request, kind: 'research.once.status', runId: original.runId! })).toEqual(original);
+    expect(f.dynamo.inspect(`DISCOVERY#${original.runId}`)).toEqual(parentBefore);
+    expect(discovery).toHaveBeenCalledTimes(2); expect(pageHttp).toHaveBeenCalledTimes(1);
+    f.mount(); region = within(await screen.findByRole('region', { name: 'Cloud research' }));
+    await region.findByText('Existing policy (read-only): active');
+    expect(region.getByText('Discovery balance: cumulative ceiling $2 USD, reserved-or-spent $2 USD, remaining $0 USD.')).toBeTruthy();
+    expect(region.getByText(/not verified invoice spend/)).toBeTruthy();
+    expect(f.requests.filter(request => request.path === '/research/setup')).toHaveLength(3);
+    expect(discovery).toHaveBeenCalledTimes(2); await f.assertEncrypted();
+  } finally { await f.finish(); }
+}, 20000);

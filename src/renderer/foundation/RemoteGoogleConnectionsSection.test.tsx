@@ -11,7 +11,7 @@ const personal = 'personal_availability';
 const empty: Status = { state: 'unconfigured', grant: null };
 function readyStatus(purpose: GoogleGrantPurpose = work): Status {
   return { state: 'ready', grant: purpose === work ? {
-    provider: 'google', subject: 'private-subject', email: 'founder@usecali.com', owner: 'remote', purpose,
+    provider: 'google', subject: 'private-subject', email: 'founder@usecallie.com', owner: 'remote', purpose,
     capabilities: ['send', 'relevant_read'], grantedScopes: [googleScopes.send, googleScopes.relevant_read],
   } : { provider: 'google', subject: 'private-subject', email: 'person@example.com', owner: 'remote', purpose,
     capabilities: ['availability'], grantedScopes: ['openid', 'email', googleScopes.availability],
@@ -33,10 +33,10 @@ function deferred<T>() {
 }
 const panel = (purpose: GoogleGrantPurpose = work) => within(screen.getByRole('region', { name: purpose === work ? 'Work email' : 'Personal calendar availability' }));
 const button = (name: string, purpose: GoogleGrantPurpose = work) => panel(purpose).getByRole('button', { name }) as HTMLButtonElement;
-const input = (purpose: GoogleGrantPurpose = work) => panel(purpose).getByLabelText(purpose === work ? 'Named work email (@usecali.com)' : 'Calendar IDs, one per line') as HTMLInputElement;
+const input = (purpose: GoogleGrantPurpose = work) => panel(purpose).getByLabelText(purpose === work ? 'Named work email (@usecallie.com)' : 'Calendar IDs, one per line') as HTMLInputElement;
 const ack = (purpose: GoogleGrantPurpose = work) => panel(purpose).getByLabelText('I have reviewed and acknowledge this disclosure') as HTMLInputElement;
 const confirm = (purpose: GoogleGrantPurpose = work) => panel(purpose).getByLabelText(purpose === work ? 'I confirm this named work mailbox' : 'I confirm these exact calendar IDs') as HTMLInputElement;
-function fill(purpose: GoogleGrantPurpose = work, value = purpose === work ? 'founder@usecali.com' : 'person@example.com\nteam@group.calendar.google.com') {
+function fill(purpose: GoogleGrantPurpose = work, value = purpose === work ? 'founder@usecallie.com' : 'person@example.com\nteam@group.calendar.google.com') {
   fireEvent.change(input(purpose), { target: { value } });
 }
 function consent(purpose: GoogleGrantPurpose = work) {
@@ -64,7 +64,7 @@ describe('remote Google purpose-specific explicit UI', () => {
   it('uses two distinct minimal purpose requests and consent receipt is not connected', async () => {
     const a = api(); await mount(a);
     fill(); consent(); fireEvent.click(button('Continue to Google')); await idle();
-    expect(a.begin).toHaveBeenNthCalledWith(1, { purpose: work, expectedEmail: 'founder@usecali.com',
+    expect(a.begin).toHaveBeenNthCalledWith(1, { purpose: work, expectedEmail: 'founder@usecallie.com',
       capabilities: ['send', 'relevant_read'], disclosureVersion: googleGrantDisclosure.version });
     expect(panel().getByText(/Google consent opened\. This is not a connected grant/)).toBeTruthy();
     expect(panel().queryByText(/Cloud grant ready/)).toBeNull();
@@ -75,7 +75,25 @@ describe('remote Google purpose-specific explicit UI', () => {
       availabilityCalendars: { calendarIds: ['person@example.com', 'team@group.calendar.google.com'], confirmed: true } });
     expect(a.status).toHaveBeenCalledTimes(2); expect(a.revoke).not.toHaveBeenCalled();
   });
-  it.each(['', 'founder@gmail.com', '@usecali.com', 'Founder@usecali.com', 'a@usecali.com.evil', 'a b@usecali.com'])('rejects invalid work address %s', async value => {
+  it('rejects the old domain and accepts the corrected Callie domain only after renewed consent', async () => {
+    const a = api(); await mount(a);
+    fill(work, 'founder@usecali.com'); consent();
+    expect(confirm().checked).toBe(true); expect(ack().checked).toBe(true);
+    expect(button('Continue to Google').disabled).toBe(true);
+    fireEvent.click(button('Continue to Google')); expect(a.begin).not.toHaveBeenCalled();
+    expect(panel().getByText('Enter a named lowercase @usecallie.com email address. This field is required.')).toBeTruthy();
+    fill(work, 'founder@usecallie.com');
+    expect(confirm().checked).toBe(false); expect(ack().checked).toBe(false);
+    expect(button('Continue to Google').disabled).toBe(true);
+    consent(); expect(button('Continue to Google').disabled).toBe(false);
+    fireEvent.click(button('Continue to Google')); await idle();
+    expect(a.begin).toHaveBeenCalledTimes(1);
+    expect(a.begin).toHaveBeenCalledWith({ purpose: work, expectedEmail: 'founder@usecallie.com',
+      capabilities: ['send', 'relevant_read'], disclosureVersion: googleGrantDisclosure.version });
+    expect(a.revoke).not.toHaveBeenCalled();
+    expect(panel().queryByText(/Cloud grant ready/)).toBeNull();
+  });
+  it.each(['', 'founder@gmail.com', 'founder@usecali.com', '@usecallie.com', 'Founder@usecallie.com', 'a@usecallie.com.evil', 'a@sub.usecallie.com', 'a@usecallieXcom', 'a b@usecallie.com'])('rejects invalid work address %s', async value => {
     const a = api(); await mount(a); fill(work, value); consent(); fireEvent.click(button('Continue to Google'));
     expect(button('Continue to Google').disabled).toBe(true); expect(a.begin).not.toHaveBeenCalled();
   });
@@ -87,9 +105,9 @@ describe('remote Google purpose-specific explicit UI', () => {
     await mount(); fill(); fireEvent.click(ack()); expect(button('Continue to Google').disabled).toBe(true);
     fireEvent.click(confirm()); expect(ack().checked).toBe(false); fireEvent.click(ack());
     expect(button('Continue to Google').disabled).toBe(false);
-    fill(work, 'other@usecali.com'); expect(ack().checked).toBe(false); expect(confirm().checked).toBe(false);
+    fill(work, 'other@usecallie.com'); expect(ack().checked).toBe(false); expect(confirm().checked).toBe(false);
     consent(); fireEvent.click(button('Refresh')); await idle();
-    expect(input().value).toBe('other@usecali.com'); expect(ack().checked).toBe(false); expect(confirm().checked).toBe(false);
+    expect(input().value).toBe('other@usecallie.com'); expect(ack().checked).toBe(false); expect(confirm().checked).toBe(false);
   });
   it('synchronously locks duplicate clicks and cross-panel operations until begin settles', async () => {
     const a = api(); const pending = deferred<Awaited<ReturnType<Api['begin']>>>(); a.begin.mockReturnValue(pending.promise);
@@ -110,7 +128,7 @@ describe('remote Google purpose-specific explicit UI', () => {
     expect(button('Continue to Google').disabled).toBe(true); expect(a.begin).toHaveBeenCalledTimes(1);
     a.status.mockImplementation(async ({ purpose }) => readyStatus(purpose));
     fireEvent.click(button('Refresh')); await idle();
-    expect(panel().getByText('founder@usecali.com')).toBeTruthy(); expect(input().value).toBe('founder@usecali.com');
+    expect(panel().getByText('founder@usecallie.com')).toBeTruthy(); expect(input().value).toBe('founder@usecallie.com');
     expect(ack().checked).toBe(false); expect(a.begin).toHaveBeenCalledTimes(1);
   });
   it.each(['wrong-purpose', 'wrong-disclosure', 'malformed'] as const)('fails closed on %s and recovers without losing input', async kind => {
@@ -120,7 +138,7 @@ describe('remote Google purpose-specific explicit UI', () => {
     if (kind === 'malformed') a.status.mockResolvedValueOnce({ state: 'ready', grant: null });
     fireEvent.click(button('Refresh')); await idle();
     expect(panel().getByText(/Status and disclosure could not be verified/)).toBeTruthy();
-    expect(button('Continue to Google').disabled).toBe(true); expect(input().value).toBe('founder@usecali.com');
+    expect(button('Continue to Google').disabled).toBe(true); expect(input().value).toBe('founder@usecallie.com');
     fireEvent.click(button('Refresh')); await idle(); expect(panel().getByText(googleGrantDisclosure.text)).toBeTruthy();
     expect(ack().checked).toBe(false); expect(a.begin).not.toHaveBeenCalled();
   });
@@ -133,7 +151,7 @@ describe('remote Google purpose-specific explicit UI', () => {
   });
   it('shows verified identity and grant facts, not resource readiness or private metadata', async () => {
     await mount(api(true));
-    expect(panel().getByText('founder@usecali.com')).toBeTruthy(); expect(panel().getByText('send, relevant_read')).toBeTruthy();
+    expect(panel().getByText('founder@usecallie.com')).toBeTruthy(); expect(panel().getByText('send, relevant_read')).toBeTruthy();
     expect(panel(personal).getByText('availability')).toBeTruthy();
     expect(panel(personal).getByText('Confirmed calendar IDs (not access proof)')).toBeTruthy();
     expect(screen.getByText(/does not authorize campaigns or prove live mailbox/)).toBeTruthy();
@@ -164,7 +182,7 @@ describe('remote Google purpose-specific explicit UI', () => {
     view.rerender(<RemoteGoogleConnectionsSection api={a} />); await idle(); fill(); consent();
     await act(async () => pending.resolve(readyStatus()));
     expect(panel().queryByText('Cloud grant ready (last verified status)')).toBeNull();
-    expect(input().value).toBe('founder@usecali.com'); expect(ack().checked).toBe(true);
+    expect(input().value).toBe('founder@usecallie.com'); expect(ack().checked).toBe(true);
   });
   it.each(['begin', 'revoke'] as const)('ignores stale %s result on API replacement and unmount, without claiming cancellation', async action => {
     const a = api(true); const b = api(); const pending = deferred<never>(); a[action].mockReturnValue(pending.promise);

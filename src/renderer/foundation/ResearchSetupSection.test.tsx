@@ -129,4 +129,30 @@ describe('bounded Cloud research settings', () => {
   it('honestly reports missing API and never enables mutation', () => {
     render(<ResearchSetupSection />); expect(screen.getByText(/unavailable in this app connection/)).toBeTruthy(); expect(button('Approve research').disabled).toBe(true);
   });
+  it('shows an amended cumulative ceiling without refunding retained uncertainty or resuming on refresh', async () => {
+    const value = status(); const remote = value.remote!;
+    remote.selector = { version: 1, workspaceId: identity.workspaceId, pairingId, revision: 2, state: 'paused', research: null };
+    remote.discoveryLedger = { limitMicros: 1000000, reservedOrSpentMicros: 1000000, remainingMicros: 0 };
+    remote.researchLedger = { limitMicros: 10000, reservedOrSpentMicros: 0, remainingMicros: 10000 };
+    const a = api(value); await mount(a);
+    expect(screen.getByText('Discovery balance: cumulative ceiling $1 USD, reserved-or-spent $1 USD, remaining $0 USD.')).toBeTruthy();
+    remote.discoveryLedger = { limitMicros: 2000000, reservedOrSpentMicros: 1000000, remainingMicros: 1000000 };
+    fireEvent.click(button('Refresh')); await idle();
+    expect(screen.getByText('Discovery balance: cumulative ceiling $2 USD, reserved-or-spent $1 USD, remaining $1 USD.')).toBeTruthy();
+    expect(screen.getByText('Research balance: cumulative ceiling $0.01 USD, reserved-or-spent $0 USD, remaining $0.01 USD.')).toBeTruthy();
+    expect(screen.getByText('Existing policy (read-only): paused')).toBeTruthy();
+    expect(screen.getByText(/not verified invoice spend/)).toBeTruthy();
+    for (const method of [a.approve, a.setState, a.retry, a.cancelPending]) expect(method).not.toHaveBeenCalled();
+    expect(button('Resume research').disabled).toBe(true);
+    a.setState.mockResolvedValue({ ...applied, kind: 'set-state', revision: 3, state: 'active' });
+    fireEvent.click(ack()); fireEvent.click(button('Resume research')); await idle();
+    expect(a.setState).toHaveBeenCalledTimes(1);
+    expect(a.setState).toHaveBeenCalledWith({ state: 'active', expectedRevision: 2, disclosureAcknowledged: true });
+    remote.selector = { ...remote.selector, revision: 3, state: 'active' };
+    remote.discoveryLedger = { limitMicros: 2000000, reservedOrSpentMicros: 2000000, remainingMicros: 0 };
+    fireEvent.click(button('Refresh')); await idle();
+    expect(screen.getByText('Discovery balance: cumulative ceiling $2 USD, reserved-or-spent $2 USD, remaining $0 USD.')).toBeTruthy();
+    expect(a.status).toHaveBeenCalledTimes(3); expect(a.setState).toHaveBeenCalledTimes(1);
+    expect(a.approve).not.toHaveBeenCalled(); expect(a.retry).not.toHaveBeenCalled(); expect(a.cancelPending).not.toHaveBeenCalled();
+  });
 });

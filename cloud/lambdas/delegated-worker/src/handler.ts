@@ -1,5 +1,5 @@
-import { executeResearchOnce, productionResearchBoundaries, researchProfile } from './researchProduction';
-import { parseResearchOnce, type ResearchOnceRequest, type ResearchOnceResult } from './researchOnceContract';
+import { admitResearchOnceNext, executeResearchOnce, productionResearchBoundaries, researchProfile } from './researchProduction';
+import { parseResearchOnce, type ResearchOnceRequest, type ResearchOnceResult, type ResearchOnceNextRequest, type ResearchOnceNextResult } from './researchOnceContract';
 import { ResearchSetupService, type ResearchSetupProfile } from './researchSetup';
 import {WorkerPolicyConfiguration} from './policyConfiguration';
 import type { PageHttp } from '../../../../src/main/research/companyPageProvider';
@@ -160,7 +160,7 @@ export async function createProductionServices(env: NodeJS.ProcessEnv, boundarie
   return { auth, google, source, researchSetup: new ResearchSetupService({ auth, profile: researchSetupProfile }), handle: createWorkerHandler({ auth, google, researchSetupProfile, host: config.DELEGATED_WORKER_HOST }) };
 }
 export function createProductionHandler(env: NodeJS.ProcessEnv, boundaries: ProductionBoundaries = {}) {
-  const invoke = async (event: unknown, context?: { getRemainingTimeInMillis(): number }): Promise<WorkerHttpResponse | ResearchOnceResult> => {
+  const invoke = async (event: unknown, context?: { getRemainingTimeInMillis(): number }): Promise<WorkerHttpResponse | ResearchOnceResult | ResearchOnceNextResult> => {
     // Native only. Never route a JSON HTTP body to internal execution.
     if (event && typeof event === 'object' && 'kind' in event && typeof event.kind === 'string' && event.kind.startsWith('research.once')) {
       const started = Date.now();
@@ -170,7 +170,8 @@ export function createProductionHandler(env: NodeJS.ProcessEnv, boundaries: Prod
       const duration = Math.max(0, Math.min(45000, remaining - 5000) - (Date.now() - started));
       const timer = setTimeout(() => controller.abort(), duration);
       if (!duration) controller.abort();
-      try { return await executeResearchOnce(env, boundaries, request, controller.signal); }
+      try { return await (request.kind === 'research.once.admit-next' || request.kind === 'research.once.admit-next.status'
+        ? admitResearchOnceNext(env, boundaries, request, controller.signal) : executeResearchOnce(env, boundaries, request, controller.signal)); }
       catch { throw new Error('research_once_unavailable'); }
       finally { clearTimeout(timer); controller.abort(); }
     }
@@ -199,12 +200,14 @@ export function createProductionHandler(env: NodeJS.ProcessEnv, boundaries: Prod
     }
   };
   return invoke as {
+    (event: ResearchOnceNextRequest, context?: { getRemainingTimeInMillis(): number }): Promise<ResearchOnceNextResult>;
     (event: ResearchOnceRequest, context?: { getRemainingTimeInMillis(): number }): Promise<ResearchOnceResult>;
     (event: unknown, context?: { getRemainingTimeInMillis(): number }): Promise<WorkerHttpResponse>;
   };
 }
+export function handler(event: ResearchOnceNextRequest, context?: { getRemainingTimeInMillis(): number }): Promise<ResearchOnceNextResult>;
 export function handler(event: ResearchOnceRequest, context?: { getRemainingTimeInMillis(): number }): Promise<ResearchOnceResult>;
 export function handler(event: unknown, context?: { getRemainingTimeInMillis(): number }): Promise<WorkerHttpResponse>;
-export async function handler(event: unknown, context?: { getRemainingTimeInMillis(): number }): Promise<WorkerHttpResponse | ResearchOnceResult> {
+export async function handler(event: unknown, context?: { getRemainingTimeInMillis(): number }): Promise<WorkerHttpResponse | ResearchOnceResult | ResearchOnceNextResult> {
   return createProductionHandler(process.env)(event, context);
 }
