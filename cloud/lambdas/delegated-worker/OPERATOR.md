@@ -211,3 +211,23 @@ reconcile supported receipts rather than editing tables, retransferring a key or
 widening policy. Admission success and logs are neither billing proof nor proof
 of useful researched-account completion. Closed-app execution and supported app
 synchronization remain separate acceptance steps.
+
+### Discovery output shape
+
+Discovery requests use Responses `text.format` with a strict JSON schema for
+`{companies: [{name, domain, sourceUrl}]}` in the existing single web-search
+request. This constrains shape, not truth: local field bounds, URL/domain policy,
+exact citation membership and consulted-source membership remain mandatory.
+Invalid output is never repaired by stripping prose or requesting another model
+response. An unsupported-format HTTP rejection is retained as `http_rejected`,
+without fallback or retry.
+
+The [model documentation](https://developers.openai.com/api/docs/models/gpt-4.1-mini)
+lists Structured Outputs for the pinned model, and the
+[Responses guide](https://developers.openai.com/api/docs/guides/structured-outputs)
+documents the request format. These references and offline request-contract tests
+are not live proof of the combined web-search, schema and citation behavior.
+`candidate_json_invalid` still means JSON syntax **or** local candidate-schema
+validation failed; it does not identify which field or recover historical output.
+Changing the request shape does not authorize another attempt, reset retained
+spend or change the immutable successor admission limit above.
