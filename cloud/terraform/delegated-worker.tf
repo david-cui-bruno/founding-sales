@@ -18,6 +18,7 @@ module "delegated_worker" {
   delegated_google_client_id             = var.delegated_google_client_id
   delegated_research_enabled             = var.delegated_research_enabled
   delegated_research_reviewed_capability = var.delegated_research_reviewed_capability
+  delegated_worker_research_once_enabled = var.delegated_worker_research_once_enabled
   delegated_worker_schedule_enabled      = var.delegated_worker_schedule_enabled
   worker_source_dir                      = "${path.module}/../lambdas/delegated-worker/dist"
   worker_output_path                     = "${path.module}/.build/delegated-worker.zip"

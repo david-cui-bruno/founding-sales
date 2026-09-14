@@ -109,6 +109,12 @@ variable "delegated_research_reviewed_capability" {
   }
 }
 
+variable "delegated_worker_research_once_enabled" {
+  description = "Explicit IAM research-only invocation opt-in. Requires continuous worker scheduling off. Does not approve research, provision credentials, grant accounts or permit outreach."
+  type        = bool
+  default     = false
+}
+
 variable "delegated_worker_schedule_enabled" {
   description = "Opt-in dedicated five-minute delegated-worker schedule, requiring worker enablement and existing activation review. Never changes existing schedules. Runtime ownership, grants, budgets and exact approvals remain mandatory."
   type        = bool

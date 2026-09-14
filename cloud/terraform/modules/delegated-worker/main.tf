@@ -139,6 +139,7 @@ resource "aws_lambda_function" "delegated_worker" {
   reserved_concurrent_executions = 2
   environment {
     variables = {
+      DELEGATED_WORKER_RESEARCH_ONCE_ENABLED  = var.delegated_worker_research_once_enabled ? "true" : "false"
       DELEGATED_WORKER_ENABLED                = "true"
       DELEGATED_WORKER_TABLE                  = aws_dynamodb_table.delegated_worker[0].name
       DELEGATED_WORKSPACE_ID                  = var.delegated_workspace_id
@@ -149,6 +150,12 @@ resource "aws_lambda_function" "delegated_worker" {
       DELEGATED_GOOGLE_CLIENT_ID              = var.delegated_google_client_id
       DELEGATED_GOOGLE_SECRET_PARAMETER       = var.delegated_google_client_id == "" ? "" : local.delegated_secret_parameter
       DELEGATED_GOOGLE_KEY_PARAMETER          = var.delegated_google_client_id == "" ? "" : local.delegated_key_parameter
+    }
+  }
+  lifecycle {
+    precondition {
+      condition     = !(var.delegated_worker_research_once_enabled && var.delegated_worker_schedule_enabled)
+      error_message = "Research-only invocation requires continuous scheduling to remain disabled."
     }
   }
   depends_on = [aws_iam_role_policy.delegated_worker, aws_cloudwatch_log_group.delegated_worker]
