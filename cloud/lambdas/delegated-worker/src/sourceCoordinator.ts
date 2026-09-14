@@ -1,7 +1,8 @@
-import { assertGuidedResearch, guardGuidedResearch, guidedResearchMarkerKey, type ResearchSetupProfile } from './researchSetup';
+import { runResearch } from './researchCoordinator';
+import type { ResearchSetupProfile } from './researchSetup';
 import { QueryCommand, TransactWriteItemsCommand, type TransactWriteItem } from '@aws-sdk/client-dynamodb';
 import { z } from 'zod';
-import { ownerCommandSchema, ownerResearchSourceSchema, ownerResearchSourceKey, ownerSourceConfigurationSchema, ownerSourceKey, type OwnerSourceConfiguration } from '../../../../src/shared/contracts/ownerCommandContract';
+import { ownerCommandSchema, ownerSourceConfigurationSchema, ownerSourceKey, type OwnerSourceConfiguration } from '../../../../src/shared/contracts/ownerCommandContract';
 import { commandReceiptSchema, workerEventSchema } from '../../../../src/shared/contracts/delegationContract';
 import { pairingKey, type WorkerAuth } from './workerAuth';
 import type { RemoteGoogleAuthorization } from './remoteGoogleAuthorization';
@@ -14,12 +15,7 @@ import { CampaignExecution } from './campaignExecution';
 import { WorkerCampaignRepository } from './workerCampaignRepository';
 import { createDispatchService } from './dispatchService';
 import { createSendReconciler } from './sendReconciler';
-import { createCompanyPageProvider, type PageHttp } from '../../../../src/main/research/companyPageProvider';
-import { createFetchedReceiptPolicy } from '../../../../src/main/research/companySourcePolicy';
-import { createCompanyPreparation, createCompanyResearchWorker } from '../../../../src/main/research/companyResearchWorker';
-import { createCompanyDiscoveryProvider, requestCompanyDiscovery } from '../../../../src/main/research/companyDiscoveryProvider';
-import { createWorkerAccountRepository } from './workerAccountRepository';
-import { createDiscoveryReservationStore } from './discoveryReservationStore';
+import type { PageHttp } from '../../../../src/main/research/companyPageProvider';
 import { DynamoMeetingRepository, meetingOfferKey } from './meetingRepository';
 import { meetingOfferSchema } from '../../../../src/shared/contracts/meetingContract';
 import { MeetingCoordinator } from './meetingCoordinator';
@@ -104,61 +100,7 @@ export function createSourceCoordinator(input: SourceCoordinatorOptions) {
     if (sequence !== after) await store.transact([store.put(key, { sequence }, cursor?.rev ?? null)]);
   }
   async function research(signal: AbortSignal, report: SourceTickReport) {
-    const boundaries = input.research; if (!boundaries) return;
-    const row = await store.get<unknown>(ownerResearchSourceKey()); if (!row) return;
-    const config = ownerResearchSourceSchema.parse(row.data);
-    if (config.workspaceId !== store.options.workspaceId || config.state !== 'active' || !config.research) return;
-    const guided = await guardGuidedResearch(store, config, input.researchSetupProfile ?? {});
-    const settings = config.research;
-    if (settings.workspaceId !== config.workspaceId || settings.researchLimits.maxCostMicros > settings.maxAccountBudgetMicros) throw new Error('research_config_mismatch');
-    const pairing = await input.auth.activePairing(config.pairingId);
-    async function guard() {
-      signal.throwIfAborted();
-      const marker = await guardGuidedResearch(store, config, input.researchSetupProfile ?? {});
-      if (marker?.rev !== guided?.rev) throw new Error('research_setup_marker_changed');
-      const current = await store.get<unknown>(ownerResearchSourceKey());
-      if (!current || current.rev !== row!.rev || fingerprint(current.data) !== fingerprint(config)) throw new Error('research_source_changed');
-      const active = await input.auth.activePairing(config.pairingId);
-      if (active.rev !== pairing.rev) throw new Error('research_pairing_changed');
-      // No await after this freshness/binding check before releasing the guard.
-      if (marker) assertGuidedResearch(marker.data, config, input.researchSetupProfile ?? {}, store.now());
-    }
-    // The SDK boundary adds actual config and pairing CAS to every C1 mutation.
-    // Reading a selector cannot approve budget, grant AUTH, or reset unknown spend.
-    const dynamo: DynamoAdapter = { async send(command) {
-      if (!(command instanceof TransactWriteItemsCommand)) return store.options.dynamo.send(command);
-      await guard();
-      return store.options.dynamo.send(new TransactWriteItemsCommand({ ...command.input, TransactItems: [...(command.input.TransactItems ?? []),
-        store.check(ownerResearchSourceKey(), row.rev), store.check(pairingKey(config.pairingId), pairing.rev), guided ? store.check(guidedResearchMarkerKey, guided.rev) : store.absent(guidedResearchMarkerKey)] }));
-    } };
-    const options = { ...store.options, dynamo };
-    const accounts = createWorkerAccountRepository(options);
-    const reservations = createDiscoveryReservationStore(options);
-    const discovery = createCompanyDiscoveryProvider({ capability: settings.capability, request: async (query, limits, requestSignal) => {
-      await guard(); const credentials = await boundaries.loadCredentials(config.workspaceId, requestSignal);
-      await guard();
-      if (credentials.model !== settings.capability.model) throw new Error('research_model_mismatch');
-      return requestCompanyDiscovery({ query, limits, capability: settings.capability, credentials, signal: requestSignal, fetch: input.fetch });
-    } });
-    const identity = fingerprint({ workspaceId: config.workspaceId, pairingId: config.pairingId, research: settings });
-    const runId = `${identity.slice(0,8)}-${identity.slice(8,12)}-4${identity.slice(13,16)}-a${identity.slice(17,20)}-${identity.slice(20,32)}`;
-    const prepared = await createCompanyPreparation({ store: accounts, reservations, discovery, configuration: settings }).prepare(runId, signal);
-    report.status = 'completed';
-    if (prepared.status !== 'prepared') { report.held++; return; }
-    report.researchPrepared++;
-    const pages = createCompanyPageProvider({ receipts: createFetchedReceiptPolicy(), clock: options.clock,
-      permitted: (url) => settings.permittedSources.includes(url),
-      resolve: async hostname => { await guard(); return boundaries.resolve(hostname); },
-      http: async request => { await guard(); return boundaries.pageHttp(request); },
-      onFetched: (source, accountId) => accounts.recordFetchedSource({ accountId, source }) });
-    const worker = createCompanyResearchWorker({ store: accounts, clock: options.clock, pages: { async research(snapshot, limits, requestSignal) {
-      await guard();
-      if (!prepared.accountIds.includes(snapshot.account.id) || fingerprint(limits) !== fingerprint(settings.researchLimits)) throw new Error('research_job_config_mismatch');
-      return pages.research(snapshot, limits, requestSignal);
-    } } });
-    const result = await worker.runNext(signal);
-    if (result === 'completed') report.researchCompleted++;
-    if (result === 'parked') report.held++;
+    return runResearch(input, signal, report);
   }
   async function meetingCursor(accountId: string, kind: string) {
     const key = `SOURCE_SCAN#${fingerprint({ accountId, kind })}`;

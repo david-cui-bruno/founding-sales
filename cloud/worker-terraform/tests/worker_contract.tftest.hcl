@@ -164,6 +164,7 @@ run "enabled_bounded_schedule_google_research_off" {
   }
   assert {
     condition = (
+      aws_lambda_function.delegated_worker[0].environment[0].variables.DELEGATED_WORKER_RESEARCH_ONCE_ENABLED == "false" &&
       aws_lambda_function.delegated_worker[0].environment[0].variables.DELEGATED_WORKER_SCHEDULE_ARN == "" &&
       aws_lambda_function.delegated_worker[0].environment[0].variables.DELEGATED_GOOGLE_CLIENT_ID == "" &&
       aws_lambda_function.delegated_worker[0].environment[0].variables.DELEGATED_GOOGLE_SECRET_PARAMETER == "" &&
@@ -388,4 +389,49 @@ run "module_reviewed_metadata_oversize_rejected" {
     delegated_research_reviewed_capability = jsonencode(join("", [for i in range(3) : join("", [for j in range(1000) : "x"])]))
   }
   expect_failures = [var.delegated_research_reviewed_capability]
+}
+
+run "research_once_explicit_without_schedule_or_new_authority" {
+  command = plan
+  module { source = "../terraform/modules/delegated-worker" }
+  variables {
+    worker_source_dir                      = "./nonexistent-mocked-dist"
+    worker_output_path                     = "./nonexistent-mocked-worker.zip"
+    delegated_worker_enabled               = true
+    delegated_worker_activation_reviewed   = true
+    delegated_workspace_id                 = "mock-workspace"
+    delegated_worker_research_once_enabled = true
+    aws_account_id                         = "123456789012"
+    name_prefix                            = "mock"
+  }
+  assert {
+    condition = (
+      aws_lambda_function.delegated_worker[0].environment[0].variables.DELEGATED_WORKER_RESEARCH_ONCE_ENABLED == "true" &&
+      aws_lambda_function.delegated_worker[0].environment[0].variables.DELEGATED_WORKER_SCHEDULE_ARN == "" &&
+      aws_lambda_function.delegated_worker[0].environment[0].variables.DELEGATED_RESEARCH_CREDENTIAL_PARAMETER == "" &&
+      aws_lambda_function.delegated_worker[0].environment[0].variables.DELEGATED_GOOGLE_CLIENT_ID == "" &&
+      length(aws_cloudwatch_event_rule.delegated_worker) == 0 &&
+      length(aws_cloudwatch_event_target.delegated_worker) == 0 &&
+      length(aws_lambda_permission.delegated_worker_schedule) == 0 &&
+      length(aws_apigatewayv2_route.delegated_worker) == 18
+    )
+    error_message = "One-shot opt-in creates no schedule, route, credential or grant."
+  }
+}
+
+run "research_once_and_schedule_are_incompatible" {
+  command = plan
+  module { source = "../terraform/modules/delegated-worker" }
+  variables {
+    worker_source_dir                      = "./nonexistent-mocked-dist"
+    worker_output_path                     = "./nonexistent-mocked-worker.zip"
+    delegated_worker_enabled               = true
+    delegated_worker_activation_reviewed   = true
+    delegated_workspace_id                 = "mock-workspace"
+    delegated_worker_research_once_enabled = true
+    delegated_worker_schedule_enabled      = true
+    aws_account_id                         = "123456789012"
+    name_prefix                            = "mock"
+  }
+  expect_failures = [aws_lambda_function.delegated_worker]
 }

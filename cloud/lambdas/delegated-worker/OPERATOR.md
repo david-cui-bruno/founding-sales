@@ -52,3 +52,63 @@ The two ceilings are cumulative totals, not monthly allowances or top-ups. Reser
 The desktop encrypts exact pending requests before transport. Refresh may reconcile an exact terminal receipt but never replays a mutation. **Retry exact pending request** preserves the original identity and payload. **Cancel pending request** can fence an uncommitted request, but if it already applied, cancellation returns that applied receipt and does not undo it. A normal restart retains pending work. The bounded immutable journal supports 128 operation generations and fails closed on corruption or exhaustion. Do not delete or edit it to clear an uncertain request. Reconcile with the owning workspace before any separately reviewed recovery.
 
 Deployment, pairing, credential setup, actual research, scheduling and outreach remain separate approval and acceptance steps. An approved policy or passing offline workflow is not evidence of useful closed-Mac work.
+# Research-only one-shot execution
+
+The optional native `research.once` operation is for one bounded P1 research
+attempt, not a recurring worker tick. It is disabled by default. Enabling
+`delegated_worker_research_once_enabled` adds no public route, schedule, grant,
+budget or credential. Continuous worker scheduling must remain disabled.
+
+Before a live attempt, separately review the exact deployment, private research
+SecureString binding and model descriptor. Admit the policy and cumulative
+budgets through the paired app's **Settings > Sourcing > Cloud research** flow.
+The approved policy must have `maxCompanies: 1`. Copying an existing desktop API
+key to cloud storage is a credential transfer, not merely a billing decision.
+Do not put keys in Terraform, command-line arguments, logs or invocation payloads.
+
+Use an authorized IAM caller with `lambda:InvokeFunction` on the exact worker.
+Use synchronous **RequestResponse**, disable caller retries (`AWS_MAX_ATTEMPTS=1`)
+and use a read timeout greater than the function's 60-second timeout. The native
+request is a strict JSON object with only:
+
+```json
+{
+  "version": 1,
+  "kind": "research.once",
+  "workspaceId": "REVIEWED_WORKSPACE",
+  "pairingId": "REVIEWED_PAIRING_UUID",
+  "expectedSourceRevision": 1,
+  "researchFingerprint": "EXACT_64_HEX_FINGERPRINT_OF_REVIEWED_RESEARCH_SETTINGS"
+}
+```
+
+These placeholders are not valid inputs. Use the exact admitted selector's
+identity, revision and canonical research-settings fingerprint, not a newly
+invented run ID or a fingerprint of the whole selector. Neither possession of
+IAM access nor pairing alone approves research. Do not send a fabricated
+Scheduled Event or call the general source coordinator to bypass this path.
+An HTTP body containing this JSON remains an HTTP request, not an internal call.
+
+Inspect both Lambda `FunctionError` and the typed result. `completed` requires
+durable evidence and job settlement. `empty`, `held`, `in-progress` and
+`uncertain` are not successful research. After a lost response, query
+`research.once.status` with the original request fields and explicit `runId`
+before considering any further execution. Status is read-only and may inspect
+the original receipt after a pause or descriptor expiry. It does not settle
+jobs, replenish budgets or restart providers. If no run ID was received, derive
+only the existing deterministic identity from the exact admitted settings. Do
+not substitute a fresh transport UUID or widen configuration to retry.
+
+The same durable identity retains discovery and page reservations after an
+unknown outcome. Abort does not prove a remote request was cancelled or unbilled.
+Application reservations are conservative cumulative accounting, not an AWS or
+OpenAI invoice cap. IAM Invoke permission on this shared function is not a
+JSON-kind restriction. Existing bearer authentication still protects HTTP
+requests, and the absent schedule binding prevents schedule execution in this
+profile. A separately isolated principal/function would be a different design.
+
+For the actual P1 acceptance check, close the desktop before Invoke, retain the
+durable result, then reopen and synchronize the resulting account/evidence
+through the supported app workflow. A local harness, an accepted Invoke or an
+empty queue does not prove useful closed-app completion. Do not enable mail,
+calendar, calls, outreach or a continuous schedule for this check.

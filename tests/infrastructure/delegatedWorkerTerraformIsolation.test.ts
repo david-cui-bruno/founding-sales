@@ -65,6 +65,7 @@ const defaults: Record<string, string> = {
   delegated_research_enabled: "false",
   delegated_research_reviewed_capability: '""',
   delegated_worker_schedule_enabled: "false",
+  delegated_worker_research_once_enabled: "false",
 };
 const implementation = tf(moduleDir);
 const legacy = read(legacyDir, "delegated-worker.tf");
@@ -131,6 +132,15 @@ describe("delegated-worker Terraform source isolation", () => {
     expect(compact(block(implementation, 'resource "aws_iam_role_policy" "delegated_worker"')))
       .not.toContain("delegated_research_reviewed_capability");
     expect(implementation).not.toContain('resource "aws_lambda_function_event_invoke_config"');
+  });
+
+  it("keeps research-only invocation explicit and mutually exclusive with scheduling", () => {
+    const lambda = compact(block(implementation, 'resource "aws_lambda_function" "delegated_worker"'));
+    expect(lambda).toContain('DELEGATED_WORKER_RESEARCH_ONCE_ENABLED = var.delegated_worker_research_once_enabled ? "true" : "false"');
+    expect(lambda).toContain('condition = !(var.delegated_worker_research_once_enabled && var.delegated_worker_schedule_enabled)');
+    expect(lambda).toContain('Research-only invocation requires continuous scheduling to remain disabled.');
+    expect(implementation).not.toContain('resource "aws_lambda_function_event_invoke_config"');
+    expect(implementation).not.toContain('resource "aws_lambda_function_url"');
   });
 
   it("retains provider constraints, account allowlist and legacy tags without child provider configuration", () => {

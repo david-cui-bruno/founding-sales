@@ -187,9 +187,39 @@ export class DynamoWorkerAccountRepository implements AccountResearchStore {
       // A previously used non-evidence command cannot impersonate a job receipt.
       this.store.absent(receiptKey(parsed.commandId))]);
   }
+  /** Exact read only. Never settles stale claims or publishes events. */
+  async readJob(id: string) {
+    const row = await this.store.get<unknown>(jobKey(z.uuid().parse(id)));
+    if (!row) return null;
+    const job = jobSchema.parse(row.data);
+    if (job.id !== id || job.receiptCommandId !== id) throw new Error('research_job_identity_conflict');
+    if (job.receiptCommitted) {
+      const receipt = await this.store.get<Receipt>(receiptKey(job.receiptCommandId));
+      if (!receipt || receipt.data.kind !== 'evidence' || receipt.data.accountId !== job.accountId || receipt.data.claimToken !== job.claimToken) throw new Error('research_receipt_conflict');
+    }
+    return job;
+  }
+  /** Selected before ANY mutation. A race/ambiguous acknowledgment never
+   * falls through to another job or starts an unreceipted running claim. */
+  async claimExact(id: string, asOf: string, expected?: Pick<ResearchJob, 'accountId' | 'limits'>): Promise<ResearchJob | null> {
+    accountInstantSchema.parse(asOf); z.uuid().parse(id);
+    const stored = await this.store.get<unknown>(jobKey(id));
+    if (!stored) return null;
+    const job = jobSchema.parse(stored.data);
+    if (job.id !== id || job.receiptCommandId !== id || expected && (job.accountId !== expected.accountId || fingerprint(job.limits) !== fingerprint(expected.limits))) throw new Error('research_job_identity_conflict');
+    try { return await this.claimRows([{ stored }], asOf); }
+    catch (error) {
+      const current = await this.readJob(id);
+      if (current && current.state !== 'queued') return null;
+      throw error;
+    }
+  }
   async claimNext(asOf: string): Promise<ResearchJob | null> {
     accountInstantSchema.parse(asOf);
     const jobs = await this.store.list<unknown>('JOB#');
+    return this.claimRows(jobs, asOf);
+  }
+  private async claimRows(jobs: { stored: Stored<unknown> }[], asOf: string): Promise<ResearchJob | null> {
     for (const { stored } of jobs) {
       const job = jobSchema.parse(stored.data);
       if (job.state === 'running' && job.receiptCommitted) {

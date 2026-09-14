@@ -7,7 +7,9 @@ export type Budget = z.infer<typeof budgetSchema>;
 const inputSchema = z.strictObject({ commandId: z.uuid(), workspaceId: accountIdSchema, budgetId: accountIdSchema,
   inputFingerprint: z.string().regex(/^[a-f0-9]{64}$/), searchCostMicros: integer.positive(), modelCostMicros: integer.positive() });
 const candidatesSchema = z.array(z.strictObject({ name: accountSchema.shape.name, domain: accountSchema.shape.domain.unwrap(), sourceUrl: z.url().max(2048) })).max(50);
-const reservationSchema = inputSchema.extend({ reserved: integer.positive(), candidates: candidatesSchema.nullable(), costMicros: integer.nullable(), completed: z.boolean() });
+export const researchOnceBindingSchema = z.strictObject({ pairingId: z.uuid(), researchFingerprint: z.string().regex(/^[a-f0-9]{64}$/), sourceRevision: integer.positive() });
+type ReservationOptions = RepositoryOptions & { researchOnceBinding?: z.infer<typeof researchOnceBindingSchema> };
+const reservationSchema = inputSchema.extend({ reserved: integer.positive(), candidates: candidatesSchema.nullable(), costMicros: integer.nullable(), completed: z.boolean(), researchOnceBinding: researchOnceBindingSchema.optional() });
 type Record = z.infer<typeof reservationSchema>;
 export const budgetKey = (id: string) => `BUDGET#discovery#${keyPart(id)}`;
 const reservationKey = (id: string) => `DISCOVERY#${keyPart(id)}`;
@@ -19,7 +21,14 @@ export function planDiscoveryBudget(store: DynamoStore, input: { budgetId: strin
 }
 export class DynamoDiscoveryReservationStore implements DiscoveryReservationStore {
   private readonly store: DynamoStore;
-  constructor(options: RepositoryOptions) { this.store = new DynamoStore(options); }
+  constructor(private readonly options: ReservationOptions) { this.store = new DynamoStore(options); }
+  async readRun(id: string) {
+    const row = await this.store.get<unknown>(reservationKey(z.uuid().parse(id)));
+    if (!row) return null;
+    const data = reservationSchema.parse(row.data);
+    if (data.commandId !== id || data.workspaceId !== this.store.options.workspaceId) throw new Error('discovery_fingerprint_conflict');
+    return data;
+  }
   /** Operator/authenticated configuration capability, never invoked by preparation
    * or a constructor. Immutable ceiling: new UUIDs cannot reset spent. */
   async approveBudget(input: { budgetId: string; limitMicros: number }): Promise<void> {
@@ -29,6 +38,7 @@ export class DynamoDiscoveryReservationStore implements DiscoveryReservationStor
   }
   private replay(record: Stored<Record>, input: DiscoveryReservationInput): DiscoveryReservationResult {
     const prior = reservationSchema.parse(record.data);
+    if (this.options.researchOnceBinding && fingerprint(prior.researchOnceBinding ?? null) !== fingerprint(this.options.researchOnceBinding)) throw new Error('research_once_binding_conflict');
     if (fingerprint({ commandId: prior.commandId, workspaceId: prior.workspaceId, budgetId: prior.budgetId, inputFingerprint: prior.inputFingerprint, searchCostMicros: prior.searchCostMicros, modelCostMicros: prior.modelCostMicros }) !== fingerprint(input)) throw new Error('discovery_fingerprint_conflict');
     return { status: 'replay', candidates: prior.completed ? prior.candidates : null };
   }
@@ -45,7 +55,7 @@ export class DynamoDiscoveryReservationStore implements DiscoveryReservationStor
     const next = { ...budget, spent: budget.spent + cost };
     try {
       await this.store.transact([this.store.put(budgetKey(parsed.budgetId), next, row.rev, { limit: budget.limit, spent: next.spent }, { limit: budget.limit, spent: budget.spent }),
-        this.store.put(key, { ...parsed, reserved: cost, candidates: null, costMicros: null, completed: false }, null)]);
+        this.store.put(key, { ...parsed, reserved: cost, candidates: null, costMicros: null, completed: false, ...(this.options.researchOnceBinding ? { researchOnceBinding: researchOnceBindingSchema.parse(this.options.researchOnceBinding) } : {}) }, null)]);
     } catch (error) {
       const committed = await this.store.get<Record>(key);
       if (committed) return this.replay(committed, parsed);
@@ -78,4 +88,4 @@ export class DynamoDiscoveryReservationStore implements DiscoveryReservationStor
     await this.store.transact(writes);
   }
 }
-export function createDiscoveryReservationStore(options: RepositoryOptions): DynamoDiscoveryReservationStore { return new DynamoDiscoveryReservationStore(options); }
+export function createDiscoveryReservationStore(options: ReservationOptions): DynamoDiscoveryReservationStore { return new DynamoDiscoveryReservationStore(options); }

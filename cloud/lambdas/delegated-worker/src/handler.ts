@@ -1,7 +1,8 @@
+import { executeResearchOnce, productionResearchBoundaries, researchProfile } from './researchProduction';
+import { parseResearchOnce, type ResearchOnceRequest, type ResearchOnceResult } from './researchOnceContract';
 import { ResearchSetupService, type ResearchSetupProfile } from './researchSetup';
 import {WorkerPolicyConfiguration} from './policyConfiguration';
-import { lookup } from 'node:dns/promises';
-import { createPinnedPageHttp, type PageHttp } from '../../../../src/main/research/companyPageProvider';
+import type { PageHttp } from '../../../../src/main/research/companyPageProvider';
 import { createSourceCoordinator } from './sourceCoordinator';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { GetParameterCommand, SSMClient, type GetParameterCommandOutput } from '@aws-sdk/client-ssm';
@@ -125,7 +126,7 @@ export function createWorkerHandler(input: { auth: WorkerAuth; host: string; goo
     }
   };
 }
-export type ProductionBoundaries = { dynamo?: DynamoAdapter; ssm?: { send(command: GetParameterCommand): Promise<GetParameterCommandOutput> }; fetch?: typeof globalThis.fetch; pageHttp?: PageHttp; resolve?: (hostname:string)=>Promise<string[]> };
+export type ProductionBoundaries = { dynamo?: DynamoAdapter; ssm?: { send(command: GetParameterCommand, options?: { abortSignal: AbortSignal }): Promise<GetParameterCommandOutput> }; fetch?: typeof globalThis.fetch; pageHttp?: PageHttp; resolve?: (hostname:string)=>Promise<string[]> };
 /** Same factory serves Lambda and explicitly authorized operator bootstrap.
  * The default/partial environment is inert. Tests replace SDK/provider I/O only. */
 export async function createProductionServices(env: NodeJS.ProcessEnv, boundaries: ProductionBoundaries = {}) {
@@ -153,21 +154,26 @@ export async function createProductionServices(env: NodeJS.ProcessEnv, boundarie
     googleConfig = { clientId: env.DELEGATED_GOOGLE_CLIENT_ID!, clientSecret, encryptionKey: Buffer.from(encodedKey, 'base64'), redirectUri: `https://${config.DELEGATED_WORKER_HOST}/oauth/callback` };
   }
   const google = new RemoteGoogleAuthorization({ auth, config: googleConfig, fetch: boundaries.fetch });
-  const researchSetupProfile: ResearchSetupProfile = { reviewedCapability: env.DELEGATED_RESEARCH_REVIEWED_CAPABILITY, credentialParameterDeclared: typeof env.DELEGATED_RESEARCH_CREDENTIAL_PARAMETER === 'string' && env.DELEGATED_RESEARCH_CREDENTIAL_PARAMETER.startsWith(`/delegated-worker/${config.DELEGATED_WORKSPACE_ID}/`) && env.DELEGATED_RESEARCH_CREDENTIAL_PARAMETER.length > `/delegated-worker/${config.DELEGATED_WORKSPACE_ID}/`.length };
-  const source=createSourceCoordinator({auth,authorization:google,researchSetupProfile,fetch:boundaries.fetch??globalThis.fetch,
-    research:{pageHttp:boundaries.pageHttp??createPinnedPageHttp(),resolve:boundaries.resolve??(async hostname=>(await lookup(hostname,{all:true})).map(item=>item.address)),
-      loadCredentials:async(workspaceId,signal)=>{
-        signal.throwIfAborted(); if(workspaceId!==config.DELEGATED_WORKSPACE_ID) throw new Error('research_workspace_mismatch');
-        const path=z.string().startsWith(`/delegated-worker/${workspaceId}/`).parse(env.DELEGATED_RESEARCH_CREDENTIAL_PARAMETER);
-        const ssm=boundaries.ssm??new SSMClient({region:config.AWS_REGION,maxAttempts:1});
-        const result=await ssm.send(new GetParameterCommand({Name:path,WithDecryption:true})); signal.throwIfAborted();
-        if(result.Parameter?.Type!=='SecureString'||!result.Parameter.Value) throw new Error('research_unconfigured');
-        return z.strictObject({apiKey:z.string().min(1).max(16384),model:z.string().min(1).max(255)}).parse(JSON.parse(result.Parameter.Value));
-      }}});
+  const researchSetupProfile = researchProfile(env);
+  const source = createSourceCoordinator({ auth, authorization: google, researchSetupProfile, fetch: boundaries.fetch ?? globalThis.fetch,
+    research: productionResearchBoundaries(env, boundaries) });
   return { auth, google, source, researchSetup: new ResearchSetupService({ auth, profile: researchSetupProfile }), handle: createWorkerHandler({ auth, google, researchSetupProfile, host: config.DELEGATED_WORKER_HOST }) };
 }
 export function createProductionHandler(env: NodeJS.ProcessEnv, boundaries: ProductionBoundaries = {}) {
-  return async (event: unknown): Promise<WorkerHttpResponse> => {
+  const invoke = async (event: unknown, context?: { getRemainingTimeInMillis(): number }): Promise<WorkerHttpResponse | ResearchOnceResult> => {
+    // Native only. Never route a JSON HTTP body to internal execution.
+    if (event && typeof event === 'object' && 'kind' in event && typeof event.kind === 'string' && event.kind.startsWith('research.once')) {
+      const started = Date.now();
+      const request = parseResearchOnce(event);
+      const controller = new AbortController();
+      const remaining = context ? context.getRemainingTimeInMillis() : 60000;
+      const duration = Math.max(0, Math.min(45000, remaining - 5000) - (Date.now() - started));
+      const timer = setTimeout(() => controller.abort(), duration);
+      if (!duration) controller.abort();
+      try { return await executeResearchOnce(env, boundaries, request, controller.signal); }
+      catch { throw new Error('research_once_unavailable'); }
+      finally { clearTimeout(timer); controller.abort(); }
+    }
     let recognizedSchedule = false;
     try {
       const scheduled=z.object({source:z.literal('aws.events'),'detail-type':z.literal('Scheduled Event'),resources:z.array(z.string()).length(1)}).safeParse(event);
@@ -192,7 +198,13 @@ export function createProductionHandler(env: NodeJS.ProcessEnv, boundaries: Prod
       return response(503, { error: 'worker_unavailable' });
     }
   };
+  return invoke as {
+    (event: ResearchOnceRequest, context?: { getRemainingTimeInMillis(): number }): Promise<ResearchOnceResult>;
+    (event: unknown, context?: { getRemainingTimeInMillis(): number }): Promise<WorkerHttpResponse>;
+  };
 }
-export async function handler(event: unknown): Promise<WorkerHttpResponse> {
-  return createProductionHandler(process.env)(event);
+export function handler(event: ResearchOnceRequest, context?: { getRemainingTimeInMillis(): number }): Promise<ResearchOnceResult>;
+export function handler(event: unknown, context?: { getRemainingTimeInMillis(): number }): Promise<WorkerHttpResponse>;
+export async function handler(event: unknown, context?: { getRemainingTimeInMillis(): number }): Promise<WorkerHttpResponse | ResearchOnceResult> {
+  return createProductionHandler(process.env)(event, context);
 }
