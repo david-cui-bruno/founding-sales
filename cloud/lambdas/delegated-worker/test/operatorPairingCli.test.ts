@@ -2,9 +2,11 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
-const executable = resolve('out/operator-pairing.cjs');
-const networkGuard = resolve('test/fixtures/operatorNetworkDenied.mjs');
+const packageRoot = fileURLToPath(new URL('../', import.meta.url));
+const executable = resolve(packageRoot, 'out/operator-pairing.cjs');
+const networkGuard = resolve(packageRoot, 'test/fixtures/operatorNetworkDenied.mjs');
 const args = ['--account', '123456789012', '--region', 'us-east-1', '--table', 'worker-table',
   '--workspace', 'workspace-one', '--expires', '60', '--scopes', 'events:read', '--output', '/not-authorized/operator-code'];
 // Actual built public command, not a copied implementation. Node permissions deny
@@ -18,7 +20,7 @@ function invoke(input: string[]) {
   });
 }
 beforeAll(() => {
-  execFileSync(process.execPath, ['build-operator.mjs'], { timeout: 30_000, stdio: 'pipe' });
+  execFileSync(process.execPath, [resolve(packageRoot, 'build-operator.mjs')], { timeout: 30_000, stdio: 'pipe' });
 }, 35_000);
 
 describe('built operator command offline acceptance', () => {
@@ -51,6 +53,6 @@ describe('built operator command offline acceptance', () => {
   });
   it('keeps operator code outside the Lambda archive directory', () => {
     expect(existsSync(executable)).toBe(true);
-    expect(existsSync(resolve('dist/operator-pairing.cjs'))).toBe(false);
+    expect(existsSync(resolve(packageRoot, 'dist/operator-pairing.cjs'))).toBe(false);
   });
 });
