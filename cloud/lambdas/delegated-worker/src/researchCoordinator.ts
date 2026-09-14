@@ -8,6 +8,7 @@ import { createCompanyPageProvider, type PageHttp } from '../../../../src/main/r
 import { createFetchedReceiptPolicy } from '../../../../src/main/research/companySourcePolicy';
 import { createCompanyPreparation, createCompanyResearchWorker } from '../../../../src/main/research/companyResearchWorker';
 import { createCompanyDiscoveryProvider, requestCompanyDiscovery } from '../../../../src/main/research/companyDiscoveryProvider';
+import { requestGuidedCompanyDiscovery, validateGuidedDiscoverySources } from '../../../../src/main/research/guidedCompanyDiscoveryProvider';
 import { createWorkerAccountRepository } from './workerAccountRepository';
 import { budgetSchema, createDiscoveryReservationStore } from './discoveryReservationStore';
 import type { SourceTickReport } from './sourceCoordinator';
@@ -91,11 +92,21 @@ export async function runResearch(input: ResearchCoordinatorOptions, signal: Abo
     } } : {}) };
     const accounts = createWorkerAccountRepository(options);
     const reservations = createDiscoveryReservationStore(options);
+    // Only a trusted native cycle selects the cited single-company transport.
+    // Existing receipts replay unchanged, including exhausted-budget settlement.
+    // New unusable scopes must fail before a discovery reservation or credential read.
+    const citedCycle = Boolean(once && input.resolvedCycle);
+    if (citedCycle && !await reservations.readRun(runId)) validateGuidedDiscoverySources(settings.permittedSources);
     const discovery = createCompanyDiscoveryProvider({ capability: settings.capability, request: async (query, limits, requestSignal) => {
       await guard(); const credentials = await boundaries.loadCredentials(config.workspaceId, requestSignal);
       await guard();
       if (credentials.model !== settings.capability.model) throw new Error('research_model_mismatch');
-      try { return await requestCompanyDiscovery({ query, limits, capability: settings.capability, credentials, signal: requestSignal, fetch: input.fetch }); }
+      try {
+        const request = { query, limits, capability: settings.capability, credentials, signal: requestSignal, fetch: input.fetch };
+        return await (citedCycle
+          ? requestGuidedCompanyDiscovery({ ...request, permittedSources: settings.permittedSources })
+          : requestCompanyDiscovery(request));
+      }
       catch (error) {
         if (!once || signal.aborted || error instanceof ResearchDiscoveryError) throw error;
         throw new Error('research_discovery_uncertain');

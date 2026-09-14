@@ -361,3 +361,49 @@ are retained in the summary. This is diagnosis only: a historic missing payload
 is unrecoverable, and these counts cannot reconstruct or explain that payload.
 No replay, resume, deployment or additional provider call is authorized by this
 local diagnostic change.
+
+### Native v2 single-company cited transport
+
+New provider requests made through a trusted `research.cycle.execute` use a bounded
+single-company cited-text adapter. This is not a fallback: v1 original/successor,
+ordinary worker discovery, and desktop discovery retain their existing strict JSON
+adapter. A previously persisted discovery result replays its original candidates,
+including empty results, without relabelling or another discovery call. Existing
+uncertain reservations remain held. Page-claim and evidence-to-settlement recovery
+remain unchanged, including recovery when the page budget is fully reserved.
+
+Before a fresh cycle reserves discovery spend or loads credentials, its permitted
+sources must contain between 1 and 100 distinct exact HTTPS roots of the form
+`https://hostname/` accepted by the existing source policy. Permitted deep pages do
+not authorize a synthesized root. Invalid fresh scope produces the existing sanitized
+`research_cycle_unavailable` native error before reservation or credential loading.
+This is a preflight refusal, not an uncertain provider run.
+The provider receives those hosts as a search
+filter, but the local validator still requires exact host equality. It does not
+accept implied `www`, subdomains, redirected aliases, or normalized URL matches.
+Permission to fetch a root is not independent proof of company identity or fit.
+
+The ordinary text response must contain exactly one fenced JSON `{name,domain}`
+record, the fixed sentence `Source for selected company.`, and one bounded native
+citation marker. There may be only one distinct URL across all native URL citation
+annotations, and that original URL must occur exactly in consulted-source metadata.
+The selected domain must exactly match its host and an approved root. Marker IDs
+are never resolved into URLs. Annotation titles never supply a company name.
+The model-selected name retains the existing candidate semantics, not a verified
+identity claim. The existing permitted page fetch and fetched-receipt checks are
+still required before admitting factual account evidence.
+
+Missing annotations, additional records/prose, ambiguous URLs, out-of-scope hosts,
+or missing exact corroboration fail closed. An uncited empty response is not a
+successful empty result in this transport. The old `citationSummary` counters are
+not invented here because this record has no independently proposed source URL.
+Errors remain bounded reasons only, with no raw output, name, query, or URL logged.
+
+This changes the output transport, not the request count, configured model,
+reservation amount, timeout, maximum output tokens, or tool-call cap. Local fixtures
+can verify parsing, authority, persistence, and replay, but cannot demonstrate that
+the pinned hosted model emits this citation-marker layout or that removing strict
+JSON fixes the observed missing annotations. Hosted compatibility and useful-company
+acceptance remain unproven until a separately reviewed live qualification. Do not
+loosen the grammar, repeat an uncertain execution, or admit another cycle merely
+because an output is rejected. This code change itself authorizes no live action.
