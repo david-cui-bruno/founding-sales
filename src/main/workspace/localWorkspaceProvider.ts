@@ -1,5 +1,6 @@
-import { admitCompanyDraftEmailSchema, openCompanyDraftSchema, getCompanyDraftSchema, saveCompanyDraftSchema, companyDraftAdmissionReply, companyDraftOpenReply, companyDraftGetReply, companyDraftSaveReply } from '../../shared/contracts/localCompanyDraftContract';
+import { admitCompanyDraftEmailSchema, openCompanyDraftSchema, getCompanyDraftSchema, saveCompanyDraftSchema, companyDraftAdmissionReply, companyDraftOpenReply, companyDraftGetReply, companyDraftSaveReply, prepareCompanyDraftSchema, companyDraftPrepareReply } from '../../shared/contracts/localCompanyDraftContract';
 import { LocalCompanyDraftRepository } from '../domain/accounts/localCompanyDraftRepository';
+import type { CompanyDraftPreparationPort } from '../outreach/companyDraftPreparationService';
 import { companyResearchSettingsSchema, companyResearchSettingsUpdateReplySchema, updateCompanyResearchSettingsRequestSchema } from '../../shared/contracts/localCompanyResearchSettingsContract';
 import { getCompanyResearchProfiles } from '../research/knownCompanyRequestProfile';
 import { localCompanyInputSchema, localCompanyCreateRequestSchema } from '../../shared/contracts/localCompanyIntakeContract';
@@ -15,7 +16,8 @@ export type SelectedCompanyResearchPort = {
 };
 export type CompanyResearchSettingsLifecycle = { pairedResearchPresent(): Promise<boolean>; changed(): Promise<void> };
 export function createLocalWorkspaceProvider(runtime: Pick<FoundationRuntime, 'withDatabase' | 'withDomain'>,
-  research?: { current(): SelectedCompanyResearchPort | null }, settings?: CompanyResearchSettingsLifecycle): LocalWorkspaceApi {
+  research?: { current(): SelectedCompanyResearchPort | null }, settings?: CompanyResearchSettingsLifecycle,
+  preparation?: CompanyDraftPreparationPort): LocalWorkspaceApi {
   const clock = new SystemClock();
   const ids = new UuidGenerator();
   const validateStatus = (selected: SelectedResearch, value: unknown): LocalCompanyResearchStatus => {
@@ -34,6 +36,11 @@ export function createLocalWorkspaceProvider(runtime: Pick<FoundationRuntime, 'w
     return companyResearchSettingsSchema.parse({ ...record, profiles: getCompanyResearchProfiles(), blockedReason, reservedOrSpentMicros });
   };
   return {
+    prepareCompanyDraft: async input => {
+      const parsed = Object.freeze(prepareCompanyDraftSchema.parse(input));
+      if (!preparation) throw new Error('Company preparation unavailable');
+      return companyDraftPrepareReply(parsed).parse(await preparation.prepareCompanyDraft(parsed));
+    },
     admitCompanyDraftEmail: async input => { const parsed = Object.freeze(admitCompanyDraftEmailSchema.parse(input)); return companyDraftAdmissionReply(parsed).parse(await runtime.withDomain(domain => domain.admitCompanyDraftEmail(parsed))); },
     openCompanyDraft: async input => { const parsed = Object.freeze(openCompanyDraftSchema.parse(input)); return companyDraftOpenReply(parsed).parse(await runtime.withDomain(domain => domain.openCompanyDraft(parsed))); },
     saveCompanyDraft: async input => { const parsed = Object.freeze(saveCompanyDraftSchema.parse(input)); return companyDraftSaveReply(parsed).parse(await runtime.withDomain(domain => domain.saveCompanyDraft(parsed))); },

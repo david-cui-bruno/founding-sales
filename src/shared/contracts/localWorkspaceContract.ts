@@ -1,4 +1,4 @@
-import type { AdmitCompanyDraftEmail, OpenCompanyDraft, GetCompanyDraft, SaveCompanyDraft, CompanyDraftAdmissionReceipt, CompanyDraftRead, CompanyDraftMutationResult } from './localCompanyDraftContract';
+import type { AdmitCompanyDraftEmail, OpenCompanyDraft, GetCompanyDraft, SaveCompanyDraft, CompanyDraftAdmissionReceipt, CompanyDraftRead, CompanyDraftMutationResult, PrepareCompanyDraft, PreparedCompanyDraft } from './localCompanyDraftContract';
 import type { CompanyResearchSettings, UpdateCompanyResearchSettingsRequest } from './localCompanyResearchSettingsContract';
 export * from './localCompanyResearchSettingsContract';
 import { z } from 'zod';
@@ -104,6 +104,7 @@ export type LocalWorkflowReceipt = z.infer<typeof localWorkflowReceiptSchema>;
 export type LocalWorkspaceSnapshot = z.infer<typeof localWorkspaceSnapshotSchema>;
 export type LocalCommitmentsSnapshot = z.infer<typeof localCommitmentsSnapshotSchema>;
 export interface LocalWorkspaceApi {
+  prepareCompanyDraft(input: PrepareCompanyDraft): Promise<PreparedCompanyDraft>;
   admitCompanyDraftEmail(input: AdmitCompanyDraftEmail): Promise<CompanyDraftAdmissionReceipt>;
   openCompanyDraft(input: OpenCompanyDraft): Promise<CompanyDraftMutationResult>;
   getCompanyDraft(input: GetCompanyDraft): Promise<CompanyDraftRead | null>;

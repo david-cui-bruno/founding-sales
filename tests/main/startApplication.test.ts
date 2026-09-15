@@ -268,6 +268,104 @@ describe('startApplication', () => {
     expect(events.indexOf('email-unregister')).toBeLessThan(events.indexOf('close'));
   });
 
+  it('composes company preparation with the shared model and fences startup lifecycle changes', async () => {
+    const { randomUUID, createHash } = await import('node:crypto');
+    const { createPmFixture, PM_NOW } = await import('../fixtures/pmAccounts');
+    const { LocalCompanyDraftRepository } = await import('../../src/main/domain/accounts/localCompanyDraftRepository');
+    const { createEmailService } = await import('../../src/main/outreach/emailService');
+    type Generated = import('../../src/main/outreach/providers/providerTypes').GeneratedDraft;
+    type Providers = import('../../src/main/outreach/providers/providerTypes').OutreachProviders;
+    const f = await createPmFixture();
+    const dependencies = createDependencies([]);
+    let app: Awaited<ReturnType<typeof startApplication>> | undefined;
+    let release: ReturnType<typeof deferred<void>> | undefined;
+    let entered: ReturnType<typeof deferred<void>> | undefined;
+    const pending: Promise<unknown>[] = [];
+    const forbidden = vi.fn((): never => { throw Error('Unexpected external operation'); });
+    const status: Awaited<ReturnType<Providers['status']>> = { model: 'ready', modelName: 'fixture-model',
+      gmail: 'unconfigured', accountEmail: null, senderName: '', postalAddress: '' };
+    const generate = vi.fn<Providers['generate']>(async (context, signal): Promise<Generated> => {
+      expect(f.db.raw.inTransaction).toBe(false);
+      expect(signal.aborted).toBe(false);
+      expect(context).toMatchObject({ recipientKind: 'company_business_inbox', companyName: 'Startup Fictional PM' });
+      const waiting = release;
+      entered?.resolve();
+      if (waiting) await waiting.promise; // Deliberately ignore abort to test the composed service's own fence.
+      return { subject: 'Residential maintenance', body: 'Hello company team, how do you coordinate maintenance for residential homes?',
+        evidenceIds: [context.facts[0]!.id], provider: 'openai', model: 'fixture-model', responseId: 'fixture-response' };
+    });
+    const manager: ReturnType<NonNullable<ApplicationStartupDependencies['createResearchProviders']>> = {
+      generate, status: vi.fn(async () => status), configure: vi.fn(async () => status),
+      connectGmail: forbidden, disconnectGmail: forbidden, prepare: forbidden, researchCompanies: forbidden,
+      invalidate: vi.fn(), dispose: vi.fn(),
+    };
+    const factory = vi.fn(() => manager);
+    dependencies.createResearchProviders = factory;
+    dependencies.openDatabase = () => f.db;
+    // Existing PM fixture owns physical close. Existing startup doubles still own unrelated services.
+    let email!: ReturnType<typeof createEmailService>;
+    dependencies.createEmailService = (runtime, _path, shared) => {
+      expect(shared).toBeDefined(); expect(shared!.generate).toBe(manager.generate);
+      email = createEmailService({ databaseGate: runtime, providers: shared! }); return email;
+    };
+    dependencies.registerOutreachIpc = () => () => undefined;
+    const register = vi.fn<ApplicationStartupDependencies['registerApplicationIpc']>(() => () => undefined);
+    dependencies.registerApplicationIpc = register;
+    let callbacks!: Parameters<NonNullable<ApplicationStartupOptions['registerOutboundLifecycle']>>[0];
+    try {
+      const account = f.repo.create({ commandId: randomUUID(), name: 'Startup Fictional PM', domain: 'example.invalid' });
+      const sourceId = randomUUID(), routeId = randomUUID();
+      const excerpt = 'We manage residential homes.\nBusiness email: team@example.invalid';
+      const admitted = f.repo.admitEvidence({ commandId: randomUUID(), accountId: account.id, expectedVersion: account.version,
+        sources: [{ id: sourceId, url: 'https://example.invalid/team', fetchedAt: PM_NOW, permitted: true,
+          excerpt, sha256: createHash('sha256').update(excerpt).digest('hex') }],
+        claims: [{ key: 'residential_scope', kind: 'fact', value: 'Residential homes', evidenceIds: [sourceId] }],
+        routes: [{ id: routeId, accountId: account.id, personId: null, channel: 'email', value: 'team@example.invalid',
+          purpose: 'business', verification: 'published', evidenceIds: [sourceId] }] });
+      const drafts = new LocalCompanyDraftRepository({ database: f.db, clock: { now: () => PM_NOW }, ids: { next: randomUUID } });
+      const opened = drafts.open({ commandId: randomUUID(), accountId: account.id, routeId,
+        expectedRouteVersion: 1, expectedAccountVersion: admitted.version }).current;
+      expect(opened).toMatchObject({ stale: false, editable: true, draft: { subject: '', body: '' } });
+      app = await startApplication({ appVersion: '1', userDataPath: '/fixture/company-preparation', createWindow: () => undefined,
+        registerOutboundLifecycle: owned => { callbacks = owned; return () => undefined; } }, dependencies);
+      expect(factory).toHaveBeenCalledTimes(1); expect(register).toHaveBeenCalledTimes(1);
+      const port = register.mock.calls[0]![9]?.companyDraftPreparation;
+      expect(port).toBeDefined(); expect(generate).not.toHaveBeenCalled();
+      if (!port) throw Error('Startup did not expose company preparation');
+      const request = { accountId: account.id, draftId: opened.draft.id, expectedRevision: opened.draft.revision };
+      const preview = await port.prepareCompanyDraft(request);
+      expect(preview).toMatchObject({ accountId: account.id, draftId: opened.draft.id, baseRevision: 1,
+        recipientBinding: opened.draft.recipientBinding, subject: 'Residential maintenance' });
+      expect(generate).toHaveBeenCalledTimes(1);
+      expect(drafts.get({ accountId: account.id, draftId: opened.draft.id })).toEqual(opened);
+      for (const change of ['lock', 'wake', 'reconfigure', 'dispose'] as const) {
+        release = deferred<void>(); entered = deferred<void>();
+        const result = port.prepareCompanyDraft(request); pending.push(result);
+        const rejected = expect(result).rejects.toThrow();
+        await Promise.race([entered.promise, result.then(() => { throw Error('Expected deferred provider'); })]);
+        if (change === 'lock') callbacks.onLock();
+        else if (change === 'wake') callbacks.onWake();
+        else if (change === 'reconfigure') await email.configure({ model: 'fixture-updated' });
+        else await app.shutdown();
+        expect(generate.mock.calls.at(-1)![1].aborted).toBe(true);
+        release.resolve(); await rejected;
+        if (change === 'lock' || change === 'dispose') {
+          const calls = generate.mock.calls.length;
+          await expect(Promise.resolve().then(() => port.prepareCompanyDraft(request))).rejects.toThrow();
+          expect(generate).toHaveBeenCalledTimes(calls);
+        }
+        if (change === 'lock') callbacks.onUnlock();
+      }
+      expect(generate).toHaveBeenCalledTimes(5);
+      expect(manager.configure).toHaveBeenCalledTimes(1); expect(manager.dispose).toHaveBeenCalledTimes(1);
+      expect(drafts.get({ accountId: account.id, draftId: opened.draft.id })).toEqual(opened);
+      expect(forbidden).not.toHaveBeenCalled();
+    } finally {
+      release?.resolve(); await Promise.allSettled(pending);
+      await app?.shutdown(); f.close();
+    }
+  }, 30_000);
+
   it('constructs one outbound service after initialization, registers lifecycle before exposure and passes argument nine unchanged', async () => {
     const events: string[] = [];
     const dependencies = createDependencies(events);

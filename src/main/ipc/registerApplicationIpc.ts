@@ -1,5 +1,6 @@
 import { registerLocalWorkspaceIpc } from '../workspace/registerLocalWorkspaceIpc';
 import { createLocalWorkspaceProvider, type SelectedCompanyResearchPort, type CompanyResearchSettingsLifecycle } from '../workspace/localWorkspaceProvider';
+import type { CompanyDraftPreparationPort } from '../outreach/companyDraftPreparationService';
 import { registerDailyIpc } from '../today/registerDailyIpc';
 import type { DailyApi } from '../../shared/contracts/dailyContract';
 import { createDiscoveryProvider } from '../discovery/discoveryProvider';
@@ -255,7 +256,8 @@ export function registerApplicationIpc(
   enrichmentRequester?: EnrichmentRequester,
   logDirectoryPath?: string,
   outbound?: OutboundCommandServiceApi,
-  options?: { selectedCompanyResearch?: { current(): SelectedCompanyResearchPort | null }; companyResearchSettings?: CompanyResearchSettingsLifecycle },
+  options?: { selectedCompanyResearch?: { current(): SelectedCompanyResearchPort | null }; companyResearchSettings?: CompanyResearchSettingsLifecycle;
+    companyDraftPreparation?: CompanyDraftPreparationPort },
 ): () => void {
   if (sourcingProvider === undefined) {
     throw new Error('Sourcing provider is required.');
@@ -304,7 +306,7 @@ export function registerApplicationIpc(
       isTrustedRendererUrl,
     }),
     () => registrars.registerDailyIpc(createDailyProvider(runtime), isTrustedRendererUrl),
-    () => registrars.registerLocalWorkspaceIpc(createLocalWorkspaceProvider(runtime, options?.selectedCompanyResearch, options?.companyResearchSettings), isTrustedRendererUrl),
+    () => registrars.registerLocalWorkspaceIpc(createLocalWorkspaceProvider(runtime, options?.selectedCompanyResearch, options?.companyResearchSettings, options?.companyDraftPreparation), isTrustedRendererUrl),
   ];
 
   const unregisters: (() => void)[] = [];
