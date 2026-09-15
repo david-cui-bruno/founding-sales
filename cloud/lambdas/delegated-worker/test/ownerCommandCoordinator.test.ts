@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { ownerCommandSchema, type OwnerCommand } from '../../../../src/shared/contracts/ownerCommandContract';
+import { ownerCommandSchema, ownerSourceKey, type OwnerSourceConfiguration, type OwnerCommand } from '../../../../src/shared/contracts/ownerCommandContract';
 const envelope = { commandId: '11111111-1111-4111-8111-111111111111', workspaceId: 'ws', accountId: 'account', expectedAuthorityGeneration: 1, expectedVersion: 2 };
 it('accepts exact existing intent references but rejects caller permission flags and arbitrary dispatch contents', () => {
   const command = { ...envelope, kind: 'submit-approved-reply', payload: { intentCommandId: '22222222-2222-4222-8222-222222222222' } };
@@ -27,10 +27,10 @@ it('requires source-backed human basis and exact edited reply rather than permis
 
 import { OwnerCommandCoordinator } from '../src/ownerCommandCoordinator';
 import { ConditionalCommandHarness } from './sdkHarness';
-import { WorkerAuth } from '../src/workerAuth';
+import { WorkerAuth, pairingKey } from '../src/workerAuth';
 import { RemoteGoogleAuthorization } from '../src/remoteGoogleAuthorization';
-import { createExecutionRepository } from '../src/executionRepository';
-import { DynamoThreadIntakeRepository } from '../src/threadIntakeRepository';
+import { createExecutionRepository, executionAuthorityKey, executionAuthorityFields, authorityRecordSchema } from '../src/executionRepository';
+import { DynamoThreadIntakeRepository, mailDraftKey, mailThreadKey } from '../src/threadIntakeRepository';
 import { DynamoDispatchRepository } from '../src/dispatchRepository';
 import { DynamoStore, fingerprint } from '../src/dynamoStore';
 import type { AccountReplyDraft, MailMessage } from '../../../../src/shared/contracts/mailThreadContract';
@@ -311,4 +311,65 @@ it.each(['selected-large','ordinary-large','utf8-overlimit','ascii-overlimit','i
  expect(await auth.store.list('ACCOUNT#')).toHaveLength(scenario==='selected-large'?1:0);
  if(scenario==='selected-large')expect(JSON.parse(result.body)).toMatchObject({commandId:selected.commandId,status:'applied'});
  else expect(await auth.store.list('COMMAND#')).toEqual([]);
+});
+
+import { TransactWriteItemsCommand } from '@aws-sdk/client-dynamodb';
+import { createWorkerHandler } from '../src/handler';
+
+async function ordinaryOwnerFixture() {
+  const f = await approvalFixture();
+  const source: OwnerSourceConfiguration = { version: 1, workspaceId: 'ws', accountId: 'account', pairingId: f.pairing.pairingId, revision: 1, state: 'active', mailboxSubject: 'mailbox', calendarId: null, research: null };
+  await f.auth.store.transact([f.auth.store.put(ownerSourceKey('account'), source, null)]);
+  const draft = (await f.threads.getReplyDraft('account', 'draft'))!.draft;
+  const request = { workspaceId: 'ws', expectedAuthorityGeneration: 1, previousDraft: draft, edit: { subject: 'Edited subject', body: 'Non-approving edit' } };
+  const handler = createWorkerHandler({ auth: f.auth, google: f.google, host: 'ordinary.test' });
+  const post = (body: unknown = request) => handler({ version: '2.0', rawPath: '/reply/draft', rawQueryString: '', headers: { host: 'ordinary.test', 'x-forwarded-proto': 'https', authorization: `Bearer ${f.pairing.credential}` }, body: JSON.stringify(body), requestContext: { domainName: 'ordinary.test', http: { method: 'POST', sourceIp: 'synthetic' } } });
+  return { ...f, source, draft, request, post };
+}
+
+it.each(['source', 'authority', 'pairing', 'thread', 'draft'] as const)('ordinary owner transaction rejects a racing %s change without partial draft writes', async changed => {
+  const f = await ordinaryOwnerFixture(), store = f.auth.store;
+  const key = changed === 'source' ? ownerSourceKey('account') : changed === 'authority' ? executionAuthorityKey('account') : changed === 'pairing' ? pairingKey(f.pairing.pairingId) : changed === 'thread' ? mailThreadKey('account', 'thread') : mailDraftKey('account', 'draft');
+  const row = (await store.get<Record<string, unknown>>(key))!;
+  const data = changed === 'source' ? { ...row.data, revision: 2, state: 'paused' } : changed === 'pairing' ? { ...row.data, revoked: true, generation: 1 } : row.data;
+  const fields = changed === 'authority' ? executionAuthorityFields(authorityRecordSchema.parse(data)) : {};
+  let injected = false;
+  f.options.dynamo.beforeTransaction = () => {
+    f.options.dynamo.beforeTransaction = undefined;
+    injected = true;
+    // SDK boundary interception applies the competing write before checking the
+    // actual production transaction. No owner/repository method is replaced.
+    void f.options.dynamo.send(new TransactWriteItemsCommand({ TransactItems: [store.put(key, data, row.rev, fields)] }));
+  };
+  expect((await f.post()).statusCode).not.toBe(200);
+  expect(injected).toBe(true);
+  expect((await f.threads.getReplyDraft('account', 'draft'))?.draft).toEqual(f.draft);
+  expect(await store.list('DISPATCH_PERMISSION#')).toEqual([]);
+  expect(await store.list('DISPATCH_APPROVAL#')).toEqual([]);
+  expect(await store.list('DISPATCH_INTENT#')).toEqual([]);
+  const editTransaction = f.options.dynamo.transactions.at(-1)!;
+  const keys = editTransaction.TransactItems!.map(item => item.ConditionCheck?.Key?.sk?.S ?? item.Put?.Item?.sk?.S);
+  for (const required of [ownerSourceKey('account'), executionAuthorityKey('account'), pairingKey(f.pairing.pairingId), mailThreadKey('account', 'thread'), mailDraftKey('account', 'draft')]) expect(keys).toContain(required);
+  expect(keys.some(key => key?.startsWith('TOKEN#'))).toBe(true);
+});
+
+it('ordinary owner enforces exact saved identities, base fingerprint and expected generation', async () => {
+  const f = await ordinaryOwnerFixture();
+  for (const patch of [{ id: 'missing' }, { accountId: 'foreign' }, { threadId: 'other' }, { mailboxSubject: 'other' }, { recipient: 'other@example.test' }, { sender: 'other@example.test' }, { evidenceIds: ['invented'] }, { body: 'Unsaved predecessor' }]) {
+    expect((await f.post({ ...f.request, previousDraft: { ...f.draft, ...patch } })).statusCode).not.toBe(200);
+  }
+  expect((await f.post({ ...f.request, expectedAuthorityGeneration: 2 })).statusCode).not.toBe(200);
+  expect((await f.post({ ...f.request, edit: { ...f.request.edit, allowed: true } })).statusCode).not.toBe(200);
+  expect((await f.threads.getReplyDraft('account', 'draft'))?.draft).toEqual(f.draft);
+});
+
+it('ordinary canonical retry preserves the first owner timestamp and conflicts on different text', async () => {
+  const f = await ordinaryOwnerFixture();
+  const first = await f.post(); expect(first.statusCode).toBe(200);
+  const canonical = JSON.parse(first.body);
+  f.options.clock.now = () => '2026-09-08T12:00:01.000Z';
+  const retry = await f.post(); expect(retry.statusCode).toBe(200); expect(JSON.parse(retry.body)).toEqual(canonical);
+  expect((await f.post({ ...f.request, edit: { ...f.request.edit, body: 'Different next text' } })).statusCode).not.toBe(200);
+  const writes = f.options.dynamo.transactions.flatMap(tx => tx.TransactItems ?? []).filter(item => item.Put?.Item?.sk?.S === mailDraftKey('account', 'draft'));
+  expect(writes).toHaveLength(2); // fixture seed plus one canonical edit
 });

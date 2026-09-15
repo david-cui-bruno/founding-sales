@@ -2,7 +2,7 @@ import { mailScopeFingerprint } from './providers/gmailThreadProvider';
 import { accountFingerprint } from '../domain/accounts/accountEvidence';
 import { createHash } from 'node:crypto';
 import type { AppDatabase } from '../db/database';
-import { mailContextTuples, mailAccountScopeSchema, type MailAccountScope, mailCheckpointSchema, mailCursorEnvelopeSchema, type MailCursorEnvelope, threadProjectionSchema, accountReplyDraftSchema, type AccountReplyDraft, type SavedReplyDraft, type MailCheckpoint, type ThreadPage, type ThreadProjection, type IntakeResult } from '../../shared/contracts/mailThreadContract';
+import { assertReplyDraftLineage, mailContextTuples, mailAccountScopeSchema, type MailAccountScope, mailCheckpointSchema, mailCursorEnvelopeSchema, type MailCursorEnvelope, threadProjectionSchema, accountReplyDraftSchema, type AccountReplyDraft, type SavedReplyDraft, type MailCheckpoint, type ThreadPage, type ThreadProjection, type IntakeResult } from '../../shared/contracts/mailThreadContract';
 import { mergeThread, validateReplyDraftSave } from './threadIntake';
 /** Real SQL adapter. Intake, immutable optout evidence, context fence and mailbox
  * checkpoint share one immediate transaction. No network occurs under its lock. */
@@ -96,6 +96,26 @@ export class SqlThreadIntakeRepository {
         ON CONFLICT(workspace_id,account_id,id) DO UPDATE SET revision=excluded.revision,draft_json=excluded.draft_json,updated_at=excluded.updated_at`)
         .run(this.deps.workspaceId, draft.accountId, draft.id, draft.threadId, draft.revision, draft.threadRevision, draft.contextRevision, JSON.stringify(draft), draft.updatedAt);
       return draft;
+    }).immediate();
+  }
+  /** Trusted owner acknowledgement only. Never writes or rewinds received history. */
+  reconcileReplyDraft(previousInput: AccountReplyDraft, canonicalInput: AccountReplyDraft, assertOwner: () => void): SavedReplyDraft {
+    const previous = accountReplyDraftSchema.parse(previousInput), canonical = accountReplyDraftSchema.parse(canonicalInput), raw = this.deps.database.raw;
+    if (raw.inTransaction) throw Error('mail_draft_requires_own_transaction');
+    return raw.transaction(() => {
+      assertOwner();
+      assertReplyDraftLineage(previous, canonical);
+      const current = this.getReplyDraft(previous.accountId, previous.id);
+      if (!current) throw Error('reply_draft_missing');
+      if (accountFingerprint(current.draft) !== accountFingerprint(previous) && accountFingerprint(current.draft) !== accountFingerprint(canonical)) throw Error('stale_draft');
+      const thread = this.getThread(canonical.accountId, canonical.threadId);
+      if (!thread || thread.thread.accountId !== canonical.accountId || thread.thread.providerThreadId !== canonical.threadId || thread.thread.mailboxSubject !== canonical.mailboxSubject || thread.revision < canonical.threadRevision || thread.revision === canonical.threadRevision && thread.contextRevision !== canonical.contextRevision) throw Error('reply_history_unavailable');
+      raw.prepare('UPDATE delegated_reply_drafts SET revision=?,draft_json=?,updated_at=? WHERE workspace_id=? AND account_id=? AND id=?')
+        .run(canonical.revision, JSON.stringify(canonical), canonical.updatedAt, this.deps.workspaceId, canonical.accountId, canonical.id);
+      const saved = this.getReplyDraft(canonical.accountId, canonical.id);
+      if (!saved || accountFingerprint(saved.draft) !== accountFingerprint(canonical)) throw Error('reply_acknowledgement_failed');
+      assertOwner();
+      return saved;
     }).immediate();
   }
   applyPage(page: ThreadPage, expected: MailCheckpoint | null, attemptId?: string): IntakeResult[] {

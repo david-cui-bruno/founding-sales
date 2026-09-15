@@ -245,3 +245,29 @@ it.each([[false, 1000], [false, 1001], [true, 1000], [true, 1001]] as const)('di
     try { const restored = new SqlThreadIntakeRepository({ database: reopened, workspaceId: 'ws', clock: { now: () => PM_NOW } }); expect(restored.isSuppressed(account.id)).toBe(true); expect(restored.checkpoint(account.id, 'sub1')).toEqual(incoming.nextCursor); } finally { closeDatabase(reopened); }
   } finally { f.close(); }
 });
+
+it('trusted ordinary canonical recovery requires exact one-step lineage and never rewrites newer received history', async () => {
+  const f = await createPmFixture();
+  try {
+    const account = f.repo.create({ commandId: randomUUID(), name: 'Recovery account', domain: null });
+    new DelegationRepository({ database: f.db, workspaceId: 'ws', clock: { now: () => PM_NOW } }).initializeLocalAuthority(account.id);
+    const repo = new SqlThreadIntakeRepository({ database: f.db, workspaceId: 'ws', clock: { now: () => PM_NOW } });
+    const incoming = page(account.id); incoming.threads[0]!.messages[0]!.bodyParts[0]!.text = 'Please explain the details.';
+    const projection = repo.applyPage(incoming, null)[0]!.projection;
+    const prior = { id: 'recover', accountId: account.id, threadId: 't1', mailboxSubject: 'sub1', threadRevision: 1, contextRevision: projection.contextRevision, revision: 1, sender: 'founder@fixture.invalid', recipient: 'pm@fixture.invalid', subject: 'Saved draft', body: 'Initial saved text', evidenceIds: ['mail:m1'], generation: 'model' as const, updatedAt: PM_NOW };
+    repo.saveReplyDraft(prior, null);
+    const next = structuredClone(incoming); next.nextCursor.historyId = '12'; next.threads[0]!.messages[0]!.id = 'm2';
+    repo.applyPage(next, incoming.nextCursor);
+    const thread = repo.getThread(account.id, 't1');
+    const canonical = { ...prior, revision: 2, generation: 'edited' as const, body: 'Canonical owner commit' };
+    for (const bad of [{ ...canonical, revision: 3 }, { ...canonical, recipient: 'other@fixture.invalid' }, { ...canonical, evidenceIds: ['invented'] }, { ...canonical, contextRevision: 'rebased' }, { ...canonical, id: 'missing' }]) expect(() => repo.reconcileReplyDraft(prior, bad, () => undefined)).toThrow();
+    let calls = 0;
+    expect(() => repo.reconcileReplyDraft(prior, canonical, () => { if (++calls === 2) throw Error('Owner changed during acknowledgement'); })).toThrow();
+    expect(repo.getReplyDraft(account.id, prior.id)?.draft).toEqual(prior);
+    expect(repo.reconcileReplyDraft(prior, canonical, () => undefined)).toEqual({ draft: canonical, stale: true });
+    expect(repo.reconcileReplyDraft(prior, canonical, () => undefined)).toEqual({ draft: canonical, stale: true });
+    expect(() => repo.reconcileReplyDraft(canonical, prior, () => undefined)).toThrow();
+    expect(() => repo.saveReplyDraft({ ...canonical, revision: 3 }, 2)).toThrow('stale_thread');
+    expect(repo.getThread(account.id, 't1')).toEqual(thread);
+  } finally { f.close(); }
+});

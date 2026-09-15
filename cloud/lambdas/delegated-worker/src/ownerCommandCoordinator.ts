@@ -10,7 +10,7 @@ import { CampaignExecution } from './campaignExecution';
 import { WorkerCampaignRepository, campaignReservationKey, campaignReservationSchema, campaignEnrollmentKey } from './workerCampaignRepository';
 import { enrollmentSchema, campaignEventPayloadSchema } from '../../../../src/shared/contracts/campaignContract';
 import { QueryCommand,type AttributeValue,type TransactWriteItem } from '@aws-sdk/client-dynamodb';
-import { threadProjectionSchema, mailAccountScopeSchema } from '../../../../src/shared/contracts/mailThreadContract';
+import { ownerReplyDraftRequestSchema, accountReplyDraftSchema, assertReplyDraftLineage, replyDraftResultSchema, threadProjectionSchema, mailAccountScopeSchema } from '../../../../src/shared/contracts/mailThreadContract';
 import { accountRecordSchema, accountKey } from './workerAccountRepository';
 import { intakeRegistryKey, intakeRegistrySchema, createIntakeBarrier, validatePendingHandoff } from './intakeBarrier';
 import type { WorkerAuth } from './workerAuth';
@@ -19,7 +19,7 @@ import { requestedOwnerDraftRequestSchema, requestedOwnerContextRequestSchema, r
 import { delegationCommandSchema, commandReceiptSchema, workerEventSchema, type CommandReceipt, type WorkerEvent } from '../../../../src/shared/contracts/delegationContract';
 import { DynamoStore, fingerprint, keyPart } from './dynamoStore';
 import { authorityRecordSchema, executionAuthorityKey, executionAuthorityFields, createExecutionRepository } from './executionRepository';
-import { DynamoThreadIntakeRepository, mailThreadKey, mailCursorKey, mailSuppressionKey } from './threadIntakeRepository';
+import { DynamoThreadIntakeRepository, mailDraftKey, mailThreadKey, mailCursorKey, mailSuppressionKey } from './threadIntakeRepository';
 import { DynamoDispatchRepository, dispatchApprovalKey, dispatchPermissionKey, dispatchIntentKey, dispatchApprovalSchema, type DispatchIntent } from './dispatchRepository';
 
 /** Authenticated owner admission. No provider action is performed here. Partially
@@ -74,6 +74,41 @@ export class OwnerCommandCoordinator {
     if(previous&&fingerprint(previous)!==fingerprint(request.previousDraft))throw Error('stale_requested_draft');
     const write=await repository.planCaptureDraft(draft,previous?.revision??null);
     await repository.store.transact([...plan.checks,write]);return draft;
+  }
+  async replyDraft(raw: unknown, authorization: string) {
+    const request = ownerReplyDraftRequestSchema.parse(raw), prior = request.previousDraft;
+    const principal = await this.input.auth.authenticate(authorization, [request.edit ? 'commands:write' : 'events:read']);
+    this.input.auth.store.workspace(request.workspaceId);
+    const repository = new DynamoThreadIntakeRepository({ ...this.input.auth.options, dynamo: this.input.auth.fencedDynamo(principal) }), store = repository.store;
+    const sourceKey = ownerSourceKey(prior.accountId), sourceRow = await store.get<unknown>(sourceKey), source = ownerSourceConfigurationSchema.parse(sourceRow?.data);
+    if (source.state !== 'active' || source.workspaceId !== request.workspaceId || source.accountId !== prior.accountId || source.pairingId !== principal.pairingId || source.mailboxSubject !== prior.mailboxSubject) throw Error('reply_source_mismatch');
+    const authKey = executionAuthorityKey(prior.accountId), authorityRow = await store.get<unknown>(authKey), authority = authorityRecordSchema.parse(authorityRow?.data);
+    if (authority.authority.accountId !== prior.accountId || authority.authority.owner !== 'worker' || authority.authority.state !== 'active' || authority.authority.generation !== request.expectedAuthorityGeneration) throw Error('reply_owner_changed');
+    const key = mailDraftKey(prior.accountId, prior.id), row = await store.get<unknown>(key);
+    if (!row) throw Error('reply_draft_missing');
+    const current = accountReplyDraftSchema.parse(row.data);
+    assertReplyDraftLineage(prior, current);
+    const threadKey = mailThreadKey(current.accountId, current.threadId), threadRow = await store.get<unknown>(threadKey), thread = threadProjectionSchema.parse(threadRow?.data);
+    if (thread.thread.accountId !== current.accountId || thread.thread.providerThreadId !== current.threadId || thread.thread.mailboxSubject !== current.mailboxSubject || thread.revision < current.threadRevision || thread.revision === current.threadRevision && thread.contextRevision !== current.contextRevision) throw Error('reply_history_unavailable');
+    const suppressionKey = mailSuppressionKey(current.accountId), suppression = await store.get(suppressionKey);
+    const stale = thread.revision !== current.threadRevision || thread.contextRevision !== current.contextRevision || suppression !== null;
+    // Historical canonical reads remain recoverable after opt-out. New saves still
+    // use the normal repository suppression absence check and cannot rebase.
+    const checks = [store.check(sourceKey, sourceRow!.rev), store.check(authKey, authorityRow!.rev, executionAuthorityFields(authority)), store.check(threadKey, threadRow!.rev), suppression ? store.check(suppressionKey, suppression.rev) : store.absent(suppressionKey)];
+    if (!request.edit || current.revision === prior.revision + 1) {
+      if (request.edit && (current.subject !== request.edit.subject || current.body !== request.edit.body || current.generation !== 'edited')) throw Error('stale_draft');
+      // Exact retry is a read, including after inbound advances. Preserve first timestamp.
+      await store.transact([...checks, store.check(key, row.rev)]);
+      return replyDraftResultSchema.parse({ draft: current, stale, capability: 'held' });
+    }
+    const draft = accountReplyDraftSchema.parse({ ...current, ...request.edit, revision: current.revision + 1, generation: 'edited', updatedAt: store.now() });
+    assertReplyDraftLineage(current, draft);
+    const plan = await repository.planReplyDraftSave(draft, current.revision);
+    if (plan.authority.rev !== authorityRow!.rev || plan.previous?.rev !== row.rev) throw Error('reply_owner_changed');
+    // Plan re-reads CAS inputs. Bind the original draft and thread snapshots as well.
+    if (!plan.items.some(item => fingerprint(item) === fingerprint(store.check(threadKey, threadRow!.rev)))) throw Error('reply_thread_changed');
+    await store.transact([...plan.items, store.check(sourceKey, sourceRow!.rev)]);
+    return replyDraftResultSchema.parse({ draft, stale: false, capability: 'held' });
   }
   async checkpoint(raw:unknown,authorization:string,signal:AbortSignal) {
     const target=ownerCheckpointRequestSchema.parse(raw); const principal=await this.input.auth.authenticate(authorization,['events:read']);this.input.auth.store.workspace(target.workspaceId);

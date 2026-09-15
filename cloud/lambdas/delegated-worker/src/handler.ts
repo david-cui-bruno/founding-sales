@@ -22,9 +22,14 @@ export type WorkerHttpResponse = { statusCode: number; body: string; headers: Re
 const headers = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer',
   'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'", 'Strict-Transport-Security': 'max-age=31536000', 'X-Content-Type-Options': 'nosniff' };
 const response = (statusCode: number, body: unknown): WorkerHttpResponse => ({ statusCode, body: JSON.stringify(body), headers });
+// A persisted predecessor is bounded by the existing 390KB Dynamo item limit.
+// JSON-escaped subject/body add at most 6*(240+20000) bytes, plus a small
+// workspace/revision envelope. 1MiB bounds that combined ordinary-only request.
+const ordinaryReplyEnvelopeMaxBytes = 1024 * 1024;
 const eventSchema = z.object({ version: z.literal('2.0'), rawPath: z.string().max(100), rawQueryString: z.string().max(8192),
-  headers: z.record(z.string(), z.string().max(16384)), body: z.string().max(204096).refine(value => Buffer.byteLength(value, 'utf8') <= 204096).optional(), isBase64Encoded: z.literal(false).optional(),
-  requestContext: z.object({ domainName: z.string(), http: z.object({ method: z.enum(['POST', 'GET']), sourceIp: z.string().min(1).max(256) }) }) });
+  headers: z.record(z.string(), z.string().max(16384)), body: z.string().max(ordinaryReplyEnvelopeMaxBytes).refine(value => Buffer.byteLength(value, 'utf8') <= ordinaryReplyEnvelopeMaxBytes).optional(), isBase64Encoded: z.literal(false).optional(),
+  requestContext: z.object({ domainName: z.string(), http: z.object({ method: z.enum(['POST', 'GET']), sourceIp: z.string().min(1).max(256) }) }) })
+  .refine(event => !event.body || Buffer.byteLength(event.body, 'utf8') <= (event.rawPath === '/reply/draft' && event.requestContext.http.method === 'POST' ? ordinaryReplyEnvelopeMaxBytes : 204096));
 /** API Gateway v2 HTTPS only. No authorizer cache, event logging, query bearer,
  * operator bootstrap issuance, token-returning route or mail dispatch endpoint. */
 export function createWorkerHandler(input: { auth: WorkerAuth; host: string; google?: RemoteGoogleAuthorization; researchSetupProfile?: ResearchSetupProfile }) {
@@ -33,9 +38,9 @@ export function createWorkerHandler(input: { auth: WorkerAuth; host: string; goo
       const event = eventSchema.parse(raw);
       if (event.headers['x-forwarded-proto'] !== 'https' || event.headers.host !== input.host || event.requestContext.domainName !== input.host) return response(400, { error: 'worker_invalid_request' });
       const method = event.requestContext.http.method; const path = event.rawPath;
-      // Ordinary requests retain their 64KiB byte limit. Only the canonical
-      // selected bootstrap may carry its bounded 200KB payload plus 4KiB envelope.
-      if (event.body && Buffer.byteLength(event.body, 'utf8') > 65536) {
+      // All other requests retain their existing limits. Only selected bootstrap
+      // and the bounded prior+next ordinary draft envelope get larger bodies.
+      if (event.body && Buffer.byteLength(event.body, 'utf8') > 65536 && !(path === '/reply/draft' && method === 'POST')) {
         if (path !== '/commands' || method !== 'POST') return response(400, { error: 'worker_request_rejected' });
         const selected = bootstrapSelectedAccountCommandSchema.parse(JSON.parse(event.body));
         if (Buffer.byteLength(JSON.stringify(selected.payload), 'utf8') > 200000) return response(400, { error: 'worker_request_rejected' });
@@ -57,6 +62,10 @@ export function createWorkerHandler(input: { auth: WorkerAuth; host: string; goo
       if(path==='/commands/reconcile' && method==='POST') {
         const owner=new OwnerCommandCoordinator({auth:input.auth,authorization:input.google??new RemoteGoogleAuthorization({auth:input.auth})});
         return response(200,await owner.reconcile(body(),event.headers.authorization??''));
+      }
+      if (path === '/reply/draft' && method === 'POST') {
+        const owner = new OwnerCommandCoordinator({ auth: input.auth, authorization: input.google ?? new RemoteGoogleAuthorization({ auth: input.auth }) });
+        return response(200, await owner.replyDraft(body(), event.headers.authorization ?? ''));
       }
       if(path==='/requested-followup/draft' && method==='POST') {
         const owner=new OwnerCommandCoordinator({auth:input.auth,authorization:input.google??new RemoteGoogleAuthorization({auth:input.auth})});
