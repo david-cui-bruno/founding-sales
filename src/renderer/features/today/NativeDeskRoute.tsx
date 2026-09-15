@@ -1,4 +1,5 @@
 import { partitionFirstUseAnswers } from './firstUseCapabilities';
+import { CompanyPhoneCall } from './CompanyPhoneCall';
 import { openSettingsSection } from '../../foundation/settingsNavigation';
 import type { FirstUseContinuation } from './localCompanyContinuation';
 import { useOverlayLayers } from '../../app/overlayLayers';
@@ -43,7 +44,7 @@ import './nativeDesk.css';
 export type NativeDeskApi = Pick<
   CalliePreloadApi,
   'daily' | 'delegation' | 'linkedin' | 'leads' | 'leadDetail'
-> & Partial<Pick<CalliePreloadApi, 'localWorkspace'>>;
+> & Partial<Pick<CalliePreloadApi, 'localWorkspace' | 'phoneSetup'>>;
 type Config = Awaited<ReturnType<NativeDeskApi['delegation']['status']>>;
 type Surface = 'today' | 'accounts' | 'campaigns';
 export type NativeDeskRouteProps = {
@@ -313,6 +314,7 @@ export function NativeDeskRoute({
       api={api}
       config={localHold ? null : current.config}
       readError={current.error || localHold}
+      phoneReadError={current.error}
       localRead={local.read}
       localHold={localHold}
       intake={intake}
@@ -485,6 +487,7 @@ export function NativeDesk({
   api,
   config,
   readError = false,
+  phoneReadError = readError,
   onRefresh,
   onOpenLead,
   onOpenImport,
@@ -500,6 +503,7 @@ export function NativeDesk({
   api: NativeDeskApi;
   config: Config | null;
   readError?: boolean;
+  phoneReadError?: boolean;
   localRead?: LocalDeskRead;
   localHold?: boolean;
   intake?: ReactNode;
@@ -873,7 +877,7 @@ export function NativeDesk({
               campaign={campaign} readError={readError || !!localHold} onRefresh={onRefresh} />}
             </>
           )}
-          {account && selected?.startsWith('call:') && (
+          {account && (selected?.startsWith('call:') || selected?.startsWith('account:')) && (
             <section className="native-desk__call">
               <h3>Phone route</h3>
               {account.routes
@@ -894,15 +898,9 @@ export function NativeDesk({
                     ) : null}
                   </div>
                 ))}
-              <p className="native-desk__hold">
-                Call handoff unavailable in this account view.{' '}
-                {account.routes.some((r) => r.channel === 'phone' && r.personId)
-                  ? 'Open the linked contact workspace to review the existing call confirmation.'
-                  : 'Review and link a real contact route before using the existing call workspace.'}{' '}
-                Selection alone never places a call.{' '}
-                <a href="#/settings" onClick={() => openSettingsSection('phone')}>Review phone setup</a>.{' '}
-                Phone setup does not repair missing contact evidence or grant call permission.
-              </p>
+              <CompanyPhoneCall key={JSON.stringify([snapshot.workspaceId, account.account.id])}
+                api={api} snapshot={snapshot} config={configuration} accountId={account.account.id}
+                readError={phoneReadError} newWorkHold={!!localHold} onRefresh={onRefresh} />
             </section>
           )}
           {!retained && !localAccount && !account && !campaign && !meeting && !answer && (
