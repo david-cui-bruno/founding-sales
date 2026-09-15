@@ -3,6 +3,7 @@ import type { AppDatabase } from '../db/database';
 import { accountClaimSchema, accountIdSchema, accountInstantSchema, accountRouteSchema, accountSchema, accountSourceSchema } from '../../shared/contracts/accountContract';
 import { accountRecordSchema, type AccountRecord } from '../../shared/contracts/accountRecordContract';
 import { accountFingerprint } from '../domain/accounts/accountEvidence';
+import { companyDraftAdmissionReceiptSchema, companyDraftEmailSchema, companyDraftMailboxOccurrences, type CompanyDraftAdmissionReceipt } from '../../shared/contracts/localCompanyDraftContract';
 
 const integer = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 export const SELECTED_ACCOUNT_LIMITS = Object.freeze({ maxHistory: 200, maxSources: 100, maxClaims: 500, maxRoutes: 500, maxBytes: 200000 });
@@ -47,11 +48,12 @@ export function exportSelectedAccountRecord(input: {
       const bytes = raw.prepare(`SELECT COALESCE(SUM(length(CAST(${columns} AS BLOB))),0) AS bytes FROM ${table} WHERE account_id=?`).get(accountId) as { bytes: number };
       if (!Number.isSafeInteger(bytes.bytes) || bytes.bytes > limits.maxBytes) fail('byte limit exceeded');
     }
-    const commands = raw.prepare('SELECT account_version,created_at,result_json FROM pm_account_commands WHERE account_id=? ORDER BY account_version LIMIT ?')
-      .all(accountId, limits.maxHistory + 1) as { account_version: number; created_at: string; result_json: string }[];
+    const commands = raw.prepare('SELECT command_id,fingerprint,account_version,created_at,result_json FROM pm_account_commands WHERE account_id=? ORDER BY account_version LIMIT ?')
+      .all(accountId, limits.maxHistory + 1) as { command_id: string; fingerprint: string; account_version: number; created_at: string; result_json: string }[];
     if (commands.length > limits.maxHistory) fail('history limit exceeded');
     if (commands.length !== account.version) fail('history version gap');
     const historyTimes = new Map<string, number>();
+    const reviewedReceipts: { at: string; receipt: CompanyDraftAdmissionReceipt }[] = [];
     for (const [index, command] of commands.entries()) {
       const at = accountInstantSchema.parse(command.created_at);
       if (command.account_version !== index + 1 || at < createdAt || at > updatedAt || (index > 0 && at < commands[index - 1].created_at)) fail('history identity conflict');
@@ -59,8 +61,14 @@ export function exportSelectedAccountRecord(input: {
       if (index === 0) {
         if (!same(exact(accountSchema, result), { ...account, version: 1 }) || at !== createdAt) fail('creation identity conflict');
       } else {
-        const receipt = exact(z.strictObject({ accountId: accountIdSchema, version: integer.positive(), duplicate: z.boolean() }), result);
-        if (receipt.accountId !== accountId || receipt.version !== command.account_version || receipt.duplicate) fail('history receipt conflict');
+        const receipt = exact(z.union([z.strictObject({ accountId: accountIdSchema, version: integer.positive(), duplicate: z.boolean() }), companyDraftAdmissionReceiptSchema]), result);
+        if ('accountVersion' in receipt) {
+          if (receipt.accountId !== accountId || receipt.accountVersion !== command.account_version || receipt.commandId !== command.command_id
+            || command.fingerprint !== accountFingerprint({ kind: 'company_draft_email', commandId: receipt.commandId, accountId: receipt.accountId,
+              expectedAccountVersion: receipt.accountVersion - 1, email: receipt.recipientBinding.email, sourceId: receipt.publication.sourceId,
+              quote: receipt.publication.quote, selection: receipt.selection })) fail('reviewed command receipt conflict');
+          reviewedReceipts.push({ at, receipt });
+        } else if (receipt.accountId !== accountId || receipt.version !== command.account_version || receipt.duplicate) fail('history receipt conflict');
       }
       historyTimes.set(at, command.account_version);
     }
@@ -117,6 +125,26 @@ export function exportSelectedAccountRecord(input: {
         value: row.value, purpose: row.purpose, verification: row.verification, evidenceIds });
       requireSources(evidenceIds, at); versions.set(row.id, { version: row.version, at }); return { at, route };
     });
+    // Frozen reviewed receipts bind to the route current at admission, not today's
+    // head. Reused routes legitimately predate the command that reviewed them.
+    for (const { at, receipt } of reviewedReceipts) {
+      const binding = receipt.recipientBinding, publication = receipt.publication;
+      const entry = routes.find(entry => entry.route.id === binding.routeId && entry.route.version === binding.routeVersion);
+      if (!entry || entry.at > at || routes.some(newer => newer.route.id === binding.routeId && newer.route.version > binding.routeVersion && newer.at <= at)) fail('reviewed route receipt conflict');
+      const route = entry.route;
+      if (route.personId !== null || route.channel !== 'email' || route.purpose !== 'business' || !['published', 'confirmed'].includes(route.verification)
+        || companyDraftEmailSchema.parse(route.value) !== binding.email || !route.evidenceIds.includes(publication.sourceId)) fail('reviewed route receipt conflict');
+      requireSources([publication.sourceId], at);
+      const source = sources.find(source => source.id === publication.sourceId)!;
+      if (source.url !== publication.url || source.sha256 !== publication.sha256 || source.fetchedAt !== publication.fetchedAt) fail('reviewed publication receipt conflict');
+      const occurrences = companyDraftMailboxOccurrences(source.excerpt, binding.email);
+      let start = source.excerpt.indexOf(publication.quote), matched = false;
+      while (start >= 0) {
+        if (occurrences.some(token => token.start >= start && token.end <= start + publication.quote.length)) { matched = true; break; }
+        start = source.excerpt.indexOf(publication.quote, start + 1);
+      }
+      if (!matched) fail('reviewed publication receipt conflict');
+    }
     const history = [...historyTimes].map(([at, version]) => {
       const eligible = routes.filter(route => route.at <= at);
       return { at, account: { ...account, version }, claims: claims.filter(claim => claim.at <= at).map(claim => claim.claim),
