@@ -243,10 +243,10 @@ export function CompanyPhoneCall({ api, snapshot, config, accountId, readError =
     <p>Nominated for review, not authorized to call. Selection alone never places a call.</p>
     <p><a href="#/settings" onClick={() => openSettingsSection('phone')}>Review phone setup</a>. Phone setup is handoff readiness only, not call permission.</p>
     {!selection || !stepId ? <p className="native-desk__hold">Call handoff unavailable in this account view. Select a saved company enrollment and call step. Review an approved company-only call campaign in <a href="#/campaigns">Campaigns</a>. No person is required for an eligible company phone route.</p> : null}
-    <label>Phone enrollment<select aria-label="Phone enrollment" value={enrollmentId} disabled={busy} onChange={event => { setEnrollmentChoice(event.target.value); setStepChoice(''); }}>
+    <label>Phone enrollment<select style={{ paddingBlock: 0 }} aria-label="Phone enrollment" value={enrollmentId} disabled={busy} onChange={event => { setEnrollmentChoice(event.target.value); setStepChoice(''); }}>
       <option value="">Choose saved enrollment</option>{choices.map(({ enrollment, campaign }) => <option key={`${campaign.version.id}:${enrollment.id}`} value={enrollment.id}>{enrollment.id} · {campaign.version.id} · {enrollment.state}</option>)}
     </select></label>
-    <label>Phone step<select aria-label="Phone step" value={stepId} disabled={busy} onChange={event => setStepChoice(event.target.value)}>
+    <label>Phone step<select style={{ paddingBlock: 0 }} aria-label="Phone step" value={stepId} disabled={busy} onChange={event => setStepChoice(event.target.value)}>
       <option value="">Choose saved call step</option>{steps.map(step => <option key={step.id} value={step.id}>{step.id}</option>)}
     </select></label>
     {!available && <p role="status">HOLD: {selector && workspaceId && !session ? 'Phone session capacity reached. Unresolved work will not be evicted.' : 'A matching readable paired workspace and saved call selection are required.'}</p>}
@@ -282,8 +282,8 @@ export function CompanyPhoneCall({ api, snapshot, config, accountId, readError =
     </article>)}
     {consumed.length > 0 && <fieldset disabled={!available || busy || stale}>
       <legend>Report an observed phone outcome</legend>
-      <label>Consumed handoff<select aria-label="Consumed handoff" value={handoffId} onChange={event => { setHandoffChoice(event.target.value); setOutcome(''); setObservedAt(''); setReportConfirmed(false); setOptOutConfirmed(false); }}><option value="">Choose original consumed handoff</option>{consumed.map(value => <option key={value.command.commandId} value={value.handoff!.value.handoffId}>{value.handoff!.value.handoffId}</option>)}</select></label>
-      <label>Observed phone outcome<select aria-label="Observed phone outcome" value={outcome} disabled={!allowed.length || !!retainedReport} onChange={event => { setOutcome(event.target.value as PhoneOutcome | ''); setReportConfirmed(false); setOptOutConfirmed(false); }}><option value="">Choose observed outcome</option>{allowed.map(value => <option key={value} value={value}>{value}</option>)}</select></label>
+      <label>Consumed handoff<select style={{ paddingBlock: 0 }} aria-label="Consumed handoff" value={handoffId} onChange={event => { setHandoffChoice(event.target.value); setOutcome(''); setObservedAt(''); setReportConfirmed(false); setOptOutConfirmed(false); }}><option value="">Choose original consumed handoff</option>{consumed.map(value => <option key={value.command.commandId} value={value.handoff!.value.handoffId}>{value.handoff!.value.handoffId}</option>)}</select></label>
+      <label>Observed phone outcome<select style={{ paddingBlock: 0 }} aria-label="Observed phone outcome" value={outcome} disabled={!allowed.length || !!retainedReport} onChange={event => { setOutcome(event.target.value as PhoneOutcome | ''); setReportConfirmed(false); setOptOutConfirmed(false); }}><option value="">Choose observed outcome</option>{allowed.map(value => <option key={value} value={value}>{value}</option>)}</select></label>
       <label>Observed at (local time)<input aria-label="Observed at (local time)" type="datetime-local" step="1" value={observedAt} onChange={event => { setObservedAt(event.target.value); setReportConfirmed(false); }} /></label>
       <p>Enter when you actually observed this outcome, at or after consumption and not in the future. This is a human report, not provider evidence. Saving queues the report without automatic owner reconciliation.</p>
       <label><input type="checkbox" checked={reportConfirmed} onChange={event => setReportConfirmed(event.target.checked)} />I confirm this observed outcome and time</label>
