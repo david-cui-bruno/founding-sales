@@ -39,7 +39,9 @@ it.each([false, true])('actual null-start public IPC activation, pairing=%s, sha
       }, openExternal: async () => unexpected(), fetch: async (_url, options) => {
         model++;
         const body = JSON.parse(String(options?.body)); const source = JSON.parse(body.input).sources[0];
-        return new Response(JSON.stringify({ status: 'completed', model: body.model, output: [{ type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: JSON.stringify({ facts: [{ key: 'residential_scope', sourceId: source.sourceId, blockId: source.blocks[0].id, quote }] }) }] }] }));
+        expect(source.blocks[0].text).toBe(quote);
+        expect(source.blocks[0].ref).toEqual(expect.any(Number));
+        return new Response(JSON.stringify({ status: 'completed', model: body.model, output: [{ type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: JSON.stringify({ facts: [{ key: 'residential_scope', ref: source.blocks[0].ref }] }) }] }] }));
       } });
       vi.spyOn(manager, 'researchCompanies').mockImplementation(async () => unexpected());
       managers.push(manager); disposals.push(vi.spyOn(manager, 'dispose')); return manager;

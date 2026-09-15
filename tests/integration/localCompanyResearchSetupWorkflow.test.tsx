@@ -167,7 +167,8 @@ it('sets up unpaired local company research in App and preserves an attributed, 
       expect(screen.getByText(`Fact: ${value}`)).toBeTruthy();
       const extracted = f.extractionRequests[0].facts.find(fact => fact.key === key)!;
       expect(extracted).toMatchObject({ quote: value, sourceId: researched.sources[0].id });
-      expect(f.extractionRequests[0].input.sources[0].blocks).toContainEqual({ id: extracted.blockId, text: value });
+      const block = f.extractionRequests[0].input.sources[0].blocks.find(item => item.id === extracted.blockId);
+      expect(block).toEqual({ id: extracted.blockId, text: value, ref: expect.any(Number) });
     }
     expect(researched.snapshot.routes).toEqual([]);
     await countsEmpty(['persons', 'person_contact_methods', 'pm_account_links', 'email_drafts']);
