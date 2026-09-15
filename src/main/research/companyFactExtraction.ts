@@ -1,18 +1,34 @@
 import { z } from 'zod';
 import { ProviderError } from '../outreach/providers/providerValidation';
 
-const validationReasons = ['response_json', 'envelope', 'model', 'output_limit', 'message_count', 'fact_json', 'fact_schema', 'quote'] as const;
+const validationReasons = ['response_json', 'envelope', 'response_incomplete', 'response_refusal', 'model', 'output_limit', 'message_count', 'fact_json', 'fact_schema', 'quote', 'model_credentials_invalid', 'model_credentials_mismatch', 'provider_rejected'] as const;
 export type CompanyFactExtractionReason = typeof validationReasons[number];
 // Keep diagnostic provenance separate from mutable/thrown public properties.
 const safeReasons = new WeakMap<object, CompanyFactExtractionReason | undefined>();
+const safeStatuses = new WeakMap<object, number>();
+type ExtractionCode = 'provider_response_invalid' | 'provider_rejected' | 'invalid_configuration' | 'model_unconfigured';
+const safeCodes = new WeakMap<object, ExtractionCode>();
+export function companyFactExtractionCode(error: unknown): ExtractionCode | undefined {
+  return typeof error === 'object' && error !== null ? safeCodes.get(error) : undefined;
+}
+export function companyFactExtractionReason(error: unknown): CompanyFactExtractionReason | undefined {
+  return typeof error === 'object' && error !== null ? safeReasons.get(error) : undefined;
+}
+export function companyFactExtractionHttpStatus(error: unknown): number | undefined {
+  return typeof error === 'object' && error !== null ? safeStatuses.get(error) : undefined;
+}
 /** Fixed diagnostics only. Never retain schema issues, payloads, or causes. */
 export class CompanyFactExtractionError extends ProviderError {
   readonly reason: CompanyFactExtractionReason | undefined;
-  constructor(reason: unknown) {
-    super('provider_response_invalid');
+  constructor(reason: unknown, code: ExtractionCode = 'provider_response_invalid', httpStatus?: number) {
+    const safeCode = code === 'provider_rejected' ? 'provider_rejected' : code === 'invalid_configuration' ? 'invalid_configuration'
+      : code === 'model_unconfigured' ? 'model_unconfigured' : 'provider_response_invalid';
+    super(safeCode);
     this.reason = typeof reason === 'string' && validationReasons.some(value => value === reason)
       ? reason as CompanyFactExtractionReason : undefined;
     safeReasons.set(this, this.reason);
+    safeCodes.set(this, safeCode);
+    if (typeof httpStatus === 'number' && Number.isInteger(httpStatus) && httpStatus >= 100 && httpStatus <= 599) safeStatuses.set(this, httpStatus);
   }
 }
 
@@ -93,6 +109,16 @@ const envelopeSchema = z.object({
   max_output_tokens: z.number().int().optional(),
 });
 function checkAbort(signal: AbortSignal): void { if (signal.aborted) throw new ProviderError('network_uncertain'); }
+/** Inspect exact JSON literals only after the unchanged envelope validator rejects. */
+function envelopeFailureReason(raw: unknown): CompanyFactExtractionReason {
+  if (z.object({ status: z.literal('incomplete') }).safeParse(raw).success) return 'response_incomplete';
+  const output = z.object({ output: z.array(z.unknown()) }).safeParse(raw);
+  if (output.success && output.data.output.some(item => {
+    const message = z.object({ type: z.literal('message'), content: z.array(z.unknown()) }).safeParse(item);
+    return message.success && message.data.content.some(part => z.object({ type: z.literal('refusal') }).safeParse(part).success);
+  })) return 'response_refusal';
+  return 'envelope';
+}
 /** Race abort even when an injected transport fails to honor its signal. */
 async function checked<T>(operation: () => Promise<T>, signal: AbortSignal): Promise<T> {
   checkAbort(signal);
@@ -141,12 +167,13 @@ export async function requestCompanyFacts(options: { input: PageFactInput; crede
   checkAbort(signal);
   const parsed = inputSchema.safeParse(options.input);
   const credentials = z.strictObject({ apiKey: z.string().min(1).max(16384).regex(/^[\x21-\x7e]+$/), model: z.string().min(1).max(200) }).safeParse(options.credentials);
-  if (!parsed.success || !credentials.success) throw new ProviderError('invalid_configuration');
+  if (!parsed.success || !credentials.success) throw !credentials.success
+    ? new CompanyFactExtractionError('model_credentials_invalid', 'invalid_configuration') : new ProviderError('invalid_configuration');
   const input = parsed.data;
   // The operator-reviewed capability names the compatible Responses model.
   // Require an exact credential match, never silently substitute a model family.
   if (credentials.data.model !== input.capability.model || !/^[a-zA-Z0-9._:/-]+$/.test(input.capability.model)) {
-    throw new ProviderError('model_unconfigured');
+    throw new CompanyFactExtractionError('model_credentials_mismatch', 'model_unconfigured');
   }
   try { validateCompanyFacts([], input); }
   catch { throw new ProviderError('invalid_configuration'); }
@@ -163,11 +190,11 @@ export async function requestCompanyFacts(options: { input: PageFactInput; crede
       body,
     }), signal);
     checkAbort(signal);
-    if (!response.ok) { void response.body?.cancel().catch((): undefined => undefined); throw new ProviderError('provider_rejected'); }
+    if (!response.ok) { void response.body?.cancel().catch((): undefined => undefined); throw new CompanyFactExtractionError('provider_rejected', 'provider_rejected', response.status); }
     const raw = await readResponse(response, signal);
     checkAbort(signal);
     const envelope = envelopeSchema.safeParse(raw);
-    if (!envelope.success) throw new CompanyFactExtractionError('envelope');
+    if (!envelope.success) throw new CompanyFactExtractionError(envelopeFailureReason(raw));
     if (envelope.data.model !== input.capability.model) throw new CompanyFactExtractionError('model');
     if ((envelope.data.usage && envelope.data.usage.output_tokens > input.capability.maxOutputTokens)
       || (envelope.data.max_output_tokens !== undefined && envelope.data.max_output_tokens !== input.capability.maxOutputTokens)) throw new CompanyFactExtractionError('output_limit');
@@ -182,8 +209,15 @@ export async function requestCompanyFacts(options: { input: PageFactInput; crede
     return validated;
   } catch (error) {
     if (signal.aborted) throw new ProviderError('network_uncertain');
-    if (error instanceof CompanyFactExtractionError && safeReasons.has(error)) throw new CompanyFactExtractionError(safeReasons.get(error));
-    if (error instanceof ProviderError && ['provider_response_invalid', 'provider_rejected', 'network_uncertain'].includes(error.code)) throw new ProviderError(error.code);
+    const trustedCode = companyFactExtractionCode(error);
+    if (trustedCode !== undefined) throw new CompanyFactExtractionError(companyFactExtractionReason(error), trustedCode, companyFactExtractionHttpStatus(error));
+    // Hostile injected errors may have throwing getters or proxy traps.
+    let code: unknown;
+    try { if (error instanceof ProviderError) code = error.code; }
+    catch { /* Never propagate a getter's exception. */ }
+    if (code === 'provider_response_invalid') throw new ProviderError('provider_response_invalid');
+    if (code === 'provider_rejected') throw new ProviderError('provider_rejected');
+    if (code === 'network_uncertain') throw new ProviderError('network_uncertain');
     throw new ProviderError('network_uncertain');
   }
 }

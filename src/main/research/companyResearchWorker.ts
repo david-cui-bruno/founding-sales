@@ -2,10 +2,11 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { accountFingerprint } from '../domain/accounts/accountEvidence';
 import { companySourcePolicy } from './companySourcePolicy';
+import { companyResearchDiagnostic, type CompanyResearchDiagnostic } from './companyResearchFailure';
 import { audienceQuerySchema, researchCapabilitySchema, researchLimitsSchema, type AudienceQuery, type ResearchCapability, type ResearchLimits, type CompanyDiscoveryPort, type DiscoveryReservationStore, type AccountResearchStore, type CompanyPagePort, type CompanyResearchWorker } from './companyResearchTypes';
 /** No scheduling, eager claim, provider access, or default activation. */
 export function createCompanyResearchWorker(options: { store: AccountResearchStore; pages: CompanyPagePort; clock: { now(): string };
-  issue?: (code: 'company_research_parked', accountId: string) => void }): CompanyResearchWorker {
+  issue?: (code: 'company_research_parked', accountId: string, diagnostic: CompanyResearchDiagnostic & { jobId: string }) => void }): CompanyResearchWorker {
   return { async runNext(signal) {
     if (signal.aborted) return 'idle';
     const job = await options.store.claimNext(options.clock.now());
@@ -16,16 +17,22 @@ export function createCompanyResearchWorker(options: { store: AccountResearchSto
       return 'completed';
     }
     let committed = false;
+    let stage: CompanyResearchDiagnostic['stage'] = 'snapshot';
     try {
       signal.throwIfAborted();
       const snapshot = await options.store.snapshot(job.accountId, options.clock.now());
+      stage = 'page';
       const batch = await options.pages.research(snapshot, job.limits, signal);
       signal.throwIfAborted();
+      stage = 'admission';
       await options.store.admitEvidence({ ...batch, commandId: job.receiptCommandId, accountId: job.accountId, expectedVersion: snapshot.account.version }, { jobId: job.id, claimToken: job.claimToken });
       committed = true;
-    } catch {
+    } catch (error) {
       await options.store.settle({ jobId: job.id, claimToken: job.claimToken, status: 'parked', receiptCommandId: null, costMicros: null });
-      options.issue?.('company_research_parked', job.accountId);
+      // A diagnostic is observation only. It cannot undo a durable settlement,
+      // expose the thrown payload, or turn a parked job into a retryable failure.
+      try { options.issue?.('company_research_parked', job.accountId, { ...companyResearchDiagnostic(error, signal.aborted ? 'cancelled' : stage), jobId: job.id }); }
+      catch { /* Logging must not change research control flow. */ }
       return 'parked';
     }
     // Keep settlement outside catch: a crash here must leave the receipt recoverable.

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { CompanyFactExtractionError, knownCompanyExtractionSchema, requestCompanyFacts, validateCompanyFacts, type PageFactInput } from '../../src/main/research/companyFactExtraction';
 import { parseCompanyPageText } from '../../src/main/research/companyPageText';
 import { ProviderError } from '../../src/main/outreach/providers/providerValidation';
+import { companyResearchDiagnostic } from '../../src/main/research/companyResearchFailure';
 const capability = { version: 1 as const, model: 'gpt-4.1-mini', maxCostMicros: 20000, maxOutputTokens: 1024, maxInputBytes: 20000, inputMicrosPerMillionTokens: 1000, outputMicrosPerMillionTokens: 2000 };
 const quote = 'Family-owned & independently operated.';
 const input: PageFactInput = { capability, sources: [{ sourceId: 'source-1', blocks: [{ id: 'b1', text: quote }, { id: 'b2', text: 'We manage over 250 residential properties.' }] }] };
@@ -185,7 +186,45 @@ describe('completed response message phase compatibility', () => {
 });
 
 describe('safe extraction validation diagnostics', () => {
+  it('retains branded undefined reason and category even when the public code getter is hostile', async () => {
+    const own = new CompanyFactExtractionError(undefined);
+    Object.defineProperty(own, 'code', { get() { throw new Error('PRIVATE'); } });
+    expect(companyResearchDiagnostic(own, 'model_request')).toEqual({ stage: 'model_request', reason: 'provider_response_invalid' });
+    const error = await invoke(undefined, { fetch: vi.fn().mockRejectedValue(own) }).promise.catch((value: unknown) => value);
+    expect(error).toBeInstanceOf(CompanyFactExtractionError);
+    expect(error).toMatchObject({ code: 'provider_response_invalid', reason: undefined });
+  });
+  it('keeps credential rejection codes while exposing only fixed credential subreasons', async () => {
+    for (const [credentials, code, reason] of [
+      [{ apiKey: '', model: capability.model }, 'invalid_configuration', 'model_credentials_invalid'],
+      [{ apiKey: 'fictional-key', model: 'other' }, 'model_unconfigured', 'model_credentials_mismatch'],
+    ] as const) {
+      const call = invoke(undefined, { credentials });
+      const error = await call.promise.catch((value: unknown) => value);
+      expect(error).toMatchObject({ code });
+      expect(companyResearchDiagnostic(error, 'model_request')).toEqual({ stage: 'model_request', reason });
+      expect(call.fetch).not.toHaveBeenCalled();
+    }
+  });
+  it('never reads a rejected provider body and privately retains only its HTTP status', async () => {
+    const read = vi.fn(); const cancel = vi.fn();
+    const response = new Response(new ReadableStream({ pull: read, cancel }, { highWaterMark: 0 }), { status: 429 });
+    const error = await invoke(undefined, { fetch: vi.fn().mockResolvedValue(response) }).promise.catch((value: unknown) => value);
+    expect(companyResearchDiagnostic(error, 'model_request')).toEqual({ stage: 'model_request', reason: 'provider_rejected', httpStatus: 429 });
+    expect(read).not.toHaveBeenCalled(); expect(cancel).toHaveBeenCalledOnce();
+  });
+  it('sanitizes throwing code getters and proxy traps without propagating their errors', async () => {
+    const hostile = new ProviderError('provider_rejected');
+    Object.defineProperty(hostile, 'code', { get() { throw new Error('PRIVATE key/body/stack'); } });
+    for (const thrown of [hostile, new Proxy({}, { getPrototypeOf() { throw new Error('PRIVATE'); } })]) {
+      const error = await invoke(undefined, { fetch: vi.fn().mockRejectedValue(thrown) }).promise.catch((value: unknown) => value);
+      expect(error).toMatchObject({ code: 'network_uncertain', message: 'network_uncertain' });
+      expect(JSON.stringify(error)).not.toContain('PRIVATE');
+    }
+  });
   it.each([
+    { reply: { ...envelope(), status: 'incomplete', incomplete_details: { reason: 'PRIVATE' } }, reason: 'response_incomplete' },
+    { reply: { ...envelope(), output: [{ ...message(), content: [{ type: 'refusal', refusal: 'PRIVATE refusal text' }] }] }, reason: 'response_refusal' },
     { reply: { ...envelope(), output: [{ ...message(), phase: 'commentary' }] }, reason: 'envelope' },
     { reply: { ...envelope(), output: [{ ...message(), phase: 'final_answer', private_extra: 'private-data' }] }, reason: 'envelope' },
     { reply: { ...envelope(), output: [{ ...message(), phase: null, private_extra: 'private-data' }] }, reason: 'envelope' },

@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createCompanyPageProvider } from '../../src/main/research/companyPageProvider';
 import { createFetchedReceiptPolicy } from '../../src/main/research/companySourcePolicy';
-import type { CompanyFactExtractor } from '../../src/main/research/companyFactExtraction';
+import { CompanyFactExtractionError, requestCompanyFacts, type CompanyFactExtractor } from '../../src/main/research/companyFactExtraction';
+import { companyResearchDiagnostic } from '../../src/main/research/companyResearchFailure';
 import type { AccountEvidenceSnapshot } from '../../src/shared/contracts/accountContract';
 
 const snapshot: AccountEvidenceSnapshot = { account: { id: 'known-account', name: 'Fictional PM', domain: 'example.invalid', version: 1 }, claims: [], routes: [], portfolio: [], unknowns: [], conflicts: [], fingerprint: 'fixture' };
@@ -19,6 +20,56 @@ function fixture(overrides: Partial<Parameters<typeof createCompanyPageProvider>
   return { provider, http, resolve, extractFacts, receipts };
 }
 describe('known-company protected page composition', () => {
+  async function diagnostic(overrides: Parameters<typeof fixture>[0], signal = new AbortController().signal) {
+    const f = fixture(overrides);
+    const result = await f.provider.research(snapshot, limits, signal).then(() => { throw new Error('Expected rejection'); }, (value: unknown) => companyResearchDiagnostic(value, 'page'));
+    return { diagnostic: result, f };
+  }
+  it('distinguishes page HTTP rejection from actual model HTTP rejection without body diagnostics', async () => {
+    const page = await diagnostic({ http: async () => new Response('PRIVATE page body', { status: 503 }) });
+    expect(page.diagnostic).toEqual({ stage: 'page_response', reason: 'page_response_rejected', httpStatus: 503 });
+    expect(page.f.extractFacts).not.toHaveBeenCalled();
+    const model = await diagnostic({ extractFacts: (input, signal) => requestCompanyFacts({ input, signal,
+      credentials: { apiKey: 'fictional-key', model: capability.model }, fetch: vi.fn().mockResolvedValue(new Response('PRIVATE provider body', { status: 429 })) }) });
+    expect(model.diagnostic).toEqual({ stage: 'model_request', reason: 'provider_rejected', httpStatus: 429 });
+    expect(JSON.stringify([page.diagnostic, model.diagnostic])).not.toContain('PRIVATE');
+  });
+  it('preserves model subreason but independently labels invalid injected facts', async () => {
+    const rejected = new CompanyFactExtractionError('envelope');
+    Object.assign(rejected, { reason: 'PRIVATE', message: 'PRIVATE', stack: 'PRIVATE' });
+    expect((await diagnostic({ extractFacts: async () => { throw rejected; } })).diagnostic).toEqual({ stage: 'model_request', reason: 'envelope' });
+    expect((await diagnostic({ extractFacts: async () => [{ key: 'ownership', sourceId: 'forged', blockId: 'forged', quote }] })).diagnostic).toEqual({ stage: 'fact_validation', reason: 'quote' });
+  });
+  it('distinguishes no supported facts, caller cancellation and a timed-out model', async () => {
+    expect((await diagnostic({ extractFacts: async () => [] })).diagnostic).toEqual({ stage: 'fact_validation', reason: 'no_supported_facts' });
+    const controller = new AbortController();
+    expect((await diagnostic({ extractFacts: async () => { controller.abort(new Error('PRIVATE')); return []; } }, controller.signal)).diagnostic).toEqual({ stage: 'model_request', reason: 'cancelled' });
+    expect((await diagnostic({ timeoutMs: 20, extractFacts: async () => new Promise(() => undefined) })).diagnostic).toEqual({ stage: 'model_request', reason: 'timeout' });
+  });
+  it('annotates hostile DNS, HTTP and receipt failures without trusting thrown fields', async () => {
+    const hostile = new Proxy({}, { get() { throw new Error('PRIVATE'); }, getPrototypeOf() { throw new Error('PRIVATE'); } });
+    for (const [stage, overrides] of [
+      ['dns', { resolve: async () => { throw hostile; } }],
+      ['page_http', { http: async () => { throw hostile; } }],
+      ['source_receipt', { onFetched: async () => { throw hostile; } }],
+    ] as const) expect((await diagnostic(overrides)).diagnostic).toEqual({ stage, reason: 'unknown' });
+  });
+  it('preserves pre-aborted custom rejection identity', async () => {
+    const original = new Error('PRIVATE custom cancellation');
+    const controller = new AbortController(); controller.abort(original);
+    const f = fixture();
+    await expect(f.provider.research(snapshot, limits, controller.signal)).rejects.toBe(original);
+    expect(companyResearchDiagnostic(original, 'page').reason).toBe('cancelled');
+    expect(f.resolve).not.toHaveBeenCalled(); expect(f.http).not.toHaveBeenCalled();
+  });
+  it('preserves primitive DNS rejections without retaining their payloads', async () => {
+    for (const original of ['PRIVATE rejection', null, undefined, 42, Symbol('PRIVATE')]) {
+      const f = fixture({ resolve: async () => { throw original; } });
+      await expect(f.provider.research(snapshot, limits, new AbortController().signal)).rejects.toBe(original);
+      expect(companyResearchDiagnostic(original, 'page')).toEqual({ stage: 'page', reason: 'unknown' });
+      expect(f.http).not.toHaveBeenCalled();
+    }
+  });
   it('reads an explicitly approved about URL and preserves exact parsed quotes without numeric or contact promotion', async () => {
     const f = fixture();
     const batch = await f.provider.research(snapshot, limits, new AbortController().signal);

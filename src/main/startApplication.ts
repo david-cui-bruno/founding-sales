@@ -236,11 +236,15 @@ export type StartupCompanyResearch = SelectedCompanyResearchPort & {
 /** Main-only composition over the actual runtime gate and C1 SQL ledger. No
  * account, grant, timer, credential read or HTTP operation occurs at construction. */
 function createStartupCompanyResearch(input: { runtime: FoundationRuntime; providers: ReturnType<typeof createOutreachProviders>;
-  configuration: EffectiveCompanyResearchConfiguration; assertAuthority?: (database: AppDatabase) => void; http?: PageHttp; resolve?: (hostname: string) => Promise<string[]> }) {
+  configuration: EffectiveCompanyResearchConfiguration; assertAuthority?: (database: AppDatabase) => void; http?: PageHttp; resolve?: (hostname: string) => Promise<string[]>; logger?: SafeLogger }) {
   const config = structuredClone(input.configuration);
   validateCompanyResearchConfiguration(config);
   const permitted = new Set(config.permittedSources);
   const receipts = createFetchedReceiptPolicy();
+  const issue: NonNullable<Parameters<typeof createCompanyResearchWorker>[0]['issue']> = (_code, _accountId, diagnostic) => {
+    input.logger?.log('warn', 'COMPANY_RESEARCH_PARKED', { component: 'company-research', requestId: diagnostic.jobId,
+      stage: diagnostic.stage, reason: diagnostic.reason, httpStatus: diagnostic.httpStatus });
+  };
   let locked = false; let closed = false; let lifetime = new AbortController();
   const flights = new Set<Promise<unknown>>();
   const invalidate = (suspended?: boolean) => {
@@ -304,7 +308,7 @@ function createStartupCompanyResearch(input: { runtime: FoundationRuntime; provi
           sourceUrls: [...permitted], extractFacts: config.researchLimits.knownCompanyExtraction ? input.providers.researchCompanyFacts : undefined });
         // A completed read projection can still be a running job with a committed
         // receipt. Let exact selected claiming reconcile it through the real worker.
-        await createCompanyResearchWorker({ store, pages, clock: domainClock }).runNext(active);
+        await createCompanyResearchWorker({ store, pages, clock: domainClock, issue }).runNext(active);
         return readSelected(selected);
       });
     },
@@ -320,7 +324,7 @@ function createStartupCompanyResearch(input: { runtime: FoundationRuntime; provi
       if (isLocalKnownCompanyConfiguration(config) || config.researchLimits.knownCompanyExtraction) return 'idle';
       const { store } = stores(active);
       const pages = createCompanyPageProvider({ receipts, clock: domainClock, permitted: url => permitted.has(url), http: input.http, resolve: input.resolve });
-      return createCompanyResearchWorker({ store, pages, clock: domainClock }).runNext(active);
+      return createCompanyResearchWorker({ store, pages, clock: domainClock, issue }).runNext(active);
     }),
   };
   return { api, invalidate, dispose: async () => { closed = true; invalidate(true); await Promise.allSettled([...flights]); } };
@@ -850,7 +854,7 @@ export async function startApplication(
             if (epoch !== researchConfigurationEpoch || !row || row.revision !== local.revision || row.configuration !== JSON.stringify(local.configuration)
               || (paired && new SqlDelegationConfiguration({ database, workspaceId: paired.workspaceId, pairingId: paired.pairingId, clock: domainClock }).read()?.configuration.research)) throw new Error('Research configuration changed');
           } : undefined;
-          companyResearch = createStartupCompanyResearch({ runtime, providers: researchProviders, configuration: config, assertAuthority, http: dependencies.companyResearchHttp, resolve: dependencies.companyResearchResolve });
+          companyResearch = createStartupCompanyResearch({ runtime, providers: researchProviders, configuration: config, assertAuthority, http: dependencies.companyResearchHttp, resolve: dependencies.companyResearchResolve, logger: options.logger });
           companyResearch.invalidate(outboundLocked);
         }
       });

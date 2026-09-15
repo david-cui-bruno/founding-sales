@@ -29,6 +29,22 @@ function capture(
 }
 
 describe('createSafeLogger', () => {
+  it('retains only bounded research stage, reason, HTTP status and generated job identity', () => {
+    const result = capture('warn', 'COMPANY_RESEARCH_PARKED', {
+      component: 'company-research', requestId: POLL_ID, stage: 'model_request', reason: 'provider_rejected', httpStatus: 401,
+      accountId: 'private-company', message: 'private response', url: 'https://private.example/', payload: { key: 'secret' },
+    });
+    expect(result.output()).toEqual({ timestamp: NOW, level: 'warn', eventCode: 'COMPANY_RESEARCH_PARKED',
+      component: 'company-research', requestId: POLL_ID, stage: 'model_request', reason: 'provider_rejected', httpStatus: 401 });
+    for (const value of ACCEPTED_SHAPE_PRIVATE_VALUES) {
+      const rejected = capture('warn', 'COMPANY_RESEARCH_PARKED', { component: 'company-research', stage: value, reason: value, requestId: value, httpStatus: value });
+      expect(rejected.output()).toEqual({ timestamp: NOW, level: 'warn', eventCode: 'COMPANY_RESEARCH_PARKED', component: 'company-research' });
+    }
+    for (const httpStatus of [-1, 99, 600, 401.5, NaN, Infinity]) {
+      expect(capture('warn', 'COMPANY_RESEARCH_PARKED', { component: 'company-research', httpStatus }).output()).not.toHaveProperty('httpStatus');
+    }
+  });
+
   it('retains the intended fields for every actual production event policy', () => {
     const cases = [
       ['error', 'SOURCING_FILE_FAILED', {
