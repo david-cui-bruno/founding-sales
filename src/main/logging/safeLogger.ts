@@ -1,3 +1,5 @@
+import { companyResearchStages, companyResearchReasons } from '../research/companyResearchFailure';
+
 export type SafeLogFields = Readonly<{
   component?: string;
   requestId?: string;
@@ -15,6 +17,9 @@ export type SafeLogFields = Readonly<{
   unprocessedCount?: number;
   status?: string;
   errorClass?: string;
+  stage?: string;
+  reason?: string;
+  httpStatus?: number;
 }>;
 
 export interface SafeLogger {
@@ -28,7 +33,7 @@ export interface SafeLogger {
 type FieldValidator = (value: unknown) => boolean;
 type EventPolicy = Readonly<{
   level: 'debug' | 'info' | 'warn' | 'error';
-  component: 'sourcing-poller' | 'sourcing-credential-store';
+  component: 'sourcing-poller' | 'sourcing-credential-store' | 'company-research';
   fields: Readonly<Record<string, FieldValidator>>;
 }>;
 
@@ -75,6 +80,11 @@ const isOneOf = (...values: readonly string[]): FieldValidator => {
 };
 
 const EVENT_POLICIES: Readonly<Record<string, EventPolicy>> = {
+  COMPANY_RESEARCH_PARKED: {
+    level: 'warn', component: 'company-research',
+    fields: { requestId: isUuid, stage: isOneOf(...companyResearchStages), reason: isOneOf(...companyResearchReasons),
+      httpStatus: value => typeof value === 'number' && Number.isInteger(value) && value >= 100 && value <= 599 },
+  },
   SOURCING_FILE_FAILED: {
     level: 'error', component: 'sourcing-poller',
     fields: { pollId: isUuid, objectKey: isGeneratedObjectKey, errorClass: isErrorClass },

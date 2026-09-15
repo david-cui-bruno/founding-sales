@@ -7,6 +7,7 @@ import { request, type RequestOptions } from 'node:https';
 import { accountEvidenceBatchSchema, type AccountClaim, type AccountSource, type AccountEvidenceBatch } from '../../shared/contracts/accountContract';
 import { companySourcePolicy, publicResearchAddress, type FetchedReceiptPolicy } from './companySourcePolicy';
 import { researchLimitsSchema, type CompanyPagePort } from './companyResearchTypes';
+import { CompanyResearchError, annotateCompanyResearchError, type CompanyResearchStage } from './companyResearchFailure';
 export type PageHttp = (input: { url: string; address: string; maxBytes: number; signal: AbortSignal }) => Promise<Response>;
 /** TLS keeps the original hostname/SNI. DNS is pinned to the prechecked address,
  * no proxy/cookies/session/automatic redirects or connection pool reuse. */
@@ -18,7 +19,7 @@ export function createPinnedPageHttp(requester: typeof request = request): PageH
     const chunks: Buffer[] = []; let size = 0;
     res.on('data', (chunk: Buffer) => {
       size += chunk.length;
-      if (size > maxBytes) { res.destroy(); req.destroy(new Error('Research bytes exceeded')); return; }
+      if (size > maxBytes) { res.destroy(); req.destroy(new CompanyResearchError('page_http', 'bytes_exceeded')); return; }
       chunks.push(chunk);
     });
     res.on('error', reject);
@@ -28,7 +29,7 @@ export function createPinnedPageHttp(requester: typeof request = request): PageH
         for (const [key, value] of Object.entries(res.headers)) if (value) headers.set(key, Array.isArray(value) ? value.join(',') : value);
         const status = res.statusCode ?? 502;
         resolve(new Response([204, 205, 304].includes(status) ? null : Buffer.concat(chunks), { status, headers }));
-      } catch { reject(new Error('Research HTTP response invalid')); }
+      } catch { reject(new CompanyResearchError('page_http', 'http_response_invalid')); }
     });
   });
   req.on('error', reject); req.end();
@@ -43,14 +44,14 @@ async function bounded<T>(operation: Promise<T>, signal: AbortSignal): Promise<T
   });
 }
 async function readBytes(response: Response, maxBytes: number, signal: AbortSignal): Promise<Buffer> {
-  if (!response.body) throw new Error('Research empty page');
+  if (!response.body) throw new CompanyResearchError('page_response', 'empty_page');
   const reader = response.body.getReader(); const chunks: Uint8Array[] = []; let size = 0;
   try {
     for (;;) {
       const part = await bounded(reader.read(), signal);
       if (part.done) break;
       size += part.value.byteLength;
-      if (size > maxBytes) throw new Error('Research bytes exceeded');
+      if (size > maxBytes) throw new CompanyResearchError('page_response', 'bytes_exceeded');
       chunks.push(part.value);
     }
     return Buffer.concat(chunks);
@@ -191,49 +192,58 @@ export function createCompanyPageProvider(options: { receipts: FetchedReceiptPol
   const resolve = options.resolve ?? (async hostname => (await lookup(hostname, { all: true, family: 4 })).map(r => r.address));
   const http = options.http ?? createPinnedPageHttp();
   return { async research(snapshot, rawLimits, callerSignal) {
+    let stage: CompanyResearchStage = 'source_policy';
+    let signal: AbortSignal | undefined;
+    try {
     const limits = researchLimitsSchema.parse(rawLimits);
     callerSignal.throwIfAborted();
-    if (!snapshot.account.domain || !options.permitted) throw new Error('Research permitted source required');
+    if (!snapshot.account.domain || !options.permitted) throw new CompanyResearchError(stage, 'source_required');
     const known = limits.knownCompanyExtraction;
-    if (known && (!options.extractFacts || !sourceUrls.length)) throw new Error('Known company extraction unavailable');
+    if (known && (!options.extractFacts || !sourceUrls.length)) throw new CompanyResearchError(stage, 'extraction_unavailable');
     const modelSources: PageFactInput['sources'] = [];
-    const signal = AbortSignal.any([callerSignal, AbortSignal.timeout(options.timeoutMs ?? 30000)]);
+    signal = AbortSignal.any([callerSignal, AbortSignal.timeout(options.timeoutMs ?? 30000)]);
     const sources = []; const claims: AccountClaim[] = []; const routes: AccountEvidenceBatch['routes'] = [];
     const withheldTargets = new Set<string>(); const qualifiedPhoneLines: string[] = []; let bytes = 0; let requests = 0;
     const urls = known ? sourceUrls.filter(url => companySourcePolicy(url) === 'candidate'
       && new URL(url).hostname === snapshot.account.domain).slice(0, limits.maxPages)
       : ['/', '/services', '/team', '/careers'].slice(0, limits.maxPages).map(path => `https://${snapshot.account.domain}${path}`);
-    if (!urls.length) throw new Error('Research permitted source required');
+    if (!urls.length) throw new CompanyResearchError(stage, 'source_required');
     for (let url of urls) {
       if (requests >= limits.maxPages) break;
       for (;;) {
+        stage = 'source_policy';
         signal.throwIfAborted();
-        if (companySourcePolicy(url) !== 'candidate') throw new Error('Research blocked redirect or source');
+        if (companySourcePolicy(url) !== 'candidate') throw new CompanyResearchError(stage, 'source_blocked');
         const parsed = new URL(url);
-        if (!(known ? parsed.hostname === snapshot.account.domain : [snapshot.account.domain, `www.${snapshot.account.domain}`].includes(parsed.hostname)) || !options.permitted(url, snapshot.account.id)) throw new Error('Research permitted source required');
-        if (requests >= limits.maxPages) throw new Error('Research page budget exceeded');
-        if (bytes >= limits.maxBytes) throw new Error('Research bytes exceeded');
+        if (!(known ? parsed.hostname === snapshot.account.domain : [snapshot.account.domain, `www.${snapshot.account.domain}`].includes(parsed.hostname)) || !options.permitted(url, snapshot.account.id)) throw new CompanyResearchError(stage, 'source_required');
+        if (requests >= limits.maxPages) throw new CompanyResearchError(stage, 'page_budget');
+        if (bytes >= limits.maxBytes) throw new CompanyResearchError(stage, 'bytes_exceeded');
+        stage = 'dns';
         const addresses = await bounded(resolve(parsed.hostname), signal);
         const address = addresses[0];
-        if (address === undefined || addresses.some(address => !publicResearchAddress(address))) throw new Error('Research private address rejected');
+        if (address === undefined || addresses.some(address => !publicResearchAddress(address))) throw new CompanyResearchError(stage, 'private_address');
         signal.throwIfAborted(); requests++;
+        stage = 'page_http';
         const response = await bounded(http({ url, address, maxBytes: limits.maxBytes - bytes, signal }), signal);
+        stage = 'page_response';
         const body = await readBytes(response, limits.maxBytes - bytes, signal); bytes += body.byteLength;
         if (response.status >= 300 && response.status < 400) {
           void response.body?.cancel().catch((): undefined => undefined);
           const location = response.headers.get('location');
-          if (!location) throw new Error('Research redirect invalid');
+          if (!location) throw new CompanyResearchError(stage, 'redirect_invalid');
           url = new URL(location, url).href; continue;
         }
         if (response.status === 404) { void response.body?.cancel().catch((): undefined => undefined); break; }
         if (response.status !== 200 || !/^(text\/html|text\/plain)(;|$)/i.test(response.headers.get('content-type') ?? '')
           || (response.headers.get('content-encoding') && response.headers.get('content-encoding') !== 'identity')) {
-          void response.body?.cancel().catch((): undefined => undefined); throw new Error('Research page response rejected');
+          void response.body?.cancel().catch((): undefined => undefined); throw new CompanyResearchError(stage, 'page_response_rejected', response.status);
         }
         signal.throwIfAborted();
+        stage = 'page_parse';
         const parsedPage = known ? parseCompanyPageText(body, response.headers.get('content-type') ?? '') : null;
         const excerpt = parsedPage?.text ?? body.toString('utf8').slice(0, 12000);
-        if (!excerpt.trim()) throw new Error('Research empty page');
+        if (!excerpt.trim()) throw new CompanyResearchError(stage, 'empty_page');
+        stage = 'source_receipt';
         const source = known ? options.receipts.recordParsedFetched({ accountId: snapshot.account.id, url, fetchedAt: options.clock.now(), body, contentType: response.headers.get('content-type') ?? '' })
           : options.receipts.recordFetched({ accountId: snapshot.account.id, url, fetchedAt: options.clock.now(), body, excerpt });
         if (options.onFetched) await bounded(Promise.resolve(options.onFetched(Object.freeze({ ...source }), snapshot.account.id)), signal);
@@ -242,6 +252,7 @@ export function createCompanyPageProvider(options: { receipts: FetchedReceiptPol
           sources.push(source); modelSources.push({ sourceId: source.id, blocks: parsedPage.blocks });
           break;
         }
+        stage = 'page_parse';
         const extracted = extract(excerpt, source.id, snapshot.account.id,
           /^text\/html(?:;|$)/i.test(response.headers.get('content-type') ?? '')
           && /^\/(?:team\/?|contact\/?)?$/.test(new URL(url).pathname));
@@ -256,14 +267,17 @@ export function createCompanyPageProvider(options: { receipts: FetchedReceiptPol
         break;
       }
     }
-    if (!sources.length) throw new Error('Research no permitted pages');
+    if (!sources.length) throw new CompanyResearchError('page_response', 'no_permitted_pages');
     if (known) {
       signal.throwIfAborted();
       const input: PageFactInput = { capability: known, sources: modelSources };
       // Preserve independent expected bytes even when an injected adapter mutates its input.
-      const facts = validateCompanyFacts(await bounded(options.extractFacts!(structuredClone(input), signal), signal), input);
+      stage = 'model_request';
+      const extractedFacts = await bounded(options.extractFacts!(structuredClone(input), signal), signal);
+      stage = 'fact_validation';
+      const facts = validateCompanyFacts(extractedFacts, input);
       signal.throwIfAborted();
-      if (!facts.length) throw new Error('Research no supported facts');
+      if (!facts.length) throw new CompanyResearchError(stage, 'no_supported_facts');
       for (const fact of facts) claims.push({ key: fact.key, kind: 'fact', value: fact.quote, evidenceIds: [fact.sourceId] });
     }
     // Negative evidence from any bounded page wins, regardless of fetch order.
@@ -275,6 +289,11 @@ export function createCompanyPageProvider(options: { receipts: FetchedReceiptPol
       const target = new RegExp(`\\+${route.value.slice(1).split('').join('[ ()-]*')}(?![0-9])`);
       return !qualifiedPhoneLines.some(line => target.test(line));
     });
+    stage = 'evidence_batch';
     return accountEvidenceBatchSchema.parse({ commandId: randomUUID(), accountId: snapshot.account.id, expectedVersion: snapshot.account.version, sources, claims, routes: eligibleRoutes });
+    } catch (error) {
+      if (callerSignal.aborted || signal?.aborted) throw annotateCompanyResearchError(error, stage, callerSignal.aborted ? 'cancelled' : 'timeout');
+      throw annotateCompanyResearchError(error, stage);
+    }
   } };
 }

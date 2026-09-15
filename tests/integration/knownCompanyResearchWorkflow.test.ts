@@ -9,6 +9,7 @@ import { DomainRuntime } from '../../src/main/domain/domainRuntime';
 import { AccountRepository } from '../../src/main/domain/accounts/accountRepository';
 import { HealthService } from '../../src/main/health/healthService';
 import { startApplication, type ApplicationStartupDependencies, type CompanyResearchStartupConfiguration } from '../../src/main/startApplication';
+import { createSafeLogger } from '../../src/main/logging/safeLogger';
 import { registerApplicationIpc } from '../../src/main/ipc/registerApplicationIpc';
 import { createOutreachProviders } from '../../src/main/outreach/providers/outreachProviders';
 import { companyDraftFacts } from '../../src/main/outreach/companyDraftContext';
@@ -55,6 +56,8 @@ async function fixture(mode: Mode = 'known', maxCostMicros = 100, onExternal: ()
   const events: string[] = [];
   const pageRequests: string[] = [];
   const modelRequests: unknown[] = [];
+  const diagnosticEntries: Record<string, unknown>[] = [];
+  const logger = createSafeLogger({ write: line => diagnosticEntries.push(JSON.parse(line)) });
   const discovery = vi.fn(async () => { onExternal(); return unexpected(); });
   const discoveryGuards: ReturnType<typeof vi.spyOn>[] = [];
   let expectedReservation: SelectedResearch | undefined;
@@ -142,7 +145,7 @@ async function fixture(mode: Mode = 'known', maxCostMicros = 100, onExternal: ()
       stop() {}, idle: async (): Promise<void> => undefined }) as unknown as SourcingPoller,
     createAppleBridgeSupervisor: unexpected,
   };
-  const start = () => startApplication({ appVersion: '1.0.0', userDataPath: dirname(temp.path),
+  const start = () => startApplication({ appVersion: '1.0.0', userDataPath: dirname(temp.path), logger,
     ...(persisted ? {} : { companyResearch: config }), createWindow: () => undefined }, dependencies);
   let app: Awaited<ReturnType<typeof start>> | undefined;
   try {
@@ -164,7 +167,7 @@ async function fixture(mode: Mode = 'known', maxCostMicros = 100, onExternal: ()
       return saved;
     };
     return { get app() { return app!; }, api: publicApi.localWorkspace, publicApi, activate,
-      get database() { return database; }, events, pageRequests, modelRequests, discovery, discoveryGuards, job,
+      get database() { return database; }, events, pageRequests, modelRequests, diagnosticEntries, discovery, discoveryGuards, job,
       expectReservationFor(selected: SelectedResearch) { expectedReservation = selected; },
       async restart() {
         const previous = database;
@@ -268,6 +271,11 @@ describe('known-company selected research through actual startup and encrypted S
       const result = await f.api.researchCompany(selected);
       expect(result).toMatchObject({ ...selected, state: 'parked', receipt: null });
       expect(f.job()).toMatchObject({ state: 'parked', reserved_cost_micros: 100, cost_micros: null, attempt: 1 });
+      expect(f.diagnosticEntries).toEqual([{
+        timestamp: expect.any(String), level: 'warn', eventCode: 'COMPANY_RESEARCH_PARKED', component: 'company-research',
+        requestId: expect.any(String), stage: 'model_request', reason: mode === 'failure' ? 'network_uncertain' : 'quote',
+      }]);
+      expect(f.job()).toMatchObject({ id: f.diagnosticEntries[0]!.requestId });
       const detail = await f.api.getCompany({ accountId: selected.accountId });
       expect(detail.sources).toEqual([]); expect(detail.snapshot.claims).toEqual([]); expect(detail.snapshot.routes).toEqual([]);
       expect(detail.snapshot.account.version).toBe(1);
