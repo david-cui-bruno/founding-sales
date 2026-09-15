@@ -80,6 +80,34 @@ describe('known-company protected page composition', () => {
     expect(f.receipts.attest(batch.sources[0]!, snapshot.account.id)).toBe(true);
     expect(f.receipts.attest({ ...batch.sources[0]!, excerpt: 'Different evidence' }, snapshot.account.id)).toBe(false);
   });
+  it('composes ref-only HTTP selections with exact canonical provenance and receipt binding', async () => {
+    const model = vi.fn<typeof globalThis.fetch>().mockImplementation(async (_url, init) => {
+      const body = JSON.parse(String(init?.body));
+      const source = JSON.parse(body.input).sources[0];
+      expect(source.blocks[0].text).toBe(quote);
+      expect(source.blocks[0].ref).toBe(0);
+      return new Response(JSON.stringify({ status: 'completed', model: capability.model, output: [{
+        type: 'message', role: 'assistant', status: 'completed',
+        content: [{ type: 'output_text', text: JSON.stringify({ facts: [{ key: 'portfolio_description', ref: source.blocks[0].ref }] }) }],
+      }] }));
+    });
+    const f = fixture({ extractFacts: (input, signal) => requestCompanyFacts({ input, signal,
+      credentials: { apiKey: 'fictional-key', model: capability.model }, fetch: model }) });
+    const batch = await f.provider.research(snapshot, limits, new AbortController().signal);
+    expect(model).toHaveBeenCalledTimes(1);
+    expect(batch.claims).toEqual([{ key: 'portfolio_description', kind: 'fact', value: quote, evidenceIds: [batch.sources[0]!.id] }]);
+    expect(batch.routes).toEqual([]);
+    expect(f.receipts.attest(batch.sources[0]!, snapshot.account.id)).toBe(true);
+    expect(f.receipts.attest({ ...batch.sources[0]!, excerpt: 'Changed source' }, snapshot.account.id)).toBe(false);
+  });
+  it('reports no supported facts for all-overlong context without model HTTP', async () => {
+    const model = vi.fn<typeof globalThis.fetch>();
+    const result = await diagnostic({ http: async () => new Response(`<p>${'x'.repeat(2001)}</p>`, { headers: { 'content-type': 'text/html' } }),
+      extractFacts: (input, signal) => requestCompanyFacts({ input, signal,
+        credentials: { apiKey: 'fictional-key', model: capability.model }, fetch: model }) });
+    expect(result.diagnostic).toEqual({ stage: 'fact_validation', reason: 'no_supported_facts' });
+    expect(model).not.toHaveBeenCalled();
+  });
   it('does not silently invoke a model for existing limits', async () => {
     const f = fixture({ sourceUrls: ['https://example.invalid/'], permitted: () => true });
     const { knownCompanyExtraction: _unused, ...legacy } = limits; void _unused;

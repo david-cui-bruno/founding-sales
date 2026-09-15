@@ -18,7 +18,9 @@ import type { SourcingPoller } from '../../src/main/sourcing/sourcingPoller';
 import { createCallieApi } from '../../src/preload/createCallieApi';
 import { createTempDatabase, createTestWorkspaceKey } from './tempDatabase';
 import type { RegisteredIpcHandler } from './registeredIpcHandler';
-import type { CompanyFact, PageFactInput } from '../../src/main/research/companyFactExtraction';
+import type { CompanyFact } from '../../src/main/research/companyFactExtraction';
+
+type WireInput = { sources: { sourceId: string; blocks: { id: string; text: string; ref?: number }[] }[] };
 
 export const localSetupClaims = {
   portfolio_description: 'Our residential portfolio includes apartments and single-family homes, but we do not publish a managed-unit count.',
@@ -67,7 +69,7 @@ export async function createFirstUseDomainFixture(handlers: Map<string, Register
     },
   };
   const modelRequests: { url: string; context: GroundedDraftContext; model: string; store: boolean }[] = [];
-  const extractionRequests: { model: string; store: boolean; input: Pick<PageFactInput, 'sources'>; facts: CompanyFact[] }[] = [];
+  const extractionRequests: { model: string; store: boolean; input: WireInput; facts: CompanyFact[] }[] = [];
   const fixturePages = options.localResearchSetup ? localSetupPages : firstUsePages;
   const manager = createOutreachProviders({ directory: join(dirname(temp.path), 'outreach'), safeStorage,
     fetch: async (url, init) => {
@@ -77,18 +79,22 @@ export async function createFirstUseDomainFixture(handlers: Map<string, Register
       if (options.localResearchSetup && request.text?.format?.name === 'company_facts') {
         if (request.model !== 'gpt-4.1-mini-2025-04-14' || request.store !== false || request.tool_choice !== 'none'
           || JSON.stringify(request.tools) !== '[]' || request.max_output_tokens !== 2048 || init.redirect !== 'error') return deny('unexpected extraction request');
-        const input: Pick<PageFactInput, 'sources'> = JSON.parse(request.input);
+        const input: WireInput = JSON.parse(request.input);
         if (input.sources.length !== 1) return deny('unexpected extraction sources');
         const source = input.sources[0];
+        const selections: { key: CompanyFact['key']; ref: number }[] = [];
         const facts = (Object.entries(localSetupClaims) as [CompanyFact['key'], string][]).map(([key, quote]) => {
-          const block = source.blocks.find(item => item.text === quote);
-          if (!block) return deny('missing whole extraction block');
+          const matches = source.blocks.filter(item => item.text === quote && typeof item.ref === 'number');
+          if (matches.length !== 1) return deny('missing unique whole extraction block');
+          const block = matches[0];
+          if (typeof block.ref !== 'number') return deny('missing extraction ref');
+          selections.push({ key, ref: block.ref });
           return { key, sourceId: source.sourceId, blockId: block.id, quote };
         });
         extractionRequests.push({ model: request.model, store: request.store, input: structuredClone(input), facts });
         return new Response(JSON.stringify({ status: 'completed', model: request.model,
           output: [{ type: 'message', role: 'assistant', status: 'completed',
-            content: [{ type: 'output_text', text: JSON.stringify({ facts }) }] }] }), {
+            content: [{ type: 'output_text', text: JSON.stringify({ facts: selections }) }] }] }), {
           headers: { 'content-type': 'application/json' },
         });
       }
