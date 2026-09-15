@@ -1,6 +1,21 @@
 import { z } from 'zod';
 import { ProviderError } from '../outreach/providers/providerValidation';
 
+const validationReasons = ['response_json', 'envelope', 'model', 'output_limit', 'message_count', 'fact_json', 'fact_schema', 'quote'] as const;
+export type CompanyFactExtractionReason = typeof validationReasons[number];
+// Keep diagnostic provenance separate from mutable/thrown public properties.
+const safeReasons = new WeakMap<object, CompanyFactExtractionReason | undefined>();
+/** Fixed diagnostics only. Never retain schema issues, payloads, or causes. */
+export class CompanyFactExtractionError extends ProviderError {
+  readonly reason: CompanyFactExtractionReason | undefined;
+  constructor(reason: unknown) {
+    super('provider_response_invalid');
+    this.reason = typeof reason === 'string' && validationReasons.some(value => value === reason)
+      ? reason as CompanyFactExtractionReason : undefined;
+    safeReasons.set(this, this.reason);
+  }
+}
+
 export const knownCompanyExtractionSchema = z.strictObject({
   version: z.literal(1), model: z.string().min(1).max(200),
   maxCostMicros: z.number().int().positive().max(20_000_000),
@@ -28,7 +43,8 @@ export type CompanyFactExtractor = (input: PageFactInput, signal: AbortSignal) =
 export function validateCompanyFacts(value: unknown, input: PageFactInput): CompanyFact[] {
   const parsedInput = inputSchema.safeParse(input);
   const parsed = factsSchema.safeParse({ facts: value });
-  if (!parsedInput.success || !parsed.success) throw new ProviderError('provider_response_invalid');
+  if (!parsedInput.success) throw new ProviderError('provider_response_invalid');
+  if (!parsed.success) throw new CompanyFactExtractionError('fact_schema');
   const sources = new Map<string, Map<string, string>>();
   let total = 0;
   for (const source of parsedInput.data.sources) {
@@ -44,7 +60,7 @@ export function validateCompanyFacts(value: unknown, input: PageFactInput): Comp
     sources.set(source.sourceId, blocks);
   }
   for (const fact of parsed.data.facts) {
-    if (!fact.quote.trim() || sources.get(fact.sourceId)?.get(fact.blockId) !== fact.quote) throw new ProviderError('provider_response_invalid');
+    if (!fact.quote.trim() || sources.get(fact.sourceId)?.get(fact.blockId) !== fact.quote) throw new CompanyFactExtractionError('quote');
   }
   return parsed.data.facts;
 }
@@ -61,7 +77,7 @@ const outputSchema = {
   } },
 };
 const messageSchema = z.strictObject({ type: z.literal('message'), id: id.optional(), role: z.literal('assistant'),
-  status: z.literal('completed'), content: z.array(z.strictObject({ type: z.literal('output_text'),
+  status: z.literal('completed'), phase: z.literal('final_answer').nullable().optional(), content: z.array(z.strictObject({ type: z.literal('output_text'),
     text: z.string().max(100000), annotations: z.array(z.never()).optional(), logprobs: z.array(z.never()).optional(),
   })).length(1) });
 const reasoningSchema = z.strictObject({ type: z.literal('reasoning'), id: id.optional(),
@@ -94,7 +110,7 @@ async function checked<T>(operation: () => Promise<T>, signal: AbortSignal): Pro
 }
 async function readResponse(response: Response, signal: AbortSignal): Promise<unknown> {
   checkAbort(signal);
-  if (!response.body) throw new ProviderError('provider_response_invalid');
+  if (!response.body) throw new CompanyFactExtractionError('response_json');
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = []; let size = 0;
   try {
@@ -104,13 +120,13 @@ async function readResponse(response: Response, signal: AbortSignal): Promise<un
       checkAbort(signal);
       if (part.done) break;
       size += part.value.byteLength;
-      if (size > 128 * 1024) throw new ProviderError('provider_response_invalid');
+      if (size > 128 * 1024) throw new CompanyFactExtractionError('output_limit');
       chunks.push(part.value);
     }
     const bytes = new Uint8Array(size); let offset = 0;
     for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
     try { return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); }
-    catch { throw new ProviderError('provider_response_invalid'); }
+    catch { throw new CompanyFactExtractionError('response_json'); }
   } finally {
     void reader.cancel().catch((): undefined => undefined);
     reader.releaseLock();
@@ -151,20 +167,22 @@ export async function requestCompanyFacts(options: { input: PageFactInput; crede
     const raw = await readResponse(response, signal);
     checkAbort(signal);
     const envelope = envelopeSchema.safeParse(raw);
-    if (!envelope.success || envelope.data.model !== input.capability.model
-      || (envelope.data.usage && envelope.data.usage.output_tokens > input.capability.maxOutputTokens)
-      || (envelope.data.max_output_tokens !== undefined && envelope.data.max_output_tokens !== input.capability.maxOutputTokens)) throw new ProviderError('provider_response_invalid');
+    if (!envelope.success) throw new CompanyFactExtractionError('envelope');
+    if (envelope.data.model !== input.capability.model) throw new CompanyFactExtractionError('model');
+    if ((envelope.data.usage && envelope.data.usage.output_tokens > input.capability.maxOutputTokens)
+      || (envelope.data.max_output_tokens !== undefined && envelope.data.max_output_tokens !== input.capability.maxOutputTokens)) throw new CompanyFactExtractionError('output_limit');
     const messages = envelope.data.output.filter(item => item.type === 'message');
-    if (messages.length !== 1) throw new ProviderError('provider_response_invalid');
+    if (messages.length !== 1) throw new CompanyFactExtractionError('message_count');
     let decoded: unknown;
-    try { decoded = JSON.parse(messages[0]!.content[0]!.text); } catch { throw new ProviderError('provider_response_invalid'); }
+    try { decoded = JSON.parse(messages[0]!.content[0]!.text); } catch { throw new CompanyFactExtractionError('fact_json'); }
     const facts = factsSchema.safeParse(decoded);
-    if (!facts.success) throw new ProviderError('provider_response_invalid');
+    if (!facts.success) throw new CompanyFactExtractionError('fact_schema');
     const validated = validateCompanyFacts(facts.data.facts, input);
     checkAbort(signal);
     return validated;
   } catch (error) {
     if (signal.aborted) throw new ProviderError('network_uncertain');
+    if (error instanceof CompanyFactExtractionError && safeReasons.has(error)) throw new CompanyFactExtractionError(safeReasons.get(error));
     if (error instanceof ProviderError && ['provider_response_invalid', 'provider_rejected', 'network_uncertain'].includes(error.code)) throw new ProviderError(error.code);
     throw new ProviderError('network_uncertain');
   }
