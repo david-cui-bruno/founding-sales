@@ -1,9 +1,11 @@
 import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import {
   researchSetupApproveInputSchema, researchSetupReceiptSchema, researchSetupStatusSchema,
-  type ResearchSetupApi, type ResearchSetupBlocker, type ResearchSetupStatus,
+  type ResearchSetupApi, type ResearchSetupBlocker, type ResearchSetupStatus, type ResearchSetupReceipt,
 } from '../../shared/contracts/researchSetupContract';
 
+type AppliedStateReceipt = Extract<ResearchSetupReceipt, { status: 'applied' }>;
+const appliedConfirmation = 'Research policy request applied. This is not proof of provider connectivity or schedule activation.';
 type Lifetime = { api: ResearchSetupApi; busy: boolean };
 type View = { owner: Lifetime | null; status: ResearchSetupStatus | null; fresh: boolean; busy: boolean; uncertain: boolean; message: string };
 const emptyView = (owner: Lifetime | null): View => ({ owner, status: null, fresh: false, busy: false, uncertain: false, message: '' });
@@ -41,16 +43,26 @@ export function ResearchSetupSection({ api }: { api?: ResearchSetupApi }) {
     if (owner.current !== lifetime) return;
     setView(previous => previous.owner === lifetime ? { ...previous, ...patch } : previous);
   }, []);
-  const read = useCallback(async (lifetime: Lifetime) => {
+  const read = useCallback(async (lifetime: Lifetime, appliedStateReceipt?: AppliedStateReceipt) => {
     if (owner.current !== lifetime || lifetime.busy) return;
     lifetime.busy = true;
     setAcknowledged(false);
-    update(lifetime, { fresh: false, busy: true, message: 'Checking cloud research status…' });
+    update(lifetime, { fresh: false, busy: true, message: appliedStateReceipt ? `${appliedConfirmation} Checking current policy status…` : 'Checking cloud research status…' });
     try {
       const status = researchSetupStatusSchema.parse(await lifetime.api.status());
-      update(lifetime, { status, fresh: true, uncertain: !!status.pending || status.blockers.includes('local_pending'), message: '' });
+      if (owner.current !== lifetime) return;
+      if (appliedStateReceipt) {
+        const remote = status.remote;
+        const selector = remote?.selector;
+        if (!remote || !selector || remote.workspaceId !== appliedStateReceipt.workspaceId || remote.pairingId !== appliedStateReceipt.pairingId ||
+            selector.workspaceId !== appliedStateReceipt.workspaceId || selector.pairingId !== appliedStateReceipt.pairingId ||
+            selector.revision < appliedStateReceipt.revision || (selector.revision === appliedStateReceipt.revision && selector.state !== appliedStateReceipt.state)) {
+          throw new Error('follow-up status mismatch');
+        }
+      }
+      update(lifetime, { status, fresh: true, uncertain: !!status.pending || status.blockers.includes('local_pending'), message: appliedStateReceipt ? appliedConfirmation : '' });
     } catch {
-      update(lifetime, { message: 'Cloud research status is unavailable. Refresh to check again. No request was retried.' });
+      update(lifetime, { message: appliedStateReceipt ? `${appliedConfirmation} Follow-up status could not be verified. Policy and balances remain last observed. Refresh before another command. No request was retried.` : 'Cloud research status is unavailable. Refresh to check again. No request was retried.' });
     } finally {
       lifetime.busy = false;
       update(lifetime, { busy: false });
@@ -94,6 +106,7 @@ export function ResearchSetupSection({ api }: { api?: ResearchSetupApi }) {
     lifetime.busy = true;
     setAcknowledged(false);
     update(lifetime, { busy: true, fresh: false, uncertain: true, message: 'Request outcome pending.' });
+    let appliedStateReceipt: AppliedStateReceipt | undefined;
     try {
       const raw = action === 'approve' && proposal.success ? await lifetime.api.approve(proposal.data)
         : action === 'state' && selector ? await lifetime.api.setState({ state: selector.state === 'active' ? 'paused' : 'active', expectedRevision: selector.revision, disclosureAcknowledged: true })
@@ -105,7 +118,10 @@ export function ResearchSetupSection({ api }: { api?: ResearchSetupApi }) {
           (action === 'approve' && receipt.kind !== 'approve') || (action === 'state' && receipt.kind !== 'set-state') ||
           (receipt.status === 'applied' && action === 'approve' && (receipt.revision !== 1 || receipt.state !== 'active')) ||
           (receipt.status === 'applied' && action === 'state' && selector && (receipt.revision !== selector.revision + 1 || receipt.state !== (selector.state === 'active' ? 'paused' : 'active')))) throw new Error('receipt mismatch');
-      update(lifetime, { uncertain: false, status: null, message: receipt.status === 'cancelled'
+      if (action === 'state' && receipt.status === 'applied') {
+        appliedStateReceipt = receipt;
+        update(lifetime, { uncertain: false, message: appliedConfirmation });
+      } else update(lifetime, { uncertain: false, status: null, message: receipt.status === 'cancelled'
         ? 'Pending request cancelled. Refresh for current policy before another action.'
         : action === 'cancel' ? 'Request was already applied. Cancellation cannot undo applied work. Refresh for current policy.'
           : 'Research policy request applied. Refresh for current policy. This is not proof of provider connectivity or schedule activation.' });
@@ -113,7 +129,9 @@ export function ResearchSetupSection({ api }: { api?: ResearchSetupApi }) {
       update(lifetime, { message: 'Request outcome unknown. New edits and commands are blocked. Refresh status, Retry the exact stored request, or Cancel pending request.' });
     } finally {
       lifetime.busy = false;
-      update(lifetime, { busy: false });
+      // Transfer the same lifetime's lock synchronously, without an enabled-command gap.
+      if (appliedStateReceipt && owner.current === lifetime) await read(lifetime, appliedStateReceipt);
+      else update(lifetime, { busy: false });
     }
   }
 
@@ -138,6 +156,7 @@ export function ResearchSetupSection({ api }: { api?: ResearchSetupApi }) {
       </dl>
       {!descriptorCurrent && <p>Operator review is not current. Approval and resume are blocked.</p>}
     </div>}
+    {remote && !view.fresh && <p>Policy and balances are last observed (stale), not current status.</p>}
     {remote && <p>Credential parameter {remote.credentialParameterDeclared ? 'declared' : 'not declared'}. A declaration does not prove credential or provider access works. Status checked: {remote.checkedAt}.</p>}
     {(['discoveryLedger', 'researchLedger'] as const).map((key) => {
       const ledger = remote?.[key];
@@ -145,7 +164,7 @@ export function ResearchSetupSection({ api }: { api?: ResearchSetupApi }) {
     })}
     {remote?.discoveryLedger && remote.researchLedger && <p>Total combined cumulative ceiling: {usd(remote.discoveryLedger.limitMicros + remote.researchLedger.limitMicros)}</p>}
     {selector ? <div>
-      <h3>Existing policy (read-only): {selector.state}</h3>
+      <h3>{view.fresh ? 'Existing policy (read-only)' : 'Last observed policy (stale, read-only)'}: {selector.state}</h3>
       {selector.research && <>
         <p>Residential regions: {selector.research.audience.regions.join(', ')}. Targeting terms: {selector.research.audience.terms.join(', ')}.</p>
         <p>Official websites: {selector.research.permittedSources.join(', ')}</p>
