@@ -256,7 +256,7 @@ function createStartupCompanyResearch(input: { runtime: FoundationRuntime; provi
     const account = <T,>(operation: (repo: AccountRepository) => T, settlement = false) => input.runtime.withDatabase(database => {
       if (!settlement) signal.throwIfAborted();
       return operation(new AccountRepository({ database, clock: domainClock, ids: domainIds, sourcePolicy: receipts,
-        research: { maxBudgetMicros: config.maxAccountBudgetMicros } }));
+        research: { maxBudgetMicros: config.maxAccountBudgetMicros, knownCompanyExtraction: config.researchLimits.knownCompanyExtraction } }));
     });
     const store: AccountResearchStore = {
       create: value => account(repo => repo.create(value)), snapshot: (id, at) => account(repo => repo.snapshot(id, at)),
@@ -302,8 +302,10 @@ function createStartupCompanyResearch(input: { runtime: FoundationRuntime; provi
         catch { return unavailable(saved, 'domain_unavailable'); }
         active.throwIfAborted();
         const { store } = stores(active, selected);
+        if (saved.state === 'not_recorded' && config.researchLimits.knownCompanyExtraction && !input.providers.researchCompanyFacts) return unavailable(saved, 'research_unavailable');
         if (saved.state === 'not_recorded') await store.enqueue({ ...selected, limits: config.researchLimits });
-        const pages = createCompanyPageProvider({ receipts, clock: domainClock, permitted: url => permitted.has(url), http: input.http, resolve: input.resolve });
+        const pages = createCompanyPageProvider({ receipts, clock: domainClock, permitted: url => permitted.has(url), http: input.http, resolve: input.resolve,
+          sourceUrls: [...permitted], extractFacts: config.researchLimits.knownCompanyExtraction ? input.providers.researchCompanyFacts : undefined });
         // A completed read projection can still be a running job with a committed
         // receipt. Let exact selected claiming reconcile it through the real worker.
         await createCompanyResearchWorker({ store, pages, clock: domainClock }).runNext(active);
@@ -311,12 +313,15 @@ function createStartupCompanyResearch(input: { runtime: FoundationRuntime; provi
       });
     },
     prepare: (commandId, signal) => invoke(signal, { status: 'blocked', accountIds: [] }, async active => {
+      // Known-account mode cannot accidentally enter paid company discovery.
+      if (config.researchLimits.knownCompanyExtraction) return { status: 'blocked' as const, accountIds: [] };
       const { store, reservations } = stores(active);
       const discovery = createCompanyDiscoveryProvider({ capability: config.capability,
         request: (query, limits, requestSignal) => input.providers.researchCompanies({ query, limits, capability: config.capability }, requestSignal) });
       return createCompanyPreparation({ store, reservations, discovery, configuration: config }).prepare(commandId, active);
     }),
     runNext: signal => invoke(signal, 'idle', async active => {
+      if (config.researchLimits.knownCompanyExtraction) return 'idle';
       const { store } = stores(active);
       const pages = createCompanyPageProvider({ receipts, clock: domainClock, permitted: url => permitted.has(url), http: input.http, resolve: input.resolve });
       return createCompanyResearchWorker({ store, pages, clock: domainClock }).runNext(active);

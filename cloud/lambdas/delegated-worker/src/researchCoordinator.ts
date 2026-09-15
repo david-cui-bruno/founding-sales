@@ -38,6 +38,8 @@ export async function runResearch(input: ResearchCoordinatorOptions, signal: Abo
     if (config.workspaceId !== store.options.workspaceId || config.state !== 'active' || !config.research) return;
     const guided = await guardGuidedResearch(store, config, input.researchSetupProfile ?? {});
     const settings = config.research;
+    // Selected-account desktop opt-in is not a discovery or hosted-cycle capability.
+    if (settings.researchLimits.knownCompanyExtraction) return;
     if (once && (!guided || config.pairingId !== once.pairingId || config.revision !== once.expectedSourceRevision
       || fingerprint(settings) !== once.researchFingerprint || settings.discoveryLimits.maxCompanies !== 1)) return;
     // Refuse missing page budget BEFORE reserving discovery/provider spend.

@@ -20,7 +20,7 @@ export const accountPortfolioSchema = z.strictObject({ count: z.number().int().n
 const claimBase = { kind: z.enum(['fact', 'hypothesis', 'prospect_stated_problem']), evidenceIds };
 export const accountClaimSchema = z.discriminatedUnion('key', [
   z.strictObject({ ...claimBase, key: z.literal('portfolio'), value: accountPortfolioSchema }),
-  z.strictObject({ ...claimBase, key: z.enum(['residential_scope', 'operating_footprint', 'maintenance_workflow', 'technology', 'role', 'pain']), value: text }),
+  z.strictObject({ ...claimBase, key: z.enum(['residential_scope', 'operating_footprint', 'maintenance_workflow', 'technology', 'role', 'pain', 'ownership', 'portfolio_description']), value: text }),
 ]).refine(claim => claim.kind === 'hypothesis' || claim.evidenceIds.length > 0, 'Supported claims require evidence');
 export type AccountClaim = z.infer<typeof accountClaimSchema>;
 export const accountSourceSchema = z.strictObject({ id: accountIdSchema, url: z.url().max(2048).refine(value => {

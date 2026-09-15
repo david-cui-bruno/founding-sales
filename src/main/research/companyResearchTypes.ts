@@ -1,7 +1,11 @@
 import { z } from 'zod';
+import { knownCompanyExtractionSchema } from './companyFactExtraction';
 import type { Account, AccountEvidenceBatch, AccountEvidenceReceipt, AccountEvidenceSnapshot } from '../../shared/contracts/accountContract';
 export const researchLimitsSchema = z.strictObject({ maxCompanies: z.number().int().min(1).max(50), maxPages: z.number().int().min(1).max(10),
-  maxBytes: z.number().int().min(1).max(1000000), maxCostMicros: z.number().int().positive().max(20000000) });
+  maxBytes: z.number().int().min(1).max(1000000), maxCostMicros: z.number().int().positive().max(20000000),
+  /** Explicit reviewed, durable opt-in for selected known-account extraction. */
+  knownCompanyExtraction: knownCompanyExtractionSchema.optional() }).refine(value => !value.knownCompanyExtraction
+    || value.knownCompanyExtraction.maxCostMicros <= value.maxCostMicros, 'Extraction exceeds research reservation');
 export type ResearchLimits = z.infer<typeof researchLimitsSchema>;
 export const audienceQuerySchema = z.strictObject({ residential: z.literal(true), regions: z.array(z.string().trim().min(1).max(200)).min(1).max(20), terms: z.array(z.string().trim().min(1).max(200)).min(1).max(20) });
 export type AudienceQuery = { residential: boolean; regions: string[]; terms: string[] };

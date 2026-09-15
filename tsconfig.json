@@ -16,6 +16,9 @@
       ],
       "@electron/fuses": [
         "node_modules/@electron/fuses/dist/index.d.ts"
+      ],
+      "cheerio/slim": [
+        "node_modules/cheerio/dist/commonjs/slim"
       ]
     },
     "outDir": "dist",
