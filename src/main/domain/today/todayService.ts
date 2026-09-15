@@ -119,6 +119,10 @@ export class TodayService {
       to: interval.localDayEndAt,
     }).map(attempt => attempt.accountId);
     const ranked = input.ranked
+      // New call nominations need a phone route. Due obligations remain unfiltered.
+      .filter(snapshot => snapshot.routes.some(route => route.channel === 'phone'
+        && route.purpose === 'business'
+        && (route.verification === 'published' || route.verification === 'confirmed')))
       .map(snapshot => rankAccount(snapshot, generatedAt))
       .filter(rank => rank.fit === 'supported' && rank.contactable)
       .map(rank => rank.accountId);

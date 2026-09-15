@@ -36,6 +36,21 @@ import {
   type TempDatabase,
 } from '../fixtures/tempDatabase';
 
+const accountSnapshot = (accountId: string): AccountEvidenceSnapshot => ({
+  account: { id: accountId, name: accountId, domain: `${accountId}.example`, version: 1 },
+  claims: [
+    { kind: 'fact', key: 'residential_scope', value: 'Residential multifamily property management', evidenceIds: [`${accountId}-scope`] },
+    { kind: 'fact', key: 'operating_footprint', value: 'Regional property manager', evidenceIds: [`${accountId}-footprint`] },
+  ],
+  routes: [
+    { id: `${accountId}-route`, accountId, personId: null, channel: 'phone', value: '+15555550100', purpose: 'business', evidenceIds: [`${accountId}-route-evidence`], verification: 'published', version: 1 },
+  ],
+  portfolio: [],
+  unknowns: [],
+  conflicts: [],
+  fingerprint: 'b'.repeat(64),
+});
+
 describe('createDomainServices', () => {
   let database: AppDatabase;
   let temp: TempDatabase;
@@ -142,25 +157,72 @@ describe('createDomainServices', () => {
         updatedAt: '2026-08-30T12:01:00.000Z',
       });
     });
-    const snapshot = (accountId: string): AccountEvidenceSnapshot => ({
-      account: { id: accountId, name: accountId, domain: `${accountId}.example`, version: 1 },
-      claims: [
-        { kind: 'fact', key: 'residential_scope', value: 'Residential multifamily property management', evidenceIds: [`${accountId}-scope`] },
-        { kind: 'fact', key: 'operating_footprint', value: 'Regional property manager', evidenceIds: [`${accountId}-footprint`] },
-      ],
-      routes: [
-        { id: `${accountId}-route`, accountId, personId: null, channel: 'phone', value: '+15555550100', purpose: 'business', evidenceIds: [`${accountId}-route-evidence`], verification: 'published', version: 1 },
-      ],
-      portfolio: [],
-      unknowns: [],
-      conflicts: [],
-      fingerprint: 'b'.repeat(64),
-    });
     expect(services.today.planMeetingFirstAccountCalls({
-      due: [snapshot('warm-due')],
-      ranked: [snapshot('new-configured')],
+      due: [accountSnapshot('warm-due')],
+      ranked: [accountSnapshot('new-configured')],
       generatedAt: '2026-08-30T12:00:00.000Z',
     })).toEqual({ accountIds: ['warm-due', 'new-configured'], workloadConflict: true });
+  });
+
+  it.each([
+    { label: 'email only', channel: 'email', purpose: 'business', verification: 'published', eligible: false },
+    { label: 'confirmed email only', channel: 'email', purpose: 'business', verification: 'confirmed', eligible: false },
+    { label: 'unverified phone', channel: 'phone', purpose: 'business', verification: 'unverified', eligible: false },
+    { label: 'emergency phone', channel: 'phone', purpose: 'tenant_emergency', verification: 'published', eligible: false },
+    { label: 'unknown-purpose phone', channel: 'phone', purpose: 'unknown', verification: 'published', eligible: false },
+    { label: 'published company phone', channel: 'phone', purpose: 'business', verification: 'published', eligible: true },
+    { label: 'confirmed company phone', channel: 'phone', purpose: 'business', verification: 'confirmed', eligible: true },
+  ] as const)('reserves new call slots for usable business phones: $label', ({ channel, purpose, verification, eligible }) => {
+    const { services } = build();
+    services.unitOfWork.immediate(() => {
+      services.workspaceSettings.updateMeetingFirstAccountCallSettingsCas({
+        expectedRevision: 0, newCallSlots: 1, totalCallCapacity: 1,
+        updatedAt: '2026-08-30T12:01:00.000Z',
+      });
+    });
+    const candidate = accountSnapshot('first');
+    candidate.routes = [{ ...candidate.routes[0]!, channel, purpose, verification,
+      value: channel === 'email' ? 'office@example.invalid' : '+15555550100' }];
+    // Email contactability must not rescue an unusable phone for the Calls lane.
+    if (channel === 'phone' && !eligible) candidate.routes.push({
+      ...candidate.routes[0]!, id: 'email-route', channel: 'email', purpose: 'business',
+      verification: 'published', value: 'office@example.invalid',
+    });
+    const uncertain: AccountEvidenceSnapshot = { ...accountSnapshot('uncertain'), claims: [] };
+    const notTarget = accountSnapshot('not-target');
+    notTarget.claims[0] = { ...notTarget.claims[0]!, key: 'residential_scope', value: 'Commercial only' };
+    const ranked = [uncertain, notTarget, candidate, accountSnapshot('later-phone')];
+    expect(services.today.planMeetingFirstAccountCalls({ due: [], ranked })).toEqual({
+      accountIds: [eligible ? 'first' : 'later-phone'], workloadConflict: false,
+    });
+    services.unitOfWork.immediate(() => {
+      services.workspaceSettings.updateMeetingFirstAccountCallSettingsCas({
+        expectedRevision: 1, newCallSlots: 3, totalCallCapacity: 1,
+        updatedAt: '2026-08-30T12:02:00.000Z',
+      });
+    });
+    expect(services.today.planMeetingFirstAccountCalls({ due: [], ranked })).toEqual({
+      accountIds: eligible ? ['first', 'later-phone'] : ['later-phone'], workloadConflict: eligible,
+    });
+  });
+
+  it.each([null, 0, 1])('preserves phone-ineligible due obligations with %s new slots', newCallSlots => {
+    const { services } = build();
+    services.unitOfWork.immediate(() => {
+      services.workspaceSettings.updateMeetingFirstAccountCallSettingsCas({
+        expectedRevision: 0, newCallSlots, totalCallCapacity: 0,
+        updatedAt: '2026-08-30T12:01:00.000Z',
+      });
+    });
+    const emailDue = accountSnapshot('email-due');
+    emailDue.routes = [{ ...emailDue.routes[0]!, channel: 'email', value: 'office@example.invalid' }];
+    const noRouteDue: AccountEvidenceSnapshot = { ...accountSnapshot('no-route-due'), routes: [], claims: [] };
+    expect(services.today.planMeetingFirstAccountCalls({
+      due: [emailDue, noRouteDue, emailDue], ranked: [emailDue, noRouteDue, accountSnapshot('new-phone')],
+    })).toEqual({
+      accountIds: newCallSlots === 1 ? ['email-due', 'no-route-due', 'new-phone'] : ['email-due', 'no-route-due'],
+      workloadConflict: true,
+    });
   });
 
   it('rejects substituted discovery bindings before any query, clock or ID access but accepts equivalent Pick containers', () => {
