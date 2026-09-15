@@ -40,7 +40,7 @@ const allowed = new Set([
   'health:get', 'daily:get', 'local-workspace:get', 'local-workspace:get-commitments',
   'leads:list', 'review:list', 'lead-detail:outbound-capabilities', 'lead-detail:get',
   'outreach:delegation-status', 'local-workspace:review-company', 'local-workspace:create-company',
-  'local-workspace:company-create-status', 'local-workspace:get-company', 'local-workspace:research-company',
+  'local-workspace:company-create-status', 'local-workspace:get-company', 'local-workspace:get-company-draft', 'local-workspace:research-company',
   'local-workspace:company-research-status', 'local-workspace:link-company-person',
   'imports:preview', 'imports:remap', 'imports:commit', 'imports:status',
   'outreach:status', 'outreach:open-draft', 'outreach:save-draft', 'outreach:inspect-local-authority',
