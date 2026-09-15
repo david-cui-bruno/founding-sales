@@ -1,3 +1,4 @@
+import { companyResearchSettingsSchema, companyResearchSettingsUpdateReplySchema, updateCompanyResearchSettingsRequestSchema } from '../../shared/contracts/localCompanyResearchSettingsContract';
 import { localCompanyInputSchema, localCompanyCreateRequestSchema, localCompanyReviewSchema, localCompanyCreateResultSchema, localCompanyCreateStatusSchema } from '../../shared/contracts/localCompanyIntakeContract';
 import { meetingFirstAccountCallSettingsSchema, updateCallSettingsRequestSchema, callSettingsUpdateReplySchema, linkCompanyPersonRequestSchema, accountEvidenceReceiptSchema, localWorkspaceSnapshotSchema, localCommitmentsSnapshotSchema, localWorkflowTransitionSchema, localWorkflowReceiptSchema, selectedCompanySchema, localCompanyDetailSchema, selectedResearchSchema, localCompanyResearchStatusSchema, type LocalWorkspaceApi } from '../../shared/contracts/localWorkspaceContract';
 import { registerValidatedIpc } from '../ipc/registerValidatedIpc';
@@ -9,6 +10,11 @@ export function registerLocalWorkspaceIpc(provider: LocalWorkspaceApi, isTrusted
     return errors;
   };
   try {
+    disposers.push(registerValidatedIpc({ channel: 'local-workspace:get-company-research-settings', requestSchema: null, responseSchema: companyResearchSettingsSchema, safeErrorCode: 'LOCAL_RESEARCH_SETTINGS_READ_FAILED', handler: () => provider.getCompanyResearchSettings(), isTrustedRendererUrl }));
+    disposers.push(registerValidatedIpc({ channel: 'local-workspace:update-company-research-settings', requestSchema: updateCompanyResearchSettingsRequestSchema, responseSchema: companyResearchSettingsSchema, safeErrorCode: 'LOCAL_RESEARCH_SETTINGS_UPDATE_FAILED', isTrustedRendererUrl, handler: async input => {
+      const parsed = updateCompanyResearchSettingsRequestSchema.parse(input);
+      return companyResearchSettingsUpdateReplySchema(parsed).parse(await provider.updateCompanyResearchSettings(parsed));
+    } }));
     disposers.push(registerValidatedIpc({ channel: 'local-workspace:get', requestSchema: null, responseSchema: localWorkspaceSnapshotSchema, safeErrorCode: 'LOCAL_WORKSPACE_READ_FAILED', handler: () => provider.get(), isTrustedRendererUrl }));
     disposers.push(registerValidatedIpc({ channel: 'local-workspace:get-commitments', requestSchema: null, responseSchema: localCommitmentsSnapshotSchema, safeErrorCode: 'LOCAL_COMMITMENTS_READ_FAILED', handler: () => provider.getCommitments(), isTrustedRendererUrl }));
     disposers.push(registerValidatedIpc({ channel: 'local-workspace:transition', requestSchema: localWorkflowTransitionSchema, responseSchema: localWorkflowReceiptSchema, safeErrorCode: 'LOCAL_WORKFLOW_TRANSITION_FAILED', handler: command => provider.transition(command), isTrustedRendererUrl }));

@@ -63,6 +63,7 @@ export const CONTINUITY_READ_CHANNELS = [
 ] as const;
 export const CONTINUITY_REGISTERED_CHANNELS = [
   'health:get',
+  'local-workspace:get-company-research-settings', 'local-workspace:update-company-research-settings',
   'local-workspace:get', 'local-workspace:get-company', 'local-workspace:get-commitments', 'local-workspace:transition',
   'local-workspace:review-company', 'local-workspace:create-company', 'local-workspace:company-create-status',
   'local-workspace:research-company', 'local-workspace:company-research-status', 'local-workspace:link-company-person', 'local-workspace:get-call-settings', 'local-workspace:update-call-settings',
@@ -70,6 +71,7 @@ export const CONTINUITY_REGISTERED_CHANNELS = [
 ] as const;
 
 export const CONTINUITY_UI_CHANNELS = [...CONTINUITY_READ_CHANNELS, 'daily:get', 'leads:list', 'review:list', 'local-workspace:get-company',
+  'local-workspace:get-company-research-settings',
   'local-workspace:review-company', 'local-workspace:create-company', 'local-workspace:company-create-status',
   'outreach:delegation-status', 'lead-detail:outbound-capabilities'] as const;
 export const CONTINUITY_UI_REGISTERED_CHANNELS = [...CONTINUITY_REGISTERED_CHANNELS, 'daily:get',

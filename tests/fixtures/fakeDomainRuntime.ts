@@ -48,6 +48,14 @@ export function fakeDomainRuntime(
     getDiagnostics: () => report,
     getServices: () => ({
       jobs: { listActive: (): never[] => [] },
+      // Startup now reads persisted research settings through FounderSalesDomain.
+      // These fake services support only its construction and the empty read.
+      outboundCommands: { assertBoundTo: (): void => undefined },
+      outboundPermission: { assertBoundTo: (): void => undefined },
+      identities: { assertBoundTo: (): void => undefined },
+      workspaceSettings: {
+        readCompanyResearchSettings: (): { revision: number; configuration: null } => ({ revision: 0, configuration: null }),
+      },
     }) as never,
     shutdown: () => {
       options.onShutdown?.();

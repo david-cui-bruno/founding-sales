@@ -50,7 +50,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
   for (const dispose of cleanup.splice(0).reverse()) await dispose();
 });
-async function fixture(version = 24, journal = 'WAL') {
+async function fixture(version = 25, journal = 'WAL') {
   mkdirSync(scratch, { recursive: true });
   const directory = mkdtempSync(join(scratch, 'encrypted-preparation-'));
   cleanup.push(() => rmSync(directory, { recursive: true, force: true }));
@@ -64,7 +64,7 @@ async function fixture(version = 24, journal = 'WAL') {
       workspaceKey: key,
     },
   );
-  if (version === 24) {
+  if (version === 25) {
     const runtime = new DomainRuntime({
       database,
       clock: { now: () => '2026-09-06T12:00:00.000Z' },
@@ -98,7 +98,7 @@ function timezone(raw: driver.RawDatabase) {
 }
 function fingerprint(raw: driver.RawDatabase) {
   try {
-    return readAndVerifyDatabaseFingerprint(raw, [24]);
+    return readAndVerifyDatabaseFingerprint(raw, [25]);
   } finally {
     raw.defaultSafeIntegers(false);
   }
@@ -173,7 +173,7 @@ async function ready(f: Fixture) {
   await boot.runtime.initialize();
   expect(await boot.runtime.getHealth()).toMatchObject({
     databaseEncrypted: true,
-    schemaVersion: 24,
+    schemaVersion: 25,
     domainReady: true,
   });
   expect(boot.keys.every((key) => key.equals(Buffer.alloc(32)))).toBe(true);
@@ -300,7 +300,7 @@ describe('bounded encrypted startup preparation', () => {
   it.each(['WAL', 'DELETE'])(
     'inspects clean %s once without writable stabilization, cleanup or fsync',
     async (journal) => {
-      const f = await fixture(24, journal);
+      const f = await fixture(25, journal);
       const before = readFileSync(f.path);
       const oracle = connection(f, true);
       const expected = fingerprint(oracle);
@@ -401,7 +401,7 @@ describe('bounded encrypted startup preparation', () => {
     writer.close();
     await boot.runtime.initialize();
     expect(await boot.runtime.getHealth()).toMatchObject({
-      schemaVersion: 24,
+      schemaVersion: 25,
       domainReady: true,
     });
     expect(
@@ -444,14 +444,14 @@ describe('bounded encrypted startup preparation', () => {
     failure.mockRestore();
     await boot.runtime.initialize();
     expect(await boot.runtime.getHealth()).toMatchObject({
-      schemaVersion: 24,
+      schemaVersion: 25,
       domainReady: true,
     });
   });
   it.each(['.encryption-state.json', '.encrypting', '.plaintext-recovery-wal'])(
     'does not delete late %s arrival after classification',
     async (suffix) => {
-      const f = await fixture(24, 'DELETE');
+      const f = await fixture(25, 'DELETE');
       const actualLstat = files.lstat;
       let canonicalReads = 0;
       let injected = false;
@@ -484,7 +484,7 @@ describe('bounded encrypted startup preparation', () => {
     'ledger-drift',
     'manifest-drift',
   ])('fresh downstream admission handles postinspection %s', async (kind) => {
-    const f = await fixture(24, 'DELETE');
+    const f = await fixture(25, 'DELETE');
     const observation = observePrepare(f, () => {
       const raw = connection(f);
       if (kind === 'supported-write')
@@ -492,10 +492,10 @@ describe('bounded encrypted startup preparation', () => {
           .prepare("UPDATE workspace_settings SET timezone='Pacific/Honolulu'")
           .run();
       if (kind === 'future-schema')
-        raw.exec('UPDATE app_meta SET schema_version=25');
+        raw.exec('UPDATE app_meta SET schema_version=26');
       if (kind === 'ledger-drift')
         raw.exec(
-          "DELETE FROM kysely_migration WHERE name='0024RequestedFollowupAndPolicyReviews'",
+          "DELETE FROM kysely_migration WHERE name='0025KnownCompanyResearchSettings'",
         );
       if (kind === 'manifest-drift')
         raw.exec('DROP INDEX jobs_state_created_idx');
@@ -520,7 +520,7 @@ describe('bounded encrypted startup preparation', () => {
   it.each(['missing', 'directory', 'dangling-symlink'])(
     'rejects postinspection canonical %s before downstream creation',
     async (kind) => {
-      const f = await fixture(24, 'DELETE');
+      const f = await fixture(25, 'DELETE');
       const before = readFileSync(f.path);
       const observation = observePrepare(f, () => {
         renameSync(f.path, `${f.path}.retained`);
@@ -545,7 +545,7 @@ describe('bounded encrypted startup preparation', () => {
     'directory',
     'symlink',
   ])('re-admits postinspection pathname replacement: %s', async (kind) => {
-    const f = await fixture(24, 'DELETE');
+    const f = await fixture(25, 'DELETE');
     const replacement = join(f.directory, 'replacement.sqlite3');
     copyFileSync(f.path, replacement);
     if (kind === 'valid' || kind === 'future') {
@@ -553,7 +553,7 @@ describe('bounded encrypted startup preparation', () => {
       driver.applyWorkspaceKey(raw, f.key.bytes);
       raw.exec(
         kind === 'future'
-          ? 'UPDATE app_meta SET schema_version=25'
+          ? 'UPDATE app_meta SET schema_version=26'
           : "UPDATE workspace_settings SET timezone='Pacific/Honolulu'",
       );
       raw.close();
@@ -598,7 +598,7 @@ describe('bounded encrypted startup preparation', () => {
         const raw = connection(f, true);
         expect(
           raw.prepare('SELECT schema_version FROM app_meta').get(),
-        ).toEqual({ schema_version: 25 });
+        ).toEqual({ schema_version: 26 });
         raw.close();
       }
     }
@@ -615,7 +615,7 @@ describe('bounded encrypted startup preparation', () => {
     '.plaintext-recovery-journal',
     '-journal',
   ])('retains old stabilization for present %s', async (suffix) => {
-    const f = await fixture(24, 'DELETE');
+    const f = await fixture(25, 'DELETE');
     // Empty regular journal is nonhot. Invalid alternate families still take
     // canonical stabilization and baseline artifact cleanup.
     writeFileSync(`${f.path}${suffix}`, '');
@@ -630,7 +630,7 @@ describe('bounded encrypted startup preparation', () => {
   it.each(['.encrypting', '.plaintext-recovery'])(
     'stabilizes and cleans a valid encrypted alternate %s',
     async (suffix) => {
-      const f = await fixture(24, 'DELETE');
+      const f = await fixture(25, 'DELETE');
       copyFileSync(f.path, `${f.path}${suffix}`);
       const observation = observePrepare(f);
       await prepareEncryptedDatabase(f.path, f.key);
@@ -644,7 +644,7 @@ describe('bounded encrypted startup preparation', () => {
   it.each(['.encrypting', '.plaintext-recovery'])(
     'preserves baseline alternate directory refusal for %s',
     async (suffix) => {
-      const f = await fixture(24, 'DELETE');
+      const f = await fixture(25, 'DELETE');
       mkdirSync(`${f.path}${suffix}`);
       const observation = observePrepare(f);
       await expect(
@@ -657,7 +657,7 @@ describe('bounded encrypted startup preparation', () => {
   it.each(['.encrypting', '.plaintext-recovery'])(
     'uses baseline cleanup without following alternate symlink %s',
     async (suffix) => {
-      const f = await fixture(24, 'DELETE');
+      const f = await fixture(25, 'DELETE');
       const target = join(f.directory, 'retained-target');
       writeFileSync(target, 'do not touch');
       symlinkSync(target, `${f.path}${suffix}`);
@@ -668,7 +668,7 @@ describe('bounded encrypted startup preparation', () => {
     },
   );
   it('retains stabilization and marker cleanup for a well-formed prior upgrade marker', async () => {
-    const f = await fixture(24, 'DELETE');
+    const f = await fixture(25, 'DELETE');
     const marker = plaintextUpgradePaths(f.path).marker;
     writeFileSync(
       marker,
@@ -730,12 +730,12 @@ describe('bounded encrypted startup preparation', () => {
     'shm-symlink',
     'journal-symlink',
   ])('preserves rejected initial admission: %s', async (kind) => {
-    const f = await fixture(24, 'DELETE');
+    const f = await fixture(25, 'DELETE');
     if (kind === 'future-schema' || kind === 'missing-meta') {
       const raw = connection(f);
       raw.exec(
         kind === 'future-schema'
-          ? 'UPDATE app_meta SET schema_version=25'
+          ? 'UPDATE app_meta SET schema_version=26'
           : 'DROP TABLE app_meta',
       );
       raw.close();

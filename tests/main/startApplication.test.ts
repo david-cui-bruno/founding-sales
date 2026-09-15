@@ -5,6 +5,7 @@ import { join } from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
 import { fakeDomainRuntime } from '../fixtures/fakeDomainRuntime';
+import { DomainRuntimeBlockedError } from '../../src/main/domain/startup/domainStartupTypes';
 
 import type { AppDatabase } from '../../src/main/db/database';
 import type { MigrationOptions } from '../../src/main/db/migrate';
@@ -124,6 +125,35 @@ describe('startApplication', () => {
       closeDatabase: () => events.push('close'),
     };
   }
+
+  it('exposes diagnostics and the window for a blocked domain without enabling company research', async () => {
+    const events: string[] = [];
+    const dependencies = createDependencies(events);
+    const blocked = fakeDomainRuntime({ status: 'blocked' });
+    const unavailable = new DomainRuntimeBlockedError();
+    blocked.getServices = vi.fn(() => { throw unavailable; });
+    dependencies.createDomainRuntime = () => blocked;
+    const blockedHealth = { ...health, domainStatus: 'blocked' as const, domainReady: false,
+      domainBlockingViolationCount: 1 };
+    dependencies.createHealthService = options => {
+      expect(options.domainStartupReport.status).toBe('blocked');
+      return { getHealth: () => blockedHealth };
+    };
+    let runtime!: FoundationRuntime;
+    dependencies.registerApplicationIpc = bound => {
+      runtime = bound; events.push('ipc'); return () => events.push('unregister');
+    };
+    const app = await startApplication({ appVersion: '1', userDataPath: '/fixture/blocked',
+      createWindow: () => { events.push('window'); } }, dependencies);
+    try {
+      expect(events).toContain('ipc');
+      expect(events).toContain('window');
+      expect(await runtime.getHealth()).toEqual(blockedHealth);
+      expect(app.companyResearch).toBeUndefined();
+      await expect(runtime.withDomain((): void => undefined)).rejects.toBe(unavailable);
+    } finally { await app.shutdown(); }
+    expect(events.at(-1)).toBe('close');
+  });
 
   it.each(['key', 'open', 'initialize'] as const)('raw %s failure rejects only after the available resource cleanup and never exposes IPC', async stage => {
     const events: string[] = [];
@@ -267,7 +297,7 @@ describe('startApplication', () => {
     }, dependencies);
     try {
       expect(factory).toHaveBeenCalledTimes(1);
-      expect(register.mock.calls[0]).toEqual([runtime, trust, undefined, expect.any(Object), expect.any(Object), undefined, enrichment, '/fixture/logs', service, { selectedCompanyResearch: { current: expect.any(Function) } }]);
+      expect(register.mock.calls[0]).toEqual([runtime, trust, undefined, expect.any(Object), expect.any(Object), undefined, enrichment, '/fixture/logs', service, { selectedCompanyResearch: { current: expect.any(Function) }, companyResearchSettings: { changed: expect.any(Function), pairedResearchPresent: expect.any(Function) } }]);
       expect(register.mock.calls[0]![9]?.selectedCompanyResearch?.current()).toBeNull();
       expect(events.slice(4, 8)).toEqual(['outbound', 'listen', 'ipc', 'window']);
       expect(removeAbort).toHaveBeenCalledTimes(1);

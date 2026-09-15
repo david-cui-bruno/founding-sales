@@ -535,7 +535,8 @@ it('renders a safe setup error instead of raw provider secrets', async () => {
   expect(await screen.findByRole('alert')).toBeTruthy(); expect(screen.queryByText(/fixture-secret/)).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Refresh connection status' }));
   await waitFor(() => expect((screen.getByRole('button', { name: 'Save connections' }) as HTMLButtonElement).disabled).toBe(false));
-  expect(api.status).toHaveBeenCalledTimes(2);
+  // Connections initial + explicit refresh, and local research stored-model hint.
+  expect(api.status).toHaveBeenCalledTimes(3);
   expect(screen.queryByRole('alert')).toBeNull();
   expect(api.configure).not.toHaveBeenCalled();
   expect(api.connectGmail).not.toHaveBeenCalled();
@@ -558,7 +559,7 @@ describe('Local workflow transition', () => {
   function localApi() {
     const snapshot: import('../../shared/contracts/localWorkspaceContract').LocalWorkspaceSnapshot = { scope: 'local_database', generatedAt: receipt.occurredAt, workflowMode: 'legacy', transitionReceipt: null, accounts: { state: 'available', snapshots: [] } };
     const unavailableCompanyIntake = async () => { throw Error('Company intake unavailable in this fixture'); };
-    return { get: vi.fn(async () => snapshot), getCompany: vi.fn(async () => { throw Error('Selected company detail unavailable in this fixture'); }), researchCompany: vi.fn(unavailableCompanyIntake), getCompanyResearchStatus: vi.fn(unavailableCompanyIntake), getCallSettings: async () => { throw Error('Call capacity unavailable in this fixture'); }, updateCallSettings: async () => { throw Error('Call capacity unavailable in this fixture'); }, linkCompanyPerson: vi.fn(unavailableCompanyIntake), getCommitments: vi.fn(), reviewCompany: vi.fn(unavailableCompanyIntake), createCompany: vi.fn(unavailableCompanyIntake), getCompanyCreateStatus: vi.fn(unavailableCompanyIntake), transition: vi.fn(async (command: import('../../shared/contracts/localWorkspaceContract').LocalWorkflowTransition) => ({ ...receipt, commandId: command.commandId, manifestId: command.manifestId })) };
+    return { get: vi.fn(async () => snapshot), getCompany: vi.fn(async () => { throw Error('Selected company detail unavailable in this fixture'); }), researchCompany: vi.fn(unavailableCompanyIntake), getCompanyResearchStatus: vi.fn(unavailableCompanyIntake), getCompanyResearchSettings: async () => { throw Error('Local research setup unavailable in this fixture'); }, updateCompanyResearchSettings: async () => { throw Error('Local research setup unavailable in this fixture'); }, getCallSettings: async () => { throw Error('Call capacity unavailable in this fixture'); }, updateCallSettings: async () => { throw Error('Call capacity unavailable in this fixture'); }, linkCompanyPerson: vi.fn(unavailableCompanyIntake), getCommitments: vi.fn(), reviewCompany: vi.fn(unavailableCompanyIntake), createCompany: vi.fn(unavailableCompanyIntake), getCompanyCreateStatus: vi.fn(unavailableCompanyIntake), transition: vi.fn(async (command: import('../../shared/contracts/localWorkspaceContract').LocalWorkflowTransition) => ({ ...receipt, commandId: command.commandId, manifestId: command.manifestId })) };
   }
   async function open(api = localApi()) {
     const view = renderSettings({ localWorkspaceApi: api });

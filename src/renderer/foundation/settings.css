@@ -301,3 +301,29 @@
 .settings-google-connections .settings__counters > div { min-width: 0; }
 .settings-google-connections .settings__counters dd { margin-left: 0; min-width: 0; overflow-wrap: anywhere; }
 .settings-google-connections p { overflow-wrap: anywhere; }
+
+/* Approved inline local known-company setup. Reuses Native Desk theme/density tokens. */
+.settings-local-research { min-width: 0; }
+.settings-local-research p { color: var(--text-muted); font-size: var(--text-caption); overflow-wrap: anywhere; }
+.settings-local-research__header, .settings-local-research__footer { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; }
+.settings-local-research__header > span { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: var(--space-1) var(--space-2); background: var(--surface-sunken); font-size: var(--text-caption); }
+.settings-local-research__fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(150px, 195px); gap: var(--space-4); margin: var(--space-4) 0; }
+.settings-local-research label { display: block; font-weight: var(--weight-medium); margin-bottom: var(--space-2); }
+.settings-local-research input:not([type="checkbox"]), .settings-local-research textarea, .settings-local-research select { box-sizing: border-box; width: 100%; min-width: 0; border: 1px solid var(--line-interactive); border-radius: var(--radius-sm); padding: var(--space-3); color: var(--text); background: var(--surface); font: inherit; }
+.settings-local-research textarea { min-height: 78px; resize: vertical; font-family: var(--font-mono); font-size: var(--text-caption); }
+.settings-local-research :is(input, textarea, select, summary, a):focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.settings-local-research__dollars { display: flex; align-items: center; gap: var(--space-2); }
+.settings-local-research__dollars > span { white-space: nowrap; }
+.settings-local-research__profile { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: var(--space-3); background: var(--surface-sunken); }
+.settings-local-research__profile-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-3); margin: var(--space-3) 0; }
+.settings-local-research__profile-grid span { display: block; color: var(--text-muted); font-size: var(--text-caption); }
+.settings-local-research__profile-grid strong { overflow-wrap: anywhere; }
+.settings-local-research summary { color: var(--accent); cursor: pointer; font-size: var(--text-caption); }
+.settings-local-research dl { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-2) var(--space-3); font-size: var(--text-caption); }
+.settings-local-research dt { color: var(--text-muted); }
+.settings-local-research dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
+.settings-local-research .settings-local-research__review { display: flex; align-items: flex-start; gap: var(--space-2); margin: var(--space-4) 0; font-size: var(--text-caption); font-weight: var(--weight-body); }
+.settings-local-research__review input { flex: none; margin-top: 3px; accent-color: var(--accent); }
+.settings-local-research__footer { border-top: 1px solid var(--line); padding-top: var(--space-3); }
+.settings-local-research pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-caption); }
+@media (max-width: 800px) { .settings-local-research__fields, .settings-local-research__profile-grid { grid-template-columns: minmax(0, 1fr); } }

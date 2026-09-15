@@ -1,3 +1,4 @@
+import type { UpdateCompanyResearchSettingsRequest } from '../../shared/contracts/localCompanyResearchSettingsContract';
 import { LocalCompanyIntake } from './accounts/localCompanyIntake';
 import { AccountRepository } from './accounts/accountRepository';
 import type { AccountEvidenceReceipt } from '../../shared/contracts/accountContract';
@@ -1229,6 +1230,12 @@ export class FounderSalesDomain implements OutboundDomainPort {
   }
 
   // ---------------------------------------------------------------- today
+
+  getCompanyResearchSettings() { return this.services.workspaceSettings.readCompanyResearchSettings(); }
+
+  updateCompanyResearchSettings(input: UpdateCompanyResearchSettingsRequest) {
+    return this.services.unitOfWork.immediate(() => this.services.workspaceSettings.updateCompanyResearchSettingsCas(input, this.clock.now()));
+  }
 
   getCallSettings() { return this.services.workspaceSettings.readMeetingFirstAccountCallSettings(); }
 

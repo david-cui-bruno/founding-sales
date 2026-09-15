@@ -326,6 +326,8 @@ function FirstUseDesk({ api }: { api: ReturnType<typeof fixture>['api'] }) {
 function f4Tree(api: ReturnType<typeof fixture>['api'], routeKey = 'accounts') { return <FirstUseOwnerProvider api={api.localWorkspace}><FirstUseDesk key={routeKey} api={api} /></FirstUseOwnerProvider>; }
 function f4Api() {
   const f = fixture(true);
+  // Explicit legacy research: no standalone configuration, paired policy remains authoritative.
+  f.api.localWorkspace.getCompanyResearchSettings = vi.fn(async () => ({ revision: 0, configuration: null, profiles: [], blockedReason: 'paired_research_present' as const, reservedOrSpentMicros: 0 }));
   f.api.localWorkspace.getCompany = vi.fn<LocalWorkspaceApi['getCompany']>(async ({ accountId }) => f4Company(accountId));
   f.api.localWorkspace.getCompanyResearchStatus = vi.fn<LocalWorkspaceApi['getCompanyResearchStatus']>(async r => f4Status(r, 'not_recorded'));
   f.api.localWorkspace.researchCompany = vi.fn<LocalWorkspaceApi['researchCompany']>(async r => f4Status(r, 'held'));
@@ -340,7 +342,8 @@ it('F4-local-01 fallback selected research survives healthy namespace and fresh 
   f.api.localWorkspace.researchCompany = vi.fn<LocalWorkspaceApi['researchCompany']>(() => gate.promise);
   const view = render(f4Tree(f.api));
   await screen.findByText(/Daily workspace unavailable/); fireEvent.click(await screen.findByRole('button', { name: 'Local account · Account A' }));
-  await screen.findByText('Selected local source a'); fireEvent.click(screen.getByRole('button', { name: /^Research(?: company)?$/i }));
+  await screen.findByText('Selected local source a'); await screen.findByText('Existing paired research remains governed by its policy. Standalone local activation is unavailable.');
+  fireEvent.click(screen.getByRole('button', { name: /^Research(?: company)?$/i }));
   expect(f.api.localWorkspace.researchCompany).toHaveBeenCalledOnce();
   const original = vi.mocked(f.api.localWorkspace.researchCompany).mock.calls[0][0];
   fireEvent.click(screen.getByRole('button', { name: 'Refresh' })); await screen.findByTestId('native-desk');
@@ -368,6 +371,7 @@ it('F4-local-03 selecting B then Close preserves A unresolved and returning A ke
   const gate = f4Deferred(f4Status(r, 'completed')); vi.spyOn(crypto, 'randomUUID').mockReturnValue('10000000-0000-4000-8000-000000000001');
   f.api.localWorkspace.researchCompany = vi.fn<LocalWorkspaceApi['researchCompany']>(() => gate.promise); render(f4Tree(f.api)); await screen.findByTestId('native-desk');
   fireEvent.click(screen.getByRole('button', { name: 'Local account · Account A' })); await screen.findByText('Selected local source a');
+  await screen.findByText('Existing paired research remains governed by its policy. Standalone local activation is unavailable.');
   fireEvent.click(screen.getByRole('button', { name: /^Research(?: company)?$/i }));
   fireEvent.click(screen.getByRole('button', { name: 'Local account · Account B' })); await screen.findByText('Selected local source b');
   fireEvent.click(screen.getByRole('button', { name: /^Research(?: company)?$/i })); expect(f.api.localWorkspace.researchCompany).toHaveBeenCalledOnce();

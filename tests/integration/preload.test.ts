@@ -156,7 +156,7 @@ describe('preload workflow bridge', () => {
     ]);
     expect(Object.keys(api.localWorkspace).sort()).toEqual([
       'createCompany', 'get', 'getCallSettings', 'getCommitments', 'getCompany', 'getCompanyCreateStatus',
-      'getCompanyResearchStatus', 'linkCompanyPerson', 'researchCompany', 'reviewCompany', 'transition', 'updateCallSettings',
+      'getCompanyResearchSettings', 'getCompanyResearchStatus', 'linkCompanyPerson', 'researchCompany', 'reviewCompany', 'transition', 'updateCallSettings', 'updateCompanyResearchSettings',
     ]);
     expect(Object.keys(api.today).sort()).toEqual([
       'addLeadNote', 'complete', 'get', 'getLeadTriageSnapshot', 'getTriageQueue', 'logCallOutcome',

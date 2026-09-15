@@ -3,7 +3,7 @@ import { configureOutreachSchema, outreachStatusSchema, type OutreachApi, type O
 import { Button } from '../components/Button';
 
 /** User-owned credentials. No connection, generation or send occurs on mount. */
-export function ConnectionsSection({ api }: { api?: OutreachApi }) {
+export function ConnectionsSection({ api, onSaved }: { api?: OutreachApi; onSaved?(): void }) {
   const [status, setStatus] = useState<OutreachStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -51,7 +51,7 @@ export function ConnectionsSection({ api }: { api?: OutreachApi }) {
     pending.current = true; setBusy(true); setError(null); setMessage(null);
     try {
       const result = outreachStatusSchema.parse(await command());
-      if (current === generation.current) { setStatus(result); setMessage(success); }
+      if (current === generation.current) { setStatus(result); setMessage(success); try { onSaved?.(); } catch { /* Stored connection remains confirmed. */ } }
     } catch { if (current === generation.current) setError('Connection change could not be completed. Check your setup and try again.'); }
     finally {
       if (current === generation.current) {

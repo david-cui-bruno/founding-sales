@@ -8,7 +8,7 @@ import { performPreReleaseBackup, openExistingPreReleaseDatabase, validateBackup
 import { resolveApplicationPaths } from '../src/main/applicationPaths';
 import { openDatabase, closeDatabase } from '../src/main/db/database';
 import { applyWorkspaceKey, createRawDatabase } from '../src/main/db/sqliteDriver';
-import { createMigrationRunner, migrateToLatest, productionMigrations } from '../src/main/db/migrate';
+import { createMigrationRunner, productionMigrations } from '../src/main/db/migrate';
 import { BackupService } from '../src/main/backup/backupService';
 import { validatePreReleaseReceipt } from '../scripts/createPreReleaseBackup.mjs';
 const roots = [];
@@ -32,7 +32,7 @@ it('holds the real host lock protocol through drain/close/zero, returning only a
   expect(key.bytes).toEqual(Buffer.alloc(32)); expect(result).toEqual({ basename: receipt.basename, kind: 'pre_release', schemaVersion: 24, sha256: 'a'.repeat(64), sizeBytes: 1234, createdAt: receipt.createdAt, verifiedAt: receipt.verifiedAt });
 });
 it.each([
-  ['schemaVersion', 14], ['schemaVersion', 15], ['schemaVersion', 16], ['schemaVersion', 17], ['schemaVersion', 18], ['schemaVersion', 19], ['schemaVersion', 20], ['schemaVersion', 21], ['schemaVersion', 22], ['schemaVersion', 23], ['schemaVersion', 25], ['schemaVersion', '19'], ['schemaVersion', '20'], ['schemaVersion', '22'], ['schemaVersion', null], ['schemaVersion', true],
+  ['schemaVersion', 14], ['schemaVersion', 15], ['schemaVersion', 16], ['schemaVersion', 17], ['schemaVersion', 18], ['schemaVersion', 19], ['schemaVersion', 20], ['schemaVersion', 21], ['schemaVersion', 22], ['schemaVersion', 23], ['schemaVersion', 26], ['schemaVersion', '19'], ['schemaVersion', '20'], ['schemaVersion', '22'], ['schemaVersion', null], ['schemaVersion', true],
   ['basename', [receipt.basename]], ['basename', 'private/path.sqlite3'], ['kind', 'manual'],
   ['sha256', [receipt.sha256]], ['sha256', 'A'.repeat(64)], ['sizeBytes', '1234'], ['sizeBytes', 0], ['sizeBytes', 1.5],
   ['createdAt', [receipt.createdAt]], ['createdAt', '2026-09-06'], ['verifiedAt', null], ['verifiedAt', 'invalid'],
@@ -54,28 +54,28 @@ async function workspace(version = 24) {
   const paths = resolveApplicationPaths(root); const key = { bytes: Buffer.alloc(32, 42), version: 1 };
   const database = openDatabase({ path: paths.databasePath, key });
   try {
-    const registry = version === 25 ? [...productionMigrations, { id: '0025SyntheticFuture', schemaVersion: 25,
-      migration: { async up(db) { await sql.raw('CREATE TABLE synthetic_future25 (id TEXT PRIMARY KEY)').execute(db);
-        await sql.raw('UPDATE app_meta SET schema_version = 25').execute(db); } } }] : productionMigrations.filter(x => x.schemaVersion <= version);
-    const migrate = version === 24 ? migrateToLatest : createMigrationRunner(registry);
+    const registry = version === 26 ? [...productionMigrations, { id: '0026SyntheticFuture', schemaVersion: 26,
+      migration: { async up(db) { await sql.raw('CREATE TABLE synthetic_future26 (id TEXT PRIMARY KEY)').execute(db);
+        await sql.raw('UPDATE app_meta SET schema_version = 26').execute(db); } } }] : productionMigrations.filter(x => x.schemaVersion <= version);
+    const migrate = createMigrationRunner(registry);
     await migrate(database, { backupDirectory: paths.backupDirectory, workspaceKey: key });
     expect(database.raw.prepare('SELECT schema_version FROM app_meta').get()).toEqual({ schema_version: version });
     expect(database.raw.prepare('SELECT name FROM kysely_migration ORDER BY timestamp, name').all()).toEqual(registry.map(x => ({ name: x.id })));
     expect(database.raw.prepare("SELECT name FROM sqlite_master WHERE name = 'discovery_assessments'").get() !== undefined).toBe(version >= 17);
-    expect(database.raw.prepare("SELECT name FROM sqlite_master WHERE name = 'synthetic_future25'").get() !== undefined).toBe(version === 25);
+    expect(database.raw.prepare("SELECT name FROM sqlite_master WHERE name = 'synthetic_future26'").get() !== undefined).toBe(version === 26);
     expect(database.raw.prepare("SELECT name FROM sqlite_master WHERE name = 'pm_accounts'").get() !== undefined).toBe(version >= 20);
     expect(database.raw.prepare('PRAGMA table_info(person_contact_methods)').all().some(column => column.name === 'source_label')).toBe(version >= 16);
   } finally { closeDatabase(database); }
   writeFileSync(paths.keyEnvelopePath, 'synthetic-fixture-envelope', { mode: 0o600 });
   return { root, paths, key };
 }
-it('backs up genuine production24 with one verified copy and same-database linked receipt without migrations or timers', async () => {
-  const { paths, key } = await workspace(); const loaded = [];
+it.each([24, 25])('backs up genuine production%s with one verified copy and same-database linked receipt without migrations or timers', async version => {
+  const { paths, key } = await workspace(version); const loaded = [];
   const loadKey = async () => { const copy = { bytes: Buffer.from(key.bytes), version: 1 }; loaded.push(copy); return copy; };
   const result = await performPreReleaseBackup({ acquireLock: () => true, releaseLock: () => {}, ready: async () => {}, paths: () => paths,
     loadKey, service: (database) => new BackupService({ databaseGate: { withDatabase: async fn => fn(database) }, backupDirectory: paths.backupDirectory, loadWorkspaceKey: loadKey, clock: { now: () => receipt.createdAt }, ids: { next: () => 'fixture-receipt' } }),
   });
-  expect(result.kind).toBe('pre_release'); expect(result.schemaVersion).toBe(24); expect(JSON.stringify(result)).not.toContain(paths.databasePath);
+  expect(result.kind).toBe('pre_release'); expect(result.schemaVersion).toBe(version); expect(JSON.stringify(result)).not.toContain(paths.databasePath);
   expect(Object.keys(result).sort()).toEqual(['basename', 'createdAt', 'kind', 'schemaVersion', 'sha256', 'sizeBytes', 'verifiedAt']);
   const copyPath = join(paths.backupDirectory, result.basename); expect(statSync(copyPath).mode & 0o777).toBe(0o600); expect(statSync(paths.backupDirectory).mode & 0o777).toBe(0o700);
   expect(readFileSync(copyPath).subarray(0, 16).toString()).not.toBe('SQLite format 3\0');
@@ -85,25 +85,25 @@ it('backs up genuine production24 with one verified copy and same-database linke
   try {
     applyWorkspaceKey(copy, key.bytes); copy.pragma('query_only = ON');
     expect(copy.pragma('integrity_check', { simple: true })).toBe('ok');
-    expect(copy.prepare('SELECT schema_version FROM app_meta').get()).toEqual({ schema_version: 24 });
+    expect(copy.prepare('SELECT schema_version FROM app_meta').get()).toEqual({ schema_version: version });
     expect(copy.prepare('SELECT count(*) AS count FROM backup_receipts').get()).toEqual({ count: 0 });
   } finally { copy.close(); }
   expect(createHash('sha256').update(readFileSync(copyPath)).digest('hex')).toBe(result.sha256);
   const db = openExistingPreReleaseDatabase(paths, key);
   try {
     expect(db.raw.prepare('SELECT id, backup_basename, kind, schema_version, sha256, size_bytes, created_at, verified_at FROM backup_receipts').all()).toEqual([
-      { id: 'fixture-receipt', backup_basename: result.basename, kind: 'pre_release', schema_version: 24, sha256: result.sha256, size_bytes: result.sizeBytes, created_at: result.createdAt, verified_at: result.verifiedAt },
+      { id: 'fixture-receipt', backup_basename: result.basename, kind: 'pre_release', schema_version: version, sha256: result.sha256, size_bytes: result.sizeBytes, created_at: result.createdAt, verified_at: result.verifiedAt },
     ]);
-    expect(db.raw.prepare('SELECT schema_version FROM app_meta').get()).toEqual({ schema_version: 24 });
+    expect(db.raw.prepare('SELECT schema_version FROM app_meta').get()).toEqual({ schema_version: version });
   } finally { closeDatabase(db); key.bytes.fill(0); }
   expect(loaded.every(k => k.bytes.equals(Buffer.alloc(32)))).toBe(true);
   // A successful real encrypted backup must not be reported as a failure by its launcher.
   expect(validatePreReleaseReceipt(result)).toEqual(result);
 });
-it.each(['missing', 'wrong-key', 'schema14', 'schema15', 'schema16', 'schema17', 'schema18', 'schema19', 'schema20', 'schema21', 'schema22', 'schema23', 'future25', 'schema17-marker19', 'schema17-marker-ledger19', 'schema16-marker17', 'schema16-marker-ledger17', 'schema15-marker16', 'schema15-marker-ledger16',
+it.each(['missing', 'wrong-key', 'schema14', 'schema15', 'schema16', 'schema17', 'schema18', 'schema19', 'schema20', 'schema21', 'schema22', 'schema23', 'future26', 'schema17-marker19', 'schema17-marker-ledger19', 'schema16-marker17', 'schema16-marker-ledger17', 'schema15-marker16', 'schema15-marker-ledger16',
   'ledger-missing', 'ledger-extra', 'ledger-wrong', 'ledger-order', 'catalog-column', 'catalog-extra', 'receipt-trigger', 'receipt-trigger-altered', 'recovery-trigger',
 ])('refuses %s before backup/receipt writes without migration or provisioning', async failure => {
-  const version = failure === 'schema14' ? 14 : failure.startsWith('schema15') ? 15 : failure.startsWith('schema16') ? 16 : failure.startsWith('schema17') ? 17 : failure === 'schema18' ? 18 : failure === 'schema19' ? 19 : failure === 'schema20' ? 20 : failure === 'schema21' ? 21 : failure === 'schema22' ? 22 : failure === 'schema23' ? 23 : failure === 'future25' ? 25 : 24;
+  const version = failure === 'schema14' ? 14 : failure.startsWith('schema15') ? 15 : failure.startsWith('schema16') ? 16 : failure.startsWith('schema17') ? 17 : failure === 'schema18' ? 18 : failure === 'schema19' ? 19 : failure === 'schema20' ? 20 : failure === 'schema21' ? 21 : failure === 'schema22' ? 22 : failure === 'schema23' ? 23 : failure === 'future26' ? 26 : 24;
   const { paths, key } = await workspace(version); const loaded = []; let unlocks = 0;
   try {
     const db = openDatabase({ path: paths.databasePath, key });
@@ -166,5 +166,26 @@ it('retains a verified synthetic copy when receipt insertion fails and still clo
     expect(readdirSync(paths.backupDirectory).filter(name => name.startsWith('pre_release-') && name.endsWith('.sqlite3'))).toHaveLength(2);
     const checked = openExistingPreReleaseDatabase(paths, key);
     try { expect(checked.raw.prepare('SELECT count(*) AS count FROM backup_receipts').get()).toEqual({ count: 1 }); } finally { closeDatabase(checked); }
+  } finally { key.bytes.fill(0); }
+});
+
+it.each(['24-spoofed25', '25-spoofed24', '25-column', '25-ledger'])('refuses schema compatibility drift %s without writes', async failure => {
+  const version = failure.startsWith('24-') ? 24 : 25;
+  const { paths, key } = await workspace(version);
+  const db = openDatabase({ path: paths.databasePath, key });
+  try {
+    if (failure === '24-spoofed25') {
+      db.raw.exec("UPDATE app_meta SET schema_version=25; INSERT INTO kysely_migration VALUES ('0025KnownCompanyResearchSettings', '2099-01-01T00:00:00.000Z')");
+    }
+    if (failure === '25-spoofed24') db.raw.exec("UPDATE app_meta SET schema_version=24; DELETE FROM kysely_migration WHERE name='0025KnownCompanyResearchSettings'");
+    if (failure === '25-column') db.raw.exec('ALTER TABLE workspace_settings DROP COLUMN known_company_research_revision');
+    if (failure === '25-ledger') db.raw.exec("DELETE FROM kysely_migration WHERE name='0025KnownCompanyResearchSettings'");
+  } finally { closeDatabase(db); }
+  const before = readFileSync(paths.databasePath);
+  const backups = readdirSync(paths.backupDirectory);
+  try {
+    expect(() => openExistingPreReleaseDatabase(paths, key)).toThrow('PRE_RELEASE_BACKUP_FAILED');
+    expect(readFileSync(paths.databasePath)).toEqual(before);
+    expect(readdirSync(paths.backupDirectory)).toEqual(backups);
   } finally { key.bytes.fill(0); }
 });

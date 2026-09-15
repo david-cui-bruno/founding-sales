@@ -29,7 +29,7 @@ test('packaged diagnostics use callie protocol and an isolated native SQLite dat
 
     expect(firstLaunch).toEqual({
       databasePath: expectedDatabasePath,
-      schemaVersion: 24,
+      schemaVersion: 25,
       databaseEncrypted: true,
       cipherVersion: 'SQLite3 Multiple Ciphers 2.3.5',
       fts5Available: true,
@@ -115,7 +115,7 @@ test('packaged startup leaves an isolated database collision untouched and recov
 
     expect(health).toEqual({
       databasePath,
-      schemaVersion: 24,
+      schemaVersion: 25,
       databaseEncrypted: true,
       cipherVersion: 'SQLite3 Multiple Ciphers 2.3.5',
       fts5Available: true,
@@ -177,7 +177,7 @@ const inspectPackagedApplication = async (userDataPath: string, inspectRecovery?
     await page.getByRole('link', { name: 'Settings' }).click();
     await expect(page.getByText('Encrypted SQLite ready')).toBeVisible();
     await expect(page.getByText('FTS5 available')).toBeVisible();
-    await expect(page.getByText('Schema 24')).toBeVisible();
+    await expect(page.getByText('Schema 25')).toBeVisible();
     // The status row uses the isolated local fixture inbox. The separate
     // enrichment fallback also sees only the empty child HOME. Automatic
     // polling stays disabled under --use-mock-keychain.

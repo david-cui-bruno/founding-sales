@@ -81,7 +81,15 @@ const api: CalliePreloadApi = {
     getCompany: forbidden('localWorkspace.getCompany'),
     researchCompany: forbidden('localWorkspace.researchCompany'),
     getCompanyResearchStatus: forbidden('localWorkspace.getCompanyResearchStatus'),
-    getCallSettings: async () => { throw Error('Call capacity unavailable in this fixture'); }, updateCallSettings: async () => { throw Error('Call capacity unavailable in this fixture'); }, linkCompanyPerson: forbidden('localWorkspace.linkCompanyPerson'),
+    getCompanyResearchSettings: read<Awaited<ReturnType<CalliePreloadApi['localWorkspace']['getCompanyResearchSettings']>>>('localWorkspace.getCompanyResearchSettings', () => {
+      if (!new URLSearchParams(location.search).has('localResearchScenario')) throw Error('Local research setup unavailable in this fixture');
+      // Fictional reviewed profile for rendering only. This fixture forbids saves and research.
+      return { revision: 0, configuration: null, blockedReason: null, reservedOrSpentMicros: 0, profiles: [{
+        id: 'browser-reviewed-profile', label: 'Fictional bounded request profile', reviewedAt: '2026-09-15', referenceUrl: 'https://example.invalid/profile',
+        researchLimits: { maxCompanies: 1, maxPages: 1, maxBytes: 250000, maxCostMicros: 20000,
+          knownCompanyExtraction: { version: 1, model: 'fictional-reviewed-model', maxInputBytes: 20000, maxOutputTokens: 2048, maxCostMicros: 20000, inputMicrosPerMillionTokens: 400000, outputMicrosPerMillionTokens: 1600000 } },
+      }] };
+    }), updateCompanyResearchSettings: forbidden('localWorkspace.updateCompanyResearchSettings'), getCallSettings: async () => { throw Error('Call capacity unavailable in this fixture'); }, updateCallSettings: async () => { throw Error('Call capacity unavailable in this fixture'); }, linkCompanyPerson: forbidden('localWorkspace.linkCompanyPerson'),
     getCommitments: read('localWorkspace.getCommitments', () => commitments()),
     transition: forbidden('localWorkspace.transition'),
   },

@@ -303,14 +303,14 @@ function runDatabaseScenario(
       assert.equal(assertDomainStorageReady({
         database,
         expectedBusyTimeoutMs: 5000,
-        expectedSchemaVersion: 24,
+        expectedSchemaVersion: 25,
         expectedManifest: DOMAIN_SCHEMA_MANIFEST,
-      }).schemaVersion, 24);
+      }).schemaVersion, 25);
       assert.deepEqual(
         raw.prepare<[], { schema_version: number }>(
           'SELECT schema_version FROM app_meta WHERE singleton = 1',
         ).get(),
-        { schema_version: 24 },
+        { schema_version: 25 },
       );
       assert.deepEqual(raw.prepare<[], { name: string }>(`
         SELECT name FROM kysely_migration ORDER BY timestamp, name
@@ -331,7 +331,7 @@ function runDatabaseScenario(
         '0014OutboundJurisdictionClearance',
         '0015RecoveryMetadata',
         '0016ContactPresentationEvidence', '0017DiscoveryAssessments',
-        '0018PlaybookDueActions', '0019EmailDrafts', '0020PmAccounts', '0021DelegatedWork', '0022MailPersistence', '0023Campaigns', '0024RequestedFollowupAndPolicyReviews',
+        '0018PlaybookDueActions', '0019EmailDrafts', '0020PmAccounts', '0021DelegatedWork', '0022MailPersistence', '0023Campaigns', '0024RequestedFollowupAndPolicyReviews', '0025KnownCompanyResearchSettings',
       ]);
       assert.deepEqual(
         raw.prepare('PRAGMA table_info(person_contact_methods)').all().slice(19),

@@ -140,8 +140,9 @@ export class FoundationRuntime {
     this.throwIfUnavailable();
     const foundation = await this.ensureInitialized();
     this.throwIfUnavailable();
+    // A cached facade is not authority after the underlying domain stops.
+    const services = foundation.domainRuntime.getServices();
     if (foundation.founderDomain === undefined) {
-      const services = foundation.domainRuntime.getServices();
       foundation.founderDomain = createFounderSalesDomain({
         services,
         database: foundation.database,
