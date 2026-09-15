@@ -1,3 +1,4 @@
+import { LocalCompanyResearchSection } from './LocalCompanyResearchSection';
 import { ResearchSetupSection } from './ResearchSetupSection';
 import { RemoteGoogleConnectionsSection } from './RemoteGoogleConnectionsSection';
 import { CallCapacitySection } from './CallCapacitySection';
@@ -431,6 +432,7 @@ export function SettingsScreen({
   sourcing,
   children,
 }: SettingsScreenProps) {
+  const [connectionRevision, setConnectionRevision] = useState(0);
   const [active, setActive] = useState<SettingsSectionId>(() => {
     // Reading is non-consuming: StrictMode may invoke this initializer twice.
     try {
@@ -489,7 +491,8 @@ export function SettingsScreen({
           {active === 'call-capacity' && <CallCapacitySection api={localWorkspaceApi} onSaved={notifyCallCapacitySaved} />}
           {active === 'connections' && <>
             <RemoteGoogleConnectionsSection api={delegationApi?.googleConnections} />
-            <ConnectionsSection api={outreachApi} />
+            <ConnectionsSection api={outreachApi} onSaved={() => setConnectionRevision(value => value + 1)} />
+            <LocalCompanyResearchSection api={localWorkspaceApi} outreachApi={outreachApi} connectionRevision={connectionRevision} />
           </>}
           {active === 'phone' && <PhoneSetupSection api={phoneSetupApi} />}
           {active === 'worker' && <>

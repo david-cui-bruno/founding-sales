@@ -60,8 +60,8 @@ async function expectCleaned(value: Fixture) {
   expect(transport.handlers.size).toBe(0);
   expect([...transport.registrations].sort()).toEqual([...CONTINUITY_REGISTERED_CHANNELS].sort());
   expect([...transport.removals].sort()).toEqual([...CONTINUITY_REGISTERED_CHANNELS].sort());
-  expect(transport.registrations).toHaveLength(18);
-  expect(transport.removals).toHaveLength(18);
+  expect(transport.registrations).toHaveLength(20);
+  expect(transport.removals).toHaveLength(20);
   expect(value.counts()).toMatchObject({ credentialLoads: 0, inboxCreations: 0, pollSchedules: 0 });
 }
 beforeEach(() => {
@@ -277,7 +277,10 @@ function assertUiInventory(value: Fixture, expected: Record<string, number>) {
     if (entry.channel === 'review:list') expect(entry.args).toEqual([{ kinds: [], cursor: null, limit: 1 }]);
     else if (entry.channel === 'leads:list') expect(entry.args).toEqual([{ query: '', stages: [], priorities: [], sort: 'priority', cursor: null, limit: 200 }]);
     else if (entry.channel === 'lead-detail:outbound-capabilities') expect(entry.args).toEqual([{}]);
-    else if (!entry.channel.includes('company')) expect(entry.args).toEqual([]);
+    else if (entry.channel === 'local-workspace:get-company-research-settings') {
+      expect(entry.args).toEqual([]);
+      expect(entry).toMatchObject({ handlerStarted: true, outcome: 'resolved', result: { revision: 0, configuration: null } });
+    } else if (!entry.channel.includes('company')) expect(entry.args).toEqual([]);
   }
   expect([...transport.registrations].sort()).toEqual([...CONTINUITY_UI_REGISTERED_CHANNELS].sort());
   expect(value.trace().every(entry => (CONTINUITY_UI_CHANNELS as readonly string[]).includes(entry.channel))).toBe(true);
@@ -381,7 +384,7 @@ describe('company continuity through actual App and local public boundaries', ()
     assertUiInventory(value, {
       'health:get': 1, 'lead-detail:outbound-capabilities': 1, 'review:list': 6, 'daily:get': 5, 'outreach:delegation-status': 5,
       'local-workspace:get': 6, 'local-workspace:get-commitments': 6, 'leads:list': 1,
-      'local-workspace:review-company': 1, 'local-workspace:create-company': 1, 'local-workspace:company-create-status': 1, 'local-workspace:get-company': 1,
+      'local-workspace:review-company': 1, 'local-workspace:create-company': 1, 'local-workspace:company-create-status': 1, 'local-workspace:get-company': 1, 'local-workspace:get-company-research-settings': 1,
     });
   });
 
@@ -419,7 +422,7 @@ describe('company continuity through actual App and local public boundaries', ()
     assertUiInventory(value, {
       'health:get': 1, 'lead-detail:outbound-capabilities': 1, 'review:list': 1, 'daily:get': 1, 'outreach:delegation-status': 1,
       'local-workspace:get': 2, 'local-workspace:get-commitments': 2,
-      'local-workspace:review-company': 1, 'local-workspace:create-company': 2, 'local-workspace:get-company': 1,
+      'local-workspace:review-company': 1, 'local-workspace:create-company': 2, 'local-workspace:get-company': 1, 'local-workspace:get-company-research-settings': 1,
     });
   });
 });
@@ -608,7 +611,7 @@ async function renderRetainedApp(synthetic = false, localMetadata: 'genuine' | '
   await act(async () => { await value.drainReads(); });
   expect(window.location.hash).toBe('#/today');
   expect([...transport.registrations].sort()).toEqual([...RETAINED_UI_REGISTERED_CHANNELS].sort());
-  expect(transport.registrations).toHaveLength(65);
+  expect(transport.registrations).toHaveLength(67);
   const status = value.trace().find(entry => entry.channel === 'outreach:delegation-status')!;
   expect(status).toMatchObject({ handlerStarted: true, outcome: 'resolved' });
   expect(status.synthetic).toBeUndefined();
@@ -858,7 +861,7 @@ describe('actual health observation and initialized blocked admission', () => {
       { channel: 'health:get', args: [], handlerStarted: true, outcome: 'resolved' },
       { channel: 'health:get', args: [], handlerStarted: true, outcome: 'resolved' },
     ]);
-    expect(transport.registrations).toHaveLength(18);
+    expect(transport.registrations).toHaveLength(20);
     const disposal = value.dispose(); expect(value.dispose()).toBe(disposal);
     expect(await disposal).toEqual({ databaseClosed: true, keysZeroed: true, directoryRemoved: true, registrationsRemaining: 0,
       pendingInvocations: 0, cleanupRuns: 1, runtimeShutdowns: 1, domainShutdowns: 1, databaseCloses: 1, pollerStops: 1, pollerIdleWaits: 1 });
@@ -976,7 +979,7 @@ describe('actual health observation and initialized blocked admission', () => {
       { channel: 'health:get', args: [], handlerStarted: true, outcome: 'resolved' },
     ]);
     expect([...transport.registrations].sort()).toEqual([...CONTINUITY_REGISTERED_CHANNELS].sort());
-    expect(transport.registrations).toHaveLength(18);
+    expect(transport.registrations).toHaveLength(20);
   });
 });
 
@@ -1055,7 +1058,7 @@ function assertFridayInventory(context: FridayContext, reports: number, commands
   const mutations: Record<string, number> = {};
   for (const command of commands) mutations[command.channel] = (mutations[command.channel] ?? 0) + 1;
   expect(counts).toEqual({ 'health:get': 1, 'lead-detail:outbound-capabilities': 1, 'review:list': 1, 'friday:get': reports, ...mutations });
-  expect([...transport.registrations].sort()).toEqual([...CONTINUITY_UI_REGISTERED_CHANNELS].sort()); expect(transport.registrations).toHaveLength(31);
+  expect([...transport.registrations].sort()).toEqual([...CONTINUITY_UI_REGISTERED_CHANNELS].sort()); expect(transport.registrations).toHaveLength(33);
   expect(value.uiCounters()).toEqual({ network: 0, forbidden: 0, delegationDisposals: 0 });
   assertOneHealthGraph(value, { credentialLoads: 0, inboxCreations: 0 });
 }

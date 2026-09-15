@@ -158,7 +158,7 @@ function fakeCallieApi(): CalliePreloadApi {
     localWorkspace: {
       get: vi.fn(async () => localSnapshot({ workflowMode: 'legacy' })),
       getCompany: pending,
-      researchCompany: pending, getCompanyResearchStatus: pending, getCallSettings: async () => { throw Error('Call capacity unavailable in this fixture'); }, updateCallSettings: async () => { throw Error('Call capacity unavailable in this fixture'); }, linkCompanyPerson: pending,
+      researchCompany: pending, getCompanyResearchStatus: pending, getCompanyResearchSettings: pending, updateCompanyResearchSettings: pending, getCallSettings: async () => { throw Error('Call capacity unavailable in this fixture'); }, updateCallSettings: async () => { throw Error('Call capacity unavailable in this fixture'); }, linkCompanyPerson: pending,
       getCommitments: vi.fn(async () => commitments()),
       reviewCompany: pending, createCompany: pending, getCompanyCreateStatus: pending, transition: pending,
     },
@@ -935,6 +935,8 @@ function f4AppDetail(accountId = 'a'): LocalCompanyDetail {
 function f4AppStatus(r: SelectedResearch, state: LocalCompanyResearchStatus['state']): LocalCompanyResearchStatus { return { ...r, state, receipt: state === 'completed' ? { accountId: r.accountId, version: 2, duplicate: false } : null, reason: null }; }
 function f4FounderApi() {
   const api = fakeCallieApi();
+  // Explicit legacy research: no standalone configuration, paired policy remains authoritative.
+  api.localWorkspace.getCompanyResearchSettings = vi.fn(async () => ({ revision: 0, configuration: null, profiles: [], blockedReason: 'paired_research_present' as const, reservedOrSpentMicros: 0 }));
   vi.mocked(api.daily.get).mockResolvedValue(dailyFixture());
   vi.mocked(api.localWorkspace.get).mockResolvedValue(localSnapshot({ accounts: { state: 'available', snapshots: dailyFixture().accounts } }));
   api.localWorkspace.getCompany = vi.fn<CalliePreloadApi['localWorkspace']['getCompany']>(async ({ accountId }) => f4AppDetail(accountId));
@@ -957,6 +959,7 @@ it('F4-founder-02 Campaigns and back retain selected local account and the same 
   api.localWorkspace.researchCompany = vi.fn<CalliePreloadApi['localWorkspace']['researchCompany']>(() => gate.promise);
   render(<StrictMode><FounderAppHarness api={api} health={readyHealth} initialRoute="accounts" /></StrictMode>);
   fireEvent.click(await screen.findByRole('button', { name: 'Local account · Account A' })); await screen.findByText('Founder selected source a');
+  await screen.findByText('Existing paired research remains governed by its policy. Standalone local activation is unavailable.');
   const research = screen.getByRole('button', { name: /^Research(?: company)?$/i }); act(() => { fireEvent.click(research); fireEvent.click(research); });
   expect(api.localWorkspace.researchCompany).toHaveBeenCalledOnce(); const original = vi.mocked(api.localWorkspace.researchCompany).mock.calls[0][0];
   fireEvent.click(screen.getByRole('link', { name: 'Campaigns' })); await screen.findByRole('heading', { level: 1, name: 'Campaigns' });
@@ -975,6 +978,7 @@ it('F4-founder-03 actual Import commit refresh retains selected pending research
   api.imports.preview = vi.fn<CalliePreloadApi['imports']['preview']>(async () => importPreview); api.imports.commit = vi.fn<CalliePreloadApi['imports']['commit']>(async () => importReceipt);
   render(<FounderAppHarness api={api} health={readyHealth} initialRoute="accounts" />);
   fireEvent.click(await screen.findByRole('button', { name: 'Local account · Account A' })); await screen.findByText('Founder selected source a');
+  await screen.findByText('Existing paired research remains governed by its policy. Standalone local activation is unavailable.');
   fireEvent.click(screen.getByRole('button', { name: /^Research(?: company)?$/i })); const original = vi.mocked(api.localWorkspace.researchCompany).mock.calls[0][0];
   // This real application event opens the global dialog without routing away, so commit exercises Accounts' keyed remount.
   await act(async () => { window.dispatchEvent(new Event('callie:open-import')); });
@@ -995,6 +999,7 @@ it('F4-founder-04 palette Escape does not close selected research or resume its 
   const gate = f4AppDeferred(f4AppStatus(r, 'completed')); vi.spyOn(crypto, 'randomUUID').mockReturnValue('10000000-0000-4000-8000-000000000001'); api.localWorkspace.researchCompany = vi.fn<CalliePreloadApi['localWorkspace']['researchCompany']>(() => gate.promise);
   render(<FounderAppHarness api={api} health={readyHealth} initialRoute="accounts" />);
   fireEvent.click(await screen.findByRole('button', { name: 'Local account · Account A' })); await screen.findByText('Founder selected source a');
+  await screen.findByText('Existing paired research remains governed by its policy. Standalone local activation is unavailable.');
   const research = screen.getByRole('button', { name: /^Research(?: company)?$/i }); fireEvent.click(research);
   fireEvent.keyDown(window, { key: 'k', metaKey: true, ctrlKey: true }); const palette = await screen.findByRole('dialog', { name: 'Command palette' });
   fireEvent.keyDown(within(palette).getByRole('combobox'), { key: 'Escape' });
@@ -1055,6 +1060,10 @@ it('T6-A01 actual global import mapping and duplicate commit retains account, ex
   const peopleBefore = structuredClone(savedPeople);
   api.leadDetail.get = vi.fn<CalliePreloadApi['leadDetail']['get']>(async ({ personId }) => structuredClone(savedPeople.find(person => person.personId === personId)!));
   api.leadDetail.getOutboundCapabilities = vi.fn<CalliePreloadApi['leadDetail']['getOutboundCapabilities']>(async () => { throw Error('Synthetic capabilities unavailable'); });
+  // Inventory only local reads, not provider work or settings mutations.
+  const safeLocalReads = new Set(['get', 'getCommitments', 'getCompany', 'getCompanyResearchSettings', 'getCallSettings']);
+  const localMethods = Object.keys(api.localWorkspace) as Array<keyof CalliePreloadApi['localWorkspace']>;
+  for (const method of localMethods) vi.spyOn(api.localWorkspace, method);
   render(<FounderAppHarness api={api} health={readyHealth} initialRoute="accounts" />);
   fireEvent.click(await screen.findByRole('button', { name: 'Local account · Account A' })); await screen.findByText(t6AppQuote);
   expect(api.localWorkspace.getCompany).toHaveBeenCalledWith({ accountId: 'a' });
@@ -1089,6 +1098,11 @@ it('T6-A01 actual global import mapping and duplicate commit retains account, ex
   await screen.findByRole('complementary', { name: 'Avery details' }); expect(screen.getAllByRole('complementary', { name: 'Avery details' })).toHaveLength(1);
   expect(api.leadDetail.get).toHaveBeenCalledWith({ personId: 'person-51' }); expect(screen.getAllByRole('button', { name: 'Close inspector' })).toHaveLength(1);
   expect(api.leads.updateField).not.toHaveBeenCalled(); expect(api.leads.bulkUpdate).not.toHaveBeenCalled(); expect(api.leadDetail.beginOutbound).not.toHaveBeenCalled(); expect(api.leadDetail.findContactInfo).not.toHaveBeenCalled(); expect(api.localWorkspace.researchCompany).not.toHaveBeenCalled();
+  expect(api.localWorkspace.getCompanyResearchSettings).toHaveBeenCalledWith();
+  expect(api.localWorkspace.getCallSettings).not.toHaveBeenCalled();
+  for (const method of localMethods) {
+    if (!safeLocalReads.has(method) && method !== 'linkCompanyPerson') expect(api.localWorkspace[method]).not.toHaveBeenCalled();
+  }
   // Fake link implementation above changes only its local link flag. This is NOT main storage proof.
   expect(savedPeople).toEqual(peopleBefore);
 }, 10_000);

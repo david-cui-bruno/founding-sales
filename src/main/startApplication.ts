@@ -1,4 +1,5 @@
-import { validateCompanyResearchConfiguration, type CompanyResearchStartupConfiguration } from './research/companyResearchConfiguration';
+import { DomainRuntimeBlockedError } from './domain/startup/domainStartupTypes';
+import { validateCompanyResearchConfiguration, isLocalKnownCompanyConfiguration, type EffectiveCompanyResearchConfiguration, type CompanyResearchStartupConfiguration } from './research/companyResearchConfiguration';
 import {accountFingerprint} from './domain/accounts/accountEvidence';
 import {constants as fsConstants} from 'node:fs';
 import {open as openNativeFile} from 'node:fs/promises';
@@ -12,7 +13,7 @@ import { SqlDelegationConfiguration } from './delegation/delegationSync';
 import type { AppDatabase } from './db/database';
 import { AccountRepository } from './domain/accounts/accountRepository';
 import { selectedResearchSchema, type SelectedResearch, type LocalCompanyResearchStatus } from '../shared/contracts/localWorkspaceContract';
-import type { SelectedCompanyResearchPort } from './workspace/localWorkspaceProvider';
+import type { SelectedCompanyResearchPort, CompanyResearchSettingsLifecycle } from './workspace/localWorkspaceProvider';
 import { SqlDiscoveryReservationStore } from './delegation/discoveryReservationStore';
 import { createCompanyDiscoveryProvider } from './research/companyDiscoveryProvider';
 import { createCompanyPageProvider, type PageHttp } from './research/companyPageProvider';
@@ -235,7 +236,7 @@ export type StartupCompanyResearch = SelectedCompanyResearchPort & {
 /** Main-only composition over the actual runtime gate and C1 SQL ledger. No
  * account, grant, timer, credential read or HTTP operation occurs at construction. */
 function createStartupCompanyResearch(input: { runtime: FoundationRuntime; providers: ReturnType<typeof createOutreachProviders>;
-  configuration: CompanyResearchStartupConfiguration; http?: PageHttp; resolve?: (hostname: string) => Promise<string[]> }) {
+  configuration: EffectiveCompanyResearchConfiguration; assertAuthority?: (database: AppDatabase) => void; http?: PageHttp; resolve?: (hostname: string) => Promise<string[]> }) {
   const config = structuredClone(input.configuration);
   validateCompanyResearchConfiguration(config);
   const permitted = new Set(config.permittedSources);
@@ -248,7 +249,7 @@ function createStartupCompanyResearch(input: { runtime: FoundationRuntime; provi
   };
   const stores = (signal: AbortSignal, selected?: SelectedResearch) => {
     const account = <T,>(operation: (repo: AccountRepository) => T, settlement = false) => input.runtime.withDatabase(database => {
-      if (!settlement) signal.throwIfAborted();
+      if (!settlement) { signal.throwIfAborted(); input.assertAuthority?.(database); }
       return operation(new AccountRepository({ database, clock: domainClock, ids: domainIds, sourcePolicy: receipts,
         research: { maxBudgetMicros: config.maxAccountBudgetMicros, knownCompanyExtraction: config.researchLimits.knownCompanyExtraction } }));
     });
@@ -260,6 +261,7 @@ function createStartupCompanyResearch(input: { runtime: FoundationRuntime; provi
     };
     const discovery = <T,>(operation: (repo: SqlDiscoveryReservationStore) => T) => input.runtime.withDatabase(database => {
       signal.throwIfAborted();
+      if (isLocalKnownCompanyConfiguration(config)) throw new Error('Known-company discovery unavailable');
       return operation(new SqlDiscoveryReservationStore({ database, workspaceId: config.workspaceId, clock: domainClock }));
     });
     const reservations: DiscoveryReservationStore = { reserveOnce: value => discovery(repo => repo.reserveOnce(value)), complete: value => discovery(repo => repo.complete(value)) };
@@ -308,14 +310,14 @@ function createStartupCompanyResearch(input: { runtime: FoundationRuntime; provi
     },
     prepare: (commandId, signal) => invoke(signal, { status: 'blocked', accountIds: [] }, async active => {
       // Known-account mode cannot accidentally enter paid company discovery.
-      if (config.researchLimits.knownCompanyExtraction) return { status: 'blocked' as const, accountIds: [] };
+      if (isLocalKnownCompanyConfiguration(config) || config.researchLimits.knownCompanyExtraction) return { status: 'blocked' as const, accountIds: [] };
       const { store, reservations } = stores(active);
       const discovery = createCompanyDiscoveryProvider({ capability: config.capability,
         request: (query, limits, requestSignal) => input.providers.researchCompanies({ query, limits, capability: config.capability }, requestSignal) });
       return createCompanyPreparation({ store, reservations, discovery, configuration: config }).prepare(commandId, active);
     }),
     runNext: signal => invoke(signal, 'idle', async active => {
-      if (config.researchLimits.knownCompanyExtraction) return 'idle';
+      if (isLocalKnownCompanyConfiguration(config) || config.researchLimits.knownCompanyExtraction) return 'idle';
       const { store } = stores(active);
       const pages = createCompanyPageProvider({ receipts, clock: domainClock, permitted: url => permitted.has(url), http: input.http, resolve: input.resolve });
       return createCompanyResearchWorker({ store, pages, clock: domainClock }).runNext(active);
@@ -353,7 +355,7 @@ export type ApplicationStartupDependencies = FoundationRuntimeDependencies & {
     enrichmentRequester?: EnrichmentRequester,
     logDirectoryPath?: string,
     outbound?: OutboundCommandServiceApi,
-    options?: { selectedCompanyResearch?: { current(): SelectedCompanyResearchPort | null } },
+    options?: { selectedCompanyResearch?: { current(): SelectedCompanyResearchPort | null }; companyResearchSettings?: CompanyResearchSettingsLifecycle },
   ): () => void;
   createEnrichmentRequester?(
     runtime: FoundationRuntime,
@@ -817,22 +819,50 @@ export async function startApplication(
       domain, phone: phoneBindings.phone, readiness: phoneBindings.readiness,
     });
     phoneBindings.onSetupChanged?.(() => { if (!outboundClosed) outbound.invalidate('wake'); });
-    delegation=createDelegationRuntime({researchSetupStore:dependencies.createResearchSetupStore?.(options.userDataPath),openGoogleConsent:dependencies.openGoogleConsent,databaseGate:runtime,pairing:paired,clock:domainClock,phone:phoneBindings.phone,inboundRegistry:startupInboundRegistry,policyImportNative:dependencies.createPolicyImportNative?.(),requestedModel:dependencies.createRequestedFollowupModel?.(options.userDataPath),linkedIn:paired?dependencies.createLinkedInAdapters?.(options.userDataPath):undefined,configurationChanged:async()=>{
-      await companyResearch?.dispose();companyResearch=undefined;
-      const state=paired?await runtime.withDatabase(database=>new SqlDelegationConfiguration({database,workspaceId:paired.workspaceId,pairingId:paired.pairingId,clock:domainClock}).read()):null;
-      if(state?.configuration.state==='active'&&state.configuration.research&&dependencies.createResearchProviders&&!outboundClosed){
-        researchProviders??=dependencies.createResearchProviders(options.userDataPath);
-        companyResearch=createStartupCompanyResearch({runtime,providers:researchProviders,configuration:state.configuration.research,http:dependencies.companyResearchHttp,resolve:dependencies.companyResearchResolve});
-        companyResearch.invalidate(outboundLocked);
-      }
-    }});
-    const persistedResearch=paired?await runtime.withDatabase(database=>new SqlDelegationConfiguration({database,workspaceId:paired.workspaceId,pairingId:paired.pairingId,clock:domainClock}).read()):null;
-    const configuredResearch=options.companyResearch??(persistedResearch?.configuration.state==='active'?persistedResearch.configuration.research:null);
-    if (configuredResearch && dependencies.createResearchProviders) {
-      researchProviders = dependencies.createResearchProviders(options.userDataPath);
-      companyResearch = createStartupCompanyResearch({ runtime, providers: researchProviders, configuration: configuredResearch,
-        http: dependencies.companyResearchHttp, resolve: dependencies.companyResearchResolve });
-    }
+    const readPairedResearch = async () => paired ? runtime.withDatabase(database => new SqlDelegationConfiguration({ database, workspaceId: paired.workspaceId, pairingId: paired.pairingId, clock: domainClock }).read()) : null;
+    // One lazy credential manager belongs to startup, including null-start activation.
+    researchProviders = dependencies.createResearchProviders?.(options.userDataPath);
+    let reloadQueue: Promise<void> = Promise.resolve();
+    let researchConfigurationEpoch = 0;
+    const reloadCompanyResearch = () => {
+      const epoch = ++researchConfigurationEpoch;
+      companyResearch?.invalidate(true);
+      const pending = reloadQueue.catch((): void => undefined).then(async () => {
+        await companyResearch?.dispose(); companyResearch = undefined;
+        let local;
+        try { local = await runtime.withDomain(domain => domain.getCompanyResearchSettings()); }
+        catch (error) {
+          // An invariant-blocked domain remains diagnostics-only. Do not fall
+          // back to another research policy or hide other configuration errors.
+          if (error instanceof DomainRuntimeBlockedError) return;
+          throw error;
+        }
+        const persisted = await readPairedResearch();
+        const pairedResearch = persisted?.configuration.research;
+        const config = local.configuration
+          ? (local.configuration.state === 'active' && !pairedResearch ? local.configuration : null)
+          : options.companyResearch ?? (persisted?.configuration.state === 'active' ? pairedResearch : null);
+        if (config && researchProviders && !outboundClosed && epoch === researchConfigurationEpoch) {
+          const assertAuthority = isLocalKnownCompanyConfiguration(config) ? (database: AppDatabase) => {
+            // Recheck in the same synchronous database lease as enqueue/claim/admission.
+            // A save's durable CAS can precede delivery of its composition callback.
+            const row = database.raw.prepare('SELECT known_company_research_revision AS revision, known_company_research_json AS configuration FROM workspace_settings WHERE singleton=1').get() as { revision: number; configuration: string | null } | undefined;
+            if (epoch !== researchConfigurationEpoch || !row || row.revision !== local.revision || row.configuration !== JSON.stringify(local.configuration)
+              || (paired && new SqlDelegationConfiguration({ database, workspaceId: paired.workspaceId, pairingId: paired.pairingId, clock: domainClock }).read()?.configuration.research)) throw new Error('Research configuration changed');
+          } : undefined;
+          companyResearch = createStartupCompanyResearch({ runtime, providers: researchProviders, configuration: config, assertAuthority, http: dependencies.companyResearchHttp, resolve: dependencies.companyResearchResolve });
+          companyResearch.invalidate(outboundLocked);
+        }
+      });
+      reloadQueue = pending;
+      return pending;
+    };
+    const companyResearchSettings: CompanyResearchSettingsLifecycle = {
+      pairedResearchPresent: async () => !!(await readPairedResearch())?.configuration.research,
+      changed: reloadCompanyResearch,
+    };
+    delegation=createDelegationRuntime({researchSetupStore:dependencies.createResearchSetupStore?.(options.userDataPath),openGoogleConsent:dependencies.openGoogleConsent,databaseGate:runtime,pairing:paired,clock:domainClock,phone:phoneBindings.phone,inboundRegistry:startupInboundRegistry,policyImportNative:dependencies.createPolicyImportNative?.(),requestedModel:dependencies.createRequestedFollowupModel?.(options.userDataPath),linkedIn:paired?dependencies.createLinkedInAdapters?.(options.userDataPath):undefined,configurationChanged:reloadCompanyResearch});
+    await reloadCompanyResearch();
     // Email borrows the same manager without owning its disposal in research mode.
     const borrowedProviders = researchProviders ? { ...researchProviders, dispose: (): void => undefined,
       invalidate: () => { companyResearch?.invalidate(); researchProviders!.invalidate(); } } : undefined;
@@ -934,7 +964,7 @@ export async function startApplication(
       ),
       options.logDirectoryPath,
       outbound,
-      { selectedCompanyResearch: { current: () => companyResearch?.api ?? null } },
+      { selectedCompanyResearch: { current: () => companyResearch?.api ?? null }, companyResearchSettings },
     );
     if (phoneBindings.setup) unregisterPhoneSetup = (dependencies.registerPhoneSetupIpc ?? registerPhoneSetupIpc)({
       provider: phoneBindings.setup, isTrustedRendererUrl: options.isTrustedRendererUrl,

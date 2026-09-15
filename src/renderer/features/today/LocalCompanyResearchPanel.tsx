@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
-import type { LinkCompanyPersonRequest, LocalCompanyDetail, LocalWorkspaceApi, SelectedResearch } from '../../../shared/contracts/localWorkspaceContract';
+import { companyResearchSettingsSchema, type CompanyResearchSettings, type LinkCompanyPersonRequest, type LocalCompanyDetail, type LocalWorkspaceApi, type SelectedResearch } from '../../../shared/contracts/localWorkspaceContract';
+import { openSettingsSection } from '../../foundation/settingsNavigation';
 import type { FirstUseContinuation, FirstUseEpoch } from './localCompanyContinuation';
 
 type Props = {
   accountId: string;
-  api: Pick<LocalWorkspaceApi, 'getCompany' | 'researchCompany' | 'getCompanyResearchStatus'>;
+  api: Pick<LocalWorkspaceApi, 'getCompany' | 'researchCompany' | 'getCompanyResearchStatus'> & Partial<Pick<LocalWorkspaceApi, 'getCompanyResearchSettings'>>;
   continuation: FirstUseContinuation;
   renderDetail?(detail: LocalCompanyDetail): ReactNode;
 };
@@ -41,6 +42,14 @@ export function LocalCompanyResearchPanel({ accountId, api, continuation, render
   const live = useRef<{ key: object; token: symbol } | null>(null);
   const [viewToken, setViewToken] = useState<symbol | null>(null);
   const [detail, setDetail] = useState<{ key: object; value: LocalCompanyDetail | null; failed: boolean } | null>(null);
+  const [settings, setSettings] = useState<{ key: object; value: CompanyResearchSettings | null } | null>(null);
+  useEffect(() => {
+    let attached = true; setSettings(null);
+    if (api.getCompanyResearchSettings) void api.getCompanyResearchSettings().then(value => {
+      if (attached) setSettings({ key: viewKey, value: companyResearchSettingsSchema.parse(value) });
+    }).catch(() => { if (attached) setSettings({ key: viewKey, value: null }); });
+    return () => { attached = false; };
+  }, [api, viewKey]);
   const [checkError, setCheckError] = useState<{ key: object; token: symbol } | null>(null);
   const checkSequence = useRef<symbol | null>(null);
   useLayoutEffect(() => {
@@ -82,7 +91,7 @@ export function LocalCompanyResearchPanel({ accountId, api, continuation, render
     } catch { continuation.settleResearch(token, { outcome: 'unknown' }); }
   };
   const research = () => {
-    if (!currentView()) return;
+    if (!currentView() || setupHeld) return;
     const previous = continuation.snapshot().research;
     if (previous && (previous.outcome !== 'known' || !previous.status
       || !['completed', 'parked', 'held'].includes(previous.status.state))) return;
@@ -119,6 +128,22 @@ export function LocalCompanyResearchPanel({ accountId, api, continuation, render
     && ['completed', 'parked', 'held'].includes(state.research.status.state));
   const visible = detail?.key === viewKey ? detail : null;
   const account = visible?.value?.snapshot;
+  const setup = settings?.key === viewKey ? settings : null;
+  const config = setup?.value?.configuration;
+  const sourceMatches = !!account?.account.domain && !!config?.permittedSources.some(source => {
+    try { return new URL(source).hostname === account.account.domain; } catch { return false; }
+  });
+  const setupHeld = !!api.getCompanyResearchSettings && (!setup?.value || !!config && (!!setup.value.blockedReason || config.state === 'paused' || !sourceMatches));
+  const setupMessage = !api.getCompanyResearchSettings ? 'Local setup status unavailable. Main checks research availability.'
+    : !setup ? 'Checking local research setup…'
+    : !setup.value ? 'Local research setup unavailable. Reopen this company to check again.'
+    : setup.value.blockedReason && config ? 'Paired research is present. Local research is held. Review Settings.'
+    : setup.value.blockedReason ? 'Existing paired research remains governed by its policy. Standalone local activation is unavailable.'
+    : !config ? 'Local research is not configured. Set up local research in Connections. Existing paired research, if configured, remains governed by its policy.'
+    : config.state === 'paused' ? 'Local research is paused. Review Settings to enable a later explicit attempt.'
+    : !account?.account.domain ? 'A saved company domain is required for local research.'
+    : !sourceMatches ? 'No permitted source matches this company’s exact hostname. Review source URLs in Settings.'
+    : 'Local known-company setup applies to this hostname. Main checks all limits before execution.';
   return <section aria-label="Local company research">
     {account && <>
       {account.portfolio.map((p, i) => <p key={i}>{p.count} {p.scope} {p.measure}</p>)}
@@ -129,7 +154,10 @@ export function LocalCompanyResearchPanel({ accountId, api, continuation, render
       {account.routes.map(route => <p key={route.id}>{route.channel}: {route.value} · {route.purpose} · {route.verification}<br /><small>Evidence: {route.evidenceIds.join(', ') || 'Unverified'}</small></p>)}
     </>}
     <h3>Company research</h3>
-    <button type="button" disabled={!canResearch} onClick={research}>Research</button>
+    <p><a href="#/settings" onClick={() => openSettingsSection('connections')}>Set up local research</a>. Setup and navigation do not start research.</p>
+    <p>Research starts a new potentially paid attempt. Check status or Resume research reconciles the existing attempt instead.</p>
+    <p role="status">{setupMessage}</p>
+    <button type="button" disabled={!canResearch || setupHeld} onClick={research}>Research</button>
     {retained && <>
       <p role="status">Research {retained.outcome}{retained.status ? ` · ${retained.status.state}` : ''}</p>
       <button type="button" onClick={() => { void check(); }}>Check status</button>

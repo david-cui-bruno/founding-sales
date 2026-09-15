@@ -12,10 +12,10 @@ test.beforeAll(async () => {
   javascript = bundle.outputFiles.find(file => file.path.endsWith('.js'))!.text;
   css = bundle.outputFiles.find(file => file.path.endsWith('.css'))!.text;
 });
-async function mount(page: Page, context: PresentationContext, initialRoute: typeof appRoutes[number] = 'today', healthScenario = false, researchScenario = false) {
+async function mount(page: Page, context: PresentationContext, initialRoute: typeof appRoutes[number] = 'today', healthScenario = false, researchScenario = false, localResearchScenario = false) {
   const errors: string[] = [], requests: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
-  const url = `http://127.0.0.1:41838/application-presentation?mode=${context.mode}${healthScenario ? '&healthScenario=1' : ''}${researchScenario ? '&researchScenario=1' : ''}`;
+  const url = `http://127.0.0.1:41838/application-presentation?mode=${context.mode}${healthScenario ? '&healthScenario=1' : ''}${researchScenario ? '&researchScenario=1' : ''}${localResearchScenario ? '&localResearchScenario=1' : ''}`;
   await page.addInitScript(context => {
     if (localStorage.getItem('callie.theme') === null) localStorage.setItem('callie.theme', context.theme);
     if (localStorage.getItem('callie.density') === null) localStorage.setItem('callie.density', context.density);
@@ -698,5 +698,34 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 1050]
     await onlyReadHealthScenario(page, observed);
     await page.screenshot({ path: info.outputPath(`diagnostic-return-${theme}-${width}.png`) });
     writeFileSync(info.outputPath('diagnostic-return-calls.json'), JSON.stringify(await calls(page), null, 2));
+  });
+}
+
+for (const theme of ['light', 'dark'] as const) for (const width of [1440, 1050] as const) {
+  test(`actual local research inline setup preserves edits and fits ${theme} ${width}`, async ({ page }, info) => {
+    const observed = await mount(page, { mode: 'meeting_first', theme, density: 'comfortable', width }, 'settings', false, false, true);
+    const navigation = page.getByRole('navigation', { name: 'Settings sections' });
+    await navigation.getByRole('button', { name: 'Connections', exact: true }).click();
+    const section = page.getByRole('region', { name: 'Local company research', exact: true });
+    await expect(section.getByText('Fictional bounded request profile · Reviewed 2026-09-15')).toBeVisible();
+    const sources = section.getByLabel('Explicit HTTPS source URLs', { exact: true });
+    const ceiling = section.getByLabel('Cumulative local ceiling (USD)', { exact: true });
+    await sources.fill('https://fictional.example/about'); await ceiling.fill('0.20');
+    const checkbox = section.getByRole('checkbox', { name: 'I have reviewed this setup', exact: true });
+    await checkbox.check(); await checkbox.focus(); await page.keyboard.press('Tab');
+    const save = section.getByRole('button', { name: 'Save local research', exact: true });
+    await expect(save).toBeFocused(); await expect(save).toBeEnabled();
+    expect(await section.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+    await section.getByText('Advanced limits & rate assumptions · read-only', { exact: true }).click();
+    expect(await section.locator('dd').evaluateAll(elements => elements.every(element => element.scrollWidth <= element.clientWidth + 1))).toBe(true);
+    await section.scrollIntoViewIfNeeded(); await page.screenshot({ path: info.outputPath('local-research-inline.png'), fullPage: true });
+    await navigation.getByRole('button', { name: 'Appearance', exact: true }).click();
+    await navigation.getByRole('button', { name: 'Connections', exact: true }).click();
+    await expect(sources).toHaveValue('https://fictional.example/about'); await expect(ceiling).toHaveValue('0.20'); await expect(save).toBeDisabled();
+    await section.getByRole('button', { name: 'Refresh current settings', exact: true }).click();
+    await section.getByRole('button', { name: 'I reviewed current settings', exact: true }).click();
+    await expect(sources).toHaveValue('https://fictional.example/about'); await expect(ceiling).toHaveValue('0.20'); await expect(checkbox).not.toBeChecked();
+    expect((await calls(page)).filter(call => call.kind !== 'read')).toEqual([]);
+    expect(observed.errors).toEqual([]); expect(observed.requests).toEqual([]);
   });
 }

@@ -18,6 +18,16 @@ import type { SourcingPoller } from '../../src/main/sourcing/sourcingPoller';
 import { createCallieApi } from '../../src/preload/createCallieApi';
 import { createTempDatabase, createTestWorkspaceKey } from './tempDatabase';
 import type { RegisteredIpcHandler } from './registeredIpcHandler';
+import type { CompanyFact, PageFactInput } from '../../src/main/research/companyFactExtraction';
+
+export const localSetupClaims = {
+  portfolio_description: 'Our residential portfolio includes apartments and single-family homes, but we do not publish a managed-unit count.',
+  ownership: 'Selected Management is independently owned and operated.',
+};
+export const localSetupRelationship = 'Maya Ortiz is the property manager at Selected Management.';
+export const localSetupPages: Record<string, string> = {
+  'https://selected.invalid/': [...Object.values(localSetupClaims), localSetupRelationship].map(text => `<p>${text}</p>`).join(''),
+};
 
 export const firstUsePages: Record<string, string> = {
   'https://selected.invalid/': '<p>We manage 240 residential units.</p><p>Main office phone: +14015550100</p>',
@@ -32,9 +42,12 @@ const allowed = new Set([
   'local-workspace:company-research-status', 'local-workspace:link-company-person',
   'imports:preview', 'imports:remap', 'imports:commit', 'imports:status',
   'outreach:status', 'outreach:open-draft', 'outreach:save-draft', 'outreach:inspect-local-authority',
+  'local-workspace:get-company-research-settings',
 ]);
 export async function createFirstUseDomainFixture(handlers: Map<string, RegisteredIpcHandler>, options: {
   draftModel?: (context: GroundedDraftContext) => Pick<GeneratedDraft, 'subject' | 'body' | 'evidenceIds'>;
+  /** Real public setup, no pairing/override or saved model. Old fixture modes are unchanged. */
+  localResearchSetup?: boolean;
 } = {}) {
   const temp = createTempDatabase();
   const key = randomBytes(32);
@@ -54,13 +67,34 @@ export async function createFirstUseDomainFixture(handlers: Map<string, Register
     },
   };
   const modelRequests: { url: string; context: GroundedDraftContext; model: string; store: boolean }[] = [];
+  const extractionRequests: { model: string; store: boolean; input: Pick<PageFactInput, 'sources'>; facts: CompanyFact[] }[] = [];
+  const fixturePages = options.localResearchSetup ? localSetupPages : firstUsePages;
   const manager = createOutreachProviders({ directory: join(dirname(temp.path), 'outreach'), safeStorage,
     fetch: async (url, init) => {
-      if (!options.draftModel || url !== 'https://api.openai.com/v1/responses' || init?.method !== 'POST'
+      if ((!options.draftModel && !options.localResearchSetup) || url !== 'https://api.openai.com/v1/responses' || init?.method !== 'POST'
         || typeof init.body !== 'string' || init.signal?.aborted) return deny('provider fetch');
       const request = JSON.parse(init.body);
+      if (options.localResearchSetup && request.text?.format?.name === 'company_facts') {
+        if (request.model !== 'gpt-4.1-mini-2025-04-14' || request.store !== false || request.tool_choice !== 'none'
+          || JSON.stringify(request.tools) !== '[]' || request.max_output_tokens !== 2048 || init.redirect !== 'error') return deny('unexpected extraction request');
+        const input: Pick<PageFactInput, 'sources'> = JSON.parse(request.input);
+        if (input.sources.length !== 1) return deny('unexpected extraction sources');
+        const source = input.sources[0];
+        const facts = (Object.entries(localSetupClaims) as [CompanyFact['key'], string][]).map(([key, quote]) => {
+          const block = source.blocks.find(item => item.text === quote);
+          if (!block) return deny('missing whole extraction block');
+          return { key, sourceId: source.sourceId, blockId: block.id, quote };
+        });
+        extractionRequests.push({ model: request.model, store: request.store, input: structuredClone(input), facts });
+        return new Response(JSON.stringify({ status: 'completed', model: request.model,
+          output: [{ type: 'message', role: 'assistant', status: 'completed',
+            content: [{ type: 'output_text', text: JSON.stringify({ facts }) }] }] }), {
+          headers: { 'content-type': 'application/json' },
+        });
+      }
       if (request.text?.format?.name !== 'grounded_email' || request.store !== false
-        || request.model !== 'first-use-fixture-model') return deny('unexpected model request');
+        || request.model !== (options.localResearchSetup ? 'gpt-4.1-mini-2025-04-14' : 'first-use-fixture-model')
+        || !options.draftModel) return deny('unexpected model request');
       const context: GroundedDraftContext = JSON.parse(request.input);
       modelRequests.push({ url, context: structuredClone(context), model: request.model, store: request.store });
       const draft = options.draftModel(context);
@@ -93,9 +127,9 @@ export async function createFirstUseDomainFixture(handlers: Map<string, Register
       return ['93.184.216.34'];
     },
     companyResearchHttp: async input => {
-      if (!Object.hasOwn(firstUsePages, input.url) || input.address !== '93.184.216.34' || input.signal.aborted) return deny(`PageHttp ${input.url}`);
+      if (!Object.hasOwn(fixturePages, input.url) || input.address !== '93.184.216.34' || input.signal.aborted) return deny(`PageHttp ${input.url}`);
       pages.push(input.url);
-      return new Response(firstUsePages[input.url], { headers: { 'content-type': 'text/html' } });
+      return new Response(fixturePages[input.url], { headers: { 'content-type': 'text/html' } });
     },
     createBackupService: () => ({ start: async () => undefined, shutdown: async () => undefined,
       createBackup: async () => deny('backup'), listAvailableBackups: async () => [] }),
@@ -111,18 +145,21 @@ export async function createFirstUseDomainFixture(handlers: Map<string, Register
   };
   try {
     mkdirSync(dirname(temp.path), { recursive: true, mode: 0o700 });
-    if (options.draftModel) await manager.configure({ apiKey: 'synthetic-first-use-key', model: 'first-use-fixture-model' });
+    if (options.draftModel && !options.localResearchSetup) await manager.configure({ apiKey: 'synthetic-first-use-key', model: 'first-use-fixture-model' });
     const app = await startApplication({ appVersion: '1.0.0', userDataPath: dirname(temp.path),
-      companyResearch: { workspaceId: 'first-use-fixture', budgetId: 'first-use-budget',
+      ...(options.localResearchSetup ? {} : { companyResearch: { workspaceId: 'first-use-fixture', budgetId: 'first-use-budget',
         audience: { residential: true, regions: ['Fictional Region'], terms: ['residential PM'] },
         discoveryLimits: limits, researchLimits: limits,
         capability: { model: 'unused-fixture-model', webSearch: true, searchCostMicros: 50, modelCostMicros: 50 },
-        maxAccountBudgetMicros: 1000, permittedSources: Object.keys(firstUsePages) },
+        maxAccountBudgetMicros: 1000, permittedSources: Object.keys(firstUsePages) } }),
       createWindow: () => undefined }, dependencies);
     const api = createCallieApi({ invoke: (channel, ...args) => {
       const entry: typeof trace[number] = { channel, args: structuredClone(args) }; trace.push(entry);
       const promise = (async () => {
-        if (!allowed.has(channel)) return deny(`IPC ${channel}`);
+        const setupReadOrSave = options.localResearchSetup && ['outreach:configure',
+          'outreach:google-connection-status', 'outreach:google-connection-disclosure',
+          'local-workspace:get-company-research-settings', 'local-workspace:update-company-research-settings'].includes(channel);
+        if (!allowed.has(channel) && !setupReadOrSave) return deny(`IPC ${channel}`);
         const handler = handlers.get(channel);
         if (!handler) throw Error(`Missing production registrar: ${channel}`);
         try { const result = await handler({ senderFrame: { url: 'callie://app/index.html' } }, ...args); entry.result = structuredClone(result); return result; }
@@ -139,7 +176,7 @@ export async function createFirstUseDomainFixture(handlers: Map<string, Register
       })]); } finally { clearTimeout(timer!); }
     };
     const drain = () => bounded((async () => { while (pending.size) await Promise.allSettled([...pending]); })());
-    return { api, runtime, trace, pages, resolutions, modelRequests, denied, deny, drain, directory: dirname(temp.path),
+    return { api, runtime, trace, pages, resolutions, modelRequests, extractionRequests, denied, deny, drain, directory: dirname(temp.path),
       async close() {
         try { await drain(); }
         finally {

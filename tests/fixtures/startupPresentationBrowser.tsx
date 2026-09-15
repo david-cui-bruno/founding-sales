@@ -69,7 +69,7 @@ const api: CalliePreloadApi = {
     getCompany: forbidden('localWorkspace.getCompany'),
     researchCompany: forbidden('localWorkspace.researchCompany'),
     getCompanyResearchStatus: forbidden('localWorkspace.getCompanyResearchStatus'),
-    getCallSettings: async () => { throw Error('Call capacity unavailable in this fixture'); }, updateCallSettings: async () => { throw Error('Call capacity unavailable in this fixture'); }, linkCompanyPerson: forbidden('localWorkspace.linkCompanyPerson'),
+    getCompanyResearchSettings: async () => { throw Error('Local research setup unavailable in this fixture'); }, updateCompanyResearchSettings: async () => { throw Error('Local research setup unavailable in this fixture'); }, getCallSettings: async () => { throw Error('Call capacity unavailable in this fixture'); }, updateCallSettings: async () => { throw Error('Call capacity unavailable in this fixture'); }, linkCompanyPerson: forbidden('localWorkspace.linkCompanyPerson'),
     getCommitments: read('localWorkspace.getCommitments', () => commitments()),
     transition: forbidden('localWorkspace.transition'),
   },

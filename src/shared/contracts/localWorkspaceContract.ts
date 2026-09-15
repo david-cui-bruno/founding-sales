@@ -1,3 +1,5 @@
+import type { CompanyResearchSettings, UpdateCompanyResearchSettingsRequest } from './localCompanyResearchSettingsContract';
+export * from './localCompanyResearchSettingsContract';
 import { z } from 'zod';
 import type { LocalCompanyInput, LocalCompanyCreateRequest, LocalCompanyReview, LocalCompanyCreateResult, LocalCompanyCreateStatus } from './localCompanyIntakeContract';
 import { accountIdSchema, accountInstantSchema, accountLinkSchema, accountSchema, accountSourceSchema, type AccountLink, type AccountEvidenceReceipt } from './accountContract';
@@ -101,6 +103,8 @@ export type LocalWorkflowReceipt = z.infer<typeof localWorkflowReceiptSchema>;
 export type LocalWorkspaceSnapshot = z.infer<typeof localWorkspaceSnapshotSchema>;
 export type LocalCommitmentsSnapshot = z.infer<typeof localCommitmentsSnapshotSchema>;
 export interface LocalWorkspaceApi {
+  getCompanyResearchSettings(): Promise<CompanyResearchSettings>;
+  updateCompanyResearchSettings(input: UpdateCompanyResearchSettingsRequest): Promise<CompanyResearchSettings>;
   getCallSettings(): Promise<MeetingFirstAccountCallSettings>;
   updateCallSettings(input: UpdateCallSettingsRequest): Promise<MeetingFirstAccountCallSettings>;
   linkCompanyPerson(input: LinkCompanyPersonRequest): Promise<AccountEvidenceReceipt>;

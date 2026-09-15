@@ -1,3 +1,5 @@
+import { companyResearchSettingsSchema, companyResearchSettingsUpdateReplySchema, updateCompanyResearchSettingsRequestSchema } from '../../shared/contracts/localCompanyResearchSettingsContract';
+import { getCompanyResearchProfiles } from '../research/knownCompanyRequestProfile';
 import { localCompanyInputSchema, localCompanyCreateRequestSchema } from '../../shared/contracts/localCompanyIntakeContract';
 import type { FoundationRuntime } from '../foundation/foundationRuntime';
 import { linkCompanyPersonRequestSchema, localWorkflowTransitionSchema, selectedCompanySchema, selectedResearchSchema, localCompanyResearchStatusSchema, type SelectedResearch, type LocalCompanyResearchStatus, type LocalWorkspaceApi } from '../../shared/contracts/localWorkspaceContract';
@@ -9,8 +11,9 @@ import { UuidGenerator } from '../domain/support/idGenerator';
 export type SelectedCompanyResearchPort = {
   researchCompany(input: SelectedResearch): Promise<LocalCompanyResearchStatus>;
 };
+export type CompanyResearchSettingsLifecycle = { pairedResearchPresent(): Promise<boolean>; changed(): Promise<void> };
 export function createLocalWorkspaceProvider(runtime: Pick<FoundationRuntime, 'withDatabase' | 'withDomain'>,
-  research?: { current(): SelectedCompanyResearchPort | null }): LocalWorkspaceApi {
+  research?: { current(): SelectedCompanyResearchPort | null }, settings?: CompanyResearchSettingsLifecycle): LocalWorkspaceApi {
   const clock = new SystemClock();
   const ids = new UuidGenerator();
   const validateStatus = (selected: SelectedResearch, value: unknown): LocalCompanyResearchStatus => {
@@ -22,7 +25,22 @@ export function createLocalWorkspaceProvider(runtime: Pick<FoundationRuntime, 'w
     validateStatus(selected, new AccountRepository({ database, clock, ids }).readSelectedResearch(selected)));
   const unavailable = (saved: LocalCompanyResearchStatus, reason: string): LocalCompanyResearchStatus =>
     saved.state === 'not_recorded' ? { ...saved, state: 'held', reason } : saved;
+  const getCompanyResearchSettings = async () => {
+    const record = await runtime.withDomain(domain => domain.getCompanyResearchSettings());
+    const blockedReason = await settings?.pairedResearchPresent() ? 'paired_research_present' : null;
+    const reservedOrSpentMicros = await runtime.withDatabase(database => (database.raw.prepare('SELECT COALESCE(SUM(COALESCE(cost_micros,reserved_cost_micros)),0) AS total FROM pm_account_research_jobs').get() as { total: number }).total);
+    return companyResearchSettingsSchema.parse({ ...record, profiles: getCompanyResearchProfiles(), blockedReason, reservedOrSpentMicros });
+  };
   return {
+    getCompanyResearchSettings,
+    updateCompanyResearchSettings: async input => {
+      const parsed = updateCompanyResearchSettingsRequestSchema.parse(input);
+      if (parsed.configuration.state === 'active' && await settings?.pairedResearchPresent()) throw new Error('Paired research present');
+      const saved = await runtime.withDomain(domain => domain.updateCompanyResearchSettings(parsed));
+      await settings?.changed();
+      const result = await getCompanyResearchSettings();
+      return companyResearchSettingsUpdateReplySchema(parsed).parse({ ...result, ...saved });
+    },
     getCallSettings: () => runtime.withDomain(domain => domain.getCallSettings()),
     updateCallSettings: input => runtime.withDomain(domain => domain.updateCallSettings(input)),
     linkCompanyPerson: async input => {

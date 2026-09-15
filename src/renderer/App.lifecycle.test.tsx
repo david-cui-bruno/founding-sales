@@ -83,7 +83,7 @@ const pendingWorkflowApis = (): Omit<CalliePreloadApi, 'health' | 'appleSpike'> 
   const pending = () => vi.fn(() => new Promise<never>(() => undefined));
   return {
     daily: { get: pending() },
-    localWorkspace: { get: pending(), getCompany: pending(), researchCompany: pending(), getCompanyResearchStatus: pending(), getCallSettings: async () => { throw Error('Call capacity unavailable in this fixture'); }, updateCallSettings: async () => { throw Error('Call capacity unavailable in this fixture'); }, linkCompanyPerson: pending(), getCommitments: pending(), reviewCompany: pending(), createCompany: pending(), getCompanyCreateStatus: pending(), transition: pending() },
+    localWorkspace: { get: pending(), getCompany: pending(), researchCompany: pending(), getCompanyResearchStatus: pending(), getCompanyResearchSettings: pending(), updateCompanyResearchSettings: pending(), getCallSettings: async () => { throw Error('Call capacity unavailable in this fixture'); }, updateCallSettings: async () => { throw Error('Call capacity unavailable in this fixture'); }, linkCompanyPerson: pending(), getCommitments: pending(), reviewCompany: pending(), createCompany: pending(), getCompanyCreateStatus: pending(), transition: pending() },
     discovery: { get: pending(), getBrief: pending(), begin: pending(), override: pending() },
     delegation: {
       status: pending(), policyImport: { selectAndPreview: pending(), confirm: pending(), resume: pending(), status: pending() },

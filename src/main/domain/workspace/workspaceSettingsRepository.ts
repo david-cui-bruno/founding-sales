@@ -1,3 +1,6 @@
+import { isDeepStrictEqual } from 'node:util';
+import { localKnownCompanyConfigurationSchema, updateCompanyResearchSettingsRequestSchema, type UpdateCompanyResearchSettingsRequest } from '../../../shared/contracts/localCompanyResearchSettingsContract';
+import { validateKnownCompanyActivation } from '../../research/knownCompanyRequestProfile';
 import { meetingFirstAccountCallSettingsSchema, type MeetingFirstAccountCallSettings } from '../../../shared/contracts/localWorkspaceContract';
 export type { MeetingFirstAccountCallSettings } from '../../../shared/contracts/localWorkspaceContract';
 import { z } from 'zod';
@@ -143,6 +146,29 @@ export class WorkspaceSettingsRepository {
       throw new WorkspaceSettingsCorruptionError('Meeting-first account call settings changed before this update.');
     }
     return this.readMeetingFirstAccountCallSettings();
+  }
+
+  readCompanyResearchSettings() {
+    const row = z.strictObject({ revision: z.number().int().nonnegative().safe(), configuration: z.string().nullable() }).parse(
+      this.database.raw.prepare('SELECT known_company_research_revision AS revision, known_company_research_json AS configuration FROM workspace_settings WHERE singleton=1').get());
+    return { revision: row.revision, configuration: row.configuration === null ? null : localKnownCompanyConfigurationSchema.parse(JSON.parse(row.configuration)) };
+  }
+
+  updateCompanyResearchSettingsCas(input: UpdateCompanyResearchSettingsRequest, updatedAt: string) {
+    this.unitOfWork.assertWriteScope();
+    const parsed = updateCompanyResearchSettingsRequestSchema.parse(input);
+    z.iso.datetime({ precision: 3 }).parse(updatedAt);
+    if (parsed.expectedRevision === Number.MAX_SAFE_INTEGER) throw new WorkspaceSettingsCorruptionError('Research settings revision exhausted');
+    const current = this.readCompanyResearchSettings();
+    if (parsed.configuration.state === 'paused') {
+      if (!current.configuration || !isDeepStrictEqual(parsed.configuration, { ...current.configuration, state: 'paused' })) throw new Error('Pause must preserve reviewed configuration');
+    } else {
+      if (!parsed.reviewed) throw new Error('Research review required');
+      validateKnownCompanyActivation(parsed.configuration);
+    }
+    const result = this.database.raw.prepare(`UPDATE workspace_settings SET known_company_research_json=?, known_company_research_revision=known_company_research_revision+1, updated_at=? WHERE singleton=1 AND known_company_research_revision=?`).run(JSON.stringify(parsed.configuration), updatedAt, parsed.expectedRevision);
+    if (result.changes !== 1) throw new WorkspaceSettingsCorruptionError('Research settings changed before update');
+    return this.readCompanyResearchSettings();
   }
 
   activateRulePointerCas(input: {

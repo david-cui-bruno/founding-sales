@@ -76,7 +76,7 @@ describe('selected local company research panel', () => {
 
   it('F4-panel-02 differentiates unavailable detail from a successful empty source set', async () => {
     const f = fixture(); f.api.getCompany.mockRejectedValue(new Error('PRIVATE_PATH /workspace.sqlite'));
-    const view = await mount(f); expect(await screen.findByText(/unavailable|could not load/i)).toBeTruthy();
+    const view = await mount(f); expect(await screen.findByText('Company evidence unavailable. Reopen this detail to check again.')).toBeTruthy();
     expect(screen.queryByText(/no (?:saved |admitted )?sources/i)).toBeNull(); expect(document.body.textContent).not.toContain('PRIVATE_PATH');
     view.unmount(); const empty = detail(); empty.sources = []; f.api.getCompany.mockResolvedValue(empty);
     await mount(f); expect(await screen.findByText(/no (?:saved |admitted )?sources/i)).toBeTruthy(); expect(f.api.researchCompany).not.toHaveBeenCalled();
@@ -229,3 +229,46 @@ it('F4-panel-16 mismatched execution response becomes unknown and keeps exact re
   await waitFor(() => expect(f.c.snapshot().research!.status!.state).toBe('completed'));
   expect(f.api.researchCompany.mock.calls[1][0]).toBe(original);
 }, 10_000);
+
+it('links to Connections without changing selected company or starting another attempt', async () => {
+  const f = fixture(); await mount(f);
+  const link = screen.getByRole('link', { name: 'Set up local research' });
+  expect(link.getAttribute('href')).toBe('#/settings');
+  fireEvent.click(link);
+  expect(window.sessionStorage.getItem('callie.settings.section')).toBe('connections');
+  expect(f.c.snapshot().selectedAccountId).toBe('a');
+  expect(f.api.researchCompany).not.toHaveBeenCalled();
+  expect(screen.getByText(/new potentially paid attempt/)).toBeTruthy();
+  expect(screen.getAllByRole('button', { name: 'Research' })).toHaveLength(1);
+});
+
+function setupFixture(): Awaited<ReturnType<LocalWorkspaceApi['getCompanyResearchSettings']>> {
+  return { revision: 1, profiles: [], blockedReason: null, reservedOrSpentMicros: 10000, configuration: { version: 1, mode: 'known_company', state: 'active', profileId: 'reviewed-fixture', maxAccountBudgetMicros: 5000000, permittedSources: ['https://a.example/about'], researchLimits: { maxCompanies: 1, maxPages: 1, maxBytes: 250000, maxCostMicros: 20000, knownCompanyExtraction: { version: 1, model: 'fixture-model', maxCostMicros: 20000, maxInputBytes: 20000, maxOutputTokens: 2048, inputMicrosPerMillionTokens: 400000, outputMicrosPerMillionTokens: 1600000 } } } };
+}
+it.each(['paused', 'conflict', 'mismatch', 'unavailable'] as const)('holds new attempts when local setup is %s without losing old evidence or recovery controls', async kind => {
+  const f = fixture(); seed(f, 'held'); const value = setupFixture();
+  if (kind === 'paused') value.configuration!.state = 'paused';
+  if (kind === 'conflict') value.blockedReason = 'paired_research_present';
+  if (kind === 'mismatch') value.configuration!.permittedSources = ['https://www.a.example/about'];
+  const getCompanyResearchSettings = vi.fn(async () => { if (kind === 'unavailable') throw Error('private'); return value; });
+  render(<LocalCompanyResearchPanel accountId="a" api={{ ...f.api, getCompanyResearchSettings }} continuation={f.c} />);
+  await screen.findByText('Evidence current'); await waitFor(() => expect(getCompanyResearchSettings).toHaveBeenCalledTimes(1));
+  expect((researchButton() as HTMLButtonElement).disabled).toBe(true);
+  expect(checkButton()).toBeTruthy(); expect(resumeButton()).toBeTruthy();
+  fireEvent.click(researchButton()); expect(f.api.researchCompany).not.toHaveBeenCalled();
+  expect(f.c.snapshot().selectedAccountId).toBe('a');
+});
+it('matching active local sources enable only the existing explicit Research action', async () => {
+  const f = fixture(); const getCompanyResearchSettings = vi.fn(async () => setupFixture());
+  render(<LocalCompanyResearchPanel accountId="a" api={{ ...f.api, getCompanyResearchSettings }} continuation={f.c} />);
+  await screen.findByText(/Local known-company setup applies/);
+  expect(f.api.researchCompany).not.toHaveBeenCalled(); expect((researchButton() as HTMLButtonElement).disabled).toBe(false);
+  fireEvent.click(researchButton()); await waitFor(() => expect(f.api.researchCompany).toHaveBeenCalledTimes(1));
+});
+it('preserves existing paired Research when no standalone record exists', async () => {
+  const f = fixture(); const value = setupFixture(); value.configuration = null; value.blockedReason = 'paired_research_present';
+  render(<LocalCompanyResearchPanel accountId="a" api={{ ...f.api, getCompanyResearchSettings: async () => value }} continuation={f.c} />);
+  await screen.findByText('Evidence current');
+  expect((researchButton() as HTMLButtonElement).disabled).toBe(false);
+  fireEvent.click(researchButton()); await waitFor(() => expect(f.api.researchCompany).toHaveBeenCalledTimes(1));
+});

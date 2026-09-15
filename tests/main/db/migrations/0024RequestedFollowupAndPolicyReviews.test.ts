@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { expect, it } from 'vitest';
 import { closeDatabase, openDatabase } from '../../../../src/main/db/database';
-import { DOMAIN_SCHEMA_MANIFEST } from '../../../../src/main/domain/startup/storageReadiness';
 import { createPmFixture, PM_NOW } from '../../../fixtures/pmAccounts';
 import { createTestWorkspaceKey } from '../../../fixtures/tempDatabase';
 
@@ -32,7 +31,7 @@ it('persists threadless drafts and immutable owner reviews with strict SQL bound
   const f = await createPmFixture();
   try {
     const account = f.repo.create({ commandId: randomUUID(), name: 'Fictional Followup PM', domain: null });
-    expect(f.db.raw.prepare('SELECT schema_version FROM app_meta').get()).toEqual({ schema_version: 24 });
+    expect(f.db.raw.prepare('SELECT schema_version FROM app_meta').get()).toEqual({ schema_version: 25 });
     const draft = f.db.raw.prepare('INSERT INTO delegated_requested_followup_drafts VALUES(?,?,?,?,?,?,?,?)');
     const values = ['workspace', account.id, 'draft', 1, 'a'.repeat(64), '{}', null, PM_NOW];
     draft.run(...values);
@@ -62,9 +61,10 @@ it('persists threadless drafts and immutable owner reviews with strict SQL bound
 });
 
 it('preserves the genuine23 catalog and every historical business row while adding only24, then reopens idempotently', async () => {
-  const { createMigrationRunner, migrateToLatest, productionMigrations } = await import('../../../../src/main/db/migrate');
+  const { createMigrationRunner, productionMigrations } = await import('../../../../src/main/db/migrate');
   const { createTempDatabase } = await import('../../../fixtures/tempDatabase');
   const { createHash } = await import('node:crypto');
+  const migrateThrough24 = createMigrationRunner(productionMigrations.filter(entry => entry.schemaVersion <= 24));
   const temp = createTempDatabase(); const key = createTestWorkspaceKey();
   const database = openDatabase({ path: temp.path, key });
   const options = { workspaceKey: key, backupDirectory: `${temp.path}.backups` };
@@ -81,16 +81,17 @@ it('preserves the genuine23 catalog and every historical business row while addi
     const tables = catalog.filter(row => row.type === 'table' && !['app_meta', 'kysely_migration'].includes(row.name)).map(row => row.name);
     const rows = () => tables.map(name => [name, database.raw.prepare(`SELECT * FROM "${name}"`).raw().all()]);
     const before = rows();
-    expect(await migrateToLatest(database, options)).toEqual({ fromVersion: 23, toVersion: 24, appliedMigrationIds: ['0024RequestedFollowupAndPolicyReviews'] });
+    expect(await migrateThrough24(database, options)).toEqual({ fromVersion: 23, toVersion: 24, appliedMigrationIds: ['0024RequestedFollowupAndPolicyReviews'] });
     const currentCatalog = database.raw.prepare("SELECT type,name,sql FROM sqlite_master WHERE type IN('table','index','trigger') AND(type<>'index' OR sql IS NOT NULL) ORDER BY type COLLATE BINARY,name COLLATE BINARY").all() as typeof catalog;
+    // Pin the genuine24 catalog rather than the moving current-schema manifest.
     expect(createHash('sha256').update(JSON.stringify(currentCatalog.map(row => [row.type, row.name, row.sql.replace(/\s+/g, ' ').trim()]))).digest('hex'))
-      .toBe(DOMAIN_SCHEMA_MANIFEST.catalogSha256);
+      .toBe('540015183cea4abf0ec50df42e643d5d7e6901a3dfd6a3a9a5c538ae80661a6b');
     expect(rows()).toEqual(before);
     for (const original of catalog) expect(database.raw.prepare('SELECT type,name,sql FROM sqlite_master WHERE name=?').get(original.name)).toEqual(original);
     closeDatabase(database);
     const reopened = openDatabase({ path: temp.path, key });
     try {
-      expect(await migrateToLatest(reopened, options)).toEqual({ fromVersion: 24, toVersion: 24, appliedMigrationIds: [] });
+      expect(await migrateThrough24(reopened, options)).toEqual({ fromVersion: 24, toVersion: 24, appliedMigrationIds: [] });
       expect(reopened.raw.prepare('SELECT * FROM delegated_requested_followup_drafts').all()).toEqual([]);
       expect(reopened.raw.prepare('SELECT * FROM account_route_policy_import_reviews').all()).toEqual([]);
       expect(reopened.raw.pragma('foreign_key_check')).toEqual([]);

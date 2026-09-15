@@ -1,7 +1,13 @@
+import { companyResearchSettingsSchema, companyResearchSettingsUpdateReplySchema, updateCompanyResearchSettingsRequestSchema } from '../../shared/contracts/localCompanyResearchSettingsContract';
 import { localCompanyInputSchema, localCompanyCreateRequestSchema, localCompanyReviewSchema, localCompanyCreateResultSchema, localCompanyCreateStatusSchema } from '../../shared/contracts/localCompanyIntakeContract';
 import { meetingFirstAccountCallSettingsSchema, updateCallSettingsRequestSchema, callSettingsUpdateReplySchema, linkCompanyPersonRequestSchema, accountEvidenceReceiptSchema, localWorkspaceSnapshotSchema, localCommitmentsSnapshotSchema, localWorkflowTransitionSchema, localWorkflowReceiptSchema, selectedCompanySchema, localCompanyDetailSchema, selectedResearchSchema, localCompanyResearchStatusSchema, type LocalWorkspaceApi } from '../../shared/contracts/localWorkspaceContract';
 import type { IpcClient } from '../ipcClient';
 export const createLocalWorkspaceApi = (client: IpcClient): LocalWorkspaceApi => ({
+  getCompanyResearchSettings: () => client.requestNoInput('local-workspace:get-company-research-settings', companyResearchSettingsSchema),
+  updateCompanyResearchSettings: async input => {
+    const parsed = updateCompanyResearchSettingsRequestSchema.parse(input);
+    return client.request('local-workspace:update-company-research-settings', updateCompanyResearchSettingsRequestSchema, companyResearchSettingsUpdateReplySchema(parsed), parsed);
+  },
   getCallSettings: () => client.requestNoInput('local-workspace:get-call-settings', meetingFirstAccountCallSettingsSchema),
   updateCallSettings: async input => {
     const parsed = Object.freeze(updateCallSettingsRequestSchema.parse(input));

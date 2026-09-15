@@ -1,3 +1,4 @@
+import { migration0025KnownCompanyResearchSettings } from './migrations/0025KnownCompanyResearchSettings';
 import { Migrator } from 'kysely/migration'; // eslint-disable-line import/no-unresolved -- Kysely exports this runtime subpath.
 
 import type { AppDatabase } from './database';
@@ -149,6 +150,7 @@ export const productionMigrations = [
   { id: '0022MailPersistence', schemaVersion: 22, migration: migration0022MailPersistence },
   { id: '0023Campaigns', schemaVersion: 23, migration: migration0023Campaigns },
   { id: '0024RequestedFollowupAndPolicyReviews', schemaVersion: 24, migration: migration0024RequestedFollowupAndPolicyReviews },
+  { id: '0025KnownCompanyResearchSettings', schemaVersion: 25, migration: migration0025KnownCompanyResearchSettings },
 ] as const;
 const productionMigrationRunner = createMigrationRunner(productionMigrations);
 

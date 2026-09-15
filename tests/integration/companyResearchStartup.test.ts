@@ -111,7 +111,8 @@ describe('actual startup company research composition', () => {
   it('is inert without approved configuration or a persisted discovery budget', async () => {
     const f = await fixture(false);
     try {
-      expect(f.factoryCalls).toBe(0);
+      // Startup owns one lazy credential manager even before research is configured.
+      expect(f.factoryCalls).toBe(1);
       expect(f.app.companyResearch).toBeUndefined();
       expect(f.requests).toEqual([]);
       expect(f.database.raw.prepare('SELECT * FROM pm_accounts').all()).toEqual([]);

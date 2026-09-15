@@ -614,6 +614,8 @@ export type ReviewPositionTable = {
 };
 
 export type WorkspaceSettingsTable = {
+  known_company_research_json: string | null;
+  known_company_research_revision: Generated<number>;
   singleton: number;
   timezone: string;
   daily_dial_capacity: number;

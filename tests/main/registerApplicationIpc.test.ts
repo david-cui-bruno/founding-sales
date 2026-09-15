@@ -157,9 +157,15 @@ describe('registerApplicationIpc', () => {
         registerApplicationIpc(runtime, trust, registrars, sourcing, recovery, shell, enrichment, logs, outbound),
       createAppleBridgeSupervisor: () => { throw new Error('unexpected helper'); }, closeDatabase: close,
     };
+    // This startup fixture has no operational domain graph. Only the new settings read is expected.
+    const getCompanyResearchSettings = vi.fn(() => ({ revision: 0, configuration: null }));
+    const settingsRead = vi.spyOn(FoundationRuntime.prototype, 'withDomain').mockImplementationOnce(async operation =>
+      operation({ getCompanyResearchSettings } as unknown as FounderSalesDomain));
     const error = await startApplication({ appVersion: '1', userDataPath: '/fixture/rollback', createWindow: window,
       registerOutboundLifecycle: (owned) => { Object.values(owned).forEach((callback) => listeners.add(callback)); return () => listeners.clear(); },
     }, dependencies).catch((caught: unknown) => caught) as AggregateError;
+    settingsRead.mockRestore();
+    expect(getCompanyResearchSettings).toHaveBeenCalledTimes(1);
     expect(error).toBeInstanceOf(AggregateError);
     expect(error.cause).toBe(registrationError);
     expect(error.errors).toEqual([registrationError, cleanupError]);
@@ -205,9 +211,15 @@ describe('registerApplicationIpc', () => {
       registerApplicationIpc: registration,
       createAppleBridgeSupervisor: () => { throw new Error('unexpected helper'); }, closeDatabase: close,
     };
+    // This startup fixture has no operational domain graph. Only the new settings read is expected.
+    const getCompanyResearchSettings = vi.fn(() => ({ revision: 0, configuration: null }));
+    const settingsRead = vi.spyOn(FoundationRuntime.prototype, 'withDomain').mockImplementationOnce(async operation =>
+      operation({ getCompanyResearchSettings } as unknown as FounderSalesDomain));
     const error = await startApplication({ appVersion: '1', userDataPath: '/fixture/rollback', createWindow: window,
       registerOutboundLifecycle: (owned) => { Object.values(owned).forEach((callback) => listeners.add(callback)); return () => listeners.clear(); },
     }, dependencies).catch((caught: unknown) => caught) as AggregateError;
+    settingsRead.mockRestore();
+    expect(getCompanyResearchSettings).toHaveBeenCalledTimes(1);
     expect(error).toBeInstanceOf(AggregateError);
     expect(error.cause).toBe(registrationError);
     expect(error.errors).toEqual([registrationError, cleanupError]);
@@ -750,21 +762,22 @@ describe('Task 1 selected-company application composition', () => {
       expect(() => registerApplicationIpc(gate, undefined, undefined, explicitSourcingProvider(), recoveryProvider)).toThrow(failure);
       expect([...handlers]).toEqual(['unrelated']);
       const removed = electron.removeHandler.mock.calls.map(call => call[0]);
-      expect(registered).toHaveLength(63);
-      expect(new Set(registered).size).toBe(63);
+      expect(registered).toHaveLength(65);
+      expect(new Set(registered).size).toBe(65);
       expect([...removed].sort()).toEqual([...registered].sort());
       // Application disposes slices in reverse order. Historical slices own their
-      // internal channel order, while local-workspace rolls its six back in reverse.
+      // internal channel order, while local-workspace rolls its eight back in reverse.
       const slices = removed.map(channel => channel.split(':')[0]);
       expect(slices.filter((slice, index) => index === 0 || slice !== slices[index - 1])).toEqual([
         'local-workspace', 'daily', 'discovery', 'recovery', 'shell', 'sourcing',
         'learnings', 'conversations', 'imports', 'friday', 'review', 'pipeline',
         'today', 'lead-detail', 'leads', 'health',
       ]);
-      expect(removed.slice(0, 6)).toEqual([
+      expect(removed.slice(0, 8)).toEqual([
         'local-workspace:company-create-status', 'local-workspace:create-company',
         'local-workspace:review-company', 'local-workspace:transition',
         'local-workspace:get-commitments', 'local-workspace:get',
+        'local-workspace:update-company-research-settings', 'local-workspace:get-company-research-settings',
       ]);
       expect(storage).not.toHaveBeenCalled(); expect(domain).not.toHaveBeenCalled();
     } finally { vi.restoreAllMocks(); electron.handle.mockReset(); electron.removeHandler.mockReset(); }
@@ -784,6 +797,7 @@ import { AccountRepository } from '../../src/main/domain/accounts/accountReposit
 import type { SelectedCompanyResearchPort } from '../../src/main/workspace/localWorkspaceProvider';
 import type { SelectedResearch } from '../../src/shared/contracts/localWorkspaceContract';
 const task3LocalChannels = [
+  'local-workspace:get-company-research-settings', 'local-workspace:update-company-research-settings',
   'local-workspace:get', 'local-workspace:get-commitments', 'local-workspace:transition',
   'local-workspace:review-company', 'local-workspace:create-company', 'local-workspace:company-create-status',
   'local-workspace:get-company', 'local-workspace:research-company', 'local-workspace:company-research-status',
@@ -825,7 +839,7 @@ describe('Task 3 application selected capability registration', () => {
       expect(storage).not.toHaveBeenCalled(); expect(domain).not.toHaveBeenCalled(); expect(current).not.toHaveBeenCalled();
       expect(first.researchCompany).not.toHaveBeenCalled(); expect(second.researchCompany).not.toHaveBeenCalled();
       const registered = electron.handle.mock.calls.map(call => call[0]);
-      expect(registered).toHaveLength(69); expect(new Set(registered).size).toBe(69);
+      expect(registered).toHaveLength(71); expect(new Set(registered).size).toBe(71);
       expect(registered.filter(channel => channel.startsWith('local-workspace:'))).toEqual(task3LocalChannels);
       const api = createCallieApi({ invoke: async (channel, ...args) => registeredIpcHandler(electron.handle, channel)({ senderFrame: { url: 'callie://app/index.html' } }, ...args) });
       expect(typeof api.localWorkspace.researchCompany).toBe('function');
@@ -844,9 +858,9 @@ describe('Task 3 application selected capability registration', () => {
       expect(second.researchCompany).toHaveBeenCalledTimes(1);
       dispose(); dispose();
       const removed = electron.removeHandler.mock.calls.map(call => call[0]);
-      expect(removed.slice(0, 12)).toEqual([...task3LocalChannels].reverse());
+      expect(removed.slice(0, 14)).toEqual([...task3LocalChannels].reverse());
       expect([...removed].sort()).toEqual([...registered].sort());
-      expect(new Set(removed).size).toBe(69);
+      expect(new Set(removed).size).toBe(71);
     } finally { dispose?.(); vi.restoreAllMocks(); await f.close(); electron.handle.mockReset(); electron.removeHandler.mockReset(); }
   });
 
