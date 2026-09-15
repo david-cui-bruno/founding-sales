@@ -4,6 +4,7 @@ import type { LocalWorkspaceApi, LocalWorkspaceSnapshot } from '../../../shared/
 import type { LocalRead } from './localWorkspaceRead';
 import type { FirstUseContinuation } from './localCompanyContinuation';
 import { LocalCompanyContactLink, type LocalCompanyContactApi } from './LocalCompanyContactLink';
+import { LocalCompanyDraft } from './LocalCompanyDraft';
 import { LocalCompanyResearchPanel } from './LocalCompanyResearchPanel';
 export const localAccountKey = (id: string) => JSON.stringify(['local-account', id]);
 export type LocalAccountSelectionRequest = { key: string };
@@ -20,7 +21,7 @@ export function LocalAccountDetail({ account, api, contactApi, continuation, onO
 }) {
   const linkApi = useMemo(() => api ? { leads: contactApi.leads, leadDetail: contactApi.leadDetail, localWorkspace: api } : null, [api, contactApi.leads, contactApi.leadDetail]);
   return <section className="native-desk__account"><h2>{account.account.name}</h2><p>{account.account.domain ?? 'Company domain not recorded'}</p><p>Local evidence, not worker authority or complete research.</p>
-    {api ? <LocalCompanyResearchPanel accountId={account.account.id} api={api} continuation={continuation} renderDetail={detail => linkApi && <LocalCompanyContactLink detail={detail} api={linkApi} continuation={continuation} onOpenImport={onOpenImport} onOpenLead={onOpenLead} />} /> : <>
+    {api ? <LocalCompanyResearchPanel accountId={account.account.id} api={api} continuation={continuation} renderDetail={detail => <>{linkApi && <LocalCompanyContactLink detail={detail} api={linkApi} continuation={continuation} onOpenImport={onOpenImport} onOpenLead={onOpenLead} />}<LocalCompanyDraft api={api} detail={detail} /></>} /> : <>
     {account.portfolio.map((p, i) => <p key={i}>{p.count} {p.scope} {p.measure}</p>)}
     {!account.portfolio.length && <p>Portfolio not recorded.</p>}
     {account.claims.map((c, i) => <div key={i}><p>{c.kind === 'hypothesis' ? 'Hypothesis' : c.kind === 'prospect_stated_problem' ? 'Prospect stated' : 'Fact'}: {typeof c.value === 'string' ? c.value : `${c.value.count} ${c.value.scope} ${c.value.measure}`}</p><small>Evidence: {c.evidenceIds.join(', ') || 'Unverified'}</small></div>)}

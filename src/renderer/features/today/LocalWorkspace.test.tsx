@@ -572,3 +572,91 @@ it.each([true, false])('explains empty campaign draft prerequisites with known s
   expect(screen.getByText(/does not enroll accounts, activate a campaign, or start outreach/)).toBeTruthy();
   expect(f.calls.every(c => /^(daily.get|delegation.status)$/.test(c.method))).toBe(true);
 });
+
+// Company draft UI integration only: actual public account panel, in-memory mock API.
+// This is not encrypted persistence, provider, installed-app or restart acceptance.
+import type { CompanyDraftRead, LocalCompanyDraft } from '../../../shared/contracts/localCompanyDraftContract';
+it('company draft public panel explicitly opens an existing company route and retains exact saved text through close and keyed remount (mock API)', async () => {
+  const f = f4Api(), detail = f4Company();
+  const email = 'info@company-panel.example', quote = `Business email: ${email}`;
+  const excerpt = `Fictional company source for the draft panel.\n${quote}`;
+  detail.sources[0] = { ...detail.sources[0], excerpt };
+  const route: LocalCompanyDetail['snapshot']['routes'][number] = { id: 'company-panel-route', accountId: detail.snapshot.account.id, version: 1, personId: null,
+    channel: 'email' as const, value: email, purpose: 'business' as const, verification: 'published' as const, evidenceIds: [detail.sources[0].id] };
+  detail.snapshot.routes = [route];
+  const originalDetail = structuredClone(detail);
+  const initial: LocalCompanyDraft = { kind: 'local_company_email', status: 'unsent', id: 'company-panel-draft', accountId: route.accountId,
+    revision: 1, recipientBinding: { routeId: route.id, routeVersion: route.version, email, personId: null },
+    accountVersionAtOpen: detail.snapshot.account.version, companyLabel: detail.snapshot.account.name, sourceIds: route.evidenceIds,
+    publication: { sourceId: detail.sources[0].id, url: detail.sources[0].url, sha256: detail.sources[0].sha256,
+      fetchedAt: detail.sources[0].fetchedAt, quote }, subject: '', body: '', createdAt: local.generatedAt, updatedAt: local.generatedAt };
+  let stored: CompanyDraftRead | null = null;
+  const trace: string[] = [];
+  f.api.localWorkspace.getCompany = vi.fn<LocalWorkspaceApi['getCompany']>(async input => {
+    expect(input).toEqual({ accountId: route.accountId }); return structuredClone(detail);
+  });
+  const getDraft = vi.fn<LocalWorkspaceApi['getCompanyDraft']>(async input => {
+    trace.push('get'); expect(input.accountId).toBe(route.accountId);
+    if ('routeId' in input) expect(input).toEqual({ accountId: route.accountId, routeId: route.id });
+    else expect(input).toEqual({ accountId: route.accountId, draftId: initial.id });
+    return structuredClone(stored);
+  });
+  const openDraft = vi.fn<LocalWorkspaceApi['openCompanyDraft']>(async input => {
+    trace.push('open'); expect(input).toEqual({ commandId: expect.any(String), accountId: route.accountId, routeId: route.id,
+      expectedRouteVersion: route.version, expectedAccountVersion: detail.snapshot.account.version });
+    stored ??= { draft: structuredClone(initial), stale: false, reason: null, editable: true };
+    return { receipt: { commandId: input.commandId, accountId: route.accountId, draftId: initial.id, operation: 'open',
+      appliedRevision: stored.draft.revision, recipientBinding: initial.recipientBinding, publication: initial.publication }, current: structuredClone(stored) };
+  });
+  const saveDraft = vi.fn<LocalWorkspaceApi['saveCompanyDraft']>(async input => {
+    trace.push('save'); if (!stored) throw new Error('Mock draft must be explicitly opened before save');
+    expect(input.accountId).toBe(route.accountId); expect(input.draftId).toBe(initial.id); expect(input.expectedRevision).toBe(stored.draft.revision);
+    stored = { ...stored, draft: { ...stored.draft, subject: input.subject, body: input.body, revision: stored.draft.revision + 1 } };
+    return { receipt: { commandId: input.commandId, accountId: route.accountId, draftId: initial.id, operation: 'save',
+      appliedRevision: stored.draft.revision, recipientBinding: initial.recipientBinding, publication: initial.publication }, current: structuredClone(stored) };
+  });
+  const forbidden = vi.fn(async (): Promise<never> => { throw new Error('Existing company draft must not create/link a person, admit a new route or research'); });
+  f.api.localWorkspace.getCompanyDraft = getDraft; f.api.localWorkspace.openCompanyDraft = openDraft; f.api.localWorkspace.saveCompanyDraft = saveDraft;
+  f.api.localWorkspace.admitCompanyDraftEmail = forbidden; f.api.localWorkspace.linkCompanyPerson = forbidden;
+  f.api.localWorkspace.researchCompany = forbidden;
+  const view = render(f4Tree(f.api));
+  fireEvent.click(await screen.findByRole('button', { name: 'Local account · Account A' }));
+  await screen.findByText(excerpt, { exact: true, normalizer: text => text });
+  expect(f.api.localWorkspace.getCompany).toHaveBeenCalledWith({ accountId: route.accountId });
+  expect(screen.getByText('Contact not established')).toBeTruthy();
+  expect(openDraft).not.toHaveBeenCalled(); expect(saveDraft).not.toHaveBeenCalled();
+
+  // Intended causal RED: current actual LocalAccountLibrary has no company-draft action/composer.
+  fireEvent.click(await screen.findByRole('button', { name: /^(?:Open|Reopen) company draft$/i }));
+  const panel = await screen.findByRole('region', { name: 'Company draft' });
+  await waitFor(() => expect(openDraft).toHaveBeenCalledTimes(1));
+  expect(trace.indexOf('get')).toBeGreaterThanOrEqual(0); expect(trace.indexOf('get')).toBeLessThan(trace.indexOf('open'));
+  expect(within(panel).getByText(email, { exact: true })).toBeTruthy();
+  expect(within(panel).getByText(/no named person verified/i)).toBeTruthy();
+  expect(within(panel).getByText(/^Unsent$/i)).toBeTruthy();
+  expect(within(panel).queryByRole('button', { name: /generate|send|approve/i })).toBeNull();
+  const subject = 'Manual company draft · café';
+  const body = 'Hello company team,\n\nExact <untrusted> text stays here.\nTrailing spaces stay too.  \n';
+  fireEvent.change(within(panel).getByRole('textbox', { name: 'Subject' }), { target: { value: subject } });
+  fireEvent.change(within(panel).getByRole('textbox', { name: 'Message' }), { target: { value: body } });
+  fireEvent.click(within(panel).getByRole('button', { name: /^Save$/ }));
+  await waitFor(() => expect(saveDraft).toHaveBeenCalledTimes(1));
+  expect(saveDraft.mock.calls[0][0]).toEqual({ commandId: expect.any(String), accountId: route.accountId, draftId: initial.id, expectedRevision: 1, subject, body });
+  await waitFor(() => expect(within(panel).getByRole('button', { name: /^Save$/ }).hasAttribute('disabled')).toBe(true));
+  fireEvent.click(within(panel).getByRole('button', { name: /^Close(?: draft)?$/ }));
+  await waitFor(() => expect(screen.queryByRole('textbox', { name: 'Subject' })).toBeNull());
+  view.rerender(f4Tree(f.api, 'company-draft-after-close'));
+  await screen.findByText(excerpt, { exact: true, normalizer: text => text });
+  expect(openDraft).toHaveBeenCalledTimes(1); expect(saveDraft).toHaveBeenCalledTimes(1);
+  fireEvent.click(await screen.findByRole('button', { name: /^(?:Open|Reopen) company draft$/i }));
+  const reopened = await screen.findByRole('region', { name: 'Company draft' });
+  await waitFor(() => {
+    expect(within(reopened).getByRole('textbox', { name: 'Subject' })).toHaveProperty('value', subject);
+    expect(within(reopened).getByRole('textbox', { name: 'Message' })).toHaveProperty('value', body);
+  });
+  expect(within(reopened).getByText(email, { exact: true })).toBeTruthy();
+  expect(within(reopened).queryByRole('button', { name: /generate|send|approve/i })).toBeNull();
+  expect(saveDraft).toHaveBeenCalledTimes(1); expect(forbidden).not.toHaveBeenCalled();
+  expect(detail).toEqual(originalDetail); expect(detail.snapshot.routes[0].personId).toBeNull(); expect(detail.links).toEqual([]);
+  expect(f.calls.filter(call => /prepare|approve|send|generate|begin|sync|import|createPerson/i.test(call.method))).toEqual([]);
+}, 10_000);
