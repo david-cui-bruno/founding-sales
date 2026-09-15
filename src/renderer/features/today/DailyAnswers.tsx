@@ -1,5 +1,6 @@
 import { openSettingsSection } from '../../foundation/settingsNavigation';
-import { SavedReplyConversation } from './SavedReplyConversation';
+import { OrdinaryReplyEditor } from './OrdinaryReplyEditor';
+import type { OrdinaryReplyApi } from './ordinaryReplySession';
 import { partitionFirstUseAnswers } from './firstUseCapabilities';
 import { dailyAnswerPresentationMatches } from '../../../shared/contracts/dailyAnswerPresentationContract';
 import type { ReactNode } from 'react';
@@ -328,7 +329,7 @@ export function DailyAnswerDetail({
 }: {
   item: DailyAnswer;
   workspaceId: string;
-  api: RequestedDraftApi;
+  api: RequestedDraftApi & OrdinaryReplyApi;
   linkedin: LinkedInApi;
   actionHold?: string;
   company?: string;
@@ -358,26 +359,6 @@ export function DailyAnswerDetail({
         accountDetails={accountDetails}
       />
     );
-  return (
-    <section key={answerKey(item)}>
-      <h3>Saved reply</h3>
-      <SavedReplyConversation thread={item.thread} />
-      <h4>Saved reply draft</h4>
-      {item.draft ? (
-        <>
-          <p>To {item.draft.recipient}</p>
-          <h4>{item.draft.subject}</h4>
-          <pre>{item.draft.body}</pre>
-        </>
-      ) : (
-        <p>No saved reply draft.</p>
-      )}
-      <p role="status">
-        {item.stale ? 'Thread or context changed. ' : ''}Reply approval held: an
-        exact permission binding and public draft editor are not available here.
-        Review the conversation and owner permissions before continuing.
-      </p>
-      <details><summary>Company details</summary>{accountDetails}</details>
-    </section>
-  );
+  return <OrdinaryReplyEditor key={answerKey(item)} item={item} api={api} workspaceId={workspaceId}
+    actionHold={actionHold} accountDetails={accountDetails} />;
 }
