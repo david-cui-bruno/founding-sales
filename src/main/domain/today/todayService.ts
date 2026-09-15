@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { listDelegatedActualCallAccountIds } from './todayActualCallEvidence';
 
 import type { AppDatabase } from '../../db/database';
 import type { Clock } from '../support/clock';
@@ -114,10 +115,13 @@ export class TodayService {
         totalCallCapacity: settings.totalCallCapacity,
       });
     }
-    const completedAccountIds = this.actualCalls(this.database, {
+    const completedAccountIds = [...this.actualCalls(this.database, {
       from: interval.localDayStartAt,
       to: interval.localDayEndAt,
-    }).map(attempt => attempt.accountId);
+    }).map(attempt => attempt.accountId), ...listDelegatedActualCallAccountIds(this.database, {
+      accountIds: input.ranked.map(snapshot => snapshot.account.id),
+      from: interval.localDayStartAt, to: interval.localDayEndAt, generatedAt,
+    })];
     const ranked = input.ranked
       .map(snapshot => rankAccount(snapshot, generatedAt))
       .filter(rank => rank.fit === 'supported' && rank.contactable)
