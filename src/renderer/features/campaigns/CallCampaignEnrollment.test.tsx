@@ -384,3 +384,50 @@ it('does not keep claiming not enrolled after a later canonical enrollment, incl
   }
   expect(f.submit).toHaveBeenCalledTimes(1);
 });
+
+
+it.each(['published', 'confirmed'] as const)('does not offer %s person-specific routes for the company-only call continuation', verification => {
+  const f = fixture(true);
+  const snapshot = structuredClone(f.props.snapshot);
+  snapshot.accounts[0].routes = [{ ...phone, personId: 'person-a', verification }];
+  render(<CallCampaignEnrollment {...f.props} snapshot={snapshot} />);
+  const select = screen.getByLabelText<HTMLSelectElement>('Business phone route');
+  expect([...select.options].map(option => option.value)).toEqual(['']);
+  expect(screen.getByText('This call queue supports company-level phone routes only. Person-specific routes are not available here.')).toBeTruthy();
+  fireEvent.change(select, { target: { value: 'phone' } });
+  fireEvent.click(screen.getByLabelText(enrollLabel));
+  const button = screen.getByRole<HTMLButtonElement>('button', { name: 'Enroll company for manual call' });
+  expect(button.disabled).toBe(true);
+  fireEvent.click(button);
+  expect(f.calls).toEqual([]);
+  expect(f.submit).not.toHaveBeenCalled();
+});
+
+it('does not revive an older company route when its latest revision is person-specific', () => {
+  const f = fixture(true);
+  const snapshot = structuredClone(f.props.snapshot);
+  snapshot.accounts[0].routes = [phone, { ...phone, version: 3, personId: 'person-a' },
+    { ...phone, id: 'supported-company', verification: 'confirmed' }];
+  render(<CallCampaignEnrollment {...f.props} snapshot={snapshot} />);
+  expect([...screen.getByLabelText<HTMLSelectElement>('Business phone route').options].map(option => option.value))
+    .toEqual(['', 'supported-company']);
+  expect(f.calls).toEqual([]);
+  expect(f.submit).not.toHaveBeenCalled();
+});
+
+it('keeps company enrollment available but rejects a person-binding change during the fresh read', async () => {
+  const f = fixture(true);
+  const fresh = structuredClone(f.props.snapshot);
+  fresh.accounts[0].routes[0].personId = 'person-a';
+  f.setSnapshot(fresh);
+  render(<CallCampaignEnrollment {...f.props} />);
+  selectRoute();
+  fireEvent.click(screen.getByLabelText(enrollLabel));
+  const button = screen.getByRole<HTMLButtonElement>('button', { name: 'Enroll company for manual call' });
+  expect(button.disabled).toBe(false);
+  fireEvent.click(button);
+  await waitFor(() => expect(f.refresh).toHaveBeenCalledTimes(1));
+  expect(f.sync).toHaveBeenCalledTimes(1);
+  expect(f.submit).not.toHaveBeenCalled();
+  expect(screen.getByText('Campaign action could not be completed. Review current data before trying again.')).toBeTruthy();
+});

@@ -63,7 +63,7 @@ function eligibleRoutes(routes: AccountRoute[]): AccountRoute[] {
     else if (route.version === prior.version && !same(route, prior)) ambiguous.add(route.id);
   }
   return [...latest.values()].filter(route => !ambiguous.has(route.id) && route.channel === 'phone'
-    && route.purpose === 'business' && ['published', 'confirmed'].includes(route.verification));
+    && route.personId === null && route.purpose === 'business' && ['published', 'confirmed'].includes(route.verification));
 }
 function projected(snapshot: DailySnapshot, proof: Proof): boolean {
   const { command, campaign, route } = proof;
@@ -230,6 +230,7 @@ export function CallCampaignEnrollment({ api, snapshot, config, campaign, readEr
         {routes.map(r => <option key={r.id} value={r.id}>{r.value} ({r.verification})</option>)}
       </select></label>
       <p>Published or confirmed describes source verification, not contact permission. A new execution context is a binding identity, not authority.</p>
+      <p>This call queue supports company-level phone routes only. Person-specific routes are not available here.</p>
       <label className="native-desk__check"><input type="checkbox" checked={requested} disabled={!available || locked || !route || alreadyEnrolled} onChange={event => setRequested(event.target.checked)} />I want this company added to the manual call queue</label>
       <button type="button" disabled={!available || !owner || locked || !route || !requested || alreadyEnrolled || completion === 'campaign.enroll'} onClick={() => { void run(); }}>Enroll company for manual call</button>
     </>}
