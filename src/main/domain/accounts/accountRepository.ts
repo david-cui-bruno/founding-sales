@@ -2,6 +2,7 @@ import { localCompanyInputSchema, localCompanyCandidateSignals, localCompanyRevi
 import { accountEvidenceReceiptSchema, linkCompanyPersonRequestSchema, localCompanyDetailSchema, localCompanyResearchStatusSchema, selectedResearchSchema,
   type LinkCompanyPersonRequest, type LocalCompanyDetail, type LocalCompanyResearchStatus, type SelectedResearch } from '../../../shared/contracts/localWorkspaceContract';
 import { z } from 'zod';
+import type { KnownCompanyExtraction } from '../../research/companyFactExtraction';
 import { researchLimitsSchema, type AccountResearchStore, type ResearchJob, type ResearchClaim } from '../../research/companyResearchTypes';
 import type { AppDatabase } from '../../db/database';
 import type { Clock } from '../support/clock';
@@ -14,7 +15,7 @@ import { accountFingerprint, projectAccountEvidence } from './accountEvidence';
 /** Main-process composition capability. B2 must attest fetched receipts out-of-band,
  * not echo the model's permitted flag. Unconfigured admission fails closed. */
 export interface AccountSourcePolicy { attest(source: Readonly<AccountSource>, accountId: string): boolean; }
-type Dependencies = { database: AppDatabase; clock: Clock; ids: IdGenerator; sourcePolicy?: AccountSourcePolicy; research?: { maxBudgetMicros: number; leaseMs?: number } };
+type Dependencies = { database: AppDatabase; clock: Clock; ids: IdGenerator; sourcePolicy?: AccountSourcePolicy; research?: { maxBudgetMicros: number; leaseMs?: number; knownCompanyExtraction?: KnownCompanyExtraction } };
 type Command = { commandId: string; accountId: string; expectedVersion: number };
 type ReceiptRow = { fingerprint: string; result_json: string };
 
@@ -374,12 +375,16 @@ export class AccountRepository implements AccountResearchStore {
       const spent = this.raw.prepare('SELECT COALESCE(SUM(COALESCE(cost_micros,reserved_cost_micros)),0) AS total FROM pm_account_research_jobs').get() as { total: number };
       // Select the oldest eligible job, not just the oldest job. Expensive or
       // exhausted work stays queued without releasing any uncertain reservation.
-      const row = this.raw.prepare(`SELECT j.* FROM pm_account_research_jobs j WHERE j.state='queued'
+      const row = this.raw.prepare(`SELECT j.* FROM pm_account_research_jobs j WHERE j.state='queued'${selected ? '' : " AND json_type(j.limits_json,'$.knownCompanyExtraction') IS NULL"}
         AND json_extract(j.limits_json,'$.maxCostMicros')<=?
         AND (SELECT COUNT(*) FROM pm_account_research_jobs prior WHERE prior.fingerprint=j.fingerprint AND prior.attempt>0)<3${scope}
         ORDER BY j.created_at,j.id LIMIT 1`).get(config.maxBudgetMicros - spent.total, ...scopeArgs) as Row | undefined;
       if (!row) return null;
       const limits = researchLimitsSchema.parse(JSON.parse(row.limits_json));
+      // Recheck the current explicit approval inside the same claim transaction.
+      // Committed receipts were recovered above, without fresh spending authority.
+      if (limits.knownCompanyExtraction && (!selected || accountFingerprint(limits.knownCompanyExtraction)
+        !== accountFingerprint(config.knownCompanyExtraction ?? null))) return null;
       if (spent.total + limits.maxCostMicros > config.maxBudgetMicros) return null;
       const previous = this.raw.prepare('SELECT COALESCE(SUM(attempt>0),0) AS count FROM pm_account_research_jobs WHERE fingerprint=?').get(row.fingerprint) as { count: number };
       if (previous.count >= 3) return null;

@@ -3,7 +3,7 @@ import type { AccountClaim } from '../../shared/contracts/accountContract';
 import type { LocalCompanyDetail } from '../../shared/contracts/localWorkspaceContract';
 import { accountFingerprint } from '../domain/accounts/accountEvidence';
 
-const COMPANY_KEYS = new Set(['portfolio', 'residential_scope', 'operating_footprint', 'maintenance_workflow', 'technology']);
+const COMPANY_KEYS = new Set(['portfolio', 'portfolio_description', 'ownership', 'residential_scope', 'operating_footprint', 'maintenance_workflow', 'technology']);
 const MAX_FACTS = 8;
 const MAX_FACT_CHARACTERS = 3000;
 const MAX_TEXT_BYTES = 12000;

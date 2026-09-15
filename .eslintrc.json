@@ -20,6 +20,14 @@
   "overrides": [
     {
       "files": [
+        "src/main/research/companyPageText.ts"
+      ],
+      "settings": {
+        "import/core-modules": ["cheerio/slim"]
+      }
+    },
+    {
+      "files": [
         "scripts/releaseArtifactCore.cjs"
       ],
       "rules": {

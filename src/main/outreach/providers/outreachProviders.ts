@@ -1,3 +1,4 @@
+import { requestCompanyFacts } from '../../research/companyFactExtraction';
 import { requestCompanyDiscovery } from '../../research/companyDiscoveryProvider';
 import { z } from 'zod';
 import type { CompanyResearchModelProvider, OutreachProviders, OutreachProviderOptions, OutreachStatus, StoredCredentials } from './providerTypes';
@@ -127,6 +128,20 @@ export function createOutreachProviders(options: OutreachProviderOptions): Outre
       const result = await generateOpenAiDraft({ credentials: value.model, context, signal, fetch: fetcher });
       assertCurrent(expected);
       return result;
+    },
+    async researchCompanyFacts(input, callerSignal) {
+      const expected = epoch;
+      const signal = AbortSignal.any([callerSignal, lifetime.signal]);
+      try {
+        const value = await serial(expected, async () => {
+          const stored = await store.load() ?? empty(); assertCurrent(expected); return stored;
+        });
+        if (signal.aborted) fail('provider_invalidated');
+        const result = await requestCompanyFacts({ input, credentials: value.model, signal, fetch: fetcher });
+        assertCurrent(expected);
+        if (signal.aborted) fail('provider_invalidated');
+        return result;
+      } catch (error) { throw safeError(error, 'provider_response_invalid'); }
     },
     async researchCompanies(input, callerSignal) {
       const expected = epoch;

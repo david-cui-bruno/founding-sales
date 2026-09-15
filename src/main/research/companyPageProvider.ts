@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { parseCompanyPageText } from './companyPageText';
+import { validateCompanyFacts, type CompanyFactExtractor, type PageFactInput } from './companyFactExtraction';
 import { randomUUID } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
 import { request, type RequestOptions } from 'node:https';
@@ -182,24 +184,33 @@ export function createCompanyPageProvider(options: { receipts: FetchedReceiptPol
   permitted?: (url: string, accountId: string) => boolean;
   /** Trusted persistence adapter only, invoked after protected fetch and proof issuance. */
   onFetched?: (source: Readonly<AccountSource>, accountId: string) => void | Promise<void>;
+  /** Explicit approved entry URLs for opt-in known-company mode; never discovered or guessed. */
+  sourceUrls?: readonly string[]; extractFacts?: CompanyFactExtractor;
   resolve?: (hostname: string) => Promise<string[]>; http?: PageHttp; timeoutMs?: number }): CompanyPagePort {
+  const sourceUrls = [...new Set(options.sourceUrls ?? [])];
   const resolve = options.resolve ?? (async hostname => (await lookup(hostname, { all: true, family: 4 })).map(r => r.address));
   const http = options.http ?? createPinnedPageHttp();
   return { async research(snapshot, rawLimits, callerSignal) {
     const limits = researchLimitsSchema.parse(rawLimits);
     callerSignal.throwIfAborted();
     if (!snapshot.account.domain || !options.permitted) throw new Error('Research permitted source required');
+    const known = limits.knownCompanyExtraction;
+    if (known && (!options.extractFacts || !sourceUrls.length)) throw new Error('Known company extraction unavailable');
+    const modelSources: PageFactInput['sources'] = [];
     const signal = AbortSignal.any([callerSignal, AbortSignal.timeout(options.timeoutMs ?? 30000)]);
     const sources = []; const claims: AccountClaim[] = []; const routes: AccountEvidenceBatch['routes'] = [];
     const withheldTargets = new Set<string>(); const qualifiedPhoneLines: string[] = []; let bytes = 0; let requests = 0;
-    const urls = ['/', '/services', '/team', '/careers'].slice(0, limits.maxPages).map(path => `https://${snapshot.account.domain}${path}`);
+    const urls = known ? sourceUrls.filter(url => companySourcePolicy(url) === 'candidate'
+      && new URL(url).hostname === snapshot.account.domain).slice(0, limits.maxPages)
+      : ['/', '/services', '/team', '/careers'].slice(0, limits.maxPages).map(path => `https://${snapshot.account.domain}${path}`);
+    if (!urls.length) throw new Error('Research permitted source required');
     for (let url of urls) {
       if (requests >= limits.maxPages) break;
       for (;;) {
         signal.throwIfAborted();
         if (companySourcePolicy(url) !== 'candidate') throw new Error('Research blocked redirect or source');
         const parsed = new URL(url);
-        if (![snapshot.account.domain, `www.${snapshot.account.domain}`].includes(parsed.hostname) || !options.permitted(url, snapshot.account.id)) throw new Error('Research permitted source required');
+        if (!(known ? parsed.hostname === snapshot.account.domain : [snapshot.account.domain, `www.${snapshot.account.domain}`].includes(parsed.hostname)) || !options.permitted(url, snapshot.account.id)) throw new Error('Research permitted source required');
         if (requests >= limits.maxPages) throw new Error('Research page budget exceeded');
         if (bytes >= limits.maxBytes) throw new Error('Research bytes exceeded');
         const addresses = await bounded(resolve(parsed.hostname), signal);
@@ -220,11 +231,17 @@ export function createCompanyPageProvider(options: { receipts: FetchedReceiptPol
           void response.body?.cancel().catch((): undefined => undefined); throw new Error('Research page response rejected');
         }
         signal.throwIfAborted();
-        const excerpt = body.toString('utf8').slice(0, 12000);
+        const parsedPage = known ? parseCompanyPageText(body, response.headers.get('content-type') ?? '') : null;
+        const excerpt = parsedPage?.text ?? body.toString('utf8').slice(0, 12000);
         if (!excerpt.trim()) throw new Error('Research empty page');
-        const source = options.receipts.recordFetched({ accountId: snapshot.account.id, url, fetchedAt: options.clock.now(), body, excerpt });
+        const source = known ? options.receipts.recordParsedFetched({ accountId: snapshot.account.id, url, fetchedAt: options.clock.now(), body, contentType: response.headers.get('content-type') ?? '' })
+          : options.receipts.recordFetched({ accountId: snapshot.account.id, url, fetchedAt: options.clock.now(), body, excerpt });
         if (options.onFetched) await bounded(Promise.resolve(options.onFetched(Object.freeze({ ...source }), snapshot.account.id)), signal);
         signal.throwIfAborted();
+        if (parsedPage) {
+          sources.push(source); modelSources.push({ sourceId: source.id, blocks: parsedPage.blocks });
+          break;
+        }
         const extracted = extract(excerpt, source.id, snapshot.account.id,
           /^text\/html(?:;|$)/i.test(response.headers.get('content-type') ?? '')
           && /^\/(?:team\/?|contact\/?)?$/.test(new URL(url).pathname));
@@ -240,6 +257,15 @@ export function createCompanyPageProvider(options: { receipts: FetchedReceiptPol
       }
     }
     if (!sources.length) throw new Error('Research no permitted pages');
+    if (known) {
+      signal.throwIfAborted();
+      const input: PageFactInput = { capability: known, sources: modelSources };
+      // Preserve independent expected bytes even when an injected adapter mutates its input.
+      const facts = validateCompanyFacts(await bounded(options.extractFacts!(structuredClone(input), signal), signal), input);
+      signal.throwIfAborted();
+      if (!facts.length) throw new Error('Research no supported facts');
+      for (const fact of facts) claims.push({ key: fact.key, kind: 'fact', value: fact.quote, evidenceIds: [fact.sourceId] });
+    }
     // Negative evidence from any bounded page wins, regardless of fetch order.
     const eligibleRoutes = routes.filter(route => {
       if (withheldTargets.has(`${route.channel}:${route.value}`)) return false;

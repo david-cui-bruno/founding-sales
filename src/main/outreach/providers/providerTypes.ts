@@ -1,3 +1,4 @@
+import type { CompanyFactExtractor } from '../../research/companyFactExtraction';
 import type { GoogleGrant } from '../../../../cloud/lambdas/delegated-worker/src/googleGrantCapabilities';
 export type { GoogleCapability, GoogleGrant } from '../../../../cloud/lambdas/delegated-worker/src/googleGrantCapabilities';
 import type { AudienceQuery, ResearchLimits, ResearchCapability, CompanyCandidate } from '../../research/companyResearchTypes';
@@ -64,5 +65,7 @@ export type OutreachProviderOptions = {
 
 /** Main-only capability. Deliberately not added to renderer/IPC contracts. */
 export interface CompanyResearchModelProvider {
+  /** Optional only for old fixtures. Production implements this without browser/search tools. */
+  researchCompanyFacts?: CompanyFactExtractor;
   researchCompanies(input: { query: AudienceQuery; limits: ResearchLimits; capability: ResearchCapability }, signal: AbortSignal): Promise<CompanyCandidate[]>;
 }

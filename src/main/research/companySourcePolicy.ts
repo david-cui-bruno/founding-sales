@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { isIP } from 'node:net';
+import { parseCompanyPageText } from './companyPageText';
 import { accountSourceSchema, type AccountSource } from '../../shared/contracts/accountContract';
 
 /** Conservative public-address allowlist. IPv6 is denied until a fully pinned IPv6 policy exists. */
@@ -35,6 +36,16 @@ export function createFetchedReceiptPolicy() {
       if (companySourcePolicy(input.url) !== 'candidate' || !Buffer.from(input.body).toString('utf8').includes(input.excerpt)) throw new Error('Invalid fetched receipt');
       const source = accountSourceSchema.parse({ id: randomUUID(), url: input.url, fetchedAt: input.fetchedAt,
         sha256: createHash('sha256').update(input.body).digest('hex'), excerpt: input.excerpt, permitted: true });
+      issued.add(fingerprint(input.accountId, source));
+      return source;
+    },
+    /** Parsed excerpts are independently reproduced from the fetched bytes, not
+     * accepted from a model. Raw-body SHA remains the provenance identity. */
+    recordParsedFetched(input: { accountId: string; url: string; fetchedAt: string; body: Uint8Array; contentType: string }): AccountSource {
+      if (companySourcePolicy(input.url) !== 'candidate') throw new Error('Invalid fetched receipt');
+      const parsed = parseCompanyPageText(input.body, input.contentType);
+      const source = accountSourceSchema.parse({ id: randomUUID(), url: input.url, fetchedAt: input.fetchedAt,
+        sha256: createHash('sha256').update(input.body).digest('hex'), excerpt: parsed.text, permitted: true });
       issued.add(fingerprint(input.accountId, source));
       return source;
     },
