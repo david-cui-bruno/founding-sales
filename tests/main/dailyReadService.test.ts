@@ -16,6 +16,44 @@ async function fixture() {
   return { ...f, services, read };
 }
 describe('daily persisted local snapshot', () => {
+  it('skips persisted email-only new calls without removing their evidence or writing', async () => {
+    const f = await fixture(); try {
+      const saved = (accountId: string, channel: 'email' | 'phone') => {
+        let firstId = true;
+        const accounts = new AccountRepository({ database: f.db, clock: f.clock,
+          ids: { next: () => { if (firstId) { firstId = false; return accountId; } return randomUUID(); } }, sourcePolicy: { attest: source => source.url === 'https://example.invalid/team' } });
+        const account = accounts.create({ commandId: randomUUID(), name: accountId, domain: 'example.invalid' });
+        const sourceId = randomUUID();
+        accounts.admitEvidence({ commandId: randomUUID(), accountId, expectedVersion: account.version,
+          sources: [{ id: sourceId, url: 'https://example.invalid/team', fetchedAt: f.now,
+            sha256: 'a'.repeat(64), excerpt: 'Fictional regional residential manager business contact.', permitted: true }],
+          claims: [
+            { kind: 'fact', key: 'residential_scope', value: 'Residential property management', evidenceIds: [sourceId] },
+            { kind: 'fact', key: 'operating_footprint', value: 'Regional property manager', evidenceIds: [sourceId] },
+          ],
+          routes: [{ id: randomUUID(), accountId, personId: null, channel,
+            value: channel === 'email' ? 'office@example.invalid' : '+12025550103',
+            purpose: 'business', verification: 'published', evidenceIds: [sourceId] }],
+        });
+        return accounts.snapshot(accountId, f.now);
+      };
+      // DailyReadService reads account IDs in order, so the email precedes the phone.
+      const email = saved('queue-a-email', 'email');
+      const phone = saved('queue-b-phone', 'phone');
+      f.db.raw.prepare('UPDATE meeting_first_call_settings SET new_call_slots=1').run();
+      const before = f.db.raw.prepare('SELECT total_changes() AS n').get();
+      const snapshot = f.read(); // This real reader throws if any ID is allocated.
+      expect(snapshot.accounts.find(a => a.account.id === email.account.id)).toEqual(email);
+      expect(snapshot.accounts.find(a => a.account.id === phone.account.id)).toEqual(phone);
+      expect(snapshot.accounts.findIndex(a => a.account.id === email.account.id))
+        .toBeLessThan(snapshot.accounts.findIndex(a => a.account.id === phone.account.id));
+      expect(f.db.raw.prepare('SELECT total_changes() AS n').get()).toEqual(before);
+      expect(snapshot.calls.accountIds).toEqual([phone.account.id]);
+      expect(f.read().revision).toBe(snapshot.revision);
+      expect(f.db.raw.prepare('SELECT total_changes() AS n').get()).toEqual(before);
+    } finally { f.close(); }
+  });
+
   it('reads frozen campaigns and company-only accounts with exact B3 due calls without any writes', async () => {
     const f = await fixture(); try {
       const enrollment = f.repo.enroll({ commandId: randomUUID(), accountId: f.account.id, selectedRouteId: f.routes[0].id, campaignVersionId: f.versions[0].id, executionContextId: 'ctx', contextRevision: 1 });
