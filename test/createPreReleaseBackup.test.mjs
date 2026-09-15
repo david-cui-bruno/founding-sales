@@ -32,7 +32,7 @@ it('holds the real host lock protocol through drain/close/zero, returning only a
   expect(key.bytes).toEqual(Buffer.alloc(32)); expect(result).toEqual({ basename: receipt.basename, kind: 'pre_release', schemaVersion: 24, sha256: 'a'.repeat(64), sizeBytes: 1234, createdAt: receipt.createdAt, verifiedAt: receipt.verifiedAt });
 });
 it.each([
-  ['schemaVersion', 14], ['schemaVersion', 15], ['schemaVersion', 16], ['schemaVersion', 17], ['schemaVersion', 18], ['schemaVersion', 19], ['schemaVersion', 20], ['schemaVersion', 21], ['schemaVersion', 22], ['schemaVersion', 23], ['schemaVersion', 26], ['schemaVersion', '19'], ['schemaVersion', '20'], ['schemaVersion', '22'], ['schemaVersion', null], ['schemaVersion', true],
+  ['schemaVersion', 14], ['schemaVersion', 15], ['schemaVersion', 16], ['schemaVersion', 17], ['schemaVersion', 18], ['schemaVersion', 19], ['schemaVersion', 20], ['schemaVersion', 21], ['schemaVersion', 22], ['schemaVersion', 23], ['schemaVersion', 27], ['schemaVersion', '19'], ['schemaVersion', '20'], ['schemaVersion', '22'], ['schemaVersion', null], ['schemaVersion', true],
   ['basename', [receipt.basename]], ['basename', 'private/path.sqlite3'], ['kind', 'manual'],
   ['sha256', [receipt.sha256]], ['sha256', 'A'.repeat(64)], ['sizeBytes', '1234'], ['sizeBytes', 0], ['sizeBytes', 1.5],
   ['createdAt', [receipt.createdAt]], ['createdAt', '2026-09-06'], ['verifiedAt', null], ['verifiedAt', 'invalid'],
@@ -54,22 +54,22 @@ async function workspace(version = 24) {
   const paths = resolveApplicationPaths(root); const key = { bytes: Buffer.alloc(32, 42), version: 1 };
   const database = openDatabase({ path: paths.databasePath, key });
   try {
-    const registry = version === 26 ? [...productionMigrations, { id: '0026SyntheticFuture', schemaVersion: 26,
-      migration: { async up(db) { await sql.raw('CREATE TABLE synthetic_future26 (id TEXT PRIMARY KEY)').execute(db);
-        await sql.raw('UPDATE app_meta SET schema_version = 26').execute(db); } } }] : productionMigrations.filter(x => x.schemaVersion <= version);
+    const registry = version === 27 ? [...productionMigrations, { id: '0027SyntheticFuture', schemaVersion: 27,
+      migration: { async up(db) { await sql.raw('CREATE TABLE synthetic_future27 (id TEXT PRIMARY KEY)').execute(db);
+        await sql.raw('UPDATE app_meta SET schema_version = 27').execute(db); } } }] : productionMigrations.filter(x => x.schemaVersion <= version);
     const migrate = createMigrationRunner(registry);
     await migrate(database, { backupDirectory: paths.backupDirectory, workspaceKey: key });
     expect(database.raw.prepare('SELECT schema_version FROM app_meta').get()).toEqual({ schema_version: version });
     expect(database.raw.prepare('SELECT name FROM kysely_migration ORDER BY timestamp, name').all()).toEqual(registry.map(x => ({ name: x.id })));
     expect(database.raw.prepare("SELECT name FROM sqlite_master WHERE name = 'discovery_assessments'").get() !== undefined).toBe(version >= 17);
-    expect(database.raw.prepare("SELECT name FROM sqlite_master WHERE name = 'synthetic_future26'").get() !== undefined).toBe(version === 26);
+    expect(database.raw.prepare("SELECT name FROM sqlite_master WHERE name = 'synthetic_future27'").get() !== undefined).toBe(version === 27);
     expect(database.raw.prepare("SELECT name FROM sqlite_master WHERE name = 'pm_accounts'").get() !== undefined).toBe(version >= 20);
     expect(database.raw.prepare('PRAGMA table_info(person_contact_methods)').all().some(column => column.name === 'source_label')).toBe(version >= 16);
   } finally { closeDatabase(database); }
   writeFileSync(paths.keyEnvelopePath, 'synthetic-fixture-envelope', { mode: 0o600 });
   return { root, paths, key };
 }
-it.each([24, 25])('backs up genuine production%s with one verified copy and same-database linked receipt without migrations or timers', async version => {
+it.each([24, 25, 26])('backs up genuine production%s with one verified copy and same-database linked receipt without migrations or timers', async version => {
   const { paths, key } = await workspace(version); const loaded = [];
   const loadKey = async () => { const copy = { bytes: Buffer.from(key.bytes), version: 1 }; loaded.push(copy); return copy; };
   const result = await performPreReleaseBackup({ acquireLock: () => true, releaseLock: () => {}, ready: async () => {}, paths: () => paths,
@@ -100,10 +100,10 @@ it.each([24, 25])('backs up genuine production%s with one verified copy and same
   // A successful real encrypted backup must not be reported as a failure by its launcher.
   expect(validatePreReleaseReceipt(result)).toEqual(result);
 });
-it.each(['missing', 'wrong-key', 'schema14', 'schema15', 'schema16', 'schema17', 'schema18', 'schema19', 'schema20', 'schema21', 'schema22', 'schema23', 'future26', 'schema17-marker19', 'schema17-marker-ledger19', 'schema16-marker17', 'schema16-marker-ledger17', 'schema15-marker16', 'schema15-marker-ledger16',
+it.each(['missing', 'wrong-key', 'schema14', 'schema15', 'schema16', 'schema17', 'schema18', 'schema19', 'schema20', 'schema21', 'schema22', 'schema23', 'future27', 'schema17-marker19', 'schema17-marker-ledger19', 'schema16-marker17', 'schema16-marker-ledger17', 'schema15-marker16', 'schema15-marker-ledger16',
   'ledger-missing', 'ledger-extra', 'ledger-wrong', 'ledger-order', 'catalog-column', 'catalog-extra', 'receipt-trigger', 'receipt-trigger-altered', 'recovery-trigger',
 ])('refuses %s before backup/receipt writes without migration or provisioning', async failure => {
-  const version = failure === 'schema14' ? 14 : failure.startsWith('schema15') ? 15 : failure.startsWith('schema16') ? 16 : failure.startsWith('schema17') ? 17 : failure === 'schema18' ? 18 : failure === 'schema19' ? 19 : failure === 'schema20' ? 20 : failure === 'schema21' ? 21 : failure === 'schema22' ? 22 : failure === 'schema23' ? 23 : failure === 'future26' ? 26 : 24;
+  const version = failure === 'schema14' ? 14 : failure.startsWith('schema15') ? 15 : failure.startsWith('schema16') ? 16 : failure.startsWith('schema17') ? 17 : failure === 'schema18' ? 18 : failure === 'schema19' ? 19 : failure === 'schema20' ? 20 : failure === 'schema21' ? 21 : failure === 'schema22' ? 22 : failure === 'schema23' ? 23 : failure === 'future27' ? 27 : 24;
   const { paths, key } = await workspace(version); const loaded = []; let unlocks = 0;
   try {
     const db = openDatabase({ path: paths.databasePath, key });

@@ -1,3 +1,4 @@
+import { admitCompanyDraftEmailSchema, openCompanyDraftSchema, getCompanyDraftSchema, saveCompanyDraftSchema, companyDraftAdmissionReply, companyDraftOpenReply, companyDraftGetReply, companyDraftSaveReply, companyDraftAdmissionReceiptSchema, companyDraftMutationResultSchema, companyDraftReadSchema } from '../../shared/contracts/localCompanyDraftContract';
 import { companyResearchSettingsSchema, companyResearchSettingsUpdateReplySchema, updateCompanyResearchSettingsRequestSchema } from '../../shared/contracts/localCompanyResearchSettingsContract';
 import { localCompanyInputSchema, localCompanyCreateRequestSchema, localCompanyReviewSchema, localCompanyCreateResultSchema, localCompanyCreateStatusSchema } from '../../shared/contracts/localCompanyIntakeContract';
 import { meetingFirstAccountCallSettingsSchema, updateCallSettingsRequestSchema, callSettingsUpdateReplySchema, linkCompanyPersonRequestSchema, accountEvidenceReceiptSchema, localWorkspaceSnapshotSchema, localCommitmentsSnapshotSchema, localWorkflowTransitionSchema, localWorkflowReceiptSchema, selectedCompanySchema, localCompanyDetailSchema, selectedResearchSchema, localCompanyResearchStatusSchema, type LocalWorkspaceApi } from '../../shared/contracts/localWorkspaceContract';
@@ -61,6 +62,18 @@ export function registerLocalWorkspaceIpc(provider: LocalWorkspaceApi, isTrusted
     disposers.push(registerValidatedIpc({ channel: 'local-workspace:update-call-settings', requestSchema: updateCallSettingsRequestSchema, responseSchema: meetingFirstAccountCallSettingsSchema, safeErrorCode: 'LOCAL_CALL_SETTINGS_UPDATE_FAILED', isTrustedRendererUrl, handler: async input => {
       const parsed = Object.freeze(updateCallSettingsRequestSchema.parse(input));
       return callSettingsUpdateReplySchema(parsed).parse(await provider.updateCallSettings(parsed));
+    } }));
+    disposers.push(registerValidatedIpc({ channel: 'local-workspace:admit-company-draft-email', requestSchema: admitCompanyDraftEmailSchema, responseSchema: companyDraftAdmissionReceiptSchema, safeErrorCode: 'LOCAL_COMPANY_DRAFT_FAILED', isTrustedRendererUrl, handler: async input => {
+      const parsed = Object.freeze(admitCompanyDraftEmailSchema.parse(input)); return companyDraftAdmissionReply(parsed).parse(await provider.admitCompanyDraftEmail(parsed));
+    } }));
+    disposers.push(registerValidatedIpc({ channel: 'local-workspace:open-company-draft', requestSchema: openCompanyDraftSchema, responseSchema: companyDraftMutationResultSchema, safeErrorCode: 'LOCAL_COMPANY_DRAFT_FAILED', isTrustedRendererUrl, handler: async input => {
+      const parsed = Object.freeze(openCompanyDraftSchema.parse(input)); return companyDraftOpenReply(parsed).parse(await provider.openCompanyDraft(parsed));
+    } }));
+    disposers.push(registerValidatedIpc({ channel: 'local-workspace:get-company-draft', requestSchema: getCompanyDraftSchema, responseSchema: companyDraftReadSchema.nullable(), safeErrorCode: 'LOCAL_COMPANY_DRAFT_FAILED', isTrustedRendererUrl, handler: async input => {
+      const parsed = Object.freeze(getCompanyDraftSchema.parse(input)); return companyDraftGetReply(parsed).parse(await provider.getCompanyDraft(parsed));
+    } }));
+    disposers.push(registerValidatedIpc({ channel: 'local-workspace:save-company-draft', requestSchema: saveCompanyDraftSchema, responseSchema: companyDraftMutationResultSchema, safeErrorCode: 'LOCAL_COMPANY_DRAFT_FAILED', isTrustedRendererUrl, handler: async input => {
+      const parsed = Object.freeze(saveCompanyDraftSchema.parse(input)); return companyDraftSaveReply(parsed).parse(await provider.saveCompanyDraft(parsed));
     } }));
   } catch (error) {
     const errors = cleanup();

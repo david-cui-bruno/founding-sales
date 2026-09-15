@@ -146,6 +146,8 @@ const requiredTriggers = [
   'pm_account_sources_no_update',
 
   'initialize_next_action_due', 'initialize_unreviewed_action',
+  'local_company_draft_binding_immutable', 'local_company_draft_commands_no_delete',
+  'local_company_draft_commands_no_update', 'local_company_email_drafts_no_delete',
   'protect_next_action_due', 'protect_operational_action_pointer',
   'email_send_intents_no_update', 'email_send_intents_no_delete',
   'email_send_results_no_update', 'email_send_results_no_delete',
@@ -303,14 +305,14 @@ function runDatabaseScenario(
       assert.equal(assertDomainStorageReady({
         database,
         expectedBusyTimeoutMs: 5000,
-        expectedSchemaVersion: 25,
+        expectedSchemaVersion: 26,
         expectedManifest: DOMAIN_SCHEMA_MANIFEST,
-      }).schemaVersion, 25);
+      }).schemaVersion, 26);
       assert.deepEqual(
         raw.prepare<[], { schema_version: number }>(
           'SELECT schema_version FROM app_meta WHERE singleton = 1',
         ).get(),
-        { schema_version: 25 },
+        { schema_version: 26 },
       );
       assert.deepEqual(raw.prepare<[], { name: string }>(`
         SELECT name FROM kysely_migration ORDER BY timestamp, name
@@ -331,7 +333,7 @@ function runDatabaseScenario(
         '0014OutboundJurisdictionClearance',
         '0015RecoveryMetadata',
         '0016ContactPresentationEvidence', '0017DiscoveryAssessments',
-        '0018PlaybookDueActions', '0019EmailDrafts', '0020PmAccounts', '0021DelegatedWork', '0022MailPersistence', '0023Campaigns', '0024RequestedFollowupAndPolicyReviews', '0025KnownCompanyResearchSettings',
+        '0018PlaybookDueActions', '0019EmailDrafts', '0020PmAccounts', '0021DelegatedWork', '0022MailPersistence', '0023Campaigns', '0024RequestedFollowupAndPolicyReviews', '0025KnownCompanyResearchSettings', '0026LocalCompanyDrafts',
       ]);
       assert.deepEqual(
         raw.prepare('PRAGMA table_info(person_contact_methods)').all().slice(19),

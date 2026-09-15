@@ -81,7 +81,7 @@ const api: CalliePreloadApi = {
     getCompany: forbidden('localWorkspace.getCompany'),
     researchCompany: forbidden('localWorkspace.researchCompany'),
     getCompanyResearchStatus: forbidden('localWorkspace.getCompanyResearchStatus'),
-    getCompanyResearchSettings: read<Awaited<ReturnType<CalliePreloadApi['localWorkspace']['getCompanyResearchSettings']>>>('localWorkspace.getCompanyResearchSettings', () => {
+    admitCompanyDraftEmail: async () => { throw Error('Company drafts unavailable in this fixture'); }, openCompanyDraft: async () => { throw Error('Company drafts unavailable in this fixture'); }, getCompanyDraft: async () => { throw Error('Company drafts unavailable in this fixture'); }, saveCompanyDraft: async () => { throw Error('Company drafts unavailable in this fixture'); }, getCompanyResearchSettings: read<Awaited<ReturnType<CalliePreloadApi['localWorkspace']['getCompanyResearchSettings']>>>('localWorkspace.getCompanyResearchSettings', () => {
       if (!new URLSearchParams(location.search).has('localResearchScenario')) throw Error('Local research setup unavailable in this fixture');
       // Fictional reviewed profile for rendering only. This fixture forbids saves and research.
       return { revision: 0, configuration: null, blockedReason: null, reservedOrSpentMicros: 0, profiles: [{

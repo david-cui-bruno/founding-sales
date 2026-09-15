@@ -84,11 +84,11 @@ describe('real temporary-copy SQLCipher restore drill', () => {
       expect(temps(historical.root)).toEqual([]);
     } finally { await historical.cleanup(); }
   });
-  it('rejects an actually unregistered schema26 without source mutation or temporary residue', async () => {
-    f.database.raw.prepare('UPDATE app_meta SET schema_version = 26').run();
+  it('rejects an actually unregistered schema27 without source mutation or temporary residue', async () => {
+    f.database.raw.prepare('UPDATE app_meta SET schema_version = 27').run();
     const request = await input(); const before = fs.readFileSync(request.backup.path);
-    expect(request.backup.schemaVersion).toBe(26);
-    expect(migrations.isRegisteredSchemaVersion(26)).toBe(false);
+    expect(request.backup.schemaVersion).toBe(27);
+    expect(migrations.isRegisteredSchemaVersion(27)).toBe(false);
     expect(() => runRestoreDrill(request)).toThrow(/^RECOVERY_FAILED$/);
     expect(fs.readFileSync(request.backup.path)).toEqual(before); expect(temps(f.root)).toEqual([]);
   });

@@ -13,6 +13,11 @@ const account = { ...input, id: 'account', version: 1 };
 const trusted = { senderFrame: { url: 'callie://app/index.html' } };
 const review = (value: LocalCompanyInput): LocalCompanyReview => ({ scope: 'local_database', input: value, candidates: [], complete: true });
 const provider = () => ({
+  admitCompanyDraftEmail: async () => { throw new Error('Company drafts unavailable in this fixture'); },
+  openCompanyDraft: async () => { throw new Error('Company drafts unavailable in this fixture'); },
+  getCompanyDraft: async () => { throw new Error('Company drafts unavailable in this fixture'); },
+  saveCompanyDraft: async () => { throw new Error('Company drafts unavailable in this fixture'); },
+
   get: async () => { throw new Error('unused'); }, getCompany: async () => { throw new Error('unused'); }, researchCompany: async () => { throw new Error('unused'); }, getCompanyResearchStatus: async () => { throw new Error('unused'); }, getCompanyResearchSettings: async () => { throw Error('Local research setup unavailable in this fixture'); }, updateCompanyResearchSettings: async () => { throw Error('Local research setup unavailable in this fixture'); }, getCallSettings: async () => { throw Error('Call capacity unavailable in this fixture'); }, updateCallSettings: async () => { throw Error('Call capacity unavailable in this fixture'); }, linkCompanyPerson: async () => { throw new Error('unused'); }, getCommitments: async () => { throw new Error('unused'); }, transition: async () => { throw new Error('unused'); },
   reviewCompany: async (value: LocalCompanyInput) => review(value),
   createCompany: async (value: LocalCompanyCreateRequest) => ({ status: 'saved' as const, commandId: value.commandId, account, replayed: false }),
