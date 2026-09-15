@@ -5,6 +5,7 @@ import { dailyAnswerSchema, type DailyAnswer } from '../../../shared/contracts/d
 import type { MailMessage } from '../../../shared/contracts/mailThreadContract';
 import type { LinkedInApi } from '../../../shared/contracts/linkedInContract';
 import type { RequestedDraftApi } from './requestedDraftSession';
+import type { OrdinaryReplyApi } from './ordinaryReplySession';
 import { answerKey, DailyAnswerDetail } from './DailyAnswers';
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
@@ -41,7 +42,8 @@ function fixture() {
   const forbidden = vi.fn((): never => { throw new Error('Unexpected API or network effect'); });
   const api = {
     getRequestedFollowup: forbidden, editRequestedFollowup: forbidden, approveRequestedFollowup: forbidden,
-  } satisfies RequestedDraftApi;
+    editReplyDraft: forbidden, reconcileReplyDraft: forbidden,
+  } satisfies RequestedDraftApi & OrdinaryReplyApi;
   const linkedin = {
     recover: forbidden, begin: forbidden, prepare: forbidden, save: forbidden,
     get: forbidden, open: forbidden, copy: forbidden, reportOutcome: forbidden,
@@ -74,7 +76,7 @@ it('shows the actual saved incoming conversation before the existing reply draft
   fireEvent.click(within(earlier).getByText('Earlier saved messages (1)'));
   expect(earlier.open).toBe(true);
   expect(within(earlier).getByText('Earlier exact wording.')).toBeTruthy();
-  expect(screen.getByRole('status').textContent).toBe('Reply approval held: an exact permission binding and public draft editor are not available here. Review the conversation and owner permissions before continuing.');
+  expect(screen.getByRole('status').textContent).toBe('Reply approval held: an exact permission binding is unavailable here. Saving is not approval or sending.');
   expect(item).toEqual(original);
   expect(f.forbidden).not.toHaveBeenCalled();
 });
@@ -107,7 +109,7 @@ it.each([false, true])('keeps the conversation available without a draft, stale=
   expect(screen.getByText(/1 saved message\./)).toBeTruthy();
   expect(screen.getByText('No earlier messages in this saved snapshot.')).toBeTruthy();
   expect(screen.getByText('No saved reply draft.')).toBeTruthy();
-  expect(screen.getByRole('status').textContent).toContain('Reply approval held: an exact permission binding and public draft editor are not available here.');
+  expect(screen.getByRole('status').textContent).toContain('Reply approval held: an exact permission binding is unavailable here.');
   expect(screen.getByRole('status').textContent?.startsWith('Thread or context changed. ')).toBe(stale);
   expect(screen.queryAllByRole('button')).toHaveLength(0);
   expect(f.forbidden).not.toHaveBeenCalled();
@@ -217,7 +219,7 @@ it.each(['account', 'mailbox', 'thread', 'draft', 'draftless'] as const)('isolat
   expect(within(conversation()).getByText('Earlier saved messages (1)').closest('details')!.open).toBe(false);
   expect(latest.querySelector('pre')?.textContent).toBe('Different selection exact text.');
   expect(conversation().textContent).not.toContain('Could you share the original example?');
-  expect(screen.queryAllByRole('button')).toHaveLength(0);
+  expect(screen.queryAllByRole('button').map(button => button.textContent)).toEqual(next.draft ? ['Edit saved reply', 'Reconcile saved reply'] : []);
   expect(screen.queryAllByRole('textbox')).toHaveLength(0);
   expect(f.forbidden).not.toHaveBeenCalled();
 });
