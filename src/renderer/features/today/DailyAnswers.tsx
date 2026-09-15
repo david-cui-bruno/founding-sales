@@ -1,4 +1,5 @@
 import { openSettingsSection } from '../../foundation/settingsNavigation';
+import { SavedReplyConversation } from './SavedReplyConversation';
 import { partitionFirstUseAnswers } from './firstUseCapabilities';
 import { dailyAnswerPresentationMatches } from '../../../shared/contracts/dailyAnswerPresentationContract';
 import type { ReactNode } from 'react';
@@ -358,8 +359,10 @@ export function DailyAnswerDetail({
       />
     );
   return (
-    <section>
+    <section key={answerKey(item)}>
       <h3>Saved reply</h3>
+      <SavedReplyConversation thread={item.thread} />
+      <h4>Saved reply draft</h4>
       {item.draft ? (
         <>
           <p>To {item.draft.recipient}</p>
