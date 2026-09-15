@@ -1,3 +1,5 @@
+import { delegatedPhoneStateRequestSchema, type GetPhoneHandoffStateRequest } from '../../shared/contracts/delegatedPhoneStateContract';
+import { readDelegatedPhoneHandoffState } from './delegatedPhoneState';
 import { z } from 'zod';
 import {googleConnectionSelectorSchema,googleConsentOpenedSchema,selectedGooglePurpose,type RemoteGoogleConnectionsApi} from '../../shared/contracts/remoteGoogleConnectionsContract';
 import {remoteGoogleGrantBeginSchema} from '../../shared/contracts/remoteGoogleGrantContract';
@@ -188,6 +190,7 @@ export function createDelegationRuntime(input:{databaseGate:{withDatabase<T>(fn:
   policyImport:pairing&&input.policyImportNative&&z.uuid().safeParse(pairing.workspaceId).success?createAccountRoutePolicyImport({workspaceId:pairing.workspaceId,clock:input.clock,databaseGate:{withDatabase:run},native:input.policyImportNative}):null,
   adapter,
   readinessForHandoff,
+  getPhoneHandoffState:(raw:GetPhoneHandoffStateRequest)=>{const request=delegatedPhoneStateRequestSchema.parse(raw);return run(database=>{if(!pairing)throw Error('pairing_unconfigured');return readDelegatedPhoneHandoffState(database,{...request,workspaceId:pairing.workspaceId,generatedAt:input.clock.now()});});},
   beginPhone:(raw:unknown):Promise<DelegatedPhoneHandoffResult>=>{const request=delegatedPhoneHandoffRequestSchema.parse(raw);return run((database,signal)=>{if(!input.phone||!pairing)return {status:'held',reason:'phone_unconfigured'};return createDelegatedPhoneHandoff({database,...services(database,signal),phone:input.phone,readinessForHandoff,clock:input.clock,signal,expectedWorkspaceId:pairing.workspaceId}).begin(request);});},
   linkedIn:pairing?createRuntimeLinkedInApi({...input.linkedIn,databaseGate:{withDatabase:run},workspaceId:pairing.workspaceId,clock:input.clock,ownerFactory:(database,signal)=>services(database,signal)}):null,
   invalidate,

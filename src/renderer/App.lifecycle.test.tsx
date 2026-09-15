@@ -88,7 +88,7 @@ const pendingWorkflowApis = (): Omit<CalliePreloadApi, 'health' | 'appleSpike'> 
     delegation: {
       status: pending(), policyImport: { selectAndPreview: pending(), confirm: pending(), resume: pending(), status: pending() },
       prepareRequestedFollowup: pending(), getRequestedFollowup: pending(), editRequestedFollowup: pending(), approveRequestedFollowup: pending(),
-      beginPhone: pending(), bootstrap: pending(), configurePolicy: pending(), configureResearch: pending(), pair: pending(), configure: pending(), submit: pending(), sync: pending(),
+      getPhoneHandoffState: pending(), beginPhone: pending(), bootstrap: pending(), configurePolicy: pending(), configureResearch: pending(), pair: pending(), configure: pending(), submit: pending(), sync: pending(),
     },
     linkedin: { prepare: pending(), get: pending(), recover: pending(), save: pending(), begin: pending(), open: pending(), copy: pending(), reportOutcome: pending() },
     phoneSetup: { status: pending(), confirm: pending(), clear: pending() },

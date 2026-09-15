@@ -78,7 +78,7 @@ const api: CalliePreloadApi = {
     policyImport: { selectAndPreview: forbidden('policyImport.selectAndPreview'), confirm: forbidden('policyImport.confirm'), resume: forbidden('policyImport.resume'), status: forbidden('policyImport.status') },
     prepareRequestedFollowup: forbidden('delegation.prepareRequestedFollowup'), getRequestedFollowup: forbidden('delegation.getRequestedFollowup'),
     editRequestedFollowup: forbidden('delegation.editRequestedFollowup'), approveRequestedFollowup: forbidden('delegation.approveRequestedFollowup'),
-    beginPhone: forbidden('delegation.beginPhone'), bootstrap: forbidden('delegation.bootstrap'),
+    getPhoneHandoffState: forbidden('delegation.getPhoneHandoffState'), beginPhone: forbidden('delegation.beginPhone'), bootstrap: forbidden('delegation.bootstrap'),
     configurePolicy: forbidden('delegation.configurePolicy'), configureResearch: forbidden('delegation.configureResearch'),
     pair: forbidden('delegation.pair'), configure: forbidden('delegation.configure'), submit: forbidden('delegation.submit'), sync: forbidden('delegation.sync'),
   },

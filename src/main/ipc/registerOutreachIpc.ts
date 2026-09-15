@@ -1,3 +1,4 @@
+import { delegatedPhoneStateRequestSchema, delegatedPhoneStateSchema, delegatedPhoneStateReplySchema } from '../../shared/contracts/delegatedPhoneStateContract';
 import {googleConnectionSelectorSchema,googleConsentOpenedSchema} from '../../shared/contracts/remoteGoogleConnectionsContract';
 import {researchSetupApproveInputSchema,researchSetupSetStateInputSchema,researchSetupReceiptSchema,researchSetupStatusSchema} from '../../shared/contracts/researchSetupContract';
 import {remoteGoogleGrantBeginSchema,remoteGoogleGrantDisclosureSchema,remoteGoogleGrantStatusSchema} from '../../shared/contracts/remoteGoogleGrantContract';
@@ -64,6 +65,7 @@ export function registerOutreachIpc(options:{provider:OutreachApi;delegation?:De
       add('requested-followup-get',getRequestedFollowupSchema,savedRequestedFollowupSchema.nullable(),input=>d.getRequestedFollowup(input));
       add('requested-followup-edit',editRequestedFollowupSchema,savedRequestedFollowupSchema,input=>d.editRequestedFollowup(input));
       add('requested-followup-approve',approveRequestedFollowupSchema,requestedApprovalStatusSchema,input=>d.approveRequestedFollowup(input));
+      add('delegation-get-phone-handoff-state',delegatedPhoneStateRequestSchema,delegatedPhoneStateSchema,async request=>delegatedPhoneStateReplySchema(request).parse(await d.getPhoneHandoffState(request)));
       add('delegation-begin-phone',delegatedPhoneHandoffRequestSchema,delegatedPhoneHandoffResultSchema,input=>d.beginPhone(input));
       add('delegation-bootstrap',bootstrapSelectedAccountSchema,commandReceiptSchema,input=>d.bootstrap(input));
       add('delegation-policy',workerPolicyRequestSchema,workerPolicyReceiptSchema,input=>d.configurePolicy(input));
