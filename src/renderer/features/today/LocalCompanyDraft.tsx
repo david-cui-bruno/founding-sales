@@ -33,7 +33,7 @@ function CompanyDraftPanel({ api, detail }: Props) {
       <h3 style={{ margin: 0 }}>Company draft</h3><span style={{ color: 'var(--accent)', background: 'var(--accent-soft)', padding: 'var(--space-1) var(--space-2)' }}>Unsent</span>
     </header>
     <p>Company inbox, no named person verified.</p>
-    <p><small>Manual local text only. Publication is not consent or send authority.</small></p>
+    <p><small>Prepare from saved company evidence, then review and save locally. Publication is not consent or send authority.</small></p>
     {routes.length > 1 && <label>Published business inbox<select style={selectField} value={selectedRoute.id} onChange={event => { setSelected(event.target.value); }}>
       {routes.map(route => <option key={route.id} value={route.id}>{route.value}</option>)}
     </select></label>}
@@ -52,7 +52,7 @@ function RetainedRouteDraft({ api, accountId, accountVersion, routeId, routeVers
   const session = localCompanyDraftSession(api, accountId, routeId, selection);
   const state = useSyncExternalStore(session.subscribe, session.snapshot, session.snapshot);
   const lifetime = useMemo(() => ({ live: false }), [session, accountVersion, routeVersion]);
-  useEffect(() => { lifetime.live = true; void session.read(); return () => { lifetime.live = false; }; }, [session, lifetime]);
+  useEffect(() => { lifetime.live = true; void session.read(); return () => { lifetime.live = false; session.cancelPreparation(); }; }, [session, lifetime]);
   const choose = (value: string) => { selectCompanyDraftSession(api, accountId, routeId, value); setSelection(value); };
   const choices = companyDraftSessionChoices(api, accountId, routeId);
   if (!eligible && !state.current) return null;
@@ -63,12 +63,13 @@ function RetainedRouteDraft({ api, accountId, accountVersion, routeId, routeVers
     </select></label>}
     <DraftEditor session={session} accountVersion={accountVersion} routeVersion={routeVersion} routeValue={routeValue}
       newVersion={selection === `${routeId}:${routeVersion}`} allowNewVersion={eligible}
-      onNewVersion={() => choose(`${routeId}:${routeVersion}`)} onReviewOpening={() => session.reviewOpening(request => api.getCompany(request), () => lifetime.live)} />
+      onNewVersion={() => choose(`${routeId}:${routeVersion}`)} onReviewOpening={() => session.reviewOpening(request => api.getCompany(request), () => lifetime.live)}
+      onPrepare={() => session.prepare(request => api.prepareCompanyDraft(request), accountVersion, () => lifetime.live)} />
     {selection !== 'saved' && <button type="button" onClick={() => choose('saved')}>Return to earlier draft</button>}
   </>;
 }
-function DraftEditor({ session, accountVersion, routeVersion, routeValue, newVersion, onNewVersion, onReviewOpening, allowNewVersion = true }: {
-  session: LocalCompanyDraftSession; accountVersion: number; routeVersion: number; routeValue: string; newVersion: boolean; onNewVersion(): void; onReviewOpening(): Promise<boolean>; allowNewVersion?: boolean;
+function DraftEditor({ session, accountVersion, routeVersion, routeValue, newVersion, onNewVersion, onReviewOpening, onPrepare, allowNewVersion = true }: {
+  session: LocalCompanyDraftSession; accountVersion: number; routeVersion: number; routeValue: string; newVersion: boolean; onNewVersion(): void; onReviewOpening(): Promise<boolean>; onPrepare(): Promise<boolean>; allowNewVersion?: boolean;
 }) {
   const state = useSyncExternalStore(session.subscribe, session.snapshot, session.snapshot);
   const read = state.current, draft = read?.draft;
@@ -84,7 +85,20 @@ function DraftEditor({ session, accountVersion, routeVersion, routeValue, newVer
       : 'Saved recipient or evidence changed. This draft keeps its original recipient. Unsuppressed text remains editable.'}</p>}
     {newVersion && (!draft || draft.recipientBinding.routeVersion !== routeVersion) && <p style={warning}>New draft selected for {routeValue}. Earlier text will not be copied. Open explicitly to create the new frozen binding.</p>}
     {state.visible && draft ? <>
-      <label style={{ display: 'block', marginTop: 'var(--space-3)' }}>Subject<input style={field} maxLength={240} value={state.subject} readOnly={!read.editable}
+      {draft.subject === '' && draft.body === '' && <div style={actions}>
+        <button type="button" disabled={!session.canPrepare()} onClick={() => void onPrepare()}>Prepare company draft</button>
+        <small>{state.preparing ? 'Preparing from saved evidence…' : 'Uses your configured model once. No new research, approval or sending.'}</small>
+      </div>}
+      {state.preparation && <section aria-label="Preparation inputs" style={{ marginTop: 'var(--space-3)' }}>
+        <h4>Company facts used for preparation</h4>
+        <p><small>Saved evidence supplied to the model, not verification of every sentence or later edit. Review the wording before saving.</small></p>
+        <ul>{state.preparation.grounding.facts.map(fact => <li key={fact.id}>
+          <p>{preparationBrief(fact.text)}</p>
+          <details><summary>Saved evidence and attribution</summary><pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{fact.text}</pre></details>
+        </li>)}</ul>
+        <p><small>Approved Callie playbook: {state.preparation.grounding.playbookVersion}. Preparation inputs are retained in this session, not a saved generation history.</small></p>
+      </section>}
+      <label style={{ display: 'block', marginTop: 'var(--space-3)' }}>Subject<input style={{ ...field, paddingBlock: 0 }} maxLength={240} value={state.subject} readOnly={!read.editable}
         onChange={event => session.edit('subject', event.target.value)} /></label>
       <label style={{ display: 'block', marginTop: 'var(--space-3)' }}>Message<textarea style={{ ...field, minHeight: 180, resize: 'vertical' }} rows={8} maxLength={20000}
         value={state.body} readOnly={!read.editable} onChange={event => session.edit('body', event.target.value)} /></label>
@@ -102,6 +116,17 @@ function DraftEditor({ session, accountVersion, routeVersion, routeValue, newVer
     {state.error && <p role="alert">{state.error}</p>}
     {(state.error || read?.stale) && <button type="button" disabled={state.busy} onClick={() => void session.read()}>Refresh draft read</button>}
   </>;
+}
+
+/** Presentation of main-selected facts only. Never interpret their content as HTML or instructions. */
+function preparationBrief(text: string): string {
+  try {
+    const value: unknown = JSON.parse(text.slice(text.indexOf('{')));
+    if (typeof value !== 'object' || value === null || !('claim' in value)) return text;
+    const claim = value.claim;
+    if (typeof claim !== 'object' || claim === null || !('key' in claim) || !('value' in claim) || typeof claim.key !== 'string') return text;
+    return `${claim.key.replaceAll('_', ' ')}: ${typeof claim.value === 'string' ? claim.value : JSON.stringify(claim.value)}`;
+  } catch { return text; }
 }
 
 type AdmissionState = { request: AdmitCompanyDraftEmail | null; receipt: CompanyDraftAdmissionReceipt | null;

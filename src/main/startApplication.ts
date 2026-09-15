@@ -21,6 +21,7 @@ import { createFetchedReceiptPolicy } from './research/companySourcePolicy';
 import { createCompanyPreparation, createCompanyResearchWorker } from './research/companyResearchWorker';
 import type { AccountResearchStore, DiscoveryReservationStore } from './research/companyResearchTypes';
 import { createEmailService } from './outreach/emailService';
+import { createCompanyDraftPreparationService, type CompanyDraftPreparationPort } from './outreach/companyDraftPreparationService';
 import { createOutreachProviders } from './outreach/providers/outreachProviders';
 import { registerOutreachIpc } from './ipc/registerOutreachIpc';
 import { createDiscoveryWorker, type DiscoveryWorker } from './discovery/discoveryWorker';
@@ -359,7 +360,8 @@ export type ApplicationStartupDependencies = FoundationRuntimeDependencies & {
     enrichmentRequester?: EnrichmentRequester,
     logDirectoryPath?: string,
     outbound?: OutboundCommandServiceApi,
-    options?: { selectedCompanyResearch?: { current(): SelectedCompanyResearchPort | null }; companyResearchSettings?: CompanyResearchSettingsLifecycle },
+    options?: { selectedCompanyResearch?: { current(): SelectedCompanyResearchPort | null }; companyResearchSettings?: CompanyResearchSettingsLifecycle;
+      companyDraftPreparation?: CompanyDraftPreparationPort },
   ): () => void;
   createEnrichmentRequester?(
     runtime: FoundationRuntime,
@@ -644,6 +646,7 @@ export async function startApplication(
   let delegationCleanup:Promise<void>|undefined;
   let email:ReturnType<typeof createEmailService>|undefined;
   let researchProviders: ReturnType<typeof createOutreachProviders> | undefined;
+  let companyDraftPreparation: ReturnType<typeof createCompanyDraftPreparationService> | undefined;
   let companyResearch: ReturnType<typeof createStartupCompanyResearch> | undefined;
   let researchCleanup: Promise<void> | undefined;
   let unregisterEmail:(()=>void)|undefined;
@@ -688,6 +691,7 @@ export async function startApplication(
     // Reserve permanent owner closure before any injected callback can reenter.
     outboundClosed = true;
     delegationCleanup=delegation?.dispose();void delegationCleanup?.catch(():undefined=>undefined);
+    try { companyDraftPreparation?.dispose(); } catch (error) { cleanupErrors.push(error); }
     // Abort research before touching the single shared credential owner.
     try { researchCleanup = companyResearch?.dispose(); void researchCleanup?.catch((): undefined => undefined); } catch (error) { cleanupErrors.push(error); }
     try { email?.dispose(); } catch (error) { cleanupErrors.push(error); }
@@ -826,10 +830,16 @@ export async function startApplication(
     const readPairedResearch = async () => paired ? runtime.withDatabase(database => new SqlDelegationConfiguration({ database, workspaceId: paired.workspaceId, pairingId: paired.pairingId, clock: domainClock }).read()) : null;
     // One lazy credential manager belongs to startup, including null-start activation.
     researchProviders = dependencies.createResearchProviders?.(options.userDataPath);
+    if (researchProviders) {
+      companyDraftPreparation = createCompanyDraftPreparationService({ runtime, providers: { generate: (context, signal) => researchProviders!.generate(context, signal) } });
+      companyDraftPreparation.invalidate(outboundLocked);
+      if (outboundClosed) companyDraftPreparation.dispose();
+    }
     let reloadQueue: Promise<void> = Promise.resolve();
     let researchConfigurationEpoch = 0;
     const reloadCompanyResearch = () => {
       const epoch = ++researchConfigurationEpoch;
+      companyDraftPreparation?.invalidate();
       companyResearch?.invalidate(true);
       const pending = reloadQueue.catch((): void => undefined).then(async () => {
         await companyResearch?.dispose(); companyResearch = undefined;
@@ -869,7 +879,7 @@ export async function startApplication(
     await reloadCompanyResearch();
     // Email borrows the same manager without owning its disposal in research mode.
     const borrowedProviders = researchProviders ? { ...researchProviders, dispose: (): void => undefined,
-      invalidate: () => { companyResearch?.invalidate(); researchProviders!.invalidate(); } } : undefined;
+      invalidate: () => { companyDraftPreparation?.invalidate(); companyResearch?.invalidate(); researchProviders!.invalidate(); } } : undefined;
     email = dependencies.createEmailService?.(runtime,options.userDataPath,borrowedProviders,expectedWorkspaceId);
     if(outboundClosed)email?.dispose();
     // The composed v1 email service sends drafts but owns no inbound adapter, and
@@ -884,12 +894,13 @@ export async function startApplication(
       throwIfStartupCancelled(signal);
     }
     unregisterOutboundLifecycle = options.registerOutboundLifecycle?.({
-      onWake: () => { if (!outboundClosed) {delegation?.invalidate();companyResearch?.invalidate();phoneBindings?.invalidate?.();email?.invalidate();outbound.invalidate('wake');} },
-      onLock: () => { if (!outboundClosed) {outboundLocked=true;delegation?.invalidate(true);companyResearch?.invalidate(true);phoneBindings?.invalidate?.(true);email?.invalidate(true);outbound.invalidate('lock');} },
+      onWake: () => { if (!outboundClosed) {companyDraftPreparation?.invalidate();delegation?.invalidate();companyResearch?.invalidate();phoneBindings?.invalidate?.();email?.invalidate();outbound.invalidate('wake');} },
+      onLock: () => { if (!outboundClosed) {outboundLocked=true;companyDraftPreparation?.invalidate(true);delegation?.invalidate(true);companyResearch?.invalidate(true);phoneBindings?.invalidate?.(true);email?.invalidate(true);outbound.invalidate('lock');} },
       onUnlock: () => {
         if (outboundClosed) return;
         delegation?.invalidate(false);
         outboundLocked=false;companyResearch?.invalidate(false);
+        companyDraftPreparation?.invalidate(false);
         phoneBindings?.invalidate?.(false);
         email?.invalidate(false);
         outbound.invalidate('wake');
@@ -968,7 +979,7 @@ export async function startApplication(
       ),
       options.logDirectoryPath,
       outbound,
-      { selectedCompanyResearch: { current: () => companyResearch?.api ?? null }, companyResearchSettings },
+      { selectedCompanyResearch: { current: () => companyResearch?.api ?? null }, companyResearchSettings, companyDraftPreparation },
     );
     if (phoneBindings.setup) unregisterPhoneSetup = (dependencies.registerPhoneSetupIpc ?? registerPhoneSetupIpc)({
       provider: phoneBindings.setup, isTrustedRendererUrl: options.isTrustedRendererUrl,

@@ -42,6 +42,29 @@ export type CompanyDraftPublication = z.infer<typeof companyDraftPublicationSche
 export type LocalCompanyDraft = z.infer<typeof localCompanyDraftSchema>;
 export type CompanyDraftRead = z.infer<typeof companyDraftReadSchema>;
 export type CompanyDraftMutationResult = z.infer<typeof companyDraftMutationResultSchema>;
+/** A preparation is an ephemeral proposal, never a durable draft mutation. */
+export const prepareCompanyDraftSchema = z.object({ accountId: accountIdSchema, draftId: accountIdSchema, expectedRevision: version }).strict();
+const preparationFactSchema = z.object({ id: z.string().regex(/^company-draft:[a-f0-9]{64}$/), text: z.string().min(1).max(3000) }).strict();
+export const preparedCompanyDraftSchema = z.object({
+  accountId: accountIdSchema, draftId: accountIdSchema, baseRevision: version, accountVersion: version,
+  recipientBinding: companyDraftRecipientSchema,
+  subject: saveCompanyDraftSchema.shape.subject.max(200).refine(value => value.trim().length > 0),
+  body: saveCompanyDraftSchema.shape.body.max(12000).refine(value => value.trim().length > 0),
+  grounding: z.object({ facts: z.array(preparationFactSchema).min(1).max(8),
+    usedFactIds: z.array(preparationFactSchema.shape.id).min(1).max(8), playbookVersion: z.literal('2026-09-08') }).strict(),
+}).strict().refine(value => {
+  const ids = new Set(value.grounding.facts.map(fact => fact.id));
+  return ids.size === value.grounding.facts.length
+    && new Set(value.grounding.usedFactIds).size === value.grounding.usedFactIds.length
+    && value.grounding.usedFactIds.every(id => ids.has(id))
+    && value.grounding.facts.reduce((bytes, fact) => bytes + new TextEncoder().encode(fact.text).length, 0) <= 12000;
+}, 'Company preparation grounding mismatch');
+export type PrepareCompanyDraft = z.infer<typeof prepareCompanyDraftSchema>;
+export type PreparedCompanyDraft = z.infer<typeof preparedCompanyDraftSchema>;
+export function companyDraftPrepareReply(input: PrepareCompanyDraft) {
+  return preparedCompanyDraftSchema.refine(result => result.accountId === input.accountId && result.draftId === input.draftId
+    && result.baseRevision === input.expectedRevision, 'Company preparation identity mismatch');
+}
 export function companyDraftAdmissionReply(input: AdmitCompanyDraftEmail) {
   return companyDraftAdmissionReceiptSchema.refine(result => result.commandId === input.commandId && result.accountId === input.accountId
     && result.accountVersion === input.expectedAccountVersion + 1 && result.recipientBinding.email === input.email

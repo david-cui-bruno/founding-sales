@@ -11,10 +11,15 @@ export type ConfigureOutreach = {
   apiKey?: string; model?: string; googleClientId?: string; googleClientSecret?: string;
   senderName?: string; postalAddress?: string;
 };
-export type GroundedDraftContext = {
+export type PersonGroundedDraftContext = {
   personName: string; organizationLabel: string | null; segment: 'hot' | 'cold' | 'warm';
   stage: string; actionLabel: string | null; facts: { id: string; text: string }[]; playbook: string;
 };
+export type CompanyGroundedDraftContext = {
+  recipientKind: 'company_business_inbox'; companyName: string; purpose: 'prepare_first_conversation';
+  facts: { id: string; text: string }[]; playbook: string;
+};
+export type GroundedDraftContext = PersonGroundedDraftContext | CompanyGroundedDraftContext;
 export type GeneratedDraft = {
   subject: string; body: string; evidenceIds: string[]; provider: 'openai'; model: string; responseId: string;
 };

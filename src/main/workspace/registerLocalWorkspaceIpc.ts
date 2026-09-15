@@ -1,4 +1,4 @@
-import { admitCompanyDraftEmailSchema, openCompanyDraftSchema, getCompanyDraftSchema, saveCompanyDraftSchema, companyDraftAdmissionReply, companyDraftOpenReply, companyDraftGetReply, companyDraftSaveReply, companyDraftAdmissionReceiptSchema, companyDraftMutationResultSchema, companyDraftReadSchema } from '../../shared/contracts/localCompanyDraftContract';
+import { admitCompanyDraftEmailSchema, openCompanyDraftSchema, getCompanyDraftSchema, saveCompanyDraftSchema, companyDraftAdmissionReply, companyDraftOpenReply, companyDraftGetReply, companyDraftSaveReply, companyDraftAdmissionReceiptSchema, companyDraftMutationResultSchema, companyDraftReadSchema, prepareCompanyDraftSchema, preparedCompanyDraftSchema, companyDraftPrepareReply } from '../../shared/contracts/localCompanyDraftContract';
 import { companyResearchSettingsSchema, companyResearchSettingsUpdateReplySchema, updateCompanyResearchSettingsRequestSchema } from '../../shared/contracts/localCompanyResearchSettingsContract';
 import { localCompanyInputSchema, localCompanyCreateRequestSchema, localCompanyReviewSchema, localCompanyCreateResultSchema, localCompanyCreateStatusSchema } from '../../shared/contracts/localCompanyIntakeContract';
 import { meetingFirstAccountCallSettingsSchema, updateCallSettingsRequestSchema, callSettingsUpdateReplySchema, linkCompanyPersonRequestSchema, accountEvidenceReceiptSchema, localWorkspaceSnapshotSchema, localCommitmentsSnapshotSchema, localWorkflowTransitionSchema, localWorkflowReceiptSchema, selectedCompanySchema, localCompanyDetailSchema, selectedResearchSchema, localCompanyResearchStatusSchema, type LocalWorkspaceApi } from '../../shared/contracts/localWorkspaceContract';
@@ -75,6 +75,11 @@ export function registerLocalWorkspaceIpc(provider: LocalWorkspaceApi, isTrusted
     disposers.push(registerValidatedIpc({ channel: 'local-workspace:save-company-draft', requestSchema: saveCompanyDraftSchema, responseSchema: companyDraftMutationResultSchema, safeErrorCode: 'LOCAL_COMPANY_DRAFT_FAILED', isTrustedRendererUrl, handler: async input => {
       const parsed = Object.freeze(saveCompanyDraftSchema.parse(input)); return companyDraftSaveReply(parsed).parse(await provider.saveCompanyDraft(parsed));
     } }));
+    disposers.push(registerValidatedIpc({ channel: 'local-workspace:prepare-company-draft', requestSchema: prepareCompanyDraftSchema,
+      responseSchema: preparedCompanyDraftSchema, safeErrorCode: 'LOCAL_COMPANY_PREPARATION_FAILED', isTrustedRendererUrl, handler: async input => {
+        const parsed = Object.freeze(prepareCompanyDraftSchema.parse(input));
+        return companyDraftPrepareReply(parsed).parse(await provider.prepareCompanyDraft(parsed));
+      } }));
   } catch (error) {
     const errors = cleanup();
     if (errors.length) throw new AggregateError([error, ...errors], 'Local workspace registration rollback failed');

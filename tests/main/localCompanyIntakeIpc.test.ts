@@ -13,7 +13,7 @@ const account = { ...input, id: 'account', version: 1 };
 const trusted = { senderFrame: { url: 'callie://app/index.html' } };
 const review = (value: LocalCompanyInput): LocalCompanyReview => ({ scope: 'local_database', input: value, candidates: [], complete: true });
 const provider = () => ({
-  admitCompanyDraftEmail: async () => { throw new Error('Company drafts unavailable in this fixture'); },
+  prepareCompanyDraft: async () => { throw Error('Company preparation unavailable in this fixture'); }, admitCompanyDraftEmail: async () => { throw new Error('Company drafts unavailable in this fixture'); },
   openCompanyDraft: async () => { throw new Error('Company drafts unavailable in this fixture'); },
   getCompanyDraft: async () => { throw new Error('Company drafts unavailable in this fixture'); },
   saveCompanyDraft: async () => { throw new Error('Company drafts unavailable in this fixture'); },

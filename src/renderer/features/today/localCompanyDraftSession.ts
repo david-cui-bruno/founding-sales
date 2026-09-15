@@ -1,19 +1,22 @@
 import { localCompanyDetailSchema, type LocalWorkspaceApi } from '../../../shared/contracts/localWorkspaceContract';
 import {
   companyDraftGetReply, companyDraftOpenReply, companyDraftSaveReply, openCompanyDraftSchema, saveCompanyDraftSchema,
+  companyDraftPrepareReply, type PreparedCompanyDraft,
   type CompanyDraftRead, type CompanyDraftMutationResult, type OpenCompanyDraft, type SaveCompanyDraft,
 } from '../../../shared/contracts/localCompanyDraftContract';
 
 export type CompanyDraftApi = Pick<LocalWorkspaceApi, 'getCompanyDraft' | 'openCompanyDraft' | 'saveCompanyDraft'>;
 type State = { current: CompanyDraftRead | null; subject: string; body: string; visible: boolean; busy: boolean;
-  checked: boolean; error: string | null; conflict: boolean; pendingSave: boolean; canReviewSaved: boolean; pendingOpen: boolean };
+  checked: boolean; error: string | null; conflict: boolean; pendingSave: boolean; canReviewSaved: boolean; pendingOpen: boolean;
+  preparing: boolean; preparation: PreparedCompanyDraft | null };
 const binding = (read: CompanyDraftRead) => JSON.stringify({ ...read.draft, revision: 0, subject: '', body: '', updatedAt: '' });
 
 /** A retained editor belongs to one API and one account/route selector. Never a company label.
  * Requests survive unknown outcomes unchanged. Reads cannot create drafts or acknowledge local edits. */
 export class LocalCompanyDraftSession {
   private state: State = { current: null, subject: '', body: '', visible: false, busy: false, checked: false,
-    error: null, conflict: false, pendingSave: false, canReviewSaved: false, pendingOpen: false };
+    error: null, conflict: false, pendingSave: false, canReviewSaved: false, pendingOpen: false, preparing: false, preparation: null };
+  private preparationSequence = 0;
   private listeners = new Set<() => void>();
   private pendingOpen: OpenCompanyDraft | null = null;
   private pendingSave: SaveCompanyDraft | null = null;
@@ -54,7 +57,36 @@ export class LocalCompanyDraftSession {
   }
   edit(field: 'subject' | 'body', value: string) {
     if (!this.state.current?.editable) return;
+    this.cancelPreparation();
     this.update({ [field]: value });
+  }
+  cancelPreparation = () => {
+    this.preparationSequence++;
+    if (this.state.preparing) this.update({ preparing: false });
+  };
+  canPrepare = () => !!this.state.current && this.state.visible && this.state.checked && !this.state.busy && !this.state.preparing
+    && !this.state.conflict && !this.state.pendingOpen && !this.state.pendingSave && !this.state.current.stale && this.state.current.editable
+    && this.state.current.draft.subject === '' && this.state.current.draft.body === '' && this.state.subject === '' && this.state.body === '';
+  async prepare(prepare: LocalWorkspaceApi['prepareCompanyDraft'], accountVersion: number, isCurrent: () => boolean) {
+    if (!this.canPrepare() || !isCurrent()) return false;
+    const original = this.state.current!;
+    const sequence = ++this.preparationSequence;
+    const request = { accountId: this.accountId, draftId: original.draft.id, expectedRevision: original.draft.revision };
+    this.update({ preparing: true, error: null });
+    try {
+      const proposal = companyDraftPrepareReply(request).parse(await prepare(request));
+      if (sequence !== this.preparationSequence || !isCurrent()) return false;
+      if (proposal.accountVersion !== accountVersion || JSON.stringify(proposal.recipientBinding) !== JSON.stringify(original.draft.recipientBinding)
+        || !this.state.current || JSON.stringify(this.state.current) !== JSON.stringify(original) || !this.state.visible
+        || this.state.subject !== '' || this.state.body !== '' || this.state.busy || this.state.conflict) throw Error('Preparation superseded');
+      this.update({ subject: proposal.subject, body: proposal.body, preparation: proposal });
+      return true;
+    } catch {
+      if (sequence === this.preparationSequence && isCurrent()) this.update({ error: 'Could not prepare a grounded draft. Saved text is unchanged. Check saved evidence and model settings. A new explicit attempt may make another model request.' });
+      return false;
+    } finally {
+      if (sequence === this.preparationSequence) this.update({ preparing: false });
+    }
   }
   async open(expectedAccountVersion: number, expectedRouteVersion: number, newVersion = false) {
     if (this.state.busy || this.opening) return false;
@@ -142,6 +174,7 @@ export class LocalCompanyDraftSession {
     return work;
   }
   async close() {
+    this.cancelPreparation();
     if (this.state.busy && !this.work) return false;
     if (this.dirty() || this.pendingSave) {
       if (!await this.save() || this.dirty()) return false;
