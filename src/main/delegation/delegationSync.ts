@@ -1,3 +1,4 @@
+import { validateCompanyResearchConfiguration } from '../research/companyResearchConfiguration';
 import { eventPageSchema, type EventPage } from '../../shared/contracts/delegationContract';
 import type { DelegationRepository } from './delegationRepository';
 import { randomUUID } from 'node:crypto';
@@ -123,6 +124,7 @@ export class SqlDelegationConfiguration {
     return db.transaction(()=>{
       const previous=this.read(); if((previous?.revision??0)!==input.expectedRevision)throw new Error('Stale configuration revision');
       if(input.configuration.research && input.configuration.research.workspaceId!==this.input.workspaceId)throw new Error('Configuration workspace mismatch');
+      if(input.configuration.state==='active' && input.configuration.research)validateCompanyResearchConfiguration(input.configuration.research);
       const at=accountInstantSchema.parse(this.input.clock.now());
       db.prepare(`INSERT INTO delegated_local_configuration VALUES(?,?,?,?,?) ON CONFLICT(workspace_id,pairing_id)
         DO UPDATE SET revision=excluded.revision,configuration_json=excluded.configuration_json,updated_at=excluded.updated_at`)

@@ -30,7 +30,53 @@ knownCompanyExtraction: {
 
 The numbers above illustrate the schema, **not verified provider pricing or spending approval**. The capability's cost ceiling must fit within the job's existing `maxCostMicros`. Integer arithmetic checks a conservative token ceiling from the entire JSON request byte cap plus 1,024 overhead tokens, and the output-token cap, against the explicitly reviewed input/output rates. The request must fit that byte cap before HTTP. Review must establish that this byte/token bound and those rates cover the exact model; they are not inferred from its name. The full job reservation remains conservative when actual invoice spend is unknown. Review the model, bounded input/output costs and source scope before enabling this mode. A model name and cost assertion do not prove provider compatibility or enforce a provider-side billing cap.
 
-Existing configurations omit this field and retain deterministic, model-free selected-page extraction. This change adds no Settings activation control, installed-app configuration, default provider call, budget increase or live migration. It is a main-process integration seam for a separately reviewed first-use configuration. Known-mode automatic `prepare`/`runNext` stay inactive; the delegated discovery/cycle coordinator explicitly refuses this desktop-only mode. Closed-Mac known-account enrichment is not implemented by this patch.
+Existing configurations omit this field and retain deterministic, model-free selected-page extraction. There is still no Settings control to author this capability, no default provider call, budget increase or live migration. The supported local configuration API described below is not an installed-app first-use workflow. Known-mode automatic `prepare`/`runNext` stay inactive; the delegated discovery/cycle coordinator explicitly refuses this desktop-only mode. Closed-Mac known-account enrichment is not implemented by this patch.
+
+## Persisted local activation boundary
+
+An already-loaded pairing is required for the existing public local configuration route:
+`createCallieApi().delegation.status()` reads the current record, and
+`delegation.configure({ expectedRevision, configuration })` saves through the real
+`outreach:delegation-configure` IPC handler. Active non-null research is composed at
+save time and on subsequent startup from that paired workspace's persisted record.
+No main-process `companyResearch` override is needed for this path.
+
+Active saves run the same pure configuration validation as startup **before the SQL
+write**, after the existing revision and workspace checks. A schema-valid prohibited
+source such as plain HTTP is rejected without advancing the record or replacing the
+previous research instance. Paused records may retain such schema-valid research,
+active `research: null` remains inert, and empty source lists retain existing holds.
+Legacy configurations without extraction remain supported. This is not a migration
+or repair for previously corrupted profiles. Other failures can still occur after a
+valid commit, so a lost/failed reply requires a status read and exact revision/content
+comparison, not an assumption that nothing was saved or an automatic retry.
+
+Configuration saves and reads never enqueue research or probe the model. Local model
+configuration uses the separate outreach API. Model readiness is checked during
+extraction, after page collection, not certified by this validator. Explicit selected
+`localWorkspace.researchCompany({ accountId, commandId })` starts work. Pausing removes
+the research instance and holds new work while saved evidence remains readable.
+Resuming requires an explicit revision-checked save and does not execute work.
+Replaying the same parked attempt does not retry transport. A different command ID is
+new potentially paid work, not recovery. The current research budget accounting sums
+jobs across the local research-jobs table, not a new allowance per account or budget ID.
+
+The current complete research shape still requires audience, discovery capability and
+limits, budget ID, revisions and preparation command, even in selected known mode.
+Tests use complete fictional configurations. A future UI must not fabricate discovery
+authority behind a toggle. Settings currently only preserves existing local research
+when toggling active/paused, and Cloud research is a separate remote policy surface.
+This local route does not activate hosted or closed-Mac known-company enrichment and
+does not provide a UI for unpaired or null-configuration first use.
+
+Integration coverage exercises public review/create, outreach configuration, persisted
+activation, exact selected execution and evidence reads through real preload/IPC and
+startup with disposable encrypted SQL and fixture-only external transport. Fresh-runtime
+checks normally shut down and reopen the same fixture with a new database connection
+and real provider managers, then verify configuration/evidence persistence, no eager
+work, same-command replay, pause and explicit resume. Uncertain transport and invalid
+quotes retain reservations and remain non-retryable after reopening. These are in-process
+restart simulations, not process-crash, packaged-app, live-provider or UI acceptance.
 
 ## Limits and acceptance
 
