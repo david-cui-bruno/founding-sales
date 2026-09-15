@@ -611,7 +611,7 @@ async function renderRetainedApp(synthetic = false, localMetadata: 'genuine' | '
   await act(async () => { await value.drainReads(); });
   expect(window.location.hash).toBe('#/today');
   expect([...transport.registrations].sort()).toEqual([...RETAINED_UI_REGISTERED_CHANNELS].sort());
-  expect(transport.registrations).toHaveLength(67);
+  expect(transport.registrations).toHaveLength(68);
   const status = value.trace().find(entry => entry.channel === 'outreach:delegation-status')!;
   expect(status).toMatchObject({ handlerStarted: true, outcome: 'resolved' });
   expect(status.synthetic).toBeUndefined();

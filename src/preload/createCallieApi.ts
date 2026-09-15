@@ -1,3 +1,4 @@
+import { delegatedPhoneStateRequestSchema, delegatedPhoneStateReplySchema, type GetPhoneHandoffStateRequest } from '../shared/contracts/delegatedPhoneStateContract';
 import { createRemoteGoogleConnectionsApi } from './apis/remoteGoogleConnectionsApi';
 import { createResearchSetupApi } from './apis/researchSetupApi';
 import type { ResearchSetupApi } from '../shared/contracts/researchSetupContract';
@@ -57,6 +58,7 @@ export const createCallieApi = (invoker: IpcInvoker) => {
       getRequestedFollowup:(input:z.infer<typeof getRequestedFollowupSchema>)=>client.request('outreach:requested-followup-get',getRequestedFollowupSchema,savedRequestedFollowupSchema.nullable(),input),
       editRequestedFollowup:(input:z.infer<typeof editRequestedFollowupSchema>)=>client.request('outreach:requested-followup-edit',editRequestedFollowupSchema,savedRequestedFollowupSchema,input),
       approveRequestedFollowup:(input:z.infer<typeof approveRequestedFollowupSchema>)=>client.request('outreach:requested-followup-approve',approveRequestedFollowupSchema,requestedApprovalStatusSchema,input),
+      getPhoneHandoffState:async(raw:GetPhoneHandoffStateRequest)=>{const request=Object.freeze(delegatedPhoneStateRequestSchema.parse(raw));return client.request('outreach:delegation-get-phone-handoff-state',delegatedPhoneStateRequestSchema,delegatedPhoneStateReplySchema(request),request);},
       beginPhone:(input:z.infer<typeof delegatedPhoneHandoffRequestSchema>)=>client.request('outreach:delegation-begin-phone',delegatedPhoneHandoffRequestSchema,delegatedPhoneHandoffResultSchema,input),
       bootstrap:(input:z.infer<typeof bootstrapSelectedAccountSchema>)=>client.request('outreach:delegation-bootstrap',bootstrapSelectedAccountSchema,commandReceiptSchema,input),
       configurePolicy:(input:z.infer<typeof workerPolicyRequestSchema>)=>client.request('outreach:delegation-policy',workerPolicyRequestSchema,workerPolicyReceiptSchema,input),

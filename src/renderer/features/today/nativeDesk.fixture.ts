@@ -261,7 +261,7 @@ export function nativeDeskFixture(initial = dailyFixture()) {
         status: forbidden,
       },
       prepareRequestedFollowup: forbidden,
-      beginPhone: forbidden,
+      getPhoneHandoffState: forbidden, beginPhone: forbidden,
       bootstrap: forbidden,
       configurePolicy: forbidden,
       configureResearch: forbidden,
