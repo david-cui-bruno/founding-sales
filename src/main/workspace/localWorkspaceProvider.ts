@@ -1,3 +1,5 @@
+import { admitCompanyDraftEmailSchema, openCompanyDraftSchema, getCompanyDraftSchema, saveCompanyDraftSchema, companyDraftAdmissionReply, companyDraftOpenReply, companyDraftGetReply, companyDraftSaveReply } from '../../shared/contracts/localCompanyDraftContract';
+import { LocalCompanyDraftRepository } from '../domain/accounts/localCompanyDraftRepository';
 import { companyResearchSettingsSchema, companyResearchSettingsUpdateReplySchema, updateCompanyResearchSettingsRequestSchema } from '../../shared/contracts/localCompanyResearchSettingsContract';
 import { getCompanyResearchProfiles } from '../research/knownCompanyRequestProfile';
 import { localCompanyInputSchema, localCompanyCreateRequestSchema } from '../../shared/contracts/localCompanyIntakeContract';
@@ -32,6 +34,10 @@ export function createLocalWorkspaceProvider(runtime: Pick<FoundationRuntime, 'w
     return companyResearchSettingsSchema.parse({ ...record, profiles: getCompanyResearchProfiles(), blockedReason, reservedOrSpentMicros });
   };
   return {
+    admitCompanyDraftEmail: async input => { const parsed = Object.freeze(admitCompanyDraftEmailSchema.parse(input)); return companyDraftAdmissionReply(parsed).parse(await runtime.withDomain(domain => domain.admitCompanyDraftEmail(parsed))); },
+    openCompanyDraft: async input => { const parsed = Object.freeze(openCompanyDraftSchema.parse(input)); return companyDraftOpenReply(parsed).parse(await runtime.withDomain(domain => domain.openCompanyDraft(parsed))); },
+    saveCompanyDraft: async input => { const parsed = Object.freeze(saveCompanyDraftSchema.parse(input)); return companyDraftSaveReply(parsed).parse(await runtime.withDomain(domain => domain.saveCompanyDraft(parsed))); },
+    getCompanyDraft: async input => { const parsed = Object.freeze(getCompanyDraftSchema.parse(input)); return companyDraftGetReply(parsed).parse(await runtime.withDatabase(database => new LocalCompanyDraftRepository({ database, clock, ids }).get(parsed))); },
     getCompanyResearchSettings,
     updateCompanyResearchSettings: async input => {
       const parsed = updateCompanyResearchSettingsRequestSchema.parse(input);

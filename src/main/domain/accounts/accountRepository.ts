@@ -1,3 +1,4 @@
+import { admitCompanyDraftEmailSchema, companyDraftAdmissionReply, companyDraftMailboxOccurrences, companyDraftAdmissionReceiptSchema, companyDraftEmailSchema, companyDraftPublicationSchema, type AdmitCompanyDraftEmail, type CompanyDraftPublication } from '../../../shared/contracts/localCompanyDraftContract';
 import { localCompanyInputSchema, localCompanyCandidateSignals, localCompanyReviewSchema, type LocalCompanyInput, type LocalCompanyCreateRequest, type LocalCompanyReview, type LocalCompanyCreateResult, type LocalCompanyCreateStatus } from '../../../shared/contracts/localCompanyIntakeContract';
 import { accountEvidenceReceiptSchema, linkCompanyPersonRequestSchema, localCompanyDetailSchema, localCompanyResearchStatusSchema, selectedResearchSchema,
   type LinkCompanyPersonRequest, type LocalCompanyDetail, type LocalCompanyResearchStatus, type SelectedResearch } from '../../../shared/contracts/localWorkspaceContract';
@@ -45,6 +46,130 @@ export class AccountRepository implements AccountResearchStore {
     const row = this.raw.prepare('SELECT id,name,domain,version FROM pm_accounts WHERE id=?').get(id);
     if (!row) throw new Error('Account not found');
     return accountSchema.parse(row);
+  }
+  /** SELECT-only, deliberately target-bound: unrelated linked people do not suppress a company inbox. */
+  companyDraftSuppressed(accountId: string, email: string): boolean {
+    return !!this.raw.prepare(`SELECT 1 WHERE
+      EXISTS(SELECT 1 FROM pm_account_suppression_tombstones WHERE account_id=?)
+      OR EXISTS(SELECT 1 FROM pm_handle_suppression_tombstones WHERE kind='email' AND normalized_value=?)
+      OR EXISTS(SELECT 1 FROM opt_out_handles WHERE kind='email' AND normalized_value=?)
+      OR EXISTS(SELECT 1 FROM person_contact_methods c JOIN persons p ON p.id=c.person_id
+        WHERE c.kind='email' AND c.normalized_value=? AND (p.opted_out=1 OR p.deleted_at IS NOT NULL
+          OR EXISTS(SELECT 1 FROM opt_out_tombstones t WHERE t.person_id=p.id)))`).get(accountId, email, email, email);
+  }
+  /** Admit the entire bounded evidence set before examining any quote. Never truncate eligibility. */
+  private companyDraftSources(accountId: string, email: string, at: string) {
+    const budget = this.raw.prepare(`SELECT count(*) AS n,coalesce(sum(length(CAST(excerpt AS BLOB))),0) AS bytes
+      FROM (SELECT excerpt FROM pm_account_sources WHERE account_id=? LIMIT 101)`).get(accountId) as { n: number; bytes: number };
+    if (budget.n > 100 || budget.bytes > 256000) throw new Error('Company publication unavailable');
+    const rows = this.raw.prepare(`SELECT id,url,sha256,fetched_at,admitted_at,excerpt,permitted FROM pm_account_sources WHERE account_id=? ORDER BY id`).all(accountId) as {
+      id: string; url: string; sha256: string; fetched_at: string; admitted_at: string; excerpt: string; permitted: number;
+    }[];
+    for (const source of rows) {
+      if (source.permitted !== 1 || source.fetched_at > at || source.admitted_at > at) throw new Error('Company publication unavailable');
+      const lines = source.excerpt.split(/\r?\n/);
+      for (const [index, line] of lines.entries()) {
+        if (!companyDraftNegativeTarget(line, email)) continue;
+        let priorIndex = index - 1;
+        while (priorIndex >= 0 && (lines[priorIndex] ?? '').trim() === '') priorIndex--;
+        const priorLine = lines[priorIndex] ?? '';
+        const prior = !priorLine.includes('@') && /:\s*$/.test(priorLine) ? priorLine : '';
+        for (const clause of (prior + ' ' + line).split(/;|\||\.\s+/)) {
+          if (companyDraftNegativeTarget(clause, email) && /\b(tenants?|residents?|emergenc(?:y|ies)|after[ -]?hours)\b/i.test(clause)) throw new Error('Company publication conflicts');
+        }
+      }
+    }
+    return rows;
+  }
+  private companyDraftPublication(accountId: string, email: string, sourceId: string, quote: string, at: string): CompanyDraftPublication {
+    const source = this.companyDraftSources(accountId, email, at).find(row => row.id === sourceId);
+    if (!source || /[<>]|\b(?:https?:|mailto:|javascript:)|\b(?:script|href|src)\s*=/i.test(source.excerpt)) throw new Error('Company publication unavailable');
+    let start = source.excerpt.indexOf(quote), matched = false;
+    const occurrences = companyDraftMailboxOccurrences(source.excerpt, email);
+    while (start >= 0) {
+      if (occurrences.some(token => token.start >= start && token.end <= start + quote.length)) { matched = true; break; }
+      start = source.excerpt.indexOf(quote, start + 1);
+    }
+    if (!matched) throw new Error('Company publication unavailable');
+    return companyDraftPublicationSchema.parse({ sourceId, quote, url: source.url, sha256: source.sha256, fetchedAt: source.fetched_at });
+  }
+  /** Current route lookup has no as-of fallback to older versions. Caller owns the SQL snapshot. */
+  companyDraftRoute(accountId: string, routeId: string) {
+    const row = this.raw.prepare(`SELECT id,account_id AS accountId,version,person_id AS personId,channel,value,purpose,verification,admitted_at AS admittedAt
+      FROM pm_account_routes WHERE account_id=? AND id=? ORDER BY version DESC LIMIT 1`).get(accountId, routeId) as {
+        id: string; accountId: string; version: number; personId: string | null; channel: string; value: string; purpose: string; verification: string; admittedAt: string;
+      } | undefined;
+    return row;
+  }
+  companyDraftEligibility(accountId: string, routeId: string, at: string, frozenPublication?: CompanyDraftPublication) {
+    const route = this.companyDraftRoute(accountId, routeId);
+    if (!route || route.personId !== null || route.channel !== 'email' || route.purpose !== 'business'
+      || !['published','confirmed'].includes(route.verification) || route.admittedAt > at) throw new Error('Company route unavailable');
+    const email = companyDraftEmailSchema.parse(route.value);
+    if (this.companyDraftSuppressed(accountId, email)) throw new Error('Company route suppressed');
+    const sourceIds = this.raw.prepare(`SELECT source_id FROM pm_account_route_evidence WHERE account_id=? AND route_id=? AND route_version=? ORDER BY source_id LIMIT 101`)
+      .all(accountId, routeId, route.version) as { source_id: string }[];
+    if (!sourceIds.length || sourceIds.length > 100) throw new Error('Company publication unavailable');
+    const reviewed = this.raw.prepare(`SELECT command_id,account_id,account_version,fingerprint,result_json,created_at FROM pm_account_commands WHERE account_id=? AND length(CAST(result_json AS BLOB))<=100000
+      AND json_extract(result_json,'$.selection')='published_company_business_inbox'
+      AND json_extract(result_json,'$.recipientBinding.routeId')=? AND json_extract(result_json,'$.recipientBinding.routeVersion')=?
+      ORDER BY created_at,command_id LIMIT 1`).get(accountId, routeId, route.version) as { command_id: string; account_id: string; account_version: number; fingerprint: string; result_json: string; created_at: string } | undefined;
+    let publication: CompanyDraftPublication;
+    if (frozenPublication) {
+      publication = this.companyDraftPublication(accountId, email, frozenPublication.sourceId, frozenPublication.quote, at);
+      if (JSON.stringify(publication) !== JSON.stringify(frozenPublication)) throw new Error('Company publication unavailable');
+    } else if (reviewed) {
+      const receipt = companyDraftAdmissionReceiptSchema.parse(JSON.parse(reviewed.result_json));
+      if (receipt.accountId !== accountId || receipt.accountId !== reviewed.account_id || receipt.commandId !== reviewed.command_id
+        || receipt.accountVersion !== reviewed.account_version || receipt.recipientBinding.email !== email || reviewed.created_at > at
+        || reviewed.fingerprint !== accountFingerprint({ kind: 'company_draft_email', commandId: receipt.commandId, accountId: receipt.accountId,
+          expectedAccountVersion: receipt.accountVersion - 1, email, sourceId: receipt.publication.sourceId, quote: receipt.publication.quote, selection: receipt.selection })) throw new Error('Company publication unavailable');
+      publication = this.companyDraftPublication(accountId, email, receipt.publication.sourceId, receipt.publication.quote, at);
+      if (JSON.stringify(publication) !== JSON.stringify(receipt.publication)) throw new Error('Company publication unavailable');
+    } else {
+      const proofs = this.companyDraftSources(accountId, email, at).filter(source => sourceIds.some(id => id.source_id === source.id))
+        .flatMap(source => source.excerpt.split(/\r?\n/).filter(line => /^\s*(?:business|company) email:\s*/i.test(line) && companyDraftMailboxOccurrences(line, email).length)
+          .map(quote => ({ sourceId: source.id, quote })));
+      const proof = proofs[0];
+      if (proofs.length !== 1 || !proof) throw new Error('Company publication requires reviewed selection');
+      publication = this.companyDraftPublication(accountId, email, proof.sourceId, proof.quote, at);
+    }
+    if (!sourceIds.some(id => id.source_id === publication.sourceId)) throw new Error('Company publication unavailable');
+    return { route, email, sourceIds: sourceIds.map(id => id.source_id), publication };
+  }
+  admitReviewedBusinessEmail(input: AdmitCompanyDraftEmail) {
+    const parsed = admitCompanyDraftEmailSchema.parse(input);
+    const fingerprint = accountFingerprint({ kind: 'company_draft_email', ...parsed });
+    return this.atomic(() => {
+      const replay = this.replay(parsed.commandId, fingerprint);
+      if (replay !== undefined) return companyDraftAdmissionReply(parsed).parse(replay);
+      const account = this.account(parsed.accountId), at = this.now();
+      if (account.version !== parsed.expectedAccountVersion || this.companyDraftSuppressed(account.id, parsed.email)) throw new Error('Company route unavailable');
+      const publication = this.companyDraftPublication(account.id, parsed.email, parsed.sourceId, parsed.quote, at);
+      this.requireEvidence(account.id, [parsed.sourceId], at);
+      const matches = this.raw.prepare(`SELECT r.* FROM pm_account_routes r WHERE r.account_id=? AND r.channel='email' AND lower(trim(r.value))=?
+        AND r.version=(SELECT max(v.version) FROM pm_account_routes v WHERE v.id=r.id) LIMIT 2`).all(account.id, parsed.email) as {
+          id: string; version: number; person_id: string | null; purpose: string; verification: string; admitted_at: string;
+        }[];
+      if (matches.length > 1 || matches.some(route => route.person_id !== null || route.purpose !== 'business'
+        || !['published','confirmed'].includes(route.verification) || route.admitted_at > at)) throw new Error('Company route ambiguous');
+      const existing = matches[0];
+      const routeId = existing?.id ?? this.deps.ids.next(), routeVersion = existing?.version ?? 1;
+      if (existing) {
+        if (!this.raw.prepare(`SELECT 1 FROM pm_account_route_evidence WHERE account_id=? AND route_id=? AND route_version=? AND source_id=?`)
+          .get(account.id, routeId, routeVersion, parsed.sourceId)) throw new Error('Company route source mismatch');
+      } else {
+        this.raw.prepare(`INSERT INTO pm_account_routes(id,account_id,version,person_id,channel,value,purpose,verification,admitted_at)
+          VALUES(?,?,1,NULL,'email',?,'business','published',?)`).run(routeId, account.id, parsed.email, at);
+        this.raw.prepare(`INSERT INTO pm_account_route_evidence(account_id,route_id,route_version,source_id) VALUES(?,?,1,?)`).run(account.id, routeId, parsed.sourceId);
+      }
+      const result = companyDraftAdmissionReceiptSchema.parse({ commandId: parsed.commandId, accountId: account.id, accountVersion: account.version + 1,
+        recipientBinding: { routeId, routeVersion, email: parsed.email, personId: null }, publication, selection: parsed.selection });
+      const updated = this.raw.prepare('UPDATE pm_accounts SET version=?,updated_at=? WHERE id=? AND version=?').run(result.accountVersion, at, account.id, account.version);
+      if (updated.changes !== 1) throw new Error('Stale account version');
+      this.record(parsed.commandId, account.id, fingerprint, result, result.accountVersion, at);
+      return result;
+    });
   }
   create(input: z.infer<typeof accountCreateSchema>): Account {
     const parsed = accountCreateSchema.parse(input);
@@ -419,4 +544,11 @@ export class AccountRepository implements AccountResearchStore {
   listCandidates(): Account[] {
     return this.raw.prepare('SELECT id,name,domain,version FROM pm_accounts ORDER BY id COLLATE BINARY').all().map(row => accountSchema.parse(row));
   }
+}
+
+
+/** Sentence punctuation may conservatively establish a denial, never quoted publication proof. */
+function companyDraftNegativeTarget(text: string, email: string): boolean {
+  return companyDraftMailboxOccurrences(text, email).length > 0
+    || companyDraftMailboxOccurrences(text.replace(/\.(?=\s|$)/g, ''), email).length > 0;
 }

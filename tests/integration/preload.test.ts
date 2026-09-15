@@ -155,8 +155,8 @@ describe('preload workflow bridge', () => {
       'beginOutbound', 'confirmTransition', 'dismissLead', 'findContactInfo', 'get', 'getOutboundCapabilities', 'overrideCloudScore',
     ]);
     expect(Object.keys(api.localWorkspace).sort()).toEqual([
-      'createCompany', 'get', 'getCallSettings', 'getCommitments', 'getCompany', 'getCompanyCreateStatus',
-      'getCompanyResearchSettings', 'getCompanyResearchStatus', 'linkCompanyPerson', 'researchCompany', 'reviewCompany', 'transition', 'updateCallSettings', 'updateCompanyResearchSettings',
+      'admitCompanyDraftEmail', 'createCompany', 'get', 'getCallSettings', 'getCommitments', 'getCompany', 'getCompanyCreateStatus', 'getCompanyDraft',
+      'getCompanyResearchSettings', 'getCompanyResearchStatus', 'linkCompanyPerson', 'openCompanyDraft', 'researchCompany', 'reviewCompany', 'saveCompanyDraft', 'transition', 'updateCallSettings', 'updateCompanyResearchSettings',
     ]);
     expect(Object.keys(api.today).sort()).toEqual([
       'addLeadNote', 'complete', 'get', 'getLeadTriageSnapshot', 'getTriageQueue', 'logCallOutcome',

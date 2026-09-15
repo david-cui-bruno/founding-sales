@@ -1,8 +1,14 @@
+import { admitCompanyDraftEmailSchema, openCompanyDraftSchema, getCompanyDraftSchema, saveCompanyDraftSchema, companyDraftAdmissionReply, companyDraftOpenReply, companyDraftGetReply, companyDraftSaveReply } from '../../shared/contracts/localCompanyDraftContract';
 import { companyResearchSettingsSchema, companyResearchSettingsUpdateReplySchema, updateCompanyResearchSettingsRequestSchema } from '../../shared/contracts/localCompanyResearchSettingsContract';
 import { localCompanyInputSchema, localCompanyCreateRequestSchema, localCompanyReviewSchema, localCompanyCreateResultSchema, localCompanyCreateStatusSchema } from '../../shared/contracts/localCompanyIntakeContract';
 import { meetingFirstAccountCallSettingsSchema, updateCallSettingsRequestSchema, callSettingsUpdateReplySchema, linkCompanyPersonRequestSchema, accountEvidenceReceiptSchema, localWorkspaceSnapshotSchema, localCommitmentsSnapshotSchema, localWorkflowTransitionSchema, localWorkflowReceiptSchema, selectedCompanySchema, localCompanyDetailSchema, selectedResearchSchema, localCompanyResearchStatusSchema, type LocalWorkspaceApi } from '../../shared/contracts/localWorkspaceContract';
 import type { IpcClient } from '../ipcClient';
 export const createLocalWorkspaceApi = (client: IpcClient): LocalWorkspaceApi => ({
+  admitCompanyDraftEmail: async input => { const parsed = Object.freeze(admitCompanyDraftEmailSchema.parse(input)); return client.request('local-workspace:admit-company-draft-email', admitCompanyDraftEmailSchema, companyDraftAdmissionReply(parsed), parsed); },
+  openCompanyDraft: async input => { const parsed = Object.freeze(openCompanyDraftSchema.parse(input)); return client.request('local-workspace:open-company-draft', openCompanyDraftSchema, companyDraftOpenReply(parsed), parsed); },
+  getCompanyDraft: async input => { const parsed = Object.freeze(getCompanyDraftSchema.parse(input)); return client.request('local-workspace:get-company-draft', getCompanyDraftSchema, companyDraftGetReply(parsed), parsed); },
+  saveCompanyDraft: async input => { const parsed = Object.freeze(saveCompanyDraftSchema.parse(input)); return client.request('local-workspace:save-company-draft', saveCompanyDraftSchema, companyDraftSaveReply(parsed), parsed); },
+
   getCompanyResearchSettings: () => client.requestNoInput('local-workspace:get-company-research-settings', companyResearchSettingsSchema),
   updateCompanyResearchSettings: async input => {
     const parsed = updateCompanyResearchSettingsRequestSchema.parse(input);

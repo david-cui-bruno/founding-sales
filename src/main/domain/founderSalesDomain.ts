@@ -1,3 +1,5 @@
+import type { AdmitCompanyDraftEmail, OpenCompanyDraft, SaveCompanyDraft } from '../../shared/contracts/localCompanyDraftContract';
+import { LocalCompanyDraftRepository } from './accounts/localCompanyDraftRepository';
 import type { UpdateCompanyResearchSettingsRequest } from '../../shared/contracts/localCompanyResearchSettingsContract';
 import { LocalCompanyIntake } from './accounts/localCompanyIntake';
 import { AccountRepository } from './accounts/accountRepository';
@@ -435,6 +437,9 @@ export class FounderSalesDomain implements OutboundDomainPort {
     this.configuredTimezone = input.timezone;
   }
 
+  admitCompanyDraftEmail(input: AdmitCompanyDraftEmail) { return new AccountRepository({ database: this.database, clock: this.clock, ids: this.ids }).admitReviewedBusinessEmail(input); }
+  openCompanyDraft(input: OpenCompanyDraft) { return new LocalCompanyDraftRepository({ database: this.database, clock: this.clock, ids: this.ids }).open(input); }
+  saveCompanyDraft(input: SaveCompanyDraft) { return new LocalCompanyDraftRepository({ database: this.database, clock: this.clock, ids: this.ids }).save(input); }
   reviewLocalCompany(input: LocalCompanyInput) {
     return new LocalCompanyIntake({ database: this.database, clock: this.clock, ids: this.ids }).review(input);
   }
