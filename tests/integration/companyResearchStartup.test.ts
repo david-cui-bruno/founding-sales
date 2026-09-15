@@ -20,7 +20,7 @@ vi.mock('electron', () => ({ safeStorage: {}, dialog: {}, shell: {}, ipcMain: ta
 const clock = { now: () => new Date().toISOString() };
 const limits = { maxCompanies: 2, maxPages: 1, maxBytes: 10000, maxCostMicros: 100 };
 const configuration = { workspaceId: 'fictional-workspace', budgetId: 'fictional-budget',
-  audience: { residential: true, regions: ['Fictional Region'], terms: ['residential PM'] }, discoveryLimits: limits, researchLimits: limits,
+  audience: { residential: true as const, regions: ['Fictional Region'], terms: ['residential PM'] }, discoveryLimits: limits, researchLimits: limits,
   capability: { model: 'fixture-model', webSearch: true as const, searchCostMicros: 50, modelCostMicros: 50 },
   maxAccountBudgetMicros: 1000, permittedSources: ['https://example.invalid/'] };
 const unexpected = (): never => { throw new Error('Forbidden external fixture operation'); };
@@ -77,7 +77,7 @@ async function fixture(configured: boolean, hooks: { search?: () => Promise<void
     createDomainRuntime: db => { database = db; return ownedDomain = new DomainRuntime({ database: db, clock, ids: { next: randomUUID } }); },
     createHealthService: options => new HealthService(options),
     registerLinkedInIpc:()=>()=>undefined,
-    registerOutreachIpc: options => {delegation=options.delegation;return () => undefined;},
+    registerOutreachIpc: options => {delegation=options.delegation;return hooks.publicIpc ? registerOutreachIpc(options) : () => undefined;},
     ...(hooks.paired?{createPairingStore:()=>({load:async()=>({endpoint:'https://worker.example.test',workspaceId:configuration.workspaceId,pairingId:'11111111-1111-4111-8111-111111111111',credential:'a'.repeat(43),emergencyCredential:'b'.repeat(43),generation:0,scopes:['commands:write' as const,'events:read' as const]}),redeem:async()=>unexpected()})}:{}),
     registerApplicationIpc: (...args) => { runtime = args[0]; return hooks.publicIpc ? registerApplicationIpc(...args) : () => undefined; },
     createResearchProviders: () => { factoryCalls++; managerOwner = 'startup'; return manager; },
@@ -98,7 +98,7 @@ async function fixture(configured: boolean, hooks: { search?: () => Promise<void
   try {
     const app = await startApplication({ appVersion: '1.0.0', userDataPath: dirname(temp.path), companyResearch: configured&&!hooks.paired ? (hooks.config ?? configuration) : undefined,
       registerOutboundLifecycle: callbacks => { lifecycle = callbacks; return () => undefined; }, createWindow: () => undefined }, dependencies);
-    return { app, runtime, database, lifecycle, requests, factoryCalls, delegation, stopDomain: () => ownedDomain.shutdown(), async close() {
+    return { app, runtime, database, lifecycle, requests, get factoryCalls() { return factoryCalls; }, delegation, stopDomain: () => ownedDomain.shutdown(), async close() {
       try { await app.shutdown(); }
       finally { try { verifyAndDisposeManager(); } finally { temp.cleanup(); } }
     } };
@@ -237,6 +237,8 @@ it('returns current research API after persisted activation and reconfiguration'
 });
 
 // Task 3: exercise the actual startup -> application registrar -> provider -> preload path.
+import { registerOutreachIpc } from '../../src/main/ipc/registerOutreachIpc';
+import { createCallieApi } from '../../src/preload/createCallieApi';
 import { registerApplicationIpc } from '../../src/main/ipc/registerApplicationIpc';
 import { createLocalWorkspaceApi } from '../../src/preload/apis/localWorkspaceApi';
 import { createIpcClient } from '../../src/preload/ipcClient';
@@ -778,3 +780,41 @@ it('Task 4 late original versus explicit replay preserves an older unrelated job
       expect(f.database.raw.prepare('SELECT COUNT(*) AS n FROM pm_account_research_jobs').get()).toEqual({ n: 2 });
     } finally { await f.close(); }
   });
+
+
+it('rejects invalid public activation before persistence and keeps the previous research instance usable', async () => {
+  const f = await fixture(true, { paired: true, publicIpc: true });
+  const api = createCallieApi({ invoke: async (channel, ...args) =>
+    registeredIpcHandler(task3Electron.handle, channel)(task3Trusted, ...args) });
+  const research = { ...configuration, audienceRevision: 1, sourceRevision: 1, budgetRevision: 1, preparationCommandId: randomUUID() };
+  try {
+    const saved = await api.delegation.configure({ expectedRevision: 0, configuration: { version: 1, state: 'active', research } });
+    const first = f.app.companyResearch;
+    const factoryCalls = f.factoryCalls;
+    const invalid = { version: 1 as const, state: 'active' as const, research: { ...research, permittedSources: ['http://example.invalid/'] } };
+    await expect(api.delegation.configure({ expectedRevision: 1, configuration: invalid })).rejects.toThrow('OUTREACH_REQUEST_FAILED');
+    // Public read exposes the actual committed record, not a mocked callback outcome.
+    expect((await api.delegation.status()).configuration).toEqual(saved);
+    expect(f.app.companyResearch).toBe(first);
+    expect(f.factoryCalls).toBe(factoryCalls);
+    expect(f.requests).toEqual([]);
+    const selected = task3Seed(f);
+    expect(await api.localWorkspace.researchCompany(selected)).toMatchObject({ state: 'completed' });
+    expect(f.requests).toEqual(['https://example.invalid/']);
+    await expect(api.delegation.configure({ expectedRevision: 0, configuration: saved.configuration })).rejects.toThrow();
+    expect((await api.delegation.status()).configuration).toEqual(saved);
+    expect(f.app.companyResearch).toBe(first);
+    // Pausing may retain a schema-valid source that cannot be activated.
+    const paused = await api.delegation.configure({ expectedRevision: 1, configuration: { ...invalid, state: 'paused' } });
+    expect(paused).toMatchObject({ revision: 2, configuration: { ...invalid, state: 'paused' } });
+    expect(f.app.companyResearch).toBeUndefined();
+    await expect(api.delegation.configure({ expectedRevision: 2, configuration: invalid })).rejects.toThrow();
+    expect((await api.delegation.status()).configuration).toEqual(paused);
+    const empty = await api.delegation.configure({ expectedRevision: 2, configuration: { version: 1, state: 'active', research: null } });
+    expect(empty.revision).toBe(3); expect(f.app.companyResearch).toBeUndefined();
+    const held = await api.delegation.configure({ expectedRevision: 3,
+      configuration: { version: 1, state: 'active', research: { ...research, permittedSources: [] } } });
+    expect(held.revision).toBe(4); expect(f.app.companyResearch).toBeDefined();
+    expect(f.requests).toEqual(['https://example.invalid/']);
+  } finally { await f.close(); }
+});

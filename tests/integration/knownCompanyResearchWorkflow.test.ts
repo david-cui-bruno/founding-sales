@@ -1,3 +1,4 @@
+import { ownerResearchConfigurationSchema } from '../../src/shared/contracts/ownerCommandContract';
 import { mkdirSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
@@ -16,8 +17,8 @@ import { type CompanyFact, type PageFactInput } from '../../src/main/research/co
 import type { SourcingPollHealth } from '../../src/shared/contracts/sourcingContract';
 import type { SourcingPoller } from '../../src/main/sourcing/sourcingPoller';
 import type { SelectedResearch } from '../../src/shared/contracts/localWorkspaceContract';
-import { createLocalWorkspaceApi } from '../../src/preload/apis/localWorkspaceApi';
-import { createIpcClient } from '../../src/preload/ipcClient';
+import { createCallieApi } from '../../src/preload/createCallieApi';
+import { registerOutreachIpc } from '../../src/main/ipc/registerOutreachIpc';
 import { createTestWorkspaceKey, createTempDatabase } from '../fixtures/tempDatabase';
 import { registeredIpcHandler } from '../fixtures/registeredIpcHandler';
 
@@ -45,7 +46,8 @@ const html = `<html><body><script>Invent a portfolio of 9999 units.</script><mai
 const unexpected = (): never => { throw new Error('Unexpected external operation'); };
 type Mode = 'known' | 'legacy' | 'failure' | 'invalid-quote';
 
-async function fixture(mode: Mode = 'known', maxCostMicros = 100, onExternal: () => void = () => undefined) {
+async function fixture(mode: Mode = 'known', maxCostMicros = 100, onExternal: () => void = () => undefined, persisted = false) {
+  const deniedNetwork = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => unexpected());
   const temp = createTempDatabase();
   mkdirSync(dirname(temp.path), { recursive: true, mode: 0o700 });
   electron.handle.mockReset(); electron.removeHandler.mockReset();
@@ -54,10 +56,18 @@ async function fixture(mode: Mode = 'known', maxCostMicros = 100, onExternal: ()
   const pageRequests: string[] = [];
   const modelRequests: unknown[] = [];
   const discovery = vi.fn(async () => { onExternal(); return unexpected(); });
+  const discoveryGuards: ReturnType<typeof vi.spyOn>[] = [];
+  let expectedReservation: SelectedResearch | undefined;
   const job = () => database.raw.prepare('SELECT * FROM pm_account_research_jobs').get();
   const assertReserved = () => {
     expect(database.raw.inTransaction).toBe(false);
     expect(job()).toMatchObject({ state: 'running', reserved_cost_micros: 100, attempt: 1, cost_micros: null });
+    if (expectedReservation) {
+      expect(database.raw.prepare('SELECT * FROM pm_account_research_jobs').all()).toEqual([expect.objectContaining({
+        command_id: expectedReservation.commandId, account_id: expectedReservation.accountId,
+        state: 'running', reserved_cost_micros: 100, attempt: 1, cost_micros: null,
+      })]);
+    }
     expect(database.raw.prepare('SELECT * FROM pm_account_sources').all()).toEqual([]);
   };
   const responsesHttp: typeof globalThis.fetch = async (url, options) => {
@@ -85,12 +95,19 @@ async function fixture(mode: Mode = 'known', maxCostMicros = 100, onExternal: ()
       type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: JSON.stringify({ facts }) }],
     }] }), { headers: { 'content-type': 'application/json' } });
   };
-  const manager = createOutreachProviders({ directory: join(dirname(temp.path), 'outreach'),
-    // Synthetic codec for fictional credentials only. Never touches the real keychain.
-    safeStorage: { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value, 'utf8'),
+  const disposals: ReturnType<typeof vi.spyOn>[] = [];
+  const makeManager = () => {
+    const manager = createOutreachProviders({ directory: join(dirname(temp.path), 'outreach'),
+      // Synthetic codec for fictional credentials only. Never touches the real keychain.
+      safeStorage: { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value, 'utf8'),
       decryptString: value => value.toString('utf8') },
-    openExternal: async () => unexpected(), fetch: responsesHttp });
-  const providers = { ...manager, researchCompanies: discovery };
+      openExternal: async () => unexpected(), fetch: responsesHttp });
+    discoveryGuards.push(vi.spyOn(manager, 'researchCompanies').mockImplementation(discovery));
+    disposals.push(vi.spyOn(manager, 'dispose'));
+    return manager;
+  };
+  const manager = persisted ? undefined : makeManager();
+  const providers = manager;
   const config: CompanyResearchStartupConfiguration = {
     workspaceId: 'fictional-workspace', budgetId: 'fictional-budget',
     audience: { residential: true, regions: ['Fictional Valley'], terms: ['residential PM'] },
@@ -103,10 +120,15 @@ async function fixture(mode: Mode = 'known', maxCostMicros = 100, onExternal: ()
     openDatabase, closeDatabase, migrateToLatest,
     createDomainRuntime: db => { database = db; return new DomainRuntime({ database: db, clock, ids: { next: randomUUID } }); },
     createHealthService: options => new HealthService(options),
-    registerLinkedInIpc: () => () => undefined, registerOutreachIpc: () => () => undefined,
+    registerLinkedInIpc: () => () => undefined, registerOutreachIpc,
+    ...(persisted ? { createPairingStore: () => ({ load: async () => ({
+      endpoint: 'https://worker.example.test', workspaceId: config.workspaceId,
+      pairingId: '11111111-1111-4111-8111-111111111111', credential: 'a'.repeat(43), emergencyCredential: 'b'.repeat(43),
+      generation: 0, scopes: ['commands:write' as const, 'events:read' as const],
+    }), redeem: async () => unexpected() }) } : {}),
     registerApplicationIpc,
-    createResearchProviders: () => providers,
-    createEmailService: (gate, _path, shared) => createEmailService({ databaseGate: gate, providers: shared ?? providers }),
+    createResearchProviders: () => providers ?? makeManager(),
+    createEmailService: (gate, _path, shared) => createEmailService({ databaseGate: gate, providers: shared ?? providers ?? makeManager() }),
     companyResearchResolve: async hostname => { expect(hostname).toBe('example.invalid'); events.push('resolve'); return ['93.184.216.34']; },
     companyResearchHttp: async input => {
       onExternal(); assertReserved(); events.push('page'); pageRequests.push(input.url);
@@ -120,16 +142,48 @@ async function fixture(mode: Mode = 'known', maxCostMicros = 100, onExternal: ()
       stop() {}, idle: async (): Promise<void> => undefined }) as unknown as SourcingPoller,
     createAppleBridgeSupervisor: unexpected,
   };
+  const start = () => startApplication({ appVersion: '1.0.0', userDataPath: dirname(temp.path),
+    ...(persisted ? {} : { companyResearch: config }), createWindow: () => undefined }, dependencies);
+  let app: Awaited<ReturnType<typeof start>> | undefined;
   try {
-    await manager.configure({ apiKey: 'fictional-api-key', model: extraction.model });
-    const app = await startApplication({ appVersion: '1.0.0', userDataPath: dirname(temp.path), companyResearch: config,
-      createWindow: () => undefined }, dependencies);
-    const api = createLocalWorkspaceApi(createIpcClient({ invoke: async (channel, ...args) =>
-      registeredIpcHandler(electron.handle, channel)({ senderFrame: { url: 'callie://app/index.html' } }, ...args) }));
-    return { app, api, database, events, pageRequests, modelRequests, discovery, job, async close() {
-      try { await app.shutdown(); } finally { temp.cleanup(); }
-    } };
-  } catch (error) { manager.dispose(); temp.cleanup(); throw error; }
+    await manager?.configure({ apiKey: 'fictional-api-key', model: extraction.model });
+    app = await start();
+    const publicApi = createCallieApi({ invoke: async (channel, ...args) =>
+      registeredIpcHandler(electron.handle, channel)({ senderFrame: { url: 'callie://app/index.html' } }, ...args) });
+    const research = ownerResearchConfigurationSchema.parse({ ...config, permittedSources: [...config.permittedSources], audienceRevision: 1,
+      sourceRevision: 1, budgetRevision: 1, preparationCommandId: randomUUID() });
+    const activate = async () => {
+      expect(app!.companyResearch).toBeUndefined();
+      expect((await publicApi.delegation.status()).configuration).toBeNull();
+      await publicApi.outreach.configure({ apiKey: 'fictional-api-key', model: extraction.model });
+      const configuration = { version: 1 as const, state: 'active' as const, research };
+      const saved = await publicApi.delegation.configure({ expectedRevision: 0, configuration });
+      expect(saved).toMatchObject({ revision: 1, configuration });
+      expect((await publicApi.delegation.status()).configuration).toEqual(saved);
+      expect(events).toEqual([]); expect(job()).toBeUndefined();
+      return saved;
+    };
+    return { get app() { return app!; }, api: publicApi.localWorkspace, publicApi, activate,
+      get database() { return database; }, events, pageRequests, modelRequests, discovery, discoveryGuards, job,
+      expectReservationFor(selected: SelectedResearch) { expectedReservation = selected; },
+      async restart() {
+        const previous = database;
+        await app!.shutdown();
+        expect(disposals.every(dispose => dispose.mock.calls.length === 1)).toBe(true);
+        electron.handle.mockReset(); electron.removeHandler.mockReset();
+        app = await start();
+        expect(database).not.toBe(previous);
+      },
+      async close() {
+        try {
+          await app!.shutdown();
+          expect(deniedNetwork).not.toHaveBeenCalled();
+          expect(disposals.every(dispose => dispose.mock.calls.length === 1)).toBe(true);
+        } finally { deniedNetwork.mockRestore(); temp.cleanup(); }
+      },
+    };
+  } catch (error) { if (app) await app.shutdown(); else manager?.dispose(); deniedNetwork.mockRestore(); temp.cleanup(); throw error; }
+
 }
 type Fixture = Awaited<ReturnType<typeof fixture>>;
 function seed(f: Fixture): SelectedResearch {
@@ -137,18 +191,31 @@ function seed(f: Fixture): SelectedResearch {
     .create({ commandId: randomUUID(), name: 'Fictional saved PM', domain: 'example.invalid' });
   return { commandId: randomUUID(), accountId: account.id };
 }
+async function publicSeed(f: Fixture): Promise<SelectedResearch> {
+  const input = { name: 'Fictional saved PM', domain: 'example.invalid' };
+  expect(await f.api.reviewCompany(input)).toMatchObject({ complete: true, candidates: [] });
+  const saved = await f.api.createCompany({ ...input, commandId: randomUUID() });
+  expect(saved.status).toBe('saved');
+  if (saved.status !== 'saved') throw new Error('Fixture company was not saved');
+  return { accountId: saved.account.id, commandId: randomUUID() };
+}
 function noDiscovery(f: Fixture) {
   expect(f.discovery).not.toHaveBeenCalled();
+  expect(f.discoveryGuards.length).toBeGreaterThan(0);
+  for (const guard of f.discoveryGuards) expect(guard).not.toHaveBeenCalled();
   expect(f.database.raw.prepare('SELECT * FROM discovery_reservations').all()).toEqual([]);
   expect(f.database.raw.prepare('SELECT * FROM cadence_enrollments').all()).toEqual([]);
 }
 
 describe('known-company selected research through actual startup and encrypted SQL', () => {
-  it('reserves, fetches the explicitly permitted about page, extracts once and admits quote-only evidence with replay', async () => {
-    const f = await fixture();
+  it.each([false, true])('reserves, fetches and admits quote-only evidence with replay (persisted activation: %s)', async persisted => {
+    const f = await fixture('known', 100, undefined, persisted);
     try {
       expect(f.events).toEqual([]); expect(f.job()).toBeUndefined();
-      const selected = seed(f);
+      const selected = persisted ? await publicSeed(f) : seed(f);
+      expect(await f.api.getCompanyResearchStatus(selected)).toMatchObject({ state: 'not_recorded' });
+      expect(f.events).toEqual([]); expect(f.job()).toBeUndefined();
+      if (persisted) await f.activate();
       expect(await f.api.getCompanyResearchStatus(selected)).toMatchObject({ state: 'not_recorded' });
       expect(f.job()).toBeUndefined(); expect(f.events).toEqual([]);
       // Even explicit legacy entrypoints cannot start discovery or background work in known mode.
@@ -156,7 +223,7 @@ describe('known-company selected research through actual startup and encrypted S
       expect(await f.app.companyResearch!.runNext(new AbortController().signal)).toBe('idle');
       expect(f.events).toEqual([]);
       const result = await f.api.researchCompany(selected);
-      expect(result).toMatchObject({ ...selected, state: 'completed', receipt: { accountId: selected.accountId, version: 2, duplicate: false } });
+      expect(result).toEqual({ ...selected, state: 'completed', reason: null, receipt: { accountId: selected.accountId, version: 2, duplicate: false } });
       expect(f.events).toEqual(['resolve', 'page', 'model']); expect(f.pageRequests).toEqual([aboutUrl]);
       expect(f.modelRequests).toHaveLength(1);
       expect(f.job()).toMatchObject({ state: 'completed', reserved_cost_micros: 100, attempt: 1 });
@@ -182,28 +249,39 @@ describe('known-company selected research through actual startup and encrypted S
       expect(detail.snapshot.portfolio).toEqual([]); expect(detail.snapshot.unknowns).toEqual(expect.arrayContaining(['portfolio', 'pain']));
       expect(detail.snapshot.routes).toEqual([]);
       expect(detail.snapshot.claims.some(claim => claim.key === 'pain' || claim.kind === 'prospect_stated_problem')).toBe(false);
-      const persisted = f.job();
+      const persistedJob = f.job();
       expect(await f.api.getCompanyResearchStatus(selected)).toEqual(result);
       expect(await f.api.researchCompany(selected)).toEqual(result);
-      expect(f.job()).toEqual(persisted); expect(f.modelRequests).toHaveLength(1); expect(f.pageRequests).toEqual([aboutUrl]);
+      expect(f.job()).toEqual(persistedJob); expect(f.modelRequests).toHaveLength(1); expect(f.pageRequests).toEqual([aboutUrl]);
       expect(f.database.raw.prepare('SELECT id FROM pm_accounts').all()).toEqual([{ id: selected.accountId }]);
       noDiscovery(f);
     } finally { await f.close(); }
   }, 15000);
 
-  it.each(['failure', 'invalid-quote'] as const)('parks %s without admission, retains reservation and never retries the same command', async mode => {
-    const f = await fixture(mode);
+  it.each([['failure', false], ['invalid-quote', false], ['failure', true], ['invalid-quote', true]] as const)('parks %s without admission or retry (persisted activation: %s)', async (mode, persisted) => {
+    const f = await fixture(mode, 100, undefined, persisted);
     try {
-      const selected = seed(f);
+      const selected = persisted ? await publicSeed(f) : seed(f);
+      expect(await f.api.getCompanyResearchStatus(selected)).toMatchObject({ state: 'not_recorded' });
+      expect(f.events).toEqual([]); expect(f.job()).toBeUndefined();
+      if (persisted) await f.activate();
       const result = await f.api.researchCompany(selected);
       expect(result).toMatchObject({ ...selected, state: 'parked', receipt: null });
       expect(f.job()).toMatchObject({ state: 'parked', reserved_cost_micros: 100, cost_micros: null, attempt: 1 });
       const detail = await f.api.getCompany({ accountId: selected.accountId });
       expect(detail.sources).toEqual([]); expect(detail.snapshot.claims).toEqual([]); expect(detail.snapshot.routes).toEqual([]);
       expect(detail.snapshot.account.version).toBe(1);
-      const persisted = f.job();
+      const persistedJob = f.job();
       expect(await f.api.researchCompany(selected)).toEqual(result); expect(await f.api.getCompanyResearchStatus(selected)).toEqual(result);
-      expect(f.job()).toEqual(persisted); expect(f.modelRequests).toHaveLength(1); expect(f.pageRequests).toEqual([aboutUrl]);
+      expect(f.job()).toEqual(persistedJob); expect(f.modelRequests).toHaveLength(1); expect(f.pageRequests).toEqual([aboutUrl]);
+      if (persisted) {
+        await f.restart();
+        expect(f.app.companyResearch).toBeDefined();
+        expect(await f.api.researchCompany(selected)).toEqual(result);
+        expect(await f.api.getCompanyResearchStatus(selected)).toEqual(result);
+        expect(f.job()).toEqual(persistedJob);
+        expect(f.modelRequests).toHaveLength(1); expect(f.pageRequests).toEqual([aboutUrl]);
+      }
       noDiscovery(f);
     } finally { await f.close(); }
   }, 15000);
@@ -279,3 +357,101 @@ describe('known-company selected research through actual startup and encrypted S
     } finally { await f.close(); }
   }, 15000);
 });
+
+
+it('loads persisted approval in a fresh runtime, replays without work, and pauses/resumes only explicitly', async () => {
+  const f = await fixture('known', 100, undefined, true);
+  try {
+    const selected = await publicSeed(f);
+    const saved = await f.activate();
+    const result = await f.api.researchCompany(selected);
+    expect(result.state).toBe('completed');
+    const detail = await f.api.getCompany({ accountId: selected.accountId });
+    const job = f.job();
+    const before = [...f.events];
+    await f.restart();
+    expect(f.app.companyResearch).toBeDefined();
+    expect((await f.publicApi.delegation.status()).configuration).toEqual(saved);
+    expect(await f.api.getCompany({ accountId: selected.accountId })).toEqual({ ...detail, generatedAt: expect.any(String) });
+    expect(await f.api.getCompanyResearchStatus(selected)).toEqual(result);
+    expect(await f.api.researchCompany(selected)).toEqual(result);
+    expect(f.job()).toEqual(job); expect(f.events).toEqual(before);
+    const paused = await f.publicApi.delegation.configure({ expectedRevision: saved.revision,
+      configuration: { ...saved.configuration, state: 'paused' } });
+    expect(paused.revision).toBe(2); expect(f.app.companyResearch).toBeUndefined();
+    const next = { ...selected, commandId: randomUUID() };
+    expect(await f.api.researchCompany(next)).toMatchObject({ state: 'held', reason: 'research_unavailable' });
+    expect(await f.api.getCompanyResearchStatus(next)).toMatchObject({ state: 'not_recorded' });
+    expect(await f.api.getCompany({ accountId: selected.accountId })).toEqual({ ...detail, generatedAt: expect.any(String) });
+    await f.restart();
+    expect((await f.publicApi.delegation.status()).configuration).toEqual(paused);
+    expect(f.app.companyResearch).toBeUndefined();
+    await expect(f.publicApi.delegation.configure({ expectedRevision: 1, configuration: saved.configuration })).rejects.toThrow();
+    expect((await f.publicApi.delegation.status()).configuration).toEqual(paused);
+    const resumed = await f.publicApi.delegation.configure({ expectedRevision: 2, configuration: saved.configuration });
+    expect(resumed.revision).toBe(3); expect(f.app.companyResearch).toBeDefined();
+    expect(await f.api.getCompanyResearchStatus(next)).toMatchObject({ state: 'not_recorded' });
+    expect(await f.api.researchCompany(selected)).toEqual(result);
+    expect(f.events).toEqual(before); expect(f.job()).toEqual(job);
+    expect(f.modelRequests).toHaveLength(1); expect(f.pageRequests).toEqual([aboutUrl]);
+    noDiscovery(f);
+  } finally { await f.close(); }
+}, 15000);
+
+
+it('executes a NEW fictional selected command after active persisted restart before any reconfigure', async () => {
+  const f = await fixture('known', 100, undefined, true);
+  try {
+    const saved = await f.activate();
+    const previousResearch = f.app.companyResearch;
+    const previousManagerCount = f.discoveryGuards.length;
+    await f.restart();
+    // Check reconstruction immediately, not after a configuration callback or receipt replay.
+    expect(f.app.companyResearch).toBeDefined();
+    expect(f.app.companyResearch).not.toBe(previousResearch);
+    expect(f.discoveryGuards.length).toBeGreaterThan(previousManagerCount);
+    expect((await f.publicApi.delegation.status()).configuration).toEqual(saved);
+    expect(f.events).toEqual([]); expect(f.job()).toBeUndefined();
+    expect(f.pageRequests).toEqual([]); expect(f.modelRequests).toEqual([]);
+
+    // First-ever selected execution, created after reopen via public IPC. This is not
+    // a retry of completed/parked work, nor the saved preparation command.
+    const selected = await publicSeed(f);
+    expect(selected.commandId).not.toBe(saved.configuration.research!.preparationCommandId);
+    expect(await f.api.getCompanyResearchStatus(selected)).toMatchObject({ ...selected, state: 'not_recorded' });
+    expect(f.database.raw.prepare('SELECT * FROM pm_account_research_jobs').all()).toEqual([]);
+    expect(f.events).toEqual([]);
+    f.expectReservationFor(selected);
+    const result = await f.api.researchCompany(selected);
+    expect(result).toEqual({ ...selected, state: 'completed', reason: null,
+      receipt: { accountId: selected.accountId, version: 2, duplicate: false } });
+    expect(f.events).toEqual(['resolve', 'page', 'model']);
+    expect(f.pageRequests).toEqual([aboutUrl]); expect(f.modelRequests).toHaveLength(1);
+    expect(f.database.raw.prepare('SELECT * FROM pm_account_research_jobs').all()).toEqual([expect.objectContaining({
+      command_id: selected.commandId, account_id: selected.accountId,
+      state: 'completed', reserved_cost_micros: 100, attempt: 1,
+    })]);
+    const detail = await f.api.getCompany({ accountId: selected.accountId });
+    expect(detail.sources).toHaveLength(1);
+    expect(detail.sources[0]).toMatchObject({ url: aboutUrl, permitted: true,
+      sha256: createHash('sha256').update(html).digest('hex'),
+      excerpt: [...Object.values(published), 'Business email: team@example.invalid', 'Business phone: +14155550123'].join('\n\n'),
+    });
+    expect(detail.snapshot.claims).toHaveLength(5);
+    expect(companyDraftFacts(detail)).toHaveLength(5);
+    for (const [key, value] of Object.entries(published)) {
+      expect(detail.snapshot.claims).toContainEqual({ key, value, kind: 'fact', evidenceIds: [detail.sources[0]!.id] });
+      const fact = companyDraftFacts(detail).find(candidate => candidate.text.includes(JSON.stringify({ key, value })));
+      expect(fact).toBeDefined();
+      expect(fact!.text).toContain(JSON.stringify(detail.sources[0]!.id));
+      expect(fact!.text).toContain(aboutUrl);
+    }
+    expect(detail.snapshot.portfolio).toEqual([]); expect(detail.snapshot.routes).toEqual([]);
+    expect(detail.snapshot.unknowns).toEqual(expect.arrayContaining(['portfolio', 'pain']));
+    expect(detail.snapshot.claims.some(claim => claim.key === 'pain' || claim.kind === 'prospect_stated_problem')).toBe(false);
+    expect(f.database.raw.prepare('SELECT id FROM pm_accounts').all()).toEqual([{ id: selected.accountId }]);
+    expect((await f.publicApi.delegation.status()).configuration).toEqual(saved);
+    expect(await f.api.getCompanyResearchStatus(selected)).toEqual(result);
+    noDiscovery(f);
+  } finally { await f.close(); }
+}, 15000);

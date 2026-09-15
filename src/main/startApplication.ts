@@ -1,3 +1,4 @@
+import { validateCompanyResearchConfiguration, type CompanyResearchStartupConfiguration } from './research/companyResearchConfiguration';
 import {accountFingerprint} from './domain/accounts/accountEvidence';
 import {constants as fsConstants} from 'node:fs';
 import {open as openNativeFile} from 'node:fs/promises';
@@ -9,15 +10,14 @@ import { ResearchSetupRequestStore } from './delegation/researchSetupRequestStor
 import { createDelegationRuntime, type DelegationRuntime } from './delegation/delegationRuntime';
 import { SqlDelegationConfiguration } from './delegation/delegationSync';
 import type { AppDatabase } from './db/database';
-import { z } from 'zod';
 import { AccountRepository } from './domain/accounts/accountRepository';
 import { selectedResearchSchema, type SelectedResearch, type LocalCompanyResearchStatus } from '../shared/contracts/localWorkspaceContract';
 import type { SelectedCompanyResearchPort } from './workspace/localWorkspaceProvider';
 import { SqlDiscoveryReservationStore } from './delegation/discoveryReservationStore';
 import { createCompanyDiscoveryProvider } from './research/companyDiscoveryProvider';
 import { createCompanyPageProvider, type PageHttp } from './research/companyPageProvider';
-import { createFetchedReceiptPolicy, companySourcePolicy } from './research/companySourcePolicy';
-import { createCompanyPreparation, createCompanyResearchWorker, discoveryInputFingerprint, type CompanyPreparationConfiguration } from './research/companyResearchWorker';
+import { createFetchedReceiptPolicy } from './research/companySourcePolicy';
+import { createCompanyPreparation, createCompanyResearchWorker } from './research/companyResearchWorker';
 import type { AccountResearchStore, DiscoveryReservationStore } from './research/companyResearchTypes';
 import { createEmailService } from './outreach/emailService';
 import { createOutreachProviders } from './outreach/providers/outreachProviders';
@@ -227,11 +227,7 @@ export function createStartupPhoneBindings(options: ApplicationStartupOptions, r
   });
 }
 
-export type CompanyResearchStartupConfiguration = CompanyPreparationConfiguration & {
-  maxAccountBudgetMicros: number;
-  /** Explicit permitted public URLs, never a model-provided boolean. */
-  permittedSources: readonly string[];
-};
+export type { CompanyResearchStartupConfiguration } from './research/companyResearchConfiguration';
 export type StartupCompanyResearch = SelectedCompanyResearchPort & {
   prepare(commandId: string, signal: AbortSignal): Promise<{ status: 'prepared' | 'blocked'; accountIds: string[] }>;
   runNext(signal: AbortSignal): Promise<'completed' | 'parked' | 'idle'>;
@@ -241,10 +237,8 @@ export type StartupCompanyResearch = SelectedCompanyResearchPort & {
 function createStartupCompanyResearch(input: { runtime: FoundationRuntime; providers: ReturnType<typeof createOutreachProviders>;
   configuration: CompanyResearchStartupConfiguration; http?: PageHttp; resolve?: (hostname: string) => Promise<string[]> }) {
   const config = structuredClone(input.configuration);
-  discoveryInputFingerprint(config);
-  z.number().int().positive().max(Number.MAX_SAFE_INTEGER).parse(config.maxAccountBudgetMicros);
-  const permitted = new Set(z.array(z.string().url().max(2048)).max(500).parse(config.permittedSources));
-  if ([...permitted].some(url => companySourcePolicy(url) !== 'candidate')) throw new Error('Research source configuration invalid');
+  validateCompanyResearchConfiguration(config);
+  const permitted = new Set(config.permittedSources);
   const receipts = createFetchedReceiptPolicy();
   let locked = false; let closed = false; let lifetime = new AbortController();
   const flights = new Set<Promise<unknown>>();
