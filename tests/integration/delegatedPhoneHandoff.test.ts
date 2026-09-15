@@ -1,3 +1,8 @@
+import { openDatabase, closeDatabase } from '../../src/main/db/database';
+import { createTestWorkspaceKey } from '../fixtures/tempDatabase';
+import { listDelegatedActualCallAccountIds } from '../../src/main/domain/today/todayActualCallEvidence';
+import { resolveLocalDayInterval } from '../../src/main/domain/today/todayOrdering';
+import { LegacyWorkflowTransition } from '../../src/main/domain/workspace/legacyWorkflowTransition';
 import { createPhoneHandoffLauncher } from '../../src/main/communications/phoneHandoffLauncher';
 import { createDelegationRuntime } from '../../src/main/delegation/delegationRuntime';
 import { createDomainServices } from '../../src/main/domain/createDomainServices';
@@ -26,14 +31,17 @@ const cleanups: (() => void)[] = [];
 beforeEach(() => vi.stubGlobal('fetch', () => Promise.reject(new Error('Unconfigured network forbidden'))));
 afterEach(() => { try { cleanups.splice(0).reverse().forEach(fn => fn()); } finally { vi.unstubAllGlobals(); } });
 const now = '2026-09-08T14:00:00.000Z';
-async function fixture(admitPolicy = true) {
+async function fixture(admitPolicy = true, supportedFit = false, secondRoute = false) {
   const local = await createPmFixture(); cleanups.push(local.close);
   let at = now; const clock = { now: () => at }; const workspaceId = randomUUID();
   const repo = new AccountRepository({ database: local.db, clock, ids: { next: randomUUID }, sourcePolicy: { attest: s => s.url === 'https://example.invalid/team' } });
   const account = repo.create({ commandId: randomUUID(), name: 'Fictional Phone PM', domain: null });
-  repo.admitEvidence({ commandId: randomUUID(), accountId: account.id, expectedVersion: 1, claims: [],
+  repo.admitEvidence({ commandId: randomUUID(), accountId: account.id, expectedVersion: 1, claims: supportedFit ? [
+      { key: 'residential_scope', kind: 'fact', value: 'Residential property management', evidenceIds: ['source'] },
+      { key: 'operating_footprint', kind: 'fact', value: 'Regional operator', evidenceIds: ['source'] },
+    ] : [],
     sources: [{ id: 'source', url: 'https://example.invalid/team', fetchedAt: now, sha256: 'a'.repeat(64), excerpt: 'Fictional switchboard and separately attested compliance evidence', permitted: true }],
-    routes: [{ id: 'route', accountId: account.id, personId: null, channel: 'phone', value: '+14015550100', purpose: 'business', evidenceIds: ['source'], verification: 'published' }] });
+    routes: ['route', ...(secondRoute ? ['later-route'] : [])].map(id => ({ id, accountId: account.id, personId: null as string | null, channel: 'phone', value: id === 'route' ? '+14015550100' : '+14015550101', purpose: 'business', evidenceIds: ['source'], verification: 'published' })) });
   const snapshot = repo.snapshot(account.id, now);
   const policy: RoutePolicyReceipt = { id: randomUUID(), accountId: account.id, routeId: 'route', routeVersion: 1, canonicalTarget: '+14015550100', evidenceFingerprint: snapshot.fingerprint,
     revision: 1, evidenceRef: 'source', evidenceIds: ['source'], provenance: 'fictional-compliance-attestor', observedAt: now, effectiveAt: now, expiresAt: '2026-09-09T14:00:00.000Z',
@@ -260,4 +268,201 @@ it('preserves final native capability currency and does not count unavailable ha
   expect(await bridge.begin(f.request)).toMatchObject({ status: 'handoff', result: { status: 'unavailable', reasonCode: 'phone_route_unverified' } });
   expect(opens).toEqual([]); expect(f.db.raw.prepare('SELECT * FROM campaign_step_receipts').all()).toEqual([]);
   expect(await bridge.begin(f.request)).toMatchObject({ status: 'already_started' });
+});
+
+async function todayFixture(secondRoute = false) {
+  const f = await fixture(true, true, secondRoute);
+  const services = createDomainServices({ database: f.db, clock: f.clock, ids: { next: randomUUID }, expectedWorkspaceId: f.workspaceId });
+  const controlRepo = new AccountRepository({ database: f.db, clock: f.clock, ids: { next: () => `zz-${randomUUID()}` }, sourcePolicy: { attest: () => true } });
+  const control = controlRepo.create({ commandId: randomUUID(), name: 'Fictional Control PM', domain: null });
+  controlRepo.admitEvidence({ commandId: randomUUID(), accountId: control.id, expectedVersion: 1,
+    claims: f.snapshot.claims.map(claim => ({ ...claim, evidenceIds: ['control-source'] })), sources: [{ id: 'control-source', url: 'https://example.invalid/team', fetchedAt: now, sha256: 'd'.repeat(64), excerpt: 'Fictional regional residential operator switchboard', permitted: true }],
+    routes: [{ id: 'control-route', accountId: control.id, personId: null, channel: 'phone', value: '+14015550199', purpose: 'business', evidenceIds: ['control-source'], verification: 'published' }] });
+  new LegacyWorkflowTransition({ database: f.db, unitOfWork: services.unitOfWork, clock: f.clock, ids: { next: randomUUID } }).transitionWorkflow({ commandId: randomUUID(), manifestId: randomUUID(), expectedMode: 'legacy' });
+  const settings = services.workspaceSettings.readMeetingFirstAccountCallSettings();
+  services.unitOfWork.immediate(() => services.workspaceSettings.updateMeetingFirstAccountCallSettingsCas({ expectedRevision: settings.revision, newCallSlots: 1, totalCallCapacity: null, updatedAt: now }));
+  const read = () => services.daily.get();
+  const complete = async (outcome: 'connected' | 'no_answer' | 'voicemail' | 'busy' | 'wrong_number' | 'cancelled' | 'unknown' | 'not_called' | 'opt_out', sync = true) => {
+    const handoff = f.repository.getManualHandoff((f.db.raw.prepare('SELECT handoff_id FROM delegated_manual_handoffs').get() as { handoff_id: string }).handoff_id)!;
+    const command = delegationCommandSchema.parse({ commandId: randomUUID(), workspaceId: f.workspaceId, accountId: f.account.id,
+      expectedAuthorityGeneration: f.repository.authority(f.account.id)!.generation, expectedVersion: f.repository.executionVersion(f.account.id), kind: 'complete-manual',
+      payload: { handoffId: handoff.handoffId, targetHash: handoff.targetHash, outcome: { actionId: handoff.actionId, channel: 'call', outcome, observedAt: f.clock.now(), evidenceRef: randomUUID() } } });
+    await f.client.submit(command);
+    if (sync) { expect((await f.client.sync(new AbortController().signal)).ownerFresh).toBe(true); expect(f.repository.commandStatus(command.commandId)?.status).toBe('applied'); }
+    return command;
+  };
+  const actualIds = () => {
+    const interval = resolveLocalDayInterval({ generatedAt: f.clock.now(), timezone: services.workspaceSettings.read().timezone });
+    return listDelegatedActualCallAccountIds(f.db, { accountIds: [f.account.id, control.id], from: interval.localDayStartAt, to: interval.localDayEndAt, generatedAt: f.clock.now() });
+  };
+  const nominationsOnly = () => services.today.planMeetingFirstAccountCalls({ due: [], ranked: read().accounts, generatedAt: f.clock.now() });
+  return { ...f, services, control, read, complete, actualIds, nominationsOnly };
+}
+
+it('Today excludes a real owner-applied delegated no_answer from new nominations and fills the slot with the control', async () => {
+  const f = await todayFixture();
+  const before = f.read();
+  expect(before.workflowMode).toBe('meeting_first');
+  expect(before.calls.accountIds).toEqual([f.account.id, f.control.id]); // due plus one genuine new nomination
+  expect(before.campaigns[0].enrollments[0]).toMatchObject({ state: 'active', personId: null });
+  expect(await f.makeBridge().begin(f.request)).toMatchObject({ status: 'handoff', result: { status: 'handoff_accepted' } });
+  await f.complete('no_answer');
+  const after = f.read();
+  expect(after.campaigns[0].enrollments[0].state).toBe('completed');
+  expect(f.db.raw.prepare('SELECT * FROM pm_account_outbound_results').all()).toEqual([]);
+  expect(after.accounts).toEqual(before.accounts);
+  expect(after.calls.accountIds).toEqual([f.control.id]);
+});
+
+it.each(['context-only', 'route-and-context'] as const)('Today retains historical actual call after %s change then stop then completion', async change => {
+  const f = await todayFixture(change === 'route-and-context');
+  const enrollment = () => f.read().campaigns[0].enrollments[0];
+  expect(await f.makeBridge().begin(f.request)).toMatchObject({ status: 'handoff', result: { status: 'handoff_accepted' } });
+  const selectedRouteId = change === 'context-only' ? 'route' : 'later-route';
+  await f.apply('campaign-command', { kind: 'campaign.route', enrollmentId: 'enrollment', expectedEnrollmentVersion: enrollment().version,
+    selectedRouteId, contextRevision: 2, executionContextId: 'later-context' });
+  expect(enrollment()).toMatchObject({ selectedRouteId, selectedRouteVersion: 1, contextRevision: 2, executionContextId: 'later-context', state: 'active' });
+  await f.apply('campaign-command', { kind: 'campaign.state', enrollmentId: 'enrollment', expectedEnrollmentVersion: enrollment().version, state: 'stopped', reason: 'Fictional campaign stop before late factual report' });
+  expect(enrollment().state).toBe('stopped');
+  expect(f.actualIds()).toEqual([]);
+  expect(f.read().calls.accountIds).toEqual([f.account.id]); // no due obligation masks the new nomination
+  const beforeAccounts = f.read().accounts;
+  const command = await f.complete('no_answer');
+  const row = f.db.raw.prepare("SELECT event_json FROM delegated_applied_events WHERE json_extract(event_json, '$.receipt.commandId')=?").get(command.commandId) as { event_json: string };
+  const event = JSON.parse(row.event_json);
+  expect(event.campaign.enrollment).toMatchObject({ id: 'enrollment', selectedRouteId, selectedRouteVersion: 1, contextRevision: 2, executionContextId: 'later-context', state: 'stopped' });
+  expect(event.campaign.evidence).toMatchObject({ enrollmentId: 'enrollment', actionId: 'action', routeId: 'route', routeVersion: 1, contextRevision: 1, executionContextId: 'context', outcome: 'no_answer', state: 'human_reported_sent' });
+  expect(event.campaign.evidence.conflict).toBeUndefined();
+  expect(event.campaign.cap).toMatchObject({ reserved: 0, sent: 1 });
+  expect(f.db.raw.prepare('SELECT * FROM pm_account_outbound_results').all()).toEqual([]);
+  expect(f.read().accounts).toEqual(beforeAccounts);
+  expect(enrollment().state).toBe('stopped');
+  expect(f.calls).toEqual(['+14015550100']);
+  expect.soft(f.actualIds()).toEqual([f.account.id]);
+  expect(f.read().calls.accountIds).toEqual([f.control.id]);
+});
+
+it.each(['accepted', 'unknown', 'cancelled', 'not_called', 'pending'] as const)('Today does not count %s as an actual delegated call', async mode => {
+  const f = await todayFixture();
+  expect(f.nominationsOnly().accountIds).toEqual([f.account.id]);
+  expect(await f.makeBridge().begin(f.request)).toMatchObject({ status: 'handoff' });
+  if (mode !== 'accepted') {
+    if (mode === 'pending') f.offline();
+    const command = await f.complete(mode === 'pending' ? 'no_answer' : mode, mode !== 'pending');
+    if (mode === 'pending') expect(f.repository.commandStatus(command.commandId)?.status).toBe('pending');
+  }
+  expect(f.actualIds()).toEqual([]);
+  expect(f.nominationsOnly().accountIds).toEqual([f.account.id]);
+  expect(f.read().calls.accountIds).toContain(f.account.id);
+});
+
+it.each(['connected', 'voicemail', 'busy', 'wrong_number'] as const)('Today counts owner-applied actual %s without inventing local B4 evidence', async outcome => {
+  const f = await todayFixture();
+  expect(await f.makeBridge().begin(f.request)).toMatchObject({ status: 'handoff' });
+  await f.complete(outcome);
+  expect(f.actualIds()).toEqual([f.account.id]);
+  expect(f.read().calls.accountIds).toEqual([f.control.id]);
+  expect(f.db.raw.prepare('SELECT * FROM pm_account_outbound_results').all()).toEqual([]);
+});
+
+it('Today resolves unknown on the original handoff once, remains read-only, and retains earlier actual evidence after opt-out', async () => {
+  const f = await todayFixture();
+  expect(await f.makeBridge().begin(f.request)).toMatchObject({ status: 'handoff' });
+  await f.complete('unknown');
+  expect(f.actualIds()).toEqual([]);
+  const command = await f.complete('no_answer');
+  await f.client.submit(command);
+  await f.client.sync(new AbortController().signal);
+  expect(f.actualIds()).toEqual([f.account.id]);
+  await f.complete('opt_out');
+  const changes = f.db.raw.prepare('SELECT total_changes() AS n').get();
+  const paths = [...f.paths];
+  expect(f.actualIds()).toEqual([f.account.id]);
+  const restarted = createDomainServices({ database: f.db, clock: f.clock, ids: { next: () => { throw Error('read allocated an ID'); } }, expectedWorkspaceId: f.workspaceId });
+  expect(restarted.daily.get().calls.accountIds).toEqual([f.control.id]);
+  expect(f.read().calls.accountIds).toEqual([f.control.id]);
+  expect(f.db.raw.prepare('SELECT total_changes() AS n').get()).toEqual(changes);
+  expect(f.paths).toEqual(paths);
+  expect(f.calls).toHaveLength(1);
+  // The isolated PM fixture uses this public test key, never a user workspace key.
+  const key = createTestWorkspaceKey();
+  closeDatabase(f.db);
+  const reopened = openDatabase({ path: f.db.path, key });
+  cleanups.push(() => { closeDatabase(reopened); key.bytes.fill(0); });
+  const recovered = createDomainServices({ database: reopened, clock: f.clock, ids: { next: () => { throw Error('recovery allocated an ID'); } }, expectedWorkspaceId: f.workspaceId });
+  const recoveredChanges = reopened.raw.prepare('SELECT total_changes() AS n').get();
+  expect(recovered.daily.get().calls.accountIds).toEqual([f.control.id]);
+  expect(reopened.raw.prepare('SELECT total_changes() AS n').get()).toEqual(recoveredChanges);
+  expect(f.paths).toEqual(paths);
+  expect(f.calls).toHaveLength(1);
+});
+
+it('Today retains a genuine new due campaign obligation even after an actual delegated call today', async () => {
+  const f = await todayFixture();
+  expect(await f.makeBridge().begin(f.request)).toMatchObject({ status: 'handoff' });
+  await f.complete('no_answer');
+  expect(f.read().calls.accountIds).toEqual([f.control.id]);
+  const version = { ...f.read().campaigns[0].version, id: 'retained-due-version', campaignId: 'retained-due-campaign', approvedAt: null as string | null,
+    steps: [{ id: 'retained-due-step', channel: 'call', condition: 'initial', delayHours: 0 }] };
+  await f.apply('campaign-command', { kind: 'campaign.version', version });
+  await f.apply('campaign-command', { kind: 'campaign.approve', campaignVersionId: version.id, snapshotHash: fingerprint(version), approvedAt: now });
+  await f.apply('campaign-command', { kind: 'campaign.enroll', enrollmentId: 'retained-due-enrollment', campaignVersionId: version.id, selectedRouteId: 'route', executionContextId: 'retained-due-context', contextRevision: 1 });
+  expect(f.actualIds()).toEqual([f.account.id]);
+  expect(f.read().calls.accountIds).toEqual([f.account.id, f.control.id]);
+  const settings = f.services.workspaceSettings.readMeetingFirstAccountCallSettings();
+  f.services.unitOfWork.immediate(() => f.services.workspaceSettings.updateMeetingFirstAccountCallSettingsCas({ expectedRevision: settings.revision, newCallSlots: 1, totalCallCapacity: 0, updatedAt: now }));
+  expect(f.read().calls).toMatchObject({ accountIds: [f.account.id, f.control.id], workloadConflict: true });
+});
+
+it.each([
+  ['America/New_York', '2026-09-09T03:59:59.999Z', '2026-09-09T04:00:00.000Z', false],
+  ['America/New_York', '2026-09-09T04:00:00.000Z', '2026-09-09T04:00:00.000Z', true],
+  ['Asia/Tokyo', '2026-09-08T14:59:59.999Z', '2026-09-08T15:00:00.000Z', false],
+  ['Asia/Tokyo', '2026-09-08T15:00:00.000Z', '2026-09-08T15:00:00.000Z', true],
+] as const)('Today uses the half-open founder day in %s for observed %s', async (timezone, observedAt, readAt, counts) => {
+  const f = await todayFixture();
+  f.db.raw.prepare('UPDATE workspace_settings SET timezone=?').run(timezone);
+  expect(await f.makeBridge().begin(f.request)).toMatchObject({ status: 'handoff' });
+  f.setTime(observedAt);
+  await f.complete('no_answer');
+  expect(f.actualIds()).toEqual([f.account.id]);
+  f.setTime(readAt);
+  expect(f.actualIds()).toEqual(counts ? [f.account.id] : []);
+  expect(f.read().calls.accountIds).toEqual(counts ? [f.control.id] : [f.account.id]);
+});
+
+it('Today rejects contradictory actual evidence after a definitive not_called report', async () => {
+  const f = await todayFixture();
+  expect(await f.makeBridge().begin(f.request)).toMatchObject({ status: 'handoff' });
+  await f.complete('not_called');
+  await f.complete('no_answer');
+  expect(f.db.raw.prepare("SELECT outcome FROM campaign_step_receipts WHERE outcome LIKE 'conflict:%'").all()).toEqual([{ outcome: 'conflict:contradictory_finalized_outcome:no_answer' }]);
+  expect(f.actualIds()).toEqual([]);
+  expect(f.nominationsOnly().accountIds).toEqual([f.account.id]);
+});
+
+it.each(['unconsumed', 'workspace', 'action', 'target', 'context', 'generation', 'handoff-event'] as const)('Today does not count crossed or missing %s evidence', async mode => {
+  const f = await todayFixture();
+  expect(await f.makeBridge().begin(f.request)).toMatchObject({ status: 'handoff' });
+  await f.complete('no_answer');
+  expect(f.actualIds()).toEqual([f.account.id]);
+  if (mode === 'unconsumed') f.db.raw.prepare('UPDATE delegated_manual_handoffs SET consumed_at=NULL').run();
+  if (mode === 'workspace') f.db.raw.prepare("UPDATE delegated_manual_handoffs SET workspace_id='foreign'").run();
+  if (mode === 'action') f.db.raw.prepare("UPDATE delegated_manual_handoffs SET action_id='other-action'").run();
+  if (mode === 'target') f.db.raw.prepare('UPDATE delegated_manual_handoffs SET target_hash=?').run('a'.repeat(64));
+  if (mode === 'context') f.db.raw.prepare("UPDATE delegated_manual_handoffs SET context_revision='other-context'").run();
+  if (mode === 'generation') f.db.raw.prepare('UPDATE delegated_manual_handoffs SET authority_generation=9').run();
+  if (mode === 'handoff-event') f.db.raw.prepare("UPDATE delegated_manual_handoffs SET event_id=(SELECT event_id FROM delegated_manual_outcomes LIMIT 1)").run();
+  expect(f.actualIds()).toEqual([]);
+  expect(f.nominationsOnly().accountIds).toEqual([f.account.id]);
+});
+
+it('Today limits completion evidence to selected accounts and preserves historical calls after owner revocation', async () => {
+  const f = await todayFixture();
+  expect(await f.makeBridge().begin(f.request)).toMatchObject({ status: 'handoff' });
+  await f.apply('revoke', { reason: 'Fictional explicit revoke' });
+  await f.complete('no_answer');
+  expect(f.actualIds()).toEqual([f.account.id]);
+  expect(listDelegatedActualCallAccountIds(f.db, { accountIds: [f.control.id], from: '2026-09-08T00:00:00.000Z', to: '2026-09-09T00:00:00.000Z', generatedAt: now })).toEqual([]);
+  expect(f.read().calls.accountIds).toEqual([f.control.id]);
 });
