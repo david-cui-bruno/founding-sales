@@ -73,3 +73,33 @@ export function mailContextTuples(accountId: string, mailboxSubject: string, inp
     .map(p => ({ providerThreadId: p.thread.providerThreadId, revision: p.revision, contextRevision: p.contextRevision }))
     .sort((a, b) => a.providerThreadId < b.providerThreadId ? -1 : a.providerThreadId > b.providerThreadId ? 1 : 0);
 }
+
+/** Text-only ordinary saved-reply operations. Neither acknowledgement grants authority. */
+export const reconcileReplyDraftSchema = z.strictObject({ accountId: id, draftId: id });
+export const editReplyDraftSchema = reconcileReplyDraftSchema.extend({
+  expectedRevision: scopeRevision, expectedThreadRevision: scopeRevision, expectedContextRevision: id,
+  subject: accountReplyDraftSchema.shape.subject, body: accountReplyDraftSchema.shape.body,
+});
+export type ReconcileReplyDraft = z.infer<typeof reconcileReplyDraftSchema>;
+export type EditReplyDraft = z.infer<typeof editReplyDraftSchema>;
+export const replyDraftResultSchema = z.strictObject({ draft: accountReplyDraftSchema, stale: z.boolean(), capability: z.literal('held') });
+export type ReplyDraftResult = z.infer<typeof replyDraftResultSchema>;
+export const ownerReplyDraftRequestSchema = z.strictObject({ workspaceId: id, expectedAuthorityGeneration: z.number().int().nonnegative().safe(), previousDraft: accountReplyDraftSchema,
+  edit: z.strictObject({ subject: accountReplyDraftSchema.shape.subject, body: accountReplyDraftSchema.shape.body }).optional(),
+});
+export type OwnerReplyDraftRequest = z.infer<typeof ownerReplyDraftRequestSchema>;
+/** A canonical import may recover exactly one edit, never rebase or create a draft. */
+export function replyDraftIdentity(draft: AccountReplyDraft) {
+  const { id, accountId, threadId, mailboxSubject, threadRevision, contextRevision, recipient, sender, evidenceIds } = draft;
+  return JSON.stringify({ id, accountId, threadId, mailboxSubject, threadRevision, contextRevision, recipient, sender, evidenceIds });
+}
+export function assertReplyDraftLineage(previous: AccountReplyDraft, canonical: AccountReplyDraft): void {
+  if (replyDraftIdentity(previous) !== replyDraftIdentity(canonical) || canonical.revision < previous.revision || canonical.revision > previous.revision + 1 || canonical.updatedAt < previous.updatedAt)
+    throw Error('reply_draft_lineage_conflict');
+  if (canonical.revision === previous.revision ? JSON.stringify(accountReplyDraftSchema.parse(previous)) !== JSON.stringify(accountReplyDraftSchema.parse(canonical)) : canonical.generation !== 'edited')
+    throw Error('reply_draft_lineage_conflict');
+}
+export function boundReplyDraftResult(request: ReconcileReplyDraft | EditReplyDraft) {
+  return replyDraftResultSchema.refine(result => result.draft.accountId === request.accountId && result.draft.id === request.draftId &&
+    (!('expectedRevision' in request) || result.draft.revision === request.expectedRevision + 1 && result.draft.threadRevision === request.expectedThreadRevision && result.draft.contextRevision === request.expectedContextRevision && result.draft.subject === request.subject && result.draft.body === request.body && result.draft.generation === 'edited'), 'reply_draft_response_mismatch');
+}

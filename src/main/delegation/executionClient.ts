@@ -1,3 +1,4 @@
+import { ownerReplyDraftRequestSchema, replyDraftResultSchema, assertReplyDraftLineage, type OwnerReplyDraftRequest } from '../../shared/contracts/mailThreadContract';
 import {requestedFollowupDraftSchema,type RequestedFollowupDraft,prepareRequestedFollowupSchema,type PrepareRequestedFollowup} from '../../shared/contracts/requestedFollowupContract';
 import {workerPolicyRequestSchema,workerPolicyReceiptSchema} from '../../shared/contracts/workerPolicyContract';
 import { requestedOwnerContextSchema, ownerCheckpointSchema, configureResearchSourceSchema, ownerResearchSourceSchema } from '../../shared/contracts/ownerCommandContract';
@@ -123,6 +124,14 @@ export class ExecutionClient {
       // HTTP acceptance never replaces transactional owner-applied event proof.
     } catch { /* Durable pending outbox survives an unavailable owner. No fallback. */ }
     return this.repository.commandStatus(command.commandId) ?? receipt;
+  }
+  async replyDraft(raw: OwnerReplyDraftRequest, signal: AbortSignal) {
+    const request = ownerReplyDraftRequestSchema.parse(raw);
+    if (request.workspaceId !== this.pairing.workspaceId) throw Error('reply_workspace_mismatch');
+    const result = replyDraftResultSchema.parse(await this.request('/reply/draft', signal, request));
+    assertReplyDraftLineage(request.previousDraft, result.draft);
+    if (request.edit && (result.draft.revision !== request.previousDraft.revision + 1 || result.draft.subject !== request.edit.subject || result.draft.body !== request.edit.body || result.draft.generation !== 'edited')) throw Error('reply_saved_draft_mismatch');
+    return result;
   }
   async requestedDraft(previousDraft:RequestedFollowupDraft,draft:RequestedFollowupDraft,signal:AbortSignal) {
     const saved=requestedFollowupDraftSchema.parse(await this.request('/requested-followup/draft',signal,{workspaceId:this.pairing.workspaceId,previousDraft,draft}));

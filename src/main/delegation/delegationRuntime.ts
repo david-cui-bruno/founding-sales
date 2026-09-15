@@ -1,3 +1,5 @@
+import { reconcileReplyDraftSchema, editReplyDraftSchema, boundReplyDraftResult, type ReconcileReplyDraft, type EditReplyDraft } from '../../shared/contracts/mailThreadContract';
+import { SqlThreadIntakeRepository } from '../outreach/threadIntakeRepository';
 import { delegatedPhoneStateRequestSchema, type GetPhoneHandoffStateRequest } from '../../shared/contracts/delegatedPhoneStateContract';
 import { readDelegatedPhoneHandoffState } from './delegatedPhoneState';
 import { z } from 'zod';
@@ -114,6 +116,37 @@ export function createDelegationRuntime(input:{databaseGate:{withDatabase<T>(fn:
   }};
   return {store,current,service:createRequestedFollowupService({store:editStore,clock:input.clock,id:randomUUID,model:request.mode==='model'?await input.requestedModel?.():undefined})};
  }
+ function ordinaryReply(raw: ReconcileReplyDraft | EditReplyDraft, editing: boolean) {
+  const editRequest = editing ? editReplyDraftSchema.parse(raw) : null;
+  const request = editRequest ?? reconcileReplyDraftSchema.parse(raw);
+  return run(async (database, signal) => {
+   const active = AbortSignal.any([signal, AbortSignal.timeout(15000)]), current = services(database, active);
+   const store = new SqlThreadIntakeRepository({ database, workspaceId: pairing!.workspaceId, clock: input.clock });
+   const saved = store.getReplyDraft(request.accountId, request.draftId);
+   if (!saved) throw Error('reply_draft_missing');
+   const prior = saved.draft, authority = current.repository.authority(prior.accountId);
+   const configuration = accountFingerprint(current.configuration.read());
+   const assertOwner = () => {
+    assertCurrent(active);
+    const owner = current.repository.authority(prior.accountId);
+    if (!authority || owner?.owner !== 'worker' || owner.state !== 'active' || owner.generation !== authority.generation || current.repository.hasPendingStop(prior.accountId) || accountFingerprint(current.configuration.read()) !== configuration) throw Error('reply_owner_changed');
+   };
+   assertOwner();
+   let edit: { subject: string; body: string } | undefined;
+   if (editRequest) {
+    const request = editRequest;
+    if (prior.threadRevision !== request.expectedThreadRevision || prior.contextRevision !== request.expectedContextRevision) throw Error('stale_thread');
+    if (prior.revision === request.expectedRevision) edit = { subject: request.subject, body: request.body };
+    else if (prior.revision !== request.expectedRevision + 1 || prior.subject !== request.subject || prior.body !== request.body || prior.generation !== 'edited') throw Error('stale_draft');
+   }
+   const result = await current.client.replyDraft({ workspaceId: pairing!.workspaceId, expectedAuthorityGeneration: authority!.generation, previousDraft: prior, ...(edit ? { edit } : {}) }, active);
+   assertOwner();
+   // Bind the requested revision/text before any local acknowledgement mutation.
+   boundReplyDraftResult(editRequest ?? request).parse(result);
+   const canonical = store.reconcileReplyDraft(prior, result.draft, assertOwner);
+   return boundReplyDraftResult(editRequest ?? request).parse({ ...canonical, stale: canonical.stale || result.stale, capability: 'held' });
+  });
+ }
  function createAdapter(handoffId?:string):InboundAdapter{return {id:'delegated-worker-mail',relevant:()=>pairing!==null,
   synchronize:(subject:OutboundSubject,external:AbortSignal)=>new Promise<{revision:string}>((resolve,reject)=>{
    const active=AbortSignal.any([lifetime.signal,external,AbortSignal.timeout(15000)]);
@@ -165,6 +198,8 @@ export function createDelegationRuntime(input:{databaseGate:{withDatabase<T>(fn:
  return {
   ...researchExtension,
   googleConnections,
+  reconcileReplyDraft:(raw:ReconcileReplyDraft)=>ordinaryReply(raw,false),
+  editReplyDraft:(raw:EditReplyDraft)=>ordinaryReply(raw,true),
   prepareRequestedFollowup:(raw:PrepareRequestedFollowup)=>{const request=prepareRequestedFollowupSchema.parse(raw);return run(async(database,signal)=>{const {service}=await requestedServices(database,signal,request);return service.prepareRequestedFollowup(request,signal);});},
   getRequestedFollowup:(raw:GetRequestedFollowup)=>{const request=getRequestedFollowupSchema.parse(raw);return run(async(database,signal)=>{
    if(!pairing)throw Error('pairing_unconfigured');const draft=savedDraft(database,request.accountId,request.draftId);if(!draft)return null;

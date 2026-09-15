@@ -1,3 +1,4 @@
+import { reconcileReplyDraftSchema, editReplyDraftSchema, boundReplyDraftResult, type ReconcileReplyDraft, type EditReplyDraft } from '../shared/contracts/mailThreadContract';
 import { delegatedPhoneStateRequestSchema, delegatedPhoneStateReplySchema, type GetPhoneHandoffStateRequest } from '../shared/contracts/delegatedPhoneStateContract';
 import { createRemoteGoogleConnectionsApi } from './apis/remoteGoogleConnectionsApi';
 import { createResearchSetupApi } from './apis/researchSetupApi';
@@ -46,6 +47,8 @@ export const createCallieApi = (invoker: IpcInvoker) => {
         client.requestNoInput('health:get', appHealthSchema),
     },
     delegation: {
+      reconcileReplyDraft: async (raw: ReconcileReplyDraft) => { const request = reconcileReplyDraftSchema.parse(raw); return client.request('outreach:reply-reconcile', reconcileReplyDraftSchema, boundReplyDraftResult(request), request); },
+      editReplyDraft: async (raw: EditReplyDraft) => { const request = editReplyDraftSchema.parse(raw); return client.request('outreach:reply-edit', editReplyDraftSchema, boundReplyDraftResult(request), request); },
       ...googleExtension,
       ...researchExtension,
       policyImport:{

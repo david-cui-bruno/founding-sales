@@ -90,7 +90,7 @@ export class DynamoThreadIntakeRepository {
     const thread = await this.getThread(accountId, draft.threadId);
     return { draft, stale: !thread || thread.revision !== draft.threadRevision || thread.contextRevision !== draft.contextRevision || await this.isSuppressed(accountId) };
   }
-  async saveReplyDraft(input: AccountReplyDraft, expectedRevision: number | null): Promise<AccountReplyDraft> {
+  async planReplyDraftSave(input: AccountReplyDraft, expectedRevision: number | null) {
     const draft = accountReplyDraftSchema.parse(input); const key = mailDraftKey(draft.accountId, draft.id);
     const previous = await this.store.get<unknown>(key);
     const thread = await this.store.get<unknown>(mailThreadKey(draft.accountId, draft.threadId));
@@ -100,10 +100,14 @@ export class DynamoThreadIntakeRepository {
     const current = authorityRecordSchema.parse(authority.data);
     if (current.authority.accountId !== draft.accountId) throw new Error('authority_identity_conflict');
     if (await this.isSuppressed(draft.accountId)) throw new Error('reply_suppressed');
-    await this.store.transact([this.store.put(key, draft, previous?.rev ?? null),
+    return { draft, authority, previous, items: [this.store.put(key, draft, previous?.rev ?? null),
       this.store.check(mailThreadKey(draft.accountId, draft.threadId), thread!.rev),
-      this.store.check(authorityKey, authority.rev, executionAuthorityFields(current)), this.store.absent(mailSuppressionKey(draft.accountId))]);
-    return draft;
+      this.store.check(authorityKey, authority.rev, executionAuthorityFields(current)), this.store.absent(mailSuppressionKey(draft.accountId))] };
+  }
+  async saveReplyDraft(input: AccountReplyDraft, expectedRevision: number | null): Promise<AccountReplyDraft> {
+    const plan = await this.planReplyDraftSave(input, expectedRevision);
+    await this.store.transact(plan.items);
+    return plan.draft;
   }
   async applyPage(page: ThreadPage, expected: MailCheckpoint | null, attemptId?: string): Promise<IntakeResult[]> {
     const checkpoint = mailCheckpointSchema.parse(page.nextCursor); const accountId = checkpoint.accountId;

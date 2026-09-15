@@ -1,3 +1,4 @@
+import { reconcileReplyDraftSchema, editReplyDraftSchema, replyDraftResultSchema, boundReplyDraftResult } from '../../shared/contracts/mailThreadContract';
 import { delegatedPhoneStateRequestSchema, delegatedPhoneStateSchema, delegatedPhoneStateReplySchema } from '../../shared/contracts/delegatedPhoneStateContract';
 import {googleConnectionSelectorSchema,googleConsentOpenedSchema} from '../../shared/contracts/remoteGoogleConnectionsContract';
 import {researchSetupApproveInputSchema,researchSetupSetStateInputSchema,researchSetupReceiptSchema,researchSetupStatusSchema} from '../../shared/contracts/researchSetupContract';
@@ -39,6 +40,8 @@ export function registerOutreachIpc(options:{provider:OutreachApi;delegation?:De
       }}));
     if(options.delegation){
       const d=options.delegation;
+      add('reply-reconcile', reconcileReplyDraftSchema, replyDraftResultSchema, async request => boundReplyDraftResult(request).parse(await d.reconcileReplyDraft(request)));
+      add('reply-edit', editReplyDraftSchema, replyDraftResultSchema, async request => boundReplyDraftResult(request).parse(await d.editReplyDraft(request)));
       if(d.researchSetup){
         const research=d.researchSetup;
         add('research-setup-status',null,researchSetupStatusSchema,()=>research.status());
