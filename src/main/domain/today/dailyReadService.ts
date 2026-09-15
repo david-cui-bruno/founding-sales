@@ -77,10 +77,33 @@ export class DailyReadService {
     }
     const plan = parse(() => today.planMeetingFirstAccountCalls({ due: input.accounts.filter(a => due.has(a.account.id)), ranked: input.accounts, generatedAt }));
     if (plan) input.calls = { accountIds: [...plan.accountIds], workloadConflict: plan.workloadConflict };
+    let pendingByAccount: Map<string, ReturnType<DelegationRepository['pendingCommands']>> | undefined;
+    let pendingFailure: { error: unknown } | undefined;
+    const pendingForAccount = (accountId: string) => {
+      if (pendingFailure) throw pendingFailure.error;
+      if (!pendingByAccount) {
+        try {
+          const index = new Map<string, ReturnType<DelegationRepository['pendingCommands']>>();
+          // Validate the entire workspace history before indexing, including undisplayed accounts.
+          for (const command of delegation.pendingCommands()) {
+            const commands = index.get(command.accountId) ?? [];
+            commands.push(command);
+            index.set(command.accountId, commands);
+          }
+          pendingByAccount = index;
+        } catch (error) {
+          // Replay failure inside each owner's parse boundary to preserve its issue count.
+          pendingFailure = { error };
+          throw error;
+        }
+      }
+      return pendingByAccount.get(accountId) ?? [];
+    };
     for (const account of input.accounts) {
       const owner = parse(() => {
         const authority = delegation.authority(account.account.id);
-        const pendingCommands = delegation.pendingCommands().filter(c => c.accountId === account.account.id).map(c => delegation.commandStatus(c.commandId)!);
+        // Stay lazy until authority succeeds. Zero accounts or all failed authorities never scan.
+        const pendingCommands = pendingForAccount(account.account.id).map(c => delegation.commandStatus(c.commandId)!);
         return dailyOwnerStatusSchema.parse({ accountId: account.account.id, authority, executionVersion: delegation.executionVersion(account.account.id), pendingCommands,
           status: pendingCommands.length ? 'pending' : authority?.owner === 'worker' ? 'owner_applied' : 'unknown' });
       });
