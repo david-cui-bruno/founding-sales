@@ -155,7 +155,7 @@ async function fixture(reviewedInbox = false) {
         expect(violations).toEqual([]);
         expect(paths.every(path => ['/commands', '/events', '/commands/reconcile'].includes(path))).toBe(true);
         expect(invocations.every(channel => ['daily:get', 'outreach:delegation-status', 'local-workspace:get',
-          'local-workspace:get-commitments', 'outreach:delegation-bootstrap', 'outreach:delegation-submit', 'outreach:delegation-sync'].includes(channel))).toBe(true);
+          'local-workspace:get-commitments', 'outreach:delegation-bootstrap', 'outreach:delegation-submit', 'outreach:delegation-sync', 'outreach:delegation-selected-account-freshness'].includes(channel))).toBe(true);
         expect(forbidden).not.toHaveBeenCalled();
       } };
 

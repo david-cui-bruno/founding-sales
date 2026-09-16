@@ -67,9 +67,23 @@ export const selectedAccountSuppressionSchema=z.strictObject({id,observedAt:inst
 export const bootstrapSelectedAccountCommandSchema=z.strictObject({...ownerCommandBase,kind:z.literal('bootstrap-selected-account'),payload:z.strictObject({record:accountRecordSchema,asOf:instant,expectedResearchRevision:revision.min(1).nullable(),suppression:z.array(selectedAccountSuppressionSchema).max(100)})});
 export const bootstrapSelectedAccountSchema=z.strictObject({commandId:z.uuid(),accountId:id});
 export const accountBootstrapPayloadSchema=z.strictObject({commandId:z.uuid(),recordFingerprint:hash,researchRevision:revision.min(1)});
+/** Explicit owner resubmission of the current saved record to a worker that already owns the company. Unlike
+ * bootstrap, generation and version are the real mirror values and the record is bound to the research revision
+ * the desktop read. The trusted main SQL exporter constructs the record; the renderer only names command and company. */
+export const refreshSelectedAccountRecordCommandSchema=z.strictObject({...ownerCommandBase,kind:z.literal('refresh-selected-account-record'),payload:z.strictObject({record:accountRecordSchema,asOf:instant,expectedResearchRevision:revision.min(1)})})
+ .refine(command=>command.payload.record.account.id===command.accountId&&command.payload.record.researchRevision===command.payload.expectedResearchRevision,'refresh_record_binding');
+export const refreshSelectedAccountRecordSchema=z.strictObject({commandId:z.uuid(),accountId:id});
+export type RefreshSelectedAccountRecord=z.infer<typeof refreshSelectedAccountRecordSchema>;
+export const selectedAccountFreshnessRequestSchema=z.strictObject({accountId:id});
+export type SelectedAccountFreshnessRequest=z.infer<typeof selectedAccountFreshnessRequestSchema>;
+/** Desktop-only comparison of the saved record with the copy the worker last applied. `unknown` means no applied
+ * copy is known locally; the state is derived from the two fingerprints and never asserted independently. */
+export const selectedAccountFreshnessSchema=z.strictObject({accountId:id,state:z.enum(['current','stale','unknown']),localFingerprint:hash,sentFingerprint:hash.nullable(),sentAt:instant.nullable()})
+ .refine(value=>(value.sentFingerprint===null)===(value.sentAt===null)&&value.state===(value.sentFingerprint===null?'unknown':value.sentFingerprint===value.localFingerprint?'current':'stale'),'selected_account_freshness_binding');
+export type SelectedAccountFreshness=z.infer<typeof selectedAccountFreshnessSchema>;
 
 export const approveRequestedFollowupCommandSchema=z.strictObject({...ownerCommandBase,kind:z.literal('approve-requested-followup'),payload:approveRequestedFollowupSchema});
-export const ownerCommandSchemas = [approveMeetingCommandSchema,approveRequestedFollowupCommandSchema,bootstrapSelectedAccountCommandSchema, submitApprovedReplyCommandSchema, prepareManualCommandSchema, completeManualCommandSchema, approveReplyCommandSchema, ownerCampaignCommandSchema, configureOwnerCommandSchema, reportAcquisitionMilestoneCommandSchema] as const;
+export const ownerCommandSchemas = [approveMeetingCommandSchema,approveRequestedFollowupCommandSchema,bootstrapSelectedAccountCommandSchema,refreshSelectedAccountRecordCommandSchema, submitApprovedReplyCommandSchema, prepareManualCommandSchema, completeManualCommandSchema, approveReplyCommandSchema, ownerCampaignCommandSchema, configureOwnerCommandSchema, reportAcquisitionMilestoneCommandSchema] as const;
 export const ownerCommandSchema = z.discriminatedUnion('kind', ownerCommandSchemas);
 export type OwnerCommand = z.infer<typeof ownerCommandSchema>;
 
