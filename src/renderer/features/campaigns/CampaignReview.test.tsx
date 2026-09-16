@@ -112,3 +112,25 @@ it('labels the exact single-company LinkedIn template as a LinkedIn draft, then 
   expect(screen.getByText(/Read-only preview/)).toBeTruthy();
   expect(screen.getByText(/Audience definition unavailable/)).toBeTruthy();
 });
+
+it('says in plain words what to do before approval for both templates, keeps the approved-state line, and holds opaque versions honestly', () => {
+  const snapshot = dailyFixture();
+  const call = createCallCampaignDraft({ campaignId: 'draft-campaign', versionId: 'draft-version', stepId: 'initial-call', accountId: 'a', offer: 'Discuss maintenance follow-up.' });
+  const campaign: DailySnapshot['campaigns'][number] = { version: call, snapshotHash: 'c'.repeat(64), caps: [], enrollments: [] };
+  const view = render(<CampaignReview campaign={campaign} accounts={snapshot.accounts} answers={[]} />);
+  expect(screen.getByText('Not yet approved. Review the frozen offer, audience, step and limits above, then approve below. Approval alone does not enroll a company or place a call.')).toBeTruthy();
+  expect(screen.queryByText(/Approval held until/)).toBeNull();
+  view.rerender(<CampaignReview campaign={{ ...campaign, version: { ...call, approvedAt: '2026-09-09T12:00:00.000Z' } }} accounts={snapshot.accounts} answers={[]} />);
+  expect(screen.getByText('Frozen approval recorded: 2026-09-09T12:00:00.000Z. Approval alone does not enroll a company or place a call.')).toBeTruthy();
+  expect(screen.queryByText(/Not yet approved/)).toBeNull();
+  const linkedIn = createLinkedInCampaignDraft({ campaignId: 'li-campaign', versionId: 'li-version', stepId: 'initial-note', accountId: 'a', offer: 'Discuss maintenance follow-up.' });
+  view.rerender(<CampaignReview campaign={{ ...campaign, version: linkedIn }} accounts={snapshot.accounts} answers={[]} />);
+  expect(screen.getByText('Not yet approved. Review the frozen offer, audience, step and limits above, then approve below. Approval alone does not enroll a company or send a message.')).toBeTruthy();
+  expect(screen.queryByText(/place a call/)).toBeNull();
+  // An opaque version has no approve control below it, so it must not be told to approve below.
+  view.rerender(<CampaignReview campaign={nativeDeskReviewFixture().campaigns[0]} accounts={snapshot.accounts} answers={[]} />);
+  expect(screen.getByText('Not approved. Approval is not available for this read-only version. Nothing here enrolls a company or starts outreach.')).toBeTruthy();
+  expect(screen.queryByText(/approve below/)).toBeNull();
+  expect(screen.getByText(/Read-only preview/)).toBeTruthy();
+  expect(screen.queryByRole('button')).toBeNull();
+});
