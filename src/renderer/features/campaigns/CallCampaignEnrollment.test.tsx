@@ -533,7 +533,7 @@ it('holds a LinkedIn structure signed with the call policy as an opaque template
 // Exact copy for a dropdown with no eligible company route. Both name the parallel lanes' exact labels ("Review phone route"
 // on Accounts, "Send updated saved record to worker" on Campaigns) and never imply a verified route or a call.
 const noPhoneRoute = 'No published business phone route is saved for this company on the worker\'s copy of its record. On Accounts, open the company and use "Review phone route" to confirm the number from a saved source, then on Campaigns use "Send updated saved record to worker". Enrollment stays unavailable until then.';
-const noLinkedInRoute = 'No published business LinkedIn route is saved for this company on the worker\'s copy of its record. On Accounts, open the company and add its company LinkedIn profile from a saved source or import (there is no LinkedIn review step), then on Campaigns use "Send updated saved record to worker". Enrollment stays unavailable until then.';
+const noLinkedInRoute = 'No published business LinkedIn route is saved for this company on the worker\'s copy of its record. There is no LinkedIn review step yet. Import a company LinkedIn profile route on Accounts, then on Campaigns use "Send updated saved record to worker". Enrollment stays unavailable until then.';
 /** Focusable controls in DOM order, named by their visible label text. */
 function controls(region: HTMLElement) {
   return [...region.querySelectorAll<HTMLElement>('select, input, button')].map(el => {

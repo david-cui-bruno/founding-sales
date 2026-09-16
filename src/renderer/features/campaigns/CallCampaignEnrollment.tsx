@@ -87,7 +87,7 @@ const copy = {
     review: 'I reviewed this company, offer, LinkedIn step and lifetime limits', approve: 'Approve LinkedIn campaign',
     route: 'Business LinkedIn route', selectRoute: 'Select a business LinkedIn route',
     // No LinkedIn admission step exists, so the only path is a saved source or an import, then the same Campaigns button.
-    noRoutes: 'No published business LinkedIn route is saved for this company on the worker\'s copy of its record. On Accounts, open the company and add its company LinkedIn profile from a saved source or import (there is no LinkedIn review step), then on Campaigns use "Send updated saved record to worker". Enrollment stays unavailable until then.',
+    noRoutes: 'No published business LinkedIn route is saved for this company on the worker\'s copy of its record. There is no LinkedIn review step yet. Import a company LinkedIn profile route on Accounts, then on Campaigns use "Send updated saved record to worker". Enrollment stays unavailable until then.',
     scope: 'This LinkedIn queue supports company-level business profile routes only. Person-specific routes and company pages are not available here.',
     request: 'I want this company added to the manual LinkedIn queue', enroll: 'Enroll company for manual LinkedIn note',
     held: 'Campaign action held. A current workspace, exact LinkedIn template, active worker and known execution version with no pending commands are required.',

@@ -50,7 +50,7 @@ async function assertClean(page: Page, state: {errors: string[]; requests: strin
 // Exact copy for an enrollment dropdown with no eligible company route. It names the parallel lanes' exact labels
 // ("Review phone route" on Accounts, "Send updated saved record to worker" on Campaigns) and promises no call or message.
 const noPhoneRouteCopy = 'No published business phone route is saved for this company on the worker\'s copy of its record. On Accounts, open the company and use "Review phone route" to confirm the number from a saved source, then on Campaigns use "Send updated saved record to worker". Enrollment stays unavailable until then.';
-const noLinkedInRouteCopy = 'No published business LinkedIn route is saved for this company on the worker\'s copy of its record. On Accounts, open the company and add its company LinkedIn profile from a saved source or import (there is no LinkedIn review step), then on Campaigns use "Send updated saved record to worker". Enrollment stays unavailable until then.';
+const noLinkedInRouteCopy = 'No published business LinkedIn route is saved for this company on the worker\'s copy of its record. There is no LinkedIn review step yet. Import a company LinkedIn profile route on Accounts, then on Campaigns use "Send updated saved record to worker". Enrollment stays unavailable until then.';
 test('real Native Desk themes, geometry, selection and unchanged editor DOM', async ({page}, testInfo) => {
   const state = await mount(page);
   expect((await methods(page)).every(method => ['daily.get','delegation.status','localWorkspace.get','localWorkspace.getCommitments'].includes(method))).toBe(true);
