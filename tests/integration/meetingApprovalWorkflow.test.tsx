@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { createWorkerHandler } from '../../cloud/lambdas/delegated-worker/src/handler';
@@ -79,7 +79,7 @@ async function worker(configureRules = true) {
   };
   const execution = createExecutionRepository(options);
   await execution.seedLocalAuthority(accountId);
-  const account = { id: accountId, name: 'Agreed Fictional PM', version: 1, domain: null };
+  const account: { id: string; name: string; version: number; domain: string | null } = { id: accountId, name: 'Agreed Fictional PM', version: 1, domain: null };
   await store.transact([store.put(`ACCOUNT#${accountId}`, { account, routes: [], sources: [], claims: [], researchRevision: 1, history: [{ at: now, account, routes: [], claims: [] }] }, null)]);
   const delegate: DelegationCommand = { commandId: randomUUID(), workspaceId, accountId, expectedAuthorityGeneration: 0, expectedVersion: 0, kind: 'delegate', payload: { delegationId: 'explicit', approvedAt: now } };
   expect((await request('/commands', delegate)).statusCode).toBe(200);
@@ -136,8 +136,7 @@ async function desktop(w: Worker) {
   // Only the bridge methods this outcome needs are real. Sync/submit from the UI stay forbidden.
   vi.spyOn(ui.api.delegation, 'sync').mockImplementation(forbidden);
   vi.spyOn(ui.api.delegation, 'submit').mockImplementation(forbidden);
-  ui.api.delegation.getAccountPreparation = bridge.delegation.getAccountPreparation;
-  Object.assign(ui.api.delegation, { approveMeeting: bridge.delegation.approveMeeting, getMeetingApproval: bridge.delegation.getMeetingApproval });
+  Object.assign(ui.api.delegation, { getAccountPreparation: bridge.delegation.getAccountPreparation, approveMeeting: bridge.delegation.approveMeeting, getMeetingApproval: bridge.delegation.getMeetingApproval });
   const approveCommands = () => posted.filter(command => command.kind === 'approve-meeting');
   return { ...ui, db, owner, services, runtime, bridge, forbidden, posted, paths, approveCommands, workspaceId,
     lose: () => { loseNext = true; },
@@ -152,24 +151,27 @@ it('approves an explicit slot from the saved scheduling reply through the real b
   try {
     render(<PresentationRoot><NativeDeskRoute api={d.api} firstUse={d.firstUse} surface="today" onOpenLead={vi.fn()} onOpenImport={vi.fn()} /></PresentationRoot>);
     fireEvent.click(await replyRow());
+    const panel = within(await screen.findByRole('region', { name: 'Meeting approval' }));
     // The quoted evidence and the attendee come from the saved projection, never from a guessed contact.
-    expect(await screen.findByText(w.message.bodyParts[0]!.text, { selector: 'blockquote' })).toBeTruthy();
-    expect(screen.getByText(/prospect@example\.test/, { selector: 'p' })).toBeTruthy();
+    expect(panel.getByText(w.message.bodyParts[0]!.text, { selector: 'blockquote' })).toBeTruthy();
+    expect(panel.getByText(/^Attendee: prospect@example\.test \(sender of the quoted message\)/)).toBeTruthy();
     expect(d.paths).toEqual([]);
-    fireEvent.click(screen.getByRole('button', { name: 'Check calendar and scheduling rules' }));
-    await screen.findByText(/founder@example\.test/);
-    expect(screen.getByText(/America\/New_York/)).toBeTruthy();
-    expect(screen.getByText(/30 minutes/)).toBeTruthy();
+    fireEvent.click(panel.getByRole('button', { name: 'Check calendar and scheduling rules' }));
+    await panel.findByText(/Calendar: founder@example\.test · Time zone: America\/New_York · Duration: 30 minutes · Rules revision 1\./);
     expect(d.paths).toEqual(['/accounts/preparation']);
-    const approve = screen.getByRole<HTMLButtonElement>('button', { name: 'Approve meeting' });
+    const approve = panel.getByRole<HTMLButtonElement>('button', { name: 'Approve meeting' });
     expect(approve.disabled).toBe(true);
-    fireEvent.change(screen.getByLabelText('Meeting start'), { target: { value: '2026-09-15T10:00' } });
-    fireEvent.click(screen.getByLabelText(/I confirm this slot matches the quoted reply/));
+    fireEvent.change(panel.getByLabelText('Meeting start'), { target: { value: '2026-09-15T10:00' } });
+    fireEvent.click(panel.getByLabelText(/I confirm this slot matches the quoted reply/));
     await waitFor(() => expect(approve.disabled).toBe(false));
     expect(d.approveCommands()).toEqual([]); expect(await w.store.list('MEETING_INTENT#')).toEqual([]);
     fireEvent.click(approve);
-    await screen.findByText('Meeting approval receipt: applied.');
-    const commands = d.approveCommands(); expect(commands).toHaveLength(1);
+    await panel.findByText('Meeting approval receipt: applied.');
+    // Submit posts once and the following sync flush re-posts the same still-pending identity;
+    // the worker answers idempotently. Exactly one command identity and one admitted work item exist.
+    const commands = d.approveCommands(); expect(commands.length).toBeGreaterThanOrEqual(1);
+    expect(new Set(commands.map(value => JSON.stringify(value))).size).toBe(1);
+    expect(await w.store.list('MEETING_INTENT#')).toHaveLength(1);
     const command = commands[0]!; if (command.kind !== 'approve-meeting') throw Error('Wrong command kind');
     expect(command.payload).toMatchObject({ calendarId: w.calendarId, intent: { operation: 'create', etag: null, approvalId: command.commandId, commandId: command.commandId,
       agreementEvidenceId: w.message.id, attendeeEmails: w.message.from, rulesRevision: 1, threadId: 'thread1', mailboxSubject: w.mailboxSubject, pairingId: w.pair.pairingId,
