@@ -1,4 +1,5 @@
 import type { AdmitCompanyDraftEmail, OpenCompanyDraft, SaveCompanyDraft } from '../../shared/contracts/localCompanyDraftContract';
+import type { AdmitCompanyPhoneRoute } from '../../shared/contracts/localCompanyPhoneRouteContract';
 import { LocalCompanyDraftRepository } from './accounts/localCompanyDraftRepository';
 import type { UpdateCompanyResearchSettingsRequest } from '../../shared/contracts/localCompanyResearchSettingsContract';
 import { LocalCompanyIntake } from './accounts/localCompanyIntake';
@@ -438,6 +439,7 @@ export class FounderSalesDomain implements OutboundDomainPort {
   }
 
   admitCompanyDraftEmail(input: AdmitCompanyDraftEmail) { return new AccountRepository({ database: this.database, clock: this.clock, ids: this.ids }).admitReviewedBusinessEmail(input); }
+  admitCompanyPhoneRoute(input: AdmitCompanyPhoneRoute) { return new AccountRepository({ database: this.database, clock: this.clock, ids: this.ids }).admitReviewedBusinessPhone(input); }
   openCompanyDraft(input: OpenCompanyDraft) { return new LocalCompanyDraftRepository({ database: this.database, clock: this.clock, ids: this.ids }).open(input); }
   saveCompanyDraft(input: SaveCompanyDraft) { return new LocalCompanyDraftRepository({ database: this.database, clock: this.clock, ids: this.ids }).save(input); }
   reviewLocalCompany(input: LocalCompanyInput) {

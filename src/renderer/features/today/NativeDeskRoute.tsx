@@ -42,6 +42,7 @@ import { CampaignReview } from '../campaigns/CampaignReview';
 import { ManualLinkedInPreparation } from '../linkedin/ManualLinkedInPreparation';
 import { CallCampaignEnrollment } from '../campaigns/CallCampaignEnrollment';
 import { CallCampaignDraft } from '../campaigns/CallCampaignDraft';
+import { describeCampaignRow } from '../campaigns/campaignListLabel';
 import { describeOneCompanyCampaignTemplate, type OneCompanyCampaignChannel } from '../../../shared/contracts/callCampaignDraft';
 import './nativeDesk.css';
 export type NativeDeskApi = Pick<
@@ -873,25 +874,24 @@ export function NativeDesk({
               <h2>
                 Saved campaign versions <span>{formatVisibleCount(workerCount(snapshot.campaigns.length))}</span>
               </h2>
-              {snapshot.campaigns.map((c) => (
-                <button
-                  className="native-desk__row"
-                  key={c.version.id}
-                  data-row-key={`campaign:${c.version.id}`}
-                  aria-current={
-                    selected === `campaign:${c.version.id}` ? 'true' : undefined
-                  }
-                  onClick={() => select(`campaign:${c.version.id}`)}
-                >
-                  <strong>{c.version.campaignId}</strong>
-                  <span>
-                    Version {c.version.version} ·{' '}
-                    {c.version.approvedAt
-                      ? 'approval recorded'
-                      : 'not approved'}
-                  </span>
-                </button>
-              ))}
+              {snapshot.campaigns.map((c) => {
+                // Company · channel with a plain state for the two exact templates; the saved id for anything else.
+                const label = describeCampaignRow(c, snapshot.accounts);
+                return (
+                  <button
+                    className="native-desk__row"
+                    key={c.version.id}
+                    data-row-key={`campaign:${c.version.id}`}
+                    aria-current={
+                      selected === `campaign:${c.version.id}` ? 'true' : undefined
+                    }
+                    onClick={() => select(`campaign:${c.version.id}`)}
+                  >
+                    <strong>{label.title}</strong>
+                    <span>{label.detail}</span>
+                  </button>
+                );
+              })}
               {!snapshot.campaigns.length && <><p>{unavailableScope ? 'Campaign scope is unavailable.' : 'No saved campaign drafts. A configured worker and active company ownership are required to save one.'}</p><p><a href="#/settings" onClick={() => openSettingsSection('worker')}>Worker settings</a> configure access. Saving a draft does not enroll accounts or activate outreach.</p></>}
             </section>
           )}

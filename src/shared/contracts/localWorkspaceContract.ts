@@ -1,4 +1,5 @@
 import type { AdmitCompanyDraftEmail, OpenCompanyDraft, GetCompanyDraft, SaveCompanyDraft, CompanyDraftAdmissionReceipt, CompanyDraftRead, CompanyDraftMutationResult, PrepareCompanyDraft, PreparedCompanyDraft } from './localCompanyDraftContract';
+import type { AdmitCompanyPhoneRoute, CompanyPhoneRouteReceipt } from './localCompanyPhoneRouteContract';
 import { companyDraftEmailSchema } from './localCompanyDraftContract';
 import type { CompanyResearchSettings, UpdateCompanyResearchSettingsRequest } from './localCompanyResearchSettingsContract';
 export * from './localCompanyResearchSettingsContract';
@@ -130,6 +131,8 @@ export type LocalCommitmentsSnapshot = z.infer<typeof localCommitmentsSnapshotSc
 export interface LocalWorkspaceApi {
   prepareCompanyDraft(input: PrepareCompanyDraft): Promise<PreparedCompanyDraft>;
   admitCompanyDraftEmail(input: AdmitCompanyDraftEmail): Promise<CompanyDraftAdmissionReceipt>;
+  /** Phone twin of the reviewed inbox admission. Optional: a build without it shows phone route review as unavailable. Saving is never a call. */
+  admitCompanyPhoneRoute?: (input: AdmitCompanyPhoneRoute) => Promise<CompanyPhoneRouteReceipt>;
   openCompanyDraft(input: OpenCompanyDraft): Promise<CompanyDraftMutationResult>;
   getCompanyDraft(input: GetCompanyDraft): Promise<CompanyDraftRead | null>;
   saveCompanyDraft(input: SaveCompanyDraft): Promise<CompanyDraftMutationResult>;

@@ -1,4 +1,5 @@
 import { admitCompanyDraftEmailSchema, openCompanyDraftSchema, getCompanyDraftSchema, saveCompanyDraftSchema, companyDraftAdmissionReply, companyDraftOpenReply, companyDraftGetReply, companyDraftSaveReply, prepareCompanyDraftSchema, companyDraftPrepareReply } from '../../shared/contracts/localCompanyDraftContract';
+import { admitCompanyPhoneRouteSchema, companyPhoneRouteReply } from '../../shared/contracts/localCompanyPhoneRouteContract';
 import { LocalCompanyDraftRepository } from '../domain/accounts/localCompanyDraftRepository';
 import { attachLocalPreparation } from '../domain/accounts/localCompanyPreparation';
 import type { CompanyDraftPreparationPort } from '../outreach/companyDraftPreparationService';
@@ -43,6 +44,7 @@ export function createLocalWorkspaceProvider(runtime: Pick<FoundationRuntime, 'w
       return companyDraftPrepareReply(parsed).parse(await preparation.prepareCompanyDraft(parsed));
     },
     admitCompanyDraftEmail: async input => { const parsed = Object.freeze(admitCompanyDraftEmailSchema.parse(input)); return companyDraftAdmissionReply(parsed).parse(await runtime.withDomain(domain => domain.admitCompanyDraftEmail(parsed))); },
+    admitCompanyPhoneRoute: async input => { const parsed = Object.freeze(admitCompanyPhoneRouteSchema.parse(input)); return companyPhoneRouteReply(parsed).parse(await runtime.withDomain(domain => domain.admitCompanyPhoneRoute(parsed))); },
     openCompanyDraft: async input => { const parsed = Object.freeze(openCompanyDraftSchema.parse(input)); return companyDraftOpenReply(parsed).parse(await runtime.withDomain(domain => domain.openCompanyDraft(parsed))); },
     saveCompanyDraft: async input => { const parsed = Object.freeze(saveCompanyDraftSchema.parse(input)); return companyDraftSaveReply(parsed).parse(await runtime.withDomain(domain => domain.saveCompanyDraft(parsed))); },
     getCompanyDraft: async input => { const parsed = Object.freeze(getCompanyDraftSchema.parse(input)); return companyDraftGetReply(parsed).parse(await runtime.withDatabase(database => new LocalCompanyDraftRepository({ database, clock, ids }).get(parsed))); },

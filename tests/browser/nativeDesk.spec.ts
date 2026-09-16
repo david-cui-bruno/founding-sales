@@ -47,6 +47,10 @@ async function assertClean(page: Page, state: {errors: string[]; requests: strin
   expect(state.requests).toEqual([]);
   expect(await methods(page)).not.toContain('forbidden');
 }
+// Exact copy for an enrollment dropdown with no eligible company route. It names the parallel lanes' exact labels
+// ("Review phone route" on Accounts, "Send updated saved record to worker" on Campaigns) and promises no call or message.
+const noPhoneRouteCopy = 'No published business phone route is saved for this company on the worker\'s copy of its record. On Accounts, open the company and use "Review phone route" to confirm the number from a saved source, then on Campaigns use "Send updated saved record to worker". Enrollment stays unavailable until then.';
+const noLinkedInRouteCopy = 'No published business LinkedIn route is saved for this company on the worker\'s copy of its record. There is no LinkedIn review step yet. Import a company LinkedIn profile route on Accounts, then on Campaigns use "Send updated saved record to worker". Enrollment stays unavailable until then.';
 test('real Native Desk themes, geometry, selection and unchanged editor DOM', async ({page}, testInfo) => {
   const state = await mount(page);
   expect((await methods(page)).every(method => ['daily.get','delegation.status','localWorkspace.get','localWorkspace.getCommitments'].includes(method))).toBe(true);
@@ -114,11 +118,16 @@ test('saved manual-call template has separate accessible review and route contro
     const f = window.nativeDeskBrowser.fixture;
     const snapshot = f.snapshot();
     snapshot.campaigns = [{version,snapshotHash,caps:[],enrollments:[]}];
-    snapshot.accounts[0].routes = [{id:'browser-phone',accountId:'a',personId:null,version:1,channel:'phone',value:'+1 212 555 0100',purpose:'business',verification:'published',evidenceIds:['fixture-source']}];
+    // Walkthrough E: the worker's copy of the company record has no published business phone yet.
+    snapshot.accounts[0].routes = [];
     f.setSnapshot(snapshot);
     window.nativeDeskBrowser.navigate('campaigns');
   }, {version,snapshotHash:accountFingerprint(version)});
-  await page.locator('[data-row-key="campaign:browser-version"]').click();
+  // The saved list names the company and channel with a plain state; the saved UUID stays in the review detail.
+  const row = page.locator('[data-row-key="campaign:browser-version"]');
+  await expect(row.locator('strong')).toHaveText('Account A · Call campaign');
+  await expect(row.locator('span')).toHaveText('Version 1 · Draft');
+  await row.click();
   const form = page.getByRole('region',{name:'Call campaign enrollment',exact:true});
   const approve = form.getByRole('button',{name:'Approve call campaign',exact:true});
   await expect(approve).toBeDisabled();
@@ -135,15 +144,16 @@ test('saved manual-call template has separate accessible review and route contro
     window.nativeDeskBrowser.refresh();
   });
   await expect(page.getByRole('heading',{name:'Reviewed call campaign',exact:true})).toBeVisible();
+  await expect(row.locator('span')).toHaveText('Version 1 · Approved');
   const phone = form.getByRole('combobox',{name:'Business phone route',exact:true});
   const enroll = form.getByRole('button',{name:'Enroll company for manual call',exact:true});
+  // An empty dropdown says why and what to do next; the select still renders and enrollment stays unavailable.
+  const noRoute = form.getByText(noPhoneRouteCopy,{exact:true});
   await expect(phone).toHaveValue('');
+  expect(await phone.locator('option').evaluateAll(options => options.map(option => (option as HTMLOptionElement).value))).toEqual(['']);
+  await expect(noRoute).toBeVisible();
+  await expect(noRoute).toHaveAttribute('role','status');
   await expect(enroll).toBeDisabled();
-  await phone.selectOption('browser-phone');
-  await expect(enroll).toBeDisabled();
-  await form.getByRole('checkbox',{name:'I want this company added to the manual call queue',exact:true}).check();
-  await expect(enroll).toBeEnabled();
-  await expect(form.getByText('Enrollment adds a due manual-call item. It does not dial, send messages, or grant contact permission.')).toBeVisible();
   for (const width of [1440,1050]) {
     await page.setViewportSize({width,height:700});
     for (const theme of ['light','dark'] as const) {
@@ -166,12 +176,30 @@ test('saved manual-call template has separate accessible review and route contro
       expect(geometry.content,'selected phone must not be vertically clipped').toBeGreaterThanOrEqual(geometry.text);
       await phone.focus();
       await expect(phone).toBeFocused();
+      await expect(noRoute).toBeVisible();
+      await expect(row.locator('strong')).toHaveText('Account A · Call campaign');
       expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
       const axe = await new AxeBuilder({page}).analyze();
       expect(axe.violations.filter(item=>item.impact==='serious'||item.impact==='critical')).toEqual([]);
       await page.screenshot({path:testInfo.outputPath(`campaign-enrollment-${width}-${theme}.png`),fullPage:true});
     }
   }
+  // The number reaches the worker's copy of the record: the explanation leaves and the same controls take the route.
+  await page.evaluate(() => {
+    const f = window.nativeDeskBrowser.fixture;
+    const snapshot = f.snapshot();
+    snapshot.accounts[0].routes = [{id:'browser-phone',accountId:'a',personId:null,version:1,channel:'phone',value:'+1 212 555 0100',purpose:'business',verification:'published',evidenceIds:['fixture-source']}];
+    f.setSnapshot(snapshot);
+    window.nativeDeskBrowser.refresh();
+  });
+  await expect(noRoute).toHaveCount(0);
+  await expect(phone).toHaveValue('');
+  await expect(enroll).toBeDisabled();
+  await phone.selectOption('browser-phone');
+  await expect(enroll).toBeDisabled();
+  await form.getByRole('checkbox',{name:'I want this company added to the manual call queue',exact:true}).check();
+  await expect(enroll).toBeEnabled();
+  await expect(form.getByText('Enrollment adds a due manual-call item. It does not dial, send messages, or grant contact permission.')).toBeVisible();
   expect(await methods(page)).not.toContain('delegation.submit');
   await assertClean(page,state);
 });
@@ -207,7 +235,10 @@ test('saved manual-LinkedIn template offers a channel choice, LinkedIn review an
   await expect(linkedInToggle).toHaveAttribute('aria-expanded','true');
   await expect(draftForm.getByRole('button', {name:'Save LinkedIn campaign draft',exact:true})).toBeDisabled();
   await expect(draftForm.getByText('Saves an unapproved LinkedIn campaign draft. This does not enroll accounts, prepare or send a note, or start outreach.')).toBeVisible();
-  await page.locator('[data-row-key="campaign:browser-li-version"]').click();
+  const liRow = page.locator('[data-row-key="campaign:browser-li-version"]');
+  await expect(liRow.locator('strong')).toHaveText('Account A · LinkedIn campaign');
+  await expect(liRow.locator('span')).toHaveText('Version 1 · Draft');
+  await liRow.click();
   await expect(page.getByRole('heading',{name:'LinkedIn campaign draft',exact:true})).toBeVisible();
   await expect(page.getByRole('region',{name:'Call campaign enrollment',exact:true})).toHaveCount(0);
   const form = page.getByRole('region',{name:'LinkedIn campaign enrollment',exact:true});
@@ -226,11 +257,14 @@ test('saved manual-LinkedIn template offers a channel choice, LinkedIn review an
     window.nativeDeskBrowser.refresh();
   });
   await expect(page.getByRole('heading',{name:'Reviewed LinkedIn campaign',exact:true})).toBeVisible();
+  await expect(liRow.locator('span')).toHaveText('Version 1 · Approved');
   const route = form.getByRole('combobox',{name:'Business LinkedIn route',exact:true});
   const enroll = form.getByRole('button',{name:'Enroll company for manual LinkedIn note',exact:true});
   await expect(form.getByRole('combobox',{name:'Business phone route',exact:true})).toHaveCount(0);
   await expect(route).toHaveValue('');
   expect(await route.locator('option').evaluateAll(options => options.map(option => (option as HTMLOptionElement).value))).toEqual(['','browser-li-company']);
+  // A saved company LinkedIn route is offered, so the empty-dropdown explanation stays away.
+  await expect(form.getByText(noLinkedInRouteCopy,{exact:true})).toHaveCount(0);
   await expect(enroll).toBeDisabled();
   await route.selectOption('browser-li-company');
   await expect(enroll).toBeDisabled();

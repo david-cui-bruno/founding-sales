@@ -529,3 +529,63 @@ it('holds a LinkedIn structure signed with the call policy as an opaque template
   expect(f.calls).toEqual([]);
   expect(f.submit).not.toHaveBeenCalled();
 });
+
+// Exact copy for a dropdown with no eligible company route. Both name the parallel lanes' exact labels ("Review phone route"
+// on Accounts, "Send updated saved record to worker" on Campaigns) and never imply a verified route or a call.
+const noPhoneRoute = 'No published business phone route is saved for this company on the worker\'s copy of its record. On Accounts, open the company and use "Review phone route" to confirm the number from a saved source, then on Campaigns use "Send updated saved record to worker". Enrollment stays unavailable until then.';
+const noLinkedInRoute = 'No published business LinkedIn route is saved for this company on the worker\'s copy of its record. There is no LinkedIn review step yet. Import a company LinkedIn profile route on Accounts, then on Campaigns use "Send updated saved record to worker". Enrollment stays unavailable until then.';
+/** Focusable controls in DOM order, named by their visible label text. */
+function controls(region: HTMLElement) {
+  return [...region.querySelectorAll<HTMLElement>('select, input, button')].map(el => {
+    const label = el.closest('label');
+    const text = label ? [...label.childNodes].filter(node => node.nodeType === Node.TEXT_NODE).map(node => node.textContent).join('') : el.textContent;
+    return `${el.tagName.toLowerCase()}:${text}`;
+  });
+}
+
+it('explains an empty business phone dropdown with the next step on Accounts and Campaigns, without changing eligibility or control order', () => {
+  const f = fixture(true);
+  const view = render(<CallCampaignEnrollment {...f.props} />);
+  const region = screen.getByRole('region', { name: 'Call campaign enrollment' });
+  const order = ['select:Business phone route', 'input:I want this company added to the manual call queue', 'button:Enroll company for manual call'];
+  expect(controls(region)).toEqual(order);
+  expect(screen.queryByText(noPhoneRoute)).toBeNull();
+  const empty = structuredClone(f.props.snapshot);
+  empty.accounts[0].routes = [];
+  view.rerender(<CallCampaignEnrollment {...f.props} snapshot={empty} />);
+  const select = screen.getByLabelText<HTMLSelectElement>('Business phone route');
+  expect([...select.options].map(option => option.text)).toEqual(['Select a business phone route']);
+  expect(screen.getByText(noPhoneRoute).getAttribute('role')).toBe('status');
+  expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Enroll company for manual call' }).disabled).toBe(true);
+  expect(controls(region)).toEqual(order);
+  // Only person-specific routes leave the dropdown just as empty; the explanation and the scope line both stay.
+  const personOnly = structuredClone(f.props.snapshot);
+  personOnly.accounts[0].routes = [{ ...phone, personId: 'person-a' }];
+  view.rerender(<CallCampaignEnrollment {...f.props} snapshot={personOnly} />);
+  expect(screen.getByText(noPhoneRoute)).toBeTruthy();
+  expect(screen.getByText('This call queue supports company-level phone routes only. Person-specific routes are not available here.')).toBeTruthy();
+  // Before approval there is no dropdown, so nothing to explain yet.
+  const unapproved = structuredClone(empty);
+  unapproved.campaigns[0].version.approvedAt = null;
+  view.rerender(<CallCampaignEnrollment {...f.props} snapshot={unapproved} campaign={unapproved.campaigns[0]} />);
+  expect(screen.queryByLabelText('Business phone route')).toBeNull();
+  expect(screen.queryByText(noPhoneRoute)).toBeNull();
+  expect(f.calls).toEqual([]);
+  expect(f.submit).not.toHaveBeenCalled();
+});
+
+it('explains an empty business LinkedIn dropdown by naming the import path, never a LinkedIn review step or a phone step', () => {
+  const f = linkedInFixture(true);
+  const snapshot = structuredClone(f.props.snapshot);
+  snapshot.accounts[0].routes = [phone];
+  render(<CallCampaignEnrollment {...f.props} snapshot={snapshot} />);
+  const select = screen.getByLabelText<HTMLSelectElement>('Business LinkedIn route');
+  expect([...select.options].map(option => option.text)).toEqual(['Select a business LinkedIn route']);
+  expect(screen.getByText(noLinkedInRoute).getAttribute('role')).toBe('status');
+  expect(screen.queryByText(noPhoneRoute)).toBeNull();
+  expect(screen.queryByText(/Review phone route/)).toBeNull();
+  expect(controls(screen.getByRole('region', { name: 'LinkedIn campaign enrollment' })))
+    .toEqual(['select:Business LinkedIn route', 'input:I want this company added to the manual LinkedIn queue', 'button:Enroll company for manual LinkedIn note']);
+  expect(f.calls).toEqual([]);
+  expect(f.submit).not.toHaveBeenCalled();
+});
