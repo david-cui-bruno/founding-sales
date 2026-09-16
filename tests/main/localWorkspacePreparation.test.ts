@@ -5,7 +5,7 @@ import { migrateToLatest } from '../../src/main/db/migrate';
 import { AccountRepository } from '../../src/main/domain/accounts/accountRepository';
 import { LocalCompanyDraftRepository } from '../../src/main/domain/accounts/localCompanyDraftRepository';
 import { createLocalWorkspaceProvider } from '../../src/main/workspace/localWorkspaceProvider';
-import { localAccountPreparationSchema, localWorkspaceSnapshotSchema } from '../../src/shared/contracts/localWorkspaceContract';
+import { localAccountPreparationSchema, localWorkspaceSnapshotSchema, type LocalAccountSnapshot } from '../../src/shared/contracts/localWorkspaceContract';
 import { createTempDatabase, createTestWorkspaceKey } from '../fixtures/tempDatabase';
 
 const NOW = '2026-09-15T18:00:00.000Z';
@@ -72,7 +72,8 @@ describe('local preparation queue from saved evidence', () => {
         expect(snapshot.preparation?.reason).not.toMatch(/worker|authority|owned|automatic/i);
       }
       // Ranking is a projection of the same rows the plain read returns: identities and evidence are untouched.
-      expect([...result.accounts.snapshots].sort((a, b) => a.account.id < b.account.id ? -1 : 1).map(({ preparation: _preparation, ...rest }) => rest))
+      const withoutPreparation = (snapshot: LocalAccountSnapshot) => Object.fromEntries(Object.entries(snapshot).filter(([key]) => key !== 'preparation'));
+      expect([...result.accounts.snapshots].sort((a, b) => a.account.id < b.account.id ? -1 : 1).map(withoutPreparation))
         .toEqual([f.alpha.id, f.bravo.id, f.charlie.id, f.delta.id].map(id => new AccountRepository({ database: f.database, clock: { now: () => result.generatedAt }, ids: { next: () => { throw new Error('No identity'); } } }).snapshot(id, result.generatedAt)));
       expect(await f.api.get()).toMatchObject({ accounts: { snapshots: result.accounts.snapshots.map(s => ({ account: { id: s.account.id }, preparation: s.preparation })) } });
     } finally { f.close(); }
@@ -97,9 +98,8 @@ describe('local preparation queue from saved evidence', () => {
     } finally { f.close(); }
   });
   it('binds the wire contract: the step follows the flags, and snapshots without preparation still parse', () => {
-    const base = { scope: 'local_database', generatedAt: NOW, workflowMode: 'legacy', transitionReceipt: null };
-    const account = { id: 'x', name: 'Fixture PM', domain: null, version: 1 };
-    const snapshot = { account, claims: [], routes: [], portfolio: [], unknowns: [], conflicts: [], fingerprint: 'a'.repeat(64) };
+    const base: Record<string, unknown> = { scope: 'local_database', generatedAt: NOW, workflowMode: 'legacy', transitionReceipt: null };
+    const snapshot: LocalAccountSnapshot = { account: { id: 'x', name: 'Fixture PM', domain: null, version: 1 }, claims: [], routes: [], portfolio: [], unknowns: [], conflicts: [], fingerprint: 'a'.repeat(64) };
     expect(localWorkspaceSnapshotSchema.safeParse({ ...base, accounts: { state: 'available', snapshots: [snapshot] } }).success).toBe(true);
     const flags = { researched: true, unsentDraft: false, businessRoute: true, reason: 'Research and a published inbox are saved locally.' };
     expect(localAccountPreparationSchema.safeParse({ ...flags, nextStep: 'draft' }).success).toBe(true);
