@@ -2,6 +2,7 @@ import { useLayoutEffect, useMemo, useState } from 'react';
 import type { CalliePreloadApi } from '../../../shared/preload';
 import { accountPreparationReplySchema, type AccountPreparation } from '../../../shared/contracts/accountPreparationContract';
 import { captureDailySessionScope } from '../today/dailySessionScope';
+import { AccountIntakeConfigure } from './AccountIntakeConfigure';
 
 type Api = Pick<CalliePreloadApi, 'daily' | 'delegation'>;
 export function AccountIntakeRead({ api, workspaceId, accountId, disabled, scopeKey }: {
@@ -62,5 +63,6 @@ export function AccountIntakeRead({ api, workspaceId, accountId, disabled, scope
         <p>An unselected mailbox does not establish no-mail eligibility. A configured mailbox does not confirm a current grant or mail readiness.</p>
       </>}
     </div>}
+    {result && workspaceId && <AccountIntakeConfigure api={api.delegation} workspaceId={workspaceId} accountId={accountId} preparation={result} disabled={disabled} />}
   </div>;
 }

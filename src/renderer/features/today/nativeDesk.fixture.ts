@@ -260,6 +260,7 @@ export function nativeDeskFixture(initial = dailyFixture()) {
       },
       approveMeeting: forbidden,
       getMeetingApproval: async (input) => { record('getMeetingApproval', input); return null; },
+      configureIntake: forbidden,
       status: async () => {
         record('delegation.status');
         return structuredClone(config);

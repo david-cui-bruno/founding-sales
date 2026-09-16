@@ -8,6 +8,7 @@ import {policyImportConfirmSchema,policyImportResumeSchema,policyImportStatusSch
 import {prepareRequestedFollowupSchema,getRequestedFollowupSchema,editRequestedFollowupSchema,approveRequestedFollowupSchema,savedRequestedFollowupSchema,requestedApprovalStatusSchema} from '../../shared/contracts/requestedFollowupContract';
 import {workerPolicyRequestSchema,workerPolicyReceiptSchema} from '../../shared/contracts/workerPolicyContract';
 import {approveMeetingFromReplySchema,getMeetingApprovalSchema,meetingApprovalStatusSchema,boundMeetingApprovalStatus} from '../../shared/contracts/meetingContract';
+import {configureAccountIntakeSchema,accountIntakeConfigureStatusSchema,boundAccountIntakeConfigureStatus} from '../../shared/contracts/accountIntakeConfigureContract';
 import type { DelegationRuntime } from '../delegation/delegationRuntime';
 import type { PairingStore } from '../delegation/pairingStore';
 import { delegatedPhoneHandoffRequestSchema,bootstrapSelectedAccountSchema,configureResearchSourceSchema,ownerResearchSourceSchema,configureLocalDelegationSchema,localDelegationStatusSchema,localDelegationConfigurationRecordSchema,redeemLocalPairingSchema,redeemedLocalPairingSchema,delegationSyncReportSchema } from '../../shared/contracts/ownerCommandContract';
@@ -86,6 +87,7 @@ export function registerOutreachIpc(options:{provider:OutreachApi;delegation?:De
         if(status&&(status.accountId!==request.accountId||status.threadId!==request.threadId))throw new Error('meeting_approval_identity_mismatch');
         return status;
       });
+      add('delegation-configure-intake',configureAccountIntakeSchema,accountIntakeConfigureStatusSchema,async request=>boundAccountIntakeConfigureStatus(request).parse(await d.configureIntake(request)));
     }
     if(options.pairingStore)add('delegation-pair',redeemLocalPairingSchema,redeemedLocalPairingSchema,input=>options.pairingStore!.redeem(input,AbortSignal.timeout(15000)));
 
