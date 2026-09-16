@@ -413,7 +413,7 @@ it('sends a repeated saved paragraph once, the saved sender name as data and the
     expect(context.facts).toEqual(companyDraftFacts(f.admitted));
     expect(proposal.grounding.facts).toEqual(context.facts);
     expect(proposal.grounding.usedFactIds).toEqual([context.facts[0]!.id]);
-    expect(proposal.grounding.playbookVersion).toBe('2026-09-08');
+    expect(proposal.grounding.playbookVersion).toBe('2026-09-16');
     // The founder's saved sender name is read-only setup data: not evidence, not permission, never invented.
     expect(status).toHaveBeenCalledTimes(1);
     expect(context.senderName).toBe('Fixture Founder');
