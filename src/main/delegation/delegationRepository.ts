@@ -126,7 +126,7 @@ export class DelegationRepository {
     const applied = this.raw.prepare(`SELECT event_json FROM delegated_applied_events WHERE workspace_id=?
       AND ((json_extract(event_json,'$.kind')='requested_followup.status' AND json_extract(event_json,'$.payload.commandId')=?)
         OR (json_extract(event_json,'$.kind')='authority.changed' AND json_extract(event_json,'$.payload.receipt.commandId')=?)
-        OR (json_extract(event_json,'$.kind') IN('account.bootstrap','manual.outcome','manual.handoff','campaign.changed','acquisition.milestone_reported') AND json_extract(event_json,'$.receipt.commandId')=?)) ORDER BY aggregate_version DESC LIMIT 1`)
+        OR (json_extract(event_json,'$.kind') IN('account.bootstrap','account.refreshed','manual.outcome','manual.handoff','campaign.changed','acquisition.milestone_reported') AND json_extract(event_json,'$.receipt.commandId')=?)) ORDER BY aggregate_version DESC LIMIT 1`)
       .get(this.deps.workspaceId, commandId, commandId, commandId) as { event_json: string } | undefined;
     if (applied) {
       const event = workerEventSchema.parse(JSON.parse(applied.event_json));
@@ -148,6 +148,13 @@ export class DelegationRepository {
     const rows = this.raw.prepare(`SELECT command_json FROM delegated_commands WHERE workspace_id=? AND account_id=? AND json_extract(command_json,'$.kind')='approve-meeting'
       AND json_extract(command_json,'$.payload.intent.threadId')=? ORDER BY created_at,command_id`).all(this.deps.workspaceId, accountIdSchema.parse(accountId), accountIdSchema.parse(threadId)) as { command_json: string }[];
     return rows.map(row => delegationCommandSchema.parse(JSON.parse(row.command_json))).filter((command): command is Extract<DelegationCommand, { kind: 'approve-meeting' }> => command.kind === 'approve-meeting');
+  }
+  /** Every saved-record command (bootstrap or refresh) ever queued for one company, oldest first. Receipts are read separately. */
+  selectedAccountRecordCommands(accountId: string): Extract<DelegationCommand, { kind: 'bootstrap-selected-account' | 'refresh-selected-account-record' }>[] {
+    const rows = this.raw.prepare(`SELECT command_json FROM delegated_commands WHERE workspace_id=? AND account_id=? AND json_extract(command_json,'$.kind') IN('bootstrap-selected-account','refresh-selected-account-record')
+      ORDER BY created_at,command_id`).all(this.deps.workspaceId, accountIdSchema.parse(accountId)) as { command_json: string }[];
+    return rows.map(row => delegationCommandSchema.parse(JSON.parse(row.command_json))).filter((command): command is Extract<DelegationCommand, { kind: 'bootstrap-selected-account' | 'refresh-selected-account-record' }> =>
+      command.kind === 'bootstrap-selected-account' || command.kind === 'refresh-selected-account-record');
   }
   /** Every configure-owner command ever queued for one company, oldest first. Receipts are read separately. */
   intakeConfigureCommands(accountId: string): Extract<DelegationCommand, { kind: 'configure-owner' }>[] {
@@ -237,6 +244,9 @@ export class DelegationRepository {
         if((prior?.aggregate_version??null)!==command.payload.expectedResearchRevision)throw Error('bootstrap_cursor_conflict');
         if(!prior)this.raw.prepare('INSERT INTO delegated_event_cursors VALUES(?,?,?,?,?)').run(event.workspaceId,event.accountId,'research',event.payload.researchRevision,event.id);
       }
+      // account.refreshed rewrites nothing locally: the saved record already is the source the worker now holds, and
+      // the research cursor the refresh was bound to stays exactly where the worker's own research left it. Only the
+      // execution version above and the execution cursor below advance, like every other applied owner receipt.
       if(event.kind==='authority.changed'&&event.payload.receipt.status==='rejected'){
         const command=this.getCommand(event.payload.receipt.commandId);
         if(command?.kind==='approve-requested-followup'){
@@ -342,6 +352,14 @@ export class DelegationRepository {
       const command=this.getCommand(event.receipt.commandId);
       if(!command||command.kind!=='bootstrap-selected-account'||command.accountId!==event.accountId||command.workspaceId!==event.workspaceId||event.payload.commandId!==command.commandId||command.expectedVersion!==0||command.expectedAuthorityGeneration!==0||owner.owner!=='local'||owner.state!=='local'||owner.generation!==0||owner.aggregate_version!==0||event.authorityGeneration!==0||event.aggregateVersion!==1||event.payload.recordFingerprint!==accountFingerprint(command.payload.record)||event.payload.researchRevision!==command.payload.record.researchRevision)throw Error('bootstrap_acknowledgment_conflict');
       return;
+    }
+    if (event.kind === 'account.refreshed') {
+      // The worker acknowledges exactly the record this desktop queued, at the real generation/version it expected.
+      const command = this.getCommand(event.receipt.commandId);
+      if (!command || command.kind !== 'refresh-selected-account-record' || command.accountId !== event.accountId || command.workspaceId !== event.workspaceId
+        || event.payload.commandId !== command.commandId || command.expectedAuthorityGeneration !== event.authorityGeneration || command.expectedVersion !== owner.aggregate_version
+        || command.expectedVersion + 1 !== event.aggregateVersion || owner.owner !== 'worker' || owner.generation !== event.authorityGeneration
+        || event.payload.recordFingerprint !== accountFingerprint(command.payload.record) || event.payload.researchRevision !== command.payload.record.researchRevision) throw Error('refresh_acknowledgment_conflict');
     }
     if (event.kind === 'manual.handoff' || event.kind === 'campaign.changed' || event.kind === 'acquisition.milestone_reported') {
       const command = this.getCommand(event.receipt.commandId);

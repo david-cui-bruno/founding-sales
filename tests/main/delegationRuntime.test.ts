@@ -86,3 +86,77 @@ it('proves local subjects independently of paired worker accounts and invalidate
   expect((await readiness.checkSubject({kind:'account',id:local.id},new AbortController().signal)).kind).toBe('blocked');
  }finally{await runtime.dispose();f.close();}
 });
+
+it('resubmits the saved record to the owning worker with one live command per account, reusing the same id after a lost response',async()=>{
+ const f=await createPmFixture();
+ const {ConditionalCommandHarness}=await import('../../cloud/lambdas/delegated-worker/test/sdkHarness');
+ const {WorkerAuth}=await import('../../cloud/lambdas/delegated-worker/src/workerAuth');
+ const {createWorkerHandler}=await import('../../cloud/lambdas/delegated-worker/src/handler');
+ const {AccountRepository}=await import('../../src/main/domain/accounts/accountRepository');
+ const {accountFingerprint}=await import('../../src/main/domain/accounts/accountEvidence');
+ const {randomUUID}=await import('node:crypto');
+ let now=PM_NOW;const clock={now:()=>now};
+ const auth=new WorkerAuth({dynamo:new ConditionalCommandHarness(),tableName:'fictional',workspaceId:'ws',clock});
+ const redeemed=await auth.redeemPairing((await auth.issuePairing({scopes:['commands:write','events:read'],expiresInSeconds:300})).code,'fictional');
+ const handler=createWorkerHandler({auth,host:'worker.example.test'});
+ let hold=false;const sent:string[]=[];
+ const http:typeof fetch=async(input,init)=>{
+  const u=new URL(String(input));
+  if(u.pathname==='/commands'&&init?.body){const raw=JSON.parse(String(init.body));if(raw.kind==='refresh-selected-account-record'){sent.push(raw.commandId);if(hold)throw Error('fictional owner unavailable');}}
+  const reply=await handler({version:'2.0',rawPath:u.pathname,rawQueryString:u.search.slice(1),headers:{host:u.host,'x-forwarded-proto':'https',authorization:new Headers(init?.headers).get('authorization')??''},body:init?.body,requestContext:{domainName:u.host,http:{method:init?.method??'GET',sourceIp:'fictional'}}});
+  return new Response(reply.body,{status:reply.statusCode});
+ };
+ const runtime=createDelegationRuntime({databaseGate:{withDatabase:async fn=>fn(f.db)},pairing:{...redeemed,endpoint:pair.endpoint},clock,fetch:http});
+ const accounts=new AccountRepository({database:f.db,clock,ids:{next:randomUUID},sourcePolicy:{attest:source=>source.url==='https://example.invalid/team'}});
+ const ids=['a1','a2','a3','a4'].map(suffix=>`aaaaaaaa-aaaa-4aaa-8aaa-${suffix.padEnd(12,'0')}`);
+ try{
+  const account=accounts.create({commandId:randomUUID(),name:'Selected Fictional PM',domain:null});
+  const workerRecord=async()=>(await auth.store.get<{routes:{id:string}[];researchRevision:number;account:{version:number}}>(`ACCOUNT#${account.id}`))!.data;
+  const researchCursor=()=>f.db.raw.prepare("SELECT aggregate_version FROM delegated_event_cursors WHERE workspace_id='ws' AND account_id=? AND stream='research'").get(account.id);
+  // Before any copy exists the freshness is honestly unknown; before the worker owns the company nothing is sent.
+  expect(await runtime.getSelectedAccountFreshness({accountId:account.id})).toMatchObject({accountId:account.id,state:'unknown',sentFingerprint:null,sentAt:null});
+  expect((await runtime.bootstrap({commandId:randomUUID(),accountId:account.id})).status).toBe('applied');
+  await expect(runtime.refreshSelectedAccount({commandId:ids[0]!,accountId:account.id})).rejects.toThrow('refresh_owner_inactive');
+  expect(sent).toEqual([]);
+  await runtime.submit({commandId:randomUUID(),workspaceId:'ws',accountId:account.id,expectedAuthorityGeneration:0,expectedVersion:1,kind:'delegate',payload:{delegationId:'explicit',approvedAt:PM_NOW}});await runtime.sync();
+  expect(await runtime.getSelectedAccountFreshness({accountId:account.id})).toMatchObject({state:'current',sentAt:PM_NOW});
+  // A local admission changes the saved record; the worker's copy is now behind.
+  now='2026-09-08T12:01:00.000Z';
+  accounts.admitEvidence({commandId:randomUUID(),accountId:account.id,expectedVersion:1,sources:[{id:'local-source',url:'https://example.invalid/team',fetchedAt:now,sha256:'a'.repeat(64),excerpt:'Fictional published phone',permitted:true}],claims:[],routes:[{id:'local-route',accountId:account.id,personId:null,channel:'phone',value:'+12025550123',purpose:'business',evidenceIds:['local-source'],verification:'published'}]});
+  const stale=await runtime.getSelectedAccountFreshness({accountId:account.id});
+  expect(stale).toMatchObject({state:'stale',sentAt:PM_NOW});expect(stale.localFingerprint).not.toBe(stale.sentFingerprint);
+  expect((await workerRecord()).routes).toEqual([]);
+  // Lost response: the command stays pending under its own id; a different id is a conflict, the same id is reused.
+  hold=true;
+  expect(await runtime.refreshSelectedAccount({commandId:ids[1]!,accountId:account.id})).toMatchObject({commandId:ids[1],status:'pending'});
+  await expect(runtime.refreshSelectedAccount({commandId:ids[2]!,accountId:account.id})).rejects.toThrow('refresh_command_conflict');
+  await expect(runtime.refreshSelectedAccount({commandId:ids[1]!,accountId:'other-account'})).rejects.toThrow('refresh_command_conflict');
+  hold=false;
+  const applied=await runtime.refreshSelectedAccount({commandId:ids[1]!,accountId:account.id});
+  expect(applied).toMatchObject({commandId:ids[1],status:'applied',authorityGeneration:1});
+  expect(new Set(sent)).toEqual(new Set([ids[1]]));expect(sent.length).toBeGreaterThanOrEqual(2);
+  expect((await workerRecord()).routes.map(route=>route.id)).toEqual(['local-route']);
+  expect(await workerRecord()).toMatchObject({researchRevision:1,account:{version:2}});
+  const current=await runtime.getSelectedAccountFreshness({accountId:account.id});
+  expect(current).toMatchObject({state:'current',sentAt:now});expect(current.sentFingerprint).toBe(current.localFingerprint);
+  const {DelegationRepository}=await import('../../src/main/delegation/delegationRepository');
+  const stored=new DelegationRepository({database:f.db,workspaceId:'ws',clock}).getCommand(ids[1]!);
+  if(stored?.kind!=='refresh-selected-account-record')throw Error('stored refresh command missing');
+  expect(stored).toMatchObject({expectedAuthorityGeneration:1,expectedVersion:2,payload:{expectedResearchRevision:1,asOf:now}});
+  expect(accountFingerprint(stored.payload.record)).toBe(current.sentFingerprint);
+  // The research cursor is untouched: a refresh is bound to it, never a second bootstrap.
+  expect(researchCursor()).toEqual({aggregate_version:1});
+  // Sending an unchanged record again is applied with duplicate semantics and keeps the freshness current.
+  expect(await runtime.refreshSelectedAccount({commandId:ids[3]!,accountId:account.id})).toMatchObject({commandId:ids[3],status:'applied'});
+  expect(await runtime.getSelectedAccountFreshness({accountId:account.id})).toMatchObject({state:'current'});
+  // A record the worker gateway cannot admit (over 64 KiB, bootstrap only) is never queued: no stuck identity, no HTTP.
+  now='2026-09-08T12:02:00.000Z';const attempts=sent.length;
+  accounts.admitEvidence({commandId:randomUUID(),accountId:account.id,expectedVersion:2,claims:[],routes:[],sources:['b','c','d','e','f','0'].map(digit=>({id:`large-${digit}`,url:'https://example.invalid/team',fetchedAt:now,sha256:digit.repeat(64),excerpt:digit.repeat(11000),permitted:true}))});
+  expect(await runtime.getSelectedAccountFreshness({accountId:account.id})).toMatchObject({state:'stale'});
+  await expect(runtime.refreshSelectedAccount({commandId:'aaaaaaaa-aaaa-4aaa-8aaa-a50000000000',accountId:account.id})).rejects.toThrow('refresh_record_too_large');
+  expect(new DelegationRepository({database:f.db,workspaceId:'ws',clock}).pendingCommands()).toEqual([]);
+  expect(new DelegationRepository({database:f.db,workspaceId:'ws',clock}).getCommand('aaaaaaaa-aaaa-4aaa-8aaa-a50000000000')).toBeNull();
+  expect(sent).toHaveLength(attempts);
+  expect(await auth.store.list('GOOGLE_GRANT#')).toEqual([]);
+ }finally{await runtime.dispose();f.close();}
+});
