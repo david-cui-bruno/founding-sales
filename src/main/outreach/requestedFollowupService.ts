@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { accountFingerprint } from '../domain/accounts/accountEvidence';
-import { type RequestedFollowupDraft, requestedMailContextSchema, type OriginalCallRef, type RequestedRecipient, type RequestedMailContext , requestedFollowupDraftSchema, prepareRequestedFollowupSchema, getRequestedFollowupSchema, editRequestedFollowupSchema, type PrepareRequestedFollowup, type GetRequestedFollowup, type EditRequestedFollowup, type SavedRequestedFollowup } from '../../shared/contracts/requestedFollowupContract';
+import { type RequestedFollowupDraft, requestedMailContextSchema, type OriginalCallRef, type RequestedRecipient, type RequestedMailContext , requestedFollowupDraftSchema, prepareRequestedFollowupSchema, getRequestedFollowupSchema, editRequestedFollowupSchema, type PrepareRequestedFollowup, type GetRequestedFollowup, type EditRequestedFollowup, type SavedRequestedFollowup, savedRequestedFollowupSchema } from '../../shared/contracts/requestedFollowupContract';
 /** Semantic evidence only. Text edits have a separate exact draft revision/hash. */
 export function requestedFollowupContextRevision(draft: RequestedFollowupDraft): string {
   const { accountVersion, researchRevision, recipientBinding, originalCall, mailContext } = draft;
@@ -73,8 +73,20 @@ export function createRequestedFollowupService(deps: { store: RequestedFollowupS
   return {
     async prepareRequestedFollowup(raw: PrepareRequestedFollowup, signal: AbortSignal): Promise<SavedRequestedFollowup> {
       const input = prepareRequestedFollowupSchema.parse(raw); signal.throwIfAborted();
+      const replay = (rawSaved: SavedRequestedFollowup): SavedRequestedFollowup => {
+        const saved = savedRequestedFollowupSchema.parse(rawSaved), draft = saved.draft;
+        if (draft.id !== input.draftId || draft.accountId !== input.accountId || draft.accountVersion !== input.expectedAccountVersion
+          || accountFingerprint(draft.originalCall) !== accountFingerprint(input.originalCall)
+          || accountFingerprint(draft.recipientBinding) !== accountFingerprint(input.recipientBinding)
+          || draft.generation !== 'edited' || draft.evidenceIds.length) throw new Error('requested_draft_identity_conflict');
+        return saved;
+      };
+      if (input.draftId) {
+        const saved = await deps.store.get(input.accountId, input.draftId); signal.throwIfAborted();
+        if (saved) return replay(saved);
+      }
       const context = await deps.store.readContext(input);
-      let draft = requestedFollowupDraftSchema.parse({ kind: 'requested_phone_followup', id: deps.id(), accountId: input.accountId, revision: 1,
+      let draft = requestedFollowupDraftSchema.parse({ kind: 'requested_phone_followup', id: input.draftId ?? deps.id(), accountId: input.accountId, revision: 1,
         mailboxSubject: context.mailbox.subject, sender: context.mailbox.sender, recipient: input.recipientBinding.email, recipientBinding: input.recipientBinding,
         accountVersion: context.account.account.version, researchRevision: context.account.researchRevision, originalCall: input.originalCall, mailContext: context.mailContext,
         contextRevision: '0'.repeat(64), subject: '', body: '', evidenceIds: [], generation: 'edited', updatedAt: deps.clock.now() });
@@ -98,7 +110,14 @@ export function createRequestedFollowupService(deps: { store: RequestedFollowupS
       }
       signal.throwIfAborted();
       validateRequestedDraftContext(draft, await deps.store.readContext(input));
-      await deps.store.save(draft, null);
+      try { await deps.store.save(draft, null); } catch (error) {
+        // A concurrent exact same-ID insert or lost post-write reply can be read,
+        // never overwritten. Mismatches retain the original write failure.
+        if (input.draftId) {
+          try { const saved = await deps.store.get(input.accountId, input.draftId); signal.throwIfAborted(); if (saved) return replay(saved); } catch { /* Preserve original failure. */ }
+        }
+        throw error;
+      }
       const saved = await deps.store.get(draft.accountId, draft.id); if (!saved) throw new Error('requested_draft_not_persisted'); return saved;
     },
     async getRequestedFollowup(raw: GetRequestedFollowup): Promise<SavedRequestedFollowup | null> { const input = getRequestedFollowupSchema.parse(raw); return deps.store.get(input.accountId, input.draftId); },

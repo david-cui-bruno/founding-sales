@@ -8,6 +8,7 @@ import { phoneSetupStatusSchema } from '../../../shared/contracts/phoneSetupCont
 import { commandReceiptSchema } from '../../../shared/contracts/commandReceiptContract';
 import { openSettingsSection } from '../../foundation/settingsNavigation';
 import { captureDailySessionScope } from './dailySessionScope';
+import { RequestedEmailPreparation } from './RequestedEmailPreparation';
 import { allowedPhoneReports, companyPhoneSession, freezePhoneValue, makePhoneReview, notifyPhoneSession, parsePhoneHistory,
   phoneFreshBinding, phoneHistoryScope, phoneOwner, phoneSelection, type CompanyPhoneApi, type PhoneAttempt,
   type PhoneConfig, type PhoneOutcome, type PhoneReport, type PhoneReview } from './companyPhoneSession';
@@ -276,9 +277,11 @@ export function CompanyPhoneCall({ api, snapshot, config, accountId, readError =
       <h5>Saved request {saved.command.commandId}</h5><p>{attemptLabel(saved)}</p>
       <p>Original route {saved.command.payload.routeId} · version {saved.command.payload.routeVersion} · target hash {saved.command.payload.targetHash}</p>
       {saved.handoff && <p>Handoff {saved.handoff.value.handoffId} · consumed at {saved.handoff.consumedAt ?? 'not recorded'} · expires at {saved.handoff.value.expiresAt}</p>}
-      {complete.completions.filter(record => record.prepareCommandId === saved.command.commandId).map(record => <p key={record.command.commandId}>
+      {complete.completions.filter(record => record.prepareCommandId === saved.command.commandId).map(record => <div key={record.command.commandId}><p>
         {record.applied && record.receiptEvent ? `Applied human-reported outcome: ${record.applied.outcome.outcome} at ${record.applied.outcome.observedAt}. ${complete.completions.some(other => other.prepareCommandId === saved.command.commandId && other.applied?.evidence.conflict) ? 'Conflicting evidence. Not an actual-call success.' : actualOutcomes.has(record.applied.outcome.outcome) ? 'Human-reported actual attempt, not a native connected-call observation.' : 'This outcome alone is not an actual call.'}` : record.receipt.status === 'pending' ? 'Human report queued, awaiting owner-applied evidence.' : `Human report rejected: ${record.receipt.reason ?? 'reason unavailable'}.`} Command {record.command.commandId}.
-      </p>)}
+      </p>{record.applied?.originalCall && selector && <RequestedEmailPreparation
+        key={JSON.stringify([snapshot.workspaceId, record.command.commandId])} api={api} snapshot={snapshot} config={config}
+        selector={selector} originalCall={record.applied.originalCall} unavailable={!available || busy || stale || newWorkHold} onRefresh={onRefresh} />}</div>)}
     </article>)}
     {consumed.length > 0 && <fieldset disabled={!available || busy || stale}>
       <legend>Report an observed phone outcome</legend>

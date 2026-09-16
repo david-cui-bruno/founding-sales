@@ -28,6 +28,8 @@ import { registerOutreachIpc } from '../../src/main/ipc/registerOutreachIpc';
 import { createCallieApi } from '../../src/preload/createCallieApi';
 import { ConditionalCommandHarness } from '../../cloud/lambdas/delegated-worker/test/sdkHarness';
 import { WorkerAuth } from '../../cloud/lambdas/delegated-worker/src/workerAuth';
+import { RemoteGoogleAuthorization } from '../../cloud/lambdas/delegated-worker/src/remoteGoogleAuthorization';
+import { googleScopes } from '../../cloud/lambdas/delegated-worker/src/googleGrantCapabilities';
 import { createWorkerHandler } from '../../cloud/lambdas/delegated-worker/src/handler';
 import { DynamoExecutionRepository } from '../../cloud/lambdas/delegated-worker/src/executionRepository';
 import { DynamoStore, fingerprint } from '../../cloud/lambdas/delegated-worker/src/dynamoStore';
@@ -68,13 +70,18 @@ async function fixture(options: { policy?: boolean; native?: boolean; inbound?: 
   if (options.policy !== false) new AccountRoutePolicyStore({ database, clock, admission: { attest: value => value.provenance === policy.provenance && value.evidenceRef === 'source' } }).admit(policy);
   const workerOptions = { dynamo: new ConditionalCommandHarness(), tableName: 'fictional-phone-ui', workspaceId, clock };
   const auth = new WorkerAuth(workerOptions);
-  const issued = await auth.issuePairing({ scopes: ['commands:write', 'events:read'], expiresInSeconds: 300 });
+  const issued = await auth.issuePairing({ scopes: ['commands:write', 'events:read', 'google:grant'], expiresInSeconds: 300 });
   const pairing = await auth.redeemPairing(issued.code, 'fictional-ui-device');
   const store = new DynamoStore(workerOptions);
   await store.transact([store.put(`ACCOUNT#${account.id}`, exportSelectedAccountRecord({ database, workspaceId, accountId: account.id, asOf: now, researchRevision: 1 }), null)]);
   await new DynamoExecutionRepository(workerOptions).seedLocalAuthority(account.id);
   const repository = new DelegationRepository({ database, workspaceId, clock }); repository.initializeLocalAuthority(account.id);
-  const handler = createWorkerHandler({ auth, host: 'phone.example.invalid' });
+  const authorization = new RemoteGoogleAuthorization({ auth, config: { clientId: 'fictional.apps.googleusercontent.com', clientSecret: 'fictional', redirectUri: 'https://phone.example.invalid/oauth/callback', encryptionKey: Buffer.alloc(32, 7) }, fetch: async url => {
+    if (String(url) === 'https://oauth2.googleapis.com/token') return Response.json({ access_token: 'fictional', refresh_token: 'fictional-refresh', token_type: 'Bearer', expires_in: 3600, scope: `openid email ${googleScopes.relevant_read} ${googleScopes.send}` });
+    if (String(url) === 'https://openidconnect.googleapis.com/v1/userinfo') return Response.json({ sub: 'mailbox', email: 'sender@example.invalid', email_verified: true });
+    throw Error('Unconfigured fictional Google boundary');
+  } });
+  const handler = createWorkerHandler({ auth, google: authorization, host: 'phone.example.invalid' });
   const paths: string[] = []; let offline = false;
   const http: typeof fetch = async (input, init) => {
     if (offline) throw Error('Controlled owner offline');
@@ -145,7 +152,24 @@ async function fixture(options: { policy?: boolean; native?: boolean; inbound?: 
     const interval = resolveLocalDayInterval({ generatedAt: clock.now(), timezone: services.workspaceSettings.read().timezone });
     return listDelegatedActualCallAccountIds(database, { accountIds: [account.id], from: interval.localDayStartAt, to: interval.localDayEndAt, generatedAt: clock.now() });
   };
+  let requestedRouteConfigured = false;
   return { api, firstUse: firstUseFixture(), account, clock, workspaceId, savedAccount, request, paths, beforeUiPaths, nativeUris, invocations, results, initialTables, tables, setup, repository, apply, actualIds,
+    store,
+    async configureRequestedMailbox(routeOnly = false) {
+      // Fixture context uses the real account evidence owner and exporter. The
+      // requested-draft UI itself must never create a route or a person.
+      if (!requestedRouteConfigured) {
+      repo.admitEvidence({ commandId: randomUUID(), accountId: account.id, expectedVersion: 2, sources: [], claims: [],
+        routes: [{ id: 'email', accountId: account.id, personId: null, channel: 'email', value: 'published@example.invalid', purpose: 'business', evidenceIds: ['source'], verification: 'published' }] });
+      const previous = (await store.get(`ACCOUNT#${account.id}`))!;
+      await store.transact([store.put(`ACCOUNT#${account.id}`, exportSelectedAccountRecord({ database, workspaceId, accountId: account.id, asOf: now, researchRevision: 1 }), previous.rev)]);
+      requestedRouteConfigured = true;
+      }
+      if (routeOnly) return;
+      const grant = await authorization.beginGoogleGrant(pairing.pairingId, ['send', 'relevant_read']);
+      await authorization.completeGoogleGrant(new URL(grant.authorizationUrl).searchParams.get('state')!, 'fictional-code');
+      await apply('configure-owner', { expectedConfigurationRevision: 1, configuration: { version: 1, workspaceId, accountId: account.id, pairingId: pairing.pairingId, revision: 2, state: 'active', mailboxSubject: 'mailbox', calendarId: null, research: null }, mailScope: { expectedEnvelopeRevision: null, since: now } });
+    },
     db: () => database, runtime: () => runtime, daily: () => services.daily.get(), setOffline(value: boolean) { offline = value; }, setCapability(value: boolean) { capability = value; },
     corruptHistoryReply(value: boolean) { corruptHistory = value; },
     async reopen() {
@@ -221,6 +245,49 @@ async function reconcile() {
   await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
   fireEvent.click(button);
 }
+
+it('public applied connected report creates one unsent requested draft and resumes the existing editor', async () => {
+  const f = await fixture(); const view = mount(f);
+  await selectCall(f); await reviewAndBegin(f);
+  await waitFor(() => expect(f.nativeUris).toHaveLength(1));
+  f.setOffline(true); await reportObserved('connected');
+  await waitFor(async () => expect((await f.api.delegation.getPhoneHandoffState(f.request)).completions).toHaveLength(1));
+  expect(screen.queryByRole('button', { name: 'Create unsent requested draft' })).toBeNull();
+  f.setOffline(false); await reconcile();
+  await waitFor(async () => expect((await f.api.delegation.getPhoneHandoffState(f.request)).completions[0].receipt.status).toBe('applied'));
+  const create = await screen.findByRole('button', { name: 'Create unsent requested draft' });
+  expect((create as HTMLButtonElement).disabled).toBe(true);
+  await f.configureRequestedMailbox();
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+  fireEvent.change(screen.getByRole('textbox', { name: 'Recipient email' }), { target: { value: 'requested@example.invalid' } });
+  await waitFor(() => expect((create as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(create); fireEvent.click(create);
+  await screen.findByText(/Draft saved for requested@example.invalid/);
+  expect(f.invocations.filter(c => c.channel === 'outreach:requested-followup-prepare')).toHaveLength(1);
+  const prepared = (await f.api.daily.get()).answers.find(a => a.kind === 'requested_followup');
+  if (prepared?.kind !== 'requested_followup') throw Error('Missing saved requested draft');
+  const ref = prepared.draft.originalCall;
+  const command = f.db().raw.prepare('SELECT command_json,fingerprint FROM delegated_commands WHERE command_id=?').get(ref.commandId) as { command_json: string; fingerprint: string };
+  const event = f.db().raw.prepare('SELECT event_json,fingerprint FROM delegated_applied_events WHERE id=?').get(ref.outcomeEventId) as { event_json: string; fingerprint: string };
+  expect(ref.commandFingerprint).toBe(command.fingerprint); expect(ref.commandFingerprint).toBe(fingerprint(JSON.parse(command.command_json)));
+  expect(ref.outcomeEventHash).toBe(event.fingerprint); expect(ref.outcomeEventHash).toBe(fingerprint(JSON.parse(event.event_json)));
+  expect(prepared.draft).toMatchObject({ recipient: 'requested@example.invalid', recipientBinding: { kind: 'owner_supplied', originalCall: ref }, generation: 'edited', subject: '', body: '' });
+  fireEvent.click(await screen.findByRole('button', { name: `Email · ${f.account.name}` }));
+  fireEvent.change(screen.getByLabelText('Email subject'), { target: { value: 'Requested information' } });
+  fireEvent.change(screen.getByLabelText('Email body'), { target: { value: 'Exact unsent note after our call.' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save edits' }));
+  await waitFor(() => expect(f.db().raw.prepare('SELECT revision FROM delegated_requested_followup_drafts').get()).toEqual({ revision: 2 }));
+  expect(screen.queryByText(/Save unavailable/)).toBeNull();
+  expect((screen.getByRole('button', { name: 'Approve email' }) as HTMLButtonElement).disabled).toBe(true);
+  view.unmount(); const api = await f.reopen(); mount(f, api);
+  fireEvent.click(await screen.findByRole('button', { name: `Email · ${f.account.name}` }));
+  expect((screen.getByLabelText('Email subject') as HTMLInputElement).value).toBe('Requested information');
+  expect((screen.getByLabelText('Email body') as HTMLTextAreaElement).value).toBe('Exact unsent note after our call.');
+  expect(f.nativeUris).toHaveLength(1); expect(f.tables()).toEqual(f.initialTables);
+  for (const prefix of ['REQUESTED_APPROVAL#', 'DISPATCH_PERMISSION#', 'MAIL_THREAD#']) expect(await f.store.list(prefix)).toEqual([]);
+  expect(f.invocations.filter(c => /requested-followup-approve|generate|send/.test(c.channel))).toEqual([]);
+  expect(globalThis.fetch).not.toHaveBeenCalled();
+});
 
 it.each(['no_answer', 'unknown', 'not_called', 'opt_out'] as const)('public observed %s report stays pending offline until owner evidence applies', async outcome => {
   const f = await fixture(); mount(f); await selectCall(f); await reviewAndBegin(f);
@@ -338,4 +405,33 @@ it('prepared unconsumed expired owner permission stays unresolved with no report
   expect(screen.queryByRole('button', { name: /retry|reset/i })).toBeNull();
   expect(f.invocations.slice(before).filter(call => /delegation-(begin-phone|submit|sync)$/.test(call.channel))).toEqual([]);
   expect(f.nativeUris).toEqual([]); expect(f.actualIds()).toEqual([]);
+});
+
+it('public prewrite zero-row failure retries exactly the retained UUID after mailbox repair', async () => {
+  const f = await fixture(); mount(f); await selectCall(f); await reviewAndBegin(f);
+  await waitFor(() => expect(f.nativeUris).toHaveLength(1));
+  await reportObserved('connected');
+  await waitFor(async () => expect((await f.api.delegation.getPhoneHandoffState(f.request)).completions).toHaveLength(1));
+  await reconcile();
+  await waitFor(async () => expect((await f.api.delegation.getPhoneHandoffState(f.request)).completions[0]?.receipt.status).toBe('applied'));
+  await f.configureRequestedMailbox(true); fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+  const create = await screen.findByRole('button', { name: 'Create unsent requested draft' });
+  fireEvent.change(screen.getByRole('textbox', { name: 'Recipient email' }), { target: { value: 'requested@example.invalid' } });
+  await waitFor(() => expect((create as HTMLButtonElement).disabled).toBe(false)); fireEvent.click(create);
+  await screen.findByRole('button', { name: 'Refresh saved requested drafts' });
+  await waitFor(() => expect(f.invocations.filter(c => c.channel === 'outreach:requested-followup-prepare')).toHaveLength(1));
+  expect(f.db().raw.prepare('SELECT count(*) n FROM delegated_requested_followup_drafts').get()).toEqual({ n: 0 });
+  const first = f.invocations.find(c => c.channel === 'outreach:requested-followup-prepare')!.args[0] as { draftId?: string };
+  await f.configureRequestedMailbox(); fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+  const recover = screen.getByRole('button', { name: 'Refresh saved requested drafts' });
+  await waitFor(() => expect((recover as HTMLButtonElement).disabled).toBe(false)); fireEvent.click(recover);
+  await waitFor(() => expect(f.invocations.filter(c => c.channel === 'outreach:requested-followup-prepare')).toHaveLength(2));
+  expect(first.draftId).toMatch(/^[a-f0-9-]{36}$/);
+  await screen.findByText(/Draft saved for requested@example.invalid/);
+  const calls = f.invocations.filter(c => c.channel === 'outreach:requested-followup-prepare');
+  expect(calls).toHaveLength(2); expect(calls[1].args[0]).toEqual(first);
+  expect(first.draftId).toMatch(/^[a-f0-9-]{36}$/);
+  expect(f.db().raw.prepare('SELECT id,revision FROM delegated_requested_followup_drafts').all()).toEqual([{ id: first.draftId, revision: 1 }]);
+  expect(f.invocations.filter(c => /requested-followup-approve|generate|send/.test(c.channel))).toEqual([]);
+  expect(f.tables()).toEqual(f.initialTables); expect(globalThis.fetch).not.toHaveBeenCalled();
 });

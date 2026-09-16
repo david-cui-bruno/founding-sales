@@ -193,7 +193,6 @@ class RequestedDraftSession {
     if (
       this.actionHold ||
       this.state.conflict ||
-      this.state.stale ||
       this.state.unknownApproval
     )
       return Promise.reject(Error('Review required'));
@@ -234,13 +233,14 @@ class RequestedDraftSession {
             identity(next) !== identity(draft) ||
             next.revision <= draft.revision ||
             next.subject !== subject ||
-            next.body !== body ||
-            result.stale
+            next.body !== body
           )
             throw Error('Saved identity changed');
           // Never replace keystrokes typed while this CAS save was in flight.
-          this.remoteAcknowledgedRevision = next.revision;
-          this.update({ draft: next, approval: result.approval, error: null });
+          // Canonical text can be saved before mailbox preflight is ready.
+          // A stale response acknowledges the draft, never an approvable revision.
+          this.remoteAcknowledgedRevision = result.stale ? null : next.revision;
+          this.update({ draft: next, approval: result.approval, stale: result.stale, error: null });
           if (this.state.conflict)
             throw Error('Concurrent snapshot requires review');
         }
@@ -333,6 +333,7 @@ class RequestedDraftSession {
       const generation = this.generation;
       await this.flush(true);
       assertScope();
+      if (this.state.stale) throw Error('Owner context is stale');
       if (generation !== this.generation) throw Error('Operation cancelled');
       if (this.actionHold) throw Error('View scope held');
       const draft = this.state.draft;

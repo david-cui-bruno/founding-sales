@@ -26,7 +26,7 @@ export const approveRequestedFollowupSchema = z.strictObject({ draft: requestedF
   request: z.strictObject({ statement: z.literal('recipient_requested_information_by_email'), recipient: email }), expiresAt: instant })
   .refine(v => v.request.recipient === v.draft.recipient && v.draft.subject.trim().length > 0 && v.draft.body.trim().length > 0);
 export type ApproveRequestedFollowup = z.infer<typeof approveRequestedFollowupSchema>;
-export const prepareRequestedFollowupSchema = z.strictObject({ accountId: id, originalCall: originalCallRefSchema, recipientBinding: requestedRecipientSchema, expectedAccountVersion: revision, mode: z.enum(['manual', 'model']) });
+export const prepareRequestedFollowupSchema = z.strictObject({ accountId: id, originalCall: originalCallRefSchema, recipientBinding: requestedRecipientSchema, expectedAccountVersion: revision, mode: z.enum(['manual', 'model']), draftId: z.uuid().optional() }).refine(v => v.draftId === undefined || v.mode === 'manual', 'requested_retry_manual_only');
 export type PrepareRequestedFollowup = z.infer<typeof prepareRequestedFollowupSchema>;
 export const getRequestedFollowupSchema = z.strictObject({ accountId: id, draftId: id });
 export type GetRequestedFollowup = z.infer<typeof getRequestedFollowupSchema>;
