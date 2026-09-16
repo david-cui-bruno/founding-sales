@@ -59,6 +59,10 @@ it('ranks rows most ready first, keeps row identities, and shows one reason and 
   expect(screen.getByRole('button', { name: `${preparationControlLabel.add_route} · Bravo Routeless PM` })).toBeTruthy();
   expect(screen.getByRole('button', { name: `${preparationControlLabel.research} · Alpha New PM` })).toBeTruthy();
   expect(screen.getByRole('button', { name: `${preparationControlLabel.unknown} · Foxtrot Unknown PM` })).toBeTruthy();
+  // The control is styled by its class alone, so the stylesheet owns its spacing.
+  const step = screen.getByRole('button', { name: `${preparationControlLabel.draft} · Charlie Ready PM` });
+  expect(step.className).toBe('native-desk__row-step');
+  expect(step.getAttribute('style')).toBeNull();
   // Snapshots without a preparation summary render exactly as before: one row, no control, no invented reason.
   expect(screen.getAllByRole('button', { name: /Echo Unassessed PM/ })).toHaveLength(1);
   expect(within(screen.getByRole('button', { name: 'Local account · Echo Unassessed PM' })).queryByText(/prepar|research|draft/i)).toBeNull();

@@ -45,7 +45,7 @@ async function fixture() {
       expectedRouteVersion: admitted.recipientBinding.routeVersion, expectedAccountVersion: admitted.accountVersion });
     expect(opened.current.draft.status).toBe('unsent');
     const api = createLocalWorkspaceProvider({ withDatabase: async operation => operation(database), withDomain: async () => { throw new Error('Domain unavailable in this fixture'); } });
-    return { database, api, alpha, bravo, charlie, delta, close() { closeDatabase(database); key.bytes.fill(0); temp.cleanup(); } };
+    return { database, api, repo, alpha, bravo, charlie, delta, close() { closeDatabase(database); key.bytes.fill(0); temp.cleanup(); } };
   } catch (error) { closeDatabase(database); key.bytes.fill(0); temp.cleanup(); throw error; }
 }
 
@@ -95,6 +95,26 @@ describe('local preparation queue from saved evidence', () => {
       const unavailable = await f.api.get();
       expect(unavailable.accounts).toEqual({ state: 'unavailable', snapshots: [] });
       expect(JSON.stringify(unavailable)).not.toContain('preparation');
+    } finally { f.close(); }
+  });
+  it('gives a parked research attempt its own honest reason without changing the step or the ranking', async () => {
+    const f = await fixture();
+    try {
+      f.repo.enqueue({ commandId: randomUUID(), accountId: f.bravo.id, limits: { maxCompanies: 1, maxPages: 1, maxBytes: 1000, maxCostMicros: 1000 } });
+      // The same row state the repository leaves behind for an expired running lease: no receipt, nothing saved.
+      expect(f.database.raw.prepare("UPDATE pm_account_research_jobs SET state='parked' WHERE account_id IN (?,?) AND state='queued'").run(f.alpha.id, f.bravo.id).changes).toBe(2);
+      f.database.raw.exec('PRAGMA query_only=ON');
+      const result = await f.api.get();
+      if (result.accounts.state !== 'available') throw new Error('Expected available local accounts');
+      expect(result.accounts.snapshots.map(s => s.account.id)).toEqual([f.delta.id, f.charlie.id, f.bravo.id, f.alpha.id]);
+      const byId = Object.fromEntries(result.accounts.snapshots.map(s => [s.account.id, s.preparation]));
+      expect(byId[f.alpha.id]).toMatchObject({ researched: false, unsentDraft: false, businessRoute: false, nextStep: 'research' });
+      expect(byId[f.alpha.id]?.reason).toMatch(/parked/i);
+      expect(byId[f.alpha.id]?.reason).not.toMatch(/no research or saved sources yet|not completed/i);
+      expect(byId[f.alpha.id]?.reason).not.toMatch(/worker|authority|owned|automatic/i);
+      // A saved source is still research: the parked attempt neither demotes bravo nor rewrites its reason.
+      expect(byId[f.bravo.id]).toMatchObject({ researched: true, unsentDraft: false, businessRoute: false, nextStep: 'add_route' });
+      expect(byId[f.bravo.id]?.reason).not.toMatch(/parked|attempt/i);
     } finally { f.close(); }
   });
   it('binds the wire contract: the step follows the flags, and snapshots without preparation still parse', () => {

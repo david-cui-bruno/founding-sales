@@ -129,6 +129,10 @@
   border-left-color: var(--accent);
   color: var(--text);
 }
+/* The ranked next-step control sits under its company row, inside the lane padding. */
+.native-desk__row-step {
+  margin: 0 var(--space-3) var(--space-2);
+}
 .native-desk :is(button, input, textarea, select, summary, a):focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
@@ -628,7 +632,10 @@
 .native-desk[data-presentation='native-a'] > .native-desk__layout {
   flex: 1 1 auto;
   height: auto;
-  min-height: 0;
+  /* Campaigns stacks a growing draft form above this split body. Keep room for the
+     queue and the welcome text; when the form needs more, the desk (which holds
+     focusable controls) scrolls instead of collapsing the body to a sliver. */
+  min-height: 112px;
 }
 .native-desk[data-presentation='native-a'] :is(.native-desk__queue, .native-desk__detail) {
   min-height: 0;
@@ -833,6 +840,8 @@
 @media (max-height: 760px) {
   .native-desk__message-area > .native-desk__message-field { flex-basis: 112px; min-height: 112px; }
   .native-desk__message-area .native-desk__message-field textarea { min-height: 90px; }
+  /* A short window gets a compact welcome pane rather than 28px of padding. */
+  .native-desk__welcome { padding: 12px; }
 }
 
 .native-desk--pending {
