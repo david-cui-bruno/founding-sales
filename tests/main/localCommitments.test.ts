@@ -110,6 +110,8 @@ describe('local retained Today feed', () => {
   });
 
   it('lists an unsent local company draft as an additive local draft continuation, never as a person item', () => {
+    // Without a draft the optional field is absent, so exact-shape readers of the feed are unchanged.
+    expect(domain.getLocalCommitments()).not.toHaveProperty('localDrafts');
     // Real repository seam: a Lenox-shaped saved source, one reviewed business inbox, one opened draft, one saved edit.
     const clock = { now: () => at }, ids = { next: randomUUID };
     const accounts = new AccountRepository({ database, clock, ids, sourcePolicy: { attest: () => true } });

@@ -1273,13 +1273,16 @@ export class FounderSalesDomain implements OutboundDomainPort {
         if (item !== null) items.push({ kind, item });
       }
     }
-    // Unsent local company drafts are their own additive continuation, never a person item. An unreadable
-    // draft list is reported as incomplete local work rather than hidden or invented.
+    // Unsent local company drafts are their own additive continuation, never a person item. The optional field is
+    // present only when a draft exists, so exact-shape readers of an empty feed are unchanged. An unreadable draft
+    // list is reported as incomplete local work rather than hidden or invented.
     let localDrafts: LocalCommitmentsSnapshot['localDrafts'], draftReadErrors = 0;
-    try { localDrafts = new LocalCompanyDraftRepository({ database: this.database, clock: this.clock, ids: this.ids }).listUnsent(); }
-    catch { draftReadErrors = 1; }
+    try {
+      const drafts = new LocalCompanyDraftRepository({ database: this.database, clock: this.clock, ids: this.ids }).listUnsent();
+      if (drafts.length) localDrafts = drafts;
+    } catch { draftReadErrors = 1; }
     return localCommitmentsSnapshotSchema.parse({ scope: 'local_database', generatedAt: queue.generatedAt,
-      revision: this.currentRevision(), reviewErrorCount: queue.diagnostics.length + draftReadErrors, items, localDrafts });
+      revision: this.currentRevision(), reviewErrorCount: queue.diagnostics.length + draftReadErrors, items, ...(localDrafts ? { localDrafts } : {}) });
   }
 
   private buildTodayProjection() {
