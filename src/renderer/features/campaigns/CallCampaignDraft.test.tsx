@@ -390,7 +390,10 @@ function preparationFixture(checkpoint: 'absent' | 'zero' | 'copied' | 'active' 
 function reviewPreparation() { fireEvent.click(screen.getByRole('button', { name: 'Review worker preparation' })); }
 function clickPreparation(name: string) { fireEvent.click(screen.getByRole('button', { name })); }
 
-it.each(['absent', 'zero', 'copied', 'active'] as const)('derives the %s checkpoint without effects on mount, selection, review, refresh or remount', checkpoint => {
+// Opening the review for a worker-owned company makes exactly one local read: the worker-copy comparison
+// (getSelectedAccountFreshness, no HTTP). Every worker-facing read (sync, daily.get, status, the preparation
+// read, bootstrap, submit) stays forbidden on mount, selection, review, refresh and remount.
+it.each(['absent', 'zero', 'copied', 'active'] as const)('derives the %s checkpoint without worker-facing effects on mount, selection, review, refresh or remount', async checkpoint => {
   const f = preparationFixture(checkpoint);
   const view = render(<CallCampaignDraft {...f.props} />);
   fill(); reviewPreparation();
@@ -402,9 +405,11 @@ it.each(['absent', 'zero', 'copied', 'active'] as const)('derives the %s checkpo
   view.rerender(<CallCampaignDraft {...f.props} snapshot={structuredClone(f.props.snapshot)} />);
   view.unmount();
   render(<CallCampaignDraft {...f.props} />);
-  expect(f.calls).toEqual([]);
+  expect(f.calls).toEqual(checkpoint === 'active' ? [{ method: 'getSelectedAccountFreshness', input: { accountId: 'a' } }] : []);
   expect(f.bootstrap).not.toHaveBeenCalled();
   expect(f.submit).not.toHaveBeenCalled();
+  if (checkpoint === 'active') await screen.findByText('Worker copy freshness unknown.');
+  expect(f.calls).toHaveLength(checkpoint === 'active' ? 1 : 0);
 });
 
 it('copies only the selected saved identity, delegates on a separate click and leaves save separate', async () => {
@@ -793,12 +798,14 @@ it('drops a saved confirmation when the channel changes and locks the other chan
   expect(f.submit).toHaveBeenCalledTimes(1);
 });
 
-// Sending the updated saved record to a worker that already owns the company. The line is a local
-// read, the button is the only producer, and a rejection shows the worker's reason verbatim.
-const checkLabel = 'Check worker copy of saved record';
+// Sending the updated saved record to a worker that already owns the company. The worker-copy line is a local
+// read made automatically while the panel is open for a worker-owned company; the button is the only producer,
+// and a rejection shows the worker's reason verbatim.
+const recheckLabel = 'Check worker copy again';
 const sendLabel = 'Send updated saved record to worker';
 const retrySendLabel = 'Retry same record send';
 const unknownLine = 'Worker copy freshness unknown.';
+const unreadableLine = 'Worker copy freshness could not be read.';
 const staleLine = 'The saved record changed since it was sent to the worker.';
 const currentLine = 'Worker holds the current saved record.';
 type Freshness = Awaited<ReturnType<NonNullable<ReturnType<typeof fixture>['api']['delegation']['getSelectedAccountFreshness']>>>;
@@ -813,43 +820,108 @@ function recordFixture(state: Freshness['state'] = 'stale') {
   }));
   return { ...f, read, send };
 }
-it('shows the honest unknown line with the two explicit buttons only for a worker-owned company and reads nothing on its own', () => {
-  const f = recordFixture();
+it('reads the worker copy state once when the review opens for a worker-owned company, without any worker-facing read, and never for a company the worker does not own', async () => {
+  const f = recordFixture('unknown');
   render(<CallCampaignDraft {...f.props} />);
-  fill(); reviewPreparation();
-  expect(screen.getByText(unknownLine)).toBeTruthy();
-  expect(screen.getByRole<HTMLButtonElement>('button', { name: checkLabel }).disabled).toBe(false);
+  fill();
+  expect(f.read).not.toHaveBeenCalled();
+  reviewPreparation();
+  await screen.findByText(unknownLine);
+  expect(f.read).toHaveBeenCalledTimes(1);
+  expect(f.read.mock.calls[0][0]).toEqual({ accountId: 'a' });
+  expect(screen.getByRole<HTMLButtonElement>('button', { name: recheckLabel }).disabled).toBe(false);
   expect(screen.getByRole<HTMLButtonElement>('button', { name: sendLabel }).disabled).toBe(false);
   expect(screen.getByText('Reconcile queued preparation asks the worker what it already holds for queued commands and applies the answer.')).toBeTruthy();
   expect(screen.queryByText('Retry same preparation resends the exact queued command.')).toBeNull();
-  expect(f.read).not.toHaveBeenCalled();
   expect(f.send).not.toHaveBeenCalled();
+  expect(f.refresh).not.toHaveBeenCalled();
   expect(f.calls).toEqual([]);
   const copied = preparationFixture('copied');
   cleanup();
   render(<CallCampaignDraft {...copied.props} />);
   fill(); reviewPreparation();
   expect(screen.queryByText(unknownLine)).toBeNull();
-  expect(screen.queryByRole('button', { name: checkLabel })).toBeNull();
+  expect(screen.queryByText(unreadableLine)).toBeNull();
+  expect(screen.queryByRole('button', { name: recheckLabel })).toBeNull();
   expect(screen.queryByRole('button', { name: sendLabel })).toBeNull();
+  expect(copied.calls).toEqual([]);
 });
-it.each(['unknown', 'stale', 'current'] as const)('reads the %s worker copy state only on the explicit check and disables sending only when current', async state => {
+it.each(['unknown', 'stale', 'current'] as const)('shows the %s worker copy state from the automatic local read, re-reads only on the explicit re-check, and disables sending only when current', async state => {
   const f = recordFixture(state);
   render(<CallCampaignDraft {...f.props} />);
-  fill(); reviewPreparation(); clickPreparation(checkLabel);
-  await screen.findByText(state === 'unknown' ? unknownLine : state === 'stale' ? staleLine : currentLine);
+  fill(); reviewPreparation();
+  const line = state === 'unknown' ? unknownLine : state === 'stale' ? staleLine : currentLine;
+  await screen.findByText(line);
   expect(f.read).toHaveBeenCalledTimes(1);
   expect(f.read.mock.calls[0][0]).toEqual({ accountId: 'a' });
+  expect(screen.getByRole<HTMLButtonElement>('button', { name: sendLabel }).disabled).toBe(state === 'current');
+  clickPreparation(recheckLabel);
+  await waitFor(() => expect(f.read).toHaveBeenCalledTimes(2));
+  await screen.findByText(line);
   expect(screen.getByRole<HTMLButtonElement>('button', { name: sendLabel }).disabled).toBe(state === 'current');
   expect(f.send).not.toHaveBeenCalled();
   expect(f.refresh).not.toHaveBeenCalled();
   expect(f.calls).toEqual([]);
 });
+it('reads again for the newly selected company once the panel is reopened after a company change', async () => {
+  const f = recordFixture('stale');
+  render(<CallCampaignDraft {...f.props} />);
+  fill(); reviewPreparation();
+  await screen.findByText(staleLine);
+  fireEvent.change(screen.getByLabelText('Company'), { target: { value: 'b' } });
+  expect(screen.queryByText(staleLine)).toBeNull();
+  expect(f.read).toHaveBeenCalledTimes(1);
+  reviewPreparation();
+  await screen.findByText(staleLine);
+  expect(f.read).toHaveBeenCalledTimes(2);
+  expect(f.read.mock.calls[1][0]).toEqual({ accountId: 'b' });
+  expect(f.send).not.toHaveBeenCalled();
+  expect(f.calls).toEqual([]);
+});
+it('says the worker copy could not be read when the local read fails or the bridge lacks it, never "unknown", and keeps sending explicit', async () => {
+  const f = recordFixture('stale');
+  f.read.mockRejectedValueOnce(Error('PRIVATE local read failure'));
+  render(<CallCampaignDraft {...f.props} />);
+  fill(); reviewPreparation();
+  await screen.findByText(unreadableLine);
+  expect(screen.queryByText(unknownLine)).toBeNull();
+  expect(screen.queryByText(/PRIVATE/)).toBeNull();
+  expect(screen.getByRole<HTMLButtonElement>('button', { name: sendLabel }).disabled).toBe(false);
+  clickPreparation(recheckLabel);
+  await screen.findByText(staleLine);
+  expect(f.read).toHaveBeenCalledTimes(2);
+  expect(f.send).not.toHaveBeenCalled();
+  cleanup();
+  const bare = preparationFixture('active');
+  const bridge: { -readonly [K in keyof typeof bare.api.delegation]?: typeof bare.api.delegation[K] } = bare.api.delegation;
+  delete bridge.getSelectedAccountFreshness;
+  delete bridge.refreshSelectedAccount;
+  render(<CallCampaignDraft {...bare.props} />);
+  fill(); reviewPreparation();
+  expect(screen.getByText(unreadableLine)).toBeTruthy();
+  expect(screen.getByRole<HTMLButtonElement>('button', { name: recheckLabel }).disabled).toBe(true);
+  expect(screen.getByRole<HTMLButtonElement>('button', { name: sendLabel }).disabled).toBe(true);
+  expect(bare.calls).toEqual([]);
+});
+it('re-reads the worker copy after an explicit reconcile of queued preparation, with no worker-facing read beyond the reconcile itself', async () => {
+  const f = recordFixture('stale');
+  render(<CallCampaignDraft {...f.props} />);
+  fill(); reviewPreparation();
+  await screen.findByText(staleLine);
+  f.read.mockImplementation(async input => ({ ...freshness('current'), accountId: input.accountId }));
+  clickPreparation(reconcileLabel);
+  await screen.findByText(currentLine);
+  expect(f.read).toHaveBeenCalledTimes(2);
+  expect(f.calls.map(c => c.method)).toEqual(['delegation.sync', 'daily.get', 'delegation.status']);
+  expect(f.refresh).toHaveBeenCalledTimes(1);
+  expect(f.send).not.toHaveBeenCalled();
+  expect(screen.getByRole<HTMLButtonElement>('button', { name: sendLabel }).disabled).toBe(true);
+});
 it('sends exactly one frozen identity for the selected company, then re-reads the worker copy state', async () => {
   const f = recordFixture('stale');
   f.send.mockImplementation(async command => { f.read.mockImplementation(async input => ({ ...freshness('current'), accountId: input.accountId })); return { commandId: command.commandId, status: 'applied', authorityGeneration: 7, aggregateVersion: 20, reason: null }; });
   render(<CallCampaignDraft {...f.props} />);
-  fill(); reviewPreparation(); clickPreparation(checkLabel);
+  fill(); reviewPreparation();
   await screen.findByText(staleLine);
   clickPreparation(sendLabel);
   await screen.findByText(currentLine);
@@ -870,7 +942,7 @@ it('shows a schema-valid exact rejection reason verbatim and frees the form with
   const f = recordFixture('stale');
   f.send.mockImplementation(async command => ({ commandId: command.commandId, status: 'rejected', authorityGeneration: 7, aggregateVersion: 20, reason: 'route_evidence_missing' }));
   render(<CallCampaignDraft {...f.props} />);
-  fill(); reviewPreparation(); clickPreparation(checkLabel);
+  fill(); reviewPreparation();
   await screen.findByText(staleLine);
   clickPreparation(sendLabel);
   const reason = await screen.findByText('route_evidence_missing');
@@ -891,7 +963,7 @@ it.each(['throw', 'pending'] as const)('retains an uncertain record send on %s a
   if (outcome === 'throw') f.send.mockRejectedValueOnce(Error('PRIVATE HTTP refusal after queue'));
   else f.send.mockImplementationOnce(async command => ({ commandId: command.commandId, status: 'pending', authorityGeneration: 7, aggregateVersion: 19, reason: null }));
   const view = render(<CallCampaignDraft {...f.props} />);
-  fill(); reviewPreparation(); clickPreparation(checkLabel);
+  fill(); reviewPreparation();
   await screen.findByText(staleLine);
   clickPreparation(sendLabel);
   await waitFor(() => expect(f.refresh).toHaveBeenCalledTimes(1));
@@ -920,7 +992,7 @@ it.each(['stale', 'gaps', 'owner', 'selection'])('holds a new record send when f
   const gate = deferred<DailySnapshot>();
   if (change === 'selection') vi.spyOn(f.api.daily, 'get').mockReturnValueOnce(gate.promise);
   render(<CallCampaignDraft {...f.props} />);
-  fill(); reviewPreparation(); clickPreparation(checkLabel);
+  fill(); reviewPreparation();
   await screen.findByText(staleLine);
   clickPreparation(sendLabel);
   if (change === 'selection') {

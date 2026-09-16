@@ -262,7 +262,7 @@ it('retains a durable pending draft across route closure and uses existing owner
 // locally afterwards never reaches it until the founder explicitly resubmits the current record.
 const staleLine = 'The saved record changed since it was sent to the worker.';
 const currentLine = 'Worker holds the current saved record.';
-const checkLabel = 'Check worker copy of saved record';
+const recheckLabel = 'Check worker copy again';
 const sendLabel = 'Send updated saved record to worker';
 const retrySendLabel = 'Retry same record send';
 type RefreshFixture = Awaited<ReturnType<typeof fixture>>;
@@ -275,9 +275,11 @@ async function openReview(f: RefreshFixture) {
   const view = f.mount();
   fireEvent.click(await screen.findByRole('button', { name: 'New call campaign' }));
   fireEvent.change(screen.getByLabelText('Company'), { target: { value: f.account.id } });
+  const http = f.paths.length;
   fireEvent.click(screen.getByRole('button', { name: 'Review worker preparation' }));
-  fireEvent.click(await screen.findByRole('button', { name: checkLabel }));
+  // The worker-copy line is read locally the moment the panel opens: no click, no HTTP.
   await screen.findByText(staleLine);
+  expect(f.paths).toHaveLength(http);
   return view;
 }
 
@@ -290,10 +292,13 @@ it('sends the updated saved record to the worker so a locally admitted phone rou
     expect(await workerRouteIds(f)).toEqual(f.routes.map(route => route.id));
     await expect(new WorkerCampaignRepository(f.auth.options).accountRoute(f.account.id, third.id)).rejects.toThrow('campaign_route_mismatch');
     const { campaign } = await approveNewDraft(f);
+    const http = f.paths.length;
     fireEvent.click(screen.getByRole('button', { name: 'Review worker preparation' }));
-    expect(screen.getByText('Worker copy freshness unknown.')).toBeTruthy();
-    fireEvent.click(await screen.findByRole('button', { name: checkLabel }));
+    // The stale line comes from the automatic local read alone: no click, no worker call.
     await screen.findByText(staleLine);
+    expect(f.paths).toHaveLength(http);
+    expect(screen.queryByText('Worker copy freshness unknown.')).toBeNull();
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: recheckLabel }).disabled).toBe(false);
     expect(screen.getByText('Reconcile queued preparation asks the worker what it already holds for queued commands and applies the answer.')).toBeTruthy();
     const send = screen.getByRole<HTMLButtonElement>('button', { name: sendLabel });
     expect(send.disabled).toBe(false);
