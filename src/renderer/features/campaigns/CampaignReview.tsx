@@ -86,7 +86,9 @@ export function CampaignReview({
       <p>
         {version.approvedAt
           ? `Frozen approval recorded: ${version.approvedAt}. ${text ? text.approval : 'This does not activate new work.'}`
-          : 'Not approved. Approval held until audience evidence and exact owner authority can be verified.'}
+          : text
+            ? `Not yet approved. Review the frozen offer, audience, step and limits above, then approve below. ${text.approval}`
+            : 'Not approved. Approval is not available for this read-only version. Nothing here enrolls a company or starts outreach.'}
       </p>
       <details>
         <summary>Frozen identities and enrollments</summary>
