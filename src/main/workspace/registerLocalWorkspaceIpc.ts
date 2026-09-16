@@ -1,4 +1,5 @@
 import { admitCompanyDraftEmailSchema, openCompanyDraftSchema, getCompanyDraftSchema, saveCompanyDraftSchema, companyDraftAdmissionReply, companyDraftOpenReply, companyDraftGetReply, companyDraftSaveReply, companyDraftAdmissionReceiptSchema, companyDraftMutationResultSchema, companyDraftReadSchema, prepareCompanyDraftSchema, preparedCompanyDraftSchema, companyDraftPrepareReply } from '../../shared/contracts/localCompanyDraftContract';
+import { admitCompanyPhoneRouteSchema, companyPhoneRouteReceiptSchema, companyPhoneRouteReply } from '../../shared/contracts/localCompanyPhoneRouteContract';
 import { companyResearchSettingsSchema, companyResearchSettingsUpdateReplySchema, updateCompanyResearchSettingsRequestSchema } from '../../shared/contracts/localCompanyResearchSettingsContract';
 import { localCompanyInputSchema, localCompanyCreateRequestSchema, localCompanyReviewSchema, localCompanyCreateResultSchema, localCompanyCreateStatusSchema } from '../../shared/contracts/localCompanyIntakeContract';
 import { meetingFirstAccountCallSettingsSchema, updateCallSettingsRequestSchema, callSettingsUpdateReplySchema, linkCompanyPersonRequestSchema, accountEvidenceReceiptSchema, localWorkspaceSnapshotSchema, localCommitmentsSnapshotSchema, localWorkflowTransitionSchema, localWorkflowReceiptSchema, selectedCompanySchema, localCompanyDetailSchema, selectedResearchSchema, localCompanyResearchStatusSchema, type LocalWorkspaceApi } from '../../shared/contracts/localWorkspaceContract';
@@ -65,6 +66,11 @@ export function registerLocalWorkspaceIpc(provider: LocalWorkspaceApi, isTrusted
     } }));
     disposers.push(registerValidatedIpc({ channel: 'local-workspace:admit-company-draft-email', requestSchema: admitCompanyDraftEmailSchema, responseSchema: companyDraftAdmissionReceiptSchema, safeErrorCode: 'LOCAL_COMPANY_DRAFT_FAILED', isTrustedRendererUrl, handler: async input => {
       const parsed = Object.freeze(admitCompanyDraftEmailSchema.parse(input)); return companyDraftAdmissionReply(parsed).parse(await provider.admitCompanyDraftEmail(parsed));
+    } }));
+    disposers.push(registerValidatedIpc({ channel: 'local-workspace:admit-company-phone-route', requestSchema: admitCompanyPhoneRouteSchema, responseSchema: companyPhoneRouteReceiptSchema, safeErrorCode: 'LOCAL_COMPANY_PHONE_ROUTE_FAILED', isTrustedRendererUrl, handler: async input => {
+      const parsed = Object.freeze(admitCompanyPhoneRouteSchema.parse(input));
+      if (!provider.admitCompanyPhoneRoute) throw new Error('Company phone route review unavailable');
+      return companyPhoneRouteReply(parsed).parse(await provider.admitCompanyPhoneRoute(parsed));
     } }));
     disposers.push(registerValidatedIpc({ channel: 'local-workspace:open-company-draft', requestSchema: openCompanyDraftSchema, responseSchema: companyDraftMutationResultSchema, safeErrorCode: 'LOCAL_COMPANY_DRAFT_FAILED', isTrustedRendererUrl, handler: async input => {
       const parsed = Object.freeze(openCompanyDraftSchema.parse(input)); return companyDraftOpenReply(parsed).parse(await provider.openCompanyDraft(parsed));

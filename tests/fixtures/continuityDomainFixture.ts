@@ -62,7 +62,7 @@ export const CONTINUITY_READ_CHANNELS = [
   'health:get', 'local-workspace:get', 'local-workspace:get-commitments', 'friday:get',
 ] as const;
 export const CONTINUITY_REGISTERED_CHANNELS = [
-  'local-workspace:admit-company-draft-email', 'local-workspace:open-company-draft', 'local-workspace:get-company-draft', 'local-workspace:save-company-draft', 'local-workspace:prepare-company-draft',
+  'local-workspace:admit-company-draft-email', 'local-workspace:admit-company-phone-route', 'local-workspace:open-company-draft', 'local-workspace:get-company-draft', 'local-workspace:save-company-draft', 'local-workspace:prepare-company-draft',
   'health:get',
   'local-workspace:get-company-research-settings', 'local-workspace:update-company-research-settings',
   'local-workspace:get', 'local-workspace:get-company', 'local-workspace:get-commitments', 'local-workspace:transition',
