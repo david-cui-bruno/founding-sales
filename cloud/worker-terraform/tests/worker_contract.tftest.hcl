@@ -180,10 +180,10 @@ run "enabled_bounded_schedule_google_research_off" {
     condition = toset(keys(aws_apigatewayv2_route.delegated_worker)) == toset([
       "POST /pairing/redeem", "POST /pairing/revoke", "POST /commands", "POST /commands/reconcile", "POST /emergency",
       "POST /readiness", "POST /research/configure", "POST /policies/configure", "POST /requested-followup/context", "POST /requested-followup/draft",
-      "POST /research/setup/status", "POST /research/setup", "POST /accounts/preparation",
+      "POST /research/setup/status", "POST /research/setup", "POST /accounts/preparation", "POST /reply/draft",
       "GET /events", "POST /google/begin", "GET /google/status", "GET /google/disclosure", "POST /google/revoke", "GET /oauth/callback"
     ])
-    error_message = "Preserve existing worker routes and expose the explicit POST account preparation read route."
+    error_message = "Preserve existing worker routes and expose the explicit POST account preparation read and ordinary reply draft routes."
   }
   assert {
     condition = (
