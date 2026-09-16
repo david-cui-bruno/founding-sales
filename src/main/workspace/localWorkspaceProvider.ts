@@ -1,5 +1,6 @@
 import { admitCompanyDraftEmailSchema, openCompanyDraftSchema, getCompanyDraftSchema, saveCompanyDraftSchema, companyDraftAdmissionReply, companyDraftOpenReply, companyDraftGetReply, companyDraftSaveReply, prepareCompanyDraftSchema, companyDraftPrepareReply } from '../../shared/contracts/localCompanyDraftContract';
 import { LocalCompanyDraftRepository } from '../domain/accounts/localCompanyDraftRepository';
+import { attachLocalPreparation } from '../domain/accounts/localCompanyPreparation';
 import type { CompanyDraftPreparationPort } from '../outreach/companyDraftPreparationService';
 import { companyResearchSettingsSchema, companyResearchSettingsUpdateReplySchema, updateCompanyResearchSettingsRequestSchema } from '../../shared/contracts/localCompanyResearchSettingsContract';
 import { getCompanyResearchProfiles } from '../research/knownCompanyRequestProfile';
@@ -89,7 +90,8 @@ export function createLocalWorkspaceProvider(runtime: Pick<FoundationRuntime, 'w
     reviewCompany: async input => { const parsed = localCompanyInputSchema.parse(input); return runtime.withDomain(domain => domain.reviewLocalCompany(parsed)); },
     createCompany: async input => { const parsed = localCompanyCreateRequestSchema.parse(input); return runtime.withDomain(domain => domain.createLocalCompany(parsed)); },
     getCompanyCreateStatus: async input => { const parsed = localCompanyCreateRequestSchema.parse(input); return runtime.withDomain(domain => domain.getLocalCompanyCreateStatus(parsed)); },
-    get: () => runtime.withDatabase(database => readLocalWorkspace(database)),
+    // Storage read only. The preparation summary ranks saved evidence; it starts nothing.
+    get: () => runtime.withDatabase(database => attachLocalPreparation(database, readLocalWorkspace(database))),
     getCommitments: () => runtime.withDomain(domain => domain.getLocalCommitments()),
     transition: command => {
       const parsed = localWorkflowTransitionSchema.parse(command);
