@@ -1,4 +1,4 @@
-import { getAccountPreparationSchema, accountPreparationRequestSchema, accountPreparationReplySchema, ACCOUNT_PREPARATION_MAX_REPLY_BYTES, type GetAccountPreparation, type AccountPreparation } from '../../shared/contracts/accountPreparationContract';
+import { getAccountPreparationSchema, accountPreparationRequestSchema, accountPreparationReplySchema, accountPreparationErrorBodySchema, AccountPreparationReadFailure, ACCOUNT_PREPARATION_MAX_REPLY_BYTES, ACCOUNT_PREPARATION_MAX_ERROR_BYTES, type GetAccountPreparation, type AccountPreparation } from '../../shared/contracts/accountPreparationContract';
 import { accountIdSchema } from '../../shared/contracts/accountContract';
 import { ownerReplyDraftRequestSchema, replyDraftResultSchema, assertReplyDraftLineage, type OwnerReplyDraftRequest } from '../../shared/contracts/mailThreadContract';
 import {requestedFollowupDraftSchema,type RequestedFollowupDraft,prepareRequestedFollowupSchema,type PrepareRequestedFollowup} from '../../shared/contracts/requestedFollowupContract';
@@ -36,20 +36,11 @@ export function createAccountPreparationTransport(options: { pairing: ExecutionP
         abort = () => { cancelReader(); reject(fail()); };
         signal.addEventListener('abort', abort, { once: true });
       });
-      const operation = async () => {
-        signal.throwIfAborted();
-        const response = await http(`${endpoint.origin}/accounts/preparation`, { method: 'POST',
-          headers: { authorization: `Bearer ${pairing.credential}`, 'content-type': 'application/json' },
-          body: JSON.stringify(request), redirect: 'error', cache: 'no-store', signal });
-        if (signal.aborted || !response.ok) {
-          if (response.body) void response.body.cancel().catch((): void => undefined);
-          throw fail();
-        }
+      const cancelBody = (response: Response) => { if (response.body) void response.body.cancel().catch((): void => undefined); };
+      // One bounded, fatal-UTF-8 read for both the preparation body and a small non-OK error body.
+      const bounded = async (response: Response, maxBytes: number): Promise<string> => {
         const length = response.headers.get('content-length');
-        if (length !== null && (!/^\d+$/.test(length) || Number(length) > ACCOUNT_PREPARATION_MAX_REPLY_BYTES)) {
-          if (response.body) void response.body.cancel().catch((): void => undefined);
-          throw fail();
-        }
+        if (length !== null && (!/^\d+$/.test(length) || Number(length) > maxBytes)) { cancelBody(response); throw fail(); }
         if (!response.body) throw fail();
         reader = response.body.getReader();
         let total = 0, text = '';
@@ -61,21 +52,39 @@ export function createAccountPreparationTransport(options: { pairing: ExecutionP
             signal.throwIfAborted();
             if (chunk.done) break;
             total += chunk.value.byteLength;
-            if (total > ACCOUNT_PREPARATION_MAX_REPLY_BYTES) { cancelReader(); throw fail(); }
+            if (total > maxBytes) { cancelReader(); throw fail(); }
             text += decoder.decode(chunk.value, { stream: true });
           }
           text += decoder.decode();
           signal.throwIfAborted();
-          return accountPreparationReplySchema({ ...request, pairingId: pairing.pairingId }).parse(JSON.parse(text));
+          return text;
         } catch (error) { cancelReader(); throw error; }
         finally { reader.releaseLock(); }
+      };
+      // A refused read names only an allowlisted worker code from a small `{ error }` body. A gateway
+      // without this route (404) is its own reason with the body left unread; anything else is generic.
+      const refusal = async (response: Response): Promise<Error> => {
+        if (response.status === 404) { cancelBody(response); return new AccountPreparationReadFailure('worker_route_unavailable'); }
+        let body: unknown;
+        try { body = JSON.parse(await bounded(response, ACCOUNT_PREPARATION_MAX_ERROR_BYTES)); } catch { return fail(); }
+        const parsed = accountPreparationErrorBodySchema.safeParse(body);
+        return parsed.success ? new AccountPreparationReadFailure(parsed.data.error) : fail();
+      };
+      const operation = async () => {
+        signal.throwIfAborted();
+        const response = await http(`${endpoint.origin}/accounts/preparation`, { method: 'POST',
+          headers: { authorization: `Bearer ${pairing.credential}`, 'content-type': 'application/json' },
+          body: JSON.stringify(request), redirect: 'error', cache: 'no-store', signal });
+        if (signal.aborted) { cancelBody(response); throw fail(); }
+        if (!response.ok) throw await refusal(response);
+        return accountPreparationReplySchema({ ...request, pairingId: pairing.pairingId }).parse(JSON.parse(await bounded(response, ACCOUNT_PREPARATION_MAX_REPLY_BYTES)));
       };
       try {
         // Bounds fetch AND stream reads if an adapter ignores AbortSignal.
         const result = await Promise.race([operation(), cancelled]);
         signal.throwIfAborted();
         return result;
-      } catch { throw fail(); }
+      } catch (error) { throw !signal.aborted && error instanceof AccountPreparationReadFailure ? error : fail(); }
       finally { signal.removeEventListener('abort', abort); }
     },
   };

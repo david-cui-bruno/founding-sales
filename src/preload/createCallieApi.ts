@@ -1,4 +1,4 @@
-import { getAccountPreparationSchema, accountPreparationReplySchema, type GetAccountPreparation } from '../shared/contracts/accountPreparationContract';
+import { getAccountPreparationSchema, accountPreparationReadReplySchema, AccountPreparationReadFailure, type GetAccountPreparation } from '../shared/contracts/accountPreparationContract';
 import { reconcileReplyDraftSchema, editReplyDraftSchema, boundReplyDraftResult, type ReconcileReplyDraft, type EditReplyDraft } from '../shared/contracts/mailThreadContract';
 import { delegatedPhoneStateRequestSchema, delegatedPhoneStateReplySchema, type GetPhoneHandoffStateRequest } from '../shared/contracts/delegatedPhoneStateContract';
 import { createRemoteGoogleConnectionsApi } from './apis/remoteGoogleConnectionsApi';
@@ -93,7 +93,11 @@ export const createCallieApi = (invoker: IpcInvoker) => {
       getAccountPreparation:async(...args:[GetAccountPreparation])=>{
         if(args.length!==1)throw Error('Preparation read requires one request.');
         const request=Object.freeze(getAccountPreparationSchema.parse(args[0]));
-        return client.request('outreach:delegation-get-account-preparation',getAccountPreparationSchema,accountPreparationReplySchema(request),request);
+        // Success keeps its shape. One allowlisted worker reason arrives as a reply field and leaves as
+        // the rejection message, which is all the context bridge preserves of an Error.
+        const reply=await client.request('outreach:delegation-get-account-preparation',getAccountPreparationSchema,accountPreparationReadReplySchema(request),request);
+        if('unavailable' in reply)throw new AccountPreparationReadFailure(reply.unavailable);
+        return reply;
       },
     },
     linkedin: createLinkedInApi(client),

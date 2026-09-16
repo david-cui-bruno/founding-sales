@@ -1,4 +1,4 @@
-import { getAccountPreparationSchema, accountPreparationSchema, accountPreparationReplySchema } from '../../shared/contracts/accountPreparationContract';
+import { getAccountPreparationSchema, accountPreparationReplySchema, accountPreparationReadResultSchema, AccountPreparationReadFailure } from '../../shared/contracts/accountPreparationContract';
 import { reconcileReplyDraftSchema, editReplyDraftSchema, replyDraftResultSchema, boundReplyDraftResult } from '../../shared/contracts/mailThreadContract';
 import { delegatedPhoneStateRequestSchema, delegatedPhoneStateSchema, delegatedPhoneStateReplySchema } from '../../shared/contracts/delegatedPhoneStateContract';
 import {googleConnectionSelectorSchema,googleConsentOpenedSchema} from '../../shared/contracts/remoteGoogleConnectionsContract';
@@ -80,7 +80,11 @@ export function registerOutreachIpc(options:{provider:OutreachApi;delegation?:De
       add('delegation-configure',configureLocalDelegationSchema,localDelegationConfigurationRecordSchema,input=>d.configure(input));
       add('delegation-submit',publicDelegationCommandSchema,commandReceiptSchema,input=>d.submit(input));
       add('delegation-sync',null,delegationSyncReportSchema,()=>d.sync());
-      add('delegation-get-account-preparation',getAccountPreparationSchema,accountPreparationSchema,async request=>accountPreparationReplySchema(request).parse(await d.getAccountPreparation(request)));
+      // Only the transport's allowlisted worker reason crosses, as a reply field; every other cause stays the fixed safe code.
+      add('delegation-get-account-preparation',getAccountPreparationSchema,accountPreparationReadResultSchema,async request=>{
+        try{return accountPreparationReplySchema(request).parse(await d.getAccountPreparation(request));}
+        catch(error){if(error instanceof AccountPreparationReadFailure)return {unavailable:error.reason};throw error;}
+      });
       add('delegation-approve-meeting',approveMeetingFromReplySchema,meetingApprovalStatusSchema,async request=>boundMeetingApprovalStatus(request).parse(await d.approveMeeting(request)));
       add('delegation-get-meeting-approval',getMeetingApprovalSchema,meetingApprovalStatusSchema.nullable(),async request=>{
         const status=await d.getMeetingApproval(request);
