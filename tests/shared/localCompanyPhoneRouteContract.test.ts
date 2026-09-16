@@ -12,7 +12,7 @@ const publication = { sourceId: 'source-lenox', url: 'https://lenoxmanagement.co
 const request = () => ({ commandId: randomUUID(), accountId: 'lenox', expectedAccountVersion: 2, phone, sourceId: 'source-lenox', quote: lenoxQuote,
   selection: 'published_company_business_phone' as const });
 const receipt = (input: ReturnType<typeof request>) => ({ commandId: input.commandId, accountId: input.accountId, accountVersion: input.expectedAccountVersion + 1,
-  route: { routeId: 'route-1', routeVersion: 1, phone: input.phone, personId: null }, publication: { ...publication, sourceId: input.sourceId, quote: input.quote }, selection: input.selection });
+  route: { routeId: 'route-1', routeVersion: 1, phone: input.phone, personId: null as null }, publication: { ...publication, sourceId: input.sourceId, quote: input.quote }, selection: input.selection });
 
 describe('normaliseCompanyPhone', () => {
   it.each(['401-572-3322', '(401) 572-3322', '(401)572-3322', '401.572.3322', '401 572 3322', '4015723322', '1-401-572-3322', '14015723322',

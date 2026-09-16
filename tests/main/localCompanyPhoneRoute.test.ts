@@ -34,7 +34,7 @@ async function fixture(options: { excerpt?: string; routes?: SeedRoute[] } = {})
   now = T1;
   repo().admitEvidence({ commandId: randomUUID(), accountId: account.id, expectedVersion: 1, claims: [],
     sources: [{ id: sourceId, url: URL, fetchedAt: T1, sha256: sha(excerpt), excerpt, permitted: true }],
-    routes: (options.routes ?? []).map(route => ({ ...route, id: randomUUID(), accountId: account.id, personId: null, evidenceIds: [sourceId] })) });
+    routes: (options.routes ?? []).map(route => ({ ...route, id: randomUUID(), accountId: account.id, personId: null as null, evidenceIds: [sourceId] })) });
   now = T2;
   const request: AdmitCompanyPhoneRoute = { commandId: randomUUID(), accountId: account.id, expectedAccountVersion: 2, phone: PHONE, sourceId, quote: lenoxQuote,
     selection: 'published_company_business_phone' };
