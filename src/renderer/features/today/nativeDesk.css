@@ -188,6 +188,11 @@
   height: auto;
   min-height: 40px;
 }
+.native-desk .native-desk__composer select {
+  height: auto;
+  min-height: 40px;
+  line-height: 1.5;
+}
 .native-desk__campaign-enrollment {
   border-top: 1px solid var(--line);
   margin-top: var(--space-4);
