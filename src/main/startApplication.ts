@@ -831,7 +831,7 @@ export async function startApplication(
     // One lazy credential manager belongs to startup, including null-start activation.
     researchProviders = dependencies.createResearchProviders?.(options.userDataPath);
     if (researchProviders) {
-      companyDraftPreparation = createCompanyDraftPreparationService({ runtime, providers: { generate: (context, signal) => researchProviders!.generate(context, signal) } });
+      companyDraftPreparation = createCompanyDraftPreparationService({ runtime, providers: { generate: (context, signal) => researchProviders!.generate(context, signal), status: () => researchProviders!.status() } });
       companyDraftPreparation.invalidate(outboundLocked);
       if (outboundClosed) companyDraftPreparation.dispose();
     }

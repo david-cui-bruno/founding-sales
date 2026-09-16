@@ -88,7 +88,7 @@ export function createCompanyDraftPreparationService(options: Options): CompanyD
       const proposal = companyDraftPrepareReply(input).parse({ accountId: input.accountId, draftId: input.draftId,
         baseRevision: input.expectedRevision, accountVersion: before.accountVersion, recipientBinding: before.recipientBinding,
         subject: result.subject, body: result.body,
-        grounding: { facts: before.facts, usedFactIds: result.evidenceIds, playbookVersion: '2026-09-08' } });
+        grounding: { facts: before.facts, usedFactIds: result.evidenceIds, playbookVersion: '2026-09-16' } });
       const after = await observe(input, expected);
       assertCurrent(expected);
       if (before.fingerprint !== after.fingerprint) throw new Error('company_preparation_evidence_changed');
