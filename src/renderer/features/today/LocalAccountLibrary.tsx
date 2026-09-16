@@ -19,7 +19,7 @@ export function LocalAccountLibrary({ read, selected, onSelect, intake }: { inta
       const key = localAccountKey(account.account.id), summary = preparationSummary(account.preparation);
       return <Fragment key={key}>
         <button className="native-desk__row" data-row-key={key} aria-current={selected === key ? 'true' : undefined} aria-label={`Local account · ${account.account.name}`} onClick={() => onSelect(key)}><strong>{account.account.name}</strong><small>Read-only local evidence</small>{summary.reason && <span>{summary.reason}</span>}</button>
-        {summary.label && <button type="button" className="native-desk__row-step" data-step-key={key} aria-label={`${summary.label} · ${account.account.name}`} style={{ margin: '0 var(--space-3) var(--space-2)' }} onClick={() => onSelect(key)}>{summary.label}</button>}
+        {summary.label && <button type="button" className="native-desk__row-step" data-step-key={key} aria-label={`${summary.label} · ${account.account.name}`} onClick={() => onSelect(key)}>{summary.label}</button>}
       </Fragment>;
     })}
   </section>;
