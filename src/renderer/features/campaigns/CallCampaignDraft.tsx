@@ -4,7 +4,7 @@ import { dailySnapshotSchema, type DailySnapshot } from '../../../shared/contrac
 import { delegationSyncReportSchema, localDelegationStatusSchema } from '../../../shared/contracts/ownerCommandContract';
 import { commandReceiptSchema } from '../../../shared/contracts/commandReceiptContract';
 import { campaignVersionSchema, type CampaignVersion } from '../../../shared/contracts/campaignContract';
-import { createCallCampaignDraft } from '../../../shared/contracts/callCampaignDraft';
+import { createCallCampaignDraft, createLinkedInCampaignDraft, type OneCompanyCampaignChannel } from '../../../shared/contracts/callCampaignDraft';
 import { captureDailySessionScope } from '../today/dailySessionScope';
 import { AccountIntakeRead } from './AccountIntakeRead';
 
@@ -18,6 +18,7 @@ type Preparation = ({ kind: 'copy'; command: Parameters<Api['delegation']['boots
   & { reviewed: { workspaceId: string; facts: string; configuration: string } };
 type Draft = {
   open: boolean;
+  channel: OneCompanyCampaignChannel;
   accountId: string;
   offer: string;
   busy: boolean;
@@ -39,7 +40,7 @@ function retainedDraft(api: Api, workspaceId: string | null): Draft {
   if (!workspaces) delegation.set(api.delegation, workspaces = new Map());
   let draft = workspaces.get(workspaceId);
   if (!draft) {
-    draft = { open: false, accountId: '', offer: '', busy: false, pending: null, saved: false, failed: false,
+    draft = { open: false, channel: 'call', accountId: '', offer: '', busy: false, pending: null, saved: false, failed: false,
       review: false, preparation: null, preparationFailed: false, selection: 0, listeners: new Set() };
     workspaces.set(workspaceId, draft);
   }
@@ -140,6 +141,8 @@ export function CallCampaignDraft({ api, snapshot, config, readError, onRefresh 
     const workspaceId = snapshot.workspaceId!;
     const accountId = draft.accountId;
     const offer = draft.offer;
+    // The channel chosen before the first await is the one saved. Only these two exact templates exist.
+    const createDraft = draft.channel === 'linkedin' ? createLinkedInCampaignDraft : createCallCampaignDraft;
     let isCurrent = () => generation === lifetime.current;
     try {
       const assertScope = captureDailySessionScope(api.delegation, workspaceId);
@@ -170,7 +173,7 @@ export function CallCampaignDraft({ api, snapshot, config, readError, onRefresh 
           commandId: crypto.randomUUID(), workspaceId, accountId,
           expectedAuthorityGeneration: owner.authority!.generation,
           expectedVersion: owner.executionVersion!, kind: 'campaign-command',
-          payload: { kind: 'campaign.version', version: createCallCampaignDraft({
+          payload: { kind: 'campaign.version', version: createDraft({
             campaignId: crypto.randomUUID(), versionId: crypto.randomUUID(), stepId: crypto.randomUUID(), accountId, offer,
           }) },
         });
@@ -293,15 +296,30 @@ export function CallCampaignDraft({ api, snapshot, config, readError, onRefresh 
   const locked = draft.busy || draft.pending !== null || draft.preparation !== null;
   const canSave = available && !!readyOwner(snapshot, draft.accountId) && !!draft.offer.trim()
     && draft.offer.trim().length <= 4000 && !locked && !draft.saved;
+  const linkedIn = draft.channel === 'linkedin';
+  // One toggle per exact template shares the form. Reopening the open channel closes it;
+  // the other channel is unavailable while a draft for this channel is pending.
+  const choose = (channel: OneCompanyCampaignChannel) => {
+    if (draft.open && draft.channel === channel) draft.open = false;
+    else {
+      if (locked && draft.channel !== channel) return;
+      draft.open = true;
+      if (draft.channel !== channel) { draft.channel = channel; draft.saved = false; draft.failed = false; }
+    }
+    notify(draft);
+  };
+  const toggle = (channel: OneCompanyCampaignChannel, label: string) =>
+    <button type="button" aria-expanded={draft.open && draft.channel === channel} disabled={locked && draft.channel !== channel} onClick={() => choose(channel)}>{label}</button>;
   return <section className="native-desk__campaign-draft native-desk__composer" aria-label="New call campaign">
-    <button type="button" aria-expanded={draft.open} onClick={() => { draft.open = !draft.open; notify(draft); }}>New call campaign</button>
+    <div role="group" aria-label="Channel">{toggle('call', 'New call campaign')} {toggle('linkedin', 'New LinkedIn campaign')}</div>
     {draft.open && <form onSubmit={event => { event.preventDefault(); void save(); }}>
       <label>Company<select value={draft.accountId} disabled={locked} onChange={event => { draft.accountId = event.target.value; draft.selection++; draft.review = false; draft.saved = false; draft.failed = false; draft.preparationFailed = false; notify(draft); }}>
         <option value="">Select a company</option>
         {snapshot.accounts.map(a => <option key={a.account.id} value={a.account.id}>{a.account.name}</option>)}
       </select></label>
       <label>Meeting offer<textarea value={draft.offer} maxLength={4000} disabled={locked} onChange={event => { draft.offer = event.target.value; draft.saved = false; draft.failed = false; notify(draft); }} /></label>
-      <p>Saves an unapproved campaign draft. This does not enroll accounts, activate a campaign, or start outreach.</p>
+      <p>{linkedIn ? 'Saves an unapproved LinkedIn campaign draft. This does not enroll accounts, prepare or send a note, or start outreach.'
+        : 'Saves an unapproved campaign draft. This does not enroll accounts, activate a campaign, or start outreach.'}</p>
       <p>Explicit preparation, reconciliation and save actions synchronize queued work across the workspace. Synchronization can replay previously queued workspace commands.</p>
       <button type="button" aria-expanded={draft.review} onClick={() => { draft.review = !draft.review; notify(draft); }}>Review worker preparation</button>
       {draft.review && <section aria-label="Worker preparation">
@@ -323,7 +341,7 @@ export function CallCampaignDraft({ api, snapshot, config, readError, onRefresh 
           onClick={() => { void prepare('reconcile'); }}>Reconcile queued preparation</button>
         {draft.preparationFailed && <p role="status">Worker preparation could not be confirmed. Review current facts or reconcile queued work. No new command was automatically authorized.</p>}
       </section>}
-      <button type="submit" disabled={!canSave}>Save call campaign draft</button>
+      <button type="submit" disabled={!canSave}>{linkedIn ? 'Save LinkedIn campaign draft' : 'Save call campaign draft'}</button>
       {!available && <p role="status">Campaign draft setup or current workspace read is unavailable. Saving is held.</p>}
       {available && draft.accountId && !readyOwner(snapshot, draft.accountId) && !draft.pending && <p role="status">Saving requires an active account worker with a known execution version and no pending commands.</p>}
       {draft.pending && <><p role="status">Campaign draft pending. Not confirmed saved. Retry the same draft or use queued command reconciliation. This cannot approve, enroll or start outreach.</p>

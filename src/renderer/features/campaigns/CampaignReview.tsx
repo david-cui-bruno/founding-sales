@@ -2,7 +2,11 @@ import type {
   DailyAnswer,
   DailySnapshot,
 } from '../../../shared/contracts/dailyContract';
-import { describeCallCampaignTemplate } from '../../../shared/contracts/callCampaignDraft';
+import { describeOneCompanyCampaignTemplate } from '../../../shared/contracts/callCampaignDraft';
+const copy = {
+  call: { template: 'manual-call template', step: 'call step', draft: 'Call campaign draft', reviewed: 'Reviewed call campaign', approval: 'Approval alone does not enroll a company or place a call.' },
+  linkedin: { template: 'manual-LinkedIn template', step: 'LinkedIn step', draft: 'LinkedIn campaign draft', reviewed: 'Reviewed LinkedIn campaign', approval: 'Approval alone does not enroll a company or send a message.' },
+} as const;
 export function CampaignReview({
   campaign,
   accounts,
@@ -13,7 +17,8 @@ export function CampaignReview({
   answers: DailyAnswer[];
 }) {
   const { version } = campaign;
-  const draft = describeCallCampaignTemplate(version);
+  const draft = describeOneCompanyCampaignTemplate(version);
+  const text = draft ? copy[draft.channel] : null;
   // Only LinkedIn drafts expose an exact campaign version binding. Shared account
   // membership alone must not relabel unrelated requested emails as sample drafts.
   const samples = answers.filter(
@@ -22,9 +27,9 @@ export function CampaignReview({
   );
   return (
     <section className="native-desk__campaign">
-      <p className="native-desk__eyebrow">Saved campaign version {version.version}{draft ? ' / manual-call template' : ' / capability preview'}</p>
-      <p>{draft ? 'Review this frozen company, offer, call step and lifetime limits before a separate enrollment. Selecting this version never starts outreach.' : 'Read-only preview. Editing, approval, enrollment and activation are not available here.'}</p>
-      <h2>{draft ? version.approvedAt ? 'Reviewed call campaign' : 'Call campaign draft' : version.campaignId}</h2>
+      <p className="native-desk__eyebrow">Saved campaign version {version.version}{text ? ` / ${text.template}` : ' / capability preview'}</p>
+      <p>{text ? `Review this frozen company, offer, ${text.step} and lifetime limits before a separate enrollment. Selecting this version never starts outreach.` : 'Read-only preview. Editing, approval, enrollment and activation are not available here.'}</p>
+      <h2>{text ? version.approvedAt ? text.reviewed : text.draft : version.campaignId}</h2>
       <h3>Offer</h3>
       <p>{version.offer}</p>
       <p>Objective: {version.objective}</p>
@@ -80,7 +85,7 @@ export function CampaignReview({
       )}
       <p>
         {version.approvedAt
-          ? `Frozen approval recorded: ${version.approvedAt}. ${draft ? 'Approval alone does not enroll a company or place a call.' : 'This does not activate new work.'}`
+          ? `Frozen approval recorded: ${version.approvedAt}. ${text ? text.approval : 'This does not activate new work.'}`
           : 'Not approved. Approval held until audience evidence and exact owner authority can be verified.'}
       </p>
       <details>

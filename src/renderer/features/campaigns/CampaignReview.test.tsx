@@ -3,7 +3,7 @@ import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
 import type { DailySnapshot } from '../../../shared/contracts/dailyContract';
 import { CampaignReview } from './CampaignReview';
-import { createCallCampaignDraft } from '../../../shared/contracts/callCampaignDraft';
+import { createCallCampaignDraft, createLinkedInCampaignDraft } from '../../../shared/contracts/callCampaignDraft';
 import { dailyFixture, nativeDeskReviewFixture, linkedInFixture } from '../today/nativeDesk.fixture';
 afterEach(cleanup);
 it('shows the verifiable single-company template, but holds altered or opaque audience hashes', () => {
@@ -90,4 +90,25 @@ it('retains exact version facts, enrollment and only version-bound LinkedIn samp
   expect(screen.getByText(/Account A/)).toBeTruthy();
   expect(screen.getByText(/A hash is not an audience definition/)).toBeTruthy();
   for (const a of snapshot.answers) if (a.kind === 'requested_followup') expect(screen.queryByText(a.draft.body)).toBeNull();
+});
+
+it('labels the exact single-company LinkedIn template as a LinkedIn draft, then as reviewed once approved, never as a call', () => {
+  const snapshot = dailyFixture();
+  const version = createLinkedInCampaignDraft({ campaignId: 'li-campaign', versionId: 'li-version', stepId: 'initial-note', accountId: 'a', offer: 'Discuss maintenance follow-up.' });
+  const campaign: DailySnapshot['campaigns'][number] = { version, snapshotHash: 'c'.repeat(64), caps: [], enrollments: [] };
+  const view = render(<CampaignReview campaign={campaign} accounts={snapshot.accounts} answers={[]} />);
+  expect(screen.getByRole('heading', { name: 'LinkedIn campaign draft' })).toBeTruthy();
+  expect(screen.getByText(/manual-LinkedIn template/)).toBeTruthy();
+  expect(screen.getByText('Explicitly selected company: Account A (a).')).toBeTruthy();
+  expect(screen.getByText('manual initial linkedin draft template v1')).toBeTruthy();
+  expect(screen.getByText(/Review this frozen company, offer, LinkedIn step and lifetime limits before a separate enrollment/)).toBeTruthy();
+  expect(screen.queryByText(/call step/)).toBeNull();
+  expect(screen.queryByText(/Audience definition unavailable/)).toBeNull();
+  expect(screen.queryByRole('button')).toBeNull();
+  view.rerender(<CampaignReview campaign={{ ...campaign, version: { ...version, approvedAt: '2026-09-09T12:00:00.000Z' } }} accounts={snapshot.accounts} answers={[]} />);
+  expect(screen.getByRole('heading', { name: 'Reviewed LinkedIn campaign' })).toBeTruthy();
+  expect(screen.getByText(/Approval alone does not enroll a company or send a message/)).toBeTruthy();
+  view.rerender(<CampaignReview campaign={{ ...campaign, version: { ...version, channelCaps: { call: 1, email: 0, linkedin: 1 } } }} accounts={snapshot.accounts} answers={[]} />);
+  expect(screen.getByText(/Read-only preview/)).toBeTruthy();
+  expect(screen.getByText(/Audience definition unavailable/)).toBeTruthy();
 });
