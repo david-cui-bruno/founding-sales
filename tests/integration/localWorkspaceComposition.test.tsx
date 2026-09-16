@@ -68,8 +68,12 @@ it('actual local account evidence is separately selectable without authorizing a
     const before = f.snapshot(), open = vi.fn();
     render(<PresentationRoot><NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={open} surface="accounts"/></PresentationRoot>);
     await screen.findByText('Local account library', {exact: true});
-    fireEvent.click(await screen.findByRole('button', {name: /Fixture Residential Management/}));
+    const row = await screen.findByRole('button', {name: 'Local account · Fixture Residential Management'});
+    // Real provider: saved source, no published business inbox. The step is a plain local reason, not worker authority.
+    expect(row.textContent).toContain('Saved evidence has no published business inbox.');
+    fireEvent.click(screen.getByRole('button', {name: 'Open route review · Fixture Residential Management'}));
     expect(screen.getByRole('heading', {name: 'Fixture Residential Management'})).toBeTruthy();
+    expect(row.getAttribute('aria-current')).toBe('true');
     expect(open).not.toHaveBeenCalled();
     expect(f.forbidden).not.toHaveBeenCalled();
     expect(f.snapshot()).toEqual(before);

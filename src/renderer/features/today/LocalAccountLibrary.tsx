@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useSyncExternalStore, type ReactNode } from 'react';
+import { Fragment, useEffect, useMemo, useSyncExternalStore, type ReactNode } from 'react';
 import type { AccountEvidenceSnapshot } from '../../../shared/contracts/accountContract';
 import type { LocalWorkspaceApi, LocalWorkspaceSnapshot } from '../../../shared/contracts/localWorkspaceContract';
 import type { LocalRead } from './localWorkspaceRead';
@@ -6,12 +6,22 @@ import type { FirstUseContinuation } from './localCompanyContinuation';
 import { LocalCompanyContactLink, type LocalCompanyContactApi } from './LocalCompanyContactLink';
 import { LocalCompanyDraft } from './LocalCompanyDraft';
 import { LocalCompanyResearchPanel } from './LocalCompanyResearchPanel';
+import { preparationSummary, rankPreparationQueue } from './preparationQueue';
 export const localAccountKey = (id: string) => JSON.stringify(['local-account', id]);
 export type LocalAccountSelectionRequest = { key: string };
 export function LocalAccountLibrary({ read, selected, onSelect, intake }: { intake?: ReactNode; read: LocalRead<LocalWorkspaceSnapshot>; selected: string | null; onSelect(key: string): void }) {
+  // Row identity and label are unchanged. The ranked order and the per-company next step come only from the saved summary.
+  const ranked = rankPreparationQueue(read.value?.accounts.state === 'available' ? read.value.accounts.snapshots : []);
   return <section className="native-desk__lane" aria-labelledby="local-account-library"><h2 id="local-account-library">Local account library</h2>{intake}<p>Stored local evidence only. Worker ownership is not established by this view.</p>
     {read.error ? <p role="status">Local account library is unavailable. {read.value && 'Saved evidence is stale.'} Refresh the local read.</p> : read.pending ? <p role="status">Checking local accounts…</p> : read.value?.accounts.state === 'unavailable' ? <p role="status">Local account library is unavailable. Refresh the local read.</p> : read.value?.accounts.snapshots.length === 0 ? <p>No local accounts in this snapshot.</p> : null}
-    {(read.value?.accounts.state === 'available' ? read.value.accounts.snapshots : []).map(account => <button className="native-desk__row" key={localAccountKey(account.account.id)} data-row-key={localAccountKey(account.account.id)} aria-current={selected === localAccountKey(account.account.id) ? 'true' : undefined} aria-label={`Local account · ${account.account.name}`} onClick={() => onSelect(localAccountKey(account.account.id))}><strong>{account.account.name}</strong><small>Read-only local evidence</small></button>)}
+    {ranked.some(account => account.preparation) && <p><small>Ordered by what is ready to prepare next, from saved local evidence. Each step opens the company; nothing starts on its own.</small></p>}
+    {ranked.map(account => {
+      const key = localAccountKey(account.account.id), summary = preparationSummary(account.preparation);
+      return <Fragment key={key}>
+        <button className="native-desk__row" data-row-key={key} aria-current={selected === key ? 'true' : undefined} aria-label={`Local account · ${account.account.name}`} onClick={() => onSelect(key)}><strong>{account.account.name}</strong><small>Read-only local evidence</small>{summary.reason && <span>{summary.reason}</span>}</button>
+        {summary.label && <button type="button" className="native-desk__row-step" data-step-key={key} aria-label={`${summary.label} · ${account.account.name}`} style={{ margin: '0 var(--space-3) var(--space-2)' }} onClick={() => onSelect(key)}>{summary.label}</button>}
+      </Fragment>;
+    })}
   </section>;
 }
 export function LocalAccountDetail({ account, api, contactApi, continuation, onOpenImport, onOpenLead }: {
