@@ -9,6 +9,7 @@ import { researchSetupStatusRequestSchema, researchSetupRemoteStatusSchema, rese
 import { matchResearchSetupReceipt } from './researchSetupRequestStore';
 import { googleGrantPurposeSchema, googleScopes, googleGrantDisclosure, personalGoogleGrantDisclosure, type GoogleGrantPurpose } from '../../shared/contracts/googleGrantCapabilities';
 import { remoteGoogleGrantAuthorizationSchema, remoteGoogleGrantBeginSchema, remoteGoogleGrantDisclosureSchema, remoteGoogleGrantStatusSchema, type RemoteGoogleGrantBegin, type RemoteGoogleGrantStatus } from '../../shared/contracts/remoteGoogleGrantContract';
+import { googleConnectionStatusErrorBodySchema, GoogleConnectionStatusFailure, GOOGLE_CONNECTION_STATUS_MAX_ERROR_BYTES } from '../../shared/contracts/remoteGoogleConnectionsContract';
 import type { DelegationRepository } from './delegationRepository';
 import { commandReceiptSchema, delegationCommandSchema, eventPageSchema, type CommandReceipt, type DelegationCommand } from '../../shared/contracts/delegationContract';
 import { synchronizeDelegation, type SqlDelegationTransport, type SyncReport } from './delegationSync';
@@ -133,14 +134,15 @@ export class ExecutionClient {
     this.transport = options.transport;
     this.signal = options.signal ?? new AbortController().signal;
   }
-  private async request(path: string, signal: AbortSignal, command?: unknown): Promise<unknown> {
+  // A non-OK reply is the generic failure unless the caller supplies a refusal reader for its own allowlisted codes.
+  private async request(path: string, signal: AbortSignal, command?: unknown, refusal?: (response: Response, signal: AbortSignal) => Promise<Error>): Promise<unknown> {
     signal = AbortSignal.any([signal,this.signal]);
     signal.throwIfAborted();
     const response = await this.http(`${this.pairing.endpoint}${path}`, { method: command ? 'POST' : 'GET',
       headers: { authorization: `Bearer ${this.pairing.credential}`, 'content-type': 'application/json' }, redirect: 'error', cache: 'no-store',
       signal, ...(command ? { body: JSON.stringify(command) } : {}) });
     signal.throwIfAborted();
-    if (!response.ok) throw new Error('Worker request unavailable');
+    if (!response.ok) throw refusal ? await refusal(response, signal) : new Error('Worker request unavailable');
     const text = await response.text();
     signal.throwIfAborted();
     if (text.length > 4 * 1024 * 1024) throw new Error('Worker response too large');
@@ -151,9 +153,38 @@ export class ExecutionClient {
     if (status.grant && status.grant.purpose !== purpose) throw Error('Worker grant purpose mismatch');
     return status;
   }
+  // A refused status read names only the worker's allowlisted codes from one small, bounded `{ error }` body: a
+  // handler built without a Google client answers 503 google_unconfigured; a pairing issued without the
+  // google:grant scope is refused with 403 worker_scope_denied. A gateway without the route (404) never carries
+  // a worker code, so its body stays unread; anything else, oversized or unreadable, is generic.
+  private async googleStatusRefusal(response: Response, signal: AbortSignal): Promise<Error> {
+    const fail = () => new Error('Worker request unavailable');
+    const length = response.headers.get('content-length');
+    if (response.status === 404 || !response.body || (length !== null && (!/^\d+$/.test(length) || Number(length) > GOOGLE_CONNECTION_STATUS_MAX_ERROR_BYTES))) {
+      if (response.body) void response.body.cancel().catch((): void => undefined);
+      return fail();
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder('utf-8', { fatal: true });
+    let total = 0, text = '';
+    try {
+      for (;;) {
+        signal.throwIfAborted();
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        total += chunk.value.byteLength;
+        if (total > GOOGLE_CONNECTION_STATUS_MAX_ERROR_BYTES) throw fail();
+        text += decoder.decode(chunk.value, { stream: true });
+      }
+      text += decoder.decode();
+      const parsed = googleConnectionStatusErrorBodySchema.safeParse(JSON.parse(text));
+      return parsed.success ? new GoogleConnectionStatusFailure(parsed.data.error) : fail();
+    } catch { void reader.cancel().catch((): void => undefined); return fail(); }
+    finally { reader.releaseLock(); }
+  }
   async googleGrantStatus(rawPurpose: GoogleGrantPurpose, signal: AbortSignal): Promise<RemoteGoogleGrantStatus> {
     const purpose = googleGrantPurposeSchema.parse(rawPurpose);
-    return this.grantStatus(await this.request(`/google/status?purpose=${purpose}`, signal), purpose);
+    return this.grantStatus(await this.request(`/google/status?purpose=${purpose}`, signal, undefined, (response, active) => this.googleStatusRefusal(response, active)), purpose);
   }
   async googleGrantDisclosure(rawPurpose: GoogleGrantPurpose, signal: AbortSignal) {
     const purpose = googleGrantPurposeSchema.parse(rawPurpose);

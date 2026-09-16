@@ -37,7 +37,7 @@ vi.mock('electron', () => ({ ipcMain: {
 const noNetwork = vi.fn(async (): Promise<never> => { throw Error('No real network allowed'); });
 afterEach(() => { cleanup(); expect(noNetwork).not.toHaveBeenCalled(); expect(ipc.handlers.size).toBe(0); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.clearAllMocks(); });
 
-type Seed = 'active-mail' | 'paused-no-mail';
+type Seed = 'active-mail' | 'paused-no-mail' | 'no-google-client' | 'no-google-scope';
 /** Worker side: fictional Google HTTP only (token and userinfo during the grant). The grant with
  * Gmail read scope, the account record with a permitted-source email route, the intake and the
  * first owner configuration are real worker state. Every provider call is counted. */
@@ -55,12 +55,18 @@ async function worker(seed: Seed) {
     if (url.pathname.endsWith('/userinfo')) return Response.json({ sub: mailboxSubject, email: grantEmail, email_verified: true });
     throw Error('Unexpected provider operation');
   };
-  const google = new RemoteGoogleAuthorization({ auth, fetch: provider, config: { clientId: 'fictional.apps.googleusercontent.com', clientSecret: 'fictional', redirectUri: `https://${host}/oauth/callback`, encryptionKey: Buffer.alloc(32, 8) } });
-  const pair = await auth.redeemPairing((await auth.issuePairing({ scopes: ['commands:write', 'events:read', 'google:grant'], expiresInSeconds: 300 })).code, 'fictional');
-  const grant = await google.beginGoogleGrant(pair.pairingId, ['relevant_read', 'availability', 'event_write'], { confirmed: true, ownedCalendarId: calendarId, conflictCalendarIds: [calendarId] });
-  await google.completeGoogleGrant(new URL(grant.authorizationUrl).searchParams.get('state')!, 'fictional');
+  // 'no-google-client' is the deployed shape with no Google client at all: the handler is built without
+  // one, so /google/status answers its own bounded code (503 google_unconfigured) rather than any grant state.
+  // 'no-google-scope' keeps the Google client but issues this pairing without google:grant, so the real
+  // handler refuses the status read (403 worker_scope_denied) before any grant lookup; no grant was ever made.
+  const google = seed === 'no-google-client' ? undefined : new RemoteGoogleAuthorization({ auth, fetch: provider, config: { clientId: 'fictional.apps.googleusercontent.com', clientSecret: 'fictional', redirectUri: `https://${host}/oauth/callback`, encryptionKey: Buffer.alloc(32, 8) } });
+  const pair = await auth.redeemPairing((await auth.issuePairing({ scopes: seed === 'no-google-scope' ? ['commands:write', 'events:read'] : ['commands:write', 'events:read', 'google:grant'], expiresInSeconds: 300 })).code, 'fictional');
+  if (google && seed !== 'no-google-scope') {
+    const grant = await google.beginGoogleGrant(pair.pairingId, ['relevant_read', 'availability', 'event_write'], { confirmed: true, ownedCalendarId: calendarId, conflictCalendarIds: [calendarId] });
+    await google.completeGoogleGrant(new URL(grant.authorizationUrl).searchParams.get('state')!, 'fictional');
+  }
   const grantCalls = providerCalls.length;
-  const handler = createWorkerHandler({ auth, host, google });
+  const handler = createWorkerHandler({ auth, host, ...(google ? { google } : {}) });
   const request = (path: string, body?: unknown, bearer = `Bearer ${pair.credential}`) => {
     const url = new URL(path, `https://${host}`);
     return handler({ version: '2.0', rawPath: url.pathname, rawQueryString: url.search.slice(1), headers: { host, 'x-forwarded-proto': 'https', authorization: bearer }, ...(body === undefined ? {} : { body: JSON.stringify(body) }), requestContext: { domainName: host, http: { method: body === undefined ? 'GET' : 'POST', sourceIp: 'fictional' } } });
@@ -116,10 +122,12 @@ async function desktop(w: Worker) {
   const posted: DelegationCommand[] = [], paths: string[] = [];
   // Offline drops every owner call except the preparation read, so a change can be queued
   // locally without the owner ever seeing it and then retried explicitly.
-  let offline = false;
+  let offline = false, googleOutage = false;
   const http: typeof fetch = async (input, init) => {
     const url = new URL(String(input)); expect(url.origin).toBe(`https://${w.host}`); paths.push(url.pathname);
     if (offline && url.pathname !== '/accounts/preparation') throw Error('Fictional owner offline');
+    // A gateway 5xx with no worker body: the grant read failed for a reason nobody can name, unlike a worker code.
+    if (googleOutage && url.pathname === '/google/status') return new Response('<html>Service Unavailable</html>', { status: 503 });
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
     if (url.pathname === '/commands' && body) posted.push(delegationCommandSchema.parse(body));
     const response = await w.request(url.pathname + url.search, body, new Headers(init?.headers).get('authorization') ?? '');
@@ -140,6 +148,7 @@ async function desktop(w: Worker) {
   const configureCommands = () => posted.filter((command): command is Extract<DelegationCommand, { kind: 'configure-owner' }> => command.kind === 'configure-owner');
   return { ...ui, db, owner, services, runtime, bridge, forbidden, posted, paths, configureCommands, workspaceId,
     setOffline: (value: boolean) => { offline = value; },
+    setGoogleOutage: (value: boolean) => { googleOutage = value; },
     identities: () => [...new Set(configureCommands().map(command => command.commandId))],
     async close() { removeIpc(); await runtime.dispose(); closeDatabase(db); key.bytes.fill(0); temp.cleanup(); } };
 }
@@ -191,6 +200,44 @@ it('offers pause, relevant mail and calendar controls only after the explicit in
     expect(d.configureCommands()).toEqual([]);
     expect(w.providerCallsSinceGrant()).toBe(0);
     expect(d.forbidden).not.toHaveBeenCalled();
+  } finally { cleanup(); await d.close(); }
+});
+
+it.each([
+  ['no-google-client', 'Mail and calendar are not configured on this worker. Call campaigns do not need them.'],
+  ['no-google-scope', 'This Mac\'s pairing does not include Google access. Mail and calendar are not available from this app.'],
+] as const)('offers no mail or calendar control and no retry when the real worker refuses the status read (%s), saying why once', async (seed, honest) => {
+  const w = await worker(seed), d = await desktop(w);
+  try {
+    await openIntake(w, d);
+    expect(screen.getByText('Configuration revision: 1. State: paused.')).toBeTruthy();
+    // The real handler answers the status read with its own bounded code (no Google client, or a pairing without
+    // google:grant). The panel names that fact once, offers nothing that needs Google, and suggests no retry.
+    await panel().findByText(honest);
+    expect(d.paths).toEqual(['/accounts/preparation', '/google/status']);
+    expect(button('Set intake active').disabled).toBe(false);
+    for (const absent of [/could not be read/, /Read intake configuration again/, /Relevant mail is not offered/, /A configured mailbox is required/, /google_unconfigured/, /worker_scope_denied/]) expect(panel().queryByText(absent)).toBeNull();
+    expect(panel().queryByRole('button', { name: /Use calendar/ })).toBeNull();
+    expect(panel().queryByRole('button', { name: 'Switch on relevant mail' })).toBeNull();
+    expect(panel().queryByLabelText('Read relevant mail since')).toBeNull();
+    expect(panel().getByText(/Configuration is not readiness; a configured mailbox is not permission to send\./)).toBeTruthy();
+    expect(d.configureCommands()).toEqual([]);
+    expect(w.providerCallsSinceGrant()).toBe(0);
+    expect(d.forbidden).not.toHaveBeenCalled();
+  } finally { cleanup(); await d.close(); }
+});
+
+it('keeps the retry line for a gateway 5xx without a worker code: a failed status read is not an unconfigured worker', async () => {
+  const w = await worker('paused-no-mail'), d = await desktop(w);
+  try {
+    d.setGoogleOutage(true);
+    await openIntake(w, d);
+    await panel().findByText('The connected grant could not be read. Read intake configuration again to retry. Relevant mail is not offered.');
+    expect(panel().queryByText(/not configured on this worker/)).toBeNull();
+    expect(d.paths).toEqual(['/accounts/preparation', '/google/status']);
+    expect(button('Set intake active').disabled).toBe(false);
+    expect(d.configureCommands()).toEqual([]);
+    expect(w.providerCallsSinceGrant()).toBe(0);
   } finally { cleanup(); await d.close(); }
 });
 

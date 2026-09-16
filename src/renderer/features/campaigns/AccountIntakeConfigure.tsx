@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import type { CalliePreloadApi } from '../../../shared/preload';
 import type { AccountPreparation } from '../../../shared/contracts/accountPreparationContract';
 import { remoteGoogleGrantStatusSchema, type RemoteGoogleGrantStatus } from '../../../shared/contracts/remoteGoogleGrantContract';
+import { googleConnectionStatusReason, type GoogleConnectionStatusReason } from '../../../shared/contracts/remoteGoogleConnectionsContract';
 import { googleScopes } from '../../../shared/contracts/googleGrantCapabilities';
 import { accountIntakeRetry, boundAccountIntakeConfigureStatus, type AccountIntakeConfigureStatus, type AccountIntakeHoldReason, type ConfigureAccountIntake } from '../../../shared/contracts/accountIntakeConfigureContract';
 import { captureDailySessionScope } from '../today/dailySessionScope';
@@ -20,6 +21,12 @@ const holdText: Record<AccountIntakeHoldReason, string> = {
   intake_mailbox_mismatch: 'The requested mailbox differs from the configured one.',
   intake_calendar_unavailable: 'The requested calendar is not the connected grant’s owned calendar.',
 };
+// The worker's own reasons for refusing the status read. Neither is a grant state or a transient failure, so
+// nothing is retried: mail and calendar controls are simply not offered, and nothing implies either is available.
+const googleUnavailableText: Record<GoogleConnectionStatusReason, string> = {
+  google_unconfigured: 'Mail and calendar are not configured on this worker. Call campaigns do not need them.',
+  worker_scope_denied: 'This Mac\'s pairing does not include Google access. Mail and calendar are not available from this app.',
+};
 const isoDate = /^\d{4}-\d\d-\d\d$/;
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -31,7 +38,7 @@ export function AccountIntakeConfigure({ api, workspaceId, accountId, preparatio
   api: AccountIntakeConfigureApi; workspaceId: string; accountId: string; preparation: AccountPreparation; disabled: boolean;
 }) {
   const headingId = useId();
-  const [grant, setGrant] = useState<{ status?: RemoteGoogleGrantStatus; error?: boolean } | null>(null);
+  const [grant, setGrant] = useState<{ status?: RemoteGoogleGrantStatus; unavailable?: GoogleConnectionStatusReason | 'unknown' } | null>(null);
   const [status, setStatus] = useState<AccountIntakeConfigureStatus | null>(null);
   const [retained, setRetained] = useState<ConfigureAccountIntake | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -44,6 +51,7 @@ export function AccountIntakeConfigure({ api, workspaceId, accountId, preparatio
   // A fresh read reopens the controls and clears a settled receipt; a pending receipt or an unacknowledged
   // request survives so the identical change can still be retried. The grant is read from the owner's
   // stored record so the mail and calendar controls can be offered honestly; never a provider call, never permission.
+  // A failed read keeps only the worker's allowlisted reason (the rejection message); anything else is unknown.
   useEffect(() => {
     setClosed(false); setGrant(null);
     setStatus(current => current?.status === 'queued' && current.receipt.status === 'pending' ? current : null);
@@ -55,7 +63,7 @@ export function AccountIntakeConfigure({ api, workspaceId, accountId, preparatio
         const result = remoteGoogleGrantStatusSchema.parse(await connections.status({ purpose: 'permitted_correspondence' }));
         check();
         if (!cancelled && alive.current) setGrant({ status: result });
-      } catch { if (!cancelled && alive.current) setGrant({ error: true }); }
+      } catch (error) { if (!cancelled && alive.current) setGrant({ unavailable: googleConnectionStatusReason(error) ?? 'unknown' }); }
     })();
     return () => { cancelled = true; };
   }, [api, connections, workspaceId, accountId, preparation]);
@@ -70,9 +78,10 @@ export function AccountIntakeConfigure({ api, workspaceId, accountId, preparatio
   const ready = grant?.status?.state === 'ready' ? grant.status.grant : null;
   const readable = !!ready && ready.grantedScopes.includes(googleScopes.relevant_read);
   const owned = ready?.purpose === 'permitted_correspondence' ? ready.calendars?.ownedCalendarId ?? null : null;
+  const googleUnavailable = grant?.unavailable && grant.unavailable !== 'unknown' ? googleUnavailableText[grant.unavailable] : null;
   const grantHold = !connections ? 'Grant status is unavailable in this bridge.'
     : grant === null ? 'Reading the connected grant…'
-    : grant.error ? 'The connected grant could not be read. Read intake configuration again to retry.'
+    : grant.unavailable ? (googleUnavailable ?? 'The connected grant could not be read. Read intake configuration again to retry.')
     : grant.status?.state === 'unconfigured' ? 'No Google grant is connected for this pairing.'
     : grant.status?.state === 'revoked' ? 'The connected Google grant is revoked.'
     : !readable ? 'The connected grant has no Gmail read scope.'
@@ -113,21 +122,23 @@ export function AccountIntakeConfigure({ api, workspaceId, accountId, preparatio
       <p>{state === 'active' ? 'Pausing keeps the configured mailbox and calendar and stops intake for this company.'
         : mailbox !== null ? 'Setting intake active resumes intake from the configured mailbox. It does not send anything.'
         : 'Setting intake active without a mailbox is admitted only for a company the worker holds no business email routes or saved threads for.'}</p>
-      {mailbox === null ? (grantHold ? <p className="native-desk__hold">{grantHold} Relevant mail is not offered.</p> : <>
-        <p>Mailbox: {ready!.email}. Switching on relevant mail sets intake active and asks the worker to admit only this company’s business correspondence with permitted-source routes from that mailbox, from the date below. The worker decides admission; this is not permission to send.</p>
-        <label>Read relevant mail since<input type="date" aria-label="Read relevant mail since" max={today()} value={since} disabled={locked} onChange={e => setSince(e.target.value)} /></label>
+      {googleUnavailable ? <p className="native-desk__hold">{googleUnavailable}</p> : <>
+        {mailbox === null ? (grantHold ? <p className="native-desk__hold">{grantHold} Relevant mail is not offered.</p> : <>
+          <p>Mailbox: {ready!.email}. Switching on relevant mail sets intake active and asks the worker to admit only this company’s business correspondence with permitted-source routes from that mailbox, from the date below. The worker decides admission; this is not permission to send.</p>
+          <label>Read relevant mail since<input type="date" aria-label="Read relevant mail since" max={today()} value={since} disabled={locked} onChange={e => setSince(e.target.value)} /></label>
+          <div className="native-desk__actions">
+            <button type="button" disabled={locked || !mailOn} onClick={() => { if (mailOn) void send(mailOn); }}>Switch on relevant mail</button>
+          </div>
+        </>) : <p>Mail: configured. Relevant mail is already on for this company and cannot be switched on again from here.</p>}
         <div className="native-desk__actions">
-          <button type="button" disabled={locked || !mailOn} onClick={() => { if (mailOn) void send(mailOn); }}>Switch on relevant mail</button>
+          <button type="button" disabled={locked || !useCalendar} onClick={() => { if (useCalendar) void send(useCalendar); }}>{owned ? `Use calendar ${owned}` : 'Use calendar'}</button>
         </div>
-      </>) : <p>Mail: configured. Relevant mail is already on for this company and cannot be switched on again from here.</p>}
-      <div className="native-desk__actions">
-        <button type="button" disabled={locked || !useCalendar} onClick={() => { if (useCalendar) void send(useCalendar); }}>{owned ? `Use calendar ${owned}` : 'Use calendar'}</button>
-      </div>
-      {mailbox === null ? <p className="native-desk__hold">A configured mailbox is required before a calendar can be used.</p>
-        : grantHold ? <p className="native-desk__hold">{grantHold} A calendar is not offered.</p>
-        : owned === null ? <p className="native-desk__hold">The connected grant names no owned calendar. A calendar is not offered.</p>
-        : owned === calendar ? <p>This calendar is already configured: {owned}.</p>
-        : <p>Uses the grant’s owned calendar for this company. This books nothing.</p>}
+        {mailbox === null ? <p className="native-desk__hold">A configured mailbox is required before a calendar can be used.</p>
+          : grantHold ? <p className="native-desk__hold">{grantHold} A calendar is not offered.</p>
+          : owned === null ? <p className="native-desk__hold">The connected grant names no owned calendar. A calendar is not offered.</p>
+          : owned === calendar ? <p>This calendar is already configured: {owned}.</p>
+          : <p>Uses the grant’s owned calendar for this company. This books nothing.</p>}
+      </>}
       <div className="native-desk__feedback" aria-live="polite">
         <p>Each change queues one owner command with the revision you read bound. Configuration is not readiness; a configured mailbox is not permission to send.</p>
         {busy && <p>Queuing the change…</p>}
