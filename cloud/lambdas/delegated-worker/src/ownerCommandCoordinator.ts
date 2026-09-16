@@ -249,7 +249,8 @@ export class OwnerCommandCoordinator {
       receipt={...receipt,authorityGeneration:plan.generation};
       proof = plan.items; event = workerEventSchema.parse({ ...base, authorityGeneration:plan.generation, kind: 'manual.outcome', payload: command.payload.outcome, campaign: plan.campaign, receipt });
     } else {
-      proof = command.kind === 'configure-owner' ? await this.configure(command, principal.pairingId, claim.data.at, store) : await this.approveReply(command, principal.pairingId, claim.data.at, store);
+      proof = command.kind === 'configure-owner' ? await this.configure(command, principal.pairingId, claim.data.at, store,
+        store.check(authKey, authorityRow.rev, executionAuthorityFields(current))) : await this.approveReply(command, principal.pairingId, claim.data.at, store);
       event = workerEventSchema.parse({ ...base, kind: 'authority.changed', payload: { authority: current.authority, receipt } });
     }
     const outbox = await store.eventItems(event);
@@ -351,7 +352,7 @@ export class OwnerCommandCoordinator {
     if(outcome.outcome==='opt_out' && !await store.get(mailSuppressionKey(command.accountId))) items.push(store.put(mailSuppressionKey(command.accountId),{accountId:command.accountId,observedAt:outcome.observedAt,evidence:outcome.evidenceRef},null));
     return {items,campaign:plan.payload,generation:row.data.generation};
   }
-  private async configure(command: Extract<OwnerCommand, { kind: 'configure-owner' }>, pairingId: string, at: string, store: DynamoStore): Promise<TransactWriteItem[]> {
+  private async configure(command: Extract<OwnerCommand, { kind: 'configure-owner' }>, pairingId: string, at: string, store: DynamoStore, enclosingAuthorityProof: TransactWriteItem): Promise<TransactWriteItem[]> {
     const p = command.payload; const config = ownerSourceConfigurationSchema.parse(p.configuration);
     if (config.workspaceId !== command.workspaceId || config.accountId !== command.accountId || config.pairingId !== pairingId
       || config.revision !== p.expectedConfigurationRevision + 1 || config.research && config.research.workspaceId !== command.workspaceId) throw new Error('source_configuration_identity');
@@ -402,13 +403,23 @@ export class OwnerCommandCoordinator {
       if (p.mailScope !== null) {
         const scope = mailAccountScopeSchema.parse({ version: 1, accountId: command.accountId, mailboxSubject: config.mailboxSubject, revision: (cursor?.data.scope?.revision ?? 0) + 1,
           participantAddresses: participants, knownThreadIds, since: p.mailScope.since, approvedAt: at });
-        await threads.admitScope(scope, p.mailScope.expectedEnvelopeRevision);
-        cursor = await threads.cursorState(command.accountId, config.mailboxSubject);
+        const plan = await threads.planScopeAdmission(scope, p.mailScope.expectedEnvelopeRevision);
+        const [authorityProof, cursorPut] = plan.items;
+        // The enclosing AUTH Put already carries this exact revision/field fence.
+        // Reject conflicting proofs rather than silently dropping a duplicate target.
+        if (plan.items.length !== 2 || !authorityProof?.ConditionCheck
+          || fingerprint(authorityProof) !== fingerprint(enclosingAuthorityProof)
+          || !cursorPut?.Put?.Item || fingerprint({ pk: cursorPut.Put.Item.pk, sk: cursorPut.Put.Item.sk })
+            !== fingerprint(store.key(mailCursorKey(command.accountId, config.mailboxSubject)))) throw new Error('source_scope_plan_conflict');
+        checks.push(cursorPut);
+        // Projected data is only used for completeness, never as a durable cursor fence.
+        cursor = { data: plan.envelope, rev: (plan.cursor?.rev ?? 0) + 1 };
       }
       const scope = cursor?.data.scope;
       if (!scope || scope.participantAddresses.some(address => !participants.includes(address)) || participants.some(address => !scope.participantAddresses.includes(address))
         || knownThreadIds.some(id => !scope.knownThreadIds.includes(id))) throw new Error('selected_scope_incomplete');
-      checks.push(store.check(accountKey(command.accountId), recordRow.rev), store.check(mailCursorKey(command.accountId, config.mailboxSubject), cursor!.rev),
+      checks.push(store.check(accountKey(command.accountId), recordRow.rev),
+        ...(p.mailScope === null ? [store.check(mailCursorKey(command.accountId, config.mailboxSubject), cursor!.rev)] : []),
         ...projections.map(row => store.check(row.key, row.stored.rev)));
       const intakeKey = intakeRegistryKey(command.accountId); const intake = await store.get<unknown>(intakeKey);
       const old = intake ? intakeRegistrySchema.parse(intake.data) : null;
