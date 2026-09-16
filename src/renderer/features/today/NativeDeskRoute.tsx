@@ -5,8 +5,10 @@ import type { FirstUseContinuation } from './localCompanyContinuation';
 import { useOverlayLayers } from '../../app/overlayLayers';
 import { Phone, RefreshCw } from 'lucide-react';
 import { useLocalWorkspaceRead, type LocalDeskRead } from './localWorkspaceRead';
-import { RetainedWork, RetainedWorkDetail, LocalOnlyCalls, retainedKey } from './RetainedWork';
-import { LocalAccountLibrary, LocalAccountDetail, localAccountKey, LocalOnlyAccountLibrary, type LocalAccountSelectionRequest } from './LocalAccountLibrary';
+import { RetainedWork, RetainedWorkDetail, LocalOnlyCalls, LocalDraftContinuations, retainedKey, localDraftKey } from './RetainedWork';
+import { LocalAccountLibrary, LocalAccountDetail, localAccountKey, LocalOnlyAccountLibrary, requestLocalAccountStep, takeLocalAccountStep, type LocalAccountSelectionRequest, type LocalAccountStepRequest } from './LocalAccountLibrary';
+import type { LocalDraftContinuation } from '../../../shared/contracts/localWorkspaceContract';
+import { routeHash } from '../../app/routes';
 import { LocalCompanyIntake, useLocalCompanyIntake } from './LocalCompanyIntake';
 import { formatVisibleCount, localCommitmentsCount, type VisibleCount } from './visibleCount';
 import { updateRequestedSessionHolds } from './requestedDraftSession';
@@ -63,6 +65,8 @@ const oneCompanyCampaignCopy: Record<OneCompanyCampaignChannel, { campaign: stri
   call: { campaign: 'call campaign', outreach: 'places a call' },
   linkedin: { campaign: 'LinkedIn campaign', outreach: 'sends a LinkedIn note' },
 };
+/** Scope, transport and allocation codes describe the paused cloud side. Every other issue is a real local record problem. */
+const OPERATIONAL_ISSUE_CODES = new Set<DailySnapshot['issues'][number]['code']>(['scope_unknown', 'scope_mismatch', 'transport_incomplete', 'call_allocation_unconfigured', 'workload_conflict']);
 export function NativeDeskRoute({
   api,
   firstUse,
@@ -239,6 +243,24 @@ export function NativeDeskRoute({
   const onIntakeSelectionHandled = useCallback((request: LocalAccountSelectionRequest) => {
     setIntakeSelection(previous => previous?.request === request ? null : previous);
   }, []);
+  // A requested step (a Today draft row or an Accounts step control) outlives the pending -> composed switch, not this route.
+  const [stepSelection, setStepSelection] = useState<{ api: NativeDeskApi['localWorkspace']; request: LocalAccountStepRequest } | null>(() => {
+    const request = surface === 'accounts' && api.localWorkspace ? takeLocalAccountStep(api.localWorkspace) : null;
+    return request ? { api: api.localWorkspace, request } : null;
+  });
+  const requestStep = useCallback((request: LocalAccountStepRequest) => { setStepSelection({ api: api.localWorkspace, request }); }, [api.localWorkspace]);
+  const onStepHandled = useCallback((request: LocalAccountStepRequest) => {
+    setStepSelection(previous => previous?.request === request ? null : previous);
+  }, []);
+  const stepRequest = surface === 'accounts' && stepSelection?.api === api.localWorkspace ? stepSelection.request : null;
+  const openLocalDraft = (draft: LocalDraftContinuation) => {
+    const localApi = api.localWorkspace;
+    if (!localApi || !firstUse.selectAccount(firstUseEpoch, draft.accountId)) return;
+    viewSelection(api.daily).set(JSON.stringify([snapshot?.workspaceId ?? null, 'accounts']), localAccountKey(draft.accountId));
+    // Opening the company is navigation, never sending. The Accounts route takes this step on mount and focuses the draft panel.
+    requestLocalAccountStep(localApi, { accountId: draft.accountId, step: 'reopen_draft' });
+    window.location.hash = routeHash('accounts');
+  };
   const intakeController = useLocalCompanyIntake({
     api: api.localWorkspace,
     scopeKey: `local-company:${surface}`,
@@ -257,8 +279,8 @@ export function NativeDeskRoute({
   const intakeRequest = surface === 'accounts' && intakeSelection?.api === api.localWorkspace ? intakeSelection?.request : null;
   const refresh = () => { local.refresh(); load(); };
   const localOnly = surface === 'accounts'
-    ? <LocalOnlyAccountLibrary api={api.localWorkspace} contactApi={api} onOpenImport={onOpenImport} onOpenLead={onOpenLead} firstUse={firstUse} intake={intake} selectionRequest={intakeRequest} onSelectionHandled={onIntakeSelectionHandled} read={local.read.overview} onSelectionChange={key => viewSelection(api.daily).set(JSON.stringify([snapshot?.workspaceId ?? null, surface]), key)} />
-    : surface === 'today' ? <LocalOnlyCalls read={local.read.retained} onOpenLead={onOpenLead} initialSelected={viewSelection(api.daily).get(JSON.stringify([snapshot?.workspaceId ?? null, surface]))} onSelectionChange={key => viewSelection(api.daily).set(JSON.stringify([snapshot?.workspaceId ?? null, surface]), key)} /> : <p>Campaign scope unavailable. This is a read-only capability preview. Creation, editing, enrollment and activation are not available here.</p>;
+    ? <LocalOnlyAccountLibrary api={api.localWorkspace} contactApi={api} onOpenImport={onOpenImport} onOpenLead={onOpenLead} firstUse={firstUse} intake={intake} selectionRequest={intakeRequest} onSelectionHandled={onIntakeSelectionHandled} read={local.read.overview} onSelectionChange={key => viewSelection(api.daily).set(JSON.stringify([snapshot?.workspaceId ?? null, surface]), key)} stepRequest={stepRequest} onStep={requestStep} onStepHandled={onStepHandled} onEvidenceChanged={local.refresh} />
+    : surface === 'today' ? <LocalOnlyCalls read={local.read.retained} onOpenLead={onOpenLead} onOpenDraft={openLocalDraft} initialSelected={viewSelection(api.daily).get(JSON.stringify([snapshot?.workspaceId ?? null, surface]))} onSelectionChange={key => viewSelection(api.daily).set(JSON.stringify([snapshot?.workspaceId ?? null, surface]), key)} /> : <p>Campaign scope unavailable. This is a read-only capability preview. Creation, editing, enrollment and activation are not available here.</p>;
   if (!snapshot)
     return (
       <section className="native-desk native-desk--pending" data-presentation="native-a">
@@ -329,6 +351,11 @@ export function NativeDeskRoute({
       onRefresh={refresh}
       onOpenLead={onOpenLead}
       onOpenImport={onOpenImport}
+      onOpenLocalDraft={openLocalDraft}
+      stepRequest={stepRequest}
+      onStep={requestStep}
+      onStepHandled={onStepHandled}
+      onEvidenceChanged={local.refresh}
       surface={surface}
     />
   );
@@ -503,6 +530,11 @@ export function NativeDesk({
   intake,
   intakeSelection,
   onIntakeSelectionHandled,
+  onOpenLocalDraft,
+  stepRequest = null,
+  onStep,
+  onStepHandled,
+  onEvidenceChanged,
 }: {
   firstUse: FirstUseContinuation;
   snapshot: DailySnapshot;
@@ -518,6 +550,11 @@ export function NativeDesk({
   onRefresh(): void;
   onOpenLead(personId: string): void;
   onOpenImport(): void;
+  onOpenLocalDraft?(draft: LocalDraftContinuation): void;
+  stepRequest?: LocalAccountStepRequest | null;
+  onStep?(request: LocalAccountStepRequest): void;
+  onStepHandled?(request: LocalAccountStepRequest): void;
+  onEvidenceChanged?(): void;
   surface?: Surface;
 }) {
   const firstUseState = useSyncExternalStore(firstUse.subscribe, firstUse.snapshot, firstUse.snapshot);
@@ -540,13 +577,15 @@ export function NativeDesk({
     onIntakeSelectionHandled?.(intakeSelection);
   }, [intakeSelection, onIntakeSelectionHandled, cache, scopeKey]);
   const root = useRef<HTMLElement>(null);
+  const localAccounts = localRead?.overview.value?.accounts.state === 'available' ? localRead.overview.value.accounts.snapshots : [];
   const select = (key: string | null) => {
     if (surface === 'accounts') {
-      const local = (localRead?.overview.value?.accounts.state === 'available' ? localRead.overview.value.accounts.snapshots : []).find(item => localAccountKey(item.account.id) === key);
-      if (!firstUse.selectAccount(firstUseEpoch, local?.account.id ?? null)) return;
+      const local = localAccounts.find(item => localAccountKey(item.account.id) === key);
+      if (!firstUse.selectAccount(firstUseEpoch, local?.account.id ?? null)) return false;
     }
     cache.set(scopeKey, key);
     setSelected(key);
+    return true;
   };
   const closeDetails = () => {
     const old = selected;
@@ -586,9 +625,15 @@ export function NativeDesk({
           ? 'Pairing present · configuration unknown'
           : `Configured ${configuration.state}`;
   const retained = localRead?.retained.value?.items.find(item => retainedKey(item) === selected);
-  const localAccount = (localRead?.overview.value?.accounts.state === 'available' ? localRead.overview.value.accounts.snapshots : []).find(item => localAccountKey(item.account.id) === selected);
+  const localAccount = localAccounts.find(item => localAccountKey(item.account.id) === selected);
   const unavailableScope = snapshot.workspaceId === null;
   const incomplete = snapshot.freshness.kind === 'incomplete';
+  // Paused or unpaired is a chosen state of this Mac, not a fault: one quiet line, connection details collapsed.
+  // A real local record problem (invalid record, failed research) keeps its own visible line either way.
+  const pausedWorker = configuration?.state === 'paused' || configuration?.configuration?.configuration.state === 'paused';
+  const calm = unavailableScope || pausedWorker;
+  const localRecordProblem = snapshot.issues.some(issue => !OPERATIONAL_ISSUE_CODES.has(issue.code));
+  const showIncomplete = incomplete && (!calm || localRecordProblem);
   const actionHold =
     answer?.kind === 'requested_followup' &&
     answer.draft.accountVersion !== account?.account.version
@@ -607,6 +652,7 @@ export function NativeDesk({
               ? 'Owner command pending. Wait for its applied receipt before continuing.'
               : undefined;
   const { continuations, history } = partitionFirstUseAnswers(snapshot.answers);
+  const localDrafts = localRead?.retained.value?.localDrafts ?? [];
   const keys =
     surface === 'today'
       ? [
@@ -614,6 +660,7 @@ export function NativeDesk({
           ...snapshot.calls.accountIds.map((id) => `call:${id}`),
           ...continuations.map(answerKey),
           ...history.map(answerKey),
+          ...localDrafts.map(localDraftKey),
           ...snapshot.meetings.map(meetingKey),
         ]
       : surface === 'accounts'
@@ -663,7 +710,9 @@ export function NativeDesk({
     }
     if (e.key === 'Enter') {
       e.preventDefault();
-      select(key);
+      const draft = localDrafts.find((item) => localDraftKey(item) === key);
+      if (draft) onOpenLocalDraft?.(draft);
+      else select(key);
     }
   };
   const retainedCount = localCommitmentsCount(localRead?.retained);
@@ -705,7 +754,7 @@ export function NativeDesk({
         </div>
         <div className="native-desk__header-status">
           <details className="native-desk__connection">
-            <summary>{unavailableScope ? 'Worker unavailable' : 'Worker freshness unknown'}</summary>
+            <summary>{unavailableScope ? 'Worker unavailable' : pausedWorker ? 'Worker paused' : 'Worker freshness unknown'}</summary>
             <p>{configLabel}</p>
             <p>Local records are separate from worker-authorized work. Pairing and owner checks are required for worker actions.</p>
             <p>Remote freshness unknown. This is a local snapshot.</p>
@@ -737,7 +786,8 @@ export function NativeDesk({
       </header>
       {surface === 'campaigns' && <CallCampaignDraft api={api} snapshot={snapshot} config={configuration} readError={readError || !!localHold} onRefresh={onRefresh} />}
       {localHold && <p role="status">Local workflow unavailable or inconsistent. Worker actions are held. Refresh to check status.</p>}
-      {incomplete && (!unavailableScope || snapshot.issues.some(issue => issue.code !== 'scope_unknown' && issue.code !== 'scope_mismatch')) && <p role="status">The daily snapshot is incomplete. Account work may be missing. Existing owner checks still apply.</p>}
+      {calm && <p role="status" className="native-desk__calm">Cloud work is paused on this Mac. Local work continues.</p>}
+      {showIncomplete && <p role="status">The daily snapshot is incomplete. Account work may be missing. Existing owner checks still apply.</p>}
       <div className="native-desk__layout">
         <nav className={`native-desk__queue${surface === 'today' ? ' native-desk__queue--today' : ''}`} aria-label={`${title} queue`} tabIndex={0}>
           <div className="native-desk__queue-title"><h2>{surface === 'today' ? 'Your next conversations' : surface === 'accounts' ? 'Your accounts' : 'Saved campaign versions'}</h2><p className="native-desk__hint" title="j / k to move · Enter to review">j / k · ↵</p></div>
@@ -782,6 +832,7 @@ export function NativeDesk({
                 name={name}
                 onSelect={select}
               />
+              {onOpenLocalDraft && <LocalDraftContinuations drafts={localDrafts} onOpen={onOpenLocalDraft} />}
               <UpcomingMeetings
                 unavailable={unavailableScope}
                 items={snapshot.meetings}
@@ -792,7 +843,10 @@ export function NativeDesk({
             </>
           ) : surface === 'accounts' ? (
             <>
-            {localRead && <LocalAccountLibrary intake={intake} read={localRead.overview} selected={selected} onSelect={select} />}
+            {localRead && <LocalAccountLibrary intake={intake} read={localRead.overview} selected={selected} onSelect={select} onStep={(key, step) => {
+              const accountId = localAccounts.find(item => localAccountKey(item.account.id) === key)?.account.id;
+              if (accountId !== undefined && select(key)) onStep?.({ accountId, step });
+            }} />}
             <section className="native-desk__lane">
               <h2>
                 Worker accounts <span>{formatVisibleCount(workerCount(snapshot.accounts.length))}</span>
@@ -862,7 +916,8 @@ export function NativeDesk({
             </div>
           )}
           {retained && <RetainedWorkDetail entry={retained} stale={!!localRead?.retained.error || !!localRead?.retained.pending} onOpenLead={onOpenLead} />}
-          {localAccount && <LocalAccountDetail account={localAccount} api={api.localWorkspace} contactApi={api} continuation={firstUse} onOpenImport={onOpenImport} onOpenLead={onOpenLead} />}
+          {localAccount && <LocalAccountDetail account={localAccount} api={api.localWorkspace} contactApi={api} continuation={firstUse} onOpenImport={onOpenImport} onOpenLead={onOpenLead}
+            step={stepRequest?.accountId === localAccount.account.id ? stepRequest : null} onStepHandled={onStepHandled} onEvidenceChanged={onEvidenceChanged} />}
           {account && !answer && <AccountContext account={account} />}{' '}
           {answer && snapshot.workspaceId && (
             <DailyAnswerDetail
