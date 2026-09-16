@@ -149,6 +149,12 @@ export class DelegationRepository {
       AND json_extract(command_json,'$.payload.intent.threadId')=? ORDER BY created_at,command_id`).all(this.deps.workspaceId, accountIdSchema.parse(accountId), accountIdSchema.parse(threadId)) as { command_json: string }[];
     return rows.map(row => delegationCommandSchema.parse(JSON.parse(row.command_json))).filter((command): command is Extract<DelegationCommand, { kind: 'approve-meeting' }> => command.kind === 'approve-meeting');
   }
+  /** Every configure-owner command ever queued for one company, oldest first. Receipts are read separately. */
+  intakeConfigureCommands(accountId: string): Extract<DelegationCommand, { kind: 'configure-owner' }>[] {
+    const rows = this.raw.prepare(`SELECT command_json FROM delegated_commands WHERE workspace_id=? AND account_id=? AND json_extract(command_json,'$.kind')='configure-owner'
+      ORDER BY created_at,command_id`).all(this.deps.workspaceId, accountIdSchema.parse(accountId)) as { command_json: string }[];
+    return rows.map(row => delegationCommandSchema.parse(JSON.parse(row.command_json))).filter((command): command is Extract<DelegationCommand, { kind: 'configure-owner' }> => command.kind === 'configure-owner');
+  }
   requestedApprovalStatus(commandId:string):RequestedApprovalStatus|null {
     const command=this.getCommand(commandId);if(command?.kind!=='approve-requested-followup')return null;
     const row=this.raw.prepare("SELECT event_json FROM delegated_applied_events WHERE workspace_id=? AND account_id=? AND json_extract(event_json,'$.kind')='requested_followup.status' AND json_extract(event_json,'$.payload.commandId')=? ORDER BY aggregate_version DESC LIMIT 1").get(command.workspaceId,command.accountId,commandId) as {event_json:string}|undefined;

@@ -121,7 +121,7 @@ describe('preload workflow bridge', () => {
       'today',
     ]);
     expect(Object.keys(api.delegation).sort()).toEqual([
-      'approveMeeting', 'approveRequestedFollowup', 'beginPhone', 'bootstrap', 'configure', 'configurePolicy', 'configureResearch',
+      'approveMeeting', 'approveRequestedFollowup', 'beginPhone', 'bootstrap', 'configure', 'configureIntake', 'configurePolicy', 'configureResearch',
       'editReplyDraft', 'editRequestedFollowup', 'getAccountPreparation', 'getMeetingApproval', 'getPhoneHandoffState', 'getRequestedFollowup', 'googleConnections', 'pair', 'policyImport', 'prepareRequestedFollowup', 'reconcileReplyDraft', 'researchSetup', 'status', 'submit', 'sync',
     ]);
     expect(Object.keys(api.linkedin).sort()).toEqual([

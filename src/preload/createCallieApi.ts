@@ -11,6 +11,7 @@ import {policyImportConfirmSchema,policyImportResumeSchema,policyImportStatusSch
 import {prepareRequestedFollowupSchema,getRequestedFollowupSchema,editRequestedFollowupSchema,approveRequestedFollowupSchema,savedRequestedFollowupSchema,requestedApprovalStatusSchema} from '../shared/contracts/requestedFollowupContract';
 import {workerPolicyRequestSchema,workerPolicyReceiptSchema} from '../shared/contracts/workerPolicyContract';
 import {approveMeetingFromReplySchema,getMeetingApprovalSchema,meetingApprovalStatusSchema,boundMeetingApprovalStatus,type ApproveMeetingFromReply,type GetMeetingApproval,type MeetingApprovalStatus} from '../shared/contracts/meetingContract';
+import {configureAccountIntakeSchema,boundAccountIntakeConfigureStatus,type ConfigureAccountIntake,type AccountIntakeConfigureStatus} from '../shared/contracts/accountIntakeConfigureContract';
 import {createLinkedInApi} from './apis/linkedInApi';
 import { delegatedPhoneHandoffRequestSchema,bootstrapSelectedAccountSchema,configureResearchSourceSchema,ownerResearchSourceSchema,configureLocalDelegationSchema,localDelegationStatusSchema,localDelegationConfigurationRecordSchema,redeemLocalPairingSchema,redeemedLocalPairingSchema,delegationSyncReportSchema } from '../shared/contracts/ownerCommandContract';
 import {delegatedPhoneHandoffResultSchema,publicDelegationCommandSchema,commandReceiptSchema,type PublicDelegationCommand} from '../shared/contracts/delegationContract';
@@ -52,6 +53,11 @@ export const createCallieApi = (invoker: IpcInvoker) => {
       return client.request('outreach:delegation-get-meeting-approval', getMeetingApprovalSchema, meetingApprovalStatusSchema.nullable().refine(status => !status || status.accountId === request.accountId && status.threadId === request.threadId, 'meeting_approval_identity_mismatch'), request);
     },
   };
+  // Optional for the same older-bridge compatibility. One explicit intake change queues one configure-owner
+  // command and returns its receipt or an honest hold; it never reads mail, sends or books.
+  const intakeExtension: { configureIntake?: (input: ConfigureAccountIntake) => Promise<AccountIntakeConfigureStatus> } = {
+    configureIntake: async raw => { const request = Object.freeze(configureAccountIntakeSchema.parse(raw)); return client.request('outreach:delegation-configure-intake', configureAccountIntakeSchema, boundAccountIntakeConfigureStatus(request), request); },
+  };
   return {
     health: {
       get: (): Promise<AppHealth> =>
@@ -63,6 +69,7 @@ export const createCallieApi = (invoker: IpcInvoker) => {
       ...googleExtension,
       ...researchExtension,
       ...meetingExtension,
+      ...intakeExtension,
       policyImport:{
         selectAndPreview:()=>client.requestNoInput('outreach:policy-import-select-preview',policyImportPreviewSchema.nullable()),
         confirm:(input:z.infer<typeof policyImportConfirmSchema>)=>client.request('outreach:policy-import-confirm',policyImportConfirmSchema,policyImportReportSchema,input),

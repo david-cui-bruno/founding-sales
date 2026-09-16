@@ -66,7 +66,7 @@ describe('preload Apple feasibility bridge', () => {
     expect(Object.keys(api.daily)).toEqual(['get']);
     expect(api.daily.get).toBeTypeOf('function');
     expect(Object.keys(api.delegation).sort()).toEqual([
-      'approveMeeting', 'approveRequestedFollowup', 'beginPhone', 'bootstrap', 'configure', 'configurePolicy', 'configureResearch',
+      'approveMeeting', 'approveRequestedFollowup', 'beginPhone', 'bootstrap', 'configure', 'configureIntake', 'configurePolicy', 'configureResearch',
       'editReplyDraft', 'editRequestedFollowup', 'getAccountPreparation', 'getMeetingApproval', 'getPhoneHandoffState', 'getRequestedFollowup', 'googleConnections', 'pair', 'policyImport', 'prepareRequestedFollowup', 'reconcileReplyDraft', 'researchSetup', 'status', 'submit', 'sync',
     ]);
     expect(Object.keys(api.linkedin).sort()).toEqual([

@@ -24,7 +24,9 @@ import {ExecutionClient,createResearchSetupTransport,createAccountPreparationTra
 import {createResearchSetupService,awaitResearchSetupOperation} from './researchSetupService';
 import type {ResearchSetupRequestStore} from './researchSetupRequestStore';
 import type {ResearchSetupApi} from '../../shared/contracts/researchSetupContract';
-import {approveRequestedFollowupCommandSchema,approveMeetingCommandSchema,delegatedPhoneHandoffRequestSchema,bootstrapSelectedAccountSchema,bootstrapSelectedAccountCommandSchema,configureLocalDelegationSchema,localDelegationStatusSchema} from '../../shared/contracts/ownerCommandContract';
+import {approveRequestedFollowupCommandSchema,approveMeetingCommandSchema,configureOwnerCommandSchema,ownerSourceConfigurationSchema,delegatedPhoneHandoffRequestSchema,bootstrapSelectedAccountSchema,bootstrapSelectedAccountCommandSchema,configureLocalDelegationSchema,localDelegationStatusSchema} from '../../shared/contracts/ownerCommandContract';
+import {configureAccountIntakeSchema,accountIntakeConfigureStatusSchema,type ConfigureAccountIntake,type AccountIntakeHoldReason} from '../../shared/contracts/accountIntakeConfigureContract';
+import {googleScopes} from '../../shared/contracts/googleGrantCapabilities';
 import {publicDelegationCommandSchema,type DelegatedPhoneHandoffResult,type DelegationCommand} from '../../shared/contracts/delegationContract';
 import {approveMeetingFromReplySchema,getMeetingApprovalSchema,meetingApprovalStatusSchema,schedulingEvidence,type ApproveMeetingFromReply} from '../../shared/contracts/meetingContract';
 import {resolveLocalTime} from '../../shared/meetings/schedulingRules';
@@ -39,6 +41,18 @@ function meetingApprovalStatus(repository:DelegationRepository,command:ApproveMe
  const receipt=repository.commandStatus(command.commandId);if(!receipt)throw Error('meeting_receipt_missing');const i=command.payload.intent;
  return meetingApprovalStatusSchema.parse({commandId:command.commandId,accountId:command.accountId,threadId:i.threadId,threadRevision:i.threadRevision,contextRevision:i.contextRevision,agreementEvidenceId:i.agreementEvidenceId,
   quote:i.agreement?.kind==='explicit_slot'?i.agreement.quote:undefined,meetingId:i.meetingId,calendarId:command.payload.calendarId,rulesRevision:i.rulesRevision,attendeeEmail:i.attendeeEmails[0],start:i.start,end:i.end,timezone:i.timezone,localStart:i.localStart,summary:i.summary,inviteAttendees:i.inviteAttendees,receipt});
+}
+type ConfigureOwnerCommand=Extract<DelegationCommand,{kind:'configure-owner'}>;
+/** The founder-visible binding of one intake change: the revision read, the target state, mailbox,
+ * calendar and mail start. The same binding reuses the live command; a different binding against a
+ * pending change is refused, never a second command. Research and the scope envelope are bound by the runtime. */
+function intakeBinding(value:ConfigureOwnerCommand|ConfigureAccountIntake):string{
+ if('kind' in value){const p=value.payload;return accountFingerprint({expectedConfigurationRevision:p.expectedConfigurationRevision,state:p.configuration.state,mailboxSubject:p.configuration.mailboxSubject,calendarId:p.configuration.calendarId,mailSince:p.mailScope?.since??null});}
+ return accountFingerprint({expectedConfigurationRevision:value.expectedConfigurationRevision,state:value.state,mailboxSubject:value.mailboxSubject,calendarId:value.calendarId,mailSince:value.mailSince});
+}
+function intakeStatus(repository:DelegationRepository,command:ConfigureOwnerCommand){
+ const receipt=repository.commandStatus(command.commandId);if(!receipt)throw Error('intake_receipt_missing');const p=command.payload;
+ return accountIntakeConfigureStatusSchema.parse({status:'queued',accountId:command.accountId,commandId:command.commandId,expectedConfigurationRevision:p.expectedConfigurationRevision,configuration:p.configuration,mailScope:p.mailScope,receipt});
 }
 /** Every repository belongs to a live FoundationRuntime operation lease. No DB
  * handle survives its callback. Local lock aborts work, never revokes the owner. */
@@ -307,6 +321,50 @@ export function createDelegationRuntime(input:{databaseGate:{withDatabase<T>(fn:
    if(!commands.length)return null;
    const live=commands.filter(command=>repository.commandStatus(command.commandId)?.status!=='rejected');
    return meetingApprovalStatus(repository,(live.length?live:commands).at(-1)!);
+  });},
+  /** Explicit intake configuration for one company: pause or resume, relevant mail on for the first
+   * time with a start date, or the grant's owned calendar. Queues exactly one configure-owner command
+   * with the revision the founder read bound; the worker's admission is mirrored first so nothing stale
+   * is queued. Pairing, research and the scope envelope are never typed. Nothing here reads mail, sends or books. */
+  configureIntake:(raw:unknown)=>{const request=configureAccountIntakeSchema.parse(raw);return run(async(database,signal)=>{
+   if(!pairing)throw Error('pairing_unconfigured');
+   const active=AbortSignal.any([signal,AbortSignal.timeout(15000)]);const current=services(database,active);const repository=current.repository;
+   const held=(reason:AccountIntakeHoldReason)=>accountIntakeConfigureStatusSchema.parse({status:'held',accountId:request.accountId,expectedConfigurationRevision:request.expectedConfigurationRevision,reason});
+   // Command identity outlives lost responses and remounts: the identical change reuses its live command.
+   const commands=repository.intakeConfigureCommands(request.accountId),receiptOf=(command:ConfigureOwnerCommand)=>repository.commandStatus(command.commandId)?.status;
+   const same=commands.filter(command=>receiptOf(command)!=='rejected'&&intakeBinding(command)===intakeBinding(request));
+   if(same.length>1)throw Error('intake_configuration_conflict');
+   let command=same[0];
+   if(!command){
+    if(commands.some(command=>receiptOf(command)==='pending'))return held('intake_configuration_conflict');
+    const authority=repository.authority(request.accountId);const version=repository.executionVersion(request.accountId);
+    if(!authority||authority.owner!=='worker'||!['active','paused'].includes(authority.state)||version===null||repository.hasPendingStop(request.accountId))return held('intake_owner_inactive');
+    if(repository.pendingCommands().some(pending=>pending.accountId===request.accountId))return held('intake_command_pending');
+    // The stored configuration is read from the owner now, bound to the same authority and version the command expects.
+    const preparation=await createAccountPreparationTransport({pairing:{endpoint:pairing.endpoint,workspaceId:pairing.workspaceId,pairingId:pairing.pairingId,credential:pairing.credential},fetch:input.fetch}).read({accountId:request.accountId},active);
+    assertCurrent(active);
+    if(preparation.authority.owner!=='worker'||!['active','paused'].includes(preparation.authority.state)||preparation.authority.generation!==authority.generation||preparation.executionVersion!==version)return held('intake_owner_stale');
+    const config=preparation.configuration,mailbox=config?.mailboxSubject??null,mailOn=request.state==='active'&&request.mailboxSubject!==null;
+    if((config?.revision??0)!==request.expectedConfigurationRevision)return held('stale_source_configuration');
+    // Worker admission mirrored before anything is queued, its codes verbatim. A mailbox is never switched or re-scoped here.
+    if(mailbox!==null&&(request.mailboxSubject!==mailbox||request.mailSince!==null))return held('intake_mailbox_mismatch');
+    if(request.state==='active'&&request.mailboxSubject===null&&(request.mailSince!==null||request.calendarId!==null))return held('no_mail_configuration_conflict');
+    if(request.state==='paused'&&request.mailSince!==null)return held('inactive_scope_change');
+    const calendarChanged=request.calendarId!==null&&request.calendarId!==(config?.calendarId??null);
+    if(mailOn||calendarChanged){
+     const grant=await current.client.googleGrantStatus('permitted_correspondence',active);assertCurrent(active);
+     if(mailOn&&(grant.state!=='ready'||grant.grant?.subject!==request.mailboxSubject||!grant.grant.grantedScopes.includes(googleScopes.relevant_read)))return held('source_grant_unavailable');
+     const owned=grant.state==='ready'&&grant.grant?.purpose==='permitted_correspondence'?grant.grant.calendars?.ownedCalendarId??null:null;
+     if(calendarChanged&&owned!==request.calendarId)return held('intake_calendar_unavailable');
+    }
+    if(mailOn&&request.mailSince===null&&!preparation.mailCursor?.scope)return held('selected_scope_incomplete');
+    if(repository.authority(request.accountId)?.generation!==authority.generation||repository.executionVersion(request.accountId)!==version)return held('intake_owner_stale');
+    const configuration=ownerSourceConfigurationSchema.parse({version:1,workspaceId:pairing.workspaceId,accountId:request.accountId,pairingId:pairing.pairingId,revision:request.expectedConfigurationRevision+1,state:request.state,mailboxSubject:request.mailboxSubject,calendarId:request.calendarId,research:config?.research??null});
+    command=configureOwnerCommandSchema.parse({commandId:randomUUID(),workspaceId:pairing.workspaceId,accountId:request.accountId,expectedAuthorityGeneration:authority.generation,expectedVersion:version,kind:'configure-owner',
+     payload:{expectedConfigurationRevision:request.expectedConfigurationRevision,configuration,mailScope:request.mailSince===null?null:{expectedEnvelopeRevision:preparation.mailCursor?.envelopeRevision??null,since:request.mailSince}}});
+   }
+   await current.client.submit(command);await current.client.sync(active);
+   return intakeStatus(repository,command);
   });},
   getAccountPreparation:(raw:unknown)=>{
     const request=Object.freeze(getAccountPreparationSchema.parse(raw));
