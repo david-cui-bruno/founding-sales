@@ -84,9 +84,16 @@ export const getMeetingApprovalSchema = z.strictObject({ accountId: id, threadId
 export type GetMeetingApproval = z.infer<typeof getMeetingApprovalSchema>;
 /** Local projection of one queued approve-meeting command with its current receipt.
  * A receipt, even applied, is admission of the approval, never a booking or a send. */
-export const meetingApprovalStatusSchema = z.strictObject({ commandId: id, accountId: id, threadId: id, agreementEvidenceId: id, meetingId: id, calendarId: id,
-  attendeeEmail: z.string().email(), start: meetingInstantSchema, end: meetingInstantSchema, timezone: id, localStart: localClock, summary, receipt: commandReceiptSchema });
+export const meetingApprovalStatusSchema = z.strictObject({ commandId: id, accountId: id, threadId: id, threadRevision: integer.positive(), contextRevision: id, agreementEvidenceId: id, quote: z.string().min(1).max(500),
+  meetingId: id, calendarId: id, rulesRevision: integer.positive(), attendeeEmail: z.string().email(), start: meetingInstantSchema, end: meetingInstantSchema, timezone: id, localStart: localClock, summary,
+  inviteAttendees: z.boolean(), receipt: commandReceiptSchema });
 export type MeetingApprovalStatus = z.infer<typeof meetingApprovalStatusSchema>;
+/** The exact request that produced a status. Retrying it reuses the stored command; nothing is guessed. */
+export function meetingApprovalRetry(status: MeetingApprovalStatus): ApproveMeetingFromReply {
+  return approveMeetingFromReplySchema.parse({ accountId: status.accountId, threadId: status.threadId, expectedThreadRevision: status.threadRevision, expectedContextRevision: status.contextRevision,
+    agreementEvidenceId: status.agreementEvidenceId, attendeeEmail: status.attendeeEmail, quote: status.quote, calendarId: status.calendarId, rulesRevision: status.rulesRevision, timezone: status.timezone,
+    durationMinutes: Math.round((Date.parse(status.end) - Date.parse(status.start)) / 60000), localStart: status.localStart, summary: status.summary, inviteAttendees: status.inviteAttendees });
+}
 export function boundMeetingApprovalStatus(request: ApproveMeetingFromReply) {
   return meetingApprovalStatusSchema.refine(status => status.accountId === request.accountId && status.threadId === request.threadId
     && status.agreementEvidenceId === request.agreementEvidenceId && status.attendeeEmail === request.attendeeEmail && status.calendarId === request.calendarId

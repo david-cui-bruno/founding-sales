@@ -2,7 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { CalliePreloadApi } from '../../../shared/preload';
 import type { DailyAnswer } from '../../../shared/contracts/dailyContract';
 import { accountPreparationReplySchema, type AccountPreparation } from '../../../shared/contracts/accountPreparationContract';
-import { approveMeetingFromReplySchema, boundMeetingApprovalStatus, schedulingEvidence, type ApproveMeetingFromReply, type MeetingApprovalStatus } from '../../../shared/contracts/meetingContract';
+import { approveMeetingFromReplySchema, boundMeetingApprovalStatus, meetingApprovalRetry, schedulingEvidence, type ApproveMeetingFromReply, type MeetingApprovalStatus } from '../../../shared/contracts/meetingContract';
 import { captureDailySessionScope } from '../today/dailySessionScope';
 
 export type MeetingApprovalApi = Pick<CalliePreloadApi['delegation'], 'approveMeeting' | 'getMeetingApproval' | 'getAccountPreparation'>;
@@ -91,6 +91,9 @@ export function MeetingApproval({ item, api, workspaceId, actionHold }: { item: 
   const settled = !!status && status.receipt.status !== 'rejected';
   const locked = settled || !!retained || !!busy;
   const canApprove = !!request && confirmed && !actionHold && !locked;
+  // A retained (unacknowledged) request or a pending receipt is the same lost-response case:
+  // retrying re-sends the identical binding and the runtime reuses the live command identity.
+  const retry = retained ?? (status?.receipt.status === 'pending' ? meetingApprovalRetry(status) : null);
   const send = async (payload: ApproveMeetingFromReply) => {
     if (busy) return;
     setBusy('approve'); setError(null); setRetained(payload);
@@ -98,7 +101,10 @@ export function MeetingApproval({ item, api, workspaceId, actionHold }: { item: 
       const check = captureDailySessionScope(api, workspaceId);
       const outcome = boundMeetingApprovalStatus(payload).parse(await approve(payload));
       check();
-      if (alive.current) { setStatus(outcome); setRetained(null); }
+      if (!alive.current) return;
+      setStatus(outcome); setRetained(null);
+      // A rejection means the owner's world moved. Any new approval starts from a fresh explicit read.
+      if (outcome.receipt.status === 'rejected') { setPreparation(null); setConfirmed(false); }
     } catch {
       if (alive.current) setError('Approval was not acknowledged. The exact request is retained; retrying the same approval never issues a second command. Nothing was booked or sent.');
     } finally { if (alive.current) setBusy(null); }
@@ -131,7 +137,7 @@ export function MeetingApproval({ item, api, workspaceId, actionHold }: { item: 
       <label className="native-desk__check"><input type="checkbox" checked={confirmed} disabled={locked} onChange={e => setConfirmed(e.target.checked)} />I confirm this slot matches the quoted reply and the attendee address</label>
       <div className="native-desk__actions">
         <button type="button" className="native-desk__primary" disabled={!canApprove} onClick={() => { if (request) void send(request); }}>Approve meeting</button>
-        {retained && !busy && <button type="button" disabled={!!actionHold} onClick={() => { void send(retained); }}>Retry same approval</button>}
+        {retry && !busy && <button type="button" onClick={() => { void send(retry); }}>Retry same approval</button>}
       </div>
       <div className="native-desk__feedback" aria-live="polite">
         <p>Approval queues one owner command for the worker’s calendar poller. This app books nothing and sends nothing.</p>

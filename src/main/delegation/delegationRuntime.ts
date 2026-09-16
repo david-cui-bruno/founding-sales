@@ -37,7 +37,8 @@ function meetingApprovalBinding(value:ApproveMeetingCommand|ApproveMeetingFromRe
 }
 function meetingApprovalStatus(repository:DelegationRepository,command:ApproveMeetingCommand){
  const receipt=repository.commandStatus(command.commandId);if(!receipt)throw Error('meeting_receipt_missing');const i=command.payload.intent;
- return meetingApprovalStatusSchema.parse({commandId:command.commandId,accountId:command.accountId,threadId:i.threadId,agreementEvidenceId:i.agreementEvidenceId,meetingId:i.meetingId,calendarId:command.payload.calendarId,attendeeEmail:i.attendeeEmails[0],start:i.start,end:i.end,timezone:i.timezone,localStart:i.localStart,summary:i.summary,receipt});
+ return meetingApprovalStatusSchema.parse({commandId:command.commandId,accountId:command.accountId,threadId:i.threadId,threadRevision:i.threadRevision,contextRevision:i.contextRevision,agreementEvidenceId:i.agreementEvidenceId,
+  quote:i.agreement?.kind==='explicit_slot'?i.agreement.quote:undefined,meetingId:i.meetingId,calendarId:command.payload.calendarId,rulesRevision:i.rulesRevision,attendeeEmail:i.attendeeEmails[0],start:i.start,end:i.end,timezone:i.timezone,localStart:i.localStart,summary:i.summary,inviteAttendees:i.inviteAttendees,receipt});
 }
 /** Every repository belongs to a live FoundationRuntime operation lease. No DB
  * handle survives its callback. Local lock aborts work, never revokes the owner. */

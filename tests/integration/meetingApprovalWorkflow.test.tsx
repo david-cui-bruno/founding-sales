@@ -13,7 +13,10 @@ import { ConditionalCommandHarness } from '../../cloud/lambdas/delegated-worker/
 import { googleScopes } from '../../cloud/lambdas/delegated-worker/src/googleGrantCapabilities';
 import { mailScopeFingerprint } from '../../src/main/outreach/providers/gmailThreadProvider';
 import type { SchedulingRules } from '../../src/shared/contracts/meetingContract';
-import type { MailMessage } from '../../src/shared/contracts/mailThreadContract';
+import type { MailMessage, ThreadProjection } from '../../src/shared/contracts/mailThreadContract';
+import type { DailyAnswer } from '../../src/shared/contracts/dailyContract';
+import type { AccountPreparation } from '../../src/shared/contracts/accountPreparationContract';
+import { DailyAnswerDetail } from '../../src/renderer/features/today/DailyAnswers';
 import type { OwnerCommand, OwnerSourceConfiguration } from '../../src/shared/contracts/ownerCommandContract';
 import { delegationCommandSchema, eventPageSchema, type DelegationCommand } from '../../src/shared/contracts/delegationContract';
 import { DelegationRepository } from '../../src/main/delegation/delegationRepository';
@@ -116,13 +119,15 @@ async function desktop(w: Worker) {
     expect(owner.applyWorkerEvent(event)).toBe('applied');
   }
   const posted: DelegationCommand[] = [], paths: string[] = [];
-  let loseNext = false;
+  // Offline drops every owner call except the preparation read, so an approval can be
+  // queued locally without the owner ever seeing it and then retried explicitly.
+  let offline = false;
   const http: typeof fetch = async (input, init) => {
     const url = new URL(String(input)); expect(url.origin).toBe(`https://${w.host}`); paths.push(url.pathname);
+    if (offline && url.pathname !== '/accounts/preparation') throw Error('Fictional owner offline');
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
     if (url.pathname === '/commands' && body) posted.push(delegationCommandSchema.parse(body));
     const response = await w.request(url.pathname + url.search, body, new Headers(init?.headers).get('authorization') ?? '');
-    if (loseNext && body?.kind === 'approve-meeting') { loseNext = false; throw Error('Fictional owner response lost'); }
     return new Response(response.body, { status: response.statusCode });
   };
   const runtime = createDelegationRuntime({ databaseGate: { withDatabase: async fn => fn(db) }, pairing: { ...w.pair, endpoint: `https://${w.host}` }, clock, fetch: http });
@@ -139,7 +144,8 @@ async function desktop(w: Worker) {
   Object.assign(ui.api.delegation, { getAccountPreparation: bridge.delegation.getAccountPreparation, approveMeeting: bridge.delegation.approveMeeting, getMeetingApproval: bridge.delegation.getMeetingApproval });
   const approveCommands = () => posted.filter(command => command.kind === 'approve-meeting');
   return { ...ui, db, owner, services, runtime, bridge, forbidden, posted, paths, approveCommands, workspaceId,
-    lose: () => { loseNext = true; },
+    setOffline: (value: boolean) => { offline = value; },
+    approvalIdentities: () => [...new Set(approveCommands().map(command => command.commandId))],
     meeting: () => db.raw.prepare('SELECT projection_json FROM delegated_meetings WHERE workspace_id=? AND account_id=?').get(workspaceId, w.accountId) as { projection_json: string } | undefined,
     async close() { removeIpc(); await runtime.dispose(); closeDatabase(db); key.bytes.fill(0); temp.cleanup(); } };
 }
@@ -186,4 +192,142 @@ it('approves an explicit slot from the saved scheduling reply through the real b
     expect(w.counts).toEqual({ calendarInserts: 1, emailSends: 0, forbidden: 0 });
     expect(d.forbidden).not.toHaveBeenCalled();
   } finally { cleanup(); await d.close(); }
+});
+
+async function openApproval(w: Worker, d: Awaited<ReturnType<typeof desktop>>) {
+  render(<PresentationRoot><NativeDeskRoute api={d.api} firstUse={d.firstUse} surface="today" onOpenLead={vi.fn()} onOpenImport={vi.fn()} /></PresentationRoot>);
+  fireEvent.click(await replyRow());
+  const panel = within(await screen.findByRole('region', { name: 'Meeting approval' }));
+  fireEvent.click(panel.getByRole('button', { name: 'Check calendar and scheduling rules' }));
+  await panel.findByText(/Rules revision 1\./);
+  fireEvent.change(panel.getByLabelText('Meeting start'), { target: { value: '2026-09-15T10:00' } });
+  fireEvent.click(panel.getByLabelText(/I confirm this slot matches the quoted reply/));
+  const approve = panel.getByRole<HTMLButtonElement>('button', { name: 'Approve meeting' });
+  await waitFor(() => expect(approve.disabled).toBe(false));
+  expect(w.counts.calendarInserts).toBe(0);
+  return { panel, approve };
+}
+
+it('retries the same approval after a lost owner response without issuing a second command identity', async () => {
+  const w = await worker(), d = await desktop(w);
+  try {
+    const { panel, approve } = await openApproval(w, d);
+    d.setOffline(true);
+    fireEvent.click(approve);
+    // The owner never answered: the local outbox holds one pending command and the receipt is honestly pending.
+    await panel.findByText('Meeting approval receipt: pending.');
+    const pending = d.owner.pendingCommands().filter(command => command.kind === 'approve-meeting');
+    expect(pending).toHaveLength(1);
+    expect(d.approveCommands()).toEqual([]); expect(await w.store.list('MEETING_INTENT#')).toEqual([]);
+    expect(approve.disabled).toBe(true);
+    d.setOffline(false);
+    fireEvent.click(panel.getByRole('button', { name: 'Retry same approval' }));
+    await panel.findByText('Meeting approval receipt: applied.');
+    expect(d.approvalIdentities()).toEqual([pending[0]!.commandId]);
+    expect(d.owner.getCommand(pending[0]!.commandId)).toEqual(pending[0]);
+    expect(await w.store.list('MEETING_INTENT#')).toHaveLength(1);
+    expect(panel.queryByRole('button', { name: 'Retry same approval' })).toBeNull();
+    expect(w.counts).toEqual({ calendarInserts: 0, emailSends: 0, forbidden: 0 });
+  } finally { cleanup(); await d.close(); }
+});
+
+it('shows a durable rejection from the owner and never re-issues the approval implicitly', async () => {
+  const w = await worker(), d = await desktop(w);
+  try {
+    const { panel, approve } = await openApproval(w, d);
+    d.setOffline(true);
+    fireEvent.click(approve);
+    await panel.findByText('Meeting approval receipt: pending.');
+    const pending = d.owner.pendingCommands().find(command => command.kind === 'approve-meeting')!;
+    // The owner moves on without this command: an explicit pause advances the version it expected.
+    expect((await w.request('/commands', { commandId: randomUUID(), workspaceId: w.workspaceId, accountId: w.accountId, expectedAuthorityGeneration: pending.expectedAuthorityGeneration, expectedVersion: pending.expectedVersion, kind: 'pause', payload: { reason: 'fictional owner pause' } })).statusCode).toBe(200);
+    d.setOffline(false);
+    fireEvent.click(panel.getByRole('button', { name: 'Retry same approval' }));
+    await panel.findByText('Meeting approval receipt: rejected.');
+    expect(panel.getByText(/Stale owner command; explicit fresh action required/)).toBeTruthy();
+    expect(d.owner.commandStatus(pending.commandId)).toMatchObject({ status: 'rejected' });
+    expect(d.approvalIdentities()).toEqual([pending.commandId]);
+    expect(await w.store.list('MEETING_INTENT#')).toEqual([]);
+    // Nothing is re-issued: the approval control is closed until an explicit fresh read and confirmation.
+    expect(panel.getByRole<HTMLButtonElement>('button', { name: 'Approve meeting' }).disabled).toBe(true);
+    expect(panel.queryByRole('button', { name: 'Retry same approval' })).toBeNull();
+    expect(panel.getByText('Check the calendar and scheduling rules before approving.')).toBeTruthy();
+    expect(w.counts).toEqual({ calendarInserts: 0, emailSends: 0, forbidden: 0 });
+  } finally { cleanup(); await d.close(); }
+});
+
+it('reads the stored rules revision through the preparation bridge, fences it, and holds the runtime when rules are absent', async () => {
+  const configured = await worker(), c = await desktop(configured);
+  try {
+    const read = await c.bridge.delegation.getAccountPreparation({ accountId: configured.accountId });
+    expect(read.meetingRules).toEqual({ calendarId: configured.calendarId, revision: 1, timezone: 'America/New_York', durationMinutes: 30 });
+    const fence = configured.dynamo.transactions.at(-1)!.TransactItems!.map(item => item.ConditionCheck?.Key?.sk?.S);
+    expect(fence).toContain(`MEETING_RULES#${encodeURIComponent(configured.calendarId)}`);
+  } finally { await c.close(); }
+  const unconfigured = await worker(false), u = await desktop(unconfigured);
+  try {
+    const read = await u.bridge.delegation.getAccountPreparation({ accountId: unconfigured.accountId });
+    expect(read.configuration?.calendarId).toBe(unconfigured.calendarId); expect(read.meetingRules).toBeNull();
+    const request = { accountId: unconfigured.accountId, threadId: 'thread1', expectedThreadRevision: 1, expectedContextRevision: u.owner.getThread(unconfigured.accountId, 'thread1')!.contextRevision,
+      agreementEvidenceId: unconfigured.message.id, attendeeEmail: unconfigured.message.from[0]!, quote: unconfigured.message.bodyParts[0]!.text, calendarId: unconfigured.calendarId, rulesRevision: 1,
+      timezone: 'America/New_York', durationMinutes: 30, localStart: '2026-09-15T10:00:00', summary: 'Callie meeting', inviteAttendees: true };
+    await expect(u.runtime.approveMeeting(request)).rejects.toThrow('meeting_rules_unconfigured');
+    // A guessed attendee, a foreign quote or a stale thread is refused before any authority is read.
+    await expect(u.runtime.approveMeeting({ ...request, attendeeEmail: 'guessed@example.test' })).rejects.toThrow('agreement_evidence_mismatch');
+    await expect(u.runtime.approveMeeting({ ...request, quote: 'Invented agreement text' })).rejects.toThrow('agreement_evidence_mismatch');
+    await expect(u.runtime.approveMeeting({ ...request, expectedThreadRevision: 2 })).rejects.toThrow('stale_thread');
+    expect(u.owner.pendingCommands()).toEqual([]); expect(u.approveCommands()).toEqual([]);
+    expect(await u.bridge.delegation.getMeetingApproval({ accountId: unconfigured.accountId, threadId: 'thread1' })).toBeNull();
+  } finally { await u.close(); }
+});
+
+function replyItem(signals: ThreadProjection['signals']): Extract<DailyAnswer, { kind: 'reply' }> {
+  return { kind: 'reply', accountId: 'a', capability: 'held', reason: 'reply_capability_unverified', stale: false, draft: null,
+    thread: { revision: 1, contextRevision: 'context-a', signals, thread: { accountId: 'a', provider: 'gmail', mailboxSubject: 'mailbox', providerThreadId: 'thread-a',
+      messages: [{ id: 'message-a', threadId: 'thread-a', rfcMessageId: null, references: [], from: ['prospect@fixture.invalid'], to: ['founder@fixture.invalid'], cc: [],
+        date: '2026-09-09T11:30:00.000Z', subject: 'Re: A short conversation', bodyParts: [{ mimeType: 'text/plain', text: 'Tuesday at 10 am Eastern works for a 30 minute call.', truncated: false }] }] } } };
+}
+const schedulingSignal: ThreadProjection['signals'] = [{ kind: 'scheduling', requiresApproval: true, evidence: [{ messageId: 'message-a', quote: 'Tuesday at 10 am Eastern works for a 30 minute call.' }] }];
+function fixturePreparation(overrides: { calendarId: string | null; meetingRules?: AccountPreparation['meetingRules'] }): AccountPreparation {
+  const configuration: OwnerSourceConfiguration = { version: 1, workspaceId: 'ws', accountId: 'a', pairingId: 'fixture-pairing', revision: 1, state: 'active', mailboxSubject: 'mailbox', calendarId: overrides.calendarId, research: null };
+  return { workspaceId: 'ws', accountId: 'a', pairingId: 'fixture-pairing', checkedAt: '2026-09-09T12:00:00.000Z', authority: { accountId: 'a', owner: 'worker', generation: 1, state: 'active' },
+    executionVersion: 1, configuration, mailCursor: { mailboxSubject: 'mailbox', envelopeRevision: null, scope: null }, ...('meetingRules' in overrides ? { meetingRules: overrides.meetingRules } : {}) };
+}
+
+it('offers no meeting approval when the latest saved message carries no scheduling signal', () => {
+  const f = nativeDeskFixture();
+  render(<PresentationRoot><DailyAnswerDetail item={replyItem([])} workspaceId="ws" api={f.api.delegation} linkedin={f.api.linkedin} company="Account A" /></PresentationRoot>);
+  expect(screen.queryByRole('region', { name: 'Meeting approval' })).toBeNull();
+  expect(screen.queryByRole('button', { name: /approve/i })).toBeNull();
+  expect(f.calls).toEqual([]);
+});
+
+it.each([
+  ['no calendar configured', { calendarId: null }, 'No calendar is configured for this company. Approval held.'],
+  ['rules unreadable from this app', { calendarId: 'founder@fixture.invalid' }, 'Scheduling rules are not readable from this app yet. Approval held.'],
+  ['no confirmed rules stored', { calendarId: 'founder@fixture.invalid', meetingRules: null }, 'No confirmed scheduling rules are stored for this calendar. Approval held.'],
+] as const)('holds approval honestly when %s', async (_label, preparation, hold) => {
+  const f = nativeDeskFixture(); f.setPreparation(fixturePreparation(preparation));
+  render(<PresentationRoot><DailyAnswerDetail item={replyItem(schedulingSignal)} workspaceId="ws" api={f.api.delegation} linkedin={f.api.linkedin} company="Account A" /></PresentationRoot>);
+  const panel = within(screen.getByRole('region', { name: 'Meeting approval' }));
+  expect(panel.getByText('Tuesday at 10 am Eastern works for a 30 minute call.', { selector: 'blockquote' })).toBeTruthy();
+  fireEvent.click(panel.getByRole('button', { name: 'Check calendar and scheduling rules' }));
+  await panel.findByText(hold);
+  fireEvent.change(panel.getByLabelText('Meeting start'), { target: { value: '2026-09-15T10:00' } });
+  fireEvent.click(panel.getByLabelText(/I confirm this slot matches the quoted reply/));
+  expect(panel.getByRole<HTMLButtonElement>('button', { name: 'Approve meeting' }).disabled).toBe(true);
+  expect(f.calls.map(call => call.method).filter(method => method !== 'getMeetingApproval')).toEqual(['getAccountPreparation']);
+});
+
+it('keeps the approval closed under a route action hold and states that mixed replies always require approval', () => {
+  const f = nativeDeskFixture(); f.setPreparation(fixturePreparation({ calendarId: 'founder@fixture.invalid', meetingRules: { calendarId: 'founder@fixture.invalid', revision: 3, timezone: 'America/New_York', durationMinutes: 30 } }));
+  const mixed: ThreadProjection['signals'] = [{ kind: 'mixed', requiresApproval: true, evidence: [{ messageId: 'message-a', quote: 'Tuesday at 10 am Eastern works' }] }];
+  render(<PresentationRoot><DailyAnswerDetail item={replyItem(mixed)} workspaceId="ws" api={f.api.delegation} linkedin={f.api.linkedin} company="Account A"
+    actionHold="Owner command pending. Wait for its applied receipt before continuing." /></PresentationRoot>);
+  const panel = within(screen.getByRole('region', { name: 'Meeting approval' }));
+  expect(panel.getByText(/approval is required and never inferred/)).toBeTruthy();
+  expect(panel.getByText('Owner command pending. Wait for its applied receipt before continuing.')).toBeTruthy();
+  expect(panel.getByRole<HTMLButtonElement>('button', { name: 'Check calendar and scheduling rules' }).disabled).toBe(true);
+  expect(panel.getByRole<HTMLButtonElement>('button', { name: 'Approve meeting' }).disabled).toBe(true);
+  expect(f.calls).toEqual([]);
 });
