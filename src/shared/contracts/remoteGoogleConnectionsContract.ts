@@ -14,13 +14,14 @@ export interface RemoteGoogleConnectionsApi {
   revoke(input: GoogleConnectionSelector): Promise<z.infer<typeof remoteGoogleGrantStatusSchema>>;
 }
 export const selectedGooglePurpose = (purpose?: GoogleGrantPurpose): GoogleGrantPurpose => purpose ?? 'permitted_correspondence';
-/** The only status-read failure reason the desktop surfaces: the worker's own `google_unconfigured` from a
- * small non-OK `{ error }` body, which a handler built without a Google client answers. It means this worker
- * deployment has no Google client at all (mail and calendar stay gated); it is not a grant state and not a
- * transient failure. Anything else stays the generic code and no body text is ever shown. The reason travels
- * as the rejection message, which is all the context bridge preserves of an Error. */
+/** The only status-read failure reasons the desktop surfaces, the worker's own codes from a small non-OK
+ * `{ error }` body: `google_unconfigured`, which a handler built without a Google client answers (this worker
+ * deployment has no Google client at all; mail and calendar stay gated), and `worker_scope_denied`, which the
+ * worker answers when this pairing was issued without the google:grant scope (this app cannot read grants).
+ * Neither is a grant state or a transient failure. Anything else stays the generic code and no body text is
+ * ever shown. The reason travels as the rejection message, which is all the context bridge preserves of an Error. */
 export const GOOGLE_CONNECTION_STATUS_MAX_ERROR_BYTES = 512;
-export const googleConnectionStatusReasonSchema = z.enum(['google_unconfigured']);
+export const googleConnectionStatusReasonSchema = z.enum(['google_unconfigured', 'worker_scope_denied']);
 export type GoogleConnectionStatusReason = z.infer<typeof googleConnectionStatusReasonSchema>;
 export const googleConnectionStatusErrorBodySchema = z.object({ error: googleConnectionStatusReasonSchema });
 export class GoogleConnectionStatusFailure extends Error {

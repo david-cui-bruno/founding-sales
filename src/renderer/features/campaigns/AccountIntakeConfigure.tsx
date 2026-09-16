@@ -21,9 +21,12 @@ const holdText: Record<AccountIntakeHoldReason, string> = {
   intake_mailbox_mismatch: 'The requested mailbox differs from the configured one.',
   intake_calendar_unavailable: 'The requested calendar is not the connected grant’s owned calendar.',
 };
-// This worker deployment has no Google client at all: not a grant state, not a transient failure, nothing to
-// retry. Call campaigns never needed mail or calendar, so neither control is offered and nothing implies either.
-const googleUnconfiguredText = 'Mail and calendar are not configured on this worker. Call campaigns do not need them.';
+// The worker's own reasons for refusing the status read. Neither is a grant state or a transient failure, so
+// nothing is retried: mail and calendar controls are simply not offered, and nothing implies either is available.
+const googleUnavailableText: Record<GoogleConnectionStatusReason, string> = {
+  google_unconfigured: 'Mail and calendar are not configured on this worker. Call campaigns do not need them.',
+  worker_scope_denied: 'This Mac\'s pairing does not include Google access. Mail and calendar are not available from this app.',
+};
 const isoDate = /^\d{4}-\d\d-\d\d$/;
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -75,10 +78,10 @@ export function AccountIntakeConfigure({ api, workspaceId, accountId, preparatio
   const ready = grant?.status?.state === 'ready' ? grant.status.grant : null;
   const readable = !!ready && ready.grantedScopes.includes(googleScopes.relevant_read);
   const owned = ready?.purpose === 'permitted_correspondence' ? ready.calendars?.ownedCalendarId ?? null : null;
-  const googleUnconfigured = grant?.unavailable === 'google_unconfigured';
+  const googleUnavailable = grant?.unavailable && grant.unavailable !== 'unknown' ? googleUnavailableText[grant.unavailable] : null;
   const grantHold = !connections ? 'Grant status is unavailable in this bridge.'
     : grant === null ? 'Reading the connected grant…'
-    : grant.unavailable ? (googleUnconfigured ? googleUnconfiguredText : 'The connected grant could not be read. Read intake configuration again to retry.')
+    : grant.unavailable ? (googleUnavailable ?? 'The connected grant could not be read. Read intake configuration again to retry.')
     : grant.status?.state === 'unconfigured' ? 'No Google grant is connected for this pairing.'
     : grant.status?.state === 'revoked' ? 'The connected Google grant is revoked.'
     : !readable ? 'The connected grant has no Gmail read scope.'
@@ -119,7 +122,7 @@ export function AccountIntakeConfigure({ api, workspaceId, accountId, preparatio
       <p>{state === 'active' ? 'Pausing keeps the configured mailbox and calendar and stops intake for this company.'
         : mailbox !== null ? 'Setting intake active resumes intake from the configured mailbox. It does not send anything.'
         : 'Setting intake active without a mailbox is admitted only for a company the worker holds no business email routes or saved threads for.'}</p>
-      {googleUnconfigured ? <p className="native-desk__hold">{googleUnconfiguredText}</p> : <>
+      {googleUnavailable ? <p className="native-desk__hold">{googleUnavailable}</p> : <>
         {mailbox === null ? (grantHold ? <p className="native-desk__hold">{grantHold} Relevant mail is not offered.</p> : <>
           <p>Mailbox: {ready!.email}. Switching on relevant mail sets intake active and asks the worker to admit only this company’s business correspondence with permitted-source routes from that mailbox, from the date below. The worker decides admission; this is not permission to send.</p>
           <label>Read relevant mail since<input type="date" aria-label="Read relevant mail since" max={today()} value={since} disabled={locked} onChange={e => setSince(e.target.value)} /></label>

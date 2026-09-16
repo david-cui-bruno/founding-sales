@@ -153,9 +153,10 @@ export class ExecutionClient {
     if (status.grant && status.grant.purpose !== purpose) throw Error('Worker grant purpose mismatch');
     return status;
   }
-  // A refused status read names only the worker's allowlisted code from one small, bounded `{ error }` body: a
-  // handler built without a Google client answers 503 google_unconfigured. A gateway without the route (404)
-  // never carries a worker code, so its body stays unread; anything else, oversized or unreadable, is generic.
+  // A refused status read names only the worker's allowlisted codes from one small, bounded `{ error }` body: a
+  // handler built without a Google client answers 503 google_unconfigured; a pairing issued without the
+  // google:grant scope is refused with 403 worker_scope_denied. A gateway without the route (404) never carries
+  // a worker code, so its body stays unread; anything else, oversized or unreadable, is generic.
   private async googleStatusRefusal(response: Response, signal: AbortSignal): Promise<Error> {
     const fail = () => new Error('Worker request unavailable');
     const length = response.headers.get('content-length');

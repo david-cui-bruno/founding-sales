@@ -37,7 +37,7 @@ vi.mock('electron', () => ({ ipcMain: {
 const noNetwork = vi.fn(async (): Promise<never> => { throw Error('No real network allowed'); });
 afterEach(() => { cleanup(); expect(noNetwork).not.toHaveBeenCalled(); expect(ipc.handlers.size).toBe(0); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.clearAllMocks(); });
 
-type Seed = 'active-mail' | 'paused-no-mail' | 'no-google-client';
+type Seed = 'active-mail' | 'paused-no-mail' | 'no-google-client' | 'no-google-scope';
 /** Worker side: fictional Google HTTP only (token and userinfo during the grant). The grant with
  * Gmail read scope, the account record with a permitted-source email route, the intake and the
  * first owner configuration are real worker state. Every provider call is counted. */
@@ -57,9 +57,11 @@ async function worker(seed: Seed) {
   };
   // 'no-google-client' is the deployed shape with no Google client at all: the handler is built without
   // one, so /google/status answers its own bounded code (503 google_unconfigured) rather than any grant state.
+  // 'no-google-scope' keeps the Google client but issues this pairing without google:grant, so the real
+  // handler refuses the status read (403 worker_scope_denied) before any grant lookup; no grant was ever made.
   const google = seed === 'no-google-client' ? undefined : new RemoteGoogleAuthorization({ auth, fetch: provider, config: { clientId: 'fictional.apps.googleusercontent.com', clientSecret: 'fictional', redirectUri: `https://${host}/oauth/callback`, encryptionKey: Buffer.alloc(32, 8) } });
-  const pair = await auth.redeemPairing((await auth.issuePairing({ scopes: ['commands:write', 'events:read', 'google:grant'], expiresInSeconds: 300 })).code, 'fictional');
-  if (google) {
+  const pair = await auth.redeemPairing((await auth.issuePairing({ scopes: seed === 'no-google-scope' ? ['commands:write', 'events:read'] : ['commands:write', 'events:read', 'google:grant'], expiresInSeconds: 300 })).code, 'fictional');
+  if (google && seed !== 'no-google-scope') {
     const grant = await google.beginGoogleGrant(pair.pairingId, ['relevant_read', 'availability', 'event_write'], { confirmed: true, ownedCalendarId: calendarId, conflictCalendarIds: [calendarId] });
     await google.completeGoogleGrant(new URL(grant.authorizationUrl).searchParams.get('state')!, 'fictional');
   }
@@ -201,17 +203,20 @@ it('offers pause, relevant mail and calendar controls only after the explicit in
   } finally { cleanup(); await d.close(); }
 });
 
-it('says mail and calendar are not configured on this worker, offering no mail or calendar control and no retry, when the worker has no Google client', async () => {
-  const w = await worker('no-google-client'), d = await desktop(w);
+it.each([
+  ['no-google-client', 'Mail and calendar are not configured on this worker. Call campaigns do not need them.'],
+  ['no-google-scope', 'This Mac\'s pairing does not include Google access. Mail and calendar are not available from this app.'],
+] as const)('offers no mail or calendar control and no retry when the real worker refuses the status read (%s), saying why once', async (seed, honest) => {
+  const w = await worker(seed), d = await desktop(w);
   try {
     await openIntake(w, d);
     expect(screen.getByText('Configuration revision: 1. State: paused.')).toBeTruthy();
-    // The real handler, built without a Google client, answers the status read with its own bounded code. The
-    // panel names that deployment fact once, offers nothing that needs Google, and suggests no retry.
-    await panel().findByText('Mail and calendar are not configured on this worker. Call campaigns do not need them.');
+    // The real handler answers the status read with its own bounded code (no Google client, or a pairing without
+    // google:grant). The panel names that fact once, offers nothing that needs Google, and suggests no retry.
+    await panel().findByText(honest);
     expect(d.paths).toEqual(['/accounts/preparation', '/google/status']);
     expect(button('Set intake active').disabled).toBe(false);
-    for (const absent of [/could not be read/, /Read intake configuration again/, /Relevant mail is not offered/, /A configured mailbox is required/, /google_unconfigured/]) expect(panel().queryByText(absent)).toBeNull();
+    for (const absent of [/could not be read/, /Read intake configuration again/, /Relevant mail is not offered/, /A configured mailbox is required/, /google_unconfigured/, /worker_scope_denied/]) expect(panel().queryByText(absent)).toBeNull();
     expect(panel().queryByRole('button', { name: /Use calendar/ })).toBeNull();
     expect(panel().queryByRole('button', { name: 'Switch on relevant mail' })).toBeNull();
     expect(panel().queryByLabelText('Read relevant mail since')).toBeNull();

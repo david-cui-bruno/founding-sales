@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DelegationRuntime } from '../../src/main/delegation/delegationRuntime';
 import type { OutreachApi } from '../../src/shared/contracts/outreachContract';
-import { GoogleConnectionStatusFailure, type RemoteGoogleConnectionsApi } from '../../src/shared/contracts/remoteGoogleConnectionsContract';
+import { GoogleConnectionStatusFailure, googleConnectionStatusReason, type RemoteGoogleConnectionsApi } from '../../src/shared/contracts/remoteGoogleConnectionsContract';
 import { googleGrantDisclosure, personalGoogleGrantDisclosure, googleScopes } from '../../src/shared/contracts/googleGrantCapabilities';
 import { createIpcClient } from '../../src/preload/ipcClient';
 import { createRemoteGoogleConnectionsApi } from '../../src/preload/apis/remoteGoogleConnectionsApi';
@@ -101,21 +101,26 @@ describe('pure Google connections IPC and preload', () => {
     const api = createRemoteGoogleConnectionsApi(createIpcClient({ invoke: async () => value }));
     await expect(api[name]((name === 'begin' ? begin : selector) as never)).rejects.toThrow();
   });
-  it('carries the one allowlisted status reason as a reply field and rethrows it typed in the preload; every other failure stays the fixed safe code', async () => {
+  it.each(['google_unconfigured', 'worker_scope_denied'] as const)('carries the allowlisted status reason %s as a reply field and rethrows it typed in the preload; every other failure stays the fixed safe code', async reason => {
     const f = bridge();
     try {
-      vi.mocked(f.google.status).mockRejectedValue(new GoogleConnectionStatusFailure('google_unconfigured'));
-      expect(await f.invoke('status')(trusted, selector)).toEqual({ unavailable: 'google_unconfigured' });
-      await expect(f.api.status(selector)).rejects.toThrow(/^google_unconfigured$/);
+      vi.mocked(f.google.status).mockRejectedValue(new GoogleConnectionStatusFailure(reason));
+      expect(await f.invoke('status')(trusted, selector)).toEqual({ unavailable: reason });
+      await expect(f.api.status(selector)).rejects.toThrow(new RegExp(`^${reason}$`));
       await expect(f.api.status(selector)).rejects.toBeInstanceOf(GoogleConnectionStatusFailure);
       // Only the status read consumes the reason: the same typed failure from revoke is redacted like any other.
-      vi.mocked(f.google.revoke).mockRejectedValue(new GoogleConnectionStatusFailure('google_unconfigured'));
+      vi.mocked(f.google.revoke).mockRejectedValue(new GoogleConnectionStatusFailure(reason));
       await expect(f.invoke('revoke')(trusted, selector)).rejects.toThrow(/^OUTREACH_REQUEST_FAILED$/);
       await expect(f.api.revoke(selector)).rejects.toThrow(/^OUTREACH_REQUEST_FAILED$/);
       // A plain error carrying the same words is not the transport's typed failure and never becomes a reason.
-      vi.mocked(f.google.status).mockRejectedValue(Error('google_unconfigured'));
+      vi.mocked(f.google.status).mockRejectedValue(Error(reason));
       await expect(f.api.status(selector)).rejects.toThrow(/^OUTREACH_REQUEST_FAILED$/);
     } finally { f.dispose(); }
+  });
+  it('decodes only the allowlisted reasons from a rejection message, as the renderer must across the context bridge', () => {
+    expect(googleConnectionStatusReason(new GoogleConnectionStatusFailure('worker_scope_denied'))).toBe('worker_scope_denied');
+    expect(googleConnectionStatusReason(Error('google_unconfigured'))).toBe('google_unconfigured');
+    for (const other of [Error('worker_unauthorized'), Error('OUTREACH_REQUEST_FAILED'), Error(''), 'worker_scope_denied', { message: 'worker_scope_denied' }, null, undefined]) expect(googleConnectionStatusReason(other)).toBeNull();
   });
   it.each(names)('captures immutable purpose for %s while transport is pending', async name => {
     let resolve!: (value: unknown) => void;
@@ -277,7 +282,8 @@ describe('native Google connections runtime acceptance (parent-run)', () => {
   const refusals: [string, () => Response, RegExp][] = [
     ['503 google_unconfigured, what a handler built without a Google client answers', () => new Response('{"error":"google_unconfigured"}', { status: 503 }), /^google_unconfigured$/],
     ['503 worker_unavailable', () => new Response('{"error":"worker_unavailable"}', { status: 503 }), /^OUTREACH_REQUEST_FAILED$/],
-    ['403 worker_scope_denied', () => new Response('{"error":"worker_scope_denied"}', { status: 403 }), /^OUTREACH_REQUEST_FAILED$/],
+    ['403 worker_scope_denied, what the handler answers a pairing issued without google:grant', () => new Response('{"error":"worker_scope_denied"}', { status: 403 }), /^worker_scope_denied$/],
+    ['401 worker_unauthorized', () => new Response('{"error":"worker_unauthorized"}', { status: 401 }), /^OUTREACH_REQUEST_FAILED$/],
     ['503 html body', () => new Response('<html><body>Service Unavailable</body></html>', { status: 503 }), /^OUTREACH_REQUEST_FAILED$/],
     ['502 empty body', () => new Response(null, { status: 502 }), /^OUTREACH_REQUEST_FAILED$/],
     ['503 bare string', () => new Response('"google_unconfigured"', { status: 503 }), /^OUTREACH_REQUEST_FAILED$/],
