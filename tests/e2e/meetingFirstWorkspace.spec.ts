@@ -133,7 +133,7 @@ test('explicit local transition preserves a real callback and local account with
     }
     await page.getByRole('link', { name: 'Accounts', exact: true }).click();
     await expect(page.getByText('Local account library', { exact: true })).toBeVisible();
-    await page.getByRole('button', { name: /Fixture Residential Management/ }).click();
+    await page.getByRole('button', { name: 'Local account · Fixture Residential Management', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Fixture Residential Management', exact: true })).toBeVisible();
     const daily = await page.evaluate(() => window.callie.daily.get());
     expect(daily).toMatchObject({workspaceId: null, workflowMode: 'meeting_first', accounts: [], answers: [],
@@ -150,7 +150,7 @@ test('explicit local transition preserves a real callback and local account with
     expect(reopened.transitionReceipt).toEqual(applied.transitionReceipt);
     expect(reopened.accounts).toMatchObject({state: 'available', snapshots: [{account: {id: seeded.accountId}}]});
     await workspace.page.getByRole('link', {name: 'Accounts', exact: true}).click();
-    await workspace.page.getByRole('button', {name: /Fixture Residential Management/}).click();
+    await workspace.page.getByRole('button', { name: 'Local account · Fixture Residential Management', exact: true }).click();
     await expect(workspace.page.getByRole('heading', {name: 'Fixture Residential Management', exact: true})).toBeVisible();
     expect((await workspace.page.evaluate(() => window.callie.localWorkspace.getCommitments())).items).toEqual(beforeWork.items);
     expect((await workspace.page.evaluate(() => window.callie.daily.get())).workspaceId).toBeNull();
