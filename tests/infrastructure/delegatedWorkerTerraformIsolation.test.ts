@@ -213,7 +213,7 @@ describe("delegated-worker Terraform source isolation", () => {
     expect([...implementation.matchAll(/"((?:GET|POST) \/[^"\n]+)"/g)].map((match) => match[1])).toEqual([
       "POST /pairing/redeem", "POST /pairing/revoke", "POST /commands", "POST /commands/reconcile", "POST /emergency",
       "POST /readiness", "POST /research/configure", "POST /policies/configure", "POST /requested-followup/context", "POST /requested-followup/draft",
-      "POST /research/setup/status", "POST /research/setup", "POST /accounts/preparation",
+      "POST /research/setup/status", "POST /research/setup", "POST /accounts/preparation", "POST /reply/draft",
       "GET /events", "POST /google/begin", "GET /google/status", "GET /google/disclosure", "POST /google/revoke", "GET /oauth/callback",
     ]);
     // Authentication stays in the existing handler. Do not silently add/change API auth in an extraction.
