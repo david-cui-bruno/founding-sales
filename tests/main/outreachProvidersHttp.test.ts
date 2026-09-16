@@ -51,6 +51,36 @@ describe('OpenAI structured grounded drafts', () => {
       signal: new AbortController().signal, fetch: fetcher })).rejects.toThrow('invalid_draft_context');
     expect(requests).toBe(0);
   });
+
+  const companyContext: GroundedDraftContext = { recipientKind: 'company_business_inbox', companyName: 'Fictional Draft PM',
+    purpose: 'prepare_first_conversation', facts: [{ id: 'company-draft:fact-1', text: 'Company-only context: coordinates maintenance.' }],
+    playbook: 'Approved product facts only.' };
+  it('carries the saved sender name as company-context data, never inside the instructions', async () => {
+    const requests: { instructions: string; input: string }[] = [];
+    const fetcher: typeof fetch = async (_url, init) => {
+      const body = JSON.parse(String(init?.body)); requests.push({ instructions: body.instructions, input: body.input });
+      return Response.json(output(['company-draft:fact-1']));
+    };
+    const credentials = { apiKey: 'fixture-secret', model: 'fixture-model' }, signal = new AbortController().signal;
+    await generateOpenAiDraft({ credentials, context: { ...companyContext, senderName: 'Fixture Founder' }, signal, fetch: fetcher });
+    await generateOpenAiDraft({ credentials, context: companyContext, signal, fetch: fetcher });
+    expect(requests).toHaveLength(2);
+    expect(JSON.parse(requests[0]!.input)).toMatchObject({ recipientKind: 'company_business_inbox', senderName: 'Fixture Founder' });
+    expect(requests[0]!.instructions).not.toContain('Fixture Founder');
+    expect(JSON.parse(requests[1]!.input)).not.toHaveProperty('senderName');
+    expect(requests[1]!.instructions).toBe(requests[0]!.instructions);
+  });
+  it.each([
+    ['an empty sender name', { ...companyContext, senderName: '' }],
+    ['a multi-line sender name', { ...companyContext, senderName: 'Fixture\nFounder' }],
+    ['an oversized sender name', { ...companyContext, senderName: 'x'.repeat(241) }],
+    ['a sender name on a person context', { ...context, senderName: 'Fixture Founder' }],
+  ])('rejects %s before HTTP', async (_name, invalid) => {
+    let requests = 0;
+    await expect(generateOpenAiDraft({ credentials: { apiKey: 'key', model: 'model' }, context: invalid as GroundedDraftContext,
+      signal: new AbortController().signal, fetch: async () => { requests++; return Response.json(output()); } })).rejects.toThrow('invalid_draft_context');
+    expect(requests).toBe(0);
+  });
 });
 
 describe('single-invocation Gmail sender', () => {

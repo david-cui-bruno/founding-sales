@@ -25,7 +25,7 @@ function fixture() {
     claim: { key: 'residential_scope', value: 'Residential homes' }, sources: [{ id: source.id, url: source.url, sha256: source.sha256, fetchedAt: at }] }) };
   const proposal: PreparedCompanyDraft = { accountId: 'a', draftId: 'draft-a', baseRevision: 1, accountVersion: snapshot.account.version,
     recipientBinding, subject: 'Your residential maintenance workflow', body: 'Hello,\n\nI saw that your company manages residential homes. How does your team coordinate maintenance today?',
-    grounding: { facts: [fact], usedFactIds: [fact.id], playbookVersion: '2026-09-08' } };
+    grounding: { facts: [fact], usedFactIds: [fact.id], playbookVersion: '2026-09-16' } };
   const prepare = vi.fn(async () => structuredClone(proposal));
   const save = vi.fn(async (input: { commandId: string; expectedRevision: number; subject: string; body: string }) => {
     expect(input.expectedRevision).toBe(current.draft.revision);

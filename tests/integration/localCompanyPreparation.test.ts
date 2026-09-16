@@ -22,6 +22,8 @@ import { createLocalWorkspaceProvider } from '../../src/main/workspace/localWork
 import { registerLocalWorkspaceIpc } from '../../src/main/workspace/registerLocalWorkspaceIpc';
 import { createCallieApi } from '../../src/preload/createCallieApi';
 import { companyDraftFacts } from '../../src/main/outreach/companyDraftContext';
+import { EMAIL_PLAYBOOK } from '../../src/main/outreach/emailPlaybook';
+import type { AccountClaim } from '../../src/shared/contracts/accountContract';
 import { registeredIpcHandler } from '../fixtures/registeredIpcHandler';
 import { createTempDatabase, createTestWorkspaceKey } from '../fixtures/tempDatabase';
 
@@ -64,7 +66,8 @@ function generated(context: Parameters<OutreachProviders['generate']>[0]): Gener
   return { subject: 'Maintenance coordination', body: 'Hello company team,\n\nWould a conversation about maintenance coordination be useful?',
     evidenceIds: [context.facts[0]!.id], provider: 'openai', model: 'fixture-model', responseId: 'fixture-response' };
 }
-async function fixture(generate = vi.fn<OutreachProviders['generate']>(async context => generated(context)), hasFacts = true) {
+type Extra = { claims?: AccountClaim[]; status?: OutreachProviders['status'] };
+async function fixture(generate = vi.fn<OutreachProviders['generate']>(async context => generated(context)), hasFacts = true, extra: Extra = {}) {
   const temp = createTempDatabase(), key = createTestWorkspaceKey();
   const forbidden = vi.fn((): never => { throw new Error('Company draft must not invoke provider/mail/phone/worker effects'); });
   vi.stubGlobal('fetch', forbidden);
@@ -85,7 +88,7 @@ async function fixture(generate = vi.fn<OutreachProviders['generate']>(async con
       createHealthService: options => new HealthService(options), closeDatabase,
     });
     runtimes.push(runtime);
-    const preparation = createCompanyDraftPreparationService({ runtime, providers: { generate }, clock });
+    const preparation = createCompanyDraftPreparationService({ runtime, providers: { generate, ...(extra.status ? { status: extra.status } : {}) }, clock });
     preparations.push(preparation);
     const remove = registerLocalWorkspaceIpc(createLocalWorkspaceProvider(runtime, { current: forbidden }, undefined, preparation)); removers.push(remove);
     const invoke = vi.fn(async (channel: string, ...args: unknown[]) => registeredIpcHandler(electron.handle, channel)(trusted, ...args));
@@ -110,10 +113,11 @@ async function fixture(generate = vi.fn<OutreachProviders['generate']>(async con
         { key: 'operating_footprint', kind: 'fact', value: 'Rhode Island', evidenceIds: [source.id] },
         { key: 'maintenance_workflow', kind: 'fact', value: 'Coordinates maintenance', evidenceIds: [source.id] },
         { key: 'technology', kind: 'fact', value: 'Resident portal', evidenceIds: [source.id] },
+        ...(extra.claims ?? []),
       ] : [],
     }));
     const before = await first.api.getCompany({ accountId });
-    expect(before.snapshot.claims).toHaveLength(hasFacts ? 4 : 0); expect(before.sources).toEqual([source]); expect(before.snapshot.routes).toEqual([]);
+    expect(before.snapshot.claims).toHaveLength(hasFacts ? 4 + (extra.claims?.length ?? 0) : 0); expect(before.sources).toEqual([source]); expect(before.snapshot.routes).toEqual([]);
     const originalRows = await first.runtime.withDatabase(auditRows);
     expect(originalRows.every(entry => entry.rows.length === 0)).toBe(true);
     expect(await first.runtime.withDatabase(inspectDatabaseEncryption)).toMatchObject({ encrypted: true, integrity: 'ok' });
@@ -131,7 +135,7 @@ async function fixture(generate = vi.fn<OutreachProviders['generate']>(async con
     expect(opened).toMatchObject({ stale: false, editable: true });
     expect(opened.draft).toMatchObject({ kind: 'local_company_email', status: 'unsent', accountId, revision: 1, subject: '', body: '',
       recipientBinding: { routeId: route.id, routeVersion: route.version, email, personId: null } });
-    expect(companyDraftFacts(admitted)).toHaveLength(hasFacts ? 4 : 0);
+    if (!extra.claims?.length) expect(companyDraftFacts(admitted)).toHaveLength(hasFacts ? 4 : 0);
     const request = { accountId, draftId: opened.draft.id, expectedRevision: opened.draft.revision };
     const state = () => first.runtime.withDatabase(allDatabaseState);
     const read = () => first.api.getCompanyDraft({ accountId, draftId: opened.draft.id });
@@ -291,7 +295,7 @@ it.each(['success', 'unknown-evidence', 'incomplete'] as const)(
       expect(envelope.text.format).toMatchObject({ type: 'json_schema', strict: true });
       const context = JSON.parse(envelope.input);
       expect(context).toMatchObject({ recipientKind: 'company_business_inbox', companyName: 'Fictional Draft PM' });
-      for (const field of ['personName', 'personId', 'stage', 'segment']) expect(context).not.toHaveProperty(field);
+      for (const field of ['personName', 'personId', 'stage', 'segment', 'senderName']) expect(context).not.toHaveProperty(field);
       expect(context.facts).toHaveLength(4);
       expect(envelope.input).not.toContain('fixture-secret');
       expect(envelope.input).not.toContain(email);
@@ -380,6 +384,95 @@ it('renders real company facts, prepares through real IPC/HTTP generation, then 
     expect((await fresh.runtime.withDatabase(auditRows)).every(entry => entry.rows.length === 0)).toBe(true);
     f.assertNoEffects(); reopened.unmount();
   } finally { cleanup(); await f.cleanup(); }
+}, 30_000);
+
+const setup = (senderName: string): Awaited<ReturnType<OutreachProviders['status']>> => ({ model: 'ready', modelName: 'fixture-model',
+  gmail: 'unconfigured', accountEmail: null, senderName, postalAddress: '' });
+const paragraph = 'Fictional Draft PM has managed, leased and serviced residential homes across Rhode Island since 2004.';
+// David's walkthrough D: three of four saved facts repeated one company-history paragraph, shown under two headings.
+const repeatedParagraph: AccountClaim[] = [
+  { key: 'ownership', kind: 'fact', value: paragraph, evidenceIds: [source.id] },
+  { key: 'portfolio_description', kind: 'fact', value: paragraph, evidenceIds: [source.id] },
+];
+
+it('sends a repeated saved paragraph once, the saved sender name as data and the tighter first-draft rules, with grounding and fencing unchanged', async () => {
+  const status = vi.fn<OutreachProviders['status']>(async () => setup('Fixture Founder'));
+  const f = await fixture(undefined, true, { claims: repeatedParagraph, status });
+  try {
+    const before = await f.state();
+    const proposal = await f.first.api.prepareCompanyDraft(f.request);
+    expect(f.generate).toHaveBeenCalledTimes(1);
+    const [context] = f.generate.mock.calls[0]!;
+    if (!('recipientKind' in context)) throw new Error('Company context expected');
+    // Six saved claims carry one paragraph twice: the model reads it once, under the first company heading.
+    expect(context.facts).toHaveLength(5);
+    const repeated = context.facts.filter(fact => fact.text.includes(paragraph));
+    expect(repeated).toHaveLength(1);
+    expect(repeated[0]!.text).toContain('"key":"portfolio_description"');
+    expect(context.facts.map(fact => fact.text).join('\n')).not.toContain('"key":"ownership"');
+    expect(context.facts).toEqual(companyDraftFacts(f.admitted));
+    expect(proposal.grounding.facts).toEqual(context.facts);
+    expect(proposal.grounding.usedFactIds).toEqual([context.facts[0]!.id]);
+    expect(proposal.grounding.playbookVersion).toBe('2026-09-16');
+    // The founder's saved sender name is read-only setup data: not evidence, not permission, never invented.
+    expect(status).toHaveBeenCalledTimes(1);
+    expect(context.senderName).toBe('Fixture Founder');
+    expect(Object.keys(context).sort()).toEqual(['companyName', 'facts', 'playbook', 'purpose', 'recipientKind', 'senderName']);
+    // The playbook carries the tighter first-draft rules without new product claims.
+    expect(context.playbook).toBe(EMAIL_PLAYBOOK);
+    expect(context.playbook).toMatch(/subject[^.]*at most 60 characters/i);
+    expect(context.playbook).toMatch(/exactly one concrete sentence[^.]*Callie[^.]*maintenance handoff[^.]*approved product facts/i);
+    expect(context.playbook).toContain('Looking forward to your insights');
+    expect(context.playbook).toMatch(/senderName[^.]*founder's saved sender name/);
+    expect(context.playbook).toMatch(/no senderName[^.]*no name/i);
+    expect(context.playbook).toContain('Never invent, guess or default a name');
+    expect(context.playbook).toContain('signature block, postal address or opt-out footer');
+    expect(await f.state()).toEqual(before); expect(await f.read()).toEqual(f.opened); f.assertNoEffects();
+  } finally { await f.cleanup(); }
+}, 30_000);
+
+it.each([
+  ['setup has no sender name', async () => setup('')],
+  ['setup has a blank sender name', async () => setup('   ')],
+  ['setup is locked', async () => ({ ...setup(''), model: 'locked' as const, gmail: 'locked' as const })],
+  ['this port cannot read setup', undefined],
+])('sends no sender name when %s, never inventing one', async (_name, status) => {
+  const f = await fixture(undefined, true, { status });
+  try {
+    const before = await f.state();
+    await f.first.api.prepareCompanyDraft(f.request);
+    const [context] = f.generate.mock.calls[0]!;
+    expect(Object.keys(context).sort()).toEqual(['companyName', 'facts', 'playbook', 'purpose', 'recipientKind']);
+    expect(context.playbook).toBe(EMAIL_PLAYBOOK);
+    expect(await f.state()).toEqual(before); expect(await f.read()).toEqual(f.opened); f.assertNoEffects();
+  } finally { await f.cleanup(); }
+}, 30_000);
+
+it('passes the saved sender name through the real HTTP generator as data only, never inside the instructions', async () => {
+  const http = vi.fn<typeof fetch>(async (_url, init) => {
+    const envelope = JSON.parse(String(init?.body)), context = JSON.parse(envelope.input);
+    expect(context).toMatchObject({ recipientKind: 'company_business_inbox', companyName: 'Fictional Draft PM', senderName: 'Fixture Founder' });
+    expect(envelope.instructions).not.toContain('Fixture Founder');
+    expect(context.facts).toHaveLength(4);
+    return Response.json({ id: 'resp_named_fixture', status: 'completed', model: 'fixture-model',
+      output: [{ type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: JSON.stringify({
+        subject: 'Maintenance handoff at Fictional Draft PM',
+        body: 'Hello Fictional Draft PM team,\n\nHow does your team hand off maintenance requests to contractors today?\n\nBest,\nFixture Founder',
+        evidenceIds: [context.facts[0].id],
+      }) }] }] });
+  });
+  const generate = vi.fn<OutreachProviders['generate']>((context, signal) => generateOpenAiDraft({ context, signal,
+    credentials: { apiKey: 'fixture-secret', model: 'fixture-model' }, fetch: http }));
+  const f = await fixture(generate, true, { status: async () => setup('Fixture Founder') });
+  try {
+    const before = await f.state();
+    const proposal = await f.first.api.prepareCompanyDraft(f.request);
+    expect(proposal.subject.length).toBeLessThanOrEqual(60);
+    expect(proposal.body.endsWith('Best,\nFixture Founder')).toBe(true);
+    expect(proposal.grounding.usedFactIds).toEqual([proposal.grounding.facts[0]!.id]);
+    expect(http).toHaveBeenCalledTimes(1); expect(generate).toHaveBeenCalledTimes(1);
+    expect(await f.state()).toEqual(before); expect(await f.read()).toEqual(f.opened); f.assertNoEffects();
+  } finally { await f.cleanup(); }
 }, 30_000);
 
 it('rejects an eligible reviewed inbox with no supported company facts before invoking the provider', async () => {

@@ -18,6 +18,8 @@ export type PersonGroundedDraftContext = {
 export type CompanyGroundedDraftContext = {
   recipientKind: 'company_business_inbox'; companyName: string; purpose: 'prepare_first_conversation';
   facts: { id: string; text: string }[]; playbook: string;
+  /** The founder's saved sender name from outreach setup, sign-off data only. Absent when unset; never defaulted. */
+  senderName?: string;
 };
 export type GroundedDraftContext = PersonGroundedDraftContext | CompanyGroundedDraftContext;
 export type GeneratedDraft = {
