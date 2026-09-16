@@ -1,3 +1,4 @@
+import { getAccountPreparationSchema, accountPreparationSchema, accountPreparationReplySchema } from '../../shared/contracts/accountPreparationContract';
 import { reconcileReplyDraftSchema, editReplyDraftSchema, replyDraftResultSchema, boundReplyDraftResult } from '../../shared/contracts/mailThreadContract';
 import { delegatedPhoneStateRequestSchema, delegatedPhoneStateSchema, delegatedPhoneStateReplySchema } from '../../shared/contracts/delegatedPhoneStateContract';
 import {googleConnectionSelectorSchema,googleConsentOpenedSchema} from '../../shared/contracts/remoteGoogleConnectionsContract';
@@ -77,6 +78,7 @@ export function registerOutreachIpc(options:{provider:OutreachApi;delegation?:De
       add('delegation-configure',configureLocalDelegationSchema,localDelegationConfigurationRecordSchema,input=>d.configure(input));
       add('delegation-submit',publicDelegationCommandSchema,commandReceiptSchema,input=>d.submit(input));
       add('delegation-sync',null,delegationSyncReportSchema,()=>d.sync());
+      add('delegation-get-account-preparation',getAccountPreparationSchema,accountPreparationSchema,async request=>accountPreparationReplySchema(request).parse(await d.getAccountPreparation(request)));
     }
     if(options.pairingStore)add('delegation-pair',redeemLocalPairingSchema,redeemedLocalPairingSchema,input=>options.pairingStore!.redeem(input,AbortSignal.timeout(15000)));
 

@@ -1,3 +1,4 @@
+import { getAccountPreparationSchema, accountPreparationReplySchema, type GetAccountPreparation } from '../shared/contracts/accountPreparationContract';
 import { reconcileReplyDraftSchema, editReplyDraftSchema, boundReplyDraftResult, type ReconcileReplyDraft, type EditReplyDraft } from '../shared/contracts/mailThreadContract';
 import { delegatedPhoneStateRequestSchema, delegatedPhoneStateReplySchema, type GetPhoneHandoffStateRequest } from '../shared/contracts/delegatedPhoneStateContract';
 import { createRemoteGoogleConnectionsApi } from './apis/remoteGoogleConnectionsApi';
@@ -71,6 +72,11 @@ export const createCallieApi = (invoker: IpcInvoker) => {
       configure:(input:z.infer<typeof configureLocalDelegationSchema>)=>client.request('outreach:delegation-configure',configureLocalDelegationSchema,localDelegationConfigurationRecordSchema,input),
       submit:(input:PublicDelegationCommand)=>client.request('outreach:delegation-submit',publicDelegationCommandSchema,commandReceiptSchema,input),
       sync:()=>client.requestNoInput('outreach:delegation-sync',delegationSyncReportSchema),
+      getAccountPreparation:async(...args:[GetAccountPreparation])=>{
+        if(args.length!==1)throw Error('Preparation read requires one request.');
+        const request=Object.freeze(getAccountPreparationSchema.parse(args[0]));
+        return client.request('outreach:delegation-get-account-preparation',getAccountPreparationSchema,accountPreparationReplySchema(request),request);
+      },
     },
     linkedin: createLinkedInApi(client),
     phoneSetup: createPhoneSetupApi(client),

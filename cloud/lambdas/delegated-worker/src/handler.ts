@@ -1,3 +1,5 @@
+import { AccountPreparationReadError, readAccountPreparation } from './accountPreparationRead';
+import { ACCOUNT_PREPARATION_MAX_REQUEST_BYTES, ACCOUNT_PREPARATION_MAX_REPLY_BYTES } from '../../../../src/shared/contracts/accountPreparationContract';
 import { parseResearchCycle, type ResearchCycleAdmission, type ResearchCycleAdmissionResult, type ResearchCycleStatusRequest, type ResearchCycleExecuteRequest, type ResearchCycleStatusResult, type ResearchCycleResult } from './researchCycleContract';
 import { executeResearchCycle } from './researchCycle';
 import { admitResearchOnceNext, executeResearchOnce, productionResearchBoundaries, researchProfile } from './researchProduction';
@@ -38,6 +40,7 @@ export function createWorkerHandler(input: { auth: WorkerAuth; host: string; goo
       const event = eventSchema.parse(raw);
       if (event.headers['x-forwarded-proto'] !== 'https' || event.headers.host !== input.host || event.requestContext.domainName !== input.host) return response(400, { error: 'worker_invalid_request' });
       const method = event.requestContext.http.method; const path = event.rawPath;
+      if (path === '/accounts/preparation' && event.body && Buffer.byteLength(event.body, 'utf8') > ACCOUNT_PREPARATION_MAX_REQUEST_BYTES) return response(400, { error: 'worker_invalid_request' });
       // All other requests retain their existing limits. Only selected bootstrap
       // and the bounded prior+next ordinary draft envelope get larger bodies.
       if (event.body && Buffer.byteLength(event.body, 'utf8') > 65536 && !(path === '/reply/draft' && method === 'POST')) {
@@ -49,6 +52,18 @@ export function createWorkerHandler(input: { auth: WorkerAuth; host: string; goo
       const allowed = path === '/oauth/callback' ? ['state', 'code', 'error', 'scope', 'authuser', 'prompt', 'hd'] : path === '/events' ? ['cursor'] : ['/google/status', '/google/disclosure'].includes(path) ? ['purpose'] : [];
       for (const key of query.keys()) if (!allowed.includes(key) || query.getAll(key).length !== 1) return response(400, { error: 'worker_invalid_request' });
       const body = () => JSON.parse(event.body ?? '{}') as unknown;
+      if (path === '/accounts/preparation' && method === 'POST') {
+        let request: unknown;
+        try { request = body(); } catch { return response(400, { error: 'worker_invalid_request' }); }
+        try {
+          const result = await readAccountPreparation(input.auth, request, event.headers.authorization);
+          const reply = response(200, result);
+          if (Buffer.byteLength(reply.body, 'utf8') > ACCOUNT_PREPARATION_MAX_REPLY_BYTES) return response(503, { error: 'worker_unavailable' });
+          return reply;
+        } catch (error) {
+          return error instanceof AccountPreparationReadError ? response(error.statusCode, { error: error.code }) : response(503, { error: 'worker_unavailable' });
+        }
+      }
       if (path === '/pairing/redeem' && method === 'POST') {
         const parsed = z.strictObject({ code: z.string().max(128) }).parse(body());
         return response(200, await input.auth.redeemPairing(parsed.code, event.requestContext.http.sourceIp));

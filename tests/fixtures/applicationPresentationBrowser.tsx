@@ -94,6 +94,7 @@ const api: CalliePreloadApi = {
     transition: forbidden('localWorkspace.transition'),
   },
   delegation: {
+    getAccountPreparation: forbidden('delegation.getAccountPreparation'),
     ...(new URLSearchParams(location.search).has('researchScenario') ? { researchSetup: {
       status: read('researchSetup.status', () => researchSetupStatusSchema.parse({ pending: null, blockers: [], remote: {
         workspaceId: 'fictional-research', pairingId: '12345678-1234-4234-8234-123456789012', selector: null,

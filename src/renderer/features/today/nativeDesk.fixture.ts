@@ -250,6 +250,7 @@ export function nativeDeskFixture(initial = dailyFixture()) {
       },
     },
     delegation: {
+      getAccountPreparation: forbidden,
       status: async () => {
         record('delegation.status');
         return structuredClone(config);

@@ -74,6 +74,7 @@ const api: CalliePreloadApi = {
     transition: forbidden('localWorkspace.transition'),
   },
   delegation: {
+    getAccountPreparation: forbidden('delegation.getAccountPreparation'),
     status: delegation.read,
     policyImport: { selectAndPreview: forbidden('policyImport.selectAndPreview'), confirm: forbidden('policyImport.confirm'), resume: forbidden('policyImport.resume'), status: forbidden('policyImport.status') },
     prepareRequestedFollowup: forbidden('delegation.prepareRequestedFollowup'), getRequestedFollowup: forbidden('delegation.getRequestedFollowup'),

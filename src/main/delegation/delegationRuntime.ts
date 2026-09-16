@@ -1,3 +1,4 @@
+import { getAccountPreparationSchema } from '../../shared/contracts/accountPreparationContract';
 import { reconcileReplyDraftSchema, editReplyDraftSchema, boundReplyDraftResult, type ReconcileReplyDraft, type EditReplyDraft } from '../../shared/contracts/mailThreadContract';
 import { SqlThreadIntakeRepository } from '../outreach/threadIntakeRepository';
 import { delegatedPhoneStateRequestSchema, type GetPhoneHandoffStateRequest } from '../../shared/contracts/delegatedPhoneStateContract';
@@ -19,7 +20,7 @@ import type {AppDatabase} from '../db/database';
 import type {StoredPairing} from './pairingStore';
 import {DelegationRepository} from './delegationRepository';
 import {SqlDelegationConfiguration,SqlDelegationTransport} from './delegationSync';
-import {ExecutionClient,createResearchSetupTransport} from './executionClient';
+import {ExecutionClient,createResearchSetupTransport,createAccountPreparationTransport} from './executionClient';
 import {createResearchSetupService,awaitResearchSetupOperation} from './researchSetupService';
 import type {ResearchSetupRequestStore} from './researchSetupRequestStore';
 import type {ResearchSetupApi} from '../../shared/contracts/researchSetupContract';
@@ -246,6 +247,16 @@ export function createDelegationRuntime(input:{databaseGate:{withDatabase<T>(fn:
   });},
   submit:(raw:unknown)=>{const command=publicDelegationCommandSchema.parse(raw);invalidate();return run((database,signal)=>services(database,signal).client.submit(command));},
   sync:()=>run((database,signal)=>services(database,signal).client.sync(AbortSignal.any([signal,AbortSignal.timeout(15000)]))),
+  getAccountPreparation:(raw:unknown)=>{
+    const request=Object.freeze(getAccountPreparationSchema.parse(raw));
+    return run((_database,signal)=>{
+      if(!pairing)throw Error('pairing_unconfigured');
+      // Never construct services(database): the detached HTTP/body continuation
+      // owns only this frozen pairing and fetch, not repository/DB handles.
+      return createAccountPreparationTransport({pairing:{endpoint:pairing.endpoint,workspaceId:pairing.workspaceId,
+        pairingId:pairing.pairingId,credential:pairing.credential},fetch:input.fetch}).read(request,signal);
+    });
+  },
   configurePolicy:(raw:unknown)=>run((database,signal)=>services(database,signal).client.configurePolicy(raw,signal)),
   configureResearch:(raw:unknown)=>run((database,signal)=>services(database,signal).client.configureResearch(raw,signal)),
   async dispose(){closed=true;invalidate(true);await Promise.allSettled([...flights]);},
