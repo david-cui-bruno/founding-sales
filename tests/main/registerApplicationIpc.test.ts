@@ -802,7 +802,7 @@ const task3LocalChannels = [
   'local-workspace:review-company', 'local-workspace:create-company', 'local-workspace:company-create-status',
   'local-workspace:get-company', 'local-workspace:research-company', 'local-workspace:company-research-status',
   'local-workspace:link-company-person', 'local-workspace:get-call-settings', 'local-workspace:update-call-settings',
-  'local-workspace:admit-company-draft-email', 'local-workspace:open-company-draft', 'local-workspace:get-company-draft', 'local-workspace:save-company-draft', 'local-workspace:prepare-company-draft',
+  'local-workspace:admit-company-draft-email', 'local-workspace:admit-company-phone-route', 'local-workspace:open-company-draft', 'local-workspace:get-company-draft', 'local-workspace:save-company-draft', 'local-workspace:prepare-company-draft',
 ];
 async function task3ApplicationFixture() {
   const temp = createTempDatabase(); const key = createTestWorkspaceKey();
@@ -840,7 +840,7 @@ describe('Task 3 application selected capability registration', () => {
       expect(storage).not.toHaveBeenCalled(); expect(domain).not.toHaveBeenCalled(); expect(current).not.toHaveBeenCalled();
       expect(first.researchCompany).not.toHaveBeenCalled(); expect(second.researchCompany).not.toHaveBeenCalled();
       const registered = electron.handle.mock.calls.map(call => call[0]);
-      expect(registered).toHaveLength(76); expect(new Set(registered).size).toBe(76);
+      expect(registered).toHaveLength(77); expect(new Set(registered).size).toBe(77);
       expect(registered.filter(channel => channel.startsWith('local-workspace:'))).toEqual(task3LocalChannels);
       const api = createCallieApi({ invoke: async (channel, ...args) => registeredIpcHandler(electron.handle, channel)({ senderFrame: { url: 'callie://app/index.html' } }, ...args) });
       expect(typeof api.localWorkspace.researchCompany).toBe('function');
@@ -859,9 +859,9 @@ describe('Task 3 application selected capability registration', () => {
       expect(second.researchCompany).toHaveBeenCalledTimes(1);
       dispose(); dispose();
       const removed = electron.removeHandler.mock.calls.map(call => call[0]);
-      expect(removed.slice(0, 19)).toEqual([...task3LocalChannels].reverse());
+      expect(removed.slice(0, 20)).toEqual([...task3LocalChannels].reverse());
       expect([...removed].sort()).toEqual([...registered].sort());
-      expect(new Set(removed).size).toBe(76);
+      expect(new Set(removed).size).toBe(77);
     } finally { dispose?.(); vi.restoreAllMocks(); await f.close(); electron.handle.mockReset(); electron.removeHandler.mockReset(); }
   });
 
