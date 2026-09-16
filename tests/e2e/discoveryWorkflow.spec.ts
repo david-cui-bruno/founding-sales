@@ -222,7 +222,7 @@ test('P2 same executable migrates nonzero16 to19, retains exact encrypted backup
     expect((await workspace.page.evaluate(() => window.callie.discovery.get())).prepared.map(b => b.assessment!.id)).toEqual(ids);
     await workspace.stop(); workspace = undefined;
     expect(await sha256(backupPath)).toBe(retainedHash);
-    expect((await fixtures.inspectStoppedProfile('through16', material, 25)).preservedActionIndependentSha256).toBe(original.preservedActionIndependentSha256);
+    expect((await fixtures.inspectStoppedProfile('through16', material, 26)).preservedActionIndependentSha256).toBe(original.preservedActionIndependentSha256);
     expect((await readdir(join(fixtures.paths.through16, 'backups'))).filter(name => name.startsWith('pre-migration-schema-16-'))).toEqual(names);
   } finally { material = ''; await workspace?.stop(); await fixtures.cleanup(); }
 });
