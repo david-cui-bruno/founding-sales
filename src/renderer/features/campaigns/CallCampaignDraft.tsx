@@ -323,7 +323,7 @@ export function CallCampaignDraft({ api, snapshot, config, readError, onRefresh 
       <p>Explicit preparation, reconciliation and save actions synchronize queued work across the workspace. Synchronization can replay previously queued workspace commands.</p>
       <button type="button" aria-expanded={draft.review} onClick={() => { draft.review = !draft.review; notify(draft); }}>Review worker preparation</button>
       {draft.review && <section aria-label="Worker preparation">
-        <AccountIntakeRead api={api} workspaceId={snapshot.workspaceId} accountId={draft.accountId} disabled={locked || !available || !parsed.success || stage === 'held'} scopeKey={guard} />
+        <AccountIntakeRead api={api} workspaceId={snapshot.workspaceId} accountId={draft.accountId} disabled={locked || !available || !parsed.success || stage === 'held'} stage={stage} scopeKey={guard} />
         <p>Unapproved draft only. Intake and outreach readiness are not verified here.</p>
         <p>Copy sends only the selected saved company record to the worker. Unsent local drafts and this meeting offer are not included. Delegation transfers account ownership only. It does not configure intake, mail or grants, enroll accounts, or start calls or outreach.</p>
         {stage === 'copy' && <button type="button" disabled={locked} onClick={() => { void prepare('copy'); }}>Copy selected company to worker</button>}
