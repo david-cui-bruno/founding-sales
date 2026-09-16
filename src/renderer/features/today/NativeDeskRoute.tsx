@@ -37,6 +37,7 @@ import {
   meetingKey,
 } from './UpcomingMeetings';
 import { CampaignReview } from '../campaigns/CampaignReview';
+import { ManualLinkedInPreparation } from '../linkedin/ManualLinkedInPreparation';
 import { CallCampaignEnrollment } from '../campaigns/CallCampaignEnrollment';
 import { CallCampaignDraft } from '../campaigns/CallCampaignDraft';
 import { describeCallCampaignTemplate } from '../../../shared/contracts/callCampaignDraft';
@@ -873,6 +874,8 @@ export function NativeDesk({
               accounts={snapshot.accounts}
               answers={snapshot.answers}
             />
+            <ManualLinkedInPreparation api={api} snapshot={snapshot} campaign={campaign} config={configuration}
+              readError={readError || !!localHold} onRefresh={onRefresh} />
             {describeCallCampaignTemplate(campaign.version) && <CallCampaignEnrollment key={`${snapshot.workspaceId}:${campaign.version.id}`} api={api} snapshot={snapshot} config={configuration}
               campaign={campaign} readError={readError || !!localHold} onRefresh={onRefresh} />}
             </>
