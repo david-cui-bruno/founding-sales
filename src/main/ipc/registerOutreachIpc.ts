@@ -1,7 +1,7 @@
 import { getAccountPreparationSchema, accountPreparationReplySchema, accountPreparationReadResultSchema, AccountPreparationReadFailure } from '../../shared/contracts/accountPreparationContract';
 import { reconcileReplyDraftSchema, editReplyDraftSchema, replyDraftResultSchema, boundReplyDraftResult } from '../../shared/contracts/mailThreadContract';
 import { delegatedPhoneStateRequestSchema, delegatedPhoneStateSchema, delegatedPhoneStateReplySchema } from '../../shared/contracts/delegatedPhoneStateContract';
-import {googleConnectionSelectorSchema,googleConsentOpenedSchema} from '../../shared/contracts/remoteGoogleConnectionsContract';
+import {googleConnectionSelectorSchema,googleConsentOpenedSchema,googleConnectionStatusResultSchema,GoogleConnectionStatusFailure} from '../../shared/contracts/remoteGoogleConnectionsContract';
 import {researchSetupApproveInputSchema,researchSetupSetStateInputSchema,researchSetupReceiptSchema,researchSetupStatusSchema} from '../../shared/contracts/researchSetupContract';
 import {remoteGoogleGrantBeginSchema,remoteGoogleGrantDisclosureSchema,remoteGoogleGrantStatusSchema} from '../../shared/contracts/remoteGoogleGrantContract';
 import {policyImportConfirmSchema,policyImportResumeSchema,policyImportStatusSchema,policyImportPreviewSchema,policyImportReportSchema} from '../../shared/contracts/accountRoutePolicyImportContract';
@@ -55,7 +55,11 @@ export function registerOutreachIpc(options:{provider:OutreachApi;delegation?:De
       }
       if(d.googleConnections){
         const google=d.googleConnections;
-        add('google-connection-status',googleConnectionSelectorSchema,remoteGoogleGrantStatusSchema,input=>google.status(input));
+        // Only the transport's allowlisted worker reason crosses, as a reply field; every other cause stays the fixed safe code.
+        add('google-connection-status',googleConnectionSelectorSchema,googleConnectionStatusResultSchema,async input=>{
+          try{return await google.status(input);}
+          catch(error){if(error instanceof GoogleConnectionStatusFailure)return {unavailable:error.reason};throw error;}
+        });
         add('google-connection-disclosure',googleConnectionSelectorSchema,remoteGoogleGrantDisclosureSchema,input=>google.disclosure(input));
         add('google-connection-begin',remoteGoogleGrantBeginSchema,googleConsentOpenedSchema,input=>google.begin(input));
         add('google-connection-revoke',googleConnectionSelectorSchema,remoteGoogleGrantStatusSchema,input=>google.revoke(input));
