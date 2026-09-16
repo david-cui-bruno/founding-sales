@@ -215,14 +215,14 @@ test('P2 same executable migrates nonzero16 to19, retains exact encrypted backup
     const backup = await fixtures.inspectStoppedBackup('through16', names[0], material, 16);
     expect(backup.businessSha256).toBe(original.businessSha256); // SAME schema only
     expect(backup.aggregateCounts).toEqual(original.aggregateCounts); expect(backup.sourceSha256).toBe(retainedHash);
-    const migrated = await fixtures.inspectStoppedProfile('through16', material, 25);
+    const migrated = await fixtures.inspectStoppedProfile('through16', material, 26);
     expect(migrated.preservedActionIndependentSha256).toBe(original.preservedActionIndependentSha256);
-    expect(migrated.ledger.slice(-10)).toEqual(['0016ContactPresentationEvidence', '0017DiscoveryAssessments', '0018PlaybookDueActions', '0019EmailDrafts', '0020PmAccounts', '0021DelegatedWork', '0022MailPersistence', '0023Campaigns', '0024RequestedFollowupAndPolicyReviews', '0025KnownCompanyResearchSettings']);
+    expect(migrated.ledger.slice(-10)).toEqual(['0017DiscoveryAssessments', '0018PlaybookDueActions', '0019EmailDrafts', '0020PmAccounts', '0021DelegatedWork', '0022MailPersistence', '0023Campaigns', '0024RequestedFollowupAndPolicyReviews', '0025KnownCompanyResearchSettings', '0026LocalCompanyDrafts']);
     workspace = await launch();
     expect((await workspace.page.evaluate(() => window.callie.discovery.get())).prepared.map(b => b.assessment!.id)).toEqual(ids);
     await workspace.stop(); workspace = undefined;
     expect(await sha256(backupPath)).toBe(retainedHash);
-    expect((await fixtures.inspectStoppedProfile('through16', material, 25)).preservedActionIndependentSha256).toBe(original.preservedActionIndependentSha256);
+    expect((await fixtures.inspectStoppedProfile('through16', material, 26)).preservedActionIndependentSha256).toBe(original.preservedActionIndependentSha256);
     expect((await readdir(join(fixtures.paths.through16, 'backups'))).filter(name => name.startsWith('pre-migration-schema-16-'))).toEqual(names);
   } finally { material = ''; await workspace?.stop(); await fixtures.cleanup(); }
 });
