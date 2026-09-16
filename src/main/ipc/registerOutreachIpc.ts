@@ -7,6 +7,7 @@ import {remoteGoogleGrantBeginSchema,remoteGoogleGrantDisclosureSchema,remoteGoo
 import {policyImportConfirmSchema,policyImportResumeSchema,policyImportStatusSchema,policyImportPreviewSchema,policyImportReportSchema} from '../../shared/contracts/accountRoutePolicyImportContract';
 import {prepareRequestedFollowupSchema,getRequestedFollowupSchema,editRequestedFollowupSchema,approveRequestedFollowupSchema,savedRequestedFollowupSchema,requestedApprovalStatusSchema} from '../../shared/contracts/requestedFollowupContract';
 import {workerPolicyRequestSchema,workerPolicyReceiptSchema} from '../../shared/contracts/workerPolicyContract';
+import {approveMeetingFromReplySchema,getMeetingApprovalSchema,meetingApprovalStatusSchema,boundMeetingApprovalStatus} from '../../shared/contracts/meetingContract';
 import type { DelegationRuntime } from '../delegation/delegationRuntime';
 import type { PairingStore } from '../delegation/pairingStore';
 import { delegatedPhoneHandoffRequestSchema,bootstrapSelectedAccountSchema,configureResearchSourceSchema,ownerResearchSourceSchema,configureLocalDelegationSchema,localDelegationStatusSchema,localDelegationConfigurationRecordSchema,redeemLocalPairingSchema,redeemedLocalPairingSchema,delegationSyncReportSchema } from '../../shared/contracts/ownerCommandContract';
@@ -79,6 +80,12 @@ export function registerOutreachIpc(options:{provider:OutreachApi;delegation?:De
       add('delegation-submit',publicDelegationCommandSchema,commandReceiptSchema,input=>d.submit(input));
       add('delegation-sync',null,delegationSyncReportSchema,()=>d.sync());
       add('delegation-get-account-preparation',getAccountPreparationSchema,accountPreparationSchema,async request=>accountPreparationReplySchema(request).parse(await d.getAccountPreparation(request)));
+      add('delegation-approve-meeting',approveMeetingFromReplySchema,meetingApprovalStatusSchema,async request=>boundMeetingApprovalStatus(request).parse(await d.approveMeeting(request)));
+      add('delegation-get-meeting-approval',getMeetingApprovalSchema,meetingApprovalStatusSchema.nullable(),async request=>{
+        const status=await d.getMeetingApproval(request);
+        if(status&&(status.accountId!==request.accountId||status.threadId!==request.threadId))throw new Error('meeting_approval_identity_mismatch');
+        return status;
+      });
     }
     if(options.pairingStore)add('delegation-pair',redeemLocalPairingSchema,redeemedLocalPairingSchema,input=>options.pairingStore!.redeem(input,AbortSignal.timeout(15000)));
 

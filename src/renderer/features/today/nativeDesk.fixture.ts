@@ -152,6 +152,7 @@ export function linkedInFixture(): Extract<
 import type { NativeDeskApi } from './NativeDeskRoute';
 import type { CommandReceipt } from '../../../shared/contracts/commandReceiptContract';
 import { requestedFollowupDraftSchema } from '../../../shared/contracts/requestedFollowupContract';
+import { accountPreparationSchema, type AccountPreparation } from '../../../shared/contracts/accountPreparationContract';
 export function configuredFixtureStatus(): Awaited<
   ReturnType<NativeDeskApi['delegation']['status']>
 > {
@@ -172,6 +173,8 @@ export function nativeDeskFixture(initial = dailyFixture()) {
   let local = localSnapshot({ workflowMode: initial.workflowMode === 'legacy' ? 'legacy' : 'meeting_first' });
   let retained = commitments();
   let config = configuredFixtureStatus();
+  // Absent by default: the preparation read stays a forbidden capability unless a test supplies one.
+  let preparation: AccountPreparation | null = null;
   const calls: { method: string; input?: unknown }[] = [];
   const record = (method: string, input?: unknown) => {
     calls.push({ method, input: structuredClone(input) });
@@ -250,7 +253,13 @@ export function nativeDeskFixture(initial = dailyFixture()) {
       },
     },
     delegation: {
-      getAccountPreparation: forbidden,
+      getAccountPreparation: async (input) => {
+        if (!preparation || preparation.accountId !== input.accountId) return forbidden();
+        record('getAccountPreparation', input);
+        return structuredClone(preparation);
+      },
+      approveMeeting: forbidden,
+      getMeetingApproval: async (input) => { record('getMeetingApproval', input); return null; },
       status: async () => {
         record('delegation.status');
         return structuredClone(config);
@@ -401,6 +410,9 @@ export function nativeDeskFixture(initial = dailyFixture()) {
     },
     setConfiguration(next: typeof config) {
       config = structuredClone(next);
+    },
+    setPreparation(next: AccountPreparation | null) {
+      preparation = next ? accountPreparationSchema.parse(structuredClone(next)) : null;
     },
     snapshot: () => structuredClone(snapshot),
   };

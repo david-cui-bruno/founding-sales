@@ -10,6 +10,7 @@ import { createDailyApi } from './apis/dailyApi';
 import {policyImportConfirmSchema,policyImportResumeSchema,policyImportStatusSchema,policyImportPreviewSchema,policyImportReportSchema} from '../shared/contracts/accountRoutePolicyImportContract';
 import {prepareRequestedFollowupSchema,getRequestedFollowupSchema,editRequestedFollowupSchema,approveRequestedFollowupSchema,savedRequestedFollowupSchema,requestedApprovalStatusSchema} from '../shared/contracts/requestedFollowupContract';
 import {workerPolicyRequestSchema,workerPolicyReceiptSchema} from '../shared/contracts/workerPolicyContract';
+import {approveMeetingFromReplySchema,getMeetingApprovalSchema,meetingApprovalStatusSchema,boundMeetingApprovalStatus,type ApproveMeetingFromReply,type GetMeetingApproval,type MeetingApprovalStatus} from '../shared/contracts/meetingContract';
 import {createLinkedInApi} from './apis/linkedInApi';
 import { delegatedPhoneHandoffRequestSchema,bootstrapSelectedAccountSchema,configureResearchSourceSchema,ownerResearchSourceSchema,configureLocalDelegationSchema,localDelegationStatusSchema,localDelegationConfigurationRecordSchema,redeemLocalPairingSchema,redeemedLocalPairingSchema,delegationSyncReportSchema } from '../shared/contracts/ownerCommandContract';
 import {delegatedPhoneHandoffResultSchema,publicDelegationCommandSchema,commandReceiptSchema,type PublicDelegationCommand} from '../shared/contracts/delegationContract';
@@ -42,6 +43,15 @@ export const createCallieApi = (invoker: IpcInvoker) => {
   // Optional in consumers for compatibility with older bridges. This bridge always supplies it.
   const googleExtension: { googleConnections?: RemoteGoogleConnectionsApi } = { googleConnections: createRemoteGoogleConnectionsApi(client) };
   const researchExtension: { researchSetup?: ResearchSetupApi } = { researchSetup: createResearchSetupApi(client) };
+  // Optional in consumers for the same older-bridge compatibility. Approval queues one
+  // owner command and returns its receipt; it never books, sends or reads a calendar.
+  const meetingExtension: { approveMeeting?: (input: ApproveMeetingFromReply) => Promise<MeetingApprovalStatus>; getMeetingApproval?: (input: GetMeetingApproval) => Promise<MeetingApprovalStatus | null> } = {
+    approveMeeting: async raw => { const request = Object.freeze(approveMeetingFromReplySchema.parse(raw)); return client.request('outreach:delegation-approve-meeting', approveMeetingFromReplySchema, boundMeetingApprovalStatus(request), request); },
+    getMeetingApproval: async raw => {
+      const request = Object.freeze(getMeetingApprovalSchema.parse(raw));
+      return client.request('outreach:delegation-get-meeting-approval', getMeetingApprovalSchema, meetingApprovalStatusSchema.nullable().refine(status => !status || status.accountId === request.accountId && status.threadId === request.threadId, 'meeting_approval_identity_mismatch'), request);
+    },
+  };
   return {
     health: {
       get: (): Promise<AppHealth> =>
@@ -52,6 +62,7 @@ export const createCallieApi = (invoker: IpcInvoker) => {
       editReplyDraft: async (raw: EditReplyDraft) => { const request = editReplyDraftSchema.parse(raw); return client.request('outreach:reply-edit', editReplyDraftSchema, boundReplyDraftResult(request), request); },
       ...googleExtension,
       ...researchExtension,
+      ...meetingExtension,
       policyImport:{
         selectAndPreview:()=>client.requestNoInput('outreach:policy-import-select-preview',policyImportPreviewSchema.nullable()),
         confirm:(input:z.infer<typeof policyImportConfirmSchema>)=>client.request('outreach:policy-import-confirm',policyImportConfirmSchema,policyImportReportSchema,input),
