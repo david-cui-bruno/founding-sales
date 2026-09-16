@@ -1,4 +1,5 @@
 import type { AdmitCompanyDraftEmail, OpenCompanyDraft, GetCompanyDraft, SaveCompanyDraft, CompanyDraftAdmissionReceipt, CompanyDraftRead, CompanyDraftMutationResult, PrepareCompanyDraft, PreparedCompanyDraft } from './localCompanyDraftContract';
+import { companyDraftEmailSchema } from './localCompanyDraftContract';
 import type { CompanyResearchSettings, UpdateCompanyResearchSettingsRequest } from './localCompanyResearchSettingsContract';
 export * from './localCompanyResearchSettingsContract';
 import { z } from 'zod';
@@ -105,13 +106,23 @@ const accountsSchema = z.discriminatedUnion('state', [
 export const localWorkspaceSnapshotSchema = z.strictObject({ scope: z.literal('local_database'), generatedAt: accountInstantSchema,
   workflowMode: z.enum(['legacy', 'meeting_first']), transitionReceipt: localWorkflowReceiptSchema.nullable(), accounts: accountsSchema,
 }).refine(s => s.transitionReceipt === null || s.workflowMode === 'meeting_first', 'local_receipt_mode_mismatch');
+/** Additive and optional: an unsent local company draft, read from local evidence only. Never a person item and never worker
+ *  ownership. Reopening or saving it is never sending. */
+export const localDraftContinuationSchema = z.strictObject({
+  accountId: accountIdSchema, draftId: accountIdSchema, companyLabel: z.string().min(1).max(300), subject: z.string().max(240),
+  revision: counter.positive(), updatedAt: accountInstantSchema, email: companyDraftEmailSchema,
+});
+export type LocalDraftContinuation = z.infer<typeof localDraftContinuationSchema>;
 export const localCommitmentsSnapshotSchema = z.strictObject({ scope: z.literal('local_database'), generatedAt: accountInstantSchema,
   revision: counter, reviewErrorCount: counter, items: z.array(z.strictObject({
     kind: z.enum(['callback', 'post_stage', 'onboarding', 'inbound_response', 'warm_relationship', 'founder_resurface']),
     item: todayItemSchema.refine(item => item.id === item.salesCycleId, 'local_today_identity_mismatch'),
   })),
+  // Snapshots without local drafts keep parsing unchanged.
+  localDrafts: z.array(localDraftContinuationSchema).optional(),
 }).refine(s => new Set(s.items.map(r => r.item.salesCycleId)).size === s.items.length
-  && new Set(s.items.map(r => r.item.action.id)).size === s.items.length, 'local_today_duplicate_identity');
+  && new Set(s.items.map(r => r.item.action.id)).size === s.items.length
+  && new Set((s.localDrafts ?? []).map(d => d.draftId)).size === (s.localDrafts ?? []).length, 'local_today_duplicate_identity');
 export type LocalWorkflowTransition = z.infer<typeof localWorkflowTransitionSchema>;
 export type LocalWorkflowReceipt = z.infer<typeof localWorkflowReceiptSchema>;
 export type LocalWorkspaceSnapshot = z.infer<typeof localWorkspaceSnapshotSchema>;

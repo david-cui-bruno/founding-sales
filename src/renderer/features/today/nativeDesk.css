@@ -436,6 +436,20 @@
   }
 }
 
+/* Unsent local drafts continue the Saved draft continuations lane as a sub-group, not a fifth lane. */
+.native-desk__local-drafts h3 {
+  margin: 4px 0 2px 9px;
+  font-size: var(--text-micro);
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.native-desk__queue--today > .native-desk__local-drafts {
+  margin-top: -8px;
+}
+/* One quiet line for a paused or unpaired Mac. Real local record problems keep their own status lines. */
+.native-desk > p.native-desk__calm {
+  color: var(--text-muted);
+}
 /* Retained local work shares the approved dense queue, not a fourth lane. */
 .native-desk__retained h3 {
   margin: 8px 0 6px;
