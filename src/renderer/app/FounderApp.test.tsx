@@ -1113,7 +1113,7 @@ it('T6-A02 office-only actual account reaches missing contact UI and global impo
   api.localWorkspace.getCompany = vi.fn<CalliePreloadApi['localWorkspace']['getCompany']>(async () => office);
   api.localWorkspace.linkCompanyPerson = vi.fn<CalliePreloadApi['localWorkspace']['linkCompanyPerson']>(async () => { throw Error('No reviewed saved person'); });
   render(<FounderAppHarness api={api} health={readyHealth} initialRoute="accounts" />);
-  fireEvent.click(await screen.findByRole('button', { name: 'Local account · Account A' })); await screen.findByText(office.sources[0].excerpt);
+  fireEvent.click(await screen.findByRole('button', { name: 'Local account · Account A' })); await screen.findAllByText(office.sources[0].excerpt);
   expect(await screen.findByText('Contact not established')).toBeTruthy(); expect(screen.queryByText(/verified person/i)).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Import named person' })); const dialog = await screen.findByRole('dialog', { name: 'Import leads' });
   expect((within(dialog).getByLabelText('Paste spreadsheet rows') as HTMLTextAreaElement).value).toBe(''); expect(api.imports.preview).not.toHaveBeenCalled(); expect(api.localWorkspace.linkCompanyPerson).not.toHaveBeenCalled();
