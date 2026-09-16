@@ -109,3 +109,26 @@ it('actual immutable later outcome event blocks SQL context even before its camp
     expect(f.repo.get(f.draft.accountId, f.draft.id)).toBeNull();
   } finally { f.local.close(); }
 });
+
+it('same-ID SQL preparation converges concurrent inserts and recovers exact edited rows after encrypted reopen', async () => {
+  const f = await fixture();
+  try {
+    const draftId = randomUUID(), request = { draftId, accountId: f.draft.accountId, originalCall: f.ref, recipientBinding: f.draft.recipientBinding, expectedAccountVersion: 2, mode: 'manual' as const };
+    const service = createRequestedFollowupService({ store: f.repo, clock: f.deps.clock, id: () => { throw Error('replacement ID'); } });
+    const [a,b] = await Promise.all([service.prepareRequestedFollowup(request, new AbortController().signal), service.prepareRequestedFollowup(request, new AbortController().signal)]);
+    expect(a).toEqual(b); expect(a.draft.id).toBe(draftId);
+    expect(f.local.db.raw.prepare('SELECT count(*) n FROM delegated_requested_followup_drafts').get()).toEqual({ n: 1 });
+    const edited = await service.editRequestedFollowup({ accountId: request.accountId, draftId, expectedRevision: 1, subject: 'Current subject', body: 'Exact current body' });
+    const approval = { receipt: f.receipt, state: 'needs_review', intentCommandId: null as null, reason: 'stale' };
+    f.local.db.raw.prepare('UPDATE delegated_requested_followup_drafts SET approval_json=? WHERE id=?').run(JSON.stringify(approval), draftId);
+    closeDatabase(f.local.db); const reopened = openDatabase({ path: f.local.db.path, key: createTestWorkspaceKey() });
+    try {
+      const repo = new SqlRequestedFollowupRepository({ ...f.deps, database: reopened });
+      const replay = createRequestedFollowupService({ store: repo, clock: f.deps.clock, id: () => { throw Error('replacement ID'); } });
+      expect(await replay.prepareRequestedFollowup(request, new AbortController().signal)).toEqual({ draft: edited.draft, stale: true, approval });
+      await expect(replay.prepareRequestedFollowup({ ...request, recipientBinding: { ...request.recipientBinding, email: 'different@example.invalid' } }, new AbortController().signal)).rejects.toThrow('requested_draft_identity_conflict');
+      expect(reopened.raw.prepare('SELECT count(*) n FROM delegated_requested_followup_drafts').get()).toEqual({ n: 1 });
+      expect(reopened.raw.prepare('SELECT * FROM persons ORDER BY id').all()).toEqual(f.local.historicalPersons);
+    } finally { closeDatabase(reopened); }
+  } finally { f.local.close(); }
+});

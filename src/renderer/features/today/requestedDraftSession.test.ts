@@ -43,6 +43,30 @@ function apiFixture() {
   return api;
 }
 describe('requested email durable session', () => {
+  it('acknowledges exact canonical saves while mailbox readiness is stale without permitting approval', async () => {
+    const api = apiFixture();
+    vi.mocked(api.editRequestedFollowup).mockImplementation(async input => ({
+      ...saved(), stale: true, draft: { ...requestedDraft(), revision: input.expectedRevision + 1, subject: input.subject, body: input.body },
+    }));
+    const s = requestedDraftSession(api, 'ws', requestedDraft(), null);
+    s.edit('body', 'Unpolled but exact saved text');
+    await expect(s.flush()).resolves.toBeUndefined();
+    expect(s.snapshot()).toMatchObject({ draft: { revision: 2, body: 'Unpolled but exact saved text' }, stale: true, error: null });
+    s.edit('body', 'Second exact saved text');
+    await expect(s.flush()).resolves.toBeUndefined();
+    expect(s.snapshot().draft).toMatchObject({ revision: 3, body: 'Second exact saved text' });
+    await s.approve('2026-09-10T12:00:00.000Z', true);
+    expect(api.approveRequestedFollowup).not.toHaveBeenCalled();
+  });
+  it('does not approve when forced canonical acknowledgment newly reports stale readiness', async () => {
+    const api = apiFixture();
+    vi.mocked(api.editRequestedFollowup).mockResolvedValue({ ...saved(), stale: true, draft: { ...requestedDraft(), revision: 2 } });
+    const s = requestedDraftSession(api, 'ws', requestedDraft(), null);
+    await s.approve('2026-09-10T12:00:00.000Z', true);
+    expect(s.snapshot().draft.revision).toBe(2);
+    expect(s.snapshot().stale).toBe(true);
+    expect(api.approveRequestedFollowup).not.toHaveBeenCalled();
+  });
   it('does not call getter on creation/ingestion and preserves newer edits through in-flight save', async () => {
     const api = apiFixture();
     const s = requestedDraftSession(api, 'ws', requestedDraft(), null);

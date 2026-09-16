@@ -101,10 +101,11 @@ export function createDelegationRuntime(input:{databaseGate:{withDatabase<T>(fn:
   if(!(await current.client.sync(active)).ownerFresh)throw Error('requested_owner_unavailable');
   const proof=await current.client.requestedContext(request,active);
   if(!(await current.client.sync(active)).ownerFresh)throw Error('requested_owner_unavailable');
-  const transport=accountFingerprint(current.transport.current()), binding=accountFingerprint({...request,mode:'manual'});
+  const semantic=(value:PrepareRequestedFollowup)=>({accountId:value.accountId,originalCall:value.originalCall,recipientBinding:value.recipientBinding,expectedAccountVersion:value.expectedAccountVersion,mode:'manual'});
+  const transport=accountFingerprint(current.transport.current()), binding=accountFingerprint(semantic(request));
   const store=new SqlRequestedFollowupRepository({database,workspaceId:pairing!.workspaceId,clock:input.clock,mailbox:()=>proof.mailbox,ownerContext:actual=>{
    assertCurrent(active);
-   if(accountFingerprint({...actual,mode:'manual'})!==binding||accountFingerprint(current.transport.current())!==transport||current.repository.hasPendingStop(request.accountId))throw Error('requested_context_changed');
+   if(accountFingerprint(semantic(actual))!==binding||accountFingerprint(current.transport.current())!==transport||current.repository.hasPendingStop(request.accountId))throw Error('requested_context_changed');
    return {...proof,cursor:proof.cursor??null};
   }});
   // Fail before generation or mutation. The same synchronous closure is checked again by every SQL reader.

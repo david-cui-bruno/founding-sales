@@ -529,7 +529,7 @@ function reopenPhone(f: Awaited<ReturnType<typeof fixture>>) {
   closeDatabase(f.db); const key = createTestWorkspaceKey(); const database = openDatabase({ path: f.db.path, key });
   cleanups.push(() => { closeDatabase(database); key.bytes.fill(0); }); return database;
 }
-async function reportPhone(f: Awaited<ReturnType<typeof fixture>>, outcome: 'unknown' | 'no_answer' | 'not_called' | 'opt_out', sync = true) {
+async function reportPhone(f: Awaited<ReturnType<typeof fixture>>, outcome: 'connected' | 'unknown' | 'no_answer' | 'not_called' | 'opt_out', sync = true) {
   const h = f.db.raw.prepare('SELECT handoff_id,target_hash FROM delegated_manual_handoffs').get() as { handoff_id: string; target_hash: string };
   const command = delegationCommandSchema.parse({ ...f.request.command, commandId: randomUUID(), kind: 'complete-manual', expectedAuthorityGeneration: f.repository.authority(f.account.id)!.generation,
     expectedVersion: f.repository.executionVersion(f.account.id), payload: { handoffId: h.handoff_id, targetHash: h.target_hash, outcome: { actionId: 'action', channel: 'call', outcome, observedAt: f.clock.now(), evidenceRef: randomUUID(), replyText: 'Saved untrusted <human> note' } } });
@@ -537,6 +537,38 @@ async function reportPhone(f: Awaited<ReturnType<typeof fixture>>, outcome: 'unk
   if (sync) { expect((await f.client.sync(new AbortController().signal)).ownerFresh).toBe(true); expect(f.repository.commandStatus(command.commandId)?.status).toBe('applied'); }
   return command;
 }
+it('phone_state_requested_origin comes only from the exact immutable applied connected command and consumed handoff', async () => {
+  const f = await fixture(); expect(await f.makeBridge().begin(f.request)).toMatchObject({ status: 'handoff' });
+  const p = phoneRecoveryPublic(f);
+  try {
+    f.offline(); const command = await reportPhone(f, 'connected', false);
+    if (command.kind !== 'complete-manual') throw Error('Expected complete-manual report');
+    expect((await recoveryRead(f, p)).completions[0].applied).toBeNull();
+    f.online(); await f.client.sync(new AbortController().signal);
+    const result = await recoveryRead(f, p), completion = result.completions[0];
+    const ref = completion.applied?.originalCall;
+    expect(ref).toMatchObject({ commandId: command.commandId, handoffId: command.payload.handoffId, actionId: 'action', commandFingerprint: fingerprint(command), outcomeEventId: completion.receiptEvent?.eventId });
+    const row = f.db.raw.prepare('SELECT event_json,fingerprint FROM delegated_applied_events WHERE id=?').get(ref!.outcomeEventId) as { event_json: string; fingerprint: string };
+    expect(ref!.outcomeEventHash).toBe(row.fingerprint); expect(ref!.outcomeEventHash).toBe(fingerprint(JSON.parse(row.event_json)));
+    const { delegatedPhoneStateSchema } = await import('../../src/shared/contracts/delegatedPhoneStateContract');
+    for (const key of ['commandId', 'handoffId', 'actionId', 'outcomeEventId'] as const) {
+      const crossed = structuredClone(result); crossed.completions[0].applied!.originalCall![key] = 'foreign';
+      expect(delegatedPhoneStateSchema.safeParse(crossed).success).toBe(false);
+    }
+    p.unregister(); await p.runtime.dispose(); const database = reopenPhone(f), reopened = phoneRecoveryPublic(f, database);
+    try { expect((await recoveryRead(f, reopened, database)).completions[0].applied?.originalCall).toEqual(ref); } finally { reopened.unregister(); await reopened.runtime.dispose(); }
+  } finally { p.unregister(); await p.runtime.dispose(); }
+});
+it.each(['opt_out', 'not_called'] as const)('phone_state_requested_origin disappears after later %s evidence', async outcome => {
+  const f = await fixture(); expect(await f.makeBridge().begin(f.request)).toMatchObject({ status: 'handoff' });
+  await reportPhone(f, 'connected'); const p = phoneRecoveryPublic(f);
+  try {
+    expect((await recoveryRead(f, p)).completions[0].applied?.originalCall).toBeDefined();
+    f.setTime(new Date(Date.parse(f.clock.now()) + 1000).toISOString()); await reportPhone(f, outcome);
+    const result = await recoveryRead(f, p); expect(result.completeness).toBe('complete');
+    expect(result.completions.every(c => c.applied?.originalCall === undefined)).toBe(true);
+  } finally { p.unregister(); await p.runtime.dispose(); }
+});
 it.each(['pending', 'local-rejected', 'owner-rejected'] as const)('phone_state_preserves_pending_and_rejected_receipts: %s after restart', async mode => {
   const f = await fixture();
   const command = prepareManualCommandSchema.parse({ ...f.request.command, ...(mode === 'local-rejected' ? { expectedVersion: 0 } : {}), payload: { ...f.request.command.payload, ...(mode === 'owner-rejected' ? { targetHash: 'f'.repeat(64) } : {}) } });

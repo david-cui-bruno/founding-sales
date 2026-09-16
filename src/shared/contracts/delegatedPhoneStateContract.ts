@@ -3,6 +3,7 @@ import { accountIdSchema as id, accountInstantSchema as instant } from './accoun
 import { campaignRevisionSchema as revision, stepEvidenceSchema } from './campaignContract';
 import { commandReceiptSchema } from './commandReceiptContract';
 import { prepareManualCommandSchema, completeManualCommandSchema, manualHandoffSchema, manualOutcomeSchema } from './ownerCommandContract';
+import { originalCallRefSchema } from './requestedFollowupContract';
 
 export const PHONE_STATE_MAX_PREPARES = 32;
 export const PHONE_STATE_MAX_COMPLETIONS = 100;
@@ -19,7 +20,7 @@ const receiptEvent = z.strictObject({ eventId: id, kind: z.enum(['manual.handoff
 const prepareRecord = z.strictObject({ command: prepare, queuedAt: instant, receipt: commandReceiptSchema, receiptEvent: receiptEvent.nullable(),
   handoff: z.strictObject({ value: handoff, authorityGeneration: revision, consumedAt: instant.nullable() }).nullable() });
 const completionRecord = z.strictObject({ prepareCommandId: z.uuid(), command: complete, queuedAt: instant, receipt: commandReceiptSchema,
-  receiptEvent: receiptEvent.nullable(), applied: z.strictObject({ outcome: callOutcome, campaignCommandId: z.uuid(), evidence }).nullable() });
+  receiptEvent: receiptEvent.nullable(), applied: z.strictObject({ outcome: callOutcome, campaignCommandId: z.uuid(), evidence, originalCall: originalCallRefSchema.optional() }).nullable() });
 const scope = { ...delegatedPhoneStateRequestSchema.shape, workspaceId: id,
   campaign: z.strictObject({ campaignId: id, campaignRevision: revision.positive(), campaignVersionId: id }), generatedAt: instant, remote: z.literal('unknown') };
 const shape = z.discriminatedUnion('completeness', [
@@ -71,6 +72,12 @@ export const delegatedPhoneStateSchema = shape.superRefine((value, ctx) => {
     if (!record.applied) continue;
     check(record.command.expectedAuthorityGeneration >= saved.authorityGeneration);
     const applied = record.applied, e = applied.evidence, event = record.receiptEvent;
+    if (applied.originalCall) {
+      const ref = applied.originalCall;
+      check(outcome.outcome === 'connected' && !e.conflict && ref.commandId === record.command.commandId
+        && ref.handoffId === saved.value.handoffId && ref.actionId === outcome.actionId && ref.outcomeEventId === event?.eventId);
+      check(!value.completions.some(other => other.applied && (other.applied.evidence.conflict || other.applied.outcome.outcome === 'opt_out')));
+    }
     check(same(applied.outcome, outcome) && applied.campaignCommandId === record.command.commandId);
     check(event !== null && event.authorityGeneration === saved.authorityGeneration && event.aggregateVersion > record.command.expectedVersion && event.aggregateVersion > (parent.receiptEvent?.aggregateVersion ?? Infinity) && event.appliedAt >= outcome.observedAt);
     check(e.accountId === value.accountId && e.enrollmentId === value.enrollmentId && e.stepId === value.stepId && e.campaignVersionId === value.campaign.campaignVersionId && e.actionId === outcome.actionId && e.routeId === saved.value.routeId && e.routeVersion === saved.value.routeVersion && e.executionContextId === saved.value.contextRevision && e.outcome === outcome.outcome && e.observedAt === outcome.observedAt);

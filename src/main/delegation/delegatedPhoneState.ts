@@ -7,6 +7,7 @@ import { commandReceiptSchema } from '../../shared/contracts/commandReceiptContr
 import { manualOutcomeSchema } from '../../shared/contracts/ownerCommandContract';
 import { delegatedPhoneStateRequestSchema, delegatedPhoneStateSchema, PHONE_STATE_MAX_PREPARES, PHONE_STATE_MAX_COMPLETIONS, type GetPhoneHandoffStateRequest, type PhoneHandoffState } from '../../shared/contracts/delegatedPhoneStateContract';
 import { accountFingerprint } from '../domain/accounts/accountEvidence';
+import { validateRequestedOriginalCall } from '../outreach/requestedFollowupService';
 
 const PHONE_STATE_MAX_SOURCE_ROWS_PER_TABLE = 512;
 const PHONE_STATE_MAX_JSON_BYTES = 1_048_576;
@@ -205,7 +206,21 @@ export function readDelegatedPhoneHandoffState(database: AppDatabase, input: Get
           requireRecord(campaign.commandId === command.commandId && campaign.enrollment.id === request.enrollmentId && campaign.enrollment.accountId === request.accountId && campaign.enrollment.campaignVersionId === version.id && campaign.enrollment.version > parent.command.payload.campaign.enrollmentRevision);
           requireRecord(!campaign.cap || campaign.cap.campaignVersionId === version.id);
           requireRecord(!campaign.version || campaign.version.id === version.id && campaign.version.campaignId === version.campaignId && campaign.version.version === version.version);
-          applied = { outcome: event.payload, campaignCommandId: campaign.commandId, evidence: campaign.evidence };
+          let originalCall;
+          const contradicted = events.some(({ event: other }) => other.kind === 'manual.outcome'
+            && other.campaign?.evidence?.enrollmentId === request.enrollmentId
+            && (other.campaign.evidence.conflict || other.payload.outcome === 'opt_out'));
+          if (event.payload.channel === 'call' && event.payload.outcome === 'connected' && parent.handoff.consumedAt !== null && !contradicted) {
+            const reference = { commandId: command.commandId, handoffId: parent.handoff.value.handoffId, actionId: event.payload.actionId,
+              commandFingerprint: accountFingerprint(command), outcomeEventId: event.id, outcomeEventHash: accountFingerprint(event) };
+            try {
+              validateRequestedOriginalCall({ workspaceId, accountId: request.accountId, reference, command,
+                commandFingerprint: reference.commandFingerprint, event, handoff: parent.handoff.value,
+                handoffAccountId: request.accountId, handoffGeneration: parent.handoff.authorityGeneration });
+              originalCall = reference;
+            } catch { /* Historical display may remain readable without a preparable requested-email origin. */ }
+          }
+          applied = { outcome: event.payload, campaignCommandId: campaign.commandId, evidence: campaign.evidence, ...(originalCall ? { originalCall } : {}) };
         }
         return { prepareCommandId: parent.command.commandId, command, queuedAt: c.queuedAt, receipt: effectiveReceipt.receipt, receiptEvent: effectiveReceipt.receiptEvent, applied };
       });
