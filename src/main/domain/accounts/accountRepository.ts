@@ -1,4 +1,5 @@
 import { admitCompanyDraftEmailSchema, companyDraftAdmissionReply, companyDraftMailboxOccurrences, companyDraftAdmissionReceiptSchema, companyDraftEmailSchema, companyDraftPublicationSchema, type AdmitCompanyDraftEmail, type CompanyDraftPublication } from '../../../shared/contracts/localCompanyDraftContract';
+import { admitCompanyPhoneRouteSchema, companyPhoneOccurrences, companyPhoneRouteReply, normaliseCompanyPhone, type AdmitCompanyPhoneRoute, type CompanyPhoneRouteReceipt } from '../../../shared/contracts/localCompanyPhoneRouteContract';
 import { localCompanyInputSchema, localCompanyCandidateSignals, localCompanyReviewSchema, type LocalCompanyInput, type LocalCompanyCreateRequest, type LocalCompanyReview, type LocalCompanyCreateResult, type LocalCompanyCreateStatus } from '../../../shared/contracts/localCompanyIntakeContract';
 import { accountEvidenceReceiptSchema, linkCompanyPersonRequestSchema, localCompanyDetailSchema, localCompanyResearchStatusSchema, selectedResearchSchema,
   type LinkCompanyPersonRequest, type LocalCompanyDetail, type LocalCompanyResearchStatus, type SelectedResearch } from '../../../shared/contracts/localWorkspaceContract';
@@ -170,6 +171,102 @@ export class AccountRepository implements AccountResearchStore {
       this.record(parsed.commandId, account.id, fingerprint, result, result.accountVersion, at);
       return result;
     });
+  }
+  /**
+   * Phone twin of admitReviewedBusinessEmail: a founder-reviewed US business line quoted verbatim from one saved permitted source, saved as
+   * channel phone, purpose business, verification published, no person. Saving it is not a call, not a check that the number answers and not
+   * worker ownership. The command log keeps the generic evidence receipt every account reader (including the read-only selected export)
+   * already accepts; the richer receipt is rebuilt from the same saved rows as of the command instant, so a replay is identical.
+   */
+  admitReviewedBusinessPhone(input: AdmitCompanyPhoneRoute): CompanyPhoneRouteReceipt {
+    const parsed = admitCompanyPhoneRouteSchema.parse(input);
+    const fingerprint = accountFingerprint({ kind: 'company_phone_route', ...parsed });
+    return this.atomic(() => {
+      const previous = this.raw.prepare('SELECT fingerprint,result_json,created_at FROM pm_account_commands WHERE command_id=?').get(parsed.commandId) as (ReceiptRow & { created_at: string }) | undefined;
+      if (previous) {
+        if (previous.fingerprint !== fingerprint) throw new Error('Account command fingerprint conflict');
+        const recorded = accountEvidenceReceiptSchema.parse(JSON.parse(previous.result_json));
+        if (recorded.accountId !== parsed.accountId || recorded.version !== parsed.expectedAccountVersion + 1) throw new Error('Company route unavailable');
+        return this.companyPhoneRouteReceipt(parsed, recorded.version, previous.created_at);
+      }
+      const account = this.account(parsed.accountId), at = this.now();
+      if (account.version !== parsed.expectedAccountVersion) throw new Error('Company route unavailable');
+      this.companyPhonePublication(account.id, parsed.phone, parsed.sourceId, parsed.quote, at);
+      this.requireEvidence(account.id, [parsed.sourceId], at);
+      // Current routes are compared on the normalised number, so an older route written "(401) 572-3322" is reused, never duplicated.
+      const matches = (this.raw.prepare(`SELECT r.id,r.version,r.person_id,r.value,r.purpose,r.verification,r.admitted_at FROM pm_account_routes r
+        WHERE r.account_id=? AND r.channel='phone' AND r.version=(SELECT max(v.version) FROM pm_account_routes v WHERE v.id=r.id) ORDER BY r.rowid`).all(account.id) as {
+          id: string; version: number; person_id: string | null; value: string; purpose: string; verification: string; admitted_at: string;
+        }[]).filter(route => normaliseCompanyPhone(route.value) === parsed.phone);
+      if (matches.length > 1 || matches.some(route => route.person_id !== null || route.purpose !== 'business'
+        || !['published','confirmed'].includes(route.verification) || route.admitted_at > at)) throw new Error('Company route ambiguous');
+      const existing = matches[0];
+      if (existing) {
+        if (!this.raw.prepare('SELECT 1 FROM pm_account_route_evidence WHERE account_id=? AND route_id=? AND route_version=? AND source_id=?')
+          .get(account.id, existing.id, existing.version, parsed.sourceId)) throw new Error('Company route source mismatch');
+      } else {
+        const routeId = this.deps.ids.next();
+        this.raw.prepare(`INSERT INTO pm_account_routes(id,account_id,version,person_id,channel,value,purpose,verification,admitted_at)
+          VALUES(?,?,1,NULL,'phone',?,'business','published',?)`).run(routeId, account.id, parsed.phone, at);
+        this.raw.prepare('INSERT INTO pm_account_route_evidence(account_id,route_id,route_version,source_id) VALUES(?,?,1,?)').run(account.id, routeId, parsed.sourceId);
+      }
+      const result = accountEvidenceReceiptSchema.parse({ accountId: account.id, version: account.version + 1, duplicate: false });
+      const updated = this.raw.prepare('UPDATE pm_accounts SET version=?,updated_at=? WHERE id=? AND version=?').run(result.version, at, account.id, account.version);
+      if (updated.changes !== 1) throw new Error('Stale account version');
+      this.record(parsed.commandId, account.id, fingerprint, result, result.version, at);
+      return this.companyPhoneRouteReceipt(parsed, result.version, at);
+    });
+  }
+  /** The receipt as of one instant: the single current business phone route bound to the reviewed number and source at that time. */
+  private companyPhoneRouteReceipt(parsed: AdmitCompanyPhoneRoute, accountVersion: number, at: string): CompanyPhoneRouteReceipt {
+    const publication = this.companyPhonePublication(parsed.accountId, parsed.phone, parsed.sourceId, parsed.quote, at);
+    const routes = (this.raw.prepare(`SELECT r.id,r.version,r.value FROM pm_account_routes r WHERE r.account_id=? AND r.channel='phone' AND r.person_id IS NULL
+      AND r.purpose='business' AND r.verification IN ('published','confirmed') AND r.admitted_at<=?
+      AND r.version=(SELECT max(v.version) FROM pm_account_routes v WHERE v.id=r.id AND v.admitted_at<=?)
+      AND EXISTS(SELECT 1 FROM pm_account_route_evidence e WHERE e.account_id=r.account_id AND e.route_id=r.id AND e.route_version=r.version AND e.source_id=?)
+      ORDER BY r.rowid`).all(parsed.accountId, at, at, parsed.sourceId) as { id: string; version: number; value: string }[])
+      .filter(route => normaliseCompanyPhone(route.value) === parsed.phone);
+    const route = routes[0];
+    if (routes.length !== 1 || !route) throw new Error('Company route unavailable');
+    return companyPhoneRouteReply(parsed).parse({ commandId: parsed.commandId, accountId: parsed.accountId, accountVersion,
+      route: { routeId: route.id, routeVersion: route.version, phone: parsed.phone, personId: null }, publication, selection: parsed.selection });
+  }
+  /**
+   * Phone twin of companyDraftPublication. Every saved source of the account must be permitted and admitted by `at`; no saved line may
+   * name this number as a tenant, resident, emergency or after-hours line; the quote is verbatim in the chosen excerpt with a whole written
+   * occurrence of the number inside it. Unrelated emergency wording elsewhere never blocks.
+   */
+  private companyPhonePublication(accountId: string, phone: string, sourceId: string, quote: string, at: string): CompanyDraftPublication {
+    const budget = this.raw.prepare(`SELECT count(*) AS n,coalesce(sum(length(CAST(excerpt AS BLOB))),0) AS bytes
+      FROM (SELECT excerpt FROM pm_account_sources WHERE account_id=? LIMIT 101)`).get(accountId) as { n: number; bytes: number };
+    if (budget.n > 100 || budget.bytes > 256000) throw new Error('Company publication unavailable');
+    const rows = this.raw.prepare('SELECT id,url,sha256,fetched_at,admitted_at,excerpt,permitted FROM pm_account_sources WHERE account_id=? ORDER BY id').all(accountId) as {
+      id: string; url: string; sha256: string; fetched_at: string; admitted_at: string; excerpt: string; permitted: number;
+    }[];
+    for (const source of rows) {
+      if (source.permitted !== 1 || source.fetched_at > at || source.admitted_at > at) throw new Error('Company publication unavailable');
+      const lines = source.excerpt.split(/\r?\n/);
+      for (const [index, line] of lines.entries()) {
+        if (!companyPhoneOccurrences(line, phone).length) continue;
+        let priorIndex = index - 1;
+        while (priorIndex >= 0 && (lines[priorIndex] ?? '').trim() === '') priorIndex--;
+        const priorLine = lines[priorIndex] ?? '';
+        const prior = !companyPhoneOccurrences(priorLine, phone).length && /:\s*$/.test(priorLine) ? priorLine : '';
+        for (const clause of (prior + ' ' + line).split(/;|\||\.\s+/)) {
+          if (companyPhoneOccurrences(clause, phone).length && /\b(tenants?|residents?|emergenc(?:y|ies)|after[ -]?hours)\b/i.test(clause)) throw new Error('Company publication conflicts');
+        }
+      }
+    }
+    const source = rows.find(row => row.id === sourceId);
+    if (!source || /[<>]|\b(?:https?:|mailto:|javascript:)|\b(?:script|href|src)\s*=/i.test(source.excerpt)) throw new Error('Company publication unavailable');
+    let start = source.excerpt.indexOf(quote), matched = false;
+    const occurrences = companyPhoneOccurrences(source.excerpt, phone);
+    while (start >= 0) {
+      if (occurrences.some(token => token.start >= start && token.end <= start + quote.length)) { matched = true; break; }
+      start = source.excerpt.indexOf(quote, start + 1);
+    }
+    if (!matched) throw new Error('Company publication unavailable');
+    return companyDraftPublicationSchema.parse({ sourceId, quote, url: source.url, sha256: source.sha256, fetchedAt: source.fetched_at });
   }
   create(input: z.infer<typeof accountCreateSchema>): Account {
     const parsed = accountCreateSchema.parse(input);
