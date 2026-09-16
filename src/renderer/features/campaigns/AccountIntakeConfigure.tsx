@@ -114,7 +114,7 @@ export function AccountIntakeConfigure({ api, workspaceId, accountId, preparatio
         : mailbox !== null ? 'Setting intake active resumes intake from the configured mailbox. It does not send anything.'
         : 'Setting intake active without a mailbox is admitted only for a company the worker holds no business email routes or saved threads for.'}</p>
       {mailbox === null ? (grantHold ? <p className="native-desk__hold">{grantHold} Relevant mail is not offered.</p> : <>
-        <p>Mailbox: {ready!.email}. Switching on relevant mail sets intake active and admits this company’s permitted business correspondence from that mailbox, from the date below. It is not permission to send.</p>
+        <p>Mailbox: {ready!.email}. Switching on relevant mail sets intake active and asks the worker to admit only this company’s business correspondence with permitted-source routes from that mailbox, from the date below. The worker decides admission; this is not permission to send.</p>
         <label>Read relevant mail since<input type="date" aria-label="Read relevant mail since" max={today()} value={since} disabled={locked} onChange={e => setSince(e.target.value)} /></label>
         <div className="native-desk__actions">
           <button type="button" disabled={locked || !mailOn} onClick={() => { if (mailOn) void send(mailOn); }}>Switch on relevant mail</button>
