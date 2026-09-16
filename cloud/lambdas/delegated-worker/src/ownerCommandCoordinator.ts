@@ -5,6 +5,7 @@ import {createRequestedApprovalRecord,requestedApprovalKey,loadRequestedApproval
 import { createMailPoller } from './mailPoller';
 import { offeredSlotText } from '../../../../src/shared/meetings/schedulingRules';
 import { meetingReservationSchema, meetingOutcomeSchema } from '../../../../src/shared/contracts/meetingContract';
+import { DynamoMeetingRepository } from './meetingRepository';
 import { createHash } from 'node:crypto';
 import { CampaignExecution } from './campaignExecution';
 import { WorkerCampaignRepository, campaignReservationKey, campaignReservationSchema, campaignEnrollmentKey } from './workerCampaignRepository';
@@ -150,7 +151,8 @@ export class OwnerCommandCoordinator {
     const command = ownerCommandSchema.parse(raw);
     const principal = await this.input.auth.authenticate(authorization, ['commands:write']);
     this.input.auth.store.workspace(command.workspaceId);
-    const options = { ...this.input.auth.options, dynamo: this.input.auth.fencedDynamo(principal) };
+    let beforeTransaction: () => void = () => undefined;
+    const options = { ...this.input.auth.options, dynamo: this.input.auth.fencedDynamo(principal, () => beforeTransaction()) };
     const store = new DynamoStore(options);
     const key = `COMMAND#${keyPart(command.commandId)}`;
     const fp = fingerprint(command);
@@ -181,7 +183,30 @@ export class OwnerCommandCoordinator {
     let proof: TransactWriteItem[];
     let finalize = (): TransactWriteItem[] => proof;
     let event: WorkerEvent;
-    if(command.kind==='approve-requested-followup') {
+    if (command.kind === 'approve-meeting') {
+      const source = await this.activeSource(command, principal.pairingId, store);
+      const input = command.payload;
+      if (principal.kind !== 'device' || input.intent.pairingId !== principal.pairingId || input.calendarId !== source.config.calendarId
+        || input.intent.mailboxSubject !== source.config.mailboxSubject) throw Error('meeting_approval_source_mismatch');
+      const plan = await new DynamoMeetingRepository(store.options, this.input.authorization).planOwnerApproval(command, { ...authorityRow, data: current });
+      const unique = new Map<string, TransactWriteItem>();
+      let authorityChecked = false;
+      for (const item of [...plan.checks, ...source.checks]) {
+        const check = item.ConditionCheck; if (!check) throw Error('meeting_approval_check_required');
+        if (fingerprint(check.Key) === fingerprint(store.key(authKey))) {
+          if (fingerprint(item) !== fingerprint(store.check(authKey, authorityRow.rev, executionAuthorityFields(current)))) throw Error('meeting_approval_authority_changed');
+          authorityChecked = true; continue;
+        }
+        const identity = fingerprint(check.Key), previous = unique.get(identity);
+        if (previous && fingerprint(previous) !== fingerprint(item)) throw Error('meeting_approval_source_changed');
+        unique.set(identity, item);
+      }
+      if (!authorityChecked) throw Error('meeting_approval_authority_changed');
+      proof = [...unique.values(), store.check(claimKey, claim.rev), ...plan.items];
+      beforeTransaction = () => { if (Date.parse(store.now()) >= plan.validUntil) throw Error('intake_stale'); };
+      finalize = () => { beforeTransaction(); return proof; };
+      event = workerEventSchema.parse({ ...base, kind: 'authority.changed', payload: { authority: current.authority, receipt } });
+    } else if(command.kind==='approve-requested-followup') {
       const repository=new DynamoRequestedFollowupRepository(store.options);
       const plan=await repository.planCurrent(command.payload.draft);
       const storedDraft=await store.get<unknown>(requestedFollowupDraftKey(command.accountId,command.payload.draft.id));
@@ -296,8 +321,8 @@ export class OwnerCommandCoordinator {
     const config = ownerSourceConfigurationSchema.parse(row.data);
     if (config.state !== 'active' || config.workspaceId !== command.workspaceId || config.accountId !== command.accountId || config.pairingId !== pairingId || (!config.mailboxSubject&&!allowNoMail)) throw new Error('source_paused_or_mismatched');
     if(!config.mailboxSubject)return {config,checks:[store.check(key,row.rev)]};
-    const grant = await this.input.authorization.status(pairingId);
     const grantKey = `GOOGLE_GRANT#${keyPart(pairingId)}`; const grantRow = await store.get(grantKey);
+    const grant = await this.input.authorization.status(pairingId);
     if (grant.state !== 'ready' || grant.grant?.subject !== config.mailboxSubject || !grantRow) throw new Error('source_grant_unavailable');
     return { config, checks: [store.check(key,row.rev), store.check(grantKey,grantRow.rev)] };
   }
