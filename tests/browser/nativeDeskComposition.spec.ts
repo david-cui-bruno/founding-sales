@@ -182,3 +182,39 @@ test('secondary approval checks do not execute and required permission remains d
   await expect(body).toHaveAttribute('data-disclosure-node', 'same');
   expect(await commands(page)).toEqual([]); await clean(page, state);
 });
+
+test('meeting approval from a saved scheduling reply is keyboard reachable at both widths and executes no command until approved', async ({ page }, info) => {
+  const state = await mount(page);
+  await page.getByRole('button', { name: 'Reply · Beacon Residential Management' }).click();
+  const detail = page.locator('.native-desk__detail');
+  const panel = detail.getByRole('region', { name: 'Meeting approval' });
+  await expect(panel.getByText('Tuesday at 10 am Eastern works for a 30 minute call.', { exact: true })).toBeVisible();
+  await expect(panel.getByText(/^Attendee: maya@beacon\.example \(sender of the quoted message\)\.$/)).toBeVisible();
+  const approve = panel.getByRole('button', { name: 'Approve meeting', exact: true });
+  await expect(approve).toBeDisabled();
+  await panel.getByRole('button', { name: 'Check calendar and scheduling rules', exact: true }).click();
+  await expect(panel.getByText(/Calendar: founder@callie\.example · Time zone: America\/New_York · Duration: 30 minutes · Rules revision 1\./)).toBeVisible();
+  await expect(approve).toBeDisabled();
+  await panel.getByLabel('Meeting start').fill('2026-09-15T10:00');
+  await expect(panel.getByText('Ends at 10:30 (America/New_York).', { exact: true })).toBeVisible();
+  const confirm = panel.getByLabel(/I confirm this slot matches the quoted reply and the attendee address/);
+  await confirm.check();
+  await expect(approve).toBeEnabled();
+  for (const width of [1440, 1050]) for (const theme of ['light', 'dark'] as const) {
+    await page.setViewportSize({ width, height: width === 1440 ? 900 : 700 });
+    await page.evaluate(theme => { window.nativeDeskCompositionBrowser.preferences(theme, 'compact'); }, theme);
+    await confirm.focus(); await page.keyboard.press('Tab');
+    await expect(approve).toBeFocused();
+    await expect(approve).toBeInViewport();
+    await expect(approve).toBeEnabled();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: info.outputPath(`meeting-approval-${width}-${theme}.png`) });
+    const axe = await new AxeBuilder({ page }).analyze();
+    expect(axe.violations.filter(i => i.impact === 'serious' || i.impact === 'critical')).toEqual([]);
+  }
+  // Only reads happened: the explicit preparation read and the local approval-status read. No approval, no forbidden capability.
+  const methods = (await commands(page)).map(c => c.method);
+  expect(methods).toContain('getAccountPreparation');
+  expect(methods.filter(method => method !== 'getAccountPreparation' && method !== 'getMeetingApproval')).toEqual([]);
+  await clean(page, state);
+});

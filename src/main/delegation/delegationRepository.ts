@@ -13,7 +13,7 @@ import { approvalSnapshotSchema, authorityStateSchema, commandReceiptSchema, del
   type ApprovalSnapshot, type AuthorityState, type CommandReceipt, type DelegationCommand, type WorkerEvent } from '../../shared/contracts/delegationContract';
 
 import { meetingOutcomePayloadSchema } from '../../shared/contracts/meetingContract';
-import { threadProjectionSchema } from '../../shared/contracts/mailThreadContract';
+import { threadProjectionSchema, type ThreadProjection } from '../../shared/contracts/mailThreadContract';
 
 type AuthorityRow = { account_id: string; workspace_id: string; owner: 'local' | 'worker'; generation: number;
   state: AuthorityState['state']; aggregate_version: number };
@@ -136,6 +136,18 @@ export class DelegationRepository {
     }
     const queued = this.raw.prepare('SELECT receipt_json FROM delegated_commands WHERE workspace_id=? AND command_id=?').get(this.deps.workspaceId, commandId) as { receipt_json: string } | undefined;
     return queued ? commandReceiptSchema.parse(JSON.parse(queued.receipt_json)) : null;
+  }
+  /** The saved thread projection as last applied from the owner. No provider read. */
+  getThread(accountId: string, threadId: string): ThreadProjection | null {
+    const row = this.raw.prepare('SELECT projection_json FROM delegated_threads WHERE workspace_id=? AND account_id=? AND id=?')
+      .get(this.deps.workspaceId, accountIdSchema.parse(accountId), accountIdSchema.parse(threadId)) as { projection_json: string } | undefined;
+    return row ? threadProjectionSchema.parse(JSON.parse(row.projection_json)) : null;
+  }
+  /** Every approve-meeting command ever queued for one saved thread, oldest first. Receipts are read separately. */
+  meetingApprovalCommands(accountId: string, threadId: string): Extract<DelegationCommand, { kind: 'approve-meeting' }>[] {
+    const rows = this.raw.prepare(`SELECT command_json FROM delegated_commands WHERE workspace_id=? AND account_id=? AND json_extract(command_json,'$.kind')='approve-meeting'
+      AND json_extract(command_json,'$.payload.intent.threadId')=? ORDER BY created_at,command_id`).all(this.deps.workspaceId, accountIdSchema.parse(accountId), accountIdSchema.parse(threadId)) as { command_json: string }[];
+    return rows.map(row => delegationCommandSchema.parse(JSON.parse(row.command_json))).filter((command): command is Extract<DelegationCommand, { kind: 'approve-meeting' }> => command.kind === 'approve-meeting');
   }
   requestedApprovalStatus(commandId:string):RequestedApprovalStatus|null {
     const command=this.getCommand(commandId);if(command?.kind!=='approve-requested-followup')return null;

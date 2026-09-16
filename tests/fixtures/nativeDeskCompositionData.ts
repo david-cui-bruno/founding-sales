@@ -4,6 +4,9 @@ import { requestedAnswerPresentationSchema, manualAnswerPresentationSchema, type
 import { commitments, dailyFixture, fixtureNow, linkedInFixture, nativeDeskFixture, requestedDraft } from '../../src/renderer/features/today/nativeDesk.fixture';
 import type { AccountRoute } from '../../src/shared/contracts/accountContract';
 import type { LocalCommitmentsSnapshot } from '../../src/shared/contracts/localWorkspaceContract';
+import type { ThreadProjection } from '../../src/shared/contracts/mailThreadContract';
+import type { AccountPreparation } from '../../src/shared/contracts/accountPreparationContract';
+import type { OwnerSourceConfiguration } from '../../src/shared/contracts/ownerCommandContract';
 
 const hash = 'a'.repeat(64);
 const names: Record<string, string> = {
@@ -12,6 +15,19 @@ const names: Record<string, string> = {
   rosa: 'Willowbrook Management', owen: 'Westhaven Residential',
 };
 export const fictionalCallNote = 'Email me a short outline of what you mean by a one-building pilot. Then we can decide if a conversation makes sense.';
+export const fictionalSchedulingQuote = 'Tuesday at 10 am Eastern works for a 30 minute call.';
+/** Saved scheduling reply for Beacon Residential Management. The attendee is the sender; nothing here is permission. */
+export const fictionalSchedulingThread: ThreadProjection = { revision: 1, contextRevision: 'context-maya',
+  signals: [{ kind: 'scheduling', requiresApproval: true, evidence: [{ messageId: 'maya-reply', quote: fictionalSchedulingQuote }] }],
+  thread: { accountId: 'maya', mailboxSubject: 'mailbox', provider: 'gmail', providerThreadId: 'thread-maya', messages: [{ id: 'maya-reply', threadId: 'thread-maya', rfcMessageId: null, references: [],
+    from: ['maya@beacon.example'], to: ['david@callie.example'], cc: [], date: '2026-09-09T11:30:00.000Z', subject: 'Re: A short conversation',
+    bodyParts: [{ mimeType: 'text/plain', text: `${fictionalSchedulingQuote} Send the invite when you can.`, truncated: false }] }] } };
+export const fictionalCalendarId = 'founder@callie.example';
+export function fictionalMeetingPreparation(): AccountPreparation {
+  const configuration: OwnerSourceConfiguration = { version: 1, workspaceId: 'ws', accountId: 'maya', pairingId: 'fixture-pairing', revision: 1, state: 'active', mailboxSubject: 'mailbox', calendarId: fictionalCalendarId, research: null };
+  return { workspaceId: 'ws', accountId: 'maya', pairingId: 'fixture-pairing', checkedAt: fixtureNow, authority: { accountId: 'maya', owner: 'worker', generation: 1, state: 'active' }, executionVersion: 1,
+    configuration, mailCursor: { mailboxSubject: 'mailbox', envelopeRevision: null, scope: null }, meetingRules: { calendarId: fictionalCalendarId, revision: 1, timezone: 'America/New_York', durationMinutes: 30 } };
+}
 export const fictionalEmailBody = 'Hi Nora,\n\nYour coordinator should stay central to the discussion. Let’s walk through the current handoff first.\n\nDavid';
 const emailRoute: AccountRoute = { id: 'nora-email', accountId: 'nora', personId: 'person-nora', channel: 'email', value: 'nora@riverton.example', purpose: 'business', evidenceIds: ['source-nora'], verification: 'confirmed', version: 1 };
 const manualRoute: AccountRoute = { id: 'li-route', accountId: 'marcus', personId: 'person-marcus', channel: 'linkedin', value: 'https://www.linkedin.com/in/fictional-marcus-lee', purpose: 'business', evidenceIds: ['source-marcus'], verification: 'published', version: 1 };
@@ -62,7 +78,8 @@ export function compositionSnapshot(): DailySnapshot {
         attendees: [{ email: `${id}@fixture.invalid`, responseStatus: i ? 'needsAction' : 'accepted' }], meetUrl: null } } } };
   });
   return dailySnapshotSchema.parse(dailyFixture({ accounts, calls: { accountIds: ['maya', 'ben'], workloadConflict: false },
-    answers: [{ kind: 'requested_followup', accountId: 'nora', draft: email, approval: null, capability: 'held', reason: 'requires_owner_preflight', presentation: requestedPresentation }, manual],
+    answers: [{ kind: 'requested_followup', accountId: 'nora', draft: email, approval: null, capability: 'held', reason: 'requires_owner_preflight', presentation: requestedPresentation }, manual,
+      { kind: 'reply', accountId: 'maya', thread: fictionalSchedulingThread, draft: null, stale: false, capability: 'held', reason: 'reply_capability_unverified' }],
     meetings, campaigns: [], ownerStatus: accounts.map((a): DailySnapshot['ownerStatus'][number] => ({ accountId: a.account.id, authority: { accountId: a.account.id, owner: 'worker', generation: 1, state: 'active' }, executionVersion: 1, pendingCommands: [], status: 'owner_applied' })) }));
 }
 export function compositionFixture(scenario: 'populated' | 'unpaired' | 'missing' = 'populated') {
@@ -75,6 +92,7 @@ export function compositionFixture(scenario: 'populated' | 'unpaired' | 'missing
     for (const answer of snapshot.answers) if (answer.kind !== 'reply') delete answer.presentation;
   }
   const fixture = nativeDeskFixture(dailySnapshotSchema.parse(snapshot));
+  if (scenario !== 'unpaired') fixture.setPreparation(fictionalMeetingPreparation());
   if (scenario !== 'unpaired') fixture.setCommitments(commitments({ items: [
     ['jamila', 'Jamila Warren', 'Coastline Residential', '2026-09-09T15:30:00.000Z'],
     ['ellis', 'Ellis Brooks', 'Alder Property Group', '2026-09-09T16:00:00.000Z'],
