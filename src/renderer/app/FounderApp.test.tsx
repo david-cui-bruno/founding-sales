@@ -163,6 +163,7 @@ function fakeCallieApi(): CalliePreloadApi {
       reviewCompany: pending, createCompany: pending, getCompanyCreateStatus: pending, transition: pending,
     },
     delegation: {
+      getAccountPreparation: pending,
       status: vi.fn(async () => ({ state: 'unconfigured' as const, workspaceId: null, endpoint: null, configuration: null })),
       policyImport: { selectAndPreview: pending, confirm: pending, resume: pending, status: pending },
       prepareRequestedFollowup: pending, getRequestedFollowup: pending, editRequestedFollowup: pending, approveRequestedFollowup: pending,

@@ -1,3 +1,5 @@
+import { getAccountPreparationSchema, accountPreparationRequestSchema, accountPreparationReplySchema, ACCOUNT_PREPARATION_MAX_REPLY_BYTES, type GetAccountPreparation, type AccountPreparation } from '../../shared/contracts/accountPreparationContract';
+import { accountIdSchema } from '../../shared/contracts/accountContract';
 import { ownerReplyDraftRequestSchema, replyDraftResultSchema, assertReplyDraftLineage, type OwnerReplyDraftRequest } from '../../shared/contracts/mailThreadContract';
 import {requestedFollowupDraftSchema,type RequestedFollowupDraft,prepareRequestedFollowupSchema,type PrepareRequestedFollowup} from '../../shared/contracts/requestedFollowupContract';
 import {workerPolicyRequestSchema,workerPolicyReceiptSchema} from '../../shared/contracts/workerPolicyContract';
@@ -12,6 +14,72 @@ import { commandReceiptSchema, delegationCommandSchema, eventPageSchema, type Co
 import { synchronizeDelegation, type SqlDelegationTransport, type SyncReport } from './delegationSync';
 export type { SyncReport } from './delegationSync';
 export type ExecutionPairing = Readonly<{ endpoint: string; workspaceId: string; credential: string }>;
+/** This transport deliberately retains no client, repository, SQL transport or DB
+ * handle. Even an abort-ignoring HTTP continuation cannot outlive a DB lease. */
+export function createAccountPreparationTransport(options: { pairing: ExecutionPairing & { pairingId: string }; fetch?: typeof globalThis.fetch }) {
+  const pairing = Object.freeze(z.strictObject({ endpoint: z.string().url(), workspaceId: accountIdSchema,
+    pairingId: accountIdSchema, credential: z.string().regex(/^[A-Za-z0-9_-]{43}$/) }).parse(options.pairing));
+  const endpoint = new URL(pairing.endpoint);
+  if (endpoint.protocol !== 'https:' || endpoint.username || endpoint.password || endpoint.search || endpoint.hash || endpoint.pathname !== '/') throw Error('account_preparation_unavailable');
+  const http = options.fetch ?? globalThis.fetch;
+  return {
+    async read(raw: GetAccountPreparation, suppliedSignal: AbortSignal): Promise<AccountPreparation> {
+      const selected = Object.freeze(getAccountPreparationSchema.parse(raw));
+      const request = Object.freeze(accountPreparationRequestSchema.parse({ workspaceId: pairing.workspaceId, accountId: selected.accountId }));
+      const signal = AbortSignal.any([suppliedSignal, AbortSignal.timeout(15000)]);
+      const fail = () => Error('account_preparation_unavailable');
+      let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+      const cancelReader = () => { if (reader) void reader.cancel().catch((): void => undefined); };
+      signal.throwIfAborted();
+      let abort!: () => void;
+      const cancelled = new Promise<never>((_resolve, reject) => {
+        abort = () => { cancelReader(); reject(fail()); };
+        signal.addEventListener('abort', abort, { once: true });
+      });
+      const operation = async () => {
+        signal.throwIfAborted();
+        const response = await http(`${endpoint.origin}/accounts/preparation`, { method: 'POST',
+          headers: { authorization: `Bearer ${pairing.credential}`, 'content-type': 'application/json' },
+          body: JSON.stringify(request), redirect: 'error', cache: 'no-store', signal });
+        if (signal.aborted || !response.ok) {
+          if (response.body) void response.body.cancel().catch((): void => undefined);
+          throw fail();
+        }
+        const length = response.headers.get('content-length');
+        if (length !== null && (!/^\d+$/.test(length) || Number(length) > ACCOUNT_PREPARATION_MAX_REPLY_BYTES)) {
+          if (response.body) void response.body.cancel().catch((): void => undefined);
+          throw fail();
+        }
+        if (!response.body) throw fail();
+        reader = response.body.getReader();
+        let total = 0, text = '';
+        const decoder = new TextDecoder('utf-8', { fatal: true });
+        try {
+          for (;;) {
+            signal.throwIfAborted();
+            const chunk = await reader.read();
+            signal.throwIfAborted();
+            if (chunk.done) break;
+            total += chunk.value.byteLength;
+            if (total > ACCOUNT_PREPARATION_MAX_REPLY_BYTES) { cancelReader(); throw fail(); }
+            text += decoder.decode(chunk.value, { stream: true });
+          }
+          text += decoder.decode();
+          signal.throwIfAborted();
+          return accountPreparationReplySchema({ ...request, pairingId: pairing.pairingId }).parse(JSON.parse(text));
+        } catch (error) { cancelReader(); throw error; }
+        finally { reader.releaseLock(); }
+      };
+      try {
+        // Bounds fetch AND stream reads if an adapter ignores AbortSignal.
+        const result = await Promise.race([operation(), cancelled]);
+        signal.throwIfAborted();
+        return result;
+      } catch { throw fail(); }
+      finally { signal.removeEventListener('abort', abort); }
+    },
+  };
+}
 /** No repositories/DB handles: research setup is only a paired owner HTTP path. */
 export function createResearchSetupTransport(options: { pairing: ExecutionPairing & { pairingId: string }; fetch?: typeof globalThis.fetch }) {
   const pairing = Object.freeze({ ...options.pairing });
