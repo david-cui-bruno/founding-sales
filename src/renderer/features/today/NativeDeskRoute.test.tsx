@@ -13,6 +13,7 @@ import { NativeDeskRoute, type NativeDeskApi } from './NativeDeskRoute';
 import { firstUseFixture, dailyFixture, nativeDeskFixture, nativeDeskReviewFixture } from './nativeDesk.fixture';
 import { createCallCampaignDraft, createLinkedInCampaignDraft } from '../../../shared/contracts/callCampaignDraft';
 import type { DailySnapshot } from '../../../shared/contracts/dailyContract';
+import type { Enrollment } from '../../../shared/contracts/campaignContract';
 afterEach(cleanup);
 function fixtureApi(initial = dailyFixture()) {
   let snapshot = initial;
@@ -520,6 +521,35 @@ it('names the selected one-company campaign by its channel in the route-owned he
   fireEvent.click(screen.getByRole('button', { name: 'Close details' }));
   expect(bar()).toBeUndefined();
   expect(header.textContent).toBe(both);
+  expect(f.calls.some((c) => c.method === 'forbidden')).toBe(false);
+});
+
+it('lists saved one-company campaigns by company, channel and plain state, and explains an empty route dropdown on the real route', async () => {
+  const offer = 'Discuss a simpler maintenance follow-up workflow.';
+  const approvedAt = '2026-09-09T12:00:00.000Z';
+  const call = createCallCampaignDraft({ campaignId: '4b1f0d6e-0000-4000-8000-000000000001', versionId: 'call-version', stepId: 'call-step', accountId: 'a', offer });
+  const linkedIn = createLinkedInCampaignDraft({ campaignId: '4b1f0d6e-0000-4000-8000-000000000002', versionId: 'li-version', stepId: 'li-step', accountId: 'b', offer });
+  const enrollment: Enrollment = { id: 'enrollment', accountId: 'a', selectedRouteId: 'phone', selectedRouteVersion: 1, personId: null, campaignVersionId: 'call-enrolled',
+    currentStepId: 'call-step', version: 1, state: 'held', executionContextId: 'context', contextRevision: 1, startedAt: approvedAt };
+  const entry = (version: DailySnapshot['campaigns'][number]['version'], enrollments: Enrollment[] = []): DailySnapshot['campaigns'][number] => ({ version, snapshotHash: 'a'.repeat(64), caps: [], enrollments });
+  // Account a has no route at all on the worker's copy of its record, so the enrollment dropdown is empty.
+  const f = nativeDeskFixture(dailyFixture({ campaigns: [entry(call), entry({ ...call, id: 'call-approved', approvedAt }), entry({ ...call, id: 'call-enrolled', approvedAt }, [enrollment]), entry(linkedIn), ...nativeDeskReviewFixture().campaigns] }));
+  const view = render(<NativeDeskRoute surface="campaigns" onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
+  await screen.findByText(/Review and enrollment are separate explicit actions/);
+  const row = (id: string) => view.container.querySelector<HTMLButtonElement>(`[data-row-key="campaign:${id}"]`)!;
+  const label = (id: string) => [row(id).querySelector('strong')?.textContent, row(id).querySelector('span')?.textContent];
+  expect(label('call-version')).toEqual(['Account A · Call campaign', 'Version 1 · Draft']);
+  expect(label('call-approved')).toEqual(['Account A · Call campaign', 'Version 1 · Approved']);
+  expect(label('call-enrolled')).toEqual(['Account A · Call campaign', 'Version 1 · Enrolled']);
+  expect(label('li-version')).toEqual(['Account B · LinkedIn campaign', 'Version 1 · Draft']);
+  // Anything other than the two exact templates keeps its saved id and recorded approval state; the browser oracle asserts both.
+  expect(label('version')).toEqual(['Fixture campaign', 'Version 1 · not approved']);
+  expect(screen.queryByText(call.campaignId)).toBeNull();
+  fireEvent.click(row('call-approved'));
+  const select = screen.getByLabelText<HTMLSelectElement>('Business phone route');
+  expect([...select.options].map((option) => option.text)).toEqual(['Select a business phone route']);
+  const status = screen.getByText('No published business phone route is saved for this company on the worker\'s copy of its record. On Accounts, open the company and use "Review phone route" to confirm the number from a saved source, then on Campaigns use "Send updated saved record to worker". Enrollment stays unavailable until then.');
+  expect(status.getAttribute('role')).toBe('status');
   expect(f.calls.some((c) => c.method === 'forbidden')).toBe(false);
 });
 
