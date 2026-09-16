@@ -106,8 +106,9 @@ it('launches a one-company LinkedIn campaign from a clean workspace: save, appro
     const originalIds = new Set(f.services.daily.get().campaigns.map(c => c.version.id));
     expect(f.services.daily.get().calls.accountIds).toEqual([]);
     const view = f.mount();
-    fireEvent.click(await screen.findByRole('button', { name: 'New call campaign' }));
-    fireEvent.change(screen.getByLabelText('Channel'), { target: { value: 'linkedin' } });
+    const channel = within(await screen.findByRole('group', { name: 'Channel' }));
+    fireEvent.click(channel.getByRole('button', { name: 'New LinkedIn campaign' }));
+    expect(channel.getByRole('button', { name: 'New call campaign' }).getAttribute('aria-expanded')).toBe('false');
     fireEvent.change(screen.getByLabelText('Company'), { target: { value: f.account.id } });
     fireEvent.change(screen.getByLabelText('Meeting offer'), { target: { value: offer } });
     expect(screen.queryByRole('button', { name: 'Save call campaign draft' })).toBeNull();
@@ -177,8 +178,10 @@ it('launches a one-company LinkedIn campaign from a clean workspace: save, appro
     expect(counts(f)).toEqual({ enrollments: { n: 1 }, handoffs: { n: 0 }, drafts: { n: 0 } });
 
     // The existing PR #57 preparation flow now offers this enrollment. It has not been invoked.
-    await waitFor(() => expect(panel.getByRole<HTMLButtonElement>('button', { name: 'Prepare LinkedIn note' }).disabled).toBe(false));
-    expect(panel.getByText('Fictional Campaign PM')).toBeTruthy();
+    const preparation = within(panel.getByRole('region', { name: 'Manual LinkedIn preparation' }));
+    await waitFor(() => expect(preparation.getByRole<HTMLButtonElement>('button', { name: 'Prepare LinkedIn note' }).disabled).toBe(false));
+    expect(preparation.getByText('Fictional Campaign PM')).toBeTruthy();
+    expect(preparation.queryByText(/No active LinkedIn enrollment is available/)).toBeNull();
     expect(panel.queryByText('The exact business LinkedIn route or enrollment is unavailable.')).toBeNull();
     expect(panel.getByRole<HTMLButtonElement>('button', { name: 'Enroll company for manual LinkedIn note' }).disabled).toBe(true);
     expect(f.forbidden).not.toHaveBeenCalled();
@@ -203,7 +206,7 @@ it('does not offer the company-level LinkedIn route for a call campaign enrollme
     const originalIds = new Set(f.services.daily.get().campaigns.map(c => c.version.id));
     const view = f.mount();
     fireEvent.click(await screen.findByRole('button', { name: 'New call campaign' }));
-    expect(screen.getByLabelText<HTMLSelectElement>('Channel').value).toBe('call');
+    expect(screen.getByRole('button', { name: 'New LinkedIn campaign' }).getAttribute('aria-expanded')).toBe('false');
     fireEvent.change(screen.getByLabelText('Company'), { target: { value: f.account.id } });
     fireEvent.change(screen.getByLabelText('Meeting offer'), { target: { value: offer } });
     fireEvent.click(screen.getByRole('button', { name: 'Save call campaign draft' }));

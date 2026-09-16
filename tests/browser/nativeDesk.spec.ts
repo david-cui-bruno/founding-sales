@@ -194,13 +194,17 @@ test('saved manual-LinkedIn template offers a channel choice, LinkedIn review an
     f.setSnapshot(snapshot);
     window.nativeDeskBrowser.navigate('campaigns');
   }, {version,snapshotHash:accountFingerprint(version)});
-  // Channel choice on the draft form: call stays the default, LinkedIn relabels only the save action.
-  await page.getByRole('button', {name:'New call campaign',exact:true}).click();
+  // Channel choice on the draft form: one toggle per exact template shares a single form row.
   const draftForm = page.getByRole('region', {name:'New call campaign',exact:true});
-  const channel = draftForm.getByRole('combobox', {name:'Channel',exact:true});
-  await expect(channel).toHaveValue('call');
+  const channel = draftForm.getByRole('group', {name:'Channel',exact:true});
+  const callToggle = channel.getByRole('button', {name:'New call campaign',exact:true});
+  const linkedInToggle = channel.getByRole('button', {name:'New LinkedIn campaign',exact:true});
+  await callToggle.click();
+  await expect(callToggle).toHaveAttribute('aria-expanded','true');
   await expect(draftForm.getByRole('button', {name:'Save call campaign draft',exact:true})).toBeVisible();
-  await channel.selectOption('linkedin');
+  await linkedInToggle.click();
+  await expect(callToggle).toHaveAttribute('aria-expanded','false');
+  await expect(linkedInToggle).toHaveAttribute('aria-expanded','true');
   await expect(draftForm.getByRole('button', {name:'Save LinkedIn campaign draft',exact:true})).toBeDisabled();
   await expect(draftForm.getByText('Saves an unapproved LinkedIn campaign draft. This does not enroll accounts, prepare or send a note, or start outreach.')).toBeVisible();
   await page.locator('[data-row-key="campaign:browser-li-version"]').click();

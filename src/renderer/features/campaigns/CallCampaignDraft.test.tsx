@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { CallCampaignDraft } from './CallCampaignDraft';
 import { configuredFixtureStatus, dailyFixture, nativeDeskFixture, nativeDeskReviewFixture } from '../today/nativeDesk.fixture';
@@ -737,12 +737,17 @@ it('saves the exact one-step LinkedIn template only after an explicit channel ch
     return { commandId: command.commandId, status: 'applied', authorityGeneration: 7, aggregateVersion: 10, reason: null };
   });
   render(<CallCampaignDraft {...f.props} />);
+  const group = within(screen.getByRole('group', { name: 'Channel' }));
+  expect(group.getAllByRole('button').map(b => b.textContent)).toEqual(['New call campaign', 'New LinkedIn campaign']);
+  expect(group.getByRole('button', { name: 'New LinkedIn campaign' }).getAttribute('aria-expanded')).toBe('false');
   fill();
-  const channel = screen.getByLabelText<HTMLSelectElement>('Channel');
-  expect(channel.value).toBe('call');
-  expect([...channel.options].map(option => option.value)).toEqual(['call', 'linkedin']);
+  expect(group.getByRole('button', { name: 'New call campaign' }).getAttribute('aria-expanded')).toBe('true');
   expect(button().disabled).toBe(false);
-  fireEvent.change(channel, { target: { value: 'linkedin' } });
+  fireEvent.click(group.getByRole('button', { name: 'New LinkedIn campaign' }));
+  expect(group.getByRole('button', { name: 'New call campaign' }).getAttribute('aria-expanded')).toBe('false');
+  expect(group.getByRole('button', { name: 'New LinkedIn campaign' }).getAttribute('aria-expanded')).toBe('true');
+  expect(screen.getByLabelText<HTMLSelectElement>('Company').value).toBe('a');
+  expect(screen.getByLabelText<HTMLTextAreaElement>('Meeting offer').value).toBe(offer);
   expect(screen.queryByRole('button', { name: 'Save call campaign draft' })).toBeNull();
   expect(screen.getByText('Saves an unapproved LinkedIn campaign draft. This does not enroll accounts, prepare or send a note, or start outreach.')).toBeTruthy();
   const saveLinkedIn = screen.getByRole<HTMLButtonElement>('button', { name: 'Save LinkedIn campaign draft' });
@@ -757,24 +762,32 @@ it('saves the exact one-step LinkedIn template only after an explicit channel ch
   expect(f.calls.map(c => c.method)).toEqual(['delegation.sync', 'daily.get', 'delegation.status', 'delegation.sync', 'daily.get']);
 });
 
-it('drops a saved confirmation when the channel changes and locks the channel while a draft is pending', async () => {
+it('drops a saved confirmation when the channel changes and locks the other channel while a draft is pending', async () => {
   const f = fixture();
   const gate = deferred<Awaited<ReturnType<typeof f.api.delegation.submit>>>();
   f.submit.mockReturnValueOnce(gate.promise);
   render(<CallCampaignDraft {...f.props} />);
   fill();
-  fireEvent.change(screen.getByLabelText('Channel'), { target: { value: 'linkedin' } });
+  const callToggle = () => screen.getByRole<HTMLButtonElement>('button', { name: 'New call campaign' });
+  fireEvent.click(screen.getByRole('button', { name: 'New LinkedIn campaign' }));
   fireEvent.click(screen.getByRole('button', { name: 'Save LinkedIn campaign draft' }));
   await waitFor(() => expect(f.submit).toHaveBeenCalledTimes(1));
-  expect(screen.getByLabelText<HTMLSelectElement>('Channel').disabled).toBe(true);
+  expect(callToggle().disabled).toBe(true);
+  fireEvent.click(callToggle());
+  expect(screen.getByRole('button', { name: 'Save LinkedIn campaign draft' })).toBeTruthy();
   const command = f.submit.mock.calls[0][0];
   if (command.kind !== 'campaign-command' || command.payload.kind !== 'campaign.version') throw Error('Wrong command');
   f.setSnapshot(projection(f.props.snapshot, command.payload.version));
   await act(async () => gate.resolve({ commandId: command.commandId, status: 'applied', authorityGeneration: 7, aggregateVersion: 10, reason: null }));
   await screen.findByText(saved);
-  expect(screen.getByLabelText<HTMLSelectElement>('Channel').disabled).toBe(false);
-  fireEvent.change(screen.getByLabelText('Channel'), { target: { value: 'call' } });
+  expect(callToggle().disabled).toBe(false);
+  fireEvent.click(callToggle());
   expect(screen.queryByText(saved)).toBeNull();
   expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Save call campaign draft' }).disabled).toBe(false);
+  // Reopening the open channel closes the shared form; the retained company and offer survive.
+  fireEvent.click(callToggle());
+  expect(screen.queryByLabelText('Meeting offer')).toBeNull();
+  fireEvent.click(callToggle());
+  expect(screen.getByLabelText<HTMLTextAreaElement>('Meeting offer').value).toBe(offer);
   expect(f.submit).toHaveBeenCalledTimes(1);
 });

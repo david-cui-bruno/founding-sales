@@ -297,13 +297,22 @@ export function CallCampaignDraft({ api, snapshot, config, readError, onRefresh 
   const canSave = available && !!readyOwner(snapshot, draft.accountId) && !!draft.offer.trim()
     && draft.offer.trim().length <= 4000 && !locked && !draft.saved;
   const linkedIn = draft.channel === 'linkedin';
+  // One toggle per exact template shares the form. Reopening the open channel closes it;
+  // the other channel is unavailable while a draft for this channel is pending.
+  const choose = (channel: OneCompanyCampaignChannel) => {
+    if (draft.open && draft.channel === channel) draft.open = false;
+    else {
+      if (locked && draft.channel !== channel) return;
+      draft.open = true;
+      if (draft.channel !== channel) { draft.channel = channel; draft.saved = false; draft.failed = false; }
+    }
+    notify(draft);
+  };
+  const toggle = (channel: OneCompanyCampaignChannel, label: string) =>
+    <button type="button" aria-expanded={draft.open && draft.channel === channel} disabled={locked && draft.channel !== channel} onClick={() => choose(channel)}>{label}</button>;
   return <section className="native-desk__campaign-draft native-desk__composer" aria-label="New call campaign">
-    <button type="button" aria-expanded={draft.open} onClick={() => { draft.open = !draft.open; notify(draft); }}>New call campaign</button>
+    <div role="group" aria-label="Channel">{toggle('call', 'New call campaign')} {toggle('linkedin', 'New LinkedIn campaign')}</div>
     {draft.open && <form onSubmit={event => { event.preventDefault(); void save(); }}>
-      <label>Channel<select value={draft.channel} disabled={locked} onChange={event => { draft.channel = event.target.value === 'linkedin' ? 'linkedin' : 'call'; draft.saved = false; draft.failed = false; notify(draft); }}>
-        <option value="call">Manual call</option>
-        <option value="linkedin">Manual LinkedIn note</option>
-      </select></label>
       <label>Company<select value={draft.accountId} disabled={locked} onChange={event => { draft.accountId = event.target.value; draft.selection++; draft.review = false; draft.saved = false; draft.failed = false; draft.preparationFailed = false; notify(draft); }}>
         <option value="">Select a company</option>
         {snapshot.accounts.map(a => <option key={a.account.id} value={a.account.id}>{a.account.name}</option>)}
