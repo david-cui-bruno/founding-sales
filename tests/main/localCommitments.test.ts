@@ -1,5 +1,7 @@
+import { randomUUID } from 'node:crypto';
 import { localCommitmentsSnapshotSchema } from '../../src/shared/contracts/localWorkspaceContract';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { AccountRepository } from '../../src/main/domain/accounts/accountRepository';
 import { closeDatabase, openDatabase, type AppDatabase } from '../../src/main/db/database';
 import { migrateToLatest } from '../../src/main/db/migrate';
 import { createDomainServices } from '../../src/main/domain/createDomainServices';
@@ -105,6 +107,35 @@ describe('local retained Today feed', () => {
     const receipt = domain.transitionWorkflow({ commandId: 'park-command', manifestId: 'park-manifest', expectedMode: 'legacy' });
     expect(receipt.parkedReviewActions.map(a => a.cycleId)).toContain(cycle.id);
     expect(domain.getLocalCommitments().items).toEqual([]);
+  });
+
+  it('lists an unsent local company draft as an additive local draft continuation, never as a person item', () => {
+    // Real repository seam: a Lenox-shaped saved source, one reviewed business inbox, one opened draft, one saved edit.
+    const clock = { now: () => at }, ids = { next: randomUUID };
+    const accounts = new AccountRepository({ database, clock, ids, sourcePolicy: { attest: () => true } });
+    const account = accounts.create({ commandId: randomUUID(), name: 'Lenox Management', domain: 'lenoxmanagement.com' });
+    const sourceId = randomUUID();
+    const quote = 'Contact Us\n\n380 Broadway Providence, Rhode Island 02909\n\ninfo@lenoxmanagement.com\n\n401-572-3322';
+    accounts.admitEvidence({ commandId: randomUUID(), accountId: account.id, expectedVersion: account.version, sources: [{ id: sourceId,
+      url: 'https://lenoxmanagement.com/', fetchedAt: at, sha256: 'b'.repeat(64), excerpt: quote, permitted: true }], claims: [], routes: [] });
+    const local = createFounderSalesDomain({ database, clock, ids, services: createDomainServices({ database, clock, ids }) });
+    const admitted = local.admitCompanyDraftEmail({ commandId: randomUUID(), accountId: account.id, expectedAccountVersion: account.version + 1,
+      email: 'info@lenoxmanagement.com', sourceId, quote, selection: 'published_company_business_inbox' });
+    const opened = local.openCompanyDraft({ commandId: randomUUID(), accountId: account.id, routeId: admitted.recipientBinding.routeId,
+      expectedRouteVersion: admitted.recipientBinding.routeVersion, expectedAccountVersion: admitted.accountVersion });
+    local.saveCompanyDraft({ commandId: randomUUID(), accountId: account.id, draftId: opened.current.draft.id, expectedRevision: 1,
+      subject: 'Maintenance request coordination at Lenox', body: 'Hello Lenox Management team,' });
+    const before = database.raw.prepare('SELECT total_changes() AS count').get();
+    const result = domain.getLocalCommitments();
+    expect(result.items).toEqual([]);
+    expect(result.localDrafts).toEqual([{ accountId: account.id, draftId: opened.current.draft.id, companyLabel: 'Lenox Management',
+      subject: 'Maintenance request coordination at Lenox', revision: 2, updatedAt: at, email: 'info@lenoxmanagement.com' }]);
+    expect(database.raw.prepare('SELECT total_changes() AS count').get()).toEqual(before);
+    expect(database.raw.inTransaction).toBe(false);
+    // Additive and optional: a snapshot without the field keeps parsing; duplicate draft identities do not.
+    const { localDrafts, ...withoutDrafts } = result;
+    expect(localCommitmentsSnapshotSchema.safeParse(withoutDrafts).success).toBe(true);
+    expect(localCommitmentsSnapshotSchema.safeParse({ ...result, localDrafts: [localDrafts![0], localDrafts![0]] }).success).toBe(false);
   });
 
 });
