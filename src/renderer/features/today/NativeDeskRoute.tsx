@@ -40,7 +40,7 @@ import { CampaignReview } from '../campaigns/CampaignReview';
 import { ManualLinkedInPreparation } from '../linkedin/ManualLinkedInPreparation';
 import { CallCampaignEnrollment } from '../campaigns/CallCampaignEnrollment';
 import { CallCampaignDraft } from '../campaigns/CallCampaignDraft';
-import { describeCallCampaignTemplate, describeOneCompanyCampaignTemplate } from '../../../shared/contracts/callCampaignDraft';
+import { describeOneCompanyCampaignTemplate, type OneCompanyCampaignChannel } from '../../../shared/contracts/callCampaignDraft';
 import './nativeDesk.css';
 export type NativeDeskApi = Pick<
   CalliePreloadApi,
@@ -58,6 +58,11 @@ export type NativeDeskRouteProps = {
   renderLegacy?(readHeld: boolean): ReactNode;
 };
 /** Local-only composition. Failed refresh preserves the editor and its DOM. */
+/** Route-owned copy for the two exact one-company templates. Every other version is an opaque read-only preview. */
+const oneCompanyCampaignCopy: Record<OneCompanyCampaignChannel, { campaign: string; outreach: string }> = {
+  call: { campaign: 'call campaign', outreach: 'places a call' },
+  linkedin: { campaign: 'LinkedIn campaign', outreach: 'sends a LinkedIn note' },
+};
 export function NativeDeskRoute({
   api,
   firstUse,
@@ -557,6 +562,8 @@ export function NativeDesk({
     campaign = snapshot.campaigns.find(
       (c) => `campaign:${c.version.id}` === selected,
     );
+  const campaignTemplate = campaign ? describeOneCompanyCampaignTemplate(campaign.version) : null;
+  const campaignCopy = campaignTemplate ? oneCompanyCampaignCopy[campaignTemplate.channel] : null;
   const accountId =
     answer?.accountId ??
     meeting?.accountId ??
@@ -691,7 +698,9 @@ export function NativeDesk({
               ? 'Calls, replies and the next conversation.'
               : surface === 'accounts'
                 ? 'Company context, from stored evidence.'
-                : 'Save an unapproved call campaign draft for one worker-owned company. Review and enrollment are separate explicit actions. Neither places a call.'}
+                : campaignCopy
+                  ? `Save an unapproved ${campaignCopy.campaign} draft for one worker-owned company. Review and enrollment are separate explicit actions. Neither ${campaignCopy.outreach}.`
+                  : 'Save an unapproved call campaign draft for one worker-owned company, or a LinkedIn campaign draft. Review and enrollment are separate explicit actions. Neither places a call or sends a LinkedIn note.'}
           </p>
         </div>
         <div className="native-desk__header-status">
@@ -844,7 +853,7 @@ export function NativeDesk({
                   : meeting
                     ? 'Upcoming meeting'
                     : campaign
-                      ? describeCallCampaignTemplate(campaign.version) ? campaign.version.approvedAt ? 'Reviewed call campaign' : 'Saved call campaign draft' : 'Read-only campaign preview'
+                      ? campaignCopy ? campaign.version.approvedAt ? `Reviewed ${campaignCopy.campaign}` : `Saved ${campaignCopy.campaign} draft` : 'Read-only campaign preview'
                       : 'Company context'}
               </span>
               <button aria-label="Close details" onClick={closeDetails}>
@@ -876,7 +885,7 @@ export function NativeDesk({
             />
             <ManualLinkedInPreparation api={api} snapshot={snapshot} campaign={campaign} config={configuration}
               readError={readError || !!localHold} onRefresh={onRefresh} />
-            {describeOneCompanyCampaignTemplate(campaign.version) && <CallCampaignEnrollment key={`${snapshot.workspaceId}:${campaign.version.id}`} api={api} snapshot={snapshot} config={configuration}
+            {campaignTemplate && <CallCampaignEnrollment key={`${snapshot.workspaceId}:${campaign.version.id}`} api={api} snapshot={snapshot} config={configuration}
               campaign={campaign} readError={readError || !!localHold} onRefresh={onRefresh} />}
             </>
           )}

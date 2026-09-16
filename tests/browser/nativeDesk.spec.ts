@@ -301,6 +301,21 @@ test('new call campaign form retains explicit company and offer across routes wi
       await page.screenshot({path:testInfo.outputPath(`campaign-draft-${width}-${theme}.png`),fullPage:true});
     }
   }
+  // One control row less room than the 700px geometry. The split body keeps the queue and the
+  // welcome text usable; the desk scrolls instead of collapsing the body to a sliver.
+  await page.setViewportSize({width:1050,height:620});
+  await page.evaluate(() => window.nativeDeskBrowser.preferences('light','compact'));
+  await expect(company).toBeVisible();
+  const squeezed = await page.evaluate(() => {
+    const box = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
+    const detail = box('.native-desk__detail'), heading = box('.native-desk__welcome h2'), text = box('.native-desk__welcome p');
+    return { queue: document.querySelector('.native-desk__queue')!.clientHeight, inside: heading.top >= detail.top && text.bottom <= detail.bottom };
+  });
+  expect(squeezed.inside, 'welcome text must stay inside its pane at 620px').toBe(true);
+  expect(squeezed.queue, 'campaign queue must keep a usable height at 620px').toBeGreaterThanOrEqual(100);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+  const squeezedAxe = await new AxeBuilder({page}).analyze();
+  expect(squeezedAxe.violations.filter(item=>item.impact==='serious'||item.impact==='critical')).toEqual([]);
   expect((await methods(page)).every(method => ['daily.get','delegation.status','localWorkspace.get','localWorkspace.getCommitments'].includes(method))).toBe(true);
   await assertClean(page,state);
 });
