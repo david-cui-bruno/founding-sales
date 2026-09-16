@@ -46,8 +46,8 @@ export class DynamoThreadIntakeRepository {
   }
   async checkpoint(accountId: string, subject: string): Promise<MailCheckpoint | null> { return (await this.cursorState(accountId, subject))?.data.checkpoint ?? null; }
   async scope(accountId: string, subject: string): Promise<MailAccountScope | null> { return (await this.cursorState(accountId, subject))?.data.scope ?? null; }
-  /** Internal admission seam. C6 must authenticate and derive the complete account scope. */
-  async admitScope(input: MailAccountScope, expectedEnvelopeRevision: number | null): Promise<void> {
+  /** Internal read-only plan. Callers must commit every proof and the cursor atomically. */
+  async planScopeAdmission(input: MailAccountScope, expectedEnvelopeRevision: number | null) {
     const scope = mailAccountScopeSchema.parse(input);
     if (Date.parse(scope.since) < Date.parse(this.store.now()) - 30 * 86400000 || scope.approvedAt > this.store.now()) throw new Error('mail_scope_window_invalid');
     const cursor = await this.cursorState(scope.accountId, scope.mailboxSubject);
@@ -59,8 +59,16 @@ export class DynamoThreadIntakeRepository {
     let digest: string | null;
     try { digest = await this.inboundContext(scope.accountId, scope.mailboxSubject); }
     catch (error) { if (!(error instanceof Error && error.message === 'mail_context_capacity_exceeded')) throw error; digest = null; }
-    await this.store.transact([this.store.check(key, authority.rev, executionAuthorityFields(current)),
-      this.store.put(mailCursorKey(scope.accountId, scope.mailboxSubject), { scope, checkpoint: null, poll: null, inboundContextRevision: digest === null ? null : integer.positive().parse((cursor?.data.inboundContextRevision ?? 0) + 1), inboundContextFingerprint: digest }, cursor?.rev ?? null)]);
+    const envelope: MailCursorEnvelope = { scope, checkpoint: null, poll: null,
+      inboundContextRevision: digest === null ? null : integer.positive().parse((cursor?.data.inboundContextRevision ?? 0) + 1), inboundContextFingerprint: digest };
+    return { scope, envelope, cursor, authority: { ...authority, data: current }, items: [
+      this.store.check(key, authority.rev, executionAuthorityFields(current)),
+      this.store.put(mailCursorKey(scope.accountId, scope.mailboxSubject), envelope, cursor?.rev ?? null)] };
+  }
+  /** Internal admission seam. C6 must authenticate and derive the complete account scope. */
+  async admitScope(input: MailAccountScope, expectedEnvelopeRevision: number | null): Promise<void> {
+    const plan = await this.planScopeAdmission(input, expectedEnvelopeRevision);
+    await this.store.transact(plan.items);
   }
   async beginPoll(accountId: string, mailboxSubject: string, attemptId: string): Promise<void> {
     const current = await this.cursorState(accountId, mailboxSubject);

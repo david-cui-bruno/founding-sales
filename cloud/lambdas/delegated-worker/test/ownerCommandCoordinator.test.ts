@@ -373,3 +373,141 @@ it('ordinary canonical retry preserves the first owner timestamp and conflicts o
   const writes = f.options.dynamo.transactions.flatMap(tx => tx.TransactItems ?? []).filter(item => item.Put?.Item?.sk?.S === mailDraftKey('account', 'draft'));
   expect(writes).toHaveLength(2); // fixture seed plus one canonical edit
 });
+
+// Configure replay uses the existing real auth/coordinator/repositories. Only
+// external OAuth HTTP and the exact final Dynamo transaction can be faulted.
+async function intakeReplayFixture(mail = true) {
+  const { TransactWriteItemsCommand } = await import('@aws-sdk/client-dynamodb');
+  const { mailCursorKey } = await import('../src/threadIntakeRepository');
+  const harness = new ConditionalCommandHarness();
+  const now = '2026-09-16T00:00:00.000Z';
+  const accountId = 'fictional-intake-account';
+  const commandId = randomUUID();
+  let failFinal = false, failedFinal = 0;
+  const attemptedCommands: string[] = [];
+  const dynamo: import('../src/dynamoStore').DynamoAdapter = { async send(request) {
+    if (request instanceof TransactWriteItemsCommand) {
+      const items = request.input.TransactItems ?? [];
+      const command = items.find(item => item.Put?.Item?.sk?.S === `COMMAND#${commandId}`)?.Put?.Item;
+      if (command && items.some(item => item.Put?.Item?.sk?.S === ownerSourceKey(accountId))) {
+        attemptedCommands.push(command.data!.S!);
+        if (failFinal) { failFinal = false; failedFinal++; throw Error('Synthetic failure before final owner commit'); }
+      }
+    }
+    return harness.send(request);
+  } };
+  const options = { dynamo, tableName: 'fictional-intake-replay', workspaceId: 'ws', clock: { now: () => now } };
+  const auth = new WorkerAuth(options);
+  const pairing = await auth.redeemPairing((await auth.issuePairing({ scopes: ['commands:write', 'events:read', 'google:grant'], expiresInSeconds: 300 })).code, 'fictional-intake-device');
+  const http: string[] = [];
+  const authorization = new RemoteGoogleAuthorization({ auth,
+    config: { clientId: 'fictional.apps.googleusercontent.com', clientSecret: 'fictional', redirectUri: 'https://worker.example.test/oauth/callback', encryptionKey: Buffer.alloc(32, 9) },
+    fetch: async input => {
+      const url = String(input); http.push(url);
+      if (url === 'https://oauth2.googleapis.com/token') return Response.json({ access_token: 'fictional', refresh_token: 'fictional', token_type: 'Bearer', expires_in: 3600, scope: `openid email ${googleScopes.relevant_read}` });
+      if (url === 'https://openidconnect.googleapis.com/v1/userinfo') return Response.json({ sub: 'fictional-mailbox', email: 'owner@example.invalid', email_verified: true });
+      throw Error('Unrelated external effect forbidden');
+    } });
+  if (mail) {
+    const grant = await authorization.beginGoogleGrant(pairing.pairingId, ['relevant_read']);
+    await authorization.completeGoogleGrant(new URL(grant.authorizationUrl).searchParams.get('state')!, 'fictional-code');
+    expect((await authorization.status(pairing.pairingId)).grant?.grantedScopes).toContain(googleScopes.relevant_read);
+    expect((await authorization.status(pairing.pairingId)).grant?.grantedScopes).not.toContain(googleScopes.send);
+  }
+  const coordinator = () => new OwnerCommandCoordinator({ auth, authorization });
+  const bearer = `Bearer ${pairing.credential}`;
+  const account = { id: accountId, name: 'Fictional Intake Company', domain: null, version: 1 };
+  const sources = mail ? [{ id: 'intake-source', url: 'https://example.invalid/team', fetchedAt: now, sha256: 'a'.repeat(64), excerpt: 'Published business inbox team@example.invalid', permitted: true }] : [];
+  const routes = mail ? [{ id: 'intake-route', accountId, personId: null, channel: 'email', value: 'team@example.invalid', version: 1, purpose: 'business', verification: 'published', evidenceIds: ['intake-source'] }] : [];
+  await coordinator().apply({ commandId: randomUUID(), workspaceId: 'ws', accountId, expectedAuthorityGeneration: 0, expectedVersion: 0,
+    kind: 'bootstrap-selected-account', payload: { record: { account, sources, routes, claims: [], researchRevision: 1, history: [{ at: now, account, claims: [], routes }] }, asOf: now, expectedResearchRevision: null, suppression: [] } }, bearer);
+  const execution = createExecutionRepository(options);
+  await execution.applyCommand({ commandId: randomUUID(), workspaceId: 'ws', accountId, expectedAuthorityGeneration: 0, expectedVersion: 1,
+    kind: 'delegate', payload: { delegationId: randomUUID(), approvedAt: now } });
+  const command = ownerCommandSchema.parse({ commandId, workspaceId: 'ws', accountId, expectedAuthorityGeneration: 1, expectedVersion: 2, kind: 'configure-owner',
+    payload: { expectedConfigurationRevision: 0, configuration: { version: 1, workspaceId: 'ws', accountId, pairingId: pairing.pairingId, revision: 1, state: 'active', mailboxSubject: mail ? 'fictional-mailbox' : null, calendarId: null, research: null },
+      mailScope: mail ? { expectedEnvelopeRevision: null, since: now } : null } });
+  const freeze = (value: object): void => { Object.values(value).forEach(child => { if (child && typeof child === 'object') freeze(child); }); Object.freeze(value); };
+  freeze(command);
+  return { harness, options, auth, command, coordinator, bearer, accountId, commandId, now, http, attemptedCommands,
+    cursorKey: mailCursorKey(accountId, 'fictional-mailbox'), failOnce() { failFinal = true; }, failures: () => failedFinal };
+}
+
+async function verifyIntakeReplay(mail: boolean) {
+  const f = await intakeReplayFixture(mail);
+  const commandJson = JSON.stringify(f.command);
+  const authority = f.harness.inspect(executionAuthorityKey(f.accountId));
+  const eventsBefore = (await f.auth.store.eventsAfter(null)).events.length;
+  const durableBefore = await f.auth.store.list('');
+  f.failOnce();
+  await expect(f.coordinator().apply(f.command, f.bearer)).rejects.toThrow('Synthetic failure before final owner commit');
+  expect(f.failures()).toBe(1);
+  // All durable records and storage revisions are unchanged except the claim.
+  // This includes cursor, intake/source, AUTH, COMMAND, event head and outbox.
+  expect((await f.auth.store.list('')).filter(row => row.key !== `OWNER_COMMAND_CLAIM#${f.commandId}`)).toEqual(durableBefore);
+  expect(f.harness.inspect(`COMMAND#${f.commandId}`)).toBeUndefined();
+  expect(f.harness.inspect(ownerSourceKey(f.accountId))).toBeUndefined();
+  expect(f.harness.inspect(executionAuthorityKey(f.accountId))).toEqual(authority);
+  const claim = await f.auth.store.get(`OWNER_COMMAND_CLAIM#${f.commandId}`);
+  expect(claim?.data).toMatchObject({ fingerprint: fingerprint(f.command), at: f.now });
+  // Diagnostic only: the old split transaction has already admitted cursor v1.
+  // The acceptance oracle below must also allow the repaired atomic boundary,
+  // which leaves no cursor at this point. Never manufacture that state in setup.
+  console.info('configure-owner partial-commit diagnostic', JSON.stringify({ mail,
+    cursor: f.harness.inspect(f.cursorKey) ?? null, finalCommand: null, source: null, authority }));
+  const restored = new OwnerCommandCoordinator({ auth: new WorkerAuth(f.options), authorization: f.coordinator().input.authorization });
+  const receipt = await restored.apply(f.command, f.bearer);
+  expect(receipt).toMatchObject({ commandId: f.commandId, status: 'applied', authorityGeneration: 1, aggregateVersion: 3 });
+  expect(JSON.stringify(f.command)).toBe(commandJson);
+  expect(await f.auth.store.get(`OWNER_COMMAND_CLAIM#${f.commandId}`)).toEqual(claim);
+  expect(f.harness.inspect(ownerSourceKey(f.accountId))).toMatchObject({ revision: 1, mailboxSubject: mail ? 'fictional-mailbox' : null });
+  expect(f.harness.inspect(executionAuthorityKey(f.accountId))).toMatchObject({ version: 3, authority: { owner: 'worker', state: 'active', generation: 1 } });
+  if (mail) {
+    const cursor = await new DynamoThreadIntakeRepository(f.options).cursorState(f.accountId, 'fictional-mailbox');
+    expect(cursor).toMatchObject({ rev: 1, data: { scope: { revision: 1, participantAddresses: ['team@example.invalid'], knownThreadIds: [], since: f.now, approvedAt: f.now }, checkpoint: null, poll: null } });
+  } else expect(f.harness.inspect(f.cursorKey)).toBeUndefined();
+  const events = (await f.auth.store.eventsAfter(null)).events;
+  expect(events).toHaveLength(eventsBefore + 1);
+  expect(events.filter(event => event.kind === 'authority.changed' && event.payload.receipt.commandId === f.commandId)).toHaveLength(1);
+  expect(f.harness.transactions.flatMap(transaction => transaction.TransactItems ?? []).filter(item => item.Put?.Item?.sk?.S === `COMMAND#${f.commandId}`)).toHaveLength(1);
+  // Exercise completed replay after genuine intake progress, not merely null fields.
+  if (mail) {
+    const intake = new DynamoThreadIntakeRepository(f.options);
+    const scope = (await intake.scope(f.accountId, 'fictional-mailbox'))!;
+    const { mailScopeFingerprint } = await import('../../../../src/main/outreach/providers/gmailThreadProvider');
+    const attemptId = 'fictional-completed-poll';
+    await intake.beginPoll(f.accountId, 'fictional-mailbox', attemptId);
+    const nextCursor = { version: 1 as const, accountId: f.accountId, mailboxSubject: 'fictional-mailbox',
+      mode: 'history' as const, historyId: '11', pageToken: null, since: f.now,
+      scopeRevision: scope.revision, scopeFingerprint: mailScopeFingerprint(scope) };
+    expect(await intake.applyPage({ complete: true, nextCursor, threads: [] }, null, attemptId)).toEqual([]);
+    expect(await intake.cursorState(f.accountId, 'fictional-mailbox')).toMatchObject({ rev: 3,
+      data: { scope, checkpoint: nextCursor, poll: { attemptId, status: 'complete', startedAt: f.now, completedAt: f.now } } });
+  }
+  const durableCompleted = await f.auth.store.list('');
+  const cursor = f.harness.inspect(f.cursorKey);
+  const transactions = f.harness.transactions.length;
+  expect(await restored.apply(f.command, f.bearer)).toEqual(receipt);
+  expect(f.harness.inspect(f.cursorKey)).toEqual(cursor);
+  expect(f.harness.transactions).toHaveLength(transactions);
+  expect(await f.auth.store.list('')).toEqual(durableCompleted);
+  expect((await f.auth.store.eventsAfter(null)).events).toEqual(events);
+  for (const transaction of f.harness.transactions) {
+    const targets = (transaction.TransactItems ?? []).map(item => {
+      const key = item.Put?.Item ?? item.ConditionCheck?.Key;
+      return `${key?.pk?.S}|${key?.sk?.S}`;
+    });
+    expect(new Set(targets).size).toBe(targets.length);
+  }
+  expect(f.attemptedCommands).toHaveLength(2);
+  expect(f.attemptedCommands[0]).toBe(f.attemptedCommands[1]);
+  expect(f.http.every(url => ['https://oauth2.googleapis.com/token', 'https://openidconnect.googleapis.com/v1/userinfo'].includes(url))).toBe(true);
+}
+
+it('configure-owner scope replay resumes the immutable command after scope admission but before final commit', async () => {
+  await verifyIntakeReplay(true);
+}, 20_000);
+
+it('configure-owner scope replay keeps the no-mail path replayable after the same final-commit fault', async () => {
+  await verifyIntakeReplay(false);
+}, 20_000);
