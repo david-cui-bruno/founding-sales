@@ -41,10 +41,12 @@ export function AccountIntakeConfigure({ api, workspaceId, accountId, preparatio
   const alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   const connections = api.googleConnections;
-  // A fresh read reopens the controls. The grant is read from the owner's stored record so the mail and
-  // calendar controls can be offered honestly; it is never a provider call and never permission.
+  // A fresh read reopens the controls and clears a settled receipt; a pending receipt or an unacknowledged
+  // request survives so the identical change can still be retried. The grant is read from the owner's
+  // stored record so the mail and calendar controls can be offered honestly; never a provider call, never permission.
   useEffect(() => {
     setClosed(false); setGrant(null);
+    setStatus(current => current?.status === 'queued' && current.receipt.status === 'pending' ? current : null);
     if (!connections) return;
     let cancelled = false;
     void (async () => {

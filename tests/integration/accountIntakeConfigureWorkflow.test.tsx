@@ -13,6 +13,7 @@ import { mailScopeFingerprint } from '../../src/main/outreach/providers/gmailThr
 import type { MailMessage } from '../../src/shared/contracts/mailThreadContract';
 import type { AccountRecord } from '../../src/shared/contracts/accountRecordContract';
 import { ownerSourceKey, type OwnerCommand, type OwnerSourceConfiguration } from '../../src/shared/contracts/ownerCommandContract';
+import type { ConfigureAccountIntake } from '../../src/shared/contracts/accountIntakeConfigureContract';
 import { delegationCommandSchema, eventPageSchema, type DelegationCommand } from '../../src/shared/contracts/delegationContract';
 import { DelegationRepository } from '../../src/main/delegation/delegationRepository';
 import { createDelegationRuntime } from '../../src/main/delegation/delegationRuntime';
@@ -144,6 +145,10 @@ async function desktop(w: Worker) {
 }
 type Desktop = Awaited<ReturnType<typeof desktop>>;
 
+// The controls belong to one read: the parent hides its result while a new read is in flight, so the
+// nested section unmounts and remounts per read. Always re-acquire it.
+const panel = () => within(screen.getByRole('region', { name: 'Intake configuration' }));
+const button = (name: string) => panel().getByRole('button', { name }) as HTMLButtonElement;
 /** The Campaigns surface, one company reviewed, then the explicit intake read. */
 async function openIntake(w: Worker, d: Desktop) {
   render(<PresentationRoot><NativeDeskRoute api={d.api} firstUse={d.firstUse} surface="campaigns" onOpenLead={vi.fn()} onOpenImport={vi.fn()} /></PresentationRoot>);
@@ -155,32 +160,226 @@ async function openIntake(w: Worker, d: Desktop) {
   expect(d.paths).toEqual([]);
   fireEvent.click(read);
   await screen.findByText('Intake configuration exists.');
-  const panel = within(await screen.findByRole('region', { name: 'Intake configuration' }));
-  return { read, panel };
+  await screen.findByRole('region', { name: 'Intake configuration' });
+  return { read };
+}
+async function reread(read: HTMLButtonElement, expected: string) {
+  fireEvent.click(read);
+  await screen.findByText(expected);
+  await screen.findByRole('region', { name: 'Intake configuration' });
 }
 
 it('offers pause, relevant mail and calendar controls only after the explicit intake read, reading the grant and nothing else', async () => {
   const w = await worker('paused-no-mail'), d = await desktop(w);
   try {
-    const { panel } = await openIntake(w, d);
+    await openIntake(w, d);
     expect(screen.getByText('Configuration revision: 1. State: paused.')).toBeTruthy();
     // The grant is read from the owner (stored record, no provider call) so the mail control can be offered honestly.
-    await panel.findByText(`Mailbox: ${w.grantEmail}.`, { exact: false });
+    await panel().findByText(`Mailbox: ${w.grantEmail}.`, { exact: false });
     expect(d.paths).toEqual(['/accounts/preparation', '/google/status']);
-    expect(panel.getByRole<HTMLButtonElement>('button', { name: 'Set intake active' }).disabled).toBe(false);
+    expect(button('Set intake active').disabled).toBe(false);
     // Relevant mail needs an explicit start date; a future date is never accepted.
-    const mail = panel.getByRole<HTMLButtonElement>('button', { name: 'Switch on relevant mail' });
+    const mail = button('Switch on relevant mail');
     expect(mail.disabled).toBe(true);
-    fireEvent.change(panel.getByLabelText('Read relevant mail since'), { target: { value: '2999-01-01' } });
+    fireEvent.change(panel().getByLabelText('Read relevant mail since'), { target: { value: '2999-01-01' } });
     expect(mail.disabled).toBe(true);
-    fireEvent.change(panel.getByLabelText('Read relevant mail since'), { target: { value: '2026-09-01' } });
+    fireEvent.change(panel().getByLabelText('Read relevant mail since'), { target: { value: '2026-09-01' } });
     expect(mail.disabled).toBe(false);
-    const calendar = panel.getByRole<HTMLButtonElement>('button', { name: `Use calendar ${w.calendarId}` });
-    expect(calendar.disabled).toBe(true);
-    expect(panel.getByText('A configured mailbox is required before a calendar can be used.')).toBeTruthy();
-    expect(panel.getByText(/Configuration is not readiness; a configured mailbox is not permission to send\./)).toBeTruthy();
+    expect(button(`Use calendar ${w.calendarId}`).disabled).toBe(true);
+    expect(panel().getByText('A configured mailbox is required before a calendar can be used.')).toBeTruthy();
+    expect(panel().getByText(/Configuration is not readiness; a configured mailbox is not permission to send\./)).toBeTruthy();
     expect(d.configureCommands()).toEqual([]);
     expect(w.providerCallsSinceGrant()).toBe(0);
     expect(d.forbidden).not.toHaveBeenCalled();
   } finally { cleanup(); await d.close(); }
+});
+
+it('pauses and resumes intake through one configure-owner command each, preserving mailbox, calendar and research with the revision read bound', async () => {
+  const w = await worker('active-mail'), d = await desktop(w);
+  try {
+    const { read } = await openIntake(w, d);
+    expect(screen.getByText('Configuration revision: 1. State: active.')).toBeTruthy();
+    await panel().findByText(`This calendar is already configured: ${w.calendarId}.`);
+    expect(panel().queryByRole('button', { name: 'Switch on relevant mail' })).toBeNull();
+    expect(button(`Use calendar ${w.calendarId}`).disabled).toBe(true);
+    const pause = button('Pause intake');
+    expect(pause.disabled).toBe(false);
+    fireEvent.click(pause);
+    await panel().findByText('Intake configuration receipt: applied.');
+    // Submit posts once and the following sync flush may re-post the same still-pending identity; the
+    // worker answers idempotently. Exactly one command identity exists.
+    expect(d.identities()).toHaveLength(1);
+    const command = d.configureCommands()[0]!;
+    expect(command.payload).toEqual({ expectedConfigurationRevision: 1, mailScope: null, configuration: { version: 1, workspaceId: w.workspaceId, accountId: w.accountId,
+      pairingId: w.pair.pairingId, revision: 2, state: 'paused', mailboxSubject: w.mailboxSubject, calendarId: w.calendarId, research: null } });
+    expect(command).toMatchObject({ expectedAuthorityGeneration: 1, expectedVersion: w.configureCommand.expectedVersion + 1 });
+    expect(await w.stored()).toEqual(command.payload.configuration);
+    expect(d.owner.commandStatus(command.commandId)).toMatchObject({ status: 'applied' });
+    expect(panel().getByText(/The worker applied revision 2\./)).toBeTruthy();
+    // Settled: the next change starts from a fresh explicit read.
+    expect(pause.disabled).toBe(true);
+    await reread(read, 'Configuration revision: 2. State: paused.');
+    const resume = button('Set intake active');
+    expect(resume.disabled).toBe(false);
+    expect(panel().queryByText('Intake configuration receipt: applied.')).toBeNull();
+    fireEvent.click(resume);
+    await panel().findByText(/The worker applied revision 3\./);
+    expect(d.identities()).toHaveLength(2);
+    const second = d.configureCommands().at(-1)!;
+    expect(second.payload).toEqual({ expectedConfigurationRevision: 2, mailScope: null, configuration: { ...command.payload.configuration, revision: 3, state: 'active' } });
+    expect(await w.stored()).toEqual(second.payload.configuration);
+    await reread(read, 'Configuration revision: 3. State: active.');
+    expect(w.providerCallsSinceGrant()).toBe(0);
+    expect(d.forbidden).not.toHaveBeenCalled();
+  } finally { cleanup(); await d.close(); }
+});
+
+it('switches relevant mail on once with a start date, planning one scope from the permitted business inbox, then uses the grant calendar without re-scoping', async () => {
+  const w = await worker('paused-no-mail'), d = await desktop(w);
+  try {
+    const { read } = await openIntake(w, d);
+    await panel().findByText(`Mailbox: ${w.grantEmail}.`, { exact: false });
+    fireEvent.change(panel().getByLabelText('Read relevant mail since'), { target: { value: '2026-09-01' } });
+    const mail = button('Switch on relevant mail');
+    expect(mail.disabled).toBe(false);
+    expect(await w.cursor()).toBeNull();
+    fireEvent.click(mail);
+    await panel().findByText(/The worker applied revision 2\./);
+    expect(d.identities()).toHaveLength(1);
+    const first = d.configureCommands()[0]!;
+    expect(first.payload).toEqual({ expectedConfigurationRevision: 1, mailScope: { expectedEnvelopeRevision: null, since: '2026-09-01T00:00:00.000Z' }, configuration: { version: 1, workspaceId: w.workspaceId,
+      accountId: w.accountId, pairingId: w.pair.pairingId, revision: 2, state: 'active', mailboxSubject: w.mailboxSubject, calendarId: null, research: null } });
+    expect(await w.stored()).toEqual(first.payload.configuration);
+    // The worker planned exactly one scope from the permitted-source business inbox; the desktop typed none of it.
+    const cursor = await w.cursor();
+    expect(cursor?.data.scope).toMatchObject({ revision: 1, accountId: w.accountId, mailboxSubject: w.mailboxSubject, participantAddresses: [w.routeEmail], knownThreadIds: [], since: '2026-09-01T00:00:00.000Z' });
+    await reread(read, 'Configuration revision: 2. State: active.');
+    expect(screen.getByText('Mail: configured. Research: not configured. Calendar: not configured.')).toBeTruthy();
+    expect(panel().getByText(/Relevant mail is already on for this company/)).toBeTruthy();
+    expect(panel().queryByRole('button', { name: 'Switch on relevant mail' })).toBeNull();
+    const calendar = await panel().findByRole('button', { name: `Use calendar ${w.calendarId}` }) as HTMLButtonElement;
+    await waitFor(() => expect(calendar.disabled).toBe(false));
+    fireEvent.click(calendar);
+    await panel().findByText(/The worker applied revision 3\./);
+    expect(d.identities()).toHaveLength(2);
+    const second = d.configureCommands().at(-1)!;
+    expect(second.payload).toEqual({ expectedConfigurationRevision: 2, mailScope: null, configuration: { ...first.payload.configuration, revision: 3, calendarId: w.calendarId } });
+    expect(await w.stored()).toEqual(second.payload.configuration);
+    expect((await w.cursor())?.data.scope).toEqual(cursor?.data.scope);
+    await reread(read, 'Mail: configured. Research: not configured. Calendar: configured.');
+    expect(w.providerCallsSinceGrant()).toBe(0);
+    expect(d.forbidden).not.toHaveBeenCalled();
+  } finally { cleanup(); await d.close(); }
+});
+
+it('retries the same change after a lost owner response without a second command identity, and refuses a different change against the pending one', async () => {
+  const w = await worker('active-mail'), d = await desktop(w);
+  try {
+    await openIntake(w, d);
+    const pause = button('Pause intake');
+    await waitFor(() => expect(pause.disabled).toBe(false));
+    d.setOffline(true);
+    fireEvent.click(pause);
+    // The owner never answered: the local outbox holds one pending command and the receipt is honestly pending.
+    await panel().findByText('Intake configuration receipt: pending.');
+    const pending = d.owner.pendingCommands().filter(command => command.kind === 'configure-owner');
+    expect(pending).toHaveLength(1);
+    expect(d.configureCommands()).toEqual([]);
+    expect(await w.stored()).toEqual(w.configureCommand.payload.configuration);
+    expect(pause.disabled).toBe(true);
+    // A different change against the live pending one is refused, never re-issued.
+    expect(await d.runtime.configureIntake({ accountId: w.accountId, expectedConfigurationRevision: 1, state: 'active', mailboxSubject: w.mailboxSubject, calendarId: null, mailSince: null }))
+      .toEqual({ status: 'held', accountId: w.accountId, expectedConfigurationRevision: 1, reason: 'intake_configuration_conflict' });
+    expect(d.owner.pendingCommands().filter(command => command.kind === 'configure-owner')).toEqual(pending);
+    d.setOffline(false);
+    fireEvent.click(button('Retry same change'));
+    await panel().findByText('Intake configuration receipt: applied.');
+    expect(d.identities()).toEqual([pending[0]!.commandId]);
+    expect(d.owner.getCommand(pending[0]!.commandId)).toEqual(pending[0]);
+    expect(await w.stored()).toMatchObject({ revision: 2, state: 'paused', mailboxSubject: w.mailboxSubject, calendarId: w.calendarId });
+    expect(panel().queryByRole('button', { name: 'Retry same change' })).toBeNull();
+    expect(w.providerCallsSinceGrant()).toBe(0);
+  } finally { cleanup(); await d.close(); }
+});
+
+it('holds a change whose revision the worker has already moved past, with the worker code verbatim, nothing queued and a fresh read required', async () => {
+  const w = await worker('active-mail'), d = await desktop(w);
+  try {
+    const { read } = await openIntake(w, d);
+    const pause = button('Pause intake');
+    await waitFor(() => expect(pause.disabled).toBe(false));
+    // Between the read and the write this workspace applies revision 2 elsewhere (the calendar is dropped).
+    const elsewhere: Extract<OwnerCommand, { kind: 'configure-owner' }> = { commandId: randomUUID(), workspaceId: w.workspaceId, accountId: w.accountId, expectedAuthorityGeneration: 1,
+      expectedVersion: d.owner.executionVersion(w.accountId)!, kind: 'configure-owner', payload: { expectedConfigurationRevision: 1, configuration: { ...w.configureCommand.payload.configuration, revision: 2, calendarId: null }, mailScope: null } };
+    expect(await d.bridge.delegation.submit(elsewhere)).toMatchObject({ status: 'pending' });
+    expect(await d.bridge.delegation.sync()).toMatchObject({ ownerFresh: true });
+    expect(d.owner.commandStatus(elsewhere.commandId)).toMatchObject({ status: 'applied' });
+    // The founder's pause still binds revision 1 as read: the worker's own rule holds it before anything is queued.
+    fireEvent.click(pause);
+    await panel().findByText('Intake change held: stale_source_configuration.');
+    expect(panel().getByText(/The worker holds a different configuration revision than the one you read\. Nothing was queued\. Read intake configuration again before another change\./)).toBeTruthy();
+    expect(d.identities()).toEqual([elsewhere.commandId]);
+    expect(d.owner.pendingCommands()).toEqual([]);
+    expect(await w.stored()).toEqual(elsewhere.payload.configuration);
+    expect(pause.disabled).toBe(true);
+    await reread(read, 'Configuration revision: 2. State: active.');
+    expect(screen.getByText('Mail: configured. Research: not configured. Calendar: not configured.')).toBeTruthy();
+    expect(button('Pause intake').disabled).toBe(false);
+    expect(panel().queryByText(/Intake change held/)).toBeNull();
+    expect(w.providerCallsSinceGrant()).toBe(0);
+  } finally { cleanup(); await d.close(); }
+});
+
+it('shows the owner rejection as is when the owner moved on before the retry, re-issues nothing and closes until a fresh read', async () => {
+  const w = await worker('active-mail'), d = await desktop(w);
+  try {
+    await openIntake(w, d);
+    const pause = button('Pause intake');
+    await waitFor(() => expect(pause.disabled).toBe(false));
+    d.setOffline(true);
+    fireEvent.click(pause);
+    await panel().findByText('Intake configuration receipt: pending.');
+    const pending = d.owner.pendingCommands().find(command => command.kind === 'configure-owner')!;
+    // The owner moves on without this command: an explicit pause advances the version it expected.
+    expect((await w.request('/commands', { commandId: randomUUID(), workspaceId: w.workspaceId, accountId: w.accountId, expectedAuthorityGeneration: pending.expectedAuthorityGeneration, expectedVersion: pending.expectedVersion, kind: 'pause', payload: { reason: 'fictional owner pause' } })).statusCode).toBe(200);
+    d.setOffline(false);
+    fireEvent.click(button('Retry same change'));
+    await panel().findByText('Intake configuration receipt: rejected.');
+    expect(panel().getByText('Stale owner command; explicit fresh action required')).toBeTruthy();
+    expect(panel().getByText(/This change was rejected\. Nothing changed locally\. Read intake configuration again before another change; nothing is re-issued automatically\./)).toBeTruthy();
+    expect(d.owner.commandStatus(pending.commandId)).toMatchObject({ status: 'rejected' });
+    expect(d.identities()).toEqual([pending.commandId]);
+    // The founder's pause never applied to the configuration; the owner holds revision 1 unchanged.
+    expect(await w.stored()).toEqual(w.configureCommand.payload.configuration);
+    expect(button('Pause intake').disabled).toBe(true);
+    expect(panel().queryByRole('button', { name: 'Retry same change' })).toBeNull();
+    expect(w.providerCallsSinceGrant()).toBe(0);
+  } finally { cleanup(); await d.close(); }
+});
+
+it('holds honestly before queueing when the revision read, the mailbox, the grant, the scope or the calendar would be refused by the worker', async () => {
+  const w = await worker('active-mail'), d = await desktop(w);
+  try {
+    const base: ConfigureAccountIntake = { accountId: w.accountId, expectedConfigurationRevision: 1, state: 'active', mailboxSubject: w.mailboxSubject, calendarId: w.calendarId, mailSince: null };
+    const held = (reason: string, expectedConfigurationRevision = 1) => ({ status: 'held', accountId: w.accountId, expectedConfigurationRevision, reason });
+    expect(await d.runtime.configureIntake({ ...base, expectedConfigurationRevision: 0, state: 'paused' })).toEqual(held('stale_source_configuration', 0));
+    expect(await d.runtime.configureIntake({ ...base, mailboxSubject: 'another-mailbox' })).toEqual(held('intake_mailbox_mismatch'));
+    expect(await d.runtime.configureIntake({ ...base, mailSince: '2026-09-01T00:00:00.000Z' })).toEqual(held('intake_mailbox_mismatch'));
+    expect(await d.runtime.configureIntake({ ...base, calendarId: 'other@example.test' })).toEqual(held('intake_calendar_unavailable'));
+    expect(d.owner.pendingCommands()).toEqual([]); expect(d.configureCommands()).toEqual([]);
+    expect(await w.stored()).toEqual(w.configureCommand.payload.configuration);
+    expect(w.providerCallsSinceGrant()).toBe(0);
+  } finally { await d.close(); }
+  const p = await worker('paused-no-mail'), e = await desktop(p);
+  try {
+    const base: Omit<ConfigureAccountIntake, 'state'> = { accountId: p.accountId, expectedConfigurationRevision: 1, mailboxSubject: null, calendarId: null, mailSince: null };
+    const held = (reason: string) => ({ status: 'held', accountId: p.accountId, expectedConfigurationRevision: 1, reason });
+    expect(await e.runtime.configureIntake({ ...base, state: 'active', calendarId: p.calendarId })).toEqual(held('no_mail_configuration_conflict'));
+    expect(await e.runtime.configureIntake({ ...base, state: 'paused', mailboxSubject: p.mailboxSubject, mailSince: '2026-09-01T00:00:00.000Z' })).toEqual(held('inactive_scope_change'));
+    expect(await e.runtime.configureIntake({ ...base, state: 'active', mailboxSubject: 'not-the-grant-subject', mailSince: '2026-09-01T00:00:00.000Z' })).toEqual(held('source_grant_unavailable'));
+    expect(await e.runtime.configureIntake({ ...base, state: 'active', mailboxSubject: p.mailboxSubject })).toEqual(held('selected_scope_incomplete'));
+    expect(e.owner.pendingCommands()).toEqual([]); expect(e.configureCommands()).toEqual([]);
+    expect(await p.stored()).toEqual(p.configureCommand.payload.configuration);
+    expect(p.providerCallsSinceGrant()).toBe(0);
+  } finally { await e.close(); }
 });

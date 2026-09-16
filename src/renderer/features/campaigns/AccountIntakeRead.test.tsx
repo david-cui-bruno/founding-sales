@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { CallCampaignDraft } from './CallCampaignDraft';
 import { configuredFixtureStatus, nativeDeskFixture, nativeDeskReviewFixture } from '../today/nativeDesk.fixture';
@@ -160,4 +160,25 @@ it('discards stale errors and rejects mismatched reply scope instead of displayi
   clickRead();
   await screen.findByText(/Read again to retry explicitly/);
   expect(screen.queryByText('No intake configuration exists.')).toBeNull();
+});
+it('nests the intake configuration controls after a successful read, bound to that read, without any automatic command or grant claim', async () => {
+  const f = fixture();
+  f.read.mockResolvedValue({ ...absent, configuration: { version: 1, workspaceId: 'ws', accountId: 'a', pairingId: 'pair', revision: 4, state: 'paused', mailboxSubject: null, calendarId: null, research: null } });
+  const props = inlineProps(f);
+  const view = render(<AccountIntakeRead {...props} />);
+  expect(screen.queryByRole('region', { name: 'Intake configuration' })).toBeNull();
+  clickRead();
+  await screen.findByText('Intake configuration exists.');
+  const panel = within(screen.getByRole('region', { name: 'Intake configuration' }));
+  expect(panel.getByText('Revision 4 as read. Each change binds this revision; the worker refuses anything older.')).toBeTruthy();
+  expect(panel.getByRole<HTMLButtonElement>('button', { name: 'Set intake active' }).disabled).toBe(false);
+  // This fixture bridge has no grant knowledge: relevant mail is withheld with the reason, never offered.
+  expect(panel.getByText('Grant status is unavailable in this bridge. Relevant mail is not offered.')).toBeTruthy();
+  expect(panel.queryByRole('button', { name: 'Switch on relevant mail' })).toBeNull();
+  expect(panel.getByRole<HTMLButtonElement>('button', { name: 'Use calendar' }).disabled).toBe(true);
+  expect(f.read).toHaveBeenCalledTimes(1);
+  expect(f.calls).toEqual([]);
+  // The parent's guard closes the controls with the read.
+  view.rerender(<AccountIntakeRead {...props} disabled />);
+  expect(screen.queryByRole('region', { name: 'Intake configuration' })).toBeNull();
 });
