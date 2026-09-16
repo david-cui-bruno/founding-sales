@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
+import type { TransactWriteItem } from '@aws-sdk/client-dynamodb';
 import { accountCreateSchema, accountEvidenceBatchSchema, accountIdSchema, accountInstantSchema, accountRouteSchema,
-  accountSchema, accountSourceSchema, type Account, type AccountEvidenceBatch, type AccountEvidenceReceipt, type AccountSource } from '../../../../src/shared/contracts/accountContract';
+  accountSchema, accountSourceSchema, type Account, type AccountEvidenceBatch, type AccountEvidenceReceipt, type AccountRoute, type AccountSource } from '../../../../src/shared/contracts/accountContract';
 import { workerEventSchema } from '../../../../src/shared/contracts/delegationContract';
 import { projectAccountEvidence } from '../../../../src/main/domain/accounts/accountEvidence';
 import { rankAccount } from '../../../../src/shared/accounts/accountRanking';
@@ -16,6 +17,14 @@ const jobSchema = z.strictObject({ id: z.uuid(), accountId: accountIdSchema, lim
 type JobRecord = z.infer<typeof jobSchema>;
 type Receipt = { fingerprint: string; kind: string; accountId: string; result: Account | AccountEvidenceReceipt; sequence: number; claimToken?: string };
 export const accountKey = (id: string) => `ACCOUNT#${keyPart(id)}`;
+/** The exact refusals of an owner-resubmitted saved record, in the order they are checked. The coordinator
+ * records each as a rejected receipt's reason; anything else thrown stays a protocol failure. */
+export const selectedRecordRefreshRejections = ['account_missing', 'record_identity_mismatch', 'record_research_stale', 'record_history_diverged', 'route_evidence_missing', 'record_not_newer'] as const;
+export type SelectedRecordRefreshRejection = typeof selectedRecordRefreshRejections[number];
+export function isSelectedRecordRefreshRejection(value: unknown): value is SelectedRecordRefreshRejection {
+  return typeof value === 'string' && (selectedRecordRefreshRejections as readonly string[]).includes(value);
+}
+export type SelectedRecordRefreshPlan = { duplicate: boolean; items: TransactWriteItem[]; stored: AccountRecord };
 const jobKey = (id: string) => `JOB#${keyPart(id)}`;
 const receiptKey = (id: string) => `ACCOUNT_COMMAND#${keyPart(id)}`;
 const jobFields = (job: JobRecord) => ({ accountId: job.accountId, state: job.state, claimToken: job.claimToken, receiptCommitted: job.receiptCommitted });
@@ -160,6 +169,26 @@ export class DynamoWorkerAccountRepository implements AccountResearchStore {
     }
     await this.store.publish(outbox.sequence);
     return receipt;
+  }
+  /** Owner-resubmitted saved record for a company this worker already holds. Plans the rev-checked ACCOUNT#
+   * replacement for the coordinator's receipt transaction; writes, publishes and touches authority nothing itself.
+   * The stored history must sit unchanged at the head of the incoming history (append-only), every route must
+   * point at a permitted source in the incoming record, and the record may never go backwards. An equal record
+   * is a duplicate: the plan only proves the row is unchanged. Each refusal throws one selectedRecordRefreshRejections code. */
+  async refreshRecord(input: { accountId: string; record: AccountRecord; expectedResearchRevision: number }): Promise<SelectedRecordRefreshPlan> {
+    const record = accountRecordSchema.parse(input.record); accountIdSchema.parse(input.accountId); integer.positive().parse(input.expectedResearchRevision);
+    const row = await this.store.get<unknown>(accountKey(input.accountId));
+    if (!row) throw new Error('account_missing');
+    const stored = accountRecordSchema.parse(row.data);
+    if (stored.account.id !== input.accountId || record.account.id !== stored.account.id || record.account.name !== stored.account.name || record.account.domain !== stored.account.domain) throw new Error('record_identity_mismatch');
+    if (stored.researchRevision !== input.expectedResearchRevision) throw new Error('record_research_stale');
+    if (record.history.length < stored.history.length || stored.history.some((entry, index) => fingerprint(entry) !== fingerprint(record.history[index]))) throw new Error('record_history_diverged');
+    const permitted = new Set(record.sources.filter(source => source.permitted).map(source => source.id));
+    const evidenced = (route: AccountRoute) => route.evidenceIds.length > 0 && route.evidenceIds.every(id => permitted.has(id));
+    if (!record.routes.every(evidenced) || !record.history.every(entry => entry.routes.every(evidenced))) throw new Error('route_evidence_missing');
+    if (record.account.version < stored.account.version) throw new Error('record_not_newer');
+    if (fingerprint(stored) === fingerprint(record)) return { duplicate: true, stored, items: [this.store.check(accountKey(input.accountId), row.rev)] };
+    return { duplicate: false, stored, items: [this.store.put(accountKey(input.accountId), record, row.rev, { accountId: input.accountId, version: record.account.version }, { accountId: input.accountId, version: stored.account.version })] };
   }
   /** Explicit immutable workspace research ceiling. Missing budget is deny. */
   async approveResearchBudget(limitMicros: number): Promise<void> {
