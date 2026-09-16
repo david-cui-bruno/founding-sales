@@ -4,7 +4,7 @@ import { dailyCampaignSchema, dailySnapshotSchema, type DailySnapshot } from '..
 import { delegationSyncReportSchema, localDelegationStatusSchema } from '../../../shared/contracts/ownerCommandContract';
 import { commandReceiptSchema } from '../../../shared/contracts/commandReceiptContract';
 import type { AccountRoute } from '../../../shared/contracts/accountContract';
-import { describeCallCampaignTemplate } from '../../../shared/contracts/callCampaignDraft';
+import { describeOneCompanyCampaignTemplate, type OneCompanyCampaignChannel } from '../../../shared/contracts/callCampaignDraft';
 import { captureDailySessionScope } from '../today/dailySessionScope';
 
 type Api = Pick<CalliePreloadApi, 'daily' | 'delegation'>;
@@ -54,7 +54,11 @@ function duplicate(snapshot: DailySnapshot, accountId: string) {
   return snapshot.campaigns.some(c => c.enrollments.some(e => e.accountId === accountId
     && ['active', 'held', 'paused', 'conversation'].includes(e.state)));
 }
-function eligibleRoutes(routes: AccountRoute[]): AccountRoute[] {
+// Same target rule as linkedInService.validateLinkedInTarget and ManualLinkedInPreparation:
+// a business profile or an existing thread. Company pages can never be prepared, so they are not offered.
+const linkedInTarget = /^https:\/\/(?:www\.)?linkedin\.com\/(?:in\/[A-Za-z0-9_-]+|messaging\/thread\/[A-Za-z0-9_-]+)\/?$/;
+/** Company-level routes only (PR #51 precedent): the latest unambiguous business route with no person binding. */
+function eligibleRoutes(routes: AccountRoute[], channel: OneCompanyCampaignChannel): AccountRoute[] {
   const latest = new Map<string, AccountRoute>();
   const ambiguous = new Set<string>();
   for (const route of routes) {
@@ -62,9 +66,30 @@ function eligibleRoutes(routes: AccountRoute[]): AccountRoute[] {
     if (!prior || route.version > prior.version) { latest.set(route.id, route); ambiguous.delete(route.id); }
     else if (route.version === prior.version && !same(route, prior)) ambiguous.add(route.id);
   }
-  return [...latest.values()].filter(route => !ambiguous.has(route.id) && route.channel === 'phone'
+  return [...latest.values()].filter(route => !ambiguous.has(route.id) && route.channel === (channel === 'call' ? 'phone' : 'linkedin')
+    && (channel === 'call' || linkedInTarget.test(route.value))
     && route.personId === null && route.purpose === 'business' && ['published', 'confirmed'].includes(route.verification));
 }
+const copy = {
+  call: {
+    region: 'Call campaign enrollment', purpose: 'Enrollment adds a due manual-call item. It does not dial, send messages, or grant contact permission.',
+    review: 'I reviewed this company, offer, call step and lifetime limits', approve: 'Approve call campaign',
+    route: 'Business phone route', selectRoute: 'Select a business phone route',
+    scope: 'This call queue supports company-level phone routes only. Person-specific routes are not available here.',
+    request: 'I want this company added to the manual call queue', enroll: 'Enroll company for manual call',
+    held: 'Campaign action held. A current workspace, exact call template, active worker and known execution version with no pending commands are required.',
+    approved: 'Call campaign approved. Not enrolled.', enrolled: 'Company enrolled for a manual call. No call placed.',
+  },
+  linkedin: {
+    region: 'LinkedIn campaign enrollment', purpose: 'Enrollment adds a due manual LinkedIn preparation item. It does not send a message, connect, or grant contact permission.',
+    review: 'I reviewed this company, offer, LinkedIn step and lifetime limits', approve: 'Approve LinkedIn campaign',
+    route: 'Business LinkedIn route', selectRoute: 'Select a business LinkedIn route',
+    scope: 'This LinkedIn queue supports company-level business profile routes only. Person-specific routes and company pages are not available here.',
+    request: 'I want this company added to the manual LinkedIn queue', enroll: 'Enroll company for manual LinkedIn note',
+    held: 'Campaign action held. A current workspace, exact LinkedIn template, active worker and known execution version with no pending commands are required.',
+    approved: 'LinkedIn campaign approved. Not enrolled.', enrolled: 'Company enrolled for a manual LinkedIn note. No message sent.',
+  },
+} as const;
 function projected(snapshot: DailySnapshot, proof: Proof): boolean {
   const { command, campaign, route } = proof;
   if (snapshot.workspaceId !== command.workspaceId) return false;
@@ -96,7 +121,10 @@ export function CallCampaignEnrollment({ api, snapshot, config, campaign, readEr
   const parsedConfig = localDelegationStatusSchema.safeParse(config);
   const current = parsed.success ? parsed.data : null;
   const canonical = parsedCampaign.success ? current?.campaigns.find(c => same(c, parsedCampaign.data)) : undefined;
-  const template = describeCallCampaignTemplate(canonical?.version);
+  const template = describeOneCompanyCampaignTemplate(canonical?.version);
+  // An unrecognised version is held with the call wording; the call template is the only default.
+  const channel: OneCompanyCampaignChannel = template?.channel ?? 'call';
+  const text = copy[channel];
   const account = current?.accounts.find(a => a.account.id === template?.accountId);
   const state = useMemo(() => actionState(api, JSON.stringify([snapshot?.workspaceId, campaign?.version?.id])),
     [api.daily, api.delegation, snapshot?.workspaceId, campaign?.version?.id]);
@@ -105,7 +133,7 @@ export function CallCampaignEnrollment({ api, snapshot, config, campaign, readEr
   const [reviewed, setReviewed] = useState(false);
   const [requested, setRequested] = useState(false);
   const lifetime = useRef(0);
-  const routes = eligibleRoutes(account?.routes ?? []);
+  const routes = eligibleRoutes(account?.routes ?? [], channel);
   const route = routes.find(r => r.id === routeId);
   const guard = JSON.stringify([snapshot?.workspaceId, snapshot?.workflowMode, snapshot?.freshness?.kind, snapshot?.issues,
     readError, config, campaign, account, current?.ownerStatus, current?.campaigns.map(c => c.enrollments), routeId]);
@@ -164,7 +192,7 @@ export function CallCampaignEnrollment({ api, snapshot, config, campaign, readEr
         if (fresh.workspaceId !== current.workspaceId || !configured(fresh, freshConfig) || !same(freshConfig, parsedConfig.data)
           || !freshCampaign || !same(freshCampaign, canonical) || !same(freshAccount, account)
           || !freshOwner || !same(freshOwner, owner)
-          || (approved && (duplicate(fresh, template.accountId) || !route || !eligibleRoutes(freshAccount?.routes ?? []).some(r => same(r, route))))) throw Error('Held');
+          || (approved && (duplicate(fresh, template.accountId) || !route || !eligibleRoutes(freshAccount?.routes ?? [], channel).some(r => same(r, route))))) throw Error('Held');
         const command: Command = {
           commandId: crypto.randomUUID(), workspaceId: current.workspaceId!, accountId: template.accountId,
           expectedAuthorityGeneration: freshOwner.authority!.generation, expectedVersion: freshOwner.executionVersion!, kind: 'campaign-command',
@@ -218,28 +246,28 @@ export function CallCampaignEnrollment({ api, snapshot, config, campaign, readEr
   const locked = !!(state?.busy || state?.pending);
   const completion = available && state?.completed && current
     && (state.completed.guard === guard || projected(current, state.completed.proof)) ? state.completed.proof.command.payload.kind : null;
-  return <section className="native-desk__campaign-enrollment" aria-label="Call campaign enrollment">
-    <p>Enrollment adds a due manual-call item. It does not dial, send messages, or grant contact permission.</p>
+  return <section className="native-desk__campaign-enrollment" aria-label={text.region}>
+    <p>{text.purpose}</p>
     {!approved && <>
-      <label className="native-desk__check"><input type="checkbox" checked={reviewed} disabled={!available || locked} onChange={event => setReviewed(event.target.checked)} />I reviewed this company, offer, call step and lifetime limits</label>
-      <button type="button" disabled={!available || !owner || locked || !reviewed || completion === 'campaign.approve'} onClick={() => { void run(); }}>Approve call campaign</button>
+      <label className="native-desk__check"><input type="checkbox" checked={reviewed} disabled={!available || locked} onChange={event => setReviewed(event.target.checked)} />{text.review}</label>
+      <button type="button" disabled={!available || !owner || locked || !reviewed || completion === 'campaign.approve'} onClick={() => { void run(); }}>{text.approve}</button>
     </>}
     {approved && <>
-      <label>Business phone route<select value={routeId} disabled={!available || locked} onChange={event => setRouteId(event.target.value)}>
-        <option value="">Select a business phone route</option>
+      <label>{text.route}<select value={routeId} disabled={!available || locked} onChange={event => setRouteId(event.target.value)}>
+        <option value="">{text.selectRoute}</option>
         {routes.map(r => <option key={r.id} value={r.id}>{r.value} ({r.verification})</option>)}
       </select></label>
       <p>Published or confirmed describes source verification, not contact permission. A new execution context is a binding identity, not authority.</p>
-      <p>This call queue supports company-level phone routes only. Person-specific routes are not available here.</p>
-      <label className="native-desk__check"><input type="checkbox" checked={requested} disabled={!available || locked || !route || alreadyEnrolled} onChange={event => setRequested(event.target.checked)} />I want this company added to the manual call queue</label>
-      <button type="button" disabled={!available || !owner || locked || !route || !requested || alreadyEnrolled || completion === 'campaign.enroll'} onClick={() => { void run(); }}>Enroll company for manual call</button>
+      <p>{text.scope}</p>
+      <label className="native-desk__check"><input type="checkbox" checked={requested} disabled={!available || locked || !route || alreadyEnrolled} onChange={event => setRequested(event.target.checked)} />{text.request}</label>
+      <button type="button" disabled={!available || !owner || locked || !route || !requested || alreadyEnrolled || completion === 'campaign.enroll'} onClick={() => { void run(); }}>{text.enroll}</button>
     </>}
-    {(!available || !owner) && <p role="status">Campaign action held. A current workspace, exact call template, active worker and known execution version with no pending commands are required.</p>}
+    {(!available || !owner) && <p role="status">{text.held}</p>}
     {approved && alreadyEnrolled && <p role="status">This company already has a nonterminal campaign enrollment.</p>}
     {state?.pending && <><p role="status">Campaign action pending. Not confirmed. Retry only the same action or reconcile queued commands.</p>
       <button type="button" disabled={!available || state.busy} onClick={() => { void run(true); }}>Retry same campaign action</button></>}
     {state?.failed && !state.pending && <p role="status">Campaign action could not be completed. Review current data before trying again.</p>}
-    {completion === 'campaign.approve' && !canonical?.enrollments.some(e => e.accountId === template?.accountId) && <p role="status">Call campaign approved. Not enrolled.</p>}
-    {completion === 'campaign.enroll' && <p role="status">Company enrolled for a manual call. No call placed.</p>}
+    {completion === 'campaign.approve' && !canonical?.enrollments.some(e => e.accountId === template?.accountId) && <p role="status">{text.approved}</p>}
+    {completion === 'campaign.enroll' && <p role="status">{text.enrolled}</p>}
   </section>;
 }
