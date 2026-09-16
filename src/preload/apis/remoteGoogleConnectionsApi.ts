@@ -1,5 +1,5 @@
 import type { z } from 'zod';
-import { googleConnectionSelectorSchema, googleConsentOpenedSchema, selectedGooglePurpose, type RemoteGoogleConnectionsApi } from '../../shared/contracts/remoteGoogleConnectionsContract';
+import { googleConnectionSelectorSchema, googleConsentOpenedSchema, googleConnectionStatusResultSchema, GoogleConnectionStatusFailure, selectedGooglePurpose, type RemoteGoogleConnectionsApi } from '../../shared/contracts/remoteGoogleConnectionsContract';
 import { remoteGoogleGrantBeginSchema, remoteGoogleGrantDisclosureSchema, remoteGoogleGrantStatusSchema } from '../../shared/contracts/remoteGoogleGrantContract';
 import { googleGrantDisclosure, personalGoogleGrantDisclosure } from '../../shared/contracts/googleGrantCapabilities';
 import type { IpcClient } from '../ipcClient';
@@ -11,7 +11,11 @@ export function createRemoteGoogleConnectionsApi(client: IpcClient): RemoteGoogl
   };
   const status = async (name: 'status' | 'revoke', args: Parameters<RemoteGoogleConnectionsApi['status']>) => {
     const purpose = googleConnectionSelectorSchema.parse(args[0]).purpose;
-    const result = await request(name, googleConnectionSelectorSchema, remoteGoogleGrantStatusSchema, args);
+    // Success keeps its shape. For a status read, one allowlisted worker reason arrives as a reply field and
+    // leaves as the rejection message, which is all the context bridge preserves of an Error.
+    const result = name === 'status' ? await request(name, googleConnectionSelectorSchema, googleConnectionStatusResultSchema, args)
+      : await request(name, googleConnectionSelectorSchema, remoteGoogleGrantStatusSchema, args);
+    if ('unavailable' in result) throw new GoogleConnectionStatusFailure(result.unavailable);
     if (result.grant && result.grant.purpose !== purpose) throw Error('Google connection purpose mismatch');
     if (name === 'revoke' && result.state !== 'revoked') throw Error('Google revocation outcome unverified');
     return result;

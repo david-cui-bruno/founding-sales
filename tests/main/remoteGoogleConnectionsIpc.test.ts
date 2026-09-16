@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DelegationRuntime } from '../../src/main/delegation/delegationRuntime';
 import type { OutreachApi } from '../../src/shared/contracts/outreachContract';
-import type { RemoteGoogleConnectionsApi } from '../../src/shared/contracts/remoteGoogleConnectionsContract';
+import { GoogleConnectionStatusFailure, type RemoteGoogleConnectionsApi } from '../../src/shared/contracts/remoteGoogleConnectionsContract';
 import { googleGrantDisclosure, personalGoogleGrantDisclosure, googleScopes } from '../../src/shared/contracts/googleGrantCapabilities';
 import { createIpcClient } from '../../src/preload/ipcClient';
 import { createRemoteGoogleConnectionsApi } from '../../src/preload/apis/remoteGoogleConnectionsApi';
@@ -87,6 +87,10 @@ describe('pure Google connections IPC and preload', () => {
   const invalidResults: { name: keyof RemoteGoogleConnectionsApi; value: unknown }[] = [
     { name: 'status' as const, value: { state: 'ready', grant: { provider: 'google', subject: 'other', email: 'other@example.com', owner: 'remote', purpose: 'permitted_correspondence', capabilities: ['send'], grantedScopes: [googleScopes.send] } } },
     { name: 'status' as const, value: { state: 'unconfigured', grant: null, token: 'SECRET' } },
+    { name: 'status' as const, value: { unavailable: 'worker_unavailable' } },
+    { name: 'status' as const, value: { unavailable: 'google_unconfigured', token: 'SECRET' } },
+    { name: 'status' as const, value: { unavailable: 'google_unconfigured', state: 'ready', grant: personalGrant } },
+    { name: 'revoke' as const, value: { unavailable: 'google_unconfigured' } },
     { name: 'disclosure' as const, value: googleGrantDisclosure },
     { name: 'begin' as const, value: { state: 'consent_opened', purpose: 'permitted_correspondence' } },
     { name: 'begin' as const, value: { state: 'consent_opened', ...selector, authorizationUrl: 'https://accounts.google.com' } },
@@ -96,6 +100,22 @@ describe('pure Google connections IPC and preload', () => {
   it.each(invalidResults)('preload rejects unbound or unsafe $name response', async ({ name, value }) => {
     const api = createRemoteGoogleConnectionsApi(createIpcClient({ invoke: async () => value }));
     await expect(api[name]((name === 'begin' ? begin : selector) as never)).rejects.toThrow();
+  });
+  it('carries the one allowlisted status reason as a reply field and rethrows it typed in the preload; every other failure stays the fixed safe code', async () => {
+    const f = bridge();
+    try {
+      vi.mocked(f.google.status).mockRejectedValue(new GoogleConnectionStatusFailure('google_unconfigured'));
+      expect(await f.invoke('status')(trusted, selector)).toEqual({ unavailable: 'google_unconfigured' });
+      await expect(f.api.status(selector)).rejects.toThrow(/^google_unconfigured$/);
+      await expect(f.api.status(selector)).rejects.toBeInstanceOf(GoogleConnectionStatusFailure);
+      // Only the status read consumes the reason: the same typed failure from revoke is redacted like any other.
+      vi.mocked(f.google.revoke).mockRejectedValue(new GoogleConnectionStatusFailure('google_unconfigured'));
+      await expect(f.invoke('revoke')(trusted, selector)).rejects.toThrow(/^OUTREACH_REQUEST_FAILED$/);
+      await expect(f.api.revoke(selector)).rejects.toThrow(/^OUTREACH_REQUEST_FAILED$/);
+      // A plain error carrying the same words is not the transport's typed failure and never becomes a reason.
+      vi.mocked(f.google.status).mockRejectedValue(Error('google_unconfigured'));
+      await expect(f.api.status(selector)).rejects.toThrow(/^OUTREACH_REQUEST_FAILED$/);
+    } finally { f.dispose(); }
   });
   it.each(names)('captures immutable purpose for %s while transport is pending', async name => {
     let resolve!: (value: unknown) => void;
@@ -253,6 +273,34 @@ describe('native Google connections runtime acceptance (parent-run)', () => {
       await opened; expect(timeoutSpy).toHaveBeenCalledWith(15000); timeout.abort();
       await rejected; await f.runtime.dispose();
     } finally { timeoutSpy.mockRestore(); await f.cleanup(); }
+  });
+  const refusals: [string, () => Response, RegExp][] = [
+    ['503 google_unconfigured, what a handler built without a Google client answers', () => new Response('{"error":"google_unconfigured"}', { status: 503 }), /^google_unconfigured$/],
+    ['503 worker_unavailable', () => new Response('{"error":"worker_unavailable"}', { status: 503 }), /^OUTREACH_REQUEST_FAILED$/],
+    ['403 worker_scope_denied', () => new Response('{"error":"worker_scope_denied"}', { status: 403 }), /^OUTREACH_REQUEST_FAILED$/],
+    ['503 html body', () => new Response('<html><body>Service Unavailable</body></html>', { status: 503 }), /^OUTREACH_REQUEST_FAILED$/],
+    ['502 empty body', () => new Response(null, { status: 502 }), /^OUTREACH_REQUEST_FAILED$/],
+    ['503 bare string', () => new Response('"google_unconfigured"', { status: 503 }), /^OUTREACH_REQUEST_FAILED$/],
+    ['503 code outside the error field', () => new Response('{"reason":"google_unconfigured"}', { status: 503 }), /^OUTREACH_REQUEST_FAILED$/],
+    ['404 gateway without the route, even carrying the code', () => new Response('{"error":"google_unconfigured"}', { status: 404 }), /^OUTREACH_REQUEST_FAILED$/],
+    ['503 declaring more than the error bound', () => new Response('{"error":"google_unconfigured"}', { status: 503, headers: { 'content-length': '4096' } }), /^OUTREACH_REQUEST_FAILED$/],
+    ['503 streamed past the error bound before the code', () => new Response(new ReadableStream<Uint8Array>({ start(controller) {
+      controller.enqueue(new TextEncoder().encode(`{"pad":"${'x'.repeat(600)}",`)); controller.enqueue(new TextEncoder().encode('"error":"google_unconfigured"}')); controller.close();
+    } }), { status: 503 }), /^OUTREACH_REQUEST_FAILED$/],
+    ['200 reply shaped like the bridge reason', () => new Response('{"unavailable":"google_unconfigured"}', { status: 200 }), /^OUTREACH_REQUEST_FAILED$/],
+    ['200 error-shaped body', () => new Response('{"error":"google_unconfigured"}', { status: 200 }), /^OUTREACH_REQUEST_FAILED$/],
+  ];
+  it.each(refusals)('surfaces %s through the real runtime, IPC and preload as exactly its allowlisted reason or the fixed safe code', async (_label, reply, expected) => {
+    const f = await fixture({ fetch: async () => reply() });
+    const unregister = registerOutreachIpc({ provider: outreach(), delegation: f.runtime });
+    const api = createRemoteGoogleConnectionsApi(createIpcClient({ invoke: async (channel, ...args) => registeredIpcHandler(electron.handle, channel)(trusted, ...args) }));
+    try {
+      await expect(api.status(selector)).rejects.toThrow(expected);
+      // Only the status read consumes a worker code; the same reply to revoke stays generic.
+      await expect(api.revoke(selector)).rejects.toThrow(/^OUTREACH_REQUEST_FAILED$/);
+      expect(f.fetcher).toHaveBeenCalledTimes(2);
+      expect(f.db.raw.prepare('SELECT * FROM delegated_commands').all()).toEqual([]);
+    } finally { unregister(); await f.cleanup(); }
   });
   it('reads status/disclosure without sync and revokes purpose without auto-configuration', async () => {
     const f = await fixture({ fetch: async (raw, init) => {
