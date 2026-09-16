@@ -1,6 +1,6 @@
 # FSS delivery roadmap
 
-Updated 2026-09-16 (delivery status as of the PR 62 merge, 05:33 UTC). This is the active product roadmap. Older design documents are historical context, not a required Superpowers execution process.
+Updated 2026-09-16 (delivery status as of the f941035 installation and the first real-company draft walkthrough). This is the active product roadmap. Older design documents are historical context, not a required Superpowers execution process.
 
 ## The outcome
 
@@ -30,8 +30,9 @@ These local capabilities and regression results do not all describe the installe
 
 ## Delivered checkpoint: September 16
 
-- **Installed:** build `2364218`, ASAR hash prefix `08d21a2d`, following a backed-up, separately approved installation on 15 September. No newer build has been installed. Everything merged since then is source only.
+- **Installed:** build `f941035` (main after PRs 63 to 65), ASAR hash prefix `7a374f3e`, installed on 16 September after David ran the full `verify:release` gate himself (31 of 31 packaged end-to-end checks; the native startup dialog check needs an Accessibility-trusted terminal), took the app's own verified pre-release database copy (schema 25, 333 MB), and kept the previous `2364218` bundle aside. First launch migrated the founder database from schema 25 to 26 and retained the Lenox research facts and saved source.
 - **Observed in the installed app:** one explicitly authorized Lenox company-research run at 18:40 UTC on 15 September saved four facts. Research was then paused, and the saved result remained after restart. This is evidence for that selected research and retention path, not automatic discovery, a useful generated draft, a send, or useful daily automation.
+- **Observed in the installed app, 16 September (first real-company UNSENT draft journey):** on Lenox, using only the four facts and one source saved on 15 September, one explicit model preparation produced a draft in 24 seconds; the founder edited subject and body, saved locally (revision 2), navigated to Today and back, and reopened the same edited text. Nothing was sent, approved, enrolled or researched. Honest limits: the draft was grounded but generic (long subject, no value proposition, unnamed sign-off) and needed tightening before it was usable; three of four saved facts repeated one company-history paragraph; the run took about ten minutes excluding an interruption and included automation overhead, so it is not a human-speed benchmark. Friction recorded for the next slices: the inbox review required manual copying of the business address and quote from the saved source; two next-step controls did not bring their target into view; the account card stayed stale after admission until navigation; Today showed no continuation for the saved local draft; worker-scope holds cluttered the local path. Settings showed cloud work paused on this Mac and phone handoff needing confirmation, so the manual call-campaign walkthrough has not run.
 - **Merged:** PRs 45 to 62 are all merged. Main is `12c1f97`, the PR 62 merge on 16 September at 05:33 UTC. The last three merged that morning behind one combined gate:
   - [PR 60, ranked preparation queue](https://github.com/david-cui-bruno/founding-sales/pull/60): saved companies on Accounts ordered by local evidence, with one next-step control each. Local reads only; not an automatic daily queue and no worker ownership.
   - [PR 61, one-company LinkedIn campaign launch](https://github.com/david-cui-bruno/founding-sales/pull/61): save, approve and enroll one manual-LinkedIn template from a clean workspace on the real Campaigns route. Enrollment creates a manual preparation item; nothing is sent.
