@@ -4,7 +4,7 @@ import { AxeBuilder } from '@axe-core/playwright';
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
 import type {} from '../fixtures/nativeDeskBrowser';
-import { createCallCampaignDraft } from '../../src/shared/contracts/callCampaignDraft';
+import { createCallCampaignDraft, createLinkedInCampaignDraft } from '../../src/shared/contracts/callCampaignDraft';
 import { accountFingerprint } from '../../src/main/domain/accounts/accountEvidence';
 
 // This exercises real renderer components, not Electron IPC or live services.
@@ -173,6 +173,89 @@ test('saved manual-call template has separate accessible review and route contro
     }
   }
   expect(await methods(page)).not.toContain('delegation.submit');
+  await assertClean(page,state);
+});
+
+test('saved manual-LinkedIn template offers a channel choice, LinkedIn review and company-level route controls without automatic commands', async ({page}, testInfo) => {
+  const state = await mount(page);
+  const version = createLinkedInCampaignDraft({campaignId:'browser-li-campaign',versionId:'browser-li-version',stepId:'browser-li-step',accountId:'a',offer:'Discuss a simpler maintenance follow-up workflow.'});
+  // Explicit saved projections only. The real owner-command path is covered by
+  // linkedInCampaignLaunchWorkflow, not a second simulated browser worker.
+  await page.evaluate(({version,snapshotHash}) => {
+    const f = window.nativeDeskBrowser.fixture;
+    const snapshot = f.snapshot();
+    snapshot.campaigns = [{version,snapshotHash,caps:[],enrollments:[]}];
+    snapshot.accounts[0].routes = [
+      {id:'browser-phone',accountId:'a',personId:null,version:1,channel:'phone',value:'+1 212 555 0100',purpose:'business',verification:'published',evidenceIds:['fixture-source']},
+      {id:'browser-li-company',accountId:'a',personId:null,version:1,channel:'linkedin',value:'https://www.linkedin.com/in/fictional-company',purpose:'business',verification:'published',evidenceIds:['fixture-source']},
+      {id:'browser-li-person',accountId:'a',personId:'person-a',version:1,channel:'linkedin',value:'https://www.linkedin.com/in/fictional-person',purpose:'business',verification:'published',evidenceIds:['fixture-source']},
+      {id:'browser-li-page',accountId:'a',personId:null,version:1,channel:'linkedin',value:'https://www.linkedin.com/company/fictional-company',purpose:'business',verification:'published',evidenceIds:['fixture-source']},
+    ];
+    f.setSnapshot(snapshot);
+    window.nativeDeskBrowser.navigate('campaigns');
+  }, {version,snapshotHash:accountFingerprint(version)});
+  // Channel choice on the draft form: call stays the default, LinkedIn relabels only the save action.
+  await page.getByRole('button', {name:'New call campaign',exact:true}).click();
+  const draftForm = page.getByRole('region', {name:'New call campaign',exact:true});
+  const channel = draftForm.getByRole('combobox', {name:'Channel',exact:true});
+  await expect(channel).toHaveValue('call');
+  await expect(draftForm.getByRole('button', {name:'Save call campaign draft',exact:true})).toBeVisible();
+  await channel.selectOption('linkedin');
+  await expect(draftForm.getByRole('button', {name:'Save LinkedIn campaign draft',exact:true})).toBeDisabled();
+  await expect(draftForm.getByText('Saves an unapproved LinkedIn campaign draft. This does not enroll accounts, prepare or send a note, or start outreach.')).toBeVisible();
+  await page.locator('[data-row-key="campaign:browser-li-version"]').click();
+  await expect(page.getByRole('heading',{name:'LinkedIn campaign draft',exact:true})).toBeVisible();
+  await expect(page.getByRole('region',{name:'Call campaign enrollment',exact:true})).toHaveCount(0);
+  const form = page.getByRole('region',{name:'LinkedIn campaign enrollment',exact:true});
+  const approve = form.getByRole('button',{name:'Approve LinkedIn campaign',exact:true});
+  await expect(approve).toBeDisabled();
+  await form.getByRole('checkbox',{name:'I reviewed this company, offer, LinkedIn step and lifetime limits',exact:true}).check();
+  await expect(approve).toBeEnabled();
+  await expect(form.getByRole('combobox')).toHaveCount(0);
+  expect(await methods(page)).not.toContain('delegation.submit');
+  await page.evaluate(() => {
+    const f = window.nativeDeskBrowser.fixture;
+    const snapshot = f.snapshot();
+    snapshot.campaigns[0].version.approvedAt = '2026-09-09T12:00:00.000Z';
+    snapshot.ownerStatus[0].executionVersion!++;
+    f.setSnapshot(snapshot);
+    window.nativeDeskBrowser.refresh();
+  });
+  await expect(page.getByRole('heading',{name:'Reviewed LinkedIn campaign',exact:true})).toBeVisible();
+  const route = form.getByRole('combobox',{name:'Business LinkedIn route',exact:true});
+  const enroll = form.getByRole('button',{name:'Enroll company for manual LinkedIn note',exact:true});
+  await expect(form.getByRole('combobox',{name:'Business phone route',exact:true})).toHaveCount(0);
+  await expect(route).toHaveValue('');
+  expect(await route.locator('option').evaluateAll(options => options.map(option => (option as HTMLOptionElement).value))).toEqual(['','browser-li-company']);
+  await expect(enroll).toBeDisabled();
+  await route.selectOption('browser-li-company');
+  await expect(enroll).toBeDisabled();
+  await form.getByRole('checkbox',{name:'I want this company added to the manual LinkedIn queue',exact:true}).check();
+  await expect(enroll).toBeEnabled();
+  await expect(form.getByText('Enrollment adds a due manual LinkedIn preparation item. It does not send a message, connect, or grant contact permission.')).toBeVisible();
+  await expect(page.getByText('No active LinkedIn enrollment is available. Creating or enrolling a LinkedIn campaign is not available here.')).toBeVisible();
+  for (const width of [1440,1050]) {
+    await page.setViewportSize({width,height:700});
+    for (const theme of ['light','dark'] as const) {
+      await page.evaluate(theme => window.nativeDeskBrowser.preferences(theme,'compact'),theme);
+      const detail = page.locator('.native-desk__detail');
+      expect((await detail.evaluate(el => getComputedStyle(el).overflowY)),'campaign review must remain naturally scrollable').not.toBe('hidden');
+      await expect(route).toBeVisible();
+      const geometry = await route.evaluate(el => {
+        const style = getComputedStyle(el);
+        return {content:el.clientHeight-parseFloat(style.paddingTop)-parseFloat(style.paddingBottom),text:parseFloat(style.lineHeight)||parseFloat(style.fontSize)*1.2};
+      });
+      expect(geometry.content,'selected LinkedIn route must not be vertically clipped').toBeGreaterThanOrEqual(geometry.text);
+      await route.focus();
+      await expect(route).toBeFocused();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+      const axe = await new AxeBuilder({page}).analyze();
+      expect(axe.violations.filter(item=>item.impact==='serious'||item.impact==='critical')).toEqual([]);
+      await page.screenshot({path:testInfo.outputPath(`linkedin-campaign-enrollment-${width}-${theme}.png`),fullPage:true});
+    }
+  }
+  expect(await methods(page)).not.toContain('delegation.submit');
+  expect((await methods(page)).some(method => method.startsWith('linkedin.'))).toBe(false);
   await assertClean(page,state);
 });
 
