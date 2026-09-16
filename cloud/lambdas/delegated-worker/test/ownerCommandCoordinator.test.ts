@@ -313,6 +313,35 @@ it.each(['selected-large','ordinary-large','utf8-overlimit','ascii-overlimit','i
  else expect(await auth.store.list('COMMAND#')).toEqual([]);
 });
 
+// The gateway admits a body over 64 KiB only for the two owner commands that carry a saved record, each capped at a
+// 200000-byte payload inside the 204096-byte body. Every other kind keeps the existing refusal.
+it.each(['refresh-large','other-large','refresh-payload-overlimit','refresh-body-overlimit'] as const)('bounds actual HTTP saved-record resubmission by UTF-8 bytes: %s',async scenario=>{
+ const f=await refreshFixture();const handler=createWorkerHandler({auth:f.auth,host:'worker.example.test'});
+ const commandsBefore=(await f.store.list('COMMAND#')).length;
+ // Sources of 1000 characters are appended until the payload first exceeds the target, so the overshoot stays small.
+ const grow=(target:number)=>{const sources=[...f.appended.sources];
+  while(Buffer.byteLength(JSON.stringify({record:{...f.appended,sources},asOf:f.later,expectedResearchRevision:1}),'utf8')<=target)sources.push({id:`large-${sources.length}`,url:`https://example.invalid/large-${sources.length}`,fetchedAt:f.later,sha256:'c'.repeat(64),excerpt:'x'.repeat(1000),permitted:true});
+  return {...f.appended,sources};};
+ const refresh=(record:AccountRecord)=>({...envelope,commandId:randomUUID(),expectedVersion:f.getVersion(),kind:'refresh-selected-account-record',payload:{record,asOf:f.later,expectedResearchRevision:1}});
+ const command=scenario==='other-large'?{...envelope,commandId:randomUUID(),expectedVersion:f.getVersion(),kind:'pause',payload:{reason:'explicit'}}:refresh(grow(scenario==='refresh-large'?70000:scenario==='refresh-payload-overlimit'?200000:204096));
+ const body=scenario==='other-large'?JSON.stringify(command)+' '.repeat(70000):JSON.stringify(command);
+ const bytes=Buffer.byteLength(body,'utf8');expect(bytes).toBeGreaterThan(65536);
+ if(scenario==='refresh-payload-overlimit'){expect(Buffer.byteLength(JSON.stringify(command.payload),'utf8')).toBeGreaterThan(200000);expect(bytes).toBeLessThanOrEqual(204096);}
+ if(scenario==='refresh-body-overlimit')expect(bytes).toBeGreaterThan(204096);
+ const result=await handler({version:'2.0',rawPath:'/commands',rawQueryString:'',headers:{host:'worker.example.test','x-forwarded-proto':'https',authorization:f.bearer},body,requestContext:{domainName:'worker.example.test',http:{method:'POST',sourceIp:'fictional'}}});
+ if(scenario==='refresh-large'){
+  expect(result.statusCode).toBe(200);
+  expect(JSON.parse(result.body)).toMatchObject({commandId:command.commandId,status:'applied'});
+  const record=f.options.dynamo.inspect('ACCOUNT#account') as AccountRecord;
+  expect(record.sources.length).toBeGreaterThan(f.appended.sources.length);expect(record.routes).toEqual(f.appended.routes);
+  expect(await f.lastEvent()).toMatchObject({kind:'account.refreshed',payload:{commandId:command.commandId}});
+ } else {
+  expect(result.statusCode).toBe(400);
+  expect(f.options.dynamo.inspect('ACCOUNT#account')).toEqual(f.stored);
+  expect(await f.store.list('COMMAND#')).toHaveLength(commandsBefore);
+ }
+});
+
 import { TransactWriteItemsCommand } from '@aws-sdk/client-dynamodb';
 import { createWorkerHandler } from '../src/handler';
 

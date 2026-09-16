@@ -31,8 +31,13 @@ import {publicDelegationCommandSchema,type DelegatedPhoneHandoffResult,type Dele
 import {approveMeetingFromReplySchema,getMeetingApprovalSchema,meetingApprovalStatusSchema,schedulingEvidence,type ApproveMeetingFromReply} from '../../shared/contracts/meetingContract';
 import {resolveLocalTime} from '../../shared/meetings/schedulingRules';
 type ApproveMeetingCommand=Extract<DelegationCommand,{kind:'approve-meeting'}>;
-/** Largest owner command body the worker gateway admits for anything but a selected bootstrap. */
-const MAX_REFRESH_COMMAND_BYTES=65536;
+/** What the worker gateway (cloud/lambdas/delegated-worker/src/handler.ts) admits on POST /commands for a saved-record
+ * command: the whole body up to 204096 bytes and the payload up to 200000 bytes, both counted in UTF-8. */
+export const REFRESH_COMMAND_LIMITS=Object.freeze({maxBodyBytes:204096,maxPayloadBytes:200000});
+/** A resubmission the gateway would refuse on every retry is never queued, so no unsendable identity can hold the company. */
+export function assertRefreshCommandTransportable(command:{commandId:string;payload:unknown}):void{
+ if(Buffer.byteLength(JSON.stringify(command.payload),'utf8')>REFRESH_COMMAND_LIMITS.maxPayloadBytes||Buffer.byteLength(JSON.stringify(command),'utf8')>REFRESH_COMMAND_LIMITS.maxBodyBytes)throw Error('refresh_record_too_large');
+}
 /** The founder-visible binding of one approval. The same binding reuses the live
  * command; a different binding against a live approval is a conflict, never a second command. */
 function meetingApprovalBinding(value:ApproveMeetingCommand|ApproveMeetingFromReply):string{
@@ -296,9 +301,7 @@ export function createDelegationRuntime(input:{databaseGate:{withDatabase<T>(fn:
       const asOf=input.clock.now();
       const record=exportSelectedAccountRecord({database,workspaceId:pairing.workspaceId,accountId:request.accountId,asOf,researchRevision:cursor.aggregate_version});
       command=refreshSelectedAccountRecordCommandSchema.parse({...request,workspaceId:pairing.workspaceId,expectedAuthorityGeneration:authority.generation,expectedVersion:version,kind:'refresh-selected-account-record',payload:{record,asOf,expectedResearchRevision:cursor.aggregate_version}});
-      // The worker gateway (cloud/lambdas/delegated-worker/src/handler.ts) admits bodies over 64 KiB only for bootstrap.
-      // A larger refresh would be refused on every retry and sit pending forever, so it is never queued at all.
-      if(Buffer.byteLength(JSON.stringify(command),'utf8')>MAX_REFRESH_COMMAND_BYTES)throw Error('refresh_record_too_large');
+      assertRefreshCommandTransportable(command);
     }
     await current.client.submit(command);await current.client.sync(signal);const receipt=repository.commandStatus(request.commandId);if(!receipt)throw Error('refresh_receipt_missing');return receipt;
   });},

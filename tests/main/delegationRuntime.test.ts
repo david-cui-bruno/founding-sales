@@ -1,7 +1,12 @@
 import {expect,it,vi} from 'vitest';
 import {createPmFixture,PM_NOW} from '../fixtures/pmAccounts';
-import {createDelegationRuntime} from '../../src/main/delegation/delegationRuntime';
+import {createDelegationRuntime,assertRefreshCommandTransportable,REFRESH_COMMAND_LIMITS} from '../../src/main/delegation/delegationRuntime';
+import {exportSelectedAccountRecord} from '../../src/main/delegation/selectedAccountSnapshot';
 import type {StoredPairing} from '../../src/main/delegation/pairingStore';
+// The real exporter refuses records over 200000 bytes on its own. To prove the gateway guard in the runtime, one call is
+// handed a record the exporter never produces; every other call runs the real exporter unchanged.
+const snapshotModule=vi.hoisted(()=>({actual:null as typeof import('../../src/main/delegation/selectedAccountSnapshot')|null}));
+vi.mock('../../src/main/delegation/selectedAccountSnapshot',async importOriginal=>{const actual=await importOriginal<typeof import('../../src/main/delegation/selectedAccountSnapshot')>();snapshotModule.actual=actual;return {...actual,exportSelectedAccountRecord:vi.fn(actual.exportSelectedAccountRecord)};});
 const pair:StoredPairing={endpoint:'https://worker.example.test',workspaceId:'ws',pairingId:'11111111-1111-4111-8111-111111111111',credential:'a'.repeat(43),emergencyCredential:'b'.repeat(43),generation:0,scopes:['commands:write','events:read']};
 it('normal local runtime is inactive without pairing and never touches HTTP',async()=>{
  const f=await createPmFixture();let calls=0;
@@ -111,7 +116,7 @@ it('resubmits the saved record to the owning worker with one live command per ac
  const ids=['a1','a2','a3','a4'].map(suffix=>`aaaaaaaa-aaaa-4aaa-8aaa-${suffix.padEnd(12,'0')}`);
  try{
   const account=accounts.create({commandId:randomUUID(),name:'Selected Fictional PM',domain:null});
-  const workerRecord=async()=>(await auth.store.get<{routes:{id:string}[];researchRevision:number;account:{version:number}}>(`ACCOUNT#${account.id}`))!.data;
+  const workerRecord=async()=>(await auth.store.get<{routes:{id:string}[];sources:{id:string}[];researchRevision:number;account:{version:number}}>(`ACCOUNT#${account.id}`))!.data;
   const researchCursor=()=>f.db.raw.prepare("SELECT aggregate_version FROM delegated_event_cursors WHERE workspace_id='ws' AND account_id=? AND stream='research'").get(account.id);
   // Before any copy exists the freshness is honestly unknown; before the worker owns the company nothing is sent.
   expect(await runtime.getSelectedAccountFreshness({accountId:account.id})).toMatchObject({accountId:account.id,state:'unknown',sentFingerprint:null,sentAt:null});
@@ -149,14 +154,35 @@ it('resubmits the saved record to the owning worker with one live command per ac
   // Sending an unchanged record again is applied with duplicate semantics and keeps the freshness current.
   expect(await runtime.refreshSelectedAccount({commandId:ids[3]!,accountId:account.id})).toMatchObject({commandId:ids[3],status:'applied'});
   expect(await runtime.getSelectedAccountFreshness({accountId:account.id})).toMatchObject({state:'current'});
-  // A record the worker gateway cannot admit (over 64 KiB, bootstrap only) is never queued: no stuck identity, no HTTP.
-  now='2026-09-08T12:02:00.000Z';const attempts=sent.length;
+  // A saved record over 64 KiB rides the gateway's saved-record allowance (204096-byte body, 200000-byte payload): applied, not refused.
+  now='2026-09-08T12:02:00.000Z';
   accounts.admitEvidence({commandId:randomUUID(),accountId:account.id,expectedVersion:2,claims:[],routes:[],sources:['b','c','d','e','f','0'].map(digit=>({id:`large-${digit}`,url:'https://example.invalid/team',fetchedAt:now,sha256:digit.repeat(64),excerpt:digit.repeat(11000),permitted:true}))});
   expect(await runtime.getSelectedAccountFreshness({accountId:account.id})).toMatchObject({state:'stale'});
-  await expect(runtime.refreshSelectedAccount({commandId:'aaaaaaaa-aaaa-4aaa-8aaa-a50000000000',accountId:account.id})).rejects.toThrow('refresh_record_too_large');
-  expect(new DelegationRepository({database:f.db,workspaceId:'ws',clock}).pendingCommands()).toEqual([]);
-  expect(new DelegationRepository({database:f.db,workspaceId:'ws',clock}).getCommand('aaaaaaaa-aaaa-4aaa-8aaa-a50000000000')).toBeNull();
-  expect(sent).toHaveLength(attempts);
+  const largeId='aaaaaaaa-aaaa-4aaa-8aaa-a50000000000';
+  expect(await runtime.refreshSelectedAccount({commandId:largeId,accountId:account.id})).toMatchObject({commandId:largeId,status:'applied'});
+  const repository=new DelegationRepository({database:f.db,workspaceId:'ws',clock});
+  expect(Buffer.byteLength(JSON.stringify(repository.getCommand(largeId)),'utf8')).toBeGreaterThan(65536);
+  expect((await workerRecord()).sources.map(source=>source.id).sort()).toEqual(['large-0','large-b','large-c','large-d','large-e','large-f','local-source']);
+  expect(await runtime.getSelectedAccountFreshness({accountId:account.id})).toMatchObject({state:'current'});
+  // A record the gateway would refuse on every retry (payload over 200000 bytes) is never queued: no stuck identity, no HTTP.
+  const attempts=sent.length;const tooLargeId='aaaaaaaa-aaaa-4aaa-8aaa-a60000000000';
+  vi.mocked(exportSelectedAccountRecord).mockImplementationOnce(input=>{const record=snapshotModule.actual!.exportSelectedAccountRecord(input);return {...record,sources:[...record.sources,...Array.from({length:12},(_,index)=>({id:`over-${index}`,url:'https://example.invalid/team',fetchedAt:now,sha256:'d'.repeat(64),excerpt:'y'.repeat(12000),permitted:true}))]};});
+  await expect(runtime.refreshSelectedAccount({commandId:tooLargeId,accountId:account.id})).rejects.toThrow('refresh_record_too_large');
+  expect(repository.pendingCommands()).toEqual([]);expect(repository.getCommand(tooLargeId)).toBeNull();expect(sent).toHaveLength(attempts);
   expect(await auth.store.list('GOOGLE_GRANT#')).toEqual([]);
  }finally{await runtime.dispose();f.close();}
+});
+
+it('refuses a resubmission the worker gateway could never admit, on the payload limit or the whole-body limit, counting UTF-8 bytes',()=>{
+ expect(REFRESH_COMMAND_LIMITS).toEqual({maxBodyBytes:204096,maxPayloadBytes:200000});
+ const payload=(length:number)=>({record:'a'.repeat(length)});
+ const within={commandId:'x',payload:payload(REFRESH_COMMAND_LIMITS.maxPayloadBytes-13)};
+ expect(Buffer.byteLength(JSON.stringify(within.payload),'utf8')).toBe(REFRESH_COMMAND_LIMITS.maxPayloadBytes);
+ expect(()=>assertRefreshCommandTransportable(within)).not.toThrow();
+ expect(()=>assertRefreshCommandTransportable({commandId:'x',payload:payload(REFRESH_COMMAND_LIMITS.maxPayloadBytes-12)})).toThrow('refresh_record_too_large');
+ const bodyOver={commandId:'x'.repeat(4200),payload:within.payload};
+ expect(Buffer.byteLength(JSON.stringify(bodyOver),'utf8')).toBeGreaterThan(REFRESH_COMMAND_LIMITS.maxBodyBytes);
+ expect(()=>assertRefreshCommandTransportable(bodyOver)).toThrow('refresh_record_too_large');
+ // 70000 three-byte characters are 210000 bytes although the string is well under the limit in characters.
+ expect(()=>assertRefreshCommandTransportable({commandId:'x',payload:{record:'界'.repeat(70000)}})).toThrow('refresh_record_too_large');
 });
