@@ -29,6 +29,33 @@ it('exposes an explicit intake read inside actual worker preparation without aut
   expect(f.calls).toEqual([]);
 });
 
+const ownedLine = 'Intake configuration exists only for a company the worker owns. Copy and delegate this company first.';
+it.each([['copy', true], ['delegate', true], ['held', false]] as const)('waits at stage %s: the read control is disabled, the copy-and-delegate line is shown %s, and no request is sent', (stage, shown) => {
+  const f = fixture();
+  const owner = f.props.snapshot.ownerStatus.find(o => o.accountId === 'a')!;
+  if (stage === 'held') owner.pendingCommands = [{ commandId: 'queued-preparation', status: 'pending', authorityGeneration: 1, aggregateVersion: 1, reason: null }];
+  else {
+    owner.status = 'unknown';
+    owner.authority = stage === 'copy' ? null : { accountId: 'a', owner: 'local', state: 'local', generation: 0 };
+    owner.executionVersion = stage === 'copy' ? null : 1;
+  }
+  f.setSnapshot(f.props.snapshot);
+  const view = render(<CallCampaignDraft {...f.props} />);
+  review();
+  const read = () => screen.getByRole<HTMLButtonElement>('button', { name: 'Read intake configuration' });
+  expect(read().disabled).toBe(true);
+  expect(!!screen.queryByText(ownedLine)).toBe(shown);
+  fireEvent.click(read());
+  view.unmount();
+  // The component holds the same line on its own, whatever the parent's guard says.
+  render(<AccountIntakeRead {...inlineProps(f)} stage={stage} />);
+  expect(read().disabled).toBe(true);
+  expect(!!screen.queryByText(ownedLine)).toBe(shown);
+  fireEvent.click(read());
+  expect(f.read).not.toHaveBeenCalled();
+  expect(f.calls).toEqual([]);
+});
+
 const absent: AccountPreparation = {
   workspaceId: 'ws', accountId: 'a', pairingId: 'pair', checkedAt: '2026-09-16T02:00:00.000Z',
   authority: { accountId: 'a', owner: 'worker', generation: 1, state: 'active' },
@@ -42,7 +69,7 @@ function deferred() {
   return { promise, resolve, reject };
 }
 function inlineProps(f: ReturnType<typeof fixture>) {
-  return { api: f.api, workspaceId: 'ws', accountId: 'a', disabled: false, scopeKey: 'initial' };
+  return { api: f.api, workspaceId: 'ws', accountId: 'a', disabled: false, stage: 'active' as const, scopeKey: 'initial' };
 }
 it('reads absence through the parent without synchronizing or sending commands, and preserves the save gate', async () => {
   const f = fixture();
@@ -181,4 +208,37 @@ it('nests the intake configuration controls after a successful read, bound to th
   // The parent's guard closes the controls with the read.
   view.rerender(<AccountIntakeRead {...props} disabled />);
   expect(screen.queryByRole('region', { name: 'Intake configuration' })).toBeNull();
+});
+const unreachableLine = 'The worker could not be reached or refused the request. Read again to retry explicitly.';
+it.each([
+  ['preparation_unavailable', 'The worker has no record of this company yet.'],
+  ['worker_scope_denied', "This Mac's pairing is not allowed to read this company."],
+  ['preparation_changed', "The worker's record changed during the read. Read again."],
+  ['worker_route_unavailable', 'The connected worker does not offer this request yet. It may need to be updated.'],
+  ['worker_unavailable', unreachableLine],
+  ['worker_invalid_request', unreachableLine],
+  ['worker_unauthorized', unreachableLine],
+  ['OUTREACH_REQUEST_FAILED', unreachableLine],
+  ['PRIVATE token', unreachableLine],
+])('names a %s read failure with exactly one honest line, never the code, and no automatic retry', async (code, line) => {
+  const f = fixture();
+  f.read.mockRejectedValueOnce(Error(code));
+  render(<AccountIntakeRead {...inlineProps(f)} />);
+  clickRead();
+  await screen.findByText(line);
+  expect(screen.getAllByRole('status')).toHaveLength(1);
+  expect(screen.queryByText(new RegExp(code))).toBeNull();
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+  expect(f.read).toHaveBeenCalledTimes(1);
+  expect(screen.queryByRole('region', { name: 'Intake configuration' })).toBeNull();
+  expect(f.calls).toEqual([]);
+});
+it('never promotes a rejection that is not an Error into a worker reason', async () => {
+  const f = fixture();
+  f.read.mockImplementationOnce(() => Promise.reject('preparation_unavailable'));
+  render(<AccountIntakeRead {...inlineProps(f)} />);
+  clickRead();
+  await screen.findByText(unreachableLine);
+  expect(screen.queryByText('The worker has no record of this company yet.')).toBeNull();
+  expect(f.calls).toEqual([]);
 });

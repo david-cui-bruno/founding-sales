@@ -26,13 +26,17 @@ import { accountPreparationSchema, type AccountPreparation } from '../../src/sha
 import { ConditionalCommandHarness } from '../../cloud/lambdas/delegated-worker/test/sdkHarness';
 import { WorkerAuth } from '../../cloud/lambdas/delegated-worker/src/workerAuth';
 import { createWorkerHandler } from '../../cloud/lambdas/delegated-worker/src/handler';
+import { createElement } from 'react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { AccountIntakeRead } from '../../src/renderer/features/campaigns/AccountIntakeRead';
+import { setDailySessionScope } from '../../src/renderer/features/today/dailySessionScope';
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(new Date(PM_NOW));
   vi.stubGlobal('fetch', vi.fn(async () => { throw Error('Real network forbidden'); }));
 });
-afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 // Narrow composition from guidedCampaignEntrypoint. No UI engine, source/config
 // seed, fabricated public API, direct AUTH seed or owner success stub.
@@ -488,4 +492,135 @@ it('rejects a schema-valid coherent foreign pairing reply against the captured t
     expect(schemaAccepted).toBe(true);
     assertReadOnly(f, before);
   } finally { await f.finish(); }
+}, 20_000);
+
+// A refused read names the worker's own bounded reason; the panel shows that one line and nothing else.
+const noRecordLine = 'The worker has no record of this company yet.';
+const routeLine = 'The connected worker does not offer this request yet. It may need to be updated.';
+const reachLine = 'The worker could not be reached or refused the request. Read again to retry explicitly.';
+function mountRead(f: Fixture, accountId = f.selected.id) {
+  setDailySessionScope(f.api.delegation, f.workspaceId);
+  render(createElement(AccountIntakeRead, { api: f.api, workspaceId: f.workspaceId, accountId, disabled: false, stage: 'active', scopeKey: 'walkthrough-e' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Read intake configuration' }));
+}
+async function settled() { await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); }); }
+
+it('surfaces the worker\'s own no-record reason for a company that was never copied, and the panel says so once without retrying', async () => {
+  const f = await fixture();
+  try {
+    for (const key of [`ACCOUNT#${f.selected.id}`, `AUTH#${f.selected.id}`]) expect(f.dynamo.inspect(key)).toBeUndefined();
+    let before = purityBaseline(f);
+    await expect(readPreparation(f)).rejects.toThrow(/^preparation_unavailable$/);
+    assertReadOnly(f, before);
+    // Walkthrough E through the actual bridge: the local view claims worker ownership, the worker has no record.
+    before = purityBaseline(f);
+    mountRead(f);
+    await screen.findByText(noRecordLine);
+    expect(screen.getAllByRole('status')).toHaveLength(1);
+    expect(screen.queryByText(/preparation_unavailable|could not be read/)).toBeNull();
+    await settled();
+    assertReadOnly(f, before);
+    for (const key of [`ACCOUNT#${f.selected.id}`, `AUTH#${f.selected.id}`]) expect(f.dynamo.inspect(key)).toBeUndefined();
+  } finally { cleanup(); await f.finish(); }
+}, 20_000);
+
+it.each<[string, number, string | null, RegExp]>([
+  ['403 worker_scope_denied', 403, '{"error":"worker_scope_denied"}', /^worker_scope_denied$/],
+  ['503 worker_unavailable', 503, '{"error":"worker_unavailable"}', /^worker_unavailable$/],
+  ['400 worker_invalid_request', 400, '{"error":"worker_invalid_request"}', /^worker_invalid_request$/],
+  ['409 preparation_changed', 409, '{"error":"preparation_changed"}', /^preparation_changed$/],
+  ['404 gateway without the route', 404, '{"message":"Not Found"}', /^worker_route_unavailable$/],
+  ['404 html body', 404, '<html><body>Not Found</body></html>', /^worker_route_unavailable$/],
+  ['404 empty body', 404, null, /^worker_route_unavailable$/],
+  ['401 not allowlisted', 401, '{"error":"worker_unauthorized"}', /^OUTREACH_REQUEST_FAILED$/],
+  ['409 unknown code', 409, '{"error":"PRIVATE"}', /^OUTREACH_REQUEST_FAILED$/],
+  ['409 code outside the error field', 409, '{"reason":"preparation_unavailable"}', /^OUTREACH_REQUEST_FAILED$/],
+  ['409 malformed json', 409, '{', /^OUTREACH_REQUEST_FAILED$/],
+  ['409 empty body', 409, null, /^OUTREACH_REQUEST_FAILED$/],
+  ['503 bare string', 503, '"worker_unavailable"', /^OUTREACH_REQUEST_FAILED$/],
+  ['200 error-shaped body', 200, '{"error":"preparation_unavailable"}', /^OUTREACH_REQUEST_FAILED$/],
+])('surfaces only an allowlisted code from a small non-OK reply: %s', async (_case, status, body, expected) => {
+  const f = await fixture();
+  try {
+    await prepare(f);
+    f.transformReply(async () => new Response(body, { status }));
+    const before = purityBaseline(f);
+    await expect(readPreparation(f)).rejects.toThrow(expected);
+    assertReadOnly(f, before);
+    f.transformReply();
+    expect((await readPreparation(f)).accountId).toBe(f.selected.id);
+  } finally { await f.finish(); }
+}, 20_000);
+
+it('reads at most the small error bound of a non-OK reply and cancels an oversized one without surfacing its late code', async () => {
+  const f = await fixture();
+  let pulls = 0, cancelled = false;
+  try {
+    await prepare(f);
+    f.transformReply(async () => new Response(new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls++;
+        if (pulls === 1) controller.enqueue(new TextEncoder().encode(`{"padding":"${'x'.repeat(600)}"`));
+        else if (pulls === 2) controller.enqueue(new TextEncoder().encode(',"error":"preparation_unavailable"}'));
+        else controller.close();
+      },
+      cancel() { cancelled = true; },
+    }, { highWaterMark: 0 }), { status: 409 }));
+    const before = purityBaseline(f);
+    await expect(readPreparation(f)).rejects.toThrow(/^OUTREACH_REQUEST_FAILED$/);
+    expect(cancelled).toBe(true);
+    expect(pulls).toBe(1);
+    assertReadOnly(f, before);
+  } finally { await f.finish(); }
+}, 20_000);
+
+it.each<[string, number, Record<string, string>, RegExp]>([
+  ['a non-OK reply declaring more than the error bound', 409, { 'content-length': '4096' }, /^OUTREACH_REQUEST_FAILED$/],
+  ['a 404 route miss with a large html body', 404, {}, /^worker_route_unavailable$/],
+])('never reads the body of %s', async (_case, status, headers, expected) => {
+  const f = await fixture();
+  let pulls = 0, cancelled = false;
+  try {
+    await prepare(f);
+    f.transformReply(async () => new Response(new ReadableStream<Uint8Array>({
+      pull(controller) { pulls++; controller.enqueue(new TextEncoder().encode('<html>'.repeat(1024))); },
+      cancel() { cancelled = true; },
+    }, { highWaterMark: 0 }), { status, headers }));
+    const before = purityBaseline(f);
+    await expect(readPreparation(f)).rejects.toThrow(expected);
+    expect(pulls).toBe(0);
+    expect(cancelled).toBe(true);
+    assertReadOnly(f, before);
+  } finally { await f.finish(); }
+}, 20_000);
+
+it('keeps a transport failure generic: the worker was never reached, so no worker reason exists', async () => {
+  const f = await fixture();
+  try {
+    await prepare(f);
+    f.transformReply(async () => { throw new TypeError('fetch failed'); });
+    const before = purityBaseline(f);
+    await expect(readPreparation(f)).rejects.toThrow(/^OUTREACH_REQUEST_FAILED$/);
+    assertReadOnly(f, before);
+  } finally { await f.finish(); }
+}, 20_000);
+
+it.each<[string, () => Promise<Response>, string]>([
+  ['404 gateway without the route', async () => new Response('{"message":"Not Found"}', { status: 404 }), routeLine],
+  ['403 worker_scope_denied', async () => new Response('{"error":"worker_scope_denied"}', { status: 403 }), "This Mac's pairing is not allowed to read this company."],
+  ['503 worker_unavailable', async () => new Response('{"error":"worker_unavailable"}', { status: 503 }), reachLine],
+  ['network failure', async () => { throw new TypeError('fetch failed'); }, reachLine],
+])('shows one honest line in the read panel for %s and does not retry on its own', async (_case, reply, line) => {
+  const f = await fixture();
+  try {
+    await prepare(f);
+    f.transformReply(reply);
+    const before = purityBaseline(f);
+    mountRead(f);
+    await screen.findByText(line);
+    expect(screen.getAllByRole('status')).toHaveLength(1);
+    expect(screen.queryByText(/Not Found|worker_|could not be read/)).toBeNull();
+    await settled();
+    assertReadOnly(f, before);
+  } finally { cleanup(); await f.finish(); }
 }, 20_000);
