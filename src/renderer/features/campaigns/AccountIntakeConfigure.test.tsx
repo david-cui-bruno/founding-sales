@@ -26,11 +26,16 @@ function grant(options: { state?: RemoteGoogleGrantStatus['state']; scopes?: str
 }
 type Outcome = 'applied' | 'pending' | 'rejected' | 'throw' | { held: AccountIntakeHoldReason };
 /** The fixture bridge plus a recorded grant read and a recorded write whose status is bound to the request. */
-function fixture(options: { grant?: RemoteGoogleGrantStatus | 'absent' | 'error'; outcome?: Outcome } = {}) {
+function fixture(options: { grant?: RemoteGoogleGrantStatus | 'absent' | 'error' | 'google_unconfigured'; outcome?: Outcome } = {}) {
   const f = nativeDeskFixture();
   setDailySessionScope(f.api.delegation, 'ws');
   const forbidden = vi.fn(async (): Promise<never> => { throw Error('PRIVATE forbidden'); });
-  const status = vi.fn(async () => { if (options.grant === 'error') throw Error('PRIVATE grant failure'); return options.grant === 'absent' ? grant() : options.grant ?? grant(); });
+  // The bridge rethrows the worker's one allowlisted status reason as an Error whose message is the reason.
+  const status = vi.fn(async () => {
+    if (options.grant === 'error') throw Error('PRIVATE grant failure');
+    if (options.grant === 'google_unconfigured') throw Error('google_unconfigured');
+    return options.grant === 'absent' ? grant() : options.grant ?? grant();
+  });
   if (options.grant !== 'absent') Object.assign(f.api.delegation, { googleConnections: { status, disclosure: forbidden, begin: forbidden, revoke: forbidden } });
   const configure = vi.fn(async (request: ConfigureAccountIntake): Promise<AccountIntakeConfigureStatus> => {
     const outcome = options.outcome ?? 'applied';
@@ -81,6 +86,30 @@ it.each([
   expect(panel.queryByText(/PRIVATE/)).toBeNull();
   expect(button(panel, 'Set intake active').disabled).toBe(false);
   expectNothingRecorded(f);
+});
+
+it('says mail and calendar are not configured on this worker, offering no mail or calendar control and no retry, when the worker has no Google client', async () => {
+  const honest = 'Mail and calendar are not configured on this worker. Call campaigns do not need them.';
+  const f = fixture({ grant: 'google_unconfigured' });
+  const { panel } = mount(f, preparation(null));
+  await panel.findByText(honest);
+  expect(f.status).toHaveBeenCalledTimes(1);
+  expect(panel.getByText('No intake configuration exists yet. The first change creates revision 1.')).toBeTruthy();
+  expect(button(panel, 'Set intake active').disabled).toBe(false);
+  for (const absent of [/could not be read/, /Read intake configuration again/, /Relevant mail is not offered/, /A configured mailbox is required/, /google_unconfigured/, /Mailbox:/]) expect(panel.queryByText(absent)).toBeNull();
+  expect(panel.queryByRole('button', { name: /Use calendar/ })).toBeNull();
+  expect(panel.queryByRole('button', { name: 'Switch on relevant mail' })).toBeNull();
+  expect(panel.queryByLabelText('Read relevant mail since')).toBeNull();
+  expect(panel.getByText(/Configuration is not readiness; a configured mailbox is not permission to send\./)).toBeTruthy();
+  expectNothingRecorded(f);
+  // Even a revision that names a mailbox offers no calendar control: this worker cannot read either.
+  cleanup();
+  const g = fixture({ grant: 'google_unconfigured' });
+  const other = mount(g, preparation({ mailboxSubject: 'mailbox' }));
+  await other.panel.findByText(honest);
+  expect(other.panel.queryByRole('button', { name: /Use calendar/ })).toBeNull();
+  expect(button(other.panel, 'Pause intake').disabled).toBe(false);
+  expectNothingRecorded(g);
 });
 
 it('offers the mail control only with a ready readable grant and an explicit non-future start date, sending the grant subject rather than a typed mailbox', async () => {
