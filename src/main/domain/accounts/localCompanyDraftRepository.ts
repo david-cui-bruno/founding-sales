@@ -6,6 +6,7 @@ import { accountInstantSchema, accountSchema } from '../../../shared/contracts/a
 import { companyDraftOpenReply, companyDraftSaveReply, companyDraftMutationReceiptSchema, companyDraftMutationResultSchema, companyDraftReadSchema, getCompanyDraftSchema,
   localCompanyDraftSchema, openCompanyDraftSchema, saveCompanyDraftSchema, type CompanyDraftRead, type GetCompanyDraft,
   type LocalCompanyDraft, type OpenCompanyDraft, type SaveCompanyDraft } from '../../../shared/contracts/localCompanyDraftContract';
+import { localDraftContinuationSchema, type LocalDraftContinuation } from '../../../shared/contracts/localWorkspaceContract';
 import { AccountRepository } from './accountRepository';
 import { accountFingerprint } from './accountEvidence';
 type Dependencies = { database: AppDatabase; clock: Clock; ids: IdGenerator };
@@ -54,6 +55,14 @@ export class LocalCompanyDraftRepository {
   get(input: GetCompanyDraft): CompanyDraftRead | null {
     const parsed = getCompanyDraftSchema.parse(input);
     return this.raw.inTransaction ? this.read(parsed) : this.raw.transaction(() => this.read(parsed)).deferred();
+  }
+  /** Read-only list of unsent drafts for the local Today feed, newest edit first. No eligibility or staleness check here:
+   *  the draft panel re-reads each draft explicitly when the company is opened. */
+  listUnsent(): LocalDraftContinuation[] {
+    const rows = this.raw.prepare(`SELECT id,account_id,company_label,subject,revision,updated_at,email FROM local_company_email_drafts
+      WHERE status='unsent' ORDER BY updated_at DESC,id ASC`).all() as Pick<DraftRow, 'id' | 'account_id' | 'company_label' | 'subject' | 'revision' | 'updated_at' | 'email'>[];
+    return rows.map(row => localDraftContinuationSchema.parse({ accountId: row.account_id, draftId: row.id, companyLabel: row.company_label,
+      subject: row.subject, revision: row.revision, updatedAt: row.updated_at, email: row.email }));
   }
   private replay(commandId: string, fingerprint: string) {
     const row = this.raw.prepare('SELECT account_id,draft_id,operation,fingerprint,applied_revision,receipt_json FROM local_company_draft_commands WHERE command_id=?')

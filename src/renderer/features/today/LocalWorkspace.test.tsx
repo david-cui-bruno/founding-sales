@@ -5,8 +5,8 @@ import { PresentationRoot } from '../../app/PresentationRoot';
 import { act, cleanup, fireEvent, render as testingRender, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { NativeDeskRoute } from './NativeDeskRoute';
-import { dailyFixture, nativeDeskFixture, nativeDeskReviewFixture, linkedInFixture } from './nativeDesk.fixture';
-import type { LinkCompanyPersonRequest, LocalWorkspaceSnapshot, LocalCommitmentsSnapshot, LocalCompanyDetail, LocalCompanyResearchStatus, SelectedResearch, LocalWorkspaceApi } from '../../../shared/contracts/localWorkspaceContract';
+import { dailyFixture, nativeDeskFixture, nativeDeskReviewFixture, linkedInFixture, localDraftContinuation } from './nativeDesk.fixture';
+import type { LinkCompanyPersonRequest, LocalAccountPreparation, LocalWorkspaceSnapshot, LocalCommitmentsSnapshot, LocalCompanyDetail, LocalCompanyResearchStatus, SelectedResearch, LocalWorkspaceApi } from '../../../shared/contracts/localWorkspaceContract';
 afterEach(cleanup);
 const local: LocalWorkspaceSnapshot = { scope: 'local_database', generatedAt: '2026-09-09T12:00:00.000Z', workflowMode: 'meeting_first', transitionReceipt: null, accounts: { state: 'available', snapshots: dailyFixture().accounts } };
 const retainedKinds: Array<[LocalCommitmentsSnapshot['items'][number]['kind'], string]> = [
@@ -659,4 +659,148 @@ it('company draft public panel explicitly opens an existing company route and re
   expect(saveDraft).toHaveBeenCalledTimes(1); expect(forbidden).not.toHaveBeenCalled();
   expect(detail).toEqual(originalDetail); expect(detail.snapshot.routes[0].personId).toBeNull(); expect(detail.links).toEqual([]);
   expect(f.calls.filter(call => /prepare|approve|send|generate|begin|sync|import|createPerson/i.test(call.method))).toEqual([]);
+}, 10_000);
+
+// Lane 8: unsent local drafts in Today, the calm paused path, and step controls that focus the panel they name.
+it('lists unsent local drafts under Saved draft continuations in keyboard order and opens the company on Accounts without selecting in Today', async () => {
+  const f = fixture(true);
+  f.setSnapshot(nativeDeskReviewFixture());
+  const drafts = [localDraftContinuation(), localDraftContinuation({ accountId: 'b', draftId: 'draft-b', companyLabel: 'Account B', subject: '', revision: 1 })];
+  f.api.localWorkspace.getCommitments.mockResolvedValue({ ...commitments, localDrafts: drafts });
+  window.location.hash = '';
+  render(<NativeDeskRoute onOpenImport={vi.fn()} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
+  const rowA = await screen.findByRole('button', { name: 'Account A · Local unsent draft · revision 2' });
+  const rowB = screen.getByRole('button', { name: 'Account B · Local unsent draft · revision 1' });
+  expect(rowA.textContent).toContain('Maintenance request coordination');
+  expect(rowA.textContent).toContain('Saved locally · revision 2');
+  for (const row of [rowA, rowB]) expect(row.textContent).not.toMatch(/worker|owner|send|approv/i);
+  const lane = screen.getByRole('region', { name: 'Saved draft continuations 3' });
+  const meetings = screen.getByRole('region', { name: /^Upcoming meetings/ });
+  const group = screen.getByRole('heading', { name: 'Local unsent drafts' }).parentElement!;
+  expect(lane.compareDocumentPosition(group) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(group.compareDocumentPosition(meetings) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(within(lane).getAllByRole('button')).toHaveLength(3);
+  // Keyboard order continues from the worker continuations into the local drafts and on to meetings.
+  const linkedIn = screen.getByRole('button', { name: 'Manual LinkedIn · Account A' });
+  linkedIn.focus();
+  fireEvent.keyDown(linkedIn, { key: 'j' }); expect(document.activeElement).toBe(rowA);
+  fireEvent.keyDown(rowA, { key: 'ArrowDown' }); expect(document.activeElement).toBe(rowB);
+  fireEvent.keyDown(rowB, { key: 'j' }); expect(document.activeElement).toBe(within(meetings).getAllByRole('button')[0]);
+  fireEvent.keyDown(document.activeElement!, { key: 'k' }); expect(document.activeElement).toBe(rowB);
+  // Enter opens the company on Accounts: continuation selection plus hash navigation. Nothing is selected in Today, nothing is commanded.
+  fireEvent.keyDown(rowB, { key: 'Enter' });
+  expect(f.firstUse.snapshot().selectedAccountId).toBe('b');
+  expect(window.location.hash).toBe('#/accounts');
+  expect(document.querySelectorAll('[data-row-key][aria-current="true"]')).toHaveLength(0);
+  expect(screen.queryByRole('button', { name: 'Close details' })).toBeNull();
+  window.location.hash = '';
+  fireEvent.click(rowA);
+  expect(f.firstUse.snapshot().selectedAccountId).toBe('a');
+  expect(window.location.hash).toBe('#/accounts');
+  expect(f.calls.every(c => /^(daily.get|delegation.status)$/.test(c.method))).toBe(true);
+  window.location.hash = '';
+});
+
+it('lists unsent local drafts inside the local-only Saved draft continuations lane while the daily read is unavailable', async () => {
+  const f = fixture(); f.api.daily.get = vi.fn(async () => { throw Error('daily unavailable'); });
+  f.api.localWorkspace.getCommitments.mockResolvedValue({ ...commitments, localDrafts: [localDraftContinuation()] });
+  window.location.hash = '';
+  render(<NativeDeskRoute onOpenImport={vi.fn()} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
+  await screen.findByText(/Daily workspace unavailable/);
+  const lane = screen.getByRole('heading', { name: /^Saved draft continuations/ }).closest('section')!;
+  expect(within(lane).getByText('Unavailable')).toBeTruthy();
+  const row = within(lane).getByRole('button', { name: 'Account A · Local unsent draft · revision 2' });
+  expect(row.textContent).not.toMatch(/worker|owner|send|approv/i);
+  fireEvent.click(row);
+  expect(f.firstUse.snapshot().selectedAccountId).toBe('a');
+  expect(window.location.hash).toBe('#/accounts');
+  window.location.hash = '';
+});
+
+it.each(['paused', 'policy paused', 'unpaired'] as const)('shows one quiet status line with collapsed connection details when this Mac is %s', async kind => {
+  const f = fixture(kind !== 'unpaired');
+  const active = await f.api.delegation.status();
+  if (kind === 'paused') f.setConfiguration({ ...active, state: 'paused' } as typeof active);
+  if (kind === 'policy paused') f.setConfiguration({ ...active, configuration: { ...active.configuration!, configuration: { ...active.configuration!.configuration, state: 'paused' } } } as typeof active);
+  // David's Mac: an incomplete daily snapshot for cloud-side reasons only, alongside retained local work.
+  const daily = await f.api.daily.get();
+  f.setSnapshot({ ...daily, freshness: { ...daily.freshness, kind: 'incomplete' }, issues: [...daily.issues, { code: 'transport_incomplete', count: 1 }, { code: 'call_allocation_unconfigured', count: 1 }] });
+  render(<NativeDeskRoute onOpenImport={vi.fn()} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
+  await screen.findByText('Cloud work is paused on this Mac. Local work continues.');
+  await screen.findByRole('button', { name: /Retained callback/ });
+  const desk = screen.getByTestId('native-desk');
+  const statusLines = Array.from(desk.children).filter(el => el.matches('p[role="status"]')).map(el => el.textContent);
+  expect(statusLines).toEqual(['Cloud work is paused on this Mac. Local work continues.']);
+  expect(screen.queryByText(/daily snapshot is incomplete/)).toBeNull();
+  expect(screen.queryByText('Worker freshness unknown')).toBeNull();
+  const details = desk.querySelector<HTMLDetailsElement>('.native-desk__connection')!;
+  expect(details.open).toBe(false);
+  expect(details.querySelector('summary')?.textContent).toBe(kind === 'unpaired' ? 'Worker unavailable' : 'Worker paused');
+  expect(within(details).getByText(/Remote freshness unknown/)).toBeTruthy();
+  fireEvent.click(screen.getByText('Queue capacity and operational details'));
+  expect(screen.getByText('transport incomplete: 1')).toBeTruthy();
+  expect(f.calls.every(c => /^(daily.get|delegation.status)$/.test(c.method))).toBe(true);
+});
+
+it.each(['invalid_local_record', 'research_failed'] as const)('keeps the incomplete line for a real %s problem while paused', async code => {
+  const f = fixture(true);
+  const active = await f.api.delegation.status(); f.setConfiguration({ ...active, state: 'paused' } as typeof active);
+  const daily = await f.api.daily.get();
+  f.setSnapshot({ ...daily, freshness: { ...daily.freshness, kind: 'incomplete' }, issues: [{ code, count: 2 }] });
+  render(<NativeDeskRoute onOpenImport={vi.fn()} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
+  await screen.findByText('Cloud work is paused on this Mac. Local work continues.');
+  const desk = screen.getByTestId('native-desk');
+  const statusLines = Array.from(desk.children).filter(el => el.matches('p[role="status"]')).map(el => el.textContent);
+  expect(statusLines).toEqual(['Cloud work is paused on this Mac. Local work continues.', 'The daily snapshot is incomplete. Account work may be missing. Existing owner checks still apply.']);
+  fireEvent.click(screen.getByText('Queue capacity and operational details'));
+  expect(screen.getByText(`${code.replaceAll('_', ' ')}: 2`)).toBeTruthy();
+});
+
+const stepPreparation = (step: LocalAccountPreparation['nextStep']): LocalAccountPreparation => step === 'unknown'
+  ? { researched: null, unsentDraft: null, businessRoute: null, nextStep: step, reason: 'Local preparation evidence unavailable for this company. Open it to check again.' }
+  : { researched: step !== 'research', unsentDraft: step === 'reopen_draft', businessRoute: step === 'reopen_draft' || step === 'draft', nextStep: step, reason: 'Saved local reason.' };
+const localAccounts = local.accounts.state === 'available' ? local.accounts.snapshots : [];
+const withPreparation = (preparation: LocalAccountPreparation): LocalWorkspaceSnapshot =>
+  ({ ...local, accounts: { state: 'available', snapshots: localAccounts.map(s => s.account.id === 'a' ? { ...s, preparation } : s) } });
+it.each([
+  ['reopen_draft', 'Reopen draft', 'Company draft'],
+  ['draft', 'Open draft', 'Company draft'],
+  ['add_route', 'Open route review', 'Company draft'],
+  ['research', 'Open research', 'Company research'],
+  ['unknown', 'Open company', 'Account A'],
+] as const)('the %s step control (%s) scrolls the %s panel into view and moves focus into it', async (step, label, target) => {
+  const f = f4Api();
+  f.api.localWorkspace.get.mockResolvedValue(withPreparation(stepPreparation(step)));
+  const scroll = vi.fn(), original = Element.prototype.scrollIntoView;
+  Element.prototype.scrollIntoView = scroll;
+  try {
+    render(f4Tree(f.api));
+    fireEvent.click(await screen.findByRole('button', { name: `${label} · Account A` }));
+    expect(screen.getByRole('button', { name: 'Local account · Account A' }).getAttribute('aria-current')).toBe('true');
+    const panel = target === 'Company draft' ? await screen.findByRole('region', { name: 'Company draft' })
+      : target === 'Company research' ? await screen.findByRole('heading', { name: 'Company research' })
+      : screen.getByRole('heading', { name: 'Account A' }).closest('section')!;
+    await waitFor(() => expect(panel.contains(document.activeElement)).toBe(true));
+    expect(scroll).toHaveBeenCalledTimes(1);
+    expect(scroll).toHaveBeenCalledWith({ block: 'start' });
+    expect(scroll.mock.contexts[0]).toBe(panel);
+    expect(f.api.localWorkspace.researchCompany).not.toHaveBeenCalled();
+    expect(f.calls.some(c => c.method === 'forbidden')).toBe(false);
+  } finally { Element.prototype.scrollIntoView = original; }
+}, 10_000);
+
+it('step controls also focus their panel on the local-only Accounts view while the daily read is unavailable', async () => {
+  const f = f4Api(); f.api.daily.get = vi.fn(async () => { throw Error('daily unavailable'); });
+  f.api.localWorkspace.get.mockResolvedValue(withPreparation(stepPreparation('reopen_draft')));
+  const scroll = vi.fn(), original = Element.prototype.scrollIntoView;
+  Element.prototype.scrollIntoView = scroll;
+  try {
+    render(f4Tree(f.api));
+    await screen.findByText(/Daily workspace unavailable/);
+    fireEvent.click(await screen.findByRole('button', { name: 'Reopen draft · Account A' }));
+    const panel = await screen.findByRole('region', { name: 'Company draft' });
+    await waitFor(() => expect(panel.contains(document.activeElement)).toBe(true));
+    expect(scroll).toHaveBeenCalledWith({ block: 'start' });
+    expect(scroll.mock.contexts[0]).toBe(panel);
+  } finally { Element.prototype.scrollIntoView = original; }
 }, 10_000);

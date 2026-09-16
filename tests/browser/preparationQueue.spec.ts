@@ -116,3 +116,19 @@ test('an unavailable local read stays unavailable with no ranked rows, controls 
   await axeClean(page);
   await assertClean(page, state);
 });
+
+test('a step control scrolls the company it names into view and moves focus there at both widths', async ({ page }) => {
+  const state = await mount(page);
+  for (const width of [1440, 1050]) {
+    await page.setViewportSize({ width, height: width === 1440 ? 900 : 700 });
+    await page.getByRole('button', { name: 'Open company · Foxtrot Unknown PM', exact: true }).click();
+    const company = page.locator('.native-desk__account').filter({ has: page.getByRole('heading', { name: 'Foxtrot Unknown PM', exact: true }) });
+    await expect(company).toBeInViewport();
+    await expect.poll(() => page.evaluate(() => document.activeElement?.classList.contains('native-desk__account') ?? false)).toBe(true);
+    await expect(page.getByRole('button', { name: 'Local account · Foxtrot Unknown PM', exact: true })).toHaveAttribute('aria-current', 'true');
+    await page.getByRole('button', { name: 'Close details', exact: true }).click();
+    await expect(company).toHaveCount(0);
+  }
+  expect((await methods(page)).filter(method => ![...reads, 'localWorkspace.getCompany'].includes(method))).toEqual([]);
+  await assertClean(page, state);
+});

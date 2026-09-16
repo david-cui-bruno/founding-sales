@@ -1,10 +1,10 @@
-import { StrictMode, useState } from 'react';
+import { StrictMode, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { AppShell } from '../../src/renderer/app/AppShell';
 import { PresentationRoot } from '../../src/renderer/app/PresentationRoot';
 import { useTheme } from '../../src/renderer/app/useTheme';
 import { useDensity } from '../../src/renderer/app/useDensity';
-import type { AppRoute } from '../../src/renderer/app/routes';
+import { routeFromHash, routeHash, type AppRoute } from '../../src/renderer/app/routes';
 import { NativeDeskRoute } from '../../src/renderer/features/today/NativeDeskRoute';
 import { nativeDeskFixture, nativeDeskReviewFixture } from '../../src/renderer/features/today/nativeDesk.fixture';
 import { WorkflowSection } from '../../src/renderer/foundation/WorkflowSection';
@@ -18,8 +18,15 @@ function Harness() {
   const [route, setRoute] = useState<'today' | 'accounts' | 'campaigns' | 'settings'>('today');
   const navigate = (next: AppRoute) => {
     if (next !== 'today' && next !== 'accounts' && next !== 'campaigns' && next !== 'settings') throw new Error(`Isolated Native Desk fixture does not render ${next}. Use applicationPresentationBrowser.`);
+    // Keep the hash in step, as the app's hash routing does, so route-owned hash navigation reaches this harness too.
+    if (window.location.hash !== routeHash(next)) window.location.hash = routeHash(next);
     setRoute(next);
   };
+  useEffect(() => {
+    const onHashChange = () => { const next = routeFromHash(window.location.hash); if (next !== null) navigate(next); };
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
   const [tick, setTick] = useState(0);
   const surface = route === 'accounts' || route === 'campaigns' ? route : 'today';
   window.nativeDeskBrowser = {

@@ -1183,3 +1183,68 @@ test('local company form keeps A geometry and explicit review/create/reuse bound
   expect(inventory.every(name => ['daily.get', 'delegation.status', 'localWorkspace.get', 'localWorkspace.getCommitments', 'localWorkspace.getCompany', 'localWorkspace.reviewCompany', 'localWorkspace.createCompany'].includes(name))).toBe(true);
   await assertClean(page, state);
 });
+
+test('an unsent local draft is listed in Today and opens its company with the draft panel in view at both widths', async ({page}, testInfo) => {
+  const state = await mount(page);
+  await localOnly(page);
+  await page.evaluate(async () => {
+    const f = window.nativeDeskBrowser.fixture, localApi = f.api.localWorkspace;
+    const local = await localApi.get(), retained = await localApi.getCommitments();
+    const at = retained.generatedAt, sourceId = 'lenox-source', routeId = 'lenox-route', email = 'info@lenoxmanagement.com';
+    const quote = 'Contact Us\n\n380 Broadway Providence, Rhode Island 02909\n\ninfo@lenoxmanagement.com\n\n401-572-3322';
+    const source = {id: sourceId, url: 'https://lenoxmanagement.com/', fetchedAt: at, sha256: 'b'.repeat(64), excerpt: quote, permitted: true};
+    const evidence: Awaited<ReturnType<typeof localApi.getCompany>>['snapshot'] = {account: {id: 'lenox', name: 'Lenox Management', domain: 'lenoxmanagement.com', version: 3},
+      claims: [], portfolio: [], unknowns: [], conflicts: [], fingerprint: 'a'.repeat(64),
+      routes: [{id: routeId, accountId: 'lenox', version: 1, personId: null, channel: 'email', value: email, purpose: 'business', verification: 'published', evidenceIds: [sourceId]}]};
+    f.setLocalSnapshot({...local, accounts: {state: 'available', snapshots: [...(local.accounts.state === 'available' ? local.accounts.snapshots : []),
+      {...evidence, preparation: {researched: true, unsentDraft: true, businessRoute: true, nextStep: 'reopen_draft', reason: 'An unsent local draft is saved. Reopen to review it. Saving is not sending.'}}]}});
+    f.setCommitments({...retained, localDrafts: [{accountId: 'lenox', draftId: 'lenox-draft', companyLabel: 'Lenox Management', subject: 'Maintenance request coordination at Lenox', revision: 2, updatedAt: at, email}]});
+    // Saved evidence and one saved unsent draft for this company only. Every other company keeps the fixture's unavailable detail.
+    const getCompany: typeof localApi.getCompany = async input => {
+      if (input.accountId !== 'lenox') return fixtureGetCompany(input);
+      f.calls.push({method: 'localWorkspace.getCompany', input});
+      return {scope: 'local_database', generatedAt: at, snapshot: evidence, sources: [source], links: []};
+    };
+    const getCompanyDraft: typeof localApi.getCompanyDraft = async input => {
+      if (input.accountId !== 'lenox') return fixtureGetCompanyDraft(input);
+      f.calls.push({method: 'localWorkspace.getCompanyDraft', input});
+      return {stale: false, reason: null, editable: true, draft: {kind: 'local_company_email', status: 'unsent', id: 'lenox-draft', accountId: 'lenox', revision: 2,
+        recipientBinding: {routeId, routeVersion: 1, email, personId: null}, accountVersionAtOpen: 3, companyLabel: 'Lenox Management', sourceIds: [sourceId],
+        publication: {sourceId, url: source.url, sha256: source.sha256, fetchedAt: at, quote}, subject: 'Maintenance request coordination at Lenox', body: 'Hello Lenox Management team,', createdAt: at, updatedAt: at}};
+    };
+    const fixtureGetCompany = localApi.getCompany, fixtureGetCompanyDraft = localApi.getCompanyDraft;
+    Object.assign(localApi, {getCompany, getCompanyDraft});
+    window.nativeDeskBrowser.refresh();
+  });
+  const row = page.getByRole('button', {name: 'Lenox Management · Local unsent draft · revision 2', exact: true});
+  await expect(row).toBeVisible();
+  await expect(row).toContainText('Saved locally · revision 2');
+  expect(await row.textContent()).not.toMatch(/worker|owner|send/i);
+  // The unpaired Mac shows one quiet line; the connection details stay collapsed.
+  await expect(page.getByText('Cloud work is paused on this Mac. Local work continues.', {exact: true})).toBeVisible();
+  await expect(page.getByText(/The daily snapshot is incomplete/)).toHaveCount(0);
+  expect(await page.locator('.native-desk__connection').evaluate(el => (el as HTMLDetailsElement).open)).toBe(false);
+  const panel = page.getByRole('region', {name: 'Company draft', exact: true});
+  const focusInPanel = () => page.evaluate(() => document.activeElement?.closest('section[aria-label="Company draft"]') !== null);
+  for (const width of [1440, 1050]) {
+    await page.setViewportSize({width, height: width === 1440 ? 900 : 700});
+    await page.evaluate(() => window.nativeDeskBrowser.navigate('today'));
+    await row.click();
+    await expect(page.getByRole('heading', {name: 'Lenox Management', exact: true})).toBeVisible();
+    await expect(page.getByRole('button', {name: 'Local account · Lenox Management', exact: true})).toHaveAttribute('aria-current', 'true');
+    await expect(panel).toBeInViewport();
+    await expect.poll(focusInPanel).toBe(true);
+    // The Accounts step control produces the same visible change.
+    await page.getByRole('button', {name: 'Close details', exact: true}).click();
+    await expect(panel).toHaveCount(0);
+    await page.getByRole('button', {name: 'Reopen draft · Lenox Management', exact: true}).click();
+    await expect(panel).toBeInViewport();
+    await expect.poll(focusInPanel).toBe(true);
+    await page.screenshot({path: testInfo.outputPath(`local-draft-continuation-${width}.png`), animations: 'disabled'});
+  }
+  const audit = await new AxeBuilder({page}).analyze();
+  expect(audit.violations.filter(issue => issue.impact === 'critical' || issue.impact === 'serious')).toEqual([]);
+  expect(await page.evaluate(() => window.nativeDeskBrowser.opened)).toEqual([]);
+  expect((await methods(page)).filter(method => !['daily.get', 'delegation.status', 'localWorkspace.get', 'localWorkspace.getCommitments', 'localWorkspace.getCompany', 'localWorkspace.getCompanyDraft'].includes(method))).toEqual([]);
+  await assertClean(page, state);
+});

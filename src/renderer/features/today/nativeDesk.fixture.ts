@@ -1,4 +1,4 @@
-import { localWorkspaceSnapshotSchema, localCommitmentsSnapshotSchema, type LocalWorkspaceSnapshot, type LocalCommitmentsSnapshot, type LocalWorkspaceApi, type LocalWorkflowReceipt } from '../../../shared/contracts/localWorkspaceContract';
+import { localWorkspaceSnapshotSchema, localCommitmentsSnapshotSchema, localDraftContinuationSchema, type LocalWorkspaceSnapshot, type LocalCommitmentsSnapshot, type LocalDraftContinuation, type LocalWorkspaceApi, type LocalWorkflowReceipt } from '../../../shared/contracts/localWorkspaceContract';
 import { createLocalCompanyContinuation } from './localCompanyContinuation';
 /** Test-only browser-safe factory. Never imported by production components. */
 import {
@@ -13,6 +13,11 @@ export function localSnapshot(overrides: Partial<LocalWorkspaceSnapshot> = {}): 
 }
 export function commitments(overrides: Partial<LocalCommitmentsSnapshot> = {}): LocalCommitmentsSnapshot {
   return localCommitmentsSnapshotSchema.parse({ scope: 'local_database', generatedAt: fixtureNow, revision: 1, reviewErrorCount: 0, items: [], ...overrides });
+}
+/** One saved, unsent local company draft as the local provider would list it. Saved data only; nothing here sends. */
+export function localDraftContinuation(overrides: Partial<LocalDraftContinuation> = {}): LocalDraftContinuation {
+  return localDraftContinuationSchema.parse({ accountId: 'a', draftId: 'draft-a', companyLabel: 'Account A', subject: 'Maintenance request coordination',
+    revision: 2, updatedAt: fixtureNow, email: 'info@a.fixture.invalid', ...overrides });
 }
 export function requestedDraft(accountId = 'a'): RequestedFollowupDraft {
   const originalCall = {
