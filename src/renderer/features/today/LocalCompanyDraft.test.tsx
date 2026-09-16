@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LocalCompanyDraft } from './LocalCompanyDraft';
 import { dailyFixture, nativeDeskFixture } from './nativeDesk.fixture';
 import type { LocalCompanyDetail, LocalWorkspaceApi } from '../../../shared/contracts/localWorkspaceContract';
-import type { CompanyDraftRead, CompanyDraftMutationResult } from '../../../shared/contracts/localCompanyDraftContract';
+import { companyDraftMailboxOccurrences, type CompanyDraftRead, type CompanyDraftMutationResult } from '../../../shared/contracts/localCompanyDraftContract';
 afterEach(cleanup);
 const time = '2026-09-15T12:00:00.000Z';
 function fixture(accountId = 'a', hasRoute = true) {
@@ -162,7 +162,8 @@ describe('company draft composer (mock API, not persistence)', () => {
     view.rerender(<LocalCompanyDraft api={a.api} detail={b.detail} />);
     await act(async () => pending.resolve({ ...a.detail, snapshot: { ...a.detail.snapshot, routes: [a.route] } }));
     expect(screen.queryByRole('button', { name: 'Open company draft' })).toBeNull();
-    expect(screen.getByRole('combobox', { name: 'Saved source' })).toHaveProperty('value', ''); expect(a.open).not.toHaveBeenCalled();
+    // B's fresh review suggests B's own saved source; nothing from A's review or late refresh is carried over.
+    expect(screen.getByRole('combobox', { name: 'Saved source' })).toHaveProperty('value', b.source.id); expect(a.open).not.toHaveBeenCalled();
   });
   it('reads an existing saved draft even after its route becomes personal and never opens a new one', async () => {
     const f = fixture(); f.setSaved({ ...f.makeSaved(), stale: true, reason: 'route_changed' });
@@ -335,4 +336,119 @@ it('a superseded admission re-review cannot unlock the original request', async 
   expect(screen.getByRole('textbox', { name: 'Business inbox email' }).closest('fieldset')).toHaveProperty('disabled', true);
   fireEvent.click(screen.getByRole('button', { name: 'Retry reviewed inbox admission' })); await waitFor(() => expect(f.admit).toHaveBeenCalledTimes(2));
   expect(f.admit.mock.calls[1][0]).toEqual(original);
+});
+
+describe('inbox review prefilled from saved sources (mock API, deterministic text match, no model)', () => {
+  // Shaped like the saved Lenox source from the 2026-09-16 walkthrough: one block per line, blank lines between blocks.
+  const lenoxExcerpt = 'Lenox Management\n\nProperty management, leasing and REO services across Rhode Island and Southeastern Massachusetts since 2004.'
+    + '\n\nContact Us\n\n380 Broadway Providence, Rhode Island 02909\n\ninfo@lenoxmanagement.com\n\n401-572-3322'
+    + '\n\nOur in-house maintenance team coordinates repairs for the properties we manage.';
+  const lenoxQuote = 'Contact Us\n\n380 Broadway Providence, Rhode Island 02909\n\ninfo@lenoxmanagement.com\n\n401-572-3322';
+  const lenoxEmail = 'info@lenoxmanagement.com';
+  function lenox(excerpt = lenoxExcerpt) {
+    const f = fixture('a', false);
+    f.source.url = 'https://lenoxmanagement.com/'; f.source.excerpt = excerpt; f.route.value = lenoxEmail;
+    return f;
+  }
+  const field = (name: string) => screen.getByRole('textbox', { name }) as HTMLInputElement | HTMLTextAreaElement;
+  const values = () => [(screen.getByRole('combobox', { name: 'Saved source' }) as HTMLSelectElement).value, field('Business inbox email').value, field('Exact publication quote').value];
+  const admitButton = () => screen.getByRole('button', { name: 'Admit reviewed company inbox' });
+  const follows = (before: Element, after: Element) => (before.compareDocumentPosition(after) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+  const bump = (detail: LocalCompanyDetail): LocalCompanyDetail => ({ ...detail, snapshot: { ...detail.snapshot, account: { ...detail.snapshot.account, version: detail.snapshot.account.version + 1 } } });
+
+  it('prefills the saved source, the address and the exact passage around it, then admits only the displayed values after one confirmation', async () => {
+    const f = lenox(); render(<LocalCompanyDraft api={f.api} detail={f.detail} />);
+    expect(values()).toEqual([f.source.id, lenoxEmail, lenoxQuote]);
+    // The prefilled quote satisfies the rule the domain applies: verbatim in the excerpt, with a standalone occurrence inside it.
+    const start = f.source.excerpt.indexOf(lenoxQuote); expect(start).toBeGreaterThanOrEqual(0);
+    expect(companyDraftMailboxOccurrences(f.source.excerpt, lenoxEmail).some(token => token.start >= start && token.end <= start + lenoxQuote.length)).toBe(true);
+    expect(screen.getByRole('checkbox')).toHaveProperty('checked', false); expect(screen.queryByRole('radio')).toBeNull();
+    expect(admitButton()).toHaveProperty('disabled', true); expect(f.admit).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('checkbox')); expect(admitButton()).toHaveProperty('disabled', false);
+    fireEvent.click(admitButton()); await screen.findByRole('button', { name: 'Open company draft' });
+    expect(f.admit).toHaveBeenCalledTimes(1);
+    expect(f.admit).toHaveBeenCalledWith({ commandId: expect.any(String), accountId: 'a', expectedAccountVersion: f.detail.snapshot.account.version,
+      email: lenoxEmail, sourceId: f.source.id, quote: lenoxQuote, selection: 'published_company_business_inbox' });
+    expect(f.open).not.toHaveBeenCalled(); expect(f.calls).toEqual([]);
+  });
+  it('offers several candidate addresses as choices with none preselected and fills the fields only when one is picked', () => {
+    const f = lenox('Leasing\n\nleasing@lenoxmanagement.com\n\n' + lenoxExcerpt); render(<LocalCompanyDraft api={f.api} detail={f.detail} />);
+    expect(screen.getAllByRole('radio').map(radio => (radio as HTMLInputElement).checked)).toEqual([false, false]);
+    expect(screen.getByRole('radio', { name: /leasing@lenoxmanagement\.com/ })).toBeTruthy();
+    expect(values()).toEqual(['', '', '']); expect(admitButton()).toHaveProperty('disabled', true);
+    fireEvent.click(screen.getByRole('radio', { name: /info@lenoxmanagement\.com/ }));
+    expect(values()).toEqual([f.source.id, lenoxEmail, lenoxQuote]);
+    expect(screen.getByRole('radio', { name: /info@lenoxmanagement\.com/ })).toHaveProperty('checked', true);
+    expect(screen.getByRole('checkbox')).toHaveProperty('checked', false); expect(admitButton()).toHaveProperty('disabled', true);
+    fireEvent.click(screen.getByRole('checkbox')); expect(admitButton()).toHaveProperty('disabled', false);
+    // Editing by hand releases the choice and the confirmation; nothing stays selected silently.
+    fireEvent.change(field('Business inbox email'), { target: { value: 'typed@lenoxmanagement.com' } });
+    expect(screen.getAllByRole('radio').every(radio => !(radio as HTMLInputElement).checked)).toBe(true);
+    expect(screen.getByRole('checkbox')).toHaveProperty('checked', false); expect(f.admit).not.toHaveBeenCalled();
+  });
+  it('lists tenant, emergency, maintenance and after-hours addresses as excluded with the matched word and never prefills or offers them', () => {
+    const f = lenox('Leasing\n\nleasing@lenoxmanagement.com\n\n' + lenoxExcerpt + '\n\nTenants\n\ntenants@lenoxmanagement.com\n\nEmergency line\n\nemergency@lenoxmanagement.com'
+      + '\n\nmaintenance@lenoxmanagement.com\n\nSupport\n\nAfter-hours requests only\n\nsupport@lenoxmanagement.com\n\n401-555-0100');
+    render(<LocalCompanyDraft api={f.api} detail={f.detail} />);
+    const items = within(screen.getByRole('list', { name: 'Excluded addresses' })).getAllByRole('listitem').map(item => item.textContent ?? '');
+    expect(items).toHaveLength(4);
+    for (const [email, word] of [['tenants@lenoxmanagement.com', 'tenants'], ['emergency@lenoxmanagement.com', 'emergency'],
+      ['maintenance@lenoxmanagement.com', 'maintenance'], ['support@lenoxmanagement.com', 'After-hours']]) {
+      expect(items.some(text => text.includes(email) && text.includes(`“${word}”`))).toBe(true);
+    }
+    expect(screen.getAllByRole('radio')).toHaveLength(2);
+    expect(screen.getByRole('radio', { name: /leasing@lenoxmanagement\.com/ })).toBeTruthy(); expect(screen.getByRole('radio', { name: /info@lenoxmanagement\.com/ })).toBeTruthy();
+    expect(screen.queryByRole('radio', { name: /tenants@|emergency@|maintenance@|support@/ })).toBeNull();
+    expect(values()).toEqual(['', '', '']); expect(admitButton()).toHaveProperty('disabled', true);
+  });
+  it.each(['not permitted', 'without any address'])('leaves the form exactly as before when the only saved source is %s', kind => {
+    const f = lenox(kind === 'not permitted' ? lenoxExcerpt : 'Contact Us\n\n380 Broadway Providence, Rhode Island 02909\n\n401-572-3322');
+    if (kind === 'not permitted') f.source.permitted = false;
+    render(<LocalCompanyDraft api={f.api} detail={f.detail} />);
+    expect(values()).toEqual(['', '', '']); expect(screen.queryByRole('radio')).toBeNull(); expect(screen.queryByRole('list', { name: 'Excluded addresses' })).toBeNull();
+    expect(screen.queryByText('Show saved source text')).toBeNull(); expect(screen.queryByText(/Filled from/)).toBeNull();
+    expect(screen.getByRole('checkbox')).toHaveProperty('checked', false); expect(admitButton()).toHaveProperty('disabled', true);
+  });
+  it('renders the saved source text below the fields in a collapsed details element, so selecting a source moves no field', () => {
+    const f = lenox(); render(<LocalCompanyDraft api={f.api} detail={f.detail} />);
+    const select = screen.getByRole('combobox', { name: 'Saved source' }), fieldset = select.closest('fieldset')!;
+    // Structural only: label text and control kind. A controlled textarea mirrors its value into its text content, which is not layout.
+    const shape = () => Array.from(fieldset.children, child => `${child.tagName}:${child.firstChild?.nodeType === Node.TEXT_NODE ? child.firstChild.textContent : ''}:${child.querySelector('input,select,textarea')?.tagName ?? ''}`);
+    const assertOrder = () => {
+      const details = screen.getByText('Show saved source text').closest('details')!;
+      expect(details.open).toBe(false); expect(fieldset.contains(details)).toBe(false);
+      const passage = within(details).getByText(lenoxQuote, { normalizer: text => text }), complete = within(details).getByText(f.source.excerpt, { normalizer: text => text });
+      const ordered = [select, field('Business inbox email'), field('Exact publication quote'), screen.getByRole('checkbox'), admitButton(), details, passage, complete];
+      for (let index = 1; index < ordered.length; index++) expect(follows(ordered[index - 1], ordered[index])).toBe(true);
+    };
+    assertOrder(); const before = shape();
+    fireEvent.change(select, { target: { value: '' } });
+    expect(screen.queryByText('Show saved source text')).toBeNull(); expect(shape()).toEqual(before);
+    fireEvent.change(select, { target: { value: f.source.id } });
+    // Picking a source by hand fills from that source's single candidate; the field order and the fieldset contents are unchanged.
+    expect(values()).toEqual([f.source.id, lenoxEmail, lenoxQuote]); expect(shape()).toEqual(before); assertOrder();
+  });
+  it('calls onEvidenceChanged once after a successful admission and once after a draft is opened, never on failure', async () => {
+    const f = lenox(), changed = vi.fn(); f.admit.mockRejectedValueOnce(Error('Denied'));
+    render(<LocalCompanyDraft api={f.api} detail={f.detail} onEvidenceChanged={changed} />);
+    fireEvent.click(screen.getByRole('checkbox')); fireEvent.click(admitButton()); await screen.findByRole('alert');
+    expect(changed).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry reviewed inbox admission' })); await screen.findByRole('button', { name: 'Open company draft' });
+    expect(changed).toHaveBeenCalledTimes(1);
+    f.open.mockRejectedValueOnce(Error('Stale'));
+    fireEvent.click(screen.getByRole('button', { name: 'Open company draft' })); await screen.findByRole('alert');
+    expect(changed).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Open company draft' })); await screen.findByRole('textbox', { name: 'Subject' });
+    expect(changed).toHaveBeenCalledTimes(2); expect(f.open).toHaveBeenCalledTimes(2);
+  });
+  it('re-derives the suggestion when an untouched observation changes, but clears a review in progress until a source is picked again', () => {
+    const f = lenox(); const view = render(<LocalCompanyDraft api={f.api} detail={f.detail} />);
+    const next = bump(f.detail); view.rerender(<LocalCompanyDraft api={f.api} detail={next} />);
+    expect(values()).toEqual([f.source.id, lenoxEmail, lenoxQuote]);
+    fireEvent.click(screen.getByRole('checkbox'));
+    view.rerender(<LocalCompanyDraft api={f.api} detail={bump(next)} />);
+    expect(values()).toEqual(['', '', '']); expect(screen.getByRole('checkbox')).toHaveProperty('checked', false); expect(admitButton()).toHaveProperty('disabled', true);
+    fireEvent.change(screen.getByRole('combobox', { name: 'Saved source' }), { target: { value: f.source.id } });
+    expect(values()).toEqual([f.source.id, lenoxEmail, lenoxQuote]); expect(screen.getByRole('checkbox')).toHaveProperty('checked', false); expect(f.admit).not.toHaveBeenCalled();
+  });
 });
