@@ -51,7 +51,7 @@ export const preparedCompanyDraftSchema = z.object({
   subject: saveCompanyDraftSchema.shape.subject.max(200).refine(value => value.trim().length > 0),
   body: saveCompanyDraftSchema.shape.body.max(12000).refine(value => value.trim().length > 0),
   grounding: z.object({ facts: z.array(preparationFactSchema).min(1).max(8),
-    usedFactIds: z.array(preparationFactSchema.shape.id).min(1).max(8), playbookVersion: z.literal('2026-09-08') }).strict(),
+    usedFactIds: z.array(preparationFactSchema.shape.id).min(1).max(8), playbookVersion: z.literal('2026-09-16') }).strict(),
 }).strict().refine(value => {
   const ids = new Set(value.grounding.facts.map(fact => fact.id));
   return ids.size === value.grounding.facts.length

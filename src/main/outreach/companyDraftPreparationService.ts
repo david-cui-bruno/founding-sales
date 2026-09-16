@@ -17,7 +17,8 @@ export type CompanyDraftPreparationPort = {
 };
 type Options = {
   runtime: Pick<FoundationRuntime, 'withDatabase' | 'withDomain'>;
-  providers: Pick<OutreachProviders, 'generate'>;
+  /** `status` is the same read-only setup read the email service uses, here only for the saved sender name. Without it no name is sent. */
+  providers: Pick<OutreachProviders, 'generate'> & Partial<Pick<OutreachProviders, 'status'>>;
   clock?: Clock;
   ids?: IdGenerator;
 };
@@ -76,13 +77,18 @@ export function createCompanyDraftPreparationService(options: Options): CompanyD
     try {
       const before = await observe(input, expected);
       assertCurrent(expected);
+      // The saved sender name is setup data for the sign-off: not evidence (so not fenced by the
+      // fingerprint), not send permission, and never defaulted when setup is unset, locked or unreadable.
+      const senderName = (await providers.status?.())?.senderName.trim() ?? '';
+      assertCurrent(expected);
       const result = await providers.generate({ recipientKind: 'company_business_inbox', companyName: before.companyName,
-        purpose: 'prepare_first_conversation', facts: structuredClone(before.facts), playbook: EMAIL_PLAYBOOK }, signal);
+        purpose: 'prepare_first_conversation', facts: structuredClone(before.facts), playbook: EMAIL_PLAYBOOK,
+        ...(senderName ? { senderName } : {}) }, signal);
       assertCurrent(expected);
       const proposal = companyDraftPrepareReply(input).parse({ accountId: input.accountId, draftId: input.draftId,
         baseRevision: input.expectedRevision, accountVersion: before.accountVersion, recipientBinding: before.recipientBinding,
         subject: result.subject, body: result.body,
-        grounding: { facts: before.facts, usedFactIds: result.evidenceIds, playbookVersion: '2026-09-08' } });
+        grounding: { facts: before.facts, usedFactIds: result.evidenceIds, playbookVersion: '2026-09-16' } });
       const after = await observe(input, expected);
       assertCurrent(expected);
       if (before.fingerprint !== after.fingerprint) throw new Error('company_preparation_evidence_changed');

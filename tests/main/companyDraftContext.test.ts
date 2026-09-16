@@ -208,8 +208,9 @@ describe('company-only draft fact projection', () => {
     const claims: AccountClaim[] = [fact('technology', 'A'), fact('residential_scope', 'B'), fact('operating_footprint', 'C'), fact('maintenance_workflow', 'D')];
     for (const scope of ['managed', 'owned'] as const) for (const measure of ['units', 'buildings', 'properties'] as const) claims.push(portfolio(100, scope, measure));
     expect(companyDraftFacts(detail(claims))).toHaveLength(8);
+    // Distinct values per key: identical text under several keys is one fact, tested separately.
     const unicode = detail((['technology', 'residential_scope', 'operating_footprint', 'maintenance_workflow'] as const)
-      .map(key => fact(key, '界'.repeat(1900))));
+      .map((key, index) => fact(key, `${index}${'界'.repeat(1900)}`)));
     const bounded = companyDraftFacts(unicode);
     expect(bounded.length).toBeGreaterThan(0);
     expect(bounded.length).toBeLessThan(4); // UTF8 bytes, not UTF16 character count.
@@ -222,5 +223,31 @@ describe('company-only draft fact projection', () => {
     expect(kept[0]!.text).toContain('portfolio');
     expect(kept[0]!.text).toContain('a'.repeat(64));
     expect(kept[0]!.text.endsWith('}')).toBe(true);
+  });
+
+  it('sends one repeated paragraph once, under the first key in company order, and keeps every distinct fact', () => {
+    const paragraph = 'Founded in 2004, Fictional PM manages, leases and services REO homes across Rhode Island and Southeastern Massachusetts.';
+    const repeated = (key: 'ownership' | 'portfolio_description' | 'residential_scope', value = paragraph): AccountClaim =>
+      ({ key, kind: 'fact', value, evidenceIds: ['source'] });
+    // One saved company-history paragraph under three headings, once differing only in whitespace and case.
+    const claims: AccountClaim[] = [repeated('ownership'), repeated('residential_scope'),
+      repeated('portfolio_description', `${paragraph.replace(', ', ',   ').toUpperCase()} `),
+      fact('maintenance_workflow', 'In-house maintenance team'), fact('technology', 'Resident portal')];
+    const output = companyDraftFacts(detail(claims));
+    expect(output).toHaveLength(3);
+    const text = output.map(f => f.text).join('\n');
+    expect(output.filter(f => /founded in 2004/i.test(f.text))).toHaveLength(1);
+    expect(text).toContain('"key":"portfolio_description"');
+    expect(text).not.toContain('"key":"ownership"');
+    expect(text).not.toContain('"key":"residential_scope"');
+    expect(text).toContain('In-house maintenance team');
+    expect(text).toContain('Resident portal');
+    expect(companyDraftFacts(detail([...claims].reverse()))).toEqual(output);
+    // The same value cited from a second source is still one fact for the model.
+    const second = { ...source('second'), sha256: 'b'.repeat(64) };
+    const cited = detail([fact('technology', 'Resident portal'), { ...fact('technology', 'Resident portal'), evidenceIds: ['second'] }], [source(), second]);
+    expect(companyDraftFacts(cited)).toHaveLength(1);
+    // Distinct paragraphs under different headings both survive.
+    expect(companyDraftFacts(detail([repeated('ownership'), repeated('portfolio_description', 'Locally owned since 2004.')]))).toHaveLength(2);
   });
 });
