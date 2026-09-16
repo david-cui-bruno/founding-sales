@@ -84,8 +84,21 @@ export const localWorkflowReceiptSchema = z.strictObject({
   parkedReviewActions: z.array(z.strictObject({ id, cycleId: id, version: counter.positive() })),
   parkedActions: z.array(z.strictObject({ id, supersededActionId: id, cycleId: id })),
 });
+/** Local evidence only: saved research or sources, an unsent local draft, a published business inbox route.
+ *  Never worker ownership; never a started action. Enum order is readiness order, most ready first. Unknown stays unknown. */
+export const localAccountPreparationStepSchema = z.enum(['reopen_draft', 'draft', 'add_route', 'research', 'unknown']);
+export const localAccountPreparationSchema = z.strictObject({
+  researched: z.boolean().nullable(), unsentDraft: z.boolean().nullable(), businessRoute: z.boolean().nullable(),
+  nextStep: localAccountPreparationStepSchema, reason: z.string().trim().min(1).max(300),
+}).refine(p => p.nextStep === (p.researched === null || p.unsentDraft === null || p.businessRoute === null ? 'unknown'
+  : p.unsentDraft ? 'reopen_draft' : !p.researched ? 'research' : !p.businessRoute ? 'add_route' : 'draft'), 'local_preparation_step_mismatch');
+export type LocalAccountPreparationStep = z.infer<typeof localAccountPreparationStepSchema>;
+export type LocalAccountPreparation = z.infer<typeof localAccountPreparationSchema>;
+// Additive and optional: snapshots without a preparation summary keep parsing unchanged.
+export const localAccountSnapshotSchema = dailyAccountSchema.extend({ preparation: localAccountPreparationSchema.optional() });
+export type LocalAccountSnapshot = z.infer<typeof localAccountSnapshotSchema>;
 const accountsSchema = z.discriminatedUnion('state', [
-  z.strictObject({ state: z.literal('available'), snapshots: z.array(dailyAccountSchema) }),
+  z.strictObject({ state: z.literal('available'), snapshots: z.array(localAccountSnapshotSchema) }),
   z.strictObject({ state: z.literal('unavailable'), snapshots: z.tuple([]) }),
 ]).refine(result => result.state === 'unavailable' || new Set(result.snapshots.map(s => s.account.id)).size === result.snapshots.length
   && result.snapshots.every(s => s.routes.every(r => r.accountId === s.account.id)), 'local_account_identity_mismatch');
