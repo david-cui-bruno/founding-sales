@@ -266,6 +266,12 @@ export function nativeDeskFixture(initial = dailyFixture()) {
       approveMeeting: forbidden,
       getMeetingApproval: async (input) => { record('getMeetingApproval', input); return null; },
       configureIntake: forbidden,
+      refreshSelectedAccount: forbidden,
+      // Local read only. The fixture holds no applied copy, so the honest answer is unknown.
+      getSelectedAccountFreshness: async (input) => {
+        record('getSelectedAccountFreshness', input);
+        return { accountId: input.accountId, state: 'unknown', localFingerprint: hash, sentFingerprint: null, sentAt: null };
+      },
       status: async () => {
         record('delegation.status');
         return structuredClone(config);

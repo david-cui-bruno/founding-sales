@@ -526,6 +526,7 @@ it.each(['throw', 'wrong-id'])('retains uncertain preparation on %s and remount,
   await waitFor(() => expect(f.refresh).toHaveBeenCalledTimes(1));
   const original = f.bootstrap.mock.calls[0][0];
   expect(screen.getByText(`Preparation command: ${original.commandId}`)).toBeTruthy();
+  expect(screen.getByText('Retry same preparation resends the exact queued command.')).toBeTruthy();
   expect(screen.queryByText(/PRIVATE/)).toBeNull();
   view.unmount();
   const next = render(<CallCampaignDraft {...f.props} />);
@@ -790,4 +791,143 @@ it('drops a saved confirmation when the channel changes and locks the other chan
   fireEvent.click(callToggle());
   expect(screen.getByLabelText<HTMLTextAreaElement>('Meeting offer').value).toBe(offer);
   expect(f.submit).toHaveBeenCalledTimes(1);
+});
+
+// Sending the updated saved record to a worker that already owns the company. The line is a local
+// read, the button is the only producer, and a rejection shows the worker's reason verbatim.
+const checkLabel = 'Check worker copy of saved record';
+const sendLabel = 'Send updated saved record to worker';
+const retrySendLabel = 'Retry same record send';
+const unknownLine = 'Worker copy freshness unknown.';
+const staleLine = 'The saved record changed since it was sent to the worker.';
+const currentLine = 'Worker holds the current saved record.';
+type Freshness = Awaited<ReturnType<NonNullable<ReturnType<typeof fixture>['api']['delegation']['getSelectedAccountFreshness']>>>;
+function freshness(state: Freshness['state']): Freshness {
+  return { accountId: 'a', state, localFingerprint: 'a'.repeat(64), sentFingerprint: state === 'unknown' ? null : state === 'current' ? 'a'.repeat(64) : 'b'.repeat(64), sentAt: state === 'unknown' ? null : '2026-09-09T12:00:00.000Z' };
+}
+function recordFixture(state: Freshness['state'] = 'stale') {
+  const f = preparationFixture('active');
+  const read = vi.spyOn(f.api.delegation, 'getSelectedAccountFreshness').mockImplementation(async input => ({ ...freshness(state), accountId: input.accountId }));
+  const send = vi.spyOn(f.api.delegation, 'refreshSelectedAccount').mockImplementation(async command => ({
+    commandId: command.commandId, status: 'applied', authorityGeneration: 7, aggregateVersion: 20, reason: null,
+  }));
+  return { ...f, read, send };
+}
+it('shows the honest unknown line with the two explicit buttons only for a worker-owned company and reads nothing on its own', () => {
+  const f = recordFixture();
+  render(<CallCampaignDraft {...f.props} />);
+  fill(); reviewPreparation();
+  expect(screen.getByText(unknownLine)).toBeTruthy();
+  expect(screen.getByRole<HTMLButtonElement>('button', { name: checkLabel }).disabled).toBe(false);
+  expect(screen.getByRole<HTMLButtonElement>('button', { name: sendLabel }).disabled).toBe(false);
+  expect(screen.getByText('Reconcile queued preparation asks the worker what it already holds for queued commands and applies the answer.')).toBeTruthy();
+  expect(screen.queryByText('Retry same preparation resends the exact queued command.')).toBeNull();
+  expect(f.read).not.toHaveBeenCalled();
+  expect(f.send).not.toHaveBeenCalled();
+  expect(f.calls).toEqual([]);
+  const copied = preparationFixture('copied');
+  cleanup();
+  render(<CallCampaignDraft {...copied.props} />);
+  fill(); reviewPreparation();
+  expect(screen.queryByText(unknownLine)).toBeNull();
+  expect(screen.queryByRole('button', { name: checkLabel })).toBeNull();
+  expect(screen.queryByRole('button', { name: sendLabel })).toBeNull();
+});
+it.each(['unknown', 'stale', 'current'] as const)('reads the %s worker copy state only on the explicit check and disables sending only when current', async state => {
+  const f = recordFixture(state);
+  render(<CallCampaignDraft {...f.props} />);
+  fill(); reviewPreparation(); clickPreparation(checkLabel);
+  await screen.findByText(state === 'unknown' ? unknownLine : state === 'stale' ? staleLine : currentLine);
+  expect(f.read).toHaveBeenCalledTimes(1);
+  expect(f.read.mock.calls[0][0]).toEqual({ accountId: 'a' });
+  expect(screen.getByRole<HTMLButtonElement>('button', { name: sendLabel }).disabled).toBe(state === 'current');
+  expect(f.send).not.toHaveBeenCalled();
+  expect(f.refresh).not.toHaveBeenCalled();
+  expect(f.calls).toEqual([]);
+});
+it('sends exactly one frozen identity for the selected company, then re-reads the worker copy state', async () => {
+  const f = recordFixture('stale');
+  f.send.mockImplementation(async command => { f.read.mockImplementation(async input => ({ ...freshness('current'), accountId: input.accountId })); return { commandId: command.commandId, status: 'applied', authorityGeneration: 7, aggregateVersion: 20, reason: null }; });
+  render(<CallCampaignDraft {...f.props} />);
+  fill(); reviewPreparation(); clickPreparation(checkLabel);
+  await screen.findByText(staleLine);
+  clickPreparation(sendLabel);
+  await screen.findByText(currentLine);
+  expect(f.send).toHaveBeenCalledTimes(1);
+  const command = f.send.mock.calls[0][0];
+  expect(command).toEqual({ commandId: expect.any(String), accountId: 'a' });
+  expect(command.commandId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  expect(Object.isFrozen(command)).toBe(true);
+  expect(f.calls.map(c => c.method)).toEqual(['delegation.sync', 'daily.get', 'delegation.status']);
+  expect(f.read).toHaveBeenCalledTimes(2);
+  expect(f.refresh).toHaveBeenCalledTimes(1);
+  expect(screen.getByRole<HTMLButtonElement>('button', { name: sendLabel }).disabled).toBe(true);
+  expect(screen.queryByText(/Record send command:/)).toBeNull();
+  expect(f.submit).not.toHaveBeenCalled();
+  expect(f.bootstrap).not.toHaveBeenCalled();
+});
+it('shows a schema-valid exact rejection reason verbatim and frees the form without retrying', async () => {
+  const f = recordFixture('stale');
+  f.send.mockImplementation(async command => ({ commandId: command.commandId, status: 'rejected', authorityGeneration: 7, aggregateVersion: 20, reason: 'route_evidence_missing' }));
+  render(<CallCampaignDraft {...f.props} />);
+  fill(); reviewPreparation(); clickPreparation(checkLabel);
+  await screen.findByText(staleLine);
+  clickPreparation(sendLabel);
+  const reason = await screen.findByText('route_evidence_missing');
+  expect(reason.closest('[role="status"]')).toBeTruthy();
+  expect(f.send).toHaveBeenCalledTimes(1);
+  expect(screen.queryByText(/Record send command:/)).toBeNull();
+  expect(screen.getByRole<HTMLButtonElement>('button', { name: sendLabel }).disabled).toBe(false);
+  expect(screen.getByLabelText<HTMLTextAreaElement>('Meeting offer').disabled).toBe(false);
+  // A mismatched identity is never a rejection of this send: the identity stays retained.
+  f.send.mockImplementation(async () => ({ commandId: 'other', status: 'rejected', authorityGeneration: 7, aggregateVersion: 21, reason: 'PRIVATE other command' }));
+  clickPreparation(sendLabel);
+  await waitFor(() => expect(f.send).toHaveBeenCalledTimes(2));
+  expect(screen.getByText(`Record send command: ${f.send.mock.calls[1][0].commandId}`)).toBeTruthy();
+  expect(screen.queryByText(/PRIVATE/)).toBeNull();
+});
+it.each(['throw', 'pending'] as const)('retains an uncertain record send on %s across remount and retries the identical frozen identity', async outcome => {
+  const f = recordFixture('stale');
+  if (outcome === 'throw') f.send.mockRejectedValueOnce(Error('PRIVATE HTTP refusal after queue'));
+  else f.send.mockImplementationOnce(async command => ({ commandId: command.commandId, status: 'pending', authorityGeneration: 7, aggregateVersion: 19, reason: null }));
+  const view = render(<CallCampaignDraft {...f.props} />);
+  fill(); reviewPreparation(); clickPreparation(checkLabel);
+  await screen.findByText(staleLine);
+  clickPreparation(sendLabel);
+  await waitFor(() => expect(f.refresh).toHaveBeenCalledTimes(1));
+  const original = f.send.mock.calls[0][0];
+  expect(screen.getByText(`Record send command: ${original.commandId}`)).toBeTruthy();
+  expect(screen.queryByText(/PRIVATE/)).toBeNull();
+  expect(screen.getByRole<HTMLButtonElement>('button', { name: sendLabel }).disabled).toBe(true);
+  expect(screen.getByLabelText<HTMLTextAreaElement>('Meeting offer').disabled).toBe(true);
+  view.unmount();
+  render(<CallCampaignDraft {...f.props} />);
+  expect(screen.getByText(`Record send command: ${original.commandId}`)).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: retrySendLabel }));
+  await waitFor(() => expect(f.refresh).toHaveBeenCalledTimes(2));
+  expect(f.send).toHaveBeenCalledTimes(2);
+  expect(f.send.mock.calls[1][0]).toBe(original);
+  expect(Object.isFrozen(original)).toBe(true);
+  expect(screen.queryByText(/Record send command:/)).toBeNull();
+  expect(screen.getByLabelText<HTMLTextAreaElement>('Meeting offer').disabled).toBe(false);
+  expect(f.submit).not.toHaveBeenCalled();
+  expect(f.bootstrap).not.toHaveBeenCalled();
+});
+it.each(['stale', 'gaps', 'owner', 'selection'])('holds a new record send when fresh %s facts depart, without minting a command', async change => {
+  const f = recordFixture('stale');
+  if (change === 'gaps' || change === 'stale') vi.spyOn(f.api.delegation, 'sync').mockResolvedValue({ applied: 0, cursor: null, gaps: change === 'gaps' ? 1 : 0, ownerFresh: change !== 'stale' });
+  if (change === 'owner') { const fresh = structuredClone(f.props.snapshot); fresh.ownerStatus[0].authority!.state = 'paused'; f.setSnapshot(fresh); }
+  const gate = deferred<DailySnapshot>();
+  if (change === 'selection') vi.spyOn(f.api.daily, 'get').mockReturnValueOnce(gate.promise);
+  render(<CallCampaignDraft {...f.props} />);
+  fill(); reviewPreparation(); clickPreparation(checkLabel);
+  await screen.findByText(staleLine);
+  clickPreparation(sendLabel);
+  if (change === 'selection') {
+    await waitFor(() => expect(f.api.daily.get).toHaveBeenCalledTimes(1));
+    fireEvent.change(screen.getByLabelText('Company'), { target: { value: 'b' } });
+    await act(async () => gate.resolve(f.props.snapshot));
+  } else await waitFor(() => expect(f.refresh).toHaveBeenCalledTimes(1));
+  expect(f.send).not.toHaveBeenCalled();
+  expect(screen.queryByText(/Record send command:/)).toBeNull();
 });
