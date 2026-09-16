@@ -79,7 +79,7 @@ it('requires worker handoff identity for typed completion and keeps no-reply dis
   expect(ownerCommandSchema.safeParse({ ...value, payload: { ...value.payload, outcome: { ...value.payload.outcome, outcome: 'provider_accepted' } } }).success).toBe(false);
 });
 
-import { workerEventSchema } from '../../../../src/shared/contracts/delegationContract';
+import { workerEventSchema, publicDelegationCommandSchema } from '../../../../src/shared/contracts/delegationContract';
 it('admits exact handoff event receipt and rejects mismatch instead of authority by token shape alone', () => {
   const event = { id: 'event', workspaceId: 'ws', accountId: 'account', authorityGeneration: 1, aggregateVersion: 3, kind: 'manual.handoff',
     receipt: { commandId: envelope.commandId, status: 'applied', authorityGeneration: 1, aggregateVersion: 3, reason: null as null },
@@ -313,6 +313,35 @@ it.each(['selected-large','ordinary-large','utf8-overlimit','ascii-overlimit','i
  else expect(await auth.store.list('COMMAND#')).toEqual([]);
 });
 
+// The gateway admits a body over 64 KiB only for the two owner commands that carry a saved record, each capped at a
+// 200000-byte payload inside the 204096-byte body. Every other kind keeps the existing refusal.
+it.each(['refresh-large','other-large','refresh-payload-overlimit','refresh-body-overlimit'] as const)('bounds actual HTTP saved-record resubmission by UTF-8 bytes: %s',async scenario=>{
+ const f=await refreshFixture();const handler=createWorkerHandler({auth:f.auth,host:'worker.example.test'});
+ const commandsBefore=(await f.store.list('COMMAND#')).length;
+ // Sources of 1000 characters are appended until the payload first exceeds the target, so the overshoot stays small.
+ const grow=(target:number)=>{const sources=[...f.appended.sources];
+  while(Buffer.byteLength(JSON.stringify({record:{...f.appended,sources},asOf:f.later,expectedResearchRevision:1}),'utf8')<=target)sources.push({id:`large-${sources.length}`,url:`https://example.invalid/large-${sources.length}`,fetchedAt:f.later,sha256:'c'.repeat(64),excerpt:'x'.repeat(1000),permitted:true});
+  return {...f.appended,sources};};
+ const refresh=(record:AccountRecord)=>({...envelope,commandId:randomUUID(),expectedVersion:f.getVersion(),kind:'refresh-selected-account-record',payload:{record,asOf:f.later,expectedResearchRevision:1}});
+ const command=scenario==='other-large'?{...envelope,commandId:randomUUID(),expectedVersion:f.getVersion(),kind:'pause',payload:{reason:'explicit'}}:refresh(grow(scenario==='refresh-large'?70000:scenario==='refresh-payload-overlimit'?200000:204096));
+ const body=scenario==='other-large'?JSON.stringify(command)+' '.repeat(70000):JSON.stringify(command);
+ const bytes=Buffer.byteLength(body,'utf8');expect(bytes).toBeGreaterThan(65536);
+ if(scenario==='refresh-payload-overlimit'){expect(Buffer.byteLength(JSON.stringify(command.payload),'utf8')).toBeGreaterThan(200000);expect(bytes).toBeLessThanOrEqual(204096);}
+ if(scenario==='refresh-body-overlimit')expect(bytes).toBeGreaterThan(204096);
+ const result=await handler({version:'2.0',rawPath:'/commands',rawQueryString:'',headers:{host:'worker.example.test','x-forwarded-proto':'https',authorization:f.bearer},body,requestContext:{domainName:'worker.example.test',http:{method:'POST',sourceIp:'fictional'}}});
+ if(scenario==='refresh-large'){
+  expect(result.statusCode).toBe(200);
+  expect(JSON.parse(result.body)).toMatchObject({commandId:command.commandId,status:'applied'});
+  const record=f.options.dynamo.inspect('ACCOUNT#account') as AccountRecord;
+  expect(record.sources.length).toBeGreaterThan(f.appended.sources.length);expect(record.routes).toEqual(f.appended.routes);
+  expect(await f.lastEvent()).toMatchObject({kind:'account.refreshed',payload:{commandId:command.commandId}});
+ } else {
+  expect(result.statusCode).toBe(400);
+  expect(f.options.dynamo.inspect('ACCOUNT#account')).toEqual(f.stored);
+  expect(await f.store.list('COMMAND#')).toHaveLength(commandsBefore);
+ }
+});
+
 import { TransactWriteItemsCommand } from '@aws-sdk/client-dynamodb';
 import { createWorkerHandler } from '../src/handler';
 
@@ -511,3 +540,103 @@ it('configure-owner scope replay resumes the immutable command after scope admis
 it('configure-owner scope replay keeps the no-mail path replayable after the same final-commit fault', async () => {
   await verifyIntakeReplay(false);
 }, 20_000);
+
+// The owner resubmits its saved record through the STANDARD owner path: replay by fingerprint,
+// worker-owned active authority, real generation/version, claim, then one atomic receipt/event.
+import type { AccountRecord } from '../../../../src/shared/contracts/accountRecordContract';
+async function refreshFixture() {
+  const f = await configuredManualFixture('call', false);
+  // Every real ACCOUNT# writer (bootstrap, create, evidence, settle) stamps the accountId/version item fields the
+  // refresh fence checks; the manual fixture seed above skipped them, so restore the real shape without changing data.
+  const seeded = (await f.store.get<AccountRecord>('ACCOUNT#account'))!;
+  await f.store.transact([f.store.put('ACCOUNT#account', seeded.data, seeded.rev, { accountId: 'account', version: seeded.data.account.version })]);
+  const stored = f.options.dynamo.inspect('ACCOUNT#account') as AccountRecord;
+  const later = '2026-09-08T12:01:00.000Z';
+  const source = { id: 'local-source', url: 'https://example.invalid/team', fetchedAt: later, sha256: 'b'.repeat(64), excerpt: 'Locally admitted second phone', permitted: true };
+  const route = { ...f.route, id: 'local-route', value: '+12025550124', evidenceIds: ['local-source'] };
+  const account = { ...stored.account, version: stored.account.version + 1 };
+  const appended: AccountRecord = { ...stored, account, sources: [...stored.sources, source], routes: [...stored.routes, route],
+    history: [...stored.history, { at: later, account, claims: [], routes: [...stored.routes, route] }] };
+  f.options.clock.now = () => later;
+  const refresh = (record: AccountRecord, expectedResearchRevision = 1, asOf = later) => f.apply('refresh-selected-account-record', { record, asOf, expectedResearchRevision });
+  const lastEvent = async () => (await f.store.eventsAfter(null)).events.at(-1);
+  return { ...f, stored, appended, later, refresh, lastEvent, bearer: `Bearer ${f.pairing.credential}` };
+}
+it('binds the resubmitted record to its account and research revision and keeps it out of the public renderer schema', async () => {
+  const f = await refreshFixture();
+  const command = { ...envelope, commandId: randomUUID(), kind: 'refresh-selected-account-record', payload: { record: f.appended, asOf: f.later, expectedResearchRevision: 1 } };
+  expect(ownerCommandSchema.safeParse(command).success).toBe(true);
+  expect(ownerCommandSchema.safeParse({ ...command, accountId: 'other' }).success).toBe(false);
+  expect(ownerCommandSchema.safeParse({ ...command, payload: { ...command.payload, expectedResearchRevision: 2 } }).success).toBe(false);
+  expect(ownerCommandSchema.safeParse({ ...command, payload: { ...command.payload, suppression: [] } }).success).toBe(false);
+  expect(ownerCommandSchema.safeParse({ ...command, payload: { ...command.payload, expectedResearchRevision: null } }).success).toBe(false);
+  expect(publicDelegationCommandSchema.safeParse(command).success).toBe(false);
+});
+it('applies the appended record atomically with its receipt and account.refreshed event, replays exactly and treats the equal record as a duplicate', async () => {
+  const f = await refreshFixture();
+  const before = f.getVersion();
+  const { command, receipt } = await f.refresh(f.appended);
+  expect(receipt).toEqual({ commandId: command.commandId, status: 'applied', authorityGeneration: 1, aggregateVersion: before + 1, reason: null });
+  expect(f.options.dynamo.inspect('ACCOUNT#account')).toEqual(f.appended);
+  expect(f.options.dynamo.inspect('AUTH#account')).toEqual({ authority: { accountId: 'account', owner: 'worker', state: 'active', generation: 1 }, version: before + 1 });
+  expect(await f.lastEvent()).toMatchObject({ kind: 'account.refreshed', accountId: 'account', authorityGeneration: 1, aggregateVersion: before + 1, receipt,
+    payload: { commandId: command.commandId, recordFingerprint: fingerprint(f.appended), researchRevision: 1 } });
+  const commit = f.options.dynamo.transactions.at(-1)!.TransactItems!.map(item => item.Put?.Item?.sk?.S ?? item.ConditionCheck?.Key?.sk?.S);
+  expect(commit).toEqual(expect.arrayContaining(['ACCOUNT#account', 'AUTH#account', `COMMAND#${command.commandId}`]));
+  const transactions = f.options.dynamo.transactions.length;
+  expect(await f.coordinator.apply(command, f.bearer)).toEqual(receipt);
+  expect(f.options.dynamo.transactions).toHaveLength(transactions);
+  // The same record again is applied with duplicate semantics: receipt and event, no ACCOUNT# rewrite.
+  const duplicate = await f.refresh(f.appended);
+  expect(duplicate.receipt).toMatchObject({ status: 'applied', aggregateVersion: before + 2 });
+  const duplicateCommit = f.options.dynamo.transactions.at(-1)!.TransactItems!;
+  expect(duplicateCommit.some(item => item.Put?.Item?.sk?.S === 'ACCOUNT#account')).toBe(false);
+  expect(duplicateCommit.some(item => item.ConditionCheck?.Key?.sk?.S === 'ACCOUNT#account')).toBe(true);
+  expect(f.options.dynamo.inspect('ACCOUNT#account')).toEqual(f.appended);
+  expect(await f.lastEvent()).toMatchObject({ kind: 'account.refreshed', payload: { commandId: duplicate.command.commandId, recordFingerprint: fingerprint(f.appended) } });
+  // A further local admission is accepted only when it preserves the whole stored history at its head.
+  const account = { ...f.appended.account, version: f.appended.account.version + 1 };
+  const third = { ...f.appended, account, history: [...f.appended.history, { at: f.later, account, claims: [], routes: f.appended.routes }] };
+  expect((await f.refresh(third)).receipt.status).toBe('applied');
+  expect(f.options.dynamo.inspect('ACCOUNT#account')).toEqual(third);
+});
+it.each([
+  ['record_identity_mismatch', (f: Awaited<ReturnType<typeof refreshFixture>>) => f.refresh({ ...f.appended, account: { ...f.appended.account, domain: 'other.invalid' }, history: f.appended.history.map(entry => ({ ...entry, account: { ...entry.account, domain: 'other.invalid' } })) })],
+  ['record_research_stale', (f: Awaited<ReturnType<typeof refreshFixture>>) => f.refresh({ ...f.appended, researchRevision: 2 }, 2)],
+  ['record_history_diverged', (f: Awaited<ReturnType<typeof refreshFixture>>) => f.refresh({ ...f.appended, history: [{ ...f.appended.history[0]!, at: f.later }, ...f.appended.history.slice(1)] })],
+  ['route_evidence_missing', (f: Awaited<ReturnType<typeof refreshFixture>>) => f.refresh({ ...f.appended, sources: f.stored.sources })],
+] as const)('records %s as a rejected receipt the founder can read and leaves the record untouched', async (code, attempt) => {
+  const f = await refreshFixture();
+  const before = f.getVersion();
+  const { command, receipt } = await attempt(f);
+  expect(receipt).toEqual({ commandId: command.commandId, status: 'rejected', authorityGeneration: 1, aggregateVersion: before + 1, reason: code });
+  expect(f.options.dynamo.inspect('ACCOUNT#account')).toEqual(f.stored);
+  expect(await f.lastEvent()).toMatchObject({ kind: 'authority.changed', aggregateVersion: before + 1, payload: { authority: { owner: 'worker', state: 'active', generation: 1 }, receipt } });
+  expect(await f.coordinator.apply(command, f.bearer)).toEqual(receipt);
+});
+it('records record_not_newer when a resubmission carries an older account version than the worker already holds', async () => {
+  const f = await refreshFixture();
+  expect((await f.refresh(f.appended)).receipt.status).toBe('applied');
+  const before = f.getVersion();
+  const { command, receipt } = await f.refresh({ ...f.appended, account: { ...f.appended.account, version: f.stored.account.version } });
+  expect(receipt).toEqual({ commandId: command.commandId, status: 'rejected', authorityGeneration: 1, aggregateVersion: before + 1, reason: 'record_not_newer' });
+  expect(f.options.dynamo.inspect('ACCOUNT#account')).toEqual(f.appended);
+  expect(await f.lastEvent()).toMatchObject({ kind: 'authority.changed', payload: { receipt } });
+});
+it('never accepts a saved record for a company the worker does not actively own, before any record check', async () => {
+  const f = await refreshFixture();
+  await f.execution.applyCommand({ ...envelope, commandId: randomUUID(), expectedVersion: f.getVersion(), kind: 'pause', payload: { reason: 'explicit pause' } });
+  const paused = { ...envelope, commandId: randomUUID(), expectedVersion: f.getVersion() + 1, kind: 'refresh-selected-account-record', payload: { record: f.appended, asOf: f.later, expectedResearchRevision: 1 } };
+  await expect(f.coordinator.apply(paused, f.bearer)).rejects.toThrow('stale_authority');
+  const missing = { ...envelope, accountId: 'unowned', commandId: randomUUID(), kind: 'refresh-selected-account-record',
+    payload: { record: { ...f.appended, account: { ...f.appended.account, id: 'unowned' }, routes: [], history: [{ at: f.later, account: { ...f.appended.account, id: 'unowned' }, claims: [], routes: [] }] }, asOf: f.later, expectedResearchRevision: 1 } };
+  await expect(f.coordinator.apply(missing, f.bearer)).rejects.toThrow('authority_missing');
+  expect(f.options.dynamo.inspect('ACCOUNT#account')).toEqual(f.stored);
+  expect(await f.store.list('ACCOUNT#')).toHaveLength(1);
+});
+it('refuses a future or oversized resubmission as a protocol violation rather than a founder-readable rejection', async () => {
+  const f = await refreshFixture();
+  await expect(f.refresh(f.appended, 1, '2026-09-08T12:02:00.000Z')).rejects.toThrow('refresh_identity_conflict');
+  await expect(f.refresh({ ...f.appended, sources: [...f.appended.sources, { ...f.appended.sources[0]!, id: 'future', fetchedAt: '2026-09-08T12:02:00.000Z' }] })).rejects.toThrow('refresh_evidence_conflict');
+  expect(f.options.dynamo.inspect('ACCOUNT#account')).toEqual(f.stored);
+});

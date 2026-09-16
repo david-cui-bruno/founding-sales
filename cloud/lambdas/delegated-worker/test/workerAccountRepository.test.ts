@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createWorkerAccountRepository } from '../src/workerAccountRepository';
+import { createWorkerAccountRepository, selectedRecordRefreshRejections, isSelectedRecordRefreshRejection } from '../src/workerAccountRepository';
 import { ScriptedDynamo, row, transaction, ConditionalCommandHarness } from './sdkHarness';
 import { rankAccount } from '../../../../src/shared/accounts/accountRanking';
 import { projectAccountEvidence } from '../../../../src/main/domain/accounts/accountEvidence';
@@ -148,4 +148,75 @@ it('skips an unaffordable queued head without releasing reservations or starving
   expect(db.inspect(`JOB#${expensive}`)).toMatchObject({ state: 'queued', reservedCost: 0 });
   expect(db.inspect('BUDGET#research')).toMatchObject({ spent: 50 });
   expect(await store.claimNext(clock.now())).toBeNull();
+});
+
+import { DynamoStore, fingerprint } from '../src/dynamoStore';
+import type { AccountRecord } from '../../../../src/shared/contracts/accountRecordContract';
+import type { AccountRoute } from '../../../../src/shared/contracts/accountContract';
+/** The owner resubmits its saved record after a local admission. The worker plans an atomic
+ * ACCOUNT# replacement for the coordinator's receipt transaction and refuses with one exact code. */
+describe('owner-resubmitted saved record', () => {
+  const later = '2026-09-09T00:01:00.000Z';
+  const source = { id: 'source', url: 'https://fictional.example/team', fetchedAt: clock.now(), sha256: 'a'.repeat(64), excerpt: 'Fictional published phone', permitted: true };
+  const seeded: AccountRoute = { id: 'route-1', accountId: 'acct', personId: null, channel: 'phone', value: '+12025550101', version: 1, purpose: 'business', verification: 'published', evidenceIds: ['source'] };
+  const admitted: AccountRoute = { ...seeded, id: 'route-2', value: '+12025550102' };
+  const stored: AccountRecord = { account: { ...account, version: 2 }, sources: [source], claims: [], routes: [seeded], researchRevision: 1,
+    history: [{ at: clock.now(), account, claims: [], routes: [] }, { at: clock.now(), account: { ...account, version: 2 }, claims: [], routes: [seeded] }] };
+  const appended: AccountRecord = { ...stored, account: { ...account, version: 3 }, routes: [seeded, admitted],
+    history: [...stored.history, { at: later, account: { ...account, version: 3 }, claims: [], routes: [seeded, admitted] }] };
+  async function refreshFixture(record: AccountRecord | null = stored) {
+    const db = new ConditionalCommandHarness();
+    const options = { dynamo: db, tableName: 't', workspaceId: 'ws', clock };
+    const raw = new DynamoStore(options);
+    if (record) await raw.transact([raw.put('ACCOUNT#acct', record, null, { accountId: 'acct', version: record.account.version })]);
+    return { db, raw, store: createWorkerAccountRepository(options) };
+  }
+  it('plans one rev-checked ACCOUNT# replacement for an appended history and no write for the equal record', async () => {
+    const f = await refreshFixture();
+    const plan = await f.store.refreshRecord({ accountId: 'acct', record: appended, expectedResearchRevision: 1 });
+    expect(plan.duplicate).toBe(false);
+    expect(plan.items).toHaveLength(1);
+    const put = plan.items[0]!.Put!;
+    expect(put.Item!.sk).toEqual({ S: 'ACCOUNT#acct' });
+    expect(JSON.parse(put.Item!.data!.S!)).toEqual(appended);
+    expect(put.ConditionExpression).toContain('#rev = :rev');
+    expect(put.ExpressionAttributeValues).toMatchObject({ ':rev': { N: '1' }, ':f1': { N: '2' } });
+    // Planning writes nothing: the coordinator commits the plan together with its receipt.
+    expect(f.db.inspect('ACCOUNT#acct')).toEqual(stored);
+    expect(f.db.transactions).toHaveLength(1);
+    await f.raw.transact(plan.items);
+    expect(f.db.inspect('ACCOUNT#acct')).toEqual(appended);
+    const duplicate = await f.store.refreshRecord({ accountId: 'acct', record: appended, expectedResearchRevision: 1 });
+    expect(duplicate.duplicate).toBe(true);
+    expect(duplicate.items.map(item => Object.keys(item)[0])).toEqual(['ConditionCheck']);
+    await f.raw.transact(duplicate.items);
+    expect(f.db.inspect('ACCOUNT#acct')).toEqual(appended);
+  });
+  const rejections: [string, AccountRecord | null, AccountRecord, number][] = [
+    ['account_missing', null, appended, 1],
+    ['record_identity_mismatch', stored, { ...appended, account: { ...appended.account, name: 'Renamed PM' }, history: appended.history.map(entry => ({ ...entry, account: { ...entry.account, name: 'Renamed PM' } })) }, 1],
+    ['record_research_stale', stored, appended, 2],
+    ['record_history_diverged', stored, { ...appended, history: [appended.history[0]!, { ...appended.history[1]!, at: later }, appended.history[2]!] }, 1],
+    ['route_evidence_missing', stored, { ...appended, routes: [seeded, { ...admitted, evidenceIds: ['unadmitted-source'] }], history: [...stored.history, { ...appended.history[2]!, routes: [seeded, { ...admitted, evidenceIds: ['unadmitted-source'] }] }] }, 1],
+    ['route_evidence_missing', stored, { ...appended, sources: [{ ...source, permitted: false }] }, 1],
+    ['record_not_newer', stored, { ...stored, account: { ...account, version: 1 } }, 1],
+  ];
+  it.each(rejections)('refuses %s with that exact code and plans nothing', async (code, seed, record, expectedResearchRevision) => {
+    const f = await refreshFixture(seed);
+    await expect(f.store.refreshRecord({ accountId: 'acct', record, expectedResearchRevision })).rejects.toThrow(new RegExp(`^${code}$`));
+    expect(f.db.transactions).toHaveLength(seed ? 1 : 0);
+    if (seed) expect(f.db.inspect('ACCOUNT#acct')).toEqual(seed);
+  });
+  it('checks in the stated order: a stale research revision is reported before a diverged history', async () => {
+    const f = await refreshFixture();
+    const diverged = { ...appended, history: [{ ...appended.history[0]!, at: later }, ...appended.history.slice(1)] };
+    await expect(f.store.refreshRecord({ accountId: 'acct', record: diverged, expectedResearchRevision: 2 })).rejects.toThrow(/^record_research_stale$/);
+    await expect(f.store.refreshRecord({ accountId: 'acct', record: diverged, expectedResearchRevision: 1 })).rejects.toThrow(/^record_history_diverged$/);
+  });
+  it('exports the exact rejection codes the coordinator may turn into a founder-readable receipt', () => {
+    expect([...selectedRecordRefreshRejections]).toEqual(['account_missing', 'record_identity_mismatch', 'record_research_stale', 'record_history_diverged', 'route_evidence_missing', 'record_not_newer']);
+    expect(isSelectedRecordRefreshRejection('record_not_newer')).toBe(true);
+    expect(isSelectedRecordRefreshRejection('stale_authority')).toBe(false);
+    expect(fingerprint(stored)).not.toBe(fingerprint(appended));
+  });
 });

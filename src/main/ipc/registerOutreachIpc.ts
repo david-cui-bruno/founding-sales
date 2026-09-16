@@ -11,7 +11,7 @@ import {approveMeetingFromReplySchema,getMeetingApprovalSchema,meetingApprovalSt
 import {configureAccountIntakeSchema,accountIntakeConfigureStatusSchema,boundAccountIntakeConfigureStatus} from '../../shared/contracts/accountIntakeConfigureContract';
 import type { DelegationRuntime } from '../delegation/delegationRuntime';
 import type { PairingStore } from '../delegation/pairingStore';
-import { delegatedPhoneHandoffRequestSchema,bootstrapSelectedAccountSchema,configureResearchSourceSchema,ownerResearchSourceSchema,configureLocalDelegationSchema,localDelegationStatusSchema,localDelegationConfigurationRecordSchema,redeemLocalPairingSchema,redeemedLocalPairingSchema,delegationSyncReportSchema } from '../../shared/contracts/ownerCommandContract';
+import { delegatedPhoneHandoffRequestSchema,bootstrapSelectedAccountSchema,refreshSelectedAccountRecordSchema,selectedAccountFreshnessRequestSchema,selectedAccountFreshnessSchema,configureResearchSourceSchema,ownerResearchSourceSchema,configureLocalDelegationSchema,localDelegationStatusSchema,localDelegationConfigurationRecordSchema,redeemLocalPairingSchema,redeemedLocalPairingSchema,delegationSyncReportSchema } from '../../shared/contracts/ownerCommandContract';
 import {delegatedPhoneHandoffResultSchema,publicDelegationCommandSchema,commandReceiptSchema} from '../../shared/contracts/delegationContract';
 import type { z } from 'zod';
 import { configureOutreachSchema,draftRevisionSchema,emailDraftSchema,localEmailAuthorityReadSchema,openDraftSchema,outreachStatusSchema,
@@ -96,6 +96,17 @@ export function registerOutreachIpc(options:{provider:OutreachApi;delegation?:De
         return status;
       });
       add('delegation-configure-intake',configureAccountIntakeSchema,accountIntakeConfigureStatusSchema,async request=>boundAccountIntakeConfigureStatus(request).parse(await d.configureIntake(request)));
+      // The renderer names only the command and the company; the trusted exporter builds the record in main.
+      add('delegation-refresh-selected-account',refreshSelectedAccountRecordSchema,commandReceiptSchema,async request=>{
+        const receipt=await d.refreshSelectedAccount(request);
+        if(receipt.commandId!==request.commandId)throw new Error('refresh_receipt_identity_mismatch');
+        return receipt;
+      });
+      add('delegation-selected-account-freshness',selectedAccountFreshnessRequestSchema,selectedAccountFreshnessSchema,async request=>{
+        const freshness=await d.getSelectedAccountFreshness(request);
+        if(freshness.accountId!==request.accountId)throw new Error('selected_account_freshness_identity_mismatch');
+        return freshness;
+      });
     }
     if(options.pairingStore)add('delegation-pair',redeemLocalPairingSchema,redeemedLocalPairingSchema,input=>options.pairingStore!.redeem(input,AbortSignal.timeout(15000)));
 

@@ -12,7 +12,7 @@ import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { GetParameterCommand, SSMClient, type GetParameterCommandOutput } from '@aws-sdk/client-ssm';
 import { z } from 'zod';
 import { delegationCommandSchema } from '../../../../src/shared/contracts/delegationContract';
-import { bootstrapSelectedAccountCommandSchema, ownerCommandSchema } from '../../../../src/shared/contracts/ownerCommandContract';
+import { bootstrapSelectedAccountCommandSchema, refreshSelectedAccountRecordCommandSchema, ownerCommandSchema } from '../../../../src/shared/contracts/ownerCommandContract';
 import { OwnerCommandCoordinator } from './ownerCommandCoordinator';
 import { WorkerAuth } from './workerAuth';
 import { DynamoExecutionRepository } from './executionRepository';
@@ -28,6 +28,9 @@ const response = (statusCode: number, body: unknown): WorkerHttpResponse => ({ s
 // JSON-escaped subject/body add at most 6*(240+20000) bytes, plus a small
 // workspace/revision envelope. 1MiB bounds that combined ordinary-only request.
 const ordinaryReplyEnvelopeMaxBytes = 1024 * 1024;
+// Only the two owner commands that carry a saved record (selected bootstrap and the record refresh a worker-owned
+// company receives later) may exceed 64 KiB; each keeps the same 200000-byte payload cap inside the 204096-byte body.
+const savedRecordCommandSchema = z.discriminatedUnion('kind', [bootstrapSelectedAccountCommandSchema, refreshSelectedAccountRecordCommandSchema]);
 const eventSchema = z.object({ version: z.literal('2.0'), rawPath: z.string().max(100), rawQueryString: z.string().max(8192),
   headers: z.record(z.string(), z.string().max(16384)), body: z.string().max(ordinaryReplyEnvelopeMaxBytes).refine(value => Buffer.byteLength(value, 'utf8') <= ordinaryReplyEnvelopeMaxBytes).optional(), isBase64Encoded: z.literal(false).optional(),
   requestContext: z.object({ domainName: z.string(), http: z.object({ method: z.enum(['POST', 'GET']), sourceIp: z.string().min(1).max(256) }) }) })
@@ -41,11 +44,11 @@ export function createWorkerHandler(input: { auth: WorkerAuth; host: string; goo
       if (event.headers['x-forwarded-proto'] !== 'https' || event.headers.host !== input.host || event.requestContext.domainName !== input.host) return response(400, { error: 'worker_invalid_request' });
       const method = event.requestContext.http.method; const path = event.rawPath;
       if (path === '/accounts/preparation' && event.body && Buffer.byteLength(event.body, 'utf8') > ACCOUNT_PREPARATION_MAX_REQUEST_BYTES) return response(400, { error: 'worker_invalid_request' });
-      // All other requests retain their existing limits. Only selected bootstrap
-      // and the bounded prior+next ordinary draft envelope get larger bodies.
+      // All other requests retain their existing limits. Only the saved-record owner commands (selected bootstrap,
+      // record refresh) and the bounded prior+next ordinary draft envelope get larger bodies.
       if (event.body && Buffer.byteLength(event.body, 'utf8') > 65536 && !(path === '/reply/draft' && method === 'POST')) {
         if (path !== '/commands' || method !== 'POST') return response(400, { error: 'worker_request_rejected' });
-        const selected = bootstrapSelectedAccountCommandSchema.parse(JSON.parse(event.body));
+        const selected = savedRecordCommandSchema.parse(JSON.parse(event.body));
         if (Buffer.byteLength(JSON.stringify(selected.payload), 'utf8') > 200000) return response(400, { error: 'worker_request_rejected' });
       }
       const query = new URLSearchParams(event.rawQueryString);

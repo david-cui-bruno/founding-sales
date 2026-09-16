@@ -24,13 +24,20 @@ import {ExecutionClient,createResearchSetupTransport,createAccountPreparationTra
 import {createResearchSetupService,awaitResearchSetupOperation} from './researchSetupService';
 import type {ResearchSetupRequestStore} from './researchSetupRequestStore';
 import type {ResearchSetupApi} from '../../shared/contracts/researchSetupContract';
-import {approveRequestedFollowupCommandSchema,approveMeetingCommandSchema,configureOwnerCommandSchema,ownerSourceConfigurationSchema,delegatedPhoneHandoffRequestSchema,bootstrapSelectedAccountSchema,bootstrapSelectedAccountCommandSchema,configureLocalDelegationSchema,localDelegationStatusSchema} from '../../shared/contracts/ownerCommandContract';
+import {approveRequestedFollowupCommandSchema,approveMeetingCommandSchema,configureOwnerCommandSchema,ownerSourceConfigurationSchema,delegatedPhoneHandoffRequestSchema,bootstrapSelectedAccountSchema,bootstrapSelectedAccountCommandSchema,refreshSelectedAccountRecordSchema,refreshSelectedAccountRecordCommandSchema,selectedAccountFreshnessRequestSchema,selectedAccountFreshnessSchema,configureLocalDelegationSchema,localDelegationStatusSchema} from '../../shared/contracts/ownerCommandContract';
 import {configureAccountIntakeSchema,accountIntakeConfigureStatusSchema,type ConfigureAccountIntake,type AccountIntakeHoldReason} from '../../shared/contracts/accountIntakeConfigureContract';
 import {googleScopes} from '../../shared/contracts/googleGrantCapabilities';
 import {publicDelegationCommandSchema,type DelegatedPhoneHandoffResult,type DelegationCommand} from '../../shared/contracts/delegationContract';
 import {approveMeetingFromReplySchema,getMeetingApprovalSchema,meetingApprovalStatusSchema,schedulingEvidence,type ApproveMeetingFromReply} from '../../shared/contracts/meetingContract';
 import {resolveLocalTime} from '../../shared/meetings/schedulingRules';
 type ApproveMeetingCommand=Extract<DelegationCommand,{kind:'approve-meeting'}>;
+/** What the worker gateway (cloud/lambdas/delegated-worker/src/handler.ts) admits on POST /commands for a saved-record
+ * command: the whole body up to 204096 bytes and the payload up to 200000 bytes, both counted in UTF-8. */
+export const REFRESH_COMMAND_LIMITS=Object.freeze({maxBodyBytes:204096,maxPayloadBytes:200000});
+/** A resubmission the gateway would refuse on every retry is never queued, so no unsendable identity can hold the company. */
+export function assertRefreshCommandTransportable(command:{commandId:string;payload:unknown}):void{
+ if(Buffer.byteLength(JSON.stringify(command.payload),'utf8')>REFRESH_COMMAND_LIMITS.maxPayloadBytes||Buffer.byteLength(JSON.stringify(command),'utf8')>REFRESH_COMMAND_LIMITS.maxBodyBytes)throw Error('refresh_record_too_large');
+}
 /** The founder-visible binding of one approval. The same binding reuses the live
  * command; a different binding against a live approval is a conflict, never a second command. */
 function meetingApprovalBinding(value:ApproveMeetingCommand|ApproveMeetingFromReply):string{
@@ -273,6 +280,39 @@ export function createDelegationRuntime(input:{databaseGate:{withDatabase<T>(fn:
     const suppression=(database.raw.prepare('SELECT id,observed_at AS observedAt,source,evidence_ref AS evidenceRef FROM pm_account_suppression_tombstones WHERE account_id=? LIMIT 101').all(request.accountId));
     const command=previous??bootstrapSelectedAccountCommandSchema.parse({...request,workspaceId:pairing.workspaceId,expectedAuthorityGeneration:0,expectedVersion:0,kind:'bootstrap-selected-account',payload:{record,asOf:input.clock.now(),expectedResearchRevision:cursor?.aggregate_version??null,suppression}});
     await current.client.submit(command);await current.client.sync(signal);const receipt=current.repository.commandStatus(request.commandId);if(!receipt)throw Error('bootstrap_receipt_missing');return receipt;
+  });},
+  /** Explicit resubmission of the current saved record to the worker that already owns the company. One live command
+   * per company: the same id reuses its stored command, a different id against a pending send is a conflict. Generation
+   * and version are the real local mirror values, the record is bound to the local research cursor, and the button is
+   * the only producer. Nothing here changes ownership, campaigns, mail or calendar. */
+  refreshSelectedAccount:(raw:unknown)=>{const request=refreshSelectedAccountRecordSchema.parse(raw);invalidate();return run(async(database,signal)=>{
+    const current=services(database,signal);if(!pairing)throw Error('pairing_unconfigured');const repository=current.repository;
+    const previous=repository.getCommand(request.commandId);
+    if(previous&&(previous.kind!=='refresh-selected-account-record'||previous.accountId!==request.accountId))throw Error('refresh_command_conflict');
+    const live=repository.selectedAccountRecordCommands(request.accountId).filter(command=>command.kind==='refresh-selected-account-record'&&repository.commandStatus(command.commandId)?.status==='pending');
+    if(live.some(command=>command.commandId!==request.commandId))throw Error('refresh_command_conflict');
+    let command=previous;
+    if(!command){
+      const authority=repository.authority(request.accountId);const version=repository.executionVersion(request.accountId);
+      if(!authority||authority.owner!=='worker'||authority.state!=='active'||version===null||repository.hasPendingStop(request.accountId))throw Error('refresh_owner_inactive');
+      if(repository.pendingCommands().some(pending=>pending.accountId===request.accountId))throw Error('refresh_owner_pending');
+      const cursor=database.raw.prepare("SELECT aggregate_version FROM delegated_event_cursors WHERE workspace_id=? AND account_id=? AND stream='research'").get(pairing.workspaceId,request.accountId) as {aggregate_version:number}|undefined;
+      if(!cursor)throw Error('refresh_research_cursor_missing');
+      const asOf=input.clock.now();
+      const record=exportSelectedAccountRecord({database,workspaceId:pairing.workspaceId,accountId:request.accountId,asOf,researchRevision:cursor.aggregate_version});
+      command=refreshSelectedAccountRecordCommandSchema.parse({...request,workspaceId:pairing.workspaceId,expectedAuthorityGeneration:authority.generation,expectedVersion:version,kind:'refresh-selected-account-record',payload:{record,asOf,expectedResearchRevision:cursor.aggregate_version}});
+      assertRefreshCommandTransportable(command);
+    }
+    await current.client.submit(command);await current.client.sync(signal);const receipt=repository.commandStatus(request.commandId);if(!receipt)throw Error('refresh_receipt_missing');return receipt;
+  });},
+  /** Local comparison of the saved record with the copy the worker last applied (bootstrap or refresh). No worker call. */
+  getSelectedAccountFreshness:(raw:unknown)=>{const request=selectedAccountFreshnessRequestSchema.parse(raw);return run((database,signal)=>{
+    if(!pairing)throw Error('pairing_unconfigured');const repository=services(database,signal).repository;
+    const sent=repository.selectedAccountRecordCommands(request.accountId).filter(command=>repository.commandStatus(command.commandId)?.status==='applied').at(-1);
+    const cursor=database.raw.prepare("SELECT aggregate_version FROM delegated_event_cursors WHERE workspace_id=? AND account_id=? AND stream='research'").get(pairing.workspaceId,request.accountId) as {aggregate_version:number}|undefined;
+    const local=exportSelectedAccountRecord({database,workspaceId:pairing.workspaceId,accountId:request.accountId,asOf:input.clock.now(),researchRevision:cursor?.aggregate_version??1});
+    const localFingerprint=accountFingerprint(local);const sentFingerprint=sent?accountFingerprint(sent.payload.record):null;
+    return selectedAccountFreshnessSchema.parse({accountId:request.accountId,state:sentFingerprint===null?'unknown':sentFingerprint===localFingerprint?'current':'stale',localFingerprint,sentFingerprint,sentAt:sent?.payload.asOf??null});
   });},
   submit:(raw:unknown)=>{const command=publicDelegationCommandSchema.parse(raw);invalidate();return run((database,signal)=>services(database,signal).client.submit(command));},
   sync:()=>run((database,signal)=>services(database,signal).client.sync(AbortSignal.any([signal,AbortSignal.timeout(15000)]))),

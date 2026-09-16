@@ -12,7 +12,7 @@ import { WorkerCampaignRepository, campaignReservationKey, campaignReservationSc
 import { enrollmentSchema, campaignEventPayloadSchema } from '../../../../src/shared/contracts/campaignContract';
 import { QueryCommand,type AttributeValue,type TransactWriteItem } from '@aws-sdk/client-dynamodb';
 import { ownerReplyDraftRequestSchema, accountReplyDraftSchema, assertReplyDraftLineage, replyDraftResultSchema, threadProjectionSchema, mailAccountScopeSchema } from '../../../../src/shared/contracts/mailThreadContract';
-import { accountRecordSchema, accountKey } from './workerAccountRepository';
+import { accountRecordSchema, accountKey, createWorkerAccountRepository, isSelectedRecordRefreshRejection } from './workerAccountRepository';
 import { intakeRegistryKey, intakeRegistrySchema, createIntakeBarrier, validatePendingHandoff } from './intakeBarrier';
 import type { WorkerAuth } from './workerAuth';
 import type { RemoteGoogleAuthorization } from './remoteGoogleAuthorization';
@@ -262,6 +262,13 @@ export class OwnerCommandCoordinator {
         proof.push(store.check(key,row.rev),store.check(commandKey,reservationRow!.rev));
       }
       event=workerEventSchema.parse({...base,kind:'acquisition.milestone_reported',receipt,payload:{commandId:command.commandId,report,observedAt:store.now(),source:'owner_report'}});
+    } else if (command.kind === 'refresh-selected-account-record') {
+      const plan = await this.refreshSelectedRecord(command, store);
+      if (plan.rejected) receipt = { ...receipt, status: 'rejected', reason: plan.rejected };
+      proof = [...plan.items, store.check(claimKey, claim.rev)];
+      // A refusal is still an owner-applied receipt the founder reads by its exact reason; ownership is unchanged.
+      event = workerEventSchema.parse(plan.rejected ? { ...base, kind: 'authority.changed', payload: { authority: current.authority, receipt } }
+        : { ...base, kind: 'account.refreshed', receipt, payload: { commandId: command.commandId, recordFingerprint: fingerprint(command.payload.record), researchRevision: command.payload.record.researchRevision } });
     } else if (command.kind === 'campaign-command') {
       const plan = await new WorkerCampaignRepository(store.options).planCommand({ commandId: command.commandId, accountId: command.accountId, payload: command.payload });
       proof = plan.items; event = workerEventSchema.parse({ ...base, kind: 'campaign.changed', payload: plan.payload, receipt });
@@ -299,6 +306,21 @@ export class OwnerCommandCoordinator {
     const outbox=await store.eventItems(event);const suppressionKey=mailSuppressionKey(command.accountId);const suppression=await store.get(suppressionKey);
     await store.transact([previous?store.check(aKey,previous.rev):store.put(aKey,record,null,{accountId:command.accountId,version:record.account.version}),store.put(authKey,next,prior?.rev??null,executionAuthorityFields(next)),store.put(key,{fingerprint:fp,receipt,sequence:outbox.sequence,command},null),...(p.suppression.length&&!suppression?[store.put(suppressionKey,{accountId:command.accountId,source:'selected_owner_bootstrap',evidence:p.suppression},null)]:[]),...outbox.items]);
     await store.publish(outbox.sequence);return receipt;
+  }
+  /** Owner-resubmitted saved record through the standard owner path (no bootstrap bypass). Structural violations
+   * throw exactly as bootstrap's do; each stated refusal of the account repository becomes the rejected receipt's
+   * reason. Bootstrap semantics, the research cursor and ownership are never touched here. */
+  private async refreshSelectedRecord(command: Extract<OwnerCommand, { kind: 'refresh-selected-account-record' }>, store: DynamoStore): Promise<{ items: TransactWriteItem[]; rejected: string | null }> {
+    const p = command.payload, record = p.record;
+    if (record.account.id !== command.accountId || p.asOf > store.now() || Buffer.byteLength(JSON.stringify(p)) > 200000 || record.history.length > 200 || record.sources.length > 100 || record.claims.length > 500 || record.routes.length > 500) throw Error('refresh_identity_conflict');
+    if (record.history.some(item => item.account.id !== command.accountId || item.at > p.asOf || item.routes.some(route => route.accountId !== command.accountId)) || record.routes.some(route => route.accountId !== command.accountId) || record.sources.some(source => source.fetchedAt > p.asOf)) throw Error('refresh_evidence_conflict');
+    try {
+      const plan = await createWorkerAccountRepository(store.options).refreshRecord({ accountId: command.accountId, record, expectedResearchRevision: p.expectedResearchRevision });
+      return { items: plan.items, rejected: null };
+    } catch (error) {
+      if (error instanceof Error && isSelectedRecordRefreshRejection(error.message)) return { items: [], rejected: error.message };
+      throw error;
+    }
   }
   private async noMailIntake(accountId:string,store:DynamoStore,scoped?:NonNullable<Awaited<ReturnType<typeof validatePendingHandoff>>>){
     const account=await store.get<unknown>(accountKey(accountId));const key=intakeRegistryKey(accountId);const row=await store.get<unknown>(key);

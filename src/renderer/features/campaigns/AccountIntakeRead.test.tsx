@@ -26,7 +26,8 @@ it('exposes an explicit intake read inside actual worker preparation without aut
   review();
   expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Read intake configuration' }).disabled).toBe(false);
   expect(f.read).not.toHaveBeenCalled();
-  expect(f.calls).toEqual([]);
+  // The only automatic read on opening the panel is the local worker-copy comparison; the intake read stays explicit and nothing reaches the worker.
+  expect(f.calls).toEqual([{ method: 'getSelectedAccountFreshness', input: { accountId: 'a' } }]);
 });
 
 const ownedLine = 'Intake configuration exists only for a company the worker owns. Copy and delegate this company first.';
@@ -86,7 +87,7 @@ it('reads absence through the parent without synchronizing or sending commands, 
   expect(screen.getByText(/Last observed:/).textContent).toContain(absent.checkedAt);
   expect(screen.getByText(/This read does not synchronize queued work/)).toBeTruthy();
   expect(save.disabled).toBe(false);
-  expect(f.calls).toEqual([]);
+  expect(f.calls).toEqual([{ method: 'getSelectedAccountFreshness', input: { accountId: 'a' } }]); // local worker-copy read only; no sync, no command
 });
 it.each([false, true])('renders configured indicators without claiming grants or no-mail eligibility (mail selected: %s)', async selected => {
   const f = fixture();
