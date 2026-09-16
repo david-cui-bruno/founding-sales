@@ -368,3 +368,363 @@ it('holds fresh read failures before queue and preserves the editable form', asy
   expect(screen.getByLabelText<HTMLTextAreaElement>('Meeting offer').value).toBe(offer);
   expect(screen.getByLabelText<HTMLTextAreaElement>('Meeting offer').disabled).toBe(false);
 });
+
+const copyLabel = 'Copy selected company to worker';
+const delegateLabel = 'Delegate selected company';
+const reconcileLabel = 'Reconcile queued preparation';
+const retryPreparationLabel = 'Retry same preparation';
+function preparationFixture(checkpoint: 'absent' | 'zero' | 'copied' | 'active' = 'absent') {
+  const f = fixture();
+  const owner = f.props.snapshot.ownerStatus[0];
+  owner.pendingCommands = [];
+  owner.status = checkpoint === 'active' ? 'owner_applied' : 'unknown';
+  owner.authority = checkpoint === 'absent' ? null : { accountId: 'a', generation: checkpoint === 'active' ? 7 : 0,
+    owner: checkpoint === 'active' ? 'worker' : 'local', state: checkpoint === 'active' ? 'active' : 'local' };
+  owner.executionVersion = checkpoint === 'absent' ? null : checkpoint === 'zero' ? 0 : checkpoint === 'copied' ? 1 : 19;
+  f.setSnapshot(f.props.snapshot);
+  const bootstrap = vi.spyOn(f.api.delegation, 'bootstrap').mockImplementation(async command => ({
+    commandId: command.commandId, status: 'applied', authorityGeneration: 0, aggregateVersion: 1, reason: null,
+  }));
+  return { ...f, bootstrap };
+}
+function reviewPreparation() { fireEvent.click(screen.getByRole('button', { name: 'Review worker preparation' })); }
+function clickPreparation(name: string) { fireEvent.click(screen.getByRole('button', { name })); }
+
+it.each(['absent', 'zero', 'copied', 'active'] as const)('derives the %s checkpoint without effects on mount, selection, review, refresh or remount', checkpoint => {
+  const f = preparationFixture(checkpoint);
+  const view = render(<CallCampaignDraft {...f.props} />);
+  fill(); reviewPreparation();
+  expect(!!screen.queryByRole('button', { name: copyLabel })).toBe(checkpoint === 'absent' || checkpoint === 'zero');
+  expect(!!screen.queryByRole('button', { name: delegateLabel })).toBe(checkpoint === 'copied');
+  expect(button().disabled).toBe(checkpoint !== 'active');
+  expect(screen.getByText(/Unsent local drafts and this meeting offer are not included/)).toBeTruthy();
+  expect(screen.getByText(/Synchronization can replay previously queued workspace commands/)).toBeTruthy();
+  view.rerender(<CallCampaignDraft {...f.props} snapshot={structuredClone(f.props.snapshot)} />);
+  view.unmount();
+  render(<CallCampaignDraft {...f.props} />);
+  expect(f.calls).toEqual([]);
+  expect(f.bootstrap).not.toHaveBeenCalled();
+  expect(f.submit).not.toHaveBeenCalled();
+});
+
+it('copies only the selected saved identity, delegates on a separate click and leaves save separate', async () => {
+  const f = preparationFixture();
+  const view = render(<CallCampaignDraft {...f.props} />);
+  fill(); reviewPreparation();
+  f.bootstrap.mockImplementation(async command => {
+    const next = structuredClone(f.props.snapshot);
+    next.ownerStatus[0] = { accountId: 'a', authority: { accountId: 'a', owner: 'local', state: 'local', generation: 0 },
+      executionVersion: 1, pendingCommands: [], status: 'unknown' };
+    f.setSnapshot(next);
+    return { commandId: command.commandId, status: 'applied', authorityGeneration: 0, aggregateVersion: 1, reason: null };
+  });
+  clickPreparation(copyLabel);
+  await waitFor(() => expect(f.refresh).toHaveBeenCalledTimes(1));
+  expect(f.bootstrap).toHaveBeenCalledTimes(1);
+  expect(f.bootstrap.mock.calls[0][0]).toEqual({ commandId: expect.any(String), accountId: 'a' });
+  expect(Object.isFrozen(f.bootstrap.mock.calls[0][0])).toBe(true);
+  expect(f.submit).not.toHaveBeenCalled();
+  view.rerender(<CallCampaignDraft {...f.props} snapshot={f.snapshot()} />);
+  expect(screen.queryByRole('button', { name: copyLabel })).toBeNull();
+  f.submit.mockImplementation(async command => {
+    const next = structuredClone(f.snapshot());
+    next.ownerStatus[0] = { accountId: 'a', authority: { accountId: 'a', owner: 'worker', state: 'active', generation: 1 },
+      executionVersion: 2, pendingCommands: [], status: 'owner_applied' };
+    f.setSnapshot(next);
+    return { commandId: command.commandId, status: 'applied', authorityGeneration: 1, aggregateVersion: 2, reason: null };
+  });
+  clickPreparation(delegateLabel);
+  await waitFor(() => expect(f.refresh).toHaveBeenCalledTimes(2));
+  expect(f.submit).toHaveBeenCalledTimes(1);
+  expect(f.submit.mock.calls[0][0]).toEqual({ commandId: expect.any(String), accountId: 'a', workspaceId: 'ws',
+    kind: 'delegate', expectedAuthorityGeneration: 0, expectedVersion: 1,
+    payload: { delegationId: expect.any(String), approvedAt: expect.any(String) } });
+  expect(Object.isFrozen(f.submit.mock.calls[0][0].payload)).toBe(true);
+  view.rerender(<CallCampaignDraft {...f.props} snapshot={f.snapshot()} />);
+  expect(screen.queryByRole('button', { name: delegateLabel })).toBeNull();
+  expect(button().disabled).toBe(false);
+  expect(screen.getByLabelText<HTMLTextAreaElement>('Meeting offer').value).toBe(offer);
+});
+
+it.each(['missing', 'duplicate', 'inconsistent', 'paused', 'revoked', 'delegating', 'version', 'pending', 'pending-status'])('holds preparation for %s ownership', kind => {
+  const f = preparationFixture('copied');
+  const owner = f.props.snapshot.ownerStatus[0];
+  if (kind === 'missing') f.props.snapshot.ownerStatus = [];
+  if (kind === 'duplicate') f.props.snapshot.ownerStatus.push(structuredClone(owner));
+  if (kind === 'inconsistent') owner.authority = null;
+  if (kind === 'paused' || kind === 'revoked' || kind === 'delegating') owner.authority!.state = kind;
+  if (kind === 'version') owner.executionVersion = 2;
+  if (kind === 'pending') owner.pendingCommands = [{ commandId: 'any-command-kind', status: 'pending', authorityGeneration: 0, aggregateVersion: 1, reason: null }];
+  if (kind === 'pending-status') owner.status = 'pending';
+  render(<CallCampaignDraft {...f.props} />);
+  fill(); reviewPreparation();
+  expect(screen.queryByRole('button', { name: copyLabel })).toBeNull();
+  expect(screen.queryByRole('button', { name: delegateLabel })).toBeNull();
+  expect(button().disabled).toBe(true);
+  expect(f.calls).toEqual([]);
+});
+
+it.each(['record', 'fingerprint', 'owner', 'checkpoint', 'config', 'malformed', 'gaps', 'stale'])('holds new preparation when fresh %s changes', async change => {
+  const f = preparationFixture();
+  const fresh = structuredClone(f.props.snapshot);
+  if (change === 'record') fresh.accounts[0].unknowns.push('new reviewed fact');
+  if (change === 'fingerprint') fresh.accounts[0].fingerprint = 'b'.repeat(64);
+  if (change === 'owner') fresh.ownerStatus.push(structuredClone(fresh.ownerStatus[0]));
+  if (change === 'checkpoint') fresh.ownerStatus[0] = { accountId: 'a', authority: { accountId: 'a', owner: 'local', state: 'local', generation: 0 }, executionVersion: 1, pendingCommands: [], status: 'unknown' };
+  f.setSnapshot(fresh);
+  if (change === 'config') f.setConfiguration({ ...f.props.config, configuration: { ...f.props.config.configuration!, revision: 2 } });
+  if (change === 'malformed') vi.spyOn(f.api.daily, 'get').mockResolvedValue({} as DailySnapshot);
+  if (change === 'gaps' || change === 'stale') vi.spyOn(f.api.delegation, 'sync').mockResolvedValue({ applied: 0, cursor: null, gaps: change === 'gaps' ? 1 : 0, ownerFresh: change !== 'stale' });
+  render(<CallCampaignDraft {...f.props} />);
+  fill(); reviewPreparation(); clickPreparation(copyLabel);
+  await waitFor(() => expect(f.refresh).toHaveBeenCalledTimes(1));
+  expect(f.bootstrap).not.toHaveBeenCalled();
+  expect(f.submit).not.toHaveBeenCalled();
+});
+
+it.each(['copy', 'delegate'] as const)('shares synchronous latch for double %s and save/reconcile', async kind => {
+  const f = preparationFixture(kind === 'copy' ? 'absent' : 'copied');
+  const gate = deferred<Awaited<ReturnType<typeof f.api.delegation.sync>>>();
+  const sync = vi.spyOn(f.api.delegation, 'sync').mockReturnValueOnce(gate.promise);
+  render(<CallCampaignDraft {...f.props} />);
+  fill(); reviewPreparation();
+  const action = screen.getByRole('button', { name: kind === 'copy' ? copyLabel : delegateLabel });
+  act(() => { fireEvent.click(action); fireEvent.click(action); fireEvent.submit(button().closest('form')!); clickPreparation(reconcileLabel); });
+  expect(sync).toHaveBeenCalledTimes(1);
+  await act(async () => gate.resolve({ applied: 0, gaps: 0, cursor: null, ownerFresh: true }));
+  await waitFor(() => expect(f.refresh).toHaveBeenCalledTimes(1));
+  expect(f.bootstrap).toHaveBeenCalledTimes(kind === 'copy' ? 1 : 0);
+  expect(f.submit).toHaveBeenCalledTimes(kind === 'delegate' ? 1 : 0);
+});
+
+it.each(['scope', 'unmount', 'bridge', 'lock', 'selection', 'record'])('invalidates delayed preparation on %s change and return', async change => {
+  const f = preparationFixture();
+  const gate = deferred<DailySnapshot>();
+  vi.spyOn(f.api.daily, 'get').mockReturnValueOnce(gate.promise);
+  const view = render(<CallCampaignDraft {...f.props} />);
+  fill(); reviewPreparation(); clickPreparation(copyLabel);
+  await waitFor(() => expect(f.api.daily.get).toHaveBeenCalledTimes(1));
+  if (change === 'scope') { setDailySessionScope(f.api.delegation, null); setDailySessionScope(f.api.delegation, 'ws'); }
+  if (change === 'unmount') { view.unmount(); render(<CallCampaignDraft {...f.props} />); }
+  if (change === 'bridge') { view.rerender(<CallCampaignDraft {...f.props} api={{ ...f.api, daily: { ...f.api.daily } }} />); view.rerender(<CallCampaignDraft {...f.props} />); }
+  if (change === 'lock') { view.rerender(<CallCampaignDraft {...f.props} config={{ ...f.props.config, state: 'locked' }} />); view.rerender(<CallCampaignDraft {...f.props} />); }
+  if (change === 'selection') { fireEvent.change(screen.getByLabelText('Company'), { target: { value: 'b' } }); fireEvent.change(screen.getByLabelText('Company'), { target: { value: 'a' } }); }
+  if (change === 'record') { const changed = structuredClone(f.props.snapshot); changed.accounts[0].unknowns.push('changed'); view.rerender(<CallCampaignDraft {...f.props} snapshot={changed} />); view.rerender(<CallCampaignDraft {...f.props} />); }
+  await act(async () => gate.resolve(f.props.snapshot));
+  expect(f.bootstrap).not.toHaveBeenCalled();
+  expect(f.submit).not.toHaveBeenCalled();
+  expect(f.refresh).not.toHaveBeenCalled();
+});
+
+it.each(['throw', 'wrong-id'])('retains uncertain preparation on %s and remount, recovering only through explicit sync', async outcome => {
+  const f = preparationFixture();
+  if (outcome === 'throw') f.bootstrap.mockRejectedValue(Error('PRIVATE HTTP refusal after queue'));
+  else f.bootstrap.mockImplementation(async command => ({ commandId: outcome === 'wrong-id' ? 'other' : command.commandId,
+    status: 'rejected', authorityGeneration: 0, aggregateVersion: 0, reason: 'PRIVATE' }));
+  const view = render(<CallCampaignDraft {...f.props} />);
+  fill(); reviewPreparation(); clickPreparation(copyLabel);
+  await waitFor(() => expect(f.refresh).toHaveBeenCalledTimes(1));
+  const original = f.bootstrap.mock.calls[0][0];
+  expect(screen.getByText(`Preparation command: ${original.commandId}`)).toBeTruthy();
+  expect(screen.queryByText(/PRIVATE/)).toBeNull();
+  view.unmount();
+  const next = render(<CallCampaignDraft {...f.props} />);
+  expect(f.bootstrap).toHaveBeenCalledTimes(1);
+  expect(screen.getByRole<HTMLButtonElement>('button', { name: copyLabel }).disabled).toBe(true);
+  const recovered = structuredClone(f.props.snapshot);
+  recovered.ownerStatus[0] = { accountId: 'a', authority: { accountId: 'a', owner: 'local', state: 'local', generation: 0 }, executionVersion: 1, pendingCommands: [], status: 'unknown' };
+  f.setSnapshot(recovered);
+  clickPreparation(reconcileLabel);
+  await waitFor(() => expect(f.refresh).toHaveBeenCalledTimes(2));
+  next.rerender(<CallCampaignDraft {...f.props} snapshot={recovered} />);
+  expect(screen.queryByText(`Preparation command: ${original.commandId}`)).toBeNull();
+  expect(screen.getByRole<HTMLButtonElement>('button', { name: delegateLabel }).disabled).toBe(false);
+  expect(f.bootstrap).toHaveBeenCalledTimes(1);
+  expect(f.submit).not.toHaveBeenCalled();
+});
+
+it('recovers unchanged-record prequeue bootstrap failure by explicitly retrying the same frozen identity', async () => {
+  const f = preparationFixture();
+  f.bootstrap.mockRejectedValueOnce(Error('export failed before queue'));
+  render(<CallCampaignDraft {...f.props} />);
+  fill(); reviewPreparation(); clickPreparation(copyLabel);
+  await waitFor(() => expect(f.refresh).toHaveBeenCalledTimes(1));
+  const original = f.bootstrap.mock.calls[0][0];
+  clickPreparation(retryPreparationLabel);
+  await waitFor(() => expect(f.refresh).toHaveBeenCalledTimes(2));
+  expect(f.bootstrap).toHaveBeenCalledTimes(2);
+  expect(f.bootstrap.mock.calls[1][0]).toBe(original);
+  expect(f.submit).not.toHaveBeenCalled();
+});
+
+it('releases only a schema-valid exact preparation rejection so the form is not permanently locked', async () => {
+  const f = preparationFixture();
+  f.bootstrap.mockImplementation(async command => ({ commandId: command.commandId, status: 'rejected',
+    authorityGeneration: 0, aggregateVersion: 0, reason: 'durable rejection' }));
+  render(<CallCampaignDraft {...f.props} />);
+  fill(); reviewPreparation(); clickPreparation(copyLabel);
+  await waitFor(() => expect(f.refresh).toHaveBeenCalledTimes(1));
+  expect(screen.getByLabelText<HTMLTextAreaElement>('Meeting offer').disabled).toBe(false);
+  expect(screen.getByRole<HTMLButtonElement>('button', { name: copyLabel }).disabled).toBe(false);
+  expect(screen.queryByText(/Preparation command:/)).toBeNull();
+  expect(f.bootstrap).toHaveBeenCalledTimes(1);
+});
+
+it('retries a delegate using the identical frozen command and complete approval payload', async () => {
+  const f = preparationFixture('copied');
+  f.submit.mockRejectedValueOnce(Error('queue outcome uncertain'));
+  render(<CallCampaignDraft {...f.props} />);
+  fill(); reviewPreparation(); clickPreparation(delegateLabel);
+  await waitFor(() => expect(f.refresh).toHaveBeenCalledTimes(1));
+  const original = f.submit.mock.calls[0][0];
+  const originalPayload = original.payload;
+  clickPreparation(retryPreparationLabel);
+  await waitFor(() => expect(f.refresh).toHaveBeenCalledTimes(2));
+  expect(f.submit).toHaveBeenCalledTimes(2);
+  expect(f.submit.mock.calls[1][0]).toBe(original);
+  expect(f.submit.mock.calls[1][0].payload).toBe(originalPayload);
+  expect(Object.isFrozen(originalPayload)).toBe(true);
+  expect(f.bootstrap).not.toHaveBeenCalled();
+});
+
+it('holds a malformed exact-ID rejected receipt rather than treating transport output as durable rejection', async () => {
+  const f = preparationFixture();
+  f.bootstrap.mockImplementation(async command => ({ commandId: command.commandId, status: 'rejected' }) as Awaited<ReturnType<typeof f.api.delegation.bootstrap>>);
+  render(<CallCampaignDraft {...f.props} />);
+  fill(); reviewPreparation(); clickPreparation(copyLabel);
+  await waitFor(() => expect(f.refresh).toHaveBeenCalledTimes(1));
+  expect(screen.getByText(`Preparation command: ${f.bootstrap.mock.calls[0][0].commandId}`)).toBeTruthy();
+  expect(screen.getByLabelText<HTMLTextAreaElement>('Meeting offer').disabled).toBe(true);
+});
+
+it.each(['copy', 'delegate'] as const)('stops a %s retry when synchronization already completed its checkpoint', async kind => {
+  const f = preparationFixture(kind === 'copy' ? 'absent' : 'copied');
+  if (kind === 'copy') f.bootstrap.mockRejectedValueOnce(Error('uncertain copy'));
+  else f.submit.mockRejectedValueOnce(Error('uncertain delegate'));
+  render(<CallCampaignDraft {...f.props} />);
+  fill(); reviewPreparation(); clickPreparation(kind === 'copy' ? copyLabel : delegateLabel);
+  await waitFor(() => expect(f.refresh).toHaveBeenCalledTimes(1));
+  const recovered = structuredClone(f.props.snapshot);
+  recovered.ownerStatus[0] = kind === 'copy'
+    ? { accountId: 'a', authority: { accountId: 'a', owner: 'local', state: 'local', generation: 0 }, executionVersion: 1, pendingCommands: [], status: 'unknown' }
+    : { accountId: 'a', authority: { accountId: 'a', owner: 'worker', state: 'active', generation: 1 }, executionVersion: 2, pendingCommands: [], status: 'owner_applied' };
+  f.setSnapshot(recovered);
+  clickPreparation(retryPreparationLabel);
+  await waitFor(() => expect(f.refresh).toHaveBeenCalledTimes(2));
+  expect(f.bootstrap).toHaveBeenCalledTimes(kind === 'copy' ? 1 : 0);
+  expect(f.submit).toHaveBeenCalledTimes(kind === 'delegate' ? 1 : 0);
+  expect(screen.queryByText(/Preparation command:/)).toBeNull();
+});
+
+it.each(['evidence', 'config', 'owner', 'pending'])('does not retry under changed original %s facts, while explicit sync remains available', async change => {
+  const f = preparationFixture();
+  f.bootstrap.mockRejectedValueOnce(Error('uncertain original export'));
+  const view = render(<CallCampaignDraft {...f.props} />);
+  fill(); reviewPreparation(); clickPreparation(copyLabel);
+  await waitFor(() => expect(f.refresh).toHaveBeenCalledTimes(1));
+  const original = f.bootstrap.mock.calls[0][0];
+  const changed = structuredClone(f.props.snapshot);
+  let config = f.props.config;
+  if (change === 'evidence') { changed.accounts[0].unknowns.push('new local evidence'); changed.accounts[0].fingerprint = 'c'.repeat(64); }
+  if (change === 'config') config = { ...config, configuration: { ...config.configuration!, revision: 2 } };
+  if (change === 'owner') changed.ownerStatus[0] = { accountId: 'a', authority: { accountId: 'a', owner: 'local', state: 'local', generation: 1 }, executionVersion: 0, pendingCommands: [], status: 'unknown' };
+  if (change === 'pending') { changed.ownerStatus[0].status = 'pending'; changed.ownerStatus[0].pendingCommands = [{ commandId: 'generic-other-intent', status: 'pending', authorityGeneration: 0, aggregateVersion: 0, reason: null }]; }
+  f.setSnapshot(changed); f.setConfiguration(config);
+  view.rerender(<CallCampaignDraft {...f.props} snapshot={changed} config={config} />);
+  clickPreparation(retryPreparationLabel);
+  await waitFor(() => expect(f.refresh).toHaveBeenCalledTimes(2));
+  expect(f.bootstrap).toHaveBeenCalledTimes(1);
+  expect(screen.getByText(`Preparation command: ${original.commandId}`)).toBeTruthy();
+  expect(screen.getByRole<HTMLButtonElement>('button', { name: reconcileLabel }).disabled).toBe(false);
+  const recovered = structuredClone(changed);
+  recovered.ownerStatus[0] = { accountId: 'a', authority: { accountId: 'a', owner: 'local', state: 'local', generation: 0 }, executionVersion: 1, pendingCommands: [], status: 'unknown' };
+  f.setSnapshot(recovered);
+  clickPreparation(reconcileLabel);
+  await waitFor(() => expect(f.refresh).toHaveBeenCalledTimes(3));
+  expect(screen.queryByText(/Preparation command:/)).toBeNull();
+  expect(f.bootstrap).toHaveBeenCalledTimes(1);
+  expect(f.submit).not.toHaveBeenCalled();
+});
+
+it.each(['scope', 'unmount', 'bridge', 'lock', 'selection'])('invalidates delayed same-ID retry on %s departure and return', async change => {
+  const f = preparationFixture();
+  f.bootstrap.mockRejectedValueOnce(Error('prequeue failure'));
+  const view = render(<CallCampaignDraft {...f.props} />);
+  fill(); reviewPreparation(); clickPreparation(copyLabel);
+  await waitFor(() => expect(f.refresh).toHaveBeenCalledTimes(1));
+  const gate = deferred<DailySnapshot>();
+  const daily = vi.spyOn(f.api.daily, 'get').mockReturnValueOnce(gate.promise);
+  clickPreparation(retryPreparationLabel);
+  await waitFor(() => expect(daily).toHaveBeenCalledTimes(1));
+  if (change === 'scope') { setDailySessionScope(f.api.delegation, null); setDailySessionScope(f.api.delegation, 'ws'); }
+  if (change === 'unmount') { view.unmount(); render(<CallCampaignDraft {...f.props} />); }
+  if (change === 'bridge') { view.rerender(<CallCampaignDraft {...f.props} api={{ ...f.api, daily: { ...f.api.daily } }} />); view.rerender(<CallCampaignDraft {...f.props} />); }
+  if (change === 'lock') { view.rerender(<CallCampaignDraft {...f.props} config={{ ...f.props.config, state: 'locked' }} />); view.rerender(<CallCampaignDraft {...f.props} />); }
+  if (change === 'selection') { fireEvent.change(screen.getByLabelText('Company'), { target: { value: 'b' } }); fireEvent.change(screen.getByLabelText('Company'), { target: { value: 'a' } }); }
+  await act(async () => gate.resolve(f.props.snapshot));
+  expect(f.bootstrap).toHaveBeenCalledTimes(1);
+  expect(f.refresh).toHaveBeenCalledTimes(1);
+});
+
+it.each([false, true])('retries the same retained absent-authority copy after exact local g0v0 initialization, refreshed=%s', async refreshed => {
+  const f = preparationFixture();
+  const placeholder = structuredClone(f.props.snapshot);
+  placeholder.ownerStatus[0] = { accountId: 'a', authority: { accountId: 'a', owner: 'local', state: 'local', generation: 0 },
+    executionVersion: 0, pendingCommands: [], status: 'unknown' };
+  f.bootstrap.mockImplementationOnce(async () => { f.setSnapshot(placeholder); throw Error('after initializeLocalAuthority, before queue'); });
+  const view = render(<CallCampaignDraft {...f.props} />);
+  fill(); reviewPreparation(); clickPreparation(copyLabel);
+  await waitFor(() => expect(f.refresh).toHaveBeenCalledTimes(1));
+  const original = f.bootstrap.mock.calls[0][0];
+  if (refreshed) view.rerender(<CallCampaignDraft {...f.props} snapshot={placeholder} />);
+  expect(screen.getByText(`Preparation command: ${original.commandId}`)).toBeTruthy();
+  expect(f.snapshot().ownerStatus[0]).toMatchObject({ executionVersion: 0, pendingCommands: [] });
+  f.bootstrap.mockImplementationOnce(async command => {
+    const applied = structuredClone(placeholder);
+    applied.ownerStatus[0].executionVersion = 1;
+    f.setSnapshot(applied);
+    return { commandId: command.commandId, status: 'applied', authorityGeneration: 0, aggregateVersion: 1, reason: null };
+  });
+  clickPreparation(retryPreparationLabel);
+  await waitFor(() => expect(f.refresh).toHaveBeenCalledTimes(2));
+  expect(f.bootstrap).toHaveBeenCalledTimes(2);
+  expect(f.bootstrap.mock.calls[1][0]).toBe(original);
+  expect(Object.isFrozen(original)).toBe(true);
+  expect(screen.queryByText(/Preparation command:/)).toBeNull();
+  expect(screen.getByLabelText<HTMLTextAreaElement>('Meeting offer').value).toBe(offer);
+  expect(f.submit).not.toHaveBeenCalled();
+  view.rerender(<CallCampaignDraft {...f.props} snapshot={f.snapshot()} />);
+  expect(screen.getByRole<HTMLButtonElement>('button', { name: delegateLabel }).disabled).toBe(false);
+  expect(button().disabled).toBe(true);
+});
+
+it.each(['reverse', 'generation', 'state', 'status', 'version', 'pending', 'duplicate', 'identity', 'record', 'config'])('does not normalize %s changes into a retained copy placeholder', async change => {
+  const f = preparationFixture(change === 'reverse' ? 'zero' : 'absent');
+  f.bootstrap.mockRejectedValueOnce(Error('copy failed before queue'));
+  const view = render(<CallCampaignDraft {...f.props} />);
+  fill(); reviewPreparation(); clickPreparation(copyLabel);
+  await waitFor(() => expect(f.refresh).toHaveBeenCalledTimes(1));
+  const original = f.bootstrap.mock.calls[0][0];
+  const changed = structuredClone(f.props.snapshot);
+  const owner = changed.ownerStatus[0] = { accountId: 'a', authority: { accountId: 'a', owner: 'local', state: 'local', generation: 0 },
+    executionVersion: 0, pendingCommands: [], status: 'unknown' } as DailySnapshot['ownerStatus'][number];
+  let config = f.props.config;
+  if (change === 'reverse') { owner.authority = null; owner.executionVersion = null; }
+  if (change === 'generation') owner.authority!.generation = 1;
+  if (change === 'state') owner.authority!.state = 'delegating';
+  if (change === 'status') owner.status = 'owner_applied';
+  if (change === 'version') owner.executionVersion = null;
+  if (change === 'pending') owner.pendingCommands = [{ commandId: 'any-pending', status: 'pending', authorityGeneration: 0, aggregateVersion: 0, reason: null }];
+  if (change === 'duplicate') changed.ownerStatus.push(structuredClone(owner));
+  if (change === 'identity') owner.authority!.accountId = 'b';
+  if (change === 'record') { changed.accounts[0].fingerprint = 'd'.repeat(64); changed.accounts[0].unknowns.push('changed evidence'); }
+  if (change === 'config') config = { ...config, configuration: { ...config.configuration!, revision: 2 } };
+  f.setSnapshot(changed); f.setConfiguration(config);
+  view.rerender(<CallCampaignDraft {...f.props} snapshot={changed} config={config} />);
+  clickPreparation(retryPreparationLabel);
+  await waitFor(() => expect(f.refresh).toHaveBeenCalledTimes(2));
+  expect(f.bootstrap).toHaveBeenCalledTimes(1);
+  expect(f.submit).not.toHaveBeenCalled();
+  expect(screen.getByText(`Preparation command: ${original.commandId}`)).toBeTruthy();
+  expect(screen.getByLabelText<HTMLTextAreaElement>('Meeting offer').value).toBe(offer);
+});
