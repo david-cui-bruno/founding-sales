@@ -13,8 +13,8 @@ import {workerPolicyRequestSchema,workerPolicyReceiptSchema} from '../shared/con
 import {approveMeetingFromReplySchema,getMeetingApprovalSchema,meetingApprovalStatusSchema,boundMeetingApprovalStatus,type ApproveMeetingFromReply,type GetMeetingApproval,type MeetingApprovalStatus} from '../shared/contracts/meetingContract';
 import {configureAccountIntakeSchema,boundAccountIntakeConfigureStatus,type ConfigureAccountIntake,type AccountIntakeConfigureStatus} from '../shared/contracts/accountIntakeConfigureContract';
 import {createLinkedInApi} from './apis/linkedInApi';
-import { delegatedPhoneHandoffRequestSchema,bootstrapSelectedAccountSchema,configureResearchSourceSchema,ownerResearchSourceSchema,configureLocalDelegationSchema,localDelegationStatusSchema,localDelegationConfigurationRecordSchema,redeemLocalPairingSchema,redeemedLocalPairingSchema,delegationSyncReportSchema } from '../shared/contracts/ownerCommandContract';
-import {delegatedPhoneHandoffResultSchema,publicDelegationCommandSchema,commandReceiptSchema,type PublicDelegationCommand} from '../shared/contracts/delegationContract';
+import { delegatedPhoneHandoffRequestSchema,bootstrapSelectedAccountSchema,refreshSelectedAccountRecordSchema,selectedAccountFreshnessRequestSchema,selectedAccountFreshnessSchema,configureResearchSourceSchema,ownerResearchSourceSchema,configureLocalDelegationSchema,localDelegationStatusSchema,localDelegationConfigurationRecordSchema,redeemLocalPairingSchema,redeemedLocalPairingSchema,delegationSyncReportSchema,type RefreshSelectedAccountRecord,type SelectedAccountFreshnessRequest,type SelectedAccountFreshness } from '../shared/contracts/ownerCommandContract';
+import {delegatedPhoneHandoffResultSchema,publicDelegationCommandSchema,commandReceiptSchema,type CommandReceipt,type PublicDelegationCommand} from '../shared/contracts/delegationContract';
 import type {z} from 'zod';
 import { createPhoneSetupApi } from './apis/phoneSetupApi';
 import { createOutreachApi } from './apis/outreachApi';
@@ -58,6 +58,18 @@ export const createCallieApi = (invoker: IpcInvoker) => {
   const intakeExtension: { configureIntake?: (input: ConfigureAccountIntake) => Promise<AccountIntakeConfigureStatus> } = {
     configureIntake: async raw => { const request = Object.freeze(configureAccountIntakeSchema.parse(raw)); return client.request('outreach:delegation-configure-intake', configureAccountIntakeSchema, boundAccountIntakeConfigureStatus(request), request); },
   };
+  // Optional for the same older-bridge compatibility. One explicit send resubmits the current saved company record
+  // to the worker that already owns it and returns that command's receipt; the freshness read is local only.
+  const recordExtension: { refreshSelectedAccount?: (input: RefreshSelectedAccountRecord) => Promise<CommandReceipt>; getSelectedAccountFreshness?: (input: SelectedAccountFreshnessRequest) => Promise<SelectedAccountFreshness> } = {
+    refreshSelectedAccount: async raw => {
+      const request = Object.freeze(refreshSelectedAccountRecordSchema.parse(raw));
+      return client.request('outreach:delegation-refresh-selected-account', refreshSelectedAccountRecordSchema, commandReceiptSchema.refine(receipt => receipt.commandId === request.commandId, 'refresh_receipt_identity_mismatch'), request);
+    },
+    getSelectedAccountFreshness: async raw => {
+      const request = Object.freeze(selectedAccountFreshnessRequestSchema.parse(raw));
+      return client.request('outreach:delegation-selected-account-freshness', selectedAccountFreshnessRequestSchema, selectedAccountFreshnessSchema.refine(value => value.accountId === request.accountId, 'selected_account_freshness_identity_mismatch'), request);
+    },
+  };
   return {
     health: {
       get: (): Promise<AppHealth> =>
@@ -70,6 +82,7 @@ export const createCallieApi = (invoker: IpcInvoker) => {
       ...researchExtension,
       ...meetingExtension,
       ...intakeExtension,
+      ...recordExtension,
       policyImport:{
         selectAndPreview:()=>client.requestNoInput('outreach:policy-import-select-preview',policyImportPreviewSchema.nullable()),
         confirm:(input:z.infer<typeof policyImportConfirmSchema>)=>client.request('outreach:policy-import-confirm',policyImportConfirmSchema,policyImportReportSchema,input),

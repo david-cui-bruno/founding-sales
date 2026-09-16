@@ -88,7 +88,8 @@ export const RETAINED_UI_REGISTERED_CHANNELS = [...CONTINUITY_UI_REGISTERED_CHAN
     'delegation-begin-phone', 'delegation-get-phone-handoff-state', 'delegation-bootstrap', 'delegation-policy', 'delegation-research', 'delegation-status',
     'google-connection-status', 'google-connection-disclosure', 'google-connection-begin', 'google-connection-revoke',
     'research-setup-status', 'research-setup-approve', 'research-setup-set-state', 'research-setup-retry', 'research-setup-cancel-pending',
-    'delegation-configure', 'delegation-submit', 'delegation-sync', 'delegation-get-account-preparation', 'delegation-approve-meeting', 'delegation-get-meeting-approval', 'delegation-configure-intake'].map(name => `outreach:${name}`),
+    'delegation-configure', 'delegation-submit', 'delegation-sync', 'delegation-get-account-preparation', 'delegation-approve-meeting', 'delegation-get-meeting-approval', 'delegation-configure-intake',
+    'delegation-refresh-selected-account', 'delegation-selected-account-freshness'].map(name => `outreach:${name}`),
 ] as const;
 const RETAINED_UI_CHANNELS = [...CONTINUITY_READ_CHANNELS, 'daily:get', 'review:list', 'outreach:delegation-status',
   'lead-detail:outbound-capabilities', 'lead-detail:get', 'discovery:get-brief', 'local-workspace:transition'];
