@@ -104,7 +104,7 @@ test('the three intake controls appear only after the explicit read, reach by ke
     }
   }
   // Nothing was queued: the fixture's write is forbidden and was never called.
-  expect((await methods(page)).filter(method => !['daily.get', 'delegation.status', 'localWorkspace.get', 'localWorkspace.getCommitments', 'getAccountPreparation'].includes(method))).toEqual([]);
+  expect((await methods(page)).filter(method => !['daily.get', 'delegation.status', 'localWorkspace.get', 'localWorkspace.getCommitments', 'getAccountPreparation', 'getSelectedAccountFreshness'].includes(method))).toEqual([]);
   await assertClean(page, state);
 });
 
