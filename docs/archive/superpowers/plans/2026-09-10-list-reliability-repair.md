@@ -5,7 +5,7 @@
 **Goal:** F05 complete local Inbox paging/counts/startup badge/availability, F06 Leads continuation, F07 exact selected-set mutation, and only Leads inline/bulk pending/error retention from F14.
 **Architecture:** chosen full-projection snapshot-fingerprint cursor, existing list/mutation names, transactional writes and authority gates. Complete source-scoped Inbox metadata travels through existing IPC. Request generations, controlled input and synchronous pending fences preserve work.
 **Tech stack:** TypeScript, React, Zod, synchronous encrypted SQLite, existing Electron preload/validated IPC, Vitest and parent-run Playwright.
-**Spec:** [List reliability repair](../specs/2026-09-10-list-reliability-repair.md). Binding [program](../2026-09-10-product-repair-program.md) and [audit](../../engineering/2026-09-10-adversarial-product-audit.md).
+**Spec:** [List reliability repair](../specs/2026-09-10-list-reliability-repair.md). Binding [program](../2026-09-10-product-repair-program.md) and [audit](../../../engineering/2026-09-10-adversarial-product-audit.md).
 **Source checkpoint:** user base `base14e5fa7`, parent-reported root `2b01261`; source reads confirm PresentationRoot above App's health branch, focusable main and dirty OverlayProvider inside PresentationRoot. No clean-tree or overlay-completion certification. Re-read handed-off files before editing.
 **Approval:** parent accepted B1-B7 and the bounded synchronous loaded-review continuation direction on 2026-09-10. At the preparation checkpoint **2026-09-10 05:24 UTC**, Task2 was awaiting Task1 acceptance and shared-file handoff. Later parent acceptance/commit/handoff supersedes that historical status. Accepted design decisions do not themselves satisfy H1-H4 or grant a runtime lease.
 

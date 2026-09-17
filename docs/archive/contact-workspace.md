@@ -32,7 +32,7 @@ If a contact changes, explicit reopening starts a fresh reviewed target and pres
 
 ## One-time setup
 
-See [outreach setup](outreach-setup.md). **Settings → Connections** accepts your own OpenAI key/model, Google Desktop OAuth credentials, sender name and postal address. Click **Connect Gmail** to authorize the account. Nothing connects or sends merely by opening Settings.
+See [outreach setup](../outreach-setup.md). **Settings → Connections** accepts your own OpenAI key/model, Google Desktop OAuth credentials, sender name and postal address. Click **Connect Gmail** to authorize the account. Nothing connects or sends merely by opening Settings.
 
 Gmail permission is send-only plus account identity. Read replies in Gmail and record opt-outs in FSS before further outreach. The app does not automatically read replies or infer unsubscribe requests.
 
