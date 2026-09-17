@@ -2,6 +2,7 @@ import { QueryCommand, type TransactWriteItem } from '@aws-sdk/client-dynamodb';
 import { z } from 'zod';
 import { researchReviewedCapabilitySchema, researchSetupWriteRequestSchema, researchSetupStatusRequestSchema, researchSetupRemoteStatusSchema, researchSetupReceiptSchema, type ResearchSetupBlocker, type ResearchSetupReceipt } from '../../../../src/shared/contracts/researchSetupContract';
 import { ownerResearchSourceKey, ownerResearchSourceSchema, type OwnerResearchSource } from '../../../../src/shared/contracts/ownerCommandContract';
+import { effectiveDiscoveryProvider, type DiscoveryProvider } from '../../../../src/main/research/companyResearchTypes';
 import { DynamoStore, fingerprint, keyPart, type Stored } from './dynamoStore';
 import { budgetKey, budgetSchema, planDiscoveryBudget, researchAdmissionKey } from './discoveryReservationStore';
 import { planResearchBudget } from './workerAccountRepository';
@@ -9,10 +10,12 @@ import { WorkerAuth } from './workerAuth';
 
 export const guidedResearchMarkerKey = 'GUIDED_RESEARCH_SETUP';
 export const guidedResearchBudgetId = 'guided-research-v1';
-export type ResearchSetupProfile = { reviewedCapability?: unknown; credentialParameterDeclared?: boolean };
+export type ResearchSetupProfile = { reviewedCapability?: unknown; credentialParameterDeclared?: boolean; placesCredentialParameterDeclared?: boolean };
 const markerSchema = z.strictObject({ version: z.literal(1), descriptorFingerprint: z.string().regex(/^[a-f0-9]{64}$/), settingsFingerprint: z.string().regex(/^[a-f0-9]{64}$/), workspaceId: z.string(), pairingId: z.uuid(), budgetId: z.literal(guidedResearchBudgetId) });
 const receiptKey = (id: string) => `RESEARCH_SETUP_REQUEST#${keyPart(id)}`;
-export function reviewedResearchProfile(profile: ResearchSetupProfile, now: string) {
+/** Readiness for one discovery provider. The cited provider needs its model credential parameter; Places needs the reviewed cost per
+ *  call and its own credential parameter instead. The descriptor checks are shared. */
+export function reviewedResearchProfile(profile: ResearchSetupProfile, now: string, provider: DiscoveryProvider = 'responses_cited') {
   const blockers: ResearchSetupBlocker[] = [];
   let raw = profile.reviewedCapability;
   if (typeof raw === 'string') { try { raw = JSON.parse(raw); } catch { raw = false; } }
@@ -21,8 +24,12 @@ export function reviewedResearchProfile(profile: ResearchSetupProfile, now: stri
   if (raw === undefined) blockers.push('operator_descriptor_missing');
   else if (!descriptor) blockers.push('operator_descriptor_invalid');
   else if (Date.parse(descriptor.reviewedAt) > Date.parse(now) || Date.parse(descriptor.expiresAt) <= Date.parse(now)) blockers.push('operator_descriptor_expired');
-  if (!profile.credentialParameterDeclared) blockers.push('credential_parameter_missing');
-  return { descriptor, descriptorFingerprint: descriptor ? fingerprint(descriptor) : null, credentialParameterDeclared: profile.credentialParameterDeclared === true, blockers };
+  if (provider === 'places') {
+    if (descriptor && descriptor.placesSearchCostMicros === undefined) blockers.push('places_cost_missing');
+    if (!profile.placesCredentialParameterDeclared) blockers.push('places_credential_parameter_missing');
+  } else if (!profile.credentialParameterDeclared) blockers.push('credential_parameter_missing');
+  return { descriptor, descriptorFingerprint: descriptor ? fingerprint(descriptor) : null, credentialParameterDeclared: profile.credentialParameterDeclared === true,
+    placesCredentialParameterDeclared: profile.placesCredentialParameterDeclared === true, blockers };
 }
 function checkBinding(raw: unknown, config: OwnerResearchSource) {
   const marker = markerSchema.parse(raw);
@@ -32,7 +39,7 @@ function checkBinding(raw: unknown, config: OwnerResearchSource) {
 /** Synchronous final check after all awaited identity/revision reads. */
 export function assertGuidedResearch(raw: unknown, config: OwnerResearchSource, profile: ResearchSetupProfile, now: string) {
   const marker = checkBinding(raw, config);
-  const current = reviewedResearchProfile(profile, now);
+  const current = reviewedResearchProfile(profile, now, effectiveDiscoveryProvider(config.research?.discoveryProvider));
   if (current.blockers.length || current.descriptorFingerprint !== marker.descriptorFingerprint) throw Error('research_setup_descriptor_unavailable');
 }
 /** Existing execution calls this before reservations and each guarded provider start. */
@@ -89,6 +96,8 @@ export class ResearchSetupService {
     await store.transact(fences);
     const checkedAt = store.now();
     const profile = reviewedResearchProfile(this.input.profile ?? {}, checkedAt);
+    // Places readiness is reported separately so a cited workspace is never blocked by a Places gap, and vice versa.
+    const placesBlockers = reviewedResearchProfile(this.input.profile ?? {}, checkedAt, 'places').blockers;
     const blockers = [...profile.blockers];
     let selector: OwnerResearchSource | null = null;
     if (source) {
@@ -111,7 +120,7 @@ export class ResearchSetupService {
       return { limitMicros: parsed.data.limit, reservedOrSpentMicros: parsed.data.spent, remainingMicros: parsed.data.limit - parsed.data.spent };
     };
     const discoveryLedger = ledger(discovery); const researchLedger = ledger(research);
-    return researchSetupRemoteStatusSchema.parse({ workspaceId: request.workspaceId, pairingId: request.pairingId, selector, discoveryLedger, researchLedger, ...profile, blockers: [...new Set(blockers)], checkedAt, receipt });
+    return researchSetupRemoteStatusSchema.parse({ workspaceId: request.workspaceId, pairingId: request.pairingId, selector, discoveryLedger, researchLedger, ...profile, blockers: [...new Set(blockers)], checkedAt, receipt, placesBlockers });
   }
   async apply(raw: unknown, bearer: string): Promise<ResearchSetupReceipt> {
     const envelope = researchSetupWriteRequestSchema.parse(raw);
@@ -126,18 +135,24 @@ export class ResearchSetupService {
     if (envelope.kind === 'cancel') {
       receipt = { ...identity, status: 'cancelled', revision: null, state: null };
     } else if (request.kind === 'approve') {
-      const profile = reviewedResearchProfile(this.input.profile ?? {}, store.now());
+      const provider = effectiveDiscoveryProvider(request.input.discoveryProvider);
+      const profile = reviewedResearchProfile(this.input.profile ?? {}, store.now(), provider);
       if (profile.blockers.length || !profile.descriptor || profile.descriptorFingerprint !== request.input.descriptorFingerprint) throw Error('research_setup_descriptor_unavailable');
       const [source, marker, research, admission] = await Promise.all([store.get(ownerResearchSourceKey()), store.get(guidedResearchMarkerKey), store.get('BUDGET#research'), store.get(researchAdmissionKey)]);
       if (source || marker || research || admission || await this.discoveryPresent(store)) throw Error('research_setup_legacy_or_orphan_state');
       const proposal = request.input; const descriptor = profile.descriptor;
-      const discoveryCost = descriptor.capability.searchCostMicros + descriptor.capability.modelCostMicros;
+      // Places reserves the reviewed cost of one text-search call per batch; the cited provider reserves search plus model per run.
+      const placesCost = descriptor.placesSearchCostMicros;
+      if (provider === 'places' && placesCost === undefined) throw Error('research_setup_descriptor_unavailable');
+      const discoveryCost = provider === 'places' && placesCost !== undefined ? placesCost : descriptor.capability.searchCostMicros + descriptor.capability.modelCostMicros;
       if (discoveryCost > proposal.discoveryCeilingMicros || descriptor.researchReservationMicros > proposal.researchCeilingMicros) throw Error('research_setup_ceiling_insufficient');
       const limits = { maxCompanies: proposal.maxCompanies, maxPages: proposal.maxPages, maxBytes: proposal.maxBytes };
       const config = ownerResearchSourceSchema.parse({ version: 1, workspaceId: request.workspaceId, pairingId: request.pairingId, revision: 1, state: 'active', research: {
         workspaceId: request.workspaceId, budgetId: guidedResearchBudgetId, audience: proposal.audience, audienceRevision: 1, sourceRevision: 1, budgetRevision: 1,
         discoveryLimits: { ...limits, maxCostMicros: discoveryCost }, researchLimits: { ...limits, maxCostMicros: descriptor.researchReservationMicros }, capability: descriptor.capability,
-        maxAccountBudgetMicros: descriptor.researchReservationMicros, permittedSources: proposal.permittedSources, preparationCommandId: request.requestId } });
+        maxAccountBudgetMicros: descriptor.researchReservationMicros, permittedSources: proposal.permittedSources, preparationCommandId: request.requestId,
+        // Cited configurations keep no provider key so their stored bytes and fingerprints are exactly what they were.
+        ...(provider === 'places' ? { discoveryProvider: 'places' } : {}) } });
       writes.push(store.put(researchAdmissionKey, { version: 1, kind: 'guided' }, null), store.put(ownerResearchSourceKey(), config, null), planDiscoveryBudget(store, { budgetId: guidedResearchBudgetId, limitMicros: proposal.discoveryCeilingMicros }), planResearchBudget(store, proposal.researchCeilingMicros),
         store.put(guidedResearchMarkerKey, markerSchema.parse({ version: 1, workspaceId: request.workspaceId, pairingId: request.pairingId, budgetId: guidedResearchBudgetId, descriptorFingerprint: profile.descriptorFingerprint, settingsFingerprint: fingerprint(config.research) }), null));
       receipt = { ...identity, status: 'applied', revision: 1, state: 'active' };
@@ -149,7 +164,7 @@ export class ResearchSetupService {
       if (config.workspaceId !== request.workspaceId || config.pairingId !== request.pairingId || config.revision !== request.input.expectedRevision) throw Error('research_setup_revision_conflict');
       const binding = checkBinding(marker.data, config);
       if (request.input.state === 'active') {
-        const profile = reviewedResearchProfile(this.input.profile ?? {}, store.now());
+        const profile = reviewedResearchProfile(this.input.profile ?? {}, store.now(), effectiveDiscoveryProvider(config.research?.discoveryProvider));
         if (profile.blockers.length || profile.descriptorFingerprint !== binding.descriptorFingerprint) throw Error('research_setup_descriptor_unavailable');
         for (const key of ['BUDGET#research', budgetKey(guidedResearchBudgetId)]) {
           const row = await store.get<unknown>(key); if (!row) throw Error('research_setup_budget_missing');

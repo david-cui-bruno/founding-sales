@@ -19,7 +19,8 @@ const RESEARCH_PAGE_PATHS = ['/', '/services', '/team', '/careers'] as const;
 const SHARED_PLATFORM_HOSTS = ['facebook.com', 'instagram.com', 'x.com', 'twitter.com', 'youtube.com', 'yelp.com', 'google.com', 'apartments.com', 'zillow.com', 'realtor.com', 'trulia.com', 'nextdoor.com', 'tiktok.com'];
 const domainPattern = /^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63}$/;
 
-const placeSchema = z.object({ id: z.string().trim().min(1).max(300), displayName: z.object({ text: z.string().trim().min(1).max(300) }).optional(),
+// A place id becomes the route's evidence source id (`place-<id>`), which is bounded at 200 characters.
+const placeSchema = z.object({ id: z.string().trim().min(1).max(190), displayName: z.object({ text: z.string().trim().min(1).max(300) }).optional(),
   formattedAddress: z.string().trim().max(500).optional(), nationalPhoneNumber: z.string().trim().max(60).optional(), internationalPhoneNumber: z.string().trim().max(60).optional(),
   websiteUri: z.string().trim().max(2048).optional(), primaryType: z.string().max(120).optional(), types: z.array(z.string().max(120)).max(50).optional() });
 const responseSchema = z.object({ places: z.array(placeSchema).max(PLACES_PAGE_SIZE).optional(), nextPageToken: z.string().min(1).max(4096).optional() });
@@ -96,7 +97,7 @@ async function fetchBytesOnce(input: { fetch: typeof globalThis.fetch; url: stri
     try {
       for (;;) {
         if (signal.aborted) throw new ResearchDiscoveryError('transport_uncertain');
-        let chunk: ReadableStreamReadResult<Uint8Array>;
+        let chunk: Awaited<ReturnType<typeof reader.read>>;
         try { chunk = await reader.read(); } catch { throw new ResearchDiscoveryError('transport_uncertain'); }
         if (chunk.done) break;
         size += chunk.value.byteLength;

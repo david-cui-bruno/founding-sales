@@ -1,20 +1,25 @@
 import { ResearchDiscoveryError } from '../../../../src/main/research/researchDiscoveryError';
 import { assertGuidedResearch, guardGuidedResearch, reviewedResearchProfile, guidedResearchMarkerKey, type ResearchSetupProfile } from './researchSetup';
 import { TransactWriteItemsCommand } from '@aws-sdk/client-dynamodb';
-import { ownerResearchSourceSchema, ownerResearchSourceKey } from '../../../../src/shared/contracts/ownerCommandContract';
+import { ownerResearchSourceSchema, ownerResearchSourceKey, type OwnerResearchSource } from '../../../../src/shared/contracts/ownerCommandContract';
+import { PLACES_SEARCH_COST_MICROS } from '../../../../src/shared/contracts/researchSetupContract';
+import type { AccountEvidenceBatch, AccountSource } from '../../../../src/shared/contracts/accountContract';
 import { pairingKey, type WorkerAuth } from './workerAuth';
-import { fingerprint, type DynamoAdapter } from './dynamoStore';
+import { fingerprint, type DynamoAdapter, type DynamoStore, type RepositoryOptions } from './dynamoStore';
 import { createCompanyPageProvider, type PageHttp } from '../../../../src/main/research/companyPageProvider';
 import { createFetchedReceiptPolicy } from '../../../../src/main/research/companySourcePolicy';
-import { createCompanyPreparation, createCompanyResearchWorker } from '../../../../src/main/research/companyResearchWorker';
+import { createCompanyPreparation, createCompanyResearchWorker, derivedCommand } from '../../../../src/main/research/companyResearchWorker';
 import { createCompanyDiscoveryProvider, requestCompanyDiscovery } from '../../../../src/main/research/companyDiscoveryProvider';
 import { requestGuidedCompanyDiscovery, validateGuidedDiscoverySources } from '../../../../src/main/research/guidedCompanyDiscoveryProvider';
-import { createWorkerAccountRepository } from './workerAccountRepository';
-import { budgetSchema, createDiscoveryReservationStore } from './discoveryReservationStore';
-import type { SourceTickReport } from './sourceCoordinator';
-import type { AccountResearchStore } from '../../../../src/main/research/companyResearchTypes';
+import { createPlacesDiscoveryProvider, placesPermittedSources, placesQueryGrid, PLACES_MAX_PAGES_PER_QUERY, type PlacesCandidate, type PlacesPage } from '../../../../src/main/research/placesDiscoveryProvider';
+import { createWorkerAccountRepository, type DynamoWorkerAccountRepository } from './workerAccountRepository';
+import { budgetSchema, createDiscoveryReservationStore, placesCursorKey, placesCursorSchema, type DynamoDiscoveryReservationStore, type PlacesCursor, type ReservedCandidate } from './discoveryReservationStore';
+import type { PlacesBatchReport, SourceTickReport } from './sourceCoordinator';
+import { effectiveDiscoveryProvider, type AccountResearchStore, type ResearchJob } from '../../../../src/main/research/companyResearchTypes';
 import type { ResearchOnceRequest, ResearchOnceNextReceipt } from './researchOnceContract';
 export type SourceResearchBoundaries = { loadCredentials(workspaceId: string, signal: AbortSignal): Promise<{ apiKey: string; model: string }>;
+  /** Present only when the Places credential parameter is declared; a Places configuration is held without it. */
+  loadPlacesCredentials?(workspaceId: string, signal: AbortSignal): Promise<{ apiKey: string }>;
   pageHttp: PageHttp; resolve(hostname: string): Promise<string[]> };
 export type ResolvedResearchSuccessor = { runId: string; receipt: { key: string; rev: number; fingerprint: string }; parent: { key: string; rev: number; fingerprint: string } };
 export type ResolvedResearchCycle = { runId: string; descriptorFingerprint: string; receipt: { key: string; rev: number; fingerprint: string }; head: { key: string; rev: number; fingerprint: string } };
@@ -40,6 +45,9 @@ export async function runResearch(input: ResearchCoordinatorOptions, signal: Abo
     const settings = config.research;
     // Selected-account desktop opt-in is not a discovery or hosted-cycle capability.
     if (settings.researchLimits.knownCompanyExtraction) return;
+    const provider = effectiveDiscoveryProvider(settings.discoveryProvider);
+    // Places is a scheduled bulk source only; research.once and hosted cycles keep the cited single-company transport.
+    if (once && provider === 'places') return;
     if (once && (!guided || config.pairingId !== once.pairingId || config.revision !== once.expectedSourceRevision
       || fingerprint(settings) !== once.researchFingerprint || settings.discoveryLimits.maxCompanies !== 1)) return;
     // Refuse missing page budget BEFORE reserving discovery/provider spend.
@@ -94,6 +102,10 @@ export async function runResearch(input: ResearchCoordinatorOptions, signal: Abo
     } } : {}) };
     const accounts = createWorkerAccountRepository(options);
     const reservations = createDiscoveryReservationStore(options);
+    if (provider === 'places') {
+      await runPlacesBatch({ store, config, settings, guard, options, accounts, reservations, boundaries, fetch: input.fetch, signal, report });
+      return;
+    }
     // Only a trusted native cycle selects the cited single-company transport.
     // Existing receipts replay unchanged, including exhausted-budget settlement.
     // New unusable scopes must fail before a discovery reservation or credential read.
@@ -144,3 +156,152 @@ export async function runResearch(input: ResearchCoordinatorOptions, signal: Abo
     if (result === 'completed') report.researchCompleted++;
     if (result === 'parked') report.held++;
   }
+
+/** One Places page batch. The ordinal makes every batch its own reservation, so identical settings never replay a page. */
+export function placesBatchRunId(input: { workspaceId: string; pairingId: string; researchFingerprint: string; budgetId: string; ordinal: number }): string {
+  const hash = fingerprint({ version: 'places-batch-v1', ...input });
+  return `${hash.slice(0,8)}-${hash.slice(8,12)}-4${hash.slice(13,16)}-a${hash.slice(17,20)}-${hash.slice(20,32)}`;
+}
+type PlacesSettings = NonNullable<OwnerResearchSource['research']>;
+type PlacesBatchContext = { store: DynamoStore; config: OwnerResearchSource; settings: PlacesSettings; guard(): Promise<void>; options: RepositoryOptions;
+  accounts: DynamoWorkerAccountRepository; reservations: DynamoDiscoveryReservationStore; boundaries: SourceResearchBoundaries; fetch: typeof globalThis.fetch; signal: AbortSignal; report: SourceTickReport };
+type Identities = Awaited<ReturnType<DynamoWorkerAccountRepository['listIdentities']>>;
+const emptyPlacesReport = (): PlacesBatchReport => ({ outcome: 'held', runId: null, created: 0, routes: 0, enqueued: 0, drained: 0,
+  skipped: { no_website: 0, website_blocked: 0, duplicate_domain: 0, duplicate_phone: 0, existing_domain: 0, existing_phone: 0, route_held: 0, enqueue_held: 0 } });
+/** The next position after a page: the next page of the same query while Google offers a token and the per-query page cap allows, else the next query. */
+function advancePlacesCursor(cursor: PlacesCursor, nextPageToken: string | null, gridLength: number): PlacesCursor {
+  if (nextPageToken && cursor.page + 1 < PLACES_MAX_PAGES_PER_QUERY) return { ...cursor, page: cursor.page + 1, nextPageToken };
+  const queryIndex = cursor.queryIndex + 1;
+  return { ...cursor, queryIndex, page: 0, nextPageToken: null, exhausted: queryIndex >= gridLength };
+}
+/** Scheduled bulk discovery: settle the last batch, reserve one page, call Places once, persist the page with the advanced cursor,
+ *  create accounts with their listed phone route and per-account research job, then drain page research until the phase deadline.
+ *  Nothing here approves, enrolls or grants execution authority; it creates accounts, routes and research jobs only. */
+async function runPlacesBatch(ctx: PlacesBatchContext): Promise<void> {
+  const { store, config, settings, signal, report } = ctx;
+  const places = emptyPlacesReport(); report.status = 'completed'; report.places = places;
+  const budgetId = settings.budgetId; const cost = settings.discoveryLimits.maxCostMicros;
+  const grid = placesQueryGrid(settings.audience); const gridFingerprint = fingerprint(grid);
+  const identity = { workspaceId: config.workspaceId, pairingId: config.pairingId, researchFingerprint: fingerprint(settings), budgetId };
+  const cursorRow = await store.get<unknown>(placesCursorKey(budgetId));
+  let cursor: PlacesCursor = cursorRow ? placesCursorSchema.parse(cursorRow.data) : { version: 1, queryIndex: 0, page: 0, nextPageToken: null, exhausted: false, ordinal: 0, runId: null, gridFingerprint };
+  let cursorRev = cursorRow?.rev ?? null;
+  // A changed territory starts a new sweep from the first query; the ordinal keeps growing so no earlier batch id is reused.
+  const gridChanged = cursor.gridFingerprint !== gridFingerprint;
+  if (gridChanged) cursor = { ...cursor, queryIndex: 0, page: 0, nextPageToken: null, exhausted: false, gridFingerprint };
+  const identities = await ctx.accounts.listIdentities();
+  const drain = async () => { places.drained += await drainPageResearch(ctx); };
+  if (cursor.runId) {
+    const previous = await ctx.reservations.readRunWithRevision(cursor.runId);
+    if (previous && !previous.data.completed) {
+      // The last page's response was lost: its spend stays reserved, the page is never re-issued, and the sweep moves on.
+      if (cursorRev === null) throw new Error('places_cursor_missing');
+      const next = gridChanged ? cursor : advancePlacesCursor(cursor, null, grid.length);
+      await ctx.reservations.completeBatch({ commandId: cursor.runId, workspaceId: config.workspaceId, budgetId, inputFingerprint: previous.data.inputFingerprint, candidates: [], costMicros: null }, { data: next, rev: cursorRev });
+      places.outcome = 'uncertain'; places.runId = cursor.runId;
+      await drain(); return;
+    }
+    // A completed page whose accounts were not all created (a crash after completion) is finished here without another call.
+    if (previous?.data.completed && previous.data.candidates?.some(candidate => !identities.accountIds.has(`account-${fingerprint([config.workspaceId, derivedCommand(cursor.runId!, candidate.domain, 'create')])}`))) {
+      await materialisePlacesCandidates(previous.data.candidates, cursor.runId, places, identities, ctx);
+    }
+  }
+  if (cursor.exhausted || cursor.queryIndex >= grid.length) { places.outcome = 'exhausted'; await drain(); return; }
+  if (!ctx.boundaries.loadPlacesCredentials || cost < PLACES_SEARCH_COST_MICROS) { places.outcome = 'held'; await drain(); return; }
+  // Reserve the reviewed call cost and record the started batch on the cursor in one transaction, before any HTTP.
+  const ordinal = cursor.ordinal + 1; const runId = placesBatchRunId({ ...identity, ordinal }); places.runId = runId;
+  const started: PlacesCursor = { ...cursor, ordinal, runId };
+  const inputFingerprint = fingerprint({ version: 'places-batch-v1', researchFingerprint: identity.researchFingerprint, queryIndex: cursor.queryIndex, page: cursor.page, pageToken: cursor.nextPageToken, ordinal });
+  const reservation = await ctx.reservations.reserveBatch({ commandId: runId, workspaceId: config.workspaceId, budgetId, inputFingerprint, searchCostMicros: cost }, { data: started, rev: cursorRev });
+  if (reservation.status === 'denied') { places.outcome = 'denied'; await drain(); return; }
+  cursorRev = (cursorRev ?? 0) + 1;
+  let candidates: ReservedCandidate[];
+  if (reservation.status === 'replay') {
+    // Another coordinator started this batch. In flight means hold; completed means create its accounts without another call.
+    if (reservation.candidates === null) { places.outcome = 'held'; await drain(); return; }
+    candidates = reservation.candidates;
+  } else {
+    places.outcome = 'uncertain';
+    await ctx.guard();
+    const credentials = await ctx.boundaries.loadPlacesCredentials(config.workspaceId, signal);
+    await ctx.guard();
+    let page: PlacesPage | undefined;
+    const discovery = createPlacesDiscoveryProvider({ credentials, fetch: ctx.fetch, clock: ctx.options.clock,
+      position: () => ({ queryIndex: cursor.queryIndex, pageToken: cursor.nextPageToken }), onPage: value => { page = value; } });
+    const found = await discovery.discover(settings.audience, settings.discoveryLimits, signal) as PlacesCandidate[];
+    signal.throwIfAborted();
+    if (!page) throw new Error('places_page_missing');
+    for (const reason of ['no_website', 'website_blocked', 'duplicate_domain', 'duplicate_phone'] as const) places.skipped[reason] += page.skipped[reason];
+    // The page and the advanced cursor commit together; only then are accounts created, so a replay rebuilds the same accounts.
+    await ctx.reservations.completeBatch({ commandId: runId, workspaceId: config.workspaceId, budgetId, inputFingerprint, candidates: found, costMicros: null },
+      { data: advancePlacesCursor(started, page.nextPageToken, grid.length), rev: cursorRev });
+    candidates = found;
+  }
+  await materialisePlacesCandidates(candidates, runId, places, identities, ctx);
+  places.outcome = 'completed';
+  await drain();
+}
+/** Idempotent per candidate: derived command ids make create, route admission and enqueue replay-safe after any interruption.
+ *  Firms already known by domain or by listed phone are counted and skipped, never merged. */
+async function materialisePlacesCandidates(candidates: ReservedCandidate[], runId: string, places: PlacesBatchReport, identities: Identities, ctx: PlacesBatchContext): Promise<void> {
+  const { config, settings, signal } = ctx;
+  for (const candidate of candidates) {
+    signal.throwIfAborted();
+    if (!candidate.placeId || !candidate.evidence) continue;
+    const createId = derivedCommand(runId, candidate.domain, 'create');
+    const accountId = `account-${fingerprint([config.workspaceId, createId])}`;
+    const replay = identities.accountIds.has(accountId);
+    if (!replay) {
+      if (identities.domains.has(candidate.domain)) { places.skipped.existing_domain++; continue; }
+      if (candidate.listedPhone && identities.phones.has(candidate.listedPhone)) { places.skipped.existing_phone++; continue; }
+    }
+    const account = await ctx.accounts.create({ commandId: createId, name: candidate.name, domain: candidate.domain });
+    if (!replay) { places.created++; ctx.report.researchPrepared++; identities.accountIds.add(account.id); identities.domains.add(candidate.domain); }
+    if (candidate.listedPhone && !(replay && identities.phones.has(candidate.listedPhone))) {
+      // The listing is the evidence: a FETCHED attestation for the Places request and response hash, named by the place id.
+      const source: AccountSource = { id: `place-${candidate.placeId}`, url: candidate.evidence.url, fetchedAt: candidate.evidence.fetchedAt, sha256: candidate.evidence.sha256, excerpt: candidate.evidence.excerpt, permitted: true };
+      const route: AccountEvidenceBatch['routes'][number] = { id: `route-${fingerprint([account.id, 'listed-phone', candidate.listedPhone])}`, accountId: account.id, personId: null, channel: 'phone',
+        value: candidate.listedPhone, purpose: 'business', evidenceIds: [source.id], verification: 'listed' };
+      try {
+        await ctx.accounts.recordFetchedSource({ accountId: account.id, source });
+        await ctx.accounts.admitEvidence({ commandId: derivedCommand(runId, candidate.domain, 'listed-route'), accountId: account.id, expectedVersion: 1, sources: [source], claims: [], routes: [route] });
+        places.routes++; identities.phones.add(candidate.listedPhone);
+      } catch (error) { if (signal.aborted) throw error; places.skipped.route_held++; }
+    }
+    try {
+      await ctx.accounts.enqueue({ commandId: derivedCommand(runId, candidate.domain, 'enqueue'), accountId: account.id, limits: settings.researchLimits,
+        permittedSources: placesPermittedSources(candidate.domain, settings.researchLimits.maxPages) });
+      places.enqueued++;
+    } catch (error) { if (signal.aborted) throw error; places.skipped.enqueue_held++; }
+  }
+}
+/** Run queued page research until the queue is empty or the phase deadline arrives. A job cut by the deadline settles as parked, as today.
+ *  A Places-born job may fetch its own recorded sources; everything else about fetching is the existing bounded page provider. */
+async function drainPageResearch(ctx: PlacesBatchContext): Promise<number> {
+  const { settings, signal, report } = ctx;
+  let current: ResearchJob | null = null;
+  const draining: AccountResearchStore = {
+    create: value => ctx.accounts.create(value), snapshot: (id, at) => ctx.accounts.snapshot(id, at), admitEvidence: (batch, claim) => ctx.accounts.admitEvidence(batch, claim),
+    settle: value => ctx.accounts.settle(value), enqueue: value => ctx.accounts.enqueue(value),
+    claimNext: async asOf => { current = await ctx.accounts.claimNext(asOf); return current; },
+  };
+  const pages = createCompanyPageProvider({ receipts: createFetchedReceiptPolicy(), clock: ctx.options.clock,
+    permitted: url => settings.permittedSources.includes(url) || (current?.permittedSources?.includes(url) ?? false),
+    resolve: async hostname => { await ctx.guard(); return ctx.boundaries.resolve(hostname); },
+    http: async request => { await ctx.guard(); return ctx.boundaries.pageHttp(request); },
+    onFetched: (source, accountId) => ctx.accounts.recordFetchedSource({ accountId, source }) });
+  const worker = createCompanyResearchWorker({ store: draining, clock: ctx.options.clock, pages: { async research(snapshot, limits, requestSignal) {
+    await ctx.guard();
+    if (fingerprint(limits) !== fingerprint(settings.researchLimits)) throw new Error('research_job_config_mismatch');
+    return pages.research(snapshot, limits, requestSignal);
+  } } });
+  let drained = 0;
+  while (!signal.aborted) {
+    const result = await worker.runNext(signal);
+    if (result === 'idle') break;
+    drained++;
+    if (result === 'completed') report.researchCompleted++;
+    if (result === 'parked') report.held++;
+  }
+  return drained;
+}

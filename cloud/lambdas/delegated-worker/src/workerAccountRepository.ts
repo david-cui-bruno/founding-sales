@@ -13,7 +13,9 @@ import { accountRecordSchema, type AccountRecord } from '../../../../src/shared/
 export { projectionSchema, accountRecordSchema, type AccountRecord } from '../../../../src/shared/contracts/accountRecordContract';
 const jobSchema = z.strictObject({ id: z.uuid(), accountId: accountIdSchema, limits: researchLimitsSchema, attempt: integer.positive().max(3),
   claimToken: z.string(), receiptCommandId: z.uuid(), receiptCommitted: z.boolean(), costMicros: integer.nullable(),
-  state: z.enum(['queued', 'running', 'completed', 'parked']), reservedCost: integer, claimedAt: accountInstantSchema.nullable() });
+  state: z.enum(['queued', 'running', 'completed', 'parked']), reservedCost: integer, claimedAt: accountInstantSchema.nullable(),
+  /** Exact per-account fetch allowlist recorded by a bulk source at enqueue; absent for jobs that rely on configuration sources. */
+  permittedSources: z.array(z.url().max(2048)).max(20).optional() });
 type JobRecord = z.infer<typeof jobSchema>;
 type Receipt = { fingerprint: string; kind: string; accountId: string; result: Account | AccountEvidenceReceipt; sequence: number; claimToken?: string };
 export const accountKey = (id: string) => `ACCOUNT#${keyPart(id)}`;
@@ -74,6 +76,17 @@ export class DynamoWorkerAccountRepository implements AccountResearchStore {
     const historical = row.data.history.filter(entry => entry.at <= asOf).at(-1);
     if (!historical) throw new Error('account_not_yet_created');
     return projectAccountEvidence(historical.account, historical.claims, historical.routes);
+  }
+  /** What a bulk source deduplicates against: every stored company domain, every phone route value and every account id. Read only. */
+  async listIdentities(): Promise<{ accountIds: Set<string>; domains: Set<string>; phones: Set<string> }> {
+    const accountIds = new Set<string>(); const domains = new Set<string>(); const phones = new Set<string>();
+    for (const { stored } of await this.store.list<unknown>('ACCOUNT#')) {
+      const record = accountRecordSchema.parse(stored.data);
+      accountIds.add(record.account.id);
+      if (record.account.domain) domains.add(record.account.domain);
+      for (const route of record.routes) if (route.channel === 'phone') phones.add(route.value);
+    }
+    return { accountIds, domains, phones };
   }
   async listCandidates(asOf: string) {
     accountInstantSchema.parse(asOf);
@@ -197,7 +210,7 @@ export class DynamoWorkerAccountRepository implements AccountResearchStore {
     await this.store.transact([this.store.put(researchAdmissionKey, { version: 1, kind: 'legacy' }, admission?.rev ?? null), planResearchBudget(this.store, limitMicros), this.store.absent('GUIDED_RESEARCH_SETUP'), source ? this.store.check('OWNER_RESEARCH_SOURCE', source.rev) : this.store.absent('OWNER_RESEARCH_SOURCE')]);
   }
   async enqueue(input: Parameters<AccountResearchStore['enqueue']>[0]): Promise<void> {
-    const parsed = z.strictObject({ commandId: z.uuid(), accountId: accountIdSchema, limits: researchLimitsSchema }).parse(input);
+    const parsed = z.strictObject({ commandId: z.uuid(), accountId: accountIdSchema, limits: researchLimitsSchema, permittedSources: jobSchema.shape.permittedSources }).parse(input);
     const key = jobKey(parsed.commandId);
     const existing = await this.store.get<JobRecord>(key);
     if (existing) {
@@ -210,7 +223,7 @@ export class DynamoWorkerAccountRepository implements AccountResearchStore {
     const attempt = integer.parse(attempts?.data.count ?? 0) + 1;
     if (attempt > 3) throw new Error('research_attempt_limit');
     const job: JobRecord = { id: parsed.commandId, accountId: parsed.accountId, limits: parsed.limits, attempt, claimToken: '', receiptCommandId: parsed.commandId,
-      receiptCommitted: false, costMicros: null, state: 'queued', reservedCost: 0, claimedAt: null };
+      receiptCommitted: false, costMicros: null, state: 'queued', reservedCost: 0, claimedAt: null, ...(parsed.permittedSources ? { permittedSources: parsed.permittedSources } : {}) };
     await this.store.transact([this.store.check(accountKey(parsed.accountId), account.rev), this.store.put(key, job, null, jobFields(job)),
       this.store.put(attemptKey, { count: attempt }, attempts?.rev ?? null),
       // A previously used non-evidence command cannot impersonate a job receipt.
@@ -279,7 +292,8 @@ export class DynamoWorkerAccountRepository implements AccountResearchStore {
   }
   private publicJob(job: JobRecord): ResearchJob {
     return { id: job.id, accountId: job.accountId, limits: job.limits, attempt: job.attempt, claimToken: job.claimToken,
-      receiptCommandId: job.receiptCommandId, receiptCommitted: job.receiptCommitted, costMicros: job.costMicros };
+      receiptCommandId: job.receiptCommandId, receiptCommitted: job.receiptCommitted, costMicros: job.costMicros,
+      ...(job.permittedSources ? { permittedSources: job.permittedSources } : {}) };
   }
   async settle(input: Parameters<AccountResearchStore['settle']>[0]): Promise<void> {
     const parsed = z.strictObject({ jobId: z.uuid(), claimToken: z.string().min(1), status: z.enum(['completed', 'parked']),

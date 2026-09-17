@@ -27,11 +27,20 @@ import { mailAccountScopeSchema } from '../../../../src/shared/contracts/mailThr
 import { mailScopeFingerprint } from '../../../../src/main/outreach/providers/gmailThreadProvider';
 
 export type SourceResearchBoundaries = { loadCredentials(workspaceId: string, signal: AbortSignal): Promise<{ apiKey: string; model: string }>;
+  /** Present only when the Places credential parameter is declared; a Places configuration is held without it. */
+  loadPlacesCredentials?(workspaceId: string, signal: AbortSignal): Promise<{ apiKey: string }>;
   pageHttp: PageHttp; resolve(hostname: string): Promise<string[]> };
 export type SourceCoordinatorOptions = { auth: WorkerAuth; authorization: RemoteGoogleAuthorization; fetch: typeof globalThis.fetch; research?: SourceResearchBoundaries; researchSetupProfile?: ResearchSetupProfile };
+/** What one Places territory batch did. `uncertain` names a page whose response was lost: its spend is retained and it is never re-issued. */
+export type PlacesBatchReport = { outcome: 'completed' | 'exhausted' | 'uncertain' | 'denied' | 'held'; runId: string | null; created: number; routes: number; enqueued: number; drained: number;
+  skipped: { no_website: number; website_blocked: number; duplicate_domain: number; duplicate_phone: number; existing_domain: number; existing_phone: number; route_held: number; enqueue_held: number } };
 export type SourceTickReport = { status: 'inactive' | 'completed' | 'aborted'; researchPrepared: number; researchCompleted: number;
-  mailPolls: number; dispatches: number; sendReconciliations: number; meetings: number; held: number };
+  mailPolls: number; dispatches: number; sendReconciliations: number; meetings: number; held: number;
+  /** Present only when the research phase ran a Places territory batch. */
+  places?: PlacesBatchReport };
 const PAGE_LIMIT = 25;
+// Research may create a page of companies and drain their page research within its slice; the other phases keep theirs.
+const PHASE_SLICES_MS = [20000, 10000, 10000, 10000] as const;
 const cursorSchema = z.strictObject({ after: z.string().min(1).max(2048).nullable() });
 const submittedSchema = z.strictObject({ fingerprint: z.string().regex(/^[a-f0-9]{64}$/), receipt: commandReceiptSchema,
   sequence: integer.positive(), command: ownerCommandSchema });
@@ -386,7 +395,7 @@ export function createSourceCoordinator(input: SourceCoordinatorOptions) {
         // never a receipt, authority, or permission to resend reserved work.
         await store.transact([store.put(key, { next: (index + 1) % phases.length }, revision)]);
         revision = (revision ?? 0) + 1;
-        const phaseDeadline = new AbortController(); const phaseTimer = setTimeout(() => phaseDeadline.abort(), 10000);
+        const phaseDeadline = new AbortController(); const phaseTimer = setTimeout(() => phaseDeadline.abort(), PHASE_SLICES_MS[index] ?? 10000);
         const phaseSignal = AbortSignal.any([signal, phaseDeadline.signal]);
         try { await phases[index]!(phaseSignal, report); }
         catch { report.held++; }
