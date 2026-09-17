@@ -263,8 +263,6 @@ export function nativeDeskFixture(initial = dailyFixture()) {
         record('getAccountPreparation', input);
         return structuredClone(preparation);
       },
-      approveMeeting: forbidden,
-      getMeetingApproval: async (input) => { record('getMeetingApproval', input); return null; },
       configureIntake: forbidden,
       refreshSelectedAccount: forbidden,
       // Local read only. The fixture holds no applied copy, so the honest answer is unknown.

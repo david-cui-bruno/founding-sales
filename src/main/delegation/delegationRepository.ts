@@ -143,12 +143,6 @@ export class DelegationRepository {
       .get(this.deps.workspaceId, accountIdSchema.parse(accountId), accountIdSchema.parse(threadId)) as { projection_json: string } | undefined;
     return row ? threadProjectionSchema.parse(JSON.parse(row.projection_json)) : null;
   }
-  /** Every approve-meeting command ever queued for one saved thread, oldest first. Receipts are read separately. */
-  meetingApprovalCommands(accountId: string, threadId: string): Extract<DelegationCommand, { kind: 'approve-meeting' }>[] {
-    const rows = this.raw.prepare(`SELECT command_json FROM delegated_commands WHERE workspace_id=? AND account_id=? AND json_extract(command_json,'$.kind')='approve-meeting'
-      AND json_extract(command_json,'$.payload.intent.threadId')=? ORDER BY created_at,command_id`).all(this.deps.workspaceId, accountIdSchema.parse(accountId), accountIdSchema.parse(threadId)) as { command_json: string }[];
-    return rows.map(row => delegationCommandSchema.parse(JSON.parse(row.command_json))).filter((command): command is Extract<DelegationCommand, { kind: 'approve-meeting' }> => command.kind === 'approve-meeting');
-  }
   /** Every saved-record command (bootstrap or refresh) ever queued for one company, oldest first. Receipts are read separately. */
   selectedAccountRecordCommands(accountId: string): Extract<DelegationCommand, { kind: 'bootstrap-selected-account' | 'refresh-selected-account-record' }>[] {
     const rows = this.raw.prepare(`SELECT command_json FROM delegated_commands WHERE workspace_id=? AND account_id=? AND json_extract(command_json,'$.kind') IN('bootstrap-selected-account','refresh-selected-account-record')

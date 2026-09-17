@@ -1,12 +1,12 @@
 import { QueryCommand } from '@aws-sdk/client-dynamodb';
-import { approveMeetingCommandSchema, ownerSourceKey, ownerSourceConfigurationSchema } from '../../../../src/shared/contracts/ownerCommandContract';
+import { ownerSourceKey, ownerSourceConfigurationSchema } from '../../../../src/shared/contracts/ownerCommandContract';
 import { z } from 'zod';
 import { workerEventSchema } from '../../../../src/shared/contracts/delegationContract';
-import { meetingWorkSchema, meetingApprovalSchema, type MeetingWork, saveMeetingOfferSchema, meetingOfferSchema, type MeetingOffer, reserveMeetingSchema, saveSchedulingRulesSchema, schedulingRulesSchema, meetingReservationSchema, meetingOutcomeSchema, type ReserveMeetingInput, type MeetingReservation, type MeetingReservationResult, type MeetingOutcome } from '../../../../src/shared/contracts/meetingContract';
+import { meetingWorkSchema, type MeetingWork, saveMeetingOfferSchema, meetingOfferSchema, type MeetingOffer, reserveMeetingSchema, saveSchedulingRulesSchema, schedulingRulesSchema, meetingReservationSchema, meetingOutcomeSchema, type ReserveMeetingInput, type MeetingReservation, type MeetingReservationResult, type MeetingOutcome } from '../../../../src/shared/contracts/meetingContract';
 import { threadProjectionSchema } from '../../../../src/shared/contracts/mailThreadContract';
 import { validateMeetingIntent, matchOfferedReply, offeredSlotText } from '../../../../src/shared/meetings/schedulingRules';
 import { providerMeetingIdentity, requireExplicitCalendarId } from '../../../../src/main/meetings/calendarProvider';
-import { DynamoStore, fingerprint, keyPart, type RepositoryOptions, type Stored } from './dynamoStore';
+import { DynamoStore, fingerprint, keyPart, type RepositoryOptions } from './dynamoStore';
 import { executionAuthorityKey, executionAuthorityFields, authorityRecordSchema } from './executionRepository';
 import { mailThreadKey, mailSuppressionKey } from './threadIntakeRepository';
 import { RemoteGoogleAuthorization, type GoogleAccessEvidence } from './remoteGoogleAuthorization';
@@ -21,6 +21,9 @@ export const meetingCommandKey = (id: string) => `MEETING_COMMAND#${keyPart(id)}
 const meetingKey = (id: string) => `MEETING#${keyPart(id)}`;
 const calendarKey = (id: string) => `MEETING_CALENDAR#${keyPart(id)}`;
 const approvalKey = (id: string) => `MEETING_APPROVAL#${keyPart(id)}`;
+/** Proof that a trusted composition approved this exact input through approveIntent. Worker-internal only;
+ * no desktop path produces it, so a mixed reply without it is held, never booked. */
+const approvedIntentSchema = z.strictObject({ input: reserveMeetingSchema, fingerprint: z.string().regex(/^[a-f0-9]{64}$/) });
 const occupiedSchema = z.strictObject({ meetingId: z.string(), start: z.number().finite(), end: z.number().finite() });
 const calendarSchema = z.strictObject({ activeCommandId: z.string().nullable(), occupied: z.array(occupiedSchema).max(200) });
 const meetingSchema = z.strictObject({ accountId: z.string(), calendarId: z.string(), commandId: z.string(), outcome: meetingOutcomeSchema.nullable(), history: z.array(meetingOutcomeSchema).max(200) });
@@ -208,7 +211,7 @@ export class DynamoMeetingRepository {
       || parsed.data.pairingId !== intent.pairingId || parsed.data.mailboxSubject !== intent.mailboxSubject || parsed.data.calendarId !== calendarId) throw new Error('meeting_source_inactive');
     return this.store.check(key, row.rev);
   }
-  private async evidence(input: ReserveMeetingInput, ownerAuthority?: Stored<z.infer<typeof authorityRecordSchema>>) {
+  private async evidence(input: ReserveMeetingInput) {
     const { intent, calendarId } = input; this.store.workspace(intent.workspaceId);
     requireExplicitCalendarId(calendarId);
     const storedRules = await this.store.get<unknown>(rulesKey(calendarId)); if (!storedRules) throw new Error('rules_missing');
@@ -218,12 +221,8 @@ export class DynamoMeetingRepository {
     const valid = validateMeetingIntent(intent, rules, this.store.now()); if (valid.allowed === false) throw new Error(valid.reason);
     const auth = await this.store.get<unknown>(executionAuthorityKey(intent.accountId)); if (!auth) throw new Error('authority_missing');
     const current = authorityRecordSchema.parse(auth.data);
-    // Only planOwnerApproval supplies this captured pre-transaction row. The
-    // executable input already names the precise successor, never a rebase.
-    if (ownerAuthority && (intent.expectedVersion !== ownerAuthority.data.version + 1 || auth.rev !== ownerAuthority.rev
-      || fingerprint(current) !== fingerprint(ownerAuthority.data))) throw new Error('meeting_approval_authority_changed');
     if (current.authority.accountId !== intent.accountId || current.authority.owner !== 'worker' || current.authority.state !== 'active'
-      || current.authority.generation !== intent.expectedAuthorityGeneration || current.version !== (ownerAuthority?.data.version ?? intent.expectedVersion)) throw new Error('stale_authority');
+      || current.authority.generation !== intent.expectedAuthorityGeneration || current.version !== intent.expectedVersion) throw new Error('stale_authority');
     const source = await this.sourceFence(input);
     const barrier = createIntakeBarrier(this.store);
     const subject = { accountId: intent.accountId, mailboxSubject: intent.mailboxSubject, requiredThreadId: intent.threadId };
@@ -243,12 +242,6 @@ export class DynamoMeetingRepository {
     if (projection.thread.accountId !== intent.accountId || projection.thread.mailboxSubject !== intent.mailboxSubject || projection.thread.providerThreadId !== intent.threadId
       || projection.revision !== intent.threadRevision || projection.contextRevision !== intent.contextRevision) throw new Error('stale_thread');
     const message = projection.thread.messages.find(m => m.id === intent.agreementEvidenceId);
-    if (ownerAuthority) {
-      const latest = Math.max(...projection.thread.messages.map(m => Date.parse(m.date)));
-      const newest = projection.thread.messages.filter(m => Date.parse(m.date) === latest);
-      if (!message || newest.length !== 1 || newest[0] !== message || message.from.length !== 1 || intent.attendeeEmails.length !== 1
-        || message.from[0] !== intent.attendeeEmails[0]) throw new Error('meeting_agreement_not_current');
-    }
     if (!message || message.bodyParts.some(p => p.truncated) || !message.bodyParts.map(p => p.text).join('\n').includes(intent.agreement!.quote)
       || message.from.length !== 1 || !intent.attendeeEmails.includes(message.from[0]!)) throw new Error('agreement_evidence_missing');
     if (/\b(not|no|never|maybe|perhaps|unavailable|cannot|can't|don't|unsure)\b/i.test(message.bodyParts.map(p => p.text).join('\n'))) throw new Error('agreement_unclear');
@@ -281,17 +274,9 @@ export class DynamoMeetingRepository {
     await this.store.transact([...checks, ...this.approvalItems(input)]);
   }
   private approvalItems(input: ReserveMeetingInput) {
-    const proof = meetingApprovalSchema.parse({ input, fingerprint: fingerprint(input) });
+    const proof = approvedIntentSchema.parse({ input, fingerprint: fingerprint(input) });
     const work = meetingWorkSchema.parse({ ...proof, preparedAt: this.store.now() });
     return [this.store.put(approvalKey(input.intent.approvalId!), proof, null), this.store.put(meetingWorkKey(input.intent.accountId, input.intent.commandId), work, null)];
-  }
-  /** Internal owner transaction plan. No caller-selectable version override. */
-  async planOwnerApproval(raw: unknown, captured: Stored<z.infer<typeof authorityRecordSchema>>) {
-    const command = approveMeetingCommandSchema.parse(raw);
-    if (command.expectedVersion !== captured.data.version || command.expectedAuthorityGeneration !== captured.data.authority.generation
-      || command.accountId !== captured.data.authority.accountId) throw new Error('meeting_approval_authority_changed');
-    const { checks, validUntil } = await this.evidence(command.payload, captured);
-    return { checks, validUntil, items: this.approvalItems(command.payload) };
   }
   async reserve(raw: ReserveMeetingInput, access: GoogleAccessEvidence): Promise<MeetingReservationResult> {
     const input = reserveMeetingSchema.parse(raw); const { intent, calendarId } = input; this.store.workspace(intent.workspaceId);
@@ -307,7 +292,7 @@ export class DynamoMeetingRepository {
     if (mixed) {
       if (!intent.approvalId) throw new Error('meeting_approval_missing');
       const approved = await this.store.get<unknown>(approvalKey(intent.approvalId));
-      const proof = meetingApprovalSchema.safeParse(approved?.data);
+      const proof = approvedIntentSchema.safeParse(approved?.data);
       if (!approved || !proof.success || proof.data.fingerprint !== fp || fingerprint(proof.data.input) !== fp) throw new Error('meeting_approval_missing'); checks.push(this.store.check(approvalKey(intent.approvalId), approved.rev));
     }
     const prior = await this.store.get<unknown>(meetingKey(intent.meetingId)); const meeting = prior ? meetingSchema.parse(prior.data) : null;
