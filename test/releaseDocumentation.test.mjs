@@ -42,7 +42,7 @@ describe('release verification documentation', () => {
     expect(packageJson.scripts['verify:release']).toBe('node scripts/verifyRelease.mjs');
     expect(packageJson.scripts['test:helpers:node']).toBe('node --test test/appleBridgeBuild.test.mjs test/verifyAppleBridgePackage.test.mjs');
     expect(packageJson.scripts['test:backup:electron']).toBe('CALLIE_TEST_SYNTHETIC_ELECTRON=1 vitest run test/preReleaseElectronHost.test.mjs');
-    expect(releaseManual).toContain('eleven independent');
+    expect(releaseManual).toContain('two independent');
     expect(releaseManual).toContain('CALLIE_RELEASE_OUT_DIR');
     expect(releaseManual).toContain('CALLIE_E2E_OUT_DIR');
     expect(releaseManual).toContain('ASAR SHA256');
