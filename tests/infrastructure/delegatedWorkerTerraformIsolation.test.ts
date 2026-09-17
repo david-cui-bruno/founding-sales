@@ -67,7 +67,7 @@ const defaults: Record<string, string> = {
   delegated_worker_schedule_enabled: "false",
   delegated_worker_research_once_enabled: "false",
 };
-// Inputs added after the legacy root was frozen for retirement: the module default keeps that root unchanged, so only the worker root wires them.
+// Inputs added after the legacy sourcing root was removed (17 September 2026): the module default is off and only the worker root wires them.
 const workerOnlyDefaults: Record<string, string> = {
   delegated_places_enabled: "false",
 };
@@ -119,7 +119,6 @@ describe("delegated-worker Terraform source isolation", () => {
       for (const input of [moduleInput, rootInput]) expect(compact(input)).toContain(`default = ${value}`);
       expect(compact(rootInput.replace(/description\s*=\s*"[^"\n]*"/, ""))).toBe(compact(moduleInput.replace(/description\s*=\s*"[^"\n]*"/, "")));
       expect(compact(block(worker, 'module "delegated_worker"'))).toContain(`${name} = var.${name}`);
-      expect(block(legacy, 'module "delegated_worker"')).not.toContain(name);
     }
     const names = [...read(workerDir, "variables.tf").matchAll(/^variable "([^"]+)"/gm)].map((match) => match[1]);
     expect(names.sort()).toEqual([...Object.keys(defaults), ...Object.keys(workerOnlyDefaults)].sort());
