@@ -161,26 +161,19 @@ local ad-hoc package skips only Team-ID equality; both code objects must still
 have valid strict signatures and the helper must retain its entitlement. Ad-hoc
 verification does not establish permission persistence across rebuilds.
 
-`npm run test:e2e` covers the packaged founder workflow: foundation health,
-the composed workflow shell booting to Today, the CSV import flow (preview is
-read-only, commit is atomic and exactly-once, rows persist across relaunch),
-the single global lead inspector opened from Leads and Pipeline, the Friday
-scoreboard job lifecycle with the domain-computed 3 / 4 and 75% fill-rate
-evidence, theme/density persistence across renderer reload, and an axe
-accessibility gate that fails on any serious or critical violation across the
-Today, Leads, Pipeline, Review, and Friday routes. Every packaged test uses a
-fresh `mkdtemp` `--user-data-dir`; production founder data is never read or
-written by tests. CSV import acceptance goes through the real UI import
-flow. Separate owned encrypted migration/transition fixtures seed specific retained
-workspace states directly to test upgrades and transitions. Those fixtures do not
-prove the UI can create that starting state.
-
-Conversations and Learnings are live workspaces. Conversations lists every
-call and voicemail activity and supports manual transcript paste/attach; each
-attach writes an explicit founder consent record, and transcripts stay
-append-only. Learnings stores founder-curated, evidence-backed insights with
-contradiction tracking. Zero-click Apple recording is still not exercised by
-fixture E2E.
+`npm run test:e2e` covers the packaged company workflow: foundation health and
+the diagnostics screen, the composed shell booting to Today, the meeting-first
+workspace, local company preparation (create, reopen, restart), navigation
+continuity across Today, Accounts, Campaigns and Settings, the presentation
+identity in both themes, and an axe accessibility gate that fails on any serious
+or critical violation across those four routes. Every packaged test uses a fresh
+`mkdtemp` `--user-data-dir`; production founder data is never read or written by
+tests. Separate owned encrypted migration/transition fixtures seed specific
+retained workspace states directly to test upgrades and transitions. Those
+fixtures do not prove the UI can create that starting state. The legacy person
+routes (Leads, Pipeline, Conversations, Learnings, Friday, Inbox), the CSV person
+import and the lead inspector were removed on 17 September 2026 together with
+their packaged specs; their tables and history remain in the database.
 
 The standard packaged E2E command includes an inert Apple smoke test. To run
 only that suite after packaging:
