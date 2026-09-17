@@ -24,7 +24,7 @@ Channel and preload inventories are exact and enumerated. When you add a channel
 
 ## 3. Two data models in one database
 
-Schema 26. Migrations `src/main/db/migrations/0001Foundation.ts` through `src/main/db/migrations/0026LocalCompanyDrafts.ts` are applied by `src/main/db/migrate.ts` only after `src/main/db/migrationBackup.ts` has taken a verified copy.
+Schema 27. Migrations `src/main/db/migrations/0001Foundation.ts` through `src/main/db/migrations/0027ListedRouteVerification.ts` are applied by `src/main/db/migrate.ts` only after `src/main/db/migrationBackup.ts` has taken a verified copy.
 
 **Legacy person/prospect model** (`0001`–`0019`): `persons`, `person_contact_methods`, `organizations`, `organization_aliases`, `prospects`, `sales_cycles`, `next_actions`, `cadence_*`, `activities`, `transcripts`, `learnings`, `lifecycle_review_items`, `source_events`, `discovery_*`, `email_drafts`, `opt_out_*`, `consent_policy_records`. Domain: `src/main/domain/founderSalesDomain.ts` and the folders under `src/main/domain/` (cadence, contacts, conversations, discovery, learnings, lifecycle, optOut, outbound, portfolio, prioritization, source). Routes: Leads, Pipeline, Conversations, Learnings, Inbox (`src/renderer/features/review/`), Friday, the lead inspector (`src/renderer/features/leadInspector/`) and the CSV import dialog (`src/renderer/features/import/ImportDialog.tsx`); on Today, the legacy queue (`src/renderer/features/today/TodayPage.tsx`, `api.today`) with the prospect shortlist (`src/renderer/features/discovery/SuggestedContacts.tsx`), which `src/renderer/features/today/TodayRoute.tsx` renders only when the daily worker API is absent. These routes are slated for deletion in the next batch; their tables, migrations and suppression data stay.
 

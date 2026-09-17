@@ -709,7 +709,7 @@ export type PmAccountTables = {
   pm_account_claim_evidence: { account_id: string; claim_id: string; source_id: string };
   pm_account_routes: { id: string; account_id: string; version: number; person_id: string | null;
     channel: 'phone' | 'email' | 'linkedin'; value: string; purpose: 'business' | 'tenant_emergency' | 'unknown';
-    verification: 'published' | 'confirmed' | 'unverified'; admitted_at: string };
+    verification: 'published' | 'confirmed' | 'unverified' | 'listed'; admitted_at: string };
   pm_account_route_evidence: { account_id: string; route_id: string; route_version: number; source_id: string };
   pm_account_links: { id: string; account_id: string; kind: 'organization' | 'person_role' | 'property';
     organization_id: string | null; person_id: string | null; property_id: string | null; relationship: string;

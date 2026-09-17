@@ -6,7 +6,7 @@ import { checkFts5, type AppDatabase } from '../../db/database';
 import { inspectDatabaseEncryption } from '../../db/databaseEncryption';
 import { DomainStartupFatalError } from './domainStartupTypes';
 
-export type DomainStorageReadiness<Version extends 24 | 25 | 26 = 26> = Readonly<{
+export type DomainStorageReadiness<Version extends 24 | 25 | 26 | 27 = 27> = Readonly<{
   schemaVersion: Version;
   encrypted: true;
   cipherVersion: string;
@@ -379,13 +379,17 @@ export const SCHEMA25_MANIFEST: DomainSchemaManifest = Object.freeze({
 // Historical object names must not follow the evolving current catalog.
 export const SCHEMA24_MANIFEST: DomainSchemaManifest = Object.freeze({ ...SCHEMA25_MANIFEST,
   catalogSha256: '540015183cea4abf0ec50df42e643d5d7e6901a3dfd6a3a9a5c538ae80661a6b' });
-export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
+export const SCHEMA26_MANIFEST: DomainSchemaManifest = Object.freeze({
   tables: Object.freeze([...SCHEMA25_MANIFEST.tables, 'local_company_email_drafts', 'local_company_draft_commands'].sort()),
   indexes: SCHEMA25_MANIFEST.indexes,
   triggers: Object.freeze([...SCHEMA25_MANIFEST.triggers, 'local_company_draft_binding_immutable', 'local_company_email_drafts_no_delete',
     'local_company_draft_commands_no_delete', 'local_company_draft_commands_no_update'].sort()),
   catalogSha256: '7c62e3f56708179cc0dd084a17a7e36e968b07ab10f128f8ad358226f67a50b4',
 });
+// Schema 27 rebuilds pm_account_routes so verification may be 'listed'; every object name is
+// unchanged, only that table's CREATE statement (and therefore the SQL fingerprint) differs.
+export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({ ...SCHEMA26_MANIFEST,
+  catalogSha256: 'fe92819582d62cbbfcd9fe88cd5f2b21d3edd638ba3abcb8b3984ef79e9d952b' });
 
 export const DOMAIN_MIGRATION_LEDGER = Object.freeze([
   '0001Foundation',
@@ -409,6 +413,7 @@ export const DOMAIN_MIGRATION_LEDGER = Object.freeze([
   '0019EmailDrafts',
   '0020PmAccounts',
   '0021DelegatedWork', '0022MailPersistence', '0023Campaigns', '0024RequestedFollowupAndPolicyReviews', '0025KnownCompanyResearchSettings', '0026LocalCompanyDrafts',
+  '0027ListedRouteVerification',
 ] as const);
 
 const appMetaSchema = z.object({
@@ -422,25 +427,25 @@ const appMetaSchema = z.object({
 export function assertDomainStorageReady(input: {
   database: AppDatabase;
   expectedBusyTimeoutMs: 5000;
-  expectedSchemaVersion: 26;
+  expectedSchemaVersion: 27;
   expectedManifest: DomainSchemaManifest;
 }): DomainStorageReadiness {
   return assertExactStorageReady(input, DOMAIN_MIGRATION_LEDGER);
 }
 
 /** Backup-only compatibility. Never migrates or admits a schema-24 app runtime. */
-export function assertPreReleaseStorageReady(database: AppDatabase): DomainStorageReadiness<24 | 25 | 26> {
+export function assertPreReleaseStorageReady(database: AppDatabase): DomainStorageReadiness<24 | 25 | 26 | 27> {
   const row = appMetaSchema.safeParse(database.raw.prepare('SELECT schema_version FROM app_meta WHERE singleton = 1').get());
-  if (!row.success || (row.data.schema_version !== 24 && row.data.schema_version !== 25 && row.data.schema_version !== 26)) {
+  if (!row.success || (row.data.schema_version !== 24 && row.data.schema_version !== 25 && row.data.schema_version !== 26 && row.data.schema_version !== 27)) {
     throw new DomainStartupFatalError('schema_not_ready', 'Unsupported pre-release backup schema.');
   }
   const version = row.data.schema_version;
-  const manifest = version === 24 ? SCHEMA24_MANIFEST : version === 25 ? SCHEMA25_MANIFEST : DOMAIN_SCHEMA_MANIFEST;
+  const manifest = version === 24 ? SCHEMA24_MANIFEST : version === 25 ? SCHEMA25_MANIFEST : version === 26 ? SCHEMA26_MANIFEST : DOMAIN_SCHEMA_MANIFEST;
   return assertExactStorageReady({ database, expectedBusyTimeoutMs: 5000,
     expectedSchemaVersion: version, expectedManifest: manifest }, DOMAIN_MIGRATION_LEDGER.slice(0, version));
 }
 
-function assertExactStorageReady<Version extends 24 | 25 | 26>(input: {
+function assertExactStorageReady<Version extends 24 | 25 | 26 | 27>(input: {
   database: AppDatabase;
   expectedBusyTimeoutMs: 5000;
   expectedSchemaVersion: Version;
