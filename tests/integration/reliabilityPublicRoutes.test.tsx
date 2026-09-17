@@ -108,7 +108,7 @@ const emptyReviewRequest: ReviewListRequest = { kinds: [], cursor: null, limit: 
 describe('reliability Step A: construction and public schema smoke, not historical behavioral RED', () => {
   it('constructs 208 valid retained reviews and reads real metadata through exposed preload and shipped registrars', async () => {
     await withFixture(async fixture => {
-      expect(fixture.constructionEvidence()).toMatchObject({ encrypted: true, integrity: 'ok', fts5Available: true, schemaVersion: 26 });
+      expect(fixture.constructionEvidence()).toMatchObject({ encrypted: true, integrity: 'ok', fts5Available: true, schemaVersion: 27 });
       const expected = fixture.seedReviews();
       const stored = fixture.reviewOwners();
       expect(stored).toHaveLength(208);
@@ -240,7 +240,7 @@ describe('reliability Step A: construction and public schema smoke, not historic
 const rendererAdmissionHealth: FoundationHealth = {
   status: 'ready', retry: () => { throw new Error('Health retry is outside this route test'); },
   health: appHealthSchema.parse({
-    appVersion: 'fixture-admission-only', schemaVersion: 26, databasePath: '/fixture-admission-only',
+    appVersion: 'fixture-admission-only', schemaVersion: 27, databasePath: '/fixture-admission-only',
     databaseEncrypted: true, cipherVersion: 'fixture-admission-only', fts5Available: true,
     pendingJobs: 0, interruptedJobsRecovered: 0, domainStatus: 'ready', domainReady: true,
     domainBlockingViolationCount: 0, domainRepairableIssueCount: 0,
