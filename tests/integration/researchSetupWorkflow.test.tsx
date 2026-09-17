@@ -3,8 +3,12 @@ import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, configure, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
+// Real worker round-trips through encrypted SQLite and the synthetic Dynamo harness run slower under the full parallel suite;
+// the 1 s query default and the 5 s test default both flaked there while every case passes alone in about two seconds.
+configure({ asyncUtilTimeout: 5000 });
+vi.setConfig({ testTimeout: 20000 });
 import { createPmFixture, PM_NOW } from '../fixtures/pmAccounts';
 import type { RegisteredIpcHandler } from '../fixtures/registeredIpcHandler';
 import { createCallieApi } from '../../src/preload/createCallieApi';
