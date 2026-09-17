@@ -1,0 +1,38 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "workspaces": {
+    ".": {
+      "entry": [
+        "forge.config.ts",
+        "src/main.ts",
+        "src/preload.ts",
+        "scripts/finalizeIdentityMigrationReview.mjs",
+        "scripts/runIdentityMigrationAudit.mjs",
+        "scripts/probeEncryptedSqliteNative.cjs",
+        "tests/support/*Scenario.ts",
+        "tests/support/*Contender.{ts,mjs}",
+        "docs/prototypes/*.verify.mjs"
+      ],
+      "vite": {
+        "config": [
+          "vite.main.config.ts",
+          "vite.preload.config.ts",
+          "vite.renderer.config.ts"
+        ]
+      },
+      "playwright": true,
+      "ignoreBinaries": ["swift", "gitleaks"]
+    },
+    "cloud/lambdas/*": {
+      "esbuild": {
+        "config": ["build.mjs"]
+      }
+    },
+    "cloud/lambdas/delegated-worker": {
+      "entry": ["src/operatorPairing.ts", "src/operatorPairingAws.ts"],
+      "esbuild": {
+        "config": ["build.mjs", "build-operator.mjs"]
+      }
+    }
+  }
+}
