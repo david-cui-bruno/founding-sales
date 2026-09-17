@@ -1,8 +1,0 @@
-# Public identifiers only. Copy to backend.hcl after Hold Point 1 approval and
-# replace ACCOUNT_ID and KMS_KEY_ID with the reviewed public identifiers.
-bucket         = "callie-sourcing-tfstate-ACCOUNT_ID"
-key            = "cloud/terraform.tfstate"
-region         = "us-east-1"
-dynamodb_table = "callie-sourcing-tflock"
-encrypt        = true
-kms_key_id     = "arn:aws:kms:us-east-1:ACCOUNT_ID:key/KMS_KEY_ID"

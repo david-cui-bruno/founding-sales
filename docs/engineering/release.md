@@ -38,8 +38,8 @@ absence or coverage of remote history that was never fetched.
 
 `verify:release` runs types, tracked lint, root tests, NativeDesk browser tests,
 Swift tests, the Node helper build/verifier tests (`test:helpers:node`), the explicit
-synthetic Electron backup-host test (`test:backup:electron`), and all eleven independent
-Lambda gates, then **packages once**. The host flag is local to its named command. It verifies that package, scans complete
+synthetic Electron backup-host test (`test:backup:electron`), and the two independent
+Lambda gates (`shared`, then `delegated-worker`), then **packages once**. The host flag is local to its named command. It verifies that package, scans complete
 fetched Git history plus the bounded source/generated build context, extracts
 and scans the final ASAR and actual unpacked/helper bundle resources, runs
 fixture E2E against that same artifact, and verifies its embedded marker again.
@@ -59,8 +59,10 @@ argument arrays, excluding generated output/dependencies at any depth. It does
 not claim ESLint validation of JSON, YAML or Terraform. Lambda source uses its
 nearest package TypeScript import-resolution options, not root substitutes.
 `verify:lambdas` discovers tracked immediate package manifests and runs shared
-first (typecheck/test), then every other package including schedule-watchdog
-(typecheck/test/build). It never installs, deploys, scouts or contacts providers.
+first (typecheck/test), then every other tracked package, today only
+`delegated-worker` (typecheck/test/build); the nine legacy sourcing packages were
+removed on 17 September 2026 after their stack was destroyed. It never installs,
+deploys, scouts or contacts providers.
 
 The marker is strict `{format:'callie-release',version:1,commitSha,builtAt}`.
 `release:marker` derives actual full HEAD and refuses index, tracked or nonignored
