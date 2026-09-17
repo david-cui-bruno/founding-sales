@@ -1,6 +1,6 @@
 import {requestedFollowupDraftSchema,approveRequestedFollowupSchema,prepareRequestedFollowupSchema,requestedMailContextSchema} from './requestedFollowupContract';
 import {accountRecordSchema} from './accountRecordContract';
-import { saveMeetingOfferSchema, reserveMeetingSchema } from './meetingContract';
+import { saveMeetingOfferSchema } from './meetingContract';
 import { z } from 'zod';
 import { acquisitionMilestoneReportSchema } from './acquisitionReportContract';
 import { audienceQuerySchema, researchCapabilitySchema, researchLimitsSchema } from '../../main/research/companyResearchTypes';
@@ -26,15 +26,6 @@ export const ownerSourceConfigurationSchema = z.strictObject({ version: z.litera
 export type OwnerSourceConfiguration = z.infer<typeof ownerSourceConfigurationSchema>;
 export const ownerSourceKey = (accountId: string): string => `OWNER_SOURCE#${encodeURIComponent(id.parse(accountId))}`;
 export const ownerCommandBase = { commandId: z.uuid(), workspaceId: id, accountId: id, expectedAuthorityGeneration: revision, expectedVersion: revision };
-/** Explicit approval queues this exact create for the existing meeting poller. */
-export const approveMeetingCommandSchema = z.strictObject({ ...ownerCommandBase, kind: z.literal('approve-meeting'), payload: reserveMeetingSchema }).refine(command => {
-  const intent = command.payload.intent;
-  return intent.workspaceId === command.workspaceId && intent.accountId === command.accountId
-    && intent.expectedAuthorityGeneration === command.expectedAuthorityGeneration && intent.expectedVersion === command.expectedVersion + 1
-    && intent.commandId === command.commandId && intent.approvalId === command.commandId
-    && intent.operation === 'create' && intent.agreement?.kind === 'explicit_slot' && intent.agreementEvidenceId !== null
-    && intent.attendeeEmails.length === 1 && intent.etag === null;
-}, 'meeting_approval_binding');
 export const ownerCampaignBindingSchema = z.strictObject({ campaignId: id, campaignRevision: revision.min(1), enrollmentId: id,
   enrollmentRevision: revision.min(1), stepId: id });
 export const manualHandoffBindingSchema = z.strictObject({ actionId: id, channel: z.enum(['call', 'linkedin']), routeId: id,
@@ -83,7 +74,7 @@ export const selectedAccountFreshnessSchema=z.strictObject({accountId:id,state:z
 export type SelectedAccountFreshness=z.infer<typeof selectedAccountFreshnessSchema>;
 
 export const approveRequestedFollowupCommandSchema=z.strictObject({...ownerCommandBase,kind:z.literal('approve-requested-followup'),payload:approveRequestedFollowupSchema});
-export const ownerCommandSchemas = [approveMeetingCommandSchema,approveRequestedFollowupCommandSchema,bootstrapSelectedAccountCommandSchema,refreshSelectedAccountRecordCommandSchema, submitApprovedReplyCommandSchema, prepareManualCommandSchema, completeManualCommandSchema, approveReplyCommandSchema, ownerCampaignCommandSchema, configureOwnerCommandSchema, reportAcquisitionMilestoneCommandSchema] as const;
+export const ownerCommandSchemas = [approveRequestedFollowupCommandSchema,bootstrapSelectedAccountCommandSchema,refreshSelectedAccountRecordCommandSchema, submitApprovedReplyCommandSchema, prepareManualCommandSchema, completeManualCommandSchema, approveReplyCommandSchema, ownerCampaignCommandSchema, configureOwnerCommandSchema, reportAcquisitionMilestoneCommandSchema] as const;
 export const ownerCommandSchema = z.discriminatedUnion('kind', ownerCommandSchemas);
 export type OwnerCommand = z.infer<typeof ownerCommandSchema>;
 

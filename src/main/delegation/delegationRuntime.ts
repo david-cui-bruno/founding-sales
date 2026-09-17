@@ -24,30 +24,16 @@ import {ExecutionClient,createResearchSetupTransport,createAccountPreparationTra
 import {createResearchSetupService,awaitResearchSetupOperation} from './researchSetupService';
 import type {ResearchSetupRequestStore} from './researchSetupRequestStore';
 import type {ResearchSetupApi} from '../../shared/contracts/researchSetupContract';
-import {approveRequestedFollowupCommandSchema,approveMeetingCommandSchema,configureOwnerCommandSchema,ownerSourceConfigurationSchema,delegatedPhoneHandoffRequestSchema,bootstrapSelectedAccountSchema,bootstrapSelectedAccountCommandSchema,refreshSelectedAccountRecordSchema,refreshSelectedAccountRecordCommandSchema,selectedAccountFreshnessRequestSchema,selectedAccountFreshnessSchema,configureLocalDelegationSchema,localDelegationStatusSchema} from '../../shared/contracts/ownerCommandContract';
+import {approveRequestedFollowupCommandSchema,configureOwnerCommandSchema,ownerSourceConfigurationSchema,delegatedPhoneHandoffRequestSchema,bootstrapSelectedAccountSchema,bootstrapSelectedAccountCommandSchema,refreshSelectedAccountRecordSchema,refreshSelectedAccountRecordCommandSchema,selectedAccountFreshnessRequestSchema,selectedAccountFreshnessSchema,configureLocalDelegationSchema,localDelegationStatusSchema} from '../../shared/contracts/ownerCommandContract';
 import {configureAccountIntakeSchema,accountIntakeConfigureStatusSchema,type ConfigureAccountIntake,type AccountIntakeHoldReason} from '../../shared/contracts/accountIntakeConfigureContract';
 import {googleScopes} from '../../shared/contracts/googleGrantCapabilities';
 import {publicDelegationCommandSchema,type DelegatedPhoneHandoffResult,type DelegationCommand} from '../../shared/contracts/delegationContract';
-import {approveMeetingFromReplySchema,getMeetingApprovalSchema,meetingApprovalStatusSchema,schedulingEvidence,type ApproveMeetingFromReply} from '../../shared/contracts/meetingContract';
-import {resolveLocalTime} from '../../shared/meetings/schedulingRules';
-type ApproveMeetingCommand=Extract<DelegationCommand,{kind:'approve-meeting'}>;
 /** What the worker gateway (cloud/lambdas/delegated-worker/src/handler.ts) admits on POST /commands for a saved-record
  * command: the whole body up to 204096 bytes and the payload up to 200000 bytes, both counted in UTF-8. */
 export const REFRESH_COMMAND_LIMITS=Object.freeze({maxBodyBytes:204096,maxPayloadBytes:200000});
 /** A resubmission the gateway would refuse on every retry is never queued, so no unsendable identity can hold the company. */
 export function assertRefreshCommandTransportable(command:{commandId:string;payload:unknown}):void{
  if(Buffer.byteLength(JSON.stringify(command.payload),'utf8')>REFRESH_COMMAND_LIMITS.maxPayloadBytes||Buffer.byteLength(JSON.stringify(command),'utf8')>REFRESH_COMMAND_LIMITS.maxBodyBytes)throw Error('refresh_record_too_large');
-}
-/** The founder-visible binding of one approval. The same binding reuses the live
- * command; a different binding against a live approval is a conflict, never a second command. */
-function meetingApprovalBinding(value:ApproveMeetingCommand|ApproveMeetingFromReply):string{
- if('kind' in value){const i=value.payload.intent;return accountFingerprint({agreementEvidenceId:i.agreementEvidenceId,attendeeEmail:i.attendeeEmails[0],quote:i.agreement?.kind==='explicit_slot'?i.agreement.quote:null,calendarId:value.payload.calendarId,rulesRevision:i.rulesRevision,timezone:i.timezone,durationMinutes:(Date.parse(i.end)-Date.parse(i.start))/60000,localStart:i.localStart,summary:i.summary,inviteAttendees:i.inviteAttendees,threadRevision:i.threadRevision,contextRevision:i.contextRevision});}
- return accountFingerprint({agreementEvidenceId:value.agreementEvidenceId,attendeeEmail:value.attendeeEmail,quote:value.quote,calendarId:value.calendarId,rulesRevision:value.rulesRevision,timezone:value.timezone,durationMinutes:value.durationMinutes,localStart:value.localStart,summary:value.summary,inviteAttendees:value.inviteAttendees,threadRevision:value.expectedThreadRevision,contextRevision:value.expectedContextRevision});
-}
-function meetingApprovalStatus(repository:DelegationRepository,command:ApproveMeetingCommand){
- const receipt=repository.commandStatus(command.commandId);if(!receipt)throw Error('meeting_receipt_missing');const i=command.payload.intent;
- return meetingApprovalStatusSchema.parse({commandId:command.commandId,accountId:command.accountId,threadId:i.threadId,threadRevision:i.threadRevision,contextRevision:i.contextRevision,agreementEvidenceId:i.agreementEvidenceId,
-  quote:i.agreement?.kind==='explicit_slot'?i.agreement.quote:undefined,meetingId:i.meetingId,calendarId:command.payload.calendarId,rulesRevision:i.rulesRevision,attendeeEmail:i.attendeeEmails[0],start:i.start,end:i.end,timezone:i.timezone,localStart:i.localStart,summary:i.summary,inviteAttendees:i.inviteAttendees,receipt});
 }
 type ConfigureOwnerCommand=Extract<DelegationCommand,{kind:'configure-owner'}>;
 /** The founder-visible binding of one intake change: the revision read, the target state, mailbox,
@@ -316,52 +302,6 @@ export function createDelegationRuntime(input:{databaseGate:{withDatabase<T>(fn:
   });},
   submit:(raw:unknown)=>{const command=publicDelegationCommandSchema.parse(raw);invalidate();return run((database,signal)=>services(database,signal).client.submit(command));},
   sync:()=>run((database,signal)=>services(database,signal).client.sync(AbortSignal.any([signal,AbortSignal.timeout(15000)]))),
-  /** Explicit founder approval of one explicit slot. Queues exactly one approve-meeting
-   * owner command per saved thread; the worker's existing poller reserves. Nothing here
-   * reads or writes a calendar, and no revision, version or attendee is ever invented. */
-  approveMeeting:(raw:unknown)=>{const request=approveMeetingFromReplySchema.parse(raw);return run(async(database,signal)=>{
-   if(!pairing)throw Error('pairing_unconfigured');
-   const active=AbortSignal.any([signal,AbortSignal.timeout(15000)]);const current=services(database,active);const repository=current.repository;
-   // Command identity outlives lost responses and remounts: at most one live approval per saved thread.
-   const live=repository.meetingApprovalCommands(request.accountId,request.threadId).filter(command=>repository.commandStatus(command.commandId)?.status!=='rejected');
-   if(live.length>1||(live[0]&&meetingApprovalBinding(live[0])!==meetingApprovalBinding(request)))throw Error('meeting_approval_conflict');
-   let command=live[0];
-   if(!command){
-    const thread=repository.getThread(request.accountId,request.threadId);if(!thread)throw Error('thread_missing');
-    if(thread.revision!==request.expectedThreadRevision||thread.contextRevision!==request.expectedContextRevision)throw Error('stale_thread');
-    const evidence=schedulingEvidence(thread);if(evidence.kind!=='available')throw Error(evidence.reason);
-    if(evidence.message.id!==request.agreementEvidenceId||evidence.attendeeEmail!==request.attendeeEmail||!evidence.quotes.includes(request.quote))throw Error('agreement_evidence_mismatch');
-    const authority=repository.authority(request.accountId);const version=repository.executionVersion(request.accountId);
-    if(!authority||authority.owner!=='worker'||authority.state!=='active'||version===null||repository.hasPendingStop(request.accountId))throw Error('meeting_owner_inactive');
-    if(repository.pendingCommands().some(pending=>pending.accountId===request.accountId))throw Error('meeting_owner_pending');
-    // The rules revision is read from the owner now, bound to the same authority and version the command expects.
-    const preparation=await createAccountPreparationTransport({pairing:{endpoint:pairing.endpoint,workspaceId:pairing.workspaceId,pairingId:pairing.pairingId,credential:pairing.credential},fetch:input.fetch}).read({accountId:request.accountId},active);
-    assertCurrent(active);
-    if(preparation.authority.owner!=='worker'||preparation.authority.state!=='active'||preparation.authority.generation!==authority.generation||preparation.executionVersion!==version)throw Error('meeting_owner_stale');
-    const config=preparation.configuration;
-    if(!config||config.state!=='active'||config.calendarId===null||config.mailboxSubject===null)throw Error('meeting_calendar_unconfigured');
-    if(config.mailboxSubject!==thread.thread.mailboxSubject)throw Error('meeting_mailbox_mismatch');
-    const rules=preparation.meetingRules;
-    if(rules===undefined)throw Error('meeting_rules_unreadable');if(rules===null)throw Error('meeting_rules_unconfigured');
-    if(config.calendarId!==request.calendarId||rules.revision!==request.rulesRevision||rules.timezone!==request.timezone||rules.durationMinutes!==request.durationMinutes)throw Error('meeting_rules_changed');
-    const resolved=resolveLocalTime(request.localStart,rules.timezone,null);if(resolved.kind!=='resolved')throw Error('time_clarification_required');
-    const start=resolved.instant,end=new Date(Date.parse(start)+rules.durationMinutes*60000).toISOString(),commandId=randomUUID();
-    if(repository.authority(request.accountId)?.generation!==authority.generation||repository.executionVersion(request.accountId)!==version)throw Error('meeting_owner_stale');
-    command=approveMeetingCommandSchema.parse({commandId,workspaceId:pairing.workspaceId,accountId:request.accountId,expectedAuthorityGeneration:authority.generation,expectedVersion:version,kind:'approve-meeting',payload:{calendarId:config.calendarId,intent:{
-     workspaceId:pairing.workspaceId,accountId:request.accountId,commandId,meetingId:randomUUID(),operation:'create',expectedAuthorityGeneration:authority.generation,expectedVersion:version+1,rulesRevision:rules.revision,
-     threadId:request.threadId,threadRevision:thread.revision,contextRevision:thread.contextRevision,mailboxSubject:config.mailboxSubject,pairingId:pairing.pairingId,start,end,localStart:request.localStart,offset:null,timezone:rules.timezone,
-     agreementEvidenceId:evidence.message.id,agreement:{kind:'explicit_slot',start,end,quote:request.quote},mixedReply:evidence.mixed,approvalId:commandId,attendeeEmails:[evidence.attendeeEmail],inviteAttendees:request.inviteAttendees,summary:request.summary,etag:null}}});
-   }
-   await current.client.submit(command);await current.client.sync(active);
-   return meetingApprovalStatus(repository,command);
-  });},
-  /** Local read of the newest live (else newest) approval for one saved thread. No owner call. */
-  getMeetingApproval:(raw:unknown)=>{const request=getMeetingApprovalSchema.parse(raw);return run((database,signal)=>{
-   const repository=services(database,signal).repository;const commands=repository.meetingApprovalCommands(request.accountId,request.threadId);
-   if(!commands.length)return null;
-   const live=commands.filter(command=>repository.commandStatus(command.commandId)?.status!=='rejected');
-   return meetingApprovalStatus(repository,(live.length?live:commands).at(-1)!);
-  });},
   /** Explicit intake configuration for one company: pause or resume, relevant mail on for the first
    * time with a start date, or the grant's owned calendar. Queues exactly one configure-owner command
    * with the revision the founder read bound; the worker's admission is mirrored first so nothing stale

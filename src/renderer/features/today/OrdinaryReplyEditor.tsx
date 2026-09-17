@@ -3,7 +3,6 @@ import type { DailyAnswer } from '../../../shared/contracts/dailyContract';
 import type { AccountReplyDraft } from '../../../shared/contracts/mailThreadContract';
 import { SavedReplyConversation } from './SavedReplyConversation';
 import { ordinaryReplySession, type OrdinaryReplyApi } from './ordinaryReplySession';
-import { MeetingApproval, type MeetingApprovalApi } from '../meetings/MeetingApproval';
 
 type Reply = Extract<DailyAnswer, { kind: 'reply' }>;
 const held = 'Reply approval held: an exact permission binding is unavailable here. Saving is not approval or sending.';
@@ -52,10 +51,9 @@ function Editor({ api, workspaceId, draft, stale, actionHold }: {
   </>;
 }
 export function OrdinaryReplyEditor({ item, api, workspaceId, actionHold, accountDetails }: {
-  item: Reply; api: OrdinaryReplyApi & Partial<MeetingApprovalApi>; workspaceId: string; actionHold?: string; accountDetails?: ReactNode;
+  item: Reply; api: OrdinaryReplyApi; workspaceId: string; actionHold?: string; accountDetails?: ReactNode;
 }) {
   return <section><h3>Saved reply</h3><SavedReplyConversation thread={item.thread} />
-    <MeetingApproval item={item} api={api} workspaceId={workspaceId} actionHold={actionHold} />
     <h4>Saved reply draft</h4>
     {item.draft ? <Editor api={api} workspaceId={workspaceId} draft={item.draft} stale={item.stale} actionHold={actionHold} /> : <p>No saved reply draft.</p>}
     <p role="status">{item.stale ? 'Thread or context changed. ' : ''}{held}</p>

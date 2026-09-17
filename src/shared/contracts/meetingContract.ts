@@ -1,6 +1,4 @@
 import { z } from 'zod';
-import { commandReceiptSchema } from './commandReceiptContract';
-import type { MailMessage, ThreadProjection } from './mailThreadContract';
 const id = z.string().min(1).max(255);
 const integer = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 export const meetingInstantSchema = z.string().datetime({ offset: true });
@@ -71,52 +69,5 @@ export const meetingOfferSchema = z.strictObject({ meeting: z.strictObject({ sum
 export type MeetingOffer = z.infer<typeof meetingOfferSchema>;
 export const saveMeetingOfferSchema = z.strictObject({ offer: meetingOfferSchema, expectedRevision: integer.positive().nullable() });
 
-const localClock = z.string().regex(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d$/);
-const summary = z.string().min(1).max(240);
-/** One founder approval of an explicit slot from a saved scheduling reply. Every
- * displayed value travels verbatim so the runtime can refuse anything that changed;
- * authority, revisions, command identity and the instant are bound by the runtime. */
-export const approveMeetingFromReplySchema = z.strictObject({ accountId: id, threadId: id, expectedThreadRevision: integer.positive(), expectedContextRevision: id,
-  agreementEvidenceId: id, attendeeEmail: z.string().email(), quote: z.string().min(1).max(500), calendarId: id, rulesRevision: integer.positive(), timezone: id,
-  durationMinutes: integer.positive().max(480), localStart: localClock, summary, inviteAttendees: z.boolean() });
-export type ApproveMeetingFromReply = z.infer<typeof approveMeetingFromReplySchema>;
-export const getMeetingApprovalSchema = z.strictObject({ accountId: id, threadId: id });
-export type GetMeetingApproval = z.infer<typeof getMeetingApprovalSchema>;
-/** Local projection of one queued approve-meeting command with its current receipt.
- * A receipt, even applied, is admission of the approval, never a booking or a send. */
-export const meetingApprovalStatusSchema = z.strictObject({ commandId: id, accountId: id, threadId: id, threadRevision: integer.positive(), contextRevision: id, agreementEvidenceId: id, quote: z.string().min(1).max(500),
-  meetingId: id, calendarId: id, rulesRevision: integer.positive(), attendeeEmail: z.string().email(), start: meetingInstantSchema, end: meetingInstantSchema, timezone: id, localStart: localClock, summary,
-  inviteAttendees: z.boolean(), receipt: commandReceiptSchema });
-export type MeetingApprovalStatus = z.infer<typeof meetingApprovalStatusSchema>;
-/** The exact request that produced a status. Retrying it reuses the stored command; nothing is guessed. */
-export function meetingApprovalRetry(status: MeetingApprovalStatus): ApproveMeetingFromReply {
-  return approveMeetingFromReplySchema.parse({ accountId: status.accountId, threadId: status.threadId, expectedThreadRevision: status.threadRevision, expectedContextRevision: status.contextRevision,
-    agreementEvidenceId: status.agreementEvidenceId, attendeeEmail: status.attendeeEmail, quote: status.quote, calendarId: status.calendarId, rulesRevision: status.rulesRevision, timezone: status.timezone,
-    durationMinutes: Math.round((Date.parse(status.end) - Date.parse(status.start)) / 60000), localStart: status.localStart, summary: status.summary, inviteAttendees: status.inviteAttendees });
-}
-export function boundMeetingApprovalStatus(request: ApproveMeetingFromReply) {
-  return meetingApprovalStatusSchema.refine(status => status.accountId === request.accountId && status.threadId === request.threadId
-    && status.agreementEvidenceId === request.agreementEvidenceId && status.attendeeEmail === request.attendeeEmail && status.calendarId === request.calendarId
-    && status.timezone === request.timezone && status.localStart === request.localStart && status.summary === request.summary, 'meeting_approval_response_mismatch');
-}
-export type SchedulingEvidence = { kind: 'available'; message: MailMessage; attendeeEmail: string; quotes: string[]; mixed: boolean }
-  | { kind: 'held'; reason: 'no_scheduling_signal' | 'latest_message_ambiguous' | 'sender_ambiguous' };
-/** Advisory evidence for one explicit-slot approval, mirroring what the worker will
- * require: the single newest saved message carries a scheduling or mixed signal from
- * exactly one sender. The attendee is that sender. This is not permission. */
-export function schedulingEvidence(projection: ThreadProjection): SchedulingEvidence {
-  const messages = projection.thread.messages;
-  const latest = Math.max(...messages.map(message => Date.parse(message.date)));
-  const newest = messages.filter(message => Date.parse(message.date) === latest);
-  if (newest.length !== 1) return { kind: 'held', reason: 'latest_message_ambiguous' };
-  const message = newest[0]!;
-  const relevant = projection.signals.filter(signal => (signal.kind === 'scheduling' || signal.kind === 'mixed') && signal.evidence.some(e => e.messageId === message.id));
-  const quotes = [...new Set(relevant.flatMap(signal => signal.evidence.filter(e => e.messageId === message.id && e.quote.length > 0).map(e => e.quote)))];
-  if (!relevant.length || !quotes.length) return { kind: 'held', reason: 'no_scheduling_signal' };
-  if (message.from.length !== 1) return { kind: 'held', reason: 'sender_ambiguous' };
-  return { kind: 'available', message, attendeeEmail: message.from[0]!, quotes, mixed: relevant.some(signal => signal.kind === 'mixed') };
-}
-
 export const meetingWorkSchema = z.strictObject({ input: reserveMeetingSchema, fingerprint: z.string().regex(/^[a-f0-9]{64}$/), preparedAt: meetingInstantSchema });
 export type MeetingWork = z.infer<typeof meetingWorkSchema>;
-export const meetingApprovalSchema = z.strictObject({ input: reserveMeetingSchema, fingerprint: z.string().regex(/^[a-f0-9]{64}$/) });
