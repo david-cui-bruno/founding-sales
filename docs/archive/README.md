@@ -5,6 +5,7 @@ Everything under `docs/archive/` is a historical record: the design specs, execu
 Moved here on 16 September 2026 (main `abfd259`):
 
 - `superpowers/` (from `docs/superpowers/`): the Superpowers specs, plans and research note from 30 August to 10 September 2026, and the whole-product repair program that followed the 10 September adversarial audit. Paths quoted inside these documents as `docs/superpowers/...` now live under `docs/archive/superpowers/...`; the markdown links that leave this tree were updated so they still resolve. `superpowers/plans/2026-09-04-runtime-recovery-security-hardening.md` is still read by `test/releaseDocumentation.test.mjs`.
+- `prototypes/` (from `docs/prototypes/`): the 9 September Today layout review, the three compact Today studies (David chose A, Native Desk) and the visual research note. `prototypes/2026-09-09-today-studies.html` is still read by `tests/browser/nativeDesk.spec.ts` as the reference composition, and `prototypes/2026-09-09-today-studies.verify.mjs` defaults to its new path.
 - `contact-workspace.md`: the daily-flow guide for the legacy person/prospect workspace (Today suggestions, Call, Email, Find contact info). Those routes are slated for deletion; the guide records how they worked.
 - `2026-09-16-readme-product-notes.md`: the two behaviour sections removed from the README on 16 September (meeting-first reporting and the explicit workflow transition; the legacy local customer-discovery shortlist), verbatim.
 
