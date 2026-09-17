@@ -8,7 +8,7 @@ import { audienceQuerySchema, researchLimitsSchema, PLACES_MAX_COMPANIES, type A
 /** Google Places API (New) Text Search. Every call is treated as Enterprise SKU and reserved before it is made. */
 export const PLACES_TEXT_SEARCH_URL = 'https://places.googleapis.com/v1/places:searchText';
 export const PLACES_FIELD_MASK = 'places.id,places.displayName,places.formattedAddress,places.nationalPhoneNumber,places.internationalPhoneNumber,places.websiteUri,places.primaryType,places.types,nextPageToken';
-export const PLACES_PAGE_SIZE = PLACES_MAX_COMPANIES;
+const PLACES_PAGE_SIZE = PLACES_MAX_COMPANIES;
 /** A text query yields at most three pages before the cursor moves to the next query of the grid. */
 export const PLACES_MAX_PAGES_PER_QUERY = 3;
 const PLACES_MAX_RESPONSE_BYTES = 256 * 1024;
@@ -26,9 +26,9 @@ const placeSchema = z.object({ id: z.string().trim().min(1).max(190), displayNam
 const responseSchema = z.object({ places: z.array(placeSchema).max(PLACES_PAGE_SIZE).optional(), nextPageToken: z.string().min(1).max(4096).optional() });
 type Place = z.infer<typeof placeSchema>;
 
-export type PlacesEvidence = { url: string; fetchedAt: string; sha256: string; excerpt: string };
+type PlacesEvidence = { url: string; fetchedAt: string; sha256: string; excerpt: string };
 export type PlacesCandidate = CompanyCandidate & { placeId: string; listedPhone: string | null; evidence: PlacesEvidence };
-export type PlacesSkipReason = 'no_website' | 'website_blocked' | 'duplicate_domain' | 'duplicate_phone';
+type PlacesSkipReason = 'no_website' | 'website_blocked' | 'duplicate_domain' | 'duplicate_phone';
 export type PlacesPage = { textQuery: string; pageToken: string | null; nextPageToken: string | null; returned: number; candidates: PlacesCandidate[]; skipped: Record<PlacesSkipReason, number> };
 export type PlacesPosition = { queryIndex: number; pageToken: string | null };
 
@@ -58,7 +58,7 @@ function excerptOf(place: Place): string {
   return JSON.stringify({ id, displayName: displayName?.text, formattedAddress, nationalPhoneNumber, internationalPhoneNumber, websiteUri }).slice(0, 12000);
 }
 /** Deterministic mapping of one response page. Firms without a website are counted and skipped; a page never repeats a domain or a listed phone. */
-export function mapPlacesPage(input: { textQuery: string; pageToken: string | null; body: unknown; raw: Buffer; fetchedAt: string }): PlacesPage {
+function mapPlacesPage(input: { textQuery: string; pageToken: string | null; body: unknown; raw: Buffer; fetchedAt: string }): PlacesPage {
   const parsed = responseSchema.safeParse(input.body);
   if (!parsed.success) throw new ResearchDiscoveryError('output_invalid');
   const evidenceBase = { url: PLACES_TEXT_SEARCH_URL, fetchedAt: input.fetchedAt, sha256: createHash('sha256').update(input.raw).digest('hex') };

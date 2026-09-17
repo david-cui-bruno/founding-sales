@@ -158,7 +158,7 @@ export async function runResearch(input: ResearchCoordinatorOptions, signal: Abo
   }
 
 /** One Places page batch. The ordinal makes every batch its own reservation, so identical settings never replay a page. */
-export function placesBatchRunId(input: { workspaceId: string; pairingId: string; researchFingerprint: string; budgetId: string; ordinal: number }): string {
+function placesBatchRunId(input: { workspaceId: string; pairingId: string; researchFingerprint: string; budgetId: string; ordinal: number }): string {
   const hash = fingerprint({ version: 'places-batch-v1', ...input });
   return `${hash.slice(0,8)}-${hash.slice(8,12)}-4${hash.slice(13,16)}-a${hash.slice(17,20)}-${hash.slice(20,32)}`;
 }
