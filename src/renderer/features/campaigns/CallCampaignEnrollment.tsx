@@ -57,7 +57,10 @@ function duplicate(snapshot: DailySnapshot, accountId: string) {
 // Same target rule as linkedInService.validateLinkedInTarget and ManualLinkedInPreparation:
 // a business profile or an existing thread. Company pages can never be prepared, so they are not offered.
 const linkedInTarget = /^https:\/\/(?:www\.)?linkedin\.com\/(?:in\/[A-Za-z0-9_-]+|messaging\/thread\/[A-Za-z0-9_-]+)\/?$/;
-/** Company-level routes only (PR #51 precedent): the latest unambiguous business route with no person binding. */
+/** Company-level routes only (PR #51 precedent): the latest unambiguous business route with no person binding.
+ *  `listed` is a business directory entry (a Google Business Profile) recorded by the worker; like published and confirmed it
+ *  describes source verification only, never contact permission. */
+const eligibleVerification = ['published', 'confirmed', 'listed'];
 function eligibleRoutes(routes: AccountRoute[], channel: OneCompanyCampaignChannel): AccountRoute[] {
   const latest = new Map<string, AccountRoute>();
   const ambiguous = new Set<string>();
@@ -68,7 +71,7 @@ function eligibleRoutes(routes: AccountRoute[], channel: OneCompanyCampaignChann
   }
   return [...latest.values()].filter(route => !ambiguous.has(route.id) && route.channel === (channel === 'call' ? 'phone' : 'linkedin')
     && (channel === 'call' || linkedInTarget.test(route.value))
-    && route.personId === null && route.purpose === 'business' && ['published', 'confirmed'].includes(route.verification));
+    && route.personId === null && route.purpose === 'business' && eligibleVerification.includes(route.verification));
 }
 const copy = {
   call: {
@@ -262,7 +265,7 @@ export function CallCampaignEnrollment({ api, snapshot, config, campaign, readEr
         {routes.map(r => <option key={r.id} value={r.id}>{r.value} ({r.verification})</option>)}
       </select></label>
       {routes.length === 0 && account && <p role="status">{text.noRoutes}</p>}
-      <p>Published or confirmed describes source verification, not contact permission. A new execution context is a binding identity, not authority.</p>
+      <p>Published, confirmed or listed describes source verification, not contact permission. Listed means a business directory entry, not the company&apos;s own page. A new execution context is a binding identity, not authority.</p>
       <p>{text.scope}</p>
       <label className="native-desk__check"><input type="checkbox" checked={requested} disabled={!available || locked || !route || alreadyEnrolled} onChange={event => setRequested(event.target.checked)} />{text.request}</label>
       <button type="button" disabled={!available || !owner || locked || !route || !requested || alreadyEnrolled || completion === 'campaign.enroll'} onClick={() => { void run(); }}>{text.enroll}</button>

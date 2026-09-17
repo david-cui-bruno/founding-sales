@@ -61,7 +61,7 @@ describe('pure research setup preload and validated IPC', () => {
     await expect(f.invoke('approve')(trusted, invalid)).rejects.toThrow(/^OUTREACH_REQUEST_FAILED$/);
     await expect(f.api.approve(invalid)).rejects.toThrow(); expect(f.research.approve).not.toHaveBeenCalled(); expect(f.transport).not.toHaveBeenCalled(); f.dispose();
   });
-  it.each([{}, { ...proposal, disclosureAcknowledged: false }, { ...proposal, discoveryCeilingMicros: 0 }, { ...proposal, expectedRevision: 1 }])('rejects malformed or unacknowledged approval before effects', async input => {
+  it.each([{}, { ...proposal, disclosureAcknowledged: false }, { ...proposal, discoveryCeilingMicros: 0 }, { ...proposal, expectedRevision: -1 }])('rejects malformed or unacknowledged approval before effects', async input => {
     const f = bridge(); await expect(f.invoke('approve')(trusted, input)).rejects.toThrow(/^OUTREACH_REQUEST_FAILED$/); expect(f.research.approve).not.toHaveBeenCalled(); f.dispose();
   });
   it.each([{ ...applied, credential: 'SECRET' }, { ...cancelled, revision: 1 }, { ...applied, status: 'unknown' }, { ...applied, fingerprint: 'bad' }])('rejects unsafe or nonterminal response at both boundaries', async raw => {

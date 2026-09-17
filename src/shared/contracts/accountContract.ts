@@ -12,7 +12,8 @@ export const accountCreateSchema = accountSchema.pick({ name: true, domain: true
 export const accountRouteInputSchema = z.strictObject({ id: accountIdSchema, accountId: accountIdSchema,
   personId: accountIdSchema.nullable(), channel: z.enum(['phone', 'email', 'linkedin']), value: z.string().trim().min(1).max(2048),
   purpose: z.enum(['business', 'tenant_emergency', 'unknown']), evidenceIds: evidenceIds.min(1),
-  verification: z.enum(['published', 'confirmed', 'unverified']) });
+  /** Source verification, not contact permission. `listed` is a business directory entry (a Google Business Profile), not the company's own page. */
+  verification: z.enum(['published', 'confirmed', 'unverified', 'listed']) });
 export const accountRouteSchema = accountRouteInputSchema.extend({ version });
 export type AccountRoute = z.infer<typeof accountRouteSchema>;
 export const accountPortfolioSchema = z.strictObject({ count: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
