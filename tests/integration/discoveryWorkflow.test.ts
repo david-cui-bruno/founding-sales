@@ -2,6 +2,8 @@
 import { createElement } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+// Assembled startup through encrypted SQLite and the full preload is slow under the parallel suite; the 5 s default flaked there.
+vi.setConfig({ testTimeout: 20000 });
 import { createHash, randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
 import { openDatabase, closeDatabase, type AppDatabase } from '../../src/main/db/database';
@@ -131,7 +133,7 @@ async function fixture(input: { temp?: TempDatabase; research?: DiscoveryResearc
   boundary.expose.mockClear(); vi.resetModules(); await import('../../src/preload');
   expect(boundary.expose.mock.calls[0][0]).toBe('callie');
   const api = boundary.expose.mock.calls[0][1] as CalliePreloadApi;
-  expect(await api.health.get()).toMatchObject({ databaseEncrypted: true, schemaVersion: 26, domainReady: true });
+  expect(await api.health.get()).toMatchObject({ databaseEncrypted: true, schemaVersion: 27, domainReady: true });
   const turn = async () => { await worker.idle(); const due = [...scheduled].filter(job => job.at <= Date.now());
     for (const job of due) { scheduled.delete(job); job.run(); } await worker.idle(); };
   const drain = async () => { for (let n = 0; n < 12; n++) { await turn(); if (![...scheduled].some(job => job.at <= Date.now())) return; }
