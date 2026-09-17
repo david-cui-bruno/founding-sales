@@ -30,10 +30,13 @@ export function researchWait<T>(signal: AbortSignal, start: () => Promise<T>): P
 }
 export function researchProfile(env: NodeJS.ProcessEnv) {
   const prefix = `/delegated-worker/${env.DELEGATED_WORKSPACE_ID}/`;
+  const declared = (value: string | undefined) => !!value?.startsWith(prefix) && value.length > prefix.length;
   return { reviewedCapability: env.DELEGATED_RESEARCH_REVIEWED_CAPABILITY,
-    credentialParameterDeclared: !!env.DELEGATED_RESEARCH_CREDENTIAL_PARAMETER?.startsWith(prefix) && env.DELEGATED_RESEARCH_CREDENTIAL_PARAMETER.length > prefix.length };
+    credentialParameterDeclared: declared(env.DELEGATED_RESEARCH_CREDENTIAL_PARAMETER),
+    placesCredentialParameterDeclared: declared(env.DELEGATED_PLACES_CREDENTIAL_PARAMETER) };
 }
 export function productionResearchBoundaries(env: NodeJS.ProcessEnv, boundaries: ProductionBoundaries): SourceResearchBoundaries {
+  const placesParameter = env.DELEGATED_PLACES_CREDENTIAL_PARAMETER;
   return { pageHttp: boundaries.pageHttp ?? createPinnedPageHttp(),
     resolve: boundaries.resolve ?? (async hostname => (await lookup(hostname, { all: true })).map(item => item.address)),
     loadCredentials: async (workspaceId, signal) => {
@@ -44,7 +47,17 @@ export function productionResearchBoundaries(env: NodeJS.ProcessEnv, boundaries:
       const result = await researchWait(signal, () => ssm.send(new GetParameterCommand({ Name: path, WithDecryption: true }), { abortSignal: signal }));
       if (result.Parameter?.Type !== 'SecureString' || !result.Parameter.Value) throw new Error('research_unconfigured');
       return z.strictObject({ apiKey: z.string().min(1).max(16384), model: z.string().min(1).max(255) }).parse(JSON.parse(result.Parameter.Value));
-    } };
+    },
+    // The Places key lives in its own SecureString under the same workspace prefix; without the declaration the bulk branch is held.
+    ...(placesParameter ? { loadPlacesCredentials: async (workspaceId: string, signal: AbortSignal) => {
+      signal.throwIfAborted();
+      if (workspaceId !== env.DELEGATED_WORKSPACE_ID) throw new Error('research_workspace_mismatch');
+      const path = z.string().startsWith(`/delegated-worker/${workspaceId}/`).parse(placesParameter);
+      const ssm = boundaries.ssm ?? new SSMClient({ region: env.AWS_REGION, maxAttempts: 1 });
+      const result = await researchWait(signal, () => ssm.send(new GetParameterCommand({ Name: path, WithDecryption: true }), { abortSignal: signal }));
+      if (result.Parameter?.Type !== 'SecureString' || !result.Parameter.Value) throw new Error('research_unconfigured');
+      return z.strictObject({ apiKey: z.string().min(1).max(16384) }).parse(JSON.parse(result.Parameter.Value));
+    } } : {}) };
 }
 async function readResult(auth: WorkerAuth, request: ResearchOnceRequest, runId: string): Promise<ResearchOnceResult> {
   const result = { ...heldResearchOnce(), runId };

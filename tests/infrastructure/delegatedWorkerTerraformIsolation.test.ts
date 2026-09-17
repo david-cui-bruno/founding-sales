@@ -67,6 +67,10 @@ const defaults: Record<string, string> = {
   delegated_worker_schedule_enabled: "false",
   delegated_worker_research_once_enabled: "false",
 };
+// Inputs added after the legacy sourcing root was removed (17 September 2026): the module default is off and only the worker root wires them.
+const workerOnlyDefaults: Record<string, string> = {
+  delegated_places_enabled: "false",
+};
 const implementation = tf(moduleDir);
 const worker = tf(workerDir);
 const workerModule = block(worker, 'module "delegated_worker"');
@@ -109,12 +113,34 @@ describe("delegated-worker Terraform source isolation", () => {
       }
       expect(compact(workerModule)).toContain(`${name} = var.${name}`);
     }
+    for (const [name, value] of Object.entries(workerOnlyDefaults)) {
+      const moduleInput = block(read(moduleDir, "variables.tf"), `variable "${name}"`);
+      const rootInput = block(read(workerDir, "variables.tf"), `variable "${name}"`);
+      for (const input of [moduleInput, rootInput]) expect(compact(input)).toContain(`default = ${value}`);
+      expect(compact(rootInput.replace(/description\s*=\s*"[^"\n]*"/, ""))).toBe(compact(moduleInput.replace(/description\s*=\s*"[^"\n]*"/, "")));
+      expect(compact(block(worker, 'module "delegated_worker"'))).toContain(`${name} = var.${name}`);
+    }
     const names = [...read(workerDir, "variables.tf").matchAll(/^variable "([^"]+)"/gm)].map((match) => match[1]);
-    expect(names.sort()).toEqual(Object.keys(defaults).sort());
+    expect(names.sort()).toEqual([...Object.keys(defaults), ...Object.keys(workerOnlyDefaults)].sort());
     const moduleNames = [...read(moduleDir, "variables.tf").matchAll(/^variable "([^"]+)"/gm)].map((match) => match[1]);
-    expect(moduleNames.sort()).toEqual([...Object.keys(defaults), "worker_source_dir", "worker_output_path"].sort());
+    expect(moduleNames.sort()).toEqual([...Object.keys(defaults), ...Object.keys(workerOnlyDefaults), "worker_source_dir", "worker_output_path"].sort());
     const referenced = [...new Set([...implementation.matchAll(/\bvar\.([A-Za-z0-9_]+)/g)].map((match) => match[1]))];
     expect(referenced.sort()).toEqual(moduleNames.sort());
+  });
+
+  it("adds the Places credential parameter only behind its own opt-in, symmetric with the research parameter", () => {
+    const source = compact(implementation);
+    expect(source).toContain('delegated_places_parameter = "${local.delegated_parameter_path}/places-api-credentials"');
+    expect(source).toContain('var.delegated_places_enabled ? [ "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter${local.delegated_places_parameter}" ] : []');
+    const lambda = compact(block(implementation, 'resource "aws_lambda_function" "delegated_worker"'));
+    expect(lambda).toContain('DELEGATED_PLACES_CREDENTIAL_PARAMETER = var.delegated_places_enabled ? local.delegated_places_parameter : ""');
+    for (const dir of [workerDir, moduleDir]) {
+      const input = compact(block(read(dir, "variables.tf"), 'variable "delegated_places_enabled"'));
+      expect(input).toContain("type = bool");
+      expect(input).toContain("default = false");
+      expect(input).toContain("places-api-credentials");
+    }
+    expect(compact(block(implementation, 'resource "aws_iam_role_policy" "delegated_worker"'))).not.toContain("places-api-credentials");
   });
 
   it("bounds optional non-secret reviewed metadata without treating it as provider or pricing proof", () => {
@@ -208,6 +234,7 @@ describe("delegated-worker Terraform source isolation", () => {
       'DELEGATED_GOOGLE_KEY_PARAMETER = var.delegated_google_client_id == "" ? "" : local.delegated_key_parameter',
       'DELEGATED_RESEARCH_CREDENTIAL_PARAMETER = var.delegated_research_enabled ? local.delegated_research_parameter : ""',
       'DELEGATED_RESEARCH_REVIEWED_CAPABILITY = var.delegated_research_reviewed_capability',
+      'DELEGATED_PLACES_CREDENTIAL_PARAMETER = var.delegated_places_enabled ? local.delegated_places_parameter : ""',
     ]) expect(source).toContain(invariant);
     expect([...implementation.matchAll(/retention_in_days\s*=\s*(\d+)/g)].map((match) => match[1])).toEqual(["7", "7"]);
     expect([...implementation.matchAll(/"((?:GET|POST) \/[^"\n]+)"/g)].map((match) => match[1])).toEqual([

@@ -3,7 +3,7 @@ import {accountRecordSchema} from './accountRecordContract';
 import { saveMeetingOfferSchema } from './meetingContract';
 import { z } from 'zod';
 import { acquisitionMilestoneReportSchema } from './acquisitionReportContract';
-import { audienceQuerySchema, researchCapabilitySchema, researchLimitsSchema } from '../../main/research/companyResearchTypes';
+import { audienceQuerySchema, discoveryProviderSchema, researchCapabilitySchema, researchLimitsSchema, PLACES_MAX_COMPANIES } from '../../main/research/companyResearchTypes';
 import { campaignCommandPayloadSchema } from './campaignContract';
 import { mailCursorEnvelopeSchema, accountReplyDraftSchema } from './mailThreadContract';
 import { accountIdSchema as id, accountInstantSchema as instant } from './accountContract';
@@ -18,7 +18,10 @@ export type ManualOutcome = Readonly<z.infer<typeof manualOutcomeSchema>>;
 export const ownerResearchConfigurationSchema = z.strictObject({ workspaceId: id, budgetId: id, audience: audienceQuerySchema,
   audienceRevision: revision.min(1), sourceRevision: revision.min(1), budgetRevision: revision.min(1),
   discoveryLimits: researchLimitsSchema, researchLimits: researchLimitsSchema, capability: researchCapabilitySchema,
-  maxAccountBudgetMicros: revision.min(1), permittedSources: z.array(z.url().max(2048)).max(500), preparationCommandId: z.uuid() });
+  maxAccountBudgetMicros: revision.min(1), permittedSources: z.array(z.url().max(2048)).max(500), preparationCommandId: z.uuid(),
+  /** Only ever stored as `places`; cited configurations keep no key so their fingerprints stay byte-identical. */
+  discoveryProvider: discoveryProviderSchema.optional() })
+  .refine(value => value.discoveryProvider !== 'places' || value.discoveryLimits.maxCompanies <= PLACES_MAX_COMPANIES, 'places_batch_size');
 /** Activation selector only. AUTH, actual grants, budgets and exact approvals
  * remain independent mandatory authority. No per-message scheduler allowlist. */
 export const ownerSourceConfigurationSchema = z.strictObject({ version: z.literal(1), workspaceId: id, accountId: id, pairingId: id,

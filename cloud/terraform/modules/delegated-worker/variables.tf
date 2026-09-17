@@ -56,6 +56,12 @@ variable "delegated_research_enabled" {
   default     = false
 }
 
+variable "delegated_places_enabled" {
+  description = "Opt-in access to the selected workspace places-api-credentials SecureString for Google Places territory discovery. Does not approve a budget, a territory configuration or any call. Secret values are provisioned separately, never stored in Terraform."
+  type        = bool
+  default     = false
+}
+
 variable "delegated_research_reviewed_capability" {
   description = "Optional non-secret operator-reviewed research settings JSON, at most 3000 characters. Empty requires operator setup. Not readiness, provider connectivity or verified pricing proof. No credentials, model defaults or default rates. Runtime validates descriptor semantics and freshness."
   type        = string
