@@ -46,16 +46,15 @@ it('actual unpaired reads preserve a callback across transition and render it wi
     expect(receipt.preservedActionIds).toContain(f.seeded.actionId);
     expect((await f.provider.getCommitments()).items).toEqual(initial.items);
     const after = f.snapshot();
-    const open = vi.fn();
-    render(<PresentationRoot><NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={open}/></PresentationRoot>);
+    render(<PresentationRoot><NativeDeskRoute firstUse={f.firstUse} api={f.api}/></PresentationRoot>);
     fireEvent.click(await screen.findByRole('button', {name: /Retained callback Property Owner/}));
-    expect(open).not.toHaveBeenCalled();
     expect(screen.queryByText(/Old acquisition Property Owner/)).toBeNull();
     fireEvent.click(screen.getByRole('button', {name: 'Refresh'}));
     await waitFor(() => expect(f.api.daily.get).toHaveBeenCalledTimes(2));
-    fireEvent.click(screen.getByRole('button', {name: 'Open contact workspace'}));
-    expect(open).toHaveBeenCalledTimes(1);
-    expect(open).toHaveBeenCalledWith(f.seeded.personId);
+    // The retained detail is local presentation only; the contact workspace left with the legacy routes.
+    const detail = screen.getByRole('region', {name: 'Retained work detail'});
+    expect(detail.textContent).toContain('Stored local work. Nothing here calls, sends or books.');
+    expect(screen.queryByRole('button', {name: 'Open contact workspace'})).toBeNull();
     expect(f.forbidden).not.toHaveBeenCalled();
     expect(f.snapshot()).toEqual(after);
     expect(await f.api.daily.get()).toMatchObject({workspaceId: null, accounts: [], answers: [], meetings: [], ownerStatus: []});
@@ -66,8 +65,8 @@ it('actual local account evidence is separately selectable without authorizing a
   const f = await fixture();
   try {
     await f.provider.transition({commandId: 'account-transition', expectedMode: 'legacy', manifestId: 'account-manifest'});
-    const before = f.snapshot(), open = vi.fn();
-    render(<PresentationRoot><NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={open} surface="accounts"/></PresentationRoot>);
+    const before = f.snapshot();
+    render(<PresentationRoot><NativeDeskRoute firstUse={f.firstUse} api={f.api} surface="accounts"/></PresentationRoot>);
     await screen.findByText('Local account library', {exact: true});
     const row = await screen.findByRole('button', {name: 'Local account · Fixture Residential Management'});
     // Real provider: saved source, no published business inbox. The step is a plain local reason, not worker authority.
@@ -75,7 +74,6 @@ it('actual local account evidence is separately selectable without authorizing a
     fireEvent.click(screen.getByRole('button', {name: 'Open route review · Fixture Residential Management'}));
     expect(screen.getByRole('heading', {name: 'Fixture Residential Management'})).toBeTruthy();
     expect(row.getAttribute('aria-current')).toBe('true');
-    expect(open).not.toHaveBeenCalled();
     expect(f.forbidden).not.toHaveBeenCalled();
     expect(f.snapshot()).toEqual(before);
     expect((await f.api.daily.get()).accounts).toEqual([]);
@@ -110,8 +108,8 @@ it('actual unsent local draft appears in Today without a worker and opens its co
     await f.provider.transition({commandId: 'draft-transition', expectedMode: 'legacy', manifestId: 'draft-manifest'});
     const lenox = await seedLenoxDraft(f);
     expect(lenox.revision).toBe(2);
-    const before = f.snapshot(), open = vi.fn();
-    const view = render(<PresentationRoot><NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={open}/></PresentationRoot>);
+    const before = f.snapshot();
+    const view = render(<PresentationRoot><NativeDeskRoute firstUse={f.firstUse} api={f.api}/></PresentationRoot>);
     // No worker: the daily snapshot has no workspace. The unsent local draft still surfaces as a local continuation.
     const row = await screen.findByRole('button', {name: 'Lenox Management · Local unsent draft · revision 2'});
     expect(row.textContent).not.toMatch(/worker|owner|send|approve/i);
@@ -123,10 +121,9 @@ it('actual unsent local draft appears in Today without a worker and opens its co
     fireEvent.click(row);
     expect(f.firstUse.snapshot().selectedAccountId).toBe(lenox.accountId);
     expect(window.location.hash).toBe('#/accounts');
-    expect(open).not.toHaveBeenCalled();
     view.unmount();
     // The app remounts the route per hash route. Selection and the requested draft step survive the remount.
-    render(<PresentationRoot><NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={open} surface="accounts"/></PresentationRoot>);
+    render(<PresentationRoot><NativeDeskRoute firstUse={f.firstUse} api={f.api} surface="accounts"/></PresentationRoot>);
     await screen.findByRole('heading', {name: 'Lenox Management'});
     expect(screen.getByRole('button', {name: 'Local account · Lenox Management'}).getAttribute('aria-current')).toBe('true');
     const panel = await screen.findByRole('region', {name: 'Company draft'});

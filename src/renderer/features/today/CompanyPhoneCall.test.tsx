@@ -31,7 +31,7 @@ function phoneFixture() {
   return { ...f, api, begin, submit, sync, setup, snapshot, source, history: () => structuredClone(history), setHistory(value: PhoneHandoffState) { history = value; } };
 }
 function mount(f: ReturnType<typeof phoneFixture>) {
-  return render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} onOpenImport={vi.fn()} />, { wrapper: PresentationRoot });
+  return render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} />, { wrapper: PresentationRoot });
 }
 
 it('P1 actual company-only Calls row exposes separate phone review and final handoff confirmation', async () => {

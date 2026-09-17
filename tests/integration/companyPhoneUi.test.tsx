@@ -182,7 +182,7 @@ async function fixture(options: { policy?: boolean; native?: boolean; inbound?: 
   };
 }
 function mount(f: Awaited<ReturnType<typeof fixture>>, api = f.api, surface: 'today' | 'accounts' = 'today') {
-  return render(<NativeDeskRoute api={api} firstUse={f.firstUse} surface={surface} onOpenLead={vi.fn()} onOpenImport={vi.fn()} />, { wrapper: PresentationRoot });
+  return render(<NativeDeskRoute api={api} firstUse={f.firstUse} surface={surface} />, { wrapper: PresentationRoot });
 }
 async function selectCall(f: Awaited<ReturnType<typeof fixture>>) {
   fireEvent.click(await screen.findByRole('button', { name: `Call · ${f.account.name}` }));

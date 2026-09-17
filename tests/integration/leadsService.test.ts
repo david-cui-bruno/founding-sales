@@ -1,5 +1,5 @@
 import { productionDomainGate } from '../fixtures/productionDomainGate';
-import { createLeadsProvider } from '../../src/main/ipc/registerApplicationIpc';
+import { createLegacyLeadsProvider as createLeadsProvider, type LegacyLeadsProvider } from '../fixtures/legacyDomainProviders';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
@@ -19,7 +19,6 @@ import {
 import {
   BUILTIN_PRIORITIZATION_RULE_V1,
 } from '../../src/main/domain/prioritization/builtinPrioritizationRules';
-import { type LeadsProvider } from '../../src/main/leads/leadsService';
 import {
   insertOpenCycleWithAction,
   insertPerson,
@@ -58,7 +57,7 @@ describe('leadsService over a real encrypted domain', () => {
   let temp: TempDatabase;
   let services: DomainServices;
   let domain: FounderSalesDomain;
-  let leads: LeadsProvider;
+  let leads: LegacyLeadsProvider;
   let ruleVersionId: string;
 
   beforeEach(async () => {
@@ -95,13 +94,13 @@ describe('leadsService over a real encrypted domain', () => {
     return prospect;
   }
 
-  const listAll = (overrides: Partial<Parameters<LeadsProvider['list']>[0]> = {}) =>
+  const listAll = (overrides: Partial<Parameters<LegacyLeadsProvider['list']>[0]> = {}) =>
     leads.list({
       query: '', stages: [], priorities: [], sort: 'person_name',
       cursor: null, limit: 50, ...overrides,
     });
 
-  type ReliabilityLeadsRequest = Parameters<LeadsProvider['list']>[0];
+  type ReliabilityLeadsRequest = Parameters<LegacyLeadsProvider['list']>[0];
 
   function seedReliabilityLeads(withFilters = false, count = 208) {
     return Array.from({ length: count }, (_, index) => {

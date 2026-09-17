@@ -1,5 +1,5 @@
 import { productionDomainGate } from '../fixtures/productionDomainGate';
-import { createFridayProvider } from '../../src/main/ipc/registerApplicationIpc';
+import { createFridayProvider } from '../fixtures/legacyDomainProviders';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
@@ -19,7 +19,7 @@ import {
 import {
   BUILTIN_PRIORITIZATION_RULE_V1,
 } from '../../src/main/domain/prioritization/builtinPrioritizationRules';
-import { type FridayProvider } from '../../src/main/friday/fridayService';
+import { type FridayProvider } from '../fixtures/legacyDomainProviders';
 import {
   insertOpenCycleWithAction,
   seedProspect,

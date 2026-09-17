@@ -1,5 +1,4 @@
 // @vitest-environment jsdom
-import { mutationReceiptSchema } from '../../src/shared/contracts/commonContract';
 // Stage0 construction plus bounded Stage1 actual-App company acceptance.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash, randomUUID } from 'node:crypto';
@@ -9,17 +8,19 @@ import type { CalliePreloadApi } from '../../src/shared/preload';
 import { localCompanyCreateRequestSchema, localCompanyCreateResultSchema, localCompanyCreateStatusSchema, localCompanyReviewSchema } from '../../src/shared/contracts/localCompanyIntakeContract';
 
 import { appHealthSchema } from '../../src/shared/healthContract';
-import { discoveryBriefSchema } from '../../src/shared/contracts/discoveryContract';
-import { leadDetailSchema } from '../../src/shared/contracts/leadDetailContract';
 import { dailySnapshotSchema } from '../../src/shared/contracts/dailyContract';
 import { localDelegationStatusSchema } from '../../src/shared/contracts/ownerCommandContract';
-import { createJobRequestSchema, fillJobRequestSchema, cancelJobRequestSchema, type CreateJobRequest, fridayReportSchema } from '../../src/shared/contracts/fridayContract';
 import { localCommitmentsSnapshotSchema, localWorkspaceSnapshotSchema, localWorkflowReceiptSchema } from '../../src/shared/contracts/localWorkspaceContract';
 import {
-  FRIDAY_OWNER_AT, FRIDAY_REQUESTED_AT, HEALTH_ORPHAN_ID, HEALTH_POLL_AT, RETAINED_T, RETAINED_O, RETAINED_DISCOVERY, RETAINED_UI_REGISTERED_CHANNELS, SYNTHETIC_WORKER_IDS,
+  HEALTH_ORPHAN_ID, RETAINED_T, RETAINED_O, RETAINED_DISCOVERY, RETAINED_UI_REGISTERED_CHANNELS, SYNTHETIC_WORKER_IDS,
   CONTINUITY_NOW, CONTINUITY_READ_CHANNELS, CONTINUITY_REGISTERED_CHANNELS, CONTINUITY_URL,
   createContinuityDomainFixture, CONTINUITY_UI_CHANNELS, CONTINUITY_UI_REGISTERED_CHANNELS,
 } from '../fixtures/continuityDomainFixture';
+
+/** Exact registrar inventories after the legacy route removal. */
+const CONSTRUCTION_CHANNEL_COUNT = 21;
+const COMPANY_UI_CHANNEL_COUNT = 24;
+const RETAINED_UI_CHANNEL_COUNT = 61;
 import type { RegisteredIpcHandler } from '../fixtures/registeredIpcHandler';
 
 // Only Electron's registration/invoke transport is replaced. No native DB,
@@ -55,14 +56,12 @@ async function expectCleaned(value: Fixture) {
     databaseClosed: true, keysZeroed: true, directoryRemoved: true,
     registrationsRemaining: 0, pendingInvocations: 0,
     cleanupRuns: 1, runtimeShutdowns: 1, domainShutdowns: 1, databaseCloses: 1,
-    pollerStops: 1, pollerIdleWaits: 1,
   });
   expect(transport.handlers.size).toBe(0);
   expect([...transport.registrations].sort()).toEqual([...CONTINUITY_REGISTERED_CHANNELS].sort());
   expect([...transport.removals].sort()).toEqual([...CONTINUITY_REGISTERED_CHANNELS].sort());
-  expect(transport.registrations).toHaveLength(26);
-  expect(transport.removals).toHaveLength(26);
-  expect(value.counts()).toMatchObject({ credentialLoads: 0, inboxCreations: 0, pollSchedules: 0 });
+  expect(transport.registrations).toHaveLength(CONSTRUCTION_CHANNEL_COUNT);
+  expect(transport.removals).toHaveLength(CONSTRUCTION_CHANNEL_COUNT);
 }
 beforeEach(() => {
   expect(transport.handlers.size).toBe(0);
@@ -94,11 +93,9 @@ afterEach(async () => {
         if (hadUi) {
           expect(result).toEqual({ databaseClosed: true, keysZeroed: true, directoryRemoved: true,
             registrationsRemaining: 0, pendingInvocations: 0, cleanupRuns: 1, runtimeShutdowns: 1,
-            domainShutdowns: 1, databaseCloses: 1, pollerStops: 1, pollerIdleWaits: 1 });
+            domainShutdowns: 1, databaseCloses: 1 });
           expect([...transport.removals].sort()).toEqual([...(value.isRetainedUi ? RETAINED_UI_REGISTERED_CHANNELS : value.isBlockedUi ? CONTINUITY_REGISTERED_CHANNELS : CONTINUITY_UI_REGISTERED_CHANNELS)].sort());
           if (value.isRetainedUi) expect(value.uiCounters()).toEqual({ network: 0, forbidden: 0, delegationDisposals: 1 });
-          if (value.isFridayUi) expect(value.uiCounters()).toEqual({ network: 0, forbidden: 0, delegationDisposals: 0 });
-          expect(value.counts()).toMatchObject({ credentialLoads: 0, inboxCreations: 0, pollSchedules: 0 });
         }
       }
     } finally { vi.useRealTimers(); }
@@ -123,35 +120,24 @@ describe('continuity public boundary construction', () => {
     expect(health).toMatchObject({
       appVersion: 'continuity-stage0', databaseEncrypted: true, fts5Available: true,
       domainStatus: 'ready', domainReady: true, domainBlockingViolationCount: 0,
-      domainStartupEvaluatedAt: CONTINUITY_NOW, operationalStatus: 'ready',
+      domainStartupEvaluatedAt: CONTINUITY_NOW,
     });
-    // An unstarted/unprovisioned real poller is honestly healthy with no success
-    // yet. This does not prove polling, provider pairing or worker availability.
-    expect(health.sourcing).toEqual({
-      status: 'healthy', reasons: [], lastSuccessAgeMs: null,
-      state: { state: 'idle', pollId: null, startedAt: null, lastCompletedAt: null,
-        consecutiveFailures: 0, lastFailureAt: null, lastFailureCode: null, backlogCount: null },
-    });
+    // The health contract is the retained startup report alone. No sourcing
+    // overlay or whole-product readiness claim rides along with it.
+    expect(health).not.toHaveProperty('operationalStatus');
+    expect(health).not.toHaveProperty('sourcing');
     const overview = localWorkspaceSnapshotSchema.parse(await value.api.localWorkspace.get());
     expect(overview).toEqual({ scope: 'local_database', generatedAt: CONTINUITY_NOW,
       workflowMode: 'legacy', transitionReceipt: null, accounts: { state: 'available', snapshots: [] } });
     const commitments = localCommitmentsSnapshotSchema.parse(await value.api.localWorkspace.getCommitments());
     expect(commitments).toEqual({ scope: 'local_database', generatedAt: CONTINUITY_NOW,
       revision: baseline.changes, reviewErrorCount: 0, items: [] });
-    const friday = fridayReportSchema.parse(await value.api.friday.getCurrent());
-    expect(friday).toMatchObject({ asOf: CONTINUITY_NOW, jobs: [], revision: baseline.changes });
-    expect(friday.metrics.find(metric => metric.id === 'jobs_requested')?.numericValue).toBe(0);
-    expect(friday.metrics.find(metric => metric.id === 'jobs_filled')?.numericValue).toBe(0);
-    expect(friday.metrics.find(metric => metric.id === 'fill_rate')).toMatchObject({ numericValue: null, numerator: 0, denominator: 0 });
-    expect(fridayReportSchema.parse(await value.api.friday.getCurrent({ weekOffset: 0 }))).toEqual(friday);
     expect(appHealthSchema.parse(await value.api.health.get())).toEqual(health);
 
     expect(value.trace().map(({ channel, args }) => ({ channel, args }))).toEqual([
       { channel: 'health:get', args: [] },
       { channel: 'local-workspace:get', args: [] },
       { channel: 'local-workspace:get-commitments', args: [] },
-      { channel: 'friday:get', args: [] },
-      { channel: 'friday:get', args: [{ weekOffset: 0 }] },
       { channel: 'health:get', args: [] },
     ]);
     expect(value.trace().every(entry => entry.handlerStarted && entry.outcome === 'resolved')).toBe(true);
@@ -159,10 +145,9 @@ describe('continuity public boundary construction', () => {
     expect(value.counts()).toEqual({
       keyLoads: 1, preparations: 1, databaseOpens: 1, migrations: 1,
       domainConstructions: 1, domainBootstraps: 1, healthConstructions: 1,
-      healthReads: 2, domainEntries: 3, databaseEntries: 1, evidenceReads: 2,
+      healthReads: 2, domainEntries: 1, databaseEntries: 1, evidenceReads: 2,
       databaseCloses: 0, domainShutdowns: 0, runtimeShutdowns: 0,
-      credentialLoads: 0, inboxCreations: 0, pollSchedules: 0,
-      pollerStops: 0, pollerIdleWaits: 0, cleanupRuns: 0,
+      cleanupRuns: 0,
     });
     await expectCleaned(value);
   });
@@ -171,16 +156,12 @@ describe('continuity public boundary construction', () => {
     const value = await fixture();
     const baseline = await value.evidence();
     const before = value.counts();
-    // The preload rejects this typed-but-invalid value before transport.
-    await expect(value.api.friday.getCurrent({ weekOffset: 1 })).rejects.toThrow();
     expect(value.trace()).toHaveLength(0);
     const malformed: { channel: string; args: unknown[] }[] = [
       { channel: 'health:get', args: [undefined] },
       { channel: 'local-workspace:get', args: [undefined] },
       { channel: 'local-workspace:get-commitments', args: [undefined] },
-      { channel: 'friday:get', args: [undefined] },
-      { channel: 'friday:get', args: [{ weekOffset: 0, extra: true }] },
-      { channel: 'friday:get', args: [{ weekOffset: 0 }, { weekOffset: 0 }] },
+      { channel: 'local-workspace:get-commitments', args: [{}] },
     ];
     for (const { channel, args } of malformed) {
       await expect(value.invokeFrom(CONTINUITY_URL, channel, ...args)).rejects.toThrow();
@@ -188,9 +169,12 @@ describe('continuity public boundary construction', () => {
     for (const channel of CONTINUITY_READ_CHANNELS) {
       await expect(value.invokeFrom('https://untrusted.invalid/', channel)).rejects.toThrow();
     }
-    expect(value.trace()).toHaveLength(10);
+    expect(value.trace()).toHaveLength(7);
     expect(value.trace().every(entry => entry.handlerStarted && entry.outcome === 'rejected')).toBe(true);
-    await expect(value.invokeFrom(CONTINUITY_URL, 'stage0:unsupported')).rejects.toThrow('four readonly channels');
+    for (const removed of ['friday:get', 'review:list', 'today:get', 'lead-detail:outbound-capabilities', 'discovery:get', 'sourcing:status']) {
+      await expect(value.invokeFrom(CONTINUITY_URL, removed)).rejects.toThrow('three readonly channels');
+    }
+    await expect(value.invokeFrom(CONTINUITY_URL, 'stage0:unsupported')).rejects.toThrow('three readonly channels');
     expect(value.trace().at(-1)).toMatchObject({ handlerStarted: false, outcome: 'rejected' });
     expect(value.counts()).toEqual(before);
     expect(before).toMatchObject({ healthReads: 0, databaseEntries: 0, domainEntries: 0,
@@ -222,15 +206,14 @@ async function renderCompanyApp() {
   expect(value.trace().find(entry => entry.channel === 'health:get')?.result).toMatchObject({ domainReady: true, domainStatus: 'ready' });
   return value;
 }
-async function navigateCompany(value: Fixture, name: 'Accounts' | 'Campaigns' | 'Leads') {
+async function navigateCompany(value: Fixture, name: 'Accounts' | 'Campaigns' | 'Today') {
   const navigation = within(screen.getByRole('navigation', { name: 'Primary' }));
-  if (name === 'Leads' && navigation.getByRole('button', { name: 'More workspaces' }).getAttribute('aria-expanded') === 'false') {
-    fireEvent.click(navigation.getByRole('button', { name: 'More workspaces' }));
-  }
+  expect(navigation.queryByRole('button', { name: 'More workspaces' })).toBeNull();
+  expect(navigation.queryByRole('link', { name: 'Leads' })).toBeNull();
   await act(async () => { fireEvent.click(navigation.getByRole('link', { name })); });
   await act(async () => { await value.drainReads(); });
   expect(window.location.hash).toBe(`#/${name.toLowerCase()}`);
-  expect(screen.getByRole(name === 'Leads' ? 'region' : 'heading', { name })).not.toBeNull();
+  expect(screen.getByRole('heading', { level: 1, name })).not.toBeNull();
   expect(navigation.getByRole('link', { name }).getAttribute('aria-current')).toBe('page');
 }
 async function editCompany(value: Fixture) {
@@ -274,47 +257,50 @@ function assertUiInventory(value: Fixture, expected: Record<string, number>) {
   for (const entry of value.trace()) actual[entry.channel] = (actual[entry.channel] ?? 0) + 1;
   expect(actual).toEqual(expected);
   for (const entry of value.trace()) {
-    if (entry.channel === 'review:list') expect(entry.args).toEqual([{ kinds: [], cursor: null, limit: 1 }]);
-    else if (entry.channel === 'leads:list') expect(entry.args).toEqual([{ query: '', stages: [], priorities: [], sort: 'priority', cursor: null, limit: 200 }]);
-    else if (entry.channel === 'lead-detail:outbound-capabilities') expect(entry.args).toEqual([{}]);
-    else if (entry.channel === 'local-workspace:get-company-research-settings') {
+    if (entry.channel === 'local-workspace:get-company-research-settings') {
       expect(entry.args).toEqual([]);
       expect(entry).toMatchObject({ handlerStarted: true, outcome: 'resolved', result: { revision: 0, configuration: null } });
     } else if (!entry.channel.includes('company')) expect(entry.args).toEqual([]);
   }
   expect([...transport.registrations].sort()).toEqual([...CONTINUITY_UI_REGISTERED_CHANNELS].sort());
+  expect(transport.registrations).toHaveLength(COMPANY_UI_CHANNEL_COUNT);
   expect(value.trace().every(entry => (CONTINUITY_UI_CHANNELS as readonly string[]).includes(entry.channel))).toBe(true);
   expect(value.trace().filter(entry => entry.synthetic).every(entry => entry.channel === 'outreach:delegation-status' && !entry.handlerStarted)).toBe(true);
   expect(value.counts()).toMatchObject({ keyLoads: 1, preparations: 1, databaseOpens: 1, migrations: 1,
-    domainConstructions: 1, domainBootstraps: 1, healthConstructions: 1,
-    credentialLoads: 0, inboxCreations: 0, pollSchedules: 0 });
-  for (const channel of ['health:get', 'local-workspace:get', 'local-workspace:get-commitments', 'daily:get', 'review:list', 'lead-detail:outbound-capabilities']) {
+    domainConstructions: 1, domainBootstraps: 1, healthConstructions: 1 });
+  for (const channel of ['health:get', 'local-workspace:get', 'local-workspace:get-commitments', 'daily:get']) {
     expect(value.trace().some(entry => entry.channel === channel && entry.handlerStarted && entry.outcome === 'resolved')).toBe(true);
+  }
+  // No person-command, review, Friday, sourcing or discovery channel is registered, let alone read.
+  for (const removed of ['review:list', 'lead-detail:outbound-capabilities', 'leads:update-field', 'friday:get', 'today:get', 'sourcing:status', 'discovery:get']) {
+    expect(transport.registrations).not.toContain(removed);
+    expect(value.trace().some(entry => entry.channel === removed)).toBe(false);
   }
 }
 
 describe('company continuity through actual App and local public boundaries', () => {
-  it('C1 retains editing and real reviewed company across Campaigns and Leads without replay', async () => {
+  it('C1 retains editing and real reviewed company across Campaigns and Today without replay', async () => {
     const value = await renderCompanyApp();
     const baseline = await value.evidence();
     await editCompany(value);
-    for (const route of ['Campaigns', 'Leads', 'Accounts'] as const) await navigateCompany(value, route);
+    for (const route of ['Campaigns', 'Today', 'Accounts'] as const) await navigateCompany(value, route);
     expect((screen.getByRole('textbox', { name: 'Company name' }) as HTMLInputElement).value).toBe(COMPANY.name);
     expect((screen.getByRole('textbox', { name: 'Company domain (optional)' }) as HTMLInputElement).value).toBe(COMPANY.domain);
     expect(companyCalls(value)).toEqual([]);
     await reviewCompany(value);
     const reviewed = companyCalls(value);
-    for (const route of ['Campaigns', 'Leads', 'Accounts'] as const) await navigateCompany(value, route);
+    for (const route of ['Campaigns', 'Today', 'Accounts'] as const) await navigateCompany(value, route);
     expect((screen.getByRole('textbox', { name: 'Company name' }) as HTMLInputElement).value).toBe(COMPANY.name);
     expect((screen.getByRole('textbox', { name: 'Company domain (optional)' }) as HTMLInputElement).value).toBe(COMPANY.domain);
     expect(screen.getByText(`Reviewed company: ${COMPANY.name} · ${COMPANY.domain}`)).not.toBeNull();
     expect((screen.getByRole('button', { name: 'Create company' }) as HTMLButtonElement).disabled).toBe(false);
     expect(companyCalls(value)).toEqual(reviewed);
     expect(await value.evidence()).toEqual(baseline);
-    expect(value.trace().some(entry => entry.channel === 'leads:list' && entry.outcome === 'resolved')).toBe(true);
+    // Every company-model surface reads the same four local projections; none reads people.
+    expect(value.trace().some(entry => entry.channel === 'leads:list')).toBe(false);
     assertUiInventory(value, {
-      'health:get': 1, 'lead-detail:outbound-capabilities': 1, 'review:list': 7, 'daily:get': 5, 'outreach:delegation-status': 5,
-      'local-workspace:get': 5, 'local-workspace:get-commitments': 5, 'leads:list': 2,
+      'health:get': 1, 'daily:get': 7, 'outreach:delegation-status': 7,
+      'local-workspace:get': 7, 'local-workspace:get-commitments': 7,
       'local-workspace:review-company': 1,
     });
   });
@@ -365,11 +351,11 @@ describe('company continuity through actual App and local public boundaries', ()
     expect(status).toMatchObject({ channel: 'local-workspace:company-create-status', args: [arrival.request], handlerStarted: true, outcome: 'resolved' });
     expect(localCompanyCreateStatusSchema.parse(status.result)).toEqual({ status: 'saved', commandId: arrival.request.commandId, account: arrival.result.status === 'saved' ? arrival.result.account : null });
     expect(companyCalls(value)[1]!.outcome).toBe('pending'); // Saved status is not delivered create.
-    await navigateCompany(value, 'Leads');
+    await navigateCompany(value, 'Today');
     const beforeLate = value.trace().length;
     await act(async () => { hold.release(); await value.drainInvocations(); });
-    expect(window.location.hash).toBe('#/leads');
-    expect(screen.getByRole('region', { name: 'Leads' })).not.toBeNull();
+    expect(window.location.hash).toBe('#/today');
+    expect(screen.getByRole('heading', { level: 1, name: 'Today' })).not.toBeNull();
     expect(screen.queryByRole('form', { name: 'Local company intake' })).toBeNull();
     expect(value.trace()).toHaveLength(beforeLate);
     expect(companyCalls(value).map(entry => ({ channel: entry.channel, args: entry.args }))).toEqual([
@@ -382,8 +368,8 @@ describe('company continuity through actual App and local public boundaries', ()
       { args: [{ accountId: arrival.result.status === 'saved' ? arrival.result.account.id : null }], outcome: 'resolved', handlerStarted: true },
     ]);
     assertUiInventory(value, {
-      'health:get': 1, 'lead-detail:outbound-capabilities': 1, 'review:list': 6, 'daily:get': 5, 'outreach:delegation-status': 5,
-      'local-workspace:get': 6, 'local-workspace:get-commitments': 6, 'leads:list': 1,
+      'health:get': 1, 'daily:get': 6, 'outreach:delegation-status': 6,
+      'local-workspace:get': 7, 'local-workspace:get-commitments': 7,
       'local-workspace:review-company': 1, 'local-workspace:create-company': 1, 'local-workspace:company-create-status': 1, 'local-workspace:get-company': 1, 'local-workspace:get-company-research-settings': 1,
     });
   });
@@ -420,7 +406,7 @@ describe('company continuity through actual App and local public boundaries', ()
       { args: [{ accountId: arrival.result.status === 'saved' ? arrival.result.account.id : null }], outcome: 'resolved', handlerStarted: true },
     ]);
     assertUiInventory(value, {
-      'health:get': 1, 'lead-detail:outbound-capabilities': 1, 'review:list': 1, 'daily:get': 1, 'outreach:delegation-status': 1,
+      'health:get': 1, 'daily:get': 1, 'outreach:delegation-status': 1,
       'local-workspace:get': 2, 'local-workspace:get-commitments': 2,
       'local-workspace:review-company': 1, 'local-workspace:create-company': 2, 'local-workspace:get-company': 1, 'local-workspace:get-company-research-settings': 1,
     });
@@ -549,7 +535,7 @@ describe('retained lifecycle construction through the genuine public boundary', 
   });
 });
 
-function mountContinuityApp(value: Fixture, route: 'accounts' | 'today' | 'friday') {
+function mountContinuityApp(value: Fixture, route: 'accounts' | 'today') {
   const previousApi = Object.getOwnPropertyDescriptor(window, 'callie');
   const previousUrl = window.location.href;
   const storage = Object.entries(window.localStorage);
@@ -611,7 +597,7 @@ async function renderRetainedApp(synthetic = false, localMetadata: 'genuine' | '
   await act(async () => { await value.drainReads(); });
   expect(window.location.hash).toBe('#/today');
   expect([...transport.registrations].sort()).toEqual([...RETAINED_UI_REGISTERED_CHANNELS].sort());
-  expect(transport.registrations).toHaveLength(80);
+  expect(transport.registrations).toHaveLength(RETAINED_UI_CHANNEL_COUNT);
   const status = value.trace().find(entry => entry.channel === 'outreach:delegation-status')!;
   expect(status).toMatchObject({ handlerStarted: true, outcome: 'resolved' });
   expect(status.synthetic).toBeUndefined();
@@ -642,29 +628,24 @@ function assertRetainedRows(context: RetainedUi) {
     expect(row.querySelector('time')?.dateTime).toBe(record.action!.due_at);
   }
 }
-function assertRetainedInventory(context: RetainedUi, refreshes: number, contactIds: string[] = []) {
+function assertRetainedInventory(context: RetainedUi, refreshes: number) {
   const { value, command } = context;
   const counts: Record<string, number> = {};
   for (const entry of value.trace()) {
     counts[entry.channel] = (counts[entry.channel] ?? 0) + 1;
     if (entry.channel === 'local-workspace:transition') expect(entry.args).toEqual([command]);
-    else if (entry.channel === 'lead-detail:outbound-capabilities') expect(entry.args).toEqual([{}]);
-    else if (entry.channel === 'review:list') expect(entry.args).toEqual([{ kinds: [], cursor: null, limit: 1 }]);
-    else if (!['lead-detail:get', 'discovery:get-brief'].includes(entry.channel)) expect(entry.args).toEqual([]);
+    else expect(entry.args).toEqual([]);
     expect(entry.handlerStarted).toBe(true);
   }
+  // Retained work is local evidence only: no person detail, review or discovery read ever leaves Today.
   expect(counts).toEqual({
     'local-workspace:transition': 1, 'local-workspace:get-commitments': 2 + refreshes,
-    'health:get': 1, 'lead-detail:outbound-capabilities': 1, 'review:list': 1,
+    'health:get': 1,
     'daily:get': 1 + refreshes, 'outreach:delegation-status': 1 + refreshes, 'local-workspace:get': 1 + refreshes,
-    ...(contactIds.length ? { 'lead-detail:get': contactIds.length, 'discovery:get-brief': contactIds.length } : {}),
   });
-  for (const channel of ['lead-detail:get', 'discovery:get-brief']) {
-    expect(value.trace().filter(entry => entry.channel === channel).map(entry => entry.args)).toEqual(contactIds.map(personId => [{ personId }]));
-  }
   expect(value.uiCounters()).toEqual({ network: 0, forbidden: 0, delegationDisposals: 0 });
   expect(value.counts()).toMatchObject({ keyLoads: 1, preparations: 1, databaseOpens: 1, migrations: 1,
-    domainConstructions: 1, domainBootstraps: 1, healthConstructions: 1, credentialLoads: 0, inboxCreations: 0, pollSchedules: 0 });
+    domainConstructions: 1, domainBootstraps: 1, healthConstructions: 1 });
 }
 async function refreshRetained(value: Fixture) {
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Refresh' })); });
@@ -672,7 +653,7 @@ async function refreshRetained(value: Fixture) {
 }
 
 describe('actual Today retained work and separately labeled synthetic worker presentation', () => {
-  it('B1 shows all six genuine retained owners with unpaired worker scope and opens contacts only explicitly', async () => {
+  it('B1 shows all six genuine retained owners with unpaired worker scope and selects each without any person read', async () => {
     const context = await renderRetainedApp();
     const { value, snapshot } = context;
     assertRetainedRows(context); assertRetainedInventory(context, 0);
@@ -684,7 +665,6 @@ describe('actual Today retained work and separately labeled synthetic worker pre
     for (const entry of value.trace().filter(entry => entry.channel === 'local-workspace:get-commitments')) {
       expect(localCommitmentsSnapshotSchema.parse(entry.result).reviewErrorCount).toBe(snapshot.reviewErrorCount);
     }
-    const opened: string[] = [];
     for (const { item } of snapshot.items) {
       const key = JSON.stringify(['retained', item.salesCycleId, item.action.id]);
       const row = retainedButtons().find(row => row.dataset.rowKey === key)!;
@@ -695,30 +675,18 @@ describe('actual Today retained work and separately labeled synthetic worker pre
       expect(detail.textContent).toContain(item.reason);
       expect(detail.textContent).toContain(`Action type: ${item.action.type} · Channel: ${item.action.channel} · Lane: ${item.lane}`);
       expect(detail.querySelector('time')?.dateTime).toBe(item.action.dueAt);
-      expect(detail.textContent).toContain('Opening the contact workspace is a separate action.');
-      expect(value.trace()).toHaveLength(before);
-      await act(async () => { fireEvent.click(within(detail).getByRole('button', { name: 'Open contact workspace' })); await value.drainReads(); });
-      const page = await screen.findByRole('article', { name: `${item.personName} full page` });
-      await act(async () => { await value.drainReads(); });
-      const detailRead = value.trace().filter(entry => entry.channel === 'lead-detail:get').at(-1)!;
-      const realDetail = leadDetailSchema.parse(detailRead.result);
-      expect(realDetail).toMatchObject({ personId: item.personId, salesCycleId: item.salesCycleId });
-      // Corrected warm referral is unreviewed but not cloud-linked: no hidden preparation read.
-      if (item.stage === 'unreviewed') expect(realDetail.cloudLinked).toBe(false);
-      // Discovery evidence is mounted only after the user opens the actual Details disclosure.
-      expect(value.trace().filter(entry => entry.channel === 'discovery:get-brief')).toHaveLength(opened.length);
-      await act(async () => { fireEvent.click(within(page).getByText('Details', { selector: 'summary', exact: true })); });
-      await waitFor(() => expect(value.trace().filter(entry => entry.channel === 'discovery:get-brief')).toHaveLength(opened.length + 1));
-      await act(async () => { await value.drainReads(); });
-      const briefRead = value.trace().filter(entry => entry.channel === 'discovery:get-brief').at(-1)!;
-      expect(discoveryBriefSchema.parse(briefRead.result)).toMatchObject({ personId: item.personId, salesCycleId: item.salesCycleId });
-      opened.push(item.personId);
-      fireEvent.click(within(page).getByRole('button', { name: 'Close inspector' }));
+      expect(detail.textContent).toContain('Stored local work. Nothing here calls, sends or books.');
+      // The contact workspace is gone with the legacy routes: the detail is pure local presentation.
+      expect(within(detail).queryByRole('button')).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Open contact workspace' })).toBeNull();
       expect(screen.queryByRole('article', { name: `${item.personName} full page` })).toBeNull();
+      await act(async () => { await value.drainReads(); });
+      expect(value.trace()).toHaveLength(before);
       expect(window.location.hash).toBe('#/today');
       expect(retainedButtons().find(row => row.dataset.rowKey === key)?.getAttribute('aria-current')).toBe('true');
-      assertRetainedRows(context); assertRetainedInventory(context, 0, opened);
+      assertRetainedRows(context); assertRetainedInventory(context, 0);
     }
+    expect(value.trace().some(entry => ['lead-detail:get', 'leads:list', 'discovery:get-brief', 'review:list'].includes(entry.channel))).toBe(false);
     expect(value.trace().every(entry => entry.outcome === 'resolved' && !entry.synthetic)).toBe(true);
     expect(await value.retainedEvidence()).toEqual(context.evidence);
   });
@@ -770,23 +738,27 @@ describe('actual Today retained work and separately labeled synthetic worker pre
     };
     fireEvent.click(selected);
     assertSelection();
-    const open = () => screen.getByRole('button', { name: 'Open contact workspace' }) as HTMLButtonElement;
+    // No contact workspace remains to open; the detail stays a read-only local presentation throughout.
+    const noOpenControl = () => {
+      expect(screen.queryByRole('button', { name: 'Open contact workspace' })).toBeNull();
+      expect(within(screen.getByRole('region', { name: 'Retained work detail' })).queryByRole('button')).toBeNull();
+    };
+    noOpenControl();
     const first = value.holdRetainedRead();
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
     await act(async () => { expect(await first.arrival).not.toBeNull(); });
     expect(laneCount('Local commitments')).toBe('6 · checking');
-    assertSelection();
-    expect(open().disabled).toBe(true);
-    fireEvent.click(open());
+    assertSelection(); noOpenControl();
     assertRetainedRows(context);
     await act(async () => { first.reject(); await value.drainReads(); });
     expect(laneCount('Local commitments')).toBe('6 · last known');
     assertSelection();
-    expect(screen.getByText('Retained work is stale. Refresh before opening a contact.')).not.toBeNull();
-    expect(open().disabled).toBe(true);
+    expect(screen.getByText('Retained work is stale. Refresh to check it again.')).not.toBeNull();
+    noOpenControl();
     expect(retainedButtons().find(row => row.dataset.rowKey === key)?.getAttribute('aria-current')).toBe('true');
     await refreshRetained(value);
-    expect(laneCount('Local commitments')).toBe('6'); expect(open().disabled).toBe(false);
+    expect(laneCount('Local commitments')).toBe('6');
+    expect(screen.queryByText(/Retained work is stale/)).toBeNull();
     assertSelection();
     value.partialRetained(); await refreshRetained(value);
     assertSelection();
@@ -795,12 +767,11 @@ describe('actual Today retained work and separately labeled synthetic worker pre
     const second = value.holdRetainedRead();
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
     await act(async () => { expect(await second.arrival).not.toBeNull(); });
-    expect(laneCount('Local commitments')).toBe('6+ · partial'); expect(open().disabled).toBe(true);
+    expect(laneCount('Local commitments')).toBe('6+ · partial'); noOpenControl();
     assertSelection();
     assertRetainedRows(context);
     await act(async () => { second.release(); await value.drainReads(); });
-    assertSelection();
-    expect(open().disabled).toBe(false);
+    assertSelection(); noOpenControl();
     value.rejectNextDaily(); await refreshRetained(value);
     assertSelection();
     expect(laneCount('Calls')).toBe('2 · last known');
@@ -822,9 +793,9 @@ describe('actual Today retained work and separately labeled synthetic worker pre
 });
 
 
-function assertOneHealthGraph(value: Fixture, expected: { credentialLoads: number; inboxCreations: number }) {
+function assertOneHealthGraph(value: Fixture) {
   expect(value.counts()).toMatchObject({ keyLoads: 1, preparations: 1, databaseOpens: 1, migrations: 1,
-    domainConstructions: 1, domainBootstraps: 1, healthConstructions: 1, pollSchedules: 0, ...expected });
+    domainConstructions: 1, domainBootstraps: 1, healthConstructions: 1 });
 }
 function healthObservation() {
   return screen.getByRole('region', { name: 'Diagnostic observation' });
@@ -832,40 +803,25 @@ function healthObservation() {
 function healthObservedAt() { return healthObservation().querySelector('time')?.dateTime; }
 
 describe('actual health observation and initialized blocked admission', () => {
-  it('H1 observes one genuine failed poll without repeating bootstrap or writing domain state', async () => {
-    const value = await createContinuityDomainFixture(transport.handlers, 'health-poll'); fixtures.push(value);
-    const baseline = await value.evidence(), initialReport = await value.healthEvidence();
-    expect(initialReport).toMatchObject({ report: { status: 'ready', evaluatedAt: CONTINUITY_NOW }, reportFrozen: true, audit: [] });
+  it('H1 serves the retained startup report twice without repeating bootstrap, domain work or any sourcing overlay', async () => {
+    const value = await createContinuityDomainFixture(transport.handlers, 'construction'); fixtures.push(value);
+    const baseline = await value.evidence();
     const before = appHealthSchema.parse(await value.api.health.get());
-    expect(before).toMatchObject({ domainReady: true, domainStatus: 'ready', domainStartupEvaluatedAt: CONTINUITY_NOW, operationalStatus: 'ready',
-      sourcing: { status: 'healthy', reasons: [], lastSuccessAgeMs: null, state: { state: 'idle', consecutiveFailures: 0, lastFailureAt: null, lastCompletedAt: null } } });
-    assertOneHealthGraph(value, { credentialLoads: 0, inboxCreations: 0 });
-    vi.setSystemTime(new Date(HEALTH_POLL_AT));
-    // Date only is fake. pollNow owns and clears its real unref 14-minute deadline.
-    // Synthetic credentials are in-memory metadata; the rejecting factory creates no inbox.
-    await value.failSourcingOnce();
+    expect(before).toMatchObject({ domainReady: true, domainStatus: 'ready', domainStartupEvaluatedAt: CONTINUITY_NOW });
+    expect(before).not.toHaveProperty('operationalStatus'); expect(before).not.toHaveProperty('sourcing');
+    assertOneHealthGraph(value);
+    vi.setSystemTime(new Date('2026-09-10T15:01:00.000Z'));
     const after = appHealthSchema.parse(await value.api.health.get());
-    expect(after.operationalStatus).toBe('degraded');
-    expect(after.sourcing).toEqual({ status: 'degraded', reasons: ['CREDENTIALS_WITHOUT_COMPLETED_POLL'], lastSuccessAgeMs: null,
-      state: { state: 'idle', pollId: null, startedAt: null, lastCompletedAt: null, consecutiveFailures: 1,
-        lastFailureAt: HEALTH_POLL_AT, lastFailureCode: 'POLL_FAILED', backlogCount: null } });
-    expect({ ...after, operationalStatus: before.operationalStatus, sourcing: before.sourcing }).toEqual(before);
-    expect(await value.healthEvidence()).toEqual(initialReport);
+    expect(after).toEqual(before); // The immutable startup report, not a re-run audit or a live poll.
     expect(await value.evidence()).toEqual(baseline);
-    assertOneHealthGraph(value, { credentialLoads: 1, inboxCreations: 1 });
+    assertOneHealthGraph(value);
     expect(value.counts()).toMatchObject({ domainEntries: 0, healthReads: 2 });
-    expect(value.pollDiagnostics()).toEqual([{ level: 'error', eventCode: 'SOURCING_POLL_FAILED', fields: {
-      component: 'sourcing-poller', pollId: 'c140fbf0-5b83-4a50-baa2-8fc06f1028fe', backlogCount: undefined, status: 'POLL_FAILED', errorClass: 'Error',
-    } }]);
     expect(value.trace().map(({ channel, args, handlerStarted, outcome }) => ({ channel, args, handlerStarted, outcome }))).toEqual([
       { channel: 'health:get', args: [], handlerStarted: true, outcome: 'resolved' },
       { channel: 'health:get', args: [], handlerStarted: true, outcome: 'resolved' },
     ]);
-    expect(transport.registrations).toHaveLength(26);
-    const disposal = value.dispose(); expect(value.dispose()).toBe(disposal);
-    expect(await disposal).toEqual({ databaseClosed: true, keysZeroed: true, directoryRemoved: true, registrationsRemaining: 0,
-      pendingInvocations: 0, cleanupRuns: 1, runtimeShutdowns: 1, domainShutdowns: 1, databaseCloses: 1, pollerStops: 1, pollerIdleWaits: 1 });
-    expect([...transport.removals].sort()).toEqual([...CONTINUITY_REGISTERED_CHANNELS].sort());
+    expect(transport.registrations).toHaveLength(CONSTRUCTION_CHANNEL_COUNT);
+    await expectCleaned(value);
   });
 
   it('H2 retains the actual company editor through rejected timed-out and superseded diagnostic observations', async () => {
@@ -892,8 +848,8 @@ describe('actual health observation and initialized blocked admission', () => {
     const trigger = () => window.dispatchEvent(new Event('focus'));
     try {
       expect(healthObservedAt()).toBe(CONTINUITY_NOW); assertEditor();
-      assertOneHealthGraph(value, { credentialLoads: 0, inboxCreations: 0 });
-      assertUiInventory(value, { 'health:get': 1, 'lead-detail:outbound-capabilities': 1, 'review:list': 1, 'daily:get': 1,
+      assertOneHealthGraph(value);
+      assertUiInventory(value, { 'health:get': 1, 'daily:get': 1,
         'outreach:delegation-status': 1, 'local-workspace:get': 1, 'local-workspace:get-commitments': 1 });
       vi.useRealTimers(); vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
       vi.setSystemTime(new Date('2026-09-10T15:00:01.000Z'));
@@ -914,7 +870,7 @@ describe('actual health observation and initialized blocked admission', () => {
       expect(healthObservedAt()).toBe(CONTINUITY_NOW); assertEditor();
       const healthReads = () => value.trace().filter(entry => entry.channel === 'health:get');
       expect(healthReads().map(entry => entry.outcome)).toEqual(['resolved', 'rejected', 'pending']);
-      assertUiInventory(value, { 'health:get': 3, 'lead-detail:outbound-capabilities': 1, 'review:list': 3, 'daily:get': 3,
+      assertUiInventory(value, { 'health:get': 3, 'daily:get': 3,
         'outreach:delegation-status': 3, 'local-workspace:get': 3, 'local-workspace:get-commitments': 3 });
       vi.setSystemTime(new Date('2026-09-10T15:00:30.000Z'));
       await act(async () => { trigger(); await value.drainLatestHealth(); });
@@ -933,9 +889,9 @@ describe('actual health observation and initialized blocked admission', () => {
         expect(appHealthSchema.parse(entry.result).domainStartupEvaluatedAt).toBe(CONTINUITY_NOW);
       }
       expect(await value.evidence()).toEqual(baseline); expect(await value.healthEvidence()).toEqual(report);
-      assertOneHealthGraph(value, { credentialLoads: 0, inboxCreations: 0 });
+      assertOneHealthGraph(value);
       expect(value.counts().healthReads).toBe(5);
-      assertUiInventory(value, { 'health:get': 5, 'lead-detail:outbound-capabilities': 1, 'review:list': 5, 'daily:get': 5,
+      assertUiInventory(value, { 'health:get': 5, 'daily:get': 5,
         'outreach:delegation-status': 5, 'local-workspace:get': 5, 'local-workspace:get-commitments': 5 });
     } finally {
       await act(async () => { value.cancelDelivery(); await value.drainInvocations(); });
@@ -953,7 +909,8 @@ describe('actual health observation and initialized blocked admission', () => {
     expect(report.report.blockingViolationCount).toBeGreaterThan(0);
     const initial = appHealthSchema.parse(await value.api.health.get());
     expect(initial).toMatchObject({ domainReady: false, domainStatus: 'blocked', domainStartupEvaluatedAt: CONTINUITY_NOW,
-      domainBlockingViolationCount: report.report.blockingViolationCount, operationalStatus: 'ready', sourcing: { status: 'healthy', reasons: [] } });
+      domainBlockingViolationCount: report.report.blockingViolationCount });
+    expect(initial).not.toHaveProperty('operationalStatus'); expect(initial).not.toHaveProperty('sourcing');
     mountContinuityApp(value, 'accounts');
     await screen.findByText(/The startup audit is blocked or inconsistent/);
     await act(async () => { await value.drainReads(); });
@@ -964,248 +921,19 @@ describe('actual health observation and initialized blocked admission', () => {
     expect(screen.queryByText('The diagnostic read could not be completed')).toBeNull();
     const request = localCompanyCreateRequestSchema.parse({ ...COMPANY, commandId: randomUUID() });
     await expect(value.api.localWorkspace.getCommitments()).rejects.toThrow();
-    await expect(value.api.friday.getCurrent()).rejects.toThrow();
     await expect(value.api.localWorkspace.createCompany(request)).rejects.toThrow();
     expect(appHealthSchema.parse(await value.api.health.get())).toEqual(initial);
     expect(value.counts()).toMatchObject({ domainEntries: 0, healthReads: 3 });
-    assertOneHealthGraph(value, { credentialLoads: 0, inboxCreations: 0 });
+    assertOneHealthGraph(value);
     expect(await value.evidence()).toEqual(baseline); expect(await value.healthEvidence()).toEqual(report);
     expect(value.trace().map(({ channel, args, handlerStarted, outcome }) => ({ channel, args, handlerStarted, outcome }))).toEqual([
       { channel: 'health:get', args: [], handlerStarted: true, outcome: 'resolved' },
       { channel: 'health:get', args: [], handlerStarted: true, outcome: 'resolved' },
       { channel: 'local-workspace:get-commitments', args: [], handlerStarted: true, outcome: 'rejected' },
-      { channel: 'friday:get', args: [], handlerStarted: true, outcome: 'rejected' },
       { channel: 'local-workspace:create-company', args: [request], handlerStarted: true, outcome: 'rejected' },
       { channel: 'health:get', args: [], handlerStarted: true, outcome: 'resolved' },
     ]);
     expect([...transport.registrations].sort()).toEqual([...CONTINUITY_REGISTERED_CHANNELS].sort());
-    expect(transport.registrations).toHaveLength(26);
-  });
-});
-
-
-type FridayContext = Awaited<ReturnType<typeof renderFridayApp>>;
-async function renderFridayApp() {
-  const value = await createContinuityDomainFixture(transport.handlers, 'friday-ui'); fixtures.push(value);
-  const owner = await value.seedFridayOwner();
-  const evidence = await value.fridayEvidence();
-  expect(evidence.audit).toEqual([]); expect(evidence.jobs).toEqual([]);
-  expect(evidence.owner.person).toEqual({ id: owner.personId, display_name: 'Friday fictional Won owner' });
-  expect(evidence.owner.source).toEqual({ id: owner.sourceEventId, person_id: owner.personId, prospect_id: null,
-    channel: 'referral', original_prospect_id: owner.prospectId });
-  expect(evidence.owner.prospect).toEqual({ id: owner.prospectId, person_id: owner.personId, original_source_event_id: owner.sourceEventId, segment: 'warm' });
-  expect(evidence.owner.cycle).toEqual({ id: owner.cycleId, person_id: owner.personId, prospect_id: owner.prospectId,
-    entry_source_event_id: owner.sourceEventId, stage: 'won', workflow_status: 'onboarding', current_next_action_id: owner.actionId, version: 7 });
-  expect(evidence.owner.stages).toEqual(['unreviewed', 'ready', 'contacted', 'interviewed', 'offered', 'won'].map(to_stage => ({ to_stage })));
-  expect(evidence.owner.terms).toEqual({ doors_committed: 12, billing_model: 'per_door_monthly', unit_rate_cents: 2500, projected_mrr_cents: 30000 });
-  expect(evidence.owner.activities.map(row => row.id).sort()).toEqual([...owner.evidenceIds].sort());
-  for (const activity of evidence.owner.activities) expect(activity).toMatchObject({ person_id: owner.personId, prospect_id: owner.prospectId,
-    sales_cycle_id: owner.cycleId, occurred_at: FRIDAY_OWNER_AT });
-  mountContinuityApp(value, 'friday');
-  await screen.findByRole('heading', { name: 'Friday scoreboard' });
-  await settleFriday(value);
-  const health = value.trace().find(entry => entry.channel === 'health:get')!;
-  expect(appHealthSchema.parse(health.result)).toMatchObject({ domainReady: true, domainStatus: 'ready', domainStartupEvaluatedAt: CONTINUITY_NOW });
-  expect(window.location.hash).toBe('#/friday');
-  const context = { value, owner, evidence };
-  assertFridayInventory(context, 1, []);
-  return context;
-}
-async function settleFriday(value: Fixture) {
-  await act(async () => { await value.drainInvocations(); });
-  await act(async () => { await value.drainReads(); });
-}
-function localFields(iso: string) {
-  const value = new Date(iso), two = (n: number) => String(n).padStart(2, '0');
-  return { date: `${value.getFullYear()}-${two(value.getMonth() + 1)}-${two(value.getDate())}`, time: `${two(value.getHours())}:${two(value.getMinutes())}` };
-}
-function fridayInput(label: string) { return screen.getByLabelText(label) as HTMLInputElement; }
-function setFridayRequest(context: FridayContext) {
-  const fields = localFields(FRIDAY_REQUESTED_AT);
-  fireEvent.change(fridayInput('Requested date'), { target: { value: fields.date } });
-  fireEvent.change(fridayInput('Requested time'), { target: { value: fields.time } });
-  fireEvent.change(fridayInput('Won sales cycle (optional)'), { target: { value: context.owner.cycleId } });
-  return fields;
-}
-function setFridayFill(jobId: string) {
-  fireEvent.click(screen.getByRole('button', { name: `Fill ${jobId}` }));
-  const fields = localFields(CONTINUITY_NOW);
-  fireEvent.change(fridayInput('Accepted date'), { target: { value: fields.date } });
-  fireEvent.change(fridayInput('Accepted time'), { target: { value: fields.time } });
-  return fields;
-}
-function fridayCommands(value: Fixture) {
-  return value.trace().filter(entry => ['friday:create-job', 'friday:fill-job', 'friday:cancel-job'].includes(entry.channel));
-}
-async function requestFriday(context: FridayContext) {
-  setFridayRequest(context);
-  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Request job' })); });
-  await settleFriday(context.value);
-  const command = fridayCommands(context.value).filter(entry => entry.channel === 'friday:create-job').at(-1)!;
-  return createJobRequestSchema.parse(command.args[0]);
-}
-function assertFridayInventory(context: FridayContext, reports: number, commands: { channel: string; args: unknown[] }[]) {
-  const { value } = context;
-  expect(fridayCommands(value).map(({ channel, args }) => ({ channel, args }))).toEqual(commands);
-  const counts: Record<string, number> = {};
-  for (const entry of value.trace()) {
-    counts[entry.channel] = (counts[entry.channel] ?? 0) + 1;
-    expect(entry.handlerStarted).toBe(true); expect(entry.synthetic).toBeUndefined();
-    if (entry.channel === 'lead-detail:outbound-capabilities') expect(entry.args).toEqual([{}]);
-    else if (entry.channel === 'review:list') expect(entry.args).toEqual([{ kinds: [], cursor: null, limit: 1 }]);
-    else if (!['friday:create-job', 'friday:fill-job', 'friday:cancel-job'].includes(entry.channel)) expect(entry.args).toEqual([]);
-  }
-  const mutations: Record<string, number> = {};
-  for (const command of commands) mutations[command.channel] = (mutations[command.channel] ?? 0) + 1;
-  expect(counts).toEqual({ 'health:get': 1, 'lead-detail:outbound-capabilities': 1, 'review:list': 1, 'friday:get': reports, ...mutations });
-  expect([...transport.registrations].sort()).toEqual([...CONTINUITY_UI_REGISTERED_CHANNELS].sort()); expect(transport.registrations).toHaveLength(39);
-  expect(value.uiCounters()).toEqual({ network: 0, forbidden: 0, delegationDisposals: 0 });
-  assertOneHealthGraph(value, { credentialLoads: 0, inboxCreations: 0 });
-}
-type ExpectedFridayJob = { request: CreateJobRequest; state: 'queued' | 'succeeded' | 'cancelled'; acceptedAt: string | null };
-async function assertFridayJobs(context: FridayContext, expected: ExpectedFridayJob[]) {
-  const evidence = await context.value.fridayEvidence();
-  expect(evidence.audit).toEqual([]); expect(evidence.owner).toEqual(context.evidence.owner);
-  expect(evidence.jobs.map(row => row.id)).toEqual(expected.map(row => row.request.jobId).sort());
-  for (const { request, state, acceptedAt } of expected) {
-    expect(request).toEqual({ jobId: expect.any(String), salesCycleId: context.owner.cycleId, requestedAt: FRIDAY_REQUESTED_AT });
-    const row = evidence.jobs.find(row => row.id === request.jobId)!;
-    expect(row).toMatchObject({ id: request.jobId, type: 'founder_job_request_v1', idempotency_key: `founder-job:${request.jobId}`, state });
-    expect(JSON.parse(row.payload_json)).toEqual({ formatVersion: 1, jobId: request.jobId, salesCycleId: context.owner.cycleId, requestedAt: FRIDAY_REQUESTED_AT });
-    expect(row.result_json === null ? null : JSON.parse(row.result_json)).toEqual(acceptedAt === null ? null : { formatVersion: 1, contractorAcceptedAt: acceptedAt });
-  }
-  const lastCommand = fridayCommands(context.value).at(-1);
-  if (lastCommand) expect(mutationReceiptSchema.parse(lastCommand.result).revision).toBe(evidence.changes);
-  for (const entry of fridayCommands(context.value)) {
-    const receipt = mutationReceiptSchema.parse(entry.result);
-    expect(receipt).toEqual({ revision: expect.any(Number), affectedPersonIds: [],
-      affectedSalesCycleIds: entry.channel === 'friday:create-job' ? [context.owner.cycleId] : [] });
-  }
-  return evidence;
-}
-function assertFridayHistory(context: FridayContext, expected: ExpectedFridayJob[]) {
-  const read = context.value.trace().filter(entry => entry.channel === 'friday:get' && entry.outcome === 'resolved').at(-1)!;
-  const report = fridayReportSchema.parse(read.result);
-  expect(report.asOf).toBe(CONTINUITY_NOW);
-  expect(Date.parse(FRIDAY_REQUESTED_AT)).toBeGreaterThanOrEqual(Date.parse(report.periodStartsAt));
-  expect(Date.parse(CONTINUITY_NOW)).toBeLessThan(Date.parse(report.periodEndsAt));
-  expect([...report.jobs].sort((a, b) => a.id.localeCompare(b.id))).toEqual(expected.map(({ request, state, acceptedAt }) => ({
-    id: request.jobId, salesCycleId: request.salesCycleId, requestedAt: request.requestedAt,
-    status: state === 'queued' ? 'requested' : state === 'succeeded' ? 'filled' : 'cancelled', contractorAcceptedAt: acceptedAt,
-  })).sort((a, b) => a.id.localeCompare(b.id)));
-  for (const { request, state } of expected) {
-    const row = screen.getByText(request.jobId).closest('li')!;
-    expect(row.textContent).toContain(state === 'queued' ? 'Requested' : state === 'succeeded' ? 'Filled' : 'Cancelled');
-  }
-}
-
-describe('actual Friday job persistence through public UI boundaries', () => {
-  it('F1 creates fills and cancels exact independently persisted jobs for one real Won owner', async () => {
-    const context = await renderFridayApp(), { value } = context;
-    const filled = await requestFriday(context);
-    const requested: ExpectedFridayJob = { request: filled, state: 'queued', acceptedAt: null };
-    await assertFridayJobs(context, [requested]); assertFridayHistory(context, [requested]);
-    setFridayFill(filled.jobId);
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Confirm fill' })); }); await settleFriday(value);
-    const fill = fillJobRequestSchema.parse(fridayCommands(value).at(-1)!.args[0]);
-    expect(fill).toEqual({ jobId: filled.jobId, contractorAcceptedAt: CONTINUITY_NOW });
-    const first: ExpectedFridayJob = { request: filled, state: 'succeeded', acceptedAt: CONTINUITY_NOW };
-    await assertFridayJobs(context, [first]); assertFridayHistory(context, [first]);
-    const cancelled = await requestFriday(context); expect(cancelled.jobId).not.toBe(filled.jobId);
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: `Cancel ${cancelled.jobId}` })); }); await settleFriday(value);
-    const cancel = cancelJobRequestSchema.parse(fridayCommands(value).at(-1)!.args[0]); expect(cancel).toEqual({ jobId: cancelled.jobId });
-    const last: ExpectedFridayJob = { request: cancelled, state: 'cancelled', acceptedAt: null };
-    await assertFridayJobs(context, [first, last]); assertFridayHistory(context, [first, last]);
-    expect(screen.getByText('Saved')).not.toBeNull();
-    assertFridayInventory(context, 5, [
-      { channel: 'friday:create-job', args: [filled] }, { channel: 'friday:fill-job', args: [fill] },
-      { channel: 'friday:create-job', args: [cancelled] }, { channel: 'friday:cancel-job', args: [cancel] },
-    ]);
-    expect(value.trace().every(entry => entry.outcome === 'resolved')).toBe(true);
-  });
-
-  it('F2 explicitly retries identical create fill and cancel after real commits lose delivery', async () => {
-    const context = await renderFridayApp(), { value } = context;
-    const control = await requestFriday(context);
-    const unchanged: ExpectedFridayJob = { request: control, state: 'queued', acceptedAt: null };
-    const controlRow = (await assertFridayJobs(context, [unchanged])).jobs[0]!;
-    const createHold = value.holdNextFridayMutation(), fields = setFridayRequest(context);
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Request job' })); expect(await createHold.arrival).not.toBeNull(); });
-    const target = createJobRequestSchema.parse(fridayCommands(value).at(-1)!.args[0]); expect(target.jobId).not.toBe(control.jobId);
-    const requested: ExpectedFridayJob = { request: target, state: 'queued', acceptedAt: null };
-    const createSaved = await assertFridayJobs(context, [unchanged, requested]);
-    await act(async () => { createHold.reject(); }); await settleFriday(value);
-    expect(screen.getByText('The change could not be confirmed. Your input is kept. Review the job before retrying.')).not.toBeNull();
-    expect(fridayInput('Requested date').value).toBe(fields.date); expect(fridayInput('Requested time').value).toBe(fields.time);
-    expect(fridayInput('Won sales cycle (optional)').value).toBe(context.owner.cycleId);
-    assertFridayInventory(context, 2, [{ channel: 'friday:create-job', args: [control] }, { channel: 'friday:create-job', args: [target] }]);
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); }); await settleFriday(value);
-    expect((await assertFridayJobs(context, [unchanged, requested])).jobs).toEqual(createSaved.jobs);
-    expect(fridayInput('Requested date').value).toBe(''); expect(fridayInput('Requested time').value).toBe('');
-    expect(fridayInput('Won sales cycle (optional)').value).toBe('');
-    const fillHold = value.holdNextFridayMutation(), accepted = setFridayFill(target.jobId);
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Confirm fill' })); expect(await fillHold.arrival).not.toBeNull(); });
-    const fill = fillJobRequestSchema.parse(fridayCommands(value).at(-1)!.args[0]); expect(fill).toEqual({ jobId: target.jobId, contractorAcceptedAt: CONTINUITY_NOW });
-    const filled: ExpectedFridayJob = { request: target, state: 'succeeded', acceptedAt: CONTINUITY_NOW };
-    const fillSaved = await assertFridayJobs(context, [unchanged, filled]);
-    await act(async () => { fillHold.reject(); }); await settleFriday(value);
-    expect(screen.getByText('The change could not be confirmed. Your input is kept. Review the job before retrying.')).not.toBeNull();
-    expect(fridayInput('Accepted date').value).toBe(accepted.date); expect(fridayInput('Accepted time').value).toBe(accepted.time);
-    expect(screen.getByRole('group', { name: `Fill ${target.jobId}` })).not.toBeNull();
-    expect(value.trace().filter(entry => entry.channel === 'friday:get')).toHaveLength(3); expect(fridayCommands(value)).toHaveLength(4);
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); }); await settleFriday(value);
-    expect((await assertFridayJobs(context, [unchanged, filled])).jobs).toEqual(fillSaved.jobs);
-    expect(screen.queryByRole('group', { name: `Fill ${target.jobId}` })).toBeNull();
-    const cancelTarget = await requestFriday(context);
-    expect(new Set([control.jobId, target.jobId, cancelTarget.jobId]).size).toBe(3);
-    const cancelHold = value.holdNextFridayMutation();
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: `Cancel ${cancelTarget.jobId}` })); expect(await cancelHold.arrival).not.toBeNull(); });
-    const cancel = cancelJobRequestSchema.parse(fridayCommands(value).at(-1)!.args[0]); expect(cancel).toEqual({ jobId: cancelTarget.jobId });
-    const cancelled: ExpectedFridayJob = { request: cancelTarget, state: 'cancelled', acceptedAt: null };
-    const cancelSaved = await assertFridayJobs(context, [unchanged, filled, cancelled]);
-    await act(async () => { cancelHold.reject(); }); await settleFriday(value);
-    expect(screen.getByText('The change could not be confirmed. Your input is kept. Review the job before retrying.')).not.toBeNull();
-    expect(value.trace().filter(entry => entry.channel === 'friday:get')).toHaveLength(5); expect(fridayCommands(value)).toHaveLength(7);
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); }); await settleFriday(value);
-    const final = await assertFridayJobs(context, [unchanged, filled, cancelled]); expect(final.jobs).toEqual(cancelSaved.jobs);
-    expect(final.jobs.find(row => row.id === control.jobId)).toEqual(controlRow);
-    assertFridayHistory(context, [unchanged, filled, cancelled]);
-    assertFridayInventory(context, 6, [
-      { channel: 'friday:create-job', args: [control] }, { channel: 'friday:create-job', args: [target] }, { channel: 'friday:create-job', args: [target] },
-      { channel: 'friday:fill-job', args: [fill] }, { channel: 'friday:fill-job', args: [fill] },
-      { channel: 'friday:create-job', args: [cancelTarget] }, { channel: 'friday:cancel-job', args: [cancel] }, { channel: 'friday:cancel-job', args: [cancel] },
-    ]);
-    expect(value.trace().filter(entry => entry.outcome === 'rejected').map(entry => entry.channel)).toEqual(['friday:create-job', 'friday:fill-job', 'friday:cancel-job']);
-  });
-
-  it('F3 keeps Saved and a new draft while an acknowledged mutation report is held rejected and refreshed', async () => {
-    const context = await renderFridayApp(), { value } = context;
-    setFridayRequest(context); const reportHold = value.holdFridayReport();
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Request job' })); expect(await reportHold.arrival).not.toBeNull(); });
-    const request = createJobRequestSchema.parse(fridayCommands(value).at(-1)!.args[0]);
-    const expected: ExpectedFridayJob = { request, state: 'queued', acceptedAt: null };
-    expect(screen.getByText('Saved')).not.toBeNull();
-    expect(fridayInput('Requested date').value).toBe(''); expect(fridayInput('Requested time').value).toBe('');
-    expect(fridayInput('Won sales cycle (optional)').value).toBe('');
-    const committed = await assertFridayJobs(context, [expected]);
-    expect(value.trace().filter(entry => entry.channel === 'friday:get').map(entry => entry.outcome)).toEqual(['resolved', 'pending']);
-    const newFields = localFields('2026-09-10T14:45:00.000Z');
-    fireEvent.change(fridayInput('Requested date'), { target: { value: newFields.date } });
-    fireEvent.change(fridayInput('Requested time'), { target: { value: newFields.time } });
-    fireEvent.change(fridayInput('Won sales cycle (optional)'), { target: { value: 'new unsent draft cycle' } });
-    const assertDraft = () => {
-      expect(fridayInput('Requested date').value).toBe(newFields.date); expect(fridayInput('Requested time').value).toBe(newFields.time);
-      expect(fridayInput('Won sales cycle (optional)').value).toBe('new unsent draft cycle');
-    };
-    assertDraft();
-    await act(async () => { reportHold.reject(); }); await settleFriday(value);
-    expect(screen.getByText('Saved; scoreboard refresh failed')).not.toBeNull(); assertDraft();
-    expect(await assertFridayJobs(context, [expected])).toEqual(committed);
-    assertFridayInventory(context, 2, [{ channel: 'friday:create-job', args: [request] }]);
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Refresh jobs' })); }); await settleFriday(value);
-    expect(screen.getByText('Saved')).not.toBeNull(); assertDraft(); assertFridayHistory(context, [expected]);
-    expect(await assertFridayJobs(context, [expected])).toEqual(committed);
-    assertFridayInventory(context, 3, [{ channel: 'friday:create-job', args: [request] }]);
-    expect(value.trace().filter(entry => entry.outcome === 'rejected').map(entry => entry.channel)).toEqual(['friday:get']);
+    expect(transport.registrations).toHaveLength(CONSTRUCTION_CHANNEL_COUNT);
   });
 });

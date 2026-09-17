@@ -3,12 +3,10 @@ import { validParcelEvent } from '../fixtures/cloudSourceEvents';
 import { cloudSourceEventSchema } from '../../src/shared/contracts/cloudSourceEventContract';
 import { randomUUID } from 'node:crypto';
 import { createOutboundCommandService } from '../../src/main/communications/outboundCommandService';
-import { createLeadDetailProvider, createTodayProvider } from '../../src/main/ipc/registerApplicationIpc';
-import { registerLeadDetailIpc } from '../../src/main/leads/registerLeadDetailIpc';
-import type { OutboundRequest, OutboundReceipt } from '../../src/shared/contracts/outboundContract';
-import { registeredIpcHandler } from '../fixtures/registeredIpcHandler';
-const electron = vi.hoisted(() => ({ handle: vi.fn(), removeHandler: vi.fn() }));
-vi.mock('electron', () => ({ ipcMain: electron }));
+import {
+  createLegacyLeadDetailProvider as createLeadDetailProvider, createTodayProvider, type LegacyLeadDetailProvider,
+} from '../fixtures/legacyDomainProviders';
+import type { OutboundRequest } from '../../src/shared/contracts/outboundContract';
 import { contactSnapshot } from '../../src/main/communications/contactSnapshot';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -29,7 +27,6 @@ import {
 import {
   BUILTIN_PRIORITIZATION_RULE_V1,
 } from '../../src/main/domain/prioritization/builtinPrioritizationRules';
-import { type LeadDetailProvider } from '../../src/main/leads/leadDetailService';
 import {
   contactMethodSchema,
   leadDetailSchema,
@@ -84,12 +81,10 @@ describe('leadDetailService over a real encrypted domain', () => {
   let temp: TempDatabase;
   let services: DomainServices;
   let domain: FounderSalesDomain;
-  let leadDetail: LeadDetailProvider;
+  let leadDetail: LegacyLeadDetailProvider;
   let ruleVersionId: string;
 
   beforeEach(async () => {
-    electron.handle.mockReset();
-    electron.removeHandler.mockReset();
     temp = createTempDatabase();
     const key = createTestWorkspaceKey();
     database = openDatabase({ path: temp.path, key });
@@ -548,9 +543,11 @@ describe('leadDetailService over a real encrypted domain', () => {
       expectedContactSnapshot: domain.getLeadDetail({ personId: prospect.personId }).phones[0].contactSnapshot };
   }
 
+  // The begin-outbound IPC channel is gone; the legacy provider is exercised directly, so the
+  // strict request parse and receipt validation under test are the outbound service's own.
   function normalRoute(beforeReady: () => void = () => undefined, injected = true) {
     const gate: Parameters<typeof createLeadDetailProvider>[0] = {
-      withDomain: async (operation) => operation(domain), getHealth: async () => ({}),
+      withDomain: async (operation) => operation(domain),
     };
     const dispatch = vi.fn(async () => ({ status: 'handoff_accepted' as const, reasonCode: null }));
     const outbound = createOutboundCommandService({ domain: gate,
@@ -559,17 +556,15 @@ describe('leadDetailService over a real encrypted domain', () => {
         check: async (personId) => { beforeReady(); return readyReply(personId); }, assertCurrent: assertCurrentReadiness },
     });
     const provider = createLeadDetailProvider(gate, undefined, injected ? outbound : undefined);
-    const dispose = registerLeadDetailIpc(provider);
-    const handler = registeredIpcHandler(electron.handle, 'lead-detail:begin-outbound');
-    return { dispatch, provider, outbound, dispose, today: createTodayProvider(gate),
-      invoke: (request: unknown) => handler({ senderFrame: { url: 'callie://app/index.html' } }, request) as Promise<OutboundReceipt> };
+    return { dispatch, provider, outbound, today: createTodayProvider(gate),
+      invoke: (request: unknown) => provider.beginOutbound(request as OutboundRequest) };
   }
 
   function expectNoCommunication() {
     expect(database.raw.prepare("SELECT COUNT(*) AS n FROM activities WHERE kind IN ('call','text','email') AND direction = 'outbound'").get()).toEqual({ n: 0 });
   }
 
-  it('normal provider and registrar accept one handoff with durable facts and no phantom touch', async () => {
+  it('normal provider accepts one handoff with durable facts and no phantom touch', async () => {
     const request = requestFor();
     const before = domain.getLeadDetail({ personId: request.personId });
     const route = normalRoute();
@@ -587,7 +582,7 @@ describe('leadDetailService over a real encrypted domain', () => {
     await expect(route.invoke(request)).resolves.toEqual(receipt);
     expect(route.dispatch).toHaveBeenCalledTimes(1);
     await expect(route.invoke({ ...request, expectedContactSnapshot: 'b'.repeat(64) })).rejects.toThrow('conflicts');
-    route.dispose(); route.outbound.dispose();
+    route.outbound.dispose();
   });
 
   it('preserves direct service factory enrichment position and delegates its third outbound service', async () => {
@@ -602,7 +597,7 @@ describe('leadDetailService over a real encrypted domain', () => {
     expect(route.dispatch).toHaveBeenCalledTimes(1); expectNoCommunication();
   });
 
-  it('strict normal registrar rejects forged target/body and missing identity before dispatch', async () => {
+  it('strict outbound service rejects forged target/body and missing identity before dispatch', async () => {
     const request = requestFor();
     const route = normalRoute();
     for (const field of ['target', 'body', 'url', 'observedOutcome']) {

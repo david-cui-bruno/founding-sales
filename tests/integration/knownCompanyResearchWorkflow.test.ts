@@ -15,8 +15,6 @@ import { createOutreachProviders } from '../../src/main/outreach/providers/outre
 import { companyDraftFacts } from '../../src/main/outreach/companyDraftContext';
 import { createEmailService } from '../../src/main/outreach/emailService';
 import { type CompanyFact } from '../../src/main/research/companyFactExtraction';
-import type { SourcingPollHealth } from '../../src/shared/contracts/sourcingContract';
-import type { SourcingPoller } from '../../src/main/sourcing/sourcingPoller';
 import type { SelectedResearch } from '../../src/shared/contracts/localWorkspaceContract';
 import { createCallieApi } from '../../src/preload/createCallieApi';
 import { registerOutreachIpc } from '../../src/main/ipc/registerOutreachIpc';
@@ -142,9 +140,6 @@ async function fixture(mode: Mode = 'known', maxCostMicros = 100, onExternal: ()
     },
     createBackupService: () => ({ start: async () => undefined, shutdown: async () => undefined, createBackup: unexpected, listAvailableBackups: async () => [] }),
     createRecoveryService: () => ({ status: unexpected, beginSetup: unexpected, saveSetupMaterial: unexpected, completeSetup: unexpected, selectAndRunRestoreDrill: unexpected, shutdown: async () => undefined }),
-    createSourcingPoller: () => ({ getHealth: (): SourcingPollHealth => ({ status: 'healthy', reasons: [], lastSuccessAgeMs: null,
-      state: { state: 'idle', pollId: null, startedAt: null, lastCompletedAt: null, consecutiveFailures: 0, lastFailureAt: null, lastFailureCode: null, backlogCount: null } }),
-      stop() {}, idle: async (): Promise<void> => undefined }) as unknown as SourcingPoller,
     createAppleBridgeSupervisor: unexpected,
   };
   const start = () => startApplication({ appVersion: '1.0.0', userDataPath: dirname(temp.path), logger,

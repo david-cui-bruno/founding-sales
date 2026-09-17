@@ -34,15 +34,6 @@ const health: AppHealth = {
   domainProjectionRefreshCandidateCount: 0,
   pendingProjectionRebuilds: 0,
   domainStartupEvaluatedAt: '2026-08-30T12:00:00.000Z',
-  operationalStatus: 'ready',
-  sourcing: {
-    status: 'healthy', reasons: [], lastSuccessAgeMs: null,
-    state: {
-      state: 'idle', pollId: null, startedAt: null, lastCompletedAt: null,
-      consecutiveFailures: 0, lastFailureAt: null, lastFailureCode: null,
-      backlogCount: null,
-    },
-  },
 };
 
 type Deferred<T> = {
@@ -84,7 +75,6 @@ const pendingWorkflowApis = (): Omit<CalliePreloadApi, 'health' | 'appleSpike'> 
   return {
     daily: { get: pending() },
     localWorkspace: { get: pending(), getCompany: pending(), researchCompany: pending(), getCompanyResearchStatus: pending(), prepareCompanyDraft: async () => { throw Error('Company preparation unavailable in this fixture'); }, admitCompanyDraftEmail: async () => { throw Error('Company drafts unavailable in this fixture'); }, openCompanyDraft: async () => { throw Error('Company drafts unavailable in this fixture'); }, getCompanyDraft: async () => { throw Error('Company drafts unavailable in this fixture'); }, saveCompanyDraft: async () => { throw Error('Company drafts unavailable in this fixture'); }, getCompanyResearchSettings: pending(), updateCompanyResearchSettings: pending(), getCallSettings: async () => { throw Error('Call capacity unavailable in this fixture'); }, updateCallSettings: async () => { throw Error('Call capacity unavailable in this fixture'); }, linkCompanyPerson: pending(), getCommitments: pending(), reviewCompany: pending(), createCompany: pending(), getCompanyCreateStatus: pending(), transition: pending() },
-    discovery: { get: pending(), getBrief: pending(), begin: pending(), override: pending() },
     delegation: {
       getAccountPreparation: pending(),
       status: pending(), policyImport: { selectAndPreview: pending(), confirm: pending(), resume: pending(), status: pending() },
@@ -94,16 +84,8 @@ const pendingWorkflowApis = (): Omit<CalliePreloadApi, 'health' | 'appleSpike'> 
     linkedin: { prepare: pending(), get: pending(), recover: pending(), save: pending(), begin: pending(), open: pending(), copy: pending(), reportOutcome: pending() },
     phoneSetup: { status: pending(), confirm: pending(), clear: pending() },
     outreach: { status: pending(), configure: pending(), connectGmail: pending(), disconnectGmail: pending(), openDraft: pending(), saveDraft: pending(), generateDraft: pending(), sendDraft: pending(), inspectLocalAuthority: pending() },
-    leads: { list: pending(), updateField: pending(), bulkUpdate: pending() },
-    leadDetail: { get: pending(), beginOutbound: pending(), getOutboundCapabilities: pending(), confirmTransition: pending(), findContactInfo: pending(), dismissLead: pending(), overrideCloudScore: pending() },
-    today: { get: pending(), complete: pending(), snooze: pending(), pin: pending(), logPastActivity: pending(), getLeadTriageSnapshot: pending(), addLeadNote: pending(), logCallOutcome: pending(), markActivityInError: pending(), getTriageQueue: pending(), setReviewPosition: pending() },
-    pipeline: { get: pending() },
-    review: { list: pending(), resolve: pending() },
-    friday: { getCurrent: pending(), getDrilldown: pending(), createJob: pending(), fillJob: pending(), cancelJob: pending() },
-    imports: { preview: pending(), remap: pending(), commit: pending(), status: pending() },
-    conversations: { list: pending(), get: pending(), attachTranscript: pending() },
-    learnings: { list: pending(), capture: pending(), addEvidence: pending(), updateStatus: pending() },
-    sourcing: { pollNow: pending(), status: pending(), retry: pending(), setHmacSalt: pending() },
+    leads: { list: pending() },
+    leadDetail: { get: pending() },
     shell: { revealDatabase: pending(), revealLogDirectory: pending() },
     recovery: { status: pending(), beginSetup: pending(), saveSetupMaterial: pending(), completeSetup: pending(), selectAndRunRestoreDrill: pending() },
   };
@@ -265,7 +247,7 @@ describe('actual App readonly observation and workspace continuity', () => {
     expect(screen.getByText(/Last successful read/).textContent).toContain('2026-09-10T16:00:00.000Z');
     expect(screen.getByRole('alert').textContent).toContain('stale');
     expect(document.body.textContent).not.toContain('key-secret');
-    for (const command of [api.localWorkspace.reviewCompany, api.localWorkspace.createCompany, api.localWorkspace.getCompanyCreateStatus, api.sourcing.pollNow, api.sourcing.retry, api.recovery.beginSetup, api.recovery.selectAndRunRestoreDrill]) expect(command).not.toHaveBeenCalled();
+    for (const command of [api.localWorkspace.reviewCompany, api.localWorkspace.createCompany, api.localWorkspace.getCompanyCreateStatus, api.recovery.beginSetup, api.recovery.selectAndRunRestoreDrill]) expect(command).not.toHaveBeenCalled();
   });
 
   it('keeps the editor through a hung refresh deadline and ignores an expired blocked reply', async () => {
@@ -488,7 +470,7 @@ describe('startup appearance before workspace readiness', () => {
     expect(view.container.querySelector('.presentation-root')?.getAttribute('data-presentation')).toBe('native-a');
     expect(view.container.querySelector('[data-workflow-mode]')).toBeNull();
     expect(screen.queryByRole('navigation')).toBeNull();
-    expect(window.callie.today.get).not.toHaveBeenCalled();
+    expect(window.callie.daily.get).not.toHaveBeenCalled();
     expect(window.callie.leads.list).not.toHaveBeenCalled();
     expect(window.callie.appleSpike.getStatus).not.toHaveBeenCalled();
   });
@@ -506,7 +488,7 @@ describe('startup appearance before workspace readiness', () => {
     expect(screen.getByRole('alert').textContent).not.toContain('private path');
     expect(view.container.querySelector('.presentation-root')).toBe(root);
     expect(view.container.querySelector('.presentation-root')?.getAttribute('data-presentation')).toBe('native-a');
-    expect(window.callie.today.get).not.toHaveBeenCalled();
+    expect(window.callie.daily.get).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(view.container.querySelector('.presentation-root')).toBe(root);
     expect(screen.getByText('Checking local foundation…')).toBeTruthy();
@@ -538,7 +520,7 @@ it.each(['missing', 'invalid', 'throwing'] as const)('resolves %s storage before
     observed.push([document.documentElement.dataset.theme, document.documentElement.dataset.density]);
   });
   expect(observed[0]).toEqual(['dark', 'comfortable']);
-  expect(window.callie.today.get).not.toHaveBeenCalled();
+  expect(window.callie.daily.get).not.toHaveBeenCalled();
 });
 it('keeps one live system listener through the health gate without extra reads', async () => {
   const listeners = new Set<(event: { matches: boolean }) => void>();
@@ -554,7 +536,7 @@ it('keeps one live system listener through the health gate without extra reads',
   act(() => listeners.forEach(listener => listener({ matches: true })));
   expect(document.documentElement.dataset.theme).toBe('dark');
   expect(get).toHaveBeenCalledTimes(2);
-  expect(window.callie.today.get).not.toHaveBeenCalled();
+  expect(window.callie.daily.get).not.toHaveBeenCalled();
   await act(async () => ready.resolve(health));
   await screen.findByRole('navigation', { name: 'Primary' });
   expect(listeners.size).toBe(1);
@@ -565,13 +547,17 @@ it('keeps one live system listener through the health gate without extra reads',
 });
 
 
-it('does not observe review counts before the real foundation gate succeeds', async () => {
+it('does not read the local workspace before the real foundation gate succeeds', async () => {
   const ready = deferred<AppHealth>();
   renderApp(vi.fn(() => ready.promise));
-  expect(window.callie.review.list).not.toHaveBeenCalled();
+  expect(window.callie.localWorkspace.get).not.toHaveBeenCalled();
+  expect(window.callie.daily.get).not.toHaveBeenCalled();
   await act(async () => { window.dispatchEvent(new Event('focus')); });
-  expect(window.callie.review.list).not.toHaveBeenCalled();
+  expect(window.callie.localWorkspace.get).not.toHaveBeenCalled();
+  expect(window.callie.daily.get).not.toHaveBeenCalled();
   await act(async () => { ready.resolve(health); });
   await screen.findByRole('navigation', { name: 'Primary' });
-  expect(window.callie.review.list).toHaveBeenCalledWith({ kinds: [], cursor: null, limit: 1 });
+  // StrictMode replays the mount effect, so only the gate ordering is fixed here, not the exact count.
+  await waitFor(() => expect(window.callie.daily.get).toHaveBeenCalled());
+  expect(window.callie.localWorkspace.get).toHaveBeenCalled();
 });

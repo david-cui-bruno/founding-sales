@@ -10,15 +10,18 @@ import { BUILTIN_CADENCES } from '../../src/main/domain/cadence/builtinCadences'
 import { FoundationRuntime } from '../../src/main/foundation/foundationRuntime';
 import { HealthService } from '../../src/main/health/healthService';
 import {
-  createLeadsProvider, createLeadDetailProvider, createTodayProvider, createPipelineProvider,
-  createReviewProvider, createFridayProvider, createImportProvider, createConversationsProvider,
-  createLearningsProvider, registerApplicationIpc,
+  createDailyProvider, createLeadDetailProvider, createLeadsProvider, registerApplicationIpc,
 } from '../../src/main/ipc/registerApplicationIpc';
+import {
+  createConversationsProvider, createFridayProvider, createImportProvider, createLearningsProvider,
+  createLegacyLeadDetailProvider, createLegacyLeadsProvider, createPipelineProvider, createReviewProvider,
+  createTodayProvider,
+} from '../fixtures/legacyDomainProviders';
 import { createCallieApi } from '../../src/preload/createCallieApi';
 import { appHealthSchema } from '../../src/shared/healthContract';
 import { mutationReceiptSchema } from '../../src/shared/contracts/commonContract';
+import { dailySnapshotSchema } from '../../src/shared/contracts/dailyContract';
 import { leadsListResponseSchema, type LeadsListRequest } from '../../src/shared/contracts/leadsContract';
-import type { SourcingPollHealth } from '../../src/shared/contracts/sourcingContract';
 import { leadDetailSchema } from '../../src/shared/contracts/leadDetailContract';
 import { todaySnapshotSchema } from '../../src/shared/contracts/todayContract';
 import { pipelineSnapshotSchema } from '../../src/shared/contracts/pipelineContract';
@@ -36,14 +39,17 @@ vi.mock('electron', () => ({ safeStorage: {}, dialog: {}, ipcMain: { handle: ele
 
 const NOW = '2026-09-10T15:00:00.000Z';
 const listRequest: LeadsListRequest = { query: '', stages: [], priorities: [], sort: 'person_name', cursor: null, limit: 50 };
+// Person command channels that left the desktop with the legacy surfaces. None may be registered by default.
+const removedPersonChannels = [
+  'leads:update-field', 'leads:bulk-update', 'lead-detail:begin-outbound', 'lead-detail:outbound-capabilities',
+  'lead-detail:confirm-transition', 'lead-detail:dismiss', 'lead-detail:cloud-score-override', 'lead-detail:find-contact-info',
+  'friday:get',
+];
 function deferred() {
   let resolve!: () => void;
   const promise = new Promise<void>(yes => { resolve = yes; });
   return { promise, resolve };
 }
-const sourcingHealth: SourcingPollHealth = { status: 'healthy', reasons: [], lastSuccessAgeMs: null,
-  state: { state: 'idle' as const, pollId: null, startedAt: null, lastCompletedAt: null,
-    consecutiveFailures: 0, lastFailureAt: null, lastFailureCode: null, backlogCount: null } };
 
 // Real foundation, migration, bootstrap/audit, domain and HealthService. The only
 // gate instrumentation delegates to the actual runtime and counts admitted callbacks.
@@ -74,7 +80,6 @@ function realFoundation(options: { holdKey?: boolean; blocked?: boolean; keyErro
     createHealthService: input => { counts.health++; return new HealthService(input); },
     closeDatabase: database => { counts.close++; closeDatabase(database); },
   });
-  runtime.setSourcingHealthProvider(() => sourcingHealth);
   const gate = {
     withDomain: <T,>(operation: (domain: FounderSalesDomain) => T | Promise<T>): Promise<T> =>
       runtime.withDomain(domain => { counts.callback++; return operation(domain); }),
@@ -103,10 +108,12 @@ async function seedReady(f: Fixture) {
     return { ...prospect, ...cycle };
   });
 }
+// Production factories first, then the test-only gates over the legacy domain slices that PR B removes.
 function gatedOperations(f: Fixture) {
   return [
     ['leads.list', () => createLeadsProvider(f.gate).list(listRequest)],
     ['detail.get', () => createLeadDetailProvider(f.gate).get({ personId: 'held-person' })],
+    ['daily.get', () => createDailyProvider(f.gate).get()],
     ['today.get', () => createTodayProvider(f.gate).get()],
     ['pipeline.get', () => createPipelineProvider(f.gate).get()],
     ['review.list', () => createReviewProvider(f.gate).list({ kinds: [], limit: 50 })],
@@ -114,7 +121,7 @@ function gatedOperations(f: Fixture) {
     ['imports.preview', () => createImportProvider(f.gate).preview({ kind: 'csv', sourceName: 'held.csv', content: 'Name\nHeld\n' })],
     ['conversations.list', () => createConversationsProvider(f.gate).list({ query: '', filter: 'all', limit: 50, cursor: null })],
     ['learnings.list', () => createLearningsProvider(f.gate).list({ categories: [], statuses: [], query: '', limit: 50 })],
-    ['leads.updateField', () => createLeadsProvider(f.gate).updateField({ personId: 'held-person', field: 'person_name', value: 'Must not write' })],
+    ['leads.updateField', () => createLegacyLeadsProvider(f.gate).updateField({ personId: 'held-person', field: 'person_name', value: 'Must not write' })],
     ['friday.createJob', () => createFridayProvider(f.gate).createJob({ jobId: 'must-not-write', salesCycleId: null, requestedAt: NOW })],
   ] as const;
 }
@@ -152,14 +159,16 @@ describe('production providers through actual encrypted FoundationRuntime', () =
     expect(f.counts).toMatchObject({ open: 0, migrate: 0, callback: 0, close: 0 });
   });
 
-  it('ready admits genuine reads from all nine factories and persisted writes from every writable slice', async () => {
+  it('ready admits genuine reads from the production and legacy domain factories and persisted writes from every writable slice', async () => {
     const f = fixture(); await f.runtime.initialize(); const owner = await seedReady(f);
     expect(appHealthSchema.parse(await f.runtime.getHealth())).toMatchObject({ domainReady: true, domainStatus: 'ready', databaseEncrypted: true });
-    const leads = createLeadsProvider(f.gate), detail = createLeadDetailProvider(f.gate), today = createTodayProvider(f.gate);
+    const leads = createLeadsProvider(f.gate), detail = createLeadDetailProvider(f.gate), daily = createDailyProvider(f.gate);
+    const legacyLeads = createLegacyLeadsProvider(f.gate), legacyDetail = createLegacyLeadDetailProvider(f.gate), today = createTodayProvider(f.gate);
     const pipeline = createPipelineProvider(f.gate), review = createReviewProvider(f.gate), friday = createFridayProvider(f.gate);
     const imports = createImportProvider(f.gate), conversations = createConversationsProvider(f.gate), learnings = createLearningsProvider(f.gate);
     expect(leadsListResponseSchema.parse(await leads.list(listRequest)).rows.map(row => row.personId)).toEqual([owner.personId]);
     expect(leadDetailSchema.parse(await detail.get({ personId: owner.personId })).personId).toBe(owner.personId);
+    expect(dailySnapshotSchema.safeParse(await daily.get()).success).toBe(true);
     expect(todaySnapshotSchema.parse(await today.get()).revision).toBeGreaterThan(0);
     expect(pipelineSnapshotSchema.parse(await pipeline.get()).stages.flatMap(stage => stage.cards).map(card => card.personId)).toContain(owner.personId);
     expect(reviewSnapshotSchema.parse(await review.list({ kinds: [], limit: 50 })).items).toEqual([]);
@@ -169,7 +178,7 @@ describe('production providers through actual encrypted FoundationRuntime', () =
     const preview = importPreviewSchema.parse(await imports.preview({ kind: 'csv', sourceName: 'fictional.csv', content: 'Name,Email\nFictional Owner,fictional@example.invalid\n' }));
     expect(preview.validCount).toBe(1);
 
-    await receipt(f, await leads.updateField({ personId: owner.personId, field: 'person_name', value: 'Renamed Fictional Owner' }), [owner.personId], [owner.cycleId]);
+    await receipt(f, await legacyLeads.updateField({ personId: owner.personId, field: 'person_name', value: 'Renamed Fictional Owner' }), [owner.personId], [owner.cycleId]);
     expect(await f.runtime.withDatabase(db => db.raw.prepare('SELECT display_name FROM persons WHERE id = ?').get(owner.personId))).toEqual({ display_name: 'Renamed Fictional Owner' });
     await receipt(f, await today.addLeadNote({ personId: owner.personId, salesCycleId: owner.cycleId, text: 'Local readiness note' }), [owner.personId], [owner.cycleId]);
     expect((await detail.get({ personId: owner.personId })).activities.some(activity => JSON.stringify(activity).includes('Local readiness note'))).toBe(true);
@@ -219,7 +228,7 @@ describe('production providers through actual encrypted FoundationRuntime', () =
     await receipt(f, await review.resolve({ kind: 'unmatched_communication', reviewId, expectedVersion: 1, action: 'promote', personId: null, sourceEventId: 'review-inbound' }), ['review-person'], ['review-promoted']);
     expect(await f.runtime.withDatabase(db => db.raw.prepare('SELECT status FROM lifecycle_review_items WHERE id = ?').get(reviewId))).toEqual({ status: 'resolved' });
     const current = await detail.get({ personId: owner.personId });
-    await receipt(f, await detail.dismissLead({ personId: owner.personId, salesCycleId: owner.cycleId, qualificationGateReason: 'out_of_area', expectedRevision: current.revision }), [owner.personId], [owner.cycleId]);
+    await receipt(f, await legacyDetail.dismissLead({ personId: owner.personId, salesCycleId: owner.cycleId, qualificationGateReason: 'out_of_area', expectedRevision: current.revision }), [owner.personId], [owner.cycleId]);
     expect(await f.runtime.withDatabase(db => db.raw.prepare('SELECT stage, workflow_status FROM sales_cycles WHERE id = ?').get(owner.cycleId))).toEqual({ stage: 'lost_nurture', workflow_status: 'closed' });
     expect(f.counts).toMatchObject({ key: 1, open: 1, migrate: 1, initialize: 1, health: 1 });
     await f.runtime.shutdown();
@@ -232,7 +241,7 @@ describe('production providers through actual encrypted FoundationRuntime', () =
     finally { closeDatabase(reopened); }
   });
 
-  it('an actual audited blocked domain refuses all nine gated factories and writes without facade callbacks', async () => {
+  it('an actual audited blocked domain refuses every gated factory and write without facade callbacks', async () => {
     const f = fixture({ blocked: true }); await f.runtime.initialize();
     const health = appHealthSchema.parse(await f.runtime.getHealth());
     expect(health.domainStatus).toBe('blocked'); expect(health.domainReady).toBe(false); expect(health.domainBlockingViolationCount).toBeGreaterThan(0);
@@ -261,12 +270,12 @@ describe('production providers through actual encrypted FoundationRuntime', () =
     } finally { release.resolve(); await lease; }
   });
 
-  it('real preload and default registrars preserve list/write receipts, sender/schema refusal and payload-free Friday reads', async () => {
+  it('real preload and default registrars preserve list and detail reads, sender/schema refusal and payload-free Daily reads, with no person write', async () => {
     const f = fixture(); await f.runtime.initialize(); const owner = await seedReady(f);
     const forbidden = vi.fn(async (): Promise<never> => { throw Error('Unrequested fixture capability'); });
     const unregister = registerApplicationIpc(f.gate, undefined, undefined,
-      { status: forbidden, pollNow: forbidden, retry: forbidden, setHmacSalt: forbidden },
-      { status: forbidden, beginSetup: forbidden, saveSetupMaterial: forbidden, completeSetup: forbidden, selectAndRunRestoreDrill: forbidden });
+      { status: forbidden, beginSetup: forbidden, saveSetupMaterial: forbidden, completeSetup: forbidden, selectAndRunRestoreDrill: forbidden },
+      { revealDatabase: forbidden, revealLogDirectory: forbidden });
     let sender: { senderFrame?: { url: string } } = { senderFrame: { url: 'callie://app/index.html' } };
     const invoke = vi.fn(async (channel: string, ...args: unknown[]) =>
       Reflect.apply(registeredIpcHandler(electron.handle, channel), undefined, [sender, ...args]) as unknown);
@@ -289,36 +298,37 @@ describe('production providers through actual encrypted FoundationRuntime', () =
     try {
       const listed = await api.leads.list({ ...listRequest, query: 'Person ready-person' });
       expect(listed.rows.map(row => row.personId)).toEqual([owner.personId]);
-      const update = { personId: owner.personId, field: 'person_name' as const, value: 'Public Fictional Owner' };
-      await receipt(f, await api.leads.updateField(update), [owner.personId], [owner.cycleId]);
-      expect(await f.runtime.withDatabase(db => db.raw.prepare('SELECT display_name FROM persons WHERE id = ?').get(owner.personId))).toEqual({ display_name: update.value });
-      expect(await unrelatedFacts()).toEqual(unrelatedBefore);
-      expect((await api.leads.list({ ...listRequest, query: 'Person unrelated-person' })).rows).toEqual(unrelatedRowsBefore);
+      const detail = await api.leadDetail.get({ personId: owner.personId });
+      expect(detail).toMatchObject({ personId: owner.personId, salesCycleId: owner.cycleId, activities: [expect.objectContaining({ id: 'ready-call' })] });
       const before = await revision(f), callbacks = f.counts.callback;
       for (const badSender of [{ senderFrame: { url: 'https://untrusted.invalid/' } }, {}]) {
         sender = badSender;
         await expect(api.leads.list(listRequest)).rejects.toThrow('trusted renderer');
-        await expect(api.leads.updateField({ ...update, value: 'Must not write' })).rejects.toThrow('trusted renderer');
+        await expect(api.leadDetail.get({ personId: owner.personId })).rejects.toThrow('trusted renderer');
       }
       sender = { senderFrame: { url: 'callie://app/index.html' } };
       const callsBeforeMalformedPreload = invoke.mock.calls.length;
-      await expect(api.leads.updateField({ ...update, field: 'opted_out' } as never)).rejects.toThrow();
+      await expect(api.leads.list({ ...listRequest, limit: 0 })).rejects.toThrow();
+      await expect(api.leadDetail.get({ personId: '' })).rejects.toThrow();
       expect(invoke.mock.calls).toHaveLength(callsBeforeMalformedPreload);
-      await expect(invoke('leads:update-field', { ...update, extra: true })).rejects.toThrow();
       await expect(invoke('leads:list', { ...listRequest, limit: 0 })).rejects.toThrow();
+      await expect(invoke('lead-detail:get', { personId: owner.personId, extra: true })).rejects.toThrow();
       expect(f.counts.callback).toBe(callbacks); expect(await revision(f)).toBe(before);
+      // The bridge carries only the two person reads, and the registry holds no person command channel.
+      expect(Object.keys(api.leads)).toEqual(['list']);
+      expect(Object.keys(api.leadDetail)).toEqual(['get']);
+      for (const channel of removedPersonChannels) await expect(invoke(channel, {}), channel).rejects.toThrow('was not registered');
       const start = invoke.mock.calls.length;
-      const noPayload = await api.friday.getCurrent();
-      const zero = await api.friday.getCurrent({ weekOffset: 0 });
-      expect(zero).toEqual(noPayload);
-      expect(invoke.mock.calls.slice(start)).toEqual([['friday:get'], ['friday:get', { weekOffset: 0 }]]);
-      const beforeBadFriday = f.counts.callback;
-      await expect(invoke('friday:get', undefined)).rejects.toThrow();
-      await expect(invoke('friday:get', { weekOffset: 0 }, { weekOffset: 0 })).rejects.toThrow('at most one');
-      expect(f.counts.callback).toBe(beforeBadFriday);
+      const snapshot = await api.daily.get();
+      expect(dailySnapshotSchema.safeParse(snapshot).success).toBe(true);
+      expect(invoke.mock.calls.slice(start)).toEqual([['daily:get']]);
+      const beforeBadDaily = f.counts.callback;
+      await expect(invoke('daily:get', undefined)).rejects.toThrow('DAILY_READ_FAILED');
+      await expect(invoke('daily:get', {}, {})).rejects.toThrow('DAILY_READ_FAILED');
+      expect(f.counts.callback).toBe(beforeBadDaily);
       expect(await unrelatedFacts()).toEqual(unrelatedBefore);
       expect((await api.leads.list({ ...listRequest, query: 'Person unrelated-person' })).rows).toEqual(unrelatedRowsBefore);
-      expect(await f.runtime.withDatabase(db => db.raw.prepare('SELECT display_name FROM persons WHERE id = ?').get(owner.personId))).toEqual({ display_name: update.value });
+      expect(await f.runtime.withDatabase(db => db.raw.prepare('SELECT display_name FROM persons WHERE id = ?').get(owner.personId))).toEqual({ display_name: `Person ${owner.personId}` });
       expect(forbidden).not.toHaveBeenCalled();
     } finally { unregister(); unregister(); }
     const registered = electron.handle.mock.calls.map(call => call[0]);

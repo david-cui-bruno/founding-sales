@@ -6,21 +6,29 @@ import { PresentationRoot } from './PresentationRoot';
 import { useModalDialog } from './useModalDialog';
 import { useDismissibleLayer } from './overlayLayers';
 import { CommandPalette } from './commandPalette/CommandPalette';
-import { ImportDialog } from '../features/import/ImportDialog';
-import { Select } from '../components/Select';
 
 beforeEach(() => {
   HTMLDialogElement.prototype.showModal = vi.fn(function(this: HTMLDialogElement) { this.open = true; });
   HTMLDialogElement.prototype.close = vi.fn(function(this: HTMLDialogElement) { this.open = false; });
 });
 afterEach(cleanup);
+/** A nested popover control that consumes Escape while open, as a listbox combobox does. */
+function Choice() {
+  const [open, setOpen] = useState(false);
+  return <>
+    <button type="button" role="combobox" aria-label="Choice" aria-expanded={open} aria-controls="choice-listbox"
+      onClick={() => setOpen(current => !current)}
+      onKeyDown={event => { if (event.key === 'Escape' && open) { event.preventDefault(); setOpen(false); } }}>One</button>
+    {open && <ul id="choice-listbox" role="listbox" aria-label="Choice options"><li role="option" aria-selected="true">One</li><li role="option" aria-selected="false">Two</li></ul>}
+  </>;
+}
 function Modal({ open = true, blocked = false, close, name = 'Feature', returnFocus }: { open?: boolean; blocked?: boolean; close(): void; name?: string; returnFocus?: () => HTMLElement | null }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const modal = useModalDialog({ open, dialogRef, canDismiss: () => !blocked, onDismiss: close, returnFocus, initialFocus: () => dialogRef.current?.querySelector('button') ?? null });
   if (!open) return null;
   return <dialog ref={dialogRef} aria-label={name} onCancel={modal.onCancel} onKeyDown={modal.onKeyDown}>
     <button onClick={() => modal.requestDismiss('close-button')}>Close {name}</button>
-    <Select label="Choice" value="one" onChange={() => undefined} options={[{ value: 'one', label: 'One' }, { value: 'two', label: 'Two' }]} />
+    <Choice />
   </dialog>;
 }
 function Contact({ close, returnFocus, distinct = false }: { close(): void; returnFocus?: () => HTMLElement | null; distinct?: boolean }) {
@@ -57,7 +65,7 @@ describe('useModalDialog', () => {
     expect(second).toHaveBeenCalledTimes(1); expect(first).not.toHaveBeenCalled();
     expect(HTMLDialogElement.prototype.showModal).toHaveBeenCalledTimes(2);
   });
-  it('lets nested Select consume Escape before the dialog and ignores repeat/composition', () => {
+  it('lets a nested open combobox consume Escape before the dialog and ignores repeat/composition', () => {
     const close = vi.fn(); render(<PresentationRoot><Modal close={close} /></PresentationRoot>);
     const choice = screen.getByRole('combobox');
     fireEvent.click(choice);
@@ -82,13 +90,13 @@ describe('useModalDialog', () => {
     fireEvent.keyDown(document, { key: 'Escape' }); expect(close).not.toHaveBeenCalled();
   });
   it('does not open palette over a feature modal', () => {
-    render(<PresentationRoot><CommandPalette navigate={vi.fn()} openImport={vi.fn()} /><Modal close={vi.fn()} /></PresentationRoot>);
+    render(<PresentationRoot><CommandPalette navigate={vi.fn()} /><Modal close={vi.fn()} /></PresentationRoot>);
     fireEvent.keyDown(window, { key: 'k', ctrlKey: true, metaKey: true });
     expect(screen.queryByRole('dialog', { name: 'Command palette' })).toBeNull();
     expect(screen.getAllByRole('dialog')).toHaveLength(1);
   });
   it('does not toggle an existing palette behind a newer feature modal', () => {
-    const tree = (open: boolean) => <PresentationRoot><CommandPalette navigate={vi.fn()} openImport={vi.fn()} /><Modal open={open} close={vi.fn()} /></PresentationRoot>;
+    const tree = (open: boolean) => <PresentationRoot><CommandPalette navigate={vi.fn()} /><Modal open={open} close={vi.fn()} /></PresentationRoot>;
     const view = render(tree(false));
     fireEvent.keyDown(window, { key: 'k', ctrlKey: true, metaKey: true });
     view.rerender(tree(true));
@@ -99,11 +107,12 @@ describe('useModalDialog', () => {
   it('does not steal focus from a palette replacement modal', async () => {
     function Workspace() {
       const [open, setOpen] = useState(false);
-      return <PresentationRoot><button>Opener</button><CommandPalette navigate={vi.fn()} openImport={() => setOpen(true)} /><Modal open={open} close={() => setOpen(false)} /></PresentationRoot>;
+      // A palette command whose destination opens a feature modal in the same turn.
+      return <PresentationRoot><button>Opener</button><CommandPalette navigate={() => setOpen(true)} /><Modal open={open} close={() => setOpen(false)} /></PresentationRoot>;
     }
     render(<Workspace />); screen.getByText('Opener').focus();
     fireEvent.keyDown(window, { key: 'k', ctrlKey: true, metaKey: true });
-    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'Import' } });
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'Settings' } });
     fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' });
     await flushFocus();
     const feature = screen.getByRole('dialog', { name: 'Feature' });
@@ -115,11 +124,9 @@ describe('useModalDialog', () => {
     const view = render(tree(true)); view.rerender(tree(false)); await flushFocus();
     expect(document.activeElement).toBe(screen.getByText('Contact action'));
   });
-  it('uses More rather than a hidden current secondary link, then main if no safe navigation remains', async () => {
-    const tree = (open: boolean, more: boolean) => <PresentationRoot><nav aria-label="Primary"><div hidden><a href="#leads" aria-current="page">Leads</a></div>{more && <button aria-expanded="false">More</button>}</nav><main id="main-content" tabIndex={-1} /><Modal open={open} close={vi.fn()} /></PresentationRoot>;
-    const view = render(tree(true, true)); view.rerender(tree(false, true)); await flushFocus();
-    expect(document.activeElement).toBe(screen.getByText('More'));
-    view.rerender(tree(true, false)); view.rerender(tree(false, false)); await flushFocus();
+  it('skips a hidden current route link and lands on main when no safe navigation remains', async () => {
+    const tree = (open: boolean) => <PresentationRoot><nav aria-label="Primary"><div hidden><a href="#/accounts" aria-current="page">Accounts</a></div></nav><main id="main-content" tabIndex={-1} /><Modal open={open} close={vi.fn()} /></PresentationRoot>;
+    const view = render(tree(true)); view.rerender(tree(false)); await flushFocus();
     expect(document.activeElement).toBe(screen.getByRole('main'));
   });
   it('restores the exact opener inside a surviving parent modal, not its underlying opener', async () => {
@@ -135,22 +142,20 @@ describe('useModalDialog', () => {
     screen.getByText('Contact action').focus(); view.rerender(tree(false, 'second')); await flushFocus();
     expect(document.activeElement).toBe(screen.getByText('Second'));
   });
-  it('hands the actual palette to actual Import without focus theft and preserves the contact underneath', async () => {
-    const api = { preview: vi.fn(), remap: vi.fn(), commit: vi.fn(), status: vi.fn() };
+  it('hands the actual palette to a replacement feature modal without focus theft and preserves the contact underneath', async () => {
     function Workspace() {
       const [open, setOpen] = useState(false);
-      return <PresentationRoot><Contact distinct close={vi.fn()} /><CommandPalette navigate={vi.fn()} openImport={() => setOpen(true)} /><ImportDialog api={api} open={open} onClose={() => setOpen(false)} onCommitted={vi.fn()} /></PresentationRoot>;
+      return <PresentationRoot><Contact distinct close={vi.fn()} /><CommandPalette navigate={() => setOpen(true)} /><Modal open={open} close={() => setOpen(false)} /></PresentationRoot>;
     }
     render(<Workspace />); screen.getByText('Contact action').focus();
     fireEvent.keyDown(window, { key: 'k', ctrlKey: true, metaKey: true });
-    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'Import' } });
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'Settings' } });
     fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' }); await flushFocus();
-    const dialog = screen.getByRole('dialog', { name: 'Import leads' });
+    const dialog = screen.getByRole('dialog', { name: 'Feature' });
     expect(dialog.tagName).toBe('DIALOG'); expect(dialog.contains(document.activeElement)).toBe(true);
     fireEvent.keyDown(dialog, { key: 'Escape' }); await flushFocus();
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(document.activeElement).toBe(screen.getByText('Contact action'));
-    expect(api.commit).not.toHaveBeenCalled();
   });
   it('does not retain a replacement origin after the no-replacement microtask', async () => {
     const tree = (open: boolean) => <PresentationRoot><button>Old opener</button><button>New opener</button><Modal open={open} close={vi.fn()} /></PresentationRoot>;

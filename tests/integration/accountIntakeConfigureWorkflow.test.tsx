@@ -160,7 +160,7 @@ const panel = () => within(screen.getByRole('region', { name: 'Intake configurat
 const button = (name: string) => panel().getByRole('button', { name }) as HTMLButtonElement;
 /** The Campaigns surface, one company reviewed, then the explicit intake read. */
 async function openIntake(w: Worker, d: Desktop) {
-  render(<PresentationRoot><NativeDeskRoute api={d.api} firstUse={d.firstUse} surface="campaigns" onOpenLead={vi.fn()} onOpenImport={vi.fn()} /></PresentationRoot>);
+  render(<PresentationRoot><NativeDeskRoute api={d.api} firstUse={d.firstUse} surface="campaigns" /></PresentationRoot>);
   fireEvent.click(await screen.findByRole('button', { name: 'New call campaign' }));
   fireEvent.change(screen.getByLabelText('Company'), { target: { value: w.accountId } });
   fireEvent.click(screen.getByRole('button', { name: 'Review worker preparation' }));

@@ -4,11 +4,9 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AppHealth } from '../../shared/healthContract';
-import type { SourcingStatus } from '../../shared/contracts/sourcingContract';
 import type { DensityState } from '../app/useDensity';
 import type { ThemeState } from '../app/useTheme';
 import { SettingsScreen } from './SettingsScreen';
-import { formatRelativeLastPoll, SourcingStatusRow } from './SourcingStatusRow';
 
 const health: AppHealth = {
   appVersion: '1.2.3',
@@ -26,15 +24,6 @@ const health: AppHealth = {
   domainProjectionRefreshCandidateCount: 0,
   pendingProjectionRebuilds: 0,
   domainStartupEvaluatedAt: '2026-08-30T12:00:00.000Z',
-  operationalStatus: 'ready',
-  sourcing: {
-    status: 'healthy', reasons: [], lastSuccessAgeMs: null,
-    state: {
-      state: 'idle', pollId: null, startedAt: null, lastCompletedAt: null,
-      consecutiveFailures: 0, lastFailureAt: null, lastFailureCode: null,
-      backlogCount: null,
-    },
-  },
 };
 
 const theme: ThemeState = {
@@ -68,20 +57,6 @@ afterEach(() => {
 });
 
 describe('SettingsScreen', () => {
-  it.each([
-    ['healthy', null, 'Not checked'],
-    ['healthy', '2026-09-10T15:00:00.000Z', 'No sourcing degradation reported'],
-    ['degraded', '2026-09-10T15:00:00.000Z', 'Sourcing degradation reported'],
-  ] as const)('reports sourcing %s completed=%s without a whole-product readiness claim', (status, lastCompletedAt, label) => {
-    renderSettings({ state: { status: 'ready', health: { ...health, sourcing: { ...health.sourcing, status, state: { ...health.sourcing.state, lastCompletedAt } } } } });
-    expect(screen.getByText('Sourcing monitor')).toBeTruthy();
-    expect(screen.getByText(label)).toBeTruthy();
-    expect(screen.queryByText(/Operations ready|Operations degraded/)).toBeNull();
-    expect(screen.getByText('Last read time unavailable')).toBeTruthy();
-    expect(screen.getByText(health.domainStartupEvaluatedAt)).toBeTruthy();
-    if (lastCompletedAt) expect(screen.getByText(lastCompletedAt)).toBeTruthy();
-  });
-
   it('keeps renderer read time distinct and stale while explicit Refresh invokes only its callback', () => {
     const onRetry = vi.fn();
     const observation = { checkedAt: '2026-09-10T16:00:00.000Z', refreshing: false, refreshFailed: true };
@@ -93,16 +68,14 @@ describe('SettingsScreen', () => {
     expect(onRetry).toHaveBeenCalledTimes(1);
   });
 
-  it('renders a master-detail with six sections and Diagnostics selected by default', () => {
+  it('renders a master-detail with nine sections and Diagnostics selected by default', () => {
     renderSettings();
 
     const sections = screen.getByRole('navigation', { name: 'Settings sections' });
-    for (const label of [
-      'Appearance', 'Data & storage', 'Sourcing',
-      'Diagnostics', 'Keyboard shortcuts', 'About',
-    ]) {
-      expect(within(sections).getByRole('button', { name: label })).toBeTruthy();
-    }
+    expect(within(sections).getAllByRole('button').map(button => button.textContent)).toEqual([
+      'Connections', 'Phone', 'Call capacity', 'Worker connection', 'Appearance',
+      'Data & storage', 'Diagnostics', 'Keyboard shortcuts', 'About',
+    ]);
 
     // Diagnostics is the default detail: its exact strings are visible
     // without a click, and the other sections stay unrendered.
@@ -130,8 +103,11 @@ describe('SettingsScreen', () => {
       screen.getByRole('button', { name: 'Diagnostics' }).getAttribute('aria-current'),
     ).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Sourcing' }));
-    expect(screen.getByRole('region', { name: 'Sourcing' })).toBeTruthy();
+    // Cloud research setup lives under Worker connection; there is no Sourcing section.
+    fireEvent.click(screen.getByRole('button', { name: 'Worker connection' }));
+    expect(screen.getByRole('region', { name: 'Worker connection' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Cloud research' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Sourcing' })).toBeNull();
     expect(screen.queryByRole('region', { name: 'Appearance' })).toBeNull();
   });
 
@@ -141,9 +117,12 @@ describe('SettingsScreen', () => {
     expect(screen.getByText('Encrypted SQLite ready')).toBeTruthy();
     expect(screen.getByText('FTS5 available')).toBeTruthy();
     expect(screen.getByText('Schema 9')).toBeTruthy();
-    expect(screen.getByText('Sourcing monitor')).toBeTruthy();
-    expect(screen.getByText('Not checked')).toBeTruthy();
-    expect(screen.queryByText('Operations ready')).toBeNull();
+    expect(screen.getByText(health.domainStartupEvaluatedAt)).toBeTruthy();
+    expect(screen.getByText('Last read time unavailable')).toBeTruthy();
+    // Diagnostics reports foundation facts only: no whole-product readiness
+    // claim and no sourcing monitor rows.
+    expect(screen.queryByText(/Operations ready|Operations degraded/)).toBeNull();
+    expect(screen.queryByText('Sourcing monitor')).toBeNull();
   });
 
   it('shows the database path in monospace with copy and reveal actions', async () => {
@@ -190,15 +169,19 @@ describe('SettingsScreen', () => {
     renderSettings();
 
     fireEvent.click(screen.getByRole('button', { name: 'Keyboard shortcuts' }));
-    expect(screen.getByText('Cmd/Ctrl+K')).toBeTruthy();
-    expect(screen.getByText('Legacy Today rows')).toBeTruthy();
-    expect(screen.getByText('Native Desk rows')).toBeTruthy();
-    expect(screen.getByText('Leads rows')).toBeTruthy();
-    expect(screen.queryByText('E / H / P')).toBeNull();
     const shortcuts = screen.getByRole('region', { name: 'Keyboard shortcuts' });
-    expect(shortcuts.textContent).toContain('Friday, Inbox');
-    expect(shortcuts.textContent).not.toContain('Friday, Review');
-    expect(shortcuts.textContent).toContain('tomorrow 09:00 local');
+    // Four rows: the company routes, Settings, the palette and Native Desk rows.
+    expect(within(shortcuts).getAllByRole('rowheader').map(row => row.textContent)).toEqual([
+      'Cmd/Ctrl+1 – Cmd/Ctrl+3', 'Cmd/Ctrl+,', 'Cmd/Ctrl+K', 'J / K / arrows · Enter · Escape',
+    ]);
+    expect(shortcuts.textContent).toContain('Go to Today, Accounts, Campaigns');
+    expect(screen.getByText('Native Desk rows')).toBeTruthy();
+    // The legacy person surfaces are gone, so the cheat sheet no longer advertises them.
+    expect(screen.queryByText('Legacy Today rows')).toBeNull();
+    expect(screen.queryByText('Leads rows')).toBeNull();
+    expect(screen.queryByText('E / H / P')).toBeNull();
+    expect(shortcuts.textContent).not.toContain('Friday');
+    expect(shortcuts.textContent).not.toContain('Inbox');
     expect(shortcuts.textContent).toContain('Editing fields and open overlays own their keys');
 
     fireEvent.click(screen.getByRole('button', { name: 'About' }));
@@ -214,169 +197,6 @@ describe('SettingsScreen', () => {
       'The diagnostic read could not be completed',
     );
     expect(screen.getByText('DIAGNOSTIC_READ_FAILED')).toBeTruthy();
-  });
-});
-
-describe('SourcingStatusRow', () => {
-  const sourcingStatus: SourcingStatus = {
-    lastPolledAt: '2026-08-31T15:00:00.000Z',
-    lastKey: null as string | null,
-    backlogCount: null as number | null,
-    counters: {
-      imported: 4, replayed: 1, needsIdentity: 2, scoreUpdates: 3, quarantined: 0,
-    },
-    credentialState: 'keychain' as const,
-    hmacSaltState: 'set' as const,
-    execution: {
-      state: 'idle' as const, pollId: null, startedAt: null,
-      lastCompletedAt: '2026-08-31T15:00:00.000Z', consecutiveFailures: 0,
-      lastFailureAt: null, lastFailureCode: null, backlogCount: 0,
-    },
-    health: {
-      status: 'healthy' as const, reasons: [], lastSuccessAgeMs: 0,
-      state: {
-        state: 'idle' as const, pollId: null, startedAt: null,
-        lastCompletedAt: '2026-08-31T15:00:00.000Z', consecutiveFailures: 0,
-        lastFailureAt: null, lastFailureCode: null, backlogCount: 0,
-      },
-    },
-  };
-
-  it('renders a success badge for keychain credentials with the counters', async () => {
-    render(
-      <SourcingStatusRow
-        api={{ status: vi.fn(async () => sourcingStatus), retry: vi.fn(async () => sourcingStatus) }}
-      />,
-    );
-
-    const badge = await screen.findByText(/^Sourcing inbox: keychain, last success/);
-    expect(badge.closest('.status-badge--success')).not.toBeNull();
-    expect(screen.getByText('Imported')).toBeTruthy();
-    expect(screen.getByText('Quarantined')).toBeTruthy();
-    expect(screen.getByText('4')).toBeTruthy();
-  });
-
-  it('renders warning for file credentials and danger for none', async () => {
-    const { unmount } = render(
-      <SourcingStatusRow
-        api={{
-          status: vi.fn(async () => ({
-            ...sourcingStatus, credentialState: 'file' as const,
-          })),
-          retry: vi.fn(async () => ({
-            ...sourcingStatus, credentialState: 'file' as const,
-          })),
-        }}
-      />,
-    );
-    const fileBadge = await screen.findByText(/^Sourcing inbox: file/);
-    expect(fileBadge.closest('.status-badge--warning')).not.toBeNull();
-    unmount();
-
-    render(
-      <SourcingStatusRow
-        api={{
-          status: vi.fn(async () => ({
-            ...sourcingStatus,
-            credentialState: 'none' as const,
-            lastPolledAt: null,
-          })),
-          retry: vi.fn(async () => sourcingStatus),
-        }}
-      />,
-    );
-    const noneBadge = await screen.findByText(
-      /^Sourcing inbox: none, last success/,
-    );
-    expect(noneBadge.closest('.status-badge--danger')).not.toBeNull();
-  });
-
-  it('never blocks settings on a sourcing failure', async () => {
-    render(
-      <SourcingStatusRow
-        api={{
-          status: vi.fn(async () => { throw new Error('boom'); }),
-          retry: vi.fn(async () => { throw new Error('boom'); }),
-        }}
-      />,
-    );
-
-    expect(await screen.findByText('Sourcing inbox: unavailable')).toBeTruthy();
-  });
-
-  it('refreshes at a one-minute cadence and immediately after Retry', async () => {
-    const interval = vi.spyOn(globalThis, 'setInterval').mockImplementation(() => 1 as never);
-    vi.spyOn(globalThis, 'clearInterval').mockImplementation(() => undefined);
-    let resolveInitial!: (value: typeof sourcingStatus) => void;
-    const initial = new Promise<typeof sourcingStatus>((resolve) => {
-      resolveInitial = resolve;
-    });
-    const status = vi.fn()
-      .mockReturnValueOnce(initial)
-      .mockResolvedValue(sourcingStatus);
-    let resolveRetry!: (value: typeof sourcingStatus) => void;
-    const retry = vi.fn(() => new Promise<typeof sourcingStatus>((resolve) => {
-      resolveRetry = resolve;
-    }));
-    const api = { status, retry };
-    render(<SourcingStatusRow api={api} />);
-    expect(status).toHaveBeenCalledTimes(1);
-    expect(interval).toHaveBeenCalledWith(expect.any(Function), 60_000);
-    await act(async () => {
-      resolveInitial(sourcingStatus);
-      await initial;
-      await Promise.resolve();
-    });
-    await screen.findByText(/^Sourcing inbox: keychain, last success/);
-
-    fireEvent.click(screen.getByRole('button', { name: 'Retry sourcing poll' }));
-    expect(retry).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole('button', { name: 'Retrying…' }).hasAttribute('disabled')).toBe(true);
-    resolveRetry(sourcingStatus);
-    await waitFor(() => expect(status).toHaveBeenCalledTimes(2));
-  });
-
-  it('allows accessible Retry for an expired running owner while coalescing a fresh one', async () => {
-    vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-09-01T12:15:00.001Z'));
-    const retry = vi.fn(async () => sourcingStatus);
-    const expiredRunning: SourcingStatus = {
-      ...sourcingStatus,
-      execution: {
-        ...sourcingStatus.execution,
-        state: 'running',
-        pollId: 'expired-poll',
-        startedAt: '2026-09-01T12:00:00.000Z',
-      },
-      health: {
-        ...sourcingStatus.health,
-        status: 'degraded',
-        reasons: ['POLL_EXCEEDED_TOTAL_DEADLINE'],
-        state: {
-          ...sourcingStatus.health.state,
-          state: 'running',
-          pollId: 'expired-poll',
-          startedAt: '2026-09-01T12:00:00.000Z',
-        },
-      },
-    };
-    render(<SourcingStatusRow api={{ status: async () => expiredRunning, retry }} />);
-
-    const button = await screen.findByRole('button', { name: 'Retry sourcing poll' });
-    expect(button.hasAttribute('disabled')).toBe(false);
-    fireEvent.click(button);
-    await waitFor(() => expect(retry).toHaveBeenCalledTimes(1));
-  });
-});
-
-describe('formatRelativeLastPoll', () => {
-  const now = () => Date.parse('2026-08-31T15:00:00.000Z');
-
-  it('formats never, just now, minutes, hours, and days', () => {
-    expect(formatRelativeLastPoll(null, now)).toBe('never');
-    expect(formatRelativeLastPoll('2026-08-31T14:59:40.000Z', now)).toBe('just now');
-    expect(formatRelativeLastPoll('2026-08-31T14:45:00.000Z', now)).toBe('15m ago');
-    expect(formatRelativeLastPoll('2026-08-31T12:00:00.000Z', now)).toBe('3h ago');
-    expect(formatRelativeLastPoll('2026-08-28T15:00:00.000Z', now)).toBe('3d ago');
   });
 });
 
@@ -615,7 +435,7 @@ describe('Local workflow transition', () => {
 });
 
 
-// Task8 additions. All original bytes above are retained verbatim.
+// Task8 additions.
 // New production modules are deliberately NOT imported at top level: the first
 // case reaches a behavioral missing-Phone RED in this existing test root.
 import type { PhoneSetupApi, PhoneSetupStatus } from '../../shared/contracts/phoneSetupContract';
@@ -693,24 +513,11 @@ function task8RouteFixture(phoneSetup = task8Phone()) {
     ...native.api,
     health: { get: vi.fn(async () => health) },
     phoneSetup,
-    discovery: { get: deny('discovery.get'), getBrief: deny('discovery.getBrief'), begin: deny('discovery.begin'), override: deny('discovery.override') },
     outreach: {
       status: deny('outreach.status'), inspectLocalAuthority: deny('outreach.inspectLocalAuthority'),
       configure: deny('outreach.configure'), connectGmail: deny('outreach.connectGmail'), disconnectGmail: deny('outreach.disconnectGmail'),
       openDraft: deny('outreach.openDraft'), saveDraft: deny('outreach.saveDraft'), generateDraft: deny('outreach.generateDraft'), sendDraft: deny('outreach.sendDraft'),
     },
-    today: {
-      get: deny('today.get'), complete: deny('today.complete'), snooze: deny('today.snooze'), pin: deny('today.pin'),
-      logPastActivity: deny('today.logPastActivity'), getLeadTriageSnapshot: deny('today.getLeadTriageSnapshot'), addLeadNote: deny('today.addLeadNote'),
-      logCallOutcome: deny('today.logCallOutcome'), markActivityInError: deny('today.markActivityInError'), getTriageQueue: deny('today.getTriageQueue'), setReviewPosition: deny('today.setReviewPosition'),
-    },
-    pipeline: { get: deny('pipeline.get') },
-    review: { list: deny('review.list'), resolve: deny('review.resolve') },
-    friday: { getCurrent: deny('friday.getCurrent'), getDrilldown: deny('friday.getDrilldown'), createJob: deny('friday.createJob'), fillJob: deny('friday.fillJob'), cancelJob: deny('friday.cancelJob') },
-    imports: { preview: deny('imports.preview'), remap: deny('imports.remap'), commit: deny('imports.commit'), status: deny('imports.status') },
-    conversations: { list: deny('conversations.list'), get: deny('conversations.get'), attachTranscript: deny('conversations.attachTranscript') },
-    learnings: { list: deny('learnings.list'), capture: deny('learnings.capture'), addEvidence: deny('learnings.addEvidence'), updateStatus: deny('learnings.updateStatus') },
-    sourcing: { pollNow: deny('sourcing.pollNow'), status: deny('sourcing.status'), retry: deny('sourcing.retry'), setHmacSalt: deny('sourcing.setHmacSalt') },
     shell: { revealDatabase: deny('shell.revealDatabase'), revealLogDirectory: deny('shell.revealLogDirectory') },
     recovery: { status: deny('recovery.status'), beginSetup: deny('recovery.beginSetup'), saveSetupMaterial: deny('recovery.saveSetupMaterial'), completeSetup: deny('recovery.completeSetup'), selectAndRunRestoreDrill: deny('recovery.selectAndRunRestoreDrill') },
     appleSpike: {
@@ -721,8 +528,6 @@ function task8RouteFixture(phoneSetup = task8Phone()) {
   };
   const context: RouteContext = {
     api, firstUse: firstUseFixture(), health: { status: 'ready', health, retry: vi.fn() }, theme, density,
-    openLead: vi.fn(), openImport: vi.fn(), onReviewRequestStart: () => Symbol('task8-review'),
-    onReviewRequestFailed: vi.fn(), onReviewSnapshot: vi.fn(), onReviewResolved: vi.fn(),
   };
   const assertReadOnly = () => {
     expect(forbidden).toEqual([]);
@@ -815,7 +620,7 @@ describe('Task8 real Settings destination integration', () => {
   }), 10_000);
 
   it.each([
-    ['call-capacity', 'Call capacity'], ['appearance', 'Appearance'], ['data', 'Data & storage'], ['sourcing', 'Sourcing'],
+    ['call-capacity', 'Call capacity'], ['appearance', 'Appearance'], ['data', 'Data & storage'], ['worker', 'Worker connection'],
     ['diagnostics', 'Diagnostics'], ['shortcuts', 'Keyboard shortcuts'], ['about', 'About'], ['connections', 'Connections'],
   ] as const)('implemented %s remains selectable through validated event and rail', async (id, label) => task8Isolated(async () => {
     sessionStorage.setItem(task8Key, id);
@@ -942,9 +747,8 @@ describe('Task8 real Settings destination integration', () => {
 });
 
 
-// Task9 append-only additions. Accepted Task8 prefix is byte-for-byte unchanged.
+// Task9 additions.
 // No import of WorkerSetupSection here: baseline S01 collects in this existing root.
-import { OutboundComposer } from '../features/leadInspector/OutboundComposer';
 
 type Task9Api = Pick<CalliePreloadApi['delegation'], 'status' | 'pair'>;
 type Task9Status = Awaited<ReturnType<Task9Api['status']>>;
@@ -1023,7 +827,6 @@ function task9RouteFixture(worker = task9Api()) {
       ...base.api.localWorkspace, researchCompany: deny('localWorkspace.researchCompany'), reviewCompany: deny('localWorkspace.reviewCompany'),
       createCompany: deny('localWorkspace.createCompany'), linkCompanyPerson: deny('localWorkspace.linkCompanyPerson'), transition: deny('localWorkspace.transition'),
     },
-    leadDetail: { ...base.api.leadDetail, beginOutbound: deny('leadDetail.beginOutbound'), confirmTransition: deny('leadDetail.confirmTransition'), findContactInfo: deny('leadDetail.findContactInfo') },
   };
   const context: RouteContext = { ...base.context, api };
   const assertNoActivation = () => {
@@ -1053,13 +856,6 @@ async function task9Hold(which: 'details' | 'welcome') {
   await waitFor(() => expect(location.hash).toBe('#/settings'));
   await task9Controls(); expect(sessionStorage.getItem(task8Key)).toBeNull();
 }
-function Task9ComposerRoutes({ context }: { context: RouteContext }) {
-  const { route } = useHashRoute('today');
-  // Actual existing composer is the source surface, never a fake Settings route.
-  return <PresentationRoot>{route === 'settings' ? renderRoute(route, context) :
-    <OutboundComposer channel="email" recipientLabel="person@fixture.invalid" personId="fictional-person" contactMethodId="fictional-email" api={context.api.outreach} onClose={vi.fn()} />}</PresentationRoot>;
-}
-
 describe('Task9 real Settings destination integration', () => {
   it('S01 baseline behavioral RED: real Settings exposes Worker fields without eagerly importing missing Worker module', async () => task9Isolated(async () => {
     const a = task9Api(); task9Settings(a);
@@ -1105,32 +901,6 @@ describe('Task9 real Settings destination integration', () => {
     task9Settings(); fireEvent.click(screen.getByRole('button', { name: 'Worker connection' }));
     await task9Controls('Unavailable'); expect(f.worker.status).not.toHaveBeenCalled(); expect(f.worker.pair).not.toHaveBeenCalled();
     expect(screen.queryByText('Unconfigured', { exact: true })).toBeNull(); f.assertNoActivation();
-  }), 10_000);
-
-  it('S05 actual existing Composer Settings → Connections anchor still reaches Gmail/model controls, not Worker', async () => task9Isolated(async () => {
-    location.hash = '#/today'; const f = task9RouteFixture();
-    const draft: import('../../shared/contracts/outreachContract').EmailDraft = {
-      id: 'fictional-draft', personId: 'fictional-person', salesCycleId: 'fictional-cycle', contactMethodId: 'fictional-email',
-      recipient: 'person@fixture.invalid', subject: 'Unsent fictional draft', body: 'Fictional local text', revision: 1,
-      status: 'draft', generation: 'none', messageId: null, notice: null, updatedAt: task8Time,
-    };
-    const openDraft = vi.fn<CalliePreloadApi['outreach']['openDraft']>(async () => draft);
-    const outreachRead = vi.fn<CalliePreloadApi['outreach']['status']>(async () => outreachStatus);
-    const inspectLocalAuthority = vi.fn<CalliePreloadApi['outreach']['inspectLocalAuthority']>(async () => ({
-      draftId: draft.id, expectedRevision: draft.revision, personId: draft.personId, contactMethodId: draft.contactMethodId,
-      state: 'held', reason: 'email_authority_unavailable', checkedAt: task8Time,
-    }));
-    const api: CalliePreloadApi = { ...f.api, outreach: { ...f.api.outreach, openDraft, status: outreachRead, inspectLocalAuthority } };
-    render(<Task9ComposerRoutes context={{ ...f.context, api }} />);
-    await waitFor(() => expect(openDraft).toHaveBeenCalledWith({ personId: draft.personId, contactMethodId: draft.contactMethodId }));
-    await waitFor(() => expect(inspectLocalAuthority).toHaveBeenCalled());
-    const anchor = screen.getByRole('link', { name: 'Settings → Connections' }); expect(anchor.getAttribute('href')).toBe('#/settings');
-    fireEvent.click(anchor); await waitFor(() => expect(location.hash).toBe('#/settings'));
-    await screen.findByLabelText('OpenAI API key'); task8Active('Connections');
-    expect(screen.getByLabelText('OpenAI model')).toBeTruthy(); expect(screen.getByRole('button', { name: 'Connect Gmail' })).toBeTruthy();
-    expect(screen.queryByRole('region', { name: 'Worker connection' })).toBeNull();
-    expect(f.worker.status).not.toHaveBeenCalled(); expect(f.worker.pair).not.toHaveBeenCalled();
-    expect(sessionStorage.getItem(task8Key)).toBeNull(); f.assertNoActivation();
   }), 10_000);
 
   it('S06 existing real Phone hold remains Phone when Worker is implemented', async () => task9Isolated(async () => {
@@ -1246,7 +1016,7 @@ describe('Call capacity Settings integration', () => {
       native.setSnapshot(dailyFixture({ answers: [], callSettings: { newCallSlots: stored.newCallSlots, totalCallCapacity: stored.totalCallCapacity } })); return stored;
     };
     render(<PresentationRoot><SettingsScreen state={{ status: 'ready', health }} onRetry={vi.fn()} theme={theme} density={density} localWorkspaceApi={native.api.localWorkspace} />
-      <NativeDeskRoute api={native.api} firstUse={firstUseFixture()} onOpenLead={vi.fn()} onOpenImport={vi.fn()} /></PresentationRoot>);
+      <NativeDeskRoute api={native.api} firstUse={firstUseFixture()} /></PresentationRoot>);
     await screen.findByRole('button', { name: 'Call · Account A' });
     const count = (method: string) => native.calls.filter(call => call.method === method).length;
     const before = ['daily.get', 'localWorkspace.get', 'localWorkspace.getCommitments'].map(count);

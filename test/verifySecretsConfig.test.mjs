@@ -33,10 +33,10 @@ it('limits the public-regex disposition to the exact 58-byte definition, path an
   expect(config.split(selfMarker)[1].split(inventoryMarker)[0]).toBe(`, not a credential or a file waiver.\n[[allowlists]]\ndescription = "Exact pinned public Bedrock detector definition only"\ntargetRules = ["aws-amazon-bedrock-api-key-short-lived"]\ncondition = "AND"\npaths = ['''\\A\\.gitleaks\\.toml\\z''']\nregexTarget = "line"\nregexes = ['''\\A\\n?${encoded}\\z''']\n`);
 });
 
-it('limits the public API-name exception to the exact 147-byte inventory, path and rule', () => {
+it('limits the public API-name exception to the exact 152-byte inventory, path and rule', () => {
   const line = readFileSync(new URL('../tests/integration/appleSpikePreload.test.ts', import.meta.url), 'utf8').split('\n').find(value => value.includes("'localWorkspace'"));
-  expect(Buffer.byteLength(line)).toBe(147);
-  expect(sha256(line)).toBe('34f77d763883e912c8f55ad22b3601b5443fa83292859fd6aa6ff2c52dda3282');
+  expect(Buffer.byteLength(line)).toBe(152);
+  expect(sha256(line)).toBe('88edd0efeb23ba4bff5c576c4deacc405d2e5452933eeb40d33467502e8ad14e');
   const encoded = [...Buffer.from(line)].map(byte => `\\x${byte.toString(16).padStart(2, '0')}`).join('');
   expect(config.split(inventoryMarker)[1]).toBe(`, not a credential or a file waiver.\n[[allowlists]]\ndescription = "Exact public preload namespace inventory only"\ntargetRules = ["linkedin-client-id"]\ncondition = "AND"\npaths = ['''\\Atests/integration/appleSpikePreload\\.test\\.ts\\z''']\nregexTarget = "line"\nregexes = ['''\\A\\n?${encoded}\\z''']\n`);
 });

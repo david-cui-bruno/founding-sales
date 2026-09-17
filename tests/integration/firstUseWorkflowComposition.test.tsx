@@ -10,6 +10,7 @@ import { localCompanyCreateResultSchema } from '../../src/shared/contracts/local
 import { localCompanyResearchStatusSchema } from '../../src/shared/contracts/localWorkspaceContract';
 import { emailDraftSchema } from '../../src/shared/contracts/outreachContract';
 import { createFirstUseDomainFixture, firstUsePages } from '../fixtures/firstUseDomainFixture';
+import { createImportProvider } from '../fixtures/legacyDomainProviders';
 import type { RegisteredIpcHandler } from '../fixtures/registeredIpcHandler';
 
 const transport = vi.hoisted(() => ({ handlers: new Map<string, RegisteredIpcHandler>(), registered: [] as string[], removed: [] as string[], nativeCalls: 0 }));
@@ -120,23 +121,24 @@ it.each(['manual', 'model'] as const)('takes an empty encrypted workspace throug
     await click('Check status');
     expect(f.pages).toEqual(Object.keys(firstUsePages));
 
-    // The global importer, not a seed or fixture-generated person ID. A nonstandard
-    // header requires an actual remap before the explicit admission click.
-    await click('Import named person');
-    change('Paste spreadsheet rows', 'Name\tPersonal mailbox\tOrganization\nMaya Ortiz\tmaya@selected.invalid\tSelected Management');
-    await click('Preview rows');
-    change('Personal mailbox', 'email');
-    await waitFor(() => expect((screen.getByRole('button', { name: 'Import 1 row' }) as HTMLButtonElement).disabled).toBe(false));
+    // The CSV person importer left the desktop with the legacy routes, so the same single
+    // identity is admitted through the retained domain import facade (test-only gate, no IPC
+    // channel). The nonstandard header still needs an explicit remap before the commit, and
+    // the reviewed link below still starts from a stored person, not a fixture-generated ID.
+    const imports = createImportProvider(f.runtime);
+    const preview = await imports.preview({ kind: 'spreadsheet_paste', sourceName: 'first-use.tsv',
+      content: 'Name\tPersonal mailbox\tOrganization\nMaya Ortiz\tmaya@selected.invalid\tSelected Management' });
+    const remapped = await imports.remap({ previewId: preview.previewId, contentHash: preview.contentHash,
+      mapping: { ...preview.suggestedMapping, 'Personal mailbox': 'email' } });
     await countsEmpty(['persons', 'person_contact_methods']);
-    await click('Import 1 row');
-    await waitFor(() => expect(screen.getByText('Imported 1 row.')).toBeTruthy());
-    const receipt = importCommitReceiptSchema.parse(calls('imports:commit')[0]?.result);
+    const receipt = importCommitReceiptSchema.parse(await imports.commit({ previewId: remapped.previewId, contentHash: remapped.contentHash,
+      mapping: remapped.suggestedMapping, source: { channel: 'custom', referredByPersonId: null }, duplicateDecisions: [] }));
     expect(receipt.importedPersonIds).toHaveLength(1);
     expect(await rows('persons')).toHaveLength(1);
     expect(await rows('source_intake_receipts')).toHaveLength(1);
-    expect(calls('imports:remap').length).toBeGreaterThan(0);
+    expect(transport.registered.filter(channel => channel.startsWith('imports:'))).toEqual([]);
+    expect(screen.queryByRole('button', { name: 'Import named person' })).toBeNull();
     const personId = receipt.importedPersonIds[0];
-    await click('Done');
     await click('Find saved person');
     await click(`Select Maya Ortiz · ${personId}`);
     const person = await api.leadDetail.get({ personId });
@@ -154,7 +156,7 @@ it.each(['manual', 'model'] as const)('takes an empty encrypted workspace throug
     await waitFor(() => expect((screen.getByRole('button', { name: 'Link saved person' }) as HTMLButtonElement).disabled).toBe(false));
     const contactsBeforeLink = await rows('person_contact_methods');
     await click('Link saved person');
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Open saved contact' })).toBeTruthy());
+    await screen.findByText(`${personId} · Property manager · Property manager at Selected Management`);
     const linked = await api.localWorkspace.getCompany({ accountId });
     expect(linked.links).toEqual([expect.objectContaining({ personId, authority: 'unconfirmed', authorityEvidenceIds: [], evidenceIds: [team.id] })]);
     expect(linked.sources).toEqual(researched.sources);
@@ -163,14 +165,15 @@ it.each(['manual', 'model'] as const)('takes an empty encrypted workspace throug
     expect(calls('local-workspace:link-company-person')[0].args).toEqual([expect.objectContaining({ accountId,
       expectedVersion: 2, sourceQuotes: [{ sourceId: team.id, quote }], link: expect.objectContaining({ personId }) })]);
 
-    await click('Open saved contact');
-    await waitFor(() => expect(screen.getByRole('complementary', { name: 'Maya Ortiz details' })).toBeTruthy());
-    await click('Email');
-    await waitFor(() => expect((screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement).disabled).toBe(false));
+    // The lead inspector and its person composer left with the legacy routes; the desktop keeps
+    // the company draft panel as its only composer. The retained outreach preload namespace still
+    // opens and saves the person-level draft through the same validated IPC, without any renderer.
+    expect(screen.queryByRole('button', { name: 'Open saved contact' })).toBeNull();
+    expect(screen.queryByRole('complementary', { name: 'Maya Ortiz details' })).toBeNull();
+    const opened = emailDraftSchema.parse(await api.outreach.openDraft({ personId, contactMethodId }));
     expect(calls('outreach:open-draft')[0].args).toEqual([{ personId, contactMethodId }]);
     if (mode === 'model') {
-      expect((screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement).value).toBe(preparedBody);
-      expect(emailDraftSchema.parse(calls('outreach:open-draft')[0].result)).toMatchObject({ generation: 'model', body: preparedBody, notice: null });
+      expect(opened).toMatchObject({ generation: 'model', body: preparedBody, notice: null });
       expect(f.modelRequests).toHaveLength(1);
       const supplied = f.modelRequests[0];
       expect(supplied).toMatchObject({ url: 'https://api.openai.com/v1/responses', model: 'first-use-fixture-model', store: false,
@@ -188,19 +191,15 @@ it.each(['manual', 'model'] as const)('takes an empty encrypted workspace throug
       expect(calls('outreach:save-draft')).toHaveLength(0);
     } else {
       expect(f.modelRequests).toEqual([]);
-      expect((screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement).value).toBe('');
+      expect(opened.body).toBe('');
     }
-    change('Subject', 'A local introduction');
-    change('Message', 'Maya, I would like to discuss your residential portfolio. This is an unsent local draft.');
-    await click('Save draft');
-    const saved = emailDraftSchema.parse(calls('outreach:save-draft').at(-1)?.result);
+    const saved = emailDraftSchema.parse(await api.outreach.saveDraft({ draftId: opened.id, expectedRevision: opened.revision,
+      subject: 'A local introduction', body: 'Maya, I would like to discuss your residential portfolio. This is an unsent local draft.' }));
+    expect(emailDraftSchema.parse(calls('outreach:save-draft').at(-1)?.result)).toEqual(saved);
     expect(saved).toMatchObject({ personId, contactMethodId, recipient: 'maya@selected.invalid',
       subject: 'A local introduction', status: 'draft', generation: 'edited' });
-    expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true);
     expect(await api.outreach.inspectLocalAuthority({ draftId: saved.id, expectedRevision: saved.revision })).toMatchObject({
       personId, contactMethodId, state: 'held', reason: 'email_authority_unavailable' });
-    await click('Close draft');
-    await click('Close inspector');
     // Unmount the entire application so reopening cannot pass on visible component
     // state alone. Its next open must return the same real persisted draft via IPC.
     await act(async () => { cleanup(); await f.drain(); });
@@ -208,25 +207,21 @@ it.each(['manual', 'model'] as const)('takes an empty encrypted workspace throug
     await waitFor(() => expect(screen.getByRole('button', { name: 'Add company' })).toBeTruthy());
     // Re-select the company through its public UI after owner replacement.
     await click('Local account · Selected Management');
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Open saved contact' })).toBeTruthy());
-    await click('Open saved contact');
-    await click('Email');
-    await waitFor(() => expect((screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement).value).toBe(saved.body));
-    expect((screen.getByRole('textbox', { name: 'Subject' }) as HTMLInputElement).value).toBe(saved.subject);
+    await screen.findByText(`${personId} · Property manager · Property manager at Selected Management`);
+    expect(screen.queryByRole('button', { name: 'Open saved contact' })).toBeNull();
+    const reopened = emailDraftSchema.parse(await api.outreach.openDraft({ personId, contactMethodId }));
     expect(calls('outreach:open-draft')).toHaveLength(2);
     expect(f.modelRequests).toHaveLength(mode === 'model' ? 1 : 0);
-    const reopened = emailDraftSchema.parse(calls('outreach:open-draft').at(-1)?.result);
     expect(reopened).toEqual(saved);
     expect(await rows('email_drafts')).toEqual([expect.objectContaining({ id: saved.id, person_id: personId,
       contact_method_id: contactMethodId, subject: saved.subject, body: saved.body, revision: saved.revision, status: 'draft' })]);
-    expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(await api.outreach.inspectLocalAuthority({ draftId: reopened.id, expectedRevision: reopened.revision })).toMatchObject({ state: 'held' });
     await countsEmpty(['email_send_intents', 'email_send_results', 'delegated_authorities', 'delegated_commands', 'discovery_reservations']);
     const after = await api.leadDetail.get({ personId });
     expect({ stage: after.stage, activities: after.activities, history: after.history, nextAction: after.nextAction })
       .toEqual({ stage: person.stage, activities: person.activities, history: person.history, nextAction: person.nextAction });
     expect(f.pages).toEqual(Object.keys(firstUsePages));
     expect(await api.outreach.status()).toMatchObject({ model: mode === 'model' ? 'ready' : 'unconfigured', gmail: 'unconfigured' });
-    expect(screen.getByText('Local account send authority is not established. Saving your draft remains available.')).toBeTruthy();
     expect(f.denied).toEqual([]);
     expect(transport.nativeCalls).toBe(0);
     expect(f.trace.filter(call => call.error)).toEqual([]);

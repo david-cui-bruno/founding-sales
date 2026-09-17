@@ -86,7 +86,7 @@ async function fixture() {
 it('offers explicit LinkedIn preparation from an existing enrolled campaign in the real route', async () => {
   const f = await fixture();
   try {
-    render(<PresentationRoot><NativeDeskRoute api={f.api} firstUse={f.firstUse} surface="campaigns" onOpenLead={vi.fn()} onOpenImport={vi.fn()} /></PresentationRoot>);
+    render(<PresentationRoot><NativeDeskRoute api={f.api} firstUse={f.firstUse} surface="campaigns" /></PresentationRoot>);
     fireEvent.click(await screen.findByRole('button', { name: new RegExp(f.version.campaignId) }));
     expect(f.services.daily.get().answers.filter(answer => answer.kind === 'manual_linkedin')).toHaveLength(0);
     expect(f.forbidden).not.toHaveBeenCalled();
@@ -112,7 +112,7 @@ it('connects the preparation panel to real saved projection without any owner co
 it('prepares once, preserves the human edit, and records only the explicitly reported manual outcome', async () => {
   const f = await fixture(); f.connect();
   try {
-    render(<PresentationRoot><NativeDeskRoute api={f.api} firstUse={f.firstUse} surface="campaigns" onOpenLead={vi.fn()} onOpenImport={vi.fn()} /></PresentationRoot>);
+    render(<PresentationRoot><NativeDeskRoute api={f.api} firstUse={f.firstUse} surface="campaigns" /></PresentationRoot>);
     fireEvent.click(await screen.findByRole('button', { name: new RegExp(f.version.campaignId) }));
     expect(f.modelFetch).not.toHaveBeenCalled(); expect(f.commands).toEqual([]);
     const prepare = await screen.findByRole<HTMLButtonElement>('button', { name: 'Prepare LinkedIn note' });
@@ -164,7 +164,7 @@ it('recovers a saved draft after a lost prepare response and a fresh bridge with
   const f = await fixture(); f.connect();
   try {
     f.api.linkedin.prepare = vi.fn(async input => { await f.service.prepare(input); throw Error('Lost post-save response'); });
-    const view = render(<PresentationRoot><NativeDeskRoute api={f.api} firstUse={f.firstUse} surface="campaigns" onOpenLead={vi.fn()} onOpenImport={vi.fn()} /></PresentationRoot>);
+    const view = render(<PresentationRoot><NativeDeskRoute api={f.api} firstUse={f.firstUse} surface="campaigns" /></PresentationRoot>);
     fireEvent.click(await screen.findByRole('button', { name: new RegExp(f.version.campaignId) }));
     const prepare = await screen.findByRole<HTMLButtonElement>('button', { name: 'Prepare LinkedIn note' });
     await waitFor(() => expect(prepare.disabled).toBe(false)); fireEvent.click(prepare);
@@ -174,7 +174,7 @@ it('recovers a saved draft after a lost prepare response and a fresh bridge with
     expect(f.modelFetch).toHaveBeenCalledTimes(1); view.unmount();
     const freshPrepare = vi.fn((input: Parameters<typeof f.service.prepare>[0]) => f.service.prepare(input));
     const api = { ...f.api, linkedin: { ...f.api.linkedin, prepare: freshPrepare } };
-    render(<PresentationRoot><NativeDeskRoute api={api} firstUse={f.firstUse} surface="campaigns" onOpenLead={vi.fn()} onOpenImport={vi.fn()} /></PresentationRoot>);
+    render(<PresentationRoot><NativeDeskRoute api={api} firstUse={f.firstUse} surface="campaigns" /></PresentationRoot>);
     // The route may retain selection, but never prepares on remount.
     if (!screen.queryByRole('button', { name: 'Open saved LinkedIn note' })) fireEvent.click(await screen.findByRole('button', { name: new RegExp(f.version.campaignId) }));
     const reopen = await screen.findByRole<HTMLButtonElement>('button', { name: 'Open saved LinkedIn note' });
@@ -189,7 +189,7 @@ it('allows an explicit new generation after a real pre-save provider failure and
   const f = await fixture(); f.connect();
   try {
     f.modelFetch.mockRejectedValueOnce(Error('Fictional provider not configured'));
-    render(<PresentationRoot><NativeDeskRoute api={f.api} firstUse={f.firstUse} surface="campaigns" onOpenLead={vi.fn()} onOpenImport={vi.fn()} /></PresentationRoot>);
+    render(<PresentationRoot><NativeDeskRoute api={f.api} firstUse={f.firstUse} surface="campaigns" /></PresentationRoot>);
     fireEvent.click(await screen.findByRole('button', { name: new RegExp(f.version.campaignId) }));
     const prepare = await screen.findByRole<HTMLButtonElement>('button', { name: 'Prepare LinkedIn note' });
     await waitFor(() => expect(prepare.disabled).toBe(false)); fireEvent.click(prepare);
