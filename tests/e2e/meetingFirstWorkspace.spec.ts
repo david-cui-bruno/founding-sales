@@ -58,7 +58,10 @@ test('unpaired daily workspace stays empty and read-only through navigation and 
     }
 
     await workspace.page.getByRole('link', { name: 'Today', exact: true }).click();
-    await expect(workspace.page.getByText('No contacts due right now.', { exact: true })).toBeVisible();
+    // The legacy queue copy left with PR 84. Unpaired, the Calls lane reports an unavailable count, not zero,
+    // and the detail pane says worker-scoped work waits for the daily workspace check.
+    await expect(workspace.page.getByRole('heading', { name: 'Calls Unavailable', exact: true })).toBeVisible();
+    await expect(workspace.page.getByText('Local work remains available. Worker-scoped work is unavailable until the daily workspace can be checked.', { exact: true })).toBeVisible();
     expect((await workspace.page.evaluate(() => window.callie.daily.get())).revision).toBe(before.revision);
     await workspace.stop();
     workspace = await launchFounderWorkspace({ userDataPath: first.userDataPath });
