@@ -23,6 +23,7 @@ const blockers: Record<ResearchSetupBlocker, string> = {
   descriptor_changed: 'Operator settings changed. Operator reconciliation is required.', budget_corrupt: 'Budget status needs operator reconciliation.',
   state_corrupt: 'Policy status needs operator reconciliation.', unavailable: 'Cloud research status is unavailable.',
   local_pending: 'A request has an unknown outcome.', local_journal_unavailable: 'Local request journal is unavailable. Mutations are blocked.',
+  places_credential_parameter_missing: 'Needs operator setup: the Google Places credential parameter is not declared.', places_cost_missing: 'Needs operator setup: reviewed settings carry no Places cost per call.',
 };
 const usd = (micros: number) => `$${(micros / 1_000_000).toFixed(6).replace(/0+$/, '').replace(/\.$/, '')} USD`;
 function money(value: string) {
