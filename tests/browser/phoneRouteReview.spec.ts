@@ -96,7 +96,6 @@ test('the phone route step sits beside the inbox step, prefilled from the saved 
   const inventory = (await calls(page)).map(call => call.method);
   expect(inventory.filter(method => method === 'localWorkspace.admitCompanyDraftEmail')).toEqual([]);
   expect(inventory).not.toContain('forbidden');
-  expect(await page.evaluate(() => window.phoneRouteReviewBrowser.opened)).toEqual([]);
   expect(state.errors).toEqual([]);
   expect(state.requests).toEqual([]);
 });

@@ -2,7 +2,6 @@ import { test, expect, type Locator, type Page } from 'playwright/test';
 import { build } from 'esbuild';
 import path from 'node:path';
 import { writeFileSync } from 'node:fs';
-import { openImportScript } from '../../src/main/applicationMenu';
 import type { ApplicationPresentationBrowser } from '../fixtures/applicationPresentationBrowser';
 import { appRoutes, assertActualDestination, assertSharedPresentation, assertTransitionPresentation, navigateActualRoute, nativePalette, presentationSample, routeLinkName, routeProofs, type PresentationContext } from '../support/presentationOracle';
 
@@ -32,13 +31,6 @@ async function mount(page: Page, context: PresentationContext, initialRoute: typ
   return { errors, requests };
 }
 const calls = (page: Page) => page.evaluate((): ApplicationPresentationBrowser['calls'] => window.applicationPresentation.calls);
-const kevinRow = (page: Page) => page.getByRole('grid').locator('[role="row"][data-person-id="person-kevin"]');
-async function openKevin(page: Page) {
-  const row = kevinRow(page);
-  await expect(row).toBeVisible();
-  await row.focus();
-  await row.press('Enter');
-}
 
 async function assertModalIsolation(page: Page, dialog: Locator) {
   await expect(dialog).toBeVisible();
@@ -62,7 +54,7 @@ test.afterEach(async ({ page }, info) => {
 for (const theme of ['light', 'dark'] as const) for (const width of [1440, 1050] as const) {
   test(`actual Settings research setup is readable and explicit ${theme} ${width}`, async ({ page }, info) => {
     const observed = await mount(page, { mode: 'meeting_first', theme, density: 'comfortable', width }, 'settings', false, true);
-    await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Sourcing', exact: true }).click();
+    await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Worker connection', exact: true }).click();
     const section = page.getByRole('region', { name: 'Cloud research', exact: true });
     await expect(section.getByRole('heading', { name: 'Operator-reviewed settings' })).toBeAttached();
     const fields = [
@@ -179,11 +171,11 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 1050]
     await page.screenshot({ path: info.outputPath('connections-recovered.png'), fullPage: true });
   });
 
-  test(`actual navigation keyboard focus preserves selection and More hover ${theme} ${width}`, async ({ page }, info) => {
+  test(`actual navigation keyboard focus preserves selection ${theme} ${width}`, async ({ page }, info) => {
     const observed = await mount(page, { mode: 'meeting_first', theme, density: 'comfortable', width });
     const rail = page.getByRole('navigation', { name: 'Primary', exact: true });
     const samples = [];
-    for (const route of ['today', 'leads'] as const) {
+    for (const route of ['today', 'campaigns'] as const) {
       await navigateActualRoute(page, route);
       // A real key event establishes keyboard modality before explicitly focusing each link.
       await page.keyboard.press('Tab');
@@ -202,19 +194,18 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 1050]
         if (selected) expect.soft(sample.shadow).toContain('inset');
       }
     }
-    const more = rail.getByRole('button', { name: 'More workspaces', exact: true });
-    await more.hover();
-    const moreBackground = await more.evaluate(element => getComputedStyle(element).backgroundColor);
-    expect.soft(moreBackground).toBe('rgba(0, 0, 0, 0)');
+    // The rail is four plain links: no disclosure, badge or secondary group remains.
+    await expect(rail.getByRole('link')).toHaveCount(4);
+    await expect(rail.getByRole('button')).toHaveCount(0);
     expect(observed.errors).toEqual([]);
     expect(observed.requests).toEqual([]);
     expect((await calls(page)).filter(call => call.kind === 'forbidden')).toEqual([]);
-    writeFileSync(info.outputPath('navigation-states.json'), JSON.stringify({ theme, width, samples, moreBackground }, null, 2));
+    writeFileSync(info.outputPath('navigation-states.json'), JSON.stringify({ theme, width, samples }, null, 2));
   });
 }
 
 for (const mode of ['meeting_first', 'legacy'] as const) for (const theme of ['light', 'dark'] as const) for (const density of ['comfortable', 'compact'] as const) for (const width of [1440, 1050] as const) {
-  test(`actual ten-route shared presentation ${mode} ${theme} ${density} ${width}`, async ({ page }, info) => {
+  test(`actual four-route shared presentation ${mode} ${theme} ${density} ${width}`, async ({ page }, info) => {
     const context = { mode, theme, density, width };
     const observed = await mount(page, context, 'settings');
     await assertActualDestination(page, 'settings', mode);
@@ -228,14 +219,7 @@ for (const mode of ['meeting_first', 'legacy'] as const) for (const theme of ['l
         await page.evaluate(() => window.applicationPresentation.startPresentationFrames());
         await navigateActualRoute(page, route);
         await assertActualDestination(page, route, mode);
-        if (route === 'inbox') {
-          // A global limit-one summary cannot stand in for this route's selected queue.
-          await expect.poll(async () => (await calls(page)).slice(before)
-            .filter(call => call.method === 'review.list').map(call => call.args))
-            .toContainEqual([{ kinds: ['unmatched_communication'], cursor: null, limit: 200 }]);
-        } else {
-          await expect.poll(async () => (await calls(page)).slice(before).some(call => call.method === routeProofs[route].read)).toBe(true);
-        }
+        await expect.poll(async () => (await calls(page)).slice(before).some(call => call.method === routeProofs[route].read)).toBe(true);
         await page.evaluate(() => window.applicationPresentation.frame());
         const sample = await presentationSample(page);
         const transition = await page.evaluate(() => window.applicationPresentation.stopPresentationFrames());
@@ -260,129 +244,33 @@ for (const mode of ['meeting_first', 'legacy'] as const) for (const theme of ['l
 for (const mode of ['meeting_first', 'legacy'] as const) for (const width of [1440, 1050] as const) {
   test(`actual deep-linked routes survive document reload ${mode} ${width}`, async ({ page }) => {
     const context: PresentationContext = { mode, width, theme: width === 1440 ? 'dark' : 'light', density: 'compact' };
-    const observed = await mount(page, context, 'leads');
+    const observed = await mount(page, context, 'campaigns');
     const base = page.url().split('#')[0];
     for (const route of appRoutes) {
       await page.goto(`${base}#/${route}`);
       await page.reload();
-      const active = page.locator('.nav-rail').getByRole('link', { name: routeLinkName(route), exact: true, includeHidden: true });
+      const active = page.locator('.nav-rail').getByRole('link', { name: routeLinkName(route), exact: true });
       await expect(active).toHaveAttribute('aria-current', 'page');
-      // A deep-linked secondary destination may correctly start under collapsed More.
-      if (!await active.isVisible()) await page.getByRole('button', { name: 'More workspaces', exact: true }).click();
       await expect(active).toBeVisible();
       await expect(page.locator('main').getByRole('heading', { level: 1, name: routeProofs[route].heading, exact: true })).toBeVisible();
       await assertActualDestination(page, route, mode);
       assertSharedPresentation(await presentationSample(page), context);
       expect((await calls(page)).filter(call => call.kind === 'forbidden')).toEqual([]);
     }
-    expect(observed.errors).toEqual([]);
-    expect(observed.requests).toEqual([]);
-  });
-}
-
-for (const mode of ['meeting_first', 'legacy'] as const) for (const theme of ['light', 'dark'] as const) for (const density of ['comfortable', 'compact'] as const) for (const width of [1440, 1050] as const) for (const view of ['docked', 'full'] as const) {
-  test(`actual contact ${view} shares presentation and survives topmost Escape ${mode} ${theme} ${density} ${width}`, async ({ page }, info) => {
-    const context: PresentationContext = { mode, theme, density, width };
-    const observed = await mount(page, context);
-    await navigateActualRoute(page, 'leads');
-    await openKevin(page);
-    await expect(page.getByRole('complementary', { name: 'Kevin Shin details', exact: true })).toBeVisible();
-    if (view === 'full') await page.getByRole('button', { name: 'Open full page', exact: true }).click();
-    const contact = page.locator(view === 'full' ? '.lead-full-page' : '.lead-inspector');
-    await expect(contact.getByRole('heading', { name: 'Kevin Shin', exact: true })).toBeVisible();
-    const original = await contact.elementHandle();
-    expect(original).not.toBeNull();
-    const samples = [];
-    for (const route of appRoutes) {
-      await navigateActualRoute(page, route);
-      await assertActualDestination(page, route, context.mode);
-      await expect(contact.getByRole('heading', { name: 'Kevin Shin', exact: true })).toBeVisible();
-      const sample = await contact.evaluate(element => {
-        const style = getComputedStyle(element);
-        return { color: style.color, background: style.backgroundColor, font: style.fontFamily, left: element.getBoundingClientRect().left, railRight: document.querySelector('.nav-rail')!.getBoundingClientRect().right };
-      });
-      samples.push({ route, ...sample });
-      expect.soft(sample.color).toBe(nativePalette[theme].text);
-      expect.soft(sample.background).toBe(view === 'full' ? nativePalette[theme].canvas : nativePalette[theme].surface);
-      expect.soft(sample.font).toContain('-apple-system');
-      if (view === 'full') expect.soft(Math.abs(sample.left - sample.railRight)).toBeLessThanOrEqual(1);
-      expect(await original!.evaluate(element => element.isConnected)).toBe(true);
+    // Old person-workspace hashes land on Today instead of a blank screen.
+    for (const legacyHash of ['leads', 'pipeline', 'conversations', 'learnings', 'friday', 'inbox', 'review']) {
+      await page.goto(`${base}#/${legacyHash}`);
+      await page.reload();
+      await expect(page.locator('.nav-rail').getByRole('link', { name: routeLinkName('today'), exact: true })).toHaveAttribute('aria-current', 'page');
+      await assertActualDestination(page, 'today', mode);
     }
-    const opener = contact.getByRole('tab', { name: 'Overview', exact: true });
-    await opener.click();
-    await page.keyboard.press('ControlOrMeta+k');
-    const palette = page.getByRole('dialog', { name: 'Command palette', exact: true });
-    await assertModalIsolation(page, palette);
-    await page.keyboard.press('Escape');
-    await expect(palette).toHaveCount(0);
-    await expect(contact).toBeVisible();
-    await expect(opener).toBeFocused();
-    expect(await original!.evaluate(element => element.isConnected)).toBe(true);
-    await page.keyboard.press('Escape');
-    await expect(contact).toHaveCount(0);
     expect(observed.errors).toEqual([]);
     expect(observed.requests).toEqual([]);
-    expect((await calls(page)).filter(call => call.kind === 'forbidden')).toEqual([]);
-    const detailReads = (await calls(page)).filter(call => call.method === 'leadDetail.get');
-    expect(detailReads.length).toBeGreaterThan(0);
-    expect(detailReads.every(call => JSON.stringify(call.args) === JSON.stringify([{ personId: 'person-kevin' }]))).toBe(true);
-    writeFileSync(info.outputPath('contact-observations.json'), JSON.stringify({ samples, calls: await calls(page) }, null, 2));
   });
 }
-
-for (const state of ['pending', 'failed'] as const) {
-  test(`actual pending or failed contact has a usable Close control ${state}`, async ({ page }) => {
-    const observed = await mount(page, { mode: 'meeting_first', theme: 'light', density: 'comfortable', width: 1050 });
-    await navigateActualRoute(page, 'leads');
-    await page.evaluate(state => window.applicationPresentation.setDetailMode(state), state);
-    await openKevin(page);
-    const contact = page.getByRole('complementary', { name: 'Lead details', exact: true });
-    await expect(contact).toBeVisible();
-    await expect(contact.getByText(state === 'pending' ? 'Loading lead details' : "Couldn't load this lead", { exact: true })).toBeVisible();
-    const close = contact.getByRole('button', { name: 'Close inspector', exact: true });
-    await expect(close).toBeVisible();
-    await close.click();
-    await expect(contact).toHaveCount(0);
-    await expect(kevinRow(page)).toBeFocused();
-    await page.evaluate(() => window.applicationPresentation.resolvePendingDetails());
-    await page.evaluate(() => window.applicationPresentation.frame());
-    await expect(page.locator('.lead-inspector, .lead-full-page')).toHaveCount(0);
-    expect(observed.errors).toEqual([]);
-    expect((await calls(page)).filter(call => call.kind === 'forbidden')).toEqual([]);
-  });
-}
-
-test('actual palette-to-Import replacement retains modal focus without closing the contact', async ({ page }) => {
-  const observed = await mount(page, { mode: 'meeting_first', theme: 'light', density: 'comfortable', width: 1440 });
-  await navigateActualRoute(page, 'leads');
-  await openKevin(page);
-  const contact = page.getByRole('complementary', { name: 'Kevin Shin details', exact: true });
-  await expect(contact).toBeVisible();
-  const origin = contact.getByRole('tab', { name: 'Overview', exact: true });
-  await origin.click();
-  await expect(origin).toBeFocused();
-  await page.keyboard.press('ControlOrMeta+k');
-  const palette = page.getByRole('dialog', { name: 'Command palette', exact: true });
-  await palette.getByRole('combobox', { name: 'Command palette', exact: true }).fill('Import leads');
-  await page.keyboard.press('Enter');
-  const dialog = page.getByRole('dialog', { name: 'Import leads', exact: true });
-  await expect(palette).toHaveCount(0);
-  await assertModalIsolation(page, dialog);
-  await page.keyboard.press('ControlOrMeta+k');
-  await expect(palette).toHaveCount(0);
-  await expect(dialog).toBeVisible();
-  await page.keyboard.press('Escape');
-  await expect(dialog).toHaveCount(0);
-  await expect(contact).toBeVisible();
-  await page.evaluate(() => window.applicationPresentation.frame());
-  const returnFocus = await origin.evaluate(element => ({ exactOrigin: document.activeElement === element, active: document.activeElement?.outerHTML.slice(0, 600), originConnected: element.isConnected }));
-  await expect(origin, JSON.stringify(returnFocus)).toBeFocused();
-  expect(observed.errors).toEqual([]);
-  expect((await calls(page)).filter(call => call.kind === 'forbidden')).toEqual([]);
-});
 
 for (const mode of ['meeting_first', 'legacy'] as const) for (const theme of ['light', 'dark'] as const) for (const density of ['comfortable', 'compact'] as const) for (const width of [1440, 1050] as const) {
-  test(`actual native Import payload and shared dialogs ${mode} ${theme} ${density} ${width}`, async ({ page }, info) => {
+  test(`actual command palette shares presentation on every route ${mode} ${theme} ${density} ${width}`, async ({ page }, info) => {
     const context: PresentationContext = { mode, theme, density, width };
     const observed = await mount(page, context);
     for (const route of appRoutes) {
@@ -394,20 +282,11 @@ for (const mode of ['meeting_first', 'legacy'] as const) for (const theme of ['l
       expect(await palette.evaluate(element => element instanceof HTMLDialogElement && element.matches(':modal'))).toBe(true);
       expect.soft(await palette.evaluate(element => ({ color: getComputedStyle(element).color, background: getComputedStyle(element).backgroundColor, font: getComputedStyle(element).fontFamily }))).toMatchObject({ color: nativePalette[theme].text, background: nativePalette[theme].surface });
       expect.soft(await palette.evaluate(element => getComputedStyle(element).fontFamily)).toContain('-apple-system');
+      // Only the four navigation commands remain; no Import command survives in the palette.
+      await expect(palette.getByRole('option')).toHaveText(['Go to Today', 'Go to Accounts', 'Go to Campaigns', 'Go to Settings']);
       await page.keyboard.press('Escape');
       await expect(palette).toHaveCount(0);
-      // Execute the exact native menu payload, not a browser-only key binding.
-      await page.evaluate(script => window.eval(script), openImportScript);
-      const dialog = page.getByRole('dialog', { name: 'Import leads', exact: true });
-      await expect(dialog).toBeVisible();
-      expect(await dialog.evaluate(element => element instanceof HTMLDialogElement && element.matches(':modal'))).toBe(true);
-      // Native modal content makes the background inert, and More may be collapsed.
-      await expect(page.locator('.nav-rail').getByRole('link', { name: 'Leads', exact: true, includeHidden: true })).toHaveAttribute('aria-current', 'page');
-      expect.soft(await dialog.evaluate(element => ({ color: getComputedStyle(element).color, background: getComputedStyle(element).backgroundColor, font: getComputedStyle(element).fontFamily }))).toMatchObject({ color: nativePalette[theme].text, background: nativePalette[theme].surface });
-      expect.soft(await dialog.evaluate(element => getComputedStyle(element).fontFamily)).toContain('-apple-system');
-      await dialog.getByRole('button', { name: 'Close', exact: true }).click();
-      await expect(dialog).toHaveCount(0);
-      await assertActualDestination(page, 'leads', mode);
+      await expect(page.locator('.nav-rail').getByRole('link', { name: routeLinkName(route), exact: true })).toHaveAttribute('aria-current', 'page');
     }
     expect(observed.errors).toEqual([]);
     expect(observed.requests).toEqual([]);
@@ -418,9 +297,9 @@ for (const mode of ['meeting_first', 'legacy'] as const) for (const theme of ['l
 
 // Additive actual-App browser coverage for local draft continuity.
 // Uses existing real App fixture/helpers with no extra allowed API operation.
-// Tests navigation and native Import-open draft retention, NOT committed create or persistence.
+// Tests navigation and palette-overlay draft retention, NOT committed create or persistence.
 for (const theme of ['light', 'dark'] as const) for (const width of [1440, 1050] as const) {
-  test(`actual company draft survives routes and native Import opening without command replay ${theme} ${width}`, async ({ page }, info) => {
+  test(`actual company draft survives routes and the command palette without command replay ${theme} ${width}`, async ({ page }, info) => {
     const context: PresentationContext = { mode: 'meeting_first', theme, density: 'compact', width };
     const observed = await mount(page, context, 'accounts');
     await assertActualDestination(page, 'accounts', 'meeting_first');
@@ -433,7 +312,7 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 1050]
     await domain.fill(rawDomain);
     const oldInput = await name.elementHandle();
     expect(oldInput).not.toBeNull();
-    for (const route of ['campaigns', 'leads', 'today'] as const) {
+    for (const route of ['campaigns', 'today'] as const) {
       await navigateActualRoute(page, route);
       await assertActualDestination(page, route, 'meeting_first');
       await expect(page.getByRole('form', { name: 'Local company intake', exact: true })).toHaveCount(0);
@@ -454,20 +333,11 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 1050]
     await expect(name).toBeFocused();
     expect(await paletteOrigin!.evaluate(element => ({ connected: element.isConnected, focused: document.activeElement === element }))).toEqual({ connected: true, focused: true });
     await expect(name).toHaveValue(rawName);
-    await page.evaluate(script => window.eval(script), openImportScript);
-    const dialog = page.getByRole('dialog', { name: 'Import leads', exact: true });
-    await assertModalIsolation(page, dialog);
-    await dialog.getByRole('button', { name: 'Close', exact: true }).click();
-    await expect(dialog).toHaveCount(0);
-    await assertActualDestination(page, 'leads', 'meeting_first');
-    await navigateActualRoute(page, 'accounts');
-    await assertActualDestination(page, 'accounts', 'meeting_first');
-    await expect(name).toHaveValue(rawName);
     await expect(domain).toHaveValue(rawDomain);
     await expect(page.getByRole('button', { name: 'Review company', exact: true })).toBeEnabled();
     await expect(page.getByRole('button', { name: 'Create company', exact: true })).toBeDisabled();
     const observedCalls = await calls(page);
-    expect(observedCalls.filter(call => ['localWorkspace.reviewCompany', 'localWorkspace.createCompany', 'localWorkspace.getCompanyCreateStatus', 'imports.preview', 'imports.commit', 'imports.status'].includes(call.method))).toEqual([]);
+    expect(observedCalls.filter(call => ['localWorkspace.reviewCompany', 'localWorkspace.createCompany', 'localWorkspace.getCompanyCreateStatus'].includes(call.method))).toEqual([]);
     expect(observedCalls.filter(call => call.kind !== 'read')).toEqual([]);
     expect(observed.errors).toEqual([]);
     expect(observed.requests).toEqual([]);
@@ -479,7 +349,7 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 1050]
 // Additive actual-App diagnostic observation acceptance.
 // Breaks caught: refresh unmounting a real editor, stale focus stealing,
 // blocked routes remaining admitted, or blocked/ready discarding the shared draft.
-const healthFocusMethods = ['daily.get', 'delegation.status', 'health.get', 'localWorkspace.get', 'localWorkspace.getCommitments', 'review.list'];
+const healthFocusMethods = ['daily.get', 'delegation.status', 'health.get', 'localWorkspace.get', 'localWorkspace.getCommitments'];
 async function settledHealthFrames(page: Page) {
   await page.evaluate(async () => { await window.applicationPresentation.frame(); await window.applicationPresentation.frame(); });
 }
@@ -488,9 +358,6 @@ async function healthReadDelta(page: Page, start: number, methods: string[]) {
   const delta = (await calls(page)).slice(start);
   expect(delta.every(call => call.kind === 'read')).toBe(true);
   expect(delta.map(call => call.method).sort()).toEqual([...methods].sort());
-  for (const call of delta.filter(call => call.method === 'review.list')) {
-    expect(call.args).toEqual([{ kinds: [], cursor: null, limit: 1 }]);
-  }
   return delta;
 }
 async function holdFocusedHealth(page: Page) {
@@ -680,7 +547,8 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 1050]
     expect(await draft.input.evaluate(element => element.isConnected)).toBe(false);
     expect(await restored!.evaluate(element => element.isConnected)).toBe(true);
     expect(await draft.root.evaluate(element => element.isConnected && document.querySelector('.presentation-root') === element)).toBe(true);
-    await healthReadDelta(page, readyStart, ['health.get', 'daily.get', 'daily.get', 'delegation.status', 'delegation.status', 'localWorkspace.get', 'localWorkspace.get', 'localWorkspace.getCommitments', 'localWorkspace.getCommitments', 'review.list', 'review.list', 'leadDetail.getOutboundCapabilities', 'leadDetail.getOutboundCapabilities']);
+    // StrictMode remounts the admitted workspace, so each desk and local read appears as a pair.
+    await healthReadDelta(page, readyStart, ['health.get', 'daily.get', 'daily.get', 'delegation.status', 'delegation.status', 'localWorkspace.get', 'localWorkspace.get', 'localWorkspace.getCommitments', 'localWorkspace.getCommitments']);
     await expect(page.getByRole('button', { name: 'Review company', exact: true })).toBeEnabled();
     await expect(page.getByRole('button', { name: 'Create company', exact: true })).toBeDisabled();
 

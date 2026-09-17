@@ -15,7 +15,6 @@ const companyDomain = (page: Page) => page.getByRole('textbox', { name: 'Company
 const intake = (page: Page) => page.getByRole('form', { name: 'Local company intake', exact: true });
 const diagnostics = (page: Page) => page.getByRole('region', { name: 'Diagnostic observation', exact: true });
 const palette = (page: Page) => page.getByRole('dialog', { name: 'Command palette', exact: true });
-const importer = (page: Page) => page.getByRole('dialog', { name: 'Import leads', exact: true });
 
 async function accounts(page: Page) {
   const snapshot = await page.evaluate(() => window.callie.localWorkspace.get());
@@ -62,7 +61,7 @@ async function draft(page: Page, name: string, domain: string) {
 }
 
 async function routeRoundTrip(page: Page) {
-  for (const route of ['Campaigns', 'Leads', 'Accounts']) await navigateFounderRoute(page, route);
+  for (const route of ['Campaigns', 'Today', 'Accounts']) await navigateFounderRoute(page, route);
 }
 
 /** Capture after route changes. This oracle is only for a stable route lifetime. */
@@ -173,29 +172,6 @@ async function dismissPalette(page: Page) {
   await expect(page.locator('dialog:modal')).toHaveCount(0);
 }
 
-async function openImport(page: Page, route: 'accounts' | 'friday') {
-  await openPalette(page);
-  await palette(page).getByRole('combobox', { name: 'Command palette', exact: true }).fill('Import');
-  await palette(page).getByRole('option', { name: 'Import leads…', exact: true }).click();
-  await expect(palette(page)).toHaveCount(0);
-  await modal(page, importer(page));
-  expect(await page.evaluate(() => location.hash)).toBe(`#/${route}`);
-  await expect(importer(page).getByLabel('CSV file', { exact: true })).toHaveValue('');
-  await expect(importer(page).getByLabel('Paste spreadsheet rows', { exact: true })).toHaveValue('');
-  const bottom = importer(page).getByRole('button', { name: 'Preview rows', exact: true });
-  await expect(bottom).toBeDisabled();
-  await reachable(bottom); // Reach, but never preview or choose a file.
-  await reachable(importer(page).getByRole('button', { name: 'Close', exact: true }));
-}
-
-async function dismissImport(page: Page, route: 'accounts' | 'friday') {
-  await page.keyboard.press('Escape');
-  await expect(importer(page)).toHaveCount(0);
-  await expect(palette(page)).toHaveCount(0);
-  expect(await page.evaluate(() => location.hash)).toBe(`#/${route}`);
-  // Deliberately no focus assertion or forced post-Import focus restoration.
-}
-
 async function diagnosticGeometry(page: Page) {
   const strip = diagnostics(page);
   const nav = page.getByRole('navigation', { name: 'Primary', exact: true });
@@ -222,7 +198,7 @@ async function diagnosticGeometry(page: Page) {
   await noHorizontalOverflow(page);
 }
 
-test('P1: packaged company draft and reviewed intent survive real routes and Import before one explicit create', async () => {
+test('P1: packaged company draft and reviewed intent survive real routes before one explicit create', async () => {
   test.setTimeout(180_000);
   const workspace = await launchFounderWorkspace();
   const { page } = workspace;
@@ -243,25 +219,15 @@ test('P1: packaged company draft and reviewed intent survive real routes and Imp
     await routeRoundTrip(page);
     await draft(page, rawName, domain); // State retention, not a node identity claim across routes.
     expect(await accounts(page)).toEqual([]);
-    await selectText(companyName(page));
-    await openImport(page, 'accounts');
-    await dismissImport(page, 'accounts');
-    await draft(page, rawName, domain);
     await page.getByRole('button', { name: 'Review company', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Create company', exact: true })).toBeEnabled();
     await expect(page.getByText(`Reviewed company: ${savedName} · ${domain}`, { exact: true })).toBeVisible();
     await expect(page.getByText('No matching companies in the current local review.', { exact: true })).toBeVisible();
     expect(await accounts(page)).toEqual([]);
     // Review deliberately normalizes input. Preserve those independently fixed reviewed values
-    // across later route and Import phases, while pre-Review raw-value assertions stay unchanged.
+    // across later route phases, while pre-Review raw-value assertions stay unchanged.
     await draft(page, savedName, domain);
     await routeRoundTrip(page);
-    await draft(page, savedName, domain);
-    await expect(page.getByRole('button', { name: 'Create company', exact: true })).toBeEnabled();
-    await expect(page.getByText(`Reviewed company: ${savedName} · ${domain}`, { exact: true })).toBeVisible();
-    await selectText(companyName(page));
-    await openImport(page, 'accounts');
-    await dismissImport(page, 'accounts');
     await draft(page, savedName, domain);
     await expect(page.getByRole('button', { name: 'Create company', exact: true })).toBeEnabled();
     await expect(page.getByText(`Reviewed company: ${savedName} · ${domain}`, { exact: true })).toBeVisible();
@@ -346,7 +312,7 @@ test('P1: packaged company draft and reviewed intent survive real routes and Imp
   }
 });
 
-test('P2: packaged Native company diagnostics and overlays retain drafts, including Friday inline fill at light 1050', async () => {
+test('P2: packaged Native company diagnostics and the palette overlay retain drafts', async () => {
   test.setTimeout(300_000);
   const workspace = await launchFounderWorkspace();
   const { page } = workspace;
@@ -405,16 +371,6 @@ test('P2: packaged Native company diagnostics and overlays retain drafts, includ
         await heldName.unchanged();
         await heldName.focused();
         await heldName.selection();
-
-        await selectText(companyName(page)); // Independent setup, before Import only.
-        await openImport(page, 'accounts');
-        await sharedPresentation(page, importer(page), appearance);
-        await heldName.unchanged();
-        await heldDomain.unchanged();
-        await capture(page, `${label}-import`);
-        await dismissImport(page, 'accounts');
-        await heldName.unchanged();
-        await heldDomain.unchanged();
         await draft(page, name, domain);
         expect(await accounts(page)).toEqual([]);
         expect(await page.evaluate(() => window.callie.health.get())).toMatchObject({
@@ -426,106 +382,7 @@ test('P2: packaged Native company diagnostics and overlays retain drafts, includ
         await heldDomain.dispose();
       }
     }
-
-    // Friday is an inline phase of P2, only light/comfortable at 1050x700.
-    const fridayAppearance: Appearance = { theme: 'light', density: 'comfortable', width: 1050, height: 700 };
-    await setAppearance(page, fridayAppearance);
-    await navigateFounderRoute(page, 'Friday');
-    await expect(page.getByRole('heading', { name: 'Friday scoreboard', exact: true })).toBeVisible();
-    expect(await page.evaluate(() => location.hash)).toBe('#/friday');
-    expect((await page.evaluate(() => window.callie.friday.getCurrent())).jobs).toEqual([]);
-    const requested = await page.evaluate(async () => {
-      const at = new Date((await window.callie.friday.getCurrent()).asOf);
-      const pad = (value: number) => String(value).padStart(2, '0');
-      const date = `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}`;
-      const time = `${pad(at.getHours())}:${pad(at.getMinutes())}`;
-      // Independent UI-input-to-ISO oracle using the renderer's local timezone.
-      return { date, time, iso: new Date(`${date}T${time}`).toISOString() };
-    });
-    const cycle = page.getByRole('textbox', { name: 'Won sales cycle (optional)', exact: true });
-    await expect(cycle).toHaveValue('');
-    await page.getByLabel('Requested date', { exact: true }).fill(requested.date);
-    await page.getByLabel('Requested time', { exact: true }).fill(requested.time);
-    await page.getByRole('button', { name: 'Request job', exact: true }).click(); // Only job request in P2.
-    await expect(page.getByRole('status').filter({ hasText: /^Saved$/u })).toBeVisible();
-    await expect(page.locator('.friday-jobs__row')).toHaveCount(1);
-    await expect.poll(async () => (await page.evaluate(() => window.callie.friday.getCurrent())).jobs.length).toBe(1);
-    const jobs = (await page.evaluate(() => window.callie.friday.getCurrent())).jobs;
-    const job = jobs[0]!;
-    expect(job).toEqual({ id: expect.any(String), salesCycleId: null, requestedAt: requested.iso, status: 'requested', contractorAcceptedAt: null });
-    expect(job.id.length).toBeGreaterThan(0);
-    await page.getByRole('button', { name: `Fill ${job.id}`, exact: true }).click();
-    const group = page.getByRole('group', { name: `Fill ${job.id}`, exact: true });
-    await expect(group).toBeVisible();
-    expect(await group.evaluate(node => node.tagName === 'DIV' && node.closest('dialog,form') === null)).toBe(true);
-    await expect(page.locator('dialog:modal')).toHaveCount(0);
-    const groupHandle = await group.elementHandle();
-    if (!groupHandle) throw new Error('Inline fill group missing');
-    const date = group.getByLabel('Accepted date', { exact: true });
-    const time = group.getByLabel('Accepted time', { exact: true });
-    await date.fill(requested.date);
-    await time.fill(requested.time);
-    const heldDate = await retainInput(date, requested.date);
-    const heldTime = await retainInput(time, requested.time);
-    const inlineUnchanged = async () => {
-      expect(await groupHandle.evaluate(node => node.isConnected && node.getAttribute('role') === 'group' && node.closest('dialog,form') === null)).toBe(true);
-      await heldDate.unchanged();
-      await heldTime.unchanged();
-    };
-    try {
-      await time.focus();
-      await openPalette(page);
-      await sharedPresentation(page, palette(page), fridayAppearance);
-      await capture(page, 'p2-friday-light-1050-time-palette');
-      await dismissPalette(page);
-      await inlineUnchanged();
-      await heldTime.focused(); // Native time has no portable numeric caret/selection API.
-
-      const unrelatedDraft = 'unsubmitted-fictional-cycle';
-      await cycle.fill(unrelatedDraft); // Never submit this unrelated cycle draft.
-      const heldCycle = await retainInput(cycle, unrelatedDraft);
-      try {
-        await selectText(cycle);
-        await openPalette(page);
-        await inlineUnchanged();
-        await capture(page, 'p2-friday-light-1050-text-palette');
-        await dismissPalette(page);
-        await heldCycle.unchanged();
-        await heldCycle.focused();
-        await heldCycle.selection();
-        await inlineUnchanged();
-        await selectText(cycle);
-        await openImport(page, 'friday');
-        await sharedPresentation(page, importer(page), fridayAppearance);
-        await inlineUnchanged();
-        await heldCycle.unchanged();
-        await capture(page, 'p2-friday-light-1050-import');
-        await dismissImport(page, 'friday');
-        // No automatic post-Import focus assertion and no corrective focus call.
-        await inlineUnchanged();
-        await heldCycle.unchanged();
-        await expect(group).toBeVisible();
-        await sharedPresentation(page, group, fridayAppearance);
-        for (const control of [date, time, group.getByRole('button', { name: 'Confirm fill', exact: true }), group.getByRole('button', { name: 'Keep requested', exact: true })]) {
-          await reachable(control); // Reachability only. Do not fill, cancel, or close the draft.
-        }
-        await capture(page, 'p2-friday-light-1050-inline-draft');
-        expect((await page.evaluate(() => window.callie.friday.getCurrent())).jobs).toEqual(jobs);
-        expect(await accounts(page)).toEqual([]);
-        await unpaired(page);
-        expect(await page.evaluate(() => window.callie.health.get())).toMatchObject({
-          domainReady: true, domainStatus: 'ready', domainStartupEvaluatedAt: startup,
-        });
-        assertObserved();
-      } finally {
-        await heldCycle.dispose();
-      }
-    } finally {
-      await heldDate.dispose();
-      await heldTime.dispose();
-      await groupHandle.dispose();
-    }
-    // Leave Friday inline edits unsubmitted. Never navigate away while asserting their retention.
+    assertObserved();
   } finally {
     await workspace.close();
   }

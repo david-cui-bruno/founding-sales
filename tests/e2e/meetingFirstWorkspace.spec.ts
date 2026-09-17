@@ -122,7 +122,10 @@ test('explicit local transition preserves a real callback and local account with
     await page.getByRole('link', { name: 'Today', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Today', exact: true })).toBeVisible();
     await page.getByRole('button', { name: /Retained callback Property Owner/ }).click();
-    await expect(page.getByRole('button', { name: 'Open contact workspace', exact: true })).toBeVisible();
+    // The retained detail is pure presentation: no contact workspace, call or send control is offered.
+    const retainedDetail = page.getByRole('region', { name: 'Retained work detail', exact: true });
+    await expect(retainedDetail).toContainText('Stored local work. Nothing here calls, sends or books.');
+    await expect(retainedDetail.getByRole('button')).toHaveCount(0);
     await expect(page.getByText(/Old acquisition Property Owner/)).toHaveCount(0);
     for (const size of [{ width: 1440, height: 900 }, { width: 1050, height: 700 }]) {
       await page.setViewportSize(size);

@@ -11,7 +11,6 @@ import '../../src/renderer/app.css';
 
 const rawScenario = new URL(location.href).searchParams.get('scenario');
 const fixture = compositionFixture(rawScenario === 'unpaired' || rawScenario === 'missing' ? rawScenario : 'populated');
-const opened: string[] = [];
 function Harness() {
   const { setPreference } = useTheme();
   const { setDensity } = useDensity();
@@ -23,17 +22,17 @@ function Harness() {
   const [tick, setTick] = useState(0);
   const surface = route === 'accounts' || route === 'campaigns' ? route : 'today';
   window.nativeDeskCompositionBrowser = {
-    fixture, opened, navigate,
+    fixture, navigate,
     refresh: () => window.dispatchEvent(new Event('focus')),
     rerender: () => setTick(v => v + 1),
     preferences: (theme, density) => { setPreference(theme); setDensity(density); },
   };
-  return <PresentationRoot><AppShell route={route} onNavigate={navigate} reviewCount={{ status: 'failed' }}>
-    <div data-rerender={tick}><NativeDeskRoute onOpenImport={(): void => undefined} firstUse={fixture.firstUse} key={route} api={fixture.api} onOpenLead={id => opened.push(id)} surface={surface} legacy={<h1>Legacy Today fixture</h1>} /></div>
+  return <PresentationRoot><AppShell route={route} onNavigate={navigate}>
+    <div data-rerender={tick}><NativeDeskRoute firstUse={fixture.firstUse} key={route} api={fixture.api} surface={surface} /></div>
   </AppShell></PresentationRoot>;
 }
 export type NativeDeskCompositionBrowser = {
-  fixture: typeof fixture; opened: string[]; navigate(route: AppRoute): void;
+  fixture: typeof fixture; navigate(route: AppRoute): void;
   refresh(): void; rerender(): void;
   preferences(theme: 'system' | 'light' | 'dark', density: 'comfortable' | 'compact'): void;
 };

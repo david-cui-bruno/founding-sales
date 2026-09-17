@@ -36,7 +36,6 @@ export const preparationAccounts = [
 ];
 const fixture = nativeDeskFixture(nativeDeskReviewFixture());
 fixture.setLocalSnapshot(localSnapshot({ accounts: { state: 'available', snapshots: preparationAccounts } }));
-const opened: string[] = [];
 function Harness() {
   const { setPreference } = useTheme();
   const { setDensity } = useDensity();
@@ -47,17 +46,17 @@ function Harness() {
   };
   const [tick, setTick] = useState(0);
   window.preparationQueueBrowser = {
-    fixture, opened, navigate,
+    fixture, navigate,
     refresh: () => window.dispatchEvent(new Event('focus')),
     rerender: () => setTick(value => value + 1),
     preferences: (theme, density) => { setPreference(theme); setDensity(density); },
   };
-  return <PresentationRoot><AppShell route={route} onNavigate={navigate} reviewCount={{ status: 'failed' }}>
-    <div data-rerender={tick}><NativeDeskRoute onOpenImport={() => opened.push('import')} firstUse={fixture.firstUse} key={route} api={fixture.api} onOpenLead={id => opened.push(id)} surface={route} legacy={<h1>Legacy Today fixture</h1>} /></div>
+  return <PresentationRoot><AppShell route={route} onNavigate={navigate}>
+    <div data-rerender={tick}><NativeDeskRoute firstUse={fixture.firstUse} key={route} api={fixture.api} surface={route} /></div>
   </AppShell></PresentationRoot>;
 }
 export type PreparationQueueBrowser = {
-  fixture: typeof fixture; opened: string[]; navigate(route: AppRoute): void;
+  fixture: typeof fixture; navigate(route: AppRoute): void;
   refresh(): void; rerender(): void;
   preferences(theme: 'system' | 'light' | 'dark', density: 'comfortable' | 'compact'): void;
 };

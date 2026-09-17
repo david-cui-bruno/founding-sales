@@ -178,12 +178,10 @@ const inspectPackagedApplication = async (userDataPath: string, inspectRecovery?
     await expect(page.getByText('Encrypted SQLite ready')).toBeVisible();
     await expect(page.getByText('FTS5 available')).toBeVisible();
     await expect(page.getByText('Schema 26')).toBeVisible();
-    // The status row uses the isolated local fixture inbox. The separate
-    // enrichment fallback also sees only the empty child HOME. Automatic
-    // polling stays disabled under --use-mock-keychain.
-    // It lives in the Sourcing section of the settings master-detail.
-    await page.getByRole('button', { name: 'Sourcing', exact: true }).click();
-    await expect(page.getByText(/^Sourcing inbox: /)).toBeVisible();
+    // The worker-connection section of the master-detail hosts the cloud
+    // research controls; no sourcing surface remains in Settings.
+    await page.getByRole('button', { name: 'Worker connection', exact: true }).click();
+    await expect(page.getByRole('region', { name: 'Cloud research', exact: true })).toBeVisible();
 
     await inspectRecovery?.(page);
     const health = await page.evaluate(() => window.callie.health.get());
