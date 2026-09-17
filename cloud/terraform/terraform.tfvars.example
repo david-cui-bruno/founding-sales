@@ -1,8 +1,0 @@
-# Public, non-secret configuration only. Runtime secret values must never be
-# placed in Terraform variables, examples, shell history, repository files, or state.
-aws_region     = "us-east-1"
-aws_account_id = "ACCOUNT_ID"
-
-# Safety gates stay disabled through source verification and baseline review.
-schedules_enabled               = false
-scheduled_health_alerts_enabled = false
