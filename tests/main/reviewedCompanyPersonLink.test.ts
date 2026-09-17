@@ -5,7 +5,7 @@ import { migrateToLatest } from '../../src/main/db/migrate';
 import { DomainRuntime } from '../../src/main/domain/domainRuntime';
 import { createFounderSalesDomain } from '../../src/main/domain/founderSalesDomain';
 import { AccountRepository } from '../../src/main/domain/accounts/accountRepository';
-import { createImportProvider } from '../../src/main/ipc/registerApplicationIpc';
+import { createImportProvider } from '../fixtures/legacyDomainProviders';
 import { productionDomainGate } from '../fixtures/productionDomainGate';
 import { createTempDatabase, createTestWorkspaceKey } from '../fixtures/tempDatabase';
 import * as workspaceContract from '../../src/shared/contracts/localWorkspaceContract';

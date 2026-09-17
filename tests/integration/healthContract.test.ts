@@ -18,15 +18,6 @@ const validHealth: AppHealth = {
   domainProjectionRefreshCandidateCount: 0,
   pendingProjectionRebuilds: 0,
   domainStartupEvaluatedAt: '2026-08-30T12:00:00.000Z',
-  operationalStatus: 'ready',
-  sourcing: {
-    status: 'healthy', reasons: [], lastSuccessAgeMs: null,
-    state: {
-      state: 'idle', pollId: null, startedAt: null, lastCompletedAt: null,
-      consecutiveFailures: 0, lastFailureAt: null, lastFailureCode: null,
-      backlogCount: null,
-    },
-  },
 };
 
 describe('appHealthSchema', () => {
@@ -42,6 +33,8 @@ describe('appHealthSchema', () => {
     ['non-boolean FTS5 result', { ...validHealth, fts5Available: 'yes' }],
     ['negative pending jobs', { ...validHealth, pendingJobs: -1 }],
     ['fractional recovery count', { ...validHealth, interruptedJobsRecovered: 0.5 }],
+    ['removed operational status overlay', { ...validHealth, operationalStatus: 'ready' }],
+    ['removed sourcing overlay', { ...validHealth, sourcing: { status: 'healthy' } }],
   ] as const;
 
   for (const [description, value] of malformedValues) {

@@ -40,11 +40,11 @@ function spiedApi(): SpiedApi {
 }
 function mount(value = snapshot) {
   const owner = createLocalCompanyContinuation(); owner.activate();
-  const api = spiedApi(), onOpenImport = vi.fn(), onOpenLead = vi.fn(), onSelectionChange = vi.fn();
+  const api = spiedApi(), onSelectionChange = vi.fn();
   const forbidden = vi.fn(async () => { throw new Error('Unexpected contact read'); });
-  const contactApi = { leads: { list: forbidden, updateField: forbidden, bulkUpdate: forbidden }, leadDetail: { get: forbidden } } as unknown as Pick<LocalCompanyContactApi, 'leads' | 'leadDetail'>;
-  render(<LocalOnlyAccountLibrary read={{ value, pending: false, error: false }} api={api} contactApi={contactApi} onOpenImport={onOpenImport} onOpenLead={onOpenLead} firstUse={owner.continuation} onSelectionChange={onSelectionChange} />);
-  return { api, onOpenImport, onOpenLead, onSelectionChange, continuation: owner.continuation, forbidden };
+  const contactApi = { leads: { list: forbidden }, leadDetail: { get: forbidden } } as unknown as Pick<LocalCompanyContactApi, 'leads' | 'leadDetail'>;
+  render(<LocalOnlyAccountLibrary read={{ value, pending: false, error: false }} api={api} contactApi={contactApi} firstUse={owner.continuation} onSelectionChange={onSelectionChange} />);
+  return { api, onSelectionChange, continuation: owner.continuation, forbidden };
 }
 const rows = () => screen.getAllByRole('button', { name: /^Local account · / });
 const noCommands = (api: SpiedApi) => { for (const method of commandMethods) expect(api[method], method).not.toHaveBeenCalled(); };
@@ -84,14 +84,12 @@ it('next-step controls only select the company through the existing continuation
   fireEvent.click(screen.getByRole('button', { name: `${preparationControlLabel.add_route} · Bravo Routeless PM` }));
   expect(f.continuation.snapshot().selectedAccountId).toBe('b');
   expect(screen.getByRole('heading', { name: 'Bravo Routeless PM' })).toBeTruthy();
-  expect(f.onOpenImport).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button', { name: `${preparationControlLabel.reopen_draft} · Delta Draft PM` }));
   expect(f.continuation.snapshot().selectedAccountId).toBe('d');
   fireEvent.click(screen.getByRole('button', { name: `${preparationControlLabel.unknown} · Foxtrot Unknown PM` }));
   expect(f.continuation.snapshot().selectedAccountId).toBe('f');
   await waitFor(() => expect(f.api.getCompany).toHaveBeenCalledWith({ accountId: 'f' }));
   noCommands(f.api);
-  expect(f.onOpenLead).not.toHaveBeenCalled();
   expect(f.forbidden).not.toHaveBeenCalled();
   expect(f.api.researchCompany).not.toHaveBeenCalled();
   expect(f.api.openCompanyDraft).not.toHaveBeenCalled();

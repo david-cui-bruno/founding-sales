@@ -1,5 +1,5 @@
 import { productionDomainGate } from '../fixtures/productionDomainGate';
-import { createTodayProvider } from '../../src/main/ipc/registerApplicationIpc';
+import { createTodayProvider } from '../fixtures/legacyDomainProviders';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { closeDatabase, openDatabase, type AppDatabase } from '../../src/main/db/database';
@@ -15,7 +15,7 @@ import {
 import {
   BUILTIN_PRIORITIZATION_RULE_V1,
 } from '../../src/main/domain/prioritization/builtinPrioritizationRules';
-import { type TodayProvider } from '../../src/main/today/todayService';
+import { type TodayProvider } from '../fixtures/legacyDomainProviders';
 import { todaySnapshotSchema } from '../../src/shared/contracts/todayContract';
 import {
   DOMAIN_TIMESTAMP,

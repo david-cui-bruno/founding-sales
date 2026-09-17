@@ -17,20 +17,11 @@ import {delegatedPhoneHandoffResultSchema,publicDelegationCommandSchema,commandR
 import type {z} from 'zod';
 import { createPhoneSetupApi } from './apis/phoneSetupApi';
 import { createOutreachApi } from './apis/outreachApi';
-import { createDiscoveryApi } from './apis/discoveryApi';
 import { createRecoveryApi } from './apis/recoveryApi';
 import { appHealthSchema, type AppHealth } from '../shared/healthContract';
-import { createConversationsApi } from './apis/conversationsApi';
-import { createFridayApi } from './apis/fridayApi';
-import { createImportApi } from './apis/importApi';
 import { createLeadDetailApi } from './apis/leadDetailApi';
 import { createLeadsApi } from './apis/leadsApi';
-import { createLearningsApi } from './apis/learningsApi';
-import { createPipelineApi } from './apis/pipelineApi';
-import { createReviewApi } from './apis/reviewApi';
 import { createShellApi } from './apis/shellApi';
-import { createSourcingApi } from './apis/sourcingApi';
-import { createTodayApi } from './apis/todayApi';
 import { createIpcClient, type IpcInvoker } from './ipcClient';
 
 /**
@@ -107,17 +98,8 @@ export const createCallieApi = (invoker: IpcInvoker) => {
     outreach: createOutreachApi(client),
     leads: createLeadsApi(client),
     leadDetail: createLeadDetailApi(client),
-    today: createTodayApi(client),
     daily: createDailyApi(client),
     localWorkspace: createLocalWorkspaceApi(client),
-    discovery: createDiscoveryApi(client),
-    pipeline: createPipelineApi(client),
-    review: createReviewApi(client),
-    friday: createFridayApi(client),
-    imports: createImportApi(client),
-    conversations: createConversationsApi(client),
-    learnings: createLearningsApi(client),
-    sourcing: createSourcingApi(client),
     shell: createShellApi(client),
     recovery: createRecoveryApi(client),
   } as const;

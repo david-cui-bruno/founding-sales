@@ -151,21 +151,6 @@ function foundation(f: Fixture) {
     },
   );
   cleanup.push(() => runtime.shutdown());
-  runtime.setSourcingHealthProvider(() => ({
-    status: 'healthy',
-    reasons: [],
-    lastSuccessAgeMs: null,
-    state: {
-      state: 'idle',
-      pollId: null,
-      startedAt: null,
-      lastCompletedAt: null,
-      consecutiveFailures: 0,
-      lastFailureAt: null,
-      lastFailureCode: null,
-      backlogCount: null,
-    },
-  }));
   return { runtime, keys, opened, stages };
 }
 async function ready(f: Fixture) {

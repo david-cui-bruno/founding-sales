@@ -5,8 +5,6 @@ import { fakeDomainRuntime } from '../fixtures/fakeDomainRuntime';
 import type { AppleBridgeSupervisorApi } from '../../src/main/appleBridge/appleBridgeSupervisor';
 import type { HealthProvider } from '../../src/main/health/registerHealthIpc';
 import type { ApplicationStartupDependencies, ApplicationStartupOptions, RunningApplication } from '../../src/main/startApplication';
-import type { SourcingPoller } from '../../src/main/sourcing/sourcingPoller';
-import type { SourcingPollHealth } from '../../src/shared/contracts/sourcingContract';
 import { createOutboundCommandService } from '../../src/main/communications/outboundCommandService';
 import type { OutboundCommandServiceApi } from '../../src/main/communications/outboundPorts';
 
@@ -189,21 +187,6 @@ describe('main process startup', () => {
     };
   }
 
-  function explicitIdleSourcingPoller(): SourcingPoller {
-    return {
-      getHealth: (): SourcingPollHealth => ({
-        status: 'healthy', reasons: [], lastSuccessAgeMs: null,
-        state: {
-          state: 'idle', pollId: null, startedAt: null, lastCompletedAt: null,
-          consecutiveFailures: 0, lastFailureAt: null, lastFailureCode: null, backlogCount: null,
-        },
-      }),
-      stop: (): void => undefined,
-      idle: async (): Promise<void> => undefined,
-      start: async (): Promise<void> => undefined,
-    } as unknown as SourcingPoller;
-  }
-
   const inertBackupRecovery = (): Pick<ApplicationStartupDependencies, 'createBackupService' | 'createRecoveryService'> => ({
     createBackupService: () => ({ start: async () => undefined, shutdown: async () => undefined,
       listAvailableBackups: async () => [], createBackup: async () => { throw new Error('unexpected backup'); } }),
@@ -224,7 +207,6 @@ describe('main process startup', () => {
       migrateToLatest: async () => ({ fromVersion: 0, toVersion: 2, appliedMigrationIds: [] }),
       createDomainRuntime: () => fakeDomainRuntime(),
       createHealthService: () => ({ getHealth: () => ({}) }),
-      createSourcingPoller: explicitIdleSourcingPoller,
       createOutboundCommandService: (input) => { outbound = createOutboundCommandService(input); return outbound; },
       registerApplicationIpc: vi.fn(() => vi.fn()),
       createAppleBridgeSupervisor: disabledAppleBridgeSupervisor,
@@ -373,7 +355,6 @@ describe('main process startup', () => {
         parentExecutablePath: process.execPath,
       },
       appleSpikeEnabled: false,
-      sourcingPollingEnabled: true,
       phoneRouteMode: 'native',
       signal: expect.anything(),
       isTrustedRendererUrl: expect.any(Function),
@@ -426,7 +407,7 @@ describe('main process startup', () => {
     });
   });
 
-  it('disables sourcing auto-polling under the mock-keychain test switch', async () => {
+  it('selects the fixture phone route under the mock-keychain test switch', async () => {
     mocks.commandLineHasSwitch.mockImplementation(
       (name: string) => name === 'use-mock-keychain',
     );
@@ -437,7 +418,6 @@ describe('main process startup', () => {
 
     expect(mocks.commandLineHasSwitch).toHaveBeenCalledWith('use-mock-keychain');
     expect(mocks.startApplication.mock.calls[0]?.[0]).toMatchObject({
-      sourcingPollingEnabled: false,
       phoneRouteMode: 'fixture',
     });
   });
@@ -759,7 +739,6 @@ describe('main process startup', () => {
         events.push('health');
         return { getHealth: () => ({}) };
       },
-      createSourcingPoller: explicitIdleSourcingPoller,
       registerApplicationIpc: (provider: HealthProvider) => {
         events.push('ipc');
         healthProvider = provider;
@@ -842,7 +821,6 @@ describe('main process startup', () => {
         events.push('health');
         return { getHealth: () => ({}) };
       },
-      createSourcingPoller: explicitIdleSourcingPoller,
       registerApplicationIpc: () => {
         events.push('ipc');
         return () => events.push('unregister');

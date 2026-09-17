@@ -54,11 +54,7 @@ type Surface = 'today' | 'accounts' | 'campaigns';
 export type NativeDeskRouteProps = {
   firstUse: FirstUseContinuation;
   api: NativeDeskApi;
-  onOpenLead(personId: string): void;
-  onOpenImport(): void;
   surface?: Surface;
-  legacy?: ReactNode;
-  renderLegacy?(readHeld: boolean): ReactNode;
 };
 /** Local-only composition. Failed refresh preserves the editor and its DOM. */
 /** Route-owned copy for the two exact one-company templates. Every other version is an opaque read-only preview. */
@@ -71,11 +67,7 @@ const OPERATIONAL_ISSUE_CODES = new Set<DailySnapshot['issues'][number]['code']>
 export function NativeDeskRoute({
   api,
   firstUse,
-  onOpenLead,
-  onOpenImport,
   surface = 'today',
-  legacy,
-  renderLegacy,
 }: NativeDeskRouteProps) {
   useSyncExternalStore(firstUse.subscribe, firstUse.snapshot, firstUse.snapshot);
   const firstUseEpoch = firstUse.captureEpoch();
@@ -280,8 +272,8 @@ export function NativeDeskRoute({
   const intakeRequest = surface === 'accounts' && intakeSelection?.api === api.localWorkspace ? intakeSelection?.request : null;
   const refresh = () => { local.refresh(); load(); };
   const localOnly = surface === 'accounts'
-    ? <LocalOnlyAccountLibrary api={api.localWorkspace} contactApi={api} onOpenImport={onOpenImport} onOpenLead={onOpenLead} firstUse={firstUse} intake={intake} selectionRequest={intakeRequest} onSelectionHandled={onIntakeSelectionHandled} read={local.read.overview} onSelectionChange={key => viewSelection(api.daily).set(JSON.stringify([snapshot?.workspaceId ?? null, surface]), key)} stepRequest={stepRequest} onStep={requestStep} onStepHandled={onStepHandled} onEvidenceChanged={local.refresh} />
-    : surface === 'today' ? <LocalOnlyCalls read={local.read.retained} onOpenLead={onOpenLead} onOpenDraft={openLocalDraft} initialSelected={viewSelection(api.daily).get(JSON.stringify([snapshot?.workspaceId ?? null, surface]))} onSelectionChange={key => viewSelection(api.daily).set(JSON.stringify([snapshot?.workspaceId ?? null, surface]), key)} /> : <p>Campaign scope unavailable. This is a read-only capability preview. Creation, editing, enrollment and activation are not available here.</p>;
+    ? <LocalOnlyAccountLibrary api={api.localWorkspace} contactApi={api} firstUse={firstUse} intake={intake} selectionRequest={intakeRequest} onSelectionHandled={onIntakeSelectionHandled} read={local.read.overview} onSelectionChange={key => viewSelection(api.daily).set(JSON.stringify([snapshot?.workspaceId ?? null, surface]), key)} stepRequest={stepRequest} onStep={requestStep} onStepHandled={onStepHandled} onEvidenceChanged={local.refresh} />
+    : surface === 'today' ? <LocalOnlyCalls read={local.read.retained} onOpenDraft={openLocalDraft} initialSelected={viewSelection(api.daily).get(JSON.stringify([snapshot?.workspaceId ?? null, surface]))} onSelectionChange={key => viewSelection(api.daily).set(JSON.stringify([snapshot?.workspaceId ?? null, surface]), key)} /> : <p>Campaign scope unavailable. This is a read-only capability preview. Creation, editing, enrollment and activation are not available here.</p>;
   if (!snapshot)
     return (
       <section className="native-desk native-desk--pending" data-presentation="native-a">
@@ -304,21 +296,6 @@ export function NativeDeskRoute({
   // Retained mode evidence owns composition; refresh health only owns admission.
   // API replacement discards current/snapshot above, and confirmed mode changes
   // still leave this branch. Never remove the worker/session holds to retain UI.
-  const establishedLegacy = snapshot.workflowMode === 'legacy' &&
-    (!api.localWorkspace || local.read.overview.value?.workflowMode === 'legacy');
-  if (surface === 'today' && establishedLegacy)
-    return (
-      <>
-        {renderLegacy ? renderLegacy(localHold || !!current?.error)
-          : legacy ?? <p>Legacy Today is available from the main workspace.</p>}
-        {(localHold || current?.error) && (
-          <section aria-label="Workspace status">
-            <p role="status">Workspace status is being checked or is unavailable. Refresh to check it again. Existing input and pending commands are retained.</p>
-            <button onClick={refresh}>Refresh workspace status</button>
-          </section>
-        )}
-      </>
-    );
   if ((snapshot.workflowMode === 'unknown' || snapshot.workflowMode === 'legacy') && local.read.overview.value?.workflowMode !== 'meeting_first')
     return (
       <section
@@ -350,8 +327,6 @@ export function NativeDeskRoute({
       intakeSelection={intakeRequest}
       onIntakeSelectionHandled={onIntakeSelectionHandled}
       onRefresh={refresh}
-      onOpenLead={onOpenLead}
-      onOpenImport={onOpenImport}
       onOpenLocalDraft={openLocalDraft}
       stepRequest={stepRequest}
       onStep={requestStep}
@@ -523,8 +498,6 @@ export function NativeDesk({
   readError = false,
   phoneReadError = readError,
   onRefresh,
-  onOpenLead,
-  onOpenImport,
   surface = 'today',
   localRead,
   localHold = false,
@@ -549,8 +522,6 @@ export function NativeDesk({
   intakeSelection?: LocalAccountSelectionRequest | null;
   onIntakeSelectionHandled?(request: LocalAccountSelectionRequest): void;
   onRefresh(): void;
-  onOpenLead(personId: string): void;
-  onOpenImport(): void;
   onOpenLocalDraft?(draft: LocalDraftContinuation): void;
   stepRequest?: LocalAccountStepRequest | null;
   onStep?(request: LocalAccountStepRequest): void;
@@ -915,8 +886,8 @@ export function NativeDesk({
               </button>
             </div>
           )}
-          {retained && <RetainedWorkDetail entry={retained} stale={!!localRead?.retained.error || !!localRead?.retained.pending} onOpenLead={onOpenLead} />}
-          {localAccount && <LocalAccountDetail account={localAccount} api={api.localWorkspace} contactApi={api} continuation={firstUse} onOpenImport={onOpenImport} onOpenLead={onOpenLead}
+          {retained && <RetainedWorkDetail entry={retained} />}
+          {localAccount && <LocalAccountDetail account={localAccount} api={api.localWorkspace} contactApi={api} continuation={firstUse}
             step={stepRequest?.accountId === localAccount.account.id ? stepRequest : null} onStepHandled={onStepHandled} onEvidenceChanged={onEvidenceChanged} />}
           {account && !answer && <AccountContext account={account} />}{' '}
           {answer && snapshot.workspaceId && (
@@ -954,15 +925,6 @@ export function NativeDesk({
                     <p>
                       {r.value} · {r.purpose} · {r.verification}
                     </p>
-                    {r.personId ? (
-                      <button
-                        disabled={readError}
-                        className="native-desk__primary"
-                        onClick={() => onOpenLead(r.personId!)}
-                      >
-                        Open contact workspace
-                      </button>
-                    ) : null}
                   </div>
                 ))}
               <CompanyPhoneCall key={JSON.stringify([snapshot.workspaceId, account.account.id])}

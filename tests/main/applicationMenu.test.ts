@@ -4,7 +4,6 @@ import {
   createApplicationMenuTemplate,
   menuNavigationRoutes,
   menuNavigationScripts,
-  openImportScript,
   type ApplicationMenuDependencies,
 } from '../../src/main/applicationMenu';
 
@@ -25,7 +24,6 @@ function buildDependencies(
     platform: 'darwin',
     isPackaged: false,
     navigate: vi.fn(),
-    openImport: vi.fn(),
     ...overrides,
   };
 }
@@ -62,15 +60,12 @@ describe('createApplicationMenuTemplate', () => {
     expect(template[0]?.label).toBe('File');
   });
 
-  it('offers Import Leads… under File with CmdOrCtrl+I and a close role', () => {
-    const openImport = vi.fn();
-    const file = submenuOf(buildTemplate({ openImport }), 'File');
+  it('keeps File to the close role now that person import is gone', () => {
+    const file = submenuOf(buildTemplate(), 'File');
 
-    const importItem = file.find((item) => item.label === 'Import Leads…');
-    expect(importItem?.accelerator).toBe('CmdOrCtrl+I');
-    importItem?.click?.();
-    expect(openImport).toHaveBeenCalledTimes(1);
-    expect(file.some((item) => item.role === 'close')).toBe(true);
+    expect(file).toEqual([{ role: 'close' }]);
+    expect(file.some((item) => item.label?.startsWith('Import'))).toBe(false);
+    expect(file.some((item) => item.accelerator === 'CmdOrCtrl+I')).toBe(false);
   });
 
   it('keeps the standard Edit roles so Cmd+C/V/X/A always work', () => {
@@ -90,18 +85,14 @@ describe('createApplicationMenuTemplate', () => {
     ]);
   });
 
-  it('maps View navigation items to routes with numbered accelerators', () => {
+  it('maps View navigation items to the four company-model routes with numbered accelerators', () => {
     const navigate = vi.fn();
     const view = submenuOf(buildTemplate({ navigate }), 'View');
 
     const expected: ReadonlyArray<[string, string, string]> = [
       ['Today', 'CmdOrCtrl+1', 'today'],
-      ['Leads', 'CmdOrCtrl+2', 'leads'],
-      ['Pipeline', 'CmdOrCtrl+3', 'pipeline'],
-      ['Conversations', 'CmdOrCtrl+4', 'conversations'],
-      ['Learnings', 'CmdOrCtrl+5', 'learnings'],
-      ['Friday', 'CmdOrCtrl+6', 'friday'],
-      ['Inbox', 'CmdOrCtrl+7', 'inbox'],
+      ['Accounts', 'CmdOrCtrl+2', 'accounts'],
+      ['Campaigns', 'CmdOrCtrl+3', 'campaigns'],
       ['Settings', 'CmdOrCtrl+,', 'settings'],
     ];
 
@@ -112,6 +103,10 @@ describe('createApplicationMenuTemplate', () => {
       item?.click?.();
       expect(navigate, `${label} navigates`).toHaveBeenCalledWith(route);
     }
+    for (const label of ['Leads', 'Pipeline', 'Conversations', 'Learnings', 'Friday', 'Inbox']) {
+      expect(view.find((candidate) => candidate.label === label), label).toBeUndefined();
+    }
+    expect(view.filter((item) => item.click !== undefined)).toHaveLength(expected.length);
   });
 
   it('includes reload and devtools roles only when not packaged', () => {
@@ -149,12 +144,8 @@ describe('menu navigation scripts', () => {
   it('builds one constant hash script per fixed route', () => {
     expect(menuNavigationRoutes).toEqual([
       'today',
-      'leads',
-      'pipeline',
-      'conversations',
-      'learnings',
-      'friday',
-      'inbox',
+      'accounts',
+      'campaigns',
       'settings',
     ]);
     for (const route of menuNavigationRoutes) {
@@ -162,12 +153,6 @@ describe('menu navigation scripts', () => {
         `window.location.hash = '#/${route}';`,
       );
     }
-  });
-
-  it('routes import to leads and dispatches the open-import event', () => {
-    expect(openImportScript).toBe(
-      "window.location.hash = '#/leads'; " +
-        "window.dispatchEvent(new CustomEvent('callie:open-import'));",
-    );
+    expect(Object.keys(menuNavigationScripts)).toHaveLength(4);
   });
 });

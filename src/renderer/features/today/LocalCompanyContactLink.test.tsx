@@ -33,12 +33,11 @@ function fixture(detail = company()) {
   const owner = createLocalCompanyContinuation(); owners.push(owner); owner.activate(); owner.continuation.selectAccount(owner.continuation.captureEpoch(), detail.snapshot.account.id);
   const forbidden = vi.fn(async () => { throw Error('Unexpected mutation outside link-only contract'); });
   const savedPeople = [person(51), person(52)];
-  const api: PanelApi = { leads: { list: vi.fn<PanelApi['leads']['list']>(async () => page()), updateField: forbidden, bulkUpdate: forbidden },
-    leadDetail: { get: vi.fn<PanelApi['leadDetail']['get']>(async ({ personId }) => structuredClone(savedPeople.find(item => item.personId === personId)!)), beginOutbound: forbidden, getOutboundCapabilities: forbidden, confirmTransition: forbidden, findContactInfo: forbidden, dismissLead: forbidden, overrideCloudScore: forbidden },
+  const api: PanelApi = { leads: { list: vi.fn<PanelApi['leads']['list']>(async () => page()) },
+    leadDetail: { get: vi.fn<PanelApi['leadDetail']['get']>(async ({ personId }) => structuredClone(savedPeople.find(item => item.personId === personId)!)) },
     localWorkspace: { getCompany: vi.fn<PanelApi['localWorkspace']['getCompany']>(async () => detail), linkCompanyPerson: vi.fn<PanelApi['localWorkspace']['linkCompanyPerson']>(async input => ({ accountId: input.accountId, version: input.expectedVersion + 1, duplicate: false })) } };
-  const onOpenImport = vi.fn(); const onOpenLead = vi.fn();
-  const tree = (next = detail) => <LocalCompanyContactLink detail={next} api={api} continuation={owner.continuation} onOpenImport={onOpenImport} onOpenLead={onOpenLead} />;
-  return { api, owner, detail, savedPeople, forbidden, onOpenImport, onOpenLead, tree };
+  const tree = (next = detail) => <LocalCompanyContactLink detail={next} api={api} continuation={owner.continuation} />;
+  return { api, owner, detail, savedPeople, forbidden, tree };
 }
 function deferred<T>() { let resolve!: (value: T) => void; let reject!: (error: Error) => void; const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
 async function choose(n = 51) {
@@ -61,7 +60,7 @@ it('T6-C01 read-only office-only mount delegates empty import and never promotes
   expect(screen.getByRole('button', { name: 'Find saved person' })).toBeTruthy();
   expect(f.api.leads.list).not.toHaveBeenCalled(); expect(f.api.leadDetail.get).not.toHaveBeenCalled(); expect(f.api.localWorkspace.getCompany).not.toHaveBeenCalled();
   expect(f.api.localWorkspace.linkCompanyPerson).not.toHaveBeenCalled(); expect(screen.queryByText(/verified person/i)).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: 'Import named person' })); expect(f.onOpenImport.mock.calls).toEqual([[]]); expect(screen.queryByRole('dialog')).toBeNull(); expect(f.forbidden).not.toHaveBeenCalled();
+  expect(screen.queryByRole('button', { name: 'Import named person' })).toBeNull(); expect(screen.queryByRole('dialog')).toBeNull(); expect(f.forbidden).not.toHaveBeenCalled();
 }, 10_000);
 it('T6-C02 exact 50-row first page and opaque second page select ID 51, not same-name first row', async () => {
   const f = fixture(); const first = Array.from({ length: 50 }, (_, i) => row(i + 1)); first[0].personName = 'Avery';
@@ -144,10 +143,11 @@ it('T6-C08 A to B held person detail cannot expose or select A in B', async () =
     expect(f.owner.continuation.snapshot().selectedAccountId).toBe('b'); expect(screen.queryByText('person51@example.test')).toBeNull(); expect(f.api.localWorkspace.linkCompanyPerson).not.toHaveBeenCalled();
   } finally { view.unmount(); await act(async () => { gate.resolve(person()); await Promise.allSettled([gate.promise]); }); }
 }, 10_000);
-it('T6-C09 known saved relationship opens only exact stored person ID, never company route snapshot', async () => {
+it('T6-C09 known saved relationship lists the exact stored person ID without an open control or any read', async () => {
   const detail = company(); detail.links = [{ id: 'saved-link', kind: 'person_role', personId: 'person-52', role: 'Manager', relationship: 'Manages company', evidenceIds: ['source-a'], authority: 'unconfirmed', authorityEvidenceIds: [], validFrom: at, validTo: null }];
-  const f = fixture(detail); render(f.tree()); fireEvent.click(await screen.findByRole('button', { name: 'Open saved contact' }));
-  expect(f.onOpenLead.mock.calls).toEqual([['person-52']]); expect(f.api.localWorkspace.linkCompanyPerson).not.toHaveBeenCalled(); expect(f.api.localWorkspace.getCompany).not.toHaveBeenCalled();
+  const f = fixture(detail); render(f.tree()); expect(await screen.findByText('person-52 · Manager · Manages company')).toBeTruthy();
+  expect(screen.getByText('Authority: unconfirmed')).toBeTruthy(); expect(screen.queryByRole('button', { name: 'Open saved contact' })).toBeNull();
+  expect(f.api.leadDetail.get).not.toHaveBeenCalled(); expect(f.api.localWorkspace.linkCompanyPerson).not.toHaveBeenCalled(); expect(f.api.localWorkspace.getCompany).not.toHaveBeenCalled();
 }, 10_000);
 it('T6-C10 wrong-account receipt is unknown, not established, and explicit replay preserves request', async () => {
   const f = fixture(); vi.mocked(f.api.localWorkspace.linkCompanyPerson).mockResolvedValueOnce({ accountId: 'b', version: 2, duplicate: false }); render(f.tree()); await review();
@@ -207,6 +207,6 @@ it('T6-C15 failed saved-person read never authorizes a reviewed link or replaces
   const f = fixture(); vi.mocked(f.api.leadDetail.get).mockRejectedValueOnce(Error('Saved person unavailable')); render(f.tree());
   fireEvent.click(screen.getByRole('button', { name: 'Find saved person' })); fireEvent.click(await screen.findByRole('button', { name: 'Select Avery · person-51' }));
   expect(f.api.leadDetail.get).toHaveBeenCalledWith({ personId: 'person-51' }); await screen.findByText(/Saved person unavailable/i);
-  expect(screen.queryByText('person51@example.test')).toBeNull(); expect(screen.getByRole('button', { name: 'Import named person' })).toBeTruthy();
+  expect(screen.queryByText('person51@example.test')).toBeNull(); expect(screen.getByRole('button', { name: 'Find saved person' })).toBeTruthy();
   expect(f.api.localWorkspace.linkCompanyPerson).not.toHaveBeenCalled(); expect(f.forbidden).not.toHaveBeenCalled();
 }, 10_000);

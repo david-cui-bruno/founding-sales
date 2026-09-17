@@ -3,15 +3,10 @@ import { googleConnectionSelectorSchema } from '../../src/shared/contracts/remot
 import { researchSetupStatusSchema } from '../../src/shared/contracts/researchSetupContract';
 /** Actual-App, complete typed read-only all-route fixture. No preload/client or production API factory. */
 import { StrictMode } from 'react';
-import { installApplicationModalScenario } from './applicationModalScenario';
-import { installApplicationLeadsScenario } from './applicationLeadsScenario';
 import { createRoot } from 'react-dom/client';
 import { App } from '../../src/renderer/App';
 import type { CalliePreloadApi } from '../../src/shared/preload';
 import { appHealthSchema, type AppHealth } from '../../src/shared/healthContract';
-import type { TodaySnapshot } from '../../src/shared/contracts/todayContract';
-import type { DiscoverySnapshot } from '../../src/shared/contracts/discoveryContract';
-import { outboundCapabilitiesSchema, type OutboundCapabilities } from '../../src/shared/contracts/outboundContract';
 import type { DailySnapshot } from '../../src/shared/contracts/dailyContract';
 import { leadDetailRequestSchema, leadDetailSchema, type LeadDetail } from '../../src/shared/contracts/leadDetailContract';
 import { leadRowSchema } from '../../src/shared/contracts/leadsContract';
@@ -19,7 +14,7 @@ import { appleSpikeStatusSchema } from '../../src/shared/appleSpikeContract';
 import { nativeDeskFixture, nativeDeskReviewFixture, localSnapshot, commitments, fixtureNow } from '../../src/renderer/features/today/nativeDesk.fixture';
 import '../../src/renderer/app.css';
 
-export type Call = { method: string; kind: 'read' | 'command' | 'forbidden'; args?: unknown[] };
+export type Call = { method: string; kind: 'read' | 'forbidden'; args?: unknown[] };
 const calls: Call[] = [];
 const forbidden = (method: string) => async (): Promise<never> => {
   calls.push({ method, kind: 'forbidden' });
@@ -31,14 +26,10 @@ const healthValue: AppHealth = {
   pendingJobs: 0, interruptedJobsRecovered: 0, domainStatus: 'ready', domainReady: true,
   domainBlockingViolationCount: 0, domainRepairableIssueCount: 0,
   domainProjectionRefreshCandidateCount: 0, pendingProjectionRebuilds: 0,
-  domainStartupEvaluatedAt: fixtureNow, operationalStatus: 'ready',
-  sourcing: { status: 'healthy', reasons: [], lastSuccessAgeMs: null,
-    state: { state: 'idle', pollId: null, startedAt: null, lastCompletedAt: null,
-      consecutiveFailures: 0, lastFailureAt: null, lastFailureCode: null, backlogCount: null } },
+  domainStartupEvaluatedAt: fixtureNow,
 };
 const desk = nativeDeskFixture(nativeDeskReviewFixture());
 let localMode: 'meeting_first' | 'legacy' = new URLSearchParams(location.search).get('mode') === 'legacy' ? 'legacy' : 'meeting_first';
-let detailMode: 'ready' | 'pending' | 'failed' = 'ready';
 let connectionStatusUnavailable = false;
 let googleConnectionReady = false;
 const read = <T,>(method: string, value: () => T) => async (...args: unknown[]): Promise<T> => {
@@ -47,13 +38,7 @@ const read = <T,>(method: string, value: () => T) => async (...args: unknown[]):
 };
 // Every bridge member is explicit and checked. Even synthetic command mutations
 // from nativeDeskFixture are NOT exposed. Any accidental command is logged/fails.
-const unavailable = { state: 'unavailable', reasonCode: 'not_integrated' } as const;
-const outboundCapabilities: OutboundCapabilities = {
-  phoneHandoff: unavailable, callObservation: unavailable, recording: unavailable,
-  messagesSend: unavailable, gmailSend: unavailable, managedAudioImport: unavailable,
-  appleTranscriptExtraction: unavailable, localDrafts: true,
-};
-outboundCapabilitiesSchema.parse(outboundCapabilities);
+// The saved-person reads survive only for the company contact link; they return one synthetic person.
 const detail: LeadDetail = leadDetailSchema.parse({
   personId: 'person-kevin', salesCycleId: 'cycle-kevin', personName: 'Kevin Shin',
   phones: [], emails: [], organizationLabel: 'Harbor Test Management', propertySummaries: [],
@@ -129,47 +114,17 @@ const api: CalliePreloadApi = {
     if (connectionStatusUnavailable) throw Error('Synthetic private connection failure');
     return { model: 'unconfigured', modelName: '', gmail: 'unconfigured', accountEmail: null, senderName: '', postalAddress: '' };
   }), connectGmail: forbidden('outreach.connectGmail'), disconnectGmail: forbidden('outreach.disconnectGmail'), configure: forbidden('outreach.configure'), openDraft: forbidden('outreach.openDraft'), saveDraft: forbidden('outreach.saveDraft'), generateDraft: forbidden('outreach.generateDraft'), sendDraft: forbidden('outreach.sendDraft'), inspectLocalAuthority: forbidden('outreach.inspectLocalAuthority') },
-  leads: { list: read<Awaited<ReturnType<CalliePreloadApi['leads']['list']>>>('leads.list', () => ({ rows: [row], nextCursor: null, total: 1, revision: 1 })), updateField: forbidden('leads.updateField'), bulkUpdate: forbidden('leads.bulkUpdate') },
+  leads: { list: read<Awaited<ReturnType<CalliePreloadApi['leads']['list']>>>('leads.list', () => ({ rows: [row], nextCursor: null, total: 1, revision: 1 })) },
   leadDetail: { get: async (input) => {
     calls.push({ method: 'leadDetail.get', kind: 'read', args: [structuredClone(input)] });
     if (leadDetailRequestSchema.parse(input).personId !== detail.personId) throw Error('Unknown synthetic person');
-    if (detailMode === 'failed') throw Error('Synthetic unavailable detail');
-    if (detailMode === 'pending') return new Promise<LeadDetail>(resolve => pendingDetails.push(resolve));
     return structuredClone(detail);
-  }, beginOutbound: forbidden('leadDetail.beginOutbound'), getOutboundCapabilities: read('leadDetail.getOutboundCapabilities', () => outboundCapabilities), confirmTransition: forbidden('leadDetail.confirmTransition'), dismissLead: forbidden('leadDetail.dismissLead'), overrideCloudScore: forbidden('leadDetail.overrideCloudScore'), findContactInfo: forbidden('leadDetail.findContactInfo') },
-  today: {
-    get: read<TodaySnapshot>('today.get', () => ({ lanes: [], dialBudget: 0, scheduledDials: 0, conversationTarget: 0, reviewErrorCount: 0, revision: 1, unreviewedBacklogCount: 0, unreviewedCloudSignalCount: 0, conversationsHeld: 0 })),
-    getLeadTriageSnapshot: forbidden('today.getLeadTriageSnapshot'), complete: forbidden('today.complete'), snooze: forbidden('today.snooze'), pin: forbidden('today.pin'), logPastActivity: forbidden('today.logPastActivity'), addLeadNote: forbidden('today.addLeadNote'), logCallOutcome: forbidden('today.logCallOutcome'), markActivityInError: forbidden('today.markActivityInError'), getTriageQueue: forbidden('today.getTriageQueue'), setReviewPosition: forbidden('today.setReviewPosition'),
-  },
-  discovery: {
-    get: read<DiscoverySnapshot>('discovery.get', () => ({ prepared: [], judgment: [], counts: { unassessed: 0, research: 0, watch: 0, excluded: 0 }, processing: 'idle' as const, researchCapability: 'not_configured' as const, generatedAt: fixtureNow, revision: 1 })),
-    getBrief: forbidden('discovery.getBrief'), begin: forbidden('discovery.begin'), override: forbidden('discovery.override'),
-  },
-  pipeline: { get: read<Awaited<ReturnType<CalliePreloadApi['pipeline']['get']>>>('pipeline.get', () => ({ stages: [{ stage: 'ready', cards: [{ personId: detail.personId, salesCycleId: 'cycle-kevin', personName: detail.personName, contextLabel: detail.organizationLabel, stage: 'ready', stageEnteredAt: fixtureNow, priorityContext: null, nextAction: null, lostReasonCode: null }] }], revision: 1 })) },
-  review: { list: read<Awaited<ReturnType<CalliePreloadApi['review']['list']>>>('review.list', () => ({
-    items: [], totalOpenCount: 0, revision: 1, nextCursor: null, matchedCount: 0,
-    countScope: 'lifecycle_review_items', observedAt: fixtureNow,
-    queues: {
-      unmatched_communication: { source: 'lifecycle_review_items', openCount: 0 },
-      system_error: { source: 'lifecycle_review_items', openCount: 0 },
-      ambiguous_identity: { source: 'not_integrated', openCount: null },
-      transcript_suggestion: { source: 'not_integrated', openCount: null },
-      import_problem: { source: 'not_integrated', openCount: null },
-      adapter_failure: { source: 'not_integrated', openCount: null },
-    },
-  })), resolve: forbidden('review.resolve') },
-  friday: { getCurrent: read<Awaited<ReturnType<CalliePreloadApi['friday']['getCurrent']>>>('friday.getCurrent', () => ({ periodStartsAt: '2026-09-07T00:00:00.000Z', periodEndsAt: '2026-09-14T00:00:00.000Z', asOf: fixtureNow, metrics: [], sourceRows: [], jobs: [], revision: 1 })), getDrilldown: forbidden('friday.getDrilldown'), createJob: forbidden('friday.createJob'), fillJob: forbidden('friday.fillJob'), cancelJob: forbidden('friday.cancelJob') },
-  imports: { preview: forbidden('imports.preview'), remap: forbidden('imports.remap'), commit: forbidden('imports.commit'), status: forbidden('imports.status') },
-  conversations: { list: read<Awaited<ReturnType<CalliePreloadApi['conversations']['list']>>>('conversations.list', () => ({ rows: [], nextCursor: null, total: 0, revision: 1 })), get: forbidden('conversations.get'), attachTranscript: forbidden('conversations.attachTranscript') },
-  learnings: { list: read<Awaited<ReturnType<CalliePreloadApi['learnings']['list']>>>('learnings.list', () => ({ rows: [], totalActiveCount: 0, revision: 1 })), capture: forbidden('learnings.capture'), addEvidence: forbidden('learnings.addEvidence'), updateStatus: forbidden('learnings.updateStatus') },
-  sourcing: { pollNow: forbidden('sourcing.pollNow'), retry: forbidden('sourcing.retry'), status: read<Awaited<ReturnType<CalliePreloadApi['sourcing']['status']>>>('sourcing.status', () => ({ lastPolledAt: null, lastKey: null, backlogCount: null, counters: { imported: 0, replayed: 0, needsIdentity: 0, scoreUpdates: 0, quarantined: 0 }, credentialState: 'none', hmacSaltState: 'none', execution: healthValue.sourcing.state, health: healthValue.sourcing })), setHmacSalt: forbidden('sourcing.setHmacSalt') },
+  } },
   shell: { revealDatabase: forbidden('shell.revealDatabase'), revealLogDirectory: forbidden('shell.revealLogDirectory') },
   recovery: { status: read<Awaited<ReturnType<CalliePreloadApi['recovery']['status']>>>('recovery.status', () => ({ setupCompletedAt: null, lastRestoreDrillAt: null, outreachReady: false, backup: { status: 'missing', createdAt: null, verifiedAt: null } })), beginSetup: forbidden('recovery.beginSetup'), saveSetupMaterial: forbidden('recovery.saveSetupMaterial'), completeSetup: forbidden('recovery.completeSetup'), selectAndRunRestoreDrill: forbidden('recovery.selectAndRunRestoreDrill') },
   appleSpike: { getStatus: read('appleSpike.getStatus', () => appleSpikeStatusSchema.parse({ enabled: false, bridge: { state: 'disabled', reason: 'not_packaged_or_configured' } })), probeCapabilities: forbidden('appleSpike.probeCapabilities'), requestContacts: forbidden('appleSpike.requestContacts'), promptAccessibility: forbidden('appleSpike.promptAccessibility'), scanRecentNotes: forbidden('appleSpike.scanRecentNotes'), scanTestMessages: forbidden('appleSpike.scanTestMessages'), startCallObservation: forbidden('appleSpike.startCallObservation'), stopCallObservation: forbidden('appleSpike.stopCallObservation'), sendTestMessage: forbidden('appleSpike.sendTestMessage'), subscribeObservationEvidence: forbidden('appleSpike.subscribeObservationEvidence') },
 };
 
-
-const pendingDetails: ((value: LeadDetail) => void)[] = [];
 // Observation only. Sample rendered frames during navigation, not just after a
 // heading has settled, and remember any transient replacement of the root.
 function sampleFrame(root: Element | null) {
@@ -194,16 +149,8 @@ let frameObserver: MutationObserver | null = null;
 let frames: ReturnType<typeof sampleFrame>[] = [];
 let rootReplaced = false;
 const scenarioParams = new URLSearchParams(location.search);
-if (scenarioParams.get('modalScenario') === '1' && scenarioParams.get('leadsScenario') === '1') {
-  throw Error('Application scenarios are mutually exclusive');
-}
-const modalScenario = scenarioParams.get('modalScenario') === '1'
-  ? installApplicationModalScenario(api, calls, detail, { fridayScenario: scenarioParams.get('fridayScenario') === '1' }) : undefined;
-const leadsScenario = scenarioParams.get('leadsScenario') === '1'
-  ? installApplicationLeadsScenario(api, calls, detail) : undefined;
 // Opt-in, finite delivery control for the actual App. Default fixtures are unchanged.
 const healthScenario = scenarioParams.get('healthScenario') === '1' ? (() => {
-  if (modalScenario || leadsScenario) throw Error('Application scenarios are mutually exclusive');
   type Slot = { phase: 'armed' | 'reading' | 'pending'; value?: AppHealth;
     resolve?: (health: AppHealth) => void; reject?: (error: Error) => void };
   let delivery: Slot | null = null;
@@ -236,21 +183,13 @@ const healthScenario = scenarioParams.get('healthScenario') === '1' ? (() => {
     },
   };
 })() : undefined;
-if (leadsScenario) {
-  window.callie = leadsScenario.api;
-} else {
-  window.callie = modalScenario?.api ?? api;
-}
+window.callie = api;
 const controls = {
   ...(healthScenario ? { health: healthScenario } : {}),
-  ...(modalScenario ? { modal: modalScenario.controller } : {}),
-  ...(leadsScenario ? { leads: leadsScenario.controller } : {}),
   calls,
   setGoogleConnectionReady(ready: boolean) { googleConnectionReady = ready; },
   setConnectionStatusUnavailable(unavailable: boolean) { connectionStatusUnavailable = unavailable; },
   setMode(mode: typeof localMode) { localMode = mode; window.dispatchEvent(new Event('focus')); },
-  setDetailMode(mode: typeof detailMode) { detailMode = mode; },
-  resolvePendingDetails() { for (const resolve of pendingDetails.splice(0)) resolve(structuredClone(detail)); },
   startPresentationFrames() {
     cancelAnimationFrame(frameRequest);
     frameObserver?.disconnect();

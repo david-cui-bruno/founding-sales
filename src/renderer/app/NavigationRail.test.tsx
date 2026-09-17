@@ -43,7 +43,7 @@ function dragRegion(selector: string): string | undefined {
 
 function RailHarness() {
   const [route, setRoute] = useState<AppRoute>('today');
-  return <NavigationRail route={route} onNavigate={setRoute} reviewCount={{ status: 'ready', count: 3, observedAt: '2026-09-10T00:00:00.000Z' }} />;
+  return <NavigationRail route={route} onNavigate={setRoute} />;
 }
 
 describe('NavigationRail window chrome', () => {
@@ -110,63 +110,54 @@ describe('NavigationRail window chrome', () => {
     expect(cssRule('.nav-rail__spacer').getPropertyValue('flex-grow')).toBe('1');
   });
 
+  it('carries no rules for the removed review badge or More disclosure', () => {
+    const selectors = Array.from(stylesheet.sheet!.cssRules)
+      .filter((rule): rule is CSSStyleRule => rule instanceof CSSStyleRule)
+      .map((rule) => rule.selectorText);
+    expect(selectors.filter((selector) => /nav-rail__(badge|more-toggle|other-workspaces)/.test(selector))).toEqual([]);
+  });
+
   it.each(['darwin', 'win32', 'linux', undefined])(
     'preserves link order, focusability and in-window navigation on %s',
     (platform) => {
       if (platform) document.body.dataset.platform = platform;
       render(<RailHarness />);
       const rail = screen.getByRole('navigation', { name: 'Primary' });
-      const toggle = screen.getByRole('button', { name: 'More workspaces' });
-      expect(toggle.getAttribute('aria-expanded')).toBe('false');
+      expect(screen.queryByRole('button', { name: 'More workspaces' })).toBeNull();
       expect(screen.queryByRole('link', { name: 'Leads' })).toBeNull();
-      fireEvent.click(toggle);
       const links = screen.getAllByRole<HTMLAnchorElement>('link');
       expect(links.map((link) => link.getAttribute('href'))).toEqual([
-        '#/today', '#/accounts', '#/campaigns', '#/leads', '#/pipeline', '#/conversations',
-        '#/learnings', '#/friday', '#/inbox', '#/settings',
+        '#/today', '#/accounts', '#/campaigns', '#/settings',
       ]);
-      const more = rail.querySelector<HTMLButtonElement>('.nav-rail__more-toggle')!;
-      expect(more).not.toBeNull();
-      expect(more.getAttribute('aria-label')).toBe('More workspaces');
-      expect(more.getAttribute('aria-expanded')).toBe('true');
-      expect(getComputedStyle(more).display).toBe('flex');
-      // Shared disclosure keeps real destinations and their order.
-      expect(Array.from(rail.querySelectorAll('a, button, input, select, textarea, [tabindex]'))).toEqual([
-        ...links.slice(0, 3), more, ...links.slice(3),
-      ]);
+      // The rail's only interactive controls are the four real destinations.
+      expect(Array.from(rail.querySelectorAll('a, button, input, select, textarea, [tabindex]'))).toEqual(links);
       for (const link of links) {
         expect(link.tabIndex).toBe(0);
         expect(link.getAttribute('target')).toBeNull();
         link.focus();
         expect(document.activeElement).toBe(link);
       }
-      const leads = screen.getByRole('link', { name: 'Leads' });
-      expect(fireEvent.click(leads)).toBe(false);
-      expect(leads.getAttribute('aria-current')).toBe('page');
+      const accounts = screen.getByRole('link', { name: 'Accounts' });
+      expect(fireEvent.click(accounts)).toBe(false);
+      expect(accounts.getAttribute('aria-current')).toBe('page');
       expect(screen.getByRole('link', { name: 'Today' }).getAttribute('aria-current')).toBeNull();
-      expect(screen.getByLabelText('3 open local reviews').textContent).toBe('3');
+      expect(screen.queryByLabelText(/open local reviews/)).toBeNull();
     },
   );
 });
 
-it('keeps one Callie wordmark and More state independent of feature descendants and authority', () => {
+it('keeps one Callie wordmark independent of feature descendants and authority', () => {
   const view = (mode?: string) => <div className="app-shell"><RailHarness />{mode && <section className="native-desk" data-presentation="native-a" data-workflow-mode={mode} />}</div>;
   const { rerender, container } = render(view());
-  const more = screen.getByRole('button', { name: 'More workspaces' });
   const brand = screen.getByText('Callie');
   expect(container.querySelectorAll('.nav-rail__brand-native')).toHaveLength(1);
   expect(screen.queryByText('FSS')).toBeNull();
   expect(getComputedStyle(brand).display).not.toBe('none');
-  expect(screen.queryByRole('link', { name: 'Leads' })).toBeNull();
-  fireEvent.click(more);
   for (const mode of ['meeting_first', 'legacy', 'unknown', undefined]) {
     rerender(view(mode));
     expect(screen.getByText('Callie')).toBe(brand);
     expect(getComputedStyle(brand).display).not.toBe('none');
-    expect(screen.getByRole('button', { name: 'More workspaces' })).toBe(more);
-    expect(more.getAttribute('aria-expanded')).toBe('true');
-    expect(screen.getByRole('link', { name: 'Leads' })).toBeTruthy();
+    expect(screen.getAllByRole('link').map((link) => link.textContent)).toEqual(['Today', 'Accounts', 'Campaigns', 'Settings']);
+    expect(screen.queryByRole('button')).toBeNull();
   }
-  fireEvent.click(more);
-  expect(screen.queryByRole('link', { name: 'Leads' })).toBeNull();
 });

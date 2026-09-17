@@ -1,5 +1,5 @@
 import { productionDomainGate } from '../fixtures/productionDomainGate';
-import { createImportProvider } from '../../src/main/ipc/registerApplicationIpc';
+import { createImportProvider } from '../fixtures/legacyDomainProviders';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -18,7 +18,7 @@ import {
 import {
   BUILTIN_PRIORITIZATION_RULE_V1,
 } from '../../src/main/domain/prioritization/builtinPrioritizationRules';
-import { type ImportProvider } from '../../src/main/imports/importService';
+import { type ImportProvider } from '../fixtures/legacyDomainProviders';
 import type {
   ImportCommitRequest,
   ImportMapping,

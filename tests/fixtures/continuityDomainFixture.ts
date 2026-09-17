@@ -1,10 +1,7 @@
 import { insertPerson } from './domainRows';
-import type { SafeLogFields } from '../../src/main/logging/safeLogger';
 import assert from 'node:assert/strict';
 import { createDelegationRuntime } from '../../src/main/delegation/delegationRuntime';
 import { registerOutreachIpc } from '../../src/main/ipc/registerOutreachIpc';
-import { registerDiscoveryIpc } from '../../src/main/discovery/registerDiscoveryIpc';
-import { createDiscoveryProvider } from '../../src/main/discovery/discoveryProvider';
 import { dailySnapshotSchema, type DailySnapshot } from '../../src/shared/contracts/dailyContract';
 import { localCommitmentsSnapshotSchema } from '../../src/shared/contracts/localWorkspaceContract';
 import { randomUUID } from 'node:crypto';
@@ -19,8 +16,7 @@ import { setTimeout as realTimeout, clearTimeout as clearRealTimeout } from 'nod
 import { registerDailyIpc } from '../../src/main/today/registerDailyIpc';
 import { registerLeadsIpc } from '../../src/main/leads/registerLeadsIpc';
 import { registerLeadDetailIpc } from '../../src/main/leads/registerLeadDetailIpc';
-import { registerReviewIpc } from '../../src/main/review/registerReviewIpc';
-import { createDailyProvider, createLeadsProvider, createLeadDetailProvider, createReviewProvider, createFridayProvider } from '../../src/main/ipc/registerApplicationIpc';
+import { createDailyProvider, createLeadsProvider, createLeadDetailProvider } from '../../src/main/ipc/registerApplicationIpc';
 import { localDelegationStatusSchema } from '../../src/shared/contracts/ownerCommandContract';
 import { localCompanyCreateRequestSchema, localCompanyCreateResultSchema, type LocalCompanyCreateRequest } from '../../src/shared/contracts/localCompanyIntakeContract';
 
@@ -32,10 +28,8 @@ import type { FounderSalesDomain } from '../../src/main/domain/founderSalesDomai
 import { SystemClock } from '../../src/main/domain/support/clock';
 import { UuidGenerator } from '../../src/main/domain/support/idGenerator';
 import { FoundationRuntime } from '../../src/main/foundation/foundationRuntime';
-import { registerFridayIpc } from '../../src/main/friday/registerFridayIpc';
 import { HealthService } from '../../src/main/health/healthService';
 import { registerHealthIpc } from '../../src/main/health/registerHealthIpc';
-import { SourcingPoller } from '../../src/main/sourcing/sourcingPoller';
 import { createLocalWorkspaceProvider } from '../../src/main/workspace/localWorkspaceProvider';
 import { registerLocalWorkspaceIpc } from '../../src/main/workspace/registerLocalWorkspaceIpc';
 import { createCallieApi } from '../../src/preload/createCallieApi';
@@ -52,15 +46,14 @@ export const RETAINED_DISCOVERY = DISCOVERY_NOW;
 type RetainedKind = 'callback' | 'post_stage' | 'onboarding' | 'inbound_response' | 'warm_relationship' | 'founder_resurface';
 type RetainedOwner = Readonly<{ kind: RetainedKind; personId: string; prospectId: string; cycleId: string; actionId: string; sourceEventId: string; evidenceIds: readonly string[] }>;
 
-export const FRIDAY_REQUESTED_AT = '2026-09-10T14:30:00.000Z';
-export const FRIDAY_OWNER_AT = '2026-09-10T13:00:00.000Z';
 export const HEALTH_ORPHAN_ID = 'continuity-health-orphan';
-export const HEALTH_POLL_AT = '2026-09-10T15:01:00.000Z';
 export const CONTINUITY_NOW = '2026-09-10T15:00:00.000Z';
 export const CONTINUITY_URL = 'callie://app/index.html';
+/** Stage0 readonly public reads: health plus the two local workspace projections. */
 export const CONTINUITY_READ_CHANNELS = [
-  'health:get', 'local-workspace:get', 'local-workspace:get-commitments', 'friday:get',
+  'health:get', 'local-workspace:get', 'local-workspace:get-commitments',
 ] as const;
+/** Construction mode registers health and the twenty local-workspace channels (21). */
 export const CONTINUITY_REGISTERED_CHANNELS = [
   'local-workspace:admit-company-draft-email', 'local-workspace:admit-company-phone-route', 'local-workspace:open-company-draft', 'local-workspace:get-company-draft', 'local-workspace:save-company-draft', 'local-workspace:prepare-company-draft',
   'health:get',
@@ -68,21 +61,18 @@ export const CONTINUITY_REGISTERED_CHANNELS = [
   'local-workspace:get', 'local-workspace:get-company', 'local-workspace:get-commitments', 'local-workspace:transition',
   'local-workspace:review-company', 'local-workspace:create-company', 'local-workspace:company-create-status',
   'local-workspace:research-company', 'local-workspace:company-research-status', 'local-workspace:link-company-person', 'local-workspace:get-call-settings', 'local-workspace:update-call-settings',
-  'friday:get', 'friday:drilldown', 'friday:create-job', 'friday:fill-job', 'friday:cancel-job',
 ] as const;
 
-export const CONTINUITY_UI_CHANNELS = [...CONTINUITY_READ_CHANNELS, 'daily:get', 'leads:list', 'review:list', 'local-workspace:get-company',
+export const CONTINUITY_UI_CHANNELS = [...CONTINUITY_READ_CHANNELS, 'daily:get', 'leads:list', 'local-workspace:get-company',
   'local-workspace:get-company-research-settings',
   'local-workspace:review-company', 'local-workspace:create-company', 'local-workspace:company-create-status',
-  'outreach:delegation-status', 'lead-detail:outbound-capabilities'] as const;
+  'outreach:delegation-status'] as const;
+/** Company UI adds the Daily read and the two surviving person reads (24). */
 export const CONTINUITY_UI_REGISTERED_CHANNELS = [...CONTINUITY_REGISTERED_CHANNELS, 'daily:get',
-  'leads:list', 'leads:update-field', 'leads:bulk-update', 'review:list', 'review:resolve',
-  'lead-detail:get', 'lead-detail:begin-outbound', 'lead-detail:outbound-capabilities',
-  'lead-detail:confirm-transition', 'lead-detail:dismiss', 'lead-detail:cloud-score-override',
-  'lead-detail:find-contact-info'] as const;
+  'leads:list', 'lead-detail:get'] as const;
 
+/** Retained UI adds the thirty-seven outreach/delegation channels (61). */
 export const RETAINED_UI_REGISTERED_CHANNELS = [...CONTINUITY_UI_REGISTERED_CHANNELS,
-  'discovery:get', 'discovery:get-brief', 'discovery:begin', 'discovery:override',
   ...['status', 'configure', 'connect-gmail', 'disconnect-gmail', 'open-draft', 'save-draft', 'generate-draft', 'send-draft', 'inspect-local-authority',
     'reply-reconcile', 'reply-edit', 'requested-followup-prepare', 'requested-followup-get', 'requested-followup-edit', 'requested-followup-approve',
     'delegation-begin-phone', 'delegation-get-phone-handoff-state', 'delegation-bootstrap', 'delegation-policy', 'delegation-research', 'delegation-status',
@@ -91,8 +81,7 @@ export const RETAINED_UI_REGISTERED_CHANNELS = [...CONTINUITY_UI_REGISTERED_CHAN
     'delegation-configure', 'delegation-submit', 'delegation-sync', 'delegation-get-account-preparation', 'delegation-configure-intake',
     'delegation-refresh-selected-account', 'delegation-selected-account-freshness'].map(name => `outreach:${name}`),
 ] as const;
-const RETAINED_UI_CHANNELS = [...CONTINUITY_READ_CHANNELS, 'daily:get', 'review:list', 'outreach:delegation-status',
-  'lead-detail:outbound-capabilities', 'lead-detail:get', 'discovery:get-brief', 'local-workspace:transition'];
+const RETAINED_UI_CHANNELS = [...CONTINUITY_READ_CHANNELS, 'daily:get', 'outreach:delegation-status', 'local-workspace:transition'];
 export const SYNTHETIC_WORKER_IDS = ['synthetic-worker-alpha', 'synthetic-worker-beta'] as const;
 
 type Invocation = Readonly<{
@@ -103,19 +92,15 @@ export type ContinuityCleanup = Readonly<{
   databaseClosed: boolean; keysZeroed: boolean; directoryRemoved: boolean;
   registrationsRemaining: number; pendingInvocations: number;
   cleanupRuns: number; runtimeShutdowns: number; domainShutdowns: number; databaseCloses: number;
-  pollerStops: number; pollerIdleWaits: number;
 }>;
 
-/** Default Stage0: four readonly channels. Explicit company-ui mode adds only
+/** Default Stage0: three readonly channels. Explicit company-ui mode adds only
  * local company commands, real incidental reads and a finite delivery hold. The caller's
  * Electron registration map is the only replacement for the IPC transport.
  */
-export async function createContinuityDomainFixture(handlers: Map<string, RegisteredIpcHandler>, mode: 'construction' | 'company-ui' | 'retained-setup' | 'retained-ui' | 'retained-synthetic' | 'health-poll' | 'health-ui' | 'health-blocked' | 'friday-ui' = 'construction') {
-  const isFridayUi = mode === 'friday-ui';
+export async function createContinuityDomainFixture(handlers: Map<string, RegisteredIpcHandler>, mode: 'construction' | 'company-ui' | 'retained-setup' | 'retained-ui' | 'retained-synthetic' | 'health-ui' | 'health-blocked' = 'construction') {
   const isCompanyUi = mode === 'company-ui' || mode === 'health-ui';
   const isBlockedUi = mode === 'health-blocked';
-  const pollDiagnostics: { level: string; eventCode: string; fields?: SafeLogFields }[] = [];
-  let pollAttempted = false;
   let latestHealth: Promise<unknown> | undefined;
   const isRetainedUi = mode === 'retained-ui' || mode === 'retained-synthetic';
   const uiCounters = { network: 0, forbidden: 0, delegationDisposals: 0 };
@@ -157,36 +142,6 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
       deliver: async value => { arrived(structuredClone(value)); const error = await decision; if (error) throw error; return value; } };
     healthHolds.push(control); return control;
   }
-  const fridayMutationHolds: (RetainedReadHold & { channel: string })[] = [];
-  let activeFridayMutation: RetainedReadHold | undefined;
-  let fridayReportHold: RetainedReadHold | undefined;
-  function holdNextFridayMutation(): RetainedReadHold {
-    assert.ok(isFridayUi); assert.ok(!disposed); assert.equal(activeFridayMutation, undefined);
-    const channel = ['friday:create-job', 'friday:fill-job', 'friday:cancel-job'][fridayMutationHolds.length]; assert.ok(channel);
-    let arrived!: (value: unknown | null) => void, decide!: (error: Error | null) => void;
-    const arrival = new Promise<unknown | null>(resolve => { arrived = resolve; });
-    const decision = new Promise<Error | null>(resolve => { decide = resolve; });
-    let settled = false, claimed = false;
-    const finish = (error: Error | null) => { if (settled) return; settled = true; clearDeliveryTimeout(timer); activeFridayMutation = undefined; arrived(null); decide(error); };
-    const timer = deliveryTimeout(() => finish(new Error('Friday mutation delivery watchdog')), 5_000);
-    const control = { channel, arrival, release: () => finish(null), reject: () => finish(new Error('Friday committed delivery rejected')),
-      cancel: () => finish(new Error('Friday mutation disposed')), claim: () => { if (claimed || settled) return false; claimed = true; return true; },
-      deliver: async (value: unknown) => { arrived(structuredClone(value)); const error = await decision; if (error) throw error; return value; } };
-    fridayMutationHolds.push(control); activeFridayMutation = control; return control;
-  }
-  function holdFridayReport(): RetainedReadHold {
-    assert.ok(isFridayUi); assert.ok(!disposed); assert.equal(fridayReportHold, undefined);
-    let arrived!: (value: unknown | null) => void, decide!: (error: Error | null) => void;
-    const arrival = new Promise<unknown | null>(resolve => { arrived = resolve; });
-    const decision = new Promise<Error | null>(resolve => { decide = resolve; });
-    let settled = false, claimed = false;
-    const finish = (error: Error | null) => { if (settled) return; settled = true; clearDeliveryTimeout(timer); arrived(null); decide(error); };
-    const timer = deliveryTimeout(() => finish(new Error('Friday report delivery watchdog')), 5_000);
-    const control = { arrival, release: () => finish(null), reject: () => finish(new Error('Friday report delivery rejected')),
-      cancel: () => finish(new Error('Friday report disposed')), claim: () => { if (claimed || settled) return false; claimed = true; return true; },
-      deliver: async (value: unknown) => { arrived(structuredClone(value)); const error = await decision; if (error) throw error; return value; } };
-    fridayReportHold = control; return control;
-  }
   assert.equal(handlers.size, 0, 'Continuity fixture requires an empty owned transport map');
   const temp = createTempDatabase();
   const directory = dirname(dirname(temp.path));
@@ -196,8 +151,7 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
     domainConstructions: 0, domainBootstraps: 0, healthConstructions: 0,
     healthReads: 0, domainEntries: 0, databaseEntries: 0, evidenceReads: 0,
     databaseCloses: 0, domainShutdowns: 0, runtimeShutdowns: 0,
-    credentialLoads: 0, inboxCreations: 0, pollSchedules: 0,
-    pollerStops: 0, pollerIdleWaits: 0, cleanupRuns: 0,
+    cleanupRuns: 0,
   };
   let database: AppDatabase | undefined;
   let capturedRuntime: DomainRuntime | undefined;
@@ -300,28 +254,6 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
       runtime.withDatabase(db => { counts.databaseEntries++; return operation(db); }),
     getHealth: () => { counts.healthReads++; return runtime.getHealth(); },
   };
-  const poller = new SourcingPoller({
-    domainGate: observed,
-    clock: new SystemClock(),
-    loadCredentials: async () => {
-      counts.credentialLoads++;
-      return mode === 'health-poll'
-        ? { credentials: { accessKeyId: 'synthetic-access', secretAccessKey: 'synthetic-secret' }, source: 'file' as const }
-        : { credentials: null, source: 'none' as const };
-    },
-    createInboxClient: async () => {
-      counts.inboxCreations++;
-      throw new Error('Stage0 does not create an inbox client');
-    },
-    ...(mode === 'health-poll' ? { pollIds: { next: () => 'c140fbf0-5b83-4a50-baa2-8fc06f1028fe' },
-      logger: { log: (level: 'debug' | 'info' | 'warn' | 'error', eventCode: string, fields?: SafeLogFields) => { pollDiagnostics.push({ level, eventCode, fields }); } } } : {}),
-    watchdogTimer: { schedule: () => {
-      counts.pollSchedules++;
-      throw new Error('Stage0 does not schedule a poller');
-    } },
-  });
-  // Constructor/getHealth are observational. Never call start/pollNow/retry.
-  runtime.setSourcingHealthProvider(() => poller.getHealth());
 
   const dispose = (): Promise<ContinuityCleanup> => {
     if (disposal) return disposal;
@@ -329,13 +261,9 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
     counts.cleanupRuns++;
     disposal = (async () => {
       const errors: unknown[] = [];
-      try { counts.pollerStops++; poller.stop(); } catch (error) { errors.push(error); }
-      try { counts.pollerIdleWaits++; await poller.idle(); } catch (error) { errors.push(error); }
       delivery?.cancel(); // Cancel/release delivery BEFORE draining invokes.
       for (const hold of readHolds) hold.cancel();
       for (const hold of healthHolds) hold.cancel();
-      for (const hold of fridayMutationHolds) hold.cancel();
-      fridayReportHold?.cancel();
       await Promise.allSettled([...flights]);
       for (const unregister of unregisters.splice(0).reverse()) {
         try { unregister(); } catch (error) { errors.push(error); }
@@ -356,7 +284,6 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
         registrationsRemaining: handlers.size, pendingInvocations: flights.size,
         cleanupRuns: counts.cleanupRuns, runtimeShutdowns: counts.runtimeShutdowns,
         domainShutdowns: counts.domainShutdowns, databaseCloses: counts.databaseCloses,
-        pollerStops: counts.pollerStops, pollerIdleWaits: counts.pollerIdleWaits,
       });
       if (errors.length) throw new AggregateError(errors, 'Continuity fixture cleanup failed');
       return evidence;
@@ -369,12 +296,10 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
     const trusted = (url: string) => url === CONTINUITY_URL;
     unregisters.push(registerHealthIpc(observed, trusted));
     unregisters.push(registerLocalWorkspaceIpc(createLocalWorkspaceProvider(observed), trusted));
-    unregisters.push(registerFridayIpc(createFridayProvider(observed), trusted));
-    if (isCompanyUi || isRetainedUi || isFridayUi) {
+    if (isCompanyUi || isRetainedUi) {
       unregisters.push(registerDailyIpc(createDailyProvider(observed), trusted));
       unregisters.push(registerLeadsIpc(createLeadsProvider(observed), trusted));
       unregisters.push(registerLeadDetailIpc(createLeadDetailProvider(observed), trusted));
-      unregisters.push(registerReviewIpc(createReviewProvider(observed), trusted));
     }
     if (delegation) {
       const denied = async (): Promise<never> => { uiCounters.forbidden++; throw new Error('Unrelated outreach forbidden'); };
@@ -382,13 +307,8 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
         status: denied, configure: denied, connectGmail: denied, disconnectGmail: denied,
         openDraft: denied, saveDraft: denied, generateDraft: denied, sendDraft: denied, inspectLocalAuthority: denied,
       } }));
-      unregisters.push(registerDiscoveryIpc({ isTrustedRendererUrl: trusted, provider: {
-        get: () => runtime.withDomain(domain => createDiscoveryProvider(domain).get()),
-        getBrief: input => runtime.withDomain(domain => createDiscoveryProvider(domain).getBrief(input)),
-        begin: denied, override: denied,
-      } }));
     }
-    assert.deepEqual([...handlers.keys()].sort(), [...(isRetainedUi ? RETAINED_UI_REGISTERED_CHANNELS : isCompanyUi || isFridayUi ? CONTINUITY_UI_REGISTERED_CHANNELS : CONTINUITY_REGISTERED_CHANNELS)].sort());
+    assert.deepEqual([...handlers.keys()].sort(), [...(isRetainedUi ? RETAINED_UI_REGISTERED_CHANNELS : isCompanyUi ? CONTINUITY_UI_REGISTERED_CHANNELS : CONTINUITY_REGISTERED_CHANNELS)].sort());
 
     const invokeFrom = (senderUrl: string, channel: string, ...args: unknown[]): Promise<unknown> => {
       const index = trace.length;
@@ -397,9 +317,9 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
       const flight = (async () => {
         try {
           if (disposed) throw new Error('Continuity fixture is disposed');
-          if (!((isRetainedUi ? RETAINED_UI_CHANNELS : isFridayUi ? ['health:get', 'lead-detail:outbound-capabilities', 'review:list', 'friday:get', 'friday:create-job', 'friday:fill-job', 'friday:cancel-job'] : isCompanyUi ? CONTINUITY_UI_CHANNELS : isBlockedUi ? [...CONTINUITY_READ_CHANNELS, 'local-workspace:create-company'] : mode === 'retained-setup' ? [...CONTINUITY_READ_CHANNELS, 'local-workspace:transition'] : CONTINUITY_READ_CHANNELS) as readonly string[]).includes(channel)) {
-            if (isRetainedUi || isFridayUi) uiCounters.forbidden++;
-            throw new Error('Stage0 only admits its four readonly channels');
+          if (!((isRetainedUi ? RETAINED_UI_CHANNELS : isCompanyUi ? CONTINUITY_UI_CHANNELS : isBlockedUi ? [...CONTINUITY_READ_CHANNELS, 'local-workspace:create-company'] : mode === 'retained-setup' ? [...CONTINUITY_READ_CHANNELS, 'local-workspace:transition'] : CONTINUITY_READ_CHANNELS) as readonly string[]).includes(channel)) {
+            if (isRetainedUi) uiCounters.forbidden++;
+            throw new Error('Stage0 only admits its three readonly channels');
           }
           // Explicit synthetic UNCONFIGURED worker transport only. No registrar,
           // credential access, worker authority, grant, pairing or readiness claim.
@@ -415,9 +335,6 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
           const hold = channel === 'local-workspace:create-company' && delivery?.claim() ? delivery : undefined;
           const retainedHold = channel === 'local-workspace:get-commitments' ? readHolds.find(item => item.claim()) : undefined;
           const healthHold = channel === 'health:get' ? healthHolds.find(item => item.claim()) : undefined;
-          const fridayHold = channel === 'friday:get'
-            ? fridayReportHold?.claim() ? fridayReportHold : undefined
-            : fridayMutationHolds.find(item => item.channel === channel && item.claim());
           const actual = await handler({ senderFrame: { url: senderUrl } }, ...args);
           let result = actual;
           if (mode === 'retained-synthetic' && channel === 'daily:get') {
@@ -440,7 +357,7 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
             trace[index] = Object.freeze({ ...trace[index]!, synthetic: true, presentationVariant: retainedMetadata === 'complete' ? 'retained-complete' : 'retained-partial', actualResult: structuredClone(actual) });
           }
           trace[index] = Object.freeze({ ...trace[index]!, result: structuredClone(result) });
-          const delivered = hold ? await hold.hold(args[0], result) : retainedHold ? await retainedHold.deliver(result) : healthHold ? await healthHold.deliver(result) : fridayHold ? await fridayHold.deliver(result) : result;
+          const delivered = hold ? await hold.hold(args[0], result) : retainedHold ? await retainedHold.deliver(result) : healthHold ? await healthHold.deliver(result) : result;
           trace[index] = Object.freeze({ ...trace[index]!, outcome: 'resolved' });
           return delivered;
         } catch (error) {
@@ -486,65 +403,6 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
         accounts: db.raw.prepare('SELECT id,name,domain,version FROM pm_accounts ORDER BY id').all(),
         commands: db.raw.prepare('SELECT command_id,account_id FROM pm_account_commands ORDER BY command_id').all(),
         jobs: db.raw.prepare('SELECT id FROM jobs ORDER BY id').all(),
-      }));
-    };
-    let fridayOwner: RetainedOwner | undefined;
-    const seedFridayOwner = async () => {
-      assert.ok(isFridayUi); assert.equal(fridayOwner, undefined); assert.equal(new Date().toISOString(), CONTINUITY_NOW);
-      return runtime.withDomain(() => {
-        assert.ok(capturedRuntime);
-        const services = capturedRuntime.getServices();
-        const at = FRIDAY_OWNER_AT;
-        const source = services.sources.createPersonProspect({ person: { displayName: 'Friday fictional Won owner' }, contacts: [],
-          source: { id: randomUUID(), channel: 'referral', observedAt: at, sourceRecord: { fixture: 'friday-owner' },
-            referral: { kind: 'unknown' as const, reason: 'not_provided' as const } } });
-        const unreviewed = services.lifecycle.createUnreviewedCycle({ personId: source.personId, prospectId: source.prospectId,
-          entrySourceEventId: source.sourceEventId, effectiveAt: at });
-        const ready = services.lifecycle.reviewToReady({ cycleId: unreviewed.id, expectedCycleVersion: 1, expectedProspectVersion: 1, effectiveAt: at });
-        const replyId = randomUUID(), interviewId = randomUUID(), offerId = randomUUID();
-        services.unitOfWork.immediate(() => services.events.appendActivity({ id: replyId, personId: ready.personId,
-          prospectId: ready.prospectId, salesCycleId: ready.id, kind: 'text', direction: 'inbound', channel: 'text', occurredAt: at, observedOutcome: 'replied', metadata: {} }));
-        services.lifecycle.recordQualifyingContact({ cycleId: ready.id, expectedCycleVersion: 2, expectedCurrentActionId: ready.currentNextActionId!, activityId: replyId, effectiveAt: at });
-        services.unitOfWork.immediate(() => services.events.appendActivity({ id: interviewId, personId: ready.personId,
-          prospectId: ready.prospectId, salesCycleId: ready.id, kind: 'interview', direction: 'outbound', channel: 'phone', occurredAt: at,
-          durationSeconds: 240, observedOutcome: 'substantive', metadata: {} }));
-        const interviewed = services.lifecycle.confirmInterviewed({ cycleId: ready.id, expectedCycleVersion: 3,
-          expectedCurrentActionId: ready.currentNextActionId!, suggestionActivityId: interviewId, effectiveAt: at, confirmedAt: at });
-        assert.equal(interviewed.version, 4);
-        services.lifecycle.setDesignPartnerFitness({ cycleId: ready.id, expectedCycleVersion: 4, fitness: 5, updatedAt: at });
-        const dimension = { value: 'moderate' as const, evidenceActivityIds: [interviewId] };
-        services.lifecycle.setCloseReadiness({ cycleId: ready.id, expectedReadinessVersion: 0, assessedAt: at,
-          readiness: { version: 1, demonstratedPain: dimension, activeTimeline: dimension, decisionAuthority: dimension,
-            willingnessToTryOrPay: dimension, concreteNextStep: dimension } });
-        services.unitOfWork.immediate(() => services.events.appendActivity({ id: offerId, personId: ready.personId,
-          prospectId: ready.prospectId, salesCycleId: ready.id, kind: 'offer', direction: 'outbound', channel: 'phone', occurredAt: at, observedOutcome: 'price_said', metadata: {} }));
-        const offered = services.lifecycle.confirmOffered({ cycleId: ready.id, expectedCycleVersion: 5,
-          expectedCurrentActionId: interviewed.currentNextActionId!, suggestionActivityId: offerId, effectiveAt: at, confirmedAt: at });
-        const won = services.lifecycle.confirmWon({ cycleId: ready.id, expectedCycleVersion: 6, expectedCurrentActionId: offered.currentNextActionId!,
-          effectiveAt: at, confirmedAt: at, terms: { billingModel: 'per_door_monthly', doorsCommitted: 12, unitRateCents: 2500, foundingCustomer: true, effectiveAt: at } });
-        assert.equal(won.stage, 'won'); assert.equal(won.version, 7); assert.ok(won.currentNextActionId);
-        fridayOwner = Object.freeze({ kind: 'onboarding' as const, personId: source.personId, prospectId: source.prospectId, cycleId: won.id,
-          actionId: won.currentNextActionId, sourceEventId: source.sourceEventId, evidenceIds: Object.freeze([replyId, interviewId, offerId]) });
-        return fridayOwner;
-      });
-    };
-    const fridayEvidence = () => {
-      assert.ok(isFridayUi); const owner = fridayOwner; assert.ok(owner);
-      return runtime.withDatabase(db => ({
-        changes: db.raw.prepare<[], { count: number }>('SELECT total_changes() AS count').get()!.count,
-        audit: auditDomainInvariants({ database: db, asOf: new Date().toISOString() }),
-        owner: {
-          identity: owner,
-          person: db.raw.prepare('SELECT id,display_name FROM persons WHERE id=?').get(owner.personId),
-          source: db.raw.prepare('SELECT id,person_id,prospect_id,channel,(SELECT id FROM prospects WHERE original_source_event_id=source_events.id) AS original_prospect_id FROM source_events WHERE id=?').get(owner.sourceEventId),
-          prospect: db.raw.prepare('SELECT id,person_id,original_source_event_id,segment FROM prospects WHERE id=?').get(owner.prospectId),
-          cycle: db.raw.prepare('SELECT id,person_id,prospect_id,entry_source_event_id,stage,workflow_status,current_next_action_id,version FROM sales_cycles WHERE id=?').get(owner.cycleId),
-          activities: db.raw.prepare< [string], { id: string; person_id: string; prospect_id: string; sales_cycle_id: string; kind: string; occurred_at: string } >('SELECT id,person_id,prospect_id,sales_cycle_id,kind,occurred_at FROM activities WHERE sales_cycle_id=? ORDER BY id').all(owner.cycleId),
-          stages: db.raw.prepare('SELECT to_stage FROM stage_events WHERE sales_cycle_id=? ORDER BY transition_sequence').all(owner.cycleId),
-          terms: db.raw.prepare('SELECT doors_committed,billing_model,unit_rate_cents,projected_mrr_cents FROM won_terms WHERE sales_cycle_id=?').get(owner.cycleId),
-        },
-        jobs: db.raw.prepare<[], { id: string; type: string; idempotency_key: string; state: string; payload_json: string; result_json: string | null }>(
-          "SELECT id,type,idempotency_key,state,payload_json,result_json FROM jobs WHERE type='founder_job_request_v1' ORDER BY id").all(),
       }));
     };
     // Finite, two-phase internal construction only. Never expose services/raw DB.
@@ -669,10 +527,8 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
         pendingIds: db.raw.prepare<[], { id: string }>("SELECT id FROM next_actions WHERE status='pending' ORDER BY id").all().map(row => row.id),
       }));
     };
-    return Object.freeze({ api, isRetainedUi, isBlockedUi, isFridayUi, seedFridayOwner, fridayEvidence, holdNextFridayMutation, holdFridayReport, holdRetainedRead, holdHealthRead,
+    return Object.freeze({ api, isRetainedUi, isBlockedUi, holdRetainedRead, holdHealthRead,
       drainLatestHealth: async () => { assert.equal(mode, 'health-ui'); assert.ok(latestHealth); await latestHealth; },
-      failSourcingOnce: async () => { assert.equal(mode, 'health-poll'); assert.equal(pollAttempted, false); assert.equal(new Date().toISOString(), HEALTH_POLL_AT); pollAttempted = true; await poller.pollNow(); },
-      pollDiagnostics: () => structuredClone(pollDiagnostics),
       healthEvidence: async () => { assert.ok(mode.startsWith('health-')); assert.ok(startupReport); return runtime.withDatabase(db => ({
         report: structuredClone(startupReport!), reportFrozen: Object.isFrozen(startupReport),
         audit: auditDomainInvariants({ database: db, asOf: new Date().toISOString() }),
@@ -684,9 +540,7 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
       rejectNextDaily: () => { assert.equal(mode, 'retained-synthetic'); assert.equal(dailyRejectionUsed, false); dailyRejectionUsed = true; rejectDaily = true; },
       seedRetained, retainedEvidence, invokeFrom, evidence, companyEvidence, armCompanyDelivery,
       cancelDelivery: () => { delivery?.cancel(); for (const hold of readHolds) hold.cancel();
-      for (const hold of healthHolds) hold.cancel();
-      for (const hold of fridayMutationHolds) hold.cancel();
-      fridayReportHold?.cancel(); },
+      for (const hold of healthHolds) hold.cancel(); },
       drainInvocations: () => Promise.allSettled([...flights]),
       drainReads: () => Promise.allSettled([...readFlights]), counts: () => Object.freeze({ ...counts }),
       trace: () => [...trace], dispose });

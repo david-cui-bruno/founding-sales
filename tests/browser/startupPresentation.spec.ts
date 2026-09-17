@@ -221,9 +221,10 @@ for (const width of [1440, 1050]) for (const theme of ['light', 'dark'] as const
     await page.evaluate(() => window.startupPresentation.setLocalMode('legacy'));
     await refresh(page);
     await settle(page, 'legacy');
-    // Actual legacy content keeps the same application-wide presentation.
-    await expect(page.getByTestId('today-route')).toBeVisible();
-    await expect(page.getByText('No suggested contacts right now.')).toBeVisible();
+    // A confirmed legacy workflow is an explicit hold on the desk route, in the
+    // same application-wide presentation. The removed legacy queue never renders.
+    await expect(page.getByText('Legacy workflow is active. Local records remain available. Switch to Native Desk in Settings to change the daily workspace. Worker actions are held.', { exact: true })).toBeVisible();
+    await expect(page.getByTestId('native-desk')).toHaveCount(0);
     await expect(page.locator('.presentation-root[data-presentation="native-a"]')).toHaveCount(1);
     await assertRail(page, width, theme);
     await expect(page.locator('.nav-rail__brand-native')).toBeVisible();
@@ -235,18 +236,11 @@ for (const width of [1440, 1050]) for (const theme of ['light', 'dark'] as const
     expect(inventory.filter(method => method === 'health.get')).toHaveLength(6);
     // StrictMode mounts read twice. Only four explicit refreshes add reads.
     for (const method of ['daily.get', 'delegation.status', 'localWorkspace.get', 'localWorkspace.getCommitments']) expect(inventory.filter(value => value === method), method).toHaveLength(6);
-    // FounderApp's real inspector provider reads capabilities on mount, not on
-    // user action (LeadInspectorProvider.tsx useEffect). It never starts outreach.
-    // Require exactly the StrictMode pair, even across every desk refresh.
-    // useDiscovery shares its in-flight read across StrictMode effects, so
-    // the diagnostic inventory has one discovery.get, not two.
+    // The removed person surfaces left no mount-time reads behind: only the
+    // health probe, the daily desk pair and the local workspace pair remain.
     const expectedReads = {
       'health.get': 6, 'daily.get': 6, 'delegation.status': 6,
       'localWorkspace.get': 6, 'localWorkspace.getCommitments': 6,
-      'leadDetail.getOutboundCapabilities': 2, 'today.get': 2, 'discovery.get': 1,
-      // Healthy StrictMode mount twice, then three explicit window-focus events.
-      // The first route-local Refresh button does not refresh the global summary.
-      'review.list': 5,
     };
     expect(inventory.filter(method => !(method in expectedReads)), 'unexpected API calls').toEqual([]);
     expect(inventory.slice().sort()).toEqual(Object.entries(expectedReads).flatMap(([method, count]) => Array<string>(count).fill(method)).sort());
@@ -290,8 +284,8 @@ for (const storage of ['system', 'invalid', 'throwing', 'missing', 'unset'] as c
       assertASample(sample, sample.theme as Theme, density, 1050);
     }
     const inventory = await methods(page);
-    for (const method of ['health.get', 'daily.get', 'delegation.status', 'localWorkspace.get', 'localWorkspace.getCommitments', 'leadDetail.getOutboundCapabilities', 'review.list']) expect(inventory.filter(value => value === method), method).toHaveLength(2);
-    expect(inventory).toHaveLength(14);
+    for (const method of ['health.get', 'daily.get', 'delegation.status', 'localWorkspace.get', 'localWorkspace.getCommitments']) expect(inventory.filter(value => value === method), method).toHaveLength(2);
+    expect(inventory).toHaveLength(10);
     await clean(page, state, info);
   });
 }

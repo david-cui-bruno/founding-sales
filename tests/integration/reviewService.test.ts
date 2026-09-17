@@ -1,5 +1,5 @@
 import { productionDomainGate } from '../fixtures/productionDomainGate';
-import { createReviewProvider } from '../../src/main/ipc/registerApplicationIpc';
+import { createReviewProvider } from '../fixtures/legacyDomainProviders';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { closeDatabase, openDatabase, type AppDatabase } from '../../src/main/db/database';

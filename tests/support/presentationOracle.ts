@@ -8,29 +8,23 @@ export const routeProofs = {
   today: { label: 'Today', heading: 'Today', read: 'daily.get' },
   accounts: { label: 'Accounts', heading: 'Accounts', read: 'daily.get' },
   campaigns: { label: 'Campaigns', heading: 'Campaigns', read: 'daily.get' },
-  leads: { label: 'Leads', heading: /^Leads · [\d,]+ (?:person|people)$/, read: 'leads.list' },
-  pipeline: { label: 'Pipeline', heading: 'Pipeline', read: 'pipeline.get' },
-  conversations: { label: 'Conversations', heading: /^Conversations · [\d,]+ calls?$/, read: 'conversations.list' },
-  learnings: { label: 'Learnings', heading: 'Learnings', read: 'learnings.list' },
-  friday: { label: 'Friday', heading: 'Friday scoreboard', read: 'friday.getCurrent' },
-  inbox: { label: 'Inbox', heading: /^Inbox · [\d,]+ open local reviews$/, read: 'review.list' },
   settings: { label: 'Settings', heading: 'Settings', read: 'appleSpike.getStatus' },
-} satisfies Record<AppRoute, { label: string; heading: string | RegExp; read: string }>;
+} satisfies Record<AppRoute, { label: string; heading: string; read: string }>;
+
+/** Exact hold the desk routes show while the legacy workflow is active. The removed legacy queue never renders. */
+export const legacyHoldCopy = 'Legacy workflow is active. Local records remain available. Switch to Native Desk in Settings to change the daily workspace. Worker actions are held.';
 
 export const nativePalette = {
   light: { canvas: 'rgb(233, 237, 242)', rail: 'rgb(233, 237, 242)', text: 'rgb(34, 42, 53)', surface: 'rgb(255, 255, 255)' },
   dark: { canvas: 'rgb(24, 29, 37)', rail: 'rgb(25, 31, 40)', text: 'rgb(237, 241, 246)', surface: 'rgb(38, 46, 57)' },
 };
 
-export function routeLinkName(route: AppRoute): string | RegExp {
-  return route === 'inbox'
-    ? /^Inbox (?:\d+ open local reviews|Checking local reviews|Local review count unavailable)$/
-    : routeProofs[route].label;
+export function routeLinkName(route: AppRoute): string {
+  return routeProofs[route].label;
 }
 
 export async function navigateActualRoute(page: Page, route: AppRoute) {
   const link = page.locator('.nav-rail').getByRole('link', { name: routeLinkName(route), exact: true });
-  if (!await link.isVisible()) await page.getByRole('button', { name: 'More workspaces', exact: true }).click();
   await expect(link).toHaveAttribute('href', `#/${route}`);
   await expect(link.locator('.nav-rail__label')).toHaveText(routeProofs[route].label);
   await link.click();
@@ -41,8 +35,13 @@ export async function navigateActualRoute(page: Page, route: AppRoute) {
 export async function assertActualDestination(page: Page, route: AppRoute, mode: PresentationContext['mode']) {
   switch (route) {
     case 'today':
-      await expect(page.locator(mode === 'legacy' ? '.today-route' : '.native-desk__queue--today')).toBeVisible();
-      if (mode === 'meeting_first') {
+      if (mode === 'legacy') {
+        // Local commitments stay readable under the hold; no desk and no removed queue is substituted.
+        await expect(page.getByText(legacyHoldCopy, { exact: true })).toBeVisible();
+        await expect(page.getByRole('heading', { level: 2, name: /^Local commitments/ })).toBeVisible();
+        await expect(page.getByTestId('native-desk')).toHaveCount(0);
+      } else {
+        await expect(page.locator('.native-desk__queue--today')).toBeVisible();
         const queue = page.getByRole('navigation', { name: 'Today queue', exact: true });
         await expect(queue.getByRole('region', { name: 'Calls', exact: true }).getByRole('button', { name: 'Call · Account A', exact: true })).toBeVisible();
         await expect(queue.getByRole('region', { name: /^Saved draft continuations/ }).locator('[data-row-key]')).toHaveCount(3);
@@ -52,7 +51,7 @@ export async function assertActualDestination(page: Page, route: AppRoute, mode:
     case 'accounts':
     case 'campaigns':
       if (mode === 'legacy') {
-        await expect(page.getByText('Legacy workflow is active. Local records remain available. Switch to Native Desk in Settings to change the daily workspace. Worker actions are held.', { exact: true })).toBeVisible();
+        await expect(page.getByText(legacyHoldCopy, { exact: true })).toBeVisible();
         if (route === 'accounts') {
           await expect(page.getByRole('navigation', { name: 'Local accounts', exact: true })).toBeVisible();
           await expect(page.getByRole('button', { name: 'Add company', exact: true })).toBeVisible();
@@ -72,24 +71,6 @@ export async function assertActualDestination(page: Page, route: AppRoute, mode:
       }
       await expect(page.locator('.native-desk__queue--today')).toHaveCount(0);
       break;
-    case 'leads':
-      await expect(page.getByRole('grid')).toBeVisible();
-      await expect(page.getByRole('grid').locator('[role="row"][data-person-id="person-kevin"]')).toBeVisible();
-      break;
-    case 'pipeline':
-      await expect(page.getByRole('radiogroup', { name: 'Pipeline view' })).toBeVisible();
-      await expect(page.locator('main').getByText('Kevin Shin', { exact: true })).toBeVisible();
-      break;
-    case 'conversations':
-      await expect(page.getByRole('searchbox', { name: 'Search conversations' })).toBeVisible();
-      await expect(page.getByRole('region', { name: 'Conversation detail', exact: true })).toBeVisible();
-      break;
-    case 'learnings': await expect(page.getByRole('button', { name: 'Capture learning', exact: true })).toBeVisible(); break;
-    case 'friday':
-      await expect(page.getByRole('heading', { name: 'Source funnel', exact: true })).toBeVisible();
-      await expect(page.getByRole('heading', { name: 'Job requests', exact: true })).toBeVisible();
-      break;
-    case 'inbox': await expect(page.locator('main').getByRole('tab')).toHaveCount(6); break;
     case 'settings':
       await expect(page.getByRole('navigation', { name: 'Settings sections' })).toBeVisible();
       await expect(page.getByRole('button', { name: 'Appearance', exact: true })).toBeVisible();
@@ -119,7 +100,6 @@ export async function presentationSample(page: Page) {
       railColor: getComputedStyle(rail).backgroundColor,
       railWidth: rail.getBoundingClientRect().width,
       currentHeight: current.getBoundingClientRect().height,
-      secondary: !!current.closest('.nav-rail__other-workspaces'),
       brand: brand && getComputedStyle(brand).display !== 'none' ? brand.textContent?.trim() : null,
       brandCount: rail.querySelectorAll('.nav-rail__brand-native').length,
       legacyBrandCount: rail.querySelectorAll('.nav-rail__brand').length,
@@ -146,7 +126,7 @@ export function assertSharedPresentation(sample: Awaited<ReturnType<typeof prese
   expect.soft(sample.canvas).toBe(palette.canvas);
   expect.soft(sample.railColor).toBe(palette.rail);
   expect.soft(sample.railWidth).toBe(context.width === 1050 ? 124 : 142);
-  expect.soft(sample.currentHeight).toBe(sample.secondary ? 36 : 44);
+  expect.soft(sample.currentHeight).toBe(44);
   expect.soft(sample.brand).toBe('Callie');
   expect.soft(sample.brandCount).toBe(1);
   expect.soft(sample.legacyBrandCount).toBe(0);

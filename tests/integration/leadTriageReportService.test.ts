@@ -6,7 +6,7 @@ import { closeDatabase, openDatabase, type AppDatabase } from '../../src/main/db
 import { migrateToLatest } from '../../src/main/db/migrate';
 import { BUILTIN_PRIORITIZATION_RULE_V1 } from '../../src/main/domain/prioritization/builtinPrioritizationRules';
 import type { LeadTriageSnapshot, LeadTriageAssessment } from '../../src/shared/contracts/leadTriageReportContract';
-import { createTodayProvider as createGatedTodayProvider } from '../../src/main/ipc/registerApplicationIpc';
+import { createTodayProvider as createGatedTodayProvider } from '../fixtures/legacyDomainProviders';
 import { createDomainServices, type DomainServices } from '../../src/main/domain/createDomainServices';
 import { createFounderSalesDomain, type FounderSalesDomain } from '../../src/main/domain/founderSalesDomain';
 

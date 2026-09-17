@@ -1,5 +1,5 @@
 import { productionDomainGate } from '../fixtures/productionDomainGate';
-import { createConversationsProvider } from '../../src/main/ipc/registerApplicationIpc';
+import { createConversationsProvider } from '../fixtures/legacyDomainProviders';
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 

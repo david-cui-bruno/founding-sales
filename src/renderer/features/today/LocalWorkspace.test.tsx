@@ -30,7 +30,7 @@ it.each(['accounts', 'campaigns'] as const)('keeps the %s route identity and tru
   const f = fixture();
   f.setSnapshot({ ...await f.api.daily.get(), workflowMode: 'legacy' });
   f.api.localWorkspace.get.mockResolvedValue({ ...local, workflowMode: 'legacy' });
-  render(<NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} surface={surface} onOpenLead={vi.fn()} />);
+  render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} surface={surface} />);
   await screen.findByText(/Legacy workflow is active/);
   expect(screen.getByRole('heading', { level: 1 }).textContent).toBe(surface === 'accounts' ? 'Accounts' : 'Campaigns');
   expect(screen.queryByText(/Workflow mode unavailable or inconsistent/)).toBeNull();
@@ -40,14 +40,14 @@ it.each(['accounts', 'campaigns'] as const)('keeps the %s route identity while u
   const f = fixture();
   f.setSnapshot({ ...await f.api.daily.get(), workflowMode: 'unknown' });
   f.api.localWorkspace.get.mockResolvedValue({ ...local, workflowMode: 'legacy' });
-  render(<NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} surface={surface} onOpenLead={vi.fn()} />);
+  render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} surface={surface} />);
   await screen.findByText(/Workflow mode unavailable or inconsistent/);
   expect(screen.getByRole('heading', { level: 1 }).textContent).toBe(surface === 'accounts' ? 'Accounts' : 'Campaigns');
   expect(screen.queryByText(/Legacy workflow is active/)).toBeNull();
   expect(f.calls.every(c => /daily.get|delegation.status/.test(c.method))).toBe(true);
 });
 it('puts typed retained work in Local commitments before worker Calls, preserving metadata and explicit navigation', async () => {
-  const f = fixture(); f.api.localWorkspace.getCommitments.mockResolvedValue(sixKindCommitments); const open = vi.fn(); render(<NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={open} legacy={<p>Forbidden legacy</p>} />);
+  const f = fixture(); f.api.localWorkspace.getCommitments.mockResolvedValue(sixKindCommitments); render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} />);
   const row = await screen.findByRole('button', { name: /Retained callback.*Retained Person 1/ });
   const localCommitments = screen.getByRole('heading', { name: /^Local commitments/ }).closest('section')!;
   const calls = screen.getByRole('heading', { name: /^Calls/ }).closest('section')!;
@@ -56,17 +56,16 @@ it('puts typed retained work in Local commitments before worker Calls, preservin
   expect(within(localCommitments).getByText('6')).toBeTruthy();
   expect(within(calls).queryByRole('button', { name: /Retained/ })).toBeNull();
   fireEvent.click(row);
-  expect(open).not.toHaveBeenCalled();
   expect(screen.getByText('Action type: follow_up · Channel: email · Lane: later')).toBeTruthy();
   expect(screen.queryByText('Forbidden legacy')).toBeNull();
   expect(within(calls).getByText('Unavailable')).toBeTruthy();
   expect(screen.getByText('Worker unavailable')).toBeTruthy();
   expect(f.calls.every(c => !/prepare|approve|begin|sync|forbidden/.test(c.method))).toBe(true);
-  fireEvent.click(screen.getByRole('button', { name: 'Open contact workspace' }));
-  expect(open).toHaveBeenCalledWith('person-retained-0');
+  expect(screen.queryByRole('button', { name: 'Open contact workspace' })).toBeNull();
+  expect(screen.getByText('Stored local work. Nothing here calls, sends or books.')).toBeTruthy();
 });
 it('keeps the local account library read-only and separate from unavailable worker scope', async () => {
-  const f = fixture(); const detailRead = vi.spyOn(f.api.localWorkspace, 'getCompany'); render(<NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} surface="accounts" onOpenLead={vi.fn()} />);
+  const f = fixture(); const detailRead = vi.spyOn(f.api.localWorkspace, 'getCompany'); render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} surface="accounts" />);
   await screen.findByRole('heading', { name: 'Local account library' });
   fireEvent.click(await screen.findByRole('button', { name: 'Local account · Account A' }));
   expect(screen.getByRole('heading', { name: 'Account A' })).toBeTruthy();
@@ -81,8 +80,7 @@ it('keeps the local account library read-only and separate from unavailable work
 it('preserves the exact six returned keys, mixed-channel details and cross-lane keyboard order', async () => {
   const f = fixture(true);
   f.api.localWorkspace.getCommitments.mockResolvedValue(sixKindCommitments);
-  const open = vi.fn();
-  render(<NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={open} />);
+  render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} />);
   await screen.findByRole('button', { name: /Retained callback.*Retained Person 1/ });
   const lane = screen.getByRole('heading', { name: /^Local commitments/ }).closest('section')!;
   const rows = within(lane).getAllByRole('button');
@@ -100,9 +98,7 @@ it('preserves the exact six returned keys, mixed-channel details and cross-lane 
     expect(within(detail).getByText(entry.item.reason)).toBeTruthy();
     expect(within(detail).getByText(`Action type: follow_up · Channel: ${retainedChannels[index]} · Lane: later`)).toBeTruthy();
     expect(detail.querySelector('time')?.dateTime).toBe(entry.item.action.dueAt);
-    expect(open).toHaveBeenCalledTimes(index);
-    fireEvent.click(within(detail).getByRole('button', { name: 'Open contact workspace' }));
-    expect(open).toHaveBeenLastCalledWith(entry.item.personId);
+    expect(within(detail).queryByRole('button')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Close details' }));
     expect(document.activeElement).toBe(row);
   }
@@ -123,7 +119,7 @@ for (const daily of ['ready', 'failed'] as const) for (const size of [0, 1] as c
     const stale = evidence === 'stale' || evidence === 'stale_partial';
     const value: LocalCommitmentsSnapshot = { ...commitments, items: size ? commitments.items : [], reviewErrorCount: partial ? 1 : 0 };
     f.api.localWorkspace.getCommitments.mockResolvedValue(value);
-    render(<NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
+    render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} />);
     const settled = partial ? `${size}+ · partial` : String(size);
     await waitFor(() => expect(countText('Local commitments')).toBe(settled));
     if (size) fireEvent.click(screen.getByRole('button', { name: /Retained callback/ }));
@@ -139,12 +135,10 @@ for (const daily of ['ready', 'failed'] as const) for (const size of [0, 1] as c
     expect(f.api.localWorkspace.getCommitments).toHaveBeenCalledTimes(readsBefore + 1);
     expect(countText('Local commitments')).toBe(stale ? `${size} · last known` : partial ? `${size}+ · partial` : `${size} · checking`);
     expect(screen.queryAllByRole('button', { name: /Retained callback/ })).toHaveLength(size);
-    if (size) expect((screen.getByRole('button', { name: 'Open contact workspace' }) as HTMLButtonElement).disabled).toBe(true);
     expect(countText('Calls')).toBe(daily === 'failed' ? 'Unavailable' : '1');
     if (daily === 'failed') for (const label of ['Saved draft continuations', 'Upcoming meetings']) expect(countText(label)).toBe('Unavailable');
     await act(async () => resolve(value));
     expect(countText('Local commitments')).toBe(settled);
-    if (size) expect((screen.getByRole('button', { name: 'Open contact workspace' }) as HTMLButtonElement).disabled).toBe(false);
     expect(f.calls.every(call => /daily.get|delegation.status/.test(call.method))).toBe(true);
   });
 }
@@ -154,7 +148,7 @@ it.each(['ready', 'failed'] as const)('distinguishes no-value Checking, Unavaila
   if (daily === 'failed') f.api.daily.get = vi.fn(async () => { throw Error('Synthetic daily unavailable'); });
   let reject!: (reason: Error) => void;
   f.api.localWorkspace.getCommitments.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
-  render(<NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
+  render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} />);
   await waitFor(() => expect(countText('Local commitments')).toBe('Checking'));
   await act(async () => reject(Error('Private source sentinel')));
   expect(countText('Local commitments')).toBe('Unavailable');
@@ -169,17 +163,19 @@ it.each(['ready', 'failed'] as const)('distinguishes no-value Checking, Unavaila
   expect(f.api.localWorkspace.getCommitments).toHaveBeenCalledTimes(2);
 });
 it('retains stale commitments after failure, holds navigation and recovers without reselection', async () => {
-  const f = fixture(); render(<NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
+  const f = fixture(); render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} />);
   fireEvent.click(await screen.findByRole('button', { name: /Retained callback/ }));
   f.api.localWorkspace.getCommitments.mockRejectedValueOnce(Error('private'));
   fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
   await screen.findByText(/Retained work is stale/);
-  expect((screen.getByRole('button', { name: 'Open contact workspace' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.getByRole('region', { name: 'Retained work detail' })).toBeTruthy();
+  expect(screen.queryByRole('button', { name: 'Open contact workspace' })).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
-  await waitFor(() => expect((screen.getByRole('button', { name: 'Open contact workspace' }) as HTMLButtonElement).disabled).toBe(false));
+  await waitFor(() => expect(screen.queryByText(/Retained work is stale/)).toBeNull());
+  expect(screen.getByRole('region', { name: 'Retained work detail' })).toBeTruthy();
 });
 it('preserves selected editor DOM and caret across independent local refresh', async () => {
-  const f = fixture(true); render(<NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
+  const f = fixture(true); render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} />);
   fireEvent.click(await screen.findByRole('button', { name: 'Email · Account A' }));
   const editor = screen.getByLabelText('Email body') as HTMLTextAreaElement;
   editor.focus(); editor.setSelectionRange(3, 3);
@@ -190,7 +186,7 @@ it('restores scope only after a delayed local mode read agrees, and preserves ed
   const f = fixture(true); const { captureDailySessionScope } = await import('./dailySessionScope');
   let resolve!: (snapshot: LocalWorkspaceSnapshot) => void;
   f.api.localWorkspace.get.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
-  render(<NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} legacy={<p>Forbidden legacy</p>} />);
+  render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} />);
   fireEvent.click(await screen.findByRole('button', { name: 'Email · Account A' }));
   const editor = screen.getByLabelText('Email body');
   expect(() => captureDailySessionScope(f.api.delegation, 'ws')).toThrow();
@@ -204,7 +200,7 @@ it('restores scope only after a delayed local mode read agrees, and preserves ed
   expect(() => captureDailySessionScope(f.api.delegation, 'ws')).toThrow();
 });
 it('keeps keyboard ordering aligned with retained-first rows and returns close focus to the exact row', async () => {
-  const f = fixture(true); render(<NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
+  const f = fixture(true); render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} />);
   const row = await screen.findByRole('button', { name: /Retained callback/ });
   row.focus(); fireEvent.keyDown(row, { key: 'j' });
   expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Call · Account A' }));
@@ -216,7 +212,7 @@ it('keeps keyboard ordering aligned with retained-first rows and returns close f
 });
 it('distinguishes failed initial reads from successfully empty local work', async () => {
   const f = fixture(); f.api.localWorkspace.getCommitments.mockRejectedValueOnce(Error('private message'));
-  render(<NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
+  render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} />);
   await screen.findByText(/Retained work could not be checked/);
   expect(screen.queryByText(/No retained work due/)).toBeNull(); expect(screen.queryByText(/private message/)).toBeNull();
   f.api.localWorkspace.getCommitments.mockResolvedValue({ ...commitments, items: [] });
@@ -227,19 +223,20 @@ it('distinguishes failed initial reads from successfully empty local work', asyn
 it('keeps local retained work usable when daily fails or local overview is unavailable', async () => {
   const f = fixture(); f.api.daily.get = vi.fn(async () => { throw Error('daily unavailable'); });
   f.api.localWorkspace.get.mockRejectedValue(Error('overview unavailable'));
-  const open = vi.fn(); render(<NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={open} />);
+  render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} />);
   fireEvent.click(await screen.findByRole('button', { name: /Retained callback/ }));
   await screen.findByText(/Daily workspace unavailable/);
-  fireEvent.click(screen.getByRole('button', { name: 'Open contact workspace' })); expect(open).toHaveBeenCalledWith('person-retained');
+  expect(screen.getByRole('region', { name: 'Retained work detail' })).toBeTruthy();
+  expect(screen.queryByRole('button', { name: 'Open contact workspace' })).toBeNull();
 });
 it('ignores a late old read after API replacement and never keeps old local evidence', async () => {
   const first = fixture(); const next = fixture();
   let resolve!: (snapshot: LocalCommitmentsSnapshot) => void;
   first.api.localWorkspace.getCommitments.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
-  const view = render(<NativeDeskRoute onOpenImport={(): void => undefined} firstUse={first.firstUse} api={first.api} onOpenLead={vi.fn()} />);
+  const view = render(<NativeDeskRoute firstUse={first.firstUse} api={first.api} />);
   await screen.findByRole('heading', { name: /^Calls/ });
   next.api.localWorkspace.getCommitments.mockResolvedValue({ ...commitments, items: [] });
-  view.rerender(<NativeDeskRoute onOpenImport={(): void => undefined} firstUse={next.firstUse} api={next.api} onOpenLead={vi.fn()} />);
+  view.rerender(<NativeDeskRoute firstUse={next.firstUse} api={next.api} />);
   await waitFor(() => expect(next.api.localWorkspace.getCommitments).toHaveBeenCalledTimes(1));
   await waitFor(() => expect(screen.queryByText(/Retained work could not be checked|Checking retained work/)).toBeNull());
   expect(screen.queryByRole('button', { name: /Retained callback/ })).toBeNull();
@@ -247,7 +244,7 @@ it('ignores a late old read after API replacement and never keeps old local evid
   expect(screen.queryByRole('button', { name: /Retained callback/ })).toBeNull();
 });
 it('keeps newest local read when an earlier refresh resolves later and preserves removed selection honestly', async () => {
-  const f = fixture(); render(<NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
+  const f = fixture(); render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} />);
   fireEvent.click(await screen.findByRole('button', { name: /Retained callback/ }));
   let resolve!: (snapshot: LocalCommitmentsSnapshot) => void;
   f.api.localWorkspace.getCommitments.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
@@ -261,7 +258,7 @@ it('keeps newest local read when an earlier refresh resolves later and preserves
 it('shows unavailable accounts separately from a valid recorded transition', async () => {
   const f = fixture();
   f.api.localWorkspace.get.mockResolvedValue({ ...local, accounts: { state: 'unavailable', snapshots: [] }, transitionReceipt: { commandId: 'canonical', manifestId: 'manifest', mode: 'meeting_first', revision: 1, occurredAt: local.generatedAt, cancelledActionIds: [], stoppedEnrollmentIds: [], preservedActionIds: [], parkedPersonIds: [], callbackEvidenceIds: [], unknownDraftIds: [], parkedReviewActions: [], parkedActions: [] } });
-  render(<NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} surface="accounts" onOpenLead={vi.fn()} />);
+  render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} surface="accounts" />);
   await screen.findByText(/Local account library is unavailable/);
   expect(screen.queryByText('No local accounts in this snapshot.')).toBeNull();
   expect(screen.queryByText(/Local workflow unavailable or inconsistent/)).toBeNull();
@@ -269,7 +266,7 @@ it('shows unavailable accounts separately from a valid recorded transition', asy
 it('keeps selected retained work when an initially failed daily read recovers', async () => {
   const f = fixture(); const daily = f.api.daily.get;
   f.api.daily.get = vi.fn().mockRejectedValueOnce(Error('unavailable')).mockImplementation(daily);
-  render(<NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
+  render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} />);
   fireEvent.click(await screen.findByRole('button', { name: /Retained callback/ }));
   expect(screen.getByRole('region', { name: 'Retained work detail' })).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
@@ -277,7 +274,7 @@ it('keeps selected retained work when an initially failed daily read recovers', 
   expect(screen.getByRole('region', { name: 'Retained work detail' })).toBeTruthy();
 });
 it('labels retained personal detail as existing commitments rather than company context', async () => {
-  const f = fixture(); render(<NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
+  const f = fixture(); render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} />);
   fireEvent.click(await screen.findByRole('button', { name: /Retained callback/ }));
   const bar = screen.getByRole('button', { name: 'Close details' }).parentElement!;
   expect(within(bar).getByText('Existing commitments and relationships')).toBeTruthy();
@@ -288,15 +285,13 @@ it('labels retained personal detail as existing commitments rather than company 
 it('keeps the exact local account selected when an initially failed daily read recovers', async () => {
   const f = fixture(); const daily = f.api.daily.get;
   f.api.daily.get = vi.fn().mockRejectedValueOnce(Error('unavailable')).mockImplementation(daily);
-  const open = vi.fn();
-  render(<NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} surface="accounts" onOpenLead={open} />);
+  render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} surface="accounts" />);
   fireEvent.click(await screen.findByRole('button', { name: 'Local account · Account A' }));
   expect(screen.getByRole('heading', { name: 'Account A' })).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
   await waitFor(() => expect(screen.queryByText(/Daily workspace unavailable/)).toBeNull());
   expect(screen.getByRole('heading', { name: 'Account A' })).toBeTruthy();
   expect(screen.getByRole('button', { name: 'Local account · Account A' }).getAttribute('aria-current')).toBe('true');
-  expect(open).not.toHaveBeenCalled();
 });
 
 const render = (ui: Parameters<typeof testingRender>[0], options?: Parameters<typeof testingRender>[1]) => testingRender(ui, { wrapper: PresentationRoot, ...options });
@@ -321,7 +316,7 @@ function f4Company(accountId = 'a'): LocalCompanyDetail {
 function f4Status(r: SelectedResearch, state: LocalCompanyResearchStatus['state']): LocalCompanyResearchStatus { return { ...r, state, receipt: state === 'completed' ? { accountId: r.accountId, version: 2, duplicate: false } : null, reason: null }; }
 function FirstUseDesk({ api }: { api: ReturnType<typeof fixture>['api'] }) {
   const firstUse = useFirstUseContinuation();
-  return <NativeDeskRoute onOpenImport={(): void => undefined} api={api} firstUse={firstUse} surface="accounts" onOpenLead={vi.fn()} />;
+  return <NativeDeskRoute api={api} firstUse={firstUse} surface="accounts" />;
 }
 function f4Tree(api: ReturnType<typeof fixture>['api'], routeKey = 'accounts') { return <FirstUseOwnerProvider api={api.localWorkspace}><FirstUseDesk key={routeKey} api={api} /></FirstUseOwnerProvider>; }
 function f4Api() {
@@ -400,18 +395,19 @@ function t6LocalRequest(accountId = 'a'): LinkCompanyPersonRequest {
     link: { id: 'link-person-51', kind: 'person_role', personId: 'person-51', role: 'Manager', relationship: 'Manages company', evidenceIds: [`f4-${accountId}`], authority: 'unconfirmed', authorityEvidenceIds: [], validFrom: local.generatedAt, validTo: null },
     sourceQuotes: [{ sourceId: `f4-${accountId}`, quote: `Selected local source ${accountId}` }] };
 }
-function T6LocalDesk({ api, capture, onOpenImport, onOpenLead }: { api: ReturnType<typeof fixture>['api']; capture: (c: FirstUseContinuation) => void; onOpenImport: () => void; onOpenLead: (id: string) => void }) {
+function T6LocalDesk({ api, capture }: { api: ReturnType<typeof fixture>['api']; capture: (c: FirstUseContinuation) => void }) {
   const firstUse = useFirstUseContinuation(); capture(firstUse);
-  return <NativeDeskRoute api={api} firstUse={firstUse} surface="accounts" onOpenImport={onOpenImport} onOpenLead={onOpenLead} />;
+  return <NativeDeskRoute api={api} firstUse={firstUse} surface="accounts" />;
 }
-function t6LocalTree(api: ReturnType<typeof fixture>['api'], capture: (c: FirstUseContinuation) => void, open = vi.fn(), onOpenLead = vi.fn()) {
-  return <FirstUseOwnerProvider api={api.localWorkspace}><T6LocalDesk api={api} capture={capture} onOpenImport={open} onOpenLead={onOpenLead} /></FirstUseOwnerProvider>;
+function t6LocalTree(api: ReturnType<typeof fixture>['api'], capture: (c: FirstUseContinuation) => void) {
+  return <FirstUseOwnerProvider api={api.localWorkspace}><T6LocalDesk api={api} capture={capture} /></FirstUseOwnerProvider>;
 }
-it('T6-L01 selected exact successful detail exposes contact join without a second independent getCompany read', async () => {
-  const f = f4Api(); const open = vi.fn(); render(t6LocalTree(f.api, () => undefined, open));
+it('T6-L01 selected exact successful detail exposes contact join without a second independent getCompany read or a person import control', async () => {
+  const f = f4Api(); render(t6LocalTree(f.api, () => undefined));
   fireEvent.click(await screen.findByRole('button', { name: 'Local account · Account A' })); await screen.findByText('Selected local source a');
   expect(await screen.findByText('Contact not established')).toBeTruthy(); expect(f.api.localWorkspace.getCompany).toHaveBeenCalledTimes(1);
-  fireEvent.click(screen.getByRole('button', { name: 'Import named person' })); expect(open.mock.calls).toEqual([[]]);
+  expect(screen.getByRole('button', { name: 'Find saved person' })).toBeTruthy();
+  expect(screen.queryByRole('button', { name: 'Import named person' })).toBeNull();
   expect(screen.queryByRole('dialog', { name: 'Import leads' })).toBeNull(); expect(f.api.localWorkspace.researchCompany).not.toHaveBeenCalled();
 }, 10_000);
 it('T6-L02 failed selected detail is not empty success and close and return remain usable', async () => {
@@ -424,7 +420,7 @@ it('T6-L02 failed selected detail is not empty success and close and return rema
   expect(await screen.findByRole('button', { name: 'Find saved person' })).toBeTruthy(); expect(f.api.localWorkspace.researchCompany).not.toHaveBeenCalled();
 }, 10_000);
 it('T6-L03 actual ResearchPanel refreshes exactly once on same-account known link, never pending or unknown', async () => {
-  const f = f4Api(); let c!: FirstUseContinuation; const open = vi.fn(); const view = render(t6LocalTree(f.api, value => { c = value; }, vi.fn(), open));
+  const f = f4Api(); let c!: FirstUseContinuation; const view = render(t6LocalTree(f.api, value => { c = value; }));
   fireEvent.click(await screen.findByRole('button', { name: 'Local account · Account A' })); await screen.findByText('Selected local source a');
   expect(await screen.findByText('Contact not established')).toBeTruthy(); expect(f.api.localWorkspace.getCompany).toHaveBeenCalledTimes(1);
   let token!: NonNullable<ReturnType<FirstUseContinuation['beginLink']>>;
@@ -436,9 +432,10 @@ it('T6-L03 actual ResearchPanel refreshes exactly once on same-account known lin
   const updated = f4Company(); updated.links = [retained.link]; updated.snapshot.account.version = 2;
   vi.mocked(f.api.localWorkspace.getCompany).mockResolvedValue(updated);
   await act(async () => { expect(c.settleLink(token, { outcome: 'known', receipt: { accountId: 'a', version: 2, duplicate: false } })).toBe(true); });
-  fireEvent.click(await screen.findByRole('button', { name: 'Open saved contact' })); expect(open.mock.calls).toEqual([['person-51']]);
+  expect(await screen.findByText('person-51 · Manager · Manages company')).toBeTruthy();
+  expect(screen.queryByRole('button', { name: 'Open saved contact' })).toBeNull();
   expect(vi.mocked(f.api.localWorkspace.getCompany).mock.calls).toEqual([[{ accountId: 'a' }], [{ accountId: 'a' }]]);
-  view.rerender(t6LocalTree(f.api, value => { c = value; }, vi.fn(), open)); await act(async () => undefined);
+  view.rerender(t6LocalTree(f.api, value => { c = value; })); await act(async () => undefined);
   expect(f.api.localWorkspace.getCompany).toHaveBeenCalledTimes(2);
 }, 10_000);
 it('T6-L04 known A settlement while B selected never refreshes B or replaces B detail', async () => {
@@ -480,7 +477,7 @@ it('partitions interleaved saved history with exact keys, keyboard order and ret
   const replies = [savedReply('one'), savedReply('two', true), savedReply(null)];
   snapshot.answers = [replies[0], original[0], replies[1], original[1], replies[2], original[2]];
   const f = fixture(true); f.setSnapshot(snapshot);
-  render(<NativeDeskRoute onOpenImport={vi.fn()} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
+  render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} />);
   const history = await screen.findByRole('region', { name: 'Saved reply history 3' });
   const continuation = screen.getByRole('region', { name: 'Saved draft continuations 3' });
   expect(within(continuation).queryByRole('button', { name: /Reply/ })).toBeNull();
@@ -514,7 +511,7 @@ it('partitions interleaved saved history with exact keys, keyboard order and ret
 
 it('retains the same requested editor, local text and caret when history arrives and reorders', async () => {
   const f = fixture(true);
-  render(<NativeDeskRoute onOpenImport={vi.fn()} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
+  render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} />);
   fireEvent.click(await screen.findByRole('button', { name: 'Email · Account A' }));
   const editor = screen.getByLabelText('Email body') as HTMLTextAreaElement;
   fireEvent.change(editor, { target: { value: 'Unsubmitted local text' } });
@@ -531,7 +528,7 @@ it('retains the same requested editor, local text and caret when history arrives
 it.each(['empty', 'requested', 'linkedin', 'history', 'unpaired'] as const)('explains missing continuation prerequisites for %s without inventing actions', async kind => {
   const f = fixture(kind !== 'unpaired');
   if (kind !== 'unpaired') f.setSnapshot(dailyFixture({ answers: kind === 'requested' ? dailyFixture().answers : kind === 'linkedin' ? [linkedInFixture()] : kind === 'history' ? [savedReply('one')] : [] }));
-  render(<NativeDeskRoute onOpenImport={vi.fn()} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
+  render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} />);
   const lane = await screen.findByRole('region', { name: /^Saved draft continuations/ });
   fireEvent.click(within(lane).getByText('About saved draft continuations'));
   expect(within(lane).getByText(/cannot prepare first worker drafts/)).toBeTruthy();
@@ -548,7 +545,7 @@ it.each(['empty', 'requested', 'linkedin', 'history', 'unpaired'] as const)('exp
 
 it('links empty calls to Phone setup without implying permission or placing calls', async () => {
   const f = fixture();
-  render(<NativeDeskRoute onOpenImport={vi.fn()} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
+  render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} />);
   const lane = await screen.findByRole('region', { name: /^Calls$/ });
   fireEvent.click(within(lane).getByText('About queued calls'));
   const link = within(lane).getByRole('link', { name: 'Phone settings' });
@@ -560,7 +557,7 @@ it('links empty calls to Phone setup without implying permission or placing call
 
 it.each([true, false])('explains empty campaign draft prerequisites with known scope %s', async scoped => {
   const f = fixture(scoped);
-  render(<NativeDeskRoute surface="campaigns" onOpenImport={vi.fn()} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
+  render(<NativeDeskRoute surface="campaigns" firstUse={f.firstUse} api={f.api} />);
   await screen.findByText(/Save an unapproved call campaign draft for one worker-owned company/);
   const queue = screen.getByRole('navigation', { name: 'Campaigns queue' });
   expect(within(queue).getByText(scoped ? /No saved campaign drafts. A configured worker and active company ownership/ : /Campaign scope is unavailable/)).toBeTruthy();
@@ -668,7 +665,7 @@ it('lists unsent local drafts under Saved draft continuations in keyboard order 
   const drafts = [localDraftContinuation(), localDraftContinuation({ accountId: 'b', draftId: 'draft-b', companyLabel: 'Account B', subject: '', revision: 1 })];
   f.api.localWorkspace.getCommitments.mockResolvedValue({ ...commitments, localDrafts: drafts });
   window.location.hash = '';
-  render(<NativeDeskRoute onOpenImport={vi.fn()} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
+  render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} />);
   const rowA = await screen.findByRole('button', { name: 'Account A · Local unsent draft · revision 2' });
   const rowB = screen.getByRole('button', { name: 'Account B · Local unsent draft · revision 1' });
   expect(rowA.textContent).toContain('Maintenance request coordination');
@@ -705,7 +702,7 @@ it('lists unsent local drafts inside the local-only Saved draft continuations la
   const f = fixture(); f.api.daily.get = vi.fn(async () => { throw Error('daily unavailable'); });
   f.api.localWorkspace.getCommitments.mockResolvedValue({ ...commitments, localDrafts: [localDraftContinuation()] });
   window.location.hash = '';
-  render(<NativeDeskRoute onOpenImport={vi.fn()} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
+  render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} />);
   await screen.findByText(/Daily workspace unavailable/);
   const lane = screen.getByRole('heading', { name: /^Saved draft continuations/ }).closest('section')!;
   expect(within(lane).getByText('Unavailable')).toBeTruthy();
@@ -725,7 +722,7 @@ it.each(['paused', 'policy paused', 'unpaired'] as const)('shows one quiet statu
   // David's Mac: an incomplete daily snapshot for cloud-side reasons only, alongside retained local work.
   const daily = await f.api.daily.get();
   f.setSnapshot({ ...daily, freshness: { ...daily.freshness, kind: 'incomplete' }, issues: [...daily.issues, { code: 'transport_incomplete', count: 1 }, { code: 'call_allocation_unconfigured', count: 1 }] });
-  render(<NativeDeskRoute onOpenImport={vi.fn()} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
+  render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} />);
   await screen.findByText('Cloud work is paused on this Mac. Local work continues.');
   await screen.findByRole('button', { name: /Retained callback/ });
   const desk = screen.getByTestId('native-desk');
@@ -747,7 +744,7 @@ it.each(['invalid_local_record', 'research_failed'] as const)('keeps the incompl
   const active = await f.api.delegation.status(); f.setConfiguration({ ...active, state: 'paused' } as typeof active);
   const daily = await f.api.daily.get();
   f.setSnapshot({ ...daily, freshness: { ...daily.freshness, kind: 'incomplete' }, issues: [{ code, count: 2 }] });
-  render(<NativeDeskRoute onOpenImport={vi.fn()} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
+  render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} />);
   await screen.findByText('Cloud work is paused on this Mac. Local work continues.');
   const desk = screen.getByTestId('native-desk');
   const statusLines = Array.from(desk.children).filter(el => el.matches('p[role="status"]')).map(el => el.textContent);

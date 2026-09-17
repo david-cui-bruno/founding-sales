@@ -181,7 +181,7 @@ it('offers explicit worker preparation for a first-time local company while exis
       configuration: { configuration: { state: 'active', research: null } } });
     const workerTransactions = f.dynamo.transactions.length;
     render(<PresentationRoot><NativeDeskRoute surface="campaigns" firstUse={firstUseFixture()} api={f.api}
-      onOpenLead={f.forbidden} onOpenImport={f.forbidden} /></PresentationRoot>);
+ /></PresentationRoot>);
     fireEvent.click(await screen.findByRole('button', { name: 'New call campaign' }));
     fireEvent.change(screen.getByLabelText('Company'), { target: { value: f.selected.id } });
     fireEvent.change(screen.getByLabelText('Meeting offer'), { target: { value: 'Discuss a fictional maintenance follow-up workflow.' } });
@@ -204,7 +204,7 @@ type Fixture = Awaited<ReturnType<typeof fixture>>;
 const offer = 'Discuss a fictional maintenance follow-up workflow.';
 function mount(f: Fixture) {
   return render(<PresentationRoot><NativeDeskRoute surface="campaigns" firstUse={firstUseFixture()} api={f.api}
-    onOpenLead={f.forbidden} onOpenImport={f.forbidden} /></PresentationRoot>);
+ /></PresentationRoot>);
 }
 async function clickEnabled(name: string) {
   const button = await screen.findByRole<HTMLButtonElement>('button', { name });

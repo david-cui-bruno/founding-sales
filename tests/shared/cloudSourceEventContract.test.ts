@@ -5,8 +5,8 @@ import {
   cloudSourceEventSchema,
   validateCloudSourceEvent,
   type CloudSourceEvent,
-} from '../../../src/shared/contracts/cloudSourceEventContract';
-import { validFrboEvent, validParcelEvent, validEnrichmentEvent } from '../../fixtures/cloudSourceEvents';
+} from '../../src/shared/contracts/cloudSourceEventContract';
+import { validFrboEvent, validParcelEvent, validEnrichmentEvent } from '../fixtures/cloudSourceEvents';
 
 describe('cloudSourceEventContract (local mirror)', () => {
   it('round-trips a valid frbo event', () => {

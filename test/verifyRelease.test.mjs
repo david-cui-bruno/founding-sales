@@ -7,14 +7,9 @@ import { afterEach, expect, it } from 'vitest';
 import { resolveReleaseArtifact, readArtifactIdentity } from '../scripts/releaseArtifact.mjs';
 import { verifyRelease } from '../scripts/verifyRelease.mjs';
 const roots = [];
-it('includes real all-route and modal consumers in the maintained serial browser stage', () => {
+it('runs every maintained browser spec serially in the browser stage', () => {
   const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
-  expect(manifest.scripts['test:browser:native-desk'].split(/\s+/)).toEqual([
-    'playwright', 'test', '--workers=1',
-    'tests/browser/nativeDesk.spec.ts', 'tests/browser/nativeDeskComposition.spec.ts',
-    'tests/browser/startupPresentation.spec.ts', 'tests/browser/applicationPresentation.spec.ts',
-    'tests/browser/applicationModals.spec.ts', 'tests/browser/applicationLeadsReliability.spec.ts',
-  ]);
+  expect(manifest.scripts['test:browser:native-desk'].split(/\s+/)).toEqual(['playwright', 'test', '--workers=1', 'tests/browser']);
 });
 afterEach(() => { uncacheAll(); roots.splice(0).forEach(root => rmSync(root, { recursive: true, force: true })); });
 const commands = [

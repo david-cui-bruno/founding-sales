@@ -34,7 +34,7 @@ it('refreshes the local read when the draft panel reports changed evidence, so t
   f.setLocalSnapshot(localSnapshot({ accounts: { state: 'available', snapshots: [company('add_route')] } }));
   const getCompany = vi.fn<LocalWorkspaceApi['getCompany']>(async ({ accountId }) => detail(accountId));
   const api = { ...f.api, localWorkspace: { ...f.api.localWorkspace, getCompany } };
-  render(<PresentationRoot><NativeDeskRoute onOpenImport={vi.fn()} firstUse={f.firstUse} api={api} surface="accounts" onOpenLead={vi.fn()} /></PresentationRoot>);
+  render(<PresentationRoot><NativeDeskRoute firstUse={f.firstUse} api={api} surface="accounts" /></PresentationRoot>);
   const row = await screen.findByRole('button', { name: 'Local account · Account A' });
   expect(row.textContent).toContain(beforeAdmission);
   fireEvent.click(screen.getByRole('button', { name: 'Open route review · Account A' }));

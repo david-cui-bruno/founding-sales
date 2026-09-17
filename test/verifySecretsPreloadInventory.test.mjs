@@ -12,7 +12,7 @@ it('excepts only the exact public preload inventory line, file and LinkedIn clie
   const candidate = readFileSync(new URL('../.gitleaks.toml', import.meta.url), 'utf8');
   const baseline = candidate.split('# Exact public preload API inventory')[0];
   const publicLine = readFileSync(new URL(`../${exactPath}`, import.meta.url), 'utf8').split('\n').find(line => line.includes("'localWorkspace'"));
-  expect(createHash('sha256').update(publicLine).digest('hex')).toBe('34f77d763883e912c8f55ad22b3601b5443fa83292859fd6aa6ff2c52dda3282');
+  expect(createHash('sha256').update(publicLine).digest('hex')).toBe('88edd0efeb23ba4bff5c576c4deacc405d2e5452933eeb40d33467502e8ad14e');
   const rule = 'linkedin-client-id';
   const fabricated = createHash('sha256').update('unissued preload inventory calibration').digest('hex').slice(0, 14);
   let invocation = 0;

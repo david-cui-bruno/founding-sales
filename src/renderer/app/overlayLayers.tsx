@@ -84,8 +84,7 @@ function createLayers() {
           const opener = visible(origin) ? origin : origin?.id ? document.getElementById(origin.id) : null;
           const parent = top();
           const activeRoute = document.querySelector<HTMLElement>('nav[aria-label="Primary"] a[aria-current="page"]');
-          const more = document.querySelector<HTMLElement>('nav[aria-label="Primary"] button[aria-expanded]');
-          const candidates = [opener, safeControl(parent?.element), activeRoute, more, document.getElementById('main-content')];
+          const candidates = [opener, safeControl(parent?.element), activeRoute, document.getElementById('main-content')];
           candidates.find((candidate) => visible(candidate) &&
             (parent?.kind !== 'modal' || parent.element.contains(candidate)))?.focus();
         });

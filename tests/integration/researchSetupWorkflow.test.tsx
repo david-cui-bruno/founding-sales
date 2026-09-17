@@ -71,7 +71,7 @@ async function fixture(options: { now?: string; discoveryCostMicros?: number; re
       unregister = registerOutreachIpc({ provider: { status: forbidden, configure: forbidden, connectGmail: forbidden, disconnectGmail: forbidden, openDraft: forbidden, saveDraft: forbidden, generateDraft: forbidden, sendDraft: forbidden, inspectLocalAuthority: forbidden }, delegation: runtime, isTrustedRendererUrl: url => url === 'app://research' });
       const api = createCallieApi({ invoke: async (channel, ...args) => { const registered = ipc.handlers.get(channel); if (!registered) throw Error('Unregistered IPC'); return registered({ senderFrame: { url: 'app://research' } }, ...args); } });
       render(<SettingsScreen state={{ status: 'loading' }} onRetry={() => undefined} theme={{ preference: 'light', resolvedTheme: 'light', setPreference: () => undefined }} density={{ density: 'comfortable', setDensity: () => undefined }} delegationApi={api.delegation} />);
-      fireEvent.click(screen.getByRole('button', { name: 'Sourcing' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Worker connection' }));
       return api;
     };
     const unmount = async () => { cleanup(); unregister(); unregister = () => undefined; await runtime?.dispose(); runtime = undefined; };

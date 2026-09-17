@@ -28,9 +28,8 @@ const pressShortcut = () => {
 
 const renderPalette = () => {
   const navigate = vi.fn();
-  const openImport = vi.fn();
-  render(<CommandPalette navigate={navigate} openImport={openImport} />);
-  return { navigate, openImport };
+  render(<CommandPalette navigate={navigate} />);
+  return { navigate };
 };
 
 describe('CommandPalette', () => {
@@ -75,7 +74,7 @@ describe('CommandPalette', () => {
     expect(navigate).not.toHaveBeenCalled();
   });
 
-  it('offers a Go to command per enabled navigation item plus Import leads', () => {
+  it('offers exactly one Go to command per company-model destination and nothing else', () => {
     renderPalette();
 
     pressShortcut();
@@ -87,14 +86,7 @@ describe('CommandPalette', () => {
       'Go to Today',
       'Go to Accounts',
       'Go to Campaigns',
-      'Go to Leads',
-      'Go to Pipeline',
-      'Go to Conversations',
-      'Go to Learnings',
-      'Go to Friday',
-      'Go to Inbox',
       'Go to Settings',
-      'Import leads…',
     ]);
   });
 
@@ -116,12 +108,12 @@ describe('CommandPalette', () => {
 
     pressShortcut();
     fireEvent.change(screen.getByRole('combobox', { name: 'Command palette' }), {
-      target: { value: 'PIPE' },
+      target: { value: 'ACCO' },
     });
 
     const options = screen.getAllByRole('option');
     expect(options).toHaveLength(1);
-    expect(options[0]!.textContent).toBe('Go to Pipeline');
+    expect(options[0]!.textContent).toBe('Go to Accounts');
   });
 
   it('filters by subsequence for fuzzy-ish queries', () => {
@@ -129,12 +121,12 @@ describe('CommandPalette', () => {
 
     pressShortcut();
     fireEvent.change(screen.getByRole('combobox', { name: 'Command palette' }), {
-      target: { value: 'gtf' },
+      target: { value: 'gtcmp' },
     });
 
     const options = screen.getAllByRole('option');
     expect(options).toHaveLength(1);
-    expect(options[0]!.textContent).toBe('Go to Friday');
+    expect(options[0]!.textContent).toBe('Go to Campaigns');
   });
 
   it('runs the selected command on Enter and closes', () => {
@@ -186,17 +178,20 @@ describe('CommandPalette', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
-  it('runs openImport for the Import leads command', () => {
-    const { navigate, openImport } = renderPalette();
+  it('offers no import, lead or review command now that those surfaces are gone', () => {
+    const { navigate } = renderPalette();
 
     pressShortcut();
     const input = screen.getByRole('combobox', { name: 'Command palette' });
-    fireEvent.change(input, { target: { value: 'import' } });
+    for (const query of ['import', 'lead', 'pipeline', 'inbox', 'friday', 'conversation', 'learning']) {
+      fireEvent.change(input, { target: { value: query } });
+      expect(screen.queryAllByRole('option'), query).toHaveLength(0);
+      expect(screen.getByText('No matching commands')).not.toBeNull();
+    }
     fireEvent.keyDown(input, { key: 'Enter' });
 
-    expect(openImport).toHaveBeenCalledTimes(1);
     expect(navigate).not.toHaveBeenCalled();
-    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByRole('dialog', { name: 'Command palette' })).not.toBeNull();
   });
 
   it('shows an empty state instead of stale options for a hopeless query', () => {

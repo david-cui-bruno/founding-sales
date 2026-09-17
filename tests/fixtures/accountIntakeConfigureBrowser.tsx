@@ -28,7 +28,6 @@ fixture.setPreparation(preparations.pausedNoMail);
 const grantReads: unknown[] = [];
 const forbidden = async (): Promise<never> => { grantReads.push('forbidden'); throw Error('Unavailable fixture capability'); };
 Object.assign(fixture.api.delegation, { googleConnections: { status: async (input: unknown) => { grantReads.push(input); return structuredClone(grant); }, disclosure: forbidden, begin: forbidden, revoke: forbidden } });
-const opened: string[] = [];
 function Harness() {
   const { setPreference } = useTheme();
   const { setDensity } = useDensity();
@@ -39,17 +38,17 @@ function Harness() {
   };
   const [tick, setTick] = useState(0);
   window.accountIntakeConfigureBrowser = {
-    fixture, opened, grantReads, preparations, navigate,
+    fixture, grantReads, preparations, navigate,
     refresh: () => window.dispatchEvent(new Event('focus')),
     rerender: () => setTick(value => value + 1),
     preferences: (theme, density) => { setPreference(theme); setDensity(density); },
   };
-  return <PresentationRoot><AppShell route={route} onNavigate={navigate} reviewCount={{ status: 'failed' }}>
-    <div data-rerender={tick}><NativeDeskRoute onOpenImport={() => opened.push('import')} firstUse={fixture.firstUse} key={route} api={fixture.api} onOpenLead={id => opened.push(id)} surface={route} legacy={<h1>Legacy Today fixture</h1>} /></div>
+  return <PresentationRoot><AppShell route={route} onNavigate={navigate}>
+    <div data-rerender={tick}><NativeDeskRoute firstUse={fixture.firstUse} key={route} api={fixture.api} surface={route} /></div>
   </AppShell></PresentationRoot>;
 }
 export type AccountIntakeConfigureBrowser = {
-  fixture: typeof fixture; opened: string[]; grantReads: unknown[]; preparations: typeof preparations; navigate(route: AppRoute): void;
+  fixture: typeof fixture; grantReads: unknown[]; preparations: typeof preparations; navigate(route: AppRoute): void;
   refresh(): void; rerender(): void;
   preferences(theme: 'system' | 'light' | 'dark', density: 'comfortable' | 'compact'): void;
 };

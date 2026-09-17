@@ -6,7 +6,7 @@ import { DomainRuntime } from '../../src/main/domain/domainRuntime';
 import { createFounderSalesDomain } from '../../src/main/domain/founderSalesDomain';
 import { LifecycleService } from '../../src/main/domain/lifecycle/lifecycleService';
 import { FOUNDER_CHANNEL_POLICIES_V1 } from '../../src/main/domain/cadence/cadenceScheduler';
-import { buildNeedsIdentityIntakeCommand, mapCloudSourceEvent } from '../../src/main/sourcing/intakeMapper';
+import { buildNeedsIdentityIntakeCommand, mapCloudSourceEvent } from '../fixtures/intakeMapper';
 import { validFrboEvent, validParcelEvent } from '../fixtures/cloudSourceEvents';
 import { createTempDatabase, createTestWorkspaceKey } from '../fixtures/tempDatabase';
 import { seedDiscoveryOwner, DISCOVERY_NOW, type DiscoveryDatabase } from '../fixtures/discoveryDatabase';

@@ -1,5 +1,5 @@
 import { productionDomainGate } from '../fixtures/productionDomainGate';
-import { createPipelineProvider } from '../../src/main/ipc/registerApplicationIpc';
+import { createPipelineProvider } from '../fixtures/legacyDomainProviders';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { closeDatabase, openDatabase, type AppDatabase } from '../../src/main/db/database';

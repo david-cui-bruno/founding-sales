@@ -55,7 +55,6 @@ type SettingsSectionId =
   | 'connections'
   | 'appearance'
   | 'data'
-  | 'sourcing'
   | 'diagnostics'
   | 'shortcuts'
   | 'about';
@@ -67,7 +66,6 @@ const SECTIONS: readonly { id: SettingsSectionId; label: string }[] = [
   { id: 'worker', label: 'Worker connection' },
   { id: 'appearance', label: 'Appearance' },
   { id: 'data', label: 'Data & storage' },
-  { id: 'sourcing', label: 'Sourcing' },
   { id: 'diagnostics', label: 'Diagnostics' },
   { id: 'shortcuts', label: 'Keyboard shortcuts' },
   { id: 'about', label: 'About' },
@@ -271,14 +269,8 @@ function DiagnosticsSection({
             tone={state.health.domainReady ? 'success' : 'warning'}
             label={`Domain ${state.health.domainStatus}`}
           />
-          <span>Sourcing monitor</span>
-          <StatusBadge
-            tone={state.health.sourcing.status === 'degraded' ? 'warning' : 'neutral'}
-            label={state.health.sourcing.status === 'degraded' ? 'Sourcing degradation reported' : state.health.sourcing.state.lastCompletedAt === null ? 'Not checked' : 'No sourcing degradation reported'}
-          />
           <dl className="settings__counters">
             <div><dt>Startup audit evaluated at</dt><dd><time dateTime={state.health.domainStartupEvaluatedAt}>{state.health.domainStartupEvaluatedAt}</time></dd></div>
-            {state.health.sourcing.state.lastCompletedAt && <div><dt>Sourcing last completed at</dt><dd><time dateTime={state.health.sourcing.state.lastCompletedAt}>{state.health.sourcing.state.lastCompletedAt}</time></dd></div>}
             <div className="settings__counter">
               <dt>Cipher</dt>
               <dd>{state.health.cipherVersion}</dd>
@@ -316,13 +308,10 @@ function DiagnosticsSection({
 }
 
 const SHORTCUTS: readonly { scope: string; keys: string; action: string }[] = [
-  { scope: 'Application menu', keys: 'Cmd/Ctrl+1 – Cmd/Ctrl+7', action: 'Go to Today, Leads, Pipeline, Conversations, Learnings, Friday, Inbox' },
+  { scope: 'Application menu', keys: 'Cmd/Ctrl+1 – Cmd/Ctrl+3', action: 'Go to Today, Accounts, Campaigns' },
   { scope: 'Application menu', keys: 'Cmd/Ctrl+,', action: 'Open Settings' },
   { scope: 'Application', keys: 'Cmd/Ctrl+K', action: 'Open the existing command palette when permitted' },
-  { scope: 'Application menu', keys: 'Cmd/Ctrl+I', action: 'Import leads' },
-  { scope: 'Legacy Today rows', keys: 'J / K / arrows · Enter · S · X', action: 'Move focused row; Enter opens contact; S snoozes to tomorrow 09:00 local; X skips today' },
   { scope: 'Native Desk rows', keys: 'J / K / arrows · Enter · Escape', action: 'Move focused queue row; Enter reviews; Escape closes selected detail only when no higher layer owns it' },
-  { scope: 'Leads rows', keys: 'J / K / arrows · Enter', action: 'Move focused row; Enter opens the contact when no edit is pending' },
 ];
 
 function ShortcutsSection() {
@@ -403,8 +392,6 @@ export type SettingsScreenProps = {
   outreachApi?: OutreachApi;
   phoneSetupApi?: PhoneSetupApi;
   delegationApi?: SettingsDelegationApi;
-  /** Sourcing status rows, rendered inside the Sourcing section. */
-  sourcing?: ReactNode;
   /** Extra diagnostics panels (Apple spike), rendered with Diagnostics. */
   children?: ReactNode;
 };
@@ -429,7 +416,6 @@ export function SettingsScreen({
   outreachApi,
   phoneSetupApi,
   delegationApi,
-  sourcing,
   children,
 }: SettingsScreenProps) {
   const [connectionRevision, setConnectionRevision] = useState(0);
@@ -498,25 +484,13 @@ export function SettingsScreen({
           {active === 'worker' && <>
             <WorkerSetupSection api={delegationApi} />
             <WorkspaceAccessSection api={hasWorkspaceAccess(delegationApi) ? delegationApi : undefined} onChanged={notifyCallCapacitySaved} />
+            <ResearchSetupSection api={delegationApi?.researchSetup} />
           </>}
           {active === 'appearance' && (
             <AppearanceSection theme={theme} density={density} />
           )}
           {active === 'data' && (
             <DataStorageSection health={health} shell={shell} recovery={recovery} localWorkspaceApi={localWorkspaceApi} />
-          )}
-          {active === 'sourcing' && (
-            <section
-              id="settings-sourcing"
-              className="settings__section"
-              aria-label="Sourcing"
-            >
-              <h2 className="settings__section-title">Sourcing</h2>
-              <ResearchSetupSection api={delegationApi?.researchSetup} />
-              {sourcing ?? (
-                <p className="settings__quiet">Sourcing inbox: not configured</p>
-              )}
-            </section>
           )}
           {active === 'diagnostics' && (
             <>

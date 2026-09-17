@@ -12,7 +12,6 @@ vi.mock('electron', () => ({
   },
 }));
 
-import type { MutationReceipt } from '../../src/shared/contracts/commonContract';
 import type {
   LeadRow,
   LeadsListRequest,
@@ -70,12 +69,6 @@ const validPage: LeadsListResponse = {
   revision: 4,
 };
 
-const receipt: MutationReceipt = {
-  revision: 5,
-  affectedPersonIds: ['person-1'],
-  affectedSalesCycleIds: ['cycle-1'],
-};
-
 const listRequest: LeadsListRequest = {
   limit: 50,
   cursor: null,
@@ -88,8 +81,6 @@ const listRequest: LeadsListRequest = {
 function fakeProvider(): LeadsProvider {
   return {
     list: vi.fn(async () => validPage),
-    updateField: vi.fn(async () => receipt),
-    bulkUpdate: vi.fn(async () => receipt),
   };
 }
 
@@ -105,17 +96,13 @@ describe('registerLeadsIpc', () => {
     electron.removeHandler.mockReset();
   });
 
-  it('registers strict leads channels and validates provider output', async () => {
+  it('registers only the strict leads:list channel and validates provider output', async () => {
     const provider = fakeProvider();
 
     registerLeadsIpc(provider);
 
-    expect(electron.handle).toHaveBeenCalledTimes(3);
-    expect(electron.handle.mock.calls.map((call) => call[0]).sort()).toEqual([
-      'leads:bulk-update',
-      'leads:list',
-      'leads:update-field',
-    ]);
+    expect(electron.handle).toHaveBeenCalledTimes(1);
+    expect(electron.handle.mock.calls.map((call) => call[0])).toEqual(['leads:list']);
     await expect(
       invokeRegistered('leads:list', trustedEvent, listRequest),
     ).resolves.toEqual(validPage);
@@ -123,40 +110,12 @@ describe('registerLeadsIpc', () => {
     expect(provider.list).toHaveBeenCalledWith(listRequest);
   });
 
-  it('passes the parsed update-field request through and returns the receipt', async () => {
-    const provider = fakeProvider();
-    registerLeadsIpc(provider);
+  it('registers no person write channel', () => {
+    registerLeadsIpc(fakeProvider());
 
-    await expect(
-      invokeRegistered('leads:update-field', trustedEvent, {
-        personId: 'person-1',
-        field: 'person_name',
-        value: 'Renamed Person',
-      }),
-    ).resolves.toEqual(receipt);
-    expect(provider.updateField).toHaveBeenCalledWith({
-      personId: 'person-1',
-      field: 'person_name',
-      value: 'Renamed Person',
-    });
-  });
-
-  it('accepts a bulk organization update for many people', async () => {
-    const provider = fakeProvider();
-    registerLeadsIpc(provider);
-
-    await expect(
-      invokeRegistered('leads:bulk-update', trustedEvent, {
-        personIds: ['person-1', 'person-2'],
-        field: 'organization_label',
-        value: 'Shared Holdings',
-      }),
-    ).resolves.toEqual(receipt);
-    expect(provider.bulkUpdate).toHaveBeenCalledWith({
-      personIds: ['person-1', 'person-2'],
-      field: 'organization_label',
-      value: 'Shared Holdings',
-    });
+    for (const channel of ['leads:update-field', 'leads:bulk-update']) {
+      expect(() => registeredIpcHandler(electron.handle, channel)).toThrow('was not registered');
+    }
   });
 
   it('rejects malformed requests before invoking the provider', async () => {
@@ -169,49 +128,18 @@ describe('registerLeadsIpc', () => {
     await expect(
       invokeRegistered('leads:list', trustedEvent, { ...listRequest, score: 90 }),
     ).rejects.toThrow();
-    await expect(
-      invokeRegistered('leads:update-field', trustedEvent, {
-        personId: 'person-1',
-        field: 'stage',
-        value: 'won',
-      }),
-    ).rejects.toThrow();
-    await expect(
-      invokeRegistered('leads:bulk-update', trustedEvent, {
-        personIds: [],
-        field: 'organization_label',
-        value: 'Shared Holdings',
-      }),
-    ).rejects.toThrow();
+    await expect(invokeRegistered('leads:list', trustedEvent)).rejects.toThrow();
     expect(provider.list).not.toHaveBeenCalled();
-    expect(provider.updateField).not.toHaveBeenCalled();
-    expect(provider.bulkUpdate).not.toHaveBeenCalled();
   });
 
-  it('rejects an untrusted sender on every channel before the provider runs', async () => {
+  it('rejects an untrusted sender before the provider runs', async () => {
     const provider = fakeProvider();
     registerLeadsIpc(provider);
 
     await expect(
       invokeRegistered('leads:list', untrustedEvent, listRequest),
     ).rejects.toThrow('trusted');
-    await expect(
-      invokeRegistered('leads:update-field', untrustedEvent, {
-        personId: 'person-1',
-        field: 'person_name',
-        value: 'Renamed Person',
-      }),
-    ).rejects.toThrow('trusted');
-    await expect(
-      invokeRegistered('leads:bulk-update', untrustedEvent, {
-        personIds: ['person-1'],
-        field: 'organization_label',
-        value: null,
-      }),
-    ).rejects.toThrow('trusted');
     expect(provider.list).not.toHaveBeenCalled();
-    expect(provider.updateField).not.toHaveBeenCalled();
-    expect(provider.bulkUpdate).not.toHaveBeenCalled();
   });
 
   it('rejects a malformed provider response in the main process', async () => {
@@ -227,15 +155,13 @@ describe('registerLeadsIpc', () => {
     ).rejects.toThrow();
   });
 
-  it('returns one idempotent unregister function that removes all three channels', () => {
+  it('returns one idempotent unregister function that removes the single channel', () => {
     const unregister = registerLeadsIpc(fakeProvider());
 
     unregister();
     unregister();
 
-    expect(electron.removeHandler).toHaveBeenCalledTimes(3);
-    expect(
-      electron.removeHandler.mock.calls.map((call) => call[0]).sort(),
-    ).toEqual(['leads:bulk-update', 'leads:list', 'leads:update-field']);
+    expect(electron.removeHandler).toHaveBeenCalledTimes(1);
+    expect(electron.removeHandler).toHaveBeenCalledWith('leads:list');
   });
 });

@@ -24,11 +24,8 @@ import { createEmailService } from './outreach/emailService';
 import { createCompanyDraftPreparationService, type CompanyDraftPreparationPort } from './outreach/companyDraftPreparationService';
 import { createOutreachProviders } from './outreach/providers/outreachProviders';
 import { registerOutreachIpc } from './ipc/registerOutreachIpc';
-import { createDiscoveryWorker, type DiscoveryWorker } from './discovery/discoveryWorker';
-import { unavailableDiscoveryResearch } from './discovery/discoveryResearchPort';
 import { resolveApplicationPaths } from './applicationPaths';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { RecoveryService, type RecoveryServiceOptions, type RecoveryDialogs } from './recovery/recoveryService';
 import type { RecoveryProvider } from '../shared/contracts/recoveryContract';
 
@@ -59,23 +56,6 @@ import {
 } from './foundation/foundationRuntime';
 import { HealthService } from './health/healthService';
 import { registerApplicationIpc } from './ipc/registerApplicationIpc';
-import type { SourcingProvider } from './sourcing/registerSourcingIpc';
-import { EnrichmentRequestWriter } from './sourcing/enrichmentRequestWriter';
-import { createFileSystemEnrichmentRequestStore } from './sourcing/enrichmentFixtureStore';
-import type { EnrichmentRequester } from './leads/leadDetailService';
-import {
-  createFileSystemInboxObjectStore,
-  createS3InboxObjectStore,
-  InboxClient,
-} from './sourcing/inboxClient';
-import { SourcingCredentialStore } from './sourcing/sourcingCredentialStore';
-import { SourcingHmacSaltStore } from './sourcing/sourcingHmacSaltStore';
-import { SourcingPoller, type PollTimer } from './sourcing/sourcingPoller';
-import {
-  createS3UpstreamObjectStore,
-  UpstreamSync,
-  type UpstreamObjectStore,
-} from './sourcing/upstreamSync';
 import { safeStorage, dialog, shell, clipboard } from 'electron';
 import { SafeStorageKeyProtector } from './security/safeStorageKeyProtector';
 import { WorkspaceKeyStore } from './security/workspaceKeyStore';
@@ -344,7 +324,6 @@ export type ApplicationStartupDependencies = FoundationRuntimeDependencies & {
   createPolicyImportNative?():NonNullable<Parameters<typeof createDelegationRuntime>[0]['policyImportNative']>;
   createRequestedFollowupModel?(userDataPath:string):NonNullable<Parameters<typeof createDelegationRuntime>[0]['requestedModel']>;
   createLinkedInAdapters?(userDataPath:string):NonNullable<Parameters<typeof createDelegationRuntime>[0]['linkedIn']>;
-  createDiscoveryWorker?: typeof createDiscoveryWorker;
   createOutboundCommandService?: typeof createOutboundCommandService;
   createPhoneBindings?(runtime: FoundationRuntime): PhoneBindings;
   registerPhoneSetupIpc?: typeof registerPhoneSetupIpc;
@@ -354,25 +333,12 @@ export type ApplicationStartupDependencies = FoundationRuntimeDependencies & {
     runtime: FoundationRuntime,
     isTrustedRendererUrl: ((url: string) => boolean) | undefined,
     registrars: undefined,
-    sourcingProvider: SourcingProvider,
     recoveryProvider: RecoveryProvider,
     shellProvider?: undefined,
-    enrichmentRequester?: EnrichmentRequester,
     logDirectoryPath?: string,
-    outbound?: OutboundCommandServiceApi,
     options?: { selectedCompanyResearch?: { current(): SelectedCompanyResearchPort | null }; companyResearchSettings?: CompanyResearchSettingsLifecycle;
       companyDraftPreparation?: CompanyDraftPreparationPort },
   ): () => void;
-  createEnrichmentRequester?(
-    runtime: FoundationRuntime,
-    userDataPath: string,
-    logger?: SafeLogger,
-  ): EnrichmentRequester;
-  createSourcingPoller(
-    runtime: FoundationRuntime,
-    userDataPath: string,
-    logger?: SafeLogger,
-  ): SourcingPoller;
   createAppleBridgeSupervisor(
     options: AppleBridgeSupervisorOptions,
   ): AppleBridgeSupervisorApi;
@@ -394,12 +360,6 @@ export type ApplicationStartupOptions = {
   expectedWorkspaceId?: string;
   /** Main-only explicit configuration. C6/D3 own persisted user/campaign activation. */
   companyResearch?: CompanyResearchStartupConfiguration;
-  /**
-   * Auto-polls the sourcing inbox on startup plus every 15 minutes. Off by
-   * default so tests and packaged E2E runs never touch the network; main.ts
-   * enables it for real launches.
-   */
-  sourcingPollingEnabled?: boolean;
   logger?: SafeLogger;
   logDirectoryPath?: string;
   registerOutboundLifecycle?(callbacks: {
@@ -433,161 +393,6 @@ const workspaceKeyStore = new WorkspaceKeyStore({
 const domainClock = new SystemClock();
 const domainIds = new UuidGenerator();
 
-const SOURCING_POLL_INTERVAL_MS = 15 * 60 * 1000;
-
-/**
- * Production enrichment requester over the same scoped key as the poller:
- * the founder's "Find contact info" click writes exactly one request line
- * to upstream/enrichment-requests/. Missing credentials surface as a
- * validated 'credentials_unavailable' refusal, never a throw.
- */
-export function createProductionEnrichmentRequester(
-  runtime: FoundationRuntime,
-  userDataPath: string,
-  logger?: SafeLogger,
-): EnrichmentRequester {
-  // TEST-ONLY: exercise the real writer/gates while substituting only its external
-  // transport. An invalid fixture path must fail, never fall back to host credentials.
-  const fixtureDirectory = process.env.CALLIE_SOURCING_FIXTURE_DIR;
-  if (fixtureDirectory !== undefined) {
-    const writer = new EnrichmentRequestWriter({
-      domainGate: runtime,
-      createStore: async () => createFileSystemEnrichmentRequestStore(fixtureDirectory),
-      clock: domainClock,
-    });
-    return { request: input => writer.request(input) };
-  }
-  const credentialStore = new SourcingCredentialStore({
-    safeStorage,
-    envelopePath: join(userDataPath, 'callie.sourcing-inbox-credentials.json'),
-    fallbackKeyFilePath: join(homedir(), '.callie-sourcing-app-inbox-key.json'),
-    clock: domainClock,
-    logger,
-  });
-  const writer = new EnrichmentRequestWriter({
-    domainGate: runtime,
-    createStore: () => createS3UpstreamObjectStore({
-      credentialProvider: async () => (await credentialStore.load())?.credentials ?? null,
-    }),
-    clock: domainClock,
-  });
-  return { request: (input) => writer.request(input) };
-}
-
-function createProductionSourcingPoller(
-  runtime: FoundationRuntime,
-  userDataPath: string,
-  logger?: SafeLogger,
-): SourcingPoller {
-  const credentialStore = new SourcingCredentialStore({
-    safeStorage,
-    envelopePath: join(userDataPath, 'callie.sourcing-inbox-credentials.json'),
-    fallbackKeyFilePath: join(homedir(), '.callie-sourcing-app-inbox-key.json'),
-    clock: domainClock,
-    logger,
-  });
-  const hmacSaltStore = new SourcingHmacSaltStore({
-    safeStorage,
-    envelopePath: join(userDataPath, 'callie.sourcing-hmac-salt.json'),
-    clock: domainClock,
-  });
-  const upstreamSync = new UpstreamSync({
-    domainGate: runtime,
-    loadHmacSalt: () => hmacSaltStore.load(),
-    clock: domainClock,
-    batchIds: domainIds,
-  });
-  // TEST-ONLY escape hatch for the packaged E2E: when
-  // CALLIE_SOURCING_FIXTURE_DIR points at a local directory, the poller
-  // reads `events/**.ndjson` fixture files from that directory instead of
-  // S3 and discards upstream uploads. Real launches never set this variable;
-  // it exists so the fixture-driven spec can exercise the full poll ->
-  // intake -> score pipeline without credentials or network.
-  const fixtureDirectory = process.env.CALLIE_SOURCING_FIXTURE_DIR ?? null;
-  const fixtureEvidence = fixtureDirectory !== null
-    && process.env.CALLIE_SOURCING_FIXTURE_HANG_ONCE === '1'
-    ? {
-      cleanupStarted: false,
-      cleanupCompleted: false,
-      replacementStartedAfterCleanup: false,
-      maxConcurrentExecutions: 0,
-    }
-    : undefined;
-  let fixtureHangOnce = fixtureEvidence !== undefined;
-  let fixtureActiveExecutions = 0;
-  let fixtureClockAdvanced = false;
-  const pollClock = fixtureEvidence === undefined ? domainClock : {
-    now: () => new Date(
-      Date.now() + (fixtureClockAdvanced ? 15 * 60_000 : 0),
-    ).toISOString(),
-  };
-  return new SourcingPoller({
-    domainGate: runtime,
-    loadCredentials: fixtureDirectory === null
-      ? () => credentialStore.load()
-      : async () => ({
-        credentials: { accessKeyId: 'fixture', secretAccessKey: 'fixture' },
-        source: 'file',
-      }),
-    createInboxClient: async (loaded) => {
-      const store = fixtureDirectory !== null
-        ? createFileSystemInboxObjectStore(fixtureDirectory)
-        : await createS3InboxObjectStore({
-          credentialProvider: async () => loaded.credentials,
-        });
-      const client = new InboxClient({ store, clock: domainClock });
-      if (fixtureEvidence === undefined) return client;
-      return {
-        listNewObjects: async (sinceKey, signal) => {
-          fixtureActiveExecutions += 1;
-          fixtureEvidence.maxConcurrentExecutions = Math.max(
-            fixtureEvidence.maxConcurrentExecutions,
-            fixtureActiveExecutions,
-          );
-          if (fixtureHangOnce) {
-            fixtureHangOnce = false;
-            fixtureClockAdvanced = true;
-            return new Promise<string[]>((_resolve, reject) => {
-              signal.addEventListener('abort', () => {
-                fixtureEvidence.cleanupStarted = true;
-                setTimeout(() => {
-                  fixtureActiveExecutions -= 1;
-                  fixtureEvidence.cleanupCompleted = true;
-                  reject(signal.reason);
-                }, 100);
-              }, { once: true });
-            });
-          }
-          fixtureEvidence.replacementStartedAfterCleanup = fixtureEvidence.cleanupCompleted;
-          try {
-            return await client.listNewObjects(sinceKey, signal);
-          } finally {
-            fixtureActiveExecutions -= 1;
-          }
-        },
-        fetchNdjson: (key, signal) => client.fetchNdjson(key, signal),
-      };
-    },
-    upstream: {
-      sync: upstreamSync,
-      createStore: async (loaded): Promise<UpstreamObjectStore> => (
-        fixtureDirectory !== null
-          ? { putObjectText: async () => undefined }
-          : createS3UpstreamObjectStore({
-            credentialProvider: async () => loaded.credentials,
-          })
-      ),
-      saltState: () => hmacSaltStore.state(),
-      setSalt: (salt) => hmacSaltStore.set(salt),
-    },
-    clock: pollClock,
-    fixtureExecutionEvidence: fixtureEvidence === undefined
-      ? undefined
-      : () => ({ ...fixtureEvidence }),
-    logger,
-  });
-}
-
 /** Default main-process domain factory, shared with the bounded startup integration test. */
 export function createStartupDomainRuntime(database: AppDatabase, expectedWorkspaceId?: string): DomainRuntime {
   return new DomainRuntime({ database, clock: domainClock, ids: domainIds, expectedWorkspaceId });
@@ -612,8 +417,6 @@ const defaultDependencies: ApplicationStartupDependencies = {
   createResearchSetupStore:userDataPath=>new ResearchSetupRequestStore({directory:join(userDataPath,'research-setup'),safeStorage}),
   createEmailService: (runtime,userDataPath,providers,expectedWorkspaceId) => createEmailService({databaseGate:runtime,expectedWorkspaceId,
     providers:providers ?? createOutreachProviders({directory:join(userDataPath,'outreach'),safeStorage,openExternal:url=>shell.openExternal(url)})}),
-  createSourcingPoller: createProductionSourcingPoller,
-  createEnrichmentRequester: createProductionEnrichmentRequester,
   createAppleBridgeSupervisor: (options) => new AppleBridgeSupervisor(options),
   registerAppleSpikeIpc,
   closeDatabase,
@@ -654,7 +457,6 @@ export async function startApplication(
   let unregisterApplicationIpc: (() => void) | undefined;
   let unregisterAppleSpikeIpc: (() => void) | undefined;
   let appleBridgeSupervisor: AppleBridgeSupervisorApi | undefined;
-  let sourcingPoller: SourcingPoller | undefined;
   let backupService: Pick<BackupService, 'start' | 'shutdown' | 'createBackup' | 'listAvailableBackups'> | undefined;
   let recoveryService: (RecoveryProvider & { shutdown(): Promise<void> }) | undefined;
   let shutdownPromise: Promise<void> | undefined;
@@ -664,18 +466,11 @@ export async function startApplication(
   let unregisterPhoneSetup: (() => void) | undefined;
   let unregisterOutboundLifecycle: (() => void) | undefined;
   let removeStartupAbort: (() => void) | undefined;
-  let discoveryWorker: DiscoveryWorker | undefined;
-  let discoveryClosed = false;
   let outboundClosed = false;
   let outboundLocked = false;
   const cleanupErrors: unknown[] = [];
 
-  const closeDiscovery = (): void => {
-    if (discoveryClosed) return;
-    discoveryClosed = true;
-    try { discoveryWorker?.stop(); } catch (error) { cleanupErrors.push(error); }
-  };
-  const abortStartup = (): void => { closeDiscovery(); closeOutbound(); };
+  const abortStartup = (): void => { closeOutbound(); };
   const detachOutboundLifecycle = (): void => {
     const unregister = unregisterOutboundLifecycle;
     unregisterOutboundLifecycle = undefined;
@@ -715,10 +510,9 @@ export async function startApplication(
     shutdownPromise = new Promise<void>((resolve, reject) => {
       resolveShutdown = resolve; rejectShutdown = reject;
     });
-    closeDiscovery();
     closeOutbound();
     void (async () => {
-      // Preserve recovery, backup, sourcing, IPC, helper and Foundation ownership.
+      // Preserve recovery, backup, IPC, helper and Foundation ownership.
       let recoveryCleanup: Promise<void> | undefined;
       try {
         recoveryCleanup = recoveryService?.shutdown();
@@ -733,18 +527,7 @@ export async function startApplication(
         cleanupErrors.push(error);
       }
 
-      try {
-        sourcingPoller?.stop();
-        await sourcingPoller?.idle();
-      } catch (error) {
-        cleanupErrors.push(error);
-      } finally {
-        sourcingPoller = undefined;
-      }
-
       try { await researchCleanup;await delegationCleanup; } catch (error) { cleanupErrors.push(error); }
-      try { await discoveryWorker?.idle(); } catch (error) { cleanupErrors.push(error); }
-      finally { discoveryWorker = undefined; }
 
       try {
         await backupCleanup;
@@ -910,28 +693,6 @@ export async function startApplication(
     // A registrar can synchronously abort before returning its owned disposer.
     if (outboundClosed) detachOutboundLifecycle();
     throwIfStartupCancelled(options.signal);
-    discoveryWorker = (dependencies.createDiscoveryWorker ?? createDiscoveryWorker)({
-      domainGate: runtime, clock: domainClock, research: unavailableDiscoveryResearch,
-      schedule: (run, delay) => { const timer = setTimeout(run, delay); timer.unref(); return () => clearTimeout(timer); },
-    });
-    // An injected factory can synchronously abort before handing back ownership.
-    if (discoveryClosed) discoveryWorker.stop();
-    throwIfStartupCancelled(options.signal);
-    discoveryWorker.start();
-    throwIfStartupCancelled(options.signal);
-    if (typeof dependencies.createSourcingPoller !== 'function') {
-      throw new Error('Sourcing poller dependency is required.');
-    }
-    sourcingPoller = dependencies.createSourcingPoller(
-      runtime,
-      options.userDataPath,
-      options.logger,
-    );
-    if (sourcingPoller === undefined) {
-      throw new Error('Sourcing poller dependency is required.');
-    }
-    const startedPoller = sourcingPoller;
-    runtime.setSourcingHealthProvider(() => startedPoller.getHealth());
     const backupOptions: BackupServiceOptions = {
       databaseGate: runtime,
       backupDirectory: join(options.userDataPath, 'backups'),
@@ -955,30 +716,9 @@ export async function startApplication(
       runtime,
       options.isTrustedRendererUrl,
       undefined,
-      {
-        pollNow: async () => {
-          await startedPoller.pollNow();
-          return startedPoller.getStatus();
-        },
-        status: () => startedPoller.getStatus(),
-        retry: async () => {
-          await startedPoller.retry();
-          return startedPoller.getStatus();
-        },
-        setHmacSalt: async ({ salt }) => {
-          await startedPoller.setHmacSalt(salt);
-          return startedPoller.getStatus();
-        },
-      },
       recoveryService,
       undefined,
-      dependencies.createEnrichmentRequester?.(
-        runtime,
-        options.userDataPath,
-        options.logger,
-      ),
       options.logDirectoryPath,
-      outbound,
       { selectedCompanyResearch: { current: () => companyResearch?.api ?? null }, companyResearchSettings, companyDraftPreparation },
     );
     if (phoneBindings.setup) unregisterPhoneSetup = (dependencies.registerPhoneSetupIpc ?? registerPhoneSetupIpc)({
@@ -986,18 +726,6 @@ export async function startApplication(
     });
     if(delegation.linkedIn)unregisterLinkedIn=(dependencies.registerLinkedInIpc??registerLinkedInIpc)({provider:delegation.linkedIn,isTrustedRendererUrl:options.isTrustedRendererUrl});
     if(email)unregisterEmail=(dependencies.registerOutreachIpc??registerOutreachIpc)({provider:email,delegation,pairingStore,isTrustedRendererUrl:options.isTrustedRendererUrl});
-    throwIfStartupCancelled(options.signal);
-    if (options.sourcingPollingEnabled === true && sourcingPoller !== undefined) {
-      const timer: PollTimer = {
-        schedule: (callback) => {
-          const interval = setInterval(callback, SOURCING_POLL_INTERVAL_MS);
-          interval.unref();
-          return () => clearInterval(interval);
-        },
-      };
-      // Startup never blocks on the network: the initial poll runs detached.
-      void sourcingPoller.start(timer);
-    }
     throwIfStartupCancelled(options.signal);
     if (options.appleBridge !== undefined) {
       appleBridgeSupervisor = dependencies.createAppleBridgeSupervisor(

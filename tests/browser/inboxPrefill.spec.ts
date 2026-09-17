@@ -101,7 +101,6 @@ test('the inbox review opens prefilled from the saved source, keeps the source t
   const inventory = await methods(page);
   expect(inventory.filter(method => method === 'localWorkspace.admitCompanyDraftEmail')).toEqual([]);
   expect(inventory).not.toContain('forbidden');
-  expect(await page.evaluate(() => window.inboxPrefillBrowser.opened)).toEqual([]);
   expect(state.errors).toEqual([]);
   expect(state.requests).toEqual([]);
 });

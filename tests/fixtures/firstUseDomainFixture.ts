@@ -13,8 +13,6 @@ import { registerOutreachIpc } from '../../src/main/ipc/registerOutreachIpc';
 import { createOutreachProviders } from '../../src/main/outreach/providers/outreachProviders';
 import { createEmailService } from '../../src/main/outreach/emailService';
 import type { GeneratedDraft, GroundedDraftContext, SafeStorage } from '../../src/main/outreach/providers/providerTypes';
-import type { SourcingPollHealth } from '../../src/shared/contracts/sourcingContract';
-import type { SourcingPoller } from '../../src/main/sourcing/sourcingPoller';
 import { createCallieApi } from '../../src/preload/createCallieApi';
 import { createTempDatabase, createTestWorkspaceKey } from './tempDatabase';
 import type { RegisteredIpcHandler } from './registeredIpcHandler';
@@ -38,11 +36,10 @@ export const firstUsePages: Record<string, string> = {
 };
 const allowed = new Set([
   'health:get', 'daily:get', 'local-workspace:get', 'local-workspace:get-commitments',
-  'leads:list', 'review:list', 'lead-detail:outbound-capabilities', 'lead-detail:get',
+  'leads:list', 'lead-detail:get',
   'outreach:delegation-status', 'local-workspace:review-company', 'local-workspace:create-company',
   'local-workspace:company-create-status', 'local-workspace:get-company', 'local-workspace:get-company-draft', 'local-workspace:research-company',
   'local-workspace:company-research-status', 'local-workspace:link-company-person',
-  'imports:preview', 'imports:remap', 'imports:commit', 'imports:status',
   'outreach:status', 'outreach:open-draft', 'outreach:save-draft', 'outreach:inspect-local-authority',
   'local-workspace:get-company-research-settings',
 ]);
@@ -142,11 +139,6 @@ export async function createFirstUseDomainFixture(handlers: Map<string, Register
     createRecoveryService: () => ({ status: async () => deny('recovery'), beginSetup: async () => deny('recovery'),
       saveSetupMaterial: async () => deny('recovery'), completeSetup: async () => deny('recovery'),
       selectAndRunRestoreDrill: async () => deny('restore'), shutdown: async () => undefined }),
-    // No sourcing timer or host credential loader. The actual Foundation health reads this idle port.
-    createSourcingPoller: () => ({ getHealth: (): SourcingPollHealth => ({ status: 'healthy', reasons: [], lastSuccessAgeMs: null,
-      state: { state: 'idle', pollId: null, startedAt: null, lastCompletedAt: null, consecutiveFailures: 0,
-        lastFailureAt: null, lastFailureCode: null, backlogCount: null } }),
-      stop() {}, idle: async (): Promise<void> => undefined }) as unknown as SourcingPoller,
     createAppleBridgeSupervisor: () => deny('Apple bridge'),
   };
   try {
