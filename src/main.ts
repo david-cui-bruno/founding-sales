@@ -19,6 +19,7 @@ import {
 import { createFileLogSink } from './main/logging/fileLogSink';
 import { createSafeLogger } from './main/logging/safeLogger';
 import { isPreReleaseBackupInvocation, runPreReleaseBackupHost } from './main/backup/preReleaseBackupRuntime';
+import { isStartupDiagnoseInvocation, runStartupDiagnoseHost, StartupDiagnoseRefusedError } from './main/diagnostics/startupDiagnoseRuntime';
 import { showStartupFailureDialog } from './main/startupFailureDialog';
 
 const preReleaseBackupMode = isPreReleaseBackupInvocation(process.argv.slice(1));
@@ -29,8 +30,21 @@ if (preReleaseBackupMode) {
     process.stderr.write('PRE_RELEASE_BACKUP_FAILED\n', () => app.exit(1));
   });
 }
+// Second reserved headless mode: startup diagnosis on a private copy of the
+// database. Same isolation as the backup host: no lock, protocol, startup,
+// logging or windows. Refusals print one closed reason word.
+const startupDiagnoseMode = !preReleaseBackupMode && isStartupDiagnoseInvocation(process.argv.slice(1));
+if (startupDiagnoseMode) {
+  void runStartupDiagnoseHost(app, safeStorage).then(report => {
+    process.stdout.write(`${JSON.stringify(report)}\n`, () => app.exit(0));
+  }, (error: unknown) => {
+    const reason = error instanceof StartupDiagnoseRefusedError ? error.reason : 'unknown';
+    process.stderr.write(`STARTUP_DIAGNOSE_FAILED ${reason}\n`, () => app.exit(1));
+  });
+}
+const headlessMode = preReleaseBackupMode || startupDiagnoseMode;
 
-if (!preReleaseBackupMode) protocol.registerSchemesAsPrivileged([
+if (!headlessMode) protocol.registerSchemesAsPrivileged([
   {
     scheme: 'callie',
     privileges: {
@@ -51,8 +65,8 @@ const rendererTrust = createRendererTrust({
   developmentRendererUrl: MAIN_WINDOW_VITE_DEV_SERVER_URL,
 });
 
-const ownsSingleInstanceLock = !started && !preReleaseBackupMode && app.requestSingleInstanceLock();
-if (!started && !preReleaseBackupMode && !ownsSingleInstanceLock) {
+const ownsSingleInstanceLock = !started && !headlessMode && app.requestSingleInstanceLock();
+if (!started && !headlessMode && !ownsSingleInstanceLock) {
   app.quit();
 }
 

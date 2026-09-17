@@ -1,4 +1,5 @@
 import { companyResearchStages, companyResearchReasons } from '../research/companyResearchFailure';
+import { STARTUP_ERROR_CLASSES, STARTUP_STAGES, isStartupFailureCode } from '../startup/startupFailure';
 
 export type SafeLogFields = Readonly<{
   component?: string;
@@ -20,6 +21,7 @@ export type SafeLogFields = Readonly<{
   stage?: string;
   reason?: string;
   httpStatus?: number;
+  code?: string;
 }>;
 
 export interface SafeLogger {
@@ -33,7 +35,7 @@ export interface SafeLogger {
 type FieldValidator = (value: unknown) => boolean;
 type EventPolicy = Readonly<{
   level: 'debug' | 'info' | 'warn' | 'error';
-  component: 'sourcing-poller' | 'sourcing-credential-store' | 'company-research';
+  component: 'sourcing-poller' | 'sourcing-credential-store' | 'company-research' | 'startup';
   fields: Readonly<Record<string, FieldValidator>>;
 }>;
 
@@ -64,6 +66,8 @@ function isGeneratedObjectKey(value: unknown): boolean {
   return match !== null && isCanonicalUtcDate(match[1]!) && ULID.test(match[3]!);
 }
 
+const isStartupStage: FieldValidator = (value) => typeof value === 'string' && (STARTUP_STAGES as readonly string[]).includes(value);
+const isStartupErrorClass: FieldValidator = (value) => typeof value === 'string' && (STARTUP_ERROR_CLASSES as readonly string[]).includes(value);
 const isUuid: FieldValidator = (value) => typeof value === 'string' && UUID.test(value);
 const isErrorClass: FieldValidator = (value) => (
   typeof value === 'string' && SAFE_ERROR_CLASSES.has(value)
@@ -116,6 +120,11 @@ const EVENT_POLICIES: Readonly<Record<string, EventPolicy>> = {
       status: (value) => typeof value === 'string' && POLL_FAILURE_STATUSES.has(value),
       errorClass: isErrorClass,
     },
+  },
+  /** One record per failed start: where it stopped, our own error class, a closed code. No message, path or value. */
+  STARTUP_FAILED: {
+    level: 'error', component: 'startup',
+    fields: { stage: isStartupStage, errorClass: isStartupErrorClass, code: isStartupFailureCode },
   },
   SOURCING_CREDENTIALS_PROTECTED: {
     level: 'info', component: 'sourcing-credential-store',

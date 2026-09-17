@@ -16,6 +16,7 @@ import type {
   WorkspaceKey,
   WorkspaceKeyStoreInput,
 } from '../security/workspaceKeyTypes';
+import type { FoundationStage } from '../startup/startupFailure';
 
 export type { FounderSalesDomain } from '../domain/founderSalesDomain';
 
@@ -73,11 +74,17 @@ export class FoundationRuntime {
   private nextAttemptId = 0;
   private shutdownPromise: Promise<void> | undefined;
   private readonly databaseOperations = new Set<Promise<void>>();
+  private failedStage: FoundationStage | undefined;
 
   constructor(
     private readonly options: FoundationRuntimeOptions,
     private readonly dependencies: FoundationRuntimeDependencies,
   ) {}
+
+  /** Where the most recent initialization attempt stopped. Closed stage name only. */
+  get lastFailedStage(): FoundationStage | undefined {
+    return this.failedStage;
+  }
 
   async initialize(): Promise<void> {
     this.throwIfUnavailable();
@@ -169,6 +176,7 @@ export class FoundationRuntime {
     let database: AppDatabase | undefined;
     let databaseAdopted = false;
     let workspaceKey: WorkspaceKey | undefined;
+    let stage: FoundationStage = 'key';
 
     try {
       try {
@@ -178,16 +186,19 @@ export class FoundationRuntime {
           databaseExists: this.options.databaseExists,
         });
         this.throwIfAttemptIsStale(id);
+        stage = 'prepare';
         await this.dependencies.prepareEncryptedDatabase(
           this.options.databasePath,
           workspaceKey,
         );
         this.throwIfAttemptIsStale(id);
+        stage = 'open';
         database = this.dependencies.openDatabase({
           path: this.options.databasePath,
           key: workspaceKey,
         });
         this.throwIfAttemptIsStale(id);
+        stage = 'migrate';
         await this.dependencies.migrateToLatest(database, {
           backupDirectory: this.options.backupDirectory,
           workspaceKey,
@@ -199,9 +210,11 @@ export class FoundationRuntime {
 
       let domainRuntime: FoundationDomainRuntime | undefined;
       try {
+        stage = 'domain';
         domainRuntime = this.dependencies.createDomainRuntime(database);
         const report = domainRuntime.initialize();
         const services = report.status === 'ready' ? domainRuntime.getServices() : undefined;
+        stage = 'health';
         const health = this.dependencies.createHealthService({
           appVersion: this.options.appVersion,
           databasePath: this.options.databasePath,
@@ -220,6 +233,7 @@ export class FoundationRuntime {
         throw domainError;
       }
     } catch (initializationError) {
+      this.failedStage = stage;
       if (database !== undefined && !databaseAdopted) {
         try {
           this.dependencies.closeDatabase(database);

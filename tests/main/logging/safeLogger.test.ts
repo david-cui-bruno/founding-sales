@@ -82,6 +82,23 @@ describe('createSafeLogger', () => {
     }
   });
 
+  it('retains one closed startup failure record and drops every open-ended field', () => {
+    const accepted = capture('error', 'STARTUP_FAILED', {
+      component: 'startup', stage: 'domain', errorClass: 'DomainStartupFatalError', code: 'catalog_conflict',
+      message: 'private text', databasePath: '/Users/founder/private.sqlite3', reason: 'private',
+    });
+    expect(accepted.output()).toEqual({ timestamp: NOW, level: 'error', eventCode: 'STARTUP_FAILED',
+      component: 'startup', stage: 'domain', errorClass: 'DomainStartupFatalError', code: 'catalog_conflict' });
+    const sqlite = capture('error', 'STARTUP_FAILED', { component: 'startup', stage: 'open', errorClass: 'SqliteError', code: 'SQLITE_NOTADB' });
+    expect(sqlite.output()).toEqual({ timestamp: NOW, level: 'error', eventCode: 'STARTUP_FAILED', component: 'startup', stage: 'open', errorClass: 'SqliteError', code: 'SQLITE_NOTADB' });
+    for (const value of ACCEPTED_SHAPE_PRIVATE_VALUES) {
+      const rejected = capture('error', 'STARTUP_FAILED', { component: 'startup', stage: value, errorClass: value, code: value });
+      expect(rejected.output()).toEqual({ timestamp: NOW, level: 'error', eventCode: 'STARTUP_FAILED', component: 'startup' });
+    }
+    expect(capture('info', 'STARTUP_FAILED', { component: 'startup', stage: 'open', errorClass: 'Error' }).write).not.toHaveBeenCalled();
+    expect(capture('error', 'STARTUP_FAILED', { component: 'sourcing-poller', stage: 'open', errorClass: 'Error' }).write).not.toHaveBeenCalled();
+  });
+
   it('rejects unsupported event codes and wrong event levels', () => {
     expect(capture('info', 'SAFE_EVENT').write).not.toHaveBeenCalled();
     expect(capture('info', 'SOURCING_FILE_FAILED').write).not.toHaveBeenCalled();

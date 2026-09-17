@@ -118,6 +118,28 @@ writable (checkpoint/receipt/retention), not a read-only inspection. A verified
 artifact is retained even if receipt recording fails. A fresh real backup and
 restore-readiness acceptance remain manual prerequisites, never mocked CI proof.
 
+### Startup diagnosis without a live launch
+
+A failed start shows only `APPLICATION_STARTUP_FAILED`. Two retained traces exist
+so nobody has to relaunch blind:
+
+- The local log (`<userData>/logs/<date>.ndjson`) gets one `STARTUP_FAILED`
+  record per failed start with three closed fields only: `stage` (`key`,
+  `prepare`, `open`, `migrate`, `domain`, `health`, `compose`, `window`),
+  `errorClass` (our own error names or `SqliteError`) and `code` (a domain fatal
+  code or a SQLite result code). No message, path or value is written.
+- `npm run diagnose:startup` launches the same packaged executable as
+  `backup:pre-release` in its second reserved mode, `--callie-diagnose-startup`.
+  It copies the workspace database (and any write-ahead log) into a private
+  temporary directory, runs open, readiness, `migrateToLatest` and the domain
+  bootstrap on the copy, deletes the copy, and prints one JSON report: sidecar
+  sizes, per-stage outcome, error class, closed code and a path-free message.
+  The live database is never opened. The launcher hands the host a fixed
+  environment (`HOME`, `PATH`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `LANG`,
+  `LC_ALL`, `TERM`) so shell-carried `NODE_*` variables do not trip the host's
+  environment refusal. Same clean-HEAD marker, identity and lock rules as the
+  backup launcher; refusals print `STARTUP_DIAGNOSE_FAILED <reason>`.
+
 ### Hosted gate prerequisites (workflow source only)
 
 `.github/workflows/ci.yml` uses disposable GitHub-hosted macOS runners for PR/main
