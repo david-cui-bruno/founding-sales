@@ -8,7 +8,7 @@
 
 **Tech Stack:** TypeScript, React, Vitest, SQLite multiple ciphers, Node 24.20.0.
 
-**Spec:** [Approved adversarial audit](../../engineering/2026-09-10-adversarial-product-audit.md), F01/F04 and copy portion of F05, approved 2026-09-10 03:04 UTC. [Program constraints and subsequent stages](../2026-09-10-product-repair-program.md).
+**Spec:** [Approved adversarial audit](../../../engineering/2026-09-10-adversarial-product-audit.md), F01/F04 and copy portion of F05, approved 2026-09-10 03:04 UTC. [Program constraints and subsequent stages](../2026-09-10-product-repair-program.md).
 
 ## Global Constraints
 

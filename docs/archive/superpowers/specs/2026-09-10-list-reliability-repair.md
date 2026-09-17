@@ -1,7 +1,7 @@
 # List reliability repair design
 
 **Scope:** F05 complete local Inbox paging/counts/startup badge/availability, F06 Leads paging, F07 exact selected targets, and only the Leads inline/bulk pending/error-retention portion of F14.
-**Authority:** [Approved repair program](../2026-09-10-product-repair-program.md), [adversarial audit](../../engineering/2026-09-10-adversarial-product-audit.md), and [execution plan](../plans/2026-09-10-list-reliability-repair.md).
+**Authority:** [Approved repair program](../2026-09-10-product-repair-program.md), [adversarial audit](../../../engineering/2026-09-10-adversarial-product-audit.md), and [execution plan](../plans/2026-09-10-list-reliability-repair.md).
 **Status:** Parent approved the design and B1-B7 dispositions for documentation on 2026-09-10. Implementation remains **HOLD** until explicit GO and file handoffs. This document is a proposal, not evidence of implemented or passing behavior.
 **Source checkpoint:** User-supplied base `base14e5fa7`, parent-reported root `2b01261`, and current dirty presentation/overlay plus frozen review-action files were read. This is not a clean-tree certification. Re-read handed-off source before implementation.
 **Invariant:** Every matching local record is reachable; counts disclose actual source and observation; every advertised selected ID is submitted or nothing is submitted with explicit scope guidance; failures retain intended input with safe errors; pending submissions cannot duplicate.

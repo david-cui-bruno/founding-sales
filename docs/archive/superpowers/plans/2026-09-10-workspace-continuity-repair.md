@@ -5,7 +5,7 @@
 **Goal:** repair F11/F15/F16 and Friday F14, retire stale Settings shortcut copy, and consolidate F18 without losing in-session work, overstating health/counts, changing authority or damaging retained data.
 **Architecture:** lift the existing company state machine into a workspace memory owner with transient view bindings; retain ready UI during readonly health refresh; add a cleanup-ordered fatal-startup dialog; separate local commitments from worker counts. Prove the shipped provider mappings/readiness boundary before removing nine test-only adapter bodies.
 **Tech Stack:** existing TypeScript/React, strict Zod IPC contracts, Electron, encrypted synchronous SQLite, Vitest and parent-run Playwright. No new dependency.
-**Spec:** [Workspace continuity specification](../specs/2026-09-10-workspace-continuity-repair.md). Also read the [program](../2026-09-10-product-repair-program.md), [audit](../../engineering/2026-09-10-adversarial-product-audit.md), [shared-presentation plan](2026-09-10-shared-presentation-repair.md), and [list-reliability plan](2026-09-10-list-reliability-repair.md).
+**Spec:** [Workspace continuity specification](../specs/2026-09-10-workspace-continuity-repair.md). Also read the [program](../2026-09-10-product-repair-program.md), [audit](../../../engineering/2026-09-10-adversarial-product-audit.md), [shared-presentation plan](2026-09-10-shared-presentation-repair.md), and [list-reliability plan](2026-09-10-list-reliability-repair.md).
 
 ### Pre-correction freeze archive, 2026-09-10 04:36 UTC
 

@@ -121,6 +121,7 @@ function readStagedScheduleRollouts(): string[] {
     join(
       process.cwd(),
       "docs",
+      "archive",
       "superpowers",
       "plans",
       "2026-09-04-runtime-recovery-security-hardening.md",
@@ -1238,7 +1239,7 @@ describe("managed secret and remote state preparation", () => {
 
   it("keeps Task 9 source-only and puts any future plan only below Hold Point 1", () => {
     const plan = readFileSync(
-      join(process.cwd(), "docs", "superpowers", "plans", "2026-09-04-runtime-recovery-security-hardening.md"),
+      join(process.cwd(), "docs", "archive", "superpowers", "plans", "2026-09-04-runtime-recovery-security-hardening.md"),
       "utf8",
     );
     const taskStart = plan.indexOf("## Task 9:");
@@ -1257,7 +1258,7 @@ describe("managed secret and remote state preparation", () => {
   it("orders protected backend migration before the state-aware IAM and Lambda cutover", () => {
     const readme = readFileSync(join(process.cwd(), "cloud", "README.md"), "utf8");
     const plan = readFileSync(
-      join(process.cwd(), "docs", "superpowers", "plans", "2026-09-04-runtime-recovery-security-hardening.md"),
+      join(process.cwd(), "docs", "archive", "superpowers", "plans", "2026-09-04-runtime-recovery-security-hardening.md"),
       "utf8",
     );
     for (const source of [readme, plan]) {
@@ -1703,6 +1704,7 @@ describe("managed secret and remote state preparation", () => {
       join(
         process.cwd(),
         "docs",
+        "archive",
         "superpowers",
         "plans",
         "2026-09-04-runtime-recovery-security-hardening.md",
