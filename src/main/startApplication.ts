@@ -593,7 +593,7 @@ export async function startApplication(
     throwIfStartupCancelled(options.signal);
     await runtime.initialize();
     throwIfStartupCancelled(options.signal);
-    stage = 'compose';
+    stage = 'phone';
     const domain: OutboundDomainGate = {
       withDomain: (operation) => runtime.withDomain((current) => operation({
         inspectOutboundCommand: (request) => current.inspectOutboundCommand(request),
@@ -615,6 +615,7 @@ export async function startApplication(
     phoneBindings.onSetupChanged?.(() => { if (!outboundClosed) outbound.invalidate('wake'); });
     const readPairedResearch = async () => paired ? runtime.withDatabase(database => new SqlDelegationConfiguration({ database, workspaceId: paired.workspaceId, pairingId: paired.pairingId, clock: domainClock }).read()) : null;
     // One lazy credential manager belongs to startup, including null-start activation.
+    stage = 'research';
     researchProviders = dependencies.createResearchProviders?.(options.userDataPath);
     if (researchProviders) {
       companyDraftPreparation = createCompanyDraftPreparationService({ runtime, providers: { generate: (context, signal) => researchProviders!.generate(context, signal), status: () => researchProviders!.status() } });
@@ -661,16 +662,20 @@ export async function startApplication(
       pairedResearchPresent: async () => !!(await readPairedResearch())?.configuration.research,
       changed: reloadCompanyResearch,
     };
+    stage = 'delegation';
     delegation=createDelegationRuntime({researchSetupStore:dependencies.createResearchSetupStore?.(options.userDataPath),openGoogleConsent:dependencies.openGoogleConsent,databaseGate:runtime,pairing:paired,clock:domainClock,phone:phoneBindings.phone,inboundRegistry:startupInboundRegistry,policyImportNative:dependencies.createPolicyImportNative?.(),requestedModel:dependencies.createRequestedFollowupModel?.(options.userDataPath),linkedIn:paired?dependencies.createLinkedInAdapters?.(options.userDataPath):undefined,configurationChanged:reloadCompanyResearch});
+    stage = 'research';
     await reloadCompanyResearch();
     // Email borrows the same manager without owning its disposal in research mode.
     const borrowedProviders = researchProviders ? { ...researchProviders, dispose: (): void => undefined,
       invalidate: () => { companyDraftPreparation?.invalidate(); companyResearch?.invalidate(); researchProviders!.invalidate(); } } : undefined;
+    stage = 'email';
     email = dependencies.createEmailService?.(runtime,options.userDataPath,borrowedProviders,expectedWorkspaceId);
     if(outboundClosed)email?.dispose();
     // The composed v1 email service sends drafts but owns no inbound adapter, and
     // the optional Apple spike is not a synchronization adapter. This explicit
     // discovery result must be extended by future inbound owners before activation.
+    stage = 'inbound';
     startupInboundRegistry?.initialize(delegation?[delegation.adapter]:[]);
     if (options.signal !== undefined) {
       const signal = options.signal;
@@ -679,6 +684,7 @@ export async function startApplication(
       if (signal.aborted) abortStartup();
       throwIfStartupCancelled(signal);
     }
+    stage = 'lifecycle';
     unregisterOutboundLifecycle = options.registerOutboundLifecycle?.({
       onWake: () => { if (!outboundClosed) {companyDraftPreparation?.invalidate();delegation?.invalidate();companyResearch?.invalidate();phoneBindings?.invalidate?.();email?.invalidate();outbound.invalidate('wake');} },
       onLock: () => { if (!outboundClosed) {outboundLocked=true;companyDraftPreparation?.invalidate(true);delegation?.invalidate(true);companyResearch?.invalidate(true);phoneBindings?.invalidate?.(true);email?.invalidate(true);outbound.invalidate('lock');} },
@@ -696,6 +702,7 @@ export async function startApplication(
     // A registrar can synchronously abort before returning its owned disposer.
     if (outboundClosed) detachOutboundLifecycle();
     throwIfStartupCancelled(options.signal);
+    stage = 'backup';
     const backupOptions: BackupServiceOptions = {
       databaseGate: runtime,
       backupDirectory: join(options.userDataPath, 'backups'),
@@ -709,12 +716,14 @@ export async function startApplication(
     // Key loading must not hold window startup. The service retains a safe
     // failure code and retries at the next hourly due check.
     void backupService.start().catch((): undefined => undefined);
+    stage = 'recovery';
     const recoveryOptions: RecoveryServiceOptions = {
       databaseGate: runtime, backups: backupService, liveDatabasePath: databasePath,
       loadWorkspaceKey: backupOptions.loadWorkspaceKey, clock: domainClock, ids: domainIds,
       dialogs: createRecoveryDialogs(backupOptions.backupDirectory),
     };
     recoveryService = dependencies.createRecoveryService?.(recoveryOptions) ?? new RecoveryService(recoveryOptions);
+    stage = 'ipc';
     unregisterApplicationIpc = dependencies.registerApplicationIpc(
       runtime,
       options.isTrustedRendererUrl,
@@ -730,6 +739,7 @@ export async function startApplication(
     if(delegation.linkedIn)unregisterLinkedIn=(dependencies.registerLinkedInIpc??registerLinkedInIpc)({provider:delegation.linkedIn,isTrustedRendererUrl:options.isTrustedRendererUrl});
     if(email)unregisterEmail=(dependencies.registerOutreachIpc??registerOutreachIpc)({provider:email,delegation,pairingStore,isTrustedRendererUrl:options.isTrustedRendererUrl});
     throwIfStartupCancelled(options.signal);
+    stage = 'apple_bridge';
     if (options.appleBridge !== undefined) {
       appleBridgeSupervisor = dependencies.createAppleBridgeSupervisor(
         options.appleBridge,
