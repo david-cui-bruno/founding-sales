@@ -8,7 +8,11 @@ import { DomainStartupFatalError } from '../domain/startup/domainStartupTypes';
  */
 export const FOUNDATION_STAGES = ['key', 'prepare', 'open', 'migrate', 'domain', 'health'] as const;
 export type FoundationStage = typeof FOUNDATION_STAGES[number];
-export const STARTUP_STAGES = [...FOUNDATION_STAGES, 'compose', 'window'] as const;
+/** Composition steps in startup order; a failure names the step that threw. */
+export const COMPOSITION_STAGES = [
+  'phone', 'research', 'delegation', 'email', 'inbound', 'lifecycle', 'backup', 'recovery', 'ipc', 'apple_bridge', 'window',
+] as const;
+export const STARTUP_STAGES = [...FOUNDATION_STAGES, ...COMPOSITION_STAGES] as const;
 export type StartupStage = typeof STARTUP_STAGES[number];
 
 export const STARTUP_ERROR_CLASSES = [

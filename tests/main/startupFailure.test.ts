@@ -5,7 +5,7 @@ import { FoundationInitializationCancelledError } from '../../src/main/foundatio
 import { WorkspaceKeyProtectionError } from '../../src/main/security/workspaceKeyStore';
 import { ApplicationStartupCancelledError } from '../../src/main/startApplication';
 import {
-  DOMAIN_FATAL_CODES, FOUNDATION_STAGES, STARTUP_ERROR_CLASSES, STARTUP_STAGES,
+  COMPOSITION_STAGES, DOMAIN_FATAL_CODES, FOUNDATION_STAGES, STARTUP_ERROR_CLASSES, STARTUP_STAGES,
   classifyStartupFailure, isStartupCancellation, isStartupFailureCode,
 } from '../../src/main/startup/startupFailure';
 
@@ -24,7 +24,7 @@ describe('classifyStartupFailure', () => {
 
   it('maps unknown classes to Error, non-errors to UnknownError, and never copies a foreign code', () => {
     class PrivateContactError extends Error { constructor() { super('Ada Lovelace'); this.name = 'PrivateContactError'; } }
-    expect(classifyStartupFailure('compose', new PrivateContactError())).toEqual({ stage: 'compose', errorClass: 'Error' });
+    expect(classifyStartupFailure('email', new PrivateContactError())).toEqual({ stage: 'email', errorClass: 'Error' });
     expect(classifyStartupFailure('window', 'private string')).toEqual({ stage: 'window', errorClass: 'UnknownError' });
     expect(classifyStartupFailure('open', new SqliteError('x', 'ADA_LOVELACE'))).toEqual({ stage: 'open', errorClass: 'SqliteError' });
     expect(classifyStartupFailure('open', Object.assign(new Error('x'), { code: 'SQLITE_CORRUPT' }))).toEqual({ stage: 'open', errorClass: 'Error' });
@@ -43,7 +43,8 @@ describe('classifyStartupFailure', () => {
     for (const code of DOMAIN_FATAL_CODES) expect(isStartupFailureCode(code)).toBe(true);
     expect(isStartupFailureCode('SQLITE_IOERR_SHORT_READ')).toBe(true);
     for (const value of ['sqlite_notadb', 'SQLITE_', 'SQLITE_ADA LOVELACE', 42, undefined, 'catalog conflict']) expect(isStartupFailureCode(value)).toBe(false);
-    expect(STARTUP_STAGES).toEqual([...FOUNDATION_STAGES, 'compose', 'window']);
+    expect(STARTUP_STAGES).toEqual([...FOUNDATION_STAGES, ...COMPOSITION_STAGES]);
+    expect(STARTUP_STAGES.at(-1)).toBe('window');
     expect(new Set(STARTUP_ERROR_CLASSES).size).toBe(STARTUP_ERROR_CLASSES.length);
   });
 });
