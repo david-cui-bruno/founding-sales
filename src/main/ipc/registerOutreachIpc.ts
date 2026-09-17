@@ -7,7 +7,6 @@ import {remoteGoogleGrantBeginSchema,remoteGoogleGrantDisclosureSchema,remoteGoo
 import {policyImportConfirmSchema,policyImportResumeSchema,policyImportStatusSchema,policyImportPreviewSchema,policyImportReportSchema} from '../../shared/contracts/accountRoutePolicyImportContract';
 import {prepareRequestedFollowupSchema,getRequestedFollowupSchema,editRequestedFollowupSchema,approveRequestedFollowupSchema,savedRequestedFollowupSchema,requestedApprovalStatusSchema} from '../../shared/contracts/requestedFollowupContract';
 import {workerPolicyRequestSchema,workerPolicyReceiptSchema} from '../../shared/contracts/workerPolicyContract';
-import {approveMeetingFromReplySchema,getMeetingApprovalSchema,meetingApprovalStatusSchema,boundMeetingApprovalStatus} from '../../shared/contracts/meetingContract';
 import {configureAccountIntakeSchema,accountIntakeConfigureStatusSchema,boundAccountIntakeConfigureStatus} from '../../shared/contracts/accountIntakeConfigureContract';
 import type { DelegationRuntime } from '../delegation/delegationRuntime';
 import type { PairingStore } from '../delegation/pairingStore';
@@ -88,12 +87,6 @@ export function registerOutreachIpc(options:{provider:OutreachApi;delegation?:De
       add('delegation-get-account-preparation',getAccountPreparationSchema,accountPreparationReadResultSchema,async request=>{
         try{return accountPreparationReplySchema(request).parse(await d.getAccountPreparation(request));}
         catch(error){if(error instanceof AccountPreparationReadFailure)return {unavailable:error.reason};throw error;}
-      });
-      add('delegation-approve-meeting',approveMeetingFromReplySchema,meetingApprovalStatusSchema,async request=>boundMeetingApprovalStatus(request).parse(await d.approveMeeting(request)));
-      add('delegation-get-meeting-approval',getMeetingApprovalSchema,meetingApprovalStatusSchema.nullable(),async request=>{
-        const status=await d.getMeetingApproval(request);
-        if(status&&(status.accountId!==request.accountId||status.threadId!==request.threadId))throw new Error('meeting_approval_identity_mismatch');
-        return status;
       });
       add('delegation-configure-intake',configureAccountIntakeSchema,accountIntakeConfigureStatusSchema,async request=>boundAccountIntakeConfigureStatus(request).parse(await d.configureIntake(request)));
       // The renderer names only the command and the company; the trusted exporter builds the record in main.

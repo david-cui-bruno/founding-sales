@@ -1,7 +1,6 @@
 import { openSettingsSection } from '../../foundation/settingsNavigation';
 import { OrdinaryReplyEditor } from './OrdinaryReplyEditor';
 import type { OrdinaryReplyApi } from './ordinaryReplySession';
-import type { MeetingApprovalApi } from '../meetings/MeetingApproval';
 import { partitionFirstUseAnswers } from './firstUseCapabilities';
 import { dailyAnswerPresentationMatches } from '../../../shared/contracts/dailyAnswerPresentationContract';
 import type { ReactNode } from 'react';
@@ -330,7 +329,7 @@ export function DailyAnswerDetail({
 }: {
   item: DailyAnswer;
   workspaceId: string;
-  api: RequestedDraftApi & OrdinaryReplyApi & Partial<MeetingApprovalApi>;
+  api: RequestedDraftApi & OrdinaryReplyApi;
   linkedin: LinkedInApi;
   actionHold?: string;
   company?: string;
