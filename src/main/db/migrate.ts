@@ -1,3 +1,4 @@
+import { migration0027ListedRouteVerification } from './migrations/0027ListedRouteVerification';
 import { migration0026LocalCompanyDrafts } from './migrations/0026LocalCompanyDrafts';
 import { migration0025KnownCompanyResearchSettings } from './migrations/0025KnownCompanyResearchSettings';
 import { Migrator } from 'kysely/migration'; // eslint-disable-line import/no-unresolved -- Kysely exports this runtime subpath.
@@ -153,6 +154,7 @@ export const productionMigrations = [
   { id: '0024RequestedFollowupAndPolicyReviews', schemaVersion: 24, migration: migration0024RequestedFollowupAndPolicyReviews },
   { id: '0025KnownCompanyResearchSettings', schemaVersion: 25, migration: migration0025KnownCompanyResearchSettings },
   { id: '0026LocalCompanyDrafts', schemaVersion: 26, migration: migration0026LocalCompanyDrafts },
+  { id: '0027ListedRouteVerification', schemaVersion: 27, migration: migration0027ListedRouteVerification },
 ] as const;
 const productionMigrationRunner = createMigrationRunner(productionMigrations);
 

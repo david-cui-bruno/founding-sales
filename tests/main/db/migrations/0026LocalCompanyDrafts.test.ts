@@ -15,7 +15,7 @@ import { createMigrationRunner, migrateToLatest, productionMigrations } from '..
 import { assertDomainStorageReady, assertPreReleaseStorageReady, DOMAIN_SCHEMA_MANIFEST } from '../../../../src/main/domain/startup/storageReadiness';
 import { AccountRepository } from '../../../../src/main/domain/accounts/accountRepository';
 import { createTempDatabase, createTestWorkspaceKey } from '../../../fixtures/tempDatabase';
-it('upgrades genuine25 additively with verified encrypted backup, preserves rows, exact26 readiness and reopen', async () => {
+it('upgrades genuine25 additively with verified encrypted backup, preserves rows, exact27 readiness and reopen', async () => {
   const temp = createTempDatabase(), key = createTestWorkspaceKey();
   const options = { workspaceKey: key, backupDirectory: `${temp.path}.backups` };
   const database = openDatabase({ path: temp.path, key });
@@ -43,14 +43,15 @@ it('upgrades genuine25 additively with verified encrypted backup, preserves rows
     const rows = () => tables.map(name => [name, database.raw.prepare(`SELECT * FROM "${name}"`).raw().all()]);
     const original = rows();
     const oldLedger = database.raw.prepare('SELECT * FROM kysely_migration ORDER BY name').all();
-    expect(await migrateToLatest(database, options)).toEqual({ fromVersion: 25, toVersion: 26, appliedMigrationIds: ['0026LocalCompanyDrafts'] });
+    expect(await migrateToLatest(database, options)).toEqual({ fromVersion: 25, toVersion: 27, appliedMigrationIds: ['0026LocalCompanyDrafts', '0027ListedRouteVerification'] });
     expect(rows()).toEqual(original);
-    for (const row of catalog) expect(database.raw.prepare('SELECT type,name,sql FROM sqlite_master WHERE name=?').get(row.name)).toEqual(row);
+    // 0027 rebuilds pm_account_routes (its CHECK admits 'listed'); every other schema-25 object keeps its exact SQL.
+    for (const row of catalog.filter(entry => entry.name !== 'pm_account_routes')) expect(database.raw.prepare('SELECT type,name,sql FROM sqlite_master WHERE name=?').get(row.name)).toEqual(row);
     const actual = database.raw.prepare("SELECT name,type,sql FROM sqlite_master WHERE type IN('table','index','trigger') AND(type<>'index' OR sql IS NOT NULL) ORDER BY name COLLATE BINARY").all() as { name: string; type: string; sql: string | null }[];
     const manifest = { tables: actual.filter(row => row.type === 'table').map(row => row.name).sort(), indexes: actual.filter(row => row.type === 'index').map(row => row.name).sort(), triggers: actual.filter(row => row.type === 'trigger').map(row => row.name).sort(),
       catalogSha256: createHash('sha256').update(JSON.stringify(actual.map(row => [row.type,row.name,(row.sql ?? '').replace(/\s+/g,' ').trim()]).sort((a,b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0))).digest('hex') };
     expect(manifest).toEqual(DOMAIN_SCHEMA_MANIFEST);
-    expect(assertDomainStorageReady({ database, expectedBusyTimeoutMs: 5000, expectedSchemaVersion: 26, expectedManifest: DOMAIN_SCHEMA_MANIFEST }).schemaVersion).toBe(26);
+    expect(assertDomainStorageReady({ database, expectedBusyTimeoutMs: 5000, expectedSchemaVersion: 27, expectedManifest: DOMAIN_SCHEMA_MANIFEST }).schemaVersion).toBe(27);
     const backups = readdirSync(options.backupDirectory).filter(name => name.startsWith('pre-migration-schema-25-') && name.endsWith('.sqlite3'));
     expect(backups).toHaveLength(1);
     const path = join(options.backupDirectory, backups[0]);
@@ -67,8 +68,8 @@ it('upgrades genuine25 additively with verified encrypted backup, preserves rows
     closeDatabase(database);
     const reopened = openDatabase({ path: temp.path, key });
     try {
-      expect(await migrateToLatest(reopened, options)).toEqual({ fromVersion: 26, toVersion: 26, appliedMigrationIds: [] });
-      expect(assertPreReleaseStorageReady(reopened).schemaVersion).toBe(26);
+      expect(await migrateToLatest(reopened, options)).toEqual({ fromVersion: 27, toVersion: 27, appliedMigrationIds: [] });
+      expect(assertPreReleaseStorageReady(reopened).schemaVersion).toBe(27);
     } finally { closeDatabase(reopened); }
   } finally { closeDatabase(database); key.bytes.fill(0); temp.cleanup(); }
 });
@@ -93,6 +94,6 @@ it('historical24 remains independently readable, not admitted as current domain 
   try {
     await createMigrationRunner(productionMigrations.slice(0,24))(database, { workspaceKey: key, backupDirectory: `${temp.path}.backups` });
     expect(assertPreReleaseStorageReady(database).schemaVersion).toBe(24);
-    expect(() => assertDomainStorageReady({ database, expectedBusyTimeoutMs: 5000, expectedSchemaVersion: 26, expectedManifest: DOMAIN_SCHEMA_MANIFEST })).toThrow();
+    expect(() => assertDomainStorageReady({ database, expectedBusyTimeoutMs: 5000, expectedSchemaVersion: 27, expectedManifest: DOMAIN_SCHEMA_MANIFEST })).toThrow();
   } finally { closeDatabase(database); key.bytes.fill(0); temp.cleanup(); }
 });
