@@ -232,3 +232,68 @@ describe('bounded Cloud research settings', () => {
   });
 
 });
+
+describe('Google Places territory batches in Cloud research settings', () => {
+  function placesStatus(): ResearchSetupStatus {
+    const value = status();
+    value.remote!.descriptor!.placesSearchCostMicros = 35000;
+    value.remote!.placesCredentialParameterDeclared = true;
+    value.remote!.placesBlockers = [];
+    return value;
+  }
+  const provider = () => screen.getByLabelText('Discovery provider') as HTMLSelectElement;
+  function fillTerritory(companies = '20') {
+    const values: [RegExp, string][] = [[/Residential regions/, 'Providence, RI\nBoston, MA\nDallas, TX'], [/Targeting terms/, 'property management company\nresidential property management'],
+      [/Companies per batch/, companies], [/Maximum pages/, '1'], [/Maximum bytes/, '10000'], [/Discovery cumulative/, '3.5'], [/Research cumulative/, '2']];
+    values.forEach(([name, value]) => fireEvent.change(input(name), { target: { value } }));
+  }
+  it('offers Places without hand-typed websites, states the cost per call and the source of listed phones, and sends the Places shape', async () => {
+    const a = api(placesStatus()); await mount(a);
+    expect(provider().value).toBe('responses_cited');
+    expect([...provider().options].map(option => option.text)).toEqual(['Cited web search (one company)', 'Google Places (territory batches)']);
+    fireEvent.change(provider(), { target: { value: 'places' } });
+    expect(screen.queryByLabelText(/Official website URLs/)).toBeNull();
+    expect(screen.getByLabelText('Companies per batch (1–20)')).toBeTruthy();
+    expect(screen.getByText(/Each Google Places text-search call reserves \$0\.035 USD \(Enterprise SKU\) against the discovery ceiling before it is made\./)).toBeTruthy();
+    expect(screen.getByText(/Listed phone numbers come from Google Business Profiles/)).toBeTruthy();
+    fillTerritory(); fireEvent.click(ack());
+    expect(button('Approve research').disabled).toBe(false);
+    fireEvent.click(button('Approve research')); await idle();
+    expect(a.approve).toHaveBeenCalledWith({ expectedRevision: 0, descriptorFingerprint: fingerprint, discoveryProvider: 'places',
+      audience: { residential: true, regions: ['Providence, RI', 'Boston, MA', 'Dallas, TX'], terms: ['property management company', 'residential property management'] },
+      permittedSources: [], maxCompanies: 20, maxPages: 1, maxBytes: 10000, discoveryCeilingMicros: 3500000, researchCeilingMicros: 2000000, disclosureAcknowledged: true });
+  });
+  it('caps a Places batch at one page, requires the ceiling to cover one call, and restores the cited fields when switched back', async () => {
+    await mount(api(placesStatus()));
+    fireEvent.change(provider(), { target: { value: 'places' } }); fillTerritory('21'); fireEvent.click(ack());
+    expect(button('Approve research').disabled).toBe(true);
+    fireEvent.change(input(/Companies per batch/), { target: { value: '20' } }); fireEvent.click(ack()); expect(button('Approve research').disabled).toBe(false);
+    fireEvent.change(input(/Discovery cumulative/), { target: { value: '0.034999' } }); fireEvent.click(ack()); expect(button('Approve research').disabled).toBe(true);
+    fireEvent.change(provider(), { target: { value: 'responses_cited' } });
+    expect(screen.getByLabelText('Official website URLs, one per line')).toBeTruthy(); expect(screen.getByLabelText('Maximum companies (1–50)')).toBeTruthy();
+    expect(screen.queryByText(/Google Business Profiles/)).toBeNull();
+  });
+  it.each(['old-worker', 'credential', 'cost'] as const)('blocks a Places approval when readiness is %s while cited approval stays available', async gap => {
+    const value = placesStatus();
+    if (gap === 'old-worker') { delete value.remote!.placesBlockers; delete value.remote!.placesCredentialParameterDeclared; }
+    if (gap === 'credential') { value.remote!.placesCredentialParameterDeclared = false; value.remote!.placesBlockers = ['places_credential_parameter_missing']; }
+    if (gap === 'cost') { delete value.remote!.descriptor!.placesSearchCostMicros; value.remote!.placesBlockers = ['places_cost_missing']; }
+    const a = api(value); await mount(a);
+    fireEvent.change(provider(), { target: { value: 'places' } }); fillTerritory(); fireEvent.click(ack());
+    expect(button('Approve research').disabled).toBe(true);
+    if (gap === 'credential') expect(screen.getByText(/Google Places credential parameter is not declared/)).toBeTruthy();
+    if (gap === 'cost') expect(screen.getByText(/carry no Places cost per call/)).toBeTruthy();
+    fireEvent.change(provider(), { target: { value: 'responses_cited' } }); fill(); fireEvent.click(ack());
+    expect(button('Approve research').disabled).toBe(false); expect(a.approve).not.toHaveBeenCalled();
+  });
+  it('shows an existing Places policy read-only with its provider and no website list', async () => {
+    const value = placesStatus();
+    value.remote!.selector = { version: 1, workspaceId: identity.workspaceId, pairingId, revision: 1, state: 'active', research: {
+      workspaceId: identity.workspaceId, budgetId: 'guided-research-v1', audience: { residential: true, regions: ['Providence, RI'], terms: ['property management company'] }, audienceRevision: 1, sourceRevision: 1, budgetRevision: 1,
+      discoveryLimits: { maxCompanies: 20, maxPages: 1, maxBytes: 10000, maxCostMicros: 35000 }, researchLimits: { maxCompanies: 20, maxPages: 1, maxBytes: 10000, maxCostMicros: 200000 },
+      capability: { model: 'fictional-reviewed-model', webSearch: true, searchCostMicros: 100000, modelCostMicros: 100000 }, maxAccountBudgetMicros: 200000, permittedSources: [], preparationCommandId: requestId, discoveryProvider: 'places' } };
+    await mount(api(value));
+    expect(screen.getByText('Discovery provider: Google Places (territory batches). Companies per batch: 20.')).toBeTruthy();
+    expect(screen.queryByText(/Official websites:/)).toBeNull(); expect(screen.queryByLabelText('Discovery provider')).toBeNull();
+  });
+});

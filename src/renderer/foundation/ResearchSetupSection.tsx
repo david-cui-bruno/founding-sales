@@ -16,6 +16,11 @@ const labels = {
 };
 type Fields = Record<keyof typeof labels, string>;
 const initialFields: Fields = { regions: '', terms: '', websites: '', companies: '', pages: '', bytes: '', discovery: '', research: '' };
+type DiscoveryProvider = 'responses_cited' | 'places';
+const providerNames: Record<DiscoveryProvider, string> = { responses_cited: 'Cited web search (one company)', places: 'Google Places (territory batches)' };
+/** Places takes one page of firms per batch and needs no hand-typed website list; every other field keeps its cited wording. */
+const placesLabels: typeof labels = { ...labels, companies: 'Companies per batch (1–20)' };
+const fieldKeys = (provider: DiscoveryProvider) => (Object.keys(labels) as (keyof Fields)[]).filter(key => provider !== 'places' || key !== 'websites');
 const blockers: Record<ResearchSetupBlocker, string> = {
   needs_pairing: 'Needs pairing. Connect your Worker first.', operator_descriptor_missing: 'Needs operator setup: reviewed settings are missing.',
   operator_descriptor_invalid: 'Needs operator setup: reviewed settings are invalid.', operator_descriptor_expired: 'Needs operator setup: review has expired.',
@@ -39,6 +44,7 @@ export function ResearchSetupSection({ api }: { api?: ResearchSetupApi }) {
   const owner = useRef<Lifetime | null>(null);
   const [view, setView] = useState<View>(() => emptyView(null));
   const [fields, setFields] = useState<Fields>(initialFields);
+  const [provider, setProvider] = useState<DiscoveryProvider>('responses_cited');
   const [acknowledged, setAcknowledged] = useState(false);
   const update = useCallback((lifetime: Lifetime, patch: Partial<View>) => {
     if (owner.current !== lifetime) return;
@@ -74,6 +80,7 @@ export function ResearchSetupSection({ api }: { api?: ResearchSetupApi }) {
     owner.current = lifetime;
     setView(emptyView(lifetime));
     setFields(initialFields);
+    setProvider('responses_cited');
     setAcknowledged(false);
     if (lifetime) void read(lifetime);
     return () => { if (owner.current === lifetime) owner.current = null; };
@@ -89,14 +96,23 @@ export function ResearchSetupSection({ api }: { api?: ResearchSetupApi }) {
   const descriptorCurrent = !!descriptor && !!remote?.descriptorFingerprint && Date.parse(descriptor.reviewedAt) <= Date.now() && Date.parse(descriptor.expiresAt) > Date.now();
   const selector = remote?.selector;
   const editable = !!api && current && view.fresh && !busy && !pending && !selector;
+  // The provider in force: the existing policy's own, else the first-use selection. Cited keeps every reading below exactly as before.
+  const territory = selector ? selector.research?.discoveryProvider === 'places' : provider === 'places';
+  const currentLabels = provider === 'places' ? placesLabels : labels;
   const proposal = researchSetupApproveInputSchema.safeParse({ expectedRevision: 0, descriptorFingerprint: remote?.descriptorFingerprint,
-    audience: { residential: true, regions: lines(fields.regions), terms: lines(fields.terms) }, permittedSources: lines(fields.websites),
+    audience: { residential: true, regions: lines(fields.regions), terms: lines(fields.terms) }, permittedSources: provider === 'places' ? [] : lines(fields.websites),
     maxCompanies: Number(fields.companies), maxPages: Number(fields.pages), maxBytes: Number(fields.bytes),
-    discoveryCeilingMicros: money(fields.discovery), researchCeilingMicros: money(fields.research), disclosureAcknowledged: true });
-  const reservationsFit = proposal.success && !!descriptor && proposal.data.discoveryCeilingMicros >= descriptor.capability.searchCostMicros + descriptor.capability.modelCostMicros && proposal.data.researchCeilingMicros >= descriptor.researchReservationMicros;
-  const canApprove = editable && acknowledged && descriptorCurrent && remote?.credentialParameterDeclared && blocked.length === 0 && proposal.success && reservationsFit;
+    discoveryCeilingMicros: money(fields.discovery), researchCeilingMicros: money(fields.research), disclosureAcknowledged: true, ...(provider === 'places' ? { discoveryProvider: 'places' } : {}) });
+  // Places reserves the reviewed cost of one text-search call per batch; the cited provider reserves search plus model per run.
+  const discoveryReservation = !descriptor ? null : territory ? descriptor.placesSearchCostMicros ?? null : descriptor.capability.searchCostMicros + descriptor.capability.modelCostMicros;
+  const reservationsFit = proposal.success && !!descriptor && discoveryReservation !== null && proposal.data.discoveryCeilingMicros >= discoveryReservation && proposal.data.researchCeilingMicros >= descriptor.researchReservationMicros;
+  // Places readiness comes from the worker's Places fields; a worker predating them reports none, which means not ready for Places.
+  const placesBlockers: ResearchSetupBlocker[] = remote ? [...new Set([...(remote.placesBlockers ?? ['places_credential_parameter_missing' as const]), ...(remote.placesCredentialParameterDeclared === true ? [] : ['places_credential_parameter_missing' as const])])] : [];
+  const providerBlocked = territory ? [...new Set([...blocked.filter(blocker => blocker !== 'credential_parameter_missing'), ...placesBlockers])] : blocked;
+  const credentialReady = territory ? remote?.placesCredentialParameterDeclared === true : remote?.credentialParameterDeclared;
+  const canApprove = editable && acknowledged && descriptorCurrent && credentialReady && providerBlocked.length === 0 && proposal.success && reservationsFit;
   const pauseBlockers = blocked.filter(blocker => !['operator_descriptor_missing', 'operator_descriptor_invalid', 'operator_descriptor_expired', 'descriptor_changed', 'credential_parameter_missing'].includes(blocker));
-  const canState = !!selector && current && view.fresh && !busy && !pending && acknowledged && (selector.state === 'active' ? pauseBlockers.length === 0 : blocked.length === 0 && descriptorCurrent && remote?.credentialParameterDeclared);
+  const canState = !!selector && current && view.fresh && !busy && !pending && acknowledged && (selector.state === 'active' ? pauseBlockers.length === 0 : providerBlocked.length === 0 && descriptorCurrent && credentialReady);
 
   async function mutate(action: 'approve' | 'state' | 'retry' | 'cancel') {
     const lifetime = owner.current;
@@ -143,7 +159,7 @@ export function ResearchSetupSection({ api }: { api?: ResearchSetupApi }) {
     {!api && <p role="status">Cloud research is unavailable in this app connection.</p>}
     {api && <button type="button" className="settings__action" disabled={busy} onClick={() => { if (owner.current) void read(owner.current); }}>Refresh</button>}
     {current && view.message && <p role="status">{view.message}</p>}
-    {blocked.map(blocker => <p key={blocker}>{blockers[blocker]}</p>)}
+    {providerBlocked.map(blocker => <p key={blocker}>{blockers[blocker]}</p>)}
     {descriptor && <div>
       <h3>Operator-reviewed settings</h3>
       <p>Operator assertions, not live connectivity proof or verified invoice pricing.</p>
@@ -154,11 +170,13 @@ export function ResearchSetupSection({ api }: { api?: ResearchSetupApi }) {
         <div><dt>Expires at</dt><dd>{descriptor.expiresAt}</dd></div>
         <div><dt>Discovery reservation per job</dt><dd>{usd(descriptor.capability.searchCostMicros + descriptor.capability.modelCostMicros)}</dd></div>
         <div><dt>Research reservation per job</dt><dd>{usd(descriptor.researchReservationMicros)}</dd></div>
+        {descriptor.placesSearchCostMicros !== undefined && <div><dt>Places cost per call</dt><dd>{usd(descriptor.placesSearchCostMicros)}</dd></div>}
       </dl>
       {!descriptorCurrent && <p>Operator review is not current. Approval and resume are blocked.</p>}
     </div>}
     {remote && !view.fresh && <p>Policy and balances are last observed (stale), not current status.</p>}
     {remote && <p>Credential parameter {remote.credentialParameterDeclared ? 'declared' : 'not declared'}. A declaration does not prove credential or provider access works. Status checked: {remote.checkedAt}.</p>}
+    {remote && territory && <p>Google Places credential parameter {remote.placesCredentialParameterDeclared === true ? 'declared' : 'not declared'}. A declaration does not prove the key or Places access works.</p>}
     {(['discoveryLedger', 'researchLedger'] as const).map((key) => {
       const ledger = remote?.[key];
       return <p key={key}>{key === 'discoveryLedger' ? 'Discovery' : 'Research'} balance: {ledger ? `cumulative ceiling ${usd(ledger.limitMicros)}, reserved-or-spent ${usd(ledger.reservedOrSpentMicros)}, remaining ${usd(ledger.remainingMicros)}` : 'unavailable, not assumed zero'}.</p>;
@@ -168,20 +186,28 @@ export function ResearchSetupSection({ api }: { api?: ResearchSetupApi }) {
       <h3>{view.fresh ? 'Existing policy (read-only)' : 'Last observed policy (stale, read-only)'}: {selector.state}</h3>
       {selector.research && <>
         <p>Residential regions: {selector.research.audience.regions.join(', ')}. Targeting terms: {selector.research.audience.terms.join(', ')}.</p>
-        <p>Official websites: {selector.research.permittedSources.join(', ')}</p>
-        <p>Maximum companies: {selector.research.discoveryLimits.maxCompanies}. Maximum pages: {selector.research.researchLimits.maxPages}. Maximum bytes: {selector.research.researchLimits.maxBytes}.</p>
+        {territory ? <p>Discovery provider: {providerNames.places}. Companies per batch: {selector.research.discoveryLimits.maxCompanies}.</p>
+          : <p>Official websites: {selector.research.permittedSources.join(', ')}</p>}
+        {territory ? <p>Maximum pages: {selector.research.researchLimits.maxPages}. Maximum bytes: {selector.research.researchLimits.maxBytes}.</p>
+          : <p>Maximum companies: {selector.research.discoveryLimits.maxCompanies}. Maximum pages: {selector.research.researchLimits.maxPages}. Maximum bytes: {selector.research.researchLimits.maxBytes}.</p>}
         <p>Policy model: {selector.research.capability.model}. Targeting and cumulative ceilings cannot be edited here.</p>
       </>}
     </div> : <fieldset disabled={!editable}>
       <legend>First-use research policy</legend>
-      {(Object.keys(labels) as (keyof Fields)[]).map(key => <label className="settings__row" key={key}>
-        {labels[key]}
-        {['regions', 'terms', 'websites'].includes(key) ? <textarea aria-label={labels[key]} required rows={3} value={fields[key]}
+      <label className="settings__row">Discovery provider
+        <select aria-label="Discovery provider" value={provider} onChange={event => { setProvider(event.target.value === 'places' ? 'places' : 'responses_cited'); setAcknowledged(false); }}>
+          {(Object.keys(providerNames) as DiscoveryProvider[]).map(key => <option key={key} value={key}>{providerNames[key]}</option>)}
+        </select>
+      </label>
+      {fieldKeys(provider).map(key => <label className="settings__row" key={key}>
+        {currentLabels[key]}
+        {['regions', 'terms', 'websites'].includes(key) ? <textarea aria-label={currentLabels[key]} required rows={3} value={fields[key]}
           onChange={event => { setFields(previous => ({ ...previous, [key]: event.target.value })); setAcknowledged(false); }} />
-          : <input aria-label={labels[key]} required value={fields[key]} inputMode="decimal"
+          : <input aria-label={currentLabels[key]} required value={fields[key]} inputMode="decimal"
             onChange={event => { setFields(previous => ({ ...previous, [key]: event.target.value })); setAcknowledged(false); }} />}
       </label>)}
       <p>Enter positive USD totals with at most six decimal places. Each ceiling must cover the operator reservation. Limits must be whole numbers within the displayed bounds.</p>
+      {provider === 'places' && <p>Each Google Places text-search call reserves {discoveryReservation !== null ? usd(discoveryReservation) : 'an amount the operator has not reviewed'} (Enterprise SKU) against the discovery ceiling before it is made. One call returns at most one page of 20 firms for one territory query; firms without a website are counted and skipped. Listed phone numbers come from Google Business Profiles: they describe source verification, not contact permission.</p>}
       {proposal.success && <p>Total combined cumulative ceiling: {usd(proposal.data.discoveryCeilingMicros + proposal.data.researchCeilingMicros)}</p>}
     </fieldset>}
     <label className="settings__row"><input type="checkbox" checked={acknowledged} disabled={!api || busy || pending || !view.fresh} onChange={event => setAcknowledged(event.target.checked)} /> I have reviewed the targeting, cumulative ceilings, operator assertions and limitations above</label>
