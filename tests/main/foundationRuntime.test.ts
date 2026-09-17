@@ -12,13 +12,12 @@ import { UuidGenerator } from '../../src/main/domain/support/idGenerator';
 import { startApplication, type ApplicationStartupDependencies, type ApplicationStartupOptions } from '../../src/main/startApplication';
 import { createOutboundCommandService } from '../../src/main/communications/outboundCommandService';
 import type { OutboundCommandServiceApi, OutboundReadinessPort, PhoneHandoffPort } from '../../src/main/communications/outboundPorts';
-import type { Capability, HandoffResult, OutboundReceipt, OutboundRequest } from '../../src/shared/contracts/outboundContract';
+import type { Capability, HandoffResult, OutboundRequest } from '../../src/shared/contracts/outboundContract';
 import { registerApplicationIpc, type FeatureRegistrars } from '../../src/main/ipc/registerApplicationIpc';
 import { registerLeadDetailIpc } from '../../src/main/leads/registerLeadDetailIpc';
 import { createTempDatabase, createTestWorkspaceKey, type TempDatabase } from '../fixtures/tempDatabase';
 import { insertPerson, seedProspect } from '../fixtures/domainRows';
 import { HealthService } from '../../src/main/health/healthService';
-import type { SourcingPoller } from '../../src/main/sourcing/sourcingPoller';
 import {
   FoundationRuntime,
   type FoundationRuntimeDependencies,
@@ -60,15 +59,6 @@ const health: AppHealth = {
   domainProjectionRefreshCandidateCount: 0,
   pendingProjectionRebuilds: 0,
   domainStartupEvaluatedAt: '2026-08-30T12:00:00.000Z',
-  operationalStatus: 'ready',
-  sourcing: {
-    status: 'healthy', reasons: [], lastSuccessAgeMs: null,
-    state: {
-      state: 'idle', pollId: null, startedAt: null, lastCompletedAt: null,
-      consecutiveFailures: 0, lastFailureAt: null, lastFailureCode: null,
-      backlogCount: null,
-    },
-  },
 };
 
 const runtimeOptions = {
@@ -176,22 +166,17 @@ const assertCurrentReadiness = (): void => undefined;
         listAvailableBackups: async () => [], createBackup: async () => { throw new Error('unexpected backup'); } }),
       createRecoveryService: () => ({ status: vi.fn(), beginSetup: vi.fn(), saveSetupMaterial: vi.fn(),
         completeSetup: vi.fn(), selectAndRunRestoreDrill: vi.fn(), shutdown: async () => undefined }),
-      createSourcingPoller: () => ({ getHealth: () => health.sourcing, stop: (): void => undefined,
-        idle: async (): Promise<void> => undefined }) as unknown as SourcingPoller,
       createAppleBridgeSupervisor: () => { throw new Error('no helper permitted'); },
-      registerApplicationIpc: (bound, trust, _registrars, sourcing, recovery, shell, enrichment, logs, outbound) => {
+      registerApplicationIpc: (bound, trust, _registrars, recovery, shell, logs, options) => {
         runtime = bound;
-        expect(outbound).toBe(service);
         expect(factory).toHaveBeenCalledTimes(1);
         expect(listeners.size).toBe(3);
-        const names = ['registerHealthIpc', 'registerLeadsIpc', 'registerTodayIpc', 'registerDailyIpc', 'registerLocalWorkspaceIpc', 'registerPipelineIpc',
-          'registerReviewIpc', 'registerFridayIpc', 'registerImportIpc', 'registerConversationsIpc',
-          'registerLearningsIpc', 'registerSourcingIpc', 'registerShellIpc', 'registerRecoveryIpc', 'registerDiscoveryIpc'];
+        const names = ['registerHealthIpc', 'registerLeadsIpc', 'registerDailyIpc', 'registerLocalWorkspaceIpc',
+          'registerShellIpc', 'registerRecoveryIpc'];
         const registrars = Object.fromEntries(names.map((name) => [name, () => {
           features.add(name); return () => { features.delete(name); };
         }])) as unknown as Omit<FeatureRegistrars, 'registerLeadDetailIpc'>;
-        return registerApplicationIpc(bound, trust, { ...registrars, registerLeadDetailIpc }, sourcing,
-          recovery, shell, enrichment, logs, outbound);
+        return registerApplicationIpc(bound, trust, { ...registrars, registerLeadDetailIpc }, recovery, shell, logs, options);
       },
       closeDatabase: (database) => { closes += 1; closeDatabase(database); closed = true; },
     };
@@ -218,13 +203,13 @@ const assertCurrentReadiness = (): void => undefined;
       result: vi.spyOn(domain, 'recordOutboundResult'),
       refusal: vi.spyOn(domain, 'recordOutboundRefusal'),
     }));
-    const invoke = ipc.handlers.get('lead-detail:begin-outbound')!;
-    const capabilities = ipc.handlers.get('lead-detail:outbound-capabilities')!;
+    // Person outbound commands no longer cross IPC. Startup still constructs and
+    // fences the one outbound service, so its lifetime is driven directly here.
     return { temp, runtime, service, callbacks, controller, window, starting, ports, listeners, features,
       counts: () => ({ sqlCalls, postCloseSql, closes }),
       portCounts: () => Object.values(ports).map((spy) => spy.mock.calls.length),
-      invoke: (request: OutboundRequest) => invoke({ senderFrame: { url: 'callie://app/index.html' } }, request) as Promise<OutboundReceipt>,
-      capabilities: () => capabilities({ senderFrame: { url: 'callie://app/index.html' } }, {}),
+      invoke: (request: OutboundRequest) => service.beginOutbound(request),
+      capabilities: () => service.getCapabilities(),
     };
   }
 
@@ -509,12 +494,11 @@ const assertCurrentReadiness = (): void => undefined;
 });
 
 describe('FoundationRuntime', () => {
-  it.each([false, true])('real HealthService observes sourcing without repeating initialization, blocked=%s', async blocked => {
+  it.each([false, true])('real HealthService serves the retained startup report without repeating initialization, blocked=%s', async blocked => {
     const temp = createTempDatabase();
     const counts = { key: 0, prepare: 0, open: 0, migrate: 0, domain: 0, initialize: 0, health: 0, close: 0 };
     const release = deferred<void>();
     const entered = deferred<void>();
-    let sourcing = health.sourcing;
     const runtime = new FoundationRuntime({ ...runtimeOptions, databasePath: temp.path, backupDirectory: `${temp.path}.backups` }, {
       loadWorkspaceKey: async () => { counts.key++; return createTestWorkspaceKey(); },
       prepareEncryptedDatabase: async () => { counts.prepare++; },
@@ -537,10 +521,11 @@ describe('FoundationRuntime', () => {
     });
     try {
       await runtime.initialize();
-      runtime.setSourcingHealthProvider(() => sourcing);
-      await expect(runtime.getHealth()).resolves.toMatchObject({ domainStatus: blocked ? 'blocked' : 'ready', domainReady: !blocked, operationalStatus: 'ready', domainStartupEvaluatedAt: '2026-09-10T15:00:00.000Z' });
-      sourcing = { ...sourcing, status: 'degraded', reasons: ['NO_SUCCESS_WITHIN_TWO_CADENCES'], state: { ...sourcing.state, lastCompletedAt: '2026-09-10T16:00:00.000Z' } };
-      await expect(runtime.getHealth()).resolves.toMatchObject({ domainStatus: blocked ? 'blocked' : 'ready', domainReady: !blocked, operationalStatus: 'degraded', domainStartupEvaluatedAt: '2026-09-10T15:00:00.000Z', sourcing: { state: { lastCompletedAt: '2026-09-10T16:00:00.000Z' } } });
+      const expected = { domainStatus: blocked ? 'blocked' : 'ready', domainReady: !blocked, domainBlockingViolationCount: blocked ? 1 : 0,
+        databaseEncrypted: true, domainStartupEvaluatedAt: '2026-09-10T15:00:00.000Z' };
+      await expect(runtime.getHealth()).resolves.toMatchObject(expected);
+      // A second read serves the same retained report without re-running the audit.
+      await expect(runtime.getHealth()).resolves.toMatchObject(expected);
       const operation = vi.fn(() => 'admitted');
       if (blocked) { await expect(runtime.withDomain(operation)).rejects.toThrow('blocked'); expect(operation).not.toHaveBeenCalled(); }
       else await expect(runtime.withDomain(operation)).resolves.toBe('admitted');
@@ -591,42 +576,6 @@ describe('FoundationRuntime', () => {
     await stopping;
     expect(events).toEqual(['released', 'close']);
     await expect(runtime.withDatabase(() => 'late')).rejects.toThrow('shut down');
-  });
-
-  it('requires and serves the explicitly composed sourcing health provider', async () => {
-    const database = { path: health.databasePath } as AppDatabase;
-    const runtime = new FoundationRuntime(runtimeOptions, {
-      ...keyDependencies(),
-      openDatabase: () => database,
-      migrateToLatest: async () => migrationResult,
-      createDomainRuntime: () => fakeDomainRuntime(),
-      createHealthService: (options) => ({
-        getHealth: () => ({
-          ...health,
-          operationalStatus: options.sourcingHealth().status === 'degraded' ? 'degraded' : 'ready',
-          sourcing: options.sourcingHealth(),
-        }),
-      }),
-      closeDatabase: () => undefined,
-    });
-    await runtime.initialize();
-
-    await expect(runtime.getHealth()).rejects.toThrow(
-      'Sourcing health provider has not been composed.',
-    );
-    runtime.setSourcingHealthProvider(() => ({
-      status: 'degraded', reasons: ['POLL_EXCEEDED_TOTAL_DEADLINE'], lastSuccessAgeMs: null,
-      state: {
-        state: 'running', pollId: 'poll-real', startedAt: '2026-09-01T11:45:00.000Z',
-        lastCompletedAt: null, consecutiveFailures: 0, lastFailureAt: null,
-        lastFailureCode: null, backlogCount: null,
-      },
-    }));
-    await expect(runtime.getHealth()).resolves.toMatchObject({
-      operationalStatus: 'degraded',
-      sourcing: { status: 'degraded', state: { pollId: 'poll-real' } },
-    });
-    await runtime.shutdown();
   });
 
   it('resolves, converts, opens, and migrates in order before zeroing the key', async () => {

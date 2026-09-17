@@ -36,7 +36,6 @@ const admitCompanyDraftEmail: LocalWorkspaceApi['admitCompanyDraftEmail'] = asyn
   throw Error('Inbox admission unavailable in this fixture');
 };
 const api = { ...fixture.api, localWorkspace: { ...fixture.api.localWorkspace, getCompany, admitCompanyDraftEmail } };
-const opened: string[] = [];
 function Harness() {
   const { setPreference } = useTheme();
   const { setDensity } = useDensity();
@@ -47,16 +46,16 @@ function Harness() {
   };
   const [tick, setTick] = useState(0);
   window.inboxPrefillBrowser = {
-    fixture, opened, navigate,
+    fixture, navigate,
     rerender: () => setTick(value => value + 1),
     preferences: (theme, density) => { setPreference(theme); setDensity(density); },
   };
-  return <PresentationRoot><AppShell route={route} onNavigate={navigate} reviewCount={{ status: 'failed' }}>
-    <div data-rerender={tick}><NativeDeskRoute onOpenImport={() => opened.push('import')} firstUse={fixture.firstUse} key={route} api={api} onOpenLead={id => opened.push(id)} surface={route} legacy={<h1>Legacy Today fixture</h1>} /></div>
+  return <PresentationRoot><AppShell route={route} onNavigate={navigate}>
+    <div data-rerender={tick}><NativeDeskRoute firstUse={fixture.firstUse} key={route} api={api} surface={route} /></div>
   </AppShell></PresentationRoot>;
 }
 export type InboxPrefillBrowser = {
-  fixture: typeof fixture; opened: string[]; navigate(route: AppRoute): void; rerender(): void;
+  fixture: typeof fixture; navigate(route: AppRoute): void; rerender(): void;
   preferences(theme: 'system' | 'light' | 'dark', density: 'comfortable' | 'compact'): void;
 };
 declare global { interface Window { inboxPrefillBrowser: InboxPrefillBrowser } }

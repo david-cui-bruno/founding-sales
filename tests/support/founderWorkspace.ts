@@ -81,7 +81,7 @@ const connectToPackagedApplication = async (
  */
 export async function launchFounderWorkspace(options: {
   userDataPath?: string;
-  /** Only the existing sourcing fixture-directory/hang-once test overrides. */
+  /** Packaged child environment overrides, forwarded to createPackagedTestEnvironment. */
   env?: Record<string, string>;
   /** Synchronous observation before CDP connection or renderer discovery. */
   onSpawn?: (application: ChildProcess) => void;
@@ -161,87 +161,21 @@ export async function launchFounderWorkspace(options: {
   }
 }
 
-const secondaryRoutes = new Set(['Leads', 'Pipeline', 'Conversations', 'Learnings', 'Inbox', 'Friday']);
-
 const routeHref = (label: string): string => `#/${label.toLowerCase()}`;
 
-export const inboxRouteName = /^Inbox\s*(?:\d+ open local reviews|Checking local reviews|Local review count unavailable)$/;
-
+/**
+ * Clicks one of the four primary rail links (Today, Accounts, Campaigns,
+ * Settings) and waits for it to become current. The rail has no disclosure
+ * or badge; every destination is a plain visible link.
+ */
 export async function navigateFounderRoute(page: Page, label: string): Promise<void> {
   const navigation = page.getByRole('navigation', { name: 'Primary', exact: true });
   await expect(navigation).toBeVisible();
 
-  const linkName = label === 'Inbox' ? inboxRouteName : label;
-  const link = navigation.getByRole('link', { name: linkName, exact: true });
-
-  if (secondaryRoutes.has(label) && !(await link.isVisible())) {
-    const more = navigation.getByRole('button', { name: 'More workspaces', exact: true });
-    await expect(more).toHaveAttribute('aria-expanded', /^(?:true|false)$/);
-    if ((await more.getAttribute('aria-expanded')) !== 'true') {
-      await more.click();
-    }
-    await expect(more).toHaveAttribute('aria-expanded', 'true');
-  }
-
+  const link = navigation.getByRole('link', { name: label, exact: true });
   await expect(link).toBeVisible();
   await expect(link).toHaveAttribute('href', routeHref(label));
   await expect(link.locator('.nav-rail__label')).toHaveText(label);
-  if (label === 'Inbox') {
-    const badge = link.locator('.nav-rail__badge');
-    await expect(badge).toHaveAttribute('aria-label', /^(?:\d+ open local reviews|Checking local reviews|Local review count unavailable)$/);
-    const badgeSnapshot = await badge.evaluate((node) => ({
-      text: node.textContent?.trim() ?? '',
-      label: node.getAttribute('aria-label'),
-    }));
-    expect(badgeSnapshot.label).toMatch(/^(?:\d+ open local reviews|Checking local reviews|Local review count unavailable)$/);
-    if (/^\d+ open local reviews$/.test(badgeSnapshot.label ?? '')) {
-      expect(badgeSnapshot.text).toBe((badgeSnapshot.label ?? '').replace(/ open local reviews$/, ''));
-    } else if (badgeSnapshot.label === 'Checking local reviews') {
-      expect(badgeSnapshot.text).toBe('…');
-    } else {
-      expect(badgeSnapshot.text).toBe('?');
-    }
-  }
   await link.click();
   await expect(link).toHaveAttribute('aria-current', 'page');
-}
-
-export async function expectCleanInboxReadyZero(page: Page): Promise<void> {
-  await navigateFounderRoute(page, 'Inbox');
-  const inbox = page.getByRole('link', { name: /^Inbox\s*0 open local reviews$/, exact: true });
-  await expect(inbox.locator('.nav-rail__badge')).toHaveText('0');
-  await expect(inbox.locator('.nav-rail__badge')).toHaveAttribute('aria-label', '0 open local reviews');
-  await expect(page.getByRole('heading', { name: /^Inbox\s*·\s*0 open local reviews$/ })).toBeVisible();
-}
-
-export const workflowFixture = (name: string): string =>
-  join(process.cwd(), 'tests', 'fixtures', 'founderWorkflow', name);
-
-/**
- * Seeds a workspace through the real UI import flow, never by writing to
- * SQLite directly, and returns the running workspace on the Leads route.
- */
-export async function launchSeededFounderWorkspace(): Promise<FounderWorkspace> {
-  const workspace = await launchFounderWorkspace();
-
-  try {
-    const { page } = workspace;
-    await navigateFounderRoute(page, 'Leads');
-    await page.getByRole('button', { name: 'Import', exact: true }).click();
-    await page
-      .getByLabel('CSV file')
-      .setInputFiles(workflowFixture('first-week-leads.csv'));
-    await page.getByRole('button', { name: 'Preview rows' }).click();
-    await page.getByText('3 rows ready').waitFor();
-    await page.getByRole('button', { name: 'Import 3 rows' }).click();
-    // Finish the real modal workflow before interacting with its inert backdrop.
-    const dialog = page.getByRole('dialog', { name: 'Import leads', exact: true });
-    await dialog.getByRole('button', { name: 'Done', exact: true }).click();
-    await dialog.waitFor({ state: 'hidden' });
-    await page.getByRole('row', { name: /Kevin Shin/ }).waitFor();
-    return workspace;
-  } catch (error) {
-    await workspace.close();
-    throw error;
-  }
 }

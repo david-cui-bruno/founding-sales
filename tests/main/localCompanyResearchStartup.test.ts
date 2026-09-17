@@ -1,4 +1,3 @@
-import type { SourcingPollHealth } from '../../src/shared/contracts/sourcingContract';
 import { mkdirSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
@@ -13,7 +12,6 @@ import { createOutreachProviders } from '../../src/main/outreach/providers/outre
 import { createEmailService } from '../../src/main/outreach/emailService';
 import { createCallieApi } from '../../src/preload/createCallieApi';
 import { registerOutreachIpc } from '../../src/main/ipc/registerOutreachIpc';
-import type { SourcingPoller } from '../../src/main/sourcing/sourcingPoller';
 import { createTestWorkspaceKey, createTempDatabase } from '../fixtures/tempDatabase';
 import { registeredIpcHandler } from '../fixtures/registeredIpcHandler';
 const electron = vi.hoisted(() => ({ handle: vi.fn(), removeHandler: vi.fn() }));
@@ -50,7 +48,6 @@ it.each([false, true])('actual null-start public IPC activation, pairing=%s, sha
     companyResearchResolve: async () => ['93.184.216.34'], companyResearchHttp: async () => { pages++; return new Response(`<p>${quote}</p>`, { headers: { 'content-type': 'text/html' } }); },
     createBackupService: () => ({ start: async () => undefined, shutdown: async () => undefined, createBackup: unexpected, listAvailableBackups: async () => [] }),
     createRecoveryService: () => ({ status: unexpected, beginSetup: unexpected, saveSetupMaterial: unexpected, completeSetup: unexpected, selectAndRunRestoreDrill: unexpected, shutdown: async () => undefined }),
-    createSourcingPoller: () => ({ getHealth: (): SourcingPollHealth => ({ status: 'healthy', reasons: [], lastSuccessAgeMs: null, state: { state: 'idle', pollId: null, startedAt: null, lastCompletedAt: null, consecutiveFailures: 0, lastFailureAt: null, lastFailureCode: null, backlogCount: null } }), stop() {}, idle: async (): Promise<void> => undefined }) as unknown as SourcingPoller,
     createAppleBridgeSupervisor: unexpected,
   };
   const start = () => { electron.handle.mockReset(); electron.removeHandler.mockReset(); return startApplication({ appVersion: '1.0.0', userDataPath: dirname(temp.path), createWindow: () => undefined }, dependencies); };

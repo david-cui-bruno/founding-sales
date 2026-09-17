@@ -30,7 +30,7 @@ function fixture() {
   const config = deferred<Config>();
   const dailyGet = vi.spyOn(f.api.daily, 'get').mockReturnValue(daily.promise);
   const status = vi.spyOn(f.api.delegation, 'status').mockReturnValue(config.promise);
-  const element = () => <NativeDeskRoute api={f.api} firstUse={f.firstUse} onOpenImport={vi.fn()} onOpenLead={vi.fn()} legacy={<p>Stored legacy mode</p>} />;
+  const element = () => <NativeDeskRoute api={f.api} firstUse={f.firstUse} />;
   return { ...f, daily, config, dailyGet, status, element };
 }
 function mount(f: ReturnType<typeof fixture>) {
@@ -72,11 +72,12 @@ describe('daily publication independent of local configuration', () => {
     mount(f);
     await settle(() => f.config.resolve(configuredFixtureStatus()));
     expect(screen.getByText('Loading daily workspace…')).toBeTruthy();
-    expect(screen.queryByText('Stored legacy mode')).toBeNull();
+    expect(screen.queryByText(/Legacy workflow is active/)).toBeNull();
     expect(screen.queryByRole('button', { name: 'Email · Account A' })).toBeNull();
     expectHeld(f.api);
     await settle(() => f.daily.resolve(dailyFixture({ workflowMode: 'legacy' })));
-    expect(screen.getByText('Stored legacy mode')).toBeTruthy();
+    expect(screen.getByText(/Legacy workflow is active/)).toBeTruthy();
+    expect(screen.queryByTestId('native-desk')).toBeNull();
     expectHeld(f.api);
   });
 

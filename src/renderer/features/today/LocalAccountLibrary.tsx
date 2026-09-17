@@ -47,10 +47,10 @@ export function LocalAccountLibrary({ read, selected, onSelect, onStep, intake }
     })}
   </section>;
 }
-export function LocalAccountDetail({ account, api, contactApi, continuation, onOpenImport, onOpenLead, step = null, onStepHandled, onEvidenceChanged }: {
+export function LocalAccountDetail({ account, api, contactApi, continuation, step = null, onStepHandled, onEvidenceChanged }: {
   account: AccountEvidenceSnapshot; api?: LocalWorkspaceApi;
   contactApi: Pick<LocalCompanyContactApi, 'leads' | 'leadDetail'>;
-  continuation: FirstUseContinuation; onOpenImport(): void; onOpenLead(personId: string): void;
+  continuation: FirstUseContinuation;
   step?: LocalAccountStepRequest | null; onStepHandled?(request: LocalAccountStepRequest): void; onEvidenceChanged?(): void;
 }) {
   const linkApi = useMemo(() => api ? { leads: contactApi.leads, leadDetail: contactApi.leadDetail, localWorkspace: api } : null, [api, contactApi.leads, contactApi.leadDetail]);
@@ -79,7 +79,7 @@ export function LocalAccountDetail({ account, api, contactApi, continuation, onO
     return () => { observer?.disconnect(); if (frame !== null) cancelAnimationFrame(frame); };
   }, [step, account.account.id]);
   return <section className="native-desk__account" ref={root}><h2>{account.account.name}</h2><p>{account.account.domain ?? 'Company domain not recorded'}</p><p>Local evidence, not worker authority or complete research.</p>
-    {api ? <LocalCompanyResearchPanel accountId={account.account.id} api={api} continuation={continuation} renderDetail={detail => <>{linkApi && <LocalCompanyContactLink detail={detail} api={linkApi} continuation={continuation} onOpenImport={onOpenImport} onOpenLead={onOpenLead} />}<CompanyDraft api={api} detail={detail} onEvidenceChanged={onEvidenceChanged} /><LocalCompanyPhoneRoute api={api} detail={detail} onEvidenceChanged={onEvidenceChanged} /></>} /> : <>
+    {api ? <LocalCompanyResearchPanel accountId={account.account.id} api={api} continuation={continuation} renderDetail={detail => <>{linkApi && <LocalCompanyContactLink detail={detail} api={linkApi} continuation={continuation} />}<CompanyDraft api={api} detail={detail} onEvidenceChanged={onEvidenceChanged} /><LocalCompanyPhoneRoute api={api} detail={detail} onEvidenceChanged={onEvidenceChanged} /></>} /> : <>
     {account.portfolio.map((p, i) => <p key={i}>{p.count} {p.scope} {p.measure}</p>)}
     {!account.portfolio.length && <p>Portfolio not recorded.</p>}
     {account.claims.map((c, i) => <div key={i}><p>{c.kind === 'hypothesis' ? 'Hypothesis' : c.kind === 'prospect_stated_problem' ? 'Prospect stated' : 'Fact'}: {typeof c.value === 'string' ? c.value : `${c.value.count} ${c.value.scope} ${c.value.measure}`}</p><small>Evidence: {c.evidenceIds.join(', ') || 'Unverified'}</small></div>)}
@@ -89,7 +89,7 @@ export function LocalAccountDetail({ account, api, contactApi, continuation, onO
   </section>;
 }
 
-export function LocalOnlyAccountLibrary({ read, api, contactApi, onOpenImport, onOpenLead, firstUse, onSelectionChange, intake, selectionRequest, onSelectionHandled, stepRequest, onStep, onStepHandled, onEvidenceChanged }: { api?: LocalWorkspaceApi; contactApi: Pick<LocalCompanyContactApi, 'leads' | 'leadDetail'>; onOpenImport(): void; onOpenLead(personId: string): void; firstUse: FirstUseContinuation; intake?: ReactNode; selectionRequest?: LocalAccountSelectionRequest | null; onSelectionHandled?(request: LocalAccountSelectionRequest): void; read: LocalRead<LocalWorkspaceSnapshot>; onSelectionChange?(key: string | null): void; stepRequest?: LocalAccountStepRequest | null; onStep?(request: LocalAccountStepRequest): void; onStepHandled?(request: LocalAccountStepRequest): void; onEvidenceChanged?(): void }) {
+export function LocalOnlyAccountLibrary({ read, api, contactApi, firstUse, onSelectionChange, intake, selectionRequest, onSelectionHandled, stepRequest, onStep, onStepHandled, onEvidenceChanged }: { api?: LocalWorkspaceApi; contactApi: Pick<LocalCompanyContactApi, 'leads' | 'leadDetail'>; firstUse: FirstUseContinuation; intake?: ReactNode; selectionRequest?: LocalAccountSelectionRequest | null; onSelectionHandled?(request: LocalAccountSelectionRequest): void; read: LocalRead<LocalWorkspaceSnapshot>; onSelectionChange?(key: string | null): void; stepRequest?: LocalAccountStepRequest | null; onStep?(request: LocalAccountStepRequest): void; onStepHandled?(request: LocalAccountStepRequest): void; onEvidenceChanged?(): void }) {
   const state = useSyncExternalStore(firstUse.subscribe, firstUse.snapshot, firstUse.snapshot);
   const epoch = firstUse.captureEpoch();
   const selected = state.selectedAccountId === null ? null : localAccountKey(state.selectedAccountId);
@@ -108,5 +108,5 @@ export function LocalOnlyAccountLibrary({ read, api, contactApi, onOpenImport, o
     if (firstUse.selectAccount(epoch, null)) onSelectionChange?.(null);
   };
   const account = snapshots.find(a => localAccountKey(a.account.id) === selected);
-  return <div className="native-desk__layout"><nav className="native-desk__queue" aria-label="Local accounts"><LocalAccountLibrary read={read} selected={selected} onSelect={select} onStep={(key, step) => { const accountId = select(key); if (accountId !== null) onStep?.({ accountId, step }); }} intake={intake} /></nav><div className="native-desk__detail">{account && <><button type="button" aria-label="Close details" onClick={close}>Close</button><LocalAccountDetail account={account} api={api} contactApi={contactApi} continuation={firstUse} onOpenImport={onOpenImport} onOpenLead={onOpenLead} step={stepRequest?.accountId === account.account.id ? stepRequest : null} onStepHandled={onStepHandled} onEvidenceChanged={onEvidenceChanged} /></>}</div></div>;
+  return <div className="native-desk__layout"><nav className="native-desk__queue" aria-label="Local accounts"><LocalAccountLibrary read={read} selected={selected} onSelect={select} onStep={(key, step) => { const accountId = select(key); if (accountId !== null) onStep?.({ accountId, step }); }} intake={intake} /></nav><div className="native-desk__detail">{account && <><button type="button" aria-label="Close details" onClick={close}>Close</button><LocalAccountDetail account={account} api={api} contactApi={contactApi} continuation={firstUse} step={stepRequest?.accountId === account.account.id ? stepRequest : null} onStepHandled={onStepHandled} onEvidenceChanged={onEvidenceChanged} /></>}</div></div>;
 }

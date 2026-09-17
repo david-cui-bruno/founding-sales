@@ -11,7 +11,6 @@ import { WorkflowSection } from '../../src/renderer/foundation/WorkflowSection';
 import '../../src/renderer/app.css';
 
 const fixture = nativeDeskFixture(nativeDeskReviewFixture());
-const opened: string[] = [];
 function Harness() {
   const {setPreference} = useTheme();
   const {setDensity} = useDensity();
@@ -31,7 +30,6 @@ function Harness() {
   const surface = route === 'accounts' || route === 'campaigns' ? route : 'today';
   window.nativeDeskBrowser = {
     fixture,
-    opened,
     navigate,
     refresh: () => window.dispatchEvent(new Event('focus')),
     rerender: () => setTick(value => value + 1),
@@ -40,15 +38,14 @@ function Harness() {
       setDensity(density);
     },
   };
-  return <PresentationRoot><AppShell route={route} onNavigate={navigate} reviewCount={{ status: 'failed' }}>
+  return <PresentationRoot><AppShell route={route} onNavigate={navigate}>
     <div data-rerender={tick}>{route === 'settings'
       ? <><h1>Settings</h1><WorkflowSection api={fixture.api.localWorkspace}/></>
-      : <NativeDeskRoute onOpenImport={(): void => undefined} firstUse={fixture.firstUse} key={route} api={fixture.api} onOpenLead={id => opened.push(id)} surface={surface} legacy={<h1>Legacy Today fixture</h1>}/>}</div>
+      : <NativeDeskRoute firstUse={fixture.firstUse} key={route} api={fixture.api} surface={surface}/>}</div>
   </AppShell></PresentationRoot>;
 }
 export type NativeDeskBrowser = {
   fixture: typeof fixture;
-  opened: string[];
   navigate(route: AppRoute): void;
   refresh(): void;
   rerender(): void;

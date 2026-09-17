@@ -126,22 +126,6 @@ describe('foundation initialization recovery', () => {
         closeDatabase,
       },
     );
-    runtime.setSourcingHealthProvider(() => ({
-      status: 'healthy',
-      reasons: [],
-      state: {
-        state: 'idle',
-        pollId: null,
-        startedAt: null,
-        lastCompletedAt: null,
-        consecutiveFailures: 0,
-        lastFailureAt: null,
-        lastFailureCode: null,
-        backlogCount: 0,
-      },
-      lastSuccessAgeMs: 0,
-    }));
-
     await expect(runtime.getHealth()).rejects.toThrow();
     expect(statSync(tempDatabase.path).isDirectory()).toBe(true);
 
@@ -164,22 +148,6 @@ describe('foundation initialization recovery', () => {
       domainProjectionRefreshCandidateCount: 0,
       pendingProjectionRebuilds: 0,
       domainStartupEvaluatedAt: expect.stringMatching(/Z$/),
-      operationalStatus: 'ready',
-      sourcing: {
-        status: 'healthy',
-        reasons: [],
-        state: {
-          state: 'idle',
-          pollId: null,
-          startedAt: null,
-          lastCompletedAt: null,
-          consecutiveFailures: 0,
-          lastFailureAt: null,
-          lastFailureCode: null,
-          backlogCount: 0,
-        },
-        lastSuccessAgeMs: 0,
-      },
     });
     expect(statSync(tempDatabase.path).isFile()).toBe(true);
   });

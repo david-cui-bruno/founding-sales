@@ -78,7 +78,6 @@ test('ranked local companies show one reason and next step each, traverse by key
   await expect(page.getByText('Company evidence unavailable. Reopen this detail to check again.', { exact: true })).toBeVisible();
   expect(await page.evaluate(() => window.preparationQueueBrowser.fixture.calls.filter(call => call.method === 'localWorkspace.getCompany'))).toEqual([{ method: 'localWorkspace.getCompany', input: { accountId: 'c' } }]);
   expect((await methods(page)).filter(method => ![...reads, 'localWorkspace.getCompany'].includes(method))).toEqual([]);
-  expect(await page.evaluate(() => window.preparationQueueBrowser.opened)).toEqual([]);
   for (const width of [1440, 1050]) {
     await page.setViewportSize({ width, height: width === 1440 ? 900 : 700 });
     for (const theme of ['light', 'dark'] as const) {

@@ -15,10 +15,7 @@ const forbidden =
 
 const guardedRoots = [
   'src/shared/contracts',
-  'src/renderer/features/leads',
   'src/renderer/features/today',
-  'src/renderer/features/pipeline',
-  'src/renderer/features/friday',
 ] as const;
 
 describe('no blended score contract', () => {

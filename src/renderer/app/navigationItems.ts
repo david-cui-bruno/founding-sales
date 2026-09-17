@@ -1,11 +1,7 @@
 import {
   CalendarCheck2,
-  ChartColumn,
   ClipboardCheck,
-  GraduationCap,
-  MessagesSquare,
   Settings,
-  SquareKanban,
   Users,
   type LucideIcon,
 } from 'lucide-react';
@@ -28,16 +24,5 @@ export const navigationItems: readonly NavigationItem[] = [
   { route: 'today', label: 'Today', icon: CalendarCheck2, enabled: true },
   { route: 'accounts', label: 'Accounts', icon: Users, enabled: true },
   { route: 'campaigns', label: 'Campaigns', icon: ClipboardCheck, enabled: true },
-  { route: 'leads', label: 'Leads', icon: Users, enabled: true },
-  { route: 'pipeline', label: 'Pipeline', icon: SquareKanban, enabled: true },
-  {
-    route: 'conversations',
-    label: 'Conversations',
-    icon: MessagesSquare,
-    enabled: true,
-  },
-  { route: 'learnings', label: 'Learnings', icon: GraduationCap, enabled: true },
-  { route: 'friday', label: 'Friday', icon: ChartColumn, enabled: true },
-  { route: 'inbox', label: 'Inbox', icon: ClipboardCheck, enabled: true },
   { route: 'settings', label: 'Settings', icon: Settings, enabled: true },
 ];

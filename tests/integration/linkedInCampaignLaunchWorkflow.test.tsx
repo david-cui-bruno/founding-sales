@@ -84,7 +84,7 @@ async function fixture() {
     daily: { get: async () => services.daily.get() },
     delegation: { ...ui.api.delegation, status: runtime.status, sync: runtime.sync, submit: runtime.submit },
   };
-  const mount = (surface: 'campaigns' | 'today' = 'campaigns') => render(<PresentationRoot><NativeDeskRoute surface={surface} firstUse={ui.firstUse} api={api} onOpenLead={forbidden} onOpenImport={forbidden} /></PresentationRoot>);
+  const mount = (surface: 'campaigns' | 'today' = 'campaigns') => render(<PresentationRoot><NativeDeskRoute surface={surface} firstUse={ui.firstUse} api={api} /></PresentationRoot>);
   return { ...f, services, domain, repository, runtime, api, mount, forbidden, paths, campaignCommands,
     async finish() { cleanup(); await runtime.dispose(); f.close(); expect(violations).toEqual([]); } };
   } catch (error) {

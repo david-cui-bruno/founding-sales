@@ -25,16 +25,16 @@ import {
   type IntakeOrganizationInput,
   type IntakePropertyInput,
   type NonCustomIntakeSourceInput,
-} from '../domain/source/sourceService';
-import type { Prospect } from '../domain/identity/identityRepository';
+} from '../../src/main/domain/source/sourceService';
+import type { Prospect } from '../../src/main/domain/identity/identityRepository';
 import type {
   CloudChannel,
   CloudEnrichmentPayload,
   CloudPostalAddress,
   CloudScores,
   CloudSourceEvent,
-} from '../../shared/contracts/cloudSourceEventContract';
-import { cloudEnrichmentPayloadSchema } from '../../shared/contracts/cloudSourceEventContract';
+} from '../../src/shared/contracts/cloudSourceEventContract';
+import { cloudEnrichmentPayloadSchema } from '../../src/shared/contracts/cloudSourceEventContract';
 
 /**
  * The receipt natural key: `source_intake_receipts.source_event_id` for

@@ -847,8 +847,10 @@ test('unpaired local records remain selectable without worker authority or autom
   await localOnly(page);
   const row = page.getByRole('button', {name: /Retained callback contact/});
   await row.focus(); await page.keyboard.press('Enter');
-  await expect(page.getByRole('button', {name: 'Open contact workspace', exact: true})).toBeVisible();
-  expect(await page.evaluate(() => window.nativeDeskBrowser.opened)).toEqual([]);
+  // Pure presentation: the retained detail offers no contact, call or send control.
+  const retainedDetail = page.getByRole('region', {name: 'Retained work detail', exact: true});
+  await expect(retainedDetail).toContainText('Stored local work. Nothing here calls, sends or books.');
+  await expect(retainedDetail.getByRole('button')).toHaveCount(0);
   for (const width of [1440, 1050]) {
     await page.setViewportSize({width, height: width === 1440 ? 900 : 700});
     const positions = await page.locator('.native-desk__lane h2').evaluateAll(headings => headings.map(el => el.getBoundingClientRect().bottom));
@@ -869,8 +871,6 @@ test('unpaired local records remain selectable without worker authority or autom
     await expect(page.locator('.native-desk__detail-bar')).toContainText('Existing commitments and relationships');
     await page.screenshot({path: testInfo.outputPath(`local-commitments-${width}.png`), animations: 'disabled'});
   }
-  await page.getByRole('button', {name: 'Open contact workspace', exact: true}).click();
-  expect(await page.evaluate(() => window.nativeDeskBrowser.opened)).toEqual(['retained-person']);
   await page.evaluate(() => window.nativeDeskBrowser.navigate('accounts'));
   await expect(page.getByText('Local account library', {exact: true})).toBeVisible();
   expect((await methods(page)).filter(method => method === 'localWorkspace.getCompany')).toEqual([]);
@@ -911,7 +911,6 @@ test('selected local account survives recovery of an initially unavailable daily
     {method: 'localWorkspace.getCompany', input: {accountId: 'local-account'}},
     {method: 'localWorkspace.getCompany', input: {accountId: 'local-account'}},
   ]);
-  expect(await page.evaluate(() => window.nativeDeskBrowser.opened)).toEqual([]);
   expect((await methods(page)).filter(method => !['daily.get','delegation.status','localWorkspace.get','localWorkspace.getCommitments','localWorkspace.getCompany'].includes(method))).toEqual([]);
   await assertClean(page, state);
 });
@@ -1072,40 +1071,27 @@ test('approved A empty unpaired surfaces stay coherent and truthful without inve
   await assertClean(page, state);
 });
 
-test('isolated Native rail retains accessible disclosure in both workflows without substituting other destinations', async ({page}) => {
+test('isolated Native rail keeps its four destinations keyboard reachable in both workflows without substituting other destinations', async ({page}) => {
   const state = await mount(page);
   const rail = page.getByRole('navigation', {name: 'Primary', exact: true});
-  for (const label of ['Today', 'Accounts', 'Campaigns', 'Settings']) await expect(rail.getByRole('link', {name: label, exact: true})).toBeVisible();
-  const more = rail.getByRole('button', {name: /More|Other workspaces/i});
+  const labels = ['Today', 'Accounts', 'Campaigns', 'Settings'];
   const traverseRail = async () => {
+    // Four plain links: no disclosure, badge or secondary group remains after the person workspaces were removed.
+    await expect(rail.getByRole('link')).toHaveCount(4);
+    await expect(rail.getByRole('button')).toHaveCount(0);
+    for (const label of labels) await expect(rail.getByRole('link', {name: label, exact: true})).toBeVisible();
+    for (const label of ['Leads', 'Pipeline', 'Conversations', 'Learnings', 'Friday', 'Inbox']) await expect(rail.getByRole('link', {name: label, exact: true, includeHidden: true})).toHaveCount(0);
     await rail.getByRole('link', {name: 'Today', exact: true}).focus();
-    for (const label of ['Accounts', 'Campaigns']) {
+    for (const label of labels.slice(1)) {
       await page.keyboard.press('Tab');
       await expect(rail.getByRole('link', {name: label, exact: true})).toBeFocused();
     }
-    await page.keyboard.press('Tab');
-    await expect(more).toBeFocused();
-    await page.keyboard.press('Enter');
-    await expect(more).toHaveAttribute('aria-expanded', 'true');
-    await expect(rail.getByRole('link')).toHaveCount(10);
-    for (const label of ['Leads', 'Pipeline', 'Conversations', 'Learnings', 'Friday', 'Inbox', 'Settings']) {
-      await page.keyboard.press('Tab');
-      await expect(rail.getByRole('link', {name: label === 'Inbox' ? 'Inbox Local review count unavailable' : label, exact: true})).toBeFocused();
-    }
   };
-  await expect(more).toHaveAttribute('aria-expanded', 'false');
-  await expect(rail.getByRole('link', {name: 'Conversations', exact: true})).toBeHidden();
   await traverseRail();
-  await expect(more).toHaveAttribute('aria-expanded', 'true');
-  for (const label of ['Leads', 'Pipeline', 'Conversations', 'Learnings', 'Friday', 'Inbox']) await expect(rail.getByRole('link', {name: label === 'Inbox' ? 'Inbox Local review count unavailable' : label, exact: true})).toBeVisible();
   // Actual destination/render/read assertions live in applicationPresentation.spec.
-  await expect(page.evaluate(() => window.nativeDeskBrowser.navigate('conversations'))).rejects.toThrow('does not render conversations');
-  await more.click();
   await localOnly(page, 'legacy');
-  await expect(page.getByRole('heading', {name: 'Legacy Today fixture', exact: true})).toBeVisible();
-  await expect(more).toBeVisible();
-  await expect(more).toHaveAttribute('aria-expanded', 'false');
-  await expect(rail.getByRole('link', {name: 'Conversations', exact: true})).toBeHidden();
+  await expect(page.getByText('Legacy workflow is active. Local records remain available. Switch to Native Desk in Settings to change the daily workspace. Worker actions are held.', {exact: true})).toBeVisible();
+  await expect(page.getByTestId('native-desk')).toHaveCount(0);
   await traverseRail();
   await assertClean(page, state);
 });
@@ -1278,7 +1264,6 @@ test('an unsent local draft is listed in Today and opens its company with the dr
   }
   const audit = await new AxeBuilder({page}).analyze();
   expect(audit.violations.filter(issue => issue.impact === 'critical' || issue.impact === 'serious')).toEqual([]);
-  expect(await page.evaluate(() => window.nativeDeskBrowser.opened)).toEqual([]);
   expect((await methods(page)).filter(method => !['daily.get', 'delegation.status', 'localWorkspace.get', 'localWorkspace.getCommitments', 'localWorkspace.getCompany', 'localWorkspace.getCompanyDraft'].includes(method))).toEqual([]);
   await assertClean(page, state);
 });

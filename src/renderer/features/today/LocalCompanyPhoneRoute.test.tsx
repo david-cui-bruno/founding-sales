@@ -50,7 +50,7 @@ describe('phone route review on the selected company detail (real detail tree, m
     const f = fixture();
     // The research panel reads the selected company's detail only for the account the continuation has selected.
     expect(f.native.firstUse.selectAccount(f.native.firstUse.captureEpoch(), 'a')).toBe(true);
-    render(<LocalAccountDetail account={f.snapshot} api={f.api} contactApi={f.native.api} continuation={f.native.firstUse} onOpenImport={vi.fn()} onOpenLead={vi.fn()} />);
+    render(<LocalAccountDetail account={f.snapshot} api={f.api} contactApi={f.native.api} continuation={f.native.firstUse} />);
     const inbox = await screen.findByRole('region', { name: 'Company draft' });
     const region = step();
     expect(region.querySelector('h3')?.textContent).toBe('Review phone route');

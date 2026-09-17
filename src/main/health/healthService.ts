@@ -3,7 +3,6 @@ import { checkFts5, type AppDatabase } from '../db/database';
 import { inspectDatabaseEncryption } from '../db/databaseEncryption';
 import type { DomainStartupReport } from '../domain/startup/domainStartupTypes';
 import type { JobRepository } from '../jobs/jobRepository';
-import type { SourcingPollHealth } from '../../shared/contracts/sourcingContract';
 
 export type HealthServiceOptions = {
   appVersion: string;
@@ -11,7 +10,6 @@ export type HealthServiceOptions = {
   database: AppDatabase;
   jobs: Pick<JobRepository, 'listActive'>;
   domainStartupReport: DomainStartupReport;
-  sourcingHealth: () => SourcingPollHealth;
 };
 
 /**
@@ -33,7 +31,6 @@ export class HealthService {
     }
     const encryption = inspectDatabaseEncryption(this.options.database);
     const report = this.options.domainStartupReport;
-    const sourcing = this.options.sourcingHealth();
 
     return appHealthSchema.parse({
       appVersion: this.options.appVersion,
@@ -51,8 +48,6 @@ export class HealthService {
       domainProjectionRefreshCandidateCount: report.projectionRefreshCandidateCount,
       pendingProjectionRebuilds: report.pendingProjectionRebuilds,
       domainStartupEvaluatedAt: report.evaluatedAt,
-      operationalStatus: sourcing.status === 'degraded' ? 'degraded' : 'ready',
-      sourcing,
     });
   }
 }

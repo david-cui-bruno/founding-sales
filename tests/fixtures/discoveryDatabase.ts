@@ -4,7 +4,7 @@ import { closeDatabase, openDatabase, type AppDatabase } from '../../src/main/db
 import { migrateToLatest } from '../../src/main/db/migrate';
 import type { DomainServices } from '../../src/main/domain/createDomainServices';
 import { DomainRuntime } from '../../src/main/domain/domainRuntime';
-import { mapCloudSourceEvent } from '../../src/main/sourcing/intakeMapper';
+import { mapCloudSourceEvent } from './intakeMapper';
 import type { WorkspaceKey } from '../../src/main/security/workspaceKeyTypes';
 import { cloudSourceEventSchema } from '../../src/shared/contracts/cloudSourceEventContract';
 import { discoveryAssessmentSchema, type DiscoveryAssessment } from '../../src/shared/contracts/discoveryContract';

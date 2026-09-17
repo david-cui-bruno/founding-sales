@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FoundationRuntime } from '../../src/main/foundation/foundationRuntime';
-import { mapCloudSourceEvent } from '../../src/main/sourcing/intakeMapper';
+import { mapCloudSourceEvent } from '../fixtures/intakeMapper';
 import { validFrboEvent, validParcelEvent } from '../fixtures/cloudSourceEvents';
 import { seedProspect } from '../fixtures/domainRows';
 import { PRIORITY_PROJECTION_REBUILD_JOB_TYPE } from '../../src/main/domain/startup/domainStartupTypes';

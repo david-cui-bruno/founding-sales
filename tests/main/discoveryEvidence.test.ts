@@ -5,7 +5,7 @@ import { collectDiscoveryEvidence, revalidateDiscoverySnapshot, validateDiscover
 import { evaluateDiscovery } from '../../src/main/domain/discovery/discoveryPolicy';
 import { DomainRuntime } from '../../src/main/domain/domainRuntime';
 import { BUILTIN_PRIORITIZATION_RULE_V1 } from '../../src/main/domain/prioritization/builtinPrioritizationRules';
-import { mapCloudSourceEvent, buildNeedsIdentityIntakeCommand } from '../../src/main/sourcing/intakeMapper';
+import { mapCloudSourceEvent, buildNeedsIdentityIntakeCommand } from '../fixtures/intakeMapper';
 import { validFrboEvent, validParcelEvent } from '../fixtures/cloudSourceEvents';
 import { createDiscoveryDatabase, seedDiscoveryOwner, DISCOVERY_NOW, type DiscoveryDatabase } from '../fixtures/discoveryDatabase';
 import type { CloudSourceEvent } from '../../src/shared/contracts/cloudSourceEventContract';

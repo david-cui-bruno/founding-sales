@@ -6,7 +6,7 @@ import { evaluateDiscovery } from '../../src/main/domain/discovery/discoveryPoli
 import { BUILTIN_PRIORITIZATION_RULE_V1 } from '../../src/main/domain/prioritization/builtinPrioritizationRules';
 import { DomainUnitOfWork } from '../../src/main/domain/support/domainUnitOfWork';
 import { SourceRepository } from '../../src/main/domain/source/sourceRepository';
-import { mapCloudSourceEvent } from '../../src/main/sourcing/intakeMapper';
+import { mapCloudSourceEvent } from '../fixtures/intakeMapper';
 import { validFrboEvent, validParcelEvent } from '../fixtures/cloudSourceEvents';
 import { createDiscoveryDatabase, seedDiscoveryOwner, DISCOVERY_NOW, type DiscoveryDatabase } from '../fixtures/discoveryDatabase';
 

@@ -8,7 +8,6 @@ import {
 import {
   createApplicationMenuTemplate,
   menuNavigationScripts,
-  openImportScript,
 } from './main/applicationMenu';
 import { createDockBadgeUpdater } from './main/dockBadge';
 import { createRendererTrust } from './main/navigationPolicy';
@@ -190,7 +189,6 @@ const installApplicationMenu = (): void => {
       platform: process.platform,
       isPackaged: app.isPackaged,
       navigate: (route) => runInFocusedWindow(menuNavigationScripts[route]),
-      openImport: () => runInFocusedWindow(openImportScript),
     });
     Menu.setApplicationMenu(Menu.buildFromTemplate(template));
   } catch {
@@ -263,14 +261,6 @@ if (!started && ownsSingleInstanceLock) {
         appleSpikeEnabled: app.commandLine.hasSwitch(
           'apple-feasibility-spike',
         ),
-        // Packaged E2E launches with --use-mock-keychain; never auto-poll the
-        // real inbox from a test workspace. Manual pollNow stays available.
-        // TEST-ONLY: the packaged sourcing E2E also sets
-        // CALLIE_SOURCING_FIXTURE_DIR so sourcing.pollNow reads ndjson
-        // fixtures from that local directory instead of S3 (see
-        // startApplication.createProductionSourcingPoller). Real launches
-        // never set that variable.
-        sourcingPollingEnabled: !app.commandLine.hasSwitch('use-mock-keychain'),
         phoneRouteMode: app.commandLine.hasSwitch('use-mock-keychain') ? 'fixture' : 'native',
         isTrustedRendererUrl: rendererTrust.isTrustedRendererUrl,
         signal,

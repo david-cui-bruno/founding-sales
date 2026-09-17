@@ -98,7 +98,7 @@ async function fixture(review = false) {
     delegation: { ...ui.api.delegation, status: runtime.status, sync: runtime.sync, submit: runtime.submit,
       refreshSelectedAccount: runtime.refreshSelectedAccount, getSelectedAccountFreshness: runtime.getSelectedAccountFreshness },
   };
-  const mount = (surface: 'campaigns' | 'today' = 'campaigns') => render(<PresentationRoot><NativeDeskRoute surface={surface} firstUse={ui.firstUse} api={api} onOpenLead={forbidden} onOpenImport={forbidden} /></PresentationRoot>);
+  const mount = (surface: 'campaigns' | 'today' = 'campaigns') => render(<PresentationRoot><NativeDeskRoute surface={surface} firstUse={ui.firstUse} api={api} /></PresentationRoot>);
   return { ...f, services, domain, repository, runtime, api, auth, mount, forbidden, paths, campaignAttempts, campaignCommands, refreshCommands,
     hold: (value: boolean) => { holdCampaign = value; }, holdRefresh: (value: boolean) => { holdRefresh = value; },
     async finish() { cleanup(); await runtime.dispose(); f.close(); expect(violations).toEqual([]); } };

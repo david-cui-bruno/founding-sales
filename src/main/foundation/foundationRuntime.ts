@@ -12,7 +12,6 @@ import { SystemClock } from '../domain/support/clock';
 import { UuidGenerator } from '../domain/support/idGenerator';
 import type { HealthServiceOptions } from '../health/healthService';
 import type { HealthProvider } from '../health/registerHealthIpc';
-import type { SourcingPollHealth } from '../../shared/contracts/sourcingContract';
 import type {
   WorkspaceKey,
   WorkspaceKeyStoreInput,
@@ -73,7 +72,6 @@ export class FoundationRuntime {
   private initialization: InitializationAttempt | undefined;
   private nextAttemptId = 0;
   private shutdownPromise: Promise<void> | undefined;
-  private sourcingHealthProvider: (() => SourcingPollHealth) | undefined;
   private readonly databaseOperations = new Set<Promise<void>>();
 
   constructor(
@@ -94,11 +92,6 @@ export class FoundationRuntime {
       throw new Error('Foundation runtime did not retain initialized state.');
     }
     return foundation.health.getHealth();
-  }
-
-  setSourcingHealthProvider(provider: () => SourcingPollHealth): void {
-    this.throwIfUnavailable();
-    this.sourcingHealthProvider = provider;
   }
 
   shutdown(): Promise<void> {
@@ -215,12 +208,6 @@ export class FoundationRuntime {
           database,
           jobs: services?.jobs ?? { listActive: () => [] },
           domainStartupReport: report,
-          sourcingHealth: () => {
-            if (this.sourcingHealthProvider === undefined) {
-              throw new Error('Sourcing health provider has not been composed.');
-            }
-            return this.sourcingHealthProvider();
-          },
         });
         this.throwIfAttemptIsStale(id);
 

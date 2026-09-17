@@ -23,15 +23,6 @@ const readyHealth: AppHealth = {
   domainProjectionRefreshCandidateCount: 0,
   pendingProjectionRebuilds: 0,
   domainStartupEvaluatedAt: '2026-08-30T12:00:00.000Z',
-  operationalStatus: 'ready',
-  sourcing: {
-    status: 'healthy', reasons: [], lastSuccessAgeMs: null,
-    state: {
-      state: 'idle', pollId: null, startedAt: null, lastCompletedAt: null,
-      consecutiveFailures: 0, lastFailureAt: null, lastFailureCode: null,
-      backlogCount: null,
-    },
-  },
 };
 
 function deferred<T>() {

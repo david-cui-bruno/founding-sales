@@ -21,7 +21,7 @@ afterEach(() => {
 describe('AppShell', () => {
   it('renders fixed navigation and marks Today current', () => {
     render(
-      <AppShell route="today" onNavigate={vi.fn()} reviewCount={{ status: 'ready', count: 3, observedAt: '2026-09-10T00:00:00.000Z' }}>
+      <AppShell route="today" onNavigate={vi.fn()}>
         <p>Queue</p>
       </AppShell>,
     );
@@ -30,28 +30,27 @@ describe('AppShell', () => {
     expect(
       screen.getByRole('link', { name: 'Today' }).getAttribute('aria-current'),
     ).toBe('page');
-    expect(screen.getByText('3')).toBeTruthy();
     expect(screen.queryByText(/custom stage/i)).toBeNull();
   });
 
   it('navigates without opening a new window', () => {
     const onNavigate = vi.fn();
     render(
-      <AppShell route="today" onNavigate={onNavigate} reviewCount={{ status: 'ready', count: 0, observedAt: '2026-09-10T00:00:00.000Z' }}>
+      <AppShell route="today" onNavigate={onNavigate}>
         <p>Queue</p>
       </AppShell>,
     );
 
-    const leads = screen.getByRole('link', { name: 'Leads' });
-    expect(leads.getAttribute('target')).toBeNull();
-    fireEvent.click(leads);
+    const accounts = screen.getByRole('link', { name: 'Accounts' });
+    expect(accounts.getAttribute('target')).toBeNull();
+    fireEvent.click(accounts);
 
-    expect(onNavigate).toHaveBeenCalledWith('leads');
+    expect(onNavigate).toHaveBeenCalledWith('accounts');
   });
 
   it('renders children inside the labelled main content region', () => {
     render(
-      <AppShell route="today" onNavigate={vi.fn()} reviewCount={{ status: 'ready', count: 0, observedAt: '2026-09-10T00:00:00.000Z' }}>
+      <AppShell route="today" onNavigate={vi.fn()}>
         <p>Queue</p>
       </AppShell>,
     );
@@ -63,7 +62,7 @@ describe('AppShell', () => {
 
   it('offers a skip link to the main content region', () => {
     render(
-      <AppShell route="today" onNavigate={vi.fn()} reviewCount={{ status: 'ready', count: 0, observedAt: '2026-09-10T00:00:00.000Z' }}>
+      <AppShell route="today" onNavigate={vi.fn()}>
         <p>Queue</p>
       </AppShell>,
     );
@@ -73,36 +72,29 @@ describe('AppShell', () => {
     ).toBe('#main-content');
   });
 
-  it('navigates to Conversations and Learnings now that they are live', () => {
+  it('offers exactly the company-model workspaces and Settings with no review badge or More disclosure', () => {
     const onNavigate = vi.fn();
     render(
-      <AppShell route="today" onNavigate={onNavigate} reviewCount={{ status: 'ready', count: 0, observedAt: '2026-09-10T00:00:00.000Z' }}>
-        <p>Queue</p>
+      <AppShell route="settings" onNavigate={onNavigate}>
+        <p>Preferences</p>
       </AppShell>,
     );
 
-    for (const name of ['Conversations', 'Learnings']) {
+    expect(screen.getAllByRole('link').map((link) => link.getAttribute('href'))).toEqual([
+      '#main-content', '#/today', '#/accounts', '#/campaigns', '#/settings',
+    ]);
+    expect(screen.getByRole('link', { name: 'Settings' }).getAttribute('aria-current')).toBe('page');
+    expect(screen.queryByRole('button', { name: 'More workspaces' })).toBeNull();
+    for (const name of ['Leads', 'Pipeline', 'Conversations', 'Learnings', 'Friday', 'Inbox']) {
+      expect(screen.queryByRole('link', { name })).toBeNull();
+    }
+    expect(screen.queryByLabelText(/open local reviews/)).toBeNull();
+    for (const name of ['Today', 'Accounts', 'Campaigns']) {
       const link = screen.getByRole('link', { name });
       expect(link.getAttribute('aria-disabled')).toBeNull();
       fireEvent.click(link);
     }
-
-    expect(onNavigate).toHaveBeenCalledTimes(2);
-    expect(onNavigate).toHaveBeenNthCalledWith(1, 'conversations');
-    expect(onNavigate).toHaveBeenNthCalledWith(2, 'learnings');
-  });
-
-  it('shows an observed local zero rather than an unknown count', () => {
-    render(
-      <AppShell route="inbox" onNavigate={vi.fn()} reviewCount={{ status: 'ready', count: 0, observedAt: '2026-09-10T00:00:00.000Z' }}>
-        <p>Queue</p>
-      </AppShell>,
-    );
-
-    const review = screen.getByRole('link', { name: /Inbox/ });
-    expect(review.textContent).toBe('Inbox0');
-    expect(screen.getByLabelText('0 open local reviews')).toBeTruthy();
-    expect(review.getAttribute('aria-current')).toBe('page');
+    expect(onNavigate.mock.calls.map(([route]) => route)).toEqual(['today', 'accounts', 'campaigns']);
   });
 });
 
@@ -112,8 +104,8 @@ function RouteProbe({ initial = 'today' }: { initial?: AppRoute }) {
   return (
     <>
       <output data-testid="route">{routing.route}</output>
-      <button type="button" onClick={() => routing.navigate('pipeline')}>
-        Go to pipeline
+      <button type="button" onClick={() => routing.navigate('accounts')}>
+        Go to accounts
       </button>
     </>
   );
@@ -121,16 +113,16 @@ function RouteProbe({ initial = 'today' }: { initial?: AppRoute }) {
 
 describe('useHashRoute', () => {
   it('starts from the initial route when no hash is present', () => {
-    render(<RouteProbe initial="leads" />);
+    render(<RouteProbe initial="campaigns" />);
 
-    expect(screen.getByTestId('route').textContent).toBe('leads');
+    expect(screen.getByTestId('route').textContent).toBe('campaigns');
   });
 
   it('adopts a valid route hash on mount', () => {
-    window.location.hash = '#/friday';
+    window.location.hash = '#/settings';
     render(<RouteProbe />);
 
-    expect(screen.getByTestId('route').textContent).toBe('friday');
+    expect(screen.getByTestId('route').textContent).toBe('settings');
   });
 
   it('ignores unknown hashes instead of rendering a broken route', () => {
@@ -143,47 +135,37 @@ describe('useHashRoute', () => {
   it('navigates by updating the location hash', () => {
     render(<RouteProbe />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Go to pipeline' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Go to accounts' }));
 
-    expect(screen.getByTestId('route').textContent).toBe('pipeline');
-    expect(window.location.hash).toBe('#/pipeline');
+    expect(screen.getByTestId('route').textContent).toBe('accounts');
+    expect(window.location.hash).toBe('#/accounts');
   });
 
   it('follows external hash changes', () => {
     render(<RouteProbe />);
 
     act(() => {
-      window.location.hash = '#/review';
-      // Renamed route: legacy #/review links resolve to inbox.
+      window.location.hash = '#/campaigns';
       window.dispatchEvent(new HashChangeEvent('hashchange'));
     });
 
-    expect(screen.getByTestId('route').textContent).toBe('inbox');
+    expect(screen.getByTestId('route').textContent).toBe('campaigns');
   });
-});
 
-it('keeps other workspaces behind a reversible presentation disclosure without changing routes', () => {
-  const onNavigate = vi.fn();
-  const view = render(<AppShell route="today" onNavigate={onNavigate} reviewCount={{ status: 'ready', count: 2, observedAt: '2026-09-10T00:00:00.000Z' }}><section className="native-desk" data-presentation="native-a" data-workflow-mode="meeting_first" /></AppShell>);
-  const toggle = screen.getByRole('button', { name: 'More workspaces' });
-  const group = document.getElementById(toggle.getAttribute('aria-controls')!);
-  expect(toggle.getAttribute('aria-expanded')).toBe('false');
-  expect(group?.hasAttribute('hidden')).toBe(false);
-  fireEvent.click(toggle);
-  expect(toggle.getAttribute('aria-expanded')).toBe('true');
-  for (const name of ['Leads', 'Pipeline', 'Conversations', 'Learnings', 'Friday', 'Inbox']) {
-    const link = screen.getByRole('link', { name: new RegExp(`^${name}`) });
-    expect(group?.contains(link)).toBe(true);
-    fireEvent.click(link);
-  }
-  expect(onNavigate.mock.calls.map(([route]) => route)).toEqual(['leads', 'pipeline', 'conversations', 'learnings', 'friday', 'inbox']);
-  expect(group?.contains(screen.getByRole('link', { name: 'Settings' }))).toBe(false);
-  view.rerender(<AppShell route="leads" onNavigate={onNavigate} reviewCount={{ status: 'ready', count: 2, observedAt: '2026-09-10T00:00:00.000Z' }}><p>Legacy route</p></AppShell>);
-  expect(screen.getByRole('link', { name: 'Leads' }).getAttribute('aria-current')).toBe('page');
-  expect(group?.hasAttribute('hidden')).toBe(false);
-  view.rerender(<AppShell route="today" onNavigate={onNavigate} reviewCount={{ status: 'ready', count: 2, observedAt: '2026-09-10T00:00:00.000Z' }}><section className="native-desk" data-presentation="native-a" data-workflow-mode="meeting_first" /></AppShell>);
-  fireEvent.click(toggle);
-  expect(toggle.getAttribute('aria-expanded')).toBe('false');
-  view.rerender(<AppShell route="today" onNavigate={onNavigate} reviewCount={{ status: 'ready', count: 2, observedAt: '2026-09-10T00:00:00.000Z' }}><p>Legacy Today</p></AppShell>);
-  expect(group?.hasAttribute('hidden')).toBe(false);
+  it('lands removed legacy hashes on Today instead of a blank route', () => {
+    render(<RouteProbe initial="settings" />);
+    expect(screen.getByTestId('route').textContent).toBe('settings');
+
+    for (const legacy of ['leads', 'pipeline', 'conversations', 'learnings', 'friday', 'inbox', 'review']) {
+      act(() => {
+        window.location.hash = '#/settings';
+        window.dispatchEvent(new HashChangeEvent('hashchange'));
+      });
+      act(() => {
+        window.location.hash = `#/${legacy}`;
+        window.dispatchEvent(new HashChangeEvent('hashchange'));
+      });
+      expect(screen.getByTestId('route').textContent, legacy).toBe('today');
+    }
+  });
 });

@@ -12,13 +12,11 @@ type Props = {
   detail: LocalCompanyDetail;
   api: LocalCompanyContactApi;
   continuation: FirstUseContinuation;
-  onOpenImport(): void;
-  onOpenLead(personId: string): void;
 };
 type SearchPage = { key: object; token: symbol; generation: symbol; rows: LeadRow[]; cursor: string | null; pending: boolean; failed: boolean };
 
 /** One explicit saved identity and one quoted relationship. No importer or company reader. */
-export function LocalCompanyContactLink({ detail, api, continuation, onOpenImport, onOpenLead }: Props) {
+export function LocalCompanyContactLink({ detail, api, continuation }: Props) {
   const accountId = detail.snapshot.account.id;
   const selection = useRef({ accountId: continuation.snapshot().selectedAccountId, token: Symbol('contact-selection') });
   const subscribe = useCallback((listener: () => void) => continuation.subscribe(() => {
@@ -164,9 +162,7 @@ export function LocalCompanyContactLink({ detail, api, continuation, onOpenImpor
     {savedLinks.map(saved => <div key={saved.id}>
       <p>{saved.personId} · {saved.role} · {saved.relationship}</p>
       <p>Authority: {saved.authority}</p>
-      <button type="button" onClick={() => { if (currentView()) onOpenLead(saved.personId); }}>Open saved contact</button>
     </div>)}
-    <button type="button" onClick={() => { if (currentView()) onOpenImport(); }}>Import named person</button>
     {foreignReview && <div>
       <p>A review is retained for another account. Return or explicitly discard it before editing this account.</p>
       <button type="button" onClick={() => { if (currentView()) continuation.selectAccount(epoch, review.accountId); }}>Return to reviewed account</button>

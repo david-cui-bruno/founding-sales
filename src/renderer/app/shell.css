@@ -191,27 +191,6 @@ body[data-platform="darwin"] .nav-rail__header {
   text-overflow: ellipsis;
 }
 
-/* Queue count badge: machine data, so it stays neutral per the accent
-   grammar; accent fills are reserved for act-here surfaces. */
-.nav-rail__badge {
-  min-width: 16px;
-  padding: 1px 5px;
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--text) 12%, transparent);
-  color: var(--text);
-  font-size: var(--text-micro);
-  font-weight: var(--weight-title);
-  font-variant-numeric: tabular-nums;
-  text-align: center;
-}
-
-/* The count belongs to the selected action: inherit its contrast-safe text
-   instead of retaining the ordinary dark-on-paper badge color. */
-.nav-rail__item--current .nav-rail__badge {
-  color: inherit;
-  background: transparent;
-}
-
 /* Per-route page header: one title, optional muted count, controls, and the
    single accent primary action, plus an optional one-line description. */
 .page-header {
@@ -279,30 +258,6 @@ body[data-platform="darwin"] .nav-rail__header {
   margin-left: 0;
 }
 
-.nav-rail__more-toggle,
-.nav-rail__more-toggle:hover {
-  display: flex;
-  flex-shrink: 0;
-  width: 100%;
-  border: 0;
-  background: transparent;
-  font-family: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.nav-rail__more-toggle[aria-expanded='false'] + .nav-rail__other-workspaces {
-  display: none;
-}
-.nav-rail__other-workspaces {
-  overflow-y: auto;
-  min-height: 0;
-}
-.nav-rail__other-workspaces .nav-rail__item {
-  font-size: var(--text-micro);
-  height: 36px;
-  padding-left: 7px;
-  gap: 6px;
-}
 @media (max-width: 1200px) {
   .nav-rail { padding-left: 8px; padding-right: 8px; }
   .nav-rail__brand-native { font-size: var(--text-native-brand-narrow); }

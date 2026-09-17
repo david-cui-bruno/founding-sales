@@ -5,7 +5,6 @@ import { randomUUID } from 'node:crypto';
 import { openDatabase, closeDatabase } from '../../src/main/db/database';
 import { migrateToLatest } from '../../src/main/db/migrate';
 import { DomainRuntime } from '../../src/main/domain/domainRuntime';
-import { createDiscoveryWorker, type DiscoveryWorker } from '../../src/main/discovery/discoveryWorker';
 import { createDomainServices } from '../../src/main/domain/createDomainServices';
 import { UuidGenerator } from '../../src/main/domain/support/idGenerator';
 import type { FoundationRuntime } from '../../src/main/foundation/foundationRuntime';
@@ -20,13 +19,10 @@ import type { OutboundCommandServiceApi } from '../../src/main/communications/ou
 import { phoneSetupSchema } from '../../src/shared/contracts/phoneSetupContract';
 import type { AppDatabase } from '../../src/main/db/database';
 import type { OutboundRequest } from '../../src/shared/contracts/outboundContract';
-import type { SourcingPoller } from '../../src/main/sourcing/sourcingPoller';
-import type { SourcingPollHealth } from '../../src/shared/contracts/sourcingContract';
 import { createIpcClient } from '../../src/preload/ipcClient';
 import { createCallieApi } from '../../src/preload/createCallieApi';
 import { createPhoneSetupApi } from '../../src/preload/apis/phoneSetupApi';
 import { createLeadDetailApi } from '../../src/preload/apis/leadDetailApi';
-import { createTodayApi } from '../../src/preload/apis/todayApi';
 import { createLeadsApi } from '../../src/preload/apis/leadsApi';
 import { createTempDatabase, createTestWorkspaceKey, type TempDatabase } from '../fixtures/tempDatabase';
 import { seedProspect } from '../fixtures/domainRows';
@@ -41,12 +37,7 @@ vi.mock('electron', () => ({ safeStorage: {}, dialog: {}, ipcMain: {
 } }));
 const NOW = '2026-08-31T15:00:00.000Z';
 const trustedUrl = 'callie://app/index.html';
-const sourcingHealth: SourcingPollHealth = {
-  status: 'healthy', reasons: [], lastSuccessAgeMs: null,
-  state: { state: 'idle', pollId: null, startedAt: null, lastCompletedAt: null,
-    consecutiveFailures: 0, lastFailureAt: null, lastFailureCode: null, backlogCount: null },
-};
-const held = <T,>() => {
+const held =<T,>() => {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((yes) => { resolve = yes; });
   return { promise, resolve };
@@ -81,19 +72,6 @@ async function fixture(input: {
   let database!: AppDatabase;
   const atOpen: { inTransaction: boolean; keys: string[] }[] = [];
   let service!: OutboundCommandServiceApi;
-  let worker!: DiscoveryWorker;
-  const scheduled = new Set<{ run(): void; at: number }>();
-  // Run the REAL worker to quiescence before baselines, then hold its timer callbacks
-  // while asserting outbound isolation. No assessment, projection or revision is faked.
-  const drainDiscovery = async () => {
-    for (let pass = 0; pass < 10; pass++) {
-      await worker.idle();
-      const due = [...scheduled].filter(job => job.at <= Date.now());
-      if (due.length === 0) return;
-      for (const job of due) { scheduled.delete(job); job.run(); }
-    }
-    throw new Error('Synthetic discovery work did not quiesce within ten bounded pumps');
-  };
   const opens: NativePhoneProcessRequest[] = [];
   const settings = new PhoneRouteSettings(join(dirname(temp.path), 'phone-setup.json'));
   const reply = JSON.stringify({version: 1, status: 'available', fingerprint: 'fictional-route'});
@@ -130,35 +108,21 @@ async function fixture(input: {
     createOutboundCommandService: factory,
     createPhoneBindings: () => bindings,
     registerPhoneSetupIpc,
-    createDiscoveryWorker: input => {
-      worker = createDiscoveryWorker({ ...input, schedule: (run, delayMs) => {
-        const job = { run, at: Date.now() + delayMs };
-        scheduled.add(job);
-        return () => { scheduled.delete(job); };
-      } });
-      return worker;
-    },
     createBackupService: () => ({ start: async () => undefined, shutdown: async () => undefined,
       createBackup: unexpected, listAvailableBackups: async () => [] }),
     createRecoveryService: () => ({ status: unexpected, beginSetup: unexpected, saveSetupMaterial: unexpected,
       completeSetup: unexpected, selectAndRunRestoreDrill: unexpected, shutdown: async () => undefined }),
-    createSourcingPoller: () => ({ getHealth: () => sourcingHealth, stop: (): void => undefined,
-      idle: async (): Promise<void> => undefined }) as unknown as SourcingPoller,
     createAppleBridgeSupervisor: unexpected,
-    registerApplicationIpc: (bound, trust, registrars, sourcing, recovery, shell, enrichment, logs, outbound) => {
-      runtime = bound;
-      expect(outbound).toBe(service);
+    registerApplicationIpc: (...args) => {
+      runtime = args[0];
       expect(factory).toHaveBeenCalledTimes(1);
-      return registerApplicationIpc(bound, trust, registrars, sourcing, recovery, shell, enrichment, logs, outbound);
+      return registerApplicationIpc(...args);
     },
   };
   const app = await startApplication({ appVersion: '1.0.0', userDataPath: dirname(temp.path),
     isTrustedRendererUrl: (url) => url === trustedUrl,
     registerOutboundLifecycle: callbacks => { lifecycle = callbacks; return () => undefined; }, createWindow: () => undefined }, dependencies);
-  cleanups.push(async () => {
-    await app.shutdown();
-    expect(scheduled.size).toBe(0); // Startup still owns real worker cancellation and drain.
-  });
+  cleanups.push(async () => { await app.shutdown(); });
   const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
     const handler = ipc.handlers.get(channel);
     if (!handler) throw new Error(`Missing fixture channel: ${channel}`);
@@ -166,11 +130,10 @@ async function fixture(input: {
   });
   const client = createIpcClient({ invoke });
   const api = createLeadDetailApi(client);
-  const outbound = vi.spyOn(api, 'beginOutbound'); // Observation only, real preload still executes.
   expect(await runtime.getHealth()).toMatchObject({ databaseEncrypted: true });
-  return { temp, runtime, app, service, opens, atOpen, settings, bindings, lifecycle, invoke, api, outbound, drainDiscovery,
-    setup: createPhoneSetupApi(client),
-    today: createTodayApi(client), leads: createLeadsApi(client) };
+  // Person outbound no longer crosses IPC; the route is driven through the startup-owned service.
+  return { temp, runtime, app, service, opens, atOpen, settings, bindings, lifecycle, invoke, api,
+    setup: createPhoneSetupApi(client), leads: createLeadsApi(client) };
 }
 type Fixture = Awaited<ReturnType<typeof fixture>>;
 
@@ -199,10 +162,9 @@ async function seed(f: Fixture, prefix = 'workflow'): Promise<OutboundRequest> {
       .run(channel, NOW);
     return { personId: prospect.personId, salesCycleId };
   });
-  await f.api.confirmTransition({ transition: 'review_to_ready', salesCycleId: identity.salesCycleId, expectedRevision: 0 });
-  await f.drainDiscovery();
+  // Person commands no longer cross IPC; the seeded cycle is confirmed through the domain facade.
+  await f.runtime.withDomain(domain => domain.confirmTransition({ transition: 'review_to_ready', salesCycleId: identity.salesCycleId, expectedRevision: 0 }));
   const detail = await f.api.get({ personId: identity.personId });
-  expect(detail.priorityContext).not.toBeNull(); // Real queued priority refresh completed before invariance baselines.
   return { ...identity, commandId: randomUUID(), channel: 'call', contactMethodId: `${prefix}-phone`,
     expectedContactSnapshot: detail.phones[0].contactSnapshot };
 }
@@ -234,7 +196,7 @@ describe('A3 real assembled production phone route with fictional process bounda
     expect((await f.service.getCapabilities()).phoneHandoff.state).toBe('unavailable');
     await confirm(f);
     const before = await businessRows(f);
-    const [first, duplicate] = await Promise.all([f.api.beginOutbound(request), f.api.beginOutbound(request)]);
+    const [first, duplicate] = await Promise.all([f.service.beginOutbound(request), f.service.beginOutbound(request)]);
     expect(first.status).toBe('handoff_accepted');
     expect(duplicate).toEqual(first);
     expect(f.opens).toHaveLength(1);
@@ -247,7 +209,7 @@ describe('A3 real assembled production phone route with fictional process bounda
     expect(await facts(f)).toHaveLength(3);
     await f.app.shutdown();
     const restarted = await fixture({ temp: f.temp });
-    expect(await restarted.api.beginOutbound(request)).toMatchObject({ status: 'handoff_accepted', reasonCode: null, commandId: request.commandId });
+    expect(await restarted.service.beginOutbound(request)).toMatchObject({ status: 'handoff_accepted', reasonCode: null, commandId: request.commandId });
     expect(restarted.opens).toEqual([]);
   });
 
@@ -259,7 +221,7 @@ describe('A3 real assembled production phone route with fictional process bounda
       return Promise.resolve(JSON.stringify({ version: 1, status: 'available', fingerprint: 'fictional-route' }));
     } });
     const request = await seed(f); await confirm(f); pending = true;
-    const attempt = f.api.beginOutbound(request); void attempt.catch((): undefined => undefined);
+    const attempt = f.service.beginOutbound(request); void attempt.catch((): undefined => undefined);
     await started.promise;
     if (reason === 'wake') f.lifecycle.onWake();
     else if (reason === 'lock') f.lifecycle.onLock();
@@ -271,7 +233,7 @@ describe('A3 real assembled production phone route with fictional process bounda
 
   it('keeps uninitialized registry blocked even with explicitly confirmed route', async () => {
     const f = await fixture({ initialized: false }); const request = await seed(f); await confirm(f);
-    expect((await f.api.beginOutbound(request)).reasonCode).toBe('inbound_safety_unwired');
+    expect((await f.service.beginOutbound(request)).reasonCode).toBe('inbound_safety_unwired');
     expect(f.opens).toEqual([]);
   });
 

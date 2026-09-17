@@ -62,7 +62,7 @@ it.each(['applied', 'rejected'] as const)('real pending manual report reconciles
     const client = { submit: async (command: DelegationCommand) => f.repository.queueCommand(command), sync: async () => ({ applied: 0, gaps: 0, cursor: null as null, ownerFresh: false }) } as unknown as ExecutionClient;
     const service = new LinkedInService({ repository: f.drafts, owner: { repository: f.repository, client } });
     f.api.linkedin.reportOutcome = vi.fn(input => service.reportOutcome(input));
-    render(<NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
+    render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Manual LinkedIn · Fictional Campaign PM' }));
     fireEvent.change(screen.getByLabelText('Manual outcome'), { target: { value: 'not_sent' } });
     fireEvent.click(screen.getByRole('button', { name: 'Record outcome' }));
@@ -112,7 +112,7 @@ it.each(['applied', 'rejected'] as const)('lost requested approval response reco
       f.repository.queueCommand(ownerCommandSchema.parse({ ...envelope(f, randomUUID()), kind: 'approve-requested-followup', payload: input }));
       throw Error('Lost response after durable queue');
     });
-    render(<NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
+    render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Email · Fictional Campaign PM' }));
     fireEvent.click(screen.getByRole('checkbox'));
     fireEvent.change(screen.getByLabelText('Approval expiry'), { target: { value: '2099-09-10T12:00' } });
@@ -154,7 +154,7 @@ it('real persisted second reply has exact detail, one selected row, keyboard and
   try {
     saveThread(f); saveReply(f, '1'); saveReply(f, '2');
     const error = vi.spyOn(console, 'error');
-    render(<NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
+    render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} />);
     const rows = await screen.findAllByRole('button', { name: 'Reply · Fictional Campaign PM' });
     expect(rows).toHaveLength(2);
     expect(rows[0].dataset.rowKey).not.toBe(rows[1].dataset.rowKey);
@@ -182,7 +182,7 @@ it('real no-draft placeholder transitions to a separately selectable saved reply
   const f = await fixture();
   try {
     saveThread(f);
-    render(<NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
+    render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} />);
     const row = await screen.findByRole('button', { name: 'Reply · Fictional Campaign PM' });
     const placeholderKey = row.dataset.rowKey;
     fireEvent.click(row);
@@ -213,7 +213,7 @@ it.each(['paused', 'revoked', 'foreign', 'failure', 'unrelated'] as const)('real
       rejectCommand(f, command);
       return { applied: 100, gaps: 0, cursor: null, ownerFresh: true };
     });
-    render(<NativeDeskRoute onOpenImport={(): void => undefined} firstUse={f.firstUse} api={f.api} onOpenLead={vi.fn()} />);
+    render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Email · Fictional Campaign PM' }));
     fireEvent.focus(window);
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
