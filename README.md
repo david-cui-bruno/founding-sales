@@ -50,7 +50,7 @@ The dev app creates an encrypted SQLite workspace under `~/Library/Application S
 | `src/preload.ts`, `src/preload/` | The renderer bridge exposed as window.callie: one Zod-validated API per feature in `src/preload/apis/`. |
 | `src/shared/` | Contracts shared by main, preload, renderer and worker (`src/shared/contracts/`), account ranking and the approved product facts. |
 | `cloud/lambdas/delegated-worker/` | The delegated worker Lambda: owner commands, campaigns, mail polling, research pipeline. Deployed only from `cloud/worker-terraform/`. |
-| `cloud/terraform/` and the other `cloud/lambdas/` packages | Legacy public-record sourcing stack; removal pending confirmation of its deployment (`cloud/README.md`). |
+| `cloud/terraform/modules/delegated-worker/` | The worker's Terraform module, used only by `cloud/worker-terraform/`. The legacy public-record sourcing stack was destroyed in AWS on 17 September 2026 and its code removed the same day. |
 | `native/apple-bridge/`, `contracts/apple-bridge/v1/` | Swift helper for call observation on the Mac and its fixed JSON Lines protocol. |
 | `tests/`, `test/`, `scripts/` | Vitest suites, Playwright browser specs, packaged end-to-end specs; release tooling tests; the gate and backup scripts. |
 | `docs/` | `docs/ARCHITECTURE.md`, `docs/ROADMAP.md`, dated reports and the release manual in `docs/engineering/`, superseded designs in `docs/archive/`. |
