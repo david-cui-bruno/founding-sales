@@ -21,32 +21,35 @@ it('parses both workflow sources and syntax-checks each shell gate without execu
 });
 describe('release verification documentation', () => {
   it('separates exact current24 pre-release backup from historical15 audit and the older-workspace protected-copy hold', () => {
-    const readme = readFileSync(join(projectRoot, 'README.md'), 'utf8');
-    const plan = readFileSync(join(projectRoot, 'docs/superpowers/plans/2026-09-04-runtime-recovery-security-hardening.md'), 'utf8');
-    expect(readme).toContain('exact current schema24 only');
-    expect(readme).toContain('supersedes the unreleased schema15-only host');
-    expect(readme).toContain('historical schema15 audit');
-    expect(readme).toMatch(/older founder workspace[\s\S]*separately approved protected-copy workflow/);
-    expect(readme).toMatch(/schema15[\s\S]*refused without migration or backup\/receipt writes/);
+    // The release manual moved verbatim from README.md to docs/engineering/release.md on 2026-09-16.
+    const releaseManual = readFileSync(join(projectRoot, 'docs/engineering/release.md'), 'utf8');
+    // Historical plan, archived under docs/archive/ on 2026-09-16 without content changes.
+    const plan = readFileSync(join(projectRoot, 'docs/archive/superpowers/plans/2026-09-04-runtime-recovery-security-hardening.md'), 'utf8');
+    expect(releaseManual).toContain('exact current schema24 only');
+    expect(releaseManual).toContain('supersedes the unreleased schema15-only host');
+    expect(releaseManual).toContain('historical schema15 audit');
+    expect(releaseManual).toMatch(/older founder workspace[\s\S]*separately approved protected-copy workflow/);
+    expect(releaseManual).toMatch(/schema15[\s\S]*refused without migration or backup\/receipt writes/);
     expect(plan).toMatch(/Task12[\s\S]*exact current schema16 only/);
     expect(plan).toMatch(/Task10[\s\S]*historical[\s\S]*schema15/);
   });
   it('packages before packaged E2E and verifies that artifact afterward', () => {
-    const readme = readFileSync(join(projectRoot, 'README.md'), 'utf8');
+    // The release manual moved verbatim from README.md to docs/engineering/release.md on 2026-09-16.
+    const releaseManual = readFileSync(join(projectRoot, 'docs/engineering/release.md'), 'utf8');
     const packageJson = JSON.parse(
       readFileSync(join(projectRoot, 'package.json'), 'utf8'),
     );
     expect(packageJson.scripts['verify:release']).toBe('node scripts/verifyRelease.mjs');
     expect(packageJson.scripts['test:helpers:node']).toBe('node --test test/appleBridgeBuild.test.mjs test/verifyAppleBridgePackage.test.mjs');
     expect(packageJson.scripts['test:backup:electron']).toBe('CALLIE_TEST_SYNTHETIC_ELECTRON=1 vitest run test/preReleaseElectronHost.test.mjs');
-    expect(readme).toContain('eleven independent');
-    expect(readme).toContain('CALLIE_RELEASE_OUT_DIR');
-    expect(readme).toContain('CALLIE_E2E_OUT_DIR');
-    expect(readme).toContain('ASAR SHA256');
-    expect(readme).toContain('owned encrypted migration/transition fixtures');
-    expect(readme).toContain('npm run verify:release');
-    expect(readme).toContain('CI never');
-    expect(readme).toMatch(/separately\s+authorized/);
+    expect(releaseManual).toContain('eleven independent');
+    expect(releaseManual).toContain('CALLIE_RELEASE_OUT_DIR');
+    expect(releaseManual).toContain('CALLIE_E2E_OUT_DIR');
+    expect(releaseManual).toContain('ASAR SHA256');
+    expect(releaseManual).toContain('owned encrypted migration/transition fixtures');
+    expect(releaseManual).toContain('npm run verify:release');
+    expect(releaseManual).toContain('CI never');
+    expect(releaseManual).toMatch(/separately\s+authorized/);
   });
 
   it('declares only Node release lines supported by the installed toolchain', () => {
@@ -80,9 +83,10 @@ describe('release verification documentation', () => {
   });
 
   it('documents only the Gate 0 Node 24 release line', () => {
-    const readme = readFileSync(join(projectRoot, 'README.md'), 'utf8');
+    // The release manual moved verbatim from README.md to docs/engineering/release.md on 2026-09-16.
+    const releaseManual = readFileSync(join(projectRoot, 'docs/engineering/release.md'), 'utf8');
 
-    expect(readme).toMatch(
+    expect(releaseManual).toMatch(
       /Use Node\.js 24\..*other Node majors fail closed/s,
     );
   });

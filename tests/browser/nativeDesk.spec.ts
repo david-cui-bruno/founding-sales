@@ -972,7 +972,7 @@ test('approved A presentation matches the unchanged reference in both themes and
   const reference = await context.newPage();
   const referenceRequests: string[] = [];
   await reference.route('**/*', route => { referenceRequests.push(route.request().url()); return route.abort(); });
-  await reference.setContent(readFileSync(path.resolve('docs/prototypes/2026-09-09-today-studies.html'), 'utf8'));
+  await reference.setContent(readFileSync(path.resolve('docs/archive/prototypes/2026-09-09-today-studies.html'), 'utf8'));
   await reference.locator('[data-item="nora"]').click();
   await page.getByRole('button', {name: 'Email · Account A', exact: true}).click();
   for (const width of [1440, 1050]) {

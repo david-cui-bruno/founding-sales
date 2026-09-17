@@ -15,7 +15,7 @@ const checks=[];
   const page=await context.newPage();const errors=[],requests=[];
   page.on('pageerror',error=>errors.push(error.message));page.on('request',request=>{if(/^https?:/.test(request.url()))requests.push(request.url());});
   await context.route(/^https?:/,route=>route.abort());
-  const url=pathToFileURL(path.resolve(process.env.FSS_STUDY_TARGET||'docs/prototypes/2026-09-09-today-studies.html')).href;
+  const url=pathToFileURL(path.resolve(process.env.FSS_STUDY_TARGET||'docs/archive/prototypes/2026-09-09-today-studies.html')).href;
   await page.goto(url);assert.equal(await page.locator('[data-item]').count(),8);assert.deepEqual(errors,[]);checks.push('initial render');
   assert.equal(await page.locator('button[data-study]').count(),3,'three approved visual study controls must exist');
   assert.equal(await page.locator('button[data-study=native]').getAttribute('aria-pressed'),'true');

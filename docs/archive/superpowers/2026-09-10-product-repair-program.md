@@ -2,7 +2,7 @@
 
 User approval: 2026-09-10 03:04 UTC, “go ahead,” following the written adversarial audit and the recommended repair-only approach.
 
-**Binding design:** [Adversarial product audit](../engineering/2026-09-10-adversarial-product-audit.md). The approved direction is to repair existing behavior, preserve data and useful workflows, move the existing Native Today presentation to one application root, and verify actual route/workflow joins. This is not a new visual redesign or permission to activate live services.
+**Binding design:** [Adversarial product audit](../../engineering/2026-09-10-adversarial-product-audit.md). The approved direction is to repair existing behavior, preserve data and useful workflows, move the existing Native Today presentation to one application root, and verify actual route/workflow joins. This is not a new visual redesign or permission to activate live services.
 
 ## Invariants
 

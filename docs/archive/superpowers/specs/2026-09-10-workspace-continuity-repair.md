@@ -1,7 +1,7 @@
 # Workspace continuity repair specification
 
 **Scope:** F11 in-session local-company continuity, F15 truthful diagnostic refresh and reachable fatal-startup failure, F16 source-correct retained/worker queue labels and counts, the Friday portion of F14, F18 production-adapter parity before duplicate-body removal, and retirement of stale Settings shortcut instructions.
-**Authority:** [Approved product repair program](../2026-09-10-product-repair-program.md), [audit](../../engineering/2026-09-10-adversarial-product-audit.md), coordinator's 2026-09-10 docs-only GO, and the prior source-only `continuity-design.md`. The user already approved repair-only implementation. No additional user design gate is introduced.
+**Authority:** [Approved product repair program](../2026-09-10-product-repair-program.md), [audit](../../../engineering/2026-09-10-adversarial-product-audit.md), coordinator's 2026-09-10 docs-only GO, and the prior source-only `continuity-design.md`. The user already approved repair-only implementation. No additional user design gate is introduced.
 **Status:** documentation only. Implementation remains subject to parent GO, explicit file handoffs and independently observed acceptance. Source inspection is not a runtime, performance or clean-tree result.
 **Plan:** [Exact ownership and execution](../plans/2026-09-10-workspace-continuity-repair.md).
 

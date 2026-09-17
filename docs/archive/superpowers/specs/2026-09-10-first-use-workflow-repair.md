@@ -1,6 +1,6 @@
 # First-use workflow repair specification
 
-Date: 2026-09-10. Findings: F08, F09 and F10 in [the adversarial audit](../../engineering/2026-09-10-adversarial-product-audit.md). Binding coordination: [whole-product repair program](../2026-09-10-product-repair-program.md). Execution recipe: [implementation plan](../plans/2026-09-10-first-use-workflow-repair.md).
+Date: 2026-09-10. Findings: F08, F09 and F10 in [the adversarial audit](../../../engineering/2026-09-10-adversarial-product-audit.md). Binding coordination: [whole-product repair program](../2026-09-10-product-repair-program.md). Execution recipe: [implementation plan](../plans/2026-09-10-first-use-workflow-repair.md).
 
 **Status: documentation proposal, implementation HOLD.** The assignment authorizes only this spec and its plan. The coordinator owns implementation/runtime GO, finding disposition and commits. This document is not evidence that a workflow works, that a test failed or passed, or that any account, contact, source, grant or provider is approved.
 
