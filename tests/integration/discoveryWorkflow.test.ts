@@ -2,6 +2,8 @@
 import { createElement } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+// Assembled startup through encrypted SQLite and the full preload is slow under the parallel suite; the 5 s default flaked there.
+vi.setConfig({ testTimeout: 20000 });
 import { createHash, randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
 import { openDatabase, closeDatabase, type AppDatabase } from '../../src/main/db/database';
