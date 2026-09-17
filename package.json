@@ -40,6 +40,7 @@
     "verify:secrets": "node scripts/verifySecrets.mjs",
     "release:marker": "node scripts/writeReleaseMarker.mjs",
     "backup:pre-release": "node scripts/createPreReleaseBackup.mjs",
+    "diagnose:startup": "node scripts/diagnoseStartup.mjs",
     "verify:release": "node scripts/verifyRelease.mjs"
   },
   "keywords": [],

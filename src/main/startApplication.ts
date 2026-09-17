@@ -59,6 +59,7 @@ import { registerApplicationIpc } from './ipc/registerApplicationIpc';
 import { safeStorage, dialog, shell, clipboard } from 'electron';
 import { SafeStorageKeyProtector } from './security/safeStorageKeyProtector';
 import { WorkspaceKeyStore } from './security/workspaceKeyStore';
+import { classifyStartupFailure, isStartupCancellation, type StartupStage } from './startup/startupFailure';
 import type { SafeLogger } from './logging/safeLogger';
 import { createOutboundCommandService } from './communications/outboundCommandService';
 import { createPhoneHandoffLauncher, unavailablePhoneHandoff, unavailableOutboundReadiness } from './communications/phoneHandoffLauncher';
@@ -587,10 +588,12 @@ export async function startApplication(
     return shutdownPromise;
   };
 
+  let stage: StartupStage = 'key';
   try {
     throwIfStartupCancelled(options.signal);
     await runtime.initialize();
     throwIfStartupCancelled(options.signal);
+    stage = 'compose';
     const domain: OutboundDomainGate = {
       withDomain: (operation) => runtime.withDomain((current) => operation({
         inspectOutboundCommand: (request) => current.inspectOutboundCommand(request),
@@ -746,6 +749,7 @@ export async function startApplication(
       );
       throwIfStartupCancelled(options.signal);
     }
+    stage = 'window';
     await options.createWindow();
     throwIfStartupCancelled(options.signal);
     detachStartupAbort();
@@ -762,6 +766,12 @@ export async function startApplication(
       shutdown,
     };
   } catch (startupError) {
+    // One closed-vocabulary record so a failed start leaves a trace in the
+    // local log. The dialog and the raw rejection are unchanged.
+    if (!isStartupCancellation(startupError)) {
+      options.logger?.log('error', 'STARTUP_FAILED', { component: 'startup',
+        ...classifyStartupFailure(stage === 'key' ? runtime.lastFailedStage ?? 'key' : stage, startupError) });
+    }
     try {
       await shutdown();
     } catch (cleanupError) {

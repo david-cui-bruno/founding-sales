@@ -78,6 +78,11 @@ vi.mock('../../src/main/backup/preReleaseBackupRuntime', () => ({
   isPreReleaseBackupInvocation: () => mocks.backupMode,
   runPreReleaseBackupHost: mocks.backupHost,
 }));
+vi.mock('../../src/main/diagnostics/startupDiagnoseRuntime', () => ({
+  isStartupDiagnoseInvocation: () => false,
+  runStartupDiagnoseHost: vi.fn(),
+  StartupDiagnoseRefusedError: Error,
+}));
 vi.mock('../../src/main/createWindow', () => ({
   createWindow: mocks.createWindow,
 }));

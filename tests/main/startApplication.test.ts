@@ -143,11 +143,26 @@ describe('startApplication', () => {
     if (stage === 'key') dependencies.loadWorkspaceKey = async () => { events.push('key-failed'); throw failure; };
     else if (stage === 'open') dependencies.openDatabase = () => { events.push('open-failed'); throw failure; };
     else dependencies.createDomainRuntime = () => fakeDomainRuntime({ onInitialize: () => { events.push('initialize-failed'); throw failure; } });
-    await expect(startApplication({ appVersion: '1', userDataPath: '/fixture/raw-stages', createWindow: () => { events.push('window'); } }, dependencies)).rejects.toBe(failure);
+    const log = vi.fn();
+    await expect(startApplication({ appVersion: '1', userDataPath: '/fixture/raw-stages', logger: { log }, createWindow: () => { events.push('window'); } }, dependencies)).rejects.toBe(failure);
     expect(events).not.toContain('ipc');
     expect(events).not.toContain('window');
     expect(events.filter(event => event === 'close')).toHaveLength(stage === 'initialize' ? 1 : 0);
     if (stage === 'initialize') expect(events.at(-1)).toBe('close');
+    // One closed record per failed start: the stage where it stopped and our class name, never the message.
+    expect(log.mock.calls).toEqual([['error', 'STARTUP_FAILED', { component: 'startup', stage: stage === 'initialize' ? 'domain' : stage, errorClass: 'Error' }]]);
+    expect(JSON.stringify(log.mock.calls)).not.toContain('raw ');
+  });
+
+  it('records the window stage for a failed renderer load and nothing for a cancelled start', async () => {
+    const log = vi.fn();
+    await expect(startApplication({ appVersion: '1', userDataPath: '/fixture/window-stage', logger: { log },
+      createWindow: () => { throw new Error('/Users/founder/private renderer'); } }, createDependencies([]))).rejects.toThrow('renderer');
+    expect(log.mock.calls).toEqual([['error', 'STARTUP_FAILED', { component: 'startup', stage: 'window', errorClass: 'Error' }]]);
+    const controller = new AbortController(); controller.abort(); const cancelledLog = vi.fn();
+    await expect(startApplication({ appVersion: '1', userDataPath: '/fixture/cancelled', logger: { log: cancelledLog }, signal: controller.signal,
+      createWindow: () => undefined }, createDependencies([]))).rejects.toThrow('cancelled');
+    expect(cancelledLog).not.toHaveBeenCalled();
   });
 
   it.each(['resolve', 'reject'] as const)('raw window failure remains pending until cleanup %s and preserves cleanup provenance', async outcome => {

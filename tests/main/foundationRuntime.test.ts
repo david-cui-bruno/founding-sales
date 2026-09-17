@@ -856,3 +856,44 @@ describe('FoundationRuntime', () => {
     expect(events).toEqual(['open', 'migrate', 'close']);
   });
 });
+
+describe('FoundationRuntime.lastFailedStage', () => {
+  const stageFailure = async (stage: 'key' | 'prepare' | 'open' | 'migrate' | 'domain' | 'health'): Promise<FoundationRuntime> => {
+    const failure = new Error(`private ${stage} detail`);
+    const database = { path: '/fixture/callie.sqlite3' } as AppDatabase;
+    const dependencies: FoundationRuntimeDependencies = {
+      loadWorkspaceKey: async () => { if (stage === 'key') throw failure; return { bytes: Buffer.alloc(32, 1), version: 1 }; },
+      prepareEncryptedDatabase: async () => { if (stage === 'prepare') throw failure; },
+      openDatabase: () => { if (stage === 'open') throw failure; return database; },
+      migrateToLatest: async () => { if (stage === 'migrate') throw failure; return migrationResult; },
+      createDomainRuntime: () => fakeDomainRuntime({ onInitialize: () => { if (stage === 'domain') throw failure; } }),
+      createHealthService: () => { if (stage === 'health') throw failure; return { getHealth: () => health }; },
+      closeDatabase: () => undefined,
+    };
+    const runtime = new FoundationRuntime(runtimeOptions, dependencies);
+    await expect(runtime.initialize()).rejects.toBe(failure);
+    return runtime;
+  };
+
+  it.each(['key', 'prepare', 'open', 'migrate', 'domain', 'health'] as const)('names %s as the stage where initialization stopped', async stage => {
+    const runtime = await stageFailure(stage);
+    expect(runtime.lastFailedStage).toBe(stage);
+  });
+
+  it('is undefined before any attempt and after a successful start', async () => {
+    const database = { path: '/fixture/callie.sqlite3' } as AppDatabase;
+    const runtime = new FoundationRuntime(runtimeOptions, {
+      loadWorkspaceKey: async () => ({ bytes: Buffer.alloc(32, 1), version: 1 }),
+      prepareEncryptedDatabase: async () => undefined,
+      openDatabase: () => database,
+      migrateToLatest: async () => migrationResult,
+      createDomainRuntime: () => fakeDomainRuntime(),
+      createHealthService: () => ({ getHealth: () => health }),
+      closeDatabase: () => undefined,
+    });
+    expect(runtime.lastFailedStage).toBeUndefined();
+    await runtime.initialize();
+    expect(runtime.lastFailedStage).toBeUndefined();
+    await runtime.shutdown();
+  });
+});
