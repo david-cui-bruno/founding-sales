@@ -174,7 +174,7 @@ const inspectPackagedApplication = async (userDataPath: string, inspectRecovery?
 
     // Foundation diagnostics stay reachable behind the Settings route;
     // Diagnostics is the default selected section of the master-detail.
-    await page.getByRole('link', { name: 'Settings' }).click();
+    await page.getByRole('link', { name: 'Settings', exact: true }).click();
     await expect(page.getByText('Encrypted SQLite ready')).toBeVisible();
     await expect(page.getByText('FTS5 available')).toBeVisible();
     await expect(page.getByText('Schema 27')).toBeVisible();
