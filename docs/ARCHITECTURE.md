@@ -67,7 +67,7 @@ Where tests live:
 - `test/*.test.mjs`: release tooling (marker, package verifier, secret scan, backup host). Two run under `node --test` as `npm run test:helpers:node`; the rest are vitest files.
 - `tests/browser/*.spec.ts`: Playwright Chromium against real renderer components (fixtures in `tests/fixtures/`), 1440 and 1050 wide, light and dark. `npm run test:browser:native-desk` is the CI group; the other specs run in the local combined gate.
 - `tests/e2e/*.spec.ts`: packaged-app end-to-end with a temporary `--user-data-dir` (`npm run test:e2e`, helpers in `tests/support/`). Production founder data is never read by tests.
-- Worker: `cloud/lambdas/delegated-worker/test/` via `npm test` in that package; `npm run verify:lambdas` runs all eleven Lambda packages. Swift: `npm run test:swift` (`native/apple-bridge/Tests`).
+- Worker: `cloud/lambdas/delegated-worker/test/` via `npm test` in that package; `npm run verify:lambdas` runs the two tracked Lambda packages, `shared` then `delegated-worker`, discovered from their manifests. Swift: `npm run test:swift` (`native/apple-bridge/Tests`).
 
 Gates:
 
@@ -76,6 +76,6 @@ Gates:
 - **Release workflow** (`.github/workflows/release.yml`): exact-SHA, dispatch-only, gate not publication.
 - **Combined lane gate** (coordinator, per batch): root `npm run verify`, worker test, typecheck and build, `verify:secrets`, the browser group plus the extra browser specs, on the merged candidate.
 
-## 8. Legacy sourcing stack
+## 8. Legacy sourcing stack (destroyed and removed)
 
-`cloud/terraform/` and the eight sourcing Lambdas (`cloud/lambdas/adapter-pvd-taxroll`, `adapter-boston-rentsmart`, `adapter-boston-assessments`, `scorer`, `resolver`, `enricher`, `suppression-sync`, `mail-parse`, with `cloud/lambdas/schedule-watchdog` and the `cloud/lambdas/shared` package) are the public-record sourcing pipeline that writes `CloudSourceEvent` files for the person model (`cloud/README.md`, `cloud/CONTRACT.md`). Whether it is deployed is unconfirmed; its removal is a 17 September decision pending that confirmation. `tests/infrastructure/terraformHardening.test.ts` and `tests/infrastructure/delegatedWorkerTerraformIsolation.test.ts` keep the worker root isolated from it.
+The public-record sourcing pipeline (a Terraform root at `cloud/terraform/*.tf`, eight sourcing Lambdas and a schedule watchdog under `cloud/lambdas/`) wrote `CloudSourceEvent` files for the person model. David destroyed the deployed stack in account 326255650484 on 17 September 2026 (its Lambdas, schedules, tables, buckets, SES identity and DNS records; only the delegated worker remains deployed), and Batch 6 removed its source, its contract documents and `tests/infrastructure/terraformHardening.test.ts` from the repository. `cloud/terraform/` now holds only `modules/delegated-worker`, instantiated solely from `cloud/worker-terraform/`; `tests/infrastructure/delegatedWorkerTerraformIsolation.test.ts` asserts that (`cloud/README.md`). `cloud/lambdas/shared` (the event schema) and the desktop poller under `src/main/sourcing/` remain until the legacy person routes are removed, after which `shared` is pruned.
