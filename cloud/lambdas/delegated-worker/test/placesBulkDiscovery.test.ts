@@ -17,8 +17,9 @@ import { ConditionalCommandHarness } from './sdkHarness';
 const now = '2026-09-17T12:00:00.000Z';
 const cursorKey = 'DISCOVERY_CURSOR#places-territory-v1';
 const placesUrl = 'https://places.googleapis.com/v1/places:searchText';
-const descriptor = { capability: { model: 'fictional-reviewed-model', webSearch: true as const, searchCostMicros: 40, modelCostMicros: 40 }, reviewedAt: '2026-09-17T00:00:00.000Z', expiresAt: '2026-09-18T00:00:00.000Z',
-  provenance: 'Fictional operator review. Not live access or invoice proof.', researchReservationMicros: 100, currency: 'USD' as const, placesSearchCostMicros: 35000 };
+const citedDescriptor = { capability: { model: 'fictional-reviewed-model', webSearch: true as const, searchCostMicros: 40, modelCostMicros: 40 }, reviewedAt: '2026-09-17T00:00:00.000Z', expiresAt: '2026-09-18T00:00:00.000Z',
+  provenance: 'Fictional operator review. Not live access or invoice proof.', researchReservationMicros: 100, currency: 'USD' as const };
+const descriptor = { ...citedDescriptor, placesSearchCostMicros: 35000 };
 /** Three fictional firms: Alpha (http www website, listed phone), Beta (https website, listed phone), Gamma (no website). */
 const firstPage = [
   { id: 'place-alpha', displayName: { text: 'Alpha Residential Management' }, formattedAddress: '1 Fictional St, Providence, RI', nationalPhoneNumber: '(401) 555-0101', websiteUri: 'http://www.alpha-pm.example/' },
@@ -156,7 +157,6 @@ describe('scheduled Places territory batches', () => {
 
 describe('Places readiness in the reviewed profile and setup handler', () => {
   it('reports places_credential_parameter_missing and places_cost_missing only for the Places provider', () => {
-    const { placesSearchCostMicros: _omitted, ...citedDescriptor } = descriptor;
     const cited = reviewedResearchProfile({ reviewedCapability: citedDescriptor, credentialParameterDeclared: true }, now);
     expect(cited.blockers).toEqual([]);
     const places = reviewedResearchProfile({ reviewedCapability: citedDescriptor, credentialParameterDeclared: true }, now, 'places');
@@ -165,7 +165,6 @@ describe('Places readiness in the reviewed profile and setup handler', () => {
     expect(reviewedResearchProfile({ reviewedCapability: descriptor, credentialParameterDeclared: true, placesCredentialParameterDeclared: true }, now).blockers).toEqual([]);
   });
   it('exposes Places readiness in status and refuses a Places approval while it is blocked, without touching cited approvals', async () => {
-    const { placesSearchCostMicros: _omitted, ...citedDescriptor } = descriptor;
     const blocked = await fixture({ descriptor: citedDescriptor, places: false });
     const status = researchSetupRemoteStatusSchema.parse(await blocked.status());
     expect(status.blockers).toEqual([]); expect(status.placesCredentialParameterDeclared).toBe(false);
