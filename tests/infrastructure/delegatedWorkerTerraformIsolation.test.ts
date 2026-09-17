@@ -1,12 +1,12 @@
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 // Offline source checks only. No subprocesses, Terraform, providers or network.
-// Deliberately not an HCL parser or proof of a safe live state migration.
-const legacyDir = join(process.cwd(), "cloud/terraform");
+// Deliberately not an HCL parser or proof of a safe live deployment.
+const terraformDir = join(process.cwd(), "cloud/terraform");
 const workerDir = join(process.cwd(), "cloud/worker-terraform");
-const moduleDir = join(legacyDir, "modules/delegated-worker");
+const moduleDir = join(terraformDir, "modules/delegated-worker");
 const read = (dir: string, name: string): string => readFileSync(join(dir, name), "utf8");
 const tf = (dir: string): string => readdirSync(dir)
   .filter((name) => name.endsWith(".tf"))
@@ -67,56 +67,84 @@ const defaults: Record<string, string> = {
   delegated_worker_schedule_enabled: "false",
   delegated_worker_research_once_enabled: "false",
 };
+// Inputs added after the legacy sourcing root was removed (17 September 2026): the module default is off and only the worker root wires them.
+const workerOnlyDefaults: Record<string, string> = {
+  delegated_places_enabled: "false",
+};
 const implementation = tf(moduleDir);
-const legacy = read(legacyDir, "delegated-worker.tf");
 const worker = tf(workerDir);
+const workerModule = block(worker, 'module "delegated_worker"');
 
 describe("delegated-worker Terraform source isolation", () => {
-  it("has one worker implementation and no transitive unrelated root dependencies", () => {
+  it("keeps cloud/terraform to the worker module only, the legacy sourcing root having been destroyed and removed", () => {
+    // Ignored local artifacts (.terraform, .build, backend.hcl) are not source; only source files are inventoried.
+    const rootSource = readdirSync(terraformDir).filter((name) => /\.(?:tf|example)$/.test(name));
+    expect(rootSource).toEqual([]);
+    expect(readdirSync(terraformDir)).toContain("modules");
+    expect(readdirSync(join(terraformDir, "modules")).filter((name) => !name.startsWith("."))).toEqual(["delegated-worker"]);
+    expect(readdirSync(moduleDir).filter((name) => name.endsWith(".tf")).sort()).toEqual(["main.tf", "variables.tf", "versions.tf"]);
+    expect(readdirSync(workerDir).filter((name) => name.endsWith(".tf")).sort()).toEqual(["main.tf", "providers.tf", "variables.tf", "versions.tf"]);
+  });
+
+  it("has one worker implementation whose module source path exists and no transitive unrelated root dependencies", () => {
     const declared = [...implementation.matchAll(/^(resource|data) "([^"]+)" "([^"]+)"/gm)]
       .map(([, kind, type, name]) => `${kind === "data" ? "data." : ""}${type}.${name}`);
     expect(declared.sort()).toEqual([...addresses].sort());
-    expect(legacy).not.toMatch(/^(resource|data)\s+"/m);
     expect(worker).not.toMatch(/^(resource|data|moved|import|removed)\s+["{]/m);
     expect([...worker.matchAll(/^module "([^"]+)"/gm)].map((match) => match[1])).toEqual(["delegated_worker"]);
     expect(implementation).not.toMatch(/^(module|provider)\s+"/m);
     expect(implementation).not.toMatch(/\b(?:backend|provisioner)\s+"|terraform_remote_state|\bpath\.(?:root|module)\b/);
-    expect(compact(block(legacy, 'module "delegated_worker"'))).toContain('source = "./modules/delegated-worker"');
-    expect(compact(block(worker, 'module "delegated_worker"'))).toContain('source = "../terraform/modules/delegated-worker"');
+    const source = /source\s*=\s*"([^"]+)"/.exec(workerModule)?.[1];
+    expect(source).toBe("../terraform/modules/delegated-worker");
+    expect(resolve(workerDir, source!)).toBe(moduleDir);
+    expect(existsSync(join(moduleDir, "main.tf"))).toBe(true);
     expect(implementation + worker).not.toMatch(/(?:resource|data)\s+"(?:aws_s3_|aws_ses|aws_route53_|aws_budgets_|external|terraform_remote_state)/);
-  });
-
-  it("moves all original count and for_each addresses only within the legacy state", () => {
-    const moves = [...legacy.matchAll(/moved\s*\{\s*from\s*=\s*(\S+)\s+to\s*=\s*(\S+)\s*\}/g)];
-    expect(moves.map((match) => match[1]).sort()).toEqual([...addresses].sort());
-    for (const [, from, to] of moves) expect(to).toBe(`module.delegated_worker.${from}`);
-    expect(block(legacy, 'module "delegated_worker"')).not.toMatch(/\b(?:count|for_each)\s*=/);
   });
 
   it("preserves defaults, validation and all explicit caller input wiring", () => {
     for (const [name, value] of Object.entries(defaults)) {
-      const original = block(read(legacyDir, "variables.tf"), `variable "${name}"`);
-      for (const dir of [legacyDir, workerDir, moduleDir]) {
+      const original = block(read(moduleDir, "variables.tf"), `variable "${name}"`);
+      for (const dir of [workerDir, moduleDir]) {
         const input = block(read(dir, "variables.tf"), `variable "${name}"`);
         expect(compact(input)).toContain(`default = ${value}`);
         // Generic descriptions may become worker-specific; types and validation may not.
         expect(compact(input.replace(/description\s*=\s*"[^"\n]*"/, "")))
           .toBe(compact(original.replace(/description\s*=\s*"[^"\n]*"/, "")));
       }
-      for (const caller of [legacy, worker]) {
-        expect(compact(block(caller, 'module "delegated_worker"'))).toContain(`${name} = var.${name}`);
-      }
+      expect(compact(workerModule)).toContain(`${name} = var.${name}`);
+    }
+    for (const [name, value] of Object.entries(workerOnlyDefaults)) {
+      const moduleInput = block(read(moduleDir, "variables.tf"), `variable "${name}"`);
+      const rootInput = block(read(workerDir, "variables.tf"), `variable "${name}"`);
+      for (const input of [moduleInput, rootInput]) expect(compact(input)).toContain(`default = ${value}`);
+      expect(compact(rootInput.replace(/description\s*=\s*"[^"\n]*"/, ""))).toBe(compact(moduleInput.replace(/description\s*=\s*"[^"\n]*"/, "")));
+      expect(compact(block(worker, 'module "delegated_worker"'))).toContain(`${name} = var.${name}`);
     }
     const names = [...read(workerDir, "variables.tf").matchAll(/^variable "([^"]+)"/gm)].map((match) => match[1]);
-    expect(names.sort()).toEqual(Object.keys(defaults).sort());
+    expect(names.sort()).toEqual([...Object.keys(defaults), ...Object.keys(workerOnlyDefaults)].sort());
     const moduleNames = [...read(moduleDir, "variables.tf").matchAll(/^variable "([^"]+)"/gm)].map((match) => match[1]);
-    expect(moduleNames.sort()).toEqual([...Object.keys(defaults), "worker_source_dir", "worker_output_path"].sort());
+    expect(moduleNames.sort()).toEqual([...Object.keys(defaults), ...Object.keys(workerOnlyDefaults), "worker_source_dir", "worker_output_path"].sort());
     const referenced = [...new Set([...implementation.matchAll(/\bvar\.([A-Za-z0-9_]+)/g)].map((match) => match[1]))];
     expect(referenced.sort()).toEqual(moduleNames.sort());
   });
 
+  it("adds the Places credential parameter only behind its own opt-in, symmetric with the research parameter", () => {
+    const source = compact(implementation);
+    expect(source).toContain('delegated_places_parameter = "${local.delegated_parameter_path}/places-api-credentials"');
+    expect(source).toContain('var.delegated_places_enabled ? [ "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter${local.delegated_places_parameter}" ] : []');
+    const lambda = compact(block(implementation, 'resource "aws_lambda_function" "delegated_worker"'));
+    expect(lambda).toContain('DELEGATED_PLACES_CREDENTIAL_PARAMETER = var.delegated_places_enabled ? local.delegated_places_parameter : ""');
+    for (const dir of [workerDir, moduleDir]) {
+      const input = compact(block(read(dir, "variables.tf"), 'variable "delegated_places_enabled"'));
+      expect(input).toContain("type = bool");
+      expect(input).toContain("default = false");
+      expect(input).toContain("places-api-credentials");
+    }
+    expect(compact(block(implementation, 'resource "aws_iam_role_policy" "delegated_worker"'))).not.toContain("places-api-credentials");
+  });
+
   it("bounds optional non-secret reviewed metadata without treating it as provider or pricing proof", () => {
-    for (const dir of [legacyDir, workerDir, moduleDir]) {
+    for (const dir of [workerDir, moduleDir]) {
       const input = compact(block(read(dir, "variables.tf"), 'variable "delegated_research_reviewed_capability"'));
       expect(input).toContain('type = string');
       expect(input).toContain('default = ""');
@@ -144,43 +172,41 @@ describe("delegated-worker Terraform source isolation", () => {
   });
 
   it("retains provider constraints, account allowlist and legacy tags without child provider configuration", () => {
-    const requirements = compact(block(read(legacyDir, "versions.tf"), "required_providers"));
+    const requirements = compact(block(read(moduleDir, "versions.tf"), "required_providers"));
+    expect(requirements).toContain('aws = { source = "hashicorp/aws" version = "~> 5.0" }');
+    expect(requirements).toContain('archive = { source = "hashicorp/archive" version = "~> 2.4" }');
     for (const dir of [workerDir, moduleDir]) {
       const versions = read(dir, "versions.tf");
       expect(compact(block(versions, "required_providers"))).toBe(requirements);
       expect(versions).toContain('required_version = ">= 1.9.0"');
     }
-    expect(compact(read(workerDir, "providers.tf"))).toBe(compact(read(legacyDir, "providers.tf")));
-    for (const caller of [legacy, worker]) {
-      expect(compact(block(caller, 'module "delegated_worker"'))).toContain("providers = { aws = aws archive = archive }");
-    }
+    const providers = compact(read(workerDir, "providers.tf"));
+    expect(providers).toContain('provider "aws" {');
+    expect(providers).toContain("region = var.aws_region");
+    expect(providers).toContain("allowed_account_ids = [var.aws_account_id]");
+    expect(providers).toContain('default_tags { tags = { Project = "callie-sourcing" ManagedBy = "terraform" } }');
+    expect([...worker.matchAll(/^provider "([^"]+)"/gm)].map((match) => match[1])).toEqual(["aws"]);
+    expect(compact(workerModule)).toContain("providers = { aws = aws archive = archive }");
   });
 
-  it("keeps archive evaluation disabled by default and caller paths stable and separate", () => {
+  it("keeps archive evaluation disabled by default and caller paths stable", () => {
     const archive = compact(block(implementation, 'data "archive_file" "delegated_worker"'));
     expect(archive).toContain("count = var.delegated_worker_enabled ? 1 : 0");
     expect(archive).toContain("source_dir = var.worker_source_dir");
     expect(archive).toContain("output_path = var.worker_output_path");
-    for (const caller of [legacy, worker]) {
-      expect(compact(caller)).toContain('worker_source_dir = "${path.module}/../lambdas/delegated-worker/dist"');
-      expect(compact(caller)).toContain('worker_output_path = "${path.module}/.build/delegated-worker.zip"');
-    }
-    expect(resolve(legacyDir, "../lambdas/delegated-worker/dist")).toBe(resolve(workerDir, "../lambdas/delegated-worker/dist"));
-    expect(resolve(legacyDir, ".build/delegated-worker.zip")).not.toBe(resolve(workerDir, ".build/delegated-worker.zip"));
+    expect(compact(worker)).toContain('worker_source_dir = "${path.module}/../lambdas/delegated-worker/dist"');
+    expect(compact(worker)).toContain('worker_output_path = "${path.module}/.build/delegated-worker.zip"');
+    expect(resolve(workerDir, "../lambdas/delegated-worker/dist")).toBe(join(process.cwd(), "cloud/lambdas/delegated-worker/dist"));
+    expect(existsSync(join(process.cwd(), "cloud/lambdas/delegated-worker/build.mjs"))).toBe(true);
   });
 
   it("preserves the endpoint output and disabled null behavior", () => {
-    for (const caller of [legacy, worker]) {
-      const output = compact(block(caller, 'output "delegated_worker_endpoint"'));
-      expect(output).toContain('description = "HTTPS base only, never a bearer or unauthenticated stop URL."');
-      expect(output).toContain("value = module.delegated_worker.delegated_worker_endpoint");
-    }
+    const output = compact(block(worker, 'output "delegated_worker_endpoint"'));
+    expect(output).toContain('description = "HTTPS base only, never a bearer or unauthenticated stop URL."');
+    expect(output).toContain("value = module.delegated_worker.delegated_worker_endpoint");
+    expect([...worker.matchAll(/^output "([^"]+)"/gm)].map((match) => match[1])).toEqual(["delegated_worker_endpoint"]);
     expect(compact(block(implementation, 'output "delegated_worker_endpoint"')))
       .toContain("value = var.delegated_worker_enabled ? aws_apigatewayv2_api.delegated_worker[0].api_endpoint : null");
-    expect([...read(legacyDir, "outputs.tf").matchAll(/^output "([^"]+)"/gm)].map((match) => match[1])).toEqual([
-      "raw_mail_bucket", "inbox_bucket", "ses_receipt_rule_set", "ses_inbound_domain",
-      "mail_parse_lambda_name", "app_inbox_user_name", "dynamodb_table_names",
-    ]);
   });
 
   it("retains disabled gating, resource limits, routes and application-auth boundary", () => {
@@ -208,6 +234,7 @@ describe("delegated-worker Terraform source isolation", () => {
       'DELEGATED_GOOGLE_KEY_PARAMETER = var.delegated_google_client_id == "" ? "" : local.delegated_key_parameter',
       'DELEGATED_RESEARCH_CREDENTIAL_PARAMETER = var.delegated_research_enabled ? local.delegated_research_parameter : ""',
       'DELEGATED_RESEARCH_REVIEWED_CAPABILITY = var.delegated_research_reviewed_capability',
+      'DELEGATED_PLACES_CREDENTIAL_PARAMETER = var.delegated_places_enabled ? local.delegated_places_parameter : ""',
     ]) expect(source).toContain(invariant);
     expect([...implementation.matchAll(/retention_in_days\s*=\s*(\d+)/g)].map((match) => match[1])).toEqual(["7", "7"]);
     expect([...implementation.matchAll(/"((?:GET|POST) \/[^"\n]+)"/g)].map((match) => match[1])).toEqual([
@@ -242,8 +269,10 @@ describe("delegated-worker Terraform source isolation", () => {
     expect(example).toContain("encrypt = true");
     expect(example).toContain("REVIEWED_STATE_KMS_KEY_ID");
     const review = read(workerDir, "README.md");
-    expect(review).toContain("Never enable both roots for the same resources.");
-    expect(review).toContain("Do not disable the old worker and apply as a migration");
-    expect(review).toContain("No cross-state transfer is implemented or authorized by this change.");
+    expect(review).toContain("This root is the only Terraform owner of the worker");
+    expect(review).toContain("This root does not create, migrate or import state.");
+    expect(review).toContain("Never point this root at the legacy state key `cloud/terraform.tfstate`");
+    expect(review).toContain("David destroyed the deployed legacy sourcing stack in account 326255650484 on 17 September 2026");
+    expect(review).not.toMatch(/both roots|legacy root including|moved blocks in `cloud\/terraform/);
   });
 });

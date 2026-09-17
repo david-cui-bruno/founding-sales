@@ -10,18 +10,27 @@ export type ResearchLimits = z.infer<typeof researchLimitsSchema>;
 export const audienceQuerySchema = z.strictObject({ residential: z.literal(true), regions: z.array(z.string().trim().min(1).max(200)).min(1).max(20), terms: z.array(z.string().trim().min(1).max(200)).min(1).max(20) });
 export type AudienceQuery = { residential: boolean; regions: string[]; terms: string[] };
 export type CompanyCandidate = { name: string; domain: string; sourceUrl: string };
+/** Which bulk source finds companies. Absent on a stored configuration means the original cited web search;
+ *  configurations never gain the key implicitly, so existing settings fingerprints and run ids are unchanged. */
+export const discoveryProviderSchema = z.enum(['responses_cited', 'places']);
+export type DiscoveryProvider = z.infer<typeof discoveryProviderSchema>;
+export const effectiveDiscoveryProvider = (value: DiscoveryProvider | undefined): DiscoveryProvider => value ?? 'responses_cited';
+/** One Places text-search page is at most 20 results; a Places batch never asks for more companies than one page. */
+export const PLACES_MAX_COMPANIES = 20;
 export interface CompanyDiscoveryPort { discover(query: AudienceQuery, limits: ResearchLimits, signal: AbortSignal): Promise<CompanyCandidate[]>; }
 export interface CompanyPagePort { research(snapshot: AccountEvidenceSnapshot, limits: ResearchLimits, signal: AbortSignal): Promise<AccountEvidenceBatch>; }
 export type ResearchJob = { id: string; accountId: string; limits: ResearchLimits; attempt: number; claimToken: string;
   /** Reserved before HTTP. An existing committed command means settlement only. */
-  receiptCommandId: string; receiptCommitted: boolean; costMicros: number | null };
+  receiptCommandId: string; receiptCommitted: boolean; costMicros: number | null;
+  /** Exact per-account fetch allowlist recorded when a bulk source created the company; absent means configuration sources only. */
+  permittedSources?: string[] };
 export type { AccountEvidenceReceipt };
 export type ResearchClaim = { jobId: string; claimToken: string };
 export interface AccountResearchStore {
   create(input: { commandId: string; name: string; domain: string | null }): Account | Promise<Account>;
   snapshot(accountId: string, asOf: string): AccountEvidenceSnapshot | Promise<AccountEvidenceSnapshot>;
   admitEvidence(batch: AccountEvidenceBatch, researchClaim?: ResearchClaim): AccountEvidenceReceipt | Promise<AccountEvidenceReceipt>;
-  enqueue(input: { commandId: string; accountId: string; limits: ResearchLimits }): void | Promise<void>;
+  enqueue(input: { commandId: string; accountId: string; limits: ResearchLimits; permittedSources?: string[] }): void | Promise<void>;
   claimNext(asOf: string): ResearchJob | null | Promise<ResearchJob | null>;
   settle(input: { jobId: string; claimToken: string; status: 'completed' | 'parked'; receiptCommandId: string | null; costMicros: number | null }): void | Promise<void>;
 }

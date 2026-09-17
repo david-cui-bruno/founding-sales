@@ -589,3 +589,21 @@ it('explains an empty business LinkedIn dropdown by naming the import path, neve
   expect(f.calls).toEqual([]);
   expect(f.submit).not.toHaveBeenCalled();
 });
+
+it('offers a listed business phone from a Google Business Profile and enrolls it through the same command path', async () => {
+  const f = fixture(true);
+  const snapshot = structuredClone(f.props.snapshot);
+  snapshot.accounts[0].routes = [{ ...phone, id: 'listed', verification: 'listed' }];
+  f.setSnapshot(snapshot);
+  render(<CallCampaignEnrollment {...f.props} snapshot={snapshot} />);
+  const select = screen.getByLabelText<HTMLSelectElement>('Business phone route');
+  expect([...select.options].map(option => option.value)).toEqual(['', 'listed']);
+  expect(select.options[1].text).toBe(`${phone.value} (listed)`);
+  expect(screen.getByText('Published, confirmed or listed describes source verification, not contact permission. Listed means a business directory entry, not the company\'s own page. A new execution context is a binding identity, not authority.')).toBeTruthy();
+  fireEvent.change(select, { target: { value: 'listed' } });
+  fireEvent.click(screen.getByLabelText(enrollLabel));
+  fireEvent.click(screen.getByRole('button', { name: 'Enroll company for manual call' }));
+  await waitFor(() => expect(f.submit).toHaveBeenCalledTimes(1));
+  expect(command(f)).toMatchObject({ workspaceId: 'ws', accountId: 'a', payload: { kind: 'campaign.enroll', campaignVersionId: 'version', selectedRouteId: 'listed', contextRevision: 1 } });
+  expect(f.calls.every(call => ['delegation.sync', 'daily.get', 'delegation.status'].includes(call.method))).toBe(true);
+});

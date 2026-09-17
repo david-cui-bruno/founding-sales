@@ -7,10 +7,9 @@ const root = resolve('.');
 it.each([
   ['node:fs', 'shared/src/index.ts', null],
   ['fs', 'shared/src/index.ts', null],
-  ['vitest/config', 'resolver/vitest.config.ts', '/vitest/'],
+  ['vitest/config', 'delegated-worker/vitest.config.ts', '/vitest/'],
   ['zod', 'shared/src/index.ts', '/shared/node_modules/zod/'],
-  ['@aws-sdk/client-dynamodb', 'resolver/src/handler.ts', '/resolver/node_modules/@aws-sdk/client-dynamodb/'],
-  ['@callie-sourcing/shared', 'resolver/src/handler.ts', '/shared/src/index.ts'],
+  ['@aws-sdk/client-dynamodb', 'delegated-worker/src/handler.ts', '/delegated-worker/node_modules/@aws-sdk/client-dynamodb/'],
   ['../src/sourceEvent.js', 'shared/test/sourceEvent.test.ts', '/shared/src/sourceEvent.ts'],
 ])('resolves %s from its own package without root substitutes', (source, importer, suffix) => {
   const result = resolver.resolve(source, resolve(root, 'cloud/lambdas', importer));
@@ -22,7 +21,7 @@ it.each(['missing-package', './missing.js', 'vitest/not-exported'])('does not bl
 });
 it('loads the resolver from ESLint for nested packages while root settings remain unchanged', async () => {
   const { ESLint } = require('eslint'); const eslint = new ESLint({ ignore: false });
-  const [result] = await eslint.lintText("import { defineConfig } from 'vitest/config'; export default defineConfig({});", { filePath: 'cloud/lambdas/resolver/vitest.config.ts' });
+  const [result] = await eslint.lintText("import { defineConfig } from 'vitest/config'; export default defineConfig({});", { filePath: 'cloud/lambdas/delegated-worker/vitest.config.ts' });
   expect(result.messages).toEqual([]);
   const [missing] = await eslint.lintText("import x from 'definitely-missing-package'; export default x;", { filePath: 'cloud/lambdas/shared/src/missing.ts' });
   expect(missing.messages.some(message => message.ruleId === 'import/no-unresolved')).toBe(true);
