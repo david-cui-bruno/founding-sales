@@ -1,5 +1,5 @@
 import { useModalDialog } from '../useModalDialog';
-import { Import, Search, type LucideIcon } from 'lucide-react';
+import { Search, type LucideIcon } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, KeyboardEvent, MouseEvent } from 'react';
 
@@ -10,7 +10,6 @@ import './commandPalette.css';
 
 export type CommandPaletteProps = {
   navigate(route: AppRoute): void;
-  openImport(): void;
 };
 
 type Command = {
@@ -40,12 +39,11 @@ const matchesQuery = (label: string, query: string): boolean => {
 
 /**
  * Cmd+K command palette. Offers one "Go to" command per enabled navigation
- * destination plus the global lead import, filtered as the founder types and
- * fully drivable from the keyboard. Theme and density stay in the workspace
- * header; their state lives inside that component, so the palette does not
- * duplicate it.
+ * destination, filtered as the founder types and fully drivable from the
+ * keyboard. Theme and density stay in Settings; their state lives inside that
+ * component, so the palette does not duplicate it.
  */
-export function CommandPalette({ navigate, openImport }: CommandPaletteProps) {
+export function CommandPalette({ navigate }: CommandPaletteProps) {
   const palette = useCommandPalette(() => { modal.requestDismiss('command'); });
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -54,23 +52,15 @@ export function CommandPalette({ navigate, openImport }: CommandPaletteProps) {
   const inputRef = useRef<HTMLInputElement>(null);
 
   const commands = useMemo<Command[]>(
-    () => [
-      ...navigationItems
-        .filter((item) => item.enabled)
-        .map((item) => ({
-          id: `go-${item.route}`,
-          label: `Go to ${item.label}`,
-          icon: item.icon,
-          run: () => navigate(item.route),
-        })),
-      {
-        id: 'import-leads',
-        label: 'Import leads…',
-        icon: Import,
-        run: openImport,
-      },
-    ],
-    [navigate, openImport],
+    () => navigationItems
+      .filter((item) => item.enabled)
+      .map((item) => ({
+        id: `go-${item.route}`,
+        label: `Go to ${item.label}`,
+        icon: item.icon,
+        run: () => navigate(item.route),
+      })),
+    [navigate],
   );
 
   const visible = useMemo(

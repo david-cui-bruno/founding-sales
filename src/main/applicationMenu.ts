@@ -7,12 +7,8 @@ import type { MenuItemConstructorOptions } from 'electron';
  */
 export const menuNavigationRoutes = [
   'today',
-  'leads',
-  'pipeline',
-  'conversations',
-  'learnings',
-  'friday',
-  'inbox',
+  'accounts',
+  'campaigns',
   'settings',
 ] as const;
 
@@ -33,20 +29,11 @@ export const menuNavigationScripts: Readonly<
   ) as Record<MenuNavigationRoute, string>,
 );
 
-/**
- * Import jumps to Leads and announces intent via a DOM event. Harmless when
- * the renderer has no listener yet.
- */
-export const openImportScript =
-  "window.location.hash = '#/leads'; " +
-  "window.dispatchEvent(new CustomEvent('callie:open-import'));";
-
 export type ApplicationMenuDependencies = {
   appName: string;
   platform: NodeJS.Platform;
   isPackaged: boolean;
   navigate(route: MenuNavigationRoute): void;
-  openImport(): void;
 };
 
 type NavigationEntry = {
@@ -57,12 +44,8 @@ type NavigationEntry = {
 
 const navigationEntries: readonly NavigationEntry[] = [
   { label: 'Today', accelerator: 'CmdOrCtrl+1', route: 'today' },
-  { label: 'Leads', accelerator: 'CmdOrCtrl+2', route: 'leads' },
-  { label: 'Pipeline', accelerator: 'CmdOrCtrl+3', route: 'pipeline' },
-  { label: 'Conversations', accelerator: 'CmdOrCtrl+4', route: 'conversations' },
-  { label: 'Learnings', accelerator: 'CmdOrCtrl+5', route: 'learnings' },
-  { label: 'Friday', accelerator: 'CmdOrCtrl+6', route: 'friday' },
-  { label: 'Inbox', accelerator: 'CmdOrCtrl+7', route: 'inbox' },
+  { label: 'Accounts', accelerator: 'CmdOrCtrl+2', route: 'accounts' },
+  { label: 'Campaigns', accelerator: 'CmdOrCtrl+3', route: 'campaigns' },
   { label: 'Settings', accelerator: 'CmdOrCtrl+,', route: 'settings' },
 ];
 
@@ -81,15 +64,7 @@ export function createApplicationMenuTemplate(
 
   template.push({
     label: 'File',
-    submenu: [
-      {
-        label: 'Import Leads…',
-        accelerator: 'CmdOrCtrl+I',
-        click: () => deps.openImport(),
-      },
-      { type: 'separator' },
-      { role: 'close' },
-    ],
+    submenu: [{ role: 'close' }],
   });
 
   template.push({
