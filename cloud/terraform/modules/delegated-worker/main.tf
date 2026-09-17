@@ -4,28 +4,34 @@
 #
 # Review envelope before activation: one low-volume workspace, <10k API calls/mo,
 # <=1 GiB table, 7-day bounded logs, 256 MiB/60s Lambda with concurrency 2, one KMS
-# key, two Google SecureStrings and an optional separate research SecureString.
-# Five-minute scheduling is up to 8,928 ticks per 31-day month, even while the Mac
-# sleeps. Incremental non-AI target <=$20/mo is NOT a quote or hard billing cap.
-# Review regional Lambda/DynamoDB/log/KMS/EventBridge costs and abuse exposure.
-# Provider/model/research costs and cold-mail transport require separate review.
+# key, two Google SecureStrings and optional separate research and Places
+# SecureStrings. Five-minute scheduling is up to 8,928 ticks per 31-day month,
+# even while the Mac sleeps. Incremental non-AI target <=$20/mo is NOT a quote or
+# hard billing cap. Review regional Lambda/DynamoDB/log/KMS/EventBridge costs and
+# abuse exposure. Provider/model/research/Places costs and cold-mail transport
+# require separate review; each Places text-search call is reserved at the
+# reviewed Enterprise SKU cost against the approved discovery ceiling.
 #
 # SecureString values must be provisioned separately after approval using this
 # KMS key: google-client-secret, token-encryption-key (32 random bytes/base64),
-# and, only if research is enabled, research-model-credentials (strict JSON with
-# apiKey/model). Terraform never reads/writes values. Review rotation/recovery.
+# only if research is enabled, research-model-credentials (strict JSON with
+# apiKey/model), and only if Places is enabled, places-api-credentials (strict
+# JSON with apiKey). Terraform never reads/writes values. Review rotation/recovery.
 locals {
   delegated_name               = "${var.name_prefix}-delegated-worker"
   delegated_parameter_path     = "/delegated-worker/${var.delegated_workspace_id}"
   delegated_secret_parameter   = "${local.delegated_parameter_path}/google-client-secret"
   delegated_key_parameter      = "${local.delegated_parameter_path}/token-encryption-key"
   delegated_research_parameter = "${local.delegated_parameter_path}/research-model-credentials"
+  delegated_places_parameter   = "${local.delegated_parameter_path}/places-api-credentials"
   delegated_schedule_enabled   = var.delegated_worker_enabled && var.delegated_worker_schedule_enabled
   delegated_parameter_arns = concat([
     "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter${local.delegated_secret_parameter}",
     "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter${local.delegated_key_parameter}"
     ], var.delegated_research_enabled ? [
     "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter${local.delegated_research_parameter}"
+    ] : [], var.delegated_places_enabled ? [
+    "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter${local.delegated_places_parameter}"
   ] : [])
   delegated_routes = toset([
     "POST /pairing/redeem", "POST /pairing/revoke", "POST /commands", "POST /commands/reconcile", "POST /emergency",
@@ -144,6 +150,7 @@ resource "aws_lambda_function" "delegated_worker" {
       DELEGATED_WORKER_TABLE                  = aws_dynamodb_table.delegated_worker[0].name
       DELEGATED_WORKSPACE_ID                  = var.delegated_workspace_id
       DELEGATED_RESEARCH_CREDENTIAL_PARAMETER = var.delegated_research_enabled ? local.delegated_research_parameter : ""
+      DELEGATED_PLACES_CREDENTIAL_PARAMETER   = var.delegated_places_enabled ? local.delegated_places_parameter : ""
       DELEGATED_RESEARCH_REVIEWED_CAPABILITY  = var.delegated_research_reviewed_capability
       DELEGATED_WORKER_SCHEDULE_ARN           = local.delegated_schedule_enabled ? aws_cloudwatch_event_rule.delegated_worker[0].arn : ""
       DELEGATED_WORKER_HOST                   = replace(aws_apigatewayv2_api.delegated_worker[0].api_endpoint, "https://", "")
