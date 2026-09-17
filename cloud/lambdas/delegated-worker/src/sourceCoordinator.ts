@@ -39,8 +39,11 @@ export type SourceTickReport = { status: 'inactive' | 'completed' | 'aborted'; r
   /** Present only when the research phase ran a Places territory batch. */
   places?: PlacesBatchReport };
 const PAGE_LIMIT = 25;
-// Research may create a page of companies and drain their page research within its slice; the other phases keep theirs.
-const PHASE_SLICES_MS = [20000, 10000, 10000, 10000] as const;
+/** One scheduled tick aborts after this; the 60 s Lambda timeout leaves room for setup and durable settlement. */
+export const TICK_DEADLINE_MS = 45000;
+/** Research may create a page of companies and drain their page research within its slice; the other three phases share what is left,
+ *  so the four slices always fit inside one tick. */
+export const PHASE_SLICES_MS = [20000, 8000, 8000, 8000] as const;
 const cursorSchema = z.strictObject({ after: z.string().min(1).max(2048).nullable() });
 const submittedSchema = z.strictObject({ fingerprint: z.string().regex(/^[a-f0-9]{64}$/), receipt: commandReceiptSchema,
   sequence: integer.positive(), command: ownerCommandSchema });
@@ -380,7 +383,7 @@ export function createSourceCoordinator(input: SourceCoordinatorOptions) {
     const report: SourceTickReport = { status: 'inactive', researchPrepared: 0, researchCompleted: 0, mailPolls: 0, dispatches: 0,
       sendReconciliations: 0, meetings: 0, held: 0 };
     if (callerSignal.aborted) return { ...report, status: 'aborted' };
-    const deadline = new AbortController(); const timer = setTimeout(() => deadline.abort(), 45000);
+    const deadline = new AbortController(); const timer = setTimeout(() => deadline.abort(), TICK_DEADLINE_MS);
     const signal = AbortSignal.any([callerSignal, deadline.signal]);
     const phases = [research, configurations, submittedCommands, publications] as const;
     const key = 'SOURCE_PHASE_CURSOR';

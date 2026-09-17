@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { createSourceCoordinator } from '../src/sourceCoordinator';
 import { WorkerAuth } from '../src/workerAuth';
 import { RemoteGoogleAuthorization } from '../src/remoteGoogleAuthorization';
-import { ResearchSetupService, guidedResearchBudgetId, reviewedResearchProfile, type ResearchSetupProfile } from '../src/researchSetup';
+import { ResearchSetupService, placesResearchBudgetId, reviewedResearchProfile, type ResearchSetupProfile } from '../src/researchSetup';
 import { budgetKey } from '../src/discoveryReservationStore';
 import { createWorkerAccountRepository, accountRecordSchema } from '../src/workerAccountRepository';
 import { runResearch } from '../src/researchCoordinator';
@@ -15,7 +15,7 @@ import { researchSetupRemoteStatusSchema, type ResearchSetupRequest } from '../.
 import { ConditionalCommandHarness } from './sdkHarness';
 
 const now = '2026-09-17T12:00:00.000Z';
-const cursorKey = 'DISCOVERY_CURSOR#guided-research-v1';
+const cursorKey = 'DISCOVERY_CURSOR#places-territory-v1';
 const placesUrl = 'https://places.googleapis.com/v1/places:searchText';
 const descriptor = { capability: { model: 'fictional-reviewed-model', webSearch: true as const, searchCostMicros: 40, modelCostMicros: 40 }, reviewedAt: '2026-09-17T00:00:00.000Z', expiresAt: '2026-09-18T00:00:00.000Z',
   provenance: 'Fictional operator review. Not live access or invoice proof.', researchReservationMicros: 100, currency: 'USD' as const, placesSearchCostMicros: 35000 };
@@ -87,7 +87,7 @@ describe('scheduled Places territory batches', () => {
       expect(source.excerpt).toContain(phone.replace('+1', '').replace(/(\d{3})(\d{3})(\d{4})/, '($1) $2-$3'));
       expect(f.db.inspect(`FETCHED#${source.id}`)).toMatchObject({ accountId: record.account.id });
     }
-    expect(f.db.inspect(budgetKey(guidedResearchBudgetId))).toMatchObject({ spent: 35000 });
+    expect(f.db.inspect(budgetKey(placesResearchBudgetId))).toMatchObject({ spent: 35000 });
     const jobs = (await f.store.list<{ accountId: string; state: string; permittedSources?: string[] }>('JOB#')).map(row => row.stored.data).sort((a, b) => a.accountId.localeCompare(b.accountId));
     expect(jobs).toHaveLength(2);
     expect(jobs.map(job => job.state)).toEqual(['completed', 'completed']);
@@ -112,13 +112,13 @@ describe('scheduled Places territory batches', () => {
     expect(f.requests[2]!.body).toEqual({ textQuery: 'property management company in Boston, MA', pageSize: 20 });
     expect(third.places).toMatchObject({ outcome: 'completed', created: 1 });
     expect(f.db.inspect(cursorKey)).toMatchObject({ queryIndex: 2, page: 0, nextPageToken: null, exhausted: true, ordinal: 3 });
-    expect(f.db.inspect(budgetKey(guidedResearchBudgetId))).toMatchObject({ spent: 105000 });
+    expect(f.db.inspect(budgetKey(placesResearchBudgetId))).toMatchObject({ spent: 105000 });
     const runIds = new Set((await f.store.list('DISCOVERY#')).map(row => row.key));
     expect(runIds.size).toBe(3);
     const exhausted = await f.tick();
     expect(f.requests).toHaveLength(3);
     expect(exhausted.places).toMatchObject({ outcome: 'exhausted' });
-    expect(f.db.inspect(budgetKey(guidedResearchBudgetId))).toMatchObject({ spent: 105000 });
+    expect(f.db.inspect(budgetKey(placesResearchBudgetId))).toMatchObject({ spent: 105000 });
     expect(await f.store.list('DISCOVERY#')).toHaveLength(3);
     expect((await records(f)).map(record => record.account.domain)).toEqual(['alpha-pm.example', 'beta-group.example', 'delta-homes.example', 'epsilon-care.example']);
   });
@@ -126,25 +126,25 @@ describe('scheduled Places territory batches', () => {
     const f = await fixture({ replies: [new Error('fictional lost response'), { places: bostonPage }] }); await f.approve();
     const first = await f.tick();
     expect(first.places).toMatchObject({ outcome: 'uncertain', runId: expect.any(String), created: 0 }); expect(first.held).toBeGreaterThan(0);
-    expect(f.db.inspect(budgetKey(guidedResearchBudgetId))).toMatchObject({ spent: 35000 });
+    expect(f.db.inspect(budgetKey(placesResearchBudgetId))).toMatchObject({ spent: 35000 });
     expect(await f.store.list('ACCOUNT#')).toEqual([]);
     const settled = await f.tick();
     expect(f.requests).toHaveLength(1);
     expect(settled.places).toMatchObject({ outcome: 'uncertain', created: 0 });
     expect(f.db.inspect(cursorKey)).toMatchObject({ queryIndex: 1, page: 0, nextPageToken: null, exhausted: false, ordinal: 1 });
-    expect(f.db.inspect(budgetKey(guidedResearchBudgetId))).toMatchObject({ spent: 35000 });
+    expect(f.db.inspect(budgetKey(placesResearchBudgetId))).toMatchObject({ spent: 35000 });
     const third = await f.tick();
     expect(f.requests).toHaveLength(2);
     expect(f.requests[1]!.body).toEqual({ textQuery: 'property management company in Boston, MA', pageSize: 20 });
     expect(third.places).toMatchObject({ outcome: 'completed', created: 1 });
-    expect(f.db.inspect(budgetKey(guidedResearchBudgetId))).toMatchObject({ spent: 70000 });
+    expect(f.db.inspect(budgetKey(placesResearchBudgetId))).toMatchObject({ spent: 70000 });
   });
   it('holds a Places configuration when the discovery ceiling cannot cover one more call and when invoked as research.once', async () => {
     const f = await fixture({ discoveryCeilingMicros: 35000 }); await f.approve();
     await f.tick(); expect(f.requests).toHaveLength(1);
     const denied = await f.tick();
     expect(f.requests).toHaveLength(1); expect(denied.places).toMatchObject({ outcome: 'denied' });
-    expect(f.db.inspect(budgetKey(guidedResearchBudgetId))).toMatchObject({ spent: 35000 });
+    expect(f.db.inspect(budgetKey(placesResearchBudgetId))).toMatchObject({ spent: 35000 });
     const g = await fixture(); await g.approve();
     const config = (await g.store.get<{ revision: number; research: unknown }>('OWNER_RESEARCH_SOURCE'))!.data;
     const report = { status: 'inactive' as const, researchPrepared: 0, researchCompleted: 0, held: 0, mailPolls: 0, dispatches: 0, sendReconciliations: 0, meetings: 0 };
@@ -180,8 +180,8 @@ describe('Places readiness in the reviewed profile and setup handler', () => {
     const readyStatus = researchSetupRemoteStatusSchema.parse(await ready.status());
     expect(readyStatus.placesBlockers).toEqual([]); expect(readyStatus.placesCredentialParameterDeclared).toBe(true);
     expect(await ready.approve()).toMatchObject({ status: 'applied', revision: 1, state: 'active' });
-    expect(ready.db.inspect('OWNER_RESEARCH_SOURCE')).toMatchObject({ research: { discoveryProvider: 'places', permittedSources: [], discoveryLimits: { maxCompanies: 20, maxCostMicros: 35000 } } });
-    expect(ready.db.inspect(budgetKey(guidedResearchBudgetId))).toMatchObject({ limit: 105000, spent: 0 });
+    expect(ready.db.inspect('OWNER_RESEARCH_SOURCE')).toMatchObject({ research: { discoveryProvider: 'places', budgetId: placesResearchBudgetId, permittedSources: [], discoveryLimits: { maxCompanies: 20, maxCostMicros: 35000 } } });
+    expect(ready.db.inspect(budgetKey(placesResearchBudgetId))).toMatchObject({ limit: 105000, spent: 0 });
   });
   it('declares the Places credential parameter only under the workspace prefix and reads it as a SecureString JSON key', async () => {
     const env = { DELEGATED_WORKSPACE_ID: 'ws', DELEGATED_RESEARCH_CREDENTIAL_PARAMETER: '/delegated-worker/ws/research-model-credentials', DELEGATED_PLACES_CREDENTIAL_PARAMETER: '/delegated-worker/ws/places-api-credentials', AWS_REGION: 'us-east-1' };

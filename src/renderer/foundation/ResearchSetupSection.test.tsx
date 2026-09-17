@@ -294,6 +294,76 @@ describe('Google Places territory batches in Cloud research settings', () => {
       capability: { model: 'fictional-reviewed-model', webSearch: true, searchCostMicros: 100000, modelCostMicros: 100000 }, maxAccountBudgetMicros: 200000, permittedSources: [], preparationCommandId: requestId, discoveryProvider: 'places' } };
     await mount(api(value));
     expect(screen.getByText('Discovery provider: Google Places (territory batches). Companies per batch: 20.')).toBeTruthy();
-    expect(screen.queryByText(/Official websites:/)).toBeNull(); expect(screen.queryByLabelText('Discovery provider')).toBeNull();
+    expect(screen.queryByText(/Official websites:/)).toBeNull();
+    // The replace form is prefilled from the Places policy: its provider is selected and no website list is offered.
+    expect(provider().value).toBe('places'); expect(input(/Companies per batch/).value).toBe('20'); expect(screen.queryByLabelText(/Official website URLs/)).toBeNull();
+  });
+});
+
+describe('replacing an existing research configuration', () => {
+  const providerSelect = () => screen.getByLabelText('Discovery provider') as HTMLSelectElement;
+  const research = (provider?: 'places') => ({ workspaceId: identity.workspaceId, budgetId: provider ? 'places-territory-v1' : 'guided-research-v1',
+    audience: { residential: true as const, regions: ['Providence, RI', 'Boston, MA'], terms: ['property management company'] }, audienceRevision: 1, sourceRevision: 1, budgetRevision: 1,
+    discoveryLimits: { maxCompanies: provider ? 20 : 1, maxPages: 2, maxBytes: 20000, maxCostMicros: provider ? 35000 : 200000 }, researchLimits: { maxCompanies: provider ? 20 : 1, maxPages: 2, maxBytes: 20000, maxCostMicros: 200000 },
+    capability: { model: 'fictional-reviewed-model', webSearch: true as const, searchCostMicros: 100000, modelCostMicros: 100000 }, maxAccountBudgetMicros: 200000,
+    permittedSources: provider ? [] : ['https://example.com/'], preparationCommandId: requestId, ...(provider ? { discoveryProvider: 'places' as const } : {}) });
+  function configured(revision = 8, provider?: 'places'): ResearchSetupStatus {
+    const value = status();
+    value.remote!.descriptor!.placesSearchCostMicros = 35000; value.remote!.placesCredentialParameterDeclared = true; value.remote!.placesBlockers = [];
+    value.remote!.selector = { version: 1, workspaceId: identity.workspaceId, pairingId, revision, state: 'active', research: research(provider) };
+    value.remote!.discoveryLedger = { limitMicros: 2000000, reservedOrSpentMicros: 1000000, remainingMicros: 1000000 };
+    value.remote!.researchLedger = { limitMicros: 3000000, reservedOrSpentMicros: 0, remainingMicros: 3000000 };
+    return value;
+  }
+  it('prefills the current policy and ceilings, explains what replacing keeps, and sends the current revision with the new shape', async () => {
+    const a = api(configured()); a.approve.mockResolvedValue({ ...applied, revision: 9 }); await mount(a);
+    expect(screen.getByRole('heading', { name: 'Existing policy (read-only): active' })).toBeTruthy();
+    expect(screen.queryByText('First-use research policy')).toBeNull(); expect(screen.queryByRole('button', { name: 'Approve research' })).toBeNull();
+    expect(providerSelect().value).toBe('responses_cited');
+    expect(input(/Residential regions/).value).toBe('Providence, RI\nBoston, MA'); expect(input(/Targeting terms/).value).toBe('property management company');
+    expect(input(/Official website URLs/).value).toBe('https://example.com/'); expect(input(/Maximum companies/).value).toBe('1');
+    expect(input(/Maximum pages/).value).toBe('2'); expect(input(/Maximum bytes/).value).toBe('20000');
+    expect(input(/Discovery cumulative/).value).toBe('2'); expect(input(/Research cumulative/).value).toBe('3');
+    expect(screen.getByText('Replacing keeps spent budget and the admission fence; it changes what the worker discovers next.')).toBeTruthy();
+    const replace = button('Replace configuration'); expect(replace.disabled).toBe(true);
+    fireEvent.change(providerSelect(), { target: { value: 'places' } }); fireEvent.change(input(/Companies per batch/), { target: { value: '20' } });
+    fireEvent.change(input(/Discovery cumulative/), { target: { value: '2.5' } });
+    expect(replace.disabled).toBe(true); fireEvent.click(ack()); expect(replace.disabled).toBe(false); expect(button('Pause research').disabled).toBe(false);
+    fireEvent.click(replace); await idle();
+    expect(a.approve).toHaveBeenCalledWith({ expectedRevision: 8, descriptorFingerprint: fingerprint, discoveryProvider: 'places',
+      audience: { residential: true, regions: ['Providence, RI', 'Boston, MA'], terms: ['property management company'] }, permittedSources: [],
+      maxCompanies: 20, maxPages: 2, maxBytes: 20000, discoveryCeilingMicros: 2500000, researchCeilingMicros: 3000000, disclosureAcknowledged: true });
+    expect(a.setState).not.toHaveBeenCalled(); expect(a.status).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(/Research policy request applied\. Refresh for current policy/)).toBeTruthy();
+  });
+  it('treats a receipt that is not the next revision as unknown, and blocks replacing when the proposal provider is not ready', async () => {
+    const a = api(configured()); a.approve.mockResolvedValue({ ...applied, revision: 1 }); await mount(a);
+    fireEvent.click(ack()); fireEvent.click(button('Replace configuration')); await idle();
+    expect(a.approve).toHaveBeenCalledTimes(1); expect(screen.getByText(/Request outcome unknown/)).toBeTruthy();
+    cleanup();
+    const blocked = configured(); blocked.remote!.placesBlockers = ['places_cost_missing']; delete blocked.remote!.descriptor!.placesSearchCostMicros;
+    const b = api(blocked); await mount(b);
+    fireEvent.click(ack()); expect(button('Replace configuration').disabled).toBe(false);
+    fireEvent.change(providerSelect(), { target: { value: 'places' } }); fireEvent.change(input(/Companies per batch/), { target: { value: '20' } }); fireEvent.click(ack());
+    expect(button('Replace configuration').disabled).toBe(true); expect(screen.getByText(/carry no Places cost per call/)).toBeTruthy();
+    expect(button('Pause research').disabled).toBe(false); expect(b.approve).not.toHaveBeenCalled();
+  });
+  it('keeps in-progress edits across a same-revision Refresh and re-prefills only when the policy revision changes', async () => {
+    const a = api(configured()); await mount(a);
+    fireEvent.change(input(/Residential regions/), { target: { value: 'Dallas, TX' } });
+    fireEvent.click(button('Refresh')); await idle();
+    expect(input(/Residential regions/).value).toBe('Dallas, TX');
+    const next = configured(9); next.remote!.selector!.research!.audience.regions = ['Fort Worth, TX'];
+    a.status.mockResolvedValue(next); fireEvent.click(button('Refresh')); await idle();
+    expect(input(/Residential regions/).value).toBe('Fort Worth, TX'); expect(a.approve).not.toHaveBeenCalled();
+  });
+  it('offers no replace action without a stored policy and keeps first-use approval at revision 0', async () => {
+    const a = api(); await mount(a); fill(); fireEvent.click(ack());
+    expect(screen.queryByRole('button', { name: 'Replace configuration' })).toBeNull();
+    fireEvent.click(button('Approve research')); await idle();
+    expect(a.approve.mock.calls[0]![0].expectedRevision).toBe(0);
+    cleanup();
+    const bare = policyStatus(); await mount(api(bare));
+    expect(screen.queryByRole('button', { name: 'Replace configuration' })).toBeNull(); expect(screen.queryByLabelText(/Residential regions/)).toBeNull();
   });
 });
