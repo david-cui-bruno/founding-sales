@@ -2,7 +2,9 @@ import { ResearchDiscoveryError } from '../../../../src/main/research/researchDi
 import { assertGuidedResearch, guardGuidedResearch, reviewedResearchProfile, guidedResearchMarkerKey, researchSelectorPauseKey, researchSelectorPauseSchema, type ResearchSetupProfile } from './researchSetup';
 import { TransactWriteItemsCommand } from '@aws-sdk/client-dynamodb';
 import { ownerResearchSourceSchema, ownerResearchSourceKey, type OwnerResearchSource } from '../../../../src/shared/contracts/ownerCommandContract';
-import { PLACES_SEARCH_COST_MICROS } from '../../../../src/shared/contracts/researchSetupContract';
+import { PLACES_SEARCH_COST_MICROS, type TickPhaseHold, type TickPhaseHoldReason } from '../../../../src/shared/contracts/researchSetupContract';
+import { tickErrorClass } from './tickLog';
+import { z } from 'zod';
 import type { AccountEvidenceBatch, AccountSource } from '../../../../src/shared/contracts/accountContract';
 import { pairingKey, type WorkerAuth } from './workerAuth';
 import { fingerprint, type DynamoAdapter, type DynamoStore, type RepositoryOptions } from './dynamoStore';
@@ -47,6 +49,38 @@ async function pauseExpiredSelector(store: DynamoStore, row: { rev: number }, co
   await store.transact([store.put(ownerResearchSourceKey(), paused, row.rev), store.check(guidedResearchMarkerKey, marker.rev), store.put(researchSelectorPauseKey, record, reason?.rev ?? null)]);
   report.selfPaused = true;
 }
+/** The approving pairing is no longer the principal the phase needs. */
+const PAIRING_CONDITIONS = ['research_pairing_changed', 'worker_unauthorized', 'worker_scope_denied', 'pairing_rate_limited'];
+/** The stored selector, its marker binding or a job's limits changed under the phase; nothing about the operator review lapsed. */
+const CONFIG_CONDITIONS = ['research_config_mismatch', 'research_source_changed', 'research_setup_binding_conflict', 'research_setup_marker_changed',
+  'research_setup_identity_conflict', 'research_model_mismatch', 'research_job_config_mismatch', 'research_next_binding_changed', 'research_cycle_binding_changed', 'research_selection_conflict'];
+const markerFingerprintSchema = z.object({ descriptorFingerprint: z.string().regex(/^[a-f0-9]{64}$/) });
+/** Why the research phase did not do its work, from the state as it stands now, so the tick record and Settings can say it in words.
+ *  Reads only, never throws, and carries no message: only a closed reason and (for `phase_error`) a recognized constructor class. */
+export async function classifyResearchPhaseHold(input: ResearchCoordinatorOptions, error: unknown): Promise<TickPhaseHold> {
+  const named = (reason: TickPhaseHoldReason): TickPhaseHold => ({ reason, errorClass: null });
+  const code = error instanceof Error ? error.message : '';
+  try {
+    if (code === 'research_setup_marker_missing') return named('setup_marker_missing');
+    if (PAIRING_CONDITIONS.includes(code)) return named('pairing_inactive');
+    if (code === 'research_setup_descriptor_unavailable') {
+      const store = input.auth.store;
+      const row = await store.get<unknown>(ownerResearchSourceKey());
+      const config = row ? ownerResearchSourceSchema.safeParse(row.data) : null;
+      const provider = effectiveDiscoveryProvider(config?.success ? config.data.research?.discoveryProvider : undefined);
+      const current = reviewedResearchProfile(input.researchSetupProfile ?? {}, store.now(), provider);
+      if (current.blockers.includes('operator_descriptor_expired')) return named('descriptor_expired');
+      const marker = await store.get<unknown>(guidedResearchMarkerKey);
+      if (!marker) return named('setup_marker_missing');
+      const bound = markerFingerprintSchema.safeParse(marker.data);
+      // The marker David's approval wrote no longer names the deployed descriptor: the desktop's Replace configuration rebinds it.
+      if (bound.success && current.descriptorFingerprint !== bound.data.descriptorFingerprint) return named('descriptor_changed');
+      return named('config_mismatch');
+    }
+    if (CONFIG_CONDITIONS.includes(code)) return named('config_mismatch');
+  } catch { /* Classification is a read-only best effort; a failed read must never replace the phase's own failure. */ }
+  return { reason: 'phase_error', errorClass: tickErrorClass(error) };
+}
 /** After the research phase: what the active policy can still spend, for the tick record and the Settings ceiling line. Reads only. */
 async function recordLedger(store: DynamoStore, budgetId: string, report: SourceTickReport): Promise<void> {
   const discovery = await store.get<unknown>(budgetKey(budgetId)); const research = await store.get<unknown>('BUDGET#research');
@@ -65,7 +99,9 @@ export async function runResearch(input: ResearchCoordinatorOptions, signal: Abo
       if (!once) {
         const reason = await store.get<unknown>(researchSelectorPauseKey);
         const parsed = reason ? researchSelectorPauseSchema.safeParse(reason.data) : null;
-        if (parsed?.success && parsed.data.revision === config.revision && parsed.data.reason === 'descriptor_expired') report.descriptorExpired = true;
+        if (parsed?.success && parsed.data.revision === config.revision && parsed.data.reason === 'descriptor_expired') {
+          report.descriptorExpired = true; report.phaseHolds.research = { reason: 'descriptor_expired', errorClass: null };
+        }
       }
       return;
     }
@@ -73,6 +109,7 @@ export async function runResearch(input: ResearchCoordinatorOptions, signal: Abo
     const provider = effectiveDiscoveryProvider(settings.discoveryProvider);
     if (!once && reviewedResearchProfile(input.researchSetupProfile ?? {}, store.now(), provider).blockers.includes('operator_descriptor_expired')) {
       report.descriptorExpired = true; report.status = 'completed';
+      report.phaseHolds.research = { reason: 'descriptor_expired', errorClass: null };
       await pauseExpiredSelector(store, row, config, report);
       return;
     }

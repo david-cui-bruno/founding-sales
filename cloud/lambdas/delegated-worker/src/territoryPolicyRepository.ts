@@ -1,6 +1,7 @@
 import { z } from 'zod';
-import type { TransactWriteItem } from '@aws-sdk/client-dynamodb';
+import { QueryCommand, type TransactWriteItem } from '@aws-sdk/client-dynamodb';
 import { accountIdSchema as id, accountInstantSchema as instant } from '../../../../src/shared/contracts/accountContract';
+import { accountRecordSchema, type AccountRecord } from '../../../../src/shared/contracts/accountRecordContract';
 import { commandReceiptSchema, workerEventSchema, type CommandReceipt } from '../../../../src/shared/contracts/delegationContract';
 import { ownerSourceConfigurationSchema, ownerSourceKey, type TerritoryPolicyCommand } from '../../../../src/shared/contracts/ownerCommandContract';
 import { deriveTerritoryCampaignVersion, territoryCallPolicyId, territoryCallPolicySchema, territoryEnrollmentCommandId, territoryEnrollmentId, territoryExecutionContextId,
@@ -12,6 +13,24 @@ import { DynamoStore, fingerprint, integer, keyPart, type RepositoryOptions, typ
 
 export const territoryCallPolicyKey = (workspaceId: string) => `TERRITORY_CALL_POLICY#${keyPart(workspaceId)}`;
 export const territoryEnrollmentKey = (accountId: string) => `TERRITORY_ENROLLMENT#${keyPart(accountId)}`;
+/** Where the backfill sweep keeps its position. It wraps: reaching the end of the table returns the cursor to the start, so a firm whose
+ *  listed route was admitted after the last pass is picked up on a later one. A firm already enrolled costs one read and nothing else. */
+export const territoryBackfillCursorKey = 'TERRITORY_BACKFILL_CURSOR';
+const ACCOUNT_PREFIX = 'ACCOUNT#';
+/** At most this many firms per scheduled tick (the brief's cap): one bounded query and at most one enrollment transaction each. */
+export const TERRITORY_BACKFILL_TICK_LIMIT = 50;
+/** What the approval receipt path sweeps inline so the first firms appear on David's click instead of on the next tick. Kept small: it runs inside one HTTP request. */
+export const TERRITORY_BACKFILL_APPROVAL_LIMIT = 10;
+const territoryBackfillCursorSchema = z.strictObject({ version: z.literal(1), after: z.string().min(1).max(2048).nullable() });
+export type TerritoryBackfillCursor = z.infer<typeof territoryBackfillCursorSchema>;
+export type TerritoryBackfillReport = { outcome: 'completed' | 'exhausted' | 'no_policy' | 'policy_paused' | 'held'; scanned: number; enrolled: number; replayed: number;
+  skipped: { policy_paused: number; authority_exists: number; route_unavailable: number; enrollment_failed: number } };
+export const emptyTerritoryBackfillReport = (): TerritoryBackfillReport =>
+  ({ outcome: 'no_policy', scanned: 0, enrolled: 0, replayed: 0, skipped: { policy_paused: 0, authority_exists: 0, route_unavailable: 0, enrollment_failed: 0 } });
+/** The route the policy enrolls a firm on: an admitted listed business phone, exactly what the Places path admits at create time. */
+export function listedBusinessRoute(record: AccountRecord): string | null {
+  return record.routes.find(route => route.channel === 'phone' && route.purpose === 'business' && route.verification === 'listed')?.id ?? null;
+}
 const heldStepSchema = z.strictObject({ stepId: id, channel: z.literal('email'), reason: z.literal(TERRITORY_EMAIL_HOLD_REASON) });
 /** What one firm received under the policy, keyed by the firm: the replay record a repeated create answers from. */
 export const territoryEnrollmentRecordSchema = z.strictObject({ policyId: id, revision: integer.positive(), accountId: id, routeId: id, commandId: z.uuid(), versionId: id, enrollmentId: id,
@@ -122,6 +141,70 @@ export class TerritoryPolicyRepository {
     }
     await this.store.publish(outbox.sequence);
     return { outcome: 'enrolled', ...record };
+  }
+  /** One bounded ascending page of account records after the cursor. `truncated` is true whenever there may be more firms
+   * beyond the last row returned, so a server-side 1 MB cut is never mistaken for the end of the table. */
+  private async accountPage(after: string | null, limit: number): Promise<{ rows: { key: string; record: AccountRecord }[]; truncated: boolean }> {
+    const result = await this.store.options.dynamo.send(new QueryCommand({ TableName: this.store.options.tableName, ConsistentRead: true, Limit: limit,
+      KeyConditionExpression: '#pk = :pk AND begins_with(#sk, :prefix)', ExpressionAttributeNames: { '#pk': 'pk', '#sk': 'sk' },
+      ExpressionAttributeValues: { ':pk': this.store.key('').pk, ':prefix': { S: ACCOUNT_PREFIX } }, ...(after ? { ExclusiveStartKey: this.store.key(after) } : {}) }));
+    const rows: { key: string; record: AccountRecord }[] = [];
+    let truncated = typeof result.LastEvaluatedKey?.sk?.S === 'string';
+    for (const item of result.Items ?? []) {
+      const key = item.sk?.S;
+      if (item.pk?.S !== this.store.key('').pk.S || !key?.startsWith(ACCOUNT_PREFIX) || typeof item.data?.S !== 'string') throw new Error('territory_backfill_page_mismatch');
+      // Everything at or before the cursor is already swept; the page cap is enforced here and never left to the server's Limit.
+      if (after && key <= after) continue;
+      if (rows.length >= limit) { truncated = true; break; }
+      rows.push({ key, record: accountRecordSchema.parse(JSON.parse(item.data.S)) });
+    }
+    return { rows, truncated };
+  }
+  /** Give territory authority to firms that already existed when the policy was approved (the 97 Places firms admitted before any
+   * policy existed). Bounded: at most `limit` firms per call, the position persisted after every firm so a crash or a phase deadline
+   * resumes instead of starting the table again. Idempotent by the enrollment record: a repeated sweep replays and creates nothing.
+   * Expected holds are counted, never thrown; an unexpected enrollment failure is counted and the sweep moves on. Nothing here dials,
+   * sends or books, and it produces exactly the `authority.granted` shape `applyTerritoryPolicy` already produces. */
+  async sweepTerritoryBackfill(input: { limit: number; signal?: AbortSignal; onFirm?: (accountId: string) => void }): Promise<TerritoryBackfillReport> {
+    const report = emptyTerritoryBackfillReport();
+    const limit = Math.max(0, Math.min(Math.trunc(input.limit), TERRITORY_BACKFILL_TICK_LIMIT));
+    const current = await this.read();
+    if (!current) return report;
+    if (current.data.state !== 'active') return { ...report, outcome: 'policy_paused' };
+    const row = await this.store.get<unknown>(territoryBackfillCursorKey);
+    const stored = row ? territoryBackfillCursorSchema.safeParse(row.data) : null;
+    let after = stored?.success ? stored.data.after : null;
+    let revision = row?.rev ?? null;
+    const persist = async (next: string | null) => {
+      await this.store.transact([this.store.put(territoryBackfillCursorKey, { version: 1, after: next } satisfies TerritoryBackfillCursor, revision)]);
+      revision = (revision ?? 0) + 1; after = next;
+    };
+    if (limit === 0 || input.signal?.aborted) return { ...report, outcome: 'held' };
+    const page = await this.accountPage(after, limit);
+    for (const { key, record } of page.rows) {
+      if (input.signal?.aborted) return { ...report, outcome: 'held' };
+      report.scanned++;
+      const routeId = listedBusinessRoute(record);
+      // An enrolled firm is answered from its own record: the sweep never re-enters the enrollment path, so a resting sweep grants and publishes nothing.
+      if (await this.store.get(territoryEnrollmentKey(record.account.id))) report.replayed++;
+      else if (!routeId) report.skipped.route_unavailable++;
+      else {
+        try {
+          const outcome = await this.applyTerritoryPolicy(record.account.id, routeId);
+          if (outcome.outcome === 'enrolled') report.enrolled++;
+          else if (outcome.outcome === 'replayed') report.replayed++;
+          // A policy that vanished under the sweep is the same condition as a paused one: the firm is untouched and a later pass sweeps it.
+          else if (outcome.outcome === 'no_policy') report.skipped.policy_paused++;
+          else report.skipped[outcome.outcome]++;
+        } catch { report.skipped.enrollment_failed++; }
+      }
+      // The position advances per firm, after the firm's own transaction, so a resumed sweep continues instead of starting the table again.
+      await persist(key);
+      input.onFirm?.(record.account.id);
+    }
+    // Reaching the end wraps the cursor: the next pass starts at the top and costs one read per already-enrolled firm.
+    if (!page.truncated) { await persist(null); return { ...report, outcome: 'exhausted' }; }
+    return { ...report, outcome: 'completed' };
   }
 }
 export function createTerritoryPolicyRepository(options: RepositoryOptions): TerritoryPolicyRepository { return new TerritoryPolicyRepository(options); }

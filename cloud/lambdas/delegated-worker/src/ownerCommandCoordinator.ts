@@ -22,7 +22,7 @@ import { DynamoStore, fingerprint, keyPart } from './dynamoStore';
 import { authorityRecordSchema, executionAuthorityKey, executionAuthorityFields, createExecutionRepository } from './executionRepository';
 import { DynamoThreadIntakeRepository, mailDraftKey, mailThreadKey, mailCursorKey, mailSuppressionKey } from './threadIntakeRepository';
 import { DynamoDispatchRepository, dispatchApprovalKey, dispatchPermissionKey, dispatchIntentKey, dispatchApprovalSchema, type DispatchIntent } from './dispatchRepository';
-import { TerritoryPolicyRepository } from './territoryPolicyRepository';
+import { TerritoryPolicyRepository, TERRITORY_BACKFILL_APPROVAL_LIMIT } from './territoryPolicyRepository';
 import { territoryCallPolicyReceiptSchema, type TerritoryCallPolicyReceipt } from '../../../../src/shared/contracts/territoryCallPolicyContract';
 
 /** Authenticated owner admission. No provider action is performed here. Partially
@@ -291,7 +291,14 @@ export class OwnerCommandCoordinator {
     }
     const plan = await repository.planCommand(command, pairingId);
     await store.transact([...plan.items, store.put(key, { fingerprint: fp, receipt: plan.receipt, command }, null)]);
-    return territoryCallPolicyReceiptSchema.parse({ receipt: plan.receipt, policy: plan.policy });
+    const receipt = territoryCallPolicyReceiptSchema.parse({ receipt: plan.receipt, policy: plan.policy });
+    // Approving the policy gives its first firms authority on David's click instead of on the next scheduled tick. Bounded and best
+    // effort: the receipt is already committed, and the tick's own sweep resumes from the same cursor for the rest. Pause and resume
+    // stay pure receipt paths; a resumed policy is swept by the next tick.
+    if (command.payload.kind === 'policy.approve' && plan.receipt.status === 'applied' && plan.policy?.state === 'active') {
+      try { await repository.sweepTerritoryBackfill({ limit: TERRITORY_BACKFILL_APPROVAL_LIMIT }); } catch { /* The scheduled sweep continues from the persisted cursor. */ }
+    }
+    return receipt;
   }
   private async bootstrap(command:Extract<OwnerCommand,{kind:'bootstrap-selected-account'}>,store:DynamoStore,fp:string,key:string):Promise<CommandReceipt> {
     const p=command.payload;const record=p.record;

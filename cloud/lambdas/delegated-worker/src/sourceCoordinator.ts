@@ -1,4 +1,4 @@
-import { runResearch } from './researchCoordinator';
+import { classifyResearchPhaseHold, runResearch } from './researchCoordinator';
 import type { ResearchSetupProfile } from './researchSetup';
 import { QueryCommand, TransactWriteItemsCommand, type TransactWriteItem } from '@aws-sdk/client-dynamodb';
 import { z } from 'zod';
@@ -25,8 +25,9 @@ import { requestedFollowupDraftSchema, type RequestedApprovalStatus } from '../.
 import { requestedFollowupContextRevision, validateRequestedDraftContext } from '../../../../src/main/outreach/requestedFollowupService';
 import { mailAccountScopeSchema } from '../../../../src/shared/contracts/mailThreadContract';
 import { mailScopeFingerprint } from '../../../../src/main/outreach/providers/gmailThreadProvider';
-import type { TickHeldReason, TickPhase, TickPhaseResult } from '../../../../src/shared/contracts/researchSetupContract';
+import type { TickHeldReason, TickPhase, TickPhaseHold, TickPhaseResult } from '../../../../src/shared/contracts/researchSetupContract';
 import { buildScheduledRunRecord, SOURCE_LAST_TICK_KEY } from './tickLog';
+import { TerritoryPolicyRepository, TERRITORY_BACKFILL_TICK_LIMIT, type TerritoryBackfillReport } from './territoryPolicyRepository';
 
 export type SourceResearchBoundaries = { loadCredentials(workspaceId: string, signal: AbortSignal): Promise<{ apiKey: string; model: string }>;
   /** Present only when the Places credential parameter is declared; a Places configuration is held without it. */
@@ -40,10 +41,14 @@ export type SourceTickReport = { status: 'inactive' | 'completed' | 'aborted'; r
   mailPolls: number; dispatches: number; sendReconciliations: number; meetings: number; held: number;
   /** Present only when the research phase ran a Places territory batch. */
   places?: PlacesBatchReport;
+  /** Present only when the territory backfill phase ran. */
+  territory?: TerritoryBackfillReport;
   /** Every hold is also counted under one closed reason; the sum equals `held`. */
   heldByReason: Partial<Record<TickHeldReason, number>>;
   /** How each phase ended this tick; a phase the deadline never reached is `skipped`. */
   phases: Partial<Record<TickPhase, TickPhaseResult>>;
+  /** The named condition a phase that did not do its work hit, instead of an anonymous failure. Closed reasons and constructor classes only. */
+  phaseHolds: Partial<Record<TickPhase, TickPhaseHold>>;
   /** Model extraction on the scheduled Places path: calls made, the cost settled against reservations and what those reservations refunded. */
   extraction: { calls: number; settledCostMicros: number; refundedMicros: number };
   /** Remaining balances of the active policy's two ledgers after the research phase; null when no policy or ledger was read. */
@@ -51,7 +56,7 @@ export type SourceTickReport = { status: 'inactive' | 'completed' | 'aborted'; r
   /** The operator review has lapsed; `selfPaused` is true only on the tick that wrote the pause. */
   descriptorExpired: boolean; selfPaused: boolean };
 export const emptyTickReport = (): SourceTickReport => ({ status: 'inactive', researchPrepared: 0, researchCompleted: 0, mailPolls: 0, dispatches: 0,
-  sendReconciliations: 0, meetings: 0, held: 0, heldByReason: {}, phases: {}, extraction: { calls: 0, settledCostMicros: 0, refundedMicros: 0 }, ledger: null, descriptorExpired: false, selfPaused: false });
+  sendReconciliations: 0, meetings: 0, held: 0, heldByReason: {}, phases: {}, phaseHolds: {}, extraction: { calls: 0, settledCostMicros: 0, refundedMicros: 0 }, ledger: null, descriptorExpired: false, selfPaused: false });
 /** The only way a tick report gains a hold: the total and its reason move together. */
 export function hold(report: SourceTickReport, reason: TickHeldReason): void {
   report.held++;
@@ -60,9 +65,9 @@ export function hold(report: SourceTickReport, reason: TickHeldReason): void {
 const PAGE_LIMIT = 25;
 /** One scheduled tick aborts after this; the 60 s Lambda timeout leaves room for setup and durable settlement. */
 export const TICK_DEADLINE_MS = 45000;
-/** Research may create a page of companies and drain their page research within its slice; the other three phases share what is left,
- *  so the four slices always fit inside one tick. */
-export const PHASE_SLICES_MS = [20000, 8000, 8000, 8000] as const;
+/** Research may create a page of companies and drain their page research within its slice; the other four phases share what is left,
+ *  so the five slices always fit inside one tick. */
+export const PHASE_SLICES_MS = [18000, 7000, 7000, 7000, 6000] as const;
 const cursorSchema = z.strictObject({ after: z.string().min(1).max(2048).nullable() });
 const submittedSchema = z.strictObject({ fingerprint: z.string().regex(/^[a-f0-9]{64}$/), receipt: commandReceiptSchema,
   sequence: integer.positive(), command: ownerCommandSchema });
@@ -131,7 +136,20 @@ export function createSourceCoordinator(input: SourceCoordinatorOptions) {
     if (sequence !== after) await store.transact([store.put(key, { sequence }, cursor?.rev ?? null)]);
   }
   async function research(signal: AbortSignal, report: SourceTickReport) {
-    return runResearch(input, signal, report);
+    try { return await runResearch(input, signal, report); }
+    catch (error) {
+      // The phase names the condition it hit before the tick records an anonymous failure. An abort is a deadline, not a condition.
+      if (!signal.aborted) report.phaseHolds.research = await classifyResearchPhaseHold(input, error);
+      throw error;
+    }
+  }
+  /** Firms that already existed when the territory policy was approved receive authority exactly as a newly admitted firm does.
+   * Its own phase, not a step of research: the sweep must keep running while research is paused or its descriptor needs replacing. */
+  async function territoryBackfill(signal: AbortSignal, report: SourceTickReport) {
+    const result = await new TerritoryPolicyRepository(store.options).sweepTerritoryBackfill({ limit: TERRITORY_BACKFILL_TICK_LIMIT, signal });
+    report.territory = result;
+    // Only a genuinely failed enrollment is a hold; a missing policy, a paused policy, an owned firm and an unusable route are expected outcomes.
+    for (let count = 0; count < result.skipped.enrollment_failed; count++) hold(report, 'territory_backfill_held');
   }
   async function meetingCursor(accountId: string, kind: string) {
     const key = `SOURCE_SCAN#${fingerprint({ accountId, kind })}`;
@@ -410,9 +428,9 @@ export function createSourceCoordinator(input: SourceCoordinatorOptions) {
     if (callerSignal.aborted) return { ...report, status: 'aborted' };
     const deadline = new AbortController(); const timer = setTimeout(() => deadline.abort(), TICK_DEADLINE_MS);
     const signal = AbortSignal.any([callerSignal, deadline.signal]);
-    const phases = [research, configurations, submittedCommands, publications] as const;
-    const phaseNames: readonly TickPhase[] = ['research', 'configurations', 'submittedCommands', 'publications'];
-    const phaseFailures: readonly TickHeldReason[] = ['research_phase_failed', 'configurations_phase_failed', 'commands_phase_failed', 'publications_phase_failed'];
+    const phases = [research, configurations, submittedCommands, publications, territoryBackfill] as const;
+    const phaseNames: readonly TickPhase[] = ['research', 'configurations', 'submittedCommands', 'publications', 'territoryBackfill'];
+    const phaseFailures: readonly TickHeldReason[] = ['research_phase_failed', 'configurations_phase_failed', 'commands_phase_failed', 'publications_phase_failed', 'territory_phase_failed'];
     const key = 'SOURCE_PHASE_CURSOR';
     try {
       const row = await store.get<unknown>(key);
