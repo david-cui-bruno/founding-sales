@@ -4,6 +4,7 @@ import { dailyFixture, nativeDeskFixture, fixtureNow } from './nativeDesk.fixtur
 import { createCallCampaignDraft } from '../../../shared/contracts/callCampaignDraft';
 import { localCompanyDetailSchema } from '../../../shared/contracts/localWorkspaceContract';
 import { delegatedPhoneStateReplySchema } from '../../../shared/contracts/delegatedPhoneStateContract';
+import type { PhoneSetupStatus } from '../../../shared/contracts/phoneSetupContract';
 import { sha256Utf8 } from '../../../shared/crypto/sha256';
 import { companyPhoneSession, freezePhoneValue, makePhoneReview, phoneFreshBinding, phoneHistoryScope, parsePhoneHistory, type PhoneConfig } from './companyPhoneSession';
 
@@ -89,6 +90,38 @@ describe('strict current phone review bindings', () => {
     const limited = parsePhoneHistory({ ...f.history, completeness: 'incomplete', issue: 'source_limit' }, f.selector, f.snapshot, 'ws');
     expect(limited.completeness).toBe('incomplete');
     expect(() => makePhoneReview(f.snapshot, f.config, f.selector, f.detail, f.setup, limited, 'ws')).toThrow();
+  });
+  /**
+   * D6 acceptance 2. Phone setup that is not `configured` is exactly the state in which David has
+   * to dial by hand, so it selects the hand-dialed review instead of refusing to build one.
+   */
+  it.each(['unconfigured', 'unavailable', 'needs_confirmation'] as const)('builds a hand-dialed review, not a refusal, when setup is %s', state => {
+    const f = fixture();
+    const helper = makePhoneReview(f.snapshot, f.config, f.selector, f.detail, f.setup, f.history, 'ws');
+    expect(helper.manual).toBe(false);
+    expect(helper.request.manual).toBeUndefined();
+    const setup: PhoneSetupStatus = { state, candidateFingerprint: state === 'needs_confirmation' ? 'helper' : null, confirmedAt: null };
+    const hand = makePhoneReview(f.snapshot, f.config, f.selector, f.detail, setup, f.history, 'ws');
+    expect(hand.manual).toBe(true);
+    expect(hand.setupState).toBe(state);
+    expect(hand.request.manual).toBe(true);
+    // Only the routing flag differs. The command, its evidence and the destination are identical
+    // apart from the per-request identifiers every review mints fresh.
+    const binding = (review: typeof helper) => ({ ...review.request.command.payload, actionId: 'fresh' });
+    expect(binding(hand)).toEqual(binding(helper));
+    expect(hand.request.expectedEvidenceFingerprint).toBe(helper.request.expectedEvidenceFingerprint);
+    expect(hand.target).toBe(helper.target);
+    // The saved setup is part of the binding, so a review confirmed on one path cannot begin on the other.
+    expect(hand.binding).not.toBe(helper.binding);
+    expect(phoneFreshBinding(f.snapshot, f.config, f.selector, f.detail, setup, f.history, 'ws').manual).toBe(true);
+  });
+  it('still refuses a hand-dialed review when the step already has a saved attempt or the history is incomplete', () => {
+    const f = fixture();
+    const setup: PhoneSetupStatus = { state: 'unavailable', candidateFingerprint: null, confirmedAt: null };
+    const incomplete = parsePhoneHistory({ ...f.history, completeness: 'incomplete', issue: 'source_limit' }, f.selector, f.snapshot, 'ws');
+    expect(() => makePhoneReview(f.snapshot, f.config, f.selector, f.detail, setup, incomplete, 'ws')).toThrow(/Existing or incomplete phone history/);
+    f.snapshot.accounts[0].routes = [];
+    expect(() => makePhoneReview(f.snapshot, f.config, f.selector, f.detail, setup, f.history, 'ws')).toThrow();
   });
   it('deep-freezes captured data without changing its literal bytes', () => {
     const data = { route: { target: '+14015550123' }, values: [' exact '] };
