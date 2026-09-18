@@ -46,7 +46,7 @@ export const TERRITORY_STATES = Object.freeze(Object.keys(TERRITORY_STATE_TIME_Z
 export const isTerritoryState = (value: string): value is TerritoryClearanceState => Object.hasOwn(TERRITORY_STATE_TIME_ZONES, value);
 
 /** Bump when any statement, summary or citation text below changes; a stale renderer cannot confirm text it did not show. */
-export const TERRITORY_RULES_REVISION = 1;
+export const TERRITORY_RULES_REVISION = 2;
 
 const httpsUrl = z.url().max(2048).refine(value => { try { return new URL(value).protocol === 'https:'; } catch { return false; } }, 'Citations link to https sources only.');
 export const territoryCitationSchema = z.strictObject({
@@ -69,9 +69,14 @@ export const TERRITORY_CLEARANCE_STATEMENT_KEYS = Object.freeze(Object.keys(TERR
 /** Federal rules the business-to-business statement rests on. Read once, not per state. */
 export const TERRITORY_FEDERAL_CITATIONS: readonly TerritoryCitation[] = Object.freeze([
   Object.freeze({
-    title: 'Telemarketing Sales Rule, 16 CFR 310.6(b)(7): business-to-business calls',
+    title: 'Telemarketing Sales Rule, 16 CFR 310.6(b)(7): business-to-business calls are exempt, except from § 310.3(a)(2) (misrepresentation) and § 310.3(a)(4) (false or misleading statements)',
     url: 'https://www.ecfr.gov/current/title-16/chapter-I/subchapter-C/part-310/section-310.6',
-    quote: 'Telephone calls between a telemarketer and any business to induce the purchase of goods or services or a charitable contribution by the business, except calls to induce the retail sale of nondurable office or cleaning supplies',
+    quote: 'Telephone calls between a telemarketer and any business to induce the purchase of goods or services or a charitable contribution by the business, provided, however that this exemption does not apply to: (i) The requirements of § 310.3(a)(2) and(4); or (ii) Calls to induce the retail sale of nondurable office or cleaning supplies; provided, however, that §§ 310.4(b)(1)(iii)(B) and 310.5 shall not apply to sellers or telemarketers of nondurable office or cleaning supplies.',
+  }),
+  Object.freeze({
+    title: 'Telemarketing Sales Rule, 16 CFR 310.3(a)(4): the ban that still applies to business calls, beside § 310.3(a)(2) on misrepresenting material information',
+    url: 'https://www.ecfr.gov/current/title-16/chapter-I/subchapter-C/part-310/section-310.3',
+    quote: 'Making a false or misleading statement to induce any person to pay for goods or services or to induce a charitable contribution.',
   }),
   Object.freeze({
     title: 'FCC rules under the TCPA, 47 CFR 64.1200(c)(2): the National Do Not Call Registry protects residential subscribers',
@@ -80,7 +85,8 @@ export const TERRITORY_FEDERAL_CITATIONS: readonly TerritoryCitation[] = Object.
   }),
 ]);
 
-export type TerritoryStateRule = Readonly<{ state: TerritoryClearanceState; name: string; summary: string; citation: TerritoryCitation }>;
+/** `citation` is the passage stored beside the confirmation; `furtherCitations` are the other sections David reads for the same state. */
+export type TerritoryStateRule = Readonly<{ state: TerritoryClearanceState; name: string; summary: string; citation: TerritoryCitation; furtherCitations: readonly TerritoryCitation[] }>;
 /**
  * Per-state rule summary and citation, in plain language. David verifies each
  * quoted passage at its linked source before confirming; the confirmation
@@ -89,30 +95,71 @@ export type TerritoryStateRule = Readonly<{ state: TerritoryClearanceState; name
 export const TERRITORY_STATE_RULES: Readonly<Record<TerritoryClearanceState, TerritoryStateRule>> = Object.freeze({
   RI: Object.freeze({
     state: 'RI', name: 'Rhode Island',
-    summary: 'Rhode Island\'s Telephone Sales Solicitation Act (R.I. Gen. Laws chapter 5-61) defines a telephonic sales call as a call to a consumer for consumer goods or services, and its registration and no-call duties attach to those calls. Confirm that a call to a property management firm\'s listed business number, offering a business service, is outside that definition, and record where you read it.',
+    summary: 'Rhode Island\'s Telephone Sales Solicitation Act reaches business calls: § 5-61-1 defines a telephone solicitation as a conversation encouraging "a person" to purchase goods or services, with no consumer limitation. Registration (§ 5-61-3, with the Department of Business Regulation, renewed yearly) attaches to a "telephonic seller" as defined in § 5-61-2(9) unless an exclusion in § 5-61-2(10) applies; none of the listed exclusions plainly covers a first-time business-to-business sale of a service, so record either your registration or the exclusion you rely on. The do-not-call duty (§ 5-61-3.5) covers residential, mobile and paging numbers, including a firm\'s listed number when it is a mobile line, and is met by maintaining your own do-not-call list under 47 C.F.R. Part 64 or 16 C.F.R. Part 310 (this app\'s suppression record). Hours of operation are in § 5-61-3.6.',
     citation: Object.freeze({
-      title: 'R.I. Gen. Laws § 5-61-1 (definitions), Telephone Sales Solicitation Act',
+      title: 'R.I. Gen. Laws § 5-61-1, Telephone Sales Solicitation Act (definition of telephone solicitation)',
       url: 'https://webserver.rilegislature.gov/Statutes/TITLE5/5-61/5-61-1.htm',
-      quote: '"Telephonic sales call" means a call made by a telephone solicitor to a consumer, for the purpose of soliciting a sale of any consumer goods or services',
+      quote: '"Telephone solicitation" means the engagement of a telephone conversation for the purpose of encouraging a person to purchase personal property, investment opportunities, goods or services, or for the purpose of gathering information for sales solicitation.',
     }),
+    furtherCitations: Object.freeze([
+      Object.freeze({
+        title: 'R.I. Gen. Laws § 5-61-3 (registration)',
+        url: 'https://webserver.rilegislature.gov/Statutes/TITLE5/5-61/5-61-3.htm',
+        quote: 'Not less than ten (10) days prior to doing business in this state, a telephone sales solicitation operation or telephonic seller shall register with the department',
+      }),
+      Object.freeze({
+        title: 'R.I. Gen. Laws § 5-61-3.5(a) (do not call lists)',
+        url: 'https://webserver.rilegislature.gov/Statutes/TITLE5/5-61/5-61-3.5.htm',
+        quote: 'No salesperson or telephonic seller shall make, or cause to be made, any unsolicited telephonic sales calls to any residential, mobile, or telephonic-paging-device telephone number unless the salesperson or telephonic seller has instituted procedures for maintaining a list of persons who do not wish to receive telephonic sales calls made by or on behalf of that person, in compliance with 47 C.F.R. Part 64 or 16 C.F.R. Part 310.',
+      }),
+      Object.freeze({
+        title: 'R.I. Gen. Laws chapter 5-61 index: § 5-61-2 definitions and exclusions, § 5-61-3.6 hours of operation',
+        url: 'https://webserver.rilegislature.gov/Statutes/TITLE5/5-61/INDEX.htm',
+        quote: '§ 5-61-2. Definitions. § 5-61-3. Registration. § 5-61-3.5. Do not call lists. § 5-61-3.6. Hours of operation.',
+      }),
+    ]),
   }),
   MA: Object.freeze({
     state: 'MA', name: 'Massachusetts',
-    summary: 'Massachusetts General Laws chapter 159C defines a consumer as a resident of the Commonwealth who is a prospective recipient of consumer goods or services, and its do-not-call list, registration and calling-hour duties attach to telephonic sales calls to consumers. Confirm that a call to a firm\'s listed business number, offering a business service, is outside that definition, and record where you read it.',
+    summary: 'Massachusetts General Laws chapter 159C attaches its duties to calls to a "consumer" as defined in § 1: an individual resident of the Commonwealth who is a prospective recipient of consumer goods or services. The no-sales-solicitation-calls listing is § 2 and the calling restrictions, including no calls received between 8:00 p.m. and 8:00 a.m. at the consumer\'s location, are § 3. The chapter\'s index shows no telephone-solicitor registration provision (§ 5 concerns marketing-list compilations, § 5A disclosures). Confirm that a call to a firm\'s listed business number, offering a business service, is outside the § 1 consumer definition, and record where you read it.',
     citation: Object.freeze({
       title: 'M.G.L. c. 159C, § 1 (definitions), Telemarketing Solicitation',
       url: 'https://malegislature.gov/Laws/GeneralLaws/PartI/TitleXXII/Chapter159C/Section1',
       quote: '"Consumer", an individual who is a resident of the commonwealth and a prospective recipient of consumer goods or services.',
     }),
+    furtherCitations: Object.freeze([
+      Object.freeze({
+        title: 'M.G.L. c. 159C, § 2 (no sales solicitation calls listing)',
+        url: 'https://malegislature.gov/Laws/GeneralLaws/PartI/TitleXXII/Chapter159C/Section2',
+        quote: 'The office shall establish and maintain a no sales solicitation calls listing of consumers who do not wish to receive unsolicited telephonic sales calls.',
+      }),
+      Object.freeze({
+        title: 'M.G.L. c. 159C, § 3 (limitations on unsolicited telephonic sales calls, including hours)',
+        url: 'https://malegislature.gov/Laws/GeneralLaws/PartI/TitleXXII/Chapter159C/Section3',
+        quote: 'to be received between the hours of 8:00 p.m. and 8:00 a.m., local time, at the consumer\'s location',
+      }),
+    ]),
   }),
   TX: Object.freeze({
     state: 'TX', name: 'Texas',
-    summary: 'Texas Business & Commerce Code chapter 302 requires a registration certificate for telephone solicitations to purchasers in Texas unless an exemption in subchapter B applies, and chapter 304 keeps the Texas no-call list for telemarketing calls to consumers. Confirm which chapter 302 exemption covers your calls to a firm\'s listed business number (or that you hold the certificate), confirm the chapter 304 position for business numbers, and record where you read it.',
+    summary: 'Two Texas chapters apply. Chapter 302 (registration): § 302.101 requires a registration certificate from the Secretary of State for a telephone solicitation to a purchaser located in Texas unless a subchapter B exemption (§§ 302.051 to 302.061) applies. The commercial-sales exemption in § 302.056 covers only purchasers who resell the item or use it in recycling, reuse, remanufacturing or manufacturing, so it does not cover a property management firm buying a service; record the exemption you rely on or your registration certificate. Chapter 304 (the Texas no-call list): § 304.004(3) excludes calls between a telemarketer and a business unless the business has said it does not want them, and § 304.002 defines a telemarketing call around consumer goods or services; a business\'s request to stop becomes a suppression record in this app.',
     citation: Object.freeze({
-      title: 'Tex. Bus. & Com. Code § 302.101 (registration certificate required), with the subchapter B exemptions',
-      url: 'https://statutes.capitol.texas.gov/Docs/BC/htm/BC.302.htm',
+      title: 'Tex. Bus. & Com. Code § 302.101 (registration certificate required)',
+      url: 'https://tcss.legis.texas.gov/resources/BC/htm/BC.302.htm#302.101',
       quote: 'A seller may not make a telephone solicitation from a location in this state or to a purchaser located in this state unless the seller holds a registration certificate for the business location from which the telephone solicitation is made.',
     }),
+    furtherCitations: Object.freeze([
+      Object.freeze({
+        title: 'Tex. Bus. & Com. Code § 302.056 (exemption: certain commercial sales), one of the subchapter B exemptions §§ 302.051 to 302.061',
+        url: 'https://tcss.legis.texas.gov/resources/BC/htm/BC.302.htm#302.056',
+        quote: 'This chapter does not apply to a sale in which the purchaser is a business that intends to: (1) resell the item purchased; or (2) use the item purchased in a recycling, reuse, remanufacturing, or manufacturing process.',
+      }),
+      Object.freeze({
+        title: 'Tex. Bus. & Com. Code § 304.004(3) (chapter 304 does not apply to business-to-business calls)',
+        url: 'https://tcss.legis.texas.gov/resources/BC/htm/BC.304.htm#304.004',
+        quote: 'This chapter does not apply to a call made: ... (3) between a telemarketer and a business, other than by a facsimile solicitation, unless the business has informed the telemarketer that the business does not wish to receive a telemarketing call from the telemarketer',
+      }),
+    ]),
   }),
 });
 
