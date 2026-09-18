@@ -182,3 +182,93 @@ describe('atomic current auth fences', () => {
     expect(f.dynamo.inspect('COMMAND#delegate')).toBeUndefined();
   });
 });
+
+describe('credential rotation on the existing pairing', () => {
+  const event = (path: string, body?: unknown, credential?: string, method = 'POST') => ({ version: '2.0', rawPath: path, rawQueryString: '',
+    headers: { host: 'worker.example.test', 'x-forwarded-proto': 'https', ...(credential ? { authorization: `Bearer ${credential}` } : {}) },
+    requestContext: { domainName: 'worker.example.test', http: { method, sourceIp: 'fictional-source' } }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  const desktopScopes = ['commands:write', 'events:read'] as const;
+  const widened = ['commands:write', 'events:read', 'google:grant', 'pairing:revoke'] as const;
+  async function paired() {
+    const { createWorkerHandler } = await import('../src/handler');
+    const f = fixture();
+    const bootstrap = await f.auth.issuePairing({ scopes: [...desktopScopes], expiresInSeconds: 300 });
+    const handler = createWorkerHandler({ auth: f.auth, host: 'worker.example.test' });
+    const first = JSON.parse((await handler(event('/pairing/redeem', { code: bootstrap.code }))).body) as { pairingId: string; credential: string; emergencyCredential: string; generation: number };
+    return { ...f, handler, first };
+  }
+  it('rotates once through the real handler: same pairing id, next generation, new scopes, old credentials refused', async () => {
+    const f = await paired();
+    // Before rotation the pairing lacks google:grant, so every /google route is refused by scope.
+    expect((await f.handler(event('/google/status', undefined, f.first.credential, 'GET'))).statusCode).toBe(403);
+    const rotation = await f.auth.issueRotation({ pairingId: f.first.pairingId, scopes: [...widened], expiresInSeconds: 300 });
+    expect(rotation).toEqual({ code: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/), pairingId: f.first.pairingId, generation: 0 });
+    const redeemed = await f.handler(event('/pairing/redeem', { code: rotation.code }));
+    expect(redeemed.statusCode).toBe(200);
+    const grant = JSON.parse(redeemed.body) as { pairingId: string; workspaceId: string; credential: string; emergencyCredential: string; generation: number; scopes: string[] };
+    expect(grant).toMatchObject({ pairingId: f.first.pairingId, workspaceId: f.options.workspaceId, generation: 1, scopes: [...widened] });
+    expect(grant.credential).not.toBe(f.first.credential);
+    expect(grant.emergencyCredential).not.toBe(f.first.emergencyCredential);
+    expect(f.dynamo.inspect(`PAIRING#${f.first.pairingId}`)).toEqual({ pairingId: f.first.pairingId, generation: 1, revoked: false });
+    // The old device and emergency credentials die with generation 0 the moment the transaction commits.
+    expect((await f.handler(event('/events', undefined, f.first.credential, 'GET'))).statusCode).toBe(401);
+    await expect(f.auth.authenticate(`Bearer ${f.first.emergencyCredential}`, ['emergency:stop'])).rejects.toThrow('worker_unauthorized');
+    // The new device credential carries the scopes it lacked; the new emergency credential carries only emergency:stop.
+    expect((await f.handler(event('/events', undefined, grant.credential, 'GET'))).statusCode).toBe(200);
+    expect((await f.auth.authenticate(`Bearer ${grant.credential}`, ['google:grant', 'pairing:revoke'])).generation).toBe(1);
+    expect((await f.auth.authenticate(`Bearer ${grant.emergencyCredential}`, ['emergency:stop'])).kind).toBe('emergency');
+    await expect(f.auth.authenticate(`Bearer ${grant.emergencyCredential}`, ['commands:write'])).rejects.toThrow('worker_scope_denied');
+    // Replay of the consumed rotation code is refused (the handler's fixed 400 for pairing_unavailable) and changes nothing.
+    expect((await f.handler(event('/pairing/redeem', { code: rotation.code }))).statusCode).toBe(400);
+    expect(f.dynamo.inspect(`PAIRING#${f.first.pairingId}`)).toEqual({ pairingId: f.first.pairingId, generation: 1, revoked: false });
+    // Stored records never contain a plaintext code or credential.
+    const stored = JSON.stringify(f.dynamo.dump());
+    for (const secret of [rotation.code, grant.credential, grant.emergencyCredential]) expect(stored).not.toContain(secret);
+  });
+  it('refuses a rotation for a revoked or unknown pairing, at issue and at redeem', async () => {
+    const f = await paired();
+    const rotation = await f.auth.issueRotation({ pairingId: f.first.pairingId, scopes: [...desktopScopes, 'google:grant'], expiresInSeconds: 300 });
+    await f.auth.revokePairing(f.first.pairingId);
+    expect((await f.handler(event('/pairing/redeem', { code: rotation.code }))).statusCode).toBe(400);
+    expect(f.dynamo.inspect(`PAIRING#${f.first.pairingId}`)).toEqual({ pairingId: f.first.pairingId, generation: 1, revoked: true });
+    await expect(f.auth.issueRotation({ pairingId: f.first.pairingId, scopes: [...desktopScopes], expiresInSeconds: 300 })).rejects.toThrow('pairing_unavailable');
+    await expect(f.auth.issueRotation({ pairingId: '00000000-0000-4000-8000-000000000000', scopes: [...desktopScopes], expiresInSeconds: 300 })).rejects.toThrow('pairing_unavailable');
+    expect(f.dynamo.dump().filter(item => item.sk?.S?.startsWith('BOOTSTRAP#'))).toHaveLength(2);
+  });
+  it('refuses a rotation scope set that drops a desktop scope or adds emergency powers', async () => {
+    const f = await paired();
+    await expect(f.auth.issueRotation({ pairingId: f.first.pairingId, scopes: ['events:read', 'google:grant'], expiresInSeconds: 300 })).rejects.toThrow('worker_scope_denied');
+    await expect(f.auth.issueRotation({ pairingId: f.first.pairingId, scopes: ['commands:write', 'google:grant'], expiresInSeconds: 300 })).rejects.toThrow('worker_scope_denied');
+    await expect(f.auth.issueRotation({ pairingId: f.first.pairingId, scopes: [...desktopScopes, 'emergency:stop'], expiresInSeconds: 300 })).rejects.toThrow('worker_scope_denied');
+    expect(f.dynamo.dump().filter(item => item.sk?.S?.startsWith('BOOTSTRAP#'))).toHaveLength(1);
+  });
+  it('keeps a plain bootstrap creating a fresh pairing at generation 0 beside a rotated one', async () => {
+    const f = await paired();
+    const rotation = await f.auth.issueRotation({ pairingId: f.first.pairingId, scopes: [...desktopScopes, 'google:grant'], expiresInSeconds: 300 });
+    expect((await f.handler(event('/pairing/redeem', { code: rotation.code }))).statusCode).toBe(200);
+    const fresh = await f.auth.issuePairing({ scopes: [...desktopScopes], expiresInSeconds: 300 });
+    const grant = JSON.parse((await f.handler(event('/pairing/redeem', { code: fresh.code }))).body) as { pairingId: string; generation: number };
+    expect(grant.pairingId).not.toBe(f.first.pairingId);
+    expect(grant.generation).toBe(0);
+    expect(f.dynamo.inspect(`PAIRING#${f.first.pairingId}`)).toEqual({ pairingId: f.first.pairingId, generation: 1, revoked: false });
+  });
+  it('lets exactly one of two competing rotation redemptions commit', async () => {
+    const f = await paired();
+    const rotation = await f.auth.issueRotation({ pairingId: f.first.pairingId, scopes: [...desktopScopes, 'google:grant'], expiresInSeconds: 300 });
+    let firstRead!: () => void; const firstReady = new Promise<void>(resolve => { firstRead = resolve; });
+    let release!: () => void; const bothReady = new Promise<void>(resolve => { release = resolve; }); let arrivals = 0;
+    const competing = new WorkerAuth({ ...f.options, dynamo: { send: async command => {
+      const result = await f.dynamo.send(command);
+      if (command instanceof GetItemCommand && command.input.Key?.sk?.S?.startsWith('PAIRING#')) {
+        arrivals++; if (arrivals === 1) firstRead(); else release(); await bothReady;
+      }
+      return result;
+    } } });
+    const first = competing.redeemPairing(rotation.code, 'one'); await firstReady;
+    const results = await Promise.allSettled([first, competing.redeemPairing(rotation.code, 'two')]);
+    expect(arrivals).toBe(2);
+    expect(results.filter(r => r.status === 'fulfilled')).toHaveLength(1);
+    expect(f.dynamo.inspect(`PAIRING#${f.first.pairingId}`)).toEqual({ pairingId: f.first.pairingId, generation: 1, revoked: false });
+    expect(f.dynamo.dump().filter(item => item.sk?.S?.startsWith('TOKEN#'))).toHaveLength(4);
+  });
+});
