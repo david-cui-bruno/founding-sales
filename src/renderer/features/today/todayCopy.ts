@@ -29,6 +29,9 @@ export const DEFAULT_NEW_CALL_SLOTS_COPY = 'default: 30 new firms a day';
  *   counts mornings with recorded work and the block says so in one line.
  * - "Drafts written", not "drafts sent". Nothing in this build sends a draft;
  *   saving and approving one is not sending it.
+ * - "Emails sent" is the one number here that is a send, and it counts only
+ *   sequence emails a provider actually accepted (D13, lane 40). A draft, an
+ *   approval and a held step are all absent from it.
  */
 export const WEEKLY_SUMMARY_COPY = Object.freeze({
   heading: 'This week',
@@ -45,6 +48,7 @@ export const WEEKLY_SUMMARY_COPY = Object.freeze({
     callbacksPromised: 'Callbacks promised',
     callbacksKept: 'Callbacks kept',
     drafts: 'Drafts written',
+    emailsSent: 'Emails sent',
     replies: 'Replies received',
     holds: 'Holds',
   }),
@@ -73,6 +77,14 @@ export const WEEKLY_SUMMARY_COPY = Object.freeze({
  */
 export function replyFirstLine(firmName: string): string {
   return `Reply received from ${firmName}`;
+}
+/**
+ * The line Today puts on a firm the sequence emailed. The template id comes from the action id the
+ * worker minted for that step, so this says which of David's five approved templates went out and
+ * never guesses one from the text. The date is the local day in his own zone, not an instant.
+ */
+export function sentTemplateEmailLine(templateId: string, firmName: string, sentOn: string): string {
+  return `Sent ${templateId} to ${firmName} on ${sentOn}`;
 }
 export function sequenceStateLine(state: string | null): string {
   if (state === null) return 'No sequence for this firm';

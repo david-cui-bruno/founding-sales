@@ -8,6 +8,7 @@ import {
   salesCycleIdSchema,
 } from './commonContract';
 import { cloudScoreChipSchema } from './leadsContract';
+import { REPLY_TEMPLATE_IDS } from './replyTemplateContract';
 
 /**
  * Stable lane IDs for the dated playbook. Main owns due-time, warm-priority
@@ -43,9 +44,24 @@ export const todaySnapshotSchema = z.object({
   conversationsHeld: z.number().int().nonnegative(),
 }).strict();
 
+/**
+ * One sequence email the worker's provider accepted for a firm (D13, lane 40). The template id comes from
+ * the action id the worker minted for the step and never from the text that went out; `sentOn` is the local
+ * date in the founder's own zone, because "Sent T4 on the 23rd" is what he reads, not an instant.
+ */
+export const sentTemplateEmailSchema = z.object({
+  accountId: z.string().min(1),
+  templateId: z.enum(REPLY_TEMPLATE_IDS),
+  sentOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  actionId: z.string().min(1),
+}).strict();
+
 export const dailyAccountCallPlanSchema = z.object({
   accountIds: z.array(z.string().min(1)),
   workloadConflict: z.boolean(),
+  /** Template sequence emails that went out to the listed firms. Absent when there are none, so a workspace
+   *  that has never had one keeps the exact snapshot revision it had. */
+  sentTemplateEmails: z.array(sentTemplateEmailSchema).max(2000).optional(),
 }).strict();
 
 export const dailyAccountCallPlanningInputSchema = z.object({
@@ -126,6 +142,7 @@ export type TodayLaneId = z.infer<typeof todayLaneIdSchema>;
 export type TodayItem = z.infer<typeof todayItemSchema>;
 export type TodaySnapshot = z.infer<typeof todaySnapshotSchema>;
 export type DailyAccountCallPlan = z.infer<typeof dailyAccountCallPlanSchema>;
+export type SentTemplateEmail = z.infer<typeof sentTemplateEmailSchema>;
 export type DailyAccountCallPlanningInput = z.infer<typeof dailyAccountCallPlanningInputSchema>;
 export type CompleteActionRequest = z.infer<typeof completeActionRequestSchema>;
 export type SnoozeActionRequest = z.infer<typeof snoozeActionRequestSchema>;

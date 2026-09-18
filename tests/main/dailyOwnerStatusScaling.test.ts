@@ -106,7 +106,7 @@ async function fixture(count = 4, scope: string | undefined = workspaceId) {
     };
     const emptyWeek = (from: string, to: string): UsageWindow => ({ from, to, mornings: 0, firms: 0, callsPlaced: 0,
       outcomes: { connected: 0, interested: 0, not_interested: 0, gatekeeper: 0, voicemail: 0, no_answer: 0, busy: 0, wrong_number: 0 },
-      notes: 0, callbacksPromised: 0, callbacksKept: 0, drafts: 0, replies: 0, holds: [] });
+      notes: 0, callbacksPromised: 0, callbacksKept: 0, drafts: 0, emailsSent: 0, replies: 0, holds: [] });
     const expected = (ownerStatus: DailySnapshot['ownerStatus'], issues: DailySnapshot['issues'] = []) => buildDailySnapshot({
       workspaceId, generatedAt: now, workflowMode: 'legacy',
       accounts: ids.map(id => accounts.snapshot(id, now)).sort((a, b) => a.account.id.localeCompare(b.account.id)),

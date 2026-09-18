@@ -15,6 +15,8 @@ import { accountReplyDraftSchema, threadProjectionSchema } from '../../../shared
 import { requestedFollowupDraftSchema, requestedApprovalStatusSchema } from '../../../shared/contracts/requestedFollowupContract';
 import { campaignVersionSchema } from '../../../shared/contracts/campaignContract';
 import { accountIdSchema } from '../../../shared/contracts/accountContract';
+import { sentTemplateEmailSchema, type SentTemplateEmail } from '../../../shared/contracts/todayContract';
+import { templateSequenceEmailTemplateId } from '../../../shared/outreach/templateSequenceEmail';
 import { buildDailySnapshot, type DailyProjectionInput } from './dailyProjection';
 import { AccountCallbackRepository } from '../callbacks/accountCallbackRepository';
 import { localDateIn } from '../../../shared/contracts/accountCallbackContract';
@@ -180,6 +182,20 @@ export class DailyReadService {
       callbacks: input.accounts.filter(a => dueToday.has(a.account.id)),
       due: input.accounts.filter(a => due.has(a.account.id)), ranked: input.accounts, generatedAt }));
     if (plan) input.calls = { accountIds: [...plan.accountIds], workloadConflict: plan.workloadConflict };
+    // Sequence emails the provider accepted (D13, lane 40). The only record of one on this Mac is the
+    // immutable outcome row the worker's own `action.outcome` event wrote, and the template is the one that
+    // row's worker-minted action id names — never anything read out of the text that went out. A row whose
+    // action id is not a template sequence action is not a template email and adds nothing to Today.
+    const sentTemplateEmails: SentTemplateEmail[] = [];
+    for (const row of rows("SELECT account_id,action_id,observed_at FROM delegated_action_outcomes WHERE workspace_id=? AND state='provider_accepted' ORDER BY observed_at,action_id", workspaceId)) {
+      const templateId = templateSequenceEmailTemplateId(row.action_id);
+      if (templateId === null) continue;
+      if (!scoped(row.account_id)) continue;
+      const value = parse(() => sentTemplateEmailSchema.parse({ accountId: row.account_id, templateId, actionId: row.action_id,
+        sentOn: localDateIn(String(row.observed_at), workspaceZone) }));
+      if (value) sentTemplateEmails.push(value);
+    }
+    if (sentTemplateEmails.length) input.calls = { ...input.calls, sentTemplateEmails };
     for (const row of rows("SELECT id,enrollment_id,account_id,revision FROM manual_linkedin_drafts WHERE workspace_id=? AND state<>'closed' ORDER BY account_id,id", workspaceId)) {
       if (!scoped(row.account_id)) continue;
       const value = parse(() => {

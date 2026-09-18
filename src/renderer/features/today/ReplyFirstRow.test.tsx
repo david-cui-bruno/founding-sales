@@ -49,6 +49,33 @@ it('leads the Calls lane with the firm that answered and names the sequence stat
   expect(callRow('Account B').textContent).not.toContain('Reply received');
 });
 
+it('names the sequence email that went out on the firm\'s row, and leaves a firm with none exactly as it was', async () => {
+  const snapshot = dailyFixture({
+    calls: { accountIds: ['a', 'b'], workloadConflict: false,
+      sentTemplateEmails: [{ accountId: 'a', templateId: 'T4', sentOn: '2026-09-11', actionId: 'template-email-T4-0123456789abcdef0123456789abcdef' }] },
+  });
+  const f = nativeDeskFixture(snapshot);
+  render(<PresentationRoot><NativeDeskRoute firstUse={f.firstUse} api={f.api} /></PresentationRoot>);
+  await screen.findByTestId('native-desk');
+  expect(callRow('Account A').textContent).toContain('Sent T4 to Account A on 2026-09-11');
+  expect(callRow('Account B').textContent).toContain('Review company and route');
+  expect(callRow('Account B').textContent).not.toContain('Sent T4');
+});
+
+it('puts the reply first even for a firm the sequence emailed, because the firm answering leads the morning', async () => {
+  const snapshot = dailyFixture({
+    calls: { accountIds: ['a'], workloadConflict: false,
+      sentTemplateEmails: [{ accountId: 'a', templateId: 'T4', sentOn: '2026-09-11', actionId: 'template-email-T4-0123456789abcdef0123456789abcdef' }] },
+    answers: [replyAnswer('a')],
+    campaigns: [pausedCampaign('a')],
+  });
+  const f = nativeDeskFixture(snapshot);
+  render(<PresentationRoot><NativeDeskRoute firstUse={f.firstUse} api={f.api} /></PresentationRoot>);
+  await screen.findByTestId('native-desk');
+  expect(callRow('Account A').textContent).toContain('Reply received from Account A · Sequence paused');
+  expect(callRow('Account A').textContent).not.toContain('Sent T4');
+});
+
 it('says so plainly when the replied firm has no stored enrollment to report', async () => {
   const f = nativeDeskFixture(dailyFixture({ calls: { accountIds: ['a'], workloadConflict: false }, answers: [replyAnswer('a')], campaigns: [] }));
   render(<PresentationRoot><NativeDeskRoute firstUse={f.firstUse} api={f.api} /></PresentationRoot>);
