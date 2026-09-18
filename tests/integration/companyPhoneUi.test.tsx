@@ -25,6 +25,8 @@ import { registerLocalWorkspaceIpc } from '../../src/main/workspace/registerLoca
 import { registerDailyIpc } from '../../src/main/today/registerDailyIpc';
 import { registerPhoneSetupIpc } from '../../src/main/communications/registerPhoneSetupIpc';
 import { registerOutreachIpc } from '../../src/main/ipc/registerOutreachIpc';
+import { AccountCallbackRepository } from '../../src/main/domain/callbacks/accountCallbackRepository';
+import { AccountNeverCallRepository } from '../../src/main/domain/callbacks/accountNeverCall';
 import { createCallieApi } from '../../src/preload/createCallieApi';
 import { ConditionalCommandHarness } from '../../cloud/lambdas/delegated-worker/test/sdkHarness';
 import { WorkerAuth } from '../../cloud/lambdas/delegated-worker/src/workerAuth';
@@ -127,7 +129,16 @@ async function fixture(options: { policy?: boolean; native?: boolean; inbound?: 
     const forbidden = async (): Promise<never> => { throw Error('Unrelated public effect forbidden'); };
     const outreach: OutreachApi = { status: forbidden, configure: forbidden, connectGmail: forbidden, disconnectGmail: forbidden, openDraft: forbidden, saveDraft: forbidden, generateDraft: forbidden, sendDraft: forbidden, inspectLocalAuthority: forbidden };
     const localProvider = createLocalWorkspaceProvider({ withDatabase: async fn => fn(database), withDomain: async fn => fn(domain) });
-    unregister = [registerOutreachIpc({ provider: outreach, delegation: runtime }), registerDailyIpc({ get: async () => services.daily.get() }), registerLocalWorkspaceIpc(localProvider), registerPhoneSetupIpc({ provider: setup })];
+    // The real local callback and never-call repositories, exactly as the host wires them.
+    const callbackRepository = new AccountCallbackRepository({ database, clock });
+    const neverCallRepository = new AccountNeverCallRepository({ database, clock });
+    const callbacks = {
+      list: async (request: { accountIds: readonly string[] }) => callbackRepository.listOpen(request.accountIds),
+      save: async (request: Parameters<AccountCallbackRepository['save']>[0]) => callbackRepository.save(request),
+      close: async (request: Parameters<AccountCallbackRepository['close']>[0]) => callbackRepository.close(request),
+      neverCall: async (request: Parameters<AccountNeverCallRepository['suppress']>[0]) => neverCallRepository.suppress(request),
+    };
+    unregister = [registerOutreachIpc({ provider: outreach, delegation: runtime, callbacks }), registerDailyIpc({ get: async () => services.daily.get() }), registerLocalWorkspaceIpc(localProvider), registerPhoneSetupIpc({ provider: setup })];
     return createCallieApi({ invoke: async (channel, ...args) => {
       invocations.push({ channel, args: structuredClone(args) });
       const result = await registeredIpcHandler(electron.handle, channel)({ senderFrame: { url: 'callie://app/index.html' } }, ...args);
@@ -434,4 +445,84 @@ it('public prewrite zero-row failure retries exactly the retained UUID after mai
   expect(f.db().raw.prepare('SELECT id,revision FROM delegated_requested_followup_drafts').all()).toEqual([{ id: first.draftId, revision: 1 }]);
   expect(f.invocations.filter(c => /requested-followup-approve|generate|send/.test(c.channel))).toEqual([]);
   expect(f.tables()).toEqual(f.initialTables); expect(globalThis.fetch).not.toHaveBeenCalled();
+});
+
+it('the report form names the three connected results in plain words and carries the note into the exact command', async () => {
+  const f = await fixture(); mount(f);
+  await selectCall(f); await reviewAndBegin(f);
+  await waitFor(() => expect(f.nativeUris).toHaveLength(1));
+  f.setOffline(true);
+  const choice = await screen.findByRole('combobox', { name: 'Observed phone outcome' });
+  await waitFor(() => expect((choice as HTMLSelectElement).disabled || choice.closest('fieldset')?.disabled).toBe(false));
+  expect([...(choice as HTMLSelectElement).options].map(option => option.textContent)).toEqual([
+    'Choose observed outcome', 'Connected', 'No answer', 'Voicemail', 'Busy', 'Wrong number',
+    'Connected, interested', 'Connected, not interested', 'Gatekeeper, did not reach them',
+    'Cancelled before dialing', 'Not called', 'Unknown', 'Explicit opt-out',
+  ]);
+  fireEvent.change(choice, { target: { value: 'gatekeeper' } });
+  const local = new Date(Date.parse(now) - new Date(now).getTimezoneOffset() * 60_000).toISOString().slice(0, 19);
+  fireEvent.change(screen.getByLabelText('Observed at (local time)'), { target: { value: local } });
+  fireEvent.change(screen.getByLabelText('Note'), { target: { value: 'Front desk took a message for the owner.' } });
+  fireEvent.click(screen.getByRole('checkbox', { name: 'I confirm this observed outcome and time' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Record phone outcome' }));
+  await waitFor(async () => expect((await f.api.delegation.getPhoneHandoffState(f.request)).completions).toHaveLength(1));
+  const submitted = f.invocations.filter(call => call.channel === 'outreach:delegation-submit');
+  expect(submitted).toHaveLength(1);
+  expect(submitted[0].args[0]).toMatchObject({ kind: 'complete-manual', payload: { outcome: { channel: 'call', outcome: 'gatekeeper', replyText: 'Front desk took a message for the owner.' } } });
+  expect(f.invocations.filter(call => call.channel === 'outreach:callback-save')).toEqual([]);
+  expect(f.db().raw.prepare('SELECT count(*) n FROM pm_account_callbacks').get()).toEqual({ n: 0 });
+});
+
+it('a promised call-back date is saved locally against the exact report and never dials, sends or books', async () => {
+  const f = await fixture(); mount(f);
+  await selectCall(f); await reviewAndBegin(f);
+  await waitFor(() => expect(f.nativeUris).toHaveLength(1));
+  f.setOffline(true);
+  const choice = await screen.findByRole('combobox', { name: 'Observed phone outcome' });
+  await waitFor(() => expect((choice as HTMLSelectElement).disabled || choice.closest('fieldset')?.disabled).toBe(false));
+  fireEvent.change(choice, { target: { value: 'interested' } });
+  const local = new Date(Date.parse(now) - new Date(now).getTimezoneOffset() * 60_000).toISOString().slice(0, 19);
+  fireEvent.change(screen.getByLabelText('Observed at (local time)'), { target: { value: local } });
+  fireEvent.change(screen.getByLabelText('Note'), { target: { value: 'Asked me to ring back Monday morning.' } });
+  fireEvent.change(screen.getByLabelText('Call back on'), { target: { value: '2026-09-21' } });
+  fireEvent.click(screen.getByRole('checkbox', { name: 'I confirm this observed outcome and time' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Record phone outcome' }));
+  await screen.findByText(/Callback saved for 2026-09-21/);
+  const saves = f.invocations.filter(call => call.channel === 'outreach:callback-save');
+  expect(saves).toHaveLength(1);
+  const submitted = f.invocations.find(call => call.channel === 'outreach:delegation-submit')!.args[0] as { commandId: string };
+  expect(saves[0].args[0]).toEqual({ accountId: f.account.id, dueOn: '2026-09-21', note: 'Asked me to ring back Monday morning.', sourceCommandId: submitted.commandId });
+  expect(f.db().raw.prepare('SELECT account_id,due_on,note,state,revision,source_command_id FROM pm_account_callbacks').all())
+    .toEqual([{ account_id: f.account.id, due_on: '2026-09-21', note: 'Asked me to ring back Monday morning.', state: 'open', revision: 1, source_command_id: submitted.commandId }]);
+  // One dial, one report, no second handoff and no suppression.
+  expect(f.nativeUris).toHaveLength(1);
+  expect(f.db().raw.prepare('SELECT count(*) n FROM pm_account_suppression_tombstones').get()).toEqual({ n: 0 });
+  expect(globalThis.fetch).not.toHaveBeenCalled();
+});
+
+it('never call writes the account tombstone only after two confirmations and never issues a handoff', async () => {
+  const f = await fixture(); mount(f);
+  await selectCall(f);
+  const reason = await screen.findByLabelText('Why this firm should never be called');
+  const button = screen.getByRole('button', { name: 'Never call this firm' });
+  expect((button as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.change(reason, { target: { value: 'They told me in writing not to contact them again.' } });
+  expect((button as HTMLButtonElement).disabled).toBe(true);
+  const first = screen.getByRole('checkbox', { name: 'I have read the reason above and it is about this firm' });
+  const second = screen.getByRole('checkbox', { name: 'I confirm permanent suppression of this firm' });
+  expect((second as HTMLInputElement).disabled).toBe(true);
+  fireEvent.click(first);
+  expect((button as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(second);
+  await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
+  expect(f.db().raw.prepare('SELECT count(*) n FROM pm_account_suppression_tombstones').get()).toEqual({ n: 0 });
+  fireEvent.click(button);
+  await screen.findByText(/Never call recorded at/);
+  expect(f.db().raw.prepare('SELECT account_id,source FROM pm_account_suppression_tombstones').all())
+    .toEqual([{ account_id: f.account.id, source: 'manual_never_call' }]);
+  // Not an outcome and not a call: no handoff was prepared, no number dialed, no owner command queued.
+  expect(f.nativeUris).toEqual([]);
+  expect(f.invocations.filter(call => /begin-phone|delegation-submit/.test(call.channel))).toEqual([]);
+  expect(f.db().raw.prepare('SELECT count(*) n FROM delegated_manual_handoffs').get()).toEqual({ n: 0 });
+  expect(f.tables()).toEqual(f.initialTables);
 });

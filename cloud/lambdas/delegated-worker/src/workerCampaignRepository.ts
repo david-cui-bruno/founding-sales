@@ -3,6 +3,7 @@ import type { TransactWriteItem } from '@aws-sdk/client-dynamodb';
 import { accountIdSchema as id, accountInstantSchema as instant, accountRouteSchema, accountSchema } from '../../../../src/shared/contracts/accountContract';
 import { campaignCommandPayloadSchema, campaignCancellationEvidenceSchema, campaignEventPayloadSchema, campaignVersionSchema, enrollmentSchema, stepEvidenceSchema, type CampaignCommandPayload, type CampaignEventPayload, type CampaignVersion } from '../../../../src/shared/contracts/campaignContract';
 import { DynamoStore, fingerprint, integer, keyPart, type RepositoryOptions } from './dynamoStore';
+import { advanceTerritorySequence, describeTerritoryPolicyVersion } from '../../../../src/shared/contracts/territoryCallPolicyContract';
 
 export const campaignVersionKey = (value: string) => `CAMPAIGN_VERSION#${keyPart(value)}`;
 export const campaignApprovalKey = (value: string) => `CAMPAIGN_APPROVAL#${keyPart(value)}`;
@@ -282,8 +283,20 @@ export class WorkerCampaignRepository {
           const index = version.steps.findIndex(step => step.id === evidence.stepId);
           const next = version.steps[index + 1];
           if (old.state === 'active' && !interruption && currentBinding) {
-            enrollment.currentStepId = next?.id ?? null;
-            if (!next) enrollment.state = 'completed';
+            // D13 sequence v1 applies only to a version the worker derived from the standing territory
+            // policy. Every other campaign keeps the exact "advance to the next step" rule it had.
+            const territory = evidence.channel === 'call' && describeTerritoryPolicyVersion(version) !== null
+              ? advanceTerritorySequence({ version, enrollment: { currentStepId: old.currentStepId, startedAt: old.startedAt }, outcome: evidence.outcome, observedAt: evidence.observedAt })
+              : null;
+            if (territory) {
+              enrollment.currentStepId = territory.currentStepId;
+              enrollment.state = territory.state === 'stopped' ? 'stopped' : territory.state;
+              enrollment.nextDueAt = territory.nextDueAt;
+              enrollment.restingUntil = territory.restingUntil;
+            } else {
+              enrollment.currentStepId = next?.id ?? null;
+              if (!next) enrollment.state = 'completed';
+            }
           }
         }
         if (definitiveCancellation && !conflict) {

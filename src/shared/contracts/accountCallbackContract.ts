@@ -28,6 +28,19 @@ export const readAccountCallbacksSchema = z.strictObject({ accountIds: z.array(i
 export type ReadAccountCallbacks = z.infer<typeof readAccountCallbacksSchema>;
 export const accountCallbackListSchema = z.array(accountCallbackSchema).max(5000);
 
+/**
+ * "Never call this firm": the standalone control writes the same account suppression tombstone the
+ * `opt_out` outcome writes, after two confirmations. It is not an outcome, it never dials, and it
+ * never prepares a handoff. The renderer names the command identity so a retry writes the same row.
+ */
+export const neverCallAccountSchema = z.strictObject({ accountId: id, commandId: z.uuid(),
+  /** What David saw. Recorded beside the tombstone as the caller's own words, never sent anywhere. */
+  reason: z.string().trim().min(1).max(2000) });
+export type NeverCallAccount = z.infer<typeof neverCallAccountSchema>;
+export const neverCallReceiptSchema = z.strictObject({ id, accountId: id, observedAt: z.string().datetime({ offset: true }),
+  source: z.string().min(1).max(200), evidenceRef: id, suppressed: z.literal(true) });
+export type NeverCallReceipt = z.infer<typeof neverCallReceiptSchema>;
+
 /** One local business day count. Weekends are skipped; public holidays are not modelled and are not claimed to be. */
 export function addBusinessDays(dueOn: string, days: number): string {
   const parsed = localDateSchema.parse(dueOn);

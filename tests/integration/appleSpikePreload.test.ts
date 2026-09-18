@@ -73,7 +73,7 @@ describe('preload Apple feasibility bridge', () => {
     expect(api.daily.get).toBeTypeOf('function');
     expect(Object.keys(api.delegation).sort()).toEqual([
       'approveRequestedFollowup', 'beginPhone', 'bootstrap', 'closeCallback', 'configure', 'configureIntake', 'configurePolicy', 'configureResearch',
-      'editReplyDraft', 'editRequestedFollowup', 'getAccountPreparation', 'getPhoneHandoffState', 'getRequestedFollowup', 'getSelectedAccountFreshness', 'googleConnections', 'listCallbacks', 'pair', 'policyImport', 'prepareRequestedFollowup', 'reconcileReplyDraft', 'refreshSelectedAccount', 'researchSetup', 'saveCallback', 'status', 'submit', 'sync', 'territoryPolicy',
+      'editReplyDraft', 'editRequestedFollowup', 'getAccountPreparation', 'getPhoneHandoffState', 'getRequestedFollowup', 'getSelectedAccountFreshness', 'googleConnections', 'listCallbacks', 'neverCall', 'pair', 'policyImport', 'prepareRequestedFollowup', 'reconcileReplyDraft', 'refreshSelectedAccount', 'researchSetup', 'saveCallback', 'status', 'submit', 'sync', 'territoryPolicy',
     ]);
     expect(Object.keys(api.linkedin).sort()).toEqual([
       'begin', 'copy', 'get', 'open', 'prepare', 'recover', 'reportOutcome', 'save',

@@ -12,7 +12,7 @@ import {prepareRequestedFollowupSchema,getRequestedFollowupSchema,editRequestedF
 import {workerPolicyRequestSchema,workerPolicyReceiptSchema} from '../shared/contracts/workerPolicyContract';
 import {configureAccountIntakeSchema,boundAccountIntakeConfigureStatus,type ConfigureAccountIntake,type AccountIntakeConfigureStatus} from '../shared/contracts/accountIntakeConfigureContract';
 import {territoryCallPolicyRequestSchema,territoryCallPolicyStatusSchema,type TerritoryCallPolicyRequest,type TerritoryCallPolicyStatus} from '../shared/contracts/territoryCallPolicyContract';
-import {saveAccountCallbackSchema,closeAccountCallbackSchema,readAccountCallbacksSchema,accountCallbackListSchema,type SaveAccountCallback,type CloseAccountCallback,type ReadAccountCallbacks} from '../shared/contracts/accountCallbackContract';
+import {saveAccountCallbackSchema,closeAccountCallbackSchema,readAccountCallbacksSchema,accountCallbackListSchema,neverCallAccountSchema,neverCallReceiptSchema,type SaveAccountCallback,type CloseAccountCallback,type ReadAccountCallbacks,type NeverCallAccount,type NeverCallReceipt} from '../shared/contracts/accountCallbackContract';
 import {accountCallbackSchema,type AccountCallback} from '../shared/contracts/dailyContract';
 import {createLinkedInApi} from './apis/linkedInApi';
 import { delegatedPhoneHandoffRequestSchema,bootstrapSelectedAccountSchema,refreshSelectedAccountRecordSchema,selectedAccountFreshnessRequestSchema,selectedAccountFreshnessSchema,configureResearchSourceSchema,ownerResearchSourceSchema,configureLocalDelegationSchema,localDelegationStatusSchema,localDelegationConfigurationRecordSchema,redeemLocalPairingSchema,redeemedLocalPairingSchema,delegationSyncReportSchema,type RefreshSelectedAccountRecord,type SelectedAccountFreshnessRequest,type SelectedAccountFreshness } from '../shared/contracts/ownerCommandContract';
@@ -66,7 +66,8 @@ export const createCallieApi = (invoker: IpcInvoker) => {
   // Optional for the same older-bridge compatibility. Reading and writing a promised callback is local only:
   // it never dials, sends, books or queues an owner command, and it never reschedules the firm by itself.
   const callbackExtension: { listCallbacks?: (input: ReadAccountCallbacks) => Promise<AccountCallback[]>;
-    saveCallback?: (input: SaveAccountCallback) => Promise<AccountCallback>; closeCallback?: (input: CloseAccountCallback) => Promise<AccountCallback> } = {
+    saveCallback?: (input: SaveAccountCallback) => Promise<AccountCallback>; closeCallback?: (input: CloseAccountCallback) => Promise<AccountCallback>;
+    neverCall?: (input: NeverCallAccount) => Promise<NeverCallReceipt> } = {
     listCallbacks: async raw => client.request('outreach:callback-list', readAccountCallbacksSchema, accountCallbackListSchema, Object.freeze(readAccountCallbacksSchema.parse(raw))),
     saveCallback: async raw => {
       const request = Object.freeze(saveAccountCallbackSchema.parse(raw));
@@ -77,6 +78,12 @@ export const createCallieApi = (invoker: IpcInvoker) => {
       const request = Object.freeze(closeAccountCallbackSchema.parse(raw));
       return client.request('outreach:callback-close', closeAccountCallbackSchema,
         accountCallbackSchema.refine(closed => closed.id === request.id && closed.state === request.state && closed.revision === request.expectedRevision + 1, 'account_callback_identity_mismatch'), request);
+    },
+    // Writes the existing account tombstone only: never dials, never prepares a handoff, never records an outcome.
+    neverCall: async raw => {
+      const request = Object.freeze(neverCallAccountSchema.parse(raw));
+      return client.request('outreach:never-call', neverCallAccountSchema,
+        neverCallReceiptSchema.refine(receipt => receipt.accountId === request.accountId, 'never_call_identity_mismatch'), request);
     },
   };
   return {

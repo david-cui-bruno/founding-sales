@@ -10,9 +10,10 @@ import { commandReceiptSchema } from '../../../shared/contracts/commandReceiptCo
 import { openSettingsSection } from '../../foundation/settingsNavigation';
 import { captureDailySessionScope } from './dailySessionScope';
 import { RequestedEmailPreparation } from './RequestedEmailPreparation';
-import { allowedPhoneReports, companyPhoneSession, freezePhoneValue, makePhoneReview, notifyPhoneSession, parsePhoneHistory,
+import { allowedPhoneReports, companyPhoneSession, describePhoneOutcome, freezePhoneValue, makePhoneReview, notifyPhoneSession, parsePhoneHistory,
   phoneFreshBinding, phoneHistoryScope, phoneOwner, phoneSelection, type CompanyPhoneApi, type PhoneAttempt,
   type PhoneConfig, type PhoneOutcome, type PhoneReport, type PhoneReview } from './companyPhoneSession';
+import { localDateSchema } from '../../../shared/contracts/accountCallbackContract';
 
 type Context = { snapshot: DailySnapshot; config: PhoneConfig; history: PhoneHandoffState };
 const actualOutcomes: ReadonlySet<string> = new Set(actualAccountCallOutcomes);
@@ -58,6 +59,11 @@ export function CompanyPhoneCall({ api, snapshot, config, accountId, readError =
   const [observedAt, setObservedAt] = useState('');
   const [reportConfirmed, setReportConfirmed] = useState(false);
   const [optOutConfirmed, setOptOutConfirmed] = useState(false);
+  const [note, setNote] = useState('');
+  const [callbackOn, setCallbackOn] = useState('');
+  const [neverCallReason, setNeverCallReason] = useState('');
+  const [neverCallReviewed, setNeverCallReviewed] = useState(false);
+  const [neverCallConfirmed, setNeverCallConfirmed] = useState(false);
   const lifetime = useRef(0);
   const readSequence = useRef(0);
   const guard = JSON.stringify([selectorKey, snapshot.workflowMode, snapshot.freshness.kind, snapshot.issues,
@@ -77,6 +83,7 @@ export function CompanyPhoneCall({ api, snapshot, config, accountId, readError =
   }, [session, guard, api.daily, api.delegation, api.localWorkspace, api.phoneSetup]);
   useLayoutEffect(() => {
     setContext(null); setNotice(''); setHandoffChoice(''); setOutcome(''); setObservedAt('');
+    setNote(''); setCallbackOn(''); setNeverCallReason(''); setNeverCallReviewed(false); setNeverCallConfirmed(false);
   }, [selectorKey]);
   // Selection performs only the selected local history read. Setup and owner
   // reconciliation require their own explicit user action.
@@ -212,11 +219,12 @@ export function CompanyPhoneCall({ api, snapshot, config, accountId, readError =
       const owner = phoneOwner(context.snapshot, accountId), original = attempt.handoff;
       const instant = new Date(observedAt).toISOString();
       if (!original.consumedAt || Date.parse(instant) < Date.parse(original.consumedAt) || Date.parse(instant) > Date.now()) throw Error('Observed time must be at or after consumption and not in the future.');
+      if (callbackOn) localDateSchema.parse(callbackOn);
       const commandId = crypto.randomUUID();
       command = freezePhoneValue(completeManualCommandSchema.parse({ commandId, workspaceId, accountId: attempt.command.accountId,
         expectedAuthorityGeneration: owner.authority!.generation, expectedVersion: owner.executionVersion, kind: 'complete-manual',
         payload: { handoffId: original.value.handoffId, targetHash: original.value.targetHash,
-          outcome: { actionId: original.value.actionId, channel: 'call', outcome, observedAt: instant, evidenceRef: commandId, replyText: null } } }));
+          outcome: { actionId: original.value.actionId, channel: 'call', outcome, observedAt: instant, evidenceRef: commandId, replyText: note.trim() ? note : null } } }));
     } catch (error) { setNotice(`HOLD: ${errorText(error)}`); return; }
     session.busy = true; notifyPhoneSession(session); readSequence.current++; setReading(false); setReportConfirmed(false);
     let check: (() => void) | null = null;
@@ -233,11 +241,36 @@ export function CompanyPhoneCall({ api, snapshot, config, accountId, readError =
       const rawReceipt = await api.delegation.submit(command); check();
       const receipt = commandReceiptSchema.parse(rawReceipt);
       if (receipt.commandId !== command.commandId) throw Error('Report receipt identity mismatch.');
-      setNotice('Human report queued, awaiting owner-applied evidence. No call is created by reporting.');
+      // Saving the promise is a local record bound to this exact report: a retry reaches the same row,
+      // and it never dials, sends, books or queues an owner command of its own.
+      let callbackNotice = '';
+      if (callbackOn && api.delegation.saveCallback) {
+        try {
+          const saved = await api.delegation.saveCallback({ accountId: command.accountId, dueOn: callbackOn, note: note.trim() ? note : null, sourceCommandId: command.commandId });
+          check(); callbackNotice = ` Callback saved for ${saved.dueOn}; this firm leads Today that morning.`;
+        } catch (error) { callbackNotice = ` HOLD: the callback was not saved (${errorText(error)}). The report itself is queued.`; }
+      } else if (callbackOn) callbackNotice = ' HOLD: this bridge cannot save a callback. The report itself is queued.';
+      setNotice(`Human report queued, awaiting owner-applied evidence. No call is created by reporting.${callbackNotice}`);
       const refreshed = await readContext(check, selector); check(); acceptContext(refreshed); onRefresh();
     } catch (error) {
       try { check?.(); setStale(true); setNotice(session.reports.has(handoffId) ? 'Human report result unknown. Its exact command is retained. Reconcile phone history, do not submit a replacement.' : `HOLD: ${errorText(error)}`); } catch { /* Original report stays retained across teardown. */ }
     } finally { session.busy = false; notifyPhoneSession(session); }
+  }
+  async function neverCall() {
+    if (!available || busy || !neverCallReviewed || !neverCallConfirmed || !neverCallReason.trim()) return;
+    if (!api.delegation.neverCall) { setNotice('HOLD: this bridge cannot record a never-call decision.'); return; }
+    let check: (() => void) | null = null;
+    try {
+      check = capture();
+      // Suppression only. No handoff is prepared, no number is dialed and no outcome is recorded.
+      const receipt = await api.delegation.neverCall({ accountId, commandId: crypto.randomUUID(), reason: neverCallReason.trim() });
+      check();
+      setNeverCallReviewed(false); setNeverCallConfirmed(false); setNeverCallReason('');
+      setNotice(`Never call recorded at ${receipt.observedAt}. This firm is suppressed; no call was placed and no outcome was recorded.`);
+      onRefresh();
+    } catch (error) {
+      try { check?.(); setNotice(`HOLD: ${errorText(error)}`); } catch { /* Invalid lifetime cannot publish. */ }
+    }
   }
   const busy = !!session?.busy || reading;
   // The call card's "last outcome and note" line: the newest owner-applied human report in this complete local history.
@@ -294,15 +327,28 @@ export function CompanyPhoneCall({ api, snapshot, config, accountId, readError =
     {consumed.length > 0 && <fieldset disabled={!available || busy || stale}>
       <legend>Report an observed phone outcome</legend>
       <label>Consumed handoff<select style={{ paddingBlock: 0 }} aria-label="Consumed handoff" value={handoffId} onChange={event => { setHandoffChoice(event.target.value); setOutcome(''); setObservedAt(''); setReportConfirmed(false); setOptOutConfirmed(false); }}><option value="">Choose original consumed handoff</option>{consumed.map(value => <option key={value.command.commandId} value={value.handoff!.value.handoffId}>{value.handoff!.value.handoffId}</option>)}</select></label>
-      <label>Observed phone outcome<select style={{ paddingBlock: 0 }} aria-label="Observed phone outcome" value={outcome} disabled={!allowed.length || !!retainedReport} onChange={event => { setOutcome(event.target.value as PhoneOutcome | ''); setReportConfirmed(false); setOptOutConfirmed(false); }}><option value="">Choose observed outcome</option>{allowed.map(value => <option key={value} value={value}>{value}</option>)}</select></label>
+      <label>Observed phone outcome<select style={{ paddingBlock: 0 }} aria-label="Observed phone outcome" value={outcome} disabled={!allowed.length || !!retainedReport} onChange={event => { setOutcome(event.target.value as PhoneOutcome | ''); setReportConfirmed(false); setOptOutConfirmed(false); }}><option value="">Choose observed outcome</option>{allowed.map(value => <option key={value} value={value}>{describePhoneOutcome(value)}</option>)}</select></label>
       <label>Observed at (local time)<input aria-label="Observed at (local time)" type="datetime-local" step="1" value={observedAt} onChange={event => { setObservedAt(event.target.value); setReportConfirmed(false); }} /></label>
       <p>Enter when you actually observed this outcome, at or after consumption and not in the future. This is a human report, not provider evidence. Saving queues the report without automatic owner reconciliation.</p>
+      <label>Note<textarea aria-label="Note" rows={3} maxLength={10000} value={note} onChange={event => { setNote(event.target.value); setReportConfirmed(false); }} /></label>
+      <p>Your own words about this call. The note is stored with the report and shown on the card&apos;s last-outcome line. It is never sent anywhere.</p>
+      <label>Call back on<input aria-label="Call back on" type="date" value={callbackOn} onChange={event => { setCallbackOn(event.target.value); setReportConfirmed(false); }} /></label>
+      <p>A business day in the firm&apos;s own time zone. Saving the promise records it locally and puts this firm first on Today that morning. It never dials, sends or books.</p>
       <label><input type="checkbox" checked={reportConfirmed} onChange={event => setReportConfirmed(event.target.checked)} />I confirm this observed outcome and time</label>
       {outcome === 'opt_out' && <label><input type="checkbox" checked={optOutConfirmed} onChange={event => setOptOutConfirmed(event.target.checked)} />I confirm the explicit opt-out and immediate account suppression</label>}
       <button disabled={!outcome || !observedAt || !reportConfirmed || !!retainedReport || !allowed.includes(outcome) || outcome === 'opt_out' && !optOutConfirmed} onClick={() => void reportOutcome()}>Record phone outcome</button>
       {retainedReport && <p>Exact human report {retainedReport.commandId} is retained. Reconcile its existing command rather than submitting a replacement.</p>}
       {!allowed.length && <p>HOLD: pending, settled or conflicting evidence does not permit a replacement report.</p>}
     </fieldset>}
+    <fieldset disabled={!available || busy}>
+      <legend>Never call this firm</legend>
+      <p>This is not a call outcome and it never dials. It writes the same account suppression the explicit opt-out outcome writes, and nothing else. It cannot be undone from here.</p>
+      <label>Why this firm should never be called<textarea aria-label="Why this firm should never be called" rows={2} maxLength={2000} value={neverCallReason}
+        onChange={event => { setNeverCallReason(event.target.value); setNeverCallReviewed(false); setNeverCallConfirmed(false); }} /></label>
+      <label><input type="checkbox" checked={neverCallReviewed} onChange={event => { setNeverCallReviewed(event.target.checked); setNeverCallConfirmed(false); }} />I have read the reason above and it is about this firm</label>
+      <label><input type="checkbox" checked={neverCallConfirmed} disabled={!neverCallReviewed} onChange={event => setNeverCallConfirmed(event.target.checked)} />I confirm permanent suppression of this firm</label>
+      <button disabled={!neverCallReason.trim() || !neverCallReviewed || !neverCallConfirmed} onClick={() => void neverCall()}>Never call this firm</button>
+    </fieldset>
     {notice && <p role="status">{notice}</p>}
   </section>;
 }
