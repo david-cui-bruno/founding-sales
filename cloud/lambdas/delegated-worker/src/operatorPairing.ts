@@ -1,12 +1,17 @@
 import type { DynamoAdapter } from './dynamoStore';
 import type { WorkerScope } from './workerAuth';
 
-const HELP = 'Usage: operator-pairing --account 12_DIGITS --region REGION --table TABLE --workspace WORKSPACE --expires 30..600 --scopes events:read[,commands:write,google:grant,pairing:revoke] --output /private/directory/file [--execute]\nDefault: dry-run, no filesystem, credentials or network access. Standalone execute verifies AWS identity after private output reservation. Workspace IDs beginning -- are not supported. Never pass a code or credential as an argument.';
+const HELP = 'Usage: operator-pairing --account 12_DIGITS --region REGION --table TABLE --workspace WORKSPACE --expires 30..600 --scopes events:read[,commands:write,google:grant,pairing:revoke] --output /private/directory/file [--rotate PAIRING_ID] [--execute]\nDefault: dry-run, no filesystem, credentials or network access. Standalone execute verifies AWS identity after private output reservation. Workspace IDs beginning -- are not supported. Never pass a code or credential as an argument.\n--rotate PAIRING_ID: mint a rotation code for an existing, unrevoked pairing instead of a fresh pairing. The pairing id and every record bound to it stay; redeeming the code replaces both credentials at the next generation with the given scopes, which must keep commands:write and events:read. The previous credentials stop working at redemption.';
 const hasControlCharacters = (value: string) => [...value].some(char => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127);
 const SCOPES = ['commands:write', 'events:read', 'google:grant', 'pairing:revoke'] as const;
+const DESKTOP_SCOPES = ['commands:write', 'events:read'] as const;
+/** Lower-case RFC 4122 form only, the shape WorkerAuth stores and the desktop shows. */
+const PAIRING_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 export type PairingOptions = {
   account: string; region: string; table: string; workspace: string;
   expires: number; scopes: WorkerScope[]; output: string; execute: boolean;
+  /** The existing pairing whose credentials the code will rotate, or null for a fresh pairing. */
+  rotate: string | null;
 };
 export type OperatorResult = { exitCode: number; message: string };
 const result = (exitCode: number, message: string): OperatorResult => ({ exitCode, message });
@@ -21,13 +26,14 @@ export function parseOperatorArgs(args: readonly string[]): PairingOptions | 'he
       if (execute) throw new Error('invalid_arguments');
       execute = true; continue;
     }
-    if (!['--account', '--region', '--table', '--workspace', '--expires', '--scopes', '--output'].includes(key)
+    if (!['--account', '--region', '--table', '--workspace', '--expires', '--scopes', '--output', '--rotate'].includes(key)
       || fields.has(key) || !args[i + 1] || args[i + 1]!.startsWith('--')) throw new Error('invalid_arguments');
     fields.set(key, args[++i]!);
   }
   const get = (name: string) => fields.get(`--${name}`) ?? '';
   const account = get('account'), region = get('region'), table = get('table'), workspace = get('workspace');
   const expiry = get('expires'), output = get('output'), scopes = get('scopes').split(',');
+  const rotate = fields.has('--rotate') ? get('rotate') : null;
   // Use the Terraform workspace character contract; CLI values beginning -- remain reserved for flags.
   if (!/^\d{12}$/.test(account) || !/^[a-z]{2}(?:-[a-z]+)+-\d$/.test(region)
     || !/^[A-Za-z0-9_.-]{3,255}$/.test(table) || !/^[A-Za-z0-9_-]{1,128}$/.test(workspace)
@@ -36,7 +42,9 @@ export function parseOperatorArgs(args: readonly string[]): PairingOptions | 'he
     || scopes.some(scope => !SCOPES.some(allowed => allowed === scope))
     || !output.startsWith('/') || output.length > 4096 || hasControlCharacters(output)
     || output.split('/').slice(1).some(part => !part || part === '.' || part === '..')) throw new Error('invalid_arguments');
-  return { account, region, table, workspace, expires: Number(expiry), scopes: scopes as WorkerScope[], output, execute };
+  // A rotation names one existing pairing and may never drop the two scopes the desktop pairing needs.
+  if (rotate !== null && (!PAIRING_ID.test(rotate) || DESKTOP_SCOPES.some(scope => !scopes.includes(scope)))) throw new Error('invalid_arguments');
+  return { account, region, table, workspace, expires: Number(expiry), scopes: scopes as WorkerScope[], output, execute, rotate };
 }
 
 /** Narrow trusted composition seam, not an HTTP route. The standalone adapter
@@ -67,7 +75,10 @@ export async function runOperatorPairing(args: readonly string[], deps?: Operato
   let options: PairingOptions | 'help';
   try { options = parseOperatorArgs(args); } catch { return result(2, 'Invalid arguments. Use --help.'); }
   if (options === 'help') return result(0, HELP);
-  if (!options.execute) return result(0, 'Dry-run valid. No IO performed, identity and destination are NOT verified. No pairing issued.');
+  if (!options.execute) {
+    return result(0, options.rotate === null ? 'Dry-run valid. No IO performed, identity and destination are NOT verified. No pairing issued.'
+      : 'Dry-run valid. No IO performed, identity, destination and pairing are NOT verified. No rotation issued.');
+  }
   if (!deps) return result(2, 'Execution unavailable: approved STS identity adapter required. No IO performed.');
   let output: PrivateOutput | undefined, cloud: OperatorCloud | undefined;
   let issuanceStarted = false, saved = false;
@@ -88,10 +99,26 @@ export async function runOperatorPairing(args: readonly string[], deps?: Operato
       const auth = new WorkerAuth({ dynamo: cloud.dynamo, tableName: arn, workspaceId: options.workspace,
         clock: { now: () => new Date().toISOString() } });
       issuanceStarted = true;
-      const grant = await auth.issuePairing({ scopes: options.scopes, expiresInSeconds: options.expires });
-      await output.save(grant.code);
-      saved = true;
-      outcome = result(0, 'Pairing code saved to private output. No code printed.');
+      if (options.rotate === null) {
+        const grant = await auth.issuePairing({ scopes: options.scopes, expiresInSeconds: options.expires });
+        await output.save(grant.code);
+        saved = true;
+        outcome = result(0, 'Pairing code saved to private output. No code printed.');
+      } else {
+        let rotation: { code: string } | null = null;
+        try { rotation = await auth.issueRotation({ pairingId: options.rotate, scopes: options.scopes, expiresInSeconds: options.expires }); }
+        catch (error) {
+          // issueRotation refuses an unknown or revoked pairing before it writes anything; every other failure stays uncertain.
+          if (!(error instanceof Error) || error.message !== 'pairing_unavailable') throw error;
+          issuanceStarted = false;
+          outcome = result(1, 'Pairing unknown or revoked. No rotation issued. Reserved output retained.');
+        }
+        if (rotation) {
+          await output.save(rotation.code);
+          saved = true;
+          outcome = result(0, 'Rotation code saved to private output. No code printed. The current credential keeps working until the code is redeemed.');
+        }
+      }
     }
   } catch {
     if (issuanceStarted) outcome = result(1, 'Issuance or output durability uncertain. Do NOT blindly retry. Output may be empty or partial. Treat any code as active until expiry, reconcile privately.');

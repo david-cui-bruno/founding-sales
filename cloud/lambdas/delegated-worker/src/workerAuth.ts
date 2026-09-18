@@ -3,7 +3,7 @@ import { TransactWriteItemsCommand } from '@aws-sdk/client-dynamodb';
 import { z } from 'zod';
 import { authorityStateSchema, delegationCommandSchema, type DelegationCommand } from '../../../../src/shared/contracts/delegationContract';
 import { accountIdSchema } from '../../../../src/shared/contracts/accountContract';
-import { DynamoStore, fingerprint, keyPart, withDynamoReadErrors, type RepositoryOptions, type DynamoAdapter } from './dynamoStore';
+import { DynamoStore, DynamoReadUnavailable, fingerprint, keyPart, withDynamoReadErrors, type RepositoryOptions, type DynamoAdapter } from './dynamoStore';
 export const workerScopeSchema = z.enum(['commands:write', 'events:read', 'google:grant', 'pairing:revoke', 'emergency:stop']);
 export type WorkerScope = z.infer<typeof workerScopeSchema>;
 export type WorkerPrincipal = { pairingId: string; workspaceId: string; generation: number; kind: 'device' | 'emergency'; scopes: WorkerScope[]; credentialHash: string };
@@ -44,8 +44,7 @@ export class WorkerAuth {
     if (scopes.includes('emergency:stop') || DESKTOP_PAIRING_SCOPES.some(scope => !scopes.includes(scope))) throw new Error('worker_scope_denied');
     z.number().int().min(30).max(600).parse(input.expiresInSeconds);
     const pairingId = z.string().uuid().parse(input.pairingId);
-    let current: Awaited<ReturnType<WorkerAuth['activePairing']>>;
-    try { current = await this.activePairing(pairingId); } catch { throw new Error('pairing_unavailable'); }
+    const current = await this.existingPairing(pairingId);
     const code = secret();
     await this.store.transact([this.store.put(`BOOTSTRAP#${secretHash(code)}`, { kind: 'rotation', pairingId, scopes,
       expiresAt: Date.parse(this.store.now()) + input.expiresInSeconds * 1000, consumed: false }, null)]);
@@ -75,8 +74,8 @@ export class WorkerAuth {
     // credentials fail `credential()` the moment this commits; a fresh bootstrap creates the pairing at generation 0.
     let pairing: { rev: number | null; generation: number } = { rev: null, generation: 0 };
     if (parsed.data.kind === 'rotation') {
-      try { const current = await this.activePairing(pairingId); pairing = { rev: current.rev, generation: current.data.generation + 1 }; }
-      catch { throw new Error('pairing_unavailable'); }
+      const current = await this.existingPairing(pairingId);
+      pairing = { rev: current.rev, generation: current.data.generation + 1 };
     }
     try {
       await this.store.transact([
@@ -93,6 +92,15 @@ export class WorkerAuth {
     const parsed = pairingSchema.safeParse(stored?.data);
     if (!stored || !parsed.success || parsed.data.pairingId !== pairingId || parsed.data.revoked) throw new Error('worker_unauthorized');
     return { ...stored, data: parsed.data };
+  }
+  /** The rotation view of `activePairing`: an unknown or revoked pairing is `pairing_unavailable`, while a DynamoDB
+   * read outage keeps its own identity so neither the handler nor the operator tool can mistake it for a refusal. */
+  private async existingPairing(pairingId: string) {
+    try { return await this.activePairing(pairingId); }
+    catch (error) {
+      if (error instanceof DynamoReadUnavailable) throw error;
+      throw new Error('pairing_unavailable');
+    }
   }
   private async credential(hash: string, required: WorkerScope[]) {
     const stored = await this.store.get<unknown>(`TOKEN#${hash}`);
