@@ -20,7 +20,7 @@ import {
 /** Exact registrar inventories after the legacy route removal. */
 const CONSTRUCTION_CHANNEL_COUNT = 24;
 const COMPANY_UI_CHANNEL_COUNT = 27;
-const RETAINED_UI_CHANNEL_COUNT = 64;
+const RETAINED_UI_CHANNEL_COUNT = 65;
 import type { RegisteredIpcHandler } from '../fixtures/registeredIpcHandler';
 
 // Only Electron's registration/invoke transport is replaced. No native DB,

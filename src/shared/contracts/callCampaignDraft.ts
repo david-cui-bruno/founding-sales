@@ -1,5 +1,6 @@
 import { sha256Utf8 } from '../crypto/sha256';
 import { campaignVersionSchema, type CampaignVersion } from './campaignContract';
+import { describeTerritoryPolicyVersion, type TerritoryPolicyVersionDescription } from './territoryCallPolicyContract';
 
 export type CreateCallCampaignDraftInput = {
   campaignId: string;
@@ -106,4 +107,16 @@ export function describeOneCompanyCampaignTemplate(version: unknown): (TemplateD
   if (call) return { channel: 'call', ...call };
   const linkedin = describeTemplate('linkedin', version);
   return linkedin ? { channel: 'linkedin', ...linkedin } : null;
+}
+
+export type CampaignTemplateDescription =
+  | (TemplateDescription & { kind: 'one_company'; channel: OneCompanyCampaignChannel })
+  | (TerritoryPolicyVersionDescription & { kind: 'territory_policy' });
+/** Every version the renderer can name: the two exact one-company manual templates (Lenox's path, unchanged) or a
+ * version the worker derived from the approved territory call policy, read-only. Anything else is opaque. */
+export function describeCampaignTemplate(version: unknown): CampaignTemplateDescription | null {
+  const manual = describeOneCompanyCampaignTemplate(version);
+  if (manual) return { kind: 'one_company', ...manual };
+  const territory = describeTerritoryPolicyVersion(version);
+  return territory ? { kind: 'territory_policy', ...territory } : null;
 }

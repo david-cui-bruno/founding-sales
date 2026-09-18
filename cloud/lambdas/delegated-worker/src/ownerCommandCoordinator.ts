@@ -15,12 +15,14 @@ import { accountRecordSchema, accountKey, createWorkerAccountRepository, isSelec
 import { intakeRegistryKey, intakeRegistrySchema, createIntakeBarrier, validatePendingHandoff } from './intakeBarrier';
 import type { WorkerAuth } from './workerAuth';
 import type { RemoteGoogleAuthorization } from './remoteGoogleAuthorization';
-import { requestedOwnerDraftRequestSchema, requestedOwnerContextRequestSchema, requestedOwnerContextSchema, ownerCheckpointRequestSchema, ownerCheckpointSchema, configureResearchSourceSchema, ownerResearchSourceKey, ownerResearchSourceSchema, ownerCommandSchema, ownerSourceConfigurationSchema, ownerSourceKey, manualHandoffSchema, type ManualHandoff, type ManualOutcome, type OwnerCommand } from '../../../../src/shared/contracts/ownerCommandContract';
+import { requestedOwnerDraftRequestSchema, requestedOwnerContextRequestSchema, requestedOwnerContextSchema, ownerCheckpointRequestSchema, ownerCheckpointSchema, configureResearchSourceSchema, ownerResearchSourceKey, ownerResearchSourceSchema, ownerCommandSchema, ownerSourceConfigurationSchema, ownerSourceKey, manualHandoffSchema, type ManualHandoff, type ManualOutcome, type OwnerCommand, type TerritoryPolicyCommand } from '../../../../src/shared/contracts/ownerCommandContract';
 import { delegationCommandSchema, commandReceiptSchema, workerEventSchema, type CommandReceipt, type WorkerEvent } from '../../../../src/shared/contracts/delegationContract';
 import { DynamoStore, fingerprint, keyPart } from './dynamoStore';
 import { authorityRecordSchema, executionAuthorityKey, executionAuthorityFields, createExecutionRepository } from './executionRepository';
 import { DynamoThreadIntakeRepository, mailDraftKey, mailThreadKey, mailCursorKey, mailSuppressionKey } from './threadIntakeRepository';
 import { DynamoDispatchRepository, dispatchApprovalKey, dispatchPermissionKey, dispatchIntentKey, dispatchApprovalSchema, type DispatchIntent } from './dispatchRepository';
+import { TerritoryPolicyRepository } from './territoryPolicyRepository';
+import { territoryCallPolicyReceiptSchema, type TerritoryCallPolicyReceipt } from '../../../../src/shared/contracts/territoryCallPolicyContract';
 
 /** Authenticated owner admission. No provider action is performed here. Partially
  * admitted immutable records cannot dispatch without a separate requested work item. */
@@ -28,6 +30,7 @@ export class OwnerCommandCoordinator {
   constructor(readonly input: { auth: WorkerAuth; authorization: RemoteGoogleAuthorization }) {}
   async reconcile(raw:unknown,authorization:string):Promise<CommandReceipt> {
     const command=delegationCommandSchema.parse(raw);const principal=await this.input.auth.authenticate(authorization,['commands:write']);this.input.auth.store.workspace(command.workspaceId);
+    if(command.kind==='territory-policy')throw Error('command_requires_explicit_reconciliation');
     const store=new DynamoStore({...this.input.auth.options,dynamo:this.input.auth.fencedDynamo(principal)});const key=`COMMAND#${keyPart(command.commandId)}`;const fp=fingerprint(command);
     const previous=await store.get<{fingerprint:string;receipt:CommandReceipt;sequence:number}>(key);
     if(previous){if(previous.data.fingerprint!==fp)throw Error('command_fingerprint_conflict');await store.publish(previous.data.sequence);return commandReceiptSchema.parse(previous.data.receipt);}
@@ -146,12 +149,16 @@ export class OwnerCommandCoordinator {
     await store.transact([store.put(key,config,current?.rev??null),store.put(receiptKey,{fingerprint:fp,configuration:config},null),store.absent('GUIDED_RESEARCH_SETUP')]);
     return config;
   }
-  async apply(raw: unknown, authorization: string): Promise<CommandReceipt> {
+  apply(raw: TerritoryPolicyCommand, authorization: string): Promise<TerritoryCallPolicyReceipt>;
+  apply(raw: unknown, authorization: string): Promise<CommandReceipt>;
+  async apply(raw: unknown, authorization: string): Promise<CommandReceipt | TerritoryCallPolicyReceipt> {
     const command = ownerCommandSchema.parse(raw);
     const principal = await this.input.auth.authenticate(authorization, ['commands:write']);
     this.input.auth.store.workspace(command.workspaceId);
     const options = { ...this.input.auth.options, dynamo: this.input.auth.fencedDynamo(principal) };
     const store = new DynamoStore(options);
+    // The territory policy is workspace-level: no account authority row, no outbox event, its own revision is the CAS.
+    if (command.kind === 'territory-policy') return this.territoryPolicy(command, principal.pairingId, store);
     const key = `COMMAND#${keyPart(command.commandId)}`;
     const fp = fingerprint(command);
     const previous = await store.get<{ fingerprint: string; receipt: CommandReceipt; sequence: number }>(key);
@@ -265,6 +272,25 @@ export class OwnerCommandCoordinator {
       store.put(key, { fingerprint: fp, receipt, sequence: outbox.sequence, command }, null), ...finalize(), ...outbox.items]);
     await store.publish(outbox.sequence);
     return receipt;
+  }
+  /** Approve, pause, resume or read the standing territory call policy (D1). Approve and set-state store their receipt
+   * under the command id like every owner command, so a retry answers the same; a read stores nothing. The reply always
+   * carries the policy as it stands afterwards, since the desktop keeps no copy of a workspace-level record. */
+  private async territoryPolicy(command: TerritoryPolicyCommand, pairingId: string, store: DynamoStore): Promise<TerritoryCallPolicyReceipt> {
+    const repository = new TerritoryPolicyRepository(store.options);
+    if (command.payload.kind === 'policy.read') {
+      const plan = await repository.planCommand(command, pairingId);
+      return territoryCallPolicyReceiptSchema.parse({ receipt: plan.receipt, policy: plan.policy });
+    }
+    const key = `COMMAND#${keyPart(command.commandId)}`; const fp = fingerprint(command);
+    const previous = await store.get<{ fingerprint: string; receipt: CommandReceipt }>(key);
+    if (previous) {
+      if (previous.data.fingerprint !== fp) throw new Error('command_fingerprint_conflict');
+      return territoryCallPolicyReceiptSchema.parse({ receipt: previous.data.receipt, policy: (await repository.read())?.data ?? null });
+    }
+    const plan = await repository.planCommand(command, pairingId);
+    await store.transact([...plan.items, store.put(key, { fingerprint: fp, receipt: plan.receipt, command }, null)]);
+    return territoryCallPolicyReceiptSchema.parse({ receipt: plan.receipt, policy: plan.policy });
   }
   private async bootstrap(command:Extract<OwnerCommand,{kind:'bootstrap-selected-account'}>,store:DynamoStore,fp:string,key:string):Promise<CommandReceipt> {
     const p=command.payload;const record=p.record;

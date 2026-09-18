@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { TransactWriteItem } from '@aws-sdk/client-dynamodb';
 import { accountIdSchema as id, accountInstantSchema as instant, accountRouteSchema, accountSchema } from '../../../../src/shared/contracts/accountContract';
-import { campaignCommandPayloadSchema, campaignCancellationEvidenceSchema, campaignEventPayloadSchema, campaignVersionSchema, enrollmentSchema, stepEvidenceSchema, type CampaignCommandPayload, type CampaignEventPayload } from '../../../../src/shared/contracts/campaignContract';
+import { campaignCommandPayloadSchema, campaignCancellationEvidenceSchema, campaignEventPayloadSchema, campaignVersionSchema, enrollmentSchema, stepEvidenceSchema, type CampaignCommandPayload, type CampaignEventPayload, type CampaignVersion } from '../../../../src/shared/contracts/campaignContract';
 import { DynamoStore, fingerprint, integer, keyPart, type RepositoryOptions } from './dynamoStore';
 
 export const campaignVersionKey = (value: string) => `CAMPAIGN_VERSION#${keyPart(value)}`;
@@ -150,6 +150,31 @@ export class WorkerCampaignRepository {
       expectedEnrollmentVersion: enrollment.version, evidence: { enrollmentId: enrollment.id, accountId: input.accountId, campaignVersionId: reservation.campaignVersionId, actionId: input.actionId, stepId: reservation.input.stepId, routeId: reservation.input.selectedRouteId, routeVersion: reservation.routeVersion,
         contextRevision: reservation.numericContextRevision, executionContextId: reservation.input.contextRevision, channel: reservation.input.channel,
         ...(input.cancellationEvidence ? { cancellationEvidence: input.cancellationEvidence } : {}), observation: 'unknown', outcome: input.state, source: 'provider', state: input.state, observedAt: input.observedAt } } });
+  }
+  /** Territory policy (D1): the derived single-firm version, its approval, zero caps, the enrollment and the slot in one
+   * plan for a firm nobody has enrolled before. Only the territory policy repository composes it, and it applies the plan
+   * together with the authority grant and its outbox event. Nothing here reserves an action, dials or sends. */
+  async planTerritoryEnrollment(raw: { commandId: string; accountId: string; version: CampaignVersion; approvedAt: string; enrollmentId: string; selectedRouteId: string;
+    executionContextId: string; contextRevision: number; requiredChannel: 'phone' | 'linkedin' }): Promise<{ items: TransactWriteItem[]; payload: CampaignEventPayload }> {
+    const input = z.strictObject({ commandId: z.uuid(), accountId: id, version: campaignVersionSchema, approvedAt: instant, enrollmentId: id, selectedRouteId: id,
+      executionContextId: id, contextRevision: integer, requiredChannel: z.enum(['phone', 'linkedin']) }).parse(raw);
+    const version = input.version;
+    if (version.approvedAt !== null || version.cohortAccountIds.length !== 1 || version.cohortAccountIds[0] !== input.accountId) throw new Error('campaign_cohort_mismatch');
+    if (input.approvedAt > this.store.now()) throw new Error('campaign_approval_mismatch');
+    if (await this.store.get(campaignVersionKey(version.id))) throw new Error('campaign_version_exists');
+    const slot = await this.store.get<unknown>(campaignSlotKey(input.accountId));
+    if (slot && !terminal(slotSchema.parse(slot.data).state)) throw new Error('account_already_enrolled');
+    const route = await this.accountRoute(input.accountId, input.selectedRouteId);
+    if (route.route.channel !== input.requiredChannel || route.route.verification === 'unverified') throw new Error('campaign_route_mismatch');
+    const enrollment = enrollmentSchema.parse({ id: input.enrollmentId, accountId: input.accountId, selectedRouteId: input.selectedRouteId, selectedRouteVersion: route.route.version, personId: route.route.personId,
+      campaignVersionId: version.id, currentStepId: version.steps[0]!.id, version: 1, state: 'active', executionContextId: input.executionContextId, contextRevision: input.contextRevision, startedAt: this.store.now() });
+    const items = [this.store.put(campaignVersionKey(version.id), version, null),
+      this.store.put(`CAMPAIGN_VERSION_NUMBER#${keyPart(version.campaignId)}#${version.version}`, { id: version.id }, null),
+      this.store.put(campaignApprovalKey(version.id), { snapshotHash: fingerprint(version), approvedAt: input.approvedAt }, null),
+      ...['call', 'email', 'linkedin'].map(channel => this.store.put(campaignCapKey(version.id, channel), { reserved: 0, sent: 0 }, null)),
+      this.store.put(campaignEnrollmentKey(enrollment.id), enrollment, null), this.store.put(campaignSlotKey(input.accountId), { enrollmentId: enrollment.id, state: enrollment.state }, slot?.rev ?? null),
+      this.store.check(route.key, route.row.rev)];
+    return { items, payload: campaignEventPayloadSchema.parse({ commandId: input.commandId, version: { ...version, approvedAt: input.approvedAt }, enrollment, evidence: null }) };
   }
   async planCommand(input: { commandId: string; accountId: string; payload: CampaignCommandPayload }): Promise<{ items: TransactWriteItem[]; payload: CampaignEventPayload }> {
     z.uuid().parse(input.commandId); id.parse(input.accountId); const command = campaignCommandPayloadSchema.parse(input.payload);

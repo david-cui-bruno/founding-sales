@@ -7,6 +7,7 @@ import { audienceQuerySchema, discoveryProviderSchema, researchCapabilitySchema,
 import { campaignCommandPayloadSchema } from './campaignContract';
 import { mailCursorEnvelopeSchema, accountReplyDraftSchema } from './mailThreadContract';
 import { accountIdSchema as id, accountInstantSchema as instant } from './accountContract';
+import { territoryCallPolicyCommandPayloadSchema, TERRITORY_CALL_POLICY_SUBJECT } from './territoryCallPolicyContract';
 const revision = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
 const manualBase = { actionId: id, observedAt: instant, evidenceRef: id, replyText: z.string().max(10000).nullable().optional() };
@@ -77,7 +78,12 @@ export const selectedAccountFreshnessSchema=z.strictObject({accountId:id,state:z
 export type SelectedAccountFreshness=z.infer<typeof selectedAccountFreshnessSchema>;
 
 export const approveRequestedFollowupCommandSchema=z.strictObject({...ownerCommandBase,kind:z.literal('approve-requested-followup'),payload:approveRequestedFollowupSchema});
-export const ownerCommandSchemas = [approveRequestedFollowupCommandSchema,bootstrapSelectedAccountCommandSchema,refreshSelectedAccountRecordCommandSchema, submitApprovedReplyCommandSchema, prepareManualCommandSchema, completeManualCommandSchema, approveReplyCommandSchema, ownerCampaignCommandSchema, configureOwnerCommandSchema, reportAcquisitionMilestoneCommandSchema] as const;
+/** The workspace-level territory call policy (D1). It names the fixed policy subject, never a company, and carries no
+ * authority CAS: its own revision is the CAS. The coordinator answers with the receipt and the resulting policy. */
+export const territoryPolicyCommandSchema=z.strictObject({...ownerCommandBase,kind:z.literal('territory-policy'),payload:territoryCallPolicyCommandPayloadSchema})
+ .refine(command=>command.accountId===TERRITORY_CALL_POLICY_SUBJECT&&command.expectedAuthorityGeneration===0&&command.expectedVersion===0,'territory_policy_envelope');
+export type TerritoryPolicyCommand=z.infer<typeof territoryPolicyCommandSchema>;
+export const ownerCommandSchemas = [territoryPolicyCommandSchema,approveRequestedFollowupCommandSchema,bootstrapSelectedAccountCommandSchema,refreshSelectedAccountRecordCommandSchema, submitApprovedReplyCommandSchema, prepareManualCommandSchema, completeManualCommandSchema, approveReplyCommandSchema, ownerCampaignCommandSchema, configureOwnerCommandSchema, reportAcquisitionMilestoneCommandSchema] as const;
 export const ownerCommandSchema = z.discriminatedUnion('kind', ownerCommandSchemas);
 export type OwnerCommand = z.infer<typeof ownerCommandSchema>;
 

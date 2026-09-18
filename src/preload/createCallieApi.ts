@@ -11,6 +11,7 @@ import {policyImportConfirmSchema,policyImportResumeSchema,policyImportStatusSch
 import {prepareRequestedFollowupSchema,getRequestedFollowupSchema,editRequestedFollowupSchema,approveRequestedFollowupSchema,savedRequestedFollowupSchema,requestedApprovalStatusSchema} from '../shared/contracts/requestedFollowupContract';
 import {workerPolicyRequestSchema,workerPolicyReceiptSchema} from '../shared/contracts/workerPolicyContract';
 import {configureAccountIntakeSchema,boundAccountIntakeConfigureStatus,type ConfigureAccountIntake,type AccountIntakeConfigureStatus} from '../shared/contracts/accountIntakeConfigureContract';
+import {territoryCallPolicyRequestSchema,territoryCallPolicyStatusSchema,type TerritoryCallPolicyRequest,type TerritoryCallPolicyStatus} from '../shared/contracts/territoryCallPolicyContract';
 import {createLinkedInApi} from './apis/linkedInApi';
 import { delegatedPhoneHandoffRequestSchema,bootstrapSelectedAccountSchema,refreshSelectedAccountRecordSchema,selectedAccountFreshnessRequestSchema,selectedAccountFreshnessSchema,configureResearchSourceSchema,ownerResearchSourceSchema,configureLocalDelegationSchema,localDelegationStatusSchema,localDelegationConfigurationRecordSchema,redeemLocalPairingSchema,redeemedLocalPairingSchema,delegationSyncReportSchema,type RefreshSelectedAccountRecord,type SelectedAccountFreshnessRequest,type SelectedAccountFreshness } from '../shared/contracts/ownerCommandContract';
 import {delegatedPhoneHandoffResultSchema,publicDelegationCommandSchema,commandReceiptSchema,type CommandReceipt,type PublicDelegationCommand} from '../shared/contracts/delegationContract';
@@ -51,6 +52,15 @@ export const createCallieApi = (invoker: IpcInvoker) => {
       return client.request('outreach:delegation-selected-account-freshness', selectedAccountFreshnessRequestSchema, selectedAccountFreshnessSchema.refine(value => value.accountId === request.accountId, 'selected_account_freshness_identity_mismatch'), request);
     },
   };
+  // Optional for the same older-bridge compatibility. One explicit territory policy read or command; the reply's receipt
+  // must name the request's command. Approving is the one hold; nothing here dials, sends or books.
+  const territoryExtension: { territoryPolicy?: (input: TerritoryCallPolicyRequest) => Promise<TerritoryCallPolicyStatus> } = {
+    territoryPolicy: async raw => {
+      const request = Object.freeze(territoryCallPolicyRequestSchema.parse(raw));
+      return client.request('outreach:delegation-territory-policy', territoryCallPolicyRequestSchema,
+        territoryCallPolicyStatusSchema.refine(status => request.kind === 'read' ? status.receipt === null : status.receipt?.commandId === request.commandId, 'territory_policy_receipt_identity_mismatch'), request);
+    },
+  };
   return {
     health: {
       get: (): Promise<AppHealth> =>
@@ -63,6 +73,7 @@ export const createCallieApi = (invoker: IpcInvoker) => {
       ...researchExtension,
       ...intakeExtension,
       ...recordExtension,
+      ...territoryExtension,
       policyImport:{
         selectAndPreview:()=>client.requestNoInput('outreach:policy-import-select-preview',policyImportPreviewSchema.nullable()),
         confirm:(input:z.infer<typeof policyImportConfirmSchema>)=>client.request('outreach:policy-import-confirm',policyImportConfirmSchema,policyImportReportSchema,input),
