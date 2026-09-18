@@ -101,6 +101,20 @@ describe('Territory clearance section', () => {
     expect(f.api.readTerritoryClearance).toHaveBeenCalledTimes(2);
     expect(within(state('Texas')).getByText(/Review due · revision 4/)).toBeTruthy();
   });
+  it('lists an added state as unconfirmed with its reason, and never confirms it with the built-in states', async () => {
+    const f = fixture();
+    const added = [{ state: 'CT' as const, timezone: 'America/New_York' as const, addedAt: '2026-09-18T13:00:00.000Z', commandId: '00000000-0000-4000-8000-000000000009' }];
+    render(<TerritoryClearanceSection api={f.api} addedStates={added} />); await ready();
+    const row = state('Connecticut');
+    expect(within(row).getByText(/Unconfirmed · added 2026-09-18/)).toBeTruthy();
+    expect(within(row).getByText(/cannot be confirmed here yet and nothing dials for it/)).toBeTruthy();
+    expect(within(row).queryByRole('button')).toBeNull();
+    fireEvent.click(disclosure()); fireEvent.click(confirmButton());
+    await screen.findByText('Confirmation recorded.');
+    // The one click still covers the three states this build carries rules for, never the added one.
+    expect(f.api.confirmTerritoryClearance).toHaveBeenCalledWith({ states: ['RI', 'MA', 'TX'], disclosureAccepted: true, rulesRevision: TERRITORY_RULES_REVISION });
+    expect(within(state('Connecticut')).getByText(/Unconfirmed/)).toBeTruthy();
+  });
   it('is unavailable without the three methods and never calls a partial API', async () => {
     const f = fixture();
     const { rerender } = render(<TerritoryClearanceSection />);
