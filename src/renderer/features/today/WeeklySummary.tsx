@@ -32,6 +32,7 @@ function windowRows(window: UsageWindow): readonly (readonly [string, string])[]
     [labels.callbacksPromised, String(window.callbacksPromised)],
     [labels.callbacksKept, String(window.callbacksKept)],
     [labels.drafts, String(window.drafts)],
+    [labels.emailsSent, String(window.emailsSent)],
     [labels.replies, String(window.replies)],
     [labels.holds, window.holds.length
       ? window.holds.map(hold => `${holdReasons[hold.reason]} ${hold.count}`).join(' · ')

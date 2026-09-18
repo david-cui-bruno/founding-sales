@@ -4,6 +4,7 @@ import { actualAccountCallOutcomes } from '../../../shared/contracts/accountOutb
 import { localDateIn } from '../../../shared/contracts/accountCallbackContract';
 import { threadProjectionSchema } from '../../../shared/contracts/mailThreadContract';
 import { workerEventSchema } from '../../../shared/contracts/delegationContract';
+import { templateSequenceEmailTemplateId } from '../../../shared/outreach/templateSequenceEmail';
 import { resolveLocalWeekInterval } from '../today/todayOrdering';
 import { usageHoldReasons, usageSummarySchema, type UsageHoldReason, type UsageOutcomeCounts, type UsageSummary, type UsageWindow } from '../../../shared/contracts/usageContract';
 
@@ -19,7 +20,8 @@ const realOutcomes: ReadonlySet<string> = new Set(actualAccountCallOutcomes);
  * `delegated_manual_handoffs.consumed_at` for a placed call, an immutable
  * `delegated_manual_outcomes` row paired with its immutable applied event for an
  * outcome and its note, `pm_account_callbacks` for a promise, the saved draft
- * rows for drafts and holds, and the stored thread projections for replies.
+ * rows for drafts and holds, `delegated_action_outcomes` for a sequence email the
+ * provider accepted, and the stored thread projections for replies.
  * A record whose stored event fingerprint does not match is not evidence of
  * anything and is skipped, exactly as the actual-call evidence reader skips it.
  */
@@ -44,7 +46,7 @@ function readWindow(database: AppDatabase, input: {
   const firms = new Set<string>();
   const holds = new Map<UsageHoldReason, number>();
   const outcomes: UsageOutcomeCounts = { connected: 0, interested: 0, not_interested: 0, gatekeeper: 0, voicemail: 0, no_answer: 0, busy: 0, wrong_number: 0 };
-  let callsPlaced = 0, notes = 0, drafts = 0, replies = 0, callbacksPromised = 0, callbacksKept = 0;
+  let callsPlaced = 0, notes = 0, drafts = 0, replies = 0, callbacksPromised = 0, callbacksKept = 0, emailsSent = 0;
   const rows = (sql: string, ...args: (string | number)[]) => database.raw.prepare(sql).all(...args) as Row[];
   /** A fact happened for this firm on this local date. Unreadable instants are not facts. */
   const record = (accountId: unknown, instant: unknown) => {
@@ -107,6 +109,14 @@ function readWindow(database: AppDatabase, input: {
     if (record(row.account_id, row.updated_at)) hold('manual_only');
   }
 
+  // A sequence email that actually went out. The template id is the one the worker-minted action id names,
+  // so a row that is not a template sequence action is not counted here at all (D13, lane 40).
+  for (const row of rows("SELECT account_id,action_id,observed_at FROM delegated_action_outcomes WHERE workspace_id=? AND state='provider_accepted' AND observed_at>=? AND observed_at<?",
+    input.workspaceId, week.startAt, week.endAt)) {
+    if (templateSequenceEmailTemplateId(row.action_id) === null) continue;
+    if (record(row.account_id, row.observed_at)) emailsSent += 1;
+  }
+
   // A reply is counted from the message the worker observed, not from when the desktop stored it,
   // so a thread that arrived late still counts on the day the firm actually answered.
   for (const row of rows('SELECT account_id,projection_json,updated_at FROM delegated_threads WHERE workspace_id=? ORDER BY account_id,id', input.workspaceId)) {
@@ -125,7 +135,7 @@ function readWindow(database: AppDatabase, input: {
   return {
     from: week.localWeekStart, to: week.localWeekEnd,
     mornings: mornings.size, firms: firms.size, callsPlaced, outcomes, notes,
-    callbacksPromised, callbacksKept, drafts, replies,
+    callbacksPromised, callbacksKept, drafts, emailsSent, replies,
     holds: [...usageHoldReasons].sort().flatMap(reason => {
       const value = holds.get(reason);
       return value === undefined ? [] : [{ reason, count: value }];

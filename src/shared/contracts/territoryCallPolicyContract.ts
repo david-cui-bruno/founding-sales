@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { accountIdSchema as id, accountInstantSchema as instant } from './accountContract';
 import { commandReceiptSchema } from './commandReceiptContract';
 import { campaignVersionSchema, type CampaignVersion } from './campaignContract';
+import type { ReplyTemplateHoldReason } from './replyTemplateContract';
 import { sha256Utf8 } from '../crypto/sha256';
 import { territoryStateSchema, territoryTimeZoneSchema, TERRITORY_RULES_REVISION, US_STATE_CODES } from './territoryClearanceContract';
 
@@ -179,7 +180,12 @@ export function deriveTerritoryCampaignVersion(policy: PolicyIdentity & Pick<Ter
     contentPolicyHash: territoryContentPolicyHash(policy),
   });
 }
-export type TerritoryHeldStep = { stepId: string; channel: 'email'; reason: typeof TERRITORY_EMAIL_HOLD_REASON };
+/**
+ * One email step the firm's cadence walked past without sending. `reason` is one of lane 31's closed
+ * template hold reasons, because the reason the worker records is the reason its own send decision
+ * gave: `mailbox_not_connected` is only the reason a step carries before anything has evaluated it.
+ */
+export type TerritoryHeldStep = { stepId: string; channel: 'email'; reason: ReplyTemplateHoldReason };
 /** Every email step of a derived version is held until the mailbox ships; call steps are due on schedule. */
 export function territoryHeldSteps(version: Pick<CampaignVersion, 'steps'>): TerritoryHeldStep[] {
   return version.steps.filter(step => step.channel === 'email').map(step => ({ stepId: step.id, channel: 'email' as const, reason: TERRITORY_EMAIL_HOLD_REASON }));

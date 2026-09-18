@@ -5,7 +5,8 @@ import { z } from 'zod';
  *
  * Every number here is **derived** from records the desktop already stores and
  * cannot rewrite: consumed call handoffs, applied hand-reported call outcomes
- * and their notes, promised callbacks, saved drafts and observed reply threads.
+ * and their notes, promised callbacks, saved drafts, observed reply threads and
+ * the immutable action outcomes the worker's own events wrote.
  * There is no usage table and no per-morning write, so reading the summary
  * changes nothing and a summary computed twice from the same database is equal.
  *
@@ -57,6 +58,9 @@ export const usageWindowSchema = z.strictObject({
   callbacksPromised: count, callbacksKept: count,
   /** Reply drafts and requested-followup drafts written in the window. Writing a draft is never sending it. */
   drafts: count,
+  /** Template sequence emails the worker's provider accepted in the window, counted from the immutable
+   *  outcome rows the worker's own events wrote. A draft is not one of these: this counts sends. */
+  emailsSent: count,
   /** Inbound reply messages the worker observed with a date in the window. */
   replies: count,
   holds: z.array(z.strictObject({ reason: z.enum(usageHoldReasons), count: count.min(1) })).max(usageHoldReasons.length),

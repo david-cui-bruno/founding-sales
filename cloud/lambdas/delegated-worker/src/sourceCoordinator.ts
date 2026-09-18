@@ -28,6 +28,7 @@ import { mailScopeFingerprint } from '../../../../src/main/outreach/providers/gm
 import type { TickHeldReason, TickPhase, TickPhaseHold, TickPhaseResult } from '../../../../src/shared/contracts/researchSetupContract';
 import { buildScheduledRunRecord, tickErrorClass, SOURCE_LAST_TICK_KEY } from './tickLog';
 import { TerritoryPolicyRepository, TERRITORY_BACKFILL_TICK_LIMIT, type TerritoryBackfillReport } from './territoryPolicyRepository';
+import { createSequenceEmailWalker, type SequenceEmailReport } from './sequenceEmailWalker';
 
 export type SourceResearchBoundaries = { loadCredentials(workspaceId: string, signal: AbortSignal): Promise<{ apiKey: string; model: string }>;
   /** Present only when the Places credential parameter is declared; a Places configuration is held without it. */
@@ -43,6 +44,8 @@ export type SourceTickReport = { status: 'inactive' | 'completed' | 'aborted'; r
   places?: PlacesBatchReport;
   /** Present only when the territory backfill phase ran. */
   territory?: TerritoryBackfillReport;
+  /** Present only when the sequence email walk ran, in the same phase and over the firms that sweep scanned. */
+  sequenceEmails?: SequenceEmailReport;
   /** Every hold is also counted under one closed reason; the sum equals `held`. */
   heldByReason: Partial<Record<TickHeldReason, number>>;
   /** How each phase ended this tick; a phase the deadline never reached is `skipped`. */
@@ -147,7 +150,10 @@ export function createSourceCoordinator(input: SourceCoordinatorOptions) {
    * Its own phase, not a step of research: the sweep must keep running while research is paused or its descriptor needs replacing. */
   async function territoryBackfill(signal: AbortSignal, report: SourceTickReport) {
     let result: TerritoryBackfillReport;
-    try { result = await new TerritoryPolicyRepository(store.options).sweepTerritoryBackfill({ limit: TERRITORY_BACKFILL_TICK_LIMIT, signal }); }
+    // Which firms this sweep actually reached. The sequence email walk below rides on exactly that list, so it
+    // inherits the sweep's own bound and its persisted cursor instead of scanning the account table a second time.
+    const swept: string[] = [];
+    try { result = await new TerritoryPolicyRepository(store.options).sweepTerritoryBackfill({ limit: TERRITORY_BACKFILL_TICK_LIMIT, signal, onFirm: accountId => swept.push(accountId) }); }
     catch (error) {
       // The sweep answers every expected condition as an outcome, so a throw here is genuinely unexpected: name its class, never its message.
       if (!signal.aborted) report.phaseHolds.territoryBackfill = { reason: 'phase_error', errorClass: tickErrorClass(error) };
@@ -156,6 +162,14 @@ export function createSourceCoordinator(input: SourceCoordinatorOptions) {
     report.territory = result;
     // Only a genuinely failed enrollment is a hold; a missing policy, a paused policy, an owned firm and an unusable route are expected outcomes.
     for (let count = 0; count < result.skipped.enrollment_failed; count++) hold(report, 'territory_backfill_held');
+    // The sequence's due email steps (D13, lane 40). Its own refusals are named holds recorded on the step, so only
+    // a firm whose walk threw something unexpected becomes a tick hold. Nothing here dials, books or advances a cadence.
+    const emails = await createSequenceEmailWalker({ options: store.options, policy, execution, authorization: input.authorization,
+      fetch: boundFetch(signal) }).walkDueEmailSteps(swept, signal);
+    report.sequenceEmails = emails;
+    report.dispatches += emails.sent;
+    for (let count = 0; count < emails.held; count++) hold(report, 'dispatch_held');
+    for (let count = 0; count < emails.failed; count++) hold(report, 'territory_backfill_held');
   }
   async function meetingCursor(accountId: string, kind: string) {
     const key = `SOURCE_SCAN#${fingerprint({ accountId, kind })}`;

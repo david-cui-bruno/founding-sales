@@ -1,9 +1,10 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import type { DailySnapshot } from '../../../shared/contracts/dailyContract';
+import type { SentTemplateEmail } from '../../../shared/contracts/todayContract';
 import { localCompanyDetailSchema, type LocalCompanyDetail, type LocalWorkspaceApi } from '../../../shared/contracts/localWorkspaceContract';
 import { phoneSetupStatusSchema, type PhoneSetupApi } from '../../../shared/contracts/phoneSetupContract';
 import { findPlacesSource } from './placesLocation';
-import { PHONE_DIAL_MODES, type PhoneDialState } from './todayCopy';
+import { PHONE_DIAL_MODES, sentTemplateEmailLine, type PhoneDialState } from './todayCopy';
 
 /**
  * D6 acceptance 2: where a hand-dialed call gets logged. The control itself lives in the company
@@ -39,8 +40,10 @@ export const PHONE_VERIFICATION_WORDS: Record<Account['routes'][number]['verific
  * so a call is never impossible. There is no `tel:` link, nothing is opened, and
  * the clipboard is written only by the copy click.
  */
-export function CallCard({ account, api, phoneSetup }: {
+export function CallCard({ account, api, phoneSetup, sentEmails = [] }: {
   account: Account; api?: Pick<LocalWorkspaceApi, 'getCompany'>; phoneSetup?: Pick<PhoneSetupApi, 'status'>;
+  /** Sequence emails the worker's provider accepted for this firm, oldest first. Reading them sends nothing. */
+  sentEmails?: readonly SentTemplateEmail[];
 }) {
   const [read, setRead] = useState<DetailRead>({ state: 'pending' });
   const [dial, setDial] = useState<DialRead>({ state: 'hidden' });
@@ -105,6 +108,7 @@ export function CallCard({ account, api, phoneSetup }: {
     <p>Source: {read.state === 'pending' ? 'reading…' : phoneSources.length
       ? phoneSources.map(source => <code key={source.id}>{source.url}</code>).reduce<ReactNode[]>((nodes, node, index) => index ? [...nodes, ' · ', node] : [node], [])
       : read.state === 'unavailable' ? 'unavailable' : 'no saved source backs this phone'}</p>
+    {sentEmails.map(email => <p key={email.actionId}>{sentTemplateEmailLine(email.templateId, account.account.name, email.sentOn)}</p>)}
     <p className="native-desk__hint">Reading this card places no call. The handoff below asks you to confirm first.</p>
     {primary && <div className="native-desk__dial">
       {dial.state === 'hidden' && <button onClick={showNumber}>Show number</button>}

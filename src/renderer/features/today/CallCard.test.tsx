@@ -156,6 +156,21 @@ describe('CallCard', () => {
     });
   });
 
+  it('says which sequence email went out to this firm and on which day, and says nothing when none has', async () => {
+    const api = { getCompany: vi.fn(async () => detail()) };
+    render(<CallCard account={firm()} api={api} />);
+    expect(screen.queryByText(/^Sent /)).toBeNull();
+    cleanup();
+    render(<CallCard account={firm()} api={api} sentEmails={[
+      { accountId: 'a', templateId: 'T4', sentOn: '2026-09-08', actionId: 'template-email-T4-0123456789abcdef0123456789abcdef' },
+      { accountId: 'a', templateId: 'T5', sentOn: '2026-09-22', actionId: 'template-email-T5-fedcba9876543210fedcba9876543210' },
+    ]} />);
+    expect(screen.getByText('Sent T4 to Fictional Harbor PM on 2026-09-08', { exact: true })).toBeTruthy();
+    expect(screen.getByText('Sent T5 to Fictional Harbor PM on 2026-09-22', { exact: true })).toBeTruthy();
+    // Reading the line is not a send and takes no control: the card still offers only "Show number".
+    expect(screen.queryAllByRole('button').map(button => button.textContent)).toEqual(['Show number']);
+  });
+
   it('says when the saved sources carry no listing', async () => {
     const account: ReturnType<typeof firm> = { ...firm(), routes: firm().routes.filter(route => route.id !== 'listed-phone') };
     const site = detail(account);

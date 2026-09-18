@@ -19,10 +19,16 @@ export function buildDailySnapshot(input: DailyProjectionInput): DailySnapshot {
   const meetings = scoped(input.meetings);
   const ownerStatus = scoped(input.ownerStatus);
   const callbacks = scoped([...(input.callbacks ?? [])]);
-  const calls = { ...input.calls, accountIds: input.calls.accountIds.filter(id => {
-    if (ids.has(id) && input.workspaceId !== null) return true;
+  const inScope = (accountId: string) => {
+    if (ids.has(accountId) && input.workspaceId !== null) return true;
     add('scope_mismatch'); return false;
-  }) };
+  };
+  const accountIds = input.calls.accountIds.filter(id => inScope(id));
+  // A sent sequence email is real content and changes the revision, but only once one exists: an empty list
+  // is absent from `calls` entirely, so a workspace that has never sent one keeps the exact revision it had.
+  const sentTemplateEmails = (input.calls.sentTemplateEmails ?? []).filter(email => inScope(email.accountId));
+  const calls = { accountIds, workloadConflict: input.calls.workloadConflict,
+    ...(sentTemplateEmails.length ? { sentTemplateEmails } : {}) };
   if (calls.workloadConflict) add('workload_conflict');
   const issues = [...issueCounts].sort(([a], [b]) => a.localeCompare(b)).map(([code, count]) => ({ code, count }));
   const content = { workspaceId: input.workspaceId, workflowMode: input.workflowMode ?? 'unknown', accounts: input.workspaceId === null ? [] : input.accounts,
