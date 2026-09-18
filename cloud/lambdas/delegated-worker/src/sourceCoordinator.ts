@@ -29,6 +29,7 @@ import type { TickHeldReason, TickPhase, TickPhaseHold, TickPhaseResult } from '
 import { buildScheduledRunRecord, tickErrorClass, SOURCE_LAST_TICK_KEY } from './tickLog';
 import { TerritoryPolicyRepository, TERRITORY_BACKFILL_TICK_LIMIT, type TerritoryBackfillReport } from './territoryPolicyRepository';
 import { createSequenceEmailWalker, type SequenceEmailReport } from './sequenceEmailWalker';
+import { createTerritoryMailScopeConfigurator, type TerritoryMailScopeReport } from './territoryMailScope';
 
 export type SourceResearchBoundaries = { loadCredentials(workspaceId: string, signal: AbortSignal): Promise<{ apiKey: string; model: string }>;
   /** Present only when the Places credential parameter is declared; a Places configuration is held without it. */
@@ -46,6 +47,8 @@ export type SourceTickReport = { status: 'inactive' | 'completed' | 'aborted'; r
   territory?: TerritoryBackfillReport;
   /** Present only when the sequence email walk ran, in the same phase and over the firms that sweep scanned. */
   sequenceEmails?: SequenceEmailReport;
+  /** Present only when the per-firm mail scope step ran, in the same phase and over the same firms, before the walk. */
+  mailScopes?: TerritoryMailScopeReport;
   /** Every hold is also counted under one closed reason; the sum equals `held`. */
   heldByReason: Partial<Record<TickHeldReason, number>>;
   /** How each phase ended this tick; a phase the deadline never reached is `skipped`. */
@@ -162,6 +165,15 @@ export function createSourceCoordinator(input: SourceCoordinatorOptions) {
     report.territory = result;
     // Only a genuinely failed enrollment is a hold; a missing policy, a paused policy, an owned firm and an unusable route are expected outcomes.
     for (let count = 0; count < result.skipped.enrollment_failed; count++) hold(report, 'territory_backfill_held');
+    // The per-firm mail scope (D13, lane 41), before the walk and never after it: a firm configured here is
+    // polled by the configurations phase of this tick or the next one, and the walk sends on the tick after
+    // that poll. Running it first is what makes the scope one tick old by the time a send is attempted, so a
+    // firm is never held with `mailbox_not_connected` for a scope this same tick already created. It issues
+    // one `configure-owner` per firm and sends nothing.
+    const scopes = await createTerritoryMailScopeConfigurator({ auth: input.auth, authorization: input.authorization,
+      options: store.options }).configureDueMailScopes(swept, signal);
+    report.mailScopes = scopes;
+    for (let count = 0; count < scopes.failed; count++) hold(report, 'territory_backfill_held');
     // The sequence's due email steps (D13, lane 40). Its own refusals are named holds recorded on the step, so only
     // a firm whose walk threw something unexpected becomes a tick hold. Nothing here dials, books or advances a cadence.
     const emails = await createSequenceEmailWalker({ options: store.options, policy, execution, authorization: input.authorization,

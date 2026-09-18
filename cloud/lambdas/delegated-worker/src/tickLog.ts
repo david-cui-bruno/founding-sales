@@ -45,11 +45,17 @@ function phaseHoldRecord(holds: SourceTickReport['phaseHolds']): Partial<Record<
 }
 /** Counts and one outcome enum only: no account id, route id or policy id from the sweep, and no template,
  *  address or hold reason from the sequence email walk that runs in the same phase. */
-function territoryRecord(territory: SourceTickReport['territory'], emails: SourceTickReport['sequenceEmails']): ScheduledRunRecord['territory'] {
+function territoryRecord(territory: SourceTickReport['territory'], emails: SourceTickReport['sequenceEmails'],
+  scopes: SourceTickReport['mailScopes']): ScheduledRunRecord['territory'] {
   if (!territory) return null;
   const skipped = territory.skipped;
+  const scopeSkips = scopes?.skipped;
   return { outcome: territory.outcome, scanned: count(territory.scanned), enrolled: count(territory.enrolled), replayed: count(territory.replayed),
     reentered: count(territory.reentered ?? 0), emailsSent: count(emails?.sent ?? 0), emailsHeld: count(emails?.held ?? 0),
+    mailScopesConfigured: count(scopes?.configured ?? 0),
+    mailScopesSkipped: { policy_paused: count(scopeSkips?.policy_paused ?? 0), no_template_approved: count(scopeSkips?.no_template_approved ?? 0),
+      grant_not_ready: count(scopeSkips?.grant_not_ready ?? 0), not_enrolled: count(scopeSkips?.not_enrolled ?? 0),
+      no_email_route: count(scopeSkips?.no_email_route ?? 0), scope_configured: count(scopeSkips?.scope_configured ?? 0) },
     skipped: { policy_paused: count(skipped.policy_paused), authority_exists: count(skipped.authority_exists), route_unavailable: count(skipped.route_unavailable), enrollment_failed: count(skipped.enrollment_failed) } };
 }
 function heldRecord(reasons: SourceTickReport['heldByReason']): Partial<Record<TickHeldReason, number>> {
@@ -61,7 +67,7 @@ function heldRecord(reasons: SourceTickReport['heldByReason']): Partial<Record<T
 export function buildScheduledRunRecord(report: SourceTickReport, input: { at: string; durationMs: number }): ScheduledRunRecord {
   return scheduledRunRecordSchema.parse({ event: SCHEDULED_RUN_EVENT, version: 1, at: input.at, durationMs: count(Math.round(input.durationMs)),
     status: report.status, phases: phaseRecord(report.phases), held: count(report.held), heldByReason: heldRecord(report.heldByReason),
-    phaseHolds: phaseHoldRecord(report.phaseHolds), territory: territoryRecord(report.territory, report.sequenceEmails),
+    phaseHolds: phaseHoldRecord(report.phaseHolds), territory: territoryRecord(report.territory, report.sequenceEmails, report.mailScopes),
     places: placesRecord(report.places), firmsCreated: count(report.places?.created ?? 0), jobsDrained: count(report.places?.drained ?? 0),
     researchPrepared: count(report.researchPrepared), researchCompleted: count(report.researchCompleted), mailPolls: count(report.mailPolls),
     dispatches: count(report.dispatches), sendReconciliations: count(report.sendReconciliations), meetings: count(report.meetings),

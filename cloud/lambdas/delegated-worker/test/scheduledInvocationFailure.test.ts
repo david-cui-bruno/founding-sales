@@ -66,6 +66,8 @@ describe('production scheduled invocation failure boundary', () => {
       territory: { outcome: 'no_policy', scanned: 0, enrolled: 0, replayed: 0, skipped: { policy_paused: 0, authority_exists: 0, route_unavailable: 0, enrollment_failed: 0 } },
       // The sequence email walk runs in the same phase over the firms that sweep reached: no firms, so nothing due.
       sequenceEmails: { scanned: 0, due: 0, sent: 0, held: 0, failed: 0, heldByReason: {} },
+      // The per-firm mail scope step runs in the same phase over the same firms, before the walk: no firms, nothing configured.
+      mailScopes: { scanned: 0, configured: 0, failed: 0, skipped: { policy_paused: 0, no_template_approved: 0, grant_not_ready: 0, not_enrolled: 0, no_email_route: 0, scope_configured: 0 } },
       extraction: { calls: 0, settledCostMicros: 0, refundedMicros: 0 }, ledger: null, descriptorExpired: false, selfPaused: false });
     expect(f.db.inspect('SOURCE_PHASE_CURSOR')).toEqual({ next: 0 });
     expect(f.db.inspect('SOURCE_LAST_TICK')).toMatchObject({ event: 'SCHEDULED_RUN_COMPLETED', version: 1, status: 'inactive', held: 0, places: null, firmsCreated: 0, jobsDrained: 0 });

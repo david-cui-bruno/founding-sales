@@ -11,12 +11,13 @@ import { TerritoryPolicyRepository } from '../src/territoryPolicyRepository';
 import { DynamoDispatchRepository, dispatchIntentKey } from '../src/dispatchRepository';
 import { campaignEnrollmentKey } from '../src/workerCampaignRepository';
 import { mailSuppressionKey } from '../src/threadIntakeRepository';
+import { executionAuthorityKey } from '../src/executionRepository';
 import { googleScopes } from '../src/googleGrantCapabilities';
 import { DynamoStore } from '../src/dynamoStore';
 import { buildScheduledRunRecord } from '../src/tickLog';
 import { REPLY_TEMPLATE_SEEDS, seededReplyTemplateHash } from '../../../../src/main/outreach/templates/replyTemplateSeeds';
 import { templateSequenceEmailActionId, templateSequenceEmailCommandId, templateSequenceEmailTemplateId } from '../../../../src/shared/outreach/templateSequenceEmail';
-import { ownerCommandSchema, territoryPolicyCommandSchema, replyTemplateCommandSchema, type OwnerCommand,
+import { ownerCommandSchema, ownerSourceKey, territoryPolicyCommandSchema, replyTemplateCommandSchema, type OwnerCommand,
   type TerritoryPolicyCommand } from '../../../../src/shared/contracts/ownerCommandContract';
 import { DEFAULT_TERRITORY_CALL_POLICY_DEFINITION as DEFAULT, TERRITORY_CALL_POLICY_SUBJECT } from '../../../../src/shared/contracts/territoryCallPolicyContract';
 import { REPLY_TEMPLATE_SUBJECT } from '../../../../src/shared/contracts/replyTemplateContract';
@@ -128,12 +129,20 @@ async function fixture(options: { city?: boolean; claim?: boolean; route?: boole
   const territory = new TerritoryPolicyRepository(shared);
   const tick = (signal = new AbortController().signal) =>
     createSourceCoordinator({ auth, authorization, fetch, research, researchSetupProfile: profile }).tick(signal);
-  /** The mailbox hop a founder's desktop makes for one firm: the mailbox subject he connected plus its mail scope. */
+  /** The mailbox hop a founder's desktop makes for one firm: the mailbox subject he connected plus its mail scope.
+   *  Lane 41's tick now does exactly this for a firm the policy already enrolled, so the hop is a no-op for a firm
+   *  the tick has already reached: the live authority version and configuration revision are read rather than assumed. */
   const configureMailbox = async (accountId = account.id) => {
+    const configuration = await dynamoStore.get<{ revision: number; mailboxSubject: string | null }>(ownerSourceKey(accountId));
+    if (!configuration || configuration.data.mailboxSubject !== null) return null;
+    const authority = await dynamoStore.get<{ authority: { generation: number }; version: number }>(executionAuthorityKey(accountId));
+    if (!authority) return null;
     const command: OwnerCommand = ownerCommandSchema.parse({ commandId: uuid(++commands + 400), workspaceId: 'ws', accountId,
-      expectedAuthorityGeneration: 1, expectedVersion: 1, kind: 'configure-owner', payload: { expectedConfigurationRevision: 1,
-        configuration: { version: 1, workspaceId: 'ws', accountId, pairingId: pair.pairingId, revision: 2, state: 'active',
-          mailboxSubject: 'mailbox', calendarId: null, research: null }, mailScope: { expectedEnvelopeRevision: null, since: DAY_ZERO } } });
+      expectedAuthorityGeneration: authority.data.authority.generation, expectedVersion: authority.data.version,
+      kind: 'configure-owner', payload: { expectedConfigurationRevision: configuration.data.revision,
+        configuration: { version: 1, workspaceId: 'ws', accountId, pairingId: pair.pairingId, revision: configuration.data.revision + 1,
+          state: 'active', mailboxSubject: 'mailbox', calendarId: null, research: null },
+        mailScope: { expectedEnvelopeRevision: null, since: DAY_ZERO } } });
     return coordinator.apply(command, bearer);
   };
   const configureEveryMailbox = async () => { for (const firm of firms) await configureMailbox(firm.account.id); };
