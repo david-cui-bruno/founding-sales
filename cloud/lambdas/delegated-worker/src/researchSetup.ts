@@ -1,5 +1,7 @@
 import { QueryCommand, type TransactWriteItem } from '@aws-sdk/client-dynamodb';
 import { z } from 'zod';
+import { TerritoryPolicyRepository } from './territoryPolicyRepository';
+import type { TerritoryAddedStates } from '../../../../src/shared/contracts/territoryCallPolicyContract';
 import { researchPausedReasonSchema, researchReviewedCapabilitySchema, researchSetupWriteRequestSchema, researchSetupStatusRequestSchema, researchSetupRemoteStatusSchema, researchSetupReceiptSchema, scheduledRunRecordSchema, type ResearchPausedReason, type ResearchSetupBlocker, type ResearchSetupReceipt, type ScheduledRunRecord } from '../../../../src/shared/contracts/researchSetupContract';
 import { ownerResearchSourceKey, ownerResearchSourceSchema, type OwnerResearchSource } from '../../../../src/shared/contracts/ownerCommandContract';
 import { effectiveDiscoveryProvider, type DiscoveryProvider } from '../../../../src/main/research/companyResearchTypes';
@@ -75,6 +77,11 @@ export async function guardGuidedResearch(store: DynamoStore, config: OwnerResea
   return row;
 }
 
+/** The stored state additions reduced to the status shape: the revision and the rows, or an empty list before David added one. */
+function territoryAdditions(row: Stored<TerritoryAddedStates> | null): { addedRevision: number; addedStates: TerritoryAddedStates['states'] } {
+  return { addedRevision: row?.data.revision ?? 0, addedStates: row?.data.states ?? [] };
+}
+
 export class ResearchSetupService {
   constructor(readonly input: { auth: WorkerAuth; profile?: ResearchSetupProfile }) {}
   private async authenticated(identity: { workspaceId: string; pairingId: string }, bearer: string, write: boolean) {
@@ -115,6 +122,10 @@ export class ResearchSetupService {
     const lastTick: ScheduledRunRecord | null = lastTickParsed?.success ? lastTickParsed.data : null;
     const pauseRow = await store.get<unknown>(researchSelectorPauseKey);
     const pause = pauseRow ? researchSelectorPauseSchema.safeParse(pauseRow.data) : null;
+    // The territory block, deliberately outside the fence like the tick observations: the counts are whatever the last
+    // scheduled tick stored, and an absent record is reported as unknown rather than as a zero nobody counted.
+    const territoryRepository = new TerritoryPolicyRepository(store.options);
+    const territory = { counts: await territoryRepository.readTerritoryCounts(), ...territoryAdditions(await territoryRepository.readAddedStates()) };
     const cursorRow = await store.get<unknown>(placesCursorKey(activeBudgetId));
     const cursor = cursorRow ? placesCursorSchema.safeParse(cursorRow.data) : null;
     const fence = (key: string, row: Stored<unknown> | null) => row ? store.check(key, row.rev) : store.absent(key);
@@ -159,7 +170,7 @@ export class ResearchSetupService {
     }
     const pausedReason: ResearchPausedReason | null = selector?.state === 'paused' && pause?.success && pause.data.revision === selector.revision ? pause.data.reason : null;
     return researchSetupRemoteStatusSchema.parse({ workspaceId: request.workspaceId, pairingId: request.pairingId, selector, discoveryLedger, researchLedger, ...profile, blockers: [...new Set(blockers)], checkedAt, receipt, placesBlockers,
-      lastTickAt: lastTick?.at ?? null, lastTick, pausedReason });
+      lastTickAt: lastTick?.at ?? null, lastTick, pausedReason, territory });
   }
   async apply(raw: unknown, bearer: string): Promise<ResearchSetupReceipt> {
     const envelope = researchSetupWriteRequestSchema.parse(raw);

@@ -45,6 +45,98 @@ export type TerritoryClearanceState = keyof typeof TERRITORY_STATE_TIME_ZONES;
 export const TERRITORY_STATES = Object.freeze(Object.keys(TERRITORY_STATE_TIME_ZONES) as TerritoryClearanceState[]);
 export const isTerritoryState = (value: string): value is TerritoryClearanceState => Object.hasOwn(TERRITORY_STATE_TIME_ZONES, value);
 
+/** Postal code to state name, so a list row or a refusal can name the state instead of its code. */
+export const US_STATE_NAMES: Readonly<Record<TerritoryState, string>> = Object.freeze({
+  AL: 'Alabama', AK: 'Alaska', AZ: 'Arizona', AR: 'Arkansas', CA: 'California', CO: 'Colorado', CT: 'Connecticut', DE: 'Delaware',
+  DC: 'District of Columbia', FL: 'Florida', GA: 'Georgia', HI: 'Hawaii', ID: 'Idaho', IL: 'Illinois', IN: 'Indiana', IA: 'Iowa',
+  KS: 'Kansas', KY: 'Kentucky', LA: 'Louisiana', ME: 'Maine', MD: 'Maryland', MA: 'Massachusetts', MI: 'Michigan', MN: 'Minnesota',
+  MS: 'Mississippi', MO: 'Missouri', MT: 'Montana', NE: 'Nebraska', NV: 'Nevada', NH: 'New Hampshire', NJ: 'New Jersey', NM: 'New Mexico',
+  NY: 'New York', NC: 'North Carolina', ND: 'North Dakota', OH: 'Ohio', OK: 'Oklahoma', OR: 'Oregon', PA: 'Pennsylvania', RI: 'Rhode Island',
+  SC: 'South Carolina', SD: 'South Dakota', TN: 'Tennessee', TX: 'Texas', UT: 'Utah', VT: 'Vermont', VA: 'Virginia', WA: 'Washington',
+  WV: 'West Virginia', WI: 'Wisconsin', WY: 'Wyoming',
+});
+
+/**
+ * The states David may add next, each with the single IANA zone its whole area observes: the New
+ * England and Mid-Atlantic states and Texas's four neighbours (design section 8). A state can be
+ * added only from this map, so a calling window is never computed from a guessed zone. Adding a
+ * state stores a revisioned record; it never edits the frozen territory map above, and the added
+ * state appears in Territory clearance as unconfirmed. Nothing dials for an added state until its
+ * clearance is confirmed, and no statute text for these states is drafted here.
+ */
+export const TERRITORY_ADDABLE_STATE_TIME_ZONES = Object.freeze({
+  CT: 'America/New_York',
+  ME: 'America/New_York',
+  NH: 'America/New_York',
+  VT: 'America/New_York',
+  NY: 'America/New_York',
+  NJ: 'America/New_York',
+  PA: 'America/New_York',
+  DE: 'America/New_York',
+  MD: 'America/New_York',
+  DC: 'America/New_York',
+  VA: 'America/New_York',
+  WV: 'America/New_York',
+  NM: 'America/Denver',
+  OK: 'America/Chicago',
+  AR: 'America/Chicago',
+  LA: 'America/Chicago',
+} as const satisfies Partial<Record<TerritoryState, TerritoryTimeZone>>);
+export type TerritoryAddableState = keyof typeof TERRITORY_ADDABLE_STATE_TIME_ZONES;
+export const TERRITORY_ADDABLE_STATES = Object.freeze(Object.keys(TERRITORY_ADDABLE_STATE_TIME_ZONES) as TerritoryAddableState[]);
+export const isTerritoryAddableState = (value: string): value is TerritoryAddableState => Object.hasOwn(TERRITORY_ADDABLE_STATE_TIME_ZONES, value);
+
+/**
+ * States whose area observes more than one IANA zone. A state clearance carries exactly one zone,
+ * so the firm's county rather than its state would have to decide the calling window, and this build
+ * records a firm's state only. Each of these is refused by name with both zones quoted, and none of
+ * them appears in the addable map above. Texas is already in the territory with `America/Chicago` by
+ * David's decision of 17 Sep 2026; this refusal governs additions and never revokes a listed state.
+ */
+export const TERRITORY_MULTI_ZONE_STATES = Object.freeze({
+  AK: Object.freeze(['America/Anchorage', 'America/Adak'] as const),
+  AZ: Object.freeze(['America/Phoenix', 'America/Denver'] as const),
+  FL: Object.freeze(['America/New_York', 'America/Chicago'] as const),
+  ID: Object.freeze(['America/Boise', 'America/Los_Angeles'] as const),
+  IN: Object.freeze(['America/Indiana/Indianapolis', 'America/Chicago'] as const),
+  KS: Object.freeze(['America/Chicago', 'America/Denver'] as const),
+  KY: Object.freeze(['America/Kentucky/Louisville', 'America/Chicago'] as const),
+  MI: Object.freeze(['America/Detroit', 'America/Menominee'] as const),
+  NE: Object.freeze(['America/Chicago', 'America/Denver'] as const),
+  NV: Object.freeze(['America/Los_Angeles', 'America/Boise'] as const),
+  ND: Object.freeze(['America/Chicago', 'America/Denver'] as const),
+  OR: Object.freeze(['America/Los_Angeles', 'America/Boise'] as const),
+  SD: Object.freeze(['America/Chicago', 'America/Denver'] as const),
+  TN: Object.freeze(['America/New_York', 'America/Chicago'] as const),
+  TX: Object.freeze(['America/Chicago', 'America/Denver'] as const),
+} as const satisfies Partial<Record<TerritoryState, readonly [string, string]>>);
+export type TerritoryMultiZoneState = keyof typeof TERRITORY_MULTI_ZONE_STATES;
+export const isTerritoryMultiZoneState = (value: string): value is TerritoryMultiZoneState => Object.hasOwn(TERRITORY_MULTI_ZONE_STATES, value);
+
+/** Why an "Add a state" request was refused. Each one carries a plain sentence, never a silent skip. */
+export const territoryStateAdditionRefusalSchema = z.enum(['not_a_us_state', 'already_in_territory', 'state_spans_two_zones', 'state_zone_not_recorded']);
+export type TerritoryStateAdditionRefusal = z.infer<typeof territoryStateAdditionRefusalSchema>;
+export type TerritoryStateAdditionDecision =
+  | { kind: 'addable'; state: TerritoryAddableState; name: string; timezone: TerritoryTimeZone }
+  | { kind: 'refused'; state: string; reason: TerritoryStateAdditionRefusal; message: string };
+/**
+ * Whether a postal code may be added to the territory, and with which zone. Pure: it reads the two
+ * fixed maps above and `added` (the states already stored as additions) and decides nothing else.
+ * It confirms no clearance, stores nothing and authorizes no call.
+ */
+export function decideTerritoryStateAddition(value: string, added: readonly string[] = []): TerritoryStateAdditionDecision {
+  const code = value.trim().toUpperCase();
+  const refused = (reason: TerritoryStateAdditionRefusal, message: string): TerritoryStateAdditionDecision => ({ kind: 'refused', state: code, reason, message });
+  if (!territoryStateSchema.safeParse(code).success) return refused('not_a_us_state', `Refused: "${code}" is not a United States postal code. The territory is described in postal codes only.`);
+  const state = code as TerritoryState;
+  const name = US_STATE_NAMES[state];
+  if (isTerritoryState(state) || added.includes(state)) return refused('already_in_territory', `Refused: ${name} is already in the territory.`);
+  const zones = isTerritoryMultiZoneState(state) ? TERRITORY_MULTI_ZONE_STATES[state] : null;
+  if (zones) return refused('state_spans_two_zones', `Refused: ${name} observes two time zones (${zones[0]} and ${zones[1]}). A state's calling window needs one zone, and this build records a firm's state but not its county, so ${name} cannot be added here.`);
+  if (!isTerritoryAddableState(state)) return refused('state_zone_not_recorded', `Refused: no fixed time zone is recorded for ${name} in this build. Its zone has to be added to the territory contract before the state can be added.`);
+  return { kind: 'addable', state, name, timezone: TERRITORY_ADDABLE_STATE_TIME_ZONES[state] };
+}
+
 /** Bump when any statement, summary or citation text below changes; a stale renderer cannot confirm text it did not show. */
 export const TERRITORY_RULES_REVISION = 2;
 
