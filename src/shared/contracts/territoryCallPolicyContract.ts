@@ -3,6 +3,7 @@ import { accountIdSchema as id, accountInstantSchema as instant } from './accoun
 import { commandReceiptSchema } from './commandReceiptContract';
 import { campaignVersionSchema, type CampaignVersion } from './campaignContract';
 import { sha256Utf8 } from '../crypto/sha256';
+import { territoryStateSchema, territoryTimeZoneSchema, TERRITORY_RULES_REVISION, US_STATE_CODES } from './territoryClearanceContract';
 
 /**
  * One standing territory call policy per workspace (design D1 and D13). Approving it once authorizes the worker to
@@ -60,6 +61,35 @@ export const territoryCallPolicySchema = z.strictObject({
   if (value.policyId !== territoryCallPolicyId(value.workspaceId)) ctx.addIssue({ code: 'custom', message: 'territory_policy_identity' });
 });
 export type TerritoryCallPolicy = z.infer<typeof territoryCallPolicySchema>;
+
+/**
+ * A state David added to the territory on top of the built-in map (design section 8). The built-in
+ * map in `territoryClearanceContract.ts` stays frozen; an addition is a stored, revisioned record the
+ * worker keeps beside the policy. An added state carries the fixed IANA zone the contract records for
+ * it and nothing else: no statute text is drafted here, the state shows as unconfirmed in Territory
+ * clearance, and nothing dials for it until David confirms its clearance.
+ */
+export const territoryAddedStateSchema = z.strictObject({
+  state: territoryStateSchema,
+  timezone: territoryTimeZoneSchema,
+  addedAt: instant,
+  /** The owner command that added the state, so a replayed add is recognized instead of recorded twice. */
+  commandId: z.uuid(),
+});
+export type TerritoryAddedState = z.infer<typeof territoryAddedStateSchema>;
+/** The one stored addition record of a workspace. `revision` increases on every accepted addition. */
+export const territoryAddedStatesSchema = z.strictObject({
+  version: z.literal(1),
+  workspaceId: id,
+  revision: revision.min(1),
+  rulesRevision: z.literal(TERRITORY_RULES_REVISION),
+  states: z.array(territoryAddedStateSchema).max(US_STATE_CODES.length)
+    .refine(states => new Set(states.map(entry => entry.state)).size === states.length, 'One row per added state.'),
+  updatedAt: instant,
+});
+export type TerritoryAddedStates = z.infer<typeof territoryAddedStatesSchema>;
+/** What the desktop tells David to do himself after adding a state: the Places regions stay his operator decision. */
+export const TERRITORY_ADD_STATE_NEXT_STEP = 'Add the state\'s regions in Cloud research and press Replace configuration. Adding a state changes no Places region on its own.';
 /** David's decision of 17 Sep 2026 (D13 v1): day 0 call, day 3 call, day 7 email T4, day 12 call, day 21 email T5; 3 calls and 3 emails per firm; 30 new firms a morning. */
 export const DEFAULT_TERRITORY_CALL_POLICY_DEFINITION: TerritoryCallPolicyDefinition = territoryCallPolicyDefinitionSchema.parse({
   audience: { kind: 'places_discovery' },
@@ -79,10 +109,14 @@ export const territoryCallPolicyCommandPayloadSchema = z.discriminatedUnion('kin
   z.strictObject({ kind: z.literal('policy.read') }),
   z.strictObject({ kind: z.literal('policy.approve'), expectedRevision: revision, definition: territoryCallPolicyDefinitionSchema }),
   z.strictObject({ kind: z.literal('policy.set-state'), expectedRevision: revision.min(1), state: z.enum(['active', 'paused']) }),
+  /** Add one state to the territory. CAS on the addition record's own revision, not the policy's. Grants nothing and dials nothing. */
+  z.strictObject({ kind: z.literal('policy.add-state'), expectedAddedRevision: revision, state: territoryStateSchema, rulesRevision: z.literal(TERRITORY_RULES_REVISION) }),
 ]);
 export type TerritoryCallPolicyCommandPayload = z.infer<typeof territoryCallPolicyCommandPayloadSchema>;
 /** The worker's answer to a territory policy command: the command's receipt plus the policy as it stands afterwards. */
-export const territoryCallPolicyReceiptSchema = z.strictObject({ receipt: commandReceiptSchema, policy: territoryCallPolicySchema.nullable() });
+export const territoryCallPolicyReceiptSchema = z.strictObject({ receipt: commandReceiptSchema, policy: territoryCallPolicySchema.nullable(),
+  /** The addition record as it stands after the command. Absent on a worker predating "Add a state". */
+  added: territoryAddedStatesSchema.nullable().optional() });
 export type TerritoryCallPolicyReceipt = z.infer<typeof territoryCallPolicyReceiptSchema>;
 /** Renderer to main. The renderer names the command identity so a retry resends the same command; main supplies the definition. */
 export const territoryCallPolicyRequestSchema = z.discriminatedUnion('kind', [
@@ -91,6 +125,15 @@ export const territoryCallPolicyRequestSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('set-state'), commandId: z.uuid(), expectedRevision: revision.min(1), state: z.enum(['active', 'paused']) }),
 ]);
 export type TerritoryCallPolicyRequest = z.infer<typeof territoryCallPolicyRequestSchema>;
+/**
+ * Renderer to main for "Add a state" (design section 8). Deliberately a schema of its own rather than a
+ * fourth member of the request union above: the main-process bridge maps that union positionally, so a
+ * new member would be routed to `policy.set-state` until the bridge names this kind. Until then Settings
+ * validates the state against the fixed maps and reports the addition as held, which is why nothing can
+ * reach the worker by accident. The worker side (`policy.add-state`) is complete.
+ */
+export const territoryAddStateRequestSchema = z.strictObject({ kind: z.literal('add-state'), commandId: z.uuid(), expectedAddedRevision: revision, state: territoryStateSchema });
+export type TerritoryAddStateRequest = z.infer<typeof territoryAddStateRequestSchema>;
 export const territoryCallPolicyStatusSchema = z.strictObject({
   workspaceId: id, policy: territoryCallPolicySchema.nullable(),
   /** What an approval would apply: the fixed default in this batch. */
@@ -120,6 +163,8 @@ export function territoryEnrollmentCommandId(policy: PolicyIdentity, accountId: 
   return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-4${hash.slice(13, 16)}-8${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
 }
 const stepId = (versionId: string, index: number) => `${versionId}-step-${index}`;
+/** The first step of a derived version, derivable from the version id alone so a count never has to read the version. */
+export const territoryFirstStepId = (versionId: string): string => stepId(versionId, 0);
 /** One single-firm campaign version, version 1, unapproved (the worker records the approval beside it). */
 export function deriveTerritoryCampaignVersion(policy: PolicyIdentity & Pick<TerritoryCallPolicy, 'sequence' | 'caps' | 'objective' | 'offer'>, accountId: string): CampaignVersion {
   id.parse(accountId);
@@ -172,6 +217,12 @@ export const TERRITORY_INTERESTED_BUSINESS_DAYS = 5;
 export const TERRITORY_GATEKEEPER_BUSINESS_DAYS = 2;
 export const TERRITORY_NOT_INTERESTED_REST_DAYS = 180;
 export const TERRITORY_SEQUENCE_COMPLETE_REST_DAYS = 90;
+/** D13 re-entry: a firm runs the sequence at most twice. The second completed run rests this long and never re-enters. */
+export const TERRITORY_FINAL_REST_DAYS = 180;
+/** How many runs of the sequence one firm may receive. The worker's enrollment record counts them. */
+export const TERRITORY_MAX_ENTRIES = 2;
+export const territoryEntriesSchema = z.union([z.literal(1), z.literal(2)]);
+export type TerritoryEntries = z.infer<typeof territoryEntriesSchema>;
 export type TerritorySequenceAdvance = Readonly<{
   currentStepId: string | null;
   state: 'active' | 'paused' | 'stopped';
@@ -179,7 +230,7 @@ export type TerritorySequenceAdvance = Readonly<{
   restingUntil: string | null;
   /** Email steps skipped on the way to the next call step; each one is held, never drafted or sent. */
   heldStepIds: readonly string[];
-  reason: 'continue' | 'interested' | 'gatekeeper' | 'rest_not_interested' | 'rest_wrong_number' | 'rest_sequence_complete' | 'opt_out';
+  reason: 'continue' | 'interested' | 'gatekeeper' | 'rest_not_interested' | 'rest_wrong_number' | 'rest_sequence_complete' | 'rest_final' | 'opt_out';
 }>;
 const TERRITORY_DAY_MS = 86400000;
 const businessDaysFrom = (instant: string, days: number): string => {
@@ -201,6 +252,8 @@ export function advanceTerritorySequence(input: {
   enrollment: { currentStepId: string | null; startedAt: string };
   outcome: string;
   observedAt: string;
+  /** Which run of the sequence this is. Absent means the first run, which is what every enrollment written before D13's counter carries. */
+  entries?: TerritoryEntries;
 }): TerritorySequenceAdvance {
   const steps = input.version.steps;
   const index = steps.findIndex(step => step.id === input.enrollment.currentStepId);
@@ -225,5 +278,58 @@ export function advanceTerritorySequence(input: {
     return { currentStepId: step.id, state: 'active', nextDueAt: new Date(Date.parse(input.enrollment.startedAt) + step.delayHours * 3600000).toISOString(),
       restingUntil: null, heldStepIds: held, reason: 'continue' };
   }
-  return { ...rest(TERRITORY_SEQUENCE_COMPLETE_REST_DAYS, 'rest_sequence_complete'), currentStepId: null, heldStepIds: held };
+  // The first completed run rests 90 days and may re-enter once; the second rests 180 days and never re-enters.
+  const final = (input.entries ?? 1) >= TERRITORY_MAX_ENTRIES;
+  return { ...rest(final ? TERRITORY_FINAL_REST_DAYS : TERRITORY_SEQUENCE_COMPLETE_REST_DAYS, final ? 'rest_final' : 'rest_sequence_complete'), currentStepId: null, heldStepIds: held };
+}
+
+/**
+ * D13 single re-entry. Whether a rested firm may start the sequence again, given the worker's own
+ * entry counter. Pure: it decides only the restart, never dials, sends, enrolls or writes anything.
+ * `resting` and `final_rest` are honest holds David can read, not silent skips.
+ */
+export type TerritoryReentryDecision =
+  | { kind: 'reenter'; entries: 2; currentStepId: string; startedAt: string }
+  | { kind: 'resting'; until: string }
+  | { kind: 'final_rest'; until: string }
+  | { kind: 'not_resting' };
+export function decideTerritoryReentry(input: {
+  /** The first step of the firm's derived version, which `territoryFirstStepId` derives from the version id alone. */
+  firstStepId: string;
+  enrollment: { state: string; restingUntil?: string | null };
+  entries?: TerritoryEntries;
+  now: string;
+}): TerritoryReentryDecision {
+  const until = input.enrollment.restingUntil ?? null;
+  if (input.enrollment.state !== 'paused' || until === null) return { kind: 'not_resting' };
+  if (until > input.now) return { kind: 'resting', until };
+  if ((input.entries ?? 1) >= TERRITORY_MAX_ENTRIES) return { kind: 'final_rest', until };
+  if (input.firstStepId.length < 1) throw new Error('territory_sequence_step_unknown');
+  // Day offsets are calendar days from `startedAt`, so a re-entry re-bases the whole cadence on today.
+  return { kind: 'reenter', entries: 2, currentStepId: input.firstStepId, startedAt: input.now };
+}
+
+/**
+ * D13 wrong number. The verifications a replacement business phone may carry: a number the firm
+ * publishes on its own page, or the one its directory listing carries. Never an unverified number.
+ */
+export const TERRITORY_REPLACEMENT_VERIFICATIONS = ['published', 'listed'] as const;
+export type TerritoryRouteCandidate = Readonly<{ id: string; channel: string; purpose: string; verification: string; version: number }>;
+/**
+ * Pure. The next business phone the firm itself publishes, after the dialed route was retired for a
+ * wrong number. A retired route is never selected again and never deleted. Deterministic: the highest
+ * stored version of each route id, a number from the firm's own page before a directory listing, then
+ * route id order, so a replayed outcome selects exactly the same route. Selecting is not dialing.
+ */
+export function selectTerritoryReplacementRoute(input: { routes: readonly TerritoryRouteCandidate[]; retiredRouteIds: readonly string[] }): TerritoryRouteCandidate | null {
+  const retired = new Set(input.retiredRouteIds);
+  const newest = new Map<string, TerritoryRouteCandidate>();
+  for (const route of input.routes) {
+    if (route.channel !== 'phone' || route.purpose !== 'business' || retired.has(route.id)) continue;
+    if (!(TERRITORY_REPLACEMENT_VERIFICATIONS as readonly string[]).includes(route.verification)) continue;
+    const held = newest.get(route.id);
+    if (!held || held.version < route.version) newest.set(route.id, route);
+  }
+  const rank = (route: TerritoryRouteCandidate) => route.verification === 'published' ? 0 : 1;
+  return [...newest.values()].sort((a, b) => rank(a) - rank(b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))[0] ?? null;
 }
