@@ -7,7 +7,10 @@ import { accountIdSchema, accountInstantSchema } from '../../shared/contracts/ac
 import { syncFailureSchema, SYNC_BUDGET_SECONDS } from '../../shared/contracts/ownerCommandContract';
 import { z } from 'zod';
 export type SyncFailure = z.infer<typeof syncFailureSchema>;
-export type SyncReport = Readonly<{ applied: number; gaps: number; cursor: string | null; ownerFresh: boolean; failure: SyncFailure }>;
+export type SyncReport = Readonly<{ applied: number; gaps: number; cursor: string | null; ownerFresh: boolean; failure: SyncFailure; detail: string | null }>;
+/** One bounded sentence naming the stage that stopped a run and the error it raised. Messages here are SQLite, schema or
+ * HTTP wording from this process; they never carry a credential, and the report is the only place David can read them. */
+const describeStop = (stage: string, error: unknown): string => `${stage}: ${error instanceof Error ? error.message : String(error)}`.slice(0, 400);
 /** One worker request. The page size the worker serves is chosen so a page always fits here. */
 export const SYNC_REQUEST_TIMEOUT_MS = 15_000;
 /** One whole run: the launch sync, the five-minute background sync and the Sync now button all get this.
@@ -28,16 +31,17 @@ export async function synchronizeDelegation(input: {
   let applied = 0;
   let gaps = 0;
   let failure: SyncFailure = null;
+  let detail: string | null = null;
   const finish = (complete: boolean): SyncReport => {
     try { input.transport.finish(attempt, cursor, complete); }
-    catch { complete = false; failure ??= 'transport'; }
-    return { applied, gaps, cursor, ownerFresh: complete, failure: complete ? null : failure ?? 'transport' };
+    catch (error) { complete = false; failure ??= 'transport'; detail ??= describeStop('recording the sync result', error); }
+    return { applied, gaps, cursor, ownerFresh: complete, failure: complete ? null : failure ?? 'transport', detail: complete ? null : detail };
   };
   // Each complete page is checkpointed while the attempt stays pending, so an abort on page seven
   // resumes at page seven rather than page one even if the closing record write is itself lost.
   const checkpoint = () => {
     try { input.transport.checkpoint(attempt, cursor); }
-    catch { failure ??= 'transport'; /* finish() still tries to record the cursor it reached. */ }
+    catch (error) { failure ??= 'transport'; detail ??= describeStop('saving the cursor', error); /* finish() still tries to record the cursor it reached. */ }
   };
   try {
     try { await input.flushPending(signal); }
@@ -47,13 +51,19 @@ export async function synchronizeDelegation(input: {
       signal.throwIfAborted();
       let raw: EventPage;
       try { raw = await input.eventsAfter(cursor, signal); }
-      catch (error) { failure = signal.aborted ? 'timeout' : 'transport'; throw error; }
+      catch (error) { failure = signal.aborted ? 'timeout' : 'transport'; detail = describeStop(`fetching the page after ${cursor ?? 'the start'}`, error); throw error; }
       let page: EventPage;
       try { page = eventPageSchema.parse(raw); }
-      catch (error) { failure = 'invalid_event'; throw error; }
+      catch (error) { failure = 'invalid_event'; detail = describeStop(`reading the page after ${cursor ?? 'the start'}`, error); throw error; }
       signal.throwIfAborted();
       for (const event of page.events) {
-        const result = input.repository.applyWorkerEvent(event);
+        let result: 'applied' | 'duplicate' | 'gap';
+        try { result = input.repository.applyWorkerEvent(event); }
+        catch (error) {
+          // A local refusal is not a transport fault: name the event so the cause is readable from the report line.
+          failure = 'apply'; detail = describeStop(`recording ${event.kind} (aggregate ${event.aggregateVersion}) for ${event.accountId.slice(0, 24)}`, error);
+          return finish(false);
+        }
         if (result === 'applied') applied++;
         if (result === 'gap') { gaps++; failure = 'gap'; return finish(false); }
       }
@@ -66,12 +76,12 @@ export async function synchronizeDelegation(input: {
         }
         return finish(true);
       }
-      if (page.nextCursor === cursor || page.events.length === 0) { failure ??= 'transport'; return finish(false); }
+      if (page.nextCursor === cursor || page.events.length === 0) { failure ??= 'transport'; detail ??= `the worker served an empty page after ${cursor ?? 'the start'} while reporting more events`; return finish(false); }
       cursor = page.nextCursor;
       checkpoint();
     }
-    failure ??= 'transport'; /* The bounded page budget ran out before the head. */
-  } catch { failure ??= signal.aborted ? 'timeout' : 'transport'; /* A failed/aborted sync is not current owner proof. */ }
+    failure ??= 'transport'; detail ??= 'the page budget ran out before the head'; /* The bounded page budget ran out before the head. */
+  } catch (error) { failure ??= signal.aborted ? 'timeout' : 'transport'; detail ??= describeStop('the run', error); /* A failed/aborted sync is not current owner proof. */ }
   // An incomplete bounded replay cannot establish owner freshness.
   return finish(false);
 }

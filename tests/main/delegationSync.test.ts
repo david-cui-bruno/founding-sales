@@ -52,6 +52,32 @@ const applying = (outcome: (event: WorkerEvent, seen: number) => 'applied' | 'du
   return { applyWorkerEvent: (event: WorkerEvent) => outcome(event, ++seen), pendingCommands: (): [] => [] } as unknown as DelegationRepository;
 };
 
+describe('synchronizeDelegation names what stopped it', () => {
+  it('reports a local refusal to record an event as apply, with the event and the error, and leaves the cursor where it was', async () => {
+    const f = await createPmFixture();
+    try {
+      const transport = new SqlDelegationTransport({ database: f.db, workspaceId, pairingId, clock });
+      const remote = worker();
+      const repository = applying((_event, seen) => { if (seen === 3) throw new Error('UNIQUE constraint failed: pm_accounts.id'); return 'applied'; });
+      const report = await synchronizeDelegation({ repository, transport, flushPending: async () => undefined, eventsAfter: remote.eventsAfter }, new AbortController().signal);
+      expect(report).toMatchObject({ applied: 2, gaps: 0, cursor: null, ownerFresh: false, failure: 'apply' });
+      expect(report.detail).toBe('recording research.receipt (aggregate 3) for fictional-firm-3: UNIQUE constraint failed: pm_accounts.id');
+      expect(transport.current()).toMatchObject({ state: 'failed', cursor: null });
+    } finally { await f.close(); }
+  });
+  it('names the fetch that failed and reports null detail for a complete run', async () => {
+    const f = await createPmFixture();
+    try {
+      const transport = new SqlDelegationTransport({ database: f.db, workspaceId, pairingId, clock });
+      const failing = await synchronizeDelegation({ repository: applying(), transport, flushPending: async () => undefined,
+        eventsAfter: async () => { throw new Error('Worker request unavailable'); } }, new AbortController().signal);
+      expect(failing).toMatchObject({ applied: 0, failure: 'transport', detail: 'fetching the page after the start: Worker request unavailable' });
+      const complete = await synchronizeDelegation({ repository: applying(), transport, flushPending: async () => undefined, eventsAfter: worker().eventsAfter }, new AbortController().signal);
+      expect(complete).toMatchObject({ ownerFresh: true, failure: null, detail: null });
+    } finally { await f.close(); }
+  });
+});
+
 describe('synchronizeDelegation throughput', () => {
   it('applies the whole 835-event backlog inside the sync budget', async () => {
     const f = await createPmFixture();
@@ -62,7 +88,7 @@ describe('synchronizeDelegation throughput', () => {
       const report = await synchronizeDelegation({ repository: applying(), transport,
         flushPending: async () => undefined, eventsAfter: remote.eventsAfter }, AbortSignal.timeout(SYNC_BUDGET_MS));
       const elapsed = performance.now() - started;
-      expect(report).toEqual({ applied: BACKLOG, gaps: 0, cursor: cursorAt(BACKLOG), ownerFresh: true, failure: null });
+      expect(report).toEqual({ applied: BACKLOG, gaps: 0, cursor: cursorAt(BACKLOG), ownerFresh: true, failure: null, detail: null });
       expect(remote.pages()).toBe(5);
       // Measured at 22 ms locally on 18 Sep 2026. The bound is deliberately loose for a slow runner
       // and still an order of magnitude inside the budget the old flat 15 s could not reach.
@@ -77,14 +103,14 @@ describe('synchronizeDelegation throughput', () => {
       const stalled = worker({ stallAtPage: 3 });
       const first = await synchronizeDelegation({ repository: applying(), transport,
         flushPending: async () => undefined, eventsAfter: stalled.eventsAfter }, AbortSignal.timeout(250));
-      expect(first).toEqual({ applied: WORKER_PAGE * 2, gaps: 0, cursor: cursorAt(WORKER_PAGE * 2), ownerFresh: false, failure: 'timeout' });
+      expect(first).toEqual({ applied: WORKER_PAGE * 2, gaps: 0, cursor: cursorAt(WORKER_PAGE * 2), ownerFresh: false, failure: 'timeout', detail: 'fetching the page after ' + cursorAt(WORKER_PAGE * 2) + ': fictional worker never answered' });
       // The record stays honest: a checkpointed but incomplete run is failed with the cursor advanced.
       expect(transport.current()).toMatchObject({ state: 'failed', completedAt: null, cursor: cursorAt(WORKER_PAGE * 2) });
       const resumed = worker();
       const second = await synchronizeDelegation({ repository: applying(), transport,
         flushPending: async () => undefined, eventsAfter: resumed.eventsAfter }, AbortSignal.timeout(SYNC_BUDGET_MS));
       expect(resumed.requests[0]).toBe(cursorAt(WORKER_PAGE * 2));
-      expect(second).toEqual({ applied: BACKLOG - WORKER_PAGE * 2, gaps: 0, cursor: cursorAt(BACKLOG), ownerFresh: true, failure: null });
+      expect(second).toEqual({ applied: BACKLOG - WORKER_PAGE * 2, gaps: 0, cursor: cursorAt(BACKLOG), ownerFresh: true, failure: null, detail: null });
       expect(transport.current()).toMatchObject({ state: 'complete', cursor: cursorAt(BACKLOG) });
     } finally { f.close(); }
   });

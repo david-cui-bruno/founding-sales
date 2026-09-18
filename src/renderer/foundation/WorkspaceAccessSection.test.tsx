@@ -156,6 +156,14 @@ describe('Workspace access explicit setup controls', () => {
     expect(a.sync.mock.calls).toEqual([[]]); expect(a.configure).not.toHaveBeenCalled(); expect(a.status).toHaveBeenCalledTimes(1);
   });
 
+  it('names a local refusal to record an event, with the detail the main process supplied', async () => {
+    const a = api(); await ready(a);
+    a.sync.mockResolvedValueOnce({ applied: 0, gaps: 0, cursor: `${'a'.repeat(64)}:6`, ownerFresh: false, failure: 'apply',
+      detail: 'recording research.created (aggregate 1) for account-e8cd5dda2bd978fc: UNIQUE constraint failed: pm_accounts.id' });
+    sync();
+    const feedback = await screen.findByRole('alert');
+    expect(feedback.textContent).toContain(`Sync stopped: this Mac could not record an event at cursor ${'a'.repeat(64)}:6. Detail: recording research.created (aggregate 1) for account-e8cd5dda2bd978fc: UNIQUE constraint failed: pm_accounts.id. The next sync resumes from that cursor.`);
+  });
   it('names a timed-out run and the cursor the next sync resumes from', async () => {
     const a = api(); await ready(a);
     a.sync.mockResolvedValueOnce({ applied: 400, gaps: 0, cursor: `${'a'.repeat(64)}:400`, ownerFresh: false, failure: 'timeout' });

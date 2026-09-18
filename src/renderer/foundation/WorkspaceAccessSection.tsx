@@ -28,13 +28,14 @@ function parseStatus(raw: Status): Status {
 const SYNC_FAILURE_CAUSE: Record<NonNullable<Report['failure']>, string> = {
   timeout: `timed out after ${SYNC_BUDGET_SECONDS} s`,
   transport: 'could not reach the cloud worker',
+  apply: 'this Mac could not record an event',
   invalid_event: 'could not read an event the cloud worker sent',
   gap: 'found a gap in the event stream',
 };
 const syncStopped = (report: Report): string => {
   const failure = report.failure ?? null;
   return failure === null ? ''
-    : ` Sync stopped: ${SYNC_FAILURE_CAUSE[failure]} at cursor ${report.cursor ?? 'none yet'}. The next sync resumes from that cursor.`;
+    : ` Sync stopped: ${SYNC_FAILURE_CAUSE[failure]} at cursor ${report.cursor ?? 'none yet'}.${report.detail ? ` Detail: ${report.detail}.` : ''} The next sync resumes from that cursor.`;
 };
 const paired = (status: Status | null) => !!status?.workspaceId && !!status.endpoint && status.state !== 'locked' && status.state !== 'unconfigured';
 // The public schema permits contradictory outer/inner states. Do not choose one as authority.
