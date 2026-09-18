@@ -30,7 +30,8 @@ async function fixture() {
   const h = f.handoff;
   raw.prepare('INSERT INTO delegated_manual_handoffs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run('ws', account.id, h.handoffId, h.actionId, 0, h.targetHash, h.contentHash, h.contextRevision, h.channel, h.routeId, h.routeVersion, h.expiresAt, f.handoffEvent.id, PM_NOW, f.command.commandId);
   raw.prepare('INSERT INTO campaign_versions VALUES(?,?,?,?,?,?,?)').run('ws', f.version.id, f.version.campaignId, 1, JSON.stringify(f.version), accountFingerprint(f.version), PM_NOW);
-  raw.prepare('INSERT INTO campaign_enrollments VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run('ws', 'enroll1', account.id, 'version1', 'phone1', 1, null, null, 2, 'completed', 1, f.handoff.contextRevision, PM_NOW, PM_NOW);
+  // Schema 29 added next_due_at and resting_until (both NULL for a completed enrollment).
+  raw.prepare('INSERT INTO campaign_enrollments VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run('ws', 'enroll1', account.id, 'version1', 'phone1', 1, null, null, 2, 'completed', 1, f.handoff.contextRevision, PM_NOW, PM_NOW, null, null);
   raw.prepare('INSERT INTO campaign_step_receipts VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run('ws', 'origin', account.id, 'enroll1', 'call-step', 'phone1', 1, 1, f.handoff.contextRevision, 'call1', 'call', 'human_reported_sent', 'connected', 'unknown', 'human', PM_NOW, f.command.commandId);
   const deps = { database: local.db, workspaceId: 'ws', clock: { now: () => PM_NOW }, mailbox: () => ({ subject: 'sub1', sender: f.draft.sender }) };
   return { ...f, local, deps, repo: new SqlRequestedFollowupRepository(deps) };
