@@ -17,13 +17,11 @@ supported Node 24 ABI and Electron 44 ABI; other Node majors fail closed.
 
 Use **Node 24.20.0** for release gates. Do not run full root, package, E2E or
 native acceptance concurrently with another checkpoint owner. Install each
-independent Lambda lockfile, shared first. The root is not an npm workspace:
+independent Lambda lockfile. The root is not an npm workspace:
 
 ```bash
 export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm ci
-export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm ci --prefix cloud/lambdas/shared
 while IFS= read -r -d '' lock; do
-  test "$lock" = cloud/lambdas/shared/package-lock.json && continue
   export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm ci --prefix "${lock%/package-lock.json}"
 done < <(git ls-files -z -- 'cloud/lambdas/*/package-lock.json')
 export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm run verify:release
@@ -58,11 +56,11 @@ package/scan/E2E/marker sequence.
 argument arrays, excluding generated output/dependencies at any depth. It does
 not claim ESLint validation of JSON, YAML or Terraform. Lambda source uses its
 nearest package TypeScript import-resolution options, not root substitutes.
-`verify:lambdas` discovers tracked immediate package manifests and runs shared
-first (typecheck/test), then every other tracked package, today only
-`delegated-worker` (typecheck/test/build); the nine legacy sourcing packages were
-removed on 17 September 2026 after their stack was destroyed. It never installs,
-deploys, scouts or contacts providers.
+`verify:lambdas` discovers tracked immediate package manifests in name order and
+runs typecheck/test/build in each, today only `delegated-worker`; the nine legacy
+sourcing packages were removed on 17 September 2026 after their stack was
+destroyed, and the `shared` event-schema package was pruned once nothing imported
+it. It never installs, deploys, scouts or contacts providers.
 
 The marker is strict `{format:'callie-release',version:1,commitSha,builtAt}`.
 `release:marker` derives actual full HEAD and refuses index, tracked or nonignored

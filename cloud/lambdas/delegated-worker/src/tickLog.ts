@@ -1,13 +1,24 @@
-import { SCHEDULED_RUN_EVENT, scheduledRunRecordSchema, type ScheduledRunRecord, type TickHeldReason, type TickPhase, type TickPhaseResult } from '../../../../src/shared/contracts/researchSetupContract';
+import { SCHEDULED_RUN_EVENT, scheduledRunRecordSchema, tickErrorClassSchema, tickPhaseHoldSchema, type ScheduledRunRecord, type TickErrorClass,
+  type TickHeldReason, type TickPhase, type TickPhaseHold, type TickPhaseResult } from '../../../../src/shared/contracts/researchSetupContract';
 import type { SourceTickReport } from './sourceCoordinator';
 
 /** Where the worker keeps its last scheduled tick so `/research/setup/status` can report `lastTickAt`. */
 export const SOURCE_LAST_TICK_KEY = 'SOURCE_LAST_TICK';
+/** The one log line per phase that named the condition it hit, beside the tick record itself. Closed reason and constructor class only. */
+export const SCHEDULED_PHASE_HELD_EVENT = 'SCHEDULED_PHASE_HELD';
 /** The closed list of top-level keys a tick record may carry. The record is built field by field from the report, never by spreading it,
  *  and then validated against the strict schema; anything else on the report (or any string that is not one of the enums) cannot pass. */
-export const scheduledRunRecordFields = ['event', 'version', 'at', 'durationMs', 'status', 'phases', 'held', 'heldByReason', 'places', 'firmsCreated', 'jobsDrained',
+export const scheduledRunRecordFields = ['event', 'version', 'at', 'durationMs', 'status', 'phases', 'held', 'heldByReason', 'phaseHolds', 'territory', 'places', 'firmsCreated', 'jobsDrained',
   'researchPrepared', 'researchCompleted', 'mailPolls', 'dispatches', 'sendReconciliations', 'meetings', 'extraction', 'ledger', 'descriptorExpired', 'selfPaused'] as const satisfies readonly (keyof ScheduledRunRecord)[];
-export const tickPhases: readonly TickPhase[] = ['research', 'configurations', 'submittedCommands', 'publications'];
+export const tickPhases: readonly TickPhase[] = ['research', 'configurations', 'submittedCommands', 'publications', 'territoryBackfill'];
+/** An exception reduced to one of the recognized constructor classes. Anything unrecognized is `unknown`: no name, message or cause travels verbatim. */
+export function tickErrorClass(error: unknown): TickErrorClass {
+  const raw = error instanceof Error ? error.constructor?.name ?? error.name : '';
+  const parsed = tickErrorClassSchema.safeParse(raw);
+  if (parsed.success) return parsed.data;
+  const named = error instanceof Error ? tickErrorClassSchema.safeParse(error.name) : null;
+  return named?.success ? named.data : 'unknown';
+}
 const count = (value: number): number => Number.isSafeInteger(value) && value >= 0 ? value : 0;
 /** Counts only: the Places `runId` (a derived UUID) and every skipped-reason counter are kept, nothing else from the batch report. */
 function placesRecord(places: SourceTickReport['places']): ScheduledRunRecord['places'] {
@@ -22,6 +33,23 @@ function phaseRecord(phases: SourceTickReport['phases']): Partial<Record<TickPha
   for (const phase of tickPhases) { const result = phases[phase]; if (result) record[phase] = result; }
   return record;
 }
+/** Only the closed reason and the closed constructor class of each named hold cross into the record; an unparsable entry is dropped, never coerced. */
+function phaseHoldRecord(holds: SourceTickReport['phaseHolds']): Partial<Record<TickPhase, TickPhaseHold>> {
+  const record: Partial<Record<TickPhase, TickPhaseHold>> = {};
+  for (const phase of tickPhases) {
+    const held = holds[phase]; if (!held) continue;
+    const parsed = tickPhaseHoldSchema.safeParse({ reason: held.reason, errorClass: held.errorClass ?? null });
+    if (parsed.success) record[phase] = parsed.data;
+  }
+  return record;
+}
+/** Counts and one outcome enum only: no account id, route id or policy id from the sweep. */
+function territoryRecord(territory: SourceTickReport['territory']): ScheduledRunRecord['territory'] {
+  if (!territory) return null;
+  const skipped = territory.skipped;
+  return { outcome: territory.outcome, scanned: count(territory.scanned), enrolled: count(territory.enrolled), replayed: count(territory.replayed),
+    skipped: { policy_paused: count(skipped.policy_paused), authority_exists: count(skipped.authority_exists), route_unavailable: count(skipped.route_unavailable), enrollment_failed: count(skipped.enrollment_failed) } };
+}
 function heldRecord(reasons: SourceTickReport['heldByReason']): Partial<Record<TickHeldReason, number>> {
   const record: Partial<Record<TickHeldReason, number>> = {};
   for (const [reason, value] of Object.entries(reasons) as [TickHeldReason, number][]) if (count(value) > 0) record[reason] = count(value);
@@ -31,6 +59,7 @@ function heldRecord(reasons: SourceTickReport['heldByReason']): Partial<Record<T
 export function buildScheduledRunRecord(report: SourceTickReport, input: { at: string; durationMs: number }): ScheduledRunRecord {
   return scheduledRunRecordSchema.parse({ event: SCHEDULED_RUN_EVENT, version: 1, at: input.at, durationMs: count(Math.round(input.durationMs)),
     status: report.status, phases: phaseRecord(report.phases), held: count(report.held), heldByReason: heldRecord(report.heldByReason),
+    phaseHolds: phaseHoldRecord(report.phaseHolds), territory: territoryRecord(report.territory),
     places: placesRecord(report.places), firmsCreated: count(report.places?.created ?? 0), jobsDrained: count(report.places?.drained ?? 0),
     researchPrepared: count(report.researchPrepared), researchCompleted: count(report.researchCompleted), mailPolls: count(report.mailPolls),
     dispatches: count(report.dispatches), sendReconciliations: count(report.sendReconciliations), meetings: count(report.meetings),
@@ -43,6 +72,13 @@ export function buildScheduledRunRecord(report: SourceTickReport, input: { at: s
 export function logScheduledRun(report: SourceTickReport, input: { at: string; durationMs: number }, log: (line: string) => void = line => console.log(line)): ScheduledRunRecord | null {
   let record: ScheduledRunRecord;
   try { record = buildScheduledRunRecord(report, input); } catch { return null; }
-  try { log(JSON.stringify(record)); } catch { /* Logging must not fail the invocation. */ }
+  try {
+    log(JSON.stringify(record));
+    // One extra line per phase that named its condition, so the reason is greppable in CloudWatch without reading the whole record.
+    for (const phase of tickPhases) {
+      const held = record.phaseHolds[phase]; if (!held) continue;
+      log(JSON.stringify({ event: SCHEDULED_PHASE_HELD_EVENT, version: 1, at: record.at, phase, reason: held.reason, errorClass: held.errorClass }));
+    }
+  } catch { /* Logging must not fail the invocation. */ }
   return record;
 }

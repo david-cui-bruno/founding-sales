@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { RemoteGoogleAuthorization } from '../src/remoteGoogleAuthorization';
-import { googleScopes, requireCapabilities } from '../src/googleGrantCapabilities';
+import { googleGrantDisclosure, googleScopes, requireCapabilities } from '../src/googleGrantCapabilities';
 import { WorkerAuth } from '../src/workerAuth';
 import { ConditionalCommandHarness } from './sdkHarness';
 function fixture() {
@@ -146,7 +146,7 @@ describe('OAuth HTTP handler binding', () => {
       headers: { host: 'worker.example.test', 'x-forwarded-proto': 'https', ...(credential ? { authorization: `Bearer ${credential}` } : {}) },
       requestContext: { domainName: 'worker.example.test', http: { method: body ? 'POST' : 'GET', sourceIp: 'fixture' } }, ...(body ? { body: JSON.stringify(body) } : {}) });
     expect((await handler(event('/google/begin', { capabilities: ['send', 'relevant_read'] }, '', pair.credential))).statusCode).toBe(400);
-    const begin = await handler(event('/google/begin', { capabilities: ['send', 'relevant_read'], disclosureVersion: 'google-grant-v1' }, '', pair.credential));
+    const begin = await handler(event('/google/begin', { capabilities: ['send', 'relevant_read'], disclosureVersion: googleGrantDisclosure.version }, '', pair.credential));
     expect(begin.statusCode).toBe(200);
     const state = new URL(JSON.parse(begin.body).authorizationUrl).searchParams.get('state')!;
     const callback = await handler(event('/oauth/callback', undefined, new URLSearchParams({ state, code: 'fictional-code' }).toString()));

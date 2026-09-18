@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { ResearchSetupApi as Api, ResearchSetupStatus, ResearchSetupReceipt } from '../../shared/contracts/researchSetupContract';
+import { scheduledRunRecordSchema, type ResearchSetupApi as Api, type ResearchSetupStatus, type ResearchSetupReceipt, type TickPhaseHoldReason } from '../../shared/contracts/researchSetupContract';
 import { ResearchSetupSection } from './ResearchSetupSection';
 
 const pairingId = '11111111-1111-4111-8111-111111111111';
@@ -275,6 +275,26 @@ describe('a worker David can see in Cloud research settings', () => {
     cleanup();
     const manual = territory('paused'); await mount(api(manual));
     expect(screen.queryByText(/Research paused itself/)).toBeNull();
+  });
+  it('says in words why the last scheduled tick held the research phase, and says nothing when the tick carries no reason', async () => {
+    const tick = (reason: TickPhaseHoldReason | null): ResearchSetupStatus => {
+      const value = territory();
+      value.remote!.lastTickAt = '2026-09-18T12:00:00.000Z';
+      value.remote!.lastTick = scheduledRunRecordSchema.parse({ event: 'SCHEDULED_RUN_COMPLETED', version: 1, at: '2026-09-18T12:00:00.000Z', durationMs: 900,
+        status: 'completed', phases: { research: reason ? 'held' : 'completed' }, held: reason ? 1 : 0, heldByReason: reason ? { research_phase_failed: 1 } : {},
+        phaseHolds: reason ? { research: { reason, errorClass: null } } : {}, territory: null, places: null, firmsCreated: 0, jobsDrained: 0,
+        researchPrepared: 0, researchCompleted: 0, mailPolls: 0, dispatches: 0, sendReconciliations: 0, meetings: 0,
+        extraction: { calls: 0, settledCostMicros: 0, refundedMicros: 0 }, ledger: null, descriptorExpired: false, selfPaused: false });
+      return value;
+    };
+    await mount(api(tick('descriptor_changed')));
+    expect(screen.getByText('Worker research is held: operator settings changed; press Replace configuration')).toBeTruthy();
+    cleanup();
+    await mount(api(tick('pairing_inactive')));
+    expect(screen.getByText(/the approving pairing is no longer active/)).toBeTruthy();
+    cleanup();
+    await mount(api(tick(null)));
+    expect(screen.queryByText(/Worker research is held/)).toBeNull();
   });
 });
 

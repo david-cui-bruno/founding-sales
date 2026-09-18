@@ -3,9 +3,10 @@ import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, 
 import { z } from 'zod';
 import { type WorkerAuth, pairingKey, secretHash } from './workerAuth';
 import { keyPart } from './dynamoStore';
+import { senderCapForDay, senderCapPolicySchema, senderFirstSendSchema, type SenderCapStatus } from '../../../../src/shared/contracts/workerPolicyContract';
 import { googleGrantPurposeSchema, googleGrantBeginOptionsSchema, googleAvailabilityCalendarSelectionSchema, type GoogleGrantPurpose, type GoogleGrantBeginOptions, googleCalendarSelectionSchema, type GoogleCalendarSelection, capabilitiesForScopes, googleCapabilitySchema, googleGrantSchema, googleScopes, requireCapabilities, type GoogleCapability, type GoogleGrant } from './googleGrantCapabilities';
 export type RemoteGoogleConfig = { clientId: string; clientSecret: string; redirectUri: string; encryptionKey: Buffer };
-export type GrantStatus = { state: 'unconfigured' | 'ready' | 'revoked'; grant: GoogleGrant | null; providerRevocation?: 'confirmed' | 'pending' };
+export type GrantStatus = { state: 'unconfigured' | 'ready' | 'revoked'; grant: GoogleGrant | null; providerRevocation?: 'confirmed' | 'pending'; senderCap?: SenderCapStatus };
 const secret = z.string().min(1).max(16384).refine(value => !/[\r\n\x00]/.test(value)); // eslint-disable-line no-control-regex
 const tokenSchema = z.object({ access_token: secret, refresh_token: secret.optional(), token_type: z.literal('Bearer'), expires_in: z.number().int().min(60).max(86400), scope: z.string().min(1).max(4000) });
 const identitySchema = z.object({ sub: z.string().min(1).max(255), email: z.string().email().max(254), email_verified: z.literal(true) });
@@ -35,6 +36,12 @@ const legacyPurpose = 'permitted_correspondence' as const;
 const grantKey = (pairingId: string, purpose: GoogleGrantPurpose) => `GOOGLE_GRANT#${keyPart(pairingId)}${googleGrantPurposeSchema.parse(purpose) === legacyPurpose ? '' : '#personal_availability'}`;
 const tokenContext = (purpose: GoogleGrantPurpose) => purpose === legacyPurpose ? 'google-tokens' : 'google-tokens:personal_availability';
 const verifierContext = (key: string, purpose: GoogleGrantPurpose) => purpose === legacyPurpose ? key : `${key}:personal_availability`;
+/** The sender-cap durable keys live beside the grant so the one grant status read and the
+ * dispatch cap check share a single definition without importing each other's module.
+ * `dispatchRepository` re-exports the policy key it has always exported. */
+export const dispatchCapPolicyKey = (sender: string) => `DISPATCH_CAP_POLICY#${keyPart(sender)}`;
+export const dispatchCapUsageKey = (sender: string, day: string) => `DISPATCH_CAP#${keyPart(sender)}#${day}`;
+export const senderFirstSendKey = (sender: string) => `DISPATCH_SENDER_FIRST_SEND#${keyPart(sender)}`;
 /** Durable state and tokens use C1 DynamoStore, with AES-256-GCM bound to the
  * workspace, pairing, purpose and envelope version. No process replay cache. */
 export class RemoteGoogleAuthorization {
@@ -160,12 +167,27 @@ export class RemoteGoogleAuthorization {
       this.store.put(grantKey(data.pairingId, purpose), { grant, revoked: false, ciphertext }, previous?.rev ?? null)]);
     return { state: 'ready', grant };
   }
+  /** Arithmetic over two recorded rows. It reserves nothing, and a missing cap policy is
+   * reported as an absent cap rather than as a zero or an invented default. */
+  async senderCap(sender: string): Promise<SenderCapStatus | null> {
+    const policyRow = await this.store.get<unknown>(dispatchCapPolicyKey(sender));
+    if (!policyRow) return null;
+    const policy = senderCapPolicySchema.parse(policyRow.data);
+    if (policy.sender !== sender) return null;
+    const anchor = await this.store.get<unknown>(senderFirstSendKey(sender));
+    const firstSendAt = anchor ? senderFirstSendSchema.parse(anchor.data).firstSendAt : null;
+    return senderCapForDay(policy, firstSendAt, this.store.now());
+  }
   async status(pairingId: string, purpose: GoogleGrantPurpose = legacyPurpose): Promise<GrantStatus> {
     await this.input.auth.activePairing(pairingId);
     const record = await this.record(pairingId, purpose);
     if (!record) return { state: 'unconfigured', grant: null };
-    return { state: record.data.revoked ? 'revoked' : 'ready', grant: record.data.grant,
-      ...(record.data.providerRevocation ? { providerRevocation: record.data.providerRevocation } : {}) };
+    // Only the correspondence grant sends, so only it carries a sender cap.
+    const grant = record.data.grant;
+    const senderCap = grant && grant.purpose === legacyPurpose ? await this.senderCap(grant.email) : null;
+    return { state: record.data.revoked ? 'revoked' : 'ready', grant,
+      ...(record.data.providerRevocation ? { providerRevocation: record.data.providerRevocation } : {}),
+      ...(senderCap ? { senderCap } : {}) };
   }
   async revokeGoogleGrant(pairingId: string, purpose: GoogleGrantPurpose = legacyPurpose): Promise<GrantStatus> {
     const pairing = await this.input.auth.activePairing(pairingId); const record = await this.record(pairingId, purpose);

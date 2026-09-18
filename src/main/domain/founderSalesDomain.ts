@@ -14,8 +14,6 @@ import { countMilestones, readAcquisitionFacts } from './campaign/acquisitionRep
 import { projectAccountPipeline } from './campaign/accountPipelineProjection';
 import type { AcquisitionWindow } from '../../shared/contracts/acquisitionReportContract';
 import type { AccountOutboundRequest, AccountCallReport, AccountCallRange } from '../../shared/contracts/accountOutboundContract';
-import { collectLeadTriageSnapshot, type LeadTriageQueueRow } from '../today/leadTriageReportService';
-import { leadTriageSnapshotRequestSchema, type LeadTriageSnapshot, type LeadTriageSnapshotRequest } from '../../shared/contracts/leadTriageReportContract';
 import { createHash } from 'node:crypto';
 import { ListCursorError, pageFromSnapshot } from './support/listCursor';
 
@@ -67,23 +65,17 @@ import {
   logCallOutcomeRequestSchema,
   logPastActivityRequestSchema,
   markActivityInErrorRequestSchema,
-  pinActionRequestSchema,
-  setReviewPositionRequestSchema,
   snoozeActionRequestSchema,
   todaySnapshotSchema,
-  triageQueueSchema,
   type AddLeadNoteRequest,
   type CompleteActionRequest,
   type LogCallOutcomeRequest,
   type LogPastActivityRequest,
   type MarkActivityInErrorRequest,
-  type PinActionRequest,
-  type SetReviewPositionRequest,
   type SnoozeActionRequest,
   type TodayItem as TodayItemDto,
   type TodayLaneId,
   type TodaySnapshot,
-  type TriageQueue,
 } from '../../shared/contracts/todayContract';
 import {
   cancelJobRequestSchema,
@@ -977,7 +969,6 @@ export class FounderSalesDomain implements OutboundDomainPort {
           durationSeconds: activity.duration_seconds!,
           recordingAvailable: activity.recording_storage_ref !== null,
           transcriptAvailable: activity.transcript_storage_ref !== null,
-          reviewCount: 0,
         })),
       properties: properties.map((property) => ({
         id: property.id,
@@ -1381,126 +1372,6 @@ export class FounderSalesDomain implements OutboundDomainPort {
     });
   }
 
-  /** One private selection/order builder for UI and evidence reads. */
-  private triageQueueSql(selection: string): string {
-    return `SELECT ${selection}
-      FROM sales_cycles AS cycle
-      JOIN persons AS person ON person.id = cycle.person_id
-      JOIN prospects AS prospect ON prospect.id = cycle.prospect_id
-      WHERE cycle.stage = 'unreviewed' AND cycle.workflow_status = 'active'
-        AND person.opted_out = 0 AND person.deleted_at IS NULL
-        AND (cycle.resurface_at IS NULL OR cycle.resurface_at <= ?)
-      ORDER BY cycle.id COLLATE BINARY
-    `;
-  }
-
-  getLeadTriageSnapshot(input: LeadTriageSnapshotRequest): LeadTriageSnapshot {
-    const request = leadTriageSnapshotRequestSchema.parse(input);
-    const revisionBefore = this.currentRevision();
-    const generatedAt = this.clock.now();
-    const orderedRows = this.database.raw.prepare(this.triageQueueSql(`
-      cycle.id AS cycle_id, cycle.person_id, cycle.prospect_id, person.display_name
-    `)).all(generatedAt) as LeadTriageQueueRow[];
-    return collectLeadTriageSnapshot({
-      database: this.database, services: this.services, orderedRows, request,
-      generatedAt, revisionBefore, currentRevision: () => this.currentRevision(),
-    });
-  }
-
-  /**
-   * The triage queue (audit 4.6): unreviewed cycles in stable id order with
-   * the persisted resume position. Leads deferred to a future resurface_at
-   * are excluded, so "Later" removes a lead from this pass entirely.
-   */
-  getTriageQueue(): TriageQueue {
-    const now = this.clock.now();
-    const rows = this.database.raw.prepare(this.triageQueueSql(`
-        cycle.id AS cycle_id, cycle.person_id, person.display_name,
-        prospect.cloud_fit, prospect.cloud_timing, prospect.cloud_score_reasons_json,
-        (
-          SELECT canonical_name FROM prospect_organizations AS link
-          JOIN organizations AS org ON org.id = link.organization_id
-          WHERE link.prospect_id = cycle.prospect_id
-          ORDER BY org.id ASC LIMIT 1
-        ) AS organization_name,
-        (
-          SELECT property.address_line_1 || ', ' || property.locality
-          FROM prospect_properties AS link
-          JOIN properties AS property ON property.id = link.property_id
-          WHERE link.prospect_id = cycle.prospect_id
-          ORDER BY property.id ASC LIMIT 1
-        ) AS property_summary,
-        (
-          SELECT COALESCE(raw_value, normalized_value) FROM person_contact_methods
-          WHERE person_id = cycle.person_id AND kind = 'phone'
-          ORDER BY is_primary DESC, id ASC LIMIT 1
-        ) AS phone,
-        (
-          SELECT COALESCE(raw_value, normalized_value) FROM person_contact_methods
-          WHERE person_id = cycle.person_id AND kind = 'email'
-          ORDER BY is_primary DESC, id ASC LIMIT 1
-        ) AS email
-    `)).all(now) as Array<{
-      cycle_id: string; person_id: string; display_name: string;
-      cloud_fit: number | null; cloud_timing: number | null;
-      cloud_score_reasons_json: string | null;
-      organization_name: string | null; property_summary: string | null;
-      phone: string | null; email: string | null;
-    }>;
-    const positionRow = this.database.raw.prepare(
-      'SELECT position FROM review_position WHERE singleton = 1',
-    ).get() as { position: number } | undefined;
-    const storedPosition = positionRow?.position ?? 0;
-    // `position` counts decisions already made this pass, so it may exceed
-    // the remaining row count. An emptied queue starts the next pass at 0.
-    const position = rows.length === 0 ? 0 : storedPosition;
-    const signalsOf = (json: string | null): string[] => {
-      if (json === null) return [];
-      try {
-        const parsed = JSON.parse(json) as Array<{ signal?: unknown }>;
-        if (!Array.isArray(parsed)) return [];
-        return parsed
-          .map((entry) => entry.signal)
-          .filter((signal): signal is string => typeof signal === 'string')
-          .slice(0, 3);
-      } catch {
-        return [];
-      }
-    };
-    return triageQueueSchema.parse({
-      items: rows.map((row) => ({
-        personId: row.person_id,
-        salesCycleId: row.cycle_id,
-        personName: row.display_name,
-        contextLabel: row.organization_name,
-        propertySummary: row.property_summary,
-        phone: row.phone,
-        email: row.email,
-        cloudScores: row.cloud_fit === null || row.cloud_timing === null
-          ? null
-          : { fit: row.cloud_fit, timing: row.cloud_timing },
-        cloudSignals: signalsOf(row.cloud_score_reasons_json),
-      })),
-      position,
-      revision: this.currentRevision(),
-    });
-  }
-
-  /** CAS-free single-row write: the resume marker is founder UI state. */
-  setReviewPosition(input: SetReviewPositionRequest): MutationReceipt {
-    const request = setReviewPositionRequestSchema.parse(input);
-    const now = this.clock.now();
-    return this.services.unitOfWork.immediate(() => {
-      const changed = this.database.raw.prepare(`
-        UPDATE review_position SET position = ?, updated_at = ? WHERE singleton = 1
-      `).run(request.position, now);
-      if (changed.changes !== 1) {
-        throw new FounderSalesDomainError('LEAD_NOT_FOUND', 'The review position row is missing.');
-      }
-      return this.receipt([], []);
-    });
-  }
-
   completePrimaryAction(input: CompleteActionRequest): MutationReceipt {
     const request = completeActionRequestSchema.parse(input);
     const now = this.clock.now();
@@ -1586,58 +1457,6 @@ export class FounderSalesDomain implements OutboundDomainPort {
       this.setCycleResurface(cycle, request.resurfaceAt, 'snooze', now);
       return this.receipt([cycle.person_id], [cycle.id]);
     });
-  }
-
-  pinWithinLane(input: PinActionRequest): MutationReceipt {
-    const request = pinActionRequestSchema.parse(input);
-    return this.manualPriorityControl({
-      salesCycleId: request.salesCycleId,
-      comparedSalesCycleId: request.comparedSalesCycleId,
-      reason: request.reason,
-      expiresAt: request.expiresAt,
-      kind: 'pin',
-    });
-  }
-
-  private manualPriorityControl(input: {
-    salesCycleId: string;
-    comparedSalesCycleId: string;
-    reason: string;
-    expiresAt: string;
-    kind: 'pin';
-  }): MutationReceipt {
-    const now = this.clock.now();
-    const cycle = this.requireCycle(input.salesCycleId);
-    const compared = this.requireCycle(input.comparedSalesCycleId);
-    const controlled = this.readProjection(cycle.prospect_id);
-    const other = this.readProjection(compared.prospect_id);
-    if (controlled === undefined || other === undefined) {
-      throw new FounderSalesDomainError(
-        'PRIORITY_PROJECTION_MISSING',
-        'Both compared prospects need a current priority projection.',
-      );
-    }
-    const controlledSide = {
-      prospectId: cycle.prospect_id,
-      evaluationId: controlled.evaluation_id,
-      projectionVersion: controlled.version,
-    };
-    const otherSide = {
-      prospectId: compared.prospect_id,
-      evaluationId: other.evaluation_id,
-      projectionVersion: other.version,
-    };
-    const command = {
-      controlId: this.ids.next(),
-      preferenceEventId: this.ids.next(),
-      controlledProspectId: cycle.prospect_id,
-      comparison: { winner: controlledSide, loser: otherSide },
-      reason: input.reason,
-      asOf: now,
-      expiresAt: input.expiresAt,
-    };
-    this.services.prioritization.pinProspect(command);
-    return this.receipt([cycle.person_id], [cycle.id]);
   }
 
   /** CAS write of the cycle's resurface marker under the current version. */

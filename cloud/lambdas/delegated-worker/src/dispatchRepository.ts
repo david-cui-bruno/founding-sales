@@ -15,9 +15,14 @@ import { accountIdSchema as id, accountInstantSchema as instant, accountSchema, 
 import { reserveDispatchInputSchema, reservationSchema, type AppendOutcomeInput, type ReserveDispatchInput } from '../../../../src/shared/contracts/delegationContract';
 import { accountReplyDraftSchema, threadProjectionSchema } from '../../../../src/shared/contracts/mailThreadContract';
 import { DynamoStore, fingerprint, integer, keyPart, type RepositoryOptions } from './dynamoStore';
-import { type GoogleAccessEvidence, RemoteGoogleAuthorization } from './remoteGoogleAuthorization';
+import { type GoogleAccessEvidence, RemoteGoogleAuthorization, dispatchCapPolicyKey, dispatchCapUsageKey, senderFirstSendKey } from './remoteGoogleAuthorization';
+import { senderCapForDay, senderCapPolicySchema as capPolicySchema, senderFirstSendSchema } from '../../../../src/shared/contracts/workerPolicyContract';
 import { mailThreadKey, mailSuppressionKey } from './threadIntakeRepository';
 import { createIntakeBarrier, intakeRegistrySchema, intakeRegistryKey } from './intakeBarrier';
+
+/** Historically exported from this module; the definitions now live beside the grant so the one
+ * grant status read and this cap check share them without the two modules importing each other. */
+export { dispatchCapPolicyKey, dispatchCapUsageKey, senderFirstSendKey };
 
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
 const header = z.string().min(1).max(998).refine(value => !/[\r\n\u0000]/.test(value)); // eslint-disable-line no-control-regex
@@ -57,12 +62,10 @@ const flightSchema = z.strictObject({ accountId: id, commandId: z.uuid(), action
 export const dispatchAccountKey = (account: string) => `DISPATCH_ACCOUNT#${keyPart(account)}`;
 export const dispatchConflictKey = (account: string) => `DISPATCH_CONFLICT#${keyPart(account)}`;
 const conflictSchema = z.strictObject({ accountId: id, actionId: id, commandId: z.uuid(), evidenceRef: id, observedAt: instant });
-const capPolicySchema = z.strictObject({ sender: z.email(), dailyLimit: integer });
 const capSchema = z.strictObject({ sender: z.email(), day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), used: integer });
 export const dispatchIntentKey = (command: string) => `DISPATCH_INTENT#${keyPart(command)}`;
 export const dispatchApprovalKey = (approval: string) => `DISPATCH_APPROVAL#${keyPart(approval)}`;
 export const dispatchPermissionKey = (account: string, permission: string) => `DISPATCH_PERMISSION#${keyPart(account)}#${keyPart(permission)}`;
-export const dispatchCapPolicyKey = (sender: string) => `DISPATCH_CAP_POLICY#${keyPart(sender)}`;
 const actionIndexKey = (account: string, action: string) => `DISPATCH_ACTION#${keyPart(account)}#${keyPart(action)}`;
 const draftKey = (account: string, draft: string) => `MAIL_DRAFT#${keyPart(account)}#${keyPart(draft)}`;
 const revokedKey = (key: string) => `REVOKED#${key}`;
@@ -443,10 +446,18 @@ export class DynamoDispatchRepository {
     if (intake.status !== 'ready') throw new Error(intake.reason);
     checks.push(...intake.checks);
     const policyKey = dispatchCapPolicyKey(message.from); const policyRow = await this.required(policyKey); const policy = capPolicySchema.parse(policyRow.data);
-    const day = this.store.now().slice(0, 10); const capKey = `DISPATCH_CAP#${keyPart(message.from)}#${day}`;
+    const day = this.store.now().slice(0, 10); const capKey = dispatchCapUsageKey(message.from, day);
     const capRow = await this.store.get<unknown>(capKey); const cap = capRow ? capSchema.parse(capRow.data) : { sender: message.from, day, used: 0 };
-    if (policy.sender !== message.from || cap.sender !== message.from || cap.day !== day || cap.used >= policy.dailyLimit) throw new Error('dispatch_cap_reached');
-    checks.push(this.store.check(policyKey, policyRow.rev), this.store.put(capKey, { ...cap, used: cap.used + 1 }, capRow?.rev ?? null));
+    // The warm-up ramp is anchored on the first cap this sender ever consumed. The anchor is
+    // written once, inside this same final transaction, and fenced on every later reservation
+    // so a concurrent reservation cannot move it and widen today's cap.
+    const anchorKey = senderFirstSendKey(message.from); const anchorRow = await this.store.get<unknown>(anchorKey);
+    const anchor = anchorRow ? senderFirstSendSchema.parse(anchorRow.data) : { sender: message.from, firstSendAt: this.store.now() };
+    if (anchor.sender !== message.from) throw new Error('dispatch_cap_reached');
+    const senderCap = senderCapForDay(policy, anchorRow ? anchor.firstSendAt : null, this.store.now());
+    if (policy.sender !== message.from || cap.sender !== message.from || cap.day !== day || cap.used >= senderCap.today) throw new Error('dispatch_cap_reached');
+    checks.push(this.store.check(policyKey, policyRow.rev), this.store.put(capKey, { ...cap, used: cap.used + 1 }, capRow?.rev ?? null),
+      anchorRow ? this.store.check(anchorKey, anchorRow.rev) : this.store.put(anchorKey, anchor, null));
     const start = validFrom; const end = Math.min(validUntil, intake.validUntil);
     const finalize = () => {
       const now = Date.parse(this.store.now());
