@@ -157,7 +157,8 @@ export function createDelegationRuntime(input:{databaseGate:{withDatabase<T>(fn:
   const editRequest = editing ? editReplyDraftSchema.parse(raw) : null;
   const request = editRequest ?? admitRequest ?? reconcileReplyDraftSchema.parse(raw);
   return run(async (database, signal) => {
-   const active = AbortSignal.any([signal, AbortSignal.timeout(45000)]), current = services(database, active);
+   // Reconcile and edit keep their 15 s. A first draft has to outlast the provider's own 45 s.
+   const active = AbortSignal.any([signal, AbortSignal.timeout(firstDraft ? 60000 : 15000)]), current = services(database, active);
    const store = new SqlThreadIntakeRepository({ database, workspaceId: pairing!.workspaceId, clock: input.clock });
    const saved = store.getReplyDraft(request.accountId, request.draftId);
    if (!saved) throw Error('reply_draft_missing');
@@ -171,6 +172,7 @@ export function createDelegationRuntime(input:{databaseGate:{withDatabase<T>(fn:
    assertOwner();
    let edit: { subject: string; body: string } | undefined;
    let cited: string[] = [];
+   let admitBinding: EditReplyDraft | null = null;
    if (editRequest) {
     const request = editRequest;
     if (prior.threadRevision !== request.expectedThreadRevision || prior.contextRevision !== request.expectedContextRevision) throw Error('stale_thread');
@@ -193,11 +195,14 @@ export function createDelegationRuntime(input:{databaseGate:{withDatabase<T>(fn:
     if (composed.state === 'model_unconfigured') return boundReplyFirstDraftResult(admitRequest).parse({ ...saved, capability: 'held', state: 'model_unconfigured', citedEvidenceIds: [] });
     edit = { subject: composed.subject, body: composed.body };
     cited = composed.evidenceIds;
+    // The worker's reply is bound to the exact composed text and revision before anything is
+    // written locally, the same guarantee a hand edit has.
+    admitBinding = { ...admitRequest, ...edit };
    }
    const result = await current.client.replyDraft({ workspaceId: pairing!.workspaceId, expectedAuthorityGeneration: authority!.generation, previousDraft: prior, ...(edit ? { edit } : {}) }, active);
    assertOwner();
    // Bind the requested revision/text before any local acknowledgement mutation.
-   if (!admitRequest) boundReplyDraftResult(editRequest ?? request).parse(result);
+   boundReplyDraftResult(admitBinding ?? editRequest ?? request).parse(result);
    const canonical = store.reconcileReplyDraft(prior, result.draft, assertOwner);
    const bound = { ...canonical, stale: canonical.stale || result.stale, capability: 'held' as const };
    if (admitRequest) return boundReplyFirstDraftResult(admitRequest).parse({ ...bound, state: 'model', citedEvidenceIds: cited });
