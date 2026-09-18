@@ -37,8 +37,9 @@ export function deriveStateFromPlacesExcerpt(excerpt: string): string | null {
   const address = (parsed as { formattedAddress?: unknown }).formattedAddress;
   if (typeof address !== 'string') return null;
   const match = /,\s*([A-Z]{2})\s+\d{5}(?:-\d{4})?(?:,\s*(?:USA|United States))?\s*$/.exec(address.trim());
-  if (!match) return null;
-  return territoryStateSchema.safeParse(match[1]).success ? match[1] : null;
+  const state = match?.[1];
+  if (state === undefined) return null;
+  return territoryStateSchema.safeParse(state).success ? state : null;
 }
 
 /**
@@ -59,8 +60,9 @@ export function resolveTerritoryJurisdiction(input: {
     .map(source => ({ sourceId: source.id, state: deriveStateFromPlacesExcerpt(source.excerpt) }))
     .filter((entry): entry is { sourceId: string; state: string } => entry.state !== null);
   const states = new Set(candidates.map(entry => entry.state));
-  if (states.size !== 1) return { kind: 'held', reason: 'jurisdiction_unknown', state: null };
-  const [{ state, sourceId }] = candidates;
+  const first = candidates[0];
+  if (states.size !== 1 || first === undefined) return { kind: 'held', reason: 'jurisdiction_unknown', state: null };
+  const { state, sourceId } = first;
   if (!isTerritoryState(state)) return { kind: 'held', reason: 'jurisdiction_unknown', state };
   const timezone = TERRITORY_STATE_TIME_ZONES[state];
   const clearance = input.clearances.find(entry => entry.state === state) ?? null;
