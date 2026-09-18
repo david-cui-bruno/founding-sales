@@ -96,6 +96,7 @@ describe('startApplication', () => {
         events.push(`health:${options.domainStartupReport.interruptedJobsRecovered}`);
         return { getHealth: () => health };
       },
+      registerTemplateIpc: () => () => undefined,
       registerApplicationIpc: (provider: HealthProvider) => {
         events.push('ipc');
         captureHealth?.(provider);
@@ -911,6 +912,7 @@ describe('startApplication background sync (D3)', () => {
       migrateToLatest: async () => ({ fromVersion: 0, toVersion: 2, appliedMigrationIds: [] }),
       createDomainRuntime: () => fakeDomainRuntime({ interruptedJobsRecovered: 0 }),
       createHealthService: () => ({ getHealth: () => health }),
+      registerTemplateIpc: () => () => undefined,
       registerApplicationIpc: () => { events.push('ipc'); return () => events.push('unregister'); },
       createAppleBridgeSupervisor: () => { throw new Error('Apple bridge must not be created without startup options.'); },
       closeDatabase: () => events.push('close'),

@@ -213,6 +213,7 @@ describe('main process startup', () => {
       createDomainRuntime: () => fakeDomainRuntime(),
       createHealthService: () => ({ getHealth: () => ({}) }),
       createOutboundCommandService: (input) => { outbound = createOutboundCommandService(input); return outbound; },
+      registerTemplateIpc: () => () => undefined,
       registerApplicationIpc: vi.fn(() => vi.fn()),
       createAppleBridgeSupervisor: disabledAppleBridgeSupervisor,
       closeDatabase: close,
@@ -744,6 +745,7 @@ describe('main process startup', () => {
         events.push('health');
         return { getHealth: () => ({}) };
       },
+      registerTemplateIpc: () => () => undefined,
       registerApplicationIpc: (provider: HealthProvider) => {
         events.push('ipc');
         healthProvider = provider;
@@ -826,6 +828,7 @@ describe('main process startup', () => {
         events.push('health');
         return { getHealth: () => ({}) };
       },
+      registerTemplateIpc: () => () => undefined,
       registerApplicationIpc: () => {
         events.push('ipc');
         return () => events.push('unregister');
