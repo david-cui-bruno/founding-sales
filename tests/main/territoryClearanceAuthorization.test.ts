@@ -1,3 +1,4 @@
+import { TERRITORY_RULES_REVISION } from '../../src/shared/contracts/territoryClearanceContract';
 import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import { closeDatabase, openDatabase } from '../../src/main/db/database';
@@ -55,7 +56,7 @@ async function fixture(state: keyof typeof ADDRESSES, options: { phone?: string;
   const admitReceipt = (policy: RoutePolicyReceipt['policy']) => new AccountRoutePolicyStore({ database: db, clock, admission: { attest: () => true } }).admit(receipt(policy));
   return { db, account, route, snapshot, clearances, read, authorize, admitReceipt, placeId, setTime: (value: string) => { at = value; } };
 }
-const confirmAll = (f: Awaited<ReturnType<typeof fixture>>, states: ('RI' | 'MA' | 'TX')[] = ['RI', 'MA', 'TX'], at = CONFIRMED_AT) => { f.setTime(at); return f.clearances.confirm({ states, disclosureAccepted: true, rulesRevision: 1 }); };
+const confirmAll = (f: Awaited<ReturnType<typeof fixture>>, states: ('RI' | 'MA' | 'TX')[] = ['RI', 'MA', 'TX'], at = CONFIRMED_AT) => { f.setTime(at); return f.clearances.confirm({ states, disclosureAccepted: true, rulesRevision: TERRITORY_RULES_REVISION }); };
 const evidence = (value: ReturnType<Awaited<ReturnType<typeof fixture>>['read']>): AccountRoutePolicyEvidence => {
   if (!value || isAccountRoutePolicyHold(value)) throw new Error(`Expected derived evidence, got ${JSON.stringify(value)}`);
   return value;

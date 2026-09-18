@@ -10,7 +10,7 @@ import { createFounderSalesDomain } from '../../src/main/domain/founderSalesDoma
 import { registerLocalWorkspaceIpc } from '../../src/main/workspace/registerLocalWorkspaceIpc';
 import { createLocalWorkspaceApi } from '../../src/preload/apis/localWorkspaceApi';
 import { createIpcClient } from '../../src/preload/ipcClient';
-import { TERRITORY_STATE_RULES, type TerritoryClearanceSnapshot } from '../../src/shared/contracts/territoryClearanceContract';
+import { TERRITORY_STATE_RULES, type TerritoryClearanceSnapshot, TERRITORY_RULES_REVISION } from '../../src/shared/contracts/territoryClearanceContract';
 import type { LocalWorkspaceApi } from '../../src/shared/contracts/localWorkspaceContract';
 import { registeredIpcHandler } from '../fixtures/registeredIpcHandler';
 import { createTempDatabase, createTestWorkspaceKey } from '../fixtures/tempDatabase';
@@ -35,15 +35,15 @@ describe('TerritoryClearanceRepository', () => {
   it('reads the territory as unconfirmed, confirms every requested state in one transaction with the contract citation and a one-year review, and touches nothing else', async () => {
     const f = await fixture();
     const before = f.otherTables();
-    expect(f.repository.read()).toEqual({ generatedAt: NOW, rulesRevision: 1, states: [
+    expect(f.repository.read()).toEqual({ generatedAt: NOW, rulesRevision: TERRITORY_RULES_REVISION, states: [
       { state: 'RI', name: 'Rhode Island', timezone: 'America/New_York', status: 'unconfirmed', clearance: null },
       { state: 'MA', name: 'Massachusetts', timezone: 'America/New_York', status: 'unconfirmed', clearance: null },
       { state: 'TX', name: 'Texas', timezone: 'America/Chicago', status: 'unconfirmed', clearance: null },
     ] });
-    const confirmed = f.repository.confirm({ states: ['RI', 'MA', 'TX'], disclosureAccepted: true, rulesRevision: 1 });
+    const confirmed = f.repository.confirm({ states: ['RI', 'MA', 'TX'], disclosureAccepted: true, rulesRevision: TERRITORY_RULES_REVISION });
     expect(statesOf(confirmed)).toEqual([['RI', 'confirmed', 1], ['MA', 'confirmed', 1], ['TX', 'confirmed', 1]]);
     expect(confirmed.states[2].clearance).toEqual({ state: 'TX', revision: 1, timezone: 'America/Chicago', confirmedAt: NOW, reviewAt: '2027-09-18T14:00:00.000Z', revokedAt: null,
-      statements: { businessToBusiness: true, registrationStatusChecked: true, stateDncSubscriptionChecked: true, consentRuleConfirmed: true, rulesRevision: 1 }, citation: TERRITORY_STATE_RULES.TX.citation });
+      statements: { businessToBusiness: true, registrationStatusChecked: true, stateDncSubscriptionChecked: true, consentRuleConfirmed: true, rulesRevision: TERRITORY_RULES_REVISION }, citation: TERRITORY_STATE_RULES.TX.citation });
     expect(f.db.raw.prepare('SELECT state,revision,timezone,confirmed_at,review_at,revoked_at FROM territory_clearances ORDER BY state').all()).toEqual([
       { state: 'MA', revision: 1, timezone: 'America/New_York', confirmed_at: NOW, review_at: '2027-09-18T14:00:00.000Z', revoked_at: null },
       { state: 'RI', revision: 1, timezone: 'America/New_York', confirmed_at: NOW, review_at: '2027-09-18T14:00:00.000Z', revoked_at: null },
@@ -55,9 +55,9 @@ describe('TerritoryClearanceRepository', () => {
   });
   it('re-confirms at the next revision, revokes one state with its expected revision, refuses a stale or repeated revoke, and rolls a partial confirm back', async () => {
     const f = await fixture();
-    f.repository.confirm({ states: ['RI'], disclosureAccepted: true, rulesRevision: 1 });
+    f.repository.confirm({ states: ['RI'], disclosureAccepted: true, rulesRevision: TERRITORY_RULES_REVISION });
     f.setTime('2026-09-19T09:00:00.000Z');
-    expect(statesOf(f.repository.confirm({ states: ['RI', 'MA'], disclosureAccepted: true, rulesRevision: 1 }))).toEqual([['RI', 'confirmed', 2], ['MA', 'confirmed', 1], ['TX', 'unconfirmed', null]]);
+    expect(statesOf(f.repository.confirm({ states: ['RI', 'MA'], disclosureAccepted: true, rulesRevision: TERRITORY_RULES_REVISION }))).toEqual([['RI', 'confirmed', 2], ['MA', 'confirmed', 1], ['TX', 'unconfirmed', null]]);
     expect(f.repository.read().states[0].clearance).toMatchObject({ confirmedAt: '2026-09-19T09:00:00.000Z', reviewAt: '2027-09-19T09:00:00.000Z' });
     f.setTime('2026-09-20T09:00:00.000Z');
     expect(() => f.repository.revoke({ state: 'RI', expectedRevision: 1 })).toThrow('TERRITORY_CLEARANCE_STALE');
@@ -67,25 +67,25 @@ describe('TerritoryClearanceRepository', () => {
     expect(() => f.repository.revoke({ state: 'TX', expectedRevision: 1 })).toThrow('TERRITORY_CLEARANCE_STALE');
     expect(listTerritoryClearanceRecords(f.db).map(entry => [entry.state, entry.revokedAt])).toEqual([['MA', null], ['RI', '2026-09-20T09:00:00.000Z']]);
     // Re-confirming a revoked state clears the revocation at the next revision.
-    expect(statesOf(f.repository.confirm({ states: ['RI'], disclosureAccepted: true, rulesRevision: 1 }))).toEqual([['RI', 'confirmed', 4], ['MA', 'confirmed', 1], ['TX', 'unconfirmed', null]]);
+    expect(statesOf(f.repository.confirm({ states: ['RI'], disclosureAccepted: true, rulesRevision: TERRITORY_RULES_REVISION }))).toEqual([['RI', 'confirmed', 4], ['MA', 'confirmed', 1], ['TX', 'unconfirmed', null]]);
     // A state outside the territory map is refused, and the states before it in the same request are rolled back.
     const rows = f.db.raw.prepare('SELECT * FROM territory_clearances ORDER BY state').all();
-    expect(() => f.repository.confirm({ states: ['TX', 'CT'], disclosureAccepted: true, rulesRevision: 1 })).toThrow('TERRITORY_STATE_NOT_LISTED:CT');
+    expect(() => f.repository.confirm({ states: ['TX', 'CT'], disclosureAccepted: true, rulesRevision: TERRITORY_RULES_REVISION })).toThrow('TERRITORY_STATE_NOT_LISTED:CT');
     expect(f.db.raw.prepare('SELECT * FROM territory_clearances ORDER BY state').all()).toEqual(rows);
     expect(f.db.raw.inTransaction).toBe(false);
   });
   it('reports review_due once the review date passes and refuses to confirm without the disclosure or with another rules revision', async () => {
     const f = await fixture();
-    f.repository.confirm({ states: ['MA'], disclosureAccepted: true, rulesRevision: 1 });
+    f.repository.confirm({ states: ['MA'], disclosureAccepted: true, rulesRevision: TERRITORY_RULES_REVISION });
     f.setTime('2027-09-18T14:00:00.000Z');
     expect(statesOf(f.repository.read())).toEqual([['RI', 'unconfirmed', null], ['MA', 'review_due', 1], ['TX', 'unconfirmed', null]]);
-    expect(() => f.repository.confirm({ states: ['RI'], disclosureAccepted: false as never, rulesRevision: 1 })).toThrow();
-    expect(() => f.repository.confirm({ states: ['RI'], disclosureAccepted: true, rulesRevision: 2 as never })).toThrow();
+    expect(() => f.repository.confirm({ states: ['RI'], disclosureAccepted: false as never, rulesRevision: TERRITORY_RULES_REVISION })).toThrow();
+    expect(() => f.repository.confirm({ states: ['RI'], disclosureAccepted: true, rulesRevision: TERRITORY_RULES_REVISION + 1 as never })).toThrow();
     expect(f.db.raw.prepare('SELECT COUNT(*) AS count FROM territory_clearances').get()).toEqual({ count: 1 });
   });
   it('drops a malformed stored row from the read and the authorization records instead of repairing it', async () => {
     const f = await fixture();
-    f.repository.confirm({ states: ['RI', 'TX'], disclosureAccepted: true, rulesRevision: 1 });
+    f.repository.confirm({ states: ['RI', 'TX'], disclosureAccepted: true, rulesRevision: TERRITORY_RULES_REVISION });
     f.db.raw.prepare("UPDATE territory_clearances SET revision=2, timezone='Mars/Olympus' WHERE state='TX'").run();
     expect(statesOf(f.repository.read())).toEqual([['RI', 'confirmed', 1], ['MA', 'unconfirmed', null], ['TX', 'unconfirmed', null]]);
     expect(listTerritoryClearanceRecords(f.db).map(entry => entry.state)).toEqual(['RI']);
@@ -94,7 +94,7 @@ describe('TerritoryClearanceRepository', () => {
     const f = await fixture();
     const services = createDomainServices({ database: f.db, clock: f.clock, ids: { next: randomUUID } });
     const domain = createFounderSalesDomain({ database: f.db, clock: f.clock, ids: { next: randomUUID }, services });
-    expect(statesOf(domain.confirmTerritoryClearance({ states: ['RI'], disclosureAccepted: true, rulesRevision: 1 }))).toEqual([['RI', 'confirmed', 1], ['MA', 'unconfirmed', null], ['TX', 'unconfirmed', null]]);
+    expect(statesOf(domain.confirmTerritoryClearance({ states: ['RI'], disclosureAccepted: true, rulesRevision: TERRITORY_RULES_REVISION }))).toEqual([['RI', 'confirmed', 1], ['MA', 'unconfirmed', null], ['TX', 'unconfirmed', null]]);
     expect(statesOf(domain.revokeTerritoryClearance({ state: 'RI', expectedRevision: 1 }))).toEqual([['RI', 'revoked', 2], ['MA', 'unconfirmed', null], ['TX', 'unconfirmed', null]]);
   });
 });
@@ -115,12 +115,12 @@ describe('territory clearance IPC channels', () => {
       const api = createLocalWorkspaceApi(createIpcClient({ invoke }));
       expect(statesOf(await api.readTerritoryClearance!())).toEqual([['RI', 'unconfirmed', null], ['MA', 'unconfirmed', null], ['TX', 'unconfirmed', null]]);
       expect(invoke).toHaveBeenLastCalledWith('local-workspace:territory-clearance-read');
-      expect(statesOf(await api.confirmTerritoryClearance!({ states: ['RI', 'MA', 'TX'], disclosureAccepted: true, rulesRevision: 1 }))).toEqual([['RI', 'confirmed', 1], ['MA', 'confirmed', 1], ['TX', 'confirmed', 1]]);
+      expect(statesOf(await api.confirmTerritoryClearance!({ states: ['RI', 'MA', 'TX'], disclosureAccepted: true, rulesRevision: TERRITORY_RULES_REVISION }))).toEqual([['RI', 'confirmed', 1], ['MA', 'confirmed', 1], ['TX', 'confirmed', 1]]);
       expect(statesOf(await api.revokeTerritoryClearance!({ state: 'MA', expectedRevision: 1 }))).toEqual([['RI', 'confirmed', 1], ['MA', 'revoked', 2], ['TX', 'confirmed', 1]]);
       // Renderer-side validation refuses what the contract refuses before anything crosses the bridge.
       const calls = invoke.mock.calls.length;
-      await expect(api.confirmTerritoryClearance!({ states: ['RI'], disclosureAccepted: false, rulesRevision: 1 } as never)).rejects.toThrow();
-      await expect(api.confirmTerritoryClearance!({ states: ['RI'], disclosureAccepted: true, rulesRevision: 2 } as never)).rejects.toThrow();
+      await expect(api.confirmTerritoryClearance!({ states: ['RI'], disclosureAccepted: false, rulesRevision: TERRITORY_RULES_REVISION } as never)).rejects.toThrow();
+      await expect(api.confirmTerritoryClearance!({ states: ['RI'], disclosureAccepted: true, rulesRevision: TERRITORY_RULES_REVISION + 1 } as never)).rejects.toThrow();
       await expect(api.revokeTerritoryClearance!({ state: 'MA', expectedRevision: 0 })).rejects.toThrow();
       expect(invoke).toHaveBeenCalledTimes(calls);
       // Main-side: arity, sender and provider failures surface only as the safe code.
@@ -131,16 +131,16 @@ describe('territory clearance IPC channels', () => {
       await expect(revoke(trusted, { state: 'MA', expectedRevision: 2 })).rejects.toThrow(/^LOCAL_TERRITORY_CLEARANCE_REVOKE_FAILED$/);
       await expect(revoke(trusted, { state: 'MA', expectedRevision: 2 }, {})).rejects.toThrow();
       const confirm = registeredIpcHandler(electron.handle, 'local-workspace:territory-clearance-confirm');
-      await expect(confirm(trusted, { states: ['CT'], disclosureAccepted: true, rulesRevision: 1 })).rejects.toThrow(/^LOCAL_TERRITORY_CLEARANCE_CONFIRM_FAILED$/);
+      await expect(confirm(trusted, { states: ['CT'], disclosureAccepted: true, rulesRevision: TERRITORY_RULES_REVISION })).rejects.toThrow(/^LOCAL_TERRITORY_CLEARANCE_CONFIRM_FAILED$/);
     } finally { remove(); }
     expect(electron.removeHandler.mock.calls.slice(0, 3).map(call => call[0])).toEqual(['local-workspace:territory-clearance-revoke', 'local-workspace:territory-clearance-confirm', 'local-workspace:territory-clearance-read']);
   });
   it('reports the safe code when a build has no territory clearance provider or the provider lies about the outcome', async () => {
-    const remove = registerLocalWorkspaceIpc({ ...base, confirmTerritoryClearance: async () => ({ generatedAt: NOW, rulesRevision: 1, states: [{ state: 'RI', name: 'Rhode Island', timezone: 'America/New_York', status: 'unconfirmed', clearance: null }] }) });
+    const remove = registerLocalWorkspaceIpc({ ...base, confirmTerritoryClearance: async () => ({ generatedAt: NOW, rulesRevision: TERRITORY_RULES_REVISION, states: [{ state: 'RI', name: 'Rhode Island', timezone: 'America/New_York', status: 'unconfirmed', clearance: null }] }) });
     try {
       await expect(registeredIpcHandler(electron.handle, 'local-workspace:territory-clearance-read')(trusted)).rejects.toThrow(/^LOCAL_TERRITORY_CLEARANCE_READ_FAILED$/);
       await expect(registeredIpcHandler(electron.handle, 'local-workspace:territory-clearance-revoke')(trusted, { state: 'RI', expectedRevision: 1 })).rejects.toThrow(/^LOCAL_TERRITORY_CLEARANCE_REVOKE_FAILED$/);
-      await expect(registeredIpcHandler(electron.handle, 'local-workspace:territory-clearance-confirm')(trusted, { states: ['RI'], disclosureAccepted: true, rulesRevision: 1 })).rejects.toThrow(/^LOCAL_TERRITORY_CLEARANCE_CONFIRM_FAILED$/);
+      await expect(registeredIpcHandler(electron.handle, 'local-workspace:territory-clearance-confirm')(trusted, { states: ['RI'], disclosureAccepted: true, rulesRevision: TERRITORY_RULES_REVISION })).rejects.toThrow(/^LOCAL_TERRITORY_CLEARANCE_CONFIRM_FAILED$/);
     } finally { remove(); }
   });
 });

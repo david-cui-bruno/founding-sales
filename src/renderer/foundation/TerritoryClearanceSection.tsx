@@ -113,6 +113,7 @@ export function TerritoryClearanceSection({ api }: { api?: Api }) {
           <p className="territory-clearance__status">{STATUS_LABEL[entry.status]}{clearance ? ` · revision ${clearance.revision}` : ''}{clearance && entry.status !== 'revoked' ? ` · confirmed ${day(clearance.confirmedAt)} · review ${day(clearance.reviewAt)}` : ''}{clearance?.revokedAt ? ` · revoked ${day(clearance.revokedAt)}` : ''}</p>
           {rule && <p>{rule.summary}</p>}
           {rule && <Citation citation={rule.citation} />}
+          {rule?.furtherCitations.map(citation => <Citation key={citation.url} citation={citation} />)}
           {clearance && entry.status !== 'revoked' && <button type="button" className="settings__action" disabled={pending} onClick={() => revoke(entry)}>Revoke {entry.state}</button>}
         </li>;
       })}
