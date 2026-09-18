@@ -165,7 +165,7 @@ it.each([0,1,2,3,4,5,6,7,8])('Task7 registration rolls back exact prefix before 
 it('Task7 later optional registration failure rolls back the newly registered ninth authority handler',()=>{
   let index=0;electron.handle.mockImplementation(()=>{if(index++===11) throw Error('fixture later registration failure');});
   expect(()=>registerOutreachIpc({provider:provider(),delegation:{} as never})).toThrow('fixture later registration failure');
-  expect(electron.handle.mock.calls.map(([channel])=>channel)).toEqual([...channels,'outreach:reply-reconcile','outreach:reply-edit','outreach:requested-followup-prepare']);
+  expect(electron.handle.mock.calls.map(([channel])=>channel)).toEqual([...channels,'outreach:reply-reconcile','outreach:reply-edit','outreach:reply-admit-first-draft']);
   expect(electron.removeHandler.mock.calls.map(([channel])=>channel)).toEqual([...channels,'outreach:reply-reconcile','outreach:reply-edit'].reverse());
 },10000);
 

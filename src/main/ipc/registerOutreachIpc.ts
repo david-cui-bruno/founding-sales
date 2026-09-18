@@ -1,5 +1,7 @@
 import { getAccountPreparationSchema, accountPreparationReplySchema, accountPreparationReadResultSchema, AccountPreparationReadFailure } from '../../shared/contracts/accountPreparationContract';
 import { reconcileReplyDraftSchema, editReplyDraftSchema, replyDraftResultSchema, boundReplyDraftResult } from '../../shared/contracts/mailThreadContract';
+import { admitReplyFirstDraftSchema, replyFirstDraftResultSchema, boundReplyFirstDraftResult, approveReplySchema, submitApprovedReplySchema,
+  replyApprovalStatusSchema, boundReplyApprovalStatus, suppressionListSchema } from '../../shared/contracts/replyFirstDraftContract';
 import { delegatedPhoneStateRequestSchema, delegatedPhoneStateSchema, delegatedPhoneStateReplySchema } from '../../shared/contracts/delegatedPhoneStateContract';
 import {googleConnectionSelectorSchema,googleConsentOpenedSchema,googleConnectionStatusResultSchema,GoogleConnectionStatusFailure} from '../../shared/contracts/remoteGoogleConnectionsContract';
 import {researchSetupApproveInputSchema,researchSetupSetStateInputSchema,researchSetupReceiptSchema,researchSetupStatusSchema} from '../../shared/contracts/researchSetupContract';
@@ -55,6 +57,13 @@ export function registerOutreachIpc(options:{provider:OutreachApi;delegation?:De
       const d=options.delegation;
       add('reply-reconcile', reconcileReplyDraftSchema, replyDraftResultSchema, async request => boundReplyDraftResult(request).parse(await d.reconcileReplyDraft(request)));
       add('reply-edit', editReplyDraftSchema, replyDraftResultSchema, async request => boundReplyDraftResult(request).parse(await d.editReplyDraft(request)));
+      // D9: the first draft is written in main with the founder's own key; the renderer never sees the key
+      // and never calls a model. Approving records the approval, submitting is the one step that sends.
+      add('reply-admit-first-draft', admitReplyFirstDraftSchema, replyFirstDraftResultSchema, async request => boundReplyFirstDraftResult(request).parse(await d.admitReplyFirstDraft(request)));
+      add('reply-approve', approveReplySchema, replyApprovalStatusSchema, async request => boundReplyApprovalStatus(request).parse(await d.approveReply(request)));
+      add('reply-submit-approved', submitApprovedReplySchema, replyApprovalStatusSchema, async request => boundReplyApprovalStatus(request).parse(await d.submitApprovedReply(request)));
+      // Settings → Suppressed: a local read with no undo. It writes nothing and queues no command.
+      add('suppression-read', null, suppressionListSchema, () => d.readSuppression());
       if(d.researchSetup){
         const research=d.researchSetup;
         add('research-setup-status',null,researchSetupStatusSchema,()=>research.status());
