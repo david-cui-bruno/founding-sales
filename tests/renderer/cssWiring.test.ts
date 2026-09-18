@@ -40,7 +40,8 @@ describe('renderer CSS wiring', () => {
       expect(content, path).not.toMatch(/native-desk|startup-presentation|data-workflow-mode/);
     }
     const tokens = await readFile(join(rendererRoot, 'design/tokens.css'), 'utf8');
-    expect(tokens).toContain(".presentation-root[data-presentation='native-a']");
+    // Either quote style: Prettier normalises attribute values, the selector is the point.
+    expect(tokens).toMatch(/\.presentation-root\[data-presentation=('|")native-a\1\]/);
   });
 
   it('distinguishes semantic color identifiers from literal fallback colors', () => {

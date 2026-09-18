@@ -10,15 +10,15 @@
    rail paints opaque paper so wallpaper cannot change text contrast.
    `data-platform` is stamped by the main process on dom-ready; the `:has(.app-shell)` guard keeps standalone
    screens (diagnostics) on their opaque body canvas. */
-body[data-platform='darwin']:has(.app-shell) {
+body[data-platform="darwin"]:has(.app-shell) {
   background: transparent;
 }
 
-body[data-platform='darwin'] .app-shell {
+body[data-platform="darwin"] .app-shell {
   background: transparent;
 }
 
-body[data-platform='darwin'] .nav-rail {
+body[data-platform="darwin"] .nav-rail {
   background: var(--native-rail);
   -webkit-backdrop-filter: saturate(1.2);
 }
@@ -79,7 +79,7 @@ body[data-platform='darwin'] .nav-rail {
   display: none;
 }
 
-body[data-platform='darwin'] .nav-rail__native-controls {
+body[data-platform="darwin"] .nav-rail__native-controls {
   display: block;
   flex: none;
   height: var(--chrome-header-height);
@@ -96,7 +96,7 @@ body[data-platform='darwin'] .nav-rail__native-controls {
   -webkit-app-region: drag;
 }
 
-body[data-platform='darwin'] .nav-rail__header {
+body[data-platform="darwin"] .nav-rail__header {
   padding-left: var(--space-4);
 }
 
@@ -108,7 +108,7 @@ body[data-platform='darwin'] .nav-rail__header {
   display: inline;
   margin: 0;
   font-weight: 800;
-  font-family: Futura, 'Avenir Next', Arial, sans-serif;
+  font-family: Futura, "Avenir Next", Arial, sans-serif;
   font-size: var(--text-native-brand);
   letter-spacing: -1.8px;
   color: var(--native-brand);
@@ -174,7 +174,7 @@ body[data-platform='darwin'] .nav-rail__header {
     inset 3px 0 var(--accent);
 }
 
-.nav-rail__item[aria-disabled='true'] {
+.nav-rail__item[aria-disabled="true"] {
   color: var(--text-faint);
   cursor: not-allowed;
 }

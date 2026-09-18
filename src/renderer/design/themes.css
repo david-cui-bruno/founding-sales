@@ -3,7 +3,7 @@
    Both explicit palettes remain available to the persisted system/light/dark
    preference. Raw ramps stay private to design/. */
 :root,
-[data-theme='light'] {
+[data-theme="light"] {
   color-scheme: light;
 
   /* PRIMITIVE */
@@ -77,7 +77,7 @@
   --inset-highlight: inset 0 0 0 transparent;
 }
 
-[data-theme='dark'] {
+[data-theme="dark"] {
   color-scheme: dark;
 
   /* PRIMITIVE */
@@ -144,7 +144,7 @@
 }
 
 /* Approved A Native Desk palette, scoped to explicit presentation rather than workflow authority. */
-.presentation-root[data-presentation='native-a'] {
+.presentation-root[data-presentation="native-a"] {
   --canvas: #e9edf2;
   --surface: #fff;
   --text: #222a35;
@@ -161,7 +161,7 @@
   --native-shadow: 0 2px 4px #18233409, 0 12px 28px #18233409;
   --native-row-shadow: 0 2px 4px #1722320b;
 }
-[data-theme='dark'] .presentation-root[data-presentation='native-a'] {
+[data-theme="dark"] .presentation-root[data-presentation="native-a"] {
   --canvas: #181d25;
   --surface: #262e39;
   --text: #edf1f6;
@@ -179,7 +179,7 @@
 }
 
 /* Rebind aliases here so sibling surfaces never inherit resolved legacy colors. */
-.presentation-root[data-presentation='native-a'] {
+.presentation-root[data-presentation="native-a"] {
   --surface-raised: var(--surface);
   --surface-sunken: var(--native-queue);
   --surface-navigation: var(--native-rail);

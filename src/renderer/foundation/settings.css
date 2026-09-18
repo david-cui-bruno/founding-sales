@@ -246,7 +246,7 @@
   color: var(--text);
 }
 
-.settings__toggle[aria-pressed='true'] {
+.settings__toggle[aria-pressed="true"] {
   color: var(--text);
   background: var(--surface-raised);
   box-shadow: var(--shadow);
@@ -319,11 +319,11 @@
   gap: var(--space-2);
   justify-content: start;
 }
-.settings-google-connections .settings__row:has(input[type='checkbox']) {
+.settings-google-connections .settings__row:has(input[type="checkbox"]) {
   grid-template-columns: 18px minmax(0, 1fr);
   align-items: start;
 }
-.settings-google-connections input:not([type='checkbox']),
+.settings-google-connections input:not([type="checkbox"]),
 .settings-google-connections textarea {
   box-sizing: border-box;
   width: 100%;
@@ -392,7 +392,7 @@
   font-weight: var(--weight-medium);
   margin-bottom: var(--space-2);
 }
-.settings-local-research input:not([type='checkbox']),
+.settings-local-research input:not([type="checkbox"]),
 .settings-local-research textarea,
 .settings-local-research select {
   box-sizing: border-box;

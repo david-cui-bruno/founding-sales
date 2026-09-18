@@ -123,7 +123,7 @@
 .native-desk .native-desk__row:hover {
   background: var(--canvas);
 }
-.native-desk .native-desk__row[aria-current='true'] {
+.native-desk .native-desk__row[aria-current="true"] {
   background: var(--accent-soft);
   border-left-color: var(--accent);
   color: var(--text);
@@ -226,7 +226,7 @@
   gap: var(--space-2);
   align-items: flex-start;
 }
-.native-desk input[type='checkbox'] {
+.native-desk input[type="checkbox"] {
   width: auto;
   flex: none;
 }
@@ -305,7 +305,7 @@
   }
 }
 
-.native-desk[data-presentation='native-a'] {
+.native-desk[data-presentation="native-a"] {
   border-radius: 10px;
   overflow: hidden;
 }
@@ -355,7 +355,7 @@
   border-left: 3px solid transparent;
   border-radius: 7px;
 }
-.native-desk .native-desk__row[aria-current='true'] {
+.native-desk .native-desk__row[aria-current="true"] {
   background: var(--surface);
   border-color: var(--line);
   border-left-color: var(--accent);
@@ -475,11 +475,11 @@
   text-align: right;
 }
 
-.native-desk[data-presentation='native-a'] .native-desk__header {
+.native-desk[data-presentation="native-a"] .native-desk__header {
   padding: 16px 24px 15px;
   align-items: flex-start;
 }
-.native-desk[data-presentation='native-a'] h1 {
+.native-desk[data-presentation="native-a"] h1 {
   font-size: var(--text-native-page);
   line-height: 1.25;
   font-weight: 720;
@@ -636,7 +636,7 @@
   .native-desk__layout {
     grid-template-columns: 280px minmax(0, 1fr);
   }
-  .native-desk[data-presentation='native-a'] .native-desk__header {
+  .native-desk[data-presentation="native-a"] .native-desk__header {
     padding: 15px 20px;
   }
   .native-desk__header-status {
@@ -666,31 +666,31 @@
   }
 }
 
-.native-desk [tabindex='0']:focus-visible {
+.native-desk [tabindex="0"]:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
-.native-desk > p[role='status'] {
+.native-desk > p[role="status"] {
   margin: 6px 24px;
   font-size: var(--text-caption);
 }
 
 /* Calls keeps its text label independent of the decorative lane icon. */
-.native-desk__lane[aria-label='Calls'] h2 {
+.native-desk__lane[aria-label="Calls"] h2 {
   justify-content: flex-start;
 }
-.native-desk__lane[aria-label='Calls'] h2 > svg {
+.native-desk__lane[aria-label="Calls"] h2 > svg {
   flex: none;
 }
-.native-desk__lane[aria-label='Calls'] h2 > .native-desk__count {
+.native-desk__lane[aria-label="Calls"] h2 > .native-desk__count {
   margin-left: auto;
 }
 
 /* Outrank the later global input:not([type]) rule without touching permission
    checkboxes or expiry controls. The saved subject remains the same editor. */
-.native-desk[data-presentation='native-a']
+.native-desk[data-presentation="native-a"]
   .native-desk__composer
-  :is(input:not([type]), input[type='text']) {
+  :is(input:not([type]), input[type="text"]) {
   height: 43px;
   padding: 10px 12px;
   border: 1px solid var(--line-interactive);
@@ -702,17 +702,17 @@
 
 /* Size the body from the remaining space, not a guessed header/footer height.
    Expanded operational disclosures stay in normal flow and remain scrollable. */
-.native-desk[data-presentation='native-a'] {
+.native-desk[data-presentation="native-a"] {
   display: flex;
   flex-direction: column;
   height: calc(100dvh - 24px);
   min-height: 0;
   overflow: auto;
 }
-.native-desk[data-presentation='native-a'] > :is(header, footer, p[role='status']) {
+.native-desk[data-presentation="native-a"] > :is(header, footer, p[role="status"]) {
   flex: none;
 }
-.native-desk[data-presentation='native-a'] > .native-desk__layout {
+.native-desk[data-presentation="native-a"] > .native-desk__layout {
   flex: 1 1 auto;
   height: auto;
   /* Campaigns stacks a growing draft form above this split body. Keep room for the
@@ -720,14 +720,14 @@
      focusable controls) scrolls instead of collapsing the body to a sliver. */
   min-height: 112px;
 }
-.native-desk[data-presentation='native-a'] :is(.native-desk__queue, .native-desk__detail) {
+.native-desk[data-presentation="native-a"] :is(.native-desk__queue, .native-desk__detail) {
   min-height: 0;
 }
 @media (max-width: 620px) {
-  .native-desk[data-presentation='native-a'] {
+  .native-desk[data-presentation="native-a"] {
     height: auto;
   }
-  .native-desk[data-presentation='native-a'] > .native-desk__layout {
+  .native-desk[data-presentation="native-a"] > .native-desk__layout {
     flex: none;
   }
 }
@@ -897,7 +897,7 @@
   font-size: var(--text-micro);
   color: var(--text-muted);
 }
-.native-desk__permission input[type='datetime-local'] {
+.native-desk__permission input[type="datetime-local"] {
   font-size: var(--text-caption);
   padding: 6px;
 }
@@ -909,7 +909,7 @@
   margin: 5px 0;
   line-height: 1.5;
 }
-.native-desk__feedback :is([role='status'], [role='alert']) {
+.native-desk__feedback :is([role="status"], [role="alert"]) {
   color: var(--warning);
 }
 .native-desk__evidence {
@@ -955,7 +955,7 @@
   .native-desk__identity h2 {
     font-size: var(--text-title);
   }
-  .native-desk__permission input[type='datetime-local'] {
+  .native-desk__permission input[type="datetime-local"] {
     max-width: 240px;
   }
 }
@@ -1142,13 +1142,13 @@
 
 /* App reserves an intrinsic diagnostic strip below its workspace. The approved
    desk uses the remaining main-content height, not another full viewport. */
-.foundation-frame--admitted .native-desk[data-presentation='native-a'] {
+.foundation-frame--admitted .native-desk[data-presentation="native-a"] {
   box-sizing: border-box;
   height: 100%;
 }
 
 @media (max-width: 620px) {
-  .foundation-frame--admitted .native-desk[data-presentation='native-a'] {
+  .foundation-frame--admitted .native-desk[data-presentation="native-a"] {
     height: auto;
   }
 }
