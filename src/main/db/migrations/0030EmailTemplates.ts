@@ -1,7 +1,7 @@
 import { sql, type Kysely } from 'kysely';
 import type { FoundationDatabase } from '../schema';
 import { REPLY_TEMPLATE_PURPOSES } from '../../../shared/contracts/replyTemplateContract';
-import { seededReplyTemplates } from '../../outreach/templates/replyTemplateSeeds';
+import { seededReplyTemplates, REPLY_TEMPLATE_SEED_AT } from '../../outreach/templates/replyTemplateSeeds';
 
 /**
  * Schema 30: the five follow-up templates David approves once (design D13, his decision of 17 Sep 2026).
@@ -58,13 +58,14 @@ const emailTemplateStatements = [
 export const migration0030EmailTemplates = {
   async up(db: Kysely<FoundationDatabase>) {
     for (const statement of emailTemplateStatements) await sql.raw(statement).execute(db);
-    const seededAt = new Date().toISOString();
+    // Deterministic seed instant (see REPLY_TEMPLATE_SEED_AT); only app_meta.updated_at records the real migration time.
+    const seededAt = REPLY_TEMPLATE_SEED_AT;
     for (const template of seededReplyTemplates(seededAt)) {
       await sql`INSERT INTO email_templates(id,name,purpose,subject,body,variables_json,revision,approval_state,approved_revision,approved_at,content_hash,created_at,updated_at)
         VALUES(${template.id},${template.name},${template.purpose},${template.subject},${template.body},${JSON.stringify(template.variables)},
           ${template.revision},'draft',NULL,NULL,NULL,${seededAt},${seededAt})`.execute(db);
     }
     await sql`INSERT INTO email_template_settings(singleton,paused,revision,updated_at) VALUES(1,0,1,${seededAt})`.execute(db);
-    await sql`UPDATE app_meta SET schema_version=30,updated_at=${seededAt} WHERE singleton=1`.execute(db);
+    await sql`UPDATE app_meta SET schema_version=30,updated_at=${new Date().toISOString()} WHERE singleton=1`.execute(db);
   },
 };

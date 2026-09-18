@@ -12,7 +12,7 @@ import { closeDatabase, openDatabase, type AppDatabase } from '../../../../src/m
 import { createMigrationRunner, migrateToLatest, productionMigrations } from '../../../../src/main/db/migrate';
 import { assertDomainStorageReady, assertPreReleaseStorageReady, DOMAIN_SCHEMA_MANIFEST, SCHEMA29_MANIFEST } from '../../../../src/main/domain/startup/storageReadiness';
 import { DomainStartupFatalError } from '../../../../src/main/domain/startup/domainStartupTypes';
-import { REPLY_TEMPLATE_SEEDS, REPLY_TEMPLATE_SEED_HASHES, seededReplyTemplateHash } from '../../../../src/main/outreach/templates/replyTemplateSeeds';
+import { REPLY_TEMPLATE_SEEDS, REPLY_TEMPLATE_SEED_HASHES, seededReplyTemplateHash, REPLY_TEMPLATE_SEED_AT } from '../../../../src/main/outreach/templates/replyTemplateSeeds';
 import { replyTemplateContentHash } from '../../../../src/shared/contracts/replyTemplateContract';
 import { createTempDatabase, createTestWorkspaceKey } from '../../../fixtures/tempDatabase';
 
@@ -97,6 +97,10 @@ it('upgrades genuine29 additively with verified encrypted backup, byte-identical
     expect(() => database.raw.prepare("UPDATE email_templates SET revision=1,body='Other' WHERE id='T1'").run()).toThrow(/Email template revision is monotonic/);
     database.raw.prepare("UPDATE email_templates SET revision=1,approval_state='approved',approved_revision=1,approved_at='2026-09-18T12:00:00.000Z',content_hash=?,updated_at='2026-09-18T12:00:00.000Z' WHERE id='T1'").run(REPLY_TEMPLATE_SEED_HASHES.T1);
     expect(templateRows(database)[0]).toMatchObject({ id: 'T1', revision: 1, approval_state: 'approved', approved_revision: 1, content_hash: REPLY_TEMPLATE_SEED_HASHES.T1 });
+    // The seed instant is a constant, never the wall clock: the same rows on every machine, and every later write at a
+    // fixed test instant or a real edit satisfies updated_at >= created_at (the packaged gate failed on this after 13:00 UTC).
+    expect(database.raw.prepare("SELECT created_at FROM email_templates WHERE id IN ('T1','T2','T3','T4','T5') ORDER BY id").pluck().all()).toEqual(Array(5).fill(REPLY_TEMPLATE_SEED_AT));
+    expect(database.raw.prepare('SELECT updated_at FROM email_template_settings WHERE singleton=1').pluck().get()).toBe(REPLY_TEMPLATE_SEED_AT);
     // An edit bumps the revision by exactly one and may return the row to revoked in the same statement.
     database.raw.prepare("UPDATE email_templates SET revision=2,subject='Edited, {firm}',approval_state='revoked',approved_revision=NULL,approved_at=NULL,content_hash=NULL,updated_at='2026-09-18T13:00:00.000Z' WHERE id='T1'").run();
     expect(templateRows(database)[0]).toMatchObject({ id: 'T1', revision: 2, approval_state: 'revoked', approved_revision: null, content_hash: null });

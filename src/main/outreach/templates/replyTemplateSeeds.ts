@@ -84,6 +84,12 @@ export const seededReplyTemplateHash = (id: ReplyTemplateId): string => {
   return replyTemplateContentHash({ id: seed.id, revision: 1, subject: seed.subject, body: seed.body });
 };
 /** The seeded revision-one templates, parsed by the contract, so a seed that broke a body rule never ships. */
+/** The instant migration 0030 records as `created_at` / `updated_at` for the five seeded drafts and the settings row.
+ * A constant, not the wall clock: a migration must produce the same rows on every machine and every day, and every
+ * later write (a fixed test instant or a real edit) must satisfy `updated_at >= created_at`. The wall clock here made
+ * the packaged release gate fail after 13:00 UTC on 18 Sep 2026. */
+export const REPLY_TEMPLATE_SEED_AT = '2026-09-18T00:00:00.000Z';
+
 export function seededReplyTemplates(seededAt: string): ReplyTemplate[] {
   return REPLY_TEMPLATE_SEEDS.map(seed => {
     if (seededReplyTemplateHash(seed.id) !== REPLY_TEMPLATE_SEED_HASHES[seed.id]) throw new Error('reply_template_seed_text_changed');
