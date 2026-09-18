@@ -1,4 +1,4 @@
-import type { SyncReport } from './delegationSync';
+import type { SyncFailure, SyncReport } from './delegationSync';
 
 /** Why a background sync ran. `manual` is reserved for a caller that already owns a button. */
 export type BackgroundSyncReason = 'launch' | 'focus' | 'interval' | 'manual';
@@ -14,6 +14,8 @@ export type BackgroundSyncStatus = Readonly<{
   lastSyncAt: string | null;
   lastSyncResult: BackgroundSyncOutcome | null;
   lastApplied: number;
+  /** Why the last run stopped short, from the report's closed set. Null after a complete run. */
+  lastFailure: SyncFailure;
 }>;
 
 export type BackgroundSync = Readonly<{
@@ -32,11 +34,12 @@ type Timers = Pick<typeof globalThis, 'setInterval' | 'clearInterval'>;
 
 /**
  * D3 (17 Sep 2026): the one owner of automatic worker synchronization in the
- * main process. It calls the same `sync()` the buttons call, so the 15-second
- * timeout and the cursor guards are unchanged; it only decides *when*. Two
- * syncs never overlap, a disposed owner never publishes a late result, and a
- * failed run is recorded as failed rather than hidden. Nothing here grants,
- * calls, sends or books; it reads worker events that already happened.
+ * main process. It calls the same `sync()` the buttons call, so the per-sync
+ * budget, the per-request timeout and the cursor guards are unchanged; it only
+ * decides *when*. Two syncs never overlap, a disposed owner never publishes a
+ * late result, and a failed run is recorded as failed, with the reason the
+ * report gave, rather than hidden. Nothing here grants, calls, sends or books;
+ * it reads worker events that already happened.
  */
 export function createBackgroundSync(input: {
   enabled: boolean;
@@ -52,7 +55,7 @@ export function createBackgroundSync(input: {
   const timers: Timers = input.timers ?? globalThis;
   let state: BackgroundSyncStatus = Object.freeze({
     enabled: input.enabled, running: false, runs: 0, lastReason: null,
-    lastStartedAt: null, lastSyncAt: null, lastSyncResult: null, lastApplied: 0,
+    lastStartedAt: null, lastSyncAt: null, lastSyncResult: null, lastApplied: 0, lastFailure: null,
   });
   let disposed = false;
   let started = false;
@@ -65,16 +68,19 @@ export function createBackgroundSync(input: {
     publish({ running: true, lastReason: reason, lastStartedAt: startedAt, runs: state.runs + 1 });
     let outcome: BackgroundSyncOutcome = 'failed';
     let applied = 0;
+    let failure: SyncFailure = null;
     try {
       const report = await input.sync();
       applied = report.applied;
-      // An incomplete replay is not a current owner proof; say so.
+      // An incomplete replay is not a current owner proof; say so, and keep the reason it gave.
       outcome = !report.ownerFresh || report.gaps > 0 ? 'failed' : report.applied > 0 ? 'applied' : 'no_change';
+      failure = outcome === 'failed' ? report.failure ?? 'transport' : null;
     } catch {
       outcome = 'failed';
+      failure = 'transport';
     }
     if (disposed) return state;
-    const finished = publish({ running: false, lastSyncAt: input.clock.now(), lastSyncResult: outcome, lastApplied: applied });
+    const finished = publish({ running: false, lastSyncAt: input.clock.now(), lastSyncResult: outcome, lastApplied: applied, lastFailure: failure });
     if (outcome === 'applied') {
       try { input.onApplied?.(finished); } catch { /* A renderer notification failure never changes the sync record. */ }
     }

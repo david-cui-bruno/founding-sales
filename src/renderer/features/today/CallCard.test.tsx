@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CallCard } from './CallCard';
 import { dailyFixture, fixtureNow } from './nativeDesk.fixture';
+import { MANUAL_DIAL_NOT_WIRED, PHONE_DIAL_MODES } from './todayCopy';
 import type { LocalCompanyDetail } from '../../../shared/contracts/localWorkspaceContract';
+import type { PhoneSetupApi, PhoneSetupStatus } from '../../../shared/contracts/phoneSetupContract';
 
 afterEach(cleanup);
 const hash = 'a'.repeat(64);
@@ -54,7 +56,9 @@ describe('CallCard', () => {
     expect(text('Source')).toBe('Source: https://places.googleapis.com/v1/places:searchText · https://harbor.example.invalid/about');
     expect(api.getCompany).toHaveBeenCalledTimes(1);
     expect(api.getCompany).toHaveBeenCalledWith({ accountId: 'a' });
-    expect(card.querySelectorAll('button, a, input, select')).toHaveLength(0);
+    // The only control is the explicit show-number fallback. Nothing here dials, links or navigates.
+    expect([...card.querySelectorAll('button, a, input, select')].map(node => node.textContent)).toEqual(['Show number']);
+    expect(card.querySelector('a[href^="tel:"]')).toBeNull();
     expect(card.textContent).toContain('Reading this card places no call.');
   });
 
@@ -83,6 +87,73 @@ describe('CallCard', () => {
     render(<CallCard account={firm()} />);
     expect(text('Location')).toBe('Location: unavailable (local company detail could not be read)');
     expect(text('Source')).toBe('Source: unavailable');
+  });
+
+  describe('show-number fallback (D6)', () => {
+    const setup = (state: PhoneSetupStatus['state']): PhoneSetupApi => ({
+      status: vi.fn<PhoneSetupApi['status']>(async () => state === 'configured'
+        ? { state, candidateFingerprint: 'fictional-helper', confirmedAt: fixtureNow }
+        : state === 'needs_confirmation' ? { state, candidateFingerprint: 'fictional-helper', confirmedAt: null }
+          : { state, candidateFingerprint: null, confirmedAt: null }),
+      confirm: async () => { throw Error('No setup mutation from the call card'); },
+      clear: async () => { throw Error('No setup mutation from the call card'); },
+    });
+    const reveal = () => fireEvent.click(screen.getByRole('button', { name: 'Show number' }));
+
+    it.each(['unconfigured', 'unavailable', 'needs_confirmation'] as const)(
+      'shows the number, a copy control and the plain reason when the helper cannot dial (%s)', async state => {
+        const account = firm();
+        const phone = setup(state);
+        const copy = vi.fn(async () => undefined);
+        Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: copy } });
+        render(<CallCard account={account} api={{ getCompany: vi.fn(async () => detail(account)) }} phoneSetup={phone} />);
+        expect(phone.status).not.toHaveBeenCalled();
+        expect(copy).not.toHaveBeenCalled();
+        reveal();
+        await screen.findByText(`Callie cannot dial from this Mac: ${PHONE_DIAL_MODES[state].reason}. Dial it yourself and log the outcome below.`);
+        expect(phone.status).toHaveBeenCalledTimes(1);
+        // Honest about the half that is not wired: nothing here promises a form it cannot open.
+        expect(screen.getByText(MANUAL_DIAL_NOT_WIRED)).toBeTruthy();
+        expect(screen.getByTestId('dial-number').textContent).toBe('+14015550100');
+        const card = screen.getByRole('region', { name: 'Call card' });
+        expect(card.querySelector('a[href^="tel:"]')).toBeNull();
+        expect(copy).not.toHaveBeenCalled();
+        fireEvent.click(screen.getByRole('button', { name: 'Copy number' }));
+        expect(copy).toHaveBeenCalledWith('+14015550100');
+        await screen.findByText('Number copied. Copying is not a call.');
+      });
+
+    it('keeps the handoff below primary and the number visible when the helper can dial', async () => {
+      const account = firm();
+      const phone = setup('configured');
+      render(<CallCard account={account} api={{ getCompany: vi.fn(async () => detail(account)) }} phoneSetup={phone} />);
+      reveal();
+      await screen.findByText(PHONE_DIAL_MODES.configured.card);
+      expect(screen.queryByText(/Callie cannot dial from this Mac/)).toBeNull();
+      expect(screen.queryByText(MANUAL_DIAL_NOT_WIRED)).toBeNull();
+      expect(screen.getByTestId('dial-number').textContent).toBe('+14015550100');
+      expect(screen.getByRole('button', { name: 'Copy number' })).toBeTruthy();
+    });
+
+    it('is honest when phone setup cannot be read at all, and offers nothing for a firm with no phone', async () => {
+      const account = firm();
+      const failing: PhoneSetupApi = { status: vi.fn(async () => { throw Error('/Users/founder/private phone failure'); }),
+        confirm: async () => { throw Error('no'); }, clear: async () => { throw Error('no'); } };
+      const view = render(<CallCard account={account} api={{ getCompany: vi.fn(async () => detail(account)) }} phoneSetup={failing} />);
+      reveal();
+      await screen.findByText(`Callie cannot dial from this Mac: ${PHONE_DIAL_MODES.unreadable.reason}. Dial it yourself and log the outcome below.`);
+      expect(screen.queryByText(/private phone failure/)).toBeNull();
+      expect(screen.getByTestId('dial-number').textContent).toBe('+14015550100');
+      view.unmount();
+      // No phoneSetup api at all is the same honest unreadable state, never a silent success.
+      render(<CallCard account={account} api={{ getCompany: vi.fn(async () => detail(account)) }} />);
+      reveal();
+      await screen.findByText(`Callie cannot dial from this Mac: ${PHONE_DIAL_MODES.unreadable.reason}. Dial it yourself and log the outcome below.`);
+      cleanup();
+      const phoneless: ReturnType<typeof firm> = { ...firm(), routes: [] };
+      render(<CallCard account={phoneless} phoneSetup={setup('configured')} />);
+      expect(screen.queryByRole('button', { name: 'Show number' })).toBeNull();
+    });
   });
 
   it('says when the saved sources carry no listing', async () => {

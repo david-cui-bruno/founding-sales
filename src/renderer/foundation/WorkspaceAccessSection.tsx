@@ -3,7 +3,7 @@ import type { z } from 'zod';
 import type { CalliePreloadApi } from '../../shared/preload';
 import {
   configureLocalDelegationSchema, delegationSyncReportSchema,
-  localDelegationConfigurationRecordSchema, localDelegationStatusSchema,
+  localDelegationConfigurationRecordSchema, localDelegationStatusSchema, SYNC_BUDGET_SECONDS,
 } from '../../shared/contracts/ownerCommandContract';
 
 type Api = Pick<CalliePreloadApi['delegation'], 'status' | 'configure' | 'sync'>;
@@ -24,6 +24,18 @@ function parseStatus(raw: Status): Status {
   if (!equal(raw.configuration, status.configuration)) throw Error('Configuration requires exact preservation');
   return status;
 }
+/** The closed set of reasons a run stopped short, said plainly. A stopped run never claims freshness. */
+const SYNC_FAILURE_CAUSE: Record<NonNullable<Report['failure']>, string> = {
+  timeout: `timed out after ${SYNC_BUDGET_SECONDS} s`,
+  transport: 'could not reach the cloud worker',
+  invalid_event: 'could not read an event the cloud worker sent',
+  gap: 'found a gap in the event stream',
+};
+const syncStopped = (report: Report): string => {
+  const failure = report.failure ?? null;
+  return failure === null ? ''
+    : ` Sync stopped: ${SYNC_FAILURE_CAUSE[failure]} at cursor ${report.cursor ?? 'none yet'}. The next sync resumes from that cursor.`;
+};
 const paired = (status: Status | null) => !!status?.workspaceId && !!status.endpoint && status.state !== 'locked' && status.state !== 'unconfigured';
 // The public schema permits contradictory outer/inner states. Do not choose one as authority.
 const configurable = (status: Status | null) => paired(status) && !!status &&
@@ -157,7 +169,7 @@ export function WorkspaceAccessSection({ api, onChanged }: { api?: Api; onChange
     </div>
     <p>Sync saved cloud work is not read-only. It may submit or reconcile previously queued approved commands. It does not create new approvals or permissions.</p>
     <button type="button" className="settings__action" disabled={busy || !paired(visible.status)} onClick={() => { if (lifetime) void run(lifetime, 'sync'); }}>Sync saved cloud work</button>
-    {visible.report && <p role={visible.report.ownerFresh && visible.report.gaps === 0 ? 'status' : 'alert'}>{visible.report.ownerFresh && visible.report.gaps === 0 ? 'Last sync report: owner events fresh.' : 'Saved cloud work sync is incomplete.'} Applied: {visible.report.applied}. Gaps: {visible.report.gaps}. Owner fresh: {visible.report.ownerFresh ? 'yes' : 'no'}. Queued commands may remain unresolved even when owner events are fresh. This is a report from the last explicit sync, not ongoing health or confirmation that all saved cloud work completed.</p>}
+    {visible.report && <p role={visible.report.ownerFresh && visible.report.gaps === 0 ? 'status' : 'alert'}>{visible.report.ownerFresh && visible.report.gaps === 0 ? 'Last sync report: owner events fresh.' : 'Saved cloud work sync is incomplete.'} Applied: {visible.report.applied}. Gaps: {visible.report.gaps}. Owner fresh: {visible.report.ownerFresh ? 'yes' : 'no'}.{syncStopped(visible.report)} Queued commands may remain unresolved even when owner events are fresh. This is a report from the last explicit sync, not ongoing health or confirmation that all saved cloud work completed.</p>}
     {visible.message && <p role={visible.failed ? 'alert' : 'status'}>{visible.message}</p>}
   </section>;
 }

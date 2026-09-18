@@ -103,7 +103,13 @@ export const ownerCheckpointRequestSchema=z.strictObject({workspaceId:id,account
 export const ownerCheckpointSchema=z.strictObject({workspaceId:id,accountId:id,handoffId:id.optional(),generation:revision,version:revision,revision:hash,validUntil:revision.min(1)});
 export const redeemLocalPairingSchema=z.strictObject({endpoint:z.url(),expectedWorkspaceId:id,code:z.string().min(1).max(128)});
 export const redeemedLocalPairingSchema=z.strictObject({state:z.literal('paired'),workspaceId:id,pairingId:id});
-export const delegationSyncReportSchema=z.strictObject({applied:revision,gaps:revision,cursor:z.string().nullable(),ownerFresh:z.boolean()});
+/** Why a bounded replay stopped short, from a closed set. Never a message, path or cause. */
+export const syncFailureSchema=z.enum(['timeout','transport','invalid_event','gap']).nullable();
+/** The budget for one whole sync run. Named once so the main process and the report line cannot drift. */
+export const SYNC_BUDGET_SECONDS=120;
+/** `failure` is optional on the wire: a report that names no reason is read as naming no reason, never
+ * as a reason it did not give. The main process always states it; `ownerFresh` stays the only proof. */
+export const delegationSyncReportSchema=z.strictObject({applied:revision,gaps:revision,cursor:z.string().nullable(),ownerFresh:z.boolean(),failure:syncFailureSchema.optional()});
 
 export const delegatedPhoneHandoffRequestSchema=z.strictObject({command:prepareManualCommandSchema.refine(command=>command.payload.channel==='call'),expectedEvidenceFingerprint:hash});
 export type DelegatedPhoneHandoffRequest=z.infer<typeof delegatedPhoneHandoffRequestSchema>;

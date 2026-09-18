@@ -28,6 +28,11 @@ const scalar = (value: string | number | boolean): AttributeValue => typeof valu
 export const keyPart = (value: string): string => encodeURIComponent(accountIdSchema.parse(value));
 export const integer = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const outboxSchema = z.strictObject({ sequence: integer.positive(), published: z.boolean(), event: workerEventSchema });
+/** Page size for `eventsAfter`. Deliberately far below the transport's own ceilings
+ * (API Gateway 10 MB, Lambda 6 MB, the desktop's 4 MB reply reader) so one page is
+ * always one fast query the desktop can apply inside its per-request timeout. */
+export const EVENT_PAGE_LIMIT = 200;
+export const EVENT_PAGE_MAX_BYTES = 1_000_000;
 export class DynamoStore {
   constructor(readonly options: RepositoryOptions) {
     accountIdSchema.parse(options.workspaceId); z.string().min(1).parse(options.tableName);
@@ -108,6 +113,10 @@ export class DynamoStore {
     const high = integer.parse(head ? head.data.sequence : 0);
     for (let sequence = 1; sequence <= high; sequence++) await this.publish(sequence);
   }
+  /** One bounded page per read, from one consistent range Query on the event keys.
+   * A whole-backlog replay of David's real workspace (835 events, 1.65 MB on 18 Sep
+   * 2026) is five queries here; the per-sequence GetItem walk it replaces needed 835
+   * round trips and ran past 40 s, longer than the desktop was willing to wait. */
   async eventsAfter(cursor: string | null): Promise<EventPage & { headCursor: string | null; complete: boolean }> {
     let after = 0;
     if (cursor !== null) {
@@ -119,13 +128,27 @@ export class DynamoStore {
     const high = integer.parse(head ? head.data.sequence : 0);
     if (after > high) throw new Error('invalid_cursor');
     const events: WorkerEvent[] = [];
-    for (let seq = after + 1; seq <= high && events.length < 1000; seq++) {
-      const record = await this.get<{ published: boolean }>(this.eventKey(seq));
-      // A missing or unpublished lower event must never be skipped by a cursor.
-      if (!record || record.data.published !== true) break;
-      const outbox = outboxSchema.parse(record.data);
-      if (outbox.sequence !== seq) throw new Error('event_gap');
-      events.push(outbox.event); after = seq;
+    if (after < high) {
+      const result = await this.options.dynamo.send(new QueryCommand({ TableName: this.options.tableName, ConsistentRead: true,
+        KeyConditionExpression: '#pk = :pk AND #sk BETWEEN :from AND :to', ExpressionAttributeNames: { '#pk': 'pk', '#sk': 'sk' },
+        ExpressionAttributeValues: { ':pk': this.key('').pk, ':from': { S: this.eventKey(after + 1) }, ':to': { S: this.eventKey(high) } },
+        ScanIndexForward: true, Limit: EVENT_PAGE_LIMIT }));
+      let bytes = 0;
+      for (const item of result.Items ?? []) {
+        // Dynamo's Limit is an upper bound the store never relies on: the page cap is enforced here too.
+        if (events.length >= EVENT_PAGE_LIMIT) break;
+        const sequence = after + 1;
+        // A missing or unpublished lower event must never be skipped by a cursor.
+        if (item.sk?.S !== this.eventKey(sequence)) break;
+        const record = this.decode<{ published: boolean }>(item);
+        if (record.data.published !== true) break;
+        const size = Buffer.byteLength(item.data!.S!);
+        // The byte cap ends a page, it never truncates an event: one oversized event still travels alone.
+        if (events.length > 0 && bytes + size > EVENT_PAGE_MAX_BYTES) break;
+        const outbox = outboxSchema.parse(record.data);
+        if (outbox.sequence !== sequence) throw new Error('event_gap');
+        events.push(outbox.event); bytes += size; after = sequence;
+      }
     }
     const encodeCursor = (sequence: number) => sequence === 0 ? null : `${accountFingerprint(this.options.workspaceId)}:${sequence}`;
     return { events, nextCursor: encodeCursor(after), headCursor: encodeCursor(high), complete: after === high };

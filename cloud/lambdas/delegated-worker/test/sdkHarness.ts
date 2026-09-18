@@ -45,8 +45,16 @@ export class ConditionalCommandHarness implements DynamoAdapter {
     if (command instanceof QueryCommand) {
       if (command.input.ConsistentRead !== true) throw new Error('read_not_strong');
       const values = command.input.ExpressionAttributeValues!;
-      const items = Object.values(this.items).filter(item => item.pk?.S === values[':pk']?.S && item.sk?.S?.startsWith(values[':prefix']?.S ?? ''));
-      return { $metadata: {}, Items: structuredClone(items.sort((a, b) => a.sk!.S!.localeCompare(b.sk!.S!))) };
+      const condition = command.input.KeyConditionExpression ?? '';
+      // Only the two key conditions this package emits: a prefix scan and an ascending sort-key range.
+      const selects = (sk: string): boolean => condition.includes('begins_with(#sk, :prefix)') ? sk.startsWith(values[':prefix']?.S ?? '')
+        : condition.includes('#sk BETWEEN :from AND :to') ? sk >= (values[':from']?.S ?? '') && sk <= (values[':to']?.S ?? '')
+          : (() => { throw new Error(`unsupported_key_condition:${condition}`); })();
+      // Limit and ExclusiveStartKey stay uninterpreted: callers that page wrap this harness and
+      // slice the full ascending result themselves. Every caller must cap its own page.
+      const items = Object.values(this.items).filter(item => item.pk?.S === values[':pk']?.S && selects(item.sk?.S ?? ''))
+        .sort((a, b) => a.sk!.S! < b.sk!.S! ? -1 : a.sk!.S! > b.sk!.S! ? 1 : 0);
+      return { $metadata: {}, Items: structuredClone(items) };
     }
     this.beforeTransaction?.();
     const transaction = command.input;

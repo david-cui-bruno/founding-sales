@@ -922,7 +922,8 @@ export function NativeDesk({
           )}
           {account && (selected?.startsWith('call:') || selected?.startsWith('account:')) && (
             <section className="native-desk__call">
-              <CallCard key={JSON.stringify([snapshot.workspaceId, account.account.id, account.account.version])} account={account} api={api.localWorkspace} />
+              <CallCard key={JSON.stringify([snapshot.workspaceId, account.account.id, account.account.version])} account={account}
+                api={api.localWorkspace} phoneSetup={api.phoneSetup} />
               <CompanyPhoneCall key={JSON.stringify([snapshot.workspaceId, account.account.id])}
                 api={api} snapshot={snapshot} config={configuration} accountId={account.account.id}
                 readError={phoneReadError} newWorkHold={!!localHold} onRefresh={onRefresh} />

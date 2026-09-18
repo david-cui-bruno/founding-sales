@@ -20,7 +20,7 @@ import type {AppDatabase} from '../db/database';
 import type {StoredPairing} from './pairingStore';
 import {DelegationRepository} from './delegationRepository';
 import {SqlDelegationConfiguration,SqlDelegationTransport} from './delegationSync';
-import {ExecutionClient,createResearchSetupTransport,createAccountPreparationTransport} from './executionClient';
+import {ExecutionClient,SYNC_BUDGET_MS,createResearchSetupTransport,createAccountPreparationTransport} from './executionClient';
 import {createResearchSetupService,awaitResearchSetupOperation} from './researchSetupService';
 import type {ResearchSetupRequestStore} from './researchSetupRequestStore';
 import type {ResearchSetupApi} from '../../shared/contracts/researchSetupContract';
@@ -302,7 +302,9 @@ export function createDelegationRuntime(input:{databaseGate:{withDatabase<T>(fn:
     return selectedAccountFreshnessSchema.parse({accountId:request.accountId,state:sentFingerprint===null?'unknown':sentFingerprint===localFingerprint?'current':'stale',localFingerprint,sentFingerprint,sentAt:sent?.payload.asOf??null});
   });},
   submit:(raw:unknown)=>{const command=publicDelegationCommandSchema.parse(raw);invalidate();return run((database,signal)=>services(database,signal).client.submit(command));},
-  sync:()=>run((database,signal)=>services(database,signal).client.sync(AbortSignal.any([signal,AbortSignal.timeout(15000)]))),
+  /** The launch sync, the five-minute background sync and both Sync buttons all arrive here and all get
+   * the same whole-run budget. Each worker request inside the run keeps its own 15 s. */
+  sync:()=>run((database,signal)=>services(database,signal).client.sync(signal,SYNC_BUDGET_MS)),
   /** Explicit intake configuration for one company: pause or resume, relevant mail on for the first
    * time with a start date, or the grant's owned calendar. Queues exactly one configure-owner command
    * with the revision the founder read bound; the worker's admission is mirrored first so nothing stale
