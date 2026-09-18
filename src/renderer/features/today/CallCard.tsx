@@ -3,7 +3,7 @@ import type { DailySnapshot } from '../../../shared/contracts/dailyContract';
 import { localCompanyDetailSchema, type LocalCompanyDetail, type LocalWorkspaceApi } from '../../../shared/contracts/localWorkspaceContract';
 import { phoneSetupStatusSchema, type PhoneSetupApi } from '../../../shared/contracts/phoneSetupContract';
 import { findPlacesSource } from './placesLocation';
-import { PHONE_DIAL_MODES, type PhoneDialState } from './todayCopy';
+import { MANUAL_DIAL_NOT_WIRED, PHONE_DIAL_MODES, type PhoneDialState } from './todayCopy';
 
 type Account = DailySnapshot['accounts'][number];
 type DetailRead = { state: 'pending' } | { state: 'unavailable' } | { state: 'read'; detail: LocalCompanyDetail };
@@ -104,6 +104,7 @@ export function CallCard({ account, api, phoneSetup }: {
       {dial.state === 'read' && mode && <>
         <p role="status">{mode.reason === null ? mode.card
           : `Callie cannot dial from this Mac: ${mode.reason}. Dial it yourself and log the outcome below.`}</p>
+        {mode.reason !== null && <p>{MANUAL_DIAL_NOT_WIRED}</p>}
         <p><strong data-testid="dial-number">{primary.value}</strong> · {PHONE_VERIFICATION_WORDS[primary.verification]}</p>
         <button onClick={copyNumber}>Copy number</button>
         {copied && <p role="status">Number copied. Copying is not a call.</p>}

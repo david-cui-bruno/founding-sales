@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 import type {} from '../fixtures/nativeDeskBrowser';
 import { createCallCampaignDraft, createLinkedInCampaignDraft } from '../../src/shared/contracts/callCampaignDraft';
 import { accountFingerprint } from '../../src/main/domain/accounts/accountEvidence';
-import { PHONE_DIAL_MODES } from '../../src/renderer/features/today/todayCopy';
+import { MANUAL_DIAL_NOT_WIRED, PHONE_DIAL_MODES } from '../../src/renderer/features/today/todayCopy';
 
 // This exercises real renderer components, not Electron IPC or live services.
 // The entire API is the explicit no-IO fixture. All browser requests are blocked.
@@ -1242,6 +1242,7 @@ test('D6 show-number fallback hands David the number when the helper cannot dial
   expect(await copied()).toEqual([]);
   await card.getByRole('button', {name: 'Show number', exact: true}).click();
   await expect(card.getByText(`Callie cannot dial from this Mac: ${PHONE_DIAL_MODES.unavailable.reason}. Dial it yourself and log the outcome below.`, {exact: true})).toBeVisible();
+  await expect(card.getByText(MANUAL_DIAL_NOT_WIRED, {exact: true})).toBeVisible();
   await expect(card.getByTestId('dial-number')).toHaveText('+14015550100');
   await expect(card.locator('a[href^="tel:"]')).toHaveCount(0);
   expect((await methods(page)).filter(method => method === 'phoneSetup.status')).toHaveLength(1);
@@ -1258,6 +1259,7 @@ test('D6 show-number fallback hands David the number when the helper cannot dial
   await card.getByRole('button', {name: 'Show number', exact: true}).click();
   await expect(card.getByText(PHONE_DIAL_MODES.configured.card, {exact: true})).toBeVisible();
   await expect(card.getByText(/Callie cannot dial from this Mac/)).toHaveCount(0);
+  await expect(card.getByText(MANUAL_DIAL_NOT_WIRED, {exact: true})).toHaveCount(0);
   await expect(card.getByTestId('dial-number')).toHaveText('+14015550100');
   await expect(page.getByRole('button', {name: 'Check owner and review call', exact: true})).toBeVisible();
   await assertClean(page, state);

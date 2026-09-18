@@ -16,6 +16,19 @@ export const DEFAULT_NEW_CALL_SLOTS_COPY = 'default: 30 new firms a day';
  * outcome below." and Settings shows `label` beside `card`. No state here is a
  * fixture success and none of this text is call permission.
  */
+/**
+ * D6 acceptance 2 (manual dial into the same outcome form) is NOT wired in this
+ * build. The outcome form opens on a consumed handoff, and the only path that
+ * consumes one runs `createDelegatedPhoneHandoff`, which refuses before it
+ * submits anything unless the helper capability is `available`
+ * (`src/main/delegation/executionRouter.ts`, the `capability.state !== 'available'`
+ * gate). Letting a hand-dialed attempt consume the step's one handoff needs a
+ * mode on `delegatedPhoneHandoffRequestSchema` and a control in
+ * `CompanyPhoneCall.tsx` — neither is lane 27's to change. Rather than promise
+ * a form it cannot open, the card says so. Delete this line with the mechanism.
+ */
+export const MANUAL_DIAL_NOT_WIRED = 'Logging a hand-dialed call still needs the call step\'s one handoff, which this build can only take through the helper. Until that changes the outcome form below stays closed for this firm.';
+
 export type PhoneDialMode = Readonly<{ label: string; reason: string | null; card: string }>;
 export type PhoneDialState = PhoneSetupStatus['state'] | 'unreadable';
 
