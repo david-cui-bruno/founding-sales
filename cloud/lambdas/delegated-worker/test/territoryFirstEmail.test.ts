@@ -5,7 +5,7 @@ import { WorkerAuth } from '../src/workerAuth';
 import { RemoteGoogleAuthorization } from '../src/remoteGoogleAuthorization';
 import { OwnerCommandCoordinator } from '../src/ownerCommandCoordinator';
 import { createSourceCoordinator } from '../src/sourceCoordinator';
-import { TERRITORY_MAIL_SCOPE_TICK_LIMIT, territoryMailScopeSince } from '../src/territoryMailScope';
+import { TERRITORY_MAIL_SCOPE_SKIPS, TERRITORY_MAIL_SCOPE_TICK_LIMIT, territoryMailScopeSince } from '../src/territoryMailScope';
 import { createWorkerAccountRepository, accountKey } from '../src/workerAccountRepository';
 import { TerritoryPolicyRepository } from '../src/territoryPolicyRepository';
 import { DynamoDispatchRepository } from '../src/dispatchRepository';
@@ -284,6 +284,8 @@ describe('a territory firm receives its first email', () => {
     const second = await f.tick();
     expect(second.mailScopes).toMatchObject({ scanned: 30, configured: 5, failed: 0, skipped: { scope_configured: 25 } });
     const record = buildScheduledRunRecord(second, { at: DAY_ZERO, durationMs: 10 });
+    // The record's skip names are exactly the closed list and nothing else can enter it.
+    expect(Object.keys(record.territory!.mailScopesSkipped).sort()).toEqual([...TERRITORY_MAIL_SCOPE_SKIPS].sort());
     expect(record.territory).toMatchObject({ mailScopesConfigured: 5,
       mailScopesSkipped: { policy_paused: 0, no_template_approved: 0, grant_not_ready: 0, not_enrolled: 0, no_email_route: 0, scope_configured: 25 } });
     // Each of the thirty firms has exactly one scope, naming its own published inbox and no other.
