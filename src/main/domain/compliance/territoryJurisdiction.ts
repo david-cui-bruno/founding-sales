@@ -22,7 +22,9 @@ export type TerritoryDerivation = Readonly<{
   jurisdiction: { regionCode: string; timezone: string; reviewAt: string };
   clearance: { decision: 'allowed'; registrationConfirmed: true; stateDncSubscriptionConfirmed: true; consentRuleConfirmed: true; effectiveAt: string; expiresAt: string };
 }>;
-export type TerritoryResolution = TerritoryDerivation | TerritoryHold;
+/** No Places listing exists for the route or the account: there is nothing to derive from, so the caller keeps its own "no evidence" answer. */
+export type TerritoryAbsence = Readonly<{ kind: 'none' }>;
+export type TerritoryResolution = TerritoryDerivation | TerritoryHold | TerritoryAbsence;
 
 /** Places source ids are `place-<id>`; nothing else is a listing excerpt. */
 export const isPlaceSourceId = (id: string): boolean => id.startsWith('place-');
@@ -51,6 +53,7 @@ export function resolveTerritoryJurisdiction(input: {
   now: string;
 }): TerritoryResolution {
   const places = input.sources.filter(source => isPlaceSourceId(source.id));
+  if (places.length === 0) return { kind: 'none' };
   const preferred = places.filter(source => input.routeEvidenceIds.includes(source.id));
   const candidates = (preferred.length > 0 ? preferred : places)
     .map(source => ({ sourceId: source.id, state: deriveStateFromPlacesExcerpt(source.excerpt) }))

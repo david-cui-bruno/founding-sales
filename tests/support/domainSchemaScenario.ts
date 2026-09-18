@@ -263,6 +263,8 @@ const requiredTriggers = [
   'protect_source_intake_receipt_prospect',
   'protect_trigger_event_ownership',
   'synchronize_person_opt_out',
+  'territory_clearances_no_delete',
+  'territory_clearances_revision',
 ] as const;
 
 const scenario = process.argv[2];

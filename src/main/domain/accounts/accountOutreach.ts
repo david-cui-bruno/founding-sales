@@ -85,6 +85,7 @@ export function createSqlAccountRoutePolicy(input: { database: AppDatabase; cloc
       const sources = raw.prepare("SELECT id,excerpt FROM pm_account_sources WHERE account_id=? AND id LIKE 'place-%' AND admitted_at<=? AND fetched_at<=? ORDER BY id")
         .all(route.accountId, at, at) as { id: string; excerpt: string }[];
       const resolution = resolveTerritoryJurisdiction({ sources, routeEvidenceIds: route.evidenceIds, clearances: listTerritoryClearanceRecords(database), now: at });
+      if (resolution.kind === 'none') return null;
       if (resolution.kind === 'held') return { held: resolution.reason, state: resolution.state, suppression };
       return {
         accountId: route.accountId, routeId: route.id, routeVersion: route.version, evidenceFingerprint: snapshot.fingerprint,

@@ -57,9 +57,10 @@ describe('resolveTerritoryJurisdiction', () => {
     expect(resolveTerritoryJurisdiction({ sources: [ri], routeEvidenceIds: [], clearances: [clearance('RI', { confirmedAt: '2026-09-19T00:00:00.000Z', reviewAt: '2027-09-19T00:00:00.000Z' })], now: NOW })).toEqual(held);
     expect(resolveTerritoryJurisdiction({ sources: [ri], routeEvidenceIds: [], clearances: [clearance('RI', { timezone: 'America/Chicago' })], now: NOW })).toEqual(held);
   });
-  it('holds with jurisdiction_unknown when the state cannot be read, is outside the territory map, or two listings disagree', () => {
-    expect(resolveTerritoryJurisdiction({ sources: [], routeEvidenceIds: [], clearances: [clearance('RI')], now: NOW })).toEqual({ kind: 'held', reason: 'jurisdiction_unknown', state: null });
-    expect(resolveTerritoryJurisdiction({ sources: [{ id: 'website', excerpt: ri.excerpt }], routeEvidenceIds: ['website'], clearances: [clearance('RI')], now: NOW })).toEqual({ kind: 'held', reason: 'jurisdiction_unknown', state: null });
+  it('answers none without any listing, and holds with jurisdiction_unknown when the state cannot be read, is outside the territory map, or two listings disagree', () => {
+    expect(resolveTerritoryJurisdiction({ sources: [], routeEvidenceIds: [], clearances: [clearance('RI')], now: NOW })).toEqual({ kind: 'none' });
+    // A website excerpt is not a listing: with no Places source at all there is nothing to derive from.
+    expect(resolveTerritoryJurisdiction({ sources: [{ id: 'website', excerpt: ri.excerpt }], routeEvidenceIds: ['website'], clearances: [clearance('RI')], now: NOW })).toEqual({ kind: 'none' });
     expect(resolveTerritoryJurisdiction({ sources: [place('place-a', null)], routeEvidenceIds: [], clearances: [clearance('RI')], now: NOW })).toEqual({ kind: 'held', reason: 'jurisdiction_unknown', state: null });
     expect(resolveTerritoryJurisdiction({ sources: [place('place-ct', '5 Fictional Way, Hartford, CT 06103, USA')], routeEvidenceIds: [], clearances: [clearance('CT')], now: NOW })).toEqual({ kind: 'held', reason: 'jurisdiction_unknown', state: 'CT' });
     expect(resolveTerritoryJurisdiction({ sources: [ri, place('place-ma', '1 Main St, Boston, MA 02108, USA')], routeEvidenceIds: [], clearances: [clearance('RI'), clearance('MA')], now: NOW })).toEqual({ kind: 'held', reason: 'jurisdiction_unknown', state: null });
