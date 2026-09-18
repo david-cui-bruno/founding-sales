@@ -1,4 +1,5 @@
 import type { AdmitCompanyDraftEmail, OpenCompanyDraft, GetCompanyDraft, SaveCompanyDraft, CompanyDraftAdmissionReceipt, CompanyDraftRead, CompanyDraftMutationResult, PrepareCompanyDraft, PreparedCompanyDraft } from './localCompanyDraftContract';
+import type { ConfirmTerritoryClearance, RevokeTerritoryClearance, TerritoryClearanceSnapshot } from './territoryClearanceContract';
 import type { AdmitCompanyPhoneRoute, CompanyPhoneRouteReceipt } from './localCompanyPhoneRouteContract';
 import { companyDraftEmailSchema } from './localCompanyDraftContract';
 import type { CompanyResearchSettings, UpdateCompanyResearchSettingsRequest } from './localCompanyResearchSettingsContract';
@@ -129,6 +130,10 @@ export type LocalWorkflowReceipt = z.infer<typeof localWorkflowReceiptSchema>;
 export type LocalWorkspaceSnapshot = z.infer<typeof localWorkspaceSnapshotSchema>;
 export type LocalCommitmentsSnapshot = z.infer<typeof localCommitmentsSnapshotSchema>;
 export interface LocalWorkspaceApi {
+  /** Territory clearance (design D4): one confirmed compliance clearance per state. Optional: a build without it shows the Settings section as unavailable. Confirming never dials. */
+  readTerritoryClearance?: () => Promise<TerritoryClearanceSnapshot>;
+  confirmTerritoryClearance?: (input: ConfirmTerritoryClearance) => Promise<TerritoryClearanceSnapshot>;
+  revokeTerritoryClearance?: (input: RevokeTerritoryClearance) => Promise<TerritoryClearanceSnapshot>;
   prepareCompanyDraft(input: PrepareCompanyDraft): Promise<PreparedCompanyDraft>;
   admitCompanyDraftEmail(input: AdmitCompanyDraftEmail): Promise<CompanyDraftAdmissionReceipt>;
   /** Phone twin of the reviewed inbox admission. Optional: a build without it shows phone route review as unavailable. Saving is never a call. */

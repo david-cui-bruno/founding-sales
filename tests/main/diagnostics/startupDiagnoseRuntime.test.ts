@@ -56,8 +56,8 @@ describe('performStartupDiagnose', () => {
     expect(report.stages.map(stage => [stage.stage, stage.ok])).toEqual([['open', true], ['readiness', true], ['migrate', true], ['domain', true]]);
     const readiness = report.stages[1]!; const migrate = report.stages[2]!; const domain = report.stages[3]!;
     if (!readiness.ok || !migrate.ok || !domain.ok) throw new Error('unreachable');
-    expect(readiness.detail.schemaVersion).toBe(27);
-    expect(migrate.detail).toEqual({ fromVersion: 27, toVersion: 27, applied: 0 });
+    expect(readiness.detail.schemaVersion).toBe(28);
+    expect(migrate.detail).toEqual({ fromVersion: 28, toVersion: 28, applied: 0 });
     expect(domain.detail.status).toBe('ready');
     expect(snapshot()).toEqual(before);
     expect(readdirSync(scratchRoot)).toEqual([]);

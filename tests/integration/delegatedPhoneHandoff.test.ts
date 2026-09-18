@@ -118,8 +118,9 @@ describe('delegated human phone bridge', () => {
     const f = await fixture();
     const result = f.db.raw.transaction(() => {
       const policy = createSqlAccountRoutePolicy({ database: f.db, clock: f.clock, expectedWorkspaceId: f.workspaceId }).read(f.snapshot, f.snapshot.routes[0]);
-      expect(policy?.ownerEnabled).toBe(false);
-      return authorizeAccountRoute({ request: { commandId: randomUUID(), accountId: f.account.id, routeId: 'route', expectedRouteVersion: 1, expectedEvidenceFingerprint: f.snapshot.fingerprint, channel: 'call' }, route: f.snapshot.routes[0], evidenceFingerprint: f.snapshot.fingerprint, policy, expectedOwnerGeneration: policy?.ownerGeneration ?? null, now, windows: PLAYBOOK_CHANNEL_POLICIES_V2 });
+      if (!policy || 'held' in policy) throw new Error('The admitted receipt must be read as evidence');
+      expect(policy.ownerEnabled).toBe(false);
+      return authorizeAccountRoute({ request: { commandId: randomUUID(), accountId: f.account.id, routeId: 'route', expectedRouteVersion: 1, expectedEvidenceFingerprint: f.snapshot.fingerprint, channel: 'call' }, route: f.snapshot.routes[0], evidenceFingerprint: f.snapshot.fingerprint, policy, expectedOwnerGeneration: policy.ownerGeneration, now, windows: PLAYBOOK_CHANNEL_POLICIES_V2 });
     }).immediate();
     expect(result).toEqual({ kind: 'blocked', reason: 'account_owner_changed' });
   });

@@ -3,8 +3,12 @@ import { admitCompanyPhoneRouteSchema, companyPhoneRouteReply } from '../../shar
 import { companyResearchSettingsSchema, companyResearchSettingsUpdateReplySchema, updateCompanyResearchSettingsRequestSchema } from '../../shared/contracts/localCompanyResearchSettingsContract';
 import { localCompanyInputSchema, localCompanyCreateRequestSchema, localCompanyReviewSchema, localCompanyCreateResultSchema, localCompanyCreateStatusSchema } from '../../shared/contracts/localCompanyIntakeContract';
 import { meetingFirstAccountCallSettingsSchema, updateCallSettingsRequestSchema, callSettingsUpdateReplySchema, linkCompanyPersonRequestSchema, accountEvidenceReceiptSchema, localWorkspaceSnapshotSchema, localCommitmentsSnapshotSchema, localWorkflowTransitionSchema, localWorkflowReceiptSchema, selectedCompanySchema, localCompanyDetailSchema, selectedResearchSchema, localCompanyResearchStatusSchema, type LocalWorkspaceApi } from '../../shared/contracts/localWorkspaceContract';
+import { confirmTerritoryClearanceSchema, revokeTerritoryClearanceSchema, territoryClearanceSnapshotSchema } from '../../shared/contracts/territoryClearanceContract';
 import type { IpcClient } from '../ipcClient';
 export const createLocalWorkspaceApi = (client: IpcClient): LocalWorkspaceApi => ({
+  readTerritoryClearance: () => client.requestNoInput('local-workspace:territory-clearance-read', territoryClearanceSnapshotSchema),
+  confirmTerritoryClearance: async input => { const parsed = Object.freeze(confirmTerritoryClearanceSchema.parse(input)); return client.request('local-workspace:territory-clearance-confirm', confirmTerritoryClearanceSchema, territoryClearanceSnapshotSchema, parsed); },
+  revokeTerritoryClearance: async input => { const parsed = Object.freeze(revokeTerritoryClearanceSchema.parse(input)); return client.request('local-workspace:territory-clearance-revoke', revokeTerritoryClearanceSchema, territoryClearanceSnapshotSchema, parsed); },
   prepareCompanyDraft: async input => {
     const parsed = Object.freeze(prepareCompanyDraftSchema.parse(input));
     return client.request('local-workspace:prepare-company-draft', prepareCompanyDraftSchema, companyDraftPrepareReply(parsed), parsed);

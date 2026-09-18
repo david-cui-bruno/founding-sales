@@ -170,6 +170,7 @@ describe('normal owner-reviewed policy import through actual encrypted SQL', () 
     const result = await f.confirm(await f.select()); expect(result.rows[0].status).toBe('admitted');
     const snapshot = f.repository().snapshot(row.accountId, NOW);
     const actual = f.db.raw.transaction(() => createSqlAccountRoutePolicy({ database: f.db, clock: f.clock, expectedWorkspaceId: WORKSPACE }).read(snapshot, snapshot.routes[0])).immediate()!;
+    if ('held' in actual) throw new Error('A hand-cited receipt must win over the territory clearance');
     expect(actual.suppression).toMatchObject({ account: true, handle: true }); expect(actual.evidenceRef).toBe(result.rows[0].receiptId);
     expect(evaluateFederalEvidence({ normalizedPhone: row.policy.contact.normalizedValue, evidence: actual.contact.evidence, now: NOW })).toEqual({ kind: 'usable_clear' });
     expect(f.db.raw.prepare('SELECT * FROM delegated_commands').all()).toEqual([]);

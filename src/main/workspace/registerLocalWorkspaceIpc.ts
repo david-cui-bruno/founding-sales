@@ -3,6 +3,7 @@ import { admitCompanyPhoneRouteSchema, companyPhoneRouteReceiptSchema, companyPh
 import { companyResearchSettingsSchema, companyResearchSettingsUpdateReplySchema, updateCompanyResearchSettingsRequestSchema } from '../../shared/contracts/localCompanyResearchSettingsContract';
 import { localCompanyInputSchema, localCompanyCreateRequestSchema, localCompanyReviewSchema, localCompanyCreateResultSchema, localCompanyCreateStatusSchema } from '../../shared/contracts/localCompanyIntakeContract';
 import { meetingFirstAccountCallSettingsSchema, updateCallSettingsRequestSchema, callSettingsUpdateReplySchema, linkCompanyPersonRequestSchema, accountEvidenceReceiptSchema, localWorkspaceSnapshotSchema, localCommitmentsSnapshotSchema, localWorkflowTransitionSchema, localWorkflowReceiptSchema, selectedCompanySchema, localCompanyDetailSchema, selectedResearchSchema, localCompanyResearchStatusSchema, type LocalWorkspaceApi } from '../../shared/contracts/localWorkspaceContract';
+import { confirmTerritoryClearanceSchema, revokeTerritoryClearanceSchema, territoryClearanceSnapshotSchema } from '../../shared/contracts/territoryClearanceContract';
 import { registerValidatedIpc } from '../ipc/registerValidatedIpc';
 export function registerLocalWorkspaceIpc(provider: LocalWorkspaceApi, isTrustedRendererUrl?: (url: string) => boolean): () => void {
   const disposers: (() => void)[] = [];
@@ -86,6 +87,25 @@ export function registerLocalWorkspaceIpc(provider: LocalWorkspaceApi, isTrusted
         const parsed = Object.freeze(prepareCompanyDraftSchema.parse(input));
         return companyDraftPrepareReply(parsed).parse(await provider.prepareCompanyDraft(parsed));
       } }));
+    // Territory clearance (design D4). Reading is a storage read; confirm and revoke record the founder's attestation and never dial.
+    disposers.push(registerValidatedIpc({ channel: 'local-workspace:territory-clearance-read', requestSchema: null, responseSchema: territoryClearanceSnapshotSchema, safeErrorCode: 'LOCAL_TERRITORY_CLEARANCE_READ_FAILED', isTrustedRendererUrl, handler: () => {
+      if (!provider.readTerritoryClearance) throw new Error('Territory clearance unavailable');
+      return provider.readTerritoryClearance();
+    } }));
+    disposers.push(registerValidatedIpc({ channel: 'local-workspace:territory-clearance-confirm', requestSchema: confirmTerritoryClearanceSchema, responseSchema: territoryClearanceSnapshotSchema, safeErrorCode: 'LOCAL_TERRITORY_CLEARANCE_CONFIRM_FAILED', isTrustedRendererUrl, handler: async input => {
+      const parsed = Object.freeze(confirmTerritoryClearanceSchema.parse(input));
+      if (!provider.confirmTerritoryClearance) throw new Error('Territory clearance unavailable');
+      const result = territoryClearanceSnapshotSchema.parse(await provider.confirmTerritoryClearance(parsed));
+      for (const state of parsed.states) if (result.states.find(entry => entry.state === state)?.status !== 'confirmed') throw new Error('Territory clearance confirmation incomplete');
+      return result;
+    } }));
+    disposers.push(registerValidatedIpc({ channel: 'local-workspace:territory-clearance-revoke', requestSchema: revokeTerritoryClearanceSchema, responseSchema: territoryClearanceSnapshotSchema, safeErrorCode: 'LOCAL_TERRITORY_CLEARANCE_REVOKE_FAILED', isTrustedRendererUrl, handler: async input => {
+      const parsed = Object.freeze(revokeTerritoryClearanceSchema.parse(input));
+      if (!provider.revokeTerritoryClearance) throw new Error('Territory clearance unavailable');
+      const result = territoryClearanceSnapshotSchema.parse(await provider.revokeTerritoryClearance(parsed));
+      if (result.states.find(entry => entry.state === parsed.state)?.status !== 'revoked') throw new Error('Territory clearance revocation incomplete');
+      return result;
+    } }));
   } catch (error) {
     const errors = cleanup();
     if (errors.length) throw new AggregateError([error, ...errors], 'Local workspace registration rollback failed');

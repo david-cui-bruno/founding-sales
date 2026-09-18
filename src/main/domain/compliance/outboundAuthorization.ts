@@ -44,6 +44,14 @@ type AuthorizationInput = {
     expiresAt: string | null;
   } | null;
   windows: ChannelPolicySnapshots;
+  /**
+   * Present only when the founder's per-state territory clearance (design D4),
+   * not a federal scrub, is the basis for calling a listed business number.
+   * It admits `federalStatus: 'unknown'` and `tcpaFlag: null` honestly recorded
+   * as never scrubbed; a known listing, a TCPA flag or stale scrub evidence
+   * still blocks, and every later gate (jurisdiction, clearance, window) stays.
+   */
+  federalBasis?: 'business_to_business';
 };
 
 const refused = (reasonCode: OutboundAuthorizationReasonCode): OutboundAuthorizationDecision => (
@@ -80,7 +88,13 @@ export function evaluateOutboundAuthorization(input: AuthorizationInput): Outbou
     evidence: input.contact.evidence,
     now: input.now,
   });
-  if (federal.kind === 'blocked') return refused(federal.reasonCode);
+  if (federal.kind === 'blocked') {
+    // Only the honest never-scrubbed record may rest on the business-to-business basis; a listing, a TCPA
+    // flag, or scrub evidence that exists but fails its own checks refuses exactly as before.
+    if (input.federalBasis === 'business_to_business' && input.contact.evidence.tcpaFlag === true) return refused('tcpa_blocked');
+    const neverScrubbed = input.contact.evidence.federalStatus === 'unknown' && input.contact.evidence.tcpaFlag === null;
+    if (!(input.federalBasis === 'business_to_business' && neverScrubbed)) return refused(federal.reasonCode);
+  }
   if (input.jurisdiction === null) return refused('jurisdiction_unknown');
   const reviewAt = input.jurisdiction.reviewAt === null ? null : instant(input.jurisdiction.reviewAt);
   if (input.jurisdiction.reviewAt !== null && (reviewAt === null || reviewAt <= now)) {
