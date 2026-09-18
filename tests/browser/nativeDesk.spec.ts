@@ -1209,10 +1209,11 @@ async function watchClipboard(page: Page) {
 async function setPhoneSetup(page: Page, state: 'configured' | 'unavailable') {
   await page.evaluate(next => {
     const f = window.nativeDeskBrowser.fixture;
-    f.api.phoneSetup = {
-      status: async () => { f.calls.push({ method: 'phoneSetup.status' }); return next === 'configured'
-        ? { state: 'configured' as const, candidateFingerprint: 'fictional-helper', confirmedAt: '2026-09-18T12:00:00.000Z' }
-        : { state: 'unavailable' as const, candidateFingerprint: null, confirmedAt: null }; },
+    const configured: { state: string; candidateFingerprint: string | null; confirmedAt: string | null } =
+      { state: 'configured', candidateFingerprint: 'fictional-helper', confirmedAt: '2026-09-18T12:00:00.000Z' };
+    const unavailable: typeof configured = { state: 'unavailable', candidateFingerprint: null, confirmedAt: null };
+    (f.api as { phoneSetup?: unknown }).phoneSetup = {
+      status: async () => { f.calls.push({ method: 'phoneSetup.status' }); return next === 'configured' ? configured : unavailable; },
       confirm: async () => { throw new Error('No setup mutation from the call card'); },
       clear: async () => { throw new Error('No setup mutation from the call card'); },
     };
