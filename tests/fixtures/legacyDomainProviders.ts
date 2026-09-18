@@ -93,7 +93,6 @@ export function createLegacyLeadDetailProvider(
       ? unavailableOutboundCapabilities() : outbound.getCapabilities(),
     confirmTransition: (input: Input<'confirmTransition'>) => runtime.withDomain((domain) => domain.confirmTransition(input)),
     dismissLead: (input: Input<'dismissLead'>) => runtime.withDomain((domain) => domain.dismissLead(input)),
-    overrideCloudScore: (input: Input<'enqueueCloudScoreOverride'>) => runtime.withDomain((domain) => domain.enqueueCloudScoreOverride(input)),
     findContactInfo: async (input: FindContactInfoRequest): Promise<FindContactInfoReceipt> => (
       enrichmentRequester === undefined
         ? { written: false, refusalReason: 'credentials_unavailable' }
