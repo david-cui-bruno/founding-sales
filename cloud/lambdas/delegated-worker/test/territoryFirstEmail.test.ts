@@ -245,6 +245,29 @@ describe('a territory firm receives its first email', () => {
     expect(await paused.threads.scope(paused.account.id, 'mailbox')).toBeNull();
   });
 
+  it('recovers its own abandoned reservation of the derived command id, and never another pairing\'s', async () => {
+    const f = await fixture();
+    await f.approvePolicy();
+    await f.approveTemplate();
+    const commandId = territoryMailScopeCommandId(f.account.id, 'mailbox');
+    const claimKey = `OWNER_COMMAND_CLAIM#${commandId}`;
+    // What one lost transaction leaves behind: the tick's own claim of its own derived id, fingerprinting an
+    // authority version that can no longer be applied. The firm would otherwise be stuck behind it forever.
+    await f.dynamoStore.transact([f.dynamoStore.put(claimKey, { fingerprint: 'f'.repeat(64), pairingId: f.pair.pairingId, at: DAY_ZERO }, null)]);
+    expect((await f.tick()).mailScopes).toMatchObject({ configured: 1, failed: 0 });
+    expect((await f.threads.scope(f.account.id, 'mailbox'))!.revision).toBe(1);
+
+    // A claim another pairing holds is never touched, and the firm is left exactly as it is.
+    const other = await fixture();
+    await other.approvePolicy();
+    await other.approveTemplate();
+    const held = { fingerprint: 'f'.repeat(64), pairingId: '00000000-0000-4000-8000-00000000abcd', at: DAY_ZERO };
+    await other.dynamoStore.transact([other.dynamoStore.put(`OWNER_COMMAND_CLAIM#${territoryMailScopeCommandId(other.account.id, 'mailbox')}`, held, null)]);
+    expect((await other.tick()).mailScopes).toMatchObject({ configured: 0, failed: 1 });
+    expect(await other.threads.scope(other.account.id, 'mailbox')).toBeNull();
+    expect(other.db.inspect(`OWNER_COMMAND_CLAIM#${territoryMailScopeCommandId(other.account.id, 'mailbox')}`)).toEqual(held);
+  });
+
   it('bounds the firms of one tick and carries the counts into the tick record', async () => {
     expect(TERRITORY_MAIL_SCOPE_TICK_LIMIT).toBe(25);
     const f = await fixture({ firms: 30 });
