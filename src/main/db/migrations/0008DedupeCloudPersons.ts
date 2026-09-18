@@ -1,11 +1,8 @@
+import { z } from 'zod';
 import { sql, type Kysely } from 'kysely';
 
 import type { FoundationDatabase } from '../schema';
 import { normalizeCloudDisplayName } from '../../domain/source/cloudNameMatching';
-import {
-  serializeCanonicalIntakeResult,
-  type StoredIntakeResult,
-} from '../../domain/source/intakeReceiptRepository';
 
 /**
  * Data repair for the cloud duplicate-person bug (schema 8).
@@ -48,6 +45,82 @@ type MergePlan = {
   duplicateProspectId: string | null;
   duplicateCycleIds: string[];
 };
+
+/*
+ * Receipt payload rewriting, inlined verbatim from the intake receipt
+ * repository (D11 step 2). A migration must be frozen at the shape schema 8
+ * wrote: it may never drift with a live domain module, and it must keep
+ * running after that module is deleted. Behaviour is byte-for-byte the
+ * repository's `serializeCanonicalIntakeResult`.
+ */
+
+type JsonPrimitive = boolean | number | string | null;
+type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
+type JsonObject = { [key: string]: JsonValue };
+
+const idSchema = z.string().trim().min(1);
+const identityReviewReasonSchema = z.enum([
+  'shared_handle', 'conflicting_handle_matches',
+  'indirect_handle_match', 'deleted_person_match',
+]);
+const contextReviewReasonSchema = z.enum([
+  'ambiguous_organization', 'ambiguous_property',
+  'organization_not_found', 'property_organization_conflict',
+]);
+
+export type StoredIntakeResult = {
+  disposition: 'created' | 'matched_existing' | 'created_merge_review';
+  personId: string;
+  prospectId: string;
+  sourceEventId: string;
+  identityReviewReason: z.infer<typeof identityReviewReasonSchema> | null;
+  contextReviewReasons: Array<z.infer<typeof contextReviewReasonSchema>>;
+  organizationIds: string[];
+  propertyIds: string[];
+};
+
+const intakeResultSchema = z.object({
+  disposition: z.enum(['created', 'matched_existing', 'created_merge_review']),
+  personId: idSchema,
+  prospectId: idSchema,
+  sourceEventId: idSchema,
+  identityReviewReason: identityReviewReasonSchema.nullable(),
+  contextReviewReasons: z.array(contextReviewReasonSchema),
+  organizationIds: z.array(idSchema),
+  propertyIds: z.array(idSchema),
+}).strict();
+
+function compareStrings(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+}
+
+function canonicalizeJson(value: unknown): JsonValue {
+  if (value === null) return null;
+  if (typeof value === 'string' || typeof value === 'boolean') return value;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (Array.isArray(value)) return value.map(canonicalizeJson);
+  if (typeof value === 'object') {
+    const output: JsonObject = {};
+    for (const [key, child] of Object.entries(value).sort(([left], [right]) => (
+      compareStrings(left, right)
+    ))) {
+      output[key] = canonicalizeJson(child);
+    }
+    return output;
+  }
+  throw new z.ZodError([]);
+}
+
+function serializeCanonicalJson(value: unknown): string {
+  return JSON.stringify(canonicalizeJson(value));
+}
+
+export function serializeCanonicalIntakeResult(result: StoredIntakeResult): string {
+  const parsed = intakeResultSchema.parse(result) as StoredIntakeResult;
+  return serializeCanonicalJson({ formatVersion: 1, result: parsed });
+}
 
 /** Trigger name -> exact recreation DDL (0002/0005 text, verbatim). */
 const REPAIR_TRIGGERS: Record<string, string> = {

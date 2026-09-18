@@ -18,7 +18,6 @@ import { collectLeadTriageSnapshot, type LeadTriageQueueRow } from '../today/lea
 import { leadTriageSnapshotRequestSchema, type LeadTriageSnapshot, type LeadTriageSnapshotRequest } from '../../shared/contracts/leadTriageReportContract';
 import { createHash } from 'node:crypto';
 import { ListCursorError, pageFromSnapshot } from './support/listCursor';
-import { reactivationReviewPayloadSchema } from './lifecycle/reactivationContracts';
 
 import { parseCsvSource, type CsvParseError } from '../imports/csvParser';
 import { z } from 'zod';
@@ -87,44 +86,6 @@ import {
   type TriageQueue,
 } from '../../shared/contracts/todayContract';
 import {
-  pipelineSnapshotSchema,
-  type PipelineSnapshot,
-} from '../../shared/contracts/pipelineContract';
-import {
-  resolveReviewRequestSchema,
-  reviewListRequestSchema,
-  reviewSnapshotSchema,
-  type ResolveReviewRequest,
-  type ReviewItem,
-  type ReviewListRequest,
-  type ReviewSnapshot,
-} from '../../shared/contracts/reviewContract';
-import type {
-  AttachTranscriptRequest,
-  ConversationDetail,
-  ConversationDetailRequest,
-  ConversationsListRequest,
-  ConversationsListResponse,
-} from '../../shared/contracts/conversationsContract';
-import type {
-  AddEvidenceRequest,
-  CaptureLearningRequest,
-  LearningsListRequest,
-  LearningsListResponse,
-  UpdateLearningStatusRequest,
-} from '../../shared/contracts/learningsContract';
-import {
-  attachTranscript,
-  getConversationDetail,
-  listConversations,
-} from './conversations/conversationsDomain';
-import {
-  addLearningEvidence,
-  captureLearning,
-  listLearnings,
-  updateLearningStatus,
-} from './learnings/learningsDomain';
-import {
   cancelJobRequestSchema,
   createJobRequestSchema,
   fillJobRequestSchema,
@@ -163,16 +124,11 @@ import {
 import { PLAYBOOK_CHANNEL_POLICIES_V2 } from './cadence/cadenceScheduler';
 import { comparePhoneCandidates } from './contacts/contactPresentation';
 import type { DomainServices } from './createDomainServices';
-import {
-  isCloudPublicRecordChannel,
-  normalizeCloudDisplayName,
-} from './source/cloudNameMatching';
 import type {
   CreatePersonProspectCommand,
   IntakeContactInput,
-  IntakeResult,
 } from './source/sourceService';
-import { normalizeEmail, normalizePhone } from './source/sourceService';
+import { normalizeEmail, normalizePhone } from './source/contactNormalization';
 import type { Clock } from './support/clock';
 import type { IdGenerator } from './support/idGenerator';
 import type { TodayItem, TodayLane } from './today/todayTypes';
@@ -336,11 +292,6 @@ const LANE_MAP: Readonly<Record<TodayLane, TodayLaneId>> = Object.freeze({
   exploration: 'exploration',
   later: 'later',
 });
-
-const PIPELINE_STAGE_ORDER = [
-  'unreviewed', 'ready', 'contacted', 'interviewed', 'offered', 'won', 'lost_nurture',
-] as const;
-
 function toPriorityContext(row: ProjectionRow | undefined): LeadPriorityContext | null {
   if (row === undefined) return null;
   return {
@@ -1977,147 +1928,6 @@ export class FounderSalesDomain implements OutboundDomainPort {
     });
   }
 
-  // ------------------------------------------------------------- pipeline
-
-  getPipelineProjection(): PipelineSnapshot {
-    const rows = this.database.raw.prepare(`
-      SELECT
-        cycle.id AS cycle_id, cycle.person_id, cycle.prospect_id, cycle.stage,
-        cycle.workflow_status, cycle.stage_entered_at, cycle.close_reason,
-        person.display_name,
-        action.id AS action_id, action.action_type, action.channel AS action_channel,
-        action.status AS action_status, action.work_intent, action.due_at AS action_due_at,
-        projection.fit_points, projection.fit_band, projection.timing_millipoints,
-        projection.timing_band, projection.reachability, projection.data_confidence,
-        projection.priority,
-        (
-          SELECT canonical_name FROM prospect_organizations AS link
-          JOIN organizations AS org ON org.id = link.organization_id
-          WHERE link.prospect_id = cycle.prospect_id
-          ORDER BY org.id ASC LIMIT 1
-        ) AS organization_name
-      FROM sales_cycles AS cycle
-      JOIN persons AS person ON person.id = cycle.person_id
-      LEFT JOIN next_actions AS action ON action.id = cycle.current_next_action_id
-      LEFT JOIN prospect_priority_projection AS projection
-        ON projection.prospect_id = cycle.prospect_id
-      ORDER BY cycle.stage_entered_at ASC, cycle.id ASC
-    `).all() as Array<{
-      cycle_id: string; person_id: string; prospect_id: string; stage: LeadRow['stage'];
-      workflow_status: 'active' | 'onboarding' | 'closed'; stage_entered_at: string;
-      close_reason: string | null; display_name: string;
-      action_id: string | null; action_type: string | null; action_channel: string | null;
-      action_status: string | null; work_intent: string | null; action_due_at: string | null;
-      fit_points: number | null; fit_band: ProjectionRow['fit_band'] | null;
-      timing_millipoints: number | null; timing_band: ProjectionRow['timing_band'] | null;
-      reachability: ProjectionRow['reachability'] | null; data_confidence: number | null;
-      priority: ProjectionRow['priority'] | null;
-      organization_name: string | null;
-    }>;
-    const byStage = new Map<string, typeof rows>(
-      PIPELINE_STAGE_ORDER.map((stage) => [stage, [] as typeof rows]),
-    );
-    for (const row of rows) byStage.get(row.stage)?.push(row);
-    return pipelineSnapshotSchema.parse({
-      stages: PIPELINE_STAGE_ORDER.map((stage) => ({
-        stage,
-        cards: byStage.get(stage)!.map((row) => ({
-          personId: row.person_id,
-          salesCycleId: row.cycle_id,
-          personName: row.display_name,
-          contextLabel: row.organization_name,
-          stage: row.stage,
-          stageEnteredAt: row.stage_entered_at,
-          priorityContext: row.priority === null
-            ? null
-            : toPriorityContext({
-              prospect_id: row.prospect_id,
-              fit_points: row.fit_points!,
-              fit_band: row.fit_band!,
-              timing_millipoints: row.timing_millipoints!,
-              timing_band: row.timing_band!,
-              reachability: row.reachability!,
-              data_confidence: row.data_confidence!,
-              priority: row.priority,
-              version: 1,
-              evaluation_id: '',
-            }),
-          nextAction: row.action_id === null || row.action_status !== 'pending' ? null : {
-            id: row.action_id,
-            dueAt: row.action_due_at,
-            type: row.action_type!,
-            channel: actionChannel({
-              actionType: row.action_type!,
-              channel: row.action_channel,
-              workIntent: row.work_intent,
-              onboarding: row.workflow_status === 'onboarding',
-            }),
-            label: actionLabel(row.action_type!),
-          },
-          lostReasonCode: row.stage === 'lost_nurture' ? row.close_reason : null,
-        })),
-      })),
-      revision: this.currentRevision(),
-    });
-  }
-
-  // --------------------------------------------------------------- review
-
-  listReviewItems(input: ReviewListRequest): ReviewSnapshot {
-    const request = reviewListRequestSchema.parse(input);
-    return this.readListSnapshot(() => {
-      const rows = this.database.raw.prepare(`
-        SELECT id, person_id, reason, payload_json, created_at, version
-        FROM lifecycle_review_items WHERE status = 'open'
-        ORDER BY created_at ASC, id ASC
-      `).all() as {
-        id: string; person_id: string; reason: string; payload_json: string; created_at: string; version: number;
-      }[];
-      const items: ReviewItem[] = rows.map(row => {
-        let raw: unknown;
-        try { raw = JSON.parse(row.payload_json); } catch { raw = null; }
-        const parsed = reactivationReviewPayloadSchema.safeParse(raw);
-        if (parsed.success) {
-          const payload = parsed.data;
-          const command = payload.command;
-          if (payload.blocker === 'unknown_inbound_handle'
-            && 'evidence' in command && command.evidence.kind === 'unknown_handle') {
-            return {
-              kind: 'unmatched_communication', reviewId: row.id,
-              channel: command.evidence.handleKind === 'email' ? 'email' : 'text',
-              handle: command.evidence.normalizedValue, occurredAt: row.created_at, summary: row.reason,
-            };
-          }
-          return { kind: 'system_error', reviewId: row.id, invariant: payload.blocker,
-            summary: row.reason, personId: row.person_id };
-        }
-        return { kind: 'system_error', reviewId: row.id, invariant: 'review_payload_unreadable',
-          summary: 'This local review could not be read. Its evidence has been retained.', personId: row.person_id };
-      });
-      const unmatched = items.filter(item => item.kind === 'unmatched_communication').length;
-      const kinds = [...new Set(request.kinds)].sort();
-      const filtered = kinds.length === 0 ? items : items.filter(item => kinds.includes(item.kind));
-      const page = pageFromSnapshot({
-        scope: 'review', queryKey: JSON.stringify({ scope: 'review', kinds, limit: request.limit }),
-        snapshotKey: JSON.stringify({ availabilityVersion: 1, rows }), rows: filtered,
-        cursor: request.cursor ?? null, limit: request.limit,
-      });
-      return reviewSnapshotSchema.parse({
-        items: page.rows, nextCursor: page.nextCursor, matchedCount: filtered.length,
-        totalOpenCount: items.length, revision: this.currentRevision(),
-        countScope: 'lifecycle_review_items', observedAt: this.clock.now(),
-        queues: {
-          unmatched_communication: { source: 'lifecycle_review_items', openCount: unmatched },
-          system_error: { source: 'lifecycle_review_items', openCount: items.length - unmatched },
-          ambiguous_identity: { source: 'not_integrated', openCount: null },
-          transcript_suggestion: { source: 'not_integrated', openCount: null },
-          import_problem: { source: 'not_integrated', openCount: null },
-          adapter_failure: { source: 'not_integrated', openCount: null },
-        },
-      });
-    });
-  }
-
   /** One deferred read snapshot, or the caller's existing snapshot. Never a write UoW. */
   private readListSnapshot<T>(read: () => T): T {
     try {
@@ -2126,92 +1936,6 @@ export class FounderSalesDomain implements OutboundDomainPort {
       if (error instanceof ListCursorError) throw new FounderSalesDomainError(error.code, error.code);
       throw error;
     }
-  }
-
-  resolveReviewItem(input: ResolveReviewRequest): MutationReceipt {
-    const request = resolveReviewRequestSchema.parse(input);
-    if (request.kind !== 'unmatched_communication' || request.action !== 'promote') {
-      throw new FounderSalesDomainError(
-        'REVIEW_RESOLUTION_UNSUPPORTED',
-        'This review kind has no V1 resolution command yet.',
-      );
-    }
-    if (request.sourceEventId === null) {
-      throw new FounderSalesDomainError(
-        'REVIEW_RESOLUTION_UNSUPPORTED', 'Promotion requires the matched source event.',
-      );
-    }
-    const now = this.clock.now();
-    const review = this.database.raw.prepare(`
-      SELECT id, activation_key, version, person_id, payload_json
-      FROM lifecycle_review_items WHERE id = ? AND status = 'open'
-    `).get(request.reviewId) as {
-      id: string; activation_key: string; version: number; person_id: string; payload_json: string;
-    } | undefined;
-    if (review === undefined) {
-      throw new FounderSalesDomainError('REVIEW_NOT_FOUND', 'The review item is not open.');
-    }
-    const source = this.database.raw.prepare(
-      'SELECT channel FROM source_events WHERE id = ?',
-    ).get(request.sourceEventId) as { channel: string } | undefined;
-    const allowed = ['inbound_demo', 'referral', 'rireig', 'community'] as const;
-    if (source === undefined || !(allowed as readonly string[]).includes(source.channel)) {
-      throw new FounderSalesDomainError(
-        'REVIEW_RESOLUTION_UNSUPPORTED', 'The source event cannot promote this review.',
-      );
-    }
-    const payload = JSON.parse(review.payload_json) as {
-      command: { cadence: unknown };
-    };
-    const result = this.services.lifecycle.promoteUnknownInboundReview({
-      reviewId: review.id,
-      activationKey: review.activation_key,
-      expectedReviewVersion: request.expectedVersion,
-      sourceEventId: request.sourceEventId,
-      channel: source.channel as typeof allowed[number],
-      activatedAt: now,
-      cadence: payload.command.cadence as never,
-    });
-    const cycleIds = result.kind === 'reactivated' ? [result.cycle.id] : [];
-    return this.receipt([review.person_id], cycleIds);
-  }
-
-  // ------------------------------------------------------- conversations
-
-  listConversations(input: ConversationsListRequest): ConversationsListResponse {
-    return listConversations(this.featureDeps(), input);
-  }
-
-  getConversationDetail(input: ConversationDetailRequest): ConversationDetail {
-    return getConversationDetail(this.featureDeps(), input);
-  }
-
-  attachTranscript(input: AttachTranscriptRequest): MutationReceipt {
-    // attachTranscript opens its own immediate transaction; wrapping it in
-    // unitOfWork.immediate would nest BEGIN IMMEDIATE and fail.
-    return attachTranscript(this.featureDeps(), input);
-  }
-
-  // ----------------------------------------------------------- learnings
-
-  listLearnings(input: LearningsListRequest): LearningsListResponse {
-    return listLearnings(this.featureDeps(), input);
-  }
-
-  captureLearning(input: CaptureLearningRequest): MutationReceipt {
-    return captureLearning(this.featureDeps(), input);
-  }
-
-  addLearningEvidence(input: AddEvidenceRequest): MutationReceipt {
-    return addLearningEvidence(this.featureDeps(), input);
-  }
-
-  updateLearningStatus(input: UpdateLearningStatusRequest): MutationReceipt {
-    return updateLearningStatus(this.featureDeps(), input);
-  }
-
-  private featureDeps(): { database: AppDatabase; clock: Clock; ids: IdGenerator } {
-    return { database: this.database, clock: this.clock, ids: this.ids };
   }
 
   // -------------------------------------------------------------- friday
@@ -2909,394 +2633,6 @@ export class FounderSalesDomain implements OutboundDomainPort {
     };
   }
 
-  // ------------------------------------------------------------- sourcing
-
-  /** Durable poller cursor; null until the first completed poll. */
-  getSourcingCursor(): { lastKey: string | null; polledAt: string | null } {
-    const row = this.database.raw.prepare(
-      'SELECT last_key, polled_at FROM sourcing_cursor WHERE id = 1',
-    ).get() as { last_key: string | null; polled_at: string } | undefined;
-    return row === undefined
-      ? { lastKey: null, polledAt: null }
-      : { lastKey: row.last_key, polledAt: row.polled_at };
-  }
-
-  /** Advance the cursor after one inbox object has fully processed. */
-  recordSourcingPoll(input: { lastKey: string | null }): void {
-    const lastKey = z.string().min(1).nullable().parse(input.lastKey);
-    const now = this.clock.now();
-    this.services.unitOfWork.immediate(() => {
-      this.database.raw.prepare(`
-        INSERT INTO sourcing_cursor (id, last_key, polled_at)
-        VALUES (1, ?, ?)
-        ON CONFLICT (id) DO UPDATE SET
-          last_key = excluded.last_key,
-          polled_at = excluded.polled_at
-      `).run(lastKey, now);
-    });
-  }
-
-  /**
-   * Every inbox key that has fully processed (schema 9). The ledger, not the
-   * cursor, defines poller progress: a key missing from this set is fetched
-   * regardless of how it sorts against previously processed keys.
-   */
-  getProcessedFileKeys(): Set<string> {
-    const rows = this.database.raw.prepare(
-      'SELECT key FROM sourcing_processed_files',
-    ).all() as { key: string }[];
-    return new Set(rows.map((row) => row.key));
-  }
-
-  /** Ledger one inbox object after the WHOLE file has processed. */
-  recordProcessedFile(input: { key: string }): void {
-    const key = z.string().min(1).parse(input.key);
-    const now = this.clock.now();
-    this.services.unitOfWork.immediate(() => {
-      this.database.raw.prepare(`
-        INSERT INTO sourcing_processed_files (key, processed_at)
-        VALUES (?, ?)
-        ON CONFLICT (key) DO NOTHING
-      `).run(key, now);
-    });
-  }
-
-  /**
-   * TTL for the processed-file ledger: rows older than 90 days are pruned
-   * at the end of each successful poll. The cloud inbox retains files far
-   * shorter than that, so a pruned key can never be re-listed and
-   * re-processed; the ledger stays bounded instead of growing forever.
-   * Returns the number of pruned rows.
-   */
-  pruneProcessedFileLedger(): number {
-    const now = this.clock.now();
-    const cutoff = new Date(
-      new Date(now).getTime() - 90 * 24 * 60 * 60 * 1000,
-    ).toISOString();
-    return this.services.unitOfWork.immediate(() => (
-      this.database.raw.prepare(
-        'DELETE FROM sourcing_processed_files WHERE processed_at < ?',
-      ).run(cutoff).changes
-    ));
-  }
-
-  /**
-   * One person-bearing cloud event through the standard intake pipeline.
-   * `source_intake_receipts` (keyed `cloud:<idempotency_key>`) makes replays
-   * no-ops; the cloud-entity link and the unreviewed cycle are created only
-   * on first import.
-   *
-   * Identity convergence (duplicate-person fix): BEFORE minting a person,
-   * the import resolves the incoming event against existing persons:
-   * 1. `cloud_entity_links` hit on the event's cloudEntityId -> the person
-   *    exists; append the source event to them (standard intake forced onto
-   *    that person, receipt included) instead of creating a duplicate.
-   * 2. Public-record channels only (parcel/deed/permit/violation): a UNIQUE
-   *    normalized display-name match against persons that already have a
-   *    cloud entity link -> same append path, plus a new link row for this
-   *    cloudEntityId (many cloud entity ids may point at one person).
-   *    Manually-created persons (no link) are never name-matched.
-   * 3. Ambiguous name matches (2+ persons) fall through to create: dupes
-   *    are recoverable, wrong merges are not.
-   */
-  importCloudSourceEvent(input: {
-    command: CreatePersonProspectCommand;
-    cloudEntityId: string | null;
-  }): IntakeResult & { replayed: boolean } {
-    // A replayed event returns its stored receipt with the ORIGINAL
-    // disposition, so callers cannot tell a fresh import from a replay by
-    // disposition alone. Full inbox re-reads after the schema-9 cursor reset
-    // made that distinction matter for counters: report whether the receipt
-    // pre-existed.
-    const replayed = this.database.raw.prepare(
-      'SELECT 1 FROM source_intake_receipts WHERE source_event_id = ?',
-    ).get(input.command.source.id) !== undefined;
-    const matchedPersonId = this.resolveCloudPerson(input);
-    const result = matchedPersonId === null
-      ? this.services.sources.createPersonProspect(input.command)
-      : this.services.sources.createPersonProspectForPerson(
-        input.command, matchedPersonId,
-      );
-    if (result.disposition === 'created') {
-      // Migration can rebind a 'created' receipt to a canonical pair while
-      // removing its duplicate cycle. Any lifecycle for that pair, including
-      // closed or parked history, already fulfills the initial-cycle import.
-      const cycleExists = this.database.raw.prepare(`
-        SELECT 1 FROM sales_cycles
-        WHERE entry_source_event_id = ? OR (person_id = ? AND prospect_id = ?)
-        LIMIT 1
-      `).get(result.sourceEventId, result.personId, result.prospectId) !== undefined;
-      if (!cycleExists) {
-        this.services.lifecycle.createUnreviewedCycle({
-          personId: result.personId,
-          prospectId: result.prospectId,
-          entrySourceEventId: result.sourceEventId,
-          effectiveAt: this.clock.now(),
-        });
-      }
-    }
-    if (input.cloudEntityId !== null) {
-      this.services.unitOfWork.immediate(() => {
-        this.database.raw.prepare(`
-          INSERT INTO cloud_entity_links (cloud_entity_id, person_id, linked_at)
-          VALUES (?, ?, ?)
-          ON CONFLICT (cloud_entity_id) DO NOTHING
-        `).run(input.cloudEntityId, result.personId, this.clock.now());
-      });
-    }
-    return { ...result, replayed };
-  }
-
-  /**
-   * Cloud-entity-link-first person resolution for one incoming cloud event.
-   * Returns the existing person to append to, or null to create.
-   */
-  private resolveCloudPerson(input: {
-    command: CreatePersonProspectCommand;
-    cloudEntityId: string | null;
-  }): string | null {
-    if (input.cloudEntityId !== null) {
-      const link = this.database.raw.prepare(
-        'SELECT person_id FROM cloud_entity_links WHERE cloud_entity_id = ?',
-      ).get(input.cloudEntityId) as { person_id: string } | undefined;
-      if (link !== undefined) return link.person_id;
-    }
-    if (
-      input.cloudEntityId === null
-      || !isCloudPublicRecordChannel(input.command.source.channel)
-    ) {
-      return null;
-    }
-    const normalizedName = normalizeCloudDisplayName(input.command.person.displayName);
-    if (normalizedName.length === 0) return null;
-    // Only persons that already carry a cloud entity link are candidates:
-    // name-matching manually-created persons is too risky.
-    const candidates = this.findCloudLinkedPersonsByNormalizedName(normalizedName);
-    if (candidates.length === 1) return candidates[0]!.id;
-    if (candidates.length > 1) {
-      // Ambiguous: creating a recoverable duplicate beats a wrong merge.
-      console.info('SOURCING_CLOUD_NAME_MATCH_AMBIGUOUS', {
-        count: candidates.length,
-      });
-    }
-    return null;
-  }
-
-  /**
-   * SQL cannot express the full punctuation-stripping normalization, so scan
-   * the (small) set of cloud-linked persons and normalize in process.
-   */
-  private findCloudLinkedPersonsByNormalizedName(
-    normalizedName: string,
-  ): { id: string }[] {
-    const rows = this.database.raw.prepare(`
-      SELECT DISTINCT person.id, person.display_name
-      FROM persons AS person
-      JOIN cloud_entity_links AS link ON link.person_id = person.id
-      WHERE person.deleted_at IS NULL
-      ORDER BY person.id ASC
-    `).all() as { id: string; display_name: string }[];
-    return rows
-      .filter((row) => normalizeCloudDisplayName(row.display_name) === normalizedName)
-      .map((row) => ({ id: row.id }));
-  }
-
-  /**
-   * Applies a scorer re-emission to the prospect that the original intake
-   * created, located through the `cloud:<idempotency_key>` receipt. Unknown
-   * receipts return false so the poller can count-and-skip; stale
-   * scores_version replays are no-ops (idempotent by design).
-   *
-   * Version guard with a timestamp tiebreaker: a HIGHER version always
-   * wins regardless of timestamps; a SAME-version update applies only when
-   * its scoredAt is >= the stored cloud_scored_at, so a replayed old
-   * correction can never regress a fresher same-version score.
-   */
-  applyCloudScoreUpdate(input: {
-    receiptKey: string;
-    scoresVersion: number;
-    fit: number;
-    timing: number;
-    reasons: readonly { signal: string; contribution: number }[];
-    scoredAt?: string;
-  }): boolean {
-    const parsed = z.object({
-      receiptKey: z.string().min(1),
-      scoresVersion: z.number().int().min(1),
-      fit: z.number().min(0).max(100),
-      timing: z.number().min(0).max(100),
-      reasons: z.array(z.object({
-        signal: z.string().min(1),
-        contribution: z.number(),
-      }).strict()).min(1).max(3),
-      scoredAt: z.string().datetime({ offset: true }).optional(),
-    }).strict().parse(input);
-    const receipt = this.database.raw.prepare(
-      'SELECT prospect_id FROM source_intake_receipts WHERE source_event_id = ?',
-    ).get(parsed.receiptKey) as { prospect_id: string } | undefined;
-    if (receipt === undefined) return false;
-    const now = this.clock.now();
-    const scoredAt = parsed.scoredAt ?? now;
-    this.services.unitOfWork.immediate(() => {
-      this.database.raw.prepare(`
-        UPDATE prospects SET
-          cloud_fit = ?,
-          cloud_timing = ?,
-          cloud_score_reasons_json = ?,
-          cloud_scores_version = ?,
-          cloud_scored_at = ?,
-          updated_at = ?
-        WHERE id = ?
-          AND (
-            cloud_scores_version IS NULL
-            OR cloud_scores_version < ?
-            OR (
-              cloud_scores_version = ?
-              AND (cloud_scored_at IS NULL OR cloud_scored_at <= ?)
-            )
-          )
-      `).run(
-        Math.round(parsed.fit),
-        Math.round(parsed.timing),
-        JSON.stringify(parsed.reasons),
-        parsed.scoresVersion,
-        scoredAt,
-        now,
-        receipt.prospect_id,
-        parsed.scoresVersion,
-        parsed.scoresVersion,
-        scoredAt,
-      );
-    });
-    return true;
-  }
-
-  /**
-   * Sweeps immutable stage events for linked persons into the outcome
-   * outbox and returns the unflushed rows. The deterministic row id
-   * `stage:<stage_event_id>` makes the sweep idempotent, and because stage
-   * events are append-only this is exactly "enqueue on transition" for
-   * every code path that can reach Interviewed/Offered/Won/Lost.
-   */
-  listUnflushedCloudOutcomes(): CloudOutcomeRow[] {
-    this.services.unitOfWork.immediate(() => {
-      this.database.raw.prepare(`
-        INSERT OR IGNORE INTO sourcing_outcome_outbox (
-          id, cloud_entity_id, label, loss_reason_code, override_direction,
-          observed_at, flushed_at
-        )
-        SELECT
-          'stage:' || event.id,
-          link.cloud_entity_id,
-          CASE event.to_stage WHEN 'lost_nurture' THEN 'lost' ELSE event.to_stage END,
-          CASE WHEN event.to_stage = 'lost_nurture' THEN cycle.close_reason ELSE NULL END,
-          NULL,
-          event.effective_at,
-          NULL
-        FROM stage_events AS event
-        JOIN sales_cycles AS cycle ON cycle.id = event.sales_cycle_id
-        JOIN cloud_entity_links AS link ON link.person_id = cycle.person_id
-        WHERE event.to_stage IN ('interviewed', 'offered', 'won', 'lost_nurture')
-      `).run();
-    });
-    const rows = this.database.raw.prepare(`
-      SELECT id, cloud_entity_id, label, loss_reason_code, override_direction,
-        observed_at
-      FROM sourcing_outcome_outbox
-      WHERE flushed_at IS NULL
-      ORDER BY observed_at ASC, id ASC
-    `).all() as Array<{
-      id: string; cloud_entity_id: string; label: string;
-      loss_reason_code: string | null; override_direction: string | null;
-      observed_at: string;
-    }>;
-    return rows.map((row) => ({
-      id: row.id,
-      cloudEntityId: row.cloud_entity_id,
-      label: row.label as CloudOutcomeRow['label'],
-      lossReasonCode: row.loss_reason_code,
-      overrideDirection: row.override_direction as CloudOutcomeRow['overrideDirection'],
-      observedAt: row.observed_at,
-    }));
-  }
-
-  /** Marks uploaded outbox rows flushed with the injected clock. */
-  markCloudOutcomesFlushed(input: { ids: readonly string[] }): void {
-    const ids = z.array(z.string().min(1)).parse(input.ids);
-    if (ids.length === 0) return;
-    const now = this.clock.now();
-    this.services.unitOfWork.immediate(() => {
-      const update = this.database.raw.prepare(
-        'UPDATE sourcing_outcome_outbox SET flushed_at = ? WHERE id = ? AND flushed_at IS NULL',
-      );
-      for (const id of ids) update.run(now, id);
-    });
-  }
-
-  /**
-   * Sweeps opt-out tombstone handles into the suppression outbox and returns
-   * the unflushed rows. The outbox is keyed by the handle id, so the sweep
-   * is idempotent and each handle uploads exactly once. Reason mapping:
-   * founder-entered blocks (observed_channel = 'manual') map to
-   * 'founder_block'; every other channel is a standard 'opt_out'.
-   * `wrong_person` has no app-side source yet, so it never serializes.
-   */
-  listUnflushedSuppressionHandles(): SuppressionOutboxRow[] {
-    this.services.unitOfWork.immediate(() => {
-      this.database.raw.prepare(`
-        INSERT OR IGNORE INTO sourcing_suppression_outbox (handle_id, flushed_at)
-        SELECT handle.id, NULL FROM opt_out_handles AS handle
-      `).run();
-    });
-    const rows = this.database.raw.prepare(`
-      SELECT handle.id, handle.kind, handle.normalized_value,
-        tombstone.observed_channel, tombstone.requested_at
-      FROM sourcing_suppression_outbox AS outbox
-      JOIN opt_out_handles AS handle ON handle.id = outbox.handle_id
-      JOIN opt_out_tombstones AS tombstone ON tombstone.id = handle.tombstone_id
-      WHERE outbox.flushed_at IS NULL
-      ORDER BY tombstone.requested_at ASC, handle.id ASC
-    `).all() as Array<{
-      id: string; kind: 'phone' | 'email'; normalized_value: string;
-      observed_channel: string; requested_at: string;
-    }>;
-    return rows.map((row) => ({
-      handleId: row.id,
-      kind: row.kind,
-      normalizedValue: row.normalized_value,
-      reason: row.observed_channel === 'manual'
-        ? 'founder_block' as const
-        : 'opt_out' as const,
-      observedAt: row.requested_at,
-    }));
-  }
-
-  /** Marks uploaded suppression outbox rows flushed with the injected clock. */
-  markSuppressionHandlesFlushed(input: { handleIds: readonly string[] }): void {
-    const handleIds = z.array(z.string().min(1)).parse(input.handleIds);
-    if (handleIds.length === 0) return;
-    const now = this.clock.now();
-    this.services.unitOfWork.immediate(() => {
-      const update = this.database.raw.prepare(
-        'UPDATE sourcing_suppression_outbox SET flushed_at = ? WHERE handle_id = ? AND flushed_at IS NULL',
-      );
-      for (const handleId of handleIds) update.run(now, handleId);
-    });
-  }
-
-  /**
-   * Everything the enrichment request writer needs for one person: the
-   * cloud entity link, the situs address of the first linked property that
-   * satisfies the vendor schema (line1 + locality + 2-letter region), the
-   * owner name, per-entity rate-limit timestamp, and persisted eligibility.
-   */
-  getEnrichmentRequestCandidate(input: { personId: string }): EnrichmentCandidate {
-    if (this.database.raw.inTransaction) return this.readEnrichmentRequestCandidate(input);
-    this.database.raw.exec('BEGIN');
-    try { return this.readEnrichmentRequestCandidate(input); }
-    finally { this.database.raw.exec('ROLLBACK'); }
-  }
-
   scanDiscoveryPage(input: { afterProspectId: string | null; limit: number }) { return this.discoveryWorkerCommands.scanDiscoveryPage(input); }
   enqueueDiscoveryPage(page: DiscoveryScanPage) { return this.discoveryWorkerCommands.enqueueDiscoveryPage(page); }
   scanAndEnqueueDiscoveryPage() { return this.discoveryWorkerCommands.scanAndEnqueueDiscoveryPage(); }
@@ -3314,6 +2650,19 @@ export class FounderSalesDomain implements OutboundDomainPort {
   beginDiscovery(input: BeginDiscoveryRequest) { return this.services.discovery.begin(input); }
   overrideDiscovery(input: OverrideDiscoveryRequest) { return this.services.discovery.override(input); }
   assessDiscoveryProspect(prospectId: string) { return this.services.discovery.assess(prospectId); }
+
+  /**
+   * Everything the enrichment request writer needs for one person: the
+   * cloud entity link, the situs address of the first linked property that
+   * satisfies the vendor schema (line1 + locality + 2-letter region), the
+   * owner name, per-entity rate-limit timestamp, and persisted eligibility.
+   */
+  getEnrichmentRequestCandidate(input: { personId: string }): EnrichmentCandidate {
+    if (this.database.raw.inTransaction) return this.readEnrichmentRequestCandidate(input);
+    this.database.raw.exec('BEGIN');
+    try { return this.readEnrichmentRequestCandidate(input); }
+    finally { this.database.raw.exec('ROLLBACK'); }
+  }
 
   private readEnrichmentRequestCandidate(input: { personId: string }): EnrichmentCandidate {
     const parsed = z.object({ personId: z.string().min(1) }).strict().parse(input);
@@ -3413,65 +2762,6 @@ export class FounderSalesDomain implements OutboundDomainPort {
         VALUES (?, ?)
         ON CONFLICT (cloud_entity_id) DO UPDATE SET last_requested_at = excluded.last_requested_at
       `).run(parsed.cloudEntityId, now);
-    });
-  }
-
-  /**
-   * Membership snapshot for the upstream upload: every linked cloud entity
-   * ID plus the normalized contact handles of manually-added persons (those
-   * WITHOUT a cloud entity link). Handles leave this process only as salted
-   * HMACs; the caller (upstreamSync) hashes them.
-   */
-  listCloudMembership(): {
-    cloudEntityIds: string[];
-    manualContacts: { kind: 'phone' | 'email'; normalizedValue: string }[];
-  } {
-    const cloudEntityIds = (this.database.raw.prepare(
-      'SELECT cloud_entity_id FROM cloud_entity_links ORDER BY cloud_entity_id ASC',
-    ).all() as { cloud_entity_id: string }[]).map((row) => row.cloud_entity_id);
-    const manualContacts = (this.database.raw.prepare(`
-      SELECT DISTINCT contact.kind, contact.normalized_value
-      FROM person_contact_methods AS contact
-      WHERE NOT EXISTS (
-        SELECT 1 FROM cloud_entity_links AS link
-        WHERE link.person_id = contact.person_id
-      )
-      ORDER BY contact.kind ASC, contact.normalized_value ASC
-    `).all() as { kind: 'phone' | 'email'; normalized_value: string }[])
-      .map((row) => ({ kind: row.kind, normalizedValue: row.normalized_value }));
-    return { cloudEntityIds, manualContacts };
-  }
-
-  /**
-   * Founder "wrong signal" control: log-only override row in the outcome
-   * outbox. Never changes any local score.
-   */
-  enqueueCloudScoreOverride(input: {
-    personId: string;
-    direction: 'up' | 'down';
-  }): MutationReceipt {
-    const parsed = z.object({
-      personId: z.string().min(1),
-      direction: z.enum(['up', 'down']),
-    }).strict().parse(input);
-    const link = this.database.raw.prepare(
-      'SELECT cloud_entity_id FROM cloud_entity_links WHERE person_id = ?',
-    ).get(parsed.personId) as { cloud_entity_id: string } | undefined;
-    if (link === undefined) {
-      throw new FounderSalesDomainError(
-        'LEAD_NOT_FOUND',
-        'The person has no cloud entity link, so there is no score to override.',
-      );
-    }
-    const now = this.clock.now();
-    return this.services.unitOfWork.immediate(() => {
-      this.database.raw.prepare(`
-        INSERT INTO sourcing_outcome_outbox (
-          id, cloud_entity_id, label, loss_reason_code, override_direction,
-          observed_at, flushed_at
-        ) VALUES (?, ?, 'override', NULL, ?, ?, NULL)
-      `).run(this.ids.next(), link.cloud_entity_id, parsed.direction, now);
-      return this.receipt([parsed.personId], []);
     });
   }
 

@@ -6,11 +6,11 @@ import type { OutboundCapabilities } from '../../src/shared/contracts/outboundCo
 
 /**
  * Test-only providers over the domain facade methods whose renderer surfaces
- * (legacy Today queue, Pipeline, Inbox reviews, Friday, CSV person import,
- * Conversations, Learnings) were removed from the desktop. The domain methods
- * themselves stay until PR B excises them; these thin gates keep their direct
- * domain tests and person-seeding helpers runnable in the meantime. Nothing
- * here is registered over IPC.
+ * (legacy Today queue, Friday, CSV person import, Leads, lead detail) were
+ * removed from the desktop. D11 step 4 excised the Pipeline, Inbox review,
+ * Conversations and Learnings facades and deleted their providers. These thin
+ * gates keep the remaining direct domain tests and person-seeding helpers
+ * runnable. Nothing here is registered over IPC.
  */
 type DomainGate = Pick<FoundationRuntime, 'withDomain'>;
 type Input<Method extends keyof FounderSalesDomain> =
@@ -33,19 +33,6 @@ export function createTodayProvider(runtime: DomainGate) {
 }
 export type TodayProvider = ReturnType<typeof createTodayProvider>;
 
-export function createPipelineProvider(runtime: DomainGate) {
-  return { get: () => runtime.withDomain((domain) => domain.getPipelineProjection()) };
-}
-export type PipelineProvider = ReturnType<typeof createPipelineProvider>;
-
-export function createReviewProvider(runtime: DomainGate) {
-  return {
-    list: (input: Input<'listReviewItems'>) => runtime.withDomain((domain) => domain.listReviewItems(input)),
-    resolve: (input: Input<'resolveReviewItem'>) => runtime.withDomain((domain) => domain.resolveReviewItem(input)),
-  };
-}
-export type ReviewProvider = ReturnType<typeof createReviewProvider>;
-
 export function createFridayProvider(runtime: DomainGate) {
   return {
     getCurrent: (input?: Input<'getFridayReport'>) => runtime.withDomain((domain) => domain.getFridayReport(input)),
@@ -66,25 +53,6 @@ export function createImportProvider(runtime: DomainGate) {
   };
 }
 export type ImportProvider = ReturnType<typeof createImportProvider>;
-
-export function createConversationsProvider(runtime: DomainGate) {
-  return {
-    list: (input: Input<'listConversations'>) => runtime.withDomain((domain) => domain.listConversations(input)),
-    get: (input: Input<'getConversationDetail'>) => runtime.withDomain((domain) => domain.getConversationDetail(input)),
-    attachTranscript: (input: Input<'attachTranscript'>) => runtime.withDomain((domain) => domain.attachTranscript(input)),
-  };
-}
-export type ConversationsProvider = ReturnType<typeof createConversationsProvider>;
-
-export function createLearningsProvider(runtime: DomainGate) {
-  return {
-    list: (input: Input<'listLearnings'>) => runtime.withDomain((domain) => domain.listLearnings(input)),
-    capture: (input: Input<'captureLearning'>) => runtime.withDomain((domain) => domain.captureLearning(input)),
-    addEvidence: (input: Input<'addLearningEvidence'>) => runtime.withDomain((domain) => domain.addLearningEvidence(input)),
-    updateStatus: (input: Input<'updateLearningStatus'>) => runtime.withDomain((domain) => domain.updateLearningStatus(input)),
-  };
-}
-export type LearningsProvider = ReturnType<typeof createLearningsProvider>;
 
 /** The pre-removal Leads slice: the surviving list read plus the two removed person writes. */
 export function createLegacyLeadsProvider(runtime: DomainGate) {
@@ -125,7 +93,6 @@ export function createLegacyLeadDetailProvider(
       ? unavailableOutboundCapabilities() : outbound.getCapabilities(),
     confirmTransition: (input: Input<'confirmTransition'>) => runtime.withDomain((domain) => domain.confirmTransition(input)),
     dismissLead: (input: Input<'dismissLead'>) => runtime.withDomain((domain) => domain.dismissLead(input)),
-    overrideCloudScore: (input: Input<'enqueueCloudScoreOverride'>) => runtime.withDomain((domain) => domain.enqueueCloudScoreOverride(input)),
     findContactInfo: async (input: FindContactInfoRequest): Promise<FindContactInfoReceipt> => (
       enrichmentRequester === undefined
         ? { written: false, refusalReason: 'credentials_unavailable' }

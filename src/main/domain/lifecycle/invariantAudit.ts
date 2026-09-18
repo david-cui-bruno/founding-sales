@@ -6,7 +6,7 @@ import {
   FOUNDER_CHANNEL_POLICIES_V1, PLAYBOOK_CHANNEL_POLICIES_V2, nextStrictFutureOctoberOne,
 } from '../cadence/cadenceScheduler';
 import type { SourceEvent } from '../source/sourceTypes';
-import { normalizeEmail, normalizePhone } from '../source/sourceService';
+import { normalizeEmail, normalizePhone } from '../source/contactNormalization';
 import {
   optOutProvenanceViolations,
   parseOptOutActivityMetadataJson,

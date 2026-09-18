@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 import type { AppDatabase } from '../../db/database';
 import { serializeCanonical } from '../lifecycle/lifecycleValidation';
-import { normalizeEmail, normalizePhone } from '../source/sourceService';
+import { normalizeEmail, normalizePhone } from '../source/contactNormalization';
 import {
   DomainRepositoryDatabaseMismatchError,
   OptOutPersistenceConflictError,

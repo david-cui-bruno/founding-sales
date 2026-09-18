@@ -653,7 +653,7 @@ describe('FounderSalesDomain', () => {
   });
 
   describe('leads', () => {
-    it.each(['detail', 'list', 'pipeline'] as const)('projects the real dated Unreviewed action in %s without lifecycle writes', (surface) => {
+    it.each(['detail', 'list'] as const)('projects the real dated Unreviewed action in %s without lifecycle writes', (surface) => {
       const prospect = seedProspect(database.raw, `dated-${surface}`);
       database.raw.prepare("UPDATE prospects SET qualification_state = 'unreviewed' WHERE id = ?").run(prospect.prospectId);
       const cycle = services.lifecycle.createUnreviewedCycle({ personId: prospect.personId,
@@ -662,9 +662,7 @@ describe('FounderSalesDomain', () => {
         .get(cycle.currentNextActionId) as { id: string; due_at: string };
       const before = database.raw.prepare('SELECT total_changes() AS count').get();
       const action = surface === 'detail' ? domain.getLeadDetail({ personId: prospect.personId }).nextAction
-        : surface === 'list' ? listAll().rows.find(row => row.personId === prospect.personId)!.nextAction
-          : domain.getPipelineProjection().stages.flatMap(stage => stage.cards)
-            .find(card => card.personId === prospect.personId)!.nextAction;
+        : listAll().rows.find(row => row.personId === prospect.personId)!.nextAction;
       expect(action).toMatchObject({ id: persisted.id, dueAt: persisted.due_at });
       expect(persisted.due_at).toBe(CLOCK_NOW);
       expect(database.raw.prepare('SELECT total_changes() AS count').get()).toEqual(before);
@@ -874,32 +872,6 @@ describe('FounderSalesDomain', () => {
       expect(detail.activities.some(
         (activity) => activity.summary.includes('RIREIG'),
       )).toBe(true);
-    });
-  });
-
-  describe('pipeline and review', () => {
-    it('returns all seven fixed stages in order including empty ones', () => {
-      seedLead('alpha');
-      const snapshot = domain.getPipelineProjection();
-      expect(snapshot.stages.map((stage) => stage.stage)).toEqual([
-        'unreviewed', 'ready', 'contacted', 'interviewed', 'offered', 'won', 'lost_nurture',
-      ]);
-      expect(snapshot.stages[0]!.cards).toHaveLength(1);
-      expect(snapshot.stages[5]!.cards).toEqual([]);
-    });
-
-    it('projects stages without renderer-forbidden fields', () => {
-      seedLead('alpha');
-      const snapshot = domain.getPipelineProjection();
-      const stages = snapshot.stages.map((stage) => stage.stage);
-      expect(stages).toContain('unreviewed');
-      const serialized = JSON.stringify(snapshot);
-      expect(serialized).not.toMatch(/normalized_value|key_envelope/);
-    });
-
-    it('lists review items as an empty strict snapshot when none exist', () => {
-      const snapshot = domain.listReviewItems({ kinds: [], limit: 50 });
-      expect(snapshot.items).toEqual([]);
     });
   });
 
