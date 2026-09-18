@@ -18,7 +18,6 @@ import { collectLeadTriageSnapshot, type LeadTriageQueueRow } from '../today/lea
 import { leadTriageSnapshotRequestSchema, type LeadTriageSnapshot, type LeadTriageSnapshotRequest } from '../../shared/contracts/leadTriageReportContract';
 import { createHash } from 'node:crypto';
 import { ListCursorError, pageFromSnapshot } from './support/listCursor';
-import { reactivationReviewPayloadSchema } from './lifecycle/reactivationContracts';
 
 import { parseCsvSource, type CsvParseError } from '../imports/csvParser';
 import { z } from 'zod';
@@ -86,44 +85,6 @@ import {
   type TodaySnapshot,
   type TriageQueue,
 } from '../../shared/contracts/todayContract';
-import {
-  pipelineSnapshotSchema,
-  type PipelineSnapshot,
-} from '../../shared/contracts/pipelineContract';
-import {
-  resolveReviewRequestSchema,
-  reviewListRequestSchema,
-  reviewSnapshotSchema,
-  type ResolveReviewRequest,
-  type ReviewItem,
-  type ReviewListRequest,
-  type ReviewSnapshot,
-} from '../../shared/contracts/reviewContract';
-import type {
-  AttachTranscriptRequest,
-  ConversationDetail,
-  ConversationDetailRequest,
-  ConversationsListRequest,
-  ConversationsListResponse,
-} from '../../shared/contracts/conversationsContract';
-import type {
-  AddEvidenceRequest,
-  CaptureLearningRequest,
-  LearningsListRequest,
-  LearningsListResponse,
-  UpdateLearningStatusRequest,
-} from '../../shared/contracts/learningsContract';
-import {
-  attachTranscript,
-  getConversationDetail,
-  listConversations,
-} from './conversations/conversationsDomain';
-import {
-  addLearningEvidence,
-  captureLearning,
-  listLearnings,
-  updateLearningStatus,
-} from './learnings/learningsDomain';
 import {
   cancelJobRequestSchema,
   createJobRequestSchema,
@@ -336,11 +297,6 @@ const LANE_MAP: Readonly<Record<TodayLane, TodayLaneId>> = Object.freeze({
   exploration: 'exploration',
   later: 'later',
 });
-
-const PIPELINE_STAGE_ORDER = [
-  'unreviewed', 'ready', 'contacted', 'interviewed', 'offered', 'won', 'lost_nurture',
-] as const;
-
 function toPriorityContext(row: ProjectionRow | undefined): LeadPriorityContext | null {
   if (row === undefined) return null;
   return {
@@ -1977,147 +1933,6 @@ export class FounderSalesDomain implements OutboundDomainPort {
     });
   }
 
-  // ------------------------------------------------------------- pipeline
-
-  getPipelineProjection(): PipelineSnapshot {
-    const rows = this.database.raw.prepare(`
-      SELECT
-        cycle.id AS cycle_id, cycle.person_id, cycle.prospect_id, cycle.stage,
-        cycle.workflow_status, cycle.stage_entered_at, cycle.close_reason,
-        person.display_name,
-        action.id AS action_id, action.action_type, action.channel AS action_channel,
-        action.status AS action_status, action.work_intent, action.due_at AS action_due_at,
-        projection.fit_points, projection.fit_band, projection.timing_millipoints,
-        projection.timing_band, projection.reachability, projection.data_confidence,
-        projection.priority,
-        (
-          SELECT canonical_name FROM prospect_organizations AS link
-          JOIN organizations AS org ON org.id = link.organization_id
-          WHERE link.prospect_id = cycle.prospect_id
-          ORDER BY org.id ASC LIMIT 1
-        ) AS organization_name
-      FROM sales_cycles AS cycle
-      JOIN persons AS person ON person.id = cycle.person_id
-      LEFT JOIN next_actions AS action ON action.id = cycle.current_next_action_id
-      LEFT JOIN prospect_priority_projection AS projection
-        ON projection.prospect_id = cycle.prospect_id
-      ORDER BY cycle.stage_entered_at ASC, cycle.id ASC
-    `).all() as Array<{
-      cycle_id: string; person_id: string; prospect_id: string; stage: LeadRow['stage'];
-      workflow_status: 'active' | 'onboarding' | 'closed'; stage_entered_at: string;
-      close_reason: string | null; display_name: string;
-      action_id: string | null; action_type: string | null; action_channel: string | null;
-      action_status: string | null; work_intent: string | null; action_due_at: string | null;
-      fit_points: number | null; fit_band: ProjectionRow['fit_band'] | null;
-      timing_millipoints: number | null; timing_band: ProjectionRow['timing_band'] | null;
-      reachability: ProjectionRow['reachability'] | null; data_confidence: number | null;
-      priority: ProjectionRow['priority'] | null;
-      organization_name: string | null;
-    }>;
-    const byStage = new Map<string, typeof rows>(
-      PIPELINE_STAGE_ORDER.map((stage) => [stage, [] as typeof rows]),
-    );
-    for (const row of rows) byStage.get(row.stage)?.push(row);
-    return pipelineSnapshotSchema.parse({
-      stages: PIPELINE_STAGE_ORDER.map((stage) => ({
-        stage,
-        cards: byStage.get(stage)!.map((row) => ({
-          personId: row.person_id,
-          salesCycleId: row.cycle_id,
-          personName: row.display_name,
-          contextLabel: row.organization_name,
-          stage: row.stage,
-          stageEnteredAt: row.stage_entered_at,
-          priorityContext: row.priority === null
-            ? null
-            : toPriorityContext({
-              prospect_id: row.prospect_id,
-              fit_points: row.fit_points!,
-              fit_band: row.fit_band!,
-              timing_millipoints: row.timing_millipoints!,
-              timing_band: row.timing_band!,
-              reachability: row.reachability!,
-              data_confidence: row.data_confidence!,
-              priority: row.priority,
-              version: 1,
-              evaluation_id: '',
-            }),
-          nextAction: row.action_id === null || row.action_status !== 'pending' ? null : {
-            id: row.action_id,
-            dueAt: row.action_due_at,
-            type: row.action_type!,
-            channel: actionChannel({
-              actionType: row.action_type!,
-              channel: row.action_channel,
-              workIntent: row.work_intent,
-              onboarding: row.workflow_status === 'onboarding',
-            }),
-            label: actionLabel(row.action_type!),
-          },
-          lostReasonCode: row.stage === 'lost_nurture' ? row.close_reason : null,
-        })),
-      })),
-      revision: this.currentRevision(),
-    });
-  }
-
-  // --------------------------------------------------------------- review
-
-  listReviewItems(input: ReviewListRequest): ReviewSnapshot {
-    const request = reviewListRequestSchema.parse(input);
-    return this.readListSnapshot(() => {
-      const rows = this.database.raw.prepare(`
-        SELECT id, person_id, reason, payload_json, created_at, version
-        FROM lifecycle_review_items WHERE status = 'open'
-        ORDER BY created_at ASC, id ASC
-      `).all() as {
-        id: string; person_id: string; reason: string; payload_json: string; created_at: string; version: number;
-      }[];
-      const items: ReviewItem[] = rows.map(row => {
-        let raw: unknown;
-        try { raw = JSON.parse(row.payload_json); } catch { raw = null; }
-        const parsed = reactivationReviewPayloadSchema.safeParse(raw);
-        if (parsed.success) {
-          const payload = parsed.data;
-          const command = payload.command;
-          if (payload.blocker === 'unknown_inbound_handle'
-            && 'evidence' in command && command.evidence.kind === 'unknown_handle') {
-            return {
-              kind: 'unmatched_communication', reviewId: row.id,
-              channel: command.evidence.handleKind === 'email' ? 'email' : 'text',
-              handle: command.evidence.normalizedValue, occurredAt: row.created_at, summary: row.reason,
-            };
-          }
-          return { kind: 'system_error', reviewId: row.id, invariant: payload.blocker,
-            summary: row.reason, personId: row.person_id };
-        }
-        return { kind: 'system_error', reviewId: row.id, invariant: 'review_payload_unreadable',
-          summary: 'This local review could not be read. Its evidence has been retained.', personId: row.person_id };
-      });
-      const unmatched = items.filter(item => item.kind === 'unmatched_communication').length;
-      const kinds = [...new Set(request.kinds)].sort();
-      const filtered = kinds.length === 0 ? items : items.filter(item => kinds.includes(item.kind));
-      const page = pageFromSnapshot({
-        scope: 'review', queryKey: JSON.stringify({ scope: 'review', kinds, limit: request.limit }),
-        snapshotKey: JSON.stringify({ availabilityVersion: 1, rows }), rows: filtered,
-        cursor: request.cursor ?? null, limit: request.limit,
-      });
-      return reviewSnapshotSchema.parse({
-        items: page.rows, nextCursor: page.nextCursor, matchedCount: filtered.length,
-        totalOpenCount: items.length, revision: this.currentRevision(),
-        countScope: 'lifecycle_review_items', observedAt: this.clock.now(),
-        queues: {
-          unmatched_communication: { source: 'lifecycle_review_items', openCount: unmatched },
-          system_error: { source: 'lifecycle_review_items', openCount: items.length - unmatched },
-          ambiguous_identity: { source: 'not_integrated', openCount: null },
-          transcript_suggestion: { source: 'not_integrated', openCount: null },
-          import_problem: { source: 'not_integrated', openCount: null },
-          adapter_failure: { source: 'not_integrated', openCount: null },
-        },
-      });
-    });
-  }
-
   /** One deferred read snapshot, or the caller's existing snapshot. Never a write UoW. */
   private readListSnapshot<T>(read: () => T): T {
     try {
@@ -2126,92 +1941,6 @@ export class FounderSalesDomain implements OutboundDomainPort {
       if (error instanceof ListCursorError) throw new FounderSalesDomainError(error.code, error.code);
       throw error;
     }
-  }
-
-  resolveReviewItem(input: ResolveReviewRequest): MutationReceipt {
-    const request = resolveReviewRequestSchema.parse(input);
-    if (request.kind !== 'unmatched_communication' || request.action !== 'promote') {
-      throw new FounderSalesDomainError(
-        'REVIEW_RESOLUTION_UNSUPPORTED',
-        'This review kind has no V1 resolution command yet.',
-      );
-    }
-    if (request.sourceEventId === null) {
-      throw new FounderSalesDomainError(
-        'REVIEW_RESOLUTION_UNSUPPORTED', 'Promotion requires the matched source event.',
-      );
-    }
-    const now = this.clock.now();
-    const review = this.database.raw.prepare(`
-      SELECT id, activation_key, version, person_id, payload_json
-      FROM lifecycle_review_items WHERE id = ? AND status = 'open'
-    `).get(request.reviewId) as {
-      id: string; activation_key: string; version: number; person_id: string; payload_json: string;
-    } | undefined;
-    if (review === undefined) {
-      throw new FounderSalesDomainError('REVIEW_NOT_FOUND', 'The review item is not open.');
-    }
-    const source = this.database.raw.prepare(
-      'SELECT channel FROM source_events WHERE id = ?',
-    ).get(request.sourceEventId) as { channel: string } | undefined;
-    const allowed = ['inbound_demo', 'referral', 'rireig', 'community'] as const;
-    if (source === undefined || !(allowed as readonly string[]).includes(source.channel)) {
-      throw new FounderSalesDomainError(
-        'REVIEW_RESOLUTION_UNSUPPORTED', 'The source event cannot promote this review.',
-      );
-    }
-    const payload = JSON.parse(review.payload_json) as {
-      command: { cadence: unknown };
-    };
-    const result = this.services.lifecycle.promoteUnknownInboundReview({
-      reviewId: review.id,
-      activationKey: review.activation_key,
-      expectedReviewVersion: request.expectedVersion,
-      sourceEventId: request.sourceEventId,
-      channel: source.channel as typeof allowed[number],
-      activatedAt: now,
-      cadence: payload.command.cadence as never,
-    });
-    const cycleIds = result.kind === 'reactivated' ? [result.cycle.id] : [];
-    return this.receipt([review.person_id], cycleIds);
-  }
-
-  // ------------------------------------------------------- conversations
-
-  listConversations(input: ConversationsListRequest): ConversationsListResponse {
-    return listConversations(this.featureDeps(), input);
-  }
-
-  getConversationDetail(input: ConversationDetailRequest): ConversationDetail {
-    return getConversationDetail(this.featureDeps(), input);
-  }
-
-  attachTranscript(input: AttachTranscriptRequest): MutationReceipt {
-    // attachTranscript opens its own immediate transaction; wrapping it in
-    // unitOfWork.immediate would nest BEGIN IMMEDIATE and fail.
-    return attachTranscript(this.featureDeps(), input);
-  }
-
-  // ----------------------------------------------------------- learnings
-
-  listLearnings(input: LearningsListRequest): LearningsListResponse {
-    return listLearnings(this.featureDeps(), input);
-  }
-
-  captureLearning(input: CaptureLearningRequest): MutationReceipt {
-    return captureLearning(this.featureDeps(), input);
-  }
-
-  addLearningEvidence(input: AddEvidenceRequest): MutationReceipt {
-    return addLearningEvidence(this.featureDeps(), input);
-  }
-
-  updateLearningStatus(input: UpdateLearningStatusRequest): MutationReceipt {
-    return updateLearningStatus(this.featureDeps(), input);
-  }
-
-  private featureDeps(): { database: AppDatabase; clock: Clock; ids: IdGenerator } {
-    return { database: this.database, clock: this.clock, ids: this.ids };
   }
 
   // -------------------------------------------------------------- friday
