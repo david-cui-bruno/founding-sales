@@ -44,7 +44,9 @@ export function SuppressionSection({ api }: { api?: Api }) {
       setUnavailable(true);
     } finally { if (request === generation.current) setPending(false); }
   };
-  useEffect(() => { void read(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [usable]);
+  // The read is keyed on the bridge function itself: a new bridge re-reads, and nothing else does.
+  const reader = useRef(read); reader.current = read;
+  useEffect(() => { void reader.current(); }, [usable]);
 
   return <section id="settings-suppressed" className="settings__section" aria-label="Suppressed">
     <h2 className="settings__section-title">Suppressed</h2>
