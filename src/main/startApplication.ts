@@ -25,6 +25,8 @@ import { createEmailService } from './outreach/emailService';
 import { createCompanyDraftPreparationService, type CompanyDraftPreparationPort } from './outreach/companyDraftPreparationService';
 import { createOutreachProviders } from './outreach/providers/outreachProviders';
 import { registerOutreachIpc } from './ipc/registerOutreachIpc';
+import { AccountCallbackRepository } from './domain/callbacks/accountCallbackRepository';
+import { AccountNeverCallRepository } from './domain/callbacks/accountNeverCall';
 import { resolveApplicationPaths } from './applicationPaths';
 import { join } from 'node:path';
 import { RecoveryService, type RecoveryServiceOptions, type RecoveryDialogs } from './recovery/recoveryService';
@@ -753,7 +755,16 @@ export async function startApplication(
       provider: phoneBindings.setup, isTrustedRendererUrl: options.isTrustedRendererUrl,
     });
     if(delegation.linkedIn)unregisterLinkedIn=(dependencies.registerLinkedInIpc??registerLinkedInIpc)({provider:delegation.linkedIn,isTrustedRendererUrl:options.isTrustedRendererUrl});
-    if(email)unregisterEmail=(dependencies.registerOutreachIpc??registerOutreachIpc)({provider:email,delegation,pairingStore,isTrustedRendererUrl:options.isTrustedRendererUrl});
+    // Lane 26 callbacks and never-call: local repositories behind the runtime's database gate, same clock as the domain.
+    const callbackStores = <T,>(operation: (stores: { callbacks: AccountCallbackRepository; neverCall: AccountNeverCallRepository }) => T) => runtime.withDatabase(database =>
+      operation({ callbacks: new AccountCallbackRepository({ database, clock: domainClock }), neverCall: new AccountNeverCallRepository({ database, clock: domainClock }) }));
+    const callbacks = {
+      list: async (request: { accountIds: readonly string[] }) => callbackStores(stores => stores.callbacks.listOpen(request.accountIds)),
+      save: async (request: Parameters<AccountCallbackRepository['save']>[0]) => callbackStores(stores => stores.callbacks.save(request)),
+      close: async (request: Parameters<AccountCallbackRepository['close']>[0]) => callbackStores(stores => stores.callbacks.close(request)),
+      neverCall: async (request: Parameters<AccountNeverCallRepository['suppress']>[0]) => callbackStores(stores => stores.neverCall.suppress(request)),
+    };
+    if(email)unregisterEmail=(dependencies.registerOutreachIpc??registerOutreachIpc)({provider:email,delegation,callbacks,pairingStore,isTrustedRendererUrl:options.isTrustedRendererUrl});
     throwIfStartupCancelled(options.signal);
     stage = 'apple_bridge';
     if (options.appleBridge !== undefined) {

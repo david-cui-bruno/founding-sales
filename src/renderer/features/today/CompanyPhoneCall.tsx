@@ -10,6 +10,7 @@ import { commandReceiptSchema } from '../../../shared/contracts/commandReceiptCo
 import { openSettingsSection } from '../../foundation/settingsNavigation';
 import { captureDailySessionScope } from './dailySessionScope';
 import { RequestedEmailPreparation } from './RequestedEmailPreparation';
+import { describeHandoffHold } from './handoffHoldCopy';
 import { allowedPhoneReports, companyPhoneSession, describePhoneOutcome, freezePhoneValue, makePhoneReview, notifyPhoneSession, parsePhoneHistory,
   phoneFreshBinding, phoneHistoryScope, phoneOwner, phoneSelection, type CompanyPhoneApi, type PhoneAttempt,
   type PhoneConfig, type PhoneOutcome, type PhoneReport, type PhoneReview } from './companyPhoneSession';
@@ -196,7 +197,7 @@ export function CompanyPhoneCall({ api, snapshot, config, accountId, readError =
       session.begin.result = result;
       setNotice(result.status === 'handoff' && result.result.status === 'handoff_accepted'
         ? 'Apple Phone accepted the handoff request. This does not mean connected or completed.'
-        : result.status === 'held' ? `HOLD: ${result.reason}. No automatic retry is available.`
+        : result.status === 'held' ? `${describeHandoffHold(result.reason)}. No automatic retry is available.`
           : result.status === 'pending' ? 'Owner acknowledgment pending. Do not redial.'
             : 'Handoff result unknown or already consumed. Do not redial from this workflow.');
       const refreshed = await readContext(check, selector); check(); acceptContext(refreshed);
