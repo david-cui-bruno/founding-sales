@@ -4,9 +4,10 @@ import { accountIdSchema as id, accountInstantSchema as instant } from '../../..
 import { accountRecordSchema, type AccountRecord } from '../../../../src/shared/contracts/accountRecordContract';
 import { commandReceiptSchema, workerEventSchema, type CommandReceipt } from '../../../../src/shared/contracts/delegationContract';
 import { ownerSourceConfigurationSchema, ownerSourceKey, type ReplyTemplateCommand, type TerritoryPolicyCommand } from '../../../../src/shared/contracts/ownerCommandContract';
-import { decideTemplateEmailStep, workerReplyTemplateApprovalSchema, workerReplyTemplateStateSchema, type ReplyTemplateId, type ReplyTemplateValues, type WorkerReplyTemplateState } from '../../../../src/shared/contracts/replyTemplateContract';
+import { decideTemplateEmailStep, replyTemplateHoldReasonSchema, workerReplyTemplateApprovalSchema, workerReplyTemplateStateSchema, REPLY_TEMPLATE_IDS,
+  type ReplyTemplateHoldReason, type ReplyTemplateId, type ReplyTemplateValues, type WorkerReplyTemplateState } from '../../../../src/shared/contracts/replyTemplateContract';
 import { decideTerritoryReentry, deriveTerritoryCampaignVersion, territoryAddedStatesSchema, territoryCallPolicyId, territoryCallPolicySchema, territoryEntriesSchema,
-  territoryEnrollmentCommandId, territoryEnrollmentId, territoryExecutionContextId, territoryFirstStepId, territoryHeldSteps, TERRITORY_EMAIL_HOLD_REASON,
+  territoryEnrollmentCommandId, territoryEnrollmentId, territoryExecutionContextId, territoryFirstStepId, territoryHeldSteps,
   type TerritoryAddedStates, type TerritoryCallPolicy, type TerritoryHeldStep } from '../../../../src/shared/contracts/territoryCallPolicyContract';
 import { decideTerritoryStateAddition, TERRITORY_RULES_REVISION } from '../../../../src/shared/contracts/territoryClearanceContract';
 import { territoryCountsSchema, territoryRemainingNewPerMorning, type TerritoryCounts } from '../../../../src/shared/contracts/researchSetupContract';
@@ -35,8 +36,8 @@ export const TERRITORY_BACKFILL_APPROVAL_LIMIT = 10;
 const territoryBackfillCursorSchema = z.strictObject({ version: z.literal(1), after: z.string().min(1).max(2048).nullable() });
 export type TerritoryBackfillCursor = z.infer<typeof territoryBackfillCursorSchema>;
 export type TerritoryBackfillReport = { outcome: 'completed' | 'exhausted' | 'no_policy' | 'policy_paused' | 'held'; scanned: number; enrolled: number; replayed: number;
-  /** Firms whose 90-day rest ended and whose sequence the sweep restarted once (D13). Counted here; the tick record
-   *  does not carry it yet, and a caller that builds a report by hand may leave it out. */
+  /** Firms whose 90-day rest ended and whose sequence the sweep restarted once (D13). The tick record carries
+   *  this count; a caller that builds a report by hand may still leave it out, and the record reads it as zero. */
   reentered?: number;
   skipped: { policy_paused: number; authority_exists: number; route_unavailable: number; enrollment_failed: number } };
 export const emptyTerritoryBackfillReport = (): TerritoryBackfillReport =>
@@ -45,10 +46,17 @@ export const emptyTerritoryBackfillReport = (): TerritoryBackfillReport =>
 export function listedBusinessRoute(record: AccountRecord): string | null {
   return record.routes.find(route => route.channel === 'phone' && route.purpose === 'business' && route.verification === 'listed')?.id ?? null;
 }
-const heldStepSchema = z.strictObject({ stepId: id, channel: z.literal('email'), reason: z.literal(TERRITORY_EMAIL_HOLD_REASON) });
+/** `reason` is one of lane 31's five closed template hold reasons. `mailbox_not_connected` is what a step carries
+ *  before any send decision has looked at it, which is exactly what it meant before the walker existed. */
+const heldStepSchema = z.strictObject({ stepId: id, channel: z.literal('email'), reason: replyTemplateHoldReasonSchema });
+/** One email step that actually went out, recorded per firm so a later tick never walks it again. */
+const sentStepSchema = z.strictObject({ stepId: id, templateId: z.enum(REPLY_TEMPLATE_IDS), commandId: z.uuid(), sentAt: instant });
+export type TerritorySentStep = z.infer<typeof sentStepSchema>;
 /** What one firm received under the policy, keyed by the firm: the replay record a repeated create answers from. */
 export const territoryEnrollmentRecordSchema = z.strictObject({ policyId: id, revision: integer.positive(), accountId: id, routeId: id, commandId: z.uuid(), versionId: id, enrollmentId: id,
   sequence: integer.positive(), heldSteps: z.array(heldStepSchema).max(20), grantedAt: instant,
+  /** Email steps this firm actually received. Absent on every record written before the walker existed, which is none. */
+  sentSteps: z.array(sentStepSchema).max(20).optional(),
   /** D13 single re-entry: which run of the sequence this firm is on. Absent on every record written before the counter existed, which is run 1. */
   entries: territoryEntriesSchema.optional(),
   /** When the worker restarted the sequence for the second and last time. Absent until then. */
@@ -337,6 +345,43 @@ export class TerritoryPolicyRepository {
     const grantConnected = approved ? await input.grant(input.pairingId) : false;
     const senderCap = approved && grantConnected ? await input.senderCap() : null;
     return decideTemplateEmailStep({ templateId: input.templateId, state: state?.data ?? null, grantConnected, senderCap, values: input.values });
+  }
+  /** What one firm received under the policy, or null for a firm the policy has never enrolled. */
+  async readEnrollmentRecord(accountId: string): Promise<Stored<TerritoryEnrollmentRecord> | null> {
+    const row = await this.store.get<unknown>(territoryEnrollmentKey(id.parse(accountId)));
+    if (!row) return null;
+    const record = territoryEnrollmentRecordSchema.parse(row.data);
+    if (record.accountId !== accountId) throw new Error('territory_enrollment_identity_conflict');
+    return { data: record, rev: row.rev };
+  }
+  /**
+   * Record what the send decision said about one email step of one firm, on the firm's own enrollment record.
+   *
+   * A `hold` replaces the reason the step carried with the reason the decision gave, so the record says
+   * `sender_cap_reached` rather than the `mailbox_not_connected` every step carries before anything evaluated
+   * it. A `sent` step leaves `heldSteps` for `sentSteps`, which is the only thing that stops a later tick from
+   * walking it again; the reservation and the command id already make a second send impossible, and this makes
+   * a second attempt unnecessary. Writing this record is not a send and never touches the enrollment's cadence:
+   * the sequence walked past its email steps the moment a call outcome advanced it (lane 26's rule), for every
+   * one of the five reasons.
+   *
+   * CAS on the record's own revision, and idempotent: a repeated write of the same fact commits nothing.
+   */
+  async recordEmailStepOutcome(input: { accountId: string; stepId: string } &
+    ({ hold: ReplyTemplateHoldReason } | { sent: { templateId: ReplyTemplateId; commandId: string; sentAt: string } })): Promise<void> {
+    const current = await this.readEnrollmentRecord(input.accountId);
+    if (!current) throw new Error('territory_enrollment_missing');
+    const record = current.data;
+    if (!record.heldSteps.some(step => step.stepId === input.stepId)
+      && !(record.sentSteps ?? []).some(step => step.stepId === input.stepId)) throw new Error('territory_email_step_unknown');
+    const next = 'hold' in input
+      ? { ...record, heldSteps: record.heldSteps.map(step => step.stepId === input.stepId ? { ...step, reason: input.hold } : step) }
+      : { ...record, heldSteps: record.heldSteps.filter(step => step.stepId !== input.stepId),
+        sentSteps: [...(record.sentSteps ?? []).filter(step => step.stepId !== input.stepId),
+          { stepId: input.stepId, ...input.sent }].sort((a, b) => a.stepId < b.stepId ? -1 : 1) };
+    const parsed = territoryEnrollmentRecordSchema.parse(next);
+    if (fingerprint(parsed) === fingerprint(record)) return;
+    await this.store.transact([this.store.put(territoryEnrollmentKey(record.accountId), parsed, current.rev)]);
   }
   /** One bounded ascending page of account records after the cursor. `truncated` is true whenever there may be more firms
    * beyond the last row returned, so a server-side 1 MB cut is never mistaken for the end of the table. */

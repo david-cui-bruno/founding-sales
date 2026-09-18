@@ -87,6 +87,11 @@ export const tickLedgerSchema = z.strictObject({ discoveryRemainingMicros: integ
  *  `exhausted` means the sweep reached the end of the table under the current policy revision; `completed` means a bounded batch with more to come. */
 export const territoryBackfillOutcomeSchema = z.enum(['completed', 'exhausted', 'no_policy', 'policy_paused', 'held']);
 export const tickTerritorySchema = z.strictObject({ outcome: territoryBackfillOutcomeSchema, scanned: integer, enrolled: integer, replayed: integer,
+  /** Firms whose 90-day rest ended and whose sequence the sweep restarted for the second and last time (D13). */
+  reentered: integer,
+  /** Sequence email steps the provider accepted on this tick, and steps held under one of the five closed
+   *  template hold reasons. Counts only: no firm, template, address or reason detail enters the record. */
+  emailsSent: integer, emailsHeld: integer,
   skipped: z.strictObject({ policy_paused: integer, authority_exists: integer, route_unavailable: integer, enrollment_failed: integer }) });
 export const scheduledRunRecordSchema = z.strictObject({ event: z.literal(SCHEDULED_RUN_EVENT), version: z.literal(1), at: instant, durationMs: integer,
   status: z.enum(['inactive', 'completed', 'aborted']), phases: z.partialRecord(tickPhaseSchema, tickPhaseResultSchema),
