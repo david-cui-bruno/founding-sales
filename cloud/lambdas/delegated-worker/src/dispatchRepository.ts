@@ -11,12 +11,11 @@ import { CampaignExecution, type CampaignExecutionPlan } from './campaignExecuti
 import { ownerSourceConfigurationSchema, ownerSourceKey } from '../../../../src/shared/contracts/ownerCommandContract';
 import type { CampaignEventPayload } from '../../../../src/shared/contracts/campaignContract';
 import type { TransactWriteItem } from '@aws-sdk/client-dynamodb';
-import { accountIdSchema as id, accountInstantSchema as instant, accountSchema, accountRouteSchema } from '../../../../src/shared/contracts/accountContract';
-import { accountClaimSchema, accountSourceSchema as accountSourceSchemaForProof } from '../../../../src/shared/contracts/accountContract';
+import { accountIdSchema as id, accountInstantSchema as instant, accountSchema, accountRouteSchema, accountClaimSchema,
+  accountSourceSchema as citedSourceSchema } from '../../../../src/shared/contracts/accountContract';
 import { createHash } from 'node:crypto';
-import { REPLY_TEMPLATE_IDS, REPLY_TEMPLATE_PURPOSES } from '../../../../src/shared/contracts/replyTemplateContract';
+import { REPLY_TEMPLATE_IDS, REPLY_TEMPLATE_PURPOSES, workerReplyTemplateStateSchema } from '../../../../src/shared/contracts/replyTemplateContract';
 import { replyTemplateStateKey } from './territoryPolicyRepository';
-import { workerReplyTemplateStateSchema } from '../../../../src/shared/contracts/replyTemplateContract';
 import { reserveDispatchInputSchema, reservationSchema, type AppendOutcomeInput, type ReserveDispatchInput } from '../../../../src/shared/contracts/delegationContract';
 import { accountReplyDraftSchema, threadProjectionSchema } from '../../../../src/shared/contracts/mailThreadContract';
 import { DynamoStore, fingerprint, integer, keyPart, type RepositoryOptions } from './dynamoStore';
@@ -185,7 +184,7 @@ export class DynamoDispatchRepository {
     const claim = record.data.claims[binding.claimIndex];
     if (!claim || claim.key !== 'business_email' || claim.kind !== 'fact' || claim.value !== binding.email || claim.evidenceIds.length !== 1) throw new Error('no_business_email');
     const sourceId = claim.evidenceIds[0]!;
-    const sources = z.object({ sources: z.array(accountSourceSchemaForProof) }).safeParse(row.data);
+    const sources = z.object({ sources: z.array(citedSourceSchema) }).safeParse(row.data);
     const cited = sources.success ? sources.data.sources.filter(source => source.id === sourceId) : [];
     const source = cited[0];
     if (cited.length !== 1 || !source || !source.permitted
