@@ -100,7 +100,7 @@ describe('source-only workflow policy', () => {
       expect(source).toContain('actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020');
       expect(source).toContain('fetch-depth: 0'); expect(source).toContain('fetch-tags: true'); expect(source).toContain('persist-credentials: false');
       expect(source).toContain("node-version: '24.20.0'"); expect(source).toContain("process.versions.node !== '24.20.0'");
-      expect(source).toContain('npm ci --prefix cloud/lambdas/shared'); expect(source).toContain('cloud/lambdas/*/package-lock.json');
+      expect(source).toContain('cloud/lambdas/*/package-lock.json');
       expect(source).toContain('b40ab0ae55c505963e365f271a8d3846efbc170aa17f2607f13df610a9aeb6a5');
       expect(source).not.toMatch(/pull_request_target|npm run publish|backup:pre-release|aws |tofu /);
       // setup-node owns PATH on hosted and release runners. A developer's

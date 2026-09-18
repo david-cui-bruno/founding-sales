@@ -9,7 +9,6 @@ import {
   createApplicationMenuTemplate,
   menuNavigationScripts,
 } from './main/applicationMenu';
-import { createDockBadgeUpdater } from './main/dockBadge';
 import { createRendererTrust } from './main/navigationPolicy';
 import { registerCallieProtocol } from './main/protocol';
 import {
@@ -211,6 +210,13 @@ const installApplicationMenu = (): void => {
 };
 
 let dockBadgeInstalled = false;
+/**
+ * Clears the macOS dock badge exactly once per start. No count exists to show:
+ * RunningApplication exposes only databasePath, shutdown and the backup hook,
+ * and due dates no longer exist in the app. The removed updater module wrapped
+ * this same single `setBadge('')` call behind a change filter, so its 60 s
+ * interval and focus listener could never emit a second call.
+ */
 const installDockBadge = (): void => {
   if (dockBadgeInstalled) {
     return;
@@ -222,23 +228,7 @@ const installDockBadge = (): void => {
   }
 
   dockBadgeInstalled = true;
-  const dockBadgeUpdater = createDockBadgeUpdater({
-    platform: process.platform,
-    // TODO: RunningApplication currently exposes only databasePath and
-    // shutdown, so main has no public surface to count fresh inbound leads.
-    // Replace this injected 0 with a real fresh-inbound count query once
-    // startApplication exposes one. Due dates no longer exist in the app,
-    // so the badge must never carry a due count.
-    getFreshInboundCount: () => 0,
-    setBadge: (text) => dock.setBadge(text),
-  });
-  dockBadgeUpdater.refresh();
-  const dockBadgeTimer = setInterval(
-    () => dockBadgeUpdater.refresh(),
-    60_000,
-  );
-  dockBadgeTimer.unref();
-  app.on('browser-window-focus', () => dockBadgeUpdater.refresh());
+  dock.setBadge('');
 };
 
 if (!started && ownsSingleInstanceLock) {

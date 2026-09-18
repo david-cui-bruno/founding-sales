@@ -12,7 +12,7 @@ import { cloudScoreChipSchema } from './leadsContract';
 import { findContactRefusalReasonSchema } from './enrichmentRequestContract';
 import { outboundAttemptSummarySchema } from './outboundContract';
 
-export const phoneComplianceStatusSchema = z.enum([
+const phoneComplianceStatusSchema = z.enum([
   'verified_clear',
   'federal_dnc_listed',
   'tcpa_blocked',
@@ -47,18 +47,18 @@ export const contactMethodSchema = z.object({
     textRefusalReason: outboundAuthorizationReasonCodeSchema.nullable(),
   }).strict().nullable(),
 }).strict();
-export const cadenceSummarySchema = z.object({ name: z.string(), stepLabel: z.string(), touchIndex: z.number().int().positive(), touchLimit: z.number().int().positive() }).strict();
-export const activitySummarySchema = z.object({ id: z.string(), kind: z.enum(['call', 'voicemail', 'text', 'email', 'interview', 'offer', 'note', 'job', 'system']), occurredAt: z.string().datetime({ offset: true }), summary: z.string(), outcome: z.string().nullable(), markedInError: z.boolean() }).strict();
-export const conversationSummarySchema = z.object({ id: z.string(), occurredAt: z.string().datetime({ offset: true }), durationSeconds: z.number().int().nonnegative(), recordingAvailable: z.boolean(), transcriptAvailable: z.boolean(), reviewCount: z.number().int().nonnegative() }).strict();
-export const propertySummarySchema = z.object({ id: z.string(), address: z.string(), doors: z.number().int().nonnegative().nullable(), ownershipEvidence: z.string().nullable(), liveVacancy: z.boolean() }).strict();
-export const historyEventSchema = z.object({ id: z.string(), occurredAt: z.string().datetime({ offset: true }), label: z.string(), detail: z.string().nullable() }).strict();
+const cadenceSummarySchema = z.object({ name: z.string(), stepLabel: z.string(), touchIndex: z.number().int().positive(), touchLimit: z.number().int().positive() }).strict();
+const activitySummarySchema = z.object({ id: z.string(), kind: z.enum(['call', 'voicemail', 'text', 'email', 'interview', 'offer', 'note', 'job', 'system']), occurredAt: z.string().datetime({ offset: true }), summary: z.string(), outcome: z.string().nullable(), markedInError: z.boolean() }).strict();
+const conversationSummarySchema = z.object({ id: z.string(), occurredAt: z.string().datetime({ offset: true }), durationSeconds: z.number().int().nonnegative(), recordingAvailable: z.boolean(), transcriptAvailable: z.boolean() }).strict();
+const propertySummarySchema = z.object({ id: z.string(), address: z.string(), doors: z.number().int().nonnegative().nullable(), ownershipEvidence: z.string().nullable(), liveVacancy: z.boolean() }).strict();
+const historyEventSchema = z.object({ id: z.string(), occurredAt: z.string().datetime({ offset: true }), label: z.string(), detail: z.string().nullable() }).strict();
 
 /**
  * Cloud score detail (Task 5): the two separate axes plus the scorer's
  * top-3 reasons. `signal` is the scorer's stable signal id (mapped to a
  * short label renderer-side), never free prose.
  */
-export const cloudScoreDetailSchema = z.object({
+const cloudScoreDetailSchema = z.object({
   scores: cloudScoreChipSchema,
   reasons: z.array(z.object({
     signal: z.string().min(1),
@@ -67,13 +67,13 @@ export const cloudScoreDetailSchema = z.object({
   scoredAt: z.string().datetime({ offset: true }).nullable(),
 }).strict();
 
-export const findContactEligibilitySchema = z.object({
+const findContactEligibilitySchema = z.object({
   eligible: z.boolean(),
   refusalReason: findContactRefusalReasonSchema.nullable(),
 }).strict();
 export type FindContactEligibility = z.infer<typeof findContactEligibilitySchema>;
 
-export const portfolioContextSchema = z.object({
+const portfolioContextSchema = z.object({
   role: z.enum(['owner', 'manager', 'unknown']),
   ownedCount: z.number().int().nonnegative(),
   managedCount: z.number().int().nonnegative(),
@@ -84,7 +84,7 @@ export const portfolioContextSchema = z.object({
   completeness: z.literal('partial'),
   facts: z.array(z.object({ id: z.string(), text: z.string() }).strict()),
 }).strict();
-export const contactReasonSchema = z.object({ text: z.string(), evidenceIds: z.array(z.string()).min(1) }).strict();
+const contactReasonSchema = z.object({ text: z.string(), evidenceIds: z.array(z.string()).min(1) }).strict();
 export type PortfolioContext = z.infer<typeof portfolioContextSchema>;
 export type ContactReason = z.infer<typeof contactReasonSchema>;
 
@@ -108,9 +108,6 @@ export const leadDetailRequestSchema = z.object({
   personId: personIdSchema,
 }).strict();
 
-export { outboundRequestSchema as beginOutboundRequestSchema } from './outboundContract';
-export type { OutboundRequest as BeginOutboundRequest } from './outboundContract';
-
 /** Stage commands are discriminated by the exact guarded transition. */
 export const confirmTransitionRequestSchema = z.discriminatedUnion('transition', [
   z.object({
@@ -131,12 +128,6 @@ export const confirmTransitionRequestSchema = z.discriminatedUnion('transition',
     suggestionActivityId: z.string().min(1),
   }).strict(),
 ]);
-
-/** Founder "wrong signal" control: log-only, no local score change. */
-export const cloudScoreOverrideRequestSchema = z.object({
-  personId: personIdSchema,
-  direction: z.enum(['up', 'down']),
-}).strict();
 
 /**
  * Founder dismissal from the review flow: disqualifies the prospect behind
@@ -161,15 +152,8 @@ export const dismissLeadRequestSchema = z.object({
 
 export type PhoneComplianceStatus = z.infer<typeof phoneComplianceStatusSchema>;
 export type ContactMethod = z.infer<typeof contactMethodSchema>;
-export type CadenceSummary = z.infer<typeof cadenceSummarySchema>;
-export type ActivitySummary = z.infer<typeof activitySummarySchema>;
-export type ConversationSummary = z.infer<typeof conversationSummarySchema>;
-export type PropertySummary = z.infer<typeof propertySummarySchema>;
-export type HistoryEvent = z.infer<typeof historyEventSchema>;
 export type LeadDetail = z.infer<typeof leadDetailSchema>;
 export type LeadDetailRequest = z.infer<typeof leadDetailRequestSchema>;
 export type ConfirmTransitionRequest = z.infer<typeof confirmTransitionRequestSchema>;
-export type CloudScoreDetail = z.infer<typeof cloudScoreDetailSchema>;
-export type CloudScoreOverrideRequest = z.infer<typeof cloudScoreOverrideRequestSchema>;
 export type QualificationGateReason = z.infer<typeof qualificationGateReasonSchema>;
 export type DismissLeadRequest = z.infer<typeof dismissLeadRequestSchema>;

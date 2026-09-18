@@ -21,14 +21,10 @@ export function createTodayProvider(runtime: DomainGate) {
     get: () => runtime.withDomain((domain) => domain.getToday()),
     complete: (input: Input<'completePrimaryAction'>) => runtime.withDomain((domain) => domain.completePrimaryAction(input)),
     snooze: (input: Input<'snoozePrimaryAction'>) => runtime.withDomain((domain) => domain.snoozePrimaryAction(input)),
-    pin: (input: Input<'pinWithinLane'>) => runtime.withDomain((domain) => domain.pinWithinLane(input)),
     logPastActivity: (input: Input<'logPastActivity'>) => runtime.withDomain((domain) => domain.logPastActivity(input)),
     addLeadNote: (input: Input<'addLeadNote'>) => runtime.withDomain((domain) => domain.addLeadNote(input)),
     logCallOutcome: (input: Input<'logCallOutcome'>) => runtime.withDomain((domain) => domain.logCallOutcome(input)),
     markActivityInError: (input: Input<'markActivityInError'>) => runtime.withDomain((domain) => domain.markActivityInError(input)),
-    getLeadTriageSnapshot: (input: Input<'getLeadTriageSnapshot'>) => runtime.withDomain((domain) => domain.getLeadTriageSnapshot(input)),
-    getTriageQueue: () => runtime.withDomain((domain) => domain.getTriageQueue()),
-    setReviewPosition: (input: Input<'setReviewPosition'>) => runtime.withDomain((domain) => domain.setReviewPosition(input)),
   };
 }
 export type TodayProvider = ReturnType<typeof createTodayProvider>;
