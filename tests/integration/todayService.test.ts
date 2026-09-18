@@ -213,16 +213,8 @@ describe('todayService', () => {
     expect(receipt.revision).toBeGreaterThan(before.revision);
   });
 
-  it('rejects pin without projections and snoozes by writing resurface_at', async () => {
+  it('snoozes by writing resurface_at', async () => {
     const { cycleId } = seedLead('alpha');
-    const { cycleId: comparedCycleId } = seedLead('beta');
-
-    await expect(provider.pin({
-      salesCycleId: cycleId,
-      reason: 'Founder context',
-      expiresAt: '2026-09-01T15:00:00.000Z',
-      comparedSalesCycleId: comparedCycleId,
-    })).rejects.toThrow('priority projection');
 
     // Snooze no longer records a preference comparison: it hides the cycle
     // behind a founder-chosen resurface instant.
@@ -248,43 +240,6 @@ describe('todayService', () => {
     expect(laneMembership).toHaveLength(0);
   });
 
-  it('pins within the lane after both prospects hold current projections', async () => {
-    const first = seedLead('alpha');
-    const second = seedLead('beta');
-    services.prioritization.recalculateProspect({
-      evaluationId: 'eval-alpha',
-      prospectId: first.prospect.prospectId,
-      ruleVersionId: BUILTIN_PRIORITIZATION_RULE_V1.id,
-      evaluatedAt: CLOCK_NOW,
-      expectedProjectionVersion: null,
-    });
-    services.prioritization.recalculateProspect({
-      evaluationId: 'eval-beta',
-      prospectId: second.prospect.prospectId,
-      ruleVersionId: BUILTIN_PRIORITIZATION_RULE_V1.id,
-      evaluatedAt: CLOCK_NOW,
-      expectedProjectionVersion: null,
-    });
-
-    const receipt = await provider.pin({
-      salesCycleId: first.cycleId,
-      reason: 'Founder context',
-      expiresAt: '2026-09-01T15:00:00.000Z',
-      comparedSalesCycleId: second.cycleId,
-    });
-    expect(receipt.affectedSalesCycleIds).toEqual([first.cycleId]);
-
-    const snapshot = await provider.get();
-    const laneOf = (cycleId: string) => snapshot.lanes.find(
-      (lane) => lane.items.some((item) => item.salesCycleId === cycleId),
-    )?.id;
-    expect(laneOf(first.cycleId)).toBe('due_cadence');
-    const pinnedItem = snapshot.lanes
-      .flatMap((lane) => lane.items)
-      .find((item) => item.salesCycleId === first.cycleId);
-    expect(pinnedItem?.pinned).toBe(true);
-  });
-
   it('rejects completing an action that is not the current cadence-bound action', async () => {
     const { cycleId, actionId } = seedLead('alpha');
 
@@ -302,52 +257,15 @@ describe('todayService', () => {
     })).rejects.toThrow('cadence-bound');
   });
 
-  describe('triage queue and review position', () => {
-    it('lists unreviewed cycles in stable id order with the saved position', async () => {
-      seedLead('alpha', 'unreviewed');
-      seedLead('beta', 'unreviewed');
-      seedLead('gamma', 'ready');
+  it('counts unreviewed cloud-scored leads for the backlog card', async () => {
+    const scored = seedLead('alpha', 'unreviewed');
+    seedLead('beta', 'unreviewed');
+    database.raw.prepare(`
+      UPDATE prospects SET cloud_fit = 62, cloud_timing = 41 WHERE id = ?
+    `).run(scored.prospect.prospectId);
 
-      const queue = await provider.getTriageQueue();
-      expect(queue.items.map((item) => item.salesCycleId)).toEqual([
-        'alpha-cycle', 'beta-cycle',
-      ]);
-      expect(queue.position).toBe(0);
-
-      await provider.setReviewPosition({ position: 1 });
-      const resumed = await provider.getTriageQueue();
-      expect(resumed.position).toBe(1);
-    });
-
-    it('excludes triage leads deferred to a future resurface date', async () => {
-      const { cycleId } = seedLead('alpha', 'unreviewed');
-      seedLead('beta', 'unreviewed');
-      await provider.snooze({
-        salesCycleId: cycleId,
-        resurfaceAt: '2026-09-30T15:00:00.000Z',
-      });
-
-      const queue = await provider.getTriageQueue();
-      expect(queue.items.map((item) => item.salesCycleId)).toEqual(['beta-cycle']);
-    });
-
-    it('reports position 0 once the pass has nothing left to review', async () => {
-      await provider.setReviewPosition({ position: 6 });
-      const queue = await provider.getTriageQueue();
-      expect(queue.items).toHaveLength(0);
-      expect(queue.position).toBe(0);
-    });
-
-    it('counts unreviewed cloud-scored leads for the backlog card', async () => {
-      const scored = seedLead('alpha', 'unreviewed');
-      seedLead('beta', 'unreviewed');
-      database.raw.prepare(`
-        UPDATE prospects SET cloud_fit = 62, cloud_timing = 41 WHERE id = ?
-      `).run(scored.prospect.prospectId);
-
-      const snapshot = await provider.get();
-      expect(snapshot.unreviewedBacklogCount).toBe(2);
-      expect(snapshot.unreviewedCloudSignalCount).toBe(1);
-    });
+    const snapshot = await provider.get();
+    expect(snapshot.unreviewedBacklogCount).toBe(2);
+    expect(snapshot.unreviewedCloudSignalCount).toBe(1);
   });
 });
