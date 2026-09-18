@@ -171,6 +171,21 @@ describe('CallCard', () => {
     expect(screen.queryAllByRole('button').map(button => button.textContent)).toEqual(['Show number']);
   });
 
+  it('says which email step of the sequence is held and why, and says nothing when none is', async () => {
+    const api = { getCompany: vi.fn(async () => detail()) };
+    render(<CallCard account={firm()} api={api} />);
+    expect(screen.queryByText(/^Email step /)).toBeNull();
+    cleanup();
+    render(<CallCard account={firm()} api={api} heldEmails={[
+      { accountId: 'a', templateId: 'T4', stepId: 'version-step-2', reason: 'template_not_approved' },
+      { accountId: 'a', templateId: 'T5', stepId: 'version-step-4', reason: 'mailbox_not_connected' },
+    ]} />);
+    expect(screen.getByText('Email step T4 held: template not approved', { exact: true })).toBeTruthy();
+    expect(screen.getByText('Email step T5 held: mailbox not connected', { exact: true })).toBeTruthy();
+    // A held step is a step that did not go out: the card offers no way to send or clear one.
+    expect(screen.queryAllByRole('button').map(button => button.textContent)).toEqual(['Show number']);
+  });
+
   it('says when the saved sources carry no listing', async () => {
     const account: ReturnType<typeof firm> = { ...firm(), routes: firm().routes.filter(route => route.id !== 'listed-phone') };
     const site = detail(account);
