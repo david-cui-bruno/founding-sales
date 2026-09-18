@@ -108,7 +108,7 @@ body[data-platform="darwin"] .nav-rail__header {
   display: inline;
   margin: 0;
   font-weight: 800;
-  font-family: Futura, 'Avenir Next', Arial, sans-serif;
+  font-family: Futura, "Avenir Next", Arial, sans-serif;
   font-size: var(--text-native-brand);
   letter-spacing: -1.8px;
   color: var(--native-brand);
@@ -169,7 +169,9 @@ body[data-platform="darwin"] .nav-rail__header {
 }
 
 .nav-rail .nav-rail__item--current:focus-visible {
-  box-shadow: var(--focus-ring), inset 3px 0 var(--accent);
+  box-shadow:
+    var(--focus-ring),
+    inset 3px 0 var(--accent);
 }
 
 .nav-rail__item[aria-disabled="true"] {
@@ -259,7 +261,17 @@ body[data-platform="darwin"] .nav-rail__header {
 }
 
 @media (max-width: 1200px) {
-  .nav-rail { padding-left: 8px; padding-right: 8px; }
-  .nav-rail__brand-native { font-size: var(--text-native-brand-narrow); }
-  .nav-rail__item { font-size: var(--text-caption); padding-left: 8px; padding-right: 8px; gap: 8px; }
+  .nav-rail {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+  .nav-rail__brand-native {
+    font-size: var(--text-native-brand-narrow);
+  }
+  .nav-rail__item {
+    font-size: var(--text-caption);
+    padding-left: 8px;
+    padding-right: 8px;
+    gap: 8px;
+  }
 }
