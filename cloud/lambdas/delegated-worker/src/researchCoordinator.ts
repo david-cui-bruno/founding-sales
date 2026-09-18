@@ -301,11 +301,19 @@ async function materialisePlacesCandidates(candidates: ReservedCandidate[], runI
       const source: AccountSource = { id: `place-${candidate.placeId}`, url: candidate.evidence.url, fetchedAt: candidate.evidence.fetchedAt, sha256: candidate.evidence.sha256, excerpt: candidate.evidence.excerpt, permitted: true };
       const route: AccountEvidenceBatch['routes'][number] = { id: `route-${fingerprint([account.id, 'listed-phone', candidate.listedPhone])}`, accountId: account.id, personId: null, channel: 'phone',
         value: candidate.listedPhone, purpose: 'business', evidenceIds: [source.id], verification: 'listed' };
+      let routed = false;
       try {
         await ctx.accounts.recordFetchedSource({ accountId: account.id, source });
         await ctx.accounts.admitEvidence({ commandId: derivedCommand(runId, candidate.domain, 'listed-route'), accountId: account.id, expectedVersion: 1, sources: [source], claims: [], routes: [route] });
-        places.routes++; identities.phones.add(candidate.listedPhone);
+        places.routes++; identities.phones.add(candidate.listedPhone); routed = true;
       } catch (error) { if (signal.aborted) throw error; places.skipped.route_held++; }
+      // The standing territory policy grants authority and enrolls the firm on its listed route in one transaction.
+      // Expected holds (no policy, paused, already granted, route unavailable) are outcomes, never throws; an unexpected
+      // failure leaves the firm created and routed for the next tick's replay. Research is enqueued either way, as before.
+      if (routed) {
+        try { await ctx.accounts.applyTerritoryPolicy(account.id, route.id); }
+        catch (error) { if (signal.aborted) throw error; }
+      }
     }
     try {
       await ctx.accounts.enqueue({ commandId: derivedCommand(runId, candidate.domain, 'enqueue'), accountId: account.id, limits: settings.researchLimits,
