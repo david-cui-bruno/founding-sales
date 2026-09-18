@@ -4,7 +4,16 @@ import type { DelegationRepository } from './delegationRepository';
 import { randomUUID } from 'node:crypto';
 import { accountFingerprint } from '../domain/accounts/accountEvidence';
 import { accountIdSchema, accountInstantSchema } from '../../shared/contracts/accountContract';
-export type SyncReport = Readonly<{ applied: number; gaps: number; cursor: string | null; ownerFresh: boolean }>;
+import { syncFailureSchema, SYNC_BUDGET_SECONDS } from '../../shared/contracts/ownerCommandContract';
+import { z } from 'zod';
+export type SyncFailure = z.infer<typeof syncFailureSchema>;
+export type SyncReport = Readonly<{ applied: number; gaps: number; cursor: string | null; ownerFresh: boolean; failure: SyncFailure }>;
+/** One worker request. The page size the worker serves is chosen so a page always fits here. */
+export const SYNC_REQUEST_TIMEOUT_MS = 15_000;
+/** One whole run: the launch sync, the five-minute background sync and the Sync now button all get this.
+ * The 835-event backlog David accumulated by 18 Sep needs five pages; a flat 15 s on the whole run aborted
+ * page one every time and reported "Applied: 0. Gaps: 0. Owner fresh: no" while nothing moved. */
+export const SYNC_BUDGET_MS = SYNC_BUDGET_SECONDS * 1_000;
 /** A replay from the beginning is safe: C1 durably validates event identity and
  * applies each projection/cursor transactionally. No replay restores rights. */
 export async function synchronizeDelegation(input: {
@@ -18,10 +27,17 @@ export async function synchronizeDelegation(input: {
   let cursor: string | null = attempt.cursor;
   let applied = 0;
   let gaps = 0;
+  let failure: SyncFailure = null;
   const finish = (complete: boolean): SyncReport => {
     try { input.transport.finish(attempt, cursor, complete); }
-    catch { complete = false; }
-    return { applied, gaps, cursor, ownerFresh: complete };
+    catch { complete = false; failure ??= 'transport'; }
+    return { applied, gaps, cursor, ownerFresh: complete, failure: complete ? null : failure ?? 'transport' };
+  };
+  // Each complete page is checkpointed while the attempt stays pending, so an abort on page seven
+  // resumes at page seven rather than page one even if the closing record write is itself lost.
+  const checkpoint = () => {
+    try { input.transport.checkpoint(attempt, cursor); }
+    catch { failure ??= 'transport'; /* finish() still tries to record the cursor it reached. */ }
   };
   try {
     try { await input.flushPending(signal); }
@@ -29,25 +45,33 @@ export async function synchronizeDelegation(input: {
     let reconciled = false;
     for (let pageNumber = 0; pageNumber < 100; pageNumber++) {
       signal.throwIfAborted();
-      const page = eventPageSchema.parse(await input.eventsAfter(cursor, signal));
+      let raw: EventPage;
+      try { raw = await input.eventsAfter(cursor, signal); }
+      catch (error) { failure = signal.aborted ? 'timeout' : 'transport'; throw error; }
+      let page: EventPage;
+      try { page = eventPageSchema.parse(raw); }
+      catch (error) { failure = 'invalid_event'; throw error; }
       signal.throwIfAborted();
       for (const event of page.events) {
         const result = input.repository.applyWorkerEvent(event);
         if (result === 'applied') applied++;
-        if (result === 'gap') { gaps++; return finish(false); }
+        if (result === 'gap') { gaps++; failure = 'gap'; return finish(false); }
       }
       if (page.complete) {
         cursor = page.nextCursor;
+        checkpoint();
         if (!reconciled && input.reconcilePending) {
           reconciled = true;
           if (await input.reconcilePending(signal)) continue;
         }
         return finish(true);
       }
-      if (page.nextCursor === cursor || page.events.length === 0) return finish(false);
+      if (page.nextCursor === cursor || page.events.length === 0) { failure ??= 'transport'; return finish(false); }
       cursor = page.nextCursor;
+      checkpoint();
     }
-  } catch { /* A failed/aborted sync is not current owner proof. */ }
+    failure ??= 'transport'; /* The bounded page budget ran out before the head. */
+  } catch { failure ??= signal.aborted ? 'timeout' : 'transport'; /* A failed/aborted sync is not current owner proof. */ }
   // An incomplete bounded replay cannot establish owner freshness.
   return finish(false);
 }
@@ -88,6 +112,20 @@ export class SqlDelegationTransport {
       { state: 'pending' | 'complete' | 'failed'; completedAt: string | null; revision: number; cursor: string | null; startedAt: string } | undefined;
     if (row) this.validateCursor(row.cursor);
     return row ?? null;
+  }
+  /** Advances the cursor of the attempt that is still running. The attempt stays `pending`, so the
+   * daily footer keeps reading a run in flight as in flight; only finish() settles it. */
+  checkpoint(attempt: { revision: number; attemptId: string }, cursor: string | null): void {
+    this.validateCursor(cursor);
+    if (cursor === null) return;
+    this.atomic(() => {
+      const old = this.current();
+      if (old?.cursor && Number(cursor.split(':')[1]) < Number(old.cursor.split(':')[1])) throw new Error('Transport cursor regression');
+      const changed = this.input.database.raw.prepare(`UPDATE delegated_transport_state SET cursor=?
+        WHERE workspace_id=? AND pairing_id=? AND revision=? AND attempt_id=? AND state='pending'`)
+        .run(cursor, this.input.workspaceId, this.input.pairingId, attempt.revision, attempt.attemptId);
+      if (changed.changes !== 1) throw new Error('Stale transport attempt');
+    });
   }
   finish(attempt: { revision: number; attemptId: string }, cursor: string | null, complete: boolean): void {
     this.validateCursor(cursor);

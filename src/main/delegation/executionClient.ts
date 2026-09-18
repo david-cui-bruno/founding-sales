@@ -13,8 +13,9 @@ import { remoteGoogleGrantAuthorizationSchema, remoteGoogleGrantBeginSchema, rem
 import { googleConnectionStatusErrorBodySchema, GoogleConnectionStatusFailure, GOOGLE_CONNECTION_STATUS_MAX_ERROR_BYTES } from '../../shared/contracts/remoteGoogleConnectionsContract';
 import type { DelegationRepository } from './delegationRepository';
 import { commandReceiptSchema, delegationCommandSchema, eventPageSchema, type CommandReceipt, type DelegationCommand } from '../../shared/contracts/delegationContract';
-import { synchronizeDelegation, type SqlDelegationTransport, type SyncReport } from './delegationSync';
+import { synchronizeDelegation, SYNC_BUDGET_MS, SYNC_REQUEST_TIMEOUT_MS, type SqlDelegationTransport, type SyncReport } from './delegationSync';
 export type { SyncReport } from './delegationSync';
+export { SYNC_BUDGET_MS } from './delegationSync';
 export type ExecutionPairing = Readonly<{ endpoint: string; workspaceId: string; credential: string }>;
 /** This transport deliberately retains no client, repository, SQL transport or DB
  * handle. Even an abort-ignoring HTTP continuation cannot outlive a DB lease. */
@@ -265,14 +266,17 @@ export class ExecutionClient {
     return result;
   }
   async configurePolicy(raw:unknown,signal:AbortSignal) {const input=workerPolicyRequestSchema.parse(raw);if(input.workspaceId!==this.pairing.workspaceId)throw Error('workspace_mismatch');const result=workerPolicyReceiptSchema.parse(await this.request('/policies/configure',signal,input));if(result.requestId!==input.requestId||result.kind!==input.kind)throw Error('policy_receipt_mismatch');return result;}
-  sync(signal: AbortSignal): Promise<SyncReport> {
+  /** The caller owns the budget for the whole run; each worker request inside it still gets its own
+   * 15 s. A page that stalls ends that page, not the run, and the cursor it reached is already saved. */
+  sync(signal: AbortSignal, budgetMs: number = SYNC_BUDGET_MS): Promise<SyncReport> {
+    const request = (currentSignal: AbortSignal) => AbortSignal.any([currentSignal, AbortSignal.timeout(SYNC_REQUEST_TIMEOUT_MS)]);
     return synchronizeDelegation({ repository: this.repository, transport: this.transport,
       flushPending: async currentSignal => {
         for (const command of this.repository.pendingCommands()) {
           currentSignal.throwIfAborted();
           if (this.repository.canSubmitCommand(command.commandId)) {
             try {
-              const receipt = commandReceiptSchema.parse(await this.request('/commands', currentSignal, command));
+              const receipt = commandReceiptSchema.parse(await this.request('/commands', request(currentSignal), command));
               if (receipt.commandId !== command.commandId) throw new Error('Worker receipt mismatch');
             } catch { currentSignal.throwIfAborted(); /* Refusal is not a durable rejection. Keep draining. */ }
           }
@@ -289,12 +293,13 @@ export class ExecutionClient {
           if (command.expectedAuthorityGeneration >= authority.generation && command.expectedVersion >= version) continue;
           attempted = true;
           try {
-            const receipt = commandReceiptSchema.parse(await this.request('/commands/reconcile', currentSignal, command));
+            const receipt = commandReceiptSchema.parse(await this.request('/commands/reconcile', request(currentSignal), command));
             if (receipt.commandId !== command.commandId) throw new Error('Worker receipt mismatch');
           } catch { currentSignal.throwIfAborted(); /* Only an applied owner event can settle this command. */ }
         }
         return attempted;
       },
-      eventsAfter: async (cursor, currentSignal) => eventPageSchema.parse(await this.request(`/events${cursor === null ? '' : `?cursor=${encodeURIComponent(cursor)}`}`, currentSignal)) }, AbortSignal.any([signal, this.signal]));
+      eventsAfter: async (cursor, currentSignal) => eventPageSchema.parse(await this.request(`/events${cursor === null ? '' : `?cursor=${encodeURIComponent(cursor)}`}`, request(currentSignal))) },
+      AbortSignal.any([signal, this.signal, AbortSignal.timeout(budgetMs)]));
   }
 }
