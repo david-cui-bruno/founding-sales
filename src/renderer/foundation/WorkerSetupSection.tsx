@@ -72,7 +72,8 @@ export function WorkerSetupSection({ api }: { api?: Api }) {
   const current = useCallback((lifetime: Lifetime) =>
     owner.current === lifetime && generation.current === lifetime.generation, []);
 
-  const read = useCallback(async (lifetime: Lifetime) => {
+  /** `remote` is true only for the explicit Refresh click: the mount and the post-pair read stay local so opening Settings never calls the worker. */
+  const read = useCallback(async (lifetime: Lifetime, remote = false) => {
     if (!current(lifetime)) return;
     lifetime.status = null;
     setView(previous => ({ ...previous, status: null, statusError: false }));
@@ -90,6 +91,7 @@ export function WorkerSetupSection({ api }: { api?: Api }) {
       if (!current(lifetime)) return;
       setView(previous => ({ ...previous, status: null, statusError: true, code: '' }));
     }
+    if (!remote) return;
     // The last scheduled tick is a second, independent observation; its failure never disturbs the local facts above.
     const researchSetup = lifetime.api.researchSetup;
     if (researchSetup) {
@@ -114,7 +116,7 @@ export function WorkerSetupSection({ api }: { api?: Api }) {
     setView(previous => ({ ...previous, senderCap }));
   }, [current]);
 
-  const run = useCallback(async (lifetime: Lifetime, fields?: Request) => {
+  const run = useCallback(async (lifetime: Lifetime, fields?: Request, remote = false) => {
     if (!current(lifetime) || lifetime.busy) return;
     if (fields !== undefined && (lifetime.status === null || lifetime.status.state === 'locked')) return;
     // Own the entire operation, including the successful pair's one status read.
@@ -122,7 +124,7 @@ export function WorkerSetupSection({ api }: { api?: Api }) {
     setView(previous => ({ ...previous, busy: true }));
     try {
       if (fields === undefined) {
-        await read(lifetime);
+        await read(lifetime, remote);
         return;
       }
       let paired = false;
@@ -252,7 +254,7 @@ export function WorkerSetupSection({ api }: { api?: Api }) {
           });
         }}>Pair worker</button>
         <button type="button" className="settings__action" disabled={busy} onClick={() => {
-          if (lifetime) void run(lifetime);
+          if (lifetime) void run(lifetime, undefined, true);
         }}>Refresh worker status</button>
       </div>
     </section>

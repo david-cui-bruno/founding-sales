@@ -418,6 +418,9 @@ describe('Task9 additional lifetime positive controls', () => {
 });
 
 
+/** Remote observations (last tick, sender cap) are read only on the explicit Refresh click, never on mount. */
+const refreshed = async (label: string) => { const region = await observed(label); refresh(); await waitFor(() => expect(button('Refresh worker status').disabled).toBe(false)); return region; };
+
 describe('a worker David can see', () => {
   type ResearchApi = Pick<ResearchSetupApi, 'status'>;
   const researchStatus = (lastTickAt: string | null, remote = true): ResearchSetupStatus => ({ pending: null, blockers: [], remote: remote ? { workspaceId: workspace, pairingId: '11111111-1111-4111-8111-111111111111', selector: null,
@@ -426,7 +429,7 @@ describe('a worker David can see', () => {
   it('W30 shows when the worker last ran from the cloud research status and warns after twenty minutes of silence', async () => {
     const fresh = vi.fn(async () => researchStatus(new Date(Date.now() - 5 * 60_000).toISOString()));
     render(<WorkerSetupSection api={withResearch({ status: fresh })} />);
-    const region = await observed('Active');
+    const region = await refreshed('Active');
     await within(region).findByText(/Worker last ran/);
     expect(region.textContent).toMatch(/Worker last ran 5 minutes ago\./);
     expect(fresh).toHaveBeenCalledTimes(1);
@@ -434,7 +437,7 @@ describe('a worker David can see', () => {
     cleanup();
     const stale = vi.fn(async () => researchStatus(new Date(Date.now() - 25 * 60_000).toISOString()));
     render(<WorkerSetupSection api={withResearch({ status: stale })} />);
-    const staleRegion = await observed('Active');
+    const staleRegion = await refreshed('Active');
     const alert = await within(staleRegion).findByRole('alert');
     expect(alert.textContent).toMatch(/has not run for more than 20 minutes/);
     expect(staleRegion.textContent).toMatch(/Worker last ran 25 minutes ago\./);
@@ -442,23 +445,23 @@ describe('a worker David can see', () => {
   it('W31 distinguishes a worker that never recorded a tick, an unreadable cloud status and a connection without cloud research', async () => {
     const never = vi.fn(async () => researchStatus(null));
     render(<WorkerSetupSection api={withResearch({ status: never })} />);
-    let region = await observed('Active');
+    let region = await refreshed('Active');
     await within(region).findByText(/Worker last run: not recorded yet/);
     expect(within(region).queryByRole('alert')).toBeNull();
     cleanup();
     const failing = vi.fn(async () => { throw Error(`private-error ${codeA}`); });
     render(<WorkerSetupSection api={withResearch({ status: failing })} />);
-    region = await observed('Active');
+    region = await refreshed('Active');
     await within(region).findByText(/Worker last run: not available/);
     safeFeedback();
     cleanup();
     const missingRemote = vi.fn(async () => researchStatus(null, false));
     render(<WorkerSetupSection api={withResearch({ status: missingRemote })} />);
-    region = await observed('Active');
+    region = await refreshed('Active');
     await within(region).findByText(/Worker last run: not available/);
     cleanup();
     const a = api(status('active', 3)); render(<WorkerSetupSection api={a} />);
-    region = await observed('Active');
+    region = await refreshed('Active');
     expect(region.textContent).not.toMatch(/Worker last r/);
   }, 10_000);
 });
@@ -485,7 +488,7 @@ describe('W32 the sender cap David can see', () => {
   it('W32 shows today cap out of the ceiling with the ramp position', async () => {
     const read = vi.fn<GrantApi['status']>(async () => grantStatus(senderCapForDay({ dailyLimit: 40, ramp: SENDER_RAMP_DEFAULT }, '2026-09-16T09:00:00.000Z', '2026-09-18T09:00:00.000Z')));
     render(<WorkerSetupSection api={withGrant({ status: read })} />);
-    const region = await observed('Active');
+    const region = await refreshed('Active');
     await within(region).findByText('Sender cap today: 14 of 40 (day 3 of ramp).', { exact: true });
     expect(read).toHaveBeenCalledWith({ purpose: 'permitted_correspondence' });
     expect(read).toHaveBeenCalledTimes(1);
@@ -493,22 +496,22 @@ describe('W32 the sender cap David can see', () => {
   it('W33 states a flat cap, an unconfigured cap and an unreadable grant honestly', async () => {
     const flat = vi.fn<GrantApi['status']>(async () => grantStatus(senderCapForDay({ dailyLimit: 25 }, null, '2026-09-18T09:00:00.000Z')));
     render(<WorkerSetupSection api={withGrant({ status: flat })} />);
-    let region = await observed('Active');
+    let region = await refreshed('Active');
     await within(region).findByText('Sender cap today: 25 a day, with no warm-up ramp configured.', { exact: true });
     cleanup();
     const none = vi.fn<GrantApi['status']>(async () => grantStatus());
     render(<WorkerSetupSection api={withGrant({ status: none })} />);
-    region = await observed('Active');
+    region = await refreshed('Active');
     await within(region).findByText('Sender cap: no cap policy recorded for this mailbox, so the worker holds every send.', { exact: true });
     cleanup();
     const failing = vi.fn<GrantApi['status']>(async () => { throw Error(`private-error ${codeA}`); });
     render(<WorkerSetupSection api={withGrant({ status: failing })} />);
-    region = await observed('Active');
+    region = await refreshed('Active');
     await within(region).findByText('Sender cap: not available (the cloud grant status could not be read).', { exact: true });
     safeFeedback();
     cleanup();
     const a = api(status('active', 3)); render(<WorkerSetupSection api={a} />);
-    region = await observed('Active');
+    region = await refreshed('Active');
     expect(region.textContent).not.toMatch(/Sender cap/);
   }, 10_000);
 });
