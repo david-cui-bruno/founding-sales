@@ -73,7 +73,7 @@ describe('SettingsScreen', () => {
 
     const sections = screen.getByRole('navigation', { name: 'Settings sections' });
     expect(within(sections).getAllByRole('button').map(button => button.textContent)).toEqual([
-      'Connections', 'Phone', 'Call capacity', 'Territory clearance', 'Worker connection', 'Suppressed', 'Appearance',
+      'Connections', 'Phone', 'Call capacity', 'Territory clearance', 'Email templates', 'Worker connection', 'Suppressed', 'Appearance',
       'Data & storage', 'Diagnostics', 'Keyboard shortcuts', 'About',
     ]);
 
