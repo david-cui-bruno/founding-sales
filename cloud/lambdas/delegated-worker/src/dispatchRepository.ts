@@ -17,10 +17,12 @@ import { accountReplyDraftSchema, threadProjectionSchema } from '../../../../src
 import { DynamoStore, fingerprint, integer, keyPart, type RepositoryOptions } from './dynamoStore';
 import { type GoogleAccessEvidence, RemoteGoogleAuthorization, dispatchCapPolicyKey, dispatchCapUsageKey, senderFirstSendKey } from './remoteGoogleAuthorization';
 import { senderCapForDay, senderCapPolicySchema as capPolicySchema, senderFirstSendSchema } from '../../../../src/shared/contracts/workerPolicyContract';
-/** Historically exported from this module; the definitions now live beside the grant. */
-export { dispatchCapPolicyKey, dispatchCapUsageKey, senderFirstSendKey };
 import { mailThreadKey, mailSuppressionKey } from './threadIntakeRepository';
 import { createIntakeBarrier, intakeRegistrySchema, intakeRegistryKey } from './intakeBarrier';
+
+/** Historically exported from this module; the definitions now live beside the grant so the one
+ * grant status read and this cap check share them without the two modules importing each other. */
+export { dispatchCapPolicyKey, dispatchCapUsageKey, senderFirstSendKey };
 
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
 const header = z.string().min(1).max(998).refine(value => !/[\r\n\u0000]/.test(value)); // eslint-disable-line no-control-regex
