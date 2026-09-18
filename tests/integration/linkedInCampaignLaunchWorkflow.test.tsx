@@ -103,6 +103,8 @@ it('launches a one-company LinkedIn campaign from a clean workspace: save, appro
   const f = await fixture();
   try {
     vi.spyOn(Date, 'now').mockReturnValue(Date.parse(f.now));
+    // D2 lists this firm's published phone as a new call under the default allocation; this test follows the LinkedIn path only.
+    f.db.raw.prepare('UPDATE meeting_first_call_settings SET new_call_slots=0').run();
     const originalIds = new Set(f.services.daily.get().campaigns.map(c => c.version.id));
     expect(f.services.daily.get().calls.accountIds).toEqual([]);
     const view = f.mount();

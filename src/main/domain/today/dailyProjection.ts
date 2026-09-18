@@ -25,6 +25,7 @@ export function buildDailySnapshot(input: DailyProjectionInput): DailySnapshot {
   const issues = [...issueCounts].sort(([a], [b]) => a.localeCompare(b)).map(([code, count]) => ({ code, count }));
   const content = { workspaceId: input.workspaceId, workflowMode: input.workflowMode ?? 'unknown', accounts: input.workspaceId === null ? [] : input.accounts,
     calls, callSettings: input.callSettings, answers, meetings, campaigns: input.workspaceId === null ? [] : input.campaigns, ownerStatus, transport: input.workspaceId === null ? [] : input.transport, issues };
-  return dailySnapshotSchema.parse({ ...content, revision: createHash('sha256').update(JSON.stringify(content)).digest('hex'),
+  // The allocation is derived from callSettings, so it stays outside the hashed content and every stored revision is unchanged.
+  return dailySnapshotSchema.parse({ ...content, ...(input.allocation ? { allocation: input.allocation } : {}), revision: createHash('sha256').update(JSON.stringify(content)).digest('hex'),
     freshness: { kind: issues.length ? 'incomplete' : 'local_snapshot', generatedAt: input.generatedAt, remote: 'unknown' } });
 }

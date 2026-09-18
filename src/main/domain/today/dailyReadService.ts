@@ -4,7 +4,7 @@ import type { AppDatabase } from '../../db/database';
 import type { Clock } from '../support/clock';
 import type { IdGenerator } from '../support/idGenerator';
 import type { TodayService } from './todayService';
-import type { WorkspaceSettingsRepository } from '../workspace/workspaceSettingsRepository';
+import { resolveAccountCallAllocation, type WorkspaceSettingsRepository } from '../workspace/workspaceSettingsRepository';
 import { accountFingerprint } from '../accounts/accountEvidence';
 import { AccountRepository } from '../accounts/accountRepository';
 import { CampaignRepository } from '../campaign/campaignRepository';
@@ -38,10 +38,14 @@ export class DailyReadService {
     const rows = (sql: string, ...args: string[]) => raw.prepare(sql).all(...args) as Row[];
     const parse = <T>(read: () => T): T | null => { try { return read(); } catch { issue('invalid_local_record'); return null; } };
     input.workflowMode = parse(() => readWorkflowMode(database)) ?? 'unknown';
-    // Unconfigured settings resolve to the default allocation (30 new firms a morning) and say so through `source`;
-    // that is a chosen state, not an incomplete snapshot, so no issue is raised for it.
-    const callSettings = parse(() => settings.readAccountCallAllocation());
-    if (callSettings) input.callSettings = { newCallSlots: callSettings.newCallSlots, totalCallCapacity: callSettings.totalCallCapacity, source: callSettings.source };
+    // The stored record goes into the hashed snapshot unchanged. Unconfigured settings resolve to the default allocation
+    // (30 new firms a morning) reported beside it as `allocation`; a chosen state, not an incomplete snapshot, so no issue.
+    const stored = parse(() => settings.readMeetingFirstAccountCallSettings());
+    if (stored) {
+      input.callSettings = { newCallSlots: stored.newCallSlots, totalCallCapacity: stored.totalCallCapacity };
+      const allocation = resolveAccountCallAllocation(stored);
+      input.allocation = { newCallSlots: allocation.newCallSlots, source: allocation.source };
+    }
     if (workspaceId === null) return buildDailySnapshot(input);
     const accounts = new AccountRepository({ database, clock, ids });
     // Accounts live in this encrypted workspace DB. Explicit foreign owner bindings are excluded.

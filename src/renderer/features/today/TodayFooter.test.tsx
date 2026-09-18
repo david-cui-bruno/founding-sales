@@ -58,7 +58,7 @@ describe('TodayFooter', () => {
   });
   it('keeps the unpaired and failed-refresh lines, reads nothing remote for them, and names the default allocation in the details', async () => {
     const researchSetup = { status: vi.fn(async () => remote()) };
-    const unpaired: DailySnapshot = { ...dailyFixture(), workspaceId: null, accounts: [], answers: [], calls: { accountIds: [], workloadConflict: false }, callSettings: { newCallSlots: 30, totalCallCapacity: null, source: 'default' } };
+    const unpaired: DailySnapshot = { ...dailyFixture(), workspaceId: null, accounts: [], answers: [], calls: { accountIds: [], workloadConflict: false }, callSettings: { newCallSlots: null, totalCallCapacity: null }, allocation: { newCallSlots: 30, source: 'default' } };
     const view = render(<TodayFooter snapshot={unpaired} readError={false} researchSetup={researchSetup} now={() => NOW} />);
     expect(screen.getByRole('status').textContent).toBe('Local snapshot · remote freshness unknown');
     fireEvent.click(screen.getByText('Queue capacity and operational details'));

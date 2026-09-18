@@ -1138,7 +1138,7 @@ test('the morning call card and the footer line read saved facts only and place 
     firm.claims = [{kind: 'fact', key: 'residential_scope', value: 'Residential and multifamily rentals', evidenceIds: ['site']}];
     firm.routes = [{id: 'listed-phone', accountId: 'a', personId: null, channel: 'phone', value: '+14015550100', purpose: 'business', verification: 'listed', evidenceIds: ['places'], version: 1}];
     firm.portfolio = [{count: 340, measure: 'units', scope: 'managed', evidenceIds: ['site']}];
-    snapshot.callSettings = {newCallSlots: 30, totalCallCapacity: null, source: 'default'};
+    snapshot.callSettings = {newCallSlots: null, totalCallCapacity: null}; snapshot.allocation = {newCallSlots: 30, source: 'default'};
     snapshot.transport = [{pairingId: 'pairing', revision: 4, state: 'complete', startedAt: new Date(Date.now() - 150_000).toISOString(), completedAt: new Date(Date.now() - 120_000).toISOString()}];
     f.setSnapshot(snapshot);
     f.setCompanyDetails([{scope: 'local_database', generatedAt: now, snapshot: firm, links: [], sources: [

@@ -64,6 +64,9 @@ async function fixture(reviewedInbox = false) {
     let offline = false;
     const http: typeof fetch = async (input, init) => {
       const url = new URL(String(input));
+      // The Today footer reads the research setup status once per mount and per completed sync (D3). This fixture has no
+      // research worker, so that read is unavailable; it is a status read, not command or event traffic, and is not counted.
+      if (url.pathname === '/research/setup/status') throw Error('Research status unavailable in this fixture');
       paths.push(url.pathname);
       if (offline) throw Error('Controlled owner offline');
       if (url.origin !== pairing.endpoint || !['/commands', '/events', '/commands/reconcile'].includes(url.pathname)) throw Error('Unexpected fixture endpoint');
@@ -154,8 +157,9 @@ async function fixture(reviewedInbox = false) {
         if (database !== local.db) closeDatabase(database); local.close();
         expect(violations).toEqual([]);
         expect(paths.every(path => ['/commands', '/events', '/commands/reconcile'].includes(path))).toBe(true);
+        // 'local-workspace:get-company' is the Today call card reading the saved listing for a selected firm: a local read, never a command.
         expect(invocations.every(channel => ['daily:get', 'outreach:delegation-status', 'local-workspace:get',
-          'local-workspace:get-commitments', 'outreach:delegation-bootstrap', 'outreach:delegation-submit', 'outreach:delegation-sync', 'outreach:delegation-selected-account-freshness'].includes(channel))).toBe(true);
+          'local-workspace:get-commitments', 'local-workspace:get-company', 'outreach:research-setup-status', 'outreach:delegation-bootstrap', 'outreach:delegation-submit', 'outreach:delegation-sync', 'outreach:delegation-selected-account-freshness'].includes(channel))).toBe(true);
         expect(forbidden).not.toHaveBeenCalled();
       } };
 
@@ -191,7 +195,8 @@ it('offers explicit worker preparation for a first-time local company while exis
     expect(await f.api.daily.get()).toEqual(before);
     expect(f.paths).toEqual([]);
     expect(f.dynamo.transactions).toHaveLength(workerTransactions);
-    expect(f.invocations.every(channel => ['daily:get', 'outreach:delegation-status', 'local-workspace:get', 'local-workspace:get-commitments'].includes(channel))).toBe(true);
+    // 'outreach:research-setup-status' is the Today footer's one status read on mount (spend and worker tick); a read, not a command.
+    expect(f.invocations.every(channel => ['daily:get', 'outreach:delegation-status', 'local-workspace:get', 'local-workspace:get-commitments', 'outreach:research-setup-status'].includes(channel))).toBe(true);
     expect(f.forbidden).not.toHaveBeenCalled();
 
     // FIRST CAUSAL RED: missing product entrypoint, not fabricated owner success.

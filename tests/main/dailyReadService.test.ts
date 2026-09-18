@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { createCampaignFixture } from '../fixtures/campaignWorkspace';
 import { createDomainServices } from '../../src/main/domain/createDomainServices';
 import { DailyReadService } from '../../src/main/domain/today/dailyReadService';
+import { buildDailySnapshot } from '../../src/main/domain/today/dailyProjection';
 import { DelegationRepository } from '../../src/main/delegation/delegationRepository';
 import { requestedFollowupFixture } from '../fixtures/requestedFollowup';
 import { createLinkedInFixture } from '../fixtures/linkedInWorkspace';
@@ -183,8 +184,11 @@ it('D2 morning list: 40 worker-prepared firms with listed phones give 30 new fir
     const before = f.db.raw.prepare('SELECT total_changes() AS n').get();
     const morning = f.read();
     expect(f.db.raw.prepare('SELECT total_changes() AS n').get()).toEqual(before);
-    // Unconfigured Settings: the default allocation is reported as such, without an incomplete-snapshot issue.
-    expect(morning.callSettings).toEqual({ newCallSlots: 30, totalCallCapacity: null, source: 'default' });
+    // Unconfigured Settings: the stored record is unchanged in the hashed snapshot; the default allocation is reported beside it, without an incomplete-snapshot issue.
+    expect(morning.callSettings).toEqual({ newCallSlots: null, totalCallCapacity: null });
+    expect(morning.allocation).toEqual({ newCallSlots: 30, source: 'default' });
+    const { allocation: omitted, ...hashed } = morning; void omitted;
+    expect(buildDailySnapshot({ ...hashed, generatedAt: morning.freshness.generatedAt, approvals: morning.answers }).revision).toBe(morning.revision);
     expect(morning.issues.map(issue => issue.code)).not.toContain('call_allocation_unconfigured');
     expect(morning.freshness.kind).toBe('local_snapshot');
     expect(morning.calls.accountIds).toHaveLength(31);
@@ -211,7 +215,8 @@ it('D2 morning list: 40 worker-prepared firms with listed phones give 30 new fir
     // Settings can still turn the default down or off.
     f.db.raw.prepare('UPDATE meeting_first_call_settings SET new_call_slots=5').run();
     const configured = f.read();
-    expect(configured.callSettings).toEqual({ newCallSlots: 5, totalCallCapacity: null, source: 'configured' });
+    expect(configured.callSettings).toEqual({ newCallSlots: 5, totalCallCapacity: null });
+    expect(configured.allocation).toEqual({ newCallSlots: 5, source: 'configured' });
     expect(configured.calls.accountIds).toEqual([f.account.id, ...listed.slice(0, 5)]);
   } finally { f.close(); }
 });

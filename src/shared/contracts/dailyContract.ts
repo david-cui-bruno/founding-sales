@@ -37,11 +37,13 @@ export const dailyCampaignSchema = z.strictObject({ version: campaignVersionSche
 export const dailyIssueSchema = z.strictObject({ code: z.enum(['scope_unknown', 'scope_mismatch', 'invalid_local_record', 'research_failed', 'call_allocation_unconfigured', 'call_due_unknown', 'transport_incomplete', 'workload_conflict']), count: revision.positive() });
 export const dailyTransportSchema = z.strictObject({ pairingId: id, revision: revision.positive(), state: z.enum(['pending', 'complete', 'failed']), startedAt: instant, completedAt: instant.nullable() })
   .refine(t => (t.state === 'complete') === (t.completedAt !== null));
-/** `source` says whether the new-call allocation was typed in Settings or is the workspace default (30 new firms a day). Absent on older snapshots. */
-export const dailyCallSettingsSchema = z.strictObject({ newCallSlots: revision.nullable(), totalCallCapacity: revision.nullable(), source: z.enum(['default', 'configured']).optional() });
+export const dailyCallSettingsSchema = z.strictObject({ newCallSlots: revision.nullable(), totalCallCapacity: revision.nullable() });
+/** What Today planned with: the typed number, or the workspace default (30 new firms a day) when Settings is unconfigured.
+ *  Derived from `callSettings` and kept outside the revision hash, so stored snapshots and their revisions are unchanged. */
+export const dailyCallAllocationSchema = z.strictObject({ newCallSlots: revision, source: z.enum(['default', 'configured']) });
 export const dailySnapshotSchema = z.strictObject({ workspaceId: id.nullable(), workflowMode: z.enum(['legacy', 'meeting_first', 'unknown']), revision: z.string().regex(/^[a-f0-9]{64}$/),
   freshness: z.strictObject({ kind: z.enum(['local_snapshot', 'incomplete']), generatedAt: instant, remote: z.literal('unknown') }),
-  accounts: z.array(dailyAccountSchema), calls: dailyAccountCallPlanSchema, callSettings: dailyCallSettingsSchema,
+  accounts: z.array(dailyAccountSchema), calls: dailyAccountCallPlanSchema, callSettings: dailyCallSettingsSchema, allocation: dailyCallAllocationSchema.optional(),
   answers: z.array(dailyAnswerSchema), meetings: z.array(dailyMeetingSchema), campaigns: z.array(dailyCampaignSchema), ownerStatus: z.array(dailyOwnerStatusSchema), transport: z.array(dailyTransportSchema), issues: z.array(dailyIssueSchema).max(8) }).refine(s => {
   const ids = new Set(s.accounts.map(a => a.account.id));
   return ids.size === s.accounts.length

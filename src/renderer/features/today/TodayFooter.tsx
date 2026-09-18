@@ -27,9 +27,9 @@ export function describeSync(snapshot: Pick<DailySnapshot, 'workspaceId' | 'tran
   return `Sync failed (attempted ${describeAgo(latest.startedAt, now)}) · showing local records`;
 }
 
-/** `lastTickAt` arrives with the worker-visibility lane; until then, and whenever it is absent or malformed, the honest word is unknown. */
+/** `lastTickAt` is the worker's last persisted scheduled tick; null before the first tick, absent on a worker predating it. Either way: unknown. */
 export function describeWorkerTick(status: ResearchSetupStatus | null, now: number): string {
-  const tick = (status?.remote as { lastTickAt?: unknown } | null | undefined)?.lastTickAt;
+  const tick: unknown = status?.remote?.lastTickAt;
   return typeof tick === 'string' && INSTANT.test(tick) ? `worker last ran ${describeAgo(tick, now)}` : 'worker last ran unknown';
 }
 
@@ -73,7 +73,7 @@ export function TodayFooter({ snapshot, readError, researchSetup, now = () => Da
       <summary>Queue capacity and operational details</summary>
       <p>
         New-call slots:{' '}
-        {snapshot.callSettings.newCallSlots ?? 'unconfigured'}{snapshot.callSettings.source === 'default' ? ` (${DEFAULT_NEW_CALL_SLOTS_COPY})` : ''} · total call
+        {snapshot.allocation ? `${snapshot.allocation.newCallSlots}${snapshot.allocation.source === 'default' ? ` (${DEFAULT_NEW_CALL_SLOTS_COPY})` : ''}` : snapshot.callSettings.newCallSlots ?? 'unconfigured'} · total call
         capacity:{' '}
         {snapshot.callSettings.totalCallCapacity ?? 'unconfigured'}.
         Allocation is not completed-call progress.

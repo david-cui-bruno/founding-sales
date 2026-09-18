@@ -201,8 +201,9 @@ describe('createDomainServices', () => {
         updatedAt: '2026-08-30T12:02:00.000Z',
       });
     });
+    // D2 (17 Sep 2026): `uncertain` fit is listed after firms with richer evidence; only `not-target` stays out.
     expect(services.today.planMeetingFirstAccountCalls({ due: [], ranked })).toEqual({
-      accountIds: eligible ? ['first', 'later-phone'] : ['later-phone'], workloadConflict: eligible,
+      accountIds: eligible ? ['first', 'later-phone', 'uncertain'] : ['later-phone', 'uncertain'], workloadConflict: true,
     });
   });
 
@@ -220,7 +221,8 @@ describe('createDomainServices', () => {
     expect(services.today.planMeetingFirstAccountCalls({
       due: [emailDue, noRouteDue, emailDue], ranked: [emailDue, noRouteDue, accountSnapshot('new-phone')],
     })).toEqual({
-      accountIds: newCallSlots === 1 ? ['email-due', 'no-route-due', 'new-phone'] : ['email-due', 'no-route-due'],
+      // D2: unconfigured (null) means the default allocation of 30, so only an explicit 0 withholds the new firm.
+      accountIds: newCallSlots === 0 ? ['email-due', 'no-route-due'] : ['email-due', 'no-route-due', 'new-phone'],
       workloadConflict: true,
     });
   });

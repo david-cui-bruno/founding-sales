@@ -57,6 +57,17 @@ export type AccountCallAllocation = Readonly<{
   updatedAt: string;
 }>;
 
+/** Pure: the stored record resolved to what Today plans with. */
+export function resolveAccountCallAllocation(stored: MeetingFirstAccountCallSettings): AccountCallAllocation {
+  return Object.freeze({
+    newCallSlots: stored.newCallSlots ?? DEFAULT_NEW_CALL_SLOTS,
+    totalCallCapacity: stored.totalCallCapacity,
+    source: stored.newCallSlots === null ? 'default' : 'configured',
+    revision: stored.revision,
+    updatedAt: stored.updatedAt,
+  });
+}
+
 export class WorkspaceSettingsCorruptionError extends Error {
   constructor(message = 'The workspace settings singleton row is missing or malformed.') {
     super(message);
@@ -135,14 +146,7 @@ export class WorkspaceSettingsRepository {
 
   /** Stored settings resolved to what Today plans with. The stored read above stays null when unconfigured so Settings shows the truth. */
   readAccountCallAllocation(): AccountCallAllocation {
-    const stored = this.readMeetingFirstAccountCallSettings();
-    return Object.freeze({
-      newCallSlots: stored.newCallSlots ?? DEFAULT_NEW_CALL_SLOTS,
-      totalCallCapacity: stored.totalCallCapacity,
-      source: stored.newCallSlots === null ? 'default' : 'configured',
-      revision: stored.revision,
-      updatedAt: stored.updatedAt,
-    });
+    return resolveAccountCallAllocation(this.readMeetingFirstAccountCallSettings());
   }
 
   updateMeetingFirstAccountCallSettingsCas(input: {
