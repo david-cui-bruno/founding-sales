@@ -294,7 +294,8 @@ export type TerritoryReentryDecision =
   | { kind: 'final_rest'; until: string }
   | { kind: 'not_resting' };
 export function decideTerritoryReentry(input: {
-  version: Pick<CampaignVersion, 'steps'>;
+  /** The first step of the firm's derived version, which `territoryFirstStepId` derives from the version id alone. */
+  firstStepId: string;
   enrollment: { state: string; restingUntil?: string | null };
   entries?: TerritoryEntries;
   now: string;
@@ -303,10 +304,9 @@ export function decideTerritoryReentry(input: {
   if (input.enrollment.state !== 'paused' || until === null) return { kind: 'not_resting' };
   if (until > input.now) return { kind: 'resting', until };
   if ((input.entries ?? 1) >= TERRITORY_MAX_ENTRIES) return { kind: 'final_rest', until };
-  const first = input.version.steps[0];
-  if (!first) throw new Error('territory_sequence_step_unknown');
+  if (input.firstStepId.length < 1) throw new Error('territory_sequence_step_unknown');
   // Day offsets are calendar days from `startedAt`, so a re-entry re-bases the whole cadence on today.
-  return { kind: 'reenter', entries: 2, currentStepId: first.id, startedAt: input.now };
+  return { kind: 'reenter', entries: 2, currentStepId: input.firstStepId, startedAt: input.now };
 }
 
 /**

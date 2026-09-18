@@ -1,9 +1,10 @@
 import { z } from 'zod';
 import type { TransactWriteItem } from '@aws-sdk/client-dynamodb';
-import { accountIdSchema as id, accountInstantSchema as instant, accountRouteSchema, accountSchema } from '../../../../src/shared/contracts/accountContract';
+import { accountIdSchema as id, accountInstantSchema as instant, accountRouteSchema, accountSchema, type AccountRoute } from '../../../../src/shared/contracts/accountContract';
 import { campaignCommandPayloadSchema, campaignCancellationEvidenceSchema, campaignEventPayloadSchema, campaignVersionSchema, enrollmentSchema, stepEvidenceSchema, type CampaignCommandPayload, type CampaignEventPayload, type CampaignVersion } from '../../../../src/shared/contracts/campaignContract';
 import { DynamoStore, fingerprint, integer, keyPart, type RepositoryOptions } from './dynamoStore';
-import { advanceTerritorySequence, describeTerritoryPolicyVersion } from '../../../../src/shared/contracts/territoryCallPolicyContract';
+import { advanceTerritorySequence, describeTerritoryPolicyVersion, selectTerritoryReplacementRoute, territoryEntriesSchema,
+  type TerritoryEntries } from '../../../../src/shared/contracts/territoryCallPolicyContract';
 
 export const campaignVersionKey = (value: string) => `CAMPAIGN_VERSION#${keyPart(value)}`;
 export const campaignApprovalKey = (value: string) => `CAMPAIGN_APPROVAL#${keyPart(value)}`;
@@ -12,6 +13,17 @@ export const campaignSlotKey = (value: string) => `CAMPAIGN_SLOT#${keyPart(value
 export const campaignCapKey = (version: string, channel: string) => `CAMPAIGN_CAP#${keyPart(version)}#${channel}`;
 export const campaignActionApprovalKey = (account: string, action: string) => `CAMPAIGN_ACTION_APPROVAL#${keyPart(account)}#${keyPart(action)}`;
 export const campaignReservationKey = (account: string, action: string) => `CAMPAIGN_RESERVATION#${keyPart(account)}#${keyPart(action)}`;
+/** What one firm received under the standing territory policy. The key lives here because both the policy repository (which writes
+ *  the record) and this repository (which reads the firm's entry counter on an applied outcome) name it. */
+export const territoryEnrollmentKey = (accountId: string) => `TERRITORY_ENROLLMENT#${keyPart(accountId)}`;
+/** Where a route the worker retired is recorded. One record per (account, route): the account's own route row is never edited or deleted. */
+export const territoryRetiredRouteKey = (account: string, route: string) => `TERRITORY_RETIRED_ROUTE#${keyPart(account)}#${keyPart(route)}`;
+/** A route the territory sequence may not dial again, because the call that used it reached a wrong number (D13). */
+export const territoryRetiredRouteSchema = z.strictObject({ accountId: id, routeId: id, routeVersion: integer.positive(),
+  retiredAt: instant, reason: z.literal('wrong_number'), commandId: z.uuid() });
+export type TerritoryRetiredRoute = z.infer<typeof territoryRetiredRouteSchema>;
+/** Only the two fields an applied outcome needs from the policy's own enrollment record; the record's full shape stays with its writer. */
+const territoryEntryRecordSchema = z.object({ accountId: id, versionId: id, entries: territoryEntriesSchema.optional() });
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
 export const campaignExecutionInputSchema = z.strictObject({ workspaceId: id, accountId: id, campaignId: id, campaignRevision: integer.positive(),
   enrollmentId: id, enrollmentRevision: integer.positive(), stepId: id, actionId: id, channel: z.enum(['call', 'email', 'linkedin']),
@@ -52,6 +64,41 @@ export class WorkerCampaignRepository {
   async evidence(enrollmentId: string) {
     const rows = await this.store.list<unknown>(`CAMPAIGN_EVIDENCE#${keyPart(enrollmentId)}#`);
     return rows.map(row => stepEvidenceSchema.parse(row.stored.data));
+  }
+  /** Which run of the territory sequence this firm is on, from the policy's own enrollment record. Absent record or absent field is run 1. */
+  private async territoryEntries(accountId: string, versionId: string): Promise<TerritoryEntries | undefined> {
+    const row = await this.store.get<unknown>(territoryEnrollmentKey(accountId));
+    if (!row) return undefined;
+    const parsed = territoryEntryRecordSchema.safeParse(row.data);
+    if (!parsed.success || parsed.data.accountId !== accountId || parsed.data.versionId !== versionId) return undefined;
+    return parsed.data.entries;
+  }
+  /**
+   * D13 wrong number. Record the dialed route as retired (a route state of its own; the account's route row is
+   * never edited or deleted) and name the next business phone the firm publishes, if it carries one. Idempotent:
+   * a route already retired is proved unchanged instead of written again, so a replayed outcome selects exactly
+   * the same replacement. Retiring is not suppression and selecting is not dialing.
+   */
+  private async planWrongNumberRetirement(input: { accountId: string; commandId: string; routeId: string; routeVersion: number; observedAt: string }):
+  Promise<{ items: TransactWriteItem[]; next: AccountRoute | null }> {
+    const key = `ACCOUNT#${keyPart(input.accountId)}`;
+    const row = await this.required(key);
+    const record = z.object({ account: accountSchema, routes: z.array(accountRouteSchema) }).parse(row.data);
+    if (record.account.id !== input.accountId) throw new Error('campaign_route_mismatch');
+    const retiredRows = await this.store.list<unknown>(`TERRITORY_RETIRED_ROUTE#${keyPart(input.accountId)}#`);
+    const retired = retiredRows.map(entry => ({ key: entry.key, rev: entry.stored.rev, record: territoryRetiredRouteSchema.parse(entry.stored.data) }));
+    if (retired.some(entry => entry.record.accountId !== input.accountId)) throw new Error('territory_retired_route_identity_conflict');
+    const retirementKey = territoryRetiredRouteKey(input.accountId, input.routeId);
+    const already = retired.find(entry => entry.key === retirementKey);
+    const items = [already ? this.store.check(retirementKey, already.rev)
+      : this.store.put(retirementKey, territoryRetiredRouteSchema.parse({ accountId: input.accountId, routeId: input.routeId,
+        routeVersion: input.routeVersion, retiredAt: input.observedAt, reason: 'wrong_number', commandId: input.commandId }), null),
+      // The firm's route set must not change under the selection, or a later dial would use a route nobody chose.
+      this.store.check(key, row.rev)];
+    const retiredRouteIds = [...new Set([...retired.map(entry => entry.record.routeId), input.routeId])];
+    const selected = selectTerritoryReplacementRoute({ routes: record.routes, retiredRouteIds });
+    const next = selected ? record.routes.filter(route => route.id === selected.id).sort((a, b) => b.version - a.version)[0] ?? null : null;
+    return { items, next };
   }
   /** This admission capability is only exposed through explicit user approval composition, never inferred from campaign strategy approval. */
   async admitActionApproval(input: z.infer<typeof campaignActionApprovalSchema>) {
@@ -285,14 +332,35 @@ export class WorkerCampaignRepository {
           if (old.state === 'active' && !interruption && currentBinding) {
             // D13 sequence v1 applies only to a version the worker derived from the standing territory
             // policy. Every other campaign keeps the exact "advance to the next step" rule it had.
-            const territory = evidence.channel === 'call' && describeTerritoryPolicyVersion(version) !== null
-              ? advanceTerritorySequence({ version, enrollment: { currentStepId: old.currentStepId, startedAt: old.startedAt }, outcome: evidence.outcome, observedAt: evidence.observedAt })
+            const derived = evidence.channel === 'call' && describeTerritoryPolicyVersion(version) !== null;
+            // The firm's entry counter decides the rest length of a completed run: 90 days on the first, 180 on the second and last.
+            const entries = derived ? await this.territoryEntries(input.accountId, version.id) : undefined;
+            const territory = derived
+              ? advanceTerritorySequence({ version, enrollment: { currentStepId: old.currentStepId, startedAt: old.startedAt }, outcome: evidence.outcome, observedAt: evidence.observedAt, entries })
               : null;
             if (territory) {
               enrollment.currentStepId = territory.currentStepId;
               enrollment.state = territory.state === 'stopped' ? 'stopped' : territory.state;
               enrollment.nextDueAt = territory.nextDueAt;
               enrollment.restingUntil = territory.restingUntil;
+              if (territory.reason === 'rest_wrong_number') {
+                // The dialed route is retired whether or not the firm carries another one; the 180-day rest above stands when it does not.
+                const retirement = await this.planWrongNumberRetirement({ accountId: input.accountId, commandId: input.commandId,
+                  routeId: evidence.routeId, routeVersion: evidence.routeVersion, observedAt: evidence.observedAt });
+                items.push(...retirement.items);
+                if (retirement.next) {
+                  // The sequence starts again on the replacement number, at its first step and re-based on today, one step at a time.
+                  enrollment.selectedRouteId = retirement.next.id;
+                  enrollment.selectedRouteVersion = retirement.next.version;
+                  enrollment.personId = retirement.next.personId;
+                  enrollment.contextRevision = old.contextRevision + 1;
+                  enrollment.currentStepId = version.steps[0]!.id;
+                  enrollment.state = 'active';
+                  enrollment.startedAt = evidence.observedAt;
+                  enrollment.nextDueAt = evidence.observedAt;
+                  enrollment.restingUntil = null;
+                }
+              }
             } else {
               enrollment.currentStepId = next?.id ?? null;
               if (!next) enrollment.state = 'completed';
