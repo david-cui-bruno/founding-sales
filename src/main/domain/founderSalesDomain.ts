@@ -172,7 +172,7 @@ import type {
   IntakeContactInput,
   IntakeResult,
 } from './source/sourceService';
-import { normalizeEmail, normalizePhone } from './source/sourceService';
+import { normalizeEmail, normalizePhone } from './source/contactNormalization';
 import type { Clock } from './support/clock';
 import type { IdGenerator } from './support/idGenerator';
 import type { TodayItem, TodayLane } from './today/todayTypes';

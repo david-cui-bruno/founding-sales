@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 import { cadenceFamilySchema } from '../cadence/cadenceTypes';
-import { normalizeEmail, normalizePhone } from '../source/sourceService';
+import { normalizeEmail, normalizePhone } from '../source/contactNormalization';
 import { idSchema, utcTimestampSchema } from './lifecycleValidation';
 
 export const reactivationCadenceIdentitySchema = z.object({

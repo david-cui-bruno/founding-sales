@@ -5,7 +5,7 @@ import { z } from 'zod';
 import type { AppDatabase } from '../../db/database';
 import { deepFreezeLifecycle, type SalesCycle } from '../lifecycle/lifecycleTypes';
 import { parseCanonicalJson, serializeCanonical } from '../lifecycle/lifecycleValidation';
-import { normalizeEmail, normalizePhone } from '../source/sourceService';
+import { normalizeEmail, normalizePhone } from '../source/contactNormalization';
 import { LifecycleEvidenceError } from '../support/domainErrors';
 import {
   optOutProvenanceViolations,
