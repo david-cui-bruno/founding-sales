@@ -2,7 +2,8 @@ import { GetParameterCommand } from '@aws-sdk/client-ssm';
 import { describe, expect, it, vi } from 'vitest';
 import { createProductionHandler } from '../src/handler';
 import { emptyTickReport, hold, type SourceTickReport } from '../src/sourceCoordinator';
-import { buildScheduledRunRecord, logScheduledRun, scheduledRunRecordFields } from '../src/tickLog';
+import { buildScheduledRunRecord, logScheduledRun, scheduledRunRecordFields, tickErrorClass } from '../src/tickLog';
+import { DynamoReadUnavailable } from '../src/dynamoStore';
 import { ConditionalCommandHarness } from './sdkHarness';
 
 const at = '2026-09-18T12:00:00.000Z';
@@ -40,6 +41,46 @@ describe('scheduled tick record', () => {
     expect(record.heldByReason).toEqual({ research_parked: 2, dispatch_held: 1 });
     expect(Object.values(record.heldByReason).reduce((sum, value) => sum + value, 0)).toBe(record.held);
     expect(record).toMatchObject({ descriptorExpired: true, selfPaused: true, phases: { research: 'held', submittedCommands: 'aborted', publications: 'skipped' }, places: null, ledger: null });
+  });
+  it('names the condition a held phase hit, with one extra log line per phase and no message anywhere in it', () => {
+    const report = emptyTickReport();
+    hold(report, 'research_phase_failed');
+    report.phases = { research: 'held', configurations: 'completed', submittedCommands: 'completed', publications: 'completed', territoryBackfill: 'completed' };
+    report.phaseHolds = { research: { reason: 'descriptor_changed', errorClass: null } };
+    report.territory = { outcome: 'exhausted', scanned: 3, enrolled: 2, replayed: 1, skipped: { policy_paused: 0, authority_exists: 1, route_unavailable: 1, enrollment_failed: 0 } };
+    const lines: string[] = [];
+    const record = logScheduledRun(report, { at, durationMs: 120 }, line => lines.push(line));
+    expect(record).toMatchObject({ phaseHolds: { research: { reason: 'descriptor_changed', errorClass: null } },
+      territory: { outcome: 'exhausted', scanned: 3, enrolled: 2, replayed: 1, skipped: { authority_exists: 1, route_unavailable: 1 } } });
+    expect(lines).toHaveLength(2);
+    expect(JSON.parse(lines[1]!)).toEqual({ event: 'SCHEDULED_PHASE_HELD', version: 1, at, phase: 'research', reason: 'descriptor_changed', errorClass: null });
+  });
+  it('reduces an exception to a recognized constructor class and never carries its message', () => {
+    expect(tickErrorClass(new Error(`private ${firm} ${phone}`))).toBe('Error');
+    expect(tickErrorClass(new TypeError(url))).toBe('TypeError');
+    expect(tickErrorClass(new DynamoReadUnavailable())).toBe('DynamoReadUnavailable');
+    // An unrecognized subclass falls back to its inherited `name`, so it reads as the closest recognized base class, never as its own name.
+    class PrivateFailure extends Error {}
+    expect(tickErrorClass(new PrivateFailure(firm))).toBe('Error');
+    const renamed = new PrivateFailure(firm); renamed.name = `Private${firm}`;
+    expect(tickErrorClass(renamed)).toBe('unknown');
+    expect(tickErrorClass(`${firm} at ${url}`)).toBe('unknown');
+    const report = emptyTickReport();
+    hold(report, 'territory_phase_failed');
+    report.phaseHolds = { territoryBackfill: { reason: 'phase_error', errorClass: 'unknown' } };
+    const lines: string[] = [];
+    logScheduledRun(report, { at, durationMs: 1 }, line => lines.push(line));
+    expect(lines).toHaveLength(2);
+    for (const line of lines) for (const secret of [firm, phone, url, 'private', 'PrivateFailure']) expect(line).not.toContain(secret);
+  });
+  it('drops a phase hold whose reason or class is not one of the closed values, instead of coercing it', () => {
+    const report = emptyTickReport();
+    report.phaseHolds = { research: { reason: `descriptor_changed ${firm}`, errorClass: url } } as unknown as SourceTickReport['phaseHolds'];
+    const lines: string[] = [];
+    const record = logScheduledRun(report, { at, durationMs: 1 }, line => lines.push(line));
+    expect(record?.phaseHolds).toEqual({});
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).not.toContain(firm);
   });
   it('never lets a firm name, phone, URL or any unlisted report property into the record', () => {
     const report = healthy() as SourceTickReport & Record<string, unknown>;

@@ -1,7 +1,7 @@
 import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import {
   researchSetupApproveInputSchema, researchSetupReceiptSchema, researchSetupStatusSchema, RESEARCH_INFORMATIONAL_BLOCKERS, RESEARCH_RENEWAL_WARNING_MS,
-  type ResearchSetupApi, type ResearchSetupBlocker, type ResearchSetupStatus, type ResearchSetupReceipt,
+  type ResearchSetupApi, type ResearchSetupBlocker, type ResearchSetupStatus, type ResearchSetupReceipt, type TickPhaseHoldReason,
 } from '../../shared/contracts/researchSetupContract';
 
 type AppliedStateReceipt = Extract<ResearchSetupReceipt, { status: 'applied' }>;
@@ -31,6 +31,16 @@ const blockers: Record<ResearchSetupBlocker, string> = {
   places_credential_parameter_missing: 'Needs operator setup: the Google Places credential parameter is not declared.', places_cost_missing: 'Needs operator setup: reviewed settings carry no Places cost per call.',
   budget_exhausted: 'Budget exhausted: the remaining ceiling cannot cover another firm or another territory page. Replace the configuration with a higher ceiling to continue.',
   territory_exhausted: 'Territory exhausted: every query in the current territory has been searched. Replace the configuration with new regions or terms to continue.',
+};
+/** What the worker's last scheduled tick said about the research phase, in words. Read only from the tick record's closed reason; the worker
+ *  never carries a message, a payload or a URL into it, so nothing here can be interpolated from provider or exception text. */
+const researchHoldCopy: Record<TickPhaseHoldReason, string> = {
+  descriptor_changed: 'Worker research is held: operator settings changed; press Replace configuration',
+  descriptor_expired: 'Worker research is held: the operator review expired. Renew the reviewed settings and redeploy the worker.',
+  setup_marker_missing: 'Worker research is held: its cloud setup record is missing. Operator reconciliation is required.',
+  pairing_inactive: 'Worker research is held: the approving pairing is no longer active. Connect your Worker again.',
+  config_mismatch: 'Worker research is held: the stored policy changed under the last run. Refresh for current status.',
+  phase_error: 'Worker research is held: the last run failed for a reason the worker could not name.',
 };
 /** Whole days until an instant, never negative. */
 const daysUntil = (instant: string, now: number) => Math.max(0, Math.ceil((Date.parse(instant) - now) / 86_400_000));
@@ -156,6 +166,8 @@ export function ResearchSetupSection({ api }: { api?: ResearchSetupApi }) {
   const firmsRemaining = existing && descriptor && remote?.researchLedger ? Math.floor(remote.researchLedger.remainingMicros / descriptor.researchReservationMicros) : null;
   const renewalDays = descriptor && descriptorCurrent && Date.parse(descriptor.expiresAt) - now <= RESEARCH_RENEWAL_WARNING_MS ? daysUntil(descriptor.expiresAt, now) : null;
   const selfPaused = remote?.pausedReason === 'descriptor_expired' && selector?.state === 'paused';
+  // A worker predating the tick record, or one whose last tick ran the research phase, carries nothing here.
+  const researchHold = remote?.lastTick?.phaseHolds.research ?? null;
 
   async function mutate(action: 'approve' | 'replace' | 'state' | 'retry' | 'cancel') {
     const lifetime = owner.current;
@@ -244,6 +256,7 @@ export function ResearchSetupSection({ api }: { api?: ResearchSetupApi }) {
       {renewalDays !== null && <p role="alert">Operator review expires in {renewalDays} {renewalDays === 1 ? 'day' : 'days'} ({descriptor.expiresAt}). Renew the reviewed settings and redeploy the worker before then; research pauses itself on expiry.</p>}
     </div>}
     {selfPaused && <p role="alert">Research paused itself because the operator review expired. Renew the reviewed settings and redeploy the worker, then Resume research.</p>}
+    {researchHold && <p role="alert">{researchHoldCopy[researchHold.reason]}</p>}
     {remote && !view.fresh && <p>Policy and balances are last observed (stale), not current status.</p>}
     {remote && <p>Credential parameter {remote.credentialParameterDeclared ? 'declared' : 'not declared'}. A declaration does not prove credential or provider access works. Status checked: {remote.checkedAt}.</p>}
     {remote && placesRelevant && <p>Google Places credential parameter {remote.placesCredentialParameterDeclared === true ? 'declared' : 'not declared'}. A declaration does not prove the key or Places access works.</p>}

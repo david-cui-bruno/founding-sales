@@ -60,8 +60,10 @@ describe('production scheduled invocation failure boundary', () => {
     const f = fixture(); const result = await createProductionHandler(environment(), f.boundaries)(schedule());
     expect(result.statusCode).toBe(200);
     expect(JSON.parse(result.body)).toEqual({ status: 'inactive', researchPrepared: 0, researchCompleted: 0,
-      mailPolls: 0, dispatches: 0, sendReconciliations: 0, meetings: 0, held: 0, heldByReason: {},
-      phases: { research: 'completed', configurations: 'completed', submittedCommands: 'completed', publications: 'completed' },
+      mailPolls: 0, dispatches: 0, sendReconciliations: 0, meetings: 0, held: 0, heldByReason: {}, phaseHolds: {},
+      phases: { research: 'completed', configurations: 'completed', submittedCommands: 'completed', publications: 'completed', territoryBackfill: 'completed' },
+      // No territory policy stands in this workspace, so the backfill sweep reads the policy and stops: nothing scanned, nothing held.
+      territory: { outcome: 'no_policy', scanned: 0, enrolled: 0, replayed: 0, skipped: { policy_paused: 0, authority_exists: 0, route_unavailable: 0, enrollment_failed: 0 } },
       extraction: { calls: 0, settledCostMicros: 0, refundedMicros: 0 }, ledger: null, descriptorExpired: false, selfPaused: false });
     expect(f.db.inspect('SOURCE_PHASE_CURSOR')).toEqual({ next: 0 });
     expect(f.db.inspect('SOURCE_LAST_TICK')).toMatchObject({ event: 'SCHEDULED_RUN_COMPLETED', version: 1, status: 'inactive', held: 0, places: null, firmsCreated: 0, jobsDrained: 0 });

@@ -54,21 +54,44 @@ export type ResearchPausedReason = z.infer<typeof researchPausedReasonSchema>;
 /** One structured record per scheduled tick, written to the worker log and persisted as the last tick. Every field is a count, an enum or
  *  an instant: no firm name, phone number, URL, excerpt or error text can enter it. The key list is closed (strict object). */
 export const SCHEDULED_RUN_EVENT = 'SCHEDULED_RUN_COMPLETED';
-export const tickPhaseSchema = z.enum(['research', 'configurations', 'submittedCommands', 'publications']);
+export const tickPhaseSchema = z.enum(['research', 'configurations', 'submittedCommands', 'publications', 'territoryBackfill']);
 export type TickPhase = z.infer<typeof tickPhaseSchema>;
 export const tickPhaseResultSchema = z.enum(['completed', 'held', 'aborted', 'skipped']);
 export type TickPhaseResult = z.infer<typeof tickPhaseResultSchema>;
 export const tickHeldReasonSchema = z.enum(['research_phase_failed', 'configurations_phase_failed', 'commands_phase_failed', 'publications_phase_failed', 'tick_failed',
-  'research_not_prepared', 'research_parked', 'meeting_held', 'dispatch_held', 'requested_followup_held', 'configuration_failed', 'command_failed', 'tick_record_write_failed']);
+  'research_not_prepared', 'research_parked', 'meeting_held', 'dispatch_held', 'requested_followup_held', 'configuration_failed', 'command_failed', 'tick_record_write_failed',
+  'territory_phase_failed', 'territory_backfill_held']);
 export type TickHeldReason = z.infer<typeof tickHeldReasonSchema>;
+/** The exception constructor names the worker recognizes. An unrecognized class is `unknown`: a name is never carried through verbatim,
+ *  so no message, payload, URL or provider detail can reach the log through it. */
+export const tickErrorClassSchema = z.enum(['Error', 'TypeError', 'RangeError', 'SyntaxError', 'ReferenceError', 'AggregateError', 'DOMException',
+  'ZodError', 'DynamoReadUnavailable', 'ResearchDiscoveryError', 'unknown']);
+export type TickErrorClass = z.infer<typeof tickErrorClassSchema>;
+/** Why a phase did not do its work, in the phase's own words instead of an anonymous failure.
+ *  `descriptor_changed`: the reviewed marker's fingerprint no longer matches the deployed descriptor; the desktop's Replace configuration rebinds it.
+ *  `descriptor_expired`: the operator review has lapsed. `setup_marker_missing`: guided admission evidence is gone. `pairing_inactive`: the approving
+ *  pairing is no longer active. `config_mismatch`: the stored selector or its binding changed under the phase. `phase_error`: anything else, named
+ *  by constructor class only. */
+export const tickPhaseHoldReasonSchema = z.enum(['descriptor_changed', 'descriptor_expired', 'setup_marker_missing', 'pairing_inactive', 'config_mismatch', 'phase_error']);
+export type TickPhaseHoldReason = z.infer<typeof tickPhaseHoldReasonSchema>;
+export const tickPhaseHoldSchema = z.strictObject({ reason: tickPhaseHoldReasonSchema, errorClass: tickErrorClassSchema.nullable() });
+export type TickPhaseHold = z.infer<typeof tickPhaseHoldSchema>;
 export const placesBatchOutcomeSchema = z.enum(['completed', 'exhausted', 'uncertain', 'denied', 'held']);
 export const tickPlacesSchema = z.strictObject({ outcome: placesBatchOutcomeSchema, created: integer, routes: integer, enqueued: integer, drained: integer,
   skipped: z.strictObject({ no_website: integer, website_blocked: integer, duplicate_domain: integer, duplicate_phone: integer, existing_domain: integer, existing_phone: integer, route_held: integer, enqueue_held: integer }) });
 export const tickExtractionSchema = z.strictObject({ calls: integer, settledCostMicros: integer, refundedMicros: integer });
 export const tickLedgerSchema = z.strictObject({ discoveryRemainingMicros: integer, researchRemainingMicros: integer });
+/** What the territory backfill sweep did for firms that already existed when the policy was approved. Counts and enums only.
+ *  `exhausted` means the sweep reached the end of the table under the current policy revision; `completed` means a bounded batch with more to come. */
+export const territoryBackfillOutcomeSchema = z.enum(['completed', 'exhausted', 'no_policy', 'policy_paused', 'held']);
+export const tickTerritorySchema = z.strictObject({ outcome: territoryBackfillOutcomeSchema, scanned: integer, enrolled: integer, replayed: integer,
+  skipped: z.strictObject({ policy_paused: integer, authority_exists: integer, route_unavailable: integer, enrollment_failed: integer }) });
 export const scheduledRunRecordSchema = z.strictObject({ event: z.literal(SCHEDULED_RUN_EVENT), version: z.literal(1), at: instant, durationMs: integer,
   status: z.enum(['inactive', 'completed', 'aborted']), phases: z.partialRecord(tickPhaseSchema, tickPhaseResultSchema),
   held: integer, heldByReason: z.partialRecord(tickHeldReasonSchema, integer.positive()),
+  /** The named condition each phase that did not do its work hit. Absent for a phase that ran, and for an abort (which is not a condition). */
+  phaseHolds: z.partialRecord(tickPhaseSchema, tickPhaseHoldSchema),
+  territory: tickTerritorySchema.nullable(),
   places: tickPlacesSchema.nullable(), firmsCreated: integer, jobsDrained: integer,
   researchPrepared: integer, researchCompleted: integer, mailPolls: integer, dispatches: integer, sendReconciliations: integer, meetings: integer,
   extraction: tickExtractionSchema, ledger: tickLedgerSchema.nullable(), descriptorExpired: z.boolean(), selfPaused: z.boolean() });

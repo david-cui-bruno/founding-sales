@@ -71,10 +71,13 @@ describe('territory call policy on the worker', () => {
   });
   it('grants authority, the approved derived version, the enrollment and the no-mail call prerequisites in one transaction, holds email steps, replays and honours pause', async () => {
     const f = await fixture();
-    const first = await f.firm(1, '+14015550101');
-    expect(await f.accounts.applyTerritoryPolicy(first.account.id, first.route.id)).toEqual({ outcome: 'no_policy', accountId: first.account.id, policyId: null, revision: null });
-    expect(await f.store.get(executionAuthorityKey(first.account.id))).toBeNull();
+    // A firm that exists before any policy gets nothing from this call; the approval's own backfill sweep is what enrolls it later.
+    const early = await f.firm(9, '+14015550109');
+    expect(await f.accounts.applyTerritoryPolicy(early.account.id, early.route.id)).toEqual({ outcome: 'no_policy', accountId: early.account.id, policyId: null, revision: null });
+    expect(await f.store.get(executionAuthorityKey(early.account.id))).toBeNull();
     await f.apply(approve);
+    // A firm the Places path admits after the approval is enrolled by this call, exactly as the research coordinator does at create time.
+    const first = await f.firm(1, '+14015550101');
     const policy = (await new TerritoryPolicyRepository(f.options).read())!.data;
     const version = deriveTerritoryCampaignVersion(policy, first.account.id);
     const before = f.dynamo.transactions.length;
@@ -94,12 +97,14 @@ describe('territory call policy on the worker', () => {
     expect(f.dynamo.inspect(ownerSourceKey(first.account.id))).toMatchObject({ state: 'active', mailboxSubject: null, calendarId: null, research: null, pairingId: f.pairing.pairingId, revision: 1 });
     expect(f.dynamo.inspect(intakeRegistryKey(first.account.id))).toEqual({ accountId: first.account.id, adapters: [], manualDependencies: [] });
     const events = (await f.store.eventsAfter(null)).events;
-    const grant = events.find(event => event.kind === 'authority.granted');
+    const grant = events.find(event => event.kind === 'authority.granted' && event.accountId === first.account.id);
     if (grant?.kind !== 'authority.granted') throw new Error('grant event missing');
     expect(grant).toMatchObject({ accountId: first.account.id, authorityGeneration: 1, aggregateVersion: 1, payload: { policyId: policy.policyId, revision: 1, receipt: { commandId: result.commandId, status: 'applied', aggregateVersion: 1 } } });
     expect(grant.campaign.version).toEqual({ ...version, approvedAt: now });
     expect(grant.campaign.enrollment?.id).toBe(result.enrollmentId);
-    expect(events.map(event => event.kind)).toEqual(['research.created', 'research.evidence', 'authority.granted']);
+    expect(events.filter(event => event.accountId === first.account.id).map(event => event.kind)).toEqual(['research.created', 'research.evidence', 'authority.granted']);
+    // The pre-existing firm received exactly the same shape from the approval's sweep, with no extra event kind.
+    expect(events.filter(event => event.accountId === early.account.id).map(event => event.kind)).toEqual(['research.created', 'research.evidence', 'authority.granted']);
     // The identical create is a replay: the same record, no second grant.
     expect(await f.accounts.applyTerritoryPolicy(first.account.id, first.route.id)).toEqual({ ...result, outcome: 'replayed' });
     expect(f.dynamo.transactions).toHaveLength(before + 1);
