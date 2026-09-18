@@ -104,7 +104,9 @@ with `ramp: { startPerDay, stepPerDay, maxPerDay }`. `SENDER_RAMP_DEFAULT` is Da
 Send and reply-read both go through `RemoteGoogleAuthorization.authorizedAccess`. With no usable grant
 that is a known, expected condition, not a failure: `dispatchService` closes the attempt as
 `{ status: 'held', reason: 'mailbox_not_connected' }` — the same reason the territory sequence gives its
-email steps (`TERRITORY_EMAIL_HOLD_REASON`). Nothing throws, nothing is marked sent, and a held step
+email steps (`TERRITORY_EMAIL_HOLD_REASON`). That covers no grant, a revoked grant, an unsealable token
+envelope and a worker with no Google client at all. A grant for a *different* mailbox is a different
+fact and keeps its own reason (`sender_identity_conflict` on send). Nothing throws, nothing is marked sent, and a held step
 stays held until David connects the mailbox. The worker modules that read the grant are
 `dispatchService.ts` (send), `mailPoller.ts` (reply read), `sendReconciler.ts` (sent-lookup),
 `dispatchRepository.ts` (grant conditions in the final transaction), `threadIntakeRepository.ts` and

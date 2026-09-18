@@ -19,7 +19,7 @@ const reasons = new Set(['authority_missing', 'authority_not_active', 'stale_aut
  * grant this is a known, expected condition, not a failure: it closes with the same reason the
  * territory sequence gives its email steps, so a held step stays held until David connects. */
 const namedGrantHolds = new Map([['google_grant_unavailable', TERRITORY_EMAIL_HOLD_REASON], ['google_unconfigured', TERRITORY_EMAIL_HOLD_REASON],
-  ['google_secret_unavailable', TERRITORY_EMAIL_HOLD_REASON], ['remote_grant_required', TERRITORY_EMAIL_HOLD_REASON]]);
+  ['google_secret_unavailable', TERRITORY_EMAIL_HOLD_REASON]]);
 function heldReason(error: unknown): string {
   if (!(error instanceof Error)) return 'dispatch_prerequisite_unavailable';
   return namedGrantHolds.get(error.message) ?? (reasons.has(error.message) ? error.message : 'dispatch_prerequisite_unavailable');
