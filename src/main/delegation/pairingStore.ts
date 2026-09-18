@@ -91,10 +91,11 @@ export class PairingStore {
       await this.inspectExisting();
       assertMayCommit();
       if (replaces) {
-        // Same pairing, consecutive generation: the file being replaced must still be the one the rotation was read against.
+        // Same pairing, higher generation: the file being replaced must still be the one the rotation was read against.
+        // Higher, not exactly next: a rotation whose reply was lost leaves the worker one or more generations ahead.
         const existing = await this.load();
         if (!existing || existing.pairingId !== replaces.pairingId || existing.generation !== replaces.generation
-          || existing.pairingId !== parsed.data.pairingId || parsed.data.generation !== existing.generation + 1) fail();
+          || existing.pairingId !== parsed.data.pairingId || parsed.data.generation <= existing.generation) fail();
         await rename(temporary, this.path);
       } else {
         // Pairing identity is write-once. A concurrent redemption must not replace it.
