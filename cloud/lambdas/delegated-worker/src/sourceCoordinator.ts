@@ -25,6 +25,8 @@ import { requestedFollowupDraftSchema, type RequestedApprovalStatus } from '../.
 import { requestedFollowupContextRevision, validateRequestedDraftContext } from '../../../../src/main/outreach/requestedFollowupService';
 import { mailAccountScopeSchema } from '../../../../src/shared/contracts/mailThreadContract';
 import { mailScopeFingerprint } from '../../../../src/main/outreach/providers/gmailThreadProvider';
+import type { TickHeldReason, TickPhase, TickPhaseResult } from '../../../../src/shared/contracts/researchSetupContract';
+import { buildScheduledRunRecord, SOURCE_LAST_TICK_KEY } from './tickLog';
 
 export type SourceResearchBoundaries = { loadCredentials(workspaceId: string, signal: AbortSignal): Promise<{ apiKey: string; model: string }>;
   /** Present only when the Places credential parameter is declared; a Places configuration is held without it. */
@@ -37,7 +39,24 @@ export type PlacesBatchReport = { outcome: 'completed' | 'exhausted' | 'uncertai
 export type SourceTickReport = { status: 'inactive' | 'completed' | 'aborted'; researchPrepared: number; researchCompleted: number;
   mailPolls: number; dispatches: number; sendReconciliations: number; meetings: number; held: number;
   /** Present only when the research phase ran a Places territory batch. */
-  places?: PlacesBatchReport };
+  places?: PlacesBatchReport;
+  /** Every hold is also counted under one closed reason; the sum equals `held`. */
+  heldByReason: Partial<Record<TickHeldReason, number>>;
+  /** How each phase ended this tick; a phase the deadline never reached is `skipped`. */
+  phases: Partial<Record<TickPhase, TickPhaseResult>>;
+  /** Model extraction on the scheduled Places path: calls made, the cost settled against reservations and what those reservations refunded. */
+  extraction: { calls: number; settledCostMicros: number; refundedMicros: number };
+  /** Remaining balances of the active policy's two ledgers after the research phase; null when no policy or ledger was read. */
+  ledger: { discoveryRemainingMicros: number; researchRemainingMicros: number } | null;
+  /** The operator review has lapsed; `selfPaused` is true only on the tick that wrote the pause. */
+  descriptorExpired: boolean; selfPaused: boolean };
+export const emptyTickReport = (): SourceTickReport => ({ status: 'inactive', researchPrepared: 0, researchCompleted: 0, mailPolls: 0, dispatches: 0,
+  sendReconciliations: 0, meetings: 0, held: 0, heldByReason: {}, phases: {}, extraction: { calls: 0, settledCostMicros: 0, refundedMicros: 0 }, ledger: null, descriptorExpired: false, selfPaused: false });
+/** The only way a tick report gains a hold: the total and its reason move together. */
+export function hold(report: SourceTickReport, reason: TickHeldReason): void {
+  report.held++;
+  report.heldByReason[reason] = (report.heldByReason[reason] ?? 0) + 1;
+}
 const PAGE_LIMIT = 25;
 /** One scheduled tick aborts after this; the 60 s Lambda timeout leaves room for setup and durable settlement. */
 export const TICK_DEADLINE_MS = 45000;
@@ -130,7 +149,7 @@ export function createSourceCoordinator(input: SourceCoordinatorOptions) {
     for (const item of work.work) { signal.throwIfAborted(); await unchanged(active);
       if (item.input.calendarId !== config.calendarId || item.input.intent.pairingId !== config.pairingId || item.input.intent.mailboxSubject !== config.mailboxSubject) continue;
       const result = await coordinator.coordinateMeeting(item.input.intent, signal); processed.add(item.input.intent.commandId); report.meetings++;
-      if (result.status === 'held' || result.status === 'unknown') report.held++;
+      if (result.status === 'held' || result.status === 'unknown') hold(report, 'meeting_held');
     }
     await workCursor.advance(work.nextCursor);
     const offersCursor = await meetingCursor(config.accountId, 'offers');
@@ -142,7 +161,7 @@ export function createSourceCoordinator(input: SourceCoordinatorOptions) {
       if (!item || processed.has(item.input.intent.commandId)) continue;
       if (item.input.calendarId !== config.calendarId || item.input.intent.pairingId !== config.pairingId || item.input.intent.mailboxSubject !== config.mailboxSubject) continue;
       const result = await coordinator.coordinateMeeting(item.input.intent, signal); processed.add(item.input.intent.commandId); report.meetings++;
-      if (result.status === 'held' || result.status === 'unknown') report.held++;
+      if (result.status === 'held' || result.status === 'unknown') hold(report, 'meeting_held');
     }
     await offersCursor.advance(offers.nextCursor);
     const reservationCursor = await meetingCursor(config.accountId, 'reservations');
@@ -250,7 +269,7 @@ export function createSourceCoordinator(input: SourceCoordinatorOptions) {
       await createSendReconciler({ execution,policy,authorization: input.authorization,fetch }).reconcileSend(intent.commandId,signal); report.sendReconciliations++;
     } else if (action.state === 'prepared' || action.state === 'queued') {
       const result = await createDispatchService({ execution,policy,authorization: input.authorization,fetch }).dispatch(intent.commandId,signal); report.dispatches++;
-      if (result.status === 'held') report.held++;
+      if (result.status === 'held') hold(report, 'dispatch_held');
     }
   }
   async function resumeRequested(commandId: string, signal: AbortSignal, report: SourceTickReport) {
@@ -296,7 +315,7 @@ export function createSourceCoordinator(input: SourceCoordinatorOptions) {
           : ['requested_evidence_changed','requested_authority_changed','requested_capture_conflict','requested_context_stale','requested_account_stale','requested_route_stale',
             'requested_call_evidence_invalid','requested_call_pairing_mismatch','requested_call_not_applied','requested_call_receipt_mismatch','requested_mailbox_mismatch','requested_suppressed','requested_draft_identity_conflict',
             'requested_mail_context_stale','requested_recipient_mismatch','requested_wrong_authority','campaign_requested_followup_origin','campaign_requested_followup_held'].includes(reason) ? 'needs_review' : 'pending_preflight';
-        await requestedStatus(current,terminal,terminal === 'pending_preflight' ? 'requested_preflight_incomplete' : reason,revocation); report.held++; return;
+        await requestedStatus(current,terminal,terminal === 'pending_preflight' ? 'requested_preflight_incomplete' : reason,revocation); hold(report, 'requested_followup_held'); return;
       }
     }
     await requestedMaterialized(commandId,signal,report);
@@ -321,7 +340,7 @@ export function createSourceCoordinator(input: SourceCoordinatorOptions) {
             report.mailPolls++;
           }
           await meetings(active, signal, fetch, report);
-        } catch { report.held++; }
+        } catch { hold(report, 'configuration_failed'); }
       }
       signal.throwIfAborted();
       await configs.advance();
@@ -372,20 +391,28 @@ export function createSourceCoordinator(input: SourceCoordinatorOptions) {
             await reconciler.reconcileSend(intent.commandId, signal); report.sendReconciliations++;
           } else if (action.state === 'prepared' || action.state === 'queued') {
             const result = await dispatch.dispatch(intent.commandId, signal); report.dispatches++;
-            if (result.status === 'held') report.held++;
+            if (result.status === 'held') hold(report, 'dispatch_held');
           }
-        } catch { report.held++; }
+        } catch { hold(report, 'command_failed'); }
       }
       signal.throwIfAborted();
       await commands.advance();
   }
+  /** The tick's own record row. Written after the phases, fenced on its own revision; a lost write holds the tick but never repeats a phase. */
+  async function persistLastTick(report: SourceTickReport, startedAt: number): Promise<void> {
+    const row = await store.get<unknown>(SOURCE_LAST_TICK_KEY);
+    const record = buildScheduledRunRecord(report, { at: store.now(), durationMs: Date.now() - startedAt });
+    await store.transact([store.put(SOURCE_LAST_TICK_KEY, record, row?.rev ?? null)]);
+  }
   return { async tick(callerSignal: AbortSignal): Promise<SourceTickReport> {
-    const report: SourceTickReport = { status: 'inactive', researchPrepared: 0, researchCompleted: 0, mailPolls: 0, dispatches: 0,
-      sendReconciliations: 0, meetings: 0, held: 0 };
+    const startedAt = Date.now();
+    const report = emptyTickReport();
     if (callerSignal.aborted) return { ...report, status: 'aborted' };
     const deadline = new AbortController(); const timer = setTimeout(() => deadline.abort(), TICK_DEADLINE_MS);
     const signal = AbortSignal.any([callerSignal, deadline.signal]);
     const phases = [research, configurations, submittedCommands, publications] as const;
+    const phaseNames: readonly TickPhase[] = ['research', 'configurations', 'submittedCommands', 'publications'];
+    const phaseFailures: readonly TickHeldReason[] = ['research_phase_failed', 'configurations_phase_failed', 'commands_phase_failed', 'publications_phase_failed'];
     const key = 'SOURCE_PHASE_CURSOR';
     try {
       const row = await store.get<unknown>(key);
@@ -400,13 +427,18 @@ export function createSourceCoordinator(input: SourceCoordinatorOptions) {
         revision = (revision ?? 0) + 1;
         const phaseDeadline = new AbortController(); const phaseTimer = setTimeout(() => phaseDeadline.abort(), PHASE_SLICES_MS[index] ?? 10000);
         const phaseSignal = AbortSignal.any([signal, phaseDeadline.signal]);
-        try { await phases[index]!(phaseSignal, report); }
-        catch { report.held++; }
+        const name = phaseNames[index]!;
+        try { await phases[index]!(phaseSignal, report); report.phases[name] = phaseSignal.aborted ? 'aborted' : 'completed'; }
+        catch { report.phases[name] = signal.aborted ? 'aborted' : 'held'; hold(report, phaseFailures[index]!); }
         finally { clearTimeout(phaseTimer); }
       }
-    } catch { if (!signal.aborted) report.held++; }
+    } catch { if (!signal.aborted) hold(report, 'tick_failed'); }
     finally { clearTimeout(timer); }
+    for (const name of phaseNames) report.phases[name] ??= 'skipped';
     if (signal.aborted) report.status = 'aborted';
+    // The record is written outside the tick deadline: a slow tick still leaves its last-run evidence for Settings and the log.
+    try { await persistLastTick(report, startedAt); }
+    catch { hold(report, 'tick_record_write_failed'); }
     return report;
   } };
 }

@@ -15,6 +15,7 @@ import { researchRunId, researchSuccessorRunId, runResearch, type SourceResearch
 import { heldResearchOnce, researchOnceNextReceiptSchema, type ResearchOnceRequest, type ResearchOnceResult, type ResearchOnceNextRequest, type ResearchOnceNextResult } from './researchOnceContract';
 import { assertGuidedResearch, guardGuidedResearch, guidedResearchMarkerKey, guidedResearchBudgetId, reviewedResearchProfile } from './researchSetup';
 import type { ProductionBoundaries } from './handler';
+import { emptyTickReport } from './sourceCoordinator';
 /** Stops waiting for non-cooperative boundaries. Every later SDK/provider start
  * separately checks this same signal. An already-sent remote write may commit. */
 export function researchWait<T>(signal: AbortSignal, start: () => Promise<T>): Promise<T> {
@@ -118,7 +119,7 @@ export async function executeResearchOnce(env: NodeJS.ProcessEnv, boundaries: Pr
   try {
     await researchWait(signal, () => runResearch({ auth, resolvedSuccessor, fetch: boundaries.fetch ?? globalThis.fetch, researchSetupProfile: researchProfile(env),
       research: { ...research, resolve: hostname => researchWait(signal, () => research.resolve(hostname)), pageHttp: value => researchWait(signal, () => research.pageHttp(value)) } }, signal,
-    { status: 'inactive', researchPrepared: 0, researchCompleted: 0, held: 0, mailPolls: 0, dispatches: 0, sendReconciliations: 0, meetings: 0 }, request));
+    emptyTickReport(), request));
   } catch (error) {
     if (error instanceof ResearchDiscoveryError) {
       // Diagnostics are best-effort and must never change the durable outcome.
