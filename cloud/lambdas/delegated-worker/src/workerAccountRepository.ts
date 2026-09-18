@@ -11,6 +11,7 @@ import { DynamoStore, fingerprint, integer, keyPart, type RepositoryOptions, typ
 import { budgetSchema, researchAdmissionKey, type Budget } from './discoveryReservationStore';
 import { accountRecordSchema, type AccountRecord } from '../../../../src/shared/contracts/accountRecordContract';
 export { projectionSchema, accountRecordSchema, type AccountRecord } from '../../../../src/shared/contracts/accountRecordContract';
+import { TerritoryPolicyRepository, type TerritoryPolicyOutcome } from './territoryPolicyRepository';
 const jobSchema = z.strictObject({ id: z.uuid(), accountId: accountIdSchema, limits: researchLimitsSchema, attempt: integer.positive().max(3),
   claimToken: z.string(), receiptCommandId: z.uuid(), receiptCommitted: z.boolean(), costMicros: integer.nullable(),
   state: z.enum(['queued', 'running', 'completed', 'parked']), reservedCost: integer, claimedAt: accountInstantSchema.nullable(),
@@ -202,6 +203,12 @@ export class DynamoWorkerAccountRepository implements AccountResearchStore {
     if (record.account.version < stored.account.version) throw new Error('record_not_newer');
     if (fingerprint(stored) === fingerprint(record)) return { duplicate: true, stored, items: [this.store.check(accountKey(input.accountId), row.rev)] };
     return { duplicate: false, stored, items: [this.store.put(accountKey(input.accountId), record, row.rev, { accountId: input.accountId, version: record.account.version }, { accountId: input.accountId, version: stored.account.version })] };
+  }
+  /** Territory policy (D1): after a firm's listed business route is admitted, the worker grants itself authority over the
+   * firm and enrolls it on the approved sequence, or reports why it did not. The Places materialisation calls this once
+   * per created firm; a replayed create answers from the enrollment record. Research itself never acquires authority. */
+  applyTerritoryPolicy(accountId: string, routeId: string): Promise<TerritoryPolicyOutcome> {
+    return new TerritoryPolicyRepository(this.store.options).applyTerritoryPolicy(accountId, routeId);
   }
   /** Explicit immutable workspace research ceiling. Missing budget is deny. */
   async approveResearchBudget(limitMicros: number): Promise<void> {

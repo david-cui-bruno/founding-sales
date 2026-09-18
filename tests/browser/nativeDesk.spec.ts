@@ -297,6 +297,29 @@ test('saved manual-LinkedIn template offers a channel choice, LinkedIn review an
   await assertClean(page,state);
 });
 
+test('territory call policy panel shows the standing sequence above the manual drafts and holds without the bridge, with no automatic call', async ({page}) => {
+  const state = await mount(page);
+  await page.evaluate(() => window.nativeDeskBrowser.navigate('campaigns'));
+  const panel = page.getByRole('region', {name:'Territory call policy',exact:true});
+  await expect(panel.getByRole('heading', {name:'Territory call policy',exact:true})).toBeVisible();
+  // The standing definition folds away by default and opens on request.
+  await expect(panel.getByRole('listitem').first()).toBeHidden();
+  await panel.getByText('Sequence, caps, objective and audience', {exact:true}).click();
+  await expect(panel.getByRole('listitem')).toHaveText(['Day 0 · Call', 'Day 3 · Call', 'Day 7 · Email T4 · held: mailbox not connected', 'Day 12 · Call', 'Day 21 · Email T5 · held: mailbox not connected']);
+  await expect(panel.getByText('Audience: every firm the Places discovery creates in this workspace.', {exact:true})).toBeVisible();
+  // The isolated fixture bridge carries no territory policy capability: the panel says so and offers no action.
+  await expect(panel.getByText('Territory call policy is not available on this bridge.', {exact:true})).toBeVisible();
+  await expect(panel.getByRole('button')).toHaveCount(0);
+  await expect(panel.getByRole('checkbox')).toHaveCount(0);
+  await expect(panel.getByRole('button', {name:'Approve territory call policy',exact:true})).toHaveCount(0);
+  // The panel precedes Lenox's manual one-company drafts, which stay reachable and unchanged.
+  const regions = await page.getByRole('region').evaluateAll(elements => elements.map(element => element.getAttribute('aria-label')));
+  expect(regions.indexOf('Territory call policy')).toBeLessThan(regions.indexOf('New call campaign'));
+  await page.getByRole('button', {name:'New call campaign',exact:true}).click();
+  await expect(page.getByRole('region', {name:'New call campaign',exact:true}).getByRole('button', {name:'Save call campaign draft',exact:true})).toBeVisible();
+  expect((await methods(page)).every(method => ['daily.get','delegation.status','localWorkspace.get','localWorkspace.getCommitments'].includes(method))).toBe(true);
+  await assertClean(page, state);
+});
 test('new call campaign form retains explicit company and offer across routes without queuing work', async ({page}, testInfo) => {
   const state = await mount(page);
   await page.evaluate(() => window.nativeDeskBrowser.navigate('campaigns'));

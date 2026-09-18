@@ -37,8 +37,9 @@ export const delegationCommandSchema = z.discriminatedUnion('kind', [
 ]);
 export type DelegationCommand = Readonly<z.infer<typeof delegationCommandSchema>>;
 /** Selected bootstrap and refresh contents are constructed only by the trusted main SQL exporter. */
-export const publicDelegationCommandSchema = delegationCommandSchema.refine(command => command.kind !== 'bootstrap-selected-account' && command.kind !== 'refresh-selected-account-record' && command.kind !== 'approve-requested-followup', 'Command requires trusted saved SQL content');
-export type PublicDelegationCommand = Exclude<DelegationCommand, {kind:'bootstrap-selected-account'|'refresh-selected-account-record'|'approve-requested-followup'}>;
+/** The territory policy travels its own main-built path (no account outbox row exists for a workspace-level subject). */
+export const publicDelegationCommandSchema = delegationCommandSchema.refine(command => command.kind !== 'bootstrap-selected-account' && command.kind !== 'refresh-selected-account-record' && command.kind !== 'approve-requested-followup' && command.kind !== 'territory-policy', 'Command requires trusted saved SQL content');
+export type PublicDelegationCommand = Exclude<DelegationCommand, {kind:'bootstrap-selected-account'|'refresh-selected-account-record'|'approve-requested-followup'|'territory-policy'}>;
 const eventBase = { id, workspaceId: id, accountId: id, authorityGeneration: revision, aggregateVersion: revision.min(1) };
 export const workerEventSchema = z.discriminatedUnion('kind', [
   z.strictObject({...eventBase,kind:z.literal('requested_followup.status'),payload:z.strictObject({commandId:z.uuid(),draftId:id,status:requestedApprovalStatusSchema}),campaign:campaignEventPayloadSchema.optional()}),
@@ -51,6 +52,9 @@ export const workerEventSchema = z.discriminatedUnion('kind', [
   z.strictObject({ ...eventBase, kind: z.literal('campaign.changed'), payload: campaignEventPayloadSchema, receipt: commandReceiptSchema }),
   z.strictObject({ ...eventBase, kind: z.literal('manual.outcome'), payload: manualOutcomeSchema, receipt: commandReceiptSchema, campaign: campaignEventPayloadSchema.optional() }),
   z.strictObject({ ...eventBase, kind: z.literal('authority.changed'), payload: z.strictObject({ authority: authorityStateSchema, receipt: commandReceiptSchema }) }),
+  /** Worker-origin grant under the approved territory call policy (D1): authority active at generation 1 together with the
+   * derived, approved single-firm version and its enrollment, in one aggregate step. No desktop command precedes it. */
+  z.strictObject({ ...eventBase, kind: z.literal('authority.granted'), payload: z.strictObject({ authority: authorityStateSchema, policyId: id, revision: revision.min(1), receipt: commandReceiptSchema }), campaign: campaignEventPayloadSchema }),
   z.strictObject({ ...eventBase, kind: z.literal('action.outcome'), campaign: campaignEventPayloadSchema.optional(), payload: z.strictObject({ actionId: id, state: actionStateSchema,
     contentHash: hash, targetHash: hash, observedAt: accountInstantSchema, evidenceRef: id }) }),
   z.strictObject({ ...eventBase, authorityGeneration: z.literal(0), kind: z.literal('research.created'),
@@ -85,6 +89,15 @@ export const workerEventSchema = z.discriminatedUnion('kind', [
       || event.kind === 'manual.handoff' && (campaign.evidence !== null || campaign.commandId !== event.receipt.commandId)
       || event.kind === 'action.outcome' && campaign.evidence === null && event.payload.state !== 'dispatching') {
       ctx.addIssue({code:'custom',message:'Invalid campaign cap-only action projection'});
+    }
+  }
+  if (event.kind === 'authority.granted') {
+    const { authority, receipt } = event.payload; const grant = event.campaign;
+    if (authority.accountId !== event.accountId || authority.owner !== 'worker' || authority.state !== 'active' || authority.generation !== event.authorityGeneration || authority.generation < 1
+      || receipt.status !== 'applied' || receipt.commandId !== grant.commandId || receipt.authorityGeneration !== event.authorityGeneration || receipt.aggregateVersion !== event.aggregateVersion
+      || grant.version === null || grant.version.approvedAt === null || grant.enrollment === null || grant.evidence !== null || grant.cap !== undefined
+      || grant.enrollment.campaignVersionId !== grant.version.id || grant.enrollment.state !== 'active' || grant.enrollment.version !== 1) {
+      ctx.addIssue({ code: 'custom', message: 'Granted authority identity mismatch' });
     }
   }
   if (event.kind === 'authority.changed' && (event.payload.authority.accountId !== event.accountId

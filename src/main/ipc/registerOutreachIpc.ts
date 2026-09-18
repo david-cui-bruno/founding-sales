@@ -8,6 +8,7 @@ import {policyImportConfirmSchema,policyImportResumeSchema,policyImportStatusSch
 import {prepareRequestedFollowupSchema,getRequestedFollowupSchema,editRequestedFollowupSchema,approveRequestedFollowupSchema,savedRequestedFollowupSchema,requestedApprovalStatusSchema} from '../../shared/contracts/requestedFollowupContract';
 import {workerPolicyRequestSchema,workerPolicyReceiptSchema} from '../../shared/contracts/workerPolicyContract';
 import {configureAccountIntakeSchema,accountIntakeConfigureStatusSchema,boundAccountIntakeConfigureStatus} from '../../shared/contracts/accountIntakeConfigureContract';
+import {territoryCallPolicyRequestSchema,territoryCallPolicyStatusSchema} from '../../shared/contracts/territoryCallPolicyContract';
 import type { DelegationRuntime } from '../delegation/delegationRuntime';
 import type { PairingStore } from '../delegation/pairingStore';
 import { delegatedPhoneHandoffRequestSchema,bootstrapSelectedAccountSchema,refreshSelectedAccountRecordSchema,selectedAccountFreshnessRequestSchema,selectedAccountFreshnessSchema,configureResearchSourceSchema,ownerResearchSourceSchema,configureLocalDelegationSchema,localDelegationStatusSchema,localDelegationConfigurationRecordSchema,redeemLocalPairingSchema,redeemedLocalPairingSchema,delegationSyncReportSchema } from '../../shared/contracts/ownerCommandContract';
@@ -99,6 +100,12 @@ export function registerOutreachIpc(options:{provider:OutreachApi;delegation?:De
         const freshness=await d.getSelectedAccountFreshness(request);
         if(freshness.accountId!==request.accountId)throw new Error('selected_account_freshness_identity_mismatch');
         return freshness;
+      });
+      // One workspace-level policy command or read; the reply's receipt must name the request's command.
+      add('delegation-territory-policy',territoryCallPolicyRequestSchema,territoryCallPolicyStatusSchema,async request=>{
+        const status=await d.territoryPolicy(request);
+        if(request.kind==='read'?status.receipt!==null:status.receipt?.commandId!==request.commandId)throw new Error('territory_policy_receipt_identity_mismatch');
+        return status;
       });
     }
     if(options.pairingStore)add('delegation-pair',redeemLocalPairingSchema,redeemedLocalPairingSchema,input=>options.pairingStore!.redeem(input,AbortSignal.timeout(15000)));
