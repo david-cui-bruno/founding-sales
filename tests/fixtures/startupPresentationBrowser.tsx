@@ -69,6 +69,9 @@ const api: CalliePreloadApi = {
     reconcileReplyDraft: forbidden('delegation.reconcileReplyDraft'), editReplyDraft: forbidden('delegation.editReplyDraft'), getPhoneHandoffState: forbidden('delegation.getPhoneHandoffState'), beginPhone: forbidden('delegation.beginPhone'), bootstrap: forbidden('delegation.bootstrap'),
     configurePolicy: forbidden('delegation.configurePolicy'), configureResearch: forbidden('delegation.configureResearch'),
     pair: forbidden('delegation.pair'), configure: forbidden('delegation.configure'), submit: forbidden('delegation.submit'), sync: forbidden('delegation.sync'),
+    admitReplyFirstDraft: forbidden('delegation.admitReplyFirstDraft'), approveReply: forbidden('delegation.approveReply'), submitApprovedReply: forbidden('delegation.submitApprovedReply'),
+    // Settings → Suppressed reads locally. The fixture answers with a real empty list so the section renders without any network.
+    readSuppression: async () => ({ entries: [], truncated: false, generatedAt: '2026-09-18T12:00:00.000Z' }),
   },
   linkedin: { prepare: forbidden('linkedin.prepare'), get: forbidden('linkedin.get'), recover: forbidden('linkedin.recover'), save: forbidden('linkedin.save'), begin: forbidden('linkedin.begin'), open: forbidden('linkedin.open'), copy: forbidden('linkedin.copy'), reportOutcome: forbidden('linkedin.reportOutcome') },
   phoneSetup: { status: forbidden('phoneSetup.status'), confirm: forbidden('phoneSetup.confirm'), clear: forbidden('phoneSetup.clear') },

@@ -327,3 +327,29 @@
 .settings-local-research__footer { border-top: 1px solid var(--line); padding-top: var(--space-3); }
 .settings-local-research pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-caption); }
 @media (max-width: 800px) { .settings-local-research__fields, .settings-local-research__profile-grid { grid-template-columns: minmax(0, 1fr); } }
+
+/* Settings → Suppressed: a read-only list of every permanent suppression. */
+.settings__suppression {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.settings__suppression th,
+.settings__suppression td {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--line);
+  font-size: var(--text-dense);
+  text-align: left;
+  vertical-align: top;
+}
+
+.settings__suppression thead th {
+  color: var(--text-muted);
+  font-size: var(--text-caption);
+  font-weight: var(--weight-medium);
+}
+
+.settings__suppression tbody th {
+  font-weight: var(--weight-body);
+  overflow-wrap: anywhere;
+}

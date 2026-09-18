@@ -62,6 +62,7 @@ export function ConnectionsSection({ api, onSaved }: { api?: OutreachApi; onSave
   return <section className="settings__section settings-connections" aria-label="Connections">
     <h2 className="settings__section-title">Connections</h2>
     <p>Use your own OpenAI and Google Desktop OAuth credentials. Secrets are encrypted by macOS in the main process, never saved in browser storage.</p>
+    <p>The OpenAI key below is what writes the first draft of a reply, on this Mac. Without it the reply editor still works, by hand.</p>
     <p>AI drafting shares supported portfolio facts and the playbook. Private local notes are not shared. Opening a draft never sends email.</p>
     {api === undefined && <p role="alert">Outreach setup is unavailable in this session.</p>}
     {reading && <p role="status">Checking connection status...</p>}

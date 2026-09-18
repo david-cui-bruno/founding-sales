@@ -11,6 +11,7 @@ import { Monitor, Moon, Rows2, Rows3, Sun, type LucideIcon } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react';
 import type { OutreachApi } from '../../shared/contracts/outreachContract';
 import { ConnectionsSection } from './ConnectionsSection';
+import { SuppressionSection } from './SuppressionSection';
 import type { PhoneSetupApi } from '../../shared/contracts/phoneSetupContract';
 import { PhoneSetupSection } from './PhoneSetupSection';
 import type { CalliePreloadApi } from '../../shared/preload';
@@ -55,6 +56,7 @@ type SettingsSectionId =
   | 'worker'
   | 'phone'
   | 'connections'
+  | 'suppressed'
   | 'appearance'
   | 'data'
   | 'diagnostics'
@@ -67,6 +69,7 @@ const SECTIONS: readonly { id: SettingsSectionId; label: string }[] = [
   { id: 'call-capacity', label: 'Call capacity' },
   { id: 'territory', label: 'Territory clearance' },
   { id: 'worker', label: 'Worker connection' },
+  { id: 'suppressed', label: 'Suppressed' },
   { id: 'appearance', label: 'Appearance' },
   { id: 'data', label: 'Data & storage' },
   { id: 'diagnostics', label: 'Diagnostics' },
@@ -377,7 +380,7 @@ function AboutSection({ health }: { health: AppHealth | null }) {
 }
 
 type SettingsDelegationApi = Pick<CalliePreloadApi['delegation'], 'status' | 'pair'> &
-  Partial<Pick<CalliePreloadApi['delegation'], 'configure' | 'sync' | 'googleConnections' | 'researchSetup'>>;
+  Partial<Pick<CalliePreloadApi['delegation'], 'configure' | 'sync' | 'googleConnections' | 'researchSetup' | 'readSuppression'>>;
 
 function hasWorkspaceAccess(api: SettingsDelegationApi | undefined): api is SettingsDelegationApi & Pick<CalliePreloadApi['delegation'], 'configure' | 'sync'> {
   return typeof api?.configure === 'function' && typeof api.sync === 'function';
@@ -485,6 +488,7 @@ export function SettingsScreen({
             <LocalCompanyResearchSection api={localWorkspaceApi} outreachApi={outreachApi} connectionRevision={connectionRevision} />
           </>}
           {active === 'phone' && <PhoneSetupSection api={phoneSetupApi} />}
+          {active === 'suppressed' && <SuppressionSection api={delegationApi} />}
           {active === 'worker' && <>
             <WorkerSetupSection api={delegationApi} />
             <WorkspaceAccessSection api={hasWorkspaceAccess(delegationApi) ? delegationApi : undefined} onChanged={notifyCallCapacitySaved} />

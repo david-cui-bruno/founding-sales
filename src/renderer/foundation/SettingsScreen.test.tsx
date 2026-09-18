@@ -68,12 +68,12 @@ describe('SettingsScreen', () => {
     expect(onRetry).toHaveBeenCalledTimes(1);
   });
 
-  it('renders a master-detail with ten sections and Diagnostics selected by default', () => {
+  it('renders a master-detail with eleven sections and Diagnostics selected by default', () => {
     renderSettings();
 
     const sections = screen.getByRole('navigation', { name: 'Settings sections' });
     expect(within(sections).getAllByRole('button').map(button => button.textContent)).toEqual([
-      'Connections', 'Phone', 'Call capacity', 'Territory clearance', 'Worker connection', 'Appearance',
+      'Connections', 'Phone', 'Call capacity', 'Territory clearance', 'Worker connection', 'Suppressed', 'Appearance',
       'Data & storage', 'Diagnostics', 'Keyboard shortcuts', 'About',
     ]);
 
