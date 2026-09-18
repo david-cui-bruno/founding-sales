@@ -11,6 +11,7 @@ import { createWorkerAccountRepository } from './workerAccountRepository';
 import { assertGuidedResearch, guidedResearchBudgetId, guidedResearchMarkerKey, reviewedResearchProfile } from './researchSetup';
 import { productionResearchBoundaries, researchProfile, researchWait, researchOnceNextKey, readNextReceipt } from './researchProduction';
 import { researchRunId, runResearch } from './researchCoordinator';
+import { emptyTickReport } from './sourceCoordinator';
 import { heldResearchOnce, researchOnceNextReceiptSchema, type ResearchOnceRequest, type ResearchOnceResult } from './researchOnceContract';
 import { researchCycleHeadSchema, researchCycleReceiptSchema, type ResearchCycleAdmission, type ResearchCycleAdmissionResult,
   type ResearchCycleReceipt, type ResearchCycleReference, type ResearchCycleRequest, type ResearchCycleStatusResult, type ResearchCyclePredecessor } from './researchCycleContract';
@@ -272,7 +273,7 @@ export async function executeResearchCycle(env: NodeJS.ProcessEnv, boundaries: P
       resolvedCycle: { runId: receipt.runId, descriptorFingerprint: receipt.request.descriptorFingerprint, head: { key: researchCycleHeadKey, rev: head.rev, fingerprint: fingerprint(head.data) },
         receipt: { key: researchCycleKey(receipt.ordinal), rev: 1, fingerprint: fingerprint(receipt) } },
       research: { ...research, resolve: hostname => researchWait(signal, () => research.resolve(hostname)), pageHttp: value => researchWait(signal, () => research.pageHttp(value)) } }, signal,
-    { status: 'inactive', researchPrepared: 0, researchCompleted: 0, held: 0, mailPolls: 0, dispatches: 0, sendReconciliations: 0, meetings: 0 }, once));
+    emptyTickReport(), once));
   } catch (error) {
     if (error instanceof ResearchDiscoveryError) {
       try { console.warn({ event: 'research_discovery_uncertain', ...researchDiscoveryDiagnostic(error) }); } catch { /* diagnostics cannot alter durable outcomes */ }

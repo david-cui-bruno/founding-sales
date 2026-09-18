@@ -1,6 +1,12 @@
 # Delegated-worker Terraform root
 
-The only Terraform root in this repository. It calls `../terraform/modules/delegated-worker`, the single worker implementation, and nothing else. It contains no sourcing, SES, S3 resource, DNS, budget, watchdog, backend-bootstrap or remote-state definitions. The S3 backend declaration is state storage configuration only, not an S3 resource.
+The only Terraform root in this repository. It calls `../terraform/modules/delegated-worker`, the single worker implementation, and nothing else. It contains no sourcing, SES, S3 resource, DNS, watchdog, backend-bootstrap or remote-state definitions. The S3 backend declaration is state storage configuration only, not an S3 resource.
+
+## Operations you can see (Batch 7)
+
+The module now carries the worker's own monitoring, all gated on `delegated_worker_enabled` and all named `callie-sourcing-delegated-worker-*`: one SNS topic (`-alarms`) with an optional email subscription (`alarm_email`, default empty, confirmed by mail, never by Terraform); CloudWatch alarms on Lambda `Errors`, Lambda `Throttles`, a silent schedule (`Invocations` below 10 in an hour, only while the five-minute rule is on) and held ticks (a metric filter on the worker's one scheduled log line, `SCHEDULED_RUN_COMPLETED`, matching `held > 0` or a denied Places page); and one account-wide monthly AWS Budget (`monthly_budget_usd`, default 25) notifying at 100% and 200% actual spend (USD 25 and USD 50) and on a 100% forecast. A budget notifies; it never caps spend. The tick record carries counts and enums only: no firm name, phone number, URL, excerpt or error text.
+
+`delegated_research_reviewed_capability` is validated as before (empty or JSON of at most 3000 characters) and, additionally, its `provenance` string may not exceed 500 characters, matching the worker's shared schema so a descriptor Terraform accepts is one the worker accepts.
 
 ## The removed legacy root
 
