@@ -1,5 +1,5 @@
 /** Convey section intent. The caller's ordinary Settings anchor owns routing. */
-export function openSettingsSection(section: 'connections' | 'phone' | 'worker' | 'call-capacity'): void {
+export function openSettingsSection(section: 'connections' | 'phone' | 'worker' | 'call-capacity' | 'territory'): void {
   try {
     window.sessionStorage.setItem('callie.settings.section', section);
   } catch { /* Mounted Settings can still receive the event without storage. */ }

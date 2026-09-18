@@ -169,8 +169,8 @@ describe('preload workflow bridge', () => {
     expect(Object.keys(api.leads)).toEqual(['list']);
     expect(Object.keys(api.leadDetail)).toEqual(['get']);
     expect(Object.keys(api.localWorkspace).sort()).toEqual([
-      'admitCompanyDraftEmail', 'admitCompanyPhoneRoute', 'createCompany', 'get', 'getCallSettings', 'getCommitments', 'getCompany', 'getCompanyCreateStatus', 'getCompanyDraft',
-      'getCompanyResearchSettings', 'getCompanyResearchStatus', 'linkCompanyPerson', 'openCompanyDraft', 'prepareCompanyDraft', 'researchCompany', 'reviewCompany', 'saveCompanyDraft', 'transition', 'updateCallSettings', 'updateCompanyResearchSettings',
+      'admitCompanyDraftEmail', 'admitCompanyPhoneRoute', 'confirmTerritoryClearance', 'createCompany', 'get', 'getCallSettings', 'getCommitments', 'getCompany', 'getCompanyCreateStatus', 'getCompanyDraft',
+      'getCompanyResearchSettings', 'getCompanyResearchStatus', 'linkCompanyPerson', 'openCompanyDraft', 'prepareCompanyDraft', 'readTerritoryClearance', 'researchCompany', 'reviewCompany', 'revokeTerritoryClearance', 'saveCompanyDraft', 'transition', 'updateCallSettings', 'updateCompanyResearchSettings',
     ]);
     expect(Object.keys(api.outreach).sort()).toEqual([
       'configure', 'connectGmail', 'disconnectGmail', 'generateDraft', 'inspectLocalAuthority', 'openDraft', 'saveDraft', 'sendDraft', 'status',

@@ -12,6 +12,8 @@ import { projectLocalWorkflowReceipt, readLocalWorkspace } from '../domain/works
 import { AccountRepository } from '../domain/accounts/accountRepository';
 import { SystemClock } from '../domain/support/clock';
 import { UuidGenerator } from '../domain/support/idGenerator';
+import { confirmTerritoryClearanceSchema, revokeTerritoryClearanceSchema } from '../../shared/contracts/territoryClearanceContract';
+import { TerritoryClearanceRepository } from '../domain/compliance/territoryClearanceRepository';
 /** Main-only execution capability. Status remains a separate storage-only read. */
 export type SelectedCompanyResearchPort = {
   researchCompany(input: SelectedResearch): Promise<LocalCompanyResearchStatus>;
@@ -38,6 +40,10 @@ export function createLocalWorkspaceProvider(runtime: Pick<FoundationRuntime, 'w
     return companyResearchSettingsSchema.parse({ ...record, profiles: getCompanyResearchProfiles(), blockedReason, reservedOrSpentMicros });
   };
   return {
+    // Territory clearance (design D4): a storage read, and two domain-gated writes that record David's attestation. Nothing here dials.
+    readTerritoryClearance: () => runtime.withDatabase(database => new TerritoryClearanceRepository({ database, clock }).read()),
+    confirmTerritoryClearance: async input => { const parsed = Object.freeze(confirmTerritoryClearanceSchema.parse(input)); return runtime.withDomain(domain => domain.confirmTerritoryClearance(parsed)); },
+    revokeTerritoryClearance: async input => { const parsed = Object.freeze(revokeTerritoryClearanceSchema.parse(input)); return runtime.withDomain(domain => domain.revokeTerritoryClearance(parsed)); },
     prepareCompanyDraft: async input => {
       const parsed = Object.freeze(prepareCompanyDraftSchema.parse(input));
       if (!preparation) throw new Error('Company preparation unavailable');

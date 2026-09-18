@@ -5,7 +5,7 @@ import { openSettingsSection } from './settingsNavigation';
 const key = 'callie.settings.section';
 afterEach(() => { vi.restoreAllMocks(); });
 describe('Task8 navigation producer', () => {
-  it.each(['connections', 'phone', 'worker', 'call-capacity'] as const)(
+  it.each(['connections', 'phone', 'worker', 'call-capacity', 'territory'] as const)(
     'stores and dispatches exact string intent %s without replacing routing', section => {
       const prior = sessionStorage.getItem(key);
       const hash = location.hash;

@@ -43,8 +43,8 @@ const fakeGate = (domain: Partial<FounderSalesDomain> = {}): Gate => ({
 
 /** The seven surviving slices in registration order. */
 const SLICES = ['health', 'leads', 'leadDetail', 'shell', 'recovery', 'daily', 'localWorkspace'] as const;
-/** Every channel the default registrars own: 1 + 1 + 1 + 2 + 5 + 1 + 20. */
-const REGISTERED_CHANNEL_COUNT = 31;
+/** Every channel the default registrars own: 1 + 1 + 1 + 2 + 5 + 1 + 23. */
+const REGISTERED_CHANNEL_COUNT = 34;
 /** Channel prefixes as the disposer removes them, in reverse registration order. */
 const REVERSE_CHANNEL_SLICES = ['local-workspace', 'daily', 'recovery', 'shell', 'lead-detail', 'leads', 'health'];
 
@@ -530,8 +530,8 @@ describe('Task 1 selected-company application composition', () => {
       expect([...handlers]).toEqual(['unrelated']);
       const removed = electron.removeHandler.mock.calls.map(call => call[0]);
       // Everything before get-company: the six earlier slices plus the first eight local channels.
-      expect(registered).toHaveLength(REGISTERED_CHANNEL_COUNT - 12);
-      expect(new Set(registered).size).toBe(REGISTERED_CHANNEL_COUNT - 12);
+      expect(registered).toHaveLength(REGISTERED_CHANNEL_COUNT - 15);
+      expect(new Set(registered).size).toBe(REGISTERED_CHANNEL_COUNT - 15);
       expect([...removed].sort()).toEqual([...registered].sort());
       // Application disposes slices in reverse order. Each slice owns its
       // internal channel order, while local-workspace rolls its eight back in reverse.
@@ -567,6 +567,7 @@ const task3LocalChannels = [
   'local-workspace:get-company', 'local-workspace:research-company', 'local-workspace:company-research-status',
   'local-workspace:link-company-person', 'local-workspace:get-call-settings', 'local-workspace:update-call-settings',
   'local-workspace:admit-company-draft-email', 'local-workspace:admit-company-phone-route', 'local-workspace:open-company-draft', 'local-workspace:get-company-draft', 'local-workspace:save-company-draft', 'local-workspace:prepare-company-draft',
+  'local-workspace:territory-clearance-read', 'local-workspace:territory-clearance-confirm', 'local-workspace:territory-clearance-revoke',
 ];
 /** Channels registered by the six slices ahead of local-workspace. */
 const EARLIER_SLICE_CHANNEL_COUNT = REGISTERED_CHANNEL_COUNT - task3LocalChannels.length;

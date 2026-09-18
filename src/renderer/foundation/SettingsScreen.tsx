@@ -2,6 +2,7 @@ import { LocalCompanyResearchSection } from './LocalCompanyResearchSection';
 import { ResearchSetupSection } from './ResearchSetupSection';
 import { RemoteGoogleConnectionsSection } from './RemoteGoogleConnectionsSection';
 import { CallCapacitySection } from './CallCapacitySection';
+import { TerritoryClearanceSection } from './TerritoryClearanceSection';
 import type { LocalWorkspaceApi } from '../../shared/contracts/localWorkspaceContract';
 import { WorkflowSection } from './WorkflowSection';
 import type { RecoveryProvider } from '../../shared/contracts/recoveryContract';
@@ -50,6 +51,7 @@ const notifyCallCapacitySaved = () => { window.dispatchEvent(new Event('callie:w
 
 type SettingsSectionId =
   | 'call-capacity'
+  | 'territory'
   | 'worker'
   | 'phone'
   | 'connections'
@@ -63,6 +65,7 @@ const SECTIONS: readonly { id: SettingsSectionId; label: string }[] = [
   { id: 'connections', label: 'Connections' },
   { id: 'phone', label: 'Phone' },
   { id: 'call-capacity', label: 'Call capacity' },
+  { id: 'territory', label: 'Territory clearance' },
   { id: 'worker', label: 'Worker connection' },
   { id: 'appearance', label: 'Appearance' },
   { id: 'data', label: 'Data & storage' },
@@ -475,6 +478,7 @@ export function SettingsScreen({
         </nav>
         <div className="settings__detail">
           {active === 'call-capacity' && <CallCapacitySection api={localWorkspaceApi} onSaved={notifyCallCapacitySaved} />}
+          {active === 'territory' && <TerritoryClearanceSection api={localWorkspaceApi} />}
           {active === 'connections' && <>
             <RemoteGoogleConnectionsSection api={delegationApi?.googleConnections} />
             <ConnectionsSection api={outreachApi} onSaved={() => setConnectionRevision(value => value + 1)} />

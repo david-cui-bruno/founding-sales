@@ -53,7 +53,7 @@ export const CONTINUITY_URL = 'callie://app/index.html';
 export const CONTINUITY_READ_CHANNELS = [
   'health:get', 'local-workspace:get', 'local-workspace:get-commitments',
 ] as const;
-/** Construction mode registers health and the twenty local-workspace channels (21). */
+/** Construction mode registers health and the twenty-three local-workspace channels (24). */
 export const CONTINUITY_REGISTERED_CHANNELS = [
   'local-workspace:admit-company-draft-email', 'local-workspace:admit-company-phone-route', 'local-workspace:open-company-draft', 'local-workspace:get-company-draft', 'local-workspace:save-company-draft', 'local-workspace:prepare-company-draft',
   'health:get',
@@ -61,17 +61,18 @@ export const CONTINUITY_REGISTERED_CHANNELS = [
   'local-workspace:get', 'local-workspace:get-company', 'local-workspace:get-commitments', 'local-workspace:transition',
   'local-workspace:review-company', 'local-workspace:create-company', 'local-workspace:company-create-status',
   'local-workspace:research-company', 'local-workspace:company-research-status', 'local-workspace:link-company-person', 'local-workspace:get-call-settings', 'local-workspace:update-call-settings',
+  'local-workspace:territory-clearance-read', 'local-workspace:territory-clearance-confirm', 'local-workspace:territory-clearance-revoke',
 ] as const;
 
 export const CONTINUITY_UI_CHANNELS = [...CONTINUITY_READ_CHANNELS, 'daily:get', 'leads:list', 'local-workspace:get-company',
   'local-workspace:get-company-research-settings',
   'local-workspace:review-company', 'local-workspace:create-company', 'local-workspace:company-create-status',
   'outreach:delegation-status'] as const;
-/** Company UI adds the Daily read and the two surviving person reads (24). */
+/** Company UI adds the Daily read and the two surviving person reads (27). */
 export const CONTINUITY_UI_REGISTERED_CHANNELS = [...CONTINUITY_REGISTERED_CHANNELS, 'daily:get',
   'leads:list', 'lead-detail:get'] as const;
 
-/** Retained UI adds the thirty-eight outreach/delegation channels (62). */
+/** Retained UI adds the thirty-eight outreach/delegation channels (65). */
 export const RETAINED_UI_REGISTERED_CHANNELS = [...CONTINUITY_UI_REGISTERED_CHANNELS,
   ...['status', 'configure', 'connect-gmail', 'disconnect-gmail', 'open-draft', 'save-draft', 'generate-draft', 'send-draft', 'inspect-local-authority',
     'reply-reconcile', 'reply-edit', 'requested-followup-prepare', 'requested-followup-get', 'requested-followup-edit', 'requested-followup-approve',

@@ -1,4 +1,4 @@
-import type { DomainTables, PmAccountTables, DelegationTables, MailPersistenceTables, CampaignTables, RequestedFollowupAndPolicyReviewTables } from './domainSchema';
+import type { DomainTables, PmAccountTables, DelegationTables, MailPersistenceTables, CampaignTables, RequestedFollowupAndPolicyReviewTables, TerritoryClearanceTables } from './domainSchema';
 
 export type AppMetaTable = {
   singleton: number;
@@ -32,4 +32,4 @@ export type FoundationTables = {
   jobs: JobsTable;
 };
 
-export type FoundationDatabase = FoundationTables & DomainTables & PmAccountTables & DelegationTables & MailPersistenceTables & CampaignTables & RequestedFollowupAndPolicyReviewTables;
+export type FoundationDatabase = FoundationTables & DomainTables & PmAccountTables & DelegationTables & MailPersistenceTables & CampaignTables & RequestedFollowupAndPolicyReviewTables & TerritoryClearanceTables;

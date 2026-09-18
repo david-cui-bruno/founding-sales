@@ -101,12 +101,12 @@ async function runScenario(): Promise<void> {
       await assertWrongKeyIsImmutable(workspace.path);
     } else if (scenario === 'encrypted-current-schema-reopen') {
       await createEncryptedLatestSchema(workspace.path);
-      const before = readEncryptedFingerprint(workspace.path, 27);
+      const before = readEncryptedFingerprint(workspace.path, 28);
       await prepareEncryptedDatabase(workspace.path, createTestWorkspaceKey());
       // WAL stabilization intentionally changes physical pages/journal mode,
       // but must preserve the exact schema and logical content fingerprint.
-      assert.deepEqual(readEncryptedFingerprint(workspace.path, 27), before);
-      assertEncryptedRetainedRow(workspace.path, 27);
+      assert.deepEqual(readEncryptedFingerprint(workspace.path, 28), before);
+      assertEncryptedRetainedRow(workspace.path, 28);
       assertArtifactsAbsent(workspace.path);
     } else if (scenario === 'encrypted-schema-13-reopen') {
       await assertEncryptedSchemaVersionAccepted(workspace.path, 13);
@@ -132,8 +132,8 @@ async function runScenario(): Promise<void> {
       await assertEncryptedSchemaVersionAccepted(workspace.path, 23);
     } else if (scenario === 'encrypted-schema-24-reopen') {
       await assertEncryptedSchemaVersionAccepted(workspace.path, 24);
-    } else if (scenario === 'encrypted-schema-28-rejected') {
-      await assertEncryptedSchemaVersionRejected(workspace.path, 28);
+    } else if (scenario === 'encrypted-schema-29-rejected') {
+      await assertEncryptedSchemaVersionRejected(workspace.path, 29);
     } else if (scenario === 'encrypted-schema-future-rejected') {
       await assertEncryptedSchemaVersionRejected(workspace.path, 99);
     } else if (scenario === 'path-mismatched-marker') {

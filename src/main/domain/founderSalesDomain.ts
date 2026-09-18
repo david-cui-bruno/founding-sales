@@ -1,4 +1,6 @@
 import type { AdmitCompanyDraftEmail, OpenCompanyDraft, SaveCompanyDraft } from '../../shared/contracts/localCompanyDraftContract';
+import type { ConfirmTerritoryClearance, RevokeTerritoryClearance } from '../../shared/contracts/territoryClearanceContract';
+import { TerritoryClearanceRepository } from './compliance/territoryClearanceRepository';
 import type { AdmitCompanyPhoneRoute } from '../../shared/contracts/localCompanyPhoneRouteContract';
 import { LocalCompanyDraftRepository } from './accounts/localCompanyDraftRepository';
 import type { UpdateCompanyResearchSettingsRequest } from '../../shared/contracts/localCompanyResearchSettingsContract';
@@ -439,6 +441,9 @@ export class FounderSalesDomain implements OutboundDomainPort {
   }
 
   admitCompanyDraftEmail(input: AdmitCompanyDraftEmail) { return new AccountRepository({ database: this.database, clock: this.clock, ids: this.ids }).admitReviewedBusinessEmail(input); }
+  /** Territory clearance (design D4): records the founder's per-state attestation with its citation and review date. Never dials. */
+  confirmTerritoryClearance(input: ConfirmTerritoryClearance) { return new TerritoryClearanceRepository({ database: this.database, clock: this.clock }).confirm(input); }
+  revokeTerritoryClearance(input: RevokeTerritoryClearance) { return new TerritoryClearanceRepository({ database: this.database, clock: this.clock }).revoke(input); }
   admitCompanyPhoneRoute(input: AdmitCompanyPhoneRoute) { return new AccountRepository({ database: this.database, clock: this.clock, ids: this.ids }).admitReviewedBusinessPhone(input); }
   openCompanyDraft(input: OpenCompanyDraft) { return new LocalCompanyDraftRepository({ database: this.database, clock: this.clock, ids: this.ids }).open(input); }
   saveCompanyDraft(input: SaveCompanyDraft) { return new LocalCompanyDraftRepository({ database: this.database, clock: this.clock, ids: this.ids }).save(input); }

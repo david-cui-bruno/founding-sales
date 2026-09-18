@@ -10,9 +10,9 @@ import { validatePreReleaseReceipt } from '../scripts/createPreReleaseBackup.mjs
 const roots = [];
 afterEach(() => roots.splice(0).forEach(root => rmSync(root, { recursive: true, force: true })));
 const receipt = { basename: 'pre_release-20260906T170000000Z.sqlite3', kind: 'pre_release', schemaVersion: 24, sha256: 'a'.repeat(64), sizeBytes: 100, createdAt: '2026-09-06T17:00:00.000Z', verifiedAt: '2026-09-06T17:00:00.000Z' };
-it.each([24, 25, 26, 27])('accepts exactly seven public fields in a supported schema%s launcher receipt', schemaVersion => { const supported = { ...receipt, schemaVersion }; expect(validatePreReleaseReceipt(supported)).toEqual(supported); });
+it.each([24, 25, 26, 27, 28])('accepts exactly seven public fields in a supported schema%s launcher receipt', schemaVersion => { const supported = { ...receipt, schemaVersion }; expect(validatePreReleaseReceipt(supported)).toEqual(supported); });
 it.each([
-  ['schemaVersion', 14], ['schemaVersion', 15], ['schemaVersion', 16], ['schemaVersion', 17], ['schemaVersion', 18], ['schemaVersion', 23], ['schemaVersion', 28], ['schemaVersion', '24'], ['schemaVersion', null], ['schemaVersion', true],
+  ['schemaVersion', 14], ['schemaVersion', 15], ['schemaVersion', 16], ['schemaVersion', 17], ['schemaVersion', 18], ['schemaVersion', 23], ['schemaVersion', 29], ['schemaVersion', '24'], ['schemaVersion', null], ['schemaVersion', true],
   ['basename', [receipt.basename]], ['basename', 'private/path.sqlite3'], ['kind', 'manual'],
   ['sha256', [receipt.sha256]], ['sha256', 'A'.repeat(64)], ['sizeBytes', '100'], ['sizeBytes', 0], ['sizeBytes', 1.5],
   ['createdAt', [receipt.createdAt]], ['createdAt', '2026-09-06'], ['verifiedAt', null], ['verifiedAt', 'invalid'], ['path', '/private'],
@@ -40,10 +40,10 @@ async function fixture({ identity = 'com.callie.foundersales', output = receipt 
   const launcherEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(?:CALLIE_|ELECTRON_|NODE_|DYLD_|XDG_)/.test(name)));
   return { root, git, contents, run: (args = [], env = {}) => spawnSync(process.execPath, [join(root, 'scripts/createPreReleaseBackup.mjs'), ...args], { cwd: tmpdir(), env: { ...launcherEnv, PATH: `${root}/bin:${process.env.PATH}`, ...env }, encoding: 'utf8' }) };
 }
-it.each([24, 25, 26, 27])('launches only exact repo-owned executable and emits a schema%s receipt alone', async schemaVersion => {
+it.each([24, 25, 26, 27, 28])('launches only exact repo-owned executable and emits a schema%s receipt alone', async schemaVersion => {
   const expected = { ...receipt, schemaVersion }; const { root, run } = await fixture({ output: expected }); const result = run(); expect(result.status).toBe(0); expect(JSON.parse(result.stdout)).toEqual(expected); expect(result.stderr).not.toContain('PRIVATE-HOST'); expect(JSON.parse(readFileSync(join(root, 'called')))).toEqual(['--callie-pre-release-backup']);
 });
-it.each([14, 15, 16, 17, 18, 23, 28, '24'])('refuses unsupported host schema %j through the real launcher entrypoint without leaking stdout', async schemaVersion => {
+it.each([14, 15, 16, 17, 18, 23, 29, '24'])('refuses unsupported host schema %j through the real launcher entrypoint without leaking stdout', async schemaVersion => {
   const { root, run } = await fixture({ output: { ...receipt, schemaVersion } }); const result = run();
   expect(existsSync(join(root, 'called'))).toBe(true); expect(result.status).toBe(1);
   expect(result.stdout).toBe(''); expect(result.stderr.trim()).toBe('PRE_RELEASE_BACKUP_FAILED');
