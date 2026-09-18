@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TerritoryClearanceSection } from './TerritoryClearanceSection';
 import { TERRITORY_CLEARANCE_STATEMENTS, TERRITORY_FEDERAL_CITATIONS, TERRITORY_STATE_RULES, territoryReviewAt,
-  type ConfirmTerritoryClearance, type RevokeTerritoryClearance, type TerritoryClearance, type TerritoryClearanceSnapshot, type TerritoryStateView } from '../../shared/contracts/territoryClearanceContract';
+  type ConfirmTerritoryClearance, type RevokeTerritoryClearance, type TerritoryClearance, type TerritoryClearanceSnapshot, type TerritoryStateView, TERRITORY_RULES_REVISION } from '../../shared/contracts/territoryClearanceContract';
 
 const NOW = '2026-09-18T14:00:00.000Z';
 const NAMES = { RI: 'Rhode Island', MA: 'Massachusetts', TX: 'Texas' } as const;
@@ -16,14 +16,14 @@ function fixture(initial: Partial<Record<keyof typeof NAMES, TerritoryClearance>
     const clearance = rows.get(state) ?? null;
     return { state, name: NAMES[state], timezone: ZONES[state], clearance, status: !clearance ? 'unconfirmed' : clearance.revokedAt ? 'revoked' : clearance.reviewAt <= at ? 'review_due' : 'confirmed' };
   };
-  const snapshot = (): TerritoryClearanceSnapshot => ({ generatedAt: at, rulesRevision: 1, states: (['RI', 'MA', 'TX'] as const).map(view) });
+  const snapshot = (): TerritoryClearanceSnapshot => ({ generatedAt: at, rulesRevision: TERRITORY_RULES_REVISION, states: (['RI', 'MA', 'TX'] as const).map(view) });
   const api = {
     readTerritoryClearance: vi.fn(async () => snapshot()),
     confirmTerritoryClearance: vi.fn(async (input: ConfirmTerritoryClearance) => {
       for (const state of input.states) {
         const previous = rows.get(state);
         rows.set(state, { state, revision: (previous?.revision ?? 0) + 1, timezone: ZONES[state as keyof typeof ZONES], confirmedAt: at, reviewAt: territoryReviewAt(at), revokedAt: null,
-          statements: { businessToBusiness: true, registrationStatusChecked: true, stateDncSubscriptionChecked: true, consentRuleConfirmed: true, rulesRevision: 1 }, citation: TERRITORY_STATE_RULES[state as keyof typeof NAMES].citation });
+          statements: { businessToBusiness: true, registrationStatusChecked: true, stateDncSubscriptionChecked: true, consentRuleConfirmed: true, rulesRevision: TERRITORY_RULES_REVISION }, citation: TERRITORY_STATE_RULES[state as keyof typeof NAMES].citation });
       }
       return snapshot();
     }),
@@ -66,7 +66,7 @@ describe('Territory clearance section', () => {
     fireEvent.click(confirmButton());
     await screen.findByText('Confirmation recorded.');
     expect(f.api.confirmTerritoryClearance).toHaveBeenCalledTimes(1);
-    expect(f.api.confirmTerritoryClearance).toHaveBeenCalledWith({ states: ['RI', 'MA', 'TX'], disclosureAccepted: true, rulesRevision: 1 });
+    expect(f.api.confirmTerritoryClearance).toHaveBeenCalledWith({ states: ['RI', 'MA', 'TX'], disclosureAccepted: true, rulesRevision: TERRITORY_RULES_REVISION });
     for (const key of ['RI', 'MA', 'TX'] as const) {
       const item = state(NAMES[key]);
       expect(within(item).getByText(/Confirmed · revision 1 · confirmed 2026-09-18 · review 2027-09-18/)).toBeTruthy();
@@ -91,7 +91,7 @@ describe('Territory clearance section', () => {
   });
   it('shows a state that arrived already confirmed and a review that fell due, and keeps a lost reply unknown', async () => {
     const stale: TerritoryClearance = { state: 'TX', revision: 4, timezone: 'America/Chicago', confirmedAt: '2025-09-01T12:00:00.000Z', reviewAt: '2026-09-01T12:00:00.000Z', revokedAt: null,
-      statements: { businessToBusiness: true, registrationStatusChecked: true, stateDncSubscriptionChecked: true, consentRuleConfirmed: true, rulesRevision: 1 }, citation: TERRITORY_STATE_RULES.TX.citation };
+      statements: { businessToBusiness: true, registrationStatusChecked: true, stateDncSubscriptionChecked: true, consentRuleConfirmed: true, rulesRevision: TERRITORY_RULES_REVISION }, citation: TERRITORY_STATE_RULES.TX.citation };
     const f = fixture({ TX: stale }); render(<TerritoryClearanceSection api={f.api} />); await ready();
     expect(within(state('Texas')).getByText(/Review due · revision 4 · confirmed 2025-09-01 · review 2026-09-01/)).toBeTruthy();
     f.api.confirmTerritoryClearance.mockRejectedValueOnce(new Error('private database path'));

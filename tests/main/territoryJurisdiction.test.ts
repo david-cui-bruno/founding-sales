@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { deriveStateFromPlacesExcerpt, resolveTerritoryJurisdiction, type TerritoryClearanceRecord } from '../../src/main/domain/compliance/territoryJurisdiction';
 import { territoryHoldMessage, territoryReviewAt, territoryStateStatus, TERRITORY_STATES, TERRITORY_STATE_RULES, TERRITORY_STATE_TIME_ZONES,
-  TERRITORY_FEDERAL_CITATIONS, territoryCitationSchema, TERRITORY_CLEARANCE_STATEMENTS, confirmTerritoryClearanceSchema } from '../../src/shared/contracts/territoryClearanceContract';
+  TERRITORY_FEDERAL_CITATIONS, territoryCitationSchema, TERRITORY_CLEARANCE_STATEMENTS, confirmTerritoryClearanceSchema, TERRITORY_RULES_REVISION } from '../../src/shared/contracts/territoryClearanceContract';
 
 const NOW = '2026-09-18T14:00:00.000Z';
 const place = (id: string, formattedAddress: string | null, extra: Record<string, unknown> = {}) =>
@@ -86,19 +86,19 @@ describe('territory clearance contract', () => {
   it('sets review one year after confirmation and derives status from revocation and review', () => {
     expect(territoryReviewAt('2026-09-18T14:00:00.000Z')).toBe('2027-09-18T14:00:00.000Z');
     expect(territoryReviewAt('2028-02-29T00:00:00.000Z')).toBe('2029-03-01T00:00:00.000Z');
-    const row = { ...clearance('RI'), statements: { businessToBusiness: true as const, registrationStatusChecked: true as const, stateDncSubscriptionChecked: true as const, consentRuleConfirmed: true as const, rulesRevision: 1 }, citation: TERRITORY_STATE_RULES.RI.citation };
+    const row = { ...clearance('RI'), statements: { businessToBusiness: true as const, registrationStatusChecked: true as const, stateDncSubscriptionChecked: true as const, consentRuleConfirmed: true as const, rulesRevision: TERRITORY_RULES_REVISION }, citation: TERRITORY_STATE_RULES.RI.citation };
     expect(territoryStateStatus(null, NOW)).toBe('unconfirmed');
     expect(territoryStateStatus(row, NOW)).toBe('confirmed');
     expect(territoryStateStatus({ ...row, revokedAt: NOW }, NOW)).toBe('revoked');
     expect(territoryStateStatus({ ...row, reviewAt: NOW }, NOW)).toBe('review_due');
   });
   it('refuses a confirmation that did not accept the disclosure, repeats a state, or shows another rules revision', () => {
-    expect(confirmTerritoryClearanceSchema.safeParse({ states: ['RI', 'MA', 'TX'], disclosureAccepted: true, rulesRevision: 1 }).success).toBe(true);
-    expect(confirmTerritoryClearanceSchema.safeParse({ states: ['RI'], disclosureAccepted: false, rulesRevision: 1 }).success).toBe(false);
-    expect(confirmTerritoryClearanceSchema.safeParse({ states: ['RI', 'RI'], disclosureAccepted: true, rulesRevision: 1 }).success).toBe(false);
-    expect(confirmTerritoryClearanceSchema.safeParse({ states: ['RI'], disclosureAccepted: true, rulesRevision: 2 }).success).toBe(false);
-    expect(confirmTerritoryClearanceSchema.safeParse({ states: [], disclosureAccepted: true, rulesRevision: 1 }).success).toBe(false);
-    expect(confirmTerritoryClearanceSchema.safeParse({ states: ['XX'], disclosureAccepted: true, rulesRevision: 1 }).success).toBe(false);
+    expect(confirmTerritoryClearanceSchema.safeParse({ states: ['RI', 'MA', 'TX'], disclosureAccepted: true, rulesRevision: TERRITORY_RULES_REVISION }).success).toBe(true);
+    expect(confirmTerritoryClearanceSchema.safeParse({ states: ['RI'], disclosureAccepted: false, rulesRevision: TERRITORY_RULES_REVISION }).success).toBe(false);
+    expect(confirmTerritoryClearanceSchema.safeParse({ states: ['RI', 'RI'], disclosureAccepted: true, rulesRevision: TERRITORY_RULES_REVISION }).success).toBe(false);
+    expect(confirmTerritoryClearanceSchema.safeParse({ states: ['RI'], disclosureAccepted: true, rulesRevision: TERRITORY_RULES_REVISION + 1 }).success).toBe(false);
+    expect(confirmTerritoryClearanceSchema.safeParse({ states: [], disclosureAccepted: true, rulesRevision: TERRITORY_RULES_REVISION }).success).toBe(false);
+    expect(confirmTerritoryClearanceSchema.safeParse({ states: ['XX'], disclosureAccepted: true, rulesRevision: TERRITORY_RULES_REVISION }).success).toBe(false);
   });
   it('phrases the hold for Today', () => {
     expect(territoryHoldMessage({ reason: 'state_clearance_missing', state: 'MA' })).toBe('Held: no clearance confirmed for MA');
