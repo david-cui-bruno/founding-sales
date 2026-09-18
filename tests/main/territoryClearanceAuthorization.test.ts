@@ -65,7 +65,7 @@ describe('state clearance fallback beside the per-route receipt', () => {
   it('holds a listed RI route with state_clearance_missing until David confirms the state, then derives jurisdiction and clearance from the Places listing', async () => {
     const f = await fixture('RI');
     expect(f.read()).toEqual({ held: 'state_clearance_missing', state: 'RI', suppression: { account: false, person: false, handle: false } });
-    expect(f.authorize(TUESDAY_1330Z)).toEqual({ kind: 'blocked', reason: 'state_clearance_missing' });
+    expect(f.authorize(TUESDAY_1330Z)).toEqual({ kind: 'blocked', reason: 'state_clearance_missing:RI' });
     confirmAll(f, ['RI']);
     const derived = evidence(f.read());
     expect(derived).toMatchObject({ accountId: f.account.id, routeId: 'listed-route', routeVersion: 1, evidenceRef: f.placeId, ownerEnabled: true, federalBasis: 'business_to_business',
@@ -103,10 +103,10 @@ describe('state clearance fallback beside the per-route receipt', () => {
     expect(f.authorize(TUESDAY_1330Z)).toMatchObject({ kind: 'allowed' });
     f.setTime('2026-09-19T12:00:00.000Z'); f.clearances.revoke({ state: 'RI', expectedRevision: 1 });
     expect(f.read()).toMatchObject({ held: 'state_clearance_missing', state: 'RI' });
-    expect(f.authorize(TUESDAY_1330Z)).toEqual({ kind: 'blocked', reason: 'state_clearance_missing' });
+    expect(f.authorize(TUESDAY_1330Z)).toEqual({ kind: 'blocked', reason: 'state_clearance_missing:RI' });
     confirmAll(f, ['RI'], '2026-09-20T12:00:00.000Z');
     expect(f.authorize(TUESDAY_1330Z)).toMatchObject({ kind: 'allowed' });
-    expect(f.authorize('2027-09-21T13:30:00.000Z')).toEqual({ kind: 'blocked', reason: 'state_clearance_missing' }); // Review fell due 2027-09-20.
+    expect(f.authorize('2027-09-21T13:30:00.000Z')).toEqual({ kind: 'blocked', reason: 'state_clearance_missing:RI' }); // Review fell due 2027-09-20.
   });
   it('holds jurisdiction_unknown for a state outside the territory map and when two listings disagree', async () => {
     const ct = await fixture('CT', { phone: '+18605550200' });
