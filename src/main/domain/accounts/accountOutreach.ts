@@ -143,7 +143,13 @@ function authorizeRouteCompliance(input: RouteAuthorizationInput, ownerCurrent: 
   if (!policy) return blocked('account_policy_evidence_unavailable');
   if (policy.suppression.account !== false || policy.suppression.person !== false || policy.suppression.handle !== false) return blocked('account_or_route_opted_out');
   // Suppression first; only then may a missing state clearance or unreadable state explain the hold.
-  if (isAccountRoutePolicyHold(policy)) return blocked(policy.held);
+  // D6: a missing clearance carries its state so Today can name it ("no clearance confirmed for MA")
+  // without a receipt schema change. `reason` is a free string on accountOutboundReceiptSchema, and the
+  // renderer's describeHandoffHold decodes the `<code>:<STATE>` form. An unreadable state adds nothing.
+  if (isAccountRoutePolicyHold(policy)) {
+    return blocked(policy.held === 'state_clearance_missing' && /^[A-Z]{2}$/.test(policy.state ?? '')
+      ? `${policy.held}:${policy.state}` : policy.held);
+  }
   if (policy.accountId !== route.accountId || policy.routeId !== route.id || policy.routeVersion !== route.version
     || policy.evidenceFingerprint !== input.evidenceFingerprint || !policy.evidenceRef?.trim()
     || policy.contact.normalizedValue !== route.value) return blocked('account_policy_evidence_stale');

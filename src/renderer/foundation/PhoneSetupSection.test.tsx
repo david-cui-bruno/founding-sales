@@ -2,6 +2,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PhoneSetupApi, PhoneSetupStatus } from '../../shared/contracts/phoneSetupContract';
+import { PHONE_DIAL_MODES } from '../features/today/todayCopy';
 import { PhoneSetupSection } from './PhoneSetupSection';
 
 const timestamp = '2026-09-10T23:00:00.000Z';
@@ -28,11 +29,34 @@ async function settle(d: ReturnType<typeof deferred>, value = empty) {
   await act(async () => { d.resolve(value); await d.joined; });
 }
 const button = (action: 'Confirm' | 'Clear' | 'Refresh') => screen.getByRole('button', { name: `${action} phone setup` });
+const dialText = () => screen.getByTestId('phone-dial-mode').textContent;
 const enabled = (action: 'Confirm' | 'Clear' | 'Refresh') => expect(button(action).hasAttribute('disabled')).toBe(false);
 const held = (action: 'Confirm' | 'Clear' | 'Refresh') => expect(button(action).hasAttribute('disabled')).toBe(true);
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe('Task8 Phone setup public controls', () => {
+  // D6 acceptance 3: each helper state names what the call card will do, and no state is hidden behind a fixture success.
+  it.each([
+    { status: empty, label: 'Not set up' },
+    { status: unavailable, label: 'Unsupported, unsigned or unverified' },
+    { status: candidate(), label: 'Not verified' },
+    { status: configured(), label: 'Available on this Mac' },
+  ])('says what the call card does in the $label helper state', async ({ status, label }) => {
+    const api = fixture(status); render(<PhoneSetupSection api={api} />);
+    await waitFor(() => expect(dialText()).toContain(label));
+    expect(dialText()).toBe(`${label}. ${PHONE_DIAL_MODES[status.state].card}`);
+    expect(api.confirm).not.toHaveBeenCalled(); expect(api.clear).not.toHaveBeenCalled();
+  }, 10_000);
+
+  it('claims nothing about the card while phone setup is unread or failing', async () => {
+    const api = fixture(); const failing = { ...api, status: vi.fn<PhoneSetupApi['status']>(async () => { throw Error('/Users/founder/private'); }) };
+    render(<PhoneSetupSection api={failing} />);
+    await waitFor(() => expect(dialText()).toBe(`${PHONE_DIAL_MODES.unavailable.label}. ${PHONE_DIAL_MODES.unavailable.card}`));
+    cleanup();
+    render(<PhoneSetupSection />);
+    expect(dialText()).toBe(`${PHONE_DIAL_MODES.unavailable.label}. ${PHONE_DIAL_MODES.unavailable.card}`);
+  }, 10_000);
+
   it('reads exact initial candidate without confirming or clearing', async () => {
     const api = fixture(); render(<PhoneSetupSection api={api} />);
     await screen.findByText('candidate_A');
