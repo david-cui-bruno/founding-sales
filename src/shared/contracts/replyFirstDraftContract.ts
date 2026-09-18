@@ -66,12 +66,16 @@ export type SubmitApprovedReply = z.infer<typeof submitApprovedReplySchema>;
 /** `held` carries a local reason and no command: nothing was queued, so nothing can be sent. */
 export const replyApprovalStatusSchema = z.strictObject({
   accountId: id, draftId: id, approvalId: id, draftRevision: z.number().int().positive().safe(),
-  statement: replyApprovalStatementSchema, approvedAt: z.string().datetime().nullable(),
+  statement: replyApprovalStatementSchema,
+  /** When this approval stops being usable. The exact instant David approved is recorded by the
+   * worker with the permission it admits; the desktop stores the command, not a second clock
+   * reading, so it reports the bound expiry rather than asserting an approval time of its own. */
+  approvalExpiresAt: z.string().datetime().nullable(),
   approvalCommandId: z.uuid().nullable(), submitCommandId: z.uuid().nullable(),
   state: z.enum(['held', 'approved', 'pending', 'applied', 'rejected']),
   receipt: commandReceiptSchema.nullable(), reason: z.string().max(1000).nullable(),
 }).refine(status => (status.state === 'held') === (status.approvalCommandId === null)
-  && (status.state === 'held') === (status.approvedAt === null)
+  && (status.state === 'held') === (status.approvalExpiresAt === null)
   && (status.submitCommandId === null ? status.receipt === null : true)
   && (status.state === 'rejected' ? status.reason !== null : true), 'reply_approval_status_binding');
 export type ReplyApprovalStatus = z.infer<typeof replyApprovalStatusSchema>;

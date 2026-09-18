@@ -215,11 +215,11 @@ export function createDelegationRuntime(input:{databaseGate:{withDatabase<T>(fn:
   return (database.raw.prepare("SELECT command_json FROM delegated_commands WHERE workspace_id=? AND account_id=? AND json_extract(command_json,'$.kind')='submit-approved-reply' AND json_extract(command_json,'$.payload.intentCommandId')=?")
    .all(pairing!.workspaceId,accountId,intentCommandId) as {command_json:string}[]).map(row=>submitApprovedReplyCommandSchema.parse(JSON.parse(row.command_json)));
  }
- function replyApprovalStatus(input_:{approval:z.infer<typeof approveReplyCommandSchema>|null;request:ApproveReply|SubmitApprovedReply;draftId:string;draftRevision:number;statement:ReplyApprovalStatement;approvedAt:string|null;submitCommandId:string|null;receipt:CommandReceipt|null;reason:string|null}){
+ function replyApprovalStatus(input_:{approval:z.infer<typeof approveReplyCommandSchema>|null;request:ApproveReply|SubmitApprovedReply;draftId:string;draftRevision:number;statement:ReplyApprovalStatement;approvalExpiresAt:string|null;submitCommandId:string|null;receipt:CommandReceipt|null;reason:string|null}){
   const receipt=input_.receipt;
   const state=input_.approval===null?'held':receipt?.status==='applied'?'applied':receipt?.status==='rejected'?'rejected':input_.submitCommandId===null?'approved':'pending';
   return replyApprovalStatusSchema.parse({accountId:input_.request.accountId,draftId:input_.draftId,approvalId:input_.request.approvalId,
-   draftRevision:input_.draftRevision,statement:input_.statement,approvedAt:input_.approvedAt,
+   draftRevision:input_.draftRevision,statement:input_.statement,approvalExpiresAt:input_.approvalExpiresAt,
    approvalCommandId:input_.approval?.commandId??null,submitCommandId:input_.submitCommandId,state,receipt,
    reason:state==='rejected'?receipt?.reason??'reply_submission_rejected':input_.reason});
  }
@@ -287,8 +287,9 @@ export function createDelegationRuntime(input:{databaseGate:{withDatabase<T>(fn:
    if(!saved)throw Error('reply_draft_missing');
    const draft=saved.draft;
    if(draft.revision!==request.expectedRevision)throw Error('stale_draft');
-   const status=(approval:z.infer<typeof approveReplyCommandSchema>|null,reason:string|null,approvedAt:string|null)=>
-    replyApprovalStatus({approval,request,draftId:draft.id,draftRevision:draft.revision,statement:request.statement,approvedAt,submitCommandId:null,receipt:null,reason});
+   const status=(approval:z.infer<typeof approveReplyCommandSchema>|null,reason:string|null)=>
+    replyApprovalStatus({approval,request,draftId:draft.id,draftRevision:draft.revision,statement:request.statement,
+     approvalExpiresAt:approval?.payload.expiresAt??null,submitCommandId:null,receipt:null,reason});
    // One approval id is one approval: the identical approval reuses its live command, never a second one.
    const previous=replyApprovalCommands(database,request.accountId,request.approvalId);
    if(previous.length>1)throw Error('reply_approval_conflict');
@@ -296,14 +297,14 @@ export function createDelegationRuntime(input:{databaseGate:{withDatabase<T>(fn:
    if(existing&&(existing.commandId!==request.commandId||existing.payload.intentCommandId!==request.intentCommandId
     ||accountFingerprint(existing.payload.draft)!==accountFingerprint(draft)))throw Error('reply_approval_conflict');
    if(!existing){
-    if(saved.stale)return status(null,'reply_draft_stale',null);
+    if(saved.stale)return status(null,'reply_draft_stale');
     const authority=current.repository.authority(request.accountId),version=current.repository.executionVersion(request.accountId);
-    if(!authority||authority.owner!=='worker'||authority.state!=='active'||version===null||current.repository.hasPendingStop(request.accountId))return status(null,'reply_owner_inactive',null);
+    if(!authority||authority.owner!=='worker'||authority.state!=='active'||version===null||current.repository.hasPendingStop(request.accountId))return status(null,'reply_owner_inactive');
     const thread=store.getThread(request.accountId,draft.threadId);
-    if(!thread||thread.revision!==draft.threadRevision||thread.contextRevision!==draft.contextRevision)return status(null,'reply_history_unavailable',null);
+    if(!thread||thread.revision!==draft.threadRevision||thread.contextRevision!==draft.contextRevision)return status(null,'reply_history_unavailable');
     // The recorded permission names the actual inbound message being answered, not the draft.
     const source=[...thread.thread.messages].reverse().find(message=>message.rfcMessageId&&!message.from.includes(draft.sender)&&message.from.includes(draft.recipient));
-    if(!source)return status(null,'recipient_permission_unproven',null);
+    if(!source)return status(null,'recipient_permission_unproven');
     const now=input.clock.now();const expiresAt=new Date(Date.parse(now)+3600000).toISOString();
     const binding={kind:'thread_participant' as const,threadId:draft.threadId,sourceMessageId:source.id,sourceMessageHash:accountFingerprint(source)};
     const command=approveReplyCommandSchema.parse({commandId:request.commandId,workspaceId:pairing!.workspaceId,accountId:request.accountId,
@@ -312,10 +313,10 @@ export function createDelegationRuntime(input:{databaseGate:{withDatabase<T>(fn:
       permission:{id:`reply-permission-${request.approvalId}`,sourceMessageId:source.id,sourceMessageHash:binding.sourceMessageHash,basis:request.statement,expiresAt},
       binding,expiresAt}});
     await current.client.submit(command);await current.client.sync(active);
-    return status(command,null,now);
+    return status(command,null);
    }
    await current.client.submit(existing);await current.client.sync(active);
-   return status(existing,null,existing.payload.permission.expiresAt);
+   return status(existing,null);
   });},
   /** The only step that asks the worker to send, and the only place a reply leaves this Mac.
    * Command identity survives a lost reply: the same id is resubmitted, never a second one. */
@@ -326,7 +327,7 @@ export function createDelegationRuntime(input:{databaseGate:{withDatabase<T>(fn:
    const approval=approvals[0]!;const draft=approval.payload.draft;
    const status=(submitCommandId:string|null,receipt:CommandReceipt|null,reason:string|null)=>
     replyApprovalStatus({approval,request,draftId:draft.id,draftRevision:draft.revision,statement:approval.payload.permission.basis,
-     approvedAt:approval.payload.permission.expiresAt,submitCommandId,receipt,reason});
+     approvalExpiresAt:approval.payload.expiresAt,submitCommandId,receipt,reason});
    const approvalReceipt=current.repository.commandStatus(approval.commandId);
    // Never ask for a send against an approval the worker has not admitted yet, or refused.
    if(approvalReceipt?.status!=='applied')return status(null,null,approvalReceipt?.status==='rejected'?approvalReceipt.reason??'reply_approval_rejected':'reply_approval_pending');

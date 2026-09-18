@@ -149,12 +149,12 @@ function approvalFixture(options: { unconfigured?: boolean } = {}) {
   });
   const approve = vi.fn<NonNullable<CalliePreloadApi['delegation']['approveReply']>>(async request => ({
     accountId: request.accountId, draftId: request.draftId, approvalId: request.approvalId, draftRevision: request.expectedRevision,
-    statement: request.statement, approvedAt: '2026-09-15T12:03:00.000Z', approvalCommandId: request.commandId,
+    statement: request.statement, approvalExpiresAt: '2026-09-15T13:03:00.000Z', approvalCommandId: request.commandId,
     submitCommandId: null, state: 'approved', receipt: null, reason: null,
   } satisfies ReplyApprovalStatus));
   const submit = vi.fn<NonNullable<CalliePreloadApi['delegation']['submitApprovedReply']>>(async request => ({
     accountId: request.accountId, draftId: 'ordinary', approvalId: request.approvalId, draftRevision: 1,
-    statement: 'ongoing_correspondence', approvedAt: '2026-09-15T12:03:00.000Z',
+    statement: 'ongoing_correspondence', approvalExpiresAt: '2026-09-15T13:03:00.000Z',
     approvalCommandId: approve.mock.calls[0]![0].commandId, submitCommandId: request.commandId, state: 'pending',
     receipt: { commandId: request.commandId, status: 'pending', authorityGeneration: 1, aggregateVersion: 2, reason: null }, reason: null,
   } satisfies ReplyApprovalStatus));
