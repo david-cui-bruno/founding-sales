@@ -51,7 +51,10 @@ describe('Call settings real facade and matching transaction', () => {
       f.domain.updateCallSettings({ expectedRevision: 1, newCallSlots: 0, totalCallCapacity: 0 });
       expect(f.domain.getDaily().calls).toEqual({ accountIds: [f.account.id], workloadConflict: true });
       f.domain.updateCallSettings({ expectedRevision: 2, newCallSlots: null, totalCallCapacity: null });
-      expect(f.domain.getDaily().calls).toEqual({ accountIds: [f.account.id], workloadConflict: false }); expect(rows(f.db, false)).toEqual(preserved);
+      // D2 (17 Sep 2026): Not configured means the default of 30 new firms a day, so the cold firm is listed again; no capacity, no conflict.
+      const unconfigured = f.domain.getDaily();
+      expect(unconfigured.calls).toEqual({ accountIds: [f.account.id, cold.id], workloadConflict: false }); expect(rows(f.db, false)).toEqual(preserved);
+      expect(unconfigured.callSettings).toEqual({ newCallSlots: null, totalCallCapacity: null }); expect(unconfigured.allocation).toEqual({ newCallSlots: 30, source: 'default' });
     } finally { f.close(); }
   });
   it('unpaired propagation only: local capacity persists without inventing scope, allocation or execution permission', async () => {

@@ -147,7 +147,7 @@ async function seed(f: Fixture, prefix = 'workflow'): Promise<OutboundRequest> {
     database.raw.prepare(`INSERT INTO person_contact_methods
       (id, person_id, kind, normalized_value, validation_state, reachability, created_at, updated_at,
        federal_status, compliance_tcpa_flag, covered_area_code, compliance_source, scrubbed_at, compliance_expires_at)
-      VALUES (?, ?, 'phone', '+14015550100', 'valid', 'direct', ?, ?, 'verified_clear', 0, '401',
+      VALUES (?, ?, 'phone', '+14015550200', 'valid', 'direct', ?, ?, 'verified_clear', 0, '401',
         'ftc_download', '2026-08-15T00:00:00.000Z', '2026-09-15T00:00:00.000Z')`)
       .run(`${prefix}-phone`, prospect.personId, NOW, NOW);
     services.unitOfWork.immediate(() => services.identities.addContactMethod({ personId: prospect.personId,
@@ -203,7 +203,7 @@ describe('A3 real assembled production phone route with fictional process bounda
     expect(f.atOpen).toEqual([{ inTransaction: false, keys: [
       `${request.commandId}:requested`, `${request.commandId}:dispatching`,
     ] }]);
-    expect(JSON.parse(f.opens[0].stdin!)).toEqual({ version: 1, target: '+14015550100', expectedFingerprint: 'fictional-route' });
+    expect(JSON.parse(f.opens[0].stdin!)).toEqual({ version: 1, target: '+14015550200', expectedFingerprint: 'fictional-route' });
     expect(await businessRows(f)).toEqual(before);
     expect(await communications(f)).toEqual([]);
     expect(await facts(f)).toHaveLength(3);
@@ -307,15 +307,15 @@ describe('setup safety beyond the assembled send path', () => {
     expect(bindings.fixtureInvocations).toEqual([]);
     expect(bindings.readiness.getCapability().state).toBe('unavailable');
     expect(await bindings.setup!.status()).toEqual({ state: 'needs_confirmation', candidateFingerprint: 'fictional-phone-route-v1', confirmedAt: null });
-    expect((await bindings.phone.dispatch('+14015550100')).status).toBe('unavailable');
+    expect((await bindings.phone.dispatch('+14015550200')).status).toBe('unavailable');
     expect(bindings.fixtureInvocations).toEqual([]);
     await bindings.setup!.confirm({ expectedFingerprint: 'fictional-phone-route-v1' });
     registry.initialize([]);
     expect(bindings.readiness.getCapability().state).toBe('available');
     expect((await bindings.phone.inspectCapability()).state).toBe('available');
-    expect((await bindings.phone.dispatch('+14015550100')).status).toBe('handoff_accepted');
+    expect((await bindings.phone.dispatch('+14015550200')).status).toBe('handoff_accepted');
     expect(bindings.fixtureInvocations).toHaveLength(1);
-    expect((await bindings.phone.dispatch('+14015550100')).status).toBe('unavailable');
+    expect((await bindings.phone.dispatch('+14015550200')).status).toBe('unavailable');
     bindings.dispose!();
     expect(await bindings.setup!.status()).toEqual({ state: 'unavailable', candidateFingerprint: null, confirmedAt: null });
   });

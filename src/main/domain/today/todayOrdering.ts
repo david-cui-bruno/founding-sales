@@ -1,5 +1,7 @@
 import { PrioritizationInputCorruptionError } from '../support/domainErrors';
 import { parseCanonicalUtcMillis } from '../prioritization/qualificationEngine';
+import type { ChannelPolicyWindow } from '../cadence/cadenceScheduler';
+import type { AccountEvidenceSnapshot } from '../../../shared/contracts/accountContract';
 import type {
   ParsedTodayCandidate,
   TodayCapacity,
@@ -70,16 +72,95 @@ export function planDailyAccountCalls(input: {
     && (!Number.isSafeInteger(input.totalCallCapacity) || input.totalCallCapacity < 0)) {
     throw new PrioritizationInputCorruptionError('totalCallCapacity must be null or a safe nonnegative integer.');
   }
-  const uniqueDue = [...new Set(input.due)];
   const completed = new Set(input.completedAccountIds);
+  // Due obligations stay listed even after a call today: a genuinely new sequence
+  // step for a firm called this morning is still David's to take. New nominations
+  // never repeat a firm called today.
+  const uniqueDue = [...new Set(input.due)];
   const dueSet = new Set(uniqueDue);
+  // "30 new firms a day" (D2) is a daily budget: a new-firm call made today keeps
+  // its slot instead of pulling the next firm forward, so the list shrinks as
+  // David works through it and uncalled firms roll over to tomorrow.
+  const consumedNewSlots = [...completed].filter(id => !dueSet.has(id)).length;
+  const remainingNewSlots = Math.max(0, input.newCallSlots - consumedNewSlots);
   const newIds = [...new Set(input.ranked)]
     .filter(id => !dueSet.has(id) && !completed.has(id));
-  const accountIds = [...uniqueDue, ...newIds.slice(0, input.newCallSlots)];
+  const accountIds = [...uniqueDue, ...newIds.slice(0, remainingNewSlots)];
   return Object.freeze({
     accountIds,
     workloadConflict: input.totalCallCapacity !== null && accountIds.length > input.totalCallCapacity,
   });
+}
+
+/** One firm as the morning list orders it. `windowOpen` null means its local business window is unknown. */
+export type MorningCallCandidate = Readonly<{
+  accountId: string;
+  windowOpen: boolean | null;
+  evidenceScore: number;
+  name: string;
+}>;
+
+/**
+ * D2 order inside a Calls group: firms whose local business window is open now,
+ * then firms whose window is unknown, then closed; within each, richer evidence
+ * first, then name, then account id so two identical firms keep a stable order.
+ * Pure and total: it never reads a clock or a database.
+ */
+export function orderMorningCalls(candidates: readonly MorningCallCandidate[]): readonly string[] {
+  const windowRank = (value: boolean | null) => value === true ? 0 : value === null ? 1 : 2;
+  const seen = new Set<string>();
+  return [...candidates]
+    .filter(candidate => {
+      if (!Number.isFinite(candidate.evidenceScore)) {
+        throw new PrioritizationInputCorruptionError('evidenceScore must be a finite number.');
+      }
+      if (seen.has(candidate.accountId)) return false;
+      seen.add(candidate.accountId);
+      return true;
+    })
+    .sort((a, b) => windowRank(a.windowOpen) - windowRank(b.windowOpen)
+      || b.evidenceScore - a.evidenceScore
+      || a.name.localeCompare(b.name, 'en')
+      || (a.accountId < b.accountId ? -1 : a.accountId > b.accountId ? 1 : 0))
+    .map(candidate => candidate.accountId);
+}
+
+/** Evidence richness for the morning order: a portfolio count, a residential-scope fact and an operating-footprint fact each count once. */
+export function morningEvidenceScore(snapshot: Pick<AccountEvidenceSnapshot, 'claims' | 'portfolio'>): number {
+  const facts = new Set(snapshot.claims.filter(claim => claim.kind === 'fact').map(claim => claim.key));
+  return (snapshot.portfolio.length > 0 ? 1 : 0)
+    + (facts.has('residential_scope') ? 1 : 0)
+    + (facts.has('operating_footprint') ? 1 : 0);
+}
+
+/**
+ * Whether `generatedAt` falls inside one of the call windows in the firm's local
+ * time zone. Returns null when the zone is not a valid IANA name, so an unknown
+ * zone is ordered as unknown rather than closed.
+ */
+export function isBusinessWindowOpen(input: {
+  generatedAt: string;
+  timezone: string;
+  windows: readonly ChannelPolicyWindow[];
+}): boolean | null {
+  const generatedAtMillis = assertCanonical(input.generatedAt, 'generatedAt');
+  let formatter: Intl.DateTimeFormat;
+  try {
+    formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: input.timezone, weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false,
+    });
+  } catch {
+    return null;
+  }
+  const parts = formatter.formatToParts(new Date(generatedAtMillis));
+  const read = (type: Intl.DateTimeFormatPartTypes) => parts.find(part => part.type === type)?.value ?? '';
+  const weekday = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(read('weekday'));
+  const hour = Number(read('hour')) % 24; // "24" is midnight in some ICU versions.
+  const minute = Number(read('minute'));
+  if (weekday < 0 || !Number.isInteger(hour) || !Number.isInteger(minute)) return null;
+  const minuteOfDay = hour * 60 + minute;
+  return input.windows.some(window => (window.days as readonly number[]).includes(weekday)
+    && minuteOfDay >= window.startMinute && minuteOfDay < window.endMinute);
 }
 
 /**

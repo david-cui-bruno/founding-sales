@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { createCampaignFixture } from '../fixtures/campaignWorkspace';
 import { createDomainServices } from '../../src/main/domain/createDomainServices';
 import { DailyReadService } from '../../src/main/domain/today/dailyReadService';
+import { buildDailySnapshot } from '../../src/main/domain/today/dailyProjection';
 import { DelegationRepository } from '../../src/main/delegation/delegationRepository';
 import { requestedFollowupFixture } from '../fixtures/requestedFollowup';
 import { createLinkedInFixture } from '../fixtures/linkedInWorkspace';
@@ -159,5 +160,63 @@ it('retains new B3 account allocation alongside warm campaign work, using config
     expect(f.read().calls).toEqual({ accountIds: [f.account.id, cold.id], workloadConflict: true });
     f.db.raw.prepare('UPDATE meeting_first_call_settings SET new_call_slots=0').run();
     expect(f.read().calls.accountIds).toEqual([f.account.id]);
+  } finally { f.close(); }
+});
+
+it('D2 morning list: 40 worker-prepared firms with listed phones give 30 new firms after every due firm, and a call this morning leaves 29', async () => {
+  const f = await fixture(); try {
+    const { TodayService } = await import('../../src/main/domain/today/todayService');
+    const due = f.repo.enroll({ commandId: randomUUID(), accountId: f.account.id, selectedRouteId: f.routes[0].id, campaignVersionId: f.versions[0].id, executionContextId: 'ctx', contextRevision: 1 });
+    expect(due.state).toBe('active');
+    const accounts = new AccountRepository({ database: f.db, clock: f.clock, ids: { next: randomUUID }, sourcePolicy: { attest: () => true } });
+    const prepared: string[] = [];
+    for (let index = 0; index < 40; index++) {
+      // A Places-born firm as the worker prepares it: a listed phone from the Google Business Profile, the listing as its source, a fact on every other firm.
+      const firm = accounts.create({ commandId: randomUUID(), name: `Fictional Territory PM ${String(index).padStart(2, '0')}`, domain: `firm-${index}.example.invalid` });
+      const listing = randomUUID();
+      accounts.admitEvidence({ commandId: randomUUID(), accountId: firm.id, expectedVersion: 1,
+        sources: [{ id: listing, url: 'https://places.googleapis.com/v1/places:searchText', fetchedAt: f.now, sha256: 'e'.repeat(64), permitted: true,
+          excerpt: JSON.stringify({ id: `place-${index}`, displayName: firm.name, formattedAddress: `${index} Main St, Providence, RI 02903, USA`, nationalPhoneNumber: '(401) 555-0100', websiteUri: `https://firm-${index}.example.invalid/` }) }],
+        claims: index % 2 === 0 ? [{ key: 'residential_scope', kind: 'fact', value: 'Residential property management', evidenceIds: [listing] }] : [],
+        routes: [{ id: randomUUID(), accountId: firm.id, personId: null, channel: 'phone', value: `+1401555${String(100 + index).padStart(4, '0')}`, purpose: 'business', verification: 'listed', evidenceIds: [listing] }] });
+      prepared.push(firm.id);
+    }
+    const before = f.db.raw.prepare('SELECT total_changes() AS n').get();
+    const morning = f.read();
+    expect(f.db.raw.prepare('SELECT total_changes() AS n').get()).toEqual(before);
+    // Unconfigured Settings: the stored record is unchanged in the hashed snapshot; the default allocation is reported beside it, without an incomplete-snapshot issue.
+    expect(morning.callSettings).toEqual({ newCallSlots: null, totalCallCapacity: null });
+    expect(morning.allocation).toEqual({ newCallSlots: 30, source: 'default' });
+    const { allocation: omitted, ...hashed } = morning; void omitted;
+    expect(buildDailySnapshot({ ...hashed, generatedAt: morning.freshness.generatedAt, approvals: morning.answers }).revision).toBe(morning.revision);
+    expect(morning.issues.map(issue => issue.code)).not.toContain('call_allocation_unconfigured');
+    expect(morning.freshness.kind).toBe('local_snapshot');
+    expect(morning.calls.accountIds).toHaveLength(31);
+    expect(morning.calls.accountIds[0]).toBe(f.account.id); // the due sequence step first
+    const listed = morning.calls.accountIds.slice(1);
+    expect(listed.every(id => prepared.includes(id))).toBe(true);
+    // Evidence richness before name: every firm with a residential fact precedes every firm without one, names ascending inside.
+    const richness = (id: string) => morning.accounts.find(a => a.account.id === id)!.claims.length;
+    const firstThin = listed.findIndex(id => richness(id) === 0);
+    expect(firstThin).toBe(20);
+    expect(listed.slice(firstThin).every(id => richness(id) === 0)).toBe(true);
+    const names = (ids: string[]) => ids.map(id => morning.accounts.find(a => a.account.id === id)!.account.name);
+    expect(names(listed.slice(0, firstThin))).toEqual([...names(listed.slice(0, firstThin))].sort((a, b) => a.localeCompare(b, 'en')));
+    // One call to a listed firm this morning: the firm leaves the list and its slot is spent (29 new); the due firm stays.
+    const called = listed[4]!;
+    const today = new TodayService({ database: f.db, unitOfWork: f.services.unitOfWork, clock: f.clock, repository: f.services.todayRepository,
+      priorities: f.services.prioritization, outboundPermission: f.services.outboundPermission, workspaceSettings: f.services.workspaceSettings,
+      actualCalls: () => [{ accountId: called, commandId: randomUUID(), attemptId: randomUUID(), outcome: 'no_answer', reportedAt: f.now }] });
+    const after = new DailyReadService({ database: f.db, clock: f.clock, ids: { next: () => { throw Error('read allocated ID'); } }, today, settings: f.services.workspaceSettings, workspaceId: f.workspaceId }).get();
+    expect(after.calls.accountIds).toHaveLength(30);
+    expect(after.calls.accountIds[0]).toBe(f.account.id);
+    expect(after.calls.accountIds).not.toContain(called);
+    expect(after.calls.accountIds.slice(1)).toEqual(listed.filter(id => id !== called).slice(0, 29));
+    // Settings can still turn the default down or off.
+    f.db.raw.prepare('UPDATE meeting_first_call_settings SET new_call_slots=5').run();
+    const configured = f.read();
+    expect(configured.callSettings).toEqual({ newCallSlots: 5, totalCallCapacity: null });
+    expect(configured.allocation).toEqual({ newCallSlots: 5, source: 'configured' });
+    expect(configured.calls.accountIds).toEqual([f.account.id, ...listed.slice(0, 5)]);
   } finally { f.close(); }
 });

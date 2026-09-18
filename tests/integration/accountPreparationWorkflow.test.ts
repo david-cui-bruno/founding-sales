@@ -101,7 +101,8 @@ describe('assembled fictional company preparation, not renderer acceptance', () 
       expect(snapshot.claims.every(claim => !('fetchedAt' in claim))).toBe(true);
       const services = createDomainServices({ database, clock, ids: { next: randomUUID }, expectedWorkspaceId: workspaceId });
       const planning: Parameters<typeof services.today.planMeetingFirstAccountCalls>[0] = { due: [], ranked: [snapshot], generatedAt: now };
-      expect(services.today.planMeetingFirstAccountCalls(planning)).toEqual({ accountIds: [], workloadConflict: false });
+      // Unconfigured call settings mean the D2 default of 30 new firms a day, so the prepared firm is listed before Settings is touched.
+      expect(services.today.planMeetingFirstAccountCalls(planning)).toEqual({ accountIds: [accountId], workloadConflict: false });
       const settings = services.workspaceSettings.readMeetingFirstAccountCallSettings();
       services.unitOfWork.immediate(() => services.workspaceSettings.updateMeetingFirstAccountCallSettingsCas({
         expectedRevision: settings.revision, newCallSlots: 1, totalCallCapacity: 1, updatedAt: now,

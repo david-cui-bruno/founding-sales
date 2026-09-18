@@ -444,7 +444,18 @@ describe('TodayService', () => {
     expect(database.raw.prepare('SELECT total_changes() AS count').get()).toEqual(before);
   });
 
-  it('leaves meeting-first account calls disabled when settings are unset and reports explicit capacity conflicts', () => {
+  it('lists the default 30 new firms a day when settings are unset and reports explicit capacity conflicts', () => {
+    // D2 (17 Sep 2026): unconfigured is the default allocation, not zero, and never a workload conflict by itself.
+    expect(workspaceSettings.readAccountCallAllocation()).toMatchObject({ newCallSlots: 30, totalCallCapacity: null, source: 'default' });
+    expect(service.planMeetingFirstAccountCalls({
+      due: [accountSnapshot('warm-only')],
+      ranked: [accountSnapshot('new-default')],
+      generatedAt: GENERATED_AT,
+    })).toEqual({ accountIds: ['warm-only', 'new-default'], workloadConflict: false });
+    const thirtyOne = Array.from({ length: 31 }, (_, index) => accountSnapshot(`new-${String(index).padStart(2, '0')}`));
+    expect(service.planMeetingFirstAccountCalls({ due: [], ranked: thirtyOne, generatedAt: GENERATED_AT }).accountIds).toHaveLength(30);
+    addMeetingFirstSettings(0, null);
+    expect(workspaceSettings.readAccountCallAllocation()).toMatchObject({ newCallSlots: 0, source: 'configured' });
     expect(service.planMeetingFirstAccountCalls({
       due: [accountSnapshot('warm-only')],
       ranked: [accountSnapshot('new-disabled')],
@@ -459,17 +470,48 @@ describe('TodayService', () => {
     })).toEqual({ accountIds: ['warm-a', 'warm-b', 'new-conflict'], workloadConflict: true });
   });
 
-  it('uses factual contactable account ranks and preserves unknown or non-target accounts outside new calls', () => {
-    addMeetingFirstSettings(3, null);
+  it('lists supported and uncertain contactable firms, accepts listed phones, and keeps not_target and uncontactable firms out of new calls', () => {
+    addMeetingFirstSettings(5, null);
+    const listedRoute = (accountId: string) => [{ id: `${accountId}-route`, accountId, personId: null as string | null, channel: 'phone' as const, value: '+15555550101',
+      purpose: 'business' as const, evidenceIds: [`${accountId}-route-evidence`], verification: 'listed' as const, version: 1 }];
     expect(service.planMeetingFirstAccountCalls({
       due: [],
       ranked: [
+        // Places already selects property managers (D2): an unknown scope is `uncertain`, which is listed after richer evidence.
         accountSnapshot('unknown', { claims: [], unknowns: ['residential_scope'] }),
         accountSnapshot('uncontactable', { routes: [] }),
+        accountSnapshot('unverified-phone', { routes: [{ ...accountSnapshot('unverified-phone').routes[0]!, verification: 'unverified' }] }),
+        accountSnapshot('commercial-only', { claims: [{ kind: 'fact', key: 'residential_scope', value: 'Commercial only portfolio', evidenceIds: ['c'] }] }),
+        accountSnapshot('listed-phone', { routes: listedRoute('listed-phone') }),
         accountSnapshot('supported'),
       ],
       generatedAt: GENERATED_AT,
-    })).toEqual({ accountIds: ['supported'], workloadConflict: false });
+    })).toEqual({ accountIds: ['listed-phone', 'supported', 'unknown'], workloadConflict: false });
+  });
+
+  it('orders each group by open local business window, then evidence richness, then name, using the route jurisdiction zone', () => {
+    addMeetingFirstSettings(10, null);
+    // Monday 2026-08-31 15:00 UTC: 11:00 in New York (window open), 08:00 in Los Angeles (closed).
+    const at = '2026-08-31T15:00:00.000Z';
+    const zones = new Map([['west-rich', 'America/Los_Angeles'], ['east-thin', 'America/New_York']]);
+    const routeTimezones = vi.fn((_database: AppDatabase, ids: readonly string[]) => new Map([...zones].filter(([id]) => ids.includes(id))));
+    const ordered = new TodayService({
+      database, unitOfWork, clock, repository: new TodayRepository({ database, unitOfWork }),
+      priorities, outboundPermission, workspaceSettings, routeTimezones,
+    });
+    const thin = { claims: [{ kind: 'fact' as const, key: 'residential_scope' as const, value: 'Residential', evidenceIds: ['e'] }] };
+    expect(ordered.planMeetingFirstAccountCalls({
+      due: [accountSnapshot('due-west', { account: { id: 'due-west', name: 'Zed Due', domain: null, version: 1 } }), accountSnapshot('due-east', { account: { id: 'due-east', name: 'Amy Due', domain: null, version: 1 } })],
+      ranked: [
+        accountSnapshot('west-rich', { account: { id: 'west-rich', name: 'Aardvark PM', domain: null, version: 1 } }),
+        accountSnapshot('east-thin', { account: { id: 'east-thin', name: 'Zebra PM', domain: null, version: 1 }, ...thin }),
+        accountSnapshot('east-rich-b', { account: { id: 'east-rich-b', name: 'Bravo PM', domain: null, version: 1 } }),
+        accountSnapshot('east-rich-a', { account: { id: 'east-rich-a', name: 'Alpha PM', domain: null, version: 1 } }),
+      ],
+      generatedAt: at,
+    // Due group first (both open in the workspace zone, equal evidence, by name), then new: open-window firms by evidence then name, the closed west firm last.
+    })).toEqual({ accountIds: ['due-east', 'due-west', 'east-rich-a', 'east-rich-b', 'east-thin', 'west-rich'], workloadConflict: false });
+    expect(routeTimezones).toHaveBeenCalledWith(database, ['due-west', 'due-east', 'west-rich', 'east-thin', 'east-rich-b', 'east-rich-a']);
   });
 
   it('rejects missing meeting-first account settings singleton', () => {

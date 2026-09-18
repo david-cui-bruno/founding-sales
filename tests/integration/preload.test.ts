@@ -5,11 +5,12 @@ import type { AppHealth } from '../../src/shared/healthContract';
 const electron = vi.hoisted(() => ({
   exposeInMainWorld: vi.fn(),
   invoke: vi.fn(),
+  on: vi.fn(),
 }));
 
 vi.mock('electron', () => ({
   contextBridge: { exposeInMainWorld: electron.exposeInMainWorld },
-  ipcRenderer: { invoke: electron.invoke },
+  ipcRenderer: { invoke: electron.invoke, on: electron.on },
 }));
 
 type ExposedCallieApi = {
@@ -63,8 +64,27 @@ describe('preload workflow bridge', () => {
   beforeEach(async () => {
     electron.exposeInMainWorld.mockReset();
     electron.invoke.mockReset();
+    electron.on.mockReset();
     vi.resetModules();
     await import('../../src/preload');
+  });
+
+  it('turns the main process daily:changed notice into a window event and forwards no payload', () => {
+    const registrations = electron.on.mock.calls.filter(([channel]) => channel === 'daily:changed');
+    expect(registrations).toHaveLength(1);
+    const handler = registrations[0]?.[1] as ((event: unknown, payload: unknown) => void) | undefined;
+    const target = new EventTarget();
+    vi.stubGlobal('window', target);
+    try {
+      const received: Event[] = [];
+      target.addEventListener('callie:daily-changed', event => received.push(event));
+      handler?.({}, { never: 'forwarded' });
+      expect(received).toHaveLength(1);
+      expect(received[0]?.type).toBe('callie:daily-changed');
+      expect(received[0] instanceof CustomEvent).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   function exposedApi(): ExposedCallieApi {

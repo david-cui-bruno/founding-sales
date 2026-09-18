@@ -1,4 +1,4 @@
-import { localWorkspaceSnapshotSchema, localCommitmentsSnapshotSchema, localDraftContinuationSchema, type LocalWorkspaceSnapshot, type LocalCommitmentsSnapshot, type LocalDraftContinuation, type LocalWorkspaceApi, type LocalWorkflowReceipt } from '../../../shared/contracts/localWorkspaceContract';
+import { localWorkspaceSnapshotSchema, localCommitmentsSnapshotSchema, localDraftContinuationSchema, localCompanyDetailSchema, type LocalWorkspaceSnapshot, type LocalCommitmentsSnapshot, type LocalDraftContinuation, type LocalWorkspaceApi, type LocalWorkflowReceipt, type LocalCompanyDetail } from '../../../shared/contracts/localWorkspaceContract';
 import { createLocalCompanyContinuation } from './localCompanyContinuation';
 /** Test-only browser-safe factory. Never imported by production components. */
 import {
@@ -180,6 +180,8 @@ export function nativeDeskFixture(initial = dailyFixture()) {
   let config = configuredFixtureStatus();
   // Absent by default: the preparation read stays a forbidden capability unless a test supplies one.
   let preparation: AccountPreparation | null = null;
+  // Absent by default: the selected company detail (sources with excerpts) is unavailable unless a test supplies one.
+  let companyDetails = new Map<string, LocalCompanyDetail>();
   const calls: { method: string; input?: unknown }[] = [];
   const record = (method: string, input?: unknown) => {
     calls.push({ method, input: structuredClone(input) });
@@ -233,7 +235,12 @@ export function nativeDeskFixture(initial = dailyFixture()) {
     leadDetail: { get: async input => { record('leadDetail.get', input); throw Error('Saved person detail unavailable in this fixture'); } },
     localWorkspace: {
       get: async () => { record('localWorkspace.get'); return structuredClone(local); },
-      getCompany: async input => { record('localWorkspace.getCompany', input); throw Error('Selected company detail unavailable in this fixture'); },
+      getCompany: async input => {
+        record('localWorkspace.getCompany', input);
+        const detail = companyDetails.get(input.accountId);
+        if (!detail) throw Error('Selected company detail unavailable in this fixture');
+        return structuredClone(detail);
+      },
       researchCompany: async () => { record('localWorkspace.researchCompany'); throw Error('Selected company research unavailable in this fixture'); },
       getCompanyResearchStatus: async () => { record('localWorkspace.getCompanyResearchStatus'); throw Error('Selected company research unavailable in this fixture'); },
       prepareCompanyDraft: async () => { throw Error('Company preparation unavailable in this fixture'); }, admitCompanyDraftEmail: async () => { throw Error('Company drafts unavailable in this fixture'); }, openCompanyDraft: async () => { throw Error('Company drafts unavailable in this fixture'); }, getCompanyDraft: async () => { throw Error('Company drafts unavailable in this fixture'); }, saveCompanyDraft: async () => { throw Error('Company drafts unavailable in this fixture'); }, getCompanyResearchSettings: async () => { throw Error('Local research setup unavailable in this fixture'); }, updateCompanyResearchSettings: async () => { throw Error('Local research setup unavailable in this fixture'); }, getCallSettings: async () => { throw Error('Call capacity unavailable in this fixture'); }, updateCallSettings: async () => { throw Error('Call capacity unavailable in this fixture'); }, linkCompanyPerson: async input => { record('localWorkspace.linkCompanyPerson', input); throw Error('Reviewed company link unavailable in this fixture'); },
@@ -423,6 +430,10 @@ export function nativeDeskFixture(initial = dailyFixture()) {
     },
     setPreparation(next: AccountPreparation | null) {
       preparation = next ? accountPreparationSchema.parse(structuredClone(next)) : null;
+    },
+    /** Saved local company detail for the call card and phone review. Replaces the whole set; validated on the way in. */
+    setCompanyDetails(next: readonly LocalCompanyDetail[]) {
+      companyDetails = new Map(next.map(detail => [detail.snapshot.account.id, localCompanyDetailSchema.parse(structuredClone(detail))]));
     },
     snapshot: () => structuredClone(snapshot),
   };

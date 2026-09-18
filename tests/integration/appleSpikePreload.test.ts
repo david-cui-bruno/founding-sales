@@ -29,6 +29,11 @@ describe('preload Apple feasibility bridge', () => {
     await import('../../src/preload');
   });
 
+  /** Only the Apple observation listener; the preload also registers the daily:changed bridge at load. */
+  function observationRegistrations(): unknown[][] {
+    return electron.on.mock.calls.filter(([channel]) => channel === APPLE_SPIKE_IPC_CHANNELS.observationEvidence);
+  }
+
   function exposedApi(): CalliePreloadApi {
     const exposure = electron.exposeInMainWorld.mock.calls[0] as
       | [string, CalliePreloadApi]
@@ -162,7 +167,7 @@ describe('preload Apple feasibility bridge', () => {
     const subscriptionAck = Promise.withResolvers<unknown>();
     electron.invoke.mockImplementation((channel: string) => {
       if (channel === APPLE_SPIKE_IPC_CHANNELS.observationSubscribe) {
-        expect(electron.on).toHaveBeenCalledTimes(1);
+        expect(observationRegistrations()).toHaveLength(1);
         return subscriptionAck.promise;
       }
       return Promise.resolve(undefined);
@@ -171,8 +176,8 @@ describe('preload Apple feasibility bridge', () => {
     const listener = vi.fn();
 
     const pendingUnsubscribe = api.appleSpike.subscribeObservationEvidence(listener);
-    expect(electron.on).toHaveBeenCalledTimes(1);
-    const [channel, wrapped] = electron.on.mock.calls[0] as [
+    expect(observationRegistrations()).toHaveLength(1);
+    const [channel, wrapped] = observationRegistrations()[0] as [
       string,
       (event: unknown, payload: unknown) => void,
     ];

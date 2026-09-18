@@ -58,6 +58,14 @@ describe('Call capacity editor', () => {
     fireEvent.click(save()); await waitFor(() => expect(api.getCallSettings).toHaveBeenCalledTimes(2));
     expect(screen.getByRole('status').textContent).toContain('Save outcome unknown'); expect(onSaved).not.toHaveBeenCalled(); expect(api.updateCallSettings).toHaveBeenCalledTimes(1);
   });
+  it('names the default of 30 new firms a day while unconfigured and the configured number once saved', async () => {
+    const api = fixture(); render(<CallCapacitySection api={api} onSaved={vi.fn()} />); await ready();
+    expect(screen.getByText(/Not configured means the default: 30 new firms a day\./)).toBeTruthy();
+    expect(screen.getByTestId('effective-allocation').textContent).toBe('Today lists 30 new firms a day (default: 30 new firms a day). Set a number to change it.');
+    number('New call slots', '1'); fireEvent.click(save());
+    await screen.findByText('Call capacity saved.');
+    expect(screen.getByTestId('effective-allocation').textContent).toBe('Today lists 1 new firm a day (configured).');
+  });
   it('shows missing and malformed initial API data as unavailable', async () => {
     const view = render(<CallCapacitySection onSaved={vi.fn()} />); expect(screen.getByRole('status').textContent).toContain('unavailable');
     const api = fixture(); api.getCallSettings.mockResolvedValueOnce({ ...initial, updatedAt: 'yesterday' });

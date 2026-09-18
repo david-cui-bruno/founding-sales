@@ -107,6 +107,8 @@ async function fixture(count = 4, scope: string | undefined = workspaceId) {
       workspaceId, generatedAt: now, workflowMode: 'legacy',
       accounts: ids.map(id => accounts.snapshot(id, now)).sort((a, b) => a.account.id.localeCompare(b.account.id)),
       calls: { accountIds: [], workloadConflict: false }, callSettings: { newCallSlots: 0, totalCallCapacity: null },
+      // Derived from callSettings and outside the revision hash (D2 default allocation).
+      allocation: { newCallSlots: 0, source: 'configured' },
       approvals: [], meetings: [], campaigns: [], ownerStatus, transport: [], issues,
     });
     const owner = (accountId: string, pendingCommands: DailySnapshot['ownerStatus'][number]['pendingCommands'] = []) => ({

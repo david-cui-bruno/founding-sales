@@ -239,8 +239,15 @@ export function CompanyPhoneCall({ api, snapshot, config, accountId, readError =
     } finally { session.busy = false; notifyPhoneSession(session); }
   }
   const busy = !!session?.busy || reading;
+  // The call card's "last outcome and note" line: the newest owner-applied human report in this complete local history.
+  const lastApplied = complete?.completions
+    .filter(record => record.applied !== null)
+    .sort((a, b) => b.applied!.outcome.observedAt.localeCompare(a.applied!.outcome.observedAt))[0]?.applied ?? null;
   return <section className="native-desk__call" aria-label="Company phone review">
     <h3>Company phone review</h3>
+    <p data-testid="last-outcome">Last outcome: {lastApplied
+      ? `${lastApplied.outcome.outcome.replaceAll('_', ' ')} at ${lastApplied.outcome.observedAt}${lastApplied.outcome.replyText ? ` · note: ${lastApplied.outcome.replyText}` : ''}`
+      : complete ? 'none recorded for this step' : 'unknown until the saved phone history is read'}</p>
     <p>Nominated for review, not authorized to call. Selection alone never places a call.</p>
     <p><a href="#/settings" onClick={() => openSettingsSection('phone')}>Review phone setup</a>. Phone setup is handoff readiness only, not call permission.</p>
     {!selection || !stepId ? <p className="native-desk__hold">Call handoff unavailable in this account view. Select a saved company enrollment and call step. Review an approved company-only call campaign in <a href="#/campaigns">Campaigns</a>. No person is required for an eligible company phone route.</p> : null}

@@ -15,8 +15,10 @@ import type { AccountEvidenceSnapshot } from '../../../shared/contracts/accountC
 import { listActualCallAttempts } from '../accounts/accountOutreach';
 import { rankAccount } from '../../../shared/accounts/accountRanking';
 import type { WorkspaceSettingsRepository } from '../workspace/workspaceSettingsRepository';
-import { planDailyAccountCalls, planTodayQueue, resolveLocalDayInterval } from './todayOrdering';
-import type { DailyAccountCallPlan } from './todayOrdering';
+import { isBusinessWindowOpen, morningEvidenceScore, orderMorningCalls, planDailyAccountCalls, planTodayQueue, resolveLocalDayInterval } from './todayOrdering';
+import type { DailyAccountCallPlan, MorningCallCandidate } from './todayOrdering';
+import { readRouteJurisdictionTimezones } from './routeJurisdiction';
+import { PLAYBOOK_CHANNEL_POLICIES_V2 } from '../cadence/cadenceScheduler';
 import type { TodayRepository } from './todayRepository';
 import type {
   ParsedTodayCandidate,
@@ -44,6 +46,7 @@ export class TodayService {
   private readonly outboundPermission: OutboundPermissionService;
   private readonly workspaceSettings: WorkspaceSettingsRepository | null;
   private readonly actualCalls: typeof listActualCallAttempts;
+  private readonly routeTimezones: typeof readRouteJurisdictionTimezones;
 
   constructor(input: {
     database: AppDatabase;
@@ -54,6 +57,7 @@ export class TodayService {
     outboundPermission: OutboundPermissionService;
     workspaceSettings?: WorkspaceSettingsRepository;
     actualCalls?: typeof listActualCallAttempts;
+    routeTimezones?: typeof readRouteJurisdictionTimezones;
   }) {
     input.repository.assertBoundTo(input.database, input.unitOfWork);
     input.outboundPermission.assertBoundTo(input.database, input.unitOfWork);
@@ -65,6 +69,7 @@ export class TodayService {
     this.outboundPermission = input.outboundPermission;
     this.workspaceSettings = input.workspaceSettings ?? null;
     this.actualCalls = input.actualCalls ?? listActualCallAttempts;
+    this.routeTimezones = input.routeTimezones ?? readRouteJurisdictionTimezones;
   }
 
   build(input: {
@@ -103,39 +108,42 @@ export class TodayService {
       });
     }
     const generatedAt = utcTimestampSchema.parse(input.generatedAt ?? this.clock.now());
-    const interval = resolveLocalDayInterval({ generatedAt, timezone: this.workspaceSettings.read().timezone });
-    const settings = this.workspaceSettings.readMeetingFirstAccountCallSettings();
-    const newCallSlots = settings.newCallSlots;
-    if (newCallSlots === null) {
-      return planDailyAccountCalls({
-        due: input.due.map(snapshot => snapshot.account.id),
-        ranked: [],
-        newCallSlots: 0,
-        completedAccountIds: [],
-        totalCallCapacity: settings.totalCallCapacity,
-      });
-    }
+    const workspaceTimezone = this.workspaceSettings.read().timezone;
+    const interval = resolveLocalDayInterval({ generatedAt, timezone: workspaceTimezone });
+    // Unconfigured settings mean the default allocation (30 new firms a morning), never zero.
+    const allocation = this.workspaceSettings.readAccountCallAllocation();
+    const everyAccount = [...input.due, ...input.ranked];
     const completedAccountIds = [...this.actualCalls(this.database, {
       from: interval.localDayStartAt,
       to: interval.localDayEndAt,
     }).map(attempt => attempt.accountId), ...listDelegatedActualCallAccountIds(this.database, {
-      accountIds: input.ranked.map(snapshot => snapshot.account.id),
+      accountIds: [...new Set(everyAccount.map(snapshot => snapshot.account.id))],
       from: interval.localDayStartAt, to: interval.localDayEndAt, generatedAt,
     })];
-    const ranked = input.ranked
-      // New call nominations need a phone route. Due obligations remain unfiltered.
+    // Order inside each group (D2): local business window open now, then evidence richness, then name.
+    // The firm's zone comes from its route policy receipt when the clearance lane wrote one; else the workspace zone.
+    const zones = this.routeTimezones(this.database, everyAccount.map(snapshot => snapshot.account.id));
+    const candidate = (snapshot: AccountEvidenceSnapshot): MorningCallCandidate => ({
+      accountId: snapshot.account.id,
+      windowOpen: isBusinessWindowOpen({ generatedAt, timezone: zones.get(snapshot.account.id) ?? workspaceTimezone, windows: PLAYBOOK_CHANNEL_POLICIES_V2.call.windows }),
+      evidenceScore: morningEvidenceScore(snapshot),
+      name: snapshot.account.name,
+    });
+    const nominated = new Set(input.ranked
+      // New call nominations need a phone the firm publishes, confirms, or lists in a business directory.
       .filter(snapshot => snapshot.routes.some(route => route.channel === 'phone'
         && route.purpose === 'business'
-        && (route.verification === 'published' || route.verification === 'confirmed')))
+        && (route.verification === 'published' || route.verification === 'confirmed' || route.verification === 'listed')))
       .map(snapshot => rankAccount(snapshot, generatedAt))
-      .filter(rank => rank.fit === 'supported' && rank.contactable)
-      .map(rank => rank.accountId);
+      // Places already selects property managers, so `uncertain` fit is listed; only an explicit not_target is excluded.
+      .filter(rank => rank.fit !== 'not_target' && rank.contactable)
+      .map(rank => rank.accountId));
     return planDailyAccountCalls({
-      due: input.due.map(snapshot => snapshot.account.id),
-      ranked,
-      newCallSlots,
+      due: orderMorningCalls(input.due.map(candidate)),
+      ranked: orderMorningCalls(input.ranked.filter(snapshot => nominated.has(snapshot.account.id)).map(candidate)),
+      newCallSlots: allocation.newCallSlots,
       completedAccountIds,
-      totalCallCapacity: settings.totalCallCapacity,
+      totalCallCapacity: allocation.totalCallCapacity,
     });
   }
 

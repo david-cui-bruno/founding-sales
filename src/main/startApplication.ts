@@ -10,6 +10,7 @@ import { PairingStore, type StoredPairing } from './delegation/pairingStore';
 import { ResearchSetupRequestStore } from './delegation/researchSetupRequestStore';
 import { createDelegationRuntime, type DelegationRuntime } from './delegation/delegationRuntime';
 import { SqlDelegationConfiguration } from './delegation/delegationSync';
+import { createBackgroundSync, type BackgroundSync } from './delegation/backgroundSync';
 import type { AppDatabase } from './db/database';
 import { AccountRepository } from './domain/accounts/accountRepository';
 import { selectedResearchSchema, type SelectedResearch, type LocalCompanyResearchStatus } from '../shared/contracts/localWorkspaceContract';
@@ -56,13 +57,14 @@ import {
 } from './foundation/foundationRuntime';
 import { HealthService } from './health/healthService';
 import { registerApplicationIpc } from './ipc/registerApplicationIpc';
-import { safeStorage, dialog, shell, clipboard } from 'electron';
+import { safeStorage, dialog, shell, clipboard, app, BrowserWindow } from 'electron';
 import { SafeStorageKeyProtector } from './security/safeStorageKeyProtector';
 import { WorkspaceKeyStore } from './security/workspaceKeyStore';
 import { classifyStartupFailure, isStartupCancellation, type StartupStage } from './startup/startupFailure';
 import type { SafeLogger } from './logging/safeLogger';
 import { createOutboundCommandService } from './communications/outboundCommandService';
 import { createPhoneHandoffLauncher, unavailablePhoneHandoff, unavailableOutboundReadiness } from './communications/phoneHandoffLauncher';
+import { isExcludedNumber } from './communications/excludedNumbers';
 import type { OutboundCommandServiceApi, OutboundDomainGate, PhoneHandoffPort, OutboundReadinessPort } from './communications/outboundPorts';
 
 import { createInboundReadiness, type InboundRegistry, type InboundAdapter } from './communications/inboundReadiness';
@@ -165,8 +167,8 @@ export function createProductionPhoneBindings(input: ProductionPhoneBindingsOpti
           launcher ??= createPhoneHandoffLauncher({
             driver: createNativePhoneLaunchDriver({ ...input.native, verifiedHelperPath, setupFingerprint: proof }),
             // Domain authorization checks DNC, jurisdiction and exact contact. The
-            // launcher independently rejects short or malformed targets.
-            isExcludedNumber: () => false,
+            // launcher independently refuses service codes, short codes, test exchanges and malformed targets.
+            isExcludedNumber,
           });
           const capability = await launcher.inspectCapability();
           if (version !== epoch || !proof()) return unavailable.inspectCapability();
@@ -330,6 +332,12 @@ export type ApplicationStartupDependencies = FoundationRuntimeDependencies & {
   registerPhoneSetupIpc?: typeof registerPhoneSetupIpc;
   createBackupService?(options: BackupServiceOptions): Pick<BackupService, 'start' | 'shutdown' | 'createBackup' | 'listAvailableBackups'>;
   createRecoveryService?(options: RecoveryServiceOptions): RecoveryProvider & { shutdown(): Promise<void> };
+  /** D3: the one automatic worker-event synchronizer (launch, window focus, every 5 minutes). Absent means no automatic sync. */
+  createBackgroundSync?: typeof createBackgroundSync;
+  /** Window focus source for the focus sync; the default listens to Electron's `browser-window-focus`. */
+  subscribeWindowFocus?(listener: () => void): () => void;
+  /** Tells every renderer that a local read changed (a sync applied events). Delivery is best effort; the renderer re-reads Today. */
+  notifyRenderer?(channel: 'daily:changed'): void;
   registerApplicationIpc(
     runtime: FoundationRuntime,
     isTrustedRendererUrl: ((url: string) => boolean) | undefined,
@@ -420,6 +428,9 @@ const defaultDependencies: ApplicationStartupDependencies = {
     providers:providers ?? createOutreachProviders({directory:join(userDataPath,'outreach'),safeStorage,openExternal:url=>shell.openExternal(url)})}),
   createAppleBridgeSupervisor: (options) => new AppleBridgeSupervisor(options),
   registerAppleSpikeIpc,
+  createBackgroundSync,
+  subscribeWindowFocus: listener => { app.on('browser-window-focus', listener); return () => { app.removeListener('browser-window-focus', listener); }; },
+  notifyRenderer: channel => { for (const window of BrowserWindow.getAllWindows()) { if (!window.isDestroyed()) window.webContents.send(channel); } },
   closeDatabase,
 };
 
@@ -448,6 +459,8 @@ export async function startApplication(
   );
   let delegation:DelegationRuntime|undefined;
   let delegationCleanup:Promise<void>|undefined;
+  let backgroundSync: BackgroundSync | undefined;
+  let unsubscribeWindowFocus: (() => void) | undefined;
   let email:ReturnType<typeof createEmailService>|undefined;
   let researchProviders: ReturnType<typeof createOutreachProviders> | undefined;
   let companyDraftPreparation: ReturnType<typeof createCompanyDraftPreparationService> | undefined;
@@ -486,6 +499,9 @@ export async function startApplication(
     if (outboundClosed) return;
     // Reserve permanent owner closure before any injected callback can reenter.
     outboundClosed = true;
+    // The background sync calls the delegation runtime, so it stops first: no interval fires into a disposed runtime.
+    try { backgroundSync?.dispose(); } catch (error) { cleanupErrors.push(error); }
+    try { unsubscribeWindowFocus?.(); } catch (error) { cleanupErrors.push(error); } finally { unsubscribeWindowFocus = undefined; }
     delegationCleanup=delegation?.dispose();void delegationCleanup?.catch(():undefined=>undefined);
     try { companyDraftPreparation?.dispose(); } catch (error) { cleanupErrors.push(error); }
     // Abort research before touching the single shared credential owner.
@@ -759,6 +775,25 @@ export async function startApplication(
       );
       throwIfStartupCancelled(options.signal);
     }
+    stage = 'background_sync';
+    // D3: worker events reach this Mac on launch, on window focus and every five minutes, through the same
+    // runtime.sync() the buttons call. Unpaired workspaces have nothing to sync and the owner stays disabled.
+    // It starts only if startup was not closed meanwhile, and stops in closeOutbound before the runtime goes.
+    if (!outboundClosed && dependencies.createBackgroundSync) {
+      const runtime = delegation;
+      backgroundSync = dependencies.createBackgroundSync({
+        enabled: paired !== null && runtime !== undefined,
+        sync: () => { if (!runtime) throw new Error('delegation_unavailable'); return runtime.sync(); },
+        clock: domainClock,
+        onApplied: () => { try { dependencies.notifyRenderer?.('daily:changed'); } catch { /* Best effort only. */ } },
+      });
+      if (backgroundSync.status().enabled) {
+        const sync = backgroundSync;
+        unsubscribeWindowFocus = dependencies.subscribeWindowFocus?.(() => { void sync.trigger('focus'); });
+        sync.start();
+      }
+    }
+    throwIfStartupCancelled(options.signal);
     stage = 'window';
     await options.createWindow();
     throwIfStartupCancelled(options.signal);
