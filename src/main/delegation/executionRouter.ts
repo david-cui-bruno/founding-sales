@@ -84,15 +84,22 @@ export function createDelegatedPhoneHandoff(input: {
       if (signal.aborted) abort();
     });
   }
-  async function run(request: DelegatedPhoneHandoffRequest): Promise<DelegatedPhoneHandoffResult> {
+  async function run(request: DelegatedPhoneHandoffRequest, manual: boolean): Promise<DelegatedPhoneHandoffResult> {
     const signal = AbortSignal.any([lifetime, AbortSignal.timeout(15000)]);
     const command = request.command;
     let started: string | null = null;
+    // The refusal the route authorization actually gave, so a territory hold keeps its state
+    // ("state_clearance_missing:MA") instead of collapsing to account_route_unavailable.
+    let refusal: string | null = null;
     try {
       signal.throwIfAborted();
       if (command.workspaceId !== expectedWorkspaceId) return held('workspace_mismatch');
-      const capability = capabilitySchema.parse(await wait(phone.inspectCapability(), signal));
-      if (capability.state !== 'available') return held(capability.reasonCode ?? 'phone_route_unverified');
+      // D6 acceptance 2: a hand-dialed attempt is not a helper dial, so it does not ask the helper
+      // whether it could dial. Every other check below is unchanged, and nothing here dials.
+      if (!manual) {
+        const capability = capabilitySchema.parse(await wait(phone.inspectCapability(), signal));
+        if (capability.state !== 'available') return held(capability.reasonCode ?? 'phone_route_unverified');
+      }
       signal.throwIfAborted();
       await wait(client.submit(command), signal);
       const sync = await wait(client.sync(signal), signal);
@@ -131,26 +138,37 @@ export function createDelegatedPhoneHandoff(input: {
         const authorization = authorizeDelegatedAccountPhoneRoute({ database, clock, expectedWorkspaceId, handoff,
           request: { commandId: command.commandId, accountId: command.accountId, routeId: binding.routeId, expectedRouteVersion: binding.routeVersion,
             expectedEvidenceFingerprint: request.expectedEvidenceFingerprint, channel: 'call' } });
-        if (authorization.kind !== 'allowed') throw new Error('account_route_unavailable');
+        if (authorization.kind !== 'allowed') {
+          // A plain code or the `<code>:<STATE>` form the renderer's describeHandoffHold decodes.
+          refusal = /^[a-z0-9_]{1,64}(:[A-Z]{2})?$/.test(authorization.reason) ? authorization.reason : 'account_route_unavailable';
+          throw new Error('account_route_unavailable');
+        }
         target = authorization.canonicalTarget;
         readiness.assertCurrent(ready.proof);
         signal.throwIfAborted();
       });
       if (consumed.status === 'already_started') return { status: 'already_started', handoffId };
       started = handoffId;
+      // A hand-dialed attempt consumes the step's one handoff and stops there, so the outcome form
+      // opens on real consumed evidence. The helper is never asked to dial, and `target` is never
+      // handed to it: the founder dialled it himself from the number on the card.
+      if (manual) return { status: 'handoff', handoffId, result: { status: 'unavailable', reasonCode: 'channel_unavailable' } };
       // No await, queued callback, or second authorization between SQL commit and dispatch.
       const pending = phone.dispatch(target);
       const result = handoffResultSchema.safeParse(await wait(pending, signal));
       return { status: 'handoff', handoffId, result: result.success ? result.data : uncertain };
     } catch {
-      return started ? { status: 'handoff', handoffId: started, result: uncertain } : held('operation_interrupted');
+      return started ? { status: 'handoff', handoffId: started, result: uncertain } : held(refusal ?? 'operation_interrupted');
     }
   }
-  return { begin(value: DelegatedPhoneHandoffRequest): Promise<DelegatedPhoneHandoffResult> {
+  /** `manual` is the desktop-side flag for a hand-dialed attempt. It is part of the in-flight
+   * identity, so the same command id can never be replayed as the other kind of handoff. */
+  return { begin(value: DelegatedPhoneHandoffRequest, options?: { manual?: boolean }): Promise<DelegatedPhoneHandoffResult> {
     const request = delegatedPhoneHandoffRequestSchema.parse(value);
-    const fingerprint = accountFingerprint(request); const id = request.command.commandId; const prior = flights.get(id);
+    const manual = options?.manual === true;
+    const fingerprint = accountFingerprint({ request, manual }); const id = request.command.commandId; const prior = flights.get(id);
     if (prior) return prior.fingerprint === fingerprint ? prior.promise : Promise.resolve(held('command_conflict'));
-    const promise = Promise.resolve().then(() => run(request)).finally(() => flights.delete(id));
+    const promise = Promise.resolve().then(() => run(request, manual)).finally(() => flights.delete(id));
     flights.set(id, { fingerprint, promise }); return promise;
   } };
 }

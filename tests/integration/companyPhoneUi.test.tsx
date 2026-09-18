@@ -206,7 +206,7 @@ async function reviewAndBegin(f: Awaited<ReturnType<typeof fixture>>) {
   const confirmation = await screen.findByRole('checkbox', { name: 'I confirm the displayed destination and call purpose' });
   await waitFor(() => expect((confirmation as HTMLInputElement).disabled).toBe(false));
   fireEvent.click(confirmation);
-  const begin = screen.getByRole('button', { name: 'Begin phone handoff' });
+  const begin = screen.getByRole('button', { name: 'Call with Phone.app' });
   await waitFor(() => expect((begin as HTMLButtonElement).disabled).toBe(false));
   fireEvent.click(begin); fireEvent.click(begin);
   await waitFor(() => expect(f.invocations.filter(call => call.channel === 'outreach:delegation-begin-phone')).toHaveLength(1));

@@ -46,7 +46,7 @@ it('P1 actual company-only Calls row exposes separate phone review and final han
   const review = await screen.findByRole('button', { name: 'Check owner and review call' });
   fireEvent.click(review);
   await waitFor(() => expect(f.sync).toHaveBeenCalledTimes(1));
-  const begin = await screen.findByRole('button', { name: 'Begin phone handoff' });
+  const begin = await screen.findByRole('button', { name: 'Call with Phone.app' });
   expect((begin as HTMLButtonElement).disabled).toBe(true);
   expect(screen.getByRole('checkbox', { name: /confirm the displayed destination and call purpose/i })).toBeTruthy();
   expect(f.begin).not.toHaveBeenCalled();
@@ -63,7 +63,7 @@ async function openReview(f: ReturnType<typeof phoneFixture>) {
 it('cancelling exact review preserves no begin or submit and a fresh confirmation is unchecked', async () => {
   const f = phoneFixture(); const confirmation = await openReview(f);
   fireEvent.click(confirmation); fireEvent.click(screen.getByRole('button', { name: 'Cancel call review' }));
-  expect(screen.queryByRole('button', { name: 'Begin phone handoff' })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Call with Phone.app' })).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Check owner and review call' }));
   const second = await screen.findByRole('checkbox', { name: 'I confirm the displayed destination and call purpose' });
   expect((second as HTMLInputElement).checked).toBe(false);
@@ -75,13 +75,13 @@ it.each(['route', 'owner', 'evidence', 'setup'] as const)('final confirmation re
   if (kind === 'owner') { f.snapshot.ownerStatus[0].executionVersion = 20; f.setSnapshot(f.snapshot); }
   if (kind === 'evidence') f.source.sources[0].excerpt += ' Revised saved source.';
   if (kind === 'setup') vi.mocked(f.setup.status).mockResolvedValue({ state: 'unavailable', candidateFingerprint: null, confirmedAt: null });
-  fireEvent.click(confirmation); fireEvent.click(screen.getByRole('button', { name: 'Begin phone handoff' }));
+  fireEvent.click(confirmation); fireEvent.click(screen.getByRole('button', { name: 'Call with Phone.app' }));
   await screen.findByText(kind === 'route' ? 'HOLD: The exact selected company business phone route is unavailable.' : kind === 'setup' ? 'HOLD: Phone handoff readiness is not configured.' : 'HOLD: Reviewed phone bindings changed. Check owner and review again before confirming.');
   expect(f.begin).not.toHaveBeenCalled(); expect(f.submit).not.toHaveBeenCalled(); expect(f.sync).toHaveBeenCalledTimes(1);
 });
 it('unknown begin reply is latched once with current non-default versions and survives panel remount', async () => {
   const f = phoneFixture(); const confirmation = await openReview(f);
-  fireEvent.click(confirmation); const button = screen.getByRole('button', { name: 'Begin phone handoff' });
+  fireEvent.click(confirmation); const button = screen.getByRole('button', { name: 'Call with Phone.app' });
   fireEvent.click(button); fireEvent.click(button);
   await screen.findByText('Handoff result unknown. Do not redial. Refresh saved phone history.');
   expect(f.begin).toHaveBeenCalledTimes(1);
