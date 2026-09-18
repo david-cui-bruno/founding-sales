@@ -121,12 +121,17 @@ describe('reply template rendering and commands', () => {
     expect(REPLY_TEMPLATE_HOLD_REASONS).toEqual(['template_not_approved', 'mailbox_not_connected', 'sender_cap_reached', 'no_business_email', 'template_variable_missing']);
   });
 
-  it('accepts exactly the four command payloads and the four renderer requests', () => {
+  it('accepts exactly the three command payloads and the four renderer requests', () => {
     expect(REPLY_TEMPLATE_SUBJECT).toBe('reply-templates');
-    for (const payload of [{ kind: 'template-read' }, { kind: 'template-approve', templateId: 'T1', revision: 1, contentHash: seededReplyTemplateHash('T1') },
+    const seed = REPLY_TEMPLATE_SEEDS[0]!;
+    for (const payload of [{ kind: 'template-approve', templateId: 'T1', revision: 1, subject: seed.subject, body: seed.body, contentHash: seededReplyTemplateHash('T1') },
       { kind: 'template-revoke', templateId: 'T1', revision: 1 }, { kind: 'template-pause', paused: true }]) {
       expect(replyTemplateCommandPayloadSchema.parse(payload)).toEqual(payload);
     }
+    // A hash that does not match the text it carries, and a body that breaks a rule, are both refused.
+    expect(replyTemplateCommandPayloadSchema.safeParse({ kind: 'template-approve', templateId: 'T1', revision: 1, subject: seed.subject, body: seed.body, contentHash: seededReplyTemplateHash('T2') }).success).toBe(false);
+    expect(replyTemplateCommandPayloadSchema.safeParse({ kind: 'template-approve', templateId: 'T1', revision: 2, subject: seed.subject, body: seed.body, contentHash: seededReplyTemplateHash('T1') }).success).toBe(false);
+    expect(replyTemplateCommandPayloadSchema.safeParse({ kind: 'template-read' }).success).toBe(false);
     expect(replyTemplateCommandPayloadSchema.safeParse({ kind: 'template-approve', templateId: 'T1', revision: 1, contentHash: 'short' }).success).toBe(false);
     expect(replyTemplateCommandPayloadSchema.safeParse({ kind: 'template-send' }).success).toBe(false);
     expect(replyTemplateRequestSchema.parse({ kind: 'read' })).toEqual({ kind: 'read' });
