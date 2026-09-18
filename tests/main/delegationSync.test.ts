@@ -64,10 +64,10 @@ describe('synchronizeDelegation throughput', () => {
       const elapsed = performance.now() - started;
       expect(report).toEqual({ applied: BACKLOG, gaps: 0, cursor: cursorAt(BACKLOG), ownerFresh: true, failure: null });
       expect(remote.pages()).toBe(5);
-      expect(elapsed).toBeLessThan(SYNC_BUDGET_MS);
+      // Measured at 22 ms locally on 18 Sep 2026. The bound is deliberately loose for a slow runner
+      // and still an order of magnitude inside the budget the old flat 15 s could not reach.
+      expect(elapsed).toBeLessThan(SYNC_BUDGET_MS / 10);
       expect(transport.current()).toMatchObject({ state: 'complete', cursor: cursorAt(BACKLOG) });
-      // eslint-disable-next-line no-console
-      console.log(`835-event sync: ${elapsed.toFixed(0)} ms over ${remote.pages()} pages`);
     } finally { f.close(); }
   });
   it('checkpoints the cursor after every complete page and resumes there after a stalled page', async () => {
