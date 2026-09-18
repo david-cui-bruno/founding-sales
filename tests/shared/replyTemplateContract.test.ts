@@ -3,6 +3,7 @@ import {
   REPLY_TEMPLATE_HOLD_REASONS, REPLY_TEMPLATE_IDS, REPLY_TEMPLATE_MAX_WORDS, REPLY_TEMPLATE_SIGN_OFF, REPLY_TEMPLATE_SUBJECT,
   REPLY_TEMPLATE_VARIABLES, editReplyTemplateSchema, renderReplyTemplate, replyTemplateCommandPayloadSchema, replyTemplateContentHash,
   replyTemplateDraftId, replyTemplateRequestSchema, replyTemplateSchema, replyTemplateSnapshotSchema, replyTemplateTextIssues,
+  type ReplyTemplateApproval,
 } from '../../src/shared/contracts/replyTemplateContract';
 import { CALLIE_OUTREACH_PRODUCT_CAPABILITY, CALLIE_OUTREACH_PRODUCT_SENTENCE, CALLIE_PRODUCT_FACTS } from '../../src/shared/product/callieProductFacts';
 import { REPLY_TEMPLATE_SEEDS, seededReplyTemplateHash, seededReplyTemplates } from '../../src/main/outreach/templates/replyTemplateSeeds';
@@ -18,7 +19,7 @@ describe('reply template seeds', () => {
     expect(templates.map(template => template.purpose)).toEqual(['after_conversation', 'missed_you', 'check_back_later', 'short_value_note', 'last_note']);
     expect(templates.map(template => template.revision)).toEqual([1, 1, 1, 1, 1]);
     expect(templates.map(template => template.approval)).toEqual(Array.from({ length: 5 },
-      () => ({ state: 'draft', approvedRevision: null, approvedAt: null, contentHash: null })));
+      (): ReplyTemplateApproval => ({ state: 'draft', approvedRevision: null, approvedAt: null, contentHash: null })));
     expect(templates.map(template => template.subject)).toEqual([
       'Following up on our call, {firm}', 'Tried to reach you, {firm}', 'Checking back around {callback_date}, {firm}',
       'One question about maintenance calls at {firm}', 'Closing the loop, {firm}',

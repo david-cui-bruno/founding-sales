@@ -68,7 +68,7 @@ it('upgrades genuine29 additively with verified encrypted backup, byte-identical
     expect(seeded.map(row => row.id)).toEqual(['T1', 'T2', 'T3', 'T4', 'T5']);
     expect(seeded.map(row => row.approval_state)).toEqual(['draft', 'draft', 'draft', 'draft', 'draft']);
     expect(seeded.map(row => row.revision)).toEqual([1, 1, 1, 1, 1]);
-    expect(seeded.flatMap(row => [row.approved_revision, row.approved_at, row.content_hash])).toEqual(Array.from({ length: 15 }, () => null));
+    expect(seeded.flatMap(row => [row.approved_revision, row.approved_at, row.content_hash])).toEqual(Array.from({ length: 15 }, (): null => null));
     for (const seed of REPLY_TEMPLATE_SEEDS) {
       const row = seeded.find(entry => entry.id === seed.id)!;
       expect({ subject: row.subject, body: row.body, name: row.name, purpose: row.purpose }).toEqual({ subject: seed.subject, body: seed.body, name: seed.name, purpose: seed.purpose });
@@ -79,7 +79,7 @@ it('upgrades genuine29 additively with verified encrypted backup, byte-identical
     expect(database.raw.prepare('SELECT singleton,paused,revision FROM email_template_settings').all()).toEqual([{ singleton: 1, paused: 0, revision: 1 }]);
 
     // The table refuses what the contract refuses, and history is immutable.
-    const insert = (id: string, extra: Partial<{ purpose: string; revision: number; state: string; approvedRevision: number | null; approvedAt: string | null; contentHash: string | null }> = {}) =>
+    const insert = (id: string, extra: Partial<{ purpose: string; revision: number; state: string; approvedRevision: number | null; approvedAt: string | null; contentHash: string | null }> = {}): unknown =>
       database.raw.prepare('INSERT INTO email_templates(id,name,purpose,subject,body,variables_json,revision,approval_state,approved_revision,approved_at,content_hash,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)')
         .run(id, 'Name', extra.purpose ?? 'missed_you', 'Subject', 'Body', '[]', extra.revision ?? 1, extra.state ?? 'draft',
           extra.approvedRevision ?? null, extra.approvedAt ?? null, extra.contentHash ?? null, '2026-09-18T12:00:00.000Z', '2026-09-18T12:00:00.000Z');

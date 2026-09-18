@@ -3,6 +3,7 @@ import { accountIdSchema as id, accountInstantSchema as instant } from './accoun
 import { commandReceiptSchema } from './commandReceiptContract';
 import { sha256Utf8 } from '../crypto/sha256';
 import { CALLIE_OUTREACH_PRODUCT_SENTENCE } from '../product/callieProductFacts';
+import { senderRampSchema, workerPolicyReceiptSchema } from './workerPolicyContract';
 
 /**
  * The five follow-up templates David approves once (design D13, his decision of 17 September 2026).
@@ -122,26 +123,53 @@ export const replyTemplateStatusSchema = z.strictObject({ snapshot: replyTemplat
 export type ReplyTemplateStatus = z.infer<typeof replyTemplateStatusSchema>;
 
 /**
- * Owner command payloads. The approval carries the id, the revision and the content hash, so the worker
- * can refuse any text David did not approve; `template-read` stores nothing.
+ * Sending limits (the `sender-caps` policy row, carried over from lane 30's PR 98). `dispatchRepository`
+ * requires this row before any send and nothing wrote it, so the first sequence email would hold forever on a
+ * missing policy. David's decision of 17 September 2026 fixes the numbers: a ceiling of forty a day with the
+ * automatic warm-up ramp. The renderer names only the request identity and the revision it read; the sender,
+ * the mailbox, the workspace and the pairing are all filled in the main process from the recorded grant and
+ * pairing, never typed or guessed. Writing this row is a ceiling, never permission to send.
+ */
+export const REPLY_TEMPLATE_SENDER_DAILY_LIMIT = 40;
+export const sendingLimitsRequestSchema = z.strictObject({ requestId: z.uuid(), expectedRevision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).nullable() });
+export type SendingLimitsRequest = z.infer<typeof sendingLimitsRequestSchema>;
+export const sendingLimitsStatusSchema = z.strictObject({ sender: z.email(), dailyLimit: revision, ramp: senderRampSchema, receipt: workerPolicyReceiptSchema });
+export type SendingLimitsStatus = z.infer<typeof sendingLimitsStatusSchema>;
+
+/**
+ * Owner command payloads. The approval carries the id, the revision and the sha256 of exactly that revision's
+ * subject and body, so the worker can refuse any text David did not approve. The hash is always computed in the
+ * main process from its own SQL, never accepted from the renderer, which is why `reply-template` is excluded
+ * from the public delegation command the renderer may submit directly.
  */
 export const replyTemplateCommandPayloadSchema = z.discriminatedUnion('kind', [
-  z.strictObject({ kind: z.literal('template-read') }),
-  z.strictObject({ kind: z.literal('template-approve'), templateId: z.enum(REPLY_TEMPLATE_IDS), revision, contentHash: hash }),
+  z.strictObject({ kind: z.literal('template-approve'), templateId: z.enum(REPLY_TEMPLATE_IDS), revision,
+    subject: z.string().min(1).max(160), body: z.string().min(1).max(4000), contentHash: hash })
+    .superRefine((payload, ctx) => {
+      // The worker re-derives the hash and re-checks every body rule, so a mismatch can never become a standing approval.
+      if (replyTemplateContentHash({ id: payload.templateId, revision: payload.revision, subject: payload.subject, body: payload.body }) !== payload.contentHash) {
+        ctx.addIssue({ code: 'custom', message: 'template_content_hash_mismatch' });
+      }
+      for (const issue of replyTemplateTextIssues(payload)) ctx.addIssue({ code: 'custom', message: issue });
+    }),
   z.strictObject({ kind: z.literal('template-revoke'), templateId: z.enum(REPLY_TEMPLATE_IDS), revision }),
   z.strictObject({ kind: z.literal('template-pause'), paused: z.boolean() }),
 ]);
 export type ReplyTemplateCommandPayload = z.infer<typeof replyTemplateCommandPayloadSchema>;
-/** One standing approval as the worker holds it. `pausedAt` is the workspace switch, not a per-template state. */
+/**
+ * One standing approval as the worker holds it: the exact text David approved, its revision, its hash and the
+ * command that carried it. The worker keeps the text because a sequence step sends without another click; it
+ * sends that text and nothing else, and only while the hash still matches the approved revision.
+ */
 export const workerReplyTemplateApprovalSchema = z.strictObject({ templateId: z.enum(REPLY_TEMPLATE_IDS), revision,
-  contentHash: hash, approvedAt: instant, commandId: z.uuid() });
+  subject: z.string().min(1).max(160), body: z.string().min(1).max(4000), contentHash: hash, approvedAt: instant, commandId: z.uuid() })
+  .refine(approval => replyTemplateContentHash({ id: approval.templateId, revision: approval.revision, subject: approval.subject, body: approval.body }) === approval.contentHash,
+    'template_content_hash_mismatch');
 export type WorkerReplyTemplateApproval = z.infer<typeof workerReplyTemplateApprovalSchema>;
 export const workerReplyTemplateStateSchema = z.strictObject({
   approvals: z.array(workerReplyTemplateApprovalSchema).max(REPLY_TEMPLATE_IDS.length), paused: z.boolean(), updatedAt: instant,
 }).refine(state => new Set(state.approvals.map(approval => approval.templateId)).size === state.approvals.length, 'template_state_duplicated');
 export type WorkerReplyTemplateState = z.infer<typeof workerReplyTemplateStateSchema>;
-export const replyTemplateReceiptSchema = z.strictObject({ receipt: commandReceiptSchema, state: workerReplyTemplateStateSchema.nullable() });
-export type ReplyTemplateReceipt = z.infer<typeof replyTemplateReceiptSchema>;
 
 /**
  * Why a template email did not go out, from a closed set. Every one of these is a hold the founder can
@@ -172,6 +200,34 @@ export function renderReplyTemplate(template: Pick<ReplyTemplate, 'subject' | 'b
   if (missing.length) return { hold: 'template_variable_missing', missing };
   const fill = (text: string) => text.replace(/\{([^{}]*)\}/g, (match, name: string) => values[name as ReplyTemplateVariable] ?? match);
   return { rendered: Object.freeze({ subject: fill(template.subject), body: fill(template.body) }) };
+}
+/**
+ * Whether a sequence email step may send, and with exactly what text (D13, step 4 of the lane brief). Pure: it
+ * reads recorded facts and returns either the approved text to send or one closed hold reason. It never sends,
+ * never reads a store and never decides that something was sent.
+ *
+ * The order of the holds is the order David reads them: an unapproved or paused template is his own decision, a
+ * missing mailbox is his setup, a reached cap is arithmetic that clears tomorrow, and a missing variable value
+ * is a fact the sequence does not have yet. `sender_cap_reached` holds the step until tomorrow; every other
+ * reason holds it until the named condition changes.
+ */
+export function decideTemplateEmailStep(input: {
+  templateId: ReplyTemplateId;
+  /** The standing approvals as the worker holds them, and the workspace pause switch. */
+  state: Pick<WorkerReplyTemplateState, 'approvals' | 'paused'> | null;
+  /** Whether a usable worker-held Google grant with the send capability exists. Never inferred from absence of a read. */
+  grantConnected: boolean;
+  /** Today's cap and today's recorded sends for the sender, from the worker's own arithmetic. */
+  senderCap: { today: number; sentToday: number } | null;
+  values: ReplyTemplateValues;
+}): { send: WorkerReplyTemplateApproval & { rendered: ReplyTemplateRendered } } | { hold: ReplyTemplateHoldReason; missing?: readonly ReplyTemplateVariable[] } {
+  const approval = input.state?.approvals.find(entry => entry.templateId === input.templateId);
+  if (!input.state || input.state.paused || !approval) return { hold: 'template_not_approved' };
+  if (!input.grantConnected) return { hold: 'mailbox_not_connected' };
+  if (!input.senderCap || input.senderCap.sentToday >= input.senderCap.today) return { hold: 'sender_cap_reached' };
+  const rendered = renderReplyTemplate({ subject: approval.subject, body: approval.body, variables: [] }, input.values);
+  if ('hold' in rendered) return rendered;
+  return { send: { ...approval, rendered: rendered.rendered } };
 }
 /** Local identity for one template-mode follow-up draft, so a retry reaches the same row instead of drafting twice. */
 export function replyTemplateDraftId(input: { accountId: string; templateId: string; sourceCommandId: string }): string {
