@@ -15,7 +15,7 @@ import {saveAccountCallbackSchema,closeAccountCallbackSchema,readAccountCallback
 import type {AccountCallback} from '../../shared/contracts/dailyContract';
 import type { DelegationRuntime } from '../delegation/delegationRuntime';
 import type { PairingStore } from '../delegation/pairingStore';
-import { delegatedPhoneHandoffRequestSchema,bootstrapSelectedAccountSchema,refreshSelectedAccountRecordSchema,selectedAccountFreshnessRequestSchema,selectedAccountFreshnessSchema,configureResearchSourceSchema,ownerResearchSourceSchema,configureLocalDelegationSchema,localDelegationStatusSchema,localDelegationConfigurationRecordSchema,redeemLocalPairingSchema,redeemedLocalPairingSchema,delegationSyncReportSchema } from '../../shared/contracts/ownerCommandContract';
+import { delegatedPhoneHandoffRequestSchema,bootstrapSelectedAccountSchema,refreshSelectedAccountRecordSchema,selectedAccountFreshnessRequestSchema,selectedAccountFreshnessSchema,configureResearchSourceSchema,ownerResearchSourceSchema,configureLocalDelegationSchema,localDelegationStatusSchema,localDelegationConfigurationRecordSchema,redeemLocalPairingSchema,redeemedLocalPairingSchema,delegationSyncReportSchema,storedPairingSummarySchema,rotateLocalPairingSchema,rotatedLocalPairingSchema } from '../../shared/contracts/ownerCommandContract';
 import {delegatedPhoneHandoffResultSchema,publicDelegationCommandSchema,commandReceiptSchema} from '../../shared/contracts/delegationContract';
 import type { z } from 'zod';
 import { configureOutreachSchema,draftRevisionSchema,emailDraftSchema,localEmailAuthorityReadSchema,openDraftSchema,outreachStatusSchema,
@@ -30,7 +30,7 @@ export type AccountCallbackApi = {
   /** Writes the existing account tombstone only. Never dials, prepares a handoff or records an outcome. */
   neverCall(request:NeverCallAccount):Promise<NeverCallReceipt>;
 };
-export function registerOutreachIpc(options:{provider:OutreachApi;delegation?:DelegationRuntime;callbacks?:AccountCallbackApi;pairingStore?:Pick<PairingStore,'redeem'>;isTrustedRendererUrl?:(url:string)=>boolean}):()=>void {
+export function registerOutreachIpc(options:{provider:OutreachApi;delegation?:DelegationRuntime;callbacks?:AccountCallbackApi;pairingStore?:Pick<PairingStore,'redeem'>&Partial<Pick<PairingStore,'describe'|'rotate'>>;isTrustedRendererUrl?:(url:string)=>boolean}):()=>void {
   const removers:(()=>void)[]=[];
   const add=<Request,Response>(name:string,requestSchema:z.ZodType<Request>|null,responseSchema:z.ZodType<Response>,handler:(request:Request)=>Promise<Response>)=>{
     removers.push(registerValidatedIpc({channel:`outreach:${name}`,requestSchema,responseSchema,handler,
@@ -148,7 +148,21 @@ export function registerOutreachIpc(options:{provider:OutreachApi;delegation?:De
         return receipt;
       });
     }
-    if(options.pairingStore)add('delegation-pair',redeemLocalPairingSchema,redeemedLocalPairingSchema,input=>options.pairingStore!.redeem(input,AbortSignal.timeout(15000)));
+    if(options.pairingStore){
+      const store=options.pairingStore;
+      add('delegation-pair',redeemLocalPairingSchema,redeemedLocalPairingSchema,input=>store.redeem(input,AbortSignal.timeout(15000)));
+      // The credential rotation pair: a credential-free read of the stored pairing, and the in-place rotation that
+      // must name exactly the pairing and generation that read showed. Registered only when the store offers them.
+      if(typeof store.describe==='function'&&typeof store.rotate==='function'){
+        const describe=store.describe.bind(store),rotate=store.rotate.bind(store);
+        add('delegation-pairing',null,storedPairingSummarySchema.nullable(),()=>describe());
+        add('delegation-rotate-pairing',rotateLocalPairingSchema,rotatedLocalPairingSchema,async input=>{
+          const rotated=await rotate(input,AbortSignal.timeout(15000));
+          if(rotated.pairingId!==input.pairingId||rotated.generation!==input.expectedGeneration+1)throw new Error('pairing_identity_mismatch');
+          return rotated;
+        });
+      }
+    }
 
   }catch(error){removers.reverse().forEach(remove=>remove());throw error;}
   let disposed=false;

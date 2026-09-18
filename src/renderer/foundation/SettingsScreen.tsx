@@ -383,7 +383,7 @@ function AboutSection({ health }: { health: AppHealth | null }) {
 }
 
 type SettingsDelegationApi = Pick<CalliePreloadApi['delegation'], 'status' | 'pair'> &
-  Partial<Pick<CalliePreloadApi['delegation'], 'configure' | 'sync' | 'googleConnections' | 'researchSetup' | 'readSuppression'>>;
+  Partial<Pick<CalliePreloadApi['delegation'], 'configure' | 'sync' | 'googleConnections' | 'researchSetup' | 'readSuppression' | 'pairing' | 'rotatePairing'>>;
 
 function hasWorkspaceAccess(api: SettingsDelegationApi | undefined): api is SettingsDelegationApi & Pick<CalliePreloadApi['delegation'], 'configure' | 'sync'> {
   return typeof api?.configure === 'function' && typeof api.sync === 'function';

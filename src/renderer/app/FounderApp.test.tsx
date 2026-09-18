@@ -71,7 +71,7 @@ function fakeCallieApi(): CalliePreloadApi {
       status: vi.fn(async () => ({ state: 'unconfigured' as const, workspaceId: null, endpoint: null, configuration: null })),
       policyImport: { selectAndPreview: pending, confirm: pending, resume: pending, status: pending },
       prepareRequestedFollowup: pending, getRequestedFollowup: pending, editRequestedFollowup: pending, approveRequestedFollowup: pending,
-      reconcileReplyDraft: pending, editReplyDraft: pending, getPhoneHandoffState: pending, beginPhone: pending, bootstrap: pending, configurePolicy: pending, configureResearch: pending, pair: pending, configure: pending, submit: pending, sync: pending,
+      reconcileReplyDraft: pending, editReplyDraft: pending, getPhoneHandoffState: pending, beginPhone: pending, bootstrap: pending, configurePolicy: pending, configureResearch: pending, pair: pending, pairing: pending, rotatePairing: pending, configure: pending, submit: pending, sync: pending,
     },
     linkedin: { prepare: pending, get: pending, recover: pending, save: pending, begin: pending, open: pending, copy: pending, reportOutcome: pending },
     phoneSetup: { status: pending, confirm: pending, clear: pending },
