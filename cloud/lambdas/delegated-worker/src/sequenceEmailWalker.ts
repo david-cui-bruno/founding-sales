@@ -155,7 +155,12 @@ export function createSequenceEmailWalker(input: SequenceEmailDependencies) {
     if (!versionRow) return;
     const version = campaignVersionSchema.parse(versionRow.data);
     if (version.id !== record.versionId) throw new Error('territory_email_identity_conflict');
-    if (!alignedSequence(version, policy.sequence)) return;
+    // A record whose steps carry their own frozen template needs no alignment at all: lane 41 froze the
+    // template on each held step at enrollment, so the step names its template whatever the live policy
+    // revision now says. Only a record written before that has to read the template off the policy by
+    // position, and reading by position is sound only while the positions still line up.
+    const frozen = record.heldSteps.every(step => step.templateId !== undefined);
+    if (!frozen && !alignedSequence(version, policy.sequence)) return;
     const enrollmentRow = await store.get<unknown>(campaignEnrollmentKey(record.enrollmentId));
     if (!enrollmentRow) return;
     const enrollment = enrollmentSchema.parse(enrollmentRow.data);
@@ -184,7 +189,7 @@ export function createSequenceEmailWalker(input: SequenceEmailDependencies) {
       if (sent.has(held.stepId)) continue;
       const index = version.steps.findIndex(step => step.id === held.stepId);
       const step = index < 0 ? undefined : version.steps[index];
-      const templateId = index < 0 ? undefined : policy.sequence[index]?.templateKey;
+      const templateId = held.templateId ?? (index < 0 ? undefined : policy.sequence[index]?.templateKey);
       if (!step || step.channel !== 'email' || !templateId) continue;
       // Day offsets are calendar days from the enrollment's own start, which a re-entry re-bases on the restart.
       const dueAt = startedAt + step.delayHours * 3_600_000;

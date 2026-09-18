@@ -51,9 +51,11 @@ describe('D13 sequence v1 on the real worker repository', () => {
     const f = await fixture();
     expect(f.version.steps.map(step => [step.channel, step.delayHours])).toEqual([['call', 0], ['call', 72], ['email', 168], ['call', 288], ['email', 504]]);
     expect(f.version.channelCaps).toEqual({ call: 3, email: 3, linkedin: 0 });
-    expect(territoryHeldSteps(f.version)).toEqual([
-      { stepId: f.version.steps[2]!.id, channel: 'email', reason: TERRITORY_EMAIL_HOLD_REASON },
-      { stepId: f.version.steps[4]!.id, channel: 'email', reason: TERRITORY_EMAIL_HOLD_REASON },
+    // Each email step also freezes the template the policy named for it (lane 41), so the reason David reads
+    // later names the template without the live policy having to still line up with the firm's own version.
+    expect(territoryHeldSteps(f.version, f.policy.sequence)).toEqual([
+      { stepId: f.version.steps[2]!.id, channel: 'email', reason: TERRITORY_EMAIL_HOLD_REASON, templateId: 'T4' },
+      { stepId: f.version.steps[4]!.id, channel: 'email', reason: TERRITORY_EMAIL_HOLD_REASON, templateId: 'T5' },
     ]);
     expect(TERRITORY_EMAIL_HOLD_REASON).toBe('mailbox_not_connected');
   });

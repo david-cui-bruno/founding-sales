@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_TERRITORY_CALL_POLICY_DEFINITION as DEFAULT, TERRITORY_CALL_POLICY_SUBJECT, deriveTerritoryCampaignVersion, describeTerritoryPolicyVersion,
-  territoryCallPolicyDefinitionSchema, territoryCallPolicyId, territoryCallPolicySchema, territoryEnrollmentCommandId, territoryHeldSteps } from '../../src/shared/contracts/territoryCallPolicyContract';
+  territoryCallPolicyDefinitionSchema, territoryCallPolicyId, territoryCallPolicySchema, territoryEnrollmentCommandId, territoryHeldSteps, territoryMailScopeCommandId } from '../../src/shared/contracts/territoryCallPolicyContract';
 import { createCallCampaignDraft, describeCampaignTemplate } from '../../src/shared/contracts/callCampaignDraft';
 import { ownerCommandSchema, territoryPolicyCommandSchema } from '../../src/shared/contracts/ownerCommandContract';
 import { publicDelegationCommandSchema, workerEventSchema } from '../../src/shared/contracts/delegationContract';
@@ -41,7 +41,21 @@ describe('territory call policy contract', () => {
     expect(deriveTerritoryCampaignVersion(policy, 'account-2').id).not.toBe(version.id);
     expect(territoryEnrollmentCommandId(policy, 'account-1')).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-8[0-9a-f]{3}-[0-9a-f]{12}$/);
     expect(territoryEnrollmentCommandId(policy, 'account-1')).toBe(territoryEnrollmentCommandId(policy, 'account-1'));
+    // Without the policy's own sequence the steps carry no template, which is what every record written before
+    // lane 41 carries; with it each email step names the template the policy froze on it at enrollment.
     expect(territoryHeldSteps(version)).toEqual([{ stepId: version.steps[2]!.id, channel: 'email', reason: 'mailbox_not_connected' }, { stepId: version.steps[4]!.id, channel: 'email', reason: 'mailbox_not_connected' }]);
+    expect(territoryHeldSteps(version, policy.sequence)).toEqual([
+      { stepId: version.steps[2]!.id, channel: 'email', reason: 'mailbox_not_connected', templateId: 'T4' },
+      { stepId: version.steps[4]!.id, channel: 'email', reason: 'mailbox_not_connected', templateId: 'T5' }]);
+    // A sequence whose entries no longer line up with the version's steps names no template for a step it does
+    // not describe, rather than lending it the template of whatever now stands at that position.
+    expect(territoryHeldSteps(version, [{ channel: 'call' }, { channel: 'call' }, { channel: 'call' }, { channel: 'call' }, { channel: 'call' }]))
+      .toEqual([{ stepId: version.steps[2]!.id, channel: 'email', reason: 'mailbox_not_connected' }, { stepId: version.steps[4]!.id, channel: 'email', reason: 'mailbox_not_connected' }]);
+    expect(territoryMailScopeCommandId('account-1', 'mailbox')).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-8[0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(territoryMailScopeCommandId('account-1', 'mailbox')).toBe(territoryMailScopeCommandId('account-1', 'mailbox'));
+    expect(territoryMailScopeCommandId('account-2', 'mailbox')).not.toBe(territoryMailScopeCommandId('account-1', 'mailbox'));
+    expect(territoryMailScopeCommandId('account-1', 'other')).not.toBe(territoryMailScopeCommandId('account-1', 'mailbox'));
+    expect(territoryMailScopeCommandId('account-1', 'mailbox')).not.toBe(territoryEnrollmentCommandId(policy, 'account-1'));
     const description = describeTerritoryPolicyVersion({ ...version, approvedAt: now });
     expect(description).toEqual({ accountId: 'account-1', policyId: policy.policyId, revision: 2, audienceDescription: expect.stringContaining('Places discovery'), policyDescription: 'Territory policy v2' });
     expect(describeCampaignTemplate(version)).toEqual({ kind: 'territory_policy', ...description });
