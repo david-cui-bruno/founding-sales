@@ -52,6 +52,16 @@ const addresses = [
   "aws_cloudwatch_event_rule.delegated_worker",
   "aws_cloudwatch_event_target.delegated_worker",
   "aws_lambda_permission.delegated_worker_schedule",
+  // Operations David can see (Batch 7, D10): one alarm topic, its optional email subscription, four alarms, the held-tick metric filter and one monthly budget.
+  "aws_sns_topic.delegated_worker_alarms",
+  "aws_sns_topic_policy.delegated_worker_alarms",
+  "aws_sns_topic_subscription.delegated_worker_alarm_email",
+  "aws_cloudwatch_metric_alarm.delegated_worker_errors",
+  "aws_cloudwatch_metric_alarm.delegated_worker_throttles",
+  "aws_cloudwatch_metric_alarm.delegated_worker_silent_schedule",
+  "aws_cloudwatch_log_metric_filter.delegated_worker_held_ticks",
+  "aws_cloudwatch_metric_alarm.delegated_worker_held_ticks",
+  "aws_budgets_budget.delegated_worker_monthly",
 ];
 const defaults: Record<string, string> = {
   aws_region: '"us-east-1"',
@@ -70,6 +80,8 @@ const defaults: Record<string, string> = {
 // Inputs added after the legacy sourcing root was removed (17 September 2026): the module default is off and only the worker root wires them.
 const workerOnlyDefaults: Record<string, string> = {
   delegated_places_enabled: "false",
+  alarm_email: '""',
+  monthly_budget_usd: "25",
 };
 const implementation = tf(moduleDir);
 const worker = tf(workerDir);
@@ -98,7 +110,10 @@ describe("delegated-worker Terraform source isolation", () => {
     expect(source).toBe("../terraform/modules/delegated-worker");
     expect(resolve(workerDir, source!)).toBe(moduleDir);
     expect(existsSync(join(moduleDir, "main.tf"))).toBe(true);
-    expect(implementation + worker).not.toMatch(/(?:resource|data)\s+"(?:aws_s3_|aws_ses|aws_route53_|aws_budgets_|external|terraform_remote_state)/);
+    // The destroyed legacy sourcing stack (SES, S3, DNS, the schedule watchdog) never returns; the worker's own monthly budget is the one budget.
+    expect(implementation + worker).not.toMatch(/(?:resource|data)\s+"(?:aws_s3_|aws_ses|aws_route53_|external|terraform_remote_state)/);
+    expect(implementation + worker).not.toMatch(/resource\s+"[^"]+"\s+"[^"]*(?:watchdog|sourcing)|cloud\/terraform\.tfstate/);
+    expect([...implementation.matchAll(/^resource "aws_budgets_budget" "([^"]+)"/gm)].map((match) => match[1])).toEqual(["delegated_worker_monthly"]);
   });
 
   it("preserves defaults, validation and all explicit caller input wiring", () => {
@@ -151,6 +166,8 @@ describe("delegated-worker Terraform source isolation", () => {
       expect(input).toContain('nullable = false');
       expect(input).toContain('length(var.delegated_research_reviewed_capability) <= 3000');
       expect(input).toContain('(var.delegated_research_reviewed_capability == "" || can(jsondecode(var.delegated_research_reviewed_capability)))');
+      // Matches `provenance: z.string().trim().min(1).max(500)` in researchSetupContract.ts: what Terraform carries, the worker accepts.
+      expect(input).toContain('try(length(tostring(jsondecode(var.delegated_research_reviewed_capability).provenance)), 0) <= 500');
       expect(input).toContain("non-secret operator-reviewed");
       expect(input).toContain("Not readiness, provider connectivity or verified pricing proof");
       expect(input).toContain("No credentials, model defaults or default rates");
@@ -160,6 +177,56 @@ describe("delegated-worker Terraform source isolation", () => {
     expect(compact(block(implementation, 'resource "aws_iam_role_policy" "delegated_worker"')))
       .not.toContain("delegated_research_reviewed_capability");
     expect(implementation).not.toContain('resource "aws_lambda_function_event_invoke_config"');
+  });
+
+  it("adds the alarms, topic and budget behind the worker opt-in, named with the worker prefix, with email only when an address is set", () => {
+    const source = compact(implementation);
+    for (const [address, suffix] of [
+      ['resource "aws_sns_topic" "delegated_worker_alarms"', 'name = "${local.delegated_name}-alarms"'],
+      ['resource "aws_cloudwatch_metric_alarm" "delegated_worker_errors"', 'alarm_name = "${local.delegated_name}-errors"'],
+      ['resource "aws_cloudwatch_metric_alarm" "delegated_worker_throttles"', 'alarm_name = "${local.delegated_name}-throttles"'],
+      ['resource "aws_cloudwatch_metric_alarm" "delegated_worker_silent_schedule"', 'alarm_name = "${local.delegated_name}-silent-schedule"'],
+      ['resource "aws_cloudwatch_metric_alarm" "delegated_worker_held_ticks"', 'alarm_name = "${local.delegated_name}-held-ticks"'],
+      ['resource "aws_cloudwatch_log_metric_filter" "delegated_worker_held_ticks"', 'name = "${local.delegated_name}-held-ticks"'],
+      ['resource "aws_budgets_budget" "delegated_worker_monthly"', 'name = "${local.delegated_name}-monthly-usd"'],
+    ]) expect(compact(block(implementation, address))).toContain(suffix);
+    expect(source).toContain('delegated_name = "${var.name_prefix}-delegated-worker"');
+    const errors = compact(block(implementation, 'resource "aws_cloudwatch_metric_alarm" "delegated_worker_errors"'));
+    expect(errors).toContain('namespace = "AWS/Lambda" metric_name = "Errors"');
+    expect(errors).toContain('threshold = 1 comparison_operator = "GreaterThanOrEqualToThreshold" treat_missing_data = "notBreaching"');
+    expect(compact(block(implementation, 'resource "aws_cloudwatch_metric_alarm" "delegated_worker_throttles"'))).toContain('metric_name = "Throttles"');
+    const silent = compact(block(implementation, 'resource "aws_cloudwatch_metric_alarm" "delegated_worker_silent_schedule"'));
+    expect(silent).toContain('metric_name = "Invocations"');
+    expect(silent).toContain('period = 3600 evaluation_periods = 1 threshold = 10 comparison_operator = "LessThanThreshold" treat_missing_data = "breaching"');
+    const filter = compact(block(implementation, 'resource "aws_cloudwatch_log_metric_filter" "delegated_worker_held_ticks"'));
+    expect(filter).toContain('log_group_name = aws_cloudwatch_log_group.delegated_worker[0].name');
+    expect(filter).toContain('pattern = "{ ($.event = \\"SCHEDULED_RUN_COMPLETED\\") && (($.held > 0) || ($.places.outcome = \\"denied\\")) }"');
+    expect(filter).toContain('name = "HeldTicks" namespace = "Callie/DelegatedWorker"');
+    expect(compact(block(implementation, 'resource "aws_cloudwatch_metric_alarm" "delegated_worker_held_ticks"'))).toContain('namespace = "Callie/DelegatedWorker" metric_name = "HeldTicks"');
+    const subscription = compact(block(implementation, 'resource "aws_sns_topic_subscription" "delegated_worker_alarm_email"'));
+    expect(subscription).toContain('count = var.delegated_worker_enabled && var.alarm_email != "" ? 1 : 0');
+    expect(subscription).toContain('protocol = "email" endpoint = var.alarm_email');
+    const policy = compact(block(implementation, 'resource "aws_sns_topic_policy" "delegated_worker_alarms"'));
+    expect(policy).toContain('Principal = { Service = ["cloudwatch.amazonaws.com", "budgets.amazonaws.com"] }');
+    expect(policy).toContain('"aws:SourceAccount" = var.aws_account_id');
+    const budget = compact(block(implementation, 'resource "aws_budgets_budget" "delegated_worker_monthly"'));
+    expect(budget).toContain('budget_type = "COST" limit_amount = tostring(var.monthly_budget_usd) limit_unit = "USD" time_unit = "MONTHLY"');
+    expect([...budget.matchAll(/threshold = (\d+) threshold_type = "PERCENTAGE" notification_type = "(ACTUAL|FORECASTED)"/g)].map((match) => `${match[1]}:${match[2]}`)).toEqual(["100:ACTUAL", "200:ACTUAL", "100:FORECASTED"]);
+    expect(budget).toContain('subscriber_email_addresses = var.alarm_email != "" ? [var.alarm_email] : null');
+    // Every alarm publishes to the one topic; nothing here widens the worker's IAM role or reads a parameter.
+    for (const name of ["delegated_worker_errors", "delegated_worker_throttles", "delegated_worker_silent_schedule", "delegated_worker_held_ticks"]) {
+      expect(compact(block(implementation, `resource "aws_cloudwatch_metric_alarm" "${name}"`))).toContain("alarm_actions = [aws_sns_topic.delegated_worker_alarms[0].arn]");
+    }
+    expect(compact(block(implementation, 'resource "aws_iam_role_policy" "delegated_worker"'))).not.toMatch(/sns:|budgets:|cloudwatch:/);
+    for (const dir of [workerDir, moduleDir]) {
+      const email = compact(block(read(dir, "variables.tf"), 'variable "alarm_email"'));
+      expect(email).toContain('type = string default = "" nullable = false');
+      expect(email).toContain('condition = var.alarm_email == "" || can(regex(');
+      const monthly = compact(block(read(dir, "variables.tf"), 'variable "monthly_budget_usd"'));
+      expect(monthly).toContain("type = number default = 25 nullable = false");
+      expect(monthly).toContain("var.monthly_budget_usd >= 1 && var.monthly_budget_usd <= 1000");
+    }
+    expect(read(workerDir, "README.md")).toContain("A budget notifies; it never caps spend.");
   });
 
   it("keeps research-only invocation explicit and mutually exclusive with scheduling", () => {
@@ -215,8 +282,10 @@ describe("delegated-worker Terraform source isolation", () => {
       const body = compact(block(implementation, match[0]));
       if (match[2] === "aws_apigatewayv2_route") {
         expect(body).toContain("for_each = var.delegated_worker_enabled ? local.delegated_routes : toset([])");
-      } else if (match[2]?.startsWith("aws_cloudwatch_event_") || match[3] === "delegated_worker_schedule") {
+      } else if (match[2]?.startsWith("aws_cloudwatch_event_") || match[3] === "delegated_worker_schedule" || match[3] === "delegated_worker_silent_schedule") {
         expect(body).toContain("count = local.delegated_schedule_enabled ? 1 : 0");
+      } else if (match[3] === "delegated_worker_alarm_email") {
+        expect(body).toContain('count = var.delegated_worker_enabled && var.alarm_email != "" ? 1 : 0');
       } else {
         expect(body).toContain("count = var.delegated_worker_enabled ? 1 : 0");
       }

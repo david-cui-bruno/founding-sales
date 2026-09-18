@@ -41,6 +41,9 @@ mock_provider "aws" {
   mock_resource "aws_cloudwatch_event_rule" {
     defaults = { arn = "arn:aws:events:us-east-1:123456789012:rule/mock-delegated-worker-schedule" }
   }
+  mock_resource "aws_sns_topic" {
+    defaults = { arn = "arn:aws:sns:us-east-1:123456789012:mock-delegated-worker-alarms" }
+  }
 }
 
 mock_provider "archive" {
@@ -103,7 +106,16 @@ run "module_disabled_zero_instances" {
       length(aws_lambda_permission.delegated_worker_api),
       length(aws_cloudwatch_event_rule.delegated_worker),
       length(aws_cloudwatch_event_target.delegated_worker),
-      length(aws_lambda_permission.delegated_worker_schedule)
+      length(aws_lambda_permission.delegated_worker_schedule),
+      length(aws_sns_topic.delegated_worker_alarms),
+      length(aws_sns_topic_policy.delegated_worker_alarms),
+      length(aws_sns_topic_subscription.delegated_worker_alarm_email),
+      length(aws_cloudwatch_metric_alarm.delegated_worker_errors),
+      length(aws_cloudwatch_metric_alarm.delegated_worker_throttles),
+      length(aws_cloudwatch_metric_alarm.delegated_worker_silent_schedule),
+      length(aws_cloudwatch_log_metric_filter.delegated_worker_held_ticks),
+      length(aws_cloudwatch_metric_alarm.delegated_worker_held_ticks),
+      length(aws_budgets_budget.delegated_worker_monthly)
     ]) == 0
     error_message = "Disabled defaults must produce zero managed resources and zero archive reads."
   }
@@ -139,14 +151,42 @@ run "enabled_bounded_schedule_google_research_off" {
       length(aws_lambda_function.delegated_worker) == 1,
       length(aws_apigatewayv2_api.delegated_worker) == 1,
       length(aws_apigatewayv2_integration.delegated_worker) == 1,
-      length(aws_apigatewayv2_route.delegated_worker) == 18,
+      length(aws_apigatewayv2_route.delegated_worker) == 20,
       length(aws_apigatewayv2_stage.delegated_worker) == 1,
       length(aws_lambda_permission.delegated_worker_api) == 1,
       length(aws_cloudwatch_event_rule.delegated_worker) == 0,
       length(aws_cloudwatch_event_target.delegated_worker) == 0,
-      length(aws_lambda_permission.delegated_worker_schedule) == 0
+      length(aws_lambda_permission.delegated_worker_schedule) == 0,
+      length(aws_sns_topic.delegated_worker_alarms) == 1,
+      length(aws_sns_topic_policy.delegated_worker_alarms) == 1,
+      length(aws_sns_topic_subscription.delegated_worker_alarm_email) == 0,
+      length(aws_cloudwatch_metric_alarm.delegated_worker_errors) == 1,
+      length(aws_cloudwatch_metric_alarm.delegated_worker_throttles) == 1,
+      length(aws_cloudwatch_metric_alarm.delegated_worker_silent_schedule) == 0,
+      length(aws_cloudwatch_log_metric_filter.delegated_worker_held_ticks) == 1,
+      length(aws_cloudwatch_metric_alarm.delegated_worker_held_ticks) == 1,
+      length(aws_budgets_budget.delegated_worker_monthly) == 1
     ])
-    error_message = "Enabled unscheduled worker must have exactly 29 managed resources and one mocked archive read."
+    error_message = "Enabled unscheduled worker must have exactly 38 managed resources (11 plus 20 routes, plus the alarm topic, its policy, two alarms, the held-tick filter and alarm, and the budget) and one mocked archive read; no email subscription and no silent-schedule alarm without their opt-ins."
+  }
+  assert {
+    condition = (
+      aws_sns_topic.delegated_worker_alarms[0].name == "mock-delegated-worker-alarms" &&
+      aws_cloudwatch_metric_alarm.delegated_worker_errors[0].alarm_name == "mock-delegated-worker-errors" &&
+      aws_cloudwatch_metric_alarm.delegated_worker_errors[0].metric_name == "Errors" &&
+      aws_cloudwatch_metric_alarm.delegated_worker_throttles[0].alarm_name == "mock-delegated-worker-throttles" &&
+      aws_cloudwatch_metric_alarm.delegated_worker_throttles[0].metric_name == "Throttles" &&
+      aws_cloudwatch_metric_alarm.delegated_worker_held_ticks[0].alarm_name == "mock-delegated-worker-held-ticks" &&
+      aws_cloudwatch_metric_alarm.delegated_worker_held_ticks[0].namespace == "Callie/DelegatedWorker" &&
+      aws_cloudwatch_log_metric_filter.delegated_worker_held_ticks[0].log_group_name == "/aws/lambda/mock-delegated-worker" &&
+      strcontains(aws_cloudwatch_log_metric_filter.delegated_worker_held_ticks[0].pattern, "SCHEDULED_RUN_COMPLETED") &&
+      aws_budgets_budget.delegated_worker_monthly[0].name == "mock-delegated-worker-monthly-usd" &&
+      aws_budgets_budget.delegated_worker_monthly[0].limit_amount == "25" &&
+      aws_budgets_budget.delegated_worker_monthly[0].limit_unit == "USD" &&
+      aws_budgets_budget.delegated_worker_monthly[0].time_unit == "MONTHLY" &&
+      toset([for n in aws_budgets_budget.delegated_worker_monthly[0].notification : "${n.threshold}:${n.notification_type}"]) == toset(["100:ACTUAL", "200:ACTUAL", "100:FORECASTED"])
+    )
+    error_message = "Alarms, the held-tick filter and the USD 25 / USD 50 budget must carry the worker prefix and the reviewed thresholds."
   }
   assert {
     condition = (
@@ -237,6 +277,95 @@ run "schedule_enabled_exactly_three_additional_resources" {
     )
     error_message = "The explicit schedule opt-in must create one bounded rule/target/permission with exact ARN binding."
   }
+  assert {
+    condition = (
+      length(aws_cloudwatch_metric_alarm.delegated_worker_silent_schedule) == 1 &&
+      aws_cloudwatch_metric_alarm.delegated_worker_silent_schedule[0].alarm_name == "mock-delegated-worker-silent-schedule" &&
+      aws_cloudwatch_metric_alarm.delegated_worker_silent_schedule[0].metric_name == "Invocations" &&
+      aws_cloudwatch_metric_alarm.delegated_worker_silent_schedule[0].threshold == 10 &&
+      aws_cloudwatch_metric_alarm.delegated_worker_silent_schedule[0].period == 3600 &&
+      aws_cloudwatch_metric_alarm.delegated_worker_silent_schedule[0].comparison_operator == "LessThanThreshold" &&
+      aws_cloudwatch_metric_alarm.delegated_worker_silent_schedule[0].treat_missing_data == "breaching"
+    )
+    error_message = "The schedule opt-in also adds the silent-schedule alarm: fewer than 10 invocations in an hour, with missing data breaching."
+  }
+}
+
+run "alarm_email_subscribes_topic_and_budget" {
+  command = plan
+  module {
+    source = "../terraform/modules/delegated-worker"
+  }
+  variables {
+    worker_source_dir                    = "./nonexistent-mocked-dist"
+    worker_output_path                   = "./nonexistent-mocked-worker.zip"
+    delegated_worker_enabled             = true
+    delegated_worker_activation_reviewed = true
+    delegated_workspace_id               = "mock-workspace"
+    aws_account_id                       = "123456789012"
+    name_prefix                          = "mock"
+    alarm_email                          = "alarms@example.test"
+    monthly_budget_usd                   = 40
+  }
+  assert {
+    condition = (
+      length(aws_sns_topic_subscription.delegated_worker_alarm_email) == 1 &&
+      aws_sns_topic_subscription.delegated_worker_alarm_email[0].protocol == "email" &&
+      aws_sns_topic_subscription.delegated_worker_alarm_email[0].endpoint == "alarms@example.test" &&
+      aws_budgets_budget.delegated_worker_monthly[0].limit_amount == "40" &&
+      alltrue([for n in aws_budgets_budget.delegated_worker_monthly[0].notification : contains(n.subscriber_email_addresses, "alarms@example.test")])
+    )
+    error_message = "A set alarm_email must subscribe the topic and every budget notification; the budget amount must follow monthly_budget_usd."
+  }
+}
+
+run "alarm_email_format_rejected" {
+  command = plan
+  variables {
+    alarm_email = "not an address"
+  }
+  expect_failures = [var.alarm_email]
+}
+
+run "monthly_budget_out_of_range_rejected" {
+  command = plan
+  variables {
+    monthly_budget_usd = 0
+  }
+  expect_failures = [var.monthly_budget_usd]
+}
+
+# Provenance is bounded at 500 characters in the worker's shared schema; Terraform rejects what the worker would reject.
+run "isolated_root_reviewed_metadata_provenance_boundary_accepted" {
+  command = plan
+  variables {
+    delegated_research_reviewed_capability = jsonencode({ provenance = join("", [for i in range(500) : "p"]), units = "USD" })
+  }
+  assert {
+    condition     = length(jsondecode(var.delegated_research_reviewed_capability).provenance) == 500 && output.delegated_worker_endpoint == null
+    error_message = "A 500-character provenance is the inclusive boundary and must be accepted without activating a worker."
+  }
+}
+
+run "isolated_root_reviewed_metadata_provenance_too_long_rejected" {
+  command = plan
+  variables {
+    delegated_research_reviewed_capability = jsonencode({ provenance = join("", [for i in range(501) : "p"]), units = "USD" })
+  }
+  expect_failures = [var.delegated_research_reviewed_capability]
+}
+
+run "module_reviewed_metadata_provenance_too_long_rejected" {
+  command = plan
+  module {
+    source = "../terraform/modules/delegated-worker"
+  }
+  variables {
+    worker_source_dir                      = "./nonexistent-mocked-dist"
+    worker_output_path                     = "./nonexistent-mocked-worker.zip"
+    delegated_research_reviewed_capability = jsonencode({ provenance = join("", [for i in range(501) : "p"]), units = "USD" })
+  }
+  expect_failures = [var.delegated_research_reviewed_capability]
 }
 
 run "schedule_cannot_enable_disabled_worker" {
@@ -328,7 +457,7 @@ run "reviewed_metadata_passes_through_without_enabling_credentials_or_schedule" 
       aws_lambda_function.delegated_worker[0].environment[0].variables.DELEGATED_WORKER_SCHEDULE_ARN == "" &&
       length(jsondecode(aws_iam_role_policy.delegated_worker[0].policy).Statement[1].Resource) == 2 &&
       !strcontains(aws_iam_role_policy.delegated_worker[0].policy, "research-model-credentials") &&
-      length(aws_apigatewayv2_route.delegated_worker) == 18 &&
+      length(aws_apigatewayv2_route.delegated_worker) == 20 &&
       length(aws_cloudwatch_event_rule.delegated_worker) == 0 &&
       length(aws_cloudwatch_event_target.delegated_worker) == 0 &&
       length(aws_lambda_permission.delegated_worker_schedule) == 0
@@ -413,7 +542,7 @@ run "research_once_explicit_without_schedule_or_new_authority" {
       length(aws_cloudwatch_event_rule.delegated_worker) == 0 &&
       length(aws_cloudwatch_event_target.delegated_worker) == 0 &&
       length(aws_lambda_permission.delegated_worker_schedule) == 0 &&
-      length(aws_apigatewayv2_route.delegated_worker) == 18
+      length(aws_apigatewayv2_route.delegated_worker) == 20
     )
     error_message = "One-shot opt-in creates no schedule, route, credential or grant."
   }

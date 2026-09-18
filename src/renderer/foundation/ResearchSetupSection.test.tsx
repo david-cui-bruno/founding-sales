@@ -14,9 +14,12 @@ function status(): ResearchSetupStatus {
   return { pending: null, blockers: [], remote: { workspaceId: identity.workspaceId, pairingId, selector: null,
     discoveryLedger: null, researchLedger: null, descriptorFingerprint: fingerprint, credentialParameterDeclared: true, blockers: [],
     checkedAt: '2026-09-14T00:00:00.000Z', receipt: null,
-    descriptor: { currency: 'USD', reviewedAt: '2020-01-01T00:00:00.000Z', expiresAt: '2099-01-01T00:00:00.000Z', provenance: 'Fictional operator review', researchReservationMicros: 200000,
+    // A review window is capped at 180 days; this one is current for the whole test run and far from the 14-day renewal warning.
+    descriptor: { currency: 'USD', reviewedAt: new Date(Date.now() - 86_400_000).toISOString(), expiresAt: new Date(Date.now() + 120 * 86_400_000).toISOString(), provenance: 'Fictional operator review', researchReservationMicros: 200000,
       capability: { model: 'fictional-reviewed-model', webSearch: true, searchCostMicros: 100000, modelCostMicros: 100000 } } } };
 }
+/** A lapsed review inside the 180-day cap: reviewed a month before it expired, both in the past. */
+function expireDescriptor(value: ResearchSetupStatus) { Object.assign(value.remote!.descriptor!, { reviewedAt: '2020-12-01T00:00:00.000Z', expiresAt: '2021-01-01T00:00:00.000Z' }); }
 function api(value = status()) {
   return { status: vi.fn<Api['status']>(async () => value), approve: vi.fn<Api['approve']>(async () => applied),
     setState: vi.fn<Api['setState']>(async () => ({ ...applied, status: 'applied', kind: 'set-state', state: 'paused', revision: 2 })),
@@ -75,7 +78,7 @@ describe('bounded Cloud research settings', () => {
     expect(button('Approve research').disabled).toBe(true); expect(a.approve).not.toHaveBeenCalled();
   });
   it('rejects an expired descriptor even if the remote reports no blockers', async () => {
-    const value = status(); value.remote!.descriptor!.expiresAt = '2021-01-01T00:00:00.000Z'; await mount(api(value)); fill(); fireEvent.click(ack());
+    const value = status(); expireDescriptor(value); await mount(api(value)); fill(); fireEvent.click(ack());
     expect(button('Approve research').disabled).toBe(true); expect(screen.getByText(/Operator review is not current/)).toBeTruthy();
   });
   it.each(['0', '0.000001', '1.0000001', '9007199254740992', '-1', '1e2'])('rejects invalid or insufficient ceiling %s', async value => {
@@ -124,7 +127,7 @@ describe('bounded Cloud research settings', () => {
     await act(async () => pending.resolve(cancelled)); expect(document.body.textContent).not.toContain('Pending request cancelled.');
   });
   it('offers explicit pause despite expired descriptor and blocks resume, with read-only policy', async () => {
-    const value = status(); value.remote!.descriptor!.expiresAt = '2021-01-01T00:00:00.000Z'; value.blockers = ['operator_descriptor_expired'];
+    const value = status(); expireDescriptor(value); value.blockers = ['operator_descriptor_expired'];
     value.remote!.selector = { version: 1, workspaceId: identity.workspaceId, pairingId, revision: 1, state: 'active', research: null };
     const a = api(value); await mount(a); expect(screen.queryByLabelText(/Residential regions/)).toBeNull(); expect(button('Pause research').disabled).toBe(true);
     fireEvent.click(ack()); fireEvent.click(button('Pause research')); await idle();
@@ -231,6 +234,48 @@ describe('bounded Cloud research settings', () => {
     expect(a.status).toHaveBeenCalledTimes(4); expect(document.body.textContent).not.toContain('Research policy request applied.');
   });
 
+});
+
+describe('a worker David can see in Cloud research settings', () => {
+  function territory(state: 'active' | 'paused' = 'active'): ResearchSetupStatus {
+    const value = policyStatus(state, 3);
+    value.remote!.descriptor!.placesSearchCostMicros = 35000; value.remote!.placesCredentialParameterDeclared = true; value.remote!.placesBlockers = [];
+    value.remote!.selector!.research = { workspaceId: identity.workspaceId, budgetId: 'places-territory-v1', audience: { residential: true, regions: ['Providence, RI'], terms: ['property management company'] },
+      capability: value.remote!.descriptor!.capability, discoveryLimits: { maxCompanies: 20, maxPages: 1, maxBytes: 10000, maxCostMicros: 35000 }, researchLimits: { maxCompanies: 20, maxPages: 1, maxBytes: 10000, maxCostMicros: 200000 },
+      audienceRevision: 1, sourceRevision: 1, budgetRevision: 1, maxAccountBudgetMicros: 200000, permittedSources: [], preparationCommandId: requestId, discoveryProvider: 'places' };
+    value.remote!.researchLedger = { limitMicros: 5_000_000, reservedOrSpentMicros: 3_400_000, remainingMicros: 1_600_000 };
+    return value;
+  }
+  it('shows how many firms the remaining research ceiling covers and the last observed budget and territory holds without blocking Replace', async () => {
+    const value = territory(); value.remote!.blockers = ['budget_exhausted', 'territory_exhausted'];
+    await mount(api(value));
+    expect(screen.getByText('8 firms remaining at this ceiling.')).toBeTruthy();
+    expect(screen.getByText(/Budget exhausted: the remaining ceiling cannot cover another firm/)).toBeTruthy();
+    expect(screen.getByText(/Territory exhausted: every query in the current territory has been searched/)).toBeTruthy();
+    fireEvent.click(ack());
+    expect(button('Replace configuration').disabled).toBe(false); expect(button('Pause research').disabled).toBe(false);
+  });
+  it('warns fourteen days before the operator review expires and says what the worker will do', async () => {
+    const value = territory(); value.remote!.descriptor!.expiresAt = new Date(Date.now() + 10 * 86_400_000 + 3600_000).toISOString();
+    await mount(api(value));
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).toMatch(/Operator review expires in 11 days/); expect(alert.textContent).toMatch(/research pauses itself on expiry/);
+    expect(screen.queryByText(/Operator review is not current/)).toBeNull();
+    cleanup();
+    await mount(api(territory()));
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+  it('explains a selector the worker paused itself and shows the reviewed per-firm extraction', async () => {
+    const value = territory('paused'); expireDescriptor(value); value.remote!.blockers = ['operator_descriptor_expired']; value.remote!.pausedReason = 'descriptor_expired';
+    value.remote!.descriptor!.placesExtraction = { version: 1, model: 'fictional-reviewed-model', maxCostMicros: 200000, maxOutputTokens: 512, maxInputBytes: 20000, inputMicrosPerMillionTokens: 400000, outputMicrosPerMillionTokens: 1600000 };
+    await mount(api(value));
+    expect(screen.getByText(/Research paused itself because the operator review expired/)).toBeTruthy();
+    expect(screen.getByText(/fictional-reviewed-model, reserved \$0\.2 USD; the real usage is settled/)).toBeTruthy();
+    fireEvent.click(ack()); expect(button('Resume research').disabled).toBe(true);
+    cleanup();
+    const manual = territory('paused'); await mount(api(manual));
+    expect(screen.queryByText(/Research paused itself/)).toBeNull();
+  });
 });
 
 describe('Google Places territory batches in Cloud research settings', () => {

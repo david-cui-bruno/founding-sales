@@ -6,12 +6,16 @@ import {
   redeemedLocalPairingSchema,
   redeemLocalPairingSchema,
 } from '../../shared/contracts/ownerCommandContract';
+import { researchSetupStatusSchema, WORKER_STALE_AFTER_MS, type ResearchSetupApi } from '../../shared/contracts/researchSetupContract';
 
-type Api = Pick<CalliePreloadApi['delegation'], 'status' | 'pair'>;
+/** The worker's last scheduled tick travels on the cloud research status; the section reads it when that namespace is present. */
+type Api = Pick<CalliePreloadApi['delegation'], 'status' | 'pair'> & { researchSetup?: Pick<ResearchSetupApi, 'status'> };
 type Status = z.infer<typeof localDelegationStatusSchema>;
 type Receipt = z.infer<typeof redeemedLocalPairingSchema>;
 type Request = z.infer<typeof redeemLocalPairingSchema>;
 type Lifetime = { api: Api; generation: number; busy: boolean; status: Status | null };
+/** `unread` before any read or when the cloud status could not be read; `null` when the worker has never recorded a tick. */
+type LastTick = { state: 'unread' } | { state: 'read'; at: string | null };
 type View = {
   owner: Lifetime | null;
   status: Status | null;
@@ -22,14 +26,25 @@ type View = {
   endpoint: string;
   expectedWorkspaceId: string;
   code: string;
+  lastTick: LastTick;
 };
 const labels: Record<Status['state'], string> = {
   unconfigured: 'Unconfigured', paused: 'Paused', active: 'Active', locked: 'Locked',
 };
 const emptyView = (owner: Lifetime | null): View => ({
   owner, status: null, receipt: null, busy: false, statusError: false,
-  pairError: null, endpoint: '', expectedWorkspaceId: '', code: '',
+  pairError: null, endpoint: '', expectedWorkspaceId: '', code: '', lastTick: { state: 'unread' },
 });
+/** Whole units only; the worker ticks every five minutes so seconds carry no information. */
+export function describeAge(from: string, now: number): string {
+  const minutes = Math.max(0, Math.floor((now - Date.parse(from)) / 60_000));
+  if (minutes < 1) return 'less than a minute ago';
+  if (minutes < 60) return `${minutes} ${minutes === 1 ? 'minute' : 'minutes'} ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `${hours} ${hours === 1 ? 'hour' : 'hours'} ago`;
+  const days = Math.floor(hours / 24);
+  return `${days} days ago`;
+}
 
 /** Local observations and explicit pairing only. Neither establishes execution authority. */
 export function WorkerSetupSection({ api }: { api?: Api }) {
@@ -57,6 +72,16 @@ export function WorkerSetupSection({ api }: { api?: Api }) {
       if (!current(lifetime)) return;
       setView(previous => ({ ...previous, status: null, statusError: true, code: '' }));
     }
+    // The last scheduled tick is a second, independent observation; its failure never disturbs the local facts above.
+    const researchSetup = lifetime.api.researchSetup;
+    if (!researchSetup) return;
+    let lastTick: LastTick = { state: 'unread' };
+    try {
+      const research = researchSetupStatusSchema.parse(await (async () => researchSetup.status())());
+      if (research.remote) lastTick = { state: 'read', at: research.remote.lastTickAt ?? null };
+    } catch { lastTick = { state: 'unread' }; }
+    if (!current(lifetime)) return;
+    setView(previous => ({ ...previous, lastTick }));
   }, [current]);
 
   const run = useCallback(async (lifetime: Lifetime, fields?: Request) => {
@@ -160,6 +185,16 @@ export function WorkerSetupSection({ api }: { api?: Api }) {
         </dl>
       )}
       <p>Remote owner and mailbox/calendar grants are not established by this local read.</p>
+      {api?.researchSetup && visible.status && (() => {
+        const now = Date.now();
+        if (visible.lastTick.state === 'unread') return <p>Worker last run: not available (the cloud research status could not be read).</p>;
+        if (visible.lastTick.at === null) return <p>Worker last run: not recorded yet. The worker writes its first record on its first scheduled tick.</p>;
+        const stale = now - Date.parse(visible.lastTick.at) > WORKER_STALE_AFTER_MS;
+        return <>
+          <p>Worker last ran <time dateTime={visible.lastTick.at}>{describeAge(visible.lastTick.at, now)}</time>.</p>
+          {stale && <p role="alert">The worker has not run for more than 20 minutes. The schedule may be off or the worker may be failing; check the CloudWatch alarms before relying on the morning list.</p>}
+        </>;
+      })()}
       {visible.receipt && (
         <div>
           <h3>Worker paired</h3>
