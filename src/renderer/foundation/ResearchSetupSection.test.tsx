@@ -348,6 +348,24 @@ describe('replacing an existing research configuration', () => {
     expect(button('Replace configuration').disabled).toBe(true); expect(screen.getByText(/carry no Places cost per call/)).toBeTruthy();
     expect(button('Pause research').disabled).toBe(false); expect(b.approve).not.toHaveBeenCalled();
   });
+  it('lets a replacement repair a changed operator descriptor while still showing the hold and never loosening first-use approval', async () => {
+    // The worker reports descriptor_changed when the stored policy is bound to an older descriptor fingerprint. Replacing rebinds it,
+    // so the proposal must stay offered; pause stays offered too; the hold itself remains visible.
+    const changed = configured(); changed.remote!.blockers = ['descriptor_changed'];
+    const a = api(changed); a.approve.mockResolvedValue({ ...applied, revision: 9 }); await mount(a);
+    expect(screen.getByText('Operator settings changed. Operator reconciliation is required.')).toBeTruthy();
+    fireEvent.change(providerSelect(), { target: { value: 'places' } }); fireEvent.change(input(/Companies per batch/), { target: { value: '20' } });
+    fireEvent.click(ack());
+    expect(button('Replace configuration').disabled).toBe(false); expect(button('Pause research').disabled).toBe(false);
+    fireEvent.click(button('Replace configuration')); await idle();
+    expect(a.approve).toHaveBeenCalledTimes(1);
+    expect(a.approve.mock.calls[0]![0]).toMatchObject({ expectedRevision: 8, descriptorFingerprint: fingerprint, discoveryProvider: 'places' });
+    cleanup();
+    // Without a stored policy there is nothing to rebind: the same blocker keeps first-use approval closed.
+    const firstUse = status(); firstUse.remote!.blockers = ['descriptor_changed'];
+    const b = api(firstUse); await mount(b); fill(); fireEvent.click(ack());
+    expect(button('Approve research').disabled).toBe(true); expect(b.approve).not.toHaveBeenCalled();
+  });
   it('keeps in-progress edits across a same-revision Refresh and re-prefills only when the policy revision changes', async () => {
     const a = api(configured()); await mount(a);
     fireEvent.change(input(/Residential regions/), { target: { value: 'Dallas, TX' } });
