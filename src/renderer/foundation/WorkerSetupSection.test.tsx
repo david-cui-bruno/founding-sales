@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CalliePreloadApi } from '../../shared/preload';
 import type { ResearchSetupApi, ResearchSetupStatus } from '../../shared/contracts/researchSetupContract';
-import { WorkerSetupSection } from './WorkerSetupSection';
+import { WorkerSetupSection, rotationConfirmation } from './WorkerSetupSection';
 import type { RemoteGoogleConnectionsApi } from '../../shared/contracts/remoteGoogleConnectionsContract';
 import { remoteGoogleGrantStatusSchema, type RemoteGoogleGrantStatus } from '../../shared/contracts/remoteGoogleGrantContract';
 import { SENDER_RAMP_DEFAULT, senderCapForDay, type SenderCapStatus } from '../../shared/contracts/workerPolicyContract';
@@ -513,5 +513,143 @@ describe('W32 the sender cap David can see', () => {
     const a = api(status('active', 3)); render(<WorkerSetupSection api={a} />);
     region = await refreshed('Active');
     expect(region.textContent).not.toMatch(/Sender cap/);
+  }, 10_000);
+});
+
+describe('W40 rotating the pairing credential in place', () => {
+  type RotationApi = Pick<CalliePreloadApi['delegation'], 'pairing' | 'rotatePairing'>;
+  type Summary = NonNullable<Awaited<ReturnType<RotationApi['pairing']>>>;
+  type Rotated = Awaited<ReturnType<RotationApi['rotatePairing']>>;
+  const pairingId = '11111111-1111-4111-8111-111111111111';
+  const desktopScopes: Summary['scopes'] = ['commands:write', 'events:read'];
+  const widened: Summary['scopes'] = ['commands:write', 'events:read', 'google:grant', 'pairing:revoke'];
+  const summary = (generation = 0, scopes: Summary['scopes'] = desktopScopes): Summary => ({ workspaceId: workspace, pairingId, endpoint, generation, scopes });
+  const rotated: Rotated = { state: 'rotated', workspaceId: workspace, pairingId, generation: 1, scopes: widened };
+  /** The fake bridge: the pairing read answers from a small store that a successful rotation advances, like the real one. */
+  function withPairing(stored: Summary | null = summary()) {
+    let current = stored;
+    const pairing = vi.fn<RotationApi['pairing']>(async () => current);
+    const rotatePairing = vi.fn<RotationApi['rotatePairing']>(async () => { current = summary(1, widened); return rotated; });
+    return { ...api(status('active', 3)), pairing, rotatePairing };
+  }
+  const rotationCode = () => field('Rotation code');
+  const confirmation = () => screen.getByLabelText(rotationConfirmation(pairingId)) as HTMLInputElement;
+  const rotateButton = () => button('Rotate pairing credential');
+  const rotateControl = () => screen.queryByRole('button', { name: 'Rotate pairing credential' });
+  function prepare(code = codeA) {
+    fireEvent.change(rotationCode(), { target: { value: code } });
+    fireEvent.click(confirmation());
+  }
+
+  it('W40 shows the stored pairing id, generation and scopes on mount from one local read, with endpoint and workspace locked', async () => {
+    const a = withPairing(); render(<WorkerSetupSection api={a} />);
+    const region = await observed('Active');
+    await within(region).findByText(pairingId, { exact: true });
+    expect(within(region).getByText('commands:write, events:read', { exact: true })).toBeTruthy();
+    expect(within(region).getByText('Credential generation')).toBeTruthy();
+    expect(within(region).getByRole('group', { name: 'Rotate pairing credential' })).toBeTruthy();
+    expect(rotationConfirmation(pairingId)).toBe('This replaces the credential this Mac uses for pairing 1111… and keeps every record. The previous credential stops working.');
+    expect(confirmation().checked).toBe(false);
+    expect(field('Rotation endpoint (locked)').value).toBe(endpoint); expect(field('Rotation endpoint (locked)').disabled).toBe(true);
+    expect(field('Rotation workspace ID (locked)').value).toBe(workspace); expect(field('Rotation workspace ID (locked)').disabled).toBe(true);
+    // The fresh-pairing fields keep their own single labels beside the rotation control.
+    for (const name of ['Endpoint', 'Expected workspace ID', 'Pairing code']) expect(field(name)).toBeTruthy();
+    expect(rotateButton().disabled).toBe(true);
+    fireEvent.change(rotationCode(), { target: { value: codeA } }); expect(rotateButton().disabled).toBe(true);
+    fireEvent.click(confirmation()); expect(rotateButton().disabled).toBe(false);
+    expect(a.pairing).toHaveBeenCalledTimes(1); expect(a.status).toHaveBeenCalledTimes(1);
+    expect(a.rotatePairing).not.toHaveBeenCalled(); expect(a.pair).not.toHaveBeenCalled();
+    expect(screen.queryByRole('alert')).toBeNull(); safeFeedback();
+  }, 10_000);
+
+  it('W41 rotates once with the identity it read, prints generation and scopes, re-reads the local facts and clears code and confirmation', async () => {
+    const a = withPairing(); render(<WorkerSetupSection api={a} />);
+    const region = await observed('Active'); await within(region).findByText(pairingId, { exact: true });
+    prepare(); const submit = rotateButton();
+    act(() => { fireEvent.click(submit); fireEvent.click(submit); });
+    await waitFor(() => expect(a.rotatePairing).toHaveBeenCalledTimes(1));
+    expect(a.rotatePairing.mock.calls).toEqual([[{ pairingId, expectedGeneration: 0, code: codeA }]]);
+    await within(region).findByText(/Pairing credential rotated: pairing 11111111-1111-4111-8111-111111111111 is now at generation 1 with scopes commands:write, events:read, google:grant, pairing:revoke\./);
+    expect(within(region).getByText(/Restart the application normally/)).toBeTruthy();
+    await waitFor(() => expect(a.pairing).toHaveBeenCalledTimes(2));
+    expect(within(region).getByText('commands:write, events:read, google:grant, pairing:revoke', { exact: true })).toBeTruthy();
+    expect(within(region).getByText('1', { exact: true })).toBeTruthy();
+    expect(rotationCode().value).toBe(''); expect(confirmation().checked).toBe(false);
+    await waitFor(() => expect(rotateButton().disabled).toBe(true));
+    expect(a.status).toHaveBeenCalledTimes(2); expect(a.pair).not.toHaveBeenCalled();
+    expect(screen.queryByRole('alert')).toBeNull(); safeFeedback();
+  }, 10_000);
+
+  it.each(['reject', 'sync throw', 'other pairing', 'skipped generation', 'other workspace', 'malformed'] as const)('W42 %s rotation outcome is uncertain, clears code and confirmation and permits only a fresh explicit retry', async mode => {
+    const a = withPairing();
+    if (mode === 'reject') a.rotatePairing.mockRejectedValueOnce(Error(`private-error ${codeA}`));
+    if (mode === 'sync throw') a.rotatePairing.mockImplementationOnce(() => { throw Error(`private-error ${codeA}`); });
+    if (mode === 'other pairing') a.rotatePairing.mockResolvedValueOnce({ ...rotated, pairingId: '22222222-2222-4222-8222-222222222222' });
+    if (mode === 'skipped generation') a.rotatePairing.mockResolvedValueOnce({ ...rotated, generation: 2 });
+    if (mode === 'other workspace') a.rotatePairing.mockResolvedValueOnce({ ...rotated, workspaceId: 'other-workspace' });
+    if (mode === 'malformed') a.rotatePairing.mockResolvedValueOnce({ state: 'rotated', pairingId } as unknown as Rotated);
+    render(<WorkerSetupSection api={a} />);
+    const region = await observed('Active'); await within(region).findByText(pairingId, { exact: true });
+    prepare(); fireEvent.click(rotateButton());
+    const alert = await within(region).findByRole('alert');
+    expect(alert.textContent).toContain('Rotation outcome could not be verified');
+    expect(within(region).queryByText(/Pairing credential rotated/)).toBeNull();
+    expect(rotationCode().value).toBe(''); expect(confirmation().checked).toBe(false);
+    expect(a.rotatePairing).toHaveBeenCalledTimes(1); safeFeedback();
+    // The local facts were re-read after the uncertain outcome; the fake store still holds generation 0.
+    await waitFor(() => expect(a.pairing).toHaveBeenCalledTimes(2));
+    expect(within(region).getByText('commands:write, events:read', { exact: true })).toBeTruthy();
+    await waitFor(() => expect(button('Refresh worker status').disabled).toBe(false));
+    expect(rotateButton().disabled).toBe(true);
+    prepare(codeB); fireEvent.click(rotateButton());
+    await within(region).findByText(/Pairing credential rotated/);
+    expect(a.rotatePairing.mock.calls).toEqual([[{ pairingId, expectedGeneration: 0, code: codeA }], [{ pairingId, expectedGeneration: 0, code: codeB }]]);
+  }, 10_000);
+
+  it('W43 states no stored pairing, an unreadable store and a bridge without the pairing read honestly, each without a rotation control', async () => {
+    render(<WorkerSetupSection api={withPairing(null)} />);
+    let region = await observed('Active');
+    await within(region).findByText('Stored pairing credential: none. Pair worker below stores one.', { exact: true });
+    expect(rotateControl()).toBeNull();
+    cleanup();
+    const failing = withPairing(); failing.pairing.mockRejectedValue(Error(`private-error ${codeA}`));
+    render(<WorkerSetupSection api={failing} />);
+    region = await observed('Active');
+    await within(region).findByText('Stored pairing credential: not available (the stored pairing could not be read).', { exact: true });
+    expect(rotateControl()).toBeNull(); safeFeedback();
+    cleanup();
+    render(<WorkerSetupSection api={api(status('active', 3))} />);
+    region = await observed('Active');
+    expect(region.textContent).not.toMatch(/Stored pairing credential/);
+    expect(rotateControl()).toBeNull();
+  }, 10_000);
+
+  it('W44 a pending rotation fences Pair and Refresh, and its stale settlement after API replacement publishes nothing', async () => {
+    const a = withPairing(); const b = withPairing(); const pending = deferred(rotated); a.rotatePairing.mockReturnValueOnce(pending.promise);
+    const view = render(<WorkerSetupSection api={a} />);
+    try {
+      let region = await observed('Active'); await within(region).findByText(pairingId, { exact: true });
+      prepare(); fireEvent.click(rotateButton());
+      await waitFor(() => expect(a.rotatePairing).toHaveBeenCalledTimes(1));
+      expect(button('Pair worker').disabled).toBe(true); expect(button('Refresh worker status').disabled).toBe(true); expect(rotateButton().disabled).toBe(true);
+      refresh(); pair(); expect(a.status).toHaveBeenCalledTimes(1); expect(a.pair).not.toHaveBeenCalled();
+      view.rerender(<WorkerSetupSection api={b} />);
+      region = await observed('Active'); await within(region).findByText(pairingId, { exact: true });
+      expect(rotationCode().value).toBe(''); expect(confirmation().checked).toBe(false);
+      await settle(pending);
+      expect(within(region).queryByText(/Pairing credential rotated/)).toBeNull();
+      expect(b.rotatePairing).not.toHaveBeenCalled(); expect(a.status).toHaveBeenCalledTimes(1); expect(b.status).toHaveBeenCalledTimes(1);
+      expect(a.pairing).toHaveBeenCalledTimes(1); expect(b.pairing).toHaveBeenCalledTimes(1); safeFeedback();
+    } finally { await settle(pending); }
+  }, 10_000);
+
+  it('W45 a paired receipt names the stored generation and scopes beside Worker paired', async () => {
+    const a = withPairing(null); let stored: Summary | null = null;
+    a.pairing.mockImplementation(async () => stored);
+    a.pair.mockImplementation(async () => { stored = { ...summary(), pairingId: receipt.pairingId }; return receipt; });
+    render(<WorkerSetupSection api={a} />); await observed('Active');
+    fill(); pair(); await screen.findByText('Worker paired', { exact: true });
+    await screen.findByText('Stored credential: generation 0, scopes commands:write, events:read.', { exact: true });
+    expect(a.pairing).toHaveBeenCalledTimes(2); safeFeedback();
   }, 10_000);
 });
