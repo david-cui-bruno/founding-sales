@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { researchSetupStatusSchema, type ResearchSetupApi, type TerritoryCounts, type TerritoryStatus } from '../../shared/contracts/researchSetupContract';
-import { decideTerritoryStateAddition, TERRITORY_STATES, TERRITORY_STATE_TIME_ZONES, US_STATE_CODES, US_STATE_NAMES,
-  type TerritoryStateAdditionDecision } from '../../shared/contracts/territoryClearanceContract';
-import { TERRITORY_ADD_STATE_NEXT_STEP } from '../../shared/contracts/territoryCallPolicyContract';
+import { decideTerritoryStateAddition, isTerritoryAddableState, TERRITORY_ADDABLE_STATES, TERRITORY_STATES, TERRITORY_STATE_TIME_ZONES,
+  US_STATE_CODES, US_STATE_NAMES, type TerritoryStateAdditionDecision } from '../../shared/contracts/territoryClearanceContract';
+import { territoryAddStateRequestSchema, TERRITORY_ADD_STATE_NEXT_STEP, type TerritoryAddStateRequest } from '../../shared/contracts/territoryCallPolicyContract';
 import { TerritoryClearanceSection } from './TerritoryClearanceSection';
 import type { LocalWorkspaceApi } from '../../shared/contracts/localWorkspaceContract';
 
@@ -21,7 +21,9 @@ export const territoryExpansionCopy = {
   states: 'States in the territory',
   addLabel: 'State to add',
   add: 'Add a state',
-  addHeld: 'Held: this build\'s desktop bridge does not carry the add-a-state command yet, so nothing was sent to the worker. The worker side is ready.',
+  addHeld: 'Held: this build\'s desktop bridge does not carry the add-a-state command yet, so the command below was prepared and nothing was sent to the worker. The worker side is ready.',
+  zoneRecorded: 'Time zone recorded in this build',
+  zoneNotRecorded: 'No time zone recorded in this build',
   nextStep: TERRITORY_ADD_STATE_NEXT_STEP,
   unconfirmed: 'An added state appears in Territory clearance as unconfirmed. Nothing dials for it until you confirm its clearance.',
 } as const;
@@ -67,6 +69,7 @@ export function useTerritoryStatus(api?: Api): TerritoryStatusState {
 export function TerritoryExpansionSection({ status }: { status: TerritoryStatusState }) {
   const [selected, setSelected] = useState('');
   const [decision, setDecision] = useState<TerritoryStateAdditionDecision | null>(null);
+  const [prepared, setPrepared] = useState<TerritoryAddStateRequest | null>(null);
   const territory = status.kind === 'read' ? status.territory : null;
   const added = territory?.addedStates ?? [];
   const counts = territory?.counts ?? null;
@@ -74,7 +77,14 @@ export function TerritoryExpansionSection({ status }: { status: TerritoryStatusS
     : status.kind === 'unavailable' ? territoryExpansionCopy.unavailable
       : counts ? territoryCountLine(counts) : territoryExpansionCopy.uncounted;
 
-  const submit = () => { setDecision(decideTerritoryStateAddition(selected, added.map(entry => entry.state))); };
+  const submit = () => {
+    const outcome = decideTerritoryStateAddition(selected, added.map(entry => entry.state));
+    setDecision(outcome);
+    // The command identity is minted once, before anything could be sent, so a retry resends the same command.
+    setPrepared(outcome.kind === 'addable'
+      ? territoryAddStateRequestSchema.parse({ kind: 'add-state', commandId: crypto.randomUUID(), expectedAddedRevision: territory?.addedRevision ?? 0, state: outcome.state })
+      : null);
+  };
   return <section className="settings__section territory-expansion" aria-label={territoryExpansionCopy.region}>
     <h2 className="settings__section-title">{territoryExpansionCopy.region}</h2>
     <p>{territoryExpansionCopy.intro}</p>
@@ -94,9 +104,14 @@ export function TerritoryExpansionSection({ status }: { status: TerritoryStatusS
     <label className="territory-expansion__picker">
       {territoryExpansionCopy.addLabel}
       {' '}
-      <select value={selected} onChange={event => { setSelected(event.target.value); setDecision(null); }}>
+      <select value={selected} onChange={event => { setSelected(event.target.value); setDecision(null); setPrepared(null); }}>
         <option value="">Choose a state</option>
-        {US_STATE_CODES.map(code => <option key={code} value={code}>{US_STATE_NAMES[code]} ({code})</option>)}
+        <optgroup label={territoryExpansionCopy.zoneRecorded}>
+          {TERRITORY_ADDABLE_STATES.map(code => <option key={code} value={code}>{US_STATE_NAMES[code]} ({code})</option>)}
+        </optgroup>
+        <optgroup label={territoryExpansionCopy.zoneNotRecorded}>
+          {US_STATE_CODES.filter(code => !isTerritoryAddableState(code)).map(code => <option key={code} value={code}>{US_STATE_NAMES[code]} ({code})</option>)}
+        </optgroup>
       </select>
     </label>
     <div className="settings__row-actions">
@@ -105,6 +120,7 @@ export function TerritoryExpansionSection({ status }: { status: TerritoryStatusS
     {decision && <p role="alert" className="territory-expansion__outcome">
       {decision.kind === 'refused' ? decision.message
         : `${decision.name} (${decision.state}) uses ${decision.timezone}. ${territoryExpansionCopy.addHeld} ${territoryExpansionCopy.nextStep}`}
+      {prepared ? ` Add-a-state command: ${prepared.commandId}` : ''}
     </p>}
   </section>;
 }

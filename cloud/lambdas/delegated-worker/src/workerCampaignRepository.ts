@@ -21,7 +21,6 @@ export const territoryRetiredRouteKey = (account: string, route: string) => `TER
 /** A route the territory sequence may not dial again, because the call that used it reached a wrong number (D13). */
 export const territoryRetiredRouteSchema = z.strictObject({ accountId: id, routeId: id, routeVersion: integer.positive(),
   retiredAt: instant, reason: z.literal('wrong_number'), commandId: z.uuid() });
-export type TerritoryRetiredRoute = z.infer<typeof territoryRetiredRouteSchema>;
 /** Only the two fields an applied outcome needs from the policy's own enrollment record; the record's full shape stays with its writer. */
 const territoryEntryRecordSchema = z.object({ accountId: id, versionId: id, entries: territoryEntriesSchema.optional() });
 const hash = z.string().regex(/^[a-f0-9]{64}$/);

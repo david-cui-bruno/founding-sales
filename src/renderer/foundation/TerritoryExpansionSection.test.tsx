@@ -2,7 +2,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TerritoryExpansionSection, TerritorySettings, territoryCountLine, territoryExpansionCopy } from './TerritoryExpansionSection';
-import { TERRITORY_MULTI_ZONE_STATES, US_STATE_NAMES } from '../../shared/contracts/territoryClearanceContract';
+import { territoryStateAdditionRefusalSchema, TERRITORY_MULTI_ZONE_STATES, US_STATE_NAMES } from '../../shared/contracts/territoryClearanceContract';
 import type { ResearchSetupStatus, TerritoryStatus } from '../../shared/contracts/researchSetupContract';
 
 const NOW = '2026-09-18T14:00:00.000Z';
@@ -75,6 +75,17 @@ describe('Territory expansion section', () => {
     has(within(region()).getByRole('listitem', { name: 'New Mexico in the territory' }), 'New Mexico (NM) · America/Denver · added 2026-09-18 · clearance unconfirmed');
     choose('NM');
     has(screen.getByRole('alert'), 'Refused: New Mexico is already in the territory.');
+  });
+
+  it('mints the add-a-state command once and keeps the refusal vocabulary closed', () => {
+    expect(territoryStateAdditionRefusalSchema.options).toEqual(['not_a_us_state', 'already_in_territory', 'state_spans_two_zones', 'state_zone_not_recorded']);
+    render(<TerritoryExpansionSection status={{ kind: 'read', territory: territory() }} />);
+    choose('ME');
+    const first = /Add-a-state command: ([0-9a-f-]{36})/.exec(screen.getByRole('alert').textContent ?? '');
+    expect(first).not.toBeNull();
+    // A refusal prepares nothing at all.
+    choose('FL');
+    expect(screen.getByRole('alert').textContent ?? '').not.toMatch(/Add-a-state command/);
   });
 
   it('paces the one line from the counts alone', () => {
