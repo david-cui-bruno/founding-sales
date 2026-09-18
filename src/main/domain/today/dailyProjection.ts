@@ -3,6 +3,7 @@ import { dailySnapshotSchema, type DailySnapshot, type DailyAnswer, type DailyIs
 export type DailyProjectionInput = Omit<DailySnapshot, 'revision' | 'freshness' | 'answers' | 'workflowMode'> & {
   generatedAt: string; workflowMode?: DailySnapshot['workflowMode']; approvals: DailyAnswer[];
 };
+/** `allocation` and `usage` are both derived and both excluded from the hash below. */
 /** Pure local presentation projection. No authorization, calendar synthesis or execution. */
 export function buildDailySnapshot(input: DailyProjectionInput): DailySnapshot {
   const ids = new Set(input.accounts.map(a => a.account.id));
@@ -30,6 +31,7 @@ export function buildDailySnapshot(input: DailyProjectionInput): DailySnapshot {
   // Callbacks are real content and do change the revision, but only once one exists: an empty list is absent from the hash,
   // so a workspace that has never promised a callback keeps the exact revision it had before schema 29.
   const hashed = callbacks.length ? { ...content, callbacks } : content;
-  return dailySnapshotSchema.parse({ ...hashed, ...(input.allocation ? { allocation: input.allocation } : {}), revision: createHash('sha256').update(JSON.stringify(hashed)).digest('hex'),
+  return dailySnapshotSchema.parse({ ...hashed, ...(input.allocation ? { allocation: input.allocation } : {}), ...(input.usage ? { usage: input.usage } : {}),
+    revision: createHash('sha256').update(JSON.stringify(hashed)).digest('hex'),
     freshness: { kind: issues.length ? 'incomplete' : 'local_snapshot', generatedAt: input.generatedAt, remote: 'unknown' } });
 }

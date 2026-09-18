@@ -59,6 +59,8 @@ export type DailyAccountCallPlan = Readonly<{
 }>;
 
 export function planDailyAccountCalls(input: {
+  /** Firms that answered. A reply outranks every other reason to call: the conversation already started. */
+  replies?: readonly string[];
   /** Promised callbacks due today. They lead the list: a promise David made outranks the cadence. */
   callbacks?: readonly string[];
   due: readonly string[];
@@ -78,10 +80,12 @@ export function planDailyAccountCalls(input: {
   // Due obligations stay listed even after a call today: a genuinely new sequence
   // step for a firm called this morning is still David's to take. New nominations
   // never repeat a firm called today.
-  const uniqueCallbacks = [...new Set(input.callbacks ?? [])];
-  const callbackSet = new Set(uniqueCallbacks);
+  const uniqueReplies = [...new Set(input.replies ?? [])];
+  const replySet = new Set(uniqueReplies);
+  const uniqueCallbacks = [...new Set(input.callbacks ?? [])].filter(id => !replySet.has(id));
+  const callbackSet = new Set([...uniqueReplies, ...uniqueCallbacks]);
   const uniqueDue = [...new Set(input.due)].filter(id => !callbackSet.has(id));
-  const dueSet = new Set([...uniqueCallbacks, ...uniqueDue]);
+  const dueSet = new Set([...uniqueReplies, ...uniqueCallbacks, ...uniqueDue]);
   // "30 new firms a day" (D2) is a daily budget: a new-firm call made today keeps
   // its slot instead of pulling the next firm forward, so the list shrinks as
   // David works through it and uncalled firms roll over to tomorrow.
@@ -89,7 +93,7 @@ export function planDailyAccountCalls(input: {
   const remainingNewSlots = Math.max(0, input.newCallSlots - consumedNewSlots);
   const newIds = [...new Set(input.ranked)]
     .filter(id => !dueSet.has(id) && !completed.has(id));
-  const accountIds = [...uniqueCallbacks, ...uniqueDue, ...newIds.slice(0, remainingNewSlots)];
+  const accountIds = [...uniqueReplies, ...uniqueCallbacks, ...uniqueDue, ...newIds.slice(0, remainingNewSlots)];
   return Object.freeze({
     accountIds,
     workloadConflict: input.totalCallCapacity !== null && accountIds.length > input.totalCallCapacity,
@@ -198,6 +202,39 @@ export function resolveLocalDayInterval(input: {
     localDate,
     localDayStartAt: new Date(localMidnightUtc).toISOString(),
     localDayEndAt: new Date(nextMidnightUtc).toISOString(),
+  };
+}
+
+/**
+ * One Monday-to-Sunday week on the founder's own calendar, and the UTC instants
+ * that bound it. `weeksBack` counts whole weeks backwards, so 0 is the week the
+ * instant falls in and 1 is the week before it. Pure: no clock, no database.
+ * The interval is half-open (`startAt` inclusive, `endAt` exclusive) so a stored
+ * instant belongs to exactly one week however the zone's offset changed inside it.
+ */
+export function resolveLocalWeekInterval(input: {
+  generatedAt: string;
+  timezone: string;
+  weeksBack?: number;
+}): { localWeekStart: string; localWeekEnd: string; startAt: string; endAt: string } {
+  const weeksBack = input.weeksBack ?? 0;
+  if (!Number.isSafeInteger(weeksBack) || weeksBack < 0 || weeksBack > 520) {
+    throw new PrioritizationInputCorruptionError('weeksBack must be a whole number of weeks in the past.');
+  }
+  const { localDate } = resolveLocalDayInterval({ generatedAt: input.generatedAt, timezone: input.timezone });
+  const [year, month, day] = localDate.split('-').map(Number) as [number, number, number];
+  const anchor = new Date(Date.UTC(year, month - 1, day));
+  // ISO weeks start on Monday; JavaScript's getUTCDay() puts Sunday at 0.
+  const mondayOffset = (anchor.getUTCDay() + 6) % 7;
+  const start = new Date(Date.UTC(year, month - 1, day - mondayOffset - weeksBack * 7));
+  const end = new Date(start.getTime() + 7 * 86_400_000);
+  const localWeekStart = start.toISOString().slice(0, 10);
+  const localWeekEnd = new Date(end.getTime() - 86_400_000).toISOString().slice(0, 10);
+  return {
+    localWeekStart,
+    localWeekEnd,
+    startAt: new Date(wallClockToUtcMillis(localWeekStart, input.timezone)).toISOString(),
+    endAt: new Date(wallClockToUtcMillis(end.toISOString().slice(0, 10), input.timezone)).toISOString(),
   };
 }
 

@@ -32,6 +32,69 @@ export const DEFAULT_NEW_CALL_SLOTS_COPY = 'default: 30 new firms a day';
  */
 export const MANUAL_DIAL_NOT_WIRED = 'Logging a hand-dialed call still needs the call step\'s one handoff. The desktop can now take one for a hand-dialed attempt, but this screen cannot ask for it yet, so the outcome form below stays closed for this firm.';
 
+/**
+ * D11: "roadmap updated from measured use; next quarter planned from numbers,
+ * not features". One collapsible block under the footer, plain numbers only: no
+ * charts, no ranking, no targets and no praise. Every label says what the number
+ * counts, because a number whose definition is vague is worse than no number.
+ *
+ * Two honest labels differ from the first sketch of this block:
+ * - "Mornings worked", not "mornings opened". The morning list is computed at
+ *   read time and never stored, so no record can say a morning was opened. This
+ *   counts mornings with recorded work and the block says so in one line.
+ * - "Drafts written", not "drafts sent". Nothing in this build sends a draft;
+ *   saving and approving one is not sending it.
+ */
+export const WEEKLY_SUMMARY_COPY = Object.freeze({
+  heading: 'This week',
+  lastWeekHeading: 'Last week',
+  unavailable: 'This week’s numbers are unavailable until the local records can be read.',
+  derivation: 'Counted from the records this Mac already keeps. "Mornings" and "firms" count the ones with recorded work: a morning you opened without working it is not counted.',
+  spendUnknown: 'Spend unknown',
+  noHolds: 'no holds',
+  labels: Object.freeze({
+    mornings: 'Mornings worked',
+    firms: 'Firms worked',
+    callsPlaced: 'Calls placed',
+    notes: 'Notes written',
+    callbacksPromised: 'Callbacks promised',
+    callbacksKept: 'Callbacks kept',
+    drafts: 'Drafts written',
+    replies: 'Replies received',
+    holds: 'Holds',
+  }),
+  /** The same words the call outcome form uses, so the two screens never disagree about a result. */
+  outcomes: Object.freeze({
+    connected: 'Connected',
+    interested: 'Connected, interested',
+    not_interested: 'Connected, not interested',
+    gatekeeper: 'Gatekeeper',
+    voicemail: 'Voicemail',
+    no_answer: 'No answer',
+    busy: 'Busy',
+    wrong_number: 'Wrong number',
+  }),
+  holdReasons: Object.freeze({
+    requires_owner_preflight: 'follow-up needs an owner preflight',
+    reply_capability_unverified: 'reply capability unverified',
+    manual_only: 'LinkedIn note is manual only',
+  }),
+});
+
+/**
+ * The line Today puts on a firm that answered. Lane 26's rule rests the sequence
+ * on the worker after a reply; the desktop only shows the state it projects, so
+ * this never claims a pause the stored enrollment does not report.
+ */
+export function replyFirstLine(firmName: string): string {
+  return `Reply received from ${firmName}`;
+}
+export function sequenceStateLine(state: string | null): string {
+  if (state === null) return 'No sequence for this firm';
+  if (state === 'paused') return 'Sequence paused';
+  return `Sequence ${state.replaceAll('_', ' ')}`;
+}
+
 export type PhoneDialMode = Readonly<{ label: string; reason: string | null; card: string }>;
 export type PhoneDialState = PhoneSetupStatus['state'] | 'unreadable';
 

@@ -2,6 +2,7 @@ import { partitionFirstUseAnswers } from './firstUseCapabilities';
 import { CompanyPhoneCall } from './CompanyPhoneCall';
 import { CallCard } from './CallCard';
 import { TodayFooter } from './TodayFooter';
+import { replyFirstLine, sequenceStateLine } from './todayCopy';
 import { openSettingsSection } from '../../foundation/settingsNavigation';
 import type { FirstUseContinuation } from './localCompanyContinuation';
 import { useOverlayLayers } from '../../app/overlayLayers';
@@ -695,6 +696,15 @@ export function NativeDesk({
   const retainedCount = localCommitmentsCount(localRead?.retained);
   const workerCount = (value: number): VisibleCount => unavailableScope ? { kind: 'unavailable' } : readError || localHold ? { kind: 'last_known', value } : incomplete ? { kind: 'partial', value } : { kind: 'known', value };
   const callCount = workerCount(snapshot.calls.accountIds.length);
+  // Lane 32's stored reply projections. The daily read already put these firms at the head of the
+  // morning list; the row says why, and names the sequence state the stored enrollment reports.
+  const repliedFirms = new Set(snapshot.answers.filter((answer) => answer.kind === 'reply').map((answer) => answer.accountId));
+  const sequenceState = (accountId: string): string | null =>
+    snapshot.campaigns
+      .flatMap((campaign) => campaign.enrollments)
+      .filter((enrollment) => enrollment.accountId === accountId)
+      .reduce<{ version: number; state: string } | null>((latest, enrollment) =>
+        latest === null || enrollment.version > latest.version ? enrollment : latest, null)?.state ?? null;
   const title =
     surface === 'today'
       ? 'Today'
@@ -796,7 +806,9 @@ export function NativeDesk({
                     >
                       <strong>{name(id)}</strong>
                       <small>Call</small>
-                      <span>Review company and route</span>
+                      <span>{repliedFirms.has(id)
+                        ? `${replyFirstLine(name(id))} · ${sequenceStateLine(sequenceState(id))}`
+                        : 'Review company and route'}</span>
                     </button>
                   ))
                 )}
@@ -944,7 +956,7 @@ export function NativeDesk({
           )}
         </div>
       </div>
-      <TodayFooter snapshot={snapshot} readError={readError} researchSetup={configuration?.state === 'active' ? api.delegation.researchSetup : undefined} />
+      <TodayFooter snapshot={snapshot} readError={readError} researchSetup={configuration?.state === 'active' ? api.delegation.researchSetup : undefined} showUsage={surface === 'today'} />
     </section>
   );
 }
