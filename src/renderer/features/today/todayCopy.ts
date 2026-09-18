@@ -36,7 +36,9 @@ export const PHONE_DIAL_MODES: Readonly<Record<PhoneDialState, PhoneDialMode>> =
   configured: Object.freeze({
     label: 'Available on this Mac',
     reason: null,
-    card: 'Callie can dial from this Mac. "Call with Phone.app" below stays the way to call; the number is here either way. One handoff per call step.',
+    // Names the control that actually exists today. D6 prefers "Call with Phone.app" for it, but the
+    // button lives in CompanyPhoneCall.tsx, so renaming it and this line together is the coordinator's.
+    card: 'Callie can dial from this Mac. "Begin phone handoff" below is the way to call, one handoff per call step; the number is here either way.',
   }),
   needs_confirmation: Object.freeze({
     label: 'Not verified',
