@@ -133,7 +133,10 @@ export function ResearchSetupSection({ api }: { api?: ResearchSetupApi }) {
   const placesBlockers: ResearchSetupBlocker[] = remote ? [...new Set([...(remote.placesBlockers ?? ['places_credential_parameter_missing' as const]), ...(remote.placesCredentialParameterDeclared === true ? [] : ['places_credential_parameter_missing' as const])])] : [];
   const blockersFor = (places: boolean): ResearchSetupBlocker[] => places ? [...new Set([...blocked.filter(blocker => blocker !== 'credential_parameter_missing'), ...placesBlockers])] : blocked;
   const credentialReadyFor = (places: boolean) => places ? remote?.placesCredentialParameterDeclared === true : remote?.credentialParameterDeclared;
-  const proposalBlocked = blockersFor(proposalTerritory); const activeBlocked = blockersFor(activeTerritory);
+  const activeBlocked = blockersFor(activeTerritory);
+  // A changed operator descriptor holds the stored policy (pause, resume, research) but never the replacement that
+  // repairs it: the worker's replace transaction rebinds the marker to the current fingerprint carried in the proposal.
+  const proposalBlocked = blockersFor(proposalTerritory).filter(blocker => !(existing && blocker === 'descriptor_changed'));
   // Every reason an offered action is held is shown: the stored policy's own gaps and, while a form is offered, the proposal's.
   const shownBlocked = [...new Set([...(selector ? activeBlocked : []), ...(formShown ? proposalBlocked : [])])];
   const placesRelevant = activeTerritory || (formShown && proposalTerritory);
