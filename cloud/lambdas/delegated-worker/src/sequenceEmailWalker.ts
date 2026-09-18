@@ -12,6 +12,7 @@ import { dispatchIntentKey, templateSequencePermissionKey, type DynamoDispatchRe
 import { DynamoStore, fingerprint, keyPart, type RepositoryOptions } from './dynamoStore';
 import { authorityRecordSchema, executionAuthorityKey, type DynamoExecutionRepository } from './executionRepository';
 import { type RemoteGoogleAuthorization } from './remoteGoogleAuthorization';
+import { mailSuppressionKey } from './threadIntakeRepository';
 import { TerritoryPolicyRepository } from './territoryPolicyRepository';
 import { WorkerCampaignRepository, campaignEnrollmentKey, campaignVersionKey } from './workerCampaignRepository';
 
@@ -38,6 +39,25 @@ const PERMISSION_TTL_MS = 3_600_000;
 const ANSWERED_OUTCOMES: ReadonlySet<string> = new Set(['not_interested', 'wrong_number', 'opt_out', 'booked', 'reply']);
 /** The enrollment states an email step may still go out under. `paused` is the D13 rest, whose last step is an email. */
 const EMAILABLE_STATES: ReadonlySet<string> = new Set(['active', 'paused']);
+/**
+ * Which of lane 31's five closed reasons each refusal of the dispatch path is. The two the dispatch path already
+ * answers in lane 31's own words map to themselves; the shared cap is the sender cap; and every condition about
+ * the mailbox the firm's mail would come from or go through — an unfinished intake, a scope that does not name
+ * the recipient, a grant that no longer carries `send` — is the mailbox not being connected for that firm. A
+ * refusal absent from this map is not one of the five and is never written on a step as if it were.
+ */
+const DISPATCH_HOLD_REASONS: ReadonlyMap<string, ReplyTemplateHoldReason> = new Map([
+  ['template_not_approved', 'template_not_approved'],
+  ['no_business_email', 'no_business_email'],
+  ['dispatch_cap_reached', 'sender_cap_reached'],
+  ['mailbox_not_connected', 'mailbox_not_connected'],
+  ['intake_unavailable', 'mailbox_not_connected'],
+  ['intake_incomplete', 'mailbox_not_connected'],
+  ['intake_stale', 'mailbox_not_connected'],
+  ['intake_scope_missing', 'mailbox_not_connected'],
+  ['sender_identity_conflict', 'mailbox_not_connected'],
+  ['google_access_evidence_missing', 'mailbox_not_connected'],
+]);
 
 export type SequenceEmailReport = {
   /** Firms whose enrollment record this walk actually looked at. */
@@ -144,6 +164,9 @@ export function createSequenceEmailWalker(input: SequenceEmailDependencies) {
     // A firm that replied, opted out, booked, said no or answered on a wrong number is done with the sequence.
     const evidence = await campaigns.evidence(enrollment.id);
     if (evidence.some(item => item.conflict || item.observation === 'replied' || ANSWERED_OUTCOMES.has(item.outcome))) return;
+    // A suppressed firm is its own decision, not a hold on a step: it is left entirely alone, and no reason
+    // out of the five would be true of it. The reservation refuses it as well, which is the durable fence.
+    if (await store.get(mailSuppressionKey(accountId))) return;
     const sourceRow = await store.get<unknown>(ownerSourceKey(accountId));
     const configuration = ownerSourceConfigurationSchema.safeParse(sourceRow?.data);
     if (!configuration.success || configuration.data.accountId !== accountId
@@ -226,11 +249,11 @@ export function createSequenceEmailWalker(input: SequenceEmailDependencies) {
     const outcome = await createDispatchService({ execution: input.execution, policy: input.policy,
       authorization: input.authorization, fetch: input.fetch }).dispatch(commandId, context.signal);
     if (outcome.status !== 'provider_accepted') {
-      // The dispatch path's own refusals include lane 31's two words wherever one applies; anything else is
-      // not one of the five reasons and is left on the step as the mailbox condition it actually is.
-      const reason: ReplyTemplateHoldReason = outcome.reason === 'template_not_approved' ? 'template_not_approved'
-        : outcome.reason === 'no_business_email' ? 'no_business_email'
-          : outcome.reason === 'dispatch_cap_reached' ? 'sender_cap_reached' : 'mailbox_not_connected';
+      // Only a refusal that one of the five closed reasons actually describes is written on the step. Anything
+      // else is an unexpected condition, and counting it as a named hold would put a reason on the record that
+      // is not true of the firm; it becomes a tick hold instead, under the phase's own words.
+      const reason = DISPATCH_HOLD_REASONS.get(outcome.reason);
+      if (!reason) throw new Error('sequence_email_unexpected_hold');
       await hold(reason);
       return;
     }

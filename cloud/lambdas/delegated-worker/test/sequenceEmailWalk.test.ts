@@ -10,6 +10,7 @@ import { createWorkerAccountRepository } from '../src/workerAccountRepository';
 import { TerritoryPolicyRepository } from '../src/territoryPolicyRepository';
 import { DynamoDispatchRepository, dispatchIntentKey } from '../src/dispatchRepository';
 import { campaignEnrollmentKey } from '../src/workerCampaignRepository';
+import { mailSuppressionKey } from '../src/threadIntakeRepository';
 import { googleScopes } from '../src/googleGrantCapabilities';
 import { DynamoStore } from '../src/dynamoStore';
 import { buildScheduledRunRecord } from '../src/tickLog';
@@ -336,5 +337,21 @@ describe('the worker walks a due sequence email step', () => {
     const after = await stopped.tick();
     expect(stopped.sends()).toBe(0);
     expect(after.sequenceEmails).toMatchObject({ due: 0, sent: 0 });
+
+    // An opted-out firm is left entirely alone: no send, and no hold reason written on its step either,
+    // because none of the five would be true of it.
+    const suppressed = await fixture();
+    await suppressed.approveTemplate();
+    await suppressed.configureMailbox();
+    await suppressed.policy.configureCaps({ sender: SENDER, dailyLimit: 40 }, null);
+    await suppressed.dynamoStore.transact([suppressed.dynamoStore.put(mailSuppressionKey(suppressed.account.id), { reason: 'opt_out' }, null)]);
+    const steps = await suppressed.stepIds();
+    suppressed.advance(DAY_SEVEN);
+    const quiet = await suppressed.tick();
+    expect(suppressed.sends()).toBe(0);
+    expect(quiet.sequenceEmails).toMatchObject({ due: 0, sent: 0, held: 0, failed: 0 });
+    const record = await suppressed.territory.readEnrollmentRecord(suppressed.account.id);
+    expect(record!.data.heldSteps.map(step => step.reason)).toEqual(['mailbox_not_connected', 'mailbox_not_connected']);
+    expect(record!.data.heldSteps.map(step => step.stepId)).toEqual(steps);
   });
 });
