@@ -29,6 +29,7 @@ type ExposedCallieApi = {
     revealLogDirectory: () => Promise<unknown>;
   };
   appleSpike: Record<string, unknown>;
+  templates: NonNullable<import('../../src/shared/preload').CalliePreloadApi['templates']>;
 };
 
 /** Schema-shaped read-only detail. Fictional person, no real contact data. */
@@ -134,6 +135,7 @@ describe('preload workflow bridge', () => {
       'phoneSetup',
       'recovery',
       'shell',
+      'templates',
     ]);
     for (const removed of ['today', 'pipeline', 'review', 'friday', 'imports', 'conversations', 'learnings', 'sourcing', 'discovery']) {
       expect(api, removed).not.toHaveProperty(removed);
@@ -176,6 +178,10 @@ describe('preload workflow bridge', () => {
       'configure', 'connectGmail', 'disconnectGmail', 'generateDraft', 'inspectLocalAuthority', 'openDraft', 'saveDraft', 'sendDraft', 'status',
     ]);
     expect(Object.keys(api.shell).sort()).toEqual(['revealDatabase', 'revealLogDirectory']);
+    // Five templates channels in their own namespace: reading and editing are local, the other three carry one owner command each.
+    expect(Object.keys(api.templates).sort()).toEqual(['approve', 'edit', 'pause', 'read', 'revoke', 'sendingLimits']);
+    for (const method of Object.values(api.templates)) expect(method).toBeTypeOf('function');
+    for (const forbidden of ['invoke', 'run', 'dispatch', 'send']) expect(api.templates).not.toHaveProperty(forbidden);
   });
 
   it('invokes only health:get without arguments for the health probe', async () => {

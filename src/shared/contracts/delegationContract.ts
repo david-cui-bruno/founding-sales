@@ -38,8 +38,8 @@ export const delegationCommandSchema = z.discriminatedUnion('kind', [
 export type DelegationCommand = Readonly<z.infer<typeof delegationCommandSchema>>;
 /** Selected bootstrap and refresh contents are constructed only by the trusted main SQL exporter. */
 /** The territory policy travels its own main-built path (no account outbox row exists for a workspace-level subject). */
-export const publicDelegationCommandSchema = delegationCommandSchema.refine(command => command.kind !== 'bootstrap-selected-account' && command.kind !== 'refresh-selected-account-record' && command.kind !== 'approve-requested-followup' && command.kind !== 'territory-policy', 'Command requires trusted saved SQL content');
-export type PublicDelegationCommand = Exclude<DelegationCommand, {kind:'bootstrap-selected-account'|'refresh-selected-account-record'|'approve-requested-followup'|'territory-policy'}>;
+export const publicDelegationCommandSchema = delegationCommandSchema.refine(command => command.kind !== 'bootstrap-selected-account' && command.kind !== 'refresh-selected-account-record' && command.kind !== 'approve-requested-followup' && command.kind !== 'territory-policy' && command.kind !== 'reply-template', 'Command requires trusted saved SQL content');
+export type PublicDelegationCommand = Exclude<DelegationCommand, {kind:'bootstrap-selected-account'|'refresh-selected-account-record'|'approve-requested-followup'|'territory-policy'|'reply-template'}>;
 const eventBase = { id, workspaceId: id, accountId: id, authorityGeneration: revision, aggregateVersion: revision.min(1) };
 export const workerEventSchema = z.discriminatedUnion('kind', [
   z.strictObject({...eventBase,kind:z.literal('requested_followup.status'),payload:z.strictObject({commandId:z.uuid(),draftId:id,status:requestedApprovalStatusSchema}),campaign:campaignEventPayloadSchema.optional()}),

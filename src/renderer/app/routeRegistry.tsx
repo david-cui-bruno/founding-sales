@@ -43,6 +43,7 @@ export function renderRoute(route: AppRoute, context: RouteContext): ReactNode {
           outreachApi={context.api.outreach}
           phoneSetupApi={context.api.phoneSetup}
           delegationApi={context.api.delegation}
+          templatesApi={context.api.templates}
         >
           <AppleSpikePanel api={context.api.appleSpike} />
         </SettingsScreen>

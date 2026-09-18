@@ -787,3 +787,11 @@ export type AccountCallbackTables = {
   pm_account_callbacks: { id: string; account_id: string; due_on: string; note: string | null;
     state: 'open' | 'done' | 'cancelled'; revision: number; source_command_id: string; created_at: string; updated_at: string };
 };
+
+/** Schema30 follow-up templates: one revisioned row per template David approves once, plus the singleton pause switch. */
+export type EmailTemplateTables = {
+  email_templates: { id: string; name: string; purpose: string; subject: string; body: string; variables_json: string;
+    revision: number; approval_state: 'draft' | 'approved' | 'revoked'; approved_revision: number | null;
+    approved_at: string | null; content_hash: string | null; created_at: string; updated_at: string };
+  email_template_settings: { singleton: number; paused: number; revision: number; updated_at: string };
+};
