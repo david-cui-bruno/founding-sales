@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs';
 import type {} from '../fixtures/nativeDeskBrowser';
 import { createCallCampaignDraft, createLinkedInCampaignDraft } from '../../src/shared/contracts/callCampaignDraft';
 import { accountFingerprint } from '../../src/main/domain/accounts/accountEvidence';
+import { PHONE_DIAL_MODES } from '../../src/renderer/features/today/todayCopy';
 
 // This exercises real renderer components, not Electron IPC or live services.
 // The entire API is the explicit no-IO fixture. All browser requests are blocked.
@@ -1185,10 +1186,80 @@ test('the morning call card and the footer line read saved facts only and place 
   await expect(card).toContainText('Portfolio: 340 managed units');
   await expect(card).toContainText('Residential: Residential and multifamily rentals');
   await expect(card).toContainText('Source: https://places.googleapis.com/v1/places:searchText');
-  await expect(card.locator('button, a, input, select')).toHaveCount(0);
+  // D6: the only control is the explicit show-number fallback, and it is not a dial.
+  await expect(card.locator('button, a, input, select')).toHaveText(['Show number']);
+  await expect(card.locator('a[href^="tel:"]')).toHaveCount(0);
   await expect(page.getByTestId('last-outcome')).toHaveText('Last outcome: unknown until the saved phone history is read');
-  // Only local reads happened: the card's company detail read, never a command, sync or handoff.
+  // Only local reads happened: the card's company detail read, never a command, sync, handoff or phone setup read.
   expect((await methods(page)).filter(method => !['daily.get', 'delegation.status', 'localWorkspace.get', 'localWorkspace.getCommitments', 'localWorkspace.getCompany'].includes(method))).toEqual([]);
+  await assertClean(page, state);
+});
+
+/** Records every clipboard write so "no clipboard write without the click" is observable, and never touches the real one. */
+async function watchClipboard(page: Page) {
+  await page.evaluate(() => {
+    Object.assign(window, { callieCopied: [] as string[] });
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {
+      writeText: async (text: string) => { (window as unknown as { callieCopied: string[] }).callieCopied.push(text); },
+    } });
+  });
+  return () => page.evaluate(() => (window as unknown as { callieCopied: string[] }).callieCopied);
+}
+/** The phone setup the isolated fixture does not carry. Reading it is recorded, so an automatic read would be visible. */
+async function setPhoneSetup(page: Page, state: 'configured' | 'unavailable') {
+  await page.evaluate(next => {
+    const f = window.nativeDeskBrowser.fixture;
+    f.api.phoneSetup = {
+      status: async () => { f.calls.push({ method: 'phoneSetup.status' }); return next === 'configured'
+        ? { state: 'configured' as const, candidateFingerprint: 'fictional-helper', confirmedAt: '2026-09-18T12:00:00.000Z' }
+        : { state: 'unavailable' as const, candidateFingerprint: null, confirmedAt: null }; },
+      confirm: async () => { throw new Error('No setup mutation from the call card'); },
+      clear: async () => { throw new Error('No setup mutation from the call card'); },
+    };
+  }, state);
+}
+
+test('D6 show-number fallback hands David the number when the helper cannot dial, and never dials', async ({page}) => {
+  const state = await mount(page);
+  const copied = await watchClipboard(page);
+  await page.evaluate(() => {
+    const f = window.nativeDeskBrowser.fixture, snapshot = f.snapshot();
+    const firm = snapshot.accounts[0];
+    firm.account.name = 'Fictional Harbor PM';
+    firm.routes = [{id: 'listed-phone', accountId: 'a', personId: null, channel: 'phone', value: '+14015550100', purpose: 'business', verification: 'listed', evidenceIds: ['places'], version: 1}];
+    f.setSnapshot(snapshot);
+    window.nativeDeskBrowser.refresh();
+  });
+  const open = async () => {
+    await page.getByRole('button', {name: 'Call · Fictional Harbor PM', exact: true}).click();
+    return page.getByRole('region', {name: 'Call card', exact: true});
+  };
+
+  await setPhoneSetup(page, 'unavailable');
+  let card = await open();
+  // Selecting the firm reads no phone setup and writes no clipboard. Only the click does.
+  expect(await methods(page)).not.toContain('phoneSetup.status');
+  expect(await copied()).toEqual([]);
+  await card.getByRole('button', {name: 'Show number', exact: true}).click();
+  await expect(card.getByText(`Callie cannot dial from this Mac: ${PHONE_DIAL_MODES.unavailable.reason}. Dial it yourself and log the outcome below.`, {exact: true})).toBeVisible();
+  await expect(card.getByTestId('dial-number')).toHaveText('+14015550100');
+  await expect(card.locator('a[href^="tel:"]')).toHaveCount(0);
+  expect((await methods(page)).filter(method => method === 'phoneSetup.status')).toHaveLength(1);
+  expect(await copied()).toEqual([]);
+  await card.getByRole('button', {name: 'Copy number', exact: true}).click();
+  await expect(card.getByText('Number copied. Copying is not a call.', {exact: true})).toBeVisible();
+  expect(await copied()).toEqual(['+14015550100']);
+
+  // With the helper available the handoff below stays the way to call, and the number is still on the card.
+  await setPhoneSetup(page, 'configured');
+  await page.getByRole('link', {name: 'Accounts', exact: true}).click();
+  await page.getByRole('link', {name: 'Today', exact: true}).click();
+  card = await open();
+  await card.getByRole('button', {name: 'Show number', exact: true}).click();
+  await expect(card.getByText(PHONE_DIAL_MODES.configured.card, {exact: true})).toBeVisible();
+  await expect(card.getByText(/Callie cannot dial from this Mac/)).toHaveCount(0);
+  await expect(card.getByTestId('dial-number')).toHaveText('+14015550100');
+  await expect(page.getByRole('button', {name: 'Check owner and review call', exact: true})).toBeVisible();
   await assertClean(page, state);
 });
 
