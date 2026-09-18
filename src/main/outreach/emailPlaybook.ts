@@ -2,7 +2,7 @@ import { CALLIE_PRODUCT_FACTS } from '../../shared/product/callieProductFacts';
 
 /** The one approved product sentence, read from the approval record rather than retyped here, so the playbook
  * and the follow-up templates can never state different things about what Callie does. */
-const PRODUCT_SENTENCE = CALLIE_PRODUCT_FACTS.facts[0].text;
+const PRODUCT_SENTENCE: string = CALLIE_PRODUCT_FACTS.facts[0]?.text ?? (() => { throw new Error('product_facts_missing'); })();
 
 /** Versioned application instructions, drawn solely from the user's 2026-09-08 playbook and the first-draft tightening from walkthrough D (2026-09-16). */
 export const EMAIL_PLAYBOOK = `FSS user playbook 2026-09-08. Write a short, personal, evidence-grounded email, not a questionnaire or a sales pitch disguised as research.
