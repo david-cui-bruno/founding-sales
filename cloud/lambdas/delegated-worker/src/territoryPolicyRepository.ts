@@ -7,16 +7,15 @@ import { ownerSourceConfigurationSchema, ownerSourceKey, type ReplyTemplateComma
 import { decideTemplateEmailStep, workerReplyTemplateApprovalSchema, workerReplyTemplateStateSchema, type ReplyTemplateId, type ReplyTemplateValues, type WorkerReplyTemplateState } from '../../../../src/shared/contracts/replyTemplateContract';
 import { decideTerritoryReentry, deriveTerritoryCampaignVersion, territoryAddedStatesSchema, territoryCallPolicyId, territoryCallPolicySchema, territoryEntriesSchema,
   territoryEnrollmentCommandId, territoryEnrollmentId, territoryExecutionContextId, territoryFirstStepId, territoryHeldSteps, TERRITORY_EMAIL_HOLD_REASON,
-  type TerritoryAddedStates, type TerritoryCallPolicy, type TerritoryEntries, type TerritoryHeldStep } from '../../../../src/shared/contracts/territoryCallPolicyContract';
+  type TerritoryAddedStates, type TerritoryCallPolicy, type TerritoryHeldStep } from '../../../../src/shared/contracts/territoryCallPolicyContract';
 import { decideTerritoryStateAddition, TERRITORY_RULES_REVISION } from '../../../../src/shared/contracts/territoryClearanceContract';
 import { territoryCountsSchema, territoryRemainingNewPerMorning, type TerritoryCounts } from '../../../../src/shared/contracts/researchSetupContract';
 import { enrollmentSchema } from '../../../../src/shared/contracts/campaignContract';
-import { campaignCapKey, campaignEnrollmentKey, campaignSlotKey, territoryEnrollmentKey } from './workerCampaignRepository';
-export { territoryEnrollmentKey };
 import { executionAuthorityFields, executionAuthorityKey } from './executionRepository';
 import { intakeRegistryKey, intakeRegistrySchema } from './intakeBarrier';
-import { WorkerCampaignRepository } from './workerCampaignRepository';
+import { WorkerCampaignRepository, campaignCapKey, campaignEnrollmentKey, campaignSlotKey, territoryEnrollmentKey } from './workerCampaignRepository';
 import { DynamoStore, fingerprint, integer, keyPart, type RepositoryOptions, type Stored } from './dynamoStore';
+export { territoryEnrollmentKey };
 
 export const territoryCallPolicyKey = (workspaceId: string) => `TERRITORY_CALL_POLICY#${keyPart(workspaceId)}`;
 /** Where the backfill sweep keeps its position. It wraps: reaching the end of the table returns the cursor to the start, so a firm whose

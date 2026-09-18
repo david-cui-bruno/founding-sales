@@ -2,7 +2,6 @@ import { QueryCommand, type TransactWriteItem } from '@aws-sdk/client-dynamodb';
 import { z } from 'zod';
 import { TerritoryPolicyRepository } from './territoryPolicyRepository';
 import type { TerritoryAddedStates } from '../../../../src/shared/contracts/territoryCallPolicyContract';
-import type { Stored as StoredRow } from './dynamoStore';
 import { researchPausedReasonSchema, researchReviewedCapabilitySchema, researchSetupWriteRequestSchema, researchSetupStatusRequestSchema, researchSetupRemoteStatusSchema, researchSetupReceiptSchema, scheduledRunRecordSchema, type ResearchPausedReason, type ResearchSetupBlocker, type ResearchSetupReceipt, type ScheduledRunRecord } from '../../../../src/shared/contracts/researchSetupContract';
 import { ownerResearchSourceKey, ownerResearchSourceSchema, type OwnerResearchSource } from '../../../../src/shared/contracts/ownerCommandContract';
 import { effectiveDiscoveryProvider, type DiscoveryProvider } from '../../../../src/main/research/companyResearchTypes';
@@ -79,7 +78,7 @@ export async function guardGuidedResearch(store: DynamoStore, config: OwnerResea
 }
 
 /** The stored state additions reduced to the status shape: the revision and the rows, or an empty list before David added one. */
-function territoryAdditions(row: StoredRow<TerritoryAddedStates> | null): { addedRevision: number; addedStates: TerritoryAddedStates['states'] } {
+function territoryAdditions(row: Stored<TerritoryAddedStates> | null): { addedRevision: number; addedStates: TerritoryAddedStates['states'] } {
   return { addedRevision: row?.data.revision ?? 0, addedStates: row?.data.states ?? [] };
 }
 
