@@ -4,6 +4,10 @@ import { createProductionHandler, createWorkerHandler } from '../src/handler';
 import { DynamoReadUnavailable, DynamoStore, withDynamoReadErrors, type DynamoAdapter, type DynamoCommand } from '../src/dynamoStore';
 import { WorkerAuth } from '../src/workerAuth';
 import { row } from './sdkHarness';
+import type { AttributeValue } from '@aws-sdk/client-dynamodb';
+/** GET /events with a two-event stream: initial token/pairing, a re-auth pair plus the head read,
+ * then a re-auth pair plus exactly one range query. Not one read per event any more. */
+const EVENTS_READS = 8;
 
 const pairingId = '00000000-0000-4000-8000-000000000001';
 const credential = 'a'.repeat(43);
@@ -17,10 +21,25 @@ const request = () => ({ version: '2.0', rawPath: '/events', rawQueryString: '',
 const event = (sequence: number) => ({ sequence, published: true, event: { id: `event-${sequence}`, workspaceId: options.workspaceId,
   accountId: 'fictional-account', authorityGeneration: 0, aggregateVersion: sequence, kind: 'research.created',
   payload: { account: { id: 'fictional-account', name: 'Fictional PM', domain: null, version: 1 }, createdAt: options.clock.now() } } });
+const eventKey = (sequence: number) => `EVENT#${String(sequence).padStart(16, '0')}`;
 function sdkFixture(override?: (key: string, call: number) => ReturnType<typeof row> | undefined) {
   const commands: DynamoCommand[] = [];
   const dynamo: DynamoAdapter = { send: async command => {
     commands.push(command);
+    // The event stream is read as one consistent ascending range query; everything else is a point read.
+    if (command instanceof QueryCommand) {
+      expect(command.input.ConsistentRead).toBe(true);
+      const bounds = command.input.ExpressionAttributeValues!;
+      const from = Number(bounds[':from']!.S!.slice('EVENT#'.length)), to = Number(bounds[':to']!.S!.slice('EVENT#'.length));
+      const items: Record<string, AttributeValue>[] = [];
+      for (let sequence = from; sequence <= to; sequence++) {
+        const key = eventKey(sequence);
+        const item = (override?.(key, commands.length) ?? row(event(sequence))).Item;
+        // An absent row simply does not come back from a range read; it is never a blank placeholder.
+        if (item) items.push({ ...item, sk: { S: key } });
+      }
+      return { $metadata: {}, Items: items };
+    }
     expect(command).toBeInstanceOf(GetItemCommand);
     const read = command as GetItemCommand;
     expect(read.input.ConsistentRead).toBe(true);
@@ -73,8 +92,8 @@ describe('raw Dynamo read dependency classification', () => {
 });
 
 describe.each([false, true])('actual GET /events dependency failure (production=%s)', production => {
-  // Initial token/pairing, then fresh token/pairing before head and each event.
-  it.each(Array.from({ length: 11 }, (_, i) => i + 1))('returns redacted 503 when read %i fails, never a partial page', async failureAt => {
+  // Initial token/pairing, then fresh token/pairing before the head read and before the one range query.
+  it.each(Array.from({ length: EVENTS_READS }, (_, i) => i + 1))('returns redacted 503 when read %i fails, never a partial page', async failureAt => {
     const f = sdkFixture((_key, call) => { if (call === failureAt) throw new Error(secretText); return undefined; });
     const result = await http(f.dynamo, production)(request());
     expect(result.statusCode).toBe(503);
@@ -89,7 +108,8 @@ describe.each([false, true])('actual GET /events dependency failure (production=
     const result = await http(f.dynamo, production)(request());
     expect(result.statusCode).toBe(200);
     expect(JSON.parse(result.body)).toMatchObject({ events: [event(1).event, event(2).event], complete: true });
-    expect(f.commands).toHaveLength(11);
+    expect(f.commands).toHaveLength(EVENTS_READS);
+    expect(f.commands.filter(command => command instanceof QueryCommand)).toHaveLength(1);
   });
 });
 
@@ -140,7 +160,7 @@ describe('authentication, validation and incomplete reads remain fail closed', (
     const result = await http(f.dynamo)(request());
     expect(result.statusCode).toBe(200);
     expect(JSON.parse(result.body)).toMatchObject({ events: [], nextCursor: null, complete: false });
-    expect(f.commands).toHaveLength(8);
+    expect(f.commands).toHaveLength(EVENTS_READS);
   });
   it('rejects corrupt stored envelopes without exposing their data', async () => {
     const f = sdkFixture(key => key === 'EVENT_HEAD' ? { $metadata: {}, Item: { rev: { N: '1' }, data: { S: secretText } } } : undefined);
