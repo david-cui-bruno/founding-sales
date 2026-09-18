@@ -1,3 +1,4 @@
+import { migration0030EmailTemplates } from './migrations/0030EmailTemplates';
 import { migration0029AccountCallbacks } from './migrations/0029AccountCallbacks';
 import { migration0028TerritoryClearances } from './migrations/0028TerritoryClearances';
 import { migration0027ListedRouteVerification } from './migrations/0027ListedRouteVerification';
@@ -159,6 +160,7 @@ export const productionMigrations = [
   { id: '0027ListedRouteVerification', schemaVersion: 27, migration: migration0027ListedRouteVerification },
   { id: '0028TerritoryClearances', schemaVersion: 28, migration: migration0028TerritoryClearances },
   { id: '0029AccountCallbacks', schemaVersion: 29, migration: migration0029AccountCallbacks },
+  { id: '0030EmailTemplates', schemaVersion: 30, migration: migration0030EmailTemplates },
 ] as const;
 const productionMigrationRunner = createMigrationRunner(productionMigrations);
 

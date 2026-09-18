@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { expect, it, vi } from 'vitest';
 import { closeDatabase, openDatabase, type AppDatabase } from '../../../../src/main/db/database';
 import { createMigrationRunner, migrateToLatest, productionMigrations } from '../../../../src/main/db/migrate';
-import { assertDomainStorageReady, assertPreReleaseStorageReady, DOMAIN_SCHEMA_MANIFEST, SCHEMA28_MANIFEST } from '../../../../src/main/domain/startup/storageReadiness';
+import { assertDomainStorageReady, assertPreReleaseStorageReady, DOMAIN_SCHEMA_MANIFEST, SCHEMA28_MANIFEST, SCHEMA29_MANIFEST } from '../../../../src/main/domain/startup/storageReadiness';
 import { DomainStartupFatalError } from '../../../../src/main/domain/startup/domainStartupTypes';
 import { AccountRepository } from '../../../../src/main/domain/accounts/accountRepository';
 import { createTempDatabase, createTestWorkspaceKey } from '../../../fixtures/tempDatabase';
@@ -23,7 +23,7 @@ const manifestOf = (database: AppDatabase) => {
   return { tables: actual.filter(row => row.type === 'table').map(row => row.name).sort(), indexes: actual.filter(row => row.type === 'index').map(row => row.name).sort(), triggers: actual.filter(row => row.type === 'trigger').map(row => row.name).sort(),
     catalogSha256: createHash('sha256').update(JSON.stringify(actual.map(row => [row.type, row.name, (row.sql ?? '').replace(/\s+/g, ' ').trim()]).sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0))).digest('hex') };
 };
-const readiness29 = (database: AppDatabase) => assertDomainStorageReady({ database, expectedBusyTimeoutMs: 5000, expectedSchemaVersion: 29, expectedManifest: DOMAIN_SCHEMA_MANIFEST });
+const readiness30 = (database: AppDatabase) => assertDomainStorageReady({ database, expectedBusyTimeoutMs: 5000, expectedSchemaVersion: 30, expectedManifest: DOMAIN_SCHEMA_MANIFEST });
 const fatalCode = (run: () => unknown) => { try { run(); } catch (error) { return error instanceof DomainStartupFatalError ? error.code : error; } return undefined; };
 const insertCallback = (database: AppDatabase, accountId: string, extra: Partial<{ id: string; dueOn: string; note: string | null; state: string; revision: number; commandId: string; createdAt: string; updatedAt: string }> = {}) =>
   database.raw.prepare('INSERT INTO pm_account_callbacks(id,account_id,due_on,note,state,revision,source_command_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)')
@@ -40,7 +40,7 @@ async function seedGenuine28(database: AppDatabase, options: { workspaceKey: Ret
   return account;
 }
 
-it('upgrades genuine28 additively with verified encrypted backup, byte-identical rows and catalog elsewhere, exact29 readiness and reopen', async () => {
+it('upgrades genuine28 additively with verified encrypted backup, byte-identical rows and catalog elsewhere, exact30 readiness and reopen', async () => {
   const temp = createTempDatabase(), key = createTestWorkspaceKey();
   const options = { workspaceKey: key, backupDirectory: `${temp.path}.backups` };
   const database = openDatabase({ path: temp.path, key });
@@ -52,7 +52,7 @@ it('upgrades genuine28 additively with verified encrypted backup, byte-identical
     const original = rows();
     const oldLedger = database.raw.prepare('SELECT * FROM kysely_migration ORDER BY name').all();
 
-    expect(await migrateToLatest(database, options)).toEqual({ fromVersion: 28, toVersion: 29, appliedMigrationIds: ['0029AccountCallbacks'] });
+    expect(await migrateToLatest(database, options)).toEqual({ fromVersion: 28, toVersion: 30, appliedMigrationIds: ['0029AccountCallbacks', '0030EmailTemplates'] });
 
     expect(rows()).toEqual(original);
     expect(database.raw.pragma('foreign_key_check')).toEqual([]);
@@ -65,11 +65,15 @@ it('upgrades genuine28 additively with verified encrypted backup, byte-identical
     expect(database.raw.prepare('PRAGMA table_info(campaign_enrollments)').all().slice(-2))
       .toEqual([{ cid: 14, name: 'next_due_at', type: 'TEXT', notnull: 0, dflt_value: null, pk: 0 }, { cid: 15, name: 'resting_until', type: 'TEXT', notnull: 0, dflt_value: null, pk: 0 }]);
     const added = catalogOf(database).filter(row => !catalog.some(entry => entry.type === row.type && entry.name === row.name)).map(row => [row.type, row.name]);
-    expect(added).toEqual([['index', 'pm_account_callbacks_due'], ['table', 'pm_account_callbacks'], ['trigger', 'pm_account_callbacks_no_delete'], ['trigger', 'pm_account_callbacks_revision']]);
+    // 0030 adds its own template objects on top of the callback objects 0029 adds.
+    expect(added).toEqual([['index', 'pm_account_callbacks_due'], ['table', 'email_template_settings'], ['table', 'email_templates'], ['table', 'pm_account_callbacks'],
+      ['trigger', 'email_template_settings_no_delete'], ['trigger', 'email_template_settings_revision'],
+      ['trigger', 'email_templates_no_delete'], ['trigger', 'email_templates_revision'],
+      ['trigger', 'pm_account_callbacks_no_delete'], ['trigger', 'pm_account_callbacks_revision']]);
     expect(database.raw.prepare('SELECT next_due_at,resting_until FROM campaign_enrollments').all()).toEqual([]);
     expect(manifestOf(database)).toEqual(DOMAIN_SCHEMA_MANIFEST);
-    expect(readiness29(database).schemaVersion).toBe(29);
-    expect(assertPreReleaseStorageReady(database).schemaVersion).toBe(29);
+    expect(readiness30(database).schemaVersion).toBe(30);
+    expect(assertPreReleaseStorageReady(database).schemaVersion).toBe(30);
 
     // The table admits one revisioned row per promised callback and refuses what the contract refuses.
     insertCallback(database, account.id);
@@ -106,9 +110,9 @@ it('upgrades genuine28 additively with verified encrypted backup, byte-identical
     closeDatabase(database);
     const reopened = openDatabase({ path: temp.path, key });
     try {
-      expect(await migrateToLatest(reopened, options)).toEqual({ fromVersion: 29, toVersion: 29, appliedMigrationIds: [] });
-      expect(assertPreReleaseStorageReady(reopened).schemaVersion).toBe(29);
-      expect(readiness29(reopened).schemaVersion).toBe(29);
+      expect(await migrateToLatest(reopened, options)).toEqual({ fromVersion: 30, toVersion: 30, appliedMigrationIds: [] });
+      expect(assertPreReleaseStorageReady(reopened).schemaVersion).toBe(30);
+      expect(readiness30(reopened).schemaVersion).toBe(30);
       expect(reopened.raw.prepare('SELECT id,revision FROM pm_account_callbacks ORDER BY id').all()).toEqual([{ id: 'callback-one', revision: 2 }, { id: 'callback-two', revision: 1 }]);
     } finally { closeDatabase(reopened); }
   } finally { closeDatabase(database); key.bytes.fill(0); temp.cleanup(); }
@@ -133,15 +137,15 @@ it.each(['backup', 'migration'] as const)('failed %s leaves genuine28 ledger, ca
   } finally { closeDatabase(database); key.bytes.fill(0); temp.cleanup(); }
 });
 
-it('migrates a fresh encrypted database straight to 29 with an empty callback table', async () => {
+it('migrates a fresh encrypted database straight to 30 with an empty callback table', async () => {
   const temp = createTempDatabase(), key = createTestWorkspaceKey(), database = openDatabase({ path: temp.path, key });
   try {
     const result = await migrateToLatest(database, { workspaceKey: key, backupDirectory: `${temp.path}.backups` });
-    expect(result).toMatchObject({ fromVersion: 0, toVersion: 29 });
-    expect(result.appliedMigrationIds).toHaveLength(29);
-    expect(result.appliedMigrationIds.at(-1)).toBe('0029AccountCallbacks');
+    expect(result).toMatchObject({ fromVersion: 0, toVersion: 30 });
+    expect(result.appliedMigrationIds).toHaveLength(30);
+    expect(result.appliedMigrationIds.at(-1)).toBe('0030EmailTemplates');
     expect(manifestOf(database)).toEqual(DOMAIN_SCHEMA_MANIFEST);
-    expect(readiness29(database).schemaVersion).toBe(29);
+    expect(readiness30(database).schemaVersion).toBe(30);
     expect(database.raw.prepare('SELECT COUNT(*) AS count FROM pm_account_callbacks').get()).toEqual({ count: 0 });
     expect(database.raw.pragma('foreign_key_check')).toEqual([]);
   } finally { closeDatabase(database); key.bytes.fill(0); temp.cleanup(); }
@@ -152,13 +156,13 @@ it('historical28 remains independently readable by the backup host, not admitted
   try {
     await createMigrationRunner(productionMigrations.filter(entry => entry.schemaVersion <= 28))(database, { workspaceKey: key, backupDirectory: `${temp.path}.backups` });
     expect(manifestOf(database)).toEqual(SCHEMA28_MANIFEST);
-    expect(SCHEMA28_MANIFEST.catalogSha256).not.toBe(DOMAIN_SCHEMA_MANIFEST.catalogSha256);
-    expect(DOMAIN_SCHEMA_MANIFEST.tables).toEqual([...SCHEMA28_MANIFEST.tables, 'pm_account_callbacks'].sort());
-    expect(DOMAIN_SCHEMA_MANIFEST.indexes).toEqual([...SCHEMA28_MANIFEST.indexes, 'pm_account_callbacks_due'].sort());
-    expect(DOMAIN_SCHEMA_MANIFEST.triggers).toEqual([...SCHEMA28_MANIFEST.triggers, 'pm_account_callbacks_no_delete', 'pm_account_callbacks_revision'].sort());
+    expect(SCHEMA28_MANIFEST.catalogSha256).not.toBe(SCHEMA29_MANIFEST.catalogSha256);
+    expect(SCHEMA29_MANIFEST.tables).toEqual([...SCHEMA28_MANIFEST.tables, 'pm_account_callbacks'].sort());
+    expect(SCHEMA29_MANIFEST.indexes).toEqual([...SCHEMA28_MANIFEST.indexes, 'pm_account_callbacks_due'].sort());
+    expect(SCHEMA29_MANIFEST.triggers).toEqual([...SCHEMA28_MANIFEST.triggers, 'pm_account_callbacks_no_delete', 'pm_account_callbacks_revision'].sort());
     expect(assertPreReleaseStorageReady(database).schemaVersion).toBe(28);
-    expect(fatalCode(() => readiness29(database))).toBe('schema_not_ready');
-    // Even a caller asking for 28 is refused: the current 29-entry ledger rejects the 28 ledger before any manifest comparison.
+    expect(fatalCode(() => readiness30(database))).toBe('schema_not_ready');
+    // Even a caller asking for 28 is refused: the current 30-entry ledger rejects the 28 ledger before any manifest comparison.
     expect(fatalCode(() => assertDomainStorageReady({ database, expectedBusyTimeoutMs: 5000, expectedSchemaVersion: 28 as never, expectedManifest: DOMAIN_SCHEMA_MANIFEST }))).toBe('schema_not_ready');
   } finally { closeDatabase(database); key.bytes.fill(0); temp.cleanup(); }
 });

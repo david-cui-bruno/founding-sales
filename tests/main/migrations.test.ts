@@ -20,7 +20,7 @@ describe('database migrations', () => {
     tempDatabase?.cleanup();
   });
 
-  it('creates the complete foundation and domain schema at current version 29', async () => {
+  it('creates the complete foundation and domain schema at current version 30', async () => {
     tempDatabase = createTempDatabase();
     const key = createTestWorkspaceKey();
     database = openDatabase({ path: tempDatabase.path, key });
@@ -32,15 +32,15 @@ describe('database migrations', () => {
 
     expect(result).toEqual({
       fromVersion: 0,
-      toVersion: 29,
-      appliedMigrationIds: ['0001Foundation', '0002DomainFoundation', '0003Transcripts', '0004Learnings', '0005SourcingChannels', '0006SourcingState', '0007SourcingOutbox', '0008DedupeCloudPersons', '0009SourcingFileLedger', '0010NoDueDates', '0011ContactDncFlags', '0012UpstreamRequestState', '0013ContactComplianceEvidence', '0014OutboundJurisdictionClearance', '0015RecoveryMetadata', '0016ContactPresentationEvidence', '0017DiscoveryAssessments', '0018PlaybookDueActions', '0019EmailDrafts', '0020PmAccounts', '0021DelegatedWork', '0022MailPersistence', '0023Campaigns', '0024RequestedFollowupAndPolicyReviews', '0025KnownCompanyResearchSettings', '0026LocalCompanyDrafts', '0027ListedRouteVerification', '0028TerritoryClearances', '0029AccountCallbacks'],
+      toVersion: 30,
+      appliedMigrationIds: ['0001Foundation', '0002DomainFoundation', '0003Transcripts', '0004Learnings', '0005SourcingChannels', '0006SourcingState', '0007SourcingOutbox', '0008DedupeCloudPersons', '0009SourcingFileLedger', '0010NoDueDates', '0011ContactDncFlags', '0012UpstreamRequestState', '0013ContactComplianceEvidence', '0014OutboundJurisdictionClearance', '0015RecoveryMetadata', '0016ContactPresentationEvidence', '0017DiscoveryAssessments', '0018PlaybookDueActions', '0019EmailDrafts', '0020PmAccounts', '0021DelegatedWork', '0022MailPersistence', '0023Campaigns', '0024RequestedFollowupAndPolicyReviews', '0025KnownCompanyResearchSettings', '0026LocalCompanyDrafts', '0027ListedRouteVerification', '0028TerritoryClearances', '0029AccountCallbacks', '0030EmailTemplates'],
     });
     expect(
       await database.kysely
         .selectFrom('app_meta')
         .select('schema_version')
         .executeTakeFirstOrThrow(),
-    ).toEqual({ schema_version: 29 });
+    ).toEqual({ schema_version: 30 });
 
     const objects = database.raw
       .prepare<[], { name: string; type: string }>(
@@ -72,8 +72,8 @@ describe('database migrations', () => {
     const secondResult = await migrateToLatest(database, options);
 
     expect(secondResult).toEqual({
-      fromVersion: 29,
-      toVersion: 29,
+      fromVersion: 30,
+      toVersion: 30,
       appliedMigrationIds: [],
     });
     expect(
@@ -81,7 +81,7 @@ describe('database migrations', () => {
         .selectFrom('app_meta')
         .select('schema_version')
         .executeTakeFirstOrThrow(),
-    ).toEqual({ schema_version: 29 });
+    ).toEqual({ schema_version: 30 });
     expect(
       database.raw
         .prepare<[], { count: number }>('SELECT COUNT(*) AS count FROM app_meta')
@@ -91,7 +91,7 @@ describe('database migrations', () => {
 
   it.each([
     { label: 'unknown', value: 'unknown' },
-    { label: 'future', value: 30 },
+    { label: 'future', value: 31 },
     { label: 'negative', value: -1 },
     { label: 'noninteger', value: 15.5 },
   ])('rejects a $label schema marker before backup or migration', async ({ label, value }) => {
@@ -215,8 +215,8 @@ describe('database migrations', () => {
 
     await expect(migrateToLatest(database, options)).resolves.toEqual({
       fromVersion: 0,
-      toVersion: 29,
-      appliedMigrationIds: ['0001Foundation', '0002DomainFoundation', '0003Transcripts', '0004Learnings', '0005SourcingChannels', '0006SourcingState', '0007SourcingOutbox', '0008DedupeCloudPersons', '0009SourcingFileLedger', '0010NoDueDates', '0011ContactDncFlags', '0012UpstreamRequestState', '0013ContactComplianceEvidence', '0014OutboundJurisdictionClearance', '0015RecoveryMetadata', '0016ContactPresentationEvidence', '0017DiscoveryAssessments', '0018PlaybookDueActions', '0019EmailDrafts', '0020PmAccounts', '0021DelegatedWork', '0022MailPersistence', '0023Campaigns', '0024RequestedFollowupAndPolicyReviews', '0025KnownCompanyResearchSettings', '0026LocalCompanyDrafts', '0027ListedRouteVerification', '0028TerritoryClearances', '0029AccountCallbacks'],
+      toVersion: 30,
+      appliedMigrationIds: ['0001Foundation', '0002DomainFoundation', '0003Transcripts', '0004Learnings', '0005SourcingChannels', '0006SourcingState', '0007SourcingOutbox', '0008DedupeCloudPersons', '0009SourcingFileLedger', '0010NoDueDates', '0011ContactDncFlags', '0012UpstreamRequestState', '0013ContactComplianceEvidence', '0014OutboundJurisdictionClearance', '0015RecoveryMetadata', '0016ContactPresentationEvidence', '0017DiscoveryAssessments', '0018PlaybookDueActions', '0019EmailDrafts', '0020PmAccounts', '0021DelegatedWork', '0022MailPersistence', '0023Campaigns', '0024RequestedFollowupAndPolicyReviews', '0025KnownCompanyResearchSettings', '0026LocalCompanyDrafts', '0027ListedRouteVerification', '0028TerritoryClearances', '0029AccountCallbacks', '0030EmailTemplates'],
     });
   });
 
@@ -279,8 +279,8 @@ describe('database migrations', () => {
 
     await expect(migrateToLatest(database, options)).resolves.toEqual({
       fromVersion: 1,
-      toVersion: 29,
-      appliedMigrationIds: ['0002DomainFoundation', '0003Transcripts', '0004Learnings', '0005SourcingChannels', '0006SourcingState', '0007SourcingOutbox', '0008DedupeCloudPersons', '0009SourcingFileLedger', '0010NoDueDates', '0011ContactDncFlags', '0012UpstreamRequestState', '0013ContactComplianceEvidence', '0014OutboundJurisdictionClearance', '0015RecoveryMetadata', '0016ContactPresentationEvidence', '0017DiscoveryAssessments', '0018PlaybookDueActions', '0019EmailDrafts', '0020PmAccounts', '0021DelegatedWork', '0022MailPersistence', '0023Campaigns', '0024RequestedFollowupAndPolicyReviews', '0025KnownCompanyResearchSettings', '0026LocalCompanyDrafts', '0027ListedRouteVerification', '0028TerritoryClearances', '0029AccountCallbacks'],
+      toVersion: 30,
+      appliedMigrationIds: ['0002DomainFoundation', '0003Transcripts', '0004Learnings', '0005SourcingChannels', '0006SourcingState', '0007SourcingOutbox', '0008DedupeCloudPersons', '0009SourcingFileLedger', '0010NoDueDates', '0011ContactDncFlags', '0012UpstreamRequestState', '0013ContactComplianceEvidence', '0014OutboundJurisdictionClearance', '0015RecoveryMetadata', '0016ContactPresentationEvidence', '0017DiscoveryAssessments', '0018PlaybookDueActions', '0019EmailDrafts', '0020PmAccounts', '0021DelegatedWork', '0022MailPersistence', '0023Campaigns', '0024RequestedFollowupAndPolicyReviews', '0025KnownCompanyResearchSettings', '0026LocalCompanyDrafts', '0027ListedRouteVerification', '0028TerritoryClearances', '0029AccountCallbacks', '0030EmailTemplates'],
     });
   });
 
