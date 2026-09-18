@@ -151,7 +151,7 @@ run "enabled_bounded_schedule_google_research_off" {
       length(aws_lambda_function.delegated_worker) == 1,
       length(aws_apigatewayv2_api.delegated_worker) == 1,
       length(aws_apigatewayv2_integration.delegated_worker) == 1,
-      length(aws_apigatewayv2_route.delegated_worker) == 18,
+      length(aws_apigatewayv2_route.delegated_worker) == 20,
       length(aws_apigatewayv2_stage.delegated_worker) == 1,
       length(aws_lambda_permission.delegated_worker_api) == 1,
       length(aws_cloudwatch_event_rule.delegated_worker) == 0,
@@ -167,7 +167,7 @@ run "enabled_bounded_schedule_google_research_off" {
       length(aws_cloudwatch_metric_alarm.delegated_worker_held_ticks) == 1,
       length(aws_budgets_budget.delegated_worker_monthly) == 1
     ])
-    error_message = "Enabled unscheduled worker must have exactly 36 managed resources (29 plus the alarm topic, its policy, three alarms, the metric filter and the budget) and one mocked archive read; no email subscription and no silent-schedule alarm without their opt-ins."
+    error_message = "Enabled unscheduled worker must have exactly 38 managed resources (11 plus 20 routes, plus the alarm topic, its policy, two alarms, the held-tick filter and alarm, and the budget) and one mocked archive read; no email subscription and no silent-schedule alarm without their opt-ins."
   }
   assert {
     condition = (
@@ -457,7 +457,7 @@ run "reviewed_metadata_passes_through_without_enabling_credentials_or_schedule" 
       aws_lambda_function.delegated_worker[0].environment[0].variables.DELEGATED_WORKER_SCHEDULE_ARN == "" &&
       length(jsondecode(aws_iam_role_policy.delegated_worker[0].policy).Statement[1].Resource) == 2 &&
       !strcontains(aws_iam_role_policy.delegated_worker[0].policy, "research-model-credentials") &&
-      length(aws_apigatewayv2_route.delegated_worker) == 18 &&
+      length(aws_apigatewayv2_route.delegated_worker) == 20 &&
       length(aws_cloudwatch_event_rule.delegated_worker) == 0 &&
       length(aws_cloudwatch_event_target.delegated_worker) == 0 &&
       length(aws_lambda_permission.delegated_worker_schedule) == 0
@@ -542,7 +542,7 @@ run "research_once_explicit_without_schedule_or_new_authority" {
       length(aws_cloudwatch_event_rule.delegated_worker) == 0 &&
       length(aws_cloudwatch_event_target.delegated_worker) == 0 &&
       length(aws_lambda_permission.delegated_worker_schedule) == 0 &&
-      length(aws_apigatewayv2_route.delegated_worker) == 18
+      length(aws_apigatewayv2_route.delegated_worker) == 20
     )
     error_message = "One-shot opt-in creates no schedule, route, credential or grant."
   }
