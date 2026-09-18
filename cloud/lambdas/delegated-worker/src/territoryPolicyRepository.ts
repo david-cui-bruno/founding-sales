@@ -156,7 +156,10 @@ export class TerritoryPolicyRepository {
       // Everything at or before the cursor is already swept; the page cap is enforced here and never left to the server's Limit.
       if (after && key <= after) continue;
       if (rows.length >= limit) { truncated = true; break; }
-      rows.push({ key, record: accountRecordSchema.parse(JSON.parse(item.data.S)) });
+      const record = accountRecordSchema.parse(JSON.parse(item.data.S));
+      // The record must be the account its own key names, or the sweep would act on one firm and advance past another.
+      if (key !== `${ACCOUNT_PREFIX}${keyPart(record.account.id)}`) throw new Error('territory_backfill_identity_conflict');
+      rows.push({ key, record });
     }
     return { rows, truncated };
   }
