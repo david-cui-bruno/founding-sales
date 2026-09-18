@@ -6,6 +6,7 @@ import { lookup } from 'node:dns/promises';
 import { request, type RequestOptions } from 'node:https';
 import { accountEvidenceBatchSchema, type AccountClaim, type AccountSource, type AccountEvidenceBatch } from '../../shared/contracts/accountContract';
 import { companySourcePolicy, publicResearchAddress, type FetchedReceiptPolicy } from './companySourcePolicy';
+import { findBusinessEmail, type BusinessEmailPage } from './businessEmailDiscovery';
 import { researchLimitsSchema, type CompanyPagePort } from './companyResearchTypes';
 import { CompanyResearchError, annotateCompanyResearchError, type CompanyResearchStage } from './companyResearchFailure';
 export type PageHttp = (input: { url: string; address: string; maxBytes: number; signal: AbortSignal }) => Promise<Response>;
@@ -136,9 +137,20 @@ function withheldContactTargets(lines: readonly string[]): string[] {
   }
   return [...targets];
 }
+/** `mailto:` targets in a complete, quoted href attribute. A firm often publishes its inbox only as a link whose
+ *  visible label is a name or an image, so the visible text alone would miss it. Only the address is taken: any
+ *  `?subject=` tail is discarded, and nothing else in the attribute is read. */
+function mailtoTargets(excerpt: string): string[] {
+  const targets: string[] = [];
+  for (const match of excerpt.matchAll(/href[\t\n\f\r ]*=[\t\n\f\r ]*(["'])[\t\n\f\r ]*mailto:([^"'?\s]{3,254})(?:\?[^"']*)?\1/gi)) {
+    const value = match[2];
+    if (value !== undefined) targets.push(value);
+  }
+  return targets;
+}
 /** Conservative deterministic extraction. Advertisements remain advertised facts,
  * never prospect-stated pain or execution routes. Unsupported knowledge stays unknown. */
-function extract(excerpt: string, sourceId: string, accountId: string, linkedInPublicationAllowed: boolean): Pick<AccountEvidenceBatch, 'claims' | 'routes'> & { withheldTargets: string[]; qualifiedPhoneLines: string[] } {
+function extract(excerpt: string, sourceId: string, accountId: string, linkedInPublicationAllowed: boolean): Pick<AccountEvidenceBatch, 'claims' | 'routes'> & { withheldTargets: string[]; qualifiedPhoneLines: string[]; emailText: string } {
   const { text, linkedInTargets } = htmlText(excerpt);
   const claims: AccountClaim[] = [];
   for (const match of text.matchAll(/(?:^|\n)\s*We (manage|own) ([0-9][0-9,]*) (residential )?(units|buildings|properties)\./g)) {
@@ -178,7 +190,9 @@ function extract(excerpt: string, sourceId: string, accountId: string, linkedInP
     if (mailbox) add('email', mailbox);
   }
   if (linkedInPublicationAllowed) for (const target of linkedInTargets) add('linkedin', target);
-  return { claims, routes, withheldTargets, qualifiedPhoneLines: lines.filter(line => /emergency|tenant|after.hours/i.test(line)) };
+  // Everything on this page an address could be published in: the rendered text plus the mailto links the markup carries.
+  const emailText = [text, ...mailtoTargets(excerpt)].join('\n');
+  return { claims, routes, withheldTargets, qualifiedPhoneLines: lines.filter(line => /emergency|tenant|after.hours/i.test(line)), emailText };
 }
 /** Every validated fact becomes one claim quoting its block; the two verdict keys become the `target_fit` claim instead of a quoted value. */
 function factClaims(facts: readonly CompanyFact[]): AccountClaim[] {
@@ -231,6 +245,8 @@ export function createCompanyPageProvider(options: { receipts: FetchedReceiptPol
     signal = AbortSignal.any([callerSignal, AbortSignal.timeout(options.timeoutMs ?? 30000)]);
     const sources = []; const claims: AccountClaim[] = []; const routes: AccountEvidenceBatch['routes'] = [];
     const withheldTargets = new Set<string>(); const qualifiedPhoneLines: string[] = []; let bytes = 0; let requests = 0;
+    /** Places path only: the text of every fetched page, in fetch order, for the on-domain business email finder. */
+    const emailPages: BusinessEmailPage[] = [];
     const urls = known ? sourceUrls.filter(url => companySourcePolicy(url) === 'candidate'
       && new URL(url).hostname === snapshot.account.domain).slice(0, limits.maxPages)
       : ['/', '/services', '/team', '/careers'].slice(0, limits.maxPages).map(path => `https://${snapshot.account.domain}${path}`);
@@ -288,6 +304,7 @@ export function createCompanyPageProvider(options: { receipts: FetchedReceiptPol
           if (parsedBlocks.length) modelSources.push({ sourceId: source.id, blocks: parsedBlocks });
         }
         sources.push(source); claims.push(...extracted.claims);
+        emailPages.push({ sourceId: source.id, text: extracted.emailText });
         qualifiedPhoneLines.push(...extracted.qualifiedPhoneLines);
         for (const target of extracted.withheldTargets) withheldTargets.add(target);
         for (const route of extracted.routes) {
@@ -299,6 +316,18 @@ export function createCompanyPageProvider(options: { receipts: FetchedReceiptPol
       }
     }
     if (!sources.length) throw new CompanyResearchError('page_response', 'no_permitted_pages');
+    // The one business email the firm publishes on its own domain (D13, lane 39). Regex only, over pages already
+    // fetched: no extra request, no guessed address, and a firm that publishes none simply gets no claim, which is
+    // what keeps a sequence email step holding with `no_business_email` truthfully. The model never invents one;
+    // it may only confirm a fact key it is already allowed to select, and `business_email` is not one of those keys.
+    if (!known) {
+      const found = findBusinessEmail({ domain: snapshot.account.domain, pages: emailPages,
+        withheldEmails: [...withheldTargets].flatMap(target => target.startsWith('email:') ? [target.slice(6)] : []) });
+      if (found.finding) {
+        claims.push({ key: 'business_email', kind: 'fact', value: found.finding.email,
+          selection: found.finding.selection, evidenceIds: [found.finding.sourceId] });
+      }
+    }
     if (known) {
       signal.throwIfAborted();
       const input: PageFactInput = { capability: known, sources: modelSources };

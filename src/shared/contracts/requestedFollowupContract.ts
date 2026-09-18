@@ -10,6 +10,15 @@ export const originalCallRefSchema = z.strictObject({ commandId: id, handoffId: 
 export type OriginalCallRef = z.infer<typeof originalCallRefSchema>;
 export const requestedRecipientSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('account_route'), routeId: id, routeVersion: revision, email }),
+  /**
+   * The business email the research found on the firm's own website, as a cited `business_email` account claim
+   * (D13, lane 39). `claimIndex` is the position of that claim in the account record the binding was made
+   * against, so the binding names one exact recorded fact rather than "whatever address the firm has now": if the
+   * claim at that index is not a `business_email` fact naming this address, the draft is refused at prepare time
+   * and again at approval. This is a recipient, never permission: the sequence step's own approval is what allows
+   * the send, and a firm without this claim holds with `no_business_email`.
+   */
+  z.strictObject({ kind: z.literal('account_claim'), claimIndex: z.number().int().nonnegative().max(199), email }),
   z.strictObject({ kind: z.literal('owner_supplied'), email, originalCall: originalCallRefSchema }),
 ]);
 export type RequestedRecipient = z.infer<typeof requestedRecipientSchema>;
