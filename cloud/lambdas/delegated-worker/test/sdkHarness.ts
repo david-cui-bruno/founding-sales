@@ -32,6 +32,8 @@ export class ConditionalCommandHarness implements DynamoAdapter {
   afterCommit?: () => void;
   beforeTransaction?: () => void;
   private identity(item: Item): string { return `${item.pk?.S}|${item.sk?.S}`; }
+  /** Every stored item, for assertions that nothing of a kind was written anywhere in the store. */
+  dump(): Item[] { return structuredClone(Object.values(this.items)); }
   inspect(sk: string): unknown {
     const item = Object.values(this.items).find(row => row.sk?.S === sk);
     return item?.data?.S ? JSON.parse(item.data.S) : undefined;

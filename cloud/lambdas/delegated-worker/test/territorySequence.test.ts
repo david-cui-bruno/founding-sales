@@ -75,7 +75,7 @@ describe('D13 sequence v1 on the real worker repository', () => {
     expect(f.enrollment()).toMatchObject({ state: 'active', currentStepId: f.version.steps[3]!.id,
       nextDueAt: new Date(Date.parse(now) + 288 * 3600000).toISOString() });
     // The email step is passed over as held, not as done: nothing in the store names a draft or a send.
-    expect(JSON.stringify(f.dynamo.snapshot ? f.dynamo.snapshot() : {})).not.toMatch(/draft|send/i);
+    expect(JSON.stringify(f.dynamo.dump())).not.toMatch(/draft|send/i);
   });
 
   it('interested holds the sequence on its own step and asks again in five business days', async () => {
