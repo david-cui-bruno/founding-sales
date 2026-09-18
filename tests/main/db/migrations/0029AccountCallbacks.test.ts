@@ -56,10 +56,17 @@ it('upgrades genuine28 additively with verified encrypted backup, byte-identical
 
     expect(rows()).toEqual(original);
     expect(database.raw.pragma('foreign_key_check')).toEqual([]);
-    // Every schema-28 object keeps its exact SQL; 0029 only adds the callback table, its index and its two triggers.
-    for (const row of catalog) expect(database.raw.prepare('SELECT type,name,sql FROM sqlite_master WHERE type=? AND name=?').get(row.type, row.name)).toEqual(row);
+    // Every schema-28 object keeps its exact SQL except campaign_enrollments, which gains two nullable columns by ADD COLUMN.
+    for (const row of catalog.filter(entry => entry.name !== 'campaign_enrollments')) expect(database.raw.prepare('SELECT type,name,sql FROM sqlite_master WHERE type=? AND name=?').get(row.type, row.name)).toEqual(row);
+    const before28 = catalog.find(row => row.name === 'campaign_enrollments')!.sql!;
+    const enrollments = (database.raw.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='campaign_enrollments'").get() as { sql: string }).sql;
+    // ADD COLUMN only appends two nullable columns; every prior column, constraint and foreign key is byte-identical.
+    expect(enrollments.replace(', next_due_at TEXT NULL, resting_until TEXT NULL', '')).toBe(before28);
+    expect(database.raw.prepare('PRAGMA table_info(campaign_enrollments)').all().slice(-2))
+      .toEqual([{ cid: 14, name: 'next_due_at', type: 'TEXT', notnull: 0, dflt_value: null, pk: 0 }, { cid: 15, name: 'resting_until', type: 'TEXT', notnull: 0, dflt_value: null, pk: 0 }]);
     const added = catalogOf(database).filter(row => !catalog.some(entry => entry.type === row.type && entry.name === row.name)).map(row => [row.type, row.name]);
     expect(added).toEqual([['index', 'pm_account_callbacks_due'], ['table', 'pm_account_callbacks'], ['trigger', 'pm_account_callbacks_no_delete'], ['trigger', 'pm_account_callbacks_revision']]);
+    expect(database.raw.prepare('SELECT next_due_at,resting_until FROM campaign_enrollments').all()).toEqual([]);
     expect(manifestOf(database)).toEqual(DOMAIN_SCHEMA_MANIFEST);
     expect(readiness29(database).schemaVersion).toBe(29);
     expect(assertPreReleaseStorageReady(database).schemaVersion).toBe(29);
@@ -133,8 +140,8 @@ it('migrates a fresh encrypted database straight to 29 with an empty callback ta
     expect(result).toMatchObject({ fromVersion: 0, toVersion: 29 });
     expect(result.appliedMigrationIds).toHaveLength(29);
     expect(result.appliedMigrationIds.at(-1)).toBe('0029AccountCallbacks');
-    expect(readiness29(database).schemaVersion).toBe(29);
     expect(manifestOf(database)).toEqual(DOMAIN_SCHEMA_MANIFEST);
+    expect(readiness29(database).schemaVersion).toBe(29);
     expect(database.raw.prepare('SELECT COUNT(*) AS count FROM pm_account_callbacks').get()).toEqual({ count: 0 });
     expect(database.raw.pragma('foreign_key_check')).toEqual([]);
   } finally { closeDatabase(database); key.bytes.fill(0); temp.cleanup(); }

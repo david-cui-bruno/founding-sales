@@ -9,6 +9,8 @@ import {prepareRequestedFollowupSchema,getRequestedFollowupSchema,editRequestedF
 import {workerPolicyRequestSchema,workerPolicyReceiptSchema} from '../../shared/contracts/workerPolicyContract';
 import {configureAccountIntakeSchema,accountIntakeConfigureStatusSchema,boundAccountIntakeConfigureStatus} from '../../shared/contracts/accountIntakeConfigureContract';
 import {territoryCallPolicyRequestSchema,territoryCallPolicyStatusSchema} from '../../shared/contracts/territoryCallPolicyContract';
+import {saveAccountCallbackSchema,closeAccountCallbackSchema,readAccountCallbacksSchema,accountCallbackListSchema,type SaveAccountCallback,type CloseAccountCallback,type ReadAccountCallbacks} from '../../shared/contracts/accountCallbackContract';
+import type {AccountCallback} from '../../shared/contracts/dailyContract';
 import type { DelegationRuntime } from '../delegation/delegationRuntime';
 import type { PairingStore } from '../delegation/pairingStore';
 import { delegatedPhoneHandoffRequestSchema,bootstrapSelectedAccountSchema,refreshSelectedAccountRecordSchema,selectedAccountFreshnessRequestSchema,selectedAccountFreshnessSchema,configureResearchSourceSchema,ownerResearchSourceSchema,configureLocalDelegationSchema,localDelegationStatusSchema,localDelegationConfigurationRecordSchema,redeemLocalPairingSchema,redeemedLocalPairingSchema,delegationSyncReportSchema } from '../../shared/contracts/ownerCommandContract';
@@ -18,7 +20,13 @@ import { configureOutreachSchema,draftRevisionSchema,emailDraftSchema,localEmail
   saveDraftSchema,sendDraftSchema,type OutreachApi } from '../../shared/contracts/outreachContract';
 import { registerValidatedIpc } from './registerValidatedIpc';
 
-export function registerOutreachIpc(options:{provider:OutreachApi;delegation?:DelegationRuntime;pairingStore?:Pick<PairingStore,'redeem'>;isTrustedRendererUrl?:(url:string)=>boolean}):()=>void {
+/** Purely local callback storage. Nothing here dials, sends, books or queues an owner command. */
+export type AccountCallbackApi = {
+  list(request:ReadAccountCallbacks):Promise<AccountCallback[]>;
+  save(request:SaveAccountCallback):Promise<AccountCallback>;
+  close(request:CloseAccountCallback):Promise<AccountCallback>;
+};
+export function registerOutreachIpc(options:{provider:OutreachApi;delegation?:DelegationRuntime;callbacks?:AccountCallbackApi;pairingStore?:Pick<PairingStore,'redeem'>;isTrustedRendererUrl?:(url:string)=>boolean}):()=>void {
   const removers:(()=>void)[]=[];
   const add=<Request,Response>(name:string,requestSchema:z.ZodType<Request>|null,responseSchema:z.ZodType<Response>,handler:(request:Request)=>Promise<Response>)=>{
     removers.push(registerValidatedIpc({channel:`outreach:${name}`,requestSchema,responseSchema,handler,
@@ -106,6 +114,21 @@ export function registerOutreachIpc(options:{provider:OutreachApi;delegation?:De
         const status=await d.territoryPolicy(request);
         if(request.kind==='read'?status.receipt!==null:status.receipt?.commandId!==request.commandId)throw new Error('territory_policy_receipt_identity_mismatch');
         return status;
+      });
+    }
+    if(options.callbacks){
+      const callbacks=options.callbacks;
+      // Local record only: saving a promised callback never dials, sends, books or queues an owner command.
+      add('callback-list',readAccountCallbacksSchema,accountCallbackListSchema,request=>callbacks.list(request));
+      add('callback-save',saveAccountCallbackSchema,accountCallbackListSchema.element,async request=>{
+        const saved=await callbacks.save(request);
+        if(saved.accountId!==request.accountId||saved.sourceCommandId!==request.sourceCommandId||saved.dueOn!==request.dueOn)throw new Error('account_callback_identity_mismatch');
+        return saved;
+      });
+      add('callback-close',closeAccountCallbackSchema,accountCallbackListSchema.element,async request=>{
+        const closed=await callbacks.close(request);
+        if(closed.id!==request.id||closed.state!==request.state||closed.revision!==request.expectedRevision+1)throw new Error('account_callback_identity_mismatch');
+        return closed;
       });
     }
     if(options.pairingStore)add('delegation-pair',redeemLocalPairingSchema,redeemedLocalPairingSchema,input=>options.pairingStore!.redeem(input,AbortSignal.timeout(15000)));

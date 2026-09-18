@@ -10,7 +10,8 @@ import type { FoundationDatabase } from '../schema';
  * `open | done | cancelled`. Marking one done or cancelled bumps the revision in
  * place; a trigger keeps the revision strictly monotonic and the firm, due date
  * and source command immutable, and nothing deletes a row. Additive only: no
- * existing table, index or trigger changes.
+ * existing table, index or trigger is dropped or rebuilt; `campaign_enrollments`
+ * gains two nullable branch-timing columns by `ADD COLUMN`, which rewrites no row.
  */
 const accountCallbackStatements = [
   `CREATE TABLE pm_account_callbacks (id TEXT PRIMARY KEY NOT NULL CHECK(length(id) BETWEEN 1 AND 255),
@@ -27,6 +28,10 @@ const accountCallbackStatements = [
         WHEN NEW.id IS NOT OLD.id OR NEW.account_id IS NOT OLD.account_id OR NEW.due_on IS NOT OLD.due_on
           OR NEW.source_command_id IS NOT OLD.source_command_id OR NEW.created_at IS NOT OLD.created_at OR NEW.revision<>OLD.revision+1
         BEGIN SELECT RAISE(ABORT,'Account callback revision is monotonic'); END`,
+  // D13 branch timing on the existing enrollment row. `ADD COLUMN` is additive: no rebuild, no row rewrite,
+  // and every enrollment the worker wrote before schema 29 keeps NULL, where the version's delay still decides.
+  `ALTER TABLE campaign_enrollments ADD COLUMN next_due_at TEXT NULL`,
+  `ALTER TABLE campaign_enrollments ADD COLUMN resting_until TEXT NULL`,
 ] as const;
 
 export const migration0029AccountCallbacks = {

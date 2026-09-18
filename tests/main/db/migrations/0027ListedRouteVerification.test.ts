@@ -81,6 +81,8 @@ it('upgrades genuine26 by rebuilding pm_account_routes with verified encrypted b
     expect(rebuilt.map(row => [row.type, row.name])).toEqual(catalog.map(row => [row.type, row.name]));
     for (const row of catalog) {
       const after = rebuilt.find(entry => entry.type === row.type && entry.name === row.name);
+      // 0029 appends two nullable branch-timing columns to campaign_enrollments by ADD COLUMN.
+      if (row.type === 'table' && row.name === 'campaign_enrollments') { expect((after as { sql: string }).sql.replace(', next_due_at TEXT NULL, resting_until TEXT NULL', '')).toBe(row.sql); continue; }
       if (row.type === 'table' && row.name === 'pm_account_routes') expect(after).toEqual({ ...row, sql: oldRoutesSql.replace("'confirmed','unverified'))", "'confirmed','unverified','listed'))") });
       else expect(after).toEqual(row);
     }

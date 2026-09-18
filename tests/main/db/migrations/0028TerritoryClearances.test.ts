@@ -62,7 +62,8 @@ it('upgrades genuine27 additively with verified encrypted backup, byte-identical
     expect(rows()).toEqual(original);
     expect(database.raw.pragma('foreign_key_check')).toEqual([]);
     // Every schema-27 object keeps its exact SQL; 0028 only adds the clearance table and its two triggers.
-    for (const row of catalog) expect(database.raw.prepare('SELECT type,name,sql FROM sqlite_master WHERE type=? AND name=?').get(row.type, row.name)).toEqual(row);
+    // 0029 adds two nullable columns to campaign_enrollments by ADD COLUMN; every other schema-27 object keeps its exact SQL.
+    for (const row of catalog.filter(entry => entry.name !== 'campaign_enrollments')) expect(database.raw.prepare('SELECT type,name,sql FROM sqlite_master WHERE type=? AND name=?').get(row.type, row.name)).toEqual(row);
     const added = catalogOf(database).filter(row => !catalog.some(entry => entry.type === row.type && entry.name === row.name)).map(row => [row.type, row.name]);
     // 0029 adds its own callback objects on top of the clearance objects 0028 adds.
     expect(added).toEqual([['index', 'pm_account_callbacks_due'], ['table', 'pm_account_callbacks'], ['table', 'territory_clearances'],

@@ -68,7 +68,9 @@ export class CampaignRepository {
     if (!row) throw new Error('campaign_enrollment_missing');
     return enrollmentSchema.parse({ id: row.id, accountId: row.account_id, selectedRouteId: row.selected_route_id, selectedRouteVersion: row.selected_route_version, personId: row.person_id,
       campaignVersionId: row.campaign_version_id, currentStepId: row.current_step_id, version: row.version, state: row.state,
-      contextRevision: row.context_revision, executionContextId: row.execution_context_id, startedAt: row.started_at });
+      contextRevision: row.context_revision, executionContextId: row.execution_context_id, startedAt: row.started_at,
+      ...(row.next_due_at === null || row.next_due_at === undefined ? {} : { nextDueAt: row.next_due_at }),
+      ...(row.resting_until === null || row.resting_until === undefined ? {} : { restingUntil: row.resting_until }) });
   }
   enroll(raw: z.infer<typeof enrollSchema>): Enrollment {
     const input = enrollSchema.parse(raw);
@@ -135,10 +137,11 @@ export class CampaignRepository {
       if (e.version !== (old?.version ?? 0) + 1) throw new Error('campaign_projection_gap');
       const route = this.raw.prepare('SELECT person_id FROM pm_account_routes WHERE account_id=? AND id=? AND version=?').get(accountId, e.selectedRouteId, e.selectedRouteVersion) as { person_id: string | null } | undefined;
       if (!route || route.person_id !== e.personId || !this.getVersion(e.campaignVersionId).cohortAccountIds.includes(accountId)) throw new Error('campaign_projection_binding');
-      this.raw.prepare(`INSERT INTO campaign_enrollments(workspace_id,id,account_id,campaign_version_id,selected_route_id,selected_route_version,person_id,current_step_id,version,state,context_revision,execution_context_id,started_at,updated_at)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(workspace_id,id) DO UPDATE SET selected_route_id=excluded.selected_route_id,selected_route_version=excluded.selected_route_version,
-        person_id=excluded.person_id,current_step_id=excluded.current_step_id,version=excluded.version,state=excluded.state,context_revision=excluded.context_revision,execution_context_id=excluded.execution_context_id,updated_at=excluded.updated_at`)
-        .run(this.ws,e.id,e.accountId,e.campaignVersionId,e.selectedRouteId,e.selectedRouteVersion,e.personId,e.currentStepId,e.version,e.state,e.contextRevision,e.executionContextId,e.startedAt,this.now());
+      this.raw.prepare(`INSERT INTO campaign_enrollments(workspace_id,id,account_id,campaign_version_id,selected_route_id,selected_route_version,person_id,current_step_id,version,state,context_revision,execution_context_id,started_at,updated_at,next_due_at,resting_until)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(workspace_id,id) DO UPDATE SET selected_route_id=excluded.selected_route_id,selected_route_version=excluded.selected_route_version,
+        person_id=excluded.person_id,current_step_id=excluded.current_step_id,version=excluded.version,state=excluded.state,context_revision=excluded.context_revision,execution_context_id=excluded.execution_context_id,updated_at=excluded.updated_at,
+        next_due_at=excluded.next_due_at,resting_until=excluded.resting_until`)
+        .run(this.ws,e.id,e.accountId,e.campaignVersionId,e.selectedRouteId,e.selectedRouteVersion,e.personId,e.currentStepId,e.version,e.state,e.contextRevision,e.executionContextId,e.startedAt,this.now(),e.nextDueAt ?? null,e.restingUntil ?? null);
       if (payload.evidence) {
         const evidence = payload.evidence;
         if (evidence.enrollmentId !== e.id || evidence.accountId !== accountId || evidence.campaignVersionId !== e.campaignVersionId) throw new Error('campaign_projection_binding');

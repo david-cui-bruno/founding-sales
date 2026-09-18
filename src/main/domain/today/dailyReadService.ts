@@ -16,6 +16,9 @@ import { requestedFollowupDraftSchema, requestedApprovalStatusSchema } from '../
 import { campaignVersionSchema } from '../../../shared/contracts/campaignContract';
 import { accountIdSchema } from '../../../shared/contracts/accountContract';
 import { buildDailySnapshot, type DailyProjectionInput } from './dailyProjection';
+import { AccountCallbackRepository } from '../callbacks/accountCallbackRepository';
+import { localDateIn } from '../../../shared/contracts/accountCallbackContract';
+import { readRouteJurisdictionTimezones } from './routeJurisdiction';
 
 type Row = Record<string, unknown>;
 /** One deferred local snapshot. Dependencies expose no transport or draft generation. */
@@ -31,7 +34,7 @@ export class DailyReadService {
     const { database, clock, ids, today, settings } = this.deps;
     const raw = database.raw;
     const workspaceId = accountIdSchema.safeParse(this.deps.workspaceId).success ? this.deps.workspaceId! : null;
-    const input: DailyProjectionInput = { workspaceId, generatedAt, workflowMode: 'unknown', accounts: [], calls: { accountIds: [], workloadConflict: false },
+    const input: DailyProjectionInput = { workspaceId, generatedAt, workflowMode: 'unknown', accounts: [], callbacks: [], calls: { accountIds: [], workloadConflict: false },
       callSettings: { newCallSlots: null, totalCallCapacity: null }, approvals: [], meetings: [], campaigns: [], ownerStatus: [], transport: [], issues: [] };
     const issue = (code: DailyProjectionInput['issues'][number]['code']) => input.issues.push({ code, count: 1 });
     // Failed top-level queries reject. Corrupt records or failed dependent reads produce incomplete snapshots with bounded issues.
@@ -75,12 +78,27 @@ export class DailyReadService {
       for (const enrollment of value.enrollments) {
         const step = value.version.steps.find(s => s.id === enrollment.currentStepId);
         if (enrollment.state !== 'active' || step?.channel !== 'call') continue;
-        // Initial step timing is persisted. Later conditional obligations need exact preceding evidence.
-        if (step.condition !== 'initial') { issue('call_due_unknown'); continue; }
-        if (Date.parse(enrollment.startedAt) + step.delayHours * 3600000 <= Date.parse(generatedAt)) due.add(enrollment.accountId);
+        // D13: the worker carries the current step's due instant on the enrollment. Without it the
+        // initial step's persisted timing still decides; a later step with no carried timing stays unknown.
+        const carried = enrollment.nextDueAt ?? null;
+        if (carried === null && step.condition !== 'initial') { issue('call_due_unknown'); continue; }
+        const dueAt = carried === null ? Date.parse(enrollment.startedAt) + step.delayHours * 3600000 : Date.parse(carried);
+        if (!Number.isFinite(dueAt)) { issue('call_due_unknown'); continue; }
+        if (dueAt <= Date.parse(generatedAt)) due.add(enrollment.accountId);
       }
     }
-    const plan = parse(() => today.planMeetingFirstAccountCalls({ due: input.accounts.filter(a => due.has(a.account.id)), ranked: input.accounts, generatedAt }));
+    // A promise David made leads the morning list on its own day, in the firm's own zone.
+    const callbacks = parse(() => new AccountCallbackRepository({ database, clock }).listOpen([...accountIds])) ?? [];
+    input.callbacks = callbacks;
+    const zones = parse(() => readRouteJurisdictionTimezones(database, [...accountIds])) ?? new Map<string, string>();
+    const workspaceZone = parse(() => settings.read().timezone) ?? 'UTC';
+    const dueToday = new Set(callbacks.filter(callback => {
+      try { return callback.dueOn <= localDateIn(generatedAt, zones.get(callback.accountId) ?? workspaceZone); }
+      catch { issue('invalid_local_record'); return false; }
+    }).map(callback => callback.accountId));
+    for (const accountId of dueToday) due.delete(accountId);
+    const plan = parse(() => today.planMeetingFirstAccountCalls({ callbacks: input.accounts.filter(a => dueToday.has(a.account.id)),
+      due: input.accounts.filter(a => due.has(a.account.id)), ranked: input.accounts, generatedAt }));
     if (plan) input.calls = { accountIds: [...plan.accountIds], workloadConflict: plan.workloadConflict };
     let pendingByAccount: Map<string, ReturnType<DelegationRepository['pendingCommands']>> | undefined;
     let pendingFailure: { error: unknown } | undefined;

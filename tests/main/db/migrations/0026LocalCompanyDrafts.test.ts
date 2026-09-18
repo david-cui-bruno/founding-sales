@@ -46,7 +46,8 @@ it('upgrades genuine25 additively with verified encrypted backup, preserves rows
     expect(await migrateToLatest(database, options)).toEqual({ fromVersion: 25, toVersion: 29, appliedMigrationIds: ['0026LocalCompanyDrafts', '0027ListedRouteVerification', '0028TerritoryClearances', '0029AccountCallbacks'] });
     expect(rows()).toEqual(original);
     // 0027 rebuilds pm_account_routes (its CHECK admits 'listed'); every other schema-25 object keeps its exact SQL.
-    for (const row of catalog.filter(entry => entry.name !== 'pm_account_routes')) expect(database.raw.prepare('SELECT type,name,sql FROM sqlite_master WHERE name=?').get(row.name)).toEqual(row);
+    // 0029 also appends two nullable branch-timing columns to campaign_enrollments by ADD COLUMN.
+    for (const row of catalog.filter(entry => !['pm_account_routes', 'campaign_enrollments'].includes(entry.name))) expect(database.raw.prepare('SELECT type,name,sql FROM sqlite_master WHERE name=?').get(row.name)).toEqual(row);
     const actual = database.raw.prepare("SELECT name,type,sql FROM sqlite_master WHERE type IN('table','index','trigger') AND(type<>'index' OR sql IS NOT NULL) ORDER BY name COLLATE BINARY").all() as { name: string; type: string; sql: string | null }[];
     const manifest = { tables: actual.filter(row => row.type === 'table').map(row => row.name).sort(), indexes: actual.filter(row => row.type === 'index').map(row => row.name).sort(), triggers: actual.filter(row => row.type === 'trigger').map(row => row.name).sort(),
       catalogSha256: createHash('sha256').update(JSON.stringify(actual.map(row => [row.type,row.name,(row.sql ?? '').replace(/\s+/g,' ').trim()]).sort((a,b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0))).digest('hex') };

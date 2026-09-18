@@ -402,7 +402,7 @@ export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
   tables: Object.freeze([...SCHEMA28_MANIFEST.tables, 'pm_account_callbacks'].sort()),
   indexes: Object.freeze([...SCHEMA28_MANIFEST.indexes, 'pm_account_callbacks_due'].sort()),
   triggers: Object.freeze([...SCHEMA28_MANIFEST.triggers, 'pm_account_callbacks_no_delete', 'pm_account_callbacks_revision'].sort()),
-  catalogSha256: '6e7dd33d5a779020eb206216cd3bde25baa6979f0a8efa28ac6a96c36f348238',
+  catalogSha256: 'd4ee83e00c1200cb2e00f4abebd96c767f08b1d8470c23cb51355788258e27d3',
 });
 
 export const DOMAIN_MIGRATION_LEDGER = Object.freeze([

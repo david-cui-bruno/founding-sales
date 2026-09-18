@@ -59,6 +59,8 @@ export type DailyAccountCallPlan = Readonly<{
 }>;
 
 export function planDailyAccountCalls(input: {
+  /** Promised callbacks due today. They lead the list: a promise David made outranks the cadence. */
+  callbacks?: readonly string[];
   due: readonly string[];
   ranked: readonly string[];
   newCallSlots: number;
@@ -76,8 +78,10 @@ export function planDailyAccountCalls(input: {
   // Due obligations stay listed even after a call today: a genuinely new sequence
   // step for a firm called this morning is still David's to take. New nominations
   // never repeat a firm called today.
-  const uniqueDue = [...new Set(input.due)];
-  const dueSet = new Set(uniqueDue);
+  const uniqueCallbacks = [...new Set(input.callbacks ?? [])];
+  const callbackSet = new Set(uniqueCallbacks);
+  const uniqueDue = [...new Set(input.due)].filter(id => !callbackSet.has(id));
+  const dueSet = new Set([...uniqueCallbacks, ...uniqueDue]);
   // "30 new firms a day" (D2) is a daily budget: a new-firm call made today keeps
   // its slot instead of pulling the next firm forward, so the list shrinks as
   // David works through it and uncalled firms roll over to tomorrow.
@@ -85,7 +89,7 @@ export function planDailyAccountCalls(input: {
   const remainingNewSlots = Math.max(0, input.newCallSlots - consumedNewSlots);
   const newIds = [...new Set(input.ranked)]
     .filter(id => !dueSet.has(id) && !completed.has(id));
-  const accountIds = [...uniqueDue, ...newIds.slice(0, remainingNewSlots)];
+  const accountIds = [...uniqueCallbacks, ...uniqueDue, ...newIds.slice(0, remainingNewSlots)];
   return Object.freeze({
     accountIds,
     workloadConflict: input.totalCallCapacity !== null && accountIds.length > input.totalCallCapacity,
