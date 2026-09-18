@@ -14,7 +14,19 @@ export const accountOutboundReceiptSchema = z.object({
 }).strict();
 export type AccountOutboundReceipt = { commandId: string; accountId: string; attemptId: string | null;
   status: 'refused' | 'unavailable' | 'unknown' | 'handoff_accepted'; reason: string | null };
-export const actualAccountCallOutcomes = ['connected', 'no_answer', 'voicemail', 'busy', 'wrong_number'] as const;
+/**
+ * The one source of truth for call outcomes (design D13, David's decision of 17 Sep 2026).
+ * `connected` stays for a reached call whose result David does not classify; `interested`,
+ * `not_interested` and `gatekeeper` are the three classified connected results the sequence branches on.
+ * None of these values authorize or record a call by themselves; they describe a human report.
+ */
+export const connectedCallOutcomes = ['connected', 'interested', 'not_interested', 'gatekeeper'] as const;
+export type ConnectedCallOutcome = typeof connectedCallOutcomes[number];
+/** Every outcome that reports an actual attempt. The three new connected results are appended, so stored order is stable. */
+export const actualAccountCallOutcomes = ['connected', 'no_answer', 'voicemail', 'busy', 'wrong_number', 'interested', 'not_interested', 'gatekeeper'] as const;
+/** The complete set a human may report for a consumed call handoff, actual attempts first. */
+export const manualCallOutcomes = [...actualAccountCallOutcomes, 'cancelled', 'not_called', 'unknown', 'opt_out'] as const;
+export type ManualCallOutcome = typeof manualCallOutcomes[number];
 export const accountCallOutcomeSchema = z.enum([...actualAccountCallOutcomes, 'cancelled', 'not_called']);
 export const accountCallReportSchema = z.object({ commandId: accountIdSchema, attemptId: accountIdSchema,
   outcome: accountCallOutcomeSchema, notes: z.string().max(4000).nullable() }).strict();

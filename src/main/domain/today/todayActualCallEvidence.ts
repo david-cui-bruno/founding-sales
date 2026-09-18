@@ -1,11 +1,12 @@
 import { createHash } from 'node:crypto';
 import type { AppDatabase } from '../../db/database';
 import { accountInstantSchema } from '../../../shared/contracts/accountContract';
+import { actualAccountCallOutcomes } from '../../../shared/contracts/accountOutboundContract';
 import { campaignVersionSchema } from '../../../shared/contracts/campaignContract';
 import { workerEventSchema, delegationCommandSchema } from '../../../shared/contracts/delegationContract';
 import { accountFingerprint } from '../accounts/accountEvidence';
 
-const actualOutcomes = new Set(['connected', 'no_answer', 'voicemail', 'busy', 'wrong_number']);
+const actualOutcomes: ReadonlySet<string> = new Set(actualAccountCallOutcomes);
 type Row = Record<string, string | number | null>;
 
 /** Today-only historical evidence. No transaction, transport, IDs, or writes.

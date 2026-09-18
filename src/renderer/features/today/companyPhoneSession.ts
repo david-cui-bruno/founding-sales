@@ -2,6 +2,7 @@ import type { CalliePreloadApi } from '../../../shared/preload';
 import type { DailySnapshot } from '../../../shared/contracts/dailyContract';
 import { describeCallCampaignTemplate } from '../../../shared/contracts/callCampaignDraft';
 import { delegatedPhoneStateReplySchema, type GetPhoneHandoffStateRequest, type PhoneHandoffState } from '../../../shared/contracts/delegatedPhoneStateContract';
+import { manualCallOutcomes } from '../../../shared/contracts/accountOutboundContract';
 import { delegatedPhoneHandoffRequestSchema, type DelegatedPhoneHandoffRequest } from '../../../shared/contracts/ownerCommandContract';
 import type { DelegatedPhoneHandoffResult } from '../../../shared/contracts/delegationContract';
 import type { LocalCompanyDetail } from '../../../shared/contracts/localWorkspaceContract';
@@ -14,7 +15,28 @@ export type PhoneReport = Extract<Parameters<CompanyPhoneApi['delegation']['subm
 export type CompletePhoneHistory = Extract<PhoneHandoffState, { completeness: 'complete' }>;
 export type PhoneAttempt = CompletePhoneHistory['attempts'][number];
 export type PhoneOutcome = Extract<PhoneReport['payload']['outcome'], { channel: 'call' }>['outcome'];
-export const phoneOutcomes: PhoneOutcome[] = ['connected', 'no_answer', 'voicemail', 'busy', 'wrong_number', 'cancelled', 'not_called', 'unknown', 'opt_out'];
+export const phoneOutcomes: PhoneOutcome[] = [...manualCallOutcomes];
+/** Plain labels for the report form. Everything unnamed falls back to the sentence-cased enum value. */
+const phoneOutcomeLabels: Readonly<Record<string, string>> = Object.freeze({
+  connected: 'Connected',
+  interested: 'Connected, interested',
+  not_interested: 'Connected, not interested',
+  gatekeeper: 'Gatekeeper, did not reach them',
+  no_answer: 'No answer',
+  voicemail: 'Voicemail',
+  busy: 'Busy',
+  wrong_number: 'Wrong number',
+  cancelled: 'Cancelled before dialing',
+  not_called: 'Not called',
+  unknown: 'Unknown',
+  opt_out: 'Explicit opt-out',
+});
+export function describePhoneOutcome(outcome: string): string {
+  const named = phoneOutcomeLabels[outcome];
+  if (named) return named;
+  const words = outcome.replaceAll('_', ' ');
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
 export type PhoneReview = { binding: string; request: DelegatedPhoneHandoffRequest; detail: LocalCompanyDetail; offer: string; target: string };
 export type PhoneSession = {
   busy: boolean;

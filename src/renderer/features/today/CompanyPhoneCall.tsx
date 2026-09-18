@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { actualAccountCallOutcomes } from '../../../shared/contracts/accountOutboundContract';
 import { dailySnapshotSchema, type DailySnapshot } from '../../../shared/contracts/dailyContract';
 import { completeManualCommandSchema, delegationSyncReportSchema, localDelegationStatusSchema } from '../../../shared/contracts/ownerCommandContract';
 import { delegatedPhoneHandoffResultSchema } from '../../../shared/contracts/delegationContract';
@@ -14,7 +15,7 @@ import { allowedPhoneReports, companyPhoneSession, freezePhoneValue, makePhoneRe
   type PhoneConfig, type PhoneOutcome, type PhoneReport, type PhoneReview } from './companyPhoneSession';
 
 type Context = { snapshot: DailySnapshot; config: PhoneConfig; history: PhoneHandoffState };
-const actualOutcomes = new Set(['connected', 'no_answer', 'voicemail', 'busy', 'wrong_number']);
+const actualOutcomes: ReadonlySet<string> = new Set(actualAccountCallOutcomes);
 function errorText(error: unknown) { return error instanceof Error ? error.message : 'Phone review unavailable.'; }
 function attemptLabel(attempt: PhoneAttempt) {
   if (attempt.receipt.status === 'pending') return 'Owner acknowledgment pending. Do not redial.';

@@ -9,6 +9,7 @@ import { createHash } from 'node:crypto';
 import { CampaignExecution } from './campaignExecution';
 import { WorkerCampaignRepository, campaignReservationKey, campaignReservationSchema, campaignEnrollmentKey } from './workerCampaignRepository';
 import { enrollmentSchema, campaignEventPayloadSchema } from '../../../../src/shared/contracts/campaignContract';
+import { actualAccountCallOutcomes } from '../../../../src/shared/contracts/accountOutboundContract';
 import { QueryCommand,type AttributeValue,type TransactWriteItem } from '@aws-sdk/client-dynamodb';
 import { ownerReplyDraftRequestSchema, accountReplyDraftSchema, assertReplyDraftLineage, replyDraftResultSchema, threadProjectionSchema, mailAccountScopeSchema } from '../../../../src/shared/contracts/mailThreadContract';
 import { accountRecordSchema, accountKey, createWorkerAccountRepository, isSelectedRecordRefreshRejection } from './workerAccountRepository';
@@ -385,7 +386,7 @@ export class OwnerCommandCoordinator {
     const reservation=campaignReservationSchema.parse((await repo.required(campaignReservationKey(command.accountId,outcome.actionId))).data);
     if(reservation.input.authorityGeneration!==row.data.generation)throw Error('manual_original_generation_conflict');
     const enrollment=enrollmentSchema.parse((await repo.required(campaignEnrollmentKey(handoff.campaign.enrollmentId))).data);
-    const actual=outcome.channel==='call' ? ['connected','no_answer','voicemail','busy','wrong_number'].includes(outcome.outcome) : outcome.outcome==='human_reported_sent';
+    const actual=outcome.channel==='call' ? (actualAccountCallOutcomes as readonly string[]).includes(outcome.outcome) : outcome.outcome==='human_reported_sent';
     const definitiveNotSent=['not_sent','not_called'].includes(outcome.outcome);
     const contradiction=reservation.state==='cancelled'&&actual||reservation.state==='sent'&&definitiveNotSent;
     if(row.data.lastOutcome && (Date.parse(outcome.observedAt)<Date.parse(row.data.lastOutcome.observedAt) || row.data.lastOutcome.outcome==='opt_out' || !contradiction && (['unknown','cancelled'].includes(row.data.lastOutcome.outcome) ? outcome.outcome===row.data.lastOutcome.outcome : !['no_reply','reply','opt_out'].includes(outcome.outcome)))) throw new Error('manual_outcome_conflict');
