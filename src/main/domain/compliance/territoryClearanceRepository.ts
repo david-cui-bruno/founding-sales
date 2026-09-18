@@ -24,10 +24,14 @@ export function listTerritoryClearanceRecords(database: AppDatabase): TerritoryC
 }
 
 /**
- * Per-state territory clearance storage (schema 28). One click confirms every
- * listed state, but every state keeps its own revisioned row, so a single state
- * can be revoked or re-confirmed later. Confirming is recording the founder's
- * attestation with its citation and a review date one year out; it never dials.
+ * Per-state territory clearance storage (schema 28). A confirmation names the
+ * states it covers, one or every listed state, and writes one revisioned row
+ * per named state with the four statements, the rules revision and that state's
+ * own citation; rows for states it does not name are never read for writing,
+ * so confirming a second state later adds a row and edits nothing. A state
+ * outside the current rules is refused by name and the whole request rolls
+ * back. Confirming is recording the founder's attestation with a review date one
+ * year out; it never dials.
  */
 export class TerritoryClearanceRepository {
   constructor(private readonly deps: { database: AppDatabase; clock: Clock }) {}
@@ -72,8 +76,10 @@ export class TerritoryClearanceRepository {
         const citation = JSON.stringify(rule.citation);
         const existing = this.raw.prepare('SELECT revision FROM territory_clearances WHERE state=?').get(state) as { revision: number } | undefined;
         if (existing) {
-          this.raw.prepare('UPDATE territory_clearances SET revision=?,timezone=?,clearance_json=?,citation_json=?,confirmed_at=?,review_at=?,revoked_at=NULL WHERE state=? AND revision=?')
+          // Compare-and-set on the row's own revision: a row another writer moved on since the read is refused, never overwritten.
+          const result = this.raw.prepare('UPDATE territory_clearances SET revision=?,timezone=?,clearance_json=?,citation_json=?,confirmed_at=?,review_at=?,revoked_at=NULL WHERE state=? AND revision=?')
             .run(existing.revision + 1, TERRITORY_STATE_TIME_ZONES[state], statements, citation, at, reviewAt, state, existing.revision);
+          if (result.changes !== 1) throw new Error('TERRITORY_CLEARANCE_STALE');
         } else {
           this.raw.prepare('INSERT INTO territory_clearances(state,revision,timezone,clearance_json,citation_json,confirmed_at,review_at,revoked_at) VALUES(?,1,?,?,?,?,?,NULL)')
             .run(state, TERRITORY_STATE_TIME_ZONES[state], statements, citation, at, reviewAt);

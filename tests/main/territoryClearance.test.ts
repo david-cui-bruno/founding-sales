@@ -74,6 +74,55 @@ describe('TerritoryClearanceRepository', () => {
     expect(f.db.raw.prepare('SELECT * FROM territory_clearances ORDER BY state').all()).toEqual(rows);
     expect(f.db.raw.inTransaction).toBe(false);
   });
+  it('confirms one state on its own, writes a second state later as a new row without editing the first, and refuses a state outside the current rules', async () => {
+    const f = await fixture();
+    const all = () => f.db.raw.prepare('SELECT * FROM territory_clearances ORDER BY state').all() as Record<string, unknown>[];
+    // One click for Massachusetts alone: exactly one row, the four statements and the rules revision, the MA citation, a one-year review.
+    const first = f.repository.confirm({ states: ['MA'], disclosureAccepted: true, rulesRevision: TERRITORY_RULES_REVISION });
+    expect(statesOf(first)).toEqual([['RI', 'unconfirmed', null], ['MA', 'confirmed', 1], ['TX', 'unconfirmed', null]]);
+    expect(all()).toEqual([{
+      state: 'MA', revision: 1, timezone: 'America/New_York',
+      clearance_json: JSON.stringify({ businessToBusiness: true, registrationStatusChecked: true, stateDncSubscriptionChecked: true, consentRuleConfirmed: true, rulesRevision: TERRITORY_RULES_REVISION }),
+      citation_json: JSON.stringify(TERRITORY_STATE_RULES.MA.citation),
+      confirmed_at: NOW, review_at: '2027-09-18T14:00:00.000Z', revoked_at: null,
+    }]);
+    expect(listTerritoryClearanceRecords(f.db).map(entry => entry.state)).toEqual(['MA']);
+    const massachusetts = all()[0];
+    // Texas the next day: a new row with its own instant and citation; the Massachusetts row is byte-for-byte what it was.
+    f.setTime('2026-09-19T09:00:00.000Z');
+    expect(statesOf(f.repository.confirm({ states: ['TX'], disclosureAccepted: true, rulesRevision: TERRITORY_RULES_REVISION }))).toEqual([['RI', 'unconfirmed', null], ['MA', 'confirmed', 1], ['TX', 'confirmed', 1]]);
+    expect(all()).toEqual([massachusetts, {
+      state: 'TX', revision: 1, timezone: 'America/Chicago',
+      clearance_json: massachusetts.clearance_json, citation_json: JSON.stringify(TERRITORY_STATE_RULES.TX.citation),
+      confirmed_at: '2026-09-19T09:00:00.000Z', review_at: '2027-09-19T09:00:00.000Z', revoked_at: null,
+    }]);
+    // A United States state the current rules do not carry is refused by name and stores nothing; so is a code that is not a state, an empty list, or a repeated state.
+    const rows = all();
+    expect(() => f.repository.confirm({ states: ['CA'], disclosureAccepted: true, rulesRevision: TERRITORY_RULES_REVISION })).toThrow('TERRITORY_STATE_NOT_LISTED:CA');
+    expect(() => f.repository.confirm({ states: ['ZZ' as never], disclosureAccepted: true, rulesRevision: TERRITORY_RULES_REVISION })).toThrow();
+    expect(() => f.repository.confirm({ states: [], disclosureAccepted: true, rulesRevision: TERRITORY_RULES_REVISION })).toThrow();
+    expect(() => f.repository.confirm({ states: ['RI', 'RI'], disclosureAccepted: true, rulesRevision: TERRITORY_RULES_REVISION })).toThrow();
+    expect(all()).toEqual(rows);
+    expect(f.db.raw.inTransaction).toBe(false);
+  });
+  it('refuses to confirm over a row another writer moved on since the read, and leaves that row alone', async () => {
+    const f = await fixture();
+    f.repository.confirm({ states: ['MA'], disclosureAccepted: true, rulesRevision: TERRITORY_RULES_REVISION });
+    const rows = f.db.raw.prepare('SELECT * FROM territory_clearances ORDER BY state').all();
+    const prepare = f.db.raw.prepare.bind(f.db.raw);
+    // The row moves between the repository's SELECT and its UPDATE: the compare-and-set finds no row and the write is refused, not repeated.
+    const spy = vi.spyOn(f.db.raw, 'prepare').mockImplementation(((sql: string) => {
+      const statement = prepare(sql);
+      if (sql.startsWith('UPDATE territory_clearances SET revision=?,timezone=?')) {
+        return { run: (...args: unknown[]) => { prepare('UPDATE territory_clearances SET revision=revision+1 WHERE state=?').run(args[6]); return statement.run(...args); } };
+      }
+      return statement;
+    }) as never);
+    try { expect(() => f.repository.confirm({ states: ['MA'], disclosureAccepted: true, rulesRevision: TERRITORY_RULES_REVISION })).toThrow('TERRITORY_CLEARANCE_STALE'); }
+    finally { spy.mockRestore(); }
+    expect(f.db.raw.prepare('SELECT * FROM territory_clearances ORDER BY state').all()).toEqual(rows);
+    expect(f.db.raw.inTransaction).toBe(false);
+  });
   it('reports review_due once the review date passes and refuses to confirm without the disclosure or with another rules revision', async () => {
     const f = await fixture();
     f.repository.confirm({ states: ['MA'], disclosureAccepted: true, rulesRevision: TERRITORY_RULES_REVISION });
@@ -115,8 +164,11 @@ describe('territory clearance IPC channels', () => {
       const api = createLocalWorkspaceApi(createIpcClient({ invoke }));
       expect(statesOf(await api.readTerritoryClearance!())).toEqual([['RI', 'unconfirmed', null], ['MA', 'unconfirmed', null], ['TX', 'unconfirmed', null]]);
       expect(invoke).toHaveBeenLastCalledWith('local-workspace:territory-clearance-read');
-      expect(statesOf(await api.confirmTerritoryClearance!({ states: ['RI', 'MA', 'TX'], disclosureAccepted: true, rulesRevision: TERRITORY_RULES_REVISION }))).toEqual([['RI', 'confirmed', 1], ['MA', 'confirmed', 1], ['TX', 'confirmed', 1]]);
-      expect(statesOf(await api.revokeTerritoryClearance!({ state: 'MA', expectedRevision: 1 }))).toEqual([['RI', 'confirmed', 1], ['MA', 'revoked', 2], ['TX', 'confirmed', 1]]);
+      // One state on its own crosses the bridge as a one-entry list and confirms only that state.
+      expect(statesOf(await api.confirmTerritoryClearance!({ states: ['MA'], disclosureAccepted: true, rulesRevision: TERRITORY_RULES_REVISION }))).toEqual([['RI', 'unconfirmed', null], ['MA', 'confirmed', 1], ['TX', 'unconfirmed', null]]);
+      expect(invoke).toHaveBeenLastCalledWith('local-workspace:territory-clearance-confirm', { states: ['MA'], disclosureAccepted: true, rulesRevision: TERRITORY_RULES_REVISION });
+      expect(statesOf(await api.confirmTerritoryClearance!({ states: ['RI', 'MA', 'TX'], disclosureAccepted: true, rulesRevision: TERRITORY_RULES_REVISION }))).toEqual([['RI', 'confirmed', 1], ['MA', 'confirmed', 2], ['TX', 'confirmed', 1]]);
+      expect(statesOf(await api.revokeTerritoryClearance!({ state: 'MA', expectedRevision: 2 }))).toEqual([['RI', 'confirmed', 1], ['MA', 'revoked', 3], ['TX', 'confirmed', 1]]);
       // Renderer-side validation refuses what the contract refuses before anything crosses the bridge.
       const calls = invoke.mock.calls.length;
       await expect(api.confirmTerritoryClearance!({ states: ['RI'], disclosureAccepted: false, rulesRevision: TERRITORY_RULES_REVISION } as never)).rejects.toThrow();
@@ -128,8 +180,8 @@ describe('territory clearance IPC channels', () => {
       await expect(read(trusted, {})).rejects.toThrow();
       await expect(read({ senderFrame: { url: 'https://evil.invalid' } })).rejects.toThrow();
       const revoke = registeredIpcHandler(electron.handle, 'local-workspace:territory-clearance-revoke');
-      await expect(revoke(trusted, { state: 'MA', expectedRevision: 2 })).rejects.toThrow(/^LOCAL_TERRITORY_CLEARANCE_REVOKE_FAILED$/);
-      await expect(revoke(trusted, { state: 'MA', expectedRevision: 2 }, {})).rejects.toThrow();
+      await expect(revoke(trusted, { state: 'MA', expectedRevision: 3 })).rejects.toThrow(/^LOCAL_TERRITORY_CLEARANCE_REVOKE_FAILED$/);
+      await expect(revoke(trusted, { state: 'MA', expectedRevision: 3 }, {})).rejects.toThrow();
       const confirm = registeredIpcHandler(electron.handle, 'local-workspace:territory-clearance-confirm');
       await expect(confirm(trusted, { states: ['CT'], disclosureAccepted: true, rulesRevision: TERRITORY_RULES_REVISION })).rejects.toThrow(/^LOCAL_TERRITORY_CLEARANCE_CONFIRM_FAILED$/);
     } finally { remove(); }
