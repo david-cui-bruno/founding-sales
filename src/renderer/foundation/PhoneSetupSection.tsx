@@ -5,6 +5,7 @@ import {
   type PhoneSetupApi,
   type PhoneSetupStatus,
 } from '../../shared/contracts/phoneSetupContract';
+import { PHONE_DIAL_MODES } from '../features/today/todayCopy';
 import { Button } from '../components/Button';
 
 const unavailable: PhoneSetupStatus = {
@@ -89,6 +90,9 @@ export function PhoneSetupSection({ api }: { api?: PhoneSetupApi }) {
       <p role="status">{isCurrent && view.busy && status.state === 'unavailable' ? 'Checking phone setup…' : labels[status.state]}</p>
       {status.candidateFingerprint !== null && <p>{status.candidateFingerprint}</p>}
       {status.confirmedAt !== null && <p>{status.confirmedAt}</p>}
+      {/* D6: the helper state in plain words, and what the Today call card does because of it. An
+          unread or failed status is the `unavailable` state above, never a claim that Callie can dial. */}
+      <p data-testid="phone-dial-mode">{PHONE_DIAL_MODES[status.state].label}. {PHONE_DIAL_MODES[status.state].card}</p>
       <p>Phone setup is handoff readiness only. It does not establish recording consent, call permission, or a connected call.</p>
       {isCurrent && view.error && <p role="alert">{view.error}</p>}
       <div className="settings__row-actions">
