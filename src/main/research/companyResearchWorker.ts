@@ -3,10 +3,17 @@ import { z } from 'zod';
 import { accountFingerprint } from '../domain/accounts/accountEvidence';
 import { companySourcePolicy } from './companySourcePolicy';
 import { companyResearchDiagnostic, type CompanyResearchDiagnostic } from './companyResearchFailure';
-import { audienceQuerySchema, researchCapabilitySchema, researchLimitsSchema, type AudienceQuery, type ResearchCapability, type ResearchLimits, type CompanyDiscoveryPort, type DiscoveryReservationStore, type AccountResearchStore, type CompanyPagePort, type CompanyResearchWorker } from './companyResearchTypes';
+import { audienceQuerySchema, researchCapabilitySchema, researchLimitsSchema, type AudienceQuery, type ResearchCapability, type ResearchLimits, type CompanyDiscoveryPort, type DiscoveryReservationStore, type AccountResearchStore, type CompanyPagePort, type CompanyResearchWorker, type ResearchJob } from './companyResearchTypes';
 /** No scheduling, eager claim, provider access, or default activation. */
 export function createCompanyResearchWorker(options: { store: AccountResearchStore; pages: CompanyPagePort; clock: { now(): string };
-  issue?: (code: 'company_research_parked', accountId: string, diagnostic: CompanyResearchDiagnostic & { jobId: string }) => void }): CompanyResearchWorker {
+  issue?: (code: 'company_research_parked', accountId: string, diagnostic: CompanyResearchDiagnostic & { jobId: string }) => void;
+  /** The provider's settled cost for a completed job, capped at its reservation. Null keeps the whole reservation, as before. */
+  settledCost?: (job: ResearchJob) => number | null }): CompanyResearchWorker {
+  const settledCost = (job: ResearchJob): number | null => {
+    const cost = options.settledCost?.(job) ?? null;
+    if (cost === null || !Number.isSafeInteger(cost) || cost < 0) return null;
+    return Math.min(cost, job.limits.maxCostMicros);
+  };
   return { async runNext(signal) {
     if (signal.aborted) return 'idle';
     const job = await options.store.claimNext(options.clock.now());
@@ -36,7 +43,7 @@ export function createCompanyResearchWorker(options: { store: AccountResearchSto
       return 'parked';
     }
     // Keep settlement outside catch: a crash here must leave the receipt recoverable.
-    if (committed) await options.store.settle({ jobId: job.id, claimToken: job.claimToken, status: 'completed', receiptCommandId: job.receiptCommandId, costMicros: null });
+    if (committed) await options.store.settle({ jobId: job.id, claimToken: job.claimToken, status: 'completed', receiptCommandId: job.receiptCommandId, costMicros: settledCost(job) });
     return 'completed';
   } };
 }

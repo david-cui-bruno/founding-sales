@@ -1,6 +1,6 @@
 import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import {
-  researchSetupApproveInputSchema, researchSetupReceiptSchema, researchSetupStatusSchema,
+  researchSetupApproveInputSchema, researchSetupReceiptSchema, researchSetupStatusSchema, RESEARCH_INFORMATIONAL_BLOCKERS, RESEARCH_RENEWAL_WARNING_MS,
   type ResearchSetupApi, type ResearchSetupBlocker, type ResearchSetupStatus, type ResearchSetupReceipt,
 } from '../../shared/contracts/researchSetupContract';
 
@@ -29,7 +29,12 @@ const blockers: Record<ResearchSetupBlocker, string> = {
   state_corrupt: 'Policy status needs operator reconciliation.', unavailable: 'Cloud research status is unavailable.',
   local_pending: 'A request has an unknown outcome.', local_journal_unavailable: 'Local request journal is unavailable. Mutations are blocked.',
   places_credential_parameter_missing: 'Needs operator setup: the Google Places credential parameter is not declared.', places_cost_missing: 'Needs operator setup: reviewed settings carry no Places cost per call.',
+  budget_exhausted: 'Budget exhausted: the remaining ceiling cannot cover another firm or another territory page. Replace the configuration with a higher ceiling to continue.',
+  territory_exhausted: 'Territory exhausted: every query in the current territory has been searched. Replace the configuration with new regions or terms to continue.',
 };
+/** Whole days until an instant, never negative. */
+const daysUntil = (instant: string, now: number) => Math.max(0, Math.ceil((Date.parse(instant) - now) / 86_400_000));
+const informational = (list: readonly ResearchSetupBlocker[]) => list.filter(blocker => !RESEARCH_INFORMATIONAL_BLOCKERS.includes(blocker));
 const usd = (micros: number) => `$${(micros / 1_000_000).toFixed(6).replace(/0+$/, '').replace(/\.$/, '')} USD`;
 function money(value: string) {
   if (!/^\d+(?:\.\d{1,6})?$/.test(value)) return NaN;
@@ -136,15 +141,21 @@ export function ResearchSetupSection({ api }: { api?: ResearchSetupApi }) {
   const activeBlocked = blockersFor(activeTerritory);
   // A changed operator descriptor holds the stored policy (pause, resume, research) but never the replacement that
   // repairs it: the worker's replace transaction rebinds the marker to the current fingerprint carried in the proposal.
-  const proposalBlocked = blockersFor(proposalTerritory).filter(blocker => !(existing && blocker === 'descriptor_changed'));
+  // Exhausted ledgers and a finished territory are shown, never a hold: Replace is exactly what fixes them.
+  const proposalBlocked = informational(blockersFor(proposalTerritory)).filter(blocker => !(existing && blocker === 'descriptor_changed'));
   // Every reason an offered action is held is shown: the stored policy's own gaps and, while a form is offered, the proposal's.
   const shownBlocked = [...new Set([...(selector ? activeBlocked : []), ...(formShown ? proposalBlocked : [])])];
   const placesRelevant = activeTerritory || (formShown && proposalTerritory);
   const proposalReady = acknowledged && descriptorCurrent && credentialReadyFor(proposalTerritory) && proposalBlocked.length === 0 && proposal.success && reservationsFit;
   const canApprove = editable && proposalReady;
   const canReplace = replaceable && proposalReady;
-  const pauseBlockers = activeBlocked.filter(blocker => !['operator_descriptor_missing', 'operator_descriptor_invalid', 'operator_descriptor_expired', 'descriptor_changed', 'credential_parameter_missing', 'places_credential_parameter_missing', 'places_cost_missing'].includes(blocker));
-  const canState = !!selector && current && view.fresh && !busy && !pending && acknowledged && (selector.state === 'active' ? pauseBlockers.length === 0 : activeBlocked.length === 0 && descriptorCurrent && credentialReadyFor(activeTerritory));
+  const pauseBlockers = informational(activeBlocked).filter(blocker => !['operator_descriptor_missing', 'operator_descriptor_invalid', 'operator_descriptor_expired', 'descriptor_changed', 'credential_parameter_missing', 'places_credential_parameter_missing', 'places_cost_missing'].includes(blocker));
+  const canState = !!selector && current && view.fresh && !busy && !pending && acknowledged && (selector.state === 'active' ? pauseBlockers.length === 0 : informational(activeBlocked).length === 0 && descriptorCurrent && credentialReadyFor(activeTerritory));
+  // What the stored policy can still do and how long the review behind it lasts, from the last observed status.
+  const now = Date.now();
+  const firmsRemaining = existing && descriptor && remote?.researchLedger ? Math.floor(remote.researchLedger.remainingMicros / descriptor.researchReservationMicros) : null;
+  const renewalDays = descriptor && descriptorCurrent && Date.parse(descriptor.expiresAt) - now <= RESEARCH_RENEWAL_WARNING_MS ? daysUntil(descriptor.expiresAt, now) : null;
+  const selfPaused = remote?.pausedReason === 'descriptor_expired' && selector?.state === 'paused';
 
   async function mutate(action: 'approve' | 'replace' | 'state' | 'retry' | 'cancel') {
     const lifetime = owner.current;
@@ -227,9 +238,12 @@ export function ResearchSetupSection({ api }: { api?: ResearchSetupApi }) {
         <div><dt>Discovery reservation per job</dt><dd>{usd(descriptor.capability.searchCostMicros + descriptor.capability.modelCostMicros)}</dd></div>
         <div><dt>Research reservation per job</dt><dd>{usd(descriptor.researchReservationMicros)}</dd></div>
         {descriptor.placesSearchCostMicros !== undefined && <div><dt>Places cost per call</dt><dd>{usd(descriptor.placesSearchCostMicros)}</dd></div>}
+        {descriptor.placesExtraction && <div><dt>Model extraction per firm</dt><dd>{descriptor.placesExtraction.model}, reserved {usd(descriptor.placesExtraction.maxCostMicros)}; the real usage is settled and the rest refunded</dd></div>}
       </dl>
       {!descriptorCurrent && <p>Operator review is not current. Approval and resume are blocked.</p>}
+      {renewalDays !== null && <p role="alert">Operator review expires in {renewalDays} {renewalDays === 1 ? 'day' : 'days'} ({descriptor.expiresAt}). Renew the reviewed settings and redeploy the worker before then; research pauses itself on expiry.</p>}
     </div>}
+    {selfPaused && <p role="alert">Research paused itself because the operator review expired. Renew the reviewed settings and redeploy the worker, then Resume research.</p>}
     {remote && !view.fresh && <p>Policy and balances are last observed (stale), not current status.</p>}
     {remote && <p>Credential parameter {remote.credentialParameterDeclared ? 'declared' : 'not declared'}. A declaration does not prove credential or provider access works. Status checked: {remote.checkedAt}.</p>}
     {remote && placesRelevant && <p>Google Places credential parameter {remote.placesCredentialParameterDeclared === true ? 'declared' : 'not declared'}. A declaration does not prove the key or Places access works.</p>}
@@ -238,6 +252,7 @@ export function ResearchSetupSection({ api }: { api?: ResearchSetupApi }) {
       return <p key={key}>{key === 'discoveryLedger' ? 'Discovery' : 'Research'} balance: {ledger ? `cumulative ceiling ${usd(ledger.limitMicros)}, reserved-or-spent ${usd(ledger.reservedOrSpentMicros)}, remaining ${usd(ledger.remainingMicros)}` : 'unavailable, not assumed zero'}.</p>;
     })}
     {remote?.discoveryLedger && remote.researchLedger && <p>Total combined cumulative ceiling: {usd(remote.discoveryLedger.limitMicros + remote.researchLedger.limitMicros)}</p>}
+    {firmsRemaining !== null && <p>{firmsRemaining} {firmsRemaining === 1 ? 'firm' : 'firms'} remaining at this ceiling.</p>}
     {selector ? <div>
       <h3>{view.fresh ? 'Existing policy (read-only)' : 'Last observed policy (stale, read-only)'}: {selector.state}</h3>
       {existing && <>

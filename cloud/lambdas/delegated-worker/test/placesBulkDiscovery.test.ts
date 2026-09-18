@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { GetParameterCommand } from '@aws-sdk/client-ssm';
 import { describe, expect, it } from 'vitest';
-import { createSourceCoordinator } from '../src/sourceCoordinator';
+import { createSourceCoordinator, emptyTickReport } from '../src/sourceCoordinator';
 import { WorkerAuth } from '../src/workerAuth';
 import { RemoteGoogleAuthorization } from '../src/remoteGoogleAuthorization';
 import { ResearchSetupService, placesResearchBudgetId, reviewedResearchProfile, type ResearchSetupProfile } from '../src/researchSetup';
@@ -148,7 +148,7 @@ describe('scheduled Places territory batches', () => {
     expect(f.db.inspect(budgetKey(placesResearchBudgetId))).toMatchObject({ spent: 35000 });
     const g = await fixture(); await g.approve();
     const config = (await g.store.get<{ revision: number; research: unknown }>('OWNER_RESEARCH_SOURCE'))!.data;
-    const report = { status: 'inactive' as const, researchPrepared: 0, researchCompleted: 0, held: 0, mailPolls: 0, dispatches: 0, sendReconciliations: 0, meetings: 0 };
+    const report = emptyTickReport();
     await runResearch({ auth: g.auth, fetch: g.fetch, research: g.research, researchSetupProfile: g.profile }, new AbortController().signal, report,
       { version: 1, kind: 'research.once', workspaceId: 'ws', pairingId: g.pair.pairingId, expectedSourceRevision: config.revision, researchFingerprint: fingerprint(config.research) });
     expect(g.requests).toHaveLength(0); expect(await g.store.list('DISCOVERY#')).toEqual([]); expect(report.status).toBe('inactive');

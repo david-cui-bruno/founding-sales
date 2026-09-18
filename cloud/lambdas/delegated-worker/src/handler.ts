@@ -8,6 +8,7 @@ import { ResearchSetupService, type ResearchSetupProfile } from './researchSetup
 import {WorkerPolicyConfiguration} from './policyConfiguration';
 import type { PageHttp } from '../../../../src/main/research/companyPageProvider';
 import { createSourceCoordinator } from './sourceCoordinator';
+import { logScheduledRun } from './tickLog';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { GetParameterCommand, SSMClient, type GetParameterCommandOutput } from '@aws-sdk/client-ssm';
 import { z } from 'zod';
@@ -223,7 +224,11 @@ export function createProductionHandler(env: NodeJS.ProcessEnv, boundaries: Prod
         recognizedSchedule = true;
         const services=await createProductionServices(env,boundaries);
         if(!services) return response(503,{error:'worker_disabled'});
-        return response(200,await services.source.tick(AbortSignal.timeout(45000)));
+        const startedAt = Date.now();
+        const report = await services.source.tick(AbortSignal.timeout(45000));
+        // The one application log line of the scheduled path: counts and enums only, from the closed record schema.
+        logScheduledRun(report, { at: new Date().toISOString(), durationMs: Date.now() - startedAt });
+        return response(200, report);
       }
       const parsed = eventSchema.safeParse(event);
       if (env.DELEGATED_WORKER_ENABLED !== 'true') return response(503, { error: 'worker_disabled' });

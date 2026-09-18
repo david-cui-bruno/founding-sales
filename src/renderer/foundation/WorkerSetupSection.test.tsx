@@ -3,6 +3,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CalliePreloadApi } from '../../shared/preload';
+import type { ResearchSetupApi, ResearchSetupStatus } from '../../shared/contracts/researchSetupContract';
 import { WorkerSetupSection } from './WorkerSetupSection';
 
 type Api = Pick<CalliePreloadApi['delegation'], 'status' | 'pair'>;
@@ -412,6 +413,51 @@ describe('Task9 additional lifetime positive controls', () => {
   }, 10_000);
 });
 
+
+describe('a worker David can see', () => {
+  type ResearchApi = Pick<ResearchSetupApi, 'status'>;
+  const researchStatus = (lastTickAt: string | null, remote = true): ResearchSetupStatus => ({ pending: null, blockers: [], remote: remote ? { workspaceId: workspace, pairingId: '11111111-1111-4111-8111-111111111111', selector: null,
+    discoveryLedger: null, researchLedger: null, descriptor: null, descriptorFingerprint: null, credentialParameterDeclared: true, blockers: [], checkedAt: '2026-09-18T12:00:00.000Z', receipt: null, lastTickAt } : null });
+  const withResearch = (research: ResearchApi, initial: Status = status('active', 3)) => ({ ...api(initial), researchSetup: research });
+  it('W30 shows when the worker last ran from the cloud research status and warns after twenty minutes of silence', async () => {
+    const fresh = vi.fn(async () => researchStatus(new Date(Date.now() - 5 * 60_000).toISOString()));
+    render(<WorkerSetupSection api={withResearch({ status: fresh })} />);
+    const region = await observed('Active');
+    await within(region).findByText(/Worker last ran/);
+    expect(region.textContent).toMatch(/Worker last ran 5 minutes ago\./);
+    expect(fresh).toHaveBeenCalledTimes(1);
+    expect(within(region).queryByRole('alert')).toBeNull();
+    cleanup();
+    const stale = vi.fn(async () => researchStatus(new Date(Date.now() - 25 * 60_000).toISOString()));
+    render(<WorkerSetupSection api={withResearch({ status: stale })} />);
+    const staleRegion = await observed('Active');
+    const alert = await within(staleRegion).findByRole('alert');
+    expect(alert.textContent).toMatch(/has not run for more than 20 minutes/);
+    expect(staleRegion.textContent).toMatch(/Worker last ran 25 minutes ago\./);
+  }, 10_000);
+  it('W31 distinguishes a worker that never recorded a tick, an unreadable cloud status and a connection without cloud research', async () => {
+    const never = vi.fn(async () => researchStatus(null));
+    render(<WorkerSetupSection api={withResearch({ status: never })} />);
+    let region = await observed('Active');
+    await within(region).findByText(/Worker last run: not recorded yet/);
+    expect(within(region).queryByRole('alert')).toBeNull();
+    cleanup();
+    const failing = vi.fn(async () => { throw Error(`private-error ${codeA}`); });
+    render(<WorkerSetupSection api={withResearch({ status: failing })} />);
+    region = await observed('Active');
+    await within(region).findByText(/Worker last run: not available/);
+    safeFeedback();
+    cleanup();
+    const missingRemote = vi.fn(async () => researchStatus(null, false));
+    render(<WorkerSetupSection api={withResearch({ status: missingRemote })} />);
+    region = await observed('Active');
+    await within(region).findByText(/Worker last run: not available/);
+    cleanup();
+    const a = api(status('active', 3)); render(<WorkerSetupSection api={a} />);
+    region = await observed('Active');
+    expect(region.textContent).not.toMatch(/Worker last r/);
+  }, 10_000);
+});
 
 it('W21 status state and nested configuration state are separate schema-valid facts', async () => {
   const value: Status = { ...status('paused', 47), configuration: {
