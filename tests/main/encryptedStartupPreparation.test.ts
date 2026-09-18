@@ -365,7 +365,8 @@ describe('bounded encrypted startup preparation', () => {
     await external.release();
     await boot.runtime.initialize();
     expect(await boot.runtime.getHealth()).toMatchObject({ domainReady: true });
-  }, 15_000);
+  // 30 s, not 15: this case took 15.2 s on the CI runner on 18 Sep 2026 while passing alone; it asserts behaviour, not speed.
+  }, 30_000);
   it('keeps older-schema pinned-reader backup refusal and retries the real pending migration', async () => {
     const f = await fixture(23);
     const reader = connection(f, true);
