@@ -25,7 +25,12 @@ export const admitReplyFirstDraftSchema = reconcileReplyDraftSchema.extend({
 });
 export type AdmitReplyFirstDraft = z.infer<typeof admitReplyFirstDraftSchema>;
 
-export const replyFirstDraftResultSchema = replyDraftResultSchema.extend({ state: replyFirstDraftGenerationSchema });
+/** `citedEvidenceIds` is what the model actually cited for this revision. The saved draft's own
+ * `evidenceIds` are part of its immutable identity and are never rebased by a regenerate, so the
+ * citations are reported here rather than written over the record's received evidence. */
+export const replyFirstDraftResultSchema = replyDraftResultSchema.extend({
+  state: replyFirstDraftGenerationSchema, citedEvidenceIds: z.array(z.string().min(1).max(200)).max(200),
+});
 export type ReplyFirstDraftResult = z.infer<typeof replyFirstDraftResultSchema>;
 
 /** A model admit either bumps the revision by one as an ordinary edit, or changes nothing at all
@@ -36,7 +41,7 @@ export function boundReplyFirstDraftResult(request: AdmitReplyFirstDraft) {
     && result.draft.threadRevision === request.expectedThreadRevision && result.draft.contextRevision === request.expectedContextRevision
     && (result.state === 'model'
       ? result.draft.revision === request.expectedRevision + 1 && result.draft.generation === 'edited'
-      : result.draft.revision === request.expectedRevision), 'reply_first_draft_response_mismatch');
+      : result.draft.revision === request.expectedRevision && result.citedEvidenceIds.length === 0), 'reply_first_draft_response_mismatch');
 }
 
 /**

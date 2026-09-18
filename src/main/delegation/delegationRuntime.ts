@@ -1,6 +1,10 @@
 import { getAccountPreparationSchema } from '../../shared/contracts/accountPreparationContract';
 import { reconcileReplyDraftSchema, editReplyDraftSchema, boundReplyDraftResult, type ReconcileReplyDraft, type EditReplyDraft } from '../../shared/contracts/mailThreadContract';
 import { SqlThreadIntakeRepository } from '../outreach/threadIntakeRepository';
+import { composeReplyFirstDraft } from '../outreach/replyFirstDraft';
+import { readSuppression } from '../domain/optOut/suppressionReadModel';
+import { admitReplyFirstDraftSchema, approveReplySchema, submitApprovedReplySchema, replyApprovalStatusSchema, boundReplyFirstDraftResult,
+  type AdmitReplyFirstDraft, type ApproveReply, type SubmitApprovedReply, type ReplyApprovalStatement, type ReplyFirstDraftResult } from '../../shared/contracts/replyFirstDraftContract';
 import { delegatedPhoneStateRequestSchema, type GetPhoneHandoffStateRequest } from '../../shared/contracts/delegatedPhoneStateContract';
 import { readDelegatedPhoneHandoffState } from './delegatedPhoneState';
 import { z } from 'zod';
@@ -24,10 +28,10 @@ import {ExecutionClient,SYNC_BUDGET_MS,createResearchSetupTransport,createAccoun
 import {createResearchSetupService,awaitResearchSetupOperation} from './researchSetupService';
 import type {ResearchSetupRequestStore} from './researchSetupRequestStore';
 import type {ResearchSetupApi} from '../../shared/contracts/researchSetupContract';
-import {approveRequestedFollowupCommandSchema,configureOwnerCommandSchema,ownerSourceConfigurationSchema,delegatedPhoneHandoffRequestSchema,bootstrapSelectedAccountSchema,bootstrapSelectedAccountCommandSchema,refreshSelectedAccountRecordSchema,refreshSelectedAccountRecordCommandSchema,selectedAccountFreshnessRequestSchema,selectedAccountFreshnessSchema,configureLocalDelegationSchema,localDelegationStatusSchema,territoryPolicyCommandSchema} from '../../shared/contracts/ownerCommandContract';
+import {approveReplyCommandSchema,submitApprovedReplyCommandSchema,approveRequestedFollowupCommandSchema,configureOwnerCommandSchema,ownerSourceConfigurationSchema,delegatedPhoneHandoffRequestSchema,bootstrapSelectedAccountSchema,bootstrapSelectedAccountCommandSchema,refreshSelectedAccountRecordSchema,refreshSelectedAccountRecordCommandSchema,selectedAccountFreshnessRequestSchema,selectedAccountFreshnessSchema,configureLocalDelegationSchema,localDelegationStatusSchema,territoryPolicyCommandSchema} from '../../shared/contracts/ownerCommandContract';
 import {configureAccountIntakeSchema,accountIntakeConfigureStatusSchema,type ConfigureAccountIntake,type AccountIntakeHoldReason} from '../../shared/contracts/accountIntakeConfigureContract';
 import {googleScopes} from '../../shared/contracts/googleGrantCapabilities';
-import {publicDelegationCommandSchema,type DelegatedPhoneHandoffResult,type DelegationCommand} from '../../shared/contracts/delegationContract';
+import {publicDelegationCommandSchema,type CommandReceipt,type DelegatedPhoneHandoffResult,type DelegationCommand} from '../../shared/contracts/delegationContract';
 import {DEFAULT_TERRITORY_CALL_POLICY_DEFINITION,TERRITORY_CALL_POLICY_SUBJECT,territoryCallPolicyRequestSchema,territoryCallPolicyStatusSchema,type TerritoryCallPolicyCommandPayload} from '../../shared/contracts/territoryCallPolicyContract';
 /** What the worker gateway (cloud/lambdas/delegated-worker/src/handler.ts) admits on POST /commands for a saved-record
  * command: the whole body up to 204096 bytes and the payload up to 200000 bytes, both counted in UTF-8. */
@@ -140,11 +144,20 @@ export function createDelegationRuntime(input:{databaseGate:{withDatabase<T>(fn:
   }};
   return {store,current,service:createRequestedFollowupService({store:editStore,clock:input.clock,id:randomUUID,model:request.mode==='model'?await input.requestedModel?.():undefined})};
  }
- function ordinaryReply(raw: ReconcileReplyDraft | EditReplyDraft, editing: boolean) {
+ /** The account's own cited evidence for the first draft: claims whose sources the evidence
+  * check in replyFirstDraft can still verify. Read-only, and never a provider fetch. */
+ function replyDraftEvidence(database:AppDatabase,accountId:string){
+  const claims=(database.raw.prepare('SELECT claim_json FROM pm_account_claims WHERE account_id=? ORDER BY rowid LIMIT 200').all(accountId) as {claim_json:string}[])
+   .map(row=>JSON.parse(row.claim_json) as {kind:string;evidenceIds:string[]});
+  const sources=database.raw.prepare('SELECT id,excerpt,sha256,permitted FROM pm_account_sources WHERE account_id=? ORDER BY rowid LIMIT 200').all(accountId) as {id:string;excerpt:string;sha256:string;permitted:number}[];
+  return {claims,sources:sources.map(source=>({id:source.id,excerpt:source.excerpt,sha256:source.sha256,permitted:source.permitted===1}))};
+ }
+ function ordinaryReply(raw: ReconcileReplyDraft | EditReplyDraft | AdmitReplyFirstDraft, editing: boolean, firstDraft = false) {
+  const admitRequest = firstDraft ? admitReplyFirstDraftSchema.parse(raw) : null;
   const editRequest = editing ? editReplyDraftSchema.parse(raw) : null;
-  const request = editRequest ?? reconcileReplyDraftSchema.parse(raw);
+  const request = editRequest ?? admitRequest ?? reconcileReplyDraftSchema.parse(raw);
   return run(async (database, signal) => {
-   const active = AbortSignal.any([signal, AbortSignal.timeout(15000)]), current = services(database, active);
+   const active = AbortSignal.any([signal, AbortSignal.timeout(45000)]), current = services(database, active);
    const store = new SqlThreadIntakeRepository({ database, workspaceId: pairing!.workspaceId, clock: input.clock });
    const saved = store.getReplyDraft(request.accountId, request.draftId);
    if (!saved) throw Error('reply_draft_missing');
@@ -157,19 +170,58 @@ export function createDelegationRuntime(input:{databaseGate:{withDatabase<T>(fn:
    };
    assertOwner();
    let edit: { subject: string; body: string } | undefined;
+   let cited: string[] = [];
    if (editRequest) {
     const request = editRequest;
     if (prior.threadRevision !== request.expectedThreadRevision || prior.contextRevision !== request.expectedContextRevision) throw Error('stale_thread');
     if (prior.revision === request.expectedRevision) edit = { subject: request.subject, body: request.body };
     else if (prior.revision !== request.expectedRevision + 1 || prior.subject !== request.subject || prior.body !== request.body || prior.generation !== 'edited') throw Error('stale_draft');
    }
+   if (admitRequest) {
+    // A regenerate is a new admit against the same thread identity, never a rebase onto a newer thread.
+    if (prior.threadRevision !== admitRequest.expectedThreadRevision || prior.contextRevision !== admitRequest.expectedContextRevision) throw Error('stale_thread');
+    if (prior.revision !== admitRequest.expectedRevision) throw Error('stale_draft');
+    if (saved.stale) throw Error('reply_draft_stale');
+    const thread = store.getThread(prior.accountId, prior.threadId);
+    if (!thread) throw Error('reply_history_unavailable');
+    const evidence = replyDraftEvidence(database, prior.accountId);
+    const model = await input.requestedModel?.();
+    assertOwner();
+    const composed = await composeReplyFirstDraft({ thread, draft: prior, ...evidence, model, signal: active });
+    assertOwner();
+    // No key means no draft and no write at all: the saved revision is returned untouched.
+    if (composed.state === 'model_unconfigured') return boundReplyFirstDraftResult(admitRequest).parse({ ...saved, capability: 'held', state: 'model_unconfigured', citedEvidenceIds: [] });
+    edit = { subject: composed.subject, body: composed.body };
+    cited = composed.evidenceIds;
+   }
    const result = await current.client.replyDraft({ workspaceId: pairing!.workspaceId, expectedAuthorityGeneration: authority!.generation, previousDraft: prior, ...(edit ? { edit } : {}) }, active);
    assertOwner();
    // Bind the requested revision/text before any local acknowledgement mutation.
-   boundReplyDraftResult(editRequest ?? request).parse(result);
+   if (!admitRequest) boundReplyDraftResult(editRequest ?? request).parse(result);
    const canonical = store.reconcileReplyDraft(prior, result.draft, assertOwner);
-   return boundReplyDraftResult(editRequest ?? request).parse({ ...canonical, stale: canonical.stale || result.stale, capability: 'held' });
+   const bound = { ...canonical, stale: canonical.stale || result.stale, capability: 'held' as const };
+   if (admitRequest) return boundReplyFirstDraftResult(admitRequest).parse({ ...bound, state: 'model', citedEvidenceIds: cited });
+   return boundReplyDraftResult(editRequest ?? request).parse(bound);
   });
+ }
+ /** Approving a reply is not sending it: this records the approval the worker admits as dispatch
+  * permission for exactly one reply, bound to the saved revision the founder read and to his
+  * statement of why he may write. Submitting is the separate step that asks the worker to send. */
+ function replyApprovalCommands(database:AppDatabase,accountId:string,approvalId:string){
+  return (database.raw.prepare("SELECT command_json FROM delegated_commands WHERE workspace_id=? AND account_id=? AND json_extract(command_json,'$.kind')='approve-reply' AND json_extract(command_json,'$.payload.approvalId')=?")
+   .all(pairing!.workspaceId,accountId,approvalId) as {command_json:string}[]).map(row=>approveReplyCommandSchema.parse(JSON.parse(row.command_json)));
+ }
+ function replySubmitCommands(database:AppDatabase,accountId:string,intentCommandId:string){
+  return (database.raw.prepare("SELECT command_json FROM delegated_commands WHERE workspace_id=? AND account_id=? AND json_extract(command_json,'$.kind')='submit-approved-reply' AND json_extract(command_json,'$.payload.intentCommandId')=?")
+   .all(pairing!.workspaceId,accountId,intentCommandId) as {command_json:string}[]).map(row=>submitApprovedReplyCommandSchema.parse(JSON.parse(row.command_json)));
+ }
+ function replyApprovalStatus(input_:{approval:z.infer<typeof approveReplyCommandSchema>|null;request:ApproveReply|SubmitApprovedReply;draftId:string;draftRevision:number;statement:ReplyApprovalStatement;approvedAt:string|null;submitCommandId:string|null;receipt:CommandReceipt|null;reason:string|null}){
+  const receipt=input_.receipt;
+  const state=input_.approval===null?'held':receipt?.status==='applied'?'applied':receipt?.status==='rejected'?'rejected':input_.submitCommandId===null?'approved':'pending';
+  return replyApprovalStatusSchema.parse({accountId:input_.request.accountId,draftId:input_.draftId,approvalId:input_.request.approvalId,
+   draftRevision:input_.draftRevision,statement:input_.statement,approvedAt:input_.approvedAt,
+   approvalCommandId:input_.approval?.commandId??null,submitCommandId:input_.submitCommandId,state,receipt,
+   reason:state==='rejected'?receipt?.reason??'reply_submission_rejected':input_.reason});
  }
  function createAdapter(handoffId?:string):InboundAdapter{return {id:'delegated-worker-mail',relevant:()=>pairing!==null,
   synchronize:(subject:OutboundSubject,external:AbortSignal)=>new Promise<{revision:string}>((resolve,reject)=>{
@@ -224,6 +276,76 @@ export function createDelegationRuntime(input:{databaseGate:{withDatabase<T>(fn:
   googleConnections,
   reconcileReplyDraft:(raw:ReconcileReplyDraft)=>ordinaryReply(raw,false),
   editReplyDraft:(raw:EditReplyDraft)=>ordinaryReply(raw,true),
+  /** D9: the first draft is written here, on the Mac. It reaches the worker only as an ordinary
+   * edited revision of the draft it already holds, so no second model boundary exists there. */
+  admitReplyFirstDraft:(raw:AdmitReplyFirstDraft)=>ordinaryReply(raw,false,true) as Promise<ReplyFirstDraftResult>,
+  /** Records the approval. Nothing is sent by this call; `submitApprovedReply` is the send request. */
+  approveReply:(raw:ApproveReply)=>{const request=approveReplySchema.parse(raw);return run(async(database,signal)=>{
+   const active=AbortSignal.any([signal,AbortSignal.timeout(15000)]);const current=services(database,active);
+   const store=new SqlThreadIntakeRepository({database,workspaceId:pairing!.workspaceId,clock:input.clock});
+   const saved=store.getReplyDraft(request.accountId,request.draftId);
+   if(!saved)throw Error('reply_draft_missing');
+   const draft=saved.draft;
+   if(draft.revision!==request.expectedRevision)throw Error('stale_draft');
+   const status=(approval:z.infer<typeof approveReplyCommandSchema>|null,reason:string|null,approvedAt:string|null)=>
+    replyApprovalStatus({approval,request,draftId:draft.id,draftRevision:draft.revision,statement:request.statement,approvedAt,submitCommandId:null,receipt:null,reason});
+   // One approval id is one approval: the identical approval reuses its live command, never a second one.
+   const previous=replyApprovalCommands(database,request.accountId,request.approvalId);
+   if(previous.length>1)throw Error('reply_approval_conflict');
+   const existing=previous[0]??null;
+   if(existing&&(existing.commandId!==request.commandId||existing.payload.intentCommandId!==request.intentCommandId
+    ||accountFingerprint(existing.payload.draft)!==accountFingerprint(draft)))throw Error('reply_approval_conflict');
+   if(!existing){
+    if(saved.stale)return status(null,'reply_draft_stale',null);
+    const authority=current.repository.authority(request.accountId),version=current.repository.executionVersion(request.accountId);
+    if(!authority||authority.owner!=='worker'||authority.state!=='active'||version===null||current.repository.hasPendingStop(request.accountId))return status(null,'reply_owner_inactive',null);
+    const thread=store.getThread(request.accountId,draft.threadId);
+    if(!thread||thread.revision!==draft.threadRevision||thread.contextRevision!==draft.contextRevision)return status(null,'reply_history_unavailable',null);
+    // The recorded permission names the actual inbound message being answered, not the draft.
+    const source=[...thread.thread.messages].reverse().find(message=>message.rfcMessageId&&!message.from.includes(draft.sender)&&message.from.includes(draft.recipient));
+    if(!source)return status(null,'recipient_permission_unproven',null);
+    const now=input.clock.now();const expiresAt=new Date(Date.parse(now)+3600000).toISOString();
+    const binding={kind:'thread_participant' as const,threadId:draft.threadId,sourceMessageId:source.id,sourceMessageHash:accountFingerprint(source)};
+    const command=approveReplyCommandSchema.parse({commandId:request.commandId,workspaceId:pairing!.workspaceId,accountId:request.accountId,
+     expectedAuthorityGeneration:authority.generation,expectedVersion:version,kind:'approve-reply',
+     payload:{draft,expectedRemoteDraftRevision:draft.revision,approvalId:request.approvalId,actionId:request.actionId,intentCommandId:request.intentCommandId,
+      permission:{id:`reply-permission-${request.approvalId}`,sourceMessageId:source.id,sourceMessageHash:binding.sourceMessageHash,basis:request.statement,expiresAt},
+      binding,expiresAt}});
+    await current.client.submit(command);await current.client.sync(active);
+    return status(command,null,now);
+   }
+   await current.client.submit(existing);await current.client.sync(active);
+   return status(existing,null,existing.payload.permission.expiresAt);
+  });},
+  /** The only step that asks the worker to send, and the only place a reply leaves this Mac.
+   * Command identity survives a lost reply: the same id is resubmitted, never a second one. */
+  submitApprovedReply:(raw:SubmitApprovedReply)=>{const request=submitApprovedReplySchema.parse(raw);return run(async(database,signal)=>{
+   const active=AbortSignal.any([signal,AbortSignal.timeout(15000)]);const current=services(database,active);
+   const approvals=replyApprovalCommands(database,request.accountId,request.approvalId);
+   if(approvals.length!==1)throw Error('reply_approval_missing');
+   const approval=approvals[0]!;const draft=approval.payload.draft;
+   const status=(submitCommandId:string|null,receipt:CommandReceipt|null,reason:string|null)=>
+    replyApprovalStatus({approval,request,draftId:draft.id,draftRevision:draft.revision,statement:approval.payload.permission.basis,
+     approvedAt:approval.payload.permission.expiresAt,submitCommandId,receipt,reason});
+   const approvalReceipt=current.repository.commandStatus(approval.commandId);
+   // Never ask for a send against an approval the worker has not admitted yet, or refused.
+   if(approvalReceipt?.status!=='applied')return status(null,null,approvalReceipt?.status==='rejected'?approvalReceipt.reason??'reply_approval_rejected':'reply_approval_pending');
+   const previous=current.repository.getCommand(request.commandId);
+   if(previous&&(previous.kind!=='submit-approved-reply'||previous.accountId!==request.accountId||previous.payload.intentCommandId!==approval.payload.intentCommandId))throw Error('reply_submit_conflict');
+   const live=replySubmitCommands(database,request.accountId,approval.payload.intentCommandId);
+   if(live.some(command=>command.commandId!==request.commandId))throw Error('reply_submit_conflict');
+   let command=previous?.kind==='submit-approved-reply'?previous:null;
+   if(!command){
+    const authority=current.repository.authority(request.accountId),version=current.repository.executionVersion(request.accountId);
+    if(!authority||authority.owner!=='worker'||authority.state!=='active'||version===null||current.repository.hasPendingStop(request.accountId))return status(null,null,'reply_owner_inactive');
+    command=submitApprovedReplyCommandSchema.parse({commandId:request.commandId,workspaceId:pairing!.workspaceId,accountId:request.accountId,
+     expectedAuthorityGeneration:authority.generation,expectedVersion:version,kind:'submit-approved-reply',payload:{intentCommandId:approval.payload.intentCommandId}});
+   }
+   await current.client.submit(command);await current.client.sync(active);
+   return status(command.commandId,current.repository.commandStatus(command.commandId),null);
+  });},
+  /** Settings → Suppressed. A local read with no undo: a suppression is permanent by design. */
+  readSuppression:()=>run(database=>readSuppression({database,clock:input.clock})),
   prepareRequestedFollowup:(raw:PrepareRequestedFollowup)=>{const request=prepareRequestedFollowupSchema.parse(raw);return run(async(database,signal)=>{const {service}=await requestedServices(database,signal,request);return service.prepareRequestedFollowup(request,signal);});},
   getRequestedFollowup:(raw:GetRequestedFollowup)=>{const request=getRequestedFollowupSchema.parse(raw);return run(async(database,signal)=>{
    if(!pairing)throw Error('pairing_unconfigured');const draft=savedDraft(database,request.accountId,request.draftId);if(!draft)return null;

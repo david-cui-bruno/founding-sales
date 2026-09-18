@@ -72,10 +72,10 @@ export const CONTINUITY_UI_CHANNELS = [...CONTINUITY_READ_CHANNELS, 'daily:get',
 export const CONTINUITY_UI_REGISTERED_CHANNELS = [...CONTINUITY_REGISTERED_CHANNELS, 'daily:get',
   'leads:list', 'lead-detail:get'] as const;
 
-/** Retained UI adds the forty-two outreach/delegation channels (69). */
+/** Retained UI adds the forty-six outreach/delegation channels (73). */
 export const RETAINED_UI_REGISTERED_CHANNELS = [...CONTINUITY_UI_REGISTERED_CHANNELS,
   ...['status', 'configure', 'connect-gmail', 'disconnect-gmail', 'open-draft', 'save-draft', 'generate-draft', 'send-draft', 'inspect-local-authority',
-    'reply-reconcile', 'reply-edit', 'requested-followup-prepare', 'requested-followup-get', 'requested-followup-edit', 'requested-followup-approve',
+    'reply-reconcile', 'reply-edit', 'reply-admit-first-draft', 'reply-approve', 'reply-submit-approved', 'suppression-read', 'requested-followup-prepare', 'requested-followup-get', 'requested-followup-edit', 'requested-followup-approve',
     'delegation-begin-phone', 'delegation-get-phone-handoff-state', 'delegation-bootstrap', 'delegation-policy', 'delegation-research', 'delegation-status',
     'google-connection-status', 'google-connection-disclosure', 'google-connection-begin', 'google-connection-revoke',
     'research-setup-status', 'research-setup-approve', 'research-setup-set-state', 'research-setup-retry', 'research-setup-cancel-pending',
