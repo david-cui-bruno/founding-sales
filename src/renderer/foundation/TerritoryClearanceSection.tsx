@@ -55,7 +55,7 @@ export function TerritoryClearanceSection({ api }: { api?: Api }) {
     setMessage(usable ? 'Loading territory clearance…' : 'Territory clearance is unavailable.');
     if (usable) void read(request, null);
     return () => { generation.current++; };
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- read closes over `usable`, which this effect keys on.
+  // `read` closes over `usable`, which is the only value this effect keys on.
   }, [usable]);
 
   const write = async (label: string, operation: () => Promise<unknown>) => {
