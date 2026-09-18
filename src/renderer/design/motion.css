@@ -14,39 +14,7 @@
   --motion-ease: var(--ease-out);
 }
 
-/* Entry animations for floating layers. Applied via class; every keyframe
-   here is gated to no-preference below. */
 @media (prefers-reduced-motion: no-preference) {
-  .motion-menu-in {
-    animation: motion-menu-in var(--duration-menu) var(--ease-out);
-  }
-
-  .motion-dialog-in {
-    animation: motion-dialog-in var(--duration-dialog) var(--ease-out);
-  }
-
-  @keyframes motion-menu-in {
-    from {
-      opacity: 0;
-      transform: translateY(2px);
-    }
-    to {
-      opacity: 1;
-      transform: translateY(0);
-    }
-  }
-
-  @keyframes motion-dialog-in {
-    from {
-      opacity: 0;
-      transform: translateY(4px) scale(0.99);
-    }
-    to {
-      opacity: 1;
-      transform: translateY(0) scale(1);
-    }
-  }
-
   /* Pressed-state feedback on real buttons only. */
   .button:active:not(:disabled),
   .icon-button:active:not(:disabled) {

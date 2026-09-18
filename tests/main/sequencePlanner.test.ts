@@ -34,6 +34,15 @@ describe('truthful campaign sequence', () => {
     expect(planNext(version, enrollment, [{ ...evidence, contextRevision: 0 }], now).kind).toBe('wait');
     expect(planNext(version, enrollment, [{ ...evidence, observedAt: '2026-09-10T00:00:00.000Z' }], now).kind).toBe('wait');
   });
+  it('does not hold a step on an outcome from a replaced route under an older context revision', () => {
+    // A wrong number retires the route; the worker re-bases the enrollment on the next published number and bumps
+    // contextRevision. The old outcome is a superseded attempt, not evidence on the restarted step.
+    const superseded = { ...evidence, routeId: id(99), contextRevision: enrollment.contextRevision - 1 };
+    expect(planNext(version, enrollment, [superseded], now).reason).not.toBe('evidence_not_current');
+    // Either half alone is still not exact and still holds.
+    expect(planNext(version, enrollment, [{ ...evidence, routeId: id(99) }], now)).toMatchObject({ kind: 'wait', reason: 'evidence_not_current' });
+    expect(planNext(version, enrollment, [{ ...evidence, contextRevision: enrollment.contextRevision - 1 }], now)).toMatchObject({ kind: 'wait', reason: 'evidence_not_current' });
+  });
   it('uses immutable predecessor only after pointer advanced, never foreign receipts', () => {
     const next = { ...enrollment, currentStepId: id(5), selectedRouteId: id(20), executionContextId: 'linkedin-context', contextRevision: 2 };
     expect(planNext(version, next, [evidence], now).kind).toBe('prepare');

@@ -313,6 +313,9 @@ describe('bounded encrypted startup preparation', () => {
         expect(fingerprint(db.raw)).toEqual(expected),
       );
     },
+    // Each case builds a fixture, fingerprints it through a second connection and boots the runtime: under a
+    // loaded machine (parallel lanes, CI) it has taken 5.4 s against the 5 s default and failed twice on 18 Sep.
+    30000,
   );
   it.each(['same-process', 'child-process'])(
     'preserves pinned %s old snapshot and latest committed WAL through normal startup/reopen',

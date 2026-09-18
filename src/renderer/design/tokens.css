@@ -22,8 +22,7 @@
   --radius-full: 999px;
 
   --font-display: Futura, "Avenir Next", "Arial Black", sans-serif;
-  --font-ui: "InterVariable", -apple-system, system-ui, BlinkMacSystemFont,
-    "Segoe UI", sans-serif;
+  --font-ui: "InterVariable", -apple-system, system-ui, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
 
   /* Type scale per the design audit (size / line-height / weight):
@@ -75,9 +74,9 @@
 }
 
 /* SEMANTIC: one application-wide Native presentation. */
-.presentation-root[data-presentation='native-a'] {
-  --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  --font-display: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+.presentation-root[data-presentation="native-a"] {
+  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-display: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --nav-rail-width: 142px;
   --text-native-brand: 30px;
   --text-native-brand-narrow: 27px;
@@ -86,5 +85,7 @@
   --text-native-footnote: 10px;
 }
 @media (max-width: 1200px) {
-  .presentation-root[data-presentation='native-a'] { --nav-rail-width: 124px; }
+  .presentation-root[data-presentation="native-a"] {
+    --nav-rail-width: 124px;
+  }
 }

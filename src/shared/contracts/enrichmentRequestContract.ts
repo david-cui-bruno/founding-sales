@@ -1,8 +1,8 @@
 import { z } from 'zod';
 
 /**
- * App-side mirror of cloud/lambdas/shared/src/enrichmentRequest.ts — one
- * ndjson line in s3://<inbox>/upstream/enrichment-requests/<...>.ndjson.
+ * App-side schema of the enrichment request line (the former shared Lambda
+ * package was removed in Batch 9): one ndjson line in s3://<inbox>/upstream/enrichment-requests/<...>.ndjson.
  *
  * The "Find contact info" action is the ONLY way an enrichment lookup can
  * happen (no bulk enrichment, ever). The enricher Lambda re-validates every
