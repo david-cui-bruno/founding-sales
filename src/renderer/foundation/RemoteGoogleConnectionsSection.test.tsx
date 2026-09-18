@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { RemoteGoogleConnectionsApi as Api } from '../../shared/contracts/remoteGoogleConnectionsContract';
+import { GoogleConnectionStatusFailure, type RemoteGoogleConnectionsApi as Api } from '../../shared/contracts/remoteGoogleConnectionsContract';
 import { googleGrantDisclosure, personalGoogleGrantDisclosure, googleScopes, type GoogleGrantPurpose } from '../../shared/contracts/googleGrantCapabilities';
 import { RemoteGoogleConnectionsSection } from './RemoteGoogleConnectionsSection';
 
@@ -261,4 +261,31 @@ describe('remote Google purpose-specific explicit UI', () => {
     expect(button('Continue to Google').disabled).toBe(true); expect(a.begin).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['worker_scope_denied', /Rotate pairing credential/, /google:grant/],
+    ['google_unconfigured', /no Google client/, /worker deployment setting/],
+  ] as const)('a refused status read carrying %s names its remedy instead of the generic hold, and stays a hold', async (reason, remedy, detail) => {
+    const a = api(); a.status.mockRejectedValue(new GoogleConnectionStatusFailure(reason));
+    await mount(a);
+    for (const purpose of [work, personal] as const) {
+      expect(panel(purpose).getByText(remedy)).toBeTruthy(); expect(panel(purpose).getByText(detail)).toBeTruthy();
+      expect(panel(purpose).queryByText(/Status and disclosure could not be verified/)).toBeNull();
+      expect(panel(purpose).getByText('Cloud grant status unverified')).toBeTruthy();
+      expect(button('Continue to Google', purpose).disabled).toBe(true);
+    }
+    expect(document.body.textContent).not.toContain(reason);
+    // A worker that later answers a real status lifts the hold on an explicit Refresh only.
+    a.status.mockImplementation(async ({ purpose }) => readyStatus(purpose));
+    expect(a.status).toHaveBeenCalledTimes(2);
+    fireEvent.click(button('Refresh')); await idle();
+    expect(panel().queryByText(remedy)).toBeNull(); expect(panel().getByText('founder@usecallie.com')).toBeTruthy();
+    expect(a.begin).not.toHaveBeenCalled();
+  });
+  it('a generic status failure keeps the generic hold without inventing a scope or client reason', async () => {
+    const a = api(); a.status.mockRejectedValue(Error('private-transport https://secret.example'));
+    await mount(a);
+    expect(panel().getByText(/Status and disclosure could not be verified/)).toBeTruthy();
+    expect(panel().queryByText(/Rotate pairing credential/)).toBeNull(); expect(panel().queryByText(/no Google client/)).toBeNull();
+    expect(document.body.textContent).not.toMatch(/private-transport|secret\.example/);
+  });
 });

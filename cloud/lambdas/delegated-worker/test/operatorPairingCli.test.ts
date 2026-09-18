@@ -27,11 +27,16 @@ describe('built operator command offline acceptance', () => {
   it.each([{ input: [] }, { input: ['--help'] }])('shows help without credentials, filesystem or network access: $input', ({ input }) => {
     const response = invoke(input);
     expect(response.error).toBeUndefined(); expect(response.status).toBe(0);
-    expect(response.stdout).toContain('Usage: operator-pairing'); expect(response.stderr).toBe('');
+    expect(response.stdout).toContain('Usage: operator-pairing'); expect(response.stdout).toContain('--rotate PAIRING_ID'); expect(response.stderr).toBe('');
   });
   it('validates a dry run without creating output or resolving credentials', () => {
     const response = invoke(args);
     expect(response.status).toBe(0); expect(response.stdout).toContain('No IO performed');
+    const rotation = invoke([...args, '--rotate', '11111111-1111-4111-8111-111111111111', '--scopes', 'commands:write,events:read,google:grant']);
+    // --scopes appears twice above, so this is an argument refusal, not a dry run: no echo of the pairing id either way.
+    expect(rotation.status).toBe(2); expect(rotation.stdout + rotation.stderr).not.toContain('11111111');
+    const dryRotation = invoke([...args.slice(0, args.indexOf('--scopes')), '--scopes', 'commands:write,events:read,google:grant', ...args.slice(args.indexOf('--scopes') + 2), '--rotate', '11111111-1111-4111-8111-111111111111']);
+    expect(dryRotation.status).toBe(0); expect(dryRotation.stdout).toContain('No rotation issued'); expect(dryRotation.stderr).toBe('');
     expect(response.stderr).toBe('');
   });
   it('rejects invalid execution arguments without echoing them', () => {

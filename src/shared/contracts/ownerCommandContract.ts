@@ -111,6 +111,16 @@ export const ownerCheckpointRequestSchema=z.strictObject({workspaceId:id,account
 export const ownerCheckpointSchema=z.strictObject({workspaceId:id,accountId:id,handoffId:id.optional(),generation:revision,version:revision,revision:hash,validUntil:revision.min(1)});
 export const redeemLocalPairingSchema=z.strictObject({endpoint:z.url(),expectedWorkspaceId:id,code:z.string().min(1).max(128)});
 export const redeemedLocalPairingSchema=z.strictObject({state:z.literal('paired'),workspaceId:id,pairingId:id});
+/** The worker's scope vocabulary as the desktop stores it. `emergency:stop` only ever travels on the emergency credential. */
+export const pairingScopeSchema=z.enum(['commands:write','events:read','google:grant','pairing:revoke','emergency:stop']);
+export type PairingScope=z.infer<typeof pairingScopeSchema>;
+/** What Settings may know about the stored pairing: identity, generation and scopes. Never a credential. */
+export const storedPairingSummarySchema=z.strictObject({workspaceId:id,pairingId:id,endpoint:z.url(),generation:revision,scopes:z.array(pairingScopeSchema).min(1)});
+export type StoredPairingSummary=z.infer<typeof storedPairingSummarySchema>;
+/** Rotate the stored pairing's credential in place. The pairing id and generation the renderer read must still be the
+ * stored ones, so a stale screen can never rotate a pairing it did not show. Endpoint and workspace come from the store. */
+export const rotateLocalPairingSchema=z.strictObject({pairingId:id,expectedGeneration:revision,code:z.string().min(1).max(128)});
+export const rotatedLocalPairingSchema=z.strictObject({state:z.literal('rotated'),workspaceId:id,pairingId:id,generation:revision.min(1),scopes:z.array(pairingScopeSchema).min(1)});
 /** Why a bounded replay stopped short, from a closed set. Never a message, path or cause. */
 export const syncFailureSchema=z.enum(['timeout','transport','invalid_event','gap']).nullable();
 /** The budget for one whole sync run. Named once so the main process and the report line cannot drift. */

@@ -19,7 +19,7 @@ import {editReplyTemplateSchema,replyTemplateRequestSchema,replyTemplateStatusSc
 import {saveAccountCallbackSchema,closeAccountCallbackSchema,readAccountCallbacksSchema,accountCallbackListSchema,neverCallAccountSchema,neverCallReceiptSchema,type SaveAccountCallback,type CloseAccountCallback,type ReadAccountCallbacks,type NeverCallAccount,type NeverCallReceipt} from '../shared/contracts/accountCallbackContract';
 import {accountCallbackSchema,type AccountCallback} from '../shared/contracts/dailyContract';
 import {createLinkedInApi} from './apis/linkedInApi';
-import { delegatedPhoneHandoffRequestSchema,bootstrapSelectedAccountSchema,refreshSelectedAccountRecordSchema,selectedAccountFreshnessRequestSchema,selectedAccountFreshnessSchema,configureResearchSourceSchema,ownerResearchSourceSchema,configureLocalDelegationSchema,localDelegationStatusSchema,localDelegationConfigurationRecordSchema,redeemLocalPairingSchema,redeemedLocalPairingSchema,delegationSyncReportSchema,type RefreshSelectedAccountRecord,type SelectedAccountFreshnessRequest,type SelectedAccountFreshness } from '../shared/contracts/ownerCommandContract';
+import { delegatedPhoneHandoffRequestSchema,bootstrapSelectedAccountSchema,refreshSelectedAccountRecordSchema,selectedAccountFreshnessRequestSchema,selectedAccountFreshnessSchema,configureResearchSourceSchema,ownerResearchSourceSchema,configureLocalDelegationSchema,localDelegationStatusSchema,localDelegationConfigurationRecordSchema,redeemLocalPairingSchema,redeemedLocalPairingSchema,delegationSyncReportSchema,storedPairingSummarySchema,rotateLocalPairingSchema,rotatedLocalPairingSchema,type RefreshSelectedAccountRecord,type SelectedAccountFreshnessRequest,type SelectedAccountFreshness } from '../shared/contracts/ownerCommandContract';
 import {delegatedPhoneHandoffResultSchema,publicDelegationCommandSchema,commandReceiptSchema,type CommandReceipt,type PublicDelegationCommand} from '../shared/contracts/delegationContract';
 import type {z} from 'zod';
 import { createPhoneSetupApi } from './apis/phoneSetupApi';
@@ -185,6 +185,11 @@ export const createCallieApi = (invoker: IpcInvoker) => {
       configureResearch:(input:z.infer<typeof configureResearchSourceSchema>)=>client.request('outreach:delegation-research',configureResearchSourceSchema,ownerResearchSourceSchema,input),
       status:()=>client.requestNoInput('outreach:delegation-status',localDelegationStatusSchema),
       pair:(input:z.infer<typeof redeemLocalPairingSchema>)=>client.request('outreach:delegation-pair',redeemLocalPairingSchema,redeemedLocalPairingSchema,input),
+      pairing:()=>client.requestNoInput('outreach:delegation-pairing',storedPairingSummarySchema.nullable()),
+      rotatePairing:async(raw:z.infer<typeof rotateLocalPairingSchema>)=>{
+        const request=Object.freeze(rotateLocalPairingSchema.parse(raw));
+        return client.request('outreach:delegation-rotate-pairing',rotateLocalPairingSchema,rotatedLocalPairingSchema.refine(receipt=>receipt.pairingId===request.pairingId&&receipt.generation===request.expectedGeneration+1,'rotation_receipt_identity_mismatch'),request);
+      },
       configure:(input:z.infer<typeof configureLocalDelegationSchema>)=>client.request('outreach:delegation-configure',configureLocalDelegationSchema,localDelegationConfigurationRecordSchema,input),
       submit:(input:PublicDelegationCommand)=>client.request('outreach:delegation-submit',publicDelegationCommandSchema,commandReceiptSchema,input),
       sync:()=>client.requestNoInput('outreach:delegation-sync',delegationSyncReportSchema),

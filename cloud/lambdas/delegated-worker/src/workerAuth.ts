@@ -3,7 +3,7 @@ import { TransactWriteItemsCommand } from '@aws-sdk/client-dynamodb';
 import { z } from 'zod';
 import { authorityStateSchema, delegationCommandSchema, type DelegationCommand } from '../../../../src/shared/contracts/delegationContract';
 import { accountIdSchema } from '../../../../src/shared/contracts/accountContract';
-import { DynamoStore, fingerprint, keyPart, withDynamoReadErrors, type RepositoryOptions, type DynamoAdapter } from './dynamoStore';
+import { DynamoStore, DynamoReadUnavailable, fingerprint, keyPart, withDynamoReadErrors, type RepositoryOptions, type DynamoAdapter } from './dynamoStore';
 export const workerScopeSchema = z.enum(['commands:write', 'events:read', 'google:grant', 'pairing:revoke', 'emergency:stop']);
 export type WorkerScope = z.infer<typeof workerScopeSchema>;
 export type WorkerPrincipal = { pairingId: string; workspaceId: string; generation: number; kind: 'device' | 'emergency'; scopes: WorkerScope[]; credentialHash: string };
@@ -11,7 +11,11 @@ export type PairingGrant = { pairingId: string; workspaceId: string; credential:
 const scopesSchema = z.array(workerScopeSchema).min(1).max(5).refine(value => new Set(value).size === value.length);
 const pairingSchema = z.strictObject({ pairingId: z.string().uuid(), generation: z.number().int().nonnegative(), revoked: z.boolean() });
 const tokenSchema = z.strictObject({ pairingId: z.string().uuid(), generation: z.number().int().nonnegative(), kind: z.enum(['device', 'emergency']), scopes: scopesSchema });
-const bootstrapSchema = z.strictObject({ pairingId: z.string().uuid(), scopes: scopesSchema, expiresAt: z.number().finite(), consumed: z.boolean() });
+/** A bootstrap without `kind` is the original fresh-pairing record; `kind: 'rotation'` names an existing pairing whose
+ * credentials the redeemer replaces in place. Both are one-time codes with the same expiry and consumption rules. */
+const bootstrapSchema = z.strictObject({ kind: z.literal('rotation').optional(), pairingId: z.string().uuid(), scopes: scopesSchema, expiresAt: z.number().finite(), consumed: z.boolean() });
+/** The two scopes every desktop pairing needs; a rotation may never drop them. */
+export const DESKTOP_PAIRING_SCOPES: readonly WorkerScope[] = ['commands:write', 'events:read'];
 export const secretHash = (value: string): string => createHash('sha256').update(value).digest('hex');
 const secret = () => randomBytes(32).toString('base64url');
 export const pairingKey = (id: string): string => `PAIRING#${keyPart(id)}`;
@@ -31,6 +35,20 @@ export class WorkerAuth {
     await this.store.transact([this.store.put(`BOOTSTRAP#${secretHash(code)}`, { pairingId, scopes,
       expiresAt: Date.parse(this.store.now()) + input.expiresInSeconds * 1000, consumed: false }, null)]);
     return { code, pairingId };
+  }
+  /** Trusted operator composition only. Mints a one-time rotation code for an EXISTING, unrevoked pairing. Redeeming it
+   * keeps the pairing id (and so every record bound to it) and replaces both credentials at the next generation with the
+   * given scope set. Refuses an unknown or revoked pairing and a scope set that drops a desktop scope or adds emergency powers. */
+  async issueRotation(input: { pairingId: string; scopes: WorkerScope[]; expiresInSeconds: number }): Promise<{ code: string; pairingId: string; generation: number }> {
+    const scopes = scopesSchema.parse(input.scopes);
+    if (scopes.includes('emergency:stop') || DESKTOP_PAIRING_SCOPES.some(scope => !scopes.includes(scope))) throw new Error('worker_scope_denied');
+    z.number().int().min(30).max(600).parse(input.expiresInSeconds);
+    const pairingId = z.string().uuid().parse(input.pairingId);
+    const current = await this.existingPairing(pairingId);
+    const code = secret();
+    await this.store.transact([this.store.put(`BOOTSTRAP#${secretHash(code)}`, { kind: 'rotation', pairingId, scopes,
+      expiresAt: Date.parse(this.store.now()) + input.expiresInSeconds * 1000, consumed: false }, null)]);
+    return { code, pairingId, generation: current.data.generation };
   }
   private async rateLimit(source: string): Promise<void> {
     if (!source || source.length > 256) throw new Error('pairing_rate_limited');
@@ -52,21 +70,37 @@ export class WorkerAuth {
     if (!stored || !parsed.success || parsed.data.consumed || parsed.data.expiresAt <= Date.parse(this.store.now())) throw new Error('pairing_unavailable');
     const { pairingId, scopes } = parsed.data;
     const credential = secret(); const emergencyCredential = secret();
+    // A rotation bumps the existing pairing's generation under its own rev check, so the old device and emergency
+    // credentials fail `credential()` the moment this commits; a fresh bootstrap creates the pairing at generation 0.
+    let pairing: { rev: number | null; generation: number } = { rev: null, generation: 0 };
+    if (parsed.data.kind === 'rotation') {
+      const current = await this.existingPairing(pairingId);
+      pairing = { rev: current.rev, generation: current.data.generation + 1 };
+    }
     try {
       await this.store.transact([
         this.store.put(key, { ...parsed.data, consumed: true }, stored.rev),
-        this.store.put(pairingKey(pairingId), { pairingId, generation: 0, revoked: false }, null),
-        this.store.put(`TOKEN#${secretHash(credential)}`, { pairingId, generation: 0, kind: 'device', scopes }, null),
-        this.store.put(`TOKEN#${secretHash(emergencyCredential)}`, { pairingId, generation: 0, kind: 'emergency', scopes: ['emergency:stop'] }, null),
+        this.store.put(pairingKey(pairingId), { pairingId, generation: pairing.generation, revoked: false }, pairing.rev),
+        this.store.put(`TOKEN#${secretHash(credential)}`, { pairingId, generation: pairing.generation, kind: 'device', scopes }, null),
+        this.store.put(`TOKEN#${secretHash(emergencyCredential)}`, { pairingId, generation: pairing.generation, kind: 'emergency', scopes: ['emergency:stop'] }, null),
       ]);
     } catch { throw new Error('pairing_unavailable'); }
-    return { pairingId, workspaceId: this.options.workspaceId, credential, emergencyCredential, scopes, generation: 0 };
+    return { pairingId, workspaceId: this.options.workspaceId, credential, emergencyCredential, scopes, generation: pairing.generation };
   }
   async activePairing(pairingId: string) {
     const stored = await this.store.get<unknown>(pairingKey(pairingId));
     const parsed = pairingSchema.safeParse(stored?.data);
     if (!stored || !parsed.success || parsed.data.pairingId !== pairingId || parsed.data.revoked) throw new Error('worker_unauthorized');
     return { ...stored, data: parsed.data };
+  }
+  /** The rotation view of `activePairing`: an unknown or revoked pairing is `pairing_unavailable`, while a DynamoDB
+   * read outage keeps its own identity so neither the handler nor the operator tool can mistake it for a refusal. */
+  private async existingPairing(pairingId: string) {
+    try { return await this.activePairing(pairingId); }
+    catch (error) {
+      if (error instanceof DynamoReadUnavailable) throw error;
+      throw new Error('pairing_unavailable');
+    }
   }
   private async credential(hash: string, required: WorkerScope[]) {
     const stored = await this.store.get<unknown>(`TOKEN#${hash}`);

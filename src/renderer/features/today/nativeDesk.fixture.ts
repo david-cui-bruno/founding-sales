@@ -293,6 +293,8 @@ export function nativeDeskFixture(initial = dailyFixture()) {
       configurePolicy: forbidden,
       configureResearch: forbidden,
       pair: forbidden,
+      pairing: forbidden,
+      rotatePairing: forbidden,
       configure: forbidden,
       submit: forbidden,
       sync: async () => {

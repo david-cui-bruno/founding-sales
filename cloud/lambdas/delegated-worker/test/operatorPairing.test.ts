@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { constants } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { parseOperatorArgs, reservePrivateOutput, runOperatorPairing, type OperatorCloud, type OperatorDependencies } from '../src/operatorPairing';
+import { WorkerAuth } from '../src/workerAuth';
+import { ConditionalCommandHarness } from './sdkHarness';
 
 // In-memory filesystem only. These tests never access a filesystem or AWS.
 const disk = vi.hoisted(() => ({ lstat: vi.fn(), open: vi.fn(), write: vi.fn(), sync: vi.fn(), close: vi.fn(), stat: vi.fn() }));
@@ -194,5 +196,118 @@ describe('trusted execution preflight and private output', () => {
     expect(disk.close).toHaveBeenCalledTimes(2); expect(f.cloud.close).toHaveBeenCalledOnce();
     // Only a directory descriptor and the exclusive final file, never secret temp files.
     expect(disk.open.mock.calls.map(call => call[0])).toEqual(['/vault', '/vault/code']);
+  });
+});
+
+describe('credential rotation on an existing pairing (--rotate)', () => {
+  const fullScopes = 'commands:write,events:read,google:grant,pairing:revoke';
+  const rotateArgs = (pairingId: string, scopes = fullScopes) => ['--rotate', pairingId, '--account', '123456789012', '--region', 'us-east-1',
+    '--table', 'worker-table', '--workspace', 'workspace-one', '--expires', '300', '--scopes', scopes, '--output', '/vault/code'];
+  /** A real WorkerAuth over the conditional harness, so the tool's existence and revocation checks read real records. */
+  async function pairedFixture(revoked = false) {
+    const dynamo = new ConditionalCommandHarness();
+    // The fixture clock sits well before the real clock the tool stamps expiry with, so the saved code is redeemable here.
+    const auth = new WorkerAuth({ dynamo, tableName: tableArn, workspaceId: 'workspace-one', clock: { now: () => '2026-09-01T00:00:00.000Z' } });
+    const issued = await auth.issuePairing({ scopes: ['commands:write', 'events:read'], expiresInSeconds: 300 });
+    const grant = await auth.redeemPairing(issued.code, 'fixture');
+    if (revoked) await auth.revokePairing(grant.pairingId);
+    const order: string[] = [];
+    const send = vi.fn(async (command: Parameters<typeof dynamo.send>[0]) => { order.push(command.constructor.name); return dynamo.send(command); });
+    const cloud: OperatorCloud = {
+      getCallerIdentity: vi.fn(async () => { order.push('sts'); return { Account: '123456789012', Arn: 'arn:aws:sts::123456789012:assumed-role/operator/session' }; }),
+      describeTable: vi.fn(async () => { order.push('table'); return { TableName: 'worker-table', TableArn: tableArn, TableStatus: 'ACTIVE' }; }),
+      dynamo: { send }, close: vi.fn(),
+    };
+    const deps: OperatorDependencies = {
+      reserveOutput: vi.fn(async path => { order.push('reserve'); return reservePrivateOutput(path); }),
+      connect: vi.fn(async () => { order.push('connect'); return cloud; }),
+    };
+    const bootstraps = () => dynamo.dump().filter(item => item.sk?.S?.startsWith('BOOTSTRAP#'));
+    return { dynamo, auth, grant, cloud, deps, order, send, bootstraps };
+  }
+  it('parses --rotate with a pairing id and the full desktop scope set', () => {
+    const pairingId = '11111111-1111-4111-8111-111111111111';
+    expect(parseOperatorArgs(rotateArgs(pairingId))).toMatchObject({ rotate: pairingId, scopes: fullScopes.split(','), execute: false });
+    expect(parseOperatorArgs(args)).toMatchObject({ rotate: null });
+    expect(parseOperatorArgs([...rotateArgs(pairingId), '--execute'])).toMatchObject({ rotate: pairingId, execute: true });
+  });
+  it.each([
+    ['not a uuid', ['--rotate', 'pairing-one']],
+    ['a uuid in upper case', ['--rotate', '11111111-1111-4111-8111-11111111111A']],
+    ['a reserved flag-like id', ['--rotate', '--execute']],
+    ['a missing id', ['--rotate']],
+    ['a repeated --rotate', ['--rotate', '11111111-1111-4111-8111-111111111111', '--rotate', '11111111-1111-4111-8111-111111111111']],
+  ])('refuses %s without IO or echo', async (_label, rotate) => {
+    const input = [...args, ...rotate, '--execute'];
+    const f = fixture(), response = await runOperatorPairing(input, f.deps);
+    expect(response.exitCode).toBe(2); expect(response.message).toBe('Invalid arguments. Use --help.');
+    expect(f.deps.reserveOutput).not.toHaveBeenCalled(); expect(f.deps.connect).not.toHaveBeenCalled();
+  });
+  const narrowed = ['events:read', 'commands:write', 'google:grant,pairing:revoke', 'events:read,google:grant', 'commands:write,pairing:revoke'];
+  it.each(narrowed)('refuses a rotation scope set %s that drops commands:write or events:read, before any IO', async scopes => {
+    const f = fixture(), response = await runOperatorPairing([...rotateArgs('11111111-1111-4111-8111-111111111111', scopes), '--execute'], f.deps);
+    expect(response.exitCode).toBe(2); expect(response.message).toBe('Invalid arguments. Use --help.');
+    expect(f.deps.reserveOutput).not.toHaveBeenCalled(); expect(f.deps.connect).not.toHaveBeenCalled(); expect(f.send).not.toHaveBeenCalled();
+  });
+  it('names the rotation flag in help and says a dry run verifies nothing', async () => {
+    const help = await runOperatorPairing(['--help']);
+    expect(help.exitCode).toBe(0); expect(help.message).toContain('--rotate PAIRING_ID'); expect(help.message).toContain('existing');
+    const f = fixture(), dry = await runOperatorPairing(rotateArgs('11111111-1111-4111-8111-111111111111'), f.deps);
+    expect(dry.exitCode).toBe(0); expect(dry.message).toContain('No IO performed'); expect(dry.message).toContain('No rotation issued');
+    expect(dry.message).not.toContain('11111111');
+    expect(f.deps.reserveOutput).not.toHaveBeenCalled(); expect(f.deps.connect).not.toHaveBeenCalled(); expect(f.send).not.toHaveBeenCalled();
+    expect(disk.lstat).not.toHaveBeenCalled(); expect(disk.open).not.toHaveBeenCalled();
+  });
+  it('executes: checks identity and table, reads the pairing, writes one rotation bootstrap and saves only the code privately', async () => {
+    const f = await pairedFixture();
+    const response = await runOperatorPairing([...rotateArgs(f.grant.pairingId), '--execute'], f.deps);
+    expect(response).toEqual({ exitCode: 0, message: expect.stringContaining('Rotation code saved to private output') });
+    expect(response.message).not.toContain(f.grant.pairingId);
+    expect(f.order.slice(0, 4)).toEqual(['reserve', 'connect', 'sts', 'table']);
+    expect(f.order.slice(4)).toEqual(['GetItemCommand', 'TransactWriteItemsCommand']);
+    const written = f.bootstraps();
+    expect(written).toHaveLength(2);
+    const before = Date.now();
+    const rotation = written.map(item => JSON.parse(item.data!.S!) as { kind?: string; pairingId: string; scopes: string[]; expiresAt: number; consumed: boolean }).find(record => record.kind === 'rotation')!;
+    // The tool stamps expiry from the real clock (the harness clock only serves the fixture's own pairing).
+    expect(rotation).toEqual({ kind: 'rotation', pairingId: f.grant.pairingId, scopes: fullScopes.split(','), expiresAt: expect.any(Number), consumed: false });
+    expect(rotation.expiresAt).toBeGreaterThan(before + 290_000); expect(rotation.expiresAt).toBeLessThanOrEqual(Date.now() + 300_000);
+    const codeLine = disk.write.mock.calls[0]![0] as string;
+    expect(codeLine).toMatch(/^[A-Za-z0-9_-]{43}\n$/);
+    const code = codeLine.trim();
+    expect(f.dynamo.dump().some(item => item.sk?.S === `BOOTSTRAP#${createHash('sha256').update(code).digest('hex')}`)).toBe(true);
+    expect(JSON.stringify(f.dynamo.dump())).not.toContain(code); expect(JSON.stringify(response)).not.toContain(code);
+    // The current credential keeps working until the code is redeemed: nothing about the pairing changed here.
+    expect(f.dynamo.inspect(`PAIRING#${f.grant.pairingId}`)).toEqual({ pairingId: f.grant.pairingId, generation: 0, revoked: false });
+    expect((await f.auth.authenticate(`Bearer ${f.grant.credential}`, ['commands:write'])).generation).toBe(0);
+    expect(disk.close).toHaveBeenCalledTimes(2); expect(f.cloud.close).toHaveBeenCalledOnce();
+    // Redeeming the saved code rotates the credential in place.
+    const rotated = await f.auth.redeemPairing(code, 'desktop');
+    expect(rotated).toMatchObject({ pairingId: f.grant.pairingId, generation: 1, scopes: fullScopes.split(',') });
+  });
+  it.each(['unknown', 'revoked'] as const)('refuses a %s pairing after the identity checks, writes nothing and keeps the reserved output', async kind => {
+    const f = await pairedFixture(kind === 'revoked');
+    const pairingId = kind === 'unknown' ? '00000000-0000-4000-8000-000000000000' : f.grant.pairingId;
+    const response = await runOperatorPairing([...rotateArgs(pairingId), '--execute'], f.deps);
+    expect(response.exitCode).toBe(1);
+    expect(response.message).toBe('Pairing unknown or revoked. No rotation issued. Reserved output retained.');
+    expect(f.order.slice(0, 4)).toEqual(['reserve', 'connect', 'sts', 'table']);
+    expect(f.order.slice(4)).toEqual(['GetItemCommand']);
+    expect(f.bootstraps()).toHaveLength(1); expect(disk.write).not.toHaveBeenCalled();
+    expect(disk.close).toHaveBeenCalledTimes(2); expect(f.cloud.close).toHaveBeenCalledOnce();
+  });
+  it('refuses the rotation before any write when the identity or table mismatches', async () => {
+    const f = await pairedFixture();
+    vi.mocked(f.cloud.getCallerIdentity).mockResolvedValue({ Account: '000000000000' });
+    const response = await runOperatorPairing([...rotateArgs(f.grant.pairingId), '--execute'], f.deps);
+    expect(response.message).toContain('Identity mismatch'); expect(response.message).toContain('No pairing issued');
+    expect(f.send).not.toHaveBeenCalled(); expect(disk.write).not.toHaveBeenCalled();
+  });
+  it('reports a failed rotation write as uncertain, never as a refusal', async () => {
+    const f = await pairedFixture();
+    f.dynamo.beforeTransaction = () => { throw new Error(sensitive); };
+    const response = await runOperatorPairing([...rotateArgs(f.grant.pairingId), '--execute'], f.deps);
+    expect(response.exitCode).toBe(1); expect(response.message).toContain('uncertain'); expect(response.message).toContain('Do NOT blindly retry');
+    expect(JSON.stringify(response)).not.toContain(sensitive); expect(disk.write).not.toHaveBeenCalled();
   });
 });

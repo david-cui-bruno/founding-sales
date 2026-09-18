@@ -1,6 +1,6 @@
 import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import {
-  googleConsentOpenedSchema, type RemoteGoogleConnectionsApi,
+  googleConsentOpenedSchema, googleConnectionStatusReason, type GoogleConnectionStatusReason, type RemoteGoogleConnectionsApi,
 } from '../../shared/contracts/remoteGoogleConnectionsContract';
 import {
   remoteGoogleGrantBeginSchema, remoteGoogleGrantDisclosureSchema,
@@ -28,6 +28,12 @@ const cleanupPending = (status: RemoteGoogleGrantStatus | null) => status?.state
 const canRequestRevoke = (status: RemoteGoogleGrantStatus | null) => status?.state === 'ready' || cleanupPending(status);
 const resetAcknowledgments = { acknowledged: false, confirmed: false, revokeAcknowledged: false };
 const connectionInstruction = 'Connect or pair your Worker in Worker connection, then explicitly Refresh here. A newly paired Worker may require a normal app restart before these controls can use it. If already paired, check Worker connection and refresh again.';
+/** The two worker reasons a refused status read can carry (`remoteGoogleConnectionsContract`). Neither is a grant
+ * state, and only the first has a remedy on this Mac: the pairing credential is rotated in Worker connection. */
+export const scopeDeniedInstruction = 'This Mac\'s pairing was issued without the google:grant scope, so the worker refuses to read or create Google grants for it. Remedy: in Worker connection, use Rotate pairing credential with a rotation code that carries google:grant, restart the application normally, then Refresh here.';
+export const googleUnconfiguredInstruction = 'This worker deployment has no Google client, so cloud mail and calendar grants are not available. Nothing on this Mac changes that; it is a worker deployment setting.';
+const readFailureMessage = (reason: GoogleConnectionStatusReason | null) => reason === 'worker_scope_denied' ? scopeDeniedInstruction
+  : reason === 'google_unconfigured' ? googleUnconfiguredInstruction : `Status and disclosure could not be verified. ${connectionInstruction}`;
 
 function requestFor(purpose: GoogleGrantPurpose, panel: Panel) {
   if (purpose === 'permitted_correspondence') {
@@ -57,19 +63,22 @@ export function RemoteGoogleConnectionsSection({ api }: { api?: RemoteGoogleConn
   }, [current]);
   const read = useCallback(async (lifetime: Lifetime, purpose: GoogleGrantPurpose) => {
     update(lifetime, purpose, { ...resetAcknowledgments, fresh: false, status: null, disclosure: null, message: 'Checking cloud grant status and disclosure…' });
+    // The one allowlisted worker reason a refused status read carries; anything else stays the generic hold.
+    let reason: GoogleConnectionStatusReason | null = null;
     try {
       const [rawStatus, rawDisclosure] = await Promise.allSettled([
         Promise.resolve().then(() => lifetime.api.status({ purpose })),
         Promise.resolve().then(() => lifetime.api.disclosure({ purpose })),
       ]);
       if (!current(lifetime)) return;
+      if (rawStatus.status === 'rejected') reason = googleConnectionStatusReason(rawStatus.reason);
       if (rawStatus.status !== 'fulfilled' || rawDisclosure.status !== 'fulfilled') throw new Error('read');
       const status = remoteGoogleGrantStatusSchema.parse(rawStatus.value);
       const disclosure = remoteGoogleGrantDisclosureSchema.parse(rawDisclosure.value);
       if ((status.grant && status.grant.purpose !== purpose) || disclosure.version !== disclosureFor(purpose).version) throw new Error('purpose');
       update(lifetime, purpose, { status, disclosure: disclosure.text, fresh: true, message: '' });
     } catch {
-      update(lifetime, purpose, { message: `Status and disclosure could not be verified. ${connectionInstruction}` });
+      update(lifetime, purpose, { message: readFailureMessage(reason) });
     }
   }, [current, update]);
   const run = useCallback(async (lifetime: Lifetime, targets: readonly GoogleGrantPurpose[],

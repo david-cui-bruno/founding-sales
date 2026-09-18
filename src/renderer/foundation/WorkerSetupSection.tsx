@@ -5,6 +5,9 @@ import {
   localDelegationStatusSchema,
   redeemedLocalPairingSchema,
   redeemLocalPairingSchema,
+  rotateLocalPairingSchema,
+  rotatedLocalPairingSchema,
+  storedPairingSummarySchema,
 } from '../../shared/contracts/ownerCommandContract';
 import { researchSetupStatusSchema, WORKER_STALE_AFTER_MS, type ResearchSetupApi } from '../../shared/contracts/researchSetupContract';
 import { remoteGoogleGrantStatusSchema } from '../../shared/contracts/remoteGoogleGrantContract';
@@ -14,16 +17,21 @@ import type { SenderCapStatus } from '../../shared/contracts/workerPolicyContrac
 /** The worker's last scheduled tick travels on the cloud research status and today's sender cap on the
  * cloud grant status; the section reads each one when that namespace is present. */
 type Api = Pick<CalliePreloadApi['delegation'], 'status' | 'pair'> & { researchSetup?: Pick<ResearchSetupApi, 'status'>;
-  googleConnections?: Pick<RemoteGoogleConnectionsApi, 'status'> };
+  googleConnections?: Pick<RemoteGoogleConnectionsApi, 'status'> } & Partial<Pick<CalliePreloadApi['delegation'], 'pairing' | 'rotatePairing'>>;
 type Status = z.infer<typeof localDelegationStatusSchema>;
 type Receipt = z.infer<typeof redeemedLocalPairingSchema>;
 type Request = z.infer<typeof redeemLocalPairingSchema>;
-type Lifetime = { api: Api; generation: number; busy: boolean; status: Status | null };
+type Summary = z.infer<typeof storedPairingSummarySchema>;
+type Rotated = z.infer<typeof rotatedLocalPairingSchema>;
+type Lifetime = { api: Api; generation: number; busy: boolean; status: Status | null; summary: Summary | null };
 /** `unread` before any read or when the cloud status could not be read; `null` when the worker has never recorded a tick. */
 type LastTick = { state: 'unread' } | { state: 'read'; at: string | null };
 /** `unread` before any read or when the cloud grant status could not be read; `null` when the worker
  * records no cap policy for the granted mailbox. Never a fabricated default. */
 type SenderCap = { state: 'unread' } | { state: 'read'; cap: SenderCapStatus | null };
+/** The stored pairing's identity, generation and scopes as the main process read them from disk on the last local
+ * read: `unread` when that read failed or the bridge has no pairing read; `null` when no pairing is stored. */
+type Stored = { state: 'unread' } | { state: 'read'; summary: Summary | null };
 type View = {
   owner: Lifetime | null;
   status: Status | null;
@@ -36,6 +44,11 @@ type View = {
   code: string;
   lastTick: LastTick;
   senderCap: SenderCap;
+  stored: Stored;
+  rotationCode: string;
+  rotationConfirmed: boolean;
+  rotated: Rotated | null;
+  rotationError: string | null;
 };
 const labels: Record<Status['state'], string> = {
   unconfigured: 'Unconfigured', paused: 'Paused', active: 'Active', locked: 'Locked',
@@ -43,7 +56,15 @@ const labels: Record<Status['state'], string> = {
 const emptyView = (owner: Lifetime | null): View => ({
   owner, status: null, receipt: null, busy: false, statusError: false,
   pairError: null, endpoint: '', expectedWorkspaceId: '', code: '', lastTick: { state: 'unread' }, senderCap: { state: 'unread' },
+  stored: { state: 'unread' }, rotationCode: '', rotationConfirmed: false, rotated: null, rotationError: null,
 });
+/** The first four characters of the pairing id are how the operator command and the docs name it too. */
+export const shortPairingId = (pairingId: string): string => `${pairingId.slice(0, 4)}…`;
+/** The one sentence David confirms before a rotation. Exactly this text, so tests and docs quote one source. */
+export const rotationConfirmation = (pairingId: string): string =>
+  `This replaces the credential this Mac uses for pairing ${shortPairingId(pairingId)} and keeps every record. The previous credential stops working.`;
+const rotationUncertain = 'Rotation outcome could not be verified. The stored credential may or may not have changed. Refresh worker status and review the credential generation before a fresh explicit attempt.';
+const rotationRefused = 'Enter the rotation code from the operator\'s private output and confirm the sentence before a fresh explicit attempt.';
 /** Whole units only; the worker ticks every five minutes so seconds carry no information. */
 export function describeAge(from: string, now: number): string {
   const minutes = Math.max(0, Math.floor((now - Date.parse(from)) / 60_000));
@@ -90,6 +111,19 @@ export function WorkerSetupSection({ api }: { api?: Api }) {
     } catch {
       if (!current(lifetime)) return;
       setView(previous => ({ ...previous, status: null, statusError: true, code: '' }));
+    }
+    // The stored pairing's identity, generation and scopes are a second local fact (a disk read in the main process,
+    // never a worker call). Its failure is stated as such and never disturbs the status above.
+    const pairing = lifetime.api.pairing;
+    if (pairing) {
+      let stored: Stored = { state: 'unread' };
+      try {
+        const raw = await (async () => pairing())();
+        stored = { state: 'read', summary: raw === null ? null : storedPairingSummarySchema.parse(raw) };
+      } catch { stored = { state: 'unread' }; }
+      if (!current(lifetime)) return;
+      lifetime.summary = stored.state === 'read' ? stored.summary : null;
+      setView(previous => ({ ...previous, stored, ...(lifetime.summary ? {} : { rotationCode: '', rotationConfirmed: false }) }));
     }
     if (!remote) return;
     // The last scheduled tick is a second, independent observation; its failure never disturbs the local facts above.
@@ -172,9 +206,48 @@ export function WorkerSetupSection({ api }: { api?: Api }) {
     }
   }, [current, read]);
 
+  /** Rotate the stored credential in place. The request names exactly the pairing and generation this screen read, so a
+   * stale screen can never rotate a pairing it did not show; endpoint and workspace never leave the main process. */
+  const rotate = useCallback(async (lifetime: Lifetime, code: string) => {
+    if (!current(lifetime) || lifetime.busy || !lifetime.summary || !lifetime.api.rotatePairing) return;
+    const summary = lifetime.summary;
+    lifetime.busy = true;
+    setView(previous => ({ ...previous, busy: true, rotationError: null, rotated: null }));
+    let rotated: Rotated | null = null;
+    let submitted = false;
+    try {
+      try {
+        rotated = await (async () => {
+          const request = Object.freeze(rotateLocalPairingSchema.parse({ pairingId: summary.pairingId, expectedGeneration: summary.generation, code }));
+          submitted = true;
+          const raw = await lifetime.api.rotatePairing!(request);
+          if (!current(lifetime)) return null;
+          const result = rotatedLocalPairingSchema.parse(raw);
+          if (result.pairingId !== summary.pairingId || result.workspaceId !== summary.workspaceId || result.generation !== summary.generation + 1) return null;
+          return result;
+        })();
+        if (!current(lifetime)) return;
+        setView(previous => ({ ...previous, rotated, rotationError: rotated ? null : rotationUncertain }));
+      } catch {
+        if (!current(lifetime)) return;
+        setView(previous => ({ ...previous, rotationError: submitted ? rotationUncertain : rotationRefused }));
+      } finally {
+        // The code and the confirmation are single-use whatever happened; a fresh attempt needs fresh explicit input.
+        if (current(lifetime)) setView(previous => ({ ...previous, rotationCode: '', rotationConfirmed: false }));
+      }
+      // Re-read the local facts so the generation and scopes shown are the stored ones, not the receipt's.
+      if (current(lifetime)) await read(lifetime);
+    } finally {
+      if (current(lifetime)) {
+        lifetime.busy = false;
+        setView(previous => ({ ...previous, busy: false }));
+      }
+    }
+  }, [current, read]);
+
   useLayoutEffect(() => {
     const lifetime: Lifetime | null = api
-      ? { api, generation: ++generation.current, busy: false, status: null }
+      ? { api, generation: ++generation.current, busy: false, status: null, summary: null }
       : null;
     owner.current = lifetime;
     setView(emptyView(lifetime));
@@ -197,6 +270,12 @@ export function WorkerSetupSection({ api }: { api?: Api }) {
       setView(previous => ({ ...previous, [key]: value }));
     }
   };
+  // Rotation needs the bridge's pairing read and rotation, and a pairing actually stored on this Mac.
+  const stored = visible.stored.state === 'read' ? visible.stored.summary : null;
+  const rotatable = !busy && stored !== null && typeof api?.rotatePairing === 'function';
+  const changeRotation = (patch: Partial<Pick<View, 'rotationCode' | 'rotationConfirmed'>>) => {
+    if (lifetime && current(lifetime) && !lifetime.busy && rotatable) setView(previous => ({ ...previous, ...patch }));
+  };
 
   return (
     <section className="settings__section" aria-label="Worker connection">
@@ -217,6 +296,15 @@ export function WorkerSetupSection({ api }: { api?: Api }) {
         </dl>
       )}
       <p>Remote owner and mailbox/calendar grants are not established by this local read.</p>
+      {api?.pairing && (visible.stored.state === 'unread'
+        ? <p>Stored pairing credential: not available (the stored pairing could not be read).</p>
+        : visible.stored.summary === null
+          ? <p>Stored pairing credential: none. Pair worker below stores one.</p>
+          : <dl className="settings__counters" aria-label="Stored pairing credential">
+            <div><dt>Pairing id</dt><dd>{visible.stored.summary.pairingId}</dd></div>
+            <div><dt>Credential generation</dt><dd>{visible.stored.summary.generation}</dd></div>
+            <div><dt>Credential scopes</dt><dd>{visible.stored.summary.scopes.join(', ')}</dd></div>
+          </dl>)}
       {api?.researchSetup && visible.status && (() => {
         const now = Date.now();
         if (visible.lastTick.state === 'unread') return <p>Worker last run: not available (the cloud research status could not be read).</p>;
@@ -232,6 +320,7 @@ export function WorkerSetupSection({ api }: { api?: Api }) {
         <div>
           <h3>Worker paired</h3>
           <p>The pairing exchange succeeded for workspace {visible.receipt.workspaceId}. This receipt is separate from the current local status.</p>
+          {stored && stored.pairingId === visible.receipt.pairingId && <p>Stored credential: generation {stored.generation}, scopes {stored.scopes.join(', ')}.</p>}
           <p>The running application may retain its startup connection. If the connection is not established above, restart the application normally, then explicitly refresh and review worker status. Pairing does not activate the worker.</p>
         </div>
       )}
@@ -257,6 +346,32 @@ export function WorkerSetupSection({ api }: { api?: Api }) {
           if (lifetime) void run(lifetime, undefined, true);
         }}>Refresh worker status</button>
       </div>
+      {api?.pairing && api.rotatePairing && stored && (
+        <div role="group" aria-label="Rotate pairing credential">
+          <h3>Rotate pairing credential</h3>
+          <p>Replaces the credential this Mac uses for the stored pairing with the one a rotation code from the operator carries, at the next generation and with the scopes the code names. The pairing id does not change, so every saved record stays. The previous credential stops working at the worker the moment the rotation is accepted.</p>
+          <label className="settings__row">Rotation endpoint (locked)
+            <input type="text" value={stored.endpoint} disabled readOnly />
+          </label>
+          <label className="settings__row">Rotation workspace ID (locked)
+            <input type="text" value={stored.workspaceId} disabled readOnly />
+          </label>
+          <label className="settings__row">Rotation code
+            <input type="password" autoComplete="off" spellCheck={false} value={visible.rotationCode} disabled={!rotatable} onChange={event => changeRotation({ rotationCode: event.target.value })} />
+          </label>
+          <label className="settings__row"><input type="checkbox" checked={visible.rotationConfirmed} disabled={!rotatable} onChange={event => changeRotation({ rotationConfirmed: event.target.checked })} />
+            {rotationConfirmation(stored.pairingId)}</label>
+          {visible.rotated && (
+            <p role="status">Pairing credential rotated: pairing {visible.rotated.pairingId} is now at generation {visible.rotated.generation} with scopes {visible.rotated.scopes.join(', ')}. The previous credential no longer works. Restart the application normally so the running connection uses the new credential, then refresh worker status.</p>
+          )}
+          {visible.rotationError && <p role="alert">{visible.rotationError}</p>}
+          <div className="settings__row-actions">
+            <button type="button" className="settings__action" disabled={!rotatable || !visible.rotationConfirmed || visible.rotationCode.length === 0} onClick={() => {
+              if (lifetime && rotatable && visible.rotationConfirmed) void rotate(lifetime, visible.rotationCode);
+            }}>Rotate pairing credential</button>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
