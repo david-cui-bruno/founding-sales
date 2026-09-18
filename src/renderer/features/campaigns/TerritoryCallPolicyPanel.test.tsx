@@ -19,6 +19,9 @@ function fixture() {
     requests.push(request);
     const reply = (receipt: TerritoryCallPolicyStatus['receipt']): TerritoryCallPolicyStatus => ({ workspaceId: 'ws', policy: worker.policy, definition: DEFAULT, receipt });
     if (request.kind === 'read') return reply(null);
+    // This fake worker models the call policy only. Adding a state is its own record with its own revision
+    // (lane 36), and this panel never sends one, so it is refused here rather than counted against the policy.
+    if (request.kind === 'add-state') return reply({ commandId: request.commandId, status: 'rejected', authorityGeneration: 0, aggregateVersion: worker.revision, reason: 'territory_add_state_not_modelled' });
     if (worker.lose > 0) { worker.lose--; throw Error('Lost reply after a durable owner write'); }
     if (request.expectedRevision !== worker.revision) return reply({ commandId: request.commandId, status: 'rejected', authorityGeneration: 0, aggregateVersion: worker.revision, reason: 'policy_revision_conflict' });
     worker.revision++;

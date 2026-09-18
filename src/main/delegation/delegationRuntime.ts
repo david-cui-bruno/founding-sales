@@ -34,6 +34,7 @@ import {googleScopes} from '../../shared/contracts/googleGrantCapabilities';
 import {publicDelegationCommandSchema,type CommandReceipt,type DelegatedPhoneHandoffResult,type DelegationCommand} from '../../shared/contracts/delegationContract';
 import {DEFAULT_TERRITORY_CALL_POLICY_DEFINITION,TERRITORY_CALL_POLICY_SUBJECT,territoryCallPolicyRequestSchema,territoryCallPolicyStatusSchema,type TerritoryCallPolicyCommandPayload} from '../../shared/contracts/territoryCallPolicyContract';
 import {REPLY_TEMPLATE_SUBJECT,replyTemplateCommandPayloadSchema} from '../../shared/contracts/replyTemplateContract';
+import {TERRITORY_RULES_REVISION} from '../../shared/contracts/territoryClearanceContract';
 /** What the worker gateway (cloud/lambdas/delegated-worker/src/handler.ts) admits on POST /commands for a saved-record
  * command: the whole body up to 204096 bytes and the payload up to 200000 bytes, both counted in UTF-8. */
 export const REFRESH_COMMAND_LIMITS=Object.freeze({maxBodyBytes:204096,maxPayloadBytes:200000});
@@ -495,7 +496,9 @@ export function createDelegationRuntime(input:{databaseGate:{withDatabase<T>(fn:
   territoryPolicy:(raw:unknown)=>{const request=territoryCallPolicyRequestSchema.parse(raw);return run(async(database,signal)=>{
    if(!pairing)throw Error('pairing_unconfigured');
    const active=AbortSignal.any([signal,AbortSignal.timeout(15000)]);
-   const payload:TerritoryCallPolicyCommandPayload=request.kind==='read'?{kind:'policy.read'}:request.kind==='approve'?{kind:'policy.approve',expectedRevision:request.expectedRevision,definition:DEFAULT_TERRITORY_CALL_POLICY_DEFINITION}:{kind:'policy.set-state',expectedRevision:request.expectedRevision,state:request.state};
+   // Each request kind is named before the fall-through, because the fall-through is `policy.set-state`, which
+   // pauses or resumes the whole policy: an unnamed kind must never be able to reach it (lane 36's PR 106 note).
+   const payload:TerritoryCallPolicyCommandPayload=request.kind==='read'?{kind:'policy.read'}:request.kind==='approve'?{kind:'policy.approve',expectedRevision:request.expectedRevision,definition:DEFAULT_TERRITORY_CALL_POLICY_DEFINITION}:request.kind==='add-state'?{kind:'policy.add-state',expectedAddedRevision:request.expectedAddedRevision,state:request.state,rulesRevision:TERRITORY_RULES_REVISION}:{kind:'policy.set-state',expectedRevision:request.expectedRevision,state:request.state};
    const command=territoryPolicyCommandSchema.parse({commandId:request.kind==='read'?randomUUID():request.commandId,workspaceId:pairing.workspaceId,accountId:TERRITORY_CALL_POLICY_SUBJECT,expectedAuthorityGeneration:0,expectedVersion:0,kind:'territory-policy',payload});
    const result=await services(database,active).client.territoryPolicy(command,active);assertCurrent(active);
    return territoryCallPolicyStatusSchema.parse({workspaceId:pairing.workspaceId,policy:result.policy,definition:DEFAULT_TERRITORY_CALL_POLICY_DEFINITION,receipt:request.kind==='read'?null:result.receipt});
