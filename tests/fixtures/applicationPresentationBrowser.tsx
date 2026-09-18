@@ -106,7 +106,7 @@ const api: CalliePreloadApi = {
     editRequestedFollowup: forbidden('delegation.editRequestedFollowup'), approveRequestedFollowup: forbidden('delegation.approveRequestedFollowup'),
     reconcileReplyDraft: forbidden('delegation.reconcileReplyDraft'), editReplyDraft: forbidden('delegation.editReplyDraft'), getPhoneHandoffState: forbidden('delegation.getPhoneHandoffState'), beginPhone: forbidden('delegation.beginPhone'), bootstrap: forbidden('delegation.bootstrap'),
     configurePolicy: forbidden('delegation.configurePolicy'), configureResearch: forbidden('delegation.configureResearch'),
-    pair: forbidden('delegation.pair'), pairing: forbidden('delegation.pairing'), rotatePairing: forbidden('delegation.rotatePairing'), configure: forbidden('delegation.configure'), submit: forbidden('delegation.submit'), sync: forbidden('delegation.sync'),
+    pair: forbidden('delegation.pair'), pairing: read('delegation.pairing', () => null), rotatePairing: forbidden('delegation.rotatePairing'), configure: forbidden('delegation.configure'), submit: forbidden('delegation.submit'), sync: forbidden('delegation.sync'),
     admitReplyFirstDraft: forbidden('delegation.admitReplyFirstDraft'), approveReply: forbidden('delegation.approveReply'), submitApprovedReply: forbidden('delegation.submitApprovedReply'),
     // Settings → Suppressed reads locally. The fixture answers with a real empty list so the section renders without any network.
     readSuppression: async () => ({ entries: [], truncated: false, generatedAt: '2026-09-18T12:00:00.000Z' }),
