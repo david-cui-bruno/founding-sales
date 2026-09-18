@@ -11,6 +11,7 @@ import { openSettingsSection } from '../../foundation/settingsNavigation';
 import { captureDailySessionScope } from './dailySessionScope';
 import { RequestedEmailPreparation } from './RequestedEmailPreparation';
 import { describeHandoffHold } from './handoffHoldCopy';
+import { PHONE_DIAL_MODES } from './todayCopy';
 import { allowedPhoneReports, companyPhoneSession, describePhoneOutcome, freezePhoneValue, makePhoneReview, notifyPhoneSession, parsePhoneHistory,
   phoneFreshBinding, phoneHistoryScope, phoneOwner, phoneSelection, type CompanyPhoneApi, type PhoneAttempt,
   type PhoneConfig, type PhoneOutcome, type PhoneReport, type PhoneReview } from './companyPhoneSession';
@@ -189,17 +190,23 @@ export function CompanyPhoneCall({ api, snapshot, config, accountId, readError =
       const next = await readReview(check, selector); check();
       const current = phoneFreshBinding(next.snapshot, next.config, selector, next.detail, next.setup, next.history, workspaceId);
       if (current.binding !== captured.binding) throw Error('Reviewed phone bindings changed. Check owner and review again before confirming.');
+      // The reviewed path is part of what was confirmed. `binding` already carries the saved setup,
+      // so this cannot fire on its own; it states the rule the request depends on rather than implying it.
+      if (current.manual !== captured.manual || current.manual !== (captured.request.manual === true)) throw Error('The phone handoff path changed since this call was reviewed. Review it again before confirming.');
       check();
       session.begin = { request: captured.request, result: null };
       notifyPhoneSession(session);
       const raw = await api.delegation.beginPhone(captured.request); check();
       const result = delegatedPhoneHandoffResultSchema.parse(raw);
       session.begin.result = result;
-      setNotice(result.status === 'handoff' && result.result.status === 'handoff_accepted'
-        ? 'Apple Phone accepted the handoff request. This does not mean connected or completed.'
-        : result.status === 'held' ? `${describeHandoffHold(result.reason)}. No automatic retry is available.`
-          : result.status === 'pending' ? 'Owner acknowledgment pending. Do not redial.'
-            : 'Handoff result unknown or already consumed. Do not redial from this workflow.');
+      setNotice(result.status === 'handoff' && result.result.reasonCode === 'manual_dial'
+        // Nothing was dialed, opened or sent from here: this records the call David already made.
+        ? 'Recorded as dialed by hand. This call step\'s one handoff is now used up, and the outcome form below is open for it. Callie placed no call.'
+        : result.status === 'handoff' && result.result.status === 'handoff_accepted'
+          ? 'Apple Phone accepted the handoff request. This does not mean connected or completed.'
+          : result.status === 'held' ? `${describeHandoffHold(result.reason)}. No automatic retry is available.`
+            : result.status === 'pending' ? 'Owner acknowledgment pending. Do not redial.'
+              : 'Handoff result unknown or already consumed. Do not redial from this workflow.');
       const refreshed = await readContext(check, selector); check(); acceptContext(refreshed);
     } catch (error) {
       try { check?.(); setStale(true); setNotice(session.begin ? 'Handoff result unknown. Do not redial. Refresh saved phone history.' : `HOLD: ${errorText(error)}`); } catch { /* Retain uncertain request without publishing to another lifetime. */ }
@@ -301,9 +308,18 @@ export function CompanyPhoneCall({ api, snapshot, config, accountId, readError =
       <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{review.offer}</pre>
       <p>Enrollment {enrollmentId} · call step {stepId}</p>
       {review.detail.sources.filter(source => review.detail.snapshot.routes.find(route => route.id === review.request.command.payload.routeId)?.evidenceIds.includes(source.id)).map(source => <details key={source.id}><summary>Saved phone evidence: {source.url}</summary><pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{source.excerpt}</pre></details>)}
-      <p>Final confirmation asks the current owner for one handoff and may open Apple Phone. Prepared or accepted is not connected. A prepared unconsumed hold has no supported reset here.</p>
-      <label><input type="checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} />I confirm the displayed destination and call purpose</label>
-      <button disabled={!confirmed || busy || !!session?.begin || !!session?.bridge.beginning || !available} onClick={() => void begin()}>Call with Phone.app</button>
+      {review.manual ? <>
+        {/* D6 acceptance 2. The helper cannot dial from this Mac, so the only call that can happen is the
+            one David makes himself on his own phone. Confirming records that call: it takes this step's
+            one handoff and opens the outcome form. It never dials, never opens Phone.app and sends nothing. */}
+        <p>Callie cannot dial from this Mac: {PHONE_DIAL_MODES[review.setupState].reason ?? 'phone setup is not confirmed'}. Dial {review.target} yourself, then confirm below. Confirming takes this call step&apos;s one handoff and opens the outcome form. It does not dial, open Apple Phone or send anything, and taking the handoff is not proof that the call connected.</p>
+        <label><input type="checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} />I dialed {review.target} at {review.detail.snapshot.account.name} by hand</label>
+        <button disabled={!confirmed || busy || !!session?.begin || !!session?.bridge.beginning || !available} onClick={() => void begin()}>I dialed this number by hand</button>
+      </> : <>
+        <p>Final confirmation asks the current owner for one handoff and may open Apple Phone. Prepared or accepted is not connected. A prepared unconsumed hold has no supported reset here.</p>
+        <label><input type="checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} />I confirm the displayed destination and call purpose</label>
+        <button disabled={!confirmed || busy || !!session?.begin || !!session?.bridge.beginning || !available} onClick={() => void begin()}>Call with Phone.app</button>
+      </>}
       <button disabled={busy} onClick={() => { setReview(null); setConfirmed(false); }}>Cancel call review</button>
     </div>}
     <h4>Saved phone history</h4>

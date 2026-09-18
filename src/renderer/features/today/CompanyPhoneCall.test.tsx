@@ -9,6 +9,8 @@ import { createCallCampaignDraft, describeCallCampaignTemplate } from '../../../
 import { localCompanyDetailSchema } from '../../../shared/contracts/localWorkspaceContract';
 import { delegatedPhoneStateReplySchema, type PhoneHandoffState } from '../../../shared/contracts/delegatedPhoneStateContract';
 import type { PhoneSetupApi } from '../../../shared/contracts/phoneSetupContract';
+import { delegatedPhoneHandoffRequestSchema, type DelegatedPhoneHandoffRequest } from '../../../shared/contracts/ownerCommandContract';
+import { PHONE_DIAL_MODES } from './todayCopy';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 function phoneFixture() {
@@ -74,9 +76,12 @@ it.each(['route', 'owner', 'evidence', 'setup'] as const)('final confirmation re
   if (kind === 'route') { f.snapshot.accounts[0].routes[0].version++; f.setSnapshot(f.snapshot); }
   if (kind === 'owner') { f.snapshot.ownerStatus[0].executionVersion = 20; f.setSnapshot(f.snapshot); }
   if (kind === 'evidence') f.source.sources[0].excerpt += ' Revised saved source.';
+  // Setup losing `configured` between review and confirmation now selects the hand-dialed path, so
+  // it is refused as a changed binding rather than as an unconfigured readiness: either way the
+  // reviewed helper dial never becomes something else without a fresh review.
   if (kind === 'setup') vi.mocked(f.setup.status).mockResolvedValue({ state: 'unavailable', candidateFingerprint: null, confirmedAt: null });
   fireEvent.click(confirmation); fireEvent.click(screen.getByRole('button', { name: 'Call with Phone.app' }));
-  await screen.findByText(kind === 'route' ? 'HOLD: The exact selected company business phone route is unavailable.' : kind === 'setup' ? 'HOLD: Phone handoff readiness is not configured.' : 'HOLD: Reviewed phone bindings changed. Check owner and review again before confirming.');
+  await screen.findByText(kind === 'route' ? 'HOLD: The exact selected company business phone route is unavailable.' : 'HOLD: Reviewed phone bindings changed. Check owner and review again before confirming.');
   expect(f.begin).not.toHaveBeenCalled(); expect(f.submit).not.toHaveBeenCalled(); expect(f.sync).toHaveBeenCalledTimes(1);
 });
 it('unknown begin reply is latched once with current non-default versions and survives panel remount', async () => {
@@ -111,4 +116,82 @@ it('selection teardown while owner review is pending cannot publish confirmation
   await screen.findByText(/No saved handoff attempt/);
   expect(screen.queryByRole('checkbox', { name: 'I confirm the displayed destination and call purpose' })).toBeNull();
   expect(f.begin).not.toHaveBeenCalled(); expect(f.setup.status).not.toHaveBeenCalled();
+});
+
+/**
+ * D6 acceptance 2, end to end in the renderer: the helper cannot dial, so the review offers the
+ * hand-dialed control instead of the Phone.app one, the request carries `manual: true`, and the
+ * consumed handoff that comes back opens the same outcome form a helper dial opens.
+ */
+function handDialledHistory(command: DelegatedPhoneHandoffRequest['command']): PhoneHandoffState {
+  const selector = { accountId: 'a', enrollmentId: 'phone-enrollment', stepId: 'initial-call' };
+  return delegatedPhoneStateReplySchema(selector).parse({
+    ...selector, workspaceId: 'ws', campaign: { campaignId: 'phone-campaign', campaignRevision: 1, campaignVersionId: 'phone-version' },
+    generatedAt: fixtureNow, remote: 'unknown', completeness: 'complete', issue: null, completions: [],
+    attempts: [{ command, queuedAt: fixtureNow,
+      receipt: { commandId: command.commandId, status: 'applied', authorityGeneration: 7, aggregateVersion: 20, reason: null },
+      receiptEvent: { eventId: 'hand-dialled-event', kind: 'manual.handoff', authorityGeneration: 7, aggregateVersion: 20, appliedAt: fixtureNow },
+      handoff: { value: { ...command.payload, handoffId: 'hand-dialled-handoff', expiresAt: '2026-09-09T13:00:00.000Z' },
+        authorityGeneration: 7, consumedAt: fixtureNow } }],
+  });
+}
+async function openHandDialledReview(f: ReturnType<typeof phoneFixture>) {
+  vi.mocked(f.setup.status).mockResolvedValue({ state: 'unavailable', candidateFingerprint: null, confirmedAt: null });
+  mount(f); fireEvent.click(await screen.findByRole('button', { name: 'Call · Account A' }));
+  const review = await screen.findByRole('button', { name: 'Check owner and review call' });
+  await waitFor(() => expect((review as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(review);
+  return screen.findByRole('checkbox', { name: 'I dialed +14015550100 at Account A by hand' });
+}
+
+it('offers the hand-dialed control instead of Phone.app when the helper cannot dial, and only after one confirmation', async () => {
+  const f = phoneFixture();
+  const confirmation = await openHandDialledReview(f);
+  expect(screen.queryByRole('button', { name: 'Call with Phone.app' })).toBeNull();
+  expect(screen.queryByRole('checkbox', { name: 'I confirm the displayed destination and call purpose' })).toBeNull();
+  expect((screen.getByRole('button', { name: 'I dialed this number by hand' }) as HTMLButtonElement).disabled).toBe(true);
+  // The reason is the plain one Settings and the card use, and the confirmation names number and firm.
+  const explanation = `Callie cannot dial from this Mac: ${PHONE_DIAL_MODES.unavailable.reason}. Dial +14015550100 yourself, then confirm below.`;
+  expect(screen.getByText((_, element) => element?.tagName === 'P' && (element.textContent ?? '').startsWith(explanation))).toBeTruthy();
+  expect((confirmation as HTMLInputElement).checked).toBe(false);
+  fireEvent.click(confirmation);
+  expect((screen.getByRole('button', { name: 'I dialed this number by hand' }) as HTMLButtonElement).disabled).toBe(false);
+  expect(f.begin).not.toHaveBeenCalled(); expect(f.submit).not.toHaveBeenCalled();
+});
+
+it('a hand-dialed call sends manual true, consumes the step\'s one handoff and opens the same outcome form', async () => {
+  const f = phoneFixture();
+  f.begin.mockImplementation(async raw => {
+    const request = delegatedPhoneHandoffRequestSchema.parse(raw);
+    expect(request.manual).toBe(true);
+    f.setHistory(handDialledHistory(request.command));
+    return { status: 'handoff', handoffId: 'hand-dialled-handoff', result: { status: 'unavailable', reasonCode: 'manual_dial' } };
+  });
+  const confirmation = await openHandDialledReview(f);
+  fireEvent.click(confirmation);
+  fireEvent.click(screen.getByRole('button', { name: 'I dialed this number by hand' }));
+  await screen.findByText('Recorded as dialed by hand. This call step\'s one handoff is now used up, and the outcome form below is open for it. Callie placed no call.');
+  expect(f.begin).toHaveBeenCalledTimes(1);
+  expect(f.begin.mock.calls[0][0]).toMatchObject({ manual: true, command: { expectedAuthorityGeneration: 7, expectedVersion: 19, kind: 'prepare-manual' } });
+  // Exactly as after a helper dial: the consumed handoff is what opens the report form.
+  expect(await screen.findByRole('group', { name: 'Report an observed phone outcome' })).toBeTruthy();
+  expect((await screen.findByRole('combobox', { name: 'Consumed handoff' }) as HTMLSelectElement).value).toBe('hand-dialled-handoff');
+  expect(f.submit).not.toHaveBeenCalled();
+});
+
+it('refuses a second hand-dialed call on the same step with the existing one-per-step rule', async () => {
+  const f = phoneFixture();
+  f.begin.mockImplementation(async raw => {
+    const request = delegatedPhoneHandoffRequestSchema.parse(raw);
+    f.setHistory(handDialledHistory(request.command));
+    return { status: 'handoff', handoffId: 'hand-dialled-handoff', result: { status: 'unavailable', reasonCode: 'manual_dial' } };
+  });
+  const confirmation = await openHandDialledReview(f);
+  fireEvent.click(confirmation);
+  fireEvent.click(screen.getByRole('button', { name: 'I dialed this number by hand' }));
+  await screen.findByRole('group', { name: 'Report an observed phone outcome' });
+  // The saved attempt is now in this step's history, so no second review can be prepared at all.
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Check owner and review call' }) as HTMLButtonElement).disabled).toBe(true));
+  expect(screen.queryByRole('button', { name: 'I dialed this number by hand' })).toBeNull();
+  expect(f.begin).toHaveBeenCalledTimes(1);
 });

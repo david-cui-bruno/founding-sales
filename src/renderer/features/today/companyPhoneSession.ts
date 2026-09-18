@@ -37,7 +37,14 @@ export function describePhoneOutcome(outcome: string): string {
   const words = outcome.replaceAll('_', ' ');
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
-export type PhoneReview = { binding: string; request: DelegatedPhoneHandoffRequest; detail: LocalCompanyDetail; offer: string; target: string };
+/**
+ * `manual` is true exactly when the signed helper cannot dial from this Mac, which is the state in
+ * which D6's hand-dialed path exists at all. It decides which of the two terminal controls the
+ * review offers and whether the request carries `manual: true`. The saved setup is inside
+ * `binding`, so a review prepared for one path can never be confirmed as the other.
+ */
+export type PhoneReview = { binding: string; request: DelegatedPhoneHandoffRequest; detail: LocalCompanyDetail; offer: string; target: string;
+  manual: boolean; setupState: PhoneSetupStatus['state'] };
 export type PhoneSession = {
   busy: boolean;
   begin: { request: DelegatedPhoneHandoffRequest; result: DelegatedPhoneHandoffResult | null } | null;
@@ -133,9 +140,14 @@ export function phoneFreshBinding(snapshot: DailySnapshot, config: PhoneConfig, 
   const caps = campaign.caps.filter(cap => cap.campaignVersionId === campaign.version.id && cap.channel === 'call');
   const cap = caps.length === 1 ? caps[0] : undefined;
   if (!cap || cap.reserved + cap.sent >= campaign.version.channelCaps.call) throw Error('A unique available saved call cap is required.');
-  if (setup.state !== 'configured') throw Error('Phone handoff readiness is not configured.');
+  // D6 acceptance 2. Setup that is not `configured` used to refuse the review outright, which is
+  // exactly when a hand-dialed call matters: David can see the number but Callie cannot dial it.
+  // It now selects the hand-dialed path instead. Every other check above is unchanged, and `setup`
+  // stays inside `binding` below, so a review prepared while configured cannot be confirmed as a
+  // hand dial (or the reverse) without the final binding comparison refusing it.
+  const manual = setup.state !== 'configured';
   if (history.completeness !== 'complete' || history.attempts.length) throw Error('Existing or incomplete phone history holds new handoffs. Do not redial.');
-  return { account, campaign, enrollment, step, owner, route,
+  return { account, campaign, enrollment, step, owner, route, manual, setupState: setup.state,
     binding: JSON.stringify({ account, version: campaign.version, snapshotHash: campaign.snapshotHash, enrollment, step, cap,
       owner: { authority: owner.authority, executionVersion: owner.executionVersion, pendingCommands: owner.pendingCommands },
       config, detail: { snapshot: detail.snapshot, sources: detail.sources, links: detail.links }, setup }) };
@@ -151,8 +163,12 @@ export function makePhoneReview(snapshot: DailySnapshot, config: PhoneConfig, se
       targetHash: sha256Utf8(route.value), contentHash: sha256Utf8(campaign.version.offer), contextRevision: enrollment.executionContextId,
       campaign: { campaignId: campaign.version.campaignId, campaignRevision: campaign.version.version, enrollmentId: enrollment.id,
         enrollmentRevision: enrollment.version, stepId: step.id } },
-  }, expectedEvidenceFingerprint: account.fingerprint }));
-  return { binding: value.binding, request, detail, offer: campaign.version.offer, target: route.value };
+  }, expectedEvidenceFingerprint: account.fingerprint,
+  // Only the literal true, and only when the helper cannot dial. The flag is a routing statement,
+  // never a permission: the command, its evidence and every approval above are identical either way.
+  ...(value.manual ? { manual: true as const } : {}) }));
+  return { binding: value.binding, request, detail, offer: campaign.version.offer, target: route.value,
+    manual: value.manual, setupState: value.setupState };
 }
 export function allowedPhoneReports(history: CompletePhoneHistory, attempt: PhoneAttempt): PhoneOutcome[] {
   if (!attempt.handoff || attempt.handoff.consumedAt === null) return [];

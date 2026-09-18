@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CallCard } from './CallCard';
+import { CallCard, MANUAL_DIAL_NEXT_STEP } from './CallCard';
 import { dailyFixture, fixtureNow } from './nativeDesk.fixture';
-import { MANUAL_DIAL_NOT_WIRED, PHONE_DIAL_MODES } from './todayCopy';
+import { PHONE_DIAL_MODES } from './todayCopy';
 import type { LocalCompanyDetail } from '../../../shared/contracts/localWorkspaceContract';
 import type { PhoneSetupApi, PhoneSetupStatus } from '../../../shared/contracts/phoneSetupContract';
 
@@ -112,8 +112,8 @@ describe('CallCard', () => {
         reveal();
         await screen.findByText(`Callie cannot dial from this Mac: ${PHONE_DIAL_MODES[state].reason}. Dial it yourself and log the outcome below.`);
         expect(phone.status).toHaveBeenCalledTimes(1);
-        // Honest about the half that is not wired: nothing here promises a form it cannot open.
-        expect(screen.getByText(MANUAL_DIAL_NOT_WIRED)).toBeTruthy();
+        // The hand-dialed call has somewhere to go now: the card names the control that logs it.
+        expect(screen.getByText(MANUAL_DIAL_NEXT_STEP)).toBeTruthy();
         expect(screen.getByTestId('dial-number').textContent).toBe('+14015550100');
         const card = screen.getByRole('region', { name: 'Call card' });
         expect(card.querySelector('a[href^="tel:"]')).toBeNull();
@@ -130,7 +130,7 @@ describe('CallCard', () => {
       reveal();
       await screen.findByText(PHONE_DIAL_MODES.configured.card);
       expect(screen.queryByText(/Callie cannot dial from this Mac/)).toBeNull();
-      expect(screen.queryByText(MANUAL_DIAL_NOT_WIRED)).toBeNull();
+      expect(screen.queryByText(MANUAL_DIAL_NEXT_STEP)).toBeNull();
       expect(screen.getByTestId('dial-number').textContent).toBe('+14015550100');
       expect(screen.getByRole('button', { name: 'Copy number' })).toBeTruthy();
     });

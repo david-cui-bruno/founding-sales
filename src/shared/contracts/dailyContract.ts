@@ -8,6 +8,7 @@ import { requestedFollowupDraftSchema, requestedApprovalStatusSchema } from './r
 import { accountReplyDraftSchema, threadProjectionSchema } from './mailThreadContract';
 import { linkedInDraftSchema, linkedInRecoverySchema } from './linkedInContract';
 import { meetingOutcomePayloadSchema } from './meetingContract';
+import { usageSummarySchema } from './usageContract';
 const id = z.string().min(1).max(255);
 const revision = z.number().int().nonnegative().safe();
 const instant = z.string().datetime({ offset: true });
@@ -50,6 +51,9 @@ export const dailyCallAllocationSchema = z.strictObject({ newCallSlots: revision
 export const dailySnapshotSchema = z.strictObject({ workspaceId: id.nullable(), workflowMode: z.enum(['legacy', 'meeting_first', 'unknown']), revision: z.string().regex(/^[a-f0-9]{64}$/),
   freshness: z.strictObject({ kind: z.enum(['local_snapshot', 'incomplete']), generatedAt: instant, remote: z.literal('unknown') }),
   accounts: z.array(dailyAccountSchema), calls: dailyAccountCallPlanSchema, callSettings: dailyCallSettingsSchema, allocation: dailyCallAllocationSchema.optional(),
+  /** The derived weekly summary. Like `allocation` it stays outside the revision hash, so measuring
+   *  use never changes a stored snapshot revision. Absent when it could not be derived, never zeroed. */
+  usage: usageSummarySchema.optional(),
   answers: z.array(dailyAnswerSchema), meetings: z.array(dailyMeetingSchema), campaigns: z.array(dailyCampaignSchema), ownerStatus: z.array(dailyOwnerStatusSchema), transport: z.array(dailyTransportSchema), issues: z.array(dailyIssueSchema).max(8),
   /** Open promised callbacks for the listed firms. Absent when there are none, so a workspace with no callback keeps its exact stored revision. */
   callbacks: z.array(accountCallbackSchema).optional() }).refine(s => {

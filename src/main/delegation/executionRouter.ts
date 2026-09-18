@@ -76,6 +76,10 @@ export function createDelegatedPhoneHandoff(input: {
   const flights = new Map<string, { fingerprint: string; promise: Promise<DelegatedPhoneHandoffResult> }>();
   const held = (reason: string): DelegatedPhoneHandoffResult => ({ status: 'held', reason });
   const uncertain: HandoffResult = { status: 'unknown', reasonCode: 'handoff_uncertain' };
+  // D6: the founder dialled the number on the card himself. No automated channel was used, so the
+  // status stays `unavailable`; `manual_dial` names why, instead of the vague `channel_unavailable`
+  // this returned before. It is deliberately not `handoff_accepted`: nothing accepted anything.
+  const handDialled: HandoffResult = { status: 'unavailable', reasonCode: 'manual_dial' };
   function wait<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
     return new Promise((resolve, reject) => {
       const abort = () => { signal.removeEventListener('abort', abort); reject(new Error('operation_interrupted')); };
@@ -152,7 +156,7 @@ export function createDelegatedPhoneHandoff(input: {
       // A hand-dialed attempt consumes the step's one handoff and stops there, so the outcome form
       // opens on real consumed evidence. The helper is never asked to dial, and `target` is never
       // handed to it: the founder dialled it himself from the number on the card.
-      if (manual) return { status: 'handoff', handoffId, result: { status: 'unavailable', reasonCode: 'channel_unavailable' } };
+      if (manual) return { status: 'handoff', handoffId, result: handDialled };
       // No await, queued callback, or second authorization between SQL commit and dispatch.
       const pending = phone.dispatch(target);
       const result = handoffResultSchema.safeParse(await wait(pending, signal));
@@ -162,10 +166,13 @@ export function createDelegatedPhoneHandoff(input: {
     }
   }
   /** `manual` is the desktop-side flag for a hand-dialed attempt. It is part of the in-flight
-   * identity, so the same command id can never be replayed as the other kind of handoff. */
+   * identity, so the same command id can never be replayed as the other kind of handoff.
+   * It arrives either on the parsed request (the IPC path, where `delegatedPhoneHandoffRequestSchema`
+   * accepts only the literal `true`) or as a caller option, so no wiring outside this file has to
+   * know about it. `false` is not a value either source can carry: absent means helper dial. */
   return { begin(value: DelegatedPhoneHandoffRequest, options?: { manual?: boolean }): Promise<DelegatedPhoneHandoffResult> {
     const request = delegatedPhoneHandoffRequestSchema.parse(value);
-    const manual = options?.manual === true;
+    const manual = options?.manual === true || request.manual === true;
     const fingerprint = accountFingerprint({ request, manual }); const id = request.command.commandId; const prior = flights.get(id);
     if (prior) return prior.fingerprint === fingerprint ? prior.promise : Promise.resolve(held('command_conflict'));
     const promise = Promise.resolve().then(() => run(request, manual)).finally(() => flights.delete(id));

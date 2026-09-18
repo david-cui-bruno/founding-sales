@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { DailySnapshot } from '../../../shared/contracts/dailyContract';
 import { researchSetupStatusSchema, type ResearchSetupApi, type ResearchSetupStatus } from '../../../shared/contracts/researchSetupContract';
 import { DEFAULT_NEW_CALL_SLOTS_COPY } from './todayCopy';
+import { WeeklySummary } from './WeeklySummary';
 
 const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
 
@@ -45,8 +46,11 @@ export function describeDiscoverySpend(status: ResearchSetupStatus | null): stri
  * Sync freshness comes from the stored transport record in the daily snapshot; the worker tick and the
  * spend come from the research setup status, read once per completed sync so the footer never polls.
  */
-export function TodayFooter({ snapshot, readError, researchSetup, now = () => Date.now() }: {
-  snapshot: DailySnapshot; readError: boolean; researchSetup?: Pick<ResearchSetupApi, 'status'>; now?: () => number;
+export function TodayFooter({ snapshot, readError, researchSetup, showUsage = false, now = () => Date.now() }: {
+  snapshot: DailySnapshot; readError: boolean; researchSetup?: Pick<ResearchSetupApi, 'status'>;
+  /** Today shows the weekly block; the account and campaign surfaces do not. */
+  showUsage?: boolean;
+  now?: () => number;
 }) {
   const [status, setStatus] = useState<ResearchSetupStatus | null>(null);
   const latestSync = [...snapshot.transport].sort((a, b) => b.revision - a.revision)[0];
@@ -69,6 +73,10 @@ export function TodayFooter({ snapshot, readError, researchSetup, now = () => Da
       : describeSync(snapshot, at);
   return <footer className="native-desk__footer">
     <span role="status">{line}</span>
+    {/* One row for both collapsed blocks, so adding the weekly summary costs the footer no height.
+        `.native-desk__layout` reserves a fixed 265px for the header and this footer, and a taller
+        footer shrinks the editor area below the browser group's usable-height floor. */}
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-4)', alignItems: 'flex-start' }}>
     <details>
       <summary>Queue capacity and operational details</summary>
       <p>
@@ -87,5 +95,9 @@ export function TodayFooter({ snapshot, readError, researchSetup, now = () => Da
         </p>
       ))}
     </details>
+    {/* The weekly block sits inside this one footer element, beside its details, so the footer stays a
+        single landmark and the spend comes from the status this footer already read. */}
+    {showUsage && <WeeklySummary usage={readError ? undefined : snapshot.usage} status={status} />}
+    </div>
   </footer>;
 }
