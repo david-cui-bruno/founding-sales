@@ -19,6 +19,7 @@ import { buildDailySnapshot, type DailyProjectionInput } from './dailyProjection
 import { AccountCallbackRepository } from '../callbacks/accountCallbackRepository';
 import { localDateIn } from '../../../shared/contracts/accountCallbackContract';
 import { readRouteJurisdictionTimezones } from './routeJurisdiction';
+import { readUsageSummary } from '../usage/usageReadService';
 
 type Row = Record<string, unknown>;
 /** One deferred local snapshot. Dependencies expose no transport or draft generation. */
@@ -97,9 +98,6 @@ export class DailyReadService {
       catch { issue('invalid_local_record'); return false; }
     }).map(callback => callback.accountId));
     for (const accountId of dueToday) due.delete(accountId);
-    const plan = parse(() => today.planMeetingFirstAccountCalls({ callbacks: input.accounts.filter(a => dueToday.has(a.account.id)),
-      due: input.accounts.filter(a => due.has(a.account.id)), ranked: input.accounts, generatedAt }));
-    if (plan) input.calls = { accountIds: [...plan.accountIds], workloadConflict: plan.workloadConflict };
     let pendingByAccount: Map<string, ReturnType<DelegationRepository['pendingCommands']>> | undefined;
     let pendingFailure: { error: unknown } | undefined;
     const pendingForAccount = (accountId: string) => {
@@ -174,6 +172,14 @@ export class DailyReadService {
       });
       if (values) input.approvals.push(...values);
     }
+    // The morning list is planned only after the stored reply threads are read, because a firm that
+    // answered leads it. Lane 32 writes the first draft; the reply itself is the reason to call, so a
+    // thread with signals leads whether or not a draft was saved for it yet. No new command, no send.
+    const replied = new Set(input.approvals.filter(answer => answer.kind === 'reply').map(answer => answer.accountId));
+    const plan = parse(() => today.planMeetingFirstAccountCalls({ replies: input.accounts.filter(a => replied.has(a.account.id)),
+      callbacks: input.accounts.filter(a => dueToday.has(a.account.id)),
+      due: input.accounts.filter(a => due.has(a.account.id)), ranked: input.accounts, generatedAt }));
+    if (plan) input.calls = { accountIds: [...plan.accountIds], workloadConflict: plan.workloadConflict };
     for (const row of rows("SELECT id,enrollment_id,account_id,revision FROM manual_linkedin_drafts WHERE workspace_id=? AND state<>'closed' ORDER BY account_id,id", workspaceId)) {
       if (!scoped(row.account_id)) continue;
       const value = parse(() => {
@@ -194,6 +200,11 @@ export class DailyReadService {
     }
     const research = raw.prepare("SELECT COUNT(*) AS count FROM pm_account_research_jobs j WHERE j.state='parked' AND EXISTS(SELECT 1 FROM pm_accounts a LEFT JOIN delegated_authorities d ON d.account_id=a.id WHERE a.id=j.account_id AND (d.workspace_id IS NULL OR d.workspace_id=?))").get(workspaceId) as { count: number };
     if (research.count > 0) input.issues.push({ code: 'research_failed', count: research.count });
+    // Measured use, derived from the stored records. A summary that cannot be derived is absent rather
+    // than zeroed, and its absence is not an incomplete snapshot: no morning work depends on it.
+    try {
+      input.usage = readUsageSummary(database, { workspaceId, accountIds: [...accountIds], generatedAt, timezone: workspaceZone });
+    } catch { input.usage = undefined; }
     return buildDailySnapshot(input);
   }
 }
