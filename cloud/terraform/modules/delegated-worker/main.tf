@@ -260,3 +260,165 @@ resource "aws_lambda_permission" "delegated_worker_schedule" {
   source_arn     = aws_cloudwatch_event_rule.delegated_worker[0].arn
   source_account = var.aws_account_id
 }
+
+# Operations David can see (Batch 7, D10). One SNS topic receives every alarm; the
+# email subscription exists only when alarm_email is set (the address confirms it
+# by mail, Terraform never confirms it). Alarms: Lambda Errors, Lambda Throttles,
+# a silent schedule (fewer than 10 invocations in an hour while the five-minute
+# rule is on), and any scheduled tick whose SCHEDULED_RUN_COMPLETED record held
+# work or was denied a Places page. The AWS Budget is account-wide monthly cost
+# with actual-spend notifications at 100% and 200% of monthly_budget_usd (USD 25
+# and USD 50 by default) plus a forecast at 100%. Nothing here reads a secret,
+# grants a permission or changes how the worker runs.
+locals {
+  delegated_alarm_topic_arn = var.delegated_worker_enabled ? aws_sns_topic.delegated_worker_alarms[0].arn : ""
+}
+
+resource "aws_sns_topic" "delegated_worker_alarms" {
+  count = var.delegated_worker_enabled ? 1 : 0
+  name  = "${local.delegated_name}-alarms"
+  tags  = { Component = "delegated-worker" }
+}
+
+resource "aws_sns_topic_policy" "delegated_worker_alarms" {
+  count = var.delegated_worker_enabled ? 1 : 0
+  arn   = aws_sns_topic.delegated_worker_alarms[0].arn
+  policy = jsonencode({ Version = "2012-10-17", Statement = [
+    { Sid       = "AlarmsAndBudgetsPublish", Effect = "Allow", Principal = { Service = ["cloudwatch.amazonaws.com", "budgets.amazonaws.com"] },
+      Action    = "sns:Publish", Resource = aws_sns_topic.delegated_worker_alarms[0].arn,
+      Condition = { StringEquals = { "aws:SourceAccount" = var.aws_account_id } }
+    }
+  ] })
+}
+
+resource "aws_sns_topic_subscription" "delegated_worker_alarm_email" {
+  count     = var.delegated_worker_enabled && var.alarm_email != "" ? 1 : 0
+  topic_arn = aws_sns_topic.delegated_worker_alarms[0].arn
+  protocol  = "email"
+  endpoint  = var.alarm_email
+}
+
+resource "aws_cloudwatch_metric_alarm" "delegated_worker_errors" {
+  count               = var.delegated_worker_enabled ? 1 : 0
+  alarm_name          = "${local.delegated_name}-errors"
+  alarm_description   = "The delegated worker Lambda reported a function error."
+  namespace           = "AWS/Lambda"
+  metric_name         = "Errors"
+  dimensions          = { FunctionName = aws_lambda_function.delegated_worker[0].function_name }
+  statistic           = "Sum"
+  period              = 300
+  evaluation_periods  = 1
+  threshold           = 1
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.delegated_worker_alarms[0].arn]
+  ok_actions          = [aws_sns_topic.delegated_worker_alarms[0].arn]
+  tags                = { Component = "delegated-worker" }
+}
+
+resource "aws_cloudwatch_metric_alarm" "delegated_worker_throttles" {
+  count               = var.delegated_worker_enabled ? 1 : 0
+  alarm_name          = "${local.delegated_name}-throttles"
+  alarm_description   = "The delegated worker Lambda was throttled (reserved concurrency is 2)."
+  namespace           = "AWS/Lambda"
+  metric_name         = "Throttles"
+  dimensions          = { FunctionName = aws_lambda_function.delegated_worker[0].function_name }
+  statistic           = "Sum"
+  period              = 300
+  evaluation_periods  = 1
+  threshold           = 1
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.delegated_worker_alarms[0].arn]
+  ok_actions          = [aws_sns_topic.delegated_worker_alarms[0].arn]
+  tags                = { Component = "delegated-worker" }
+}
+
+# Twelve ticks an hour are expected; fewer than ten means the schedule stopped firing or the
+# function stopped being invoked. Missing data is the silence itself, so it breaches.
+resource "aws_cloudwatch_metric_alarm" "delegated_worker_silent_schedule" {
+  count               = local.delegated_schedule_enabled ? 1 : 0
+  alarm_name          = "${local.delegated_name}-silent-schedule"
+  alarm_description   = "The delegated worker was invoked fewer than 10 times in an hour while its five-minute schedule is on."
+  namespace           = "AWS/Lambda"
+  metric_name         = "Invocations"
+  dimensions          = { FunctionName = aws_lambda_function.delegated_worker[0].function_name }
+  statistic           = "Sum"
+  period              = 3600
+  evaluation_periods  = 1
+  threshold           = 10
+  comparison_operator = "LessThanThreshold"
+  treat_missing_data  = "breaching"
+  alarm_actions       = [aws_sns_topic.delegated_worker_alarms[0].arn]
+  ok_actions          = [aws_sns_topic.delegated_worker_alarms[0].arn]
+  tags                = { Component = "delegated-worker" }
+}
+
+# The tick record is the only application log line of the scheduled path; its fields are counts and enums.
+resource "aws_cloudwatch_log_metric_filter" "delegated_worker_held_ticks" {
+  count          = var.delegated_worker_enabled ? 1 : 0
+  name           = "${local.delegated_name}-held-ticks"
+  log_group_name = aws_cloudwatch_log_group.delegated_worker[0].name
+  pattern        = "{ ($.event = \"SCHEDULED_RUN_COMPLETED\") && (($.held > 0) || ($.places.outcome = \"denied\")) }"
+  metric_transformation {
+    name          = "HeldTicks"
+    namespace     = "Callie/DelegatedWorker"
+    value         = "1"
+    default_value = "0"
+    unit          = "Count"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "delegated_worker_held_ticks" {
+  count               = var.delegated_worker_enabled ? 1 : 0
+  alarm_name          = "${local.delegated_name}-held-ticks"
+  alarm_description   = "A scheduled tick held work or was denied a Places page (see the SCHEDULED_RUN_COMPLETED record)."
+  namespace           = "Callie/DelegatedWorker"
+  metric_name         = "HeldTicks"
+  statistic           = "Sum"
+  period              = 300
+  evaluation_periods  = 1
+  threshold           = 1
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.delegated_worker_alarms[0].arn]
+  ok_actions          = [aws_sns_topic.delegated_worker_alarms[0].arn]
+  tags                = { Component = "delegated-worker" }
+  depends_on          = [aws_cloudwatch_log_metric_filter.delegated_worker_held_ticks]
+}
+
+# Account-wide monthly cost: after the legacy sourcing stack was destroyed (17 September 2026)
+# the worker is the only stack in the account. Not a hard cap; Budgets notify, they never stop spend.
+resource "aws_budgets_budget" "delegated_worker_monthly" {
+  count        = var.delegated_worker_enabled ? 1 : 0
+  name         = "${local.delegated_name}-monthly-usd"
+  budget_type  = "COST"
+  limit_amount = tostring(var.monthly_budget_usd)
+  limit_unit   = "USD"
+  time_unit    = "MONTHLY"
+  notification {
+    comparison_operator        = "GREATER_THAN"
+    threshold                  = 100
+    threshold_type             = "PERCENTAGE"
+    notification_type          = "ACTUAL"
+    subscriber_sns_topic_arns  = [aws_sns_topic.delegated_worker_alarms[0].arn]
+    subscriber_email_addresses = var.alarm_email != "" ? [var.alarm_email] : null
+  }
+  notification {
+    comparison_operator        = "GREATER_THAN"
+    threshold                  = 200
+    threshold_type             = "PERCENTAGE"
+    notification_type          = "ACTUAL"
+    subscriber_sns_topic_arns  = [aws_sns_topic.delegated_worker_alarms[0].arn]
+    subscriber_email_addresses = var.alarm_email != "" ? [var.alarm_email] : null
+  }
+  notification {
+    comparison_operator        = "GREATER_THAN"
+    threshold                  = 100
+    threshold_type             = "PERCENTAGE"
+    notification_type          = "FORECASTED"
+    subscriber_sns_topic_arns  = [aws_sns_topic.delegated_worker_alarms[0].arn]
+    subscriber_email_addresses = var.alarm_email != "" ? [var.alarm_email] : null
+  }
+  depends_on = [aws_sns_topic_policy.delegated_worker_alarms]
+}
