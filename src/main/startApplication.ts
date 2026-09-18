@@ -64,6 +64,7 @@ import { classifyStartupFailure, isStartupCancellation, type StartupStage } from
 import type { SafeLogger } from './logging/safeLogger';
 import { createOutboundCommandService } from './communications/outboundCommandService';
 import { createPhoneHandoffLauncher, unavailablePhoneHandoff, unavailableOutboundReadiness } from './communications/phoneHandoffLauncher';
+import { isExcludedNumber } from './communications/excludedNumbers';
 import type { OutboundCommandServiceApi, OutboundDomainGate, PhoneHandoffPort, OutboundReadinessPort } from './communications/outboundPorts';
 
 import { createInboundReadiness, type InboundRegistry, type InboundAdapter } from './communications/inboundReadiness';
@@ -166,8 +167,8 @@ export function createProductionPhoneBindings(input: ProductionPhoneBindingsOpti
           launcher ??= createPhoneHandoffLauncher({
             driver: createNativePhoneLaunchDriver({ ...input.native, verifiedHelperPath, setupFingerprint: proof }),
             // Domain authorization checks DNC, jurisdiction and exact contact. The
-            // launcher independently rejects short or malformed targets.
-            isExcludedNumber: () => false,
+            // launcher independently refuses service codes, short codes, test exchanges and malformed targets.
+            isExcludedNumber,
           });
           const capability = await launcher.inspectCapability();
           if (version !== epoch || !proof()) return unavailable.inspectCapability();
