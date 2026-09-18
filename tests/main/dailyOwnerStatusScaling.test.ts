@@ -9,6 +9,7 @@ import { AccountRepository } from '../../src/main/domain/accounts/accountReposit
 import { DelegationRepository } from '../../src/main/delegation/delegationRepository';
 import { buildDailySnapshot } from '../../src/main/domain/today/dailyProjection';
 import type { DailySnapshot } from '../../src/shared/contracts/dailyContract';
+import type { UsageWindow } from '../../src/shared/contracts/usageContract';
 
 const now = '2026-09-15T12:00:00.000Z';
 const workspaceId = 'fictional-owner-scaling';
@@ -103,7 +104,7 @@ async function fixture(count = 4, scope: string | undefined = workspaceId) {
       evidence(label, snapshot, scans);
       return { snapshot, scans, trace: [...trace] };
     };
-    const emptyWeek = (from: string, to: string) => ({ from, to, mornings: 0, firms: 0, callsPlaced: 0,
+    const emptyWeek = (from: string, to: string): UsageWindow => ({ from, to, mornings: 0, firms: 0, callsPlaced: 0,
       outcomes: { connected: 0, interested: 0, not_interested: 0, gatekeeper: 0, voicemail: 0, no_answer: 0, busy: 0, wrong_number: 0 },
       notes: 0, callbacksPromised: 0, callbacksKept: 0, drafts: 0, replies: 0, holds: [] });
     const expected = (ownerStatus: DailySnapshot['ownerStatus'], issues: DailySnapshot['issues'] = []) => buildDailySnapshot({
