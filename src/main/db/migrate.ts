@@ -1,3 +1,4 @@
+import { migration0029AccountCallbacks } from './migrations/0029AccountCallbacks';
 import { migration0028TerritoryClearances } from './migrations/0028TerritoryClearances';
 import { migration0027ListedRouteVerification } from './migrations/0027ListedRouteVerification';
 import { migration0026LocalCompanyDrafts } from './migrations/0026LocalCompanyDrafts';
@@ -157,6 +158,7 @@ export const productionMigrations = [
   { id: '0026LocalCompanyDrafts', schemaVersion: 26, migration: migration0026LocalCompanyDrafts },
   { id: '0027ListedRouteVerification', schemaVersion: 27, migration: migration0027ListedRouteVerification },
   { id: '0028TerritoryClearances', schemaVersion: 28, migration: migration0028TerritoryClearances },
+  { id: '0029AccountCallbacks', schemaVersion: 29, migration: migration0029AccountCallbacks },
 ] as const;
 const productionMigrationRunner = createMigrationRunner(productionMigrations);
 

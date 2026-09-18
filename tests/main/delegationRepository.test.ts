@@ -7,7 +7,7 @@ describe('C1 encrypted migration', () => {
     const f = await createPmFixture();
     try {
       f.repo.create({ commandId: randomUUID(), name: 'Fictional PM', domain: null });
-      expect(f.db.raw.prepare('SELECT schema_version FROM app_meta').get()).toEqual({ schema_version: 28 });
+      expect(f.db.raw.prepare('SELECT schema_version FROM app_meta').get()).toEqual({ schema_version: 29 });
       expect(f.db.raw.prepare('SELECT * FROM delegated_authorities').all()).toEqual([]);
       expect(f.db.raw.prepare('SELECT * FROM persons ORDER BY id').all()).toEqual(f.historicalPersons);
     } finally { f.close(); }

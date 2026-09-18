@@ -6,7 +6,7 @@ import { checkFts5, type AppDatabase } from '../../db/database';
 import { inspectDatabaseEncryption } from '../../db/databaseEncryption';
 import { DomainStartupFatalError } from './domainStartupTypes';
 
-export type DomainStorageReadiness<Version extends 24 | 25 | 26 | 27 | 28 = 28> = Readonly<{
+export type DomainStorageReadiness<Version extends 24 | 25 | 26 | 27 | 28 | 29 = 29> = Readonly<{
   schemaVersion: Version;
   encrypted: true;
   cipherVersion: string;
@@ -391,11 +391,18 @@ export const SCHEMA26_MANIFEST: DomainSchemaManifest = Object.freeze({
 export const SCHEMA27_MANIFEST: DomainSchemaManifest = Object.freeze({ ...SCHEMA26_MANIFEST,
   catalogSha256: 'fe92819582d62cbbfcd9fe88cd5f2b21d3edd638ba3abcb8b3984ef79e9d952b' });
 // Schema 28 adds the per-state territory clearance table and its two triggers; nothing else changes.
-export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
+export const SCHEMA28_MANIFEST: DomainSchemaManifest = Object.freeze({
   tables: Object.freeze([...SCHEMA27_MANIFEST.tables, 'territory_clearances'].sort()),
   indexes: SCHEMA27_MANIFEST.indexes,
   triggers: Object.freeze([...SCHEMA27_MANIFEST.triggers, 'territory_clearances_no_delete', 'territory_clearances_revision'].sort()),
   catalogSha256: 'c75e605441a7b92fed26e9a5c59389061ea674512afbbe997622a6d0ab96e66b',
+});
+// Schema 29 adds the promised-callback table, its due-date index and its two triggers; nothing else changes.
+export const DOMAIN_SCHEMA_MANIFEST: DomainSchemaManifest = Object.freeze({
+  tables: Object.freeze([...SCHEMA28_MANIFEST.tables, 'pm_account_callbacks'].sort()),
+  indexes: Object.freeze([...SCHEMA28_MANIFEST.indexes, 'pm_account_callbacks_due'].sort()),
+  triggers: Object.freeze([...SCHEMA28_MANIFEST.triggers, 'pm_account_callbacks_no_delete', 'pm_account_callbacks_revision'].sort()),
+  catalogSha256: '6e7dd33d5a779020eb206216cd3bde25baa6979f0a8efa28ac6a96c36f348238',
 });
 
 export const DOMAIN_MIGRATION_LEDGER = Object.freeze([
@@ -422,6 +429,7 @@ export const DOMAIN_MIGRATION_LEDGER = Object.freeze([
   '0021DelegatedWork', '0022MailPersistence', '0023Campaigns', '0024RequestedFollowupAndPolicyReviews', '0025KnownCompanyResearchSettings', '0026LocalCompanyDrafts',
   '0027ListedRouteVerification',
   '0028TerritoryClearances',
+  '0029AccountCallbacks',
 ] as const);
 
 const appMetaSchema = z.object({
@@ -435,25 +443,25 @@ const appMetaSchema = z.object({
 export function assertDomainStorageReady(input: {
   database: AppDatabase;
   expectedBusyTimeoutMs: 5000;
-  expectedSchemaVersion: 28;
+  expectedSchemaVersion: 29;
   expectedManifest: DomainSchemaManifest;
 }): DomainStorageReadiness {
   return assertExactStorageReady(input, DOMAIN_MIGRATION_LEDGER);
 }
 
 /** Backup-only compatibility. Never migrates or admits a schema-24 app runtime. */
-export function assertPreReleaseStorageReady(database: AppDatabase): DomainStorageReadiness<24 | 25 | 26 | 27 | 28> {
+export function assertPreReleaseStorageReady(database: AppDatabase): DomainStorageReadiness<24 | 25 | 26 | 27 | 28 | 29> {
   const row = appMetaSchema.safeParse(database.raw.prepare('SELECT schema_version FROM app_meta WHERE singleton = 1').get());
-  if (!row.success || (row.data.schema_version !== 24 && row.data.schema_version !== 25 && row.data.schema_version !== 26 && row.data.schema_version !== 27 && row.data.schema_version !== 28)) {
+  if (!row.success || (row.data.schema_version !== 24 && row.data.schema_version !== 25 && row.data.schema_version !== 26 && row.data.schema_version !== 27 && row.data.schema_version !== 28 && row.data.schema_version !== 29)) {
     throw new DomainStartupFatalError('schema_not_ready', 'Unsupported pre-release backup schema.');
   }
   const version = row.data.schema_version;
-  const manifest = version === 24 ? SCHEMA24_MANIFEST : version === 25 ? SCHEMA25_MANIFEST : version === 26 ? SCHEMA26_MANIFEST : version === 27 ? SCHEMA27_MANIFEST : DOMAIN_SCHEMA_MANIFEST;
+  const manifest = version === 24 ? SCHEMA24_MANIFEST : version === 25 ? SCHEMA25_MANIFEST : version === 26 ? SCHEMA26_MANIFEST : version === 27 ? SCHEMA27_MANIFEST : version === 28 ? SCHEMA28_MANIFEST : DOMAIN_SCHEMA_MANIFEST;
   return assertExactStorageReady({ database, expectedBusyTimeoutMs: 5000,
     expectedSchemaVersion: version, expectedManifest: manifest }, DOMAIN_MIGRATION_LEDGER.slice(0, version));
 }
 
-function assertExactStorageReady<Version extends 24 | 25 | 26 | 27 | 28>(input: {
+function assertExactStorageReady<Version extends 24 | 25 | 26 | 27 | 28 | 29>(input: {
   database: AppDatabase;
   expectedBusyTimeoutMs: 5000;
   expectedSchemaVersion: Version;

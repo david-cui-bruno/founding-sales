@@ -781,3 +781,9 @@ export type TerritoryClearanceTables = {
   territory_clearances: { state: string; revision: number; timezone: string; clearance_json: string; citation_json: string;
     confirmed_at: string; review_at: string; revoked_at: string | null };
 };
+
+/** Schema29 promised callbacks: one revisioned row per callback David promised on a call. `due_on` is a plain local date. */
+export type AccountCallbackTables = {
+  pm_account_callbacks: { id: string; account_id: string; due_on: string; note: string | null;
+    state: 'open' | 'done' | 'cancelled'; revision: number; source_command_id: string; created_at: string; updated_at: string };
+};

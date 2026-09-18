@@ -7,7 +7,7 @@ it('adds real account-scoped mail checkpoint and thread-owned draft storage with
  const f=await createPmFixture();
  try {
   const account=f.repo.create({commandId:randomUUID(),name:'Mail PM',domain:null});
-  expect(f.db.raw.prepare('SELECT schema_version FROM app_meta').get()).toEqual({schema_version:28});
+  expect(f.db.raw.prepare('SELECT schema_version FROM app_meta').get()).toEqual({schema_version:29});
   expect(f.db.raw.prepare('SELECT * FROM delegated_mail_cursors').all()).toEqual([]);
   expect(f.db.raw.prepare('SELECT * FROM delegated_reply_drafts').all()).toEqual([]);
   const checkpoint=f.db.raw.prepare('INSERT INTO delegated_mail_cursors VALUES(?,?,?,?,?,?)');
