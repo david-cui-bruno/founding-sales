@@ -3,7 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BACKGROUND_SYNC_INTERVAL_MS, createBackgroundSync } from '../../src/main/delegation/backgroundSync';
 import type { SyncReport } from '../../src/main/delegation/delegationSync';
 
-const fresh = (applied = 0): SyncReport => ({ applied, gaps: 0, cursor: null, ownerFresh: true });
+const fresh = (applied = 0): SyncReport => ({ applied, gaps: 0, cursor: null, ownerFresh: true, failure: null });
+const stopped = (failure: SyncReport['failure'], cursor: string | null = null): SyncReport => ({ applied: 0, gaps: 0, cursor, ownerFresh: false, failure });
 const deferred = () => {
   let resolve!: (value: SyncReport) => void; let reject!: (error: Error) => void;
   const promise = new Promise<SyncReport>((yes, no) => { resolve = yes; reject = no; });
@@ -59,17 +60,18 @@ describe('createBackgroundSync', () => {
   it('records a failed transport as failed and keeps the previous applied count out of it', async () => {
     const onApplied = vi.fn();
     const sync = vi.fn().mockResolvedValueOnce(fresh(3)).mockRejectedValueOnce(new Error('/Users/founder/private transport failure'))
-      .mockResolvedValueOnce({ applied: 0, gaps: 1, cursor: null, ownerFresh: false }).mockResolvedValueOnce({ applied: 4, gaps: 0, cursor: 'c', ownerFresh: false });
+      .mockResolvedValueOnce({ ...stopped('gap'), gaps: 1 }).mockResolvedValueOnce({ ...stopped('timeout', 'c'), applied: 4 });
     const owner = createBackgroundSync({ enabled: true, sync, clock, onApplied });
     await owner.trigger('launch');
     expect(onApplied).toHaveBeenCalledTimes(1);
-    expect(onApplied.mock.calls[0]![0]).toMatchObject({ lastSyncResult: 'applied', lastApplied: 3 });
+    expect(onApplied.mock.calls[0]![0]).toMatchObject({ lastSyncResult: 'applied', lastApplied: 3, lastFailure: null });
     const failed = await owner.trigger('interval');
-    expect(failed).toMatchObject({ running: false, lastSyncResult: 'failed', lastApplied: 0, runs: 2 });
+    // A rejected run has no report to read a reason from, so it says only that the transport failed.
+    expect(failed).toMatchObject({ running: false, lastSyncResult: 'failed', lastApplied: 0, runs: 2, lastFailure: 'transport' });
     expect(failed.lastSyncAt).not.toBeNull();
     // An incomplete replay (gap, or owner not fresh) is not a current owner proof: failed, even when events applied.
-    expect(await owner.trigger('focus')).toMatchObject({ lastSyncResult: 'failed' });
-    expect(await owner.trigger('focus')).toMatchObject({ lastSyncResult: 'failed', lastApplied: 4 });
+    expect(await owner.trigger('focus')).toMatchObject({ lastSyncResult: 'failed', lastFailure: 'gap' });
+    expect(await owner.trigger('focus')).toMatchObject({ lastSyncResult: 'failed', lastApplied: 4, lastFailure: 'timeout' });
     expect(onApplied).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(owner.status())).not.toContain('private');
     owner.dispose();

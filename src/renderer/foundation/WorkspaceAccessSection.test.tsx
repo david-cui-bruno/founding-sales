@@ -24,7 +24,7 @@ function api(initial = status()) {
   return {
     status: vi.fn<Api['status']>(async () => initial),
     configure: vi.fn<Api['configure']>(async input => ({ revision: input.expectedRevision + 1, updatedAt, configuration: input.configuration })),
-    sync: vi.fn<Api['sync']>(async () => ({ applied: 2, gaps: 0, cursor: null, ownerFresh: true })),
+    sync: vi.fn<Api['sync']>(async () => ({ applied: 2, gaps: 0, cursor: null, ownerFresh: true, failure: null })),
   } satisfies Api;
 }
 const joins: Array<() => Promise<void>> = [];
@@ -143,12 +143,26 @@ describe('Workspace access explicit setup controls', () => {
 
   it.each(['current', 'gaps', 'stale', 'invalid'] as const)('sync is explicit and validates %s report without configuring', async mode => {
     const a = api(); await ready(a);
-    a.sync.mockResolvedValueOnce({ applied: 2, gaps: mode === 'gaps' ? 1 : 0, cursor: null, ownerFresh: mode !== 'stale', ...(mode === 'invalid' ? { extra: true } : {}) });
+    a.sync.mockResolvedValueOnce({ applied: 2, gaps: mode === 'gaps' ? 1 : 0, cursor: null,
+      ownerFresh: mode !== 'stale', failure: mode === 'gaps' ? 'gap' : mode === 'stale' ? 'timeout' : null, ...(mode === 'invalid' ? { extra: true } : {}) });
     expect(a.sync).not.toHaveBeenCalled(); sync();
     const feedback = await screen.findByText(mode === 'invalid' ? /Sync outcome unknown/ : mode === 'current' ? /Last sync report: owner events fresh/ : /sync is incomplete/);
     expect(feedback.getAttribute('role')).toBe(mode === 'current' ? 'status' : 'alert');
     if (mode !== 'invalid') expect(feedback.textContent).toContain('Queued commands may remain unresolved even when owner events are fresh.');
+    // A complete run says nothing about a stop; a short run names the reason from the closed set.
+    if (mode === 'current') expect(feedback.textContent).not.toContain('Sync stopped');
+    if (mode === 'gaps') expect(feedback.textContent).toContain('Sync stopped: found a gap in the event stream at cursor none yet.');
+    if (mode === 'stale') expect(feedback.textContent).toContain('Sync stopped: timed out after 120 s at cursor none yet.');
     expect(a.sync.mock.calls).toEqual([[]]); expect(a.configure).not.toHaveBeenCalled(); expect(a.status).toHaveBeenCalledTimes(1);
+  });
+
+  it('names a timed-out run and the cursor the next sync resumes from', async () => {
+    const a = api(); await ready(a);
+    a.sync.mockResolvedValueOnce({ applied: 400, gaps: 0, cursor: `${'a'.repeat(64)}:400`, ownerFresh: false, failure: 'timeout' });
+    sync();
+    const feedback = await screen.findByRole('alert');
+    expect(feedback.textContent).toContain('Applied: 400. Gaps: 0. Owner fresh: no.');
+    expect(feedback.textContent).toContain(`Sync stopped: timed out after 120 s at cursor ${'a'.repeat(64)}:400. The next sync resumes from that cursor.`);
   });
 });
 
@@ -182,7 +196,7 @@ describe('Workspace access operation lifetimes', () => {
     view.rerender(<WorkspaceAccessSection api={b} />); await waitFor(() => expect(button('Refresh setup status').disabled).toBe(false));
     view.rerender(<WorkspaceAccessSection api={a} />); await waitFor(() => expect(a.status).toHaveBeenCalledTimes(3));
     await waitFor(() => expect(button('Refresh setup status').disabled).toBe(false));
-    const fresh = deferred({ applied: 5, gaps: 0, cursor: null, ownerFresh: true }); a.sync.mockReturnValueOnce(fresh.promise); sync();
+    const fresh = deferred({ applied: 5, gaps: 0, cursor: null, ownerFresh: true, failure: null }); a.sync.mockReturnValueOnce(fresh.promise); sync();
     await settle(old); expect(button('Refresh setup status').disabled).toBe(true); expect(a.status).toHaveBeenCalledTimes(3);
     expect(screen.queryByText(/Local configuration saved/)).toBeNull();
     await settle(fresh); expect(await screen.findByText(/Applied: 5/)).toBeTruthy();
@@ -193,7 +207,7 @@ describe('Workspace access operation lifetimes', () => {
     const view = render(<WorkspaceAccessSection api={a} />); view.rerender(<WorkspaceAccessSection />);
     await settle(oldRead); expect(screen.getByText('Setup status unavailable')).toBeTruthy();
     view.rerender(<WorkspaceAccessSection api={a} />); await waitFor(() => expect(button('Refresh setup status').disabled).toBe(false));
-    const oldSync = deferred({ applied: 99, gaps: 0, cursor: null, ownerFresh: true }); a.sync.mockReturnValueOnce(oldSync.promise); sync();
+    const oldSync = deferred({ applied: 99, gaps: 0, cursor: null, ownerFresh: true, failure: null }); a.sync.mockReturnValueOnce(oldSync.promise); sync();
     view.unmount(); await settle(oldSync); expect(a.status).toHaveBeenCalledTimes(2);
     render(<WorkspaceAccessSection api={a} />); await waitFor(() => expect(button('Refresh setup status').disabled).toBe(false));
     expect(screen.queryByText(/Applied: 99/)).toBeNull(); expect(checkbox().checked).toBe(false);
@@ -233,7 +247,7 @@ describe('Workspace access presentation callbacks', () => {
     a.sync.mockRejectedValueOnce(Error('sync')); sync(); await screen.findByRole('alert');
     expect(changed).not.toHaveBeenCalled();
     refresh(); await waitFor(() => expect(checkbox().disabled).toBe(false));
-    const pending = deferred({ applied: 0, gaps: 0, cursor: null, ownerFresh: true });
+    const pending = deferred({ applied: 0, gaps: 0, cursor: null, ownerFresh: true, failure: null });
     a.sync.mockReturnValueOnce(pending.promise); sync(); view.unmount(); await settle(pending);
     expect(changed).not.toHaveBeenCalled();
   });
