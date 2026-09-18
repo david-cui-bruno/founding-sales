@@ -1,16 +1,19 @@
 import { constants, type Stats } from 'node:fs';
-import { lstat, mkdir, open, link, rm } from 'node:fs/promises';
+import { lstat, mkdir, open, link, rename, rm } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { SafeStorage } from '../outreach/providers/providerTypes';
 import { accountIdSchema } from '../../shared/contracts/accountContract';
+import { pairingScopeSchema, rotateLocalPairingSchema, rotatedLocalPairingSchema, storedPairingSummarySchema, type StoredPairingSummary } from '../../shared/contracts/ownerCommandContract';
 const fail = (): never => { throw new Error('pairing_unavailable'); };
 const endpointSchema = z.string().url().refine(value => { const u = new URL(value); return u.protocol === 'https:' && !u.username && !u.password && !u.search && !u.hash && u.pathname === '/'; }).transform(value => new URL(value).origin);
 const credential = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
-const grantSchema = z.strictObject({ workspaceId: accountIdSchema, pairingId: accountIdSchema, credential, emergencyCredential: credential, generation: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), scopes: z.array(z.enum(['commands:write', 'events:read', 'google:grant', 'pairing:revoke', 'emergency:stop'])) });
+const grantSchema = z.strictObject({ workspaceId: accountIdSchema, pairingId: accountIdSchema, credential, emergencyCredential: credential, generation: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), scopes: z.array(pairingScopeSchema) });
 const storedPairingSchema = grantSchema.extend({ endpoint: endpointSchema });
 export type StoredPairing = z.infer<typeof storedPairingSchema>;
+type Grant = z.infer<typeof grantSchema>;
+const desktopScopes = (grant: Grant) => grant.scopes.includes('commands:write') && grant.scopes.includes('events:read');
 
 const maxBytes = 256 * 1024;
 const envelopeSchema = z.object({ format: z.literal('callie-worker-pairing'), version: z.literal(1),
@@ -63,7 +66,10 @@ export class PairingStore {
     } catch { throw new Error('pairing_unavailable'); }
   }
 
-  private async save(value: StoredPairing, assertMayCommit: () => void = () => undefined): Promise<void> {
+  /** Without `replaces`, pairing identity is write-once: the commit is a hard link that fails if any file exists. With
+   * `replaces` (a rotation), the commit is an atomic rename over the file that still holds exactly that pairing id and
+   * generation; any other content on disk at commit time refuses the replacement. */
+  private async save(value: StoredPairing, assertMayCommit: () => void = () => undefined, replaces?: { pairingId: string; generation: number }): Promise<void> {
     await this.available();
     let temporary: string | null = null;
     try {
@@ -84,9 +90,17 @@ export class PairingStore {
       if (!current || current.ino !== directory.ino || current.dev !== directory.dev) fail();
       await this.inspectExisting();
       assertMayCommit();
-      // Pairing identity is write-once. A concurrent redemption must not replace it.
-      await link(temporary, this.path);
-      await rm(temporary);
+      if (replaces) {
+        // Same pairing, consecutive generation: the file being replaced must still be the one the rotation was read against.
+        const existing = await this.load();
+        if (!existing || existing.pairingId !== replaces.pairingId || existing.generation !== replaces.generation
+          || existing.pairingId !== parsed.data.pairingId || parsed.data.generation !== existing.generation + 1) fail();
+        await rename(temporary, this.path);
+      } else {
+        // Pairing identity is write-once. A concurrent redemption must not replace it.
+        await link(temporary, this.path);
+        await rm(temporary);
+      }
       temporary = null;
       const parent = await open(this.input.directory, constants.O_RDONLY | constants.O_NOFOLLOW);
       try { await parent.sync(); } finally { await parent.close(); }
@@ -100,17 +114,49 @@ export class PairingStore {
     signal.throwIfAborted();
     await this.available();
     if (await this.load()) throw new Error('pairing_already_configured');
-    const response = await (this.input.fetch ?? globalThis.fetch)(`${value.endpoint}/pairing/redeem`, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: value.code }),
+    const grant = await this.exchange(value.endpoint, value.code, signal);
+    if (grant.workspaceId !== value.expectedWorkspaceId || !desktopScopes(grant)) throw new Error('pairing_identity_mismatch');
+    await this.save({ ...grant, endpoint: value.endpoint }, () => signal.throwIfAborted());
+    return Object.freeze({ state: 'paired' as const, workspaceId: grant.workspaceId, pairingId: grant.pairingId });
+  }
+
+  /** The stored pairing's identity, generation and scopes for Settings. Never a credential. */
+  async describe(): Promise<StoredPairingSummary | null> {
+    const stored = await this.load();
+    if (!stored) return null;
+    return Object.freeze(storedPairingSummarySchema.parse({ workspaceId: stored.workspaceId, pairingId: stored.pairingId,
+      endpoint: stored.endpoint, generation: stored.generation, scopes: [...stored.scopes] }));
+  }
+
+  /** Explicit trusted rotation of the stored credential. Endpoint and workspace come from the store, so the exchange can
+   * only ever reach the worker this Mac is paired with. The reply is accepted only when it names the same pairing and
+   * workspace at exactly the next generation and still carries both desktop scopes; the pairing id never changes, so
+   * every row keyed by it stays valid. The previous credentials are dead at the worker once the reply exists. */
+  async rotate(request: { pairingId: string; expectedGeneration: number; code: string }, signal: AbortSignal) {
+    const value = rotateLocalPairingSchema.extend({ code: credential }).parse(request);
+    signal.throwIfAborted();
+    await this.available();
+    const stored = await this.load();
+    if (!stored) throw new Error('pairing_unconfigured');
+    if (stored.pairingId !== value.pairingId || stored.generation !== value.expectedGeneration) throw new Error('pairing_identity_mismatch');
+    const grant = await this.exchange(stored.endpoint, value.code, signal);
+    if (grant.pairingId !== stored.pairingId || grant.workspaceId !== stored.workspaceId
+      || grant.generation !== stored.generation + 1 || !desktopScopes(grant)) throw new Error('pairing_identity_mismatch');
+    await this.save({ ...grant, endpoint: stored.endpoint }, () => signal.throwIfAborted(), { pairingId: stored.pairingId, generation: stored.generation });
+    return Object.freeze(rotatedLocalPairingSchema.parse({ state: 'rotated', workspaceId: grant.workspaceId, pairingId: grant.pairingId,
+      generation: grant.generation, scopes: [...grant.scopes] }));
+  }
+
+  /** One POST of the one-time code to the worker's redeem route; the same exchange serves a fresh pairing and a rotation. */
+  private async exchange(endpoint: string, code: string, signal: AbortSignal): Promise<Grant> {
+    const response = await (this.input.fetch ?? globalThis.fetch)(`${endpoint}/pairing/redeem`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code }),
       redirect: 'error', cache: 'no-store', signal });
     signal.throwIfAborted();
     if (!response.ok) throw new Error('pairing_unavailable');
     const text = await response.text();
     if (text.length > 16384) throw new Error('pairing_unavailable');
-    const grant = grantSchema.parse(JSON.parse(text));
-    if (grant.workspaceId !== value.expectedWorkspaceId || !grant.scopes.includes('commands:write') || !grant.scopes.includes('events:read')) throw new Error('pairing_identity_mismatch');
-    await this.save({ ...grant, endpoint: value.endpoint }, () => signal.throwIfAborted());
-    return Object.freeze({ state: 'paired' as const, workspaceId: grant.workspaceId, pairingId: grant.pairingId });
+    return grantSchema.parse(JSON.parse(text));
   }
 
   private async available(): Promise<void> {
