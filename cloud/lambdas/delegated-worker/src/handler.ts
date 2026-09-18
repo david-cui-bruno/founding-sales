@@ -53,7 +53,7 @@ export function createWorkerHandler(input: { auth: WorkerAuth; host: string; goo
         if (Buffer.byteLength(JSON.stringify(selected.payload), 'utf8') > 200000) return response(400, { error: 'worker_request_rejected' });
       }
       const query = new URLSearchParams(event.rawQueryString);
-      const allowed = path === '/oauth/callback' ? ['state', 'code', 'error', 'scope', 'authuser', 'prompt', 'hd'] : path === '/events' ? ['cursor'] : ['/google/status', '/google/disclosure'].includes(path) ? ['purpose'] : [];
+      const allowed = path === '/oauth/callback' ? ['state', 'code', 'error', 'scope', 'authuser', 'prompt', 'hd', 'iss'] : path === '/events' ? ['cursor'] : ['/google/status', '/google/disclosure'].includes(path) ? ['purpose'] : [];
       for (const key of query.keys()) if (!allowed.includes(key) || query.getAll(key).length !== 1) return response(400, { error: 'worker_invalid_request' });
       const body = () => JSON.parse(event.body ?? '{}') as unknown;
       if (path === '/accounts/preparation' && method === 'POST') {
@@ -74,6 +74,8 @@ export function createWorkerHandler(input: { auth: WorkerAuth; host: string; goo
       }
       if (path === '/oauth/callback' && method === 'GET') {
         if (!input.google || !query.has('state') || query.has('code') === query.has('error')) return response(400, { error: 'worker_invalid_request' });
+        // Google appends the issuer to the redirect; only its own issuer is admitted, and the value is otherwise unused.
+        if (query.has('iss') && query.get('iss') !== 'https://accounts.google.com') return response(400, { error: 'worker_invalid_request' });
         await input.google.completeGoogleGrant(query.get('state')!, query.has('error') ? null : query.get('code'));
         return { statusCode: 200, headers: { ...headers, 'Content-Type': 'text/plain; charset=utf-8' }, body: 'Authorization completed. Return to FSS.' };
       }

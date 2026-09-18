@@ -376,3 +376,18 @@ describe('lost provider response retains uncertain revoke ownership', () => {
     } finally { finishRemote(); await processing; }
   });
 });
+
+describe('Google callback iss parameter', () => {
+  it('admits iss=https://accounts.google.com and refuses any other issuer before the provider is contacted', async () => {
+    const { createWorkerHandler } = await import('../src/handler');
+    const f = fixture(); const pair = await paired(f);
+    const handler = createWorkerHandler({ auth: f.auth, google: f.remote(), host: 'worker.example.test' });
+    const call = (query: Record<string, string>) => handler({ version: '2.0', rawPath: '/oauth/callback', rawQueryString: new URLSearchParams(query).toString(),
+      headers: { host: 'worker.example.test', 'x-forwarded-proto': 'https' }, requestContext: { domainName: 'worker.example.test', http: { method: 'GET', sourceIp: 'fixture' } } });
+    const first = await begun(f, pair.pairingId); const before = f.calls.length;
+    const refused = await call({ state: first.searchParams.get('state')!, code: 'code', iss: 'https://accounts.example.invalid' });
+    expect(refused.statusCode).toBe(400); expect(refused.body).toContain('worker_invalid_request'); expect(f.calls).toHaveLength(before);
+    const accepted = await call({ state: first.searchParams.get('state')!, code: 'code', iss: 'https://accounts.google.com' });
+    expect(accepted.statusCode).toBe(200); expect(accepted.body).toContain('Authorization completed');
+  });
+});

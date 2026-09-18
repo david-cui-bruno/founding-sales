@@ -294,7 +294,7 @@ describe("delegated-worker Terraform source isolation", () => {
       "delegated_schedule_enabled = var.delegated_worker_enabled && var.delegated_worker_schedule_enabled",
       'condition = var.delegated_worker_activation_reviewed && var.delegated_workspace_id != ""',
       'runtime = "nodejs22.x"', 'handler = "index.handler"', 'architectures = ["arm64"]',
-      "memory_size = 256", "timeout = 60", "reserved_concurrent_executions = 2",
+      "memory_size = 256", "timeout = 60", "reserved_concurrent_executions = 5",
       "throttling_burst_limit = 5", "throttling_rate_limit = 2", "timeout_milliseconds = 30000",
       "deletion_protection_enabled = true", "point_in_time_recovery { enabled = true }",
       "enable_key_rotation = true", "deletion_window_in_days = 30",

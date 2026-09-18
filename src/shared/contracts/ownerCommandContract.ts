@@ -122,12 +122,15 @@ export type StoredPairingSummary=z.infer<typeof storedPairingSummarySchema>;
 export const rotateLocalPairingSchema=z.strictObject({pairingId:id,expectedGeneration:revision,code:z.string().min(1).max(128)});
 export const rotatedLocalPairingSchema=z.strictObject({state:z.literal('rotated'),workspaceId:id,pairingId:id,generation:revision.min(1),scopes:z.array(pairingScopeSchema).min(1)});
 /** Why a bounded replay stopped short, from a closed set. Never a message, path or cause. */
-export const syncFailureSchema=z.enum(['timeout','transport','invalid_event','gap']).nullable();
+/** `apply`: this Mac refused to record an event the worker served (a local constraint or validation), which is not a transport fault. */
+export const syncFailureSchema=z.enum(['timeout','transport','invalid_event','gap','apply']).nullable();
 /** The budget for one whole sync run. Named once so the main process and the report line cannot drift. */
 export const SYNC_BUDGET_SECONDS=120;
 /** `failure` is optional on the wire: a report that names no reason is read as naming no reason, never
  * as a reason it did not give. The main process always states it; `ownerFresh` stays the only proof. */
-export const delegationSyncReportSchema=z.strictObject({applied:revision,gaps:revision,cursor:z.string().nullable(),ownerFresh:z.boolean(),failure:syncFailureSchema.optional()});
+export const delegationSyncReportSchema=z.strictObject({applied:revision,gaps:revision,cursor:z.string().nullable(),ownerFresh:z.boolean(),failure:syncFailureSchema.optional(),
+  /** The stage that stopped the run and the error it raised, bounded, for the report line; null when the run completed. */
+  detail:z.string().max(400).nullable().optional()});
 
 /** `manual` states that the founder will dial the number himself on this Mac. It is a routing flag the
  * desktop carries, never a permission: absent or present, the handoff, the evidence and the approvals are

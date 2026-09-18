@@ -3,8 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BACKGROUND_SYNC_INTERVAL_MS, createBackgroundSync } from '../../src/main/delegation/backgroundSync';
 import type { SyncReport } from '../../src/main/delegation/delegationSync';
 
-const fresh = (applied = 0): SyncReport => ({ applied, gaps: 0, cursor: null, ownerFresh: true, failure: null });
-const stopped = (failure: SyncReport['failure'], cursor: string | null = null): SyncReport => ({ applied: 0, gaps: 0, cursor, ownerFresh: false, failure });
+const fresh = (applied = 0): SyncReport => ({ applied, gaps: 0, cursor: null, ownerFresh: true, failure: null, detail: null });
+const stopped = (failure: SyncReport['failure'], cursor: string | null = null): SyncReport => ({ applied: 0, gaps: 0, cursor, ownerFresh: false, failure, detail: failure ? `fictional ${failure}` : null });
 const deferred = () => {
   let resolve!: (value: SyncReport) => void; let reject!: (error: Error) => void;
   const promise = new Promise<SyncReport>((yes, no) => { resolve = yes; reject = no; });

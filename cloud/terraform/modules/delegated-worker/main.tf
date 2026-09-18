@@ -142,7 +142,8 @@ resource "aws_lambda_function" "delegated_worker" {
   memory_size      = 256
   # Source ticks abort after 45s; leave time for setup and durable settlement.
   timeout                        = 60
-  reserved_concurrent_executions = 2
+  # The scheduled tick holds one execution for up to 30 s; Settings fires up to four reads at once beside it and a sync.
+  reserved_concurrent_executions = 5
   environment {
     variables = {
       DELEGATED_WORKER_RESEARCH_ONCE_ENABLED  = var.delegated_worker_research_once_enabled ? "true" : "false"
