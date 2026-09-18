@@ -256,15 +256,15 @@ describe('a wrong number retires the route it dialed', () => {
       .toMatchObject({ id: SECOND, version: 3 });
   });
 
-  it('holds the next dial with a named reason until the planner stops counting the retired route\'s outcome', async () => {
+  it('plans the first step again on the replacement route: the retired route\'s outcome no longer holds it', async () => {
     const f = await firm([{ id: FIRST, verification: 'listed' }, { id: SECOND, verification: 'published' }]);
     await f.report('wrong_number', 1, f.version.steps[0]!.id);
-    // The replacement route and the first step are recorded, and the firm is due. What still holds is the shared
-    // sequence planner, which counts the retired route's outcome as evidence on this step: an honest hold, not a
-    // silent skip and not a dial. Closing it is one change in `src/main/domain/campaign/sequencePlanner.ts`.
+    // The replacement route and the first step are recorded, and the firm is due. The shared sequence planner
+    // counts only evidence on the enrollment's selected route, so the retired route's wrong-number outcome does
+    // not hold the restarted step (it still counts against the version's call cap).
     const enrollment = enrollmentSchema.parse(f.enrollment());
     const decision = planNext({ ...f.version, approvedAt: now }, enrollment, await f.repo.evidence(uuid(8)), now);
-    expect(decision).toEqual({ kind: 'wait', stepId: f.version.steps[0]!.id, reason: 'evidence_not_current' });
+    expect(decision).toEqual({ kind: 'prepare', stepId: f.version.steps[0]!.id, reason: 'step_eligible' });
   });
 
   it('is idempotent by command id: the same outcome never retires twice or selects a third route', async () => {
