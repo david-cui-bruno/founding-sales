@@ -4,6 +4,7 @@ import { closeDatabase, openDatabase, type AppDatabase } from '../../src/main/db
 import { migrateToLatest } from '../../src/main/db/migrate';
 import { createFounderSalesDomain } from '../../src/main/domain/founderSalesDomain';
 import { DomainRuntime } from '../../src/main/domain/domainRuntime';
+import type { DomainServices } from '../../src/main/domain/createDomainServices';
 import type { PriorityProjectionRebuildCommandV1 } from '../../src/main/domain/startup/domainStartupTypes';
 import {
   PRIORITY_PROJECTION_REBUILD_JOB_TYPE,
@@ -28,6 +29,7 @@ import {
 } from '../../src/main/domain/optOut/outboundPermissionService';
 import { DomainUnitOfWork } from '../../src/main/domain/support/domainUnitOfWork';
 import { DOMAIN_TIMESTAMP, seedProspect, type SeededProspect } from '../fixtures/domainRows';
+import { seedPriorityRebuildJobs } from '../fixtures/priorityRebuildJob';
 import {
   createTempDatabase,
   createTestWorkspaceKey,
@@ -85,6 +87,19 @@ describe('priority projection refresh at startup', () => {
     return { unitOfWork, repository, priorities };
   }
 
+  /**
+   * Startup stopped enqueuing `priority_projection_rebuild_v1` in Batch 10 (D11
+   * step 6a) and now retires whatever it finds queued: nothing ever executed those
+   * jobs, because `createDiscoveryWorker` has no caller in `src/`. Cases below whose
+   * subject is the executor, the recovery ledger or revalidation still need a real
+   * queued root command, so they seed the exact command bootstrap used to build,
+   * after `initialize()` has swept.
+   */
+  function seedRebuild(services: DomainServices, asOf: string, prospectIds: readonly string[]) {
+    return seedPriorityRebuildJobs({ services, asOf, listEligibleProspectIds: () => prospectIds,
+      nextId: () => `seeded-${++runtimeCounter}` });
+  }
+
   function addDirectPhone(prospect: SeededProspect, id: string): void {
     phoneCounter += 1;
     database.raw.prepare(`
@@ -102,6 +117,7 @@ describe('priority projection refresh at startup', () => {
     const clock = { now: () => at };
     const runtime = buildRuntime(clock); runtime.initialize();
     const services = runtime.getServices();
+    seedRebuild(services, at, [owner.prospectId]);
     const domain = createFounderSalesDomain({ database, services, clock, ids: { next: () => `recovery-${++runtimeCounter}` } });
     if (existingProjection) {
       domain.processPriorityRefreshJob(services.jobs.listActive()[0]!.id);
@@ -182,7 +198,7 @@ describe('priority projection refresh at startup', () => {
     expect(f.services.jobs.get(f.failed.id)).toEqual(f.failed);
   });
 
-  it('retains the recovery locator when projection identity disappears and startup queues an output-only canonical alias', () => {
+  it('retains the recovery locator when projection identity disappears and a fresh output-only canonical alias is queued', () => {
     const f = failedRecoveryFixture(true);
     expect(f.failed.payload).toMatchObject({ expectedProjectionVersion: 1 });
     f.domain.scanAndEnqueueDiscoveryPage(); f.domain.processNextDiscoveryJob(); f.domain.scanAndEnqueueDiscoveryPage();
@@ -191,8 +207,7 @@ describe('priority projection refresh at startup', () => {
     expect(first.retryCount).toBe(1);
     database.raw.prepare('DELETE FROM prospect_priority_projection WHERE prospect_id = ?').run(f.owner.prospectId);
     f.restoreSchema(); f.advance();
-    const startup = buildRuntime(f.clock); startup.initialize();
-    const alias = f.services.jobs.listByTypeState(PRIORITY_PROJECTION_REBUILD_JOB_TYPE, 'queued', 50)[0]!;
+    const alias = seedRebuild(f.services, f.clock.now(), [f.owner.prospectId])[0]!;
     expect(alias.retryCount).toBe(0);
     f.domain.processPriorityRefreshJob(alias.id);
     expect(f.services.jobs.get(alias.id)?.result).toEqual({ status: 'superseded' });
@@ -279,18 +294,30 @@ describe('priority projection refresh at startup', () => {
     expect(f.services.prioritizationRepository.getEvaluationById(command.evaluationId)).not.toBeNull();
   });
 
-  it('queues a missing-projection rebuild job for an eligible prospect', () => {
+  it('reports the missing-projection candidate and queues nothing for it', () => {
     seedProspect(database.raw, 'refresh-missing');
     const report = buildRuntime().initialize();
+    expect(report.status).toBe('ready');
+    // The scan still runs and still names the repairable prospect honestly.
     expect(report.projectionRefreshCandidateCount).toBe(1);
-    expect(report.projectionRebuildsQueued).toBe(1);
-    expect(report.pendingProjectionRebuilds).toBe(1);
+    expect(report.repairableIssueCount).toBe(1);
+    // It just no longer becomes durable work nothing would execute.
+    expect(report.projectionRebuildsQueued).toBe(0);
+    expect(report.pendingProjectionRebuilds).toBe(0);
+    expect(database.raw.prepare('SELECT COUNT(*) AS count FROM jobs').get()).toEqual({ count: 0 });
+  });
+
+  it('still derives the exact durable v1 command and canonical key for that candidate', () => {
+    const prospect = seedProspect(database.raw, 'refresh-missing');
+    const runtime = buildRuntime(); runtime.initialize();
+    const seeded = seedRebuild(runtime.getServices(), BOOT_AT, [prospect.prospectId])[0]!;
     const job = database.raw.prepare(`
-      SELECT type, state, idempotency_key, payload_json FROM jobs
+      SELECT id, type, state, idempotency_key, payload_json FROM jobs
       WHERE type = ?
     `).get(PRIORITY_PROJECTION_REBUILD_JOB_TYPE) as {
-      type: string; state: string; idempotency_key: string; payload_json: string;
+      id: string; type: string; state: string; idempotency_key: string; payload_json: string;
     };
+    expect(job.id).toBe(seeded.id);
     expect(job.state).toBe('queued');
     expect(job.type).toBe('priority_projection_rebuild_v1');
     const payload = JSON.parse(job.payload_json) as Record<string, unknown>;
@@ -311,10 +338,11 @@ describe('priority projection refresh at startup', () => {
     }));
   });
 
-  it('executes the actual startup-enqueued durable v1 command through prioritization', () => {
+  it('executes the actual durable v1 command through prioritization', () => {
     const p = seedProspect(database.raw, 'execute-refresh');
     const runtime = buildRuntime(); runtime.initialize();
     const services = runtime.getServices();
+    seedRebuild(services, BOOT_AT, [p.prospectId]);
     const queued = services.jobs.listActive().find(j => j.type === PRIORITY_PROJECTION_REBUILD_JOB_TYPE)!;
     const domain = createFounderSalesDomain({ database, services, clock: { now: () => BOOT_AT }, ids: { next: () => 'unused-id' } });
     domain.processPriorityRefreshJob(queued.id);
@@ -325,13 +353,14 @@ describe('priority projection refresh at startup', () => {
     expect(services.prioritizationRepository.getProjection(p.prospectId)).toEqual(before);
   });
 
-  it('repairs a same-date timezone change without losing the canonical startup job', () => {
+  it('repairs a same-date timezone change without losing the canonical job', () => {
     const at = '2026-09-06T12:00:00.000Z';
     const p = seedProspect(database.raw, 'timezone-alias');
     let id = 0;
     const clock = { now: () => at }; const ids = { next: () => `timezone-${++id}` };
     const runtime = new DomainRuntime({ database, clock, ids }); runtime.initialize();
     const services = runtime.getServices();
+    seedRebuild(services, at, [p.prospectId]);
     const old = services.jobs.listActive().find(job => job.type === PRIORITY_PROJECTION_REBUILD_JOB_TYPE)!;
     expect(old.payload).toMatchObject({ founderTimezone: 'America/New_York', founderLocalDate: '2026-09-06' });
     database.raw.prepare("UPDATE workspace_settings SET timezone = 'America/Chicago' WHERE singleton = 1").run();
@@ -348,7 +377,8 @@ describe('priority projection refresh at startup', () => {
 
   it('keeps a failed normal v1 repair unresolved until a real current projection exists', () => {
     const p = seedProspect(database.raw, 'failed-v1-proof'); const runtime = buildRuntime(); runtime.initialize();
-    const services = runtime.getServices(); const old = services.jobs.listActive()[0]!;
+    const services = runtime.getServices(); seedRebuild(services, BOOT_AT, [p.prospectId]);
+    const old = services.jobs.listActive()[0]!;
     services.jobs.start(old.id, BOOT_AT); services.jobs.fail(old.id, { code: 'invalid_evidence', message: 'Original failure.' }, BOOT_AT);
     const failed = services.jobs.get(old.id)!;
     const domain = createFounderSalesDomain({ database, services, clock: { now: () => BOOT_AT }, ids: { next: () => `proof-${++runtimeCounter}` } });
@@ -374,10 +404,11 @@ describe('priority projection refresh at startup', () => {
     expect(services.jobs.get(old.id)).toEqual({ ...failed, result: { kind: 'discovery_diagnostic_status_v1', status: 'unresolved' } });
   });
 
-  it.each(['source', 'rule', 'projection', 'day'] as const)('revalidates %s before executing an older startup refresh command', kind => {
+  it.each(['source', 'rule', 'projection', 'day'] as const)('revalidates %s before executing an older refresh command', kind => {
     let at = BOOT_AT;
     const p = seedProspect(database.raw, `changed-${kind}`); const runtime = buildRuntime({ now: () => at }); runtime.initialize();
-    const services = runtime.getServices(); const old = services.jobs.listActive()[0]!;
+    const services = runtime.getServices(); seedRebuild(services, BOOT_AT, [p.prospectId]);
+    const old = services.jobs.listActive()[0]!;
     if (kind === 'day') at = '2026-08-31T12:00:00.000Z';
     const domain = createFounderSalesDomain({ database, services, clock: { now: () => at }, ids: { next: () => `successor-${++runtimeCounter}` } });
     if (kind === 'source') addDirectPhone(p, 'changed-contact');
@@ -401,16 +432,47 @@ describe('priority projection refresh at startup', () => {
     if (kind === 'projection') expect(projection.evaluationId).toBe('newer-projection');
   });
 
-  it('same-local-day restart reuses the exact stored job without duplication', () => {
-    seedProspect(database.raw, 'refresh-restart');
-    buildRuntime().initialize();
+  it('retires a rebuild job an earlier build left queued, once, and deletes no row', () => {
+    const prospect = seedProspect(database.raw, 'refresh-restart');
+    const first = buildRuntime(); first.initialize();
+    // Exactly what a build before D11 step 6a left behind on this database.
+    const legacy = seedRebuild(first.getServices(), BOOT_AT, [prospect.prospectId])[0]!;
+    expect(legacy.state).toBe('queued');
+
     const report = buildRuntime().initialize();
     expect(report.projectionRefreshCandidateCount).toBe(1);
     expect(report.projectionRebuildsQueued).toBe(0);
-    expect(report.pendingProjectionRebuilds).toBe(1);
-    expect(database.raw.prepare(
-      'SELECT COUNT(*) AS count FROM jobs WHERE type = ?',
-    ).get(PRIORITY_PROJECTION_REBUILD_JOB_TYPE)).toEqual({ count: 1 });
+    expect(report.pendingProjectionRebuilds).toBe(0);
+    const retired = database.raw.prepare(`
+      SELECT state, idempotency_key, payload_json, retry_count, started_at, finished_at, updated_at
+      FROM jobs WHERE id = ?
+    `).get(legacy.id) as { state: string; idempotency_key: string; payload_json: string;
+      retry_count: number; started_at: string | null; finished_at: string; updated_at: string };
+    expect(retired).toEqual({ state: 'cancelled', idempotency_key: legacy.idempotencyKey,
+      payload_json: JSON.stringify(legacy.payload), retry_count: 0, started_at: null,
+      finished_at: BOOT_AT, updated_at: BOOT_AT });
+    expect(database.raw.prepare('SELECT COUNT(*) AS count FROM jobs').get()).toEqual({ count: 1 });
+
+    // A later startup finds nothing left to retire and never touches the row again.
+    const later = '2026-08-31T12:00:00.000Z';
+    const again = buildRuntime({ now: () => later }).initialize();
+    expect(again.pendingProjectionRebuilds).toBe(0);
+    expect(again.projectionRebuildsQueued).toBe(0);
+    expect(database.raw.prepare('SELECT state, finished_at, updated_at FROM jobs WHERE id = ?')
+      .get(legacy.id)).toEqual({ state: 'cancelled', finished_at: BOOT_AT, updated_at: BOOT_AT });
+    expect(database.raw.prepare('SELECT COUNT(*) AS count FROM jobs').get()).toEqual({ count: 1 });
+  });
+
+  it('leaves a queued recovery-lineage job for a composed worker alone', () => {
+    const f = failedRecoveryFixture();
+    f.domain.scanAndEnqueueDiscoveryPage();
+    const child = f.services.jobs.listByTypeState(PRIORITY_PROJECTION_REBUILD_JOB_TYPE, 'queued', 50)[0]!;
+    expect(child).toMatchObject({ retryCount: 1, payload: { recovery: { rootJobId: f.failed.id } } });
+    f.restoreSchema();
+    // A retried or recovery-lineage job exists only because something executed its
+    // root, so the retirement sweep must not reach into that lineage.
+    buildRuntime(f.clock).initialize();
+    expect(f.services.jobs.get(child.id)).toEqual(child);
   });
 
   it('a current same-day projection produces no refresh candidate', () => {
@@ -432,9 +494,11 @@ describe('priority projection refresh at startup', () => {
     expect(report.projectionRefreshCandidateCount).toBe(0);
   });
 
-  it('changed relevant input yields a new fingerprint and a second exact job', () => {
+  it('changed relevant input yields a new fingerprint, and both jobs retire together', () => {
     const prospect = seedProspect(database.raw, 'refresh-changed');
-    buildRuntime().initialize();
+    const runtime = buildRuntime(); runtime.initialize();
+    const services = runtime.getServices();
+    seedRebuild(services, BOOT_AT, [prospect.prospectId]);
     const first = database.raw.prepare(`
       SELECT idempotency_key FROM jobs WHERE type = ?
     `).get(PRIORITY_PROJECTION_REBUILD_JOB_TYPE) as { idempotency_key: string };
@@ -449,13 +513,19 @@ describe('priority projection refresh at startup', () => {
       INSERT INTO prospect_properties (prospect_id, property_id, created_at)
       VALUES (?, 'refresh-changed-prop', ?)
     `).run(prospect.prospectId, DOMAIN_TIMESTAMP);
-    const report = buildRuntime().initialize();
-    expect(report.projectionRebuildsQueued).toBe(1);
+    seedRebuild(services, BOOT_AT, [prospect.prospectId]);
     const keys = database.raw.prepare(`
       SELECT idempotency_key FROM jobs WHERE type = ? ORDER BY created_at
     `).all(PRIORITY_PROJECTION_REBUILD_JOB_TYPE) as { idempotency_key: string }[];
     expect(keys).toHaveLength(2);
     expect(keys[1]!.idempotency_key).not.toBe(first.idempotency_key);
+    // Neither is work anything would run: one startup retires both, deleting neither.
+    const report = buildRuntime().initialize();
+    expect(report.projectionRebuildsQueued).toBe(0);
+    expect(report.pendingProjectionRebuilds).toBe(0);
+    expect(database.raw.prepare("SELECT COUNT(*) AS count FROM jobs WHERE state = 'cancelled'")
+      .get()).toEqual({ count: 2 });
+    expect(database.raw.prepare('SELECT COUNT(*) AS count FROM jobs').get()).toEqual({ count: 2 });
   });
 
   it('excludes corrupt projections from refresh and reports them as blocking', () => {

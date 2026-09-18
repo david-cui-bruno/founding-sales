@@ -10,6 +10,7 @@ import {
 } from '../../src/main/jobs/jobRepository';
 import { createTempDatabase, createTestWorkspaceKey, type TempDatabase } from '../fixtures/tempDatabase';
 import { seedProspect } from '../fixtures/domainRows';
+import { seedPriorityRebuildJobs } from '../fixtures/priorityRebuildJob';
 import { DomainRuntime } from '../../src/main/domain/domainRuntime';
 import type { PriorityProjectionRebuildCommandV1 } from '../../src/main/domain/startup/domainStartupTypes';
 
@@ -42,6 +43,11 @@ describe('JobRepository', () => {
     let id = 0;
     const runtime = new DomainRuntime({ database: database!, clock: { now: () => at }, ids: { next: () => `budget-${++id}` } });
     runtime.initialize();
+    // Startup stopped enqueuing rebuild jobs in Batch 10 (D11 step 6a). The root command
+    // is seeded with the same functions bootstrap used, after initialize() so its
+    // retirement sweep has already run; the ids are the same as before.
+    seedPriorityRebuildJobs({ services: runtime.getServices(), asOf: at,
+      listEligibleProspectIds: () => [owner.prospectId], nextId: () => `budget-${++id}` });
     const root = repository.listActive()[0]!;
     for (let i = 0; i < retries; i++) {
       repository.start(root.id, at); repository.fail(root.id, { code: 'discovery_transient', message: 'Synthetic transient' }, at);

@@ -73,8 +73,7 @@
   display: flex;
   gap: var(--space-2);
   justify-content: space-between;
-  font: var(--weight-heading) var(--text-caption)/var(--leading-caption)
-    var(--font-ui);
+  font: var(--weight-heading) var(--text-caption)/var(--leading-caption) var(--font-ui);
   padding: var(--space-2);
   margin: 0;
 }
@@ -124,7 +123,7 @@
 .native-desk .native-desk__row:hover {
   background: var(--canvas);
 }
-.native-desk .native-desk__row[aria-current='true'] {
+.native-desk .native-desk__row[aria-current="true"] {
   background: var(--accent-soft);
   border-left-color: var(--accent);
   color: var(--text);
@@ -227,7 +226,7 @@
   gap: var(--space-2);
   align-items: flex-start;
 }
-.native-desk input[type='checkbox'] {
+.native-desk input[type="checkbox"] {
   width: auto;
   flex: none;
 }
@@ -306,7 +305,7 @@
   }
 }
 
-.native-desk[data-presentation='native-a'] {
+.native-desk[data-presentation="native-a"] {
   border-radius: 10px;
   overflow: hidden;
 }
@@ -356,7 +355,7 @@
   border-left: 3px solid transparent;
   border-radius: 7px;
 }
-.native-desk .native-desk__row[aria-current='true'] {
+.native-desk .native-desk__row[aria-current="true"] {
   background: var(--surface);
   border-color: var(--line);
   border-left-color: var(--accent);
@@ -476,17 +475,19 @@
   text-align: right;
 }
 
-.native-desk[data-presentation='native-a'] .native-desk__header {
+.native-desk[data-presentation="native-a"] .native-desk__header {
   padding: 16px 24px 15px;
   align-items: flex-start;
 }
-.native-desk[data-presentation='native-a'] h1 {
+.native-desk[data-presentation="native-a"] h1 {
   font-size: var(--text-native-page);
   line-height: 1.25;
   font-weight: 720;
   letter-spacing: -0.7px;
 }
-.native-desk__header p { font-size: var(--text-caption); }
+.native-desk__header p {
+  font-size: var(--text-caption);
+}
 .native-desk__header-status {
   display: flex;
   align-items: center;
@@ -531,7 +532,9 @@
   overflow-y: auto;
   scrollbar-width: thin;
 }
-.native-desk__queue--today > .native-desk__lane + .native-desk__lane { margin-top: 0; }
+.native-desk__queue--today > .native-desk__lane + .native-desk__lane {
+  margin-top: 0;
+}
 .native-desk__queue-title {
   display: flex;
   align-items: center;
@@ -563,7 +566,9 @@
   align-items: center;
   gap: 7px;
 }
-.native-desk__lane-label svg { flex: none; }
+.native-desk__lane-label svg {
+  flex: none;
+}
 .native-desk__lane h2 .native-desk__count {
   display: inline-grid;
   place-items: center;
@@ -581,47 +586,111 @@
   font-size: var(--text-micro);
   font-weight: 400;
 }
-.native-desk .native-desk__row { padding: 5px 10px; }
-.native-desk__row strong { font-size: var(--text-dense); font-weight: 650; }
-.native-desk__row :is(small, span) { font-size: var(--text-micro); }
-.native-desk__empty { font-size: var(--text-caption); line-height: 1.5; }
+.native-desk .native-desk__row {
+  padding: 5px 10px;
+}
+.native-desk__row strong {
+  font-size: var(--text-dense);
+  font-weight: 650;
+}
+.native-desk__row :is(small, span) {
+  font-size: var(--text-micro);
+}
+.native-desk__empty {
+  font-size: var(--text-caption);
+  line-height: 1.5;
+}
 .native-desk__detail--welcome {
   align-self: start;
   max-width: 660px;
   min-height: 0;
 }
-.native-desk__welcome { padding: 8px 0; }
-.native-desk__welcome h2 { font-size: var(--text-section); line-height: 1.3; margin: 0 0 8px; }
-.native-desk__welcome p { font-size: var(--text-dense); max-width: 52ch; }
-.native-desk__account h2 { font-size: var(--text-native-identity); font-weight: 720; letter-spacing: -0.65px; }
-.native-desk__composer :is(input, textarea) { font-size: var(--text-base); padding: 10px 12px; }
-.native-desk__composer textarea { min-height: 220px; }
-.native-desk__footer { font-size: var(--text-native-footnote); }
+.native-desk__welcome {
+  padding: 8px 0;
+}
+.native-desk__welcome h2 {
+  font-size: var(--text-section);
+  line-height: 1.3;
+  margin: 0 0 8px;
+}
+.native-desk__welcome p {
+  font-size: var(--text-dense);
+  max-width: 52ch;
+}
+.native-desk__account h2 {
+  font-size: var(--text-native-identity);
+  font-weight: 720;
+  letter-spacing: -0.65px;
+}
+.native-desk__composer :is(input, textarea) {
+  font-size: var(--text-base);
+  padding: 10px 12px;
+}
+.native-desk__composer textarea {
+  min-height: 220px;
+}
+.native-desk__footer {
+  font-size: var(--text-native-footnote);
+}
 @media (max-width: 1200px) {
-  .native-desk__layout { grid-template-columns: 280px minmax(0, 1fr); }
-  .native-desk[data-presentation='native-a'] .native-desk__header { padding: 15px 20px; }
-  .native-desk__header-status { gap: 6px; }
-  .native-desk__detail { padding: 18px 20px; }
-  .native-desk__account h2 { font-size: var(--text-title); }
+  .native-desk__layout {
+    grid-template-columns: 280px minmax(0, 1fr);
+  }
+  .native-desk[data-presentation="native-a"] .native-desk__header {
+    padding: 15px 20px;
+  }
+  .native-desk__header-status {
+    gap: 6px;
+  }
+  .native-desk__detail {
+    padding: 18px 20px;
+  }
+  .native-desk__account h2 {
+    font-size: var(--text-title);
+  }
 }
 @media (max-width: 620px) {
-  .native-desk__layout { grid-template-columns: minmax(0, 1fr); height: auto; }
-  .native-desk__queue--today { display: block; max-height: none; }
-  .native-desk__queue--today > .native-desk__lane { max-height: 250px; }
-  .native-desk__header-status { flex-wrap: wrap; }
+  .native-desk__layout {
+    grid-template-columns: minmax(0, 1fr);
+    height: auto;
+  }
+  .native-desk__queue--today {
+    display: block;
+    max-height: none;
+  }
+  .native-desk__queue--today > .native-desk__lane {
+    max-height: 250px;
+  }
+  .native-desk__header-status {
+    flex-wrap: wrap;
+  }
 }
 
-.native-desk [tabindex="0"]:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.native-desk > p[role="status"] { margin: 6px 24px; font-size: var(--text-caption); }
+.native-desk [tabindex="0"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.native-desk > p[role="status"] {
+  margin: 6px 24px;
+  font-size: var(--text-caption);
+}
 
 /* Calls keeps its text label independent of the decorative lane icon. */
-.native-desk__lane[aria-label='Calls'] h2 { justify-content: flex-start; }
-.native-desk__lane[aria-label='Calls'] h2 > svg { flex: none; }
-.native-desk__lane[aria-label='Calls'] h2 > .native-desk__count { margin-left: auto; }
+.native-desk__lane[aria-label="Calls"] h2 {
+  justify-content: flex-start;
+}
+.native-desk__lane[aria-label="Calls"] h2 > svg {
+  flex: none;
+}
+.native-desk__lane[aria-label="Calls"] h2 > .native-desk__count {
+  margin-left: auto;
+}
 
 /* Outrank the later global input:not([type]) rule without touching permission
    checkboxes or expiry controls. The saved subject remains the same editor. */
-.native-desk[data-presentation='native-a'] .native-desk__composer :is(input:not([type]), input[type='text']) {
+.native-desk[data-presentation="native-a"]
+  .native-desk__composer
+  :is(input:not([type]), input[type="text"]) {
   height: 43px;
   padding: 10px 12px;
   border: 1px solid var(--line-interactive);
@@ -633,17 +702,17 @@
 
 /* Size the body from the remaining space, not a guessed header/footer height.
    Expanded operational disclosures stay in normal flow and remain scrollable. */
-.native-desk[data-presentation='native-a'] {
+.native-desk[data-presentation="native-a"] {
   display: flex;
   flex-direction: column;
   height: calc(100dvh - 24px);
   min-height: 0;
   overflow: auto;
 }
-.native-desk[data-presentation='native-a'] > :is(header, footer, p[role='status']) {
+.native-desk[data-presentation="native-a"] > :is(header, footer, p[role="status"]) {
   flex: none;
 }
-.native-desk[data-presentation='native-a'] > .native-desk__layout {
+.native-desk[data-presentation="native-a"] > .native-desk__layout {
   flex: 1 1 auto;
   height: auto;
   /* Campaigns stacks a growing draft form above this split body. Keep room for the
@@ -651,12 +720,16 @@
      focusable controls) scrolls instead of collapsing the body to a sliver. */
   min-height: 112px;
 }
-.native-desk[data-presentation='native-a'] :is(.native-desk__queue, .native-desk__detail) {
+.native-desk[data-presentation="native-a"] :is(.native-desk__queue, .native-desk__detail) {
   min-height: 0;
 }
 @media (max-width: 620px) {
-  .native-desk[data-presentation='native-a'] { height: auto; }
-  .native-desk[data-presentation='native-a'] > .native-desk__layout { flex: none; }
+  .native-desk[data-presentation="native-a"] {
+    height: auto;
+  }
+  .native-desk[data-presentation="native-a"] > .native-desk__layout {
+    flex: none;
+  }
 }
 
 /* A is a composed conversation surface, not an account form above an editor.
@@ -676,9 +749,17 @@
   margin: 0;
   z-index: 1;
 }
-.native-desk__detail:has(> .native-desk__composer) > .native-desk__detail-bar > span { display: none; }
-.native-desk__detail-bar button { min-height: 28px; padding: 3px 8px; font-size: var(--text-micro); }
-.native-desk__composer { min-width: 0; }
+.native-desk__detail:has(> .native-desk__composer) > .native-desk__detail-bar > span {
+  display: none;
+}
+.native-desk__detail-bar button {
+  min-height: 28px;
+  padding: 3px 8px;
+  font-size: var(--text-micro);
+}
+.native-desk__composer {
+  min-width: 0;
+}
 .native-desk__identity {
   padding: 17px 24px 18px;
   border-bottom: 1px solid var(--line);
@@ -693,7 +774,11 @@
   font-size: var(--text-caption);
   font-weight: 600;
 }
-.native-desk__identity-top > span:first-child { display: inline-flex; align-items: center; gap: 7px; }
+.native-desk__identity-top > span:first-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
 .native-desk__tag {
   border: 1px solid var(--line);
   border-radius: 5px;
@@ -703,8 +788,14 @@
   font-size: var(--text-micro);
   font-weight: 400;
 }
-.native-desk__identity-bar { display: flex; gap: 12px; align-items: center; }
-.native-desk__identity-bar > div { min-width: 0; }
+.native-desk__identity-bar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+.native-desk__identity-bar > div {
+  min-width: 0;
+}
 .native-desk__avatar {
   width: 44px;
   height: 44px;
@@ -718,11 +809,28 @@
   font-size: var(--text-base);
   font-weight: 600;
 }
-.native-desk__identity h2 { font-size: var(--text-native-identity); font-weight: 720; letter-spacing: -.65px; line-height: 1.25; margin: 0 0 3px; }
-.native-desk__company-role { display: flex; flex-wrap: wrap; gap: 2px 8px; font-size: var(--text-caption); }
-.native-desk__company-role > span + span { color: var(--text-muted); }
-.native-desk__message-area { padding: 18px 24px 20px; }
-.native-desk__recipient { font-size: var(--text-caption); }
+.native-desk__identity h2 {
+  font-size: var(--text-native-identity);
+  font-weight: 720;
+  letter-spacing: -0.65px;
+  line-height: 1.25;
+  margin: 0 0 3px;
+}
+.native-desk__company-role {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  font-size: var(--text-caption);
+}
+.native-desk__company-role > span + span {
+  color: var(--text-muted);
+}
+.native-desk__message-area {
+  padding: 18px 24px 20px;
+}
+.native-desk__recipient {
+  font-size: var(--text-caption);
+}
 .native-desk__call-context {
   margin: 12px 0 17px;
   padding: 10px 13px;
@@ -732,11 +840,26 @@
   background: var(--native-action, var(--canvas));
   font-size: var(--text-micro);
 }
-.native-desk__call-context p { margin: 3px 0; line-height: 1.5; }
-.native-desk__context-label { color: var(--text-muted); font-size: var(--text-micro); }
-.native-desk__call-context .native-desk__call-note { font-size: var(--text-dense); color: var(--text); white-space: pre-wrap; }
-.native-desk__message-area label { font-weight: 600; }
-.native-desk__message-area textarea { min-height: 220px; font-weight: 400; }
+.native-desk__call-context p {
+  margin: 3px 0;
+  line-height: 1.5;
+}
+.native-desk__context-label {
+  color: var(--text-muted);
+  font-size: var(--text-micro);
+}
+.native-desk__call-context .native-desk__call-note {
+  font-size: var(--text-dense);
+  color: var(--text);
+  white-space: pre-wrap;
+}
+.native-desk__message-area label {
+  font-weight: 600;
+}
+.native-desk__message-area textarea {
+  min-height: 220px;
+  font-weight: 400;
+}
 .native-desk__action-area {
   padding: 15px 24px 14px;
   border-top: 1px solid var(--line);
@@ -750,45 +873,108 @@
   box-shadow: none;
   background: transparent;
 }
-.native-desk__action-area button { min-height: 36px; font-size: var(--text-caption); }
+.native-desk__action-area button {
+  min-height: 36px;
+  font-size: var(--text-caption);
+}
 .native-desk__permission {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(175px, 210px);
   gap: 6px 18px;
 }
-.native-desk__permission h3 { grid-column: 1 / -1; font-size: var(--text-caption); margin: 0; }
-.native-desk__permission label { margin: 0; line-height: 1.5; }
-.native-desk__permission > p { grid-column: 1 / -1; margin: 0; font-size: var(--text-micro); color: var(--text-muted); }
-.native-desk__permission input[type='datetime-local'] { font-size: var(--text-caption); padding: 6px; }
-.native-desk__action-area .native-desk__feedback { margin-bottom: 0; min-height: 0; }
-.native-desk__feedback p { margin: 5px 0; line-height: 1.5; }
-.native-desk__feedback :is([role='status'], [role='alert']) { color: var(--warning); }
-.native-desk__evidence { margin: 0 !important; padding: 12px 24px; border-top: 1px solid var(--line); }
-.native-desk__detail--welcome { align-self: stretch; max-width: none; display: flex; flex-direction: column; justify-content: center; }
-.native-desk__welcome { padding: 28px 12px; }
-.native-desk__welcome h2 { font-size: var(--text-native-identity); }
-.native-desk__welcome p { max-width: 56ch; }
-.native-desk__welcome a { display: inline-block; margin-top: 12px; color: var(--accent); }
-.native-desk__row .native-desk__row-company { font-size: var(--text-caption); }
+.native-desk__permission h3 {
+  grid-column: 1 / -1;
+  font-size: var(--text-caption);
+  margin: 0;
+}
+.native-desk__permission label {
+  margin: 0;
+  line-height: 1.5;
+}
+.native-desk__permission > p {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: var(--text-micro);
+  color: var(--text-muted);
+}
+.native-desk__permission input[type="datetime-local"] {
+  font-size: var(--text-caption);
+  padding: 6px;
+}
+.native-desk__action-area .native-desk__feedback {
+  margin-bottom: 0;
+  min-height: 0;
+}
+.native-desk__feedback p {
+  margin: 5px 0;
+  line-height: 1.5;
+}
+.native-desk__feedback :is([role="status"], [role="alert"]) {
+  color: var(--warning);
+}
+.native-desk__evidence {
+  margin: 0 !important;
+  padding: 12px 24px;
+  border-top: 1px solid var(--line);
+}
+.native-desk__detail--welcome {
+  align-self: stretch;
+  max-width: none;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.native-desk__welcome {
+  padding: 28px 12px;
+}
+.native-desk__welcome h2 {
+  font-size: var(--text-native-identity);
+}
+.native-desk__welcome p {
+  max-width: 56ch;
+}
+.native-desk__welcome a {
+  display: inline-block;
+  margin-top: 12px;
+  color: var(--accent);
+}
+.native-desk__row .native-desk__row-company {
+  font-size: var(--text-caption);
+}
 @media (max-width: 1200px) {
-  .native-desk__identity { padding: 17px 20px; }
-  .native-desk__message-area, .native-desk__action-area { padding: 16px 20px; }
-  .native-desk__evidence { padding: 12px 20px; }
-  .native-desk__identity h2 { font-size: var(--text-title); }
-  .native-desk__permission input[type='datetime-local'] { max-width: 240px; }
+  .native-desk__identity {
+    padding: 17px 20px;
+  }
+  .native-desk__message-area,
+  .native-desk__action-area {
+    padding: 16px 20px;
+  }
+  .native-desk__evidence {
+    padding: 12px 20px;
+  }
+  .native-desk__identity h2 {
+    font-size: var(--text-title);
+  }
+  .native-desk__permission input[type="datetime-local"] {
+    max-width: 240px;
+  }
 }
 
 /* The message owns the remaining height. Permission and action feedback are a
    real footer, not content that falls below the inset pane. Both overflow paths
    remain keyboard-scrollable for long context or recovery evidence. */
-.native-desk__detail:has(> .native-desk__composer) { overflow: hidden; }
+.native-desk__detail:has(> .native-desk__composer) {
+  overflow: hidden;
+}
 .native-desk__detail > .native-desk__composer {
   height: 100%;
   min-height: 0;
   display: flex;
   flex-direction: column;
 }
-.native-desk__composer > .native-desk__identity { flex: none; }
+.native-desk__composer > .native-desk__identity {
+  flex: none;
+}
 .native-desk__composer > .native-desk__message-area {
   flex: 1 1 auto;
   min-height: 0;
@@ -803,17 +989,32 @@
   overflow: auto;
   scrollbar-width: thin;
 }
-.native-desk__message-area > .native-desk__evidence { padding: 12px 0; }
-.native-desk__message-area > .native-desk__evidence:first-of-type { margin-top: 16px !important; }
+.native-desk__message-area > .native-desk__evidence {
+  padding: 12px 0;
+}
+.native-desk__message-area > .native-desk__evidence:first-of-type {
+  margin-top: 16px !important;
+}
 @media (max-width: 740px) {
-  .native-desk__permission { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .native-desk__permission {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
 }
 @media (max-width: 620px) {
-  .native-desk__detail > .native-desk__composer { min-height: 680px; height: 80dvh; }
+  .native-desk__detail > .native-desk__composer {
+    min-height: 680px;
+    height: 80dvh;
+  }
 }
 
-.native-desk__message-area { display: flex; flex-direction: column; }
-.native-desk__message-area > * { flex: none; }
+.native-desk__message-area {
+  display: flex;
+  flex-direction: column;
+}
+.native-desk__message-area > * {
+  flex: none;
+}
 .native-desk__message-area > .native-desk__message-field {
   display: flex;
   flex-direction: column;
@@ -825,20 +1026,44 @@
   min-height: 140px;
   height: 100%;
 }
-.native-desk__action-area .native-desk__actions { align-items: center; }
-.native-desk__action-area .native-desk__approval-checks { margin: 0; }
-.native-desk__approval-checks[open] { flex-basis: 100%; }
-.native-desk__approval-checks > .native-desk__evidence { padding: 10px 0; }
-.native-desk__approval-checks > p { font-size: var(--text-micro); }
+.native-desk__action-area .native-desk__actions {
+  align-items: center;
+}
+.native-desk__action-area .native-desk__approval-checks {
+  margin: 0;
+}
+.native-desk__approval-checks[open] {
+  flex-basis: 100%;
+}
+.native-desk__approval-checks > .native-desk__evidence {
+  padding: 10px 0;
+}
+.native-desk__approval-checks > p {
+  font-size: var(--text-micro);
+}
 
 /* Flex children do not collapse margins. Keep the recipient/context/subject
    rhythm compact and budget the message label plus its input as one field. */
-.native-desk__composer > .native-desk__message-area { padding-top: 12px; padding-bottom: 12px; }
-.native-desk__message-area > .native-desk__recipient { margin: 0 0 6px; }
-.native-desk__message-area > .native-desk__call-context { margin: 0 0 8px; padding: 8px 12px; }
-.native-desk__call-context p { margin: 0; }
-.native-desk__call-context .native-desk__call-note { margin: 4px 0; }
-.native-desk__message-area > label { margin: 0 0 8px; }
+.native-desk__composer > .native-desk__message-area {
+  padding-top: 12px;
+  padding-bottom: 12px;
+}
+.native-desk__message-area > .native-desk__recipient {
+  margin: 0 0 6px;
+}
+.native-desk__message-area > .native-desk__call-context {
+  margin: 0 0 8px;
+  padding: 8px 12px;
+}
+.native-desk__call-context p {
+  margin: 0;
+}
+.native-desk__call-context .native-desk__call-note {
+  margin: 4px 0;
+}
+.native-desk__message-area > label {
+  margin: 0 0 8px;
+}
 .native-desk__message-area > .native-desk__message-field {
   flex-basis: 212px;
   min-height: 212px;
@@ -849,13 +1074,25 @@
   min-height: 190px;
   margin-top: 4px;
 }
-.native-desk__composer > .native-desk__action-area { padding-top: 12px; padding-bottom: 12px; }
-.native-desk__feedback p { margin: 3px 0; }
+.native-desk__composer > .native-desk__action-area {
+  padding-top: 12px;
+  padding-bottom: 12px;
+}
+.native-desk__feedback p {
+  margin: 3px 0;
+}
 @media (max-height: 760px) {
-  .native-desk__message-area > .native-desk__message-field { flex-basis: 112px; min-height: 112px; }
-  .native-desk__message-area .native-desk__message-field textarea { min-height: 90px; }
+  .native-desk__message-area > .native-desk__message-field {
+    flex-basis: 112px;
+    min-height: 112px;
+  }
+  .native-desk__message-area .native-desk__message-field textarea {
+    min-height: 90px;
+  }
   /* A short window gets a compact welcome pane rather than 28px of padding. */
-  .native-desk__welcome { padding: 12px; }
+  .native-desk__welcome {
+    padding: 12px;
+  }
 }
 
 .native-desk--pending {
@@ -864,23 +1101,54 @@
 }
 
 /* Scoped manual local-company intake, independent of message/editor layout. */
-.local-company-intake { min-width: 0; margin-block: var(--space-3); }
-.local-company-intake__form { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; margin-top: var(--space-3); }
-.local-company-intake__form input { box-sizing: border-box; width: 100%; min-width: 0; padding: var(--space-2); border: 1px solid var(--line); background: var(--surface); color: var(--text); font: inherit; }
-.local-company-intake__form p, .local-company-intake__form h3 { overflow-wrap: anywhere; margin: 0; }
-.local-company-intake__form section { border-top: 1px solid var(--line); padding-block: var(--space-2); }
-.local-company-intake button { white-space: normal; overflow-wrap: anywhere; }
-.local-company-intake :is(button, input):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.local-company-intake {
+  min-width: 0;
+  margin-block: var(--space-3);
+}
+.local-company-intake__form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  margin-top: var(--space-3);
+}
+.local-company-intake__form input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: var(--space-2);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+.local-company-intake__form p,
+.local-company-intake__form h3 {
+  overflow-wrap: anywhere;
+  margin: 0;
+}
+.local-company-intake__form section {
+  border-top: 1px solid var(--line);
+  padding-block: var(--space-2);
+}
+.local-company-intake button {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.local-company-intake :is(button, input):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 
 /* App reserves an intrinsic diagnostic strip below its workspace. The approved
    desk uses the remaining main-content height, not another full viewport. */
-.foundation-frame--admitted .native-desk[data-presentation='native-a'] {
+.foundation-frame--admitted .native-desk[data-presentation="native-a"] {
   box-sizing: border-box;
   height: 100%;
 }
 
 @media (max-width: 620px) {
-  .foundation-frame--admitted .native-desk[data-presentation='native-a'] {
+  .foundation-frame--admitted .native-desk[data-presentation="native-a"] {
     height: auto;
   }
 }

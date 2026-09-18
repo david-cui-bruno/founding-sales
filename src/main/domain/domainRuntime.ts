@@ -10,11 +10,7 @@ import {
   DOMAIN_SCHEMA_MANIFEST,
   assertDomainStorageReady,
 } from './startup/storageReadiness';
-import {
-  buildRebuildCommand,
-  deriveRefreshIdempotencyKey,
-  scanPriorityProjections,
-} from './startup/priorityProjectionRefresh';
+import { scanPriorityProjections } from './startup/priorityProjectionRefresh';
 import {
   DomainRuntimeBlockedError,
   DomainRuntimeUnavailableError,
@@ -177,40 +173,29 @@ export class DomainRuntime {
       workspaceTimezone: settings.timezone,
     });
 
-    // 8. Enqueue exact refresh jobs, excluding corrupt prospects.
-    const interval = founderLocalDate(asOf, settings.timezone);
-    let projectionRebuildsQueued = 0;
-    for (const candidate of scan.candidates) {
-      const idempotencyKey = deriveRefreshIdempotencyKey({
-        prospectId: candidate.prospectId,
-        ruleVersionId: activeRule.id,
-        founderLocalDate: interval,
-        refreshFingerprint: candidate.refreshFingerprint,
-      });
-      const existing = this.database.raw.prepare(`
-        SELECT id FROM jobs WHERE type = ? AND idempotency_key = ?
-      `).get(PRIORITY_PROJECTION_REBUILD_JOB_TYPE, idempotencyKey) as { id: string } | undefined;
-      if (existing !== undefined) continue;
-      const jobId = this.ids.next();
-      const evaluationId = this.ids.next();
-      const command = buildRebuildCommand({
-        jobId,
-        evaluationId,
-        candidate,
-        ruleVersionId: activeRule.id,
-        founderTimezone: settings.timezone,
-        founderLocalDate: interval,
-        evaluatedAt: asOf,
-      });
-      services.jobs.enqueue({
-        id: jobId,
-        type: PRIORITY_PROJECTION_REBUILD_JOB_TYPE,
-        idempotencyKey,
-        payload: command,
-        at: asOf,
-      });
-      projectionRebuildsQueued += 1;
-    }
+    // 8. Retire the rebuild queue this step used to fill. Nothing executes
+    // `priority_projection_rebuild_v1`: `createDiscoveryWorker` has no caller in
+    // `src/`, so every job enqueued here stayed queued for the life of the installed
+    // database. Startup no longer enqueues, and the jobs an earlier build left queued
+    // are cancelled with the same `asOf`. Rows are never deleted: the command payload,
+    // its idempotency key and its retry count stay readable, and `finished_at` records
+    // the retirement. It runs once in practice, because after the first startup there
+    // is nothing left to match and no later startup creates more.
+    //
+    // Only the canonical jobs this step created are retired: `retry_count = 0` and no
+    // recovery metadata. A retried or recovery-lineage job exists only because
+    // something executed its root, so a caller that composes a discovery worker keeps
+    // its queue; this sweep never reaches into that lineage.
+    //
+    // `scan.candidates` above is still the honest count of prospects whose projection
+    // would need a rebuild; it just no longer becomes durable work.
+    this.database.raw.prepare(`
+      UPDATE jobs
+      SET state = 'cancelled', result_json = NULL, error_code = NULL, error_message = NULL,
+          started_at = NULL, finished_at = ?, updated_at = ?
+      WHERE type = ? AND state = 'queued' AND retry_count = 0
+        AND (json_valid(payload_json) = 0 OR json_extract(payload_json, '$.recovery') IS NULL)
+    `).run(asOf, asOf, PRIORITY_PROJECTION_REBUILD_JOB_TYPE);
 
     // Corrupt/divergent projections are blocking violations, never rebuilt.
     const corruptionViolations = scan.corruptProspectIds.map((prospectId) => Object.freeze({
@@ -243,7 +228,8 @@ export class DomainRuntime {
       blockingViolationCount: allViolations.length,
       repairableIssueCount: scan.candidates.length,
       projectionRefreshCandidateCount: scan.candidates.length,
-      projectionRebuildsQueued,
+      // Startup stopped enqueuing in Batch 10 (D11 step 6a); always zero.
+      projectionRebuildsQueued: 0,
       pendingProjectionRebuilds,
       interruptedJobsRecovered,
     });
@@ -288,14 +274,4 @@ export class DomainRuntime {
     this.state = 'stopped';
     this.services = undefined;
   }
-}
-
-function founderLocalDate(asOf: string, timezone: string): string {
-  const formatter = new Intl.DateTimeFormat('en-CA', {
-    timeZone: timezone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  });
-  return formatter.format(new Date(asOf));
 }

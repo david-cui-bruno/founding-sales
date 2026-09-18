@@ -112,7 +112,7 @@ export class WorkerAuth {
   }
   /** Add fresh credential/revocation CAS fences to actual C1 transactions. A
    * successful earlier HTTP authorization can never bypass a later revocation. */
-  fencedDynamo(principal: WorkerPrincipal, beforeTransaction?: () => void): DynamoAdapter {
+  fencedDynamo(principal: WorkerPrincipal): DynamoAdapter {
     this.store.workspace(principal.workspaceId);
     return { send: async command => {
       const current = await this.credential(principal.credentialHash, principal.scopes);
@@ -120,7 +120,6 @@ export class WorkerAuth {
       if (!(command instanceof TransactWriteItemsCommand)) return this.options.dynamo.send(command);
       const items = command.input.TransactItems ?? [];
       if (items.length > 98) throw new Error('transaction_capacity_exceeded');
-      beforeTransaction?.();
       return this.options.dynamo.send(new TransactWriteItemsCommand({ ...command.input, TransactItems: [...items,
         this.store.check(`TOKEN#${principal.credentialHash}`, current.stored.rev),
         this.store.check(pairingKey(principal.pairingId), current.pairing.rev),

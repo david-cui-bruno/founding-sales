@@ -18,25 +18,28 @@ body {
   font-size: var(--text-base);
   font-weight: var(--weight-body);
   line-height: calc(var(--leading-base) / var(--text-base));
-  font-feature-settings: "liga" 1, "calt" 1, "cv11" 1;
+  font-feature-settings:
+    "liga" 1,
+    "calt" 1,
+    "cv11" 1;
   -webkit-font-smoothing: antialiased;
   overscroll-behavior: none;
   /* Desktop chrome behaves like an app, not a document. */
   cursor: default;
 }
 
-/* Chrome (buttons, nav, pills) is never text-selectable; content and inputs
+/* Chrome (buttons, nav, status) is never text-selectable; content and inputs
    stay selectable. */
 button,
-.status-pill,
 .status-badge,
-.segmented-control,
 .nav-rail {
   user-select: none;
   -webkit-user-select: none;
 }
 
-h1, h2, h3 {
+h1,
+h2,
+h3 {
   font-family: var(--font-display);
   font-weight: var(--weight-title);
   letter-spacing: -0.01em;
@@ -47,17 +50,6 @@ h1, h2, h3 {
   font-variant-numeric: tabular-nums;
 }
 
-/* Micro-label utility: the ONLY sanctioned uppercase treatment, reserved for
-   true table column headers, at step-11 contrast. */
-.micro-label {
-  color: var(--text-muted);
-  font-size: var(--text-micro);
-  font-weight: var(--weight-medium);
-  line-height: var(--leading-micro);
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-}
-
 :is(a, button, input, select, textarea, [role="separator"][tabindex]):focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
@@ -66,18 +58,6 @@ h1, h2, h3 {
 
 ::selection {
   background: color-mix(in srgb, var(--accent) 25%, transparent);
-}
-
-.visually-hidden {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
-  padding: 0;
-  border: 0;
-  clip-path: inset(50%);
-  overflow: hidden;
-  white-space: nowrap;
 }
 
 /* Shared control primitives. Ordinary surfaces stay neutral by design.
@@ -97,7 +77,8 @@ h1, h2, h3 {
   font-size: var(--text-dense);
   font-weight: var(--weight-medium);
   cursor: default;
-  transition: background var(--motion-fast) var(--motion-ease),
+  transition:
+    background var(--motion-fast) var(--motion-ease),
     border-color var(--motion-fast) var(--motion-ease);
 }
 
@@ -153,7 +134,8 @@ h1, h2, h3 {
   background: transparent;
   color: var(--text-muted);
   cursor: default;
-  transition: background var(--duration-hover) var(--ease-out),
+  transition:
+    background var(--duration-hover) var(--ease-out),
     color var(--duration-hover) var(--ease-out);
 }
 
@@ -195,59 +177,6 @@ textarea::placeholder {
   color: var(--text-faint);
 }
 
-/* Avatars are identity, not actions: neutral per the accent grammar. */
-.avatar {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  border-radius: var(--radius-full);
-  background: var(--surface-sunken);
-  color: var(--text-muted);
-  font-size: 10px;
-  font-weight: var(--weight-title);
-  letter-spacing: 0.02em;
-  user-select: none;
-  -webkit-user-select: none;
-}
-
-.status-pill {
-  display: inline-flex;
-  align-items: center;
-  height: 18px;
-  padding: 0 var(--space-2);
-  border: none;
-  border-radius: var(--radius-sm);
-  background: var(--surface-sunken);
-  color: var(--text-muted);
-  font-size: var(--text-micro);
-  font-weight: var(--weight-medium);
-  letter-spacing: 0.01em;
-  white-space: nowrap;
-}
-
-.status-pill--neutral {
-  color: var(--text-muted);
-  background: var(--surface-sunken);
-}
-
-/* Accent urgency is reserved for P0 and equally meaningful states. */
-.status-pill--urgent {
-  color: var(--danger);
-  background: var(--status-danger-bg);
-}
-
-.status-pill--positive {
-  color: var(--positive);
-  background: var(--status-success-bg);
-}
-
-.status-pill--danger {
-  color: var(--danger);
-  background: var(--status-danger-bg);
-}
-
 /* Status badge: filled 8px dot plus a neutral label. Dots carry the color;
    the text stays neutral so status never competes with CTAs. */
 .status-badge {
@@ -277,226 +206,4 @@ textarea::placeholder {
 
 .status-badge--danger .status-badge__dot {
   background: var(--status-danger-dot);
-}
-
-/* Segmented control: radiogroup with an accent-soft selected fill. */
-.segmented-control {
-  display: inline-flex;
-  gap: 1px;
-  padding: 2px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--surface-sunken);
-}
-
-.segmented-control__option {
-  display: inline-flex;
-  align-items: center;
-  height: calc(var(--control-height) - 6px);
-  padding: 0 var(--space-3);
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-muted);
-  font: inherit;
-  font-size: var(--text-dense);
-  font-weight: var(--weight-medium);
-  cursor: default;
-}
-
-.segmented-control__option:hover {
-  color: var(--text);
-}
-
-.segmented-control__option[aria-checked="true"] {
-  color: var(--accent-strong);
-  background: var(--accent-soft);
-}
-
-/* Styled select: button trigger plus popover listbox. */
-.select {
-  position: relative;
-  display: inline-flex;
-}
-
-.select__trigger {
-  display: inline-flex;
-  gap: var(--space-2);
-  align-items: center;
-  justify-content: space-between;
-  min-width: 120px;
-  height: var(--control-height);
-  padding: 0 var(--space-2) 0 var(--space-3);
-  border: 1px solid var(--line-interactive);
-  border-radius: var(--radius-sm);
-  background: var(--surface-raised);
-  color: var(--text);
-  font: inherit;
-  font-size: var(--text-dense);
-  font-weight: var(--weight-medium);
-  cursor: default;
-}
-
-.select__trigger:hover:not(:disabled) {
-  background: var(--surface-sunken);
-}
-
-/* Popover entry: 200ms fade-and-lift, gated to no-preference. */
-@media (prefers-reduced-motion: no-preference) {
-  .select__listbox {
-    animation: motion-menu-in var(--duration-menu) var(--ease-out);
-  }
-}
-
-.select__chevron {
-  flex: none;
-  color: var(--text-faint);
-}
-
-.select__listbox {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  z-index: 30;
-  min-width: 100%;
-  max-height: 320px;
-  margin: 0;
-  padding: var(--space-1);
-  overflow-y: auto;
-  list-style: none;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  background: var(--surface-raised);
-  box-shadow: var(--shadow-overlay), var(--inset-highlight);
-}
-
-.select__option {
-  display: flex;
-  gap: var(--space-2);
-  align-items: center;
-  justify-content: space-between;
-  padding: var(--space-1) var(--space-2);
-  border-radius: var(--radius-sm);
-  color: var(--text);
-  font-size: var(--text-dense);
-  line-height: var(--leading-dense);
-  white-space: nowrap;
-}
-
-.select__option[data-active="true"] {
-  background: color-mix(in srgb, var(--line) 55%, transparent);
-}
-
-.select__option[aria-selected="true"] {
-  color: var(--accent-strong);
-  font-weight: var(--weight-medium);
-}
-
-.panel {
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  background: var(--surface);
-  box-shadow: var(--shadow), var(--inset-highlight);
-}
-
-.panel__header {
-  display: flex;
-  gap: var(--space-3);
-  align-items: center;
-  justify-content: space-between;
-  padding: var(--space-4) var(--space-4) 0;
-}
-
-.panel__title {
-  margin: 0;
-  font-size: var(--text-comfortable);
-  font-weight: var(--weight-heading);
-}
-
-.panel__actions {
-  display: flex;
-  gap: var(--space-2);
-}
-
-.panel__body {
-  padding: var(--space-4);
-}
-
-.empty-state,
-.loading-state,
-.error-state {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  align-items: center;
-  padding: var(--space-6);
-  color: var(--text-muted);
-  text-align: center;
-}
-
-.loading-state {
-  flex-direction: row;
-  justify-content: center;
-}
-
-.empty-state__title,
-.error-state__title {
-  margin: 0;
-  color: var(--text);
-  font-size: var(--text-comfortable);
-  font-weight: var(--weight-heading);
-}
-
-.empty-state__description,
-.error-state__description {
-  margin: 0;
-  max-width: 34rem;
-}
-
-.error-state__icon {
-  color: var(--danger);
-}
-
-.loading-state__spinner {
-  animation: loading-spin 1s linear infinite;
-}
-
-@keyframes loading-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-/* Thin indeterminate progress bar: 2px accent sweep pinned to the top of
-   the loading content region. Reduced motion renders a static accent bar. */
-.progress-bar-thin {
-  position: relative;
-  flex: none;
-  height: 2px;
-  overflow: hidden;
-  border-radius: var(--radius-full);
-  background: var(--accent-soft);
-}
-
-.progress-bar-thin__fill {
-  position: absolute;
-  inset: 0;
-  width: 40%;
-  border-radius: var(--radius-full);
-  background: var(--accent);
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .progress-bar-thin__fill {
-    animation: progress-bar-thin-slide 1.2s var(--ease-out) infinite;
-  }
-
-  @keyframes progress-bar-thin-slide {
-    from {
-      transform: translateX(-110%);
-    }
-    to {
-      transform: translateX(260%);
-    }
-  }
 }
