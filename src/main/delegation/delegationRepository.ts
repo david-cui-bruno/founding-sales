@@ -51,6 +51,8 @@ export class DelegationRepository {
   queueCommand(input: DelegationCommand, assertCurrent?: () => void): CommandReceipt {
     const command = delegationCommandSchema.parse(input);
     if (command.workspaceId !== this.deps.workspaceId) throw new Error('Workspace command mismatch');
+    // The account outbox is keyed by a researched company; the workspace-level policy travels the runtime's own path.
+    if (command.kind === 'territory-policy') throw new Error('territory_policy_requires_policy_path');
     const fingerprint = accountFingerprint(command);
     return this.atomic(() => {
       assertCurrent?.();
@@ -222,7 +224,11 @@ export class DelegationRepository {
       else this.validateExecution(event);
       this.raw.prepare('INSERT INTO delegated_applied_events VALUES(?,?,?,?,?,?,?,?,?)').run(event.id, event.workspaceId, event.accountId,
         stream, event.aggregateVersion, event.authorityGeneration, fingerprint, JSON.stringify(event), at);
-      if (event.kind === 'authority.changed') {
+      if (event.kind === 'authority.granted') {
+        // Worker-origin authority under the approved territory policy: the row is created here, never by research itself.
+        const state = event.payload.authority;
+        this.raw.prepare('INSERT INTO delegated_authorities VALUES(?,?,?,?,?,?,?)').run(event.accountId, event.workspaceId, state.owner, state.generation, state.state, event.aggregateVersion, at);
+      } else if (event.kind === 'authority.changed') {
         const state = event.payload.authority;
         const result = this.raw.prepare('UPDATE delegated_authorities SET owner=?,generation=?,state=?,aggregate_version=?,updated_at=? WHERE account_id=? AND workspace_id=?')
           .run(state.owner, state.generation, state.state, event.aggregateVersion, at, event.accountId, event.workspaceId);
@@ -327,6 +333,14 @@ export class DelegationRepository {
   }
   private validateExecution(event: WorkerEvent) {
     const owner = this.owner(event.accountId);
+    if (event.kind === 'authority.granted') {
+      // Only a firm the worker researched and nobody has claimed can receive a policy grant, and only as its first step.
+      if (owner) throw new Error('Authority already assigned');
+      if (!this.raw.prepare('SELECT 1 FROM pm_accounts WHERE id=?').get(event.accountId)) throw new Error('Granted authority requires the researched account');
+      const { authority, receipt } = event.payload;
+      if (authority.owner !== 'worker' || authority.state !== 'active' || authority.generation !== 1 || event.aggregateVersion !== 1 || receipt.status !== 'applied') throw new Error('Unproven granted authority');
+      return;
+    }
     if (!owner) throw new Error('Execution event requires explicit authority');
     if(event.kind==='requested_followup.status'){
       const command=this.getCommand(event.payload.commandId),status=event.payload.status;

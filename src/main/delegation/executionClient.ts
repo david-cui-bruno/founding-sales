@@ -3,7 +3,8 @@ import { accountIdSchema } from '../../shared/contracts/accountContract';
 import { ownerReplyDraftRequestSchema, replyDraftResultSchema, assertReplyDraftLineage, type OwnerReplyDraftRequest } from '../../shared/contracts/mailThreadContract';
 import {requestedFollowupDraftSchema,type RequestedFollowupDraft,prepareRequestedFollowupSchema,type PrepareRequestedFollowup} from '../../shared/contracts/requestedFollowupContract';
 import {workerPolicyRequestSchema,workerPolicyReceiptSchema} from '../../shared/contracts/workerPolicyContract';
-import { requestedOwnerContextSchema, ownerCheckpointSchema, configureResearchSourceSchema, ownerResearchSourceSchema } from '../../shared/contracts/ownerCommandContract';
+import { requestedOwnerContextSchema, ownerCheckpointSchema, configureResearchSourceSchema, ownerResearchSourceSchema, territoryPolicyCommandSchema } from '../../shared/contracts/ownerCommandContract';
+import { territoryCallPolicyReceiptSchema, type TerritoryCallPolicyReceipt } from '../../shared/contracts/territoryCallPolicyContract';
 import { z } from 'zod';
 import { researchSetupStatusRequestSchema, researchSetupRemoteStatusSchema, researchSetupWriteRequestSchema, type ResearchSetupStatusRequest, type ResearchSetupRequest, type ResearchSetupCancelRequest } from '../../shared/contracts/researchSetupContract';
 import { matchResearchSetupReceipt } from './researchSetupRequestStore';
@@ -255,6 +256,14 @@ export class ExecutionClient {
   }
   async checkpoint(accountId:string,signal:AbortSignal,handoffId?:string) {const proof=ownerCheckpointSchema.parse(await this.request('/readiness',signal,{workspaceId:this.pairing.workspaceId,accountId,...(handoffId?{handoffId}:{})}));if(proof.workspaceId!==this.pairing.workspaceId||proof.accountId!==accountId||proof.handoffId!==handoffId)throw Error('checkpoint_identity_mismatch');return proof;}
   async configureResearch(raw:unknown,signal:AbortSignal) {const input=configureResearchSourceSchema.parse(raw);if(input.workspaceId!==this.pairing.workspaceId)throw Error('workspace_mismatch');return ownerResearchSourceSchema.parse(await this.request('/research/configure',signal,input));}
+  /** One territory policy command straight to the owner. It never enters the account outbox (no company owns it); the
+   * caller keeps the command identity and resends the same command after an uncertain reply. */
+  async territoryPolicy(raw:unknown,signal:AbortSignal):Promise<TerritoryCallPolicyReceipt> {
+    const command=territoryPolicyCommandSchema.parse(raw);if(command.workspaceId!==this.pairing.workspaceId)throw Error('workspace_mismatch');
+    const result=territoryCallPolicyReceiptSchema.parse(await this.request('/commands',signal,command));
+    if(result.receipt.commandId!==command.commandId||(result.policy&&result.policy.workspaceId!==this.pairing.workspaceId))throw Error('policy_receipt_mismatch');
+    return result;
+  }
   async configurePolicy(raw:unknown,signal:AbortSignal) {const input=workerPolicyRequestSchema.parse(raw);if(input.workspaceId!==this.pairing.workspaceId)throw Error('workspace_mismatch');const result=workerPolicyReceiptSchema.parse(await this.request('/policies/configure',signal,input));if(result.requestId!==input.requestId||result.kind!==input.kind)throw Error('policy_receipt_mismatch');return result;}
   sync(signal: AbortSignal): Promise<SyncReport> {
     return synchronizeDelegation({ repository: this.repository, transport: this.transport,
