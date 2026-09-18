@@ -89,6 +89,16 @@ export function rankAccount(snapshot: AccountEvidenceSnapshot, asOf: string): Ac
     reasons.push({ text: 'Evidence supports property management operating relevance.', evidenceIds: operatingEvidence });
   }
 
+  // A model-extracted verdict is one fact among others: `no` is negative evidence, `yes` supports fit, both together stay uncertain.
+  const targetFitNo = evidenceFrom(snapshot.claims, claim => claim.kind === 'fact' && claim.key === 'target_fit' && claim.value === 'no');
+  const targetFitYes = evidenceFrom(snapshot.claims, claim => claim.kind === 'fact' && claim.key === 'target_fit' && claim.value === 'yes');
+  if (targetFitNo.length > 0) {
+    reasons.push({ text: 'Published text indicates the company is not a property manager.', evidenceIds: targetFitNo });
+  }
+  if (targetFitYes.length > 0) {
+    reasons.push({ text: 'Published text indicates the company is a property manager.', evidenceIds: targetFitYes });
+  }
+
   const route = businessRoute(snapshot.routes);
   if (route !== null) {
     reasons.push({ text: 'Published business route is available for a company-level call.', evidenceIds: [...route.evidenceIds] });
@@ -96,10 +106,12 @@ export function rankAccount(snapshot: AccountEvidenceSnapshot, asOf: string): Ac
 
   const unknowns = [...snapshot.unknowns];
   if (route === null && !unknowns.includes('business_route')) unknowns.push('business_route');
+  const negative = negativeScopeEvidence.length > 0 || targetFitNo.length > 0;
+  const supported = supportedScopeEvidence.length > 0 || targetFitYes.length > 0;
   const fit = mixedScopeEvidence.length > 0 ? 'uncertain'
-    : supportedScopeEvidence.length > 0 && negativeScopeEvidence.length > 0 ? 'uncertain'
-    : negativeScopeEvidence.length > 0 ? 'not_target'
-      : supportedScopeEvidence.length > 0 && regionalEvidence.length > 0 ? 'supported' : 'uncertain';
+    : supported && negative ? 'uncertain'
+    : negative ? 'not_target'
+      : (supportedScopeEvidence.length > 0 && regionalEvidence.length > 0) || (targetFitYes.length > 0 && supportedScopeEvidence.length > 0) ? 'supported' : 'uncertain';
 
   return Object.freeze({
     accountId: snapshot.account.id,
