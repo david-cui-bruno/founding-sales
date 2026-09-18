@@ -16,7 +16,7 @@ import { accountRecordSchema, accountKey, createWorkerAccountRepository, isSelec
 import { intakeRegistryKey, intakeRegistrySchema, createIntakeBarrier, validatePendingHandoff } from './intakeBarrier';
 import type { WorkerAuth } from './workerAuth';
 import type { RemoteGoogleAuthorization } from './remoteGoogleAuthorization';
-import { requestedOwnerDraftRequestSchema, requestedOwnerContextRequestSchema, requestedOwnerContextSchema, ownerCheckpointRequestSchema, ownerCheckpointSchema, configureResearchSourceSchema, ownerResearchSourceKey, ownerResearchSourceSchema, ownerCommandSchema, ownerSourceConfigurationSchema, ownerSourceKey, manualHandoffSchema, type ManualHandoff, type ManualOutcome, type OwnerCommand, type TerritoryPolicyCommand } from '../../../../src/shared/contracts/ownerCommandContract';
+import { requestedOwnerDraftRequestSchema, requestedOwnerContextRequestSchema, requestedOwnerContextSchema, ownerCheckpointRequestSchema, ownerCheckpointSchema, configureResearchSourceSchema, ownerResearchSourceKey, ownerResearchSourceSchema, ownerCommandSchema, ownerSourceConfigurationSchema, ownerSourceKey, manualHandoffSchema, type ManualHandoff, type ManualOutcome, type OwnerCommand, type ReplyTemplateCommand, type TerritoryPolicyCommand } from '../../../../src/shared/contracts/ownerCommandContract';
 import { delegationCommandSchema, commandReceiptSchema, workerEventSchema, type CommandReceipt, type WorkerEvent } from '../../../../src/shared/contracts/delegationContract';
 import { DynamoStore, fingerprint, keyPart } from './dynamoStore';
 import { authorityRecordSchema, executionAuthorityKey, executionAuthorityFields, createExecutionRepository } from './executionRepository';
@@ -160,6 +160,8 @@ export class OwnerCommandCoordinator {
     const store = new DynamoStore(options);
     // The territory policy is workspace-level: no account authority row, no outbox event, its own revision is the CAS.
     if (command.kind === 'territory-policy') return this.territoryPolicy(command, principal.pairingId, store);
+    // A standing template approval is workspace-level in exactly the same way, and is never a send.
+    if (command.kind === 'reply-template') return this.replyTemplate(command, store);
     const key = `COMMAND#${keyPart(command.commandId)}`;
     const fp = fingerprint(command);
     const previous = await store.get<{ fingerprint: string; receipt: CommandReceipt; sequence: number }>(key);
@@ -299,6 +301,26 @@ export class OwnerCommandCoordinator {
       try { await repository.sweepTerritoryBackfill({ limit: TERRITORY_BACKFILL_APPROVAL_LIMIT }); } catch { /* The scheduled sweep continues from the persisted cursor. */ }
     }
     return receipt;
+  }
+  /**
+   * Approve, revoke or pause a follow-up template (D13). Workspace-level like the territory policy: no account
+   * authority row, no outbox event, the stored state's own revision is the CAS, and the receipt is stored under the
+   * command id so a retry answers the same. The payload schema has already re-derived the sha256 from the subject
+   * and body the command carries and re-checked every body rule, so a hash that does not match its text is refused
+   * before this method runs. Approving is standing permission to send an already approved template as a sequence
+   * step; it creates no dispatch intent, no reservation and no event, and nothing here sends an email.
+   */
+  private async replyTemplate(command: ReplyTemplateCommand, store: DynamoStore): Promise<CommandReceipt> {
+    const repository = new TerritoryPolicyRepository(store.options);
+    const key = `COMMAND#${keyPart(command.commandId)}`; const fp = fingerprint(command);
+    const previous = await store.get<{ fingerprint: string; receipt: CommandReceipt }>(key);
+    if (previous) {
+      if (previous.data.fingerprint !== fp) throw new Error('command_fingerprint_conflict');
+      return commandReceiptSchema.parse(previous.data.receipt);
+    }
+    const plan = await repository.planTemplateCommand(command);
+    await store.transact([...plan.items, store.put(key, { fingerprint: fp, receipt: plan.receipt, command }, null)]);
+    return plan.receipt;
   }
   private async bootstrap(command:Extract<OwnerCommand,{kind:'bootstrap-selected-account'}>,store:DynamoStore,fp:string,key:string):Promise<CommandReceipt> {
     const p=command.payload;const record=p.record;

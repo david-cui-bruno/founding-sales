@@ -77,6 +77,7 @@ function dependencies(
         getHealth: async () => ({ state: 'ok' }),
       };
     },
+    registerTemplateIpc: () => () => undefined,
     registerApplicationIpc: () => {
       events.push('health-ipc:register');
       return () => events.push('health-ipc:unregister');

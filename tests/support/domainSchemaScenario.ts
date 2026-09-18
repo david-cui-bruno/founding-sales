@@ -262,6 +262,10 @@ const requiredTriggers = [
   'protect_restore_drill_backup_receipt',
   'protect_source_intake_receipt_prospect',
   'protect_trigger_event_ownership',
+  'email_template_settings_no_delete',
+  'email_template_settings_revision',
+  'email_templates_no_delete',
+  'email_templates_revision',
   'pm_account_callbacks_no_delete',
   'pm_account_callbacks_revision',
   'synchronize_person_opt_out',
@@ -309,14 +313,14 @@ function runDatabaseScenario(
       assert.equal(assertDomainStorageReady({
         database,
         expectedBusyTimeoutMs: 5000,
-        expectedSchemaVersion: 29,
+        expectedSchemaVersion: 30,
         expectedManifest: DOMAIN_SCHEMA_MANIFEST,
-      }).schemaVersion, 29);
+      }).schemaVersion, 30);
       assert.deepEqual(
         raw.prepare<[], { schema_version: number }>(
           'SELECT schema_version FROM app_meta WHERE singleton = 1',
         ).get(),
-        { schema_version: 29 },
+        { schema_version: 30 },
       );
       assert.deepEqual(raw.prepare<[], { name: string }>(`
         SELECT name FROM kysely_migration ORDER BY timestamp, name
@@ -337,7 +341,7 @@ function runDatabaseScenario(
         '0014OutboundJurisdictionClearance',
         '0015RecoveryMetadata',
         '0016ContactPresentationEvidence', '0017DiscoveryAssessments',
-        '0018PlaybookDueActions', '0019EmailDrafts', '0020PmAccounts', '0021DelegatedWork', '0022MailPersistence', '0023Campaigns', '0024RequestedFollowupAndPolicyReviews', '0025KnownCompanyResearchSettings', '0026LocalCompanyDrafts', '0027ListedRouteVerification', '0028TerritoryClearances', '0029AccountCallbacks',
+        '0018PlaybookDueActions', '0019EmailDrafts', '0020PmAccounts', '0021DelegatedWork', '0022MailPersistence', '0023Campaigns', '0024RequestedFollowupAndPolicyReviews', '0025KnownCompanyResearchSettings', '0026LocalCompanyDrafts', '0027ListedRouteVerification', '0028TerritoryClearances', '0029AccountCallbacks', '0030EmailTemplates',
       ]);
       assert.deepEqual(
         raw.prepare('PRAGMA table_info(person_contact_methods)').all().slice(19),

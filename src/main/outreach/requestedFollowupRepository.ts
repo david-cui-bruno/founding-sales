@@ -6,7 +6,10 @@ import { exportSelectedAccountRecord } from '../delegation/selectedAccountSnapsh
 import { DelegationRepository } from '../delegation/delegationRepository';
 import { SqlThreadIntakeRepository } from './threadIntakeRepository';
 import { requestedMailContextSchema, type RequestedMailContext, requestedFollowupDraftSchema, requestedApprovalStatusSchema, prepareRequestedFollowupSchema, type PrepareRequestedFollowup, type RequestedFollowupDraft, type SavedRequestedFollowup } from '../../shared/contracts/requestedFollowupContract';
-import { requestedMailContext, validateRequestedOriginalCall, validateRequestedRecipient, validateRequestedDraftContext, validateRequestedDraftRevision, type RequestedFollowupContext } from './requestedFollowupService';
+import { requestedMailContext, validateRequestedOriginalCall, validateRequestedRecipient, validateRequestedDraftContext, validateRequestedDraftRevision, REQUESTED_CONNECTED_ONLY, type RequestedFollowupContext } from './requestedFollowupService';
+import { SqlReplyTemplateRepository } from './templates/replyTemplateRepository';
+import { FOLLOWUP_TEMPLATE_OUTCOMES } from './templates/followupTemplateChoice';
+import type { ReplyTemplate, ReplyTemplateId } from '../../shared/contracts/replyTemplateContract';
 export type RequestedOwnerContext = { workspaceId: string; accountId: string; mailbox: { subject: string; sender: string }; mailContext: RequestedMailContext;
   accountVersion: number; researchRevision: number; authorityGeneration: number; aggregateVersion: number;
   cursor: { data: MailCursorEnvelope; rev: number } | null; expiresAt: string };
@@ -33,8 +36,11 @@ export class SqlRequestedFollowupRepository {
       if (!command || !event || !handoff || !handoff.consumedAt) throw new Error('requested_call_missing');
       const { accountId: handoffAccountId, authorityGeneration: handoffGeneration, consumedAt: _consumed, ...originalHandoff } = handoff;
       void _consumed;
+      // Manual and model mode keep the single `connected` origin they always had. Template mode names the wider
+      // set the template choice covers, because David decided a follow-up drafts after every call outcome.
+      const allowedOutcomes = input.mode === 'template' ? FOLLOWUP_TEMPLATE_OUTCOMES : REQUESTED_CONNECTED_ONLY;
       const originalCall = validateRequestedOriginalCall({ workspaceId: this.deps.workspaceId, accountId, reference: input.originalCall, command: JSON.parse(command.command_json), commandFingerprint: command.fingerprint,
-        event: JSON.parse(event.event_json), handoff: originalHandoff, handoffAccountId, handoffGeneration });
+        event: JSON.parse(event.event_json), handoff: originalHandoff, handoffAccountId, handoffGeneration, allowedOutcomes });
       // Immutable original receipt plus current enrollment/conflict evidence share
       // this SQL snapshot (and the immediate save transaction), not mutable lastOutcome.
       const receipt = raw.prepare(`SELECT r.*,e.campaign_version_id,e.state AS enrollment_state FROM campaign_step_receipts r
@@ -46,7 +52,7 @@ export class SqlRequestedFollowupRepository {
       const evidence = originalCall.event.campaign?.evidence, h = originalCall.handoff;
       if (!receipt || !evidence || receipt.enrollment_id !== h.campaign.enrollmentId || receipt.step_id !== h.campaign.stepId
         || receipt.action_id !== h.actionId || receipt.route_id !== h.routeId || receipt.route_version !== h.routeVersion || receipt.execution_context_id !== h.contextRevision
-        || receipt.channel !== 'call' || receipt.state !== 'human_reported_sent' || receipt.outcome !== 'connected' || receipt.source !== 'human'
+        || receipt.channel !== 'call' || receipt.state !== 'human_reported_sent' || receipt.outcome !== originalCall.command.payload.outcome.outcome || receipt.source !== 'human'
         || receipt.campaign_version_id !== evidence.campaignVersionId || receipt.context_revision !== evidence.contextRevision
         || !['active', 'conversation', 'completed'].includes(receipt.enrollment_state)) throw new Error('requested_call_origin_invalid');
       if (raw.prepare(`SELECT 1 FROM campaign_step_receipts WHERE workspace_id=? AND account_id=? AND enrollment_id=?
@@ -77,6 +83,10 @@ export class SqlRequestedFollowupRepository {
       return { account, originalCall, mailbox, mailContext, cursor };
     };
     return raw.inTransaction ? read() : raw.transaction(read).deferred();
+  }
+  /** The template as this Mac holds it. Template mode renders from this text, never from a caller's text. */
+  template(templateId: ReplyTemplateId): ReplyTemplate {
+    return new SqlReplyTemplateRepository(this.deps).get(templateId);
   }
   get(accountId: string, draftId: string): SavedRequestedFollowup | null {
     const row = this.deps.database.raw.prepare('SELECT draft_json,approval_json FROM delegated_requested_followup_drafts WHERE workspace_id=? AND account_id=? AND id=?').get(this.deps.workspaceId, accountId, draftId) as { draft_json: string; approval_json: string | null } | undefined;

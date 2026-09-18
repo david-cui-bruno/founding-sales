@@ -25,6 +25,7 @@ import { createEmailService } from './outreach/emailService';
 import { createCompanyDraftPreparationService, type CompanyDraftPreparationPort } from './outreach/companyDraftPreparationService';
 import { createOutreachProviders } from './outreach/providers/outreachProviders';
 import { registerOutreachIpc } from './ipc/registerOutreachIpc';
+import { registerTemplateIpc } from './ipc/registerTemplateIpc';
 import { AccountCallbackRepository } from './domain/callbacks/accountCallbackRepository';
 import { AccountNeverCallRepository } from './domain/callbacks/accountNeverCall';
 import { resolveApplicationPaths } from './applicationPaths';
@@ -325,6 +326,7 @@ export type ApplicationStartupDependencies = FoundationRuntimeDependencies & {
   companyResearchHttp?: PageHttp;
   companyResearchResolve?: (hostname: string) => Promise<string[]>;
   registerOutreachIpc?:typeof registerOutreachIpc;
+  registerTemplateIpc?:typeof registerTemplateIpc;
   registerLinkedInIpc?:typeof registerLinkedInIpc;
   createPolicyImportNative?():NonNullable<Parameters<typeof createDelegationRuntime>[0]['policyImportNative']>;
   createRequestedFollowupModel?(userDataPath:string):NonNullable<Parameters<typeof createDelegationRuntime>[0]['requestedModel']>;
@@ -469,6 +471,7 @@ export async function startApplication(
   let companyResearch: ReturnType<typeof createStartupCompanyResearch> | undefined;
   let researchCleanup: Promise<void> | undefined;
   let unregisterEmail:(()=>void)|undefined;
+  let unregisterTemplates:(()=>void)|undefined;
   let unregisterLinkedIn:(()=>void)|undefined;
   let unregisterApplicationIpc: (() => void) | undefined;
   let unregisterAppleSpikeIpc: (() => void) | undefined;
@@ -561,6 +564,7 @@ export async function startApplication(
 
       try { unregisterPhoneSetup?.(); } catch (error) { cleanupErrors.push(error); } finally { unregisterPhoneSetup = undefined; }
       try { unregisterLinkedIn?.(); } catch(error) { cleanupErrors.push(error); } finally { unregisterLinkedIn=undefined; }
+      try { unregisterTemplates?.(); } catch(error) { cleanupErrors.push(error); } finally { unregisterTemplates=undefined; }
       try { unregisterEmail?.(); } catch(error) { cleanupErrors.push(error); } finally { unregisterEmail=undefined; }
       try {
         unregisterApplicationIpc?.();
@@ -765,6 +769,9 @@ export async function startApplication(
       neverCall: async (request: Parameters<AccountNeverCallRepository['suppress']>[0]) => callbackStores(stores => stores.neverCall.suppress(request)),
     };
     if(email)unregisterEmail=(dependencies.registerOutreachIpc??registerOutreachIpc)({provider:email,delegation,callbacks,pairingStore,isTrustedRendererUrl:options.isTrustedRendererUrl});
+    // Lane 31 templates: schema-30 storage behind the runtime's database gate, same clock as the domain. The three worker
+    // channels appear only once the delegation runtime carries `replyTemplate`; read and edit are local and always present.
+    unregisterTemplates=(dependencies.registerTemplateIpc??registerTemplateIpc)({databaseGate:runtime,clock:domainClock,host:delegation,pairing:pairingStore,isTrustedRendererUrl:options.isTrustedRendererUrl});
     throwIfStartupCancelled(options.signal);
     stage = 'apple_bridge';
     if (options.appleBridge !== undefined) {

@@ -3,7 +3,8 @@ import { QueryCommand, type TransactWriteItem } from '@aws-sdk/client-dynamodb';
 import { accountIdSchema as id, accountInstantSchema as instant } from '../../../../src/shared/contracts/accountContract';
 import { accountRecordSchema, type AccountRecord } from '../../../../src/shared/contracts/accountRecordContract';
 import { commandReceiptSchema, workerEventSchema, type CommandReceipt } from '../../../../src/shared/contracts/delegationContract';
-import { ownerSourceConfigurationSchema, ownerSourceKey, type TerritoryPolicyCommand } from '../../../../src/shared/contracts/ownerCommandContract';
+import { ownerSourceConfigurationSchema, ownerSourceKey, type ReplyTemplateCommand, type TerritoryPolicyCommand } from '../../../../src/shared/contracts/ownerCommandContract';
+import { decideTemplateEmailStep, workerReplyTemplateApprovalSchema, workerReplyTemplateStateSchema, type ReplyTemplateId, type ReplyTemplateValues, type WorkerReplyTemplateState } from '../../../../src/shared/contracts/replyTemplateContract';
 import { deriveTerritoryCampaignVersion, territoryCallPolicyId, territoryCallPolicySchema, territoryEnrollmentCommandId, territoryEnrollmentId, territoryExecutionContextId,
   territoryHeldSteps, TERRITORY_EMAIL_HOLD_REASON, type TerritoryCallPolicy, type TerritoryHeldStep } from '../../../../src/shared/contracts/territoryCallPolicyContract';
 import { executionAuthorityFields, executionAuthorityKey } from './executionRepository';
@@ -16,6 +17,8 @@ export const territoryEnrollmentKey = (accountId: string) => `TERRITORY_ENROLLME
 /** Where the backfill sweep keeps its position. It wraps: reaching the end of the table returns the cursor to the start, so a firm whose
  *  listed route was admitted after the last pass is picked up on a later one. A firm already enrolled costs one read and nothing else. */
 export const territoryBackfillCursorKey = 'TERRITORY_BACKFILL_CURSOR';
+/** Where the workspace's standing template approvals live. One record per workspace, exactly like the territory policy. */
+export const replyTemplateStateKey = (workspaceId: string) => `REPLY_TEMPLATE_STATE#${keyPart(workspaceId)}`;
 const ACCOUNT_PREFIX = 'ACCOUNT#';
 /** At most this many firms per scheduled tick (the brief's cap): one bounded query and at most one enrollment transaction each. */
 export const TERRITORY_BACKFILL_TICK_LIMIT = 50;
@@ -40,6 +43,7 @@ export type TerritoryPolicyOutcome =
   | ({ outcome: 'enrolled' | 'replayed' } & TerritoryEnrollmentRecord)
   | { outcome: 'no_policy' | 'policy_paused' | 'authority_exists' | 'route_unavailable'; accountId: string; policyId: string | null; revision: number | null };
 export type TerritoryPolicyPlan = { items: TransactWriteItem[]; receipt: CommandReceipt; policy: TerritoryCallPolicy | null };
+export type TerritoryTemplatePlan = { items: TransactWriteItem[]; receipt: CommandReceipt; state: WorkerReplyTemplateState | null };
 const definitionOf = (policy: TerritoryCallPolicy) => ({ audience: policy.audience, sequence: policy.sequence, caps: policy.caps, objective: policy.objective, offer: policy.offer });
 const ROUTE_REFUSALS = ['campaign_record_missing', 'campaign_route_mismatch'];
 
@@ -141,6 +145,60 @@ export class TerritoryPolicyRepository {
     }
     await this.store.publish(outbox.sequence);
     return { outcome: 'enrolled', ...record };
+  }
+  /** The standing template approvals of this workspace, or null when David has approved none yet. */
+  async readTemplateState(): Promise<Stored<WorkerReplyTemplateState> | null> {
+    const row = await this.store.get<unknown>(replyTemplateStateKey(this.workspaceId));
+    return row ? { data: workerReplyTemplateStateSchema.parse(row.data), rev: row.rev } : null;
+  }
+  /**
+   * Plan one reply-template command for the owner coordinator's receipt transaction (D13). The payload schema has
+   * already re-derived the sha256 from the subject and body it carries and re-checked every body rule, so a hash
+   * that does not match the text never reaches this method. What is left is the CAS on the stored state.
+   *
+   * Approving is standing permission to send one already approved template as a sequence step. It is never a send:
+   * no dispatch intent, no reservation and no outbox event is created here.
+   */
+  async planTemplateCommand(command: ReplyTemplateCommand): Promise<TerritoryTemplatePlan> {
+    this.store.workspace(command.workspaceId);
+    const current = await this.readTemplateState(); const p = command.payload; const now = this.store.now();
+    const receipt = (status: CommandReceipt['status'], reason: string | null): CommandReceipt =>
+      commandReceiptSchema.parse({ commandId: command.commandId, status, authorityGeneration: 0, aggregateVersion: (current?.data.approvals.length ?? 0) + 1, reason });
+    const base = current?.data ?? { approvals: [], paused: false, updatedAt: now };
+    const others = base.approvals.filter(approval => approval.templateId !== ('templateId' in p ? p.templateId : ''));
+    let next: WorkerReplyTemplateState;
+    if (p.kind === 'template-pause') {
+      if (base.paused === p.paused) return { items: [], receipt: receipt('rejected', 'template_pause_unchanged'), state: current?.data ?? null };
+      next = workerReplyTemplateStateSchema.parse({ ...base, paused: p.paused, updatedAt: now });
+    } else if (p.kind === 'template-revoke') {
+      const existing = base.approvals.find(approval => approval.templateId === p.templateId);
+      if (!existing || existing.revision !== p.revision) return { items: [], receipt: receipt('rejected', 'template_not_approved'), state: current?.data ?? null };
+      next = workerReplyTemplateStateSchema.parse({ ...base, approvals: others, updatedAt: now });
+    } else {
+      const existing = base.approvals.find(approval => approval.templateId === p.templateId);
+      // An identical re-approval is a read: the standing permission already names this revision and this hash.
+      if (existing && existing.revision === p.revision && existing.contentHash === p.contentHash) return { items: [], receipt: receipt('applied', null), state: base };
+      const approval = workerReplyTemplateApprovalSchema.parse({ templateId: p.templateId, revision: p.revision, subject: p.subject,
+        body: p.body, contentHash: p.contentHash, approvedAt: now, commandId: command.commandId });
+      next = workerReplyTemplateStateSchema.parse({ ...base, approvals: [...others, approval].sort((a, b) => a.templateId < b.templateId ? -1 : 1), updatedAt: now });
+    }
+    return { items: [this.store.put(replyTemplateStateKey(this.workspaceId), next, current?.rev ?? null)], receipt: receipt('applied', null), state: next };
+  }
+  /**
+   * Whether one sequence email step may send, and with exactly what text. Reads the standing approvals, the
+   * worker-held grant and the sender's own recorded arithmetic; decides nothing else. Every refusal is one of the
+   * closed hold reasons David reads on Today, never a silent skip and never an inferred success.
+   */
+  async planTemplateEmailStep(input: { templateId: ReplyTemplateId; pairingId: string; values: ReplyTemplateValues;
+    grant(pairingId: string): Promise<boolean>; senderCap(): Promise<{ today: number; sentToday: number } | null> }):
+  Promise<ReturnType<typeof decideTemplateEmailStep>> {
+    const state = await this.readTemplateState();
+    // Read the grant and the cap only when the approval already permits this template, so an unapproved
+    // template never touches the Google boundary at all.
+    const approved = !!state?.data.approvals.some(approval => approval.templateId === input.templateId) && !state.data.paused;
+    const grantConnected = approved ? await input.grant(input.pairingId) : false;
+    const senderCap = approved && grantConnected ? await input.senderCap() : null;
+    return decideTemplateEmailStep({ templateId: input.templateId, state: state?.data ?? null, grantConnected, senderCap, values: input.values });
   }
   /** One bounded ascending page of account records after the cursor. `truncated` is true whenever there may be more firms
    * beyond the last row returned, so a server-side 1 MB cut is never mistaken for the end of the table. */

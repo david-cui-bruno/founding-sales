@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import { accountFingerprint } from '../domain/accounts/accountEvidence';
 import { type RequestedFollowupDraft, requestedMailContextSchema, type OriginalCallRef, type RequestedRecipient, type RequestedMailContext , requestedFollowupDraftSchema, prepareRequestedFollowupSchema, getRequestedFollowupSchema, editRequestedFollowupSchema, type PrepareRequestedFollowup, type GetRequestedFollowup, type EditRequestedFollowup, type SavedRequestedFollowup, savedRequestedFollowupSchema } from '../../shared/contracts/requestedFollowupContract';
+/** The only applied outcome a manual or model requested follow-up may name, unchanged since it shipped. */
+export const REQUESTED_CONNECTED_ONLY = Object.freeze(['connected'] as const);
 /** Semantic evidence only. Text edits have a separate exact draft revision/hash. */
 export function requestedFollowupContextRevision(draft: RequestedFollowupDraft): string {
   const { accountVersion, researchRevision, recipientBinding, originalCall, mailContext } = draft;
@@ -13,10 +15,14 @@ import type { MailCursorEnvelope } from '../../shared/contracts/mailThreadContra
 import { mailScopeFingerprint } from './providers/gmailThreadProvider';
 /** Shared strict receipt validation. Connected is taken only from the pinned
  * immutable applied outcome COMMAND/event pair, never the handoff/lastOutcome. */
-export function validateRequestedOriginalCall(input: { workspaceId: string; accountId: string; reference: OriginalCallRef; command: unknown; commandFingerprint: string; event: unknown; handoff: unknown; handoffAccountId: string; handoffGeneration: number }) {
+export function validateRequestedOriginalCall(input: { workspaceId: string; accountId: string; reference: OriginalCallRef; command: unknown; commandFingerprint: string; event: unknown; handoff: unknown; handoffAccountId: string; handoffGeneration: number;
+  /** Which applied outcomes may originate this follow-up. Manual and model mode keep the single `connected`
+   * they always had; template mode names the wider set the template choice covers. Never widened implicitly. */
+  allowedOutcomes?: readonly string[] }) {
   const command = ownerCommandSchema.parse(input.command), event = workerEventSchema.parse(input.event), handoff = manualHandoffSchema.parse(input.handoff), ref = input.reference;
+  const allowed = input.allowedOutcomes ?? REQUESTED_CONNECTED_ONLY;
   if (command.kind !== 'complete-manual' || event.kind !== 'manual.outcome' || command.payload.outcome.channel !== 'call' || event.payload.channel !== 'call'
-    || command.payload.outcome.outcome !== 'connected' || event.payload.outcome !== 'connected' || event.receipt.status !== 'applied'
+    || !allowed.includes(command.payload.outcome.outcome) || command.payload.outcome.outcome !== event.payload.outcome || event.receipt.status !== 'applied'
     || command.commandId !== ref.commandId || event.receipt.commandId !== ref.commandId || event.id !== ref.outcomeEventId
     || command.workspaceId !== input.workspaceId || event.workspaceId !== input.workspaceId || command.accountId !== input.accountId || event.accountId !== input.accountId
     || input.commandFingerprint !== accountFingerprint(command) || input.commandFingerprint !== ref.commandFingerprint || accountFingerprint(event) !== ref.outcomeEventHash
@@ -28,7 +34,8 @@ export function validateRequestedOriginalCall(input: { workspaceId: string; acco
   if (!evidence || event.campaign?.commandId !== ref.commandId || evidence.accountId !== input.accountId || evidence.actionId !== ref.actionId
     || evidence.enrollmentId !== handoff.campaign.enrollmentId || evidence.stepId !== handoff.campaign.stepId
     || evidence.routeId !== handoff.routeId || evidence.routeVersion !== handoff.routeVersion || evidence.executionContextId !== handoff.contextRevision
-    || evidence.channel !== 'call' || evidence.source !== 'human' || evidence.state !== 'human_reported_sent' || evidence.outcome !== 'connected') throw new Error('requested_call_origin_invalid');
+    || evidence.channel !== 'call' || evidence.source !== 'human' || evidence.state !== 'human_reported_sent'
+    || evidence.outcome !== command.payload.outcome.outcome) throw new Error('requested_call_origin_invalid');
   return { command, event, handoff };
 }
 export type RequestedCallEvidence = ReturnType<typeof validateRequestedOriginalCall>;
@@ -64,7 +71,10 @@ export function validateRequestedDraftIdentity(next: RequestedFollowupDraft, pre
 import { generateOpenAiDraft } from './providers/openAiDraftProvider';
 import type { ModelCredentials } from './providers/providerTypes';
 import { EMAIL_PLAYBOOK } from './emailPlaybook';
+import { renderReplyTemplate, replyTemplateContentHash, replyTemplateSchema, type ReplyTemplate, type ReplyTemplateId } from '../../shared/contracts/replyTemplateContract';
 export interface RequestedFollowupStore {
+  /** Template mode only: the template as this Mac holds it. The text always comes from SQL, never from a caller. */
+  template?(templateId: ReplyTemplateId): ReplyTemplate | Promise<ReplyTemplate>;
   readContext(input: PrepareRequestedFollowup): RequestedFollowupContext | Promise<RequestedFollowupContext>;
   get(accountId: string, draftId: string): SavedRequestedFollowup | null | Promise<SavedRequestedFollowup | null>;
   save(draft: RequestedFollowupDraft, expectedRevision: number | null): RequestedFollowupDraft | Promise<RequestedFollowupDraft>;
@@ -78,7 +88,7 @@ export function createRequestedFollowupService(deps: { store: RequestedFollowupS
         if (draft.id !== input.draftId || draft.accountId !== input.accountId || draft.accountVersion !== input.expectedAccountVersion
           || accountFingerprint(draft.originalCall) !== accountFingerprint(input.originalCall)
           || accountFingerprint(draft.recipientBinding) !== accountFingerprint(input.recipientBinding)
-          || draft.generation !== 'edited' || draft.evidenceIds.length) throw new Error('requested_draft_identity_conflict');
+          || draft.generation !== (input.mode === 'template' ? 'template' : 'edited') || draft.evidenceIds.length) throw new Error('requested_draft_identity_conflict');
         return saved;
       };
       if (input.draftId) {
@@ -91,6 +101,18 @@ export function createRequestedFollowupService(deps: { store: RequestedFollowupS
         accountVersion: context.account.account.version, researchRevision: context.account.researchRevision, originalCall: input.originalCall, mailContext: context.mailContext,
         contextRevision: '0'.repeat(64), subject: '', body: '', evidenceIds: [], generation: 'edited', updatedAt: deps.clock.now() });
       draft = { ...draft, contextRevision: requestedFollowupContextRevision(draft) };
+      if (input.mode === 'template') {
+        // The subject and body are rendered from the stored template text and the supplied values. Nothing is
+        // written by a model and nothing is invented: a variable with no value is a hold, not a gap in an email.
+        if (!deps.store.template) throw new Error('requested_template_store_unavailable');
+        const template = replyTemplateSchema.parse(await deps.store.template(input.template!.templateId));
+        const rendered = renderReplyTemplate(template, input.template!.values);
+        if ('hold' in rendered) throw new Error(rendered.hold);
+        draft = requestedFollowupDraftSchema.parse({ ...draft, subject: rendered.rendered.subject, body: rendered.rendered.body,
+          generation: 'template', template: { templateId: template.id, revision: template.revision, contentHash: replyTemplateContentHash(template),
+            purpose: template.purpose, values: input.template!.values } });
+        draft = { ...draft, contextRevision: requestedFollowupContextRevision(draft) };
+      }
       if (input.mode === 'model') {
         if (!deps.model) throw new Error('requested_model_unconfigured');
         const callText = JSON.stringify(context.originalCall.event.payload);

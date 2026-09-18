@@ -29,7 +29,7 @@ test('packaged diagnostics use callie protocol and an isolated native SQLite dat
 
     expect(firstLaunch).toEqual({
       databasePath: expectedDatabasePath,
-      schemaVersion: 29,
+      schemaVersion: 30,
       databaseEncrypted: true,
       cipherVersion: 'SQLite3 Multiple Ciphers 2.3.5',
       fts5Available: true,
@@ -115,7 +115,7 @@ test('packaged startup leaves an isolated database collision untouched and recov
 
     expect(health).toEqual({
       databasePath,
-      schemaVersion: 29,
+      schemaVersion: 30,
       databaseEncrypted: true,
       cipherVersion: 'SQLite3 Multiple Ciphers 2.3.5',
       fts5Available: true,
@@ -177,7 +177,7 @@ const inspectPackagedApplication = async (userDataPath: string, inspectRecovery?
     await page.getByRole('link', { name: 'Settings', exact: true }).click();
     await expect(page.getByText('Encrypted SQLite ready')).toBeVisible();
     await expect(page.getByText('FTS5 available')).toBeVisible();
-    await expect(page.getByText('Schema 29')).toBeVisible();
+    await expect(page.getByText('Schema 30')).toBeVisible();
     // The worker-connection section of the master-detail hosts the cloud
     // research controls; no sourcing surface remains in Settings.
     await page.getByRole('button', { name: 'Worker connection', exact: true }).click();
