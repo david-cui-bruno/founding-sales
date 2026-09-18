@@ -1,9 +1,9 @@
 /**
  * Local mirror of the CloudSourceEvent v1 wire contract (cloud/CONTRACT.md).
  *
- * The canonical implementation lives in the cloud workspace
- * (`cloud/lambdas/shared/src/sourceEvent.ts`); the app must never import from
- * `cloud/`, so this file mirrors it faithfully as an independent module. All
+ * The worker's implementation lives in `cloud/lambdas/delegated-worker`; the
+ * app must never import from `cloud/`, so this file mirrors the wire shape as
+ * an independent module. All
  * object schemas are `.strict()`: unknown fields are rejected so nothing can
  * smuggle free text past the typed-fields-only rule. Change this file only in
  * lockstep with the cloud schema and a CONTRACT.md version note.

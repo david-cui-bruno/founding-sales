@@ -16,21 +16,6 @@ export const DEFAULT_NEW_CALL_SLOTS_COPY = 'default: 30 new firms a day';
  * outcome below." and Settings shows `label` beside `card`. No state here is a
  * fixture success and none of this text is call permission.
  */
-/**
- * D6 acceptance 2 (manual dial into the same outcome form) is half wired in this
- * build. `createDelegatedPhoneHandoff` now admits a hand-dialed attempt: a
- * `manual` handoff skips the helper capability gate, consumes the step's one
- * handoff under the same command identity and never dispatches
- * (`src/main/delegation/executionRouter.ts`). Two things still stand between
- * that and a control here, and neither is lane 32's to change:
- * `phoneFreshBinding` in `companyPhoneSession.ts` throws
- * 'Phone handoff readiness is not configured.' before a review exists when
- * setup is not `configured`, and `delegatedPhoneHandoffRequestSchema`
- * (`ownerCommandContract.ts`) has no optional `manual` field for the IPC request
- * to carry. Rather than promise a form it cannot open, the card says so. Delete
- * this line with those two.
- */
-export const MANUAL_DIAL_NOT_WIRED = 'Logging a hand-dialed call still needs the call step\'s one handoff. The desktop can now take one for a hand-dialed attempt, but this screen cannot ask for it yet, so the outcome form below stays closed for this firm.';
 
 /**
  * D11: "roadmap updated from measured use; next quarter planned from numbers,

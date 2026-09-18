@@ -25,7 +25,8 @@ export function planNext(versionInput: CampaignVersion, enrollmentInput: Enrollm
   if (!current) return wait('step_missing');
   const currentEvidence = exact.filter(e => e.stepId === current.id).sort((a, b) => b.observedAt.localeCompare(a.observedAt));
   const last = currentEvidence[0];
-  if (evidence.some(e => e.stepId === current.id) && !last) return wait('evidence_not_current');
+  // Evidence on this step for a route the enrollment no longer uses (a retired wrong number) must not hold the replacement.
+  if (observed.some(e => e.stepId === current.id && e.routeId === enrollment.selectedRouteId) && !last) return wait('evidence_not_current');
   if (last && !actual(last)) return wait('outcome_unresolved');
   if (last) index += 1;
   const step = version.steps[index];
