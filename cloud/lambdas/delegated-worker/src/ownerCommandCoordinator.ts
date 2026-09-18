@@ -276,24 +276,26 @@ export class OwnerCommandCoordinator {
     await store.publish(outbox.sequence);
     return receipt;
   }
-  /** Approve, pause, resume or read the standing territory call policy (D1). Approve and set-state store their receipt
-   * under the command id like every owner command, so a retry answers the same; a read stores nothing. The reply always
-   * carries the policy as it stands afterwards, since the desktop keeps no copy of a workspace-level record. */
+  /** Approve, pause, resume, read or extend the standing territory call policy (D1, D13). Approve, set-state and add-state
+   * store their receipt under the command id like every owner command, so a retry answers the same; a read stores nothing.
+   * The reply always carries the policy and the state-addition record as they stand afterwards, since the desktop keeps no
+   * copy of a workspace-level record. Adding a state grants nothing and dials nothing. */
   private async territoryPolicy(command: TerritoryPolicyCommand, pairingId: string, store: DynamoStore): Promise<TerritoryCallPolicyReceipt> {
     const repository = new TerritoryPolicyRepository(store.options);
     if (command.payload.kind === 'policy.read') {
       const plan = await repository.planCommand(command, pairingId);
-      return territoryCallPolicyReceiptSchema.parse({ receipt: plan.receipt, policy: plan.policy });
+      return territoryCallPolicyReceiptSchema.parse({ receipt: plan.receipt, policy: plan.policy, ...(plan.added ? { added: plan.added } : {}) });
     }
     const key = `COMMAND#${keyPart(command.commandId)}`; const fp = fingerprint(command);
     const previous = await store.get<{ fingerprint: string; receipt: CommandReceipt }>(key);
     if (previous) {
       if (previous.data.fingerprint !== fp) throw new Error('command_fingerprint_conflict');
-      return territoryCallPolicyReceiptSchema.parse({ receipt: previous.data.receipt, policy: (await repository.read())?.data ?? null });
+      const added = (await repository.readAddedStates())?.data ?? null;
+      return territoryCallPolicyReceiptSchema.parse({ receipt: previous.data.receipt, policy: (await repository.read())?.data ?? null, ...(added ? { added } : {}) });
     }
     const plan = await repository.planCommand(command, pairingId);
     await store.transact([...plan.items, store.put(key, { fingerprint: fp, receipt: plan.receipt, command }, null)]);
-    const receipt = territoryCallPolicyReceiptSchema.parse({ receipt: plan.receipt, policy: plan.policy });
+    const receipt = territoryCallPolicyReceiptSchema.parse({ receipt: plan.receipt, policy: plan.policy, ...(plan.added ? { added: plan.added } : {}) });
     // Approving the policy gives its first firms authority on David's click instead of on the next scheduled tick. Bounded and best
     // effort: the receipt is already committed, and the tick's own sweep resumes from the same cursor for the rest. Pause and resume
     // stay pure receipt paths; a resumed policy is swept by the next tick.
