@@ -19,11 +19,26 @@ export type AccountRoute = z.infer<typeof accountRouteSchema>;
 export const accountPortfolioSchema = z.strictObject({ count: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   measure: z.enum(['units', 'buildings', 'properties']), scope: z.enum(['managed', 'owned']) });
 const claimBase = { kind: z.enum(['fact', 'hypothesis', 'prospect_stated_problem']), evidenceIds };
+/** Why one published address was chosen over the others the same firm published. */
+export const BUSINESS_EMAIL_SELECTIONS = ['role_mailbox', 'sole_on_domain_address', 'first_on_domain_address'] as const;
+export type BusinessEmailSelection = typeof BUSINESS_EMAIL_SELECTIONS[number];
+/** Lower-case, printable-ASCII, on a real domain. Stored exactly as it will be addressed, never re-cased at send time. */
+const businessEmailValueSchema = z.string().min(3).max(254).refine(value => value === value.toLowerCase() && /^[\x21-\x7e]+$/.test(value)
+  && z.email().safeParse(value).success, 'Invalid business email');
 export const accountClaimSchema = z.discriminatedUnion('key', [
   z.strictObject({ ...claimBase, key: z.literal('portfolio'), value: accountPortfolioSchema }),
   z.strictObject({ ...claimBase, key: z.enum(['residential_scope', 'operating_footprint', 'maintenance_workflow', 'technology', 'role', 'pain', 'ownership', 'portfolio_description']), value: text }),
   /** Model-extracted verdict on whether the company is a property manager, always backed by a quoted published block. `unclear` is never stored: it stays an unknown. */
   z.strictObject({ ...claimBase, key: z.literal('target_fit'), value: z.enum(['yes', 'no']) }),
+  /**
+   * The one business mailbox the firm publishes on its own domain (D13, lane 39). A firm has at most one, it is
+   * always an address on the firm's own website domain or a subdomain of it, it is never a free-mail address, and
+   * it is cited exactly like every other claim: `evidenceIds` names the fetched source whose excerpt and sha256
+   * contain the address. `selection` records why this address and not another the same firm published, because
+   * that choice is made once, from pages that will not be refetched, and cannot be re-derived later.
+   */
+  z.strictObject({ ...claimBase, key: z.literal('business_email'), value: businessEmailValueSchema,
+    selection: z.enum(BUSINESS_EMAIL_SELECTIONS) }),
 ]).refine(claim => claim.kind === 'hypothesis' || claim.evidenceIds.length > 0, 'Supported claims require evidence');
 export type AccountClaim = z.infer<typeof accountClaimSchema>;
 export const accountSourceSchema = z.strictObject({ id: accountIdSchema, url: z.url().max(2048).refine(value => {

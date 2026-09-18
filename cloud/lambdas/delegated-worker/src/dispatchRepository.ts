@@ -11,7 +11,11 @@ import { CampaignExecution, type CampaignExecutionPlan } from './campaignExecuti
 import { ownerSourceConfigurationSchema, ownerSourceKey } from '../../../../src/shared/contracts/ownerCommandContract';
 import type { CampaignEventPayload } from '../../../../src/shared/contracts/campaignContract';
 import type { TransactWriteItem } from '@aws-sdk/client-dynamodb';
-import { accountIdSchema as id, accountInstantSchema as instant, accountSchema, accountRouteSchema } from '../../../../src/shared/contracts/accountContract';
+import { accountIdSchema as id, accountInstantSchema as instant, accountSchema, accountRouteSchema, accountClaimSchema,
+  accountSourceSchema as citedSourceSchema } from '../../../../src/shared/contracts/accountContract';
+import { createHash } from 'node:crypto';
+import { REPLY_TEMPLATE_IDS, REPLY_TEMPLATE_PURPOSES, workerReplyTemplateStateSchema } from '../../../../src/shared/contracts/replyTemplateContract';
+import { replyTemplateStateKey } from './territoryPolicyRepository';
 import { reserveDispatchInputSchema, reservationSchema, type AppendOutcomeInput, type ReserveDispatchInput } from '../../../../src/shared/contracts/delegationContract';
 import { accountReplyDraftSchema, threadProjectionSchema } from '../../../../src/shared/contracts/mailThreadContract';
 import { DynamoStore, fingerprint, integer, keyPart, type RepositoryOptions } from './dynamoStore';
@@ -48,12 +52,48 @@ export const campaignDispatchBindingSchema = z.strictObject({ campaignId: id, ca
  * approved content/target and campaign caps inside the SAME final transaction. */
 export const campaignDispatchStateSchema = campaignDispatchBindingSchema.extend({ accountId: id, state: z.literal('active'), approvedRevision: integer.positive(),
   allowedContentHash: hash, allowedTargetHash: hash, capsRevision: integer.positive() });
+/**
+ * The cold first email of a territory sequence step (D13, lane 39). Lane 31 shipped the standing template approval
+ * and the send-or-hold decision, and then had nowhere to hand a send: every intent kind but `phone_requested_followup`
+ * assumes a reply thread, and a firm that has never written to us has none.
+ *
+ * What makes this intent admissible is not a thread and not a route: it is one cited `business_email` claim on the
+ * firm's own record, and one standing approval of the exact template revision whose text this message was rendered
+ * from. Both are re-checked at reservation, so an edited template or a changed claim holds the step instead of
+ * sending. The intent carries the template's hash, never its text: the text that goes out is the frozen message, and
+ * the frozen message is what the content hash of the action already fences.
+ */
+export const templateSequenceBindingSchema = z.strictObject({ kind: z.literal('account_claim'),
+  claimIndex: integer.max(199), accountVersion: integer.positive(), email: z.email() });
+export const templateSequenceEmailIntentSchema = z.strictObject({ ...commonIntentBase, kind: z.literal('template_sequence_email'),
+  frozenMessage: frozenFirstEmailSchema, binding: templateSequenceBindingSchema,
+  /** The sequence step this send belongs to. One send per step: the action index already admits one intent per action. */
+  stepId: id, campaignVersionId: id, enrollmentId: id,
+  template: z.strictObject({ templateId: z.enum(REPLY_TEMPLATE_IDS), revision: integer.positive(), contentHash: hash,
+    purpose: z.enum(REPLY_TEMPLATE_PURPOSES) }) });
+export type TemplateSequenceEmailIntent = z.infer<typeof templateSequenceEmailIntentSchema>;
 export const dispatchIntentSchema = z.discriminatedUnion('kind', [
   phoneRequestedFollowupIntentSchema,
+  templateSequenceEmailIntentSchema,
   z.strictObject({ ...intentBase, kind: z.literal('standalone_reply') }),
   z.strictObject({ ...intentBase, kind: z.literal('campaign_step'), campaign: campaignDispatchBindingSchema }),
 ]);
 export type DispatchIntent = z.infer<typeof dispatchIntentSchema>;
+/** The two first-email kinds answer no thread; every other kind replies inside one and is fenced on its thread id. */
+export function threadedDispatchIntent(intent: DispatchIntent): intent is Extract<DispatchIntent, { kind: 'standalone_reply' | 'campaign_step' }> {
+  return intent.kind === 'standalone_reply' || intent.kind === 'campaign_step';
+}
+/**
+ * Permission to write one cold first email to a firm's published business inbox. Its whole basis is the firm's own
+ * published page: the cited `business_email` claim, the source that carries it, and that source's recorded sha256.
+ * It is recorded once, against the exact account version the claim was read at, and it expires. Recording it is not
+ * a send and not a standing permission: each send still needs its own approved template and its own reservation.
+ */
+export const templateSequencePermissionSchema = z.strictObject({ basis: z.literal('listed_business_email'), id, accountId: id,
+  recipient: z.email(), sender: z.email(), mailboxSubject: id, accountVersion: integer.positive(), claimIndex: integer.max(199),
+  claimFingerprint: hash, sourceId: id, sourceSha256: hash, recordedAt: instant, expiresAt: instant });
+export type TemplateSequencePermission = z.infer<typeof templateSequencePermissionSchema>;
+export const templateSequencePermissionKey = (account: string, permission: string) => `TEMPLATE_PERMISSION#${keyPart(account)}#${keyPart(permission)}`;
 export const dispatchApprovalSchema = z.strictObject({ id, commandId: z.uuid(), intentHash: hash, draft: accountReplyDraftSchema,
   permissionEvidenceId: id, approvedAt: instant, expiresAt: instant });
 export const dispatchPermissionSchema = z.strictObject({ id, accountId: id, recipient: z.email(), sender: z.email(), threadId: id,
@@ -131,7 +171,46 @@ export class DynamoDispatchRepository {
       || source.date > permission.recordedAt || source.date > this.store.now()) throw new Error('recipient_permission_unproven');
     return source;
   }
+  /**
+   * The recorded business email of one firm, read from the account row exactly as a recipient binding names it: the
+   * claim at that index must be a `business_email` fact naming that address, and its citation must be a permitted
+   * source whose stored excerpt still hashes to its recorded sha256. Returns the proof, or throws `no_business_email`
+   * — lane 31's own closed reason, so a step that loses its address reads the same on Today as one that never had one.
+   */
+  private async businessEmailProof(accountId: string, binding: z.infer<typeof templateSequenceBindingSchema>) {
+    const key = `ACCOUNT#${keyPart(accountId)}`; const row = await this.store.get<unknown>(key);
+    const record = z.object({ account: accountSchema, claims: z.array(accountClaimSchema) }).safeParse(row?.data);
+    if (!row || !record.success || record.data.account.id !== accountId || record.data.account.version !== binding.accountVersion) throw new Error('no_business_email');
+    const claim = record.data.claims[binding.claimIndex];
+    if (!claim || claim.key !== 'business_email' || claim.kind !== 'fact' || claim.value !== binding.email || claim.evidenceIds.length !== 1) throw new Error('no_business_email');
+    const sourceId = claim.evidenceIds[0]!;
+    const sources = z.object({ sources: z.array(citedSourceSchema) }).safeParse(row.data);
+    const cited = sources.success ? sources.data.sources.filter(source => source.id === sourceId) : [];
+    const source = cited[0];
+    if (cited.length !== 1 || !source || !source.permitted
+      || createHash('sha256').update(source.excerpt).digest('hex') !== source.sha256) throw new Error('no_business_email');
+    return { key, rev: row.rev, claim, claimFingerprint: fingerprint(claim), sourceId, sourceSha256: source.sha256 };
+  }
+  /**
+   * Record permission to write one cold first email to a firm's published business inbox, from the firm's own page.
+   * Immutable and fenced on the account row it was read from; a second admission with the same id must carry the
+   * identical proof. This writes no intent, reserves nothing and sends nothing.
+   */
+  async admitTemplateSequencePermission(input: TemplateSequencePermission): Promise<void> {
+    const permission = templateSequencePermissionSchema.parse(input);
+    const proof = await this.businessEmailProof(permission.accountId, { kind: 'account_claim', claimIndex: permission.claimIndex,
+      accountVersion: permission.accountVersion, email: permission.recipient });
+    if (proof.claimFingerprint !== permission.claimFingerprint || proof.sourceId !== permission.sourceId
+      || proof.sourceSha256 !== permission.sourceSha256) throw new Error('no_business_email');
+    if (permission.recordedAt > this.store.now() || permission.expiresAt <= this.store.now()
+      || permission.recordedAt > permission.expiresAt) throw new Error('permission_not_current');
+    await this.immutable(templateSequencePermissionKey(permission.accountId, permission.id), permission,
+      [this.store.check(proof.key, proof.rev), this.store.absent(mailSuppressionKey(permission.accountId))]);
+  }
   async revokeApproval(approvalId: string): Promise<void> { await this.immutable(revokedKey(dispatchApprovalKey(approvalId)), { revokedAt: this.store.now() }); }
+  async revokeTemplateSequencePermission(accountId: string, permissionId: string): Promise<void> {
+    await this.immutable(revokedKey(templateSequencePermissionKey(accountId, permissionId)), { revokedAt: this.store.now() });
+  }
   async revokePermission(accountId: string, permissionId: string): Promise<void> { await this.immutable(revokedKey(dispatchPermissionKey(accountId, permissionId)), { revokedAt: this.store.now() }); }
   async configureIntake(input: z.infer<typeof intakeRegistrySchema>, expectedRevision: number | null): Promise<void> {
     const registry = intakeRegistrySchema.parse(input);
@@ -161,7 +240,7 @@ export class DynamoDispatchRepository {
     const flight = flightSchema.parse(flightRow.data);
     if (terminalState && (terminalState === evidence.state || !['provider_accepted', 'cancelled'].includes(evidence.state)
       || evidence.state === 'provider_accepted' && !(evidence.kind === 'provider_result' && evidence.reason === 'provider_accepted'
-        || evidence.kind === 'sent_lookup' && evidence.reason === 'sent_match' && (intent.kind === 'phone_requested_followup' ? evidence.providerIdentity?.threadId != null : evidence.providerIdentity?.threadId === intent.frozenMessage.threadId)))) throw new Error('send_evidence_conflict');
+        || evidence.kind === 'sent_lookup' && evidence.reason === 'sent_match' && (threadedDispatchIntent(intent) ? evidence.providerIdentity?.threadId === intent.frozenMessage.threadId : evidence.providerIdentity?.threadId != null)))) throw new Error('send_evidence_conflict');
     if (!terminalState && (flight.commandId !== intent.commandId || flight.accountId !== intent.action.accountId || flight.actionId !== intent.action.actionId
       || !['dispatching', 'unknown'].includes(flight.state))) throw new Error('account_dispatch_conflict');
     const items = [this.store.put(`DISPATCH_EVIDENCE#${keyPart(intent.commandId)}#${fingerprint(evidence)}`, evidence, null),
@@ -382,6 +461,7 @@ export class DynamoDispatchRepository {
       expectedAuthorityGeneration: parsed.expectedAuthorityGeneration, approvalId: parsed.approvalId, contentHash: parsed.contentHash, targetHash: parsed.targetHash };
     if (intent.commandId !== commandId || fingerprint(identity) !== fingerprint(intent.action)) throw new Error('dispatch_identity_conflict');
     if (intent.kind === 'phone_requested_followup') return this.requestedReservationPlan(parsed, intent, evidence, [this.store.absent(holdKey), this.store.check(indexKey, index.rev), this.store.check(key, row.rev)]);
+    if (intent.kind === 'template_sequence_email') return this.templateSequenceReservationPlan(parsed, intent, evidence, [this.store.absent(holdKey), this.store.check(indexKey, index.rev), this.store.check(key, row.rev)]);
     if (intent.kind === 'campaign_step' && (!this.campaignExecution || intent.binding.kind !== 'account_route')) throw new Error('campaign_binding_unavailable');
     const sourceKey = ownerSourceKey(parsed.accountId); const sourceRow = await this.store.get<unknown>(sourceKey);
     const configuration = ownerSourceConfigurationSchema.safeParse(sourceRow?.data);
@@ -432,6 +512,45 @@ export class DynamoDispatchRepository {
     return this.finishReservationPlan(parsed, intent, evidence, checks, Math.max(Date.parse(approval.approvedAt), Date.parse(permission.recordedAt)),
       Math.min(Date.parse(approval.expiresAt), Date.parse(permission.expiresAt)), campaign);
   }
+  /**
+   * One cold sequence email, re-checked against everything it was admitted on. The refusals are lane 31's own closed
+   * hold reasons wherever one applies, so the founder reads the same words here as on the send decision that produced
+   * this intent: `template_not_approved` when the standing approval no longer names this revision and hash (an edit
+   * revokes it, and a pause holds it), `no_business_email` when the claim no longer names this recipient, and
+   * `dispatch_cap_reached` from the shared sender cap and ramp below. The approved text is never re-read here: the
+   * hash is what proves the frozen message came from text David approved, and the action's content hash freezes that
+   * message. Nothing about a thread is required or implied — this firm has never written to us.
+   */
+  private async templateSequenceReservationPlan(parsed: ReserveDispatchInput, intent: TemplateSequenceEmailIntent, evidence: GoogleAccessEvidence | undefined, checks: TransactWriteItem[]) {
+    const sourceKey = ownerSourceKey(parsed.accountId); const sourceRow = await this.store.get<unknown>(sourceKey);
+    const configuration = ownerSourceConfigurationSchema.safeParse(sourceRow?.data);
+    if (!sourceRow || !configuration.success || configuration.data.state !== 'active' || configuration.data.workspaceId !== parsed.workspaceId
+      || configuration.data.accountId !== parsed.accountId || configuration.data.pairingId !== intent.pairingId
+      || configuration.data.mailboxSubject !== intent.mailboxSubject) throw new Error('source_configuration_unavailable');
+    // The standing approval as the worker holds it now, not as it stood when the step was planned.
+    const stateKey = replyTemplateStateKey(parsed.workspaceId); const stateRow = await this.store.get<unknown>(stateKey);
+    const state = stateRow ? workerReplyTemplateStateSchema.safeParse(stateRow.data) : null;
+    const approval = state?.success ? state.data.approvals.find(entry => entry.templateId === intent.template.templateId) : undefined;
+    if (!stateRow || !state?.success || state.data.paused || !approval || approval.revision !== intent.template.revision
+      || approval.contentHash !== intent.template.contentHash) throw new Error('template_not_approved');
+    const proof = await this.businessEmailProof(parsed.accountId, intent.binding);
+    if (intent.frozenMessage.to !== intent.binding.email) throw new Error('no_business_email');
+    const permissionKey = templateSequencePermissionKey(parsed.accountId, parsed.approvalId);
+    const permissionRow = await this.required(permissionKey);
+    const permission = templateSequencePermissionSchema.parse(permissionRow.data);
+    if (permission.id !== parsed.approvalId || permission.accountId !== parsed.accountId || permission.recipient !== intent.frozenMessage.to
+      || permission.sender !== intent.frozenMessage.from || permission.mailboxSubject !== intent.mailboxSubject
+      || permission.accountVersion !== intent.binding.accountVersion || permission.claimIndex !== intent.binding.claimIndex
+      || permission.claimFingerprint !== proof.claimFingerprint || permission.sourceId !== proof.sourceId
+      || permission.sourceSha256 !== proof.sourceSha256) throw new Error('no_business_email');
+    checks.push(this.store.check(sourceKey, sourceRow.rev), this.store.check(stateKey, stateRow.rev),
+      this.store.check(proof.key, proof.rev), this.store.check(permissionKey, permissionRow.rev));
+    for (const absent of [revokedKey(dispatchIntentKey(intent.commandId)), revokedKey(permissionKey), mailSuppressionKey(parsed.accountId)]) {
+      if (await this.store.get(absent)) throw new Error('dispatch_suppressed');
+      checks.push(this.store.absent(absent));
+    }
+    return this.finishReservationPlan(parsed, intent, evidence, checks, Date.parse(permission.recordedAt), Date.parse(permission.expiresAt));
+  }
   /** Shared final flight, intake, sender cap and C2 grant conditions for every email kind. */
   private async finishReservationPlan(parsed: ReserveDispatchInput, intent: DispatchIntent, evidence: GoogleAccessEvidence | undefined, checks: TransactWriteItem[], validFrom: number, validUntil: number, campaign: CampaignExecutionPlan | null = null): Promise<DispatchReservationPlan> {
     const message = intent.frozenMessage; const commandId = intent.commandId;
@@ -442,7 +561,7 @@ export class DynamoDispatchRepository {
     }
     checks.push(this.store.put(flightKey, { accountId: parsed.accountId, commandId, actionId: parsed.actionId, state: 'dispatching' }, flightRow?.rev ?? null));
     const intake = await createIntakeBarrier(this.store).check({ accountId: parsed.accountId, mailboxSubject: intent.mailboxSubject, requiredRecipient: message.to,
-      ...(intent.kind !== 'phone_requested_followup' ? { requiredThreadId: intent.frozenMessage.threadId } : {}) }, new AbortController().signal);
+      ...(threadedDispatchIntent(intent) ? { requiredThreadId: intent.frozenMessage.threadId } : {}) }, new AbortController().signal);
     if (intake.status !== 'ready') throw new Error(intake.reason);
     checks.push(...intake.checks);
     const policyKey = dispatchCapPolicyKey(message.from); const policyRow = await this.required(policyKey); const policy = capPolicySchema.parse(policyRow.data);

@@ -48,6 +48,22 @@ export function requestedMailContext(cursor: MailCursorEnvelope | null, actualFi
 export function validateRequestedRecipient(record: AccountRecord, binding: RequestedRecipient, ref: OriginalCallRef): void {
   if (binding.kind === 'owner_supplied') {
     if (accountFingerprint(binding.originalCall) !== accountFingerprint(ref)) throw new Error('requested_recipient_mismatch');
+  } else if (binding.kind === 'account_claim') {
+    // The business email the research found on the firm's own site (D13, lane 39). The binding names one exact
+    // recorded claim, so a later edit, a re-run of the research, or a second address cannot silently move the
+    // recipient: the claim at that index must still be the same `business_email` fact naming the same address, and
+    // its citation must still be a permitted source whose stored excerpt hashes to its recorded sha256. Both
+    // callers of this function run it — the repository at prepare time and `validateRequestedDraftContext` again
+    // at approval — so a claim that changed between the two refuses the approval rather than sending.
+    const claim = record.claims[binding.claimIndex];
+    if (!claim || claim.key !== 'business_email' || claim.kind !== 'fact' || claim.value !== binding.email
+      || claim.evidenceIds.length === 0) throw new Error('requested_business_email_stale');
+    for (const id of claim.evidenceIds) {
+      const cited = record.sources.filter(source => source.id === id);
+      const source = cited[0];
+      if (cited.length !== 1 || !source || !source.permitted
+        || createHash('sha256').update(source.excerpt).digest('hex') !== source.sha256) throw new Error('requested_business_email_stale');
+    }
   } else {
     const route = record.routes.find(r => r.id === binding.routeId);
     if (!route || route.accountId !== record.account.id || route.version !== binding.routeVersion || route.channel !== 'email' || route.value !== binding.email

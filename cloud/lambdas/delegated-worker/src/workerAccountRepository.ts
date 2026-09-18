@@ -148,7 +148,24 @@ export class DynamoWorkerAccountRepository implements AccountResearchStore {
     const requireEvidence = (ids: string[]) => {
       for (const id of ids) if (!next.sources.some(source => source.id === id && source.fetchedAt <= at)) throw new Error('missing_or_cross_account_evidence');
     };
-    for (const claim of batch.claims) { requireEvidence(claim.evidenceIds); next.claims.push(claim); }
+    // A firm has at most one business email (D13, lane 39). Research runs again on every revision and finds the same
+    // published address again, so the second admission is a replay of a fact already recorded, not a second mailbox:
+    // it is dropped, and the batch still commits everything else. A batch that carries a *different* address for a
+    // firm that already has one is refused outright, because silently keeping either one would decide by accident
+    // which mailbox a standing template approval sends to.
+    const existingBusinessEmail = next.claims.find(claim => claim.key === 'business_email');
+    const admitted: typeof next.claims = [];
+    for (const claim of batch.claims) {
+      requireEvidence(claim.evidenceIds);
+      if (claim.key === 'business_email') {
+        const already = existingBusinessEmail ?? admitted.find(entry => entry.key === 'business_email');
+        if (already) {
+          if (already.key !== 'business_email' || already.value !== claim.value) throw new Error('business_email_conflict');
+          continue;
+        }
+      }
+      admitted.push(claim); next.claims.push(claim);
+    }
     const seenRoutes = new Set<string>();
     for (const route of batch.routes) {
       if (route.accountId !== batch.accountId || seenRoutes.has(route.id)) throw new Error('cross_account_or_duplicate_route');

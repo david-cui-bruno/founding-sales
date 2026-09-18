@@ -10,7 +10,7 @@ import { DynamoStore, fingerprint, keyPart, type RepositoryOptions } from './dyn
 import { executionAuthorityKey, executionAuthorityFields, authorityRecordSchema } from './executionRepository';
 import { mailThreadKey, mailSuppressionKey } from './threadIntakeRepository';
 import { RemoteGoogleAuthorization, type GoogleAccessEvidence } from './remoteGoogleAuthorization';
-import { dispatchIntentKey, dispatchIntentSchema, sendEvidenceSchema } from './dispatchRepository';
+import { dispatchIntentKey, dispatchIntentSchema, sendEvidenceSchema, threadedDispatchIntent } from './dispatchRepository';
 import { createIntakeBarrier } from './intakeBarrier';
 import { googleGrantSchema } from './googleGrantCapabilities';
 export const meetingOfferKey = (account: string, thread: string) => `MEETING_OFFER#${keyPart(account)}#${keyPart(thread)}`;
@@ -159,7 +159,8 @@ export class DynamoMeetingRepository {
   private async acceptedOffer(offer: MeetingOffer) {
     const key = dispatchIntentKey(offer.sendCommandId); const row = await this.store.get<unknown>(key);
     if (!row) throw new Error('accepted_offer_missing'); const sent = dispatchIntentSchema.parse(row.data);
-    if (sent.kind === 'phone_requested_followup') throw new Error('offer_content_conflict');
+    // A meeting offer is always a reply inside a thread; neither first-email kind can carry one.
+    if (!threadedDispatchIntent(sent)) throw new Error('offer_content_conflict');
     if (sent.action.workspaceId !== this.store.options.workspaceId || sent.action.accountId !== offer.accountId || sent.mailboxSubject !== offer.mailboxSubject
       || sent.frozenMessage.threadId !== offer.threadId || sent.action.contentHash !== fingerprint(sent.frozenMessage)
       || offer.slots.some(slot => Date.parse(slot.end) <= Date.parse(slot.start))

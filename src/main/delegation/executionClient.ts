@@ -3,7 +3,7 @@ import { accountIdSchema } from '../../shared/contracts/accountContract';
 import { ownerReplyDraftRequestSchema, replyDraftResultSchema, assertReplyDraftLineage, type OwnerReplyDraftRequest } from '../../shared/contracts/mailThreadContract';
 import {requestedFollowupDraftSchema,type RequestedFollowupDraft,prepareRequestedFollowupSchema,type PrepareRequestedFollowup} from '../../shared/contracts/requestedFollowupContract';
 import {workerPolicyRequestSchema,workerPolicyReceiptSchema} from '../../shared/contracts/workerPolicyContract';
-import { requestedOwnerContextSchema, ownerCheckpointSchema, configureResearchSourceSchema, ownerResearchSourceSchema, territoryPolicyCommandSchema } from '../../shared/contracts/ownerCommandContract';
+import { requestedOwnerContextSchema, ownerCheckpointSchema, configureResearchSourceSchema, ownerResearchSourceSchema, territoryPolicyCommandSchema, replyTemplateCommandSchema } from '../../shared/contracts/ownerCommandContract';
 import { territoryCallPolicyReceiptSchema, type TerritoryCallPolicyReceipt } from '../../shared/contracts/territoryCallPolicyContract';
 import { z } from 'zod';
 import { researchSetupStatusRequestSchema, researchSetupRemoteStatusSchema, researchSetupWriteRequestSchema, type ResearchSetupStatusRequest, type ResearchSetupRequest, type ResearchSetupCancelRequest } from '../../shared/contracts/researchSetupContract';
@@ -264,6 +264,16 @@ export class ExecutionClient {
     const result=territoryCallPolicyReceiptSchema.parse(await this.request('/commands',signal,command));
     if(result.receipt.commandId!==command.commandId||(result.policy&&result.policy.workspaceId!==this.pairing.workspaceId))throw Error('policy_receipt_mismatch');
     return result;
+  }
+  /** One reply-template command straight to the owner, exactly as `territoryPolicy` goes (D13, lane 31's wiring note).
+   * It never enters the account outbox: no company owns the templates subject, so there is no account row to queue it
+   * against. The caller keeps the command identity and resends the identical command after an uncertain reply, so a
+   * retry answers from the worker's stored receipt instead of approving twice. This carries an approval; it sends nothing. */
+  async replyTemplate(raw:unknown,signal:AbortSignal):Promise<CommandReceipt> {
+    const command=replyTemplateCommandSchema.parse(raw);if(command.workspaceId!==this.pairing.workspaceId)throw Error('workspace_mismatch');
+    const receipt=commandReceiptSchema.parse(await this.request('/commands',signal,command));
+    if(receipt.commandId!==command.commandId)throw Error('reply_template_receipt_mismatch');
+    return receipt;
   }
   async configurePolicy(raw:unknown,signal:AbortSignal) {const input=workerPolicyRequestSchema.parse(raw);if(input.workspaceId!==this.pairing.workspaceId)throw Error('workspace_mismatch');const result=workerPolicyReceiptSchema.parse(await this.request('/policies/configure',signal,input));if(result.requestId!==input.requestId||result.kind!==input.kind)throw Error('policy_receipt_mismatch');return result;}
   /** The caller owns the budget for the whole run; each worker request inside it still gets its own

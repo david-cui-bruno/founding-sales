@@ -3,7 +3,7 @@ import type { EmailSendResult } from '../../../../src/main/outreach/providers/pr
 import type { Reservation } from '../../../../src/shared/contracts/delegationContract';
 import { TERRITORY_EMAIL_HOLD_REASON } from '../../../../src/shared/contracts/territoryCallPolicyContract';
 import { type DynamoExecutionRepository } from './executionRepository';
-import { type DynamoDispatchRepository, type SendEvidence } from './dispatchRepository';
+import { threadedDispatchIntent, type DynamoDispatchRepository, type SendEvidence } from './dispatchRepository';
 import { type RemoteGoogleAuthorization } from './remoteGoogleAuthorization';
 import { DynamoThreadIntakeRepository } from './threadIntakeRepository';
 import { createMailPoller } from './mailPoller';
@@ -14,7 +14,10 @@ export type DispatchOutcome = { status: 'held' | 'not_sent' | 'provider_accepted
 export type DispatchDependencies = { execution: DynamoExecutionRepository; policy: DynamoDispatchRepository; authorization: RemoteGoogleAuthorization; fetch: typeof globalThis.fetch };
 const reasons = new Set(['authority_missing', 'authority_not_active', 'stale_authority', 'dispatch_policy_missing', 'dispatch_evidence_missing', 'approval_not_current',
   'thread_not_current', 'route_not_current', 'recipient_permission_unproven', 'dispatch_suppressed', 'dispatch_cap_reached', 'dispatch_evidence_expired',
-  'campaign_binding_unavailable', 'intake_unavailable', 'intake_incomplete', 'intake_stale', 'manual_outcome_pending', 'google_access_evidence_missing']);
+  'campaign_binding_unavailable', 'intake_unavailable', 'intake_incomplete', 'intake_stale', 'manual_outcome_pending', 'google_access_evidence_missing',
+  // The two cold sequence-email refusals, kept in lane 31's own words so a step that loses its standing approval or
+  // its recorded address reads on Today exactly as the send decision that produced the intent would have read.
+  'template_not_approved', 'no_business_email']);
 /** The worker-held Google grant is what both the send and the reply read use. With no usable
  * grant this is a known, expected condition, not a failure: it closes with the same reason the
  * territory sequence gives its email steps, so a held step stays held until David connects. */
@@ -47,12 +50,13 @@ export function createDispatchService(input: DispatchDependencies) {
       }
       if (prior.reservation || ['dispatching', 'unknown', 'human_reported_sent'].includes(prior.state)) return { status: 'unknown', reason: 'already_reserved' };
       if (!['prepared', 'queued'].includes(prior.state)) return { status: 'held', reason: 'action_not_eligible' };
-      if (intent.kind !== 'phone_requested_followup') {
+      // A first email has no thread to be current in; a reply must still be inside the thread its intent froze.
+      if (threadedDispatchIntent(intent)) {
         const thread = await threads.getThread(intent.action.accountId, intent.frozenMessage.threadId);
         if (!thread) return { status: 'held', reason: 'thread_not_current' };
       }
       const scope = await threads.scope(intent.action.accountId, intent.mailboxSubject);
-      if (!scope || !scope.participantAddresses.includes(intent.frozenMessage.to) || intent.kind !== 'phone_requested_followup' && !scope.knownThreadIds.includes(intent.frozenMessage.threadId)) {
+      if (!scope || !scope.participantAddresses.includes(intent.frozenMessage.to) || threadedDispatchIntent(intent) && !scope.knownThreadIds.includes(intent.frozenMessage.threadId)) {
         return { status: 'held', reason: 'intake_scope_missing' };
       }
       // Only identity crosses this boundary. C3 loads the complete authorized

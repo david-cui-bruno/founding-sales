@@ -27,7 +27,7 @@ export function verifySentMatch(email: ThreadedFrozenEmail, messages: MailMessag
 import { z } from 'zod';
 import { requestJsonOnce } from '../../../../src/main/outreach/providers/providerHttp';
 import type { DispatchDependencies } from './dispatchService';
-import { type SendEvidence } from './dispatchRepository';
+import { threadedDispatchIntent, type SendEvidence } from './dispatchRepository';
 import { fingerprint } from './dynamoStore';
 const providerId = z.string().regex(/^[a-zA-Z0-9_-]{1,200}$/);
 const sentListSchema = z.object({ messages: z.array(z.object({ id: providerId })).max(2).optional(), nextPageToken: z.string().optional() });
@@ -100,8 +100,9 @@ export function createSendReconciler(input: DispatchDependencies) {
         cc: header('cc') ? header('cc').split(',').map(value => value.trim()) : [], date: new Date(Number(raw.internalDate)).toISOString(), subject: decodedSubject(header('subject')),
         bodyParts: [{ mimeType: 'text/plain', text: new TextDecoder('utf-8', { fatal: true }).decode(bytes), truncated: false }] })]);
       if (outcome.status !== 'provider_accepted') return outcome;
-      if (intent.kind === 'phone_requested_followup' ? names.includes('in-reply-to') || names.includes('references')
-        : header('in-reply-to') !== intent.frozenMessage.inReplyTo) return { status: 'unknown', reason: 'sent_mismatch' };
+      // A first email carries no reply headers at all; a reply must carry exactly the ones its intent froze.
+      if (threadedDispatchIntent(intent) ? header('in-reply-to') !== intent.frozenMessage.inReplyTo
+        : names.includes('in-reply-to') || names.includes('references')) return { status: 'unknown', reason: 'sent_mismatch' };
       const observedAt = input.policy.store.now();
       const evidence: SendEvidence = { commandId, reservation, state: 'provider_accepted', observedAt, kind: 'sent_lookup', reason: 'sent_match',
         rfcMessageId: `<${commandId}@callie.invalid>`, providerIdentity: outcome.providerIdentity };

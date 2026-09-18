@@ -1,7 +1,7 @@
 import { fixture, dispatchFixture, campaignFixture } from './dispatchFixture';
 import { ownerSourceKey, type OwnerSourceConfiguration } from '../../../../src/shared/contracts/ownerCommandContract';
 import { describe, expect, it, vi } from 'vitest';
-import { dispatchIntentKey, dispatchApprovalKey, dispatchPermissionKey, dispatchCapPolicyKey, type DispatchIntent, type SendEvidence } from '../src/dispatchRepository';
+import { dispatchIntentKey, dispatchApprovalKey, dispatchPermissionKey, dispatchCapPolicyKey, threadedDispatchIntent, type DispatchIntent, type SendEvidence } from '../src/dispatchRepository';
 import { fingerprint } from '../src/dynamoStore';
 import { DynamoThreadIntakeRepository, mailThreadKey, mailCursorKey } from '../src/threadIntakeRepository';
 import { intakeRegistryKey } from '../src/intakeBarrier';
@@ -244,7 +244,7 @@ it('durable action read rejects mismatched reservation identities', async () => 
 });
 
 function sentRaw(f: Pick<Awaited<ReturnType<typeof dispatchFixture>>, 'options'> & { intent: DispatchIntent }, extraHeaders: { name: string; value: string }[] = []) {
-  if (f.intent.kind === 'phone_requested_followup') throw new Error('threaded_fixture_required');
+  if (!threadedDispatchIntent(f.intent)) throw new Error('threaded_fixture_required');
   const email = f.intent.frozenMessage; const body = Buffer.from(email.body.replace(/\n/g, '\r\n'));
   return { id: 'sent1', threadId: email.threadId, internalDate: String(Date.parse(f.options.clock.now())), labelIds: ['SENT'], payload: { mimeType: 'text/plain', headers: [
     { name: 'Message-ID', value: `<${email.commandId}@callie.invalid>` }, { name: 'From', value: email.from }, { name: 'To', value: email.to }, { name: 'Subject', value: email.subject },

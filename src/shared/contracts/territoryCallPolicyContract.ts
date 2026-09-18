@@ -118,22 +118,22 @@ export const territoryCallPolicyReceiptSchema = z.strictObject({ receipt: comman
   /** The addition record as it stands after the command. Absent on a worker predating "Add a state". */
   added: territoryAddedStatesSchema.nullable().optional() });
 export type TerritoryCallPolicyReceipt = z.infer<typeof territoryCallPolicyReceiptSchema>;
+/**
+ * Renderer to main for "Add a state" (design section 8). Lane 36 kept this out of the request union below on
+ * purpose, because the main-process bridge maps that union positionally and a fourth member would have been
+ * routed to `policy.set-state`, which pauses or resumes the whole policy. Lane 39 names the kind in the bridge
+ * and admits the member here, in the same commit, so the two can never be apart.
+ */
+export const territoryAddStateRequestSchema = z.strictObject({ kind: z.literal('add-state'), commandId: z.uuid(), expectedAddedRevision: revision, state: territoryStateSchema });
+export type TerritoryAddStateRequest = z.infer<typeof territoryAddStateRequestSchema>;
 /** Renderer to main. The renderer names the command identity so a retry resends the same command; main supplies the definition. */
 export const territoryCallPolicyRequestSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('read') }),
   z.strictObject({ kind: z.literal('approve'), commandId: z.uuid(), expectedRevision: revision }),
   z.strictObject({ kind: z.literal('set-state'), commandId: z.uuid(), expectedRevision: revision.min(1), state: z.enum(['active', 'paused']) }),
+  territoryAddStateRequestSchema,
 ]);
 export type TerritoryCallPolicyRequest = z.infer<typeof territoryCallPolicyRequestSchema>;
-/**
- * Renderer to main for "Add a state" (design section 8). Deliberately a schema of its own rather than a
- * fourth member of the request union above: the main-process bridge maps that union positionally, so a
- * new member would be routed to `policy.set-state` until the bridge names this kind. Until then Settings
- * validates the state against the fixed maps and reports the addition as held, which is why nothing can
- * reach the worker by accident. The worker side (`policy.add-state`) is complete.
- */
-export const territoryAddStateRequestSchema = z.strictObject({ kind: z.literal('add-state'), commandId: z.uuid(), expectedAddedRevision: revision, state: territoryStateSchema });
-export type TerritoryAddStateRequest = z.infer<typeof territoryAddStateRequestSchema>;
 export const territoryCallPolicyStatusSchema = z.strictObject({
   workspaceId: id, policy: territoryCallPolicySchema.nullable(),
   /** What an approval would apply: the fixed default in this batch. */
