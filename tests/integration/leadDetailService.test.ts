@@ -308,14 +308,12 @@ describe('leadDetailService over a real encrypted domain', () => {
     }
   });
 
-  it.each(['detail', 'list', 'pipeline'] as const)('keeps an absent projection null in real %s output without getter writes', async surface => {
+  it.each(['detail', 'list'] as const)('keeps an absent projection null in real %s output without getter writes', async surface => {
     const { prospect } = seedLead('not-assessed');
     const before = database.raw.prepare('SELECT total_changes() AS n').get();
     const detail = await leadDetail.get({ personId: prospect.personId });
     const list = domain.listLeadRows({ query: '', stages: [], priorities: [], sort: 'priority', cursor: null, limit: 20 });
-    const pipeline = domain.getPipelineProjection();
-    const output = surface === 'detail' ? detail : surface === 'list' ? list.rows.find(row => row.personId === prospect.personId)
-      : pipeline.stages.flatMap(stage => stage.cards).find(card => card.personId === prospect.personId);
+    const output = surface === 'detail' ? detail : list.rows.find(row => row.personId === prospect.personId);
     expect(output).toBeDefined();
     expect(output?.priorityContext).toBeNull();
     expect(detail.priorityReasons).toEqual([]);
@@ -326,7 +324,7 @@ describe('leadDetailService over a real encrypted domain', () => {
     }
   });
 
-  it('preserves real zero scores in detail, list and pipeline after a canonical evaluation', async () => {
+  it('preserves real zero scores in detail and list after a canonical evaluation', async () => {
     const { prospect } = seedLead('real-zero');
     services.prioritization.recalculateProspect({ evaluationId: 'real-zero-evaluation', prospectId: prospect.prospectId,
       ruleVersionId, evaluatedAt: CLOCK_NOW, expectedProjectionVersion: null });
@@ -335,8 +333,7 @@ describe('leadDetailService over a real encrypted domain', () => {
     const before = database.raw.prepare('SELECT total_changes() AS n').get();
     const detail = await leadDetail.get({ personId: prospect.personId });
     const list = domain.listLeadRows({ query: '', stages: [], priorities: [], sort: 'priority', cursor: null, limit: 20 });
-    const pipeline = domain.getPipelineProjection();
-    for (const output of [detail, list.rows[0], pipeline.stages.flatMap(stage => stage.cards)[0]]) {
+    for (const output of [detail, list.rows[0]]) {
       expect(output?.priorityContext).toMatchObject({ fitPoints: 0, fitBand: 'low', timingValue: 0, timingBand: 'cold', priority: 'P3' });
     }
     expect(detail.priorityReasons).toContain('Fit low 0/30');

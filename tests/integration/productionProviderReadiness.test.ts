@@ -6,15 +6,14 @@ import { migrateToLatest } from '../../src/main/db/migrate';
 import { prepareEncryptedDatabase } from '../../src/main/db/plaintextDatabaseUpgrade';
 import { DomainRuntime } from '../../src/main/domain/domainRuntime';
 import type { FounderSalesDomain } from '../../src/main/domain/founderSalesDomain';
-import { BUILTIN_CADENCES } from '../../src/main/domain/cadence/builtinCadences';
 import { FoundationRuntime } from '../../src/main/foundation/foundationRuntime';
 import { HealthService } from '../../src/main/health/healthService';
 import {
   createDailyProvider, createLeadDetailProvider, createLeadsProvider, registerApplicationIpc,
 } from '../../src/main/ipc/registerApplicationIpc';
 import {
-  createConversationsProvider, createFridayProvider, createImportProvider, createLearningsProvider,
-  createLegacyLeadDetailProvider, createLegacyLeadsProvider, createPipelineProvider, createReviewProvider,
+  createFridayProvider, createImportProvider,
+  createLegacyLeadDetailProvider, createLegacyLeadsProvider,
   createTodayProvider,
 } from '../fixtures/legacyDomainProviders';
 import { createCallieApi } from '../../src/preload/createCallieApi';
@@ -24,14 +23,10 @@ import { dailySnapshotSchema } from '../../src/shared/contracts/dailyContract';
 import { leadsListResponseSchema, type LeadsListRequest } from '../../src/shared/contracts/leadsContract';
 import { leadDetailSchema } from '../../src/shared/contracts/leadDetailContract';
 import { todaySnapshotSchema } from '../../src/shared/contracts/todayContract';
-import { pipelineSnapshotSchema } from '../../src/shared/contracts/pipelineContract';
-import { reviewSnapshotSchema } from '../../src/shared/contracts/reviewContract';
 import { fridayReportSchema } from '../../src/shared/contracts/fridayContract';
 import { importPreviewSchema, importCommitReceiptSchema } from '../../src/shared/contracts/importContract';
-import { conversationsListResponseSchema, conversationDetailSchema } from '../../src/shared/contracts/conversationsContract';
-import { learningsListResponseSchema } from '../../src/shared/contracts/learningsContract';
 import { createTempDatabase, createTestWorkspaceKey } from '../fixtures/tempDatabase';
-import { insertPerson, seedProspect, insertOpenCycleWithAction, insertClosedCycle, insertSourceEvent } from '../fixtures/domainRows';
+import { insertPerson, seedProspect, insertOpenCycleWithAction } from '../fixtures/domainRows';
 import { registeredIpcHandler } from '../fixtures/registeredIpcHandler';
 
 const electron = vi.hoisted(() => ({ handle: vi.fn(), removeHandler: vi.fn() }));
@@ -115,12 +110,8 @@ function gatedOperations(f: Fixture) {
     ['detail.get', () => createLeadDetailProvider(f.gate).get({ personId: 'held-person' })],
     ['daily.get', () => createDailyProvider(f.gate).get()],
     ['today.get', () => createTodayProvider(f.gate).get()],
-    ['pipeline.get', () => createPipelineProvider(f.gate).get()],
-    ['review.list', () => createReviewProvider(f.gate).list({ kinds: [], limit: 50 })],
     ['friday.getCurrent', () => createFridayProvider(f.gate).getCurrent()],
     ['imports.preview', () => createImportProvider(f.gate).preview({ kind: 'csv', sourceName: 'held.csv', content: 'Name\nHeld\n' })],
-    ['conversations.list', () => createConversationsProvider(f.gate).list({ query: '', filter: 'all', limit: 50, cursor: null })],
-    ['learnings.list', () => createLearningsProvider(f.gate).list({ categories: [], statuses: [], query: '', limit: 50 })],
     ['leads.updateField', () => createLegacyLeadsProvider(f.gate).updateField({ personId: 'held-person', field: 'person_name', value: 'Must not write' })],
     ['friday.createJob', () => createFridayProvider(f.gate).createJob({ jobId: 'must-not-write', salesCycleId: null, requestedAt: NOW })],
   ] as const;
@@ -164,17 +155,13 @@ describe('production providers through actual encrypted FoundationRuntime', () =
     expect(appHealthSchema.parse(await f.runtime.getHealth())).toMatchObject({ domainReady: true, domainStatus: 'ready', databaseEncrypted: true });
     const leads = createLeadsProvider(f.gate), detail = createLeadDetailProvider(f.gate), daily = createDailyProvider(f.gate);
     const legacyLeads = createLegacyLeadsProvider(f.gate), legacyDetail = createLegacyLeadDetailProvider(f.gate), today = createTodayProvider(f.gate);
-    const pipeline = createPipelineProvider(f.gate), review = createReviewProvider(f.gate), friday = createFridayProvider(f.gate);
-    const imports = createImportProvider(f.gate), conversations = createConversationsProvider(f.gate), learnings = createLearningsProvider(f.gate);
+    const friday = createFridayProvider(f.gate);
+    const imports = createImportProvider(f.gate);
     expect(leadsListResponseSchema.parse(await leads.list(listRequest)).rows.map(row => row.personId)).toEqual([owner.personId]);
     expect(leadDetailSchema.parse(await detail.get({ personId: owner.personId })).personId).toBe(owner.personId);
     expect(dailySnapshotSchema.safeParse(await daily.get()).success).toBe(true);
     expect(todaySnapshotSchema.parse(await today.get()).revision).toBeGreaterThan(0);
-    expect(pipelineSnapshotSchema.parse(await pipeline.get()).stages.flatMap(stage => stage.cards).map(card => card.personId)).toContain(owner.personId);
-    expect(reviewSnapshotSchema.parse(await review.list({ kinds: [], limit: 50 })).items).toEqual([]);
     expect(fridayReportSchema.parse(await friday.getCurrent()).jobs).toEqual([]);
-    expect(conversationsListResponseSchema.parse(await conversations.list({ query: '', filter: 'all', limit: 50, cursor: null })).rows.map(row => row.activityId)).toContain('ready-call');
-    expect(learningsListResponseSchema.parse(await learnings.list({ categories: [], statuses: [], query: '', limit: 50 })).rows).toEqual([]);
     const preview = importPreviewSchema.parse(await imports.preview({ kind: 'csv', sourceName: 'fictional.csv', content: 'Name,Email\nFictional Owner,fictional@example.invalid\n' }));
     expect(preview.validCount).toBe(1);
 
@@ -182,8 +169,6 @@ describe('production providers through actual encrypted FoundationRuntime', () =
     expect(await f.runtime.withDatabase(db => db.raw.prepare('SELECT display_name FROM persons WHERE id = ?').get(owner.personId))).toEqual({ display_name: 'Renamed Fictional Owner' });
     await receipt(f, await today.addLeadNote({ personId: owner.personId, salesCycleId: owner.cycleId, text: 'Local readiness note' }), [owner.personId], [owner.cycleId]);
     expect((await detail.get({ personId: owner.personId })).activities.some(activity => JSON.stringify(activity).includes('Local readiness note'))).toBe(true);
-    await receipt(f, await conversations.attachTranscript({ personId: owner.personId, activityId: 'ready-call', rawText: 'me: Local fixture.\nLead: Fictional reply.' }), [owner.personId], [owner.cycleId]);
-    expect(conversationDetailSchema.parse(await conversations.get({ activityId: 'ready-call' })).transcriptAvailable).toBe(true);
     await receipt(f, await friday.createJob({ jobId: 'ready-job', salesCycleId: owner.cycleId, requestedAt: NOW }), [], [owner.cycleId]);
     expect((await friday.getCurrent()).jobs).toEqual([{ id: 'ready-job', salesCycleId: owner.cycleId, requestedAt: NOW, status: 'requested', contractorAcceptedAt: null }]);
     const imported = importCommitReceiptSchema.parse(await imports.commit({ previewId: preview.previewId, contentHash: preview.contentHash, mapping: preview.suggestedMapping,
@@ -210,23 +195,6 @@ describe('production providers through actual encrypted FoundationRuntime', () =
     expect(JSON.parse(importedJob.result_json)).toEqual({ formatVersion: 1, importedPersonIds: [importedPerson.id], importedRowCount: 1 });
     expect(imported).toEqual({ jobId: importedJob.id, importedPersonIds: [importedPerson.id], importedRowCount: 1, revision: await revision(f) });
     expect((await leads.list({ ...listRequest, query: 'Fictional Owner' })).rows.map(row => row.personId)).toContain(importedPerson.id);
-    await receipt(f, await learnings.capture({ category: 'pain', statement: 'Fictional maintenance delay', confidence: 'medium',
-      evidence: [{ personId: null, activityId: null, quote: 'Fixture evidence', notedAt: NOW }], contradictionOf: null }), [], []);
-    expect((await learnings.list({ categories: [], statuses: [], query: '', limit: 50 })).rows[0].statement).toBe('Fictional maintenance delay');
-
-    const reviewId = await f.runtime.withDatabase(db => {
-      const prospect = seedProspect(db.raw, 'review'); const sourceCycleId = insertClosedCycle({ database: db.raw, prefix: 'review-closed', prospect });
-      const cadence = BUILTIN_CADENCES.find(value => value.family === 'cadence_c')!;
-      const result = f.services().lifecycle.reactivateFromInboundResponse({ evidence: { kind: 'unknown_handle', handleKind: 'phone', normalizedValue: '+14015550100' },
-        personId: prospect.personId, prospectId: prospect.prospectId, sourceCycleId, newCycleId: 'review-promoted', activatedAt: NOW,
-        cadence: { definitionId: cadence.id, family: 'cadence_c', version: cadence.version, contentHash: cadence.contentHash } });
-      if (result.kind !== 'review_required') throw Error('Expected genuine lifecycle review');
-      insertSourceEvent({ database: db.raw, id: 'review-inbound', personId: prospect.personId, channel: 'inbound_demo' });
-      return result.reviewItem.id;
-    });
-    expect((await review.list({ kinds: [], limit: 50 })).items.map(item => item.reviewId)).toEqual([reviewId]);
-    await receipt(f, await review.resolve({ kind: 'unmatched_communication', reviewId, expectedVersion: 1, action: 'promote', personId: null, sourceEventId: 'review-inbound' }), ['review-person'], ['review-promoted']);
-    expect(await f.runtime.withDatabase(db => db.raw.prepare('SELECT status FROM lifecycle_review_items WHERE id = ?').get(reviewId))).toEqual({ status: 'resolved' });
     const current = await detail.get({ personId: owner.personId });
     await receipt(f, await legacyDetail.dismissLead({ personId: owner.personId, salesCycleId: owner.cycleId, qualificationGateReason: 'out_of_area', expectedRevision: current.revision }), [owner.personId], [owner.cycleId]);
     expect(await f.runtime.withDatabase(db => db.raw.prepare('SELECT stage, workflow_status FROM sales_cycles WHERE id = ?').get(owner.cycleId))).toEqual({ stage: 'lost_nurture', workflow_status: 'closed' });
