@@ -25,8 +25,12 @@ export function planNext(versionInput: CampaignVersion, enrollmentInput: Enrollm
   if (!current) return wait('step_missing');
   const currentEvidence = exact.filter(e => e.stepId === current.id).sort((a, b) => b.observedAt.localeCompare(a.observedAt));
   const last = currentEvidence[0];
-  // Evidence on this step for a route the enrollment no longer uses (a retired wrong number) must not hold the replacement.
-  if (observed.some(e => e.stepId === current.id && e.routeId === enrollment.selectedRouteId) && !last) return wait('evidence_not_current');
+  // Evidence on this step that is not exact holds the step (evidence_not_current) rather than redoing or skipping it,
+  // with one exception: an outcome on a different route under an older context revision is a superseded attempt.
+  // That is exactly a route replacement (a wrong number retired, the enrollment re-based on the firm's next number
+  // with contextRevision bumped), and it must not hold the restarted step forever.
+  const superseded = (e: (typeof evidence)[number]) => e.routeId !== enrollment.selectedRouteId && e.contextRevision < enrollment.contextRevision;
+  if (evidence.some(e => e.stepId === current.id && !superseded(e)) && !last) return wait('evidence_not_current');
   if (last && !actual(last)) return wait('outcome_unresolved');
   if (last) index += 1;
   const step = version.steps[index];
