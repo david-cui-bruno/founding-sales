@@ -140,6 +140,24 @@ describe('territory backfill for firms that already exist', () => {
     expect(report.territory).toMatchObject({ outcome: 'policy_paused', scanned: 0, enrolled: 0 });
     expect(f.db.inspect(territoryEnrollmentKey(later.account.id))).toBeUndefined();
   });
+  it('names an unexpected sweep failure by its constructor class alone, carrying no message into the tick record', async () => {
+    const f = await fixture();
+    await f.firm(1, '+14015550201');
+    await f.apply(approve, uuid(10));
+    // A stored account record whose data names another firm is the one condition the sweep refuses rather than counts.
+    const key = `ACCOUNT#${encodeURIComponent('account-impostor')}`;
+    const record = f.db.inspect(`ACCOUNT#${encodeURIComponent((await f.store.list<{ account: { id: string } }>('ACCOUNT#'))[0]!.stored.data.account.id)}`);
+    await f.store.transact([f.store.put(key, record, null)]);
+    const report = await f.tick();
+    expect(report.phases.territoryBackfill).toBe('held');
+    expect(report.phaseHolds.territoryBackfill).toEqual({ reason: 'phase_error', errorClass: 'Error' });
+    expect(report.heldByReason.territory_phase_failed).toBe(1);
+    expect(report.territory).toBeUndefined();
+    const line = JSON.stringify(f.db.inspect('SOURCE_LAST_TICK'));
+    expect(line).toContain('"territoryBackfill":{"reason":"phase_error","errorClass":"Error"}');
+    expect(line).not.toContain('identity_conflict');
+    expect(line).not.toContain('impostor');
+  });
 });
 
 describe('the research phase names the condition it hit', () => {

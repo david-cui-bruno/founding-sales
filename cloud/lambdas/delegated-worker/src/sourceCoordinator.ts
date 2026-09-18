@@ -26,7 +26,7 @@ import { requestedFollowupContextRevision, validateRequestedDraftContext } from 
 import { mailAccountScopeSchema } from '../../../../src/shared/contracts/mailThreadContract';
 import { mailScopeFingerprint } from '../../../../src/main/outreach/providers/gmailThreadProvider';
 import type { TickHeldReason, TickPhase, TickPhaseHold, TickPhaseResult } from '../../../../src/shared/contracts/researchSetupContract';
-import { buildScheduledRunRecord, SOURCE_LAST_TICK_KEY } from './tickLog';
+import { buildScheduledRunRecord, tickErrorClass, SOURCE_LAST_TICK_KEY } from './tickLog';
 import { TerritoryPolicyRepository, TERRITORY_BACKFILL_TICK_LIMIT, type TerritoryBackfillReport } from './territoryPolicyRepository';
 
 export type SourceResearchBoundaries = { loadCredentials(workspaceId: string, signal: AbortSignal): Promise<{ apiKey: string; model: string }>;
@@ -146,7 +146,13 @@ export function createSourceCoordinator(input: SourceCoordinatorOptions) {
   /** Firms that already existed when the territory policy was approved receive authority exactly as a newly admitted firm does.
    * Its own phase, not a step of research: the sweep must keep running while research is paused or its descriptor needs replacing. */
   async function territoryBackfill(signal: AbortSignal, report: SourceTickReport) {
-    const result = await new TerritoryPolicyRepository(store.options).sweepTerritoryBackfill({ limit: TERRITORY_BACKFILL_TICK_LIMIT, signal });
+    let result: TerritoryBackfillReport;
+    try { result = await new TerritoryPolicyRepository(store.options).sweepTerritoryBackfill({ limit: TERRITORY_BACKFILL_TICK_LIMIT, signal }); }
+    catch (error) {
+      // The sweep answers every expected condition as an outcome, so a throw here is genuinely unexpected: name its class, never its message.
+      if (!signal.aborted) report.phaseHolds.territoryBackfill = { reason: 'phase_error', errorClass: tickErrorClass(error) };
+      throw error;
+    }
     report.territory = result;
     // Only a genuinely failed enrollment is a hold; a missing policy, a paused policy, an owned firm and an unusable route are expected outcomes.
     for (let count = 0; count < result.skipped.enrollment_failed; count++) hold(report, 'territory_backfill_held');
