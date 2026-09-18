@@ -17,6 +17,7 @@ import { exportSelectedAccountRecord } from '../../src/main/delegation/selectedA
 import { createHash, randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDelegatedPhoneHandoff } from '../../src/main/delegation/executionRouter';
+import { describeHandoffHold } from '../../src/renderer/features/today/handoffHoldCopy';
 import { createPmFixture } from '../fixtures/pmAccounts';
 import { AccountRepository } from '../../src/main/domain/accounts/accountRepository';
 import { AccountRoutePolicyStore, type RoutePolicyReceipt } from '../../src/main/delegation/accountRoutePolicyStore';
@@ -1004,4 +1005,49 @@ it('ack_review_applied_completion_still_rejects_generation_older_than_original_h
     if (result.completeness !== 'complete') throw Error('fixture'); result.completions[0].command.expectedAuthorityGeneration = 0;
     expect(delegatedPhoneStateSchema.safeParse(result).success).toBe(false);
   } finally { p.unregister(); await p.runtime.dispose(); }
+});
+
+it('a manual handoff consumes the step\'s one handoff without asking the helper to dial, and never mixes identities', async () => {
+  const f = await fixture();
+  f.unavailable();
+  // The capability gate is bypassed only for the hand-dialed attempt, and nothing is dispatched.
+  const result = await f.makeBridge().begin(f.request, { manual: true });
+  expect(result).toMatchObject({ status: 'handoff', result: { status: 'unavailable', reasonCode: 'channel_unavailable' } });
+  expect(f.calls).toEqual([]);
+  expect(f.repository.commandStatus(f.request.command.commandId)?.status).toBe('applied');
+  // The same one-per-step rule: the consumed handoff is the evidence the outcome form needs.
+  expect(f.db.raw.prepare('SELECT consumed_at FROM delegated_manual_handoffs').get()).toEqual({ consumed_at: now });
+  expect(await f.makeBridge().begin(f.request, { manual: true })).toMatchObject({ status: 'already_started' });
+  expect(f.calls).toEqual([]);
+  // No person, campaign receipt or outbound result is fabricated by a hand-dialed attempt.
+  expect(f.db.raw.prepare('SELECT * FROM campaign_step_receipts').all()).toEqual([]);
+  expect(f.db.raw.prepare('SELECT * FROM pm_account_outbound_results').all()).toEqual([]);
+});
+
+it('refuses to replay one command id as the other kind of handoff while it is in flight', async () => {
+  const f = await fixture();
+  const bridge = f.makeBridge();
+  const manual = bridge.begin(f.request, { manual: true });
+  expect(await bridge.begin(f.request)).toMatchObject({ status: 'held', reason: 'command_conflict' });
+  expect(await manual).toMatchObject({ status: 'handoff' });
+});
+
+it('names the actual route refusal instead of collapsing every hold to an interrupted operation', async () => {
+  const f = await fixture();
+  f.db.raw.prepare("INSERT INTO person_contact_methods(id,person_id,kind,normalized_value,validation_state,reachability,is_primary,created_at,updated_at) VALUES('retained','historical-person','phone','+14015550100','valid','direct',1,?,?)").run(now, now);
+  f.onReady(() => {
+    f.db.raw.prepare("UPDATE person_contact_methods SET dnc_listed=1,federal_status='listed' WHERE id='retained'").run();
+  });
+  const result = await f.makeBridge().begin(f.request);
+  expect(result.status).toBe('held');
+  const reason = result.status === 'held' ? result.reason : '';
+  // The reason is the route authorization's own code, not a generic interruption. The same
+  // variable carries a territory hold's `state_clearance_missing:MA` form, which
+  // describeHandoffHold decodes into the state's name.
+  expect(reason).not.toBe('operation_interrupted');
+  expect(reason).not.toBe('account_route_unavailable');
+  expect(describeHandoffHold(reason)).not.toMatch(/does not recognize/);
+  expect(describeHandoffHold('state_clearance_missing:MA')).toBe('Held: no clearance confirmed for MA');
+  expect(f.calls).toEqual([]);
+  expect(f.db.raw.prepare('SELECT consumed_at FROM delegated_manual_handoffs').get()).toEqual({ consumed_at: null });
 });

@@ -1,5 +1,8 @@
 import { getAccountPreparationSchema, accountPreparationReadReplySchema, AccountPreparationReadFailure, type GetAccountPreparation } from '../shared/contracts/accountPreparationContract';
 import { reconcileReplyDraftSchema, editReplyDraftSchema, boundReplyDraftResult, type ReconcileReplyDraft, type EditReplyDraft } from '../shared/contracts/mailThreadContract';
+import { admitReplyFirstDraftSchema, boundReplyFirstDraftResult, approveReplySchema, submitApprovedReplySchema, boundReplyApprovalStatus,
+  suppressionListSchema, type AdmitReplyFirstDraft, type ReplyFirstDraftResult, type ApproveReply, type SubmitApprovedReply,
+  type ReplyApprovalStatus, type SuppressionList } from '../shared/contracts/replyFirstDraftContract';
 import { delegatedPhoneStateRequestSchema, delegatedPhoneStateReplySchema, type GetPhoneHandoffStateRequest } from '../shared/contracts/delegatedPhoneStateContract';
 import { createRemoteGoogleConnectionsApi } from './apis/remoteGoogleConnectionsApi';
 import { createResearchSetupApi } from './apis/researchSetupApi';
@@ -125,6 +128,30 @@ export const createCallieApi = (invoker: IpcInvoker) => {
     return client.request(channel, replyTemplateRequestSchema,
       replyTemplateStatusSchema.refine(status => status.receipt?.commandId === raw.commandId, 'reply_template_receipt_identity_mismatch'), request);
   }
+  // Optional for the same older-bridge compatibility. The first draft is composed in main with the
+  // founder's own stored key: the renderer never holds it and never calls a model. Approving records
+  // the approval, and `submitApprovedReply` is the one call that asks the worker to send. Reading the
+  // suppression list is local, permanent and has no undo.
+  const replyFirstDraftExtension: {
+    admitReplyFirstDraft?: (input: AdmitReplyFirstDraft) => Promise<ReplyFirstDraftResult>;
+    approveReply?: (input: ApproveReply) => Promise<ReplyApprovalStatus>;
+    submitApprovedReply?: (input: SubmitApprovedReply) => Promise<ReplyApprovalStatus>;
+    readSuppression?: () => Promise<SuppressionList>;
+  } = {
+    admitReplyFirstDraft: async raw => {
+      const request = Object.freeze(admitReplyFirstDraftSchema.parse(raw));
+      return client.request('outreach:reply-admit-first-draft', admitReplyFirstDraftSchema, boundReplyFirstDraftResult(request), request);
+    },
+    approveReply: async raw => {
+      const request = Object.freeze(approveReplySchema.parse(raw));
+      return client.request('outreach:reply-approve', approveReplySchema, boundReplyApprovalStatus(request), request);
+    },
+    submitApprovedReply: async raw => {
+      const request = Object.freeze(submitApprovedReplySchema.parse(raw));
+      return client.request('outreach:reply-submit-approved', submitApprovedReplySchema, boundReplyApprovalStatus(request), request);
+    },
+    readSuppression: () => client.requestNoInput('outreach:suppression-read', suppressionListSchema),
+  };
   return {
     ...templatesExtension,
     health: {
@@ -134,6 +161,7 @@ export const createCallieApi = (invoker: IpcInvoker) => {
     delegation: {
       reconcileReplyDraft: async (raw: ReconcileReplyDraft) => { const request = reconcileReplyDraftSchema.parse(raw); return client.request('outreach:reply-reconcile', reconcileReplyDraftSchema, boundReplyDraftResult(request), request); },
       editReplyDraft: async (raw: EditReplyDraft) => { const request = editReplyDraftSchema.parse(raw); return client.request('outreach:reply-edit', editReplyDraftSchema, boundReplyDraftResult(request), request); },
+      ...replyFirstDraftExtension,
       ...googleExtension,
       ...researchExtension,
       ...intakeExtension,

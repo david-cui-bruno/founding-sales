@@ -303,7 +303,7 @@ export function CompanyPhoneCall({ api, snapshot, config, accountId, readError =
       {review.detail.sources.filter(source => review.detail.snapshot.routes.find(route => route.id === review.request.command.payload.routeId)?.evidenceIds.includes(source.id)).map(source => <details key={source.id}><summary>Saved phone evidence: {source.url}</summary><pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{source.excerpt}</pre></details>)}
       <p>Final confirmation asks the current owner for one handoff and may open Apple Phone. Prepared or accepted is not connected. A prepared unconsumed hold has no supported reset here.</p>
       <label><input type="checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} />I confirm the displayed destination and call purpose</label>
-      <button disabled={!confirmed || busy || !!session?.begin || !!session?.bridge.beginning || !available} onClick={() => void begin()}>Begin phone handoff</button>
+      <button disabled={!confirmed || busy || !!session?.begin || !!session?.bridge.beginning || !available} onClick={() => void begin()}>Call with Phone.app</button>
       <button disabled={busy} onClick={() => { setReview(null); setConfirmed(false); }}>Cancel call review</button>
     </div>}
     <h4>Saved phone history</h4>

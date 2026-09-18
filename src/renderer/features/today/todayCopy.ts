@@ -17,17 +17,20 @@ export const DEFAULT_NEW_CALL_SLOTS_COPY = 'default: 30 new firms a day';
  * fixture success and none of this text is call permission.
  */
 /**
- * D6 acceptance 2 (manual dial into the same outcome form) is NOT wired in this
- * build. The outcome form opens on a consumed handoff, and the only path that
- * consumes one runs `createDelegatedPhoneHandoff`, which refuses before it
- * submits anything unless the helper capability is `available`
- * (`src/main/delegation/executionRouter.ts`, the `capability.state !== 'available'`
- * gate). Letting a hand-dialed attempt consume the step's one handoff needs a
- * mode on `delegatedPhoneHandoffRequestSchema` and a control in
- * `CompanyPhoneCall.tsx` — neither is lane 27's to change. Rather than promise
- * a form it cannot open, the card says so. Delete this line with the mechanism.
+ * D6 acceptance 2 (manual dial into the same outcome form) is half wired in this
+ * build. `createDelegatedPhoneHandoff` now admits a hand-dialed attempt: a
+ * `manual` handoff skips the helper capability gate, consumes the step's one
+ * handoff under the same command identity and never dispatches
+ * (`src/main/delegation/executionRouter.ts`). Two things still stand between
+ * that and a control here, and neither is lane 32's to change:
+ * `phoneFreshBinding` in `companyPhoneSession.ts` throws
+ * 'Phone handoff readiness is not configured.' before a review exists when
+ * setup is not `configured`, and `delegatedPhoneHandoffRequestSchema`
+ * (`ownerCommandContract.ts`) has no optional `manual` field for the IPC request
+ * to carry. Rather than promise a form it cannot open, the card says so. Delete
+ * this line with those two.
  */
-export const MANUAL_DIAL_NOT_WIRED = 'Logging a hand-dialed call still needs the call step\'s one handoff, which this build can only take through the helper. Until that changes the outcome form below stays closed for this firm.';
+export const MANUAL_DIAL_NOT_WIRED = 'Logging a hand-dialed call still needs the call step\'s one handoff. The desktop can now take one for a hand-dialed attempt, but this screen cannot ask for it yet, so the outcome form below stays closed for this firm.';
 
 export type PhoneDialMode = Readonly<{ label: string; reason: string | null; card: string }>;
 export type PhoneDialState = PhoneSetupStatus['state'] | 'unreadable';
@@ -36,9 +39,9 @@ export const PHONE_DIAL_MODES: Readonly<Record<PhoneDialState, PhoneDialMode>> =
   configured: Object.freeze({
     label: 'Available on this Mac',
     reason: null,
-    // Names the control that actually exists today. D6 prefers "Call with Phone.app" for it, but the
-    // button lives in CompanyPhoneCall.tsx, so renaming it and this line together is the coordinator's.
-    card: 'Callie can dial from this Mac. "Begin phone handoff" below is the way to call, one handoff per call step; the number is here either way.',
+    // Names the control that actually exists today, renamed to D6's wording together with the
+    // button in CompanyPhoneCall.tsx so the two screens never disagree about what to press.
+    card: 'Callie can dial from this Mac. "Call with Phone.app" below is the way to call, one handoff per call step; the number is here either way.',
   }),
   needs_confirmation: Object.freeze({
     label: 'Not verified',
