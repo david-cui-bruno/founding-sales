@@ -775,3 +775,9 @@ export type RequestedFollowupAndPolicyReviewTables = {
   delegated_requested_followup_drafts: { workspace_id: string; account_id: string; id: string; revision: number; context_revision: string; draft_json: string; approval_json: string | null; updated_at: string };
   account_route_policy_import_reviews: { id: string; workspace_id: string; artifact_sha256: string; artifact_bytes: Buffer; row_plans_json: string; row_count: number; review_reason: string; reviewed_at: string; reviewer_kind: 'local_owner_review'; review_policy_version: 'account_route_policy_import_review_v1' };
 };
+
+/** Schema28 territory clearance: one revisioned row per US state. JSON is parsed by the strict territory clearance contract. */
+export type TerritoryClearanceTables = {
+  territory_clearances: { state: string; revision: number; timezone: string; clearance_json: string; citation_json: string;
+    confirmed_at: string; review_at: string; revoked_at: string | null };
+};
