@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import type { LocalWorkspaceApi } from '../../shared/contracts/localWorkspaceContract';
 import { TERRITORY_CLEARANCE_STATEMENT_KEYS, TERRITORY_CLEARANCE_STATEMENTS, TERRITORY_FEDERAL_CITATIONS, TERRITORY_RULES_REVISION, TERRITORY_STATE_RULES,
-  confirmTerritoryClearanceSchema, isTerritoryState, revokeTerritoryClearanceSchema, territoryClearanceSnapshotSchema,
+  US_STATE_NAMES, confirmTerritoryClearanceSchema, isTerritoryState, revokeTerritoryClearanceSchema, territoryClearanceSnapshotSchema,
   type TerritoryCitation, type TerritoryClearanceSnapshot, type TerritoryStateView } from '../../shared/contracts/territoryClearanceContract';
+import type { TerritoryAddedState } from '../../shared/contracts/territoryCallPolicyContract';
 
 type Api = Pick<LocalWorkspaceApi, 'readTerritoryClearance' | 'confirmTerritoryClearance' | 'revokeTerritoryClearance'>;
 const STATUS_LABEL: Record<TerritoryStateView['status'], string> = { unconfirmed: 'Unconfirmed', confirmed: 'Confirmed', review_due: 'Review due', revoked: 'Revoked' };
@@ -23,8 +24,12 @@ function Citation({ citation }: { citation: TerritoryCitation }) {
  * keeps its own Revoke control and revision. Confirming records David's
  * attestation; it never dials. A failed response is shown as unknown and the
  * section re-reads before offering another write.
+ *
+ * `addedStates` are the states David added in the Territory control above. They are
+ * listed here as unconfirmed with the reason they cannot yet be confirmed, and they
+ * are never part of the one-click confirmation, which covers the built-in states only.
  */
-export function TerritoryClearanceSection({ api }: { api?: Api }) {
+export function TerritoryClearanceSection({ api, addedStates = [] }: { api?: Api; addedStates?: readonly TerritoryAddedState[] }) {
   const usable = api && typeof api.readTerritoryClearance === 'function' && typeof api.confirmTerritoryClearance === 'function' && typeof api.revokeTerritoryClearance === 'function' ? api : undefined;
   const [snapshot, setSnapshot] = useState<TerritoryClearanceSnapshot | null>(null);
   const [disclosure, setDisclosure] = useState(false);
@@ -117,6 +122,11 @@ export function TerritoryClearanceSection({ api }: { api?: Api }) {
           {clearance && entry.status !== 'revoked' && <button type="button" className="settings__action" disabled={pending} onClick={() => revoke(entry)}>Revoke {entry.state}</button>}
         </li>;
       })}
+      {addedStates.map(entry => <li key={entry.state} className="territory-clearance__state territory-clearance__state--added" aria-label={`${US_STATE_NAMES[entry.state]} clearance`}>
+        <h4>{US_STATE_NAMES[entry.state]} ({entry.state}) <span className="territory-clearance__zone">{entry.timezone}</span></h4>
+        <p className="territory-clearance__status">{STATUS_LABEL.unconfirmed} · added {day(entry.addedAt)}</p>
+        <p>Added to the territory in the Territory control above. This build carries no rule summary or citation for {US_STATE_NAMES[entry.state]}, so it cannot be confirmed here yet and nothing dials for it.</p>
+      </li>)}
     </ul>
     <label className="territory-clearance__disclosure">
       <input type="checkbox" checked={disclosure} disabled={!usable || !snapshot || pending} onChange={event => setDisclosure(event.target.checked)} />

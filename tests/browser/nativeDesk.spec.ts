@@ -6,7 +6,8 @@ import { readFileSync } from 'node:fs';
 import type {} from '../fixtures/nativeDeskBrowser';
 import { createCallCampaignDraft, createLinkedInCampaignDraft } from '../../src/shared/contracts/callCampaignDraft';
 import { accountFingerprint } from '../../src/main/domain/accounts/accountEvidence';
-import { MANUAL_DIAL_NOT_WIRED, PHONE_DIAL_MODES } from '../../src/renderer/features/today/todayCopy';
+import { PHONE_DIAL_MODES } from '../../src/renderer/features/today/todayCopy';
+import { MANUAL_DIAL_NEXT_STEP } from '../../src/renderer/features/today/CallCard';
 
 // This exercises real renderer components, not Electron IPC or live services.
 // The entire API is the explicit no-IO fixture. All browser requests are blocked.
@@ -1243,7 +1244,7 @@ test('D6 show-number fallback hands David the number when the helper cannot dial
   expect(await copied()).toEqual([]);
   await card.getByRole('button', {name: 'Show number', exact: true}).click();
   await expect(card.getByText(`Callie cannot dial from this Mac: ${PHONE_DIAL_MODES.unavailable.reason}. Dial it yourself and log the outcome below.`, {exact: true})).toBeVisible();
-  await expect(card.getByText(MANUAL_DIAL_NOT_WIRED, {exact: true})).toBeVisible();
+  await expect(card.getByText(MANUAL_DIAL_NEXT_STEP, {exact: true})).toBeVisible();
   await expect(card.getByTestId('dial-number')).toHaveText('+14015550100');
   await expect(card.locator('a[href^="tel:"]')).toHaveCount(0);
   expect((await methods(page)).filter(method => method === 'phoneSetup.status')).toHaveLength(1);
@@ -1260,9 +1261,91 @@ test('D6 show-number fallback hands David the number when the helper cannot dial
   await card.getByRole('button', {name: 'Show number', exact: true}).click();
   await expect(card.getByText(PHONE_DIAL_MODES.configured.card, {exact: true})).toBeVisible();
   await expect(card.getByText(/Callie cannot dial from this Mac/)).toHaveCount(0);
-  await expect(card.getByText(MANUAL_DIAL_NOT_WIRED, {exact: true})).toHaveCount(0);
+  await expect(card.getByText(MANUAL_DIAL_NEXT_STEP, {exact: true})).toHaveCount(0);
   await expect(card.getByTestId('dial-number')).toHaveText('+14015550100');
   await expect(page.getByRole('button', {name: 'Check owner and review call', exact: true})).toBeVisible();
+  await assertClean(page, state);
+});
+
+/**
+ * D6 acceptance 2, the whole path in the real components: the helper cannot dial, David dials the
+ * number on the card himself, presses "I dialed this number by hand" behind one confirmation that
+ * names the number and the firm, and the outcome form opens on the consumed handoff. The fixture
+ * driver refuses any request that is not `manual: true`, so nothing here can dial or open Phone.app.
+ */
+test('D6 hand-dialed call takes the step\'s one handoff and opens the outcome form, without dialing', async ({page}) => {
+  const state = await mount(page);
+  const version = createCallCampaignDraft({campaignId: 'hand-dial-campaign', versionId: 'hand-dial-version', stepId: 'hand-dial-step',
+    accountId: 'a', offer: 'Discuss a simpler maintenance follow-up workflow.'});
+  await setPhoneSetup(page, 'unavailable');
+  await page.evaluate(({version, snapshotHash, at}) => {
+    const f = window.nativeDeskBrowser.fixture, snapshot = f.snapshot();
+    const firm = snapshot.accounts[0];
+    firm.account.name = 'Fictional Harbor PM';
+    firm.claims = []; firm.portfolio = [];
+    firm.routes = [{id: 'listed-phone', accountId: 'a', personId: null, channel: 'phone', value: '+14015550100', purpose: 'business', verification: 'listed', evidenceIds: ['places'], version: 1}];
+    snapshot.campaigns = [{version: {...version, approvedAt: at}, snapshotHash,
+      caps: [{campaignVersionId: version.id, channel: 'call', revision: 1, reserved: 0, sent: 0}],
+      enrollments: [{id: 'hand-dial-enrollment', accountId: 'a', campaignVersionId: version.id, selectedRouteId: 'listed-phone',
+        selectedRouteVersion: 1, personId: null, currentStepId: 'hand-dial-step', version: 1, state: 'active',
+        executionContextId: 'hand-dial-context', contextRevision: 1, startedAt: at}]}];
+    f.setSnapshot(snapshot);
+    f.setCompanyDetails([{scope: 'local_database', generatedAt: at, snapshot: firm, links: [],
+      sources: [{id: 'places', url: 'https://places.googleapis.com/v1/places:searchText', fetchedAt: at, sha256: 'c'.repeat(64),
+        permitted: true, excerpt: 'Fictional Harbor PM · +14015550100 · Newport, RI'}]}]);
+    const selector = {accountId: 'a', enrollmentId: 'hand-dial-enrollment', stepId: 'hand-dial-step'};
+    let history: Record<string, unknown> = {...selector, workspaceId: 'ws', generatedAt: at, remote: 'unknown',
+      campaign: {campaignId: 'hand-dial-campaign', campaignRevision: 1, campaignVersionId: 'hand-dial-version'},
+      completeness: 'complete', issue: null, attempts: [], completions: []};
+    const api = f.api.delegation as unknown as Record<string, unknown>;
+    api.sync = async () => { f.calls.push({method: 'delegation.sync'}); return {applied: 0, gaps: 0, cursor: null as string | null, ownerFresh: true}; };
+    api.getPhoneHandoffState = async () => { f.calls.push({method: 'delegation.getPhoneHandoffState'}); return structuredClone(history); };
+    api.beginPhone = async (request: {manual?: true; command: {commandId: string; payload: Record<string, unknown>}}) => {
+      f.calls.push({method: 'delegation.beginPhone', input: request});
+      // The fixture is not a dialer. Only a hand-dialed handoff is admitted, so a regression that
+      // dropped the flag would fail here rather than quietly pretending Phone.app was opened.
+      if (request.manual !== true) throw new Error('This fixture never dials.');
+      history = {...history, attempts: [{command: request.command, queuedAt: at,
+        receipt: {commandId: request.command.commandId, status: 'applied', authorityGeneration: 1, aggregateVersion: 2, reason: null},
+        receiptEvent: {eventId: 'browser-hand-dialled-event', kind: 'manual.handoff', authorityGeneration: 1, aggregateVersion: 2, appliedAt: at},
+        handoff: {value: {...request.command.payload, handoffId: 'browser-hand-dialled', expiresAt: '2026-09-09T13:00:00.000Z'},
+          authorityGeneration: 1, consumedAt: at}}]};
+      return {status: 'handoff', handoffId: 'browser-hand-dialled', result: {status: 'unavailable', reasonCode: 'manual_dial'}};
+    };
+    window.nativeDeskBrowser.refresh();
+  }, {version, snapshotHash: accountFingerprint(version), at: '2026-09-09T12:00:00.000Z'});
+
+  await page.getByRole('button', {name: 'Call · Fictional Harbor PM', exact: true}).click();
+  const card = page.getByRole('region', {name: 'Call card', exact: true});
+  await card.getByRole('button', {name: 'Show number', exact: true}).click();
+  await expect(card.getByText(MANUAL_DIAL_NEXT_STEP, {exact: true})).toBeVisible();
+  await expect(card.getByTestId('dial-number')).toHaveText('+14015550100');
+  await expect(page.locator('a[href^="tel:"]')).toHaveCount(0);
+
+  const panel = page.getByRole('region', {name: 'Company phone review', exact: true});
+  const review = panel.getByRole('button', {name: 'Check owner and review call', exact: true});
+  await expect(review).toBeEnabled();
+  await review.click();
+  // The helper cannot dial, so its control is not offered at all.
+  await expect(panel.getByRole('button', {name: 'Call with Phone.app', exact: true})).toHaveCount(0);
+  await expect(panel.getByRole('checkbox', {name: 'I confirm the displayed destination and call purpose', exact: true})).toHaveCount(0);
+  const hand = panel.getByRole('button', {name: 'I dialed this number by hand', exact: true});
+  await expect(hand).toBeDisabled();
+  await expect(panel.getByText(new RegExp(`^Callie cannot dial from this Mac: ${PHONE_DIAL_MODES.unavailable.reason.replaceAll(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\. Dial \\+14015550100 yourself`))).toBeVisible();
+  const confirmation = panel.getByRole('checkbox', {name: 'I dialed +14015550100 at Fictional Harbor PM by hand', exact: true});
+  await confirmation.check();
+  await expect(hand).toBeEnabled();
+  await hand.click();
+
+  await expect(panel.getByText('Recorded as dialed by hand. This call step\'s one handoff is now used up, and the outcome form below is open for it. Callie placed no call.', {exact: true})).toBeVisible();
+  // The same outcome form a helper dial opens, on the same consumed handoff.
+  const outcomes = panel.getByRole('group', {name: 'Report an observed phone outcome', exact: true});
+  await expect(outcomes.getByRole('combobox', {name: 'Consumed handoff', exact: true})).toHaveValue('browser-hand-dialled');
+  await expect(outcomes.getByRole('combobox', {name: 'Observed phone outcome', exact: true})).toBeEnabled();
+  // The one-per-step rule: the saved attempt closes any second hand-dialed call on this step.
+  await expect(review).toBeDisabled();
+  await expect(panel.getByRole('button', {name: 'I dialed this number by hand', exact: true})).toHaveCount(0);
+  expect((await methods(page)).filter(method => method === 'delegation.beginPhone')).toHaveLength(1);
   await assertClean(page, state);
 });
 

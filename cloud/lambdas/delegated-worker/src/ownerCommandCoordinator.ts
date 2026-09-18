@@ -16,7 +16,7 @@ import { accountRecordSchema, accountKey, createWorkerAccountRepository, isSelec
 import { intakeRegistryKey, intakeRegistrySchema, createIntakeBarrier, validatePendingHandoff } from './intakeBarrier';
 import type { WorkerAuth } from './workerAuth';
 import type { RemoteGoogleAuthorization } from './remoteGoogleAuthorization';
-import { requestedOwnerDraftRequestSchema, requestedOwnerContextRequestSchema, requestedOwnerContextSchema, ownerCheckpointRequestSchema, ownerCheckpointSchema, configureResearchSourceSchema, ownerResearchSourceKey, ownerResearchSourceSchema, ownerCommandSchema, ownerSourceConfigurationSchema, ownerSourceKey, manualHandoffSchema, type ManualHandoff, type ManualOutcome, type OwnerCommand, type TerritoryPolicyCommand } from '../../../../src/shared/contracts/ownerCommandContract';
+import { requestedOwnerDraftRequestSchema, requestedOwnerContextRequestSchema, requestedOwnerContextSchema, ownerCheckpointRequestSchema, ownerCheckpointSchema, configureResearchSourceSchema, ownerResearchSourceKey, ownerResearchSourceSchema, ownerCommandSchema, ownerSourceConfigurationSchema, ownerSourceKey, manualHandoffSchema, type ManualHandoff, type ManualOutcome, type OwnerCommand, type ReplyTemplateCommand, type TerritoryPolicyCommand } from '../../../../src/shared/contracts/ownerCommandContract';
 import { delegationCommandSchema, commandReceiptSchema, workerEventSchema, type CommandReceipt, type WorkerEvent } from '../../../../src/shared/contracts/delegationContract';
 import { DynamoStore, fingerprint, keyPart } from './dynamoStore';
 import { authorityRecordSchema, executionAuthorityKey, executionAuthorityFields, createExecutionRepository } from './executionRepository';
@@ -160,6 +160,8 @@ export class OwnerCommandCoordinator {
     const store = new DynamoStore(options);
     // The territory policy is workspace-level: no account authority row, no outbox event, its own revision is the CAS.
     if (command.kind === 'territory-policy') return this.territoryPolicy(command, principal.pairingId, store);
+    // A standing template approval is workspace-level in exactly the same way, and is never a send.
+    if (command.kind === 'reply-template') return this.replyTemplate(command, store);
     const key = `COMMAND#${keyPart(command.commandId)}`;
     const fp = fingerprint(command);
     const previous = await store.get<{ fingerprint: string; receipt: CommandReceipt; sequence: number }>(key);
@@ -274,31 +276,54 @@ export class OwnerCommandCoordinator {
     await store.publish(outbox.sequence);
     return receipt;
   }
-  /** Approve, pause, resume or read the standing territory call policy (D1). Approve and set-state store their receipt
-   * under the command id like every owner command, so a retry answers the same; a read stores nothing. The reply always
-   * carries the policy as it stands afterwards, since the desktop keeps no copy of a workspace-level record. */
+  /** Approve, pause, resume, read or extend the standing territory call policy (D1, D13). Approve, set-state and add-state
+   * store their receipt under the command id like every owner command, so a retry answers the same; a read stores nothing.
+   * The reply always carries the policy and the state-addition record as they stand afterwards, since the desktop keeps no
+   * copy of a workspace-level record. Adding a state grants nothing and dials nothing. */
   private async territoryPolicy(command: TerritoryPolicyCommand, pairingId: string, store: DynamoStore): Promise<TerritoryCallPolicyReceipt> {
     const repository = new TerritoryPolicyRepository(store.options);
     if (command.payload.kind === 'policy.read') {
       const plan = await repository.planCommand(command, pairingId);
-      return territoryCallPolicyReceiptSchema.parse({ receipt: plan.receipt, policy: plan.policy });
+      return territoryCallPolicyReceiptSchema.parse({ receipt: plan.receipt, policy: plan.policy, ...(plan.added ? { added: plan.added } : {}) });
     }
     const key = `COMMAND#${keyPart(command.commandId)}`; const fp = fingerprint(command);
     const previous = await store.get<{ fingerprint: string; receipt: CommandReceipt }>(key);
     if (previous) {
       if (previous.data.fingerprint !== fp) throw new Error('command_fingerprint_conflict');
-      return territoryCallPolicyReceiptSchema.parse({ receipt: previous.data.receipt, policy: (await repository.read())?.data ?? null });
+      const added = (await repository.readAddedStates())?.data ?? null;
+      return territoryCallPolicyReceiptSchema.parse({ receipt: previous.data.receipt, policy: (await repository.read())?.data ?? null, ...(added ? { added } : {}) });
     }
     const plan = await repository.planCommand(command, pairingId);
     await store.transact([...plan.items, store.put(key, { fingerprint: fp, receipt: plan.receipt, command }, null)]);
-    const receipt = territoryCallPolicyReceiptSchema.parse({ receipt: plan.receipt, policy: plan.policy });
+    const receipt = territoryCallPolicyReceiptSchema.parse({ receipt: plan.receipt, policy: plan.policy, ...(plan.added ? { added: plan.added } : {}) });
     // Approving the policy gives its first firms authority on David's click instead of on the next scheduled tick. Bounded and best
     // effort: the receipt is already committed, and the tick's own sweep resumes from the same cursor for the rest. Pause and resume
-    // stay pure receipt paths; a resumed policy is swept by the next tick.
+    // stay pure receipt paths; a resumed policy is swept by the next tick. The territory count stays off this path: it is the
+    // scheduled tick's work, at most once per tick, and it must not add four table queries inside David's click.
     if (command.payload.kind === 'policy.approve' && plan.receipt.status === 'applied' && plan.policy?.state === 'active') {
-      try { await repository.sweepTerritoryBackfill({ limit: TERRITORY_BACKFILL_APPROVAL_LIMIT }); } catch { /* The scheduled sweep continues from the persisted cursor. */ }
+      try { await repository.sweepTerritoryBackfill({ limit: TERRITORY_BACKFILL_APPROVAL_LIMIT, count: false }); } catch { /* The scheduled sweep continues from the persisted cursor. */ }
     }
     return receipt;
+  }
+  /**
+   * Approve, revoke or pause a follow-up template (D13). Workspace-level like the territory policy: no account
+   * authority row, no outbox event, the stored state's own revision is the CAS, and the receipt is stored under the
+   * command id so a retry answers the same. The payload schema has already re-derived the sha256 from the subject
+   * and body the command carries and re-checked every body rule, so a hash that does not match its text is refused
+   * before this method runs. Approving is standing permission to send an already approved template as a sequence
+   * step; it creates no dispatch intent, no reservation and no event, and nothing here sends an email.
+   */
+  private async replyTemplate(command: ReplyTemplateCommand, store: DynamoStore): Promise<CommandReceipt> {
+    const repository = new TerritoryPolicyRepository(store.options);
+    const key = `COMMAND#${keyPart(command.commandId)}`; const fp = fingerprint(command);
+    const previous = await store.get<{ fingerprint: string; receipt: CommandReceipt }>(key);
+    if (previous) {
+      if (previous.data.fingerprint !== fp) throw new Error('command_fingerprint_conflict');
+      return commandReceiptSchema.parse(previous.data.receipt);
+    }
+    const plan = await repository.planTemplateCommand(command);
+    await store.transact([...plan.items, store.put(key, { fingerprint: fp, receipt: plan.receipt, command }, null)]);
+    return plan.receipt;
   }
   private async bootstrap(command:Extract<OwnerCommand,{kind:'bootstrap-selected-account'}>,store:DynamoStore,fp:string,key:string):Promise<CommandReceipt> {
     const p=command.payload;const record=p.record;

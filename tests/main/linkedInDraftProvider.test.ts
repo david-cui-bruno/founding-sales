@@ -74,7 +74,7 @@ it('passes versioned owner-approved Callie description provenance through the re
     const service = new LinkedInService({ repository: f.drafts, provider });
     expect((await service.prepare({ enrollmentId: f.enrollment.id, stepId: f.version.steps[0]!.id, expectedVersion: 1 })).body).toBe('Fictional prepared message');
     expect(sent).toMatchObject({ productFactsVersion: 1, productApprovalKind: 'owner_approved_description',
-      productApprovalId: 'callie-product-description:2026-09-08:v1', productSourceRef: 'docs/superpowers/specs/2026-09-08-meeting-first-fss-design.md#1-the-product-in-one-minute' });
+      productApprovalId: 'callie-product-description:2026-09-08:v1', productSourceRef: 'docs/archive/superpowers/specs/2026-09-08-meeting-first-fss-design.md#1-the-product-in-one-minute' });
     expect(JSON.stringify(sent)).toContain('tenant requests');
     expect(JSON.stringify(sent)).toContain('coordinates contractors');
     expect(JSON.stringify(sent)).not.toMatch(/guaranteed|savings|customer count/i);

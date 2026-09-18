@@ -31,7 +31,7 @@ it('persists threadless drafts and immutable owner reviews with strict SQL bound
   const f = await createPmFixture();
   try {
     const account = f.repo.create({ commandId: randomUUID(), name: 'Fictional Followup PM', domain: null });
-    expect(f.db.raw.prepare('SELECT schema_version FROM app_meta').get()).toEqual({ schema_version: 29 });
+    expect(f.db.raw.prepare('SELECT schema_version FROM app_meta').get()).toEqual({ schema_version: 30 });
     const draft = f.db.raw.prepare('INSERT INTO delegated_requested_followup_drafts VALUES(?,?,?,?,?,?,?,?)');
     const values = ['workspace', account.id, 'draft', 1, 'a'.repeat(64), '{}', null, PM_NOW];
     draft.run(...values);

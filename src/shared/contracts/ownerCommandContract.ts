@@ -9,6 +9,7 @@ import { mailCursorEnvelopeSchema, accountReplyDraftSchema } from './mailThreadC
 import { accountIdSchema as id, accountInstantSchema as instant } from './accountContract';
 import { manualCallOutcomes } from './accountOutboundContract';
 import { territoryCallPolicyCommandPayloadSchema, TERRITORY_CALL_POLICY_SUBJECT } from './territoryCallPolicyContract';
+import { replyTemplateCommandPayloadSchema, REPLY_TEMPLATE_SUBJECT } from './replyTemplateContract';
 const revision = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
 const manualBase = { actionId: id, observedAt: instant, evidenceRef: id, replyText: z.string().max(10000).nullable().optional() };
@@ -84,7 +85,14 @@ export const approveRequestedFollowupCommandSchema=z.strictObject({...ownerComma
 export const territoryPolicyCommandSchema=z.strictObject({...ownerCommandBase,kind:z.literal('territory-policy'),payload:territoryCallPolicyCommandPayloadSchema})
  .refine(command=>command.accountId===TERRITORY_CALL_POLICY_SUBJECT&&command.expectedAuthorityGeneration===0&&command.expectedVersion===0,'territory_policy_envelope');
 export type TerritoryPolicyCommand=z.infer<typeof territoryPolicyCommandSchema>;
-export const ownerCommandSchemas = [territoryPolicyCommandSchema,approveRequestedFollowupCommandSchema,bootstrapSelectedAccountCommandSchema,refreshSelectedAccountRecordCommandSchema, submitApprovedReplyCommandSchema, prepareManualCommandSchema, completeManualCommandSchema, approveReplyCommandSchema, ownerCampaignCommandSchema, configureOwnerCommandSchema, reportAcquisitionMilestoneCommandSchema] as const;
+/** The workspace-level standing approval of one follow-up template (D13). Like the territory policy it names the
+ * fixed templates subject, never a company, and carries no authority CAS. Approving carries the template id, the
+ * revision and the sha256 of exactly that revision's subject and body, so the worker can never send text David
+ * did not approve; it is standing permission to send an already approved template, not a send. */
+export const replyTemplateCommandSchema=z.strictObject({...ownerCommandBase,kind:z.literal('reply-template'),payload:replyTemplateCommandPayloadSchema})
+ .refine(command=>command.accountId===REPLY_TEMPLATE_SUBJECT&&command.expectedAuthorityGeneration===0&&command.expectedVersion===0,'reply_template_envelope');
+export type ReplyTemplateCommand=z.infer<typeof replyTemplateCommandSchema>;
+export const ownerCommandSchemas = [replyTemplateCommandSchema,territoryPolicyCommandSchema,approveRequestedFollowupCommandSchema,bootstrapSelectedAccountCommandSchema,refreshSelectedAccountRecordCommandSchema, submitApprovedReplyCommandSchema, prepareManualCommandSchema, completeManualCommandSchema, approveReplyCommandSchema, ownerCampaignCommandSchema, configureOwnerCommandSchema, reportAcquisitionMilestoneCommandSchema] as const;
 export const ownerCommandSchema = z.discriminatedUnion('kind', ownerCommandSchemas);
 export type OwnerCommand = z.infer<typeof ownerCommandSchema>;
 
@@ -111,7 +119,10 @@ export const SYNC_BUDGET_SECONDS=120;
  * as a reason it did not give. The main process always states it; `ownerFresh` stays the only proof. */
 export const delegationSyncReportSchema=z.strictObject({applied:revision,gaps:revision,cursor:z.string().nullable(),ownerFresh:z.boolean(),failure:syncFailureSchema.optional()});
 
-export const delegatedPhoneHandoffRequestSchema=z.strictObject({command:prepareManualCommandSchema.refine(command=>command.payload.channel==='call'),expectedEvidenceFingerprint:hash});
+/** `manual` states that the founder will dial the number himself on this Mac. It is a routing flag the
+ * desktop carries, never a permission: absent or present, the handoff, the evidence and the approvals are
+ * identical. Only the literal `true` is accepted, so `false` can never be read as "the worker may dial". */
+export const delegatedPhoneHandoffRequestSchema=z.strictObject({command:prepareManualCommandSchema.refine(command=>command.payload.channel==='call'),expectedEvidenceFingerprint:hash,manual:z.literal(true).optional()});
 export type DelegatedPhoneHandoffRequest=z.infer<typeof delegatedPhoneHandoffRequestSchema>;
 
 /** Authenticated owner-only bounded proof. Never accepts caller authority or expiry. */

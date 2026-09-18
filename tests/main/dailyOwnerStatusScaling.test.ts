@@ -9,6 +9,7 @@ import { AccountRepository } from '../../src/main/domain/accounts/accountReposit
 import { DelegationRepository } from '../../src/main/delegation/delegationRepository';
 import { buildDailySnapshot } from '../../src/main/domain/today/dailyProjection';
 import type { DailySnapshot } from '../../src/shared/contracts/dailyContract';
+import type { UsageWindow } from '../../src/shared/contracts/usageContract';
 
 const now = '2026-09-15T12:00:00.000Z';
 const workspaceId = 'fictional-owner-scaling';
@@ -103,6 +104,9 @@ async function fixture(count = 4, scope: string | undefined = workspaceId) {
       evidence(label, snapshot, scans);
       return { snapshot, scans, trace: [...trace] };
     };
+    const emptyWeek = (from: string, to: string): UsageWindow => ({ from, to, mornings: 0, firms: 0, callsPlaced: 0,
+      outcomes: { connected: 0, interested: 0, not_interested: 0, gatekeeper: 0, voicemail: 0, no_answer: 0, busy: 0, wrong_number: 0 },
+      notes: 0, callbacksPromised: 0, callbacksKept: 0, drafts: 0, replies: 0, holds: [] });
     const expected = (ownerStatus: DailySnapshot['ownerStatus'], issues: DailySnapshot['issues'] = []) => buildDailySnapshot({
       workspaceId, generatedAt: now, workflowMode: 'legacy',
       accounts: ids.map(id => accounts.snapshot(id, now)).sort((a, b) => a.account.id.localeCompare(b.account.id)),
@@ -110,6 +114,10 @@ async function fixture(count = 4, scope: string | undefined = workspaceId) {
       // Derived from callSettings and outside the revision hash (D2 default allocation).
       allocation: { newCallSlots: 0, source: 'configured' },
       approvals: [], meetings: [], campaigns: [], ownerStatus, transport: [], issues,
+      // Derived too, and also outside the revision hash. A workspace with no recorded work reports
+      // zeros for both founder-local weeks rather than omitting them, and `now` is a Tuesday, so
+      // this week is Monday 14 to Sunday 20 September in America/New_York.
+      usage: { timezone: 'America/New_York', thisWeek: emptyWeek('2026-09-14', '2026-09-20'), lastWeek: emptyWeek('2026-09-07', '2026-09-13') },
     });
     const owner = (accountId: string, pendingCommands: DailySnapshot['ownerStatus'][number]['pendingCommands'] = []) => ({
       accountId, authority: { accountId, owner: 'local' as const, generation: 0, state: 'local' as const },

@@ -18,12 +18,21 @@ export type OutboundRequest = Readonly<{
   expectedContactSnapshot: string;
 }>;
 export type OutboundStatus = 'handoff_accepted' | 'refused' | 'unavailable' | 'unknown';
+/**
+ * `manual_dial` (D6) is the closed reason a hand-dialed attempt carries. The founder read the
+ * number off the call card and dialed it himself, so no automated channel was used: the status
+ * stays `unavailable` and this code says why it is unavailable rather than leaving it as the
+ * vague `channel_unavailable`. It is never `handoff_accepted`: nothing accepted a handoff, no
+ * `tel:` URI was opened and the helper was never asked. `hasConsistentReason` below forbids a
+ * reason on `handoff_accepted` anyway, so claiming acceptance would have to erase the one fact
+ * that distinguishes a hand dial from a helper dial in every receipt that carries it.
+ */
 export type OutboundReason =
   | 'stale_contact' | 'invalid_target' | 'cycle_not_executable'
   | 'command_conflict' | 'command_evidence_invalid' | 'outbound_busy'
   | 'channel_unavailable' | 'phone_route_unverified' | 'inbound_safety_unwired'
   | 'workspace_inactive' | 'operation_interrupted' | 'handoff_uncertain'
-  | 'result_not_persisted'
+  | 'result_not_persisted' | 'manual_dial'
   | OutboundAuthorizationReasonCode;
 export type HandoffResult = Readonly<{
   status: OutboundStatus;
@@ -68,6 +77,7 @@ const outboundReasonSchema = z.enum([
   'command_conflict', 'command_evidence_invalid', 'outbound_busy',
   'channel_unavailable', 'phone_route_unverified', 'inbound_safety_unwired',
   'workspace_inactive', 'operation_interrupted', 'handoff_uncertain', 'result_not_persisted',
+  'manual_dial',
   ...outboundAuthorizationReasonCodeSchema.options,
 ]);
 

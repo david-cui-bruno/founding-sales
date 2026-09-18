@@ -2,7 +2,8 @@ import { LocalCompanyResearchSection } from './LocalCompanyResearchSection';
 import { ResearchSetupSection } from './ResearchSetupSection';
 import { RemoteGoogleConnectionsSection } from './RemoteGoogleConnectionsSection';
 import { CallCapacitySection } from './CallCapacitySection';
-import { TerritoryClearanceSection } from './TerritoryClearanceSection';
+import { TerritorySettings } from './TerritoryExpansionSection';
+import { EmailTemplatesSection } from './EmailTemplatesSection';
 import type { LocalWorkspaceApi } from '../../shared/contracts/localWorkspaceContract';
 import { WorkflowSection } from './WorkflowSection';
 import type { RecoveryProvider } from '../../shared/contracts/recoveryContract';
@@ -53,6 +54,7 @@ const notifyCallCapacitySaved = () => { window.dispatchEvent(new Event('callie:w
 type SettingsSectionId =
   | 'call-capacity'
   | 'territory'
+  | 'email-templates'
   | 'worker'
   | 'phone'
   | 'connections'
@@ -67,7 +69,8 @@ const SECTIONS: readonly { id: SettingsSectionId; label: string }[] = [
   { id: 'connections', label: 'Connections' },
   { id: 'phone', label: 'Phone' },
   { id: 'call-capacity', label: 'Call capacity' },
-  { id: 'territory', label: 'Territory clearance' },
+  { id: 'territory', label: 'Territory' },
+  { id: 'email-templates', label: 'Email templates' },
   { id: 'worker', label: 'Worker connection' },
   { id: 'suppressed', label: 'Suppressed' },
   { id: 'appearance', label: 'Appearance' },
@@ -398,6 +401,8 @@ export type SettingsScreenProps = {
   outreachApi?: OutreachApi;
   phoneSetupApi?: PhoneSetupApi;
   delegationApi?: SettingsDelegationApi;
+  /** Settings → Email templates. Absent on an older bridge, which shows the section's honest unavailable state. */
+  templatesApi?: CalliePreloadApi['templates'];
   /** Extra diagnostics panels (Apple spike), rendered with Diagnostics. */
   children?: ReactNode;
 };
@@ -422,6 +427,7 @@ export function SettingsScreen({
   outreachApi,
   phoneSetupApi,
   delegationApi,
+  templatesApi,
   children,
 }: SettingsScreenProps) {
   const [connectionRevision, setConnectionRevision] = useState(0);
@@ -481,7 +487,8 @@ export function SettingsScreen({
         </nav>
         <div className="settings__detail">
           {active === 'call-capacity' && <CallCapacitySection api={localWorkspaceApi} onSaved={notifyCallCapacitySaved} />}
-          {active === 'territory' && <TerritoryClearanceSection api={localWorkspaceApi} />}
+          {active === 'territory' && <TerritorySettings api={delegationApi} localWorkspaceApi={localWorkspaceApi} />}
+          {active === 'email-templates' && <EmailTemplatesSection api={templatesApi} grants={delegationApi?.googleConnections} />}
           {active === 'connections' && <>
             <RemoteGoogleConnectionsSection api={delegationApi?.googleConnections} />
             <ConnectionsSection api={outreachApi} onSaved={() => setConnectionRevision(value => value + 1)} />

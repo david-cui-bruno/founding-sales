@@ -59,9 +59,24 @@ Also shown: § 302.056: "This chapter does not apply to a sale in which the purc
 
 ## Adding a state to the territory
 
-1. Add the state and its IANA zone to `TERRITORY_STATE_TIME_ZONES` and a rule entry to `TERRITORY_STATE_RULES` in the contract; bump `TERRITORY_RULES_REVISION`.
-2. Add the state's section here.
-3. The Settings section lists the new state as unconfirmed with the same one-click control. Firms in that state stay held until you confirm.
+Two routes, and they are not alternatives: the control adds the state to the territory, the contract entry is what lets you confirm its clearance.
+
+### From Settings, Territory (the control)
+
+1. Settings, Territory shows the count first: "Territory: 97 firms, 61 not yet called, about 12 new firms a morning at the current pace". The worker counts this on its scheduled tick from its own records; before the first tick, and when the worker's status cannot be read, it says unknown rather than a zero. The estimate spreads the firms nobody has called yet over one business week of mornings and never exceeds the policy's own new-firms-a-day cap. David decides the next state when it falls under 30 a morning (design section 8).
+2. "Add a state" offers every United States postal code. The state's time zone comes from `TERRITORY_ADDABLE_STATE_TIME_ZONES` in the contract and from nowhere else, so no calling window is ever computed from a guessed zone. That fixed map holds the New England and Mid-Atlantic states and Texas's four neighbours: CT, ME, NH, VT, NY, NJ, PA, DE, MD, DC, VA and WV on `America/New_York`, NM on `America/Denver`, and OK, AR and LA on `America/Chicago`.
+3. A state that observes more than one IANA zone is refused by name with both zones quoted, because a state clearance carries exactly one zone and this build records a firm's state but not its county. The refused states are AK, AZ, FL, ID, IN, KS, KY, MI, NE, NV, ND, OR, SD, TN and TX (`TERRITORY_MULTI_ZONE_STATES`). Texas is already in the territory with `America/Chicago` by David's decision of 17 September 2026; the refusal governs additions and never revokes a state already listed.
+4. A state whose zone the build does not record is refused too, with the reason that its zone has to be added to the contract first. Nothing is stored on any refusal.
+5. An accepted addition is a revisioned record the worker keeps beside the territory policy (`TERRITORY_ADDED_STATES#<workspaceId>`, compare-and-set on its own revision, idempotent by command id). It never edits `TERRITORY_STATE_TIME_ZONES`.
+6. Adding a state changes no Places region. **David's step:** add the state's regions in Settings, Worker connection, Cloud research and press Replace configuration. Until you do, the worker discovers no firms there.
+7. The added state appears in Territory clearance as unconfirmed and nothing dials for it: a firm whose listing names a state the built-in map does not hold stays `jurisdiction_unknown` at authorization time.
+
+### In the contract (what lets you confirm it)
+
+1. Add the state and its IANA zone to `TERRITORY_STATE_TIME_ZONES` and a rule entry to `TERRITORY_STATE_RULES`; bump `TERRITORY_RULES_REVISION`.
+2. Read the state's own statute at its source and quote the passage. Never draft the summary or the quote from memory.
+3. Add the state's section here.
+4. The Settings section then lists the state with the same one-click control, its summary and its citation. Firms in that state stay held until you confirm.
 
 ## Where things live
 
@@ -69,4 +84,6 @@ Also shown: § 302.056: "This chapter does not apply to a sale in which the purc
 - Storage: migration `src/main/db/migrations/0028TerritoryClearances.ts`, repository `src/main/domain/compliance/territoryClearanceRepository.ts`
 - Derivation (pure): `src/main/domain/compliance/territoryJurisdiction.ts`; used by `createSqlAccountRoutePolicy` in `src/main/domain/accounts/accountOutreach.ts`
 - Excluded numbers: `src/main/communications/excludedNumbers.ts` (wired into `startApplication.ts` by the coordinator)
-- Settings: `src/renderer/foundation/TerritoryClearanceSection.tsx`, mounted in `SettingsScreen` as "Territory clearance"; IPC `local-workspace:territory-clearance-read|confirm|revoke`
+- Settings: `src/renderer/foundation/TerritoryClearanceSection.tsx` and `TerritoryExpansionSection.tsx`, mounted together in `SettingsScreen` under the rail entry "Territory"; IPC `local-workspace:territory-clearance-read|confirm|revoke`
+- Territory count and added states: computed by `TerritoryPolicyRepository.computeTerritoryCounts` in `cloud/lambdas/delegated-worker/src/territoryPolicyRepository.ts`, stored under `TERRITORY_COUNTS` once per scheduled tick and reported in the `territory` block of `/research/setup/status`
+- Addable zones and refusals (pure): `TERRITORY_ADDABLE_STATE_TIME_ZONES`, `TERRITORY_MULTI_ZONE_STATES` and `decideTerritoryStateAddition` in `src/shared/contracts/territoryClearanceContract.ts`

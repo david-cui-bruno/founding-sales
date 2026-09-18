@@ -43,7 +43,7 @@ it('upgrades genuine25 additively with verified encrypted backup, preserves rows
     const rows = () => tables.map(name => [name, database.raw.prepare(`SELECT * FROM "${name}"`).raw().all()]);
     const original = rows();
     const oldLedger = database.raw.prepare('SELECT * FROM kysely_migration ORDER BY name').all();
-    expect(await migrateToLatest(database, options)).toEqual({ fromVersion: 25, toVersion: 29, appliedMigrationIds: ['0026LocalCompanyDrafts', '0027ListedRouteVerification', '0028TerritoryClearances', '0029AccountCallbacks'] });
+    expect(await migrateToLatest(database, options)).toEqual({ fromVersion: 25, toVersion: 30, appliedMigrationIds: ['0026LocalCompanyDrafts', '0027ListedRouteVerification', '0028TerritoryClearances', '0029AccountCallbacks', '0030EmailTemplates'] });
     expect(rows()).toEqual(original);
     // 0027 rebuilds pm_account_routes (its CHECK admits 'listed'); every other schema-25 object keeps its exact SQL.
     // 0029 also appends two nullable branch-timing columns to campaign_enrollments by ADD COLUMN.
@@ -52,7 +52,7 @@ it('upgrades genuine25 additively with verified encrypted backup, preserves rows
     const manifest = { tables: actual.filter(row => row.type === 'table').map(row => row.name).sort(), indexes: actual.filter(row => row.type === 'index').map(row => row.name).sort(), triggers: actual.filter(row => row.type === 'trigger').map(row => row.name).sort(),
       catalogSha256: createHash('sha256').update(JSON.stringify(actual.map(row => [row.type,row.name,(row.sql ?? '').replace(/\s+/g,' ').trim()]).sort((a,b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0))).digest('hex') };
     expect(manifest).toEqual(DOMAIN_SCHEMA_MANIFEST);
-    expect(assertDomainStorageReady({ database, expectedBusyTimeoutMs: 5000, expectedSchemaVersion: 29, expectedManifest: DOMAIN_SCHEMA_MANIFEST }).schemaVersion).toBe(29);
+    expect(assertDomainStorageReady({ database, expectedBusyTimeoutMs: 5000, expectedSchemaVersion: 30, expectedManifest: DOMAIN_SCHEMA_MANIFEST }).schemaVersion).toBe(30);
     const backups = readdirSync(options.backupDirectory).filter(name => name.startsWith('pre-migration-schema-25-') && name.endsWith('.sqlite3'));
     expect(backups).toHaveLength(1);
     const path = join(options.backupDirectory, backups[0]);
@@ -69,8 +69,8 @@ it('upgrades genuine25 additively with verified encrypted backup, preserves rows
     closeDatabase(database);
     const reopened = openDatabase({ path: temp.path, key });
     try {
-      expect(await migrateToLatest(reopened, options)).toEqual({ fromVersion: 29, toVersion: 29, appliedMigrationIds: [] });
-      expect(assertPreReleaseStorageReady(reopened).schemaVersion).toBe(29);
+      expect(await migrateToLatest(reopened, options)).toEqual({ fromVersion: 30, toVersion: 30, appliedMigrationIds: [] });
+      expect(assertPreReleaseStorageReady(reopened).schemaVersion).toBe(30);
     } finally { closeDatabase(reopened); }
   } finally { closeDatabase(database); key.bytes.fill(0); temp.cleanup(); }
 });
@@ -95,6 +95,6 @@ it('historical24 remains independently readable, not admitted as current domain 
   try {
     await createMigrationRunner(productionMigrations.slice(0,24))(database, { workspaceKey: key, backupDirectory: `${temp.path}.backups` });
     expect(assertPreReleaseStorageReady(database).schemaVersion).toBe(24);
-    expect(() => assertDomainStorageReady({ database, expectedBusyTimeoutMs: 5000, expectedSchemaVersion: 29, expectedManifest: DOMAIN_SCHEMA_MANIFEST })).toThrow();
+    expect(() => assertDomainStorageReady({ database, expectedBusyTimeoutMs: 5000, expectedSchemaVersion: 30, expectedManifest: DOMAIN_SCHEMA_MANIFEST })).toThrow();
   } finally { closeDatabase(database); key.bytes.fill(0); temp.cleanup(); }
 });

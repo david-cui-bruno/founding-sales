@@ -15,6 +15,7 @@ import {prepareRequestedFollowupSchema,getRequestedFollowupSchema,editRequestedF
 import {workerPolicyRequestSchema,workerPolicyReceiptSchema} from '../shared/contracts/workerPolicyContract';
 import {configureAccountIntakeSchema,boundAccountIntakeConfigureStatus,type ConfigureAccountIntake,type AccountIntakeConfigureStatus} from '../shared/contracts/accountIntakeConfigureContract';
 import {territoryCallPolicyRequestSchema,territoryCallPolicyStatusSchema,type TerritoryCallPolicyRequest,type TerritoryCallPolicyStatus} from '../shared/contracts/territoryCallPolicyContract';
+import {editReplyTemplateSchema,replyTemplateRequestSchema,replyTemplateStatusSchema,sendingLimitsRequestSchema,sendingLimitsStatusSchema,type EditReplyTemplate,type ReplyTemplateRequest,type ReplyTemplateStatus,type SendingLimitsRequest,type SendingLimitsStatus} from '../shared/contracts/replyTemplateContract';
 import {saveAccountCallbackSchema,closeAccountCallbackSchema,readAccountCallbacksSchema,accountCallbackListSchema,neverCallAccountSchema,neverCallReceiptSchema,type SaveAccountCallback,type CloseAccountCallback,type ReadAccountCallbacks,type NeverCallAccount,type NeverCallReceipt} from '../shared/contracts/accountCallbackContract';
 import {accountCallbackSchema,type AccountCallback} from '../shared/contracts/dailyContract';
 import {createLinkedInApi} from './apis/linkedInApi';
@@ -89,6 +90,44 @@ export const createCallieApi = (invoker: IpcInvoker) => {
         neverCallReceiptSchema.refine(receipt => receipt.accountId === request.accountId, 'never_call_identity_mismatch'), request);
     },
   };
+  /**
+   * Settings → Email templates (D13). Optional for the same older-bridge compatibility as the namespaces above;
+   * this bridge always supplies it. Reading and editing are local. Approving is standing permission for the
+   * worker to send that one template as a sequence step, so the renderer names only the template, the revision
+   * it read and the command identity: main owns the text, the sha256 and the owner command. Nothing here sends.
+   */
+  const templatesExtension: { templates?: {
+    read(): Promise<ReplyTemplateStatus>;
+    edit(input: EditReplyTemplate): Promise<ReplyTemplateStatus>;
+    approve(input: Extract<ReplyTemplateRequest, { kind: 'approve' }>): Promise<ReplyTemplateStatus>;
+    revoke(input: Extract<ReplyTemplateRequest, { kind: 'revoke' }>): Promise<ReplyTemplateStatus>;
+    pause(input: Extract<ReplyTemplateRequest, { kind: 'pause' }>): Promise<ReplyTemplateStatus>;
+    sendingLimits(input: SendingLimitsRequest): Promise<SendingLimitsStatus>;
+  } } = {
+    templates: {
+      read: () => client.requestNoInput('templates:read', replyTemplateStatusSchema),
+      edit: async raw => {
+        const request = Object.freeze(editReplyTemplateSchema.parse(raw));
+        return client.request('templates:edit', editReplyTemplateSchema, replyTemplateStatusSchema
+          .refine(status => status.snapshot.templates.some(template => template.id === request.templateId && template.revision === request.expectedRevision + 1
+            && template.approval.state !== 'approved'), 'reply_template_edit_identity_mismatch'), request);
+      },
+      approve: raw => command('templates:approve', raw),
+      revoke: raw => command('templates:revoke', raw),
+      pause: raw => command('templates:pause', raw),
+      sendingLimits: async raw => {
+        const request = Object.freeze(sendingLimitsRequestSchema.parse(raw));
+        return client.request('templates:sending-limits', sendingLimitsRequestSchema,
+          sendingLimitsStatusSchema.refine(status => status.receipt.requestId === request.requestId && status.receipt.kind === 'sender-caps',
+            'reply_template_policy_receipt_identity_mismatch'), request);
+      },
+    },
+  };
+  function command<T extends Exclude<ReplyTemplateRequest, { kind: 'read' }>>(channel: 'templates:approve' | 'templates:revoke' | 'templates:pause', raw: T): Promise<ReplyTemplateStatus> {
+    const request = Object.freeze(replyTemplateRequestSchema.parse(raw));
+    return client.request(channel, replyTemplateRequestSchema,
+      replyTemplateStatusSchema.refine(status => status.receipt?.commandId === raw.commandId, 'reply_template_receipt_identity_mismatch'), request);
+  }
   // Optional for the same older-bridge compatibility. The first draft is composed in main with the
   // founder's own stored key: the renderer never holds it and never calls a model. Approving records
   // the approval, and `submitApprovedReply` is the one call that asks the worker to send. Reading the
@@ -114,6 +153,7 @@ export const createCallieApi = (invoker: IpcInvoker) => {
     readSuppression: () => client.requestNoInput('outreach:suppression-read', suppressionListSchema),
   };
   return {
+    ...templatesExtension,
     health: {
       get: (): Promise<AppHealth> =>
         client.requestNoInput('health:get', appHealthSchema),

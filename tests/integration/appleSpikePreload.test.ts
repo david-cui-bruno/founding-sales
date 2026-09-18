@@ -66,6 +66,8 @@ describe('preload Apple feasibility bridge', () => {
 
     expect(Object.keys(api).sort()).toEqual([
       'appleSpike', 'daily', 'delegation', 'health', 'leadDetail', 'leads', 'linkedin', 'localWorkspace', 'outreach', 'phoneSetup', 'recovery', 'shell',
+      // `templates` stays on its own line so the line above keeps the exact bytes the gitleaks allowlist pins.
+      'templates',
     ]);
     expect(Object.keys(api.leads)).toEqual(['list']);
     expect(Object.keys(api.leadDetail)).toEqual(['get']);
