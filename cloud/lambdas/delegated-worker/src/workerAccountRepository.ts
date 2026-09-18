@@ -178,6 +178,31 @@ export class DynamoWorkerAccountRepository implements AccountResearchStore {
       next.routes = next.routes.filter(item => item.id !== route.id);
       next.routes.push(accountRouteSchema.parse({ ...route, version: (old?.version ?? 0) + 1 }));
     }
+    // The firm's published inbox becomes an email route as well as a claim (D13, lane 41). `configure-owner`
+    // builds a firm's mail scope from `record.routes` and never from its claims, so the claim alone can never
+    // reach the mailbox and every sequence email step holds with `mailbox_not_connected`. The route cites
+    // exactly the sources the claim cites, its purpose is the firm's business and its verification is
+    // `published`, because the address was read off the firm's own page and not out of a directory listing.
+    // Recorded once and idempotent across research revisions: the id is derived from the firm and the
+    // address, and a record that already carries an email route with that address is left alone. A batch
+    // carrying a *different* address never reaches this line: it is refused above as `business_email_conflict`,
+    // which also means a refused address never becomes a route and the route already recorded stays as it is.
+    const businessEmail = next.claims.find(entry => entry.key === 'business_email');
+    if (businessEmail?.key === 'business_email' && !next.routes.some(route => route.channel === 'email' && route.value === businessEmail.value)) {
+      const cited = businessEmail.evidenceIds.filter(sourceId => next.sources.some(source => source.id === sourceId && source.permitted && source.fetchedAt <= at));
+      const routeId = `route-business-email-${fingerprint({ accountId: batch.accountId, email: businessEmail.value })}`;
+      // A claim this record can no longer show a permitted source for is not turned into a route; the claim stands as it is.
+      if (cited.length === businessEmail.evidenceIds.length && cited.length > 0 && !seenRoutes.has(routeId)) {
+        const routeKey = `ROUTE_ID#${keyPart(routeId)}`;
+        const identity = await this.store.get<{ accountId: string }>(routeKey);
+        if (identity && identity.data.accountId !== batch.accountId) throw new Error('cross_account_route');
+        checks.push(identity ? this.store.check(routeKey, identity.rev) : this.store.put(routeKey, { accountId: batch.accountId }, null));
+        const old = next.routes.find(item => item.id === routeId);
+        next.routes = next.routes.filter(item => item.id !== routeId);
+        next.routes.push(accountRouteSchema.parse({ id: routeId, accountId: batch.accountId, personId: null, channel: 'email',
+          value: businessEmail.value, purpose: 'business', evidenceIds: cited, verification: 'published', version: (old?.version ?? 0) + 1 }));
+      }
+    }
     next.account = { ...next.account, version: next.account.version + 1 }; next.researchRevision++;
     next.history.push({ at, account: next.account, claims: [...next.claims], routes: [...next.routes] });
     const receipt: AccountEvidenceReceipt = { accountId: batch.accountId, version: next.account.version, duplicate: false };

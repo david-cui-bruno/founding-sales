@@ -14,7 +14,7 @@ import { QueryCommand,type AttributeValue,type TransactWriteItem } from '@aws-sd
 import { ownerReplyDraftRequestSchema, accountReplyDraftSchema, assertReplyDraftLineage, replyDraftResultSchema, threadProjectionSchema, mailAccountScopeSchema } from '../../../../src/shared/contracts/mailThreadContract';
 import { accountRecordSchema, accountKey, createWorkerAccountRepository, isSelectedRecordRefreshRejection } from './workerAccountRepository';
 import { intakeRegistryKey, intakeRegistrySchema, createIntakeBarrier, validatePendingHandoff } from './intakeBarrier';
-import type { WorkerAuth } from './workerAuth';
+import type { WorkerAuth, WorkerPrincipal } from './workerAuth';
 import type { RemoteGoogleAuthorization } from './remoteGoogleAuthorization';
 import { requestedOwnerDraftRequestSchema, requestedOwnerContextRequestSchema, requestedOwnerContextSchema, ownerCheckpointRequestSchema, ownerCheckpointSchema, configureResearchSourceSchema, ownerResearchSourceKey, ownerResearchSourceSchema, ownerCommandSchema, ownerSourceConfigurationSchema, ownerSourceKey, manualHandoffSchema, type ManualHandoff, type ManualOutcome, type OwnerCommand, type ReplyTemplateCommand, type TerritoryPolicyCommand } from '../../../../src/shared/contracts/ownerCommandContract';
 import { delegationCommandSchema, commandReceiptSchema, workerEventSchema, type CommandReceipt, type WorkerEvent } from '../../../../src/shared/contracts/delegationContract';
@@ -25,6 +25,12 @@ import { DynamoDispatchRepository, dispatchApprovalKey, dispatchPermissionKey, d
 import { TerritoryPolicyRepository, TERRITORY_BACKFILL_APPROVAL_LIMIT } from './territoryPolicyRepository';
 import { territoryCallPolicyReceiptSchema, type TerritoryCallPolicyReceipt } from '../../../../src/shared/contracts/territoryCallPolicyContract';
 
+/** The device principal a command that records the requesting device needs. The worker's own scheduled
+ *  territory path carries none, and every such command refuses there rather than inventing one. */
+function requireOwnerPrincipal(actor: { principal: WorkerPrincipal | null }): WorkerPrincipal {
+  if (!actor.principal) throw new Error('owner_principal_required');
+  return actor.principal;
+}
 /** Authenticated owner admission. No provider action is performed here. Partially
  * admitted immutable records cannot dispatch without a separate requested work item. */
 export class OwnerCommandCoordinator {
@@ -158,8 +164,19 @@ export class OwnerCommandCoordinator {
     this.input.auth.store.workspace(command.workspaceId);
     const options = { ...this.input.auth.options, dynamo: this.input.auth.fencedDynamo(principal) };
     const store = new DynamoStore(options);
+    return this.applyCommand(command, { pairingId: principal.pairingId, principal }, store);
+  }
+  /**
+   * One authenticated owner command, after the principal has been resolved and the store fenced. Split out of
+   * `apply` so the worker's own scheduled territory path can issue the one `configure-owner` a firm it already
+   * enrolled needs (lane 41) through exactly this code — the same authority CAS, the same command claim, the same
+   * receipt row, the same outbox event — instead of a second copy of it. `principal` is null only on that path,
+   * where there is no device credential to fence; every command that needs the principal itself refuses without one.
+   */
+  private async applyCommand(command: OwnerCommand, actor: { pairingId: string; principal: WorkerPrincipal | null },
+    store: DynamoStore): Promise<CommandReceipt | TerritoryCallPolicyReceipt> {
     // The territory policy is workspace-level: no account authority row, no outbox event, its own revision is the CAS.
-    if (command.kind === 'territory-policy') return this.territoryPolicy(command, principal.pairingId, store);
+    if (command.kind === 'territory-policy') return this.territoryPolicy(command, actor.pairingId, store);
     // A standing template approval is workspace-level in exactly the same way, and is never a send.
     if (command.kind === 'reply-template') return this.replyTemplate(command, store);
     const key = `COMMAND#${keyPart(command.commandId)}`;
@@ -180,10 +197,10 @@ export class OwnerCommandCoordinator {
     const claimKey = `OWNER_COMMAND_CLAIM#${keyPart(command.commandId)}`;
     let claim = await store.get<{ fingerprint: string; pairingId: string; at: string }>(claimKey);
     if (!claim) {
-      await store.transact([store.put(claimKey, { fingerprint: fp, pairingId: principal.pairingId, at: store.now() }, null), store.check(authKey, authorityRow.rev)]);
+      await store.transact([store.put(claimKey, { fingerprint: fp, pairingId: actor.pairingId, at: store.now() }, null), store.check(authKey, authorityRow.rev)]);
       claim = await store.get(claimKey);
     }
-    if (!claim || claim.data.fingerprint !== fp || claim.data.pairingId !== principal.pairingId) throw new Error('owner_claim_conflict');
+    if (!claim || claim.data.fingerprint !== fp || claim.data.pairingId !== actor.pairingId) throw new Error('owner_claim_conflict');
     const next = { authority: current.authority, version: current.version + 1 };
     let receipt: CommandReceipt = { commandId: command.commandId, status: 'applied', authorityGeneration: command.expectedAuthorityGeneration, aggregateVersion: next.version, reason: null };
     const base = { id: `command-${fingerprint([command.workspaceId, command.commandId])}`, workspaceId: command.workspaceId, accountId: command.accountId,
@@ -198,11 +215,11 @@ export class OwnerCommandCoordinator {
       const parsedDraft=storedDraft?requestedFollowupDraftSchema.parse(storedDraft.data):null;
       const exact=parsedDraft&&fingerprint(parsedDraft)===fingerprint(command.payload.draft);
       const draftItem=await repository.planCaptureDraft(command.payload.draft,exact?parsedDraft.revision:command.payload.expectedRemoteDraftRevision);
-      const source=await this.activeSource(command,principal.pairingId,store);
+      const source=await this.activeSource(command,actor.pairingId,store);
       if(plan.authority.rev!==authorityRow.rev||fingerprint(plan.authority.data)!==fingerprint(current)||plan.mailbox.subject!==source.config.mailboxSubject)throw Error('requested_capture_changed');
       const authorityChecks=[...plan.checks,...source.checks].filter(item=>item.ConditionCheck&&fingerprint(item.ConditionCheck.Key)===fingerprint(store.key(authKey)));
       if(authorityChecks.length!==1||fingerprint(authorityChecks[0])!==fingerprint(store.check(authKey,authorityRow.rev,executionAuthorityFields(current))))throw Error('requested_capture_authority_condition');
-      const record=createRequestedApprovalRecord(command,principal,claim.data.at);
+      const record=createRequestedApprovalRecord(command,requireOwnerPrincipal(actor),claim.data.at);
       // AUTH is written by this enclosing transaction. Preserve every other C3
       // current-evidence condition and reject conflicting duplicate snapshots.
       const unique=new Map<string,TransactWriteItem>();
@@ -216,10 +233,10 @@ export class OwnerCommandCoordinator {
       proof=[...unique.values(),draftItem,store.check(claimKey,claim.rev),store.put(requestedApprovalKey(command.commandId),record,null)];
       event=workerEventSchema.parse({...base,kind:'requested_followup.status',payload:{commandId:command.commandId,draftId:record.draftSnapshot.id,status:{receipt,state:'pending_preflight',intentCommandId:null,reason:null}}});
     } else if(command.kind==='submit-approved-reply') {
-      const source=await this.activeSource(command,principal.pairingId,store);
+      const source=await this.activeSource(command,actor.pairingId,store);
       const policy=new DynamoDispatchRepository(store.options,this.input.authorization);
       const intent=await policy.loadIntent(command.payload.intentCommandId);
-      if(!intent||intent.kind!=='standalone_reply'||intent.action.accountId!==command.accountId||intent.action.workspaceId!==command.workspaceId||intent.action.expectedAuthorityGeneration!==command.expectedAuthorityGeneration||intent.pairingId!==principal.pairingId||intent.mailboxSubject!==source.config.mailboxSubject) throw new Error('approved_intent_mismatch');
+      if(!intent||intent.kind!=='standalone_reply'||intent.action.accountId!==command.accountId||intent.action.workspaceId!==command.workspaceId||intent.action.expectedAuthorityGeneration!==command.expectedAuthorityGeneration||intent.pairingId!==actor.pairingId||intent.mailboxSubject!==source.config.mailboxSubject) throw new Error('approved_intent_mismatch');
       const intentKey=dispatchIntentKey(intent.commandId); const intentRow=await store.get(intentKey);
       const approvalKey=dispatchApprovalKey(intent.action.approvalId); const approvalRow=await store.get(approvalKey);
       const approval=dispatchApprovalSchema.parse(approvalRow?.data);
@@ -258,16 +275,16 @@ export class OwnerCommandCoordinator {
       const plan = await new WorkerCampaignRepository(store.options).planCommand({ commandId: command.commandId, accountId: command.accountId, payload: command.payload });
       proof = plan.items; event = workerEventSchema.parse({ ...base, kind: 'campaign.changed', payload: plan.payload, receipt });
     } else if (command.kind === 'prepare-manual') {
-      const plan = await this.prepareManual(command, principal.pairingId, claim.data.at, store);
+      const plan = await this.prepareManual(command, actor.pairingId, claim.data.at, store);
       proof = []; finalize = plan.finalize;
       event = workerEventSchema.parse({ ...base, kind: 'manual.handoff', payload: plan.handoff, campaign: plan.campaign, receipt });
     } else if (command.kind === 'complete-manual') {
-      const plan = await this.completeManual(command, principal.pairingId, store);
+      const plan = await this.completeManual(command, actor.pairingId, store);
       receipt={...receipt,authorityGeneration:plan.generation};
       proof = plan.items; event = workerEventSchema.parse({ ...base, authorityGeneration:plan.generation, kind: 'manual.outcome', payload: command.payload.outcome, campaign: plan.campaign, receipt });
     } else {
-      proof = command.kind === 'configure-owner' ? await this.configure(command, principal.pairingId, claim.data.at, store,
-        store.check(authKey, authorityRow.rev, executionAuthorityFields(current))) : await this.approveReply(command, principal.pairingId, claim.data.at, store);
+      proof = command.kind === 'configure-owner' ? await this.configure(command, actor.pairingId, claim.data.at, store,
+        store.check(authKey, authorityRow.rev, executionAuthorityFields(current))) : await this.approveReply(command, actor.pairingId, claim.data.at, store);
       event = workerEventSchema.parse({ ...base, kind: 'authority.changed', payload: { authority: current.authority, receipt } });
     }
     const outbox = await store.eventItems(event);
@@ -275,6 +292,42 @@ export class OwnerCommandCoordinator {
       store.put(key, { fingerprint: fp, receipt, sequence: outbox.sequence, command }, null), ...finalize(), ...outbox.items]);
     await store.publish(outbox.sequence);
     return receipt;
+  }
+  /**
+   * The one `configure-owner` a firm the standing territory policy already enrolled needs before a sequence email
+   * step can leave: the mailbox David connected, and the per-firm mail scope built from that firm's own email route
+   * (lane 41). The worker issues it on its own scheduled tick, so there is no device credential to authenticate; the
+   * approving pairing recorded on the policy is checked live instead, and the command then runs through exactly the
+   * same `applyCommand` an owner command runs through — the same authority CAS, the same claim, the same receipt.
+   *
+   * Nothing here sends. What this configures is the mailbox plumbing under a permission David already gave: the
+   * standing approval of a template is his permission for the worker to send that template as a sequence step, and
+   * the caller has already checked that at least one approval stands and that sends are not paused. The payload is
+   * refused unless it is exactly that: one active configuration naming a mailbox, no calendar, no research selector,
+   * and a mail scope. A configuration that would pause a firm, take its mailbox away or change its research is not
+   * something the tick may issue at all.
+   */
+  async applyTerritoryMailScope(raw: unknown, pairingId: string): Promise<CommandReceipt> {
+    const command = ownerCommandSchema.parse(raw);
+    const p = command.kind === 'configure-owner' ? command.payload : null;
+    if (!p || p.mailScope === null || p.configuration.state !== 'active' || p.configuration.mailboxSubject === null
+      || p.configuration.calendarId !== null || p.configuration.research !== null
+      || p.configuration.accountId !== command.accountId || p.configuration.workspaceId !== command.workspaceId
+      || p.configuration.pairingId !== pairingId) throw new Error('territory_mail_scope_payload');
+    await this.input.auth.activePairing(pairingId);
+    this.input.auth.store.workspace(command.workspaceId);
+    const store = new DynamoStore(this.input.auth.options);
+    // A claim left behind by an attempt that never committed is the tick's own abandoned reservation of its own
+    // derived command id, and the authority version inside its fingerprint can no longer be applied. Replacing it
+    // (fenced on its own revision, and only when no receipt was ever stored for the id) is what keeps a firm from
+    // being stuck forever behind one lost transaction. A claim another pairing holds is never touched.
+    const claimKey = `OWNER_COMMAND_CLAIM#${keyPart(command.commandId)}`;
+    const claim = await store.get<{ fingerprint: string; pairingId: string; at: string }>(claimKey);
+    if (claim && claim.data.fingerprint !== fingerprint(command) && claim.data.pairingId === pairingId
+      && !await store.get(`COMMAND#${keyPart(command.commandId)}`)) {
+      await store.transact([store.put(claimKey, { fingerprint: fingerprint(command), pairingId, at: store.now() }, claim.rev)]);
+    }
+    return commandReceiptSchema.parse(await this.applyCommand(command, { pairingId, principal: null }, store));
   }
   /** Approve, pause, resume, read or extend the standing territory call policy (D1, D13). Approve, set-state and add-state
    * store their receipt under the command id like every owner command, so a retry answers the same; a read stores nothing.

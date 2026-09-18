@@ -8,6 +8,7 @@ import { campaignEventPayloadSchema } from './campaignContract';
 import { meetingOutcomePayloadSchema } from './meetingContract';
 import { z } from 'zod';
 import { threadObservedPayloadSchema } from './mailThreadContract';
+import { REPLY_TEMPLATE_IDS, replyTemplateHoldReasonSchema } from './replyTemplateContract';
 import { accountIdSchema, accountInstantSchema, accountSchema, accountEvidenceBatchSchema } from './accountContract';
 
 const id = accountIdSchema;
@@ -55,6 +56,16 @@ export const workerEventSchema = z.discriminatedUnion('kind', [
   /** Worker-origin grant under the approved territory call policy (D1): authority active at generation 1 together with the
    * derived, approved single-firm version and its enrollment, in one aggregate step. No desktop command precedes it. */
   z.strictObject({ ...eventBase, kind: z.literal('authority.granted'), payload: z.strictObject({ authority: authorityStateSchema, policyId: id, revision: revision.min(1), receipt: commandReceiptSchema }), campaign: campaignEventPayloadSchema }),
+  /** Which email steps of one firm's territory sequence are held, and why (D13, lane 41). Published by the worker
+   *  when a step's reason changes, so Today can say which approved template is waiting on what. It is a statement
+   *  about mail that did NOT go out: it carries no subject, no body, no recipient and no send, and applying it
+   *  writes no draft, no approval and no permission. `templateId` is the one frozen on the step at enrollment.
+   *  An empty list is the firm's honest "nothing is held": it is published when the last held step clears, so
+   *  the newest event of this kind for a firm is always the whole truth about that firm's held steps. */
+  z.strictObject({ ...eventBase, kind: z.literal('territory.steps_held'), payload: z.strictObject({ policyId: id, enrollmentId: id,
+    observedAt: accountInstantSchema, heldSteps: z.array(z.strictObject({ stepId: id, templateId: z.enum(REPLY_TEMPLATE_IDS),
+      reason: replyTemplateHoldReasonSchema })).max(20)
+      .refine(steps => new Set(steps.map(step => step.stepId)).size === steps.length, 'One row per held step.') }) }),
   z.strictObject({ ...eventBase, kind: z.literal('action.outcome'), campaign: campaignEventPayloadSchema.optional(), payload: z.strictObject({ actionId: id, state: actionStateSchema,
     contentHash: hash, targetHash: hash, observedAt: accountInstantSchema, evidenceRef: id }) }),
   z.strictObject({ ...eventBase, authorityGeneration: z.literal(0), kind: z.literal('research.created'),

@@ -8,7 +8,7 @@ import {
   salesCycleIdSchema,
 } from './commonContract';
 import { cloudScoreChipSchema } from './leadsContract';
-import { REPLY_TEMPLATE_IDS } from './replyTemplateContract';
+import { REPLY_TEMPLATE_IDS, replyTemplateHoldReasonSchema } from './replyTemplateContract';
 
 /**
  * Stable lane IDs for the dated playbook. Main owns due-time, warm-priority
@@ -56,12 +56,28 @@ export const sentTemplateEmailSchema = z.object({
   actionId: z.string().min(1),
 }).strict();
 
+/**
+ * One email step of a firm's territory sequence that has not gone out, and the reason it has not (D13, lane 41).
+ * Both the template and the reason come from the worker's own `territory.steps_held` event: the template is the
+ * one the standing policy froze on the step when the firm was enrolled, and the reason is the one the worker's
+ * own send decision gave. Reading a held step sends nothing and clears nothing.
+ */
+export const heldTemplateEmailSchema = z.object({
+  accountId: z.string().min(1),
+  templateId: z.enum(REPLY_TEMPLATE_IDS),
+  stepId: z.string().min(1),
+  reason: replyTemplateHoldReasonSchema,
+}).strict();
+
 export const dailyAccountCallPlanSchema = z.object({
   accountIds: z.array(z.string().min(1)),
   workloadConflict: z.boolean(),
   /** Template sequence emails that went out to the listed firms. Absent when there are none, so a workspace
    *  that has never had one keeps the exact snapshot revision it had. */
   sentTemplateEmails: z.array(sentTemplateEmailSchema).max(2000).optional(),
+  /** Email steps of the listed firms that are held, newest reason per step. Absent when none is held, so a
+   *  workspace with nothing waiting keeps the exact snapshot revision it had. */
+  heldTemplateEmails: z.array(heldTemplateEmailSchema).max(2000).optional(),
 }).strict();
 
 export const dailyAccountCallPlanningInputSchema = z.object({
@@ -143,6 +159,7 @@ export type TodayItem = z.infer<typeof todayItemSchema>;
 export type TodaySnapshot = z.infer<typeof todaySnapshotSchema>;
 export type DailyAccountCallPlan = z.infer<typeof dailyAccountCallPlanSchema>;
 export type SentTemplateEmail = z.infer<typeof sentTemplateEmailSchema>;
+export type HeldTemplateEmail = z.infer<typeof heldTemplateEmailSchema>;
 export type DailyAccountCallPlanningInput = z.infer<typeof dailyAccountCallPlanningInputSchema>;
 export type CompleteActionRequest = z.infer<typeof completeActionRequestSchema>;
 export type SnoozeActionRequest = z.infer<typeof snoozeActionRequestSchema>;

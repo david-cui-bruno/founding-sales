@@ -84,7 +84,9 @@ describe('territory call policy on the worker', () => {
     const result = await f.accounts.applyTerritoryPolicy(first.account.id, first.route.id);
     if (result.outcome !== 'enrolled') throw new Error(result.outcome);
     expect(result).toMatchObject({ accountId: first.account.id, routeId: first.route.id, policyId: policy.policyId, revision: 1, commandId: territoryEnrollmentCommandId(policy, first.account.id), versionId: version.id, grantedAt: now,
-      heldSteps: [{ stepId: version.steps[2]!.id, channel: 'email', reason: 'mailbox_not_connected' }, { stepId: version.steps[4]!.id, channel: 'email', reason: 'mailbox_not_connected' }] });
+      heldSteps: [{ stepId: version.steps[2]!.id, channel: 'email', reason: 'mailbox_not_connected', templateId: 'T4' }, { stepId: version.steps[4]!.id, channel: 'email', reason: 'mailbox_not_connected', templateId: 'T5' }] });
+    // The frozen template is on the stored record, not just on the outcome the call returned.
+    expect((await new TerritoryPolicyRepository(f.options).readEnrollmentRecord(first.account.id))!.data.heldSteps.map(step => step.templateId)).toEqual(['T4', 'T5']);
     expect(f.dynamo.transactions).toHaveLength(before + 1);
     const keys = f.dynamo.transactions[before]!.TransactItems!.map(item => (item.Put?.Item ?? item.ConditionCheck?.Key)!.sk!.S!);
     expect(keys).toEqual(expect.arrayContaining([campaignVersionKey(version.id), campaignApprovalKey(version.id), campaignEnrollmentKey(result.enrollmentId), campaignSlotKey(first.account.id),

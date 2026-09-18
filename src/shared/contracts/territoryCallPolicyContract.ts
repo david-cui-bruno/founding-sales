@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { accountIdSchema as id, accountInstantSchema as instant } from './accountContract';
 import { commandReceiptSchema } from './commandReceiptContract';
 import { campaignVersionSchema, type CampaignVersion } from './campaignContract';
-import type { ReplyTemplateHoldReason } from './replyTemplateContract';
+import type { ReplyTemplateHoldReason, ReplyTemplateId } from './replyTemplateContract';
 import { sha256Utf8 } from '../crypto/sha256';
 import { territoryStateSchema, territoryTimeZoneSchema, TERRITORY_RULES_REVISION, US_STATE_CODES } from './territoryClearanceContract';
 
@@ -184,11 +184,39 @@ export function deriveTerritoryCampaignVersion(policy: PolicyIdentity & Pick<Ter
  * One email step the firm's cadence walked past without sending. `reason` is one of lane 31's closed
  * template hold reasons, because the reason the worker records is the reason its own send decision
  * gave: `mailbox_not_connected` is only the reason a step carries before anything has evaluated it.
+ *
+ * `templateId` is the template the standing policy named for this step, frozen here when the firm was
+ * enrolled. The derived campaign version carries step ids, channels and delays but not the template, so
+ * without this the template could only be read off the live policy by position — and the live policy is
+ * CAS-overwritten, so a firm enrolled under a superseded revision could not have its template re-derived
+ * at all. It is optional because every record written before lane 41 carries none.
  */
-export type TerritoryHeldStep = { stepId: string; channel: 'email'; reason: ReplyTemplateHoldReason };
-/** Every email step of a derived version is held until the mailbox ships; call steps are due on schedule. */
-export function territoryHeldSteps(version: Pick<CampaignVersion, 'steps'>): TerritoryHeldStep[] {
-  return version.steps.filter(step => step.channel === 'email').map(step => ({ stepId: step.id, channel: 'email' as const, reason: TERRITORY_EMAIL_HOLD_REASON }));
+export type TerritoryHeldStep = { stepId: string; channel: 'email'; reason: ReplyTemplateHoldReason; templateId?: ReplyTemplateId };
+/**
+ * Every email step of a derived version is held until the mailbox ships; call steps are due on schedule.
+ * `sequence` is the approved policy's own sequence, which is what names each email step's template; the
+ * step and the sequence entry line up by index because the version's steps are derived from it in order.
+ * A caller that passes none records the steps without a template, exactly as before lane 41.
+ */
+export function territoryHeldSteps(version: Pick<CampaignVersion, 'steps'>,
+  sequence: readonly Pick<TerritoryCallPolicyStep, 'channel' | 'templateKey'>[] = []): TerritoryHeldStep[] {
+  return version.steps.flatMap((step, index) => {
+    if (step.channel !== 'email') return [];
+    const entry = sequence[index];
+    const templateId = entry?.channel === 'email' ? entry.templateKey : undefined;
+    return [{ stepId: step.id, channel: 'email' as const, reason: TERRITORY_EMAIL_HOLD_REASON, ...(templateId ? { templateId } : {}) }];
+  });
+}
+/**
+ * The one owner command that gives a firm the policy already enrolled its per-firm mail scope (lane 41).
+ * Derived from the firm, the connected mailbox and a fixed version word, so a tick that retries reaches the
+ * command the first tick issued instead of minting a second one. Deriving an id configures nothing and sends
+ * nothing; the standing template approval is what permits a send, and only the dispatch path can make one.
+ */
+export const TERRITORY_MAIL_SCOPE_COMMAND_VERSION = 'territory-mail-scope-v1';
+export function territoryMailScopeCommandId(accountId: string, mailboxSubject: string): string {
+  const hash = sha256Utf8(JSON.stringify({ kind: TERRITORY_MAIL_SCOPE_COMMAND_VERSION, accountId: id.parse(accountId), mailboxSubject: id.parse(mailboxSubject) }));
+  return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-4${hash.slice(13, 16)}-8${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
 }
 export type TerritoryPolicyVersionDescription = { accountId: string; policyId: string; revision: number; audienceDescription: string; policyDescription: string };
 const campaignIdPattern = /^territory:(territory-policy-[a-f0-9]{64}):([1-9][0-9]{0,15}):(.+)$/;

@@ -92,6 +92,12 @@ export const tickTerritorySchema = z.strictObject({ outcome: territoryBackfillOu
   /** Sequence email steps the provider accepted on this tick, and steps held under one of the five closed
    *  template hold reasons. Counts only: no firm, template, address or reason detail enters the record. */
   emailsSent: integer, emailsHeld: integer,
+  /** Firms that gained their per-firm mail scope on this tick (D13, lane 41), and why each other firm the
+   *  sweep reached did not. Configuring a scope is never a send: `mailScopesConfigured` counts owner commands
+   *  the worker issued for firms it had already enrolled, and nothing else. Counts and closed names only. */
+  mailScopesConfigured: integer,
+  mailScopesSkipped: z.strictObject({ policy_paused: integer, no_template_approved: integer, grant_not_ready: integer,
+    not_enrolled: integer, no_email_route: integer, scope_configured: integer }),
   skipped: z.strictObject({ policy_paused: integer, authority_exists: integer, route_unavailable: integer, enrollment_failed: integer }) });
 export const scheduledRunRecordSchema = z.strictObject({ event: z.literal(SCHEDULED_RUN_EVENT), version: z.literal(1), at: instant, durationMs: integer,
   status: z.enum(['inactive', 'completed', 'aborted']), phases: z.partialRecord(tickPhaseSchema, tickPhaseResultSchema),

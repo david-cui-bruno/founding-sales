@@ -62,6 +62,32 @@ it('names the sequence email that went out on the firm\'s row, and leaves a firm
   expect(callRow('Account B').textContent).not.toContain('Sent T4');
 });
 
+it('names the held email step on the firm\'s row beside any send, and leaves a firm with none exactly as it was', async () => {
+  const snapshot = dailyFixture({
+    calls: { accountIds: ['a', 'b'], workloadConflict: false,
+      sentTemplateEmails: [{ accountId: 'a', templateId: 'T4', sentOn: '2026-09-11', actionId: 'template-email-T4-0123456789abcdef0123456789abcdef' }],
+      heldTemplateEmails: [{ accountId: 'a', templateId: 'T5', stepId: 'version-step-4', reason: 'sender_cap_reached' }] },
+  });
+  const f = nativeDeskFixture(snapshot);
+  render(<PresentationRoot><NativeDeskRoute firstUse={f.firstUse} api={f.api} /></PresentationRoot>);
+  await screen.findByTestId('native-desk');
+  expect(callRow('Account A').textContent).toContain('Sent T4 to Account A on 2026-09-11 · Email step T5 held: sender cap reached');
+  expect(callRow('Account B').textContent).toContain('Review company and route');
+  expect(callRow('Account B').textContent).not.toContain('Email step');
+});
+
+it('names a held step on its own for a firm that has had no send at all', async () => {
+  const snapshot = dailyFixture({
+    calls: { accountIds: ['a'], workloadConflict: false,
+      heldTemplateEmails: [{ accountId: 'a', templateId: 'T4', stepId: 'version-step-2', reason: 'no_business_email' }] },
+  });
+  const f = nativeDeskFixture(snapshot);
+  render(<PresentationRoot><NativeDeskRoute firstUse={f.firstUse} api={f.api} /></PresentationRoot>);
+  await screen.findByTestId('native-desk');
+  expect(callRow('Account A').textContent).toContain('Email step T4 held: no business email');
+  expect(callRow('Account A').textContent).not.toContain('Review company and route');
+});
+
 it('puts the reply first even for a firm the sequence emailed, because the firm answering leads the morning', async () => {
   const snapshot = dailyFixture({
     calls: { accountIds: ['a'], workloadConflict: false,

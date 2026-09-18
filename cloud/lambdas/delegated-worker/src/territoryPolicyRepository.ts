@@ -12,7 +12,7 @@ import { decideTerritoryReentry, deriveTerritoryCampaignVersion, territoryAddedS
 import { decideTerritoryStateAddition, TERRITORY_RULES_REVISION } from '../../../../src/shared/contracts/territoryClearanceContract';
 import { territoryCountsSchema, territoryRemainingNewPerMorning, type TerritoryCounts } from '../../../../src/shared/contracts/researchSetupContract';
 import { enrollmentSchema } from '../../../../src/shared/contracts/campaignContract';
-import { executionAuthorityFields, executionAuthorityKey } from './executionRepository';
+import { authorityRecordSchema, executionAuthorityFields, executionAuthorityKey } from './executionRepository';
 import { intakeRegistryKey, intakeRegistrySchema } from './intakeBarrier';
 import { WorkerCampaignRepository, campaignCapKey, campaignEnrollmentKey, campaignSlotKey, territoryEnrollmentKey } from './workerCampaignRepository';
 import { DynamoStore, fingerprint, integer, keyPart, type RepositoryOptions, type Stored } from './dynamoStore';
@@ -47,8 +47,11 @@ export function listedBusinessRoute(record: AccountRecord): string | null {
   return record.routes.find(route => route.channel === 'phone' && route.purpose === 'business' && route.verification === 'listed')?.id ?? null;
 }
 /** `reason` is one of lane 31's five closed template hold reasons. `mailbox_not_connected` is what a step carries
- *  before any send decision has looked at it, which is exactly what it meant before the walker existed. */
-const heldStepSchema = z.strictObject({ stepId: id, channel: z.literal('email'), reason: replyTemplateHoldReasonSchema });
+ *  before any send decision has looked at it, which is exactly what it meant before the walker existed.
+ *  `templateId` is the template the policy named for this step, frozen at enrollment (lane 41). Absent on every
+ *  record written before then, which is why the walker still falls back to the policy's own positions for those. */
+const heldStepSchema = z.strictObject({ stepId: id, channel: z.literal('email'), reason: replyTemplateHoldReasonSchema,
+  templateId: z.enum(REPLY_TEMPLATE_IDS).optional() });
 /** One email step that actually went out, recorded per firm so a later tick never walks it again. */
 const sentStepSchema = z.strictObject({ stepId: id, templateId: z.enum(REPLY_TEMPLATE_IDS), commandId: z.uuid(), sentAt: instant });
 export type TerritorySentStep = z.infer<typeof sentStepSchema>;
@@ -69,6 +72,12 @@ export type TerritoryPolicyPlan = { items: TransactWriteItem[]; receipt: Command
 export type TerritoryTemplatePlan = { items: TransactWriteItem[]; receipt: CommandReceipt; state: WorkerReplyTemplateState | null };
 const definitionOf = (policy: TerritoryCallPolicy) => ({ audience: policy.audience, sequence: policy.sequence, caps: policy.caps, objective: policy.objective, offer: policy.offer });
 const ROUTE_REFUSALS = ['campaign_record_missing', 'campaign_route_mismatch'];
+/** The held steps the desktop can actually name: the ones carrying the template frozen on them at enrollment.
+ *  A step from a record written before that freeze names no template, so no sentence could be built for it. */
+function publishableHeldSteps(record: TerritoryEnrollmentRecord): { stepId: string; templateId: ReplyTemplateId; reason: ReplyTemplateHoldReason }[] {
+  return record.heldSteps.flatMap(step => step.templateId
+    ? [{ stepId: step.stepId, templateId: step.templateId, reason: step.reason }] : []);
+}
 
 /** The one standing territory call policy of a workspace and what it does for each firm the worker prepares (D1, D13).
  * Policy commands are planned for the owner coordinator's receipt transaction. `applyTerritoryPolicy` is the worker's own
@@ -272,7 +281,7 @@ export class TerritoryPolicyRepository {
     // intake registry with no relevant adapter; both are what configure-owner writes for a no-mail company today.
     const source = ownerSourceConfigurationSchema.parse({ version: 1, workspaceId: this.workspaceId, accountId, pairingId: policy.pairingId, revision: 1, state: 'active', mailboxSubject: null, calendarId: null, research: null });
     const registry = intakeRegistrySchema.parse({ accountId, adapters: [], manualDependencies: [] });
-    const heldSteps: TerritoryHeldStep[] = territoryHeldSteps(version);
+    const heldSteps: TerritoryHeldStep[] = territoryHeldSteps(version, policy.sequence);
     const record = territoryEnrollmentRecordSchema.parse({ policyId: policy.policyId, revision: policy.revision, accountId, routeId, commandId, versionId: version.id, enrollmentId, sequence: outbox.sequence, heldSteps, grantedAt });
     const items = [...plan.items,
       this.store.put(executionAuthorityKey(accountId), authority, null, executionAuthorityFields(authority)),
@@ -381,7 +390,36 @@ export class TerritoryPolicyRepository {
           { stepId: input.stepId, ...input.sent }].sort((a, b) => a.stepId < b.stepId ? -1 : 1) };
     const parsed = territoryEnrollmentRecordSchema.parse(next);
     if (fingerprint(parsed) === fingerprint(record)) return;
-    await this.store.transact([this.store.put(territoryEnrollmentKey(record.accountId), parsed, current.rev)]);
+    // David reads the reason on this Mac, and the only thing the desktop ever sees of this record is an event.
+    // The firm's held steps are therefore published beside the record write, in one transaction, whenever that
+    // set actually changes — including when the last one clears, so the newest event is never a stale reason.
+    // Publishing it is not a send and not an approval: it names the steps that did not go out and why.
+    const published = fingerprint(publishableHeldSteps(parsed)) === fingerprint(publishableHeldSteps(record))
+      ? null : await this.planHeldStepEvent(parsed);
+    await this.store.transact([this.store.put(territoryEnrollmentKey(record.accountId), parsed, current.rev), ...(published?.items ?? [])]);
+    if (published) await this.store.publish(published.sequence);
+  }
+  /**
+   * The `territory.steps_held` event for one firm, or null when there is no worker authority row to advance
+   * beside it. The event id is derived from the firm, the authority version it advances to and the held steps
+   * themselves, so a retried publication is the same event the desktop already applied, and a reason that
+   * returns after clearing is a new one rather than a duplicate of the first.
+   */
+  private async planHeldStepEvent(record: TerritoryEnrollmentRecord): Promise<{ items: TransactWriteItem[]; sequence: number } | null> {
+    const heldSteps = publishableHeldSteps(record);
+    const key = executionAuthorityKey(record.accountId);
+    const row = await this.store.get<unknown>(key);
+    if (!row) return null;
+    const authority = authorityRecordSchema.parse(row.data);
+    if (authority.authority.accountId !== record.accountId || authority.authority.owner !== 'worker') return null;
+    const next = { ...authority, version: authority.version + 1 };
+    const event = workerEventSchema.parse({ id: `territory-held-${fingerprint([this.workspaceId, record.accountId, next.version, heldSteps])}`,
+      workspaceId: this.workspaceId, accountId: record.accountId, authorityGeneration: authority.authority.generation,
+      aggregateVersion: next.version, kind: 'territory.steps_held',
+      payload: { policyId: record.policyId, enrollmentId: record.enrollmentId, observedAt: this.store.now(), heldSteps } });
+    const outbox = await this.store.eventItems(event);
+    return { items: [this.store.put(key, next, row.rev, executionAuthorityFields(next), executionAuthorityFields(authority)), ...outbox.items],
+      sequence: outbox.sequence };
   }
   /** One bounded ascending page of account records after the cursor. `truncated` is true whenever there may be more firms
    * beyond the last row returned, so a server-side 1 MB cut is never mistaken for the end of the table. */
