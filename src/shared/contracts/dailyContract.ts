@@ -37,6 +37,12 @@ export const dailyCampaignSchema = z.strictObject({ version: campaignVersionSche
 export const dailyIssueSchema = z.strictObject({ code: z.enum(['scope_unknown', 'scope_mismatch', 'invalid_local_record', 'research_failed', 'call_allocation_unconfigured', 'call_due_unknown', 'transport_incomplete', 'workload_conflict']), count: revision.positive() });
 export const dailyTransportSchema = z.strictObject({ pairingId: id, revision: revision.positive(), state: z.enum(['pending', 'complete', 'failed']), startedAt: instant, completedAt: instant.nullable() })
   .refine(t => (t.state === 'complete') === (t.completedAt !== null));
+/** A callback David promised on a call (schema 29). `dueOn` is a plain local date in the firm's zone,
+ *  never an instant, because the promise is "I will call you back on that day", not at a moment. */
+export const accountCallbackSchema = z.strictObject({ id, accountId: id, dueOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  note: z.string().min(1).max(10000).nullable(), state: z.enum(['open', 'done', 'cancelled']), revision: revision.positive(),
+  sourceCommandId: id, createdAt: instant, updatedAt: instant });
+export type AccountCallback = z.infer<typeof accountCallbackSchema>;
 export const dailyCallSettingsSchema = z.strictObject({ newCallSlots: revision.nullable(), totalCallCapacity: revision.nullable() });
 /** What Today planned with: the typed number, or the workspace default (30 new firms a day) when Settings is unconfigured.
  *  Derived from `callSettings` and kept outside the revision hash, so stored snapshots and their revisions are unchanged. */
@@ -44,13 +50,16 @@ export const dailyCallAllocationSchema = z.strictObject({ newCallSlots: revision
 export const dailySnapshotSchema = z.strictObject({ workspaceId: id.nullable(), workflowMode: z.enum(['legacy', 'meeting_first', 'unknown']), revision: z.string().regex(/^[a-f0-9]{64}$/),
   freshness: z.strictObject({ kind: z.enum(['local_snapshot', 'incomplete']), generatedAt: instant, remote: z.literal('unknown') }),
   accounts: z.array(dailyAccountSchema), calls: dailyAccountCallPlanSchema, callSettings: dailyCallSettingsSchema, allocation: dailyCallAllocationSchema.optional(),
-  answers: z.array(dailyAnswerSchema), meetings: z.array(dailyMeetingSchema), campaigns: z.array(dailyCampaignSchema), ownerStatus: z.array(dailyOwnerStatusSchema), transport: z.array(dailyTransportSchema), issues: z.array(dailyIssueSchema).max(8) }).refine(s => {
+  answers: z.array(dailyAnswerSchema), meetings: z.array(dailyMeetingSchema), campaigns: z.array(dailyCampaignSchema), ownerStatus: z.array(dailyOwnerStatusSchema), transport: z.array(dailyTransportSchema), issues: z.array(dailyIssueSchema).max(8),
+  /** Open promised callbacks for the listed firms. Absent when there are none, so a workspace with no callback keeps its exact stored revision. */
+  callbacks: z.array(accountCallbackSchema).optional() }).refine(s => {
   const ids = new Set(s.accounts.map(a => a.account.id));
   return ids.size === s.accounts.length
     && (s.workspaceId !== null || !s.accounts.length && !s.answers.length && !s.meetings.length && !s.campaigns.length && !s.ownerStatus.length && !s.transport.length)
     && s.accounts.every(a => a.routes.every(r => r.accountId === a.account.id))
     && s.calls.accountIds.every(id => ids.has(id))
     && [...s.answers, ...s.meetings, ...s.ownerStatus].every(item => ids.has(item.accountId))
+    && (s.callbacks ?? []).every(callback => ids.has(callback.accountId))
     && s.answers.every(a => a.kind !== 'manual_linkedin' || a.draft.workspaceId === s.workspaceId)
     && s.campaigns.every(c => c.version.cohortAccountIds.every(id => ids.has(id)));
 }, 'daily_scope_mismatch').transform(s => ({ ...s, answers: s.answers.map(a => {

@@ -94,12 +94,15 @@ export class TodayService {
   }
 
   planMeetingFirstAccountCalls(input: {
+    /** Firms whose promised callback is due today in their own zone. They lead the morning list. */
+    callbacks?: readonly AccountEvidenceSnapshot[];
     due: readonly AccountEvidenceSnapshot[];
     ranked: readonly AccountEvidenceSnapshot[];
     generatedAt?: string;
   }): DailyAccountCallPlan {
     if (this.workspaceSettings === null) {
       return planDailyAccountCalls({
+        callbacks: (input.callbacks ?? []).map(snapshot => snapshot.account.id),
         due: input.due.map(snapshot => snapshot.account.id),
         ranked: [],
         newCallSlots: 0,
@@ -112,7 +115,7 @@ export class TodayService {
     const interval = resolveLocalDayInterval({ generatedAt, timezone: workspaceTimezone });
     // Unconfigured settings mean the default allocation (30 new firms a morning), never zero.
     const allocation = this.workspaceSettings.readAccountCallAllocation();
-    const everyAccount = [...input.due, ...input.ranked];
+    const everyAccount = [...(input.callbacks ?? []), ...input.due, ...input.ranked];
     const completedAccountIds = [...this.actualCalls(this.database, {
       from: interval.localDayStartAt,
       to: interval.localDayEndAt,
@@ -139,6 +142,7 @@ export class TodayService {
       .filter(rank => rank.fit !== 'not_target' && rank.contactable)
       .map(rank => rank.accountId));
     return planDailyAccountCalls({
+      callbacks: orderMorningCalls((input.callbacks ?? []).map(candidate)),
       due: orderMorningCalls(input.due.map(candidate)),
       ranked: orderMorningCalls(input.ranked.filter(snapshot => nominated.has(snapshot.account.id)).map(candidate)),
       newCallSlots: allocation.newCallSlots,

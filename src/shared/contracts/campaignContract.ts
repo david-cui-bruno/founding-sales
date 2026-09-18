@@ -16,7 +16,12 @@ export const campaignVersionSchema = z.strictObject({ id, campaignId: id, versio
 export type CampaignVersion = z.infer<typeof campaignVersionSchema>;
 export const enrollmentStateSchema = z.enum(['active', 'held', 'paused', 'conversation', 'completed', 'stopped']);
 export const enrollmentSchema = z.strictObject({ id, accountId: id, selectedRouteId: id, selectedRouteVersion: revision.positive(), personId: id.nullable(), campaignVersionId: id,
-  currentStepId: id.nullable(), version: revision.positive(), state: enrollmentStateSchema, executionContextId: id, contextRevision: revision, startedAt: instant });
+  currentStepId: id.nullable(), version: revision.positive(), state: enrollmentStateSchema, executionContextId: id, contextRevision: revision, startedAt: instant,
+  /** D13 branch timing: when the worker's branch decides the current step's due instant instead of the version's
+   *  delay. Absent on every enrollment the worker wrote before schema 29, where the version's delay still decides. */
+  nextDueAt: instant.nullable().optional(),
+  /** D13 rest: when a rested firm may re-enter. Present only on a paused enrollment the worker rested; never a due time. */
+  restingUntil: instant.nullable().optional() });
 export type Enrollment = z.infer<typeof enrollmentSchema>;
 export const campaignCancellationEvidenceSchema = z.strictObject({ kind: z.literal('provider_result'), reason: z.literal('provider_not_sent'), providerIdentity: z.null(), evidenceRef: id });
 export const stepEvidenceSchema = z.strictObject({ enrollmentId: id, accountId: id, campaignVersionId: id, cancellationEvidence: campaignCancellationEvidenceSchema.optional(), conflict: z.literal('contradictory_finalized_outcome').optional(), stepId: id, routeId: id, routeVersion: revision.positive(), outcome: z.string().min(1).max(200), observedAt: instant,

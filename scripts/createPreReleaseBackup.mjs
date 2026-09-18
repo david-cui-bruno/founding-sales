@@ -10,7 +10,7 @@ const PRODUCT = 'Callie Founder Sales System';
 const fail = () => { throw new Error('PRE_RELEASE_BACKUP_FAILED'); };
 export function validatePreReleaseReceipt(value) {
   if (!value || JSON.stringify(Object.keys(value).sort()) !== JSON.stringify(['basename', 'createdAt', 'kind', 'schemaVersion', 'sha256', 'sizeBytes', 'verifiedAt'])
-    || typeof value.basename !== 'string' || !/^pre_release-[0-9]{8}T[0-9]{9}Z\.sqlite3$/.test(value.basename) || value.kind !== 'pre_release' || (value.schemaVersion !== 24 && value.schemaVersion !== 25 && value.schemaVersion !== 26 && value.schemaVersion !== 27 && value.schemaVersion !== 28)
+    || typeof value.basename !== 'string' || !/^pre_release-[0-9]{8}T[0-9]{9}Z\.sqlite3$/.test(value.basename) || value.kind !== 'pre_release' || (value.schemaVersion !== 24 && value.schemaVersion !== 25 && value.schemaVersion !== 26 && value.schemaVersion !== 27 && value.schemaVersion !== 28 && value.schemaVersion !== 29)
     || typeof value.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(value.sha256) || !Number.isSafeInteger(value.sizeBytes) || value.sizeBytes <= 0
     || [value.createdAt, value.verifiedAt].some(time => typeof time !== 'string' || !Number.isFinite(Date.parse(time)) || new Date(time).toISOString() !== time)) fail();
   return value;

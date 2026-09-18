@@ -7,12 +7,13 @@ import { audienceQuerySchema, discoveryProviderSchema, researchCapabilitySchema,
 import { campaignCommandPayloadSchema } from './campaignContract';
 import { mailCursorEnvelopeSchema, accountReplyDraftSchema } from './mailThreadContract';
 import { accountIdSchema as id, accountInstantSchema as instant } from './accountContract';
+import { manualCallOutcomes } from './accountOutboundContract';
 import { territoryCallPolicyCommandPayloadSchema, TERRITORY_CALL_POLICY_SUBJECT } from './territoryCallPolicyContract';
 const revision = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
 const manualBase = { actionId: id, observedAt: instant, evidenceRef: id, replyText: z.string().max(10000).nullable().optional() };
 export const manualOutcomeSchema = z.discriminatedUnion('channel', [
-  z.strictObject({ ...manualBase, channel: z.literal('call'), outcome: z.enum(['connected', 'no_answer', 'voicemail', 'busy', 'wrong_number', 'cancelled', 'not_called', 'unknown', 'opt_out']) }),
+  z.strictObject({ ...manualBase, channel: z.literal('call'), outcome: z.enum(manualCallOutcomes) }),
   z.strictObject({ ...manualBase, channel: z.literal('linkedin'), outcome: z.enum(['human_reported_sent', 'reply', 'no_reply', 'opt_out', 'cancelled', 'not_sent', 'unknown']) }),
 ]);
 export type ManualOutcome = Readonly<z.infer<typeof manualOutcomeSchema>>;

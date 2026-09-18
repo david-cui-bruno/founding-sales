@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { expect, it, vi } from 'vitest';
 import { closeDatabase, openDatabase, type AppDatabase } from '../../../../src/main/db/database';
 import { createMigrationRunner, migrateToLatest, productionMigrations } from '../../../../src/main/db/migrate';
-import { assertDomainStorageReady, assertPreReleaseStorageReady, DOMAIN_SCHEMA_MANIFEST, SCHEMA27_MANIFEST } from '../../../../src/main/domain/startup/storageReadiness';
+import { assertDomainStorageReady, assertPreReleaseStorageReady, DOMAIN_SCHEMA_MANIFEST, SCHEMA27_MANIFEST, SCHEMA28_MANIFEST } from '../../../../src/main/domain/startup/storageReadiness';
 import { DomainStartupFatalError } from '../../../../src/main/domain/startup/domainStartupTypes';
 import { AccountRepository } from '../../../../src/main/domain/accounts/accountRepository';
 import { createTempDatabase, createTestWorkspaceKey } from '../../../fixtures/tempDatabase';
@@ -24,7 +24,7 @@ const manifestOf = (database: AppDatabase) => {
   return { tables: actual.filter(row => row.type === 'table').map(row => row.name).sort(), indexes: actual.filter(row => row.type === 'index').map(row => row.name).sort(), triggers: actual.filter(row => row.type === 'trigger').map(row => row.name).sort(),
     catalogSha256: createHash('sha256').update(JSON.stringify(actual.map(row => [row.type,row.name,(row.sql ?? '').replace(/\s+/g,' ').trim()]).sort((a,b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0))).digest('hex') };
 };
-const readiness28 = (database: AppDatabase) => assertDomainStorageReady({ database, expectedBusyTimeoutMs: 5000, expectedSchemaVersion: 28, expectedManifest: DOMAIN_SCHEMA_MANIFEST });
+const readiness29 = (database: AppDatabase) => assertDomainStorageReady({ database, expectedBusyTimeoutMs: 5000, expectedSchemaVersion: 29, expectedManifest: DOMAIN_SCHEMA_MANIFEST });
 const fatalCode = (run: () => unknown) => { try { run(); } catch (error) { return error instanceof DomainStartupFatalError ? error.code : error; } return undefined; };
 const insertClearance = (database: AppDatabase, state: string, revision = 1, extra: Partial<{ timezone: string; confirmedAt: string; reviewAt: string; revokedAt: string | null; clearance: string; citation: string }> = {}) =>
   database.raw.prepare('INSERT INTO territory_clearances(state,revision,timezone,clearance_json,citation_json,confirmed_at,review_at,revoked_at) VALUES(?,?,?,?,?,?,?,?)')
@@ -45,7 +45,7 @@ async function seedGenuine27(database: AppDatabase, options: { workspaceKey: Ret
   return account;
 }
 
-it('upgrades genuine27 additively with verified encrypted backup, byte-identical rows and catalog elsewhere, exact28 readiness and reopen', async () => {
+it('upgrades genuine27 additively with verified encrypted backup, byte-identical rows and catalog elsewhere, exact29 readiness and reopen', async () => {
   const temp = createTempDatabase(), key = createTestWorkspaceKey();
   const options = { workspaceKey: key, backupDirectory: `${temp.path}.backups` };
   const database = openDatabase({ path: temp.path, key });
@@ -57,17 +57,20 @@ it('upgrades genuine27 additively with verified encrypted backup, byte-identical
     const original = rows();
     const oldLedger = database.raw.prepare('SELECT * FROM kysely_migration ORDER BY name').all();
 
-    expect(await migrateToLatest(database, options)).toEqual({ fromVersion: 27, toVersion: 28, appliedMigrationIds: ['0028TerritoryClearances'] });
+    expect(await migrateToLatest(database, options)).toEqual({ fromVersion: 27, toVersion: 29, appliedMigrationIds: ['0028TerritoryClearances', '0029AccountCallbacks'] });
 
     expect(rows()).toEqual(original);
     expect(database.raw.pragma('foreign_key_check')).toEqual([]);
     // Every schema-27 object keeps its exact SQL; 0028 only adds the clearance table and its two triggers.
-    for (const row of catalog) expect(database.raw.prepare('SELECT type,name,sql FROM sqlite_master WHERE type=? AND name=?').get(row.type, row.name)).toEqual(row);
+    // 0029 adds two nullable columns to campaign_enrollments by ADD COLUMN; every other schema-27 object keeps its exact SQL.
+    for (const row of catalog.filter(entry => entry.name !== 'campaign_enrollments')) expect(database.raw.prepare('SELECT type,name,sql FROM sqlite_master WHERE type=? AND name=?').get(row.type, row.name)).toEqual(row);
     const added = catalogOf(database).filter(row => !catalog.some(entry => entry.type === row.type && entry.name === row.name)).map(row => [row.type, row.name]);
-    expect(added).toEqual([['table', 'territory_clearances'], ['trigger', 'territory_clearances_no_delete'], ['trigger', 'territory_clearances_revision']]);
+    // 0029 adds its own callback objects on top of the clearance objects 0028 adds.
+    expect(added).toEqual([['index', 'pm_account_callbacks_due'], ['table', 'pm_account_callbacks'], ['table', 'territory_clearances'],
+      ['trigger', 'pm_account_callbacks_no_delete'], ['trigger', 'pm_account_callbacks_revision'], ['trigger', 'territory_clearances_no_delete'], ['trigger', 'territory_clearances_revision']]);
     expect(manifestOf(database)).toEqual(DOMAIN_SCHEMA_MANIFEST);
-    expect(readiness28(database).schemaVersion).toBe(28);
-    expect(assertPreReleaseStorageReady(database).schemaVersion).toBe(28);
+    expect(readiness29(database).schemaVersion).toBe(29);
+    expect(assertPreReleaseStorageReady(database).schemaVersion).toBe(29);
 
     // The table admits one revisioned row per state and refuses what the contract refuses.
     insertClearance(database, 'RI');
@@ -102,9 +105,9 @@ it('upgrades genuine27 additively with verified encrypted backup, byte-identical
     closeDatabase(database);
     const reopened = openDatabase({ path: temp.path, key });
     try {
-      expect(await migrateToLatest(reopened, options)).toEqual({ fromVersion: 28, toVersion: 28, appliedMigrationIds: [] });
-      expect(assertPreReleaseStorageReady(reopened).schemaVersion).toBe(28);
-      expect(readiness28(reopened).schemaVersion).toBe(28);
+      expect(await migrateToLatest(reopened, options)).toEqual({ fromVersion: 29, toVersion: 29, appliedMigrationIds: [] });
+      expect(assertPreReleaseStorageReady(reopened).schemaVersion).toBe(29);
+      expect(readiness29(reopened).schemaVersion).toBe(29);
       expect(reopened.raw.prepare('SELECT state,revision FROM territory_clearances ORDER BY state').all()).toEqual([{ state: 'RI', revision: 2 }, { state: 'TX', revision: 1 }]);
     } finally { closeDatabase(reopened); }
   } finally { closeDatabase(database); key.bytes.fill(0); temp.cleanup(); }
@@ -129,14 +132,14 @@ it.each(['backup', 'migration'] as const)('failed %s leaves genuine27 ledger, ca
   } finally { closeDatabase(database); key.bytes.fill(0); temp.cleanup(); }
 });
 
-it('migrates a fresh encrypted database straight to 28 with an empty clearance table', async () => {
+it('migrates a fresh encrypted database straight to 29 with an empty clearance table', async () => {
   const temp = createTempDatabase(), key = createTestWorkspaceKey(), database = openDatabase({ path: temp.path, key });
   try {
     const result = await migrateToLatest(database, { workspaceKey: key, backupDirectory: `${temp.path}.backups` });
-    expect(result).toMatchObject({ fromVersion: 0, toVersion: 28 });
-    expect(result.appliedMigrationIds).toHaveLength(28);
-    expect(result.appliedMigrationIds.at(-1)).toBe('0028TerritoryClearances');
-    expect(readiness28(database).schemaVersion).toBe(28);
+    expect(result).toMatchObject({ fromVersion: 0, toVersion: 29 });
+    expect(result.appliedMigrationIds).toHaveLength(29);
+    expect(result.appliedMigrationIds.at(-1)).toBe('0029AccountCallbacks');
+    expect(readiness29(database).schemaVersion).toBe(29);
     expect(manifestOf(database)).toEqual(DOMAIN_SCHEMA_MANIFEST);
     expect(database.raw.prepare('SELECT COUNT(*) AS count FROM territory_clearances').get()).toEqual({ count: 0 });
     expect(database.raw.pragma('foreign_key_check')).toEqual([]);
@@ -148,13 +151,13 @@ it('historical27 remains independently readable by the backup host, not admitted
   try {
     await createMigrationRunner(productionMigrations.filter(entry => entry.schemaVersion <= 27))(database, { workspaceKey: key, backupDirectory: `${temp.path}.backups` });
     expect(manifestOf(database)).toEqual(SCHEMA27_MANIFEST);
-    expect(SCHEMA27_MANIFEST.catalogSha256).not.toBe(DOMAIN_SCHEMA_MANIFEST.catalogSha256);
-    expect(DOMAIN_SCHEMA_MANIFEST.tables).toEqual([...SCHEMA27_MANIFEST.tables, 'territory_clearances'].sort());
-    expect(DOMAIN_SCHEMA_MANIFEST.indexes).toEqual(SCHEMA27_MANIFEST.indexes);
-    expect(DOMAIN_SCHEMA_MANIFEST.triggers).toEqual([...SCHEMA27_MANIFEST.triggers, 'territory_clearances_no_delete', 'territory_clearances_revision'].sort());
+    expect(SCHEMA27_MANIFEST.catalogSha256).not.toBe(SCHEMA28_MANIFEST.catalogSha256);
+    expect(SCHEMA28_MANIFEST.tables).toEqual([...SCHEMA27_MANIFEST.tables, 'territory_clearances'].sort());
+    expect(SCHEMA28_MANIFEST.indexes).toEqual(SCHEMA27_MANIFEST.indexes);
+    expect(SCHEMA28_MANIFEST.triggers).toEqual([...SCHEMA27_MANIFEST.triggers, 'territory_clearances_no_delete', 'territory_clearances_revision'].sort());
     expect(assertPreReleaseStorageReady(database).schemaVersion).toBe(27);
-    expect(fatalCode(() => readiness28(database))).toBe('schema_not_ready');
-    // Even a caller asking for 27 is refused: the current 28-entry ledger rejects the 27 ledger before any manifest comparison.
+    expect(fatalCode(() => readiness29(database))).toBe('schema_not_ready');
+    // Even a caller asking for 27 is refused: the current 29-entry ledger rejects the 27 ledger before any manifest comparison.
     expect(fatalCode(() => assertDomainStorageReady({ database, expectedBusyTimeoutMs: 5000, expectedSchemaVersion: 27 as never, expectedManifest: DOMAIN_SCHEMA_MANIFEST }))).toBe('schema_not_ready');
   } finally { closeDatabase(database); key.bytes.fill(0); temp.cleanup(); }
 });

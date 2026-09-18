@@ -759,7 +759,7 @@ export type CampaignTables = {
   workflow_transition_receipts: { command_id: string; manifest_id: string; fingerprint: string; result_json: string; created_at: string };
   campaign_versions: { workspace_id: string; id: string; campaign_id: string; version: number; snapshot_json: string; snapshot_hash: string; created_at: string };
   campaign_approvals: { workspace_id: string; campaign_version_id: string; snapshot_hash: string; approved_at: string; command_id: string };
-  campaign_enrollments: { workspace_id: string; id: string; account_id: string; campaign_version_id: string; selected_route_id: string; selected_route_version: number; person_id: string | null; current_step_id: string | null; version: number; state: string; context_revision: number; execution_context_id: string; started_at: string; updated_at: string };
+  campaign_enrollments: { workspace_id: string; id: string; account_id: string; campaign_version_id: string; selected_route_id: string; selected_route_version: number; person_id: string | null; current_step_id: string | null; version: number; state: string; context_revision: number; execution_context_id: string; started_at: string; updated_at: string; next_due_at: string | null; resting_until: string | null };
   campaign_step_receipts: { workspace_id: string; id: string; account_id: string; enrollment_id: string; step_id: string; route_id: string; route_version: number; context_revision: number; execution_context_id: string; action_id: string; channel: string; state: string; outcome: string; observation: string; source: string; observed_at: string; command_id: string };
   campaign_caps: { workspace_id: string; campaign_version_id: string; channel: string; revision: number; reserved: number; sent: number };
   campaign_command_receipts: { workspace_id: string; command_id: string; fingerprint: string; result_json: string; created_at: string };
@@ -780,4 +780,10 @@ export type RequestedFollowupAndPolicyReviewTables = {
 export type TerritoryClearanceTables = {
   territory_clearances: { state: string; revision: number; timezone: string; clearance_json: string; citation_json: string;
     confirmed_at: string; review_at: string; revoked_at: string | null };
+};
+
+/** Schema29 promised callbacks: one revisioned row per callback David promised on a call. `due_on` is a plain local date. */
+export type AccountCallbackTables = {
+  pm_account_callbacks: { id: string; account_id: string; due_on: string; note: string | null;
+    state: 'open' | 'done' | 'cancelled'; revision: number; source_command_id: string; created_at: string; updated_at: string };
 };

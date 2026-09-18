@@ -48,7 +48,7 @@ it('P1 actual company-only Calls row exposes separate phone review and final han
   await waitFor(() => expect(f.sync).toHaveBeenCalledTimes(1));
   const begin = await screen.findByRole('button', { name: 'Begin phone handoff' });
   expect((begin as HTMLButtonElement).disabled).toBe(true);
-  expect(screen.getByRole('checkbox', { name: /confirm/i })).toBeTruthy();
+  expect(screen.getByRole('checkbox', { name: /confirm the displayed destination and call purpose/i })).toBeTruthy();
   expect(f.begin).not.toHaveBeenCalled();
   expect(f.submit).not.toHaveBeenCalled();
 });

@@ -72,7 +72,7 @@ export const CONTINUITY_UI_CHANNELS = [...CONTINUITY_READ_CHANNELS, 'daily:get',
 export const CONTINUITY_UI_REGISTERED_CHANNELS = [...CONTINUITY_REGISTERED_CHANNELS, 'daily:get',
   'leads:list', 'lead-detail:get'] as const;
 
-/** Retained UI adds the thirty-eight outreach/delegation channels (65). */
+/** Retained UI adds the forty-two outreach/delegation channels (69). */
 export const RETAINED_UI_REGISTERED_CHANNELS = [...CONTINUITY_UI_REGISTERED_CHANNELS,
   ...['status', 'configure', 'connect-gmail', 'disconnect-gmail', 'open-draft', 'save-draft', 'generate-draft', 'send-draft', 'inspect-local-authority',
     'reply-reconcile', 'reply-edit', 'requested-followup-prepare', 'requested-followup-get', 'requested-followup-edit', 'requested-followup-approve',
@@ -80,7 +80,8 @@ export const RETAINED_UI_REGISTERED_CHANNELS = [...CONTINUITY_UI_REGISTERED_CHAN
     'google-connection-status', 'google-connection-disclosure', 'google-connection-begin', 'google-connection-revoke',
     'research-setup-status', 'research-setup-approve', 'research-setup-set-state', 'research-setup-retry', 'research-setup-cancel-pending',
     'delegation-configure', 'delegation-submit', 'delegation-sync', 'delegation-get-account-preparation', 'delegation-configure-intake',
-    'delegation-refresh-selected-account', 'delegation-selected-account-freshness', 'delegation-territory-policy'].map(name => `outreach:${name}`),
+    'delegation-refresh-selected-account', 'delegation-selected-account-freshness', 'delegation-territory-policy',
+    'callback-list', 'callback-save', 'callback-close', 'never-call'].map(name => `outreach:${name}`),
 ] as const;
 const RETAINED_UI_CHANNELS = [...CONTINUITY_READ_CHANNELS, 'daily:get', 'outreach:delegation-status', 'local-workspace:transition'];
 export const SYNTHETIC_WORKER_IDS = ['synthetic-worker-alpha', 'synthetic-worker-beta'] as const;
@@ -304,7 +305,7 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
     }
     if (delegation) {
       const denied = async (): Promise<never> => { uiCounters.forbidden++; throw new Error('Unrelated outreach forbidden'); };
-      unregisters.push(registerOutreachIpc({ delegation, isTrustedRendererUrl: trusted, provider: {
+      unregisters.push(registerOutreachIpc({ delegation, isTrustedRendererUrl: trusted, callbacks: { list: denied, save: denied, close: denied, neverCall: denied }, provider: {
         status: denied, configure: denied, connectGmail: denied, disconnectGmail: denied,
         openDraft: denied, saveDraft: denied, generateDraft: denied, sendDraft: denied, inspectLocalAuthority: denied,
       } }));

@@ -158,3 +158,72 @@ export function describeTerritoryPolicyVersion(value: unknown): TerritoryPolicyV
       || step.condition !== (index === 0 ? 'initial' : 'no_reply'))) return null;
   return { accountId, ...policy, audienceDescription: 'Territory policy audience: every firm the Places discovery creates in this workspace.', policyDescription: `Territory policy v${policy.revision}` };
 }
+
+/**
+ * D13 sequence v1: how an applied call outcome moves the firm through its derived sequence.
+ * Pure. It decides only the enrollment's next step, state and timing; it never dials, sends,
+ * books, suppresses or retires a route, and it never reads or writes anything.
+ *
+ * Business days are counted on the UTC date. The firm's own zone decides which morning Today
+ * lists the firm, not which day the worker computes; a callback David promised overrides this
+ * timing entirely, because the callback lane leads the morning list on its own day.
+ */
+export const TERRITORY_INTERESTED_BUSINESS_DAYS = 5;
+export const TERRITORY_GATEKEEPER_BUSINESS_DAYS = 2;
+export const TERRITORY_NOT_INTERESTED_REST_DAYS = 180;
+export const TERRITORY_SEQUENCE_COMPLETE_REST_DAYS = 90;
+export type TerritorySequenceAdvance = Readonly<{
+  currentStepId: string | null;
+  state: 'active' | 'paused' | 'stopped';
+  nextDueAt: string | null;
+  restingUntil: string | null;
+  /** Email steps skipped on the way to the next call step; each one is held, never drafted or sent. */
+  heldStepIds: readonly string[];
+  reason: 'continue' | 'interested' | 'gatekeeper' | 'rest_not_interested' | 'rest_wrong_number' | 'rest_sequence_complete' | 'opt_out';
+}>;
+const TERRITORY_DAY_MS = 86400000;
+const businessDaysFrom = (instant: string, days: number): string => {
+  const parsed = Date.parse(instant);
+  if (!Number.isFinite(parsed)) throw new Error('territory_sequence_instant');
+  const date = new Date(parsed);
+  const weekend = () => date.getUTCDay() === 0 || date.getUTCDay() === 6;
+  for (let remaining = days; remaining > 0;) { date.setUTCDate(date.getUTCDate() + 1); if (!weekend()) remaining -= 1; }
+  while (weekend()) date.setUTCDate(date.getUTCDate() + 1);
+  return date.toISOString();
+};
+const calendarDaysFrom = (instant: string, days: number): string => {
+  const parsed = Date.parse(instant);
+  if (!Number.isFinite(parsed)) throw new Error('territory_sequence_instant');
+  return new Date(parsed + days * TERRITORY_DAY_MS).toISOString();
+};
+export function advanceTerritorySequence(input: {
+  version: Pick<CampaignVersion, 'steps'>;
+  enrollment: { currentStepId: string | null; startedAt: string };
+  outcome: string;
+  observedAt: string;
+}): TerritorySequenceAdvance {
+  const steps = input.version.steps;
+  const index = steps.findIndex(step => step.id === input.enrollment.currentStepId);
+  if (index < 0) throw new Error('territory_sequence_step_unknown');
+  const rest = (days: number, reason: TerritorySequenceAdvance['reason']): TerritorySequenceAdvance =>
+    ({ currentStepId: input.enrollment.currentStepId, state: 'paused', nextDueAt: null, restingUntil: calendarDaysFrom(input.observedAt, days), heldStepIds: [], reason });
+  if (input.outcome === 'opt_out') return { currentStepId: null, state: 'stopped', nextDueAt: null, restingUntil: null, heldStepIds: [], reason: 'opt_out' };
+  if (input.outcome === 'not_interested') return rest(TERRITORY_NOT_INTERESTED_REST_DAYS, 'rest_not_interested');
+  // The route the worker dialed is not a route this sequence may reuse. Selecting another published
+  // phone is the account repository's decision, not this function's; with no other route the firm rests.
+  if (input.outcome === 'wrong_number') return rest(TERRITORY_NOT_INTERESTED_REST_DAYS, 'rest_wrong_number');
+  if (input.outcome === 'interested') return { currentStepId: input.enrollment.currentStepId, state: 'active',
+    nextDueAt: businessDaysFrom(input.observedAt, TERRITORY_INTERESTED_BUSINESS_DAYS), restingUntil: null, heldStepIds: [], reason: 'interested' };
+  if (input.outcome === 'gatekeeper') return { currentStepId: input.enrollment.currentStepId, state: 'active',
+    nextDueAt: businessDaysFrom(input.observedAt, TERRITORY_GATEKEEPER_BUSINESS_DAYS), restingUntil: null, heldStepIds: [], reason: 'gatekeeper' };
+  // connected, voicemail, no_answer and busy all continue: the next call step of the cadence.
+  // Email steps on the way are held with `mailbox_not_connected` (Batch 9 drafts them), never drafted or sent here.
+  const held: string[] = [];
+  for (let next = index + 1; next < steps.length; next++) {
+    const step = steps[next]!;
+    if (step.channel !== 'call') { held.push(step.id); continue; }
+    return { currentStepId: step.id, state: 'active', nextDueAt: new Date(Date.parse(input.enrollment.startedAt) + step.delayHours * 3600000).toISOString(),
+      restingUntil: null, heldStepIds: held, reason: 'continue' };
+  }
+  return { ...rest(TERRITORY_SEQUENCE_COMPLETE_REST_DAYS, 'rest_sequence_complete'), currentStepId: null, heldStepIds: held };
+}

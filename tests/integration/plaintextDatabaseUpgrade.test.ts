@@ -30,7 +30,7 @@ const scenarios = [
   'encrypted-schema-22-reopen',
   'encrypted-schema-23-reopen',
   'encrypted-schema-24-reopen',
-  'encrypted-schema-29-rejected',
+  'encrypted-schema-30-rejected',
   'encrypted-schema-future-rejected',
   'path-mismatched-marker',
   'busy-wal',

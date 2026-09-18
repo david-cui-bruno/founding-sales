@@ -28,7 +28,7 @@ const routesOf = (database: AppDatabase) => database.raw.prepare('SELECT rowid A
 const insertRoute = (database: AppDatabase, accountId: string, id: string, version: number, verification: string) =>
   database.raw.prepare('INSERT INTO pm_account_routes(id,account_id,version,person_id,channel,value,purpose,verification,admitted_at) VALUES(?,?,?,?,?,?,?,?,?)')
     .run(id, accountId, version, null, 'phone', `+1401555${String(version).padStart(4, '0')}`, 'business', verification, NOW);
-const readiness28 = (database: AppDatabase) => assertDomainStorageReady({ database, expectedBusyTimeoutMs: 5000, expectedSchemaVersion: 28, expectedManifest: DOMAIN_SCHEMA_MANIFEST });
+const readiness29 = (database: AppDatabase) => assertDomainStorageReady({ database, expectedBusyTimeoutMs: 5000, expectedSchemaVersion: 29, expectedManifest: DOMAIN_SCHEMA_MANIFEST });
 const fatalCode = (run: () => unknown) => { try { run(); } catch (error) { return error instanceof DomainStartupFatalError ? error.code : error; } return undefined; };
 
 /** Genuine schema 26 with a real account whose routes carry every historical verification value and child evidence rows. */
@@ -53,7 +53,7 @@ async function seedGenuine26(database: AppDatabase, options: { workspaceKey: Ret
   return account;
 }
 
-it('upgrades genuine26 by rebuilding pm_account_routes with verified encrypted backup, byte-identical rows and catalog elsewhere, exact28 readiness and reopen', async () => {
+it('upgrades genuine26 by rebuilding pm_account_routes with verified encrypted backup, byte-identical rows and catalog elsewhere, exact29 readiness and reopen', async () => {
   const temp = createTempDatabase(), key = createTestWorkspaceKey();
   const options = { workspaceKey: key, backupDirectory: `${temp.path}.backups` };
   const database = openDatabase({ path: temp.path, key });
@@ -69,24 +69,26 @@ it('upgrades genuine26 by rebuilding pm_account_routes with verified encrypted b
     const oldRoutesSql = catalog.find(row => row.type === 'table' && row.name === 'pm_account_routes')!.sql!;
     expect(oldRoutesSql).toContain("CHECK(verification IN ('published','confirmed','unverified'))");
 
-    expect(await migrateToLatest(database, options)).toEqual({ fromVersion: 26, toVersion: 28, appliedMigrationIds: ['0027ListedRouteVerification', '0028TerritoryClearances'] });
+    expect(await migrateToLatest(database, options)).toEqual({ fromVersion: 26, toVersion: 29, appliedMigrationIds: ['0027ListedRouteVerification', '0028TerritoryClearances', '0029AccountCallbacks'] });
 
     expect(rows()).toEqual(original);
     expect(routesOf(database)).toEqual(routes);
     expect(children()).toEqual(originalChildren);
     expect(database.raw.pragma('foreign_key_check')).toEqual([]);
     expect(database.raw.prepare("SELECT name FROM sqlite_master WHERE name LIKE '%migration_holding%'").all()).toEqual([]);
-    // 0028 adds the territory clearance objects on top; everything 0027 touched is compared object for object below.
-    const rebuilt = catalogOf(database).filter(row => !row.name.startsWith('territory_clearances'));
+    // 0028 and 0029 add their own objects on top; everything 0027 touched is compared object for object below.
+    const rebuilt = catalogOf(database).filter(row => !row.name.startsWith('territory_clearances') && !row.name.startsWith('pm_account_callbacks'));
     expect(rebuilt.map(row => [row.type, row.name])).toEqual(catalog.map(row => [row.type, row.name]));
     for (const row of catalog) {
       const after = rebuilt.find(entry => entry.type === row.type && entry.name === row.name);
+      // 0029 appends two nullable branch-timing columns to campaign_enrollments by ADD COLUMN.
+      if (row.type === 'table' && row.name === 'campaign_enrollments') { expect((after as { sql: string }).sql.replace(', next_due_at TEXT NULL, resting_until TEXT NULL', '')).toBe(row.sql); continue; }
       if (row.type === 'table' && row.name === 'pm_account_routes') expect(after).toEqual({ ...row, sql: oldRoutesSql.replace("'confirmed','unverified'))", "'confirmed','unverified','listed'))") });
       else expect(after).toEqual(row);
     }
     expect(manifestOf(database)).toEqual(DOMAIN_SCHEMA_MANIFEST);
-    expect(readiness28(database).schemaVersion).toBe(28);
-    expect(assertPreReleaseStorageReady(database).schemaVersion).toBe(28);
+    expect(readiness29(database).schemaVersion).toBe(29);
+    expect(assertPreReleaseStorageReady(database).schemaVersion).toBe(29);
 
     insertRoute(database, account.id, 'listed-route', 1, 'listed');
     expect(database.raw.prepare("SELECT verification FROM pm_account_routes WHERE id='listed-route'").get()).toEqual({ verification: 'listed' });
@@ -114,9 +116,9 @@ it('upgrades genuine26 by rebuilding pm_account_routes with verified encrypted b
     closeDatabase(database);
     const reopened = openDatabase({ path: temp.path, key });
     try {
-      expect(await migrateToLatest(reopened, options)).toEqual({ fromVersion: 28, toVersion: 28, appliedMigrationIds: [] });
-      expect(assertPreReleaseStorageReady(reopened).schemaVersion).toBe(28);
-      expect(readiness28(reopened).schemaVersion).toBe(28);
+      expect(await migrateToLatest(reopened, options)).toEqual({ fromVersion: 29, toVersion: 29, appliedMigrationIds: [] });
+      expect(assertPreReleaseStorageReady(reopened).schemaVersion).toBe(29);
+      expect(readiness29(reopened).schemaVersion).toBe(29);
       expect(reopened.raw.prepare("SELECT verification FROM pm_account_routes WHERE id='listed-route'").get()).toEqual({ verification: 'listed' });
     } finally { closeDatabase(reopened); }
   } finally { closeDatabase(database); key.bytes.fill(0); temp.cleanup(); }
@@ -141,14 +143,14 @@ it.each(['backup', 'migration'] as const)('failed %s leaves genuine26 ledger, ca
   } finally { closeDatabase(database); key.bytes.fill(0); temp.cleanup(); }
 });
 
-it('migrates a fresh encrypted database straight to 28 and admits a listed route', async () => {
+it('migrates a fresh encrypted database straight to 29 and admits a listed route', async () => {
   const temp = createTempDatabase(), key = createTestWorkspaceKey(), database = openDatabase({ path: temp.path, key });
   try {
     const result = await migrateToLatest(database, { workspaceKey: key, backupDirectory: `${temp.path}.backups` });
-    expect(result).toMatchObject({ fromVersion: 0, toVersion: 28 });
-    expect(result.appliedMigrationIds).toHaveLength(28);
-    expect(result.appliedMigrationIds.at(-1)).toBe('0028TerritoryClearances');
-    expect(readiness28(database).schemaVersion).toBe(28);
+    expect(result).toMatchObject({ fromVersion: 0, toVersion: 29 });
+    expect(result.appliedMigrationIds).toHaveLength(29);
+    expect(result.appliedMigrationIds.at(-1)).toBe('0029AccountCallbacks');
+    expect(readiness29(database).schemaVersion).toBe(29);
     expect(manifestOf(database)).toEqual(DOMAIN_SCHEMA_MANIFEST);
     const accounts = new AccountRepository({ database, clock: { now: () => NOW }, ids: { next: randomUUID }, sourcePolicy: { attest: () => true } });
     const account = accounts.create({ commandId: randomUUID(), name: 'Fresh PM', domain: null });
@@ -166,8 +168,8 @@ it('historical26 remains independently readable by the backup host, not admitted
     expect(SCHEMA26_MANIFEST).toEqual({ ...SCHEMA27_MANIFEST, catalogSha256: SCHEMA26_MANIFEST.catalogSha256 });
     expect(SCHEMA26_MANIFEST.catalogSha256).not.toBe(DOMAIN_SCHEMA_MANIFEST.catalogSha256);
     expect(assertPreReleaseStorageReady(database).schemaVersion).toBe(26);
-    expect(fatalCode(() => readiness28(database))).toBe('schema_not_ready');
-    // Even a caller asking for 26 is refused: the current 28-entry ledger rejects the 26 ledger before any manifest comparison.
+    expect(fatalCode(() => readiness29(database))).toBe('schema_not_ready');
+    // Even a caller asking for 26 is refused: the current 29-entry ledger rejects the 26 ledger before any manifest comparison.
     expect(fatalCode(() => assertDomainStorageReady({ database, expectedBusyTimeoutMs: 5000, expectedSchemaVersion: 26 as never, expectedManifest: DOMAIN_SCHEMA_MANIFEST }))).toBe('schema_not_ready');
   } finally { closeDatabase(database); key.bytes.fill(0); temp.cleanup(); }
 });

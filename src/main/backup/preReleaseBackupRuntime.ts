@@ -78,7 +78,7 @@ export type PreReleaseReceipt = Omit<VerifiedBackup, 'path'>;
 function receiptOnly(value: VerifiedBackup): PreReleaseReceipt {
   const { basename, kind, schemaVersion, sha256, sizeBytes, createdAt, verifiedAt } = value;
   if (typeof basename !== 'string' || !/^pre_release-[0-9]{8}T[0-9]{9}Z\.sqlite3$/.test(basename) || kind !== 'pre_release'
-    || (schemaVersion !== 24 && schemaVersion !== 25 && schemaVersion !== 26 && schemaVersion !== 27 && schemaVersion !== 28) || typeof sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(sha256) || !Number.isSafeInteger(sizeBytes) || sizeBytes <= 0
+    || (schemaVersion !== 24 && schemaVersion !== 25 && schemaVersion !== 26 && schemaVersion !== 27 && schemaVersion !== 28 && schemaVersion !== 29) || typeof sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(sha256) || !Number.isSafeInteger(sizeBytes) || sizeBytes <= 0
     || [createdAt, verifiedAt].some(time => !Number.isFinite(Date.parse(time)) || new Date(time).toISOString() !== time)) fail();
   return { basename, kind, schemaVersion, sha256, sizeBytes, createdAt, verifiedAt };
 }

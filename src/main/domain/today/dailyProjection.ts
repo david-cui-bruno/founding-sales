@@ -17,6 +17,7 @@ export function buildDailySnapshot(input: DailyProjectionInput): DailySnapshot {
   const answers = scoped(input.approvals);
   const meetings = scoped(input.meetings);
   const ownerStatus = scoped(input.ownerStatus);
+  const callbacks = scoped([...(input.callbacks ?? [])]);
   const calls = { ...input.calls, accountIds: input.calls.accountIds.filter(id => {
     if (ids.has(id) && input.workspaceId !== null) return true;
     add('scope_mismatch'); return false;
@@ -26,6 +27,9 @@ export function buildDailySnapshot(input: DailyProjectionInput): DailySnapshot {
   const content = { workspaceId: input.workspaceId, workflowMode: input.workflowMode ?? 'unknown', accounts: input.workspaceId === null ? [] : input.accounts,
     calls, callSettings: input.callSettings, answers, meetings, campaigns: input.workspaceId === null ? [] : input.campaigns, ownerStatus, transport: input.workspaceId === null ? [] : input.transport, issues };
   // The allocation is derived from callSettings, so it stays outside the hashed content and every stored revision is unchanged.
-  return dailySnapshotSchema.parse({ ...content, ...(input.allocation ? { allocation: input.allocation } : {}), revision: createHash('sha256').update(JSON.stringify(content)).digest('hex'),
+  // Callbacks are real content and do change the revision, but only once one exists: an empty list is absent from the hash,
+  // so a workspace that has never promised a callback keeps the exact revision it had before schema 29.
+  const hashed = callbacks.length ? { ...content, callbacks } : content;
+  return dailySnapshotSchema.parse({ ...hashed, ...(input.allocation ? { allocation: input.allocation } : {}), revision: createHash('sha256').update(JSON.stringify(hashed)).digest('hex'),
     freshness: { kind: issues.length ? 'incomplete' : 'local_snapshot', generatedAt: input.generatedAt, remote: 'unknown' } });
 }
