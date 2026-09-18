@@ -7,6 +7,7 @@ import { campaignVersionSchema, type CampaignVersion } from '../../../shared/con
 import { createCallCampaignDraft, createLinkedInCampaignDraft, type OneCompanyCampaignChannel } from '../../../shared/contracts/callCampaignDraft';
 import { captureDailySessionScope } from '../today/dailySessionScope';
 import { AccountIntakeRead } from './AccountIntakeRead';
+import { TerritoryCallPolicyPanel } from './TerritoryCallPolicyPanel';
 
 type Api = Pick<CalliePreloadApi, 'daily' | 'delegation'>;
 type LocalDelegationStatus = Awaited<ReturnType<Api['delegation']['status']>>;
@@ -431,7 +432,9 @@ export function CallCampaignDraft({ api, snapshot, config, readError, onRefresh 
   };
   const toggle = (channel: OneCompanyCampaignChannel, label: string) =>
     <button type="button" aria-expanded={draft.open && draft.channel === channel} disabled={locked && draft.channel !== channel} onClick={() => choose(channel)}>{label}</button>;
-  return <section className="native-desk__campaign-draft native-desk__composer" aria-label="New call campaign">
+  // The standing territory policy sits above the manual one-company drafts; the two paths share nothing but the bridge.
+  return <><TerritoryCallPolicyPanel api={api} snapshot={snapshot} config={config} readError={readError} />
+  <section className="native-desk__campaign-draft native-desk__composer" aria-label="New call campaign">
     <div role="group" aria-label="Channel">{toggle('call', 'New call campaign')} {toggle('linkedin', 'New LinkedIn campaign')}</div>
     {draft.open && <form onSubmit={event => { event.preventDefault(); void save(); }}>
       <label>Company<select value={draft.accountId} disabled={locked} onChange={event => { draft.accountId = event.target.value; draft.selection++; draft.review = false; draft.saved = false; draft.failed = false; draft.preparationFailed = false; draft.freshness = null; draft.recordRejected = null; draft.recordSendFailed = false; notify(draft); }}>
@@ -484,5 +487,5 @@ export function CallCampaignDraft({ api, snapshot, config, readError, onRefresh 
       {draft.failed && !draft.pending && <p role="status">Campaign draft could not be saved. Check the current workspace and owner status before trying again.</p>}
       {draft.saved && available && <p role="status">Campaign draft saved. Not approved or enrolled.</p>}
     </form>}
-  </section>;
+  </section></>;
 }

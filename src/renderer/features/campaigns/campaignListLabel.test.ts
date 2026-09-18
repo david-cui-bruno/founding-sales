@@ -4,6 +4,7 @@ import { createCallCampaignDraft, createLinkedInCampaignDraft } from '../../../s
 import type { DailySnapshot } from '../../../shared/contracts/dailyContract';
 import type { Enrollment } from '../../../shared/contracts/campaignContract';
 import { dailyFixture, nativeDeskReviewFixture } from '../today/nativeDesk.fixture';
+import { DEFAULT_TERRITORY_CALL_POLICY_DEFINITION, deriveTerritoryCampaignVersion, territoryCallPolicyId } from '../../../shared/contracts/territoryCallPolicyContract';
 
 type Campaign = DailySnapshot['campaigns'][number];
 const offer = 'Discuss a simpler maintenance follow-up workflow.';
@@ -45,4 +46,12 @@ it('keeps the saved campaign id and recorded approval wording for anything other
   // A call structure signed with a different policy is opaque, even with an enrollment.
   expect(describeCampaignRow(entry({ ...call, contentPolicyHash: 'b'.repeat(64) }, [enrollment]), accounts))
     .toEqual({ title: call.campaignId, detail: 'Version 1 · not approved' });
+});
+
+it('names a version the worker derived from the territory call policy as company · Territory policy v<revision>', () => {
+  const territory = deriveTerritoryCampaignVersion({ ...DEFAULT_TERRITORY_CALL_POLICY_DEFINITION, policyId: territoryCallPolicyId('ws'), revision: 2 }, 'a');
+  const approved = { ...territory, approvedAt: '2026-09-18T12:00:00.000Z' };
+  expect(describeCampaignRow(entry(territory), accounts)).toEqual({ title: 'Account A · Territory policy v2', detail: 'Version 1 · Draft' });
+  expect(describeCampaignRow(entry(approved), accounts)).toEqual({ title: 'Account A · Territory policy v2', detail: 'Version 1 · Approved' });
+  expect(describeCampaignRow(entry(approved, [{ ...enrollment, campaignVersionId: territory.id, currentStepId: territory.steps[0]!.id }]), accounts)).toEqual({ title: 'Account A · Territory policy v2', detail: 'Version 1 · Enrolled' });
 });
