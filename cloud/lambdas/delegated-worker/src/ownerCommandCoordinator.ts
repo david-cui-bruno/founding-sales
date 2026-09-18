@@ -298,9 +298,10 @@ export class OwnerCommandCoordinator {
     const receipt = territoryCallPolicyReceiptSchema.parse({ receipt: plan.receipt, policy: plan.policy, ...(plan.added ? { added: plan.added } : {}) });
     // Approving the policy gives its first firms authority on David's click instead of on the next scheduled tick. Bounded and best
     // effort: the receipt is already committed, and the tick's own sweep resumes from the same cursor for the rest. Pause and resume
-    // stay pure receipt paths; a resumed policy is swept by the next tick.
+    // stay pure receipt paths; a resumed policy is swept by the next tick. The territory count stays off this path: it is the
+    // scheduled tick's work, at most once per tick, and it must not add four table queries inside David's click.
     if (command.payload.kind === 'policy.approve' && plan.receipt.status === 'applied' && plan.policy?.state === 'active') {
-      try { await repository.sweepTerritoryBackfill({ limit: TERRITORY_BACKFILL_APPROVAL_LIMIT }); } catch { /* The scheduled sweep continues from the persisted cursor. */ }
+      try { await repository.sweepTerritoryBackfill({ limit: TERRITORY_BACKFILL_APPROVAL_LIMIT, count: false }); } catch { /* The scheduled sweep continues from the persisted cursor. */ }
     }
     return receipt;
   }
