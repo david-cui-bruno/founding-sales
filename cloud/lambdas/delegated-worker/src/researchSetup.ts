@@ -1,16 +1,20 @@
 import { QueryCommand, type TransactWriteItem } from '@aws-sdk/client-dynamodb';
 import { z } from 'zod';
-import { researchReviewedCapabilitySchema, researchSetupWriteRequestSchema, researchSetupStatusRequestSchema, researchSetupRemoteStatusSchema, researchSetupReceiptSchema, type ResearchSetupBlocker, type ResearchSetupReceipt } from '../../../../src/shared/contracts/researchSetupContract';
+import { researchPausedReasonSchema, researchReviewedCapabilitySchema, researchSetupWriteRequestSchema, researchSetupStatusRequestSchema, researchSetupRemoteStatusSchema, researchSetupReceiptSchema, scheduledRunRecordSchema, type ResearchPausedReason, type ResearchSetupBlocker, type ResearchSetupReceipt, type ScheduledRunRecord } from '../../../../src/shared/contracts/researchSetupContract';
 import { ownerResearchSourceKey, ownerResearchSourceSchema, type OwnerResearchSource } from '../../../../src/shared/contracts/ownerCommandContract';
 import { effectiveDiscoveryProvider, type DiscoveryProvider } from '../../../../src/main/research/companyResearchTypes';
 import { DynamoStore, fingerprint, keyPart, type Stored } from './dynamoStore';
-import { budgetKey, budgetSchema, planDiscoveryBudget, researchAdmissionKey } from './discoveryReservationStore';
+import { budgetKey, budgetSchema, placesCursorKey, placesCursorSchema, planDiscoveryBudget, researchAdmissionKey } from './discoveryReservationStore';
+import { SOURCE_LAST_TICK_KEY } from './tickLog';
 import { planResearchBudget } from './workerAccountRepository';
 import { WorkerAuth } from './workerAuth';
 
 export const guidedResearchMarkerKey = 'GUIDED_RESEARCH_SETUP';
 export const guidedResearchBudgetId = 'guided-research-v1';
 export const placesResearchBudgetId = 'places-territory-v1';
+/** Why the worker paused the selector itself, bound to the selector revision that pause produced; a later manual change makes it stale. */
+export const researchSelectorPauseKey = 'RESEARCH_SELECTOR_PAUSE';
+export const researchSelectorPauseSchema = z.strictObject({ version: z.literal(1), reason: researchPausedReasonSchema, pausedAt: z.iso.datetime({ precision: 3 }), revision: z.number().int().positive() });
 /** The discovery ledger a provider draws on, derived from the provider alone: replacing with the same provider reuses its ledger and its spent balance. */
 const researchBudgetIdFor = (provider: DiscoveryProvider): string => provider === 'places' ? placesResearchBudgetId : guidedResearchBudgetId;
 export type ResearchSetupProfile = { reviewedCapability?: unknown; credentialParameterDeclared?: boolean; placesCredentialParameterDeclared?: boolean };
@@ -105,6 +109,14 @@ export class ResearchSetupService {
     const discovery = await store.get<unknown>(budgetKey(activeBudgetId));
     const legacyDiscovery = !marker && await this.discoveryPresent(store);
     const receipt = request.requestId ? await this.receipt(store, { ...request, requestId: request.requestId }) : null;
+    // Observations of the scheduled path, deliberately outside the fence: a tick in flight must never make status fail.
+    const lastTickRow = await store.get<unknown>(SOURCE_LAST_TICK_KEY);
+    const lastTickParsed = lastTickRow ? scheduledRunRecordSchema.safeParse(lastTickRow.data) : null;
+    const lastTick: ScheduledRunRecord | null = lastTickParsed?.success ? lastTickParsed.data : null;
+    const pauseRow = await store.get<unknown>(researchSelectorPauseKey);
+    const pause = pauseRow ? researchSelectorPauseSchema.safeParse(pauseRow.data) : null;
+    const cursorRow = await store.get<unknown>(placesCursorKey(activeBudgetId));
+    const cursor = cursorRow ? placesCursorSchema.safeParse(cursorRow.data) : null;
     const fence = (key: string, row: Stored<unknown> | null) => row ? store.check(key, row.rev) : store.absent(key);
     const fences = [fence(researchAdmissionKey, admission), fence(ownerResearchSourceKey(), source), fence(guidedResearchMarkerKey, marker), fence('BUDGET#research', research), fence(budgetKey(activeBudgetId), discovery)];
     if (request.requestId) fences.push(receipt ? store.check(receiptKey(request.requestId), 1) : store.absent(receiptKey(request.requestId)));
@@ -136,7 +148,18 @@ export class ResearchSetupService {
       return { limitMicros: parsed.data.limit, reservedOrSpentMicros: parsed.data.spent, remainingMicros: parsed.data.limit - parsed.data.spent };
     };
     const discoveryLedger = ledger(discovery); const researchLedger = ledger(research);
-    return researchSetupRemoteStatusSchema.parse({ workspaceId: request.workspaceId, pairingId: request.pairingId, selector, discoveryLedger, researchLedger, ...profile, blockers: [...new Set(blockers)], checkedAt, receipt, placesBlockers });
+    // What the stored policy can still do: another firm needs the per-firm reservation; another Places page needs the reviewed call cost.
+    const stored = selector?.research ?? null;
+    if (stored && profile.descriptor && researchLedger && discoveryLedger) {
+      const places = effectiveDiscoveryProvider(stored.discoveryProvider) === 'places';
+      const nextCall = places ? profile.descriptor.placesSearchCostMicros ?? null : profile.descriptor.capability.searchCostMicros + profile.descriptor.capability.modelCostMicros;
+      const territoryExhausted = places && cursor?.success === true && cursor.data.exhausted;
+      if (researchLedger.remainingMicros < profile.descriptor.researchReservationMicros || (nextCall !== null && !territoryExhausted && discoveryLedger.remainingMicros < nextCall)) blockers.push('budget_exhausted');
+      if (territoryExhausted) blockers.push('territory_exhausted');
+    }
+    const pausedReason: ResearchPausedReason | null = selector?.state === 'paused' && pause?.success && pause.data.revision === selector.revision ? pause.data.reason : null;
+    return researchSetupRemoteStatusSchema.parse({ workspaceId: request.workspaceId, pairingId: request.pairingId, selector, discoveryLedger, researchLedger, ...profile, blockers: [...new Set(blockers)], checkedAt, receipt, placesBlockers,
+      lastTickAt: lastTick?.at ?? null, lastTick, pausedReason });
   }
   async apply(raw: unknown, bearer: string): Promise<ResearchSetupReceipt> {
     const envelope = researchSetupWriteRequestSchema.parse(raw);

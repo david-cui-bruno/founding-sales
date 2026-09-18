@@ -1,5 +1,5 @@
 import { ResearchDiscoveryError } from '../../../../src/main/research/researchDiscoveryError';
-import { assertGuidedResearch, guardGuidedResearch, reviewedResearchProfile, guidedResearchMarkerKey, type ResearchSetupProfile } from './researchSetup';
+import { assertGuidedResearch, guardGuidedResearch, reviewedResearchProfile, guidedResearchMarkerKey, researchSelectorPauseKey, researchSelectorPauseSchema, type ResearchSetupProfile } from './researchSetup';
 import { TransactWriteItemsCommand } from '@aws-sdk/client-dynamodb';
 import { ownerResearchSourceSchema, ownerResearchSourceKey, type OwnerResearchSource } from '../../../../src/shared/contracts/ownerCommandContract';
 import { PLACES_SEARCH_COST_MICROS } from '../../../../src/shared/contracts/researchSetupContract';
@@ -7,14 +7,15 @@ import type { AccountEvidenceBatch, AccountSource } from '../../../../src/shared
 import { pairingKey, type WorkerAuth } from './workerAuth';
 import { fingerprint, type DynamoAdapter, type DynamoStore, type RepositoryOptions } from './dynamoStore';
 import { createCompanyPageProvider, type PageHttp } from '../../../../src/main/research/companyPageProvider';
+import { requestCompanyFacts, type KnownCompanyExtraction } from '../../../../src/main/research/companyFactExtraction';
 import { createFetchedReceiptPolicy } from '../../../../src/main/research/companySourcePolicy';
 import { createCompanyPreparation, createCompanyResearchWorker, derivedCommand } from '../../../../src/main/research/companyResearchWorker';
 import { createCompanyDiscoveryProvider, requestCompanyDiscovery } from '../../../../src/main/research/companyDiscoveryProvider';
 import { requestGuidedCompanyDiscovery, validateGuidedDiscoverySources } from '../../../../src/main/research/guidedCompanyDiscoveryProvider';
 import { createPlacesDiscoveryProvider, placesPermittedSources, placesQueryGrid, PLACES_MAX_PAGES_PER_QUERY, type PlacesCandidate, type PlacesPage } from '../../../../src/main/research/placesDiscoveryProvider';
 import { createWorkerAccountRepository, type DynamoWorkerAccountRepository } from './workerAccountRepository';
-import { budgetSchema, createDiscoveryReservationStore, placesCursorKey, placesCursorSchema, type DynamoDiscoveryReservationStore, type PlacesCursor, type ReservedCandidate } from './discoveryReservationStore';
-import type { PlacesBatchReport, SourceTickReport } from './sourceCoordinator';
+import { budgetKey, budgetSchema, createDiscoveryReservationStore, placesCursorKey, placesCursorSchema, type DynamoDiscoveryReservationStore, type PlacesCursor, type ReservedCandidate } from './discoveryReservationStore';
+import { hold, type PlacesBatchReport, type SourceTickReport } from './sourceCoordinator';
 import { effectiveDiscoveryProvider, type AccountResearchStore, type ResearchJob } from '../../../../src/main/research/companyResearchTypes';
 import type { ResearchOnceRequest, ResearchOnceNextReceipt } from './researchOnceContract';
 export type SourceResearchBoundaries = { loadCredentials(workspaceId: string, signal: AbortSignal): Promise<{ apiKey: string; model: string }>;
@@ -35,17 +36,49 @@ export function researchSuccessorRunId(request: ResearchOnceNextReceipt['request
     expectedExecutionRevision: 3, descriptorFingerprint: request.descriptorFingerprint });
   return `${hash.slice(0,8)}-${hash.slice(8,12)}-4${hash.slice(13,16)}-a${hash.slice(17,20)}-${hash.slice(20,32)}`;
 }
+/** A lapsed operator review pauses the selector itself, once, instead of every tick holding on the same descriptor until redeploy.
+ *  Fenced on the selector, the guided marker and the pause-reason row; a concurrent change leaves the pause to the next tick. Resume is David's Settings action. */
+async function pauseExpiredSelector(store: DynamoStore, row: { rev: number }, config: OwnerResearchSource, report: SourceTickReport): Promise<void> {
+  const marker = await store.get<unknown>(guidedResearchMarkerKey);
+  if (!marker) return; // Legacy execution has no reviewed descriptor to lapse.
+  const reason = await store.get<unknown>(researchSelectorPauseKey);
+  const paused = ownerResearchSourceSchema.parse({ ...config, revision: config.revision + 1, state: 'paused' });
+  const record = researchSelectorPauseSchema.parse({ version: 1, reason: 'descriptor_expired', pausedAt: store.now(), revision: paused.revision });
+  await store.transact([store.put(ownerResearchSourceKey(), paused, row.rev), store.check(guidedResearchMarkerKey, marker.rev), store.put(researchSelectorPauseKey, record, reason?.rev ?? null)]);
+  report.selfPaused = true;
+}
+/** After the research phase: what the active policy can still spend, for the tick record and the Settings ceiling line. Reads only. */
+async function recordLedger(store: DynamoStore, budgetId: string, report: SourceTickReport): Promise<void> {
+  const discovery = await store.get<unknown>(budgetKey(budgetId)); const research = await store.get<unknown>('BUDGET#research');
+  const parsedDiscovery = discovery ? budgetSchema.safeParse(discovery.data) : null; const parsedResearch = research ? budgetSchema.safeParse(research.data) : null;
+  if (!parsedDiscovery?.success || !parsedResearch?.success) return;
+  report.ledger = { discoveryRemainingMicros: Math.max(0, parsedDiscovery.data.limit - parsedDiscovery.data.spent), researchRemainingMicros: Math.max(0, parsedResearch.data.limit - parsedResearch.data.spent) };
+}
 export async function runResearch(input: ResearchCoordinatorOptions, signal: AbortSignal, report: SourceTickReport, once?: ResearchOnceRequest) {
     const store = input.auth.store;
     const boundaries = input.research; if (!boundaries) return;
     const row = await store.get<unknown>(ownerResearchSourceKey()); if (!row) return;
     const config = ownerResearchSourceSchema.parse(row.data);
-    if (config.workspaceId !== store.options.workspaceId || config.state !== 'active' || !config.research) return;
-    const guided = await guardGuidedResearch(store, config, input.researchSetupProfile ?? {});
+    if (config.workspaceId !== store.options.workspaceId || !config.research) return;
+    if (config.state !== 'active') {
+      // A selector the worker paused itself keeps reporting the cause until David resumes it.
+      if (!once) {
+        const reason = await store.get<unknown>(researchSelectorPauseKey);
+        const parsed = reason ? researchSelectorPauseSchema.safeParse(reason.data) : null;
+        if (parsed?.success && parsed.data.revision === config.revision && parsed.data.reason === 'descriptor_expired') report.descriptorExpired = true;
+      }
+      return;
+    }
     const settings = config.research;
+    const provider = effectiveDiscoveryProvider(settings.discoveryProvider);
+    if (!once && reviewedResearchProfile(input.researchSetupProfile ?? {}, store.now(), provider).blockers.includes('operator_descriptor_expired')) {
+      report.descriptorExpired = true; report.status = 'completed';
+      await pauseExpiredSelector(store, row, config, report);
+      return;
+    }
+    const guided = await guardGuidedResearch(store, config, input.researchSetupProfile ?? {});
     // Selected-account desktop opt-in is not a discovery or hosted-cycle capability.
     if (settings.researchLimits.knownCompanyExtraction) return;
-    const provider = effectiveDiscoveryProvider(settings.discoveryProvider);
     // Places is a scheduled bulk source only; research.once and hosted cycles keep the cited single-company transport.
     if (once && provider === 'places') return;
     if (once && (!guided || config.pairingId !== once.pairingId || config.revision !== once.expectedSourceRevision
@@ -103,7 +136,10 @@ export async function runResearch(input: ResearchCoordinatorOptions, signal: Abo
     const accounts = createWorkerAccountRepository(options);
     const reservations = createDiscoveryReservationStore(options);
     if (provider === 'places') {
-      await runPlacesBatch({ store, config, settings, guard, options, accounts, reservations, boundaries, fetch: input.fetch, signal, report });
+      // Model extraction is a property of the reviewed descriptor, read at run time; the stored job limits stay exactly as approved.
+      const extraction = reviewedResearchProfile(input.researchSetupProfile ?? {}, store.now(), 'places').descriptor?.placesExtraction;
+      try { await runPlacesBatch({ store, config, settings, guard, options, accounts, reservations, boundaries, fetch: input.fetch, signal, report, ...(extraction ? { extraction } : {}) }); }
+      finally { if (!signal.aborted) await recordLedger(store, settings.budgetId, report); }
       return;
     }
     // Only a trusted native cycle selects the cited single-company transport.
@@ -140,7 +176,7 @@ export async function runResearch(input: ResearchCoordinatorOptions, signal: Abo
     } : accounts;
     const prepared = await createCompanyPreparation({ store: selectedAccounts, reservations, discovery, configuration: settings }).prepare(runId, signal);
     report.status = 'completed';
-    if (prepared.status !== 'prepared') { report.held++; return; }
+    if (prepared.status !== 'prepared') { hold(report, 'research_not_prepared'); return; }
     report.researchPrepared++;
     const pages = createCompanyPageProvider({ receipts: createFetchedReceiptPolicy(), clock: options.clock,
       permitted: (url) => settings.permittedSources.includes(url),
@@ -154,7 +190,8 @@ export async function runResearch(input: ResearchCoordinatorOptions, signal: Abo
     } } });
     const result = await worker.runNext(signal);
     if (result === 'completed') report.researchCompleted++;
-    if (result === 'parked') report.held++;
+    if (result === 'parked') hold(report, 'research_parked');
+    if (!signal.aborted) await recordLedger(store, settings.budgetId, report);
   }
 
 /** One Places page batch. The ordinal makes every batch its own reservation, so identical settings never replay a page. */
@@ -164,7 +201,9 @@ function placesBatchRunId(input: { workspaceId: string; pairingId: string; resea
 }
 type PlacesSettings = NonNullable<OwnerResearchSource['research']>;
 type PlacesBatchContext = { store: DynamoStore; config: OwnerResearchSource; settings: PlacesSettings; guard(): Promise<void>; options: RepositoryOptions;
-  accounts: DynamoWorkerAccountRepository; reservations: DynamoDiscoveryReservationStore; boundaries: SourceResearchBoundaries; fetch: typeof globalThis.fetch; signal: AbortSignal; report: SourceTickReport };
+  accounts: DynamoWorkerAccountRepository; reservations: DynamoDiscoveryReservationStore; boundaries: SourceResearchBoundaries; fetch: typeof globalThis.fetch; signal: AbortSignal; report: SourceTickReport;
+  /** The descriptor's reviewed per-firm extraction; absent means regex facts only. Present only on the Places path. */
+  extraction?: KnownCompanyExtraction };
 type Identities = Awaited<ReturnType<DynamoWorkerAccountRepository['listIdentities']>>;
 const emptyPlacesReport = (): PlacesBatchReport => ({ outcome: 'held', runId: null, created: 0, routes: 0, enqueued: 0, drained: 0,
   skipped: { no_website: 0, website_blocked: 0, duplicate_domain: 0, duplicate_phone: 0, existing_domain: 0, existing_phone: 0, route_held: 0, enqueue_held: 0 } });
@@ -278,30 +317,49 @@ async function materialisePlacesCandidates(candidates: ReservedCandidate[], runI
 /** Run queued page research until the queue is empty or the phase deadline arrives. A job cut by the deadline settles as parked, as today.
  *  A Places-born job may fetch its own recorded sources; everything else about fetching is the existing bounded page provider. */
 async function drainPageResearch(ctx: PlacesBatchContext): Promise<number> {
-  const { settings, signal, report } = ctx;
+  const { settings, signal, report, extraction } = ctx;
   let current: ResearchJob | null = null;
+  // Per account: the provider's priced usage after one model call, or null when the call was attempted but usage is unknown
+  // (settle at the reservation, never below). An account without an entry made no call and keeps its reservation as before.
+  const costs = new Map<string, number | null>();
   const draining: AccountResearchStore = {
     create: value => ctx.accounts.create(value), snapshot: (id, at) => ctx.accounts.snapshot(id, at), admitEvidence: (batch, claim) => ctx.accounts.admitEvidence(batch, claim),
-    settle: value => ctx.accounts.settle(value), enqueue: value => ctx.accounts.enqueue(value),
+    settle: async value => {
+      await ctx.accounts.settle(value);
+      if (value.status === 'completed' && value.costMicros !== null && current && current.id === value.jobId) {
+        report.extraction.settledCostMicros += value.costMicros; report.extraction.refundedMicros += Math.max(0, current.limits.maxCostMicros - value.costMicros);
+      }
+    },
+    enqueue: value => ctx.accounts.enqueue(value),
     claimNext: async asOf => { current = await ctx.accounts.claimNext(asOf); return current; },
   };
-  const pages = createCompanyPageProvider({ receipts: createFetchedReceiptPolicy(), clock: ctx.options.clock,
-    permitted: url => settings.permittedSources.includes(url) || (current?.permittedSources?.includes(url) ?? false),
-    resolve: async hostname => { await ctx.guard(); return ctx.boundaries.resolve(hostname); },
-    http: async request => { await ctx.guard(); return ctx.boundaries.pageHttp(request); },
-    onFetched: (source, accountId) => ctx.accounts.recordFetchedSource({ accountId, source }) });
-  const worker = createCompanyResearchWorker({ store: draining, clock: ctx.options.clock, pages: { async research(snapshot, limits, requestSignal) {
-    await ctx.guard();
-    if (fingerprint(limits) !== fingerprint(settings.researchLimits)) throw new Error('research_job_config_mismatch');
-    return pages.research(snapshot, limits, requestSignal);
-  } } });
+  const base = { receipts: createFetchedReceiptPolicy(), clock: ctx.options.clock,
+    permitted: (url: string) => settings.permittedSources.includes(url) || (current?.permittedSources?.includes(url) ?? false),
+    resolve: async (hostname: string) => { await ctx.guard(); return ctx.boundaries.resolve(hostname); },
+    http: async (request: Parameters<PageHttp>[0]) => { await ctx.guard(); return ctx.boundaries.pageHttp(request); },
+    onFetched: (source: AccountSource, accountId: string) => ctx.accounts.recordFetchedSource({ accountId, source }) };
+  const pages = createCompanyPageProvider(base);
+  /** One bounded model call per firm per research revision, reserved at the descriptor's per-firm reservation; the reviewed credential must name the same model. */
+  const extracting = (accountId: string) => extraction ? createCompanyPageProvider({ ...base, modelExtraction: { capability: extraction, extractFacts: async (input, requestSignal) => {
+    costs.set(accountId, null); report.extraction.calls++;
+    await ctx.guard(); const credentials = await ctx.boundaries.loadCredentials(ctx.config.workspaceId, requestSignal); await ctx.guard();
+    if (credentials.model !== extraction.model) throw new Error('research_model_mismatch');
+    return requestCompanyFacts({ input, credentials, signal: requestSignal, fetch: ctx.fetch, onUsage: usage => { if (usage.costMicros !== null) costs.set(accountId, usage.costMicros); } });
+  } } }) : pages;
+  const worker = createCompanyResearchWorker({ store: draining, clock: ctx.options.clock,
+    settledCost: job => costs.has(job.accountId) ? (costs.get(job.accountId) ?? job.limits.maxCostMicros) : null,
+    pages: { async research(snapshot, limits, requestSignal) {
+      await ctx.guard();
+      if (fingerprint(limits) !== fingerprint(settings.researchLimits)) throw new Error('research_job_config_mismatch');
+      return extracting(snapshot.account.id).research(snapshot, limits, requestSignal);
+    } } });
   let drained = 0;
   while (!signal.aborted) {
     const result = await worker.runNext(signal);
     if (result === 'idle') break;
     drained++;
     if (result === 'completed') report.researchCompleted++;
-    if (result === 'parked') report.held++;
+    if (result === 'parked') hold(report, 'research_parked');
   }
   return drained;
 }

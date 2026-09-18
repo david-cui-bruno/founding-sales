@@ -22,6 +22,8 @@ const claimBase = { kind: z.enum(['fact', 'hypothesis', 'prospect_stated_problem
 export const accountClaimSchema = z.discriminatedUnion('key', [
   z.strictObject({ ...claimBase, key: z.literal('portfolio'), value: accountPortfolioSchema }),
   z.strictObject({ ...claimBase, key: z.enum(['residential_scope', 'operating_footprint', 'maintenance_workflow', 'technology', 'role', 'pain', 'ownership', 'portfolio_description']), value: text }),
+  /** Model-extracted verdict on whether the company is a property manager, always backed by a quoted published block. `unclear` is never stored: it stays an unknown. */
+  z.strictObject({ ...claimBase, key: z.literal('target_fit'), value: z.enum(['yes', 'no']) }),
 ]).refine(claim => claim.kind === 'hypothesis' || claim.evidenceIds.length > 0, 'Supported claims require evidence');
 export type AccountClaim = z.infer<typeof accountClaimSchema>;
 export const accountSourceSchema = z.strictObject({ id: accountIdSchema, url: z.url().max(2048).refine(value => {

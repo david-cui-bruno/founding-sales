@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { parseCompanyPageText } from './companyPageText';
-import { validateCompanyFacts, type CompanyFactExtractor, type PageFactInput } from './companyFactExtraction';
+import { validateCompanyFacts, type CompanyFact, type CompanyFactExtractor, type KnownCompanyExtraction, type PageFactInput } from './companyFactExtraction';
 import { randomUUID } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
 import { request, type RequestOptions } from 'node:https';
@@ -180,6 +180,28 @@ function extract(excerpt: string, sourceId: string, accountId: string, linkedInP
   if (linkedInPublicationAllowed) for (const target of linkedInTargets) add('linkedin', target);
   return { claims, routes, withheldTargets, qualifiedPhoneLines: lines.filter(line => /emergency|tenant|after.hours/i.test(line)) };
 }
+/** Every validated fact becomes one claim quoting its block; the two verdict keys become the `target_fit` claim instead of a quoted value. */
+function factClaims(facts: readonly CompanyFact[]): AccountClaim[] {
+  return facts.map(fact => fact.key === 'target_fit' || fact.key === 'not_target'
+    ? { key: 'target_fit', kind: 'fact', value: fact.key === 'target_fit' ? 'yes' : 'no', evidenceIds: [fact.sourceId] }
+    : { key: fact.key, kind: 'fact', value: fact.quote, evidenceIds: [fact.sourceId] });
+}
+/** Keep the request under the reviewed input bound with room for the instructions and JSON envelope; later blocks are dropped whole, never cut. */
+function boundedModelSources(sources: PageFactInput['sources'], maxInputBytes: number): PageFactInput['sources'] {
+  const budget = Math.max(0, maxInputBytes - 4096);
+  const encoder = new TextEncoder(); let used = 0;
+  const bounded: PageFactInput['sources'] = [];
+  for (const source of sources) {
+    const blocks: PageFactInput['sources'][number]['blocks'] = [];
+    for (const block of source.blocks) {
+      const size = encoder.encode(JSON.stringify(block)).byteLength + 32;
+      if (used + size > budget) break;
+      used += size; blocks.push(block);
+    }
+    if (blocks.length) bounded.push({ sourceId: source.sourceId, blocks });
+  }
+  return bounded;
+}
 export function createCompanyPageProvider(options: { receipts: FetchedReceiptPolicy; clock: { now(): string };
   /** Trusted operator/source-policy decision. Omission denies all fetching. */
   permitted?: (url: string, accountId: string) => boolean;
@@ -187,6 +209,9 @@ export function createCompanyPageProvider(options: { receipts: FetchedReceiptPol
   onFetched?: (source: Readonly<AccountSource>, accountId: string) => void | Promise<void>;
   /** Explicit approved entry URLs for opt-in known-company mode; never discovered or guessed. */
   sourceUrls?: readonly string[]; extractFacts?: CompanyFactExtractor;
+  /** Scheduled bulk path only: one bounded model call per research over the fetched pages, added to the regex facts and published routes.
+   *  A failed or empty model reply leaves the regex result intact; `onOutcome` observes what happened for the tick record. */
+  modelExtraction?: { capability: KnownCompanyExtraction; extractFacts: CompanyFactExtractor; onOutcome?: (outcome: 'facts' | 'no_facts' | 'failed') => void };
   resolve?: (hostname: string) => Promise<string[]>; http?: PageHttp; timeoutMs?: number }): CompanyPagePort {
   const sourceUrls = [...new Set(options.sourceUrls ?? [])];
   const resolve = options.resolve ?? (async hostname => (await lookup(hostname, { all: true, family: 4 })).map(r => r.address));
@@ -200,6 +225,8 @@ export function createCompanyPageProvider(options: { receipts: FetchedReceiptPol
     if (!snapshot.account.domain || !options.permitted) throw new CompanyResearchError(stage, 'source_required');
     const known = limits.knownCompanyExtraction;
     if (known && (!options.extractFacts || !sourceUrls.length)) throw new CompanyResearchError(stage, 'extraction_unavailable');
+    // Known-company mode and scheduled model extraction are two different opt-ins; a job never carries both.
+    const scheduled = !known && options.modelExtraction ? options.modelExtraction : null;
     const modelSources: PageFactInput['sources'] = [];
     signal = AbortSignal.any([callerSignal, AbortSignal.timeout(options.timeoutMs ?? 30000)]);
     const sources = []; const claims: AccountClaim[] = []; const routes: AccountEvidenceBatch['routes'] = [];
@@ -256,6 +283,10 @@ export function createCompanyPageProvider(options: { receipts: FetchedReceiptPol
         const extracted = extract(excerpt, source.id, snapshot.account.id,
           /^text\/html(?:;|$)/i.test(response.headers.get('content-type') ?? '')
           && /^\/(?:team\/?|contact\/?)?$/.test(new URL(url).pathname));
+        if (scheduled) {
+          const parsedBlocks = parseCompanyPageText(body, response.headers.get('content-type') ?? '').blocks;
+          if (parsedBlocks.length) modelSources.push({ sourceId: source.id, blocks: parsedBlocks });
+        }
         sources.push(source); claims.push(...extracted.claims);
         qualifiedPhoneLines.push(...extracted.qualifiedPhoneLines);
         for (const target of extracted.withheldTargets) withheldTargets.add(target);
@@ -278,7 +309,23 @@ export function createCompanyPageProvider(options: { receipts: FetchedReceiptPol
       const facts = validateCompanyFacts(extractedFacts, input);
       signal.throwIfAborted();
       if (!facts.length) throw new CompanyResearchError(stage, 'no_supported_facts');
-      for (const fact of facts) claims.push({ key: fact.key, kind: 'fact', value: fact.quote, evidenceIds: [fact.sourceId] });
+      claims.push(...factClaims(facts));
+    }
+    if (scheduled && modelSources.length) {
+      signal.throwIfAborted();
+      const input: PageFactInput = { capability: scheduled.capability, sources: boundedModelSources(modelSources, scheduled.capability.maxInputBytes) };
+      // One bounded call per research. Its failure is observed, never a reason to discard the fetched pages, regex facts or routes.
+      let outcome: 'facts' | 'no_facts' | 'failed' = 'failed';
+      try {
+        const extractedFacts = await bounded(scheduled.extractFacts(structuredClone(input), signal), signal);
+        const facts = validateCompanyFacts(extractedFacts, input);
+        claims.push(...factClaims(facts));
+        outcome = facts.length ? 'facts' : 'no_facts';
+      } catch (error) {
+        if (callerSignal.aborted || signal.aborted) throw error;
+      }
+      signal.throwIfAborted();
+      try { scheduled.onOutcome?.(outcome); } catch { /* Observation must not change research control flow. */ }
     }
     // Negative evidence from any bounded page wins, regardless of fetch order.
     const eligibleRoutes = routes.filter(route => {

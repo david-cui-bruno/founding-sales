@@ -63,13 +63,18 @@ variable "delegated_places_enabled" {
 }
 
 variable "delegated_research_reviewed_capability" {
-  description = "Optional non-secret operator-reviewed research settings JSON, at most 3000 characters. Empty requires operator setup. Not readiness, provider connectivity or verified pricing proof. No credentials, model defaults or default rates. Runtime validates descriptor semantics and freshness."
+  description = "Optional non-secret operator-reviewed research settings JSON, at most 3000 characters with a provenance of at most 500 characters. Empty requires operator setup. Not readiness, provider connectivity or verified pricing proof. No credentials, model defaults or default rates. Runtime validates descriptor semantics and freshness."
   type        = string
   default     = ""
   nullable    = false
   validation {
     condition     = length(var.delegated_research_reviewed_capability) <= 3000 && (var.delegated_research_reviewed_capability == "" || can(jsondecode(var.delegated_research_reviewed_capability)))
     error_message = "Reviewed research metadata must be empty or valid non-secret JSON of at most 3000 characters."
+  }
+  # The worker's shared schema caps provenance at 500 characters; a descriptor Terraform accepts must be one the worker accepts.
+  validation {
+    condition     = try(length(tostring(jsondecode(var.delegated_research_reviewed_capability).provenance)), 0) <= 500
+    error_message = "Reviewed research metadata provenance must be at most 500 characters."
   }
 }
 
@@ -83,4 +88,26 @@ variable "delegated_worker_schedule_enabled" {
   description = "Opt-in dedicated five-minute delegated-worker schedule, requiring worker enablement and existing activation review. Never changes existing schedules. Runtime ownership, grants, budgets and exact approvals remain mandatory."
   type        = bool
   default     = false
+}
+
+variable "alarm_email" {
+  description = "Optional address for the worker alarm topic and budget notifications. Empty creates no subscription; a set address must confirm the SNS subscription by mail. Never a credential."
+  type        = string
+  default     = ""
+  nullable    = false
+  validation {
+    condition     = var.alarm_email == "" || can(regex("^[^@[:space:]]+@[^@[:space:]]+\\.[^@[:space:]]+$", var.alarm_email))
+    error_message = "alarm_email must be empty or one plain email address."
+  }
+}
+
+variable "monthly_budget_usd" {
+  description = "Account-wide monthly AWS Budget in whole USD. Notifications fire at 100% and 200% of this amount (USD 25 and USD 50 by default) and on a 100% forecast. A notification, never a hard billing cap."
+  type        = number
+  default     = 25
+  nullable    = false
+  validation {
+    condition     = var.monthly_budget_usd >= 1 && var.monthly_budget_usd <= 1000 && floor(var.monthly_budget_usd) == var.monthly_budget_usd
+    error_message = "monthly_budget_usd must be a whole number of USD between 1 and 1000."
+  }
 }
