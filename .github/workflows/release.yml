@@ -71,9 +71,7 @@ jobs:
         run: |
           set -euo pipefail
           npm ci
-          npm ci --prefix cloud/lambdas/shared
           while IFS= read -r -d '' lock; do
-            test "$lock" = cloud/lambdas/shared/package-lock.json && continue
             npm ci --prefix "${lock%/package-lock.json}"
           done < <(git ls-files -z -- 'cloud/lambdas/*/package-lock.json')
           npx playwright install chromium

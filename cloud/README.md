@@ -7,13 +7,10 @@ The cloud side of FSS is one AWS Lambda, the delegated worker, deployed from one
 ```
 cloud/
   lambdas/delegated-worker/             # the worker Lambda: handler, DynamoDB store, pairing operator CLI (OPERATOR.md)
-  lambdas/shared/                       # CloudSourceEvent schema package, still imported by the desktop's src/main/sourcing
   terraform/modules/delegated-worker/   # the single worker implementation
   worker-terraform/                     # the only Terraform root; calls the module (README.md)
   scripts/bootstrap-terraform-state.sh  # one-time create/recover of the shared state bucket and lock table (already created)
 ```
-
-`cloud/lambdas/shared` is retained only because the desktop's sourcing poller (`src/main/sourcing/`) and its contract mirrors under `src/shared/contracts/` still import it; pruning it follows the removal of those desktop routes.
 
 ## Legacy sourcing pipeline (removed)
 
@@ -21,14 +18,13 @@ Until 17 September 2026 this directory also held the public-record lead-sourcing
 
 ## Source verification only
 
-Nothing here initializes providers, reads state, contacts AWS or deploys. Install the root and the two tracked Lambda lockfiles, then run the offline gates:
+Nothing here initializes providers, reads state, contacts AWS or deploys. Install the root and the one tracked Lambda lockfile, then run the offline gates:
 
 ```bash
 export PATH="/opt/homebrew/opt/node@24/bin:/opt/homebrew/bin:$PATH"
 npm ci --no-audit --no-fund
-npm ci --prefix cloud/lambdas/shared --no-audit --no-fund
 npm ci --prefix cloud/lambdas/delegated-worker --no-audit --no-fund
-npm run verify:lambdas            # shared (typecheck, test), then delegated-worker (typecheck, test, build)
+npm run verify:lambdas            # delegated-worker (typecheck, test, build)
 npx vitest run tests/infrastructure
 npm run lint:tracked
 npm run typecheck
