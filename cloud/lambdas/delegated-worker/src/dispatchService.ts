@@ -1,6 +1,7 @@
 import { createPreparedGmailSender } from '../../../../src/main/outreach/providers/gmailProvider';
 import type { EmailSendResult } from '../../../../src/main/outreach/providers/providerTypes';
 import type { Reservation } from '../../../../src/shared/contracts/delegationContract';
+import { TERRITORY_EMAIL_HOLD_REASON } from '../../../../src/shared/contracts/territoryCallPolicyContract';
 import { type DynamoExecutionRepository } from './executionRepository';
 import { type DynamoDispatchRepository, type SendEvidence } from './dispatchRepository';
 import { type RemoteGoogleAuthorization } from './remoteGoogleAuthorization';
@@ -14,7 +15,15 @@ export type DispatchDependencies = { execution: DynamoExecutionRepository; polic
 const reasons = new Set(['authority_missing', 'authority_not_active', 'stale_authority', 'dispatch_policy_missing', 'dispatch_evidence_missing', 'approval_not_current',
   'thread_not_current', 'route_not_current', 'recipient_permission_unproven', 'dispatch_suppressed', 'dispatch_cap_reached', 'dispatch_evidence_expired',
   'campaign_binding_unavailable', 'intake_unavailable', 'intake_incomplete', 'intake_stale', 'manual_outcome_pending', 'google_access_evidence_missing']);
-function heldReason(error: unknown): string { return error instanceof Error && reasons.has(error.message) ? error.message : 'dispatch_prerequisite_unavailable'; }
+/** The worker-held Google grant is what both the send and the reply read use. With no usable
+ * grant this is a known, expected condition, not a failure: it closes with the same reason the
+ * territory sequence gives its email steps, so a held step stays held until David connects. */
+const namedGrantHolds = new Map([['google_grant_unavailable', TERRITORY_EMAIL_HOLD_REASON], ['google_unconfigured', TERRITORY_EMAIL_HOLD_REASON],
+  ['google_secret_unavailable', TERRITORY_EMAIL_HOLD_REASON], ['remote_grant_required', TERRITORY_EMAIL_HOLD_REASON]]);
+function heldReason(error: unknown): string {
+  if (!(error instanceof Error)) return 'dispatch_prerequisite_unavailable';
+  return namedGrantHolds.get(error.message) ?? (reasons.has(error.message) ? error.message : 'dispatch_prerequisite_unavailable');
+}
 /** No handler registration. Trusted source composition must explicitly provide all
  * stores and external boundaries. The provider continuation immediately follows reserve. */
 export function createDispatchService(input: DispatchDependencies) {
