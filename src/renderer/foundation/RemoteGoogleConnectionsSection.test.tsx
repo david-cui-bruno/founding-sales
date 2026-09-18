@@ -267,7 +267,7 @@ describe('remote Google purpose-specific explicit UI', () => {
   ] as const)('a refused status read carrying %s names its remedy instead of the generic hold, and stays a hold', async (reason, remedy, detail) => {
     const a = api(); a.status.mockRejectedValue(new GoogleConnectionStatusFailure(reason));
     await mount(a);
-    for (const purpose of [work, personal]) {
+    for (const purpose of [work, personal] as const) {
       expect(panel(purpose).getByText(remedy)).toBeTruthy(); expect(panel(purpose).getByText(detail)).toBeTruthy();
       expect(panel(purpose).queryByText(/Status and disclosure could not be verified/)).toBeNull();
       expect(panel(purpose).getByText('Cloud grant status unverified')).toBeTruthy();

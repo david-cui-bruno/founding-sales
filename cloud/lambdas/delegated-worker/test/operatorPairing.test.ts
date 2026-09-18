@@ -243,8 +243,8 @@ describe('credential rotation on an existing pairing (--rotate)', () => {
     expect(response.exitCode).toBe(2); expect(response.message).toBe('Invalid arguments. Use --help.');
     expect(f.deps.reserveOutput).not.toHaveBeenCalled(); expect(f.deps.connect).not.toHaveBeenCalled();
   });
-  it.each(['events:read', 'commands:write', 'google:grant,pairing:revoke', 'events:read,google:grant', 'commands:write,pairing:revoke'])
-  ('refuses a rotation scope set %s that drops commands:write or events:read, before any IO', async scopes => {
+  const narrowed = ['events:read', 'commands:write', 'google:grant,pairing:revoke', 'events:read,google:grant', 'commands:write,pairing:revoke'];
+  it.each(narrowed)('refuses a rotation scope set %s that drops commands:write or events:read, before any IO', async scopes => {
     const f = fixture(), response = await runOperatorPairing([...rotateArgs('11111111-1111-4111-8111-111111111111', scopes), '--execute'], f.deps);
     expect(response.exitCode).toBe(2); expect(response.message).toBe('Invalid arguments. Use --help.');
     expect(f.deps.reserveOutput).not.toHaveBeenCalled(); expect(f.deps.connect).not.toHaveBeenCalled(); expect(f.send).not.toHaveBeenCalled();

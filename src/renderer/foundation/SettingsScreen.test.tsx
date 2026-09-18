@@ -817,6 +817,8 @@ function task9RouteFixture(worker = task9Api()) {
     ...base.api,
     delegation: {
       ...base.api.delegation, status: worker.status, pair: worker.pair,
+      // The stored-pairing summary is a local read Worker connection makes beside status; no pairing is stored here.
+      pairing: vi.fn(async () => null), rotatePairing: deny('delegation.rotatePairing'),
       configure: deny('delegation.configure'), configureResearch: deny('delegation.configureResearch'), configurePolicy: deny('delegation.configurePolicy'),
       bootstrap: deny('delegation.bootstrap'), submit: deny('delegation.submit'), sync: deny('delegation.sync'), beginPhone: deny('delegation.beginPhone'),
       prepareRequestedFollowup: deny('delegation.prepareRequestedFollowup'), getRequestedFollowup: deny('delegation.getRequestedFollowup'),
