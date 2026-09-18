@@ -2,6 +2,8 @@ import { z } from 'zod';
 import { accountIdSchema as id, accountInstantSchema as instant } from './accountContract';
 import { audienceQuerySchema, discoveryProviderSchema, researchCapabilitySchema, researchLimitsSchema, PLACES_MAX_COMPANIES } from '../../main/research/companyResearchTypes';
 import { ownerResearchSourceSchema } from './ownerCommandContract';
+import { US_STATE_CODES } from './territoryClearanceContract';
+import { territoryAddedStateSchema } from './territoryCallPolicyContract';
 const integer = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
 /** Google Places API (New) Text Search, Enterprise SKU: the reviewed cost per call can never be below this ceiling, in micros of USD. */
@@ -96,6 +98,43 @@ export const scheduledRunRecordSchema = z.strictObject({ event: z.literal(SCHEDU
   researchPrepared: integer, researchCompleted: integer, mailPolls: integer, dispatches: integer, sendReconciliations: integer, meetings: integer,
   extraction: tickExtractionSchema, ledger: tickLedgerSchema.nullable(), descriptorExpired: z.boolean(), selfPaused: z.boolean() });
 export type ScheduledRunRecord = z.infer<typeof scheduledRunRecordSchema>;
+/**
+ * What is left in the territory, counted by the worker from its own records once per scheduled tick
+ * (design section 8): every firm that carries an admitted listed business phone, every firm the
+ * territory policy already holds authority over, and every firm whose first call has not happened yet.
+ * Counts only: no firm name, phone number or account id can enter this block. A worker that has not
+ * counted yet reports `null`, which Settings shows as unknown; it never shows a zero it did not count.
+ */
+export const territoryCountsSchema = z.strictObject({
+  computedAt: instant,
+  /** Firms with at least one admitted listed business phone route: the size of the territory's callable list. */
+  listedFirms: integer,
+  /** Firms the territory policy has already granted itself authority over. */
+  withAuthority: integer,
+  /** Firms with a listed route whose first sequence step has not been consumed yet (or that are not enrolled at all). */
+  notYetCalled: integer,
+  /** `notYetCalled` spread over one business week of mornings, capped by the policy's own new-firms-a-day cap. */
+  remainingNewPerMorningEstimate: integer,
+  /** The approved policy's `caps.newFirmsPerDay`, or null when no policy is approved. */
+  newFirmsPerDay: integer.positive().nullable(),
+});
+export type TerritoryCounts = z.infer<typeof territoryCountsSchema>;
+/** The estimate spreads the remaining uncalled firms over one business week of mornings, so the number falls as the list empties. */
+export const TERRITORY_ESTIMATE_MORNINGS = 5;
+/** Pure. How many new firms a morning the territory can still sustain at the current pace. Never above the policy cap, never below zero. */
+export function territoryRemainingNewPerMorning(notYetCalled: number, newFirmsPerDay: number | null): number {
+  if (!Number.isFinite(notYetCalled) || notYetCalled <= 0) return 0;
+  const paced = Math.floor(notYetCalled / TERRITORY_ESTIMATE_MORNINGS);
+  return newFirmsPerDay === null ? paced : Math.max(0, Math.min(newFirmsPerDay, paced));
+}
+/** The territory block of the worker's research status: the counts and the states David added on top of the built-in map. */
+export const territoryStatusSchema = z.strictObject({
+  counts: territoryCountsSchema.nullable(),
+  addedRevision: integer,
+  addedStates: z.array(territoryAddedStateSchema).max(US_STATE_CODES.length)
+    .refine(states => new Set(states.map(entry => entry.state)).size === states.length, 'One row per added state.'),
+});
+export type TerritoryStatus = z.infer<typeof territoryStatusSchema>;
 /** Settings treats a worker whose last tick is older than this as stale. Three missed five-minute ticks. */
 export const WORKER_STALE_AFTER_MS = 20 * 60_000;
 /** Settings warns this long before the operator review expires. */
@@ -104,7 +143,9 @@ export const RESEARCH_RENEWAL_WARNING_MS = 14 * 86_400_000;
  *  `lastTickAt`/`lastTick` are the worker's last persisted scheduled tick (null before the first tick or on a worker predating them); `pausedReason` is set only when the worker paused the selector itself. */
 export const researchSetupRemoteStatusSchema = z.strictObject({ ...identity, selector: ownerResearchSourceSchema.nullable(), discoveryLedger: researchSetupLedgerSchema.nullable(), researchLedger: researchSetupLedgerSchema.nullable(), descriptor: researchReviewedCapabilitySchema.nullable(), descriptorFingerprint: hash.nullable(), credentialParameterDeclared: z.boolean(), blockers: z.array(researchSetupBlockerSchema), checkedAt: instant, receipt: researchSetupReceiptSchema.nullable(),
   placesCredentialParameterDeclared: z.boolean().optional(), placesBlockers: z.array(researchSetupBlockerSchema).optional(),
-  lastTickAt: instant.nullable().optional(), lastTick: scheduledRunRecordSchema.nullable().optional(), pausedReason: researchPausedReasonSchema.nullable().optional() });
+  lastTickAt: instant.nullable().optional(), lastTick: scheduledRunRecordSchema.nullable().optional(), pausedReason: researchPausedReasonSchema.nullable().optional(),
+  /** Territory counts and added states (design section 8). Absent on a worker predating them, which Settings reports as unknown. */
+  territory: territoryStatusSchema.nullable().optional() });
 export type ResearchSetupRemoteStatus = z.infer<typeof researchSetupRemoteStatusSchema>;
 /** Metadata only. Exact request stays in encrypted main-process journal. */
 export const researchSetupPendingSchema = z.strictObject({ requestId: z.uuid(), kind: z.enum(['approve','set-state']), createdAt: instant, state: z.literal('unknown') });

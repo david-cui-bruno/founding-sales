@@ -2,7 +2,7 @@ import { LocalCompanyResearchSection } from './LocalCompanyResearchSection';
 import { ResearchSetupSection } from './ResearchSetupSection';
 import { RemoteGoogleConnectionsSection } from './RemoteGoogleConnectionsSection';
 import { CallCapacitySection } from './CallCapacitySection';
-import { TerritoryClearanceSection } from './TerritoryClearanceSection';
+import { TerritorySettings } from './TerritoryExpansionSection';
 import { EmailTemplatesSection } from './EmailTemplatesSection';
 import type { LocalWorkspaceApi } from '../../shared/contracts/localWorkspaceContract';
 import { WorkflowSection } from './WorkflowSection';
@@ -69,7 +69,7 @@ const SECTIONS: readonly { id: SettingsSectionId; label: string }[] = [
   { id: 'connections', label: 'Connections' },
   { id: 'phone', label: 'Phone' },
   { id: 'call-capacity', label: 'Call capacity' },
-  { id: 'territory', label: 'Territory clearance' },
+  { id: 'territory', label: 'Territory' },
   { id: 'email-templates', label: 'Email templates' },
   { id: 'worker', label: 'Worker connection' },
   { id: 'suppressed', label: 'Suppressed' },
@@ -487,7 +487,7 @@ export function SettingsScreen({
         </nav>
         <div className="settings__detail">
           {active === 'call-capacity' && <CallCapacitySection api={localWorkspaceApi} onSaved={notifyCallCapacitySaved} />}
-          {active === 'territory' && <TerritoryClearanceSection api={localWorkspaceApi} />}
+          {active === 'territory' && <TerritorySettings api={delegationApi} localWorkspaceApi={localWorkspaceApi} />}
           {active === 'email-templates' && <EmailTemplatesSection api={templatesApi} grants={delegationApi?.googleConnections} />}
           {active === 'connections' && <>
             <RemoteGoogleConnectionsSection api={delegationApi?.googleConnections} />
