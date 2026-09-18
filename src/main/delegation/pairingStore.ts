@@ -141,7 +141,10 @@ export class PairingStore {
     if (stored.pairingId !== value.pairingId || stored.generation !== value.expectedGeneration) throw new Error('pairing_identity_mismatch');
     const grant = await this.exchange(stored.endpoint, value.code, signal);
     if (grant.pairingId !== stored.pairingId || grant.workspaceId !== stored.workspaceId
-      || grant.generation !== stored.generation + 1 || !desktopScopes(grant)) throw new Error('pairing_identity_mismatch');
+      || grant.generation <= stored.generation || !desktopScopes(grant)) throw new Error('pairing_identity_mismatch');
+    // Any higher generation is accepted, not only g + 1: if a previous rotation committed on the worker but its reply
+    // never reached this Mac, the stored credential is already dead and the next rotation code is the only recovery.
+    // The stale-screen protection is the expectedGeneration check above, against the stored file, not the worker.
     await this.save({ ...grant, endpoint: stored.endpoint }, () => signal.throwIfAborted(), { pairingId: stored.pairingId, generation: stored.generation });
     return Object.freeze(rotatedLocalPairingSchema.parse({ state: 'rotated', workspaceId: grant.workspaceId, pairingId: grant.pairingId,
       generation: grant.generation, scopes: [...grant.scopes] }));

@@ -116,6 +116,21 @@ it('rotates the credential in place through the real worker handler: same pairin
   expect(bytes).not.toContain(after.credential); expect(bytes).not.toContain(f.before.credential);
   expect((await readdir(f.directory)).sort()).toEqual(['pairing.json']);
 });
+it('recovers when a rotation committed on the worker but its reply never reached this Mac: the next code is accepted at any higher generation', async () => {
+  const f = await pairedFixture();
+  // Generation 1 commits on the worker; the Mac never saves it (the reply was lost), so its stored credential is dead.
+  const lost = await f.auth.issueRotation({ pairingId: f.before.pairingId, scopes: [...widened], expiresInSeconds: 300 });
+  await f.auth.redeemPairing(lost.code, '198.51.100.7');
+  await expect(f.auth.authenticate(`Bearer ${f.before.credential}`, ['commands:write'])).rejects.toThrow('worker_unauthorized');
+  expect((await f.store.load())!.generation).toBe(0);
+  // The operator mints another code; the Mac still holds generation 0 and receives generation 2. That is the recovery.
+  const again = await f.auth.issueRotation({ pairingId: f.before.pairingId, scopes: [...widened], expiresInSeconds: 300 });
+  const result = await f.store.rotate({ pairingId: f.before.pairingId, expectedGeneration: 0, code: again.code }, new AbortController().signal);
+  expect(result).toMatchObject({ state: 'rotated', pairingId: f.before.pairingId, generation: 2 });
+  const after = (await f.store.load())!;
+  expect(after.generation).toBe(2);
+  expect((await f.auth.authenticate(`Bearer ${after.credential}`, ['google:grant'])).generation).toBe(2);
+});
 it('keeps every desktop row keyed by the pairing id readable after rotation on a real migrated encrypted database', async () => {
   const f = await pairedFixture();
   const db = await createPmFixture();
@@ -138,7 +153,6 @@ it('keeps every desktop row keyed by the pairing id readable after rotation on a
 });
 it.each([
   ['a different pairing id', { pairingId: '22222222-2222-4222-8222-222222222222', generation: 1 }],
-  ['a non-consecutive generation', { generation: 2 }],
   ['the same generation', { generation: 0 }],
   ['another workspace', { workspaceId: 'other-workspace', generation: 1 }],
   ['a scope set without commands:write', { generation: 1, scopes: ['events:read', 'google:grant'] }],
