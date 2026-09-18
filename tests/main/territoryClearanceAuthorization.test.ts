@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
-import { closeDatabase, openDatabase, type AppDatabase } from '../../src/main/db/database';
+import { closeDatabase, openDatabase } from '../../src/main/db/database';
 import { migrateToLatest } from '../../src/main/db/migrate';
 import { AccountRepository } from '../../src/main/domain/accounts/accountRepository';
 import { authorizeAccountRoute, createSqlAccountRoutePolicy, isAccountRoutePolicyHold, type AccountRoutePolicyEvidence } from '../../src/main/domain/accounts/accountOutreach';
@@ -9,7 +9,6 @@ import { evaluateOutboundAuthorization } from '../../src/main/domain/compliance/
 import { TerritoryClearanceRepository } from '../../src/main/domain/compliance/territoryClearanceRepository';
 import { AccountRoutePolicyStore, type RoutePolicyReceipt } from '../../src/main/delegation/accountRoutePolicyStore';
 import { DelegationRepository } from '../../src/main/delegation/delegationRepository';
-import type { AccountRoute } from '../../src/shared/contracts/accountContract';
 import type { ContactComplianceEvidence } from '../../src/main/domain/compliance/contactComplianceTypes';
 import { createTempDatabase, createTestWorkspaceKey } from '../fixtures/tempDatabase';
 
