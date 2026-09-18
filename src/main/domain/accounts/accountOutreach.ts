@@ -11,6 +11,8 @@ import { accountIdSchema, accountInstantSchema } from '../../../shared/contracts
 import { accountFingerprint } from './accountEvidence';
 import { PLAYBOOK_CHANNEL_POLICIES_V2, type ChannelPolicySnapshots } from '../cadence/cadenceScheduler';
 import { evaluateOutboundAuthorization } from '../compliance/outboundAuthorization';
+import { resolveTerritoryJurisdiction } from '../compliance/territoryJurisdiction';
+import { listTerritoryClearanceRecords } from '../compliance/territoryClearanceRepository';
 import { contactComplianceEvidenceSchema } from '../compliance/contactComplianceTypes';
 import { handoffResultSchema, type HandoffResult } from '../../../shared/contracts/outboundContract';
 import { accountCallEvidenceSchema, accountCallRangeSchema, accountCallReportSchema, accountOutboundReceiptSchema,
@@ -22,14 +24,21 @@ type PhonePolicy = Parameters<typeof evaluateOutboundAuthorization>[0];
 /** Trusted main-process read port, never renderer supplied. Must read genuine route-bound
  * compliance, suppression and execution ownership in the caller's SQL transaction.
  * Schema21 supplies immutable policy receipts. Missing evidence always denies. */
-export type AccountRoutePolicyEvidence = Pick<PhonePolicy, 'contact' | 'jurisdiction' | 'clearance'> & {
+export type AccountRoutePolicyEvidence = Pick<PhonePolicy, 'contact' | 'jurisdiction' | 'clearance' | 'federalBasis'> & {
   accountId: string; routeId: string; routeVersion: number; evidenceFingerprint: string;
   evidenceRef: string; ownerGeneration: string; ownerEnabled: boolean;
   suppression: { account: boolean; person: boolean; handle: boolean };
+  /** Present when jurisdiction and clearance came from the state clearance and the Places listing, not a per-route receipt (design D4). */
+  territory?: { state: string; clearanceRevision: number; sourceId: string };
 };
+/** A route with no receipt whose state clearance is missing or whose state cannot be read. Suppression still travels with it and is checked first. */
+export type AccountRoutePolicyHold = { held: 'state_clearance_missing' | 'jurisdiction_unknown'; state: string | null; suppression: AccountRoutePolicyEvidence['suppression'] };
+export type AccountRoutePolicyRead = AccountRoutePolicyEvidence | AccountRoutePolicyHold;
+export const isAccountRoutePolicyHold = (value: AccountRoutePolicyRead): value is AccountRoutePolicyHold => 'held' in value;
 export interface AccountRoutePolicyPort {
-  read(snapshot: AccountEvidenceSnapshot, route: AccountRoute): AccountRoutePolicyEvidence | null;
+  read(snapshot: AccountEvidenceSnapshot, route: AccountRoute): AccountRoutePolicyRead | null;
 }
+const E164_TARGET = /^\+[1-9][0-9]{7,14}$/;
 export function legacyRouteSuppression(database: AppDatabase, route: AccountRoute, at: string) {
   const raw = database.raw;
   const handle = !!raw.prepare('SELECT 1 FROM opt_out_handles WHERE kind=? AND normalized_value=? LIMIT 1').get(route.channel, route.value);
@@ -51,6 +60,16 @@ export function createSqlAccountRoutePolicy(input: { database: AppDatabase; cloc
     if (!raw.inTransaction) throw new Error('Account policy read requires the authorization transaction');
     if (!accountIdSchema.safeParse(expectedWorkspaceId).success) return null;
     const at = accountInstantSchema.parse(clock.now());
+    const owner = raw.prepare('SELECT workspace_id,owner,generation,state,updated_at FROM delegated_authorities WHERE account_id=?').get(route.accountId) as {
+      workspace_id: string; owner: string; generation: number; state: string; updated_at: string;
+    } | undefined;
+    if (!owner || owner.workspace_id !== expectedWorkspaceId || !accountIdSchema.safeParse(owner.workspace_id).success || !Number.isSafeInteger(owner.generation) || owner.generation < 0
+      || !accountInstantSchema.safeParse(owner.updated_at).success || owner.updated_at > at) return null;
+    const legacy = legacyRouteSuppression(database, route, at);
+    const suppression = { account: !!raw.prepare('SELECT 1 FROM pm_account_suppression_tombstones WHERE account_id=? LIMIT 1').get(route.accountId),
+      person: legacy.person, handle: legacy.handle || !!raw.prepare('SELECT 1 FROM pm_handle_suppression_tombstones WHERE kind=? AND normalized_value=? LIMIT 1').get(route.channel, route.value) };
+    const ownership = { ownerGeneration: accountFingerprint({ workspaceId: owner.workspace_id, owner: owner.owner, generation: owner.generation, state: owner.state }),
+      ownerEnabled: owner.owner === 'local' && owner.state === 'local' };
     // Select latest first, then validate. Never fall back past a newer expired/blocked receipt.
     const row = raw.prepare(`SELECT * FROM pm_account_route_policy_receipts
       WHERE account_id=? AND route_id=? AND route_version=? ORDER BY revision DESC LIMIT 1`)
@@ -59,7 +78,25 @@ export function createSqlAccountRoutePolicy(input: { database: AppDatabase; cloc
         revision: number; evidence_ref: string; provenance: string; observed_at: string; admitted_at: string;
         effective_at: string; expires_at: string; policy_json: string; receipt_fingerprint: string;
       } | undefined;
-    if (!row) return null;
+    if (!row) {
+      // No receipt was ever cited for this route: derive the jurisdiction from the firm's Places listing and the
+      // founder's per-state clearance (design D4). A route that has any receipt, even a lapsed one, never falls back.
+      if (route.channel !== 'phone' || route.purpose === 'unknown') return null;
+      const sources = raw.prepare("SELECT id,excerpt FROM pm_account_sources WHERE account_id=? AND id LIKE 'place-%' AND admitted_at<=? AND fetched_at<=? ORDER BY id")
+        .all(route.accountId, at, at) as { id: string; excerpt: string }[];
+      const resolution = resolveTerritoryJurisdiction({ sources, routeEvidenceIds: route.evidenceIds, clearances: listTerritoryClearanceRecords(database), now: at });
+      if (resolution.kind === 'held') return { held: resolution.reason, state: resolution.state, suppression };
+      return {
+        accountId: route.accountId, routeId: route.id, routeVersion: route.version, evidenceFingerprint: snapshot.fingerprint,
+        // The listing that named the state is the evidence; state and clearance revision fold into contextRevision.
+        evidenceRef: resolution.sourceId, ...ownership, suppression,
+        contact: { kind: 'phone', normalizedValue: route.value, validationState: E164_TARGET.test(route.value) ? 'valid' : 'unverified',
+          // Honest record: this number was never scrubbed against the federal registry. The business-to-business basis is explicit.
+          evidence: { federalStatus: 'unknown', tcpaFlag: null, coveredAreaCode: null, source: 'legacy', scrubbedAt: null, expiresAt: null } },
+        federalBasis: 'business_to_business', jurisdiction: resolution.jurisdiction, clearance: resolution.clearance,
+        territory: { state: resolution.state, clearanceRevision: resolution.clearanceRevision, sourceId: resolution.sourceId },
+      };
+    }
     const evidenceIds = (raw.prepare('SELECT source_id FROM pm_account_route_policy_evidence WHERE receipt_id=? ORDER BY source_id').all(row.id) as { source_id: string }[]).map(value => value.source_id);
     let parsed: ReturnType<typeof routePolicyReceiptSchema.safeParse>;
     try { parsed = routePolicyReceiptSchema.safeParse({ id: row.id, accountId: row.account_id, routeId: row.route_id, routeVersion: row.route_version,
@@ -75,19 +112,10 @@ export function createSqlAccountRoutePolicy(input: { database: AppDatabase; cloc
       if (!raw.prepare('SELECT 1 FROM pm_account_sources WHERE account_id=? AND id=? AND fetched_at<=? AND admitted_at<=?')
         .get(route.accountId, sourceId, receipt.observedAt, at)) return null;
     }
-    const owner = raw.prepare('SELECT workspace_id,owner,generation,state,updated_at FROM delegated_authorities WHERE account_id=?').get(route.accountId) as {
-      workspace_id: string; owner: string; generation: number; state: string; updated_at: string;
-    } | undefined;
-    if (!owner || owner.workspace_id !== expectedWorkspaceId || !accountIdSchema.safeParse(owner.workspace_id).success || !Number.isSafeInteger(owner.generation) || owner.generation < 0
-      || !accountInstantSchema.safeParse(owner.updated_at).success || owner.updated_at > at) return null;
-    const legacy = legacyRouteSuppression(database, route, at);
     return {
       accountId: route.accountId, routeId: route.id, routeVersion: route.version, evidenceFingerprint: snapshot.fingerprint,
       // Immutable receipt ID freezes the selected compliance revision/provenance in contextRevision.
-      evidenceRef: receipt.id, ownerGeneration: accountFingerprint({ workspaceId: owner.workspace_id, owner: owner.owner, generation: owner.generation, state: owner.state }),
-      ownerEnabled: owner.owner === 'local' && owner.state === 'local',
-      suppression: { account: !!raw.prepare('SELECT 1 FROM pm_account_suppression_tombstones WHERE account_id=? LIMIT 1').get(route.accountId),
-        person: legacy.person, handle: legacy.handle || !!raw.prepare('SELECT 1 FROM pm_handle_suppression_tombstones WHERE kind=? AND normalized_value=? LIMIT 1').get(route.channel, route.value) },
+      evidenceRef: receipt.id, ...ownership, suppression,
       contact: receipt.policy.contact as AccountRoutePolicyEvidence['contact'], jurisdiction: receipt.policy.jurisdiction as AccountRoutePolicyEvidence['jurisdiction'],
       clearance: receipt.policy.clearance as AccountRoutePolicyEvidence['clearance'],
     };
@@ -96,7 +124,7 @@ export function createSqlAccountRoutePolicy(input: { database: AppDatabase; cloc
 
 type RouteAuthorizationInput = {
   request: AccountOutboundRequest; route: AccountRoute | null; evidenceFingerprint: string;
-  policy: AccountRoutePolicyEvidence | null; expectedOwnerGeneration: string | null; now: string; windows: ChannelPolicySnapshots;
+  policy: AccountRoutePolicyRead | null; expectedOwnerGeneration: string | null; now: string; windows: ChannelPolicySnapshots;
 };
 export function authorizeAccountRoute(input: RouteAuthorizationInput): AccountRouteAuthorization {
   return authorizeRouteCompliance(input, policy => policy.ownerEnabled === true && !!policy.ownerGeneration?.trim() && policy.ownerGeneration === input.expectedOwnerGeneration);
@@ -113,13 +141,15 @@ function authorizeRouteCompliance(input: RouteAuthorizationInput, ownerCurrent: 
   if (route.verification === 'unverified' || route.evidenceIds.length === 0) return blocked('route_unverified');
   if (!policy) return blocked('account_policy_evidence_unavailable');
   if (policy.suppression.account !== false || policy.suppression.person !== false || policy.suppression.handle !== false) return blocked('account_or_route_opted_out');
+  // Suppression first; only then may a missing state clearance or unreadable state explain the hold.
+  if (isAccountRoutePolicyHold(policy)) return blocked(policy.held);
   if (policy.accountId !== route.accountId || policy.routeId !== route.id || policy.routeVersion !== route.version
     || policy.evidenceFingerprint !== input.evidenceFingerprint || !policy.evidenceRef?.trim()
     || policy.contact.normalizedValue !== route.value) return blocked('account_policy_evidence_stale');
   if (!ownerCurrent(policy)) return blocked('account_owner_changed');
   if (!contactComplianceEvidenceSchema.safeParse(policy.contact.evidence).success) return blocked('account_policy_evidence_invalid');
   const decision = evaluateOutboundAuthorization({ channel: 'call', now: input.now, personOrHandleOptedOut: false,
-    contact: policy.contact, jurisdiction: policy.jurisdiction, clearance: policy.clearance, windows: input.windows });
+    contact: policy.contact, jurisdiction: policy.jurisdiction, clearance: policy.clearance, windows: input.windows, ...(policy.federalBasis ? { federalBasis: policy.federalBasis } : {}) });
   if (decision.kind !== 'allowed') return blocked(decision.reasonCode);
   return { kind: 'allowed', canonicalTarget: route.value,
     contextRevision: accountFingerprint({ request, policy, windows: input.windows, now: input.now }) };
@@ -232,7 +262,7 @@ export class AccountOutreach {
   }
   ownerGeneration(request: AccountOutboundRequest): string | null {
     request = accountOutboundRequestSchema.parse(request);
-    return this.atomic(() => this.context(request, this.now()).policy?.ownerGeneration ?? null);
+    return this.atomic(() => { const policy = this.context(request, this.now()).policy; return policy && !isAccountRoutePolicyHold(policy) ? policy.ownerGeneration : null; });
   }
   private storeCommand(request: AccountOutboundRequest, receipt: AccountOutboundReceipt, version: number, at: string) {
     this.raw.prepare('INSERT INTO pm_account_commands(command_id,account_id,fingerprint,result_json,account_version,created_at) VALUES(?,?,?,?,?,?)')
