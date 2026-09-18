@@ -5,6 +5,7 @@ import { join } from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
 import { fakeDomainRuntime } from '../fixtures/fakeDomainRuntime';
+import { createBackgroundSync, type BackgroundSync } from '../../src/main/delegation/backgroundSync';
 import { DomainRuntimeBlockedError } from '../../src/main/domain/startup/domainStartupTypes';
 
 import type { AppDatabase } from '../../src/main/db/database';
@@ -889,5 +890,92 @@ describe('startApplication', () => {
       'unregister',
       'close',
     ]);
+  });
+});
+
+describe('startApplication background sync (D3)', () => {
+  const pairing = { endpoint: 'https://worker.example.test', workspaceId: 'paired-workspace', pairingId: '11111111-1111-4111-8111-111111111111',
+    credential: 'a'.repeat(43), emergencyCredential: 'b'.repeat(43), generation: 0, scopes: ['commands:write', 'events:read'] } as const;
+  type Created = Parameters<typeof createBackgroundSync>[0];
+  // A paired start composes the real delegation runtime over the database, so the harness opens the isolated PM fixture.
+  async function harness(events: string[]) {
+    const { createPmFixture } = await import('../fixtures/pmAccounts');
+    const f = await createPmFixture();
+    const database = f.db;
+    const dependencies: ApplicationStartupDependencies = {
+      loadWorkspaceKey: async () => ({ bytes: Buffer.alloc(32, 0x2a), version: 1 as const }),
+      prepareEncryptedDatabase: async (): Promise<void> => undefined,
+      createRecoveryService: () => ({ status: vi.fn(), beginSetup: vi.fn(), saveSetupMaterial: vi.fn(), completeSetup: vi.fn(), selectAndRunRestoreDrill: vi.fn(), shutdown: async () => undefined }),
+      createBackupService: () => ({ start: async () => undefined, shutdown: async () => undefined, listAvailableBackups: async () => [], createBackup: async () => { throw new Error('Unexpected backup request'); } }),
+      openDatabase: () => database,
+      migrateToLatest: async () => ({ fromVersion: 0, toVersion: 2, appliedMigrationIds: [] }),
+      createDomainRuntime: () => fakeDomainRuntime({ interruptedJobsRecovered: 0 }),
+      createHealthService: () => ({ getHealth: () => health }),
+      registerApplicationIpc: () => { events.push('ipc'); return () => events.push('unregister'); },
+      createAppleBridgeSupervisor: () => { throw new Error('Apple bridge must not be created without startup options.'); },
+      closeDatabase: () => events.push('close'),
+      createPairingStore: () => ({ load: async () => ({ ...pairing, scopes: [...pairing.scopes] }), redeem: async () => { throw Error('No pairing operation authorized'); } }),
+      registerOutreachIpc: () => () => undefined,
+      registerLinkedInIpc: () => () => undefined,
+      createEmailService: () => ({ invalidate: vi.fn(), dispose: vi.fn() } as unknown as ReturnType<typeof import('../../src/main/outreach/emailService').createEmailService>),
+    };
+    return { dependencies, close: () => f.close() };
+  }
+
+  it('creates one enabled owner for a paired workspace after IPC, syncs on focus through the runtime, tells the renderer when events applied, and stops before the runtime closes', async () => {
+    const events: string[] = [];
+    const { dependencies, close } = await harness(events);
+    let created: Created | undefined;
+    const owner = { start: vi.fn(() => events.push('sync-start')), trigger: vi.fn(async () => { throw new Error('unused'); }), status: vi.fn(() => ({ enabled: true } as ReturnType<BackgroundSync['status']>)), dispose: vi.fn(() => events.push('sync-dispose')) };
+    dependencies.createBackgroundSync = input => { created = input; events.push('sync-create'); return owner as unknown as BackgroundSync; };
+    let focus: (() => void) | undefined;
+    dependencies.subscribeWindowFocus = listener => { focus = listener; events.push('focus-subscribe'); return () => { focus = undefined; events.push('focus-unsubscribe'); }; };
+    const notified: string[] = [];
+    dependencies.notifyRenderer = channel => notified.push(channel);
+    const app = await startApplication({ appVersion: '1', userDataPath: '/fixture/background-sync', expectedWorkspaceId: pairing.workspaceId, createWindow: () => { events.push('window'); } }, dependencies);
+    try {
+      expect(created).toMatchObject({ enabled: true });
+      expect(events.indexOf('sync-create')).toBeGreaterThan(events.indexOf('ipc'));
+      expect(events.indexOf('sync-start')).toBeLessThan(events.indexOf('window'));
+      expect(events).toContain('focus-subscribe');
+      focus!();
+      expect(owner.trigger).toHaveBeenCalledWith('focus');
+      // The owner's sync is the delegation runtime's own sync (15 s timeout, cursor guards). Without a reachable worker it reports
+      // an incomplete replay (ownerFresh false, nothing applied); it never fabricates freshness.
+      await expect(created!.sync()).resolves.toMatchObject({ applied: 0, ownerFresh: false });
+      created!.onApplied?.({} as ReturnType<BackgroundSync['status']>);
+      expect(notified).toEqual(['daily:changed']);
+      expect(typeof created!.clock.now()).toBe('string');
+    } finally { await app.shutdown(); close(); }
+    expect(events.indexOf('sync-dispose')).toBeLessThan(events.indexOf('close'));
+    expect(events.indexOf('focus-unsubscribe')).toBeLessThan(events.indexOf('close'));
+    expect(owner.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the owner disabled for an unpaired workspace: no focus subscription, no timer, nothing to sync', async () => {
+    const events: string[] = [];
+    const { dependencies, close } = await harness(events);
+    dependencies.createPairingStore = () => ({ load: async () => null, redeem: async () => { throw Error('No pairing operation authorized'); } });
+    let created: Created | undefined;
+    dependencies.createBackgroundSync = input => { created = input; return createBackgroundSync(input); };
+    dependencies.subscribeWindowFocus = () => { events.push('focus-subscribe'); return () => undefined; };
+    const app = await startApplication({ appVersion: '1', userDataPath: '/fixture/background-sync-unpaired', createWindow: () => undefined }, dependencies);
+    try {
+      expect(created).toMatchObject({ enabled: false });
+      expect(events).not.toContain('focus-subscribe');
+    } finally { await app.shutdown(); close(); }
+  });
+
+  it('records the background_sync stage when the owner cannot be composed', async () => {
+    const events: string[] = [];
+    const { dependencies, close } = await harness(events);
+    dependencies.createBackgroundSync = () => { throw new Error('/Users/founder/private composition failure'); };
+    const log = vi.fn();
+    try {
+      await expect(startApplication({ appVersion: '1', userDataPath: '/fixture/background-sync-failure', logger: { log }, createWindow: () => { events.push('window'); } }, dependencies)).rejects.toThrow('composition failure');
+    } finally { close(); }
+    expect(log.mock.calls).toEqual([['error', 'STARTUP_FAILED', { component: 'startup', stage: 'background_sync', errorClass: 'Error' }]]);
+    expect(events).not.toContain('window');
+    expect(events.at(-1)).toBe('close');
   });
 });

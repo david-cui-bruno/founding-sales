@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { callSettingsUpdateReplySchema, meetingFirstAccountCallSettingsSchema, updateCallSettingsRequestSchema, type LocalWorkspaceApi, type MeetingFirstAccountCallSettings } from '../../shared/contracts/localWorkspaceContract';
+import { DEFAULT_NEW_CALL_SLOTS_COPY } from '../features/today/todayCopy';
 
 type Api = Pick<LocalWorkspaceApi, 'getCallSettings' | 'updateCallSettings'>;
 type Field = { configured: boolean; text: string };
@@ -106,7 +107,8 @@ export function CallCapacitySection({ api, onSaved }: { api?: Api; onSaved(): vo
   </fieldset>;
   return <section className="settings__section" aria-label="Call capacity">
     <h2 className="settings__section-title">Call capacity</h2>
-    <p>New call slots control discretionary calls. Total capacity flags workload conflicts and never removes due calls. These settings do not grant call permission.</p>
+    <p>New call slots are how many new firms Today lists each morning after the firms whose sequence step is due. Not configured means the {DEFAULT_NEW_CALL_SLOTS_COPY}. Total capacity flags workload conflicts and never removes due calls. These settings do not grant call permission.</p>
+    {snapshot && <p data-testid="effective-allocation">{snapshot.newCallSlots === null ? `Today lists 30 new firms a day (${DEFAULT_NEW_CALL_SLOTS_COPY}). Set a number to change it.` : `Today lists ${snapshot.newCallSlots} new firm${snapshot.newCallSlots === 1 ? '' : 's'} a day (configured).`}</p>}
     <form onSubmit={event => { event.preventDefault(); void save(); }}>
       {control('New call slots', slots, setSlots)}
       {control('Total call capacity', capacity, setCapacity)}

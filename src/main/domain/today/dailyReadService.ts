@@ -38,10 +38,11 @@ export class DailyReadService {
     const rows = (sql: string, ...args: string[]) => raw.prepare(sql).all(...args) as Row[];
     const parse = <T>(read: () => T): T | null => { try { return read(); } catch { issue('invalid_local_record'); return null; } };
     input.workflowMode = parse(() => readWorkflowMode(database)) ?? 'unknown';
-    const callSettings = parse(() => settings.readMeetingFirstAccountCallSettings());
-    if (callSettings) input.callSettings = { newCallSlots: callSettings.newCallSlots, totalCallCapacity: callSettings.totalCallCapacity };
+    // Unconfigured settings resolve to the default allocation (30 new firms a morning) and say so through `source`;
+    // that is a chosen state, not an incomplete snapshot, so no issue is raised for it.
+    const callSettings = parse(() => settings.readAccountCallAllocation());
+    if (callSettings) input.callSettings = { newCallSlots: callSettings.newCallSlots, totalCallCapacity: callSettings.totalCallCapacity, source: callSettings.source };
     if (workspaceId === null) return buildDailySnapshot(input);
-    if (input.callSettings.newCallSlots === null) issue('call_allocation_unconfigured');
     const accounts = new AccountRepository({ database, clock, ids });
     // Accounts live in this encrypted workspace DB. Explicit foreign owner bindings are excluded.
     for (const row of rows('SELECT a.id FROM pm_accounts a LEFT JOIN delegated_authorities d ON d.account_id=a.id WHERE d.workspace_id IS NULL OR d.workspace_id=? ORDER BY a.id', workspaceId)) {

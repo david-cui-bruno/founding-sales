@@ -45,6 +45,9 @@ describe('classifyStartupFailure', () => {
     for (const value of ['sqlite_notadb', 'SQLITE_', 'SQLITE_ADA LOVELACE', 42, undefined, 'catalog conflict']) expect(isStartupFailureCode(value)).toBe(false);
     expect(STARTUP_STAGES).toEqual([...FOUNDATION_STAGES, ...COMPOSITION_STAGES]);
     expect(STARTUP_STAGES.at(-1)).toBe('window');
+    // The background sync owner is composed after the IPC registrars and the Apple bridge, right before the window.
+    expect(COMPOSITION_STAGES.indexOf('background_sync')).toBe(COMPOSITION_STAGES.indexOf('window') - 1);
+    expect(COMPOSITION_STAGES.indexOf('background_sync')).toBeGreaterThan(COMPOSITION_STAGES.indexOf('apple_bridge'));
     expect(new Set(STARTUP_ERROR_CLASSES).size).toBe(STARTUP_ERROR_CLASSES.length);
   });
 });

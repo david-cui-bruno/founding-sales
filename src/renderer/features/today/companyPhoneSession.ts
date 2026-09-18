@@ -100,7 +100,8 @@ export function phoneFreshBinding(snapshot: DailySnapshot, config: PhoneConfig, 
   const routes = account.routes.filter(route => route.id === enrollment.selectedRouteId);
   const route = routes.length === 1 ? routes[0] : undefined;
   if (!route || route.version !== enrollment.selectedRouteVersion || route.personId !== null || route.channel !== 'phone'
-    || route.purpose !== 'business' || !['published', 'confirmed'].includes(route.verification) || !/^\+[1-9]\d{7,14}$/.test(route.value)) {
+    // D2 (17 Sep 2026): a phone listed in a business directory counts, the same as a published or confirmed one.
+    || route.purpose !== 'business' || !['published', 'confirmed', 'listed'].includes(route.verification) || !/^\+[1-9]\d{7,14}$/.test(route.value)) {
     throw Error('The exact selected company business phone route is unavailable.');
   }
   if (JSON.stringify(detail.snapshot) !== JSON.stringify(account) || !route.evidenceIds.length

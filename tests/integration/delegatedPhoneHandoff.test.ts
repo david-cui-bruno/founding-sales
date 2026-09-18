@@ -281,13 +281,15 @@ async function todayFixture(secondRoute = false) {
   const f = await fixture(true, true, secondRoute);
   const services = createDomainServices({ database: f.db, clock: f.clock, ids: { next: randomUUID }, expectedWorkspaceId: f.workspaceId });
   const controlRepo = new AccountRepository({ database: f.db, clock: f.clock, ids: { next: () => `zz-${randomUUID()}` }, sourcePolicy: { attest: () => true } });
-  const control = controlRepo.create({ commandId: randomUUID(), name: 'Fictional Control PM', domain: null });
+  // Sorts after 'Fictional Phone PM' by name and by id: the D2 morning order (window, evidence, name) keeps the control second.
+  const control = controlRepo.create({ commandId: randomUUID(), name: 'Fictional Zz Control PM', domain: null });
   controlRepo.admitEvidence({ commandId: randomUUID(), accountId: control.id, expectedVersion: 1,
     claims: f.snapshot.claims.map(claim => ({ ...claim, evidenceIds: ['control-source'] })), sources: [{ id: 'control-source', url: 'https://example.invalid/team', fetchedAt: now, sha256: 'd'.repeat(64), excerpt: 'Fictional regional residential operator switchboard', permitted: true }],
     routes: [{ id: 'control-route', accountId: control.id, personId: null, channel: 'phone', value: '+14015550199', purpose: 'business', evidenceIds: ['control-source'], verification: 'published' }] });
   new LegacyWorkflowTransition({ database: f.db, unitOfWork: services.unitOfWork, clock: f.clock, ids: { next: randomUUID } }).transitionWorkflow({ commandId: randomUUID(), manifestId: randomUUID(), expectedMode: 'legacy' });
   const settings = services.workspaceSettings.readMeetingFirstAccountCallSettings();
-  services.unitOfWork.immediate(() => services.workspaceSettings.updateMeetingFirstAccountCallSettingsCas({ expectedRevision: settings.revision, newCallSlots: 1, totalCallCapacity: null, updatedAt: now }));
+  // Two new-firm slots a day (D2 budget): one for the firm under test, one the control fills once that call is made and its slot is consumed.
+  services.unitOfWork.immediate(() => services.workspaceSettings.updateMeetingFirstAccountCallSettingsCas({ expectedRevision: settings.revision, newCallSlots: 2, totalCallCapacity: null, updatedAt: now }));
   const read = () => services.daily.get();
   const complete = async (outcome: 'connected' | 'no_answer' | 'voicemail' | 'busy' | 'wrong_number' | 'cancelled' | 'unknown' | 'not_called' | 'opt_out', sync = true) => {
     const handoff = f.repository.getManualHandoff((f.db.raw.prepare('SELECT handoff_id FROM delegated_manual_handoffs').get() as { handoff_id: string }).handoff_id)!;
@@ -319,6 +321,10 @@ it('Today excludes a real owner-applied delegated no_answer from new nominations
   expect(f.db.raw.prepare('SELECT * FROM pm_account_outbound_results').all()).toEqual([]);
   expect(after.accounts).toEqual(before.accounts);
   expect(after.calls.accountIds).toEqual([f.control.id]);
+  // The call consumed one of the two daily new-firm slots (D2): a one-slot day now lists nothing new, and the firm called today never returns.
+  const settings = f.services.workspaceSettings.readMeetingFirstAccountCallSettings();
+  f.services.unitOfWork.immediate(() => f.services.workspaceSettings.updateMeetingFirstAccountCallSettingsCas({ expectedRevision: settings.revision, newCallSlots: 1, totalCallCapacity: null, updatedAt: now }));
+  expect(f.read().calls.accountIds).toEqual([]);
 });
 
 it.each(['context-only', 'route-and-context'] as const)('Today retains historical actual call after %s change then stop then completion', async change => {
@@ -332,7 +338,7 @@ it.each(['context-only', 'route-and-context'] as const)('Today retains historica
   await f.apply('campaign-command', { kind: 'campaign.state', enrollmentId: 'enrollment', expectedEnrollmentVersion: enrollment().version, state: 'stopped', reason: 'Fictional campaign stop before late factual report' });
   expect(enrollment().state).toBe('stopped');
   expect(f.actualIds()).toEqual([]);
-  expect(f.read().calls.accountIds).toEqual([f.account.id]); // no due obligation masks the new nomination
+  expect(f.read().calls.accountIds).toEqual([f.account.id, f.control.id]); // no due obligation masks the new nomination
   const beforeAccounts = f.read().accounts;
   const command = await f.complete('no_answer');
   const row = f.db.raw.prepare("SELECT event_json FROM delegated_applied_events WHERE json_extract(event_json, '$.receipt.commandId')=?").get(command.commandId) as { event_json: string };
@@ -351,7 +357,7 @@ it.each(['context-only', 'route-and-context'] as const)('Today retains historica
 
 it.each(['accepted', 'unknown', 'cancelled', 'not_called', 'pending'] as const)('Today does not count %s as an actual delegated call', async mode => {
   const f = await todayFixture();
-  expect(f.nominationsOnly().accountIds).toEqual([f.account.id]);
+  expect(f.nominationsOnly().accountIds).toEqual([f.account.id, f.control.id]);
   expect(await f.makeBridge().begin(f.request)).toMatchObject({ status: 'handoff' });
   if (mode !== 'accepted') {
     if (mode === 'pending') f.offline();
@@ -359,7 +365,7 @@ it.each(['accepted', 'unknown', 'cancelled', 'not_called', 'pending'] as const)(
     if (mode === 'pending') expect(f.repository.commandStatus(command.commandId)?.status).toBe('pending');
   }
   expect(f.actualIds()).toEqual([]);
-  expect(f.nominationsOnly().accountIds).toEqual([f.account.id]);
+  expect(f.nominationsOnly().accountIds).toEqual([f.account.id, f.control.id]);
   expect(f.read().calls.accountIds).toContain(f.account.id);
 });
 
@@ -435,7 +441,7 @@ it.each([
   expect(f.actualIds()).toEqual([f.account.id]);
   f.setTime(readAt);
   expect(f.actualIds()).toEqual(counts ? [f.account.id] : []);
-  expect(f.read().calls.accountIds).toEqual(counts ? [f.control.id] : [f.account.id]);
+  expect(f.read().calls.accountIds).toEqual(counts ? [f.control.id] : [f.account.id, f.control.id]);
 });
 
 it('Today rejects contradictory actual evidence after a definitive not_called report', async () => {
@@ -445,7 +451,7 @@ it('Today rejects contradictory actual evidence after a definitive not_called re
   await f.complete('no_answer');
   expect(f.db.raw.prepare("SELECT outcome FROM campaign_step_receipts WHERE outcome LIKE 'conflict:%'").all()).toEqual([{ outcome: 'conflict:contradictory_finalized_outcome:no_answer' }]);
   expect(f.actualIds()).toEqual([]);
-  expect(f.nominationsOnly().accountIds).toEqual([f.account.id]);
+  expect(f.nominationsOnly().accountIds).toEqual([f.account.id, f.control.id]);
 });
 
 it.each(['unconsumed', 'workspace', 'action', 'target', 'context', 'generation', 'handoff-event'] as const)('Today does not count crossed or missing %s evidence', async mode => {
@@ -461,7 +467,7 @@ it.each(['unconsumed', 'workspace', 'action', 'target', 'context', 'generation',
   if (mode === 'generation') f.db.raw.prepare('UPDATE delegated_manual_handoffs SET authority_generation=9').run();
   if (mode === 'handoff-event') f.db.raw.prepare("UPDATE delegated_manual_handoffs SET event_id=(SELECT event_id FROM delegated_manual_outcomes LIMIT 1)").run();
   expect(f.actualIds()).toEqual([]);
-  expect(f.nominationsOnly().accountIds).toEqual([f.account.id]);
+  expect(f.nominationsOnly().accountIds).toEqual([f.account.id, f.control.id]);
 });
 
 it('Today limits completion evidence to selected accounts and preserves historical calls after owner revocation', async () => {

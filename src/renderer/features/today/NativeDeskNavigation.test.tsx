@@ -1,6 +1,6 @@
 import { PresentationRoot } from '../../app/PresentationRoot';
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render as testingRender, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render as testingRender, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
 import { dailyFixture, nativeDeskFixture } from './nativeDesk.fixture';
 import { renderRoute, type RouteContext } from '../../app/routeRegistry';
@@ -63,15 +63,19 @@ it('company call selection is not dispatch and offers no contact workspace to op
   fireEvent.click(
     await screen.findByRole('button', { name: 'Call · Account A' }),
   );
-  expect(screen.getByRole('heading', { level: 3, name: 'Phone route' })).toBeTruthy();
-  expect(screen.getByText('+12025550100 · business · confirmed')).toBeTruthy();
+  const card = screen.getByRole('region', { name: 'Call card' });
+  expect(within(card).getByRole('heading', { level: 3, name: 'Account A' })).toBeTruthy();
+  expect(within(card).getByText('+12025550100').closest('p')?.textContent).toBe('+12025550100 · confirmed');
   expect(screen.queryByRole('button', { name: 'Open contact workspace' })).toBeNull();
-  expect(f.calls.map((c) => c.method)).toEqual([
+  // Selecting a call with a saved phone reads the local company detail for the card (city, state, sources). It is a local read, never a command.
+  await waitFor(() => expect(f.calls.map((c) => c.method)).toEqual([
     'localWorkspace.get',
     'localWorkspace.getCommitments',
     'daily.get',
     'delegation.status',
-  ]);
+    'localWorkspace.getCompany',
+  ]));
+  expect(f.calls.find((c) => c.method === 'localWorkspace.getCompany')?.input).toEqual({ accountId: 'a' });
 });
 
 const render = (ui: Parameters<typeof testingRender>[0], options?: Parameters<typeof testingRender>[1]) => testingRender(ui, { wrapper: PresentationRoot, ...options });

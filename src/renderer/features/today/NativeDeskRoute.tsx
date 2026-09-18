@@ -1,5 +1,7 @@
 import { partitionFirstUseAnswers } from './firstUseCapabilities';
 import { CompanyPhoneCall } from './CompanyPhoneCall';
+import { CallCard } from './CallCard';
+import { TodayFooter } from './TodayFooter';
 import { openSettingsSection } from '../../foundation/settingsNavigation';
 import type { FirstUseContinuation } from './localCompanyContinuation';
 import { useOverlayLayers } from '../../app/overlayLayers';
@@ -147,6 +149,8 @@ export function NativeDeskRoute({
   useEffect(() => {
     load();
     window.addEventListener('focus', load);
+    // Dispatched by the preload when the main process reports a background sync that applied worker events (D3).
+    window.addEventListener('callie:daily-changed', load);
     window.addEventListener('callie:outcome-logged', load);
     window.addEventListener('callie:email-sent', load);
     window.addEventListener('callie:workflow-changed', load);
@@ -157,6 +161,7 @@ export function NativeDeskRoute({
       updateRequestedSessionHolds(api.delegation, () => 'Daily view closed');
       updateLinkedInSessionHolds(api.linkedin, () => 'Daily view closed');
       window.removeEventListener('focus', load);
+      window.removeEventListener('callie:daily-changed', load);
       window.removeEventListener('callie:outcome-logged', load);
       window.removeEventListener('callie:email-sent', load);
       window.removeEventListener('callie:workflow-changed', load);
@@ -917,16 +922,7 @@ export function NativeDesk({
           )}
           {account && (selected?.startsWith('call:') || selected?.startsWith('account:')) && (
             <section className="native-desk__call">
-              <h3>Phone route</h3>
-              {account.routes
-                .filter((r) => r.channel === 'phone')
-                .map((r) => (
-                  <div key={r.id}>
-                    <p>
-                      {r.value} · {r.purpose} · {r.verification}
-                    </p>
-                  </div>
-                ))}
+              <CallCard key={JSON.stringify([snapshot.workspaceId, account.account.id, account.account.version])} account={account} api={api.localWorkspace} />
               <CompanyPhoneCall key={JSON.stringify([snapshot.workspaceId, account.account.id])}
                 api={api} snapshot={snapshot} config={configuration} accountId={account.account.id}
                 readError={phoneReadError} newWorkHold={!!localHold} onRefresh={onRefresh} />
@@ -947,31 +943,7 @@ export function NativeDesk({
           )}
         </div>
       </div>
-      <footer className="native-desk__footer">
-        <span role="status">
-          {readError
-            ? 'Refresh unavailable. Your current view and edits are retained.'
-            : 'Local snapshot · remote freshness unknown'}
-        </span>
-        <details>
-          <summary>Queue capacity and operational details</summary>
-          <p>
-            New-call slots:{' '}
-            {snapshot.callSettings.newCallSlots ?? 'unconfigured'} · total call
-            capacity:{' '}
-            {snapshot.callSettings.totalCallCapacity ?? 'unconfigured'}.
-            Allocation is not completed-call progress.
-          </p>
-          {snapshot.calls.workloadConflict && (
-            <p>Workload conflict needs review.</p>
-          )}
-          {snapshot.issues.map((i) => (
-            <p key={i.code}>
-              {i.code.replaceAll('_', ' ')}: {i.count}
-            </p>
-          ))}
-        </details>
-      </footer>
+      <TodayFooter snapshot={snapshot} readError={readError} researchSetup={configuration?.state === 'active' ? api.delegation.researchSetup : undefined} />
     </section>
   );
 }

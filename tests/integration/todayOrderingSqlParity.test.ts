@@ -153,6 +153,12 @@ describe('Today discretionary suborder SQL parity', () => {
         SELECT account_id, MIN(position) AS position FROM due_accounts GROUP BY account_id
       ), unique_ranked AS (
         SELECT account_id, MIN(position) AS position FROM ranked_accounts GROUP BY account_id
+      ), consumed_new_slots AS (
+        -- D2 daily budget: each firm actually called today outside the due group spent one new-firm slot.
+        SELECT COUNT(DISTINCT c.account_id) AS n
+        FROM actual_completed_accounts c
+        LEFT JOIN unique_due d ON d.account_id = c.account_id
+        WHERE d.account_id IS NULL
       ), new_accounts AS (
         SELECT r.account_id, r.position
         FROM unique_ranked r
@@ -160,7 +166,7 @@ describe('Today discretionary suborder SQL parity', () => {
         LEFT JOIN actual_completed_accounts c ON c.account_id = r.account_id
         WHERE d.account_id IS NULL AND c.account_id IS NULL
         ORDER BY r.position
-        LIMIT 2
+        LIMIT MAX(0, 2 - (SELECT n FROM consumed_new_slots))
       ), planned AS (
         SELECT account_id, position, 0 AS band FROM unique_due
         UNION ALL

@@ -522,7 +522,8 @@ test('accounts, frozen campaigns, real meeting status and held refresh preserve 
   await page.evaluate(()=>window.nativeDeskBrowser.navigate('accounts'));
   await expect(page.getByRole('heading',{name:'Accounts',exact:true,level:1})).toBeVisible();
   await page.locator('[data-row-key="account:a"]').click();
-  await expect(page.getByText('12 managed buildings')).toBeVisible();
+  // The call card also says "Portfolio: 12 managed buildings"; the evidence block's own line is the exact text.
+  await expect(page.getByText('12 managed buildings', {exact: true})).toBeVisible();
   await page.evaluate(()=>window.nativeDeskBrowser.navigate('campaigns'));
   await page.locator('[data-row-key="campaign:version"]').click();
   await expect(page.getByText(/Lifetime channel caps/).first()).toBeVisible();
@@ -1126,6 +1127,47 @@ test('approved A scrollable lanes keep every queued row keyboard reachable witho
   await assertClean(page, state);
 });
 
+
+test('the morning call card and the footer line read saved facts only and place no call', async ({page}) => {
+  const state = await mount(page);
+  await page.evaluate(() => {
+    const f = window.nativeDeskBrowser.fixture, snapshot = f.snapshot();
+    const hash = 'a'.repeat(64), now = snapshot.freshness.generatedAt;
+    const firm = snapshot.accounts[0];
+    firm.account.name = 'Fictional Harbor PM'; firm.account.domain = 'harbor.example.invalid';
+    firm.claims = [{kind: 'fact', key: 'residential_scope', value: 'Residential and multifamily rentals', evidenceIds: ['site']}];
+    firm.routes = [{id: 'listed-phone', accountId: 'a', personId: null, channel: 'phone', value: '+14015550100', purpose: 'business', verification: 'listed', evidenceIds: ['places'], version: 1}];
+    firm.portfolio = [{count: 340, measure: 'units', scope: 'managed', evidenceIds: ['site']}];
+    snapshot.callSettings = {newCallSlots: 30, totalCallCapacity: null, source: 'default'};
+    snapshot.transport = [{pairingId: 'pairing', revision: 4, state: 'complete', startedAt: new Date(Date.now() - 150_000).toISOString(), completedAt: new Date(Date.now() - 120_000).toISOString()}];
+    f.setSnapshot(snapshot);
+    f.setCompanyDetails([{scope: 'local_database', generatedAt: now, snapshot: firm, links: [], sources: [
+      {id: 'places', url: 'https://places.googleapis.com/v1/places:searchText', fetchedAt: now, sha256: hash, permitted: true,
+        excerpt: JSON.stringify({id: 'place-1', displayName: 'Fictional Harbor PM', formattedAddress: '12 Harbor Way, Newport, RI 02840, USA', nationalPhoneNumber: '(401) 555-0100', websiteUri: 'https://harbor.example.invalid/'})},
+      {id: 'site', url: 'https://harbor.example.invalid/about', fetchedAt: now, sha256: hash, permitted: true, excerpt: 'We manage 340 residential and multifamily rental units.'},
+    ]}]);
+    window.nativeDeskBrowser.refresh();
+  });
+  // Footer: stored sync record plus the honest unknowns (no research status api in this fixture), and the default allocation named in the details.
+  const footer = page.locator('.native-desk__footer');
+  await expect(footer.getByRole('status')).toHaveText('Synced 2 min ago · worker last ran unknown · discovery spend unknown');
+  await footer.getByText('Queue capacity and operational details', {exact: true}).click();
+  await expect(footer).toContainText('New-call slots: 30 (default: 30 new firms a day)');
+  await page.getByRole('button', {name: 'Call · Fictional Harbor PM', exact: true}).click();
+  const card = page.getByRole('region', {name: 'Call card', exact: true});
+  await expect(card.getByRole('heading', {level: 3, name: 'Fictional Harbor PM', exact: true})).toBeVisible();
+  await expect(card).toContainText('+14015550100 · listed in a business directory');
+  await expect(card).toContainText('Website: https://harbor.example.invalid/');
+  await expect(card).toContainText('Location: Newport, RI');
+  await expect(card).toContainText('Portfolio: 340 managed units');
+  await expect(card).toContainText('Residential: Residential and multifamily rentals');
+  await expect(card).toContainText('Source: https://places.googleapis.com/v1/places:searchText');
+  await expect(card.locator('button, a, input, select')).toHaveCount(0);
+  await expect(page.getByTestId('last-outcome')).toHaveText('Last outcome: unknown until the saved phone history is read');
+  // Only local reads happened: the card's company detail read, never a command, sync or handoff.
+  expect((await methods(page)).filter(method => !['daily.get', 'delegation.status', 'localWorkspace.get', 'localWorkspace.getCommitments', 'localWorkspace.getCompany'].includes(method))).toEqual([]);
+  await assertClean(page, state);
+});
 
 test('local company form keeps A geometry and explicit review/create/reuse boundaries', async ({ page }, testInfo) => {
   const state = await mount(page);

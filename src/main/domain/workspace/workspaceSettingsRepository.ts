@@ -45,6 +45,18 @@ export type WorkspaceSettings = Readonly<{
   updatedAt: string;
 }>;
 
+/** D2 (17 Sep 2026): an unconfigured workspace lists this many new firms a morning. Settings can replace it with any number, including 0. */
+export const DEFAULT_NEW_CALL_SLOTS = 30;
+
+/** The allocation Today plans with: the typed number when Settings has one, otherwise the default, and which of the two it was. */
+export type AccountCallAllocation = Readonly<{
+  newCallSlots: number;
+  totalCallCapacity: number | null;
+  source: 'default' | 'configured';
+  revision: number;
+  updatedAt: string;
+}>;
+
 export class WorkspaceSettingsCorruptionError extends Error {
   constructor(message = 'The workspace settings singleton row is missing or malformed.') {
     super(message);
@@ -118,6 +130,18 @@ export class WorkspaceSettingsRepository {
       totalCallCapacity: parsed.data.totalCallCapacity,
       revision: parsed.data.revision,
       updatedAt: parsed.data.updatedAt,
+    });
+  }
+
+  /** Stored settings resolved to what Today plans with. The stored read above stays null when unconfigured so Settings shows the truth. */
+  readAccountCallAllocation(): AccountCallAllocation {
+    const stored = this.readMeetingFirstAccountCallSettings();
+    return Object.freeze({
+      newCallSlots: stored.newCallSlots ?? DEFAULT_NEW_CALL_SLOTS,
+      totalCallCapacity: stored.totalCallCapacity,
+      source: stored.newCallSlots === null ? 'default' : 'configured',
+      revision: stored.revision,
+      updatedAt: stored.updatedAt,
     });
   }
 
