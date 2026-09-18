@@ -28,11 +28,12 @@ import {ExecutionClient,SYNC_BUDGET_MS,createResearchSetupTransport,createAccoun
 import {createResearchSetupService,awaitResearchSetupOperation} from './researchSetupService';
 import type {ResearchSetupRequestStore} from './researchSetupRequestStore';
 import type {ResearchSetupApi} from '../../shared/contracts/researchSetupContract';
-import {approveReplyCommandSchema,submitApprovedReplyCommandSchema,approveRequestedFollowupCommandSchema,configureOwnerCommandSchema,ownerSourceConfigurationSchema,delegatedPhoneHandoffRequestSchema,bootstrapSelectedAccountSchema,bootstrapSelectedAccountCommandSchema,refreshSelectedAccountRecordSchema,refreshSelectedAccountRecordCommandSchema,selectedAccountFreshnessRequestSchema,selectedAccountFreshnessSchema,configureLocalDelegationSchema,localDelegationStatusSchema,territoryPolicyCommandSchema} from '../../shared/contracts/ownerCommandContract';
+import {approveReplyCommandSchema,submitApprovedReplyCommandSchema,approveRequestedFollowupCommandSchema,configureOwnerCommandSchema,ownerSourceConfigurationSchema,delegatedPhoneHandoffRequestSchema,bootstrapSelectedAccountSchema,bootstrapSelectedAccountCommandSchema,refreshSelectedAccountRecordSchema,refreshSelectedAccountRecordCommandSchema,selectedAccountFreshnessRequestSchema,selectedAccountFreshnessSchema,configureLocalDelegationSchema,localDelegationStatusSchema,territoryPolicyCommandSchema,replyTemplateCommandSchema} from '../../shared/contracts/ownerCommandContract';
 import {configureAccountIntakeSchema,accountIntakeConfigureStatusSchema,type ConfigureAccountIntake,type AccountIntakeHoldReason} from '../../shared/contracts/accountIntakeConfigureContract';
 import {googleScopes} from '../../shared/contracts/googleGrantCapabilities';
 import {publicDelegationCommandSchema,type CommandReceipt,type DelegatedPhoneHandoffResult,type DelegationCommand} from '../../shared/contracts/delegationContract';
 import {DEFAULT_TERRITORY_CALL_POLICY_DEFINITION,TERRITORY_CALL_POLICY_SUBJECT,territoryCallPolicyRequestSchema,territoryCallPolicyStatusSchema,type TerritoryCallPolicyCommandPayload} from '../../shared/contracts/territoryCallPolicyContract';
+import {REPLY_TEMPLATE_SUBJECT,replyTemplateCommandPayloadSchema} from '../../shared/contracts/replyTemplateContract';
 /** What the worker gateway (cloud/lambdas/delegated-worker/src/handler.ts) admits on POST /commands for a saved-record
  * command: the whole body up to 204096 bytes and the payload up to 200000 bytes, both counted in UTF-8. */
 export const REFRESH_COMMAND_LIMITS=Object.freeze({maxBodyBytes:204096,maxPayloadBytes:200000});
@@ -499,6 +500,17 @@ export function createDelegationRuntime(input:{databaseGate:{withDatabase<T>(fn:
    const result=await services(database,active).client.territoryPolicy(command,active);assertCurrent(active);
    return territoryCallPolicyStatusSchema.parse({workspaceId:pairing.workspaceId,policy:result.policy,definition:DEFAULT_TERRITORY_CALL_POLICY_DEFINITION,receipt:request.kind==='read'?null:result.receipt});
   });},
+  /** One standing template approval (D13). Main builds the payload from its own SQL; this method owns only the
+   * envelope. Approving is standing permission for the worker to send that template as a sequence step; it sends nothing. */
+  replyTemplate:(raw:unknown)=>run(async(database,signal)=>{
+   if(!pairing)throw Error('pairing_unconfigured');
+   const request=z.strictObject({commandId:z.uuid(),payload:replyTemplateCommandPayloadSchema}).parse(raw);
+   const active=AbortSignal.any([signal,AbortSignal.timeout(15000)]);
+   const command=replyTemplateCommandSchema.parse({commandId:request.commandId,workspaceId:pairing.workspaceId,
+    accountId:REPLY_TEMPLATE_SUBJECT,expectedAuthorityGeneration:0,expectedVersion:0,kind:'reply-template',payload:request.payload});
+   const receipt=await services(database,active).client.replyTemplate(command,active);assertCurrent(active);
+   return receipt;
+  }),
   configureResearch:(raw:unknown)=>run((database,signal)=>services(database,signal).client.configureResearch(raw,signal)),
   async dispose(){closed=true;invalidate(true);await Promise.allSettled([...flights]);},
  };
