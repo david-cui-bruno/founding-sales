@@ -969,7 +969,6 @@ export class FounderSalesDomain implements OutboundDomainPort {
           durationSeconds: activity.duration_seconds!,
           recordingAvailable: activity.recording_storage_ref !== null,
           transcriptAvailable: activity.transcript_storage_ref !== null,
-          reviewCount: 0,
         })),
       properties: properties.map((property) => ({
         id: property.id,
