@@ -3,7 +3,15 @@ import type { DailySnapshot } from '../../../shared/contracts/dailyContract';
 import { localCompanyDetailSchema, type LocalCompanyDetail, type LocalWorkspaceApi } from '../../../shared/contracts/localWorkspaceContract';
 import { phoneSetupStatusSchema, type PhoneSetupApi } from '../../../shared/contracts/phoneSetupContract';
 import { findPlacesSource } from './placesLocation';
-import { MANUAL_DIAL_NOT_WIRED, PHONE_DIAL_MODES, type PhoneDialState } from './todayCopy';
+import { PHONE_DIAL_MODES, type PhoneDialState } from './todayCopy';
+
+/**
+ * D6 acceptance 2: where a hand-dialed call gets logged. The control itself lives in the company
+ * phone review below this card, because taking the call step's one handoff needs the reviewed
+ * owner, route and evidence bindings that only that panel holds. This line points at it. Reading
+ * it places no call, and nothing on this card takes a handoff.
+ */
+export const MANUAL_DIAL_NEXT_STEP = 'Dialed it yourself? Press "Check owner and review call" below, then "I dialed this number by hand". That takes this call step\'s one handoff and opens the outcome form. It never dials.';
 
 type Account = DailySnapshot['accounts'][number];
 type DetailRead = { state: 'pending' } | { state: 'unavailable' } | { state: 'read'; detail: LocalCompanyDetail };
@@ -104,7 +112,7 @@ export function CallCard({ account, api, phoneSetup }: {
       {dial.state === 'read' && mode && <>
         <p role="status">{mode.reason === null ? mode.card
           : `Callie cannot dial from this Mac: ${mode.reason}. Dial it yourself and log the outcome below.`}</p>
-        {mode.reason !== null && <p>{MANUAL_DIAL_NOT_WIRED}</p>}
+        {mode.reason !== null && <p>{MANUAL_DIAL_NEXT_STEP}</p>}
         <p><strong data-testid="dial-number">{primary.value}</strong> · {PHONE_VERIFICATION_WORDS[primary.verification]}</p>
         <button onClick={copyNumber}>Copy number</button>
         {copied && <p role="status">Number copied. Copying is not a call.</p>}

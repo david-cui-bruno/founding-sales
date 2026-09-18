@@ -1,5 +1,6 @@
 import { expect, it } from 'vitest';
 import { delegatedPhoneHandoffRequestSchema } from '../../src/shared/contracts/ownerCommandContract';
+import { handoffResultSchema, outboundReceiptSchema } from '../../src/shared/contracts/outboundContract';
 import { requestedFollowupFixture } from '../fixtures/requestedFollowup';
 
 /**
@@ -32,4 +33,20 @@ it('refuses manual false, and every other value than the literal true', () => {
   for (const manual of [false, 'true', 1, null]) {
     expect(delegatedPhoneHandoffRequestSchema.safeParse({ ...request, manual }).success).toBe(false);
   }
+});
+
+/**
+ * D6's closed reason for a hand-dialed call. The founder dialled the number himself, so the
+ * automated channel was not used: `unavailable` with `manual_dial` is the honest shape, and the
+ * contract's own status/reason rule refuses the alternative of claiming the handoff was accepted.
+ */
+it('carries a hand-dialed call as unavailable with manual_dial, and never as an accepted handoff', () => {
+  expect(handoffResultSchema.parse({ status: 'unavailable', reasonCode: 'manual_dial' }))
+    .toEqual({ status: 'unavailable', reasonCode: 'manual_dial' });
+  expect(handoffResultSchema.safeParse({ status: 'handoff_accepted', reasonCode: 'manual_dial' }).success).toBe(false);
+  // A receipt that reaches saved evidence carries the same code, so a hand dial stays distinguishable
+  // from a helper dial everywhere it is read.
+  expect(outboundReceiptSchema.safeParse({ status: 'unavailable', reasonCode: 'manual_dial',
+    commandId: '55555555-5555-4555-8555-555555555555', channel: 'call',
+    mutation: { revision: 0, affectedPersonIds: [], affectedSalesCycleIds: [] } }).success).toBe(true);
 });

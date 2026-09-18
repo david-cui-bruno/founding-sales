@@ -1012,7 +1012,9 @@ it('a manual handoff consumes the step\'s one handoff without asking the helper 
   f.unavailable();
   // The capability gate is bypassed only for the hand-dialed attempt, and nothing is dispatched.
   const result = await f.makeBridge().begin(f.request, { manual: true });
-  expect(result).toMatchObject({ status: 'handoff', result: { status: 'unavailable', reasonCode: 'channel_unavailable' } });
+  // D6: the founder dialled it, so no automated channel was used and `manual_dial` says exactly
+  // that. It is never `handoff_accepted`: nothing accepted a handoff and no `tel:` URI was opened.
+  expect(result).toMatchObject({ status: 'handoff', result: { status: 'unavailable', reasonCode: 'manual_dial' } });
   expect(f.calls).toEqual([]);
   expect(f.repository.commandStatus(f.request.command.commandId)?.status).toBe('applied');
   // The same one-per-step rule: the consumed handoff is the evidence the outcome form needs.
@@ -1022,6 +1024,17 @@ it('a manual handoff consumes the step\'s one handoff without asking the helper 
   // No person, campaign receipt or outbound result is fabricated by a hand-dialed attempt.
   expect(f.db.raw.prepare('SELECT * FROM campaign_step_receipts').all()).toEqual([]);
   expect(f.db.raw.prepare('SELECT * FROM pm_account_outbound_results').all()).toEqual([]);
+});
+
+it('takes the hand-dialed path from the flag on the IPC request itself, with no caller option', async () => {
+  const f = await fixture();
+  f.unavailable();
+  // This is the shape `registerOutreachIpc` parses and hands down: the renderer's request carries
+  // the flag, so no wiring between the preload and this router has to know the path exists.
+  const result = await f.makeBridge().begin({ ...f.request, manual: true });
+  expect(result).toMatchObject({ status: 'handoff', result: { status: 'unavailable', reasonCode: 'manual_dial' } });
+  expect(f.calls).toEqual([]);
+  expect(f.db.raw.prepare('SELECT consumed_at FROM delegated_manual_handoffs').get()).toEqual({ consumed_at: now });
 });
 
 it('refuses to replay one command id as the other kind of handoff while it is in flight', async () => {
