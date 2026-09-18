@@ -3,6 +3,7 @@ import {
   googleAvailabilityCalendarSelectionSchema, googleCalendarSelectionSchema, googleCapabilitySchema,
   googleGrantDisclosure, googleGrantPurposeSchema, googleGrantSchema, personalGoogleGrantDisclosure,
 } from './googleGrantCapabilities';
+import { senderCapStatusSchema } from './workerPolicyContract';
 
 const legacyBegin = z.strictObject({
   purpose: z.literal('permitted_correspondence').optional(),
@@ -25,9 +26,13 @@ export const remoteGoogleGrantStatusSchema = z.strictObject({
   state: z.enum(['unconfigured', 'ready', 'revoked']),
   grant: googleGrantSchema.nullable(),
   providerRevocation: z.enum(['confirmed', 'pending']).optional(),
+  /** Today's sender-cap arithmetic for the granted mailbox. Absent when this deployment
+   * records no cap policy for it. A cap is a ceiling, never a permission to send. */
+  senderCap: senderCapStatusSchema.optional(),
 }).refine(value => (value.state !== 'ready' || value.grant !== null) &&
   (value.state !== 'unconfigured' || value.grant === null) &&
   (!value.grant || value.grant.owner === 'remote') &&
+  (!value.senderCap || value.grant !== null) &&
   (!value.providerRevocation || value.state === 'revoked'), 'invalid_remote_grant_state');
 export type RemoteGoogleGrantStatus = z.infer<typeof remoteGoogleGrantStatusSchema>;
 export const remoteGoogleGrantAuthorizationSchema = z.strictObject({ authorizationUrl: z.string().url().max(8192) });

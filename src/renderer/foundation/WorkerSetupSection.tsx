@@ -7,15 +7,23 @@ import {
   redeemLocalPairingSchema,
 } from '../../shared/contracts/ownerCommandContract';
 import { researchSetupStatusSchema, WORKER_STALE_AFTER_MS, type ResearchSetupApi } from '../../shared/contracts/researchSetupContract';
+import { remoteGoogleGrantStatusSchema } from '../../shared/contracts/remoteGoogleGrantContract';
+import type { RemoteGoogleConnectionsApi } from '../../shared/contracts/remoteGoogleConnectionsContract';
+import type { SenderCapStatus } from '../../shared/contracts/workerPolicyContract';
 
-/** The worker's last scheduled tick travels on the cloud research status; the section reads it when that namespace is present. */
-type Api = Pick<CalliePreloadApi['delegation'], 'status' | 'pair'> & { researchSetup?: Pick<ResearchSetupApi, 'status'> };
+/** The worker's last scheduled tick travels on the cloud research status and today's sender cap on the
+ * cloud grant status; the section reads each one when that namespace is present. */
+type Api = Pick<CalliePreloadApi['delegation'], 'status' | 'pair'> & { researchSetup?: Pick<ResearchSetupApi, 'status'>;
+  googleConnections?: Pick<RemoteGoogleConnectionsApi, 'status'> };
 type Status = z.infer<typeof localDelegationStatusSchema>;
 type Receipt = z.infer<typeof redeemedLocalPairingSchema>;
 type Request = z.infer<typeof redeemLocalPairingSchema>;
 type Lifetime = { api: Api; generation: number; busy: boolean; status: Status | null };
 /** `unread` before any read or when the cloud status could not be read; `null` when the worker has never recorded a tick. */
 type LastTick = { state: 'unread' } | { state: 'read'; at: string | null };
+/** `unread` before any read or when the cloud grant status could not be read; `null` when the worker
+ * records no cap policy for the granted mailbox. Never a fabricated default. */
+type SenderCap = { state: 'unread' } | { state: 'read'; cap: SenderCapStatus | null };
 type View = {
   owner: Lifetime | null;
   status: Status | null;
@@ -27,13 +35,14 @@ type View = {
   expectedWorkspaceId: string;
   code: string;
   lastTick: LastTick;
+  senderCap: SenderCap;
 };
 const labels: Record<Status['state'], string> = {
   unconfigured: 'Unconfigured', paused: 'Paused', active: 'Active', locked: 'Locked',
 };
 const emptyView = (owner: Lifetime | null): View => ({
   owner, status: null, receipt: null, busy: false, statusError: false,
-  pairError: null, endpoint: '', expectedWorkspaceId: '', code: '', lastTick: { state: 'unread' },
+  pairError: null, endpoint: '', expectedWorkspaceId: '', code: '', lastTick: { state: 'unread' }, senderCap: { state: 'unread' },
 });
 /** Whole units only; the worker ticks every five minutes so seconds carry no information. */
 export function describeAge(from: string, now: number): string {
@@ -46,6 +55,15 @@ export function describeAge(from: string, now: number): string {
   return `${days} days ago`;
 }
 
+/** One sentence over recorded arithmetic. A cap is a ceiling the worker holds sends at, never a permission. */
+export function describeSenderCap(cap: SenderCap): string {
+  if (cap.state === 'unread') return 'Sender cap: not available (the cloud grant status could not be read).';
+  if (cap.cap === null) return 'Sender cap: no cap policy recorded for this mailbox, so the worker holds every send.';
+  const { today, position } = cap.cap;
+  if (position === null) return `Sender cap today: ${today} a day, with no warm-up ramp configured.`;
+  return `Sender cap today: ${today} of ${position.maxPerDay} (day ${position.day} of ramp).`;
+}
+
 /** Local observations and explicit pairing only. Neither establishes execution authority. */
 export function WorkerSetupSection({ api }: { api?: Api }) {
   const generation = useRef(0);
@@ -54,7 +72,8 @@ export function WorkerSetupSection({ api }: { api?: Api }) {
   const current = useCallback((lifetime: Lifetime) =>
     owner.current === lifetime && generation.current === lifetime.generation, []);
 
-  const read = useCallback(async (lifetime: Lifetime) => {
+  /** `remote` is true only for the explicit Refresh click: the mount and the post-pair read stay local so opening Settings never calls the worker. */
+  const read = useCallback(async (lifetime: Lifetime, remote = false) => {
     if (!current(lifetime)) return;
     lifetime.status = null;
     setView(previous => ({ ...previous, status: null, statusError: false }));
@@ -72,19 +91,32 @@ export function WorkerSetupSection({ api }: { api?: Api }) {
       if (!current(lifetime)) return;
       setView(previous => ({ ...previous, status: null, statusError: true, code: '' }));
     }
+    if (!remote) return;
     // The last scheduled tick is a second, independent observation; its failure never disturbs the local facts above.
     const researchSetup = lifetime.api.researchSetup;
-    if (!researchSetup) return;
-    let lastTick: LastTick = { state: 'unread' };
+    if (researchSetup) {
+      let lastTick: LastTick = { state: 'unread' };
+      try {
+        const research = researchSetupStatusSchema.parse(await (async () => researchSetup.status())());
+        if (research.remote) lastTick = { state: 'read', at: research.remote.lastTickAt ?? null };
+      } catch { lastTick = { state: 'unread' }; }
+      if (!current(lifetime)) return;
+      setView(previous => ({ ...previous, lastTick }));
+    }
+    // Today's sender cap is a third independent observation of the cloud grant. Its failure
+    // never disturbs the local facts or the tick above, and it starts no consent or send.
+    const googleConnections = lifetime.api.googleConnections;
+    if (!googleConnections) return;
+    let senderCap: SenderCap = { state: 'unread' };
     try {
-      const research = researchSetupStatusSchema.parse(await (async () => researchSetup.status())());
-      if (research.remote) lastTick = { state: 'read', at: research.remote.lastTickAt ?? null };
-    } catch { lastTick = { state: 'unread' }; }
+      const grant = remoteGoogleGrantStatusSchema.parse(await (async () => googleConnections.status({ purpose: 'permitted_correspondence' }))());
+      senderCap = { state: 'read', cap: grant.senderCap ?? null };
+    } catch { senderCap = { state: 'unread' }; }
     if (!current(lifetime)) return;
-    setView(previous => ({ ...previous, lastTick }));
+    setView(previous => ({ ...previous, senderCap }));
   }, [current]);
 
-  const run = useCallback(async (lifetime: Lifetime, fields?: Request) => {
+  const run = useCallback(async (lifetime: Lifetime, fields?: Request, remote = false) => {
     if (!current(lifetime) || lifetime.busy) return;
     if (fields !== undefined && (lifetime.status === null || lifetime.status.state === 'locked')) return;
     // Own the entire operation, including the successful pair's one status read.
@@ -92,7 +124,7 @@ export function WorkerSetupSection({ api }: { api?: Api }) {
     setView(previous => ({ ...previous, busy: true }));
     try {
       if (fields === undefined) {
-        await read(lifetime);
+        await read(lifetime, remote);
         return;
       }
       let paired = false;
@@ -195,6 +227,7 @@ export function WorkerSetupSection({ api }: { api?: Api }) {
           {stale && <p role="alert">The worker has not run for more than 20 minutes. The schedule may be off or the worker may be failing; check the CloudWatch alarms before relying on the morning list.</p>}
         </>;
       })()}
+      {api?.googleConnections && visible.status && <p>{describeSenderCap(visible.senderCap)}</p>}
       {visible.receipt && (
         <div>
           <h3>Worker paired</h3>
@@ -221,7 +254,7 @@ export function WorkerSetupSection({ api }: { api?: Api }) {
           });
         }}>Pair worker</button>
         <button type="button" className="settings__action" disabled={busy} onClick={() => {
-          if (lifetime) void run(lifetime);
+          if (lifetime) void run(lifetime, undefined, true);
         }}>Refresh worker status</button>
       </div>
     </section>
