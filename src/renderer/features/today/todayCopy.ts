@@ -1,4 +1,5 @@
 import type { PhoneSetupStatus } from '../../../shared/contracts/phoneSetupContract';
+import type { ReplyTemplateHoldReason } from '../../../shared/contracts/replyTemplateContract';
 
 /** Shared Today and Settings copy for the D2 default allocation. One place, so the two screens never disagree. */
 export const DEFAULT_NEW_CALL_SLOTS_COPY = 'default: 30 new firms a day';
@@ -85,6 +86,25 @@ export function replyFirstLine(firmName: string): string {
  */
 export function sentTemplateEmailLine(templateId: string, firmName: string, sentOn: string): string {
   return `Sent ${templateId} to ${firmName} on ${sentOn}`;
+}
+/**
+ * What each of the worker's five closed template hold reasons says in David's own words. One sentence per
+ * reason and nothing else: a held step is a step that did not go out, so no line here offers to send one.
+ */
+export const HELD_TEMPLATE_EMAIL_REASON_WORDS: Readonly<Record<ReplyTemplateHoldReason, string>> = Object.freeze({
+  template_not_approved: 'template not approved',
+  mailbox_not_connected: 'mailbox not connected',
+  no_business_email: 'no business email',
+  sender_cap_reached: 'sender cap reached',
+  template_variable_missing: 'template variable missing',
+});
+/**
+ * The line Today puts on a firm whose next sequence email has not gone out. The template is the one the
+ * standing policy froze on that step when the firm was enrolled, and the reason is the one the worker's own
+ * send decision gave, so this never guesses either. Reading it changes nothing and sends nothing.
+ */
+export function heldTemplateEmailLine(templateId: string, reason: ReplyTemplateHoldReason): string {
+  return `Email step ${templateId} held: ${HELD_TEMPLATE_EMAIL_REASON_WORDS[reason]}`;
 }
 export function sequenceStateLine(state: string | null): string {
   if (state === null) return 'No sequence for this firm';

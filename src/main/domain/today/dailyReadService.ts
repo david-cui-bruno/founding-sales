@@ -15,7 +15,8 @@ import { accountReplyDraftSchema, threadProjectionSchema } from '../../../shared
 import { requestedFollowupDraftSchema, requestedApprovalStatusSchema } from '../../../shared/contracts/requestedFollowupContract';
 import { campaignVersionSchema } from '../../../shared/contracts/campaignContract';
 import { accountIdSchema } from '../../../shared/contracts/accountContract';
-import { sentTemplateEmailSchema, type SentTemplateEmail } from '../../../shared/contracts/todayContract';
+import { heldTemplateEmailSchema, sentTemplateEmailSchema, type HeldTemplateEmail, type SentTemplateEmail } from '../../../shared/contracts/todayContract';
+import { workerEventSchema } from '../../../shared/contracts/delegationContract';
 import { templateSequenceEmailTemplateId } from '../../../shared/outreach/templateSequenceEmail';
 import { buildDailySnapshot, type DailyProjectionInput } from './dailyProjection';
 import { AccountCallbackRepository } from '../callbacks/accountCallbackRepository';
@@ -196,6 +197,29 @@ export class DailyReadService {
       if (value) sentTemplateEmails.push(value);
     }
     if (sentTemplateEmails.length) input.calls = { ...input.calls, sentTemplateEmails };
+    // Email steps of the sequence that have not gone out, and the reason each has not (D13, lane 41). The worker
+    // publishes the whole held set of a firm whenever it changes, including the empty set when the last one clears,
+    // so the newest `territory.steps_held` event of a firm is the whole truth about that firm and an older one is
+    // never merged into it. Reading a held step sends nothing, clears nothing and writes nothing.
+    const heldTemplateEmails: HeldTemplateEmail[] = [];
+    const newestHeld = new Map<string, unknown>();
+    for (const row of rows(`SELECT account_id,event_json FROM delegated_applied_events WHERE workspace_id=?
+      AND json_extract(event_json,'$.kind')='territory.steps_held' ORDER BY account_id,aggregate_version`, workspaceId)) {
+      if (!scoped(row.account_id)) continue;
+      newestHeld.set(String(row.account_id), row.event_json);
+    }
+    for (const [accountId, json] of newestHeld) {
+      const steps = parse(() => {
+        const event = workerEventSchema.parse(JSON.parse(String(json)));
+        if (event.kind !== 'territory.steps_held' || event.accountId !== accountId) throw Error('held_step_identity_mismatch');
+        return event.payload.heldSteps;
+      });
+      for (const step of steps ?? []) {
+        const value = parse(() => heldTemplateEmailSchema.parse({ accountId, templateId: step.templateId, stepId: step.stepId, reason: step.reason }));
+        if (value) heldTemplateEmails.push(value);
+      }
+    }
+    if (heldTemplateEmails.length) input.calls = { ...input.calls, heldTemplateEmails };
     for (const row of rows("SELECT id,enrollment_id,account_id,revision FROM manual_linkedin_drafts WHERE workspace_id=? AND state<>'closed' ORDER BY account_id,id", workspaceId)) {
       if (!scoped(row.account_id)) continue;
       const value = parse(() => {

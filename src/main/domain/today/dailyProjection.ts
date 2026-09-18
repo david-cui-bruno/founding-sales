@@ -27,8 +27,12 @@ export function buildDailySnapshot(input: DailyProjectionInput): DailySnapshot {
   // A sent sequence email is real content and changes the revision, but only once one exists: an empty list
   // is absent from `calls` entirely, so a workspace that has never sent one keeps the exact revision it had.
   const sentTemplateEmails = (input.calls.sentTemplateEmails ?? []).filter(email => inScope(email.accountId));
+  // A held email step is real content and changes the revision on the same terms: an empty list is absent from
+  // `calls` entirely, so a workspace with nothing waiting keeps the exact revision it had.
+  const heldTemplateEmails = (input.calls.heldTemplateEmails ?? []).filter(email => inScope(email.accountId));
   const calls = { accountIds, workloadConflict: input.calls.workloadConflict,
-    ...(sentTemplateEmails.length ? { sentTemplateEmails } : {}) };
+    ...(sentTemplateEmails.length ? { sentTemplateEmails } : {}),
+    ...(heldTemplateEmails.length ? { heldTemplateEmails } : {}) };
   if (calls.workloadConflict) add('workload_conflict');
   const issues = [...issueCounts].sort(([a], [b]) => a.localeCompare(b)).map(([code, count]) => ({ code, count }));
   const content = { workspaceId: input.workspaceId, workflowMode: input.workflowMode ?? 'unknown', accounts: input.workspaceId === null ? [] : input.accounts,

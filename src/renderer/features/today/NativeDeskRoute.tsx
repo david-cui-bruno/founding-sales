@@ -2,7 +2,7 @@ import { partitionFirstUseAnswers } from './firstUseCapabilities';
 import { CompanyPhoneCall } from './CompanyPhoneCall';
 import { CallCard } from './CallCard';
 import { TodayFooter } from './TodayFooter';
-import { replyFirstLine, sentTemplateEmailLine, sequenceStateLine } from './todayCopy';
+import { heldTemplateEmailLine, replyFirstLine, sentTemplateEmailLine, sequenceStateLine } from './todayCopy';
 import { openSettingsSection } from '../../foundation/settingsNavigation';
 import type { FirstUseContinuation } from './localCompanyContinuation';
 import { useOverlayLayers } from '../../app/overlayLayers';
@@ -702,6 +702,7 @@ export function NativeDesk({
   // Sequence emails the worker's provider accepted, as the daily read projected them. The row and the
   // call card read the same list, so the two never disagree about what went out to a firm.
   const sentEmailsFor = (accountId: string) => (snapshot.calls.sentTemplateEmails ?? []).filter((email) => email.accountId === accountId);
+  const heldEmailsFor = (accountId: string) => (snapshot.calls.heldTemplateEmails ?? []).filter((email) => email.accountId === accountId);
   const sequenceState = (accountId: string): string | null =>
     snapshot.campaigns
       .flatMap((campaign) => campaign.enrollments)
@@ -811,9 +812,9 @@ export function NativeDesk({
                       <small>Call</small>
                       <span>{repliedFirms.has(id)
                         ? `${replyFirstLine(name(id))} · ${sequenceStateLine(sequenceState(id))}`
-                        : sentEmailsFor(id).length
-                          ? sentEmailsFor(id).map((email) => sentTemplateEmailLine(email.templateId, name(id), email.sentOn)).join(' · ')
-                          : 'Review company and route'}</span>
+                        : [...sentEmailsFor(id).map((email) => sentTemplateEmailLine(email.templateId, name(id), email.sentOn)),
+                          ...heldEmailsFor(id).map((email) => heldTemplateEmailLine(email.templateId, email.reason))].join(' · ')
+                          || 'Review company and route'}</span>
                     </button>
                   ))
                 )}
@@ -940,7 +941,8 @@ export function NativeDesk({
           {account && (selected?.startsWith('call:') || selected?.startsWith('account:')) && (
             <section className="native-desk__call">
               <CallCard key={JSON.stringify([snapshot.workspaceId, account.account.id, account.account.version])} account={account}
-                api={api.localWorkspace} phoneSetup={api.phoneSetup} sentEmails={sentEmailsFor(account.account.id)} />
+                api={api.localWorkspace} phoneSetup={api.phoneSetup} sentEmails={sentEmailsFor(account.account.id)}
+                heldEmails={heldEmailsFor(account.account.id)} />
               <CompanyPhoneCall key={JSON.stringify([snapshot.workspaceId, account.account.id])}
                 api={api} snapshot={snapshot} config={configuration} accountId={account.account.id}
                 readError={phoneReadError} newWorkHold={!!localHold} onRefresh={onRefresh} />
