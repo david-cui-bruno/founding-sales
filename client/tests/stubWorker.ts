@@ -9,10 +9,13 @@ import {
   diagnosticsViewSchema,
   pairRedeemRequestSchema,
   pairRedeemResponseSchema,
+  todayViewSchema,
   v1CommandReceiptSchema,
   v1CommandSchema,
   type AttemptRecord,
   type DiagnosticsDevice,
+  type TodayCard,
+  type TodayView,
   type V1Command,
 } from '../../src/shared/contracts/v1Contract';
 
@@ -39,7 +42,9 @@ export type PairedDevice = { deviceId: string; label: string; token: string; cre
 export type StubWorker = {
   url: string;
   asOf: string;
-  today: Record<string, unknown>;
+  today: TodayView;
+  /** Replace the Today answer (a contract-valid view) for the next reads. */
+  setToday(view: TodayView): void;
   requests: StubRequest[];
   commands: V1Command[];
   mintCode(label: string): string;
@@ -82,6 +87,40 @@ function attemptFixture(): AttemptRecord[] {
   return rows.map((row, index) => ({ at: instant(index * 7), ...row }));
 }
 
+/** One card of the morning list; every number stays outside the refused 555-01XX block, every name and place is fictional. */
+function card(over: Partial<TodayCard> & Pick<TodayCard, 'firmId' | 'lane' | 'reason' | 'name'>): TodayCard {
+  return {
+    phone: { number: '+14015550201', verification: 'listed' }, website: 'fictional-firm.example', city: 'Providence', state: 'RI', timeZone: 'America/New_York',
+    localTime: '09:30', openNow: true, dialAllowed: true, holdReason: null, holdCode: null,
+    offer: 'A short introductory call about how your firm handles resident maintenance requests.', lastOutcome: null, nextStep: { kind: 'first_call' }, ...over,
+  };
+}
+
+/** The built morning list the stub serves: one reply, no callbacks, one due call held outside hours, two new firms; MA and TX have firms and no posture. */
+export function todayFixture(): TodayView {
+  return todayViewSchema.parse({
+    asOf: new Date(NOW).toISOString(),
+    list: {
+      header: {
+        date: '2026-09-18', builtAt: instant(7 * 60), poolSize: 2, counts: { replies: 1, callbacks: 0, due: 1, new: 2 },
+        holds: [{ reason: 'state_not_cleared', code: 'no_posture', count: 3 }], excluded: { no_posture: 3 },
+        lastTick: { at: instant(3), status: 'completed', durationMs: 1830 },
+        postures: [{ state: 'RI', posture: 'calling', decidedAt: instant(60 * 24 * 8), decidedBy: 'David MacBook', reviewAt: ninetyDaysAfter(instant(60 * 24 * 8)), reviewOverdue: false }],
+        statesWithoutPosture: ['MA', 'TX'],
+      },
+      lanes: {
+        replies: [card({ firmId: 'account-reply-1', lane: 'replies', reason: 'reply_waiting', name: 'Replied Property Group', nextStep: { kind: 'reply' } })],
+        callbacks: [],
+        due: [card({ firmId: 'account-tx-1', lane: 'due', reason: 'step_due', name: 'Lone Star Living', phone: { number: '+15125550271', verification: 'listed' }, city: 'Austin', state: 'TX',
+          timeZone: 'America/Chicago', localTime: '06:00', openNow: false, dialAllowed: false, holdReason: 'outside_hours', holdCode: 'outside_hours',
+          lastOutcome: { outcome: 'voicemail', at: instant(60 * 24 * 3), note: null }, nextStep: { kind: 'call', stepIndex: 1, stepCount: 5, dueAt: instant(-60) } })],
+        new: [card({ firmId: 'account-ri-1', lane: 'new', reason: 'new_firm', name: 'Rhode Island Firm 1' }),
+          card({ firmId: 'account-ri-2', lane: 'new', reason: 'new_firm', name: 'Rhode Island Firm 2', phone: { number: '+14015550202', verification: 'published' } })],
+      },
+    },
+  });
+}
+
 const readJson = (request: IncomingMessage): Promise<unknown> => new Promise((resolve, reject) => {
   const chunks: Buffer[] = [];
   let total = 0;
@@ -107,7 +146,7 @@ export async function startStubWorker(): Promise<StubWorker> {
   ];
   const attempts = attemptFixture();
   const asOf = new Date(NOW).toISOString();
-  const today = { list: null, reason: 'not_built' };
+  let today: TodayView = todayFixture();
   const requests: StubRequest[] = [];
   const commands: V1Command[] = [];
   const receipts = new Map<string, unknown>();
@@ -167,7 +206,7 @@ export async function startStubWorker(): Promise<StubWorker> {
     if (url.pathname === '/v1/today' && method === 'GET') {
       const auth = authenticate(request.headers.authorization);
       if ('status' in auth) return send(response, auth.status, auth.body);
-      return send(response, 200, today);
+      return send(response, 200, todayViewSchema.parse(today));
     }
 
     if (url.pathname === '/v1/commands' && method === 'POST') {
@@ -180,6 +219,12 @@ export async function startStubWorker(): Promise<StubWorker> {
       const previous = receipts.get(command.commandId);
       if (previous !== undefined) return send(response, 200, previous);
       let receipt: unknown;
+      // The stub applies a posture without keeping it: Settings is S5, and the Today fixture carries the postures it shows.
+      if (command.kind !== 'revoke_device') {
+        receipt = { commandId: command.commandId, outcome: 'applied', reason: null };
+        receipts.set(command.commandId, receipt);
+        return send(response, 200, v1CommandReceiptSchema.parse(receipt));
+      }
       const target = otherDevices.find((device) => device.deviceId === command.deviceId);
       if (target === undefined) receipt = { commandId: command.commandId, outcome: 'refused', reason: 'device_unknown' };
       else if (target.revokedAt !== null) receipt = { commandId: command.commandId, outcome: 'refused', reason: 'device_revoked' };
@@ -200,7 +245,8 @@ export async function startStubWorker(): Promise<StubWorker> {
   return {
     url: `http://127.0.0.1:${port}`,
     asOf,
-    today,
+    get today() { return today; },
+    setToday: (view) => { today = todayViewSchema.parse(view); },
     requests,
     commands,
     mintCode: (label) => { const code = secret(); codes.set(code, label); return code; },

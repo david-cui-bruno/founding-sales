@@ -77,7 +77,7 @@ export function App() {
       </nav>
       <main className="content">
         {problem && <p role="alert" className="error">{problem}</p>}
-        {page === 'today' && <TodayPage />}
+        {page === 'today' && <TodayPage onStatusChanged={refreshStatus} />}
         {page === 'diagnostics' && <DiagnosticsPage status={status} onStatusChanged={refreshStatus} />}
         {page === 'settings' && <SettingsPage />}
       </main>

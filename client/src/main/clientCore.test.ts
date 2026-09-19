@@ -135,21 +135,32 @@ describe('get', () => {
     const { token } = await pairedCore();
     const view = diagnostics();
     fetch.mockResolvedValueOnce(json(200, view));
-    expect(await core.get({ view: '/v1/diagnostics', kind: 'command' })).toEqual({ outcome: 'ok', fetchedAt: NOW, view });
+    expect(await core.get({ view: '/v1/diagnostics', kind: 'command' })).toEqual({ outcome: 'ok', fetchedAt: NOW, view, source: 'worker' });
     const [url, init] = lastCall();
     expect(url).toBe(`${endpoint}/v1/diagnostics?kind=command`);
     expect(new Headers(init.headers).get('authorization')).toBe(`Bearer ${token}`);
     expect(existsSync(join(clientDirectory, TODAY_LAST_GOOD_FILE))).toBe(false);
   });
 
-  it('persists the last good /v1/today answer with its fetched-at stamp', async () => {
+  it('persists the last good /v1/today answer with its fetched-at stamp, and serves it as last_good when the worker does not answer', async () => {
     await pairedCore();
-    fetch.mockResolvedValueOnce(json(200, { list: null, reason: 'not_built' }));
-    expect(await core.get({ view: '/v1/today' })).toEqual({ outcome: 'ok', fetchedAt: NOW, view: { list: null, reason: 'not_built' } });
-    expect(JSON.parse(readFileSync(join(clientDirectory, TODAY_LAST_GOOD_FILE), 'utf8'))).toEqual({ fetchedAt: NOW, view: { list: null, reason: 'not_built' } });
+    const today = { asOf: NOW, list: null, reason: 'not_built_yet', postures: [], statesWithoutPosture: ['RI'] };
+    // Nothing on disk yet: a failed read is unavailable, never an invented list.
     fetch.mockResolvedValueOnce(json(503, { error: 'unavailable' }));
     expect(await core.get({ view: '/v1/today' })).toMatchObject({ outcome: 'unavailable', reason: 'unavailable', status: 503 });
+    fetch.mockResolvedValueOnce(json(200, today));
+    expect(await core.get({ view: '/v1/today' })).toEqual({ outcome: 'ok', fetchedAt: NOW, view: today, source: 'worker' });
+    expect(JSON.parse(readFileSync(join(clientDirectory, TODAY_LAST_GOOD_FILE), 'utf8'))).toEqual({ fetchedAt: NOW, view: today });
+    // The worker fails: the last good answer is served with its own stamp and the failure's sentence; the file is untouched.
+    fetch.mockResolvedValueOnce(json(503, { error: 'unavailable' }));
+    expect(await core.get({ view: '/v1/today' })).toEqual({ outcome: 'ok', fetchedAt: NOW, view: today, source: 'last_good', sentence: "The worker's store is unavailable right now." });
     expect(JSON.parse(readFileSync(join(clientDirectory, TODAY_LAST_GOOD_FILE), 'utf8')).fetchedAt).toBe(NOW);
+    // A view the contract refuses is unavailable as invalid_response and is not written over the good one.
+    fetch.mockResolvedValueOnce(json(200, { list: null, reason: 'not_built' }));
+    expect(await core.get({ view: '/v1/today' })).toMatchObject({ outcome: 'ok', source: 'last_good' });
+    // A refused token is never papered over with the old list.
+    fetch.mockResolvedValueOnce(json(401, { error: 'unauthenticated' }));
+    expect(await core.get({ view: '/v1/today' })).toMatchObject({ outcome: 'unauthenticated', cleared: false });
   });
 
   it('refuses a view that does not match the contract', async () => {
