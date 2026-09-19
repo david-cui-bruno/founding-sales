@@ -95,14 +95,19 @@ test('records a posture for RI with a fresh UUID v4 commandId and shows it refle
 test('a second posture for the same state keeps the first one under it, newest first', async () => {
   const { page } = client!;
   const row = stateRow(page, 'RI');
-  // The form stays open after a decision, so the second one is made in the form the first one left open.
+  const opener = row.getByRole('button', { name: /posture for RI$/ });
+  const form = row.getByRole('form', { name: 'Posture for RI', exact: true });
+  // The form stays open after a decision, so the second one is made in the form the first one left open. Waiting
+  // for one or the other to be on the page first is what makes that safe: a bare `count()` on the opener is a
+  // one-shot read that answers zero while the page's first Settings read is still in flight, and the helper then
+  // waits for a form nothing opened. Under load that is exactly what happened.
   const record = async (posture: 'Calling' | 'Not calling') => {
-    const opener = row.getByRole('button', { name: /posture for RI$/ });
-    if (await opener.count() > 0) await opener.click();
-    const form = row.getByRole('form', { name: 'Posture for RI', exact: true });
+    await expect(opener.or(form).first()).toBeVisible();
+    if (await opener.isVisible()) await opener.click();
+    await expect(form).toBeVisible();
     await form.getByLabel('Posture', { exact: true }).selectOption({ label: posture });
     await form.getByRole('button', { name: 'Record', exact: true }).click();
-    await expect(form.getByRole('status')).toContainText(`Recorded for RI`);
+    await expect(form.getByRole('status')).toContainText('Recorded for RI');
   };
 
   // The first decision stands alone: there is nothing behind it to show.
