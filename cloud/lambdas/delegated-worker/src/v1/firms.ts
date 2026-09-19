@@ -67,7 +67,6 @@ export type FirmCard = {
 };
 export interface FirmSource { listFirms(): Promise<FirmCard[]> }
 
-const PLACES_SOURCE_PREFIX = 'place-';
 const NOT_A_CALL = new Set(['cancelled', 'not_called']);
 /** Only the fields this adapter reads; the records' full shapes stay with their writers. */
 const enrollmentLightSchema = z.object({ id: z.string(), accountId: z.string(), campaignVersionId: z.string(), currentStepId: z.string().nullable(),

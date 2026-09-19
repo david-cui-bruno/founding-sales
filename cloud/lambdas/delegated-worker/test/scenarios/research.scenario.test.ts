@@ -295,7 +295,7 @@ describe('research.backfill_page and research.firm on the real runner', () => {
 
   it('runs both kinds through the real runner and settles their JOB# records', async () => {
     const f = v1Fixture(START);
-    const { queryHash, pageHash, jobId } = await seedQuery(f);
+    const { jobId } = await seedQuery(f);
     const places = placesFetch({ pages: [placesPage([listings[0]!])] });
     const deps = researchDeps(f, { fetch: places.fetch, pageHttp: pageHttpOf(() => '<p>Reach us at info@alpha-pm.example.</p>').pageHttp });
 
