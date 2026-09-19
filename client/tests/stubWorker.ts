@@ -255,6 +255,13 @@ export async function startStubWorker(): Promise<StubWorker> {
         receipts.set(command.commandId, receipt);
         return send(response, 200, v1CommandReceiptSchema.parse(receipt));
       }
+      // The stub models the two commands the client pages issue. Anything else the contract now carries (the S3
+      // email commands, which no client page sends yet) is refused honestly rather than answered as applied.
+      if (command.kind !== 'revoke_device') {
+        receipt = { commandId: command.commandId, outcome: 'refused', reason: 'command_not_stubbed' };
+        receipts.set(command.commandId, receipt);
+        return send(response, 200, v1CommandReceiptSchema.parse(receipt));
+      }
       const target = otherDevices.find((device) => device.deviceId === command.deviceId);
       if (target === undefined) receipt = { commandId: command.commandId, outcome: 'refused', reason: 'device_unknown' };
       else if (target.revokedAt !== null) receipt = { commandId: command.commandId, outcome: 'refused', reason: 'device_revoked' };
