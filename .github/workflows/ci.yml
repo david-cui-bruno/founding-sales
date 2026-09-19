@@ -55,3 +55,36 @@ jobs:
           npm run verify:lambdas
           npm run build:operational-tools
           npm run verify:secrets
+  client:
+    # The thin client package only: its own tsc, lint, Vitest and Playwright runs against the stub worker.
+    runs-on: macos-15
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.20.0'
+      - name: Assert supported Node and architecture
+        run: |
+          node -e "if (process.versions.node !== '24.20.0' || process.platform !== 'darwin' || process.arch !== 'arm64') process.exit(1)"
+      - name: Install the root packages without native builds (the client's Forge configuration imports the root build helpers)
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts
+      - name: Install the client package
+        run: |
+          set -euo pipefail
+          npm ci --prefix client
+      - name: Client gate
+        run: |
+          set -euo pipefail
+          cd client
+          npm run typecheck
+          npm run lint
+          npm test
+          npm run test:browser
