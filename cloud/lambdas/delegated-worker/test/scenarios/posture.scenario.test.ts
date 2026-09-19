@@ -62,7 +62,7 @@ describe('set_state_posture and the STATE# record', () => {
     const raw = f.json(await f.request('GET', '/v1/settings', { authorization: device.bearer }));
     // The whole Settings inventory (S5 added every key but the first two). A section added here without a page to
     // read it is a control David cannot reach, which is why this list is pinned rather than counted.
-    expect(Object.keys(raw as object).sort()).toEqual(['calls', 'devices', 'google', 'paused', 'phone', 'postures', 'referenceTexts', 'research', 'sending', 'templates']);
+    expect(Object.keys(raw as object).sort()).toEqual(['calls', 'devices', 'google', 'paused', 'phone', 'postureHistory', 'postures', 'referenceTexts', 'research', 'sending', 'templates']);
     const empty = settingsViewSchema.parse(raw);
     expect(empty.postures).toEqual([]);
     expect(empty.referenceTexts.revision).toBe(TERRITORY_RULES_REVISION);

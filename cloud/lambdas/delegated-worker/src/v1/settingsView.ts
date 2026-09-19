@@ -7,7 +7,7 @@ import { callPolicyView, readCallPolicy } from './callPolicy';
 import { V1Devices } from './devices';
 import { GOOGLE_GRANT_PREFIX, grantPairingIds } from './mailbox';
 import { phoneSetupView, pausedView, readPausedRecord, readPhoneSetup } from './phoneSetup';
-import { postureSummary, readPostures } from './postures';
+import { postureHistory, postureSummary, readPostures } from './postures';
 import { footerBlock, readSendingSettings, readSendUsage, readTemplates, SENDING_CEILING, sendingCapForDay, templateApprovalIssues,
   templateApproved } from './templates';
 
@@ -15,7 +15,7 @@ import { footerBlock, readSendingSettings, readSendUsage, readTemplates, SENDING
  * `GET /v1/settings` in full (FSS target design section 3; slice S5). Every control the design's
  * "Controls you use today, mapped" table keeps has a section here:
  *
- *   States      the postures per state with their review dates, and the clearance reference texts (S1b)
+ *   States      the postures per state with their review dates and every earlier decision, and the reference texts
  *   Templates   the five templates, their standing approval and the footer check (S3's records)
  *   Sending     the daily limit, the ramp, the ceiling fixed in code, the postal address and today's cap line (S3)
  *   Research    S4's `SETTINGS#research`, read-only and saying so while that slice has not landed
@@ -134,6 +134,7 @@ export async function readSettingsView(store: DynamoStore): Promise<SettingsView
   ]);
   return settingsViewSchema.parse({
     postures: postures.map(record => postureSummary(record, now)),
+    postureHistory: postures.filter(record => record.history.length > 0).map(record => ({ state: record.state, entries: postureHistory(record) })),
     referenceTexts: referenceTexts(),
     templates: templates.map(record => settingsTemplate(record, settings.postalAddress)),
     sending,

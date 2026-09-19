@@ -299,6 +299,7 @@ export async function startStubWorker(): Promise<StubWorker> {
   const asOf = new Date(NOW).toISOString();
   let today: TodayView = todayFixture();
   const postures = new Map<string, StatePostureSummary>();
+  const postureHistory = new Map<string, NonNullable<SettingsView['postureHistory']>[number]['entries']>();
   // The S5 sections the stub keeps, so a command a spec sends is visible on the next read.
   let calls: CallPolicyView = callsFixture();
   let phone: PhoneSetupView = phoneFixture();
@@ -366,6 +367,8 @@ export async function startStubWorker(): Promise<StubWorker> {
       if ('status' in auth) return send(response, auth.status, auth.body);
       return send(response, 200, settingsViewSchema.parse({
         postures: [...postures.values()].sort((a, b) => (a.state < b.state ? -1 : 1)), referenceTexts: referenceTextsFixture(),
+        postureHistory: [...postureHistory.entries()].filter(([, entries]) => entries.length > 0)
+          .map(([state, entries]) => ({ state, entries })).sort((a, b) => (a.state < b.state ? -1 : 1)),
         templates, sending,
         research: { present: false, readOnlyReason: 'research_config_absent',
           note: 'Research config is not set. This section is read-only until the research slice ships set_research_config.',
@@ -409,6 +412,11 @@ export async function startStubWorker(): Promise<StubWorker> {
       let receipt: unknown;
       // set_state_posture is kept, as the worker keeps it: the next /v1/settings read shows the decision with the worker's stamps.
       if (command.kind === 'set_state_posture') {
+        // The worker appends the prior decision to history, newest first in the view; the stub does the same.
+        const prior = postures.get(command.state);
+        if (prior) postureHistory.set(command.state, [{ posture: prior.posture, decidedAt: prior.decidedAt, decidedBy: prior.decidedBy,
+          reviewAt: prior.reviewAt, registrationStatus: 'unknown', dncStatus: 'unknown', counsel: false, referenceTextRevision: TERRITORY_RULES_REVISION },
+        ...(postureHistory.get(command.state) ?? [])]);
         postures.set(command.state, { state: command.state, posture: command.posture, decidedAt: asOf, decidedBy: auth.device.label, reviewAt: twelveMonthsAfter(asOf), reviewOverdue: false });
         receipt = { commandId: command.commandId, outcome: 'applied', reason: null };
         receipts.set(command.commandId, receipt);

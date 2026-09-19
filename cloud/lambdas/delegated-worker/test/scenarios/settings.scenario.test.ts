@@ -66,6 +66,44 @@ describe('GET /v1/settings: every kept control has a section', () => {
     expect(view.google?.reconsentAtCutover).toBe(true);
     expect(view.devices?.map(entry => entry.label)).toEqual(['David MacBook']);
     expect(view.paused).toEqual({ paused: false, reason: null, at: null, by: null, revision: 0 });
+    expect(view.postureHistory).toEqual([]);
+  });
+
+  it('shows every earlier posture for a state, newest first, without the citations David typed', async () => {
+    const f = v1Fixture(START);
+    const device = await f.pairDevice('David MacBook');
+    const decide = (posture: 'calling' | 'not_calling', counsel: boolean) => command(f, device.bearer, {
+      kind: 'set_state_posture', state: 'RI', posture,
+      registration: { status: 'exempt', citation: 'R.I. Gen. Laws SS 5-61-2(10), checked 18 Sep 2026.' },
+      dncList: { status: 'not_required', citation: 'Own suppression list under 16 C.F.R. Part 310.' },
+      referenceTextRevision: 2,
+      ...(counsel ? { counsel: { name: 'Fictional Counsel LLP', date: '2026-09-10', memoRef: 'memo-ri' } } : {}),
+    });
+
+    // One decision: the current posture, and nothing behind it yet.
+    await decide('calling', true);
+    const first = settingsViewSchema.parse(f.json(await f.request('GET', '/v1/settings', { authorization: device.bearer })));
+    expect(first.postures.map(posture => posture.posture)).toEqual(['calling']);
+    expect(first.postureHistory).toEqual([]);
+
+    // Two more: the current posture is the newest, and the two before it are under it, newest first.
+    f.advance('2026-10-01T09:00:00.000Z');
+    await decide('not_calling', false);
+    f.advance('2026-11-01T09:00:00.000Z');
+    await decide('calling', false);
+    const view = settingsViewSchema.parse(f.json(await f.request('GET', '/v1/settings', { authorization: device.bearer })));
+    expect(view.postures).toMatchObject([{ state: 'RI', posture: 'calling', decidedAt: '2026-11-01T09:00:00.000Z' }]);
+    expect(view.postureHistory).toEqual([{ state: 'RI', entries: [
+      { posture: 'not_calling', decidedAt: '2026-10-01T09:00:00.000Z', decidedBy: 'David MacBook', reviewAt: '2027-10-01T09:00:00.000Z',
+        registrationStatus: 'exempt', dncStatus: 'not_required', counsel: false, referenceTextRevision: 2 },
+      { posture: 'calling', decidedAt: START, decidedBy: 'David MacBook', reviewAt: '2027-09-18T12:00:00.000Z',
+        registrationStatus: 'exempt', dncStatus: 'not_required', counsel: true, referenceTextRevision: 2 },
+    ] }]);
+    // No citation David typed, and no counsel name, leaves the worker through this view.
+    const serialised = JSON.stringify(view.postureHistory);
+    expect(serialised).not.toContain('5-61-2');
+    expect(serialised).not.toContain('Fictional Counsel LLP');
+    expect(serialised).not.toContain('memo-ri');
   });
 
   it('shows the templates approved, the footer present and the cap line once an address and an approval exist', async () => {

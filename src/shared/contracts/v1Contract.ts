@@ -114,6 +114,16 @@ export type StatePostureRecord = z.infer<typeof statePostureRecordSchema>;
 /** The posture as the Today header and Diagnostics show it: no citations, just the decision and whether its review is overdue. */
 export const statePostureSummarySchema = z.strictObject({ state: v1StateCodeSchema, posture: statePostureSchema, decidedAt: instant, decidedBy: deviceLabel, reviewAt: instant, reviewOverdue: z.boolean() });
 export type StatePostureSummary = z.infer<typeof statePostureSummarySchema>;
+/**
+ * One earlier decision, as Settings shows it under the current posture (S5). Every posture David has ever recorded
+ * for a state is kept on the record, and Settings is where he reads them back: what he decided, when, and on which
+ * device. The citations he typed stay on the record and never travel in a view, here or anywhere else.
+ */
+export const statePostureHistoryEntrySchema = z.strictObject({ posture: statePostureSchema, decidedAt: instant, decidedBy: deviceLabel, reviewAt: instant,
+  registrationStatus: stateRegistrationSchema.shape.status, dncStatus: stateDncListSchema.shape.status,
+  /** Whether counsel was named on that decision. The name, date and memo reference stay on the record. */
+  counsel: z.boolean(), referenceTextRevision: z.number().int().positive() });
+export type StatePostureHistoryEntry = z.infer<typeof statePostureHistoryEntrySchema>;
 
 /** The user-facing hold reasons (design section 5). The exact closed code travels beside the reason. */
 export const V1_HOLD_REASONS = ['paused', 'mailbox_not_connected', 'template_not_approved', 'cap_reached', 'no_email', 'no_phone', 'outside_hours',
@@ -518,6 +528,8 @@ export const settingsViewSchema = z.strictObject({
    * Every other section (S5). All optional so a client built against the S1b shape still validates its answer,
    * and so a worker that has not shipped S5 yet is read as "not served", never as an empty setting.
    */
+  /** Every earlier decision per state, newest first. A state with only its first decision has an empty list. */
+  postureHistory: z.array(z.strictObject({ state: v1StateCodeSchema, entries: z.array(statePostureHistoryEntrySchema).max(200) })).max(60).optional(),
   templates: z.array(settingsTemplateSchema).max(20).optional(),
   sending: sendingViewSchema.optional(),
   research: researchViewSchema.optional(),

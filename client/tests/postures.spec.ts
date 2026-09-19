@@ -92,6 +92,33 @@ test('records a posture for RI with a fresh UUID v4 commandId and shows it refle
   await expect(row.getByRole('button', { name: 'Record posture for RI', exact: true })).toHaveCount(0);
 });
 
+test('a second posture for the same state keeps the first one under it, newest first', async () => {
+  const { page } = client!;
+  const row = stateRow(page, 'RI');
+  // The form stays open after a decision, so the second one is made in the form the first one left open.
+  const record = async (posture: 'Calling' | 'Not calling') => {
+    const opener = row.getByRole('button', { name: /posture for RI$/ });
+    if (await opener.count() > 0) await opener.click();
+    const form = row.getByRole('form', { name: 'Posture for RI', exact: true });
+    await form.getByLabel('Posture', { exact: true }).selectOption({ label: posture });
+    await form.getByRole('button', { name: 'Record', exact: true }).click();
+    await expect(form.getByRole('status')).toContainText(`Recorded for RI`);
+  };
+
+  // The first decision stands alone: there is nothing behind it to show.
+  await record('Calling');
+  await expect(row.locator('.state__posture')).toContainText('calling');
+  await expect(row.getByRole('list', { name: 'Earlier decisions for RI', exact: true })).toHaveCount(0);
+
+  // The second replaces it and keeps it: the current posture above, what it was before under it.
+  await record('Not calling');
+  await expect(row.locator('.state__posture')).toContainText('not calling');
+  const history = row.getByRole('list', { name: 'Earlier decisions for RI', exact: true });
+  await expect(history.locator('li')).toHaveCount(1);
+  await expect(history.locator('li').first()).toContainText('calling, decided');
+  await expect(history.locator('li').first()).toContainText('by David MacBook');
+});
+
 test('adds a state code by hand and refuses one that is not a US postal code', async () => {
   const { page } = client!;
   const add = page.getByRole('form', { name: 'Add a state', exact: true });

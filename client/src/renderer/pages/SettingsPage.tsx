@@ -246,6 +246,8 @@ export function SettingsPage({ onPausedChanged }: { onPausedChanged?: () => Prom
             {states.map((state) => {
               const posture = settings.postures.find((entry) => entry.state === state) ?? null;
               const text = settings.referenceTexts.states.find((entry) => entry.state === state) ?? null;
+              // Every earlier decision for this state, newest first. Nothing David decided is ever lost or hidden.
+              const history = settings.postureHistory?.find((entry) => entry.state === state)?.entries ?? [];
               return (
                 <li key={state} className="state" data-state={state}>
                   <h3>{state} · {US_STATE_NAMES[state]}</h3>
@@ -254,6 +256,17 @@ export function SettingsPage({ onPausedChanged }: { onPausedChanged?: () => Prom
                       <>Posture: <strong>{posture.posture === 'calling' ? 'calling' : 'not calling'}</strong>, decided <time dateTime={posture.decidedAt}>{posture.decidedAt.slice(0, 10)}</time> by {posture.decidedBy}; review due <time dateTime={posture.reviewAt}>{posture.reviewAt.slice(0, 10)}</time>{posture.reviewOverdue ? ' (overdue)' : ''}.</>
                     )}
                   </p>
+                  {history.length > 0 && (
+                    <ul className="state__history" aria-label={`Earlier decisions for ${state}`}>
+                      {history.map((entry) => (
+                        <li key={entry.decidedAt}>
+                          {entry.posture === 'calling' ? 'calling' : 'not calling'}, decided <time dateTime={entry.decidedAt}>{entry.decidedAt.slice(0, 10)}</time> by {entry.decidedBy}
+                          {' '}· registration {entry.registrationStatus.replace(/_/g, ' ')} · do-not-call {entry.dncStatus.replace(/_/g, ' ')}
+                          {entry.counsel ? ' · counsel named' : ''}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                   {text ? <ReferenceText text={text} /> : <p className="page__tick">No reference text for this state in this build; record what you checked in the citations.</p>}
                   {open === state ? (
                     <PostureForm state={state} revision={settings.referenceTexts.revision} current={posture} onRecorded={read} />
