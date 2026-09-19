@@ -4,8 +4,9 @@ import { accountInstantSchema } from '../../../../../src/shared/contracts/accoun
 import { attemptReasonSchema, laneCountsSchema, TODAY_LANES, type LaneCounts, type StatePostureRecord } from '../../../../../src/shared/contracts/v1Contract';
 import { keyPart, type DynamoStore } from '../dynamoStore';
 import { attemptCode, recordAttempt } from './attempts';
+import { pendingCallbacksByFirm } from './calls';
 import { createAccountFirmSource, type FirmCard, type FirmSource } from './firms';
-import { listSequenceRecords, type SequenceRecord } from './sequence';
+import { currentStepOf, isFirstCallOnSequence, listSequenceRecords, type SequenceRecord } from './sequence';
 import { EASTERN, endOfLocalDay, localParts } from './localClock';
 import { posturesByState, readPostures, stateClearance } from './postures';
 
@@ -16,8 +17,9 @@ import { posturesByState, readPostures, stateClearance } from './postures';
  * the day record once, absent-fenced, so two ticks can never build the same morning twice.
  *
  *   replies    firms with an unresolved reply signal in the existing thread intake records
- *   callbacks  none exist on the worker before S2: the lane is present and empty
- *   due        DUE# pointers to the end of the Eastern day whose enrollment stands on a call step and has been called before
+ *   callbacks  firms with a pending CALLBACK# due on or before today on the firm's own clock; they lead the due lane,
+ *              because the date David promised is what decides when the firm is called
+ *   due        DUE# pointers to the end of the Eastern day whose sequence stands on a call step and has been called before
  *   new        up to 30 firms: posture calling for the derived state with its review not overdue, not suppressed, state and
  *              zone known, a phone route present, never in any earlier DAY#, no call under the old keys and not mid-sequence;
  *              ordered by research recency, then evidence richness, then name
@@ -158,16 +160,33 @@ export async function unresolvedReplyFirms(store: DynamoStore): Promise<Set<stri
   return firms;
 }
 
-/** Whether a firm is past its first call: standing beyond step 0, or resting, or with a call already recorded. */
-function midSequence(firm: FirmCard): boolean {
+/**
+ * Whether a firm is past its first call, read new-first exactly as `expectedDuePointer` reads the due instant: the
+ * `SEQ#` record slice S2 owns answers when there is one, and the old enrollment pair answers otherwise. Without the
+ * new-first read a firm the outcome form advanced still looks like it stands on step 0 — the S2 path never edits the
+ * old `CAMPAIGN_ENROLLMENT#` record — so it fell out of the due lane, and out of the new lane as `already_listed`,
+ * and appeared in no lane at all from the day after its first call.
+ */
+function midSequence(firm: FirmCard, sequence: SequenceRecord | undefined): boolean {
+  // Anything said to the firm puts it past its first call: a logged outcome, a send, an old-key call, or a sequence
+  // that is no longer running. Standing on step 0 is not enough on its own, because `interested` and `gatekeeper`
+  // try the same step again on a later day.
+  if (sequence) return !isFirstCallOnSequence(sequence, firm);
   const enrollment = firm.enrollment;
   if (!enrollment) return false;
   if (enrollment.state !== 'active') return true;
   return (enrollment.currentStepIndex ?? 0) > 0;
 }
 
+/** The date on the firm's own clock, which is what a promised callback's date is measured against. Eastern for an unknown zone. */
+const localDateOf = (firm: FirmCard, now: string): string => localParts(now, firm.timeZone ?? EASTERN).date;
+
 export type DayBuildInput = { firms: readonly FirmCard[]; postures: ReadonlyMap<string, StatePostureRecord>; now: string; date: string;
-  listedBefore: ReadonlySet<string>; duePointers: readonly DuePointer[]; replyFirms: ReadonlySet<string> };
+  listedBefore: ReadonlySet<string>; duePointers: readonly DuePointer[]; replyFirms: ReadonlySet<string>;
+  /** The `SEQ#` record of each firm that has one; the due lane and the new lane both read it before the old enrollment. */
+  sequences: ReadonlyMap<string, SequenceRecord>;
+  /** The callback David promised and has not made, by firm, as `pendingCallbacksByFirm` reads it. */
+  callbacks: ReadonlyMap<string, { dueOn: string }> };
 /** Pure: the day record from what was read. Every firm left out of the new lane is counted under the first condition it failed. */
 export function buildDayRecord(input: DayBuildInput): DayRecord {
   const byFirm = new Map(input.firms.map(firm => [firm.firmId, firm]));
@@ -180,10 +199,23 @@ export function buildDayRecord(input: DayBuildInput): DayRecord {
     if (!firm || firm.suppressed) continue;
     replies.push({ firmId, reason: LANE_REASONS.replies }); placed.add(firmId);
   }
+  // The callbacks David promised, on or before today on the firm's own clock. They lead the due lane, because a
+  // promised date overrides the cadence's timing entirely. The card carries its own dial verdict, so a firm whose
+  // state clearance lapsed is shown held rather than quietly dropped: his promise is not the build's to forget.
+  const callbacks: LaneEntry[] = [];
+  for (const firmId of [...input.callbacks.keys()].sort()) {
+    const firm = byFirm.get(firmId);
+    if (!firm || placed.has(firmId) || firm.suppressed) continue;
+    if (input.callbacks.get(firmId)!.dueOn > localDateOf(firm, input.now)) continue;
+    callbacks.push({ firmId, reason: LANE_REASONS.callbacks }); placed.add(firmId);
+  }
   const due: LaneEntry[] = [];
   for (const pointer of input.duePointers) {
     const firm = byFirm.get(pointer.firmId);
-    if (!firm || placed.has(firm.firmId) || firm.suppressed || !firm.phone || firm.enrollment?.currentStepChannel !== 'call' || !midSequence(firm)) continue;
+    if (!firm || placed.has(firm.firmId) || firm.suppressed || !firm.phone) continue;
+    // Which step the firm stands on comes from the `SEQ#` record first and the carried enrollment second, the same
+    // way the pointer itself was verified; the due lane is for call steps, and an email step is the scheduler's.
+    if (currentStepOf(input.sequences.get(firm.firmId), firm)?.channel !== 'call' || !midSequence(firm, input.sequences.get(firm.firmId))) continue;
     if (!firm.state || !firm.timeZone || !stateClearance(input.postures, firm.state, input.now).cleared) continue;
     due.push({ firmId: firm.firmId, reason: LANE_REASONS.due }); placed.add(firm.firmId);
   }
@@ -198,14 +230,14 @@ export function buildDayRecord(input: DayBuildInput): DayRecord {
     if (!firm.phone) { exclude('no_phone'); continue; }
     if (input.listedBefore.has(firm.firmId)) { exclude('already_listed'); continue; }
     if (firm.calls > 0) { exclude('called_before'); continue; }
-    if (midSequence(firm)) { exclude('in_sequence'); continue; }
+    if (midSequence(firm, input.sequences.get(firm.firmId))) { exclude('in_sequence'); continue; }
     pool.push(firm);
   }
   pool.sort((a, b) => a.researchedAt < b.researchedAt ? 1 : a.researchedAt > b.researchedAt ? -1 : b.evidenceScore - a.evidenceScore
     || (a.name < b.name ? -1 : a.name > b.name ? 1 : a.firmId < b.firmId ? -1 : a.firmId > b.firmId ? 1 : 0));
   const fresh = pool.slice(0, NEW_FIRMS_PER_DAY).map(firm => ({ firmId: firm.firmId, reason: LANE_REASONS.new }));
   for (let index = NEW_FIRMS_PER_DAY; index < pool.length; index++) exclude('over_cap');
-  return dayRecordSchema.parse({ version: 1, date: input.date, timeZone: EASTERN, builtAt: input.now, lanes: { replies, callbacks: [], due, new: fresh }, poolSize: pool.length, excluded });
+  return dayRecordSchema.parse({ version: 1, date: input.date, timeZone: EASTERN, builtAt: input.now, lanes: { replies, callbacks, due, new: fresh }, poolSize: pool.length, excluded });
 }
 
 export const laneCounts = (record: DayRecord): LaneCounts => laneCountsSchema.parse({ replies: record.lanes.replies.length, callbacks: record.lanes.callbacks.length, due: record.lanes.due.length, new: record.lanes.new.length });
@@ -225,10 +257,12 @@ export async function runScheduledDayBuild(store: DynamoStore, options: { firms?
     if (parts.minuteOfDay < LIST_BUILD_START_MINUTE) return { outcome: 'not_due' };
     if (await store.get<unknown>(dayKey(parts.date))) return { outcome: 'already_built' };
     const firms = await (options.firms ?? createAccountFirmSource(store)).listFirms();
-    const [postures, listedBefore, replyFirms] = await Promise.all([readPostures(store), listedFirmIds(store), unresolvedReplyFirms(store)]);
+    const [postures, listedBefore, replyFirms, callbacks] = await Promise.all([readPostures(store), listedFirmIds(store),
+      unresolvedReplyFirms(store), pendingCallbacksByFirm(store)]);
     await backfillDuePointers(store, firms);
     const duePointers = await readDuePointers(store, firms, endOfLocalDay(now, EASTERN));
-    const record = buildDayRecord({ firms, postures: posturesByState(postures), now, date: parts.date, listedBefore, duePointers, replyFirms });
+    const sequences = await listSequenceRecords(store);
+    const record = buildDayRecord({ firms, postures: posturesByState(postures), now, date: parts.date, listedBefore, duePointers, replyFirms, sequences, callbacks });
     try { await store.transact([store.put(dayKey(parts.date), record, null)]); }
     catch (error) {
       // Another tick built this morning between our read and our write: theirs stands.
