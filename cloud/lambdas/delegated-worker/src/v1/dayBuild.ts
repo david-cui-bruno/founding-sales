@@ -262,6 +262,7 @@ export async function runScheduledDayBuild(store: DynamoStore, options: { firms?
       unresolvedReplyFirms(store), pendingCallbacksByFirm(store)]);
     await backfillDuePointers(store, firms);
     const duePointers = await readDuePointers(store, firms, endOfLocalDay(now, EASTERN));
+    // S2b: where each firm actually stands, which is the `SEQ#` record and not the old enrollment pair.
     const sequences = await listSequenceRecords(store);
     const record = buildDayRecord({ firms, postures: posturesByState(postures), now, date: parts.date, listedBefore, duePointers, replyFirms, sequences, callbacks });
     // S4: the pool counter, recounted from exactly the firms this build read, in the same transaction as the list.
