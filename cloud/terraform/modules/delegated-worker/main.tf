@@ -198,9 +198,18 @@ resource "aws_apigatewayv2_stage" "delegated_worker" {
   api_id      = aws_apigatewayv2_api.delegated_worker[0].id
   name        = "$default"
   auto_deploy = true
+  # The per-route settings below name a route key, so the routes must exist before the stage is written.
+  depends_on = [aws_apigatewayv2_route.delegated_worker]
+  # A thin client polls every 60 s, and a Today, Settings, Diagnostics walk plus one command lands in one burst.
   default_route_settings {
-    throttling_burst_limit = 5
-    throttling_rate_limit  = 2
+    throttling_burst_limit = 20
+    throttling_rate_limit  = 5
+  }
+  # A pairing code is redeemed once; the redeem route is throttled far below the default because guessing is what the limit is for.
+  route_settings {
+    route_key              = "POST /v1/pair/redeem"
+    throttling_burst_limit = 2
+    throttling_rate_limit  = 0.2
   }
   access_log_settings {
     destination_arn = aws_cloudwatch_log_group.delegated_worker_api[0].arn
