@@ -122,6 +122,29 @@ export const v1HoldReasonSchema = z.enum(V1_HOLD_REASONS);
 export type V1HoldReason = z.infer<typeof v1HoldReasonSchema>;
 
 /**
+ * The ten outcomes of one dialed call (design section 3, `log_call_outcome`; slice S2). Closed: David picks one
+ * button on the outcome form and the worker decides everything that follows from it. `opt_out` and a `neverCall`
+ * reason are the two that suppress, permanently; `wrong_number` retires the route it was dialed on.
+ */
+export const V1_CALL_OUTCOMES = ['answered_interested', 'answered_not_interested', 'gatekeeper', 'voicemail', 'no_answer', 'busy',
+  'wrong_number', 'requested_info', 'callback', 'opt_out'] as const;
+export const v1CallOutcomeSchema = z.enum(V1_CALL_OUTCOMES);
+export type V1CallOutcome = z.infer<typeof v1CallOutcomeSchema>;
+export const CALL_NOTE_MAX = 2000;
+/** What David typed about the call. Never a decision: the outcome word is what the worker acts on. */
+const callNote = z.string().max(CALL_NOTE_MAX);
+/** Why this firm is never called again. David's words, kept whole on the suppression record. */
+export const NEVER_CALL_REASON_MAX = 400;
+export const neverCallSchema = z.strictObject({ reason: z.string().trim().min(1).max(NEVER_CALL_REASON_MAX) });
+export type NeverCall = z.infer<typeof neverCallSchema>;
+/** Where a suppression came from. `call` is the outcome form, `reply` the mailbox (S3), `manual` the suppress command, `dnc_evidence` research. */
+export const v1SuppressionSourceSchema = z.enum(['call', 'reply', 'manual', 'dnc_evidence']);
+export type V1SuppressionSource = z.infer<typeof v1SuppressionSourceSchema>;
+/** A callback David promised on a call, as the card and the Firm view show it. */
+export const v1PendingCallbackSchema = z.strictObject({ dueOn: z.iso.date(), promisedAt: instant });
+export type V1PendingCallback = z.infer<typeof v1PendingCallbackSchema>;
+
+/**
  * The Today view (design section 3; slice S1): the four lanes of the day record expanded into call cards. Everything a
  * card says about now (local time, open or closed, dialAllowed and its hold) is computed by the worker at request time
  * from the firm's zone and the code floor window; the Mac never computes it. The addresses and excerpts that derived
@@ -157,6 +180,8 @@ export const todayCardSchema = z.strictObject({
   /** Today's opener: the standing territory policy's offer text. */
   offer: z.string().max(4000).nullable(),
   lastOutcome: z.strictObject({ outcome: attemptReasonSchema, at: instant, note: z.string().max(2000).nullable() }).nullable(),
+  /** The callback David promised on the last call and has not made yet (S2); the callbacks lane leads the morning on its due day. */
+  pendingCallback: v1PendingCallbackSchema.nullable().optional(),
   nextStep: todayNextStepSchema,
 });
 export type TodayCard = z.infer<typeof todayCardSchema>;
@@ -187,6 +212,91 @@ export const todayViewSchema = z.union([
 ]);
 export type TodayView = z.infer<typeof todayViewSchema>;
 
+/**
+ * The Firm view (design section 3, `GET /v1/firms`; slice S2). Everything the worker holds about one firm that
+ * David may read: its routes with the verification word and whether each is retired or suppressed, where it stands
+ * in the sequence, every call logged against it, the callbacks promised, the suppression record if there is one, a
+ * one-line evidence summary and the holds that stop a dial now. No address, excerpt, token or provider message
+ * travels: the city and the state code are the only place words, exactly as on a card.
+ */
+export const v1FirmStatusSchema = z.enum(['new', 'listed', 'in_sequence', 'resting', 'done', 'suppressed']);
+export type V1FirmStatus = z.infer<typeof v1FirmStatusSchema>;
+export const v1FirmRouteSchema = z.strictObject({
+  routeId: z.string().min(1).max(200),
+  channel: z.enum(['phone', 'email']),
+  /** The E.164 number or the lower-case address, as it would be dialed or addressed. */
+  value: z.string().min(1).max(254),
+  verification: z.enum(['published', 'confirmed', 'unverified', 'listed']),
+  /** Retired for a wrong number: never dialed again, never deleted. */
+  retired: z.boolean(),
+  suppressed: z.boolean(),
+});
+export type V1FirmRoute = z.infer<typeof v1FirmRouteSchema>;
+export const v1FirmCallSchema = z.strictObject({
+  at: instant,
+  outcome: v1CallOutcomeSchema,
+  note: z.string().max(CALL_NOTE_MAX).nullable(),
+  callbackOn: z.iso.date().nullable(),
+  neverCallReason: z.string().max(NEVER_CALL_REASON_MAX).nullable(),
+  /** The route the call was dialed on, and the worker's own dial verdict at that instant. */
+  routeId: z.string().max(200).nullable(),
+  dialAllowed: z.boolean(),
+  holdCode: attemptReasonSchema.nullable(),
+  deviceId: uuid.nullable(),
+});
+export type V1FirmCall = z.infer<typeof v1FirmCallSchema>;
+/** Where the firm stands in the standing sequence, and which record said so: the new `SEQ#` or the carried enrollment. */
+export const v1FirmSequenceSchema = z.strictObject({
+  source: z.enum(['sequence', 'enrollment']),
+  state: z.enum(['active', 'paused', 'stopped']),
+  startedAt: instant,
+  currentStepId: z.string().max(200).nullable(),
+  stepIndex: z.number().int().nonnegative().nullable(),
+  stepCount: z.number().int().nonnegative(),
+  nextDueAt: instant.nullable(),
+  restingUntil: instant.nullable(),
+  entries: z.union([z.literal(1), z.literal(2)]),
+  /** Email steps the cadence walked past; each one held, never drafted or sent here. */
+  heldStepIds: z.array(z.string().max(200)).max(40),
+  lastAdvance: attemptReasonSchema.nullable(),
+});
+export type V1FirmSequence = z.infer<typeof v1FirmSequenceSchema>;
+export const v1FirmSuppressionSchema = z.strictObject({
+  reason: z.string().max(NEVER_CALL_REASON_MAX),
+  source: v1SuppressionSourceSchema,
+  evidenceRef: z.string().max(200).nullable(),
+  recordedBy: deviceLabel,
+  at: instant,
+  /** The canonical handles suppressed with the firm: E.164 numbers and lower-case addresses. */
+  handles: z.array(z.string().min(1).max(254)).max(100),
+});
+export type V1FirmSuppression = z.infer<typeof v1FirmSuppressionSchema>;
+/** One line about the firm's evidence: how many sources, when it was last researched, whether it is a hand-entered firm. */
+export const v1FirmEvidenceSchema = z.strictObject({ sources: count, researchedAt: instant.nullable(), enteredBy: z.enum(['research', 'hand']) });
+export const v1FirmViewSchema = z.strictObject({
+  asOf: instant,
+  firmId: z.string().min(1).max(200),
+  name: z.string().min(1).max(300),
+  website: z.string().max(253).nullable(),
+  city: z.string().max(200).nullable(),
+  state: v1StateCodeSchema.nullable(),
+  timeZone: z.string().max(64).nullable(),
+  status: v1FirmStatusSchema,
+  localTime: z.string().regex(/^\d{2}:\d{2}$/).nullable(),
+  dialAllowed: z.boolean(),
+  holdReason: v1HoldReasonSchema.nullable(),
+  holdCode: attemptReasonSchema.nullable(),
+  routes: z.array(v1FirmRouteSchema).max(100),
+  sequence: v1FirmSequenceSchema.nullable(),
+  calls: z.array(v1FirmCallSchema).max(200),
+  callbacks: z.array(v1PendingCallbackSchema).max(100),
+  suppression: v1FirmSuppressionSchema.nullable(),
+  evidence: v1FirmEvidenceSchema,
+  /** Every hold that stands between this firm and a dial now, by reason and closed code. */
+  holds: z.array(todayHoldCountSchema).max(20),
+});
+export type V1FirmView = z.infer<typeof v1FirmViewSchema>;
+
 export const diagnosticsViewSchema = z.strictObject({
   asOf: instant,
   attempts: z.array(attemptRecordSchema).max(DIAGNOSTICS_ATTEMPT_LIMIT),
@@ -210,8 +320,52 @@ export const revokeDeviceCommandSchema = z.strictObject({ commandId, kind: z.lit
 /** Record David's calling posture for one state (S1). The worker stamps the instant and the device; the decision is his. */
 export const setStatePostureCommandSchema = z.strictObject({ commandId, kind: z.literal('set_state_posture'), state: v1StateCodeSchema, ...statePostureDecisionShape });
 export type SetStatePostureCommand = z.infer<typeof setStatePostureCommandSchema>;
+/**
+ * One dialed call, logged once (slice S2). `observedAt` is when David says the call happened; the worker stamps
+ * its own dial evaluation at that instant beside it, so a call logged from a held card is visible as exactly that.
+ * `callbackOn` is only read for the `callback` outcome; `neverCall` suppresses whatever the outcome was.
+ */
+export const logCallOutcomeCommandSchema = z.strictObject({
+  commandId, kind: z.literal('log_call_outcome'),
+  firmId: z.string().min(1).max(200),
+  outcome: v1CallOutcomeSchema,
+  note: callNote.optional(),
+  callbackOn: z.iso.date().optional(),
+  neverCall: neverCallSchema.optional(),
+  observedAt: instant,
+});
+export type LogCallOutcomeCommand = z.infer<typeof logCallOutcomeCommandSchema>;
+/** A firm David enters by hand (design section 3). It enters the pool like a researched one; research is never enqueued for it. */
+export const addFirmCommandSchema = z.strictObject({
+  commandId, kind: z.literal('add_firm'),
+  name: z.string().trim().min(1).max(300),
+  site: z.string().max(253).optional(),
+  phone: z.string().min(1).max(60).optional(),
+  email: z.string().min(3).max(254).optional(),
+  city: z.string().trim().min(1).max(200),
+  state: v1StateCodeSchema,
+});
+export type AddFirmCommand = z.infer<typeof addFirmCommandSchema>;
+/** One route admitted by hand on a firm that already exists. Refused on a suppressed firm. */
+export const admitRouteCommandSchema = z.strictObject({
+  commandId, kind: z.literal('admit_route'),
+  firmId: z.string().min(1).max(200),
+  phone: z.string().min(1).max(60).optional(),
+  email: z.string().min(3).max(254).optional(),
+});
+export type AdmitRouteCommand = z.infer<typeof admitRouteCommandSchema>;
+/** Suppress a firm or one handle, permanently. There is no unsuppress anywhere in this contract. */
+export const suppressCommandSchema = z.strictObject({
+  commandId, kind: z.literal('suppress'),
+  firmId: z.string().min(1).max(200).optional(),
+  handle: z.string().min(1).max(254).optional(),
+  reason: z.string().trim().min(1).max(NEVER_CALL_REASON_MAX),
+  evidenceRef: z.string().max(200).optional(),
+});
+export type SuppressCommand = z.infer<typeof suppressCommandSchema>;
 /** Every `/v1` command, discriminated on `kind`. S0 ships `revoke_device`, S1 adds `set_state_posture`; later slices add theirs here. */
-export const v1CommandSchema = z.discriminatedUnion('kind', [revokeDeviceCommandSchema, setStatePostureCommandSchema]);
+export const v1CommandSchema = z.discriminatedUnion('kind', [revokeDeviceCommandSchema, setStatePostureCommandSchema,
+  logCallOutcomeCommandSchema, addFirmCommandSchema, admitRouteCommandSchema, suppressCommandSchema]);
 export type V1Command = z.infer<typeof v1CommandSchema>;
 
 /**
@@ -219,9 +373,16 @@ export type V1Command = z.infer<typeof v1CommandSchema>;
  * device: the receipt then carries the first answer's reason, or its outcome (`applied`) when the first answer
  * had no reason. The same commandId from another device, or with another payload, is `refused` as `command_conflict`.
  */
+export const v1CommandSliceSchema = z.discriminatedUnion('kind', [
+  /** The card as it stands after the command, or null when the firm has left the list (suppressed, or never on it). */
+  z.strictObject({ kind: z.literal('card'), firmId: z.string().min(1).max(200), card: todayCardSchema.nullable() }),
+]);
+export type V1CommandSlice = z.infer<typeof v1CommandSliceSchema>;
 export const v1CommandReceiptSchema = z.strictObject({
   commandId,
   outcome: z.enum(['applied', 'duplicate', 'refused']),
   reason: attemptReasonSchema.nullable(),
+  /** The updated view slice (design section 3). Optional: `revoke_device` and `set_state_posture` return none. */
+  slice: v1CommandSliceSchema.nullable().optional(),
 });
 export type V1CommandReceipt = z.infer<typeof v1CommandReceiptSchema>;
