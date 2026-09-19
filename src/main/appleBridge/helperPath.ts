@@ -42,3 +42,15 @@ export function resolveAppleBridgeExecutable(
   }
   return normalize(executablePath);
 }
+
+/** Bundle identifier the packaged helper must carry; `verifyHelperSignature` compares it byte-for-byte. */
+export const CALLIE_APPLE_BRIDGE_IDENTIFIER = 'com.callie.foundersales.applebridge';
+
+/** What startup needs to resolve and verify the packaged phone helper for the phone route. Nothing here launches it. */
+export type PhoneHelperOptions = {
+  platform: NodeJS.Platform;
+  isPackaged: boolean;
+  resourcesPath: string;
+  expectedIdentifier: string;
+  parentExecutablePath: string;
+};

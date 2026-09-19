@@ -108,7 +108,6 @@ export function dailyFixture(
       capability: 'held',
       reason: 'requires_owner_preflight',
     })),
-    meetings: [],
     campaigns: [],
     ownerStatus: [],
     transport: [],
@@ -337,38 +336,6 @@ export function nativeDeskReviewFixture(): DailySnapshot {
       status: 'owner_applied',
     }),
   );
-  const identity = {
-    meetingId: 'meeting-a',
-    calendarId: 'calendar-fixture',
-    providerEventId: 'aaaaa',
-  };
-  snapshot.meetings = [
-    {
-      id: identity.meetingId,
-      accountId: 'a',
-      revision: 1,
-      payload: {
-        commandId: 'meeting-command',
-        observedAt: fixtureNow,
-        outcome: {
-          ...identity,
-          status: 'booked',
-          reason: null,
-          event: {
-            ...identity,
-            status: 'confirmed',
-            etag: 'fixture-etag',
-            start: '2026-09-10T15:00:00.000Z',
-            end: '2026-09-10T15:30:00.000Z',
-            attendees: [
-              { email: 'a@fixture.invalid', responseStatus: 'needsAction' },
-            ],
-            meetUrl: null,
-          },
-        },
-      },
-    },
-  ];
   snapshot.campaigns = [
     {
       version: {

@@ -79,30 +79,6 @@ describe('daily persisted local snapshot', () => {
       expect(unknown.issues).toContainEqual({ code: 'scope_unknown', count: 1 });
     } finally { f.close(); }
   });
-  it('projects only C5 event identities and never synthesizes provider times on unknown outcomes', async () => {
-    const f = await fixture(); try {
-      const repository = new DelegationRepository({ database: f.db, workspaceId: f.workspaceId, clock: f.clock });
-      repository.initializeLocalAuthority(f.account.id);
-      const commandId = randomUUID();
-      repository.queueCommand({ commandId, workspaceId: f.workspaceId, accountId: f.account.id, expectedAuthorityGeneration: 0, expectedVersion: 0, kind: 'delegate', payload: { delegationId: 'delegation', approvedAt: f.now } });
-      repository.applyWorkerEvent({ id: randomUUID(), workspaceId: f.workspaceId, accountId: f.account.id, authorityGeneration: 1, aggregateVersion: 1, kind: 'authority.changed', payload: { authority: { accountId: f.account.id, owner: 'worker', generation: 1, state: 'active' }, receipt: { commandId, status: 'applied', authorityGeneration: 1, aggregateVersion: 1, reason: null } } });
-      const identity = { meetingId: 'meeting', calendarId: 'calendar', providerEventId: 'b'.repeat(64) };
-      const payload: import('../../src/shared/contracts/meetingContract').MeetingOutcomePayload = { commandId: 'meeting-command', observedAt: f.now, outcome: { ...identity, status: 'unknown' as const, reason: 'timeout', event: null } };
-      f.db.raw.prepare('INSERT INTO persons(id,display_name,created_at,updated_at) VALUES(?,?,?,?)').run('legacy-person', 'Legacy fixture', f.now, f.now);
-      f.db.raw.prepare("INSERT INTO activities(id,person_id,kind,direction,channel,occurred_at,observed_outcome,metadata_json,created_at) VALUES('legacy-booked','legacy-person','call','outbound','phone',?,'interview_booked','{}',?)").run(f.now, f.now);
-      const booked: import('../../src/shared/contracts/meetingContract').MeetingOutcomePayload = { ...payload, outcome: { ...identity, status: 'booked' as const, reason: null as null, event: { ...identity, status: 'confirmed' as const, etag: 'etag', start: f.now, end: '2026-09-09T12:30:00.000Z', attendees: [], meetUrl: null as null } } };
-      expect(repository.applyWorkerEvent({ id: randomUUID(), workspaceId: f.workspaceId, accountId: f.account.id, authorityGeneration: 1, aggregateVersion: 2, kind: 'meeting.outcome', payload: booked })).toBe('applied');
-      expect(f.read().meetings.map(m => m.id)).toEqual(['meeting']);
-      expect(f.read().meetings[0]!.payload).toEqual(booked);
-      repository.applyWorkerEvent({ id: randomUUID(), workspaceId: f.workspaceId, accountId: f.account.id, authorityGeneration: 1, aggregateVersion: 3, kind: 'meeting.outcome', payload });
-      const snapshot = f.read();
-      expect(snapshot.meetings).toEqual([{ id: 'meeting', accountId: f.account.id, revision: 2, payload }]);
-      expect(snapshot.ownerStatus[0]).toMatchObject({ authority: { generation: 1, owner: 'worker' }, executionVersion: 3, status: 'owner_applied' });
-      f.db.raw.prepare("UPDATE delegated_meetings SET projection_json='{}'").run();
-      expect(f.read().meetings).toEqual([]);
-      expect(f.read().issues).toContainEqual({ code: 'invalid_local_record', count: 1 });
-    } finally { f.close(); }
-  });
 });
 
 it('keeps saved requested followup identity but drops an unbound approval rather than presenting it as applied', async () => {

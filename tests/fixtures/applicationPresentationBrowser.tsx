@@ -10,7 +10,6 @@ import { appHealthSchema, type AppHealth } from '../../src/shared/healthContract
 import type { DailySnapshot } from '../../src/shared/contracts/dailyContract';
 import { leadDetailRequestSchema, leadDetailSchema, type LeadDetail } from '../../src/shared/contracts/leadDetailContract';
 import { leadRowSchema } from '../../src/shared/contracts/leadsContract';
-import { appleSpikeStatusSchema } from '../../src/shared/appleSpikeContract';
 import { nativeDeskFixture, nativeDeskReviewFixture, localSnapshot, commitments, fixtureNow } from '../../src/renderer/features/today/nativeDesk.fixture';
 import '../../src/renderer/app.css';
 
@@ -124,7 +123,6 @@ const api: CalliePreloadApi = {
   } },
   shell: { revealDatabase: forbidden('shell.revealDatabase'), revealLogDirectory: forbidden('shell.revealLogDirectory') },
   recovery: { status: read<Awaited<ReturnType<CalliePreloadApi['recovery']['status']>>>('recovery.status', () => ({ setupCompletedAt: null, lastRestoreDrillAt: null, outreachReady: false, backup: { status: 'missing', createdAt: null, verifiedAt: null } })), beginSetup: forbidden('recovery.beginSetup'), saveSetupMaterial: forbidden('recovery.saveSetupMaterial'), completeSetup: forbidden('recovery.completeSetup'), selectAndRunRestoreDrill: forbidden('recovery.selectAndRunRestoreDrill') },
-  appleSpike: { getStatus: read('appleSpike.getStatus', () => appleSpikeStatusSchema.parse({ enabled: false, bridge: { state: 'disabled', reason: 'not_packaged_or_configured' } })), probeCapabilities: forbidden('appleSpike.probeCapabilities'), requestContacts: forbidden('appleSpike.requestContacts'), promptAccessibility: forbidden('appleSpike.promptAccessibility'), scanRecentNotes: forbidden('appleSpike.scanRecentNotes'), scanTestMessages: forbidden('appleSpike.scanTestMessages'), startCallObservation: forbidden('appleSpike.startCallObservation'), stopCallObservation: forbidden('appleSpike.stopCallObservation'), sendTestMessage: forbidden('appleSpike.sendTestMessage'), subscribeObservationEvidence: forbidden('appleSpike.subscribeObservationEvidence') },
 };
 
 // Observation only. Sample rendered frames during navigation, not just after a

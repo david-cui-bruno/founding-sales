@@ -1,6 +1,5 @@
 import {requestedFollowupDraftSchema,approveRequestedFollowupSchema,prepareRequestedFollowupSchema,requestedMailContextSchema} from './requestedFollowupContract';
 import {accountRecordSchema} from './accountRecordContract';
-import { saveMeetingOfferSchema } from './meetingContract';
 import { z } from 'zod';
 import { acquisitionMilestoneReportSchema } from './acquisitionReportContract';
 import { audienceQuerySchema, discoveryProviderSchema, researchCapabilitySchema, researchLimitsSchema, PLACES_MAX_COMPANIES } from '../../main/research/companyResearchTypes';
@@ -50,7 +49,7 @@ export const ownerReplyBindingSchema = z.discriminatedUnion('kind', [
 export const approveReplyCommandSchema = z.strictObject({ ...ownerCommandBase, kind: z.literal('approve-reply'), payload: z.strictObject({
   draft: accountReplyDraftSchema, expectedRemoteDraftRevision: revision.min(1), approvalId: id, actionId: id, intentCommandId: z.uuid(),
   permission: z.strictObject({ id, sourceMessageId: id, sourceMessageHash: hash, basis: z.enum(['requested_followup', 'ongoing_correspondence']), expiresAt: instant }),
-  binding: ownerReplyBindingSchema, expiresAt: instant, schedulingOffer: saveMeetingOfferSchema.optional(),
+  binding: ownerReplyBindingSchema, expiresAt: instant,
 }) });
 /** Canonical owner command members. DelegationCommand imports these exact schemas
  * during its serialized integration turn. No arbitrary execute payload exists. */

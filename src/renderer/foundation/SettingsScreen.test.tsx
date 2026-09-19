@@ -520,11 +520,6 @@ function task8RouteFixture(phoneSetup = task8Phone()) {
     },
     shell: { revealDatabase: deny('shell.revealDatabase'), revealLogDirectory: deny('shell.revealLogDirectory') },
     recovery: { status: deny('recovery.status'), beginSetup: deny('recovery.beginSetup'), saveSetupMaterial: deny('recovery.saveSetupMaterial'), completeSetup: deny('recovery.completeSetup'), selectAndRunRestoreDrill: deny('recovery.selectAndRunRestoreDrill') },
-    appleSpike: {
-      getStatus: deny('appleSpike.getStatus'), probeCapabilities: deny('appleSpike.probeCapabilities'), requestContacts: deny('appleSpike.requestContacts'),
-      promptAccessibility: deny('appleSpike.promptAccessibility'), scanRecentNotes: deny('appleSpike.scanRecentNotes'), scanTestMessages: deny('appleSpike.scanTestMessages'),
-      startCallObservation: deny('appleSpike.startCallObservation'), stopCallObservation: deny('appleSpike.stopCallObservation'), sendTestMessage: deny('appleSpike.sendTestMessage'), subscribeObservationEvidence: deny('appleSpike.subscribeObservationEvidence'),
-    },
   };
   const context: RouteContext = {
     api, firstUse: firstUseFixture(), health: { status: 'ready', health, retry: vi.fn() }, theme, density,
@@ -566,7 +561,6 @@ describe('Task8 real Settings destination integration', () => {
     await waitFor(() => expect(location.hash).toBe('#/settings'));
     await screen.findByText('candidate_A'); await task8Controls();
     expect(sessionStorage.getItem(task8Key)).toBeNull();
-    expect(screen.queryByText(/Apple spike/i)).toBeNull();
     expect(screen.queryByLabelText(/API key/i)).toBeNull();
     expect(f.api.phoneSetup.status).toHaveBeenCalledTimes(1);
     f.assertReadOnly();
@@ -647,11 +641,10 @@ describe('Task8 real Settings destination integration', () => {
     act(() => openSettingsSection('phone')); await screen.findByText('candidate_A'); await task8Controls(); set.mockRestore();
   }), 10_000);
 
-  it('missing optional Settings phone API renders unavailable rather than AppleSpike fallback', async () => task8Isolated(async () => {
+  it('missing optional Settings phone API renders unavailable', async () => task8Isolated(async () => {
     task8Settings(); fireEvent.click(screen.getByRole('button', { name: 'Phone' }));
     await screen.findByText('Unavailable', { exact: true }); task8Active('Phone');
     expect(screen.queryByText('Unconfigured', { exact: true })).toBeNull();
-    expect(screen.queryByText(/Apple spike/i)).toBeNull();
   }), 10_000);
 
   it.each(['Confirm', 'Clear'] as const)('real route unmount during %s settles while absent, then observes afresh', async action => task8Isolated(async () => {
@@ -810,7 +803,7 @@ async function task9Settle<T>(pending: ReturnType<typeof task9Deferred<T>>) {
 // Task9-sensitive capability its own named guard. Pair never enters native.calls.
 function task9RouteFixture(worker = task9Api()) {
   const base = task8RouteFixture();
-  base.native.setSnapshot(dailyFixture({ workspaceId: null, accounts: [], calls: { accountIds: [], workloadConflict: false }, answers: [], meetings: [], campaigns: [], ownerStatus: [], transport: [] }));
+  base.native.setSnapshot(dailyFixture({ workspaceId: null, accounts: [], calls: { accountIds: [], workloadConflict: false }, answers: [], campaigns: [], ownerStatus: [], transport: [] }));
   const forbidden: string[] = [];
   const deny = (name: string) => vi.fn((..._args: unknown[]): never => { void _args; forbidden.push(name); throw Error(`Unexpected Task9 capability: ${name}`); });
   const api: CalliePreloadApi = {

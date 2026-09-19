@@ -22,7 +22,7 @@ const retainedTemplate = commitments.items[0].item;
 const retainedChannels = ['email', 'call', 'onboarding', 'text', 'review', 'email'] as const;
 const sixKindCommitments: LocalCommitmentsSnapshot = { scope: 'local_database', generatedAt: local.generatedAt, revision: 1, reviewErrorCount: 0, items: retainedKinds.map(([kind], index) => ({ kind, item: { ...retainedTemplate, id: `cycle-retained-${index}`, salesCycleId: `cycle-retained-${index}`, personId: `person-retained-${index}`, personName: `Retained Person ${index + 1}`, contextLabel: `Stored Company ${index + 1}`, reason: `Retained reason ${index + 1}`, action: { ...retainedTemplate.action, id: `action-retained-${index}`, label: `Retained action ${index + 1}`, channel: retainedChannels[index] } } })) };
 function fixture(scoped = false) {
-  const f = nativeDeskFixture(scoped ? dailyFixture() : dailyFixture({ workspaceId: null, accounts: [], answers: [], calls: { accountIds: [], workloadConflict: false }, ownerStatus: [], transport: [], meetings: [], campaigns: [], issues: [{ code: 'scope_unknown', count: 1 }] }));
+  const f = nativeDeskFixture(scoped ? dailyFixture() : dailyFixture({ workspaceId: null, accounts: [], answers: [], calls: { accountIds: [], workloadConflict: false }, ownerStatus: [], transport: [], campaigns: [], issues: [{ code: 'scope_unknown', count: 1 }] }));
   const api = { ...f.api, localWorkspace: { ...f.api.localWorkspace, get: vi.fn(async () => structuredClone(local)), getCommitments: vi.fn(async () => structuredClone(commitments)), transition: vi.fn() } };
   return { ...f, api };
 }
@@ -136,7 +136,7 @@ for (const daily of ['ready', 'failed'] as const) for (const size of [0, 1] as c
     expect(countText('Local commitments')).toBe(stale ? `${size} · last known` : partial ? `${size}+ · partial` : `${size} · checking`);
     expect(screen.queryAllByRole('button', { name: /Retained callback/ })).toHaveLength(size);
     expect(countText('Calls')).toBe(daily === 'failed' ? 'Unavailable' : '1');
-    if (daily === 'failed') for (const label of ['Saved draft continuations', 'Upcoming meetings']) expect(countText(label)).toBe('Unavailable');
+    if (daily === 'failed') for (const label of ['Saved draft continuations']) expect(countText(label)).toBe('Unavailable');
     await act(async () => resolve(value));
     expect(countText('Local commitments')).toBe(settled);
     expect(f.calls.every(call => /daily.get|delegation.status/.test(call.method))).toBe(true);
@@ -675,18 +675,14 @@ it('lists unsent local drafts under Saved draft continuations in keyboard order 
   expect(rowA.textContent).toContain('Saved locally · revision 2');
   for (const row of [rowA, rowB]) expect(row.textContent).not.toMatch(/worker|owner|send|approv/i);
   const lane = screen.getByRole('region', { name: 'Saved draft continuations 2' });
-  const meetings = screen.getByRole('region', { name: /^Upcoming meetings/ });
   const group = screen.getByRole('heading', { name: 'Local unsent drafts' }).parentElement!;
   expect(lane.compareDocumentPosition(group) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  expect(group.compareDocumentPosition(meetings) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(within(lane).getAllByRole('button')).toHaveLength(2);
-  // Keyboard order continues from the worker continuations into the local drafts and on to meetings.
+  // Keyboard order continues from the worker continuations into the local drafts.
   const lastContinuation = screen.getByRole('button', { name: 'Email · Account B' });
   lastContinuation.focus();
   fireEvent.keyDown(lastContinuation, { key: 'j' }); expect(document.activeElement).toBe(rowA);
   fireEvent.keyDown(rowA, { key: 'ArrowDown' }); expect(document.activeElement).toBe(rowB);
-  fireEvent.keyDown(rowB, { key: 'j' }); expect(document.activeElement).toBe(within(meetings).getAllByRole('button')[0]);
-  fireEvent.keyDown(document.activeElement!, { key: 'k' }); expect(document.activeElement).toBe(rowB);
   // Enter opens the company on Accounts: continuation selection plus hash navigation. Nothing is selected in Today, nothing is commanded.
   fireEvent.keyDown(rowB, { key: 'Enter' });
   expect(f.firstUse.snapshot().selectedAccountId).toBe('b');

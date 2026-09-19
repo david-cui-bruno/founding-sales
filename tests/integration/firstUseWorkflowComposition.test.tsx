@@ -51,12 +51,7 @@ it.each(['manual', 'model'] as const)('takes an empty encrypted workspace throug
   Object.defineProperty(HTMLDialogElement.prototype, 'close', { configurable: true, value() { this.open = false; } });
   const storage = Object.entries(localStorage), session = Object.entries(sessionStorage);
   const attrs = ['data-theme', 'data-density'].map(name => [name, document.documentElement.getAttribute(name)] as const);
-  const forbidden = async (): Promise<never> => f.deny('Apple spike');
-  const api: CalliePreloadApi = { ...f.api, appleSpike: {
-    getStatus: forbidden, probeCapabilities: forbidden, requestContacts: forbidden, promptAccessibility: forbidden,
-    scanRecentNotes: forbidden, scanTestMessages: forbidden, startCallObservation: forbidden, stopCallObservation: forbidden,
-    sendTestMessage: forbidden, subscribeObservationEvidence: forbidden,
-  } };
+  const api: CalliePreloadApi = { ...f.api };
   // No ambient fetch is allowed, even if a future production path forgets to use its injected port.
   vi.stubGlobal('fetch', async () => f.deny('ambient fetch'));
   const rows = (table: string) => f.runtime.withDatabase(db => db.raw.prepare(`SELECT * FROM ${table}`).all());

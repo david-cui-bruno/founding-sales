@@ -140,7 +140,6 @@ async function fixture(mode: Mode = 'known', maxCostMicros = 100, onExternal: ()
     },
     createBackupService: () => ({ start: async () => undefined, shutdown: async () => undefined, createBackup: unexpected, listAvailableBackups: async () => [] }),
     createRecoveryService: () => ({ status: unexpected, beginSetup: unexpected, saveSetupMaterial: unexpected, completeSetup: unexpected, selectAndRunRestoreDrill: unexpected, shutdown: async () => undefined }),
-    createAppleBridgeSupervisor: unexpected,
   };
   const start = () => startApplication({ appVersion: '1.0.0', userDataPath: dirname(temp.path), logger,
     ...(persisted ? {} : { companyResearch: config }), createWindow: () => undefined }, dependencies);

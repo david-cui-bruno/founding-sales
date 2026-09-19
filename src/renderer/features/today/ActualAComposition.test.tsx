@@ -34,10 +34,10 @@ it('uses one intentional unpaired surface and unavailable counts instead of zero
   render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} />);
   const root = await screen.findByTestId('native-desk');
   const queue = within(root).getByRole('navigation', { name: 'Today queue' });
-  expect(queue.querySelectorAll('.native-desk__count')).toHaveLength(4);
+  expect(queue.querySelectorAll('.native-desk__count')).toHaveLength(3);
   const counts = [...queue.querySelectorAll('.native-desk__count')].map(count => count.textContent);
-  expect(counts).toEqual(['0', 'Unavailable', 'Unavailable', 'Unavailable']);
-  expect(within(queue).queryByText(/No retained work|Account .* unavailable|No approvals|No stored meetings/)).toBeNull();
+  expect(counts).toEqual(['0', 'Unavailable', 'Unavailable']);
+  expect(within(queue).queryByText(/No retained work|Account .* unavailable|No approvals/)).toBeNull();
   const surface = root.querySelector('.native-desk__welcome')!;
   expect(surface.textContent).toContain('Local work remains available');
   expect(within(surface as HTMLElement).getByRole('link', { name: 'Review Settings' }).getAttribute('href')).toBe('#/settings');

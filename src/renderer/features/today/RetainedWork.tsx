@@ -45,7 +45,7 @@ export function LocalOnlyCalls({ read, onOpenDraft, initialSelected = null, onSe
   return <div className="native-desk__layout">
     <section className="native-desk__queue">
       <section className="native-desk__lane"><h2>Local commitments <span className="native-desk__count">{formatVisibleCount(localCommitmentsCount(read))}</span></h2><RetainedWork read={read} selected={selected} onSelect={select} /></section>
-      {['Calls', 'Saved draft continuations', 'Upcoming meetings'].map(label => <section className="native-desk__lane" key={label}><h2>{label} <span className="native-desk__count">Unavailable</span></h2>
+      {['Calls', 'Saved draft continuations'].map(label => <section className="native-desk__lane" key={label}><h2>{label} <span className="native-desk__count">Unavailable</span></h2>
         {label === 'Saved draft continuations' && onOpenDraft && <LocalDraftContinuations drafts={read.value?.localDrafts ?? []} onOpen={onOpenDraft} />}
       </section>)}
     </section>

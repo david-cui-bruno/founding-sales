@@ -9,7 +9,7 @@ import { accountFingerprint } from '../accounts/accountEvidence';
 import { AccountRepository } from '../accounts/accountRepository';
 import { CampaignRepository } from '../campaign/campaignRepository';
 import { DelegationRepository } from '../../delegation/delegationRepository';
-import { dailyAccountSchema, dailyAnswerSchema, dailyCampaignSchema, dailyMeetingSchema, dailyOwnerStatusSchema, dailyTransportSchema, type DailySnapshot } from '../../../shared/contracts/dailyContract';
+import { dailyAccountSchema, dailyAnswerSchema, dailyCampaignSchema, dailyOwnerStatusSchema, dailyTransportSchema, type DailySnapshot } from '../../../shared/contracts/dailyContract';
 import { accountReplyDraftSchema, threadProjectionSchema } from '../../../shared/contracts/mailThreadContract';
 import { requestedFollowupDraftSchema, requestedApprovalStatusSchema } from '../../../shared/contracts/requestedFollowupContract';
 import { campaignVersionSchema } from '../../../shared/contracts/campaignContract';
@@ -38,7 +38,7 @@ export class DailyReadService {
     const raw = database.raw;
     const workspaceId = accountIdSchema.safeParse(this.deps.workspaceId).success ? this.deps.workspaceId! : null;
     const input: DailyProjectionInput = { workspaceId, generatedAt, workflowMode: 'unknown', accounts: [], callbacks: [], calls: { accountIds: [], workloadConflict: false },
-      callSettings: { newCallSlots: null, totalCallCapacity: null }, approvals: [], meetings: [], campaigns: [], ownerStatus: [], transport: [], issues: [] };
+      callSettings: { newCallSlots: null, totalCallCapacity: null }, approvals: [], campaigns: [], ownerStatus: [], transport: [], issues: [] };
     const issue = (code: DailyProjectionInput['issues'][number]['code']) => input.issues.push({ code, count: 1 });
     // Failed top-level queries reject. Corrupt records or failed dependent reads produce incomplete snapshots with bounded issues.
     const rows = (sql: string, ...args: string[]) => raw.prepare(sql).all(...args) as Row[];
@@ -131,15 +131,6 @@ export class DailyReadService {
           status: pendingCommands.length ? 'pending' : authority?.owner === 'worker' ? 'owner_applied' : 'unknown' });
       });
       if (owner) input.ownerStatus.push(owner);
-    }
-    for (const row of rows('SELECT * FROM delegated_meetings WHERE workspace_id=? ORDER BY account_id,id', workspaceId)) {
-      if (!scoped(row.account_id)) continue;
-      const value = parse(() => {
-        const meeting = dailyMeetingSchema.parse({ id: row.id, accountId: row.account_id, revision: row.revision, payload: JSON.parse(String(row.projection_json)) });
-        if (meeting.payload.outcome.providerEventId !== row.provider_event_id) throw Error('meeting_identity_mismatch');
-        return meeting;
-      });
-      if (value) input.meetings.push(value);
     }
     for (const row of rows('SELECT * FROM delegated_requested_followup_drafts WHERE workspace_id=? ORDER BY account_id,id', workspaceId)) {
       if (!scoped(row.account_id)) continue;

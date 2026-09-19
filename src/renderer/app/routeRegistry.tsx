@@ -2,7 +2,6 @@ import type { FirstUseContinuation } from '../features/today/localCompanyContinu
 import type { ReactNode } from 'react';
 
 import type { CalliePreloadApi } from '../../shared/preload';
-import { AppleSpikePanel } from '../appleSpike/AppleSpikePanel';
 import { SettingsScreen } from '../foundation/SettingsScreen';
 import type { FoundationHealth } from '../foundation/useFoundationHealth';
 import { NativeDeskRoute } from '../features/today/NativeDeskRoute';
@@ -44,9 +43,7 @@ export function renderRoute(route: AppRoute, context: RouteContext): ReactNode {
           phoneSetupApi={context.api.phoneSetup}
           delegationApi={context.api.delegation}
           templatesApi={context.api.templates}
-        >
-          <AppleSpikePanel api={context.api.appleSpike} />
-        </SettingsScreen>
+        />
       );
   }
 }

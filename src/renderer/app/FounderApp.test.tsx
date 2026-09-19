@@ -89,7 +89,6 @@ function fakeCallieApi(): CalliePreloadApi {
     },
     shell: { revealDatabase: pending, revealLogDirectory: pending },
     recovery: { status: pending, beginSetup: pending, saveSetupMaterial: pending, completeSetup: pending, selectAndRunRestoreDrill: pending },
-    appleSpike: { getStatus: pending, probeCapabilities: pending, requestContacts: pending, promptAccessibility: pending, scanRecentNotes: pending, scanTestMessages: pending, startCallObservation: pending, stopCallObservation: pending, sendTestMessage: pending, subscribeObservationEvidence: pending },
   };
 }
 

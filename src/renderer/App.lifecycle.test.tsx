@@ -11,10 +11,7 @@ import {
 import { StrictMode, useLayoutEffect } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppHealth } from '../shared/healthContract';
-import type {
-  AppleSpikePreloadApi,
-  CalliePreloadApi,
-} from '../shared/preload';
+import type { CalliePreloadApi } from '../shared/preload';
 import { App } from './App';
 import { commitments, dailyFixture, localSnapshot } from './features/today/nativeDesk.fixture';
 
@@ -53,24 +50,8 @@ const deferred = <T,>(): Deferred<T> => {
   return { promise, reject, resolve };
 };
 
-const disabledAppleSpike = (): AppleSpikePreloadApi => ({
-  getStatus: vi.fn(async () => ({
-    enabled: false,
-    bridge: { state: 'disabled', reason: 'not_packaged_or_configured' },
-  } as const)),
-  probeCapabilities: vi.fn(),
-  requestContacts: vi.fn(),
-  promptAccessibility: vi.fn(),
-  scanRecentNotes: vi.fn(),
-  scanTestMessages: vi.fn(),
-  startCallObservation: vi.fn(),
-  stopCallObservation: vi.fn(),
-  sendTestMessage: vi.fn(),
-  subscribeObservationEvidence: vi.fn(async (): Promise<() => void> => () => undefined),
-});
-
 /** Complete preload shape. Unused reads and commands remain pending without IO. */
-const pendingWorkflowApis = (): Omit<CalliePreloadApi, 'health' | 'appleSpike'> => {
+const pendingWorkflowApis = (): Omit<CalliePreloadApi, 'health'> => {
   const pending = () => vi.fn(() => new Promise<never>(() => undefined));
   return {
     daily: { get: pending() },
@@ -97,13 +78,11 @@ function LayoutObservation({ observe }: { observe?: () => void }): null {
 
 const renderApp = (
   getHealth: () => Promise<AppHealth>,
-  appleSpike: AppleSpikePreloadApi = disabledAppleSpike(),
   observe?: () => void,
 ) => {
   window.callie = {
     health: { get: getHealth },
     ...pendingWorkflowApis(),
-    appleSpike,
   };
   window.location.hash = '';
   return render(
@@ -128,7 +107,7 @@ afterEach(() => {
 });
 
 function workspaceApi(): CalliePreloadApi {
-  const api: CalliePreloadApi = { ...pendingWorkflowApis(), health: { get: vi.fn(async () => health) }, appleSpike: disabledAppleSpike() };
+  const api: CalliePreloadApi = { ...pendingWorkflowApis(), health: { get: vi.fn(async () => health) } };
   api.daily.get = vi.fn(async () => dailyFixture());
   api.localWorkspace.get = vi.fn(async () => localSnapshot());
   api.localWorkspace.getCommitments = vi.fn(async () => commitments());
@@ -366,22 +345,13 @@ describe('App async lifecycle', () => {
     expect(screen.queryByText('Checking local foundation…')).toBeNull();
   });
 
-  it('keeps foundation diagnostics and the Apple spike behind the Settings route', async () => {
-    const appleSpike = disabledAppleSpike();
-    appleSpike.getStatus = vi.fn(async () => ({
-      enabled: true,
-      bridge: { state: 'ready', helperVersion: '1.0.0', protocolVersion: 1 },
-    } as const));
-
-    renderApp(vi.fn(async () => health), appleSpike);
+  it('keeps foundation diagnostics behind the Settings route', async () => {
+    renderApp(vi.fn(async () => health));
 
     await screen.findByRole('navigation', { name: 'Primary' });
     fireEvent.click(screen.getByRole('link', { name: 'Settings' }));
 
     await screen.findByText('Encrypted SQLite ready');
-    expect(
-      await screen.findByRole('region', { name: 'Apple feasibility spike' }),
-    ).not.toBeNull();
   });
 
   it('ignores a stale failed request after the latest request is ready', async () => {
@@ -461,7 +431,7 @@ describe('startup appearance before workspace readiness', () => {
     window.localStorage.setItem('callie.density', density);
     vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: systemDark, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
     const observations: unknown[] = [];
-    const view = renderApp(() => new Promise(() => undefined), undefined, () => {
+    const view = renderApp(() => new Promise(() => undefined), () => {
       observations.push([document.documentElement.dataset.theme, document.documentElement.dataset.density]);
     });
     expect(observations[0]).toEqual([resolved, density]);
@@ -471,7 +441,6 @@ describe('startup appearance before workspace readiness', () => {
     expect(screen.queryByRole('navigation')).toBeNull();
     expect(window.callie.daily.get).not.toHaveBeenCalled();
     expect(window.callie.leads.list).not.toHaveBeenCalled();
-    expect(window.callie.appleSpike.getStatus).not.toHaveBeenCalled();
   });
 
   it('retains saved preferences and truthful presentation through failure, retry and readiness', async () => {
@@ -515,7 +484,7 @@ it.each(['missing', 'invalid', 'throwing'] as const)('resolves %s storage before
   }
   if (mode === 'throwing') vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('blocked'); });
   const observed: unknown[] = [];
-  renderApp(() => new Promise(() => undefined), undefined, () => {
+  renderApp(() => new Promise(() => undefined), () => {
     observed.push([document.documentElement.dataset.theme, document.documentElement.dataset.density]);
   });
   expect(observed[0]).toEqual(['dark', 'comfortable']);

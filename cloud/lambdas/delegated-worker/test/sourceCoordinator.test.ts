@@ -61,28 +61,19 @@ import { fingerprint } from '../src/dynamoStore';
 import { mailScopeFingerprint } from '../../../../src/main/outreach/providers/gmailThreadProvider';
 import { OwnerCommandCoordinator } from '../src/ownerCommandCoordinator';
 import type { AccountReplyDraft, MailMessage } from '../../../../src/shared/contracts/mailThreadContract';
-async function mailFixture(meeting = false) {
+async function mailFixture() {
   const db = new BoundedSdk(); const options = { dynamo: db, tableName: 'fictional-table', workspaceId: 'ws', clock: { now: () => now } };
   const auth = new WorkerAuth(options); const urls: string[] = []; let sends = 0; let sentLookups = 0; let uncertain = false;
-  let incoming = false; let calendarUnknown = false; let inserts = 0; const events: Record<string, unknown> = {};
+  let incoming = false;
   const fetch: typeof globalThis.fetch = async (input, init) => {
     const url = String(input); urls.push(url);
     if (url.endsWith('/token')) return Response.json({ access_token: 'fictional', refresh_token: 'fictional-refresh', token_type: 'Bearer', expires_in: 3600,
-      scope: `openid email ${googleScopes.send} ${googleScopes.relevant_read}${meeting ? ` ${googleScopes.availability} ${googleScopes.event_write}` : ''}` });
+      scope: `openid email ${googleScopes.send} ${googleScopes.relevant_read}` });
     if (url.endsWith('/userinfo')) return Response.json({ sub: 'mailbox', email: 'sender@example.test', email_verified: true });
     if (url.includes('/history?')) return Response.json({ historyId: incoming ? '3' : '2', history: incoming ? [{ messagesAdded: [{ message: { id: 'accepted-reply' } }] }] : [] });
     if (url.endsWith('/messages/accepted-reply') || url.includes('/messages/accepted-reply?')) return Response.json({ id: 'accepted-reply', threadId: 'thread1', internalDate: String(Date.parse(now)), payload: { mimeType: 'text/plain',
       headers: [{ name: 'From', value: 'recipient@example.test' }, { name: 'To', value: 'sender@example.test' }, { name: 'Subject', value: 'Meeting offer' }, { name: 'Message-ID', value: '<accepted@example.test>' }, { name: 'In-Reply-To', value: `<${intentId}@callie.invalid>` }],
       body: { data: Buffer.from('That works!').toString('base64url') } } });
-    if (url.endsWith('/freeBusy')) return Response.json({ calendars: { 'sender@example.test': { busy: [] } } });
-    if (url.includes('/calendars/')) {
-      const path = new URL(url).pathname; const method = init?.method ?? 'GET';
-      if (method === 'POST' && path.endsWith('/events')) { inserts++; const body = JSON.parse(String(init?.body));
-        const event = { id: body.id, status: 'confirmed', etag: 'fictional-etag', start: body.start, end: body.end, attendees: body.attendees.map((a: {email:string}) => ({ ...a, responseStatus: 'needsAction' })) };
-        if (calendarUnknown) throw new Error('fictional uncertain insert'); events[body.id] = event; return Response.json(event); }
-      if (path.endsWith('/events')) return Response.json({ items: Object.values(events) });
-      const id = path.split('/').at(-1)!; return events[id] ? Response.json(events[id]) : new Response('', { status: 404 });
-    }
     if (url.endsWith('/messages/send') && init?.method === 'POST') { sends++; if (uncertain) throw new Error('fictional lost response'); return Response.json({ id: 'sent1', threadId: 'thread1' }); }
     if (url.includes('/messages?') && new URL(url).searchParams.get('q')?.startsWith('in:sent')) { sentLookups++; return Response.json({ messages: [] }); }
     throw new Error('unconfigured fictional HTTP');
@@ -90,8 +81,7 @@ async function mailFixture(meeting = false) {
   const authorization = new RemoteGoogleAuthorization({ auth, fetch, config: { clientId: 'fictional.apps.googleusercontent.com', clientSecret: 'fictional',
     redirectUri: 'https://worker.example.test/oauth/callback', encryptionKey: Buffer.alloc(32, 8) } });
   const pair = await auth.redeemPairing((await auth.issuePairing({ scopes: ['commands:write', 'google:grant'], expiresInSeconds: 300 })).code, 'fictional');
-  const grant = await authorization.beginGoogleGrant(pair.pairingId, meeting ? ['send', 'relevant_read', 'availability', 'event_write'] : ['send', 'relevant_read'],
-    meeting ? { confirmed: true, ownedCalendarId: 'sender@example.test', conflictCalendarIds: ['sender@example.test'] } : undefined);
+  const grant = await authorization.beginGoogleGrant(pair.pairingId, ['send', 'relevant_read']);
   await authorization.completeGoogleGrant(new URL(grant.authorizationUrl).searchParams.get('state')!, 'fictional');
   const store = auth.store; const accountId = 'acct';
   const policy = new DynamoDispatchRepository(options, authorization);
@@ -105,7 +95,7 @@ async function mailFixture(meeting = false) {
   const scope = { version: 1 as const, accountId, mailboxSubject: 'mailbox', revision: 1, participantAddresses: ['colleague@example.test', 'recipient@example.test'], knownThreadIds: ['thread1'], since: now, approvedAt: now };
   const binding = { scopeRevision: 1, scopeFingerprint: mailScopeFingerprint(scope) };
   const draft: AccountReplyDraft = { id: 'draft', accountId, threadId: 'thread1', mailboxSubject: 'mailbox', threadRevision: 1, contextRevision: 'context', revision: 1,
-    sender: 'sender@example.test', recipient: 'recipient@example.test', subject: 'Requested details', body: meeting ? 'Tuesday, September 15, 2026 at 10:00 AM to 10:30 AM (America/New_York)' : 'Exact approved details.', evidenceIds: ['inbound1'], generation: 'edited', updatedAt: now };
+    sender: 'sender@example.test', recipient: 'recipient@example.test', subject: 'Requested details', body: 'Exact approved details.', evidenceIds: ['inbound1'], generation: 'edited', updatedAt: now };
   await store.transact([store.put('ACCOUNT#acct', { account, sources: [], claims: [], routes: [], researchRevision: 1, history: [{ at: now, account, claims: [], routes: [] }] }, null),
     store.put(mailThreadKey(accountId, 'thread1'), { thread: { accountId, mailboxSubject: 'mailbox', provider: 'gmail', providerThreadId: 'thread1', messages: [message, { ...message, id: 'colleague-message', from: ['colleague@example.test'], rfcMessageId: '<colleague@example.test>' }] }, revision: 1, contextRevision: 'context', signals: [] }, null),
     store.put('MAIL_DRAFT#acct#draft', draft, null),
@@ -113,7 +103,7 @@ async function mailFixture(meeting = false) {
       poll: { ...binding, attemptId: 'initial', accountId, mailboxSubject: 'mailbox', status: 'complete', startedAt: now, completedAt: now } }, null),
     store.put(intakeRegistryKey(accountId), { accountId, adapters: [{ id: 'gmail', kind: 'gmail', relevant: true, enabled: true, mailboxSubject: 'mailbox' }], manualDependencies: [] }, null)]);
   const owner = new OwnerCommandCoordinator({ auth, authorization });
-  const config = ownerSourceConfigurationSchema.parse({ version: 1, workspaceId: 'ws', accountId, pairingId: pair.pairingId, revision: 1, state: 'active', mailboxSubject: 'mailbox', calendarId: meeting ? 'sender@example.test' : null, research: null });
+  const config = ownerSourceConfigurationSchema.parse({ version: 1, workspaceId: 'ws', accountId, pairingId: pair.pairingId, revision: 1, state: 'active', mailboxSubject: 'mailbox', calendarId: null, research: null });
   await owner.apply({ commandId: randomUUID(), workspaceId: 'ws', accountId, expectedAuthorityGeneration: 1, expectedVersion: 1, kind: 'configure-owner',
     payload: { expectedConfigurationRevision: 0, configuration: config, mailScope: null } }, `Bearer ${pair.credential}`);
   const intentId = randomUUID();
@@ -121,23 +111,14 @@ async function mailFixture(meeting = false) {
   const intent = { commandId: intentId, kind: 'standalone_reply' as const, action: { workspaceId: 'ws', accountId, actionId: 'action', expectedAuthorityGeneration: 1, approvalId: 'approval',
     contentHash: fingerprint(frozenMessage), targetHash: fingerprint({ sender: draft.sender, recipient: draft.recipient, threadId: draft.threadId }) }, draftId: draft.id, draftRevision: 1,
     pairingId: pair.pairingId, mailboxSubject: 'mailbox', frozenMessage, binding: { kind: 'thread_participant' as const, threadId: draft.threadId, sourceMessageId: message.id, sourceMessageHash: fingerprint(message) } };
-  const offer = { id: 'accepted-offer', revision: 1, accountId, threadId: 'thread1', mailboxSubject: 'mailbox', sendCommandId: intentId,
-    meeting: { summary: 'Callie meeting' as const, inviteAttendees: true }, expiresAt: '2026-09-15T00:00:00.000Z', slots: [{ id: 'offered-slot', start: '2026-09-15T14:00:00.000Z', end: '2026-09-15T14:30:00.000Z', timezone: 'America/New_York' }] };
-  if (meeting) {
-    await owner.apply({ commandId: randomUUID(), workspaceId: 'ws', accountId, expectedAuthorityGeneration: 1, expectedVersion: 2, kind: 'approve-reply', payload: {
-      draft, expectedRemoteDraftRevision: 1, approvalId: 'approval', actionId: 'action', intentCommandId: intentId, binding: intent.binding, expiresAt: offer.expiresAt,
-      permission: { id: 'permission', sourceMessageId: message.id, sourceMessageHash: fingerprint(message), basis: 'requested_followup', expiresAt: offer.expiresAt }, schedulingOffer: { offer, expectedRevision: null },
-    } }, `Bearer ${pair.credential}`);
-  } else {
-    await policy.admitPermission({ id: 'permission', accountId, recipient: draft.recipient, sender: draft.sender, threadId: draft.threadId, sourceMessageId: message.id, sourceMessageHash: fingerprint(message), basis: 'requested_followup', recordedAt: now, expiresAt: '2026-09-15T00:00:00.000Z' });
-    await policy.admitApproval({ id: 'approval', commandId: intentId, intentHash: fingerprint(intent), draft, permissionEvidenceId: 'permission', approvedAt: now, expiresAt: '2026-09-15T00:00:00.000Z' });
-    await policy.admitIntent(intent); await execution.prepareAction({ ...intent.action, expectedVersion: 2 });
-  }
+  await policy.admitPermission({ id: 'permission', accountId, recipient: draft.recipient, sender: draft.sender, threadId: draft.threadId, sourceMessageId: message.id, sourceMessageHash: fingerprint(message), basis: 'requested_followup', recordedAt: now, expiresAt: '2026-09-15T00:00:00.000Z' });
+  await policy.admitApproval({ id: 'approval', commandId: intentId, intentHash: fingerprint(intent), draft, permissionEvidenceId: 'permission', approvedAt: now, expiresAt: '2026-09-15T00:00:00.000Z' });
+  await policy.admitIntent(intent); await execution.prepareAction({ ...intent.action, expectedVersion: 2 });
   await policy.configureCaps({ sender: draft.sender, dailyLimit: 5 }, null);
-  const submit = ownerCommandSchema.parse({ commandId: randomUUID(), workspaceId: 'ws', accountId, expectedAuthorityGeneration: 1, expectedVersion: meeting ? 3 : 2,
+  const submit = ownerCommandSchema.parse({ commandId: randomUUID(), workspaceId: 'ws', accountId, expectedAuthorityGeneration: 1, expectedVersion: 2,
     kind: 'submit-approved-reply', payload: { intentCommandId: intentId } });
   return { db, options, auth, authorization, fetch, owner, pair, execution, policy, submit, config, intent, scope, urls, sends: () => sends, sentLookups: () => sentLookups,
-    unknownCalendar: () => { calendarUnknown = true; }, incoming: () => { incoming = true; }, inserts: () => inserts, uncertain: () => { uncertain = true; }, source: () => createSourceCoordinator({ auth, authorization, fetch }) };
+    incoming: () => { incoming = true; }, uncertain: () => { uncertain = true; }, source: () => createSourceCoordinator({ auth, authorization, fetch }) };
 }
 it('selects actual applied owner command and performs one exact C4 dispatch while retaining the full C3 scope', async () => {
   const f = await mailFixture(); await f.owner.apply(f.submit, `Bearer ${f.pair.credential}`);
@@ -230,24 +211,6 @@ it('retains uncertain pre-account spend across coordinator restart without repea
   expect((await f.auth.store.get<{spent:number}>('BUDGET#discovery#approved-budget'))?.data.spent).toBe(80);
 });
 
-import { DynamoMeetingRepository } from '../src/meetingRepository';
-it.each(['confirmed', 'unknown'] as const)('processes actual accepted offer and C3 reply into one durable C5 meeting: %s', async status => {
-  const f = await mailFixture(true);
-  const repository = new DynamoMeetingRepository(f.options, f.authorization);
-  await repository.saveRules({ expectedRevision: null, rules: { revision: 1, confirmed: true, timezone: 'America/New_York', weeklyWindows: [{ weekday: 2, start: '09:00', end: '17:00' }],
-    durationMinutes: 30, bufferBeforeMinutes: 10, bufferAfterMinutes: 10, minimumNoticeMinutes: 60, horizonDays: 30, ownedCalendarId: 'sender@example.test', conflictCalendarIds: ['sender@example.test'],
-    location: { kind: 'text', value: 'Fictional office' }, allowCancel: true, allowReschedule: true } });
-  await f.owner.apply(f.submit, `Bearer ${f.pair.credential}`);
-  await f.source().tick(new AbortController().signal); expect(f.sends()).toBe(1); expect(f.inserts()).toBe(0);
-  await f.source().tick(new AbortController().signal);
-  expect((await repository.listAcceptedOffers('acct')).offers).toHaveLength(1);
-  if (status === 'unknown') f.unknownCalendar();
-  f.incoming(); const result = await f.source().tick(new AbortController().signal);
-  expect(result).toMatchObject({ mailPolls: 1, meetings: 1 }); expect(f.inserts()).toBe(1);
-  expect((await repository.listReservations('acct')).records).toMatchObject([{ outcome: { status: status === 'confirmed' ? 'booked' : 'unknown' } }]);
-  await f.source().tick(new AbortController().signal); expect(f.inserts()).toBe(1); expect(f.sends()).toBe(1);
-});
-
 async function pauseResearch(f: Awaited<ReturnType<typeof researchFixture>>) {
   await new OwnerCommandCoordinator({ auth: f.auth, authorization: f.authorization }).configureResearch({ commandId: randomUUID(), workspaceId: 'ws', pairingId: f.pair.pairingId,
     expectedRevision: 1, configuration: { ...f.config, revision: 2, state: 'paused' } }, `Bearer ${f.pair.credential}`);
@@ -308,63 +271,11 @@ it('paused and reactivated selector with the same research run cannot retry unce
   await f.source().tick(new AbortController().signal);
   expect(f.counts()).toEqual({ modelCalls: 1, pageCalls: 0, credentialCalls: 1 });
 });
-it('unknown mail offer is never promoted into accepted scheduling work', async () => {
-  const f = await mailFixture(true); f.uncertain(); await f.owner.apply(f.submit, `Bearer ${f.pair.credential}`);
-  await f.source().tick(new AbortController().signal); await f.source().tick(new AbortController().signal);
-  expect(f.sends()).toBe(1); expect(f.inserts()).toBe(0);
-  expect(await f.auth.store.list('MEETING_OFFER#')).toEqual([]);
-  expect(await f.auth.store.list('MEETING_INTENT#')).toEqual([]);
-});
 it('rejects a command payload changed independently of its durable receipt fingerprint', async () => {
   const f = await mailFixture(); await f.owner.apply(f.submit, `Bearer ${f.pair.credential}`);
   const key = `COMMAND#${f.submit.commandId}`; const row = (await f.auth.store.get<{command:unknown}>(key))!;
   await f.auth.store.transact([f.auth.store.put(key, { ...row.data, command: { ...f.submit, accountId: 'other-account' } }, row.rev)]);
   await f.source().tick(new AbortController().signal); expect(f.sends()).toBe(0);
-});
-it('books two independently accepted offers for the same account without freezing the same authority version', async () => {
-  const f = await mailFixture(true); const store = f.auth.store;
-  const firstApproval = (await store.list<{ command: ReturnType<typeof ownerCommandSchema.parse> }>('COMMAND#')).find(row => row.stored.data.command?.kind === 'approve-reply')!.stored.data.command;
-  if (firstApproval.kind !== 'approve-reply') throw new Error('fixture approval missing');
-  const secondId = randomUUID(); const body = 'Tuesday, September 15, 2026 at 11:00 AM to 11:30 AM (America/New_York)';
-  const threads = new DynamoThreadIntakeRepository(f.options); const first = (await threads.getThread('acct', 'thread1'))!;
-  const message = { ...first.thread.messages[0]!, id: 'inbound2', threadId: 'thread2', rfcMessageId: '<request2@example.test>' };
-  await store.transact([store.put(mailThreadKey('acct', 'thread2'), { ...first, thread: { ...first.thread, providerThreadId: 'thread2', messages: [message] } }, null)]);
-  await f.owner.apply({ commandId: randomUUID(), workspaceId: 'ws', accountId: 'acct', expectedAuthorityGeneration: 1, expectedVersion: await f.execution.currentVersion('acct'), kind: 'configure-owner',
-    payload: { expectedConfigurationRevision: 1, configuration: { ...f.config, revision: 2 }, mailScope: { expectedEnvelopeRevision: 1, since: now } } }, `Bearer ${f.pair.credential}`);
-  const draft = { ...firstApproval.payload.draft, id: 'draft2', threadId: 'thread2', body, evidenceIds: ['inbound2'] };
-  await threads.saveReplyDraft(draft, null);
-  const approval = ownerCommandSchema.parse({ ...firstApproval, commandId: randomUUID(), expectedVersion: await f.execution.currentVersion('acct'), payload: {
-    ...firstApproval.payload, draft, actionId: 'action2', approvalId: 'approval2', intentCommandId: secondId,
-    permission: { ...firstApproval.payload.permission, id: 'permission2', sourceMessageId: message.id, sourceMessageHash: fingerprint(message) },
-    binding: { kind: 'thread_participant', threadId: 'thread2', sourceMessageId: message.id, sourceMessageHash: fingerprint(message) },
-    schedulingOffer: { expectedRevision: null, offer: { ...firstApproval.payload.schedulingOffer!.offer, id: 'offer2', threadId: 'thread2', sendCommandId: secondId,
-      slots: [{ id: 'slot2', start: '2026-09-15T15:00:00.000Z', end: '2026-09-15T15:30:00.000Z', timezone: 'America/New_York' }] } },
-  } });
-  await f.owner.apply(approval, `Bearer ${f.pair.credential}`);
-  await f.owner.apply({ ...f.submit, expectedVersion: await f.execution.currentVersion('acct') }, `Bearer ${f.pair.credential}`);
-  await f.owner.apply({ ...f.submit, commandId: randomUUID(), expectedVersion: await f.execution.currentVersion('acct'), payload: { intentCommandId: secondId } }, `Bearer ${f.pair.credential}`);
-  let incoming = false;
-  const fetch: typeof globalThis.fetch = async (resource, init) => {
-    const url = String(resource);
-    if (url.endsWith('/profile')) return Response.json({ historyId: '2' });
-    if (url.includes('/messages?')) return Response.json({ messages: [] });
-    if (url.includes('/history?')) return Response.json({ historyId: incoming ? '4' : '2', history: incoming ? [{ messagesAdded: [{ message: { id: 'accepted-reply' } }, { message: { id: 'accepted2' } }] }] : [] });
-    if (url.includes('/messages/accepted2')) return Response.json({ id: 'accepted2', threadId: 'thread2', internalDate: String(Date.parse(now)), payload: { mimeType: 'text/plain', headers: [
-      { name: 'From', value: 'recipient@example.test' }, { name: 'To', value: 'sender@example.test' }, { name: 'Subject', value: 'Meeting offer' }, { name: 'Message-ID', value: '<accepted2@example.test>' }, { name: 'In-Reply-To', value: `<${secondId}@callie.invalid>` }], body: { data: Buffer.from('That works!').toString('base64url') } } });
-    if (url.endsWith('/messages/send') && JSON.parse(String(init?.body)).threadId === 'thread2') {
-      await f.fetch(resource, init); return Response.json({ id: 'sent2', threadId: 'thread2' });
-    }
-    return f.fetch(resource, init);
-  };
-  const repository = new DynamoMeetingRepository(f.options, f.authorization);
-  await repository.saveRules({ expectedRevision: null, rules: { revision: 1, confirmed: true, timezone: 'America/New_York', weeklyWindows: [{ weekday: 2, start: '09:00', end: '17:00' }], durationMinutes: 30,
-    bufferBeforeMinutes: 10, bufferAfterMinutes: 10, minimumNoticeMinutes: 60, horizonDays: 30, ownedCalendarId: 'sender@example.test', conflictCalendarIds: ['sender@example.test'], location: { kind: 'text', value: 'Fictional office' }, allowCancel: true, allowReschedule: true } });
-  const source = () => createSourceCoordinator({ auth: f.auth, authorization: f.authorization, fetch });
-  await source().tick(new AbortController().signal); await source().tick(new AbortController().signal);
-  expect(f.sends()).toBe(2); expect((await repository.listAcceptedOffers('acct')).offers).toHaveLength(2);
-  incoming = true; f.incoming(); await source().tick(new AbortController().signal);
-  expect(f.inserts()).toBe(2);
-  expect((await repository.listReservations('acct')).records.map(record => record.outcome?.status)).toEqual(['booked', 'booked']);
 });
 it.each(['caller', 'phase'] as const)('resumes later accounts, commands and publication after cooperative slow-first interruption: %s', async cancellation => {
   const f = await mailFixture(); const store = f.auth.store; const slow = 'aaa-slow';
