@@ -356,7 +356,7 @@ describe("delegated-worker Terraform source isolation", () => {
       "POST /research/setup/status", "POST /research/setup", "POST /accounts/preparation", "POST /reply/draft",
       "GET /events", "POST /google/begin", "GET /google/status", "GET /google/disclosure", "POST /google/revoke", "GET /oauth/callback",
       "POST /v1/pair/redeem", "GET /v1/diagnostics", "POST /v1/commands",
-      "GET /v1/today",
+      "GET /v1/today", "GET /v1/settings",
       // The stage's per-route throttle names the redeem route a second time; it is the same route key, not a second route.
       "POST /v1/pair/redeem",
     ]);

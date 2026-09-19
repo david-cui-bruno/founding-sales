@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { TERRITORY_RULES_REVISION } from '../../../../../src/shared/contracts/territoryClearanceContract';
-import { diagnosticsViewSchema, statePostureRecordSchema, type StatePostureRecord } from '../../../../../src/shared/contracts/v1Contract';
+import { TERRITORY_CLEARANCE_STATEMENTS, TERRITORY_RULES_REVISION } from '../../../../../src/shared/contracts/territoryClearanceContract';
+import { diagnosticsViewSchema, settingsViewSchema, statePostureRecordSchema, type StatePostureRecord } from '../../../../../src/shared/contracts/v1Contract';
 import { postureReviewAt, readPostures, stateClearance, stateKey } from '../../src/v1/postures';
 import { putFirm, putTerritoryPolicy, readDay, riFirm, setPosture, tickOf } from './firmFixtures';
 import { v1Fixture } from './v1Fixture';
@@ -53,6 +53,25 @@ describe('set_state_posture and the STATE# record', () => {
     const ma = randomUUID();
     await f.request('POST', '/v1/commands', { authorization: device.bearer, body: { commandId: ma, ...decision('calling'), state: 'MA' } });
     expect((await readPostures(f.store)).map(record => record.state)).toEqual(['MA', 'RI']);
+  });
+
+  it('GET /v1/settings serves the postures summary and the revision 2 reference texts, and only those, behind the device token', async () => {
+    const f = v1Fixture(AT);
+    expect((await f.request('GET', '/v1/settings')).statusCode).toBe(401);
+    const device = await f.pairDevice();
+    const raw = f.json(await f.request('GET', '/v1/settings', { authorization: device.bearer }));
+    expect(Object.keys(raw as object).sort()).toEqual(['postures', 'referenceTexts']);
+    const empty = settingsViewSchema.parse(raw);
+    expect(empty.postures).toEqual([]);
+    expect(empty.referenceTexts.revision).toBe(TERRITORY_RULES_REVISION);
+    expect(empty.referenceTexts.statements).toEqual({ ...TERRITORY_CLEARANCE_STATEMENTS });
+    expect(empty.referenceTexts.states.map(entry => entry.state)).toEqual(['RI', 'MA', 'TX']);
+    for (const entry of empty.referenceTexts.states) { expect(entry.citation.url).toMatch(/^https:\/\//); expect(entry.summary.length).toBeGreaterThan(100); }
+    await f.request('POST', '/v1/commands', { authorization: device.bearer, body: { commandId: randomUUID(), ...decision('calling') } });
+    const view = settingsViewSchema.parse(f.json(await f.request('GET', '/v1/settings', { authorization: device.bearer })));
+    expect(view.postures).toEqual([{ state: 'RI', posture: 'calling', decidedAt: AT, decidedBy: 'David MacBook', reviewAt: '2027-09-18T12:00:00.000Z', reviewOverdue: false }]);
+    // No citation David typed leaves the worker through this view: the summary carries the decision and its dates only.
+    expect(JSON.stringify(view.postures)).not.toContain('checked 18 Sep 2026');
   });
 
   it('a repeated commandId returns the first receipt as duplicate and writes nothing more; another payload under the same id is a conflict', async () => {
