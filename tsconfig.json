@@ -26,6 +26,7 @@
     "resolveJsonModule": true
   },
   "exclude": [
-    "cloud"
+    "cloud",
+    "client"
   ]
 }
