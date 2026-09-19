@@ -7,8 +7,8 @@ import { TodayPage } from './pages/TodayPage';
 
 /**
  * The thin client's shell: the Pair page until this Mac holds a device token, then a rail with Today,
- * Diagnostics and Settings and an Unpair button. The only automatic call on mount is the status read;
- * the Diagnostics page adds its own read when it mounts.
+ * Diagnostics and Settings and an Unpair button. Today is the landing page: the product is the morning
+ * list. The only automatic call on mount is the status read; the page shown adds its own read when it mounts.
  */
 type Page = 'today' | 'diagnostics' | 'settings';
 
@@ -20,7 +20,7 @@ const PAGES: { id: Page; label: string }[] = [
 
 export function App() {
   const [status, setStatus] = useState<ClientStatus | null>(null);
-  const [page, setPage] = useState<Page>('diagnostics');
+  const [page, setPage] = useState<Page>('today');
   const [problem, setProblem] = useState<string | null>(null);
 
   const refreshStatus = useCallback(async () => {
@@ -37,7 +37,7 @@ export function App() {
   const unpair = async () => {
     try {
       setStatus(await window.callie.unpair());
-      setPage('diagnostics');
+      setPage('today');
     } catch {
       setProblem('The client could not forget the pairing.');
     }
@@ -51,7 +51,7 @@ export function App() {
     );
   }
   if (status.state === 'unpaired') {
-    return <PairPage status={status} onPaired={(paired) => { setStatus(paired); setPage('diagnostics'); }} />;
+    return <PairPage status={status} onPaired={(paired) => { setStatus(paired); setPage('today'); }} />;
   }
   return (
     <div className="shell">
