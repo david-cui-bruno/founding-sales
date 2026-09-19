@@ -60,6 +60,8 @@ export interface SequencePort {
   recordSent(input: SequenceSeed & { stepId: string; sentAt: string; next: NextStep }): Promise<void>;
   /** A reply arrived: the sequence waits for David's decision under the `replied` hold. */
   pauseForReply(input: SequenceSeed & { code: string }): Promise<void>;
+  /** David said continue: the hold is cleared and the sequence stands where it did. Never moves a due instant. */
+  resume(input: SequenceSeed): Promise<void>;
   /** The firm asked to stop, or a bounce ended the route. Permanent for `opt_out`. */
   stop(input: SequenceSeed & { code: string }): Promise<void>;
 }
@@ -125,6 +127,10 @@ export function createSequencePort(store: DynamoStore): SequencePort {
     },
     async pauseForReply(input): Promise<void> {
       await write(input, record => ({ ...record, state: 'paused', holdCode: attemptReasonSchema.parse(input.code), nextDueAt: null }));
+    },
+    async resume(input): Promise<void> {
+      await write(input, record => record.state === 'stopped' ? record
+        : ({ ...record, state: 'active', holdCode: null, currentStepId: record.currentStepId ?? input.currentStepId, nextDueAt: record.nextDueAt ?? input.nextDueAt }));
     },
     async stop(input): Promise<void> {
       await write(input, record => ({ ...record, state: 'stopped', holdCode: attemptReasonSchema.parse(input.code), currentStepId: null, nextDueAt: null }));

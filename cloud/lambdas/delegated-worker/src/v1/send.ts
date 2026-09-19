@@ -41,6 +41,11 @@ export const SEND_PREFIX = 'SEND#';
 export const sendKey = (firmId: string, stepId: string): string => `${SEND_PREFIX}${keyPart(firmId)}#${keyPart(stepId)}`;
 export const FLIGHT_PREFIX = 'FLIGHT#';
 export const flightKey = (firmId: string): string => `${FLIGHT_PREFIX}${keyPart(firmId)}`;
+/** An address the provider said it could not deliver to. Written by `mail.poll` on a bounce; read here as `no_email`. */
+export const ROUTE_INVALID_PREFIX = 'ROUTE_INVALID#';
+export const invalidRouteKey = (firmId: string, handle: string): string => `${ROUTE_INVALID_PREFIX}${keyPart(firmId)}#${keyPart(handle.trim().toLowerCase())}`;
+export const invalidRouteSchema = z.strictObject({ version: z.literal(1), firmId: z.string().min(1).max(200), handle: z.string().min(1).max(320),
+  reason: attemptReasonSchema, evidenceRef: z.string().max(200).nullable(), at: accountInstantSchema });
 
 /** A claim older than this is stale: the runner that made it is long gone, so the Sent lookup decides, not a resend. */
 export const SEND_BUDGET_MS = 5 * 60_000;
@@ -174,7 +179,8 @@ export async function planSend(deps: SendDependencies, context: SendContext, sig
   const email = context.firm.businessEmail;
   if (await suppression.isSuppressed(context.firm.firmId, email ? [email] : [])) return { send: false, code: 'suppressed' };
   if (context.firm.suppressed) return { send: false, code: 'suppressed' };
-  if (!email) return { send: false, code: 'no_email' };
+  // A bounce marked this address invalid: the firm has no usable email until David admits another route.
+  if (!email || await store.get<unknown>(invalidRouteKey(context.firm.firmId, email))) return { send: false, code: 'no_email' };
   if (!context.firm.state) return { send: false, code: 'state_unknown' };
   const clearance = stateClearance(posturesByState(await readPostures(store)), context.firm.state, now);
   if (clearance.code !== null) return { send: false, code: clearance.code };
@@ -447,3 +453,78 @@ export async function runReconcileJob(deps: SendDependencies, signal: AbortSigna
 
 /** The job id one due step has. Exported so the scheduler and the runner name the same work. */
 export const sendJobIdFor = (firmId: string, stepId: string): string => sendStepJobId(firmId, stepId);
+
+/** An approved draft occupies the same fence as a sequence step, under its own step key. */
+export const followupStepId = (draftId: string): string => `followup:${draftId}`;
+
+export type FollowupDraft = { firmId: string; draftId: string; to: string; subject: string; text: string; inReplyTo: string | null; threadId: string | null };
+export type FollowupOutcome = SendOutcome | { outcome: 'refused'; code: 'draft_not_approved' };
+
+/**
+ * One `mail.send_followup` job: the draft David wrote and approved, through exactly the fence a sequence step uses.
+ * The holds are the same minus the template approval, because the text is his own; the lock, the claim, the
+ * Message-ID and the Sent lookup are identical. A follow-up never advances the sequence.
+ */
+export async function runSendFollowupJob(deps: SendDependencies, input: { jobId: string; draft: FollowupDraft }, signal: AbortSignal): Promise<FollowupOutcome> {
+  const store = deps.store;
+  const started = Date.now();
+  const stepId = followupStepId(input.draft.draftId);
+  const firmId = input.draft.firmId;
+
+  const existing = await readSend(store, firmId, stepId);
+  if (existing) {
+    const record = existing.record;
+    if (record.state === 'accepted') { await releaseFlight(store, firmId, record.jobId); return { outcome: 'already_accepted', record }; }
+    if (record.state === 'not_sent' || (record.state === 'unknown' && record.noRetry)) { await releaseFlight(store, firmId, record.jobId); return { outcome: 'settled', record }; }
+    if (Date.parse(store.now()) - Date.parse(record.claimedAt) < SEND_BUDGET_MS) return { outcome: 'refused', code: 'firm_send_in_flight' };
+    const settled = await settleStaleSend(deps, existing, signal);
+    await releaseFlight(store, firmId, settled.record.jobId);
+    return { outcome: settled.record.state === 'accepted' ? 'already_accepted' : 'settled', record: settled.record };
+  }
+
+  const suppression = deps.suppression ?? createSuppressionPort(store);
+  const paused = await readPaused(store);
+  if (paused.paused) return { outcome: 'held', code: 'paused', reason: 'paused' };
+  const mailbox = await deps.mailbox.access(signal);
+  if (!mailbox.connected) return { outcome: 'held', code: 'mailbox_not_connected', reason: 'mailbox_not_connected' };
+  if (await suppression.isSuppressed(firmId, [input.draft.to])) return { outcome: 'held', code: 'suppressed', reason: 'suppressed' };
+  if (await store.get<unknown>(invalidRouteKey(firmId, input.draft.to))) return { outcome: 'held', code: 'no_email', reason: 'no_email' };
+  const now = store.now();
+  const { settings } = await readSendingSettings(store);
+  const usage = await readSendUsage(store, now);
+  if (usage.used >= sendingCapForDay(settings, usage.firstSendAt, now).today) return { outcome: 'held', code: 'cap_reached', reason: 'cap_reached' };
+
+  const flight = await readFlight(store, firmId);
+  if (flight && flight.record.jobId !== null && flight.record.jobId !== input.jobId
+    && Date.parse(now) - Date.parse(flight.record.since) < SEND_BUDGET_MS) return { outcome: 'refused', code: 'firm_send_in_flight' };
+
+  const record: SendRecord = sendRecordSchema.parse({ version: 1, firmId, stepId, state: 'dispatching', contextRevision: 0,
+    jobId: input.jobId, messageId: jobMessageId(input.jobId), providerMessageId: null, providerThreadId: null,
+    frozen: frozenEmailSchema.parse({ from: mailbox.email, to: input.draft.to, subject: input.draft.subject, body: input.draft.text }),
+    templateId: null, claimedAt: now, sentAt: null, reconciledAt: null, noRetry: false, reason: null });
+  try {
+    await store.transact([store.put(sendKey(firmId, stepId), record, null),
+      store.put(flightKey(firmId), flightRecordSchema.parse({ version: 1, firmId, jobId: input.jobId, since: now }), flight?.rev ?? null),
+      ...consumeCapItems(store, usage, now)]);
+  } catch { return { outcome: 'refused', code: 'claim_lost' }; }
+
+  const sender = createPreparedGmailSender({ accountEmail: mailbox.email, accessToken: mailbox.accessToken, fetch: deps.fetch, signal, isCurrent: () => !signal.aborted });
+  let result;
+  try { result = await sender.sendOnce({ commandId: jobMessageUuid(input.jobId), from: mailbox.email, to: input.draft.to, subject: input.draft.subject, body: input.draft.text }); }
+  catch { result = { status: 'unknown' as const, reasonCode: 'provider_result_unknown' }; }
+  if (result.status === 'accepted') {
+    const settled = await recordResult(store, record, { state: 'accepted', reason: null, noRetry: false,
+      providerMessageId: result.messageId, providerThreadId: result.threadId, sentAt: store.now() });
+    await releaseFlight(store, firmId, input.jobId);
+    await recordAttempt(store, { kind: 'send', outcome: 'ok', reason: null, detail: { code: 'followup_accepted', firmId, jobId: jobRef(input.jobId) },
+      durationMs: Date.now() - started, ref: jobRef(input.jobId) });
+    return { outcome: 'sent', record: settled };
+  }
+  const state = result.status === 'not_sent' ? 'not_sent' : 'unknown';
+  const reason = result.status === 'not_sent' ? 'provider_error' : 'send_unknown';
+  const settled = await recordResult(store, record, { state, reason, noRetry: false });
+  if (state === 'not_sent') await releaseFlight(store, firmId, input.jobId);
+  await recordAttempt(store, { kind: 'send', outcome: 'failed', reason, detail: { code: reason, firmId, jobId: jobRef(input.jobId) },
+    durationMs: Date.now() - started, ref: jobRef(input.jobId) });
+  return { outcome: 'settled', record: settled };
+}
