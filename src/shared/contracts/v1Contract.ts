@@ -52,13 +52,14 @@ export type AttemptRecord = z.infer<typeof attemptRecordSchema>;
 
 export const DIAGNOSTICS_ATTEMPT_LIMIT = 20;
 
-/** One paired device as Diagnostics lists it. The token itself is never part of any view. */
+/** One paired device as Diagnostics lists it. The token itself is never part of any view; `expiresAt` is ninety days after pairing. */
 export const diagnosticsDeviceSchema = z.strictObject({
   deviceId: uuid,
   label: z.string().min(1).max(80),
   createdAt: instant,
   lastSeenAt: instant.nullable(),
   revokedAt: instant.nullable(),
+  expiresAt: instant,
 });
 export type DiagnosticsDevice = z.infer<typeof diagnosticsDeviceSchema>;
 
@@ -77,17 +78,20 @@ export type PairRedeemRequest = z.infer<typeof pairRedeemRequestSchema>;
 export const pairRedeemResponseSchema = z.strictObject({ deviceToken: z.string().min(1), deviceId: uuid, workspaceId: z.string().min(1) });
 export type PairRedeemResponse = z.infer<typeof pairRedeemResponseSchema>;
 
-export const revokeDeviceCommandSchema = z.strictObject({ commandId: uuid, kind: z.literal('revoke_device'), deviceId: uuid });
+/** A command id is a UUID v4 the client minted; any other UUID version is refused as a malformed request. */
+const commandId = z.uuidv4();
+export const revokeDeviceCommandSchema = z.strictObject({ commandId, kind: z.literal('revoke_device'), deviceId: uuid });
 /** Every `/v1` command, discriminated on `kind`. S0 ships `revoke_device` only; later slices add theirs here. */
 export const v1CommandSchema = z.discriminatedUnion('kind', [revokeDeviceCommandSchema]);
 export type V1Command = z.infer<typeof v1CommandSchema>;
 
 /**
- * What one `/v1/commands` request came to. `duplicate` means this commandId was already answered: the receipt
- * then carries the first answer's reason, or its outcome (`applied`) when the first answer had no reason.
+ * What one `/v1/commands` request came to. `duplicate` means this commandId was already answered to the same
+ * device: the receipt then carries the first answer's reason, or its outcome (`applied`) when the first answer
+ * had no reason. The same commandId from another device, or with another payload, is `refused` as `command_conflict`.
  */
 export const v1CommandReceiptSchema = z.strictObject({
-  commandId: uuid,
+  commandId,
   outcome: z.enum(['applied', 'duplicate', 'refused']),
   reason: attemptReasonSchema.nullable(),
 });

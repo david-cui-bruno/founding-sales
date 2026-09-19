@@ -64,6 +64,10 @@ node out/operator-pairing.cjs \
 
 Success prints `Device code saved to private output. No code printed.`; the code is the one line in the output file, to be pasted once into the thin client's pairing screen. Refusals say `No device code issued`; anything after issuance starts is uncertain, exactly as for a desktop pairing, and a code that may have been issued stays redeemable until its expiry.
 
+**A lost Mac.** Add `--replace-device <DEVICE_ID>` (the lower-case id Diagnostics shows for the old device) to the same command, dry run then execute. The tool reads that device under the same credential after the identity and table checks and refuses an unknown or already revoked one before writing anything (`Device unknown or revoked. No device code issued. Reserved output retained.`). Otherwise the minted code names the device, and the moment the new Mac redeems the code the old device is revoked in the same transaction that creates the new one: its token is refused on its very next request. Until the code is redeemed the old token keeps working. A device may also be revoked from any paired client with `revoke_device` on `POST /v1/commands`; every command transaction checks that the calling device is still unrevoked, so a revocation takes effect even against a request already in flight.
+
+**Tokens expire.** A device token is accepted for ninety days from pairing. After that every request from it answers 401 `{ "error": "unauthenticated", "reason": "device_expired" }`, and the Mac pairs again with a fresh code (`--replace-device` the expired device to keep the device list honest). Diagnostics lists each device with its `expiresAt`.
+
 The three `/v1` routes (`POST /v1/pair/redeem`, `GET /v1/diagnostics`, `POST /v1/commands`) are served by the existing worker Lambda and listed in `local.delegated_routes` of `cloud/terraform/modules/delegated-worker/main.tf`; the HTTP API provisions explicit route keys only, so they become reachable at the next Terraform apply of the worker root (part of David's redeploy). Until that apply the gateway answers 404 for them.
 
 ## What this does not do

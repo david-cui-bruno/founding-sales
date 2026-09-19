@@ -15,11 +15,13 @@ import { V1Devices, V1PairRefused, V1Unauthenticated, type V1Principal } from '.
  *
  *   POST /v1/pair/redeem      unauthenticated   a pairing code in, the device token out, once
  *   GET  /v1/diagnostics      device token      the last attempts (kind, limit), the last tick, the devices
- *   POST /v1/commands         device token      idempotent by commandId; S0 ships `revoke_device` only
+ *   POST /v1/commands         device token      idempotent by commandId, per device; S0 ships `revoke_device` only
  *
- * Errors: 401 `{ error: 'unauthenticated' }`, 404 `{ error: 'not_found' }` for any other `/v1` path or method,
- * 400 `{ error: 'invalid_request' }` on a body or query the contract refuses, 400 or 429 `{ error: 'pair_refused',
- * reason }` on a refused code. Every POST records one attempt (`pairing` or `command`); GET views record none.
+ * Errors: 401 `{ error: 'unauthenticated' }` (with `reason: 'device_expired'` once a device's ninety days are over),
+ * 404 `{ error: 'not_found' }` for any other `/v1` path or method, 400 `{ error: 'invalid_request' }` on a body or
+ * query the contract refuses, 400 or 429 `{ error: 'pair_refused', reason }` on a refused code. Every POST records
+ * one attempt (`pairing` or `command`); GET views record none. Every command transaction carries a ConditionCheck
+ * that the calling device is still unrevoked, so a revocation is effective mid-request, not on the next poll.
  * The handler owns the security headers and passes `respond`, so this module never builds a response by hand.
  */
 
@@ -40,6 +42,7 @@ const diagnosticsQuerySchema = z.strictObject({ kind: attemptKindSchema.optional
   limit: z.coerce.number().int().min(1).max(DIAGNOSTICS_ATTEMPT_LIMIT).optional() });
 /** Only the three fields the view needs are read off the persisted tick record; the rest of it stays where it is. */
 const lastTickSchema = z.object({ at: z.iso.datetime({ precision: 3 }), status: z.enum(['inactive', 'completed', 'aborted']), durationMs: z.number().int().nonnegative() });
+/** A receipt is bound to the device that issued the command; a replay from any other device is a conflict. */
 const receiptRecordSchema = z.strictObject({ fingerprint: z.string().regex(/^[a-f0-9]{64}$/), kind: z.string(), receipt: v1CommandReceiptSchema,
   at: z.iso.datetime({ precision: 3 }), deviceId: z.string().uuid() });
 
@@ -56,23 +59,28 @@ async function readLastTick(store: DynamoStore) {
   return parsed.success ? { at: parsed.data.at, status: parsed.data.status, durationMs: parsed.data.durationMs } : null;
 }
 
-/** The receipt a repeated commandId gets: the first answer's reason (or its outcome), or a conflict when the payload differs. */
-function repeatedReceipt(stored: unknown, expectedFingerprint: string, commandId: string): V1CommandReceipt {
+const unauthenticated = (respond: V1RouterInput['respond'], error: V1Unauthenticated): WorkerHttpResponse =>
+  respond(401, error.reason ? { error: 'unauthenticated', reason: error.reason } : { error: 'unauthenticated' });
+
+/** The receipt a repeated commandId gets: `duplicate` with the first answer's reason (or its outcome) for the device that
+ *  issued it; `command_conflict` for a different payload or a different device. */
+function repeatedReceipt(stored: unknown, expectedFingerprint: string, command: V1Command, principal: V1Principal): V1CommandReceipt {
   const parsed = receiptRecordSchema.safeParse(stored);
   if (!parsed.success) throw new Error('v1_receipt_corrupt');
-  if (parsed.data.fingerprint !== expectedFingerprint) return { commandId, outcome: 'refused', reason: 'command_conflict' };
-  return { commandId, outcome: 'duplicate', reason: parsed.data.receipt.reason ?? parsed.data.receipt.outcome };
+  if (parsed.data.deviceId !== principal.deviceId || parsed.data.fingerprint !== expectedFingerprint) return { commandId: command.commandId, outcome: 'refused', reason: 'command_conflict' };
+  return { commandId: command.commandId, outcome: 'duplicate', reason: parsed.data.receipt.reason ?? parsed.data.receipt.outcome };
 }
 
 /**
- * Applies one command exactly once. The receipt is written under `V1COMMAND#<commandId>` in the same transaction
- * as the command's own write, so a lost response is answered from the receipt and a second copy can never apply.
+ * Applies one command exactly once. The receipt is written under `V1COMMAND#<commandId>` in the same transaction as
+ * the command's own write and as the check that the caller is still an active device, so a lost response is answered
+ * from the receipt, a second copy can never apply, and a revocation that lands mid-request refuses the write.
  */
 async function applyCommand(store: DynamoStore, devices: V1Devices, principal: V1Principal, command: V1Command): Promise<V1CommandReceipt> {
   const key = v1CommandKey(command.commandId);
   const commandFingerprint = fingerprint(command);
   const existing = await store.get<unknown>(key);
-  if (existing) return repeatedReceipt(existing.data, commandFingerprint, command.commandId);
+  if (existing) return repeatedReceipt(existing.data, commandFingerprint, command, principal);
   let receipt: V1CommandReceipt;
   const items: TransactWriteItem[] = [];
   switch (command.kind) {
@@ -82,12 +90,17 @@ async function applyCommand(store: DynamoStore, devices: V1Devices, principal: V
       else receipt = { commandId: command.commandId, outcome: 'refused', reason: plan.refused };
     }
   }
-  const record = { fingerprint: commandFingerprint, kind: command.kind, receipt, at: store.now(), deviceId: principal.deviceId };
-  try { await store.transact([...items, store.put(key, record, null)]); }
+  items.push(store.put(key, { fingerprint: commandFingerprint, kind: command.kind, receipt, at: store.now(), deviceId: principal.deviceId }, null));
+  // The caller must still be an active device when this commits. When the command writes the caller's own row (a
+  // self-revocation) that put's revision fence is the check; a second item on the same key is not allowed.
+  if (!items.some(item => item.Put?.Item?.sk?.S === principal.key)) items.push(devices.activeCheck(principal.key));
+  try { await store.transact(items); }
   catch (error) {
-    // The receipt slot was taken between the read and the write: answer from it. Anything else stays uncertain.
+    // The receipt slot was taken between the read and the write: answer from it.
     const committed = await store.get<unknown>(key);
-    if (committed) return repeatedReceipt(committed.data, commandFingerprint, command.commandId);
+    if (committed) return repeatedReceipt(committed.data, commandFingerprint, command, principal);
+    // No receipt landed. A caller revoked or expired meanwhile is refused as its credential; anything else stays uncertain.
+    if (!(await devices.isActive(principal.key))) throw new V1Unauthenticated();
     throw error;
   }
   return receipt;
@@ -119,7 +132,7 @@ export async function v1Router(input: V1RouterInput): Promise<WorkerHttpResponse
     }
     if (path === '/v1/diagnostics' && method === 'GET') {
       try { await devices.authenticate(input.authorization); }
-      catch (error) { if (error instanceof V1Unauthenticated) return respond(401, { error: 'unauthenticated' }); throw error; }
+      catch (error) { if (error instanceof V1Unauthenticated) return unauthenticated(respond, error); throw error; }
       const query = diagnosticsQuerySchema.safeParse({ kind: input.query.get('kind') ?? undefined, limit: input.query.get('limit') ?? undefined });
       if (!query.success) return respond(400, { error: 'invalid_request' });
       const [attempts, lastTick, deviceList] = await Promise.all([listAttempts(store, query.data), readLastTick(store), devices.listDevices()]);
@@ -130,8 +143,8 @@ export async function v1Router(input: V1RouterInput): Promise<WorkerHttpResponse
       try { principal = await devices.authenticate(input.authorization); }
       catch (error) {
         if (!(error instanceof V1Unauthenticated)) throw error;
-        await recordAttempt(store, { kind: 'command', outcome: 'failed', reason: 'unauthenticated', detail: null, durationMs: null, ref: null });
-        return respond(401, { error: 'unauthenticated' });
+        await recordAttempt(store, { kind: 'command', outcome: 'failed', reason: error.reason ?? 'unauthenticated', detail: null, durationMs: null, ref: null });
+        return unauthenticated(respond, error);
       }
       const request = parseBody(input.body, v1CommandSchema);
       if (!request.success) {
@@ -139,7 +152,14 @@ export async function v1Router(input: V1RouterInput): Promise<WorkerHttpResponse
         return respond(400, { error: 'invalid_request' });
       }
       const started = Date.now();
-      const receipt = await applyCommand(store, devices, principal, request.data);
+      let receipt: V1CommandReceipt;
+      try { receipt = await applyCommand(store, devices, principal, request.data); }
+      catch (error) {
+        if (!(error instanceof V1Unauthenticated)) throw error;
+        const reason = error.reason ?? 'unauthenticated';
+        await recordAttempt(store, { kind: 'command', outcome: 'failed', reason, detail: { code: reason, commandId: request.data.commandId }, durationMs: Date.now() - started, ref: request.data.commandId });
+        return unauthenticated(respond, error);
+      }
       await recordAttempt(store, { kind: 'command', outcome: receipt.outcome === 'refused' ? 'failed' : 'ok',
         reason: receipt.outcome === 'duplicate' ? 'duplicate' : receipt.reason, detail: { code: request.data.kind, commandId: receipt.commandId }, durationMs: Date.now() - started, ref: receipt.commandId });
       return respond(200, v1CommandReceiptSchema.parse(receipt));

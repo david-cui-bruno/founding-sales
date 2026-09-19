@@ -1,7 +1,7 @@
 import type { DynamoAdapter } from './dynamoStore';
 import type { WorkerScope } from './workerAuth';
 
-const HELP = 'Usage: operator-pairing --account 12_DIGITS --region REGION --table TABLE --workspace WORKSPACE --expires 30..600 --scopes events:read[,commands:write,google:grant,pairing:revoke] --output /private/directory/file [--rotate PAIRING_ID] [--execute]\n       operator-pairing --mint-device-code --account 12_DIGITS --region REGION --table TABLE --workspace WORKSPACE --label TEXT --expires 60..900 --output /private/directory/file [--execute]\nDefault: dry-run, no filesystem, credentials or network access. Standalone execute verifies AWS identity after private output reservation. Workspace IDs beginning -- are not supported. Never pass a code or credential as an argument.\n--rotate PAIRING_ID: mint a rotation code for an existing, unrevoked pairing instead of a fresh pairing. The pairing id and every record bound to it stay; redeeming the code replaces both credentials at the next generation with the given scopes, which must keep commands:write and events:read. The previous credentials stop working at redemption.\n--mint-device-code: mint a one-time pairing code for the /v1 thin client instead of a desktop pairing. --label TEXT (1 to 80 printable characters) names the device in Diagnostics; --scopes and --rotate do not apply. Redeemed once at POST /v1/pair/redeem for the single device token; the worker keeps only hashes of the code and the token.';
+const HELP = 'Usage: operator-pairing --account 12_DIGITS --region REGION --table TABLE --workspace WORKSPACE --expires 30..600 --scopes events:read[,commands:write,google:grant,pairing:revoke] --output /private/directory/file [--rotate PAIRING_ID] [--execute]\n       operator-pairing --mint-device-code --account 12_DIGITS --region REGION --table TABLE --workspace WORKSPACE --label TEXT --expires 60..900 --output /private/directory/file [--replace-device DEVICE_ID] [--execute]\nDefault: dry-run, no filesystem, credentials or network access. Standalone execute verifies AWS identity after private output reservation. Workspace IDs beginning -- are not supported. Never pass a code or credential as an argument.\n--rotate PAIRING_ID: mint a rotation code for an existing, unrevoked pairing instead of a fresh pairing. The pairing id and every record bound to it stay; redeeming the code replaces both credentials at the next generation with the given scopes, which must keep commands:write and events:read. The previous credentials stop working at redemption.\n--mint-device-code: mint a one-time pairing code for the /v1 thin client instead of a desktop pairing. --label TEXT (1 to 80 printable characters) names the device in Diagnostics; --scopes and --rotate do not apply. Redeemed once at POST /v1/pair/redeem for the single device token; the worker keeps only hashes of the code and the token. Device tokens are accepted for ninety days from pairing.\n--replace-device DEVICE_ID: with --mint-device-code, the code also retires that device (a lost Mac) in the same transaction that pairs the new one; the tool reads the device under the same credential and refuses an unknown or revoked one before writing anything.';
 const hasControlCharacters = (value: string) => [...value].some(char => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127);
 const SCOPES = ['commands:write', 'events:read', 'google:grant', 'pairing:revoke'] as const;
 const DESKTOP_SCOPES = ['commands:write', 'events:read'] as const;
@@ -9,6 +9,8 @@ const DESKTOP_SCOPES = ['commands:write', 'events:read'] as const;
 const PAIRING_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 /** A /v1 device code lives between one and fifteen minutes (`DEVICE_CODE_EXPIRY_SECONDS` in v1/devices.ts); a desktop bootstrap 30 to 600 seconds. */
 const DEVICE_CODE_EXPIRY = { min: 60, max: 900 } as const;
+/** Lower-case RFC 4122 version 4, the shape the worker mints device ids in and Diagnostics shows. */
+const DEVICE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 export type PairingOptions = {
   account: string; region: string; table: string; workspace: string;
   expires: number; scopes: WorkerScope[]; output: string; execute: boolean;
@@ -18,6 +20,8 @@ export type PairingOptions = {
   mode: 'pairing' | 'device_code';
   /** The device label a /v1 code carries into Diagnostics; null for a desktop pairing. */
   label: string | null;
+  /** The /v1 device the new code retires when redeemed (a lost Mac); null when the code replaces nothing. */
+  replaceDevice: string | null;
 };
 export type OperatorResult = { exitCode: number; message: string };
 const result = (exitCode: number, message: string): OperatorResult => ({ exitCode, message });
@@ -36,7 +40,7 @@ export function parseOperatorArgs(args: readonly string[]): PairingOptions | 'he
       if (mintDeviceCode) throw new Error('invalid_arguments');
       mintDeviceCode = true; continue;
     }
-    if (!['--account', '--region', '--table', '--workspace', '--expires', '--scopes', '--output', '--rotate', '--label'].includes(key)
+    if (!['--account', '--region', '--table', '--workspace', '--expires', '--scopes', '--output', '--rotate', '--label', '--replace-device'].includes(key)
       || fields.has(key) || !args[i + 1] || args[i + 1]!.startsWith('--')) throw new Error('invalid_arguments');
     fields.set(key, args[++i]!);
   }
@@ -53,18 +57,20 @@ export function parseOperatorArgs(args: readonly string[]): PairingOptions | 'he
   if (mintDeviceCode) {
     // A /v1 device code: one label, a one-to-fifteen-minute expiry, and none of the desktop pairing's scope or rotation arguments.
     const label = fields.has('--label') ? get('label') : null;
+    const replaceDevice = fields.has('--replace-device') ? get('replace-device') : null;
     if (fields.has('--scopes') || fields.has('--rotate') || label === null || label.length > 80 || hasControlCharacters(label)
-      || expires < DEVICE_CODE_EXPIRY.min || expires > DEVICE_CODE_EXPIRY.max) throw new Error('invalid_arguments');
-    return { account, region, table, workspace, expires, scopes: [], output, execute, rotate: null, mode: 'device_code', label };
+      || expires < DEVICE_CODE_EXPIRY.min || expires > DEVICE_CODE_EXPIRY.max
+      || (replaceDevice !== null && !DEVICE_ID.test(replaceDevice))) throw new Error('invalid_arguments');
+    return { account, region, table, workspace, expires, scopes: [], output, execute, rotate: null, mode: 'device_code', label, replaceDevice };
   }
   const scopes = get('scopes').split(',');
   const rotate = fields.has('--rotate') ? get('rotate') : null;
-  if (fields.has('--label') || expires < 30 || expires > 600
+  if (fields.has('--label') || fields.has('--replace-device') || expires < 30 || expires > 600
     || scopes.length < 1 || scopes.length > 4 || new Set(scopes).size !== scopes.length
     || scopes.some(scope => !SCOPES.some(allowed => allowed === scope))) throw new Error('invalid_arguments');
   // A rotation names one existing pairing and may never drop the two scopes the desktop pairing needs.
   if (rotate !== null && (!PAIRING_ID.test(rotate) || DESKTOP_SCOPES.some(scope => !scopes.includes(scope)))) throw new Error('invalid_arguments');
-  return { account, region, table, workspace, expires, scopes: scopes as WorkerScope[], output, execute, rotate, mode: 'pairing', label: null };
+  return { account, region, table, workspace, expires, scopes: scopes as WorkerScope[], output, execute, rotate, mode: 'pairing', label: null, replaceDevice: null };
 }
 
 /** Narrow trusted composition seam, not an HTTP route. The standalone adapter
@@ -124,11 +130,17 @@ export async function runOperatorPairing(args: readonly string[], deps?: Operato
       const devices = new V1Devices(new DynamoStore({ dynamo: cloud.dynamo, tableName: arn, workspaceId: options.workspace,
         clock: { now: () => new Date().toISOString() } }));
       if (options.label === null) throw new Error('invalid_arguments');
-      issuanceStarted = true;
-      const minted = await devices.mintPairCode({ label: options.label, expiresInSeconds: options.expires });
-      await output.save(minted.code);
-      saved = true;
-      outcome = result(0, 'Device code saved to private output. No code printed.');
+      // The device to retire is read under the same credential; an unknown or already revoked one is refused before anything is written.
+      const replaced = options.replaceDevice === null ? null : await devices.findDevice(options.replaceDevice);
+      if (options.replaceDevice !== null && (!replaced || replaced.revokedAt !== null)) {
+        outcome = result(1, 'Device unknown or revoked. No device code issued. Reserved output retained.');
+      } else {
+        issuanceStarted = true;
+        const minted = await devices.mintPairCode({ label: options.label, expiresInSeconds: options.expires, ...(replaced ? { replaceDeviceId: replaced.deviceId } : {}) });
+        await output.save(minted.code);
+        saved = true;
+        outcome = result(0, 'Device code saved to private output. No code printed.');
+      }
     } else {
       const { WorkerAuth } = await import('./workerAuth');
       const auth = new WorkerAuth({ dynamo: cloud.dynamo, tableName: arn, workspaceId: options.workspace,

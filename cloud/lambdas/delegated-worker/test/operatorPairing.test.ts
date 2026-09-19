@@ -404,4 +404,65 @@ describe('device code for the /v1 thin client (--mint-device-code)', () => {
     expect(uncertain.exitCode).toBe(1); expect(uncertain.message).toContain('uncertain'); expect(uncertain.message).toContain('Do NOT blindly retry');
     expect(JSON.stringify(uncertain)).not.toContain(sensitive); expect(disk.write).not.toHaveBeenCalled();
   });
+
+  const OLD_DEVICE = '00000000-0000-4000-8000-00000000000a';
+  it('parses --replace-device as a lower-case v4 uuid beside --mint-device-code only', () => {
+    expect(parseOperatorArgs(mintArgs)).toMatchObject({ mode: 'device_code', replaceDevice: null });
+    expect(parseOperatorArgs([...mintArgs, '--replace-device', OLD_DEVICE])).toMatchObject({ mode: 'device_code', replaceDevice: OLD_DEVICE, label: 'David MacBook' });
+    expect(parseOperatorArgs(args)).toMatchObject({ mode: 'pairing', replaceDevice: null });
+    for (const input of [
+      [...args, '--replace-device', OLD_DEVICE],
+      [...mintArgs, '--replace-device', '11111111-1111-1111-1111-111111111111'],
+      [...mintArgs, '--replace-device', OLD_DEVICE.toUpperCase()],
+      [...mintArgs, '--replace-device', 'not-a-device'],
+      [...mintArgs, '--replace-device', OLD_DEVICE, '--replace-device', OLD_DEVICE],
+      [...mintArgs, '--replace-device'],
+    ]) expect(() => parseOperatorArgs(input)).toThrow('invalid_arguments');
+  });
+  it('names --replace-device in help', async () => {
+    const help = await runOperatorPairing(['--help']);
+    expect(help.message).toContain('--replace-device DEVICE_ID');
+  });
+  it('refuses to mint a replacement for an unknown or already revoked device after the identity checks, writing nothing', async () => {
+    const f = deviceFixture();
+    const devices = new V1Devices(f.store);
+    const revoked = await devices.redeem((await devices.mintPairCode({ label: 'Gone Mac', expiresInSeconds: 600 })).code);
+    const plan = await devices.planRevoke(revoked.deviceId);
+    if (!('item' in plan)) throw new Error(plan.refused);
+    await f.store.transact([plan.item]);
+    const before = f.dynamo.dump().length;
+    for (const target of [OLD_DEVICE, revoked.deviceId]) {
+      f.order.length = 0;
+      const response = await runOperatorPairing([...mintArgs, '--replace-device', target, '--execute'], f.deps);
+      expect(response).toEqual({ exitCode: 1, message: 'Device unknown or revoked. No device code issued. Reserved output retained.' });
+      expect(f.order.slice(0, 4)).toEqual(['reserve', 'connect', 'sts', 'table']);
+      expect(f.order.slice(4)).toEqual(['QueryCommand']);
+    }
+    expect(f.dynamo.dump()).toHaveLength(before); expect(disk.write).not.toHaveBeenCalled();
+  });
+  it('mints a code that names the device to replace; redeeming it creates the new device and revokes the old one in one transaction', async () => {
+    const f = deviceFixture();
+    const devices = new V1Devices(f.store);
+    const old = await devices.redeem((await devices.mintPairCode({ label: 'Old Mac', expiresInSeconds: 600 })).code);
+    expect(await devices.authenticate(`Bearer ${old.deviceToken}`)).toMatchObject({ deviceId: old.deviceId });
+    const response = await runOperatorPairing([...mintArgs, '--replace-device', old.deviceId, '--execute'], f.deps);
+    expect(response).toEqual({ exitCode: 0, message: 'Device code saved to private output. No code printed.' });
+    expect(f.order).toEqual(['reserve', 'connect', 'sts', 'table', 'QueryCommand', 'TransactWriteItemsCommand']);
+    const code = (disk.write.mock.calls[0]![0] as string).trim();
+    const codeRow = f.dynamo.dump().find(item => item.sk!.S === `PAIRCODE#${createHash('sha256').update(code).digest('hex')}`)!;
+    expect(JSON.parse(codeRow.data!.S!)).toMatchObject({ label: 'David MacBook', consumedAt: null, replaceDeviceId: old.deviceId });
+    const transactions = f.dynamo.transactions.length;
+    const fresh = await devices.redeem(code);
+    expect(f.dynamo.transactions).toHaveLength(transactions + 1);
+    const keys = f.dynamo.transactions.at(-1)!.TransactItems!.map(item => item.Put!.Item!.sk!.S!).sort();
+    expect(keys.filter(key => key.startsWith('DEVICE#'))).toHaveLength(2);
+    expect(keys.filter(key => key.startsWith('PAIRCODE#'))).toHaveLength(1);
+    await expect(devices.authenticate(`Bearer ${old.deviceToken}`)).rejects.toThrow('unauthenticated');
+    expect(await devices.authenticate(`Bearer ${fresh.deviceToken}`)).toMatchObject({ deviceId: fresh.deviceId, label: 'David MacBook' });
+    // Both devices were created at the fixture's one instant, so the list's order between them is unspecified: check each by id.
+    const listed = await devices.listDevices();
+    expect(listed).toHaveLength(2);
+    expect(listed.find(device => device.deviceId === old.deviceId)).toMatchObject({ revokedAt: '2026-09-01T00:00:00.000Z' });
+    expect(listed.find(device => device.deviceId === fresh.deviceId)).toMatchObject({ label: 'David MacBook', revokedAt: null });
+  });
 });
