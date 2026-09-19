@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { ClientStatus } from '../shared/clientContract';
 import { DiagnosticsPage } from './pages/DiagnosticsPage';
+import { FirmPage } from './pages/FirmPage';
 import { PairPage } from './pages/PairPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { TodayPage } from './pages/TodayPage';
@@ -9,6 +10,9 @@ import { TodayPage } from './pages/TodayPage';
  * The thin client's shell: the Pair page until this Mac holds a device token, then a rail with Today,
  * Diagnostics and Settings and an Unpair button. Today is the landing page: the product is the morning
  * list. The only automatic call on mount is the status read; the page shown adds its own read when it mounts.
+ *
+ * One firm's page (slice S2) is reached from a card, not from the rail: it is a detail of the list, and the client
+ * has one window, so opening a firm replaces the page and Back to Today returns to it.
  */
 type Page = 'today' | 'diagnostics' | 'settings';
 
@@ -21,6 +25,7 @@ const PAGES: { id: Page; label: string }[] = [
 export function App() {
   const [status, setStatus] = useState<ClientStatus | null>(null);
   const [page, setPage] = useState<Page>('today');
+  const [firmId, setFirmId] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
 
   const refreshStatus = useCallback(async () => {
@@ -38,6 +43,7 @@ export function App() {
     try {
       setStatus(await window.callie.unpair());
       setPage('today');
+      setFirmId(null);
     } catch {
       setProblem('The client could not forget the pairing.');
     }
@@ -62,8 +68,8 @@ export function App() {
               <button
                 type="button"
                 className="rail__page"
-                aria-current={page === entry.id ? 'page' : undefined}
-                onClick={() => setPage(entry.id)}
+                aria-current={page === entry.id && firmId === null ? 'page' : undefined}
+                onClick={() => { setPage(entry.id); setFirmId(null); }}
               >
                 {entry.label}
               </button>
@@ -77,9 +83,13 @@ export function App() {
       </nav>
       <main className="content">
         {problem && <p role="alert" className="error">{problem}</p>}
-        {page === 'today' && <TodayPage onStatusChanged={refreshStatus} />}
-        {page === 'diagnostics' && <DiagnosticsPage status={status} onStatusChanged={refreshStatus} />}
-        {page === 'settings' && <SettingsPage />}
+        {firmId !== null ? <FirmPage firmId={firmId} onBack={() => setFirmId(null)} onStatusChanged={refreshStatus} /> : (
+          <>
+            {page === 'today' && <TodayPage onStatusChanged={refreshStatus} onOpenFirm={setFirmId} />}
+            {page === 'diagnostics' && <DiagnosticsPage status={status} onStatusChanged={refreshStatus} />}
+            {page === 'settings' && <SettingsPage />}
+          </>
+        )}
       </main>
     </div>
   );

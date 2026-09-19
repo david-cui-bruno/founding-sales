@@ -12,11 +12,14 @@ import {
   todayViewSchema,
   v1CommandReceiptSchema,
   v1CommandSchema,
+  v1FirmViewSchema,
   type AttemptRecord,
   type DiagnosticsDevice,
   type TodayCard,
+  type TodayLane,
   type TodayView,
   type V1Command,
+  type V1FirmView,
 } from '../../src/shared/contracts/v1Contract';
 
 /**
@@ -28,6 +31,10 @@ import {
  * What a spec can do with it: mint codes, read the fixture it serves, expire or revoke the paired device
  * (the next authenticated request then gets the 401 with that reason), and inspect every request and
  * command the client sent.
+ *
+ * Slice S2 gave it the Firm view and the two commands a card issues. `log_call_outcome` is applied the way the
+ * worker applies it, to the degree the specs need: the card gains the outcome and the note, a promised callback
+ * appears on it, and a never-call or an opt-out takes the firm off the list for good and answers with no card.
  */
 const secret = () => randomBytes(32).toString('base64url');
 const PAIR_CODE = /^[A-Za-z0-9_-]{43}$/;
@@ -43,6 +50,8 @@ export type StubWorker = {
   url: string;
   asOf: string;
   today: TodayView;
+  /** The Firm view the stub serves for one firm, built from the card it is showing. */
+  firmView(firmId: string): V1FirmView | null;
   /** Replace the Today answer (a contract-valid view) for the next reads. */
   setToday(view: TodayView): void;
   requests: StubRequest[];
@@ -118,6 +127,52 @@ export function todayFixture(): TodayView {
           card({ firmId: 'account-ri-2', lane: 'new', reason: 'new_firm', name: 'Rhode Island Firm 2', phone: { number: '+14015550202', verification: 'published' } })],
       },
     },
+  });
+}
+
+const LANES: readonly TodayLane[] = ['replies', 'callbacks', 'due', 'new'];
+/** The card for one firm in a view, whichever lane it stands in, with the lane it was found in. */
+function findCard(view: TodayView, firmId: string): { lane: TodayLane; card: TodayCard } | null {
+  if (view.list === null) return null;
+  for (const lane of LANES) {
+    const card = view.list.lanes[lane].find((entry) => entry.firmId === firmId);
+    if (card) return { lane, card };
+  }
+  return null;
+}
+
+/** The view with one card replaced, or the firm removed when the card is null. */
+function replaceCard(view: TodayView, firmId: string, card: TodayCard | null): TodayView {
+  if (view.list === null) return view;
+  const lanes = { ...view.list.lanes };
+  for (const lane of LANES) {
+    if (!lanes[lane].some((entry) => entry.firmId === firmId)) continue;
+    lanes[lane] = card === null ? lanes[lane].filter((entry) => entry.firmId !== firmId) : lanes[lane].map((entry) => (entry.firmId === firmId ? card : entry));
+  }
+  const counts = { replies: lanes.replies.length, callbacks: lanes.callbacks.length, due: lanes.due.length, new: lanes.new.length };
+  return todayViewSchema.parse({ ...view, list: { ...view.list, header: { ...view.list.header, counts }, lanes } });
+}
+
+/** One Firm view, built from the card the stub is showing so the two can never disagree. */
+function firmViewOf(view: TodayView, firmId: string, asOf: string): V1FirmView | null {
+  const found = findCard(view, firmId);
+  if (!found) return null;
+  const { card } = found;
+  return v1FirmViewSchema.parse({
+    asOf, firmId: card.firmId, name: card.name, website: card.website, city: card.city, state: card.state, timeZone: card.timeZone,
+    status: card.lastOutcome ? 'in_sequence' : 'new', localTime: card.localTime, dialAllowed: card.dialAllowed,
+    holdReason: card.holdReason, holdCode: card.holdCode,
+    routes: card.phone ? [{ routeId: `route-${card.firmId}`, channel: 'phone', value: card.phone.number, verification: card.phone.verification, retired: false, suppressed: false }] : [],
+    sequence: card.nextStep.kind === 'call'
+      ? { source: 'sequence', state: 'active', startedAt: asOf, currentStepId: `step-${card.nextStep.stepIndex}`, stepIndex: card.nextStep.stepIndex,
+        stepCount: card.nextStep.stepCount, nextDueAt: card.nextStep.dueAt, restingUntil: null, entries: 1, heldStepIds: [], lastAdvance: 'continue' }
+      : null,
+    calls: card.lastOutcome ? [{ at: card.lastOutcome.at, outcome: card.lastOutcome.outcome, note: card.lastOutcome.note, callbackOn: card.pendingCallback?.dueOn ?? null,
+      neverCallReason: null, routeId: card.phone ? `route-${card.firmId}` : null, dialAllowed: card.dialAllowed, holdCode: card.holdCode, deviceId: null }] : [],
+    callbacks: card.pendingCallback ? [card.pendingCallback] : [],
+    suppression: null,
+    evidence: { sources: 2, researchedAt: asOf, enteredBy: 'research' },
+    holds: card.dialAllowed || card.holdReason === null ? [] : [{ reason: card.holdReason, code: card.holdCode ?? card.holdReason, count: 1 }],
   });
 }
 
@@ -209,6 +264,15 @@ export async function startStubWorker(): Promise<StubWorker> {
       return send(response, 200, todayViewSchema.parse(today));
     }
 
+    if (url.pathname === '/v1/firms' && method === 'GET') {
+      const auth = authenticate(request.headers.authorization);
+      if ('status' in auth) return send(response, auth.status, auth.body);
+      const firmId = url.searchParams.get('firmId');
+      if (firmId === null || firmId.length === 0) return send(response, 400, { error: 'invalid_request' });
+      const view = firmViewOf(today, firmId, asOf);
+      return view === null ? send(response, 404, { error: 'not_found' }) : send(response, 200, view);
+    }
+
     if (url.pathname === '/v1/commands' && method === 'POST') {
       const auth = authenticate(request.headers.authorization);
       if ('status' in auth) return send(response, auth.status, auth.body);
@@ -219,6 +283,32 @@ export async function startStubWorker(): Promise<StubWorker> {
       const previous = receipts.get(command.commandId);
       if (previous !== undefined) return send(response, 200, previous);
       let receipt: unknown;
+      // One dialed call (S2), applied the way the worker applies it to the degree the specs need.
+      if (command.kind === 'log_call_outcome') {
+        const found = findCard(today, command.firmId);
+        if (!found) receipt = { commandId: command.commandId, outcome: 'refused', reason: 'firm_unknown' };
+        else {
+          const suppressing = command.outcome === 'opt_out' || command.neverCall !== undefined;
+          const card: TodayCard | null = suppressing ? null : {
+            ...found.card,
+            ...(command.outcome === 'callback' && command.callbackOn !== undefined
+              ? { lane: 'callbacks' as const, reason: 'callback_due', pendingCallback: { dueOn: command.callbackOn, promisedAt: command.observedAt },
+                nextStep: { kind: 'callback' as const, dueOn: command.callbackOn } }
+              : { pendingCallback: null }),
+            lastOutcome: { outcome: command.outcome, at: command.observedAt, note: command.note ?? null },
+          };
+          today = replaceCard(today, command.firmId, card);
+          receipt = { commandId: command.commandId, outcome: 'applied', reason: null, slice: { kind: 'card', firmId: command.firmId, card } };
+        }
+        receipts.set(command.commandId, receipt);
+        return send(response, 200, v1CommandReceiptSchema.parse(receipt));
+      }
+      // A firm entered by hand (S2) is in the pool, not on today's list: the slice names it with no card.
+      if (command.kind === 'add_firm') {
+        receipt = { commandId: command.commandId, outcome: 'applied', reason: null, slice: { kind: 'card', firmId: `account-hand-${commands.length}`, card: null } };
+        receipts.set(command.commandId, receipt);
+        return send(response, 200, v1CommandReceiptSchema.parse(receipt));
+      }
       // The stub applies a posture without keeping it: Settings is S5, and the Today fixture carries the postures it shows.
       if (command.kind !== 'revoke_device') {
         receipt = { commandId: command.commandId, outcome: 'applied', reason: null };
@@ -246,6 +336,7 @@ export async function startStubWorker(): Promise<StubWorker> {
     url: `http://127.0.0.1:${port}`,
     asOf,
     get today() { return today; },
+    firmView: (firmId) => firmViewOf(today, firmId, asOf),
     setToday: (view) => { today = todayViewSchema.parse(view); },
     requests,
     commands,
