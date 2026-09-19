@@ -4,9 +4,15 @@ import type { AccountRoute } from '../../../../../src/shared/contracts/accountCo
 import { enrollmentSchema, type CampaignVersion, type Enrollment, type StepEvidence } from '../../../../../src/shared/contracts/campaignContract';
 import { deriveTerritoryCampaignVersion, DEFAULT_TERRITORY_CALL_POLICY_DEFINITION, territoryCallPolicyId, territoryCallPolicySchema,
   territoryEnrollmentCommandId, territoryEnrollmentId, territoryExecutionContextId, territoryHeldSteps, type TerritoryCallPolicy } from '../../../../../src/shared/contracts/territoryCallPolicyContract';
+import { TERRITORY_RULES_REVISION } from '../../../../../src/shared/contracts/territoryClearanceContract';
+import type { StatePosture } from '../../../../../src/shared/contracts/v1Contract';
 import type { DynamoStore } from '../../src/dynamoStore';
 import { fingerprint } from '../../src/dynamoStore';
+import { RemoteGoogleAuthorization } from '../../src/remoteGoogleAuthorization';
+import { createSourceCoordinator, type SourceTickReport } from '../../src/sourceCoordinator';
+import { dayKey, dayRecordSchema, type DayRecord } from '../../src/v1/dayBuild';
 import { accountKey } from '../../src/workerAccountRepository';
+import type { v1Fixture } from './v1Fixture';
 import { campaignEnrollmentKey, campaignVersionKey, territoryEnrollmentKey, territoryRetiredRouteKey } from '../../src/workerCampaignRepository';
 import { territoryCallPolicyKey, type TerritoryEnrollmentRecord } from '../../src/territoryPolicyRepository';
 import { mailSuppressionKey } from '../../src/threadIntakeRepository';
@@ -126,3 +132,40 @@ export async function putMailSuppression(store: DynamoStore, firmId: string, obs
 
 /** The listed phone route id `firmRecord` derives, so a test can name it without reading the record back. */
 export const listedRouteId = (firmId: string, phone: string): string => `route-${fingerprint([firmId, 'listed-phone', phone])}`;
+
+/** A fictional Rhode Island firm `n`: Providence address, a listed phone outside the refused 555-01XX block. */
+export function riFirm(n: number, extra: Partial<FirmInput> = {}): FirmInput {
+  return { id: `account-ri-${n}`, name: `Rhode Island Firm ${n}`, address: `${n} Hope St, Providence, RI 02906, USA`, phone: `+1401555${String(200 + n).padStart(4, '0')}`,
+    researchedAt: `2026-09-${String(10 + (n % 7)).padStart(2, '0')}T12:00:00.000Z`, ...extra };
+}
+
+/** The existing scheduled tick on the fixture's store: no providers, every HTTP boundary refused. Returns the report and the console lines the tick logged. */
+export function tickOf(f: ReturnType<typeof v1Fixture>): () => Promise<{ report: SourceTickReport; lines: string[] }> {
+  const fetch: typeof globalThis.fetch = async () => { throw new Error('unconfigured fictional HTTP'); };
+  const authorization = new RemoteGoogleAuthorization({ auth: f.auth, fetch });
+  const source = createSourceCoordinator({ auth: f.auth, authorization, fetch });
+  return async () => {
+    const log = console.log; const lines: string[] = []; console.log = (...args: unknown[]) => { lines.push(args.map(String).join(' ')); };
+    try { return { report: await source.tick(new AbortController().signal), lines }; } finally { console.log = log; }
+  };
+}
+
+/** Record David's posture for one state through the real command route. */
+export async function setPosture(f: ReturnType<typeof v1Fixture>, bearer: string, state: string, posture: StatePosture): Promise<void> {
+  const response = await f.request('POST', '/v1/commands', { authorization: bearer, body: { commandId: randomUUID(), kind: 'set_state_posture', state, posture,
+    registration: { status: 'exempt', citation: 'checked' }, dncList: { status: 'not_required', citation: 'checked' }, referenceTextRevision: TERRITORY_RULES_REVISION } });
+  if (response.statusCode !== 200) throw new Error(`posture failed in fixture: ${response.statusCode}`);
+}
+
+/** An earlier day's list, written the way the build writes it, so "never in any earlier DAY#" has something to read. */
+export async function putDay(store: DynamoStore, input: { date: string; builtAt: string; newFirmIds: string[] }): Promise<DayRecord> {
+  const record = dayRecordSchema.parse({ version: 1, date: input.date, timeZone: 'America/New_York', builtAt: input.builtAt,
+    lanes: { replies: [], callbacks: [], due: [], new: input.newFirmIds.map(firmId => ({ firmId, reason: 'new_firm' })) }, poolSize: input.newFirmIds.length, excluded: {} });
+  await store.transact([store.put(dayKey(input.date), record, null)]);
+  return record;
+}
+
+export const readDay = (f: ReturnType<typeof v1Fixture>, date: string): DayRecord | null => {
+  const raw = f.db.inspect(dayKey(date));
+  return raw === undefined ? null : dayRecordSchema.parse(raw);
+};

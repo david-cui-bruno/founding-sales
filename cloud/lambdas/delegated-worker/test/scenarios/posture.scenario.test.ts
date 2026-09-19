@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { TERRITORY_RULES_REVISION } from '../../../../../src/shared/contracts/territoryClearanceContract';
 import { diagnosticsViewSchema, statePostureRecordSchema, type StatePostureRecord } from '../../../../../src/shared/contracts/v1Contract';
 import { postureReviewAt, readPostures, stateClearance, stateKey } from '../../src/v1/postures';
+import { putFirm, putTerritoryPolicy, readDay, riFirm, setPosture, tickOf } from './firmFixtures';
 import { v1Fixture } from './v1Fixture';
 
 /**
@@ -84,6 +85,21 @@ describe('set_state_posture and the STATE# record', () => {
     }
     expect(f.db.inspect(stateKey('RI'))).toBeUndefined();
     expect(f.db.inspect('STATE#ZZ')).toBeUndefined();
+  });
+
+  it('a posture older than twelve months no longer clears its state: the build excludes every firm there as state_not_cleared / posture_review_overdue', async () => {
+    const f = v1Fixture('2025-09-01T12:00:00.000Z');
+    const store = f.store; const tick = tickOf(f);
+    await putTerritoryPolicy(store, '2025-08-01T12:00:00.000Z');
+    // Decided a year and seventeen days before the morning in question.
+    await setPosture(f, (await f.pairDevice('Old MacBook')).bearer, 'RI', 'calling');
+    for (let n = 1; n <= 4; n++) await putFirm(store, riFirm(n));
+    f.advance('2026-09-18T09:05:00.000Z');
+    await tick();
+    const day = readDay(f, '2026-09-18')!;
+    expect(day.lanes.new).toEqual([]);
+    expect(day.excluded).toEqual({ posture_review_overdue: 4 });
+    expect(stateClearance(new Map((await readPostures(store)).map(record => [record.state, record])), 'RI', '2026-09-18T09:05:00.000Z')).toEqual({ cleared: false, code: 'posture_review_overdue' });
   });
 
   it('clearance: calling and inside twelve months is cleared; not_calling, review overdue and no record each name their code', () => {

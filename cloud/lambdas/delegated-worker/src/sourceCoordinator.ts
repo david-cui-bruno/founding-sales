@@ -25,6 +25,7 @@ import { mailScopeFingerprint } from '../../../../src/main/outreach/providers/gm
 import type { TickHeldReason, TickPhase, TickPhaseHold, TickPhaseResult } from '../../../../src/shared/contracts/researchSetupContract';
 import { buildScheduledRunRecord, tickErrorClass, SOURCE_LAST_TICK_KEY } from './tickLog';
 import { attemptCode, recordAttempt, type AttemptInput } from './v1/attempts';
+import { runScheduledDayBuild } from './v1/dayBuild';
 import { TerritoryPolicyRepository, TERRITORY_BACKFILL_TICK_LIMIT, type TerritoryBackfillReport } from './territoryPolicyRepository';
 import { createSequenceEmailWalker, type SequenceEmailReport } from './sequenceEmailWalker';
 import { createTerritoryMailScopeConfigurator, type TerritoryMailScopeReport } from './territoryMailScope';
@@ -427,6 +428,9 @@ export function createSourceCoordinator(input: SourceCoordinatorOptions) {
     finally { clearTimeout(timer); }
     for (const name of phaseNames) report.phases[name] ??= 'skipped';
     if (signal.aborted) report.status = 'aborted';
+    // The morning list (S1, design section 4): built once per Eastern day by the first tick at or after 05:00, outside the phase
+    // deadline like the tick record. It records its own `list` attempt and the LIST_BUILT line, and never throws into the tick.
+    if (!callerSignal.aborted) await runScheduledDayBuild(store);
     // The record is written outside the tick deadline: a slow tick still leaves its last-run evidence for Settings and the log.
     try { await persistLastTick(report, startedAt); }
     catch { hold(report, 'tick_record_write_failed'); }

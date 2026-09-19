@@ -127,7 +127,12 @@ describe('the existing worker records what it does', () => {
     expect(phases).toHaveLength(tickPhases.length);
     expect(phases.map(phase => phase.ref).sort()).toEqual([...tickPhases].sort());
     for (const phase of phases) expect(phase).toMatchObject({ outcome: 'ok', reason: null, detail: null, durationMs: expect.any(Number) });
-    expect(await listAttempts(f.auth.store, {})).toHaveLength(tickPhases.length + 1);
+    // 12:00Z is 08:00 Eastern: the first tick at or after 05:00 also builds the morning list (S1), once, and records it as a `list` attempt.
+    // With no firms the list is empty; the LIST_BUILT line carries counts only.
+    expect(await listAttempts(f.auth.store, { kind: 'list' })).toEqual([expect.objectContaining({ outcome: 'ok', reason: null, ref: 'day:2026-09-18',
+      detail: { code: 'list_built', count: 0, lanes: { replies: 0, callbacks: 0, due: 0, new: 0 } } })]);
+    expect(lines.filter(line => line.includes('LIST_BUILT'))).toHaveLength(1);
+    expect(await listAttempts(f.auth.store, {})).toHaveLength(tickPhases.length + 2);
   });
 
   it('a phase that fails is a held tick_phase attempt with the phase failure as its reason, and the tick attempt is held for the same reason', async () => {

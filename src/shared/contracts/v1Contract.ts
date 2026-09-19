@@ -17,6 +17,14 @@ const deviceLabel = z.string().min(1).max(80);
 
 /** A closed reason slug: lower-case words joined by underscores, never free text, at most 40 characters. */
 export const attemptReasonSchema = z.string().regex(/^[a-z0-9]+(?:_[a-z0-9]+)*$/).max(40);
+/** The four lanes of the morning list (design section 4), in the order the Today page shows them. */
+export const TODAY_LANES = ['replies', 'callbacks', 'due', 'new'] as const;
+export const todayLaneSchema = z.enum(TODAY_LANES);
+export type TodayLane = z.infer<typeof todayLaneSchema>;
+/** How many cards each lane holds; the `list` attempt and the LIST_BUILT log line carry exactly this. */
+export const laneCountsSchema = z.strictObject({ replies: z.number().int().nonnegative(), callbacks: z.number().int().nonnegative(), due: z.number().int().nonnegative(), new: z.number().int().nonnegative() });
+export type LaneCounts = z.infer<typeof laneCountsSchema>;
+
 /**
  * What an attempt was about, as a closed object and never free text, so no address, token, excerpt or provider
  * message can reach a device through the view. `code` is the closed word for the thing tried or the thing that
@@ -32,10 +40,12 @@ export const attemptDetailSchema = z.strictObject({
   count: z.number().int().nonnegative().optional(),
   bytes: z.number().int().nonnegative().optional(),
   cursor: z.string().max(12).optional(),
+  /** The `list` attempt's counts per lane (S1). */
+  lanes: laneCountsSchema.optional(),
 });
 export type AttemptDetail = z.infer<typeof attemptDetailSchema>;
 
-export const attemptKindSchema = z.enum(['tick', 'tick_phase', 'command', 'events_page', 'send', 'hold', 'research', 'poll', 'pairing']);
+export const attemptKindSchema = z.enum(['tick', 'tick_phase', 'command', 'events_page', 'send', 'hold', 'research', 'poll', 'pairing', 'list']);
 export type AttemptKind = z.infer<typeof attemptKindSchema>;
 export const attemptOutcomeSchema = z.enum(['ok', 'held', 'failed', 'aborted']);
 export type AttemptOutcome = z.infer<typeof attemptOutcomeSchema>;

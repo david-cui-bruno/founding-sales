@@ -111,12 +111,17 @@ describe('scheduled tick record', () => {
       { dynamo: db, ssm, fetch: async () => { throw new Error('unexpected HTTP'); }, pageHttp: async () => { throw new Error('unexpected page HTTP'); }, resolve: async () => { throw new Error('unexpected DNS'); } });
     const result = await handler({ source: 'aws.events', 'detail-type': 'Scheduled Event', resources: [arn], detail: { private: firm } });
     expect(result.statusCode).toBe(200);
-    expect(log).toHaveBeenCalledTimes(1);
-    const line = String(log.mock.calls[0]![0]);
+    // One SCHEDULED_RUN_COMPLETED line per tick. From 05:00 Eastern the first tick of the day also builds the morning list (S1)
+    // and writes its one LIST_BUILT line, counts only; this test runs on the wall clock, so it reads what the tick actually did.
+    const lines = log.mock.calls.map(call => String(call[0]));
+    const events = lines.map(entry => (JSON.parse(entry) as { event: string }).event);
+    const builtList = db.dump().some(item => item.sk?.S?.startsWith('DAY#'));
+    expect(events).toEqual(builtList ? ['LIST_BUILT', 'SCHEDULED_RUN_COMPLETED'] : ['SCHEDULED_RUN_COMPLETED']);
+    const line = lines[events.indexOf('SCHEDULED_RUN_COMPLETED')]!;
     const record = JSON.parse(line) as Record<string, unknown>;
     expect(Object.keys(record).sort()).toEqual([...scheduledRunRecordFields].sort());
     expect(record).toMatchObject({ event: 'SCHEDULED_RUN_COMPLETED', status: 'inactive', held: 0, places: null, descriptorExpired: false });
-    expect(line).not.toContain(firm); expect(line).not.toContain(arn);
+    for (const entry of lines) { expect(entry).not.toContain(firm); expect(entry).not.toContain(arn); }
     expect(db.inspect('SOURCE_LAST_TICK')).toMatchObject({ event: 'SCHEDULED_RUN_COMPLETED', status: 'inactive', held: 0 });
     log.mockRestore();
   });
