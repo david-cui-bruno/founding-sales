@@ -7,6 +7,9 @@ import { evaluateDial, type DialEvaluation } from './callWindow';
 import { lastCallsByFirm, pendingCallbacksByFirm, type CallRecord } from './calls';
 import { dayKey, dayRecordSchema, laneCounts, NEW_LANE_EXCLUSIONS, type DayRecord, type LaneEntry, type NewLaneExclusion } from './dayBuild';
 import { createAccountFirmSource, type FirmCard, type FirmSource } from './firms';
+import { pendingDraftsByFirm, type DraftRecord } from './mail';
+import { holdReasonOf } from './send';
+import { createSequencePort, type SequenceRecord as MailSequenceRecord } from './sequenceBridge';
 import { readLastTick } from './lastTick';
 import { EASTERN, localParts } from './localClock';
 import { postureSummary, readPostures } from './postures';
@@ -58,8 +61,9 @@ function nextStepOf(lane: TodayLane, firm: FirmCard, history: CardHistory): Toda
   return { kind: 'call', stepIndex: enrollment.currentStepIndex, stepCount: enrollment.stepCount, dueAt: enrollment.nextDueAt };
 }
 
-/** One card. Pure over the firm, the lane entry, the instant, the offer and what S2 recorded about the firm. */
-export function todayCard(firm: FirmCard, lane: TodayLane, entry: LaneEntry, now: string, offer: string | null, history: CardHistory = {}): TodayCard {
+/** One card. Pure over the firm, the lane entry, the instant, the offer, what S2 recorded and what S3's mail left. */
+export function todayCard(firm: FirmCard, lane: TodayLane, entry: LaneEntry, now: string, offer: string | null,
+  history: CardHistory = {}, mail: { draft?: DraftRecord; sequence?: MailSequenceRecord } = {}): TodayCard {
   const dial: DialEvaluation = firm.hold ? { dialAllowed: false, holdReason: firm.hold.reason, holdCode: firm.hold.code, localTime: null, openNow: null } : evaluateDial(now, firm.timeZone);
   // The new `CALL#` record first, the old-key call evidence second; the note only ever comes from the new record.
   const lastOutcome: TodayCard['lastOutcome'] = history.lastCall ? { outcome: history.lastCall.outcome, at: history.lastCall.observedAt, note: history.lastCall.note }
@@ -68,7 +72,11 @@ export function todayCard(firm: FirmCard, lane: TodayLane, entry: LaneEntry, now
     phone: firm.phone ? { number: firm.phone.number, verification: firm.phone.verification } : null,
     website: firm.website, city: firm.city, state: firm.state, timeZone: firm.timeZone,
     localTime: dial.localTime, openNow: dial.openNow, dialAllowed: dial.dialAllowed, holdReason: dial.holdReason, holdCode: dial.holdCode,
-    offer, lastOutcome, pendingCallback: history.pendingCallback ?? null, nextStep: nextStepOf(lane, firm, history) };
+    offer, lastOutcome, pendingCallback: history.pendingCallback ?? null, nextStep: nextStepOf(lane, firm, history),
+    // S3: the draft waiting for David on this firm, and why its sequence is not moving. Both null when there is nothing to say.
+    pendingDraft: mail.draft ? { draftId: mail.draft.draftId, kind: mail.draft.kind, status: mail.draft.status === 'sent' ? 'approved' : mail.draft.status,
+      subject: mail.draft.subject, createdAt: mail.draft.createdAt } : null,
+    sequenceHold: sequenceHoldOf(mail.sequence) };
 }
 
 /** The holds among the build's exclusions, by reason and code, in the order the build checks them. */
@@ -88,14 +96,22 @@ export function statesWithoutPosture(firms: readonly FirmCard[], postured: Reado
   return [...states].sort();
 }
 
+/** The sequence's own hold, as Today reads it: the closed code the fence or the poller recorded, and the step it sits on. */
+export function sequenceHoldOf(sequence: MailSequenceRecord | undefined): TodayCard['sequenceHold'] {
+  if (!sequence) return null;
+  const held = sequence.heldSteps.at(-1);
+  if (sequence.holdCode !== null) return { reason: holdReasonOf(sequence.holdCode), code: sequence.holdCode, stepId: sequence.currentStepId };
+  return held ? { reason: holdReasonOf(held.code), code: held.code, stepId: held.stepId } : null;
+}
+
 const isEmpty = (counts: LaneCounts) => counts.replies + counts.callbacks + counts.due + counts.new === 0;
 
 export async function readTodayView(store: DynamoStore, options: { firms?: FirmSource } = {}): Promise<TodayView> {
   const asOf = store.now();
   const date = localParts(asOf, EASTERN).date;
-  const [dayRow, postures, firms, lastTick, offer, lastCalls, pendingCallbacks, sequences] = await Promise.all([store.get<unknown>(dayKey(date)), readPostures(store),
-    (options.firms ?? createAccountFirmSource(store)).listFirms(), readLastTick(store), readOffer(store),
-    lastCallsByFirm(store), pendingCallbacksByFirm(store), listSequenceRecords(store)]);
+  const [dayRow, postures, firms, lastTick, offer, lastCalls, pendingCallbacks, sequences, drafts] = await Promise.all([store.get<unknown>(dayKey(date)),
+    readPostures(store), (options.firms ?? createAccountFirmSource(store)).listFirms(), readLastTick(store), readOffer(store),
+    lastCallsByFirm(store), pendingCallbacksByFirm(store), listSequenceRecords(store), pendingDraftsByFirm(store)]);
   const summaries: StatePostureSummary[] = postures.map(record => postureSummary(record, asOf));
   const missing = statesWithoutPosture(firms, new Set(postures.map(record => record.state)));
   const day = dayRow ? dayRecordSchema.safeParse(dayRow.data) : null;
@@ -106,10 +122,17 @@ export async function readTodayView(store: DynamoStore, options: { firms?: FirmS
     return todayViewSchema.parse({ asOf, list: null, reason, postures: summaries, statesWithoutPosture: missing });
   }
   const byFirm = new Map(firms.map(firm => [firm.firmId, firm]));
+  const sequencePort = createSequencePort(store);
+  const listed = [...new Set(TODAY_LANES.flatMap(lane => record.lanes[lane].map(entry => entry.firmId)))];
+  const sequenceByFirm = new Map((await Promise.all(listed.map(async firmId => [firmId, await sequencePort.read(firmId)] as const)))
+    .flatMap(([firmId, sequence]) => sequence ? [[firmId, sequence] as const] : []));
   const lanes = Object.fromEntries(TODAY_LANES.map(lane => [lane, record.lanes[lane].flatMap(entry => {
     const firm = byFirm.get(entry.firmId);
+    const draft = drafts.get(entry.firmId);
+    const sequence = sequenceByFirm.get(entry.firmId);
     return firm ? [todayCard(firm, lane, entry, asOf, offer,
-      { lastCall: lastCalls.get(entry.firmId), pendingCallback: pendingCallbacks.get(entry.firmId), sequence: sequences.get(entry.firmId) })] : [];
+      { lastCall: lastCalls.get(entry.firmId), pendingCallback: pendingCallbacks.get(entry.firmId), sequence: sequences.get(entry.firmId) },
+      { ...(draft ? { draft } : {}), ...(sequence ? { sequence } : {}) })] : [];
   })])) as Record<TodayLane, TodayCard[]>;
   return todayViewSchema.parse({ asOf, list: { header: { date: record.date, builtAt: record.builtAt, poolSize: record.poolSize, counts, holds: holdsOf(record),
     excluded: record.excluded, lastTick, postures: summaries, statesWithoutPosture: missing }, lanes } });

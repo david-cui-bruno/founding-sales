@@ -346,8 +346,14 @@ export async function startStubWorker(): Promise<StubWorker> {
         return send(response, 200, v1CommandReceiptSchema.parse(receipt));
       }
       // `admit_route` and `suppress` (S2) are applied without being kept: no spec reads them back off the stub.
-      if (command.kind !== 'revoke_device') {
+      if (command.kind === 'admit_route' || command.kind === 'suppress') {
         receipt = { commandId: command.commandId, outcome: 'applied', reason: null };
+        receipts.set(command.commandId, receipt);
+        return send(response, 200, v1CommandReceiptSchema.parse(receipt));
+      }
+      // Anything else the contract carries that no client page sends yet is refused honestly, never answered as applied.
+      if (command.kind !== 'revoke_device') {
+        receipt = { commandId: command.commandId, outcome: 'refused', reason: 'command_not_stubbed' };
         receipts.set(command.commandId, receipt);
         return send(response, 200, v1CommandReceiptSchema.parse(receipt));
       }

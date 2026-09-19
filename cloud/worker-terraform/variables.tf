@@ -101,6 +101,13 @@ variable "alarm_email" {
   }
 }
 
+variable "delegated_worker_legacy_email_enabled" {
+  description = "Whether the old five-minute tick still walks sequence email steps, configures per-firm mail scopes and polls the mailbox. True keeps today's behaviour; the S3 deploy directive sets it false, after which the old app still shows and dials but no longer sends or polls. It never enables a schedule, a grant or a send."
+  type        = bool
+  default     = true
+  nullable    = false
+}
+
 variable "monthly_budget_usd" {
   description = "Account-wide monthly AWS Budget in whole USD. Notifications fire at 100% and 200% of this amount (USD 25 and USD 50 by default) and on a 100% forecast. A notification, never a hard billing cap."
   type        = number
