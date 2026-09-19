@@ -34,7 +34,6 @@ export type V1RouterInput = {
   respond: (statusCode: number, body: unknown) => WorkerHttpResponse;
 };
 
-export const V1_ROUTES = { pairRedeem: '/v1/pair/redeem', diagnostics: '/v1/diagnostics', commands: '/v1/commands' } as const;
 export const v1CommandKey = (commandId: string): string => `V1COMMAND#${keyPart(commandId)}`;
 
 const diagnosticsQuerySchema = z.strictObject({ kind: attemptKindSchema.optional(),
@@ -99,8 +98,9 @@ export async function v1Router(input: V1RouterInput): Promise<WorkerHttpResponse
   const store = input.auth.store;
   const devices = new V1Devices(store);
   try {
-    if (path === V1_ROUTES.pairRedeem) {
-      if (method !== 'POST') return respond(404, { error: 'not_found' });
+    // One path literal and its method per line: tests/infrastructure/delegatedWorkerRouteParity.test.ts reads these
+    // lines and checks them against the API Gateway route keys Terraform provisions. Any other path or method is 404.
+    if (path === '/v1/pair/redeem' && method === 'POST') {
       const request = parseBody(input.body, pairRedeemRequestSchema);
       if (!request.success) {
         await recordAttempt(store, { kind: 'pairing', outcome: 'failed', reason: 'invalid_request', detail: null, durationMs: null, ref: null });
@@ -117,8 +117,7 @@ export async function v1Router(input: V1RouterInput): Promise<WorkerHttpResponse
         return respond(error.reason === 'too_many_failures' ? 429 : 400, { error: 'pair_refused', reason: error.reason });
       }
     }
-    if (path === V1_ROUTES.diagnostics) {
-      if (method !== 'GET') return respond(404, { error: 'not_found' });
+    if (path === '/v1/diagnostics' && method === 'GET') {
       try { await devices.authenticate(input.authorization); }
       catch (error) { if (error instanceof V1Unauthenticated) return respond(401, { error: 'unauthenticated' }); throw error; }
       const query = diagnosticsQuerySchema.safeParse({ kind: input.query.get('kind') ?? undefined, limit: input.query.get('limit') ?? undefined });
@@ -126,8 +125,7 @@ export async function v1Router(input: V1RouterInput): Promise<WorkerHttpResponse
       const [attempts, lastTick, deviceList] = await Promise.all([listAttempts(store, query.data), readLastTick(store), devices.listDevices()]);
       return respond(200, diagnosticsViewSchema.parse({ asOf: store.now(), attempts, lastTick, devices: deviceList }));
     }
-    if (path === V1_ROUTES.commands) {
-      if (method !== 'POST') return respond(404, { error: 'not_found' });
+    if (path === '/v1/commands' && method === 'POST') {
       let principal: V1Principal;
       try { principal = await devices.authenticate(input.authorization); }
       catch (error) {

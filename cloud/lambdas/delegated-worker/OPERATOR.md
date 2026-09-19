@@ -64,7 +64,7 @@ node out/operator-pairing.cjs \
 
 Success prints `Device code saved to private output. No code printed.`; the code is the one line in the output file, to be pasted once into the thin client's pairing screen. Refusals say `No device code issued`; anything after issuance starts is uncertain, exactly as for a desktop pairing, and a code that may have been issued stays redeemable until its expiry.
 
-The three `/v1` routes (`POST /v1/pair/redeem`, `GET /v1/diagnostics`, `POST /v1/commands`) are served by the existing worker Lambda, but the HTTP API provisions explicit route keys only: they need the matching entries in `local.delegated_routes` of `cloud/terraform/modules/delegated-worker/main.tf`, a separately approved Terraform change, before a client can reach them.
+The three `/v1` routes (`POST /v1/pair/redeem`, `GET /v1/diagnostics`, `POST /v1/commands`) are served by the existing worker Lambda and listed in `local.delegated_routes` of `cloud/terraform/modules/delegated-worker/main.tf`; the HTTP API provisions explicit route keys only, so they become reachable at the next Terraform apply of the worker root (part of David's redeploy). Until that apply the gateway answers 404 for them.
 
 ## What this does not do
 
