@@ -90,6 +90,13 @@ variable "delegated_worker_schedule_enabled" {
   default     = false
 }
 
+variable "delegated_worker_legacy_email_enabled" {
+  description = "Whether the old five-minute tick still walks sequence email steps, configures per-firm mail scopes and polls the mailbox. True keeps today's behaviour; the S3 deploy directive sets it false, after which the old app still shows and dials but no longer sends or polls. It never enables a schedule, a grant or a send."
+  type        = bool
+  default     = true
+  nullable    = false
+}
+
 variable "worker_source_dir" {
   description = "Caller-owned path to the separately built delegated-worker dist directory. No build is run by Terraform."
   type        = string
