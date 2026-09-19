@@ -1,12 +1,16 @@
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { isExcludedNumber } from '../../../src/main/communications/excludedNumbers';
 import { createPhoneHandoffLauncher } from '../../../src/main/communications/phoneHandoffLauncher';
-import { createNativePhoneLaunchDriver, resolveVerifiedNativePhoneHelper } from '../../../src/main/communications/phoneLaunchDriver';
+import { createNativePhoneLaunchDriver, inspectNativePhoneRouteCandidate, resolveVerifiedNativePhoneHelper } from '../../../src/main/communications/phoneLaunchDriver';
 import { PhoneRouteSettings } from '../../../src/main/communications/phoneRouteSettings';
 import { CALLIE_APPLE_BRIDGE_IDENTIFIER } from '../../../src/main/appleBridge/helperPath';
 import type { TodayCard, TodayView } from '../../../src/shared/contracts/v1Contract';
 import { TODAY_STALE_MS } from '../renderer/today/todayModel';
-import { DIAL_REFUSAL_SENTENCES, type DialRefusal, type DialResult } from '../shared/clientContract';
+import { DIAL_REFUSAL_SENTENCES, PHONE_SETUP_SENTENCES, type ClientPhoneSetup as ClientPhoneSetupResult,
+  type DialRefusal, type DialResult } from '../shared/clientContract';
+
+type PhoneSetupState = ClientPhoneSetupResult['state'];
 
 /**
  * The Phone.app handoff of the thin client (FSS target design section 6: the only native piece). The launcher, the
@@ -128,8 +132,87 @@ export function createProductionDialLauncher(input: {
   })().catch(() => null);
 }
 
+/**
+ * The fingerprint of the phone helper this Mac would actually launch (S5), for the setup proof. Null on anything
+ * but a packaged macOS build, because `resolveVerifiedNativePhoneHelper` refuses an unpackaged helper outright:
+ * a development run and the Playwright specs therefore have no candidate and the section says so.
+ */
+export async function inspectProductionPhoneCandidate(input: {
+  isPackaged: boolean;
+  resourcesPath: string;
+  parentExecutablePath: string;
+  platform?: NodeJS.Platform;
+}): Promise<string | null> {
+  if ((input.platform ?? process.platform) !== 'darwin' || !input.isPackaged) return null;
+  try {
+    const verifiedHelperPath = await resolveVerifiedNativePhoneHelper({
+      path: { isPackaged: true, resourcesPath: input.resourcesPath, developmentExecutablePath: '/forbidden', environment: {} },
+      signature: { parentExecutablePath: input.parentExecutablePath, expectedIdentifier: CALLIE_APPLE_BRIDGE_IDENTIFIER },
+    });
+    return await inspectNativePhoneRouteCandidate({ verifiedHelperPath });
+  } catch { return null; }
+}
+
 /** Whether the local setup proof this Mac holds names a fingerprint at all. Read-only; never authorization. */
 export function readPhoneSetupProof(clientDirectory: string): { confirmed: boolean; confirmedAt: string | null } {
   const proof = new PhoneRouteSettings(join(clientDirectory, 'phone-route.json')).read();
   return { confirmed: proof !== null, confirmedAt: proof?.confirmedAt ?? null };
+}
+
+/**
+ * The Phone.app setup proof as the Settings page reads and writes it (slice S5). The proof rule is the old app's,
+ * carried here unchanged: `PhoneRouteSettings` owns the file (0600, no symlink, no oversize, three keys), and the
+ * state is the same comparison `createPhoneSetupService` makes — the stored fingerprint against the fingerprint of
+ * the helper this Mac would actually launch. What differs is the shape it is reported in, and that the digest the
+ * worker records is the sha256 of the fingerprint rather than the fingerprint itself.
+ *
+ * Nothing here dials, and confirming is not permission to dial: the launcher checks the helper's signature and the
+ * excluded-number rules at the moment a number is handed over, whatever this file says.
+ */
+export type ClientPhoneSetupInput = {
+  clientDirectory: string;
+  /** The fingerprint of the helper this Mac would launch, or null when there is none to inspect. */
+  inspectCandidate: () => Promise<string | null>;
+  now?: () => string;
+};
+
+export const proofDigest = (fingerprint: string): string => createHash('sha256').update(fingerprint).digest('hex');
+
+export class ClientPhoneSetup {
+  private readonly settings: PhoneRouteSettings;
+  constructor(private readonly input: ClientPhoneSetupInput) {
+    this.settings = new PhoneRouteSettings(join(input.clientDirectory, 'phone-route.json'));
+  }
+
+  private answer(state: PhoneSetupState, proof: { fingerprint: string; confirmedAt: string } | null, candidate: string | null): ClientPhoneSetupResult {
+    return { state, confirmedAt: proof?.confirmedAt ?? null, proofDigest: proof ? proofDigest(proof.fingerprint) : null,
+      candidateDigest: candidate === null ? null : proofDigest(candidate), sentence: PHONE_SETUP_SENTENCES[state] };
+  }
+
+  /** The state of this Mac's proof. A candidate that cannot be inspected is `unavailable`, never a guess. */
+  async read(): Promise<ClientPhoneSetupResult> {
+    let candidate: string | null;
+    try { candidate = await this.input.inspectCandidate(); } catch { candidate = null; }
+    const proof = this.settings.read();
+    if (candidate === null) return this.answer('unavailable', proof, null);
+    if (proof?.fingerprint === candidate) return this.answer('configured', proof, candidate);
+    return this.answer('needs_confirmation', proof, candidate);
+  }
+
+  /** Writes the proof for the helper this Mac would launch. Refuses when there is none: no proof is ever invented. */
+  async confirm(): Promise<ClientPhoneSetupResult> {
+    let candidate: string | null;
+    try { candidate = await this.input.inspectCandidate(); } catch { candidate = null; }
+    if (candidate === null) return this.answer('unavailable', this.settings.read(), null);
+    const confirmedAt = (this.input.now ?? (() => new Date().toISOString()))();
+    try { this.settings.confirm({ version: 1, fingerprint: candidate, confirmedAt }); }
+    catch { return this.answer('unavailable', this.settings.read(), candidate); }
+    return this.read();
+  }
+
+  /** Removes the proof. A Mac with no proof cannot hand a number to Phone.app at all. */
+  async clear(): Promise<ClientPhoneSetupResult> {
+    try { this.settings.clear(); } catch { /* A proof that cannot be removed is reported by the read below. */ }
+    return this.read();
+  }
 }

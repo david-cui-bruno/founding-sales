@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { pairRedeemResponseSchema, v1CommandReceiptSchema, v1CommandSchema, type V1Command } from '../../../src/shared/contracts/v1Contract';
 import {
+  clientPhoneSetupSchema,
   clientStatusSchema,
   dialRequestSchema,
   dialResultSchema,
@@ -14,18 +15,20 @@ import {
   type PairRequest,
   type PairResult,
   type ReadRequest,
+  type ClientPhoneSetup as ClientPhoneSetupResult,
+  type PhoneSetupAction,
   type ReadResult,
   type TodayView,
 } from '../shared/clientContract';
 import { readLastGoodToday, writeLastGoodToday } from './lastGood';
-import { ClientPhone, type HandoffLauncher, type HeldView } from './phone';
+import { ClientPhone, ClientPhoneSetup, type HandoffLauncher, type HeldView } from './phone';
 import { deleteCodeFile, PairCodeError, resolvePairCode, type PairCodeRefusal } from './pairCode';
 import { TokenStoreError, type StoredDevice, type TokenStore } from './tokenStore';
 import { requestWorker, type WorkerFailure, type WorkerReply } from './workerClient';
 import type { EndpointResolution } from './workerEndpoint';
 
 /**
- * The client's five operations behind the IPC channels: status, pair, get, command, unpair. Every worker
+ * The client's operations behind the IPC channels: status, pair, get, command, dial, phoneSetup, unpair. Every worker
  * exchange goes through `requestWorker` (15 s, one retry on a network failure, never on an answer) and
  * every outcome is one of the honest states the renderer shows: ok, unavailable, unauthenticated,
  * unpaired, or for pairing paired, refused, unavailable. A 401 that names `device_revoked` or
@@ -86,6 +89,11 @@ export type ClientCoreInput = {
   now?: () => string;
   /** The Phone.app launcher. Absent means this Mac has no phone route, which is what a development run has. */
   dialLauncher?: () => Promise<HandoffLauncher | null>;
+  /**
+   * The fingerprint of the phone helper this Mac would launch (slice S5), for the setup proof. Absent means there
+   * is none to inspect, which is what an unpackaged run and the Playwright specs have, and the setup section says so.
+   */
+  inspectPhoneCandidate?: () => Promise<string | null>;
 };
 
 export class ClientCore {
@@ -93,9 +101,12 @@ export class ClientCore {
   /** The Today view this process last served the renderer, and when it was fetched. The handoff's only source of truth. */
   private held: HeldView | null = null;
   private readonly phone: ClientPhone;
+  private readonly phoneSetup: ClientPhoneSetup;
 
   constructor(private readonly input: ClientCoreInput) {
     this.phone = new ClientPhone({ heldView: () => this.held, launcher: input.dialLauncher ?? (async () => null) });
+    this.phoneSetup = new ClientPhoneSetup({ clientDirectory: input.clientDirectory,
+      inspectCandidate: input.inspectPhoneCandidate ?? (async () => null), now: () => this.now() });
   }
 
   /** The Today view this Mac is showing, for the handoff gate and for a test that needs to see it. */
@@ -199,6 +210,19 @@ export class ClientCore {
   async dial(request: DialRequest): Promise<DialResult> {
     const parsed = dialRequestSchema.parse(request);
     return dialResultSchema.parse(await this.phone.dial(parsed));
+  }
+
+  /**
+   * The local Phone.app setup proof (S5). The file stays on this Mac: only its state and the sha256 digest the
+   * worker records cross the bridge. Confirming writes the proof and nothing else; it never dials and it is never
+   * permission to dial, and it does not by itself tell the worker anything — the Settings page sends
+   * `confirm_phone_setup` with the digest as a separate, idempotent command.
+   */
+  async phoneSetupAction(request: PhoneSetupAction): Promise<ClientPhoneSetupResult> {
+    const result = request.action === 'confirm' ? await this.phoneSetup.confirm()
+      : request.action === 'clear' ? await this.phoneSetup.clear()
+        : await this.phoneSetup.read();
+    return clientPhoneSetupSchema.parse(result);
   }
 
   async unpair(): Promise<ClientStatus> {

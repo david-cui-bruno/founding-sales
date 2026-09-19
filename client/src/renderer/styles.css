@@ -246,3 +246,22 @@ time { white-space: nowrap; }
 .firm__status, .firm__dial { font-weight: 600; }
 .firm__suppression { color: var(--held); font-weight: 600; }
 .firm__routes li[data-retired="true"] { color: var(--muted); text-decoration: line-through; }
+
+/* Slice S5: Settings sections, the pause banner and the Week page. */
+.paused-banner { margin: 0 0 10px; padding: 6px 10px; border: 1px solid var(--held); border-radius: 4px; color: var(--held); font-weight: 600; font-size: 13px; }
+.settings__section { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 10px; }
+.settings__section h2 { margin: 0 0 4px; font-size: 14px; }
+.settings__section h3 { margin: 8px 0 2px; font-size: 13px; }
+.settings__section p, .settings__section ul { margin: 0; }
+.settings__section ul { list-style: none; padding: 0; display: grid; gap: 6px; font-size: 12px; }
+.template__state, .phone__worker, .phone__local, .google__status, .research__state, .research__descriptor, .research__ledger,
+.sending__cap, .sending__ceiling, .calls__floor, .calls__window, .paused__state, .device__dates { font-size: 12px; color: var(--muted); }
+.template__form, .sending__form, .calls__form, .paused__form { display: grid; gap: 6px; margin-top: 6px; }
+.device { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
+.page--week h2 { margin: 12px 0 4px; font-size: 13px; }
+.page--week p, .page--week ul { margin: 0; }
+.week__totals, .week__outcomes, .week__holds { list-style: none; padding: 0; display: grid; gap: 2px; font-size: 12px; }
+.week__range { color: var(--muted); font-size: 12px; }
+.week__days { border-collapse: collapse; font-size: 12px; margin-top: 4px; }
+.week__days caption { text-align: left; color: var(--muted); padding-bottom: 4px; }
+.week__days th, .week__days td { border: 1px solid var(--line); padding: 2px 8px; text-align: left; }
