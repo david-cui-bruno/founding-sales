@@ -20,6 +20,10 @@ import { planSuppress } from './suppression';
 import { planSetResearchConfig, readResearchDiagnostics } from './pool';
 import { planApproveTemplate, planSetSendingLimit } from './templates';
 import { readTodayView } from './today';
+// Slice S5: Settings and the week view.
+import { callPolicyView, planSetCallPolicy } from './callPolicy';
+import { pausedView, phoneSetupView, planClearPhoneSetup, planConfirmPhoneSetup, planSetPaused } from './phoneSetup';
+import { readWeekView } from './week';
 
 /**
  * The mailbox and the network as the API sees them: not at all. The three mailbox commands only write records, and
@@ -37,9 +41,11 @@ const fetchRefused: typeof globalThis.fetch = async () => { throw new Error('api
  *   GET  /v1/diagnostics      device token      the last attempts (kind, limit), the last tick, the devices, the postures
  *   GET  /v1/today            device token      the morning list as cards, dialability computed at request time (S1)
  *   GET  /v1/firms            device token      one firm in full, named by `?firmId=`: routes, sequence, calls, callbacks, suppression (S2)
- *   GET  /v1/settings         device token      postures by state and the clearance reference texts (S1b; the rest of Settings is S5)
+ *   GET  /v1/settings         device token      every Settings section: postures, templates, sending, research, calls, phone, grant, devices, paused (S1b, S5)
+ *   GET  /v1/week             device token      the last seven Eastern days from the permanent records (S5)
  *   POST /v1/commands         device token      idempotent by commandId, per device; `revoke_device` (S0), `set_state_posture` (S1),
  *                                               `log_call_outcome`, `add_firm`, `admit_route`, `suppress` (S2)
+ *                                               `set_call_policy`, `confirm_phone_setup`, `clear_phone_setup`, `pause`, `resume` (S5)
  *
  * Errors: 401 `{ error: 'unauthenticated' }` (with `reason: 'device_expired'` once a device's ninety days are over),
  * 404 `{ error: 'not_found' }` for any other `/v1` path or method, 400 `{ error: 'invalid_request' }` on a body or
@@ -98,6 +104,7 @@ function repeatedReceipt(stored: unknown, expectedFingerprint: string, command: 
  */
 /** The one view slice the S2 commands return: the firm's card as it stands, or null when it is not on any list. */
 const card = (firmId: string, value: TodayCard | null): V1CommandSlice => ({ kind: 'card', firmId, card: value });
+/** The Settings slices S5's commands return: the section as it stands after the write, so the page need not re-read. */
 
 async function applyCommand(store: DynamoStore, devices: V1Devices, principal: V1Principal, command: V1Command): Promise<V1CommandReceipt> {
   const key = v1CommandKey(command.commandId);
@@ -212,6 +219,37 @@ async function applyCommand(store: DynamoStore, devices: V1Devices, principal: V
         : { commandId: command.commandId, outcome: 'refused', reason: outcome.reason };
       break;
     }
+    case 'set_call_policy': {
+      // Narrowing only (S5). A window the code floor does not contain is refused whole, never partly applied.
+      const plan = await planSetCallPolicy(store, command, principal.label);
+      if ('refused' in plan) { receipt = { commandId: command.commandId, outcome: 'refused', reason: plan.refused }; break; }
+      items.push(plan.item);
+      receipt = { commandId: command.commandId, outcome: 'applied', reason: null, slice: { kind: 'call_policy', calls: callPolicyView(plan.record) } };
+      break;
+    }
+    case 'confirm_phone_setup': {
+      // David's statement that this Mac's Phone.app setup is done, with the digest of the proof. Never the proof itself.
+      const plan = await planConfirmPhoneSetup(store, command, principal.label);
+      items.push(plan.item);
+      receipt = { commandId: command.commandId, outcome: 'applied', reason: null, slice: { kind: 'phone_setup', phone: phoneSetupView(plan.record) } };
+      break;
+    }
+    case 'clear_phone_setup': {
+      const plan = await planClearPhoneSetup(store);
+      items.push(plan.item);
+      receipt = { commandId: command.commandId, outcome: 'applied', reason: null, slice: { kind: 'phone_setup', phone: phoneSetupView(plan.record) } };
+      break;
+    }
+    case 'pause':
+    case 'resume': {
+      // One row, written with the receipt in one transaction, so a paused workspace and its receipt can never disagree.
+      const paused = command.kind === 'pause';
+      const plan = await planSetPaused(store, { paused, reason: paused ? command.reason : null, by: principal.label });
+      items.push(plan.item);
+      receipt = { commandId: command.commandId, outcome: 'applied', reason: null,
+        slice: { kind: 'paused', paused: pausedView({ record: plan.record, rev: null, unreadable: false }) } };
+      break;
+    }
   }
   items.push(store.put(key, { fingerprint: commandFingerprint, kind: command.kind, receipt, at: store.now(), deviceId: principal.deviceId }, null));
   // The caller must still be an active device when this commits. When the command writes the caller's own row (a
@@ -269,6 +307,12 @@ export async function v1Router(input: V1RouterInput): Promise<WorkerHttpResponse
       try { await devices.authenticate(input.authorization); }
       catch (error) { if (error instanceof V1Unauthenticated) return unauthenticated(respond, error); throw error; }
       return respond(200, await readSettingsView(store));
+    }
+    if (path === '/v1/week' && method === 'GET') {
+      // The last seven Eastern days from the permanent records (S5). A read, never a write and never a provider call.
+      try { await devices.authenticate(input.authorization); }
+      catch (error) { if (error instanceof V1Unauthenticated) return unauthenticated(respond, error); throw error; }
+      return respond(200, await readWeekView(store));
     }
     if (path === '/v1/today' && method === 'GET') {
       // The morning list as cards (S1). Dialability is computed here, at request time, from the firm's zone; a read is never a dial.

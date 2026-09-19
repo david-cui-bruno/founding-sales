@@ -7,9 +7,11 @@ import {
   v1CommandReceiptSchema,
   v1CommandSchema,
   v1FirmViewSchema,
+  weekViewSchema,
   type SettingsView,
   type TodayView,
   type V1FirmView,
+  type WeekView,
 } from '../../../src/shared/contracts/v1Contract';
 
 /**
@@ -30,6 +32,8 @@ export const CLIENT_CHANNELS = {
   unpair: 'client:unpair',
   /** Hand one number to Phone.app (slice S2). Handing off is not calling: David presses the button. */
   dial: 'client:dial',
+  /** The local Phone.app setup proof on this Mac (slice S5): read it, confirm it, clear it. */
+  phoneSetup: 'client:phone-setup',
 } as const;
 
 export const clientStatusSchema = z.strictObject({
@@ -54,7 +58,7 @@ export const pairResultSchema = z.discriminatedUnion('outcome', [
 ]);
 export type PairResult = z.infer<typeof pairResultSchema>;
 
-export const viewPathSchema = z.enum(['/v1/diagnostics', '/v1/today', '/v1/settings', '/v1/firms']);
+export const viewPathSchema = z.enum(['/v1/diagnostics', '/v1/today', '/v1/settings', '/v1/firms', '/v1/week']);
 export type ViewPath = z.infer<typeof viewPathSchema>;
 export const readRequestSchema = z.strictObject({ view: viewPathSchema, kind: attemptKindSchema.optional(),
   /** The firm the Firm view names (S2); refused on any other view. */
@@ -104,8 +108,10 @@ export type CommandResult = z.infer<typeof commandResultSchema>;
 
 /** The Today view is the contract's own schema (slice S1): the four lanes as cards, or `{ list: null, reason }`. */
 export { todayViewSchema, type TodayView };
-/** The Settings view is the contract's own schema (S1b: postures and reference texts; the rest with S5). */
+/** The Settings view is the contract's own schema: postures and reference texts (S1b) and every S5 section. */
 export { settingsViewSchema, type SettingsView };
+/** The Week view is the contract's own schema (S5): the last seven Eastern days from the permanent records. */
+export { weekViewSchema, type WeekView };
 export const lastGoodTodaySchema = z.strictObject({ fetchedAt: instant, view: todayViewSchema });
 export type LastGoodToday = z.infer<typeof lastGoodTodaySchema>;
 
@@ -115,6 +121,7 @@ export const viewSchemas = {
   '/v1/today': todayViewSchema,
   '/v1/settings': settingsViewSchema,
   '/v1/firms': v1FirmViewSchema,
+  '/v1/week': weekViewSchema,
 } as const;
 
 /**
@@ -139,6 +146,38 @@ export const DIAL_REFUSAL_SENTENCES: Readonly<Record<DialRefusal, string>> = Obj
   route_unavailable: 'The Phone.app handoff is not set up on this Mac, so nothing was dialed.',
   handoff_uncertain: 'The handoff may or may not have reached Phone.app. Check Phone.app before dialing again.',
 });
+/**
+ * The Phone.app setup proof this Mac holds (slice S5). The proof file never leaves the Mac: what crosses this
+ * bridge is its state and the sha256 digest the worker records beside David's confirmation, never the proof.
+ *
+ *   configured        the stored proof matches the helper this Mac would actually launch
+ *   needs_confirmation a helper is there and David has not confirmed it (or has confirmed a different one)
+ *   unconfigured      no proof stored and none needed right now
+ *   unavailable       this Mac has no phone route at all: an unpackaged run, or no helper to inspect
+ *
+ * Confirming writes the proof and nothing else. It is not permission to dial: the launcher still checks the
+ * helper's signature and the excluded-number rules at the moment a number is handed over.
+ */
+export const PHONE_SETUP_STATES = ['configured', 'needs_confirmation', 'unconfigured', 'unavailable'] as const;
+export const phoneSetupActionSchema = z.strictObject({ action: z.enum(['read', 'confirm', 'clear']) });
+export type PhoneSetupAction = z.infer<typeof phoneSetupActionSchema>;
+export const clientPhoneSetupSchema = z.strictObject({
+  state: z.enum(PHONE_SETUP_STATES),
+  confirmedAt: instant.nullable(),
+  /** The sha256 of the confirmed proof's fingerprint, which is exactly what `confirm_phone_setup` sends. */
+  proofDigest: z.string().regex(/^[a-f0-9]{64}$/).nullable(),
+  /** The digest of the helper this Mac would launch now, when there is one to inspect. */
+  candidateDigest: z.string().regex(/^[a-f0-9]{64}$/).nullable(),
+  sentence: z.string(),
+});
+export type ClientPhoneSetup = z.infer<typeof clientPhoneSetupSchema>;
+export const PHONE_SETUP_SENTENCES: Readonly<Record<z.infer<typeof clientPhoneSetupSchema>['state'], string>> = Object.freeze({
+  configured: 'This Mac holds a confirmed setup proof for the helper it would launch.',
+  needs_confirmation: 'This Mac can reach a phone helper, but the setup is not confirmed. Confirm it before dialing.',
+  unconfigured: 'This Mac holds no setup proof.',
+  unavailable: 'This Mac has no phone route: there is no packaged helper to inspect, so nothing can be confirmed here.',
+});
+
 export const dialResultSchema = z.discriminatedUnion('outcome', [
   z.strictObject({ outcome: z.literal('handed_off'), number: z.string().min(1).max(60) }),
   z.strictObject({ outcome: z.literal('refused'), reason: dialRefusalSchema, sentence: z.string() }),

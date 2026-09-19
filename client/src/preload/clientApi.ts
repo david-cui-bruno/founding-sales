@@ -3,27 +3,32 @@ import {
   CLIENT_CHANNELS,
   clientStatusSchema,
   commandResultSchema,
+  clientPhoneSetupSchema,
   dialRequestSchema,
   dialResultSchema,
   pairRequestSchema,
+  phoneSetupActionSchema,
   pairResultSchema,
   readRequestSchema,
   readResultSchema,
   v1CommandSchema,
   viewSchemas,
+  type ClientPhoneSetup,
   type ClientStatus,
   type CommandResult,
   type DialRequest,
   type DialResult,
+  type PhoneSetupAction,
   type PairResult,
   type ReadRequest,
   type ReadResult,
   type SettingsView,
   type TodayView,
+  type WeekView,
 } from '../shared/clientContract';
 
 /**
- * The renderer's whole view of the main process: five operations, each a request validated before it
+ * The renderer's whole view of the main process: seven operations, each a request validated before it
  * crosses and a reply validated with the contract's zod schemas after it returns. A view is re-validated
  * per path (`diagnosticsViewSchema` for Diagnostics), so a main process that drifted from the contract is
  * refused here rather than rendered. Nothing else is exposed; there is no token anywhere in these shapes.
@@ -41,8 +46,11 @@ export type ClientApi = {
   get(request: { view: '/v1/today' }): Promise<ReadResult<TodayView>>;
   get(request: { view: '/v1/settings' }): Promise<ReadResult<SettingsView>>;
   get(request: { view: '/v1/firms'; firmId: string }): Promise<ReadResult<V1FirmView>>;
+  get(request: { view: '/v1/week' }): Promise<ReadResult<WeekView>>;
   command(command: V1Command): Promise<CommandResult>;
   dial(request: DialRequest): Promise<DialResult>;
+  /** The local Phone.app setup proof on this Mac (S5): read it, confirm it, clear it. Never a dial. */
+  phoneSetup(request: PhoneSetupAction): Promise<ClientPhoneSetup>;
   unpair(): Promise<ClientStatus>;
 };
 
@@ -68,6 +76,10 @@ export function createClientApi(invoke: Invoke): ClientApi {
     dial: async (raw) => {
       const request = dialRequestSchema.parse(raw);
       return dialResultSchema.parse(await invoke(CLIENT_CHANNELS.dial, request));
+    },
+    phoneSetup: async (raw) => {
+      const request = phoneSetupActionSchema.parse(raw);
+      return clientPhoneSetupSchema.parse(await invoke(CLIENT_CHANNELS.phoneSetup, request));
     },
     unpair: async () => clientStatusSchema.parse(await invoke(CLIENT_CHANNELS.unpair)),
   };

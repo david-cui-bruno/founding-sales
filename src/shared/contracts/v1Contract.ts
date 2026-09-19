@@ -114,6 +114,16 @@ export type StatePostureRecord = z.infer<typeof statePostureRecordSchema>;
 /** The posture as the Today header and Diagnostics show it: no citations, just the decision and whether its review is overdue. */
 export const statePostureSummarySchema = z.strictObject({ state: v1StateCodeSchema, posture: statePostureSchema, decidedAt: instant, decidedBy: deviceLabel, reviewAt: instant, reviewOverdue: z.boolean() });
 export type StatePostureSummary = z.infer<typeof statePostureSummarySchema>;
+/**
+ * One earlier decision, as Settings shows it under the current posture (S5). Every posture David has ever recorded
+ * for a state is kept on the record, and Settings is where he reads them back: what he decided, when, and on which
+ * device. The citations he typed stay on the record and never travel in a view, here or anywhere else.
+ */
+export const statePostureHistoryEntrySchema = z.strictObject({ posture: statePostureSchema, decidedAt: instant, decidedBy: deviceLabel, reviewAt: instant,
+  registrationStatus: stateRegistrationSchema.shape.status, dncStatus: stateDncListSchema.shape.status,
+  /** Whether counsel was named on that decision. The name, date and memo reference stay on the record. */
+  counsel: z.boolean(), referenceTextRevision: z.number().int().positive() });
+export type StatePostureHistoryEntry = z.infer<typeof statePostureHistoryEntrySchema>;
 
 /** The user-facing hold reasons (design section 5). The exact closed code travels beside the reason. */
 export const V1_HOLD_REASONS = ['paused', 'mailbox_not_connected', 'template_not_approved', 'cap_reached', 'no_email', 'no_phone', 'outside_hours',
@@ -352,6 +362,170 @@ export const referenceCitationSchema = z.strictObject({ title: z.string().min(1)
 export const stateReferenceTextSchema = z.strictObject({ state: v1StateCodeSchema, name: z.string().min(1).max(100), summary: z.string().min(1).max(4000),
   citation: referenceCitationSchema, furtherCitations: z.array(referenceCitationSchema).max(10) });
 export type StateReferenceText = z.infer<typeof stateReferenceTextSchema>;
+
+/**
+ * The rest of Settings (slice S5): every control the design's "Controls you use today, mapped" table keeps, as the
+ * worker serves it. Reading Settings decides nothing; each section is the record as it stands, with the closed
+ * reasons a control is not usable beside it, never a silent zero.
+ */
+
+/** Minutes from midnight on the firm's own clock. 0 to 1440, so 20:00 is 1200 and the end of the day is 1440. */
+const minuteOfDay = z.number().int().min(0).max(24 * 60);
+export const callWindowSchema = z.strictObject({ startMinute: minuteOfDay, endMinute: minuteOfDay })
+  .refine(window => window.startMinute < window.endMinute, 'call_window_empty');
+export type CallWindowShape = z.infer<typeof callWindowSchema>;
+export const stateCallWindowSchema = z.strictObject({ state: v1StateCodeSchema, window: callWindowSchema });
+
+/**
+ * `SETTINGS#calls` as Settings shows it. `floor` is the window fixed in code (Monday to Friday, 08:00 to 20:00 on
+ * the firm's own clock); `window` is what David narrowed it to, and `byState` narrows one state further. Nothing
+ * here can widen the floor: `set_call_policy` refuses a window the floor does not contain.
+ */
+export const callPolicyViewSchema = z.strictObject({
+  floor: z.strictObject({ days: z.array(z.number().int().min(0).max(6)).max(7), window: callWindowSchema }),
+  window: callWindowSchema,
+  byState: z.array(stateCallWindowSchema).max(60),
+  /** How many cards one run of the list offers, when David has narrowed it; null means the code's own number. */
+  capPerRun: z.number().int().positive().max(1000).nullable(),
+  revision: count,
+  updatedAt: instant.nullable(),
+});
+export type CallPolicyView = z.infer<typeof callPolicyViewSchema>;
+
+/**
+ * `SETTINGS#phone`. The worker records that David confirmed the Phone.app setup on some Mac and the digest of the
+ * proof he confirmed; the proof file itself never leaves the Mac, and this record is never a permission to dial.
+ */
+export const phoneSetupViewSchema = z.strictObject({
+  status: z.enum(['confirmed', 'cleared']),
+  confirmedAt: instant.nullable(),
+  proofDigest: z.string().regex(/^[a-f0-9]{64}$/).nullable(),
+  confirmedBy: deviceLabel.nullable(),
+  revision: count,
+  updatedAt: instant.nullable(),
+});
+export type PhoneSetupView = z.infer<typeof phoneSetupViewSchema>;
+
+/** `SETTINGS#paused`. While paused nothing sends and nothing polls; the reason is the sentence every page shows. */
+export const pausedViewSchema = z.strictObject({
+  paused: z.boolean(),
+  reason: z.string().max(200).nullable(),
+  at: instant.nullable(),
+  by: deviceLabel.nullable(),
+  revision: count,
+});
+export type PausedView = z.infer<typeof pausedViewSchema>;
+
+/** One template with its standing approval and the footer check, as Settings shows it. Approving is never sending. */
+export const settingsTemplateSchema = z.strictObject({
+  templateId: z.string().min(1).max(40),
+  name: z.string().min(1).max(120),
+  subject: z.string().min(1).max(160),
+  body: z.string().min(1).max(4000),
+  variables: z.array(z.string().min(1).max(40)).max(20),
+  revision: z.number().int().positive(),
+  state: z.enum(['draft', 'approved']),
+  approvedAt: instant.nullable(),
+  approvedRevision: z.number().int().positive().nullable(),
+  /** Whether the standing approval still covers this exact text and the current postal address. */
+  approved: z.boolean(),
+  /** Whether the body ends with the footer block the current postal address makes. False with no address. */
+  footerPresent: z.boolean(),
+  /** Every reason this text could not be approved right now, in the order David reads them; empty when it could. */
+  issues: z.array(attemptReasonSchema).max(20),
+});
+export type SettingsTemplate = z.infer<typeof settingsTemplateSchema>;
+
+/** `SETTINGS#sending` with the ceiling fixed in code beside it and today's cap line. Settings may only narrow. */
+export const sendingViewSchema = z.strictObject({
+  dailyLimit: count,
+  ramp: z.strictObject({ startPerDay: count, stepPerDay: count, maxPerDay: count }),
+  ceiling: z.strictObject({ dailyLimit: count, startPerDay: count, stepPerDay: count, maxPerDay: count }),
+  postalAddress: z.string().max(200).nullable(),
+  revision: count,
+  updatedAt: instant.nullable(),
+  /** The cap line: today's Eastern date, the cap it works out to, the warm-up day it is, and how many are used. */
+  capLine: z.strictObject({ date: z.iso.date(), cap: count, day: z.number().int().positive(), used: count, remaining: count }),
+  /** The footer every approved body must end with, built from the postal address; null until there is one. */
+  footerBlock: z.string().max(1000).nullable(),
+});
+export type SendingView = z.infer<typeof sendingViewSchema>;
+
+/**
+ * `SETTINGS#research` as Settings shows it, which is S4's record and nothing invented beside it: the query grid,
+ * the daily budget under the ceiling fixed in code, and the operator descriptor's window. The descriptor is the
+ * one thing David has to keep current — research stops when it expires — so its dates are here, not only its
+ * status, and the section names the day it runs out. `todaySpend` is today's counter, which is arithmetic about
+ * what research already did and never a permission to do more.
+ */
+export const researchDescriptorViewSchema = z.strictObject({
+  reviewedAt: instant,
+  expiresAt: instant,
+  status: z.enum(['reviewed', 'expired']),
+});
+export const researchViewSchema = z.strictObject({
+  queries: z.array(z.string().min(1).max(500)).max(400),
+  dailyBudget: count,
+  /** The ceiling fixed in code. `set_research_config` may only set a budget below it. */
+  budgetCeiling: count,
+  /** Null until David records the review window. Research is held while it is null or expired. */
+  descriptor: researchDescriptorViewSchema.nullable(),
+  todaySpend: z.strictObject({ date: z.iso.date(), spent: count, budget: count, remaining: count }),
+  revision: count,
+  updatedAt: instant,
+});
+export type ResearchView = z.infer<typeof researchViewSchema>;
+
+/**
+ * The Google grant as Settings reads it from the table alone: no refresh, no network call, because a view is never
+ * an action. Until the cutover (S6) the grant is still the pairing-bound `GOOGLE_GRANT#<pairingId>` record the old
+ * flow wrote; S6 replaces it with a fresh consent, which is what `reconsentAtCutover` says.
+ */
+export const GOOGLE_GRANT_STATUSES = ['connected', 'not_connected', 'revoked', 'multiple_grants'] as const;
+export const googleGrantViewSchema = z.strictObject({
+  status: z.enum(GOOGLE_GRANT_STATUSES),
+  email: z.string().max(320).nullable(),
+  grants: count,
+  reconsentAtCutover: z.literal(true),
+  note: z.string().max(400),
+});
+export type GoogleGrantView = z.infer<typeof googleGrantViewSchema>;
+
+/**
+ * The Week view (`GET /v1/week`, design section 3): the last seven Eastern days read from the permanent records —
+ * `CALL#`, accepted `SEND#`, `REPLY#`, `CALLBACK#`, the research evidence — plus the holds from `ATTEMPT#`, which
+ * is the one source that expires (thirty days), so a hold count is what the log still holds and says so.
+ */
+export const weekDaySchema = z.strictObject({
+  date: z.iso.date(),
+  calls: count,
+  emailsSent: count,
+  replies: count,
+  callbacksPromised: count,
+  callbacksKept: count,
+  firmsResearched: count,
+});
+export const weekViewSchema = z.strictObject({
+  asOf: instant,
+  /** The seven Eastern days the view covers, oldest first; `to` is today in New York. */
+  from: z.iso.date(),
+  to: z.iso.date(),
+  days: z.array(weekDaySchema).max(7),
+  calls: z.strictObject({ total: count, byOutcome: z.array(z.strictObject({ outcome: v1CallOutcomeSchema, count: count.min(1) })).max(V1_CALL_OUTCOMES.length) }),
+  emailsSent: count,
+  replies: count,
+  callbacks: z.strictObject({ promised: count, kept: count }),
+  firmsResearched: count,
+  /**
+   * Research spend over the seven days, summed from S4's daily counters. Those counters keep three days, so the
+   * older days of the week usually have none: `daysCounted` says how many of the seven the sum actually covers,
+   * and `spent` is null when it covers none of them. It is never presented as a zero it did not read.
+   */
+  spend: z.strictObject({ spent: count.nullable(), daysCounted: count, daysMissing: count, counterKeepsDays: z.literal(3) }),
+  holds: z.array(z.strictObject({ reason: v1HoldReasonSchema, code: attemptReasonSchema, count: count.min(1) })).max(60),
+});
+export type WeekView = z.infer<typeof weekViewSchema>;
+
 export const settingsViewSchema = z.strictObject({
   postures: z.array(statePostureSummarySchema),
   referenceTexts: z.strictObject({
@@ -361,6 +535,20 @@ export const settingsViewSchema = z.strictObject({
     statements: z.record(z.string().min(1).max(40), z.string().min(1).max(1000)),
     states: z.array(stateReferenceTextSchema),
   }),
+  /**
+   * Every other section (S5). All optional so a client built against the S1b shape still validates its answer,
+   * and so a worker that has not shipped S5 yet is read as "not served", never as an empty setting.
+   */
+  /** Every earlier decision per state, newest first. A state with only its first decision has an empty list. */
+  postureHistory: z.array(z.strictObject({ state: v1StateCodeSchema, entries: z.array(statePostureHistoryEntrySchema).max(200) })).max(60).optional(),
+  templates: z.array(settingsTemplateSchema).max(20).optional(),
+  sending: sendingViewSchema.optional(),
+  research: researchViewSchema.optional(),
+  calls: callPolicyViewSchema.optional(),
+  phone: phoneSetupViewSchema.optional(),
+  google: googleGrantViewSchema.optional(),
+  devices: z.array(diagnosticsDeviceSchema).optional(),
+  paused: pausedViewSchema.optional(),
 });
 export type SettingsView = z.infer<typeof settingsViewSchema>;
 
@@ -478,6 +666,25 @@ export const approveReplyDraftCommandSchema = z.strictObject({ commandId, kind: 
   firmId: z.string().min(1).max(200), draftId, text: z.string().min(1).max(24000) });
 
 /**
+ * The Settings commands (S5). None of them sends, dials or books: they record what David decided.
+ * `set_call_policy` may only narrow the window fixed in code; a window the floor does not contain is refused whole.
+ * `confirm_phone_setup` records the digest of the proof file the Mac holds, never the proof itself.
+ * `pause` stops every send and poll until a `resume`; both carry the reason David typed.
+ */
+export const setCallPolicyCommandSchema = z.strictObject({ commandId, kind: z.literal('set_call_policy'),
+  window: callWindowSchema.optional(),
+  byState: z.array(stateCallWindowSchema).max(60).optional(),
+  /** Null clears David's narrowing and returns the run to the number fixed in code. */
+  capPerRun: z.number().int().positive().max(1000).nullable().optional() });
+export type SetCallPolicyCommand = z.infer<typeof setCallPolicyCommandSchema>;
+export const confirmPhoneSetupCommandSchema = z.strictObject({ commandId, kind: z.literal('confirm_phone_setup'),
+  proofDigest: z.string().regex(/^[a-f0-9]{64}$/) });
+export type ConfirmPhoneSetupCommand = z.infer<typeof confirmPhoneSetupCommandSchema>;
+export const clearPhoneSetupCommandSchema = z.strictObject({ commandId, kind: z.literal('clear_phone_setup') });
+export const pauseCommandSchema = z.strictObject({ commandId, kind: z.literal('pause'), reason: z.string().trim().min(1).max(200) });
+export const resumeCommandSchema = z.strictObject({ commandId, kind: z.literal('resume'), reason: z.string().trim().min(1).max(200).optional() });
+
+/**
  * What research is allowed to do (S4). The queries are replaced whole, the daily budget may only be set below the
  * ceiling fixed in code, and the descriptor records the window David's operator review actually covers. Narrowing
  * research is always allowed; nothing here starts a research run, and setting a budget is never a spend.
@@ -491,12 +698,13 @@ export type SetResearchConfigCommand = z.infer<typeof setResearchConfigCommandSc
 
 /**
  * Every `/v1` command, discriminated on `kind`. S0 ships `revoke_device`, S1 adds `set_state_posture`, S2 the dial
- * and log, S3 email under the standing approval, S4 the research configuration; later slices add theirs here.
+ * and log, S3 email under the standing approval, S4 the research configuration, S5 Settings.
  */
 export const v1CommandSchema = z.discriminatedUnion('kind', [revokeDeviceCommandSchema, setStatePostureCommandSchema,
   logCallOutcomeCommandSchema, addFirmCommandSchema, admitRouteCommandSchema, suppressCommandSchema,
   approveTemplateCommandSchema, setSendingLimitCommandSchema, replyDecisionCommandSchema, requestFollowupCommandSchema,
-  approveFollowupDraftCommandSchema, approveReplyDraftCommandSchema, setResearchConfigCommandSchema]);
+  approveFollowupDraftCommandSchema, approveReplyDraftCommandSchema, setResearchConfigCommandSchema,
+  setCallPolicyCommandSchema, confirmPhoneSetupCommandSchema, clearPhoneSetupCommandSchema, pauseCommandSchema, resumeCommandSchema]);
 export type V1Command = z.infer<typeof v1CommandSchema>;
 
 /**
@@ -507,6 +715,10 @@ export type V1Command = z.infer<typeof v1CommandSchema>;
 export const v1CommandSliceSchema = z.discriminatedUnion('kind', [
   /** The card as it stands after the command, or null when the firm has left the list (suppressed, or never on it). */
   z.strictObject({ kind: z.literal('card'), firmId: z.string().min(1).max(200), card: todayCardSchema.nullable() }),
+  /** The Settings sections S5's commands return, each the section as it stands after the write. */
+  z.strictObject({ kind: z.literal('call_policy'), calls: callPolicyViewSchema }),
+  z.strictObject({ kind: z.literal('phone_setup'), phone: phoneSetupViewSchema }),
+  z.strictObject({ kind: z.literal('paused'), paused: pausedViewSchema }),
 ]);
 export type V1CommandSlice = z.infer<typeof v1CommandSliceSchema>;
 export const v1CommandReceiptSchema = z.strictObject({
