@@ -41,6 +41,7 @@
     "release:marker": "node scripts/writeReleaseMarker.mjs",
     "backup:pre-release": "node scripts/createPreReleaseBackup.mjs",
     "diagnose:startup": "node scripts/diagnoseStartup.mjs",
+    "export:cutover": "node scripts/exportCutover.mjs",
     "verify:release": "node scripts/verifyRelease.mjs"
   },
   "keywords": [],
