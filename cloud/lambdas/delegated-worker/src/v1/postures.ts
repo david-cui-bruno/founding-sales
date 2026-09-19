@@ -1,6 +1,6 @@
 import type { TransactWriteItem } from '@aws-sdk/client-dynamodb';
-import { statePostureEntrySchema, statePostureRecordSchema, type SetStatePostureCommand, type StatePostureRecord, type StatePostureSummary,
-  type V1StateCode } from '../../../../../src/shared/contracts/v1Contract';
+import { statePostureEntrySchema, statePostureRecordSchema, type SetStatePostureCommand, type StatePostureHistoryEntry, type StatePostureRecord,
+  type StatePostureSummary, type V1StateCode } from '../../../../../src/shared/contracts/v1Contract';
 import type { DynamoStore } from '../dynamoStore';
 
 /**
@@ -38,6 +38,18 @@ export const posturesByState = (records: readonly StatePostureRecord[]): Map<str
 
 export function postureSummary(record: StatePostureRecord, now: string): StatePostureSummary {
   return { state: record.state, posture: record.posture, decidedAt: record.decidedAt, decidedBy: record.decidedBy, reviewAt: record.reviewAt, reviewOverdue: record.reviewAt <= now };
+}
+
+/**
+ * The earlier decisions for one state, newest first, as Settings shows them (S5). History is append-only on the
+ * record, oldest first; this reverses it, because what David wants to see under the current posture is what it was
+ * before. The citations he typed are on the record and stay there: only the statuses, the stamps and whether
+ * counsel was named travel in a view.
+ */
+export function postureHistory(record: StatePostureRecord): StatePostureHistoryEntry[] {
+  return [...record.history].reverse().map(entry => ({ posture: entry.posture, decidedAt: entry.decidedAt, decidedBy: entry.decidedBy,
+    reviewAt: entry.reviewAt, registrationStatus: entry.registration.status, dncStatus: entry.dncList.status,
+    counsel: entry.counsel !== undefined, referenceTextRevision: entry.referenceTextRevision }));
 }
 
 /** Whether calls to `state` are cleared now: a `calling` posture whose review is not yet due. Pure. */

@@ -15,14 +15,21 @@ import {
   v1CommandReceiptSchema,
   v1CommandSchema,
   v1FirmViewSchema,
+  weekViewSchema,
   type AttemptRecord,
+  type CallPolicyView,
   type DiagnosticsDevice,
+  type PausedView,
+  type PhoneSetupView,
+  type ResearchView,
+  type SettingsView,
   type StatePostureSummary,
   type TodayCard,
   type TodayLane,
   type TodayView,
   type V1Command,
   type V1FirmView,
+  type WeekView,
 } from '../../src/shared/contracts/v1Contract';
 
 /**
@@ -152,6 +159,84 @@ export function referenceTextsFixture() {
   };
 }
 
+/**
+ * The Settings sections slice S5 added, as the worker serves them: the five templates with one approved, the
+ * sending limit with the ceiling fixed in code and today's cap line, S4's research record absent and saying so,
+ * the call hours at the code floor, phone setup cleared, a connected grant, and not paused. Every address,
+ * mailbox and postal address here is fictional.
+ */
+export const STUB_POSTAL_ADDRESS = '12 Fictional Way, Suite 3, Providence, RI 02903';
+export const STUB_MAILBOX = 'founder@usecallie.invalid';
+const SIGN_OFF = 'David Cui\nFounder, Callie\nhttps://usecallie.invalid\n+14015550200';
+const STOP_LINE = 'Reply "stop" and I will not email you again.';
+export const stubFooterBlock = (postalAddress: string): string => `${SIGN_OFF}\n${postalAddress}\n${STOP_LINE}`;
+
+function templatesFixture(postalAddress: string): NonNullable<SettingsView['templates']> {
+  const footer = stubFooterBlock(postalAddress);
+  return ['T1', 'T2', 'T3', 'T4', 'T5'].map((templateId, index) => {
+    const approved = templateId === 'T4';
+    const body = approved ? `Fictional body for ${templateId}.\n\n${footer}` : `Fictional body for ${templateId}.\n\n${SIGN_OFF}`;
+    return {
+      templateId, name: `Template ${templateId}`, subject: `Fictional subject ${templateId}`, body,
+      variables: ['firmName'], revision: index + 1,
+      state: approved ? ('approved' as const) : ('draft' as const),
+      approvedAt: approved ? instant(60 * 24) : null, approvedRevision: approved ? index + 1 : null,
+      approved, footerPresent: approved, issues: approved ? [] : ['template_footer_missing'],
+    };
+  });
+}
+
+function sendingFixture(postalAddress: string): NonNullable<SettingsView['sending']> {
+  return {
+    dailyLimit: 40, ramp: { startPerDay: 10, stepPerDay: 2, maxPerDay: 40 },
+    ceiling: { dailyLimit: 40, startPerDay: 10, stepPerDay: 2, maxPerDay: 40 },
+    postalAddress, revision: 2, updatedAt: instant(60 * 24 * 3),
+    capLine: { date: '2026-09-18', cap: 12, day: 2, used: 5, remaining: 7 },
+    footerBlock: stubFooterBlock(postalAddress),
+  };
+}
+
+/** The research config as the worker serves it: a grid, a budget under the code ceiling, and a live review window. */
+export const STUB_DESCRIPTOR_EXPIRES_AT = '2026-12-01T12:00:00.000Z';
+const researchFixture = (): ResearchView => ({
+  queries: ['fictional law firms in Providence RI', 'fictional law firms in Boston MA', 'fictional law firms in Austin TX'],
+  dailyBudget: 45, budgetCeiling: 200,
+  descriptor: { reviewedAt: '2026-09-01T12:00:00.000Z', expiresAt: STUB_DESCRIPTOR_EXPIRES_AT, status: 'reviewed' },
+  todaySpend: { date: '2026-09-18', spent: 12, budget: 45, remaining: 33 },
+  revision: 4, updatedAt: '2026-09-01T12:00:00.000Z',
+});
+
+const CALL_FLOOR = { days: [1, 2, 3, 4, 5], window: { startMinute: 480, endMinute: 1200 } };
+const callsFixture = (): CallPolicyView => ({ floor: CALL_FLOOR, window: { startMinute: 480, endMinute: 1200 }, byState: [], capPerRun: null, revision: 0, updatedAt: null });
+const phoneFixture = (): PhoneSetupView => ({ status: 'cleared', confirmedAt: null, proofDigest: null, confirmedBy: null, revision: 0, updatedAt: null });
+const pausedFixture = (): PausedView => ({ paused: false, reason: null, at: null, by: null, revision: 0 });
+
+/** Seven Eastern days ending 2026-09-18, with the counts a real week of records would give. */
+function weekFixture(asOf: string): WeekView {
+  const dates = ['2026-09-12', '2026-09-13', '2026-09-14', '2026-09-15', '2026-09-16', '2026-09-17', '2026-09-18'];
+  const perDay = [
+    { calls: 0, emailsSent: 0, replies: 0, callbacksPromised: 0, callbacksKept: 0, firmsResearched: 0 },
+    { calls: 0, emailsSent: 0, replies: 0, callbacksPromised: 0, callbacksKept: 0, firmsResearched: 0 },
+    { calls: 6, emailsSent: 3, replies: 1, callbacksPromised: 1, callbacksKept: 0, firmsResearched: 8 },
+    { calls: 9, emailsSent: 4, replies: 0, callbacksPromised: 0, callbacksKept: 1, firmsResearched: 11 },
+    { calls: 7, emailsSent: 5, replies: 2, callbacksPromised: 2, callbacksKept: 0, firmsResearched: 9 },
+    { calls: 4, emailsSent: 2, replies: 1, callbacksPromised: 0, callbacksKept: 1, firmsResearched: 6 },
+    { calls: 2, emailsSent: 0, replies: 0, callbacksPromised: 0, callbacksKept: 0, firmsResearched: 0 },
+  ];
+  const days = dates.map((date, index) => ({ date, ...perDay[index]! }));
+  const total = (field: 'calls' | 'emailsSent' | 'replies' | 'callbacksPromised' | 'callbacksKept' | 'firmsResearched') =>
+    days.reduce((sum, day) => sum + day[field], 0);
+  return weekViewSchema.parse({
+    asOf, from: dates[0], to: dates[dates.length - 1], days,
+    calls: { total: total('calls'), byOutcome: [{ outcome: 'answered_interested', count: 3 }, { outcome: 'gatekeeper', count: 6 }, { outcome: 'no_answer', count: 9 }, { outcome: 'voicemail', count: 10 }] },
+    emailsSent: total('emailsSent'), replies: total('replies'),
+    callbacks: { promised: total('callbacksPromised'), kept: total('callbacksKept') },
+    firmsResearched: total('firmsResearched'),
+    spend: { spent: 84, daysCounted: 3, daysMissing: 4, counterKeepsDays: 3 },
+    holds: [{ reason: 'cap_reached', code: 'cap_reached', count: 4 }, { reason: 'state_not_cleared', code: 'no_posture', count: 2 }],
+  });
+}
+
 const LANES: readonly TodayLane[] = ['replies', 'callbacks', 'due', 'new'];
 /** The card for one firm in a view, whichever lane it stands in, with the lane it was found in. */
 function findCard(view: TodayView, firmId: string): { lane: TodayLane; card: TodayCard } | null {
@@ -225,6 +310,14 @@ export async function startStubWorker(): Promise<StubWorker> {
   const asOf = new Date(NOW).toISOString();
   let today: TodayView = todayFixture();
   const postures = new Map<string, StatePostureSummary>();
+  const postureHistory = new Map<string, NonNullable<SettingsView['postureHistory']>[number]['entries']>();
+  // The S5 sections the stub keeps, so a command a spec sends is visible on the next read.
+  let calls: CallPolicyView = callsFixture();
+  let phone: PhoneSetupView = phoneFixture();
+  let paused: PausedView = pausedFixture();
+  let sending = sendingFixture(STUB_POSTAL_ADDRESS);
+  const research: ResearchView = researchFixture();
+  let templates = templatesFixture(STUB_POSTAL_ADDRESS);
   const requests: StubRequest[] = [];
   const commands: V1Command[] = [];
   const receipts = new Map<string, unknown>();
@@ -284,7 +377,22 @@ export async function startStubWorker(): Promise<StubWorker> {
     if (url.pathname === '/v1/settings' && method === 'GET') {
       const auth = authenticate(request.headers.authorization);
       if ('status' in auth) return send(response, auth.status, auth.body);
-      return send(response, 200, settingsViewSchema.parse({ postures: [...postures.values()].sort((a, b) => (a.state < b.state ? -1 : 1)), referenceTexts: referenceTextsFixture() }));
+      return send(response, 200, settingsViewSchema.parse({
+        postures: [...postures.values()].sort((a, b) => (a.state < b.state ? -1 : 1)), referenceTexts: referenceTextsFixture(),
+        postureHistory: [...postureHistory.entries()].filter(([, entries]) => entries.length > 0)
+          .map(([state, entries]) => ({ state, entries })).sort((a, b) => (a.state < b.state ? -1 : 1)),
+        templates, sending,
+        research,
+        calls, phone, google: { status: 'connected', email: STUB_MAILBOX, grants: 1, reconsentAtCutover: true,
+          note: 'Connected through the pairing-bound grant the old worker holds. It is replaced by a fresh consent at cutover.' },
+        devices: devicesView(), paused,
+      }));
+    }
+
+    if (url.pathname === '/v1/week' && method === 'GET') {
+      const auth = authenticate(request.headers.authorization);
+      if ('status' in auth) return send(response, auth.status, auth.body);
+      return send(response, 200, weekFixture(asOf));
     }
 
     if (url.pathname === '/v1/today' && method === 'GET') {
@@ -314,6 +422,11 @@ export async function startStubWorker(): Promise<StubWorker> {
       let receipt: unknown;
       // set_state_posture is kept, as the worker keeps it: the next /v1/settings read shows the decision with the worker's stamps.
       if (command.kind === 'set_state_posture') {
+        // The worker appends the prior decision to history, newest first in the view; the stub does the same.
+        const prior = postures.get(command.state);
+        if (prior) postureHistory.set(command.state, [{ posture: prior.posture, decidedAt: prior.decidedAt, decidedBy: prior.decidedBy,
+          reviewAt: prior.reviewAt, registrationStatus: 'unknown', dncStatus: 'unknown', counsel: false, referenceTextRevision: TERRITORY_RULES_REVISION },
+        ...(postureHistory.get(command.state) ?? [])]);
         postures.set(command.state, { state: command.state, posture: command.posture, decidedAt: asOf, decidedBy: auth.device.label, reviewAt: twelveMonthsAfter(asOf), reviewOverdue: false });
         receipt = { commandId: command.commandId, outcome: 'applied', reason: null };
         receipts.set(command.commandId, receipt);
@@ -345,13 +458,84 @@ export async function startStubWorker(): Promise<StubWorker> {
         receipts.set(command.commandId, receipt);
         return send(response, 200, v1CommandReceiptSchema.parse(receipt));
       }
+      // Approving a template (S3) keeps David's exact text with the footer rule the worker applies: a body that
+      // does not end with the footer block the current postal address makes is refused, never quietly approved.
+      if (command.kind === 'approve_template') {
+        const held = templates.find((template) => template.templateId === command.templateId);
+        if (!held) receipt = { commandId: command.commandId, outcome: 'refused', reason: 'template_unknown' };
+        else if (held.revision !== command.expectedRevision) receipt = { commandId: command.commandId, outcome: 'refused', reason: 'template_revision_conflict' };
+        else if (sending.postalAddress === null) receipt = { commandId: command.commandId, outcome: 'refused', reason: 'postal_address_not_set' };
+        else if (!command.body.endsWith(stubFooterBlock(sending.postalAddress))) receipt = { commandId: command.commandId, outcome: 'refused', reason: 'template_footer_missing' };
+        else {
+          const revision = held.revision + 1;
+          templates = templates.map((template) => template.templateId === command.templateId
+            ? { ...template, subject: command.subject, body: command.body, revision, state: 'approved' as const,
+              approvedAt: asOf, approvedRevision: revision, approved: true, footerPresent: true, issues: [] }
+            : template);
+          receipt = { commandId: command.commandId, outcome: 'applied', reason: null };
+        }
+        receipts.set(command.commandId, receipt);
+        return send(response, 200, v1CommandReceiptSchema.parse(receipt));
+      }
+      // The sending limit (S3) may only narrow the ceiling fixed in code; a request that would widen one is refused whole.
+      if (command.kind === 'set_sending_limit') {
+        const candidate = { ...sending, ...(command.dailyLimit === undefined ? {} : { dailyLimit: command.dailyLimit }),
+          ...(command.ramp === undefined ? {} : { ramp: command.ramp }),
+          ...(command.postalAddress === undefined ? {} : { postalAddress: command.postalAddress }) };
+        const widened = candidate.dailyLimit > sending.ceiling.dailyLimit || candidate.ramp.startPerDay > sending.ceiling.startPerDay
+          || candidate.ramp.stepPerDay > sending.ceiling.stepPerDay || candidate.ramp.maxPerDay > sending.ceiling.maxPerDay;
+        if (widened) receipt = { commandId: command.commandId, outcome: 'refused', reason: 'sending_limit_exceeds_code_ceiling' };
+        else {
+          sending = { ...candidate, revision: sending.revision + 1, updatedAt: asOf,
+            capLine: { ...sending.capLine, cap: Math.min(sending.capLine.cap, candidate.dailyLimit),
+              remaining: Math.max(0, Math.min(sending.capLine.cap, candidate.dailyLimit) - sending.capLine.used) },
+            footerBlock: candidate.postalAddress === null ? null : stubFooterBlock(candidate.postalAddress) };
+          receipt = { commandId: command.commandId, outcome: 'applied', reason: null };
+        }
+        receipts.set(command.commandId, receipt);
+        return send(response, 200, v1CommandReceiptSchema.parse(receipt));
+      }
+      // The Settings commands (S5). Each one is kept and each one answers with the section it changed, which is
+      // what the page reads; the narrowing rule is the worker's, and the stub refuses a window outside the floor
+      // exactly as the worker does rather than accepting hours the real core never would.
+      if (command.kind === 'set_call_policy') {
+        const proposed = [...(command.window ? [command.window] : []), ...(command.byState ?? []).map((entry) => entry.window)];
+        const outside = proposed.some((window) => window.startMinute < CALL_FLOOR.window.startMinute || window.endMinute > CALL_FLOOR.window.endMinute);
+        if (outside) receipt = { commandId: command.commandId, outcome: 'refused', reason: 'call_policy_outside_floor' };
+        else {
+          calls = { ...calls, ...(command.window ? { window: command.window } : {}), ...(command.byState ? { byState: command.byState } : {}),
+            ...(command.capPerRun === undefined ? {} : { capPerRun: command.capPerRun }), revision: calls.revision + 1, updatedAt: asOf };
+          receipt = { commandId: command.commandId, outcome: 'applied', reason: null, slice: { kind: 'call_policy', calls } };
+        }
+        receipts.set(command.commandId, receipt);
+        return send(response, 200, v1CommandReceiptSchema.parse(receipt));
+      }
+      if (command.kind === 'confirm_phone_setup' || command.kind === 'clear_phone_setup') {
+        const confirmed = command.kind === 'confirm_phone_setup';
+        phone = { status: confirmed ? 'confirmed' : 'cleared', confirmedAt: confirmed ? asOf : null,
+          proofDigest: confirmed ? command.proofDigest : null, confirmedBy: confirmed ? auth.device.label : null,
+          revision: phone.revision + 1, updatedAt: asOf };
+        receipt = { commandId: command.commandId, outcome: 'applied', reason: null, slice: { kind: 'phone_setup', phone } };
+        receipts.set(command.commandId, receipt);
+        return send(response, 200, v1CommandReceiptSchema.parse(receipt));
+      }
+      if (command.kind === 'pause' || command.kind === 'resume') {
+        const stopped = command.kind === 'pause';
+        paused = { paused: stopped, reason: stopped ? command.reason : null, at: asOf, by: auth.device.label, revision: paused.revision + 1 };
+        receipt = { commandId: command.commandId, outcome: 'applied', reason: null, slice: { kind: 'paused', paused } };
+        receipts.set(command.commandId, receipt);
+        return send(response, 200, v1CommandReceiptSchema.parse(receipt));
+      }
       // `admit_route` and `suppress` (S2) are applied without being kept: no spec reads them back off the stub.
-      // Anything else the contract now carries (the S3 email commands, which no client page sends yet) is refused
-      // honestly rather than answered as applied.
+      if (command.kind === 'admit_route' || command.kind === 'suppress') {
+        receipt = { commandId: command.commandId, outcome: 'applied', reason: null };
+        receipts.set(command.commandId, receipt);
+        return send(response, 200, v1CommandReceiptSchema.parse(receipt));
+      }
+      // Anything else the contract carries that no client page sends yet is refused honestly, never answered as
+      // applied. `admit_route` and `suppress` were already answered above, so everything reaching here is unmodelled.
       if (command.kind !== 'revoke_device') {
-        receipt = command.kind === 'admit_route' || command.kind === 'suppress'
-          ? { commandId: command.commandId, outcome: 'applied', reason: null }
-          : { commandId: command.commandId, outcome: 'refused', reason: 'command_not_stubbed' };
+        receipt = { commandId: command.commandId, outcome: 'refused', reason: 'command_not_stubbed' };
         receipts.set(command.commandId, receipt);
         return send(response, 200, v1CommandReceiptSchema.parse(receipt));
       }
