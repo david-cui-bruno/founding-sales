@@ -89,7 +89,6 @@ async function fixture(configured: boolean, hooks: { search?: () => Promise<void
     companyResearchHttp: async input => { requests.push(input.url); await hooks.page?.(); return hooks.response?.() ?? new Response('<p>We manage 240 residential units.</p>', { headers: { 'content-type': 'text/html' } }); },
     createBackupService: () => ({ start: async () => undefined, shutdown: async () => undefined, createBackup: unexpected, listAvailableBackups: async () => [] }),
     createRecoveryService: () => ({ status: unexpected, beginSetup: unexpected, saveSetupMaterial: unexpected, completeSetup: unexpected, selectAndRunRestoreDrill: unexpected, shutdown: async () => undefined }),
-    createAppleBridgeSupervisor: unexpected,
   };
   try {
     const app = await startApplication({ appVersion: '1.0.0', userDataPath: dirname(temp.path), companyResearch: configured&&!hooks.paired ? (hooks.config ?? configuration) : undefined,

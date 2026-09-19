@@ -139,7 +139,6 @@ export async function createFirstUseDomainFixture(handlers: Map<string, Register
     createRecoveryService: () => ({ status: async () => deny('recovery'), beginSetup: async () => deny('recovery'),
       saveSetupMaterial: async () => deny('recovery'), completeSetup: async () => deny('recovery'),
       selectAndRunRestoreDrill: async () => deny('restore'), shutdown: async () => undefined }),
-    createAppleBridgeSupervisor: () => deny('Apple bridge'),
   };
   try {
     mkdirSync(dirname(temp.path), { recursive: true, mode: 0o700 });

@@ -166,7 +166,6 @@ const assertCurrentReadiness = (): void => undefined;
         listAvailableBackups: async () => [], createBackup: async () => { throw new Error('unexpected backup'); } }),
       createRecoveryService: () => ({ status: vi.fn(), beginSetup: vi.fn(), saveSetupMaterial: vi.fn(),
         completeSetup: vi.fn(), selectAndRunRestoreDrill: vi.fn(), shutdown: async () => undefined }),
-      createAppleBridgeSupervisor: () => { throw new Error('no helper permitted'); },
       registerApplicationIpc: (bound, trust, _registrars, recovery, shell, logs, options) => {
         runtime = bound;
         expect(factory).toHaveBeenCalledTimes(1);

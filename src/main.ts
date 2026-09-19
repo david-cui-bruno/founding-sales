@@ -2,9 +2,7 @@ import { app, BrowserWindow, Menu, powerMonitor, protocol, safeStorage } from 'e
 import path from 'node:path';
 import started from 'electron-squirrel-startup';
 import { createWindow } from './main/createWindow';
-import {
-  CALLIE_APPLE_BRIDGE_IDENTIFIER,
-} from './main/appleBridge/appleBridgeSupervisor';
+import { CALLIE_APPLE_BRIDGE_IDENTIFIER } from './main/appleBridge/helperPath';
 import {
   createApplicationMenuTemplate,
   menuNavigationScripts,
@@ -245,20 +243,10 @@ if (!started && ownsSingleInstanceLock) {
       const rawStartup = startApplication({
         appVersion: app.getVersion(),
         userDataPath: app.getPath('userData'),
-        appleBridge: {
+        phoneHelper: {
           platform: process.platform,
           isPackaged: app.isPackaged,
           resourcesPath: process.resourcesPath,
-          environment: {
-            CALLIE_APPLE_BRIDGE_PATH:
-              process.env.CALLIE_APPLE_BRIDGE_PATH,
-          },
-          allowDevelopmentOverride: true,
-          allowUnsignedDevelopment: true,
-          stagingRoot: path.join(
-            app.getPath('userData'),
-            'apple-bridge-staging',
-          ),
           expectedIdentifier: CALLIE_APPLE_BRIDGE_IDENTIFIER,
           parentExecutablePath: process.execPath,
         },
