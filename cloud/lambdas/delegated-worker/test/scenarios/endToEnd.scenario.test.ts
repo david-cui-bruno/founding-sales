@@ -12,7 +12,7 @@ import { runMailPollJob } from '../../src/v1/mail';
 import { readSend } from '../../src/v1/send';
 import { sequenceKey, sequenceRecordSchema } from '../../src/v1/sequence';
 import { suppressionFirmKey, suppressionHandleKey } from '../../src/v1/suppression';
-import { putFirm, putTerritoryPolicy, riFirm, setPosture, tickOf } from './firmFixtures';
+import { putFirm, putTerritoryPolicy, riFirm, setPosture, dayBuildOf, tickOf } from './firmFixtures';
 import { approveWithFooter, gmailFetch, mailboxAccess, MAILBOX, setPostalAddress } from './sendFixtures';
 import { v1Fixture } from './v1Fixture';
 
@@ -83,7 +83,9 @@ describe('one firm end to end: listed, called, emailed once, stopped, suppressed
     expect(emailStep.channel).toBe('email');
 
     // 1. Listed. The morning build offers the firm as a new one; nothing has been said to it yet.
+    // The old tick still enrolls the firm under the standing policy; S6 moved only the list build off it.
     await tickOf(f)();
+    await dayBuildOf(f)();
     const morning = todayViewSchema.parse(f.json(await f.request('GET', '/v1/today', { authorization: device.bearer })));
     expect(lanesOf(morning).new.map(card => card.firmId)).toEqual([FIRM_ID]);
     expect(lanesOf(morning).new[0]).toMatchObject({ lane: 'new', reason: 'new_firm', lastOutcome: null, pendingCallback: null });
@@ -148,7 +150,9 @@ describe('one firm end to end: listed, called, emailed once, stopped, suppressed
     // 6. Never listed again. The next morning's build offers no lane with this firm in it, and the scheduler has
     //    nothing left to enqueue for it.
     f.advance(NEXT_WEEK);
+    // The old tick still enrolls the firm under the standing policy; S6 moved only the list build off it.
     await tickOf(f)();
+    await dayBuildOf(f)();
     const monday = todayViewSchema.parse(f.json(await f.request('GET', '/v1/today', { authorization: device.bearer })));
     expect(firmIdsIn(monday)).not.toContain(FIRM_ID);
     // It was the only firm in the workspace, so the morning has nothing to offer at all — not a held card, not a

@@ -24,6 +24,10 @@ import { readTodayView } from './today';
 import { callPolicyView, planSetCallPolicy } from './callPolicy';
 import { pausedView, phoneSetupView, planClearPhoneSetup, planConfirmPhoneSetup, planSetPaused } from './phoneSetup';
 import { readWeekView } from './week';
+// Slice S6: the fresh Google consent on the new client, and the revoke of the old pairing-bound grant.
+import { RemoteGoogleAuthorization } from '../remoteGoogleAuthorization';
+import { beginDeviceGrant } from './grant';
+import { grantPairingIds, GOOGLE_GRANT_PREFIX } from './mailbox';
 
 /**
  * The mailbox and the network as the API sees them: not at all. The three mailbox commands only write records, and
@@ -57,6 +61,8 @@ const fetchRefused: typeof globalThis.fetch = async () => { throw new Error('api
 
 export type V1RouterInput = {
   auth: WorkerAuth;
+  /** The carried Google authorization, for the two consent routes (S6). Absent, both answer `google_unconfigured`. */
+  google?: RemoteGoogleAuthorization;
   method: 'GET' | 'POST';
   path: string;
   query: URLSearchParams;
@@ -354,6 +360,41 @@ export async function v1Router(input: V1RouterInput): Promise<WorkerHttpResponse
       await recordAttempt(store, { kind: 'command', outcome: receipt.outcome === 'refused' ? 'failed' : 'ok',
         reason: receipt.outcome === 'duplicate' ? 'duplicate' : receipt.reason, detail: { code: request.data.kind, commandId: receipt.commandId }, durationMs: Date.now() - started, ref: receipt.commandId });
       return respond(200, v1CommandReceiptSchema.parse(receipt));
+    }
+    if (path === '/v1/google/begin' && method === 'POST') {
+      // Step one of the fresh consent (S6). It writes a device-bound OAuth state and returns the URL the client
+      // opens in the browser. Beginning a consent is never a grant: nothing can send until the callback lands.
+      let principal: V1Principal;
+      try { principal = await devices.authenticate(input.authorization); }
+      catch (error) { if (error instanceof V1Unauthenticated) return unauthenticated(respond, error); throw error; }
+      const begun = await beginDeviceGrant(store, input.google?.input.config, { deviceId: principal.deviceId });
+      if (begun.outcome === 'refused') {
+        await recordAttempt(store, { kind: 'command', outcome: 'failed', reason: begun.reason, detail: { code: 'google_begin' }, durationMs: null, ref: principal.deviceId });
+        return respond(begun.reason === 'google_unconfigured' ? 503 : 409, { error: begun.reason });
+      }
+      await recordAttempt(store, { kind: 'command', outcome: 'ok', reason: null, detail: { code: 'google_begin' }, durationMs: null, ref: principal.deviceId });
+      return respond(200, { authorizationUrl: begun.authorizationUrl });
+    }
+    if (path === '/v1/google/revoke-old' && method === 'POST') {
+      // "Revoke the old grant" (S6): the carried revoke, on the pairing-bound record, once the fresh consent is
+      // ready. It never touches `GRANT#google`, and with no old grant left it is a no-op that says so.
+      let principal: V1Principal;
+      try { principal = await devices.authenticate(input.authorization); }
+      catch (error) { if (error instanceof V1Unauthenticated) return unauthenticated(respond, error); throw error; }
+      if (!input.google) return respond(503, { error: 'google_unconfigured' });
+      const pairingIds = grantPairingIds((await store.list<unknown>(GOOGLE_GRANT_PREFIX)).map(row => row.key));
+      if (pairingIds.length === 0) {
+        await recordAttempt(store, { kind: 'command', outcome: 'ok', reason: 'no_old_grant', detail: { code: 'google_revoke_old', count: 0 }, durationMs: null, ref: principal.deviceId });
+        return respond(200, { revoked: 0, providerRevocation: null });
+      }
+      let revoked = 0; let providerRevocation: string | null = null;
+      for (const pairingId of pairingIds) {
+        const status = await input.google.revokeGoogleGrant(pairingId);
+        revoked += 1;
+        providerRevocation = status.providerRevocation ?? providerRevocation;
+      }
+      await recordAttempt(store, { kind: 'command', outcome: 'ok', reason: null, detail: { code: 'google_revoke_old', count: revoked }, durationMs: null, ref: principal.deviceId });
+      return respond(200, { revoked, providerRevocation });
     }
     return respond(404, { error: 'not_found' });
   } catch (error) {

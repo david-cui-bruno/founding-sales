@@ -6,6 +6,8 @@ import {
   clientPhoneSetupSchema,
   dialRequestSchema,
   dialResultSchema,
+  googleActionSchema,
+  googleResultSchema,
   pairRequestSchema,
   phoneSetupActionSchema,
   pairResultSchema,
@@ -18,6 +20,8 @@ import {
   type CommandResult,
   type DialRequest,
   type DialResult,
+  type GoogleAction,
+  type GoogleResult,
   type PhoneSetupAction,
   type PairResult,
   type ReadRequest,
@@ -28,7 +32,7 @@ import {
 } from '../shared/clientContract';
 
 /**
- * The renderer's whole view of the main process: seven operations, each a request validated before it
+ * The renderer's whole view of the main process: eight operations, each a request validated before it
  * crosses and a reply validated with the contract's zod schemas after it returns. A view is re-validated
  * per path (`diagnosticsViewSchema` for Diagnostics), so a main process that drifted from the contract is
  * refused here rather than rendered. Nothing else is exposed; there is no token anywhere in these shapes.
@@ -51,6 +55,8 @@ export type ClientApi = {
   dial(request: DialRequest): Promise<DialResult>;
   /** The local Phone.app setup proof on this Mac (S5): read it, confirm it, clear it. Never a dial. */
   phoneSetup(request: PhoneSetupAction): Promise<ClientPhoneSetup>;
+  /** The cutover's Google steps (S6): open the consent in the browser, or revoke the old grant. Never a send. */
+  google(request: GoogleAction): Promise<GoogleResult>;
   unpair(): Promise<ClientStatus>;
 };
 
@@ -80,6 +86,10 @@ export function createClientApi(invoke: Invoke): ClientApi {
     phoneSetup: async (raw) => {
       const request = phoneSetupActionSchema.parse(raw);
       return clientPhoneSetupSchema.parse(await invoke(CLIENT_CHANNELS.phoneSetup, request));
+    },
+    google: async (raw) => {
+      const request = googleActionSchema.parse(raw);
+      return googleResultSchema.parse(await invoke(CLIENT_CHANNELS.google, request));
     },
     unpair: async () => clientStatusSchema.parse(await invoke(CLIENT_CHANNELS.unpair)),
   };

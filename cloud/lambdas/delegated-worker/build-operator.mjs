@@ -10,7 +10,10 @@ async function main() {
   let parsed;
   try { parsed = parseOperatorArgs(args); } catch { return runOperatorPairing(args); }
   if (parsed === 'help') return runOperatorPairing(args);
-  if (!parsed.execute) return runOperatorPairing(args);
+  // A cutover dry run reads the live table to count what it would write, so it needs the adapter even though it
+  // writes nothing; a pairing dry run touches nothing at all and must never resolve a credential.
+  const cutover = parsed.mode === 'cutover_copy' || parsed.mode === 'cutover_import';
+  if (!parsed.execute && !cutover) return runOperatorPairing(args);
   const { operatorAwsDependencies } = await import('./src/operatorPairingAws');
   return runOperatorPairing(args, operatorAwsDependencies);
 }

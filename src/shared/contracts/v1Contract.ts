@@ -45,7 +45,12 @@ export const attemptDetailSchema = z.strictObject({
 });
 export type AttemptDetail = z.infer<typeof attemptDetailSchema>;
 
-export const attemptKindSchema = z.enum(['tick', 'tick_phase', 'command', 'events_page', 'send', 'hold', 'research', 'poll', 'pairing', 'list']);
+/**
+ * What the worker was doing. `operator` is the one kind nothing on the worker writes by itself: it is recorded by
+ * the operator tool running beside the worker (slice S6's cutover copy and import), one per table row, so the work
+ * David ran by hand is in the same log as the work the worker did.
+ */
+export const attemptKindSchema = z.enum(['tick', 'tick_phase', 'command', 'events_page', 'send', 'hold', 'research', 'poll', 'pairing', 'list', 'operator']);
 export type AttemptKind = z.infer<typeof attemptKindSchema>;
 export const attemptOutcomeSchema = z.enum(['ok', 'held', 'failed', 'aborted']);
 export type AttemptOutcome = z.infer<typeof attemptOutcomeSchema>;
@@ -487,6 +492,10 @@ export const googleGrantViewSchema = z.strictObject({
   email: z.string().max(320).nullable(),
   grants: count,
   reconsentAtCutover: z.literal(true),
+  /** True once the fresh consent has written `GRANT#google` and it is ready (S6). The old record is never this. */
+  reconsented: z.boolean(),
+  /** How many pairing-bound grants are still live and would be revoked by "Revoke the old grant" (S6). */
+  oldGrants: count,
   note: z.string().max(400),
 });
 export type GoogleGrantView = z.infer<typeof googleGrantViewSchema>;

@@ -23,6 +23,7 @@ module "delegated_worker" {
   delegated_worker_schedule_enabled        = var.delegated_worker_schedule_enabled
   delegated_worker_legacy_email_enabled    = var.delegated_worker_legacy_email_enabled
   delegated_worker_legacy_research_enabled = var.delegated_worker_legacy_research_enabled
+  delegated_worker_legacy_tick_enabled     = var.delegated_worker_legacy_tick_enabled
   alarm_email                              = var.alarm_email
   monthly_budget_usd                       = var.monthly_budget_usd
   worker_source_dir                        = "${path.module}/../lambdas/delegated-worker/dist"

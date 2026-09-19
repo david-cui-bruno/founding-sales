@@ -17,7 +17,7 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:browser": "playwright test --workers=1",
-    "verify:package": "node scripts/verifyClientPackage.mjs",
+    "verify:package": "npm run package && node scripts/verifyClientPackage.mjs",
     "postinstall": "install-electron"
   },
   "author": {

@@ -34,6 +34,8 @@ export const CLIENT_CHANNELS = {
   dial: 'client:dial',
   /** The local Phone.app setup proof on this Mac (slice S5): read it, confirm it, clear it. */
   phoneSetup: 'client:phone-setup',
+  /** The fresh Google consent of the cutover (slice S6): begin it in the browser, or revoke the old grant. */
+  google: 'client:google',
 } as const;
 
 export const clientStatusSchema = z.strictObject({
@@ -177,6 +179,29 @@ export const PHONE_SETUP_SENTENCES: Readonly<Record<z.infer<typeof clientPhoneSe
   unconfigured: 'This Mac holds no setup proof.',
   unavailable: 'This Mac has no phone route: there is no packaged helper to inspect, so nothing can be confirmed here.',
 });
+
+/**
+ * The two Google steps of the cutover (slice S6). `begin` asks the worker for the consent URL and opens it in the
+ * default browser: the consent happens in Google's own window, never inside this app, and beginning one is never a
+ * grant. `revoke_old` calls the carried revoke on the pairing-bound record the old worker held, which is a step
+ * David takes deliberately after the fresh consent reads ready.
+ */
+export const googleActionSchema = z.strictObject({ action: z.enum(['begin', 'revoke_old']) });
+export type GoogleAction = z.infer<typeof googleActionSchema>;
+export const googleResultSchema = z.discriminatedUnion('outcome', [
+  z.strictObject({ outcome: z.literal('begun'),
+    /** The Google URL. Shown so David can open it himself when this Mac could not. Never a token. */
+    authorizationUrl: z.string().max(4096),
+    /** Whether the default browser was actually opened with it. */
+    opened: z.boolean(),
+    sentence: z.string() }),
+  z.strictObject({ outcome: z.literal('revoked'), revoked: z.number().int().nonnegative(), sentence: z.string() }),
+  z.strictObject({ outcome: z.literal('refused'), reason: slug, sentence: z.string() }),
+  unavailableSchema,
+  unauthenticatedSchema,
+  unpairedSchema,
+]);
+export type GoogleResult = z.infer<typeof googleResultSchema>;
 
 export const dialResultSchema = z.discriminatedUnion('outcome', [
   z.strictObject({ outcome: z.literal('handed_off'), number: z.string().min(1).max(60) }),

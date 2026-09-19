@@ -106,6 +106,8 @@ const workerOnlyDefaults: Record<string, string> = {
   delegated_worker_legacy_email_enabled: "true",
   // S4's coexistence switch, the same shape: true keeps the tick's research phases, false hands them to the queue.
   delegated_worker_legacy_research_enabled: "true",
+  // S6's switch, the last of the three: true keeps the old tick running, false leaves the function answering HTTP only.
+  delegated_worker_legacy_tick_enabled: "true",
 };
 const implementation = tf(moduleDir);
 const worker = tf(workerDir);
@@ -363,6 +365,8 @@ describe("delegated-worker Terraform source isolation", () => {
       "GET /v1/firms",
       // The Week view (S5).
       "GET /v1/week",
+      "POST /v1/google/begin",
+      "POST /v1/google/revoke-old",
       // The stage's per-route throttle names the redeem route a second time; it is the same route key, not a second route.
       "POST /v1/pair/redeem",
     ]);
@@ -476,6 +480,21 @@ describe("delegated-worker Terraform source isolation", () => {
     // The switch is the API function's alone: the scheduler and the runner never read it.
     for (const name of ["delegated_worker_scheduler", "delegated_worker_runner"]) {
       expect(compact(block(implementation, `resource "aws_lambda_function" "${name}"`))).not.toContain("DELEGATED_WORKER_LEGACY_RESEARCH_ENABLED");
+    }
+  });
+
+  it("carries the legacy tick switch to the API function, defaulting to today's behaviour (S6)", () => {
+    const lambda = compact(block(implementation, 'resource "aws_lambda_function" "delegated_worker"'));
+    expect(lambda).toContain('DELEGATED_WORKER_LEGACY_TICK_ENABLED = var.delegated_worker_legacy_tick_enabled ? "true" : "false"');
+    for (const dir of [workerDir, moduleDir]) {
+      const input = compact(block(read(dir, "variables.tf"), 'variable "delegated_worker_legacy_tick_enabled"'));
+      expect(input).toContain("type = bool default = true nullable = false");
+      expect(input).toContain("the old function answers HTTP only");
+      expect(input).toContain("It never enables a schedule, a grant, a send or a provider call.");
+    }
+    // The switch is the API function's alone: the scheduler and the runner never read it.
+    for (const name of ["delegated_worker_scheduler", "delegated_worker_runner"]) {
+      expect(compact(block(implementation, `resource "aws_lambda_function" "${name}"`))).not.toContain("DELEGATED_WORKER_LEGACY_TICK_ENABLED");
     }
   });
 

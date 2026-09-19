@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { todayCardSchema, todayViewSchema, type TodayView } from '../../../../../src/shared/contracts/v1Contract';
 import { CALL_WINDOW_FLOOR, evaluateDial, narrowCallWindow } from '../../src/v1/callWindow';
-import { enrollFirm, listedRouteId, putCallEvidence, putFirm, putTerritoryPolicy, readDay, riFirm, setPosture, tickOf } from './firmFixtures';
+import { enrollFirm, listedRouteId, putCallEvidence, putFirm, putTerritoryPolicy, readDay, riFirm, setPosture, morningOf } from './firmFixtures';
 import { v1Fixture } from './v1Fixture';
 
 /**
@@ -28,7 +28,7 @@ describe('GET /v1/today', () => {
 
   it('expands the lanes into cards that validate, with dialability from the firm\'s zone and the code floor, and a header with builtAt, poolSize, holds, the last tick and postures', async () => {
     const f = v1Fixture('2026-09-10T12:00:00.000Z');
-    const store = f.store; const tick = tickOf(f);
+    const store = f.store; const tick = morningOf(f);
     const policy = await putTerritoryPolicy(store, '2026-09-01T12:00:00.000Z');
     const device = await f.pairDevice();
     await setPosture(f, device.bearer, 'RI', 'calling');
@@ -95,7 +95,7 @@ describe('GET /v1/today', () => {
 
   it('a built day with nothing in any lane is no_candidates; a state whose posture is not calling is not without posture', async () => {
     const f = v1Fixture('2026-09-10T12:00:00.000Z');
-    const device = await f.pairDevice(); const tick = tickOf(f);
+    const device = await f.pairDevice(); const tick = morningOf(f);
     await putTerritoryPolicy(f.store, '2026-09-01T12:00:00.000Z');
     await setPosture(f, device.bearer, 'RI', 'not_calling');
     await putFirm(f.store, riFirm(1));

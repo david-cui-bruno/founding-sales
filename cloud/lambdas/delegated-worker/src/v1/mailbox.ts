@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { DynamoStore } from '../dynamoStore';
 import type { RemoteGoogleAuthorization } from '../remoteGoogleAuthorization';
+import { grantAccess, readGrant } from './grant';
 
 /**
  * The one seam through which the rebuilt core reaches the mailbox (slice S3). The send fence, the reconcile job
@@ -38,6 +39,12 @@ const grantRowSchema = z.object({ revoked: z.boolean().optional(), grant: z.obje
 export function createWorkerGrantMailboxAccess(input: { store: DynamoStore; authorization: RemoteGoogleAuthorization }): MailboxAccess {
   return { async access(signal: AbortSignal): Promise<MailboxConnection> {
     try {
+      // S6: the fresh consent's `GRANT#google` is the mailbox once it exists. The pairing-bound record below is
+      // the carry, read only until the cutover writes the new one; after the cutover it is revoked and then, at
+      // S7, deleted. One record answers at a time, and a workspace with neither is `mailbox_not_connected`.
+      if (await readGrant(input.store)) {
+        return await grantAccess(input.store, input.authorization.input.config, input.authorization.input.fetch ?? globalThis.fetch);
+      }
       const rows = await input.store.list<unknown>(GOOGLE_GRANT_PREFIX);
       const live = rows.filter(row => {
         if (row.key.includes('#personal_availability')) return false;

@@ -4,7 +4,7 @@ import { v1CommandReceiptSchema, v1FirmViewSchema } from '../../../../../src/sha
 import { createAccountFirmSource } from '../../src/v1/firms';
 import { canonicalHandle, canonicalRoutes, isSuppressed, suppressionFirmKey, suppressionHandleKey } from '../../src/v1/suppression';
 import { firmKey } from '../../src/v1/firmsWrite';
-import { listedRouteId, putFirm, putTerritoryPolicy, readDay, riFirm, setPosture, tickOf } from './firmFixtures';
+import { listedRouteId, putFirm, putTerritoryPolicy, readDay, riFirm, setPosture, morningOf } from './firmFixtures';
 import { v1Fixture } from './v1Fixture';
 
 /**
@@ -99,7 +99,7 @@ describe('the suppression set', () => {
     await putFirm(f.store, riFirm(1));
     await putFirm(f.store, riFirm(2));
     await command(f, device, { kind: 'suppress', firmId: 'account-ri-1', reason: 'Do-not-call list.' });
-    await tickOf(f)();
+    await morningOf(f)();
     const day = readDay(f, '2026-09-18')!;
     expect(day.lanes.new.map(entry => entry.firmId)).toEqual(['account-ri-2']);
     expect(JSON.stringify(day.lanes)).not.toContain('account-ri-1');

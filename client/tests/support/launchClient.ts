@@ -30,7 +30,9 @@ export const newUserData = (): Promise<string> => mkdtemp(join(tmpdir(), 'callie
 /** A file under the client's own directory beneath userData, where the token and last-good files live. */
 export const clientFile = (userData: string, name: string): string => join(userData, 'client', name);
 
-export async function launchClient(options: { endpoint: string; userData: string }): Promise<LaunchedClient> {
+export async function launchClient(options: { endpoint: string; userData: string;
+  /** Suppresses the Google consent's browser handoff (S6), so a spec never opens a real browser. */
+  noBrowser?: boolean }): Promise<LaunchedClient> {
   const app = await electron.launch({
     executablePath: electronExecutable,
     args: [clientRoot],
@@ -39,6 +41,7 @@ export async function launchClient(options: { endpoint: string; userData: string
       ...process.env,
       CALLIE_WORKER_ENDPOINT: options.endpoint,
       CALLIE_CLIENT_USER_DATA: options.userData,
+      ...(options.noBrowser ? { CALLIE_CLIENT_NO_BROWSER: '1' } : {}),
     },
   });
   const page = await app.firstWindow();

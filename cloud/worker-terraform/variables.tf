@@ -115,6 +115,13 @@ variable "delegated_worker_legacy_research_enabled" {
   nullable    = false
 }
 
+variable "delegated_worker_legacy_tick_enabled" {
+  description = "Whether the old five-minute tick runs at all. True keeps today's behaviour; the S6 cutover directive sets it false, after which the old function answers HTTP only and does no scheduled work: the morning list is the scheduler's day job, email is the queue's and research is the queue's. It never enables a schedule, a grant, a send or a provider call."
+  type        = bool
+  default     = true
+  nullable    = false
+}
+
 variable "monthly_budget_usd" {
   description = "Account-wide monthly AWS Budget in whole USD. Notifications fire at 100% and 200% of this amount (USD 25 and USD 50 by default) and on a 100% forecast. A notification, never a hard billing cap."
   type        = number

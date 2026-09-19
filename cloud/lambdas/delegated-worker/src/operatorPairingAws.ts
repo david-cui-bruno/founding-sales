@@ -80,8 +80,26 @@ export async function connectOperatorAws(options: PairingOptions, policy: { maxA
   } catch { close(); throw new Error('operator_cloud_unavailable'); }
 }
 
+/**
+ * The Mac export, read for `--cutover-import`. Read-only, no symlink in the final component, owned by the operator,
+ * and bounded by the contract's own byte cap so an unbounded file is refused before it is parsed. The file is
+ * David's to read first; nothing here writes it, moves it or deletes it.
+ */
+async function readCutoverExport(path: string): Promise<string> {
+  const { constants } = await import('node:fs');
+  const fs = await import('node:fs/promises');
+  const { CUTOVER_EXPORT_MAX } = await import('../../../../src/shared/contracts/cutoverExportContract');
+  const handle = await fs.open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile() || stat.size > CUTOVER_EXPORT_MAX.bytes) throw new Error('export_unreadable');
+    return (await handle.readFile()).toString('utf8');
+  } finally { await handle.close(); }
+}
+
 // Importing this module does not construct clients, read credentials, or touch disk.
 export const operatorAwsDependencies: OperatorDependencies = {
   reserveOutput: reservePrivateOutput,
   connect: connectOperatorAws,
+  readExport: readCutoverExport,
 };

@@ -231,14 +231,53 @@ export function PhoneSection({ phone, local, run, onLocalChange }: {
   );
 }
 
-export function GoogleSection({ google }: { google: GoogleGrantView }) {
+/**
+ * Google (slice S6). Two deliberate steps, in order, and neither of them is a send.
+ *
+ * "Continue to Google" asks the worker for the consent URL and opens it in the default browser; the consent
+ * happens in Google's own window and this app never sees the password, the code or the token. When the consent
+ * reads ready, "Revoke the old grant" retires the pairing-bound record the old worker held. The second button
+ * only appears once the fresh consent is ready and an old grant is still there to revoke, so the order the
+ * cutover needs is the order the page offers.
+ */
+export function GoogleSection({ google, act }: { google: GoogleGrantView; act?: GoogleRunner }) {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ applied: boolean; sentence: string } | null>(null);
+  const [url, setUrl] = useState<string | null>(null);
+  const run = async (action: 'begin' | 'revoke_old') => {
+    if (!act || busy) return;
+    setBusy(true); setResult(null); setUrl(null);
+    try {
+      const answer = await act(action);
+      setResult({ applied: answer.applied, sentence: answer.sentence });
+      setUrl(answer.authorizationUrl ?? null);
+    } finally { setBusy(false); }
+  };
   return (
-    <Section id="google" title="Google" lead="The mailbox grant, as the worker holds it. This is a status only: connecting is a separate step, and the grant is replaced by a fresh consent at cutover.">
+    <Section id="google" title="Google" lead="The mailbox grant. Until it is connected nothing can send or poll, and the grant is a fresh consent at cutover, never a copy of the old one.">
       <p className="google__status">Status: <strong>{google.status.replace(/_/g, ' ')}</strong>{google.email === null ? '' : ` · ${google.email}`}.</p>
-      <p className="page__tick">{google.note}</p>
+      <p className="page__tick google__note">{google.note}</p>
+      {google.oldGrants > 0 && (
+        <p className="page__tick" data-google="old-grants">
+          {google.oldGrants === 1 ? 'One old pairing-bound grant is still live.' : `${google.oldGrants} old pairing-bound grants are still live.`}
+        </p>
+      )}
+      {act && (
+        <div className="page__controls">
+          <button type="button" disabled={busy || google.reconsented} onClick={() => { void run('begin'); }}>Continue to Google</button>
+          {google.reconsented && google.oldGrants > 0 && (
+            <button type="button" disabled={busy} onClick={() => { void run('revoke_old'); }}>Revoke the old grant</button>
+          )}
+        </div>
+      )}
+      {url !== null && <p className="google__url" data-google="consent-url">{url}</p>}
+      <Outcome value={result} />
     </Section>
   );
 }
+
+/** How the page runs one Google step. `applied` is false for every refusal, and the sentence is what came back. */
+export type GoogleRunner = (action: 'begin' | 'revoke_old') => Promise<{ applied: boolean; sentence: string; authorizationUrl?: string }>;
 
 /**
  * Research. The one thing here David has to keep current is the descriptor window: research stops when it expires,

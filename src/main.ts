@@ -17,6 +17,7 @@ import { createFileLogSink } from './main/logging/fileLogSink';
 import { createSafeLogger } from './main/logging/safeLogger';
 import { isPreReleaseBackupInvocation, runPreReleaseBackupHost } from './main/backup/preReleaseBackupRuntime';
 import { isStartupDiagnoseInvocation, runStartupDiagnoseHost, StartupDiagnoseRefusedError } from './main/diagnostics/startupDiagnoseRuntime';
+import { CutoverExportRefusedError, isCutoverExportInvocation, runCutoverExportHost } from './main/cutoverExport';
 import { showStartupFailureDialog } from './main/startupFailureDialog';
 
 const preReleaseBackupMode = isPreReleaseBackupInvocation(process.argv.slice(1));
@@ -39,7 +40,18 @@ if (startupDiagnoseMode) {
     process.stderr.write(`STARTUP_DIAGNOSE_FAILED ${reason}\n`, () => app.exit(1));
   });
 }
-const headlessMode = preReleaseBackupMode || startupDiagnoseMode;
+// Third reserved headless mode: the one-off cutover export (slice S6). Same isolation as the other two, and the
+// only one that opens the live database — read-only, and only while the app itself is closed.
+const cutoverExportMode = !preReleaseBackupMode && !startupDiagnoseMode && isCutoverExportInvocation(process.argv.slice(1));
+if (cutoverExportMode) {
+  void runCutoverExportHost(app, safeStorage).then(report => {
+    process.stdout.write(`${JSON.stringify(report)}\n`, () => app.exit(0));
+  }, (error: unknown) => {
+    const reason = error instanceof CutoverExportRefusedError ? error.reason : 'unknown';
+    process.stderr.write(`CUTOVER_EXPORT_FAILED ${reason}\n`, () => app.exit(1));
+  });
+}
+const headlessMode = preReleaseBackupMode || startupDiagnoseMode || cutoverExportMode;
 
 if (!headlessMode) protocol.registerSchemesAsPrivileged([
   {
