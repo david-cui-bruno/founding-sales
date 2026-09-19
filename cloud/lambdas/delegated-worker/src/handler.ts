@@ -22,6 +22,7 @@ import { googleGrantDisclosure, googleGrantPurposeSchema, personalGoogleGrantDis
 import { remoteGoogleGrantBeginSchema, remoteGoogleGrantSelectorSchema } from '../../../../src/shared/contracts/remoteGoogleGrantContract';
 import { DynamoReadUnavailable, type DynamoAdapter } from './dynamoStore';
 import { v1Router } from './v1/router';
+import { recordAttempt, type AttemptInput } from './v1/attempts';
 export type WorkerHttpResponse = { statusCode: number; body: string; headers: Record<string, string> };
 const headers = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer',
   'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'", 'Strict-Transport-Security': 'max-age=31536000', 'X-Content-Type-Options': 'nosniff' };
@@ -41,6 +42,8 @@ const eventSchema = z.object({ version: z.literal('2.0'), rawPath: z.string().ma
  * operator bootstrap issuance, token-returning route or mail dispatch endpoint. */
 export function createWorkerHandler(input: { auth: WorkerAuth; host: string; google?: RemoteGoogleAuthorization; researchSetupProfile?: ResearchSetupProfile }) {
   return async (raw: unknown): Promise<WorkerHttpResponse> => {
+    // Which of the two instrumented old routes this request is, so a refusal in the catch below is recorded as its attempt (S0 diagnostics).
+    let attemptSite: { kind: 'command' | 'events_page'; detail: string; ref: string | null } | null = null;
     try {
       const event = eventSchema.parse(raw);
       if (event.headers['x-forwarded-proto'] !== 'https' || event.headers.host !== input.host || event.requestContext.domainName !== input.host) return response(400, { error: 'worker_invalid_request' });
@@ -112,23 +115,35 @@ export function createWorkerHandler(input: { auth: WorkerAuth; host: string; goo
         return response(200,await owner.configureResearch(body(),event.headers.authorization??''));
       }
       if ((path === '/commands' || path === '/emergency') && method === 'POST') {
+        if (path === '/commands') attemptSite = { kind: 'command', detail: 'kind=unknown', ref: null };
         const principal = await input.auth.authenticate(event.headers.authorization, [path === '/emergency' ? 'emergency:stop' : 'commands:write']);
         const rawCommand = body();
         if (path === '/emergency' && (!rawCommand || typeof rawCommand !== 'object' || !['pause', 'revoke'].includes(String((rawCommand as { kind?: unknown }).kind)))) return response(403, { error: 'worker_scope_denied' });
         const command = path === '/emergency' ? await input.auth.emergencyCommand(principal, rawCommand) : delegationCommandSchema.parse(rawCommand);
         input.auth.store.workspace(command.workspaceId);
+        if (path === '/commands') attemptSite = { kind: 'command', detail: `kind=${command.kind}`, ref: command.commandId };
         if (path === '/emergency' && command.kind !== 'pause' && command.kind !== 'revoke') return response(403, { error: 'worker_scope_denied' });
         if (path === '/commands' && ownerCommandSchema.safeParse(command).success) {
           const owner = new OwnerCommandCoordinator({ auth: input.auth, authorization: input.google ?? new RemoteGoogleAuthorization({ auth: input.auth }) });
-          return response(200, await owner.apply(command, event.headers.authorization!));
+          const ownerReceipt = await owner.apply(command, event.headers.authorization!);
+          attemptSite = null; await recordAttempt(input.auth.store, commandAttempt(command, ownerReceipt));
+          return response(200, ownerReceipt);
         }
         const repository = new DynamoExecutionRepository({ ...input.auth.options, dynamo: input.auth.fencedDynamo(principal) });
-        return response(200, await repository.applyCommand(command));
+        const receipt = await repository.applyCommand(command);
+        if (path === '/commands') { attemptSite = null; await recordAttempt(input.auth.store, commandAttempt(command, receipt)); }
+        return response(200, receipt);
       }
       if (path === '/events' && method === 'GET') {
+        attemptSite = { kind: 'events_page', detail: `cursor=${(query.get('cursor') ?? 'none').slice(0, 12)}`, ref: null };
         const principal = await input.auth.authenticate(event.headers.authorization, ['events:read']);
         const repository = new DynamoExecutionRepository({ ...input.auth.options, dynamo: input.auth.fencedDynamo(principal) });
-        return response(200, await repository.eventsAfter(query.get('cursor')));
+        const page = await repository.eventsAfter(query.get('cursor'));
+        const reply = response(200, page);
+        attemptSite = null;
+        await recordAttempt(input.auth.store, { kind: 'events_page', outcome: 'ok', reason: null, durationMs: null, ref: null,
+          detail: `cursor=${(query.get('cursor') ?? 'none').slice(0, 12)} count=${page.events.length} bytes=${Buffer.byteLength(reply.body, 'utf8')}` });
+        return reply;
       }
       if (path === '/pairing/revoke' && method === 'POST') {
         const principal = await input.auth.authenticate(event.headers.authorization, ['pairing:revoke']);
@@ -152,6 +167,7 @@ export function createWorkerHandler(input: { auth: WorkerAuth; host: string; goo
       return response(404, { error: 'worker_route_unavailable' });
     } catch (error) {
       // Deliberately never interpolate exception, provider payload, URL or event.
+      if (attemptSite) await recordAttempt(input.auth.store, { kind: attemptSite.kind, outcome: 'failed', reason: refusalReason(error), detail: attemptSite.detail, durationMs: null, ref: attemptSite.ref });
       if (error instanceof DynamoReadUnavailable) return response(503, { error: 'worker_unavailable' });
       const code = error instanceof Error ? error.message : '';
       if (code === 'worker_unauthorized') return response(401, { error: 'worker_unauthorized' });
@@ -160,6 +176,20 @@ export function createWorkerHandler(input: { auth: WorkerAuth; host: string; goo
       return response(400, { error: 'worker_request_rejected' });
     }
   };
+}
+/** One `command` attempt per /commands request (S0 diagnostics): the receipt's status as the outcome, its reason text in the detail. */
+function commandAttempt(command: { kind: string; commandId: string }, receipt: unknown): AttemptInput {
+  const record = receipt && typeof receipt === 'object' ? receipt as { status?: unknown; reason?: unknown } : {};
+  const status = typeof record.status === 'string' ? record.status : 'unknown';
+  const outcome = status === 'applied' ? 'ok' : status === 'pending' ? 'held' : 'failed';
+  const reason = outcome === 'ok' ? null : status === 'rejected' ? 'rejected' : status === 'pending' ? 'pending' : 'receipt_unknown';
+  const text = typeof record.reason === 'string' && record.reason ? ` reason=${record.reason}` : '';
+  return { kind: 'command', outcome, reason, detail: `kind=${command.kind}${text}`, durationMs: null, ref: command.commandId };
+}
+/** The closed code a refused request was answered with, as the attempt's reason; anything that is not a code is the generic rejection. */
+function refusalReason(error: unknown): string {
+  const code = error instanceof Error ? error.message : '';
+  return /^[a-z0-9]+(?:_[a-z0-9]+)*$/.test(code) && code.length <= 40 ? code : 'worker_request_rejected';
 }
 export type ProductionBoundaries = { dynamo?: DynamoAdapter; ssm?: { send(command: GetParameterCommand, options?: { abortSignal: AbortSignal }): Promise<GetParameterCommandOutput> }; fetch?: typeof globalThis.fetch; pageHttp?: PageHttp; resolve?: (hostname:string)=>Promise<string[]> };
 /** Same factory serves Lambda and explicitly authorized operator bootstrap.

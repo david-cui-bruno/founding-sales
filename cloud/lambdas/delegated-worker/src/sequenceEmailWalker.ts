@@ -13,6 +13,7 @@ import { DynamoStore, fingerprint, keyPart, type RepositoryOptions } from './dyn
 import { authorityRecordSchema, executionAuthorityKey, type DynamoExecutionRepository } from './executionRepository';
 import { type RemoteGoogleAuthorization } from './remoteGoogleAuthorization';
 import { mailSuppressionKey } from './threadIntakeRepository';
+import { recordAttempt } from './v1/attempts';
 import { TerritoryPolicyRepository } from './territoryPolicyRepository';
 import { WorkerCampaignRepository, campaignEnrollmentKey, campaignVersionKey } from './workerCampaignRepository';
 
@@ -214,6 +215,7 @@ export function createSequenceEmailWalker(input: SequenceEmailDependencies) {
       report.held++;
       report.heldByReason[reason] = (report.heldByReason[reason] ?? 0) + 1;
       await territory.recordEmailStepOutcome({ accountId, stepId: context.step.id, hold: reason });
+      await recordAttempt(store, { kind: 'hold', outcome: 'held', reason, detail: `step=${readableId(context.step.id)} template=${templateId}`, durationMs: null, ref: accountId });
     };
     const accountRow = await store.get<unknown>(`ACCOUNT#${keyPart(accountId)}`);
     const business = accountRow ? readBusinessEmail(accountRow.data) : null;
@@ -263,6 +265,7 @@ export function createSequenceEmailWalker(input: SequenceEmailDependencies) {
       return;
     }
     report.sent++;
+    await recordAttempt(store, { kind: 'send', outcome: 'ok', reason: null, detail: `step=${readableId(context.step.id)} template=${templateId}`, durationMs: null, ref: accountId });
     await territory.recordEmailStepOutcome({ accountId, stepId: context.step.id, sent: { templateId, commandId, sentAt: store.now() } });
   }
 
@@ -284,6 +287,11 @@ export function createSequenceEmailWalker(input: SequenceEmailDependencies) {
   };
 }
 
+/** A derived id with its long hex digest collapsed, so an attempt's detail keeps the readable part (`territory-version-<hash>-step-2`)
+ *  and the log's redaction of 32+ character runs never has to touch it. */
+function readableId(id: string): string {
+  return id.replace(/[a-f0-9]{32,}/g, '<hash>');
+}
 /** A template's purpose, read from the seeded templates rather than retyped here: schema 30 freezes a template's
  *  purpose for the life of the row, so the seed is what the desktop and the worker both mean by it. */
 function templatePurpose(templateId: ReplyTemplateId): ReplyTemplatePurpose {

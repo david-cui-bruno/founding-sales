@@ -15,6 +15,7 @@ import { executionAuthorityKey } from '../src/executionRepository';
 import { googleScopes } from '../src/googleGrantCapabilities';
 import { DynamoStore } from '../src/dynamoStore';
 import { buildScheduledRunRecord } from '../src/tickLog';
+import { listAttempts } from '../src/v1/attempts';
 import { REPLY_TEMPLATE_SEEDS, seededReplyTemplateHash } from '../../../../src/main/outreach/templates/replyTemplateSeeds';
 import { templateSequenceEmailActionId, templateSequenceEmailCommandId, templateSequenceEmailTemplateId } from '../../../../src/shared/outreach/templateSequenceEmail';
 import { ownerCommandSchema, ownerSourceKey, territoryPolicyCommandSchema, replyTemplateCommandSchema, type OwnerCommand,
@@ -195,6 +196,11 @@ describe('the worker walks a due sequence email step', () => {
     expect(record?.data.sentSteps).toEqual([{ stepId: steps[0], templateId: 'T4',
       commandId: templateSequenceEmailCommandId({ accountId: f.account.id, templateId: 'T4', stepId: steps[0]! }), sentAt: DAY_SEVEN }]);
     expect(record?.data.heldSteps.map(step => step.stepId)).toEqual([steps[1]]);
+    // The send is one `send` attempt in the diagnostics log, naming the step and template but never the address or the text.
+    const sendAttempts = await listAttempts(f.dynamoStore, { kind: 'send' });
+    expect(sendAttempts).toEqual([expect.objectContaining({ outcome: 'ok', reason: null, ref: f.account.id, detail: `step=${steps[0]!.replace(/[a-f0-9]{32,}/g, '<hash>')} template=T4` })]);
+    expect(JSON.stringify(sendAttempts)).not.toContain(RECIPIENT);
+    expect(await listAttempts(f.dynamoStore, { kind: 'hold' })).toEqual([]);
     // The text that went out is the approved text with the firm's own name and city, and nothing else.
     const text = messageText(f.sent()[0]!.raw);
     expect(text).toBe(T4.body.replaceAll('{firm}', 'Fictional PM 1').replaceAll('{city}', 'Providence').replaceAll('\n', '\r\n'));
@@ -240,6 +246,9 @@ describe('the worker walks a due sequence email step', () => {
     await unapproved.tick();
     reasons.template_not_approved = (await unapproved.territory.readEnrollmentRecord(unapproved.account.id))!.data.heldSteps[0]!.reason;
     expect(unapproved.sends()).toBe(0);
+    // The held step is one `hold` attempt with the same closed reason, and no `send` attempt exists.
+    expect(await listAttempts(unapproved.dynamoStore, { kind: 'hold' })).toEqual([expect.objectContaining({ outcome: 'held', reason: 'template_not_approved', ref: unapproved.account.id })]);
+    expect(await listAttempts(unapproved.dynamoStore, { kind: 'send' })).toEqual([]);
 
     // mailbox_not_connected: the approval stands, but this firm's owner source carries no mailbox.
     const nomailbox = await fixture();
