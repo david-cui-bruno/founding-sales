@@ -27,7 +27,7 @@ import { mailAccountScopeSchema } from '../../../../src/shared/contracts/mailThr
 import { mailScopeFingerprint } from '../../../../src/main/outreach/providers/gmailThreadProvider';
 import type { TickHeldReason, TickPhase, TickPhaseHold, TickPhaseResult } from '../../../../src/shared/contracts/researchSetupContract';
 import { buildScheduledRunRecord, tickErrorClass, SOURCE_LAST_TICK_KEY } from './tickLog';
-import { recordAttempt, type AttemptInput } from './v1/attempts';
+import { attemptCode, recordAttempt, type AttemptInput } from './v1/attempts';
 import { TerritoryPolicyRepository, TERRITORY_BACKFILL_TICK_LIMIT, type TerritoryBackfillReport } from './territoryPolicyRepository';
 import { createSequenceEmailWalker, type SequenceEmailReport } from './sequenceEmailWalker';
 import { createTerritoryMailScopeConfigurator, type TerritoryMailScopeReport } from './territoryMailScope';
@@ -502,15 +502,13 @@ function phaseAttempt(name: TickPhase, report: SourceTickReport, failure: TickHe
   const result = report.phases[name]; const held = report.phaseHolds[name];
   const outcome = result === 'completed' ? 'ok' : result === 'aborted' ? 'aborted' : 'held';
   const reason = outcome === 'ok' ? null : held?.reason ?? (outcome === 'held' ? failure : 'deadline');
-  return { kind: 'tick_phase', outcome, reason, detail: held?.errorClass ? `errorClass=${held.errorClass}` : null, durationMs, ref: name };
+  return { kind: 'tick_phase', outcome, reason, detail: held?.errorClass ? { code: attemptCode(held.errorClass) } : null, durationMs, ref: name };
 }
-/** One `tick` attempt per run: counts only, the most frequent hold reason when held, and the run's duration. */
+/** One `tick` attempt per run: the status as the code, the hold count, the most frequent hold reason when held, and the run's duration.
+ *  The full counts live in the tick record (`SOURCE_LAST_TICK`), which the diagnostics view reads beside the attempts. */
 function tickAttempt(report: SourceTickReport, durationMs: number): AttemptInput {
   const outcome = report.status === 'aborted' ? 'aborted' : report.held > 0 ? 'held' : 'ok';
   const reasons = (Object.entries(report.heldByReason) as [TickHeldReason, number][]).sort((a, b) => b[1] - a[1]);
   const reason = outcome === 'ok' ? null : reasons[0]?.[0] ?? (outcome === 'aborted' ? 'deadline' : null);
-  const detail = `status=${report.status} held=${report.held} polls=${report.mailPolls} dispatches=${report.dispatches} research=${report.researchCompleted}`
-    + (report.places ? ` places=${report.places.outcome}` : '') + (report.territory ? ` swept=${report.territory.scanned}` : '')
-    + (report.sequenceEmails ? ` emails_sent=${report.sequenceEmails.sent} emails_held=${report.sequenceEmails.held}` : '');
-  return { kind: 'tick', outcome, reason, detail, durationMs, ref: null };
+  return { kind: 'tick', outcome, reason, detail: { code: report.status, count: report.held }, durationMs, ref: null };
 }

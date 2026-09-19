@@ -198,7 +198,8 @@ describe('the worker walks a due sequence email step', () => {
     expect(record?.data.heldSteps.map(step => step.stepId)).toEqual([steps[1]]);
     // The send is one `send` attempt in the diagnostics log, naming the step and template but never the address or the text.
     const sendAttempts = await listAttempts(f.dynamoStore, { kind: 'send' });
-    expect(sendAttempts).toEqual([expect.objectContaining({ outcome: 'ok', reason: null, ref: f.account.id, detail: `step=${steps[0]!.replace(/[a-f0-9]{32,}/g, '<hash>')} template=T4` })]);
+    expect(sendAttempts).toEqual([expect.objectContaining({ outcome: 'ok', reason: null, ref: f.account.id,
+      detail: { code: 'provider_accepted', firmId: f.account.id, commandId: templateSequenceEmailCommandId({ accountId: f.account.id, templateId: 'T4', stepId: steps[0]! }) } })]);
     expect(JSON.stringify(sendAttempts)).not.toContain(RECIPIENT);
     expect(await listAttempts(f.dynamoStore, { kind: 'hold' })).toEqual([]);
     // The text that went out is the approved text with the firm's own name and city, and nothing else.
@@ -247,7 +248,8 @@ describe('the worker walks a due sequence email step', () => {
     reasons.template_not_approved = (await unapproved.territory.readEnrollmentRecord(unapproved.account.id))!.data.heldSteps[0]!.reason;
     expect(unapproved.sends()).toBe(0);
     // The held step is one `hold` attempt with the same closed reason, and no `send` attempt exists.
-    expect(await listAttempts(unapproved.dynamoStore, { kind: 'hold' })).toEqual([expect.objectContaining({ outcome: 'held', reason: 'template_not_approved', ref: unapproved.account.id })]);
+    expect(await listAttempts(unapproved.dynamoStore, { kind: 'hold' })).toEqual([expect.objectContaining({ outcome: 'held', reason: 'template_not_approved', ref: unapproved.account.id,
+      detail: { code: 'template_not_approved', firmId: unapproved.account.id } })]);
     expect(await listAttempts(unapproved.dynamoStore, { kind: 'send' })).toEqual([]);
 
     // mailbox_not_connected: the approval stands, but this firm's owner source carries no mailbox.

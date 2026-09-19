@@ -7,10 +7,10 @@ import type { DynamoStore } from '../dynamoStore';
  * The attempt log (FSS target design section 2, `ATTEMPT#<ts>#<id>`): the worker's own account of what it
  * tried, kept 30 days in the workspace partition. Everything the Diagnostics page shows comes from here.
  *
- * Writing is best effort by design: the log describes the work, it never decides it. A failed write is a
- * console warning, and no caller ever sees an exception from `recordAttempt`. Details are sanitised before
- * they are stored so that an address, a bearer token or a long secret can never reach a device through the
- * view.
+ * Writing is best effort by design: the log describes the work, it never decides it. A failed write is one
+ * console warning naming the event and the kind, and no caller ever sees an exception from `recordAttempt`.
+ * A record is never logged: its detail is the contract's closed object (codes, identifiers, counts) or null,
+ * and a record the contract refuses is dropped, never coerced.
  */
 
 export const ATTEMPT_PREFIX = 'ATTEMPT#';
@@ -19,29 +19,25 @@ export const ATTEMPT_RANGE_END = 'ATTEMPT#~';
 export const ATTEMPT_TTL_SECONDS = 30 * 24 * 3600;
 /** With a kind filter the query reads this many newest rows before filtering; without one it reads only the page. */
 const FILTERED_FETCH_LIMIT = 100;
-export const REDACTED = '[redacted]';
 
 /** What a call site supplies; `at` is always the store's clock. */
 export type AttemptInput = Omit<AttemptRecord, 'at'>;
 
-const EMAIL_ADDRESS = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/g;
-/** `Bearer` and anything glued to it, including the bare word: the scheme name alone is enough to invite a paste. */
-const BEARER = /Bearer(?:\s+[A-Za-z0-9._~+/=-]+)?/g;
-const LONG_BASE64URL_RUN = /[A-Za-z0-9_-]{32,}/g;
-
-/** Pure. Removes addresses, bearer tokens and 32+ character base64url runs, then bounds the length to the contract's 400. */
-export function sanitiseAttemptDetail(detail: string | null | undefined): string | null {
-  if (detail === null || detail === undefined) return null;
-  const cleaned = detail.replace(EMAIL_ADDRESS, REDACTED).replace(BEARER, REDACTED).replace(LONG_BASE64URL_RUN, REDACTED);
-  return cleaned.length > 400 ? cleaned.slice(0, 400) : cleaned;
+/**
+ * A closed code from a command kind (`bootstrap-selected-account`), an error class (`DynamoReadUnavailable`) or any
+ * other short word: lower-case words joined by one underscore, at most 40 characters, never empty. Pure.
+ */
+export function attemptCode(value: string): string {
+  const code = value.replace(/([A-Z]+)([A-Z][a-z])/g, '$1_$2').replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40).replace(/_+$/, '');
+  return code || 'unknown';
 }
 
-/** Writes one attempt. Never throws: a record the contract refuses or a write that fails is one console warning with no detail from the cause. */
+/** Writes one attempt. Never throws: a record the contract refuses or a write that fails is one console warning without the record. */
 export async function recordAttempt(store: DynamoStore, input: AttemptInput): Promise<void> {
   let record: AttemptRecord;
-  try {
-    record = attemptRecordSchema.parse({ ...input, at: store.now(), detail: sanitiseAttemptDetail(input.detail) });
-  } catch {
+  try { record = attemptRecordSchema.parse({ ...input, at: store.now() }); }
+  catch {
     console.warn(JSON.stringify({ event: 'attempt_record_invalid', kind: String(input.kind).slice(0, 20) }));
     return;
   }

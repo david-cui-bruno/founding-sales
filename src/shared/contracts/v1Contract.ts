@@ -14,8 +14,23 @@ const uuid = z.string().uuid();
 
 /** A closed reason slug: lower-case words joined by underscores, never free text, at most 40 characters. */
 export const attemptReasonSchema = z.string().regex(/^[a-z0-9]+(?:_[a-z0-9]+)*$/).max(40);
-/** Human-readable detail. The worker sanitises it before storage (no addresses, bearer tokens or long secrets). */
-export const attemptDetailSchema = z.string().max(400);
+/**
+ * What an attempt was about, as a closed object and never free text, so no address, token, excerpt or provider
+ * message can reach a device through the view. `code` is the closed word for the thing tried or the thing that
+ * stopped it (a command kind, a hold code, a provider outcome, an error class); the rest are identifiers and counts.
+ */
+export const attemptDetailSchema = z.strictObject({
+  code: attemptReasonSchema,
+  firmId: z.string().max(80).optional(),
+  jobId: z.string().max(80).optional(),
+  commandId: z.string().max(80).optional(),
+  providerStatus: z.number().int().optional(),
+  providerCode: attemptReasonSchema.optional(),
+  count: z.number().int().nonnegative().optional(),
+  bytes: z.number().int().nonnegative().optional(),
+  cursor: z.string().max(12).optional(),
+});
+export type AttemptDetail = z.infer<typeof attemptDetailSchema>;
 
 export const attemptKindSchema = z.enum(['tick', 'tick_phase', 'command', 'events_page', 'send', 'hold', 'research', 'poll', 'pairing']);
 export type AttemptKind = z.infer<typeof attemptKindSchema>;

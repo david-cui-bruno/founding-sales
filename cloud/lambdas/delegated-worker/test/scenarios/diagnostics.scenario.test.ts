@@ -30,7 +30,7 @@ describe('/v1/diagnostics and /v1/commands on the real handler', () => {
     expect(body.lastTick).toBeNull();
     expect(body.devices).toEqual([{ deviceId: device.deviceId, label: 'David MacBook', createdAt: '2026-09-18T12:00:00.000Z', lastSeenAt: '2026-09-18T12:01:00.000Z', revokedAt: null }]);
     // The pairing itself is the first attempt the device can see; the token is nowhere in the view.
-    expect(body.attempts).toEqual([{ at: '2026-09-18T12:00:00.000Z', kind: 'pairing', outcome: 'ok', reason: null, detail: 'device paired', durationMs: expect.any(Number), ref: device.deviceId }]);
+    expect(body.attempts).toEqual([{ at: '2026-09-18T12:00:00.000Z', kind: 'pairing', outcome: 'ok', reason: null, detail: { code: 'device_paired' }, durationMs: expect.any(Number), ref: device.deviceId }]);
     expect(view.body).not.toContain(device.deviceToken);
 
     // The last tick record, when one exists, is reduced to its instant, status and duration.
@@ -41,12 +41,12 @@ describe('/v1/diagnostics and /v1/commands on the real handler', () => {
     // kind and limit are honoured; anything else on the query is refused before the router runs.
     for (let index = 0; index < 8; index++) {
       f.advance(`2026-09-18T12:${String(10 + index).padStart(2, '0')}:00.000Z`);
-      await recordAttempt(f.store, { kind: index % 2 ? 'tick_phase' : 'tick', outcome: 'ok', reason: null, detail: `n${index}`, durationMs: null, ref: null });
+      await recordAttempt(f.store, { kind: index % 2 ? 'tick_phase' : 'tick', outcome: 'ok', reason: null, detail: { code: 'sample', count: index }, durationMs: null, ref: null });
     }
     const limited = diagnosticsViewSchema.parse(f.json(await f.request('GET', '/v1/diagnostics', { authorization: device.bearer, query: 'limit=5' })));
-    expect(limited.attempts.map(attempt => attempt.detail)).toEqual(['n7', 'n6', 'n5', 'n4', 'n3']);
+    expect(limited.attempts.map(attempt => attempt.detail?.count)).toEqual([7, 6, 5, 4, 3]);
     const filtered = diagnosticsViewSchema.parse(f.json(await f.request('GET', '/v1/diagnostics', { authorization: device.bearer, query: 'kind=tick_phase&limit=3' })));
-    expect(filtered.attempts.map(attempt => attempt.detail)).toEqual(['n7', 'n5', 'n3']);
+    expect(filtered.attempts.map(attempt => attempt.detail?.count)).toEqual([7, 5, 3]);
     expect((await f.request('GET', '/v1/diagnostics', { authorization: device.bearer, query: 'kind=nonsense' })).statusCode).toBe(400);
     expect(f.json(await f.request('GET', '/v1/diagnostics', { authorization: device.bearer, query: 'limit=0' }))).toEqual({ error: 'invalid_request' });
     expect((await f.request('GET', '/v1/diagnostics', { authorization: device.bearer, query: 'cursor=1' })).statusCode).toBe(400);
@@ -106,7 +106,7 @@ describe('/v1/diagnostics and /v1/commands on the real handler', () => {
     expect(sorted(attempts.map(attempt => [attempt.outcome, attempt.reason]))).toEqual(sorted([
       ['ok', 'duplicate'], ['failed', 'device_revoked'], ['failed', 'command_conflict'], ['failed', 'device_unknown'], ['failed', 'command_conflict'], ['ok', 'duplicate'], ['ok', null],
       ['failed', 'invalid_request'], ['failed', 'invalid_request'], ['failed', 'invalid_request'], ['failed', 'unauthenticated']]));
-    expect(attempts.filter(attempt => attempt.reason === null)[0]).toMatchObject({ ref: commandId, detail: 'kind=revoke_device' });
+    expect(attempts.filter(attempt => attempt.reason === null)[0]).toMatchObject({ ref: commandId, detail: { code: 'revoke_device', commandId } });
     const dump = JSON.stringify(f.db.dump());
     expect(dump).not.toContain(first.deviceToken); expect(dump).not.toContain(second.deviceToken);
 

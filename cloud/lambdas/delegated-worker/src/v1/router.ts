@@ -109,7 +109,7 @@ export async function v1Router(input: V1RouterInput): Promise<WorkerHttpResponse
       const started = Date.now();
       try {
         const redeemed = pairRedeemResponseSchema.parse(await devices.redeem(request.data.code));
-        await recordAttempt(store, { kind: 'pairing', outcome: 'ok', reason: null, detail: 'device paired', durationMs: Date.now() - started, ref: redeemed.deviceId });
+        await recordAttempt(store, { kind: 'pairing', outcome: 'ok', reason: null, detail: { code: 'device_paired' }, durationMs: Date.now() - started, ref: redeemed.deviceId });
         return respond(200, redeemed);
       } catch (error) {
         if (!(error instanceof V1PairRefused)) throw error;
@@ -141,7 +141,7 @@ export async function v1Router(input: V1RouterInput): Promise<WorkerHttpResponse
       const started = Date.now();
       const receipt = await applyCommand(store, devices, principal, request.data);
       await recordAttempt(store, { kind: 'command', outcome: receipt.outcome === 'refused' ? 'failed' : 'ok',
-        reason: receipt.outcome === 'duplicate' ? 'duplicate' : receipt.reason, detail: `kind=${request.data.kind}`, durationMs: Date.now() - started, ref: receipt.commandId });
+        reason: receipt.outcome === 'duplicate' ? 'duplicate' : receipt.reason, detail: { code: request.data.kind, commandId: receipt.commandId }, durationMs: Date.now() - started, ref: receipt.commandId });
       return respond(200, v1CommandReceiptSchema.parse(receipt));
     }
     return respond(404, { error: 'not_found' });

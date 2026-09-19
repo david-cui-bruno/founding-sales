@@ -190,7 +190,7 @@ describe('POST /v1/pair/redeem on the real handler', () => {
     expect(attempts.map(attempt => [attempt.outcome, attempt.reason])).toEqual([
       ['failed', 'too_many_failures'], ['failed', 'code_unknown'], ['failed', 'code_unknown'], ['failed', 'invalid_request'],
       ['failed', 'code_invalid'], ['failed', 'code_expired'], ['failed', 'code_consumed'], ['ok', null]]);
-    expect(attempts.at(-1)).toMatchObject({ ref: token.deviceId, detail: 'device paired' });
+    expect(attempts.at(-1)).toMatchObject({ ref: token.deviceId, detail: { code: 'device_paired' } });
     // In the next hour the fresh code redeems.
     f.advance('2026-09-18T13:00:30.000Z');
     expect((await f.request('POST', '/v1/pair/redeem', { body: { code: fresh.code } })).statusCode).toBe(200);

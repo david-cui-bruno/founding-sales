@@ -111,7 +111,7 @@ describe.each([false, true])('actual GET /events dependency failure (production=
     expect(result.body).not.toContain(secretText);
     expect(f.commands).toHaveLength(failureAt);
     // The refused page is one failed attempt under the closed code, and the SDK text is not in it either.
-    expect(f.attempts).toEqual([{ outcome: 'failed', reason: 'worker_unavailable', detail: 'cursor=none' }].map(attempt => expect.objectContaining(attempt)));
+    expect(f.attempts).toEqual([expect.objectContaining({ outcome: 'failed', reason: 'worker_unavailable', detail: { code: 'worker_unavailable', cursor: 'none' } })]);
     expect(JSON.stringify(f.attempts)).not.toContain(secretText);
   });
   it('returns the unchanged event page on healthy reads', async () => {
@@ -121,7 +121,7 @@ describe.each([false, true])('actual GET /events dependency failure (production=
     expect(JSON.parse(result.body)).toMatchObject({ events: [event(1).event, event(2).event], complete: true });
     expect(f.commands).toHaveLength(EVENTS_READS);
     expect(f.commands.filter(command => command instanceof QueryCommand)).toHaveLength(1);
-    expect(f.attempts).toEqual([expect.objectContaining({ outcome: 'ok', reason: null, detail: `cursor=none count=2 bytes=${Buffer.byteLength(result.body, 'utf8')}` })]);
+    expect(f.attempts).toEqual([expect.objectContaining({ outcome: 'ok', reason: null, detail: { code: 'events_page', cursor: 'none', count: 2, bytes: Buffer.byteLength(result.body, 'utf8') } })]);
   });
 });
 
