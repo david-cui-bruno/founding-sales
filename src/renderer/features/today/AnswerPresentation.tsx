@@ -1,6 +1,6 @@
 import type { FocusEvent } from 'react';
 import { Mail, UserRound } from 'lucide-react';
-import type { RequestedAnswerPresentation, ManualAnswerPresentation } from '../../../shared/contracts/dailyAnswerPresentationContract';
+import type { RequestedAnswerPresentation } from '../../../shared/contracts/dailyAnswerPresentationContract';
 
 type Contact = NonNullable<RequestedAnswerPresentation['contact']>;
 export function AnswerIdentity({ type, tag, company, fallback, contact }: { type: string; tag: string; company: string; fallback: string; contact?: Contact | null }) {
@@ -22,7 +22,7 @@ export function OriginalCallContext({ context }: { context?: RequestedAnswerPres
     {context?.linkedContact && <p>Linked call contact: {context.linkedContact.displayName}</p>}
   </section>;
 }
-export type AnswerPresentation = RequestedAnswerPresentation | ManualAnswerPresentation;
+export type AnswerPresentation = RequestedAnswerPresentation;
 
 /** Reveal focused fields in their own scrollport. Native textarea focus can
  * leave a nested flex scrollport unchanged even when the field is offscreen.

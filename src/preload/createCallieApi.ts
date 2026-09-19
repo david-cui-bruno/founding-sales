@@ -18,7 +18,6 @@ import {territoryCallPolicyRequestSchema,territoryCallPolicyStatusSchema,type Te
 import {editReplyTemplateSchema,replyTemplateRequestSchema,replyTemplateStatusSchema,sendingLimitsRequestSchema,sendingLimitsStatusSchema,type EditReplyTemplate,type ReplyTemplateRequest,type ReplyTemplateStatus,type SendingLimitsRequest,type SendingLimitsStatus} from '../shared/contracts/replyTemplateContract';
 import {saveAccountCallbackSchema,closeAccountCallbackSchema,readAccountCallbacksSchema,accountCallbackListSchema,neverCallAccountSchema,neverCallReceiptSchema,type SaveAccountCallback,type CloseAccountCallback,type ReadAccountCallbacks,type NeverCallAccount,type NeverCallReceipt} from '../shared/contracts/accountCallbackContract';
 import {accountCallbackSchema,type AccountCallback} from '../shared/contracts/dailyContract';
-import {createLinkedInApi} from './apis/linkedInApi';
 import { delegatedPhoneHandoffRequestSchema,bootstrapSelectedAccountSchema,refreshSelectedAccountRecordSchema,selectedAccountFreshnessRequestSchema,selectedAccountFreshnessSchema,configureResearchSourceSchema,ownerResearchSourceSchema,configureLocalDelegationSchema,localDelegationStatusSchema,localDelegationConfigurationRecordSchema,redeemLocalPairingSchema,redeemedLocalPairingSchema,delegationSyncReportSchema,storedPairingSummarySchema,rotateLocalPairingSchema,rotatedLocalPairingSchema,type RefreshSelectedAccountRecord,type SelectedAccountFreshnessRequest,type SelectedAccountFreshness } from '../shared/contracts/ownerCommandContract';
 import {delegatedPhoneHandoffResultSchema,publicDelegationCommandSchema,commandReceiptSchema,type CommandReceipt,type PublicDelegationCommand} from '../shared/contracts/delegationContract';
 import type {z} from 'zod';
@@ -203,7 +202,6 @@ export const createCallieApi = (invoker: IpcInvoker) => {
         return reply;
       },
     },
-    linkedin: createLinkedInApi(client),
     phoneSetup: createPhoneSetupApi(client),
     outreach: createOutreachApi(client),
     leads: createLeadsApi(client),

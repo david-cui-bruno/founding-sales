@@ -9,17 +9,15 @@ export type CreateCallCampaignDraftInput = {
   accountId: string;
   offer: string;
 };
-export type CreateLinkedInCampaignDraftInput = CreateCallCampaignDraftInput;
-/** The two exact one-company manual templates. Email is not a template here. */
-export type OneCompanyCampaignChannel = 'call' | 'linkedin';
+/** The one exact one-company manual template. Email is not a template here, and the LinkedIn template was removed on 18 September 2026. */
+export type OneCompanyCampaignChannel = 'call';
 
 // Hash the exact UTF-8 text below, without a trailing newline. Each names a
 // descriptive content policy only, not compliance, consent, send or call authority.
 const templates = {
   call: { policyDescription: 'manual initial call draft template v1', channelCaps: { call: 1, email: 0, linkedin: 0 } },
-  linkedin: { policyDescription: 'manual initial linkedin draft template v1', channelCaps: { call: 0, email: 0, linkedin: 1 } },
 } as const;
-const policyHashes = { call: sha256Utf8(templates.call.policyDescription), linkedin: sha256Utf8(templates.linkedin.policyDescription) };
+const policyHashes = { call: sha256Utf8(templates.call.policyDescription) };
 
 function audienceHash(accountId: string): string {
   // Canonical v1 JSON: fixed key order, no whitespace, one explicit account ID.
@@ -46,11 +44,6 @@ function createDraft(channel: OneCompanyCampaignChannel, input: CreateCallCampai
 
 export function createCallCampaignDraft(input: CreateCallCampaignDraftInput): CampaignVersion {
   return createDraft('call', input);
-}
-
-/** Lifetime caps linkedin 1, call 0, email 0. Saving this never prepares, sends or connects. */
-export function createLinkedInCampaignDraft(input: CreateLinkedInCampaignDraftInput): CampaignVersion {
-  return createDraft('linkedin', input);
 }
 
 type TemplateDescription = {
@@ -91,28 +84,16 @@ export function describeCallCampaignDraft(version: unknown): ReturnType<typeof d
   return describeDraft('call', version);
 }
 
-/** Recognize the exact LinkedIn template, with or without approval. Never grants authority. */
-export function describeLinkedInCampaignTemplate(version: unknown): TemplateDescription | null {
-  return describeTemplate('linkedin', version);
-}
-
-/** Draft presentation must never relabel an approved version as unapproved. */
-export function describeLinkedInCampaignDraft(version: unknown): ReturnType<typeof describeLinkedInCampaignTemplate> {
-  return describeDraft('linkedin', version);
-}
-
-/** Exactly one of the two one-company templates, naming its channel. Anything else is opaque. */
+/** The exact one-company call template, naming its channel. Anything else, including a saved LinkedIn-typed version, is opaque. */
 export function describeOneCompanyCampaignTemplate(version: unknown): (TemplateDescription & { channel: OneCompanyCampaignChannel }) | null {
   const call = describeTemplate('call', version);
-  if (call) return { channel: 'call', ...call };
-  const linkedin = describeTemplate('linkedin', version);
-  return linkedin ? { channel: 'linkedin', ...linkedin } : null;
+  return call ? { channel: 'call', ...call } : null;
 }
 
 export type CampaignTemplateDescription =
   | (TemplateDescription & { kind: 'one_company'; channel: OneCompanyCampaignChannel })
   | (TerritoryPolicyVersionDescription & { kind: 'territory_policy' });
-/** Every version the renderer can name: the two exact one-company manual templates (Lenox's path, unchanged) or a
+/** Every version the renderer can name: the exact one-company manual call template (Lenox's path, unchanged) or a
  * version the worker derived from the approved territory call policy, read-only. Anything else is opaque. */
 export function describeCampaignTemplate(version: unknown): CampaignTemplateDescription | null {
   const manual = describeOneCompanyCampaignTemplate(version);

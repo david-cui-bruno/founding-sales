@@ -4,7 +4,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { CallCampaignEnrollment } from './CallCampaignEnrollment';
 import { configuredFixtureStatus, fixtureNow, nativeDeskFixture, nativeDeskReviewFixture } from '../today/nativeDesk.fixture';
 import { setDailySessionScope } from '../today/dailySessionScope';
-import { createCallCampaignDraft, createLinkedInCampaignDraft } from '../../../shared/contracts/callCampaignDraft';
+import { createCallCampaignDraft } from '../../../shared/contracts/callCampaignDraft';
 import { ownerCampaignCommandSchema } from '../../../shared/contracts/ownerCommandContract';
 import type { DailySnapshot } from '../../../shared/contracts/dailyContract';
 import type { Enrollment } from '../../../shared/contracts/campaignContract';
@@ -433,79 +433,6 @@ it('keeps company enrollment available but rejects a person-binding change durin
 
 const linkedIn: AccountRoute = { id: 'li-company', accountId: 'a', personId: null, version: 1, channel: 'linkedin',
   value: 'https://www.linkedin.com/in/fictional-company', purpose: 'business', verification: 'published', evidenceIds: ['source'] };
-const linkedInReviewLabel = 'I reviewed this company, offer, LinkedIn step and lifetime limits';
-const linkedInEnrollLabel = 'I want this company added to the manual LinkedIn queue';
-function linkedInFixture(approved = false) {
-  const f = fixture(approved);
-  const snapshot = f.props.snapshot;
-  snapshot.campaigns[0].version = { ...createLinkedInCampaignDraft({ campaignId: 'campaign', versionId: 'version', stepId: 'step', accountId: 'a', offer: 'Discuss maintenance workflow.' }),
-    approvedAt: approved ? fixtureNow : null };
-  snapshot.accounts[0].routes = [phone, linkedIn];
-  f.setSnapshot(structuredClone(snapshot));
-  f.props.campaign = snapshot.campaigns[0];
-  return f;
-}
-
-it('approves and enrolls the exact LinkedIn template through explicit LinkedIn-labelled requests without sending', async () => {
-  const f = linkedInFixture();
-  f.submit.mockImplementation(async raw => {
-    const c = ownerCampaignCommandSchema.parse(raw);
-    const snapshot = f.snapshot();
-    if (c.payload.kind === 'campaign.approve') snapshot.campaigns[0].version.approvedAt = c.payload.approvedAt;
-    else if (c.payload.kind === 'campaign.enroll') snapshot.campaigns[0].enrollments = [{ ...enrolled(f, 1), selectedRouteVersion: linkedIn.version }];
-    else throw Error('Unexpected action');
-    snapshot.ownerStatus[0].executionVersion!++;
-    f.setSnapshot(snapshot);
-    return { commandId: c.commandId, status: 'applied', authorityGeneration: 1, aggregateVersion: 2, reason: null };
-  });
-  const view = render(<CallCampaignEnrollment {...f.props} />);
-  expect(screen.getByRole('region', { name: 'LinkedIn campaign enrollment' })).toBeTruthy();
-  expect(screen.getByText('Enrollment adds a due manual LinkedIn preparation item. It does not send a message, connect, or grant contact permission.')).toBeTruthy();
-  expect(screen.queryByRole('button', { name: 'Approve call campaign' })).toBeNull();
-  expect(screen.queryByLabelText(reviewLabel)).toBeNull();
-  const approveButton = screen.getByRole<HTMLButtonElement>('button', { name: 'Approve LinkedIn campaign' });
-  expect(approveButton.disabled).toBe(true);
-  fireEvent.click(screen.getByLabelText(linkedInReviewLabel));
-  fireEvent.click(approveButton);
-  await screen.findByText('LinkedIn campaign approved. Not enrolled.');
-  expect(command(f).payload).toMatchObject({ kind: 'campaign.approve', campaignVersionId: 'version', snapshotHash: 'a'.repeat(64) });
-  const snapshot = f.snapshot();
-  view.rerender(<CallCampaignEnrollment {...f.props} snapshot={snapshot} campaign={snapshot.campaigns[0]} />);
-  expect(screen.queryByLabelText('Business phone route')).toBeNull();
-  const select = screen.getByLabelText<HTMLSelectElement>('Business LinkedIn route');
-  expect([...select.options].map(option => option.value)).toEqual(['', 'li-company']);
-  expect(select.options[1].text).toBe(`${linkedIn.value} (published)`);
-  expect(screen.getByText('This LinkedIn queue supports company-level business profile routes only. Person-specific routes and company pages are not available here.')).toBeTruthy();
-  fireEvent.change(select, { target: { value: 'li-company' } });
-  const enrollButton = screen.getByRole<HTMLButtonElement>('button', { name: 'Enroll company for manual LinkedIn note' });
-  expect(enrollButton.disabled).toBe(true);
-  fireEvent.click(screen.getByLabelText(linkedInEnrollLabel));
-  fireEvent.click(enrollButton);
-  await screen.findByText('Company enrolled for a manual LinkedIn note. No message sent.');
-  expect(command(f, 1)).toMatchObject({ accountId: 'a', payload: { kind: 'campaign.enroll', campaignVersionId: 'version', selectedRouteId: 'li-company', contextRevision: 1 } });
-  expect(f.submit).toHaveBeenCalledTimes(2);
-  expect(f.calls.every(call => ['delegation.sync', 'daily.get', 'delegation.status'].includes(call.method))).toBe(true);
-});
-
-it('offers only latest distinct company-level business LinkedIn profile routes for the LinkedIn template', () => {
-  const f = linkedInFixture(true);
-  const snapshot = structuredClone(f.props.snapshot);
-  snapshot.accounts[0].routes = [phone, linkedIn, { ...linkedIn, id: 'confirmed', verification: 'confirmed', value: 'https://linkedin.com/in/fictional-company-2/' },
-    { ...linkedIn, id: 'thread', value: 'https://www.linkedin.com/messaging/thread/fictional-thread' },
-    { ...linkedIn, id: 'person', personId: 'person-a' }, { ...linkedIn, id: 'company-page', value: 'https://www.linkedin.com/company/fictional-company' },
-    { ...linkedIn, id: 'unverified', verification: 'unverified' }, { ...linkedIn, id: 'unknown', purpose: 'unknown' },
-    { ...linkedIn, id: 'withdrawn' }, { ...linkedIn, id: 'withdrawn', version: 2, personId: 'person-b' },
-    { ...linkedIn, id: 'http', value: 'http://www.linkedin.com/in/fictional-company' }];
-  render(<CallCampaignEnrollment {...f.props} snapshot={snapshot} />);
-  const select = screen.getByLabelText<HTMLSelectElement>('Business LinkedIn route');
-  expect([...select.options].map(option => option.value)).toEqual(['', 'li-company', 'confirmed', 'thread']);
-  fireEvent.change(select, { target: { value: 'phone' } });
-  fireEvent.click(screen.getByLabelText(linkedInEnrollLabel));
-  expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Enroll company for manual LinkedIn note' }).disabled).toBe(true);
-  expect(f.calls).toEqual([]);
-  expect(f.submit).not.toHaveBeenCalled();
-});
-
 it('never offers LinkedIn routes for the call template', () => {
   const f = fixture(true);
   const snapshot = structuredClone(f.props.snapshot);
@@ -517,22 +444,25 @@ it('never offers LinkedIn routes for the call template', () => {
   expect(f.submit).not.toHaveBeenCalled();
 });
 
-it('holds a LinkedIn structure signed with the call policy as an opaque template without API calls', () => {
-  const f = linkedInFixture();
+it('holds a saved LinkedIn-typed version as an opaque template without API calls, offering no LinkedIn route', () => {
+  const f = fixture();
   const snapshot = structuredClone(f.props.snapshot);
-  snapshot.campaigns[0].version.contentPolicyHash = createCallCampaignDraft({ campaignId: 'campaign', versionId: 'version', stepId: 'step', accountId: 'a', offer: 'x' }).contentPolicyHash;
+  // Exactly what the retired LinkedIn template produced; since 18 September 2026 nothing on the desktop can approve or enroll it.
+  snapshot.campaigns[0].version = { ...snapshot.campaigns[0].version, steps: [{ ...snapshot.campaigns[0].version.steps[0], channel: 'linkedin' }], channelCaps: { call: 0, email: 0, linkedin: 1 } };
+  snapshot.accounts[0].routes = [phone, linkedIn];
   render(<CallCampaignEnrollment {...f.props} snapshot={snapshot} campaign={snapshot.campaigns[0]} />);
   expect(screen.getByText(/Campaign action held/)).toBeTruthy();
+  expect(screen.queryByLabelText('Business LinkedIn route')).toBeNull();
+  expect(screen.queryByRole('button', { name: /LinkedIn/ })).toBeNull();
   fireEvent.click(screen.getByLabelText(reviewLabel));
   expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Approve call campaign' }).disabled).toBe(true);
   expect(f.calls).toEqual([]);
   expect(f.submit).not.toHaveBeenCalled();
 });
 
-// Exact copy for a dropdown with no eligible company route. Both name the parallel lanes' exact labels ("Review phone route"
-// on Accounts, "Send updated saved record to worker" on Campaigns) and never imply a verified route or a call.
+// Exact copy for a dropdown with no eligible company route. It names the parallel lanes' exact labels ("Review phone route"
+// on Accounts, "Send updated saved record to worker" on Campaigns) and never implies a verified route or a call.
 const noPhoneRoute = 'No published business phone route is saved for this company on the worker\'s copy of its record. On Accounts, open the company and use "Review phone route" to confirm the number from a saved source, then on Campaigns use "Send updated saved record to worker". Enrollment stays unavailable until then.';
-const noLinkedInRoute = 'No published business LinkedIn route is saved for this company on the worker\'s copy of its record. There is no LinkedIn review step yet. Import a company LinkedIn profile route on Accounts, then on Campaigns use "Send updated saved record to worker". Enrollment stays unavailable until then.';
 /** Focusable controls in DOM order, named by their visible label text. */
 function controls(region: HTMLElement) {
   return [...region.querySelectorAll<HTMLElement>('select, input, button')].map(el => {
@@ -573,21 +503,6 @@ it('explains an empty business phone dropdown with the next step on Accounts and
   expect(f.submit).not.toHaveBeenCalled();
 });
 
-it('explains an empty business LinkedIn dropdown by naming the import path, never a LinkedIn review step or a phone step', () => {
-  const f = linkedInFixture(true);
-  const snapshot = structuredClone(f.props.snapshot);
-  snapshot.accounts[0].routes = [phone];
-  render(<CallCampaignEnrollment {...f.props} snapshot={snapshot} />);
-  const select = screen.getByLabelText<HTMLSelectElement>('Business LinkedIn route');
-  expect([...select.options].map(option => option.text)).toEqual(['Select a business LinkedIn route']);
-  expect(screen.getByText(noLinkedInRoute).getAttribute('role')).toBe('status');
-  expect(screen.queryByText(noPhoneRoute)).toBeNull();
-  expect(screen.queryByText(/Review phone route/)).toBeNull();
-  expect(controls(screen.getByRole('region', { name: 'LinkedIn campaign enrollment' })))
-    .toEqual(['select:Business LinkedIn route', 'input:I want this company added to the manual LinkedIn queue', 'button:Enroll company for manual LinkedIn note']);
-  expect(f.calls).toEqual([]);
-  expect(f.submit).not.toHaveBeenCalled();
-});
 
 it('offers a listed business phone from a Google Business Profile and enrolls it through the same command path', async () => {
   const f = fixture(true);

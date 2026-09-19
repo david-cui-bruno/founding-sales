@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { AppDatabase } from '../../db/database';
 import { accountInstantSchema, accountLinkSchema, accountRouteSchema, accountSourceSchema, type AccountRoute } from '../../../shared/contracts/accountContract';
-import { dailyAnswerPresentationMatches, displayContactSchema, displayRoleSchema, requestedAnswerPresentationSchema, manualAnswerPresentationSchema, type DisplayContact, type DisplayIssue, type RequestedAnswerPresentation } from '../../../shared/contracts/dailyAnswerPresentationContract';
+import { dailyAnswerPresentationMatches, displayContactSchema, displayRoleSchema, requestedAnswerPresentationSchema, type DisplayContact, type DisplayIssue, type RequestedAnswerPresentation } from '../../../shared/contracts/dailyAnswerPresentationContract';
 import type { DailyAnswer } from '../../../shared/contracts/dailyContract';
 import type { RequestedFollowupDraft } from '../../../shared/contracts/requestedFollowupContract';
 import { workerEventSchema } from '../../../shared/contracts/delegationContract';
@@ -107,14 +107,6 @@ export function withDailyAnswerPresentation(database: AppDatabase, workspaceId: 
       const { revision, subject, body, evidenceIds, generation, updatedAt, ...identity } = d;
       void [revision, subject, body, evidenceIds, generation, updatedAt];
       const presentation = requestedAnswerPresentationSchema.parse({ kind: answer.kind, asOf, binding: { ...identity, workspaceId }, contact, callContext, issues: reader.issues });
-      return dailyAnswerPresentationMatches(presentation, d, workspaceId) ? { ...answer, presentation } : answer;
-    }
-    if (answer.kind === 'manual_linkedin' && !('kind' in d)) {
-      const contact = reader.contact(d.accountId, d.routeId, d.routeVersion, 'manual_route', r => r.channel === 'linkedin' && r.personId === d.personId && hash(r.value) === d.targetHash);
-      if (!contact) return answer;
-      const { revision, body, contentHash, state, updatedAt, ...binding } = d;
-      void [revision, body, contentHash, state, updatedAt];
-      const presentation = manualAnswerPresentationSchema.parse({ kind: answer.kind, asOf, binding, contact, issues: reader.issues });
       return dailyAnswerPresentationMatches(presentation, d, workspaceId) ? { ...answer, presentation } : answer;
     }
   } catch { /* Optional decoration must not enter the core invalid-record path. */ }
