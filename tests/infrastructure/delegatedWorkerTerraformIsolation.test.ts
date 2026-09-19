@@ -65,6 +65,23 @@ const addresses = [
   "aws_cloudwatch_log_metric_filter.delegated_worker_list_built",
   "aws_cloudwatch_metric_alarm.delegated_worker_list_short",
   "aws_budgets_budget.delegated_worker_monthly",
+  // The job queue (S3): one FIFO queue and its dead-letter queue, two more functions from the same artifact with
+  // their own roles, policies and log groups, the event source mapping, the second schedule target and two alarms.
+  "aws_sqs_queue.delegated_worker_jobs",
+  "aws_sqs_queue.delegated_worker_jobs_dlq",
+  "aws_cloudwatch_log_group.delegated_worker_scheduler",
+  "aws_cloudwatch_log_group.delegated_worker_runner",
+  "aws_iam_role.delegated_worker_scheduler",
+  "aws_iam_role_policy.delegated_worker_scheduler",
+  "aws_iam_role.delegated_worker_runner",
+  "aws_iam_role_policy.delegated_worker_runner",
+  "aws_lambda_function.delegated_worker_scheduler",
+  "aws_lambda_function.delegated_worker_runner",
+  "aws_lambda_event_source_mapping.delegated_worker_runner",
+  "aws_cloudwatch_event_target.delegated_worker_scheduler",
+  "aws_lambda_permission.delegated_worker_scheduler",
+  "aws_cloudwatch_metric_alarm.delegated_worker_dlq_depth",
+  "aws_cloudwatch_metric_alarm.delegated_worker_runner_heartbeat",
 ];
 const defaults: Record<string, string> = {
   aws_region: '"us-east-1"',
@@ -85,6 +102,8 @@ const workerOnlyDefaults: Record<string, string> = {
   delegated_places_enabled: "false",
   alarm_email: '""',
   monthly_budget_usd: "25",
+  // S3's coexistence switch: true keeps today's old tick, and the deploy directive sets it false.
+  delegated_worker_legacy_email_enabled: "true",
 };
 const implementation = tf(moduleDir);
 const worker = tf(workerDir);
@@ -300,7 +319,9 @@ describe("delegated-worker Terraform source isolation", () => {
       if (match[2] === "aws_apigatewayv2_route") {
         expect(body).toContain("for_each = var.delegated_worker_enabled ? local.delegated_routes : toset([])");
       } else if (match[2]?.startsWith("aws_cloudwatch_event_") || match[3] === "delegated_worker_schedule" || match[3] === "delegated_worker_silent_schedule"
-        || match[3] === "delegated_worker_list_short") {
+        || match[3] === "delegated_worker_list_short"
+        // S3's second target on the same five-minute rule, and the permission that lets it invoke the scheduler.
+        || (match[2] === "aws_lambda_permission" && match[3] === "delegated_worker_scheduler")) {
         expect(body).toContain("count = local.delegated_schedule_enabled ? 1 : 0");
       } else if (match[3] === "delegated_worker_alarm_email") {
         expect(body).toContain('count = var.delegated_worker_enabled && var.alarm_email != "" ? 1 : 0');
@@ -327,7 +348,8 @@ describe("delegated-worker Terraform source isolation", () => {
       'DELEGATED_RESEARCH_REVIEWED_CAPABILITY = var.delegated_research_reviewed_capability',
       'DELEGATED_PLACES_CREDENTIAL_PARAMETER = var.delegated_places_enabled ? local.delegated_places_parameter : ""',
     ]) expect(source).toContain(invariant);
-    expect([...implementation.matchAll(/retention_in_days\s*=\s*(\d+)/g)].map((match) => match[1])).toEqual(["7", "7"]);
+    // Four bounded log groups after S3: the API function, the API gateway, the scheduler and the runner.
+    expect([...implementation.matchAll(/retention_in_days\s*=\s*(\d+)/g)].map((match) => match[1])).toEqual(["7", "7", "7", "7"]);
     expect([...implementation.matchAll(/"((?:GET|POST) \/[^"\n]+)"/g)].map((match) => match[1])).toEqual([
       "POST /pairing/redeem", "POST /pairing/revoke", "POST /commands", "POST /commands/reconcile", "POST /emergency",
       "POST /readiness", "POST /research/configure", "POST /policies/configure", "POST /requested-followup/context", "POST /requested-followup/draft",
@@ -341,6 +363,99 @@ describe("delegated-worker Terraform source isolation", () => {
     // Authentication stays in the existing handler. Do not silently add/change API auth in an extraction.
     expect(implementation).not.toMatch(/\b(?:authorization_type|authorizer_id|api_key_required)\s*=/);
     expect(source).toContain('format = jsonencode({ requestId = "$context.requestId", status = "$context.status", responseLength = "$context.responseLength" })');
+  });
+
+  it("adds one FIFO queue with a dead-letter queue, two functions from the same artifact, three roles and two alarms (S3)", () => {
+    const jobs = compact(block(implementation, 'resource "aws_sqs_queue" "delegated_worker_jobs"'));
+    expect(jobs).toContain('name = "${local.delegated_name}-jobs.fifo"');
+    expect(jobs).toContain("fifo_queue = true");
+    // The worker supplies the deduplication id (the sha256 of the job id); the queue never reads a message body.
+    expect(jobs).toContain("content_based_deduplication = false");
+    expect(jobs).toContain("sqs_managed_sse_enabled = true");
+    // Visibility timeout 36 min > the runner's 6 min timeout > its 5 min job budget.
+    expect(jobs).toContain("visibility_timeout_seconds = 2160");
+    expect(jobs).toContain("message_retention_seconds = 345600");
+    expect(jobs).toContain("deadLetterTargetArn = aws_sqs_queue.delegated_worker_jobs_dlq[0].arn maxReceiveCount = 3");
+    const dlq = compact(block(implementation, 'resource "aws_sqs_queue" "delegated_worker_jobs_dlq"'));
+    expect(dlq).toContain('name = "${local.delegated_name}-jobs-dlq.fifo"');
+    expect(dlq).toContain("fifo_queue = true");
+    expect(dlq).toContain("message_retention_seconds = 1209600");
+    expect(dlq).not.toContain("redrive_policy");
+
+    const scheduler = compact(block(implementation, 'resource "aws_lambda_function" "delegated_worker_scheduler"'));
+    expect(scheduler).toContain('handler = "scheduler.handler"');
+    expect(scheduler).toContain("filename = data.archive_file.delegated_worker[0].output_path");
+    expect(scheduler).toContain("role = aws_iam_role.delegated_worker_scheduler[0].arn");
+    expect(scheduler).toContain("memory_size = 256");
+    expect(scheduler).toContain("timeout = 60");
+    expect(scheduler).toContain("reserved_concurrent_executions = 1");
+    expect(scheduler).toContain("DELEGATED_WORKER_QUEUE_URL = aws_sqs_queue.delegated_worker_jobs[0].url");
+    // The scheduler holds no Google client id, no parameter path and no mailbox.
+    expect(scheduler).not.toContain("DELEGATED_GOOGLE");
+
+    const runner = compact(block(implementation, 'resource "aws_lambda_function" "delegated_worker_runner"'));
+    expect(runner).toContain('handler = "runner.handler"');
+    expect(runner).toContain("filename = data.archive_file.delegated_worker[0].output_path");
+    expect(runner).toContain("role = aws_iam_role.delegated_worker_runner[0].arn");
+    expect(runner).toContain("memory_size = 512");
+    expect(runner).toContain("timeout = 360");
+    expect(runner).toContain("reserved_concurrent_executions = 3");
+    expect(runner).toContain('DELEGATED_GOOGLE_SECRET_PARAMETER = var.delegated_google_client_id == "" ? "" : local.delegated_secret_parameter');
+
+    const mapping = compact(block(implementation, 'resource "aws_lambda_event_source_mapping" "delegated_worker_runner"'));
+    expect(mapping).toContain("event_source_arn = aws_sqs_queue.delegated_worker_jobs[0].arn");
+    expect(mapping).toContain("function_name = aws_lambda_function.delegated_worker_runner[0].arn");
+    expect(mapping).toContain("batch_size = 1");
+    expect(mapping).toContain("maximum_batching_window_in_seconds = 0");
+
+    // The scheduler is a second target on the one existing five-minute rule, so one switch stops everything.
+    const target = compact(block(implementation, 'resource "aws_cloudwatch_event_target" "delegated_worker_scheduler"'));
+    expect(target).toContain("rule = aws_cloudwatch_event_rule.delegated_worker[0].name");
+    expect(target).toContain('target_id = "delegated-scheduler-tick"');
+    expect(target).toContain("arn = aws_lambda_function.delegated_worker_scheduler[0].arn");
+    expect(compact(block(implementation, 'resource "aws_lambda_permission" "delegated_worker_scheduler"')))
+      .toContain('statement_id = "DedicatedSchedulerScheduleOnly"');
+
+    // The scheduler's role reaches the table and the queue and nothing else; the runner's adds the Google parameters.
+    const schedulerPolicy = compact(block(implementation, 'resource "aws_iam_role_policy" "delegated_worker_scheduler"'));
+    expect(schedulerPolicy).toContain('Action = ["sqs:SendMessage", "sqs:GetQueueAttributes"], Resource = aws_sqs_queue.delegated_worker_jobs[0].arn');
+    expect(schedulerPolicy).toContain('"dynamodb:LeadingKeys" = ["WORKSPACE#${var.delegated_workspace_id}"]');
+    expect(schedulerPolicy).not.toContain("ssm:GetParameter");
+    expect(schedulerPolicy).not.toContain("kms:Decrypt");
+    const runnerPolicy = compact(block(implementation, 'resource "aws_iam_role_policy" "delegated_worker_runner"'));
+    expect(runnerPolicy).toContain('Action = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"], Resource = aws_sqs_queue.delegated_worker_jobs[0].arn');
+    expect(runnerPolicy).toContain('Action = ["ssm:GetParameter"], Resource = local.delegated_parameter_arns');
+    expect(runnerPolicy).toContain('"kms:ViaService" = "ssm.${var.aws_region}.amazonaws.com"');
+    expect(runnerPolicy).not.toContain("sqs:SendMessage");
+    // The API role is exactly what it was: no queue permission reaches it.
+    expect(compact(block(implementation, 'resource "aws_iam_role_policy" "delegated_worker"'))).not.toContain("sqs:");
+
+    const dlqAlarm = compact(block(implementation, 'resource "aws_cloudwatch_metric_alarm" "delegated_worker_dlq_depth"'));
+    expect(dlqAlarm).toContain('namespace = "AWS/SQS" metric_name = "ApproximateNumberOfMessagesVisible"');
+    expect(dlqAlarm).toContain("dimensions = { QueueName = aws_sqs_queue.delegated_worker_jobs_dlq[0].name }");
+    expect(dlqAlarm).toContain('threshold = 1 comparison_operator = "GreaterThanOrEqualToThreshold" treat_missing_data = "notBreaching"');
+    const heartbeat = compact(block(implementation, 'resource "aws_cloudwatch_metric_alarm" "delegated_worker_runner_heartbeat"'));
+    expect(heartbeat).toContain('namespace = "AWS/SQS" metric_name = "ApproximateAgeOfOldestMessage"');
+    expect(heartbeat).toContain("dimensions = { QueueName = aws_sqs_queue.delegated_worker_jobs[0].name }");
+    expect(heartbeat).toContain('evaluation_periods = 2 threshold = 1800 comparison_operator = "GreaterThanThreshold" treat_missing_data = "notBreaching"');
+    for (const name of ["delegated_worker_dlq_depth", "delegated_worker_runner_heartbeat"]) {
+      expect(compact(block(implementation, `resource "aws_cloudwatch_metric_alarm" "${name}"`))).toContain("alarm_actions = [aws_sns_topic.delegated_worker_alarms[0].arn]");
+    }
+  });
+
+  it("carries the legacy email switch to the API function, defaulting to today's behaviour (S3)", () => {
+    const lambda = compact(block(implementation, 'resource "aws_lambda_function" "delegated_worker"'));
+    expect(lambda).toContain('DELEGATED_WORKER_LEGACY_EMAIL_ENABLED = var.delegated_worker_legacy_email_enabled ? "true" : "false"');
+    for (const dir of [workerDir, moduleDir]) {
+      const input = compact(block(read(dir, "variables.tf"), 'variable "delegated_worker_legacy_email_enabled"'));
+      expect(input).toContain("type = bool default = true nullable = false");
+      expect(input).toContain("sequence email steps");
+      expect(input).toContain("It never enables a schedule, a grant or a send.");
+    }
+    // The switch is the API function's alone: the scheduler and the runner never read it.
+    for (const name of ["delegated_worker_scheduler", "delegated_worker_runner"]) {
+      expect(compact(block(implementation, `resource "aws_lambda_function" "${name}"`))).not.toContain("DELEGATED_WORKER_LEGACY_EMAIL_ENABLED");
+    }
   });
 
   it("retains bounded IAM access and never provisions or reads secret values", () => {

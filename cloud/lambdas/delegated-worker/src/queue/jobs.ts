@@ -98,6 +98,12 @@ export const JOB_BACKOFF_START_MS = 3_600_000;
 export const JOB_BACKOFF_MAX_MS = 24 * 3_600_000;
 /** How long a claim holds the job. Longer than the runner's five-minute budget, shorter than the visibility timeout. */
 export const JOB_LEASE_MS = 6 * 60_000;
+/**
+ * How long a `queued` record is taken to mean the message is still on the queue. Past the queue's own visibility
+ * timeout (36 minutes) plus a tick, a message that never reached a runner is gone, and the scheduler offers the
+ * work again rather than leaving it queued forever. Re-offering is safe: the claim is what stops a second run.
+ */
+export const JOB_QUEUED_STALE_MS = 40 * 60_000;
 
 export const jobRecordSchema = z.strictObject({
   version: z.literal(1),
@@ -141,6 +147,10 @@ export function jobEnqueueable(record: JobRecord | null, now: string): JobEnqueu
     return until !== null && until > now ? { enqueue: false, reason: 'backoff', until } : { enqueue: true };
   }
   if (record.state === 'running' && record.leaseUntil !== null && record.leaseUntil > now) return { enqueue: false, reason: 'in_flight', until: record.leaseUntil };
+  if (record.state === 'queued') {
+    const stale = new Date(Date.parse(record.enqueuedAt) + JOB_QUEUED_STALE_MS).toISOString();
+    if (stale > now) return { enqueue: false, reason: 'in_flight', until: stale };
+  }
   return { enqueue: true };
 }
 
@@ -197,6 +207,51 @@ export async function readJobs(store: DynamoStore): Promise<Map<string, JobRecor
     if (parsed.success) jobs.set(parsed.data.jobId, parsed.data);
   }
   return jobs;
+}
+
+export type ParsedJob =
+  | { kind: 'day.build'; date: string }
+  | { kind: 'mail.poll'; tickSeq: number }
+  | { kind: 'mail.reconcile'; date: string; hour: number }
+  | { kind: 'mail.send_step'; firmId: string; stepId: string }
+  | { kind: 'mail.send_followup'; firmId: string; draftId: string }
+  | { kind: 'research.firm'; firmId: string; revision: number }
+  | { kind: 'research.backfill_page'; queryHash: string; pageHash: string };
+
+/**
+ * What one job id says the work is. The parts are percent-encoded on the way in (`keyPart`), so splitting on the
+ * colons is exact whatever the firm id, step id or page token contained. Pure; returns null rather than guessing.
+ */
+export function parseJobId(jobId: string): ParsedJob | null {
+  const parts = jobId.split(':');
+  const decode = (value: string | undefined): string | null => {
+    if (value === undefined || value.length === 0) return null;
+    try { return decodeURIComponent(value); } catch { return null; }
+  };
+  const integer = (value: string | undefined): number | null => value !== undefined && /^\d+$/.test(value) ? Number(value) : null;
+  if (parts[0] === 'day' && parts.length === 2) return z.iso.date().safeParse(parts[1]).success ? { kind: 'day.build', date: parts[1]! } : null;
+  if (parts[0] === 'poll' && parts.length === 2) { const tickSeq = integer(parts[1]); return tickSeq === null ? null : { kind: 'mail.poll', tickSeq }; }
+  if (parts[0] === 'reconcile' && parts.length === 2) {
+    const match = /^(\d{4}-\d{2}-\d{2})T(\d{2})$/.exec(parts[1]!);
+    return match ? { kind: 'mail.reconcile', date: match[1]!, hour: Number(match[2]) } : null;
+  }
+  if (parts[0] === 'send' && parts.length === 3) {
+    const firmId = decode(parts[1]); const stepId = decode(parts[2]);
+    return firmId && stepId ? { kind: 'mail.send_step', firmId, stepId } : null;
+  }
+  if (parts[0] === 'followup' && parts.length === 3) {
+    const firmId = decode(parts[1]); const draftId = decode(parts[2]);
+    return firmId && draftId ? { kind: 'mail.send_followup', firmId, draftId } : null;
+  }
+  if (parts[0] === 'research' && parts.length === 3) {
+    const firmId = decode(parts[1]); const revision = integer(parts[2]);
+    return firmId && revision !== null ? { kind: 'research.firm', firmId, revision } : null;
+  }
+  if (parts[0] === 'backfill' && parts.length === 3) {
+    const queryHash = decode(parts[1]); const pageHash = decode(parts[2]);
+    return queryHash && pageHash ? { kind: 'research.backfill_page', queryHash, pageHash } : null;
+  }
+  return null;
 }
 
 /** What one message on the queue carries. The runner trusts the job id and re-reads everything else from the table. */
