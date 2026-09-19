@@ -104,6 +104,8 @@ const workerOnlyDefaults: Record<string, string> = {
   monthly_budget_usd: "25",
   // S3's coexistence switch: true keeps today's old tick, and the deploy directive sets it false.
   delegated_worker_legacy_email_enabled: "true",
+  // S4's coexistence switch, the same shape: true keeps the tick's research phases, false hands them to the queue.
+  delegated_worker_legacy_research_enabled: "true",
 };
 const implementation = tf(moduleDir);
 const worker = tf(workerDir);
@@ -457,6 +459,21 @@ describe("delegated-worker Terraform source isolation", () => {
     // The switch is the API function's alone: the scheduler and the runner never read it.
     for (const name of ["delegated_worker_scheduler", "delegated_worker_runner"]) {
       expect(compact(block(implementation, `resource "aws_lambda_function" "${name}"`))).not.toContain("DELEGATED_WORKER_LEGACY_EMAIL_ENABLED");
+    }
+  });
+
+  it("carries the legacy research switch to the API function, defaulting to today's behaviour (S4)", () => {
+    const lambda = compact(block(implementation, 'resource "aws_lambda_function" "delegated_worker"'));
+    expect(lambda).toContain('DELEGATED_WORKER_LEGACY_RESEARCH_ENABLED = var.delegated_worker_legacy_research_enabled ? "true" : "false"');
+    for (const dir of [workerDir, moduleDir]) {
+      const input = compact(block(read(dir, "variables.tf"), 'variable "delegated_worker_legacy_research_enabled"'));
+      expect(input).toContain("type = bool default = true nullable = false");
+      expect(input).toContain("research, configurations and territory backfill phases");
+      expect(input).toContain("It never enables a schedule, a grant or a provider call.");
+    }
+    // The switch is the API function's alone: the scheduler and the runner never read it.
+    for (const name of ["delegated_worker_scheduler", "delegated_worker_runner"]) {
+      expect(compact(block(implementation, `resource "aws_lambda_function" "${name}"`))).not.toContain("DELEGATED_WORKER_LEGACY_RESEARCH_ENABLED");
     }
   });
 

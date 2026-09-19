@@ -9,6 +9,7 @@ import { createAccountFirmSource, type FirmCard, type FirmSource } from './firms
 import { currentStepOf, isFirstCallOnSequence, listSequenceRecords, type SequenceRecord } from './sequence';
 import { EASTERN, endOfLocalDay, localParts } from './localClock';
 import { posturesByState, readPostures, stateClearance } from './postures';
+import { planPoolCounter, poolCountsOf } from './pool';
 
 /**
  * The morning list (FSS target design sections 2 and 4; slice S1). `day.build` runs inside the existing scheduled
@@ -261,9 +262,12 @@ export async function runScheduledDayBuild(store: DynamoStore, options: { firms?
       unresolvedReplyFirms(store), pendingCallbacksByFirm(store)]);
     await backfillDuePointers(store, firms);
     const duePointers = await readDuePointers(store, firms, endOfLocalDay(now, EASTERN));
+    // S2b: where each firm actually stands, which is the `SEQ#` record and not the old enrollment pair.
     const sequences = await listSequenceRecords(store);
     const record = buildDayRecord({ firms, postures: posturesByState(postures), now, date: parts.date, listedBefore, duePointers, replyFirms, sequences, callbacks });
-    try { await store.transact([store.put(dayKey(parts.date), record, null)]); }
+    // S4: the pool counter, recounted from exactly the firms this build read, in the same transaction as the list.
+    const pool = await planPoolCounter(store, poolCountsOf({ firms, postures: posturesByState(postures), listedBefore, now }));
+    try { await store.transact([store.put(dayKey(parts.date), record, null), ...pool]); }
     catch (error) {
       // Another tick built this morning between our read and our write: theirs stands.
       if (await store.get<unknown>(dayKey(parts.date))) return { outcome: 'already_built' };

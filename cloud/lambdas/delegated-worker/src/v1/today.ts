@@ -12,6 +12,7 @@ import { holdReasonOf } from './send';
 import { readLastTick } from './lastTick';
 import { EASTERN, localParts } from './localClock';
 import { postureSummary, readPostures } from './postures';
+import { readPoolCounter } from './pool';
 import { listSequenceRecords, type SequenceRecord } from './sequence';
 
 /**
@@ -116,6 +117,9 @@ export async function readTodayView(store: DynamoStore, options: { firms?: FirmS
     store.get<unknown>(dayKey(date)), readPostures(store),
     (options.firms ?? createAccountFirmSource(store)).listFirms(), readLastTick(store), readOffer(store),
     lastCallsByFirm(store), pendingCallbacksByFirm(store), listSequenceRecords(store), pendingDraftsByFirm(store)]);
+  // S4: the pool the header shows is the counter research and the list build maintain, read once here rather than
+  // recomputed from the stored record, so the number David reads is today's and not the morning the list was built.
+  const pool = await readPoolCounter(store);
   const summaries: StatePostureSummary[] = postures.map(record => postureSummary(record, asOf));
   const missing = statesWithoutPosture(firms, new Set(postures.map(record => record.state)));
   const day = dayRow ? dayRecordSchema.safeParse(dayRow.data) : null;
@@ -131,6 +135,6 @@ export async function readTodayView(store: DynamoStore, options: { firms?: FirmS
     return firm ? [todayCard(firm, lane, entry, asOf, offer, { lastCall: lastCalls.get(entry.firmId),
       pendingCallback: pendingCallbacks.get(entry.firmId), sequence: sequences.get(entry.firmId), draft: drafts.get(entry.firmId) })] : [];
   })])) as Record<TodayLane, TodayCard[]>;
-  return todayViewSchema.parse({ asOf, list: { header: { date: record.date, builtAt: record.builtAt, poolSize: record.poolSize, counts, holds: holdsOf(record),
+  return todayViewSchema.parse({ asOf, list: { header: { date: record.date, builtAt: record.builtAt, poolSize: pool.postureCleared, counts, holds: holdsOf(record),
     excluded: record.excluded, lastTick, postures: summaries, statesWithoutPosture: missing }, lanes } });
 }

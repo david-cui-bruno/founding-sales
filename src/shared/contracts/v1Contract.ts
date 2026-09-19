@@ -381,6 +381,17 @@ export const diagnosticsViewSchema = z.strictObject({
     queued: count, running: count, failed: count, deadLettered: count,
     lastSchedulerRun: z.strictObject({ at: instant, tickSeq: z.number().int().positive(), enqueued: count, durationMs: count }).nullable(),
   }).optional(),
+  /**
+   * Research as the worker can see it (S4): how many posture-cleared firms are waiting for a morning that has
+   * not offered them yet, what today has spent against its budget, and the window David's operator review
+   * covers. `descriptor` is null until he has recorded one, which is honest rather than an assumed approval.
+   */
+  research: z.strictObject({
+    pool: z.strictObject({ researched: count, unlisted: count, postureCleared: count }),
+    spentToday: count,
+    budget: count,
+    descriptor: z.strictObject({ reviewedAt: instant, expiresAt: instant, status: z.enum(['reviewed', 'expired']) }).nullable(),
+  }).optional(),
 });
 export type DiagnosticsView = z.infer<typeof diagnosticsViewSchema>;
 
@@ -467,13 +478,25 @@ export const approveReplyDraftCommandSchema = z.strictObject({ commandId, kind: 
   firmId: z.string().min(1).max(200), draftId, text: z.string().min(1).max(24000) });
 
 /**
+ * What research is allowed to do (S4). The queries are replaced whole, the daily budget may only be set below the
+ * ceiling fixed in code, and the descriptor records the window David's operator review actually covers. Narrowing
+ * research is always allowed; nothing here starts a research run, and setting a budget is never a spend.
+ */
+export const setResearchConfigCommandSchema = z.strictObject({ commandId, kind: z.literal('set_research_config'),
+  expectedRevision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  queries: z.array(z.string().trim().min(1).max(500)).max(400).optional(),
+  dailyBudget: z.number().int().nonnegative().max(100000).optional(),
+  descriptor: z.strictObject({ reviewedAt: instant, expiresAt: instant }).optional() });
+export type SetResearchConfigCommand = z.infer<typeof setResearchConfigCommandSchema>;
+
+/**
  * Every `/v1` command, discriminated on `kind`. S0 ships `revoke_device`, S1 adds `set_state_posture`, S2 the dial
- * and log, S3 email under the standing approval; later slices add theirs here.
+ * and log, S3 email under the standing approval, S4 the research configuration; later slices add theirs here.
  */
 export const v1CommandSchema = z.discriminatedUnion('kind', [revokeDeviceCommandSchema, setStatePostureCommandSchema,
   logCallOutcomeCommandSchema, addFirmCommandSchema, admitRouteCommandSchema, suppressCommandSchema,
   approveTemplateCommandSchema, setSendingLimitCommandSchema, replyDecisionCommandSchema, requestFollowupCommandSchema,
-  approveFollowupDraftCommandSchema, approveReplyDraftCommandSchema]);
+  approveFollowupDraftCommandSchema, approveReplyDraftCommandSchema, setResearchConfigCommandSchema]);
 export type V1Command = z.infer<typeof v1CommandSchema>;
 
 /**

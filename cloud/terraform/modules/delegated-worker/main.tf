@@ -145,7 +145,7 @@ resource "aws_lambda_function" "delegated_worker" {
   architectures    = ["arm64"]
   memory_size      = 256
   # Source ticks abort after 45s; leave time for setup and durable settlement.
-  timeout                        = 60
+  timeout = 60
   # The scheduled tick holds one execution for up to 30 s; Settings fires up to four reads at once beside it and a sync.
   reserved_concurrent_executions = 5
   environment {
@@ -165,6 +165,9 @@ resource "aws_lambda_function" "delegated_worker" {
       # The S3 switch. False makes the old tick skip the sequence email walk, the per-firm mail scopes and the
       # mailbox poll; the old research phases keep running until S4. It enables nothing on its own.
       DELEGATED_WORKER_LEGACY_EMAIL_ENABLED = var.delegated_worker_legacy_email_enabled ? "true" : "false"
+      # The S4 switch. False makes the old tick skip its research, configurations and territory backfill phases;
+      # the tick itself and S1's list build keep running. It enables nothing on its own.
+      DELEGATED_WORKER_LEGACY_RESEARCH_ENABLED = var.delegated_worker_legacy_research_enabled ? "true" : "false"
     }
   }
   lifecycle {

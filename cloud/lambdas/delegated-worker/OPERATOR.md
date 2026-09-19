@@ -297,3 +297,26 @@ are retained in the summary. This is diagnosis only: a historic missing payload
 is unrecoverable, and these counts cannot reconstruct or explain that payload.
 No replay, resume, deployment or additional provider call is authorized by this
 local diagnostic change.
+
+## Coexistence switches for the rebuild (slices S3 and S4)
+
+Two Terraform inputs decide how much of the old five-minute tick still runs while the rebuilt core takes its
+work over. Both default to `true`, which is exactly today's behaviour, and neither of them can make the tick do
+more: each one only ever takes work away.
+
+| Terraform variable | Environment variable | `false` takes off the tick |
+| --- | --- | --- |
+| `delegated_worker_legacy_email_enabled` | `DELEGATED_WORKER_LEGACY_EMAIL_ENABLED` | The mailbox poll, the per-firm mail scope step and the sequence email walk (S3). |
+| `delegated_worker_legacy_research_enabled` | `DELEGATED_WORKER_LEGACY_RESEARCH_ENABLED` | The research, configurations and territory backfill phases (S4). |
+
+Only the exact string `false` turns a switch off. Any other value, and an absent variable, is `true`.
+
+Both are inputs of the worker root (`cloud/worker-terraform`) and of the module, and both reach the API
+function alone: the scheduler and the runner never read either of them. Applying them is a Lambda environment
+change, not a schedule, a grant or a permission change.
+
+After the S3 and S4 deploy sets both to `false`, the old tick still runs, and it still builds the morning
+list — the list build is not a phase and is deliberately outside both switches. Email, Places discovery and
+per-firm research then live in exactly one place: the FIFO queue, its scheduler and its runner. Turning either
+switch back to `true` restores the old phase without any other change, which is what makes the cutover
+reversible before S7 deletes the old handlers.
