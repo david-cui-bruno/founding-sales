@@ -2,10 +2,12 @@ import { z } from 'zod';
 import {
   attemptKindSchema,
   diagnosticsViewSchema,
+  settingsViewSchema,
   todayViewSchema,
   v1CommandReceiptSchema,
   v1CommandSchema,
   v1FirmViewSchema,
+  type SettingsView,
   type TodayView,
   type V1FirmView,
 } from '../../../src/shared/contracts/v1Contract';
@@ -52,7 +54,7 @@ export const pairResultSchema = z.discriminatedUnion('outcome', [
 ]);
 export type PairResult = z.infer<typeof pairResultSchema>;
 
-export const viewPathSchema = z.enum(['/v1/diagnostics', '/v1/today', '/v1/firms']);
+export const viewPathSchema = z.enum(['/v1/diagnostics', '/v1/today', '/v1/settings', '/v1/firms']);
 export type ViewPath = z.infer<typeof viewPathSchema>;
 export const readRequestSchema = z.strictObject({ view: viewPathSchema, kind: attemptKindSchema.optional(),
   /** The firm the Firm view names (S2); refused on any other view. */
@@ -102,6 +104,8 @@ export type CommandResult = z.infer<typeof commandResultSchema>;
 
 /** The Today view is the contract's own schema (slice S1): the four lanes as cards, or `{ list: null, reason }`. */
 export { todayViewSchema, type TodayView };
+/** The Settings view is the contract's own schema (S1b: postures and reference texts; the rest with S5). */
+export { settingsViewSchema, type SettingsView };
 export const lastGoodTodaySchema = z.strictObject({ fetchedAt: instant, view: todayViewSchema });
 export type LastGoodToday = z.infer<typeof lastGoodTodaySchema>;
 
@@ -109,6 +113,7 @@ export type LastGoodToday = z.infer<typeof lastGoodTodaySchema>;
 export const viewSchemas = {
   '/v1/diagnostics': diagnosticsViewSchema,
   '/v1/today': todayViewSchema,
+  '/v1/settings': settingsViewSchema,
   '/v1/firms': v1FirmViewSchema,
 } as const;
 

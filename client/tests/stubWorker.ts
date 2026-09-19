@@ -3,18 +3,21 @@ import { writeFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
+import { TERRITORY_CLEARANCE_STATEMENTS, TERRITORY_RULES_REVISION, TERRITORY_STATE_RULES } from '../../src/shared/contracts/territoryClearanceContract';
 import {
   attemptKindSchema,
   DIAGNOSTICS_ATTEMPT_LIMIT,
   diagnosticsViewSchema,
   pairRedeemRequestSchema,
   pairRedeemResponseSchema,
+  settingsViewSchema,
   todayViewSchema,
   v1CommandReceiptSchema,
   v1CommandSchema,
   v1FirmViewSchema,
   type AttemptRecord,
   type DiagnosticsDevice,
+  type StatePostureSummary,
   type TodayCard,
   type TodayLane,
   type TodayView,
@@ -54,6 +57,8 @@ export type StubWorker = {
   firmView(firmId: string): V1FirmView | null;
   /** Replace the Today answer (a contract-valid view) for the next reads. */
   setToday(view: TodayView): void;
+  /** The postures the stub holds after the `set_state_posture` commands the client sent, by state. */
+  postures(): StatePostureSummary[];
   requests: StubRequest[];
   commands: V1Command[];
   mintCode(label: string): string;
@@ -130,6 +135,23 @@ export function todayFixture(): TodayView {
   });
 }
 
+/** Twelve months after an instant, same UTC day and time; what the worker's posture module writes as reviewAt. */
+export function twelveMonthsAfter(instantIso: string): string {
+  const date = new Date(Date.parse(instantIso));
+  date.setUTCMonth(date.getUTCMonth() + 12);
+  return date.toISOString();
+}
+
+/** The reference texts the worker serves: the shared clearance contract's statements and per-state rules at revision 2. */
+export function referenceTextsFixture() {
+  return {
+    revision: TERRITORY_RULES_REVISION,
+    statements: { ...TERRITORY_CLEARANCE_STATEMENTS },
+    states: Object.values(TERRITORY_STATE_RULES).map((rule) => ({ state: rule.state, name: rule.name, summary: rule.summary,
+      citation: { ...rule.citation }, furtherCitations: rule.furtherCitations.map((citation) => ({ ...citation })) })),
+  };
+}
+
 const LANES: readonly TodayLane[] = ['replies', 'callbacks', 'due', 'new'];
 /** The card for one firm in a view, whichever lane it stands in, with the lane it was found in. */
 function findCard(view: TodayView, firmId: string): { lane: TodayLane; card: TodayCard } | null {
@@ -202,6 +224,7 @@ export async function startStubWorker(): Promise<StubWorker> {
   const attempts = attemptFixture();
   const asOf = new Date(NOW).toISOString();
   let today: TodayView = todayFixture();
+  const postures = new Map<string, StatePostureSummary>();
   const requests: StubRequest[] = [];
   const commands: V1Command[] = [];
   const receipts = new Map<string, unknown>();
@@ -258,6 +281,12 @@ export async function startStubWorker(): Promise<StubWorker> {
       }));
     }
 
+    if (url.pathname === '/v1/settings' && method === 'GET') {
+      const auth = authenticate(request.headers.authorization);
+      if ('status' in auth) return send(response, auth.status, auth.body);
+      return send(response, 200, settingsViewSchema.parse({ postures: [...postures.values()].sort((a, b) => (a.state < b.state ? -1 : 1)), referenceTexts: referenceTextsFixture() }));
+    }
+
     if (url.pathname === '/v1/today' && method === 'GET') {
       const auth = authenticate(request.headers.authorization);
       if ('status' in auth) return send(response, auth.status, auth.body);
@@ -283,6 +312,13 @@ export async function startStubWorker(): Promise<StubWorker> {
       const previous = receipts.get(command.commandId);
       if (previous !== undefined) return send(response, 200, previous);
       let receipt: unknown;
+      // set_state_posture is kept, as the worker keeps it: the next /v1/settings read shows the decision with the worker's stamps.
+      if (command.kind === 'set_state_posture') {
+        postures.set(command.state, { state: command.state, posture: command.posture, decidedAt: asOf, decidedBy: auth.device.label, reviewAt: twelveMonthsAfter(asOf), reviewOverdue: false });
+        receipt = { commandId: command.commandId, outcome: 'applied', reason: null };
+        receipts.set(command.commandId, receipt);
+        return send(response, 200, v1CommandReceiptSchema.parse(receipt));
+      }
       // One dialed call (S2), applied the way the worker applies it to the degree the specs need.
       if (command.kind === 'log_call_outcome') {
         const found = findCard(today, command.firmId);
@@ -309,7 +345,7 @@ export async function startStubWorker(): Promise<StubWorker> {
         receipts.set(command.commandId, receipt);
         return send(response, 200, v1CommandReceiptSchema.parse(receipt));
       }
-      // The stub applies a posture without keeping it: Settings is S5, and the Today fixture carries the postures it shows.
+      // `admit_route` and `suppress` (S2) are applied without being kept: no spec reads them back off the stub.
       if (command.kind !== 'revoke_device') {
         receipt = { commandId: command.commandId, outcome: 'applied', reason: null };
         receipts.set(command.commandId, receipt);
@@ -338,6 +374,7 @@ export async function startStubWorker(): Promise<StubWorker> {
     get today() { return today; },
     firmView: (firmId) => firmViewOf(today, firmId, asOf),
     setToday: (view) => { today = todayViewSchema.parse(view); },
+    postures: () => [...postures.values()].sort((a, b) => (a.state < b.state ? -1 : 1)),
     requests,
     commands,
     mintCode: (label) => { const code = secret(); codes.set(code, label); return code; },

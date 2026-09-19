@@ -12,6 +12,7 @@ import { createAccountFirmSource } from './firms';
 import { planAddFirm, planAdmitRoute, planFirmStatus } from './firmsWrite';
 import { readLastTick } from './lastTick';
 import { planSetStatePosture, postureSummary, readPostures } from './postures';
+import { readSettingsView } from './settings';
 import { planSuppress } from './suppression';
 import { readTodayView } from './today';
 
@@ -23,6 +24,7 @@ import { readTodayView } from './today';
  *   GET  /v1/diagnostics      device token      the last attempts (kind, limit), the last tick, the devices, the postures
  *   GET  /v1/today            device token      the morning list as cards, dialability computed at request time (S1)
  *   GET  /v1/firms            device token      one firm in full, named by `?firmId=`: routes, sequence, calls, callbacks, suppression (S2)
+ *   GET  /v1/settings         device token      postures by state and the clearance reference texts (S1b; the rest of Settings is S5)
  *   POST /v1/commands         device token      idempotent by commandId, per device; `revoke_device` (S0), `set_state_posture` (S1),
  *                                               `log_call_outcome`, `add_firm`, `admit_route`, `suppress` (S2)
  *
@@ -195,6 +197,12 @@ export async function v1Router(input: V1RouterInput): Promise<WorkerHttpResponse
       const [attempts, lastTick, deviceList, postures] = await Promise.all([listAttempts(store, query.data), readLastTick(store), devices.listDevices(), readPostures(store)]);
       const asOf = store.now();
       return respond(200, diagnosticsViewSchema.parse({ asOf, attempts, lastTick, devices: deviceList, postures: postures.map(record => postureSummary(record, asOf)) }));
+    }
+    if (path === '/v1/settings' && method === 'GET') {
+      // Postures by state and the clearance reference texts (S1b), so David can record postures before S5 ships the rest of Settings.
+      try { await devices.authenticate(input.authorization); }
+      catch (error) { if (error instanceof V1Unauthenticated) return unauthenticated(respond, error); throw error; }
+      return respond(200, await readSettingsView(store));
     }
     if (path === '/v1/today' && method === 'GET') {
       // The morning list as cards (S1). Dialability is computed here, at request time, from the firm's zone; a read is never a dial.

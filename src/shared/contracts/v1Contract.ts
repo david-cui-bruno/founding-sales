@@ -297,6 +297,27 @@ export const v1FirmViewSchema = z.strictObject({
 });
 export type V1FirmView = z.infer<typeof v1FirmViewSchema>;
 
+/**
+ * The Settings view, first slice (S1b, ahead of S5): David's postures by state and the clearance reference texts he
+ * reads beside the posture control, served by the worker so the client shows exactly the revision the worker records
+ * as `referenceTextRevision`. Only these two keys for now; templates, limits, research, phone, grant and devices are S5.
+ */
+export const referenceCitationSchema = z.strictObject({ title: z.string().min(1).max(200), url: z.url().max(2048), quote: z.string().min(1).max(600) });
+export const stateReferenceTextSchema = z.strictObject({ state: v1StateCodeSchema, name: z.string().min(1).max(100), summary: z.string().min(1).max(4000),
+  citation: referenceCitationSchema, furtherCitations: z.array(referenceCitationSchema).max(10) });
+export type StateReferenceText = z.infer<typeof stateReferenceTextSchema>;
+export const settingsViewSchema = z.strictObject({
+  postures: z.array(statePostureSummarySchema),
+  referenceTexts: z.strictObject({
+    /** `TERRITORY_RULES_REVISION`: what a `set_state_posture` sends back as `referenceTextRevision`. */
+    revision: z.number().int().positive(),
+    /** The four confirmation statements, by key. */
+    statements: z.record(z.string().min(1).max(40), z.string().min(1).max(1000)),
+    states: z.array(stateReferenceTextSchema),
+  }),
+});
+export type SettingsView = z.infer<typeof settingsViewSchema>;
+
 export const diagnosticsViewSchema = z.strictObject({
   asOf: instant,
   attempts: z.array(attemptRecordSchema).max(DIAGNOSTICS_ATTEMPT_LIMIT),

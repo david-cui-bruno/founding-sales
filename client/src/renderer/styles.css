@@ -207,6 +207,23 @@ time { white-space: nowrap; }
 .today-card[data-dial-allowed="false"] .today-card__dial { color: var(--held); }
 .today-card__offer { font-size: 12px; }
 
+/* Settings, States section (S1b): one row per state with its posture and a form to record one. */
+.statements { margin: 0 0 12px; padding-left: 18px; color: var(--muted); font-size: 12px; }
+.statements li { margin: 2px 0; }
+.states { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.state { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; display: grid; gap: 6px; }
+.state h3 { margin: 0; font-size: 14px; }
+.state__posture { margin: 0; }
+.state__form { display: grid; gap: 6px; max-width: 640px; }
+.state__form .field { display: grid; gap: 2px; }
+.state__form .field label { font-size: 12px; font-weight: 600; }
+.state__form textarea, .state__form input[type="text"], .state__form input[type="date"] { width: 100%; }
+.state__reference { border-left: 3px solid var(--line); padding: 4px 10px; display: grid; gap: 4px; font-size: 12px; }
+.state__reference p { margin: 0; }
+.state__reference cite { font-style: normal; color: var(--muted); overflow-wrap: anywhere; }
+.add-state { display: flex; align-items: center; gap: 8px; margin: 12px 0; }
+.add-state input { width: 4em; text-transform: uppercase; }
+
 /* Dial and log (slice S2): the Call button, the outcome form, the add-a-firm form and one firm's page. */
 .today-card__callback { color: var(--held); font-size: 12px; font-weight: 600; }
 .today-card__call:disabled { opacity: 0.5; cursor: not-allowed; }
