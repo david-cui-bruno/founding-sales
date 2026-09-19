@@ -20,7 +20,6 @@ type ExposedCallieApi = {
   localWorkspace: import('../../src/shared/preload').CalliePreloadApi['localWorkspace'];
   daily: import('../../src/shared/preload').CalliePreloadApi['daily'];
   delegation: import('../../src/shared/preload').CalliePreloadApi['delegation'];
-  linkedin: import('../../src/shared/contracts/linkedInContract').LinkedInApi;
   phoneSetup: import('../../src/shared/contracts/phoneSetupContract').PhoneSetupApi;
   outreach: Record<string, unknown>;
   recovery: import('../../src/shared/contracts/recoveryContract').RecoveryProvider;
@@ -129,7 +128,6 @@ describe('preload workflow bridge', () => {
       'health',
       'leadDetail',
       'leads',
-      'linkedin',
       'localWorkspace',
       'outreach',
       'phoneSetup',
@@ -144,19 +142,16 @@ describe('preload workflow bridge', () => {
       'admitReplyFirstDraft', 'approveReply', 'approveRequestedFollowup', 'beginPhone', 'bootstrap', 'closeCallback', 'configure', 'configureIntake', 'configurePolicy', 'configureResearch',
       'editReplyDraft', 'editRequestedFollowup', 'getAccountPreparation', 'getPhoneHandoffState', 'getRequestedFollowup', 'getSelectedAccountFreshness', 'googleConnections', 'listCallbacks', 'neverCall', 'pair', 'pairing', 'policyImport', 'prepareRequestedFollowup', 'readSuppression', 'reconcileReplyDraft', 'refreshSelectedAccount', 'researchSetup', 'rotatePairing', 'saveCallback', 'status', 'submit', 'submitApprovedReply', 'sync', 'territoryPolicy',
     ]);
-    expect(Object.keys(api.linkedin).sort()).toEqual([
-      'begin', 'copy', 'get', 'open', 'prepare', 'recover', 'reportOutcome', 'save',
-    ]);
     expect(Object.keys(api.delegation.policyImport).sort()).toEqual(['confirm', 'resume', 'selectAndPreview', 'status']);
     const { policyImport, googleConnections, researchSetup, ...delegationMethods } = api.delegation;
     if (!googleConnections) throw new Error('Current preload must expose Google connections');
     expect(Object.keys(googleConnections).sort()).toEqual(['begin', 'disclosure', 'revoke', 'status']);
     if (!researchSetup) throw new Error('Current preload must expose research setup');
     expect(Object.keys(researchSetup).sort()).toEqual(['approve', 'cancelPending', 'retry', 'setState', 'status']);
-    for (const namespace of [delegationMethods, api.linkedin, policyImport, googleConnections, researchSetup]) {
+    for (const namespace of [delegationMethods, policyImport, googleConnections, researchSetup]) {
       for (const method of Object.values(namespace)) expect(method).toBeTypeOf('function');
     }
-    for (const namespace of [api.delegation, api.linkedin, policyImport, googleConnections, researchSetup]) {
+    for (const namespace of [api.delegation, policyImport, googleConnections, researchSetup]) {
       expect(namespace).not.toHaveProperty('invoke');
       expect(namespace).not.toHaveProperty('run');
       expect(namespace).not.toHaveProperty('dispatch');

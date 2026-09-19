@@ -7,10 +7,11 @@ const sha256 = value => createHash('sha256').update(value).digest('hex');
 const marker = '# Independently classified';
 const selfMarker = '# Exact pinned public detector definition';
 const inventoryMarker = '# Exact public preload API inventory';
-// The inventory before the legacy routes were removed on 17 September 2026 stays in Git history. It is decoded from the pinned bytes
-// rather than written here, so the scanned working tree never carries a second copy of it.
+// The inventories before the legacy routes were removed on 17 September 2026 and before the LinkedIn namespace was removed on
+// 18 September 2026 stay in Git history. They are decoded from the pinned bytes rather than written here, so the scanned working
+// tree never carries a second copy of either.
 const decode = encoded => Buffer.from(encoded.match(/\\x([0-9a-f]{2})/g).map(byte => parseInt(byte.slice(2), 16))).toString();
-const retiredInventoryLine = decode(config.split(inventoryMarker)[1].match(/regexes = \['''[^']*''', '''\\A\\n\?((?:\\x[0-9a-f]{2})+)\\z'''\]/)[1]);
+const [retired18InventoryLine, retired17InventoryLine] = [...config.split(inventoryMarker)[1].matchAll(/'''\\A\\n\?((?:\\x[0-9a-f]{2})+)\\z'''/g)].map(match => decode(match[1]));
 
 it('pins every default 8.30.1 detector and rule-specific allowance byte-for-byte', () => {
   expect(config).not.toMatch(/^\[extend\]/m);
@@ -37,12 +38,16 @@ it('limits the public-regex disposition to the exact 58-byte definition, path an
   expect(config.split(selfMarker)[1].split(inventoryMarker)[0]).toBe(`, not a credential or a file waiver.\n[[allowlists]]\ndescription = "Exact pinned public Bedrock detector definition only"\ntargetRules = ["aws-amazon-bedrock-api-key-short-lived"]\ncondition = "AND"\npaths = ['''\\A\\.gitleaks\\.toml\\z''']\nregexTarget = "line"\nregexes = ['''\\A\\n?${encoded}\\z''']\n`);
 });
 
-it('limits the public API-name exception to the exact 152-byte current and 147-byte retired inventories, path and rule', () => {
+it('limits the public API-name exception to the exact 152-byte and 147-byte retired inventories, path and rule; the current 140-byte line needs none', () => {
   const line = readFileSync(new URL('../tests/integration/appleSpikePreload.test.ts', import.meta.url), 'utf8').split('\n').find(value => value.includes("'localWorkspace'"));
-  expect(Buffer.byteLength(line)).toBe(152);
-  expect(sha256(line)).toBe('88edd0efeb23ba4bff5c576c4deacc405d2e5452933eeb40d33467502e8ad14e');
-  expect(Buffer.byteLength(retiredInventoryLine)).toBe(147);
-  expect(sha256(retiredInventoryLine)).toBe('34f77d763883e912c8f55ad22b3601b5443fa83292859fd6aa6ff2c52dda3282');
+  expect(Buffer.byteLength(line)).toBe(140);
+  expect(sha256(line)).toBe('97ff278ccc1b8bdf16e574b0476424466016fbb79c35f1f41555562ca78abc7e');
+  // Without a LinkedIn namespace the detector's keyword never appears on the current line, so it is not pinned.
+  expect(line).not.toMatch(/linked[_-]?in/i);
+  expect(Buffer.byteLength(retired18InventoryLine)).toBe(152);
+  expect(sha256(retired18InventoryLine)).toBe('88edd0efeb23ba4bff5c576c4deacc405d2e5452933eeb40d33467502e8ad14e');
+  expect(Buffer.byteLength(retired17InventoryLine)).toBe(147);
+  expect(sha256(retired17InventoryLine)).toBe('34f77d763883e912c8f55ad22b3601b5443fa83292859fd6aa6ff2c52dda3282');
   const encode = value => [...Buffer.from(value)].map(byte => `\\x${byte.toString(16).padStart(2, '0')}`).join('');
-  expect(config.split(inventoryMarker)[1]).toBe(`, not a credential or a file waiver. Git history is scanned in full, so the line retired on 17 September 2026 stays pinned beside the current one.\n[[allowlists]]\ndescription = "Exact public preload namespace inventory only: the current line and the line retired on 17 September 2026"\ntargetRules = ["linkedin-client-id"]\ncondition = "AND"\npaths = ['''\\Atests/integration/appleSpikePreload\\.test\\.ts\\z''']\nregexTarget = "line"\nregexes = ['''\\A\\n?${encode(line)}\\z''', '''\\A\\n?${encode(retiredInventoryLine)}\\z''']\n`);
+  expect(config.split(inventoryMarker)[1]).toBe(`, not a credential or a file waiver. Git history is scanned in full, so the lines retired on 17 and 18 September 2026 stay pinned; the current line names no LinkedIn namespace and needs no exception.\n[[allowlists]]\ndescription = "Exact public preload namespace inventory only: the lines retired on 17 and 18 September 2026"\ntargetRules = ["linkedin-client-id"]\ncondition = "AND"\npaths = ['''\\Atests/integration/appleSpikePreload\\.test\\.ts\\z''']\nregexTarget = "line"\nregexes = ['''\\A\\n?${encode(retired18InventoryLine)}\\z''', '''\\A\\n?${encode(retired17InventoryLine)}\\z''']\n`);
 });
