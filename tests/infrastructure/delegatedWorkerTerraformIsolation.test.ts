@@ -361,6 +361,8 @@ describe("delegated-worker Terraform source isolation", () => {
       "GET /v1/today", "GET /v1/settings",
       // The Firm view (S2). It names its firm in the query, not in the path, so the route key stays one literal.
       "GET /v1/firms",
+      // The Week view (S5).
+      "GET /v1/week",
       // The stage's per-route throttle names the redeem route a second time; it is the same route key, not a second route.
       "POST /v1/pair/redeem",
     ]);

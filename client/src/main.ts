@@ -5,16 +5,18 @@ import { createRendererTrust } from '../../src/main/navigationPolicy';
 import { registerCallieProtocol } from '../../src/main/protocol';
 import { ClientCore } from './main/clientCore';
 import { TokenStore } from './main/tokenStore';
-import { createProductionDialLauncher } from './main/phone';
+import { createProductionDialLauncher, inspectProductionPhoneCandidate } from './main/phone';
 import { resolveWorkerEndpoint } from './main/workerEndpoint';
 import {
   CLIENT_CHANNELS,
   clientStatusSchema,
   commandResultSchema,
+  clientPhoneSetupSchema,
   dialRequestSchema,
   dialResultSchema,
   pairRequestSchema,
   pairResultSchema,
+  phoneSetupActionSchema,
   readRequestSchema,
   readResultSchema,
   v1CommandSchema,
@@ -22,7 +24,7 @@ import {
 
 /**
  * The thin client's main process (FSS target design, section 1): one window, one device token in a
- * safeStorage-encrypted file, the worker's views and commands over five IPC channels. No database, no
+ * safeStorage-encrypted file, the worker's views and commands over seven IPC channels. No database, no
  * migrations, no backup, no sync. The window, the renderer trust rules and the `callie://` scheme that
  * serves the bundled UI are the old app's modules, imported from the repository's `src/main`.
  */
@@ -58,6 +60,9 @@ const core = new ClientCore({
   // is asked for. An unpackaged run has no route at all and says so, which is what a development run and the specs get.
   dialLauncher: createProductionDialLauncher({ clientDirectory, isPackaged: app.isPackaged,
     resourcesPath: process.resourcesPath, parentExecutablePath: app.getPath('exe') }),
+  // The setup proof (S5) reads the same verified helper. An unpackaged run has none, and Settings says exactly that.
+  inspectPhoneCandidate: () => inspectProductionPhoneCandidate({ isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath, parentExecutablePath: app.getPath('exe') }),
 });
 
 type Parser<T> = { parse(value: unknown): T };
@@ -76,6 +81,7 @@ handle(CLIENT_CHANNELS.pair, pairRequestSchema, pairResultSchema, (request) => c
 handle(CLIENT_CHANNELS.get, readRequestSchema, readResultSchema, (request) => core.get(request));
 handle(CLIENT_CHANNELS.command, v1CommandSchema, commandResultSchema, (command) => core.command(command));
 handle(CLIENT_CHANNELS.dial, dialRequestSchema, dialResultSchema, (request) => core.dial(request));
+handle(CLIENT_CHANNELS.phoneSetup, phoneSetupActionSchema, clientPhoneSetupSchema, (request) => core.phoneSetupAction(request));
 handle(CLIENT_CHANNELS.unpair, null, clientStatusSchema, () => core.unpair());
 
 const createMainWindow = (): void => {

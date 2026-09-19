@@ -7,17 +7,36 @@ import {
   type StatePostureSummary,
   type StateReferenceText,
   type TodayView,
+  type V1Command,
   type V1StateCode,
 } from '../../../../src/shared/contracts/v1Contract';
+import {
+  CallsSection,
+  DevicesSection,
+  GoogleSection,
+  PauseSection,
+  PhoneSection,
+  ResearchSection,
+  SendingSection,
+  TemplatesSection,
+  useLocalPhoneSetup,
+  type CommandRunner,
+} from '../settings/sections';
 
 /**
- * Settings, first slice (S1b): the States section, so David can record a calling posture per state before S5 ships
- * the rest of Settings. Without a posture the morning list is empty by design. One row per state that appears in the
- * pool (the postures the worker holds, the states the Today header names as without posture, and the states the
- * reference texts cover), plus a state code added by hand. Each row shows the current posture or none, the review
- * date, the state's reference text when the worker has one, and a form that sends `set_state_posture` with a fresh
- * UUID v4 commandId and re-reads. Recording a posture is David's decision, not a checkbox: the form asks for the
- * registration and do-not-call status he checked and the citation he read. Nothing here dials or sends.
+ * Settings. The States section (S1b) came first, so David could record a calling posture per state before the rest
+ * of Settings existed; slice S5 adds every other control the design's mapping table keeps, in the order the design
+ * lists them: States, Templates, Sending, Calls, Phone setup, Google, Research, Devices, Pause/Resume.
+ *
+ * States: one row per state that appears in the pool (the postures the worker holds, the states the Today header
+ * names as without posture, and the states the reference texts cover), plus a state code added by hand. Each row
+ * shows the current posture or none, the review date, the state's reference text when the worker has one, and a
+ * form that sends `set_state_posture`. Recording a posture is David's decision, not a checkbox: the form asks for
+ * the registration and do-not-call status he checked and the citation he read.
+ *
+ * Every command on this page mints one fresh UUID v4 at the click and re-reads Settings when it applies, so the
+ * page shows what the worker holds. Nothing here dials or sends: approving a template is not sending, confirming
+ * the phone setup is not dialing, and narrowing the call hours is not permission to call.
  */
 const REFRESH_MS = 60_000;
 const REGISTRATION = [['registered', 'Registered'], ['exempt', 'Exempt'], ['none_required', 'None required'], ['unknown', 'Unknown']] as const;
@@ -144,13 +163,15 @@ function ReferenceText({ text }: { text: StateReferenceText }) {
   );
 }
 
-export function SettingsPage() {
+export function SettingsPage({ onPausedChanged }: { onPausedChanged?: () => Promise<void> } = {}) {
   const [reading, setReading] = useState<Reading | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [added, setAdded] = useState<V1StateCode[]>([]);
   const [open, setOpen] = useState<V1StateCode | null>(null);
   const [newCode, setNewCode] = useState('');
   const [addError, setAddError] = useState<string | null>(null);
+  // The local phone setup proof this Mac holds, read once on mount and again after each confirm or clear.
+  const { local, act } = useLocalPhoneSetup();
 
   const read = useCallback(async () => {
     try {
@@ -181,6 +202,20 @@ export function SettingsPage() {
 
   const settings = reading?.settings ?? null;
   const states = settings ? statesToShow(settings, reading!.statesInPool, added) : [];
+  // One runner for every S5 section: send the command, say what came back in the worker's own words, re-read on apply.
+  const run: CommandRunner = async (command: V1Command) => {
+    try {
+      const result = await window.callie.command(command);
+      if (result.outcome !== 'ok') return { applied: false, sentence: result.sentence };
+      if (result.receipt.outcome === 'refused') return { applied: false, sentence: `The worker refused it: ${result.receipt.reason ?? 'no reason given'}.` };
+      await read();
+      // A pause or a resume changes a banner the shell owns, so the shell is told rather than left a minute behind.
+      if (command.kind === 'pause' || command.kind === 'resume') await onPausedChanged?.();
+      return { applied: true, sentence: `${command.kind} ${result.receipt.outcome}.` };
+    } catch {
+      return { applied: false, sentence: 'The client could not send the command to the worker.' };
+    }
+  };
   return (
     <section className="page page--settings">
       <header className="page__header">
@@ -211,6 +246,8 @@ export function SettingsPage() {
             {states.map((state) => {
               const posture = settings.postures.find((entry) => entry.state === state) ?? null;
               const text = settings.referenceTexts.states.find((entry) => entry.state === state) ?? null;
+              // Every earlier decision for this state, newest first. Nothing David decided is ever lost or hidden.
+              const history = settings.postureHistory?.find((entry) => entry.state === state)?.entries ?? [];
               return (
                 <li key={state} className="state" data-state={state}>
                   <h3>{state} · {US_STATE_NAMES[state]}</h3>
@@ -219,6 +256,17 @@ export function SettingsPage() {
                       <>Posture: <strong>{posture.posture === 'calling' ? 'calling' : 'not calling'}</strong>, decided <time dateTime={posture.decidedAt}>{posture.decidedAt.slice(0, 10)}</time> by {posture.decidedBy}; review due <time dateTime={posture.reviewAt}>{posture.reviewAt.slice(0, 10)}</time>{posture.reviewOverdue ? ' (overdue)' : ''}.</>
                     )}
                   </p>
+                  {history.length > 0 && (
+                    <ul className="state__history" aria-label={`Earlier decisions for ${state}`}>
+                      {history.map((entry) => (
+                        <li key={entry.decidedAt}>
+                          {entry.posture === 'calling' ? 'calling' : 'not calling'}, decided <time dateTime={entry.decidedAt}>{entry.decidedAt.slice(0, 10)}</time> by {entry.decidedBy}
+                          {' '}· registration {entry.registrationStatus.replace(/_/g, ' ')} · do-not-call {entry.dncStatus.replace(/_/g, ' ')}
+                          {entry.counsel ? ' · counsel named' : ''}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                   {text ? <ReferenceText text={text} /> : <p className="page__tick">No reference text for this state in this build; record what you checked in the citations.</p>}
                   {open === state ? (
                     <PostureForm state={state} revision={settings.referenceTexts.revision} current={posture} onRecorded={read} />
@@ -229,6 +277,17 @@ export function SettingsPage() {
               );
             })}
           </ul>
+          {settings.templates && <TemplatesSection templates={settings.templates} postalAddress={settings.sending?.postalAddress ?? null} run={run} />}
+          {settings.sending && <SendingSection sending={settings.sending} run={run} />}
+          {settings.calls && <CallsSection calls={settings.calls} run={run} />}
+          {settings.phone && <PhoneSection phone={settings.phone} local={local} run={run} onLocalChange={act} />}
+          {settings.google && <GoogleSection google={settings.google} />}
+          {settings.research && <ResearchSection research={settings.research} />}
+          {settings.devices && <DevicesSection devices={settings.devices} run={run} />}
+          {settings.paused && <PauseSection paused={settings.paused} run={run} />}
+          {settings.templates === undefined && (
+            <p className="page__tick">This worker serves only the States section. The rest of Settings arrives with the worker that serves it.</p>
+          )}
         </>
       )}
     </section>

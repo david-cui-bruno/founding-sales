@@ -10,7 +10,7 @@ import { TODAY_LAST_GOOD_FILE } from './lastGood';
 import { TokenStore, type SafeStorageLike } from './tokenStore';
 
 /**
- * The orchestration behind the five IPC channels, on a programmable fetch: pairing with a code or a code
+ * The orchestration behind the IPC channels, on a programmable fetch: pairing with a code or a code
  * file, reads and commands with the bearer, the honest outcomes, and the two 401 reasons that forget the
  * token. The token store is the real one on a fake safeStorage; the last-good file is the real file.
  */

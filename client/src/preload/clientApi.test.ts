@@ -18,8 +18,8 @@ const diagnostics = {
 const invoker = (reply: unknown) => vi.fn().mockResolvedValue(reply);
 
 describe('createClientApi', () => {
-  it('exposes exactly status, pair, get, command, dial and unpair', () => {
-    expect(Object.keys(createClientApi(vi.fn())).sort()).toEqual(['command', 'dial', 'get', 'pair', 'status', 'unpair']);
+  it('exposes exactly status, pair, get, command, dial, phoneSetup and unpair', () => {
+    expect(Object.keys(createClientApi(vi.fn())).sort()).toEqual(['command', 'dial', 'get', 'pair', 'phoneSetup', 'status', 'unpair']);
   });
 
   it('dial sends the firm and the number and validates the answer, refusing a shape the contract does not allow', async () => {
