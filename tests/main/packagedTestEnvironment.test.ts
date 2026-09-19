@@ -103,7 +103,7 @@ type Environment = {
   capture(child: FakeChild): FakeChild;
   cleanup(): Promise<void>;
 };
-type LaunchKind = 'shared' | 'foundation' | 'collision' | 'apple';
+type LaunchKind = 'shared' | 'foundation' | 'collision';
 
 function sourceHarness(fault?: Fault, selectedBinary?: string) {
   const parentEnv: NodeJS.ProcessEnv = Object.fromEntries(
@@ -133,11 +133,8 @@ function sourceHarness(fault?: Fault, selectedBinary?: string) {
     getByText: () => locator,
     locator: () => locator,
     on: (): void => undefined,
-    evaluate: async () => kind === 'apple' ? {
-      enabled: true,
-      bridge: { state: 'ready', helperVersion: '1.0.0', protocolVersion: 1 },
-    } : { databasePath: '/synthetic/callie.sqlite3', schemaVersion: 17,
-      databaseEncrypted: true, cipherVersion: 'fixture', fts5Available: true },
+    evaluate: async () => ({ databasePath: '/synthetic/callie.sqlite3', schemaVersion: 17,
+      databaseEncrypted: true, cipherVersion: 'fixture', fts5Available: true }),
   };
   const browser = {
     contexts: () => {
@@ -332,9 +329,6 @@ function sourceHarness(fault?: Fault, selectedBinary?: string) {
     if (kind === 'shared') {
       const workspace = await launchShared();
       await workspace.close();
-    } else if (kind === 'apple') {
-      load('tests/e2e/appleBridgeSmoke.spec.ts');
-      await registeredTests[0]();
     } else {
       const module = load('tests/e2e/foundation.spec.ts');
       const inspect = module[kind === 'foundation' ? 'inspectPackagedApplication' : 'inspectFailedPackagedLaunch'];
@@ -368,7 +362,7 @@ describe('normal packaged GUI child credential isolation', () => {
   });
 });
 
-const launchKinds: LaunchKind[] = ['shared', 'foundation', 'collision', 'apple'];
+const launchKinds: LaunchKind[] = ['shared', 'foundation', 'collision'];
 
 describe('shared captured-child observation seam', () => {
   it('invokes onSpawn once with the captured instance synchronously before CDP and renderer discovery', async () => {
@@ -503,7 +497,6 @@ describe('every packaged source call site', () => {
     expect(binary).toBe(packagedProcess.packagedApplicationBinary);
     expect(args).toEqual([
       expect.stringMatching(/^--user-data-dir=/u), '--remote-debugging-port=43123', '--use-mock-keychain',
-      ...(kind === 'apple' ? ['--apple-feasibility-spike'] : []),
     ]);
     expect(child.closed).toBe(true);
     expect(fs.existsSync(env.HOME ?? '')).toBe(false);
@@ -523,7 +516,7 @@ describe('every packaged source call site', () => {
   }
 
   for (const fault of ['cdp-exit', 'no-page', 'browser-close'] as const) {
-    it.each(['shared', 'foundation', 'apple'] as const)(`%s cleans CDP/teardown failure (${fault})`, async (kind) => {
+    it.each(['shared', 'foundation'] as const)(`%s cleans CDP/teardown failure (${fault})`, async (kind) => {
       const harness = sourceHarness(fault);
       if (kind === 'shared' && fault === 'browser-close') await harness.run(kind);
       else await expect(harness.run(kind)).rejects.toThrow();

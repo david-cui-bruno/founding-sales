@@ -25,7 +25,6 @@ function deferred<T>() {
 function fixture(approved = false) {
   const snapshot = nativeDeskReviewFixture();
   snapshot.answers = [];
-  snapshot.meetings = [];
   snapshot.campaigns = [{ version: { ...createCallCampaignDraft({ campaignId: 'campaign', versionId: 'version', stepId: 'step', accountId: 'a', offer: 'Discuss maintenance workflow.' }),
     approvedAt: approved ? fixtureNow : null }, snapshotHash: 'a'.repeat(64), caps: [], enrollments: [] }];
   snapshot.accounts[0].routes = [phone];

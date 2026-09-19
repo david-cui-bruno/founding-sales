@@ -3,7 +3,6 @@ import {requestedFollowupDraftSchema} from '../../../../src/shared/contracts/req
 import {DynamoRequestedFollowupRepository,requestedFollowupDraftKey} from './requestedFollowupRepository';
 import {createRequestedApprovalRecord,requestedApprovalKey,loadRequestedApproval,requestedApprovalRecordSchema} from './requestedFollowupApproval';
 import { createMailPoller } from './mailPoller';
-import { offeredSlotText } from '../../../../src/shared/meetings/schedulingRules';
 import { meetingReservationSchema, meetingOutcomeSchema } from '../../../../src/shared/contracts/meetingContract';
 import { createHash } from 'node:crypto';
 import { CampaignExecution } from './campaignExecution';
@@ -570,11 +569,6 @@ export class OwnerCommandCoordinator {
   }
   private async approveReply(command: Extract<OwnerCommand, { kind: 'approve-reply' }>, pairingId: string, at: string, store: DynamoStore) {
     const p = command.payload; const draft = p.draft;
-    if(p.schedulingOffer) {
-      const {offer,expectedRevision}=p.schedulingOffer;
-      if(!offer.meeting||offer.accountId!==command.accountId||offer.threadId!==draft.threadId||offer.mailboxSubject!==draft.mailboxSubject||offer.sendCommandId!==p.intentCommandId||offer.revision!==(expectedRevision??0)+1||offer.expiresAt<=at||offer.slots.some(slot=>slot.end<=slot.start)||draft.body.trim()!==offer.slots.map(offeredSlotText).join('\n')) throw new Error('offer_content_conflict');
-    }
-
     if (draft.accountId !== command.accountId || draft.updatedAt > at || p.expiresAt <= at || p.permission.expiresAt <= at
       || Date.parse(p.expiresAt) - Date.parse(at) > 86400000 || Date.parse(p.permission.expiresAt) - Date.parse(at) > 86400000) throw new Error('approval_not_current');
     const threads = new DynamoThreadIntakeRepository(store.options);

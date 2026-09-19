@@ -131,7 +131,7 @@ test('real local company intake reviews, creates, reuses and reopens without fab
     expect(final.find(item => item.account.name === 'No Domain Test Management')?.account.domain).toBeNull();
     expect(final.every(item => !item.claims.length && !item.routes.length && !item.portfolio.length)).toBe(true);
     expect((await page.evaluate(() => window.callie.localWorkspace.getCommitments())).items).toEqual(commitments);
-    expect(await page.evaluate(() => window.callie.daily.get())).toMatchObject({ workspaceId: null, workflowMode: 'meeting_first', accounts: [], calls: { accountIds: [] }, answers: [], meetings: [], campaigns: [], ownerStatus: [], transport: [] });
+    expect(await page.evaluate(() => window.callie.daily.get())).toMatchObject({ workspaceId: null, workflowMode: 'meeting_first', accounts: [], calls: { accountIds: [] }, answers: [], campaigns: [], ownerStatus: [], transport: [] });
     expect(await page.evaluate(() => window.callie.delegation.status())).toMatchObject({ state: 'unconfigured', workspaceId: null, configuration: null });
     expect(requests).toEqual([]); expect(errors).toEqual([]);
   } finally {

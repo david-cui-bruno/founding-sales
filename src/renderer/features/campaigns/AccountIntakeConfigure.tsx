@@ -22,7 +22,7 @@ const holdText: Record<AccountIntakeHoldReason, string> = {
   intake_calendar_unavailable: 'The requested calendar is not the connected grant’s owned calendar.',
 };
 // The worker's own reasons for refusing the status read. Neither is a grant state or a transient failure, so
-// nothing is retried: mail and calendar controls are simply not offered, and nothing implies either is available.
+// nothing is retried: the mail control is simply not offered, and nothing implies it is available.
 const googleUnavailableText: Record<GoogleConnectionStatusReason, string> = {
   google_unconfigured: 'Mail and calendar are not configured on this worker. Call campaigns do not need them.',
   worker_scope_denied: 'This Mac\'s pairing does not include Google access. Mail and calendar are not available from this app.',
@@ -30,8 +30,8 @@ const googleUnavailableText: Record<GoogleConnectionStatusReason, string> = {
 const isoDate = /^\d{4}-\d\d-\d\d$/;
 const today = () => new Date().toISOString().slice(0, 10);
 
-/** Three explicit intake controls after a successful read: pause or resume, relevant mail on for the
- * first time with a start date, and the grant's owned calendar. Each submit queues one owner command
+/** Two explicit intake controls after a successful read: pause or resume, and relevant mail on for the
+ * first time with a start date (the calendar control went with calendar meetings). Each submit queues one owner command
  * with the revision just read bound, shows the worker's receipt as is, and asks for a fresh read before
  * the next change. Configuration is not readiness; a mailbox on is not permission to send. */
 export function AccountIntakeConfigure({ api, workspaceId, accountId, preparation, disabled }: {
@@ -50,7 +50,7 @@ export function AccountIntakeConfigure({ api, workspaceId, accountId, preparatio
   const connections = api.googleConnections;
   // A fresh read reopens the controls and clears a settled receipt; a pending receipt or an unacknowledged
   // request survives so the identical change can still be retried. The grant is read from the owner's
-  // stored record so the mail and calendar controls can be offered honestly; never a provider call, never permission.
+  // stored record so the mail control can be offered honestly; never a provider call, never permission.
   // A failed read keeps only the worker's allowlisted reason (the rejection message); anything else is unknown.
   useEffect(() => {
     setClosed(false); setGrant(null);
@@ -77,7 +77,6 @@ export function AccountIntakeConfigure({ api, workspaceId, accountId, preparatio
     ? 'The worker does not hold active or paused authority for this company. Intake configuration is held.' : null;
   const ready = grant?.status?.state === 'ready' ? grant.status.grant : null;
   const readable = !!ready && ready.grantedScopes.includes(googleScopes.relevant_read);
-  const owned = ready?.purpose === 'permitted_correspondence' ? ready.calendars?.ownedCalendarId ?? null : null;
   const googleUnavailable = grant?.unavailable && grant.unavailable !== 'unknown' ? googleUnavailableText[grant.unavailable] : null;
   const grantHold = !connections ? 'Grant status is unavailable in this bridge.'
     : grant === null ? 'Reading the connected grant…'
@@ -92,7 +91,6 @@ export function AccountIntakeConfigure({ api, workspaceId, accountId, preparatio
   const toggle: ConfigureAccountIntake = { ...base, state: state === 'active' ? 'paused' : 'active' };
   const mailOn: ConfigureAccountIntake | null = ready && readable && mailbox === null && isoDate.test(since) && since <= today()
     ? { ...base, state: 'active', mailboxSubject: ready.subject, mailSince: `${since}T00:00:00.000Z` } : null;
-  const useCalendar: ConfigureAccountIntake | null = mailbox !== null && state !== null && owned !== null && owned !== calendar ? { ...base, state, calendarId: owned } : null;
   const send = async (payload: ConfigureAccountIntake) => {
     if (busy) return;
     setBusy(true); setError(null); setRetained(payload);
@@ -130,14 +128,6 @@ export function AccountIntakeConfigure({ api, workspaceId, accountId, preparatio
             <button type="button" disabled={locked || !mailOn} onClick={() => { if (mailOn) void send(mailOn); }}>Switch on relevant mail</button>
           </div>
         </>) : <p>Mail: configured. Relevant mail is already on for this company and cannot be switched on again from here.</p>}
-        <div className="native-desk__actions">
-          <button type="button" disabled={locked || !useCalendar} onClick={() => { if (useCalendar) void send(useCalendar); }}>{owned ? `Use calendar ${owned}` : 'Use calendar'}</button>
-        </div>
-        {mailbox === null ? <p className="native-desk__hold">A configured mailbox is required before a calendar can be used.</p>
-          : grantHold ? <p className="native-desk__hold">{grantHold} A calendar is not offered.</p>
-          : owned === null ? <p className="native-desk__hold">The connected grant names no owned calendar. A calendar is not offered.</p>
-          : owned === calendar ? <p>This calendar is already configured: {owned}.</p>
-          : <p>Uses the grant’s owned calendar for this company. This books nothing.</p>}
       </>}
       <div className="native-desk__feedback" aria-live="polite">
         <p>Each change queues one owner command with the revision you read bound. Configuration is not readiness; a configured mailbox is not permission to send.</p>

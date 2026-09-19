@@ -45,13 +45,13 @@ The dev app creates an encrypted SQLite workspace under `~/Library/Application S
 
 | Path | What lives there |
 | --- | --- |
-| `src/main.ts`, `src/main/` | Electron main process: encrypted SQLite and migrations (`src/main/db/`), domain (`src/main/domain/`), validated IPC (`src/main/ipc/`), delegation runtime (`src/main/delegation/`), company research (`src/main/research/`), backups (`src/main/backup/`), Apple bridge supervisor (`src/main/appleBridge/`). |
+| `src/main.ts`, `src/main/` | Electron main process: encrypted SQLite and migrations (`src/main/db/`), domain (`src/main/domain/`), validated IPC (`src/main/ipc/`), delegation runtime (`src/main/delegation/`), company research (`src/main/research/`), backups (`src/main/backup/`), the packaged phone helper's path and signature check (`src/main/appleBridge/`). |
 | `src/renderer/` | React 19 UI: shell and route registry in `src/renderer/app/`; Today, Accounts and Campaigns in `src/renderer/features/today/`, `src/renderer/features/campaigns/` and `src/renderer/features/linkedin/`; Settings in `src/renderer/foundation/`. The legacy person routes were removed on 17 September 2026. |
 | `src/preload.ts`, `src/preload/` | The renderer bridge exposed as window.callie: one Zod-validated API per feature in `src/preload/apis/`. |
 | `src/shared/` | Contracts shared by main, preload, renderer and worker (`src/shared/contracts/`), account ranking and the approved product facts. |
 | `cloud/lambdas/delegated-worker/` | The delegated worker Lambda: owner commands, campaigns, mail polling, research pipeline. Deployed only from `cloud/worker-terraform/`. |
 | `cloud/terraform/modules/delegated-worker/` | The worker's Terraform module, used only by `cloud/worker-terraform/`. The legacy public-record sourcing stack was destroyed in AWS on 17 September 2026 and its code removed the same day. |
-| `native/apple-bridge/`, `contracts/apple-bridge/v1/` | Swift helper for call observation on the Mac and its fixed JSON Lines protocol. |
+| `native/apple-bridge/`, `contracts/apple-bridge/v1/` | Swift helper the phone route launches to open a call on the Mac, and its fixed protocol. Since 18 September 2026 the app no longer runs it as a child process at startup. |
 | `tests/`, `test/`, `scripts/` | Vitest suites, Playwright browser specs, packaged end-to-end specs; release tooling tests; the gate and backup scripts. |
 | `docs/` | `docs/ARCHITECTURE.md`, `docs/ROADMAP.md`, dated reports and the release manual in `docs/engineering/`, superseded designs in `docs/archive/`. |
 

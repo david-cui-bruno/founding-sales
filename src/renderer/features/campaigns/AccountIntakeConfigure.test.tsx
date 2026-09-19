@@ -66,8 +66,6 @@ it('offers no mail control without grant knowledge in the bridge and says why, c
   expect(panel.getByText('Grant status is unavailable in this bridge. Relevant mail is not offered.')).toBeTruthy();
   expect(panel.queryByRole('button', { name: 'Switch on relevant mail' })).toBeNull();
   expect(button(panel, 'Pause intake').disabled).toBe(false);
-  expect(button(panel, 'Use calendar').disabled).toBe(true);
-  expect(panel.getByText('A configured mailbox is required before a calendar can be used.')).toBeTruthy();
   expect(panel.getByText(/Configuration is not readiness; a configured mailbox is not permission to send\./)).toBeTruthy();
   expect(f.status).not.toHaveBeenCalled();
   expectNothingRecorded(f);
@@ -135,40 +133,22 @@ it('offers the mail control only with a ready readable grant and an explicit non
   expect(f.calls).toEqual([]);
 });
 
-it('offers the calendar only with a configured mailbox and the grant’s owned calendar, and never twice', async () => {
-  const f = fixture();
-  const { panel, rerender } = mount(f, preparation({ mailboxSubject: 'mailbox' }));
-  const calendar = await panel.findByRole<HTMLButtonElement>('button', { name: `Use calendar ${owned}` });
-  expect(calendar.disabled).toBe(false);
-  expect(panel.queryByRole('button', { name: 'Switch on relevant mail' })).toBeNull();
-  expect(panel.getByText(/Relevant mail is already on for this company/)).toBeTruthy();
-  rerender(preparation({ mailboxSubject: 'mailbox', calendarId: owned }));
-  await panel.findByText(`This calendar is already configured: ${owned}.`);
-  expect(button(panel, `Use calendar ${owned}`).disabled).toBe(true);
-  const g = fixture({ grant: grant({ calendars: false }) });
-  cleanup();
-  const other = mount(g, preparation({ mailboxSubject: 'mailbox' }));
-  await other.panel.findByText('The connected grant names no owned calendar. A calendar is not offered.');
-  expect(button(other.panel, 'Use calendar').disabled).toBe(true);
-  expectNothingRecorded(f); expectNothingRecorded(g);
-});
-
 it('sends one bound command per control and closes every control until a fresh read after an applied receipt', async () => {
   const f = fixture();
   const { panel, rerender } = mount(f, preparation({ mailboxSubject: 'mailbox' }));
-  const calendar = await panel.findByRole<HTMLButtonElement>('button', { name: `Use calendar ${owned}` });
-  fireEvent.click(calendar);
-  await panel.findByText('Intake configuration receipt: applied.');
-  expect(f.configure).toHaveBeenCalledWith({ accountId: 'a', expectedConfigurationRevision: 3, state: 'active', mailboxSubject: 'mailbox', calendarId: owned, mailSince: null });
-  expect(panel.getByText('The worker applied revision 4. Read intake configuration again to see it; this is not a readiness check.')).toBeTruthy();
-  for (const name of ['Pause intake', `Use calendar ${owned}`]) expect(button(panel, name).disabled).toBe(true);
-  // A fresh read reopens the controls with the new revision bound and clears the settled receipt.
-  rerender(preparation({ mailboxSubject: 'mailbox', calendarId: owned, revision: 4 }));
-  await waitFor(() => expect(button(panel, 'Pause intake').disabled).toBe(false));
-  expect(panel.queryByText('Intake configuration receipt: applied.')).toBeNull();
+  await panel.findByText(/Relevant mail is already on for this company/);
   fireEvent.click(button(panel, 'Pause intake'));
   await panel.findByText('Intake configuration receipt: applied.');
-  expect(f.configure).toHaveBeenLastCalledWith({ accountId: 'a', expectedConfigurationRevision: 4, state: 'paused', mailboxSubject: 'mailbox', calendarId: owned, mailSince: null });
+  expect(f.configure).toHaveBeenCalledWith({ accountId: 'a', expectedConfigurationRevision: 3, state: 'paused', mailboxSubject: 'mailbox', calendarId: null, mailSince: null });
+  expect(panel.getByText('The worker applied revision 4. Read intake configuration again to see it; this is not a readiness check.')).toBeTruthy();
+  expect(button(panel, 'Pause intake').disabled).toBe(true);
+  // A fresh read reopens the controls with the new revision bound and clears the settled receipt.
+  rerender(preparation({ mailboxSubject: 'mailbox', state: 'paused', revision: 4 }));
+  await waitFor(() => expect(button(panel, 'Set intake active').disabled).toBe(false));
+  expect(panel.queryByText('Intake configuration receipt: applied.')).toBeNull();
+  fireEvent.click(button(panel, 'Set intake active'));
+  await panel.findByText('Intake configuration receipt: applied.');
+  expect(f.configure).toHaveBeenLastCalledWith({ accountId: 'a', expectedConfigurationRevision: 4, state: 'active', mailboxSubject: 'mailbox', calendarId: null, mailSince: null });
   expect(f.configure).toHaveBeenCalledTimes(2);
   expect(f.calls).toEqual([]);
 });
@@ -222,14 +202,14 @@ it('holds every control under revoked worker authority and under the parent’s 
   const f = fixture();
   const { panel } = mount(f, preparation({ mailboxSubject: 'mailbox' }, { ...activeAuthority, state: 'revoked' }));
   expect(panel.getByText('The worker does not hold active or paused authority for this company. Intake configuration is held.')).toBeTruthy();
-  await panel.findByRole('button', { name: `Use calendar ${owned}` });
-  for (const name of ['Pause intake', `Use calendar ${owned}`]) expect(button(panel, name).disabled).toBe(true);
+  await panel.findByText(/Relevant mail is already on for this company/);
+  for (const name of ['Pause intake']) expect(button(panel, name).disabled).toBe(true);
   cleanup();
   const g = fixture();
   const held = mount(g, preparation({}), true);
   await held.panel.findByText(/Mailbox: founder@fixture\.invalid\./);
   fireEvent.change(held.panel.getByLabelText('Read relevant mail since'), { target: { value: '2026-09-01' } });
-  for (const name of ['Pause intake', 'Switch on relevant mail', `Use calendar ${owned}`]) expect(button(held.panel, name).disabled).toBe(true);
+  for (const name of ['Pause intake', 'Switch on relevant mail']) expect(button(held.panel, name).disabled).toBe(true);
   expectNothingRecorded(f); expectNothingRecorded(g);
 });
 

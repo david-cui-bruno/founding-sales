@@ -178,7 +178,7 @@ async function reread(read: HTMLButtonElement, expected: string) {
   await screen.findByRole('region', { name: 'Intake configuration' });
 }
 
-it('offers pause, relevant mail and calendar controls only after the explicit intake read, reading the grant and nothing else', async () => {
+it('offers pause and relevant mail controls only after the explicit intake read, reading the grant and nothing else', async () => {
   const w = await worker('paused-no-mail'), d = await desktop(w);
   try {
     await openIntake(w, d);
@@ -194,8 +194,6 @@ it('offers pause, relevant mail and calendar controls only after the explicit in
     expect(mail.disabled).toBe(true);
     fireEvent.change(panel().getByLabelText('Read relevant mail since'), { target: { value: '2026-09-01' } });
     expect(mail.disabled).toBe(false);
-    expect(button(`Use calendar ${w.calendarId}`).disabled).toBe(true);
-    expect(panel().getByText('A configured mailbox is required before a calendar can be used.')).toBeTruthy();
     expect(panel().getByText(/Configuration is not readiness; a configured mailbox is not permission to send\./)).toBeTruthy();
     expect(d.configureCommands()).toEqual([]);
     expect(w.providerCallsSinceGrant()).toBe(0);
@@ -246,9 +244,8 @@ it('pauses and resumes intake through one configure-owner command each, preservi
   try {
     const { read } = await openIntake(w, d);
     expect(screen.getByText('Configuration revision: 1. State: active.')).toBeTruthy();
-    await panel().findByText(`This calendar is already configured: ${w.calendarId}.`);
+    await panel().findByText(/Relevant mail is already on for this company/);
     expect(panel().queryByRole('button', { name: 'Switch on relevant mail' })).toBeNull();
-    expect(button(`Use calendar ${w.calendarId}`).disabled).toBe(true);
     const pause = button('Pause intake');
     expect(pause.disabled).toBe(false);
     fireEvent.click(pause);
@@ -281,7 +278,7 @@ it('pauses and resumes intake through one configure-owner command each, preservi
   } finally { cleanup(); await d.close(); }
 });
 
-it('switches relevant mail on once with a start date, planning one scope from the permitted business inbox, then uses the grant calendar without re-scoping', async () => {
+it('switches relevant mail on once with a start date, planning one scope from the permitted business inbox', async () => {
   const w = await worker('paused-no-mail'), d = await desktop(w);
   try {
     const { read } = await openIntake(w, d);
@@ -304,16 +301,6 @@ it('switches relevant mail on once with a start date, planning one scope from th
     expect(screen.getByText('Mail: configured. Research: not configured. Calendar: not configured.')).toBeTruthy();
     expect(panel().getByText(/Relevant mail is already on for this company/)).toBeTruthy();
     expect(panel().queryByRole('button', { name: 'Switch on relevant mail' })).toBeNull();
-    const calendar = await panel().findByRole('button', { name: `Use calendar ${w.calendarId}` }) as HTMLButtonElement;
-    await waitFor(() => expect(calendar.disabled).toBe(false));
-    fireEvent.click(calendar);
-    await panel().findByText(/The worker applied revision 3\./);
-    expect(d.identities()).toHaveLength(2);
-    const second = d.configureCommands().at(-1)!;
-    expect(second.payload).toEqual({ expectedConfigurationRevision: 2, mailScope: null, configuration: { ...first.payload.configuration, revision: 3, calendarId: w.calendarId } });
-    expect(await w.stored()).toEqual(second.payload.configuration);
-    expect((await w.cursor())?.data.scope).toEqual(cursor?.data.scope);
-    await reread(read, 'Mail: configured. Research: not configured. Calendar: configured.');
     expect(w.providerCallsSinceGrant()).toBe(0);
     expect(d.forbidden).not.toHaveBeenCalled();
   } finally { cleanup(); await d.close(); }

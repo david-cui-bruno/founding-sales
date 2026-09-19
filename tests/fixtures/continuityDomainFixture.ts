@@ -347,7 +347,7 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
               accounts: SYNTHETIC_WORKER_IDS.map((id): DailySnapshot['accounts'][number] => ({ account: { id, name: id, domain: null, version: 1 },
                 claims: [], routes: [], portfolio: [], unknowns: [], conflicts: [], fingerprint: 'c'.repeat(64) })),
               calls: { accountIds: [...SYNTHETIC_WORKER_IDS], workloadConflict: false },
-              answers: [], meetings: [], campaigns: [], ownerStatus: [], transport: [],
+              answers: [], campaigns: [], ownerStatus: [], transport: [],
               issues: workerPartial ? [{ code: 'transport_incomplete', count: 1 }] : [],
             });
             trace[index] = Object.freeze({ ...trace[index]!, synthetic: true, actualResult: structuredClone(actual) });
