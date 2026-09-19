@@ -16,6 +16,7 @@ export default defineConfig(({ command }) => ({
   build: {
     outDir: resolve(__dirname, '.vite/renderer/main_window'),
   },
+  resolve: { dedupe: ['zod', 'react', 'react-dom'] },
   server: {
     host: developmentViteServer.host,
     port: developmentViteServer.port,
