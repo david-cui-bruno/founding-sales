@@ -1,15 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { createPmFixture, PM_NOW } from '../fixtures/pmAccounts';
-import { createLinkedInFixture } from '../fixtures/linkedInWorkspace';
 import { AccountRepository } from '../../src/main/domain/accounts/accountRepository';
 import { SqlDiscoveryReservationStore } from '../../src/main/delegation/discoveryReservationStore';
 import { createCompanyDiscoveryProvider, requestCompanyDiscovery } from '../../src/main/research/companyDiscoveryProvider';
 import { createCompanyPageProvider } from '../../src/main/research/companyPageProvider';
 import { createFetchedReceiptPolicy } from '../../src/main/research/companySourcePolicy';
 import { createCompanyPreparation, createCompanyResearchWorker } from '../../src/main/research/companyResearchWorker';
-import { LinkedInService } from '../../src/main/linkedin/linkedInService';
-import { countMilestones, readAcquisitionFacts } from '../../src/main/domain/campaign/acquisitionReport';
 
 const limits = { maxCompanies: 1, maxPages: 1, maxBytes: 16000, maxCostMicros: 100 };
 const officialUrl = 'https://example.invalid/';
@@ -86,34 +83,4 @@ describe('D5 partial source negative controls', () => {
     } finally { f.close(); noNetwork.mockRestore(); }
   });
 
-  it('actual LinkedIn copy/open leave SQL campaign sent counts and public acquisition report unchanged', async () => {
-    const f = await createLinkedInFixture();
-    try {
-      const draft = f.drafts.create(f.drafts.requireStep(f.version.steps[0]!.id, 1), 'Reviewed fictional message');
-      const effects: string[] = [];
-      const service = new LinkedInService({ repository: f.drafts,
-        clipboard: { writeText: text => { expect(text).toBe(draft.body); effects.push('copy'); } },
-        shell: { openExternal: async url => { expect(url).toBe('https://www.linkedin.com/in/fictional-person'); effects.push('open'); } },
-      });
-      const window = { start: '2026-09-09T00:00:00.000Z', end: '2026-09-10T00:00:00.000Z' };
-      const beforeReport = countMilestones(readAcquisitionFacts(f.db), window);
-      const beforeEnrollment = f.repo.getEnrollment(f.enrollment.id);
-      const cap = () => f.db.raw.prepare('SELECT revision,reserved,sent FROM campaign_caps WHERE workspace_id=? AND campaign_version_id=? AND channel=?')
-        .get(f.workspaceId, f.version.id, 'linkedin');
-      expect(cap()).toEqual({ revision: 1, reserved: 0, sent: 0 });
-      for (const operation of ['copy', 'open'] as const) {
-        expect(await service[operation]({ draftId: draft.id, expectedRevision: 1 })).toMatchObject({ status: operation === 'copy' ? 'copied' : 'opened' });
-        expect(cap()).toEqual({ revision: 1, reserved: 0, sent: 0 });
-        expect(f.db.raw.prepare('SELECT COUNT(*) AS sent FROM delegated_manual_outcomes').get()).toEqual({ sent: 0 });
-        expect(f.repo.getEnrollment(f.enrollment.id)).toEqual(beforeEnrollment);
-        expect(f.drafts.requireRevision(draft.id, 1)).toMatchObject({ state: 'draft', body: draft.body });
-        expect(countMilestones(readAcquisitionFacts(f.db), window)).toEqual(beforeReport);
-      }
-      expect(effects).toEqual(['copy', 'open']);
-      // AcquisitionReport has no sent field. Assert its real outcomes, not an invented metric.
-      expect(beforeReport).toMatchObject({ manualCalls: 0, conversations: 0, positiveResponses: 0, meetingsBooked: 0, meetingsHeld: 0, pilotStarts: 0 });
-      expect(f.db.raw.pragma('foreign_key_check')).toEqual([]);
-      service.dispose();
-    } finally { f.close(); }
-  });
 });

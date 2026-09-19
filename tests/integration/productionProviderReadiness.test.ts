@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { closeDatabase, openDatabase, type AppDatabase } from '../../src/main/db/database';
 import { migrateToLatest } from '../../src/main/db/migrate';
@@ -11,20 +11,13 @@ import { HealthService } from '../../src/main/health/healthService';
 import {
   createDailyProvider, createLeadDetailProvider, createLeadsProvider, registerApplicationIpc,
 } from '../../src/main/ipc/registerApplicationIpc';
-import {
-  createFridayProvider, createImportProvider,
-  createLegacyLeadDetailProvider, createLegacyLeadsProvider,
-  createTodayProvider,
-} from '../fixtures/legacyDomainProviders';
+import { createLocalWorkspaceProvider } from '../../src/main/workspace/localWorkspaceProvider';
 import { createCallieApi } from '../../src/preload/createCallieApi';
 import { appHealthSchema } from '../../src/shared/healthContract';
-import { mutationReceiptSchema } from '../../src/shared/contracts/commonContract';
 import { dailySnapshotSchema } from '../../src/shared/contracts/dailyContract';
 import { leadsListResponseSchema, type LeadsListRequest } from '../../src/shared/contracts/leadsContract';
 import { leadDetailSchema } from '../../src/shared/contracts/leadDetailContract';
-import { todaySnapshotSchema } from '../../src/shared/contracts/todayContract';
-import { fridayReportSchema } from '../../src/shared/contracts/fridayContract';
-import { importPreviewSchema, importCommitReceiptSchema } from '../../src/shared/contracts/importContract';
+import { localCompanyCreateResultSchema } from '../../src/shared/contracts/localCompanyIntakeContract';
 import { createTempDatabase, createTestWorkspaceKey } from '../fixtures/tempDatabase';
 import { insertPerson, seedProspect, insertOpenCycleWithAction } from '../fixtures/domainRows';
 import { registeredIpcHandler } from '../fixtures/registeredIpcHandler';
@@ -34,6 +27,7 @@ vi.mock('electron', () => ({ safeStorage: {}, dialog: {}, ipcMain: { handle: ele
 
 const NOW = '2026-09-10T15:00:00.000Z';
 const listRequest: LeadsListRequest = { query: '', stages: [], priorities: [], sort: 'person_name', cursor: null, limit: 50 };
+const companyInput = (name: string, domain: string | null = null) => ({ commandId: randomUUID(), name, domain });
 // Person command channels that left the desktop with the legacy surfaces. None may be registered by default.
 const removedPersonChannels = [
   'leads:update-field', 'leads:bulk-update', 'lead-detail:begin-outbound', 'lead-detail:outbound-capabilities',
@@ -91,9 +85,6 @@ const fixture = (options: Parameters<typeof realFoundation>[0] = {}) => {
 };
 const revision = (f: Fixture) => f.runtime.withDatabase(database =>
   (database.raw.prepare('SELECT total_changes() AS count').get() as { count: number }).count);
-const receipt = async (f: Fixture, result: unknown, people: string[], cycles: string[]) => {
-  expect(mutationReceiptSchema.parse(result)).toEqual({ revision: await revision(f), affectedPersonIds: people, affectedSalesCycleIds: cycles });
-};
 async function seedReady(f: Fixture) {
   return f.runtime.withDatabase(database => {
     const prospect = seedProspect(database.raw, 'ready');
@@ -103,17 +94,13 @@ async function seedReady(f: Fixture) {
     return { ...prospect, ...cycle };
   });
 }
-// Production factories first, then the test-only gates over the legacy domain slices that PR B removes.
+// Production factories only: the two person reads, the payload-free Daily read and the local company write.
 function gatedOperations(f: Fixture) {
   return [
     ['leads.list', () => createLeadsProvider(f.gate).list(listRequest)],
     ['detail.get', () => createLeadDetailProvider(f.gate).get({ personId: 'held-person' })],
     ['daily.get', () => createDailyProvider(f.gate).get()],
-    ['today.get', () => createTodayProvider(f.gate).get()],
-    ['friday.getCurrent', () => createFridayProvider(f.gate).getCurrent()],
-    ['imports.preview', () => createImportProvider(f.gate).preview({ kind: 'csv', sourceName: 'held.csv', content: 'Name\nHeld\n' })],
-    ['leads.updateField', () => createLegacyLeadsProvider(f.gate).updateField({ personId: 'held-person', field: 'person_name', value: 'Must not write' })],
-    ['friday.createJob', () => createFridayProvider(f.gate).createJob({ jobId: 'must-not-write', salesCycleId: null, requestedAt: NOW })],
+    ['local.createCompany', () => createLocalWorkspaceProvider(f.gate).createCompany(companyInput('Must not write'))],
   ] as const;
 }
 
@@ -125,19 +112,19 @@ describe('production providers through actual encrypted FoundationRuntime', () =
     const f = fixture({ holdKey: true });
     let settled = 0;
     const read = createLeadsProvider(f.gate).list(listRequest).then(value => { settled++; return value; });
-    const write = createFridayProvider(f.gate).createJob({ jobId: 'pending-job', salesCycleId: null, requestedAt: NOW }).then(value => { settled++; return value; });
+    const write = createLocalWorkspaceProvider(f.gate).createCompany(companyInput('Pending Fictional PM')).then(value => { settled++; return value; });
     await f.keyEntered.promise; await Promise.resolve();
     expect(f.counts).toMatchObject({ key: 1, open: 0, migrate: 0, callback: 0 }); expect(settled).toBe(0);
     f.releaseKey.resolve();
     expect(leadsListResponseSchema.parse(await read).rows).toEqual([]);
-    await receipt(f, await write, [], []);
+    expect(localCompanyCreateResultSchema.parse(await write)).toMatchObject({ status: 'saved', replayed: false, account: { name: 'Pending Fictional PM', version: 1 } });
     expect(f.counts).toMatchObject({ key: 1, open: 1, migrate: 1, initialize: 1, health: 1, callback: 2 });
-    expect((await createFridayProvider(f.gate).getCurrent()).jobs).toEqual([{ id: 'pending-job', salesCycleId: null, requestedAt: NOW, status: 'requested', contractorAcceptedAt: null }]);
+    expect(await f.runtime.withDatabase(db => db.raw.prepare('SELECT name, domain, version FROM pm_accounts').all())).toEqual([{ name: 'Pending Fictional PM', domain: null, version: 1 }]);
   });
 
   it('shutdown while initialization is pending rejects queued commands without entering a callback or opening a database', async () => {
     const f = fixture({ holdKey: true });
-    const write = createFridayProvider(f.gate).createJob({ jobId: 'cancelled-before-open', salesCycleId: null, requestedAt: NOW });
+    const write = createLocalWorkspaceProvider(f.gate).createCompany(companyInput('Cancelled before open'));
     const rejected = expect(write).rejects.toThrow('cancelled');
     await f.keyEntered.promise; const shutdown = f.runtime.shutdown(); f.releaseKey.resolve();
     await rejected; await shutdown;
@@ -150,61 +137,33 @@ describe('production providers through actual encrypted FoundationRuntime', () =
     expect(f.counts).toMatchObject({ open: 0, migrate: 0, callback: 0, close: 0 });
   });
 
-  it('ready admits genuine reads from the production and legacy domain factories and persisted writes from every writable slice', async () => {
+  it('ready admits genuine reads from the production factories and a persisted write from the local company slice', async () => {
     const f = fixture(); await f.runtime.initialize(); const owner = await seedReady(f);
     expect(appHealthSchema.parse(await f.runtime.getHealth())).toMatchObject({ domainReady: true, domainStatus: 'ready', databaseEncrypted: true });
     const leads = createLeadsProvider(f.gate), detail = createLeadDetailProvider(f.gate), daily = createDailyProvider(f.gate);
-    const legacyLeads = createLegacyLeadsProvider(f.gate), legacyDetail = createLegacyLeadDetailProvider(f.gate), today = createTodayProvider(f.gate);
-    const friday = createFridayProvider(f.gate);
-    const imports = createImportProvider(f.gate);
+    const local = createLocalWorkspaceProvider(f.gate);
     expect(leadsListResponseSchema.parse(await leads.list(listRequest)).rows.map(row => row.personId)).toEqual([owner.personId]);
     expect(leadDetailSchema.parse(await detail.get({ personId: owner.personId })).personId).toBe(owner.personId);
     expect(dailySnapshotSchema.safeParse(await daily.get()).success).toBe(true);
-    expect(todaySnapshotSchema.parse(await today.get()).revision).toBeGreaterThan(0);
-    expect(fridayReportSchema.parse(await friday.getCurrent()).jobs).toEqual([]);
-    const preview = importPreviewSchema.parse(await imports.preview({ kind: 'csv', sourceName: 'fictional.csv', content: 'Name,Email\nFictional Owner,fictional@example.invalid\n' }));
-    expect(preview.validCount).toBe(1);
-
-    await receipt(f, await legacyLeads.updateField({ personId: owner.personId, field: 'person_name', value: 'Renamed Fictional Owner' }), [owner.personId], [owner.cycleId]);
-    expect(await f.runtime.withDatabase(db => db.raw.prepare('SELECT display_name FROM persons WHERE id = ?').get(owner.personId))).toEqual({ display_name: 'Renamed Fictional Owner' });
-    await receipt(f, await today.addLeadNote({ personId: owner.personId, salesCycleId: owner.cycleId, text: 'Local readiness note' }), [owner.personId], [owner.cycleId]);
-    expect((await detail.get({ personId: owner.personId })).activities.some(activity => JSON.stringify(activity).includes('Local readiness note'))).toBe(true);
-    await receipt(f, await friday.createJob({ jobId: 'ready-job', salesCycleId: owner.cycleId, requestedAt: NOW }), [], [owner.cycleId]);
-    expect((await friday.getCurrent()).jobs).toEqual([{ id: 'ready-job', salesCycleId: owner.cycleId, requestedAt: NOW, status: 'requested', contractorAcceptedAt: null }]);
-    const imported = importCommitReceiptSchema.parse(await imports.commit({ previewId: preview.previewId, contentHash: preview.contentHash, mapping: preview.suggestedMapping,
-      source: { channel: 'registry', referredByPersonId: null }, duplicateDecisions: [] }));
-    const expectedImportHash = createHash('sha256').update('Name,Email\nFictional Owner,fictional@example.invalid\n').digest('hex');
-    // Find the imported owner by independent fixture content, never by a returned receipt ID.
-    const importFacts = (db: AppDatabase) => ({
-      people: db.raw.prepare("SELECT * FROM persons WHERE display_name = 'Fictional Owner' ORDER BY id").all() as { id: string }[],
-      prospects: db.raw.prepare("SELECT * FROM prospects WHERE person_id IN (SELECT id FROM persons WHERE display_name = 'Fictional Owner') ORDER BY id").all() as { id: string; person_id: string; original_source_event_id: string }[],
-      cycles: db.raw.prepare("SELECT * FROM sales_cycles WHERE person_id IN (SELECT id FROM persons WHERE display_name = 'Fictional Owner') ORDER BY id").all() as { id: string; person_id: string; prospect_id: string; entry_source_event_id: string; stage: string }[],
-      sources: db.raw.prepare("SELECT * FROM source_events WHERE person_id IN (SELECT id FROM persons WHERE display_name = 'Fictional Owner') ORDER BY id").all() as { id: string; person_id: string; channel: string; source_record_json: string }[],
-      jobs: db.raw.prepare("SELECT * FROM jobs WHERE type = 'lead_import_v1' AND idempotency_key = ? ORDER BY id").all(`import:${expectedImportHash}`) as { id: string; state: string; progress_current: number; progress_total: number; result_json: string }[],
+    const command = companyInput('Ready Fictional PM', 'ready.invalid');
+    const saved = localCompanyCreateResultSchema.parse(await local.createCompany(command));
+    expect(saved).toMatchObject({ status: 'saved', replayed: false, commandId: command.commandId });
+    if (saved.status !== 'saved') throw new Error('Expected a saved local company');
+    // Find the company by independent fixture content and command identity, never by a returned ID alone.
+    const companyFacts = (db: AppDatabase) => ({
+      accounts: db.raw.prepare("SELECT id, name, domain, version FROM pm_accounts WHERE name = 'Ready Fictional PM' ORDER BY id").all() as { id: string; name: string; domain: string | null; version: number }[],
+      commands: db.raw.prepare('SELECT command_id, account_id, account_version FROM pm_account_commands WHERE command_id = ? ORDER BY command_id').all(command.commandId) as { command_id: string; account_id: string; account_version: number }[],
     });
-    const persistedImport = await f.runtime.withDatabase(importFacts);
-    for (const records of [persistedImport.people, persistedImport.prospects, persistedImport.cycles, persistedImport.sources, persistedImport.jobs]) expect(records).toHaveLength(1);
-    const importedPerson = persistedImport.people[0], importedProspect = persistedImport.prospects[0];
-    const importedCycle = persistedImport.cycles[0], importedSource = persistedImport.sources[0], importedJob = persistedImport.jobs[0];
-    expect(importedProspect.person_id).toBe(importedPerson.id);
-    expect(importedProspect.original_source_event_id).toBe(importedSource.id);
-    expect(importedCycle).toMatchObject({ person_id: importedPerson.id, prospect_id: importedProspect.id, entry_source_event_id: importedSource.id, stage: 'unreviewed' });
-    expect(importedSource).toMatchObject({ person_id: importedPerson.id, channel: 'registry' });
-    expect(JSON.parse(importedSource.source_record_json)).toMatchObject({ sourceRecord: { formatVersion: 1, importSourceName: 'fictional.csv', contentHash: expectedImportHash, rowNumber: 2 } });
-    expect(importedJob).toMatchObject({ state: 'succeeded', progress_current: 1, progress_total: 1 });
-    expect(JSON.parse(importedJob.result_json)).toEqual({ formatVersion: 1, importedPersonIds: [importedPerson.id], importedRowCount: 1 });
-    expect(imported).toEqual({ jobId: importedJob.id, importedPersonIds: [importedPerson.id], importedRowCount: 1, revision: await revision(f) });
-    expect((await leads.list({ ...listRequest, query: 'Fictional Owner' })).rows.map(row => row.personId)).toContain(importedPerson.id);
-    const current = await detail.get({ personId: owner.personId });
-    await receipt(f, await legacyDetail.dismissLead({ personId: owner.personId, salesCycleId: owner.cycleId, qualificationGateReason: 'out_of_area', expectedRevision: current.revision }), [owner.personId], [owner.cycleId]);
-    expect(await f.runtime.withDatabase(db => db.raw.prepare('SELECT stage, workflow_status FROM sales_cycles WHERE id = ?').get(owner.cycleId))).toEqual({ stage: 'lost_nurture', workflow_status: 'closed' });
+    const persisted = await f.runtime.withDatabase(companyFacts);
+    expect(persisted.accounts).toEqual([{ id: saved.account.id, name: 'Ready Fictional PM', domain: 'ready.invalid', version: 1 }]);
+    expect(persisted.commands).toEqual([{ command_id: command.commandId, account_id: saved.account.id, account_version: 1 }]);
     expect(f.counts).toMatchObject({ key: 1, open: 1, migrate: 1, initialize: 1, health: 1 });
     await f.runtime.shutdown();
     expect(readFileSync(f.temp.path).subarray(0, 16).toString()).not.toBe('SQLite format 3\0');
     const reopened = openDatabase({ path: f.temp.path, key: createTestWorkspaceKey() });
     try {
-      expect(reopened.raw.prepare('SELECT display_name FROM persons WHERE id = ?').get(owner.personId)).toEqual({ display_name: 'Renamed Fictional Owner' });
-      expect(importFacts(reopened)).toEqual(persistedImport);
+      expect(reopened.raw.prepare('SELECT display_name FROM persons WHERE id = ?').get(owner.personId)).toEqual({ display_name: `Person ${owner.personId}` });
+      expect(companyFacts(reopened)).toEqual(persisted);
     }
     finally { closeDatabase(reopened); }
   });

@@ -3,7 +3,6 @@ import { randomUUID, createHash } from 'node:crypto';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { createCampaignFixture } from '../fixtures/campaignWorkspace';
-import { createLinkedInFixture } from '../fixtures/linkedInWorkspace';
 import { requestedFollowupFixture } from '../fixtures/requestedFollowup';
 import { AccountRepository } from '../../src/main/domain/accounts/accountRepository';
 import { accountFingerprint } from '../../src/main/domain/accounts/accountEvidence';
@@ -49,7 +48,6 @@ function actualReaderUi(f: Awaited<ReturnType<typeof createCampaignFixture>>) {
   ui.setConfiguration({ ...configuredFixtureStatus(), workspaceId: f.workspaceId });
   const forbidden = vi.fn(async () => { throw Error('Display attempted an execution command'); });
   Object.assign(ui.api.delegation, { sync: forbidden, getRequestedFollowup: forbidden, prepareRequestedFollowup: forbidden, editRequestedFollowup: forbidden, approveRequestedFollowup: forbidden });
-  Object.assign(ui.api.linkedin, { prepare: forbidden, get: forbidden, recover: forbidden, save: forbidden, begin: forbidden, open: forbidden, copy: forbidden, reportOutcome: forbidden });
   const get = vi.fn(async () => services.daily.get());
   ui.api.daily.get = get;
   const api = { ...ui.api, localWorkspace: local };
@@ -94,17 +92,3 @@ it('owner-supplied email never inherits the named phone contact as recipient ide
   } finally { cleanup(); f.close(); }
 });
 
-it('actual stored manual draft exposes only its pinned person while viewing stays query-only', async () => {
-  const f = await createLinkedInFixture();
-  try {
-    const draft = f.drafts.create(f.drafts.requireStep(f.version.steps[0]!.id, 1), 'Saved local manual note');
-    const ui = actualReaderUi(f), before = ui.snapshot(); f.db.raw.pragma('query_only=ON');
-    const view = render(<PresentationRoot><NativeDeskRoute firstUse={ui.firstUse} api={ui.api} /></PresentationRoot>);
-    await waitFor(() => expect(view.container.querySelector('[data-row-key="manual_linkedin:' + f.account.id + ':' + draft.id + '"]')).toBeTruthy());
-    fireEvent.click(view.container.querySelector('[data-row-key="manual_linkedin:' + f.account.id + ':' + draft.id + '"]')!);
-    const detail = within(view.container.querySelector('.native-desk__detail')! as HTMLElement);
-    expect(detail.getByRole('heading', { name: 'Fictional Person' })).toBeTruthy();
-    expect(screen.getByDisplayValue(draft.body)).toBeTruthy();
-    expect(ui.forbidden).not.toHaveBeenCalled(); expect(ui.snapshot()).toEqual(before);
-  } finally { cleanup(); f.close(); }
-});

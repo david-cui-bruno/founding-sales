@@ -41,8 +41,6 @@ describe('local retained Today feed', () => {
     expect(localCommitmentsSnapshotSchema.safeParse({ ...result, items: [result.items[0], result.items[0]] }).success).toBe(false);
     expect(localCommitmentsSnapshotSchema.safeParse({ ...result, reviewErrorCount: Number.MAX_SAFE_INTEGER + 1 }).success).toBe(false);
     expect(database.raw.inTransaction).toBe(false);
-
-    expect(result.items.map(r => r.item)).toEqual(domain.getToday().lanes.flatMap(l => l.items).filter(i => i.action.id !== 'unproven-action'));
     expect(database.raw.prepare('SELECT total_changes() AS count').get()).toEqual(before);
     domain.transitionWorkflow({ commandId: 'transition', manifestId: 'manifest', expectedMode: 'legacy' });
     expect(domain.getLocalCommitments().items).toEqual(result.items);
@@ -73,7 +71,6 @@ describe('local retained Today feed', () => {
     const result = domain.getLocalCommitments();
     expect(result.items).toHaveLength(1);
     expect(result.items[0]).toMatchObject({ kind: 'founder_resurface', item: { id: founder.cycleId, salesCycleId: founder.cycleId, lane: 'later', reason: 'capacity_overflow', action: { id: founder.actionId, dueAt: at } } });
-    expect(result.items[0].item).toEqual(domain.getToday().lanes.flatMap(l => l.items).find(i => i.id === founder.cycleId));
   });
   it('excludes future, opted-out and deleted work and preserves corruption diagnostics', () => {
     const future = seed('future', 'interviewed'), opted = seed('opted', 'contacted'), deleted = seed('deleted', 'interviewed'), malformed = seed('malformed', 'interviewed');
@@ -89,7 +86,6 @@ describe('local retained Today feed', () => {
     const result = domain.getLocalCommitments();
     expect(result.items).toEqual([]);
     expect(result.reviewErrorCount).toBeGreaterThan(0);
-    expect(result.reviewErrorCount).toBe(domain.getToday().reviewErrorCount);
   });
   it('classifies an earlier independent non-call post-stage due separately from a future callback', () => {
     const post = seed('early-post', 'interviewed');

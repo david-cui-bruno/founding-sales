@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createCallCampaignDraft, createLinkedInCampaignDraft, describeCallCampaignDraft, describeCallCampaignTemplate, describeLinkedInCampaignDraft,
-  describeLinkedInCampaignTemplate, describeOneCompanyCampaignTemplate, type CreateCallCampaignDraftInput, type CreateLinkedInCampaignDraftInput } from '../../src/shared/contracts/callCampaignDraft';
+import { createCallCampaignDraft, describeCallCampaignDraft, describeCallCampaignTemplate, describeOneCompanyCampaignTemplate, type CreateCallCampaignDraftInput } from '../../src/shared/contracts/callCampaignDraft';
 import { campaignVersionSchema } from '../../src/shared/contracts/campaignContract';
 import { sha256Utf8 } from '../../src/shared/crypto/sha256';
 
@@ -91,76 +90,16 @@ describe('manual initial call campaign draft', () => {
     ]) expect(describeCallCampaignDraft({ ...draft, ...changed })).toBeNull();
     for (const malformed of [null, undefined, {}, 'unknown']) expect(describeCallCampaignDraft(malformed)).toBeNull();
   });
-});
 
-describe('manual initial LinkedIn campaign draft', () => {
-  const linkedInInput: CreateLinkedInCampaignDraftInput = { ...input, campaignId: 'li-campaign-1', versionId: 'li-version-1', stepId: 'li-step-1' };
-  const linkedInPolicy = 'manual initial linkedin draft template v1';
-
-  it('creates exactly one unapproved initial LinkedIn step with lifetime caps linkedin 1, call 0, email 0', () => {
-    const draft = createLinkedInCampaignDraft(linkedInInput);
-    expect(campaignVersionSchema.parse(draft)).toEqual(draft);
-    expect(draft).toMatchObject({ id: 'li-version-1', campaignId: 'li-campaign-1', version: 1, approvedAt: null, objective: 'meeting', offer: 'Discuss a meeting',
-      cohortAccountIds: ['account-1'], steps: [{ id: 'li-step-1', channel: 'linkedin', condition: 'initial', delayHours: 0 }],
-      capScope: 'campaign_version_lifetime', channelCaps: { call: 0, email: 0, linkedin: 1 } });
-    expect(draft.contentPolicyHash).toBe(sha256Utf8(linkedInPolicy));
-    expect(draft.contentPolicyHash).not.toBe(createCallCampaignDraft(input).contentPolicyHash);
-    // The audience binding is channel independent: one explicit account, canonical JSON v1.
-    expect(draft.audienceHash).toBe(createCallCampaignDraft(input).audienceHash);
-    expect(describeLinkedInCampaignDraft(draft)).toEqual({ accountId: 'account-1', audienceDescription: 'Single account: account-1', policyDescription: linkedInPolicy });
-  });
-
-  it('describes the same exact LinkedIn template after approval without relabeling it as a draft', () => {
-    const draft = createLinkedInCampaignDraft(linkedInInput);
-    const approved = { ...draft, approvedAt: '2026-09-11T21:00:00.000Z' };
-    expect(describeLinkedInCampaignTemplate(draft)).toEqual(describeLinkedInCampaignDraft(draft));
-    expect(describeLinkedInCampaignTemplate(approved)).toEqual(describeLinkedInCampaignDraft(draft));
-    expect(describeLinkedInCampaignDraft(approved)).toBeNull();
-    expect(describeOneCompanyCampaignTemplate(approved)).toEqual({ channel: 'linkedin', ...describeLinkedInCampaignTemplate(draft) });
-  });
-
-  it('rejects mixed caps, extra steps, wrong channels, tampered hashes and malformed versions', () => {
-    const draft = createLinkedInCampaignDraft(linkedInInput);
-    const step = draft.steps[0]!;
-    for (const changed of [
-      ...[{ call: 1, email: 0, linkedin: 1 }, { call: 0, email: 1, linkedin: 1 }, { call: 0, email: 0, linkedin: 2 },
-        { call: 0, email: 0, linkedin: 0 }, { call: 1, email: 0, linkedin: 0 }].map(channelCaps => ({ channelCaps })),
-      { steps: [step, { ...step, id: 'li-step-2', condition: 'no_reply' }] }, { steps: [] },
-      { steps: [{ ...step, channel: 'call' }] }, { steps: [{ ...step, channel: 'email' }] },
-      { steps: [{ ...step, condition: 'requested_info' }] }, { steps: [{ ...step, delayHours: 1 }] },
-      { version: 2 }, { objective: 'sale' }, { capScope: 'daily' }, { cohortAccountIds: [] }, { cohortAccountIds: ['account-1', 'account-2'] }, { cohortAccountIds: ['account-2'] },
-      { audienceHash: 'a'.repeat(64) }, { contentPolicyHash: createCallCampaignDraft(input).contentPolicyHash }, { contentPolicyHash: sha256Utf8('legacy opaque policy') },
-      { offer: '' }, { id: '' }, { authority: true },
-    ]) {
-      expect(describeLinkedInCampaignTemplate({ ...draft, ...changed })).toBeNull();
-      expect(describeOneCompanyCampaignTemplate({ ...draft, ...changed })).toBeNull();
-    }
-    for (const malformed of [null, undefined, {}, 'unknown']) {
-      expect(describeLinkedInCampaignTemplate(malformed)).toBeNull();
-      expect(describeOneCompanyCampaignTemplate(malformed)).toBeNull();
-    }
-  });
-
-  it('keeps the call helper strictly call-only and the LinkedIn helper strictly LinkedIn-only', () => {
-    const call = createCallCampaignDraft(input);
-    const linkedIn = createLinkedInCampaignDraft(linkedInInput);
-    expect(describeCallCampaignTemplate(linkedIn)).toBeNull();
-    expect(describeCallCampaignDraft(linkedIn)).toBeNull();
-    expect(describeLinkedInCampaignTemplate(call)).toBeNull();
-    expect(describeLinkedInCampaignDraft(call)).toBeNull();
-    // A LinkedIn structure signed with the call policy, or vice versa, is neither template.
-    expect(describeCallCampaignTemplate({ ...linkedIn, contentPolicyHash: call.contentPolicyHash })).toBeNull();
-    expect(describeLinkedInCampaignTemplate({ ...call, contentPolicyHash: linkedIn.contentPolicyHash })).toBeNull();
-    expect(describeOneCompanyCampaignTemplate({ ...linkedIn, contentPolicyHash: call.contentPolicyHash })).toBeNull();
-    expect(describeOneCompanyCampaignTemplate(call)).toEqual({ channel: 'call', ...describeCallCampaignTemplate(call) });
-    expect(describeOneCompanyCampaignTemplate(linkedIn)).toEqual({ channel: 'linkedin', ...describeLinkedInCampaignTemplate(linkedIn) });
-    expect(describeOneCompanyCampaignTemplate({ ...call, channelCaps: { call: 2, email: 1, linkedin: 1 } })).toBeNull();
-  });
-
-  it('validates offers and identities for LinkedIn drafts through the existing schema', () => {
-    for (const offer of ['', ' \n ', 'a'.repeat(4001)]) expect(() => createLinkedInCampaignDraft({ ...linkedInInput, offer })).toThrow();
-    for (const key of ['campaignId', 'versionId', 'stepId', 'accountId'] as const) {
-      for (const value of ['', 'a'.repeat(201)]) expect(() => createLinkedInCampaignDraft({ ...linkedInInput, [key]: value })).toThrow();
-    }
+  it('names the call template as the only one-company template and keeps a saved LinkedIn-typed version opaque', () => {
+    const draft = createCallCampaignDraft(input);
+    expect(describeOneCompanyCampaignTemplate(draft)).toEqual({ channel: 'call', ...describeCallCampaignTemplate(draft) });
+    // Exactly what the retired LinkedIn template produced. Since 18 September 2026 the desktop names no such template.
+    const linkedInTyped = campaignVersionSchema.parse({ ...draft, steps: [{ ...draft.steps[0]!, channel: 'linkedin' }],
+      channelCaps: { call: 0, email: 0, linkedin: 1 }, contentPolicyHash: sha256Utf8('manual initial linkedin draft template v1') });
+    expect(describeOneCompanyCampaignTemplate(linkedInTyped)).toBeNull();
+    expect(describeCallCampaignTemplate(linkedInTyped)).toBeNull();
+    expect(describeCallCampaignDraft(linkedInTyped)).toBeNull();
   });
 });
+

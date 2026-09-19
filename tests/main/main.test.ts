@@ -4,8 +4,7 @@ import type { AppDatabase } from '../../src/main/db/database';
 import { fakeDomainRuntime } from '../fixtures/fakeDomainRuntime';
 import type { HealthProvider } from '../../src/main/health/registerHealthIpc';
 import type { ApplicationStartupDependencies, ApplicationStartupOptions, RunningApplication } from '../../src/main/startApplication';
-import { createOutboundCommandService } from '../../src/main/communications/outboundCommandService';
-import type { OutboundCommandServiceApi } from '../../src/main/communications/outboundPorts';
+import { unavailablePhoneHandoff, unavailableOutboundReadiness } from '../../src/main/communications/phoneHandoffLauncher';
 
 const mocks = vi.hoisted(() => {
   const fileLogSink = {
@@ -184,7 +183,7 @@ describe('main process startup', () => {
   });
 
   it('forwards real source events to the pending startup owner and captured late events cannot revive it after before-quit', async () => {
-    let outbound!: OutboundCommandServiceApi;
+    const invalidate = vi.fn();
     let resolveWindow!: () => void;
     mocks.loadUrl.mockReturnValue(new Promise<void>((resolve) => { resolveWindow = resolve; }));
     const close = vi.fn();
@@ -196,7 +195,7 @@ describe('main process startup', () => {
       migrateToLatest: async () => ({ fromVersion: 0, toVersion: 2, appliedMigrationIds: [] }),
       createDomainRuntime: () => fakeDomainRuntime(),
       createHealthService: () => ({ getHealth: () => ({}) }),
-      createOutboundCommandService: (input) => { outbound = createOutboundCommandService(input); return outbound; },
+      createPhoneBindings: () => ({ phone: unavailablePhoneHandoff(), readiness: unavailableOutboundReadiness(), invalidate }),
       registerTemplateIpc: () => () => undefined,
       registerApplicationIpc: vi.fn(() => vi.fn()),
       closeDatabase: close,
@@ -208,14 +207,13 @@ describe('main process startup', () => {
     expect(mocks.powerOn.mock.calls.map(([event]) => event)).toEqual(['resume', 'lock-screen', 'unlock-screen']);
     const saved = Object.fromEntries(mocks.powerOn.mock.calls) as Record<string, () => void>;
     saved['lock-screen'](); saved.resume();
-    expect((await outbound.getCapabilities()).phoneHandoff.reasonCode).toBe('workspace_inactive');
+    expect(invalidate.mock.calls).toEqual([[true], []]);
     saved['unlock-screen']();
-    expect((await outbound.getCapabilities()).phoneHandoff.reasonCode).toBe('inbound_safety_unwired');
+    expect(invalidate.mock.calls).toEqual([[true], [], [false]]);
     const beforeQuit = mocks.appOn.mock.calls.find(([event]) => event === 'before-quit')![1];
     beforeQuit({ preventDefault: vi.fn() }); beforeQuit({ preventDefault: vi.fn() });
-    expect((await outbound.getCapabilities()).phoneHandoff.reasonCode).toBe('workspace_inactive');
     saved.resume(); saved['unlock-screen'](); saved['lock-screen']();
-    expect((await outbound.getCapabilities()).phoneHandoff.reasonCode).toBe('workspace_inactive');
+    expect(invalidate.mock.calls).toEqual([[true], [], [false]]);
     expect(mocks.powerRemove).toHaveBeenCalledTimes(3);
     expect([...mocks.powerListeners.values()].every((listeners) => listeners.size === 0)).toBe(true);
     resolveWindow(); await new Promise((resolve) => setTimeout(resolve, 0));

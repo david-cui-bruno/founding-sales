@@ -45,7 +45,7 @@ export async function assertActualDestination(page: Page, route: AppRoute, mode:
         await expect(page.locator('.native-desk__queue--today')).toBeVisible();
         const queue = page.getByRole('navigation', { name: 'Today queue', exact: true });
         await expect(queue.getByRole('region', { name: 'Calls', exact: true }).getByRole('button', { name: 'Call · Account A', exact: true })).toBeVisible();
-        await expect(queue.getByRole('region', { name: /^Saved draft continuations/ }).locator('[data-row-key]')).toHaveCount(3);
+        await expect(queue.getByRole('region', { name: /^Saved draft continuations/ }).locator('[data-row-key]')).toHaveCount(2);
       }
       break;
     case 'accounts':
