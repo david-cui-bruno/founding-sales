@@ -49,8 +49,12 @@ describe('createClientApi', () => {
     await expect(createClientApi(invoke).get({ view: '/v1/nope' } as never)).rejects.toThrow();
   });
 
-  it('get passes a Today view through as an object and passes the other outcomes through unchanged', async () => {
-    expect(await createClientApi(invoker({ outcome: 'ok', fetchedAt: NOW, view: { list: null, reason: 'not_built' } })).get({ view: '/v1/today' })).toEqual({ outcome: 'ok', fetchedAt: NOW, view: { list: null, reason: 'not_built' } });
+  it('get validates a Today view with the contract, keeps its source and sentence, and passes the other outcomes through unchanged', async () => {
+    const today = { asOf: NOW, list: null, reason: 'not_built_yet', postures: [], statesWithoutPosture: [] };
+    expect(await createClientApi(invoker({ outcome: 'ok', fetchedAt: NOW, view: today })).get({ view: '/v1/today' })).toEqual({ outcome: 'ok', fetchedAt: NOW, view: today });
+    expect(await createClientApi(invoker({ outcome: 'ok', fetchedAt: NOW, view: today, source: 'last_good', sentence: 'The worker could not be reached.' })).get({ view: '/v1/today' }))
+      .toEqual({ outcome: 'ok', fetchedAt: NOW, view: today, source: 'last_good', sentence: 'The worker could not be reached.' });
+    await expect(createClientApi(invoker({ outcome: 'ok', fetchedAt: NOW, view: { list: null, reason: 'not_built' } })).get({ view: '/v1/today' })).rejects.toThrow();
     await expect(createClientApi(invoker({ outcome: 'ok', fetchedAt: NOW, view: 'text' })).get({ view: '/v1/today' })).rejects.toThrow();
     const unauthenticated = { outcome: 'unauthenticated', reason: 'device_expired', cleared: true, sentence: 'The worker refused this device: its token expired. Pair again with a new code.' };
     expect(await createClientApi(invoker(unauthenticated)).get({ view: '/v1/diagnostics' })).toEqual(unauthenticated);

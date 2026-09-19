@@ -39,7 +39,8 @@ export function createClientApi(invoke: Invoke): ClientApi {
     const request = readRequestSchema.parse(raw);
     const result = readResultSchema.parse(await invoke(CLIENT_CHANNELS.get, request));
     if (result.outcome !== 'ok') return result;
-    return { outcome: 'ok', fetchedAt: result.fetchedAt, view: viewSchemas[request.view].parse(result.view) };
+    return { outcome: 'ok', fetchedAt: result.fetchedAt, view: viewSchemas[request.view].parse(result.view),
+      ...(result.source === undefined ? {} : { source: result.source }), ...(result.sentence === undefined ? {} : { sentence: result.sentence }) };
   };
   return {
     status: async () => clientStatusSchema.parse(await invoke(CLIENT_CHANNELS.status)),

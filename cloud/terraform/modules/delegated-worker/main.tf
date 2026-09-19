@@ -39,8 +39,9 @@ locals {
     "POST /research/setup/status", "POST /research/setup", "POST /accounts/preparation", "POST /reply/draft",
     "GET /events", "POST /google/begin", "GET /google/status", "GET /google/disclosure",
     "POST /google/revoke", "GET /oauth/callback",
-    # The rebuilt core's routes (S0), served by the same Lambda from src/v1/router.ts.
-    "POST /v1/pair/redeem", "GET /v1/diagnostics", "POST /v1/commands"
+    # The rebuilt core's routes (S0, S1), served by the same Lambda from src/v1/router.ts.
+    "POST /v1/pair/redeem", "GET /v1/diagnostics", "POST /v1/commands",
+    "GET /v1/today"
   ])
 }
 
@@ -397,6 +398,62 @@ resource "aws_cloudwatch_metric_alarm" "delegated_worker_held_ticks" {
   ok_actions          = [aws_sns_topic.delegated_worker_alarms[0].arn]
   tags                = { Component = "delegated-worker" }
   depends_on          = [aws_cloudwatch_log_metric_filter.delegated_worker_held_ticks]
+}
+
+# The morning list (S1, design section 4). day.build logs one LIST_BUILT line, counts only, when it writes
+# DAY#<date> at the first tick at or after 05:00 America/New_York. The filter counts a line whose count is at
+# least 10; the alarm fires when no such line arrives inside the 05:00 to 05:30 Eastern window. CloudWatch cannot
+# read a wall clock, so the window is the UTC band 09:00 to 10:30 that covers 05:00 to 05:30 under both offsets
+# (09:00 to 09:30 EDT, 10:00 to 10:30 EST), checked as three consecutive 30-minute periods through metric math
+# HOUR() and MINUTE(); every other period evaluates to 1 and never breaches. It evaluates at 10:30 UTC (05:30 EST,
+# 06:30 EDT) and returns to OK on its own at 11:00 UTC, so it carries no ok_actions.
+resource "aws_cloudwatch_log_metric_filter" "delegated_worker_list_built" {
+  count          = var.delegated_worker_enabled ? 1 : 0
+  name           = "${local.delegated_name}-list-built"
+  log_group_name = aws_cloudwatch_log_group.delegated_worker[0].name
+  pattern        = "{ ($.event = \"LIST_BUILT\") && ($.count >= 10) }"
+  metric_transformation {
+    name          = "ListBuilt"
+    namespace     = "Callie/DelegatedWorker"
+    value         = "1"
+    default_value = "0"
+    unit          = "Count"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "delegated_worker_list_short" {
+  count               = local.delegated_schedule_enabled ? 1 : 0
+  alarm_name          = "${local.delegated_name}-list-short"
+  alarm_description   = "No LIST_BUILT line with count >= 10 between 05:00 and 05:30 Eastern: the morning list is missing or short."
+  comparison_operator = "LessThanThreshold"
+  threshold           = 1
+  evaluation_periods  = 3
+  datapoints_to_alarm = 3
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.delegated_worker_alarms[0].arn]
+  tags                = { Component = "delegated-worker" }
+  metric_query {
+    id          = "built"
+    return_data = false
+    metric {
+      namespace   = "Callie/DelegatedWorker"
+      metric_name = "ListBuilt"
+      period      = 1800
+      stat        = "Sum"
+    }
+  }
+  metric_query {
+    id          = "filled"
+    expression  = "FILL(built, 0)"
+    return_data = false
+  }
+  metric_query {
+    id          = "window"
+    label       = "LIST_BUILT with count >= 10 inside 09:00-10:30 UTC"
+    expression  = "IF(HOUR(filled) == 9 OR (HOUR(filled) == 10 AND MINUTE(filled) == 0), filled, 1)"
+    return_data = true
+  }
+  depends_on = [aws_cloudwatch_log_metric_filter.delegated_worker_list_built]
 }
 
 # Account-wide monthly cost: after the legacy sourcing stack was destroyed (17 September 2026)

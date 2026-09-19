@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { expect, test, type Page } from 'playwright/test';
 import { startStubWorker, type StubWorker } from './stubWorker';
-import { clientFile, launchClient, newUserData, pairThroughUi, type LaunchedClient } from './support/launchClient';
+import { clientFile, launchClient, newUserData, openDiagnostics, pairThroughUi, type LaunchedClient } from './support/launchClient';
 
 /**
  * The Diagnostics page on the real seam: the last twenty attempts newest first with their closed detail as
@@ -20,6 +20,8 @@ test.beforeEach(async () => {
   userData = await newUserData();
   client = await launchClient({ endpoint: stub.url, userData });
   await pairThroughUi(client.page, stub);
+  // Today is the landing page; these specs are about Diagnostics, so they navigate there through the rail.
+  await openDiagnostics(client.page);
 });
 
 test.afterEach(async () => {
@@ -47,9 +49,10 @@ test('shows the last 20 attempts newest first with the closed detail as chips an
     await expect(rows.first().getByText(`${key}: ${value}`, { exact: true })).toBeVisible();
   }
   await expect(page.getByText(`as of ${stub.asOf}`, { exact: false })).toBeVisible();
-  // Only the status and the diagnostics read happen on mount: no command, no other view.
+  // Only the status, the Today landing read and the diagnostics read happen on mount: no command, no other view.
   expect(stub.requests.filter(request => request.method === 'POST' && request.path !== '/v1/pair/redeem')).toEqual([]);
-  expect(stub.requests.filter(request => request.method === 'GET').every(request => request.path === '/v1/diagnostics')).toBe(true);
+  expect(stub.requests.filter(request => request.method === 'GET').every(request => request.path === '/v1/diagnostics' || request.path === '/v1/today')).toBe(true);
+  expect(diagnosticsReads().length).toBeGreaterThan(0);
 });
 
 test('the kind filter narrows the list through the worker', async () => {
@@ -97,7 +100,8 @@ test('Revoke this device on another device sends revoke_device with a fresh UUID
 test('a successful /v1/today read writes the last-good file with its fetched-at stamp', async () => {
   const { page } = client!;
   const lastGood = clientFile(userData, 'today-last-good.json');
-  expect(existsSync(lastGood)).toBe(false);
+  // The Today landing page already read once and wrote the file; a read through the bridge rewrites it with its own stamp.
+  expect(existsSync(lastGood)).toBe(true);
   const result = await page.evaluate(() => window.callie.get({ view: '/v1/today' }));
   expect(result.outcome).toBe('ok');
   if (result.outcome !== 'ok') return;

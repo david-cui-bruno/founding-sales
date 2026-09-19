@@ -61,6 +61,9 @@ const addresses = [
   "aws_cloudwatch_metric_alarm.delegated_worker_silent_schedule",
   "aws_cloudwatch_log_metric_filter.delegated_worker_held_ticks",
   "aws_cloudwatch_metric_alarm.delegated_worker_held_ticks",
+  // The morning list alarm (S1): the LIST_BUILT metric filter and the list-short alarm on the 05:00-05:30 Eastern window.
+  "aws_cloudwatch_log_metric_filter.delegated_worker_list_built",
+  "aws_cloudwatch_metric_alarm.delegated_worker_list_short",
   "aws_budgets_budget.delegated_worker_monthly",
 ];
 const defaults: Record<string, string> = {
@@ -188,8 +191,22 @@ describe("delegated-worker Terraform source isolation", () => {
       ['resource "aws_cloudwatch_metric_alarm" "delegated_worker_silent_schedule"', 'alarm_name = "${local.delegated_name}-silent-schedule"'],
       ['resource "aws_cloudwatch_metric_alarm" "delegated_worker_held_ticks"', 'alarm_name = "${local.delegated_name}-held-ticks"'],
       ['resource "aws_cloudwatch_log_metric_filter" "delegated_worker_held_ticks"', 'name = "${local.delegated_name}-held-ticks"'],
+      ['resource "aws_cloudwatch_log_metric_filter" "delegated_worker_list_built"', 'name = "${local.delegated_name}-list-built"'],
+      ['resource "aws_cloudwatch_metric_alarm" "delegated_worker_list_short"', 'alarm_name = "${local.delegated_name}-list-short"'],
       ['resource "aws_budgets_budget" "delegated_worker_monthly"', 'name = "${local.delegated_name}-monthly-usd"'],
     ]) expect(compact(block(implementation, address))).toContain(suffix);
+    // The morning list alarm (S1): a LIST_BUILT line with count >= 10 counts one; the alarm checks the three 30-minute periods that
+    // cover 05:00-05:30 Eastern under both offsets (09:00, 09:30 and 10:00 UTC) through HOUR() and MINUTE(), and 1 everywhere else.
+    const listBuilt = compact(block(implementation, 'resource "aws_cloudwatch_log_metric_filter" "delegated_worker_list_built"'));
+    expect(listBuilt).toContain('log_group_name = aws_cloudwatch_log_group.delegated_worker[0].name');
+    expect(listBuilt).toContain('pattern = "{ ($.event = \\"LIST_BUILT\\") && ($.count >= 10) }"');
+    expect(listBuilt).toContain('name = "ListBuilt" namespace = "Callie/DelegatedWorker" value = "1" default_value = "0"');
+    const listShort = compact(block(implementation, 'resource "aws_cloudwatch_metric_alarm" "delegated_worker_list_short"'));
+    expect(listShort).toContain('comparison_operator = "LessThanThreshold" threshold = 1 evaluation_periods = 3 datapoints_to_alarm = 3 treat_missing_data = "notBreaching"');
+    expect(listShort).toContain('metric { namespace = "Callie/DelegatedWorker" metric_name = "ListBuilt" period = 1800 stat = "Sum" }');
+    expect(listShort).toContain('expression = "FILL(built, 0)"');
+    expect(listShort).toContain('expression = "IF(HOUR(filled) == 9 OR (HOUR(filled) == 10 AND MINUTE(filled) == 0), filled, 1)" return_data = true');
+    expect(listShort).not.toContain("ok_actions");
     expect(source).toContain('delegated_name = "${var.name_prefix}-delegated-worker"');
     const errors = compact(block(implementation, 'resource "aws_cloudwatch_metric_alarm" "delegated_worker_errors"'));
     expect(errors).toContain('namespace = "AWS/Lambda" metric_name = "Errors"');
@@ -214,7 +231,7 @@ describe("delegated-worker Terraform source isolation", () => {
     expect([...budget.matchAll(/threshold = (\d+) threshold_type = "PERCENTAGE" notification_type = "(ACTUAL|FORECASTED)"/g)].map((match) => `${match[1]}:${match[2]}`)).toEqual(["100:ACTUAL", "200:ACTUAL", "100:FORECASTED"]);
     expect(budget).toContain('subscriber_email_addresses = var.alarm_email != "" ? [var.alarm_email] : null');
     // Every alarm publishes to the one topic; nothing here widens the worker's IAM role or reads a parameter.
-    for (const name of ["delegated_worker_errors", "delegated_worker_throttles", "delegated_worker_silent_schedule", "delegated_worker_held_ticks"]) {
+    for (const name of ["delegated_worker_errors", "delegated_worker_throttles", "delegated_worker_silent_schedule", "delegated_worker_held_ticks", "delegated_worker_list_short"]) {
       expect(compact(block(implementation, `resource "aws_cloudwatch_metric_alarm" "${name}"`))).toContain("alarm_actions = [aws_sns_topic.delegated_worker_alarms[0].arn]");
     }
     expect(compact(block(implementation, 'resource "aws_iam_role_policy" "delegated_worker"'))).not.toMatch(/sns:|budgets:|cloudwatch:/);
@@ -282,7 +299,8 @@ describe("delegated-worker Terraform source isolation", () => {
       const body = compact(block(implementation, match[0]));
       if (match[2] === "aws_apigatewayv2_route") {
         expect(body).toContain("for_each = var.delegated_worker_enabled ? local.delegated_routes : toset([])");
-      } else if (match[2]?.startsWith("aws_cloudwatch_event_") || match[3] === "delegated_worker_schedule" || match[3] === "delegated_worker_silent_schedule") {
+      } else if (match[2]?.startsWith("aws_cloudwatch_event_") || match[3] === "delegated_worker_schedule" || match[3] === "delegated_worker_silent_schedule"
+        || match[3] === "delegated_worker_list_short") {
         expect(body).toContain("count = local.delegated_schedule_enabled ? 1 : 0");
       } else if (match[3] === "delegated_worker_alarm_email") {
         expect(body).toContain('count = var.delegated_worker_enabled && var.alarm_email != "" ? 1 : 0');
@@ -316,6 +334,7 @@ describe("delegated-worker Terraform source isolation", () => {
       "POST /research/setup/status", "POST /research/setup", "POST /accounts/preparation", "POST /reply/draft",
       "GET /events", "POST /google/begin", "GET /google/status", "GET /google/disclosure", "POST /google/revoke", "GET /oauth/callback",
       "POST /v1/pair/redeem", "GET /v1/diagnostics", "POST /v1/commands",
+      "GET /v1/today",
       // The stage's per-route throttle names the redeem route a second time; it is the same route key, not a second route.
       "POST /v1/pair/redeem",
     ]);

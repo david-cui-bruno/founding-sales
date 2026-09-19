@@ -2,8 +2,10 @@ import { z } from 'zod';
 import {
   attemptKindSchema,
   diagnosticsViewSchema,
+  todayViewSchema,
   v1CommandReceiptSchema,
   v1CommandSchema,
+  type TodayView,
 } from '../../../src/shared/contracts/v1Contract';
 
 /**
@@ -66,14 +68,19 @@ const unauthenticatedSchema = z.strictObject({
 });
 const unpairedSchema = z.strictObject({ outcome: z.literal('unpaired'), sentence: z.string() });
 
+/** Where an ok view came from: the worker just now, or the last good `/v1/today` file this Mac kept when the worker did not answer. */
+export const viewSourceSchema = z.enum(['worker', 'last_good']);
+export type ViewSource = z.infer<typeof viewSourceSchema>;
 export const readResultSchema = z.discriminatedUnion('outcome', [
-  z.strictObject({ outcome: z.literal('ok'), fetchedAt: instant, view: z.unknown() }),
+  z.strictObject({ outcome: z.literal('ok'), fetchedAt: instant, view: z.unknown(), source: viewSourceSchema.optional(),
+    /** For a last-good answer: the sentence of the failed read it stands in for. */
+    sentence: z.string().optional() }),
   unavailableSchema,
   unauthenticatedSchema,
   unpairedSchema,
 ]);
 export type ReadResult<View = unknown> =
-  | { outcome: 'ok'; fetchedAt: string; view: View }
+  | { outcome: 'ok'; fetchedAt: string; view: View; source?: ViewSource; sentence?: string }
   | z.infer<typeof unavailableSchema>
   | z.infer<typeof unauthenticatedSchema>
   | z.infer<typeof unpairedSchema>;
@@ -86,9 +93,8 @@ export const commandResultSchema = z.discriminatedUnion('outcome', [
 ]);
 export type CommandResult = z.infer<typeof commandResultSchema>;
 
-/** `/v1/today` has no schema in S0 (slice S1 adds it to the contract); until then the view is an opaque JSON object. */
-export const todayViewSchema = z.record(z.string(), z.unknown());
-export type TodayView = z.infer<typeof todayViewSchema>;
+/** The Today view is the contract's own schema (slice S1): the four lanes as cards, or `{ list: null, reason }`. */
+export { todayViewSchema, type TodayView };
 export const lastGoodTodaySchema = z.strictObject({ fetchedAt: instant, view: todayViewSchema });
 export type LastGoodToday = z.infer<typeof lastGoodTodaySchema>;
 

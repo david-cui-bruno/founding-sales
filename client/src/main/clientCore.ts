@@ -13,7 +13,7 @@ import {
   type ReadResult,
   type TodayView,
 } from '../shared/clientContract';
-import { writeLastGoodToday } from './lastGood';
+import { readLastGoodToday, writeLastGoodToday } from './lastGood';
 import { deleteCodeFile, PairCodeError, resolvePairCode, type PairCodeRefusal } from './pairCode';
 import { TokenStoreError, type StoredDevice, type TokenStore } from './tokenStore';
 import { requestWorker, type WorkerFailure, type WorkerReply } from './workerClient';
@@ -140,11 +140,21 @@ export class ClientCore {
 
   async get(request: ReadRequest): Promise<ReadResult> {
     const { view, kind } = readRequestSchema.parse(request);
-    return this.authenticated({ path: view, method: 'GET', ...(kind === undefined ? {} : { query: { kind } }) }, viewSchemas[view], async (value): Promise<ReadResult> => {
+    // The two view schemas differ in shape; the read only needs "does it parse", and the preload re-validates per path.
+    const schema: Parser<unknown> = viewSchemas[view];
+    const result: ReadResult = await this.authenticated({ path: view, method: 'GET', ...(kind === undefined ? {} : { query: { kind } }) }, schema, async (value): Promise<ReadResult> => {
       const fetchedAt = this.now();
       if (view === '/v1/today') await writeLastGoodToday(this.input.clientDirectory, { fetchedAt, view: value as TodayView });
-      return { outcome: 'ok', fetchedAt, view: value };
+      return { outcome: 'ok', fetchedAt, view: value, source: 'worker' };
     });
+    // A morning survives an outage (design section 1): when the worker does not answer Today, the last good answer
+    // this Mac kept is served with its own fetched-at stamp and the sentence of the failure, so the page shows it as
+    // stale. A refused token or an unpaired Mac is never papered over with an old list.
+    if (view === '/v1/today' && result.outcome === 'unavailable') {
+      const lastGood = await readLastGoodToday(this.input.clientDirectory);
+      if (lastGood) return { outcome: 'ok', fetchedAt: lastGood.fetchedAt, view: lastGood.view, source: 'last_good', sentence: result.sentence };
+    }
+    return result;
   }
 
   async command(command: V1Command): Promise<CommandResult> {

@@ -54,12 +54,32 @@ export async function launchClient(options: { endpoint: string; userData: string
 export const codeField = (page: Page) => page.getByLabel('Pairing code or the path of the code file', { exact: true });
 export const pairButton = (page: Page) => page.getByRole('button', { name: 'Pair', exact: true });
 
-/** Pairs through the real Pair page with a code the stub minted, and waits for Diagnostics. */
+/** The heading of the landing page after pairing: Today, the morning list. */
+export const todayHeading = (page: Page) => page.getByRole('heading', { name: 'Today', exact: true, level: 1 });
+export const diagnosticsHeading = (page: Page) => page.getByRole('heading', { name: 'Diagnostics', exact: true, level: 1 });
+
+/** The as-of stamp Today shows once its landing read has answered; absent while the page is still reading. */
+export const todayAsOf = (page: Page) => page.locator('.today-as-of');
+
+/**
+ * Pairs through the real Pair page with a code the stub minted, and waits for the Today landing page to have
+ * completed its first read. Waiting for the heading alone is a race: the heading is up while the landing read
+ * is still in flight, and a spec that then changes the stub (expiring the device, stopping the worker) has its
+ * change consumed by that read instead of by the action it is about to take. On the CI runner the 401 case did
+ * exactly that: the landing read got the 401, the shell returned to Pair, and the Refresh click found no button.
+ */
 export async function pairThroughUi(page: Page, stub: StubWorker, label = 'David MacBook'): Promise<string> {
   await expect(page.getByRole('heading', { name: 'Pair this Mac', exact: true })).toBeVisible();
   const code = stub.mintCode(label);
   await codeField(page).fill(code);
   await pairButton(page).click();
-  await expect(page.getByRole('heading', { name: 'Diagnostics', exact: true })).toBeVisible();
+  await expect(todayHeading(page)).toBeVisible();
+  await expect(todayAsOf(page)).toBeVisible();
   return code;
+}
+
+/** Navigates to Diagnostics through the rail, for a spec that needs that page. */
+export async function openDiagnostics(page: Page): Promise<void> {
+  await page.getByRole('button', { name: 'Diagnostics', exact: true }).click();
+  await expect(diagnosticsHeading(page)).toBeVisible();
 }

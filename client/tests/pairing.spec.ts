@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { expect, test } from 'playwright/test';
 import { startStubWorker, type StubWorker } from './stubWorker';
-import { clientFile, codeField, launchClient, newUserData, pairButton, pairThroughUi, type LaunchedClient } from './support/launchClient';
+import { clientFile, codeField, launchClient, newUserData, pairButton, pairThroughUi, todayHeading, type LaunchedClient } from './support/launchClient';
 
 /**
  * Pairing on the real seam: the built renderer, preload and main process of the client against the stub
@@ -43,7 +43,7 @@ test('a wrong code shows the refusal, the right code pairs, and a restart keeps 
   const code = stub.mintCode('David MacBook');
   await codeField(page).fill(code);
   await pairButton(page).click();
-  await expect(page.getByRole('heading', { name: 'Diagnostics', exact: true })).toBeVisible();
+  await expect(todayHeading(page)).toBeVisible();
   const [device] = stub.pairedDevices();
   expect(device?.label).toBe('David MacBook');
   expect(existsSync(tokenFile())).toBe(true);
@@ -54,7 +54,7 @@ test('a wrong code shows the refusal, the right code pairs, and a restart keeps 
 
   await client.close();
   client = await launchClient({ endpoint: stub.url, userData });
-  await expect(client.page.getByRole('heading', { name: 'Diagnostics', exact: true })).toBeVisible();
+  await expect(todayHeading(client.page)).toBeVisible();
   await expect(client.page.getByRole('heading', { name: 'Pair this Mac', exact: true })).toHaveCount(0);
   // The restart used the stored token: no second redeem.
   expect(stub.requests.filter(request => request.path === '/v1/pair/redeem')).toHaveLength(2);
@@ -66,7 +66,7 @@ test('a path to the code file pairs and the file is deleted after the redeem', a
   const codePath = await stub.writeCodeFile('David MacBook', userData);
   await codeField(page).fill(codePath);
   await pairButton(page).click();
-  await expect(page.getByRole('heading', { name: 'Diagnostics', exact: true })).toBeVisible();
+  await expect(todayHeading(page)).toBeVisible();
   expect(existsSync(codePath)).toBe(false);
   expect(stub.pairedDevices()).toHaveLength(1);
 });
@@ -78,6 +78,7 @@ test('a 401 device_expired from the worker returns to Pair with the sentence and
   const [device] = stub.pairedDevices();
   stub.expireDevice(device!.deviceId);
 
+  // The Today landing page's Refresh reads through the worker; the 401 clears the token and the shell returns to Pair.
   await page.getByRole('button', { name: 'Refresh', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Pair this Mac', exact: true })).toBeVisible();
   await expect(page.getByRole('status')).toHaveText('The worker refused this device: its token expired. Pair again with a new code.');

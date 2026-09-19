@@ -1,9 +1,6 @@
-/** Placeholder until slice S1 builds the four-lane morning list on `GET /v1/today`. No call is made here. */
-export function TodayPage() {
-  return (
-    <section className="page page--placeholder">
-      <h1>Today</h1>
-      <p>Not built yet: slice S1.</p>
-    </section>
-  );
+import { TodayPage as TodayLanes } from '../today/TodayPage';
+
+/** The Today route (slice S1): the four-lane morning list from `GET /v1/today`, read through `window.callie`. */
+export function TodayPage({ onStatusChanged }: { onStatusChanged: () => Promise<void> }) {
+  return <TodayLanes api={window.callie} onStatusChanged={onStatusChanged} />;
 }

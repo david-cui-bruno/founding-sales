@@ -4,18 +4,21 @@ import { attemptKindSchema, DIAGNOSTICS_ATTEMPT_LIMIT, diagnosticsViewSchema, pa
   v1CommandReceiptSchema, v1CommandSchema, type V1Command, type V1CommandReceipt } from '../../../../../src/shared/contracts/v1Contract';
 import { DynamoReadUnavailable, fingerprint, keyPart, type DynamoStore } from '../dynamoStore';
 import type { WorkerHttpResponse } from '../handler';
-import { SOURCE_LAST_TICK_KEY } from '../tickLog';
 import type { WorkerAuth } from '../workerAuth';
 import { listAttempts, recordAttempt } from './attempts';
 import { V1Devices, V1PairRefused, V1Unauthenticated, type V1Principal } from './devices';
+import { readLastTick } from './lastTick';
+import { planSetStatePosture, postureSummary, readPostures } from './postures';
+import { readTodayView } from './today';
 
 /**
  * The `/v1` routes of the rebuilt core (FSS target design section 3), mounted inside the existing handler so
  * that David only redeploys the worker:
  *
  *   POST /v1/pair/redeem      unauthenticated   a pairing code in, the device token out, once
- *   GET  /v1/diagnostics      device token      the last attempts (kind, limit), the last tick, the devices
- *   POST /v1/commands         device token      idempotent by commandId, per device; S0 ships `revoke_device` only
+ *   GET  /v1/diagnostics      device token      the last attempts (kind, limit), the last tick, the devices, the postures
+ *   GET  /v1/today            device token      the morning list as cards, dialability computed at request time (S1)
+ *   POST /v1/commands         device token      idempotent by commandId, per device; `revoke_device` (S0), `set_state_posture` (S1)
  *
  * Errors: 401 `{ error: 'unauthenticated' }` (with `reason: 'device_expired'` once a device's ninety days are over),
  * 404 `{ error: 'not_found' }` for any other `/v1` path or method, 400 `{ error: 'invalid_request' }` on a body or
@@ -40,8 +43,6 @@ export const v1CommandKey = (commandId: string): string => `V1COMMAND#${keyPart(
 
 const diagnosticsQuerySchema = z.strictObject({ kind: attemptKindSchema.optional(),
   limit: z.coerce.number().int().min(1).max(DIAGNOSTICS_ATTEMPT_LIMIT).optional() });
-/** Only the three fields the view needs are read off the persisted tick record; the rest of it stays where it is. */
-const lastTickSchema = z.object({ at: z.iso.datetime({ precision: 3 }), status: z.enum(['inactive', 'completed', 'aborted']), durationMs: z.number().int().nonnegative() });
 /** A receipt is bound to the device that issued the command; a replay from any other device is a conflict. */
 const receiptRecordSchema = z.strictObject({ fingerprint: z.string().regex(/^[a-f0-9]{64}$/), kind: z.string(), receipt: v1CommandReceiptSchema,
   at: z.iso.datetime({ precision: 3 }), deviceId: z.string().uuid() });
@@ -51,12 +52,6 @@ function parseBody<T>(body: () => unknown, schema: z.ZodType<T>): { success: tru
   try { raw = body(); } catch { return { success: false }; }
   const parsed = schema.safeParse(raw);
   return parsed.success ? { success: true, data: parsed.data } : { success: false };
-}
-
-async function readLastTick(store: DynamoStore) {
-  const row = await store.get<unknown>(SOURCE_LAST_TICK_KEY);
-  const parsed = lastTickSchema.safeParse(row?.data);
-  return parsed.success ? { at: parsed.data.at, status: parsed.data.status, durationMs: parsed.data.durationMs } : null;
 }
 
 const unauthenticated = (respond: V1RouterInput['respond'], error: V1Unauthenticated): WorkerHttpResponse =>
@@ -88,6 +83,13 @@ async function applyCommand(store: DynamoStore, devices: V1Devices, principal: V
       const plan = await devices.planRevoke(command.deviceId);
       if ('item' in plan) { items.push(plan.item); receipt = { commandId: command.commandId, outcome: 'applied', reason: null }; }
       else receipt = { commandId: command.commandId, outcome: 'refused', reason: plan.refused };
+      break;
+    }
+    case 'set_state_posture': {
+      // David's decision for one state (S1): stamped with the instant and the device label, prior decisions kept in history.
+      const plan = await planSetStatePosture(store, command, principal.label);
+      items.push(plan.item); receipt = { commandId: command.commandId, outcome: 'applied', reason: null };
+      break;
     }
   }
   items.push(store.put(key, { fingerprint: commandFingerprint, kind: command.kind, receipt, at: store.now(), deviceId: principal.deviceId }, null));
@@ -135,8 +137,15 @@ export async function v1Router(input: V1RouterInput): Promise<WorkerHttpResponse
       catch (error) { if (error instanceof V1Unauthenticated) return unauthenticated(respond, error); throw error; }
       const query = diagnosticsQuerySchema.safeParse({ kind: input.query.get('kind') ?? undefined, limit: input.query.get('limit') ?? undefined });
       if (!query.success) return respond(400, { error: 'invalid_request' });
-      const [attempts, lastTick, deviceList] = await Promise.all([listAttempts(store, query.data), readLastTick(store), devices.listDevices()]);
-      return respond(200, diagnosticsViewSchema.parse({ asOf: store.now(), attempts, lastTick, devices: deviceList }));
+      const [attempts, lastTick, deviceList, postures] = await Promise.all([listAttempts(store, query.data), readLastTick(store), devices.listDevices(), readPostures(store)]);
+      const asOf = store.now();
+      return respond(200, diagnosticsViewSchema.parse({ asOf, attempts, lastTick, devices: deviceList, postures: postures.map(record => postureSummary(record, asOf)) }));
+    }
+    if (path === '/v1/today' && method === 'GET') {
+      // The morning list as cards (S1). Dialability is computed here, at request time, from the firm's zone; a read is never a dial.
+      try { await devices.authenticate(input.authorization); }
+      catch (error) { if (error instanceof V1Unauthenticated) return unauthenticated(respond, error); throw error; }
+      return respond(200, await readTodayView(store));
     }
     if (path === '/v1/commands' && method === 'POST') {
       let principal: V1Principal;
