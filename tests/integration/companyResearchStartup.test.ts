@@ -74,7 +74,6 @@ async function fixture(configured: boolean, hooks: { search?: () => Promise<void
     openDatabase, closeDatabase, migrateToLatest,
     createDomainRuntime: db => { database = db; return ownedDomain = new DomainRuntime({ database: db, clock, ids: { next: randomUUID } }); },
     createHealthService: options => new HealthService(options),
-    registerLinkedInIpc:()=>()=>undefined,
     registerOutreachIpc: options => {delegation=options.delegation;return hooks.publicIpc ? registerOutreachIpc(options) : () => undefined;},
     ...(hooks.paired?{createPairingStore:()=>({load:async()=>({endpoint:'https://worker.example.test',workspaceId:configuration.workspaceId,pairingId:'11111111-1111-4111-8111-111111111111',credential:'a'.repeat(43),emergencyCredential:'b'.repeat(43),generation:0,scopes:['commands:write' as const,'events:read' as const]}),redeem:async()=>unexpected()})}:{}),
     registerApplicationIpc: (...args) => { runtime = args[0]; return hooks.publicIpc ? registerApplicationIpc(...args) : () => undefined; },

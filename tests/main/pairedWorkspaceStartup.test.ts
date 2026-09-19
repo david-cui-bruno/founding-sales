@@ -54,7 +54,6 @@ describe('paired workspace startup with production policyImportNative wiring (pu
       }
       expect(runtime.researchSetup).toBeDefined();
       expect(runtime.googleConnections).toBeDefined();
-      expect(runtime.linkedIn).not.toBeNull();
       expect(runtime.sync).toBeTypeOf('function');
     } finally { await runtime.dispose(); }
     expect(withDatabase).not.toHaveBeenCalled();

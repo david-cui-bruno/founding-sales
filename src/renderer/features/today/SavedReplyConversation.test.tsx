@@ -3,7 +3,6 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 import { afterEach, expect, it, vi } from 'vitest';
 import { dailyAnswerSchema, type DailyAnswer } from '../../../shared/contracts/dailyContract';
 import type { MailMessage } from '../../../shared/contracts/mailThreadContract';
-import type { LinkedInApi } from '../../../shared/contracts/linkedInContract';
 import type { RequestedDraftApi } from './requestedDraftSession';
 import type { OrdinaryReplyApi } from './ordinaryReplySession';
 import { answerKey, DailyAnswerDetail } from './DailyAnswers';
@@ -44,16 +43,12 @@ function fixture() {
     getRequestedFollowup: forbidden, editRequestedFollowup: forbidden, approveRequestedFollowup: forbidden,
     editReplyDraft: forbidden, reconcileReplyDraft: forbidden,
   } satisfies RequestedDraftApi & OrdinaryReplyApi;
-  const linkedin = {
-    recover: forbidden, begin: forbidden, prepare: forbidden, save: forbidden,
-    get: forbidden, open: forbidden, copy: forbidden, reportOutcome: forbidden,
-  } satisfies LinkedInApi;
   vi.stubGlobal('fetch', forbidden);
   vi.stubGlobal('XMLHttpRequest', forbidden);
   vi.stubGlobal('WebSocket', forbidden);
   const view = (item: Reply) => {
     expect(dailyAnswerSchema.safeParse(item).success).toBe(true);
-    return <DailyAnswerDetail item={item} workspaceId="workspace-a" api={api} linkedin={linkedin} company="Larkspur Studio" accountDetails={<p>Saved company context.</p>} />;
+    return <DailyAnswerDetail item={item} workspaceId="workspace-a" api={api} company="Larkspur Studio" accountDetails={<p>Saved company context.</p>} />;
   };
   return { forbidden, view };
 }

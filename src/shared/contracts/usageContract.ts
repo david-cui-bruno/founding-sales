@@ -32,7 +32,7 @@ const localDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
  * daily read puts on a held answer; the summary groups the week's held records
  * by the same strings, so the block never invents a hold category.
  */
-export const usageHoldReasons = ['requires_owner_preflight', 'reply_capability_unverified', 'manual_only'] as const;
+export const usageHoldReasons = ['requires_owner_preflight', 'reply_capability_unverified'] as const;
 export type UsageHoldReason = typeof usageHoldReasons[number];
 
 /** One count per real call outcome (`actualAccountCallOutcomes`). `cancelled`, `not_called`, `unknown` and `opt_out` are not calls that happened. */

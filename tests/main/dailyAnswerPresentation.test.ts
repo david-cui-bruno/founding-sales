@@ -1,25 +1,12 @@
 import { randomUUID, createHash } from 'node:crypto';
 import { expect, it } from 'vitest';
-import { createLinkedInFixture } from '../fixtures/linkedInWorkspace';
 import { createDomainServices } from '../../src/main/domain/createDomainServices';
 
-it('projects exact saved manual person without writes or changing saved draft', async () => {
-  const f = await createLinkedInFixture();
-  try {
-    const draft = f.drafts.create(f.drafts.requireStep(f.version.steps[0]!.id, 1), 'Existing manual text');
-    const services = createDomainServices({ database: f.db, clock: f.clock, ids: { next: randomUUID }, expectedWorkspaceId: f.workspaceId });
-    const before = f.db.raw.prepare('SELECT total_changes() AS n').get();
-    const answer = services.daily.get().answers.find(a => a.kind === 'manual_linkedin');
-    expect(answer).toMatchObject({ draft, presentation: { kind: 'manual_linkedin', contact: { personId: f.personId, displayName: 'Fictional Person', basis: 'manual_route', route: { id: f.routeId, version: 1 } } } });
-    expect(f.db.raw.prepare('SELECT total_changes() AS n').get()).toEqual(before);
-  } finally { f.close(); }
-});
 import { createCampaignFixture } from '../fixtures/campaignWorkspace';
 import { requestedFollowupFixture } from '../fixtures/requestedFollowup';
 import { AccountRepository } from '../../src/main/domain/accounts/accountRepository';
 import { accountFingerprint } from '../../src/main/domain/accounts/accountEvidence';
 import type { RequestedFollowupDraft } from '../../src/shared/contracts/requestedFollowupContract';
-import { dailyAnswerPresentationMatches, manualAnswerPresentationSchema } from '../../src/shared/contracts/dailyAnswerPresentationContract';
 async function requestedFixture(options: { owner?: boolean; person?: 'deleted' | 'blank' | 'missing'; role?: 'conflict' | 'expired' | 'future' | 'unsupported' | 'malformed'; note?: string; call?: 'hash' | 'foreign' | 'future' | 'malformed' } = {}) {
   const f = await createCampaignFixture();
   const raw = f.db.raw, personId = 'named-person';
@@ -69,40 +56,15 @@ it.each(['hash', 'foreign', 'future', 'malformed'] as const)('omits %s call evid
 it('keeps owner-supplied recipient unnamed and missing note distinct from valid outcome time', async () => {
   const f = await requestedFixture({ owner: true }); try { expect(f.answer()).toMatchObject({ draft: f.draft, presentation: { contact: null, callContext: { linkedContact: { displayName: 'Nora Exact', basis: 'original_call_route' }, noteText: null, observedAt: '2026-09-08T12:00:00.000Z' } } }); } finally { f.close(); }
 });
-it('matches retained manual identity across edits but rejects changed person/target/context', async () => {
-  const f = await createLinkedInFixture(); try {
-    const draft = f.drafts.create(f.drafts.requireStep(f.version.steps[0]!.id, 1), 'Saved note');
-    const services = createDomainServices({ database: f.db, clock: f.clock, ids: { next: randomUUID }, expectedWorkspaceId: f.workspaceId });
-    const answer = services.daily.get().answers.find(a => a.kind === 'manual_linkedin');
-    if (answer?.kind !== 'manual_linkedin') throw Error('missing manual');
-    expect(dailyAnswerPresentationMatches(answer.presentation, { ...draft, revision: 2, body: 'Typing' }, f.workspaceId)).toBe(true);
-    for (const changed of [{ ...draft, personId: 'other' }, { ...draft, routeVersion: 2 }, { ...draft, targetHash: 'f'.repeat(64) }, { ...draft, contextRevision: 9 }]) expect(dailyAnswerPresentationMatches(answer.presentation, changed, f.workspaceId)).toBe(false);
-  } finally { f.close(); }
-});
 
 it('retains valid identity and call time when optional human note is malformed', async () => {
   const f = await requestedFixture({ note: 'bad\0note' }); try {
     expect(f.answer()).toMatchObject({ draft: f.draft, presentation: { contact: { displayName: 'Nora Exact' }, callContext: { outcome: 'connected', noteText: null, observedAt: '2026-09-08T12:00:00.000Z' } } });
   } finally { f.close(); }
 });
-it.each(['person', 'target', 'route', 'deleted'] as const)('manual %s mismatch yields no annotation, not a missing draft', async change => {
-  const f = await createLinkedInFixture(); try {
-    const draft = f.drafts.create(f.drafts.requireStep(f.version.steps[0]!.id, 1), 'Saved note');
-    if (change === 'deleted') f.db.raw.prepare('UPDATE persons SET deleted_at=? WHERE id=?').run(f.now, f.personId);
-    else if (change === 'person') f.db.raw.prepare('UPDATE manual_linkedin_drafts SET person_id=NULL WHERE id=?').run(draft.id);
-    else if (change === 'target') f.db.raw.prepare('UPDATE manual_linkedin_drafts SET target_hash=? WHERE id=?').run('f'.repeat(64), draft.id);
-    else f.db.raw.prepare('UPDATE manual_linkedin_drafts SET route_id=? WHERE id=?').run(f.routes[0]!.id, draft.id);
-    const services = createDomainServices({ database: f.db, clock: f.clock, ids: { next: randomUUID }, expectedWorkspaceId: f.workspaceId });
-    const answer = services.daily.get().answers.find(a => a.kind === 'manual_linkedin');
-    expect(answer?.draft.id).toBe(draft.id);
-    if (answer?.kind !== 'manual_linkedin') throw Error('missing manual');
-    expect(answer.presentation).toBeUndefined();
-    expect(answer.capability).toBe('manual_only');
-  } finally { f.close(); }
-});
 import { ownerCommandSchema } from '../../src/shared/contracts/ownerCommandContract';
 import { workerEventSchema } from '../../src/shared/contracts/delegationContract';
-import { dailySnapshotSchema, dailyAnswerSchema } from '../../src/shared/contracts/dailyContract';
+import { dailySnapshotSchema } from '../../src/shared/contracts/dailyContract';
 it('preserves exact approval and command bytes through optional identity loss, while keeping global scope checks', async () => {
   const f = await requestedFixture(); try {
     const commandId = randomUUID();
@@ -131,23 +93,6 @@ it('preserves exact approval and command bytes through optional identity loss, w
   } finally { f.close(); }
 });
 
-it('rejects altered manual presentation route text while retaining genuine binding and saved draft', async () => {
-  const f = await createLinkedInFixture(); try {
-    const draft = f.drafts.create(f.drafts.requireStep(f.version.steps[0]!.id, 1), 'Saved note');
-    const services = createDomainServices({ database: f.db, clock: f.clock, ids: { next: randomUUID }, expectedWorkspaceId: f.workspaceId });
-    const snapshot = services.daily.get(), answer = snapshot.answers.find(a => a.kind === 'manual_linkedin');
-    if (answer?.kind !== 'manual_linkedin' || !answer.presentation?.contact) throw Error('missing genuine manual presentation');
-    const presentation = { ...answer.presentation, contact: { ...answer.presentation.contact, route: { ...answer.presentation.contact.route, value: 'https://www.linkedin.com/in/not-the-saved-target' } } };
-    expect(dailyAnswerPresentationMatches(presentation, draft, f.workspaceId)).toBe(false);
-    expect(manualAnswerPresentationSchema.safeParse(presentation).success).toBe(false);
-    const parsedAnswer = dailyAnswerSchema.parse({ ...answer, presentation });
-    expect(parsedAnswer).not.toHaveProperty('presentation');
-    expect(parsedAnswer.draft).toEqual(draft);
-    const parsed = dailySnapshotSchema.parse({ ...snapshot, answers: [{ ...answer, presentation }] });
-    expect(parsed.answers[0]).not.toHaveProperty('presentation');
-    expect(parsed.answers[0]?.draft).toEqual(draft);
-  } finally { f.close(); }
-});
 it('degrades producer-admitted invalid role only, preserving exact requested name and original call context', async () => {
   const f = await requestedFixture({ role: 'unsupported', note: 'Original human note' }); try {
     const accounts = new AccountRepository({ database: f.db, clock: f.clock, ids: { next: randomUUID } });

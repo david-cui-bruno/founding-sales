@@ -90,7 +90,7 @@ async function fixture(review = false) {
   const guardMethods = (object: object, allowed: string[] = []) => {
     for (const [name, value] of Object.entries(object)) if (typeof value === 'function' && !allowed.includes(name)) Reflect.set(object, name, refuse);
   };
-  for (const namespace of [ui.api.delegation, ui.api.linkedin, ui.api.leads, ui.api.leadDetail]) guardMethods(namespace);
+  for (const namespace of [ui.api.delegation, ui.api.leads, ui.api.leadDetail]) guardMethods(namespace);
   const local = createLocalWorkspaceProvider({ withDatabase: async op => op(f.db), withDomain: async op => op(domain) });
   guardMethods(local, ['get', 'getCommitments']);
   const api = { ...ui.api, localWorkspace: local,

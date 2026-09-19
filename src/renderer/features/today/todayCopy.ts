@@ -67,7 +67,6 @@ export const WEEKLY_SUMMARY_COPY = Object.freeze({
   holdReasons: Object.freeze({
     requires_owner_preflight: 'follow-up needs an owner preflight',
     reply_capability_unverified: 'reply capability unverified',
-    manual_only: 'LinkedIn note is manual only',
   }),
 });
 

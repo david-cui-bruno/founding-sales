@@ -1,7 +1,7 @@
 /** Fictional, no-IO equivalent-content acceptance data. Never used in production. */
 import { dailySnapshotSchema, type DailySnapshot } from '../../src/shared/contracts/dailyContract';
-import { requestedAnswerPresentationSchema, manualAnswerPresentationSchema, type DisplayContact } from '../../src/shared/contracts/dailyAnswerPresentationContract';
-import { commitments, dailyFixture, fixtureNow, linkedInFixture, nativeDeskFixture, requestedDraft } from '../../src/renderer/features/today/nativeDesk.fixture';
+import { requestedAnswerPresentationSchema, type DisplayContact } from '../../src/shared/contracts/dailyAnswerPresentationContract';
+import { commitments, dailyFixture, fixtureNow, nativeDeskFixture, requestedDraft } from '../../src/renderer/features/today/nativeDesk.fixture';
 import type { AccountRoute } from '../../src/shared/contracts/accountContract';
 import type { LocalCommitmentsSnapshot } from '../../src/shared/contracts/localWorkspaceContract';
 import type { ThreadProjection } from '../../src/shared/contracts/mailThreadContract';
@@ -30,8 +30,7 @@ export function fictionalMeetingPreparation(): AccountPreparation {
 }
 export const fictionalEmailBody = 'Hi Nora,\n\nYour coordinator should stay central to the discussion. Let’s walk through the current handoff first.\n\nDavid';
 const emailRoute: AccountRoute = { id: 'nora-email', accountId: 'nora', personId: 'person-nora', channel: 'email', value: 'nora@riverton.example', purpose: 'business', evidenceIds: ['source-nora'], verification: 'confirmed', version: 1 };
-const manualRoute: AccountRoute = { id: 'li-route', accountId: 'marcus', personId: 'person-marcus', channel: 'linkedin', value: 'https://www.linkedin.com/in/fictional-marcus-lee', purpose: 'business', evidenceIds: ['source-marcus'], verification: 'published', version: 1 };
-const contact = (route: AccountRoute, displayName: string, role: string, basis: 'recipient_route' | 'manual_route'): DisplayContact => ({
+const contact = (route: AccountRoute, displayName: string, role: string, basis: 'recipient_route'): DisplayContact => ({
   basis, personId: route.personId!, personVersion: 1, displayName, route,
   role: { linkId: `${route.accountId}-role`, value: role, validFrom: '2026-09-01T12:00:00.000Z', validTo: null, evidenceIds: [...route.evidenceIds] },
 });
@@ -51,26 +50,13 @@ export function compositionSnapshot(): DailySnapshot {
     callContext: { basis: 'human_reported_call_outcome', originalCall: email.originalCall, outcome: 'connected', observedAt: '2026-09-08T19:10:00.000Z', noteText: fictionalCallNote, linkedContact: null },
     issues: [],
   });
-  const manual = linkedInFixture();
-  manual.accountId = 'marcus';
-  manual.draft = { ...manual.draft, id: 'linkedin-marcus', accountId: 'marcus', personId: 'person-marcus',
-    body: 'Hi Marcus,\n\nI’m learning how residential teams coordinate maintenance. Would a brief conversation be useful?\n\nDavid',
-    targetHash: '3ff69f30939c800e701b77e074fcab5e0435189401ee69e6dc5d9b92ba253601',
-    contentHash: 'dfd0ff1255220645e3a89a24360722fb9256a21bc23c3fb265d4ccdbb4a93c96' };
-  manual.recovery = { ...manual.recovery, draftId: manual.draft.id };
-  const manualKeys = new Set(['id', 'workspaceId', 'accountId', 'enrollmentId', 'campaignVersionId', 'personId', 'stepId', 'routeId', 'routeVersion', 'contextRevision', 'executionContextId', 'targetHash']);
-  manual.presentation = manualAnswerPresentationSchema.parse({
-    kind: 'manual_linkedin', asOf: fixtureNow,
-    binding: Object.fromEntries(Object.entries(manual.draft).filter(([key]) => manualKeys.has(key))),
-    contact: contact(manualRoute, 'Marcus Lee', 'Operations manager', 'manual_route'), issues: [],
-  });
   const accounts: DailySnapshot['accounts'] = Object.entries(names).map(([id, name]): DailySnapshot['accounts'][number] => ({
     account: { id, name, domain: `${id}.example`, version: 1 }, claims: [],
-    routes: id === 'nora' ? [emailRoute] : id === 'marcus' ? [manualRoute] : [],
+    routes: id === 'nora' ? [emailRoute] : [],
     portfolio: [], unknowns: ['Buying authority not established'], conflicts: [], fingerprint: hash,
   }));
   return dailySnapshotSchema.parse(dailyFixture({ accounts, calls: { accountIds: ['maya', 'ben'], workloadConflict: false },
-    answers: [{ kind: 'requested_followup', accountId: 'nora', draft: email, approval: null, capability: 'held', reason: 'requires_owner_preflight', presentation: requestedPresentation }, manual,
+    answers: [{ kind: 'requested_followup', accountId: 'nora', draft: email, approval: null, capability: 'held', reason: 'requires_owner_preflight', presentation: requestedPresentation },
       { kind: 'reply', accountId: 'maya', thread: fictionalSchedulingThread, draft: null, stale: false, capability: 'held', reason: 'reply_capability_unverified' }],
     campaigns: [], ownerStatus: accounts.map((a): DailySnapshot['ownerStatus'][number] => ({ accountId: a.account.id, authority: { accountId: a.account.id, owner: 'worker', generation: 1, state: 'active' }, executionVersion: 1, pendingCommands: [], status: 'owner_applied' })) }));
 }

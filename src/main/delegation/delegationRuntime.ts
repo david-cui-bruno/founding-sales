@@ -16,7 +16,6 @@ import {createRequestedFollowupService} from '../outreach/requestedFollowupServi
 import {prepareRequestedFollowupSchema,getRequestedFollowupSchema,editRequestedFollowupSchema,approveRequestedFollowupSchema,requestedFollowupDraftSchema,requestedApprovalStatusSchema,type PrepareRequestedFollowup,type GetRequestedFollowup,type EditRequestedFollowup,type ApproveRequestedFollowup,type RequestedFollowupDraft} from '../../shared/contracts/requestedFollowupContract';
 import {createDelegatedPhoneHandoff} from './executionRouter';
 import {createInboundReadiness,type InboundRegistry,type InboundAdapter,type OutboundSubject} from '../communications/inboundReadiness';
-import {createRuntimeLinkedInApi} from '../linkedin/linkedInService';
 import {exportSelectedAccountRecord} from './selectedAccountSnapshot';
 import { randomUUID } from 'node:crypto';
 import {accountFingerprint} from '../domain/accounts/accountEvidence';
@@ -56,7 +55,7 @@ function intakeStatus(repository:DelegationRepository,command:ConfigureOwnerComm
 }
 /** Every repository belongs to a live FoundationRuntime operation lease. No DB
  * handle survives its callback. Local lock aborts work, never revokes the owner. */
-export function createDelegationRuntime(input:{databaseGate:{withDatabase<T>(fn:(database:AppDatabase)=>T|Promise<T>):Promise<T>};pairing:StoredPairing|null;clock:{now():string};fetch?:typeof globalThis.fetch;phone?:Parameters<typeof createDelegatedPhoneHandoff>[0]['phone'];inboundRegistry?:InboundRegistry;linkedIn?:Pick<Parameters<typeof createRuntimeLinkedInApi>[0],'provider'|'productFacts'|'shell'|'clipboard'>;policyImportNative?:AccountRoutePolicyImportDependencies['native'];requestedModel?:()=>Promise<NonNullable<Parameters<typeof createRequestedFollowupService>[0]['model']>|undefined>;configurationChanged?:()=>void|Promise<void>;openGoogleConsent?:(url:string)=>Promise<void>;researchSetupStore?:ResearchSetupRequestStore}) {
+export function createDelegationRuntime(input:{databaseGate:{withDatabase<T>(fn:(database:AppDatabase)=>T|Promise<T>):Promise<T>};pairing:StoredPairing|null;clock:{now():string};fetch?:typeof globalThis.fetch;phone?:Parameters<typeof createDelegatedPhoneHandoff>[0]['phone'];inboundRegistry?:InboundRegistry;policyImportNative?:AccountRoutePolicyImportDependencies['native'];requestedModel?:()=>Promise<NonNullable<Parameters<typeof createRequestedFollowupService>[0]['model']>|undefined>;configurationChanged?:()=>void|Promise<void>;openGoogleConsent?:(url:string)=>Promise<void>;researchSetupStore?:ResearchSetupRequestStore}) {
  const pairing=input.pairing?Object.freeze({...input.pairing,scopes:Object.freeze([...input.pairing.scopes])}):null;
  let lifetime=new AbortController();let locked=false;let closed=false;
  const flights=new Set<Promise<unknown>>();
@@ -381,7 +380,6 @@ export function createDelegationRuntime(input:{databaseGate:{withDatabase<T>(fn:
   readinessForHandoff,
   getPhoneHandoffState:(raw:GetPhoneHandoffStateRequest)=>{const request=delegatedPhoneStateRequestSchema.parse(raw);return run(database=>{if(!pairing)throw Error('pairing_unconfigured');return readDelegatedPhoneHandoffState(database,{...request,workspaceId:pairing.workspaceId,generatedAt:input.clock.now()});});},
   beginPhone:(raw:unknown):Promise<DelegatedPhoneHandoffResult>=>{const request=delegatedPhoneHandoffRequestSchema.parse(raw);return run((database,signal)=>{if(!input.phone||!pairing)return {status:'held',reason:'phone_unconfigured'};return createDelegatedPhoneHandoff({database,...services(database,signal),phone:input.phone,readinessForHandoff,clock:input.clock,signal,expectedWorkspaceId:pairing.workspaceId}).begin(request);});},
-  linkedIn:pairing?createRuntimeLinkedInApi({...input.linkedIn,databaseGate:{withDatabase:run},workspaceId:pairing.workspaceId,clock:input.clock,ownerFactory:(database,signal)=>services(database,signal)}):null,
   invalidate,
   status:async()=>!pairing?localDelegationStatusSchema.parse({state:'unconfigured',workspaceId:null,endpoint:null,configuration:null}):locked||closed?localDelegationStatusSchema.parse({state:'locked',workspaceId:pairing.workspaceId,endpoint:pairing.endpoint,configuration:null}):run((database,signal)=>{
     const config=services(database,signal).configuration.read();return localDelegationStatusSchema.parse({state:locked?'locked':config?.configuration.state??'paused',workspaceId:pairing.workspaceId,endpoint:pairing.endpoint,configuration:config});

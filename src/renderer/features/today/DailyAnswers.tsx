@@ -17,8 +17,6 @@ import {
   requestedDraftSession,
   type RequestedDraftApi,
 } from './requestedDraftSession';
-import { LinkedInStep } from '../linkedin/LinkedInStep';
-import type { LinkedInApi } from '../../../shared/contracts/linkedInContract';
 export const answerKey = (a: DailyAnswer) =>
   a.kind === 'reply'
     ? JSON.stringify([
@@ -31,11 +29,7 @@ export const answerKey = (a: DailyAnswer) =>
       ])
     : `${a.kind}:${a.accountId}:${a.draft.id}`;
 export const answerLabel = (a: DailyAnswer) =>
-  a.kind === 'manual_linkedin'
-    ? 'Manual LinkedIn'
-    : a.kind === 'reply'
-      ? 'Reply'
-      : 'Email';
+  a.kind === 'reply' ? 'Reply' : 'Email';
 export function DailyAnswers({
   items,
   selected,
@@ -61,12 +55,11 @@ export function DailyAnswers({
       <h2 id={group.id}>
         <span className="native-desk__lane-label"><ClipboardCheck size={14} aria-hidden="true" />{group.label}</span> <span className="native-desk__count">{unavailable ? 'Unavailable' : group.answers.length}</span>
       </h2>
-      {group.id === 'daily-answers' && (!continuations.some(a => a.kind === 'requested_followup') || !continuations.some(a => a.kind === 'manual_linkedin')) && (
+      {group.id === 'daily-answers' && !continuations.some(a => a.kind === 'requested_followup') && (
         <details>
           <summary>About saved draft continuations</summary>
           <p>This view continues saved drafts only. It cannot prepare first worker drafts.</p>
-          {!continuations.some(a => a.kind === 'requested_followup') && <p>Requested email requires an eligible saved owner call, its exact saved call reference, the recipient’s request for information by email, current account and recipient context, and authenticated worker mailbox proof. Manual preparation does not bypass these checks.</p>}
-          {!continuations.some(a => a.kind === 'manual_linkedin') && <p>LinkedIn requires an approved campaign version, real enrollment at its current eligible step, exact route and context, and an available preparation provider. This view cannot enroll or prepare. Opening or copying is not sending.</p>}
+          <p>Requested email requires an eligible saved owner call, its exact saved call reference, the recipient’s request for information by email, current account and recipient context, and authenticated worker mailbox proof. Manual preparation does not bypass these checks.</p>
           <p><a href="#/settings" onClick={() => openSettingsSection('worker')}>Worker settings</a> configure worker access, not eligibility. <a href="#/campaigns">Saved campaign versions</a> are read-only.</p>
           <p>For a separate local unsent email draft, open a saved company in <a href="#/accounts">Accounts</a> and use its Company draft panel once a published business inbox is reviewed. <a href="#/settings" onClick={() => openSettingsSection('connections')}>Connections settings</a> provide local model and Gmail setup, not worker mailbox proof. Own-text draft saving does not require those connections.</p>
         </details>
@@ -88,15 +81,13 @@ export function DailyAnswers({
             <small>{answerLabel(a)}</small>
             <span className="native-desk__row-company">{name(a.accountId)}</span>
             <span>
-              {a.kind === 'manual_linkedin'
-                ? 'Manual step'
-                : a.kind === 'reply'
-                  ? a.stale
-                    ? 'Saved reply needs review'
-                    : 'Review saved reply'
-                  : a.approval
-                    ? a.approval.receipt.status === 'pending' ? 'Approval pending' : a.approval.receipt.status === 'rejected' ? 'Approval rejected' : a.approval.state.replaceAll('_', ' ')
-                    : 'Review saved email'}
+              {a.kind === 'reply'
+                ? a.stale
+                  ? 'Saved reply needs review'
+                  : 'Review saved reply'
+                : a.approval
+                  ? a.approval.receipt.status === 'pending' ? 'Approval pending' : a.approval.receipt.status === 'rejected' ? 'Approval rejected' : a.approval.state.replaceAll('_', ' ')
+                  : 'Review saved email'}
             </span>
           </button>
         );})}
@@ -322,7 +313,6 @@ export function DailyAnswerDetail({
   item,
   workspaceId,
   api,
-  linkedin,
   actionHold,
   company = 'Company unavailable',
   accountDetails,
@@ -330,7 +320,6 @@ export function DailyAnswerDetail({
   item: DailyAnswer;
   workspaceId: string;
   api: RequestedDraftApi & OrdinaryReplyApi;
-  linkedin: LinkedInApi;
   actionHold?: string;
   company?: string;
   accountDetails?: ReactNode;
@@ -342,18 +331,6 @@ export function DailyAnswerDetail({
         item={item}
         workspaceId={workspaceId}
         api={api}
-        actionHold={actionHold}
-        company={company}
-        accountDetails={accountDetails}
-      />
-    );
-  if (item.kind === 'manual_linkedin')
-    return (
-      <LinkedInStep
-        key={answerKey(item)}
-        item={item}
-        workspaceId={workspaceId}
-        api={linkedin}
         actionHold={actionHold}
         company={company}
         accountDetails={accountDetails}

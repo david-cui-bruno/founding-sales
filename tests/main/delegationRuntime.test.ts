@@ -39,8 +39,6 @@ it('bootstraps one actual selected account through C2 HTTP and acknowledges expl
   const account=f.repo.create({commandId:'33333333-3333-4333-8333-333333333333',name:'Selected Fictional PM',domain:null});
   const receipt=await runtime.bootstrap({commandId:'22222222-2222-4222-8222-222222222222',accountId:account.id});
   expect(receipt.status).toBe('applied');
-  expect(runtime.linkedIn).not.toBeNull();
-  await expect(runtime.linkedIn!.recover({draftId:'missing-fictional-draft',expectedRevision:1})).rejects.toThrow('draft_missing');
   expect((await auth.store.list('ACCOUNT#'))).toHaveLength(1);
   expect((await auth.store.get<{authority:{owner:string;state:string}}> (`AUTH#${account.id}`))?.data.authority).toMatchObject({owner:'local',state:'local'});
   expect(f.db.raw.prepare("SELECT aggregate_version FROM delegated_event_cursors WHERE workspace_id='ws' AND account_id=? AND stream='research'").get(account.id)).toEqual({aggregate_version:1});
