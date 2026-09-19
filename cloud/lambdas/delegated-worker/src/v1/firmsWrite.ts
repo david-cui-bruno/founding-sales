@@ -75,6 +75,12 @@ export const firmRecordSchema = z.strictObject({
   enteredBy: z.enum(['research', 'hand']),
   /** One line about the firm's evidence; empty for a hand-entered firm, which has none. */
   evidenceSummary: z.string().max(400),
+  /**
+   * Which research pass last wrote this firm's `EVIDENCE#` record, and when (S4). Absent on every record written
+   * before S4 and on a hand-entered firm, which has no evidence at all; `research.firm` sets both together.
+   */
+  researchRevision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+  researchedAt: instant.nullable().optional(),
   routes: z.array(firmRouteSchema).max(100),
   enteredAt: instant,
   updatedAt: instant,

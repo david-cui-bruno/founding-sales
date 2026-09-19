@@ -42,7 +42,17 @@ export type SourceCoordinatorOptions = { auth: WorkerAuth; authorization: Remote
    * untouched. From the day S3 deploys with it false, the old app still shows and dials but no longer sends or
    * polls, and the queue's runner owns email. It enables nothing: it can only take work away from this tick.
    */
-  legacyEmailEnabled?: boolean };
+  legacyEmailEnabled?: boolean;
+  /**
+   * Whether this tick still owns research (slice S4's coexistence switch, `delegated_worker_legacy_research_enabled`).
+   * Absent or true is exactly today's behaviour. False makes the tick skip its research, configurations and
+   * territory backfill phases entirely — they are reported as `skipped`, not as having run and found nothing —
+   * while the tick itself and S1's list build keep running, because the list is what David reads every morning
+   * and it is not a phase. From the day S3 and S4 deploy with both switches false, discovery, per-firm research
+   * and email all live on the queue, and this tick's only remaining work is the list and the old command paths.
+   * It enables nothing: it can only take work away from this tick.
+   */
+  legacyResearchEnabled?: boolean };
 /** What one Places territory batch did. `uncertain` names a page whose response was lost: its spend is retained and it is never re-issued. */
 export type PlacesBatchReport = { outcome: 'completed' | 'exhausted' | 'uncertain' | 'denied' | 'held'; runId: string | null; created: number; routes: number; enqueued: number; drained: number;
   skipped: { no_website: number; website_blocked: number; duplicate_domain: number; duplicate_phone: number; existing_domain: number; existing_phone: number; route_held: number; enqueue_held: number } };
@@ -93,6 +103,10 @@ export function createSourceCoordinator(input: SourceCoordinatorOptions) {
   if (input.authorization.input.auth !== input.auth) throw new Error('source_store_mismatch');
   // S3's coexistence switch. Absent is today's behaviour; false hands email to the queue's runner.
   const legacyEmail = input.legacyEmailEnabled !== false;
+  // S4's coexistence switch. Absent is today's behaviour; false hands research to the queue's jobs.
+  const legacyResearch = input.legacyResearchEnabled !== false;
+  /** The three phases S4's research jobs replace. With the switch false each one is skipped, never run empty. */
+  const RESEARCH_PHASES: readonly TickPhase[] = ['research', 'configurations', 'territoryBackfill'];
   const store = input.auth.store;
   const threads = new DynamoThreadIntakeRepository(store.options);
   const poller = createMailPoller({ authorization: input.authorization, store: threads, fetch: input.fetch });
@@ -430,6 +444,8 @@ export function createSourceCoordinator(input: SourceCoordinatorOptions) {
         const phaseDeadline = new AbortController(); const phaseTimer = setTimeout(() => phaseDeadline.abort(), PHASE_SLICES_MS[index] ?? 10000);
         const phaseSignal = AbortSignal.any([signal, phaseDeadline.signal]);
         const name = phaseNames[index]!;
+        // S4's switch: the phase is not run and not reported as completed. `report.phases` names it `skipped` below.
+        if (!legacyResearch && RESEARCH_PHASES.includes(name)) continue;
         const phaseStartedAt = Date.now();
         try { await phases[index]!(phaseSignal, report); report.phases[name] = phaseSignal.aborted ? 'aborted' : 'completed'; }
         catch { report.phases[name] = signal.aborted ? 'aborted' : 'held'; hold(report, phaseFailures[index]!); }

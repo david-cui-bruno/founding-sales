@@ -1,9 +1,13 @@
 import { z } from 'zod';
-import { accountRecordSchema, type AccountRecord } from '../../../../../src/shared/contracts/accountRecordContract';
+import { accountRecordSchema } from '../../../../../src/shared/contracts/accountRecordContract';
 import type { AccountRoute } from '../../../../../src/shared/contracts/accountContract';
-import { isTerritoryAddableState, isTerritoryMultiZoneState, isTerritoryState, TERRITORY_ADDABLE_STATE_TIME_ZONES, TERRITORY_STATE_TIME_ZONES,
-  territoryStateSchema, type TerritoryState, type TerritoryTimeZone } from '../../../../../src/shared/contracts/territoryClearanceContract';
+import { isTerritoryAddableState, isTerritoryState, TERRITORY_ADDABLE_STATE_TIME_ZONES, TERRITORY_STATE_TIME_ZONES,
+  type TerritoryState, type TerritoryTimeZone } from '../../../../../src/shared/contracts/territoryClearanceContract';
 import type { DynamoStore } from '../dynamoStore';
+// S4 moved the derivation into `evidence.ts` as the single implementation; this adapter and the backfill job
+// both call it, so a firm's state and zone can never be derived two different ways.
+import { deriveStateAndZone, type FirmDerivation, type FirmHold } from './evidence';
+export { deriveStateAndZone, parseUsAddress, type FirmDerivation, type FirmHold } from './evidence';
 import { listFirmRecords, type FirmRecord, type FirmRouteLike } from './firmsWrite';
 import { listSuppressedFirmIds } from './suppression';
 
@@ -29,15 +33,6 @@ import { listSuppressedFirmIds } from './suppression';
  * by exactly the same rule as a researched one.
  */
 
-export type FirmHold = { reason: 'state_not_cleared'; code: 'state_unknown' | 'zone_unknown' };
-export type FirmDerivation =
-  | { source: 'places_formatted_address'; sourceId: string; state: TerritoryState; zoneFrom: 'territory_state_map' | 'addable_state_map' }
-  /** A firm David typed in himself (S2, `add_firm`): he named the state, the zone comes from the same two maps. */
-  | { source: 'hand_entered'; sourceId: null; state: TerritoryState; zoneFrom: 'territory_state_map' | 'addable_state_map' }
-  | { source: 'hand_entered'; sourceId: null; state: TerritoryState | null; zoneFrom: null; reason: 'state_zone_not_recorded' | 'state_not_found' }
-  | { source: 'places_formatted_address'; sourceId: string; state: TerritoryState; zoneFrom: null; reason: 'state_spans_two_zones' | 'state_zone_not_recorded' }
-  | { source: 'places_formatted_address'; sourceId: string; state: null; zoneFrom: null; reason: 'address_missing' | 'state_not_found' }
-  | { source: 'none'; sourceId: null; state: null; zoneFrom: null; reason: 'no_places_source' };
 export type FirmPhone = { routeId: string; number: string; verification: AccountRoute['verification'] };
 export type FirmEnrollment = {
   enrollmentId: string; versionId: string; state: string; currentStepId: string | null; currentStepIndex: number | null;
@@ -59,6 +54,12 @@ export type FirmCard = {
   enteredBy: 'research' | 'hand';
   /** How many fetched sources back the firm's record; zero for a hand-entered firm, which has no evidence yet. */
   sourceCount: number;
+  /**
+   * Which research pass last wrote this firm's `EVIDENCE#` record (S4); zero for a firm nothing has researched.
+   * A firm born on the new path has no `ACCOUNT#` row and therefore no `sourceCount`, so this is what says its
+   * evidence exists.
+   */
+  researchRevision: number;
   suppressed: 'mail_suppression' | 'sequence_stopped' | 'suppression_set' | null;
   /** Calls already made under the old keys (a `CAMPAIGN_EVIDENCE#` call row that was actually dialed). */
   calls: number;
@@ -66,7 +67,6 @@ export type FirmCard = {
 };
 export interface FirmSource { listFirms(): Promise<FirmCard[]> }
 
-const PLACES_SOURCE_PREFIX = 'place-';
 const NOT_A_CALL = new Set(['cancelled', 'not_called']);
 /** Only the fields this adapter reads; the records' full shapes stay with their writers. */
 const enrollmentLightSchema = z.object({ id: z.string(), accountId: z.string(), campaignVersionId: z.string(), currentStepId: z.string().nullable(),
@@ -76,39 +76,6 @@ const territoryEnrollmentLightSchema = z.object({ accountId: z.string(), enrollm
 const evidenceLightSchema = z.object({ accountId: z.string(), channel: z.string(), source: z.string(), outcome: z.string(), observedAt: z.string() });
 const retiredLightSchema = z.object({ accountId: z.string(), routeId: z.string() });
 const suppressionLightSchema = z.object({ accountId: z.string() });
-const placesExcerptSchema = z.object({ formattedAddress: z.string().optional() });
-
-/**
- * The state and city of a United States postal address as Google Places formats it (`street, city, ST 02903, USA`,
- * with or without the ZIP and the country). Pure. Anything that does not end that way, or names a code that is not
- * a US state, is `{ city: null, state: null }`: never a guess.
- */
-export function parseUsAddress(formatted: string): { city: string | null; state: TerritoryState | null } {
-  const match = /,\s*([^,]+?),\s*([A-Z]{2})(?:\s+\d{5}(?:-\d{4})?)?\s*(?:,\s*(?:USA|United States|US))?\s*$/.exec(formatted.trim())
-    ?? /^([^,]+?),\s*([A-Z]{2})(?:\s+\d{5}(?:-\d{4})?)?\s*(?:,\s*(?:USA|United States|US))?\s*$/.exec(formatted.trim());
-  if (!match) return { city: null, state: null };
-  const state = territoryStateSchema.safeParse(match[2]);
-  if (!state.success) return { city: null, state: null };
-  const city = match[1]!.trim();
-  return { city: city.length ? city : null, state: state.data };
-}
-
-/** State, city, zone and the record of how they were derived, from the firm's Places listing source. Pure. */
-export function deriveStateAndZone(record: AccountRecord): { city: string | null; state: TerritoryState | null; timeZone: TerritoryTimeZone | null; derivation: FirmDerivation; hold: FirmHold | null } {
-  const listing = record.sources.find(source => source.id.startsWith(PLACES_SOURCE_PREFIX));
-  if (!listing) return { city: null, state: null, timeZone: null, derivation: { source: 'none', sourceId: null, state: null, zoneFrom: null, reason: 'no_places_source' }, hold: { reason: 'state_not_cleared', code: 'state_unknown' } };
-  let formatted: string | undefined;
-  try { formatted = placesExcerptSchema.parse(JSON.parse(listing.excerpt)).formattedAddress; } catch { formatted = undefined; }
-  const sourceId = listing.id;
-  if (!formatted) return { city: null, state: null, timeZone: null, derivation: { source: 'places_formatted_address', sourceId, state: null, zoneFrom: null, reason: 'address_missing' }, hold: { reason: 'state_not_cleared', code: 'state_unknown' } };
-  const { city, state } = parseUsAddress(formatted);
-  if (!state) return { city: null, state: null, timeZone: null, derivation: { source: 'places_formatted_address', sourceId, state: null, zoneFrom: null, reason: 'state_not_found' }, hold: { reason: 'state_not_cleared', code: 'state_unknown' } };
-  // The fixed territory map first (Texas is there with America/Chicago by David's decision), then the single-zone states he may add.
-  if (isTerritoryState(state)) return { city, state, timeZone: TERRITORY_STATE_TIME_ZONES[state], derivation: { source: 'places_formatted_address', sourceId, state, zoneFrom: 'territory_state_map' }, hold: null };
-  if (isTerritoryAddableState(state)) return { city, state, timeZone: TERRITORY_ADDABLE_STATE_TIME_ZONES[state], derivation: { source: 'places_formatted_address', sourceId, state, zoneFrom: 'addable_state_map' }, hold: null };
-  const reason = isTerritoryMultiZoneState(state) ? 'state_spans_two_zones' : 'state_zone_not_recorded';
-  return { city, state, timeZone: null, derivation: { source: 'places_formatted_address', sourceId, state, zoneFrom: null, reason }, hold: { reason: 'state_not_cleared', code: 'zone_unknown' } };
-}
 
 /** The newest stored version of each route id, whichever shape wrote it. */
 function newestRoutes(routes: readonly FirmRouteLike[]): FirmRouteLike[] {
@@ -181,15 +148,17 @@ export function createAccountFirmSource(store: DynamoStore): FirmSource {
       return { firmId, name: record.account.name, website: record.account.domain, phone, businessEmail, city: derived.city, state: derived.state, timeZone: derived.timeZone,
         derivation: derived.derivation, hold: derived.hold, researchedAt, evidenceScore, enrollment,
         routes, retiredRouteIds: [...(retiredByFirm.get(firmId) ?? new Set<string>())].sort(), enteredBy: 'research', sourceCount: record.sources.length,
+        researchRevision: firmRecords.get(firmId)?.researchRevision ?? 0,
         suppressed: suppressedIds.has(firmId) ? 'suppression_set' : suppressed.has(firmId) ? 'mail_suppression' : enrollment?.state === 'stopped' ? 'sequence_stopped' : null,
         calls: calls.length, lastCall: calls.at(-1) ?? null };
     });
-    // A firm David typed in has no `ACCOUNT#` row of its own; its card comes from its `FIRM#` record, with the same
-    // enrollment, retired-route, call and suppression joins applied, so it is a card like any other.
-    const researched = new Set(cards.map(card => card.firmId));
+    // A firm with no `ACCOUNT#` row of its own — one David typed in (S2) or one a Places page created (S4) — gets
+    // its card from its `FIRM#` record, with the same enrollment, retired-route, call and suppression joins
+    // applied, so it is a card like any other. The old records are what S6 stops writing; this path is what stays.
+    const withAccountRow = new Set(cards.map(card => card.firmId));
     for (const record of firmRecords.values()) {
-      if (researched.has(record.firmId) || record.enteredBy !== 'hand') continue;
-      cards.push(handEnteredCard(record, { territoryByFirm, enrollmentById, versionById, retiredByFirm, callsByFirm, suppressed, suppressedIds }));
+      if (withAccountRow.has(record.firmId)) continue;
+      cards.push(firmRecordCard(record, { territoryByFirm, enrollmentById, versionById, retiredByFirm, callsByFirm, suppressed, suppressedIds }));
     }
     return cards;
   } };
@@ -205,13 +174,20 @@ type FirmJoins = {
   suppressedIds: ReadonlySet<string>;
 };
 
-/** One card for a firm that exists only as a `FIRM#` record: the state David named, the zone the record derived. */
-function handEnteredCard(record: FirmRecord, joins: FirmJoins): FirmCard {
+/** One card for a firm that exists only as a `FIRM#` record: the state it carries, and the zone that record derived. */
+function firmRecordCard(record: FirmRecord, joins: FirmJoins): FirmCard {
   const state = record.state;
   const timeZone = territoryTimeZoneOf(record);
-  const derivation: FirmDerivation = state && timeZone && record.derivedZoneFrom
-    ? { source: 'hand_entered', sourceId: null, state, zoneFrom: record.derivedZoneFrom }
-    : { source: 'hand_entered', sourceId: null, state, zoneFrom: null, reason: state ? 'state_zone_not_recorded' : 'state_not_found' };
+  // A record a Places page created derived its state from that listing's address; a hand-entered one from what
+  // David typed. Both derived the zone through the same two maps, and the derivation names which record it read.
+  const placed = state && timeZone && record.derivedZoneFrom ? { state, zoneFrom: record.derivedZoneFrom } : null;
+  // Annotated rather than inferred: the root TypeScript configuration compiles without `strictNullChecks`, where a
+  // bare `null` in an object literal is read as `any`.
+  const unplaced: { sourceId: null; state: TerritoryState | null; zoneFrom: null; reason: 'state_zone_not_recorded' | 'state_not_found' } =
+    { sourceId: null, state, zoneFrom: null, reason: state ? 'state_zone_not_recorded' : 'state_not_found' };
+  const derivation: FirmDerivation = record.enteredBy === 'research'
+    ? placed ? { source: 'firm_record', sourceId: null, ...placed } : { source: 'firm_record', ...unplaced }
+    : placed ? { source: 'hand_entered', sourceId: null, ...placed } : { source: 'hand_entered', ...unplaced };
   const hold: FirmHold | null = !state ? { reason: 'state_not_cleared', code: 'state_unknown' }
     : !timeZone ? { reason: 'state_not_cleared', code: 'zone_unknown' } : null;
   const territoryRow = joins.territoryByFirm.get(record.firmId);
@@ -222,9 +198,9 @@ function handEnteredCard(record: FirmRecord, joins: FirmJoins): FirmCard {
   const businessEmail = routes.find(route => route.channel === 'email')?.value ?? null;
   const calls = [...(joins.callsByFirm.get(record.firmId) ?? [])].sort((a, b) => a.at < b.at ? -1 : a.at > b.at ? 1 : 0);
   return { firmId: record.firmId, name: record.name, website: record.domain, phone, businessEmail, city: record.city, state, timeZone,
-    derivation, hold, researchedAt: record.enteredAt,
+    derivation, hold, researchedAt: record.researchedAt ?? record.enteredAt,
     evidenceScore: (businessEmail ? 2 : 0) + (phone && (phone.verification === 'published' || phone.verification === 'confirmed') ? 1 : 0),
-    enrollment: null, routes, retiredRouteIds, enteredBy: 'hand', sourceCount: 0,
+    enrollment: null, routes, retiredRouteIds, enteredBy: record.enteredBy, sourceCount: 0, researchRevision: record.researchRevision ?? 0,
     suppressed: joins.suppressedIds.has(record.firmId) ? 'suppression_set' : joins.suppressed.has(record.firmId) ? 'mail_suppression' : null,
     calls: calls.length, lastCall: calls.at(-1) ?? null };
 }
