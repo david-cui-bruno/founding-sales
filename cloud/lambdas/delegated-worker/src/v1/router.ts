@@ -17,6 +17,7 @@ import { planSetStatePosture, postureSummary, readPostures } from './postures';
 import { readQueueSummary } from './queueView';
 import { readSettingsView } from './settings';
 import { planSuppress } from './suppression';
+import { planSetResearchConfig } from './pool';
 import { planApproveTemplate, planSetSendingLimit } from './templates';
 import { readTodayView } from './today';
 
@@ -193,6 +194,14 @@ async function applyCommand(store: DynamoStore, devices: V1Devices, principal: V
         { firmId: command.firmId, draftId: command.draftId, text: command.text ?? null });
       receipt = outcome.applied ? { commandId: command.commandId, outcome: 'applied', reason: null }
         : { commandId: command.commandId, outcome: 'refused', reason: outcome.reason };
+      break;
+    }
+    case 'set_research_config': {
+      // What research may sweep and spend (S4). Narrowing only past the ceiling fixed in code; never a research run.
+      const plan = await planSetResearchConfig(store, command);
+      if (plan.outcome === 'refused') { receipt = { commandId: command.commandId, outcome: 'refused', reason: plan.reason }; break; }
+      items.push(...plan.items);
+      receipt = { commandId: command.commandId, outcome: 'applied', reason: null };
       break;
     }
     case 'approve_followup_draft':

@@ -7,6 +7,7 @@ import { attemptCode, recordAttempt } from './attempts';
 import { createAccountFirmSource, type FirmCard, type FirmSource } from './firms';
 import { EASTERN, endOfLocalDay, localParts } from './localClock';
 import { posturesByState, readPostures, stateClearance } from './postures';
+import { planPoolCounter, poolCountsOf } from './pool';
 
 /**
  * The morning list (FSS target design sections 2 and 4; slice S1). `day.build` runs inside the existing scheduled
@@ -215,7 +216,9 @@ export async function runScheduledDayBuild(store: DynamoStore, options: { firms?
     await backfillDuePointers(store, firms);
     const duePointers = await readDuePointers(store, firms, endOfLocalDay(now, EASTERN));
     const record = buildDayRecord({ firms, postures: posturesByState(postures), now, date: parts.date, listedBefore, duePointers, replyFirms });
-    try { await store.transact([store.put(dayKey(parts.date), record, null)]); }
+    // S4: the pool counter, recounted from exactly the firms this build read, in the same transaction as the list.
+    const pool = await planPoolCounter(store, poolCountsOf({ firms, postures: posturesByState(postures), listedBefore, now }));
+    try { await store.transact([store.put(dayKey(parts.date), record, null), ...pool]); }
     catch (error) {
       // Another tick built this morning between our read and our write: theirs stands.
       if (await store.get<unknown>(dayKey(parts.date))) return { outcome: 'already_built' };
