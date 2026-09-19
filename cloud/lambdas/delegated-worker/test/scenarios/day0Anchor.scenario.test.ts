@@ -7,7 +7,7 @@ import type { QueueClient } from '../../src/queue/queueClient';
 import { runScheduler } from '../../src/scheduler';
 import { dueKey, readDuePointers } from '../../src/v1/dayBuild';
 import { createAccountFirmSource } from '../../src/v1/firms';
-import { sequenceKey, sequenceRecordSchema } from '../../src/v1/sequence';
+import { createSequencePort, sequenceKey, sequenceRecordSchema } from '../../src/v1/sequence';
 import { enrollFirm, listedRouteId, putCallEvidence, putFirm, putTerritoryPolicy, riFirm, setPosture, tickOf } from './firmFixtures';
 import { approveWithFooter, setPostalAddress } from './sendFixtures';
 import { v1Fixture } from './v1Fixture';
@@ -136,6 +136,16 @@ describe('day 0 is the first call, not the enrollment', () => {
     await log(old, { outcome: 'voicemail', observedAt: CALL_AT });
     expect(seq(old)).toMatchObject({ startedAt: ENROLLED_AT, currentStepId: old.steps[1]!.id,
       nextDueAt: '2026-09-11T13:00:00.000Z', lastAdvance: 'continue' });
+  });
+
+  it('leaves a record the carried rule cannot read exactly as it stood: step_unknown is never dressed up as a re-base', async () => {
+    const h = await enrolledFirm(CALL_AT);
+    // A mail job reached the sequence before any call, so the record carries a seed with no frozen steps at all.
+    await createSequencePort(h.f.store).holdStep({ firmId: FIRM_ID, enrollmentId: h.enrolled.enrollment.id, startedAt: ENROLLED_AT,
+      currentStepId: h.steps[2]!.id, nextDueAt: null, stepId: h.steps[2]!.id, code: 'mailbox_not_connected' });
+    expect(seq(h).steps).toEqual([]);
+    await log(h, { outcome: 'voicemail', observedAt: CALL_AT });
+    expect(seq(h)).toMatchObject({ startedAt: ENROLLED_AT, currentStepId: h.steps[2]!.id, lastAdvance: 'step_unknown' });
   });
 
   it('leaves a firm re-entering after its rest on the restart anchor the carried re-entry rule gives it', async () => {

@@ -301,6 +301,7 @@ export async function advanceAfterCall(store: DynamoStore, input: SequenceAdvanc
   // day-7 email at `observedAt + 168 h`. `nextDueAt` is deliberately left where it was: it is what names the
   // stale `DUE#` pointer the transaction below retires. A sequence that already carries a call or a send is
   // never re-based, and a re-entry after rest brings its own restart anchor, which is kept exactly as it is.
+  const anchorBeforeCall = current.startedAt;
   let anchoredOnThisCall = reentry.kind === 'not_resting' && current.startedAt !== input.observedAt
     && isFirstCallOnSequence(current, input.firm);
   if (anchoredOnThisCall) current = { ...current, startedAt: input.observedAt };
@@ -352,7 +353,11 @@ export async function advanceAfterCall(store: DynamoStore, input: SequenceAdvanc
     // A stopped firm, and a firm still resting or in its final rest, is never advanced; the call is still recorded.
     next = { ...current, routeId: dialedRouteId, lastAdvance: current.state === 'stopped' ? current.lastAdvance : reentry.kind === 'final_rest' ? 'rest_final' : 'resting', updatedAt: now };
   } else {
-    next = { ...applyCarried(current, CALL_OUTCOME_ADVANCE[input.outcome], input.observedAt), routeId: dialedRouteId, updatedAt: now };
+    const carried = applyCarried(current, CALL_OUTCOME_ADVANCE[input.outcome], input.observedAt);
+    // The carried rule refused to guess a step that is not in the frozen version: the record stands exactly as it
+    // was, its anchor included, so an honest `step_unknown` is never dressed up as a re-based cadence.
+    if (carried.lastAdvance === 'step_unknown') anchoredOnThisCall = false;
+    next = { ...carried, startedAt: anchoredOnThisCall ? carried.startedAt : anchorBeforeCall, routeId: dialedRouteId, updatedAt: now };
   }
 
   const record = sequenceRecordSchema.parse(anchoredOnThisCall ? { ...next, lastAdvance: REBASED_TO_FIRST_CALL } : next);
