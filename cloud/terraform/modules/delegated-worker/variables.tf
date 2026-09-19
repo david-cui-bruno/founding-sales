@@ -97,6 +97,13 @@ variable "delegated_worker_legacy_email_enabled" {
   nullable    = false
 }
 
+variable "delegated_worker_legacy_research_enabled" {
+  description = "Whether the old five-minute tick still runs its research, configurations and territory backfill phases. True keeps today's behaviour; the S4 deploy directive sets it false, after which Places discovery and per-firm research run only as queue jobs while the tick itself and the morning list build keep running. It never enables a schedule, a grant or a provider call."
+  type        = bool
+  default     = true
+  nullable    = false
+}
+
 variable "worker_source_dir" {
   description = "Caller-owned path to the separately built delegated-worker dist directory. No build is run by Terraform."
   type        = string
