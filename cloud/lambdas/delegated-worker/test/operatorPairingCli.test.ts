@@ -28,6 +28,7 @@ describe('built operator command offline acceptance', () => {
     const response = invoke(input);
     expect(response.error).toBeUndefined(); expect(response.status).toBe(0);
     expect(response.stdout).toContain('Usage: operator-pairing'); expect(response.stdout).toContain('--rotate PAIRING_ID'); expect(response.stderr).toBe('');
+    expect(response.stdout).toContain('--mint-device-code'); expect(response.stdout).toContain('--label TEXT');
   });
   it('validates a dry run without creating output or resolving credentials', () => {
     const response = invoke(args);
@@ -38,6 +39,12 @@ describe('built operator command offline acceptance', () => {
     const dryRotation = invoke([...args.slice(0, args.indexOf('--scopes')), '--scopes', 'commands:write,events:read,google:grant', ...args.slice(args.indexOf('--scopes') + 2), '--rotate', '11111111-1111-4111-8111-111111111111']);
     expect(dryRotation.status).toBe(0); expect(dryRotation.stdout).toContain('No rotation issued'); expect(dryRotation.stderr).toBe('');
     expect(response.stderr).toBe('');
+    // The built command's device-code dry run (S0): valid without --scopes, no IO, and the label is not echoed.
+    const deviceArgs = ['--mint-device-code', ...args.slice(0, args.indexOf('--scopes')), '--label', 'FICTIONAL_LABEL_NO_ECHO', ...args.slice(args.indexOf('--scopes') + 2)];
+    const dryDevice = invoke(deviceArgs);
+    expect(dryDevice.status).toBe(0); expect(dryDevice.stdout).toContain('No device code issued'); expect(dryDevice.stdout).toContain('No IO performed');
+    expect(dryDevice.stdout + dryDevice.stderr).not.toContain('FICTIONAL_LABEL_NO_ECHO'); expect(dryDevice.stderr).toBe('');
+    expect(invoke([...deviceArgs, '--execute']).status).toBe(1);
   });
   it('rejects invalid execution arguments without echoing them', () => {
     const response = invoke([...args, '--execute', '--secret', 'FICTIONAL_SECRET_NO_ECHO']);

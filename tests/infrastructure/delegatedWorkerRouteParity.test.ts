@@ -7,7 +7,10 @@ import { describe, expect, it } from "vitest";
 // TypeScript compiler, subprocess or network. A handler path with no route is
 // unreachable in production (the gateway answers 404 before the Lambda runs);
 // a route with no handler path is dead (the handler itself answers 404).
-const handlerSource = readFileSync(join(process.cwd(), "cloud/lambdas/delegated-worker/src/handler.ts"), "utf8");
+// The handler serves the old routes itself and mounts the rebuilt core's `/v1` routes from src/v1/router.ts
+// (S0), so both files are read: a path literal in either is a path the one Lambda serves.
+const workerSourceFiles = ["cloud/lambdas/delegated-worker/src/handler.ts", "cloud/lambdas/delegated-worker/src/v1/router.ts"] as const;
+const workerSources = workerSourceFiles.map((file) => readFileSync(join(process.cwd(), file), "utf8"));
 const terraformSource = readFileSync(join(process.cwd(), "cloud/terraform/modules/delegated-worker/main.tf"), "utf8");
 
 // Handler paths deliberately served without an API Gateway route. None is
@@ -24,18 +27,25 @@ const methodComparison = /\bmethod\s*(?:===|!==)\s*['"]([A-Z]+)['"]/g;
 
 const handlerPaths = new Set<string>();
 const handlerRoutes = new Set<string>();
-const uncommented = handlerSource.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-for (const line of uncommented.split("\n")) {
-  const paths = [
-    ...[...line.matchAll(pathComparison)].map((match) => match[2]),
-    ...[...line.matchAll(pathList)].flatMap((match) => [...match[1].matchAll(quotedPath)].map((inner) => inner[1])),
-  ];
-  const methods = new Set([...line.matchAll(methodComparison)].map((match) => match[1]));
-  const [method] = methods;
-  for (const path of paths) {
-    handlerPaths.add(path);
-    if (methods.size === 1 && method) handlerRoutes.add(`${method} ${path}`);
+// How many path literals each worker source contributed, so a refactor that hid them cannot silently empty the check.
+const literalsPerSource: number[] = [];
+for (const source of workerSources) {
+  let literals = 0;
+  const uncommented = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  for (const line of uncommented.split("\n")) {
+    const paths = [
+      ...[...line.matchAll(pathComparison)].map((match) => match[2]),
+      ...[...line.matchAll(pathList)].flatMap((match) => [...match[1].matchAll(quotedPath)].map((inner) => inner[1])),
+    ];
+    const methods = new Set([...line.matchAll(methodComparison)].map((match) => match[1]));
+    const [method] = methods;
+    for (const path of paths) {
+      literals += 1;
+      handlerPaths.add(path);
+      if (methods.size === 1 && method) handlerRoutes.add(`${method} ${path}`);
+    }
   }
+  literalsPerSource.push(literals);
 }
 
 const routeList = /delegated_routes\s*=\s*toset\(\[([\s\S]*?)\]\)/.exec(terraformSource);
@@ -47,6 +57,7 @@ const pathOf = (route: string): string => route.split(" ")[1];
 describe("delegated-worker handler and Terraform route parity", () => {
   it("reads both real sources and drives the API gateway route keys from the same set", () => {
     expect(handlerPaths.size).toBeGreaterThan(0);
+    for (const [index, count] of literalsPerSource.entries()) expect(count, `${workerSourceFiles[index]} path literals`).toBeGreaterThan(0);
     expect(terraformRoutes.length).toBeGreaterThan(0);
     expect(new Set(terraformRoutes).size).toBe(terraformRoutes.length);
     for (const route of terraformRoutes) expect(route).toMatch(/^(?:GET|POST) \/[a-z0-9/-]+$/);

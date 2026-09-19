@@ -13,6 +13,7 @@ import { DynamoStore, fingerprint, keyPart, type RepositoryOptions } from './dyn
 import { authorityRecordSchema, executionAuthorityKey, type DynamoExecutionRepository } from './executionRepository';
 import { type RemoteGoogleAuthorization } from './remoteGoogleAuthorization';
 import { mailSuppressionKey } from './threadIntakeRepository';
+import { recordAttempt } from './v1/attempts';
 import { TerritoryPolicyRepository } from './territoryPolicyRepository';
 import { WorkerCampaignRepository, campaignEnrollmentKey, campaignVersionKey } from './workerCampaignRepository';
 
@@ -214,6 +215,7 @@ export function createSequenceEmailWalker(input: SequenceEmailDependencies) {
       report.held++;
       report.heldByReason[reason] = (report.heldByReason[reason] ?? 0) + 1;
       await territory.recordEmailStepOutcome({ accountId, stepId: context.step.id, hold: reason });
+      await recordAttempt(store, { kind: 'hold', outcome: 'held', reason, detail: { code: reason, firmId: accountId }, durationMs: null, ref: accountId });
     };
     const accountRow = await store.get<unknown>(`ACCOUNT#${keyPart(accountId)}`);
     const business = accountRow ? readBusinessEmail(accountRow.data) : null;
@@ -263,6 +265,7 @@ export function createSequenceEmailWalker(input: SequenceEmailDependencies) {
       return;
     }
     report.sent++;
+    await recordAttempt(store, { kind: 'send', outcome: 'ok', reason: null, detail: { code: 'provider_accepted', firmId: accountId, commandId }, durationMs: null, ref: accountId });
     await territory.recordEmailStepOutcome({ accountId, stepId: context.step.id, sent: { templateId, commandId, sentAt: store.now() } });
   }
 
