@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 import { pairRedeemResponseSchema } from '../../../../../src/shared/contracts/v1Contract';
 import { DynamoStore } from '../../src/dynamoStore';
 import { DEVICE_PREFIX, PAIR_FAILURE_LIMIT, PAIRCODE_PREFIX, pairFailureCounterKey, V1Devices, V1PairRefused, V1Unauthenticated } from '../../src/v1/devices';
+import { listAttempts } from '../../src/v1/attempts';
 import { ConditionalCommandHarness } from '../sdkHarness';
+import { v1Fixture } from './v1Fixture';
 
 /**
  * Pairing with one device token, on the real store and the in-memory Dynamo harness. The code is minted the
@@ -107,5 +109,56 @@ describe('device pairing on the store', () => {
       await expect(f.devices.mintPairCode(input)).rejects.toThrow();
     }
     expect(f.db.dump()).toHaveLength(0);
+  });
+});
+
+describe('POST /v1/pair/redeem on the real handler', () => {
+  it('redeems a minted code for a token once, refuses the same code, an expired code and the sixth failure in an hour, and records every attempt', async () => {
+    // Minted at 12:50 so the hour boundary falls inside the codes' lifetime, as in the store-level scenario.
+    const f = v1Fixture('2026-09-18T12:50:00.000Z');
+    const minted = await f.devices.mintPairCode({ label: 'David MacBook', expiresInSeconds: 600 });
+    const expired = await f.devices.mintPairCode({ label: 'Old code', expiresInSeconds: 60 });
+    f.advance('2026-09-18T12:51:00.000Z');
+    // One second between requests: same-instant attempts share a key prefix and the log promises no order among them.
+    let second = 0;
+    const redeem = (body: unknown, query?: string) => { f.advance(`2026-09-18T12:51:${String(++second).padStart(2, '0')}.000Z`); return f.request('POST', '/v1/pair/redeem', { body, query }); };
+
+    const redeemed = await redeem({ code: minted.code });
+    expect(redeemed.statusCode).toBe(200);
+    const token = pairRedeemResponseSchema.parse(f.json(redeemed));
+    expect(token.workspaceId).toBe('ws'); expect(token.deviceToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(JSON.stringify(f.db.dump())).not.toContain(token.deviceToken);
+    expect(JSON.stringify(f.db.dump())).not.toContain(minted.code);
+    // The token works on the authenticated route straight away.
+    expect((await f.request('GET', '/v1/diagnostics', { authorization: `Bearer ${token.deviceToken}` })).statusCode).toBe(200);
+
+    const again = await redeem({ code: minted.code });
+    expect(again.statusCode).toBe(400); expect(f.json(again)).toEqual({ error: 'pair_refused', reason: 'code_consumed' });
+    const stale = await redeem({ code: expired.code });
+    expect(stale.statusCode).toBe(400); expect(f.json(stale)).toEqual({ error: 'pair_refused', reason: 'code_expired' });
+    const malformed = await redeem({ code: 'x' });
+    expect(malformed.statusCode).toBe(400); expect(f.json(malformed)).toEqual({ error: 'pair_refused', reason: 'code_invalid' });
+    // A body the contract refuses is invalid_request and also counts as nothing more than a failed pairing attempt.
+    const schema = await redeem({ code: 'A'.repeat(43), extra: true });
+    expect(schema.statusCode).toBe(400); expect(f.json(schema)).toEqual({ error: 'invalid_request' });
+    expect((await redeem({ code: 'A'.repeat(43) })).statusCode).toBe(400);
+    expect((await redeem({ code: 'B'.repeat(43) })).statusCode).toBe(400);
+    // That was the fifth failure of the hour; the sixth is refused before any code is looked at.
+    const fresh = await f.devices.mintPairCode({ label: 'Second Mac', expiresInSeconds: 600 });
+    const sixth = await redeem({ code: fresh.code });
+    expect(sixth.statusCode).toBe(429); expect(f.json(sixth)).toEqual({ error: 'pair_refused', reason: 'too_many_failures' });
+    expect(f.db.dump().filter(item => item.sk!.S!.startsWith(DEVICE_PREFIX))).toHaveLength(1);
+    // GET on the redeem path is not a route; a query string on it is refused by the handler's allowlist.
+    expect((await f.request('GET', '/v1/pair/redeem')).statusCode).toBe(404);
+    expect((await redeem({ code: fresh.code }, 'kind=tick')).statusCode).toBe(400);
+
+    const attempts = await listAttempts(f.store, { kind: 'pairing' });
+    expect(attempts.map(attempt => [attempt.outcome, attempt.reason])).toEqual([
+      ['failed', 'too_many_failures'], ['failed', 'code_unknown'], ['failed', 'code_unknown'], ['failed', 'invalid_request'],
+      ['failed', 'code_invalid'], ['failed', 'code_expired'], ['failed', 'code_consumed'], ['ok', null]]);
+    expect(attempts.at(-1)).toMatchObject({ ref: token.deviceId, detail: 'device paired' });
+    // In the next hour the fresh code redeems.
+    f.advance('2026-09-18T13:00:30.000Z');
+    expect((await f.request('POST', '/v1/pair/redeem', { body: { code: fresh.code } })).statusCode).toBe(200);
   });
 });

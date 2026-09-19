@@ -21,6 +21,7 @@ import { RemoteGoogleAuthorization, type RemoteGoogleConfig } from './remoteGoog
 import { googleGrantDisclosure, googleGrantPurposeSchema, personalGoogleGrantDisclosure } from './googleGrantCapabilities';
 import { remoteGoogleGrantBeginSchema, remoteGoogleGrantSelectorSchema } from '../../../../src/shared/contracts/remoteGoogleGrantContract';
 import { DynamoReadUnavailable, type DynamoAdapter } from './dynamoStore';
+import { v1Router } from './v1/router';
 export type WorkerHttpResponse = { statusCode: number; body: string; headers: Record<string, string> };
 const headers = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer',
   'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'", 'Strict-Transport-Security': 'max-age=31536000', 'X-Content-Type-Options': 'nosniff' };
@@ -53,9 +54,11 @@ export function createWorkerHandler(input: { auth: WorkerAuth; host: string; goo
         if (Buffer.byteLength(JSON.stringify(selected.payload), 'utf8') > 200000) return response(400, { error: 'worker_request_rejected' });
       }
       const query = new URLSearchParams(event.rawQueryString);
-      const allowed = path === '/oauth/callback' ? ['state', 'code', 'error', 'scope', 'authuser', 'prompt', 'hd', 'iss'] : path === '/events' ? ['cursor'] : ['/google/status', '/google/disclosure'].includes(path) ? ['purpose'] : [];
+      const allowed = path === '/v1/diagnostics' ? ['kind', 'limit'] : path === '/oauth/callback' ? ['state', 'code', 'error', 'scope', 'authuser', 'prompt', 'hd', 'iss'] : path === '/events' ? ['cursor'] : ['/google/status', '/google/disclosure'].includes(path) ? ['purpose'] : [];
       for (const key of query.keys()) if (!allowed.includes(key) || query.getAll(key).length !== 1) return response(400, { error: 'worker_invalid_request' });
       const body = () => JSON.parse(event.body ?? '{}') as unknown;
+      // The rebuilt core's routes (S0). Mounted here so David only redeploys the worker; the router owns its own errors.
+      if (path.startsWith('/v1/')) return v1Router({ auth: input.auth, method, path, query, authorization: event.headers.authorization, body, respond: response });
       if (path === '/accounts/preparation' && method === 'POST') {
         let request: unknown;
         try { request = body(); } catch { return response(400, { error: 'worker_invalid_request' }); }

@@ -69,7 +69,8 @@ export async function listAttempts(store: DynamoStore, input: { kind?: AttemptKi
     const record = attemptRecordSchema.safeParse(parsed);
     return record.success ? [{ key: item.sk.S, record: record.data }] : [];
   });
-  // Newest first whatever order the adapter returned; a fixed clock leaves same-instant rows in key order.
+  // Newest first whatever order the adapter returned. Rows written in the same millisecond differ only by their
+  // random suffix, so the log promises no order among them; a reader that cares compares instants, not positions.
   rows.sort((a, b) => a.key < b.key ? 1 : a.key > b.key ? -1 : 0);
   return rows.filter(row => !input.kind || row.record.kind === input.kind).slice(0, limit).map(row => row.record);
 }
