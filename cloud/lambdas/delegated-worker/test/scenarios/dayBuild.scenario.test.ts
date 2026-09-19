@@ -1,9 +1,41 @@
 import { describe, expect, it } from 'vitest';
+import { backfillDuePointers, dueKey, duePointerSchema, readDuePointers } from '../../src/v1/dayBuild';
 import { createAccountFirmSource, parseUsAddress } from '../../src/v1/firms';
 import { enrollFirm, listedRouteId, putCallEvidence, putFirm, putMailSuppression, putRetiredRoute, putTerritoryPolicy } from './firmFixtures';
 import { v1Fixture } from './v1Fixture';
 
 const AT = '2026-09-17T15:00:00.000Z';
+
+describe('DUE#<nextDueAt>#<firmId> pointers (S1 item 3): maintained from the enrollment records until S3 writes them transactionally', () => {
+  it('backfills one pointer per active enrollment with a due instant, idempotently, and the range read verifies each against its enrollment', async () => {
+    const f = v1Fixture(AT);
+    const store = f.store;
+    const policy = await putTerritoryPolicy(store, '2026-09-01T12:00:00.000Z');
+    for (const [id, phone] of [['account-a', '+14015550220'], ['account-b', '+14015550221'], ['account-c', '+14015550222']] as const) {
+      await putFirm(store, { id, name: `Firm ${id}`, address: `1 Hope St, Providence, RI 02906, USA`, phone, researchedAt: AT });
+    }
+    const a = await enrollFirm(store, { firmId: 'account-a', routeId: listedRouteId('account-a', '+14015550220'), policy, startedAt: '2026-09-17T13:00:00.000Z' });
+    const b = await enrollFirm(store, { firmId: 'account-b', routeId: listedRouteId('account-b', '+14015550221'), policy, startedAt: '2026-09-15T13:00:00.000Z', stepIndex: 1 });
+    await enrollFirm(store, { firmId: 'account-c', routeId: listedRouteId('account-c', '+14015550222'), policy, startedAt: '2026-09-10T13:00:00.000Z', state: 'paused', nextDueAt: null, restingUntil: '2027-03-01T00:00:00.000Z' });
+    const firms = await createAccountFirmSource(store).listFirms();
+    expect(await backfillDuePointers(store, firms)).toEqual({ written: 2, present: 0 });
+    const keys = () => f.db.dump().map(item => item.sk!.S!).filter(sk => sk.startsWith('DUE#')).sort();
+    expect(keys()).toEqual([dueKey('2026-09-17T13:00:00.000Z', 'account-a'), dueKey('2026-09-18T13:00:00.000Z', 'account-b')].sort());
+    expect(duePointerSchema.parse(f.db.inspect(dueKey('2026-09-18T13:00:00.000Z', 'account-b')))).toEqual({ version: 1, firmId: 'account-b', enrollmentId: b.enrollment.id,
+      stepId: b.version.steps[1]!.id, nextDueAt: '2026-09-18T13:00:00.000Z', writtenAt: AT });
+    // A second pass writes nothing: the pointers are already there.
+    expect(await backfillDuePointers(store, firms)).toEqual({ written: 0, present: 2 });
+    expect(keys()).toHaveLength(2);
+    // The range read to the end of the Eastern day of the 17th sees only A; to the end of the 18th, both.
+    expect((await readDuePointers(store, firms, '2026-09-18T03:59:59.999Z')).map(entry => entry.firmId)).toEqual(['account-a']);
+    expect((await readDuePointers(store, firms, '2026-09-19T03:59:59.999Z')).map(entry => entry.firmId)).toEqual(['account-a', 'account-b']);
+    // A pointer whose enrollment has since moved on is stale: skipped, never offered. (Old keys cannot be deleted: the role has no DeleteItem.)
+    await store.transact([store.put(dueKey('2026-09-16T13:00:00.000Z', 'account-a'), { version: 1, firmId: 'account-a', enrollmentId: a.enrollment.id, stepId: a.version.steps[0]!.id,
+      nextDueAt: '2026-09-16T13:00:00.000Z', writtenAt: '2026-09-16T12:00:00.000Z' }, null)]);
+    const read = await readDuePointers(store, firms, '2026-09-19T03:59:59.999Z');
+    expect(read.map(entry => [entry.firmId, entry.nextDueAt])).toEqual([['account-a', '2026-09-17T13:00:00.000Z'], ['account-b', '2026-09-18T13:00:00.000Z']]);
+  });
+});
 
 describe('the firm read adapter (S1 item 1): a FirmCard from today\'s records', () => {
   it('parses the state and city out of a Places formatted address, or says it could not', () => {
