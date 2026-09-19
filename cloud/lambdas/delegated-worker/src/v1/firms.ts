@@ -54,6 +54,12 @@ export type FirmCard = {
   enteredBy: 'research' | 'hand';
   /** How many fetched sources back the firm's record; zero for a hand-entered firm, which has no evidence yet. */
   sourceCount: number;
+  /**
+   * Which research pass last wrote this firm's `EVIDENCE#` record (S4); zero for a firm nothing has researched.
+   * A firm born on the new path has no `ACCOUNT#` row and therefore no `sourceCount`, so this is what says its
+   * evidence exists.
+   */
+  researchRevision: number;
   suppressed: 'mail_suppression' | 'sequence_stopped' | 'suppression_set' | null;
   /** Calls already made under the old keys (a `CAMPAIGN_EVIDENCE#` call row that was actually dialed). */
   calls: number;
@@ -143,15 +149,17 @@ export function createAccountFirmSource(store: DynamoStore): FirmSource {
       return { firmId, name: record.account.name, website: record.account.domain, phone, businessEmail, city: derived.city, state: derived.state, timeZone: derived.timeZone,
         derivation: derived.derivation, hold: derived.hold, researchedAt, evidenceScore, enrollment,
         routes, retiredRouteIds: [...(retiredByFirm.get(firmId) ?? new Set<string>())].sort(), enteredBy: 'research', sourceCount: record.sources.length,
+        researchRevision: firmRecords.get(firmId)?.researchRevision ?? 0,
         suppressed: suppressedIds.has(firmId) ? 'suppression_set' : suppressed.has(firmId) ? 'mail_suppression' : enrollment?.state === 'stopped' ? 'sequence_stopped' : null,
         calls: calls.length, lastCall: calls.at(-1) ?? null };
     });
-    // A firm David typed in has no `ACCOUNT#` row of its own; its card comes from its `FIRM#` record, with the same
-    // enrollment, retired-route, call and suppression joins applied, so it is a card like any other.
-    const researched = new Set(cards.map(card => card.firmId));
+    // A firm with no `ACCOUNT#` row of its own — one David typed in (S2) or one a Places page created (S4) — gets
+    // its card from its `FIRM#` record, with the same enrollment, retired-route, call and suppression joins
+    // applied, so it is a card like any other. The old records are what S6 stops writing; this path is what stays.
+    const withAccountRow = new Set(cards.map(card => card.firmId));
     for (const record of firmRecords.values()) {
-      if (researched.has(record.firmId) || record.enteredBy !== 'hand') continue;
-      cards.push(handEnteredCard(record, { territoryByFirm, enrollmentById, versionById, retiredByFirm, callsByFirm, suppressed, suppressedIds }));
+      if (withAccountRow.has(record.firmId)) continue;
+      cards.push(firmRecordCard(record, { territoryByFirm, enrollmentById, versionById, retiredByFirm, callsByFirm, suppressed, suppressedIds }));
     }
     return cards;
   } };
@@ -167,13 +175,17 @@ type FirmJoins = {
   suppressedIds: ReadonlySet<string>;
 };
 
-/** One card for a firm that exists only as a `FIRM#` record: the state David named, the zone the record derived. */
-function handEnteredCard(record: FirmRecord, joins: FirmJoins): FirmCard {
+/** One card for a firm that exists only as a `FIRM#` record: the state it carries, and the zone that record derived. */
+function firmRecordCard(record: FirmRecord, joins: FirmJoins): FirmCard {
   const state = record.state;
   const timeZone = territoryTimeZoneOf(record);
-  const derivation: FirmDerivation = state && timeZone && record.derivedZoneFrom
-    ? { source: 'hand_entered', sourceId: null, state, zoneFrom: record.derivedZoneFrom }
-    : { source: 'hand_entered', sourceId: null, state, zoneFrom: null, reason: state ? 'state_zone_not_recorded' : 'state_not_found' };
+  // A record a Places page created derived its state from that listing's address; a hand-entered one from what
+  // David typed. Both derived the zone through the same two maps, and the derivation names which record it read.
+  const placed = state && timeZone && record.derivedZoneFrom ? { state, zoneFrom: record.derivedZoneFrom } : null;
+  const unplaced = { sourceId: null, state, zoneFrom: null, reason: (state ? 'state_zone_not_recorded' : 'state_not_found') } as const;
+  const derivation: FirmDerivation = record.enteredBy === 'research'
+    ? placed ? { source: 'firm_record', sourceId: null, ...placed } : { source: 'firm_record', ...unplaced }
+    : placed ? { source: 'hand_entered', sourceId: null, ...placed } : { source: 'hand_entered', ...unplaced };
   const hold: FirmHold | null = !state ? { reason: 'state_not_cleared', code: 'state_unknown' }
     : !timeZone ? { reason: 'state_not_cleared', code: 'zone_unknown' } : null;
   const territoryRow = joins.territoryByFirm.get(record.firmId);
@@ -184,9 +196,9 @@ function handEnteredCard(record: FirmRecord, joins: FirmJoins): FirmCard {
   const businessEmail = routes.find(route => route.channel === 'email')?.value ?? null;
   const calls = [...(joins.callsByFirm.get(record.firmId) ?? [])].sort((a, b) => a.at < b.at ? -1 : a.at > b.at ? 1 : 0);
   return { firmId: record.firmId, name: record.name, website: record.domain, phone, businessEmail, city: record.city, state, timeZone,
-    derivation, hold, researchedAt: record.enteredAt,
+    derivation, hold, researchedAt: record.researchedAt ?? record.enteredAt,
     evidenceScore: (businessEmail ? 2 : 0) + (phone && (phone.verification === 'published' || phone.verification === 'confirmed') ? 1 : 0),
-    enrollment: null, routes, retiredRouteIds, enteredBy: 'hand', sourceCount: 0,
+    enrollment: null, routes, retiredRouteIds, enteredBy: record.enteredBy, sourceCount: 0, researchRevision: record.researchRevision ?? 0,
     suppressed: joins.suppressedIds.has(record.firmId) ? 'suppression_set' : joins.suppressed.has(record.firmId) ? 'mail_suppression' : null,
     calls: calls.length, lastCall: calls.at(-1) ?? null };
 }

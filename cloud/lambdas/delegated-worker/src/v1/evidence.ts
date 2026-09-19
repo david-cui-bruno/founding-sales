@@ -42,6 +42,8 @@ const hex64 = z.string().regex(/^[a-f0-9]{64}$/);
 
 /** One fetched page as its receipt recorded it: where it came from, when, the digest of the bytes read, and the text kept. */
 export const evidenceSourceSchema = z.strictObject({
+  /** The receipt's own id, which every extracted fact quotes, so a claim can be traced to the page it came from. */
+  id: z.string().min(1).max(200),
   url: z.string().min(1).max(2048),
   fetchedAt: instant,
   sha256: hex64,
@@ -162,6 +164,13 @@ export type FirmDerivation =
   | { source: 'places_formatted_address'; sourceId: string; state: TerritoryState; zoneFrom: 'territory_state_map' | 'addable_state_map' }
   /** A firm David typed in himself (S2, `add_firm`): he named the state, the zone comes from the same two maps. */
   | { source: 'hand_entered'; sourceId: null; state: TerritoryState; zoneFrom: 'territory_state_map' | 'addable_state_map' }
+  /**
+   * A firm that exists only as a `FIRM#` record because a Places page created it (S4). The listing's own
+   * address is what derived the state, at the instant the page landed; the record keeps the answer, not the
+   * source id, so the card says where it read it from rather than claiming a citation it cannot produce.
+   */
+  | { source: 'firm_record'; sourceId: null; state: TerritoryState; zoneFrom: 'territory_state_map' | 'addable_state_map' }
+  | { source: 'firm_record'; sourceId: null; state: TerritoryState | null; zoneFrom: null; reason: 'state_zone_not_recorded' | 'state_not_found' }
   | { source: 'hand_entered'; sourceId: null; state: TerritoryState | null; zoneFrom: null; reason: 'state_zone_not_recorded' | 'state_not_found' }
   | { source: 'places_formatted_address'; sourceId: string; state: TerritoryState; zoneFrom: null; reason: 'state_spans_two_zones' | 'state_zone_not_recorded' }
   | { source: 'places_formatted_address'; sourceId: string; state: null; zoneFrom: null; reason: 'address_missing' | 'state_not_found' }

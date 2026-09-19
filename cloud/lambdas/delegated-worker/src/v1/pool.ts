@@ -83,7 +83,8 @@ export function poolCountsOf(input: { firms: readonly FirmCard[]; postures: Read
   let researched = 0, unlisted = 0, postureCleared = 0;
   for (const firm of input.firms) {
     if (firm.suppressed) continue;
-    if (firm.sourceCount === 0 && firm.enteredBy === 'research') continue;
+    // Evidence behind the firm, in either shape: fetched sources on the old record, or a research revision on the new one.
+    if (firm.sourceCount === 0 && firm.researchRevision === 0) continue;
     researched++;
     if (input.listedBefore.has(firm.firmId) || firm.calls > 0) continue;
     unlisted++;
@@ -122,7 +123,8 @@ export async function remainingResearchToday(store: DynamoStore, now?: string): 
   return { date, spent, budget, remaining: Math.max(0, budget - spent) };
 }
 
-export type ResearchSpend = { spent: number; budget: number; exhausted: boolean; reason: 'budget_exhausted' | null };
+/** `charged` is the only thing a caller should branch on: false means nothing was spent and nothing may be fetched. */
+export type ResearchSpend = { charged: boolean; spent: number; budget: number; exhausted: boolean; reason: 'budget_exhausted' | null };
 
 /**
  * Records `units` of research spend against today's counter, before the work they pay for. A counter that is
@@ -138,7 +140,7 @@ export async function spendResearch(store: DynamoStore, input: { units: number; 
   const held = row ? researchCounterSchema.safeParse(row.data) : null;
   const budget = held?.success ? held.data.budget : (await readResearchSettings(store)).record.dailyBudget;
   const spent = held?.success ? held.data.spent : 0;
-  if (spent >= budget) return { spent, budget, exhausted: true, reason: 'budget_exhausted' };
+  if (spent >= budget) return { charged: false, spent, budget, exhausted: true, reason: 'budget_exhausted' };
   const next = researchCounterSchema.parse({ version: 1, date, spent: spent + units, budget, updatedAt: store.now() });
   const ttl = Math.floor(Date.parse(at) / 1000) + RESEARCH_COUNTER_TTL_SECONDS;
   try { await store.transact([store.put(key, next, row?.rev ?? null, { ttl })]); }
@@ -146,9 +148,10 @@ export async function spendResearch(store: DynamoStore, input: { units: number; 
     // Another job spent first. Re-read rather than overwrite: nobody's spend is ever lost to a race.
     const now = await readResearchCounter(store, date);
     const settled = now ?? next;
-    return { spent: settled.spent, budget: settled.budget, exhausted: settled.spent >= settled.budget, reason: settled.spent >= settled.budget ? 'budget_exhausted' : null };
+    return { charged: settled !== null, spent: settled.spent, budget: settled.budget, exhausted: settled.spent >= settled.budget,
+      reason: settled.spent >= settled.budget ? 'budget_exhausted' : null };
   }
-  return { spent: next.spent, budget, exhausted: next.spent >= budget, reason: next.spent >= budget ? 'budget_exhausted' : null };
+  return { charged: true, spent: next.spent, budget, exhausted: next.spent >= budget, reason: next.spent >= budget ? 'budget_exhausted' : null };
 }
 
 // ---------------------------------------------------------------------------------------------------------
