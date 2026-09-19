@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { accountInstantSchema } from '../../../../../src/shared/contracts/accountContract';
 import { territoryCallPolicySchema, type TerritoryCallPolicy } from '../../../../../src/shared/contracts/territoryCallPolicyContract';
 import { v1CallOutcomeSchema, v1FirmViewSchema, type LogCallOutcomeCommand, type TodayCard, type TodayLane, type TodayNextStep,
-  type V1CallOutcome, type V1FirmCall, type V1FirmRoute, type V1FirmStatus, type V1FirmView, type V1PendingCallback } from '../../../../../src/shared/contracts/v1Contract';
+  type V1FirmCall, type V1FirmRoute, type V1FirmStatus, type V1FirmView, type V1PendingCallback } from '../../../../../src/shared/contracts/v1Contract';
 import { keyPart, type DynamoStore } from '../dynamoStore';
 import { territoryCallPolicyKey } from '../territoryPolicyRepository';
 import { evaluateDial, type DialEvaluation } from './callWindow';
@@ -268,7 +268,6 @@ export async function readFirmView(store: DynamoStore, firmId: string, options: 
     .map((route): V1FirmRoute => ({ routeId: route.id, channel: route.channel === 'phone' ? 'phone' : 'email', value: route.value, verification: route.verification,
       retired: retired.has(route.id), suppressed: suppressedHandles.has(route.value) }))
     .sort((a, b) => a.routeId < b.routeId ? -1 : a.routeId > b.routeId ? 1 : 0);
-  const pending = pendingCallbackOf(callbacks);
   const dial = suppression ? { dialAllowed: false, holdReason: 'suppressed' as const, holdCode: 'suppressed' as const, localTime: null, openNow: null } : dialAt(firm, asOf);
   const holds = [] as V1FirmView['holds'];
   if (suppression) holds.push({ reason: 'suppressed', code: 'suppressed', count: 1 });
@@ -314,6 +313,3 @@ export async function lastCallsByFirm(store: DynamoStore): Promise<Map<string, C
   }
   return last;
 }
-
-/** The outcome a card shows, as a closed word the attempt reason schema accepts. Pure. */
-export const callOutcomeWord = (outcome: V1CallOutcome): string => v1CallOutcomeSchema.parse(outcome);
