@@ -7,7 +7,7 @@ import { listAttempts } from '../../src/v1/attempts';
 import { runScheduledDayBuild } from '../../src/v1/dayBuild';
 import { firmKey, firmRecordSchema } from '../../src/v1/firmsWrite';
 import { enqueueResearch, pageHashOf, queryHashOf, readResearchQueryCursor, researchedFirmId, researchQueryKey,
-  runResearchBackfillPage, runResearchFirmJob, RESEARCH_POOL_TARGET } from '../../src/v1/research';
+  runResearchBackfillPage, runResearchFirmJob, RESEARCH_FIRM_JOBS_PER_TICK, RESEARCH_PAGES_PER_TICK, RESEARCH_POOL_TARGET } from '../../src/v1/research';
 import { planSuppress } from '../../src/v1/suppression';
 import { deriveStateAndZone, evidenceKey, evidenceRecordSchema, evidenceSummaryLine, EVIDENCE_EXCERPT_MAX, EVIDENCE_MAX_SOURCES,
   readEvidence, writeEvidence } from '../../src/v1/evidence';
@@ -326,5 +326,51 @@ describe('research.backfill_page and research.firm on the real runner', () => {
     const built = await runScheduledDayBuild(f.store);
     expect(built.outcome).toBe('built');
     expect(await readPoolCounter(f.store)).toMatchObject({ researched: 3, unlisted: 3, postureCleared: 3 });
+  });
+
+  it('offers at most five pages a tick, and never a job already queued, in flight or inside its backoff', async () => {
+    const f = v1Fixture(START);
+    const { bearer } = await f.pairDevice();
+    const queries = Array.from({ length: 8 }, (_, n) => `property manager in Fictional City ${n + 1}`);
+    const before = await readResearchSettings(f.store);
+    await f.request('POST', '/v1/commands', { authorization: bearer, body: { commandId: randomUUID(), kind: 'set_research_config',
+      expectedRevision: before.record.revision, queries } });
+
+    const queue = recordingQueue();
+    const first = await enqueueResearch(f.store, queue, f.now());
+    expect(first.enqueued).toHaveLength(RESEARCH_PAGES_PER_TICK);
+
+    // The next tick: the five already queued are skipped as in flight, and the three remaining queries get theirs.
+    const second = await enqueueResearch(f.store, queue, f.now());
+    expect(second.enqueued).toHaveLength(queries.length - RESEARCH_PAGES_PER_TICK);
+    expect(second.skipped.map(entry => entry.reason)).toEqual(Array.from({ length: RESEARCH_PAGES_PER_TICK }, () => 'in_flight'));
+
+    // A third tick has nothing left to offer: every query's frontier page is already on the queue.
+    const third = await enqueueResearch(f.store, queue, f.now());
+    expect(third.enqueued).toEqual([]);
+    expect(third.skipped).toHaveLength(queries.length);
+
+    // A job that failed its last attempt is not offered again inside its backoff window, and is after it.
+    const failed = first.enqueued[0]!.jobId;
+    const record = jobRecordSchema.parse(f.db.inspect(jobKey(failed)));
+    await f.store.transact([f.store.put(jobKey(failed), jobRecordSchema.parse({ ...record, state: 'failed', attempt: 1,
+      lastError: 'provider_error', lastAttemptAt: START, leaseUntil: null }), 1)]);
+    const inBackoff = await enqueueResearch(f.store, queue, '2026-09-18T12:30:00.000Z');
+    expect(inBackoff.skipped.some(entry => entry.jobId === failed && entry.reason === 'backoff')).toBe(true);
+    const afterBackoff = await enqueueResearch(f.store, queue, '2026-09-18T14:00:00.000Z');
+    expect(afterBackoff.enqueued.some(job => job.jobId === failed)).toBe(true);
+  });
+
+  it('offers at most thirty per-firm jobs a tick, for firms a page created and nothing has researched', async () => {
+    const f = v1Fixture(START);
+    const now = f.now();
+    for (let n = 0; n < 35; n++) {
+      const firmId = researchedFirmId(`place-bulk-${n}`);
+      await f.store.transact([f.store.put(firmKey(firmId), { version: 1, firmId, name: `Fictional Firm ${n}`, domain: `firm-${n}.example`,
+        city: 'Providence', state: 'RI', timeZone: 'America/New_York', derivedZoneFrom: 'territory_state_map', status: 'new',
+        enteredBy: 'research', evidenceSummary: '', researchRevision: 0, researchedAt: null, routes: [], enteredAt: now, updatedAt: now }, null)]);
+    }
+    const report = await enqueueResearch(f.store, recordingQueue(), now);
+    expect(report.enqueued.filter(job => job.kind === 'research.firm')).toHaveLength(RESEARCH_FIRM_JOBS_PER_TICK);
   });
 });
