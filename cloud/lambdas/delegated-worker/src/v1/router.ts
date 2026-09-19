@@ -8,8 +8,20 @@ import type { WorkerAuth } from '../workerAuth';
 import { listAttempts, recordAttempt } from './attempts';
 import { V1Devices, V1PairRefused, V1Unauthenticated, type V1Principal } from './devices';
 import { readLastTick } from './lastTick';
+import { applyReplyDecision, approveDraft, requestFollowup } from './mail';
+import type { MailboxAccess } from './mailbox';
 import { planSetStatePosture, postureSummary, readPostures } from './postures';
+import { readQueueSummary } from './queueView';
+import { planApproveTemplate, planSetSendingLimit } from './templates';
 import { readTodayView } from './today';
+
+/**
+ * The mailbox and the network as the API sees them: not at all. The three mailbox commands only write records, and
+ * the modules they share with the runner take those boundaries as arguments, so this is what the API passes in.
+ * A command that somehow tried to reach a mailbox from here would be refused rather than quietly succeeding.
+ */
+const mailboxRefused: MailboxAccess = { access: async () => ({ connected: false, reason: 'mailbox_not_connected' }) };
+const fetchRefused: typeof globalThis.fetch = async () => { throw new Error('api_has_no_provider_access'); };
 
 /**
  * The `/v1` routes of the rebuilt core (FSS target design section 3), mounted inside the existing handler so
@@ -91,6 +103,49 @@ async function applyCommand(store: DynamoStore, devices: V1Devices, principal: V
       items.push(plan.item); receipt = { commandId: command.commandId, outcome: 'applied', reason: null };
       break;
     }
+    case 'approve_template': {
+      // The standing approval (S3). Refused outright without the footer block or a postal address; approving never sends.
+      const plan = await planApproveTemplate(store, command);
+      if ('refused' in plan) receipt = { commandId: command.commandId, outcome: 'refused', reason: plan.refused.applied ? 'template_refused' : plan.refused.reason };
+      else { items.push(plan.item); receipt = { commandId: command.commandId, outcome: 'applied', reason: null }; }
+      break;
+    }
+    case 'set_sending_limit': {
+      // Narrowing only: a request that would widen any number past the ceiling fixed in code is refused whole.
+      const plan = await planSetSendingLimit(store, command);
+      if ('refused' in plan) receipt = { commandId: command.commandId, outcome: 'refused', reason: plan.refused.applied ? 'sending_limit_refused' : plan.refused.reason };
+      else { items.push(plan.item); receipt = { commandId: command.commandId, outcome: 'applied', reason: null }; }
+      break;
+    }
+    // The three mailbox commands (S3) write records of their own before the receipt, because each one touches more
+    // than one key: a decision writes REPLY# then the suppression set and the sequence, an approval writes DRAFT#.
+    // Every one of those writes is idempotent by construction (compare-and-set on the record's own revision, or
+    // absent-fenced), so a retry that lands before the receipt did repeats nothing; what it cannot promise is that
+    // the effect and the receipt commit together, which is why the caller is still refused if its device is revoked
+    // between the two. Approving a draft never sends it: the scheduler enqueues `mail.send_followup`, the runner
+    // puts it through the same fence as a sequence step.
+    case 'reply_decision': {
+      const outcome = await applyReplyDecision({ store, mailbox: mailboxRefused, fetch: fetchRefused },
+        { replyId: command.replyId, decision: command.decision, recordedBy: principal.label });
+      receipt = outcome.applied ? { commandId: command.commandId, outcome: 'applied', reason: outcome.decision }
+        : { commandId: command.commandId, outcome: 'refused', reason: outcome.reason };
+      break;
+    }
+    case 'request_followup': {
+      const outcome = await requestFollowup({ store, mailbox: mailboxRefused, fetch: fetchRefused },
+        { firmId: command.firmId, draftId: command.draftId, text: command.text ?? null });
+      receipt = outcome.applied ? { commandId: command.commandId, outcome: 'applied', reason: null }
+        : { commandId: command.commandId, outcome: 'refused', reason: outcome.reason };
+      break;
+    }
+    case 'approve_followup_draft':
+    case 'approve_reply_draft': {
+      const outcome = await approveDraft({ store, mailbox: mailboxRefused, fetch: fetchRefused },
+        { firmId: command.firmId, draftId: command.draftId, text: command.text });
+      receipt = outcome.applied ? { commandId: command.commandId, outcome: 'applied', reason: null }
+        : { commandId: command.commandId, outcome: 'refused', reason: outcome.reason };
+      break;
+    }
   }
   items.push(store.put(key, { fingerprint: commandFingerprint, kind: command.kind, receipt, at: store.now(), deviceId: principal.deviceId }, null));
   // The caller must still be an active device when this commits. When the command writes the caller's own row (a
@@ -137,9 +192,9 @@ export async function v1Router(input: V1RouterInput): Promise<WorkerHttpResponse
       catch (error) { if (error instanceof V1Unauthenticated) return unauthenticated(respond, error); throw error; }
       const query = diagnosticsQuerySchema.safeParse({ kind: input.query.get('kind') ?? undefined, limit: input.query.get('limit') ?? undefined });
       if (!query.success) return respond(400, { error: 'invalid_request' });
-      const [attempts, lastTick, deviceList, postures] = await Promise.all([listAttempts(store, query.data), readLastTick(store), devices.listDevices(), readPostures(store)]);
+      const [attempts, lastTick, deviceList, postures, queue] = await Promise.all([listAttempts(store, query.data), readLastTick(store), devices.listDevices(), readPostures(store), readQueueSummary(store)]);
       const asOf = store.now();
-      return respond(200, diagnosticsViewSchema.parse({ asOf, attempts, lastTick, devices: deviceList, postures: postures.map(record => postureSummary(record, asOf)) }));
+      return respond(200, diagnosticsViewSchema.parse({ asOf, attempts, lastTick, devices: deviceList, postures: postures.map(record => postureSummary(record, asOf)), queue }));
     }
     if (path === '/v1/today' && method === 'GET') {
       // The morning list as cards (S1). Dialability is computed here, at request time, from the firm's zone; a read is never a dial.

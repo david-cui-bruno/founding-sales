@@ -8,7 +8,6 @@ import { keyPart, type DynamoStore } from '../dynamoStore';
 import { jobRef } from '../queue/jobs';
 import { recordAttempt } from './attempts';
 import { createAccountFirmSource, type FirmCard, type FirmSource } from './firms';
-import type { MailboxAccess } from './mailbox';
 import { invalidRouteKey, invalidRouteSchema, readSend, SEND_PREFIX, sendRecordSchema, type SendDependencies } from './send';
 import { createSequencePort, createSuppressionPort, type SequencePort, type SuppressionPort } from './sequenceBridge';
 
@@ -99,10 +98,12 @@ export const draftRecordSchema = z.strictObject({
 });
 export type DraftRecord = z.infer<typeof draftRecordSchema>;
 
-/** Replies whose classification is clear enough that a draft may be opened without asking David what it was. */
+/**
+ * Replies whose classification is clear enough that a draft may be opened without asking David what it was.
+ * Everything else that reaches the sequence (`ambiguous` and `mixed`) waits for an explicit `reply_decision`,
+ * which is exactly what a reply record with no `draftId` means.
+ */
 const UNAMBIGUOUS = new Set<ReplyClassification['kind']>(['substantive', 'scheduling', 'rejection']);
-/** Replies David has to settle himself before the sequence moves at all. */
-const NEEDS_DECISION = new Set<ReplyClassification['kind']>(['ambiguous', 'mixed']);
 
 /**
  * The classification the design asks for: the carried `classifyReply`, plus the one addition the security review
@@ -380,7 +381,7 @@ export async function readDrafts(store: DynamoStore, firmId?: string): Promise<D
   }).sort((a, b) => a.createdAt < b.createdAt ? -1 : 1);
 }
 
-export type ReplyDecisionOutcome = { applied: true; decision: 'stop' | 'continue' } | { applied: false; reason: 'reply_unknown' | 'reply_already_decided' };
+export type ReplyDecisionOutcome = { applied: true; decision: 'stop' | 'continue'; reason?: undefined } | { applied: false; decision?: undefined; reason: 'reply_unknown' | 'reply_already_decided' };
 
 /** `reply_decision`. David's answer to an ambiguous reply: stop suppresses permanently, continue resumes the cadence. */
 export async function applyReplyDecision(deps: MailDependencies, input: { replyId: string; decision: 'stop' | 'continue'; recordedBy: string }): Promise<ReplyDecisionOutcome> {
@@ -403,7 +404,7 @@ export async function applyReplyDecision(deps: MailDependencies, input: { replyI
   return { applied: true, decision: input.decision };
 }
 
-export type DraftCommandOutcome = { applied: true; draft: DraftRecord } | { applied: false; reason: string };
+export type DraftCommandOutcome = { applied: true; draft: DraftRecord; reason?: undefined } | { applied: false; draft?: undefined; reason: string };
 
 /** `request_followup`. Opens a follow-up draft for a firm; David writes the text and approves it separately. */
 export async function requestFollowup(deps: MailDependencies, input: { firmId: string; draftId: string; text?: string | null }): Promise<DraftCommandOutcome> {

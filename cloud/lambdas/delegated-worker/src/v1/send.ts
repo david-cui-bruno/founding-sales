@@ -156,7 +156,7 @@ export async function readSendContext(store: DynamoStore, firm: FirmCard, stepId
     next: following ? { stepId: following.id, dueAt: new Date(Date.parse(enrollment.data.startedAt) + following.delayHours * 3600000).toISOString() } : null };
 }
 
-export type SendPlan = { send: true; frozen: z.infer<typeof frozenEmailSchema>; templateId: ReplyTemplateId } | { send: false; code: string };
+export type SendPlan = { send: true; frozen: z.infer<typeof frozenEmailSchema>; templateId: ReplyTemplateId; code?: undefined } | { send: false; code: string };
 
 /**
  * Every hold, in the order David reads them (design section 5): his own pause, his mailbox, his approval, the

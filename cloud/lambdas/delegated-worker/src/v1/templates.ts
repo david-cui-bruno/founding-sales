@@ -1,3 +1,4 @@
+import type { TransactWriteItem } from '@aws-sdk/client-dynamodb';
 import { z } from 'zod';
 import { accountInstantSchema } from '../../../../../src/shared/contracts/accountContract';
 import { REPLY_TEMPLATE_IDS, REPLY_TEMPLATE_SIGN_OFF, REPLY_TEMPLATE_VARIABLES, replyTemplateContentHash, replyTemplateTextIssues,
@@ -39,6 +40,8 @@ export function footerBlock(postalAddress: string): string {
   return `${REPLY_TEMPLATE_SIGN_OFF}\n${postalAddress.trim()}\n${SENDING_STOP_LINE}`;
 }
 
+/** How long a postal address may be, here and in the command contract. */
+export const POSTAL_ADDRESS_MAX = 200;
 /** The ceiling David fixed in code on 17 September 2026. Settings may narrow each number; nothing may widen one. */
 export const SENDING_CEILING = Object.freeze({ dailyLimit: 40, startPerDay: 10, stepPerDay: 2, maxPerDay: 40 });
 
@@ -51,8 +54,10 @@ export const sendingSettingsSchema = z.strictObject({
   postalAddress: z.string().trim().min(1).max(200).nullable(),
   revision: z.number().int().positive(),
   updatedAt: accountInstantSchema,
+// Every number is checked against the ceiling fixed in code and against nothing else, so David may narrow the
+// daily limit without having to restate the ramp: today's cap is the smallest of all four numbers anyway.
 }).refine(settings => settings.dailyLimit <= SENDING_CEILING.dailyLimit && settings.ramp.startPerDay <= SENDING_CEILING.startPerDay
-  && settings.ramp.stepPerDay <= SENDING_CEILING.stepPerDay && settings.ramp.maxPerDay <= Math.min(SENDING_CEILING.maxPerDay, settings.dailyLimit),
+  && settings.ramp.stepPerDay <= SENDING_CEILING.stepPerDay && settings.ramp.maxPerDay <= SENDING_CEILING.maxPerDay,
 'sending_limit_exceeds_code_ceiling');
 export type SendingSettings = z.infer<typeof sendingSettingsSchema>;
 
@@ -69,14 +74,14 @@ export async function readSendingSettings(store: DynamoStore): Promise<{ setting
 }
 
 export type SendingLimitInput = { dailyLimit?: number; ramp?: { startPerDay: number; stepPerDay: number; maxPerDay: number }; postalAddress?: string };
-export type SendingLimitOutcome = { applied: true; settings: SendingSettings } | { applied: false; reason: 'sending_limit_exceeds_code_ceiling' | 'sending_limit_invalid' };
+export type SendingLimitOutcome = { applied: true; settings: SendingSettings; reason?: undefined } | { applied: false; reason: 'sending_limit_exceeds_code_ceiling' | 'sending_limit_invalid' };
 
 /**
  * `set_sending_limit`. Every number is checked against the ceiling fixed in code before anything is written, so a
  * request that would widen the cap is refused whole rather than partly applied. Storing a limit is not permission
  * to send: it only says how few.
  */
-export async function setSendingLimit(store: DynamoStore, input: SendingLimitInput): Promise<SendingLimitOutcome> {
+export async function planSetSendingLimit(store: DynamoStore, input: SendingLimitInput): Promise<{ item: TransactWriteItem; settings: SendingSettings } | { refused: SendingLimitOutcome }> {
   const held = await readSendingSettings(store);
   const candidate = { ...held.settings, ...(input.dailyLimit === undefined ? {} : { dailyLimit: input.dailyLimit }),
     ...(input.ramp === undefined ? {} : { ramp: input.ramp }),
@@ -85,10 +90,16 @@ export async function setSendingLimit(store: DynamoStore, input: SendingLimitInp
   const parsed = sendingSettingsSchema.safeParse(candidate);
   if (!parsed.success) {
     const ceiling = parsed.error.issues.some(issue => issue.message === 'sending_limit_exceeds_code_ceiling');
-    return { applied: false, reason: ceiling ? 'sending_limit_exceeds_code_ceiling' : 'sending_limit_invalid' };
+    return { refused: { applied: false, reason: ceiling ? 'sending_limit_exceeds_code_ceiling' : 'sending_limit_invalid' } };
   }
-  await store.transact([store.put(SENDING_SETTINGS_KEY, parsed.data, held.rev)]);
-  return { applied: true, settings: parsed.data };
+  return { item: store.put(SENDING_SETTINGS_KEY, parsed.data, held.rev), settings: parsed.data };
+}
+
+export async function setSendingLimit(store: DynamoStore, input: SendingLimitInput): Promise<SendingLimitOutcome> {
+  const plan = await planSetSendingLimit(store, input);
+  if ('refused' in plan) return plan.refused;
+  await store.transact([plan.item]);
+  return { applied: true, settings: plan.settings };
 }
 
 /** Whether every send is paused. Absent record means not paused; a record the schema refuses is treated as paused. */
@@ -161,26 +172,32 @@ export function templateApprovalIssues(input: { subject: string; body: string; p
 }
 
 export type ApproveTemplateInput = { templateId: ReplyTemplateId; expectedRevision: number; subject: string; body: string };
-export type ApproveTemplateOutcome = { applied: true; record: TemplateRecord } | { applied: false; reason: string };
+export type ApproveTemplateOutcome = { applied: true; record: TemplateRecord; reason?: undefined } | { applied: false; reason: string };
 
 /**
  * `approve_template`. David's statement about exactly this text: it is stored with its sha256 so the send fence can
  * refuse anything else, and it is refused outright when the body has no footer block. Approving is never sending.
  */
-export async function approveTemplate(store: DynamoStore, input: ApproveTemplateInput): Promise<ApproveTemplateOutcome> {
+export async function planApproveTemplate(store: DynamoStore, input: ApproveTemplateInput): Promise<{ item: TransactWriteItem; record: TemplateRecord } | { refused: ApproveTemplateOutcome }> {
   const { settings } = await readSendingSettings(store);
   const held = await readTemplate(store, input.templateId);
-  if (input.expectedRevision !== held.record.revision) return { applied: false, reason: 'template_revision_conflict' };
+  if (input.expectedRevision !== held.record.revision) return { refused: { applied: false, reason: 'template_revision_conflict' } };
   const issues = templateApprovalIssues({ subject: input.subject, body: input.body, postalAddress: settings.postalAddress });
-  if (issues.length) return { applied: false, reason: issues[0]! };
+  if (issues.length) return { refused: { applied: false, reason: issues[0]! } };
   const now = store.now();
   const revision = held.rev === null ? held.record.revision : held.record.revision + 1;
   const record = templateRecordSchema.parse({ ...held.record, subject: input.subject, body: input.body, revision,
     approval: { state: 'approved', approvedRevision: revision, approvedAt: now,
       contentHash: replyTemplateContentHash({ id: input.templateId, revision, subject: input.subject, body: input.body }),
       footerPostalAddress: settings.postalAddress }, updatedAt: now });
-  await store.transact([store.put(templateKey(input.templateId), record, held.rev)]);
-  return { applied: true, record };
+  return { item: store.put(templateKey(input.templateId), record, held.rev), record };
+}
+
+export async function approveTemplate(store: DynamoStore, input: ApproveTemplateInput): Promise<ApproveTemplateOutcome> {
+  const plan = await planApproveTemplate(store, input);
+  if ('refused' in plan) return plan.refused;
+  await store.transact([plan.item]);
+  return { applied: true, record: plan.record };
 }
 
 /**

@@ -137,7 +137,9 @@ export function jobClaimable(record: JobRecord | null, now: string): boolean {
   return record.leaseUntil === null || record.leaseUntil <= now;
 }
 
-export type JobEnqueueDecision = { enqueue: true } | { enqueue: false; reason: 'in_flight' | 'already_done' | 'backoff'; until: string | null };
+/** The positive case names the same keys as `undefined` so a reader may check `decision.reason` without narrowing:
+ *  the root TypeScript configuration compiles without `strictNullChecks`, where a boolean discriminant does not narrow. */
+export type JobEnqueueDecision = { enqueue: true; reason?: undefined; until?: undefined } | { enqueue: false; reason: 'in_flight' | 'already_done' | 'backoff'; until: string | null };
 /** Whether the scheduler may enqueue this job now: claimable, and past its backoff window if it failed. Pure. */
 export function jobEnqueueable(record: JobRecord | null, now: string): JobEnqueueDecision {
   if (record === null) return { enqueue: true };

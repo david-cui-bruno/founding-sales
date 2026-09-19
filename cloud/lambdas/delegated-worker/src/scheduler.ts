@@ -6,13 +6,13 @@ import { attemptReasonSchema } from '../../../../src/shared/contracts/v1Contract
 import { withDynamoReadErrors, type DynamoAdapter, type DynamoStore } from './dynamoStore';
 import { WorkerAuth } from './workerAuth';
 import { createSqsQueueClient, type QueueClient } from './queue/queueClient';
-import { dayBuildJobId, jobEnqueueable, jobRef, markQueued, pollJobId, readJobs, reconcileJobId, sendStepJobId,
+import { dayBuildJobId, jobEnqueueable, jobRef, markQueued, pollJobId, readJobs, reconcileJobId, sendFollowupJobId, sendStepJobId,
   type JobKind, type JobRecord } from './queue/jobs';
 import { recordAttempt } from './v1/attempts';
 import { backfillDuePointers, dayKey, LIST_BUILD_START_MINUTE, readDuePointers } from './v1/dayBuild';
 import { createAccountFirmSource, type FirmCard, type FirmSource } from './v1/firms';
 import { EASTERN, localParts } from './v1/localClock';
-import { readMailboxCursor } from './v1/mail';
+import { readDrafts, readMailboxCursor } from './v1/mail';
 import { createSequencePort, type SequencePort } from './v1/sequenceBridge';
 import { remainingSendsToday } from './v1/templates';
 
@@ -119,6 +119,14 @@ export async function runScheduler(deps: SchedulerDependencies, signal: AbortSig
           currentStepId: pointer.stepId, nextDueAt: pointer.nextDueAt, stepId: pointer.stepId, code });
       });
       if (taken) enqueued++;
+    }
+    // The drafts David approved. Approving is never sending: the approval writes the record, this puts it on the
+    // queue, and the runner takes it through the same fence, under the same cap, as a sequence step.
+    for (const draft of await readDrafts(store)) {
+      if (draft.status !== 'approved' || draft.text === null) continue;
+      const jobId = sendFollowupJobId(draft.firmId, draft.draftId);
+      if (enqueued >= remaining) { report.skipped.push({ jobId, reason: 'cap_reached' }); continue; }
+      if (await offer(jobId, 'mail.send_followup')) enqueued++;
     }
   }
 

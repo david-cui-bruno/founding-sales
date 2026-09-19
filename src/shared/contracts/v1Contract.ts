@@ -158,6 +158,17 @@ export const todayCardSchema = z.strictObject({
   offer: z.string().max(4000).nullable(),
   lastOutcome: z.strictObject({ outcome: attemptReasonSchema, at: instant, note: z.string().max(2000).nullable() }).nullable(),
   nextStep: todayNextStepSchema,
+  /**
+   * The draft waiting for David on this firm, if any (S3). Optional so a client built against the S1 card shape
+   * still validates; the worker always sends it, as null when there is nothing waiting.
+   */
+  pendingDraft: z.strictObject({ draftId: z.string().min(1).max(200), kind: z.enum(['reply', 'followup']),
+    status: z.enum(['pending', 'approved']), subject: z.string().max(240), createdAt: instant }).nullable().optional(),
+  /**
+   * Why the firm's sequence is not moving, as the send fence and the mail poller recorded it (S3). Separate from
+   * `holdReason`, which is about dialling this card right now; both can be set, and both are closed codes.
+   */
+  sequenceHold: z.strictObject({ reason: v1HoldReasonSchema, code: attemptReasonSchema, stepId: z.string().max(200).nullable() }).nullable().optional(),
 });
 export type TodayCard = z.infer<typeof todayCardSchema>;
 export const todayHoldCountSchema = z.strictObject({ reason: v1HoldReasonSchema, code: attemptReasonSchema, count: count.min(1) });
@@ -194,6 +205,16 @@ export const diagnosticsViewSchema = z.strictObject({
   devices: z.array(diagnosticsDeviceSchema),
   /** Postures by state, until Settings ships in S5. Optional so a client built against the S0 shape still validates. */
   postures: z.array(statePostureSummarySchema).optional(),
+  /**
+   * The job queue as the worker can see it from the table alone (S3): jobs waiting or running, jobs that failed
+   * their last attempt, jobs that exhausted their three attempts and are therefore on the dead-letter queue, and
+   * when the scheduler last ran. The API role holds no queue permission by design, so these are counts of `JOB#`
+   * records, not a reading of SQS; `deadLettered` is what the worker knows, and the DLQ alarm is what AWS knows.
+   */
+  queue: z.strictObject({
+    queued: count, running: count, failed: count, deadLettered: count,
+    lastSchedulerRun: z.strictObject({ at: instant, tickSeq: z.number().int().positive(), enqueued: count, durationMs: count }).nullable(),
+  }).optional(),
 });
 export type DiagnosticsView = z.infer<typeof diagnosticsViewSchema>;
 
@@ -210,8 +231,36 @@ export const revokeDeviceCommandSchema = z.strictObject({ commandId, kind: z.lit
 /** Record David's calling posture for one state (S1). The worker stamps the instant and the device; the decision is his. */
 export const setStatePostureCommandSchema = z.strictObject({ commandId, kind: z.literal('set_state_posture'), state: v1StateCodeSchema, ...statePostureDecisionShape });
 export type SetStatePostureCommand = z.infer<typeof setStatePostureCommandSchema>;
-/** Every `/v1` command, discriminated on `kind`. S0 ships `revoke_device`, S1 adds `set_state_posture`; later slices add theirs here. */
-export const v1CommandSchema = z.discriminatedUnion('kind', [revokeDeviceCommandSchema, setStatePostureCommandSchema]);
+/**
+ * Email under the standing approval (S3). `approve_template` carries the exact subject and body David approved,
+ * which the worker re-checks against every body rule and the footer before it records a standing approval;
+ * `set_sending_limit` may only narrow the ceiling fixed in code. Neither of them sends anything.
+ */
+export const REPLY_TEMPLATE_COMMAND_IDS = ['T1', 'T2', 'T3', 'T4', 'T5'] as const;
+export const approveTemplateCommandSchema = z.strictObject({ commandId, kind: z.literal('approve_template'),
+  templateId: z.enum(REPLY_TEMPLATE_COMMAND_IDS), expectedRevision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  subject: z.string().min(1).max(160), body: z.string().min(1).max(4000) });
+const sendingLimitNumber = z.number().int().nonnegative().max(10000);
+export const setSendingLimitCommandSchema = z.strictObject({ commandId, kind: z.literal('set_sending_limit'),
+  dailyLimit: sendingLimitNumber.optional(),
+  ramp: z.strictObject({ startPerDay: sendingLimitNumber, stepPerDay: sendingLimitNumber, maxPerDay: sendingLimitNumber }).optional(),
+  postalAddress: z.string().trim().min(1).max(200).optional() });
+/** David's answer to a reply that is not unambiguous. `stop` suppresses permanently; `continue` resumes the cadence. */
+export const replyDecisionCommandSchema = z.strictObject({ commandId, kind: z.literal('reply_decision'),
+  replyId: z.string().min(1).max(200), decision: z.enum(['stop', 'continue']) });
+const draftId = z.string().min(1).max(200);
+/** Opens a follow-up draft. The worker never writes the prose: the text arrives with the approval. */
+export const requestFollowupCommandSchema = z.strictObject({ commandId, kind: z.literal('request_followup'),
+  firmId: z.string().min(1).max(200), draftId, text: z.string().max(24000).optional() });
+export const approveFollowupDraftCommandSchema = z.strictObject({ commandId, kind: z.literal('approve_followup_draft'),
+  firmId: z.string().min(1).max(200), draftId, text: z.string().min(1).max(24000) });
+export const approveReplyDraftCommandSchema = z.strictObject({ commandId, kind: z.literal('approve_reply_draft'),
+  firmId: z.string().min(1).max(200), draftId, text: z.string().min(1).max(24000) });
+
+/** Every `/v1` command, discriminated on `kind`. S0 ships `revoke_device`, S1 adds `set_state_posture`, S3 adds email; later slices add theirs here. */
+export const v1CommandSchema = z.discriminatedUnion('kind', [revokeDeviceCommandSchema, setStatePostureCommandSchema,
+  approveTemplateCommandSchema, setSendingLimitCommandSchema, replyDecisionCommandSchema, requestFollowupCommandSchema,
+  approveFollowupDraftCommandSchema, approveReplyDraftCommandSchema]);
 export type V1Command = z.infer<typeof v1CommandSchema>;
 
 /**

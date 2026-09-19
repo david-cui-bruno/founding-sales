@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { campaignEnrollmentKey } from '../../src/workerCampaignRepository';
 import { jobMessageId, sendStepJobId } from '../../src/queue/jobs';
 import { flightKey, readSend, runReconcileJob, runSendStepJob, sendKey, type SendDependencies } from '../../src/v1/send';
 import { createSequencePort, seqKey, sequenceRecordSchema } from '../../src/v1/sequenceBridge';
