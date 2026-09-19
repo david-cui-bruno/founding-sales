@@ -1,8 +1,4 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { AccountRoutePolicyStore } from '../../src/main/delegation/accountRoutePolicyStore';
-import { DelegationRepository } from '../../src/main/delegation/delegationRepository';
-import { createAccountOutboundService } from '../../src/main/communications/accountOutboundService';
-import { createInboundReadiness } from '../../src/main/communications/inboundReadiness';
 import { describe, expect, it, vi } from 'vitest';
 import { closeDatabase, openDatabase } from '../../src/main/db/database';
 import { migrateToLatest } from '../../src/main/db/migrate';
@@ -110,71 +106,6 @@ describe('assembled fictional company preparation, not renderer acceptance', () 
       expect(services.today.planMeetingFirstAccountCalls(planning)).toEqual({ accountIds: [accountId], workloadConflict: false });
       expect(snapshot.unknowns).toEqual(expect.arrayContaining(['technology', 'role', 'pain']));
       expect(snapshot.routes[0].evidenceIds).toEqual(committedSources.map((source: { id: string }) => source.id));
-      const route = snapshot.routes[0];
-      const request = () => ({ commandId: randomUUID(), accountId, routeId: route.id, expectedRouteVersion: route.version,
-        expectedEvidenceFingerprint: repo.snapshot(accountId, now).fingerprint, channel: 'call' as const });
-      let synchronized = 0; let fictionalHandoffs = 0;
-      const readiness = createInboundReadiness({ snapshot: () => ({ initialized: true, revision: 1,
-        adapters: [{ id: 'fictional-inbound', relevant: () => true, synchronize: async subject => {
-          expect(subject).toEqual({ kind: 'account', id: accountId }); synchronized++; return { revision: 'fictional-applied-1' };
-        }, isAppliedCurrent: (_subject, revision) => revision === 'fictional-applied-1' }] }) });
-      const outbound = (expectedWorkspaceId?: string) => createAccountOutboundService({
-        domain: { withDomain: async fn => fn(createDomainServices({ database, clock, ids: { next: randomUUID }, expectedWorkspaceId }).accountOutreach) },
-        readiness, phone: { inspectCapability: async () => ({ state: 'available', reasonCode: null }), dispatch: async target => {
-          expect(target).toBe('+14015550100'); expect(database.raw.inTransaction).toBe(false);
-          fictionalHandoffs++; return { status: 'handoff_accepted', reasonCode: null };
-        } },
-      });
-      const service = outbound(workspaceId);
-      expect(await service.begin(request())).toMatchObject({ status: 'refused', reason: 'account_policy_evidence_unavailable', attemptId: null });
-      expect(fictionalHandoffs).toBe(0); // Publication is not validation, DNC, or authority clearance.
-      const policySource = { id: randomUUID(), url: 'https://trusted-policy.invalid/fictional-clearance', fetchedAt: now,
-        sha256: 'c'.repeat(64), excerpt: 'Fictional independently trusted phone validation, DNC and jurisdiction record.', permitted: true };
-      const trustedRepo = new AccountRepository({ database, clock, ids: { next: randomUUID },
-        sourcePolicy: { attest: source => JSON.stringify(source) === JSON.stringify(policySource) } });
-      trustedRepo.admitEvidence({ commandId: randomUUID(), accountId, expectedVersion: snapshot.account.version,
-        sources: [policySource], claims: [], routes: [] }); // Does not manufacture a final contact.
-      expect(repo.snapshot(accountId, now).routes).toEqual(snapshot.routes);
-      const provenance = randomUUID();
-      const policy = new AccountRoutePolicyStore({ database, clock,
-        admission: { attest: receipt => receipt.provenance === provenance && receipt.evidenceRef === policySource.id } });
-      policy.admit({ id: randomUUID(), accountId, routeId: route.id, routeVersion: route.version, canonicalTarget: route.value,
-        evidenceFingerprint: repo.snapshot(accountId, now).fingerprint, revision: 1, evidenceRef: policySource.id,
-        // evidenceIds bind the exact published target. Only the separately attested
-        // evidenceRef/policy supplies clearance, never the publication itself.
-        evidenceIds: [...route.evidenceIds], provenance, observedAt: now, effectiveAt: now, expiresAt: '2026-09-09T14:00:00.000Z',
-        policy: { contact: { kind: 'phone', normalizedValue: route.value, validationState: 'valid',
-          evidence: { federalStatus: 'verified_clear', tcpaFlag: false, coveredAreaCode: '401', source: 'ftc_download',
-            scrubbedAt: '2026-09-01T00:00:00.000Z', expiresAt: '2026-10-01T00:00:00.000Z' } },
-        jurisdiction: { regionCode: 'RI', timezone: 'America/New_York', reviewAt: null },
-        clearance: { decision: 'allowed', registrationConfirmed: true, stateDncSubscriptionConfirmed: true, consentRuleConfirmed: true,
-          effectiveAt: '2026-09-01T00:00:00.000Z', expiresAt: '2026-10-01T00:00:00.000Z' } },
-      });
-      // Valid independently attested policy still grants no execution ownership.
-      expect(database.raw.prepare('SELECT * FROM delegated_authorities WHERE account_id=?').all(accountId)).toEqual([]);
-      expect(await service.begin(request())).toMatchObject({
-        status: 'refused', reason: 'account_policy_evidence_unavailable', attemptId: null,
-      });
-      expect(database.raw.prepare('SELECT * FROM pm_account_outbound_intents').all()).toEqual([]);
-      expect(database.raw.prepare('SELECT * FROM delegated_authorities WHERE account_id=?').all(accountId)).toEqual([]);
-      expect(fictionalHandoffs).toBe(0);
-      new DelegationRepository({ database, clock, workspaceId }).initializeLocalAuthority(accountId);
-      for (const identity of [undefined, randomUUID()]) {
-        const wrong = outbound(identity);
-        expect(await wrong.begin(request())).toMatchObject({ status: 'refused', attemptId: null }); wrong.dispose();
-      }
-      expect(fictionalHandoffs).toBe(0);
-      const readyRequest = request();
-      const ready = await service.begin(readyRequest);
-      expect(ready.status).toBe('handoff_accepted'); expect(fictionalHandoffs).toBe(1);
-      expect(synchronized).toBeGreaterThan(0);
-      // Handoff is not an actual call outcome and does not consume Today new-call work.
-      expect(services.today.planMeetingFirstAccountCalls({ ...planning, ranked: [repo.snapshot(accountId, now)] }))
-        .toEqual({ accountIds: [accountId], workloadConflict: false });
-      await service.reportCallOutcome({ commandId: readyRequest.commandId, attemptId: ready.attemptId!, outcome: 'no_answer', notes: null });
-      expect(services.today.planMeetingFirstAccountCalls({ ...planning, ranked: [repo.snapshot(accountId, now)] }))
-        .toEqual({ accountIds: [], workloadConflict: false });
-      service.dispose();
       expect(database.raw.prepare('SELECT * FROM persons').all()).toEqual([]);
       expect(database.raw.prepare('SELECT * FROM cadence_enrollments').all()).toEqual([]);
       expect(database.raw.pragma('foreign_key_check')).toEqual([]);

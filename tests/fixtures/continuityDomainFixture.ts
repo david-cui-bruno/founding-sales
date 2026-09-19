@@ -9,7 +9,7 @@ import { auditDomainInvariants } from '../../src/main/domain/lifecycle/invariant
 import type { DomainServices } from '../../src/main/domain/createDomainServices';
 import type { SalesCycle } from '../../src/main/domain/lifecycle/lifecycleTypes';
 import { BUILTIN_CADENCES } from '../../src/main/domain/cadence/builtinCadences';
-import { DISCOVERY_NOW, seedDiscoveryOwner } from './discoveryDatabase';
+import { DISCOVERY_NOW, recordPromisedCallback, seedDiscoveryOwner } from './discoveryDatabase';
 import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { setTimeout as realTimeout, clearTimeout as clearRealTimeout } from 'node:timers';
@@ -410,7 +410,7 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
     // Finite, two-phase internal construction only. Never expose services/raw DB.
     const seedRetained = async (phase: 'warm-owners' | 'callback') => {
       assert.ok(mode === 'retained-setup' || isRetainedUi);
-      return runtime.withDomain(async domain => {
+      return runtime.withDomain(async () => {
         assert.ok(capturedRuntime); assert.ok(database);
         const now = new Date().toISOString();
         if (phase === 'warm-owners') {
@@ -496,14 +496,20 @@ export async function createContinuityDomainFixture(handlers: Map<string, Regist
           if (activated.kind !== 'reactivated') throw new Error('Inbound construction did not reactivate');
           remember('inbound_response', activated.cycle, [inboundId]);
           const founder = ready(warm('founder_resurface'));
-          domain.snoozePrimaryAction({ salesCycleId: founder.id, resurfaceAt: RETAINED_O });
+          // The removed snooze command's durable effect: the founder-chosen resurface marker and the re-dated current action.
+          database.raw.transaction(() => {
+            database.raw.prepare(`UPDATE sales_cycles SET resurface_at = ?, resurface_reason = 'snooze', version = version + 1, updated_at = ?
+              WHERE id = ? AND version = ?`).run(RETAINED_O, RETAINED_T, founder.id, founder.version);
+            database.raw.prepare(`UPDATE next_actions SET due_at = ?, due_source = 'founder_resurface', version = version + 1, updated_at = ?
+              WHERE id = ? AND status = 'pending'`).run(RETAINED_O, RETAINED_T, founder.currentNextActionId);
+          }).immediate();
           remember('founder_resurface', founder);
         } else {
           const callback = seedDiscoveryOwner({ services }, { prefix: 'Continuity retained callback', units: 12 });
           const cycle = services.lifecycle.reviewToReady({ cycleId: callback.salesCycleId, expectedCycleVersion: 1,
             expectedProspectVersion: 1, effectiveAt: DISCOVERY_NOW });
-          domain.logCallOutcome({ personId: callback.personId, salesCycleId: callback.salesCycleId,
-            outcome: 'spoke', occurredAt: DISCOVERY_NOW, callbackAt: RETAINED_O });
+          recordPromisedCallback(services, database.raw, { personId: callback.personId, salesCycleId: callback.salesCycleId,
+            occurredAt: DISCOVERY_NOW, now: DISCOVERY_NOW, callbackAt: RETAINED_O });
           const activities = database.raw.prepare<[string], { id: string }>('SELECT id FROM activities WHERE sales_cycle_id=? AND callback_at IS NOT NULL').all(cycle.id);
           assert.equal(activities.length, 1);
           remember('callback', cycle, [activities[0]!.id]);

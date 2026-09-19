@@ -6,8 +6,6 @@
         "forge.config.ts",
         "src/main.ts",
         "src/preload.ts",
-        "scripts/finalizeIdentityMigrationReview.mjs",
-        "scripts/runIdentityMigrationAudit.mjs",
         "scripts/probeEncryptedSqliteNative.cjs",
         "tests/support/*Scenario.ts",
         "tests/support/*Contender.{ts,mjs}",

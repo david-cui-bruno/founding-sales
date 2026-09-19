@@ -1,7 +1,6 @@
-import type { DiscoveryAssessment, DiscoveryClaim } from '../../../shared/contracts/discoveryContract';
+import type { DiscoveryClaim } from '../../../shared/contracts/discoveryContract';
 import type { LifecycleStage } from '../../../shared/contracts/commonContract';
 import type { ProspectsTable, WorkflowStatus } from '../../db/domainSchema';
-import type { PrioritizationRuleDocument } from '../prioritization/builtinPrioritizationRules';
 import type { ContactMethodFact, OriginalSourceFact, PropertyFact, TriggerEvent } from '../prioritization/prioritizationTypes';
 
 /**
@@ -33,10 +32,3 @@ export type DiscoveryEvidenceSnapshot = Readonly<{
   conversationActivityIds: readonly string[];
   inputFingerprint: string; ruleVersionId: string;
 }>;
-export type DiscoveryAssessmentDraft = Omit<DiscoveryAssessment,
-  'id' | 'modelVersion' | 'evaluatedAt' | 'expiresAt' | 'localDate' | 'overrideId'>;
-export type DiscoveryEvaluationInput = {
-  snapshot: DiscoveryEvidenceSnapshot; rule: PrioritizationRuleDocument; asOf: string;
-};
-export type DiscoveryScanPage = { prospectIds: string[]; cursor: string | null; done: boolean };
-export type DiscoveryProcessResult = { assessmentId: string; unchanged: boolean };
