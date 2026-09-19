@@ -55,7 +55,7 @@ export function createWorkerHandler(input: { auth: WorkerAuth; host: string; goo
         if (Buffer.byteLength(JSON.stringify(selected.payload), 'utf8') > 200000) return response(400, { error: 'worker_request_rejected' });
       }
       const query = new URLSearchParams(event.rawQueryString);
-      const allowed = path === '/v1/diagnostics' ? ['kind', 'limit'] : path === '/oauth/callback' ? ['state', 'code', 'error', 'scope', 'authuser', 'prompt', 'hd', 'iss'] : path === '/events' ? ['cursor'] : ['/google/status', '/google/disclosure'].includes(path) ? ['purpose'] : [];
+      const allowed = path === '/v1/diagnostics' ? ['kind', 'limit'] : path === '/v1/firms' ? ['firmId'] : path === '/oauth/callback' ? ['state', 'code', 'error', 'scope', 'authuser', 'prompt', 'hd', 'iss'] : path === '/events' ? ['cursor'] : ['/google/status', '/google/disclosure'].includes(path) ? ['purpose'] : [];
       for (const key of query.keys()) if (!allowed.includes(key) || query.getAll(key).length !== 1) return response(400, { error: 'worker_invalid_request' });
       const body = () => JSON.parse(event.body ?? '{}') as unknown;
       // The rebuilt core's routes (S0). Mounted here so David only redeploys the worker; the router owns its own errors.

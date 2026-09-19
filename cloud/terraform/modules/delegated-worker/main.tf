@@ -39,9 +39,10 @@ locals {
     "POST /research/setup/status", "POST /research/setup", "POST /accounts/preparation", "POST /reply/draft",
     "GET /events", "POST /google/begin", "GET /google/status", "GET /google/disclosure",
     "POST /google/revoke", "GET /oauth/callback",
-    # The rebuilt core's routes (S0, S1), served by the same Lambda from src/v1/router.ts.
+    # The rebuilt core's routes (S0, S1, S2), served by the same Lambda from src/v1/router.ts.
     "POST /v1/pair/redeem", "GET /v1/diagnostics", "POST /v1/commands",
-    "GET /v1/today"
+    "GET /v1/today",
+    "GET /v1/firms"
   ])
 }
 
