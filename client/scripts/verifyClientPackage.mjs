@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { accessSync, constants, existsSync, statSync } from 'node:fs';
+import { accessSync, constants, existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { extractFile } from '@electron/asar';
@@ -127,6 +127,25 @@ const verifyAppleBridgeHelper = (appPath, runCommand) => {
   return { bundlePath: helperBundle, executable, bundleIdentifier: identifier, architecture: 'arm64' };
 };
 
+/**
+ * Whether this build is notarized, stated plainly rather than assumed either way (slice S6). Forge notarizes
+ * only when a configuration declares `osxNotarize`; neither the root configuration nor the client's does, so a
+ * packaged build is signed and not notarized, and Gatekeeper asks on first launch. The answer is derived from
+ * the two configurations at verification time, so adding notarization later changes this report by itself — and
+ * when it is declared, the stapled ticket is checked on the bundle instead of being taken on trust.
+ */
+export const verifyNotarization = (appPath, runCommand, root) => {
+  const configured = [join(root, 'forge.config.ts'), resolve(root, '..', 'forge.config.ts')]
+    .filter((path) => existsSync(path))
+    .some((path) => /(^|[^\w])osxNotarize\s*[:=]/.test(readFileSync(path, 'utf8')));
+  if (!configured) {
+    return { configured: false, notarized: false,
+      reason: 'No Forge configuration declares osxNotarize, so this build is signed and not notarized. Gatekeeper asks once on first launch; open it from Finder with Control-click and Open.' };
+  }
+  runCommand({ command: 'xcrun', args: ['stapler', 'validate', appPath] });
+  return { configured: true, notarized: true, reason: 'A stapled notarization ticket is present and valid.' };
+};
+
 export const verifyClientPackage = (appPath, { runCommand = createClientCommandRunner(), root = clientRoot } = {}) => {
   assertDirectory(appPath, 'packaged app bundle');
   const contentsPath = join(appPath, 'Contents');
@@ -156,9 +175,12 @@ export const verifyClientPackage = (appPath, { runCommand = createClientCommandR
   const fuses = verifySecurityFuses(appPath, runCommand);
   runCommand({ command: 'codesign', args: ['--verify', '--deep', '--strict', '--verbose=2', appPath] });
   const appleBridge = verifyAppleBridgeHelper(appPath, runCommand);
+  const notarization = verifyNotarization(appPath, runCommand, root);
   assertCleanHead({ root, expectedSha: releaseMarker.commitSha });
 
-  return { appPath, executable: executablePath, executableArchitecture, bundleIdentifier: identifier, fuses, appleBridge, releaseMarker: embedded };
+  return { appPath, executable: executablePath, executableArchitecture, bundleIdentifier: identifier, fuses, appleBridge,
+    notarization, releaseMarker: embedded,
+    install: 'Drag the app to /Applications, then open it once from Finder. On first launch it reads its worker endpoint from <userData>/client/worker-endpoint.json; see docs/cutover/INSTALL-CLIENT.md.' };
 };
 
 const main = () => {
