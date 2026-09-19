@@ -19,7 +19,7 @@ function founderLocalDate(asOf: string, timezone: string): string {
  *
  * Startup stopped enqueuing them in Batch 10 (D11 step 6a) and now retires
  * whatever it finds queued, because nothing ever executed them:
- * `createDiscoveryWorker` has no caller in `src/`. Tests whose subject is the
+ * the discovery worker that would have consumed them was never composed. Tests whose subject is the
  * executor, the recovery ledger or the restart path still need a real queued
  * root command, so they seed it here instead of relying on startup.
  *

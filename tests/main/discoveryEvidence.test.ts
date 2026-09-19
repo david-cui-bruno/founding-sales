@@ -2,9 +2,7 @@ import { BUILTIN_CADENCES } from '../../src/main/domain/cadence/builtinCadences'
 import { attachTranscript } from '../../src/main/domain/conversations/conversationsDomain';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { collectDiscoveryEvidence, revalidateDiscoverySnapshot, validateDiscoveryClaim, DiscoveryEvidenceDiagnosticError } from '../../src/main/domain/discovery/discoveryEvidence';
-import { evaluateDiscovery } from '../../src/main/domain/discovery/discoveryPolicy';
 import { DomainRuntime } from '../../src/main/domain/domainRuntime';
-import { BUILTIN_PRIORITIZATION_RULE_V1 } from '../../src/main/domain/prioritization/builtinPrioritizationRules';
 import { mapCloudSourceEvent, buildNeedsIdentityIntakeCommand } from '../fixtures/intakeMapper';
 import { validFrboEvent, validParcelEvent } from '../fixtures/cloudSourceEvents';
 import { createDiscoveryDatabase, seedDiscoveryOwner, DISCOVERY_NOW, type DiscoveryDatabase } from '../fixtures/discoveryDatabase';
@@ -346,9 +344,6 @@ describe('coherent collector evidence admission', () => {
     expect(collect(owner.prospectId)).toEqual(snapshot);
     expect(collect(owner.prospectId, '2026-09-07T12:00:00.000Z').inputFingerprint).toBe(snapshot.inputFingerprint);
     expect(f.database.raw.prepare('SELECT total_changes() AS n').get()).toEqual(before);
-    const assessment = evaluateDiscovery({ snapshot, rule: BUILTIN_PRIORITIZATION_RULE_V1, asOf: DISCOVERY_NOW });
-    expect(assessment.axes.fit?.points).toBe(15);
-    expect(assessment.ranking.latestSourceObservedAt).toBe('2026-08-30T00:00:00.000Z');
   });
 
   it('distinguishes real owner entities from unknown-owner placeholders without inferring management', () => {
@@ -415,7 +410,6 @@ describe('coherent collector evidence admission', () => {
     const snapshot = collect(owner.prospectId);
     expect(snapshot.properties[0]?.maintenanceProfile).toBeNull();
     expect(snapshot.claims.find(c => c.label === 'Self-managed')?.certainty).toBe('inference');
-    expect(evaluateDiscovery({ snapshot, rule: BUILTIN_PRIORITIZATION_RULE_V1, asOf: DISCOVERY_NOW }).axes.fit?.points ?? 0).toBeLessThan(8);
   });
 
   it('admits only explicit lead statements naming the exact linked property and excludes amended activities', () => {
@@ -453,7 +447,6 @@ describe('coherent collector evidence admission', () => {
     }
     const linked = f.services.identities.listPropertiesForProspect(owner.prospectId);
     expect(linked).toHaveLength(2);
-    const baselineFit = evaluateDiscovery({ snapshot: collect(owner.prospectId), rule: BUILTIN_PRIORITIZATION_RULE_V1, asOf: DISCOVERY_NOW }).axes.fit?.points;
     const cycle = f.database.raw.prepare('SELECT id FROM sales_cycles WHERE prospect_id = ?').get(owner.prospectId) as { id: string };
     const quote = `I self-manage ${property.addressLine1}.`;
     const ref = statement({ ...owner, salesCycleId: cycle.id }, quote, 'ambiguous-management');
@@ -466,9 +459,6 @@ describe('coherent collector evidence admission', () => {
     expect(snapshot.validatedClaims.some(c => c.value === 'self_managed')).toBe(false);
     expect(snapshot.conflicts).toEqual([]);
     expect(snapshot.validatedClaims.find(c => c.value === quote)?.refs[0]).toMatchObject({ kind: 'utterance', utteranceId: ref, quote });
-    const assessment = evaluateDiscovery({ snapshot, rule: BUILTIN_PRIORITIZATION_RULE_V1, asOf: DISCOVERY_NOW });
-    expect(assessment.unknowns).toContain('Management style is unknown');
-    expect(assessment.axes.fit?.points).toBe(baselineFit);
     expect(f.database.raw.prepare('SELECT total_changes() AS n').get()).toEqual(before);
   });
 
@@ -493,7 +483,6 @@ describe('coherent collector evidence admission', () => {
     expect(snapshot.validatedClaims.length).toBeGreaterThan(100);
     expect(snapshot.claims.length).toBeLessThanOrEqual(100);
     expect(snapshot.conflicts.some(c => c.kind === 'property')).toBe(true);
-    expect(evaluateDiscovery({ snapshot, rule: BUILTIN_PRIORITIZATION_RULE_V1, asOf: DISCOVERY_NOW }).disposition).toBe('judgment');
     expect(f.services.identities.listPropertiesForProspect(owner.prospectId)[0]?.doorCount).toBe(10);
   });
 
@@ -517,9 +506,6 @@ describe('coherent collector evidence admission', () => {
     const snapshot = collect(owner.prospectId);
     expect(snapshot.properties).toHaveLength(1);
     expect(snapshot.properties[0]?.doorCount).toBe(10);
-    const assessment = evaluateDiscovery({ snapshot, rule: BUILTIN_PRIORITIZATION_RULE_V1, asOf: DISCOVERY_NOW });
-    expect(assessment.disposition).toBe('judgment');
-    expect(assessment.axes.fit).toBeNull();
     expect(snapshot.conflicts.some(c => c.kind === 'property')).toBe(true);
     expect(snapshot.validatedClaims.length).toBeGreaterThan(100);
     const sourceAddress = event.entity.property!.situs_address;
@@ -532,11 +518,9 @@ describe('coherent collector evidence admission', () => {
     expect(validateDiscoveryClaim({ snapshot, claim: { ...sourceClaim, value: storedValue } })).toBe(false);
     expect(snapshot.conflicts.some(c => c.claimIds.includes(sourceClaim.id))).toBe(true);
     expect(snapshot.claims).toContainEqual(sourceClaim);
-    expect(assessment.claims).toContainEqual(sourceClaim);
     const storedClaim = snapshot.claims.find(c => c.value === storedValue)!;
     expect(storedClaim).toMatchObject({ certainty: 'unknown', refs: [] });
     expect(validateDiscoveryClaim({ snapshot, claim: storedClaim })).toBe(false);
-    expect(assessment.claims).toContainEqual(storedClaim);
     expect(f.database.raw.prepare('SELECT * FROM properties ORDER BY id').all()).toEqual(rows);
     expect(f.database.raw.prepare('SELECT * FROM source_events ORDER BY id').all()).toEqual(sources);
     expect(f.database.raw.prepare('SELECT total_changes() AS n').get()).toEqual(changes);
