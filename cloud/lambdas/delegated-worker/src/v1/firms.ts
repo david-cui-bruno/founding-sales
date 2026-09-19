@@ -182,7 +182,10 @@ function firmRecordCard(record: FirmRecord, joins: FirmJoins): FirmCard {
   // A record a Places page created derived its state from that listing's address; a hand-entered one from what
   // David typed. Both derived the zone through the same two maps, and the derivation names which record it read.
   const placed = state && timeZone && record.derivedZoneFrom ? { state, zoneFrom: record.derivedZoneFrom } : null;
-  const unplaced = { sourceId: null, state, zoneFrom: null, reason: (state ? 'state_zone_not_recorded' : 'state_not_found') } as const;
+  // Annotated rather than inferred: the root TypeScript configuration compiles without `strictNullChecks`, where a
+  // bare `null` in an object literal is read as `any`.
+  const unplaced: { sourceId: null; state: TerritoryState | null; zoneFrom: null; reason: 'state_zone_not_recorded' | 'state_not_found' } =
+    { sourceId: null, state, zoneFrom: null, reason: state ? 'state_zone_not_recorded' : 'state_not_found' };
   const derivation: FirmDerivation = record.enteredBy === 'research'
     ? placed ? { source: 'firm_record', sourceId: null, ...placed } : { source: 'firm_record', ...unplaced }
     : placed ? { source: 'hand_entered', sourceId: null, ...placed } : { source: 'hand_entered', ...unplaced };

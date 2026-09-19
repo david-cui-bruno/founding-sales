@@ -17,7 +17,7 @@ import { planSetStatePosture, postureSummary, readPostures } from './postures';
 import { readQueueSummary } from './queueView';
 import { readSettingsView } from './settings';
 import { planSuppress } from './suppression';
-import { planSetResearchConfig } from './pool';
+import { planSetResearchConfig, readResearchDiagnostics } from './pool';
 import { planApproveTemplate, planSetSendingLimit } from './templates';
 import { readTodayView } from './today';
 
@@ -258,9 +258,11 @@ export async function v1Router(input: V1RouterInput): Promise<WorkerHttpResponse
       catch (error) { if (error instanceof V1Unauthenticated) return unauthenticated(respond, error); throw error; }
       const query = diagnosticsQuerySchema.safeParse({ kind: input.query.get('kind') ?? undefined, limit: input.query.get('limit') ?? undefined });
       if (!query.success) return respond(400, { error: 'invalid_request' });
-      const [attempts, lastTick, deviceList, postures, queue] = await Promise.all([listAttempts(store, query.data), readLastTick(store), devices.listDevices(), readPostures(store), readQueueSummary(store)]);
+      const [attempts, lastTick, deviceList, postures, queue, research] = await Promise.all([listAttempts(store, query.data), readLastTick(store),
+        devices.listDevices(), readPostures(store), readQueueSummary(store), readResearchDiagnostics(store)]);
       const asOf = store.now();
-      return respond(200, diagnosticsViewSchema.parse({ asOf, attempts, lastTick, devices: deviceList, postures: postures.map(record => postureSummary(record, asOf)), queue }));
+      return respond(200, diagnosticsViewSchema.parse({ asOf, attempts, lastTick, devices: deviceList,
+        postures: postures.map(record => postureSummary(record, asOf)), queue, research }));
     }
     if (path === '/v1/settings' && method === 'GET') {
       // Postures by state and the clearance reference texts (S1b), so David can record postures before S5 ships the rest of Settings.

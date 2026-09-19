@@ -381,6 +381,17 @@ export const diagnosticsViewSchema = z.strictObject({
     queued: count, running: count, failed: count, deadLettered: count,
     lastSchedulerRun: z.strictObject({ at: instant, tickSeq: z.number().int().positive(), enqueued: count, durationMs: count }).nullable(),
   }).optional(),
+  /**
+   * Research as the worker can see it (S4): how many posture-cleared firms are waiting for a morning that has
+   * not offered them yet, what today has spent against its budget, and the window David's operator review
+   * covers. `descriptor` is null until he has recorded one, which is honest rather than an assumed approval.
+   */
+  research: z.strictObject({
+    pool: z.strictObject({ researched: count, unlisted: count, postureCleared: count }),
+    spentToday: count,
+    budget: count,
+    descriptor: z.strictObject({ reviewedAt: instant, expiresAt: instant, status: z.enum(['reviewed', 'expired']) }).nullable(),
+  }).optional(),
 });
 export type DiagnosticsView = z.infer<typeof diagnosticsViewSchema>;
 

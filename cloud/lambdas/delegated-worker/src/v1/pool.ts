@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { accountInstantSchema } from '../../../../../src/shared/contracts/accountContract';
 import { ownerResearchSourceKey, ownerResearchSourceSchema } from '../../../../../src/shared/contracts/ownerCommandContract';
 import { placesQueryGrid } from '../../../../../src/main/research/placesDiscoveryProvider';
-import type { SetResearchConfigCommand, StatePostureRecord } from '../../../../../src/shared/contracts/v1Contract';
+import type { DiagnosticsView, SetResearchConfigCommand, StatePostureRecord } from '../../../../../src/shared/contracts/v1Contract';
 import type { DynamoStore } from '../dynamoStore';
 import { guidedResearchMarkerKey } from '../researchSetup';
 import type { FirmCard } from './firms';
@@ -230,6 +230,17 @@ async function migratedQueries(store: DynamoStore): Promise<string[]> {
   const parsed = source ? ownerResearchSourceSchema.safeParse(source.data) : null;
   if (!parsed?.success || !parsed.data.research) return [];
   try { return placesQueryGrid(parsed.data.research.audience).slice(0, RESEARCH_QUERIES_MAX); } catch { return []; }
+}
+
+/**
+ * Research as `/v1/diagnostics` shows it (S4): the pool, today's spend against its budget, and the operator
+ * descriptor's window with the status recomputed at this instant. Reading it decides nothing and spends nothing.
+ */
+export async function readResearchDiagnostics(store: DynamoStore, now?: string): Promise<NonNullable<DiagnosticsView['research']>> {
+  const at = now ?? store.now();
+  const [pool, budget, settings] = await Promise.all([readPoolCounter(store), remainingResearchToday(store, at), readResearchSettings(store, at)]);
+  return { pool: { researched: pool.researched, unlisted: pool.unlisted, postureCleared: pool.postureCleared },
+    spentToday: budget.spent, budget: budget.budget, descriptor: settings.record.descriptor };
 }
 
 export type ResearchConfigRefusal = 'revision_stale' | 'budget_above_ceiling' | 'no_change';

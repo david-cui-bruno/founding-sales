@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { ownerResearchSourceKey } from '../../../../../src/shared/contracts/ownerCommandContract';
+import type { DiagnosticsView, TodayView } from '../../../../../src/shared/contracts/v1Contract';
 import { jobKey, jobRecordSchema, queueMessage, researchBackfillJobId, researchFirmJobId } from '../../src/queue/jobs';
 import { runQueuedJob } from '../../src/runner';
 import { listAttempts } from '../../src/v1/attempts';
@@ -24,6 +25,8 @@ import { v1Fixture } from './v1Fixture';
  */
 
 const START = '2026-09-18T12:00:00.000Z';
+/** Before 05:00 Eastern the list is not due; 10:00 UTC is 06:00 Eastern on this date, which is. */
+const AFTER_FIVE_EASTERN = '2026-09-18T10:00:00.000Z';
 const sha = (value: string) => createHash('sha256').update(value).digest('hex');
 const source = (n: number, excerpt: string) => ({ id: `page-${n}`, url: `https://firm-${n}.example/page`, fetchedAt: START, sha256: sha(excerpt), excerpt });
 
@@ -317,7 +320,7 @@ describe('research.backfill_page and research.firm on the real runner', () => {
   });
 
   it('recounts the pool from the firms the morning build read', async () => {
-    const f = v1Fixture('2026-09-18T10:00:00.000Z');
+    const f = v1Fixture(AFTER_FIVE_EASTERN);
     const { bearer } = await f.pairDevice();
     await setPosture(f, bearer, 'RI', 'calling');
     await putTerritoryPolicy(f.store, START);
@@ -372,5 +375,33 @@ describe('research.backfill_page and research.firm on the real runner', () => {
     }
     const report = await enqueueResearch(f.store, recordingQueue(), now);
     expect(report.enqueued.filter(job => job.kind === 'research.firm')).toHaveLength(RESEARCH_FIRM_JOBS_PER_TICK);
+  });
+
+  it('shows the pool, the spend, the budget and the descriptor on /v1/diagnostics, and the pool on /v1/today', async () => {
+    const f = v1Fixture(AFTER_FIVE_EASTERN);
+    const { bearer } = await f.pairDevice();
+    await setPosture(f, bearer, 'RI', 'calling');
+    await putTerritoryPolicy(f.store, START);
+    for (let n = 1; n <= 3; n++) await putFirm(f.store, riFirm(n));
+    await runScheduledDayBuild(f.store);
+    await spendResearch(f.store, { units: 4 });
+
+    const diagnostics = f.json(await f.request('GET', '/v1/diagnostics', { authorization: bearer })) as DiagnosticsView;
+    expect(diagnostics.research).toMatchObject({ pool: { researched: 3, unlisted: 3, postureCleared: 3 },
+      spentToday: 4, budget: RESEARCH_DAILY_BUDGET_DEFAULT, descriptor: null });
+
+    // The header's pool size is the counter, read now, not the number frozen into the morning's record.
+    await writePoolCounter(f.store, { researched: 9, unlisted: 7, postureCleared: 5 });
+    const today = f.json(await f.request('GET', '/v1/today', { authorization: bearer })) as TodayView;
+    expect(today.list?.header.poolSize).toBe(5);
+
+    // Once David records the window his operator review covers, Diagnostics says whether it still stands.
+    const settings = await readResearchSettings(f.store);
+    const recorded = f.json(await f.request('POST', '/v1/commands', { authorization: bearer, body: { commandId: randomUUID(),
+      kind: 'set_research_config', expectedRevision: settings.record.revision,
+      descriptor: { reviewedAt: '2026-09-01T00:00:00.000Z', expiresAt: '2026-09-10T00:00:00.000Z' } } }));
+    expect(recorded).toMatchObject({ outcome: 'applied' });
+    const expired = f.json(await f.request('GET', '/v1/diagnostics', { authorization: bearer })) as DiagnosticsView;
+    expect(expired.research?.descriptor).toMatchObject({ status: 'expired' });
   });
 });
