@@ -26,7 +26,7 @@ export const fictionalCalendarId = 'founder@callie.example';
 export function fictionalMeetingPreparation(): AccountPreparation {
   const configuration: OwnerSourceConfiguration = { version: 1, workspaceId: 'ws', accountId: 'maya', pairingId: 'fixture-pairing', revision: 1, state: 'active', mailboxSubject: 'mailbox', calendarId: fictionalCalendarId, research: null };
   return { workspaceId: 'ws', accountId: 'maya', pairingId: 'fixture-pairing', checkedAt: fixtureNow, authority: { accountId: 'maya', owner: 'worker', generation: 1, state: 'active' }, executionVersion: 1,
-    configuration, mailCursor: { mailboxSubject: 'mailbox', envelopeRevision: null, scope: null }, meetingRules: { calendarId: fictionalCalendarId, revision: 1, timezone: 'America/New_York', durationMinutes: 30 } };
+    configuration, mailCursor: { mailboxSubject: 'mailbox', envelopeRevision: null, scope: null } };
 }
 export const fictionalEmailBody = 'Hi Nora,\n\nYour coordinator should stay central to the discussion. Let’s walk through the current handoff first.\n\nDavid';
 const emailRoute: AccountRoute = { id: 'nora-email', accountId: 'nora', personId: 'person-nora', channel: 'email', value: 'nora@riverton.example', purpose: 'business', evidenceIds: ['source-nora'], verification: 'confirmed', version: 1 };
@@ -69,23 +69,15 @@ export function compositionSnapshot(): DailySnapshot {
     routes: id === 'nora' ? [emailRoute] : id === 'marcus' ? [manualRoute] : [],
     portfolio: [], unknowns: ['Buying authority not established'], conflicts: [], fingerprint: hash,
   }));
-  const meetings: DailySnapshot['meetings'] = ['rosa', 'owen'].map((id, i): DailySnapshot['meetings'][number] => {
-    const identity = { meetingId: `meeting-${id}`, calendarId: 'calendar-fixture', providerEventId: i ? 'bbbbb' : 'aaaaa' };
-    return { id: identity.meetingId, accountId: id, revision: 1, payload: { commandId: `meeting-command-${id}`, observedAt: fixtureNow,
-      outcome: { ...identity, status: 'booked', reason: null, event: { ...identity, status: 'confirmed', etag: 'fixture-etag',
-        start: i ? '2026-09-10T14:00:00.000Z' : '2026-09-09T18:30:00.000Z',
-        end: i ? '2026-09-10T14:25:00.000Z' : '2026-09-09T18:55:00.000Z',
-        attendees: [{ email: `${id}@fixture.invalid`, responseStatus: i ? 'needsAction' : 'accepted' }], meetUrl: null } } } };
-  });
   return dailySnapshotSchema.parse(dailyFixture({ accounts, calls: { accountIds: ['maya', 'ben'], workloadConflict: false },
     answers: [{ kind: 'requested_followup', accountId: 'nora', draft: email, approval: null, capability: 'held', reason: 'requires_owner_preflight', presentation: requestedPresentation }, manual,
       { kind: 'reply', accountId: 'maya', thread: fictionalSchedulingThread, draft: null, stale: false, capability: 'held', reason: 'reply_capability_unverified' }],
-    meetings, campaigns: [], ownerStatus: accounts.map((a): DailySnapshot['ownerStatus'][number] => ({ accountId: a.account.id, authority: { accountId: a.account.id, owner: 'worker', generation: 1, state: 'active' }, executionVersion: 1, pendingCommands: [], status: 'owner_applied' })) }));
+    campaigns: [], ownerStatus: accounts.map((a): DailySnapshot['ownerStatus'][number] => ({ accountId: a.account.id, authority: { accountId: a.account.id, owner: 'worker', generation: 1, state: 'active' }, executionVersion: 1, pendingCommands: [], status: 'owner_applied' })) }));
 }
 export function compositionFixture(scenario: 'populated' | 'unpaired' | 'missing' = 'populated') {
   const snapshot = compositionSnapshot();
   if (scenario === 'unpaired') {
-    snapshot.workspaceId = null; snapshot.accounts = []; snapshot.answers = []; snapshot.meetings = []; snapshot.ownerStatus = [];
+    snapshot.workspaceId = null; snapshot.accounts = []; snapshot.answers = []; snapshot.ownerStatus = [];
     snapshot.calls = { accountIds: [], workloadConflict: false };
     snapshot.freshness.kind = 'incomplete'; snapshot.issues = [{ code: 'scope_unknown', count: 1 }];
   } else if (scenario === 'missing') {

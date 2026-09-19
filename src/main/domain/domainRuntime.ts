@@ -174,9 +174,9 @@ export class DomainRuntime {
     });
 
     // 8. Retire the rebuild queue this step used to fill. Nothing executes
-    // `priority_projection_rebuild_v1`: `createDiscoveryWorker` has no caller in
-    // `src/`, so every job enqueued here stayed queued for the life of the installed
-    // database. Startup no longer enqueues, and the jobs an earlier build left queued
+    // `priority_projection_rebuild_v1`: the discovery worker that consumed it was
+    // never composed and has since been removed, so every job enqueued here stayed
+    // queued for the life of the installed database. Startup no longer enqueues, and the jobs an earlier build left queued
     // are cancelled with the same `asOf`. Rows are never deleted: the command payload,
     // its idempotency key and its retry count stay readable, and `finished_at` records
     // the retirement. It runs once in practice, because after the first startup there
@@ -184,7 +184,7 @@ export class DomainRuntime {
     //
     // Only the canonical jobs this step created are retired: `retry_count = 0` and no
     // recovery metadata. A retried or recovery-lineage job exists only because
-    // something executed its root, so a caller that composes a discovery worker keeps
+    // something executed its root, so a caller that composed a discovery worker kept
     // its queue; this sweep never reaches into that lineage.
     //
     // `scan.candidates` above is still the honest count of prospects whose projection

@@ -447,7 +447,6 @@ describe('bounded packaged fixture database preparation', () => {
       services.unitOfWork.immediate(() => services.prioritizationRepository.activateRuleVersion({
         ruleVersionId: 'founder-priority-v1', expectedActiveRuleVersionId: null,
       }));
-      for (const row of database.raw.prepare('SELECT id FROM prospects').all() as { id: string }[]) services.discovery.assess(row.id);
     } finally { closeDatabase(database); key.bytes.fill(0); }
     const backups = fs.readdirSync(join(f.paths.through16, 'backups')).filter(name => name.startsWith('pre-migration-schema-16-'));
     expect(backups).toHaveLength(1);

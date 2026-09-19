@@ -2,11 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AppDatabase } from '../../src/main/db/database';
 import { fakeDomainRuntime } from '../fixtures/fakeDomainRuntime';
-import type { AppleBridgeSupervisorApi } from '../../src/main/appleBridge/appleBridgeSupervisor';
 import type { HealthProvider } from '../../src/main/health/registerHealthIpc';
 import type { ApplicationStartupDependencies, ApplicationStartupOptions, RunningApplication } from '../../src/main/startApplication';
-import { createOutboundCommandService } from '../../src/main/communications/outboundCommandService';
-import type { OutboundCommandServiceApi } from '../../src/main/communications/outboundPorts';
+import { unavailablePhoneHandoff, unavailableOutboundReadiness } from '../../src/main/communications/phoneHandoffLauncher';
 
 const mocks = vi.hoisted(() => {
   const fileLogSink = {
@@ -177,21 +175,6 @@ describe('main process startup', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
 
-  function disabledAppleBridgeSupervisor(): AppleBridgeSupervisorApi {
-    return {
-      start: async () => undefined,
-      getStatus: () => ({
-        state: 'disabled',
-        reason: 'not_packaged_or_configured',
-      }),
-      request: async () => {
-        throw new Error('Apple integration helper is unavailable.');
-      },
-      subscribe: () => () => undefined,
-      stop: async () => undefined,
-    };
-  }
-
   const inertBackupRecovery = (): Pick<ApplicationStartupDependencies, 'createBackupService' | 'createRecoveryService'> => ({
     createBackupService: () => ({ start: async () => undefined, shutdown: async () => undefined,
       listAvailableBackups: async () => [], createBackup: async () => { throw new Error('unexpected backup'); } }),
@@ -200,7 +183,7 @@ describe('main process startup', () => {
   });
 
   it('forwards real source events to the pending startup owner and captured late events cannot revive it after before-quit', async () => {
-    let outbound!: OutboundCommandServiceApi;
+    const invalidate = vi.fn();
     let resolveWindow!: () => void;
     mocks.loadUrl.mockReturnValue(new Promise<void>((resolve) => { resolveWindow = resolve; }));
     const close = vi.fn();
@@ -212,10 +195,9 @@ describe('main process startup', () => {
       migrateToLatest: async () => ({ fromVersion: 0, toVersion: 2, appliedMigrationIds: [] }),
       createDomainRuntime: () => fakeDomainRuntime(),
       createHealthService: () => ({ getHealth: () => ({}) }),
-      createOutboundCommandService: (input) => { outbound = createOutboundCommandService(input); return outbound; },
+      createPhoneBindings: () => ({ phone: unavailablePhoneHandoff(), readiness: unavailableOutboundReadiness(), invalidate }),
       registerTemplateIpc: () => () => undefined,
       registerApplicationIpc: vi.fn(() => vi.fn()),
-      createAppleBridgeSupervisor: disabledAppleBridgeSupervisor,
       closeDatabase: close,
     };
     const actual = await vi.importActual<typeof import('../../src/main/startApplication')>('../../src/main/startApplication');
@@ -225,14 +207,13 @@ describe('main process startup', () => {
     expect(mocks.powerOn.mock.calls.map(([event]) => event)).toEqual(['resume', 'lock-screen', 'unlock-screen']);
     const saved = Object.fromEntries(mocks.powerOn.mock.calls) as Record<string, () => void>;
     saved['lock-screen'](); saved.resume();
-    expect((await outbound.getCapabilities()).phoneHandoff.reasonCode).toBe('workspace_inactive');
+    expect(invalidate.mock.calls).toEqual([[true], []]);
     saved['unlock-screen']();
-    expect((await outbound.getCapabilities()).phoneHandoff.reasonCode).toBe('inbound_safety_unwired');
+    expect(invalidate.mock.calls).toEqual([[true], [], [false]]);
     const beforeQuit = mocks.appOn.mock.calls.find(([event]) => event === 'before-quit')![1];
     beforeQuit({ preventDefault: vi.fn() }); beforeQuit({ preventDefault: vi.fn() });
-    expect((await outbound.getCapabilities()).phoneHandoff.reasonCode).toBe('workspace_inactive');
     saved.resume(); saved['unlock-screen'](); saved['lock-screen']();
-    expect((await outbound.getCapabilities()).phoneHandoff.reasonCode).toBe('workspace_inactive');
+    expect(invalidate.mock.calls).toEqual([[true], [], [false]]);
     expect(mocks.powerRemove).toHaveBeenCalledTimes(3);
     expect([...mocks.powerListeners.values()].every((listeners) => listeners.size === 0)).toBe(true);
     resolveWindow(); await new Promise((resolve) => setTimeout(resolve, 0));
@@ -346,21 +327,13 @@ describe('main process startup', () => {
     expect(mocks.startApplication).toHaveBeenCalledWith({
       appVersion: '4.5.6',
       userDataPath: '/Users/founder/Library/Application Support/Callie',
-      appleBridge: {
+      phoneHelper: {
         platform: process.platform,
         isPackaged: false,
         resourcesPath: process.resourcesPath,
-        environment: {
-          CALLIE_APPLE_BRIDGE_PATH:
-            process.env.CALLIE_APPLE_BRIDGE_PATH,
-        },
-        allowDevelopmentOverride: true,
-        allowUnsignedDevelopment: true,
-        stagingRoot: '/Users/founder/Library/Application Support/Callie/apple-bridge-staging',
         expectedIdentifier: 'com.callie.foundersales.applebridge',
         parentExecutablePath: process.execPath,
       },
-      appleSpikeEnabled: false,
       phoneRouteMode: 'native',
       signal: expect.anything(),
       isTrustedRendererUrl: expect.any(Function),
@@ -396,21 +369,6 @@ describe('main process startup', () => {
     expect(shutdown).toHaveBeenCalledTimes(1);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(mocks.appQuit).toHaveBeenCalledTimes(1);
-  });
-
-  it('enables the spike only from the exact Electron command-line switch', async () => {
-    mocks.commandLineHasSwitch.mockImplementation(
-      (name: string) => name === 'apple-feasibility-spike',
-    );
-    mocks.loadUrl.mockResolvedValue(undefined);
-
-    await import('../../src/main');
-    await settleStartup();
-
-    expect(mocks.commandLineHasSwitch).toHaveBeenCalledWith('apple-feasibility-spike');
-    expect(mocks.startApplication.mock.calls[0]?.[0]).toMatchObject({
-      appleSpikeEnabled: true,
-    });
   });
 
   it('selects the fixture phone route under the mock-keychain test switch', async () => {
@@ -751,7 +709,6 @@ describe('main process startup', () => {
         healthProvider = provider;
         return () => events.push('unregister');
       },
-      createAppleBridgeSupervisor: disabledAppleBridgeSupervisor,
       closeDatabase: () => events.push('close'),
     };
     const actual = await vi.importActual<
@@ -833,7 +790,6 @@ describe('main process startup', () => {
         events.push('ipc');
         return () => events.push('unregister');
       },
-      createAppleBridgeSupervisor: disabledAppleBridgeSupervisor,
       closeDatabase: () => events.push('close'),
     };
     const actual = await vi.importActual<

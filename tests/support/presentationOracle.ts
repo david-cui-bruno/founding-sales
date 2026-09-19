@@ -8,8 +8,9 @@ export const routeProofs = {
   today: { label: 'Today', heading: 'Today', read: 'daily.get' },
   accounts: { label: 'Accounts', heading: 'Accounts', read: 'daily.get' },
   campaigns: { label: 'Campaigns', heading: 'Campaigns', read: 'daily.get' },
-  settings: { label: 'Settings', heading: 'Settings', read: 'appleSpike.getStatus' },
-} satisfies Record<AppRoute, { label: string; heading: string; read: string }>;
+  // Settings performs no bridge read on mount since the Apple spike panel was removed (18 September 2026); its proof is the heading alone.
+  settings: { label: 'Settings', heading: 'Settings', read: null as null },
+} satisfies Record<AppRoute, { label: string; heading: string; read: string | null }>;
 
 /** Exact hold the desk routes show while the legacy workflow is active. The removed legacy queue never renders. */
 export const legacyHoldCopy = 'Legacy workflow is active. Local records remain available. Switch to Native Desk in Settings to change the daily workspace. Worker actions are held.';
@@ -45,7 +46,6 @@ export async function assertActualDestination(page: Page, route: AppRoute, mode:
         const queue = page.getByRole('navigation', { name: 'Today queue', exact: true });
         await expect(queue.getByRole('region', { name: 'Calls', exact: true }).getByRole('button', { name: 'Call · Account A', exact: true })).toBeVisible();
         await expect(queue.getByRole('region', { name: /^Saved draft continuations/ }).locator('[data-row-key]')).toHaveCount(3);
-        await expect(queue.getByRole('region', { name: /^Upcoming meetings/ }).getByRole('button', { name: 'Meeting · Account A · booked', exact: true })).toBeVisible();
       }
       break;
     case 'accounts':

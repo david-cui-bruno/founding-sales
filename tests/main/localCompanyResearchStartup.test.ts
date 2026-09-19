@@ -48,7 +48,6 @@ it.each([false, true])('actual null-start public IPC activation, pairing=%s, sha
     companyResearchResolve: async () => ['93.184.216.34'], companyResearchHttp: async () => { pages++; return new Response(`<p>${quote}</p>`, { headers: { 'content-type': 'text/html' } }); },
     createBackupService: () => ({ start: async () => undefined, shutdown: async () => undefined, createBackup: unexpected, listAvailableBackups: async () => [] }),
     createRecoveryService: () => ({ status: unexpected, beginSetup: unexpected, saveSetupMaterial: unexpected, completeSetup: unexpected, selectAndRunRestoreDrill: unexpected, shutdown: async () => undefined }),
-    createAppleBridgeSupervisor: unexpected,
   };
   const start = () => { electron.handle.mockReset(); electron.removeHandler.mockReset(); return startApplication({ appVersion: '1.0.0', userDataPath: dirname(temp.path), createWindow: () => undefined }, dependencies); };
   let app: Awaited<ReturnType<typeof start>> | undefined;

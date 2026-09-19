@@ -7,7 +7,6 @@ import { authorityStateSchema, commandReceiptSchema } from './delegationContract
 import { requestedFollowupDraftSchema, requestedApprovalStatusSchema } from './requestedFollowupContract';
 import { accountReplyDraftSchema, threadProjectionSchema } from './mailThreadContract';
 import { linkedInDraftSchema, linkedInRecoverySchema } from './linkedInContract';
-import { meetingOutcomePayloadSchema } from './meetingContract';
 import { usageSummarySchema } from './usageContract';
 const id = z.string().min(1).max(255);
 const revision = z.number().int().nonnegative().safe();
@@ -30,8 +29,6 @@ export const dailyAnswerSchema = z.discriminatedUnion('kind', [
   void presentation;
   return saved as typeof a;
 });
-export const dailyMeetingSchema = z.strictObject({ id, accountId: id, revision: revision.positive(), payload: meetingOutcomePayloadSchema })
-  .refine(m => m.id === m.payload.outcome.meetingId, 'meeting_identity_mismatch');
 export const dailyOwnerStatusSchema = z.strictObject({ accountId: id, authority: authorityStateSchema.nullable(), executionVersion: revision.nullable(), pendingCommands: z.array(commandReceiptSchema),
   status: z.enum(['unknown', 'pending', 'owner_applied']) }).refine(o => o.authority === null || o.authority.accountId === o.accountId, 'owner_identity_mismatch');
 export const dailyCampaignSchema = z.strictObject({ version: campaignVersionSchema, snapshotHash: z.string().regex(/^[a-f0-9]{64}$/), caps: z.array(campaignCapSnapshotSchema), enrollments: z.array(enrollmentSchema) }).refine(c => c.caps.every(cap => cap.campaignVersionId === c.version.id) && c.enrollments.every(e => e.campaignVersionId === c.version.id && c.version.cohortAccountIds.includes(e.accountId)), 'campaign_identity_mismatch');
@@ -54,15 +51,15 @@ export const dailySnapshotSchema = z.strictObject({ workspaceId: id.nullable(), 
   /** The derived weekly summary. Like `allocation` it stays outside the revision hash, so measuring
    *  use never changes a stored snapshot revision. Absent when it could not be derived, never zeroed. */
   usage: usageSummarySchema.optional(),
-  answers: z.array(dailyAnswerSchema), meetings: z.array(dailyMeetingSchema), campaigns: z.array(dailyCampaignSchema), ownerStatus: z.array(dailyOwnerStatusSchema), transport: z.array(dailyTransportSchema), issues: z.array(dailyIssueSchema).max(8),
+  answers: z.array(dailyAnswerSchema), campaigns: z.array(dailyCampaignSchema), ownerStatus: z.array(dailyOwnerStatusSchema), transport: z.array(dailyTransportSchema), issues: z.array(dailyIssueSchema).max(8),
   /** Open promised callbacks for the listed firms. Absent when there are none, so a workspace with no callback keeps its exact stored revision. */
   callbacks: z.array(accountCallbackSchema).optional() }).refine(s => {
   const ids = new Set(s.accounts.map(a => a.account.id));
   return ids.size === s.accounts.length
-    && (s.workspaceId !== null || !s.accounts.length && !s.answers.length && !s.meetings.length && !s.campaigns.length && !s.ownerStatus.length && !s.transport.length)
+    && (s.workspaceId !== null || !s.accounts.length && !s.answers.length && !s.campaigns.length && !s.ownerStatus.length && !s.transport.length)
     && s.accounts.every(a => a.routes.every(r => r.accountId === a.account.id))
     && s.calls.accountIds.every(id => ids.has(id))
-    && [...s.answers, ...s.meetings, ...s.ownerStatus].every(item => ids.has(item.accountId))
+    && [...s.answers, ...s.ownerStatus].every(item => ids.has(item.accountId))
     && (s.callbacks ?? []).every(callback => ids.has(callback.accountId))
     && s.answers.every(a => a.kind !== 'manual_linkedin' || a.draft.workspaceId === s.workspaceId)
     && s.campaigns.every(c => c.version.cohortAccountIds.every(id => ids.has(id)));
@@ -74,6 +71,5 @@ export const dailySnapshotSchema = z.strictObject({ workspaceId: id.nullable(), 
 }) }));
 export type DailySnapshot = z.infer<typeof dailySnapshotSchema>;
 export type DailyAnswer = z.infer<typeof dailyAnswerSchema>;
-export type DailyMeeting = z.infer<typeof dailyMeetingSchema>;
 export type DailyIssue = z.infer<typeof dailyIssueSchema>;
 export interface DailyApi { get(): Promise<DailySnapshot>; }

@@ -16,9 +16,6 @@ import { WorkerCampaignRepository } from './workerCampaignRepository';
 import { createDispatchService } from './dispatchService';
 import { createSendReconciler } from './sendReconciler';
 import type { PageHttp } from '../../../../src/main/research/companyPageProvider';
-import { DynamoMeetingRepository, meetingOfferKey } from './meetingRepository';
-import { meetingOfferSchema } from '../../../../src/shared/contracts/meetingContract';
-import { MeetingCoordinator } from './meetingCoordinator';
 import { loadRequestedApproval, requestedApprovalKey, requestedApprovalRecordSchema, type RequestedApprovalRecord } from './requestedFollowupApproval';
 import { DynamoRequestedFollowupRepository, requestedFollowupDraftKey, type RequestedContextPlan } from './requestedFollowupRepository';
 import { requestedFollowupDraftSchema, type RequestedApprovalStatus } from '../../../../src/shared/contracts/requestedFollowupContract';
@@ -41,7 +38,9 @@ export type SourceCoordinatorOptions = { auth: WorkerAuth; authorization: Remote
 export type PlacesBatchReport = { outcome: 'completed' | 'exhausted' | 'uncertain' | 'denied' | 'held'; runId: string | null; created: number; routes: number; enqueued: number; drained: number;
   skipped: { no_website: number; website_blocked: number; duplicate_domain: number; duplicate_phone: number; existing_domain: number; existing_phone: number; route_held: number; enqueue_held: number } };
 export type SourceTickReport = { status: 'inactive' | 'completed' | 'aborted'; researchPrepared: number; researchCompleted: number;
-  mailPolls: number; dispatches: number; sendReconciliations: number; meetings: number; held: number;
+  mailPolls: number; dispatches: number; sendReconciliations: number;
+  /** Always 0 since calendar meetings were removed on 18 September 2026; kept so stored tick records and the desktop's strict schema still agree. */
+  meetings: number; held: number;
   /** Present only when the research phase ran a Places territory batch. */
   places?: PlacesBatchReport;
   /** Present only when the territory backfill phase ran. */
@@ -183,48 +182,6 @@ export function createSourceCoordinator(input: SourceCoordinatorOptions) {
     report.dispatches += emails.sent;
     for (let count = 0; count < emails.held; count++) hold(report, 'dispatch_held');
     for (let count = 0; count < emails.failed; count++) hold(report, 'territory_backfill_held');
-  }
-  async function meetingCursor(accountId: string, kind: string) {
-    const key = `SOURCE_SCAN#${fingerprint({ accountId, kind })}`;
-    const row = await store.get<unknown>(key);
-    return { after: row ? cursorSchema.parse(row.data).after : null,
-      advance: (after: string | null) => store.transact([store.put(key, { after }, row?.rev ?? null)]) };
-  }
-  async function meetings(active: SourceRecord, signal: AbortSignal, fetch: typeof globalThis.fetch, report: SourceTickReport) {
-    const config = await unchanged(active); if (!config.calendarId || !config.mailboxSubject) return;
-    const repository = new DynamoMeetingRepository(store.options, input.authorization);
-    const coordinator = new MeetingCoordinator({ repository, authorization: input.authorization, calendarId: config.calendarId, fetch });
-    const workCursor = await meetingCursor(config.accountId, 'work');
-    const work = await repository.listPreparedIntents(config.accountId, workCursor.after, PAGE_LIMIT);
-    const processed = new Set<string>();
-    for (const item of work.work) { signal.throwIfAborted(); await unchanged(active);
-      if (item.input.calendarId !== config.calendarId || item.input.intent.pairingId !== config.pairingId || item.input.intent.mailboxSubject !== config.mailboxSubject) continue;
-      const result = await coordinator.coordinateMeeting(item.input.intent, signal); processed.add(item.input.intent.commandId); report.meetings++;
-      if (result.status === 'held' || result.status === 'unknown') hold(report, 'meeting_held');
-    }
-    await workCursor.advance(work.nextCursor);
-    const offersCursor = await meetingCursor(config.accountId, 'offers');
-    const offers = await repository.listAcceptedOffers(config.accountId, offersCursor.after, PAGE_LIMIT);
-    // Reserve/settle one current agreement before freezing the next account version.
-    // Existing reserved/unknown work is never re-prepared or resent.
-    for (const offer of offers.offers) { signal.throwIfAborted(); await unchanged(active);
-      const item = await repository.prepareOfferedReply({ accountId: config.accountId, threadId: offer.threadId });
-      if (!item || processed.has(item.input.intent.commandId)) continue;
-      if (item.input.calendarId !== config.calendarId || item.input.intent.pairingId !== config.pairingId || item.input.intent.mailboxSubject !== config.mailboxSubject) continue;
-      const result = await coordinator.coordinateMeeting(item.input.intent, signal); processed.add(item.input.intent.commandId); report.meetings++;
-      if (result.status === 'held' || result.status === 'unknown') hold(report, 'meeting_held');
-    }
-    await offersCursor.advance(offers.nextCursor);
-    const reservationCursor = await meetingCursor(config.accountId, 'reservations');
-    const reservations = await repository.listReservations(config.accountId, reservationCursor.after, PAGE_LIMIT);
-    for (const record of reservations.records) { signal.throwIfAborted();
-      if (processed.has(record.intent.commandId) || record.outcome && record.outcome.status !== 'unknown') continue;
-      await unchanged(active);
-      if (record.identity.calendarId !== config.calendarId || record.intent.pairingId !== config.pairingId || record.intent.mailboxSubject !== config.mailboxSubject) continue;
-      await coordinator.coordinateMeeting(record.intent, signal); report.meetings++;
-    }
-    // Empty filtered pages still carry a continuation and must advance.
-    await reservationCursor.advance(reservations.nextCursor);
   }
   type CapturedRequested = NonNullable<Awaited<ReturnType<typeof loadRequestedApproval>>>;
   const checkKey = (item: TransactWriteItem) => item.ConditionCheck?.Key?.sk?.S;
@@ -375,7 +332,6 @@ export function createSourceCoordinator(input: SourceCoordinatorOptions) {
     return (resource, init) => input.fetch(resource, { ...init, signal: AbortSignal.any([signal, ...(init?.signal ? [init.signal] : [])]) });
   }
   async function configurations(signal: AbortSignal, report: SourceTickReport) {
-    const fetch = boundFetch(signal);
       const configs = await page('OWNER_SOURCE#');
       for (const row of configs.rows) {
         signal.throwIfAborted();
@@ -390,7 +346,6 @@ export function createSourceCoordinator(input: SourceCoordinatorOptions) {
             await poller.pollOnce({ accountId: config.accountId, pairingId: config.pairingId, mailboxSubject: config.mailboxSubject! }, signal);
             report.mailPolls++;
           }
-          await meetings(active, signal, fetch, report);
         } catch { hold(report, 'configuration_failed'); }
       }
       signal.throwIfAborted();
@@ -405,37 +360,20 @@ export function createSourceCoordinator(input: SourceCoordinatorOptions) {
         signal.throwIfAborted();
         await commands.advance(row.key);
         const parsed = submittedSchema.safeParse(row.data);
-        if (!parsed.success || !['submit-approved-reply', 'approve-reply', 'approve-requested-followup'].includes(parsed.data.command.kind)) continue;
+        if (!parsed.success || !['submit-approved-reply', 'approve-requested-followup'].includes(parsed.data.command.kind)) continue;
         try {
           const { command, receipt } = parsed.data;
           if (row.key !== `COMMAND#${keyPart(command.commandId)}` || command.workspaceId !== store.options.workspaceId
             || parsed.data.fingerprint !== fingerprint(command) || receipt.commandId !== command.commandId || receipt.status !== 'applied'
             || receipt.authorityGeneration !== command.expectedAuthorityGeneration || receipt.aggregateVersion !== command.expectedVersion + 1) throw new Error('source_command_mismatch');
           if (command.kind === 'approve-requested-followup') { await resumeRequested(command.commandId,signal,report); continue; }
-          if (command.kind !== 'submit-approved-reply' && command.kind !== 'approve-reply') continue;
+          if (command.kind !== 'submit-approved-reply') continue;
           const active = await source(command.accountId); if (!active) continue;
           const intent = await policy.loadIntent(command.payload.intentCommandId);
           if (!intent || intent.commandId !== command.payload.intentCommandId || intent.action.accountId !== command.accountId
             || intent.action.workspaceId !== command.workspaceId || intent.pairingId !== active.data.pairingId || intent.mailboxSubject !== active.data.mailboxSubject
             || intent.action.expectedAuthorityGeneration !== command.expectedAuthorityGeneration) throw new Error('source_intent_mismatch');
           const action = await execution.readDispatch(command.accountId, intent.action.actionId); if (!action) throw new Error('source_action_missing');
-          if (command.kind === 'approve-reply') {
-            const scheduling = command.payload.schedulingOffer;
-            if (!scheduling || action.state !== 'provider_accepted') continue;
-            if (intent.action.actionId !== command.payload.actionId || intent.action.approvalId !== command.payload.approvalId) throw new Error('source_approval_mismatch');
-            await unchanged(active); signal.throwIfAborted();
-            const previous = await store.get<unknown>(meetingOfferKey(command.accountId, scheduling.offer.threadId));
-            if (previous) {
-              const offer = meetingOfferSchema.parse(previous.data);
-              if (offer.revision > scheduling.offer.revision) continue;
-              if (offer.revision === scheduling.offer.revision) {
-                if (fingerprint(offer) !== fingerprint(scheduling.offer)) throw new Error('source_offer_conflict');
-                continue;
-              }
-            }
-            await new DynamoMeetingRepository(store.options, input.authorization).saveOffer(scheduling);
-            continue;
-          }
           if (['provider_accepted', 'cancelled', 'human_reported_sent'].includes(action.state)) continue;
           await unchanged(active); signal.throwIfAborted(); report.status = 'completed';
           if (action.reservation || action.state === 'dispatching' || action.state === 'unknown') {

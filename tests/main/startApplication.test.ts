@@ -18,8 +18,7 @@ import {
   type ApplicationStartupOptions,
 } from '../../src/main/startApplication';
 import type { AppHealth } from '../../src/shared/healthContract';
-import { createOutboundCommandService } from '../../src/main/communications/outboundCommandService';
-import type { OutboundCommandServiceApi } from '../../src/main/communications/outboundPorts';
+import { unavailablePhoneHandoff, unavailableOutboundReadiness } from '../../src/main/communications/phoneHandoffLauncher';
 import type { FoundationRuntime } from '../../src/main/foundation/foundationRuntime';
 
 const nativeDialogs = vi.hoisted(() => ({ showSaveDialog: vi.fn(), showOpenDialog: vi.fn() }));
@@ -49,8 +48,6 @@ const keyDependencies = () => ({
 });
 
 describe('startApplication', () => {
-  const request = { commandId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', channel: 'call' as const,
-    personId: 'p', salesCycleId: 's', contactMethodId: 'c', expectedContactSnapshot: 'a'.repeat(64) };
   const deferred = <T,>() => {
     let resolve!: (value: T) => void;
     let reject!: (error: Error) => void;
@@ -101,9 +98,6 @@ describe('startApplication', () => {
         events.push('ipc');
         captureHealth?.(provider);
         return () => events.push('unregister');
-      },
-      createAppleBridgeSupervisor: () => {
-        throw new Error('Apple bridge must not be created without startup options.');
       },
       closeDatabase: () => events.push('close'),
     };
@@ -202,16 +196,12 @@ describe('startApplication', () => {
     const bindings = { phone, readiness, setup, invalidate: vi.fn(), dispose: vi.fn(() => events.push('phone-dispose')) };
     dependencies.createPhoneBindings = () => { expect(events).toContain('recover'); return bindings; };
     dependencies.registerPhoneSetupIpc = () => () => events.push('phone-unregister');
-    let outbound!: OutboundCommandServiceApi;
-    dependencies.createOutboundCommandService = input => { outbound = createOutboundCommandService(input); return outbound; };
     let callbacks!: Parameters<NonNullable<ApplicationStartupOptions['registerOutboundLifecycle']>>[0];
     const app = await startApplication({ appVersion: '1', userDataPath: '/fixture/phone', createWindow: () => undefined,
       registerOutboundLifecycle: owned => { callbacks = owned; return () => undefined; } }, dependencies);
-    expect((await outbound.getCapabilities()).phoneHandoff.state).toBe('available');
     callbacks.onLock(); expect(bindings.invalidate).toHaveBeenLastCalledWith(true);
-    callbacks.onWake(); expect((await outbound.getCapabilities()).phoneHandoff.state).toBe('unavailable');
+    callbacks.onWake(); expect(bindings.invalidate).toHaveBeenLastCalledWith();
     callbacks.onUnlock(); expect(bindings.invalidate).toHaveBeenLastCalledWith(false);
-    expect((await outbound.getCapabilities()).phoneHandoff.state).toBe('available');
     await app.shutdown(); await app.shutdown();
     expect(bindings.dispose).toHaveBeenCalledTimes(1);
     expect(events.indexOf('phone-dispose')).toBeLessThan(events.indexOf('close'));
@@ -364,19 +354,11 @@ describe('startApplication', () => {
     }
   }, 30_000);
 
-  it('constructs one outbound service after initialization, registers lifecycle before exposure and passes the IPC composition unchanged', async () => {
+  it('registers lifecycle before exposure and passes the IPC composition unchanged', async () => {
     const events: string[] = [];
     const dependencies = createDependencies(events);
-    let service!: OutboundCommandServiceApi;
     let runtime!: FoundationRuntime;
     let callbacks!: Parameters<NonNullable<ApplicationStartupOptions['registerOutboundLifecycle']>>[0];
-    const factory = vi.fn<typeof createOutboundCommandService>((input) => {
-      expect(events).toContain('recover');
-      events.push('outbound');
-      service = createOutboundCommandService(input);
-      return service;
-    });
-    dependencies.createOutboundCommandService = factory;
     const register = vi.fn<ApplicationStartupDependencies['registerApplicationIpc']>((bound) => {
       runtime = bound; events.push('ipc'); return () => events.push('unregister');
     });
@@ -390,28 +372,15 @@ describe('startApplication', () => {
       createWindow: () => { events.push('window'); },
     }, dependencies);
     try {
-      expect(factory).toHaveBeenCalledTimes(1);
       expect(register.mock.calls[0]).toEqual([runtime, trust, undefined, expect.any(Object), undefined, '/fixture/logs', { selectedCompanyResearch: { current: expect.any(Function) }, companyResearchSettings: { changed: expect.any(Function), pairedResearchPresent: expect.any(Function) } }]);
       expect(register.mock.calls[0]![6]?.selectedCompanyResearch?.current()).toBeNull();
-      expect(events.slice(4, 8)).toEqual(['outbound', 'listen', 'ipc', 'window']);
+      expect(events.slice(4, 7)).toEqual(['listen', 'ipc', 'window']);
       expect(removeAbort).toHaveBeenCalledTimes(1);
       const domain = vi.spyOn(runtime, 'withDomain');
-      const active = await service.getCapabilities();
-      expect(active.phoneHandoff).toEqual({ state: 'unavailable', reasonCode: 'inbound_safety_unwired' });
-      expect(active.localDrafts).toBe(true);
-      for (const name of ['callObservation', 'recording', 'messagesSend', 'gmailSend', 'managedAudioImport', 'appleTranscriptExtraction'] as const) {
-        expect(active[name]).toEqual({ state: 'unavailable', reasonCode: 'not_integrated' });
-      }
-      callbacks.onLock(); callbacks.onWake();
-      expect((await service.getCapabilities()).phoneHandoff.reasonCode).toBe('workspace_inactive');
-      await expect(service.beginOutbound(request)).rejects.toThrow('inactive');
-      callbacks.onUnlock();
-      expect((await service.getCapabilities()).phoneHandoff.reasonCode).toBe('inbound_safety_unwired');
+      callbacks.onLock(); callbacks.onWake(); callbacks.onUnlock();
       expect(domain).not.toHaveBeenCalled();
       await app.shutdown();
       callbacks.onWake(); callbacks.onUnlock(); callbacks.onLock();
-      expect((await service.getCapabilities()).phoneHandoff.reasonCode).toBe('workspace_inactive');
-      await expect(service.beginOutbound(request)).rejects.toThrow('inactive');
       expect(domain).not.toHaveBeenCalled();
       expect(events.slice(-3)).toEqual(['unlisten', 'unregister', 'close']);
     } finally { await app.shutdown(); removeAbort.mockRestore(); }
@@ -422,16 +391,11 @@ describe('startApplication', () => {
     const dependencies = createDependencies(events);
     const drain = deferred<void>();
     let reentrant!: Promise<void>;
-    let service!: OutboundCommandServiceApi;
     const disposeError = new Error('injected disposer failed before cleaning');
     const listenerError = new Error('listener cleanup failed');
-    const invalidate = vi.fn<OutboundCommandServiceApi['invalidate']>();
+    const invalidate = vi.fn();
     const dispose = vi.fn(() => { reentrant = app.shutdown(); throw disposeError; });
-    dependencies.createOutboundCommandService = (input) => {
-      service = createOutboundCommandService(input);
-      invalidate.mockImplementation((reason) => service.invalidate(reason));
-      return { ...service, dispose, invalidate };
-    };
+    dependencies.createPhoneBindings = () => ({ phone: unavailablePhoneHandoff(), readiness: unavailableOutboundReadiness(), invalidate, dispose });
     dependencies.createRecoveryService = () => ({ status: vi.fn(), beginSetup: vi.fn(), saveSetupMaterial: vi.fn(),
       completeSetup: vi.fn(), selectAndRunRestoreDrill: vi.fn(), shutdown: () => { events.push('recovery-stop'); return drain.promise; } });
     let callbacks!: Parameters<NonNullable<ApplicationStartupOptions['registerOutboundLifecycle']>>[0];
@@ -452,17 +416,14 @@ describe('startApplication', () => {
     const error = await observed as AggregateError;
     expect(error.errors).toEqual([disposeError, listenerError]);
     expect(events.filter((event) => event === 'close')).toHaveLength(1);
-    // A throwing injected disposer did NOT clean its service. Explicit fixture cleanup only.
-    service.dispose();
   });
 
   it.each(['factory', 'registration'] as const)('handles a signal aborted synchronously during %s without exposing IPC', async (during) => {
     const dependencies = createDependencies([]); const controller = new AbortController();
     const dispose = vi.fn(); const unlisten = vi.fn();
-    dependencies.createOutboundCommandService = (input) => {
-      const service = createOutboundCommandService(input); dispose.mockImplementation(() => service.dispose());
+    dependencies.createPhoneBindings = () => {
       if (during === 'factory') controller.abort();
-      return { ...service, dispose };
+      return { phone: unavailablePhoneHandoff(), readiness: unavailableOutboundReadiness(), dispose };
     };
     const register = vi.fn(() => vi.fn()); dependencies.registerApplicationIpc = register;
     await expect(startApplication({ appVersion: '1', userDataPath: '/fixture/sync-abort', signal: controller.signal,
@@ -478,9 +439,8 @@ describe('startApplication', () => {
     const controller = new AbortController(); const entered = deferred<void>(); const window = deferred<void>();
     const originalError = new Error('window'); const disposeError = new Error('dispose');
     const lifecycleError = new Error('lifecycle'); const abortError = new Error('abort removal');
-    let service!: OutboundCommandServiceApi;
     const dispose = vi.fn(() => { throw disposeError; });
-    dependencies.createOutboundCommandService = (input) => { service = createOutboundCommandService(input); return { ...service, dispose }; };
+    dependencies.createPhoneBindings = () => ({ phone: unavailablePhoneHandoff(), readiness: unavailableOutboundReadiness(), dispose });
     const remove = controller.signal.removeEventListener.bind(controller.signal);
     const removeSpy = vi.spyOn(controller.signal, 'removeEventListener').mockImplementation((...args) => { remove(...args); throw abortError; });
     const unlisten = vi.fn(() => { throw lifecycleError; });
@@ -495,7 +455,7 @@ describe('startApplication', () => {
     expect((error.errors[1] as AggregateError).errors).toEqual([disposeError, lifecycleError, abortError]);
     expect(events.slice(-2)).toEqual(['unregister', 'close']);
     expect(dispose).toHaveBeenCalledTimes(1); expect(removeSpy).toHaveBeenCalledTimes(1);
-    removeSpy.mockRestore(); service.dispose(); // The injected throwing disposer never cleaned it.
+    removeSpy.mockRestore();
   });
 
   it.each(['resolve', 'reject'] as const)('startup abort permanently closes outbound while the window is pending, late window %s', async (settle) => {
@@ -503,12 +463,8 @@ describe('startApplication', () => {
     const dependencies = createDependencies(events);
     const window = deferred<void>(); const entered = deferred<void>();
     const controller = new AbortController();
-    let service!: OutboundCommandServiceApi;
-    let dispose!: ReturnType<typeof vi.fn>;
-    dependencies.createOutboundCommandService = (input) => {
-      service = createOutboundCommandService(input); dispose = vi.fn(() => service.dispose());
-      return { ...service, dispose };
-    };
+    const dispose = vi.fn();
+    dependencies.createPhoneBindings = () => ({ phone: unavailablePhoneHandoff(), readiness: unavailableOutboundReadiness(), dispose });
     const remove = vi.spyOn(controller.signal, 'removeEventListener');
     const unlisten = vi.fn();
     const startup = startApplication({ appVersion: '1', userDataPath: '/fixture/abort', signal: controller.signal,
@@ -521,7 +477,6 @@ describe('startApplication', () => {
     expect(dispose).toHaveBeenCalledTimes(1);
     expect(unlisten).toHaveBeenCalledTimes(1);
     expect(remove).toHaveBeenCalledTimes(1);
-    expect((await service.getCapabilities()).phoneHandoff.reasonCode).toBe('workspace_inactive');
     expect(events).not.toContain('close');
     if (settle === 'resolve') window.resolve(); else window.reject(new Error('window rejected'));
     expect(await observed).toBeInstanceOf(Error);
@@ -530,18 +485,16 @@ describe('startApplication', () => {
     remove.mockRestore();
   });
 
-  it.each(['initialize', 'factory', 'lifecycle', 'ipc', 'window'] as const)('cleans the one constructed service on startup failure at %s', async (stage) => {
+  it.each(['initialize', 'factory', 'lifecycle', 'ipc', 'window'] as const)('cleans the constructed phone bindings on startup failure at %s', async (stage) => {
     const events: string[] = [];
     const dependencies = createDependencies(events);
     const failure = new Error(stage);
     const dispose = vi.fn(); const unlisten = vi.fn();
-    const factory = vi.fn<typeof createOutboundCommandService>((input) => {
+    const factory = vi.fn(() => {
       if (stage === 'factory') throw failure;
-      const service = createOutboundCommandService(input);
-      dispose.mockImplementation(() => service.dispose());
-      return { ...service, dispose };
+      return { phone: unavailablePhoneHandoff(), readiness: unavailableOutboundReadiness(), dispose };
     });
-    dependencies.createOutboundCommandService = factory;
+    dependencies.createPhoneBindings = factory;
     if (stage === 'initialize') dependencies.migrateToLatest = async () => { throw failure; };
     if (stage === 'ipc') dependencies.registerApplicationIpc = () => { throw failure; };
     await expect(startApplication({ appVersion: '1', userDataPath: '/fixture/start-failure',
@@ -914,7 +867,6 @@ describe('startApplication background sync (D3)', () => {
       createHealthService: () => ({ getHealth: () => health }),
       registerTemplateIpc: () => () => undefined,
       registerApplicationIpc: () => { events.push('ipc'); return () => events.push('unregister'); },
-      createAppleBridgeSupervisor: () => { throw new Error('Apple bridge must not be created without startup options.'); },
       closeDatabase: () => events.push('close'),
       createPairingStore: () => ({ load: async () => ({ ...pairing, scopes: [...pairing.scopes] }), redeem: async () => { throw Error('No pairing operation authorized'); } }),
       registerOutreachIpc: () => () => undefined,

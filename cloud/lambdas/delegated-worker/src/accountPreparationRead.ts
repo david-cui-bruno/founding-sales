@@ -2,8 +2,7 @@ import { z } from 'zod';
 import { accountPreparationRequestSchema, accountPreparationSchema, type AccountPreparation } from '../../../../src/shared/contracts/accountPreparationContract';
 import { accountRecordSchema } from '../../../../src/shared/contracts/accountRecordContract';
 import { ownerSourceConfigurationSchema, ownerSourceKey } from '../../../../src/shared/contracts/ownerCommandContract';
-import { schedulingRulesSchema } from '../../../../src/shared/contracts/meetingContract';
-import { DynamoStore, keyPart } from './dynamoStore';
+import { DynamoStore } from './dynamoStore';
 import { authorityRecordSchema, executionAuthorityKey, executionAuthorityFields } from './executionRepository';
 import { accountKey } from './workerAccountRepository';
 import { DynamoThreadIntakeRepository, mailCursorKey } from './threadIntakeRepository';
@@ -52,17 +51,6 @@ export async function readAccountPreparation(auth: WorkerAuth, raw: unknown, aut
       checks.push(cursor ? store.check(key, cursor.rev) : store.absent(key));
       mailCursor = { mailboxSubject: subject, envelopeRevision: cursor?.rev ?? null, scope: cursor?.data.scope ?? null };
     }
-    let meetingRules: AccountPreparation['meetingRules'];
-    if (configuration?.calendarId !== null && configuration?.calendarId !== undefined) {
-      // The same MEETING_RULES#<calendarId> row DynamoMeetingRepository fences at
-      // approval. Absent rules are returned as null and proven absent, never defaulted.
-      const calendarId = configuration.calendarId, key = `MEETING_RULES#${keyPart(calendarId)}`;
-      const row = await store.get<unknown>(key);
-      checks.push(row ? store.check(key, row.rev) : store.absent(key));
-      const rules = row ? schedulingRulesSchema.parse(row.data) : null;
-      if (rules && rules.ownedCalendarId !== calendarId) throw unavailable();
-      meetingRules = rules?.confirmed ? { calendarId, revision: rules.revision, timezone: rules.timezone, durationMinutes: rules.durationMinutes } : null;
-    }
     // Strong Gets alone are not a snapshot. Fence the SAME rows we return;
     // fencedDynamo adds current TOKEN/PAIRING conditions to this transaction.
     try { await store.transact(checks); }
@@ -74,7 +62,7 @@ export async function readAccountPreparation(auth: WorkerAuth, raw: unknown, aut
       throw error;
     }
     return accountPreparationSchema.parse({ ...request, pairingId: principal.pairingId, checkedAt: store.now(),
-      authority: authority.authority, executionVersion: authority.version, configuration, mailCursor, ...(meetingRules === undefined ? {} : { meetingRules }) });
+      authority: authority.authority, executionVersion: authority.version, configuration, mailCursor });
   } catch (error) {
     if (error instanceof AccountPreparationReadError) throw error;
     if (error instanceof Error && error.message === 'worker_unauthorized') throw new AccountPreparationReadError(401, 'worker_unauthorized');

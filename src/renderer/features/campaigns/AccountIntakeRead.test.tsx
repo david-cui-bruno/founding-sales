@@ -203,7 +203,6 @@ it('nests the intake configuration controls after a successful read, bound to th
   // This fixture bridge has no grant knowledge: relevant mail is withheld with the reason, never offered.
   expect(panel.getByText('Grant status is unavailable in this bridge. Relevant mail is not offered.')).toBeTruthy();
   expect(panel.queryByRole('button', { name: 'Switch on relevant mail' })).toBeNull();
-  expect(panel.getByRole<HTMLButtonElement>('button', { name: 'Use calendar' }).disabled).toBe(true);
   expect(f.read).toHaveBeenCalledTimes(1);
   expect(f.calls).toEqual([]);
   // The parent's guard closes the controls with the read.

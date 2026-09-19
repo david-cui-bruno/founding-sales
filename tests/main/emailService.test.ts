@@ -6,6 +6,7 @@ import { migration0019EmailDrafts } from '../../src/main/db/migrations/0019Email
 import { createDomainServices, type DomainServices } from '../../src/main/domain/createDomainServices';
 import { createFounderSalesDomain, type FounderSalesDomain } from '../../src/main/domain/founderSalesDomain';
 import { createEmailService } from '../../src/main/outreach/emailService';
+import type { CompleteCurrentActionInput } from '../../src/main/domain/lifecycle/lifecycleTransactionWriter';
 import { AccountRepository } from '../../src/main/domain/accounts/accountRepository';
 import { companyDraftFacts } from '../../src/main/outreach/companyDraftContext';
 import { EmailRepository } from '../../src/main/outreach/emailRepository';
@@ -60,6 +61,30 @@ describe('durable explicit email using real encrypted SQLite', () => {
   async function readyDraft() {
     const draft=await service.openDraft({personId,contactMethodId});
     return service.saveDraft({draftId:draft.id,expectedRevision:draft.revision,subject:'Hello',body:'A personally reviewed email.'});
+  }
+  /** The removed call-outcome command's opt-out path: person-wide closure with this call as founder-confirmed evidence. */
+  function optOutByCall() {
+    services.optOut.apply({personId,tombstoneId:randomUUID(),requestedAt:now(),policyVersion:'founder_opt_out_v1',
+      decision:{kind:'founder_confirmed',channel:'call'},
+      evidence:{kind:'append_activity',activity:{id:randomUUID(),personId,prospectId:'email-prospect',salesCycleId:'email-cycle',
+        kind:'call',direction:'outbound',channel:'phone',occurredAt:now(),observedOutcome:'opted_out',metadata:{formatVersion:1,loggedVia:'call_outcome'}}},
+      terminalStageEventId:randomUUID()});
+  }
+  /** The removed complete-action command: append the outbound evidence, then the guarded cadence completion. */
+  function completeCurrentAction(cycleId:string,actionId:string,outcome:CompleteCurrentActionInput['outcome']) {
+    const cycle=db.raw.prepare('SELECT person_id,prospect_id,version FROM sales_cycles WHERE id=?').get(cycleId) as {person_id:string;prospect_id:string;version:number};
+    const action=db.raw.prepare('SELECT action_type,channel,version,cadence_enrollment_id,cadence_step_id,cadence_component_id FROM next_actions WHERE id=?').get(actionId) as
+      {action_type:string;channel:string|null;version:number;cadence_enrollment_id:string;cadence_step_id:string;cadence_component_id:string};
+    const enrollment=db.raw.prepare('SELECT version FROM cadence_enrollments WHERE id=?').get(action.cadence_enrollment_id) as {version:number};
+    const kind=action.action_type==='voicemail'?'voicemail':action.action_type==='text'?'text':action.action_type==='email'?'email':'call';
+    services.unitOfWork.immediate(()=>{
+      const appended=services.events.appendActivity({id:randomUUID(),personId:cycle.person_id,prospectId:cycle.prospect_id,salesCycleId:cycleId,
+        cadenceEnrollmentId:action.cadence_enrollment_id,cadenceStepId:action.cadence_step_id,cadenceComponentId:action.cadence_component_id,
+        kind,direction:'outbound',channel:action.channel??kind,occurredAt:now(),observedOutcome:outcome,metadata:{formatVersion:1,completedVia:'test_fixture'}});
+      services.lifecycle.scopedWriter().completeCurrentAction({cycleId,expectedCycleVersion:cycle.version,expectedCurrentActionId:actionId,
+        expectedActionVersion:action.version,expectedEnrollmentVersion:enrollment.version,outcome,activityId:appended.id,
+        impossibleDisposition:null,evaluationAt:now(),manualReactivationDueAt:null});
+    });
   }
   it.each([false,true])('keeps the 40-fact prompt bounded with crowded person facts and company context=%s',async linked=>{
     for(let index=0;index<45;index++){
@@ -137,7 +162,7 @@ describe('durable explicit email using real encrypted SQLite', () => {
     expect(db.raw.prepare('SELECT COUNT(*) AS n FROM email_send_intents').get()).toEqual({n:1});
   });
   it('rechecks person-wide suppression after token preparation',async()=>{
-    const draft=await readyDraft();prepareHook=()=>domain.logCallOutcome({personId,salesCycleId:'email-cycle',outcome:'opted_out',callbackAt:null,occurredAt:now()});
+    const draft=await readyDraft();prepareHook=optOutByCall;
     await expect(service.sendDraft({draftId:draft.id,expectedRevision:draft.revision,commandId:randomUUID()})).rejects.toThrow();
     expect(sent).toHaveLength(0);
   });
@@ -200,7 +225,7 @@ describe('durable explicit email using real encrypted SQLite', () => {
     for(let count=0;count<20;count++){
       action=db.raw.prepare('SELECT a.id,a.action_type FROM sales_cycles c JOIN next_actions a ON a.id=c.current_next_action_id WHERE c.id=?').get(cycle.id) as {id:string;action_type:string};
       if(action.action_type==='email')break;
-      domain.completePrimaryAction({salesCycleId:cycle.id,actionId:action.id,outcome:action.action_type==='call'?'no_answer':action.action_type==='voicemail'?'voicemail_left':'accepted',activityId:null});
+      completeCurrentAction(cycle.id,action.id,action.action_type==='call'?'no_answer':action.action_type==='voicemail'?'voicemail_left':'accepted');
     }
     expect(action?.action_type).toBe('email');
     db.raw.prepare(`INSERT INTO person_contact_methods(id,person_id,kind,normalized_value,validation_state,reachability,is_primary,created_at,updated_at)
@@ -219,7 +244,7 @@ describe('durable explicit email using real encrypted SQLite', () => {
     expect(()=>service.sendDraft({draftId:draft.id,expectedRevision:draft.revision,commandId:randomUUID()})).toThrow();
   });
   it('late opt-out preserves accepted evidence without promoting the cycle',async()=>{
-    const draft=await readyDraft();sendHook=()=>domain.logCallOutcome({personId,salesCycleId:'email-cycle',outcome:'opted_out',callbackAt:null,occurredAt:now()});
+    const draft=await readyDraft();sendHook=optOutByCall;
     expect((await service.sendDraft({draftId:draft.id,expectedRevision:draft.revision,commandId:randomUUID()})).status).toBe('sent');
     expect(db.raw.prepare('SELECT stage FROM sales_cycles WHERE id=?').get('email-cycle')).toEqual({stage:'lost_nurture'});
     expect(db.raw.prepare("SELECT COUNT(*) AS n FROM activities WHERE adapter='fss_gmail_v1'").get()).toEqual({n:1});
@@ -249,7 +274,8 @@ describe('durable explicit email using real encrypted SQLite', () => {
     expect(db.raw.prepare('SELECT subject FROM email_drafts WHERE id=?').get(draft.id)).toEqual({subject:'Hello'});
   });
   it('generates once only for pristine drafts and excludes private note prose',async()=>{
-    domain.addLeadNote({personId,salesCycleId:'email-cycle',text:'SECRET PRIVATE NOTE'});
+    services.unitOfWork.immediate(()=>services.events.appendActivity({id:randomUUID(),personId,prospectId:'email-prospect',salesCycleId:'email-cycle',
+      kind:'note',direction:'internal',channel:'note',occurredAt:now(),observedOutcome:null,noteText:'SECRET PRIVATE NOTE',metadata:{formatVersion:1,loggedVia:'founder_note'}}));
     setup.model='ready'; const draft=await service.openDraft({personId,contactMethodId});
     expect(draft.generation).toBe('model');expect(contexts).toHaveLength(1);
     expect(JSON.stringify(contexts)).not.toContain('SECRET PRIVATE NOTE');
@@ -387,7 +413,7 @@ describe('durable explicit email using real encrypted SQLite', () => {
   it('Task7 ownership observation never replaces final Send suppression recheck',async()=>{
     const draft=await readyDraft();
     expect((await service.inspectLocalAuthority({draftId:draft.id,expectedRevision:draft.revision})).state).toBe('allowed');
-    domain.logCallOutcome({personId,salesCycleId:'email-cycle',outcome:'opted_out',callbackAt:null,occurredAt:now()});
+    optOutByCall();
     await expect(service.sendDraft({draftId:draft.id,expectedRevision:draft.revision,commandId:randomUUID()})).rejects.toThrow();
     expect(sent).toEqual([]);expect(db.raw.prepare('SELECT * FROM email_send_intents').all()).toEqual([]);
   },10000);

@@ -33,16 +33,7 @@ import { join } from 'node:path';
 import { RecoveryService, type RecoveryServiceOptions, type RecoveryDialogs } from './recovery/recoveryService';
 import type { RecoveryProvider } from '../shared/contracts/recoveryContract';
 
-import {
-  AppleBridgeSupervisor,
-  type AppleBridgeSupervisorApi,
-  type AppleBridgeSupervisorOptions,
-} from './appleBridge/appleBridgeSupervisor';
-import {
-  AppleSpikeService,
-  type AppleSpikeServiceApi,
-} from './appleBridge/appleSpikeService';
-import { registerAppleSpikeIpc } from './appleBridge/registerAppleSpikeIpc';
+import type { PhoneHelperOptions } from './appleBridge/helperPath';
 import { BackupService, type BackupServiceOptions } from './backup/backupService';
 import type { VerifiedBackup } from './backup/verifiedBackup';
 import { closeDatabase, openDatabase } from './db/database';
@@ -65,10 +56,9 @@ import { SafeStorageKeyProtector } from './security/safeStorageKeyProtector';
 import { WorkspaceKeyStore } from './security/workspaceKeyStore';
 import { classifyStartupFailure, isStartupCancellation, type StartupStage } from './startup/startupFailure';
 import type { SafeLogger } from './logging/safeLogger';
-import { createOutboundCommandService } from './communications/outboundCommandService';
 import { createPhoneHandoffLauncher, unavailablePhoneHandoff, unavailableOutboundReadiness } from './communications/phoneHandoffLauncher';
 import { isExcludedNumber } from './communications/excludedNumbers';
-import type { OutboundCommandServiceApi, OutboundDomainGate, PhoneHandoffPort, OutboundReadinessPort } from './communications/outboundPorts';
+import type { PhoneHandoffPort, OutboundReadinessPort } from './communications/outboundPorts';
 
 import { createInboundReadiness, type InboundRegistry, type InboundAdapter } from './communications/inboundReadiness';
 import { createNativePhoneLaunchDriver, inspectNativePhoneRouteCandidate, resolveVerifiedNativePhoneHelper,
@@ -206,12 +196,12 @@ export function createStartupPhoneBindings(options: ApplicationStartupOptions, r
     });
     return { ...bindings, fixtureInvocations: invocations };
   }
-  const bridge = options.appleBridge;
+  const helper = options.phoneHelper;
   return createProductionPhoneBindings({ settings, registry,
-    helper: { path: { isPackaged: bridge?.isPackaged ?? false, resourcesPath: bridge?.resourcesPath ?? '',
+    helper: { path: { isPackaged: helper?.isPackaged ?? false, resourcesPath: helper?.resourcesPath ?? '',
       developmentExecutablePath: '/unavailable', environment: {} },
-    signature: { expectedIdentifier: bridge?.expectedIdentifier ?? '', parentExecutablePath: bridge?.parentExecutablePath ?? '' } },
-    native: { platform: bridge?.platform ?? process.platform },
+    signature: { expectedIdentifier: helper?.expectedIdentifier ?? '', parentExecutablePath: helper?.parentExecutablePath ?? '' } },
+    native: { platform: helper?.platform ?? process.platform },
   });
 }
 
@@ -331,7 +321,6 @@ export type ApplicationStartupDependencies = FoundationRuntimeDependencies & {
   createPolicyImportNative?():NonNullable<Parameters<typeof createDelegationRuntime>[0]['policyImportNative']>;
   createRequestedFollowupModel?(userDataPath:string):NonNullable<Parameters<typeof createDelegationRuntime>[0]['requestedModel']>;
   createLinkedInAdapters?(userDataPath:string):NonNullable<Parameters<typeof createDelegationRuntime>[0]['linkedIn']>;
-  createOutboundCommandService?: typeof createOutboundCommandService;
   createPhoneBindings?(runtime: FoundationRuntime): PhoneBindings;
   registerPhoneSetupIpc?: typeof registerPhoneSetupIpc;
   createBackupService?(options: BackupServiceOptions): Pick<BackupService, 'start' | 'shutdown' | 'createBackup' | 'listAvailableBackups'>;
@@ -352,13 +341,6 @@ export type ApplicationStartupDependencies = FoundationRuntimeDependencies & {
     options?: { selectedCompanyResearch?: { current(): SelectedCompanyResearchPort | null }; companyResearchSettings?: CompanyResearchSettingsLifecycle;
       companyDraftPreparation?: CompanyDraftPreparationPort },
   ): () => void;
-  createAppleBridgeSupervisor(
-    options: AppleBridgeSupervisorOptions,
-  ): AppleBridgeSupervisorApi;
-  registerAppleSpikeIpc?(
-    service: AppleSpikeServiceApi,
-    isTrustedRendererUrl?: (url: string) => boolean,
-  ): () => void;
 };
 
 export type ApplicationStartupOptions = {
@@ -366,8 +348,8 @@ export type ApplicationStartupOptions = {
   userDataPath: string;
   signal?: AbortSignal;
   isTrustedRendererUrl?: (url: string) => boolean;
-  appleBridge?: AppleBridgeSupervisorOptions;
-  appleSpikeEnabled?: boolean;
+  /** Where the packaged phone helper lives and how its signature is checked. Absent in tests, which leaves the phone route unavailable. */
+  phoneHelper?: PhoneHelperOptions;
   phoneRouteMode?: 'native' | 'fixture';
   /** Trusted paired workspace identity. Absence leaves account dispatch unavailable. */
   expectedWorkspaceId?: string;
@@ -430,8 +412,6 @@ const defaultDependencies: ApplicationStartupDependencies = {
   createResearchSetupStore:userDataPath=>new ResearchSetupRequestStore({directory:join(userDataPath,'research-setup'),safeStorage}),
   createEmailService: (runtime,userDataPath,providers,expectedWorkspaceId) => createEmailService({databaseGate:runtime,expectedWorkspaceId,
     providers:providers ?? createOutreachProviders({directory:join(userDataPath,'outreach'),safeStorage,openExternal:url=>shell.openExternal(url)})}),
-  createAppleBridgeSupervisor: (options) => new AppleBridgeSupervisor(options),
-  registerAppleSpikeIpc,
   createBackgroundSync,
   subscribeWindowFocus: listener => { app.on('browser-window-focus', listener); return () => { app.removeListener('browser-window-focus', listener); }; },
   notifyRenderer: channel => { for (const window of BrowserWindow.getAllWindows()) { if (!window.isDestroyed()) window.webContents.send(channel); } },
@@ -474,12 +454,9 @@ export async function startApplication(
   let unregisterTemplates:(()=>void)|undefined;
   let unregisterLinkedIn:(()=>void)|undefined;
   let unregisterApplicationIpc: (() => void) | undefined;
-  let unregisterAppleSpikeIpc: (() => void) | undefined;
-  let appleBridgeSupervisor: AppleBridgeSupervisorApi | undefined;
   let backupService: Pick<BackupService, 'start' | 'shutdown' | 'createBackup' | 'listAvailableBackups'> | undefined;
   let recoveryService: (RecoveryProvider & { shutdown(): Promise<void> }) | undefined;
   let shutdownPromise: Promise<void> | undefined;
-  let outbound: OutboundCommandServiceApi | undefined;
   let phoneBindings: PhoneBindings | undefined;
   let startupInboundRegistry: PhoneInboundRegistry | undefined;
   let unregisterPhoneSetup: (() => void) | undefined;
@@ -515,7 +492,6 @@ export async function startApplication(
     try { researchProviders?.dispose(); } catch (error) { cleanupErrors.push(error); }
     startupInboundRegistry?.reset();
     try { phoneBindings?.dispose?.(); } catch (error) { cleanupErrors.push(error); }
-    try { outbound?.dispose(); } catch (error) { cleanupErrors.push(error); }
     detachOutboundLifecycle();
     try { detachStartupAbort(); } catch (error) { cleanupErrors.push(error); }
   };
@@ -575,22 +551,6 @@ export async function startApplication(
       }
 
       try {
-        unregisterAppleSpikeIpc?.();
-      } catch (error) {
-        cleanupErrors.push(error);
-      } finally {
-        unregisterAppleSpikeIpc = undefined;
-      }
-
-      try {
-        await appleBridgeSupervisor?.stop();
-      } catch (error) {
-        cleanupErrors.push(error);
-      } finally {
-        appleBridgeSupervisor = undefined;
-      }
-
-      try {
         await runtime.shutdown();
       } catch (error) {
         cleanupErrors.push(error);
@@ -616,14 +576,6 @@ export async function startApplication(
     await runtime.initialize();
     throwIfStartupCancelled(options.signal);
     stage = 'phone';
-    const domain: OutboundDomainGate = {
-      withDomain: (operation) => runtime.withDomain((current) => operation({
-        inspectOutboundCommand: (request) => current.inspectOutboundCommand(request),
-        prepareOutboundDispatch: (request) => current.prepareOutboundDispatch(request),
-        recordOutboundResult: (request, result) => current.recordOutboundResult(request, result),
-        recordOutboundRefusal: (request, reason) => current.recordOutboundRefusal(request, reason),
-      })),
-    };
     if (dependencies === defaultDependencies && options.phoneRouteMode !== undefined) {
       startupInboundRegistry = createPhoneInboundRegistry();
     }
@@ -631,10 +583,6 @@ export async function startApplication(
       ?? (dependencies === defaultDependencies && options.phoneRouteMode !== undefined
         ? createStartupPhoneBindings(options, startupInboundRegistry)
         : { phone: unavailablePhoneHandoff(), readiness: unavailableOutboundReadiness() });
-    outbound = (dependencies.createOutboundCommandService ?? createOutboundCommandService)({
-      domain, phone: phoneBindings.phone, readiness: phoneBindings.readiness,
-    });
-    phoneBindings.onSetupChanged?.(() => { if (!outboundClosed) outbound.invalidate('wake'); });
     const readPairedResearch = async () => paired ? runtime.withDatabase(database => new SqlDelegationConfiguration({ database, workspaceId: paired.workspaceId, pairingId: paired.pairingId, clock: domainClock }).read()) : null;
     // One lazy credential manager belongs to startup, including null-start activation.
     stage = 'research';
@@ -694,8 +642,7 @@ export async function startApplication(
     stage = 'email';
     email = dependencies.createEmailService?.(runtime,options.userDataPath,borrowedProviders,expectedWorkspaceId);
     if(outboundClosed)email?.dispose();
-    // The composed v1 email service sends drafts but owns no inbound adapter, and
-    // the optional Apple spike is not a synchronization adapter. This explicit
+    // The composed v1 email service sends drafts but owns no inbound adapter. This explicit
     // discovery result must be extended by future inbound owners before activation.
     stage = 'inbound';
     startupInboundRegistry?.initialize(delegation?[delegation.adapter]:[]);
@@ -708,8 +655,8 @@ export async function startApplication(
     }
     stage = 'lifecycle';
     unregisterOutboundLifecycle = options.registerOutboundLifecycle?.({
-      onWake: () => { if (!outboundClosed) {companyDraftPreparation?.invalidate();delegation?.invalidate();companyResearch?.invalidate();phoneBindings?.invalidate?.();email?.invalidate();outbound.invalidate('wake');} },
-      onLock: () => { if (!outboundClosed) {outboundLocked=true;companyDraftPreparation?.invalidate(true);delegation?.invalidate(true);companyResearch?.invalidate(true);phoneBindings?.invalidate?.(true);email?.invalidate(true);outbound.invalidate('lock');} },
+      onWake: () => { if (!outboundClosed) {companyDraftPreparation?.invalidate();delegation?.invalidate();companyResearch?.invalidate();phoneBindings?.invalidate?.();email?.invalidate();} },
+      onLock: () => { if (!outboundClosed) {outboundLocked=true;companyDraftPreparation?.invalidate(true);delegation?.invalidate(true);companyResearch?.invalidate(true);phoneBindings?.invalidate?.(true);email?.invalidate(true);} },
       onUnlock: () => {
         if (outboundClosed) return;
         delegation?.invalidate(false);
@@ -717,8 +664,6 @@ export async function startApplication(
         companyDraftPreparation?.invalidate(false);
         phoneBindings?.invalidate?.(false);
         email?.invalidate(false);
-        outbound.invalidate('wake');
-        if (!outboundClosed) outbound.resumeAfterUnlock();
       },
     });
     // A registrar can synchronously abort before returning its owned disposer.
@@ -773,26 +718,6 @@ export async function startApplication(
     // channels appear only once the delegation runtime carries `replyTemplate`; read and edit are local and always present.
     unregisterTemplates=(dependencies.registerTemplateIpc??registerTemplateIpc)({databaseGate:runtime,clock:domainClock,host:delegation,pairing:pairingStore,isTrustedRendererUrl:options.isTrustedRendererUrl});
     throwIfStartupCancelled(options.signal);
-    stage = 'apple_bridge';
-    if (options.appleBridge !== undefined) {
-      appleBridgeSupervisor = dependencies.createAppleBridgeSupervisor(
-        options.appleBridge,
-      );
-      try {
-        const helperStartup = appleBridgeSupervisor.start();
-        void helperStartup.catch((): undefined => undefined);
-      } catch {
-        // Apple integration is optional; supervisor status remains the safe diagnostic.
-      }
-      unregisterAppleSpikeIpc = dependencies.registerAppleSpikeIpc?.(
-        new AppleSpikeService({
-          enabled: options.appleSpikeEnabled === true,
-          bridge: appleBridgeSupervisor,
-        }),
-        options.isTrustedRendererUrl,
-      );
-      throwIfStartupCancelled(options.signal);
-    }
     stage = 'background_sync';
     // D3: worker events reach this Mac on launch, on window focus and every five minutes, through the same
     // runtime.sync() the buttons call. Unpaired workspaces have nothing to sync and the owner stays disabled.

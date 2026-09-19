@@ -7,7 +7,7 @@ import { createIpcClient } from '../../src/preload/ipcClient';
 import { buildDailySnapshot } from '../../src/main/domain/today/dailyProjection';
 import { registeredIpcHandler } from '../fixtures/registeredIpcHandler';
 import { createDailyProvider } from '../../src/main/ipc/registerApplicationIpc';
-const snapshot = () => buildDailySnapshot({ workspaceId: null, generatedAt: '2026-09-09T12:00:00.000Z', accounts: [], calls: { accountIds: [], workloadConflict: false }, approvals: [], meetings: [], ownerStatus: [], issues: [], campaigns: [], callSettings: { newCallSlots: null, totalCallCapacity: null }, transport: [] });
+const snapshot = () => buildDailySnapshot({ workspaceId: null, generatedAt: '2026-09-09T12:00:00.000Z', accounts: [], calls: { accountIds: [], workloadConflict: false }, approvals: [], ownerStatus: [], issues: [], campaigns: [], callSettings: { newCallSlots: null, totalCallCapacity: null }, transport: [] });
 describe('daily read IPC', () => {
   it('roundtrips through validated bridge, rejects input and untrusted callers, cleans up once', async () => {
     const remove = registerDailyIpc({ get: async () => snapshot() });

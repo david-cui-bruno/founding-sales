@@ -38,7 +38,7 @@ async function unpaired(page: Page) {
   });
   expect(await page.evaluate(() => window.callie.daily.get())).toMatchObject({
     workspaceId: null, accounts: [], campaigns: [], calls: { accountIds: [] },
-    answers: [], meetings: [], ownerStatus: [], transport: [],
+    answers: [], ownerStatus: [], transport: [],
   });
 }
 

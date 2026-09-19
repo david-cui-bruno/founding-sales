@@ -5,8 +5,7 @@ import { migrateToLatest } from '../../src/main/db/migrate';
 import { DomainRuntime } from '../../src/main/domain/domainRuntime';
 import { createFounderSalesDomain } from '../../src/main/domain/founderSalesDomain';
 import { AccountRepository } from '../../src/main/domain/accounts/accountRepository';
-import { createImportProvider } from '../fixtures/legacyDomainProviders';
-import { productionDomainGate } from '../fixtures/productionDomainGate';
+import { seedIntakePeople } from '../fixtures/discoveryDatabase';
 import { createTempDatabase, createTestWorkspaceKey } from '../fixtures/tempDatabase';
 import * as workspaceContract from '../../src/shared/contracts/localWorkspaceContract';
 import type { LinkCompanyPersonRequest } from '../../src/shared/contracts/localWorkspaceContract';
@@ -50,18 +49,14 @@ async function reviewedFixture(sourceCount = 2, excerpt = EXCERPT) {
     runtime = new DomainRuntime({ database: db, clock, ids });
     expect(runtime.initialize().status).toBe('ready');
     const domain = createFounderSalesDomain({ database: db, services: runtime.getServices(), clock, ids });
-    const imports = createImportProvider(productionDomainGate(domain));
-    const preview = await imports.preview({ kind: 'csv', sourceName: 'fictional-reviewed-people.csv',
-      content: 'Name,Email,Organization\nNora Vale,nora.vale@cedar.invalid,Fictional Cedar PM\nMarcus Reed,marcus.reed@cedar.invalid,Fictional Cedar PM\n' });
-    expect(preview.errors).toEqual([]);
-    const mapping = { Name: 'person_name', Email: 'email', Organization: 'organization' } as const;
-    const remap = await imports.remap({ previewId: preview.previewId, contentHash: preview.contentHash, mapping });
-    expect(remap.errors).toEqual([]);
-    const imported = await imports.commit({ previewId: preview.previewId, contentHash: preview.contentHash, mapping,
-      source: { channel: 'registry', referredByPersonId: null }, duplicateDecisions: [] });
-    expect(imported.importedRowCount).toBe(2);
-    expect(new Set(imported.importedPersonIds).size).toBe(2);
-    const details = imported.importedPersonIds.map(personId => domain.getLeadDetail({ personId }));
+    const imported = seedIntakePeople(runtime.getServices(), { channel: 'registry', sourceName: 'fictional-reviewed-people.csv',
+      observedAt: NOW, ids, rows: [
+        { displayName: 'Nora Vale', email: 'nora.vale@cedar.invalid', organization: 'Fictional Cedar PM' },
+        { displayName: 'Marcus Reed', email: 'marcus.reed@cedar.invalid', organization: 'Fictional Cedar PM' },
+      ] });
+    expect(imported).toHaveLength(2);
+    expect(new Set(imported.map(person => person.personId)).size).toBe(2);
+    const details = imported.map(({ personId }) => domain.getLeadDetail({ personId }));
     const nora = details.find(person => person.personName === 'Nora Vale')!;
     const marcus = details.find(person => person.personName === 'Marcus Reed')!;
     expect(nora).toBeDefined(); expect(marcus).toBeDefined();

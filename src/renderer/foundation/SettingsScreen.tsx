@@ -9,7 +9,7 @@ import { WorkflowSection } from './WorkflowSection';
 import type { RecoveryProvider } from '../../shared/contracts/recoveryContract';
 import { RecoverySection } from './RecoverySection';
 import { Monitor, Moon, Rows2, Rows3, Sun, type LucideIcon } from 'lucide-react';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useState } from 'react';
 import type { OutreachApi } from '../../shared/contracts/outreachContract';
 import { ConnectionsSection } from './ConnectionsSection';
 import { SuppressionSection } from './SuppressionSection';
@@ -403,8 +403,6 @@ export type SettingsScreenProps = {
   delegationApi?: SettingsDelegationApi;
   /** Settings → Email templates. Absent on an older bridge, which shows the section's honest unavailable state. */
   templatesApi?: CalliePreloadApi['templates'];
-  /** Extra diagnostics panels (Apple spike), rendered with Diagnostics. */
-  children?: ReactNode;
 };
 
 /**
@@ -428,7 +426,6 @@ export function SettingsScreen({
   phoneSetupApi,
   delegationApi,
   templatesApi,
-  children,
 }: SettingsScreenProps) {
   const [connectionRevision, setConnectionRevision] = useState(0);
   const [active, setActive] = useState<SettingsSectionId>(() => {
@@ -508,10 +505,7 @@ export function SettingsScreen({
             <DataStorageSection health={health} shell={shell} recovery={recovery} localWorkspaceApi={localWorkspaceApi} />
           )}
           {active === 'diagnostics' && (
-            <>
-              <DiagnosticsSection state={state} onRetry={onRetry} observation={observation} />
-              {children}
-            </>
+            <DiagnosticsSection state={state} onRetry={onRetry} observation={observation} />
           )}
           {active === 'shortcuts' && <ShortcutsSection />}
           {active === 'about' && <AboutSection health={health} />}

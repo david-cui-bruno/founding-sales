@@ -7,7 +7,6 @@ import { googleScopes } from '../src/googleGrantCapabilities';
 import { DynamoStore, keyPart } from '../src/dynamoStore';
 import { dispatchCapPolicyKey } from '../src/dispatchRepository';
 import { ConditionalCommandHarness } from './sdkHarness';
-import type { SchedulingRules } from '../../../../src/shared/contracts/meetingContract';
 
 async function fixture(scopes: WorkerScope[] = ['commands:write', 'google:grant']) {
   const dynamo = new ConditionalCommandHarness(); const options = { dynamo, workspaceId: 'policy-fiction', tableName: 'policy-fiction', clock: { now: () => '2026-09-15T12:00:00.000Z' } };
@@ -23,8 +22,7 @@ async function fixture(scopes: WorkerScope[] = ['commands:write', 'google:grant'
   await authorization.completeGoogleGrant(new URL(started.authorizationUrl).searchParams.get('state')!, 'fictional-code');
   const common = { version: 1 as const, requestId: randomUUID(), workspaceId: options.workspaceId, pairingId: pair.pairingId, mailboxSubject: 'subject-fiction', expectedRevision: null as number | null };
   const caps = { ...common, kind: 'sender-caps' as const, policy: { sender: 'founder@example.test', dailyLimit: 8 } };
-  const rules: SchedulingRules = { revision: 1, confirmed: true, timezone: 'America/New_York', weeklyWindows: [{ weekday: 2, start: '09:00', end: '17:00' }], durationMinutes: 30, bufferBeforeMinutes: 10, bufferAfterMinutes: 10, minimumNoticeMinutes: 60, horizonDays: 30, ownedCalendarId: 'founder@example.test', conflictCalendarIds: ['founder@example.test', 'other@example.test'], location: { kind: 'text', value: 'Fictional office' }, allowCancel: true, allowReschedule: true };
-  return { auth, store, pair, authorization, dynamo, options, caps, rules, bearer: `Bearer ${pair.credential}`, http: () => http, service: new WorkerPolicyConfiguration({ auth, authorization }), grantKey: `GOOGLE_GRANT#${keyPart(pair.pairingId)}` };
+  return { auth, store, pair, authorization, dynamo, options, caps, bearer: `Bearer ${pair.credential}`, http: () => http, service: new WorkerPolicyConfiguration({ auth, authorization }), grantKey: `GOOGLE_GRANT#${keyPart(pair.pairingId)}` };
 }
 
 describe('authenticated policy configuration', () => {
@@ -41,30 +39,6 @@ describe('authenticated policy configuration', () => {
     expect(keys.some(key => /^(AUTH|ACCOUNT|ACTION|DISPATCH_CAP)#/.test(key ?? ''))).toBe(false);
     expect(await f.service.apply(f.caps, f.bearer)).toEqual(result);
     expect(f.dynamo.transactions.length - before).toBe(1); expect(f.http()).toBe(http);
-  });
-  it('calls the actual scheduling rules setter with exact grant selection and revision CAS', async () => {
-    const f = await fixture(); const request = { ...f.caps, kind: 'meeting-rules', rules: f.rules, policy: undefined as { sender: string; dailyLimit: number } | undefined }; delete request.policy;
-    const result = await f.service.apply(request, f.bearer); expect(result.revision).toBe(1);
-    expect(f.dynamo.inspect(`MEETING_RULES#${keyPart(f.rules.ownedCalendarId)}`)).toEqual(f.rules);
-    await expect(f.service.apply({ ...request, requestId: randomUUID() }, f.bearer)).rejects.toThrow();
-    const next = { ...request, requestId: randomUUID(), expectedRevision: 1, rules: { ...f.rules, revision: 2, minimumNoticeMinutes: 120 } };
-    expect((await f.service.apply(next, f.bearer)).revision).toBe(2);
-    expect(await f.service.apply(request, f.bearer)).toEqual(result);
-  });
-  it.each(['timezone', 'window', 'duplicate-calendar', 'duplicate-window'])('holds invalid %s rules before any write', async defect => {
-    const f = await fixture(); const base = { ...f.caps, policy: undefined as { sender: string; dailyLimit: number } | undefined }; delete base.policy;
-    const rules = structuredClone(f.rules);
-    if (defect === 'timezone') rules.timezone = 'Not/A_Timezone';
-    if (defect === 'window') rules.weeklyWindows[0]!.end = '08:00';
-    if (defect === 'duplicate-calendar') {
-      rules.conflictCalendarIds.push('other@example.test');
-      const row = await f.store.get<{ grant: Record<string, unknown> }>(f.grantKey);
-      await f.store.transact([f.store.put(f.grantKey, { ...row!.data, grant: { ...row!.data.grant, calendars: { confirmed: true, ownedCalendarId: rules.ownedCalendarId, conflictCalendarIds: rules.conflictCalendarIds } } }, row!.rev)]);
-    }
-    if (defect === 'duplicate-window') rules.weeklyWindows.push({ ...rules.weeklyWindows[0]! });
-    const before = f.dynamo.transactions.length;
-    await expect(f.service.apply({ ...base, kind: 'meeting-rules', rules }, f.bearer)).rejects.toThrow();
-    expect(f.dynamo.transactions.length).toBe(before);
   });
   it.each(['sender', 'subject', 'pairing', 'workspace', 'scope', 'emergency', 'grant-revoked', 'grant-capability'])('refuses wrong %s without policy admission', async defect => {
     const f = await fixture(defect === 'scope' ? ['google:grant'] : undefined); const request = structuredClone(f.caps);
@@ -111,20 +85,6 @@ describe('authenticated policy configuration', () => {
     expect(f.dynamo.transactions.length).toBe(before);
   });
 
-  it.each(['missing-conflict', 'foreign-owned', 'alias'])('rejects %s calendar selection before setter writes', async defect => {
-    const f = await fixture(); const base = { ...f.caps, policy: undefined as { sender: string; dailyLimit: number } | undefined }; delete base.policy;
-    const rules = structuredClone(f.rules);
-    if (defect === 'missing-conflict') rules.conflictCalendarIds = [rules.ownedCalendarId];
-    if (defect === 'foreign-owned') rules.ownedCalendarId = 'foreign@example.test';
-    if (defect === 'alias') {
-      rules.ownedCalendarId = 'primary'; rules.conflictCalendarIds = ['primary'];
-      const row = await f.store.get<{ grant: Record<string, unknown> }>(f.grantKey);
-      await f.store.transact([f.store.put(f.grantKey, { ...row!.data, grant: { ...row!.data.grant, calendars: { confirmed: true, ownedCalendarId: 'primary', conflictCalendarIds: ['primary'] } } }, row!.rev)]);
-    }
-    const before = f.dynamo.transactions.length;
-    await expect(f.service.apply({ ...base, kind: 'meeting-rules', rules }, f.bearer)).rejects.toThrow();
-    expect(f.dynamo.transactions.length).toBe(before);
-  });
   it('keeps explicit zero caps and current usage while reporting historical replay only', async () => {
     const f = await fixture(); const request = { ...f.caps, policy: { ...f.caps.policy, dailyLimit: 0 } };
     await f.service.apply(request, f.bearer);
