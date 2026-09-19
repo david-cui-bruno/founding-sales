@@ -42,7 +42,9 @@ locals {
     # The rebuilt core's routes (S0, S1, S2), served by the same Lambda from src/v1/router.ts.
     "POST /v1/pair/redeem", "GET /v1/diagnostics", "POST /v1/commands",
     "GET /v1/today", "GET /v1/settings",
-    "GET /v1/firms"
+    "GET /v1/firms",
+    # The Week view (S5): the last seven Eastern days from the permanent records.
+    "GET /v1/week"
   ])
 }
 
