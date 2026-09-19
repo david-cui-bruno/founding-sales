@@ -803,7 +803,7 @@ async function task9Settle<T>(pending: ReturnType<typeof task9Deferred<T>>) {
 // Task9-sensitive capability its own named guard. Pair never enters native.calls.
 function task9RouteFixture(worker = task9Api()) {
   const base = task8RouteFixture();
-  base.native.setSnapshot(dailyFixture({ workspaceId: null, accounts: [], calls: { accountIds: [], workloadConflict: false }, answers: [], meetings: [], campaigns: [], ownerStatus: [], transport: [] }));
+  base.native.setSnapshot(dailyFixture({ workspaceId: null, accounts: [], calls: { accountIds: [], workloadConflict: false }, answers: [], campaigns: [], ownerStatus: [], transport: [] }));
   const forbidden: string[] = [];
   const deny = (name: string) => vi.fn((..._args: unknown[]): never => { void _args; forbidden.push(name); throw Error(`Unexpected Task9 capability: ${name}`); });
   const api: CalliePreloadApi = {

@@ -36,11 +36,6 @@ import {
   type DailySnapshot,
 } from '../../../shared/contracts/dailyContract';
 import { DailyAnswers, DailyAnswerDetail, answerKey } from './DailyAnswers';
-import {
-  UpcomingMeetings,
-  MeetingDetail,
-  meetingKey,
-} from './UpcomingMeetings';
 import { CampaignReview } from '../campaigns/CampaignReview';
 import { ManualLinkedInPreparation } from '../linkedin/ManualLinkedInPreparation';
 import { CallCampaignEnrollment } from '../campaigns/CallCampaignEnrollment';
@@ -575,7 +570,6 @@ export function NativeDesk({
   const name = (id: string) =>
     snapshot.accounts.find((a) => a.account.id === id)?.account.name ?? id;
   const answer = snapshot.answers.find((a) => answerKey(a) === selected),
-    meeting = snapshot.meetings.find((m) => meetingKey(m) === selected),
     campaign = snapshot.campaigns.find(
       (c) => `campaign:${c.version.id}` === selected,
     );
@@ -583,7 +577,6 @@ export function NativeDesk({
   const campaignCopy = campaignTemplate ? oneCompanyCampaignCopy[campaignTemplate.channel] : null;
   const accountId =
     answer?.accountId ??
-    meeting?.accountId ??
     (selected?.startsWith('call:')
       ? selected.slice(5)
       : selected?.startsWith('account:')
@@ -639,7 +632,6 @@ export function NativeDesk({
           ...continuations.map(answerKey),
           ...history.map(answerKey),
           ...localDrafts.map(localDraftKey),
-          ...snapshot.meetings.map(meetingKey),
         ]
       : surface === 'accounts'
         ? [...((localRead?.overview.value?.accounts.state === 'available' ? localRead.overview.value.accounts.snapshots : []).map(a => localAccountKey(a.account.id)) ?? []), ...snapshot.accounts.map((a) => `account:${a.account.id}`)]
@@ -828,13 +820,6 @@ export function NativeDesk({
                 onSelect={select}
               />
               {onOpenLocalDraft && <LocalDraftContinuations drafts={localDrafts} onOpen={onOpenLocalDraft} />}
-              <UpcomingMeetings
-                unavailable={unavailableScope}
-                items={snapshot.meetings}
-                selected={selected}
-                name={name}
-                onSelect={select}
-              />
             </>
           ) : surface === 'accounts' ? (
             <>
@@ -890,7 +875,7 @@ export function NativeDesk({
             </section>
           )}
         </nav>
-        <div className={`native-desk__detail${!retained && !localAccount && !account && !campaign && !meeting && !answer ? ' native-desk__detail--welcome' : ''}`}>
+        <div className={`native-desk__detail${!retained && !localAccount && !account && !campaign && !answer ? ' native-desk__detail--welcome' : ''}`}>
           {selected && (
             <div className="native-desk__detail-bar">
               <span>
@@ -898,11 +883,9 @@ export function NativeDesk({
                   ? 'Existing commitments and relationships'
                   : answer
                   ? answer.kind === 'reply' ? 'Saved reply history' : 'Saved draft continuations'
-                  : meeting
-                    ? 'Upcoming meeting'
-                    : campaign
-                      ? campaignCopy ? campaign.version.approvedAt ? `Reviewed ${campaignCopy.campaign}` : `Saved ${campaignCopy.campaign} draft` : 'Read-only campaign preview'
-                      : 'Company context'}
+                  : campaign
+                    ? campaignCopy ? campaign.version.approvedAt ? `Reviewed ${campaignCopy.campaign}` : `Saved ${campaignCopy.campaign} draft` : 'Read-only campaign preview'
+                    : 'Company context'}
               </span>
               <button aria-label="Close details" onClick={closeDetails}>
                 Close
@@ -924,7 +907,6 @@ export function NativeDesk({
               actionHold={actionHold}
             />
           )}{' '}
-          {meeting && <MeetingDetail item={meeting} />}{' '}
           {campaign && (
             <>
             <CampaignReview
@@ -948,7 +930,7 @@ export function NativeDesk({
                 readError={phoneReadError} newWorkHold={!!localHold} onRefresh={onRefresh} />
             </section>
           )}
-          {!retained && !localAccount && !account && !campaign && !meeting && !answer && (
+          {!retained && !localAccount && !account && !campaign && !answer && (
             <div className="native-desk__welcome">
               <h2>
                 {selected
@@ -956,7 +938,7 @@ export function NativeDesk({
                   : keys.length ? 'Make room for a good conversation.' : surface === 'today' ? 'No conversations queued.' : surface === 'accounts' ? 'Your account library starts here.' : 'No saved campaign versions to preview.'}
               </h2>
               <p>
-                {selected ? 'Your selection is retained. Refresh to check its saved work.' : keys.length ? 'Select an item to review its company context and exact saved work.' : surface === 'today' ? unavailableScope ? 'Local work remains available. Worker-scoped calls, saved drafts and meetings are unavailable until a workspace is connected.' : 'No work in this local snapshot. Refresh to check for saved conversations and local commitments.' : surface === 'accounts' ? 'Local company evidence will appear here. Local records do not establish worker ownership.' : 'Save a call campaign draft after worker ownership is configured, then review its exact company and offer here. Drafts are not approved, enrolled or active.'}
+                {selected ? 'Your selection is retained. Refresh to check its saved work.' : keys.length ? 'Select an item to review its company context and exact saved work.' : surface === 'today' ? unavailableScope ? 'Local work remains available. Worker-scoped calls and saved drafts are unavailable until a workspace is connected.' : 'No work in this local snapshot. Refresh to check for saved conversations and local commitments.' : surface === 'accounts' ? 'Local company evidence will appear here. Local records do not establish worker ownership.' : 'Save a call campaign draft after worker ownership is configured, then review its exact company and offer here. Drafts are not approved, enrolled or active.'}
               </p>
               {!selected && unavailableScope && <a href="#/settings" onClick={() => openSettingsSection('worker')}>Review Settings</a>}
             </div>

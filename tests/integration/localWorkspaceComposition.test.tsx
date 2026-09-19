@@ -57,7 +57,7 @@ it('actual unpaired reads preserve a callback across transition and render it wi
     expect(screen.queryByRole('button', {name: 'Open contact workspace'})).toBeNull();
     expect(f.forbidden).not.toHaveBeenCalled();
     expect(f.snapshot()).toEqual(after);
-    expect(await f.api.daily.get()).toMatchObject({workspaceId: null, accounts: [], answers: [], meetings: [], ownerStatus: []});
+    expect(await f.api.daily.get()).toMatchObject({workspaceId: null, accounts: [], answers: [], ownerStatus: []});
   } finally {f.close();}
 });
 
@@ -115,9 +115,7 @@ it('actual unsent local draft appears in Today without a worker and opens its co
     expect(row.textContent).not.toMatch(/worker|owner|send|approve/i);
     expect(screen.getByRole('button', {name: /Retained callback Property Owner/})).toBeTruthy();
     const lane = screen.getByRole('heading', {name: /^Saved draft continuations/}).closest('section')!;
-    const meetings = screen.getByRole('heading', {name: /^Upcoming meetings/}).closest('section')!;
     expect(lane.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(row.compareDocumentPosition(meetings) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     fireEvent.click(row);
     expect(f.firstUse.snapshot().selectedAccountId).toBe(lenox.accountId);
     expect(window.location.hash).toBe('#/accounts');

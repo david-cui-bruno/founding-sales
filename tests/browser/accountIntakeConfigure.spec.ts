@@ -58,7 +58,7 @@ const axeClean = async (page: Page) => {
   expect(audit.violations.filter(issue => issue.impact === 'serious' || issue.impact === 'critical')).toEqual([]);
 };
 
-test('the three intake controls appear only after the explicit read, reach by keyboard in order, and queue nothing at 1440/1050 in light and dark', async ({ page }, testInfo) => {
+test('the two intake controls appear only after the explicit read, reach by keyboard in order, and queue nothing at 1440/1050 in light and dark', async ({ page }, testInfo) => {
   const state = await mount(page);
   const read = await review(page);
   await expect(panel(page)).toHaveCount(0);
@@ -72,9 +72,7 @@ test('the three intake controls appear only after the explicit read, reach by ke
   const activate = panel(page).getByRole('button', { name: 'Set intake active', exact: true });
   const since = panel(page).getByLabel('Read relevant mail since');
   const mail = panel(page).getByRole('button', { name: 'Switch on relevant mail', exact: true });
-  const calendar = panel(page).getByRole('button', { name: 'Use calendar founder@fixture.invalid', exact: true });
-  await expect(activate).toBeEnabled(); await expect(mail).toBeDisabled(); await expect(calendar).toBeDisabled();
-  await expect(panel(page).getByText('A configured mailbox is required before a calendar can be used.', { exact: true })).toBeVisible();
+  await expect(activate).toBeEnabled(); await expect(mail).toBeDisabled();
   await expect(panel(page).getByText(/Configuration is not readiness; a configured mailbox is not permission to send\./)).toBeVisible();
   // Keyboard reach: from the read control, Tab lands on each offered intake control in order. A disabled
   // control is not in the tab order; its reason is visible instead.
@@ -86,14 +84,13 @@ test('the three intake controls appear only after the explicit read, reach by ke
   // Chromium's date field tabs through its month, day and year segments before leaving the input.
   for (let presses = 0; presses < 4 && !(await mail.evaluate(element => element === document.activeElement)); presses++) await page.keyboard.press('Tab');
   await expect(mail).toBeFocused();
-  await page.keyboard.press('Tab'); await expect(calendar).not.toBeFocused();
   for (const width of [1440, 1050]) {
     await page.setViewportSize({ width, height: width === 1440 ? 900 : 700 });
     for (const theme of ['light', 'dark'] as const) {
       await page.evaluate(theme => { window.accountIntakeConfigureBrowser.preferences(theme, 'comfortable'); window.accountIntakeConfigureBrowser.rerender(); }, theme);
       await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-      await expect(activate).toBeEnabled(); await expect(mail).toBeEnabled(); await expect(calendar).toBeDisabled();
+      await expect(activate).toBeEnabled(); await expect(mail).toBeEnabled();
       await activate.scrollIntoViewIfNeeded();
       await expect(activate).toBeInViewport();
       const composer = await page.locator('.native-desk__campaign-draft').boundingBox();
@@ -108,20 +105,15 @@ test('the three intake controls appear only after the explicit read, reach by ke
   await assertClean(page, state);
 });
 
-test('with a configured mailbox the mail control is withdrawn and the grant calendar is offered and reachable', async ({ page }) => {
+test('with a configured mailbox the mail control is withdrawn', async ({ page }) => {
   const state = await mount(page);
   await page.evaluate(() => window.accountIntakeConfigureBrowser.fixture.setPreparation(window.accountIntakeConfigureBrowser.preparations.activeMail));
   const read = await review(page);
   await read.click();
   const pause = panel(page).getByRole('button', { name: 'Pause intake', exact: true });
-  const calendar = panel(page).getByRole('button', { name: 'Use calendar founder@fixture.invalid', exact: true });
   await expect(pause).toBeEnabled();
-  await expect(calendar).toBeEnabled();
   await expect(panel(page).getByRole('button', { name: 'Switch on relevant mail' })).toHaveCount(0);
   await expect(panel(page).getByText(/Relevant mail is already on for this company/)).toBeVisible();
-  await expect(panel(page).getByText('Uses the grant’s owned calendar for this company. This books nothing.', { exact: true })).toBeVisible();
-  await pause.focus();
-  await page.keyboard.press('Tab'); await expect(calendar).toBeFocused();
   await axeClean(page);
   await expectOnlyGrantStatusReads(page);
   await assertClean(page, state);
