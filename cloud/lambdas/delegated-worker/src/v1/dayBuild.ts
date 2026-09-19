@@ -180,7 +180,7 @@ export function buildDayRecord(input: DayBuildInput): DayRecord {
     if (!firm.state) { exclude('state_unknown'); continue; }
     if (!firm.timeZone) { exclude('zone_unknown'); continue; }
     const clearance = stateClearance(input.postures, firm.state, input.now);
-    if (!clearance.cleared) { exclude(clearance.code); continue; }
+    if (clearance.code !== null) { exclude(clearance.code); continue; }
     if (!firm.phone) { exclude('no_phone'); continue; }
     if (input.listedBefore.has(firm.firmId)) { exclude('already_listed'); continue; }
     if (firm.calls > 0) { exclude('called_before'); continue; }

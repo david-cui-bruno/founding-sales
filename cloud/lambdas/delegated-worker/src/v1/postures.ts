@@ -15,7 +15,8 @@ export const STATE_PREFIX = 'STATE#';
 export const stateKey = (state: V1StateCode): string => `${STATE_PREFIX}${state}`;
 export const POSTURE_REVIEW_MONTHS = 12;
 export type StateClearanceCode = 'no_posture' | 'posture_not_calling' | 'posture_review_overdue';
-export type StateClearance = { cleared: true } | { cleared: false; code: StateClearanceCode };
+/** `code` names the condition that failed, and is null exactly when the state is cleared. */
+export type StateClearance = { cleared: boolean; code: StateClearanceCode | null };
 
 /** Twelve months after the decision, same UTC day and time; the 29th of February lands on the 1st of March. */
 export function postureReviewAt(decidedAt: string): string {
@@ -45,7 +46,7 @@ export function stateClearance(postures: ReadonlyMap<string, StatePostureRecord>
   if (!record) return { cleared: false, code: 'no_posture' };
   if (record.posture !== 'calling') return { cleared: false, code: 'posture_not_calling' };
   if (record.reviewAt <= now) return { cleared: false, code: 'posture_review_overdue' };
-  return { cleared: true };
+  return { cleared: true, code: null };
 }
 
 /**

@@ -17,7 +17,7 @@ export const OPEN_HOURS: CallWindow = Object.freeze({ startMinute: 9 * 60, endMi
 export type DialEvaluation = {
   dialAllowed: boolean;
   holdReason: 'outside_hours' | 'state_not_cleared' | null;
-  holdCode: 'outside_hours' | 'zone_unknown' | null;
+  holdCode: 'outside_hours' | 'zone_unknown' | 'state_unknown' | null;
   localTime: string | null;
   openNow: boolean | null;
 };

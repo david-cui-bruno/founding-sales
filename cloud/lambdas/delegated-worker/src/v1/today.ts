@@ -3,7 +3,7 @@ import { TODAY_LANES, todayViewSchema, type LaneCounts, type StatePostureSummary
   type V1HoldReason, type V1StateCode } from '../../../../../src/shared/contracts/v1Contract';
 import type { DynamoStore } from '../dynamoStore';
 import { territoryCallPolicyKey } from '../territoryPolicyRepository';
-import { evaluateDial } from './callWindow';
+import { evaluateDial, type DialEvaluation } from './callWindow';
 import { dayKey, dayRecordSchema, laneCounts, NEW_LANE_EXCLUSIONS, type DayRecord, type LaneEntry, type NewLaneExclusion } from './dayBuild';
 import { createAccountFirmSource, type FirmCard, type FirmSource } from './firms';
 import { readLastTick } from './lastTick';
@@ -42,7 +42,7 @@ function nextStepOf(lane: TodayLane, firm: FirmCard): TodayNextStep {
 
 /** One card. Pure over the firm, the lane entry, the instant and the offer. */
 export function todayCard(firm: FirmCard, lane: TodayLane, entry: LaneEntry, now: string, offer: string | null): TodayCard {
-  const dial = firm.hold ? { dialAllowed: false, holdReason: firm.hold.reason, holdCode: firm.hold.code, localTime: null, openNow: null } : evaluateDial(now, firm.timeZone);
+  const dial: DialEvaluation = firm.hold ? { dialAllowed: false, holdReason: firm.hold.reason, holdCode: firm.hold.code, localTime: null, openNow: null } : evaluateDial(now, firm.timeZone);
   return { firmId: firm.firmId, lane, reason: entry.reason, name: firm.name,
     phone: firm.phone ? { number: firm.phone.number, verification: firm.phone.verification } : null,
     website: firm.website, city: firm.city, state: firm.state, timeZone: firm.timeZone,

@@ -106,7 +106,7 @@ describe('set_state_posture and the STATE# record', () => {
     const base: StatePostureRecord = { state: 'RI', posture: 'calling', registration: { status: 'exempt', citation: 'checked' }, dncList: { status: 'not_required', citation: 'checked' },
       referenceTextRevision: TERRITORY_RULES_REVISION, decidedAt: '2025-09-01T12:00:00.000Z', decidedBy: 'David MacBook', reviewAt: postureReviewAt('2025-09-01T12:00:00.000Z'), history: [] };
     const postures = new Map<string, StatePostureRecord>([['RI', base], ['MA', { ...base, state: 'MA', posture: 'not_calling' }]]);
-    expect(stateClearance(postures, 'RI', '2026-08-31T12:00:00.000Z')).toEqual({ cleared: true });
+    expect(stateClearance(postures, 'RI', '2026-08-31T12:00:00.000Z')).toEqual({ cleared: true, code: null });
     // Twelve months after the decision the posture is due for review and no longer clears the state.
     expect(stateClearance(postures, 'RI', '2026-09-01T12:00:00.000Z')).toEqual({ cleared: false, code: 'posture_review_overdue' });
     expect(stateClearance(postures, 'MA', '2026-08-31T12:00:00.000Z')).toEqual({ cleared: false, code: 'posture_not_calling' });
