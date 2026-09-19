@@ -1,0 +1,8 @@
+# This package's own output. The root .gitignore covers node_modules/, .vite/, out/, test-results/ and
+# playwright-report/ at any depth, but its `build/generated/` entry is anchored to the repository root.
+build/generated/
+out/
+.vite/
+node_modules/
+test-results/
+playwright-report/
