@@ -112,6 +112,22 @@ export const CALL_OUTCOME_ADVANCE: Readonly<Record<V1CallOutcome, string>> = Obj
   opt_out: 'opt_out',
 });
 
+/**
+ * The word the record carries when the first logged outcome moved the anchor onto the call (slice S2b). The
+ * outcome's own word is on the `CALL#` record, and a rest or a stop keeps its reason in `holdCode`, so nothing
+ * is lost by saying here the thing only this transition can say.
+ */
+export const REBASED_TO_FIRST_CALL = 'rebased_to_first_call';
+
+/**
+ * Whether this call is the first thing ever said to the firm, so its cadence may be re-based onto the call.
+ * Nothing has been logged against the sequence, nothing has gone out, and the old app never dialled it either.
+ * A stopped sequence is never re-based: it is not advanced at all. Pure.
+ */
+export function isFirstCallOnSequence(record: SequenceRecord, firm: Pick<FirmCard, 'calls'>): boolean {
+  return record.state !== 'stopped' && record.lastAdvance === null && record.sentSteps.length === 0 && firm.calls === 0;
+}
+
 /** The start-anchored due rule the policy fixes: a step's day offset counted from the instant the firm entered. Pure. */
 export function startAnchoredDueAt(startedAt: string, delayHours: number): string {
   const parsed = Date.parse(instant.parse(startedAt));
@@ -256,6 +272,9 @@ export function selectReplacementRoute(firm: FirmCard, retiredRouteIds: readonly
  *
  * A firm resting past its rest date re-enters once, exactly as `decideTerritoryReentry` allows, before the outcome
  * is applied; a firm in its final rest, or stopped, is not advanced at all.
+ *
+ * Day 0 is the day of the first call (slice S2b): a firm the backfill enrolled at listing time and never called
+ * is re-based onto the call before the carried rule runs, so its cadence counts from what was actually said to it.
  */
 export async function advanceAfterCall(store: DynamoStore, input: SequenceAdvanceInput): Promise<SequenceAdvance> {
   const now = store.now();
@@ -274,6 +293,18 @@ export async function advanceAfterCall(store: DynamoStore, input: SequenceAdvanc
     current = { ...current, entries: reentry.entries, currentStepId: reentry.currentStepId, startedAt: reentry.startedAt, state: 'active', restingUntil: null, sentSteps: [] };
   }
   const restStands = reentry.kind === 'resting' || reentry.kind === 'final_rest';
+
+  // Day 0 is the day of the first call, not the day the backfill enrolled the firm. A firm enrolled at listing
+  // time and never called carries an anchor weeks old, so the day-3 call and the day-7 email of its own cadence
+  // would both be due the instant David logs a first outcome. The first outcome re-bases the whole cadence onto
+  // the call before the carried rule is applied, so the next call step is due at `observedAt + 72 h` and the
+  // day-7 email at `observedAt + 168 h`. `nextDueAt` is deliberately left where it was: it is what names the
+  // stale `DUE#` pointer the transaction below retires. A sequence that already carries a call or a send is
+  // never re-based, and a re-entry after rest brings its own restart anchor, which is kept exactly as it is.
+  const anchorBeforeCall = current.startedAt;
+  let anchoredOnThisCall = reentry.kind === 'not_resting' && current.startedAt !== input.observedAt
+    && isFirstCallOnSequence(current, input.firm);
+  if (anchoredOnThisCall) current = { ...current, startedAt: input.observedAt };
 
   const items: TransactWriteItem[] = [];
   let retiredRouteId: string | null = null;
@@ -299,6 +330,8 @@ export async function advanceAfterCall(store: DynamoStore, input: SequenceAdvanc
     const replacement = selectReplacementRoute(input.firm, retiredIds);
     if (replacement) {
       replacementRouteId = replacement.id;
+      // The restart is already anchored on the call and names its own word; there is no re-base left to report.
+      anchoredOnThisCall = false;
       const restarted = startSequenceRecord({ policy: input.policy, firmId: input.firm.firmId, startedAt: input.observedAt, routeId: replacement.id, entries: current.entries });
       next = { ...restarted, versionId: current.versionId, enrollmentId: current.enrollmentId, steps: current.steps,
         currentStepId: current.steps[0]?.id ?? null, nextDueAt: current.steps[0] ? startAnchoredDueAt(input.observedAt, current.steps[0].delayHours) : null,
@@ -311,16 +344,23 @@ export async function advanceAfterCall(store: DynamoStore, input: SequenceAdvanc
   } else if (input.outcome === 'callback') {
     // A callback David promised overrides the cadence's timing entirely: the CALLBACK# pointer leads the callbacks
     // lane on its own day, so the firm keeps its step and carries no due instant until the callback is made.
+    // The anchor still moved onto the call — the held email steps count their offsets from it — but the promised
+    // callback is what David reads on the card, so it keeps the word.
+    anchoredOnThisCall = false;
     next = { ...current, state: current.state === 'stopped' ? 'stopped' : 'active', nextDueAt: null, restingUntil: null,
       holdCode: current.state === 'stopped' ? current.holdCode : null, routeId: dialedRouteId, lastAdvance: 'callback_promised', updatedAt: now };
   } else if (current.state === 'stopped' || restStands) {
     // A stopped firm, and a firm still resting or in its final rest, is never advanced; the call is still recorded.
     next = { ...current, routeId: dialedRouteId, lastAdvance: current.state === 'stopped' ? current.lastAdvance : reentry.kind === 'final_rest' ? 'rest_final' : 'resting', updatedAt: now };
   } else {
-    next = { ...applyCarried(current, CALL_OUTCOME_ADVANCE[input.outcome], input.observedAt), routeId: dialedRouteId, updatedAt: now };
+    const carried = applyCarried(current, CALL_OUTCOME_ADVANCE[input.outcome], input.observedAt);
+    // The carried rule refused to guess a step that is not in the frozen version: the record stands exactly as it
+    // was, its anchor included, so an honest `step_unknown` is never dressed up as a re-based cadence.
+    if (carried.lastAdvance === 'step_unknown') anchoredOnThisCall = false;
+    next = { ...carried, startedAt: anchoredOnThisCall ? carried.startedAt : anchorBeforeCall, routeId: dialedRouteId, updatedAt: now };
   }
 
-  const record = sequenceRecordSchema.parse(next);
+  const record = sequenceRecordSchema.parse(anchoredOnThisCall ? { ...next, lastAdvance: REBASED_TO_FIRST_CALL } : next);
   items.push(store.put(sequenceKey(record.firmId), record, held?.rev ?? null));
   items.push(...await duePointerItems(store, current, record));
   return { items, record, hold, retiredRouteId, replacementRouteId, from };

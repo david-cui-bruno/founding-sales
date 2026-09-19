@@ -33,8 +33,8 @@ import { v1Fixture } from './v1Fixture';
 
 const FRIDAY_EARLY = '2026-09-18T09:05:00.000Z'; // 05:05 in Providence: the morning list may be built.
 const FRIDAY_CALL = '2026-09-18T14:00:00.000Z'; // 10:00 in Providence: inside the code floor.
-const DAY_THREE = '2026-09-21T09:05:00.000Z'; // The day-3 call step, start-anchored on the firm's entry.
-const DAY_SEVEN = '2026-09-25T14:05:00.000Z'; // Past the day-7 instant the firm's entry anchored.
+const DAY_THREE = '2026-09-21T14:00:00.000Z'; // The day-3 call step, 72 h after the call that is day 0.
+const DAY_SEVEN = '2026-09-25T14:05:00.000Z'; // Just past the day-7 instant that same call anchored (168 h).
 const REPLY_AT = '2026-09-25T16:00:00.000Z';
 const NEXT_WEEK = '2026-09-28T09:05:00.000Z'; // The following Monday's 05:05 build.
 
@@ -95,11 +95,13 @@ describe('one firm end to end: listed, called, emailed once, stopped, suppressed
         note: 'Left a message with the front desk.' } })));
     expect(receipt).toMatchObject({ outcome: 'applied', reason: null });
     expect(callRecordSchema.parse(f.db.inspect(callKey(FIRM_ID, FRIDAY_CALL)))).toMatchObject({ outcome: 'voicemail', dial: { dialAllowed: true } });
-    // The cadence is anchored where the firm entered it. The old tick that builds the list also enrolls the firm
-    // under the standing policy, so entry is 05:05 and the logged call advances that sequence rather than starting
-    // a second one: the `SEQ#` record is read new-first and seeded from the carried enrollment when there is none.
+    // The cadence is anchored on the call, not on the enrollment. The old tick that builds the list also enrolls
+    // the firm under the standing policy at 05:05, and the logged call advances that sequence rather than starting
+    // a second one — the `SEQ#` record is read new-first and seeded from the carried enrollment when there is none
+    // — but nothing had been said to the firm before 10:00, so this call is day 0 and everything counts from it.
     const anchored = sequenceRecordSchema.parse(f.db.inspect(sequenceKey(FIRM_ID)));
-    expect(anchored).toMatchObject({ startedAt: FRIDAY_EARLY, currentStepId: steps[1]!.id, nextDueAt: DAY_THREE, state: 'active' });
+    expect(anchored).toMatchObject({ startedAt: FRIDAY_CALL, currentStepId: steps[1]!.id, nextDueAt: DAY_THREE,
+      state: 'active', lastAdvance: 'rebased_to_first_call' });
     expect(anchored.heldSteps.map(step => step.stepId)).toContain(emailStep.id);
     expect(anchored.heldSteps.find(step => step.stepId === emailStep.id)?.templateId).toBe('T4');
     expect(f.db.dump().map(item => item.sk!.S!)).toContain(dueKey(DAY_THREE, FIRM_ID));
