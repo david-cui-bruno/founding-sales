@@ -15,7 +15,6 @@ import { routeHash } from '../../app/routes';
 import { LocalCompanyIntake, useLocalCompanyIntake } from './LocalCompanyIntake';
 import { formatVisibleCount, localCommitmentsCount, type VisibleCount } from './visibleCount';
 import { updateRequestedSessionHolds } from './requestedDraftSession';
-import { updateLinkedInSessionHolds } from '../linkedin/linkedInSession';
 import {
   captureDailySessionScope,
   setDailySessionScope,
@@ -42,7 +41,6 @@ import {
   meetingKey,
 } from './UpcomingMeetings';
 import { CampaignReview } from '../campaigns/CampaignReview';
-import { ManualLinkedInPreparation } from '../linkedin/ManualLinkedInPreparation';
 import { CallCampaignEnrollment } from '../campaigns/CallCampaignEnrollment';
 import { CallCampaignDraft } from '../campaigns/CallCampaignDraft';
 import { describeCampaignRow } from '../campaigns/campaignListLabel';
@@ -50,7 +48,7 @@ import { describeOneCompanyCampaignTemplate, type OneCompanyCampaignChannel } fr
 import './nativeDesk.css';
 export type NativeDeskApi = Pick<
   CalliePreloadApi,
-  'daily' | 'delegation' | 'linkedin' | 'leads' | 'leadDetail'
+  'daily' | 'delegation' | 'leads' | 'leadDetail'
 > & Partial<Pick<CalliePreloadApi, 'localWorkspace' | 'phoneSetup'>>;
 type Config = Awaited<ReturnType<NativeDeskApi['delegation']['status']>>;
 type Surface = 'today' | 'accounts' | 'campaigns';
@@ -86,9 +84,7 @@ export function NativeDeskRoute({
     const request = ++sequence.current;
     // Retain the mounted content, but invalidate admission before either read.
     setDailySessionScope(api.delegation, null);
-    setDailySessionScope(api.linkedin, null);
     updateRequestedSessionHolds(api.delegation, () => 'Daily configuration pending');
-    updateLinkedInSessionHolds(api.linkedin, () => 'Daily configuration pending');
     setState((previous) => previous.api === api
       ? { ...previous, config: null }
       : { api, snapshot: null, config: null, error: false });
@@ -130,13 +126,8 @@ export function NativeDeskRoute({
         validated = null;
         if (request === sequence.current) {
           setDailySessionScope(api.delegation, null);
-          setDailySessionScope(api.linkedin, null);
           updateRequestedSessionHolds(
             api.delegation,
-            () => 'Daily read unavailable',
-          );
-          updateLinkedInSessionHolds(
-            api.linkedin,
             () => 'Daily read unavailable',
           );
           setState((previous) =>
@@ -158,9 +149,7 @@ export function NativeDeskRoute({
     return () => {
       sequence.current++;
       setDailySessionScope(api.delegation, null);
-      setDailySessionScope(api.linkedin, null);
       updateRequestedSessionHolds(api.delegation, () => 'Daily view closed');
-      updateLinkedInSessionHolds(api.linkedin, () => 'Daily view closed');
       window.removeEventListener('focus', load);
       window.removeEventListener('callie:daily-changed', load);
       window.removeEventListener('callie:outcome-logged', load);
@@ -174,7 +163,6 @@ export function NativeDeskRoute({
   useLayoutEffect(() => {
     if (!snapshot) {
       setDailySessionScope(api.delegation, null);
-      setDailySessionScope(api.linkedin, null);
       return;
     }
     const local = current?.config;
@@ -186,7 +174,6 @@ export function NativeDeskRoute({
         ? snapshot.workspaceId
         : null;
     setDailySessionScope(api.delegation, scope);
-    setDailySessionScope(api.linkedin, scope);
     const hold = (
       accountId: string,
       workspaceId: string,
@@ -233,10 +220,6 @@ export function NativeDeskRoute({
           : undefined)
       );
     });
-    updateLinkedInSessionHolds(api.linkedin, (d) =>
-      hold(d.accountId, d.workspaceId),
-    );
-
   }, [api, localHold, snapshot, current?.config, current?.error]);
   const [intakeSelection, setIntakeSelection] = useState<{ api: NativeDeskApi['localWorkspace']; request: LocalAccountSelectionRequest } | null>(null);
   const onIntakeSelectionHandled = useCallback((request: LocalAccountSelectionRequest) => {
@@ -920,7 +903,6 @@ export function NativeDesk({
               accountDetails={account ? <AccountContext account={account} /> : null}
               workspaceId={snapshot.workspaceId}
               api={api.delegation}
-              linkedin={api.linkedin}
               actionHold={actionHold}
             />
           )}{' '}
@@ -930,10 +912,7 @@ export function NativeDesk({
             <CampaignReview
               campaign={campaign}
               accounts={snapshot.accounts}
-              answers={snapshot.answers}
             />
-            <ManualLinkedInPreparation api={api} snapshot={snapshot} campaign={campaign} config={configuration}
-              readError={readError || !!localHold} onRefresh={onRefresh} />
             {campaignTemplate && <CallCampaignEnrollment key={`${snapshot.workspaceId}:${campaign.version.id}`} api={api} snapshot={snapshot} config={configuration}
               campaign={campaign} readError={readError || !!localHold} onRefresh={onRefresh} />}
             </>

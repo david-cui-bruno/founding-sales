@@ -26,7 +26,6 @@ async function fixture() {
   const provider = createLocalWorkspaceProvider({withDatabase: async operation => operation(database), withDomain: async operation => operation(domain)});
   const ui = nativeDeskFixture(services.daily.get());
   const forbidden = vi.fn(async () => { throw Error('Unexpected command during local viewing'); });
-  Object.assign(ui.api.linkedin, {prepare: forbidden, get: forbidden, recover: forbidden, save: forbidden, begin: forbidden, open: forbidden, copy: forbidden, reportOutcome: forbidden});
   Object.assign(ui.api.delegation, {sync: forbidden, getRequestedFollowup: forbidden, prepareRequestedFollowup: forbidden, editRequestedFollowup: forbidden, approveRequestedFollowup: forbidden});
   ui.api.daily.get = vi.fn(async () => services.daily.get());
   const api = {...ui.api, localWorkspace: provider};

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { randomUUID } from 'node:crypto';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { createCampaignFixture } from '../fixtures/campaignWorkspace';
 import { createDomainServices } from '../../src/main/domain/createDomainServices';
@@ -77,7 +77,7 @@ async function fixture() {
     for (const [name, value] of Object.entries(object)) if (typeof value === 'function' && !allowed.includes(name)) Reflect.set(object, name, refuse);
   };
   // Every LinkedIn bridge method is forbidden: launching must never prepare, open, copy or report.
-  for (const namespace of [ui.api.delegation, ui.api.linkedin, ui.api.leads, ui.api.leadDetail]) guardMethods(namespace);
+  for (const namespace of [ui.api.delegation, ui.api.leads, ui.api.leadDetail]) guardMethods(namespace);
   const local = createLocalWorkspaceProvider({ withDatabase: async op => op(f.db), withDomain: async op => op(domain) });
   guardMethods(local, ['get', 'getCommitments']);
   const api = { ...ui.api, localWorkspace: local,
@@ -95,11 +95,10 @@ async function fixture() {
 function detail(container: HTMLElement) { return within(container.querySelector('.native-desk__detail') as HTMLElement); }
 function distinct(f: Awaited<ReturnType<typeof fixture>>) { return [...new Map(f.campaignCommands.map(c => [c.commandId, c])).values()]; }
 function counts(f: Awaited<ReturnType<typeof fixture>>) {
-  return { enrollments: f.db.raw.prepare('SELECT COUNT(*) n FROM campaign_enrollments').get(), handoffs: f.db.raw.prepare('SELECT COUNT(*) n FROM delegated_manual_handoffs').get(),
-    drafts: f.db.raw.prepare('SELECT COUNT(*) n FROM manual_linkedin_drafts').get() };
+  return { enrollments: f.db.raw.prepare('SELECT COUNT(*) n FROM campaign_enrollments').get(), handoffs: f.db.raw.prepare('SELECT COUNT(*) n FROM delegated_manual_handoffs').get() };
 }
 
-it('launches a one-company LinkedIn campaign from a clean workspace: save, approve, enroll a company-level route, then only preparation is offered', async () => {
+it('launches a one-company LinkedIn campaign from a clean workspace: save, approve, enroll a company-level route, and nothing is prepared or sent', async () => {
   const f = await fixture();
   try {
     vi.spyOn(Date, 'now').mockReturnValue(Date.parse(f.now));
@@ -135,7 +134,6 @@ it('launches a one-company LinkedIn campaign from a clean workspace: save, appro
     expect(panel.getByRole('heading', { name: 'LinkedIn campaign draft' })).toBeTruthy();
     expect(panel.getByText(/manual-LinkedIn template/)).toBeTruthy();
     expect(panel.getByText('Explicitly selected company: Fictional Campaign PM (' + f.account.id + ').')).toBeTruthy();
-    expect(panel.getByText('No active LinkedIn enrollment is available. Creating or enrolling a LinkedIn campaign is not available here.')).toBeTruthy();
     expect(panel.queryByRole('button', { name: 'Approve call campaign' })).toBeNull();
     expect(panel.queryByRole('button', { name: /Prepare LinkedIn note|Open saved LinkedIn note/ })).toBeNull();
     const approve = panel.getByRole<HTMLButtonElement>('button', { name: 'Approve LinkedIn campaign' });
@@ -177,14 +175,10 @@ it('launches a one-company LinkedIn campaign from a clean workspace: save, appro
     expect(enrolled.caps).toHaveLength(3);
     expect(enrolled.caps.every(c => c.reserved === 0 && c.sent === 0)).toBe(true);
     expect(f.services.daily.get().calls.accountIds).toEqual([]);
-    expect(counts(f)).toEqual({ enrollments: { n: 1 }, handoffs: { n: 0 }, drafts: { n: 0 } });
+    expect(counts(f)).toEqual({ enrollments: { n: 1 }, handoffs: { n: 0 } });
 
-    // The existing PR #57 preparation flow now offers this enrollment. It has not been invoked.
-    const preparation = within(panel.getByRole('region', { name: 'Manual LinkedIn preparation' }));
-    await waitFor(() => expect(preparation.getByRole<HTMLButtonElement>('button', { name: 'Prepare LinkedIn note' }).disabled).toBe(false));
-    expect(preparation.getByText('Fictional Campaign PM')).toBeTruthy();
-    expect(preparation.queryByText(/No active LinkedIn enrollment is available/)).toBeNull();
-    expect(panel.queryByText('The exact business LinkedIn route or enrollment is unavailable.')).toBeNull();
+    // The desktop LinkedIn manual-draft feature was removed on 18 September 2026: the enrollment is recorded and no note is prepared.
+    expect(panel.queryByRole('region', { name: 'Manual LinkedIn preparation' })).toBeNull();
     expect(panel.getByRole<HTMLButtonElement>('button', { name: 'Enroll company for manual LinkedIn note' }).disabled).toBe(true);
     expect(f.forbidden).not.toHaveBeenCalled();
 
@@ -224,7 +218,7 @@ it('does not offer the company-level LinkedIn route for a call campaign enrollme
     expect([...routeSelect.options].map(option => option.value)).toEqual(['', f.routes[0]!.id, f.routes[1]!.id]);
     expect([...routeSelect.options].some(option => option.value === f.linkedInRoute!.id || option.text.includes('linkedin.com'))).toBe(false);
     expect(panel.queryByRole('combobox', { name: 'Business LinkedIn route' })).toBeNull();
-    expect(counts(f)).toEqual({ enrollments: { n: 0 }, handoffs: { n: 0 }, drafts: { n: 0 } });
+    expect(counts(f)).toEqual({ enrollments: { n: 0 }, handoffs: { n: 0 } });
     expect(f.forbidden).not.toHaveBeenCalled();
   } finally { await f.finish(); }
 }, 30_000);

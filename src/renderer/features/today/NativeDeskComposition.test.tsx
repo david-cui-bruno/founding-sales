@@ -1,14 +1,12 @@
 import { PresentationRoot } from '../../app/PresentationRoot';
 // @vitest-environment jsdom
 import { randomUUID } from 'node:crypto';
-import { act, cleanup, fireEvent, render as testingRender, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render as testingRender, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
-import { createLinkedInFixture } from '../../../../tests/fixtures/linkedInWorkspace';
+import { createCampaignFixture } from '../../../../tests/fixtures/campaignWorkspace';
 import { requestedFollowupFixture } from '../../../../tests/fixtures/requestedFollowup';
 import { createDomainServices } from '../../../main/domain/createDomainServices';
 import { DelegationRepository } from '../../../main/delegation/delegationRepository';
-import { LinkedInService } from '../../../main/linkedin/linkedInService';
-import type { ExecutionClient } from '../../../main/delegation/executionClient';
 import { ownerCommandSchema } from '../../../shared/contracts/ownerCommandContract';
 import type { DelegationCommand } from '../../../shared/contracts/delegationContract';
 import type { AccountReplyDraft, ThreadProjection } from '../../../shared/contracts/mailThreadContract';
@@ -16,7 +14,7 @@ import { NativeDeskRoute } from './NativeDeskRoute';
 import { configuredFixtureStatus, nativeDeskFixture } from './nativeDesk.fixture';
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 async function fixture() {
-  const f = await createLinkedInFixture();
+  const f = await createCampaignFixture();
   f.db.raw.prepare("INSERT INTO workspace_workflow_state VALUES(1,'meeting_first',1,?)").run(f.now);
   const repository = new DelegationRepository({ database: f.db, workspaceId: f.workspaceId, clock: f.clock });
   repository.initializeLocalAuthority(f.account.id);
@@ -34,7 +32,6 @@ async function fixture() {
     return result;
   });
   const forbidden = vi.fn(async () => { throw Error('Unexpected command boundary'); });
-  Object.assign(ui.api.linkedin, { prepare: forbidden, get: forbidden, recover: forbidden, save: forbidden, begin: forbidden, copy: forbidden, open: forbidden, reportOutcome: forbidden });
   vi.spyOn(ui.api.delegation, 'sync').mockImplementation(forbidden);
   return { ...f, ...ui, read, repository, forbidden };
 }
@@ -44,67 +41,10 @@ function envelope(f: Awaited<ReturnType<typeof fixture>>, commandId: string) {
 function rejectCommand(f: Awaited<ReturnType<typeof fixture>>, command: DelegationCommand) {
   expect(f.repository.applyWorkerEvent({ id: randomUUID(), workspaceId: f.workspaceId, accountId: f.account.id, authorityGeneration: 1, aggregateVersion: command.expectedVersion + 1, kind: 'authority.changed', payload: { authority: f.repository.authority(f.account.id)!, receipt: { commandId: command.commandId, status: 'rejected', authorityGeneration: 1, aggregateVersion: command.expectedVersion + 1, reason: 'Fixture owner rejection' } } })).toBe('applied');
 }
-it.each(['applied', 'rejected'] as const)('real pending manual report reconciles %s without changing retained command', async status => {
-  const f = await fixture();
-  try {
-    const draft = f.drafts.create(f.drafts.requireStep(f.version.steps[0].id, 1), 'Saved manual text');
-    const beginId = randomUUID();
-    const approval = f.drafts.approve({ commandId: beginId, draftId: draft.id, expectedRevision: 1 });
-    f.repository.queueCommand(ownerCommandSchema.parse({ ...envelope(f, beginId), kind: 'prepare-manual', payload: approval.binding }));
-    const handoff = { ...approval.binding, handoffId: 'fixture-handoff', expiresAt: '2099-09-10T12:00:00.000Z' };
-    expect(f.repository.applyWorkerEvent({ id: randomUUID(), workspaceId: f.workspaceId, accountId: f.account.id, authorityGeneration: 1, aggregateVersion: 2, kind: 'manual.handoff', payload: handoff, receipt: { commandId: beginId, status: 'applied', authorityGeneration: 1, aggregateVersion: 2, reason: null } })).toBe('applied');
-    vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(new Date(f.now));
-    const full = f.repository.getManualHandoff(handoff.handoffId)!;
-    const { consumedAt: _, ...stored } = full; void _;
-    f.repository.consumeManualHandoff(stored, () => undefined);
-    f.clock.now = () => f.now;
-    const client = { submit: async (command: DelegationCommand) => f.repository.queueCommand(command), sync: async () => ({ applied: 0, gaps: 0, cursor: null as null, ownerFresh: false }) } as unknown as ExecutionClient;
-    const service = new LinkedInService({ repository: f.drafts, owner: { repository: f.repository, client } });
-    f.api.linkedin.reportOutcome = vi.fn(input => service.reportOutcome(input));
-    render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Manual LinkedIn · Fictional Campaign PM' }));
-    fireEvent.change(screen.getByLabelText('Manual outcome'), { target: { value: 'not_sent' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Record outcome' }));
-    await waitFor(() => expect(f.repository.pendingCommands()).toHaveLength(1));
-    const command = f.repository.pendingCommands()[0];
-    const retained = structuredClone(command);
-    expect(command.kind).toBe('complete-manual');
-    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
-    await screen.findByRole('button', { name: 'Reconcile queued commands' });
-    expect((screen.getByRole('button', { name: 'Retry retained outcome' }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole('button', { name: 'Copy note' }) as HTMLButtonElement).disabled).toBe(true);
-    let finish!: () => void;
-    vi.spyOn(f.api.delegation, 'sync').mockImplementation(() => new Promise(resolve => { finish = () => {
-      if (status === 'rejected') rejectCommand(f, command);
-      else {
-        if (command.kind !== 'complete-manual') throw Error('fixture');
-        expect(f.repository.applyWorkerEvent({ id: randomUUID(), workspaceId: f.workspaceId, accountId: f.account.id, authorityGeneration: 1, aggregateVersion: 3, kind: 'manual.outcome', payload: command.payload.outcome, receipt: { commandId: command.commandId, status, authorityGeneration: 1, aggregateVersion: 3, reason: null } })).toBe('applied');
-      }
-      resolve({ applied: 1, gaps: 0, cursor: null, ownerFresh: true });
-    }; }));
-    const before = vi.mocked(f.api.daily.get).mock.calls.length;
-    fireEvent.click(screen.getByRole('button', { name: 'Reconcile queued commands' }));
-    expect(f.api.daily.get).toHaveBeenCalledTimes(before);
-    await act(async () => finish());
-    await waitFor(() => expect(f.api.daily.get).toHaveBeenCalledTimes(before + 1));
-    expect(f.read().ownerStatus[0].pendingCommands).toEqual([]);
-    expect(f.repository.getCommand(command.commandId)).toEqual(retained);
-    expect(f.repository.commandStatus(command.commandId)?.status).toBe(status);
-    expect(f.api.linkedin.reportOutcome).toHaveBeenCalledTimes(1);
-    fireEvent.click(screen.getByRole('button', { name: 'Retry retained outcome' }));
-    await screen.findByText(`Human outcome receipt: ${status}.`);
-    expect(f.api.linkedin.reportOutcome).toHaveBeenCalledTimes(2);
-    const reports = vi.mocked(f.api.linkedin.reportOutcome).mock.calls;
-    expect(reports[1][0]).toEqual(reports[0][0]);
-    expect(f.repository.getCommand(command.commandId)).toEqual(retained);
-    expect(f.forbidden).not.toHaveBeenCalled();
-  } finally { cleanup(); f.close(); }
-});
 it.each(['applied', 'rejected'] as const)('lost requested approval response reconciles %s from real saved outbox', async status => {
   const f = await fixture();
   try {
-    let draft = requestedFollowupFixture(f.account.id, 3).draft;
+    let draft = requestedFollowupFixture(f.account.id, 2).draft;
     const persist = () => f.db.raw.prepare('INSERT OR REPLACE INTO delegated_requested_followup_drafts VALUES(?,?,?,?,?,?,?,?)').run(f.workspaceId, f.account.id, draft.id, draft.revision, draft.contextRevision, JSON.stringify(draft), null, f.now);
     persist();
     vi.spyOn(f.api.delegation, 'editRequestedFollowup').mockImplementation(async input => { draft = { ...draft, revision: draft.revision + 1, subject: input.subject, body: input.body }; persist(); return { draft, stale: false, approval: null }; });
@@ -201,7 +141,7 @@ it('real no-draft placeholder transitions to a separately selectable saved reply
 it.each(['paused', 'revoked', 'foreign', 'failure', 'unrelated'] as const)('real outbox retains new-work protection under %s reconciliation', async condition => {
   const f = await fixture();
   try {
-    const draft = requestedFollowupFixture(f.account.id, 3).draft;
+    const draft = requestedFollowupFixture(f.account.id, 2).draft;
     f.db.raw.prepare('INSERT INTO delegated_requested_followup_drafts VALUES(?,?,?,?,?,?,?,?)').run(f.workspaceId, f.account.id, draft.id, draft.revision, draft.contextRevision, JSON.stringify(draft), null, f.now);
     const command = ownerCommandSchema.parse({ ...envelope(f, randomUUID()), kind: 'approve-requested-followup', payload: { draft, expectedRemoteDraftRevision: 1, approvalId: 'approval', actionId: 'action', intentCommandId: randomUUID(), request: { statement: 'recipient_requested_information_by_email', recipient: draft.recipient }, expiresAt: '2099-09-10T12:00:00.000Z' } });
     f.repository.queueCommand(command);

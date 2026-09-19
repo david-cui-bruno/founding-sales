@@ -111,7 +111,6 @@ const api: CalliePreloadApi = {
     // Settings → Suppressed reads locally. The fixture answers with a real empty list so the section renders without any network.
     readSuppression: async () => ({ entries: [], truncated: false, generatedAt: '2026-09-18T12:00:00.000Z' }),
   },
-  linkedin: { prepare: forbidden('linkedin.prepare'), get: forbidden('linkedin.get'), recover: forbidden('linkedin.recover'), save: forbidden('linkedin.save'), begin: forbidden('linkedin.begin'), open: forbidden('linkedin.open'), copy: forbidden('linkedin.copy'), reportOutcome: forbidden('linkedin.reportOutcome') },
   phoneSetup: { status: forbidden('phoneSetup.status'), confirm: forbidden('phoneSetup.confirm'), clear: forbidden('phoneSetup.clear') },
   outreach: { status: read<Awaited<ReturnType<CalliePreloadApi['outreach']['status']>>>('outreach.status', () => {
     if (connectionStatusUnavailable) throw Error('Synthetic private connection failure');

@@ -5,7 +5,7 @@ import { PresentationRoot } from '../../app/PresentationRoot';
 import { act, cleanup, fireEvent, render as testingRender, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { NativeDeskRoute } from './NativeDeskRoute';
-import { dailyFixture, nativeDeskFixture, nativeDeskReviewFixture, linkedInFixture, localDraftContinuation } from './nativeDesk.fixture';
+import { dailyFixture, nativeDeskFixture, nativeDeskReviewFixture, localDraftContinuation } from './nativeDesk.fixture';
 import type { LinkCompanyPersonRequest, LocalAccountPreparation, LocalWorkspaceSnapshot, LocalCommitmentsSnapshot, LocalCompanyDetail, LocalCompanyResearchStatus, SelectedResearch, LocalWorkspaceApi } from '../../../shared/contracts/localWorkspaceContract';
 afterEach(cleanup);
 const local: LocalWorkspaceSnapshot = { scope: 'local_database', generatedAt: '2026-09-09T12:00:00.000Z', workflowMode: 'meeting_first', transitionReceipt: null, accounts: { state: 'available', snapshots: dailyFixture().accounts } };
@@ -459,27 +459,27 @@ function savedReply(id: string | null, stale = false): Extract<import('../../../
 }
 
 it('stably partitions every frozen saved object, including stale and draftless replies', () => {
-  const email = dailyFixture().answers[0], manual = linkedInFixture();
+  const [email, second] = dailyFixture().answers;
   const replies = [savedReply('one'), savedReply('two', true), savedReply(null)];
-  const input = Object.freeze([replies[0], email, replies[1], manual, replies[2]].map(a => Object.freeze(a)));
+  const input = Object.freeze([replies[0], email, replies[1], second, replies[2]].map(a => Object.freeze(a)));
   const { continuations, history } = partitionFirstUseAnswers(input);
-  expect(continuations).toEqual([email, manual]); expect(history).toEqual(replies);
-  [email, manual].forEach((a, i) => expect(continuations[i]).toBe(a));
+  expect(continuations).toEqual([email, second]); expect(history).toEqual(replies);
+  [email, second].forEach((a, i) => expect(continuations[i]).toBe(a));
   replies.forEach((a, i) => expect(history[i]).toBe(a));
-  expect(input).toEqual([replies[0], email, replies[1], manual, replies[2]]);
+  expect(input).toEqual([replies[0], email, replies[1], second, replies[2]]);
   expect(partitionFirstUseAnswers([])).toEqual({ continuations: [], history: [] });
   expect(partitionFirstUseAnswers(replies)).toEqual({ continuations: [], history: replies });
-  expect(partitionFirstUseAnswers([email, manual])).toEqual({ continuations: [email, manual], history: [] });
+  expect(partitionFirstUseAnswers([email, second])).toEqual({ continuations: [email, second], history: [] });
 });
 
 it('partitions interleaved saved history with exact keys, keyboard order and retained selected body', async () => {
   const snapshot = nativeDeskReviewFixture(), original = [...snapshot.answers];
   const replies = [savedReply('one'), savedReply('two', true), savedReply(null)];
-  snapshot.answers = [replies[0], original[0], replies[1], original[1], replies[2], original[2]];
+  snapshot.answers = [replies[0], original[0], replies[1], original[1], replies[2]];
   const f = fixture(true); f.setSnapshot(snapshot);
   render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} />);
   const history = await screen.findByRole('region', { name: 'Saved reply history 3' });
-  const continuation = screen.getByRole('region', { name: 'Saved draft continuations 3' });
+  const continuation = screen.getByRole('region', { name: 'Saved draft continuations 2' });
   expect(within(continuation).queryByRole('button', { name: /Reply/ })).toBeNull();
   const replyRows = within(history).getAllByRole('button');
   expect(replyRows.map(row => row.dataset.rowKey)).toEqual(replies.map(answerKey));
@@ -525,16 +525,19 @@ it('retains the same requested editor, local text and caret when history arrives
   expect(f.calls.every(c => /^(daily.get|delegation.status)$/.test(c.method))).toBe(true);
 });
 
-it.each(['empty', 'requested', 'linkedin', 'history', 'unpaired'] as const)('explains missing continuation prerequisites for %s without inventing actions', async kind => {
+it.each(['empty', 'requested', 'history', 'unpaired'] as const)('explains missing continuation prerequisites for %s without inventing actions', async kind => {
   const f = fixture(kind !== 'unpaired');
-  if (kind !== 'unpaired') f.setSnapshot(dailyFixture({ answers: kind === 'requested' ? dailyFixture().answers : kind === 'linkedin' ? [linkedInFixture()] : kind === 'history' ? [savedReply('one')] : [] }));
+  if (kind !== 'unpaired') f.setSnapshot(dailyFixture({ answers: kind === 'requested' ? dailyFixture().answers : kind === 'history' ? [savedReply('one')] : [] }));
   render(<NativeDeskRoute firstUse={f.firstUse} api={f.api} />);
   const lane = await screen.findByRole('region', { name: /^Saved draft continuations/ });
+  expect(countText('Saved draft continuations')).toBe(kind === 'unpaired' ? 'Unavailable' : kind === 'requested' ? '2' : '0');
+  expect(screen.queryByRole('button', { name: /prepare|enroll|generate|activate/i })).toBeNull();
+  // A lane that already holds a requested draft has nothing missing to explain, so the note stays away.
+  expect(!!within(lane).queryByText('About saved draft continuations')).toBe(kind !== 'requested');
+  if (kind === 'requested') return;
   fireEvent.click(within(lane).getByText('About saved draft continuations'));
   expect(within(lane).getByText(/cannot prepare first worker drafts/)).toBeTruthy();
-  expect(!!within(lane).queryByText(/Requested email requires/)).toBe(kind !== 'requested');
-  expect(!!within(lane).queryByText(/LinkedIn requires/)).toBe(kind !== 'linkedin');
-  expect(countText('Saved draft continuations')).toBe(kind === 'unpaired' ? 'Unavailable' : kind === 'requested' ? '2' : kind === 'linkedin' ? '1' : '0');
+  expect(within(lane).getByText(/Requested email requires/)).toBeTruthy();
   for (const [label, section] of [['Worker settings', 'worker'], ['Connections settings', 'connections']] as const) {
     const link = within(lane).getByRole('link', { name: label });
     expect(link.getAttribute('href')).toBe('#/settings');
@@ -671,16 +674,16 @@ it('lists unsent local drafts under Saved draft continuations in keyboard order 
   expect(rowA.textContent).toContain('Maintenance request coordination');
   expect(rowA.textContent).toContain('Saved locally · revision 2');
   for (const row of [rowA, rowB]) expect(row.textContent).not.toMatch(/worker|owner|send|approv/i);
-  const lane = screen.getByRole('region', { name: 'Saved draft continuations 3' });
+  const lane = screen.getByRole('region', { name: 'Saved draft continuations 2' });
   const meetings = screen.getByRole('region', { name: /^Upcoming meetings/ });
   const group = screen.getByRole('heading', { name: 'Local unsent drafts' }).parentElement!;
   expect(lane.compareDocumentPosition(group) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(group.compareDocumentPosition(meetings) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  expect(within(lane).getAllByRole('button')).toHaveLength(3);
+  expect(within(lane).getAllByRole('button')).toHaveLength(2);
   // Keyboard order continues from the worker continuations into the local drafts and on to meetings.
-  const linkedIn = screen.getByRole('button', { name: 'Manual LinkedIn · Account A' });
-  linkedIn.focus();
-  fireEvent.keyDown(linkedIn, { key: 'j' }); expect(document.activeElement).toBe(rowA);
+  const lastContinuation = screen.getByRole('button', { name: 'Email · Account B' });
+  lastContinuation.focus();
+  fireEvent.keyDown(lastContinuation, { key: 'j' }); expect(document.activeElement).toBe(rowA);
   fireEvent.keyDown(rowA, { key: 'ArrowDown' }); expect(document.activeElement).toBe(rowB);
   fireEvent.keyDown(rowB, { key: 'j' }); expect(document.activeElement).toBe(within(meetings).getAllByRole('button')[0]);
   fireEvent.keyDown(document.activeElement!, { key: 'k' }); expect(document.activeElement).toBe(rowB);

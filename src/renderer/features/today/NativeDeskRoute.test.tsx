@@ -33,16 +33,6 @@ function fixtureApi(initial = dailyFixture()) {
       editRequestedFollowup: forbidden,
       approveRequestedFollowup: forbidden,
     },
-    linkedin: {
-      prepare: forbidden,
-      get: forbidden,
-      recover: forbidden,
-      save: forbidden,
-      begin: forbidden,
-      copy: forbidden,
-      open: forbidden,
-      reportOutcome: forbidden,
-    },
   } as unknown as NativeDeskApi;
   return {
     api,

@@ -1,7 +1,4 @@
-import type {
-  DailyAnswer,
-  DailySnapshot,
-} from '../../../shared/contracts/dailyContract';
+import type { DailySnapshot } from '../../../shared/contracts/dailyContract';
 import { describeCampaignTemplate } from '../../../shared/contracts/callCampaignDraft';
 const copy = {
   call: { template: 'manual-call template', step: 'call step', draft: 'Call campaign draft', reviewed: 'Reviewed call campaign', approval: 'Approval alone does not enroll a company or place a call.' },
@@ -10,23 +7,15 @@ const copy = {
 export function CampaignReview({
   campaign,
   accounts,
-  answers,
 }: {
   campaign: DailySnapshot['campaigns'][number];
   accounts: DailySnapshot['accounts'];
-  answers: DailyAnswer[];
 }) {
   const { version } = campaign;
   const template = describeCampaignTemplate(version);
   const draft = template?.kind === 'one_company' ? template : null;
   const territory = template?.kind === 'territory_policy' ? template : null;
   const text = draft ? copy[draft.channel] : null;
-  // Only LinkedIn drafts expose an exact campaign version binding. Shared account
-  // membership alone must not relabel unrelated requested emails as sample drafts.
-  const samples = answers.filter(
-    (a) =>
-      a.kind === 'manual_linkedin' && a.draft.campaignVersionId === version.id,
-  );
   return (
     <section className="native-desk__campaign">
       <p className="native-desk__eyebrow">Saved campaign version {version.version}{text ? ` / ${text.template}` : territory ? ' / territory call policy' : ' / capability preview'}</p>
@@ -72,22 +61,6 @@ export function CampaignReview({
           {cap.channel}: {cap.reserved} reserved, {cap.sent} recorded sent
         </p>
       ))}
-      <h3>Exact saved samples</h3>
-      {samples.length ? (
-        samples.map(
-          (a) =>
-            a.kind === 'manual_linkedin' && (
-              <details key={a.draft.id}>
-                <summary>
-                  Manual LinkedIn · {a.accountId} · revision {a.draft.revision}
-                </summary>
-                <pre>{a.draft.body}</pre>
-              </details>
-            ),
-        )
-      ) : (
-        <p>No exact campaign-bound samples available.</p>
-      )}
       <p>
         {version.approvedAt
           ? `Frozen approval recorded: ${version.approvedAt}. ${text ? text.approval : 'This does not activate new work.'}`

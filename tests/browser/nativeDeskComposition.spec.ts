@@ -25,7 +25,6 @@ async function mount(page: Page, scenario = 'populated') {
 }
 const commands = (page: Page) => page.evaluate(() => window.nativeDeskCompositionBrowser.fixture.calls.filter(c => !['daily.get', 'delegation.status', 'localWorkspace.get', 'localWorkspace.getCommitments'].includes(c.method)));
 const emailRow = (page: Page) => page.locator('[data-row-key="requested_followup:nora:draft-nora"]');
-const manualRow = (page: Page) => page.locator('[data-row-key="manual_linkedin:marcus:linkedin-marcus"]');
 async function clean(page: Page, state: { errors: string[]; requests: string[] }) {
   expect(state.errors).toEqual([]); expect(state.requests).toEqual([]);
   expect((await commands(page)).some(c => c.method === 'forbidden')).toBe(false);
@@ -102,20 +101,6 @@ test('unpaired A uses one coherent inset state and does not mislabel unavailable
     await page.screenshot({ path: info.outputPath(`empty-A-${width}-${theme}.png`) });
     expect((await new AxeBuilder({ page }).analyze()).violations.filter(i => i.impact === 'serious' || i.impact === 'critical')).toEqual([]);
   }
-  expect(await commands(page)).toEqual([]); await clean(page, state);
-});
-
-test('manual LinkedIn uses the bound person while selection and presentation execute no commands', async ({ page }, info) => {
-  const state = await mount(page);
-  await manualRow(page).click();
-  const detail = page.locator('.native-desk__detail');
-  await expect(manualRow(page)).toContainText('Marcus Lee');
-  await expect(detail.getByRole('heading', { name: 'Marcus Lee', exact: true })).toBeVisible();
-  await expect(detail.getByText('Operations manager', { exact: true })).toBeVisible();
-  await expect(detail.locator('.native-desk__identity').getByText('Cedarline Property Management', { exact: true })).toBeVisible();
-  await expect(detail.getByRole('heading', { name: 'Cedarline Property Management', exact: true })).toHaveCount(0);
-  await expect(detail.getByText(/sent|delivered/i).filter({ hasText: /^Sent$|^Delivered$/ })).toHaveCount(0);
-  await page.screenshot({ path: info.outputPath('manual-composed-A.png') });
   expect(await commands(page)).toEqual([]); await clean(page, state);
 });
 
