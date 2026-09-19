@@ -24,6 +24,7 @@ import { mailAccountScopeSchema } from '../../../../src/shared/contracts/mailThr
 import { mailScopeFingerprint } from '../../../../src/main/outreach/providers/gmailThreadProvider';
 import type { TickHeldReason, TickPhase, TickPhaseHold, TickPhaseResult } from '../../../../src/shared/contracts/researchSetupContract';
 import { buildScheduledRunRecord, tickErrorClass, SOURCE_LAST_TICK_KEY } from './tickLog';
+import { attemptCode, recordAttempt, type AttemptInput } from './v1/attempts';
 import { TerritoryPolicyRepository, TERRITORY_BACKFILL_TICK_LIMIT, type TerritoryBackfillReport } from './territoryPolicyRepository';
 import { createSequenceEmailWalker, type SequenceEmailReport } from './sequenceEmailWalker';
 import { createTerritoryMailScopeConfigurator, type TerritoryMailScopeReport } from './territoryMailScope';
@@ -416,9 +417,11 @@ export function createSourceCoordinator(input: SourceCoordinatorOptions) {
         const phaseDeadline = new AbortController(); const phaseTimer = setTimeout(() => phaseDeadline.abort(), PHASE_SLICES_MS[index] ?? 10000);
         const phaseSignal = AbortSignal.any([signal, phaseDeadline.signal]);
         const name = phaseNames[index]!;
+        const phaseStartedAt = Date.now();
         try { await phases[index]!(phaseSignal, report); report.phases[name] = phaseSignal.aborted ? 'aborted' : 'completed'; }
         catch { report.phases[name] = signal.aborted ? 'aborted' : 'held'; hold(report, phaseFailures[index]!); }
         finally { clearTimeout(phaseTimer); }
+        await recordAttempt(store, phaseAttempt(name, report, phaseFailures[index]!, Date.now() - phaseStartedAt));
       }
     } catch { if (!signal.aborted) hold(report, 'tick_failed'); }
     finally { clearTimeout(timer); }
@@ -427,6 +430,23 @@ export function createSourceCoordinator(input: SourceCoordinatorOptions) {
     // The record is written outside the tick deadline: a slow tick still leaves its last-run evidence for Settings and the log.
     try { await persistLastTick(report, startedAt); }
     catch { hold(report, 'tick_record_write_failed'); }
+    await recordAttempt(store, tickAttempt(report, Date.now() - startedAt));
     return report;
   } };
+}
+
+/** One `tick_phase` attempt (S0 diagnostics): the phase's outcome, the closed reason it named or the failure it counted, and its error class. */
+function phaseAttempt(name: TickPhase, report: SourceTickReport, failure: TickHeldReason, durationMs: number): AttemptInput {
+  const result = report.phases[name]; const held = report.phaseHolds[name];
+  const outcome = result === 'completed' ? 'ok' : result === 'aborted' ? 'aborted' : 'held';
+  const reason = outcome === 'ok' ? null : held?.reason ?? (outcome === 'held' ? failure : 'deadline');
+  return { kind: 'tick_phase', outcome, reason, detail: held?.errorClass ? { code: attemptCode(held.errorClass) } : null, durationMs, ref: name };
+}
+/** One `tick` attempt per run: the status as the code, the hold count, the most frequent hold reason when held, and the run's duration.
+ *  The full counts live in the tick record (`SOURCE_LAST_TICK`), which the diagnostics view reads beside the attempts. */
+function tickAttempt(report: SourceTickReport, durationMs: number): AttemptInput {
+  const outcome = report.status === 'aborted' ? 'aborted' : report.held > 0 ? 'held' : 'ok';
+  const reasons = (Object.entries(report.heldByReason) as [TickHeldReason, number][]).sort((a, b) => b[1] - a[1]);
+  const reason = outcome === 'ok' ? null : reasons[0]?.[0] ?? (outcome === 'aborted' ? 'deadline' : null);
+  return { kind: 'tick', outcome, reason, detail: { code: report.status, count: report.held }, durationMs, ref: null };
 }

@@ -24,7 +24,15 @@ const event = (sequence: number) => ({ sequence, published: true, event: { id: `
 const eventKey = (sequence: number) => `EVENT#${String(sequence).padStart(16, '0')}`;
 function sdkFixture(override?: (key: string, call: number) => ReturnType<typeof row> | undefined) {
   const commands: DynamoCommand[] = [];
+  const attempts: { outcome: string; reason: string | null; detail: string | null }[] = [];
   const dynamo: DynamoAdapter = { send: async command => {
+    // The one attempt row each /events request writes (S0 diagnostics) is not a read of the stream: it is kept apart from the read count.
+    if (command instanceof TransactWriteItemsCommand) {
+      const items = command.input.TransactItems ?? [];
+      expect(items).toHaveLength(1); expect(items[0]!.Put?.Item?.sk?.S).toMatch(/^ATTEMPT#/);
+      attempts.push(JSON.parse(items[0]!.Put!.Item!.data!.S!));
+      return { $metadata: {} };
+    }
     commands.push(command);
     // The event stream is read as one consistent ascending range query; everything else is a point read.
     if (command instanceof QueryCommand) {
@@ -51,7 +59,7 @@ function sdkFixture(override?: (key: string, call: number) => ReturnType<typeof 
     if (key === 'EVENT_HEAD') return row({ sequence: 2 });
     return row(event(Number(key.slice('EVENT#'.length))));
   } };
-  return { dynamo, commands };
+  return { dynamo, commands, attempts };
 }
 function http(dynamo: DynamoAdapter, production = false) {
   return production ? createProductionHandler({ DELEGATED_WORKER_ENABLED: 'true', DELEGATED_WORKER_TABLE: options.tableName,
@@ -102,6 +110,9 @@ describe.each([false, true])('actual GET /events dependency failure (production=
     expect(result.body).not.toContain(credential);
     expect(result.body).not.toContain(secretText);
     expect(f.commands).toHaveLength(failureAt);
+    // The refused page is one failed attempt under the closed code, and the SDK text is not in it either.
+    expect(f.attempts).toEqual([expect.objectContaining({ outcome: 'failed', reason: 'worker_unavailable', detail: { code: 'worker_unavailable', cursor: 'none' } })]);
+    expect(JSON.stringify(f.attempts)).not.toContain(secretText);
   });
   it('returns the unchanged event page on healthy reads', async () => {
     const f = sdkFixture();
@@ -110,6 +121,7 @@ describe.each([false, true])('actual GET /events dependency failure (production=
     expect(JSON.parse(result.body)).toMatchObject({ events: [event(1).event, event(2).event], complete: true });
     expect(f.commands).toHaveLength(EVENTS_READS);
     expect(f.commands.filter(command => command instanceof QueryCommand)).toHaveLength(1);
+    expect(f.attempts).toEqual([expect.objectContaining({ outcome: 'ok', reason: null, detail: { code: 'events_page', cursor: 'none', count: 2, bytes: Buffer.byteLength(result.body, 'utf8') } })]);
   });
 });
 
@@ -121,6 +133,8 @@ describe('authentication, validation and incomplete reads remain fail closed', (
     expect(result.statusCode).toBe(401);
     expect(JSON.parse(result.body)).toEqual({ error: 'worker_unauthorized' });
     expect(f.commands).toHaveLength(0);
+    expect(f.attempts).toEqual([expect.objectContaining({ outcome: 'failed', reason: 'worker_unauthorized' })]);
+    expect(JSON.stringify(f.attempts)).not.toContain('private-token');
   });
   it.each([1, 2])('denies missing credential/pairing read %i', async missingAt => {
     const f = sdkFixture((_key, call) => call === missingAt ? { $metadata: {} } : undefined);

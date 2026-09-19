@@ -295,7 +295,11 @@ describe("delegated-worker Terraform source isolation", () => {
       'condition = var.delegated_worker_activation_reviewed && var.delegated_workspace_id != ""',
       'runtime = "nodejs22.x"', 'handler = "index.handler"', 'architectures = ["arm64"]',
       "memory_size = 256", "timeout = 60", "reserved_concurrent_executions = 5",
-      "throttling_burst_limit = 5", "throttling_rate_limit = 2", "timeout_milliseconds = 30000",
+      // The stage default covers a thin client polling every 60 s plus a Today, Settings, Diagnostics walk and a command in one burst;
+      // the pairing redeem alone is throttled far below it, since a code is redeemed once and guessing is what the limit is for.
+      "default_route_settings { throttling_burst_limit = 20 throttling_rate_limit = 5 }",
+      'route_settings { route_key = "POST /v1/pair/redeem" throttling_burst_limit = 2 throttling_rate_limit = 0.2 }',
+      "timeout_milliseconds = 30000",
       "deletion_protection_enabled = true", "point_in_time_recovery { enabled = true }",
       "enable_key_rotation = true", "deletion_window_in_days = 30",
       'schedule_expression = "rate(5 minutes)"', "maximum_event_age_in_seconds = 60", "maximum_retry_attempts = 0",
@@ -311,6 +315,9 @@ describe("delegated-worker Terraform source isolation", () => {
       "POST /readiness", "POST /research/configure", "POST /policies/configure", "POST /requested-followup/context", "POST /requested-followup/draft",
       "POST /research/setup/status", "POST /research/setup", "POST /accounts/preparation", "POST /reply/draft",
       "GET /events", "POST /google/begin", "GET /google/status", "GET /google/disclosure", "POST /google/revoke", "GET /oauth/callback",
+      "POST /v1/pair/redeem", "GET /v1/diagnostics", "POST /v1/commands",
+      // The stage's per-route throttle names the redeem route a second time; it is the same route key, not a second route.
+      "POST /v1/pair/redeem",
     ]);
     // Authentication stays in the existing handler. Do not silently add/change API auth in an extraction.
     expect(implementation).not.toMatch(/\b(?:authorization_type|authorizer_id|api_key_required)\s*=/);

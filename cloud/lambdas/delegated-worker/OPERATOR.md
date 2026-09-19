@@ -39,6 +39,37 @@ Any error after issuance starts is **uncertain**, not proof that no bootstrap ex
 
 The same argument rules apply, plus: the pairing id must be a lower-case UUID, and `--scopes` must keep both `commands:write` and `events:read` (a rotation may widen the scope set, never narrow it below what desktop pairing needs). After the identity and table checks the tool reads the pairing under the same explicit credential and refuses, without writing, one that is unknown or revoked: `Pairing unknown or revoked. No rotation issued. Reserved output retained.` A dry run verifies neither identity, table nor pairing. The rotation code is written only to the private output; nothing is printed. Do not run two rotations for one pairing at once: each redeems into the next generation and the second redemption makes the first Mac's new credential stale. See `docs/engineering/pairing-rotation.md` for the desktop side and the emergency credential caveat.
 
+## Minting a device code for the /v1 thin client
+
+Slice S0 of the rebuilt core (design of 18 Sep 2026) pairs a thin Mac client with **one device token, all scopes**: no scopes, generations or emergency credential. `--mint-device-code` mints the one-time code that client redeems at `POST /v1/pair/redeem`; the worker stores only `PAIRCODE#<sha256(code)>` with the label and expiry, and after redemption only `DEVICE#<sha256(token)>`. Losing the Mac means minting a new code and revoking the old device (`revoke_device` on `POST /v1/commands`, from any paired client).
+
+The same dry-run default, private output reservation, explicit environment credential, STS identity and DescribeTable checks apply as for a desktop pairing. `--scopes` and `--rotate` do not apply and are refused. `--label` is 1 to 80 printable characters and is what Diagnostics shows for the device; it is not secret, but it is never echoed. `--expires` is 60 to 900 seconds (the code lives at most fifteen minutes). Failed redeems are counted per hour on the worker; after five in an hour every redeem is refused until the hour turns, so mint the code when the client is ready to paste it.
+
+The exact command, dry run first, then the same line with `--execute`. The four identifiers are the ones the desktop pairing code was minted with: the reviewed AWS account, the worker's region, the worker's DynamoDB table and the workspace id (`DELEGATED_WORKSPACE_ID` in the deployed worker's environment).
+
+```sh
+cd cloud/lambdas/delegated-worker && node build-operator.mjs
+node out/operator-pairing.cjs \
+  --mint-device-code \
+  --account <AWS_ACCOUNT_ID> --region <AWS_REGION> --table <WORKER_TABLE> --workspace <WORKSPACE_ID> \
+  --label "David MacBook" --expires 600 \
+  --output <PRIVATE_0700_DIRECTORY>/device-code
+# review the dry-run line (it verifies nothing and writes nothing), then:
+node out/operator-pairing.cjs \
+  --mint-device-code \
+  --account <AWS_ACCOUNT_ID> --region <AWS_REGION> --table <WORKER_TABLE> --workspace <WORKSPACE_ID> \
+  --label "David MacBook" --expires 600 \
+  --output <PRIVATE_0700_DIRECTORY>/device-code --execute
+```
+
+Success prints `Device code saved to private output. No code printed.`; the code is the one line in the output file, to be pasted once into the thin client's pairing screen. Refusals say `No device code issued`; anything after issuance starts is uncertain, exactly as for a desktop pairing, and a code that may have been issued stays redeemable until its expiry.
+
+**A lost Mac.** Add `--replace-device <DEVICE_ID>` (the lower-case id Diagnostics shows for the old device) to the same command, dry run then execute. The tool reads that device under the same credential after the identity and table checks and refuses an unknown or already revoked one before writing anything (`Device unknown or revoked. No device code issued. Reserved output retained.`). Otherwise the minted code names the device, and the moment the new Mac redeems the code the old device is revoked in the same transaction that creates the new one: its token is refused on its very next request. Until the code is redeemed the old token keeps working. A device may also be revoked from any paired client with `revoke_device` on `POST /v1/commands`; every command transaction checks that the calling device is still unrevoked, so a revocation takes effect even against a request already in flight.
+
+**Tokens expire.** A device token is accepted for ninety days from pairing. After that every request from it answers 401 `{ "error": "unauthenticated", "reason": "device_expired" }`, and the Mac pairs again with a fresh code (`--replace-device` the expired device to keep the device list honest). Diagnostics lists each device with its `expiresAt`.
+
+The three `/v1` routes (`POST /v1/pair/redeem`, `GET /v1/diagnostics`, `POST /v1/commands`) are served by the existing worker Lambda and listed in `local.delegated_routes` of `cloud/terraform/modules/delegated-worker/main.tf`; the HTTP API provisions explicit route keys only, so they become reachable at the next Terraform apply of the worker root (part of David's redeploy). Until that apply the gateway answers 404 for them.
+
 ## What this does not do
 
 It does not deploy infrastructure, configure the desktop endpoint, redeem a bootstrap, change research policy, start schedules, approve campaigns, grant Google permissions, send outreach or book meetings. Desktop configuration and pairing require the real reviewed workflow, and a normal restart may be required for its startup-bound connection. Synchronization may submit already approved queued commands and is not read-only.
