@@ -17,7 +17,7 @@ const usage = (extra: Partial<UsageSummary> = {}): UsageSummary => usageSummaryS
   timezone: 'America/New_York',
   thisWeek: window({ mornings: 4, firms: 22, callsPlaced: 31, notes: 6, callbacksPromised: 3, callbacksKept: 2, drafts: 5, emailsSent: 7, replies: 4,
     outcomes: { connected: 3, interested: 2, not_interested: 4, gatekeeper: 5, voicemail: 7, no_answer: 9, busy: 1, wrong_number: 2 },
-    holds: [{ reason: 'manual_only', count: 1 }, { reason: 'reply_capability_unverified', count: 4 }] }),
+    holds: [{ reason: 'reply_capability_unverified', count: 4 }, { reason: 'requires_owner_preflight', count: 1 }] }),
   lastWeek: window({ from: '2026-09-07', to: '2026-09-13', mornings: 5, callsPlaced: 40, replies: 2, callbacksKept: 1,
     outcomes: { connected: 4, interested: 1, not_interested: 2, gatekeeper: 3, voicemail: 6, no_answer: 8, busy: 0, wrong_number: 1 } }),
   ...extra,
@@ -52,7 +52,7 @@ describe('the weekly block', () => {
       ['Voicemail', '7'], ['No answer', '9'], ['Busy', '1'], ['Wrong number', '2'],
       ['Notes written', '6'], ['Callbacks promised', '3'], ['Callbacks kept', '2'],
       ['Drafts written', '5'], ['Emails sent', '7'], ['Replies received', '4'],
-      ['Holds', 'LinkedIn note is manual only 1 · reply capability unverified 4'],
+      ['Holds', 'reply capability unverified 4 · follow-up needs an owner preflight 1'],
       ['Spend', 'Discovery USD 0.35 of 5.00 · research USD 1.25 of 2.00 (to date)'],
     ]);
     expect(screen.getByText('Last week (2026-09-07 to 2026-09-13): mornings worked 5 · calls placed 40 · connected 10 · replies received 2 · callbacks kept 1')).toBeTruthy();

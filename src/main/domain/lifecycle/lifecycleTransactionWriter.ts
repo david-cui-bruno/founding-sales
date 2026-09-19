@@ -73,8 +73,6 @@ import {
   type InsertReactivationRuleInput,
 } from './reactivationRepository';
 import { SalesCycleRepository } from './salesCycleRepository';
-import type { DiscoveryRepository } from '../discovery/discoveryRepository';
-import { discoveryAssessmentSchema } from '../../../shared/contracts/discoveryContract';
 
 const NO_CADENCE: CadenceActionBinding = {
   cadenceEnrollmentId: null, cadenceDefinitionId: null,
@@ -321,7 +319,6 @@ export interface LifecycleCommands {
 }
 
 export interface LifecycleTransactionCommands extends LifecycleCommands {
-  prepareFromAssessment(input: ReviewToReadyInput & { assessmentId: string; fingerprint: string }): SalesCycle;
   closeForOptOut(input: CloseForOptOutInput): CloseForOptOutResult;
 }
 
@@ -336,7 +333,6 @@ export type LifecycleWriterDependencies = Readonly<{
   ids: IdGenerator;
   timezone: string;
   policies: ChannelPolicySnapshots;
-  discoveryRepository?: DiscoveryRepository;
 }>;
 
 export class LifecycleTransactionWriter implements LifecycleTransactionCommands {
@@ -355,7 +351,6 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
   private readonly enrollments: CadenceEnrollmentRepository;
   private readonly reactivations: ReactivationRepository;
   private readonly reviews: LifecycleReviewRepository;
-  private readonly discoveryRepository: DiscoveryRepository | undefined;
 
   constructor(input: LifecycleWriterDependencies) {
     if (input.database.raw !== input.unitOfWork.database.raw) {
@@ -365,8 +360,6 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
     input.events.assertBoundTo(input.database, input.unitOfWork);
     input.sources.assertBoundTo(input.database, input.unitOfWork);
     input.cadences.assertBoundTo(input.database, input.unitOfWork);
-    input.discoveryRepository?.assertBoundTo(input.database, input.unitOfWork);
-    this.discoveryRepository = input.discoveryRepository;
     this.database = input.database;
     this.unitOfWork = input.unitOfWork;
     this.identities = input.identities;
@@ -429,26 +422,6 @@ export class LifecycleTransactionWriter implements LifecycleTransactionCommands 
     this.unitOfWork.assertWriteScope();
     const parsed = reviewToReadySchema.parse(input);
     return this.writeReady(parsed, { kind: 'founder', reason: 'Founder reviewed' });
-  }
-
-  prepareFromAssessment(input: ReviewToReadyInput & { assessmentId: string; fingerprint: string }): SalesCycle {
-    this.unitOfWork.assertWriteScope();
-    const parsed = reviewToReadySchema.extend({ assessmentId: discoveryAssessmentSchema.shape.id,
-      fingerprint: discoveryAssessmentSchema.shape.fingerprint }).parse(input);
-    const cycle = this.cycles.getById(parsed.cycleId);
-    const assessment = cycle === null ? null : this.discoveryRepository?.getCurrent(cycle.prospectId);
-    if (!assessment || !cycle || assessment.id !== parsed.assessmentId || assessment.fingerprint !== parsed.fingerprint
-      || assessment.personId !== cycle.personId || assessment.prospectId !== cycle.prospectId
-      || assessment.salesCycleId !== cycle.id || assessment.disposition !== 'candidate' || !assessment.identitySupported
-      || assessment.evaluatedAt > parsed.effectiveAt || assessment.expiresAt <= parsed.effectiveAt) {
-      throw new LifecycleEligibilityError('A current matching discovery assessment is required.');
-    }
-    const override = this.discoveryRepository!.overrideForFingerprint(cycle.prospectId, parsed.fingerprint);
-    if (assessment.overrideId !== (override?.id ?? null) || (override !== null
-      && (override.createdAt > parsed.effectiveAt || (!override.evidenceChanged && override.decision !== 'reconsider')))) {
-      throw new LifecycleEligibilityError('Founder discovery decision takes precedence.');
-    }
-    return this.writeReady(parsed, { kind: 'mechanical', reason: `Discovery assessment ${assessment.id}` });
   }
 
   private writeReady(parsed: ReviewToReadyInput, provenance: { kind: 'founder' | 'mechanical'; reason: string }): SalesCycle {

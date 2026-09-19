@@ -1,8 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { DiscoveryService } from '../../src/main/domain/discovery/discoveryService';
-import { DiscoveryFactWriter } from '../../src/main/domain/discovery/discoveryFactWriter';
-import { DiscoveryReadService } from '../../src/main/domain/discovery/discoveryReadService';
-import { SourceRepository } from '../../src/main/domain/source/sourceRepository';
 
 import { closeDatabase, openDatabase, type AppDatabase } from '../../src/main/db/database';
 import { migrateToLatest } from '../../src/main/db/migrate';
@@ -225,43 +221,5 @@ describe('createDomainServices', () => {
       accountIds: newCallSlots === 0 ? ['email-due', 'no-route-due'] : ['email-due', 'no-route-due', 'new-phone'],
       workloadConflict: true,
     });
-  });
-
-  it('rejects substituted discovery bindings before any query, clock or ID access but accepts equivalent Pick containers', () => {
-    const { services } = build();
-    const clock = { now: () => { throw new Error('clock read during binding'); } };
-    const ids = { next: () => { throw new Error('ID during binding'); } };
-    const dependencies = { identities: services.identities, sourceRepository: services.sourceRepository,
-      events: services.events, outboundPermission: services.outboundPermission,
-      prioritizationRepository: services.prioritizationRepository, prioritization: services.prioritization,
-      workspaceSettings: services.workspaceSettings };
-    const factWriter = new DiscoveryFactWriter({ database, unitOfWork: services.unitOfWork, services: { ...dependencies } });
-    const replacement = new SourceRepository({ database, unitOfWork: services.unitOfWork, clock });
-    const alienWriter = new DiscoveryFactWriter({ database, unitOfWork: services.unitOfWork,
-      services: { ...dependencies, sourceRepository: replacement } });
-    const mutableReadServices = { ...services };
-    const reader = new DiscoveryReadService({ database, unitOfWork: services.unitOfWork, clock, services: mutableReadServices });
-    const alienReader = new DiscoveryReadService({ database, unitOfWork: services.unitOfWork, clock,
-      services: { ...services, sourceRepository: replacement } });
-    const mutableFactServices = { ...dependencies };
-    const capturedWriter = new DiscoveryFactWriter({ database, unitOfWork: services.unitOfWork, services: mutableFactServices });
-    mutableReadServices.sourceRepository = replacement;
-    mutableFactServices.sourceRepository = replacement;
-    const input = { database, unitOfWork: services.unitOfWork, clock, ids, factWriter,
-      services: { ...dependencies, lifecycle: services.lifecycle, discoveryRepository: services.discoveryRepository,
-        discoveryRead: services.discoveryRead } };
-    const changes = database.raw.prepare('SELECT total_changes() AS n').get();
-    const reads = vi.spyOn(database.raw, 'prepare').mockImplementation(() => { throw new Error('query during binding'); });
-    expect(() => new DiscoveryService(input)).not.toThrow();
-    expect(() => new DiscoveryService({ ...input, factWriter: capturedWriter,
-      services: { ...input.services, discoveryRead: reader } })).not.toThrow();
-    expect(() => new DiscoveryService({ ...input, database: { ...database } })).toThrow(/bound|database/i);
-    expect(() => new DiscoveryService({ ...input, unitOfWork: new DomainUnitOfWork(database) })).toThrow(/bound|database/i);
-    expect(() => new DiscoveryService({ ...input, factWriter: alienWriter })).toThrow(/bound|database/i);
-    expect(() => new DiscoveryService({ ...input, services: { ...input.services, discoveryRead: alienReader } })).toThrow(/bound|database/i);
-    expect(() => new DiscoveryService({ ...input, services: { ...input.services, sourceRepository: replacement } })).toThrow(/bound|database/i);
-    expect(reads).not.toHaveBeenCalled();
-    reads.mockRestore();
-    expect(database.raw.prepare('SELECT total_changes() AS n').get()).toEqual(changes);
   });
 });

@@ -104,10 +104,6 @@ function readWindow(database: AppDatabase, input: {
     // Exactly the reason the daily read puts on an unapproved requested follow-up.
     if (row.approval_json === null) hold('requires_owner_preflight');
   }
-  for (const row of rows("SELECT account_id,updated_at FROM manual_linkedin_drafts WHERE workspace_id=? AND state<>'closed' AND updated_at>=? AND updated_at<?",
-    input.workspaceId, week.startAt, week.endAt)) {
-    if (record(row.account_id, row.updated_at)) hold('manual_only');
-  }
 
   // A sequence email that actually went out. The template id is the one the worker-minted action id names,
   // so a row that is not a template sequence action is not counted here at all (D13, lane 40).

@@ -2,13 +2,13 @@ import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { readFileSync } from 'node:fs';
 import { expect, it, vi } from 'vitest';
-it('builds backup tools separately without widening the seven-input identity audit graph', () => {
+it('builds backup tools separately without widening the three-input read-only tools graph', () => {
   const result = spawnSync(process.execPath, ['scripts/buildOperationalTools.mjs'], { encoding: 'utf8' }); expect(result.status).toBe(0);
   const audit = JSON.parse(readFileSync('build/generated/operational-tools/inputs.json'));
-  expect(audit).toEqual(['src/main/db/readOnlyEncryptedDatabase.ts', 'src/main/db/sqliteDriver.ts', 'src/main/db/sqliteDriverDecision.ts', 'src/main/domain/source/cloudNameMatching.ts', 'src/main/identityMigration/identityMigrationAudit.ts', 'src/main/identityMigration/identityMigrationManifest.ts', 'src/main/security/recoveryKey.ts']);
+  expect(audit).toEqual(['src/main/db/readOnlyEncryptedDatabase.ts', 'src/main/db/sqliteDriver.ts', 'src/main/db/sqliteDriverDecision.ts']);
   const backup = JSON.parse(readFileSync('build/generated/pre-release-tools/inputs.json'));
   expect(backup).toContain('src/main/backup/preReleaseBackupRuntime.ts'); expect(backup).toContain('src/main/backup/backupService.ts');
-  expect(backup.some(path => /(?:migrations\/|\/migrate\.ts|startApplication|recoveryService|sourcing\/|identityMigration\/)/.test(path))).toBe(false);
+  expect(backup.some(path => /(?:migrations\/|\/migrate\.ts|startApplication|recoveryService|sourcing\/)/.test(path))).toBe(false);
   expect(readFileSync('build/generated/pre-release-tools/preReleaseBackupRuntime.cjs', 'utf8')).toContain('runPreReleaseBackupHost');
 });
 it.each(['', 'candidate-output'])('composes marker hooks with encrypted-native copy and existing helper/fuse/signature hooks with output %s', async candidate => {

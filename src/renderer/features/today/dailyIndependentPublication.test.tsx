@@ -48,7 +48,6 @@ function preflight() {
 }
 function expectHeld(api: NativeDeskApi, workspaceId = 'ws') {
   expect(() => captureDailySessionScope(api.delegation, workspaceId)).toThrow();
-  expect(() => captureDailySessionScope(api.linkedin, workspaceId)).toThrow();
 }
 function expectNoCommands(f: ReturnType<typeof fixture>) {
   expect(f.calls.filter(call => !['daily.get', 'delegation.status', 'localWorkspace.get', 'localWorkspace.getCommitments'].includes(call.method))).toEqual([]);

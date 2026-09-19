@@ -1,13 +1,12 @@
 import { PresentationRoot } from '../../app/PresentationRoot';
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render as testingRender, screen, within, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render as testingRender, screen, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { NativeDesk, NativeDeskRoute } from './NativeDeskRoute';
-import { dailyFixture, nativeDeskFixture, linkedInFixture, requestedDraft, fixtureNow, configuredFixtureStatus, localSnapshot, commitments } from './nativeDesk.fixture';
-import { requestedDisplayBindingSchema, manualDisplayBindingSchema } from '../../../shared/contracts/dailyAnswerPresentationContract';
+import { dailyFixture, nativeDeskFixture, requestedDraft, fixtureNow, configuredFixtureStatus, localSnapshot, commitments } from './nativeDesk.fixture';
+import { requestedDisplayBindingSchema } from '../../../shared/contracts/dailyAnswerPresentationContract';
 import type { DailyAnswer } from '../../../shared/contracts/dailyContract';
 import { DailyAnswerDetail, DailyAnswers } from './DailyAnswers';
-import { createHash } from 'node:crypto';
 import { RetainedWork } from './RetainedWork';
 import type { LocalCommitmentsSnapshot } from '../../../shared/contracts/localWorkspaceContract';
 afterEach(cleanup);
@@ -75,7 +74,7 @@ it('shows exact named person/company/role and human-reported context in saved ro
 it('updates optional labels without remounting the controlled input or accepting mismatched context', async () => {
   const item = namedRequested();
   const f = nativeDeskFixture(dailyFixture({answers: [item]}));
-  const props = {workspaceId: 'ws', api: f.api.delegation, linkedin: f.api.linkedin, company: 'Account A'};
+  const props = {workspaceId: 'ws', api: f.api.delegation, company: 'Account A'};
   const view = render(<DailyAnswerDetail {...props} item={item} />);
   const body = screen.getByRole('textbox', {name: 'Email body'}) as HTMLTextAreaElement;
   body.focus(); body.setSelectionRange(2, 5);
@@ -93,30 +92,6 @@ it('updates optional labels without remounting the controlled input or accepting
   expect(screen.getByText('Original call context unavailable')).toBeTruthy();
   expect(screen.getByRole('textbox', {name: 'Email body'})).toBe(body);
 });
-it('matches manual labels to the retained target and preserves manual input across incoming target conflict', async () => {
-  const item = linkedInFixture();
-  item.draft.personId = 'manual-person';
-  item.draft.targetHash = createHash('sha256').update('https://www.linkedin.com/in/manual-fixture').digest('hex');
-  item.presentation = {kind: 'manual_linkedin', asOf: fixtureNow, binding: manualDisplayBindingSchema.parse(Object.fromEntries(Object.entries(item.draft).filter(([key]) => !['revision','body','contentHash','state','updatedAt'].includes(key)))), issues: [], contact: {basis: 'manual_route', personId: 'manual-person', personVersion: 1, displayName: 'Marcus Fixture', route: {id: item.draft.routeId, accountId: 'a', personId: 'manual-person', channel: 'linkedin', value: 'https://www.linkedin.com/in/manual-fixture', purpose: 'business', verification: 'confirmed', evidenceIds: ['evidence'], version: 1}, role: null}};
-  const f = nativeDeskFixture(dailyFixture({answers: [item]}));
-  const props = {workspaceId: 'ws', api: f.api.delegation, linkedin: f.api.linkedin, company: 'Account A'};
-  const view = render(<DailyAnswerDetail {...props} item={item} />);
-  const note = screen.getByRole('textbox', {name: 'LinkedIn note'});
-  expect(screen.getByRole('heading', {name: 'Marcus Fixture'})).toBeTruthy();
-  fireEvent.change(note, {target:{value:'Retained local note'}});
-  const next = structuredClone(item);
-  next.draft.routeVersion = 2;
-  next.presentation!.binding.routeVersion = 2;
-  next.presentation!.contact!.route.version = 2;
-  next.presentation!.contact!.displayName = 'Other Contact';
-  view.rerender(<DailyAnswerDetail {...props} item={next} />);
-  await waitFor(() => expect(screen.getByText('Saved LinkedIn version needs review')).toBeTruthy());
-  expect(screen.queryByRole('heading', {name: 'Other Contact'})).toBeNull();
-  expect(screen.getByRole('heading', {name: 'Account A'})).toBeTruthy();
-  expect(screen.getByRole('textbox', {name: 'LinkedIn note'})).toBe(note);
-  expect((note as HTMLTextAreaElement).value).toBe('Retained local note');
-});
-
 it('shows actual retained company and due time beside the original action', () => {
   const value: LocalCommitmentsSnapshot = {scope:'local_database', generatedAt: fixtureNow, revision:1, reviewErrorCount:0, items:[{kind:'callback',item:{id:'cycle',salesCycleId:'cycle',personId:'person',personName:'Retained Person',contextLabel:'Stored Company',stage:'interviewed',priorityContext:null,action:{id:'action',type:'follow_up',channel:'email',label:'Review requested details',dueAt:'2026-09-10T09:00:00.000Z'},lane:'later',reason:'Recorded callback',activeTriggers:[],verifyFirst:false,pinned:false,consentRequirement:null,cloudScores:null}}]};
   render(<RetainedWork read={{value,pending:false,error:false}} selected={null} onSelect={vi.fn()} />);
@@ -129,7 +104,7 @@ it('distinguishes pending approval from applied approval in the identity tag', (
   const item = namedRequested();
   item.approval = {state:'pending_preflight',receipt:{commandId:'approval',status:'pending',authorityGeneration:1,aggregateVersion:1,reason:null},intentCommandId:null,reason:null};
   const f = nativeDeskFixture(dailyFixture({answers:[item]}));
-  render(<DailyAnswerDetail item={item} workspaceId="ws" api={f.api.delegation} linkedin={f.api.linkedin} company="Account A" />);
+  render(<DailyAnswerDetail item={item} workspaceId="ws" api={f.api.delegation} company="Account A" />);
   expect(screen.getByRole('heading',{name:'Nora Fixture'}).closest('header')?.textContent).toContain('Approval pending');
 });
 it('keeps partial source warnings even when worker scope is unavailable', async () => {
@@ -142,7 +117,7 @@ it('keeps partial source warnings even when worker scope is unavailable', async 
 it('keeps routine owner preflight discoverable without preceding the primary save actions', () => {
   const item = namedRequested();
   const f = nativeDeskFixture(dailyFixture({answers:[item]}));
-  render(<DailyAnswerDetail item={item} workspaceId="ws" api={f.api.delegation} linkedin={f.api.linkedin} company="Account A" />);
+  render(<DailyAnswerDetail item={item} workspaceId="ws" api={f.api.delegation} company="Account A" />);
   const checks = screen.getByText('Approval checks').closest('details')!;
   expect(checks.open).toBe(false);
   fireEvent.click(screen.getByText('Approval checks'));
@@ -244,7 +219,7 @@ it('keeps a solely unpaired scope quiet without hiding a separate local hold', (
 
 it('reveals a focused editor only within its message scroll owner without changing selection or text', () => {
   const item=namedRequested(), f=nativeDeskFixture(dailyFixture({answers:[item]}));
-  render(<DailyAnswerDetail item={item} workspaceId="ws" api={f.api.delegation} linkedin={f.api.linkedin} company="Account A" />);
+  render(<DailyAnswerDetail item={item} workspaceId="ws" api={f.api.delegation} company="Account A" />);
   const body=screen.getByRole('textbox',{name:'Email body'}) as HTMLTextAreaElement;
   const area=body.closest('.native-desk__message-area') as HTMLElement;
   vi.spyOn(area,'getBoundingClientRect').mockReturnValue({top:100,bottom:300,height:200,left:0,right:400,width:400,x:0,y:100,toJSON:()=>({})});

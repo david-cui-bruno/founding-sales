@@ -115,44 +115,6 @@ export function dailyFixture(
     ...overrides,
   });
 }
-export function linkedInFixture(): Extract<
-  DailySnapshot['answers'][number],
-  { kind: 'manual_linkedin' }
-> {
-  return {
-    kind: 'manual_linkedin',
-    accountId: 'a',
-    capability: 'manual_only',
-    draft: {
-      id: 'linkedin-a',
-      workspaceId: 'ws',
-      accountId: 'a',
-      enrollmentId: 'enrollment',
-      campaignVersionId: 'version',
-      personId: null,
-      stepId: 'li-step',
-      routeId: 'li-route',
-      routeVersion: 1,
-      contextRevision: 1,
-      executionContextId: 'context',
-      revision: 1,
-      body: 'Manual note',
-      contentHash: hash,
-      targetHash: hash,
-      state: 'draft',
-      updatedAt: fixtureNow,
-    },
-    recovery: {
-      draftId: 'linkedin-a',
-      revision: 1,
-      approvalCommandId: null,
-      attempts: [],
-      handoffId: null,
-      started: false,
-    },
-  };
-}
-
 import type { NativeDeskApi } from './NativeDeskRoute';
 import type { CommandReceipt } from '../../../shared/contracts/commandReceiptContract';
 import { requestedFollowupDraftSchema } from '../../../shared/contracts/requestedFollowupContract';
@@ -215,18 +177,6 @@ export function nativeDeskFixture(initial = dailyFixture()) {
     );
     if (!item || item.kind !== 'requested_followup')
       throw Error('Fixture draft not found');
-    return item;
-  };
-  const linked = (draftId: string, revision: number) => {
-    const item = snapshot.answers.find(
-      (a) => a.kind === 'manual_linkedin' && a.draft.id === draftId,
-    );
-    if (
-      !item ||
-      item.kind !== 'manual_linkedin' ||
-      item.draft.revision !== revision
-    )
-      throw Error('Fixture revision conflict');
     return item;
   };
   const api: NativeDeskApi & { localWorkspace: LocalWorkspaceApi } = {
@@ -345,77 +295,6 @@ export function nativeDeskFixture(initial = dailyFixture()) {
         return structuredClone(item.approval);
       },
     },
-    linkedin: {
-      prepare: forbidden,
-      get: async (input) => {
-        record('linkedin.get', input);
-        return structuredClone(
-          linked(input.draftId, input.expectedRevision).draft,
-        );
-      },
-      recover: async (input) => {
-        record('linkedin.recover', input);
-        return structuredClone(
-          linked(input.draftId, input.expectedRevision).recovery,
-        );
-      },
-      save: async (input) => {
-        record('linkedin.save', input);
-        const item = linked(input.draftId, input.expectedRevision);
-        item.draft = {
-          ...item.draft,
-          revision: item.draft.revision + 1,
-          body: input.body,
-        };
-        item.recovery = { ...item.recovery, revision: item.draft.revision };
-        return structuredClone(item.draft);
-      },
-      begin: async (input) => {
-        record('linkedin.begin', input);
-        const item = linked(input.draftId, input.expectedRevision);
-        item.recovery = {
-          ...item.recovery,
-          started: true,
-          handoffId: 'fixture-handoff',
-          approvalCommandId: input.commandId,
-        };
-        return {
-          draftId: input.draftId,
-          revision: input.expectedRevision,
-          status: 'started',
-          handoffId: 'fixture-handoff',
-          receipt: receipt(input.commandId),
-        };
-      },
-      open: async (input) => {
-        record('linkedin.open', input);
-        linked(input.draftId, input.expectedRevision);
-        return {
-          draftId: input.draftId,
-          revision: input.expectedRevision,
-          status: 'opened',
-        };
-      },
-      copy: async (input) => {
-        record('linkedin.copy', input);
-        linked(input.draftId, input.expectedRevision);
-        return {
-          draftId: input.draftId,
-          revision: input.expectedRevision,
-          status: 'copied',
-        };
-      },
-      reportOutcome: async (input) => {
-        record('linkedin.reportOutcome', input);
-        const item = linked(input.draftId, input.expectedRevision);
-        retainPending(item.accountId, input.commandId);
-        return {
-          draftId: input.draftId,
-          revision: input.expectedRevision,
-          receipt: receipt(input.commandId, 'pending'),
-        };
-      },
-    },
   };
   return {
     api,
@@ -457,7 +336,6 @@ export function nativeDeskReviewFixture(): DailySnapshot {
       status: 'owner_applied',
     }),
   );
-  snapshot.answers.push(linkedInFixture());
   snapshot.campaigns = [
     {
       version: {

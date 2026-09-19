@@ -36,7 +36,7 @@ it('offers explicit ordinary reply editing only after showing the exact saved co
   const network = vi.fn((): never => { throw Error('Unexpected network effect'); });
   vi.stubGlobal('fetch', network); vi.stubGlobal('XMLHttpRequest', network); vi.stubGlobal('WebSocket', network);
   expect(typeof api.editReplyDraft).toBe('function'); expect(typeof api.reconcileReplyDraft).toBe('function');
-  render(<DailyAnswerDetail item={item} workspaceId="workspace-a" api={api} linkedin={f.api.linkedin}
+  render(<DailyAnswerDetail item={item} workspaceId="workspace-a" api={api}
     company="Larkspur Studio" accountDetails={<p>Saved company context.</p>} />);
   const conversation = screen.getByRole('region', { name: 'Saved conversation' });
   const draftHeading = screen.getByRole('heading', { name: /^Saved reply draft$/ });
@@ -77,7 +77,7 @@ function editingFixture() {
   const reconcile = vi.fn<CalliePreloadApi['delegation']['reconcileReplyDraft']>(async () => structuredClone(current));
   const api = { ...f.api.delegation, editReplyDraft: edit, reconcileReplyDraft: reconcile };
   setDailySessionScope(api, 'workspace');
-  const view = (next = item, actionHold?: string) => <DailyAnswerDetail item={next} workspaceId="workspace" api={api} linkedin={f.api.linkedin} actionHold={actionHold} />;
+  const view = (next = item, actionHold?: string) => <DailyAnswerDetail item={next} workspaceId="workspace" api={api} actionHold={actionHold} />;
   return { f, api, draft, item, edit, reconcile, view, current: () => current,
     setCurrent: (value: ReplyDraftResult) => { current = value; } };
 }
@@ -161,7 +161,7 @@ function approvalFixture(options: { unconfigured?: boolean } = {}) {
   const api = { ...base.api, admitReplyFirstDraft: admit, approveReply: approve, submitApprovedReply: submit };
   setDailySessionScope(api, 'workspace');
   return { ...base, api, admit, approve, submit,
-    view: (next = base.item, actionHold?: string) => <DailyAnswerDetail item={next} workspaceId="workspace" api={api} linkedin={base.f.api.linkedin} actionHold={actionHold} /> };
+    view: (next = base.item, actionHold?: string) => <DailyAnswerDetail item={next} workspaceId="workspace" api={api} actionHold={actionHold} /> };
 }
 
 it('writes the first draft, regenerates against the same thread identity, and never calls a model in the renderer', async () => {

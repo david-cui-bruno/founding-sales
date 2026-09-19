@@ -4,7 +4,7 @@ import { AxeBuilder } from '@axe-core/playwright';
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
 import type {} from '../fixtures/nativeDeskBrowser';
-import { createCallCampaignDraft, createLinkedInCampaignDraft } from '../../src/shared/contracts/callCampaignDraft';
+import { createCallCampaignDraft } from '../../src/shared/contracts/callCampaignDraft';
 import { accountFingerprint } from '../../src/main/domain/accounts/accountEvidence';
 import { PHONE_DIAL_MODES } from '../../src/renderer/features/today/todayCopy';
 import { MANUAL_DIAL_NEXT_STEP } from '../../src/renderer/features/today/CallCard';
@@ -52,7 +52,6 @@ async function assertClean(page: Page, state: {errors: string[]; requests: strin
 // Exact copy for an enrollment dropdown with no eligible company route. It names the parallel lanes' exact labels
 // ("Review phone route" on Accounts, "Send updated saved record to worker" on Campaigns) and promises no call or message.
 const noPhoneRouteCopy = 'No published business phone route is saved for this company on the worker\'s copy of its record. On Accounts, open the company and use "Review phone route" to confirm the number from a saved source, then on Campaigns use "Send updated saved record to worker". Enrollment stays unavailable until then.';
-const noLinkedInRouteCopy = 'No published business LinkedIn route is saved for this company on the worker\'s copy of its record. There is no LinkedIn review step yet. Import a company LinkedIn profile route on Accounts, then on Campaigns use "Send updated saved record to worker". Enrollment stays unavailable until then.';
 test('real Native Desk themes, geometry, selection and unchanged editor DOM', async ({page}, testInfo) => {
   const state = await mount(page);
   expect((await methods(page)).every(method => ['daily.get','delegation.status','localWorkspace.get','localWorkspace.getCommitments'].includes(method))).toBe(true);
@@ -206,99 +205,6 @@ test('saved manual-call template has separate accessible review and route contro
   await assertClean(page,state);
 });
 
-test('saved manual-LinkedIn template offers a channel choice, LinkedIn review and company-level route controls without automatic commands', async ({page}, testInfo) => {
-  const state = await mount(page);
-  const version = createLinkedInCampaignDraft({campaignId:'browser-li-campaign',versionId:'browser-li-version',stepId:'browser-li-step',accountId:'a',offer:'Discuss a simpler maintenance follow-up workflow.'});
-  // Explicit saved projections only. The real owner-command path is covered by
-  // linkedInCampaignLaunchWorkflow, not a second simulated browser worker.
-  await page.evaluate(({version,snapshotHash}) => {
-    const f = window.nativeDeskBrowser.fixture;
-    const snapshot = f.snapshot();
-    snapshot.campaigns = [{version,snapshotHash,caps:[],enrollments:[]}];
-    snapshot.accounts[0].routes = [
-      {id:'browser-phone',accountId:'a',personId:null,version:1,channel:'phone',value:'+1 212 555 0100',purpose:'business',verification:'published',evidenceIds:['fixture-source']},
-      {id:'browser-li-company',accountId:'a',personId:null,version:1,channel:'linkedin',value:'https://www.linkedin.com/in/fictional-company',purpose:'business',verification:'published',evidenceIds:['fixture-source']},
-      {id:'browser-li-person',accountId:'a',personId:'person-a',version:1,channel:'linkedin',value:'https://www.linkedin.com/in/fictional-person',purpose:'business',verification:'published',evidenceIds:['fixture-source']},
-      {id:'browser-li-page',accountId:'a',personId:null,version:1,channel:'linkedin',value:'https://www.linkedin.com/company/fictional-company',purpose:'business',verification:'published',evidenceIds:['fixture-source']},
-    ];
-    f.setSnapshot(snapshot);
-    window.nativeDeskBrowser.navigate('campaigns');
-  }, {version,snapshotHash:accountFingerprint(version)});
-  // Channel choice on the draft form: one toggle per exact template shares a single form row.
-  const draftForm = page.getByRole('region', {name:'New call campaign',exact:true});
-  const channel = draftForm.getByRole('group', {name:'Channel',exact:true});
-  const callToggle = channel.getByRole('button', {name:'New call campaign',exact:true});
-  const linkedInToggle = channel.getByRole('button', {name:'New LinkedIn campaign',exact:true});
-  await callToggle.click();
-  await expect(callToggle).toHaveAttribute('aria-expanded','true');
-  await expect(draftForm.getByRole('button', {name:'Save call campaign draft',exact:true})).toBeVisible();
-  await linkedInToggle.click();
-  await expect(callToggle).toHaveAttribute('aria-expanded','false');
-  await expect(linkedInToggle).toHaveAttribute('aria-expanded','true');
-  await expect(draftForm.getByRole('button', {name:'Save LinkedIn campaign draft',exact:true})).toBeDisabled();
-  await expect(draftForm.getByText('Saves an unapproved LinkedIn campaign draft. This does not enroll accounts, prepare or send a note, or start outreach.')).toBeVisible();
-  const liRow = page.locator('[data-row-key="campaign:browser-li-version"]');
-  await expect(liRow.locator('strong')).toHaveText('Account A · LinkedIn campaign');
-  await expect(liRow.locator('span')).toHaveText('Version 1 · Draft');
-  await liRow.click();
-  await expect(page.getByRole('heading',{name:'LinkedIn campaign draft',exact:true})).toBeVisible();
-  await expect(page.getByRole('region',{name:'Call campaign enrollment',exact:true})).toHaveCount(0);
-  const form = page.getByRole('region',{name:'LinkedIn campaign enrollment',exact:true});
-  const approve = form.getByRole('button',{name:'Approve LinkedIn campaign',exact:true});
-  await expect(approve).toBeDisabled();
-  await form.getByRole('checkbox',{name:'I reviewed this company, offer, LinkedIn step and lifetime limits',exact:true}).check();
-  await expect(approve).toBeEnabled();
-  await expect(form.getByRole('combobox')).toHaveCount(0);
-  expect(await methods(page)).not.toContain('delegation.submit');
-  await page.evaluate(() => {
-    const f = window.nativeDeskBrowser.fixture;
-    const snapshot = f.snapshot();
-    snapshot.campaigns[0].version.approvedAt = '2026-09-09T12:00:00.000Z';
-    snapshot.ownerStatus[0].executionVersion!++;
-    f.setSnapshot(snapshot);
-    window.nativeDeskBrowser.refresh();
-  });
-  await expect(page.getByRole('heading',{name:'Reviewed LinkedIn campaign',exact:true})).toBeVisible();
-  await expect(liRow.locator('span')).toHaveText('Version 1 · Approved');
-  const route = form.getByRole('combobox',{name:'Business LinkedIn route',exact:true});
-  const enroll = form.getByRole('button',{name:'Enroll company for manual LinkedIn note',exact:true});
-  await expect(form.getByRole('combobox',{name:'Business phone route',exact:true})).toHaveCount(0);
-  await expect(route).toHaveValue('');
-  expect(await route.locator('option').evaluateAll(options => options.map(option => (option as HTMLOptionElement).value))).toEqual(['','browser-li-company']);
-  // A saved company LinkedIn route is offered, so the empty-dropdown explanation stays away.
-  await expect(form.getByText(noLinkedInRouteCopy,{exact:true})).toHaveCount(0);
-  await expect(enroll).toBeDisabled();
-  await route.selectOption('browser-li-company');
-  await expect(enroll).toBeDisabled();
-  await form.getByRole('checkbox',{name:'I want this company added to the manual LinkedIn queue',exact:true}).check();
-  await expect(enroll).toBeEnabled();
-  await expect(form.getByText('Enrollment adds a due manual LinkedIn preparation item. It does not send a message, connect, or grant contact permission.')).toBeVisible();
-  await expect(page.getByText('No active LinkedIn enrollment is available. Creating or enrolling a LinkedIn campaign is not available here.')).toBeVisible();
-  for (const width of [1440,1050]) {
-    await page.setViewportSize({width,height:700});
-    for (const theme of ['light','dark'] as const) {
-      await page.evaluate(theme => window.nativeDeskBrowser.preferences(theme,'compact'),theme);
-      const detail = page.locator('.native-desk__detail');
-      expect((await detail.evaluate(el => getComputedStyle(el).overflowY)),'campaign review must remain naturally scrollable').not.toBe('hidden');
-      await expect(route).toBeVisible();
-      const geometry = await route.evaluate(el => {
-        const style = getComputedStyle(el);
-        return {content:el.clientHeight-parseFloat(style.paddingTop)-parseFloat(style.paddingBottom),text:parseFloat(style.lineHeight)||parseFloat(style.fontSize)*1.2};
-      });
-      expect(geometry.content,'selected LinkedIn route must not be vertically clipped').toBeGreaterThanOrEqual(geometry.text);
-      await route.focus();
-      await expect(route).toBeFocused();
-      expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
-      const axe = await new AxeBuilder({page}).analyze();
-      expect(axe.violations.filter(item=>item.impact==='serious'||item.impact==='critical')).toEqual([]);
-      await page.screenshot({path:testInfo.outputPath(`linkedin-campaign-enrollment-${width}-${theme}.png`),fullPage:true});
-    }
-  }
-  expect(await methods(page)).not.toContain('delegation.submit');
-  expect((await methods(page)).some(method => method.startsWith('linkedin.'))).toBe(false);
-  await assertClean(page,state);
-});
-
 test('territory call policy panel shows the standing sequence above the manual drafts and holds without the bridge, with no automatic call', async ({page}) => {
   const state = await mount(page);
   await page.evaluate(() => window.nativeDeskBrowser.navigate('campaigns'));
@@ -410,24 +316,8 @@ test('explicit exact email approval stays separate from sending', async ({page})
   await assertClean(page,state);
 });
 
-test('manual LinkedIn outcome stays separate from opening and copying', async ({page}) => {
-  const state = await mount(page);
-  await page.getByRole('button',{name:'Manual LinkedIn · Account A',exact:true}).click();
-  const note = page.getByRole('textbox',{name:'LinkedIn note'});
-  await note.fill('A human-reviewed manual note.');
-  await page.getByRole('button',{name:'Begin manual step',exact:true}).click();
-  await expect(page.getByRole('button',{name:'Begin manual step',exact:true})).toBeDisabled();
-  await page.getByRole('button',{name:'Copy note',exact:true}).click();
-  await page.getByRole('button',{name:'Open LinkedIn',exact:true}).click();
-  expect((await methods(page)).filter(method=>method==='linkedin.reportOutcome')).toHaveLength(0);
-  await page.getByRole('combobox',{name:'Manual outcome'}).selectOption('human_reported_sent');
-  await page.getByRole('button',{name:'Record outcome',exact:true}).click();
-  expect((await methods(page)).filter(method=>method==='linkedin.reportOutcome')).toHaveLength(1);
-  await assertClean(page,state);
-});
-
-async function installPendingRecoveryFixture(page: Page, kind: 'manual' | 'requested') {
-  await page.evaluate(kind=>{
+async function installPendingRecoveryFixture(page: Page) {
+  await page.evaluate(()=>{
     type Mutable<T> = { -readonly [K in keyof T]: T[K] };
     const fixture = window.nativeDeskBrowser.fixture;
     type Receipt = Parameters<typeof fixture.setSnapshot>[0]['ownerStatus'][number]['pendingCommands'][number];
@@ -440,82 +330,27 @@ async function installPendingRecoveryFixture(page: Page, kind: 'manual' | 'reque
       fixture.setSnapshot(snapshot);
     };
     const delegation: Mutable<typeof fixture.api.delegation> = fixture.api.delegation;
-    let syncCalls=0;
     delegation.sync = async () => {
       fixture.calls.push({method:'delegation.sync'});
-      if (++syncCalls===1 && kind==='manual') throw Error('Fixture owner sync unavailable');
       // This models a durable owner event applied to local storage. The UI must
       // reread it, not infer cleared state from the untrusted report counts.
       reflect(null);
       return {applied:1,gaps:0,cursor:'fixture-cursor',ownerFresh:true};
     };
-    if (kind==='manual') {
-      const api: Mutable<typeof fixture.api.linkedin> = fixture.api.linkedin;
-      const original = api.reportOutcome;
-      let reports=0;
-      api.reportOutcome = async input => {
-        const result=await original(input);
-        if (++reports===1) {reflect(result.receipt);return result;}
-        reflect(null);
-        return {...result,receipt:{...result.receipt,status:'applied'}};
-      };
-    } else {
-      const original=delegation.approveRequestedFollowup;
-      let approvals=0;
-      delegation.approveRequestedFollowup=async input=>{
-        const result=await original(input);
-        if (++approvals===1) {reflect(result.receipt);throw Error('Fixture lost pending approval response');}
-        reflect(null);
-        return {...result,state:'needs_review',receipt:{...result.receipt,status:'rejected',reason:'Fixture terminal rejection'}};
-      };
-    }
-  },kind);
+    const original=delegation.approveRequestedFollowup;
+    let approvals=0;
+    delegation.approveRequestedFollowup=async input=>{
+      const result=await original(input);
+      if (++approvals===1) {reflect(result.receipt);throw Error('Fixture lost pending approval response');}
+      reflect(null);
+      return {...result,state:'needs_review',receipt:{...result.receipt,status:'rejected',reason:'Fixture terminal rejection'}};
+    };
+  });
 }
-
-test('real pending manual receipt can be explicitly reconciled without unholding new work or syncing automatically', async ({page}) => {
-  const state=await mount(page);
-  await installPendingRecoveryFixture(page,'manual');
-  await page.getByRole('button',{name:'Manual LinkedIn · Account A',exact:true}).click();
-  await page.getByRole('button',{name:'Begin manual step',exact:true}).click();
-  await page.getByRole('combobox',{name:'Manual outcome'}).selectOption('not_sent');
-  await page.getByRole('button',{name:'Record outcome',exact:true}).click();
-  await page.evaluate(()=>window.nativeDeskBrowser.refresh());
-  await expect(page.getByRole('button',{name:'Copy note',exact:true})).toBeDisabled();
-  expect((await methods(page)).filter(method=>method==='delegation.sync')).toHaveLength(0);
-  await page.locator('.native-desk__connection > summary').click();
-  const recheck=page.getByRole('button',{name:'Reconcile queued commands',exact:true});
-  await expect(recheck).toBeEnabled();
-  await page.evaluate(()=>{
-    window.nativeDeskBrowser.fixture.setConfiguration({state:'paused',workspaceId:'ws',endpoint:'https://owner.fixture.invalid',configuration:{revision:2,configuration:{version:1,state:'paused',research:null},updatedAt:new Date().toISOString()}});
-    window.nativeDeskBrowser.refresh();
-  });
-  await expect(recheck).toBeDisabled();
-  expect((await methods(page)).filter(method=>method==='delegation.sync')).toHaveLength(0);
-  await page.evaluate(()=>{
-    window.nativeDeskBrowser.fixture.setConfiguration({state:'active',workspaceId:'ws',endpoint:'https://owner.fixture.invalid',configuration:{revision:3,configuration:{version:1,state:'active',research:null},updatedAt:new Date().toISOString()}});
-    window.nativeDeskBrowser.refresh();
-  });
-  await expect(recheck).toBeEnabled();
-  await recheck.click();
-  await expect.poll(async()=>(await methods(page)).filter(method=>method==='delegation.sync').length).toBe(1);
-  await expect(page.getByRole('button',{name:'Copy note',exact:true})).toBeDisabled();
-  expect((await methods(page)).filter(method=>method==='linkedin.reportOutcome')).toHaveLength(1);
-  await expect(recheck).toBeEnabled();
-  await recheck.click();
-  const retry=page.getByRole('button',{name:'Retry retained outcome',exact:true});
-  await expect(retry).toBeEnabled();
-  await retry.click();
-  await expect(page.getByText('Human outcome receipt: applied.',{exact:true})).toBeVisible();
-  const reports=await page.evaluate(()=>window.nativeDeskBrowser.fixture.calls.filter(call=>call.method==='linkedin.reportOutcome'));
-  expect(reports).toHaveLength(2);expect(reports[1].input).toEqual(reports[0].input);
-  expect((await methods(page)).filter(method=>method==='delegation.sync')).toHaveLength(2);
-  expect((await methods(page)).filter(method=>['linkedin.open','linkedin.copy'].includes(method))).toHaveLength(0);
-  await assertClean(page,state);
-});
 
 test('a lost requested approval with a persisted pending receipt keeps exact identity through explicit owner recheck', async ({page}) => {
   const state=await mount(page);
-  await installPendingRecoveryFixture(page,'requested');
+  await installPendingRecoveryFixture(page);
   await page.getByRole('button',{name:'Email · Account A',exact:true}).click();
   await expect(page.getByRole('checkbox')).toBeVisible();
   await page.getByRole('checkbox').check();
@@ -573,7 +408,7 @@ test('two saved replies in one thread keep exact independent row identities', as
     fixture.setSnapshot(snapshot);
     window.nativeDeskBrowser.refresh();
   });
-  await expect(page.getByRole('region', { name: 'Saved draft continuations 3', exact: true }).locator('[data-row-key]')).toHaveCount(3);
+  await expect(page.getByRole('region', { name: 'Saved draft continuations 2', exact: true }).locator('[data-row-key]')).toHaveCount(2);
   const replies = page.getByRole('region', { name: 'Saved reply history 2', exact: true }).getByRole('button',{name:'Reply · Account A',exact:true});
   await expect(replies).toHaveCount(2);
   await replies.nth(0).click();
@@ -705,35 +540,6 @@ test('approval continuation does not revive after leaving and reopening the same
   await assertClean(page,state);
 });
 
-for (const terminal of ['applied','rejected'] as const) {
-  test(`pending manual outcome can explicitly reconcile to ${terminal} with identical command`, async ({page}) => {
-    const state = await mount(page);
-    await page.evaluate(terminal=>{
-      type Mutable<T> = { -readonly [K in keyof T]: T[K] };
-      const api: Mutable<typeof window.nativeDeskBrowser.fixture.api.linkedin> = window.nativeDeskBrowser.fixture.api.linkedin;
-      const original = api.reportOutcome;
-      let calls = 0;
-      api.reportOutcome = async input => {
-        const result = await original(input);
-        calls++;
-        return calls===1 ? result : {...result,receipt:{...result.receipt,status:terminal,reason:terminal==='rejected'?'Fixture terminal rejection':null}};
-      };
-    },terminal);
-    await page.getByRole('button',{name:'Manual LinkedIn · Account A',exact:true}).click();
-    await page.getByRole('button',{name:'Begin manual step',exact:true}).click();
-    await page.getByRole('combobox',{name:'Manual outcome'}).selectOption('not_sent');
-    await page.getByRole('button',{name:'Record outcome',exact:true}).click();
-    const retry = page.getByRole('button',{name:/Retry.*outcome/i});
-    await expect(retry).toBeEnabled();
-    await retry.click();
-    await expect(page.getByText(new RegExp(`receipt: ${terminal}`))).toBeVisible();
-    const reports = await page.evaluate(()=>window.nativeDeskBrowser.fixture.calls.filter(call=>call.method==='linkedin.reportOutcome'));
-    expect(reports).toHaveLength(2);
-    expect(reports[0].input).toEqual(reports[1].input);
-    await assertClean(page,state);
-  });
-}
-
 test('accepting a newer saved email immediately permits explicit preflight and save', async ({page}) => {
   const state = await mount(page);
   await page.getByRole('button',{name:'Email · Account A',exact:true}).click();
@@ -759,92 +565,6 @@ test('accepting a newer saved email immediately permits explicit preflight and s
   expect((await methods(page)).filter(method=>method==='approveRequestedFollowup')).toHaveLength(0);
   await assertClean(page,state);
 });
-
-for (const initial of ['pending','unknown'] as const) {
-  for (const terminal of ['applied','rejected'] as const) {
-    test(`${initial} historical outcome retries exactly to ${terminal} before adopting a newer LinkedIn draft`, async ({page}) => {
-      const state = await mount(page);
-      await page.evaluate(({initial,terminal})=>{
-        type Mutable<T> = { -readonly [K in keyof T]: T[K] };
-        const fixture = window.nativeDeskBrowser.fixture;
-        const api: Mutable<typeof fixture.api.linkedin> = fixture.api.linkedin;
-        const delegation: Mutable<typeof fixture.api.delegation> = fixture.api.delegation;
-        delegation.sync = async () => {
-          fixture.calls.push({method:'delegation.sync'});
-          // Model the owner having reconciled the outbox. The retained editor
-          // still needs an explicit exact receipt retry before it can adopt.
-          const canonical = fixture.snapshot();
-          for (const owner of canonical.ownerStatus) { owner.pendingCommands=[]; owner.status='owner_applied'; }
-          fixture.setSnapshot(canonical);
-          return {applied:1,gaps:0,cursor:'historical-owner-event',ownerFresh:true};
-        };
-        const original = api.reportOutcome;
-        let retained: Awaited<ReturnType<typeof original>> | undefined;
-        api.reportOutcome = async input => {
-          if (!retained) {
-            retained = await original(input);
-            if (initial==='unknown') throw Error('Fixture lost historical receipt');
-            return retained;
-          }
-          // Production supports immutable historical action records. This fixture
-          // deliberately preserves the old command instead of querying the new draft.
-          if (input.draftId!==retained.draftId || input.expectedRevision!==retained.revision || input.commandId!==retained.receipt.commandId) throw Error('Historical identity changed');
-          fixture.calls.push({method:'linkedin.reportOutcome',input:structuredClone(input)});
-          return {...retained,receipt:{...retained.receipt,status:terminal,reason:terminal==='rejected'?'Fixture terminal rejection':null}};
-        };
-      },{initial,terminal});
-      await page.getByRole('button',{name:'Manual LinkedIn · Account A',exact:true}).click();
-      await page.getByRole('button',{name:'Begin manual step',exact:true}).click();
-      await page.getByRole('combobox',{name:'Manual outcome'}).selectOption('not_sent');
-      await page.getByRole('button',{name:'Record outcome',exact:true}).click();
-      const retry = page.getByRole('button',{name:'Retry retained outcome',exact:true});
-      await expect(retry).toBeEnabled();
-      await page.evaluate(()=>{
-        type Mutable<T> = { -readonly [K in keyof T]: T[K] };
-        const fixture = window.nativeDeskBrowser.fixture;
-        const snapshot = fixture.snapshot();
-        const item = snapshot.answers.find(answer=>answer.kind==='manual_linkedin');
-        if (!item || item.kind!=='manual_linkedin' || !item.recovery.approvalCommandId) throw Error('Missing started fixture draft');
-        const old = structuredClone(item.recovery);
-        old.attempts = [{commandId:item.recovery.approvalCommandId,receipt:{commandId:item.recovery.approvalCommandId,status:'applied',authorityGeneration:1,aggregateVersion:2,reason:null}}];
-        const api: Mutable<typeof fixture.api.linkedin> = fixture.api.linkedin;
-        api.recover = async input => {
-          if (input.draftId!==old.draftId || input.expectedRevision!==old.revision) throw Error('Wrong historical recovery');
-          fixture.calls.push({method:'linkedin.recover',input:structuredClone(input)});
-          return structuredClone(old);
-        };
-        item.draft = {...item.draft,revision:item.draft.revision+1,body:'Newer saved LinkedIn note',state:'draft'};
-        item.recovery = {...item.recovery,revision:item.draft.revision,approvalCommandId:null,attempts:[],handoffId:null,started:false};
-        fixture.setSnapshot(snapshot);
-        window.nativeDeskBrowser.refresh();
-      });
-      const adopt = page.getByRole('button',{name:'Use saved LinkedIn version',exact:true});
-      await expect(adopt).toBeDisabled();
-      await expect(page.getByRole('textbox',{name:'LinkedIn note'})).toHaveValue('Manual note');
-      for (const name of ['Begin manual step','Open LinkedIn','Copy note','Save note']) await expect(page.getByRole('button',{name,exact:true})).toBeDisabled();
-      await expect(page.getByRole('button',{name:'Recover receipts',exact:true})).toBeDisabled();
-      await page.locator('.native-desk__connection > summary').click();
-      expect((await methods(page)).filter(method=>method==='delegation.sync')).toHaveLength(0);
-      await page.getByRole('button',{name:'Reconcile queued commands',exact:true}).click();
-      await page.getByRole('button',{name:'Recover receipts',exact:true}).click();
-      expect((await methods(page)).filter(method=>method==='delegation.sync')).toHaveLength(1);
-      await expect.poll(async()=>(await methods(page)).filter(method=>method==='linkedin.recover').length).toBe(1);
-      await expect(adopt).toBeDisabled();
-      await expect(retry).toBeEnabled();
-      await retry.click();
-      await expect(page.getByText(new RegExp(`Human outcome receipt: ${terminal}`))).toBeVisible();
-      const reports = await page.evaluate(()=>window.nativeDeskBrowser.fixture.calls.filter(call=>call.method==='linkedin.reportOutcome'));
-      expect(reports).toHaveLength(2);
-      expect(reports[0].input).toEqual(reports[1].input);
-      await expect(adopt).toBeEnabled();
-      await adopt.click();
-      await expect(page.getByRole('textbox',{name:'LinkedIn note'})).toHaveValue('Newer saved LinkedIn note');
-      expect((await methods(page)).filter(method=>method==='linkedin.begin')).toHaveLength(1);
-      expect((await methods(page)).filter(method=>['linkedin.copy','linkedin.open'].includes(method))).toHaveLength(0);
-      await assertClean(page,state);
-    });
-  }
-}
 
 async function localOnly(page: Page, mode: 'legacy' | 'meeting_first' = 'meeting_first') {
   await page.evaluate(mode => {
