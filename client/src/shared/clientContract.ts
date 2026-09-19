@@ -5,7 +5,9 @@ import {
   todayViewSchema,
   v1CommandReceiptSchema,
   v1CommandSchema,
+  v1FirmViewSchema,
   type TodayView,
+  type V1FirmView,
 } from '../../../src/shared/contracts/v1Contract';
 
 /**
@@ -24,6 +26,8 @@ export const CLIENT_CHANNELS = {
   get: 'client:get',
   command: 'client:command',
   unpair: 'client:unpair',
+  /** Hand one number to Phone.app (slice S2). Handing off is not calling: David presses the button. */
+  dial: 'client:dial',
 } as const;
 
 export const clientStatusSchema = z.strictObject({
@@ -48,9 +52,12 @@ export const pairResultSchema = z.discriminatedUnion('outcome', [
 ]);
 export type PairResult = z.infer<typeof pairResultSchema>;
 
-export const viewPathSchema = z.enum(['/v1/diagnostics', '/v1/today']);
+export const viewPathSchema = z.enum(['/v1/diagnostics', '/v1/today', '/v1/firms']);
 export type ViewPath = z.infer<typeof viewPathSchema>;
-export const readRequestSchema = z.strictObject({ view: viewPathSchema, kind: attemptKindSchema.optional() });
+export const readRequestSchema = z.strictObject({ view: viewPathSchema, kind: attemptKindSchema.optional(),
+  /** The firm the Firm view names (S2); refused on any other view. */
+  firmId: z.string().min(1).max(200).optional() })
+  .refine(request => (request.view === '/v1/firms') === (request.firmId !== undefined), 'firmId belongs to the Firm view');
 export type ReadRequest = z.infer<typeof readRequestSchema>;
 
 const unavailableSchema = z.strictObject({
@@ -102,7 +109,37 @@ export type LastGoodToday = z.infer<typeof lastGoodTodaySchema>;
 export const viewSchemas = {
   '/v1/diagnostics': diagnosticsViewSchema,
   '/v1/today': todayViewSchema,
+  '/v1/firms': v1FirmViewSchema,
 } as const;
 
-export { attemptKindSchema, diagnosticsViewSchema, v1CommandSchema };
+/**
+ * Handing one number to Phone.app (slice S2). Every refusal is named and carries the plain sentence the card shows:
+ * a dial the client refuses is never a silent nothing. `unknown` means the handoff may have reached Phone.app and
+ * may not have; it is never reported as a call, and only `log_call_outcome` says what happened on the line.
+ */
+export const dialRequestSchema = z.strictObject({ firmId: z.string().min(1).max(200), number: z.string().min(1).max(60) });
+export type DialRequest = z.infer<typeof dialRequestSchema>;
+export const DIAL_REFUSALS = ['no_view', 'view_stale', 'card_unknown', 'dial_not_allowed', 'number_mismatch',
+  'number_excluded', 'suppressed', 'route_unavailable', 'handoff_uncertain'] as const;
+export const dialRefusalSchema = z.enum(DIAL_REFUSALS);
+export type DialRefusal = z.infer<typeof dialRefusalSchema>;
+export const DIAL_REFUSAL_SENTENCES: Readonly<Record<DialRefusal, string>> = Object.freeze({
+  no_view: 'This Mac has not read a list yet, so there is no card to dial from.',
+  view_stale: 'This list is more than two minutes old. Refresh it and try again.',
+  card_unknown: 'That firm is not on the list this Mac is showing.',
+  dial_not_allowed: 'The worker holds this firm: it says the dial is not allowed right now.',
+  number_mismatch: 'That number is not the one on the card. Refresh the list and try again.',
+  number_excluded: 'That is not a number this Mac will ever dial.',
+  suppressed: 'This firm is suppressed. It is never called again.',
+  route_unavailable: 'The Phone.app handoff is not set up on this Mac, so nothing was dialed.',
+  handoff_uncertain: 'The handoff may or may not have reached Phone.app. Check Phone.app before dialing again.',
+});
+export const dialResultSchema = z.discriminatedUnion('outcome', [
+  z.strictObject({ outcome: z.literal('handed_off'), number: z.string().min(1).max(60) }),
+  z.strictObject({ outcome: z.literal('refused'), reason: dialRefusalSchema, sentence: z.string() }),
+  z.strictObject({ outcome: z.literal('unknown'), reason: z.literal('handoff_uncertain'), sentence: z.string() }),
+]);
+export type DialResult = z.infer<typeof dialResultSchema>;
+
+export { attemptKindSchema, diagnosticsViewSchema, v1CommandSchema, v1FirmViewSchema, type V1FirmView };
 export const ATTEMPT_KINDS = attemptKindSchema.options;

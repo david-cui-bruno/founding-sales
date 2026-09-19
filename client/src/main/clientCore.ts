@@ -2,11 +2,15 @@ import { z } from 'zod';
 import { pairRedeemResponseSchema, v1CommandReceiptSchema, v1CommandSchema, type V1Command } from '../../../src/shared/contracts/v1Contract';
 import {
   clientStatusSchema,
+  dialRequestSchema,
+  dialResultSchema,
   pairRequestSchema,
   readRequestSchema,
   viewSchemas,
   type ClientStatus,
   type CommandResult,
+  type DialRequest,
+  type DialResult,
   type PairRequest,
   type PairResult,
   type ReadRequest,
@@ -14,6 +18,7 @@ import {
   type TodayView,
 } from '../shared/clientContract';
 import { readLastGoodToday, writeLastGoodToday } from './lastGood';
+import { ClientPhone, type HandoffLauncher, type HeldView } from './phone';
 import { deleteCodeFile, PairCodeError, resolvePairCode, type PairCodeRefusal } from './pairCode';
 import { TokenStoreError, type StoredDevice, type TokenStore } from './tokenStore';
 import { requestWorker, type WorkerFailure, type WorkerReply } from './workerClient';
@@ -25,6 +30,10 @@ import type { EndpointResolution } from './workerEndpoint';
  * every outcome is one of the honest states the renderer shows: ok, unavailable, unauthenticated,
  * unpaired, or for pairing paired, refused, unavailable. A 401 that names `device_revoked` or
  * `device_expired` forgets the token here, so the next status is unpaired and carries the sentence.
+ *
+ * Slice S2 adds the Firm view as a third readable path and the Phone.app handoff as a sixth operation. The handoff
+ * is gated on the Today view this object last served, not on anything the renderer says: the card, its `dialAllowed`
+ * and its number all have to come from that view, and the view has to be under two minutes old.
  */
 const slug = z.string().regex(/^[a-z0-9]+(?:_[a-z0-9]+)*$/).max(40);
 const errorBodySchema = z.object({ error: slug });
@@ -75,12 +84,24 @@ export type ClientCoreInput = {
   endpoint: EndpointResolution;
   fetch?: typeof globalThis.fetch;
   now?: () => string;
+  /** The Phone.app launcher. Absent means this Mac has no phone route, which is what a development run has. */
+  dialLauncher?: () => Promise<HandoffLauncher | null>;
 };
 
 export class ClientCore {
   private notice: string | null = null;
+  /** The Today view this process last served the renderer, and when it was fetched. The handoff's only source of truth. */
+  private held: HeldView | null = null;
+  private readonly phone: ClientPhone;
 
-  constructor(private readonly input: ClientCoreInput) {}
+  constructor(private readonly input: ClientCoreInput) {
+    this.phone = new ClientPhone({ heldView: () => this.held, launcher: input.dialLauncher ?? (async () => null) });
+  }
+
+  /** The Today view this Mac is showing, for the handoff gate and for a test that needs to see it. */
+  heldTodayView(): HeldView | null {
+    return this.held;
+  }
 
   private now(): string {
     return this.input.now?.() ?? new Date().toISOString();
@@ -139,12 +160,16 @@ export class ClientCore {
   }
 
   async get(request: ReadRequest): Promise<ReadResult> {
-    const { view, kind } = readRequestSchema.parse(request);
-    // The two view schemas differ in shape; the read only needs "does it parse", and the preload re-validates per path.
+    const { view, kind, firmId } = readRequestSchema.parse(request);
+    // The three view schemas differ in shape; the read only needs "does it parse", and the preload re-validates per path.
     const schema: Parser<unknown> = viewSchemas[view];
-    const result: ReadResult = await this.authenticated({ path: view, method: 'GET', ...(kind === undefined ? {} : { query: { kind } }) }, schema, async (value): Promise<ReadResult> => {
+    const query: Record<string, string> | undefined = kind !== undefined ? { kind } : firmId !== undefined ? { firmId } : undefined;
+    const result: ReadResult = await this.authenticated({ path: view, method: 'GET', ...(query === undefined ? {} : { query }) }, schema, async (value): Promise<ReadResult> => {
       const fetchedAt = this.now();
-      if (view === '/v1/today') await writeLastGoodToday(this.input.clientDirectory, { fetchedAt, view: value as TodayView });
+      if (view === '/v1/today') {
+        await writeLastGoodToday(this.input.clientDirectory, { fetchedAt, view: value as TodayView });
+        this.held = { view: value as TodayView, fetchedAt };
+      }
       return { outcome: 'ok', fetchedAt, view: value, source: 'worker' };
     });
     // A morning survives an outage (design section 1): when the worker does not answer Today, the last good answer
@@ -152,7 +177,12 @@ export class ClientCore {
     // stale. A refused token or an unpaired Mac is never papered over with an old list.
     if (view === '/v1/today' && result.outcome === 'unavailable') {
       const lastGood = await readLastGoodToday(this.input.clientDirectory);
-      if (lastGood) return { outcome: 'ok', fetchedAt: lastGood.fetchedAt, view: lastGood.view, source: 'last_good', sentence: result.sentence };
+      // The held view keeps the original fetched-at stamp, so a dial from a last-good list is refused as stale
+      // rather than as "no list": the answer names the real reason.
+      if (lastGood) {
+        this.held = { view: lastGood.view, fetchedAt: lastGood.fetchedAt };
+        return { outcome: 'ok', fetchedAt: lastGood.fetchedAt, view: lastGood.view, source: 'last_good', sentence: result.sentence };
+      }
     }
     return result;
   }
@@ -162,9 +192,19 @@ export class ClientCore {
     return this.authenticated({ path: '/v1/commands', method: 'POST', body: parsed }, v1CommandReceiptSchema, async (receipt): Promise<CommandResult> => ({ outcome: 'ok', receipt }));
   }
 
+  /**
+   * Hands one number to Phone.app (S2). Never a call: the dialer opens with the number in it and David presses the
+   * button. An unpaired Mac has no list and therefore no card, which is the refusal it gets.
+   */
+  async dial(request: DialRequest): Promise<DialResult> {
+    const parsed = dialRequestSchema.parse(request);
+    return dialResultSchema.parse(await this.phone.dial(parsed));
+  }
+
   async unpair(): Promise<ClientStatus> {
     await this.input.tokenStore.clear();
     this.notice = null;
+    this.held = null;
     return this.status();
   }
 

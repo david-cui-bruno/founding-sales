@@ -3,8 +3,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { createClientApi } from './clientApi';
 
 /**
- * The renderer bridge on a fake IPC invoker: exactly five operations, every request validated before it
- * is sent and every reply validated with the contract's zod schemas before it reaches renderer code.
+ * The renderer bridge on a fake IPC invoker: exactly six operations (slice S2 added `dial`), every request
+ * validated before it is sent and every reply validated with the contract's zod schemas before it reaches
+ * renderer code.
  */
 const NOW = '2026-09-18T12:00:00.000Z';
 const status = { state: 'unpaired', endpoint: 'https://worker.example.test', endpointSource: 'environment', deviceId: null, workspaceId: null, pairedAt: null, notice: null };
@@ -17,8 +18,21 @@ const diagnostics = {
 const invoker = (reply: unknown) => vi.fn().mockResolvedValue(reply);
 
 describe('createClientApi', () => {
-  it('exposes exactly status, pair, get, command and unpair', () => {
-    expect(Object.keys(createClientApi(vi.fn())).sort()).toEqual(['command', 'get', 'pair', 'status', 'unpair']);
+  it('exposes exactly status, pair, get, command, dial and unpair', () => {
+    expect(Object.keys(createClientApi(vi.fn())).sort()).toEqual(['command', 'dial', 'get', 'pair', 'status', 'unpair']);
+  });
+
+  it('dial sends the firm and the number and validates the answer, refusing a shape the contract does not allow', async () => {
+    const handed = { outcome: 'handed_off', number: '+14015550201' };
+    const invoke = invoker(handed);
+    expect(await createClientApi(invoke).dial({ firmId: 'account-ri-1', number: '+14015550201' })).toEqual(handed);
+    expect(invoke).toHaveBeenCalledWith('client:dial', { firmId: 'account-ri-1', number: '+14015550201' });
+    const refused = { outcome: 'refused', reason: 'view_stale', sentence: 'This list is more than two minutes old. Refresh it and try again.' };
+    expect(await createClientApi(invoker(refused)).dial({ firmId: 'account-ri-1', number: '+14015550201' })).toEqual(refused);
+    // Never a bare "called": the outcome words are handed_off, refused and unknown, and nothing else parses.
+    await expect(createClientApi(invoker({ outcome: 'called' })).dial({ firmId: 'a', number: '+14015550201' })).rejects.toThrow();
+    await expect(createClientApi(invoker({ outcome: 'refused', reason: 'made_up', sentence: 'x' })).dial({ firmId: 'a', number: '+14015550201' })).rejects.toThrow();
+    await expect(createClientApi(invoke).dial({ firmId: '', number: '+14015550201' })).rejects.toThrow();
   });
 
   it('status and unpair invoke their channels without a payload and validate the reply', async () => {

@@ -5,11 +5,14 @@ import { createRendererTrust } from '../../src/main/navigationPolicy';
 import { registerCallieProtocol } from '../../src/main/protocol';
 import { ClientCore } from './main/clientCore';
 import { TokenStore } from './main/tokenStore';
+import { createProductionDialLauncher } from './main/phone';
 import { resolveWorkerEndpoint } from './main/workerEndpoint';
 import {
   CLIENT_CHANNELS,
   clientStatusSchema,
   commandResultSchema,
+  dialRequestSchema,
+  dialResultSchema,
   pairRequestSchema,
   pairResultSchema,
   readRequestSchema,
@@ -51,6 +54,10 @@ const core = new ClientCore({
   clientDirectory,
   tokenStore: new TokenStore({ directory: clientDirectory, safeStorage }),
   endpoint: resolveWorkerEndpoint({ env: process.env, clientDirectory, isPackaged: app.isPackaged }),
+  // The Phone.app handoff (S2): the packaged same-team helper and the local setup proof, resolved only when a dial
+  // is asked for. An unpackaged run has no route at all and says so, which is what a development run and the specs get.
+  dialLauncher: createProductionDialLauncher({ clientDirectory, isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath, parentExecutablePath: app.getPath('exe') }),
 });
 
 type Parser<T> = { parse(value: unknown): T };
@@ -68,6 +75,7 @@ handle(CLIENT_CHANNELS.status, null, clientStatusSchema, () => core.status());
 handle(CLIENT_CHANNELS.pair, pairRequestSchema, pairResultSchema, (request) => core.pair(request));
 handle(CLIENT_CHANNELS.get, readRequestSchema, readResultSchema, (request) => core.get(request));
 handle(CLIENT_CHANNELS.command, v1CommandSchema, commandResultSchema, (command) => core.command(command));
+handle(CLIENT_CHANNELS.dial, dialRequestSchema, dialResultSchema, (request) => core.dial(request));
 handle(CLIENT_CHANNELS.unpair, null, clientStatusSchema, () => core.unpair());
 
 const createMainWindow = (): void => {
