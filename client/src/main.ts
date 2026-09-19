@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, protocol, safeStorage, type IpcMainInvokeEvent } from 'electron';
+import { app, BrowserWindow, ipcMain, protocol, safeStorage, shell, type IpcMainInvokeEvent } from 'electron';
 import path from 'node:path';
 import { createWindow } from '../../src/main/createWindow';
 import { createRendererTrust } from '../../src/main/navigationPolicy';
@@ -14,6 +14,8 @@ import {
   clientPhoneSetupSchema,
   dialRequestSchema,
   dialResultSchema,
+  googleActionSchema,
+  googleResultSchema,
   pairRequestSchema,
   pairResultSchema,
   phoneSetupActionSchema,
@@ -24,7 +26,7 @@ import {
 
 /**
  * The thin client's main process (FSS target design, section 1): one window, one device token in a
- * safeStorage-encrypted file, the worker's views and commands over seven IPC channels. No database, no
+ * safeStorage-encrypted file, the worker's views and commands over eight IPC channels. No database, no
  * migrations, no backup, no sync. The window, the renderer trust rules and the `callie://` scheme that
  * serves the bundled UI are the old app's modules, imported from the repository's `src/main`.
  */
@@ -63,6 +65,16 @@ const core = new ClientCore({
   // The setup proof (S5) reads the same verified helper. An unpackaged run has none, and Settings says exactly that.
   inspectPhoneCandidate: () => inspectProductionPhoneCandidate({ isPackaged: app.isPackaged,
     resourcesPath: process.resourcesPath, parentExecutablePath: app.getPath('exe') }),
+  // The Google consent (S6) happens in the default browser, never in this window. Only an https Google address is
+  // ever handed over. The third development-only override keeps the Playwright specs from opening a real browser;
+  // a packaged build ignores its environment, so David's install always opens one.
+  ...(!app.isPackaged && process.env.CALLIE_CLIENT_NO_BROWSER === '1' ? {} : {
+    openExternal: async (url: string) => {
+      const parsed = new URL(url);
+      if (parsed.protocol !== 'https:' || parsed.hostname !== 'accounts.google.com') throw new Error('untrusted_consent_url');
+      await shell.openExternal(parsed.href);
+    },
+  }),
 });
 
 type Parser<T> = { parse(value: unknown): T };
@@ -82,6 +94,7 @@ handle(CLIENT_CHANNELS.get, readRequestSchema, readResultSchema, (request) => co
 handle(CLIENT_CHANNELS.command, v1CommandSchema, commandResultSchema, (command) => core.command(command));
 handle(CLIENT_CHANNELS.dial, dialRequestSchema, dialResultSchema, (request) => core.dial(request));
 handle(CLIENT_CHANNELS.phoneSetup, phoneSetupActionSchema, clientPhoneSetupSchema, (request) => core.phoneSetupAction(request));
+handle(CLIENT_CHANNELS.google, googleActionSchema, googleResultSchema, (request) => core.googleAction(request));
 handle(CLIENT_CHANNELS.unpair, null, clientStatusSchema, () => core.unpair());
 
 const createMainWindow = (): void => {

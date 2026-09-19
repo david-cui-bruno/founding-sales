@@ -66,11 +66,14 @@ test('renders every section from the stub: templates, sending, calls, phone, goo
   await expect(phone.locator('.phone__local')).toContainText('This Mac has no phone route');
   await expect(phone.getByRole('button', { name: 'Confirm phone setup', exact: true })).toBeDisabled();
 
-  // Google: a status only. There is no "connect" button on this page; that is its own step.
+  // Google: the status, and the first of the cutover's two steps (S6). Continuing to Google is not connecting,
+  // and the revoke of the old grant is not offered until the fresh consent is ready: `tests/google.spec.ts` walks both.
   const google = section(page, 'google');
   await expect(google.locator('.google__status')).toContainText('connected');
   await expect(google.locator('.google__status')).toContainText(STUB_MAILBOX);
-  await expect(google.locator('p.page__tick').last()).toContainText('replaced by a fresh consent at cutover');
+  await expect(google.locator('.google__note')).toContainText('replaced by a fresh consent at cutover');
+  await expect(google.getByRole('button', { name: 'Continue to Google', exact: true })).toBeEnabled();
+  await expect(google.getByRole('button', { name: 'Revoke the old grant', exact: true })).toHaveCount(0);
 
   // Research: the review window David has to renew, with the date on it, plus the budget and the grid.
   const research = section(page, 'research');

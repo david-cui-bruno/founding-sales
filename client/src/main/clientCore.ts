@@ -5,6 +5,8 @@ import {
   clientStatusSchema,
   dialRequestSchema,
   dialResultSchema,
+  googleActionSchema,
+  googleResultSchema,
   pairRequestSchema,
   readRequestSchema,
   viewSchemas,
@@ -19,6 +21,8 @@ import {
   type PhoneSetupAction,
   type ReadResult,
   type TodayView,
+  type GoogleAction,
+  type GoogleResult,
 } from '../shared/clientContract';
 import { readLastGoodToday, writeLastGoodToday } from './lastGood';
 import { ClientPhone, ClientPhoneSetup, type HandoffLauncher, type HeldView } from './phone';
@@ -69,6 +73,10 @@ const TOKEN_UNREADABLE = 'The stored device token could not be read. Pair again 
 const ENCRYPTION_UNAVAILABLE = 'This Mac cannot protect a device token: safeStorage encryption is unavailable.';
 const BARE_401 = "The worker refused this device's token. Unpair and pair again with a new code.";
 
+/** What the worker's two S6 Google routes answer with. Neither carries a token, a code or a secret. */
+const beginSchema = z.object({ authorizationUrl: z.string().url().max(4096).startsWith('https://accounts.google.com/') });
+const revokedSchema = z.object({ revoked: z.number().int().nonnegative().max(1000) });
+
 type Reply = Extract<WorkerReply, { kind: 'reply' }>;
 type Parser<T> = { safeParse(value: unknown): { success: true; data: T } | { success: false } };
 type Unavailable = Extract<ReadResult, { outcome: 'unavailable' }>;
@@ -94,6 +102,12 @@ export type ClientCoreInput = {
    * is none to inspect, which is what an unpackaged run and the Playwright specs have, and the setup section says so.
    */
   inspectPhoneCandidate?: () => Promise<string | null>;
+  /**
+   * Opens one https URL in the default browser, for the Google consent (slice S6). Absent, the consent URL is
+   * returned and shown rather than opened, and the page says so: a Mac that cannot open a browser is never
+   * reported as one that did.
+   */
+  openExternal?: (url: string) => Promise<void>;
 };
 
 export class ClientCore {
@@ -223,6 +237,32 @@ export class ClientCore {
       : request.action === 'clear' ? await this.phoneSetup.clear()
         : await this.phoneSetup.read();
     return clientPhoneSetupSchema.parse(result);
+  }
+
+  /**
+   * The two Google steps of the cutover (S6). `begin` asks the worker for the consent URL and hands it to the
+   * default browser; the consent itself happens in Google's own window and this app never sees the password, the
+   * code or the token. `revoke_old` asks the worker to revoke the pairing-bound grant the old worker held.
+   * Neither step sends anything, and beginning a consent is never a grant.
+   */
+  async googleAction(request: GoogleAction): Promise<GoogleResult> {
+    const { action } = googleActionSchema.parse(request);
+    if (action === 'revoke_old') {
+      return googleResultSchema.parse(await this.authenticated({ path: '/v1/google/revoke-old', method: 'POST', body: {} },
+        revokedSchema, async (value): Promise<GoogleResult> => ({ outcome: 'revoked', revoked: value.revoked,
+          sentence: value.revoked === 0 ? 'There was no old grant left to revoke.'
+            : `Revoked ${value.revoked === 1 ? 'the old grant' : `${value.revoked} old grants`}. The fresh consent is unaffected.` })));
+    }
+    return googleResultSchema.parse(await this.authenticated({ path: '/v1/google/begin', method: 'POST', body: {} },
+      beginSchema, async (value): Promise<GoogleResult> => {
+        let opened = false;
+        if (this.input.openExternal) {
+          try { await this.input.openExternal(value.authorizationUrl); opened = true; } catch { opened = false; }
+        }
+        return { outcome: 'begun', authorizationUrl: value.authorizationUrl, opened,
+          sentence: opened ? 'Google is open in your browser. Finish the consent there, then come back to this page.'
+            : 'This Mac could not open a browser. Open the address below in Google Chrome or Safari to finish the consent.' };
+      }));
   }
 
   async unpair(): Promise<ClientStatus> {

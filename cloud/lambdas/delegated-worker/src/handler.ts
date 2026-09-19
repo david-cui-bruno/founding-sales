@@ -20,6 +20,7 @@ import { googleGrantDisclosure, googleGrantPurposeSchema, personalGoogleGrantDis
 import { remoteGoogleGrantBeginSchema, remoteGoogleGrantSelectorSchema } from '../../../../src/shared/contracts/remoteGoogleGrantContract';
 import { DynamoReadUnavailable, type DynamoAdapter } from './dynamoStore';
 import { v1Router } from './v1/router';
+import { completeDeviceGrant, isDeviceGrantState } from './v1/grant';
 import { attemptCode, recordAttempt, type AttemptInput } from './v1/attempts';
 export type WorkerHttpResponse = { statusCode: number; body: string; headers: Record<string, string> };
 const headers = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer',
@@ -59,7 +60,8 @@ export function createWorkerHandler(input: { auth: WorkerAuth; host: string; goo
       for (const key of query.keys()) if (!allowed.includes(key) || query.getAll(key).length !== 1) return response(400, { error: 'worker_invalid_request' });
       const body = () => JSON.parse(event.body ?? '{}') as unknown;
       // The rebuilt core's routes (S0). Mounted here so David only redeploys the worker; the router owns its own errors.
-      if (path.startsWith('/v1/')) return v1Router({ auth: input.auth, method, path, query, authorization: event.headers.authorization, body, respond: response });
+      if (path.startsWith('/v1/')) return v1Router({ auth: input.auth, method, path, query, authorization: event.headers.authorization, body, respond: response,
+        ...(input.google ? { google: input.google } : {}) });
       if (path === '/accounts/preparation' && method === 'POST') {
         let request: unknown;
         try { request = body(); } catch { return response(400, { error: 'worker_invalid_request' }); }
@@ -80,7 +82,15 @@ export function createWorkerHandler(input: { auth: WorkerAuth; host: string; goo
         if (!input.google || !query.has('state') || query.has('code') === query.has('error')) return response(400, { error: 'worker_invalid_request' });
         // Google appends the issuer to the redirect; only its own issuer is admitted, and the value is otherwise unused.
         if (query.has('iss') && query.get('iss') !== 'https://accounts.google.com') return response(400, { error: 'worker_invalid_request' });
-        await input.google.completeGoogleGrant(query.get('state')!, query.has('error') ? null : query.get('code'));
+        // One callback URL, two flows (S6). A state the rebuilt core wrote is device-bound and version 2; anything
+        // else is the carried pairing flow, unchanged. The state record itself decides, never the query.
+        const state = query.get('state')!;
+        if (await isDeviceGrantState(input.auth.store, state)) {
+          await completeDeviceGrant(input.auth.store, input.google.input.config, input.google.input.fetch ?? globalThis.fetch,
+            { state, code: query.has('error') ? null : query.get('code') });
+          return response(200, { status: 'ok' });
+        }
+        await input.google.completeGoogleGrant(state, query.has('error') ? null : query.get('code'));
         return { statusCode: 200, headers: { ...headers, 'Content-Type': 'text/plain; charset=utf-8' }, body: 'Authorization completed. Return to FSS.' };
       }
       if(path==='/policies/configure' && method==='POST') return response(200,await new WorkerPolicyConfiguration({auth:input.auth,authorization:input.google??new RemoteGoogleAuthorization({auth:input.auth})}).apply(body(),event.headers.authorization??''));

@@ -492,6 +492,10 @@ export const googleGrantViewSchema = z.strictObject({
   email: z.string().max(320).nullable(),
   grants: count,
   reconsentAtCutover: z.literal(true),
+  /** True once the fresh consent has written `GRANT#google` and it is ready (S6). The old record is never this. */
+  reconsented: z.boolean(),
+  /** How many pairing-bound grants are still live and would be revoked by "Revoke the old grant" (S6). */
+  oldGrants: count,
   note: z.string().max(400),
 });
 export type GoogleGrantView = z.infer<typeof googleGrantViewSchema>;

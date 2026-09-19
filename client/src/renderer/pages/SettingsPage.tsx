@@ -21,6 +21,7 @@ import {
   TemplatesSection,
   useLocalPhoneSetup,
   type CommandRunner,
+  type GoogleRunner,
 } from '../settings/sections';
 
 /**
@@ -216,6 +217,18 @@ export function SettingsPage({ onPausedChanged }: { onPausedChanged?: () => Prom
       return { applied: false, sentence: 'The client could not send the command to the worker.' };
     }
   };
+  // The two Google steps of the cutover (S6). Both go through the client's own channel, which is the only thing
+  // that may open a browser or reach the worker's consent routes; the page re-reads Settings after each one.
+  const google: GoogleRunner = async (action) => {
+    try {
+      const answer = await window.callie.google({ action });
+      if (answer.outcome === 'begun') return { applied: true, sentence: answer.sentence, authorizationUrl: answer.authorizationUrl };
+      if (answer.outcome === 'revoked') { await read(); return { applied: true, sentence: answer.sentence }; }
+      return { applied: false, sentence: answer.sentence };
+    } catch {
+      return { applied: false, sentence: 'The client could not reach the worker for the Google step.' };
+    }
+  };
   return (
     <section className="page page--settings">
       <header className="page__header">
@@ -281,7 +294,7 @@ export function SettingsPage({ onPausedChanged }: { onPausedChanged?: () => Prom
           {settings.sending && <SendingSection sending={settings.sending} run={run} />}
           {settings.calls && <CallsSection calls={settings.calls} run={run} />}
           {settings.phone && <PhoneSection phone={settings.phone} local={local} run={run} onLocalChange={act} />}
-          {settings.google && <GoogleSection google={settings.google} />}
+          {settings.google && <GoogleSection google={settings.google} act={google} />}
           {settings.research && <ResearchSection research={settings.research} />}
           {settings.devices && <DevicesSection devices={settings.devices} run={run} />}
           {settings.paused && <PauseSection paused={settings.paused} run={run} />}

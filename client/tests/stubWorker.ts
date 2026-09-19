@@ -74,6 +74,12 @@ export type StubWorker = {
   attempts(kind?: string): AttemptRecord[];
   pairedDevices(): PairedDevice[];
   otherDevices(): DiagnosticsDevice[];
+  /** The consent URLs the stub handed out, in order (S6). */
+  consentUrls(): string[];
+  /** What the callback would do: the fresh consent lands and Settings reads reconsented (S6). */
+  completeConsent(): void;
+  /** How many old pairing-bound grants the stub still holds (S6). */
+  oldGrants(): number;
   expireDevice(deviceId: string): void;
   revokeDevice(deviceId: string): void;
   close(): Promise<void>;
@@ -318,6 +324,18 @@ export async function startStubWorker(): Promise<StubWorker> {
   let sending = sendingFixture(STUB_POSTAL_ADDRESS);
   const research: ResearchView = researchFixture();
   let templates = templatesFixture(STUB_POSTAL_ADDRESS);
+  // The cutover's Google state (S6): whether the fresh consent has landed, and how many old grants remain.
+  let reconsented = false;
+  let oldGrants = 1;
+  const consentUrls: string[] = [];
+  const googleView = () => reconsented
+    ? { status: 'connected' as const, email: STUB_MAILBOX, grants: 1, reconsentAtCutover: true as const, reconsented: true, oldGrants,
+      note: oldGrants > 0
+        ? 'Connected through the fresh consent of the cutover. The old pairing-bound grant is still live: revoke it.'
+        : 'Connected through the fresh consent of the cutover. This grant is bound to the workspace, not to a pairing.' }
+    : { status: oldGrants > 0 ? 'connected' as const : 'not_connected' as const, email: oldGrants > 0 ? STUB_MAILBOX : null,
+      grants: oldGrants, reconsentAtCutover: true as const, reconsented: false, oldGrants,
+      note: 'Connected through the pairing-bound grant the old worker holds. It is replaced by a fresh consent at cutover.' };
   const requests: StubRequest[] = [];
   const commands: V1Command[] = [];
   const receipts = new Map<string, unknown>();
@@ -383,10 +401,28 @@ export async function startStubWorker(): Promise<StubWorker> {
           .map(([state, entries]) => ({ state, entries })).sort((a, b) => (a.state < b.state ? -1 : 1)),
         templates, sending,
         research,
-        calls, phone, google: { status: 'connected', email: STUB_MAILBOX, grants: 1, reconsentAtCutover: true,
-          note: 'Connected through the pairing-bound grant the old worker holds. It is replaced by a fresh consent at cutover.' },
+        calls, phone, google: googleView(),
         devices: devicesView(), paused,
       }));
+    }
+
+    // The two S6 consent routes. `begin` answers with a Google URL and nothing else; the consent itself is
+    // Google's own window, so the spec completes it by calling `completeConsent()` the way the callback would.
+    if (url.pathname === '/v1/google/begin' && method === 'POST') {
+      const auth = authenticate(request.headers.authorization);
+      if ('status' in auth) return send(response, auth.status, auth.body);
+      if (reconsented) return send(response, 409, { error: 'already_connected' });
+      const state = secret();
+      const authorizationUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=fictional.apps.googleusercontent.com&state=${state}`;
+      consentUrls.push(authorizationUrl);
+      return send(response, 200, { authorizationUrl });
+    }
+    if (url.pathname === '/v1/google/revoke-old' && method === 'POST') {
+      const auth = authenticate(request.headers.authorization);
+      if ('status' in auth) return send(response, auth.status, auth.body);
+      const revoked = oldGrants;
+      oldGrants = 0;
+      return send(response, 200, { revoked, providerRevocation: revoked > 0 ? 'confirmed' : null });
     }
 
     if (url.pathname === '/v1/week' && method === 'GET') {
@@ -577,6 +613,9 @@ export async function startStubWorker(): Promise<StubWorker> {
     attempts: (kind) => (kind === undefined ? attempts : attempts.filter((attempt) => attempt.kind === kind)),
     pairedDevices: () => paired.map((device) => ({ ...device })),
     otherDevices: () => otherDevices.map((device) => ({ ...device })),
+    consentUrls: () => [...consentUrls],
+    completeConsent: () => { reconsented = true; },
+    oldGrants: () => oldGrants,
     expireDevice: (deviceId) => { const device = paired.find((candidate) => candidate.deviceId === deviceId); if (device) device.expired = true; },
     revokeDevice: (deviceId) => { const device = paired.find((candidate) => candidate.deviceId === deviceId); if (device) device.revoked = true; },
     close: () => new Promise<void>((resolve, reject) => { server.closeAllConnections(); server.close((error) => (error ? reject(error) : resolve())); }),

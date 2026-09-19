@@ -7,6 +7,7 @@ import { callPolicyView, readCallPolicy } from './callPolicy';
 import { descriptorStatusAt, RESEARCH_DAILY_BUDGET_CEILING, readResearchSettings, remainingResearchToday } from './pool';
 import { V1Devices } from './devices';
 import { GOOGLE_GRANT_PREFIX, grantPairingIds } from './mailbox';
+import { grantView, readGrant } from './grant';
 import { phoneSetupView, pausedView, readPausedRecord, readPhoneSetup } from './phoneSetup';
 import { postureHistory, postureSummary, readPostures } from './postures';
 import { footerBlock, readSendingSettings, readSendUsage, readTemplates, SENDING_CEILING, sendingCapForDay, templateApprovalIssues,
@@ -69,6 +70,9 @@ const GRANT_NOTES = Object.freeze({
   multiple_grants: 'More than one usable grant is stored, so the worker cannot say which mailbox is the one. Nothing sends until exactly one remains.',
 });
 const grantRowSchema = z.object({ revoked: z.boolean().optional(), grant: z.object({ email: z.string().max(320) }).optional() });
+/** What Settings says once the fresh consent of the cutover has landed (S6). */
+const RECONSENTED_NOTE = 'Connected through the fresh consent of the cutover. This grant is bound to the workspace, not to a pairing.';
+const RECONSENTED_WITH_OLD = 'Connected through the fresh consent of the cutover. The old pairing-bound grant is still live: revoke it.';
 
 /**
  * The grant status from the table alone. No refresh and no network call: a view is never an action, so a grant
@@ -79,9 +83,19 @@ export async function readGoogleGrantView(store: DynamoStore): Promise<GoogleGra
   const rows = (await store.list<unknown>(GOOGLE_GRANT_PREFIX)).filter(row => !row.key.includes('#personal_availability'));
   const parsed = rows.map(row => ({ key: row.key, data: grantRowSchema.safeParse(row.stored.data) }));
   const live = parsed.filter(row => row.data.success && row.data.data.revoked !== true && row.data.data.grant !== undefined);
-  const status = live.length === 1 ? 'connected' : live.length > 1 ? 'multiple_grants' : rows.length > 0 ? 'revoked' : 'not_connected';
+  const oldGrants = grantPairingIds(live.map(row => row.key)).length;
+  // S6: the fresh consent's own record answers first, because after the cutover it is the mailbox. The old
+  // pairing-bound records are then only something still to revoke, which is what `oldGrants` says.
+  const fresh = grantView(await readGrant(store));
+  if (fresh.status === 'connected') {
+    return googleGrantViewSchema.parse({ status: 'connected', email: fresh.email, grants: 1, reconsentAtCutover: true,
+      reconsented: true, oldGrants, note: oldGrants > 0 ? RECONSENTED_WITH_OLD : RECONSENTED_NOTE });
+  }
+  const status = fresh.status === 'revoked' ? 'revoked' as const
+    : live.length === 1 ? 'connected' as const : live.length > 1 ? 'multiple_grants' as const : rows.length > 0 ? 'revoked' as const : 'not_connected' as const;
   const email = status === 'connected' && live[0]?.data.success ? live[0].data.data.grant?.email ?? null : null;
-  return googleGrantViewSchema.parse({ status, email, grants: grantPairingIds(live.map(row => row.key)).length, reconsentAtCutover: true, note: GRANT_NOTES[status] });
+  return googleGrantViewSchema.parse({ status, email, grants: oldGrants, reconsentAtCutover: true,
+    reconsented: false, oldGrants, note: GRANT_NOTES[status] });
 }
 
 /** One template with the footer check and every reason it could not be approved as it stands. Pure over the records. */

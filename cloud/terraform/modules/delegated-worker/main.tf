@@ -44,7 +44,9 @@ locals {
     "GET /v1/today", "GET /v1/settings",
     "GET /v1/firms",
     # The Week view (S5): the last seven Eastern days from the permanent records.
-    "GET /v1/week"
+    "GET /v1/week",
+    # The fresh Google consent on the new client (S6), and the revoke of the old pairing-bound grant afterwards.
+    "POST /v1/google/begin", "POST /v1/google/revoke-old"
   ])
 }
 

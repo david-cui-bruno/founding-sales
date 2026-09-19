@@ -18,8 +18,21 @@ const diagnostics = {
 const invoker = (reply: unknown) => vi.fn().mockResolvedValue(reply);
 
 describe('createClientApi', () => {
-  it('exposes exactly status, pair, get, command, dial, phoneSetup and unpair', () => {
-    expect(Object.keys(createClientApi(vi.fn())).sort()).toEqual(['command', 'dial', 'get', 'pair', 'phoneSetup', 'status', 'unpair']);
+  it('exposes exactly status, pair, get, command, dial, phoneSetup, google and unpair', () => {
+    expect(Object.keys(createClientApi(vi.fn())).sort()).toEqual(['command', 'dial', 'get', 'google', 'pair', 'phoneSetup', 'status', 'unpair']);
+  });
+
+  it('google sends the action and validates the answer, refusing anything the contract does not allow', async () => {
+    const begun = { outcome: 'begun', authorizationUrl: 'https://accounts.google.com/o/oauth2/v2/auth?state=x', opened: true,
+      sentence: 'Google is open in your browser. Finish the consent there, then come back to this page.' };
+    const invoke = invoker(begun);
+    expect(await createClientApi(invoke).google({ action: 'begin' })).toEqual(begun);
+    expect(invoke).toHaveBeenCalledWith('client:google', { action: 'begin' });
+    const revoked = { outcome: 'revoked', revoked: 1, sentence: 'Revoked the old grant. The fresh consent is unaffected.' };
+    expect(await createClientApi(invoker(revoked)).google({ action: 'revoke_old' })).toEqual(revoked);
+    // There is no third action, and there is no outcome that says a send happened.
+    await expect(createClientApi(invoker(begun)).google({ action: 'connect' } as never)).rejects.toThrow();
+    await expect(createClientApi(invoker({ outcome: 'sent' })).google({ action: 'begin' })).rejects.toThrow();
   });
 
   it('dial sends the firm and the number and validates the answer, refusing a shape the contract does not allow', async () => {
