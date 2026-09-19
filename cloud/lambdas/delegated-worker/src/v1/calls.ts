@@ -98,6 +98,20 @@ export async function listCallbacks(store: DynamoStore, firmId: string): Promise
 export const pendingCallbackOf = (callbacks: readonly { record: CallbackRecord }[]): CallbackRecord | null =>
   callbacks.map(entry => entry.record).find(record => record.state === 'pending') ?? null;
 
+/**
+ * The dial verdict of one firm, which is the call window's verdict widened by the one hold the window knows nothing
+ * about: a suppressed firm. Annotated rather than inferred, because the root tsconfig compiles this module (the
+ * integration tests reach it through the handler) with `noImplicitAny` and without `strictNullChecks`, where a bare
+ * `null` in an unannotated object literal is an implicit `any`.
+ */
+export type FirmDialVerdict = {
+  dialAllowed: boolean;
+  holdReason: 'outside_hours' | 'state_not_cleared' | 'suppressed' | null;
+  holdCode: 'outside_hours' | 'zone_unknown' | 'state_unknown' | 'suppressed' | null;
+  localTime: string | null;
+  openNow: boolean | null;
+};
+
 /** The dial verdict the record carries: the firm's own hold first, the code window second. Pure. */
 export function dialAt(firm: Pick<FirmCard, 'hold' | 'timeZone'>, at: string): DialEvaluation {
   if (firm.hold) return { dialAllowed: false, holdReason: firm.hold.reason, holdCode: firm.hold.code, localTime: null, openNow: null };
@@ -268,7 +282,9 @@ export async function readFirmView(store: DynamoStore, firmId: string, options: 
     .map((route): V1FirmRoute => ({ routeId: route.id, channel: route.channel === 'phone' ? 'phone' : 'email', value: route.value, verification: route.verification,
       retired: retired.has(route.id), suppressed: suppressedHandles.has(route.value) }))
     .sort((a, b) => a.routeId < b.routeId ? -1 : a.routeId > b.routeId ? 1 : 0);
-  const dial = suppression ? { dialAllowed: false, holdReason: 'suppressed' as const, holdCode: 'suppressed' as const, localTime: null, openNow: null } : dialAt(firm, asOf);
+  const dial: FirmDialVerdict = suppression
+    ? { dialAllowed: false, holdReason: 'suppressed', holdCode: 'suppressed', localTime: null, openNow: null }
+    : dialAt(firm, asOf);
   const holds = [] as V1FirmView['holds'];
   if (suppression) holds.push({ reason: 'suppressed', code: 'suppressed', count: 1 });
   if (!firm.phone) holds.push({ reason: 'no_phone', code: 'no_phone', count: 1 });

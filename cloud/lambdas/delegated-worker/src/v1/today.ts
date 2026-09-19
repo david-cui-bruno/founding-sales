@@ -62,7 +62,7 @@ function nextStepOf(lane: TodayLane, firm: FirmCard, history: CardHistory): Toda
 export function todayCard(firm: FirmCard, lane: TodayLane, entry: LaneEntry, now: string, offer: string | null, history: CardHistory = {}): TodayCard {
   const dial: DialEvaluation = firm.hold ? { dialAllowed: false, holdReason: firm.hold.reason, holdCode: firm.hold.code, localTime: null, openNow: null } : evaluateDial(now, firm.timeZone);
   // The new `CALL#` record first, the old-key call evidence second; the note only ever comes from the new record.
-  const lastOutcome = history.lastCall ? { outcome: history.lastCall.outcome, at: history.lastCall.observedAt, note: history.lastCall.note }
+  const lastOutcome: TodayCard['lastOutcome'] = history.lastCall ? { outcome: history.lastCall.outcome, at: history.lastCall.observedAt, note: history.lastCall.note }
     : firm.lastCall ? { outcome: firm.lastCall.outcome, at: firm.lastCall.at, note: null } : null;
   return { firmId: firm.firmId, lane, reason: entry.reason, name: firm.name,
     phone: firm.phone ? { number: firm.phone.number, verification: firm.phone.verification } : null,
