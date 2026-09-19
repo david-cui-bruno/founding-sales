@@ -91,7 +91,6 @@ async function fixture(input: {
       createBackup: unexpected, listAvailableBackups: async () => [] }),
     createRecoveryService: () => ({ status: unexpected, beginSetup: unexpected, saveSetupMaterial: unexpected,
       completeSetup: unexpected, selectAndRunRestoreDrill: unexpected, shutdown: async () => undefined }),
-    createAppleBridgeSupervisor: unexpected,
     registerApplicationIpc: (...args) => {
       runtime = args[0];
       return registerApplicationIpc(...args);

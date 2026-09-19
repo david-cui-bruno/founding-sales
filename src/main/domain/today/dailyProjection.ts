@@ -16,7 +16,6 @@ export function buildDailySnapshot(input: DailyProjectionInput): DailySnapshot {
     add('scope_mismatch'); return false;
   });
   const answers = scoped(input.approvals);
-  const meetings = scoped(input.meetings);
   const ownerStatus = scoped(input.ownerStatus);
   const callbacks = scoped([...(input.callbacks ?? [])]);
   const inScope = (accountId: string) => {
@@ -36,7 +35,7 @@ export function buildDailySnapshot(input: DailyProjectionInput): DailySnapshot {
   if (calls.workloadConflict) add('workload_conflict');
   const issues = [...issueCounts].sort(([a], [b]) => a.localeCompare(b)).map(([code, count]) => ({ code, count }));
   const content = { workspaceId: input.workspaceId, workflowMode: input.workflowMode ?? 'unknown', accounts: input.workspaceId === null ? [] : input.accounts,
-    calls, callSettings: input.callSettings, answers, meetings, campaigns: input.workspaceId === null ? [] : input.campaigns, ownerStatus, transport: input.workspaceId === null ? [] : input.transport, issues };
+    calls, callSettings: input.callSettings, answers, campaigns: input.workspaceId === null ? [] : input.campaigns, ownerStatus, transport: input.workspaceId === null ? [] : input.transport, issues };
   // The allocation is derived from callSettings, so it stays outside the hashed content and every stored revision is unchanged.
   // Callbacks are real content and do change the revision, but only once one exists: an empty list is absent from the hash,
   // so a workspace that has never promised a callback keeps the exact revision it had before schema 29.

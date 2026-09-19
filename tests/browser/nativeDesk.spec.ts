@@ -77,8 +77,8 @@ test('real Native Desk themes, geometry, selection and unchanged editor DOM', as
         await expect(body).toHaveValue('My retained local edit for account A');
         const geometry = await page.evaluate(() => ({ overflow: document.documentElement.scrollWidth > innerWidth, headings:[...document.querySelectorAll('.native-desk__lane h2')].map(el=>({text:el.textContent,y:el.getBoundingClientRect().bottom})),height:innerHeight }));
         expect(geometry.overflow).toBe(false);
-        expect(geometry.headings).toHaveLength(4);
-        await expect(page.locator('.native-desk__lane h2 .native-desk__lane-label')).toHaveText(['Local commitments', 'Calls', 'Saved draft continuations', 'Upcoming meetings']);
+        expect(geometry.headings).toHaveLength(3);
+        await expect(page.locator('.native-desk__lane h2 .native-desk__lane-label')).toHaveText(['Local commitments', 'Calls', 'Saved draft continuations']);
         for (const heading of geometry.headings) expect(heading.y,`${heading.text} visible at ${width}/${theme}/${density}`).toBeLessThan(geometry.height);
         const axe = await new AxeBuilder({page}).analyze();
         expect(axe.violations.filter(item=>item.impact==='serious'||item.impact==='critical')).toEqual([]);
@@ -538,12 +538,10 @@ test('a lost requested approval with a persisted pending receipt keeps exact ide
   await assertClean(page,state);
 });
 
-test('accounts, frozen campaigns, real meeting status and held refresh preserve boundaries', async ({page}) => {
+test('accounts, frozen campaigns and held refresh preserve boundaries', async ({page}) => {
   const state = await mount(page);
   await page.getByRole('button',{name:'Call · Account A',exact:true}).click();
   await expect(page.getByText(/Call handoff unavailable in this account view/)).toBeVisible();
-  await page.locator('[data-row-key="meeting:a:meeting-a"]').click();
-  await expect(page.getByText(/Attendance not recorded/)).toBeVisible();
   await page.evaluate(()=>window.nativeDeskBrowser.navigate('accounts'));
   await expect(page.getByRole('heading',{name:'Accounts',exact:true,level:1})).toBeVisible();
   await page.locator('[data-row-key="account:a"]').click();
@@ -862,7 +860,7 @@ async function localOnly(page: Page, mode: 'legacy' | 'meeting_first' = 'meeting
         priorityContext: null, action: {id: 'retained-action', type: 'follow_up', channel: 'call', label: 'Call back', dueAt: '2026-09-09T11:00:00.000Z'},
         reason: 'callback_promised_today', activeTriggers: [], verifyFirst: false, pinned: false, consentRequirement: null, cloudScores: null}}]});
     f.setSnapshot({...daily, workspaceId: null, workflowMode: mode, accounts: [], calls: {accountIds: [], workloadConflict: false},
-      answers: [], meetings: [], campaigns: [], ownerStatus: [], transport: [], issues: [{code: 'scope_unknown', count: 1}]});
+      answers: [], campaigns: [], ownerStatus: [], transport: [], issues: [{code: 'scope_unknown', count: 1}]});
     f.setConfiguration({state: 'unconfigured', workspaceId: null, endpoint: null, configuration: null});
     window.nativeDeskBrowser.refresh();
   }, mode);
@@ -880,8 +878,8 @@ test('unpaired local records remain selectable without worker authority or autom
   for (const width of [1440, 1050]) {
     await page.setViewportSize({width, height: width === 1440 ? 900 : 700});
     const positions = await page.locator('.native-desk__lane h2').evaluateAll(headings => headings.map(el => el.getBoundingClientRect().bottom));
-    expect(positions).toHaveLength(4);
-    await expect(page.locator('.native-desk__lane h2 .native-desk__lane-label')).toHaveText(['Local commitments', 'Calls', 'Saved draft continuations', 'Upcoming meetings']);
+    expect(positions).toHaveLength(3);
+    await expect(page.locator('.native-desk__lane h2 .native-desk__lane-label')).toHaveText(['Local commitments', 'Calls', 'Saved draft continuations']);
     for (const y of positions) expect(y).toBeLessThan(width === 1440 ? 900 : 700);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
     const heading = await page.locator('.native-desk__lane h2').first().evaluate(el => {
@@ -1037,9 +1035,9 @@ test('approved A presentation matches the unchanged reference in both themes and
       const status = await page.locator('.native-desk__connection > summary').boundingBox();
       expect.soft(Math.abs(status!.y + status!.height / 2 - actual[3].centerY), `${label} horizontal status`).toBeLessThanOrEqual(3);
       expect.soft(await page.getByText('Your next conversations', {exact: true}).count()).toBe(1);
-      expect.soft(await page.locator('.native-desk__lane h2 svg').count()).toBe(4);
-      expect.soft(await page.locator('.native-desk__lane h2 .native-desk__count').count()).toBe(4);
-      await expect.soft(page.locator('.native-desk__lane h2 .native-desk__lane-label')).toHaveText(['Local commitments', 'Calls', 'Saved draft continuations', 'Upcoming meetings']);
+      expect.soft(await page.locator('.native-desk__lane h2 svg').count()).toBe(3);
+      expect.soft(await page.locator('.native-desk__lane h2 .native-desk__count').count()).toBe(3);
+      await expect.soft(page.locator('.native-desk__lane h2 .native-desk__lane-label')).toHaveText(['Local commitments', 'Calls', 'Saved draft continuations']);
       expect.soft(await page.getByRole('button', {name: 'Refresh', exact: true}).innerText()).toBe('');
       await page.screenshot({path: testInfo.outputPath(`restored-A-${width}-${theme}.png`), animations: 'disabled'});
     }
@@ -1083,8 +1081,8 @@ test('approved A empty unpaired surfaces stay coherent and truthful without inve
         for (const label of labels) expect.soft(label.fullTextWidth, `${width} complete primary label ${label.text}`).toBeLessThanOrEqual(label.width + 0.05);
         if (surface === 'today') {
           const headings = await page.locator('.native-desk__lane h2').evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().bottom));
-          expect(headings).toHaveLength(4);
-          await expect(page.locator('.native-desk__lane h2 .native-desk__lane-label')).toHaveText(['Local commitments', 'Calls', 'Saved draft continuations', 'Upcoming meetings']);
+          expect(headings).toHaveLength(3);
+          await expect(page.locator('.native-desk__lane h2 .native-desk__lane-label')).toHaveText(['Local commitments', 'Calls', 'Saved draft continuations']);
           for (const bottom of headings) expect(bottom).toBeLessThan(width === 1440 ? 900 : 700);
         }
         const axe = await new AxeBuilder({page}).analyze();
@@ -1354,7 +1352,7 @@ test('local company form keeps A geometry and explicit review/create/reuse bound
   await page.evaluate(async () => {
     const f = window.nativeDeskBrowser.fixture;
     const snapshot = await f.api.daily.get();
-    f.setSnapshot({ ...snapshot, workspaceId: null, accounts: [], answers: [], meetings: [], campaigns: [], ownerStatus: [], transport: [], calls: { accountIds: [], workloadConflict: false } });
+    f.setSnapshot({ ...snapshot, workspaceId: null, accounts: [], answers: [], campaigns: [], ownerStatus: [], transport: [], calls: { accountIds: [], workloadConflict: false } });
     const local = await f.api.localWorkspace.get();
     f.setLocalSnapshot({ ...local, accounts: { state: 'available', snapshots: [] } });
     // Explicit synthetic presentation adapter. Real persistence/IPC is covered by

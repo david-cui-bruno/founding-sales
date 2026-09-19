@@ -1,4 +1,9 @@
 import { z } from 'zod';
+/**
+ * Calendar meetings were removed on 18 September 2026 (David's B2 A decision). What remains is only what
+ * still parses historical records: the `meeting.outcome` worker event the desktop sync applies, and the
+ * `meeting_attended` milestone report the worker verifies against stored MEETING# reservations.
+ */
 const id = z.string().min(1).max(255);
 const integer = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 export const meetingInstantSchema = z.string().datetime({ offset: true });
@@ -24,27 +29,6 @@ export const meetingIntentSchema = z.strictObject({ workspaceId: id, accountId: 
   inviteAttendees: z.boolean(), summary: z.string().min(1).max(240), etag: z.string().min(1).max(255).nullable(),
 });
 export type MeetingIntent = z.infer<typeof meetingIntentSchema>;
-export type MeetingIdentity = { meetingId: string; calendarId: string; providerEventId: string };
-export type BusyInterval = { start: string; end: string };
-export type CalendarWrite = MeetingIdentity & BusyInterval & { timezone: string; summary: string; attendeeEmails: string[]; inviteAttendees: boolean; location: z.infer<typeof meetingLocationSchema>; etag: string | null };
-export type ProviderMeeting = MeetingIdentity & { status: 'confirmed' | 'cancelled' | 'tentative'; etag: string; start: string | null; end: string | null;
-  attendees: { email: string; responseStatus: 'needsAction' | 'declined' | 'tentative' | 'accepted' }[]; meetUrl: string | null };
-export type CalendarResult = { kind: 'confirmed'; event: ProviderMeeting } | { kind: 'absent' } | { kind: 'unknown'; reason: string };
-export type AvailabilityQuery = BusyInterval & { calendarIds: string[]; excludeIdentity?: MeetingIdentity };
-export type AvailabilityResult = { kind: 'confirmed'; calendars: Record<string, BusyInterval[]> } | { kind: 'unknown'; reason: string };
-export interface CalendarPort {
-  availability(query: AvailabilityQuery, signal: AbortSignal): Promise<AvailabilityResult>;
-  create(intent: CalendarWrite, signal: AbortSignal): Promise<CalendarResult>;
-  get(identity: MeetingIdentity, signal: AbortSignal): Promise<CalendarResult>;
-  update(intent: CalendarWrite, signal: AbortSignal): Promise<CalendarResult>;
-  cancel(identity: MeetingIdentity & { etag: string }, signal: AbortSignal): Promise<CalendarResult>;
-}
-export type MeetingOutcome = z.infer<typeof meetingOutcomeSchema>;
-
-/** Trusted composition inputs. No route accepts an `allowed` boolean. */
-export const reserveMeetingSchema = z.strictObject({ intent: meetingIntentSchema, calendarId: id });
-export type ReserveMeetingInput = z.infer<typeof reserveMeetingSchema>;
-export const saveSchedulingRulesSchema = z.strictObject({ rules: schedulingRulesSchema, expectedRevision: integer.positive().nullable() });
 export const meetingIdentitySchema = z.strictObject({ meetingId: id, calendarId: id, providerEventId: z.string().regex(/^[0-9a-v]{5,1024}$/) });
 export const providerMeetingSchema = meetingIdentitySchema.extend({ status: z.enum(['confirmed', 'cancelled', 'tentative']), etag: z.string().min(1).max(255),
   start: meetingInstantSchema.nullable(), end: meetingInstantSchema.nullable(), attendees: z.array(z.strictObject({ email: z.string().email(), responseStatus: z.enum(['needsAction', 'declined', 'tentative', 'accepted']) })).max(200), meetUrl: z.string().url().nullable() });
@@ -58,16 +42,6 @@ export const meetingOutcomeSchema = meetingIdentitySchema.extend({ status: z.enu
 }, 'meeting_provider_evidence_conflict');
 export const meetingReservationSchema = z.strictObject({ intent: meetingIntentSchema, rules: schedulingRulesSchema, identity: meetingIdentitySchema,
   fingerprint: z.string().regex(/^[a-f0-9]{64}$/), state: z.enum(['dispatching', 'recorded']), outcome: meetingOutcomeSchema.nullable(), outcomeSequence: integer.positive().optional(), reservationSequence: integer.positive().optional() });
-export type MeetingReservation = z.infer<typeof meetingReservationSchema>;
-export type MeetingReservationResult = { kind: 'reserved' | 'existing'; record: MeetingReservation };
 export const meetingOutcomePayloadSchema = z.strictObject({ commandId: id, outcome: meetingOutcomeSchema, observedAt: meetingInstantSchema });
 export type MeetingOutcomePayload = z.infer<typeof meetingOutcomePayloadSchema>;
 
-export const offeredSlotSchema = z.strictObject({ id, start: meetingInstantSchema, end: meetingInstantSchema, timezone: id });
-export const meetingOfferSchema = z.strictObject({ meeting: z.strictObject({ summary: z.literal('Callie meeting'), inviteAttendees: z.boolean() }).optional(), id, revision: integer.positive(), accountId: id, mailboxSubject: id, threadId: id, sendCommandId: z.string().uuid(), expiresAt: meetingInstantSchema,
-  slots: z.array(offeredSlotSchema).min(1).max(5) }).refine(o => new Set(o.slots.map(s => s.id)).size === o.slots.length);
-export type MeetingOffer = z.infer<typeof meetingOfferSchema>;
-export const saveMeetingOfferSchema = z.strictObject({ offer: meetingOfferSchema, expectedRevision: integer.positive().nullable() });
-
-export const meetingWorkSchema = z.strictObject({ input: reserveMeetingSchema, fingerprint: z.string().regex(/^[a-f0-9]{64}$/), preparedAt: meetingInstantSchema });
-export type MeetingWork = z.infer<typeof meetingWorkSchema>;

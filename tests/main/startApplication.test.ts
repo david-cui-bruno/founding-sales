@@ -99,9 +99,6 @@ describe('startApplication', () => {
         captureHealth?.(provider);
         return () => events.push('unregister');
       },
-      createAppleBridgeSupervisor: () => {
-        throw new Error('Apple bridge must not be created without startup options.');
-      },
       closeDatabase: () => events.push('close'),
     };
   }
@@ -870,7 +867,6 @@ describe('startApplication background sync (D3)', () => {
       createHealthService: () => ({ getHealth: () => health }),
       registerTemplateIpc: () => () => undefined,
       registerApplicationIpc: () => { events.push('ipc'); return () => events.push('unregister'); },
-      createAppleBridgeSupervisor: () => { throw new Error('Apple bridge must not be created without startup options.'); },
       closeDatabase: () => events.push('close'),
       createPairingStore: () => ({ load: async () => ({ ...pairing, scopes: [...pairing.scopes] }), redeem: async () => { throw Error('No pairing operation authorized'); } }),
       registerOutreachIpc: () => () => undefined,

@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AppDatabase } from '../../src/main/db/database';
 import { fakeDomainRuntime } from '../fixtures/fakeDomainRuntime';
-import type { AppleBridgeSupervisorApi } from '../../src/main/appleBridge/appleBridgeSupervisor';
 import type { HealthProvider } from '../../src/main/health/registerHealthIpc';
 import type { ApplicationStartupDependencies, ApplicationStartupOptions, RunningApplication } from '../../src/main/startApplication';
 import { unavailablePhoneHandoff, unavailableOutboundReadiness } from '../../src/main/communications/phoneHandoffLauncher';
@@ -176,21 +175,6 @@ describe('main process startup', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
 
-  function disabledAppleBridgeSupervisor(): AppleBridgeSupervisorApi {
-    return {
-      start: async () => undefined,
-      getStatus: () => ({
-        state: 'disabled',
-        reason: 'not_packaged_or_configured',
-      }),
-      request: async () => {
-        throw new Error('Apple integration helper is unavailable.');
-      },
-      subscribe: () => () => undefined,
-      stop: async () => undefined,
-    };
-  }
-
   const inertBackupRecovery = (): Pick<ApplicationStartupDependencies, 'createBackupService' | 'createRecoveryService'> => ({
     createBackupService: () => ({ start: async () => undefined, shutdown: async () => undefined,
       listAvailableBackups: async () => [], createBackup: async () => { throw new Error('unexpected backup'); } }),
@@ -214,7 +198,6 @@ describe('main process startup', () => {
       createPhoneBindings: () => ({ phone: unavailablePhoneHandoff(), readiness: unavailableOutboundReadiness(), invalidate }),
       registerTemplateIpc: () => () => undefined,
       registerApplicationIpc: vi.fn(() => vi.fn()),
-      createAppleBridgeSupervisor: disabledAppleBridgeSupervisor,
       closeDatabase: close,
     };
     const actual = await vi.importActual<typeof import('../../src/main/startApplication')>('../../src/main/startApplication');
@@ -344,21 +327,13 @@ describe('main process startup', () => {
     expect(mocks.startApplication).toHaveBeenCalledWith({
       appVersion: '4.5.6',
       userDataPath: '/Users/founder/Library/Application Support/Callie',
-      appleBridge: {
+      phoneHelper: {
         platform: process.platform,
         isPackaged: false,
         resourcesPath: process.resourcesPath,
-        environment: {
-          CALLIE_APPLE_BRIDGE_PATH:
-            process.env.CALLIE_APPLE_BRIDGE_PATH,
-        },
-        allowDevelopmentOverride: true,
-        allowUnsignedDevelopment: true,
-        stagingRoot: '/Users/founder/Library/Application Support/Callie/apple-bridge-staging',
         expectedIdentifier: 'com.callie.foundersales.applebridge',
         parentExecutablePath: process.execPath,
       },
-      appleSpikeEnabled: false,
       phoneRouteMode: 'native',
       signal: expect.anything(),
       isTrustedRendererUrl: expect.any(Function),
@@ -394,21 +369,6 @@ describe('main process startup', () => {
     expect(shutdown).toHaveBeenCalledTimes(1);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(mocks.appQuit).toHaveBeenCalledTimes(1);
-  });
-
-  it('enables the spike only from the exact Electron command-line switch', async () => {
-    mocks.commandLineHasSwitch.mockImplementation(
-      (name: string) => name === 'apple-feasibility-spike',
-    );
-    mocks.loadUrl.mockResolvedValue(undefined);
-
-    await import('../../src/main');
-    await settleStartup();
-
-    expect(mocks.commandLineHasSwitch).toHaveBeenCalledWith('apple-feasibility-spike');
-    expect(mocks.startApplication.mock.calls[0]?.[0]).toMatchObject({
-      appleSpikeEnabled: true,
-    });
   });
 
   it('selects the fixture phone route under the mock-keychain test switch', async () => {
@@ -749,7 +709,6 @@ describe('main process startup', () => {
         healthProvider = provider;
         return () => events.push('unregister');
       },
-      createAppleBridgeSupervisor: disabledAppleBridgeSupervisor,
       closeDatabase: () => events.push('close'),
     };
     const actual = await vi.importActual<
@@ -831,7 +790,6 @@ describe('main process startup', () => {
         events.push('ipc');
         return () => events.push('unregister');
       },
-      createAppleBridgeSupervisor: disabledAppleBridgeSupervisor,
       closeDatabase: () => events.push('close'),
     };
     const actual = await vi.importActual<

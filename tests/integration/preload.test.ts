@@ -28,7 +28,6 @@ type ExposedCallieApi = {
     revealDatabase: () => Promise<unknown>;
     revealLogDirectory: () => Promise<unknown>;
   };
-  appleSpike: Record<string, unknown>;
   templates: NonNullable<import('../../src/shared/preload').CalliePreloadApi['templates']>;
 };
 
@@ -119,11 +118,10 @@ describe('preload workflow bridge', () => {
     domainStartupEvaluatedAt: '2026-08-30T12:00:00.000Z',
   };
 
-  it('exposes exactly the composed workflow APIs plus the Apple spike surface', () => {
+  it('exposes exactly the composed workflow APIs', () => {
     const api = exposedApi();
 
     expect(Object.keys(api).sort()).toEqual([
-      'appleSpike',
       'daily',
       'delegation',
       'health',

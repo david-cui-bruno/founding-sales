@@ -51,16 +51,7 @@ it('sets up unpaired local company research in App and preserves an attributed, 
   Object.defineProperty(HTMLDialogElement.prototype, 'close', { configurable: true, value() { this.open = false; } });
   const storage = Object.entries(localStorage), session = Object.entries(sessionStorage);
   const attrs = ['data-theme', 'data-density'].map(name => [name, document.documentElement.getAttribute(name)] as const);
-  const forbidden = async (): Promise<never> => f.deny('Apple spike');
-  let osStatusReads = 0;
-  const api: CalliePreloadApi = { ...f.api, appleSpike: {
-    // Default Settings diagnostics observes the OS port. No native helper exists
-    // in this in-process fixture, and every action remains forbidden below.
-    getStatus: async () => { osStatusReads++; throw Error('Synthetic OS status unavailable'); },
-    probeCapabilities: forbidden, requestContacts: forbidden, promptAccessibility: forbidden,
-    scanRecentNotes: forbidden, scanTestMessages: forbidden, startCallObservation: forbidden, stopCallObservation: forbidden,
-    sendTestMessage: forbidden, subscribeObservationEvidence: forbidden,
-  } };
+  const api: CalliePreloadApi = { ...f.api };
   // No ambient fetch is allowed, even if a future production path forgets to use its injected port.
   vi.stubGlobal('fetch', async () => f.deny('ambient fetch'));
   const rows = (table: string) => f.runtime.withDatabase(db => db.raw.prepare(`SELECT * FROM ${table}`).all());
@@ -280,7 +271,6 @@ it('sets up unpaired local company research in App and preserves an attributed, 
     expect(f.pages).toEqual(Object.keys(localSetupPages));
     expect(await api.outreach.status()).toMatchObject({ model: 'ready', gmail: 'unconfigured' });
     expect(f.denied).toEqual([]);
-    expect(osStatusReads).toBe(2);
     expect(transport.nativeCalls).toBe(0);
     // Existing cloud panels may observe status, but unpaired main rejects before any transport.
     const readOnlyCloudChannels = ['outreach:google-connection-status', 'outreach:google-connection-disclosure'];

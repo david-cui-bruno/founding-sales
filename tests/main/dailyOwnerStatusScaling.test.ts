@@ -113,7 +113,7 @@ async function fixture(count = 4, scope: string | undefined = workspaceId) {
       calls: { accountIds: [], workloadConflict: false }, callSettings: { newCallSlots: 0, totalCallCapacity: null },
       // Derived from callSettings and outside the revision hash (D2 default allocation).
       allocation: { newCallSlots: 0, source: 'configured' },
-      approvals: [], meetings: [], campaigns: [], ownerStatus, transport: [], issues,
+      approvals: [], campaigns: [], ownerStatus, transport: [], issues,
       // Derived too, and also outside the revision hash. A workspace with no recorded work reports
       // zeros for both founder-local weeks rather than omitting them, and `now` is a Tuesday, so
       // this week is Monday 14 to Sunday 20 September in America/New_York.
@@ -275,11 +275,11 @@ describe('public daily.get owner history scaling on real encrypted SQLite', () =
       f.queue('foreign-history', f.ids[3]!);
       f.db.raw.prepare('UPDATE delegated_authorities SET workspace_id=? WHERE account_id=?').run('foreign-workspace', f.ids[3]!);
       f.mutateCommands("UPDATE delegated_commands SET workspace_id='foreign-workspace',command_json='{}'");
-      f.db.raw.prepare('INSERT INTO delegated_meetings VALUES(?,?,?,?,?,?,?,?,?)').run(workspaceId, f.ids[3]!, 'foreign-meeting', 'google_calendar', 'provider-fictional', 1, 'held', '{}', now);
       const result = f.read('scope');
       expect(result.snapshot.accounts.map(a => a.account.id)).toEqual(f.ids.slice(0, 3));
       expect(result.snapshot.ownerStatus).toEqual(f.ids.slice(0, 3).map(id => f.owner(id)));
-      expect(result.snapshot.issues).toEqual([{ code: 'scope_mismatch', count: 1 }]);
+      // Nothing in this workspace's own rows is out of scope; the foreign history simply never enters the snapshot.
+      expect(result.snapshot.issues).toEqual([]);
       expect(result.scans).toBe(1);
     } finally { f.close(); }
   });

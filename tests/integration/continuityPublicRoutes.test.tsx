@@ -561,13 +561,7 @@ function mountContinuityApp(value: Fixture, route: 'accounts' | 'today') {
     }
   };
   Object.defineProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT', { configurable: true, writable: true, value: true });
-  const deniedAppleCall = async (): Promise<never> => { throw new Error('Stage1 denies Apple spike access'); };
-  const completeApi: CalliePreloadApi = { ...value.api, appleSpike: {
-    getStatus: deniedAppleCall, probeCapabilities: deniedAppleCall, requestContacts: deniedAppleCall,
-    promptAccessibility: deniedAppleCall, scanRecentNotes: deniedAppleCall, scanTestMessages: deniedAppleCall,
-    startCallObservation: deniedAppleCall, stopCallObservation: deniedAppleCall, sendTestMessage: deniedAppleCall,
-    subscribeObservationEvidence: deniedAppleCall,
-  } };
+  const completeApi: CalliePreloadApi = { ...value.api };
   Object.defineProperty(window, 'callie', { configurable: true, value: completeApi });
   window.history.replaceState(null, '', `#/${route}`);
   render(<App />);

@@ -175,7 +175,6 @@ describe('Native Desk actual route', () => {
     expect(screen.getByText(/Hypothesis: Unconfirmed workflow/)).toBeTruthy();
     expect(screen.getByText(/Call handoff unavailable/)).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Saved draft continuations 0' })).toBeTruthy();
-    expect(screen.getByRole('heading', { name: 'Upcoming meetings 0' })).toBeTruthy();
   });
 });
 

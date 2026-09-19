@@ -214,8 +214,8 @@ for (const width of [1440, 1050]) for (const theme of ['light', 'dark'] as const
     await expect(page.getByTestId('native-desk')).toHaveAttribute('data-workflow-mode', 'meeting_first');
     await assertRail(page, width, theme);
     const headings = await page.locator('.native-desk__lane h2').evaluateAll(elements => elements.map(element => ({ text: element.textContent, bottom: element.getBoundingClientRect().bottom })));
-    expect(headings).toHaveLength(4);
-    await expect(page.locator('.native-desk__lane h2 .native-desk__lane-label')).toHaveText(['Local commitments', 'Calls', 'Saved draft continuations', 'Upcoming meetings']);
+    expect(headings).toHaveLength(3);
+    await expect(page.locator('.native-desk__lane h2 .native-desk__lane-label')).toHaveText(['Local commitments', 'Calls', 'Saved draft continuations']);
     for (const heading of headings) expect(heading.bottom, heading.text ?? '').toBeLessThan(width === 1440 ? 900 : 700);
     await checkpoint(page, info, '10-ready-native-a');
     await page.evaluate(() => window.startupPresentation.setLocalMode('legacy'));
@@ -324,7 +324,7 @@ for (const width of [1440, 1050]) for (const theme of ['light', 'dark'] as const
     await page.evaluate(() => window.startupPresentation.resolveDaily('meeting_first'));
     const desk = page.getByTestId('native-desk');
     await expect(desk).toHaveAttribute('data-workflow-mode', 'meeting_first');
-    await expect(page.locator('.native-desk__lane h2 .native-desk__lane-label')).toHaveText(['Local commitments', 'Calls', 'Saved draft continuations', 'Upcoming meetings']);
+    await expect(page.locator('.native-desk__lane h2 .native-desk__lane-label')).toHaveText(['Local commitments', 'Calls', 'Saved draft continuations']);
     expect(await page.evaluate(() => window.startupPresentation.pending().delegation)).toBe(2);
     await expect(page.getByText('Loading daily workspace…', { exact: true })).toHaveCount(0);
     await desk.evaluate(element => element.setAttribute('data-publication-retained', 'yes'));

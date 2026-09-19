@@ -118,7 +118,7 @@ describe('registerApplicationIpc', () => {
       createPhoneBindings: () => ({ phone: unavailablePhoneHandoff(), readiness: unavailableOutboundReadiness(), dispose }),
       registerApplicationIpc: (runtime, trust, _unused, recovery, shell, logs, options) =>
         registerApplicationIpc(runtime, trust, registrars, recovery, shell, logs, options),
-      createAppleBridgeSupervisor: () => { throw new Error('unexpected helper'); }, closeDatabase: close,
+      closeDatabase: close,
     };
     // This startup fixture has no operational domain graph. Only the settings read is expected.
     const getCompanyResearchSettings = vi.fn(() => ({ revision: 0, configuration: null }));
@@ -168,7 +168,7 @@ describe('registerApplicationIpc', () => {
       createRecoveryService: () => ({ ...recoveryProvider, shutdown: async () => undefined }),
       createPhoneBindings: () => ({ phone: unavailablePhoneHandoff(), readiness: unavailableOutboundReadiness(), dispose }),
       registerApplicationIpc: registration,
-      createAppleBridgeSupervisor: () => { throw new Error('unexpected helper'); }, closeDatabase: close,
+      closeDatabase: close,
     };
     // This startup fixture has no operational domain graph. Only the settings read is expected.
     const getCompanyResearchSettings = vi.fn(() => ({ revision: 0, configuration: null }));

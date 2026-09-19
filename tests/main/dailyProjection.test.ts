@@ -4,14 +4,8 @@ import { dailySnapshotSchema } from '../../src/shared/contracts/dailyContract';
 import { requestedFollowupFixture } from '../fixtures/requestedFollowup';
 
 const now = '2026-09-09T12:00:00.000Z';
-const base = (): DailyProjectionInput => ({ workspaceId: 'ws', generatedAt: now, accounts: [], calls: { accountIds: [], workloadConflict: false }, approvals: [], meetings: [], ownerStatus: [], issues: [], campaigns: [], callSettings: { newCallSlots: null, totalCallCapacity: null }, transport: [] });
+const base = (): DailyProjectionInput => ({ workspaceId: 'ws', generatedAt: now, accounts: [], calls: { accountIds: [], workloadConflict: false }, approvals: [], ownerStatus: [], issues: [], campaigns: [], callSettings: { newCallSlots: null, totalCallCapacity: null }, transport: [] });
 describe('daily local projection', () => {
-  it('exposes only C5 exact identities and preserves unknown/cancelled outcomes', () => {
-    const identity = { meetingId: 'meeting', calendarId: 'calendar', providerEventId: 'a'.repeat(64) };
-    const meeting: DailyProjectionInput['meetings'][number] = { id: 'meeting', accountId: 'account', revision: 2, payload: { commandId: 'command', observedAt: now, outcome: { ...identity, status: 'unknown' as const, reason: 'timeout', event: null } } };
-    // Unscoped identities must not become lane content.
-    expect(buildDailySnapshot({ ...base(), meetings: [meeting] }).meetings).toEqual([]);
-  });
   it('does not convert research failures into answers and bounds aggregated issues', () => {
     const snapshot = buildDailySnapshot({ ...base(), issues: Array.from({ length: 100 }, () => ({ code: 'research_failed' as const, count: 1 })) });
     expect(snapshot.answers).toEqual([]);

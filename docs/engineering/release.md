@@ -195,25 +195,10 @@ routes (Leads, Pipeline, Conversations, Learnings, Friday, Inbox), the CSV perso
 import and the lead inspector were removed on 17 September 2026 together with
 their packaged specs; their tables and history remain in the database.
 
-The standard packaged E2E command includes an inert Apple smoke test. To run
-only that suite after packaging:
-
-```bash
-export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm run test:e2e:apple
-```
-
-It launches the packaged app with an isolated temporary profile and the gated
-Apple feasibility panel, proves helper packaging, protocol handshake, exact
-status reporting, and helper/process-tree cleanup when Callie closes. It does
-not click capability, permission, call-observation, Notes, Messages, or send
-controls. Therefore it does not prompt for TCC access, read founder Apple
-databases, place a call, send a message, prove TCC grants, or prove live
-communication. Those remain separate consenting manual checks.
-
-The [Apple communications manual feasibility procedure](apple-feasibility-procedure.md)
-is the only approved live-capability check. It is manual-only and is never run
-by `npm test`, `npm run test:swift`, `npm run verify`, `npm run verify:e2e`,
-`npm run verify:package`, or CI.
+The Apple feasibility spike, its packaged smoke test (`test:e2e:apple`) and the
+manual feasibility procedure were removed on 18 September 2026. The nested helper
+is still packaged, signed and verified as above because the phone route opens
+calls through it; nothing launches it at startup any more.
 
 Packaging sets every Electron 44 V1 fuse with
 `strictlyRequireAllFuses: true`, so a future Electron fuse addition stops the

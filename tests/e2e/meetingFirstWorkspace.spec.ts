@@ -29,7 +29,7 @@ test('unpaired daily workspace stays empty and read-only through navigation and 
       workflowMode: 'legacy',
       freshness: { kind: 'incomplete', remote: 'unknown' },
       accounts: [], calls: { accountIds: [], workloadConflict: false },
-      answers: [], meetings: [], campaigns: [], ownerStatus: [], transport: [],
+      answers: [], campaigns: [], ownerStatus: [], transport: [],
     });
     expect(before.issues).toContainEqual({ code: 'scope_unknown', count: 1 });
     expect(await workspace.page.evaluate(() => window.callie.delegation.status()))
@@ -143,7 +143,7 @@ test('explicit local transition preserves a real callback and local account with
     await expect(page.getByRole('heading', { name: 'Fixture Residential Management', exact: true })).toBeVisible();
     const daily = await page.evaluate(() => window.callie.daily.get());
     expect(daily).toMatchObject({workspaceId: null, workflowMode: 'meeting_first', accounts: [], answers: [],
-      calls: {accountIds: []}, meetings: [], campaigns: [], ownerStatus: [], transport: []});
+      calls: {accountIds: []}, campaigns: [], ownerStatus: [], transport: []});
     expect(await page.evaluate(() => window.callie.delegation.status())).toMatchObject({ state: 'unconfigured', workspaceId: null });
     const detailAfter = await page.evaluate(personId => window.callie.leadDetail.get({personId}), seeded.personId);
     expect(detailAfter.activities).toEqual(detailBefore.activities);

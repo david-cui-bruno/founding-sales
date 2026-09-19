@@ -6,7 +6,6 @@ import { WorkerAuth } from './workerAuth';
 import { RemoteGoogleAuthorization } from './remoteGoogleAuthorization';
 import { googleGrantSchema, requireCapabilities } from './googleGrantCapabilities';
 import { DynamoDispatchRepository } from './dispatchRepository';
-import { DynamoMeetingRepository } from './meetingRepository';
 
 /** Authenticated policy admission only. No account, AUTH, permission, cap usage,
  * work item or provider mutation is created. Existing setters own policy storage. */
@@ -34,15 +33,8 @@ export class WorkerPolicyConfiguration {
     const metadata = z.object({ grant: googleGrantSchema, revoked: z.literal(false), revocationInFlight: z.literal(false).optional(), providerRevocation: z.enum(['confirmed', 'pending']).optional() }).parse(row?.data);
     const grant = metadata.grant;
     if (!row || grant.purpose !== 'permitted_correspondence' || grant.owner !== 'remote' || grant.subject !== request.mailboxSubject || metadata.providerRevocation) throw Error('policy_grant_unavailable');
-    if (request.kind === 'sender-caps') {
-      requireCapabilities(grant, ['send']);
-      if (request.policy.sender !== grant.email) throw Error('policy_sender_mismatch');
-    } else {
-      requireCapabilities(grant, ['availability', 'event_write']);
-      const calendars = grant.calendars;
-      if (!calendars || request.rules.ownedCalendarId !== calendars.ownedCalendarId
-        || fingerprint([...request.rules.conflictCalendarIds].sort()) !== fingerprint([...calendars.conflictCalendarIds].sort())) throw Error('policy_calendar_mismatch');
-    }
+    requireCapabilities(grant, ['send']);
+    if (request.policy.sender !== grant.email) throw Error('policy_sender_mismatch');
     const receipt = workerPolicyReceiptSchema.parse({ requestId: request.requestId, kind: request.kind, status: 'applied', revision: (request.expectedRevision ?? 0) + 1, fingerprint: fp });
     let transactionCount = 0;
     const joined: DynamoAdapter = { send: async command => {
@@ -52,8 +44,7 @@ export class WorkerPolicyConfiguration {
     } };
     const options = { ...this.input.auth.options, dynamo: joined };
     try {
-      if (request.kind === 'sender-caps') await new DynamoDispatchRepository(options, this.input.authorization).configureCaps(request.policy, request.expectedRevision);
-      else await new DynamoMeetingRepository(options, this.input.authorization).saveRules({ rules: request.rules, expectedRevision: request.expectedRevision });
+      await new DynamoDispatchRepository(options, this.input.authorization).configureCaps(request.policy, request.expectedRevision);
       if (transactionCount !== 1) throw Error('policy_setter_transaction_invalid');
       return receipt;
     } catch (error) { const committed = await replay(); if (committed) return committed; throw error; }

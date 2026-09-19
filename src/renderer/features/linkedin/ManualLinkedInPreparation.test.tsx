@@ -15,7 +15,7 @@ function deferred<T>() {
 }
 function fixture() {
   const input = nativeDeskReviewFixture();
-  input.answers = []; input.meetings = [];
+  input.answers = [];
   const campaign = input.campaigns[0];
   campaign.version.approvedAt = fixtureNow;
   campaign.version.steps = [{ id: 'li-step', channel: 'linkedin', condition: 'initial', delayHours: 0 }];
