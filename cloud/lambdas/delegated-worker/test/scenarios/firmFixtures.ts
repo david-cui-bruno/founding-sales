@@ -10,7 +10,7 @@ import type { DynamoStore } from '../../src/dynamoStore';
 import { fingerprint } from '../../src/dynamoStore';
 import { RemoteGoogleAuthorization } from '../../src/remoteGoogleAuthorization';
 import { createSourceCoordinator, type SourceTickReport } from '../../src/sourceCoordinator';
-import { dayKey, dayRecordSchema, type DayRecord } from '../../src/v1/dayBuild';
+import { dayKey, dayRecordSchema, runScheduledDayBuild, type DayBuildOutcome, type DayRecord } from '../../src/v1/dayBuild';
 import { accountKey } from '../../src/workerAccountRepository';
 import type { v1Fixture } from './v1Fixture';
 import { campaignEnrollmentKey, campaignVersionKey, territoryEnrollmentKey, territoryRetiredRouteKey } from '../../src/workerCampaignRepository';
@@ -147,6 +147,32 @@ export function tickOf(f: ReturnType<typeof v1Fixture>): () => Promise<{ report:
   return async () => {
     const log = console.log; const lines: string[] = []; console.log = (...args: unknown[]) => { lines.push(args.map(String).join(' ')); };
     try { return { report: await source.tick(new AbortController().signal), lines }; } finally { console.log = log; }
+  };
+}
+
+/**
+ * One whole morning of the old worker as it stands after S6: the scheduled tick, then the list build the runner's
+ * `day.build` job performs. The two were one call until S6 moved the list off the tick; a test that wants "the
+ * state David wakes up to" wants both, and a test about either seam on its own uses `tickOf` or `dayBuildOf`.
+ */
+export function morningOf(f: ReturnType<typeof v1Fixture>): () => Promise<{ report: SourceTickReport; lines: string[] }> {
+  const tick = tickOf(f); const build = dayBuildOf(f);
+  return async () => {
+    const ticked = await tick();
+    const built = await build();
+    return { report: ticked.report, lines: [...ticked.lines, ...built.lines] };
+  };
+}
+
+/**
+ * The morning list build, on the seam that owns it since S6: `runScheduledDayBuild`, which is exactly what the
+ * runner's `day.build` job calls. Returns the outcome and the console lines it logged, so a test can read the
+ * LIST_BUILT line the same way it read it when the old tick still built the list.
+ */
+export function dayBuildOf(f: ReturnType<typeof v1Fixture>): () => Promise<{ outcome: DayBuildOutcome; lines: string[] }> {
+  return async () => {
+    const log = console.log; const lines: string[] = []; console.log = (...args: unknown[]) => { lines.push(args.map(String).join(' ')); };
+    try { return { outcome: await runScheduledDayBuild(f.store), lines }; } finally { console.log = log; }
   };
 }
 

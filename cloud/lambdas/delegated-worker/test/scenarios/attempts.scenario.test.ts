@@ -8,6 +8,7 @@ import { RemoteGoogleAuthorization } from '../../src/remoteGoogleAuthorization';
 import { createSourceCoordinator } from '../../src/sourceCoordinator';
 import { tickPhases } from '../../src/tickLog';
 import { ATTEMPT_PREFIX, ATTEMPT_TTL_SECONDS, attemptCode, listAttempts, recordAttempt } from '../../src/v1/attempts';
+import { runScheduledDayBuild } from '../../src/v1/dayBuild';
 import { WorkerAuth } from '../../src/workerAuth';
 import { ConditionalCommandHarness } from '../sdkHarness';
 
@@ -127,11 +128,17 @@ describe('the existing worker records what it does', () => {
     expect(phases).toHaveLength(tickPhases.length);
     expect(phases.map(phase => phase.ref).sort()).toEqual([...tickPhases].sort());
     for (const phase of phases) expect(phase).toMatchObject({ outcome: 'ok', reason: null, detail: null, durationMs: expect.any(Number) });
-    // 12:00Z is 08:00 Eastern: the first tick at or after 05:00 also builds the morning list (S1), once, and records it as a `list` attempt.
-    // With no firms the list is empty; the LIST_BUILT line carries counts only.
+    // S6 moved the morning list off this tick and onto the runner's `day.build` job, so the tick records no `list`
+    // attempt at all. The build records exactly the same one when the job runs it, wherever that job is claimed.
+    expect(await listAttempts(f.auth.store, { kind: 'list' })).toEqual([]);
+    const built: string[] = [];
+    await runScheduledDayBuild(f.auth.store, { log: line => built.push(line) });
+    // 12:00Z is 08:00 Eastern, so the build is due. With no firms the list is empty and the counts say so.
     expect(await listAttempts(f.auth.store, { kind: 'list' })).toEqual([expect.objectContaining({ outcome: 'ok', reason: null, ref: 'day:2026-09-18',
       detail: { code: 'list_built', count: 0, lanes: { replies: 0, callbacks: 0, due: 0, new: 0 } } })]);
-    expect(lines.filter(line => line.includes('LIST_BUILT'))).toHaveLength(1);
+    // The one LIST_BUILT line belongs to the build, not to the tick, and it carries counts only.
+    expect(lines.filter(line => line.includes('LIST_BUILT'))).toEqual([]);
+    expect(built.filter(line => line.includes('LIST_BUILT'))).toHaveLength(1);
     expect(await listAttempts(f.auth.store, {})).toHaveLength(tickPhases.length + 2);
   });
 

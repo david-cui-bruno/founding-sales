@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { v1CommandReceiptSchema, v1FirmViewSchema, todayViewSchema } from '../../../../../src/shared/contracts/v1Contract';
 import { createAccountFirmSource } from '../../src/v1/firms';
 import { firmKey, firmRecordSchema, handEnteredFirmId, handEnteredRouteId, siteDomain, zoneOfState } from '../../src/v1/firmsWrite';
-import { putFirm, putTerritoryPolicy, readDay, riFirm, setPosture, tickOf } from './firmFixtures';
+import { putFirm, putTerritoryPolicy, readDay, riFirm, setPosture, morningOf } from './firmFixtures';
 import { v1Fixture } from './v1Fixture';
 
 /**
@@ -76,7 +76,7 @@ describe('add_firm and admit_route', () => {
       derivation: { source: 'hand_entered', sourceId: null, state: 'RI', zoneFrom: 'territory_state_map' },
       phone: { number: '+14015550230', verification: 'confirmed' } });
     // The build offers it like a researched firm: one pool entry, no exclusion.
-    await tickOf(f)();
+    await morningOf(f)();
     const day = readDay(f, '2026-09-18')!;
     expect(day.lanes.new.map(entry => entry.firmId)).toEqual([HAND_ID]);
     expect(day.poolSize).toBe(1);

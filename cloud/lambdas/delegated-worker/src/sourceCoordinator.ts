@@ -25,7 +25,6 @@ import { mailScopeFingerprint } from '../../../../src/main/outreach/providers/gm
 import type { TickHeldReason, TickPhase, TickPhaseHold, TickPhaseResult } from '../../../../src/shared/contracts/researchSetupContract';
 import { buildScheduledRunRecord, tickErrorClass, SOURCE_LAST_TICK_KEY } from './tickLog';
 import { attemptCode, recordAttempt, type AttemptInput } from './v1/attempts';
-import { runScheduledDayBuild } from './v1/dayBuild';
 import { TerritoryPolicyRepository, TERRITORY_BACKFILL_TICK_LIMIT, type TerritoryBackfillReport } from './territoryPolicyRepository';
 import { createSequenceEmailWalker, type SequenceEmailReport } from './sequenceEmailWalker';
 import { createTerritoryMailScopeConfigurator, type TerritoryMailScopeReport } from './territoryMailScope';
@@ -52,7 +51,16 @@ export type SourceCoordinatorOptions = { auth: WorkerAuth; authorization: Remote
    * and email all live on the queue, and this tick's only remaining work is the list and the old command paths.
    * It enables nothing: it can only take work away from this tick.
    */
-  legacyResearchEnabled?: boolean };
+  legacyResearchEnabled?: boolean;
+  /**
+   * Whether this scheduled tick runs at all (slice S6's switch, `delegated_worker_legacy_tick_enabled`). Absent
+   * or true is exactly today's behaviour. False makes the scheduled invocation return an inactive report without
+   * reading or writing anything, so the old function answers HTTP and nothing else: the desktop's event sync, the
+   * pairing and Google routes and the readiness probe are untouched. By S6 nothing is left on this tick anyway —
+   * S3 took email off it, S4 took research off it, and the morning list is the scheduler's `day` job — so this is
+   * the switch that stops the last empty round trip. It enables nothing: it can only take work away.
+   */
+  legacyTickEnabled?: boolean };
 /** What one Places territory batch did. `uncertain` names a page whose response was lost: its spend is retained and it is never re-issued. */
 export type PlacesBatchReport = { outcome: 'completed' | 'exhausted' | 'uncertain' | 'denied' | 'held'; runId: string | null; created: number; routes: number; enqueued: number; drained: number;
   skipped: { no_website: number; website_blocked: number; duplicate_domain: number; duplicate_phone: number; existing_domain: number; existing_phone: number; route_held: number; enqueue_held: number } };
@@ -87,6 +95,8 @@ export function hold(report: SourceTickReport, reason: TickHeldReason): void {
   report.held++;
   report.heldByReason[reason] = (report.heldByReason[reason] ?? 0) + 1;
 }
+/** The five phases of the old tick, in the order its round-robin cursor visits them. */
+export const TICK_PHASE_NAMES: readonly TickPhase[] = ['research', 'configurations', 'submittedCommands', 'publications', 'territoryBackfill'];
 const PAGE_LIMIT = 25;
 /** One scheduled tick aborts after this; the 60 s Lambda timeout leaves room for setup and durable settlement. */
 export const TICK_DEADLINE_MS = 45000;
@@ -105,6 +115,8 @@ export function createSourceCoordinator(input: SourceCoordinatorOptions) {
   const legacyEmail = input.legacyEmailEnabled !== false;
   // S4's coexistence switch. Absent is today's behaviour; false hands research to the queue's jobs.
   const legacyResearch = input.legacyResearchEnabled !== false;
+  // S6's switch. Absent is today's behaviour; false leaves the old function answering HTTP only.
+  const legacyTick = input.legacyTickEnabled !== false;
   /** The three phases S4's research jobs replace. With the switch false each one is skipped, never run empty. */
   const RESEARCH_PHASES: readonly TickPhase[] = ['research', 'configurations', 'territoryBackfill'];
   const store = input.auth.store;
@@ -424,10 +436,16 @@ export function createSourceCoordinator(input: SourceCoordinatorOptions) {
     const startedAt = Date.now();
     const report = emptyTickReport();
     if (callerSignal.aborted) return { ...report, status: 'aborted' };
+    // S6's switch, checked before anything is read: an off tick does no work, records no attempt and writes no
+    // tick record. It is the honest report of a function that answered its schedule and had nothing to do.
+    if (!legacyTick) {
+      for (const name of TICK_PHASE_NAMES) report.phases[name] = 'skipped';
+      return report;
+    }
     const deadline = new AbortController(); const timer = setTimeout(() => deadline.abort(), TICK_DEADLINE_MS);
     const signal = AbortSignal.any([callerSignal, deadline.signal]);
     const phases = [research, configurations, submittedCommands, publications, territoryBackfill] as const;
-    const phaseNames: readonly TickPhase[] = ['research', 'configurations', 'submittedCommands', 'publications', 'territoryBackfill'];
+    const phaseNames = TICK_PHASE_NAMES;
     const phaseFailures: readonly TickHeldReason[] = ['research_phase_failed', 'configurations_phase_failed', 'commands_phase_failed', 'publications_phase_failed', 'territory_phase_failed'];
     const key = 'SOURCE_PHASE_CURSOR';
     try {
@@ -456,9 +474,8 @@ export function createSourceCoordinator(input: SourceCoordinatorOptions) {
     finally { clearTimeout(timer); }
     for (const name of phaseNames) report.phases[name] ??= 'skipped';
     if (signal.aborted) report.status = 'aborted';
-    // The morning list (S1, design section 4): built once per Eastern day by the first tick at or after 05:00, outside the phase
-    // deadline like the tick record. It records its own `list` attempt and the LIST_BUILT line, and never throws into the tick.
-    if (!callerSignal.aborted) await runScheduledDayBuild(store);
+    // The morning list is no longer built here (S6): it is the scheduler's `day` job, which the scheduler has
+    // offered since S3 and the runner runs on the queue. One builder, one place, one record per Eastern day.
     // The record is written outside the tick deadline: a slow tick still leaves its last-run evidence for Settings and the log.
     try { await persistLastTick(report, startedAt); }
     catch { hold(report, 'tick_record_write_failed'); }

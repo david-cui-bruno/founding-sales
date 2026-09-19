@@ -6,7 +6,7 @@ import { sendStepJobId, type JobKind } from '../../src/queue/jobs';
 import type { QueueClient } from '../../src/queue/queueClient';
 import { runScheduler } from '../../src/scheduler';
 import { sequenceKey, sequenceRecordSchema } from '../../src/v1/sequence';
-import { enrollFirm, listedRouteId, putFirm, putTerritoryPolicy, readDay, riFirm, setPosture, tickOf } from './firmFixtures';
+import { enrollFirm, listedRouteId, putFirm, putTerritoryPolicy, readDay, riFirm, setPosture, morningOf } from './firmFixtures';
 import { approveWithFooter, setPostalAddress } from './sendFixtures';
 import { v1Fixture } from './v1Fixture';
 
@@ -77,7 +77,7 @@ async function tick(h: Harness): Promise<string[]> {
 describe('the morning after a call: the due lane reads the sequence, not the old enrollment', () => {
   it('brings a firm called on day 0 back in the due lane on day 3, with the step it actually stands on', async () => {
     const h = await enrolledFirm();
-    await tickOf(h.f)();
+    await morningOf(h.f)();
     expect(lanesOf(await view(h)).new.map(card => card.firmId)).toEqual([FIRM_ID]);
 
     h.f.advance(CALL_AT);
@@ -87,7 +87,7 @@ describe('the morning after a call: the due lane reads the sequence, not the old
     // Day three. The build reads where the firm stands from `SEQ#`, so it is a due-lane firm, not a firm that
     // vanished between the lanes: the old enrollment still says step 0 and the day record no longer believes it.
     h.f.advance(DAY_THREE_BUILD);
-    await tickOf(h.f)();
+    await morningOf(h.f)();
     const day = readDay(h.f, '2026-09-21');
     expect(day?.lanes.due).toEqual([{ firmId: FIRM_ID, reason: 'step_due' }]);
     expect(day?.lanes.new).toEqual([]);
@@ -104,7 +104,7 @@ describe('the morning after a call: the due lane reads the sequence, not the old
 
   it('leaves the day-7 email to the scheduler: the due lane never offers a call for an email step', async () => {
     const h = await enrolledFirm();
-    await tickOf(h.f)();
+    await morningOf(h.f)();
     h.f.advance(CALL_AT);
     await log(h, { outcome: 'voicemail', observedAt: CALL_AT });
     h.f.advance(DAY_THREE_CALL);
@@ -116,7 +116,7 @@ describe('the morning after a call: the due lane reads the sequence, not the old
 
     // Day seven: there is nothing to call, and the build says so rather than offering the email step as a call.
     h.f.advance(DAY_SEVEN_BUILD);
-    await tickOf(h.f)();
+    await morningOf(h.f)();
     expect(readDay(h.f, '2026-09-25')).toMatchObject({ lanes: { replies: [], callbacks: [], due: [], new: [] } });
     expect(await view(h)).toMatchObject({ list: null, reason: 'no_candidates' });
     // The email step is the scheduler's, on its own re-based instant.
@@ -126,14 +126,14 @@ describe('the morning after a call: the due lane reads the sequence, not the old
 
   it('puts a firm with a callback promised for today in the callbacks lane, never in the due lane', async () => {
     const h = await enrolledFirm();
-    await tickOf(h.f)();
+    await morningOf(h.f)();
     h.f.advance(CALL_AT);
     await log(h, { outcome: 'callback', callbackOn: '2026-09-21', observedAt: CALL_AT, note: 'Call back Monday after ten.' });
     // A promised callback overrides the cadence's timing: the sequence keeps its step and carries no due instant.
     expect(seq(h)).toMatchObject({ currentStepId: h.steps[0]!.id, nextDueAt: null, lastAdvance: 'callback_promised' });
 
     h.f.advance(DAY_THREE_BUILD);
-    await tickOf(h.f)();
+    await morningOf(h.f)();
     expect(readDay(h.f, '2026-09-21')).toMatchObject({ lanes: { callbacks: [{ firmId: FIRM_ID, reason: 'callback_due' }], due: [], new: [] } });
 
     h.f.advance(DAY_THREE_CALL);
@@ -145,12 +145,12 @@ describe('the morning after a call: the due lane reads the sequence, not the old
 
   it('does not offer a callback before the day it was promised for', async () => {
     const h = await enrolledFirm();
-    await tickOf(h.f)();
+    await morningOf(h.f)();
     h.f.advance(CALL_AT);
     await log(h, { outcome: 'callback', callbackOn: '2026-09-21', observedAt: CALL_AT });
     // The next morning is not the promised morning: the firm waits, and no lane claims it.
     h.f.advance('2026-09-19T09:05:00.000Z');
-    await tickOf(h.f)();
+    await morningOf(h.f)();
     expect(readDay(h.f, '2026-09-19')).toMatchObject({ lanes: { replies: [], callbacks: [], due: [], new: [] } });
   });
 });

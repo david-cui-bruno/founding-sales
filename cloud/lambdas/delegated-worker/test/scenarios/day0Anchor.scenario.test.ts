@@ -8,7 +8,7 @@ import { runScheduler } from '../../src/scheduler';
 import { dueKey, readDuePointers } from '../../src/v1/dayBuild';
 import { createAccountFirmSource } from '../../src/v1/firms';
 import { createSequencePort, sequenceKey, sequenceRecordSchema } from '../../src/v1/sequence';
-import { enrollFirm, listedRouteId, putCallEvidence, putFirm, putTerritoryPolicy, riFirm, setPosture, tickOf } from './firmFixtures';
+import { enrollFirm, listedRouteId, putCallEvidence, putFirm, putTerritoryPolicy, riFirm, setPosture, morningOf } from './firmFixtures';
 import { approveWithFooter, setPostalAddress } from './sendFixtures';
 import { v1Fixture } from './v1Fixture';
 
@@ -85,7 +85,7 @@ describe('day 0 is the first call, not the enrollment', () => {
     const h = await enrolledFirm(MORNING);
     // The enrollment anchored the firm ten days ago, so its day-7 email instant is already three days in the past.
     expect(ENROLLMENT_DAY_SEVEN < CALL_AT).toBe(true);
-    await tickOf(h.f)();
+    await morningOf(h.f)();
 
     h.f.advance(CALL_AT);
     expect(await log(h, { outcome: 'voicemail', observedAt: CALL_AT, note: 'Left a message with the front desk.' }))
@@ -111,7 +111,7 @@ describe('day 0 is the first call, not the enrollment', () => {
 
   it('keeps a never-called firm in the new lane and out of the due lane, however old its due pointer is', async () => {
     const h = await enrolledFirm(MORNING);
-    await tickOf(h.f)();
+    await morningOf(h.f)();
     // The pointer really is due: the enrollment's day-0 instant is ten days old and the range read returns it.
     const firms = await createAccountFirmSource(h.f.store).listFirms();
     expect((await readDuePointers(h.f.store, firms, MORNING)).map(pointer => pointer.firmId)).toEqual([FIRM_ID]);

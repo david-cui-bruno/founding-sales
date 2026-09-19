@@ -3,7 +3,7 @@ import { RemoteGoogleAuthorization } from '../../src/remoteGoogleAuthorization';
 import { createSourceCoordinator } from '../../src/sourceCoordinator';
 import { createProductionServices } from '../../src/handler';
 import { dayKey } from '../../src/v1/dayBuild';
-import { putFirm, putTerritoryPolicy, riFirm, setPosture } from './firmFixtures';
+import { dayBuildOf, putFirm, putTerritoryPolicy, riFirm, setPosture } from './firmFixtures';
 import { v1Fixture } from './v1Fixture';
 
 /**
@@ -44,7 +44,7 @@ describe('the legacy research switch on the old tick', () => {
     expect(explicit.some(report => report.phases.territoryBackfill === 'completed')).toBe(true);
   });
 
-  it('takes the research, configurations and territory backfill phases off the tick when the switch is false, and still builds the list', async () => {
+  it('takes the research, configurations and territory backfill phases off the tick when the switch is false, and no longer builds the list', async () => {
     const f = v1Fixture(AFTER_FIVE_EASTERN);
     const { bearer } = await f.pairDevice();
     await setPosture(f, bearer, 'RI', 'calling');
@@ -62,7 +62,10 @@ describe('the legacy research switch on the old tick', () => {
     // The two phases that are nobody's research still take their turn.
     expect(reports.some(report => report.phases.submittedCommands === 'completed')).toBe(true);
     expect(reports.some(report => report.phases.publications === 'completed')).toBe(true);
-    // And the morning list, which is not a phase, was still built.
+    // The morning list is not this tick's any more (S6 moved it to the runner's `day.build` job), so the tick
+    // leaves it unbuilt whatever this switch says. The one builder is the one the scheduler enqueues.
+    expect(f.db.inspect(dayKey('2026-09-18'))).toBeUndefined();
+    expect((await dayBuildOf(f)()).outcome.outcome).toBe('built');
     expect(f.db.inspect(dayKey('2026-09-18'))).toBeDefined();
   });
 

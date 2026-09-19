@@ -3,15 +3,15 @@ import { attemptRecordSchema } from '../../../../../src/shared/contracts/v1Contr
 import { listAttempts } from '../../src/v1/attempts';
 import { backfillDuePointers, dueKey, duePointerSchema, LIST_BUILT_EVENT, NEW_FIRMS_PER_DAY, readDuePointers } from '../../src/v1/dayBuild';
 import { createAccountFirmSource, parseUsAddress } from '../../src/v1/firms';
-import { enrollFirm, listedRouteId, putCallEvidence, putDay, putFirm, putMailSuppression, putRetiredRoute, putTerritoryPolicy, readDay, riFirm, setPosture, tickOf } from './firmFixtures';
+import { enrollFirm, listedRouteId, putCallEvidence, putDay, putFirm, putMailSuppression, putRetiredRoute, putTerritoryPolicy, readDay, riFirm, setPosture, dayBuildOf } from './firmFixtures';
 import { v1Fixture } from './v1Fixture';
 
 const AT = '2026-09-17T15:00:00.000Z';
 
-describe('day.build inside the existing tick (S1 item 4): one list per Eastern day, four lanes, nothing repeated', () => {
+describe('day.build on the seam the runner owns (S1 item 4, moved off the old tick at S6): one list per Eastern day, four lanes, nothing repeated', () => {
   it('builds at the first tick at or after 05:00 Eastern, not before; the second tick does nothing; the next day is disjoint (EDT)', async () => {
     const f = v1Fixture('2026-09-10T12:00:00.000Z');
-    const store = f.store; const tick = tickOf(f);
+    const store = f.store; const buildDay = dayBuildOf(f);
     const policy = await putTerritoryPolicy(store, '2026-09-01T12:00:00.000Z');
     const device = await f.pairDevice();
     await setPosture(f, device.bearer, 'RI', 'calling');
@@ -36,14 +36,14 @@ describe('day.build inside the existing tick (S1 item 4): one list per Eastern d
 
     // 04:55 EDT (08:55Z): the list is not due yet. Nothing is written, no attempt, no line.
     f.advance('2026-09-18T08:55:00.000Z');
-    const early = await tick();
+    const early = await buildDay();
     expect(readDay(f, '2026-09-18')).toBeNull();
     expect(early.lines.some(line => line.includes(LIST_BUILT_EVENT))).toBe(false);
     expect(await listAttempts(store, { kind: 'list' })).toEqual([]);
 
     // 05:05 EDT (09:05Z): the first tick at or after 05:00 builds the day.
     f.advance('2026-09-18T09:05:00.000Z');
-    const built = await tick();
+    const built = await buildDay();
     const day = readDay(f, '2026-09-18');
     expect(day).not.toBeNull();
     expect(day!.builtAt).toBe('2026-09-18T09:05:00.000Z');
@@ -81,7 +81,7 @@ describe('day.build inside the existing tick (S1 item 4): one list per Eastern d
 
     // 05:10 EDT: the same day is built once. Nothing changes, no second attempt.
     f.advance('2026-09-18T09:10:00.000Z');
-    const again = await tick();
+    const again = await buildDay();
     expect(readDay(f, '2026-09-18')).toEqual(day);
     expect(await listAttempts(store, { kind: 'list' })).toHaveLength(1);
     expect(again.lines.some(entry => entry.includes(LIST_BUILT_EVENT))).toBe(false);
@@ -89,7 +89,7 @@ describe('day.build inside the existing tick (S1 item 4): one list per Eastern d
     // The next morning: five firms research found overnight are the new lane; nothing from the 18th repeats.
     for (let n = 41; n <= 45; n++) await putFirm(store, riFirm(n, { researchedAt: '2026-09-18T20:00:00.000Z' }));
     f.advance('2026-09-19T09:05:00.000Z');
-    await tick();
+    await buildDay();
     const next = readDay(f, '2026-09-19');
     expect(next!.lanes.new.map(entry => entry.firmId).sort()).toEqual(['account-ri-41', 'account-ri-42', 'account-ri-43', 'account-ri-44', 'account-ri-45']);
     for (const entry of next!.lanes.new) expect(fresh).not.toContain(entry.firmId);
@@ -98,12 +98,12 @@ describe('day.build inside the existing tick (S1 item 4): one list per Eastern d
 
   it('caps the new lane at 30 and counts the rest as over_cap', async () => {
     const f = v1Fixture('2026-09-10T12:00:00.000Z');
-    const store = f.store; const tick = tickOf(f);
+    const store = f.store; const buildDay = dayBuildOf(f);
     await putTerritoryPolicy(store, '2026-09-01T12:00:00.000Z');
     await setPosture(f, (await f.pairDevice()).bearer, 'RI', 'calling');
     for (let n = 1; n <= 34; n++) await putFirm(store, riFirm(n));
     f.advance('2026-09-18T09:05:00.000Z');
-    await tick();
+    await buildDay();
     const day = readDay(f, '2026-09-18')!;
     expect(day.lanes.new).toHaveLength(NEW_FIRMS_PER_DAY);
     expect(NEW_FIRMS_PER_DAY).toBe(30);
@@ -113,25 +113,25 @@ describe('day.build inside the existing tick (S1 item 4): one list per Eastern d
 
   it('builds under the winter offset too: 04:55 EST does nothing, 05:05 EST builds', async () => {
     const f = v1Fixture('2026-12-01T12:00:00.000Z');
-    const store = f.store; const tick = tickOf(f);
+    const store = f.store; const buildDay = dayBuildOf(f);
     await putTerritoryPolicy(store, '2026-09-01T12:00:00.000Z');
     await setPosture(f, (await f.pairDevice()).bearer, 'RI', 'calling');
     await putFirm(store, riFirm(1, { researchedAt: '2026-11-30T12:00:00.000Z' }));
     f.advance('2026-12-10T09:55:00.000Z');
-    await tick();
+    await buildDay();
     expect(readDay(f, '2026-12-10')).toBeNull();
     f.advance('2026-12-10T10:05:00.000Z');
-    await tick();
+    await buildDay();
     expect(readDay(f, '2026-12-10')).toMatchObject({ date: '2026-12-10', builtAt: '2026-12-10T10:05:00.000Z', lanes: { new: [{ firmId: 'account-ri-1', reason: 'new_firm' }] } });
   });
 
   it('with no posture anywhere the list still builds, empty, and every firm is counted under no_posture', async () => {
     const f = v1Fixture('2026-09-10T12:00:00.000Z');
-    const store = f.store; const tick = tickOf(f);
+    const store = f.store; const buildDay = dayBuildOf(f);
     await putTerritoryPolicy(store, '2026-09-01T12:00:00.000Z');
     for (let n = 1; n <= 3; n++) await putFirm(store, riFirm(n));
     f.advance('2026-09-18T09:05:00.000Z');
-    await tick();
+    await buildDay();
     expect(readDay(f, '2026-09-18')).toMatchObject({ lanes: { replies: [], callbacks: [], due: [], new: [] }, poolSize: 0, excluded: { no_posture: 3 } });
   });
 });

@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { TERRITORY_CLEARANCE_STATEMENTS, TERRITORY_RULES_REVISION } from '../../../../../src/shared/contracts/territoryClearanceContract';
 import { diagnosticsViewSchema, settingsViewSchema, statePostureRecordSchema, type StatePostureRecord } from '../../../../../src/shared/contracts/v1Contract';
 import { postureReviewAt, readPostures, stateClearance, stateKey } from '../../src/v1/postures';
-import { putFirm, putTerritoryPolicy, readDay, riFirm, setPosture, tickOf } from './firmFixtures';
+import { putFirm, putTerritoryPolicy, readDay, riFirm, setPosture, morningOf } from './firmFixtures';
 import { v1Fixture } from './v1Fixture';
 
 /**
@@ -110,7 +110,7 @@ describe('set_state_posture and the STATE# record', () => {
 
   it('a posture older than twelve months no longer clears its state: the build excludes every firm there as state_not_cleared / posture_review_overdue', async () => {
     const f = v1Fixture('2025-09-01T12:00:00.000Z');
-    const store = f.store; const tick = tickOf(f);
+    const store = f.store; const tick = morningOf(f);
     await putTerritoryPolicy(store, '2025-08-01T12:00:00.000Z');
     // Decided a year and seventeen days before the morning in question.
     await setPosture(f, (await f.pairDevice('Old MacBook')).bearer, 'RI', 'calling');

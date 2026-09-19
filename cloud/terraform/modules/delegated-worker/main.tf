@@ -170,6 +170,9 @@ resource "aws_lambda_function" "delegated_worker" {
       # The S4 switch. False makes the old tick skip its research, configurations and territory backfill phases;
       # the tick itself and S1's list build keep running. It enables nothing on its own.
       DELEGATED_WORKER_LEGACY_RESEARCH_ENABLED = var.delegated_worker_legacy_research_enabled ? "true" : "false"
+      # The S6 switch. False stops the old tick entirely; the function keeps answering every route it served
+      # before, and the morning list is built by the scheduler's day job. It enables nothing on its own.
+      DELEGATED_WORKER_LEGACY_TICK_ENABLED = var.delegated_worker_legacy_tick_enabled ? "true" : "false"
     }
   }
   lifecycle {
