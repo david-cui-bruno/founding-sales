@@ -11,10 +11,10 @@ export function isNonterminalEnrollment(enrollment: Pick<Enrollment, 'state'>): 
   return NONTERMINAL_ENROLLMENT_STATES.has(enrollment.state);
 }
 
-const channelTitle: Record<OneCompanyCampaignChannel, string> = { call: 'Call campaign', linkedin: 'LinkedIn campaign' };
+const channelTitle: Record<OneCompanyCampaignChannel, string> = { call: 'Call campaign' };
 
 /**
- * List copy for one saved campaign version. The two exact one-company templates read as company · channel, a version the
+ * List copy for one saved campaign version. The exact one-company call template reads as company · channel, a version the
  * worker derived from the territory call policy as company · Territory policy v<revision>, each with a plain state (Draft,
  * Approved, or Enrolled while a nonterminal enrollment exists); every other version keeps its saved campaign id and the
  * recorded approval wording. Presentation only: it never decides eligibility, approval or enrollment.

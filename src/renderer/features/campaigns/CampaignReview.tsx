@@ -2,7 +2,6 @@ import type { DailySnapshot } from '../../../shared/contracts/dailyContract';
 import { describeCampaignTemplate } from '../../../shared/contracts/callCampaignDraft';
 const copy = {
   call: { template: 'manual-call template', step: 'call step', draft: 'Call campaign draft', reviewed: 'Reviewed call campaign', approval: 'Approval alone does not enroll a company or place a call.' },
-  linkedin: { template: 'manual-LinkedIn template', step: 'LinkedIn step', draft: 'LinkedIn campaign draft', reviewed: 'Reviewed LinkedIn campaign', approval: 'Approval alone does not enroll a company or send a message.' },
 } as const;
 export function CampaignReview({
   campaign,

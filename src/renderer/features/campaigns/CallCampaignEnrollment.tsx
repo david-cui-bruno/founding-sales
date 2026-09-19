@@ -54,14 +54,11 @@ function duplicate(snapshot: DailySnapshot, accountId: string) {
   return snapshot.campaigns.some(c => c.enrollments.some(e => e.accountId === accountId
     && ['active', 'held', 'paused', 'conversation'].includes(e.state)));
 }
-// Same target rule as linkedInService.validateLinkedInTarget and ManualLinkedInPreparation:
-// a business profile or an existing thread. Company pages can never be prepared, so they are not offered.
-const linkedInTarget = /^https:\/\/(?:www\.)?linkedin\.com\/(?:in\/[A-Za-z0-9_-]+|messaging\/thread\/[A-Za-z0-9_-]+)\/?$/;
 /** Company-level routes only (PR #51 precedent): the latest unambiguous business route with no person binding.
  *  `listed` is a business directory entry (a Google Business Profile) recorded by the worker; like published and confirmed it
  *  describes source verification only, never contact permission. */
 const eligibleVerification = ['published', 'confirmed', 'listed'];
-function eligibleRoutes(routes: AccountRoute[], channel: OneCompanyCampaignChannel): AccountRoute[] {
+function eligibleRoutes(routes: AccountRoute[]): AccountRoute[] {
   const latest = new Map<string, AccountRoute>();
   const ambiguous = new Set<string>();
   for (const route of routes) {
@@ -69,8 +66,7 @@ function eligibleRoutes(routes: AccountRoute[], channel: OneCompanyCampaignChann
     if (!prior || route.version > prior.version) { latest.set(route.id, route); ambiguous.delete(route.id); }
     else if (route.version === prior.version && !same(route, prior)) ambiguous.add(route.id);
   }
-  return [...latest.values()].filter(route => !ambiguous.has(route.id) && route.channel === (channel === 'call' ? 'phone' : 'linkedin')
-    && (channel === 'call' || linkedInTarget.test(route.value))
+  return [...latest.values()].filter(route => !ambiguous.has(route.id) && route.channel === 'phone'
     && route.personId === null && route.purpose === 'business' && eligibleVerification.includes(route.verification));
 }
 const copy = {
@@ -84,17 +80,6 @@ const copy = {
     request: 'I want this company added to the manual call queue', enroll: 'Enroll company for manual call',
     held: 'Campaign action held. A current workspace, exact call template, active worker and known execution version with no pending commands are required.',
     approved: 'Call campaign approved. Not enrolled.', enrolled: 'Company enrolled for a manual call. No call placed.',
-  },
-  linkedin: {
-    region: 'LinkedIn campaign enrollment', purpose: 'Enrollment adds a due manual LinkedIn preparation item. It does not send a message, connect, or grant contact permission.',
-    review: 'I reviewed this company, offer, LinkedIn step and lifetime limits', approve: 'Approve LinkedIn campaign',
-    route: 'Business LinkedIn route', selectRoute: 'Select a business LinkedIn route',
-    // No LinkedIn admission step exists, so the only path is a saved source or an import, then the same Campaigns button.
-    noRoutes: 'No published business LinkedIn route is saved for this company on the worker\'s copy of its record. There is no LinkedIn review step yet. Import a company LinkedIn profile route on Accounts, then on Campaigns use "Send updated saved record to worker". Enrollment stays unavailable until then.',
-    scope: 'This LinkedIn queue supports company-level business profile routes only. Person-specific routes and company pages are not available here.',
-    request: 'I want this company added to the manual LinkedIn queue', enroll: 'Enroll company for manual LinkedIn note',
-    held: 'Campaign action held. A current workspace, exact LinkedIn template, active worker and known execution version with no pending commands are required.',
-    approved: 'LinkedIn campaign approved. Not enrolled.', enrolled: 'Company enrolled for a manual LinkedIn note. No message sent.',
   },
 } as const;
 function projected(snapshot: DailySnapshot, proof: Proof): boolean {
@@ -140,7 +125,7 @@ export function CallCampaignEnrollment({ api, snapshot, config, campaign, readEr
   const [reviewed, setReviewed] = useState(false);
   const [requested, setRequested] = useState(false);
   const lifetime = useRef(0);
-  const routes = eligibleRoutes(account?.routes ?? [], channel);
+  const routes = eligibleRoutes(account?.routes ?? []);
   const route = routes.find(r => r.id === routeId);
   const guard = JSON.stringify([snapshot?.workspaceId, snapshot?.workflowMode, snapshot?.freshness?.kind, snapshot?.issues,
     readError, config, campaign, account, current?.ownerStatus, current?.campaigns.map(c => c.enrollments), routeId]);
@@ -199,7 +184,7 @@ export function CallCampaignEnrollment({ api, snapshot, config, campaign, readEr
         if (fresh.workspaceId !== current.workspaceId || !configured(fresh, freshConfig) || !same(freshConfig, parsedConfig.data)
           || !freshCampaign || !same(freshCampaign, canonical) || !same(freshAccount, account)
           || !freshOwner || !same(freshOwner, owner)
-          || (approved && (duplicate(fresh, template.accountId) || !route || !eligibleRoutes(freshAccount?.routes ?? [], channel).some(r => same(r, route))))) throw Error('Held');
+          || (approved && (duplicate(fresh, template.accountId) || !route || !eligibleRoutes(freshAccount?.routes ?? []).some(r => same(r, route))))) throw Error('Held');
         const command: Command = {
           commandId: crypto.randomUUID(), workspaceId: current.workspaceId!, accountId: template.accountId,
           expectedAuthorityGeneration: freshOwner.authority!.generation, expectedVersion: freshOwner.executionVersion!, kind: 'campaign-command',

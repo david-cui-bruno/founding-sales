@@ -58,10 +58,9 @@ export type NativeDeskRouteProps = {
   surface?: Surface;
 };
 /** Local-only composition. Failed refresh preserves the editor and its DOM. */
-/** Route-owned copy for the two exact one-company templates. Every other version is an opaque read-only preview. */
+/** Route-owned copy for the exact one-company call template. Every other version is an opaque read-only preview. */
 const oneCompanyCampaignCopy: Record<OneCompanyCampaignChannel, { campaign: string; outreach: string }> = {
   call: { campaign: 'call campaign', outreach: 'places a call' },
-  linkedin: { campaign: 'LinkedIn campaign', outreach: 'sends a LinkedIn note' },
 };
 /** Scope, transport and allocation codes describe the paused cloud side. Every other issue is a real local record problem. */
 const OPERATIONAL_ISSUE_CODES = new Set<DailySnapshot['issues'][number]['code']>(['scope_unknown', 'scope_mismatch', 'transport_incomplete', 'call_allocation_unconfigured', 'workload_conflict']);
@@ -723,7 +722,7 @@ export function NativeDesk({
                 ? 'Company context, from stored evidence.'
                 : campaignCopy
                   ? `Save an unapproved ${campaignCopy.campaign} draft for one worker-owned company. Review and enrollment are separate explicit actions. Neither ${campaignCopy.outreach}.`
-                  : 'Save an unapproved call campaign draft for one worker-owned company, or a LinkedIn campaign draft. Review and enrollment are separate explicit actions. Neither places a call or sends a LinkedIn note.'}
+                  : 'Save an unapproved call campaign draft for one worker-owned company. Review and enrollment are separate explicit actions. Neither places a call.'}
           </p>
         </div>
         <div className="native-desk__header-status">

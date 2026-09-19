@@ -3,7 +3,7 @@ import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
 import type { DailySnapshot } from '../../../shared/contracts/dailyContract';
 import { CampaignReview } from './CampaignReview';
-import { createCallCampaignDraft, createLinkedInCampaignDraft } from '../../../shared/contracts/callCampaignDraft';
+import { createCallCampaignDraft } from '../../../shared/contracts/callCampaignDraft';
 import { dailyFixture, nativeDeskReviewFixture } from '../today/nativeDesk.fixture';
 afterEach(cleanup);
 it('shows the verifiable single-company template, but holds altered or opaque audience hashes', () => {
@@ -84,28 +84,20 @@ it('retains exact version facts, enrollment and caps in a read-only preview', ()
   for (const a of snapshot.answers) if (a.kind === 'requested_followup') expect(screen.queryByText(a.draft.body)).toBeNull();
 });
 
-it('labels the exact single-company LinkedIn template as a LinkedIn draft, then as reviewed once approved, never as a call', () => {
+it('holds a saved LinkedIn-typed version as an opaque read-only preview, never as a LinkedIn or call template', () => {
   const snapshot = dailyFixture();
-  const version = createLinkedInCampaignDraft({ campaignId: 'li-campaign', versionId: 'li-version', stepId: 'initial-note', accountId: 'a', offer: 'Discuss maintenance follow-up.' });
-  const campaign: DailySnapshot['campaigns'][number] = { version, snapshotHash: 'c'.repeat(64), caps: [], enrollments: [] };
-  const view = render(<CampaignReview campaign={campaign} accounts={snapshot.accounts} />);
-  expect(screen.getByRole('heading', { name: 'LinkedIn campaign draft' })).toBeTruthy();
-  expect(screen.getByText(/manual-LinkedIn template/)).toBeTruthy();
-  expect(screen.getByText('Explicitly selected company: Account A (a).')).toBeTruthy();
-  expect(screen.getByText('manual initial linkedin draft template v1')).toBeTruthy();
-  expect(screen.getByText(/Review this frozen company, offer, LinkedIn step and lifetime limits before a separate enrollment/)).toBeTruthy();
-  expect(screen.queryByText(/call step/)).toBeNull();
-  expect(screen.queryByText(/Audience definition unavailable/)).toBeNull();
-  expect(screen.queryByRole('button')).toBeNull();
-  view.rerender(<CampaignReview campaign={{ ...campaign, version: { ...version, approvedAt: '2026-09-09T12:00:00.000Z' } }} accounts={snapshot.accounts} />);
-  expect(screen.getByRole('heading', { name: 'Reviewed LinkedIn campaign' })).toBeTruthy();
-  expect(screen.getByText(/Approval alone does not enroll a company or send a message/)).toBeTruthy();
-  view.rerender(<CampaignReview campaign={{ ...campaign, version: { ...version, channelCaps: { call: 1, email: 0, linkedin: 1 } } }} accounts={snapshot.accounts} />);
+  const call = createCallCampaignDraft({ campaignId: 'li-campaign', versionId: 'li-version', stepId: 'initial-note', accountId: 'a', offer: 'Discuss maintenance follow-up.' });
+  // Exactly what the retired LinkedIn template produced. Since 18 September 2026 the review names no LinkedIn template.
+  const version = { ...call, steps: [{ ...call.steps[0]!, channel: 'linkedin' as const }], channelCaps: { call: 0, email: 0, linkedin: 1 } };
+  render(<CampaignReview campaign={{ version, snapshotHash: 'c'.repeat(64), caps: [], enrollments: [] }} accounts={snapshot.accounts} />);
   expect(screen.getByText(/Read-only preview/)).toBeTruthy();
   expect(screen.getByText(/Audience definition unavailable/)).toBeTruthy();
+  expect(screen.queryByText(/LinkedIn/)).toBeNull();
+  expect(screen.queryByText(/call step/)).toBeNull();
+  expect(screen.queryByRole('button')).toBeNull();
 });
 
-it('says in plain words what to do before approval for both templates, keeps the approved-state line, and holds opaque versions honestly', () => {
+it('says in plain words what to do before approval for the call template, keeps the approved-state line, and holds opaque versions honestly', () => {
   const snapshot = dailyFixture();
   const call = createCallCampaignDraft({ campaignId: 'draft-campaign', versionId: 'draft-version', stepId: 'initial-call', accountId: 'a', offer: 'Discuss maintenance follow-up.' });
   const campaign: DailySnapshot['campaigns'][number] = { version: call, snapshotHash: 'c'.repeat(64), caps: [], enrollments: [] };
@@ -115,10 +107,6 @@ it('says in plain words what to do before approval for both templates, keeps the
   view.rerender(<CampaignReview campaign={{ ...campaign, version: { ...call, approvedAt: '2026-09-09T12:00:00.000Z' } }} accounts={snapshot.accounts} />);
   expect(screen.getByText('Frozen approval recorded: 2026-09-09T12:00:00.000Z. Approval alone does not enroll a company or place a call.')).toBeTruthy();
   expect(screen.queryByText(/Not yet approved/)).toBeNull();
-  const linkedIn = createLinkedInCampaignDraft({ campaignId: 'li-campaign', versionId: 'li-version', stepId: 'initial-note', accountId: 'a', offer: 'Discuss maintenance follow-up.' });
-  view.rerender(<CampaignReview campaign={{ ...campaign, version: linkedIn }} accounts={snapshot.accounts} />);
-  expect(screen.getByText('Not yet approved. Review the frozen offer, audience, step and limits above, then approve below. Approval alone does not enroll a company or send a message.')).toBeTruthy();
-  expect(screen.queryByText(/place a call/)).toBeNull();
   // An opaque version has no approve control below it, so it must not be told to approve below.
   view.rerender(<CampaignReview campaign={nativeDeskReviewFixture().campaigns[0]} accounts={snapshot.accounts} />);
   expect(screen.getByText('Not approved. Approval is not available for this read-only version. Nothing here enrolls a company or starts outreach.')).toBeTruthy();

@@ -11,7 +11,7 @@ import {
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { NativeDeskRoute, type NativeDeskApi } from './NativeDeskRoute';
 import { firstUseFixture, dailyFixture, nativeDeskFixture, nativeDeskReviewFixture } from './nativeDesk.fixture';
-import { createCallCampaignDraft, createLinkedInCampaignDraft } from '../../../shared/contracts/callCampaignDraft';
+import { createCallCampaignDraft } from '../../../shared/contracts/callCampaignDraft';
 import type { DailySnapshot } from '../../../shared/contracts/dailyContract';
 import type { Enrollment } from '../../../shared/contracts/campaignContract';
 afterEach(cleanup);
@@ -475,31 +475,26 @@ it('already-paused edit does not autosave after teardown and active same-workspa
 
 it('names the selected one-company campaign by its channel in the route-owned header and detail bar', async () => {
   const offer = 'Discuss a simpler maintenance follow-up workflow.';
-  const linkedIn = createLinkedInCampaignDraft({ campaignId: 'LinkedIn campaign', versionId: 'li-version', stepId: 'li-step', accountId: 'a', offer });
   const call = createCallCampaignDraft({ campaignId: 'Call campaign', versionId: 'call-version', stepId: 'call-step', accountId: 'a', offer });
   const entry = (version: DailySnapshot['campaigns'][number]['version']): DailySnapshot['campaigns'][number] => ({ version, snapshotHash: 'a'.repeat(64), caps: [], enrollments: [] });
-  const f = nativeDeskFixture(dailyFixture({ campaigns: [entry(linkedIn), entry({ ...linkedIn, id: 'li-approved', approvedAt: '2026-09-09T12:00:00.000Z' }), entry(call), ...nativeDeskReviewFixture().campaigns] }));
+  const f = nativeDeskFixture(dailyFixture({ campaigns: [entry(call), entry({ ...call, id: 'call-approved', approvedAt: '2026-09-09T12:00:00.000Z' }), ...nativeDeskReviewFixture().campaigns] }));
   const view = render(<NativeDeskRoute surface="campaigns" firstUse={f.firstUse} api={f.api} />);
   const header = await screen.findByText(/Review and enrollment are separate explicit actions/);
   const row = (id: string) => view.container.querySelector<HTMLButtonElement>(`[data-row-key="campaign:${id}"]`)!;
   const bar = () => view.container.querySelector('.native-desk__detail-bar span')?.textContent;
-  fireEvent.click(row('li-version'));
-  expect(bar()).toBe('Saved LinkedIn campaign draft');
-  expect(header.textContent).toBe('Save an unapproved LinkedIn campaign draft for one worker-owned company. Review and enrollment are separate explicit actions. Neither sends a LinkedIn note.');
-  fireEvent.click(row('li-approved'));
-  expect(bar()).toBe('Reviewed LinkedIn campaign');
-  // The exact call template keeps its existing labels.
   fireEvent.click(row('call-version'));
   expect(bar()).toBe('Saved call campaign draft');
   expect(header.textContent).toBe('Save an unapproved call campaign draft for one worker-owned company. Review and enrollment are separate explicit actions. Neither places a call.');
-  // Anything other than the two exact templates stays an opaque read-only preview, and the surface names both templates.
-  const both = 'Save an unapproved call campaign draft for one worker-owned company, or a LinkedIn campaign draft. Review and enrollment are separate explicit actions. Neither places a call or sends a LinkedIn note.';
+  fireEvent.click(row('call-approved'));
+  expect(bar()).toBe('Reviewed call campaign');
+  // Anything other than the exact call template stays an opaque read-only preview, and the surface names only that template.
+  const fallback = 'Save an unapproved call campaign draft for one worker-owned company. Review and enrollment are separate explicit actions. Neither places a call.';
   fireEvent.click(row('version'));
   expect(bar()).toBe('Read-only campaign preview');
-  expect(header.textContent).toBe(both);
+  expect(header.textContent).toBe(fallback);
   fireEvent.click(screen.getByRole('button', { name: 'Close details' }));
   expect(bar()).toBeUndefined();
-  expect(header.textContent).toBe(both);
+  expect(header.textContent).toBe(fallback);
   expect(f.calls.some((c) => c.method === 'forbidden')).toBe(false);
 });
 
@@ -507,12 +502,11 @@ it('lists saved one-company campaigns by company, channel and plain state, and e
   const offer = 'Discuss a simpler maintenance follow-up workflow.';
   const approvedAt = '2026-09-09T12:00:00.000Z';
   const call = createCallCampaignDraft({ campaignId: '4b1f0d6e-0000-4000-8000-000000000001', versionId: 'call-version', stepId: 'call-step', accountId: 'a', offer });
-  const linkedIn = createLinkedInCampaignDraft({ campaignId: '4b1f0d6e-0000-4000-8000-000000000002', versionId: 'li-version', stepId: 'li-step', accountId: 'b', offer });
   const enrollment: Enrollment = { id: 'enrollment', accountId: 'a', selectedRouteId: 'phone', selectedRouteVersion: 1, personId: null, campaignVersionId: 'call-enrolled',
     currentStepId: 'call-step', version: 1, state: 'held', executionContextId: 'context', contextRevision: 1, startedAt: approvedAt };
   const entry = (version: DailySnapshot['campaigns'][number]['version'], enrollments: Enrollment[] = []): DailySnapshot['campaigns'][number] => ({ version, snapshotHash: 'a'.repeat(64), caps: [], enrollments });
   // Account a has no route at all on the worker's copy of its record, so the enrollment dropdown is empty.
-  const f = nativeDeskFixture(dailyFixture({ campaigns: [entry(call), entry({ ...call, id: 'call-approved', approvedAt }), entry({ ...call, id: 'call-enrolled', approvedAt }, [enrollment]), entry(linkedIn), ...nativeDeskReviewFixture().campaigns] }));
+  const f = nativeDeskFixture(dailyFixture({ campaigns: [entry(call), entry({ ...call, id: 'call-approved', approvedAt }), entry({ ...call, id: 'call-enrolled', approvedAt }, [enrollment]), ...nativeDeskReviewFixture().campaigns] }));
   const view = render(<NativeDeskRoute surface="campaigns" firstUse={f.firstUse} api={f.api} />);
   await screen.findByText(/Review and enrollment are separate explicit actions/);
   const row = (id: string) => view.container.querySelector<HTMLButtonElement>(`[data-row-key="campaign:${id}"]`)!;
@@ -520,8 +514,7 @@ it('lists saved one-company campaigns by company, channel and plain state, and e
   expect(label('call-version')).toEqual(['Account A · Call campaign', 'Version 1 · Draft']);
   expect(label('call-approved')).toEqual(['Account A · Call campaign', 'Version 1 · Approved']);
   expect(label('call-enrolled')).toEqual(['Account A · Call campaign', 'Version 1 · Enrolled']);
-  expect(label('li-version')).toEqual(['Account B · LinkedIn campaign', 'Version 1 · Draft']);
-  // Anything other than the two exact templates keeps its saved id and recorded approval state; the browser oracle asserts both.
+  // Anything other than the exact call template keeps its saved id and recorded approval state; the browser oracle asserts both.
   expect(label('version')).toEqual(['Fixture campaign', 'Version 1 · not approved']);
   expect(screen.queryByText(call.campaignId)).toBeNull();
   fireEvent.click(row('call-approved'));
