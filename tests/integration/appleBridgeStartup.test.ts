@@ -86,10 +86,6 @@ function dependencies(
       events.push('helper:create');
       return supervisor;
     },
-    registerAppleSpikeIpc: (service) => {
-      events.push(`apple-ipc:register:${service.getStatus().enabled}`);
-      return () => events.push('apple-ipc:unregister');
-    },
     closeDatabase: () => events.push('database:close'),
   };
 }
@@ -127,7 +123,6 @@ describe('Apple bridge application lifecycle', () => {
         appVersion: '1.0.0',
         userDataPath: '/Users/founder/Library/Application Support/Callie',
         appleBridge: APPLE_OPTIONS,
-        appleSpikeEnabled: false,
         createWindow: () => {
           events.push('window');
         },
@@ -135,7 +130,7 @@ describe('Apple bridge application lifecycle', () => {
       dependencies(events, supervisor),
     );
 
-    expect(events.slice(0, 9)).toEqual([
+    expect(events.slice(0, 8)).toEqual([
       'database:open',
       'database:migrate',
       'database:recover',
@@ -143,7 +138,6 @@ describe('Apple bridge application lifecycle', () => {
       'health-ipc:register',
       'helper:create',
       'helper:start',
-      'apple-ipc:register:false',
       'window',
     ]);
     await app.shutdown();
@@ -163,7 +157,6 @@ describe('Apple bridge application lifecycle', () => {
         appVersion: '1.0.0',
         userDataPath: '/Users/founder/Library/Application Support/Callie',
         appleBridge: APPLE_OPTIONS,
-        appleSpikeEnabled: false,
         createWindow: () => {
           events.push('window');
         },
@@ -188,7 +181,6 @@ describe('Apple bridge application lifecycle', () => {
         appVersion: '1.0.0',
         userDataPath: '/Users/founder/Library/Application Support/Callie',
         appleBridge: APPLE_OPTIONS,
-        appleSpikeEnabled: false,
         createWindow: () => {
           events.push('window');
         },
@@ -204,7 +196,7 @@ describe('Apple bridge application lifecycle', () => {
     await app.shutdown();
   });
 
-  it('unregisters bridge IPC, stops the helper, then closes FoundationRuntime SQLite', async () => {
+  it('unregisters IPC, stops the helper, then closes FoundationRuntime SQLite', async () => {
     const events: string[] = [];
     const supervisor = fakeSupervisor(events);
     const app = await startApplication(
@@ -212,7 +204,6 @@ describe('Apple bridge application lifecycle', () => {
         appVersion: '1.0.0',
         userDataPath: '/Users/founder/Library/Application Support/Callie',
         appleBridge: APPLE_OPTIONS,
-        appleSpikeEnabled: false,
         createWindow: () => {
           events.push('window');
         },
@@ -222,10 +213,9 @@ describe('Apple bridge application lifecycle', () => {
 
     await Promise.all([app.shutdown(), app.shutdown()]);
 
-    expect(events.slice(-5)).toEqual([
+    expect(events.slice(-4)).toEqual([
       'outbound:dispose',
       'health-ipc:unregister',
-      'apple-ipc:unregister',
       'helper:stop',
       'database:close',
     ]);
@@ -234,7 +224,6 @@ describe('Apple bridge application lifecycle', () => {
   it('aggregates every cleanup failure while preserving unregister, helper, database order', async () => {
     const events: string[] = [];
     const healthUnregisterError = new Error('health unregister failed');
-    const appleUnregisterError = new Error('apple unregister failed');
     const helperStopError = new Error('helper stop failed');
     const databaseCloseError = new Error('database close failed');
     const supervisor = fakeSupervisor(events);
@@ -247,10 +236,6 @@ describe('Apple bridge application lifecycle', () => {
       events.push('health-ipc:unregister');
       throw healthUnregisterError;
     };
-    startupDependencies.registerAppleSpikeIpc = () => () => {
-      events.push('apple-ipc:unregister');
-      throw appleUnregisterError;
-    };
     startupDependencies.closeDatabase = () => {
       events.push('database:close');
       throw databaseCloseError;
@@ -260,7 +245,6 @@ describe('Apple bridge application lifecycle', () => {
         appVersion: '1.0.0',
         userDataPath: '/Users/founder/Library/Application Support/Callie',
         appleBridge: APPLE_OPTIONS,
-        appleSpikeEnabled: false,
         createWindow: () => {
           events.push('window');
         },
@@ -273,20 +257,18 @@ describe('Apple bridge application lifecycle', () => {
     expect(cleanupError).toBeInstanceOf(AggregateError);
     expect((cleanupError as AggregateError).errors).toEqual([
       healthUnregisterError,
-      appleUnregisterError,
       helperStopError,
       databaseCloseError,
     ]);
-    expect(events.slice(-5)).toEqual([
+    expect(events.slice(-4)).toEqual([
       'outbound:dispose',
       'health-ipc:unregister',
-      'apple-ipc:unregister',
       'helper:stop',
       'database:close',
     ]);
   });
 
-  it('optional helper failure never enables Phone and spike-registration failure uses the common outbound close', async () => {
+  it('optional helper failure never enables Phone', async () => {
     const events: string[] = []; const helperStart = deferred<void>();
     const startupDependencies = dependencies(events, fakeSupervisor(events, () => helperStart.promise));
     let service!: OutboundCommandServiceApi;
@@ -297,11 +279,5 @@ describe('Apple bridge application lifecycle', () => {
     expect((await service.getCapabilities()).phoneHandoff.reasonCode).toBe('inbound_safety_unwired');
     await app.shutdown();
     expect((await service.getCapabilities()).phoneHandoff.reasonCode).toBe('workspace_inactive');
-    const failure = new Error('spike registration');
-    const second = dependencies(events, fakeSupervisor(events));
-    second.registerAppleSpikeIpc = () => { throw failure; };
-    await expect(startApplication({ appVersion: '1', userDataPath: '/fixture/spike-failure', appleBridge: APPLE_OPTIONS,
-      createWindow: () => { throw new Error('window must not open'); } }, second)).rejects.toBe(failure);
-    expect(events.slice(-4)).toEqual(['outbound:dispose', 'health-ipc:unregister', 'helper:stop', 'database:close']);
   });
 });

@@ -38,11 +38,6 @@ import {
   type AppleBridgeSupervisorApi,
   type AppleBridgeSupervisorOptions,
 } from './appleBridge/appleBridgeSupervisor';
-import {
-  AppleSpikeService,
-  type AppleSpikeServiceApi,
-} from './appleBridge/appleSpikeService';
-import { registerAppleSpikeIpc } from './appleBridge/registerAppleSpikeIpc';
 import { BackupService, type BackupServiceOptions } from './backup/backupService';
 import type { VerifiedBackup } from './backup/verifiedBackup';
 import { closeDatabase, openDatabase } from './db/database';
@@ -355,10 +350,6 @@ export type ApplicationStartupDependencies = FoundationRuntimeDependencies & {
   createAppleBridgeSupervisor(
     options: AppleBridgeSupervisorOptions,
   ): AppleBridgeSupervisorApi;
-  registerAppleSpikeIpc?(
-    service: AppleSpikeServiceApi,
-    isTrustedRendererUrl?: (url: string) => boolean,
-  ): () => void;
 };
 
 export type ApplicationStartupOptions = {
@@ -367,7 +358,6 @@ export type ApplicationStartupOptions = {
   signal?: AbortSignal;
   isTrustedRendererUrl?: (url: string) => boolean;
   appleBridge?: AppleBridgeSupervisorOptions;
-  appleSpikeEnabled?: boolean;
   phoneRouteMode?: 'native' | 'fixture';
   /** Trusted paired workspace identity. Absence leaves account dispatch unavailable. */
   expectedWorkspaceId?: string;
@@ -431,7 +421,6 @@ const defaultDependencies: ApplicationStartupDependencies = {
   createEmailService: (runtime,userDataPath,providers,expectedWorkspaceId) => createEmailService({databaseGate:runtime,expectedWorkspaceId,
     providers:providers ?? createOutreachProviders({directory:join(userDataPath,'outreach'),safeStorage,openExternal:url=>shell.openExternal(url)})}),
   createAppleBridgeSupervisor: (options) => new AppleBridgeSupervisor(options),
-  registerAppleSpikeIpc,
   createBackgroundSync,
   subscribeWindowFocus: listener => { app.on('browser-window-focus', listener); return () => { app.removeListener('browser-window-focus', listener); }; },
   notifyRenderer: channel => { for (const window of BrowserWindow.getAllWindows()) { if (!window.isDestroyed()) window.webContents.send(channel); } },
@@ -474,7 +463,6 @@ export async function startApplication(
   let unregisterTemplates:(()=>void)|undefined;
   let unregisterLinkedIn:(()=>void)|undefined;
   let unregisterApplicationIpc: (() => void) | undefined;
-  let unregisterAppleSpikeIpc: (() => void) | undefined;
   let appleBridgeSupervisor: AppleBridgeSupervisorApi | undefined;
   let backupService: Pick<BackupService, 'start' | 'shutdown' | 'createBackup' | 'listAvailableBackups'> | undefined;
   let recoveryService: (RecoveryProvider & { shutdown(): Promise<void> }) | undefined;
@@ -572,14 +560,6 @@ export async function startApplication(
         cleanupErrors.push(error);
       } finally {
         unregisterApplicationIpc = undefined;
-      }
-
-      try {
-        unregisterAppleSpikeIpc?.();
-      } catch (error) {
-        cleanupErrors.push(error);
-      } finally {
-        unregisterAppleSpikeIpc = undefined;
       }
 
       try {
@@ -694,8 +674,7 @@ export async function startApplication(
     stage = 'email';
     email = dependencies.createEmailService?.(runtime,options.userDataPath,borrowedProviders,expectedWorkspaceId);
     if(outboundClosed)email?.dispose();
-    // The composed v1 email service sends drafts but owns no inbound adapter, and
-    // the optional Apple spike is not a synchronization adapter. This explicit
+    // The composed v1 email service sends drafts but owns no inbound adapter. This explicit
     // discovery result must be extended by future inbound owners before activation.
     stage = 'inbound';
     startupInboundRegistry?.initialize(delegation?[delegation.adapter]:[]);
@@ -784,13 +763,6 @@ export async function startApplication(
       } catch {
         // Apple integration is optional; supervisor status remains the safe diagnostic.
       }
-      unregisterAppleSpikeIpc = dependencies.registerAppleSpikeIpc?.(
-        new AppleSpikeService({
-          enabled: options.appleSpikeEnabled === true,
-          bridge: appleBridgeSupervisor,
-        }),
-        options.isTrustedRendererUrl,
-      );
       throwIfStartupCancelled(options.signal);
     }
     stage = 'background_sync';

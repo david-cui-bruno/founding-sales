@@ -262,9 +262,6 @@ if (!started && ownsSingleInstanceLock) {
           expectedIdentifier: CALLIE_APPLE_BRIDGE_IDENTIFIER,
           parentExecutablePath: process.execPath,
         },
-        appleSpikeEnabled: app.commandLine.hasSwitch(
-          'apple-feasibility-spike',
-        ),
         phoneRouteMode: app.commandLine.hasSwitch('use-mock-keychain') ? 'fixture' : 'native',
         isTrustedRendererUrl: rendererTrust.isTrustedRendererUrl,
         signal,

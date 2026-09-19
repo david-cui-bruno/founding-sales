@@ -219,7 +219,8 @@ for (const mode of ['meeting_first', 'legacy'] as const) for (const theme of ['l
         await page.evaluate(() => window.applicationPresentation.startPresentationFrames());
         await navigateActualRoute(page, route);
         await assertActualDestination(page, route, mode);
-        await expect.poll(async () => (await calls(page)).slice(before).some(call => call.method === routeProofs[route].read)).toBe(true);
+        const read = routeProofs[route].read;
+        if (read !== null) await expect.poll(async () => (await calls(page)).slice(before).some(call => call.method === read)).toBe(true);
         await page.evaluate(() => window.applicationPresentation.frame());
         const sample = await presentationSample(page);
         const transition = await page.evaluate(() => window.applicationPresentation.stopPresentationFrames());

@@ -360,7 +360,6 @@ describe('main process startup', () => {
         expectedIdentifier: 'com.callie.foundersales.applebridge',
         parentExecutablePath: process.execPath,
       },
-      appleSpikeEnabled: false,
       phoneRouteMode: 'native',
       signal: expect.anything(),
       isTrustedRendererUrl: expect.any(Function),
@@ -396,21 +395,6 @@ describe('main process startup', () => {
     expect(shutdown).toHaveBeenCalledTimes(1);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(mocks.appQuit).toHaveBeenCalledTimes(1);
-  });
-
-  it('enables the spike only from the exact Electron command-line switch', async () => {
-    mocks.commandLineHasSwitch.mockImplementation(
-      (name: string) => name === 'apple-feasibility-spike',
-    );
-    mocks.loadUrl.mockResolvedValue(undefined);
-
-    await import('../../src/main');
-    await settleStartup();
-
-    expect(mocks.commandLineHasSwitch).toHaveBeenCalledWith('apple-feasibility-spike');
-    expect(mocks.startApplication.mock.calls[0]?.[0]).toMatchObject({
-      appleSpikeEnabled: true,
-    });
   });
 
   it('selects the fixture phone route under the mock-keychain test switch', async () => {
