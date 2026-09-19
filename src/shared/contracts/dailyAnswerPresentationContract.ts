@@ -1,8 +1,6 @@
-import { sha256Utf8 } from '../crypto/sha256';
 import { z } from 'zod';
 import { accountIdSchema as id, accountInstantSchema as instant, accountRouteSchema } from './accountContract';
 import { requestedFollowupDraftSchema, originalCallRefSchema, type RequestedFollowupDraft } from './requestedFollowupContract';
-import { linkedInDraftSchema, type LinkedInDraft } from './linkedInContract';
 
 const text = z.string().min(1).max(2000).refine(v => v.trim().length > 0 && !v.includes('\0'));
 const evidenceIds = z.array(id).min(1).max(100).refine(v => new Set(v).size === v.length);
@@ -17,8 +15,6 @@ export type DisplayContact = z.infer<typeof displayContactSchema>;
 export type DisplayIssue = z.infer<typeof displayIssueSchema>;
 export const requestedDisplayBindingSchema = z.strictObject({ ...requestedFollowupDraftSchema.shape, workspaceId: id })
   .omit({ revision: true, subject: true, body: true, evidenceIds: true, generation: true, updatedAt: true });
-export const manualDisplayBindingSchema = linkedInDraftSchema.pick({ id: true, workspaceId: true, accountId: true, enrollmentId: true, campaignVersionId: true,
-  personId: true, stepId: true, routeId: true, routeVersion: true, contextRevision: true, executionContextId: true, targetHash: true });
 const issues = z.array(displayIssueSchema).max(8).refine(v => new Set(v.map(i => `${i.field}:${i.reason}`)).size === v.length);
 const callContextSchema = z.strictObject({ basis: z.literal('human_reported_call_outcome'), originalCall: originalCallRefSchema,
   outcome: z.literal('connected'), observedAt: instant, noteText: z.string().min(1).max(10000).refine(v => v.trim().length > 0 && !v.includes('\0')).nullable(), linkedContact: displayContactSchema.nullable() });
@@ -42,26 +38,12 @@ export const requestedAnswerPresentationSchema = z.strictObject({ kind: z.litera
       && (!call.linkedContact || call.linkedContact.basis === 'original_call_route' && call.linkedContact.route.accountId === b.accountId && call.linkedContact.route.channel === 'phone')
       && roleCurrent(call.linkedContact, p.asOf));
 });
-export const manualAnswerPresentationSchema = z.strictObject({ kind: z.literal('manual_linkedin'), asOf: instant, binding: manualDisplayBindingSchema,
-  contact: displayContactSchema.nullable(), issues }).refine(p => {
-  const c = p.contact, b = p.binding;
-  return roleCurrent(c, p.asOf) && (!c || c.basis === 'manual_route' && c.personId === b.personId && c.route.accountId === b.accountId
-    && c.route.id === b.routeId && c.route.version === b.routeVersion && c.route.channel === 'linkedin' && sha256Utf8(c.route.value) === b.targetHash);
-});
 export type RequestedAnswerPresentation = z.infer<typeof requestedAnswerPresentationSchema>;
-export type ManualAnswerPresentation = z.infer<typeof manualAnswerPresentationSchema>;
 /** Display identity only. This does not authorize any operation or require a text revision. */
-export function dailyAnswerPresentationMatches(presentation: unknown, draft: RequestedFollowupDraft | LinkedInDraft, workspaceId: string): boolean {
-  if ('kind' in draft) {
-    const p = requestedAnswerPresentationSchema.safeParse(presentation), d = requestedFollowupDraftSchema.safeParse(draft);
-    if (!p.success || !d.success) return false;
-    const { revision, subject, body, evidenceIds, generation, updatedAt, ...binding } = d.data;
-    void [revision, subject, body, evidenceIds, generation, updatedAt];
-    return equal(p.data.binding, { ...binding, workspaceId });
-  }
-  const p = manualAnswerPresentationSchema.safeParse(presentation), d = linkedInDraftSchema.safeParse(draft);
-  if (!p.success || !d.success || d.data.workspaceId !== workspaceId) return false;
-  const { revision, body, contentHash, state, updatedAt, ...binding } = d.data;
-  void [revision, body, contentHash, state, updatedAt];
-  return equal(p.data.binding, binding);
+export function dailyAnswerPresentationMatches(presentation: unknown, draft: RequestedFollowupDraft, workspaceId: string): boolean {
+  const p = requestedAnswerPresentationSchema.safeParse(presentation), d = requestedFollowupDraftSchema.safeParse(draft);
+  if (!p.success || !d.success) return false;
+  const { revision, subject, body, evidenceIds, generation, updatedAt, ...binding } = d.data;
+  void [revision, subject, body, evidenceIds, generation, updatedAt];
+  return equal(p.data.binding, { ...binding, workspaceId });
 }

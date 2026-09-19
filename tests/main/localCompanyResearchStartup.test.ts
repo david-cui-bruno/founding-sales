@@ -28,7 +28,7 @@ it.each([false, true])('actual null-start public IPC activation, pairing=%s, sha
     loadWorkspaceKey: async () => createTestWorkspaceKey(), prepareEncryptedDatabase: async () => undefined,
     openDatabase, closeDatabase, migrateToLatest,
     createDomainRuntime: db => { database = db; return new DomainRuntime({ database: db, clock: { now: () => new Date().toISOString() }, ids: { next: randomUUID } }); },
-    createHealthService: options => new HealthService(options), registerLinkedInIpc: () => () => undefined,
+    createHealthService: options => new HealthService(options),
     registerApplicationIpc, registerOutreachIpc,
     ...(paired ? { createPairingStore: () => ({ load: async () => ({ endpoint: 'https://worker.example.test', workspaceId: 'fictional-workspace', pairingId: '11111111-1111-4111-8111-111111111111', credential: 'a'.repeat(43), emergencyCredential: 'b'.repeat(43), generation: 0, scopes: ['commands:write' as const, 'events:read' as const] }), redeem: async () => unexpected() }) } : {}),
     createResearchProviders: () => {

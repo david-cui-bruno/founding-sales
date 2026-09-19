@@ -9,7 +9,6 @@ import { accountFingerprint } from '../accounts/accountEvidence';
 import { AccountRepository } from '../accounts/accountRepository';
 import { CampaignRepository } from '../campaign/campaignRepository';
 import { DelegationRepository } from '../../delegation/delegationRepository';
-import { LinkedInRepository } from '../../linkedin/linkedInRepository';
 import { dailyAccountSchema, dailyAnswerSchema, dailyCampaignSchema, dailyMeetingSchema, dailyOwnerStatusSchema, dailyTransportSchema, type DailySnapshot } from '../../../shared/contracts/dailyContract';
 import { accountReplyDraftSchema, threadProjectionSchema } from '../../../shared/contracts/mailThreadContract';
 import { requestedFollowupDraftSchema, requestedApprovalStatusSchema } from '../../../shared/contracts/requestedFollowupContract';
@@ -220,20 +219,6 @@ export class DailyReadService {
       }
     }
     if (heldTemplateEmails.length) input.calls = { ...input.calls, heldTemplateEmails };
-    for (const row of rows("SELECT id,enrollment_id,account_id,revision FROM manual_linkedin_drafts WHERE workspace_id=? AND state<>'closed' ORDER BY account_id,id", workspaceId)) {
-      if (!scoped(row.account_id)) continue;
-      const value = parse(() => {
-        const repository = new LinkedInRepository({ database, workspaceId, clock, enrollmentId: String(row.enrollment_id) });
-        const draft = repository.requireRevision(String(row.id), Number(row.revision));
-        const record = repository.actionRecord(draft.id, draft.revision);
-        const handoffId = repository.handoffId(record.identity);
-        const handoff = handoffId ? delegation.getManualHandoff(handoffId) : null;
-        return dailyAnswerSchema.parse({ kind: 'manual_linkedin', accountId: row.account_id, draft, capability: 'manual_only', recovery: {
-          draftId: draft.id, revision: draft.revision, approvalCommandId: record.approvalCommandId,
-          attempts: record.commandIds.map(commandId => ({ commandId, receipt: delegation.commandStatus(commandId) })), handoffId, started: handoff?.consumedAt != null } });
-      });
-      if (value) input.approvals.push(withDailyAnswerPresentation(database, workspaceId, generatedAt, value));
-    }
     for (const row of rows('SELECT pairing_id AS pairingId,revision,state,started_at AS startedAt,completed_at AS completedAt FROM delegated_transport_state WHERE workspace_id=? ORDER BY pairing_id', workspaceId)) {
       const value = parse(() => dailyTransportSchema.parse(row));
       if (value) { input.transport.push(value); if (value.state !== 'complete') issue('transport_incomplete'); }

@@ -1,4 +1,4 @@
-import { requestedAnswerPresentationSchema, manualAnswerPresentationSchema, dailyAnswerPresentationMatches } from './dailyAnswerPresentationContract';
+import { requestedAnswerPresentationSchema, dailyAnswerPresentationMatches } from './dailyAnswerPresentationContract';
 import { z } from 'zod';
 import { accountSchema, accountClaimSchema, accountRouteSchema, accountPortfolioSchema } from './accountContract';
 import { dailyAccountCallPlanSchema } from './todayContract';
@@ -6,7 +6,6 @@ import { campaignVersionSchema, campaignCapSnapshotSchema, enrollmentSchema } fr
 import { authorityStateSchema, commandReceiptSchema } from './delegationContract';
 import { requestedFollowupDraftSchema, requestedApprovalStatusSchema } from './requestedFollowupContract';
 import { accountReplyDraftSchema, threadProjectionSchema } from './mailThreadContract';
-import { linkedInDraftSchema, linkedInRecoverySchema } from './linkedInContract';
 import { meetingOutcomePayloadSchema } from './meetingContract';
 import { usageSummarySchema } from './usageContract';
 const id = z.string().min(1).max(255);
@@ -18,10 +17,8 @@ export const dailyAccountSchema = z.strictObject({ account: accountSchema, claim
 export const dailyAnswerSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('requested_followup'), accountId: id, draft: requestedFollowupDraftSchema, presentation: requestedAnswerPresentationSchema.optional().catch(undefined), approval: requestedApprovalStatusSchema.nullable(), capability: z.literal('held'), reason: z.literal('requires_owner_preflight') }),
   z.strictObject({ kind: z.literal('reply'), accountId: id, thread: threadProjectionSchema, draft: accountReplyDraftSchema.nullable(), stale: z.boolean(), capability: z.literal('held'), reason: z.literal('reply_capability_unverified') }),
-  z.strictObject({ kind: z.literal('manual_linkedin'), accountId: id, draft: linkedInDraftSchema, presentation: manualAnswerPresentationSchema.optional().catch(undefined), recovery: linkedInRecoverySchema, capability: z.literal('manual_only') }),
 ]).refine(a => {
   if (a.kind === 'requested_followup') return a.draft.accountId === a.accountId;
-  if (a.kind === 'manual_linkedin') return a.draft.accountId === a.accountId && a.recovery.draftId === a.draft.id && a.recovery.revision === a.draft.revision;
   return a.thread.thread.accountId === a.accountId && (!a.draft || a.draft.accountId === a.accountId && a.draft.threadId === a.thread.thread.providerThreadId && a.draft.mailboxSubject === a.thread.thread.mailboxSubject);
 }, 'answer_identity_mismatch').transform(a => {
   if (a.kind === 'reply' || !('presentation' in a)) return a;
@@ -64,7 +61,6 @@ export const dailySnapshotSchema = z.strictObject({ workspaceId: id.nullable(), 
     && s.calls.accountIds.every(id => ids.has(id))
     && [...s.answers, ...s.meetings, ...s.ownerStatus].every(item => ids.has(item.accountId))
     && (s.callbacks ?? []).every(callback => ids.has(callback.accountId))
-    && s.answers.every(a => a.kind !== 'manual_linkedin' || a.draft.workspaceId === s.workspaceId)
     && s.campaigns.every(c => c.version.cohortAccountIds.every(id => ids.has(id)));
 }, 'daily_scope_mismatch').transform(s => ({ ...s, answers: s.answers.map(a => {
   if (a.kind === 'reply' || !a.presentation || a.presentation.binding.workspaceId === s.workspaceId && a.presentation.asOf === s.freshness.generatedAt) return a;

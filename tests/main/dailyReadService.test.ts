@@ -6,7 +6,6 @@ import { DailyReadService } from '../../src/main/domain/today/dailyReadService';
 import { buildDailySnapshot } from '../../src/main/domain/today/dailyProjection';
 import { DelegationRepository } from '../../src/main/delegation/delegationRepository';
 import { requestedFollowupFixture } from '../fixtures/requestedFollowup';
-import { createLinkedInFixture } from '../fixtures/linkedInWorkspace';
 import { openDatabase, closeDatabase } from '../../src/main/db/database';
 import { AccountRepository } from '../../src/main/domain/accounts/accountRepository';
 
@@ -116,19 +115,6 @@ it('keeps saved requested followup identity but drops an unbound approval rather
   } finally { f.close(); }
 });
 
-it('recovers exact saved D2 manual draft without preparing, opening, copying or consuming a handoff', async () => {
-  const f = await createLinkedInFixture(); try {
-    const draft = f.drafts.create(f.drafts.requireStep(f.version.steps[0]!.id, 1), 'Existing manual text');
-    const services = createDomainServices({ database: f.db, clock: f.clock, ids: { next: () => { throw Error('Unexpected ID'); } }, expectedWorkspaceId: f.workspaceId });
-    const before = f.db.raw.prepare('SELECT total_changes() AS n').get();
-    const answer = services.daily.get().answers.find(a => a.kind === 'manual_linkedin');
-    if (answer?.kind !== 'manual_linkedin') throw Error('missing manual answer');
-    const { presentation, ...saved } = answer;
-    expect(presentation?.contact).toMatchObject({ personId: f.personId, displayName: 'Fictional Person' });
-    expect(saved).toEqual({ kind: 'manual_linkedin', accountId: f.account.id, draft, capability: 'manual_only', recovery: { draftId: draft.id, revision: 1, approvalCommandId: null, attempts: [], handoffId: null, started: false } });
-    expect(f.db.raw.prepare('SELECT total_changes() AS n').get()).toEqual(before);
-  } finally { f.close(); }
-});
 
 it('preserves an exact saved reply, marks stale context, and reads the same revision after encrypted reopen', async () => {
   const f = await fixture(); try {

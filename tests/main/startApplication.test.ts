@@ -240,15 +240,15 @@ describe('startApplication', () => {
     const loaded=deferred<import('../../src/main/delegation/pairingStore').StoredPairing|null>();
     dependencies.openDatabase=()=>f.db;dependencies.createPairingStore=()=>({load:()=>loaded.promise,redeem:async()=>{throw Error('No pairing operation authorized');}});
     const email={invalidate:vi.fn(),dispose:vi.fn()} as unknown as ReturnType<typeof import('../../src/main/outreach/emailService').createEmailService>;
-    let passedWorkspace:string|undefined;let delegated:import('../../src/main/delegation/delegationRuntime').DelegationRuntime|undefined;let linkedInRegistrations=0;
+    let passedWorkspace:string|undefined;let delegated:import('../../src/main/delegation/delegationRuntime').DelegationRuntime|undefined;
     dependencies.createEmailService=(_runtime,_path,_providers,workspace)=>{passedWorkspace=workspace;return email;};
-    dependencies.registerOutreachIpc=options=>{delegated=options.delegation;return ()=>undefined;};dependencies.registerLinkedInIpc=()=>{linkedInRegistrations++;return ()=>undefined;};
+    dependencies.registerOutreachIpc=options=>{delegated=options.delegation;return ()=>undefined;};
     const options:ApplicationStartupOptions={appVersion:'fixture',userDataPath:'/fictional-pairing-test',expectedWorkspaceId:'trusted-workspace',createWindow:()=>undefined};
     const starting=startApplication(options,dependencies);options.expectedWorkspaceId='mutated-after-start';
     if(mode==='unavailable')loaded.reject(Error('Protected configuration unavailable'));
     else loaded.resolve({endpoint:'https://worker.example.test',workspaceId:mode==='matching'?'trusted-workspace':'other-workspace',pairingId:'11111111-1111-4111-8111-111111111111',credential:'a'.repeat(43),emergencyCredential:'b'.repeat(43),generation:0,scopes:['commands:write','events:read']});
     const app=await starting;
-    try{expect(passedWorkspace).toBe('trusted-workspace');expect(await delegated!.status()).toMatchObject(mode==='matching'?{state:'paused',workspaceId:'trusted-workspace'}:{state:'unconfigured',workspaceId:null});expect(linkedInRegistrations).toBe(mode==='matching'?1:0);}finally{await app.shutdown();f.close();}
+    try{expect(passedWorkspace).toBe('trusted-workspace');expect(await delegated!.status()).toMatchObject(mode==='matching'?{state:'paused',workspaceId:'trusted-workspace'}:{state:'unconfigured',workspaceId:null});}finally{await app.shutdown();f.close();}
   });
 
   it('owns email service registration, lock invalidation and disposal before database shutdown', async () => {
@@ -918,7 +918,6 @@ describe('startApplication background sync (D3)', () => {
       closeDatabase: () => events.push('close'),
       createPairingStore: () => ({ load: async () => ({ ...pairing, scopes: [...pairing.scopes] }), redeem: async () => { throw Error('No pairing operation authorized'); } }),
       registerOutreachIpc: () => () => undefined,
-      registerLinkedInIpc: () => () => undefined,
       createEmailService: () => ({ invalidate: vi.fn(), dispose: vi.fn() } as unknown as ReturnType<typeof import('../../src/main/outreach/emailService').createEmailService>),
     };
     return { dependencies, close: () => f.close() };

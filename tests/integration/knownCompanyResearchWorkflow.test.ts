@@ -123,7 +123,7 @@ async function fixture(mode: Mode = 'known', maxCostMicros = 100, onExternal: ()
     openDatabase, closeDatabase, migrateToLatest,
     createDomainRuntime: db => { database = db; return new DomainRuntime({ database: db, clock, ids: { next: randomUUID } }); },
     createHealthService: options => new HealthService(options),
-    registerLinkedInIpc: () => () => undefined, registerOutreachIpc,
+    registerOutreachIpc,
     ...(persisted ? { createPairingStore: () => ({ load: async () => ({
       endpoint: 'https://worker.example.test', workspaceId: config.workspaceId,
       pairingId: '11111111-1111-4111-8111-111111111111', credential: 'a'.repeat(43), emergencyCredential: 'b'.repeat(43),
