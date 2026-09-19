@@ -4,7 +4,7 @@ import { dayBuildJobId, jobBackoffUntil, jobDedupId, jobKey, jobRecordSchema, JO
 import { runQueuedJob } from '../../src/runner';
 import { runScheduler, readSchedulerState, type SchedulerDependencies } from '../../src/scheduler';
 import { readSend } from '../../src/v1/send';
-import { seqKey, sequenceRecordSchema } from '../../src/v1/sequenceBridge';
+import { sequenceKey, sequenceRecordSchema } from '../../src/v1/sequence';
 import { setSendingLimit } from '../../src/v1/templates';
 import { enrollOnEmailStep, gmailFetch, mailboxAccess, sendWorkspace } from './sendFixtures';
 import { putTerritoryPolicy, setPosture, putDay } from './firmFixtures';
@@ -126,7 +126,7 @@ describe('scheduler: what is due, once, inside the cap', () => {
     queue.sent.length = 0;
     const third = await runScheduler(deps(f, queue), AbortSignal.timeout(5000));
     expect(third.skipped.find(entry => entry.jobId === jobId)).toEqual({ jobId, reason: 'backoff' });
-    expect(sequenceRecordSchema.parse(f.db.inspect(seqKey(firm.firmId))).heldSteps.map(step => step.code)).toEqual(['provider_error']);
+    expect(sequenceRecordSchema.parse(f.db.inspect(sequenceKey(firm.firmId))).heldSteps.map(step => step.code)).toEqual(['provider_error']);
     expect(jobBackoffUntil({ attempt: 1, lastAttemptAt: '2026-09-18T12:06:00.000Z' })).toBe('2026-09-18T13:06:00.000Z');
 
     // Past the window it is offered again.

@@ -1,7 +1,7 @@
 import type { TransactWriteItem } from '@aws-sdk/client-dynamodb';
 import { z } from 'zod';
 import { accountInstantSchema } from '../../../../../src/shared/contracts/accountContract';
-import { campaignVersionSchema, type CampaignVersion } from '../../../../../src/shared/contracts/campaignContract';
+import { campaignStepSchema, type CampaignVersion } from '../../../../../src/shared/contracts/campaignContract';
 import { advanceTerritorySequence, decideTerritoryReentry, deriveTerritoryCampaignVersion, selectTerritoryReplacementRoute,
   territoryEnrollmentId, territoryEntriesSchema, territoryFirstStepId, territoryHeldSteps,
   type TerritoryCallPolicy, type TerritoryEntries, type TerritorySequenceAdvance } from '../../../../../src/shared/contracts/territoryCallPolicyContract';
@@ -37,10 +37,26 @@ export const RETIRED_DUE_TTL_SECONDS = 3 * 24 * 3600;
 
 const instant = accountInstantSchema;
 const stepId = z.string().min(1).max(200);
-/** The steps of the firm's derived campaign version, frozen when the firm entered the sequence. */
-const sequenceStepSchema = campaignVersionSchema.shape.steps;
-export const sequenceHeldStepSchema = z.strictObject({ stepId, code: attemptReasonSchema, templateId: z.enum(['T1', 'T2', 'T3', 'T4', 'T5']).optional() });
+/**
+ * The steps of the firm's derived campaign version, frozen when the firm entered the sequence. The version's own
+ * invariants (a day-zero initial call, one id per step, the cap arithmetic) were checked where the version was
+ * derived; here the steps are a record of what was frozen, so the array carries no minimum. Empty means no version
+ * has been read for this firm yet — a mail job seeded the record off the old enrollment pair — and the first logged
+ * outcome re-derives the steps from the standing policy.
+ */
+const sequenceStepSchema = z.array(campaignStepSchema).max(100);
+export const sequenceTemplateIdSchema = z.enum(['T1', 'T2', 'T3', 'T4', 'T5']);
+/** One step the cadence walked past or the fence refused: the closed code, the template frozen at entry, and when. */
+export const sequenceHeldStepSchema = z.strictObject({ stepId, code: attemptReasonSchema,
+  templateId: sequenceTemplateIdSchema.optional(), at: instant.optional() });
 export type SequenceHeldStep = z.infer<typeof sequenceHeldStepSchema>;
+/**
+ * One step that went out. The send's own identity travels with it, so the durable audit on the sequence and the
+ * `SEND#` fence name the same send: a step in `sentSteps` is a step the fence accepted, never one it merely tried.
+ */
+export const sequenceSentStepSchema = z.strictObject({ stepId, sentAt: instant,
+  templateId: sequenceTemplateIdSchema.optional(), jobId: z.string().min(1).max(200).optional() });
+export type SequenceSentStep = z.infer<typeof sequenceSentStepSchema>;
 
 /**
  * `SEQ#<firmId>`. Under 2 KB: the frozen steps, where the firm stands, the phone the sequence dials, the email steps
@@ -60,10 +76,15 @@ export const sequenceRecordSchema = z.strictObject({
   nextDueAt: instant.nullable(),
   restingUntil: instant.nullable(),
   state: z.enum(['active', 'paused', 'stopped']),
+  /**
+   * Why the sequence is paused or stopped, as a closed code David reads on Today (design section 5). Null while it
+   * is running. `replied` is the mail poller waiting for his decision; `opt_out` and `reply_stop` are permanent.
+   */
+  holdCode: attemptReasonSchema.nullable(),
   entries: territoryEntriesSchema,
   routeId: z.string().min(1).max(200).nullable(),
   heldSteps: z.array(sequenceHeldStepSchema).max(40),
-  sentSteps: z.array(stepId).max(40),
+  sentSteps: z.array(sequenceSentStepSchema).max(40),
   lastAdvance: attemptReasonSchema.nullable(),
   updatedAt: instant,
 });
@@ -159,7 +180,7 @@ export function startSequenceRecord(input: { policy: TerritoryCallPolicy; firmId
     version: 1, firmId: input.firmId, versionId: version.id, enrollmentId: territoryEnrollmentId(input.policy, input.firmId),
     steps: version.steps, startedAt: input.startedAt, currentStepId: first.id,
     nextDueAt: startAnchoredDueAt(input.startedAt, first.delayHours), restingUntil: null, state: 'active',
-    entries: input.entries ?? 1, routeId: input.routeId,
+    holdCode: null, entries: input.entries ?? 1, routeId: input.routeId,
     heldSteps: territoryHeldSteps(version, input.policy.sequence).map(step => ({ stepId: step.stepId, code: step.reason, ...(step.templateId ? { templateId: step.templateId } : {}) })),
     sentSteps: [], lastAdvance: null, updatedAt: input.startedAt,
   });
@@ -179,7 +200,7 @@ export function sequenceRecordFromEnrollment(input: { policy: TerritoryCallPolic
   return sequenceRecordSchema.parse({
     version: 1, firmId: input.firm.firmId, versionId: version.id, enrollmentId: enrollment.enrollmentId,
     steps: version.steps, startedAt: enrollment.startedAt, currentStepId: enrollment.currentStepId,
-    nextDueAt: enrollment.nextDueAt, restingUntil: enrollment.restingUntil, state, entries: 1,
+    nextDueAt: enrollment.nextDueAt, restingUntil: enrollment.restingUntil, state, holdCode: null, entries: 1,
     routeId: input.firm.phone?.routeId ?? null,
     heldSteps: territoryHeldSteps(version, input.policy.sequence).map(step => ({ stepId: step.stepId, code: step.reason, ...(step.templateId ? { templateId: step.templateId } : {}) })),
     sentSteps: [], lastAdvance: null, updatedAt: input.now,
@@ -281,17 +302,17 @@ export async function advanceAfterCall(store: DynamoStore, input: SequenceAdvanc
       const restarted = startSequenceRecord({ policy: input.policy, firmId: input.firm.firmId, startedAt: input.observedAt, routeId: replacement.id, entries: current.entries });
       next = { ...restarted, versionId: current.versionId, enrollmentId: current.enrollmentId, steps: current.steps,
         currentStepId: current.steps[0]?.id ?? null, nextDueAt: current.steps[0] ? startAnchoredDueAt(input.observedAt, current.steps[0].delayHours) : null,
-        lastAdvance: 'wrong_number_restarted', updatedAt: now };
+        holdCode: null, lastAdvance: 'wrong_number_restarted', updatedAt: now };
     } else {
       const rested = applyCarried(current, 'wrong_number', input.observedAt);
       hold = 'no_phone';
-      next = { ...rested, routeId: null, lastAdvance: 'rest_wrong_number', updatedAt: now };
+      next = { ...rested, routeId: null, holdCode: 'no_phone', lastAdvance: 'rest_wrong_number', updatedAt: now };
     }
   } else if (input.outcome === 'callback') {
     // A callback David promised overrides the cadence's timing entirely: the CALLBACK# pointer leads the callbacks
     // lane on its own day, so the firm keeps its step and carries no due instant until the callback is made.
     next = { ...current, state: current.state === 'stopped' ? 'stopped' : 'active', nextDueAt: null, restingUntil: null,
-      routeId: dialedRouteId, lastAdvance: 'callback_promised', updatedAt: now };
+      holdCode: current.state === 'stopped' ? current.holdCode : null, routeId: dialedRouteId, lastAdvance: 'callback_promised', updatedAt: now };
   } else if (current.state === 'stopped' || restStands) {
     // A stopped firm, and a firm still resting or in its final rest, is never advanced; the call is still recorded.
     next = { ...current, routeId: dialedRouteId, lastAdvance: current.state === 'stopped' ? current.lastAdvance : reentry.kind === 'final_rest' ? 'rest_final' : 'resting', updatedAt: now };
@@ -320,7 +341,8 @@ function applyCarried(current: SequenceRecord, outcome: string, observedAt: stri
   const heldSteps = [...current.heldSteps];
   for (const id of advance.heldStepIds) if (!heldIds.has(id)) heldSteps.push({ stepId: id, code: 'mailbox_not_connected' });
   return { ...current, currentStepId: advance.currentStepId, state: advance.state, nextDueAt: advance.nextDueAt,
-    restingUntil: advance.restingUntil, heldSteps, lastAdvance: advance.reason };
+    restingUntil: advance.restingUntil, heldSteps, lastAdvance: advance.reason,
+    holdCode: advance.state === 'active' ? null : advance.reason };
 }
 
 /**
@@ -344,4 +366,136 @@ export async function duePointerItems(store: DynamoStore, before: SequenceRecord
       existing.rev, { ttl: Math.floor(Date.parse(store.now()) / 1000) + RETIRED_DUE_TTL_SECONDS }));
   }
   return items;
+}
+
+/**
+ * What the send fence, the mail poller and the scheduler ask of the sequence (the ports slice S3 wrote against, now
+ * implemented here, where the record lives). Each operation is one compare-and-set on `SEQ#<firmId>`, with the
+ * `DUE#` pointer written and retired in the same transaction where the step moves; none of them computes a cadence,
+ * because the cadence is `advanceAfterCall` above and its rules are carried, not rewritten.
+ *
+ * The seed is what the caller read off the records it had: it is used only to create a record that does not exist
+ * yet, never to overwrite one that does. So a firm the outcome form already put on the sequence keeps its own
+ * `startedAt`, entry count and steps, whatever the mail job passes.
+ */
+export type SequenceSeed = { firmId: string; enrollmentId: string; startedAt: string; currentStepId: string | null; nextDueAt: string | null };
+export type NextStep = { stepId: string; dueAt: string } | null;
+
+export interface SequencePort {
+  read(firmId: string): Promise<SequenceRecord | null>;
+  /** Records one closed hold on one step. Never advances, never sends: the step stays where it is. */
+  holdStep(input: SequenceSeed & { stepId: string; code: string; templateId?: string | null }): Promise<void>;
+  /** The step went out. Appends it to `sentSteps` and moves the sequence to `next`, writing the `DUE#` pointer with it. */
+  recordSent(input: SequenceSeed & { stepId: string; sentAt: string; next: NextStep; templateId?: string | null; jobId?: string }): Promise<void>;
+  /** A reply arrived: the sequence waits for David's decision under the `replied` hold. */
+  pauseForReply(input: SequenceSeed & { code: string }): Promise<void>;
+  /** David said continue: the hold is cleared and the sequence stands where it did. Never moves a due instant. */
+  resume(input: SequenceSeed): Promise<void>;
+  /** The firm asked to stop, or a bounce ended the route. Permanent for `opt_out` and `reply_stop`. */
+  stop(input: SequenceSeed & { code: string }): Promise<void>;
+}
+
+/** The template id a caller named, when it is one of the five the policy can carry. Pure. */
+const templateOf = (value: string | null | undefined): { templateId: SequenceHeldStep['templateId'] } | Record<string, never> => {
+  const parsed = sequenceTemplateIdSchema.safeParse(value);
+  return parsed.success ? { templateId: parsed.data } : {};
+};
+
+/**
+ * A record for a firm no logged call has put on the sequence yet, from what the caller read off the old enrollment
+ * pair. It carries no frozen steps, because the caller did not read a version: the cadence is not decided from here,
+ * and `advanceAfterCall` re-derives the steps from the standing policy the first time an outcome is logged.
+ */
+function seededRecord(seed: SequenceSeed, now: string): SequenceRecord {
+  return sequenceRecordSchema.parse({
+    version: 1, firmId: seed.firmId, versionId: seed.enrollmentId, enrollmentId: seed.enrollmentId, steps: [],
+    startedAt: seed.startedAt, currentStepId: seed.currentStepId, nextDueAt: seed.nextDueAt, restingUntil: null,
+    state: 'active', holdCode: null, entries: 1, routeId: null, heldSteps: [], sentSteps: [], lastAdvance: null, updatedAt: now,
+  });
+}
+
+/** The one implementation of `SequencePort`, over the `SEQ#` record this module owns. */
+export function createSequencePort(store: DynamoStore): SequencePort {
+  /** One read, one change, one transaction: the record, plus the pointer writes the step's move implies. */
+  const write = async (seed: SequenceSeed, change: (record: SequenceRecord, now: string) => SequenceRecord): Promise<void> => {
+    const now = store.now();
+    const held = await readSequenceRecord(store, seed.firmId);
+    const before = held?.record ?? seededRecord(seed, now);
+    const after = sequenceRecordSchema.parse({ ...change(before, now), updatedAt: now });
+    const items = [store.put(sequenceKey(seed.firmId), after, held?.rev ?? null), ...await duePointerItems(store, before, after)];
+    await store.transact(items);
+  };
+  return {
+    async read(firmId) { return (await readSequenceRecord(store, firmId))?.record ?? null; },
+    async holdStep(input) {
+      await write(input, (record, now) => ({ ...record,
+        heldSteps: [...record.heldSteps.filter(step => step.stepId !== input.stepId),
+          { stepId: input.stepId, code: attemptReasonSchema.parse(input.code), ...templateOf(input.templateId), at: now }].slice(-40) }));
+    },
+    async recordSent(input) {
+      // The step is off the held list and on the sent list. The sequence moves to `next` only when the step that went
+      // out is the one it was standing on: an email step the call cadence already walked past is sent on its own due
+      // instant, and sending it must never rewind the firm to a step it is already past.
+      await write(input, record => {
+        const sent = { ...record,
+          sentSteps: [...record.sentSteps.filter(step => step.stepId !== input.stepId),
+            { stepId: input.stepId, sentAt: input.sentAt, ...templateOf(input.templateId), ...(input.jobId ? { jobId: input.jobId } : {}) }].slice(-40),
+          heldSteps: record.heldSteps.filter(step => step.stepId !== input.stepId) };
+        const standing = record.currentStepId === null || record.currentStepId === input.stepId;
+        if (!standing) return { ...sent, lastAdvance: 'sent' };
+        return { ...sent, currentStepId: input.next?.stepId ?? null, nextDueAt: input.next?.dueAt ?? null,
+          state: input.next ? 'active' : 'paused', holdCode: input.next ? null : 'sequence_complete',
+          lastAdvance: input.next ? 'sent' : 'sequence_complete' };
+      });
+    },
+    async pauseForReply(input) {
+      await write(input, record => ({ ...record, state: 'paused', holdCode: attemptReasonSchema.parse(input.code),
+        nextDueAt: null, lastAdvance: attemptReasonSchema.parse(input.code) }));
+    },
+    async resume(input) {
+      // A stopped sequence is never resumed: suppression is permanent and a stop is the record of it.
+      await write(input, record => record.state === 'stopped' ? record
+        : ({ ...record, state: 'active', holdCode: null, lastAdvance: 'resumed',
+          currentStepId: record.currentStepId ?? input.currentStepId, nextDueAt: record.nextDueAt ?? input.nextDueAt }));
+    },
+    async stop(input) {
+      await write(input, record => ({ ...record, state: 'stopped', holdCode: attemptReasonSchema.parse(input.code),
+        currentStepId: null, nextDueAt: null, restingUntil: null, lastAdvance: attemptReasonSchema.parse(input.code) }));
+    },
+  };
+}
+
+/**
+ * The email steps of the firm's own frozen cadence that are due to go out now: still held, never sent, and past the
+ * start-anchored instant their day offset names. The call cadence walks past an email step and records it as held —
+ * that is the carried rule, unchanged — so this is how a held step becomes a send once the mailbox can send one.
+ * The fence decides whether it actually goes; this only says which steps are due. Pure.
+ */
+export function dueEmailSteps(record: SequenceRecord, now: string): { stepId: string; dueAt: string }[] {
+  if (record.state !== 'active') return [];
+  const sent = new Set(record.sentSteps.map(step => step.stepId));
+  const held = new Set(record.heldSteps.map(step => step.stepId));
+  return record.steps.flatMap(step => {
+    if (step.channel !== 'email' || sent.has(step.id) || !held.has(step.id)) return [];
+    const dueAt = startAnchoredDueAt(record.startedAt, step.delayHours);
+    return dueAt <= now ? [{ stepId: step.id, dueAt }] : [];
+  });
+}
+
+/**
+ * The step the firm stands on and its channel, read from the `SEQ#` record first and the carried enrollment second.
+ * The scheduler asks this before it enqueues a send, so a firm whose sequence came from a logged call is scheduled
+ * on the cadence the record froze rather than skipped for having no old enrollment. Pure over what it is given.
+ */
+export function currentStepOf(record: SequenceRecord | null | undefined, firm: Pick<FirmCard, 'enrollment'>):
+{ stepId: string; channel: 'call' | 'email' | 'linkedin'; source: 'sequence' | 'enrollment' } | null {
+  if (record && record.currentStepId !== null) {
+    const step = record.steps.find(candidate => candidate.id === record.currentStepId);
+    if (step) return { stepId: step.id, channel: step.channel, source: 'sequence' };
+  }
+  const enrollment = firm.enrollment;
+  if (enrollment?.currentStepId && enrollment.currentStepChannel) {
+    return { stepId: enrollment.currentStepId, channel: enrollment.currentStepChannel, source: 'enrollment' };
+  }
+  return null;
 }

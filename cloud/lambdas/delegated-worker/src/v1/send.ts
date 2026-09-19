@@ -14,7 +14,8 @@ import { attemptCode, recordAttempt } from './attempts';
 import { createAccountFirmSource, type FirmCard, type FirmSource } from './firms';
 import type { MailboxAccess } from './mailbox';
 import { posturesByState, readPostures, stateClearance } from './postures';
-import { createSequencePort, createSuppressionPort, type SequencePort, type SuppressionPort, type NextStep } from './sequenceBridge';
+import { createSequencePort, readSequenceRecord, type NextStep, type SequencePort } from './sequence';
+import { createSuppressionPort, type SuppressionPort } from './suppression';
 import { readSendingSettings, readSendUsage, readTemplate, sendAnchorSchema, sendCounterKey, sendCounterSchema, sendingCapForDay,
   SEND_ANCHOR_KEY, SEND_COUNTER_TTL_SECONDS, readPaused, templateApproved } from './templates';
 
@@ -120,7 +121,7 @@ export type SendDependencies = {
   suppression?: SuppressionPort;
 };
 
-/** What a step needs to be sent, read once from the records that are the truth today (S1's adapter and the enrollment pair). */
+/** What a step needs to be sent, read once from the records that are the truth: the `SEQ#` record, or the carried enrollment pair. */
 export type SendContext = {
   firm: FirmCard;
   enrollmentId: string;
@@ -136,8 +137,25 @@ const versionLightSchema = z.object({ id: z.string(), steps: z.array(z.object({ 
 const territoryLightSchema = z.object({ accountId: z.string(), enrollmentId: z.string(), versionId: z.string(),
   heldSteps: z.array(z.object({ stepId: z.string(), templateId: z.string().optional() })).max(40) });
 
-/** The step's context, or null when the firm, the enrollment or the step is not there. Reading is never sending. */
+/**
+ * The step's context, or null when neither shape knows the firm or the step. Read new-first: the `SEQ#` record the
+ * sequence module owns carries the steps frozen at entry and the template each email step was enrolled under, which
+ * is everything a send needs and three fewer reads. The old enrollment pair answers for a firm no logged call has
+ * put on the sequence yet, and stops answering at all once S6 retires it. Reading is never sending.
+ */
 export async function readSendContext(store: DynamoStore, firm: FirmCard, stepId: string): Promise<SendContext | null> {
+  const sequence = await readSequenceRecord(store, firm.firmId);
+  if (sequence && sequence.record.steps.length > 0) {
+    const record = sequence.record;
+    const index = record.steps.findIndex(step => step.id === stepId);
+    if (index < 0) return null;
+    const frozen = record.heldSteps.find(step => step.stepId === stepId) ?? record.sentSteps.find(step => step.stepId === stepId);
+    const templateId = z.enum(REPLY_TEMPLATE_IDS).safeParse(frozen?.templateId);
+    const following = record.steps[index + 1];
+    return { firm, enrollmentId: record.enrollmentId, startedAt: record.startedAt, contextRevision: 0, stepId,
+      templateId: templateId.success ? templateId.data : null,
+      next: following ? { stepId: following.id, dueAt: new Date(Date.parse(record.startedAt) + following.delayHours * 3600000).toISOString() } : null };
+  }
   const territoryRow = await store.get<unknown>(territoryEnrollmentKey(firm.firmId));
   const territory = territoryRow ? territoryLightSchema.safeParse(territoryRow.data) : null;
   if (!territory?.success) return null;
