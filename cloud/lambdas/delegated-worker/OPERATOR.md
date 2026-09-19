@@ -39,6 +39,33 @@ Any error after issuance starts is **uncertain**, not proof that no bootstrap ex
 
 The same argument rules apply, plus: the pairing id must be a lower-case UUID, and `--scopes` must keep both `commands:write` and `events:read` (a rotation may widen the scope set, never narrow it below what desktop pairing needs). After the identity and table checks the tool reads the pairing under the same explicit credential and refuses, without writing, one that is unknown or revoked: `Pairing unknown or revoked. No rotation issued. Reserved output retained.` A dry run verifies neither identity, table nor pairing. The rotation code is written only to the private output; nothing is printed. Do not run two rotations for one pairing at once: each redeems into the next generation and the second redemption makes the first Mac's new credential stale. See `docs/engineering/pairing-rotation.md` for the desktop side and the emergency credential caveat.
 
+## Minting a device code for the /v1 thin client
+
+Slice S0 of the rebuilt core (design of 18 Sep 2026) pairs a thin Mac client with **one device token, all scopes**: no scopes, generations or emergency credential. `--mint-device-code` mints the one-time code that client redeems at `POST /v1/pair/redeem`; the worker stores only `PAIRCODE#<sha256(code)>` with the label and expiry, and after redemption only `DEVICE#<sha256(token)>`. Losing the Mac means minting a new code and revoking the old device (`revoke_device` on `POST /v1/commands`, from any paired client).
+
+The same dry-run default, private output reservation, explicit environment credential, STS identity and DescribeTable checks apply as for a desktop pairing. `--scopes` and `--rotate` do not apply and are refused. `--label` is 1 to 80 printable characters and is what Diagnostics shows for the device; it is not secret, but it is never echoed. `--expires` is 60 to 900 seconds (the code lives at most fifteen minutes). Failed redeems are counted per hour on the worker; after five in an hour every redeem is refused until the hour turns, so mint the code when the client is ready to paste it.
+
+The exact command, dry run first, then the same line with `--execute`. The four identifiers are the ones the desktop pairing code was minted with: the reviewed AWS account, the worker's region, the worker's DynamoDB table and the workspace id (`DELEGATED_WORKSPACE_ID` in the deployed worker's environment).
+
+```sh
+cd cloud/lambdas/delegated-worker && node build-operator.mjs
+node out/operator-pairing.cjs \
+  --mint-device-code \
+  --account <AWS_ACCOUNT_ID> --region <AWS_REGION> --table <WORKER_TABLE> --workspace <WORKSPACE_ID> \
+  --label "David MacBook" --expires 600 \
+  --output <PRIVATE_0700_DIRECTORY>/device-code
+# review the dry-run line (it verifies nothing and writes nothing), then:
+node out/operator-pairing.cjs \
+  --mint-device-code \
+  --account <AWS_ACCOUNT_ID> --region <AWS_REGION> --table <WORKER_TABLE> --workspace <WORKSPACE_ID> \
+  --label "David MacBook" --expires 600 \
+  --output <PRIVATE_0700_DIRECTORY>/device-code --execute
+```
+
+Success prints `Device code saved to private output. No code printed.`; the code is the one line in the output file, to be pasted once into the thin client's pairing screen. Refusals say `No device code issued`; anything after issuance starts is uncertain, exactly as for a desktop pairing, and a code that may have been issued stays redeemable until its expiry.
+
+The three `/v1` routes (`POST /v1/pair/redeem`, `GET /v1/diagnostics`, `POST /v1/commands`) are served by the existing worker Lambda, but the HTTP API provisions explicit route keys only: they need the matching entries in `local.delegated_routes` of `cloud/terraform/modules/delegated-worker/main.tf`, a separately approved Terraform change, before a client can reach them.
+
 ## What this does not do
 
 It does not deploy infrastructure, configure the desktop endpoint, redeem a bootstrap, change research policy, start schedules, approve campaigns, grant Google permissions, send outreach or book meetings. Desktop configuration and pairing require the real reviewed workflow, and a normal restart may be required for its startup-bound connection. Synchronization may submit already approved queued commands and is not read-only.

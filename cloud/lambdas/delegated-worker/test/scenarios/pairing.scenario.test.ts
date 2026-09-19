@@ -4,6 +4,7 @@ import { pairRedeemResponseSchema } from '../../../../../src/shared/contracts/v1
 import { DynamoStore } from '../../src/dynamoStore';
 import { DEVICE_PREFIX, PAIR_FAILURE_LIMIT, PAIRCODE_PREFIX, pairFailureCounterKey, V1Devices, V1PairRefused, V1Unauthenticated } from '../../src/v1/devices';
 import { listAttempts } from '../../src/v1/attempts';
+import { parseOperatorArgs, runOperatorPairing, type OperatorDependencies } from '../../src/operatorPairing';
 import { ConditionalCommandHarness } from '../sdkHarness';
 import { v1Fixture } from './v1Fixture';
 
@@ -113,6 +114,39 @@ describe('device pairing on the store', () => {
 });
 
 describe('POST /v1/pair/redeem on the real handler', () => {
+  /** The exact argument shape David runs, minus his four identifiers; the same values with --execute mint the code. */
+  const mintArgs = ['--mint-device-code', '--account', '123456789012', '--region', 'us-east-1', '--table', 'worker-table',
+    '--workspace', 'ws', '--label', 'David MacBook', '--expires', '600', '--output', '/private/operator/device-code'];
+
+  it('the operator tool mints the code (dry run first, then execute against the same store) and the fresh client redeems it through the handler', async () => {
+    // The fixture clock sits before the real clock the tool stamps expiry with, so the minted code is unexpired here.
+    const f = v1Fixture('2026-09-01T00:00:00.000Z');
+    expect(parseOperatorArgs(mintArgs)).toMatchObject({ mode: 'device_code', label: 'David MacBook', expires: 600, workspace: 'ws', scopes: [], rotate: null, execute: false });
+    let saved: string | null = null;
+    const deps: OperatorDependencies = {
+      reserveOutput: async () => ({ save: async code => { saved = code; }, close: async () => {} }),
+      connect: async () => ({
+        getCallerIdentity: async () => ({ Account: '123456789012', Arn: 'arn:aws:iam::123456789012:user/operator' }),
+        describeTable: async () => ({ TableName: 'worker-table', TableArn: 'arn:aws:dynamodb:us-east-1:123456789012:table/worker-table', TableStatus: 'ACTIVE' }),
+        dynamo: { send: command => f.db.send(command) }, close: () => {},
+      }),
+    };
+    const dry = await runOperatorPairing(mintArgs, deps);
+    expect(dry).toEqual({ exitCode: 0, message: 'Dry-run valid. No IO performed, identity and destination are NOT verified. No device code issued.' });
+    expect(saved).toBeNull(); expect(f.db.dump()).toHaveLength(0);
+    const executed = await runOperatorPairing([...mintArgs, '--execute'], deps);
+    expect(executed).toEqual({ exitCode: 0, message: 'Device code saved to private output. No code printed.' });
+    expect(saved).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(JSON.stringify(f.db.dump())).not.toContain(saved);
+    const redeemed = await f.request('POST', '/v1/pair/redeem', { body: { code: saved } });
+    expect(redeemed.statusCode).toBe(200);
+    const token = pairRedeemResponseSchema.parse(f.json(redeemed));
+    const view = await f.request('GET', '/v1/diagnostics', { authorization: `Bearer ${token.deviceToken}` });
+    expect(view.statusCode).toBe(200);
+    expect(f.json(view)).toMatchObject({ devices: [{ deviceId: token.deviceId, label: 'David MacBook', revokedAt: null }] });
+    expect((await f.request('POST', '/v1/pair/redeem', { body: { code: saved } })).statusCode).toBe(400);
+  });
+
   it('redeems a minted code for a token once, refuses the same code, an expired code and the sixth failure in an hour, and records every attempt', async () => {
     // Minted at 12:50 so the hour boundary falls inside the codes' lifetime, as in the store-level scenario.
     const f = v1Fixture('2026-09-18T12:50:00.000Z');

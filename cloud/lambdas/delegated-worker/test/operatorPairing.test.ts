@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { constants } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { parseOperatorArgs, reservePrivateOutput, runOperatorPairing, type OperatorCloud, type OperatorDependencies } from '../src/operatorPairing';
+import { DynamoStore } from '../src/dynamoStore';
+import { V1Devices } from '../src/v1/devices';
 import { WorkerAuth } from '../src/workerAuth';
 import { ConditionalCommandHarness } from './sdkHarness';
 
@@ -309,5 +311,97 @@ describe('credential rotation on an existing pairing (--rotate)', () => {
     const response = await runOperatorPairing([...rotateArgs(f.grant.pairingId), '--execute'], f.deps);
     expect(response.exitCode).toBe(1); expect(response.message).toContain('uncertain'); expect(response.message).toContain('Do NOT blindly retry');
     expect(JSON.stringify(response)).not.toContain(sensitive); expect(disk.write).not.toHaveBeenCalled();
+  });
+});
+
+describe('device code for the /v1 thin client (--mint-device-code)', () => {
+  const mintArgs = ['--mint-device-code', '--account', '123456789012', '--region', 'us-east-1', '--table', 'worker-table',
+    '--workspace', 'workspace-one', '--label', 'David MacBook', '--expires', '600', '--output', '/vault/code'];
+  const replaced = (key: string, value: string) => { const input = [...mintArgs]; input[input.indexOf(key) + 1] = value; return input; };
+  const without = (key: string) => { const input = [...mintArgs]; input.splice(input.indexOf(key), 2); return input; };
+  /** A real store over the conditional harness, so the saved code is redeemed by the real device store. The fixture clock sits
+   *  well before the real clock the tool stamps expiry with, so the code is unexpired here. */
+  function deviceFixture() {
+    const dynamo = new ConditionalCommandHarness();
+    const store = new DynamoStore({ dynamo, tableName: tableArn, workspaceId: 'workspace-one', clock: { now: () => '2026-09-01T00:00:00.000Z' } });
+    const order: string[] = [];
+    const cloud: OperatorCloud = {
+      getCallerIdentity: vi.fn(async () => { order.push('sts'); return { Account: '123456789012', Arn: 'arn:aws:sts::123456789012:assumed-role/operator/session' }; }),
+      describeTable: vi.fn(async () => { order.push('table'); return { TableName: 'worker-table', TableArn: tableArn, TableStatus: 'ACTIVE' }; }),
+      dynamo: { send: async command => { order.push(command.constructor.name); return dynamo.send(command); } }, close: vi.fn(),
+    };
+    const deps: OperatorDependencies = {
+      reserveOutput: vi.fn(async path => { order.push('reserve'); return reservePrivateOutput(path); }),
+      connect: vi.fn(async () => { order.push('connect'); return cloud; }),
+    };
+    return { dynamo, store, cloud, deps, order };
+  }
+  it('parses the device-code form: a label, a 60..900 second expiry, no scopes and no rotation', () => {
+    expect(parseOperatorArgs(mintArgs)).toMatchObject({ mode: 'device_code', label: 'David MacBook', expires: 600, scopes: [], rotate: null, execute: false, workspace: 'workspace-one' });
+    expect(parseOperatorArgs([...mintArgs, '--execute'])).toMatchObject({ mode: 'device_code', execute: true });
+    expect(parseOperatorArgs(replaced('--expires', '60'))).toMatchObject({ expires: 60 });
+    expect(parseOperatorArgs(replaced('--expires', '900'))).toMatchObject({ expires: 900 });
+    expect(parseOperatorArgs(args)).toMatchObject({ mode: 'pairing', label: null });
+  });
+  it.each([
+    ['--scopes beside a device code', [...mintArgs, '--scopes', 'events:read']],
+    ['--rotate beside a device code', [...mintArgs, '--rotate', '11111111-1111-4111-8111-111111111111']],
+    ['a repeated --mint-device-code', [...mintArgs, '--mint-device-code']],
+    ['a missing label', without('--label')],
+    ['a label over 80 characters', replaced('--label', 'x'.repeat(81))],
+    ['a label with a control character', replaced('--label', 'tab\there')],
+    ['a label that looks like a flag', replaced('--label', '--execute')],
+    ['an expiry under 60', replaced('--expires', '59')],
+    ['an expiry over 900', replaced('--expires', '901')],
+    ['a missing expiry', without('--expires')],
+    ['a label on a desktop pairing', [...args, '--label', 'David MacBook']],
+  ])('refuses %s before any IO and without echo', async (_label, input) => {
+    const f = fixture(), response = await runOperatorPairing([...input, '--execute'], f.deps);
+    expect(response.exitCode).toBe(2); expect(response.message).toBe('Invalid arguments. Use --help.');
+    expect(f.deps.reserveOutput).not.toHaveBeenCalled(); expect(f.deps.connect).not.toHaveBeenCalled(); expect(f.send).not.toHaveBeenCalled();
+  });
+  it('names the flag in help, and a dry run performs no IO and says no device code was issued', async () => {
+    const help = await runOperatorPairing(['--help']);
+    expect(help.exitCode).toBe(0); expect(help.message).toContain('--mint-device-code'); expect(help.message).toContain('--label TEXT'); expect(help.message).toContain('60..900');
+    const f = fixture(), dry = await runOperatorPairing(mintArgs, f.deps);
+    expect(dry.exitCode).toBe(0); expect(dry.message).toContain('No IO performed'); expect(dry.message).toContain('No device code issued');
+    expect(dry.message).not.toContain('David MacBook');
+    expect(f.deps.reserveOutput).not.toHaveBeenCalled(); expect(f.deps.connect).not.toHaveBeenCalled(); expect(f.send).not.toHaveBeenCalled();
+    expect(disk.lstat).not.toHaveBeenCalled(); expect(disk.open).not.toHaveBeenCalled();
+  });
+  it('mints one PAIRCODE# row holding only the hash and the label, saves the code privately, and that code redeems once for a device token', async () => {
+    const f = deviceFixture();
+    const response = await runOperatorPairing([...mintArgs, '--execute'], f.deps);
+    expect(response).toEqual({ exitCode: 0, message: 'Device code saved to private output. No code printed.' });
+    expect(f.order).toEqual(['reserve', 'connect', 'sts', 'table', 'TransactWriteItemsCommand']);
+    expect(disk.write).toHaveBeenCalledOnce();
+    const codeLine = disk.write.mock.calls[0]![0] as string; const code = codeLine.trim();
+    expect(codeLine).toMatch(/^[A-Za-z0-9_-]{43}\n$/);
+    const rows = f.dynamo.dump();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.sk!.S).toBe(`PAIRCODE#${createHash('sha256').update(code).digest('hex')}`);
+    expect(rows[0]!.pk!.S).toBe('WORKSPACE#workspace-one');
+    expect(JSON.parse(rows[0]!.data!.S!)).toMatchObject({ label: 'David MacBook', consumedAt: null });
+    expect(Number(rows[0]!.ttl!.N)).toBeGreaterThan(Date.now() / 1000);
+    expect(JSON.stringify(rows)).not.toContain(code); expect(JSON.stringify(response)).not.toContain(code);
+    expect(disk.close).toHaveBeenCalledTimes(2); expect(f.cloud.close).toHaveBeenCalledOnce();
+    // The saved code is what a fresh thin client redeems, once.
+    const devices = new V1Devices(f.store);
+    const redeemed = await devices.redeem(code);
+    expect(redeemed).toMatchObject({ workspaceId: 'workspace-one' });
+    expect(await devices.authenticate(`Bearer ${redeemed.deviceToken}`)).toMatchObject({ label: 'David MacBook' });
+    await expect(devices.redeem(code)).rejects.toMatchObject({ reason: 'code_consumed' });
+  });
+  it('refuses an identity mismatch in the device-code words before any write, and reports a failed write as uncertain', async () => {
+    const mismatch = deviceFixture();
+    vi.mocked(mismatch.cloud.getCallerIdentity).mockResolvedValue({ Account: '000000000000' });
+    const refused = await runOperatorPairing([...mintArgs, '--execute'], mismatch.deps);
+    expect(refused).toEqual({ exitCode: 1, message: 'Identity mismatch or table not active. No device code issued. Reserved output retained.' });
+    expect(mismatch.dynamo.dump()).toHaveLength(0); expect(disk.write).not.toHaveBeenCalled();
+    const failing = deviceFixture();
+    failing.dynamo.beforeTransaction = () => { throw new Error(sensitive); };
+    const uncertain = await runOperatorPairing([...mintArgs, '--execute'], failing.deps);
+    expect(uncertain.exitCode).toBe(1); expect(uncertain.message).toContain('uncertain'); expect(uncertain.message).toContain('Do NOT blindly retry');
+    expect(JSON.stringify(uncertain)).not.toContain(sensitive); expect(disk.write).not.toHaveBeenCalled();
   });
 });
