@@ -1,9 +1,13 @@
 import { z } from 'zod';
-import { accountRecordSchema, type AccountRecord } from '../../../../../src/shared/contracts/accountRecordContract';
+import { accountRecordSchema } from '../../../../../src/shared/contracts/accountRecordContract';
 import type { AccountRoute } from '../../../../../src/shared/contracts/accountContract';
-import { isTerritoryAddableState, isTerritoryMultiZoneState, isTerritoryState, TERRITORY_ADDABLE_STATE_TIME_ZONES, TERRITORY_STATE_TIME_ZONES,
-  territoryStateSchema, type TerritoryState, type TerritoryTimeZone } from '../../../../../src/shared/contracts/territoryClearanceContract';
+import { isTerritoryAddableState, isTerritoryState, TERRITORY_ADDABLE_STATE_TIME_ZONES, TERRITORY_STATE_TIME_ZONES,
+  type TerritoryState, type TerritoryTimeZone } from '../../../../../src/shared/contracts/territoryClearanceContract';
 import type { DynamoStore } from '../dynamoStore';
+// S4 moved the derivation into `evidence.ts` as the single implementation; this adapter and the backfill job
+// both call it, so a firm's state and zone can never be derived two different ways.
+import { deriveStateAndZone, type FirmDerivation, type FirmHold } from './evidence';
+export { deriveStateAndZone, parseUsAddress, type FirmDerivation, type FirmHold } from './evidence';
 import { listFirmRecords, type FirmRecord, type FirmRouteLike } from './firmsWrite';
 import { listSuppressedFirmIds } from './suppression';
 
@@ -29,15 +33,6 @@ import { listSuppressedFirmIds } from './suppression';
  * by exactly the same rule as a researched one.
  */
 
-export type FirmHold = { reason: 'state_not_cleared'; code: 'state_unknown' | 'zone_unknown' };
-export type FirmDerivation =
-  | { source: 'places_formatted_address'; sourceId: string; state: TerritoryState; zoneFrom: 'territory_state_map' | 'addable_state_map' }
-  /** A firm David typed in himself (S2, `add_firm`): he named the state, the zone comes from the same two maps. */
-  | { source: 'hand_entered'; sourceId: null; state: TerritoryState; zoneFrom: 'territory_state_map' | 'addable_state_map' }
-  | { source: 'hand_entered'; sourceId: null; state: TerritoryState | null; zoneFrom: null; reason: 'state_zone_not_recorded' | 'state_not_found' }
-  | { source: 'places_formatted_address'; sourceId: string; state: TerritoryState; zoneFrom: null; reason: 'state_spans_two_zones' | 'state_zone_not_recorded' }
-  | { source: 'places_formatted_address'; sourceId: string; state: null; zoneFrom: null; reason: 'address_missing' | 'state_not_found' }
-  | { source: 'none'; sourceId: null; state: null; zoneFrom: null; reason: 'no_places_source' };
 export type FirmPhone = { routeId: string; number: string; verification: AccountRoute['verification'] };
 export type FirmEnrollment = {
   enrollmentId: string; versionId: string; state: string; currentStepId: string | null; currentStepIndex: number | null;
@@ -76,39 +71,6 @@ const territoryEnrollmentLightSchema = z.object({ accountId: z.string(), enrollm
 const evidenceLightSchema = z.object({ accountId: z.string(), channel: z.string(), source: z.string(), outcome: z.string(), observedAt: z.string() });
 const retiredLightSchema = z.object({ accountId: z.string(), routeId: z.string() });
 const suppressionLightSchema = z.object({ accountId: z.string() });
-const placesExcerptSchema = z.object({ formattedAddress: z.string().optional() });
-
-/**
- * The state and city of a United States postal address as Google Places formats it (`street, city, ST 02903, USA`,
- * with or without the ZIP and the country). Pure. Anything that does not end that way, or names a code that is not
- * a US state, is `{ city: null, state: null }`: never a guess.
- */
-export function parseUsAddress(formatted: string): { city: string | null; state: TerritoryState | null } {
-  const match = /,\s*([^,]+?),\s*([A-Z]{2})(?:\s+\d{5}(?:-\d{4})?)?\s*(?:,\s*(?:USA|United States|US))?\s*$/.exec(formatted.trim())
-    ?? /^([^,]+?),\s*([A-Z]{2})(?:\s+\d{5}(?:-\d{4})?)?\s*(?:,\s*(?:USA|United States|US))?\s*$/.exec(formatted.trim());
-  if (!match) return { city: null, state: null };
-  const state = territoryStateSchema.safeParse(match[2]);
-  if (!state.success) return { city: null, state: null };
-  const city = match[1]!.trim();
-  return { city: city.length ? city : null, state: state.data };
-}
-
-/** State, city, zone and the record of how they were derived, from the firm's Places listing source. Pure. */
-export function deriveStateAndZone(record: AccountRecord): { city: string | null; state: TerritoryState | null; timeZone: TerritoryTimeZone | null; derivation: FirmDerivation; hold: FirmHold | null } {
-  const listing = record.sources.find(source => source.id.startsWith(PLACES_SOURCE_PREFIX));
-  if (!listing) return { city: null, state: null, timeZone: null, derivation: { source: 'none', sourceId: null, state: null, zoneFrom: null, reason: 'no_places_source' }, hold: { reason: 'state_not_cleared', code: 'state_unknown' } };
-  let formatted: string | undefined;
-  try { formatted = placesExcerptSchema.parse(JSON.parse(listing.excerpt)).formattedAddress; } catch { formatted = undefined; }
-  const sourceId = listing.id;
-  if (!formatted) return { city: null, state: null, timeZone: null, derivation: { source: 'places_formatted_address', sourceId, state: null, zoneFrom: null, reason: 'address_missing' }, hold: { reason: 'state_not_cleared', code: 'state_unknown' } };
-  const { city, state } = parseUsAddress(formatted);
-  if (!state) return { city: null, state: null, timeZone: null, derivation: { source: 'places_formatted_address', sourceId, state: null, zoneFrom: null, reason: 'state_not_found' }, hold: { reason: 'state_not_cleared', code: 'state_unknown' } };
-  // The fixed territory map first (Texas is there with America/Chicago by David's decision), then the single-zone states he may add.
-  if (isTerritoryState(state)) return { city, state, timeZone: TERRITORY_STATE_TIME_ZONES[state], derivation: { source: 'places_formatted_address', sourceId, state, zoneFrom: 'territory_state_map' }, hold: null };
-  if (isTerritoryAddableState(state)) return { city, state, timeZone: TERRITORY_ADDABLE_STATE_TIME_ZONES[state], derivation: { source: 'places_formatted_address', sourceId, state, zoneFrom: 'addable_state_map' }, hold: null };
-  const reason = isTerritoryMultiZoneState(state) ? 'state_spans_two_zones' : 'state_zone_not_recorded';
-  return { city, state, timeZone: null, derivation: { source: 'places_formatted_address', sourceId, state, zoneFrom: null, reason }, hold: { reason: 'state_not_cleared', code: 'zone_unknown' } };
-}
 
 /** The newest stored version of each route id, whichever shape wrote it. */
 function newestRoutes(routes: readonly FirmRouteLike[]): FirmRouteLike[] {
