@@ -3,7 +3,8 @@ import { z } from 'zod';
 import { accountInstantSchema } from '../../../../../src/shared/contracts/accountContract';
 import { territoryCallPolicySchema, type TerritoryCallPolicy } from '../../../../../src/shared/contracts/territoryCallPolicyContract';
 import { v1CallOutcomeSchema, v1FirmViewSchema, type LogCallOutcomeCommand, type TodayCard, type TodayLane, type TodayNextStep,
-  type V1FirmCall, type V1FirmRoute, type V1FirmStatus, type V1FirmView, type V1PendingCallback } from '../../../../../src/shared/contracts/v1Contract';
+  type V1FirmCall, type V1FirmDraft, type V1FirmReply, type V1FirmRoute, type V1FirmSend, type V1FirmStatus, type V1FirmView,
+  type V1PendingCallback } from '../../../../../src/shared/contracts/v1Contract';
 import { keyPart, type DynamoStore } from '../dynamoStore';
 import { territoryCallPolicyKey } from '../territoryPolicyRepository';
 import { evaluateDial, type DialEvaluation } from './callWindow';
@@ -11,6 +12,7 @@ import { dayKey, dayRecordSchema, LANE_REASONS, type LaneEntry } from './dayBuil
 import { createAccountFirmSource, type FirmCard, type FirmSource } from './firms';
 import { planFirmStatus, readFirmRecord } from './firmsWrite';
 import { EASTERN, localParts } from './localClock';
+import { readFirmMailView } from './mail';
 import { advanceAfterCall, readSequenceRecord, sequenceStateOf, type SequenceRecord } from './sequence';
 import { firmSuppressionView, planSuppress, readFirmSuppression } from './suppression';
 import { todayCard } from './today';
@@ -273,8 +275,9 @@ export async function readFirmView(store: DynamoStore, firmId: string, options: 
   const firms = await (options.firms ?? createAccountFirmSource(store)).listFirms();
   const firm = firms.find(candidate => candidate.firmId === firmId);
   if (!firm) return null;
-  const [sequence, calls, callbacks, suppression, record] = await Promise.all([
-    readSequenceRecord(store, firmId), listCalls(store, firmId), listCallbacks(store, firmId), readFirmSuppression(store, firmId), readFirmRecord(store, firmId)]);
+  const [sequence, calls, callbacks, suppression, record, mail] = await Promise.all([
+    readSequenceRecord(store, firmId), listCalls(store, firmId), listCallbacks(store, firmId), readFirmSuppression(store, firmId),
+    readFirmRecord(store, firmId), readFirmMailView(store, firmId)]);
   const suppressedHandles = new Set(suppression?.handles ?? []);
   const retired = new Set(firm.retiredRouteIds);
   const routes: V1FirmRoute[] = firm.routes
@@ -301,6 +304,14 @@ export async function readFirmView(store: DynamoStore, firmId: string, options: 
     localTime: dial.localTime, dialAllowed: dial.dialAllowed, holdReason: dial.holdReason, holdCode: dial.holdCode,
     routes, sequence: sequenceStateOf(sequence?.record ?? null, firm), calls: callView, callbacks: callbackView,
     suppression: firmSuppressionView(suppression),
+    // The mail side (S3), read through its own reader: the sends the fence recorded, the replies the poller matched
+    // and the drafts waiting for David. Newest last for the sends, newest first for the replies.
+    sends: mail.sends.slice(-40).map((send): V1FirmSend => ({ stepId: send.stepId, state: send.state, sentAt: send.sentAt,
+      reason: send.reason, templateId: send.templateId })),
+    replies: mail.replies.slice(0, 100).map((reply): V1FirmReply => ({ replyId: reply.gmailMessageId, at: reply.at,
+      classification: reply.classification.kind, matchedBy: reply.matchedBy, decision: reply.decision, resolvedAt: reply.resolvedAt })),
+    drafts: mail.drafts.slice(0, 40).map((draft): V1FirmDraft => ({ draftId: draft.draftId, kind: draft.kind,
+      status: draft.status, subject: draft.subject, createdAt: draft.createdAt })),
     evidence: { sources: firm.sourceCount, researchedAt: firm.enteredBy === 'hand' ? null : firm.researchedAt, enteredBy: firm.enteredBy },
     holds: holds.slice(0, 20),
   });

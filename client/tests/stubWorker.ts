@@ -345,9 +345,10 @@ export async function startStubWorker(): Promise<StubWorker> {
         receipts.set(command.commandId, receipt);
         return send(response, 200, v1CommandReceiptSchema.parse(receipt));
       }
-      // `admit_route` and `suppress` (S2) are applied without being kept: no spec reads them back off the stub.
+      // The stub models the two commands the client pages issue. Anything else the contract now carries (the S3
+      // email commands, which no client page sends yet) is refused honestly rather than answered as applied.
       if (command.kind !== 'revoke_device') {
-        receipt = { commandId: command.commandId, outcome: 'applied', reason: null };
+        receipt = { commandId: command.commandId, outcome: 'refused', reason: 'command_not_stubbed' };
         receipts.set(command.commandId, receipt);
         return send(response, 200, v1CommandReceiptSchema.parse(receipt));
       }

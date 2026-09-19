@@ -183,6 +183,17 @@ export const todayCardSchema = z.strictObject({
   /** The callback David promised on the last call and has not made yet (S2); the callbacks lane leads the morning on its due day. */
   pendingCallback: v1PendingCallbackSchema.nullable().optional(),
   nextStep: todayNextStepSchema,
+  /**
+   * The draft waiting for David on this firm, if any (S3). Optional so a client built against the S1 card shape
+   * still validates; the worker always sends it, as null when there is nothing waiting.
+   */
+  pendingDraft: z.strictObject({ draftId: z.string().min(1).max(200), kind: z.enum(['reply', 'followup']),
+    status: z.enum(['pending', 'approved']), subject: z.string().max(240), createdAt: instant }).nullable().optional(),
+  /**
+   * Why the firm's sequence is not moving, as the send fence and the mail poller recorded it (S3). Separate from
+   * `holdReason`, which is about dialling this card right now; both can be set, and both are closed codes.
+   */
+  sequenceHold: z.strictObject({ reason: v1HoldReasonSchema, code: attemptReasonSchema, stepId: z.string().max(200).nullable() }).nullable().optional(),
 });
 export type TodayCard = z.infer<typeof todayCardSchema>;
 export const todayHoldCountSchema = z.strictObject({ reason: v1HoldReasonSchema, code: attemptReasonSchema, count: count.min(1) });
@@ -273,6 +284,37 @@ export const v1FirmSuppressionSchema = z.strictObject({
 export type V1FirmSuppression = z.infer<typeof v1FirmSuppressionSchema>;
 /** One line about the firm's evidence: how many sources, when it was last researched, whether it is a hand-entered firm. */
 export const v1FirmEvidenceSchema = z.strictObject({ sources: count, researchedAt: instant.nullable(), enteredBy: z.enum(['research', 'hand']) });
+/**
+ * The mail side of one firm, as the Firm view reports it (S3's records read through S2's view). No body, no
+ * address and no provider message travels: a send is its step, its state and when it went; a reply is when it
+ * arrived, what it was classified as and whether David has answered it; a draft is what is waiting for him.
+ */
+export const v1FirmSendSchema = z.strictObject({
+  stepId: z.string().min(1).max(200),
+  state: z.enum(['dispatching', 'accepted', 'not_sent', 'unknown']),
+  sentAt: instant.nullable(),
+  reason: attemptReasonSchema.nullable(),
+  templateId: z.enum(['T1', 'T2', 'T3', 'T4', 'T5']).nullable(),
+});
+export type V1FirmSend = z.infer<typeof v1FirmSendSchema>;
+export const v1FirmReplySchema = z.strictObject({
+  replyId: z.string().min(1).max(200),
+  at: instant,
+  classification: attemptReasonSchema,
+  matchedBy: z.enum(['message_id', 'sender']),
+  /** David's decision, when the reply needed one; null while it is still waiting. */
+  decision: z.enum(['stop', 'continue']).nullable(),
+  resolvedAt: instant.nullable(),
+});
+export type V1FirmReply = z.infer<typeof v1FirmReplySchema>;
+export const v1FirmDraftSchema = z.strictObject({
+  draftId: z.string().min(1).max(200),
+  kind: z.enum(['reply', 'followup']),
+  status: z.enum(['pending', 'approved', 'sent']),
+  subject: z.string().max(240),
+  createdAt: instant,
+});
+export type V1FirmDraft = z.infer<typeof v1FirmDraftSchema>;
 export const v1FirmViewSchema = z.strictObject({
   asOf: instant,
   firmId: z.string().min(1).max(200),
@@ -291,6 +333,10 @@ export const v1FirmViewSchema = z.strictObject({
   calls: z.array(v1FirmCallSchema).max(200),
   callbacks: z.array(v1PendingCallbackSchema).max(100),
   suppression: v1FirmSuppressionSchema.nullable(),
+  /** The mail side (S3). Optional so a client built against the S2 shape still validates; the worker always sends all three. */
+  sends: z.array(v1FirmSendSchema).max(40).optional(),
+  replies: z.array(v1FirmReplySchema).max(100).optional(),
+  drafts: z.array(v1FirmDraftSchema).max(40).optional(),
   evidence: v1FirmEvidenceSchema,
   /** Every hold that stands between this firm and a dial now, by reason and closed code. */
   holds: z.array(todayHoldCountSchema).max(20),
@@ -325,6 +371,16 @@ export const diagnosticsViewSchema = z.strictObject({
   devices: z.array(diagnosticsDeviceSchema),
   /** Postures by state, until Settings ships in S5. Optional so a client built against the S0 shape still validates. */
   postures: z.array(statePostureSummarySchema).optional(),
+  /**
+   * The job queue as the worker can see it from the table alone (S3): jobs waiting or running, jobs that failed
+   * their last attempt, jobs that exhausted their three attempts and are therefore on the dead-letter queue, and
+   * when the scheduler last ran. The API role holds no queue permission by design, so these are counts of `JOB#`
+   * records, not a reading of SQS; `deadLettered` is what the worker knows, and the DLQ alarm is what AWS knows.
+   */
+  queue: z.strictObject({
+    queued: count, running: count, failed: count, deadLettered: count,
+    lastSchedulerRun: z.strictObject({ at: instant, tickSeq: z.number().int().positive(), enqueued: count, durationMs: count }).nullable(),
+  }).optional(),
 });
 export type DiagnosticsView = z.infer<typeof diagnosticsViewSchema>;
 
@@ -384,9 +440,40 @@ export const suppressCommandSchema = z.strictObject({
   evidenceRef: z.string().max(200).optional(),
 });
 export type SuppressCommand = z.infer<typeof suppressCommandSchema>;
-/** Every `/v1` command, discriminated on `kind`. S0 ships `revoke_device`, S1 adds `set_state_posture`; later slices add theirs here. */
+/**
+ * Email under the standing approval (S3). `approve_template` carries the exact subject and body David approved,
+ * which the worker re-checks against every body rule and the footer before it records a standing approval;
+ * `set_sending_limit` may only narrow the ceiling fixed in code. Neither of them sends anything.
+ */
+export const REPLY_TEMPLATE_COMMAND_IDS = ['T1', 'T2', 'T3', 'T4', 'T5'] as const;
+export const approveTemplateCommandSchema = z.strictObject({ commandId, kind: z.literal('approve_template'),
+  templateId: z.enum(REPLY_TEMPLATE_COMMAND_IDS), expectedRevision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  subject: z.string().min(1).max(160), body: z.string().min(1).max(4000) });
+const sendingLimitNumber = z.number().int().nonnegative().max(10000);
+export const setSendingLimitCommandSchema = z.strictObject({ commandId, kind: z.literal('set_sending_limit'),
+  dailyLimit: sendingLimitNumber.optional(),
+  ramp: z.strictObject({ startPerDay: sendingLimitNumber, stepPerDay: sendingLimitNumber, maxPerDay: sendingLimitNumber }).optional(),
+  postalAddress: z.string().trim().min(1).max(200).optional() });
+/** David's answer to a reply that is not unambiguous. `stop` suppresses permanently; `continue` resumes the cadence. */
+export const replyDecisionCommandSchema = z.strictObject({ commandId, kind: z.literal('reply_decision'),
+  replyId: z.string().min(1).max(200), decision: z.enum(['stop', 'continue']) });
+const draftId = z.string().min(1).max(200);
+/** Opens a follow-up draft. The worker never writes the prose: the text arrives with the approval. */
+export const requestFollowupCommandSchema = z.strictObject({ commandId, kind: z.literal('request_followup'),
+  firmId: z.string().min(1).max(200), draftId, text: z.string().max(24000).optional() });
+export const approveFollowupDraftCommandSchema = z.strictObject({ commandId, kind: z.literal('approve_followup_draft'),
+  firmId: z.string().min(1).max(200), draftId, text: z.string().min(1).max(24000) });
+export const approveReplyDraftCommandSchema = z.strictObject({ commandId, kind: z.literal('approve_reply_draft'),
+  firmId: z.string().min(1).max(200), draftId, text: z.string().min(1).max(24000) });
+
+/**
+ * Every `/v1` command, discriminated on `kind`. S0 ships `revoke_device`, S1 adds `set_state_posture`, S2 the dial
+ * and log, S3 email under the standing approval; later slices add theirs here.
+ */
 export const v1CommandSchema = z.discriminatedUnion('kind', [revokeDeviceCommandSchema, setStatePostureCommandSchema,
-  logCallOutcomeCommandSchema, addFirmCommandSchema, admitRouteCommandSchema, suppressCommandSchema]);
+  logCallOutcomeCommandSchema, addFirmCommandSchema, admitRouteCommandSchema, suppressCommandSchema,
+  approveTemplateCommandSchema, setSendingLimitCommandSchema, replyDecisionCommandSchema, requestFollowupCommandSchema,
+  approveFollowupDraftCommandSchema, approveReplyDraftCommandSchema]);
 export type V1Command = z.infer<typeof v1CommandSchema>;
 
 /**

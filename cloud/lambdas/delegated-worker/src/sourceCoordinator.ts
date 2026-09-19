@@ -34,7 +34,15 @@ export type SourceResearchBoundaries = { loadCredentials(workspaceId: string, si
   /** Present only when the Places credential parameter is declared; a Places configuration is held without it. */
   loadPlacesCredentials?(workspaceId: string, signal: AbortSignal): Promise<{ apiKey: string }>;
   pageHttp: PageHttp; resolve(hostname: string): Promise<string[]> };
-export type SourceCoordinatorOptions = { auth: WorkerAuth; authorization: RemoteGoogleAuthorization; fetch: typeof globalThis.fetch; research?: SourceResearchBoundaries; researchSetupProfile?: ResearchSetupProfile };
+export type SourceCoordinatorOptions = { auth: WorkerAuth; authorization: RemoteGoogleAuthorization; fetch: typeof globalThis.fetch; research?: SourceResearchBoundaries; researchSetupProfile?: ResearchSetupProfile;
+  /**
+   * Whether this tick still owns email (slice S3's coexistence switch, `delegated_worker_legacy_email_enabled`).
+   * Absent or true is exactly today's behaviour. False makes the tick skip the mailbox poll, the per-firm mail
+   * scope step and the sequence email walk; the research phases, the backfill sweep and the list build are
+   * untouched. From the day S3 deploys with it false, the old app still shows and dials but no longer sends or
+   * polls, and the queue's runner owns email. It enables nothing: it can only take work away from this tick.
+   */
+  legacyEmailEnabled?: boolean };
 /** What one Places territory batch did. `uncertain` names a page whose response was lost: its spend is retained and it is never re-issued. */
 export type PlacesBatchReport = { outcome: 'completed' | 'exhausted' | 'uncertain' | 'denied' | 'held'; runId: string | null; created: number; routes: number; enqueued: number; drained: number;
   skipped: { no_website: number; website_blocked: number; duplicate_domain: number; duplicate_phone: number; existing_domain: number; existing_phone: number; route_held: number; enqueue_held: number } };
@@ -83,6 +91,8 @@ type SourceRecord = Stored<OwnerSourceConfiguration>;
  * tick command, synthetic work queue, permission inference or automatic activation. */
 export function createSourceCoordinator(input: SourceCoordinatorOptions) {
   if (input.authorization.input.auth !== input.auth) throw new Error('source_store_mismatch');
+  // S3's coexistence switch. Absent is today's behaviour; false hands email to the queue's runner.
+  const legacyEmail = input.legacyEmailEnabled !== false;
   const store = input.auth.store;
   const threads = new DynamoThreadIntakeRepository(store.options);
   const poller = createMailPoller({ authorization: input.authorization, store: threads, fetch: input.fetch });
@@ -171,6 +181,8 @@ export function createSourceCoordinator(input: SourceCoordinatorOptions) {
     // that poll. Running it first is what makes the scope one tick old by the time a send is attempted, so a
     // firm is never held with `mailbox_not_connected` for a scope this same tick already created. It issues
     // one `configure-owner` per firm and sends nothing.
+    // Both steps below are email; S3's switch takes them off this tick together, and the sweep above keeps running.
+    if (!legacyEmail) return;
     const scopes = await createTerritoryMailScopeConfigurator({ auth: input.auth, authorization: input.authorization,
       options: store.options }).configureDueMailScopes(swept, signal);
     report.mailScopes = scopes;
@@ -342,7 +354,7 @@ export function createSourceCoordinator(input: SourceCoordinatorOptions) {
           if (row.key !== ownerSourceKey(parsed.accountId)) throw new Error('source_identity_mismatch');
           const active = await source(parsed.accountId); if (!active) continue;
           report.status = 'completed';
-          if (active.data.mailboxSubject !== null) {
+          if (legacyEmail && active.data.mailboxSubject !== null) {
             const config = await unchanged(active);
             await poller.pollOnce({ accountId: config.accountId, pairingId: config.pairingId, mailboxSubject: config.mailboxSubject! }, signal);
             report.mailPolls++;
