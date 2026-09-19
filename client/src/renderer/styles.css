@@ -223,3 +223,26 @@ time { white-space: nowrap; }
 .state__reference cite { font-style: normal; color: var(--muted); overflow-wrap: anywhere; }
 .add-state { display: flex; align-items: center; gap: 8px; margin: 12px 0; }
 .add-state input { width: 4em; text-transform: uppercase; }
+
+/* Dial and log (slice S2): the Call button, the outcome form, the add-a-firm form and one firm's page. */
+.today-card__callback { color: var(--held); font-size: 12px; font-weight: 600; }
+.today-card__call:disabled { opacity: 0.5; cursor: not-allowed; }
+.outcome-form { border-top: 1px solid var(--line); margin-top: 6px; padding-top: 8px; display: grid; gap: 6px; }
+.outcome-form__notice { margin: 0; color: var(--muted); font-size: 12px; }
+.outcome-form__outcomes { border: 0; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.outcome-form__outcomes legend { font-size: 12px; color: var(--muted); padding: 0 0 4px; }
+.outcome-form__outcome[aria-pressed="true"] { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+.outcome-form label { display: grid; gap: 2px; font-size: 12px; color: var(--muted); }
+.outcome-form__never { display: flex; align-items: center; gap: 6px; }
+.outcome-form__warning, .outcome-form__problem, .outcome-form__failure { margin: 0; color: var(--held); font-size: 12px; font-weight: 600; }
+.outcome-form__controls { display: flex; gap: 8px; }
+.add-firm { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px 10px; align-items: end; margin-top: 8px; }
+.add-firm label { display: grid; gap: 2px; font-size: 12px; color: var(--muted); }
+.add-firm__problem, .add-firm__failure { grid-column: 1 / -1; margin: 0; color: var(--held); font-size: 12px; font-weight: 600; }
+.page--firm h2 { margin: 12px 0 4px; font-size: 13px; }
+.page--firm p, .page--firm ul { margin: 0; }
+.page--firm ul { list-style: none; padding: 0; display: grid; gap: 2px; font-size: 12px; }
+.firm__place, .firm__empty, .firm__evidence { color: var(--muted); font-size: 12px; }
+.firm__status, .firm__dial { font-weight: 600; }
+.firm__suppression { color: var(--held); font-weight: 600; }
+.firm__routes li[data-retired="true"] { color: var(--muted); text-decoration: line-through; }

@@ -5,6 +5,7 @@ import { attemptReasonSchema, laneCountsSchema, TODAY_LANES, type LaneCounts, ty
 import { keyPart, type DynamoStore } from '../dynamoStore';
 import { attemptCode, recordAttempt } from './attempts';
 import { createAccountFirmSource, type FirmCard, type FirmSource } from './firms';
+import { listSequenceRecords, type SequenceRecord } from './sequence';
 import { EASTERN, endOfLocalDay, localParts } from './localClock';
 import { posturesByState, readPostures, stateClearance } from './postures';
 
@@ -65,8 +66,17 @@ export type DuePointer = z.infer<typeof duePointerSchema>;
 /** Dynamo allows 100 items per transaction; the backfill writes the pointers in batches of this size. */
 const POINTER_BATCH = 100;
 
-/** The pointer an enrollment should have now, or null for a firm with no due instant (not enrolled, resting, stopped, completed). */
-export function expectedDuePointer(firm: FirmCard, writtenAt: string): DuePointer | null {
+/**
+ * The pointer a firm should have now, or null for a firm with no due instant (not on the sequence, resting, held,
+ * stopped, completed). Read new-first: the `SEQ#` record slice S2 owns answers when there is one, and the old
+ * enrollment pair answers otherwise. Without the new-first read a firm the outcome form advanced would fail this
+ * check against a stale enrollment and drop out of the due lane until S6 retired the old records.
+ */
+export function expectedDuePointer(firm: FirmCard, writtenAt: string, sequence?: SequenceRecord | null): DuePointer | null {
+  if (sequence) {
+    if (sequence.state !== 'active' || !sequence.nextDueAt || !sequence.currentStepId) return null;
+    return { version: 1, firmId: firm.firmId, enrollmentId: sequence.enrollmentId, stepId: sequence.currentStepId, nextDueAt: sequence.nextDueAt, writtenAt };
+  }
   const enrollment = firm.enrollment;
   if (!enrollment || enrollment.state !== 'active' || !enrollment.nextDueAt || !enrollment.currentStepId) return null;
   return { version: 1, firmId: firm.firmId, enrollmentId: enrollment.enrollmentId, stepId: enrollment.currentStepId, nextDueAt: enrollment.nextDueAt, writtenAt };
@@ -75,10 +85,12 @@ export function expectedDuePointer(firm: FirmCard, writtenAt: string): DuePointe
 /** Put every missing pointer, absent-fenced, in batches; a batch a concurrent writer beat is left to it. Counts only. */
 export async function backfillDuePointers(store: DynamoStore, firms: readonly FirmCard[]): Promise<{ written: number; present: number }> {
   const existing = new Set((await store.list<unknown>(DUE_PREFIX)).map(row => row.key));
+  const sequences = await listSequenceRecords(store);
   const now = store.now();
   const missing: DuePointer[] = []; let present = 0;
   for (const firm of firms) {
-    const pointer = expectedDuePointer(firm, now);
+    // A firm with its own `SEQ#` record needs no backfill: the sequence module writes its pointer with the step.
+    const pointer = expectedDuePointer(firm, now, sequences.get(firm.firmId));
     if (!pointer) continue;
     if (existing.has(dueKey(pointer.nextDueAt, pointer.firmId))) present++; else missing.push(pointer);
   }
@@ -92,11 +104,13 @@ export async function backfillDuePointers(store: DynamoStore, firms: readonly Fi
 }
 
 /**
- * Every pointer due at or before `until`, ascending, verified against the enrollment the firm carries now: the firm must
- * still be enrolled on that enrollment, standing on that step, due at that instant. Anything else is stale and skipped.
+ * Every pointer due at or before `until`, ascending, verified against where the firm stands now: on that enrollment,
+ * on that step, due at that instant — read from the `SEQ#` record first and the carried enrollment second. Anything
+ * else is stale and skipped.
  */
 export async function readDuePointers(store: DynamoStore, firms: readonly FirmCard[], until: string): Promise<DuePointer[]> {
   const byFirm = new Map(firms.map(firm => [firm.firmId, firm]));
+  const sequences = await listSequenceRecords(store);
   const result = await store.options.dynamo.send(new QueryCommand({ TableName: store.options.tableName, ConsistentRead: true,
     KeyConditionExpression: '#pk = :pk AND #sk BETWEEN :from AND :to', ExpressionAttributeNames: { '#pk': 'pk', '#sk': 'sk' },
     ExpressionAttributeValues: { ':pk': store.key('').pk, ':from': { S: DUE_PREFIX }, ':to': { S: dueRangeEnd(until) } }, ScanIndexForward: true }));
@@ -109,7 +123,7 @@ export async function readDuePointers(store: DynamoStore, firms: readonly FirmCa
     if (!parsed.success || parsed.data.nextDueAt > until) continue;
     const pointer = parsed.data;
     const firm = byFirm.get(pointer.firmId);
-    const live = firm ? expectedDuePointer(firm, pointer.writtenAt) : null;
+    const live = firm ? expectedDuePointer(firm, pointer.writtenAt, sequences.get(pointer.firmId)) : null;
     if (!live || live.enrollmentId !== pointer.enrollmentId || live.stepId !== pointer.stepId || live.nextDueAt !== pointer.nextDueAt) continue;
     pointers.push(pointer);
   }

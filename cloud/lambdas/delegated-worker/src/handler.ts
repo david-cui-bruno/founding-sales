@@ -55,7 +55,7 @@ export function createWorkerHandler(input: { auth: WorkerAuth; host: string; goo
         if (Buffer.byteLength(JSON.stringify(selected.payload), 'utf8') > 200000) return response(400, { error: 'worker_request_rejected' });
       }
       const query = new URLSearchParams(event.rawQueryString);
-      const allowed = path === '/v1/diagnostics' ? ['kind', 'limit'] : path === '/oauth/callback' ? ['state', 'code', 'error', 'scope', 'authuser', 'prompt', 'hd', 'iss'] : path === '/events' ? ['cursor'] : ['/google/status', '/google/disclosure'].includes(path) ? ['purpose'] : [];
+      const allowed = path === '/v1/diagnostics' ? ['kind', 'limit'] : path === '/v1/firms' ? ['firmId'] : path === '/oauth/callback' ? ['state', 'code', 'error', 'scope', 'authuser', 'prompt', 'hd', 'iss'] : path === '/events' ? ['cursor'] : ['/google/status', '/google/disclosure'].includes(path) ? ['purpose'] : [];
       for (const key of query.keys()) if (!allowed.includes(key) || query.getAll(key).length !== 1) return response(400, { error: 'worker_invalid_request' });
       const body = () => JSON.parse(event.body ?? '{}') as unknown;
       // The rebuilt core's routes (S0). Mounted here so David only redeploys the worker; the router owns its own errors.
@@ -227,7 +227,10 @@ export async function createProductionServices(env: NodeJS.ProcessEnv, boundarie
   const google = new RemoteGoogleAuthorization({ auth, config: googleConfig, fetch: boundaries.fetch });
   const researchSetupProfile = researchProfile(env);
   const source = createSourceCoordinator({ auth, authorization: google, researchSetupProfile, fetch: boundaries.fetch ?? globalThis.fetch,
-    research: productionResearchBoundaries(env, boundaries) });
+    research: productionResearchBoundaries(env, boundaries),
+    // S3's coexistence switch (`delegated_worker_legacy_email_enabled`). Only the exact string `false` takes the
+    // mailbox poll, the mail scopes and the sequence email walk off this tick; anything else is today's behaviour.
+    legacyEmailEnabled: env.DELEGATED_WORKER_LEGACY_EMAIL_ENABLED !== 'false' });
   return { auth, google, source, researchSetup: new ResearchSetupService({ auth, profile: researchSetupProfile }), handle: createWorkerHandler({ auth, google, researchSetupProfile, host: config.DELEGATED_WORKER_HOST }) };
 }
 export function createProductionHandler(env: NodeJS.ProcessEnv, boundaries: ProductionBoundaries = {}) {

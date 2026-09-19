@@ -1,16 +1,32 @@
 import type { TransactWriteItem } from '@aws-sdk/client-dynamodb';
 import { z } from 'zod';
 import { attemptKindSchema, DIAGNOSTICS_ATTEMPT_LIMIT, diagnosticsViewSchema, pairRedeemRequestSchema, pairRedeemResponseSchema,
-  v1CommandReceiptSchema, v1CommandSchema, type V1Command, type V1CommandReceipt } from '../../../../../src/shared/contracts/v1Contract';
+  v1CommandReceiptSchema, v1CommandSchema, type TodayCard, type V1Command, type V1CommandReceipt, type V1CommandSlice } from '../../../../../src/shared/contracts/v1Contract';
 import { DynamoReadUnavailable, fingerprint, keyPart, type DynamoStore } from '../dynamoStore';
 import type { WorkerHttpResponse } from '../handler';
 import type { WorkerAuth } from '../workerAuth';
 import { listAttempts, recordAttempt } from './attempts';
+import { planLogCallOutcome, readFirmView } from './calls';
 import { V1Devices, V1PairRefused, V1Unauthenticated, type V1Principal } from './devices';
+import { createAccountFirmSource } from './firms';
+import { planAddFirm, planAdmitRoute, planFirmStatus } from './firmsWrite';
 import { readLastTick } from './lastTick';
+import { applyReplyDecision, approveDraft, requestFollowup } from './mail';
+import type { MailboxAccess } from './mailbox';
 import { planSetStatePosture, postureSummary, readPostures } from './postures';
+import { readQueueSummary } from './queueView';
 import { readSettingsView } from './settings';
+import { planSuppress } from './suppression';
+import { planApproveTemplate, planSetSendingLimit } from './templates';
 import { readTodayView } from './today';
+
+/**
+ * The mailbox and the network as the API sees them: not at all. The three mailbox commands only write records, and
+ * the modules they share with the runner take those boundaries as arguments, so this is what the API passes in.
+ * A command that somehow tried to reach a mailbox from here would be refused rather than quietly succeeding.
+ */
+const mailboxRefused: MailboxAccess = { access: async () => ({ connected: false, reason: 'mailbox_not_connected' }) };
+const fetchRefused: typeof globalThis.fetch = async () => { throw new Error('api_has_no_provider_access'); };
 
 /**
  * The `/v1` routes of the rebuilt core (FSS target design section 3), mounted inside the existing handler so
@@ -19,8 +35,10 @@ import { readTodayView } from './today';
  *   POST /v1/pair/redeem      unauthenticated   a pairing code in, the device token out, once
  *   GET  /v1/diagnostics      device token      the last attempts (kind, limit), the last tick, the devices, the postures
  *   GET  /v1/today            device token      the morning list as cards, dialability computed at request time (S1)
+ *   GET  /v1/firms            device token      one firm in full, named by `?firmId=`: routes, sequence, calls, callbacks, suppression (S2)
  *   GET  /v1/settings         device token      postures by state and the clearance reference texts (S1b; the rest of Settings is S5)
- *   POST /v1/commands         device token      idempotent by commandId, per device; `revoke_device` (S0), `set_state_posture` (S1)
+ *   POST /v1/commands         device token      idempotent by commandId, per device; `revoke_device` (S0), `set_state_posture` (S1),
+ *                                               `log_call_outcome`, `add_firm`, `admit_route`, `suppress` (S2)
  *
  * Errors: 401 `{ error: 'unauthenticated' }` (with `reason: 'device_expired'` once a device's ninety days are over),
  * 404 `{ error: 'not_found' }` for any other `/v1` path or method, 400 `{ error: 'invalid_request' }` on a body or
@@ -45,6 +63,8 @@ export const v1CommandKey = (commandId: string): string => `V1COMMAND#${keyPart(
 
 const diagnosticsQuerySchema = z.strictObject({ kind: attemptKindSchema.optional(),
   limit: z.coerce.number().int().min(1).max(DIAGNOSTICS_ATTEMPT_LIMIT).optional() });
+/** The Firm view names its firm in the query, not in the path: one path literal per route keeps the gateway parity check exact. */
+const firmQuerySchema = z.strictObject({ firmId: z.string().min(1).max(200) });
 /** A receipt is bound to the device that issued the command; a replay from any other device is a conflict. */
 const receiptRecordSchema = z.strictObject({ fingerprint: z.string().regex(/^[a-f0-9]{64}$/), kind: z.string(), receipt: v1CommandReceiptSchema,
   at: z.iso.datetime({ precision: 3 }), deviceId: z.string().uuid() });
@@ -65,7 +85,9 @@ function repeatedReceipt(stored: unknown, expectedFingerprint: string, command: 
   const parsed = receiptRecordSchema.safeParse(stored);
   if (!parsed.success) throw new Error('v1_receipt_corrupt');
   if (parsed.data.deviceId !== principal.deviceId || parsed.data.fingerprint !== expectedFingerprint) return { commandId: command.commandId, outcome: 'refused', reason: 'command_conflict' };
-  return { commandId: command.commandId, outcome: 'duplicate', reason: parsed.data.receipt.reason ?? parsed.data.receipt.outcome };
+  // The first answer's slice travels with the duplicate too: a retry after a lost response still updates the card (S2).
+  return { commandId: command.commandId, outcome: 'duplicate', reason: parsed.data.receipt.reason ?? parsed.data.receipt.outcome,
+    ...(parsed.data.receipt.slice === undefined ? {} : { slice: parsed.data.receipt.slice }) };
 }
 
 /**
@@ -73,6 +95,9 @@ function repeatedReceipt(stored: unknown, expectedFingerprint: string, command: 
  * the command's own write and as the check that the caller is still an active device, so a lost response is answered
  * from the receipt, a second copy can never apply, and a revocation that lands mid-request refuses the write.
  */
+/** The one view slice the S2 commands return: the firm's card as it stands, or null when it is not on any list. */
+const card = (firmId: string, value: TodayCard | null): V1CommandSlice => ({ kind: 'card', firmId, card: value });
+
 async function applyCommand(store: DynamoStore, devices: V1Devices, principal: V1Principal, command: V1Command): Promise<V1CommandReceipt> {
   const key = v1CommandKey(command.commandId);
   const commandFingerprint = fingerprint(command);
@@ -91,6 +116,91 @@ async function applyCommand(store: DynamoStore, devices: V1Devices, principal: V
       // David's decision for one state (S1): stamped with the instant and the device label, prior decisions kept in history.
       const plan = await planSetStatePosture(store, command, principal.label);
       items.push(plan.item); receipt = { commandId: command.commandId, outcome: 'applied', reason: null };
+      break;
+    }
+    case 'log_call_outcome': {
+      // One dialed call (S2): the call record, the callback, the suppression set and the sequence advance, all here.
+      const plan = await planLogCallOutcome(store, { command, device: { deviceId: principal.deviceId, label: principal.label } });
+      if (plan.outcome === 'refused') { receipt = { commandId: command.commandId, outcome: 'refused', reason: plan.reason }; break; }
+      items.push(...plan.items);
+      receipt = { commandId: command.commandId, outcome: 'applied', reason: null, slice: card(command.firmId, plan.card) };
+      break;
+    }
+    case 'add_firm': {
+      // A firm David typed in (S2). It enters the pool like a researched one; no research is enqueued for it.
+      const plan = await planAddFirm(store, command);
+      if (plan.outcome === 'refused') { receipt = { commandId: command.commandId, outcome: 'refused', reason: plan.reason }; break; }
+      items.push(...plan.items);
+      // The firm is in the pool, not on today's list: the slice names it with no card until the next build.
+      receipt = { commandId: command.commandId, outcome: 'applied', reason: null, slice: card(plan.record.firmId, null) };
+      break;
+    }
+    case 'admit_route': {
+      // One route admitted by hand (S2). Refused on a suppressed firm; the free-mail and excluded-number rules decide the rest.
+      const firm = (await createAccountFirmSource(store).listFirms()).find(candidate => candidate.firmId === command.firmId);
+      const plan = await planAdmitRoute(store, command, firm
+        ? { name: firm.name, domain: firm.website, city: firm.city, state: firm.state, routes: firm.routes, status: firm.suppressed ? 'suppressed' : 'listed' }
+        : null);
+      if (plan.outcome === 'refused') { receipt = { commandId: command.commandId, outcome: 'refused', reason: plan.reason }; break; }
+      items.push(...plan.items);
+      receipt = { commandId: command.commandId, outcome: 'applied', reason: null, slice: card(command.firmId, null) };
+      break;
+    }
+    case 'suppress': {
+      // Permanent, by hand (S2). There is no unsuppress: no command, no view and no client path offers one.
+      const firm = command.firmId === undefined ? undefined
+        : (await createAccountFirmSource(store).listFirms()).find(candidate => candidate.firmId === command.firmId);
+      const plan = await planSuppress(store, { firmId: command.firmId ?? null, handle: command.handle ?? null, routes: firm?.routes ?? [],
+        reason: command.reason, source: 'manual', evidenceRef: command.evidenceRef ?? null, recordedBy: principal.label });
+      if (plan.outcome === 'refused') { receipt = { commandId: command.commandId, outcome: 'refused', reason: plan.reason }; break; }
+      items.push(...plan.items);
+      if (command.firmId !== undefined) items.push(...await planFirmStatus(store, command.firmId, 'suppressed'));
+      // A suppressed firm has left the list for good, which is what a null card says.
+      receipt = { commandId: command.commandId, outcome: 'applied', reason: null,
+        slice: command.firmId === undefined ? null : card(command.firmId, null) };
+      break;
+    }
+    case 'approve_template': {
+      // The standing approval (S3). Refused outright without the footer block or a postal address; approving never sends.
+      const plan = await planApproveTemplate(store, command);
+      if ('refused' in plan) receipt = { commandId: command.commandId, outcome: 'refused', reason: plan.refused.applied ? 'template_refused' : plan.refused.reason };
+      else { items.push(plan.item); receipt = { commandId: command.commandId, outcome: 'applied', reason: null }; }
+      break;
+    }
+    case 'set_sending_limit': {
+      // Narrowing only: a request that would widen any number past the ceiling fixed in code is refused whole.
+      const plan = await planSetSendingLimit(store, command);
+      if ('refused' in plan) receipt = { commandId: command.commandId, outcome: 'refused', reason: plan.refused.applied ? 'sending_limit_refused' : plan.refused.reason };
+      else { items.push(plan.item); receipt = { commandId: command.commandId, outcome: 'applied', reason: null }; }
+      break;
+    }
+    // The three mailbox commands (S3) write records of their own before the receipt, because each one touches more
+    // than one key: a decision writes REPLY# then the suppression set and the sequence, an approval writes DRAFT#.
+    // Every one of those writes is idempotent by construction (compare-and-set on the record's own revision, or
+    // absent-fenced), so a retry that lands before the receipt did repeats nothing; what it cannot promise is that
+    // the effect and the receipt commit together, which is why the caller is still refused if its device is revoked
+    // between the two. Approving a draft never sends it: the scheduler enqueues `mail.send_followup`, the runner
+    // puts it through the same fence as a sequence step.
+    case 'reply_decision': {
+      const outcome = await applyReplyDecision({ store, mailbox: mailboxRefused, fetch: fetchRefused },
+        { replyId: command.replyId, decision: command.decision, recordedBy: principal.label });
+      receipt = outcome.applied ? { commandId: command.commandId, outcome: 'applied', reason: outcome.decision }
+        : { commandId: command.commandId, outcome: 'refused', reason: outcome.reason };
+      break;
+    }
+    case 'request_followup': {
+      const outcome = await requestFollowup({ store, mailbox: mailboxRefused, fetch: fetchRefused },
+        { firmId: command.firmId, draftId: command.draftId, text: command.text ?? null });
+      receipt = outcome.applied ? { commandId: command.commandId, outcome: 'applied', reason: null }
+        : { commandId: command.commandId, outcome: 'refused', reason: outcome.reason };
+      break;
+    }
+    case 'approve_followup_draft':
+    case 'approve_reply_draft': {
+      const outcome = await approveDraft({ store, mailbox: mailboxRefused, fetch: fetchRefused },
+        { firmId: command.firmId, draftId: command.draftId, text: command.text });
+      receipt = outcome.applied ? { commandId: command.commandId, outcome: 'applied', reason: null }
+        : { commandId: command.commandId, outcome: 'refused', reason: outcome.reason };
       break;
     }
   }
@@ -139,9 +249,9 @@ export async function v1Router(input: V1RouterInput): Promise<WorkerHttpResponse
       catch (error) { if (error instanceof V1Unauthenticated) return unauthenticated(respond, error); throw error; }
       const query = diagnosticsQuerySchema.safeParse({ kind: input.query.get('kind') ?? undefined, limit: input.query.get('limit') ?? undefined });
       if (!query.success) return respond(400, { error: 'invalid_request' });
-      const [attempts, lastTick, deviceList, postures] = await Promise.all([listAttempts(store, query.data), readLastTick(store), devices.listDevices(), readPostures(store)]);
+      const [attempts, lastTick, deviceList, postures, queue] = await Promise.all([listAttempts(store, query.data), readLastTick(store), devices.listDevices(), readPostures(store), readQueueSummary(store)]);
       const asOf = store.now();
-      return respond(200, diagnosticsViewSchema.parse({ asOf, attempts, lastTick, devices: deviceList, postures: postures.map(record => postureSummary(record, asOf)) }));
+      return respond(200, diagnosticsViewSchema.parse({ asOf, attempts, lastTick, devices: deviceList, postures: postures.map(record => postureSummary(record, asOf)), queue }));
     }
     if (path === '/v1/settings' && method === 'GET') {
       // Postures by state and the clearance reference texts (S1b), so David can record postures before S5 ships the rest of Settings.
@@ -154,6 +264,15 @@ export async function v1Router(input: V1RouterInput): Promise<WorkerHttpResponse
       try { await devices.authenticate(input.authorization); }
       catch (error) { if (error instanceof V1Unauthenticated) return unauthenticated(respond, error); throw error; }
       return respond(200, await readTodayView(store));
+    }
+    if (path === '/v1/firms' && method === 'GET') {
+      // One firm in full (S2), named by `?firmId=`. Dialability is computed here, at request time; a read is never a dial.
+      try { await devices.authenticate(input.authorization); }
+      catch (error) { if (error instanceof V1Unauthenticated) return unauthenticated(respond, error); throw error; }
+      const query = firmQuerySchema.safeParse({ firmId: input.query.get('firmId') ?? undefined });
+      if (!query.success) return respond(400, { error: 'invalid_request' });
+      const view = await readFirmView(store, query.data.firmId);
+      return view === null ? respond(404, { error: 'not_found' }) : respond(200, view);
     }
     if (path === '/v1/commands' && method === 'POST') {
       let principal: V1Principal;

@@ -4,6 +4,8 @@ import type { AccountRoute } from '../../../../../src/shared/contracts/accountCo
 import { isTerritoryAddableState, isTerritoryMultiZoneState, isTerritoryState, TERRITORY_ADDABLE_STATE_TIME_ZONES, TERRITORY_STATE_TIME_ZONES,
   territoryStateSchema, type TerritoryState, type TerritoryTimeZone } from '../../../../../src/shared/contracts/territoryClearanceContract';
 import type { DynamoStore } from '../dynamoStore';
+import { listFirmRecords, type FirmRecord, type FirmRouteLike } from './firmsWrite';
+import { listSuppressedFirmIds } from './suppression';
 
 /**
  * The firm read adapter of the rebuilt core (FSS target design section 2, slice S1). It builds one `FirmCard` per
@@ -20,11 +22,19 @@ import type { DynamoStore } from '../dynamoStore';
  * Nothing here is an authority record: ordering inputs are research recency and evidence richness only.
  *
  * `FirmSource` is the seam S6 swaps for `FIRM#`: the list build and the Today view read cards through it and nothing else.
+ *
+ * Slice S2 adds the new-shape reads beside the old ones, so one card can come from either core: the `FIRM#` records
+ * (a firm David entered by hand, and the routes he admitted by hand on a researched firm) and the `SUPPRESS#FIRM#`
+ * set. New first, old second — a firm suppressed under either shape is suppressed, and a hand-admitted route ranks
+ * by exactly the same rule as a researched one.
  */
 
 export type FirmHold = { reason: 'state_not_cleared'; code: 'state_unknown' | 'zone_unknown' };
 export type FirmDerivation =
   | { source: 'places_formatted_address'; sourceId: string; state: TerritoryState; zoneFrom: 'territory_state_map' | 'addable_state_map' }
+  /** A firm David typed in himself (S2, `add_firm`): he named the state, the zone comes from the same two maps. */
+  | { source: 'hand_entered'; sourceId: null; state: TerritoryState; zoneFrom: 'territory_state_map' | 'addable_state_map' }
+  | { source: 'hand_entered'; sourceId: null; state: TerritoryState | null; zoneFrom: null; reason: 'state_zone_not_recorded' | 'state_not_found' }
   | { source: 'places_formatted_address'; sourceId: string; state: TerritoryState; zoneFrom: null; reason: 'state_spans_two_zones' | 'state_zone_not_recorded' }
   | { source: 'places_formatted_address'; sourceId: string; state: null; zoneFrom: null; reason: 'address_missing' | 'state_not_found' }
   | { source: 'none'; sourceId: null; state: null; zoneFrom: null; reason: 'no_places_source' };
@@ -41,7 +51,15 @@ export type FirmCard = {
   /** Evidence richness: a business email counts two, a phone the firm itself published or confirmed counts one. A directory listing counts nothing. */
   evidenceScore: number;
   enrollment: FirmEnrollment | null;
-  suppressed: 'mail_suppression' | 'sequence_stopped' | null;
+  /** The newest stored version of every route the firm carries, researched or hand-admitted; what a wrong number selects a replacement from (S2). */
+  routes: FirmRouteLike[];
+  /** Routes never dialed again: this firm's `TERRITORY_RETIRED_ROUTE#` rows, sorted. */
+  retiredRouteIds: string[];
+  /** Whether the firm itself came from research or from David's own hand (S2, `add_firm`). */
+  enteredBy: 'research' | 'hand';
+  /** How many fetched sources back the firm's record; zero for a hand-entered firm, which has no evidence yet. */
+  sourceCount: number;
+  suppressed: 'mail_suppression' | 'sequence_stopped' | 'suppression_set' | null;
   /** Calls already made under the old keys (a `CAMPAIGN_EVIDENCE#` call row that was actually dialed). */
   calls: number;
   lastCall: { outcome: string; at: string } | null;
@@ -92,9 +110,9 @@ export function deriveStateAndZone(record: AccountRecord): { city: string | null
   return { city, state, timeZone: null, derivation: { source: 'places_formatted_address', sourceId, state, zoneFrom: null, reason }, hold: { reason: 'state_not_cleared', code: 'zone_unknown' } };
 }
 
-/** The newest stored version of each route id. */
-function newestRoutes(routes: readonly AccountRoute[]): AccountRoute[] {
-  const newest = new Map<string, AccountRoute>();
+/** The newest stored version of each route id, whichever shape wrote it. */
+function newestRoutes(routes: readonly FirmRouteLike[]): FirmRouteLike[] {
+  const newest = new Map<string, FirmRouteLike>();
   for (const route of routes) { const held = newest.get(route.id); if (!held || held.version < route.version) newest.set(route.id, route); }
   return [...newest.values()];
 }
@@ -102,10 +120,10 @@ function newestRoutes(routes: readonly AccountRoute[]): AccountRoute[] {
  * The phone the card offers: the enrolled route when the sequence selected one and it is not retired; otherwise the
  * best remaining business phone, a number from the firm's own page before a directory listing, never an unverified one.
  */
-function selectPhone(routes: readonly AccountRoute[], retired: ReadonlySet<string>, selectedRouteId: string | null): FirmPhone | null {
+function selectPhone(routes: readonly FirmRouteLike[], retired: ReadonlySet<string>, selectedRouteId: string | null): FirmPhone | null {
   const candidates = newestRoutes(routes).filter(route => route.channel === 'phone' && route.purpose === 'business' && route.verification !== 'unverified' && !retired.has(route.id));
   const selected = selectedRouteId ? candidates.find(route => route.id === selectedRouteId) : undefined;
-  const rank = (route: AccountRoute) => route.verification === 'published' ? 0 : route.verification === 'confirmed' ? 1 : 2;
+  const rank = (route: FirmRouteLike) => route.verification === 'published' ? 0 : route.verification === 'confirmed' ? 1 : 2;
   const chosen = selected ?? [...candidates].sort((a, b) => rank(a) - rank(b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))[0];
   return chosen ? { routeId: chosen.id, number: chosen.value, verification: chosen.verification } : null;
 }
@@ -114,14 +132,17 @@ async function listParsed<T>(store: DynamoStore, prefix: string, schema: z.ZodTy
   return (await store.list<unknown>(prefix)).flatMap(row => { const parsed = schema.safeParse(row.stored.data); return parsed.success ? [parsed.data] : []; });
 }
 
-/** Today's records as the firm source. Seven prefix queries per listing, one card per `ACCOUNT#` row that parses. */
+/**
+ * Today's records as the firm source: nine prefix queries per listing, one card per `ACCOUNT#` row that parses, plus
+ * one card per firm that exists only as a `FIRM#` record because David typed it in. Never one read per firm.
+ */
 export function createAccountFirmSource(store: DynamoStore): FirmSource {
   return { async listFirms(): Promise<FirmCard[]> {
-    const [accounts, territory, enrollments, versions, evidence, retiredRows, suppressions] = await Promise.all([
+    const [accounts, territory, enrollments, versions, evidence, retiredRows, suppressions, firmRecords, suppressedIds] = await Promise.all([
       listParsed(store, 'ACCOUNT#', accountRecordSchema), listParsed(store, 'TERRITORY_ENROLLMENT#', territoryEnrollmentLightSchema),
       listParsed(store, 'CAMPAIGN_ENROLLMENT#', enrollmentLightSchema), listParsed(store, 'CAMPAIGN_VERSION#', versionLightSchema),
       listParsed(store, 'CAMPAIGN_EVIDENCE#', evidenceLightSchema), listParsed(store, 'TERRITORY_RETIRED_ROUTE#', retiredLightSchema),
-      listParsed(store, 'MAIL_SUPPRESSION#', suppressionLightSchema)]);
+      listParsed(store, 'MAIL_SUPPRESSION#', suppressionLightSchema), listFirmRecords(store), listSuppressedFirmIds(store)]);
     const territoryByFirm = new Map(territory.map(row => [row.accountId, row]));
     const enrollmentById = new Map(enrollments.map(row => [row.id, row]));
     const versionById = new Map(versions.map(row => [row.id, row]));
@@ -133,7 +154,7 @@ export function createAccountFirmSource(store: DynamoStore): FirmSource {
       if (row.channel !== 'call' || row.source !== 'human' || NOT_A_CALL.has(row.outcome)) continue;
       const calls = callsByFirm.get(row.accountId) ?? []; calls.push({ outcome: row.outcome, at: row.observedAt }); callsByFirm.set(row.accountId, calls);
     }
-    return accounts.map(record => {
+    const cards: FirmCard[] = accounts.map(record => {
       const firmId = record.account.id;
       const derived = deriveStateAndZone(record);
       const territoryRow = territoryByFirm.get(firmId);
@@ -149,7 +170,9 @@ export function createAccountFirmSource(store: DynamoStore): FirmSource {
           currentStepIndex: index >= 0 ? index : null, currentStepChannel: step?.channel ?? null, stepCount: version?.steps.length ?? 0,
           nextDueAt, startedAt: enrollmentRow.startedAt, restingUntil: enrollmentRow.restingUntil ?? null };
       }
-      const phone = selectPhone(record.routes, retiredByFirm.get(firmId) ?? new Set(), enrollmentRow?.selectedRouteId ?? null);
+      // Routes David admitted by hand on this firm live on its `FIRM#` record, never inside the researched record.
+      const routes = newestRoutes([...record.routes, ...(firmRecords.get(firmId)?.routes ?? [])]);
+      const phone = selectPhone(routes, retiredByFirm.get(firmId) ?? new Set(), enrollmentRow?.selectedRouteId ?? null);
       const email = record.claims.find(claim => claim.key === 'business_email');
       const businessEmail = email?.key === 'business_email' ? email.value : null;
       const calls = [...(callsByFirm.get(firmId) ?? [])].sort((a, b) => a.at < b.at ? -1 : a.at > b.at ? 1 : 0);
@@ -157,8 +180,59 @@ export function createAccountFirmSource(store: DynamoStore): FirmSource {
       const evidenceScore = (businessEmail ? 2 : 0) + (phone && (phone.verification === 'published' || phone.verification === 'confirmed') ? 1 : 0);
       return { firmId, name: record.account.name, website: record.account.domain, phone, businessEmail, city: derived.city, state: derived.state, timeZone: derived.timeZone,
         derivation: derived.derivation, hold: derived.hold, researchedAt, evidenceScore, enrollment,
-        suppressed: suppressed.has(firmId) ? 'mail_suppression' : enrollment?.state === 'stopped' ? 'sequence_stopped' : null,
+        routes, retiredRouteIds: [...(retiredByFirm.get(firmId) ?? new Set<string>())].sort(), enteredBy: 'research', sourceCount: record.sources.length,
+        suppressed: suppressedIds.has(firmId) ? 'suppression_set' : suppressed.has(firmId) ? 'mail_suppression' : enrollment?.state === 'stopped' ? 'sequence_stopped' : null,
         calls: calls.length, lastCall: calls.at(-1) ?? null };
     });
+    // A firm David typed in has no `ACCOUNT#` row of its own; its card comes from its `FIRM#` record, with the same
+    // enrollment, retired-route, call and suppression joins applied, so it is a card like any other.
+    const researched = new Set(cards.map(card => card.firmId));
+    for (const record of firmRecords.values()) {
+      if (researched.has(record.firmId) || record.enteredBy !== 'hand') continue;
+      cards.push(handEnteredCard(record, { territoryByFirm, enrollmentById, versionById, retiredByFirm, callsByFirm, suppressed, suppressedIds }));
+    }
+    return cards;
   } };
+}
+
+type FirmJoins = {
+  territoryByFirm: ReadonlyMap<string, { accountId: string; enrollmentId: string; versionId: string; routeId: string }>;
+  enrollmentById: ReadonlyMap<string, z.infer<typeof enrollmentLightSchema>>;
+  versionById: ReadonlyMap<string, z.infer<typeof versionLightSchema>>;
+  retiredByFirm: ReadonlyMap<string, Set<string>>;
+  callsByFirm: ReadonlyMap<string, { outcome: string; at: string }[]>;
+  suppressed: ReadonlySet<string>;
+  suppressedIds: ReadonlySet<string>;
+};
+
+/** One card for a firm that exists only as a `FIRM#` record: the state David named, the zone the record derived. */
+function handEnteredCard(record: FirmRecord, joins: FirmJoins): FirmCard {
+  const state = record.state;
+  const timeZone = territoryTimeZoneOf(record);
+  const derivation: FirmDerivation = state && timeZone && record.derivedZoneFrom
+    ? { source: 'hand_entered', sourceId: null, state, zoneFrom: record.derivedZoneFrom }
+    : { source: 'hand_entered', sourceId: null, state, zoneFrom: null, reason: state ? 'state_zone_not_recorded' : 'state_not_found' };
+  const hold: FirmHold | null = !state ? { reason: 'state_not_cleared', code: 'state_unknown' }
+    : !timeZone ? { reason: 'state_not_cleared', code: 'zone_unknown' } : null;
+  const territoryRow = joins.territoryByFirm.get(record.firmId);
+  const enrollmentRow = territoryRow ? joins.enrollmentById.get(territoryRow.enrollmentId) : undefined;
+  const retiredRouteIds = [...(joins.retiredByFirm.get(record.firmId) ?? new Set<string>())].sort();
+  const routes = newestRoutes(record.routes);
+  const phone = selectPhone(routes, new Set(retiredRouteIds), enrollmentRow?.selectedRouteId ?? null);
+  const businessEmail = routes.find(route => route.channel === 'email')?.value ?? null;
+  const calls = [...(joins.callsByFirm.get(record.firmId) ?? [])].sort((a, b) => a.at < b.at ? -1 : a.at > b.at ? 1 : 0);
+  return { firmId: record.firmId, name: record.name, website: record.domain, phone, businessEmail, city: record.city, state, timeZone,
+    derivation, hold, researchedAt: record.enteredAt,
+    evidenceScore: (businessEmail ? 2 : 0) + (phone && (phone.verification === 'published' || phone.verification === 'confirmed') ? 1 : 0),
+    enrollment: null, routes, retiredRouteIds, enteredBy: 'hand', sourceCount: 0,
+    suppressed: joins.suppressedIds.has(record.firmId) ? 'suppression_set' : joins.suppressed.has(record.firmId) ? 'mail_suppression' : null,
+    calls: calls.length, lastCall: calls.at(-1) ?? null };
+}
+
+/** The zone on a `FIRM#` record, only when it is one the territory contract actually records. */
+function territoryTimeZoneOf(record: FirmRecord): TerritoryTimeZone | null {
+  if (!record.state) return null;
+  if (isTerritoryState(record.state)) return TERRITORY_STATE_TIME_ZONES[record.state];
+  if (isTerritoryAddableState(record.state)) return TERRITORY_ADDABLE_STATE_TIME_ZONES[record.state];
+  return null;
 }
