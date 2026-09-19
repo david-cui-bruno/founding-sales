@@ -3,11 +3,11 @@ import { weekViewSchema, type V1CallOutcome, type V1HoldReason, type WeekView } 
 import type { DynamoStore } from '../dynamoStore';
 import { ATTEMPT_PREFIX } from './attempts';
 import { CALL_PREFIX, CALLBACK_PREFIX, callRecordSchema, callbackRecordSchema } from './calls';
-import { FIRM_PREFIX, firmRecordSchema } from './firmsWrite';
 import { REPLY_PREFIX, replyRecordSchema } from './mail';
 import { holdReasonOf, SEND_PREFIX, sendRecordSchema } from './send';
 import { EASTERN, localParts } from './localClock';
-import { RESEARCH_LEDGER_KEY } from './settingsView';
+import { createAccountFirmSource, type FirmSource } from './firms';
+import { readResearchCounter } from './pool';
 
 /**
  * `GET /v1/week` (FSS target design section 3; slice S5): the last seven Eastern days, counted from the permanent
@@ -17,8 +17,8 @@ import { RESEARCH_LEDGER_KEY } from './settingsView';
  *   emails sent        `SEND#` in state `accepted`, on the day it was accepted
  *   replies            `REPLY#`, one per matched message
  *   callbacks          `CALLBACK#`: promised on the day the call promised it, kept on the day it was resolved `made`
- *   firms researched   `EVIDENCE#` where it exists, and `FIRM#` rows research entered, counted once per firm
- *   spend              the daily research counters, with the days that have no counter named rather than read as zero
+ *   firms researched   the firm source's own research stamp (`FIRM#.researchRevision` above zero, at `researchedAt`)
+ *   spend              S4's daily research counters, with the days they no longer cover named rather than read as zero
  *   holds              `ATTEMPT#` outcomes of `held`, by the user-facing reason S3's `holdReasonOf` maps the code to
  *
  * Days are America/New_York calendar days, so a call at 22:00 Eastern belongs to the day David was living in. The
@@ -41,21 +41,14 @@ export function easternDay(instant: string | null): string | null {
   try { return localParts(instant, EASTERN).date; } catch { return null; }
 }
 
-/** The daily research counter the design names; absent means the day is unknown, never zero. */
-export const researchCounterKey = (easternDate: string): string => `COUNTER#${z.iso.date().parse(easternDate)}#research`;
-const researchCounterSchema = z.object({ spentMicros: z.number().int().nonnegative() });
-/** Evidence is slice S4's record; read loosely here, because this slice does not own its shape. */
-export const EVIDENCE_PREFIX = 'EVIDENCE#';
-const evidenceSchema = z.object({ firmId: z.string().min(1).max(200),
-  researchedAt: z.iso.datetime({ precision: 3 }).optional(), at: z.iso.datetime({ precision: 3 }).optional() });
-const researchLedgerSchema = z.object({ limit: z.number().int().nonnegative(), spent: z.number().int().nonnegative(),
-  approvedAt: z.iso.datetime({ precision: 3 }) });
 /** Only an accepted send left the building. A `dispatching` or `unknown` row is not a sent email and is not counted. */
 const SENT_STATE = 'accepted';
+/** S4's research counters keep three days (design section 2), so the older days of a week have none by design. */
+const RESEARCH_COUNTER_KEEPS_DAYS = 3;
 
 type Day = { date: string; calls: number; emailsSent: number; replies: number; callbacksPromised: number; callbacksKept: number; firmsResearched: number };
 
-export async function readWeekView(store: DynamoStore): Promise<WeekView> {
+export async function readWeekView(store: DynamoStore, options: { firms?: FirmSource } = {}): Promise<WeekView> {
   const asOf = store.now();
   const dates = easternWeek(asOf);
   const inWindow = new Set(dates);
@@ -66,11 +59,10 @@ export async function readWeekView(store: DynamoStore): Promise<WeekView> {
     if (day) day[field] += by;
   };
 
-  const [callRows, sendRows, replyRows, callbackRows, evidenceRows, firmRows, attemptRows, counterRows, ledgerRow] = await Promise.all([
+  const [callRows, sendRows, replyRows, callbackRows, firms, attemptRows, counters] = await Promise.all([
     store.list<unknown>(CALL_PREFIX), store.list<unknown>(SEND_PREFIX), store.list<unknown>(REPLY_PREFIX), store.list<unknown>(CALLBACK_PREFIX),
-    store.list<unknown>(EVIDENCE_PREFIX), store.list<unknown>(FIRM_PREFIX), store.list<unknown>(ATTEMPT_PREFIX),
-    Promise.all(dates.map(async date => ({ date, row: await store.get<unknown>(researchCounterKey(date)) }))),
-    store.get<unknown>(RESEARCH_LEDGER_KEY),
+    (options.firms ?? createAccountFirmSource(store)).listFirms(), store.list<unknown>(ATTEMPT_PREFIX),
+    Promise.all(dates.map(async date => ({ date, counter: await readResearchCounter(store, date) }))),
   ]);
 
   // Calls, by the outcome David logged, on the day he says the call happened.
@@ -117,20 +109,14 @@ export async function readWeekView(store: DynamoStore): Promise<WeekView> {
     if (keptOn !== null && inWindow.has(keptOn)) { kept += 1; bump(keptOn, 'callbacksKept'); }
   }
 
-  // One firm counted once, on the day its research landed: the evidence record where there is one, the firm row
-  // research entered where there is not. A hand-entered firm was never researched and is never counted here.
+  // One firm counted once, on the day its research landed. The firm source is the one place that stamp lives:
+  // `researchRevision` above zero is a firm research actually worked on, and `researchedAt` is when it last did.
+  // A firm David entered by hand has no revision and is never counted here, whatever else it has.
   const researchedOn = new Map<string, string>();
-  for (const row of evidenceRows) {
-    const parsed = evidenceSchema.safeParse(row.stored.data);
-    if (!parsed.success) continue;
-    const date = easternDay(parsed.data.researchedAt ?? parsed.data.at ?? null);
-    if (date !== null && inWindow.has(date)) researchedOn.set(parsed.data.firmId, date);
-  }
-  for (const row of firmRows) {
-    const parsed = firmRecordSchema.safeParse(row.stored.data);
-    if (!parsed.success || parsed.data.enteredBy !== 'research' || researchedOn.has(parsed.data.firmId)) continue;
-    const date = easternDay(parsed.data.enteredAt);
-    if (date !== null && inWindow.has(date)) researchedOn.set(parsed.data.firmId, date);
+  for (const firm of firms) {
+    if (firm.researchRevision <= 0) continue;
+    const date = easternDay(firm.researchedAt);
+    if (date !== null && inWindow.has(date)) researchedOn.set(firm.firmId, date);
   }
   for (const date of researchedOn.values()) bump(date, 'firmsResearched');
 
@@ -146,21 +132,21 @@ export async function readWeekView(store: DynamoStore): Promise<WeekView> {
     if (held) held.count += 1; else holds.set(code, { reason: holdReasonOf(code), code, count: 1 });
   }
 
-  let micros = 0, daysCounted = 0;
-  for (const { row } of counterRows) {
-    const parsed = row ? researchCounterSchema.safeParse(row.data) : null;
-    if (!parsed?.success) continue;
-    micros += parsed.data.spentMicros;
+  // S4's counters keep three days, so a week's older days have none. That is said as `daysMissing`, never summed
+  // in as a zero: the total is only ever over the days a counter was actually read.
+  let spent = 0, daysCounted = 0;
+  for (const { counter } of counters) {
+    if (counter === null) continue;
+    spent += counter.spent;
     daysCounted += 1;
   }
-  const ledger = ledgerRow ? researchLedgerSchema.safeParse(ledgerRow.data) : null;
 
   return weekViewSchema.parse({
     asOf, from: dates[0]!, to: dates[dates.length - 1]!, days: dates.map(date => days.get(date)!),
     calls: { total: callTotal, byOutcome: [...byOutcome.entries()].map(([outcome, count]) => ({ outcome, count })).sort((a, b) => a.outcome < b.outcome ? -1 : 1) },
     emailsSent, replies, callbacks: { promised, kept }, firmsResearched: researchedOn.size,
-    spend: { micros: daysCounted === 0 ? null : micros, daysCounted, daysMissing: dates.length - daysCounted,
-      ledger: ledger?.success ? { limitMicros: ledger.data.limit, spentMicros: ledger.data.spent, approvedAt: ledger.data.approvedAt } : null },
+    spend: { spent: daysCounted === 0 ? null : spent, daysCounted, daysMissing: dates.length - daysCounted,
+      counterKeepsDays: RESEARCH_COUNTER_KEEPS_DAYS },
     holds: [...holds.values()].sort((a, b) => b.count - a.count || (a.code < b.code ? -1 : 1)),
   });
 }

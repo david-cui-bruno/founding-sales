@@ -9,6 +9,7 @@ import { attemptCode, recordAttempt } from './v1/attempts';
 import { runScheduledDayBuild } from './v1/dayBuild';
 import { draftKey, draftRecordSchema, runMailPollJob, type MailDependencies } from './v1/mail';
 import { createWorkerGrantMailboxAccess, type MailboxAccess } from './v1/mailbox';
+import { runResearchBackfillPage, runResearchFirmJob, type ResearchDependencies } from './v1/research';
 import { runReconcileJob, runSendFollowupJob, runSendStepJob, type SendDependencies } from './v1/send';
 
 /**
@@ -26,7 +27,9 @@ import { runReconcileJob, runSendFollowupJob, runSendStepJob, type SendDependenc
 
 export const RUNNER_BUDGET_MS = 5 * 60_000;
 
-export type RunnerDependencies = { store: DynamoStore; mailbox: MailboxAccess; fetch: typeof globalThis.fetch; budgetMs?: number };
+export type RunnerDependencies = { store: DynamoStore; mailbox: MailboxAccess; fetch: typeof globalThis.fetch; budgetMs?: number }
+  /** S4's research boundaries. Absent, a research job is held honestly rather than answered as done. */
+  & Pick<ResearchDependencies, 'places' | 'pageHttp' | 'resolve' | 'extraction'>;
 export type RunnerOutcome = { jobId: string; state: 'done' | 'failed' | 'skipped'; reason: string | null };
 
 export const sqsEventSchema = z.object({ Records: z.array(z.object({ messageId: z.string().max(200), body: z.string().max(262144) })).max(1) });
@@ -45,6 +48,8 @@ async function execute(deps: RunnerDependencies, message: QueueMessage, signal: 
   if (!parsed || parsed.kind !== message.kind) return { ok: false, reason: 'job_id_unrecognised' };
   const send: SendDependencies = { store: deps.store, mailbox: deps.mailbox, fetch: deps.fetch };
   const mail: MailDependencies = send;
+  const research: ResearchDependencies = { store: deps.store, fetch: deps.fetch, places: deps.places, pageHttp: deps.pageHttp,
+    resolve: deps.resolve, extraction: deps.extraction };
   switch (parsed.kind) {
     case 'day.build': {
       const outcome = await runScheduledDayBuild(deps.store);
@@ -80,11 +85,14 @@ async function execute(deps: RunnerDependencies, message: QueueMessage, signal: 
       }
       return { ok: outcome.outcome !== 'refused', reason: 'code' in outcome ? outcome.code : outcome.outcome };
     }
-    // S4 puts research on the queue. Until it does, the scheduler never enqueues one, and a message that names one
-    // is refused honestly rather than quietly acknowledged as done.
-    case 'research.firm':
-    case 'research.backfill_page':
-      return { ok: false, reason: 'job_kind_not_ready' };
+    case 'research.backfill_page': {
+      const report = await runResearchBackfillPage(research, { jobId: message.jobId, queryHash: parsed.queryHash, pageHash: parsed.pageHash }, signal);
+      return { ok: true, reason: report.reason };
+    }
+    case 'research.firm': {
+      const report = await runResearchFirmJob(research, { jobId: message.jobId, firmId: parsed.firmId, revision: parsed.revision }, signal);
+      return { ok: true, reason: report.reason };
+    }
   }
 }
 

@@ -21,6 +21,7 @@ import {
   type DiagnosticsDevice,
   type PausedView,
   type PhoneSetupView,
+  type ResearchView,
   type SettingsView,
   type StatePostureSummary,
   type TodayCard,
@@ -195,6 +196,16 @@ function sendingFixture(postalAddress: string): NonNullable<SettingsView['sendin
   };
 }
 
+/** The research config as the worker serves it: a grid, a budget under the code ceiling, and a live review window. */
+export const STUB_DESCRIPTOR_EXPIRES_AT = '2026-12-01T12:00:00.000Z';
+const researchFixture = (): ResearchView => ({
+  queries: ['fictional law firms in Providence RI', 'fictional law firms in Boston MA', 'fictional law firms in Austin TX'],
+  dailyBudget: 45, budgetCeiling: 200,
+  descriptor: { reviewedAt: '2026-09-01T12:00:00.000Z', expiresAt: STUB_DESCRIPTOR_EXPIRES_AT, status: 'reviewed' },
+  todaySpend: { date: '2026-09-18', spent: 12, budget: 45, remaining: 33 },
+  revision: 4, updatedAt: '2026-09-01T12:00:00.000Z',
+});
+
 const CALL_FLOOR = { days: [1, 2, 3, 4, 5], window: { startMinute: 480, endMinute: 1200 } };
 const callsFixture = (): CallPolicyView => ({ floor: CALL_FLOOR, window: { startMinute: 480, endMinute: 1200 }, byState: [], capPerRun: null, revision: 0, updatedAt: null });
 const phoneFixture = (): PhoneSetupView => ({ status: 'cleared', confirmedAt: null, proofDigest: null, confirmedBy: null, revision: 0, updatedAt: null });
@@ -221,7 +232,7 @@ function weekFixture(asOf: string): WeekView {
     emailsSent: total('emailsSent'), replies: total('replies'),
     callbacks: { promised: total('callbacksPromised'), kept: total('callbacksKept') },
     firmsResearched: total('firmsResearched'),
-    spend: { micros: 184_000, daysCounted: 5, daysMissing: 2, ledger: { limitMicros: 5_000_000, spentMicros: 612_000, approvedAt: instant(60 * 24 * 40) } },
+    spend: { spent: 84, daysCounted: 3, daysMissing: 4, counterKeepsDays: 3 },
     holds: [{ reason: 'cap_reached', code: 'cap_reached', count: 4 }, { reason: 'state_not_cleared', code: 'no_posture', count: 2 }],
   });
 }
@@ -305,6 +316,7 @@ export async function startStubWorker(): Promise<StubWorker> {
   let phone: PhoneSetupView = phoneFixture();
   let paused: PausedView = pausedFixture();
   let sending = sendingFixture(STUB_POSTAL_ADDRESS);
+  const research: ResearchView = researchFixture();
   let templates = templatesFixture(STUB_POSTAL_ADDRESS);
   const requests: StubRequest[] = [];
   const commands: V1Command[] = [];
@@ -370,9 +382,7 @@ export async function startStubWorker(): Promise<StubWorker> {
         postureHistory: [...postureHistory.entries()].filter(([, entries]) => entries.length > 0)
           .map(([state, entries]) => ({ state, entries })).sort((a, b) => (a.state < b.state ? -1 : 1)),
         templates, sending,
-        research: { present: false, readOnlyReason: 'research_config_absent',
-          note: 'Research config is not set. This section is read-only until the research slice ships set_research_config.',
-          config: null, descriptor: null, ledger: null },
+        research,
         calls, phone, google: { status: 'connected', email: STUB_MAILBOX, grants: 1, reconsentAtCutover: true,
           note: 'Connected through the pairing-bound grant the old worker holds. It is replaced by a fresh consent at cutover.' },
         devices: devicesView(), paused,
@@ -522,7 +532,8 @@ export async function startStubWorker(): Promise<StubWorker> {
         receipts.set(command.commandId, receipt);
         return send(response, 200, v1CommandReceiptSchema.parse(receipt));
       }
-      // Anything else the contract carries that no client page sends yet is refused honestly, never answered as applied.
+      // Anything else the contract carries that no client page sends yet is refused honestly, never answered as
+      // applied. `admit_route` and `suppress` were already answered above, so everything reaching here is unmodelled.
       if (command.kind !== 'revoke_device') {
         receipt = { commandId: command.commandId, outcome: 'refused', reason: 'command_not_stubbed' };
         receipts.set(command.commandId, receipt);

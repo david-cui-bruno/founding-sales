@@ -240,21 +240,27 @@ export function GoogleSection({ google }: { google: GoogleGrantView }) {
   );
 }
 
+/**
+ * Research. The one thing here David has to keep current is the descriptor window: research stops when it expires,
+ * so the date is shown plainly and an expired or unrecorded window says what that means rather than only naming a
+ * status. The queries and the budget are the research slice's to change; this section reports them.
+ */
 export function ResearchSection({ research }: { research: ResearchView }) {
+  const descriptor = research.descriptor;
   return (
-    <Section id="research" title="Research" lead="How firms are found and what that may cost. Read-only here.">
-      <p className="research__state">{research.present ? 'A research config is stored.' : 'No research config is stored.'}</p>
-      <p className="page__tick">{research.note}</p>
-      {research.descriptor && (
-        <p className="research__descriptor">
-          Descriptor: {research.descriptor.status}{research.descriptor.expiresAt === null ? '' : ` · expires ${day(research.descriptor.expiresAt)}`}.
-        </p>
-      )}
-      {research.ledger && (
-        <p className="research__ledger">
-          Budget since {day(research.ledger.approvedAt)}: {research.ledger.spentMicros} of {research.ledger.limitMicros} micros. This is a total, not a week.
-        </p>
-      )}
+    <Section id="research" title="Research" lead="How firms are found, what that may cost a day, and when your operator review runs out.">
+      <p className="research__descriptor" data-descriptor={descriptor === null ? 'none' : descriptor.status}>
+        {descriptor === null
+          ? 'Operator review: not recorded. Research is held until it is.'
+          : descriptor.status === 'expired'
+            ? `Operator review: expired ${day(descriptor.expiresAt)}. Research is held until it is renewed.`
+            : `Operator review: valid until ${day(descriptor.expiresAt)}, reviewed ${day(descriptor.reviewedAt)}.`}
+      </p>
+      <p className="research__budget">
+        Today ({research.todaySpend.date}): {research.todaySpend.spent} of {research.todaySpend.budget} used, {research.todaySpend.remaining} left.
+        Daily budget {research.dailyBudget}, ceiling fixed in code {research.budgetCeiling}.
+      </p>
+      <p className="research__queries">{research.queries.length} {research.queries.length === 1 ? 'query' : 'queries'} in the grid · revision {research.revision}.</p>
     </Section>
   );
 }

@@ -4,6 +4,7 @@ import { googleGrantViewSchema, researchViewSchema, sendingViewSchema, settingsT
   type GoogleGrantView, type ResearchView, type SendingView, type SettingsTemplate, type SettingsView } from '../../../../../src/shared/contracts/v1Contract';
 import type { DynamoStore } from '../dynamoStore';
 import { callPolicyView, readCallPolicy } from './callPolicy';
+import { descriptorStatusAt, RESEARCH_DAILY_BUDGET_CEILING, readResearchSettings, remainingResearchToday } from './pool';
 import { V1Devices } from './devices';
 import { GOOGLE_GRANT_PREFIX, grantPairingIds } from './mailbox';
 import { phoneSetupView, pausedView, readPausedRecord, readPhoneSetup } from './phoneSetup';
@@ -18,7 +19,7 @@ import { footerBlock, readSendingSettings, readSendUsage, readTemplates, SENDING
  *   States      the postures per state with their review dates and every earlier decision, and the reference texts
  *   Templates   the five templates, their standing approval and the footer check (S3's records)
  *   Sending     the daily limit, the ramp, the ceiling fixed in code, the postal address and today's cap line (S3)
- *   Research    S4's `SETTINGS#research`, read-only and saying so while that slice has not landed
+ *   Research    S4's `SETTINGS#research`: the queries, the daily budget and the descriptor window David renews
  *   Calls       the hours inside the code floor and the per-state narrowing (S5)
  *   Phone       whether the Phone.app setup was confirmed and the digest of the proof (S5)
  *   Google      the grant as the table holds it, read without a refresh and without a network call
@@ -39,35 +40,25 @@ export function referenceTexts(): SettingsView['referenceTexts'] {
   };
 }
 
-/** S4's record, whatever shape it takes; read loosely on purpose, because this slice does not own it. */
-export const RESEARCH_SETTINGS_KEY = 'SETTINGS#research';
-/** The old worker's cumulative research ledger: a total since it was approved, never a week's or a day's number. */
-export const RESEARCH_LEDGER_KEY = 'BUDGET#research';
-const researchLedgerSchema = z.object({ limit: z.number().int().nonnegative(), spent: z.number().int().nonnegative(),
-  approvedAt: z.iso.datetime({ precision: 3 }) });
-const researchDescriptorSchema = z.object({ status: z.string().max(40).optional(), descriptorStatus: z.string().max(40).optional(),
-  reviewedAt: z.iso.datetime({ precision: 3 }).optional(), expiresAt: z.iso.datetime({ precision: 3 }).optional() });
-
-const RESEARCH_ABSENT_NOTE = 'Research config is not set. This section is read-only until the research slice ships set_research_config.';
-const RESEARCH_PRESENT_NOTE = 'Read-only here: the research slice owns set_research_config. The stored config is shown as the worker holds it.';
-
-/** The research section. Read-only in both cases for now; `present` says whether there is a config at all. */
+/**
+ * The research section: S4's `SETTINGS#research` read through S4's own reader, so a field this view shows and a
+ * field that record carries are the same field by construction. Nothing here is parsed loosely or guessed at; a
+ * shape this module and S4 disagree about is a type error, not a quietly empty section.
+ */
 export async function readResearchView(store: DynamoStore): Promise<ResearchView> {
-  const [configRow, ledgerRow] = await Promise.all([store.get<unknown>(RESEARCH_SETTINGS_KEY), store.get<unknown>(RESEARCH_LEDGER_KEY)]);
-  const config = configRow && typeof configRow.data === 'object' && configRow.data !== null ? configRow.data as Record<string, unknown> : null;
-  const descriptorParsed = config ? researchDescriptorSchema.safeParse(config) : null;
-  const descriptor = descriptorParsed?.success && (descriptorParsed.data.status ?? descriptorParsed.data.descriptorStatus) !== undefined
-    ? { status: (descriptorParsed.data.status ?? descriptorParsed.data.descriptorStatus)!, reviewedAt: descriptorParsed.data.reviewedAt ?? null,
-      expiresAt: descriptorParsed.data.expiresAt ?? null }
-    : null;
-  const ledgerParsed = ledgerRow ? researchLedgerSchema.safeParse(ledgerRow.data) : null;
+  const now = store.now();
+  const [{ record }, today] = await Promise.all([readResearchSettings(store, now), remainingResearchToday(store, now)]);
   return researchViewSchema.parse({
-    present: config !== null,
-    readOnlyReason: config === null ? 'research_config_absent' : 'research_owned_by_s4',
-    note: config === null ? RESEARCH_ABSENT_NOTE : RESEARCH_PRESENT_NOTE,
-    config,
-    descriptor,
-    ledger: ledgerParsed?.success ? { limitMicros: ledgerParsed.data.limit, spentMicros: ledgerParsed.data.spent, approvedAt: ledgerParsed.data.approvedAt } : null,
+    queries: [...record.queries],
+    dailyBudget: record.dailyBudget,
+    budgetCeiling: RESEARCH_DAILY_BUDGET_CEILING,
+    descriptor: record.descriptor === null ? null
+      : { reviewedAt: record.descriptor.reviewedAt, expiresAt: record.descriptor.expiresAt,
+        // Recomputed at this instant, so a window that expired since the record was written reads as expired here.
+        status: descriptorStatusAt(record.descriptor, now) ?? 'expired' },
+    todaySpend: { date: today.date, spent: today.spent, budget: today.budget, remaining: today.remaining },
+    revision: record.revision,
+    updatedAt: record.updatedAt,
   });
 }
 

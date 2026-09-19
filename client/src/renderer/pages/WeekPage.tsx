@@ -7,16 +7,16 @@ import type { WeekView } from '../../../../src/shared/contracts/v1Contract';
  * the holds the attempt log still holds.
  *
  * It reads and nothing else. There is no control on this page, because there is no decision to make here: it is
- * the account of a week that already happened. Two things are said plainly rather than rounded off: a day with no
- * spend counter is a day the worker does not know about, not a zero, and the hold counts come from a log that
- * expires after thirty days, so they are what the log still holds rather than a total for all time.
+ * the account of a week that already happened. Two things are said plainly rather than rounded off. The research
+ * counters keep three days, so the older days of the week have none: the spend names how many days it actually
+ * covers instead of summing the rest in as zero. The hold counts come from a log that keeps thirty days, so they
+ * are what the log still holds rather than a total for all time.
  */
 const REFRESH_MS = 60_000;
 
 type Reading = { view: WeekView; fetchedAt: string };
 
 const outcomeLabel = (outcome: string): string => outcome.replace(/_/g, ' ');
-const micros = (value: number): string => `${(value / 1_000_000).toFixed(2)} USD`;
 
 export function WeekPage() {
   const [reading, setReading] = useState<Reading | null>(null);
@@ -60,8 +60,9 @@ export function WeekPage() {
             <li className="week__total" data-total="callbacks">Callbacks: <strong>{view.callbacks.promised}</strong> promised, <strong>{view.callbacks.kept}</strong> kept</li>
             <li className="week__total" data-total="researched">Firms researched: <strong>{view.firmsResearched}</strong></li>
             <li className="week__total" data-total="spend">
-              Research spend: <strong>{view.spend.micros === null ? 'not counted' : micros(view.spend.micros)}</strong>
-              {view.spend.daysMissing === 0 ? '' : ` (${view.spend.daysMissing} of 7 days have no counter)`}
+              Research spend: <strong>{view.spend.spent === null ? 'not counted' : `${view.spend.spent} over ${view.spend.daysCounted} days`}</strong>
+              {view.spend.daysMissing === 0 ? ''
+                : ` · ${view.spend.daysMissing} of the 7 days are past it, because the daily counter keeps ${view.spend.counterKeepsDays} days`}
             </li>
           </ul>
           <h2>Calls by outcome</h2>

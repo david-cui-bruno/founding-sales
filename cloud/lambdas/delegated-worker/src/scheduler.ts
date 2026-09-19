@@ -13,6 +13,7 @@ import { backfillDuePointers, dayKey, LIST_BUILD_START_MINUTE, readDuePointers }
 import { createAccountFirmSource, type FirmCard, type FirmSource } from './v1/firms';
 import { EASTERN, localParts } from './v1/localClock';
 import { readDrafts, readMailboxCursor } from './v1/mail';
+import { enqueueResearch, type ResearchEnqueueReport } from './v1/research';
 import { createSequencePort, currentStepOf, dueEmailSteps, listSequenceRecords, type SequencePort } from './v1/sequence';
 import { remainingSendsToday } from './v1/templates';
 
@@ -46,7 +47,9 @@ export type SchedulerState = z.infer<typeof schedulerStateSchema>;
 
 export type SchedulerDependencies = { store: DynamoStore; queue: QueueClient; firms?: FirmSource; sequence?: SequencePort };
 export type SchedulerReport = { tickSeq: number; enqueued: { jobId: string; kind: JobKind }[];
-  skipped: { jobId: string; reason: string }[]; remainingCap: number; failed: string[] };
+  skipped: { jobId: string; reason: string }[]; remainingCap: number; failed: string[];
+  /** What research this tick offered and why it offered no more (S4). */
+  research?: ResearchEnqueueReport };
 
 /** The user-facing code a job's own failure is held under. A closed code the record carries, or a generic refusal. */
 function holdCodeOf(record: JobRecord | null): string {
@@ -153,6 +156,12 @@ export async function runScheduler(deps: SchedulerDependencies, signal: AbortSig
       if (await offer(jobId, 'mail.send_followup')) enqueued++;
     }
   }
+
+  // S4: the research pages and per-firm jobs this tick should carry. It decides on counters and cursors alone.
+  report.research = await enqueueResearch(store, deps.queue, now);
+  for (const job of report.research.enqueued) report.enqueued.push(job);
+  for (const entry of report.research.skipped) report.skipped.push(entry);
+  signal.throwIfAborted();
 
   const state = schedulerStateSchema.parse({ version: 1, tickSeq, lastRunAt: now,
     enqueued: countBy(report.enqueued.map(job => job.kind)), skipped: countBy(report.skipped.map(entry => entry.reason)),

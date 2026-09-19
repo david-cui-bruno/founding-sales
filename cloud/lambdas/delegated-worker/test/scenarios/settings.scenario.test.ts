@@ -5,6 +5,8 @@ import { CALL_POLICY_KEY, callPolicyRecordSchema, windowForState } from '../../s
 import { CALL_WINDOW_FLOOR } from '../../src/v1/callWindow';
 import { PAUSED_SETTINGS_KEY, PHONE_SETUP_KEY, phoneSetupRecordSchema, pausedRecordSchema } from '../../src/v1/phoneSetup';
 import { readSettingsView } from '../../src/v1/settingsView';
+import { RESEARCH_DAILY_BUDGET_CEILING, RESEARCH_DAILY_BUDGET_DEFAULT, researchCounterKey, researchCounterSchema, RESEARCH_SETTINGS_KEY,
+  researchSettingsSchema } from '../../src/v1/pool';
 import { runSendStepJob, readSend, type SendDependencies } from '../../src/v1/send';
 import { sendStepJobId } from '../../src/queue/jobs';
 import { GOOGLE_GRANT_PREFIX } from '../../src/v1/mailbox';
@@ -51,10 +53,12 @@ describe('GET /v1/settings: every kept control has a section', () => {
     expect(view.sending?.postalAddress).toBeNull();
     expect(view.sending?.footerBlock).toBeNull();
     expect(view.sending?.capLine).toEqual({ date: '2026-09-18', cap: 10, day: 1, used: 0, remaining: 10 });
-    // Research: S4's record is absent, so the section says so rather than showing an empty config.
-    expect(view.research?.present).toBe(false);
-    expect(view.research?.readOnlyReason).toBe('research_config_absent');
-    expect(view.research?.config).toBeNull();
+    // Research: S4's record, migrated into existence on first read, with no descriptor window recorded yet.
+    expect(view.research?.dailyBudget).toBe(RESEARCH_DAILY_BUDGET_DEFAULT);
+    expect(view.research?.budgetCeiling).toBe(RESEARCH_DAILY_BUDGET_CEILING);
+    expect(view.research?.descriptor).toBeNull();
+    expect(view.research?.todaySpend).toEqual({ date: '2026-09-18', spent: 0, budget: RESEARCH_DAILY_BUDGET_DEFAULT, remaining: RESEARCH_DAILY_BUDGET_DEFAULT });
+    expect(view.research?.revision).toBe(1);
     // Calls: the code floor itself, Monday to Friday, with no narrowing and no revision yet.
     expect(view.calls?.floor).toEqual({ days: [1, 2, 3, 4, 5], window: { startMinute: 480, endMinute: 1200 } });
     expect(view.calls?.window).toEqual({ startMinute: 480, endMinute: 1200 });
@@ -141,6 +145,35 @@ describe('GET /v1/settings: every kept control has a section', () => {
     expect(await read()).toMatchObject({ status: 'connected', grants: 1 });
     await f.store.transact([f.store.put(`${GOOGLE_GRANT_PREFIX}pairing-two`, { revoked: true, grant: { email: 'second@usecallie.invalid', subject: 'second@usecallie.invalid' } }, 1)]);
     expect(await read()).toMatchObject({ status: 'revoked', email: null, grants: 0 });
+  });
+});
+
+describe('the Research section is S4\'s record', () => {
+  it('shows the queries, the budget under the ceiling, today\'s spend and the descriptor window with its expiry', async () => {
+    const f = v1Fixture(START);
+    const device = await f.pairDevice();
+    // The window David recorded through `set_research_config`, still open at the instant the view is read.
+    await f.store.transact([f.store.put(RESEARCH_SETTINGS_KEY, researchSettingsSchema.parse({ version: 1,
+      queries: ['fictional law firms in Providence RI', 'fictional law firms in Boston MA'], dailyBudget: 45,
+      descriptor: { reviewedAt: '2026-09-01T12:00:00.000Z', expiresAt: '2026-12-01T12:00:00.000Z', status: 'reviewed' },
+      revision: 4, updatedAt: '2026-09-01T12:00:00.000Z' }), null)]);
+    await f.store.transact([f.store.put(researchCounterKey('2026-09-18'),
+      researchCounterSchema.parse({ version: 1, date: '2026-09-18', spent: 12, budget: 45, updatedAt: START }), null)]);
+
+    const view = settingsViewSchema.parse(f.json(await f.request('GET', '/v1/settings', { authorization: device.bearer })));
+    expect(view.research).toEqual({
+      queries: ['fictional law firms in Providence RI', 'fictional law firms in Boston MA'],
+      dailyBudget: 45, budgetCeiling: RESEARCH_DAILY_BUDGET_CEILING,
+      descriptor: { reviewedAt: '2026-09-01T12:00:00.000Z', expiresAt: '2026-12-01T12:00:00.000Z', status: 'reviewed' },
+      todaySpend: { date: '2026-09-18', spent: 12, budget: 45, remaining: 33 },
+      revision: 4, updatedAt: '2026-09-01T12:00:00.000Z',
+    });
+
+    // The status is recomputed at the instant of the read, so a window that has since closed reads as expired
+    // even though the stored record still says it was reviewed. David renews it from the date this section shows.
+    f.advance('2026-12-02T12:00:00.000Z');
+    const later = settingsViewSchema.parse(f.json(await f.request('GET', '/v1/settings', { authorization: device.bearer })));
+    expect(later.research?.descriptor).toMatchObject({ expiresAt: '2026-12-01T12:00:00.000Z', status: 'expired' });
   });
 });
 

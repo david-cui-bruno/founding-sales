@@ -230,7 +230,10 @@ export async function createProductionServices(env: NodeJS.ProcessEnv, boundarie
     research: productionResearchBoundaries(env, boundaries),
     // S3's coexistence switch (`delegated_worker_legacy_email_enabled`). Only the exact string `false` takes the
     // mailbox poll, the mail scopes and the sequence email walk off this tick; anything else is today's behaviour.
-    legacyEmailEnabled: env.DELEGATED_WORKER_LEGACY_EMAIL_ENABLED !== 'false' });
+    legacyEmailEnabled: env.DELEGATED_WORKER_LEGACY_EMAIL_ENABLED !== 'false',
+    // S4's coexistence switch (`delegated_worker_legacy_research_enabled`). Only the exact string `false` takes the
+    // research, configurations and territory backfill phases off this tick; the tick and the list build stay.
+    legacyResearchEnabled: env.DELEGATED_WORKER_LEGACY_RESEARCH_ENABLED !== 'false' });
   return { auth, google, source, researchSetup: new ResearchSetupService({ auth, profile: researchSetupProfile }), handle: createWorkerHandler({ auth, google, researchSetupProfile, host: config.DELEGATED_WORKER_HOST }) };
 }
 export function createProductionHandler(env: NodeJS.ProcessEnv, boundaries: ProductionBoundaries = {}) {

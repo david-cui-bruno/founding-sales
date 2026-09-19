@@ -1,6 +1,6 @@
 import { rm } from 'node:fs/promises';
 import { expect, test, type Page } from 'playwright/test';
-import { startStubWorker, STUB_MAILBOX, STUB_POSTAL_ADDRESS, type StubWorker } from './stubWorker';
+import { startStubWorker, STUB_DESCRIPTOR_EXPIRES_AT, STUB_MAILBOX, STUB_POSTAL_ADDRESS, type StubWorker } from './stubWorker';
 import { launchClient, newUserData, pairThroughUi, type LaunchedClient } from './support/launchClient';
 
 /**
@@ -72,10 +72,13 @@ test('renders every section from the stub: templates, sending, calls, phone, goo
   await expect(google.locator('.google__status')).toContainText(STUB_MAILBOX);
   await expect(google.locator('p.page__tick').last()).toContainText('replaced by a fresh consent at cutover');
 
-  // Research: absent, said plainly, and read-only.
+  // Research: the review window David has to renew, with the date on it, plus the budget and the grid.
   const research = section(page, 'research');
-  await expect(research.locator('.research__state')).toHaveText('No research config is stored.');
-  await expect(research.locator('p.page__tick').last()).toContainText('read-only until the research slice ships set_research_config');
+  await expect(research.locator('.research__descriptor')).toHaveAttribute('data-descriptor', 'reviewed');
+  await expect(research.locator('.research__descriptor')).toHaveText(`Operator review: valid until ${STUB_DESCRIPTOR_EXPIRES_AT.slice(0, 10)}, reviewed 2026-09-01.`);
+  await expect(research.locator('.research__budget')).toContainText('Today (2026-09-18): 12 of 45 used, 33 left.');
+  await expect(research.locator('.research__budget')).toContainText('ceiling fixed in code 200');
+  await expect(research.locator('.research__queries')).toHaveText('3 queries in the grid · revision 4.');
 
   // Devices: this Mac and the two the stub holds beside it.
   await expect(section(page, 'devices').locator('.device')).toHaveCount(3);

@@ -39,9 +39,9 @@ test('shows the seven Eastern days, the totals, the calls by outcome and the hol
   await expect(totals.locator('[data-total="replies"]')).toHaveText('Replies: 4');
   await expect(totals.locator('[data-total="callbacks"]')).toHaveText('Callbacks: 3 promised, 2 kept');
   await expect(totals.locator('[data-total="researched"]')).toHaveText('Firms researched: 34');
-  // A day with no counter is named, never read as zero.
-  await expect(totals.locator('[data-total="spend"]')).toContainText('Research spend: 0.18 USD');
-  await expect(totals.locator('[data-total="spend"]')).toContainText('2 of 7 days have no counter');
+  // The counters keep three days, so the older days of the week have none. That is said, never summed in as zero.
+  await expect(totals.locator('[data-total="spend"]')).toContainText('Research spend: 84 over 3 days');
+  await expect(totals.locator('[data-total="spend"]')).toContainText('the daily counter keeps 3 days');
 
   const outcomes = page.getByRole('list', { name: 'Calls by outcome', exact: true });
   await expect(outcomes.locator('li')).toHaveCount(4);

@@ -6,8 +6,8 @@ import { callKey, callbackKey, callRecordSchema, callbackRecordSchema } from '..
 import { firmKey, firmRecordSchema } from '../../src/v1/firmsWrite';
 import { replyKey, replyRecordSchema } from '../../src/v1/mail';
 import { sendKey, sendRecordSchema } from '../../src/v1/send';
-import { easternWeek, EVIDENCE_PREFIX, readWeekView, researchCounterKey } from '../../src/v1/week';
-import { RESEARCH_LEDGER_KEY } from '../../src/v1/settingsView';
+import { easternWeek, readWeekView } from '../../src/v1/week';
+import { researchCounterKey, researchCounterSchema } from '../../src/v1/pool';
 import { v1Fixture } from './v1Fixture';
 
 /**
@@ -45,10 +45,16 @@ function callbackRecord(firmId: string, dueOn: string, promisedAt: string, resol
   return callbackRecordSchema.parse({ version: 1, firmId, dueOn, promisedAt, promisedBy: `CALL#${firmId}#${promisedAt}`,
     state: resolved?.state ?? 'pending', resolvedAt: resolved?.resolvedAt ?? null });
 }
-function firmRecord(firmId: string, enteredBy: 'research' | 'hand', enteredAt: string) {
+/**
+ * A `FIRM#` row as the firm source reads it. `researchRevision` above zero is what says research worked on this
+ * firm at all, and `researchedAt` is when it last did: the Week view counts on exactly those two and on nothing
+ * else, so a hand-entered firm (revision zero) is never counted however recently it was added.
+ */
+function firmRecord(firmId: string, enteredBy: 'research' | 'hand', at: string) {
   return firmRecordSchema.parse({ version: 1, firmId, name: `Firm ${firmId}`, domain: `${firmId}.example`, city: 'Providence', state: 'RI',
     timeZone: 'America/New_York', derivedZoneFrom: 'territory_state_map', status: 'listed', enteredBy,
-    evidenceSummary: enteredBy === 'research' ? '3 sources' : '', routes: [], enteredAt, updatedAt: enteredAt });
+    evidenceSummary: enteredBy === 'research' ? '3 sources' : '', routes: [], enteredAt: at, updatedAt: at,
+    ...(enteredBy === 'research' ? { researchRevision: 1, researchedAt: at } : {}) });
 }
 
 describe('GET /v1/week: the last seven Eastern days from the permanent records', () => {
@@ -72,16 +78,14 @@ describe('GET /v1/week: the last seven Eastern days from the permanent records',
     await put(callbackKey('2026-09-18', 'account-a'), callbackRecord('account-a', '2026-09-18', '2026-09-15T14:00:00.000Z', { state: 'made', resolvedAt: '2026-09-18T14:00:00.000Z' }));
     await put(callbackKey('2026-09-25', 'account-b'), callbackRecord('account-b', '2026-09-25', '2026-09-17T14:00:00.000Z', null));
     await put(callbackKey('2026-09-14', 'account-e'), callbackRecord('account-e', '2026-09-14', '2026-09-01T14:00:00.000Z', { state: 'made', resolvedAt: '2026-09-14T14:00:00.000Z' }));
-    // Research: one firm with an evidence record, one without, one entered by hand, one researched before the week.
-    await put(`${EVIDENCE_PREFIX}account-a`, { firmId: 'account-a', researchedAt: '2026-09-16T12:00:00.000Z', sources: 3 });
+    // Research: two firms researched inside the week, one entered by hand the same day, one researched before it.
     await put(firmKey('account-a'), firmRecord('account-a', 'research', '2026-09-16T12:00:00.000Z'));
     await put(firmKey('account-b'), firmRecord('account-b', 'research', '2026-09-17T12:00:00.000Z'));
     await put(firmKey('account-f'), firmRecord('account-f', 'hand', '2026-09-17T12:00:00.000Z'));
     await put(firmKey('account-g'), firmRecord('account-g', 'research', '2026-09-01T12:00:00.000Z'));
-    // Spend: two of the seven days have a counter.
-    await put(researchCounterKey('2026-09-16'), { version: 1, date: '2026-09-16', spentMicros: 12_500 });
-    await put(researchCounterKey('2026-09-17'), { version: 1, date: '2026-09-17', spentMicros: 7_500 });
-    await put(RESEARCH_LEDGER_KEY, { limit: 5_000_000, spent: 120_000, approvedAt: '2026-08-01T12:00:00.000Z' });
+    // Spend: S4's counters keep three days, so only the newest days of the week still have one.
+    await put(researchCounterKey('2026-09-16'), researchCounterSchema.parse({ version: 1, date: '2026-09-16', spent: 25, budget: 60, updatedAt: '2026-09-16T23:00:00.000Z' }));
+    await put(researchCounterKey('2026-09-17'), researchCounterSchema.parse({ version: 1, date: '2026-09-17', spent: 15, budget: 60, updatedAt: '2026-09-17T23:00:00.000Z' }));
     // Holds, from the attempt log: two of one code, one of another, and one attempt that is not a hold at all.
     for (const at of ['2026-09-16T05:00:00.000Z', '2026-09-17T05:00:00.000Z']) { f.advance(at); await recordAttempt(f.store, { kind: 'hold', outcome: 'held', reason: 'cap_reached', detail: null, durationMs: null, ref: null }); }
     f.advance('2026-09-17T05:00:01.000Z'); await recordAttempt(f.store, { kind: 'hold', outcome: 'held', reason: 'template_not_approved', detail: null, durationMs: null, ref: null });
@@ -97,8 +101,7 @@ describe('GET /v1/week: the last seven Eastern days from the permanent records',
     expect(view.replies).toBe(1);
     expect(view.callbacks).toEqual({ promised: 2, kept: 2 });
     expect(view.firmsResearched).toBe(2);
-    expect(view.spend).toEqual({ micros: 20_000, daysCounted: 2, daysMissing: 5,
-      ledger: { limitMicros: 5_000_000, spentMicros: 120_000, approvedAt: '2026-08-01T12:00:00.000Z' } });
+    expect(view.spend).toEqual({ spent: 40, daysCounted: 2, daysMissing: 5, counterKeepsDays: 3 });
     expect(view.holds).toEqual([{ reason: 'cap_reached', code: 'cap_reached', count: 2 }, { reason: 'template_not_approved', code: 'template_not_approved', count: 1 }]);
 
     // The per-day rows add up to the totals and put each record on the day it happened.
@@ -133,7 +136,7 @@ describe('GET /v1/week: the last seven Eastern days from the permanent records',
     const view = weekViewSchema.parse(f.json(await f.request('GET', '/v1/week', { authorization: device.bearer })));
     expect(view.calls).toEqual({ total: 0, byOutcome: [] });
     expect(view).toMatchObject({ emailsSent: 0, replies: 0, callbacks: { promised: 0, kept: 0 }, firmsResearched: 0, holds: [] });
-    expect(view.spend).toEqual({ micros: null, daysCounted: 0, daysMissing: 7, ledger: null });
+    expect(view.spend).toEqual({ spent: null, daysCounted: 0, daysMissing: 7, counterKeepsDays: 3 });
     expect(view.days.every(day => day.calls === 0 && day.emailsSent === 0)).toBe(true);
     // The same view read through the module is the same seven Eastern days the route served.
     expect((await readWeekView(f.store)).days.map(day => day.date)).toEqual(easternWeek(START));

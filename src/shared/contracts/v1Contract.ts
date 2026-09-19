@@ -452,19 +452,27 @@ export const sendingViewSchema = z.strictObject({
 export type SendingView = z.infer<typeof sendingViewSchema>;
 
 /**
- * `SETTINGS#research` (slice S4). Until S4's record exists this is `{ present: false }` with the note Settings
- * shows: the section is read-only and says so rather than pretending a config is set. `ledger` is the old worker's
- * cumulative `BUDGET#research`, which is a total since it was approved and never a week's number, which is why it
- * is named separately from the daily counters the Week view reads.
+ * `SETTINGS#research` as Settings shows it, which is S4's record and nothing invented beside it: the query grid,
+ * the daily budget under the ceiling fixed in code, and the operator descriptor's window. The descriptor is the
+ * one thing David has to keep current — research stops when it expires — so its dates are here, not only its
+ * status, and the section names the day it runs out. `todaySpend` is today's counter, which is arithmetic about
+ * what research already did and never a permission to do more.
  */
+export const researchDescriptorViewSchema = z.strictObject({
+  reviewedAt: instant,
+  expiresAt: instant,
+  status: z.enum(['reviewed', 'expired']),
+});
 export const researchViewSchema = z.strictObject({
-  present: z.boolean(),
-  /** Why the section is read-only, when it is. Null once S4's `set_research_config` is wired. */
-  readOnlyReason: attemptReasonSchema.nullable(),
-  note: z.string().max(400),
-  config: z.looseObject({}).nullable(),
-  descriptor: z.strictObject({ status: attemptReasonSchema, reviewedAt: instant.nullable(), expiresAt: instant.nullable() }).nullable(),
-  ledger: z.strictObject({ limitMicros: count, spentMicros: count, approvedAt: instant }).nullable(),
+  queries: z.array(z.string().min(1).max(500)).max(400),
+  dailyBudget: count,
+  /** The ceiling fixed in code. `set_research_config` may only set a budget below it. */
+  budgetCeiling: count,
+  /** Null until David records the review window. Research is held while it is null or expired. */
+  descriptor: researchDescriptorViewSchema.nullable(),
+  todaySpend: z.strictObject({ date: z.iso.date(), spent: count, budget: count, remaining: count }),
+  revision: count,
+  updatedAt: instant,
 });
 export type ResearchView = z.infer<typeof researchViewSchema>;
 
@@ -508,9 +516,12 @@ export const weekViewSchema = z.strictObject({
   replies: count,
   callbacks: z.strictObject({ promised: count, kept: count }),
   firmsResearched: count,
-  /** Research spend over the seven days from the daily counters; `micros` is null when no day has a counter. */
-  spend: z.strictObject({ micros: count.nullable(), daysCounted: count, daysMissing: count,
-    ledger: z.strictObject({ limitMicros: count, spentMicros: count, approvedAt: instant }).nullable() }),
+  /**
+   * Research spend over the seven days, summed from S4's daily counters. Those counters keep three days, so the
+   * older days of the week usually have none: `daysCounted` says how many of the seven the sum actually covers,
+   * and `spent` is null when it covers none of them. It is never presented as a zero it did not read.
+   */
+  spend: z.strictObject({ spent: count.nullable(), daysCounted: count, daysMissing: count, counterKeepsDays: z.literal(3) }),
   holds: z.array(z.strictObject({ reason: v1HoldReasonSchema, code: attemptReasonSchema, count: count.min(1) })).max(60),
 });
 export type WeekView = z.infer<typeof weekViewSchema>;
@@ -557,6 +568,17 @@ export const diagnosticsViewSchema = z.strictObject({
   queue: z.strictObject({
     queued: count, running: count, failed: count, deadLettered: count,
     lastSchedulerRun: z.strictObject({ at: instant, tickSeq: z.number().int().positive(), enqueued: count, durationMs: count }).nullable(),
+  }).optional(),
+  /**
+   * Research as the worker can see it (S4): how many posture-cleared firms are waiting for a morning that has
+   * not offered them yet, what today has spent against its budget, and the window David's operator review
+   * covers. `descriptor` is null until he has recorded one, which is honest rather than an assumed approval.
+   */
+  research: z.strictObject({
+    pool: z.strictObject({ researched: count, unlisted: count, postureCleared: count }),
+    spentToday: count,
+    budget: count,
+    descriptor: z.strictObject({ reviewedAt: instant, expiresAt: instant, status: z.enum(['reviewed', 'expired']) }).nullable(),
   }).optional(),
 });
 export type DiagnosticsView = z.infer<typeof diagnosticsViewSchema>;
@@ -663,13 +685,25 @@ export const pauseCommandSchema = z.strictObject({ commandId, kind: z.literal('p
 export const resumeCommandSchema = z.strictObject({ commandId, kind: z.literal('resume'), reason: z.string().trim().min(1).max(200).optional() });
 
 /**
- * Every `/v1` command, discriminated on `kind`. S0 ships `revoke_device`, S1 adds `set_state_posture`,
- * S2 adds the dial and log commands, S3 adds email, S5 adds Settings.
+ * What research is allowed to do (S4). The queries are replaced whole, the daily budget may only be set below the
+ * ceiling fixed in code, and the descriptor records the window David's operator review actually covers. Narrowing
+ * research is always allowed; nothing here starts a research run, and setting a budget is never a spend.
+ */
+export const setResearchConfigCommandSchema = z.strictObject({ commandId, kind: z.literal('set_research_config'),
+  expectedRevision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  queries: z.array(z.string().trim().min(1).max(500)).max(400).optional(),
+  dailyBudget: z.number().int().nonnegative().max(100000).optional(),
+  descriptor: z.strictObject({ reviewedAt: instant, expiresAt: instant }).optional() });
+export type SetResearchConfigCommand = z.infer<typeof setResearchConfigCommandSchema>;
+
+/**
+ * Every `/v1` command, discriminated on `kind`. S0 ships `revoke_device`, S1 adds `set_state_posture`, S2 the dial
+ * and log, S3 email under the standing approval, S4 the research configuration, S5 Settings.
  */
 export const v1CommandSchema = z.discriminatedUnion('kind', [revokeDeviceCommandSchema, setStatePostureCommandSchema,
   logCallOutcomeCommandSchema, addFirmCommandSchema, admitRouteCommandSchema, suppressCommandSchema,
   approveTemplateCommandSchema, setSendingLimitCommandSchema, replyDecisionCommandSchema, requestFollowupCommandSchema,
-  approveFollowupDraftCommandSchema, approveReplyDraftCommandSchema,
+  approveFollowupDraftCommandSchema, approveReplyDraftCommandSchema, setResearchConfigCommandSchema,
   setCallPolicyCommandSchema, confirmPhoneSetupCommandSchema, clearPhoneSetupCommandSchema, pauseCommandSchema, resumeCommandSchema]);
 export type V1Command = z.infer<typeof v1CommandSchema>;
 

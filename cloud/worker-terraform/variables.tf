@@ -108,6 +108,13 @@ variable "delegated_worker_legacy_email_enabled" {
   nullable    = false
 }
 
+variable "delegated_worker_legacy_research_enabled" {
+  description = "Whether the old five-minute tick still runs its research, configurations and territory backfill phases. True keeps today's behaviour; the S4 deploy directive sets it false, after which Places discovery and per-firm research run only as queue jobs while the tick itself and the morning list build keep running. It never enables a schedule, a grant or a provider call."
+  type        = bool
+  default     = true
+  nullable    = false
+}
+
 variable "monthly_budget_usd" {
   description = "Account-wide monthly AWS Budget in whole USD. Notifications fire at 100% and 200% of this amount (USD 25 and USD 50 by default) and on a 100% forecast. A notification, never a hard billing cap."
   type        = number
