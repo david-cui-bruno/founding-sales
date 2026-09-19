@@ -115,6 +115,78 @@ export type StatePostureRecord = z.infer<typeof statePostureRecordSchema>;
 export const statePostureSummarySchema = z.strictObject({ state: v1StateCodeSchema, posture: statePostureSchema, decidedAt: instant, decidedBy: deviceLabel, reviewAt: instant, reviewOverdue: z.boolean() });
 export type StatePostureSummary = z.infer<typeof statePostureSummarySchema>;
 
+/** The user-facing hold reasons (design section 5). The exact closed code travels beside the reason. */
+export const V1_HOLD_REASONS = ['paused', 'mailbox_not_connected', 'template_not_approved', 'cap_reached', 'no_email', 'no_phone', 'outside_hours',
+  'state_not_cleared', 'suppressed', 'replied', 'evidence_stale', 'provider_error', 'send_unknown', 'budget_exhausted'] as const;
+export const v1HoldReasonSchema = z.enum(V1_HOLD_REASONS);
+export type V1HoldReason = z.infer<typeof v1HoldReasonSchema>;
+
+/**
+ * The Today view (design section 3; slice S1): the four lanes of the day record expanded into call cards. Everything a
+ * card says about now (local time, open or closed, dialAllowed and its hold) is computed by the worker at request time
+ * from the firm's zone and the code floor window; the Mac never computes it. The addresses and excerpts that derived
+ * the state never travel: only the city and the state code do.
+ */
+const count = z.number().int().nonnegative();
+export const todayNextStepSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('first_call') }),
+  z.strictObject({ kind: z.literal('call'), stepIndex: count, stepCount: count, dueAt: instant.nullable() }),
+  z.strictObject({ kind: z.literal('reply') }),
+  z.strictObject({ kind: z.literal('callback'), dueOn: z.iso.date().nullable() }),
+]);
+export type TodayNextStep = z.infer<typeof todayNextStepSchema>;
+export const todayCardSchema = z.strictObject({
+  firmId: z.string().min(1).max(200),
+  lane: todayLaneSchema,
+  /** Why the firm is in its lane: reply_waiting, callback_due, step_due or new_firm. */
+  reason: attemptReasonSchema,
+  name: z.string().min(1).max(300),
+  /** The number to dial, with the verification word the route carries; null when the firm has no usable phone. */
+  phone: z.strictObject({ number: z.string().min(1).max(60), verification: z.enum(['published', 'confirmed', 'unverified', 'listed']) }).nullable(),
+  website: z.string().max(253).nullable(),
+  city: z.string().max(200).nullable(),
+  state: v1StateCodeSchema.nullable(),
+  timeZone: z.string().max(64).nullable(),
+  /** `HH:MM` on the firm's clock now; null without a zone. */
+  localTime: z.string().regex(/^\d{2}:\d{2}$/).nullable(),
+  /** Whether the firm's clock is inside the usual business day (Monday to Friday 09:00 to 17:00): a guess from the zone, not the firm's posted hours. */
+  openNow: z.boolean().nullable(),
+  dialAllowed: z.boolean(),
+  holdReason: v1HoldReasonSchema.nullable(),
+  holdCode: attemptReasonSchema.nullable(),
+  /** Today's opener: the standing territory policy's offer text. */
+  offer: z.string().max(4000).nullable(),
+  lastOutcome: z.strictObject({ outcome: attemptReasonSchema, at: instant, note: z.string().max(2000).nullable() }).nullable(),
+  nextStep: todayNextStepSchema,
+});
+export type TodayCard = z.infer<typeof todayCardSchema>;
+export const todayHoldCountSchema = z.strictObject({ reason: v1HoldReasonSchema, code: attemptReasonSchema, count: count.min(1) });
+export const todayHeaderSchema = z.strictObject({
+  date: z.iso.date(),
+  builtAt: instant,
+  poolSize: count,
+  counts: laneCountsSchema,
+  /** Firms left out of the new lane under a hold, by reason and closed code, in the order the build checks them. */
+  holds: z.array(todayHoldCountSchema),
+  /** Every exclusion count of the build, holds included, by closed code. */
+  excluded: z.record(attemptReasonSchema, count.min(1)),
+  lastTick: lastTickLineSchema.nullable(),
+  postures: z.array(statePostureSummarySchema),
+  /** States the firms derive to for which no posture has been recorded; the Today page warns about these. */
+  statesWithoutPosture: z.array(v1StateCodeSchema),
+});
+export type TodayHeader = z.infer<typeof todayHeaderSchema>;
+const cards = z.array(todayCardSchema);
+export const todayListSchema = z.strictObject({ header: todayHeaderSchema, lanes: z.strictObject({ replies: cards, callbacks: cards, due: cards, new: cards }) });
+export type TodayList = z.infer<typeof todayListSchema>;
+export const todayEmptyReasonSchema = z.enum(['not_built_yet', 'no_posture', 'no_candidates']);
+export type TodayEmptyReason = z.infer<typeof todayEmptyReasonSchema>;
+export const todayViewSchema = z.union([
+  z.strictObject({ asOf: instant, list: todayListSchema }),
+  z.strictObject({ asOf: instant, list: z.null(), reason: todayEmptyReasonSchema, postures: z.array(statePostureSummarySchema), statesWithoutPosture: z.array(v1StateCodeSchema) }),
+]);
+export type TodayView = z.infer<typeof todayViewSchema>;
+
 export const diagnosticsViewSchema = z.strictObject({
   asOf: instant,
   attempts: z.array(attemptRecordSchema).max(DIAGNOSTICS_ATTEMPT_LIMIT),

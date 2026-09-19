@@ -9,14 +9,16 @@ import { listAttempts, recordAttempt } from './attempts';
 import { V1Devices, V1PairRefused, V1Unauthenticated, type V1Principal } from './devices';
 import { readLastTick } from './lastTick';
 import { planSetStatePosture, postureSummary, readPostures } from './postures';
+import { readTodayView } from './today';
 
 /**
  * The `/v1` routes of the rebuilt core (FSS target design section 3), mounted inside the existing handler so
  * that David only redeploys the worker:
  *
  *   POST /v1/pair/redeem      unauthenticated   a pairing code in, the device token out, once
- *   GET  /v1/diagnostics      device token      the last attempts (kind, limit), the last tick, the devices
- *   POST /v1/commands         device token      idempotent by commandId, per device; S0 ships `revoke_device` only
+ *   GET  /v1/diagnostics      device token      the last attempts (kind, limit), the last tick, the devices, the postures
+ *   GET  /v1/today            device token      the morning list as cards, dialability computed at request time (S1)
+ *   POST /v1/commands         device token      idempotent by commandId, per device; `revoke_device` (S0), `set_state_posture` (S1)
  *
  * Errors: 401 `{ error: 'unauthenticated' }` (with `reason: 'device_expired'` once a device's ninety days are over),
  * 404 `{ error: 'not_found' }` for any other `/v1` path or method, 400 `{ error: 'invalid_request' }` on a body or
@@ -138,6 +140,12 @@ export async function v1Router(input: V1RouterInput): Promise<WorkerHttpResponse
       const [attempts, lastTick, deviceList, postures] = await Promise.all([listAttempts(store, query.data), readLastTick(store), devices.listDevices(), readPostures(store)]);
       const asOf = store.now();
       return respond(200, diagnosticsViewSchema.parse({ asOf, attempts, lastTick, devices: deviceList, postures: postures.map(record => postureSummary(record, asOf)) }));
+    }
+    if (path === '/v1/today' && method === 'GET') {
+      // The morning list as cards (S1). Dialability is computed here, at request time, from the firm's zone; a read is never a dial.
+      try { await devices.authenticate(input.authorization); }
+      catch (error) { if (error instanceof V1Unauthenticated) return unauthenticated(respond, error); throw error; }
+      return respond(200, await readTodayView(store));
     }
     if (path === '/v1/commands' && method === 'POST') {
       let principal: V1Principal;
