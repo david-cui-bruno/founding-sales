@@ -623,7 +623,7 @@ it.each(['account', 'command', 'shape'] as const)('Task 3 real provider validate
 // Task 5 append-only preparation. Original tests and their frozen nine-handler
 // inventory above are intentionally unchanged. Parent owns inventory migration.
 import type { AccountEvidenceReceipt } from '../../src/shared/contracts/accountContract';
-import { seedIntakePeople } from '../fixtures/domainRows';
+import { seedIntakePeople } from '../fixtures/discoveryDatabase';
 import { createFounderSalesDomain, type FounderSalesDomain } from '../../src/main/domain/founderSalesDomain';
 const task5Channel = 'local-workspace:link-company-person';
 const task5Now = '2026-09-09T12:00:00.000Z';

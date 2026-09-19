@@ -1,4 +1,4 @@
-import { insertPerson, recordPromisedCallback } from './domainRows';
+import { insertPerson } from './domainRows';
 import assert from 'node:assert/strict';
 import { createDelegationRuntime } from '../../src/main/delegation/delegationRuntime';
 import { registerOutreachIpc } from '../../src/main/ipc/registerOutreachIpc';
@@ -9,7 +9,7 @@ import { auditDomainInvariants } from '../../src/main/domain/lifecycle/invariant
 import type { DomainServices } from '../../src/main/domain/createDomainServices';
 import type { SalesCycle } from '../../src/main/domain/lifecycle/lifecycleTypes';
 import { BUILTIN_CADENCES } from '../../src/main/domain/cadence/builtinCadences';
-import { DISCOVERY_NOW, seedDiscoveryOwner } from './discoveryDatabase';
+import { DISCOVERY_NOW, recordPromisedCallback, seedDiscoveryOwner } from './discoveryDatabase';
 import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { setTimeout as realTimeout, clearTimeout as clearRealTimeout } from 'node:timers';

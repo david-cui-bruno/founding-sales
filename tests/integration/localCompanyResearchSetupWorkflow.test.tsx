@@ -10,7 +10,7 @@ import { localCompanyResearchStatusSchema } from '../../src/shared/contracts/loc
 import { companyResearchSettingsSchema, companyResearchSettingsUpdateReplySchema, updateCompanyResearchSettingsRequestSchema } from '../../src/shared/contracts/localCompanyResearchSettingsContract';
 import { emailDraftSchema } from '../../src/shared/contracts/outreachContract';
 import { createFirstUseDomainFixture, localSetupPages, localSetupClaims, localSetupRelationship } from '../fixtures/firstUseDomainFixture';
-import { seedIntakePeople } from '../fixtures/domainRows';
+import { seedIntakePeople } from '../fixtures/discoveryDatabase';
 import type { RegisteredIpcHandler } from '../fixtures/registeredIpcHandler';
 
 const transport = vi.hoisted(() => ({ handlers: new Map<string, RegisteredIpcHandler>(), registered: [] as string[], removed: [] as string[], nativeCalls: 0 }));

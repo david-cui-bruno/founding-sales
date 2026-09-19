@@ -9,7 +9,7 @@ import { localCompanyCreateResultSchema } from '../../src/shared/contracts/local
 import { localCompanyResearchStatusSchema } from '../../src/shared/contracts/localWorkspaceContract';
 import { emailDraftSchema } from '../../src/shared/contracts/outreachContract';
 import { createFirstUseDomainFixture, firstUsePages } from '../fixtures/firstUseDomainFixture';
-import { seedIntakePeople } from '../fixtures/domainRows';
+import { seedIntakePeople } from '../fixtures/discoveryDatabase';
 import type { RegisteredIpcHandler } from '../fixtures/registeredIpcHandler';
 
 const transport = vi.hoisted(() => ({ handlers: new Map<string, RegisteredIpcHandler>(), registered: [] as string[], removed: [] as string[], nativeCalls: 0 }));

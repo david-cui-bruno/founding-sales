@@ -3,8 +3,7 @@ import type { AppDatabase } from '../../src/main/db/database';
 import { AccountRepository } from '../../src/main/domain/accounts/accountRepository';
 import { createDomainServices } from '../../src/main/domain/createDomainServices';
 import { BUILTIN_PRIORITIZATION_RULE_V1 } from '../../src/main/domain/prioritization/builtinPrioritizationRules';
-import { DISCOVERY_NOW, seedDiscoveryOwner } from './discoveryDatabase';
-import { recordPromisedCallback } from './domainRows';
+import { DISCOVERY_NOW, recordPromisedCallback, seedDiscoveryOwner } from './discoveryDatabase';
 
 /** Synthetic records only. No workspace identity, worker, provider or transition. */
 export function seedLocalWorkspaceAcceptance(database: AppDatabase) {
