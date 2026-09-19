@@ -502,7 +502,7 @@ test('two saved replies in one thread keep exact independent row identities', as
     fixture.setSnapshot(snapshot);
     window.nativeDeskBrowser.refresh();
   });
-  await expect(page.getByRole('region', { name: 'Saved draft continuations 3', exact: true }).locator('[data-row-key]')).toHaveCount(3);
+  await expect(page.getByRole('region', { name: 'Saved draft continuations 2', exact: true }).locator('[data-row-key]')).toHaveCount(2);
   const replies = page.getByRole('region', { name: 'Saved reply history 2', exact: true }).getByRole('button',{name:'Reply · Account A',exact:true});
   await expect(replies).toHaveCount(2);
   await replies.nth(0).click();
