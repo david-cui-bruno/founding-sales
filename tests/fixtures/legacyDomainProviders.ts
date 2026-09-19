@@ -1,8 +1,6 @@
-import type { OutboundCommandServiceApi } from '../../src/main/communications/outboundPorts';
 import type { FounderSalesDomain } from '../../src/main/domain/founderSalesDomain';
 import type { FoundationRuntime } from '../../src/main/foundation/foundationRuntime';
 import type { FindContactInfoReceipt, FindContactInfoRequest } from '../../src/shared/contracts/enrichmentRequestContract';
-import type { OutboundCapabilities } from '../../src/shared/contracts/outboundContract';
 
 /**
  * Test-only providers over the domain facade methods whose renderer surfaces
@@ -65,28 +63,13 @@ export type EnrichmentRequester = {
   request(input: FindContactInfoRequest): Promise<FindContactInfoReceipt>;
 };
 
-/** Fixed fail-closed status only. No probes, personal-data reads or enablement flags. */
-export function unavailableOutboundCapabilities(): OutboundCapabilities {
-  const unavailable = { state: 'unavailable', reasonCode: 'not_integrated' } as const;
-  return { phoneHandoff: { state: 'unavailable', reasonCode: 'phone_route_unverified' },
-    callObservation: unavailable, recording: unavailable, messagesSend: unavailable,
-    gmailSend: unavailable, managedAudioImport: unavailable, appleTranscriptExtraction: unavailable,
-    localDrafts: true };
-}
-
 /** The pre-removal lead-detail slice composition: the surviving read plus the removed guarded commands. */
 export function createLegacyLeadDetailProvider(
   runtime: DomainGate,
   enrichmentRequester?: EnrichmentRequester,
-  outbound?: OutboundCommandServiceApi,
 ) {
   return {
     get: (input: Input<'getLeadDetail'>) => runtime.withDomain((domain) => domain.getLeadDetail(input)),
-    beginOutbound: (input: Input<'recordOutboundRefusal'>) => outbound === undefined
-      ? runtime.withDomain((domain) => domain.recordOutboundRefusal(input, input.channel === 'call' ? 'phone_route_unverified' : 'channel_unavailable'))
-      : outbound.beginOutbound(input),
-    getOutboundCapabilities: async () => outbound === undefined
-      ? unavailableOutboundCapabilities() : outbound.getCapabilities(),
     confirmTransition: (input: Input<'confirmTransition'>) => runtime.withDomain((domain) => domain.confirmTransition(input)),
     dismissLead: (input: Input<'dismissLead'>) => runtime.withDomain((domain) => domain.dismissLead(input)),
     findContactInfo: async (input: FindContactInfoRequest): Promise<FindContactInfoReceipt> => (

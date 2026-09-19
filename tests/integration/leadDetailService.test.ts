@@ -1,14 +1,9 @@
 import { productionDomainGate } from '../fixtures/productionDomainGate';
 import { validParcelEvent } from '../fixtures/cloudSourceEvents';
 import { cloudSourceEventSchema } from '../../src/shared/contracts/cloudSourceEventContract';
-import { randomUUID } from 'node:crypto';
-import { createOutboundCommandService } from '../../src/main/communications/outboundCommandService';
-import {
-  createLegacyLeadDetailProvider as createLeadDetailProvider, createTodayProvider, type LegacyLeadDetailProvider,
-} from '../fixtures/legacyDomainProviders';
-import type { OutboundRequest } from '../../src/shared/contracts/outboundContract';
+import { createLegacyLeadDetailProvider as createLeadDetailProvider, type LegacyLeadDetailProvider } from '../fixtures/legacyDomainProviders';
 import { contactSnapshot } from '../../src/main/communications/contactSnapshot';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   closeDatabase,
@@ -44,18 +39,6 @@ import {
   type TempDatabase,
 } from '../fixtures/tempDatabase';
 
-
-function readinessProof(personId = 'fixture-person') {
-  return Object.freeze({
-    subject: Object.freeze({ kind: 'person' as const, id: personId }),
-    registryRevision: 1,
-    checkpoints: Object.freeze([]),
-  });
-}
-function readyReply(personId?: string) {
-  return { kind: 'ready' as const, proof: readinessProof(personId) };
-}
-const assertCurrentReadiness = (): void => undefined;
 
 const CLOCK_NOW = '2026-08-31T15:00:00.000Z';
 
@@ -530,189 +513,6 @@ describe('leadDetailService over a real encrypted domain', () => {
     await expect(
       leadDetail.get({ personId: 'missing-person' }),
     ).rejects.toThrow();
-  });
-
-  function requestFor(prefix = 'outbound'): OutboundRequest {
-    const { prospect, cycleId } = seedLead(prefix);
-    addPhone(prospect, `${prefix}-phone`);
-    return { commandId: randomUUID(), channel: 'call', personId: prospect.personId,
-      salesCycleId: cycleId, contactMethodId: `${prefix}-phone`,
-      expectedContactSnapshot: domain.getLeadDetail({ personId: prospect.personId }).phones[0].contactSnapshot };
-  }
-
-  // The begin-outbound IPC channel is gone; the legacy provider is exercised directly, so the
-  // strict request parse and receipt validation under test are the outbound service's own.
-  function normalRoute(beforeReady: () => void = () => undefined, injected = true) {
-    const gate: Parameters<typeof createLeadDetailProvider>[0] = {
-      withDomain: async (operation) => operation(domain),
-    };
-    const dispatch = vi.fn(async () => ({ status: 'handoff_accepted' as const, reasonCode: null }));
-    const outbound = createOutboundCommandService({ domain: gate,
-      phone: { inspectCapability: async () => ({ state: 'available', reasonCode: null }), dispatch },
-      readiness: { getCapability: () => ({ state: 'available', reasonCode: null }),
-        check: async (personId) => { beforeReady(); return readyReply(personId); }, assertCurrent: assertCurrentReadiness },
-    });
-    const provider = createLeadDetailProvider(gate, undefined, injected ? outbound : undefined);
-    return { dispatch, provider, outbound, today: createTodayProvider(gate),
-      invoke: (request: unknown) => provider.beginOutbound(request as OutboundRequest) };
-  }
-
-  function expectNoCommunication() {
-    expect(database.raw.prepare("SELECT COUNT(*) AS n FROM activities WHERE kind IN ('call','text','email') AND direction = 'outbound'").get()).toEqual({ n: 0 });
-  }
-
-  it('normal provider accepts one handoff with durable facts and no phantom touch', async () => {
-    const request = requestFor();
-    const before = domain.getLeadDetail({ personId: request.personId });
-    const route = normalRoute();
-    const receipt = await route.invoke(request);
-    expect(receipt).toMatchObject({ commandId: request.commandId, channel: 'call', status: 'handoff_accepted', reasonCode: null });
-    expect(route.dispatch).toHaveBeenCalledTimes(1);
-    expect(route.dispatch).toHaveBeenCalledWith('+14015550100');
-    expectNoCommunication();
-    const after = domain.getLeadDetail({ personId: request.personId });
-    expect(after.outboundAttempts).toEqual([expect.objectContaining({ commandId: request.commandId, status: 'handoff_accepted', manualActivityId: null })]);
-    expect(after.activities).toEqual(before.activities);
-    expect(after.nextAction).toEqual(before.nextAction);
-    expect(after.stage).toBe(before.stage);
-    expect(database.raw.prepare("SELECT COUNT(*) AS n FROM activities WHERE channel = 'outbound_command'").get()).toEqual({ n: 3 });
-    await expect(route.invoke(request)).resolves.toEqual(receipt);
-    expect(route.dispatch).toHaveBeenCalledTimes(1);
-    await expect(route.invoke({ ...request, expectedContactSnapshot: 'b'.repeat(64) })).rejects.toThrow('conflicts');
-    route.outbound.dispose();
-  });
-
-  it('preserves direct service factory enrichment position and delegates its third outbound service', async () => {
-    const request = requestFor();
-    const route = normalRoute();
-    const enrichment = { request: vi.fn(async () => ({ written: false, refusalReason: 'rate_limited' as const })) };
-    const provider = createLeadDetailProvider(productionDomainGate(domain), enrichment, route.outbound);
-    await expect(provider.beginOutbound(request)).resolves.toMatchObject({ status: 'handoff_accepted' });
-    expect((await provider.getOutboundCapabilities()).phoneHandoff.state).toBe('available');
-    await expect(provider.findContactInfo({ personId: request.personId })).resolves.toEqual({ written: false, refusalReason: 'rate_limited' });
-    expect(enrichment.request).toHaveBeenCalledWith({ personId: request.personId });
-    expect(route.dispatch).toHaveBeenCalledTimes(1); expectNoCommunication();
-  });
-
-  it('strict outbound service rejects forged target/body and missing identity before dispatch', async () => {
-    const request = requestFor();
-    const route = normalRoute();
-    for (const field of ['target', 'body', 'url', 'observedOutcome']) {
-      await expect(route.invoke({ ...request, [field]: 'forged' })).rejects.toThrow();
-    }
-    for (const field of ['commandId', 'expectedContactSnapshot']) {
-      const invalid: Record<string, unknown> = { ...request }; delete invalid[field];
-      await expect(route.invoke(invalid)).rejects.toThrow();
-    }
-    expect(route.dispatch).not.toHaveBeenCalled();
-    expect(database.raw.prepare('SELECT COUNT(*) AS n FROM activities').get()).toEqual({ n: 0 });
-  });
-
-  it.each(['federal_status', 'validation_state', 'normalized_value'] as const)('rechecks changed %s at final authority after readiness', async (field) => {
-    const request = requestFor();
-    const route = normalRoute(() => {
-      if (field === 'federal_status') database.raw.prepare("UPDATE person_contact_methods SET federal_status = 'listed'").run();
-      if (field === 'validation_state') database.raw.prepare("UPDATE person_contact_methods SET validation_state = 'invalid'").run();
-      if (field === 'normalized_value') database.raw.prepare("UPDATE person_contact_methods SET normalized_value = '+14015550101'").run();
-    });
-    await expect(route.invoke(request)).resolves.toMatchObject({ status: 'refused', reasonCode: field === 'federal_status' ? 'federal_dnc_listed' : 'stale_contact' });
-    expect(route.dispatch).not.toHaveBeenCalled(); expectNoCommunication();
-  });
-
-  it('rejects another persons contact before creating any command facts', async () => {
-    const request = requestFor();
-    const other = requestFor('other');
-    const route = normalRoute();
-    await expect(route.invoke({ ...request, contactMethodId: other.contactMethodId })).rejects.toMatchObject({ code: 'CONTACT_METHOD_NOT_FOUND' });
-    expect(route.dispatch).not.toHaveBeenCalled();
-    expect(database.raw.prepare('SELECT COUNT(*) AS n FROM activities').get()).toEqual({ n: 0 });
-  });
-
-  it('checks current permission inside its write scope immediately before fake dispatch', async () => {
-    const request = requestFor();
-    const order: string[] = [];
-    const original = services.outboundPermission.assertMayExecuteOutbound.bind(services.outboundPermission);
-    vi.spyOn(services.outboundPermission, 'assertMayExecuteOutbound').mockImplementation((input) => {
-      services.unitOfWork.assertWriteScope(); original(input); order.push('authorize');
-    });
-    const route = normalRoute();
-    route.dispatch.mockImplementation(async () => { order.push('dispatch'); return { status: 'handoff_accepted', reasonCode: null }; });
-    await route.invoke(request);
-    expect(order).toEqual(['authorize', 'dispatch']); expectNoCommunication();
-  });
-
-  it('rolls back command preparation and never dispatches when the durable write fails', async () => {
-    const request = requestFor();
-    const append = services.events.appendActivity.bind(services.events);
-    vi.spyOn(services.events, 'appendActivity').mockImplementation((input) => { append(input); throw new Error('fault after append'); });
-    const route = normalRoute();
-    await expect(route.invoke(request)).rejects.toThrow('fault after append');
-    expect(route.dispatch).not.toHaveBeenCalled();
-    expect(database.raw.prepare('SELECT COUNT(*) AS n FROM activities').get()).toEqual({ n: 0 });
-  });
-
-  it('applies a real opt-out during readiness and never dispatches from stale allowed detail', async () => {
-    const request = requestFor();
-    const route = normalRoute(() => { domain.logCallOutcome({ personId: request.personId, salesCycleId: request.salesCycleId,
-      outcome: 'opted_out', occurredAt: CLOCK_NOW, callbackAt: null }); });
-    await expect(route.invoke(request)).resolves.toMatchObject({ status: 'refused', reasonCode: 'cycle_not_executable' });
-    expect(route.dispatch).not.toHaveBeenCalled();
-    expect(domain.getLeadDetail({ personId: request.personId }).optedOut).toBe(true);
-    expect(database.raw.prepare("SELECT COUNT(*) AS n FROM activities WHERE channel = 'outbound_command' AND kind <> 'system'").get()).toEqual({ n: 0 });
-  });
-
-  it.each(['call', 'text', 'email'] as const)('absent service persists unavailable %s and never launches', async (channel) => {
-    const request = requestFor();
-    if (channel === 'email') { addEmail({ personId: request.personId } as SeededProspect, 'email'); }
-    const route = normalRoute(undefined, false);
-    const input = channel === 'email' ? { ...request, channel, contactMethodId: 'email', expectedContactSnapshot: domain.getLeadDetail({ personId: request.personId }).emails[0].contactSnapshot } : { ...request, channel };
-    const capabilities = await route.provider.getOutboundCapabilities();
-    expect(capabilities.phoneHandoff).toEqual({ state: 'unavailable', reasonCode: 'phone_route_unverified' });
-    expect(capabilities.localDrafts).toBe(true);
-    const receipt = await route.invoke(input);
-    expect(receipt).toMatchObject({ status: 'unavailable', reasonCode: channel === 'call' ? 'phone_route_unverified' : 'channel_unavailable' });
-    expect(domain.inspectOutboundCommand(input)).toEqual(receipt);
-    expect(route.dispatch).not.toHaveBeenCalled(); expectNoCommunication();
-    const direct = createLeadDetailProvider(productionDomainGate(domain));
-    await expect(direct.beginOutbound(input)).resolves.toEqual(receipt);
-  });
-
-  it.each(['text', 'email'] as const)('injected normal %s request is unavailable, never a Phone launch', async (channel) => {
-    const request = requestFor();
-    const route = normalRoute();
-    await expect(route.invoke({ ...request, channel })).resolves.toMatchObject({ status: 'unavailable', reasonCode: 'channel_unavailable' });
-    expect(route.dispatch).not.toHaveBeenCalled(); expectNoCommunication();
-  });
-
-  it.each(['same', 'old'] as const)('recovered %s-cycle command association uses authoritative normal manual provider', async (cycle) => {
-    const request = requestFor();
-    domain.prepareOutboundDispatch(request); // Durable unresolved intent, no dispatched result.
-    if (cycle === 'old') {
-      domain.dismissLead({ personId: request.personId, salesCycleId: request.salesCycleId,
-        qualificationGateReason: 'out_of_area', expectedRevision: domain.getLeadDetail({ personId: request.personId }).revision });
-      const prospect = { personId: request.personId, prospectId: 'outbound-prospect', sourceEventId: 'outbound-source' };
-      insertOpenCycleWithAction({ database: database.raw, prefix: 'replacement', prospect });
-    }
-    const route = normalRoute();
-    const detail = await route.provider.get({ personId: request.personId });
-    expect(detail.outboundAttempts[0]).toMatchObject({ commandId: request.commandId, status: 'unknown', manualActivityId: null });
-    const input = { personId: detail.personId, salesCycleId: detail.salesCycleId, outboundCommandId: request.commandId,
-      outcome: 'no_answer' as const, occurredAt: CLOCK_NOW, callbackAt: null as string | null };
-    const before = database.raw.prepare('SELECT total_changes() AS n').get();
-    if (cycle === 'old') {
-      expect(detail.salesCycleId).not.toBe(request.salesCycleId);
-      await expect(route.today.logCallOutcome(input)).rejects.toMatchObject({ code: 'ACTION_NOT_SUPPORTED' });
-      expect(database.raw.prepare('SELECT total_changes() AS n').get()).toEqual(before);
-      expectNoCommunication();
-    } else {
-      await route.today.logCallOutcome(input);
-      const saved = database.raw.prepare('SELECT total_changes() AS n').get();
-      await route.today.logCallOutcome(input);
-      expect(database.raw.prepare('SELECT total_changes() AS n').get()).toEqual(saved);
-      expect((await route.provider.get({ personId: request.personId })).outboundAttempts[0]).toMatchObject({ status: 'unknown', manualActivityId: expect.any(String) });
-      expect(database.raw.prepare("SELECT COUNT(*) AS n FROM activities WHERE adapter = 'callie_manual_outbound_v1'").get()).toEqual({ n: 1 });
-    }
-    expect(route.dispatch).not.toHaveBeenCalled();
   });
 
   it('confirms review_to_ready through the guarded transition', async () => {

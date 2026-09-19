@@ -16,8 +16,7 @@ import type { LeadDetail } from '../../src/shared/contracts/leadDetailContract';
 import { startApplication, type ApplicationStartupDependencies } from '../../src/main/startApplication';
 import { fakeDomainRuntime } from '../fixtures/fakeDomainRuntime';
 import type { AppDatabase } from '../../src/main/db/database';
-import { createOutboundCommandService } from '../../src/main/communications/outboundCommandService';
-import type { OutboundCommandServiceApi } from '../../src/main/communications/outboundPorts';
+import { unavailablePhoneHandoff, unavailableOutboundReadiness } from '../../src/main/communications/phoneHandoffLauncher';
 import { registeredIpcHandler } from '../fixtures/registeredIpcHandler';
 import { createCallieApi } from '../../src/preload/createCallieApi';
 import { registerLeadDetailIpc } from '../../src/main/leads/registerLeadDetailIpc';
@@ -106,7 +105,6 @@ describe('registerApplicationIpc', () => {
       handlers.add(channel);
     });
     electron.removeHandler.mockReset().mockImplementation((channel: string) => { handlers.delete(channel); });
-    let service!: OutboundCommandServiceApi;
     const dispose = vi.fn(); const close = vi.fn(); const window = vi.fn();
     const dependencies: ApplicationStartupDependencies = {
       loadWorkspaceKey: async () => ({ bytes: Buffer.alloc(32, 0x2a), version: 1 }),
@@ -117,7 +115,7 @@ describe('registerApplicationIpc', () => {
       createBackupService: () => ({ start: async () => undefined, shutdown: async () => undefined,
         listAvailableBackups: async () => [], createBackup: async () => { throw new Error('unexpected backup'); } }),
       createRecoveryService: () => ({ ...recoveryProvider, shutdown: async () => undefined }),
-      createOutboundCommandService: (input) => { service = createOutboundCommandService(input); dispose.mockImplementation(() => service.dispose()); return { ...service, dispose }; },
+      createPhoneBindings: () => ({ phone: unavailablePhoneHandoff(), readiness: unavailableOutboundReadiness(), dispose }),
       registerApplicationIpc: (runtime, trust, _unused, recovery, shell, logs, options) =>
         registerApplicationIpc(runtime, trust, registrars, recovery, shell, logs, options),
       createAppleBridgeSupervisor: () => { throw new Error('unexpected helper'); }, closeDatabase: close,
@@ -136,7 +134,6 @@ describe('registerApplicationIpc', () => {
     expect(error.errors).toEqual([registrationError, cleanupError]);
     expect(handlers.size).toBe(0); expect(features.size).toBe(0); expect(listeners.size).toBe(0);
     expect(dispose).toHaveBeenCalledTimes(1); expect(close).toHaveBeenCalledTimes(1); expect(window).not.toHaveBeenCalled();
-    expect((await service.getCapabilities()).phoneHandoff.reasonCode).toBe('workspace_inactive');
   });
 
   it('Task 1 startup rolls selected-company registration back without repeating startup', async () => {
@@ -155,7 +152,6 @@ describe('registerApplicationIpc', () => {
       handlers.add(channel);
     });
     electron.removeHandler.mockReset().mockImplementation((channel: string) => { handlers.delete(channel); });
-    let service!: OutboundCommandServiceApi;
     const dispose = vi.fn(); const close = vi.fn(); const window = vi.fn();
     const opened = vi.fn(() => ({ path: '/fixture/rollback' }) as AppDatabase);
     const domainCreated = vi.fn(() => fakeDomainRuntime());
@@ -170,7 +166,7 @@ describe('registerApplicationIpc', () => {
       createBackupService: () => ({ start: async () => undefined, shutdown: async () => undefined,
         listAvailableBackups: async () => [], createBackup: async () => { throw new Error('unexpected backup'); } }),
       createRecoveryService: () => ({ ...recoveryProvider, shutdown: async () => undefined }),
-      createOutboundCommandService: (input) => { service = createOutboundCommandService(input); dispose.mockImplementation(() => service.dispose()); return { ...service, dispose }; },
+      createPhoneBindings: () => ({ phone: unavailablePhoneHandoff(), readiness: unavailableOutboundReadiness(), dispose }),
       registerApplicationIpc: registration,
       createAppleBridgeSupervisor: () => { throw new Error('unexpected helper'); }, closeDatabase: close,
     };
@@ -188,7 +184,6 @@ describe('registerApplicationIpc', () => {
     expect(error.errors).toEqual([registrationError, cleanupError]);
     expect(handlers.size).toBe(0); expect(features.size).toBe(0); expect(listeners.size).toBe(0);
     expect(dispose).toHaveBeenCalledTimes(1); expect(close).toHaveBeenCalledTimes(1); expect(window).not.toHaveBeenCalled();
-    expect((await service.getCapabilities()).phoneHandoff.reasonCode).toBe('workspace_inactive');
     expect(opened).toHaveBeenCalledTimes(1); expect(domainCreated).toHaveBeenCalledTimes(1);
     expect(registration).toHaveBeenCalledTimes(1);
     expect(electron.handle.mock.calls.filter(call => call[0] === 'local-workspace:get-company')).toHaveLength(1);

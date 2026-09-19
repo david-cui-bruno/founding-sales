@@ -65,10 +65,9 @@ import { SafeStorageKeyProtector } from './security/safeStorageKeyProtector';
 import { WorkspaceKeyStore } from './security/workspaceKeyStore';
 import { classifyStartupFailure, isStartupCancellation, type StartupStage } from './startup/startupFailure';
 import type { SafeLogger } from './logging/safeLogger';
-import { createOutboundCommandService } from './communications/outboundCommandService';
 import { createPhoneHandoffLauncher, unavailablePhoneHandoff, unavailableOutboundReadiness } from './communications/phoneHandoffLauncher';
 import { isExcludedNumber } from './communications/excludedNumbers';
-import type { OutboundCommandServiceApi, OutboundDomainGate, PhoneHandoffPort, OutboundReadinessPort } from './communications/outboundPorts';
+import type { PhoneHandoffPort, OutboundReadinessPort } from './communications/outboundPorts';
 
 import { createInboundReadiness, type InboundRegistry, type InboundAdapter } from './communications/inboundReadiness';
 import { createNativePhoneLaunchDriver, inspectNativePhoneRouteCandidate, resolveVerifiedNativePhoneHelper,
@@ -331,7 +330,6 @@ export type ApplicationStartupDependencies = FoundationRuntimeDependencies & {
   createPolicyImportNative?():NonNullable<Parameters<typeof createDelegationRuntime>[0]['policyImportNative']>;
   createRequestedFollowupModel?(userDataPath:string):NonNullable<Parameters<typeof createDelegationRuntime>[0]['requestedModel']>;
   createLinkedInAdapters?(userDataPath:string):NonNullable<Parameters<typeof createDelegationRuntime>[0]['linkedIn']>;
-  createOutboundCommandService?: typeof createOutboundCommandService;
   createPhoneBindings?(runtime: FoundationRuntime): PhoneBindings;
   registerPhoneSetupIpc?: typeof registerPhoneSetupIpc;
   createBackupService?(options: BackupServiceOptions): Pick<BackupService, 'start' | 'shutdown' | 'createBackup' | 'listAvailableBackups'>;
@@ -479,7 +477,6 @@ export async function startApplication(
   let backupService: Pick<BackupService, 'start' | 'shutdown' | 'createBackup' | 'listAvailableBackups'> | undefined;
   let recoveryService: (RecoveryProvider & { shutdown(): Promise<void> }) | undefined;
   let shutdownPromise: Promise<void> | undefined;
-  let outbound: OutboundCommandServiceApi | undefined;
   let phoneBindings: PhoneBindings | undefined;
   let startupInboundRegistry: PhoneInboundRegistry | undefined;
   let unregisterPhoneSetup: (() => void) | undefined;
@@ -515,7 +512,6 @@ export async function startApplication(
     try { researchProviders?.dispose(); } catch (error) { cleanupErrors.push(error); }
     startupInboundRegistry?.reset();
     try { phoneBindings?.dispose?.(); } catch (error) { cleanupErrors.push(error); }
-    try { outbound?.dispose(); } catch (error) { cleanupErrors.push(error); }
     detachOutboundLifecycle();
     try { detachStartupAbort(); } catch (error) { cleanupErrors.push(error); }
   };
@@ -616,14 +612,6 @@ export async function startApplication(
     await runtime.initialize();
     throwIfStartupCancelled(options.signal);
     stage = 'phone';
-    const domain: OutboundDomainGate = {
-      withDomain: (operation) => runtime.withDomain((current) => operation({
-        inspectOutboundCommand: (request) => current.inspectOutboundCommand(request),
-        prepareOutboundDispatch: (request) => current.prepareOutboundDispatch(request),
-        recordOutboundResult: (request, result) => current.recordOutboundResult(request, result),
-        recordOutboundRefusal: (request, reason) => current.recordOutboundRefusal(request, reason),
-      })),
-    };
     if (dependencies === defaultDependencies && options.phoneRouteMode !== undefined) {
       startupInboundRegistry = createPhoneInboundRegistry();
     }
@@ -631,10 +619,6 @@ export async function startApplication(
       ?? (dependencies === defaultDependencies && options.phoneRouteMode !== undefined
         ? createStartupPhoneBindings(options, startupInboundRegistry)
         : { phone: unavailablePhoneHandoff(), readiness: unavailableOutboundReadiness() });
-    outbound = (dependencies.createOutboundCommandService ?? createOutboundCommandService)({
-      domain, phone: phoneBindings.phone, readiness: phoneBindings.readiness,
-    });
-    phoneBindings.onSetupChanged?.(() => { if (!outboundClosed) outbound.invalidate('wake'); });
     const readPairedResearch = async () => paired ? runtime.withDatabase(database => new SqlDelegationConfiguration({ database, workspaceId: paired.workspaceId, pairingId: paired.pairingId, clock: domainClock }).read()) : null;
     // One lazy credential manager belongs to startup, including null-start activation.
     stage = 'research';
@@ -708,8 +692,8 @@ export async function startApplication(
     }
     stage = 'lifecycle';
     unregisterOutboundLifecycle = options.registerOutboundLifecycle?.({
-      onWake: () => { if (!outboundClosed) {companyDraftPreparation?.invalidate();delegation?.invalidate();companyResearch?.invalidate();phoneBindings?.invalidate?.();email?.invalidate();outbound.invalidate('wake');} },
-      onLock: () => { if (!outboundClosed) {outboundLocked=true;companyDraftPreparation?.invalidate(true);delegation?.invalidate(true);companyResearch?.invalidate(true);phoneBindings?.invalidate?.(true);email?.invalidate(true);outbound.invalidate('lock');} },
+      onWake: () => { if (!outboundClosed) {companyDraftPreparation?.invalidate();delegation?.invalidate();companyResearch?.invalidate();phoneBindings?.invalidate?.();email?.invalidate();} },
+      onLock: () => { if (!outboundClosed) {outboundLocked=true;companyDraftPreparation?.invalidate(true);delegation?.invalidate(true);companyResearch?.invalidate(true);phoneBindings?.invalidate?.(true);email?.invalidate(true);} },
       onUnlock: () => {
         if (outboundClosed) return;
         delegation?.invalidate(false);
@@ -717,8 +701,6 @@ export async function startApplication(
         companyDraftPreparation?.invalidate(false);
         phoneBindings?.invalidate?.(false);
         email?.invalidate(false);
-        outbound.invalidate('wake');
-        if (!outboundClosed) outbound.resumeAfterUnlock();
       },
     });
     // A registrar can synchronously abort before returning its owned disposer.
