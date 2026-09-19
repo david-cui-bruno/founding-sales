@@ -14,6 +14,7 @@ import {
   type PairResult,
   type ReadRequest,
   type ReadResult,
+  type SettingsView,
   type TodayView,
 } from '../shared/clientContract';
 
@@ -30,6 +31,7 @@ export type ClientApi = {
   pair(codeOrPath: string): Promise<PairResult>;
   get(request: { view: '/v1/diagnostics'; kind?: ReadRequest['kind'] }): Promise<ReadResult<DiagnosticsView>>;
   get(request: { view: '/v1/today' }): Promise<ReadResult<TodayView>>;
+  get(request: { view: '/v1/settings' }): Promise<ReadResult<SettingsView>>;
   command(command: V1Command): Promise<CommandResult>;
   unpair(): Promise<ClientStatus>;
 };
