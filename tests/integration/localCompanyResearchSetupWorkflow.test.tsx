@@ -5,13 +5,12 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { expect, it, vi } from 'vitest';
 import { App } from '../../src/renderer/App';
 import type { CalliePreloadApi } from '../../src/shared/preload';
-import { importCommitReceiptSchema } from '../../src/shared/contracts/importContract';
 import { localCompanyCreateResultSchema } from '../../src/shared/contracts/localCompanyIntakeContract';
 import { localCompanyResearchStatusSchema } from '../../src/shared/contracts/localWorkspaceContract';
 import { companyResearchSettingsSchema, companyResearchSettingsUpdateReplySchema, updateCompanyResearchSettingsRequestSchema } from '../../src/shared/contracts/localCompanyResearchSettingsContract';
 import { emailDraftSchema } from '../../src/shared/contracts/outreachContract';
 import { createFirstUseDomainFixture, localSetupPages, localSetupClaims, localSetupRelationship } from '../fixtures/firstUseDomainFixture';
-import { createImportProvider } from '../fixtures/legacyDomainProviders';
+import { seedIntakePeople } from '../fixtures/domainRows';
 import type { RegisteredIpcHandler } from '../fixtures/registeredIpcHandler';
 
 const transport = vi.hoisted(() => ({ handlers: new Map<string, RegisteredIpcHandler>(), registered: [] as string[], removed: [] as string[], nativeCalls: 0 }));
@@ -177,23 +176,18 @@ it('sets up unpaired local company research in App and preserves an attributed, 
     expect(f.pages).toEqual(Object.keys(localSetupPages));
 
     // The CSV person importer left the desktop with the legacy routes, so the same single
-    // identity is admitted through the retained domain import facade (test-only gate, no IPC
-    // channel). The nonstandard header still needs an explicit remap before the commit, and
-    // the reviewed link below still starts from a stored person, not a fixture-generated ID.
-    const imports = createImportProvider(f.runtime);
-    const preview = await imports.preview({ kind: 'spreadsheet_paste', sourceName: 'local-setup.tsv',
-      content: 'Name\tPersonal mailbox\tOrganization\nMaya Ortiz\tmaya@selected.invalid\tSelected Management' });
-    const remapped = await imports.remap({ previewId: preview.previewId, contentHash: preview.contentHash,
-      mapping: { ...preview.suggestedMapping, 'Personal mailbox': 'email' } });
+    // identity is admitted through the intake service the importer composed (test-only
+    // seeding, no IPC channel). The reviewed link below still starts from a stored person,
+    // not a fixture-generated ID.
     await countsEmpty(['persons', 'person_contact_methods']);
-    const receipt = importCommitReceiptSchema.parse(await imports.commit({ previewId: remapped.previewId, contentHash: remapped.contentHash,
-      mapping: remapped.suggestedMapping, source: { channel: 'custom', referredByPersonId: null }, duplicateDecisions: [] }));
-    expect(receipt.importedPersonIds).toHaveLength(1);
+    const seeded = await f.runtime.withDatabase(() => seedIntakePeople(f.services(), { channel: 'custom', sourceName: 'local-setup.tsv',
+      observedAt: new Date().toISOString(), rows: [{ displayName: 'Maya Ortiz', email: 'maya@selected.invalid', organization: 'Selected Management' }] }));
+    expect(seeded).toHaveLength(1);
     expect(await rows('persons')).toHaveLength(1);
     expect(await rows('source_intake_receipts')).toHaveLength(1);
     expect(transport.registered.filter(channel => channel.startsWith('imports:'))).toEqual([]);
     expect(screen.queryByRole('button', { name: 'Import named person' })).toBeNull();
-    const personId = receipt.importedPersonIds[0];
+    const personId = seeded[0]!.personId;
     await click('Find saved person');
     await click(`Select Maya Ortiz · ${personId}`);
     const person = await api.leadDetail.get({ personId });

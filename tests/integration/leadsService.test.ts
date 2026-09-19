@@ -1,5 +1,6 @@
 import { productionDomainGate } from '../fixtures/productionDomainGate';
-import { createLegacyLeadsProvider as createLeadsProvider, type LegacyLeadsProvider } from '../fixtures/legacyDomainProviders';
+import { createLeadsProvider } from '../../src/main/ipc/registerApplicationIpc';
+import type { LeadsProvider } from '../../src/main/leads/leadsService';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
@@ -57,7 +58,7 @@ describe('leadsService over a real encrypted domain', () => {
   let temp: TempDatabase;
   let services: DomainServices;
   let domain: FounderSalesDomain;
-  let leads: LegacyLeadsProvider;
+  let leads: LeadsProvider;
   let ruleVersionId: string;
 
   beforeEach(async () => {
@@ -94,13 +95,19 @@ describe('leadsService over a real encrypted domain', () => {
     return prospect;
   }
 
-  const listAll = (overrides: Partial<Parameters<LegacyLeadsProvider['list']>[0]> = {}) =>
+  /** The same committed rename the removed field-update command performed. */
+  function renamePerson(personId: string, displayName: string): void {
+    database.raw.prepare('UPDATE persons SET display_name = ?, version = version + 1, updated_at = ? WHERE id = ?')
+      .run(displayName, CLOCK_NOW, personId);
+  }
+
+  const listAll = (overrides: Partial<Parameters<LeadsProvider['list']>[0]> = {}) =>
     leads.list({
       query: '', stages: [], priorities: [], sort: 'person_name',
       cursor: null, limit: 50, ...overrides,
     });
 
-  type ReliabilityLeadsRequest = Parameters<LegacyLeadsProvider['list']>[0];
+  type ReliabilityLeadsRequest = Parameters<LeadsProvider['list']>[0];
 
   function seedReliabilityLeads(withFilters = false, count = 208) {
     return Array.from({ length: count }, (_, index) => {
@@ -165,7 +172,7 @@ describe('leadsService over a real encrypted domain', () => {
         expect(first.rows.some(row => row.personId === target.personId)).toBe(false);
         expect(first.nextCursor).not.toBeNull();
         if (sort === 'person_name') {
-          await leads.updateField({ personId: target.personId, field: 'person_name', value: 'AAA moved earlier' });
+          renamePerson(target.personId, 'AAA moved earlier');
         } else if (sort === 'priority') {
           setCloudScores(target.prospectId, 100, 100);
         } else {
@@ -184,7 +191,7 @@ describe('leadsService over a real encrypted domain', () => {
       const first = await listAll({ query: 'Person', limit: 200 });
       expect(first.nextCursor).not.toBeNull();
       const target = fixtures[207]!;
-      await leads.updateField({ personId: target.personId, field: 'person_name', value: 'Outside selected text' });
+      renamePerson(target.personId, 'Outside selected text');
       await expect(listAll({ query: 'Person', limit: 200, cursor: first.nextCursor }))
         .rejects.toThrow('LIST_CURSOR_STALE');
       await walkReliabilityLeads(fixtures.slice(0, 207).map(row => row.personId), { query: 'Person' });
@@ -321,74 +328,6 @@ describe('leadsService over a real encrypted domain', () => {
 
     expect(page.total).toBe(1);
     expect(page.rows[0]?.personName).toBe('Person alpha-person');
-  });
-
-  it('updates an allowed field and reflects it in the next list read', async () => {
-    const prospect = seedLead('alpha');
-    const before = await listAll();
-
-    const receipt = await leads.updateField({
-      personId: prospect.personId, field: 'person_name', value: 'Renamed Person',
-    });
-
-    expect(receipt.affectedPersonIds).toEqual([prospect.personId]);
-    expect(receipt.revision).toBeGreaterThan(before.revision);
-    const after = await listAll();
-    expect(after.rows[0]?.personName).toBe('Renamed Person');
-    expect(after.revision).toBeGreaterThan(before.revision);
-  });
-
-  it('assigns one person without renaming a shared organization', () => {
-    const alice = seedLead('alice');
-    const bob = seedLead('bob');
-    services.unitOfWork.immediate(() => {
-      const shared = services.identities.createOrganization({ canonicalName: 'Shared Org' });
-      services.identities.addOrganizationAlias({ organizationId: shared.id, alias: 'shared org' });
-      services.identities.linkOrganization({ prospectId: alice.prospectId, organizationId: shared.id });
-      services.identities.linkOrganization({ prospectId: bob.prospectId, organizationId: shared.id });
-    });
-    const receipt = domain.updateLeadField({
-      personId: alice.personId, field: 'organization_label', value: 'New Employer',
-    });
-    const page = domain.listLeadRows({
-      query: '', stages: [], priorities: [], sort: 'person_name', cursor: null, limit: 200,
-    });
-    expect(page.rows.find((row) => row.personId === alice.personId)?.organization).toBe('New Employer');
-    expect(page.rows.find((row) => row.personId === bob.personId)?.organization).toBe('Shared Org');
-    expect(receipt.affectedPersonIds).toEqual([alice.personId]);
-    expect(receipt.affectedSalesCycleIds).toEqual(['alice-cycle']);
-  });
-
-  it('bulk-updates the organization label for many people', async () => {
-    const alpha = seedLead('alpha');
-    const beta = seedLead('beta');
-
-    const receipt = await leads.bulkUpdate({
-      personIds: [alpha.personId, beta.personId],
-      field: 'organization_label',
-      value: 'Shared Holdings',
-    });
-
-    expect(receipt.affectedPersonIds.sort()).toEqual(
-      [alpha.personId, beta.personId].sort(),
-    );
-    const page = await listAll();
-    expect(page.rows.map((row) => row.organization)).toEqual([
-      'Shared Holdings',
-      'Shared Holdings',
-    ]);
-  });
-
-  it('rejects an update for an unknown person without corrupting reads', async () => {
-    seedLead('alpha');
-
-    await expect(
-      leads.updateField({
-        personId: 'missing-person', field: 'person_name', value: 'Nope',
-      }),
-    ).rejects.toThrow(/does not exist/);
-    const page = await listAll();
-    expect(page.total).toBe(1);
   });
 
   /** Sets the prospect's cloud axes exactly as the sourcing sync would. */

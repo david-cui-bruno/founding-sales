@@ -623,9 +623,8 @@ it.each(['account', 'command', 'shape'] as const)('Task 3 real provider validate
 // Task 5 append-only preparation. Original tests and their frozen nine-handler
 // inventory above are intentionally unchanged. Parent owns inventory migration.
 import type { AccountEvidenceReceipt } from '../../src/shared/contracts/accountContract';
-import { createImportProvider } from '../fixtures/legacyDomainProviders';
+import { seedIntakePeople } from '../fixtures/domainRows';
 import { createFounderSalesDomain, type FounderSalesDomain } from '../../src/main/domain/founderSalesDomain';
-import { productionDomainGate } from '../fixtures/productionDomainGate';
 const task5Channel = 'local-workspace:link-company-person';
 const task5Now = '2026-09-09T12:00:00.000Z';
 const task5Quote = 'Nora Vale is the maintenance manager at Fictional Cedar PM.';
@@ -657,17 +656,14 @@ function task5RuntimeFixture(load?: () => Promise<void>) {
 async function task5Seed(f: ReturnType<typeof task5RuntimeFixture>, isolatedDomain?: FounderSalesDomain) {
   // P01/P03 retain the public Foundation composition. Only P02 supplies a real
   // facade inside withDatabase, without populating Foundation's memoized facade.
-  const imports = createImportProvider(isolatedDomain ? productionDomainGate(isolatedDomain) : f.runtime);
-  const preview = await imports.preview({ kind: 'csv', sourceName: 'fictional-link-bridge.csv',
-    content: 'Name,Email,Organization\nNora Vale,nora.vale@cedar.invalid,Fictional Cedar PM\nMarcus Reed,marcus.reed@cedar.invalid,Fictional Cedar PM\n' });
-  expect(preview.errors).toEqual([]);
-  const mapping = { Name: 'person_name', Email: 'email', Organization: 'organization' } as const;
-  const remapped = await imports.remap({ previewId: preview.previewId, contentHash: preview.contentHash, mapping });
-  expect(remapped.errors).toEqual([]);
-  const imported = await imports.commit({ previewId: preview.previewId, contentHash: preview.contentHash, mapping,
-    source: { channel: 'registry', referredByPersonId: null }, duplicateDecisions: [] });
-  expect(imported.importedRowCount).toBe(2); expect(new Set(imported.importedPersonIds).size).toBe(2);
-  const readDetails = (domain: FounderSalesDomain) => imported.importedPersonIds.map(personId => domain.getLeadDetail({ personId }));
+  const seed = () => seedIntakePeople(f.domainServices(), { channel: 'registry', sourceName: 'fictional-link-bridge.csv',
+    observedAt: task5Now, ids: f.ids, rows: [
+      { displayName: 'Nora Vale', email: 'nora.vale@cedar.invalid', organization: 'Fictional Cedar PM' },
+      { displayName: 'Marcus Reed', email: 'marcus.reed@cedar.invalid', organization: 'Fictional Cedar PM' },
+    ] });
+  const imported = isolatedDomain ? seed() : await f.runtime.withDatabase(seed);
+  expect(imported).toHaveLength(2); expect(new Set(imported.map(person => person.personId)).size).toBe(2);
+  const readDetails = (domain: FounderSalesDomain) => imported.map(({ personId }) => domain.getLeadDetail({ personId }));
   const details = isolatedDomain ? readDetails(isolatedDomain) : await f.runtime.withDomain(readDetails);
   const nora = details.find(p => p.personName === 'Nora Vale')!;
   const marcus = details.find(p => p.personName === 'Marcus Reed')!;
