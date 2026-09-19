@@ -2,9 +2,8 @@ import { randomUUID } from 'node:crypto';
 import type { AppDatabase } from '../../src/main/db/database';
 import { AccountRepository } from '../../src/main/domain/accounts/accountRepository';
 import { createDomainServices } from '../../src/main/domain/createDomainServices';
-import { FounderSalesDomain } from '../../src/main/domain/founderSalesDomain';
 import { BUILTIN_PRIORITIZATION_RULE_V1 } from '../../src/main/domain/prioritization/builtinPrioritizationRules';
-import { DISCOVERY_NOW, seedDiscoveryOwner } from './discoveryDatabase';
+import { DISCOVERY_NOW, recordPromisedCallback, seedDiscoveryOwner } from './discoveryDatabase';
 
 /** Synthetic records only. No workspace identity, worker, provider or transition. */
 export function seedLocalWorkspaceAcceptance(database: AppDatabase) {
@@ -20,10 +19,9 @@ export function seedLocalWorkspaceAcceptance(database: AppDatabase) {
   // backlog-only in the existing Today scheduler, even when they have activity.
   services.lifecycle.reviewToReady({ cycleId: retained.salesCycleId, expectedCycleVersion: 1,
     expectedProspectVersion: 1, effectiveAt: DISCOVERY_NOW });
-  const domain = new FounderSalesDomain({ services, database, clock, ids, timezone: 'America/New_York' });
   const callbackAt = '2026-09-06T13:00:00.000Z';
-  domain.logCallOutcome({ personId: retained.personId, salesCycleId: retained.salesCycleId,
-    outcome: 'spoke', occurredAt: DISCOVERY_NOW, callbackAt });
+  recordPromisedCallback(services, database.raw, { personId: retained.personId, salesCycleId: retained.salesCycleId,
+    occurredAt: DISCOVERY_NOW, now: DISCOVERY_NOW, callbackAt });
   const accounts = new AccountRepository({ database, clock, ids, sourcePolicy: { attest: () => true } });
   const account = accounts.create({ commandId: randomUUID(), name: 'Fixture Residential Management', domain: 'fixture.invalid' });
   const sourceId = randomUUID();

@@ -14,11 +14,7 @@ import {
   OutboundContactBlockedError,
 } from '../../src/main/domain/support/domainErrors';
 import { DomainUnitOfWork } from '../../src/main/domain/support/domainUnitOfWork';
-import { createDomainServices } from '../../src/main/domain/createDomainServices';
-import { createFounderSalesDomain } from '../../src/main/domain/founderSalesDomain';
-import { contactSnapshot } from '../../src/main/communications/contactSnapshot';
-import { createOutboundCommandService } from '../../src/main/communications/outboundCommandService';
-import { DOMAIN_TIMESTAMP, seedProspect, insertOpenCycleWithAction } from '../fixtures/domainRows';
+import { DOMAIN_TIMESTAMP, seedProspect } from '../fixtures/domainRows';
 import {
   createTempDatabase,
   createTestWorkspaceKey,
@@ -26,17 +22,6 @@ import {
 } from '../fixtures/tempDatabase';
 
 
-function readinessProof(personId = 'fixture-person') {
-  return Object.freeze({
-    subject: Object.freeze({ kind: 'person' as const, id: personId }),
-    registryRevision: 1,
-    checkpoints: Object.freeze([]),
-  });
-}
-function readyReply(personId?: string) {
-  return { kind: 'ready' as const, proof: readinessProof(personId) };
-}
-const assertCurrentReadiness = (): void => undefined;
 
 describe('OutboundPermissionService', () => {
   const AUTHORIZATION_NOW = '2026-09-04T14:00:00.000Z';
@@ -261,50 +246,6 @@ describe('OutboundPermissionService', () => {
     })).toThrow(DomainRepositoryDatabaseMismatchError);
     expect(() => permissions.assertBoundTo(database, otherUnit))
       .toThrow(DomainRepositoryDatabaseMismatchError);
-  });
-
-  it('rechecks actual authorization after preflight applies an opt-out, ignoring the earlier allowed advice', async () => {
-    const prospect = seedProspect(database.raw, 'final-gate');
-    const { cycleId } = insertOpenCycleWithAction({ database: database.raw, prefix: 'final-gate', prospect });
-    const contact = unitOfWork.immediate(() => identities.addContactMethod({
-      personId: prospect.personId, kind: 'phone', normalizedValue: '+14015550100',
-      validationState: 'valid', reachability: 'direct',
-    }));
-    makeFederalEvidenceClear(contact.id);
-    authorizeRegion(prospect.personId);
-    expect(unitOfWork.immediate(() => permissions.inspectOutbound({
-      personId: prospect.personId, contactMethodId: contact.id, channel: 'call', now: AUTHORIZATION_NOW,
-    }))).toEqual({ kind: 'allowed' });
-    const dependencies = { database, clock: { now: () => AUTHORIZATION_NOW }, ids: { next: () => `final-${++id}` } };
-    const services = createDomainServices(dependencies);
-    const domain = createFounderSalesDomain({ ...dependencies, services });
-    const priorOwner = createPerson('+14015550100');
-    let dispatches = 0;
-    const commands = createOutboundCommandService({
-      domain: { withDomain: async (operation) => operation(domain) },
-      phone: {
-        inspectCapability: async () => ({ state: 'available', reasonCode: null }),
-        dispatch: async () => { dispatches++; return { status: 'handoff_accepted', reasonCode: null }; },
-      },
-      readiness: {
-        getCapability: () => ({ state: 'available', reasonCode: null }),
-        check: async (personId) => {
-          block(priorOwner, '+14015550100', 'during-preflight');
-          return readyReply(personId);
-        },
-        assertCurrent: assertCurrentReadiness,
-      },
-    });
-    const receipt = await commands.beginOutbound({
-      commandId: '00000000-0000-4000-8000-000000000001', channel: 'call',
-      personId: prospect.personId, salesCycleId: cycleId, contactMethodId: contact.id,
-      expectedContactSnapshot: contactSnapshot(contact),
-    });
-    expect(receipt).toMatchObject({ status: 'refused', reasonCode: 'person_or_handle_opted_out' });
-    expect(dispatches).toBe(0);
-    expect(database.raw.prepare("SELECT kind, direction FROM activities WHERE adapter = 'callie_outbound_v1' ORDER BY rowid").all())
-      .toEqual([{ kind: 'system', direction: 'internal' }, { kind: 'system', direction: 'internal' }]);
-    expect(database.raw.prepare("SELECT COUNT(*) AS n FROM activities WHERE direction = 'outbound'").get()).toEqual({ n: 0 });
   });
 
   it('strictly validates the deferred Today selected-call receipt envelope', () => {

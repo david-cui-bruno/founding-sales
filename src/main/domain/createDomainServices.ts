@@ -6,10 +6,6 @@ import { CadenceRepository } from './cadence/cadenceRepository';
 import { ContactComplianceService } from './compliance/contactComplianceService';
 import { JurisdictionRepository } from './compliance/jurisdictionRepository';
 import { PLAYBOOK_CHANNEL_POLICIES_V2 } from './cadence/cadenceScheduler';
-import { DiscoveryRepository } from './discovery/discoveryRepository';
-import { DiscoveryReadService } from './discovery/discoveryReadService';
-import { DiscoveryFactWriter } from './discovery/discoveryFactWriter';
-import { DiscoveryService } from './discovery/discoveryService';
 import { EventRepository } from './events/eventRepository';
 import { IdentityRepository } from './identity/identityRepository';
 import { LifecycleService } from './lifecycle/lifecycleService';
@@ -33,9 +29,6 @@ import { JobRepository } from '../jobs/jobRepository';
 export type DomainServices = Readonly<{
   accountOutreach: AccountOutreach;
   unitOfWork: DomainUnitOfWork;
-  discoveryRepository: DiscoveryRepository;
-  discoveryRead: DiscoveryReadService;
-  discovery: DiscoveryService;
   jobs: JobRepository;
   identities: IdentityRepository;
   contactCompliance: ContactComplianceService;
@@ -75,7 +68,6 @@ export function createDomainServices(input: {
   // Read-only binding: no policy admission or implicit local execution owner.
   const accountOutreach = new AccountOutreach({ database, clock, ids, accounts: new AccountRepository({ database, clock, ids }),
     policy: createSqlAccountRoutePolicy({ database, clock, expectedWorkspaceId: input.expectedWorkspaceId }) });
-  const discoveryRepository = new DiscoveryRepository({ database, unitOfWork });
   const jobs = new JobRepository(database);
   const identities = new IdentityRepository({ database, unitOfWork, clock, ids });
   const jurisdictions = new JurisdictionRepository({ database, unitOfWork });
@@ -103,7 +95,6 @@ export function createDomainServices(input: {
     ids,
     timezone,
     policies: PLAYBOOK_CHANNEL_POLICIES_V2,
-    discoveryRepository,
   });
   const optOutRepository = new OptOutRepository({ database, unitOfWork });
   const optOut = new OptOutService({
@@ -123,17 +114,8 @@ export function createDomainServices(input: {
     database, unitOfWork, clock, repository: todayRepository, priorities: prioritization,
     outboundPermission, workspaceSettings,
   });
-  const discoveryRead = new DiscoveryReadService({ database, unitOfWork, clock,
-    services: { discoveryRepository, today, workspaceSettings, jobs, identities, sourceRepository,
-      events, outboundPermission, prioritizationRepository, prioritization } });
-  const evidenceServices = { identities, sourceRepository, events, outboundPermission,
-    prioritizationRepository, prioritization, workspaceSettings };
-  const factWriter = new DiscoveryFactWriter({ database, unitOfWork, services: evidenceServices });
-  const discovery = new DiscoveryService({ database, unitOfWork, clock, ids, factWriter,
-    services: { ...evidenceServices, lifecycle, discoveryRepository, discoveryRead } });
 
   // Assert every final binding before any read/time/ID access.
-  discoveryRepository.assertBoundTo(database, unitOfWork);
   identities.assertBoundTo(database, unitOfWork);
   contactCompliance.assertBoundTo(database, unitOfWork);
   events.assertBoundTo(database, unitOfWork);
@@ -152,9 +134,6 @@ export function createDomainServices(input: {
     accountOutreach,
     daily: new DailyReadService({ database, clock, ids, today, settings: workspaceSettings, workspaceId: input.expectedWorkspaceId }),
     unitOfWork,
-    discoveryRepository,
-    discoveryRead,
-    discovery,
     jobs,
     identities,
     contactCompliance,

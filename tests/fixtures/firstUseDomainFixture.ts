@@ -111,11 +111,15 @@ export async function createFirstUseDomainFixture(handlers: Map<string, Register
   const trace: { channel: string; args: unknown[]; result?: unknown; error?: unknown }[] = [];
   const pending = new Set<Promise<unknown>>();
   let runtime!: FoundationRuntime;
+  let domainRuntime: DomainRuntime | undefined;
   const limits = { maxCompanies: 1, maxPages: 3, maxBytes: 10000, maxCostMicros: 100 };
   const dependencies: ApplicationStartupDependencies = {
     loadWorkspaceKey: async () => createTestWorkspaceKey(), prepareEncryptedDatabase: async () => undefined,
     openDatabase, closeDatabase, migrateToLatest,
-    createDomainRuntime: database => new DomainRuntime({ database, clock: { now: () => new Date().toISOString() }, ids: { next: randomUUID } }),
+    createDomainRuntime: database => {
+      domainRuntime = new DomainRuntime({ database, clock: { now: () => new Date().toISOString() }, ids: { next: randomUUID } });
+      return domainRuntime;
+    },
     createHealthService: options => new HealthService(options),
     registerApplicationIpc: (...args) => { runtime = args[0]; return registerApplicationIpc(...args); },
     registerOutreachIpc,
@@ -173,7 +177,9 @@ export async function createFirstUseDomainFixture(handlers: Map<string, Register
       })]); } finally { clearTimeout(timer!); }
     };
     const drain = () => bounded((async () => { while (pending.size) await Promise.allSettled([...pending]); })());
-    return { api, runtime, trace, pages, resolutions, modelRequests, extractionRequests, denied, deny, drain, directory: dirname(temp.path),
+    // Exactly the initialized graph, for the person seeding the removed importer used to perform.
+    const services = () => { if (!domainRuntime) throw Error('First-use fixture has no domain runtime yet'); return domainRuntime.getServices(); };
+    return { api, runtime, services, trace, pages, resolutions, modelRequests, extractionRequests, denied, deny, drain, directory: dirname(temp.path),
       async close() {
         try { await drain(); }
         finally {

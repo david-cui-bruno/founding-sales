@@ -10,15 +10,10 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const allowed = new Set([
   'src/main/db/readOnlyEncryptedDatabase.ts', 'src/main/db/sqliteDriver.ts',
   'src/main/db/sqliteDriverDecision.ts', 'src/main/security/recoveryKey.ts',
-  'src/main/domain/source/cloudNameMatching.ts',
-  'src/main/identityMigration/identityMigrationAudit.ts',
-  'src/main/identityMigration/identityMigrationManifest.ts',
 ]);
 const result = await build({
   absWorkingDir: root,
   entryPoints: {
-    identityMigrationAudit: 'src/main/identityMigration/identityMigrationAudit.ts',
-    identityMigrationManifest: 'src/main/identityMigration/identityMigrationManifest.ts',
     readOnlyEncryptedDatabase: 'src/main/db/readOnlyEncryptedDatabase.ts',
   },
   outdir: 'build/generated/operational-tools', outExtension: { '.js': '.cjs' },
@@ -32,8 +27,8 @@ await mkdir(resolve(root, 'build/generated/operational-tools'), { recursive: tru
 for (const output of result.outputFiles) await writeFile(output.path, output.contents);
 await writeFile(resolve(root, 'build/generated/operational-tools/inputs.json'), JSON.stringify(inputs, null, 2) + '\n');
 
-// Writable backup composition is deliberately NOT part of the seven-module
-// read-only identity audit graph above. Check it independently before publishing.
+// Writable backup composition is deliberately NOT part of the read-only
+// encrypted-database tool graph above. Check it independently before publishing.
 const preReleaseAllowed = new Set([
   'src/main/applicationPaths.ts',
   'src/main/backup/preReleaseBackupRuntime.ts', 'src/main/backup/backupService.ts',
