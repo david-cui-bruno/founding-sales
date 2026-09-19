@@ -49,9 +49,12 @@ test('shows the last 20 attempts newest first with the closed detail as chips an
     await expect(rows.first().getByText(`${key}: ${value}`, { exact: true })).toBeVisible();
   }
   await expect(page.getByText(`as of ${stub.asOf}`, { exact: false })).toBeVisible();
-  // Only the status, the Today landing read and the diagnostics read happen on mount: no command, no other view.
+  // Only the status, the Today landing read, the diagnostics read and the shell's own pause read happen on mount:
+  // no command, and no other view. The Settings read is the pause banner (S5), which belongs to the shell because
+  // pausing stops every send whichever page is open; it is a read of a view David could open himself, nothing more.
   expect(stub.requests.filter(request => request.method === 'POST' && request.path !== '/v1/pair/redeem')).toEqual([]);
-  expect(stub.requests.filter(request => request.method === 'GET').every(request => request.path === '/v1/diagnostics' || request.path === '/v1/today')).toBe(true);
+  expect(stub.requests.filter(request => request.method === 'GET')
+    .every(request => ['/v1/diagnostics', '/v1/today', '/v1/settings'].includes(request.path))).toBe(true);
   expect(diagnosticsReads().length).toBeGreaterThan(0);
 });
 

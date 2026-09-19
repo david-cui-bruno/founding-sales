@@ -3,7 +3,8 @@ import { jobMessageId, pollJobId, sendStepJobId } from '../../src/queue/jobs';
 import { applyReplyDecision, approveDraft, draftKey, draftRecordSchema, mailboxCursorSchema, MAILBOX_CURSOR_KEY, readDrafts, readMailboxCursor,
   readReplies, replyKey, replyRecordSchema, requestFollowup, runMailPollJob, type MailDependencies } from '../../src/v1/mail';
 import { invalidRouteKey, runSendStepJob } from '../../src/v1/send';
-import { seqKey, sequenceRecordSchema, suppressFirmKey, suppressHandleKey } from '../../src/v1/sequenceBridge';
+import { sequenceKey, sequenceRecordSchema } from '../../src/v1/sequence';
+import { suppressionFirmKey, suppressionHandleKey } from '../../src/v1/suppression';
 import { gmailFetch, mailboxAccess, MAILBOX, sendWorkspace } from './sendFixtures';
 import { v1Fixture } from './v1Fixture';
 
@@ -96,7 +97,7 @@ describe('mail.poll: replies are matched once and David decides what they mean',
     const record = replyRecordSchema.parse(f.db.inspect(replyKey('msg-reply-1')));
     expect(record).toMatchObject({ firmId: firm.firmId, matchedBy: 'message_id', stepId: firm.stepId });
     expect(record.classification.kind).toBe('substantive');
-    expect(sequenceRecordSchema.parse(f.db.inspect(seqKey(firm.firmId)))).toMatchObject({ state: 'paused', holdCode: 'replied' });
+    expect(sequenceRecordSchema.parse(f.db.inspect(sequenceKey(firm.firmId)))).toMatchObject({ state: 'paused', holdCode: 'replied' });
     // An unambiguous reply opens a pending draft; the worker writes no prose into it.
     const drafts = await readDrafts(f.store, firm.firmId);
     expect(drafts).toHaveLength(1);
@@ -119,9 +120,9 @@ describe('mail.poll: replies are matched once and David decides what they mean',
     expect(report).toMatchObject({ recorded: 1, optOuts: 1, drafts: 0 });
 
     expect(replyRecordSchema.parse(f.db.inspect(replyKey('msg-stop'))).classification.kind).toBe('opt_out');
-    expect(f.db.inspect(suppressFirmKey(firm.firmId))).toMatchObject({ reason: 'opt_out', source: 'reply' });
-    expect(f.db.inspect(suppressHandleKey(firm.email))).toMatchObject({ firmId: firm.firmId });
-    expect(sequenceRecordSchema.parse(f.db.inspect(seqKey(firm.firmId)))).toMatchObject({ state: 'stopped', holdCode: 'opt_out' });
+    expect(f.db.inspect(suppressionFirmKey(firm.firmId))).toMatchObject({ reason: 'opt_out', source: 'reply' });
+    expect(f.db.inspect(suppressionHandleKey(firm.email))).toMatchObject({ firmId: firm.firmId });
+    expect(sequenceRecordSchema.parse(f.db.inspect(sequenceKey(firm.firmId)))).toMatchObject({ state: 'stopped', holdCode: 'opt_out' });
     expect(await readDrafts(f.store, firm.firmId)).toEqual([]);
 
     // Nothing is ever sent to a suppressed firm again.
@@ -142,7 +143,7 @@ describe('mail.poll: replies are matched once and David decides what they mean',
     expect(f.db.inspect(invalidRouteKey(firm.firmId, firm.email))).toMatchObject({ reason: 'delivery_failure', handle: firm.email });
     expect(await readDrafts(f.store, firm.firmId)).toEqual([]);
     // The firm itself is not suppressed: a broken address is not a request to stop.
-    expect(f.db.inspect(suppressFirmKey(firm.firmId))).toBeUndefined();
+    expect(f.db.inspect(suppressionFirmKey(firm.firmId))).toBeUndefined();
 
     const gmail = gmailFetch({ send: ['accepted'] });
     const outcome = await runSendStepJob({ store: f.store, mailbox: mailboxAccess(), fetch: gmail.fetch },
@@ -160,12 +161,12 @@ describe('mail.poll: replies are matched once and David decides what they mean',
     expect(record.classification.kind).toBe('ambiguous');
     expect(record.draftId).toBeNull();
     expect(await readDrafts(f.store, firm.firmId)).toEqual([]);
-    expect(sequenceRecordSchema.parse(f.db.inspect(seqKey(firm.firmId)))).toMatchObject({ state: 'paused', holdCode: 'replied' });
+    expect(sequenceRecordSchema.parse(f.db.inspect(sequenceKey(firm.firmId)))).toMatchObject({ state: 'paused', holdCode: 'replied' });
 
     const stopped = await applyReplyDecision(deps(f, mail.fetch), { replyId: 'msg-ambiguous', decision: 'stop', recordedBy: 'David MacBook' });
     expect(stopped).toEqual({ applied: true, decision: 'stop' });
-    expect(f.db.inspect(suppressFirmKey(firm.firmId))).toMatchObject({ reason: 'reply_stop' });
-    expect(sequenceRecordSchema.parse(f.db.inspect(seqKey(firm.firmId)))).toMatchObject({ state: 'stopped' });
+    expect(f.db.inspect(suppressionFirmKey(firm.firmId))).toMatchObject({ reason: 'reply_stop' });
+    expect(sequenceRecordSchema.parse(f.db.inspect(sequenceKey(firm.firmId)))).toMatchObject({ state: 'stopped' });
     // The decision is made once: a repeat is refused rather than suppressing twice.
     expect(await applyReplyDecision(deps(f, mail.fetch), { replyId: 'msg-ambiguous', decision: 'continue', recordedBy: 'David MacBook' }))
       .toEqual({ applied: false, reason: 'reply_already_decided' });
@@ -179,9 +180,9 @@ describe('mail.poll: replies are matched once and David decides what they mean',
     await runMailPollJob(deps(f, mail.fetch), POLL, AbortSignal.timeout(5000));
     expect(await applyReplyDecision(deps(f, mail.fetch), { replyId: 'msg-maybe', decision: 'continue', recordedBy: 'David MacBook' }))
       .toEqual({ applied: true, decision: 'continue' });
-    const sequence = sequenceRecordSchema.parse(f.db.inspect(seqKey(firm.firmId)));
+    const sequence = sequenceRecordSchema.parse(f.db.inspect(sequenceKey(firm.firmId)));
     expect(sequence).toMatchObject({ state: 'active', holdCode: null });
-    expect(f.db.inspect(suppressFirmKey(firm.firmId))).toBeUndefined();
+    expect(f.db.inspect(suppressionFirmKey(firm.firmId))).toBeUndefined();
   });
 
   it('an out-of-office is recorded and ignored: no hold, no draft, no suppression', async () => {
@@ -194,7 +195,7 @@ describe('mail.poll: replies are matched once and David decides what they mean',
     const record = replyRecordSchema.parse(f.db.inspect(replyKey('msg-ooo')));
     expect(record.classification.kind).toBe('out_of_office');
     expect(record.resolvedAt).toBe(START);
-    expect(f.db.inspect(seqKey(firm.firmId))).toBeUndefined();
+    expect(f.db.inspect(sequenceKey(firm.firmId))).toBeUndefined();
     expect(await readDrafts(f.store, firm.firmId)).toEqual([]);
   });
 

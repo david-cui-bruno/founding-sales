@@ -284,6 +284,37 @@ export const v1FirmSuppressionSchema = z.strictObject({
 export type V1FirmSuppression = z.infer<typeof v1FirmSuppressionSchema>;
 /** One line about the firm's evidence: how many sources, when it was last researched, whether it is a hand-entered firm. */
 export const v1FirmEvidenceSchema = z.strictObject({ sources: count, researchedAt: instant.nullable(), enteredBy: z.enum(['research', 'hand']) });
+/**
+ * The mail side of one firm, as the Firm view reports it (S3's records read through S2's view). No body, no
+ * address and no provider message travels: a send is its step, its state and when it went; a reply is when it
+ * arrived, what it was classified as and whether David has answered it; a draft is what is waiting for him.
+ */
+export const v1FirmSendSchema = z.strictObject({
+  stepId: z.string().min(1).max(200),
+  state: z.enum(['dispatching', 'accepted', 'not_sent', 'unknown']),
+  sentAt: instant.nullable(),
+  reason: attemptReasonSchema.nullable(),
+  templateId: z.enum(['T1', 'T2', 'T3', 'T4', 'T5']).nullable(),
+});
+export type V1FirmSend = z.infer<typeof v1FirmSendSchema>;
+export const v1FirmReplySchema = z.strictObject({
+  replyId: z.string().min(1).max(200),
+  at: instant,
+  classification: attemptReasonSchema,
+  matchedBy: z.enum(['message_id', 'sender']),
+  /** David's decision, when the reply needed one; null while it is still waiting. */
+  decision: z.enum(['stop', 'continue']).nullable(),
+  resolvedAt: instant.nullable(),
+});
+export type V1FirmReply = z.infer<typeof v1FirmReplySchema>;
+export const v1FirmDraftSchema = z.strictObject({
+  draftId: z.string().min(1).max(200),
+  kind: z.enum(['reply', 'followup']),
+  status: z.enum(['pending', 'approved', 'sent']),
+  subject: z.string().max(240),
+  createdAt: instant,
+});
+export type V1FirmDraft = z.infer<typeof v1FirmDraftSchema>;
 export const v1FirmViewSchema = z.strictObject({
   asOf: instant,
   firmId: z.string().min(1).max(200),
@@ -302,6 +333,10 @@ export const v1FirmViewSchema = z.strictObject({
   calls: z.array(v1FirmCallSchema).max(200),
   callbacks: z.array(v1PendingCallbackSchema).max(100),
   suppression: v1FirmSuppressionSchema.nullable(),
+  /** The mail side (S3). Optional so a client built against the S2 shape still validates; the worker always sends all three. */
+  sends: z.array(v1FirmSendSchema).max(40).optional(),
+  replies: z.array(v1FirmReplySchema).max(100).optional(),
+  drafts: z.array(v1FirmDraftSchema).max(40).optional(),
   evidence: v1FirmEvidenceSchema,
   /** Every hold that stands between this firm and a dial now, by reason and closed code. */
   holds: z.array(todayHoldCountSchema).max(20),

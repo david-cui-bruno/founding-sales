@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { jobMessageId, sendStepJobId } from '../../src/queue/jobs';
 import { flightKey, readSend, runReconcileJob, runSendStepJob, sendKey, type SendDependencies } from '../../src/v1/send';
-import { createSequencePort, seqKey, sequenceRecordSchema } from '../../src/v1/sequenceBridge';
+import { createSequencePort, sequenceKey, sequenceRecordSchema } from '../../src/v1/sequence';
 import { approveTemplate, footerBlock, readTemplate, sendCounterKey, sendCounterSchema } from '../../src/v1/templates';
 import { enrollOnEmailStep, gmailFetch, mailboxAccess, POSTAL_ADDRESS, sendWorkspace, sentBodyOf, setPostalAddress, approveWithFooter } from './sendFixtures';
 import { putTerritoryPolicy, setPosture } from './firmFixtures';
@@ -20,7 +20,7 @@ import { v1Fixture } from './v1Fixture';
 const START = '2026-09-18T12:00:00.000Z';
 const deps = (f: ReturnType<typeof v1Fixture>, fetch: typeof globalThis.fetch, mailbox = mailboxAccess()): SendDependencies =>
   ({ store: f.store, mailbox, fetch });
-const sequenceOf = (f: ReturnType<typeof v1Fixture>, firmId: string) => sequenceRecordSchema.parse(f.db.inspect(seqKey(firmId)));
+const sequenceOf = (f: ReturnType<typeof v1Fixture>, firmId: string) => sequenceRecordSchema.parse(f.db.inspect(sequenceKey(firmId)));
 const sendCalls = (calls: { url: string }[]) => calls.filter(call => call.url.includes('/messages/send')).length;
 
 describe('send fence: a due template step sends exactly once', () => {
@@ -96,7 +96,7 @@ describe('send fence: a due template step sends exactly once', () => {
     expect(record?.record.state).toBe('not_sent');
     expect(record?.record.noRetry).toBe(true);
     expect(sendCalls(lookup.calls)).toBe(0);
-    expect(f.db.inspect(seqKey(firm.firmId))).toBeUndefined();
+    expect(f.db.inspect(sequenceKey(firm.firmId))).toBeUndefined();
   });
 
   it('a context revision bump does not mint a second key and does not re-send', async () => {
@@ -210,7 +210,7 @@ describe('send fence: a due template step sends exactly once', () => {
     const { bearer } = await f.pairDevice();
     const firm = await sendWorkspace(f, bearer);
     await createSequencePort(f.store); // the stand-in port is constructed the same way the job constructs it
-    const { createSuppressionPort } = await import('../../src/v1/sequenceBridge');
+    const { createSuppressionPort } = await import('../../src/v1/suppression');
     await createSuppressionPort(f.store).suppress({ firmId: firm.firmId, handles: [firm.email], reason: 'opt_out', source: 'reply', recordedBy: 'David MacBook' });
     const gmail = gmailFetch({ send: ['accepted'] });
     const outcome = await runSendStepJob(deps(f, gmail.fetch), { jobId: sendStepJobId(firm.firmId, firm.stepId), firmId: firm.firmId, stepId: firm.stepId }, AbortSignal.timeout(5000));

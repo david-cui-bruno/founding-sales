@@ -187,3 +187,44 @@ export function firmSuppressionView(record: SuppressionFirmRecord | null): V1Fir
   if (!record) return null;
   return { reason: record.reason, source: record.source, evidenceRef: record.evidenceRef, recordedBy: record.recordedBy, at: record.at, handles: record.handles };
 }
+
+/**
+ * What the send fence and the mail poller ask of the suppression set (the port slice S3 wrote against, now
+ * implemented here, over the set this module owns). `suppress` is the whole set in one transaction — the firm plus
+ * every handle it names — and `isSuppressed` answers from both sides. Permanent, as everywhere else: the port has
+ * no unsuppress, and neither does anything that calls it.
+ *
+ * The handles arrive as whatever the caller read (a Gmail sender, a firm's business email, a number off a card) and
+ * are canonicalised here, so the set has one spelling per handle whichever slice wrote it. A handle neither
+ * normalizer accepts is dropped from the list rather than stored raw; the firm-level record still stands, so a firm
+ * is never left unsuppressed because one of its handles was unparsable.
+ */
+export interface SuppressionPort {
+  suppress(input: { firmId: string; handles?: readonly (string | null | undefined)[]; reason: string;
+    source: V1SuppressionSource; evidenceRef?: string | null; recordedBy: string }): Promise<void>;
+  isSuppressed(firmId: string, handles?: readonly (string | null | undefined)[]): Promise<boolean>;
+}
+
+/** Whatever the caller passed, as the routes `planSuppress` and `isSuppressed` read: one entry per usable handle. */
+function routesOf(handles: readonly (string | null | undefined)[] = []): { channel: string; value: string }[] {
+  return handles.flatMap(handle => {
+    if (typeof handle !== 'string') return [];
+    const canonical = canonicalHandle(handle);
+    return canonical ? [{ channel: canonical.channel, value: canonical.handle }] : [];
+  });
+}
+
+export function createSuppressionPort(store: DynamoStore): SuppressionPort {
+  return {
+    async suppress(input) {
+      const plan = await planSuppress(store, { firmId: input.firmId, routes: routesOf(input.handles), reason: input.reason,
+        source: input.source, evidenceRef: input.evidenceRef ?? null, recordedBy: input.recordedBy });
+      if (plan.outcome === 'refused') throw new Error(`suppression_refused_${plan.reason}`);
+      // Every item together or none: a firm is never suppressed without its known routes.
+      if (plan.items.length) await store.transact(plan.items);
+    },
+    async isSuppressed(firmId, handles = []) {
+      return isSuppressed(store, firmId, routesOf(handles));
+    },
+  };
+}

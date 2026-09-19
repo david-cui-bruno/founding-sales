@@ -13,7 +13,7 @@ import { backfillDuePointers, dayKey, LIST_BUILD_START_MINUTE, readDuePointers }
 import { createAccountFirmSource, type FirmCard, type FirmSource } from './v1/firms';
 import { EASTERN, localParts } from './v1/localClock';
 import { readDrafts, readMailboxCursor } from './v1/mail';
-import { createSequencePort, type SequencePort } from './v1/sequenceBridge';
+import { createSequencePort, currentStepOf, dueEmailSteps, listSequenceRecords, type SequencePort } from './v1/sequence';
 import { remainingSendsToday } from './v1/templates';
 
 /**
@@ -102,23 +102,47 @@ export async function runScheduler(deps: SchedulerDependencies, signal: AbortSig
   report.remainingCap = remaining;
   if (remaining > 0) {
     const firms = await (deps.firms ?? createAccountFirmSource(store)).listFirms();
-    // The pointers are a hint the range read checks against the live enrollment; the backfill keeps them there
-    // until S2's sequence module writes them beside SEQ# in one transaction.
+    // The pointers are a hint the range read checks against where the firm stands now, `SEQ#` first. The backfill
+    // only writes the ones no `SEQ#` record covers: the sequence module writes its own beside the step it moves.
     await backfillDuePointers(store, firms);
     const byFirm = new Map(firms.map(firm => [firm.firmId, firm]));
     const sequence = deps.sequence ?? createSequencePort(store);
     let enqueued = 0;
+    // One jobId is offered at most once a tick, whichever of the two reads below found the step due.
+    const offered = new Set<string>();
     for (const pointer of await readDuePointers(store, firms, now)) {
       if (enqueued >= remaining) { report.skipped.push({ jobId: sendStepJobId(pointer.firmId, pointer.stepId), reason: 'cap_reached' }); continue; }
       const firm = byFirm.get(pointer.firmId) as FirmCard | undefined;
-      if (!firm || firm.enrollment?.currentStepChannel !== 'email') continue;
-      if (firm.suppressed) continue;
+      if (!firm || firm.suppressed) continue;
+      // Which step the firm stands on, and whether it is an email one, comes from the `SEQ#` record first: a firm
+      // whose sequence began at a logged call has no old enrollment to read a channel off.
+      const step = currentStepOf(await sequence.read(firm.firmId), firm);
+      if (step?.channel !== 'email' || step.stepId !== pointer.stepId) continue;
       const jobId = sendStepJobId(pointer.firmId, pointer.stepId);
+      if (offered.has(jobId)) continue;
+      offered.add(jobId);
       const taken = await offer(jobId, 'mail.send_step', async code => {
-        await sequence.holdStep({ firmId: firm.firmId, enrollmentId: firm.enrollment!.enrollmentId, startedAt: firm.enrollment!.startedAt,
+        await sequence.holdStep({ firmId: firm.firmId, enrollmentId: pointer.enrollmentId, startedAt: firm.enrollment?.startedAt ?? pointer.nextDueAt,
           currentStepId: pointer.stepId, nextDueAt: pointer.nextDueAt, stepId: pointer.stepId, code });
       });
       if (taken) enqueued++;
+    }
+    // The email steps the call cadence walked past and held, now past their own start-anchored instant. This is how
+    // a firm whose mornings are calls gets its day-7 and day-21 emails: the cadence never stands on an email step.
+    for (const [firmId, record] of await listSequenceRecords(store)) {
+      const firm = byFirm.get(firmId);
+      if (!firm || firm.suppressed) continue;
+      for (const step of dueEmailSteps(record, now)) {
+        const jobId = sendStepJobId(firmId, step.stepId);
+        if (offered.has(jobId)) continue;
+        offered.add(jobId);
+        if (enqueued >= remaining) { report.skipped.push({ jobId, reason: 'cap_reached' }); continue; }
+        const taken = await offer(jobId, 'mail.send_step', async code => {
+          await sequence.holdStep({ firmId, enrollmentId: record.enrollmentId, startedAt: record.startedAt,
+            currentStepId: record.currentStepId, nextDueAt: record.nextDueAt, stepId: step.stepId, code });
+        });
+        if (taken) enqueued++;
+      }
     }
     // The drafts David approved. Approving is never sending: the approval writes the record, this puts it on the
     // queue, and the runner takes it through the same fence, under the same cap, as a sequence step.

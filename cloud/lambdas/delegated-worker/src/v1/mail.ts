@@ -8,8 +8,9 @@ import { keyPart, type DynamoStore } from '../dynamoStore';
 import { jobRef } from '../queue/jobs';
 import { recordAttempt } from './attempts';
 import { createAccountFirmSource, type FirmCard, type FirmSource } from './firms';
-import { invalidRouteKey, invalidRouteSchema, readSend, SEND_PREFIX, sendRecordSchema, type SendDependencies } from './send';
-import { createSequencePort, createSuppressionPort, type SequencePort, type SuppressionPort } from './sequenceBridge';
+import { invalidRouteKey, invalidRouteSchema, readSend, SEND_PREFIX, sendRecordSchema, type SendDependencies, type SendRecord } from './send';
+import { createSequencePort, type SequencePort } from './sequence';
+import { createSuppressionPort, type SuppressionPort } from './suppression';
 
 /**
  * The mailbox side of the rebuilt core (FSS target design sections 2 and 4; slice S3): `mail.poll` reads what came
@@ -449,7 +450,9 @@ export async function approveDraft(deps: MailDependencies & { enqueue?: (input: 
 }
 
 /** What the Firm view shows about the mailbox for one firm (design section 3). A read; it decides nothing. */
-export async function readFirmMailView(store: DynamoStore, firmId: string): Promise<{ sends: unknown[]; replies: ReplyRecord[]; drafts: DraftRecord[] }> {
+/** One firm's sends, as the Firm view reads them: the step, its state and when it went. No body, no address. */
+export type FirmMailSend = Pick<SendRecord, 'stepId' | 'state' | 'sentAt' | 'reason' | 'templateId'>;
+export async function readFirmMailView(store: DynamoStore, firmId: string): Promise<{ sends: FirmMailSend[]; replies: ReplyRecord[]; drafts: DraftRecord[] }> {
   const [replies, drafts] = await Promise.all([readReplies(store), readDrafts(store, firmId)]);
   const sends = (await store.list<unknown>(`${SEND_PREFIX}${keyPart(firmId)}#`)).flatMap(row => {
     const parsed = sendRecordSchema.safeParse(row.stored.data);
