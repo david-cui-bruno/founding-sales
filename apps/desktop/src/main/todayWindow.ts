@@ -1,6 +1,12 @@
 import { BrowserWindow, ipcMain, shell } from 'electron';
 import { CRM_IPC_CHANNELS, createCrmBridge, type CrmBridgeDeps, type CrmBridgeHost } from './crmBridge.ts';
 import { TODAY_IPC_CHANNELS, createTodayBridge, type TodayBridgeDeps, type TodayBridgeHost } from './todayBridge.ts';
+import {
+  SEQUENCE_IPC_CHANNELS,
+  createSequenceBridge,
+  type SequenceBridgeDeps,
+  type SequenceBridgeHost,
+} from './sequenceBridge.ts';
 
 /**
  * The two windows beside G2's, and the channels that feed them
@@ -114,6 +120,79 @@ export function registerCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
   return host;
 }
 
+/**
+ * Lane G8's sequence editor (11.1, 11.3, 4.3).
+ *
+ * The same shape as the two above: a renderer's word is never taken for a shape, and
+ * a malformed request is the current state back rather than an argument passed on to
+ * the API.
+ */
+export function registerSequenceBridge(deps: SequenceBridgeDeps): SequenceBridgeHost {
+  const host = createSequenceBridge(deps);
+  const withString = (
+    channel: string,
+    field: string,
+    call: (value: string) => Promise<unknown>,
+  ): void => {
+    handleOnce(channel, async argument => {
+      const value = (argument as Record<string, unknown> | null)?.[field];
+      return typeof value === 'string' ? await call(value) : await host.state();
+    });
+  };
+
+  handleOnce(SEQUENCE_IPC_CHANNELS.state, async () => await host.state());
+  withString(SEQUENCE_IPC_CHANNELS.openSequence, 'sequenceId', async sequenceId =>
+    await host.openSequence({ sequenceId }),
+  );
+  withString(SEQUENCE_IPC_CHANNELS.createSequence, 'name', async name =>
+    await host.createSequence({ name }),
+  );
+  withString(SEQUENCE_IPC_CHANNELS.publish, 'sequenceVersionId', async sequenceVersionId =>
+    await host.publish({ sequenceVersionId }),
+  );
+  withString(SEQUENCE_IPC_CHANNELS.retire, 'sequenceVersionId', async sequenceVersionId =>
+    await host.retire({ sequenceVersionId }),
+  );
+  withString(SEQUENCE_IPC_CHANNELS.approveTemplate, 'templateVersionId', async templateVersionId =>
+    await host.approveTemplate({ templateVersionId }),
+  );
+  withString(SEQUENCE_IPC_CHANNELS.completeLinkedIn, 'stepExecutionId', async stepExecutionId =>
+    await host.completeLinkedIn({ stepExecutionId }),
+  );
+  withString(SEQUENCE_IPC_CHANNELS.undoLinkedIn, 'stepExecutionId', async stepExecutionId =>
+    await host.undoLinkedIn({ stepExecutionId }),
+  );
+  withString(SEQUENCE_IPC_CHANNELS.resumeEnrollment, 'enrollmentId', async enrollmentId =>
+    await host.resumeEnrollment({ enrollmentId }),
+  );
+  handleOnce(SEQUENCE_IPC_CHANNELS.enroll, async argument => {
+    const input = argument as Record<string, unknown> | null;
+    if (
+      input === null ||
+      typeof input['sequenceVersionId'] !== 'string' ||
+      typeof input['opportunityId'] !== 'string' ||
+      typeof input['firmId'] !== 'string' ||
+      typeof input['contactId'] !== 'string'
+    ) {
+      return await host.state();
+    }
+    return await host.enroll(input as unknown as Parameters<SequenceBridgeHost['enroll']>[0]);
+  });
+  handleOnce(SEQUENCE_IPC_CHANNELS.recordLinkedInResult, async argument => {
+    const input = argument as Record<string, unknown> | null;
+    const result = input?.['result'];
+    if (
+      input === null ||
+      typeof input['enrollmentId'] !== 'string' ||
+      (result !== 'replied' && result !== 'no_engagement')
+    ) {
+      return await host.state();
+    }
+    return await host.recordLinkedInResult({ enrollmentId: input['enrollmentId'], result });
+  });
+  return host;
+}
+
 /** One window, built exactly as G2 builds its own. Focused rather than duplicated. */
 export async function openSecondaryWindow(
   title: string,
@@ -156,6 +235,7 @@ export async function openSecondaryWindow(
 export function windowMenuTemplate(open: {
   readonly today: () => void;
   readonly firms: () => void;
+  readonly sequences: () => void;
 }): readonly { readonly label: string; readonly submenu: readonly { readonly label: string; readonly accelerator: string; readonly click: () => void }[] }[] {
   return [
     {
@@ -163,6 +243,7 @@ export function windowMenuTemplate(open: {
       submenu: [
         { label: 'Today', accelerator: 'CmdOrCtrl+1', click: open.today },
         { label: 'Firms', accelerator: 'CmdOrCtrl+2', click: open.firms },
+        { label: 'Sequences', accelerator: 'CmdOrCtrl+3', click: open.sequences },
       ],
     },
   ];

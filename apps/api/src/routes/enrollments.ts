@@ -121,6 +121,10 @@ export async function routeEnrollments(
     return {
       status: 200,
       body: {
+        // Database time travels with the list, because the Mac compares the LinkedIn
+        // undo deadline against it (11.3) and a Mac whose clock is fast must not be
+        // able to show an undo the server would refuse.
+        asOf: await databaseNow(scoped.context),
         enrollments: await listEnrollments(scoped.context, {
           ...(parsed.data.firmId === undefined ? {} : { firmId: parsed.data.firmId }),
           ...(parsed.data.contactId === undefined ? {} : { contactId: parsed.data.contactId }),

@@ -1,6 +1,8 @@
 import pg from 'pg';
 import type { QueryResultRowLike, SessionQueryable } from '@fss/domain/db';
 import { HandlerRegistry, canaryHandler, createCloudWatchSink, loadCloudWatchTransport } from '@fss/domain/jobs';
+import { defaultTodaySources } from '@fss/domain/today';
+import { dueSequenceWorkSource } from '@fss/domain/sequences';
 import { WORKER_EXIT_CODES } from '../index.ts';
 import { mailHandlers } from '../handlers/mail.ts';
 import { researchHandlers } from '../handlers/research.ts';
@@ -40,7 +42,14 @@ import { WorkerStartupRefusal, startWorker } from './worker.ts';
 function registerHandlers(registry: HandlerRegistry): HandlerRegistry {
   registry.register(canaryHandler());
   registry.register(suppressionFinalizeJobHandler());
-  registry.register(todayBuildJobHandler());
+  // 8.2's lane 3 is due sequence work, and G6 left `TodaySource` as the seam for it.
+  // The source is composed here rather than added to `defaultTodaySources()` because
+  // `packages/domain/sequences` already imports `packages/domain/today` for the
+  // interface, and the reverse import would be a cycle between two packages that are
+  // shipped in the same image.
+  registry.register(
+    todayBuildJobHandler({ sources: [...defaultTodaySources(), dueSequenceWorkSource()] }),
+  );
   // The send is not wired in this release, so a due email step holds with a reason
   // rather than throwing; see the note in `handlers/sequenceAction.ts`.
   registry.register(sequenceActionJobHandler());

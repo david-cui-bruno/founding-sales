@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { app, BrowserWindow, ipcMain, Menu, shell } from 'electron';
+import { app, BrowserWindow, clipboard, ipcMain, Menu, shell } from 'electron';
 import { z } from 'zod';
 import { uuid } from '@fss/contracts';
 import { createApiClient, fetchSend } from './apiClient.ts';
@@ -9,6 +9,7 @@ import { createDialApi, createTelLaunchDriver } from './telHandoff.ts';
 import {
   openSecondaryWindow,
   registerCrmBridge,
+  registerSequenceBridge,
   registerTodayBridge,
   windowMenuTemplate,
 } from './todayWindow.ts';
@@ -147,6 +148,18 @@ export function registerWindows(configuration: DesktopConfiguration, manager: Se
     session,
   });
   registerCrmBridge({ api, session });
+  // G8's editor. The clipboard and the browser open are ports so the bridge itself
+  // imports nothing from Electron and is testable without a window (11.3).
+  registerSequenceBridge({
+    api,
+    session,
+    copyToClipboard: text => {
+      clipboard.writeText(text);
+    },
+    openExternally: async url => {
+      await shell.openExternal(url);
+    },
+  });
 
   const renderer = (name: string): { readonly pageFile: string; readonly pageUrl?: string; readonly preloadEntry: string } => ({
     preloadEntry: configuration.preloadEntry,
@@ -158,6 +171,7 @@ export function registerWindows(configuration: DesktopConfiguration, manager: Se
 
   let todayWindow: BrowserWindow | null = null;
   let crmWindow: BrowserWindow | null = null;
+  let sequenceWindow: BrowserWindow | null = null;
   Menu.setApplicationMenu(
     Menu.buildFromTemplate([
       ...(Menu.getApplicationMenu()?.items.map(item => item as unknown as Electron.MenuItemConstructorOptions) ?? []),
@@ -170,6 +184,15 @@ export function registerWindows(configuration: DesktopConfiguration, manager: Se
         firms: () => {
           void openSecondaryWindow('Callie — CRM', renderer('firmWorkspace.html'), crmWindow).then(window => {
             crmWindow = window;
+          });
+        },
+        sequences: () => {
+          void openSecondaryWindow(
+            'Callie — Sequences',
+            renderer('sequenceEditor.html'),
+            sequenceWindow,
+          ).then(window => {
+            sequenceWindow = window;
           });
         },
       }) as unknown as Electron.MenuItemConstructorOptions[]),

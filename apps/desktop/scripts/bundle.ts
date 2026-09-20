@@ -82,7 +82,7 @@ export async function bundleApp(input: BundleInput): Promise<void> {
   // split, because a window loads one script and nothing else — and because the CSP
   // on every page is `script-src 'self'` with no inline script, so a shared chunk
   // would only be a second file to get wrong.
-  for (const entry of ['renderer', 'firmWorkspace', 'todayPage'] as const) {
+  for (const entry of ['renderer', 'firmWorkspace', 'todayPage', 'sequenceEditor'] as const) {
     await build({
       entryPoints: [source('renderer', `${entry}.ts`)],
       outfile: target('renderer', `${entry}.js`),
@@ -95,7 +95,13 @@ export async function bundleApp(input: BundleInput): Promise<void> {
     });
   }
 
-  for (const page of ['index.html', 'firmWorkspace.html', 'today.html', 'styles.css'] as const) {
+  for (const page of [
+    'index.html',
+    'firmWorkspace.html',
+    'today.html',
+    'sequenceEditor.html',
+    'styles.css',
+  ] as const) {
     await copyFile(source('renderer', page), target('renderer', page));
   }
 

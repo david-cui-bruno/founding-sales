@@ -2,9 +2,15 @@ import { contextBridge, ipcRenderer } from 'electron';
 import { IPC_CHANNELS } from '../main/ipc.ts';
 import { CRM_IPC_CHANNELS } from '../main/crmBridge.ts';
 import { TODAY_IPC_CHANNELS } from '../main/todayBridge.ts';
+import { SEQUENCE_IPC_CHANNELS } from '../main/sequenceBridge.ts';
 import { desktopStateSchema, type DesktopBridge, type DesktopState } from '../shared/contract.ts';
 import type { CrmBridge, CrmState } from '../renderer/firmWorkspaceContract.ts';
 import { todayStateSchema, type TodayBridge, type TodayState } from '../renderer/todayContract.ts';
+import {
+  sequenceStateSchema,
+  type SequenceBridge,
+  type SequenceState,
+} from '../renderer/sequenceContract.ts';
 
 /**
  * The bridges, and the whole of what a renderer can reach (specification 14.2).
@@ -40,6 +46,11 @@ const invokeToday = async (channel: string, argument?: unknown): Promise<TodaySt
 const invokeCrm = async (channel: string, argument?: unknown): Promise<CrmState> =>
   (await ipcRenderer.invoke(channel, argument)) as CrmState;
 
+const invokeSequences = async (channel: string, argument?: unknown): Promise<SequenceState> => {
+  const answer: unknown = await ipcRenderer.invoke(channel, argument);
+  return sequenceStateSchema.parse(answer);
+};
+
 const bridge: DesktopBridge = {
   state: async () => await invokeDesktop(IPC_CHANNELS.state),
   signIn: async input => await invokeDesktop(IPC_CHANNELS.signIn, input),
@@ -66,6 +77,23 @@ const crm: CrmBridge = {
   resolveMerge: async input => await invokeCrm(CRM_IPC_CHANNELS.resolveMerge, input),
 };
 
+const sequences: SequenceBridge = {
+  state: async () => await invokeSequences(SEQUENCE_IPC_CHANNELS.state),
+  openSequence: async input => await invokeSequences(SEQUENCE_IPC_CHANNELS.openSequence, input),
+  createSequence: async input => await invokeSequences(SEQUENCE_IPC_CHANNELS.createSequence, input),
+  saveDraft: async input => await invokeSequences(SEQUENCE_IPC_CHANNELS.saveDraft, input),
+  publish: async input => await invokeSequences(SEQUENCE_IPC_CHANNELS.publish, input),
+  retire: async input => await invokeSequences(SEQUENCE_IPC_CHANNELS.retire, input),
+  approveTemplate: async input => await invokeSequences(SEQUENCE_IPC_CHANNELS.approveTemplate, input),
+  enroll: async input => await invokeSequences(SEQUENCE_IPC_CHANNELS.enroll, input),
+  completeLinkedIn: async input => await invokeSequences(SEQUENCE_IPC_CHANNELS.completeLinkedIn, input),
+  undoLinkedIn: async input => await invokeSequences(SEQUENCE_IPC_CHANNELS.undoLinkedIn, input),
+  recordLinkedInResult: async input =>
+    await invokeSequences(SEQUENCE_IPC_CHANNELS.recordLinkedInResult, input),
+  resumeEnrollment: async input => await invokeSequences(SEQUENCE_IPC_CHANNELS.resumeEnrollment, input),
+};
+
 contextBridge.exposeInMainWorld('callie', bridge);
 contextBridge.exposeInMainWorld('callieToday', today);
 contextBridge.exposeInMainWorld('callieCrm', crm);
+contextBridge.exposeInMainWorld('callieSequences', sequences);
