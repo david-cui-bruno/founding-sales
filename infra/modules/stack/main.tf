@@ -123,6 +123,24 @@ module "registry" {
   tags         = local.tags
 }
 
+# Production state already holds this module at its un-counted address.
+#
+# David ran `terraform apply -target=module.stack.module.registry` in
+# infra/roots/production at 71d84e00 to bootstrap `fss-prod-api` and
+# `fss-prod-worker` before the first image push (infra-apply-runbook.md 2.2).
+# Adding `count` above renames the address to `module.registry[0]`, and without
+# this block the next production plan would read that as one module destroyed
+# and another created — which, for an ECR repository, means deleting the images
+# every release is identified by.
+#
+# The move is a state operation Terraform performs inside the plan. It is not a
+# change to any resource: the plan should show the two repositories as *moved*
+# and then report no changes to them.
+moved {
+  from = module.registry
+  to   = module.registry[0]
+}
+
 module "secrets" {
   source = "../secrets"
 

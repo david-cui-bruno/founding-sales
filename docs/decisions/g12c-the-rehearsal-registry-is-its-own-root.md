@@ -44,6 +44,35 @@ keeps its own registry) and passed `false` by the per-run rehearsal root. The tw
 registry outputs and the `resource_names` inventory return empty rather than failing
 when the module is not created, so the isolation test can assert the absence.
 
+### The one address that already exists, and the `moved` block
+
+Production is not greenfield state any more. David ran
+`terraform apply -target=module.stack.module.registry` in `infra/roots/production` at
+commit 71d84e00 to bootstrap `fss-prod-api` and `fss-prod-worker` before the first
+image push, so production state holds that module at its **un-counted** address.
+
+Adding `count` renames it to `module.stack.module.registry[0]`. Terraform reads a
+renamed address as one thing destroyed and another created, and for an ECR repository
+that means deleting the images every release record identifies — including the earlier
+compatible binaries 4.2's preferred rollback depends on. A `moved` block inside
+`infra/modules/stack`
+
+```hcl
+moved {
+  from = module.registry
+  to   = module.registry[0]
+}
+```
+
+migrates the state within the plan: the two repositories appear under "has moved to"
+and then report no changes. The rehearsal roots are unaffected — their state is created
+fresh per run — and both root test suites stay green (16 and 16).
+
+The runbook (2.1, 2.2 and the 3.2 plan checklist) and `release.md` 4 all say the same
+thing in the operator's words: **a production plan that proposes to destroy an ECR
+repository is not to be applied.** That instruction outlives this block; it is the
+check that catches the next person who removes it.
+
 **The per-run root now validates its image variables.** `api_image` must end
 `/fss-rh-api@sha256:<64 hex>` and `worker_image` `/fss-rh-worker@sha256:<64 hex>`. The
 digest is the one proposed for production; the repository it is pulled from is not,
@@ -84,8 +113,15 @@ seeing them.
 
 ## What this could not verify
 
-Nothing has been applied. In particular: whether `fss-rh-deploy`'s policy, written for
-ephemeral run resources, permits `ecr:CreateRepository` on `fss-rh-api` — it should,
-since the condition is on the `fss-rh-*` name — and whether an ECR lifecycle policy
-retaining thirty tagged images is enough history for the rollback path when several
-releases are rehearsed in a week.
+One targeted apply has happened (the production registry, above); nothing else has.
+In particular: whether `fss-rh-deploy`'s policy, written for ephemeral run resources,
+permits `ecr:CreateRepository` on `fss-rh-api` — it should, since the condition is on
+the `fss-rh-*` name — and whether an ECR lifecycle policy retaining thirty tagged
+images is enough history for the rollback path when several releases are rehearsed in a
+week.
+
+And the `moved` block itself, which cannot be tested offline: `terraform test` plans
+against mocked providers with no prior state, so nothing in this repository exercises
+the migration. What is verified is that both roots still plan and validate with the
+block present. The proof is the first production plan, and the instruction to stop on a
+proposed ECR destroy is what makes a wrong answer survivable.

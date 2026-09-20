@@ -234,7 +234,11 @@ FSS_REHEARSAL_DRY_RUN=1 FSS_REHEARSAL_REPORTS=/tmp/fss-rehearsal \
 
 ## 4. Production apply — David
 
-Follow `docs/greenfield/infra-apply-runbook.md` section 3.2 for the plan and apply. Three things belong to the release rather than to the infrastructure:
+Follow `docs/greenfield/infra-apply-runbook.md` section 3.2 for the plan and apply.
+
+**Read the ECR lines first.** The production registry was bootstrapped by a targeted apply at commit 71d84e00, and `create_registry` has since given that module a `count`. The first plan after this change must show `fss-prod-api` and `fss-prod-worker` as **moved** — `module.stack.module.registry.…` *has moved to* `module.stack.module.registry[0].…` — and then report no changes to them. **A plan that proposes to destroy or replace an ECR repository is not to be applied.** It would delete the images every release record identifies, and the digests in section 6 step 2 would stop resolving. The `moved` block in `infra/modules/stack` is what makes this a state migration; if it is ever removed, this is the failure.
+
+Three things belong to the release rather than to the infrastructure:
 
 **The digests.** `api_image` and `worker_image` are the digests from section 2, not the tags.
 

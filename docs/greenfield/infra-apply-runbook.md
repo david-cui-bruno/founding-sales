@@ -120,6 +120,14 @@ This root takes no `name_prefix`: `fss-rh` is a literal, because the workflow's 
 
 Do not `terraform destroy` this root. `force_delete` is false, so a destroy fails on a repository that still holds images, which is the correct answer.
 
+**The first production plan after this change shows the two repositories as *moved*, never as replaced.** `create_registry` gives `module.stack.module.registry` a `count`, which renames its address to `module.stack.module.registry[0]`; the production state already holds the un-counted address, because the targeted apply in 2.2 below was run at commit 71d84e00. A `moved` block in `infra/modules/stack` migrates the state inside the plan, so the plan reads
+
+```
+module.stack.module.registry.aws_ecr_repository.this["api"] has moved to module.stack.module.registry[0].aws_ecr_repository.this["api"]
+```
+
+and reports **no changes** to either repository. **If a production plan ever proposes to destroy an ECR repository, stop and do not apply it.** Destroying `fss-prod-api` or `fss-prod-worker` deletes the images every release is identified by, including the earlier compatible binaries 4.2's preferred rollback depends on, and the digests in every past release record stop resolving.
+
 ### 2.2 The production repositories — the one use of `-target`
 
 ```bash
@@ -141,6 +149,8 @@ aws ecr describe-images --repository-name fss-prod-api \
 ```
 
 `-target` is used exactly once, for this bootstrap, and never again. The rest of the runbook applies the whole root.
+
+**This has already been done**, at commit 71d84e00, so production state holds the two repositories with immutable tags and scan on push. That is why 2.1's `moved` note exists: the next plan you run against this root migrates their address and changes nothing about them.
 
 The same digests are then pushed to `fss-rh-api` and `fss-rh-worker` so the rehearsal deploys the exact artefacts production will (`release.md` 2.1). The rehearsal root refuses an `api_image` that does not end `/fss-rh-api@sha256:<64 hex>`: `fss-rh-deploy` may read nothing outside `fss-rh-*`, and a plan is a better place to learn that than an ECR authorization error minutes into a deployment.
 
@@ -207,7 +217,8 @@ Read the plan before applying it. Specifically confirm:
 - `aws_db_instance.main` has `multi_az = true`, `deletion_protection = true`, `backup_retention_period = 35`, `storage_encrypted = true`;
 - there is no `aws_nat_gateway` and no `aws_vpc_endpoint`;
 - there is no `aws_secretsmanager_secret_version`;
-- the ALB has exactly one listener, on 443.
+- the ALB has exactly one listener, on 443;
+- the two ECR repositories appear under **"has moved to"** and under nothing else. A plan that proposes to destroy, replace or recreate `fss-prod-api` or `fss-prod-worker` is a plan to delete the images the release record names. Stop; the `moved` block in `infra/modules/stack` is what makes the address change a migration rather than a replacement.
 
 The RDS instance takes 10-20 minutes to become available with Multi-AZ. The ECS services will not stabilise until it is, because the tasks need the database.
 
