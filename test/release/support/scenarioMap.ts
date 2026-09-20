@@ -371,6 +371,7 @@ export const SCENARIOS: readonly Scenario[] = Object.freeze([
     title: 'Ambiguous opt-out wording holds for review; explicit stop wording suppresses immediately.',
     coverage: 'release',
     references: laneTest(
+      'packages/domain/src/rules/replyClassification.ts',
       'packages/domain/test/classification/confirmation.test.ts',
       'packages/domain/test/domain/rules.test.ts',
     ),
