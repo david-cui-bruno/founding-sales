@@ -19,4 +19,16 @@ export {
   type ScopeRefusal,
   type VerifiedPrincipal,
 } from './scope.ts';
-export { createApiServer, route, type ApiOptions, type RouteResult } from './server.ts';
+export {
+  createApiServer,
+  dispatch,
+  route,
+  type ApiOptions,
+  type ApiRequest,
+  type RouteResult,
+} from './server.ts';
+export { DEFAULT_UPGRADE_URL, type RoutingOptions } from './routes/types.ts';
+export { routeAuth } from './routes/auth.ts';
+export { routeAdminMemberships } from './routes/admin/memberships.ts';
+export { routeAdminDevices } from './routes/admin/devices.ts';
+export * from './auth/index.ts';

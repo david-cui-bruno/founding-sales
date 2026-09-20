@@ -309,9 +309,13 @@ export async function renewSession(deps: AuthDeps, input: RenewInput): Promise<R
       return { renewed: false, refusal: 'credential_unknown' };
     }
 
-    if (credential.state !== 'active') {
+    if (credential.state === 'rotated') {
       // Reuse. Whoever holds the spent generation, the device is compromised: revoke it,
       // end its sessions, and require a full Google sign-in (5.3, Appendix G 24).
+      //
+      // Only `rotated` is reuse. A `revoked` credential was taken away deliberately —
+      // by an admin, a sign-out or a membership ending — and calling that an attack
+      // would make every ordinary sign-out look like one.
       await revokeDevice(deps, {
         workspaceId: parsed.workspaceId,
         deviceId: parsed.deviceId,
@@ -330,6 +334,9 @@ export async function renewSession(deps: AuthDeps, input: RenewInput): Promise<R
 
     if (credential.device_status !== 'active') return { renewed: false, refusal: 'device_revoked' };
     if (credential.membership_status !== 'active') return { renewed: false, refusal: 'membership_inactive' };
+    // Revoked while the device itself is still registered: a sign-out. The Mac signs
+    // in with Google again rather than renewing a credential it gave up.
+    if (credential.state !== 'active') return { renewed: false, refusal: 'credential_unknown' };
 
     // The 30-day boundary lives on the sessions this device has held. The newest one
     // carries it, whether or not it is still active. It is checked before the
