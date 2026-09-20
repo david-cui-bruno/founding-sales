@@ -22,6 +22,15 @@
 # and that the carry tooling has no import direction at all — there is a reader for the
 # old table and no writer, so "roll back to the old stack" is not a command that exists.
 #
+# **Only one of the two needs a cutover.** The watermark and the source table do not
+# exist until a cutover is scheduled, and the first release comes before the cutover.
+# With `FSS_CARRY_WATERMARK` and `FSS_CARRY_SOURCE_TABLE` both unset this prints
+# `carry drill skipped: no cutover watermark yet`, records
+# `carry_drill=skipped_no_watermark` so the release record carries the state rather than
+# claiming a pass, and exits 0 — after running the halves above, which need no cutover.
+# One set without the other is a refusal. See
+# `docs/decisions/g12c-the-carry-drill-waits-for-a-cutover.md`.
+#
 # Dry run: FSS_REHEARSAL_DRY_RUN=1 prints the plan and needs no credential.
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rehearsal-common.sh"
