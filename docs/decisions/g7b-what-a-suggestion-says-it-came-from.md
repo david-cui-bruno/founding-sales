@@ -20,8 +20,9 @@ there are three plausible answers to each half — the model, and the prompt.
 
 And the two identifier rules:
 
-* **Model ids carry no date suffix.** `CLASSIFIER_MODELS` is
-  `['claude-opus-5', 'claude-haiku-4-5']`.
+* **The allow-list is a list of models the adapter has been told about**, not a shape
+  rule about the string. `CLASSIFIER_MODELS` is `['claude-opus-5', 'claude-haiku-4-5',
+  'claude-haiku-4-5-20251001']`.
 * **The model's own claim about itself is never used.** The answer schema *does*
   require `model_version` and `prompt_version` — a required field the model must fill
   in is a cheap consistency signal, and the schema is `additionalProperties: false`
@@ -52,29 +53,35 @@ constraining even where the content is not trusted: an answer missing it fails t
 schema read, which is one more way a model that has wandered off the format announces
 itself before a person sees anything.
 
-## Why no date suffixes
+## Why both spellings of Haiku 4.5
 
-The Anthropic API skill is explicit that current model strings are unsuffixed
-(`claude-opus-5`) and that appending a date is a stale habit from older model
-families. The lane brief mentioned `claude-haiku-4-5-20251001`; the constant is
-`claude-haiku-4-5`, and this is the deviation to flag rather than bury. If a future
-deployment genuinely needs a pinned snapshot, it is one entry in `CLASSIFIER_MODELS`
-and one row in `classifier_settings`, and the check constraint is the thing that would
-need editing — deliberately.
+Opus 5 has one id, `claude-opus-5`. Haiku 4.5 has two the API accepts — the undated
+alias `claude-haiku-4-5` and the `-20251001` snapshot — and David's environment
+documents the dated one. Both are in the allow-list.
+
+The lane's first version allowed only the undated alias, on the general rule that
+current model strings are unsuffixed and that appending a date is a habit from older
+model families. That rule is right as advice and wrong as a constraint here: the thing
+the allow-list protects against is a model the adapter has no capability row for — one
+whose `output_config.effort` support nobody has checked — and a snapshot id the API
+takes is not that. Refusing a string the provider would have accepted turns a
+documentation difference into an admin's afternoon.
+
+So the rule is stated as what it actually is: **every entry in `CLASSIFIER_MODELS` has
+a row in `MODEL_CAPABILITIES`**, which `cards.test.ts` asserts, and the two Haiku
+spellings have identical rows because they are one model.
 
 ### The CHECK that was removed
 
-`0011_classification.sql` briefly had two constraints on `model_name`: an allow-list,
-and `classifier_settings_model_has_no_date_suffix`, forbidding a trailing `-20YYMMDD`.
+`0011_classification.sql` briefly had a second constraint on `model_name`,
+`classifier_settings_model_has_no_date_suffix`, forbidding a trailing `-20YYMMDD`.
 
-The second one was deleted. It could never be the *sole* violation — every string with
-a date suffix also fails the allow-list — so `constraints.test.ts`, which requires a
-failing insert per enforced constraint, could only cover it with a case whose outcome
-depended on the order PostgreSQL happened to evaluate the two checks in. A constraint
-whose test is order-dependent is a flake waiting for a version upgrade.
+It was deleted twice over. First because it could never be the *sole* violation — every
+string with a date suffix also failed the allow-list — so `constraints.test.ts`, which
+requires a failing insert per enforced constraint, could only cover it with a case whose
+outcome depended on the order PostgreSQL happened to evaluate the checks in; a
+constraint whose test is order-dependent is a flake waiting for a version upgrade. And
+second because the rule it encoded turned out to be wrong, as above.
 
-The rule now lives where it can be tested honestly: `CLASSIFIER_MODELS` in
-`classification/types.ts`, with a TypeScript assertion that no entry matches
-`/-20\d{6}$/u`. The allow-list constraint keeps the database's promise, and its
-failing-insert case uses `claude-haiku-4-5-20251001` — so the exact string the brief
-suggested is now the fixture for "a model this workspace will not call".
+The failing-insert fixture for the allow-list is now `claude-3-haiku-20240307` — a real
+model, retired, and unrelated to anything this workspace calls.

@@ -97,13 +97,11 @@ CREATE INDEX mail_message_classifications_uncertain_deterministic
 -- costs a retry ladder; and the adapter knows per-model facts — Claude Haiku 4.5
 -- rejects `output_config.effort`, Claude Opus 5 takes the server-side `fallbacks`
 -- parameter — that it can only know about models it has been told about.
--- The allow-list is also what enforces "never a date suffix": the ids above are
--- complete as they are, and a remembered `claude-haiku-4-5-20251001` is a refusal at
--- the provider rather than a pin. A separate CHECK for the suffix would be a
--- constraint that can never be the *sole* reason a row is refused, which makes a
--- failing-insert test depend on the order PostgreSQL happens to evaluate CHECKs in.
--- `CLASSIFIER_MODELS` in `packages/domain/classification/types.ts` carries the same
--- rule on the TypeScript side, with its own assertion.
+-- Claude Haiku 4.5 is listed twice on purpose: the API accepts the undated alias and
+-- the `-20251001` snapshot, David's environment documents the dated one, and a
+-- workspace configured with a string the API would have taken should not be refused
+-- here. They are the same model to `MODEL_CAPABILITIES`. `CLASSIFIER_MODELS` in
+-- `packages/domain/classification/types.ts` is the same list on the TypeScript side.
 --
 -- `enabled = false` is the workspace-level half of the classifier's off switch; the
 -- process-level half is the `FSS_CLASSIFIER` environment variable the worker reads.
@@ -124,7 +122,7 @@ CREATE TABLE classifier_settings (
   CONSTRAINT classifier_settings_updater_fkey FOREIGN KEY (workspace_id, updated_by_user_id)
     REFERENCES workspace_memberships (workspace_id, user_id),
   CONSTRAINT classifier_settings_model_known
-    CHECK (model_name IN ('claude-opus-5', 'claude-haiku-4-5')),
+    CHECK (model_name IN ('claude-opus-5', 'claude-haiku-4-5', 'claude-haiku-4-5-20251001')),
   CONSTRAINT classifier_settings_effort_known
     CHECK (effort IN ('low', 'medium', 'high', 'xhigh', 'max')),
   CONSTRAINT classifier_settings_output_bounded

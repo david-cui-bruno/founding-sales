@@ -207,7 +207,10 @@ export function buildReplyCardView(
   chosen: ReplyDisposition | null,
 ): ReplyCardView {
   const banners: BannerView[] = [];
-  const answerable = card.nextAction === 'confirm_disposition';
+  // Appendix F: a member who may not read the message is not offered an answer to
+  // it. Not a disabled form — no form. A body they cannot see and six buttons they
+  // cannot press is an invitation to ask somebody to read it out to them.
+  const answerable = card.nextAction === 'confirm_disposition' && card.visibility === 'assigned_or_admin';
   const mayAct = state.mayMutate && state.online;
 
   if (card.visibility === 'any_active_member') {
@@ -288,7 +291,7 @@ export function buildReplyCardView(
     callbackRequired: callbackOffered && card.callbackProposal !== null,
     firmWideOptOutOffered: chosen === 'opt_out',
     // Everything above may be true and this stays false until somebody chooses.
-    confirmEnabled: mayAct && answerable && chosen !== null && card.visibility === 'assigned_or_admin',
+    confirmEnabled: mayAct && answerable && chosen !== null,
     confirmLabel: chosen === null ? 'Choose what this reply means' : `Confirm: ${DISPOSITION_LABELS[chosen]}`,
     nextAction: card.nextAction,
     ambiguity: card.nextAction === 'resolve_ambiguity' ? card.impact.candidates : [],

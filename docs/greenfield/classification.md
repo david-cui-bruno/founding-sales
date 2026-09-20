@@ -41,7 +41,7 @@ those, and the tests that say so are the point of the lane.
 | Configuration | `classification/settings.ts` — workspace-level, admin-only to write |
 | Routes | `apps/api/src/routes/replies.ts` — five exact paths |
 | Handler and sweep | `apps/worker/src/handlers/classify.ts` |
-| Desktop | `apps/desktop/src/renderer/replyContract.ts`, `replyView.ts`, `apps/desktop/src/main/replyBridge.ts` |
+| Desktop | `apps/desktop/src/renderer/{replyContract,replyView,replyPage}.ts` + `replyCard.html`, `apps/desktop/src/main/replyBridge.ts`, registered in `todayWindow.ts` and `app.ts` |
 | Tests | `packages/domain/test/classification/**`, `test/corpus/replies/**`, `apps/api/test/replies.test.ts`, `apps/worker/test/classifyHandlers.test.ts`, `apps/desktop/test/reply.test.ts` |
 | Re-record script | `packages/domain/scripts/recordReplyCorpus.mjs` — spends money, never in CI |
 
@@ -70,10 +70,12 @@ Everything about the request is either a constant in `prompt.ts` or a row in
 `classifier_settings`. Nothing is a literal at the call site.
 
 * **Model and effort are configuration.** `classifier_settings.model_name` defaults to
-  `claude-opus-5` and `effort` to `low`; `claude-haiku-4-5` is the cheaper alternative
-  and an admin switches with `POST /replies/settings/update`. `MODEL_CAPABILITIES`
-  knows that Haiku 4.5 rejects `output_config.effort` with a 400, so the field is
-  *omitted* for it rather than sent and ignored.
+  `claude-opus-5` and `effort` to `low`; Claude Haiku 4.5 is the cheaper alternative,
+  accepted as either `claude-haiku-4-5` or `claude-haiku-4-5-20251001`, and an admin
+  switches with `POST /replies/settings/update`. `MODEL_CAPABILITIES` knows that Haiku
+  4.5 rejects `output_config.effort` with a 400, so the field is *omitted* for it
+  rather than sent and ignored. Every allowed id has a capability row: that, and not
+  the shape of the string, is what the allow-list is for.
 * **Structured output, not tool use.** `output_config.format` carries
   `MODEL_SUGGESTION_JSON_SCHEMA`: seven required fields, `additionalProperties: false`.
 * **Prompt caching is a prefix.** The system block carries
@@ -216,9 +218,8 @@ one while printing the other would be the same leak with more steps.
 * **Closing an opportunity.** 9.1 gives that to a person on the firm page.
 * **Any use of the model outside reply classification.** No summarisation, no drafting,
   no enrichment. The transport interface has one method and the prompt has one job.
-* **The reply window's HTML.** The card shell is G6's Today window; this lane supplies
-  the contract, the view model and the bridge. See
-  `docs/decisions/g7b-the-desktop-window-is-not-wired-up.md`.
+* **A second place to read a message.** The reply window shows the body, and the Firm
+  page does not gain one. See `docs/decisions/g7b-the-reply-window.md`.
 
 ## Running the tests
 

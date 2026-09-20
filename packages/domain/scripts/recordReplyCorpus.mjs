@@ -53,7 +53,7 @@ function usage(message) {
 
   FSS_LLM_CLASSIFIER_API_KEY=… \\
     node --experimental-transform-types --disable-warning=ExperimentalWarning \\
-      packages/domain/scripts/recordReplyCorpus.mjs --model <claude-opus-5|claude-haiku-4-5> [--dry-run]
+      packages/domain/scripts/recordReplyCorpus.mjs --model <one of CLASSIFIER_MODELS> [--dry-run]
 `);
   return 2;
 }

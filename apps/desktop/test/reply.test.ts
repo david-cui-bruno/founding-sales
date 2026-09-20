@@ -160,6 +160,9 @@ describe('the reply card view model', () => {
     expect(view.bodyText).toBeNull();
     expect(view.subject).toBeNull();
     expect(view.suggestion?.excerpt).toBeNull();
+    // No answer is offered at all, not a disabled one: a form they cannot fill in
+    // beside a message they cannot read is an invitation to guess.
+    expect(view.choices).toEqual([]);
     expect(view.confirmEnabled).toBe(false);
     expect(view.banners.map(banner => banner.text)).toContain(replyNotice('not_assigned'));
     // The impact is still there: that is the point of showing them anything.

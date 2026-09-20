@@ -137,10 +137,11 @@ export const CLASSIFICATION_CONSTRAINT_CASES: readonly ClassificationCase[] = [
       ),
   },
   {
-    // Also the rule "never a date suffix": `claude-haiku-4-5-20251001` is not one of
-    // the two ids, so the allow-list refuses it without a second constraint.
+    // An old model this workspace will not call. The allow-list is the only thing
+    // between a typo in an admin's configuration and a request that fails at the
+    // provider on every classification until somebody notices.
     constraint: 'classifier_settings_model_known',
-    run: async f => await settings(f, 'model_name', "'claude-haiku-4-5-20251001'"),
+    run: async f => await settings(f, 'model_name', "'claude-3-haiku-20240307'"),
   },
   {
     constraint: 'classifier_settings_effort_known',

@@ -29,14 +29,24 @@ import type { ReplyClass, ReplyDisposition } from '../src/rules/replyClassificat
 export const CLASSIFIER_PROMPT_VERSION = 'g7b.replies.1';
 
 /**
- * The two model ids David chooses between at launch, and the only two
+ * The model ids David chooses between at launch, and the only ones
  * `classifier_settings_model_known` accepts.
  *
- * Complete as written. Appending a date suffix to either — `claude-haiku-4-5-20251001`
- * and the like — is a refusal at the provider rather than a pin, and migration 0011
- * has a CHECK that says so, because the mistake is a remembered one.
+ * Claude Opus 5 is the default and has no dated form. Claude Haiku 4.5 has two
+ * accepted spellings — the undated alias and the `-20251001` snapshot, which is how
+ * David's environment documents it — and the API takes either, so both are here
+ * rather than one of them being a refusal a person has to discover. They are the same
+ * model to `MODEL_CAPABILITIES`; only the string differs.
+ *
+ * The list is an allow-list and not a shape rule: what makes an id acceptable is that
+ * the adapter has been told what parameters it takes, which is a fact about this
+ * table and not about the characters in the string.
  */
-export const CLASSIFIER_MODELS = ['claude-opus-5', 'claude-haiku-4-5'] as const;
+export const CLASSIFIER_MODELS = [
+  'claude-opus-5',
+  'claude-haiku-4-5',
+  'claude-haiku-4-5-20251001',
+] as const;
 export type ClassifierModel = (typeof CLASSIFIER_MODELS)[number];
 
 export const CLASSIFIER_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
@@ -57,7 +67,11 @@ export interface ModelCapabilities {
 
 export const MODEL_CAPABILITIES: Readonly<Record<ClassifierModel, ModelCapabilities>> = Object.freeze({
   'claude-opus-5': { effort: true, serverSideFallbacks: true },
+  // The two spellings of Haiku 4.5 are one model and take one row each, because the
+  // table is keyed by the string that is sent and a lookup that had to normalise
+  // first would be a second place to get the normalisation wrong.
   'claude-haiku-4-5': { effort: false, serverSideFallbacks: false },
+  'claude-haiku-4-5-20251001': { effort: false, serverSideFallbacks: false },
 });
 
 /** The beta flag the scalar `fallbacks: "default"` form requires. */

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   CLASSIFIER_MODELS,
   CLASSIFIER_PROMPT_VERSION,
+  MODEL_CAPABILITIES,
   CLASSIFIER_SYSTEM_PROMPT,
   classifyReplyWithModel,
   confirmReplyDisposition,
@@ -283,16 +284,22 @@ describe('the classifier configuration (10.1)', () => {
     expect(rows[0]?.detail['previousModel']).toBe('claude-opus-5');
   });
 
-  it('refuses a model id the adapter has never been told about, including a date suffix', async () => {
+  it('refuses a model id the adapter has never been told about, and accepts both spellings of Haiku', async () => {
     world = await createClassifierWorld({ cases: only('terse-human-reply') });
     const w = world;
-    // The ids are complete as written; a remembered `-20251001` is a 404 at the
-    // provider rather than a pin, and the allow-list is where that is refused.
-    for (const id of CLASSIFIER_MODELS) expect(id).not.toMatch(/-20\d{6}$/u);
+    // Every allowed id has a capability row, which is the actual rule: an id is
+    // acceptable because the adapter knows what parameters it takes.
+    for (const id of CLASSIFIER_MODELS) expect(MODEL_CAPABILITIES[id]).toBeDefined();
+    // The dated Haiku snapshot and its alias are both real, and both accepted.
+    for (const id of ['claude-haiku-4-5', 'claude-haiku-4-5-20251001'] as const) {
+      const accepted = await updateClassifierSettings(w.adminContext(), { modelName: id });
+      expect(accepted.ok).toBe(true);
+      if (accepted.ok) expect(accepted.value.modelName).toBe(id);
+    }
     await expect(
       w.mail.database.session.query(
         'INSERT INTO classifier_settings (workspace_id, model_name) VALUES ($1, $2)',
-        [w.mail.seeded.alpha.workspaceId, 'claude-haiku-4-5-20251001'],
+        [w.mail.seeded.beta.workspaceId, 'claude-3-haiku-20240307'],
       ),
     ).rejects.toMatchObject({ constraint: 'classifier_settings_model_known' });
   });
