@@ -11,6 +11,7 @@ import {
   type ReplyPromoter,
 } from '@fss/domain/mail';
 import type { SuppressionJournal } from '@fss/domain/suppression';
+import { mailReconcileHandler, outboundRecoveryFloor } from '@fss/domain/outbound';
 import { promoteReply } from '@fss/domain/today';
 
 /**
@@ -57,7 +58,12 @@ export interface MailWorkerOptions {
   readonly replyPromoter: ReplyPromoter;
   /** The fully qualified Pub/Sub topic `infra/modules/pubsub` outputs. */
   readonly pushTopicName: string;
-  /** 12.3's "oldest unresolved outbound message or active enrollment". G7-2 supplies it. */
+  /**
+   * 12.3's "oldest unresolved outbound message or active enrollment".
+   *
+   * Defaults to the outbound half, which G7-2 implemented. G8 supplies the enrollment
+   * half by passing `combinedRecoveryFloor(outboundRecoveryFloor(), enrollmentFloor())`.
+   */
   readonly recoveryFloor?: RecoveryFloorSource | undefined;
   readonly maxAttempts?: number | undefined;
   readonly leaseSeconds?: number | undefined;
@@ -79,10 +85,17 @@ export function mailHandlers(options: MailWorkerOptions | undefined): readonly J
   };
 
   return [
+    // Appendix C's fourth mail kind. It shares this composition because it shares the
+    // adapters — the same Gmail client, the same envelope key — and because a
+    // deployment that cannot sync cannot reconcile either.
+    mailReconcileHandler(
+      { gmail: options.gmail, oauth: options.oauth, cipher: options.cipher },
+      { ...(options.maxAttempts === undefined ? {} : { maxAttempts: options.maxAttempts }) },
+    ),
     mailSyncHandler(
       {
         ...pipeline,
-        ...(options.recoveryFloor === undefined ? {} : { recoveryFloor: options.recoveryFloor }),
+        recoveryFloor: options.recoveryFloor ?? outboundRecoveryFloor(),
       },
       handlerOptions,
     ),
@@ -129,4 +142,5 @@ export const MAIL_JOB_KINDS: readonly string[] = Object.freeze([
   'mail.sync',
   'mail.recover',
   'mail.watch_renew',
+  'mail.reconcile',
 ]);

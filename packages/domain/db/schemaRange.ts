@@ -26,8 +26,8 @@ export const CURRENT_SCHEMA_VERSION = 13;
  *
  * Lanes G5 and G2 shipped migrations 0002 and 0003 from the same main and each widened
  * this constant for its own; lane G3a widened it again for migration 0004, G3b for
- * 0005, G4 for 0006, G10 for 0007, G6 for 0008 and G7 for 0009. A merge that finds
- * two different maxima takes the larger. That is honest only because nothing has been
+ * 0005, G4 for 0006, G10 for 0007, G6 for 0008 and G7 for 0009 and 0010. A merge
+ * that finds two different maxima takes the larger. That is honest only because nothing has been
  * deployed — G0's {1, 1} was never a promise made to a running production binary. From
  * the first real deployment onwards the widening must precede the migration by a
  * release, and the compatibility test will keep saying so.
@@ -102,31 +102,51 @@ export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum:
  * maxima move to 9: a binary that refused the database it has just been deployed
  * against would be a self-inflicted outage.
  *
+ * Migration 0010 (G7-2) moves both a fifth time, and this is the one where the rule
+ * bites hardest, because the table it adds is the one that makes double sending
+ * impossible.
+ *
+ * The worker needs it beyond argument. Appendix C gives `sequence.action` and
+ * `mail.reconcile` the protection `outbound_fence`, and the fence *is*
+ * `outbound_messages` with its state-machine trigger. A worker on a version-9
+ * database would be a worker whose declared at-most-once protection does not exist —
+ * not degraded, absent — and the failure it would permit is sending the same email
+ * to a prospect twice, which no later correction undoes. Refusing to start is the
+ * only honest behaviour.
+ *
+ * The API needs it for a narrower but equally structural reason: the admin
+ * resolutions of 12.5 (`unknown_terminal` marked delivered or skipped), the ramp and
+ * cap commands of 12.7, and the sending-domain authentication checklist all read and
+ * write tables that arrive here. An API on a version-9 database could accept an
+ * admin's "mark this delivered" and have nowhere to record it, which is worse than
+ * refusing: the admin would believe the sequence had been unblocked.
+ *
  * Migration 0013 (G9) is the first one that moves the two sides differently, and the
  * difference is the rule working rather than an oversight.
  *
  * The API's minimum moves to 13. `GET /settings`, `POST /settings/update` and
  * `POST /settings/history` read and write `workspace_settings`, and `GET /diagnostics`
  * reads it too. An API on a version-12 database could not answer what the postal
- * footer or the sending limits are, and — worse — `effectiveSendingEnabled` would
+ * footer or the business time zone is, and — worse — `effectiveSendingEnabled` would
  * have no admin half of 16.2's two switches to read. Fail closed would make it
  * answer "sending is off" forever, which is safe and useless; refusing to start says
  * so out loud.
  *
- * The worker's minimum does **not** move. Nothing in `apps/worker/src` reads
- * `workspace_settings` today: the settings a worker will want — the holiday calendar
- * for business-day delays, the effective mailbox cap — are read by G8's sequence
- * execution, which does not exist yet. The rule from
+ * The worker's minimum does **not** move past G7-2's 10. Nothing in `apps/worker/src`
+ * reads `workspace_settings` today: the settings a worker will want — the holiday
+ * calendar for business-day delays, which G8 owns in its own table, and the
+ * workspace sending attestation, whose send-path read is G12's — are read by code
+ * that does not exist yet. The rule from
  * `docs/decisions/g10-worker-schema-minimum.md` is that a binary declares the lowest
  * version on which its *first statement* can succeed, not the lowest it would like,
  * and raising the worker's minimum for a table it never queries would refuse a
- * database for no reason. G8 raises it when it adds the read.
+ * database for no reason. The lane that adds the read raises it.
  *
  * Both maxima move to 13, because a binary that refused the database it has just been
  * deployed against would be a self-inflicted outage.
  */
 export const API_SCHEMA_RANGE: SchemaRange = { minimum: 13, maximum: 13 };
-export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 9, maximum: 13 };
+export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 10, maximum: 13 };
 
 export function acceptsSchemaVersion(range: SchemaRange, version: number): boolean {
   return Number.isInteger(version) && version >= range.minimum && version <= range.maximum;
