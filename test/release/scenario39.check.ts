@@ -1,5 +1,9 @@
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { mustBeRehearsed, readRepositoryFile } from './support/coverage.ts';
+import { mustBeRehearsed, readRepositoryFile, repositoryPath } from './support/coverage.ts';
 
 /**
  * Appendix G 39: "Production and rehearsal Terraform plans use distinct state keys,
@@ -85,6 +89,19 @@ describe('Appendix G 39: the two roots cannot address each other', () => {
     expect(guard).toContain('the name classifier accepted a production resource');
     expect(guard).toContain("the name classifier accepted another run's resource");
     expect(guard).toContain('stable_repositories=rehearsal');
+  });
+
+  it('runs that classifier rather than only declaring it', () => {
+    // Asserting the source would pass against a classifier somebody commented out.
+    const reports = mkdtempSync(join(tmpdir(), 'fss-guard-'));
+    const output = execFileSync(repositoryPath('infra/scripts/rehearsal-prefix-guard.sh'), ['fss-rh-check', 'after'], {
+      env: { ...process.env, FSS_REHEARSAL_DRY_RUN: '1', FSS_REHEARSAL_REPORTS: reports },
+      encoding: 'utf8',
+      stdio: 'pipe',
+    });
+    expect(output).toContain('fss-rh-check-api: rehearsal-run');
+    expect(output).toContain('fss-rh-api: rehearsal-stable');
+    expect(output).toContain('fss-rh-worker: rehearsal-stable');
   });
 
   it('makes each root refuse the other’s namespace rather than merely avoid it', () => {
