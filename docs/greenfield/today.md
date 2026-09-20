@@ -34,6 +34,7 @@ apps/api/src/routes/today.ts                  GET /today, POST /today/firm
 apps/api/src/routes/snooze.ts                 POST /today/snooze, /today/snooze/cancel
 apps/desktop/src/renderer/today*.ts           the window: contract, view model, page
 apps/desktop/src/main/todayBridge.ts          the main-process half of its bridge
+apps/desktop/src/main/telHandoff.ts           the tel: driver and the two dial commands
 apps/desktop/src/main/crmBridge.ts            G3b's CRM windows, wired
 apps/desktop/src/main/todayWindow.ts          both windows, their channels, the menu
 ```
@@ -155,7 +156,15 @@ a screenshot.
 
 **The window never holds a ticket.** `bridge.dial()` performs the setup proof, the
 authorization, the consumption and the `tel:` open in the main process, through G4's
-`dialHandoff.ts`. The renderer sends the firm, the route and the *displayed* route
+`dialHandoff.ts` and this lane's `telHandoff.ts`, which is the macOS binding of its two
+ports: the launch-services probe for the proof and `shell.openExternal` for the open.
+There is no Swift helper — section 2's decision table, and David's confirmation. The
+driver opens a `tel:` URI with an E.164 number and throws for anything else, so
+`shell.openExternal` is unreachable from that module for any other scheme, and a probe
+that answers `absent` *or* `unknown` is `no_tel_handler`: an unreadable Launch Services
+database is not a proof of anything. A setup proof older than a ticket's own sixty
+seconds stops being current, because the real check reads an `lsregister -dump` that
+cannot happen between consuming a ticket and opening a URI. The renderer sends the firm, the route and the *displayed* route
 version — 9.2's "authorization uses the route version displayed on the card" — and gets
 back a state with a notice. The calling identity is the one the server reported with the
 card, because 9.1 requires it to be the actor's own and there is nothing there to
@@ -180,18 +189,18 @@ renderer code:
   so a packaged build contains them;
 * `apps/desktop/src/main/sessionManager.ts` — one method, `accessToken()`, which goes
   through the existing `liveSession` so renewal stays serialised. Without it a second
-  window would have to hold the refresh credential, and reuse revokes the device (5.3).
+  window would have to hold the refresh credential, and reuse revokes the device (5.3);
+* `apps/desktop/src/main/telHandoff.ts` — the macOS binding of G4's two handoff ports,
+  and `createDialApi`, which is the two commands of 9.2 through the window's
+  authenticated client.
 
-Two things the wiring cannot do yet, both recorded rather than faked:
+One thing the wiring cannot do yet, recorded rather than faked:
 
-* **The `tel:` opener.** `launchServices.ts` can read whether a handler exists; nothing
-  opens the URI. `registerWindows` supplies `unavailableDialHandoff()`, so a Call button
-  answers `no_tel_handler` instead of pretending. The handoff logic itself is G4's and
-  is fully tested; what is missing is the Electron binding.
 * **Stage changes from the board.** `GET /firms` returns `FirmIdentityDto`, which
   carries the open opportunity's stage and not its id, so the board can only offer a
   stage change for firms whose Firm page has been opened. See
-  `docs/decisions/g6-pipeline-board-opportunity-ids.md`.
+  `docs/decisions/g6-pipeline-board-opportunity-ids.md`; the gap belongs to the lane
+  that owns Appendix F's read matrix.
 
 ## Adding a source or a lane
 
@@ -211,5 +220,6 @@ npm run test --workspace packages/domain -- test/today            # G 8 and G 33
 npm run test --workspace apps/api -- test/today.test.ts           # the routes
 npm run test --workspace apps/worker -- test/todayBuild.test.ts   # G 1 and G 2 for this handler
 npm run test --workspace apps/desktop -- test/today.test.ts       # the view model and both bridges
+npm run test --workspace apps/desktop -- test/telHandoff.test.ts  # tel: only, and the probe
 npm run test:desktop:e2e                                          # the window, in chromium
 ```

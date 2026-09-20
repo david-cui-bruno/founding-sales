@@ -4,7 +4,8 @@ import { z } from 'zod';
 import { uuid } from '@fss/contracts';
 import { createApiClient, fetchSend } from './apiClient.ts';
 import { createAuthedClient } from './authedClient.ts';
-import { unavailableDialHandoff } from './dialHandoff.ts';
+import { createDialHandoff } from './dialHandoff.ts';
+import { createDialApi, createTelLaunchDriver } from './telHandoff.ts';
 import {
   openSecondaryWindow,
   registerCrmBridge,
@@ -139,11 +140,10 @@ export function registerWindows(configuration: DesktopConfiguration, manager: Se
 
   registerTodayBridge({
     api,
-    // The `tel:` handoff needs an OS binding this build does not have yet: the
-    // launch-services probe is a read (`launchServices.ts`) and the opener is not
-    // written. Until it is, the window shows its Call buttons refused with
-    // `no_tel_handler` rather than pretending. See docs/greenfield/today.md.
-    handoff: unavailableDialHandoff(),
+    // G4's handoff logic, bound to macOS through `telHandoff.ts`: the launch-services
+    // probe for the setup proof and `shell.openExternal` for the open, with every
+    // scheme but `tel:` unreachable from that module. There is no Swift helper (2).
+    handoff: createDialHandoff({ driver: createTelLaunchDriver(), api: createDialApi(api) }),
     session,
   });
   registerCrmBridge({ api, session });
