@@ -5,6 +5,10 @@
   "description": "Local-first macOS founder-sales application.",
   "main": ".vite/build/main.js",
   "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "engines": {
     "node": ">=24.0.0 <25.0.0"
   },
@@ -42,7 +46,11 @@
     "backup:pre-release": "node scripts/createPreReleaseBackup.mjs",
     "diagnose:startup": "node scripts/diagnoseStartup.mjs",
     "export:cutover": "node scripts/exportCutover.mjs",
-    "verify:release": "node scripts/verifyRelease.mjs"
+    "verify:release": "node scripts/verifyRelease.mjs",
+    "typecheck:greenfield": "npm run typecheck --workspace packages/contracts --workspace packages/domain --workspace apps/api --workspace apps/worker",
+    "lint:greenfield": "eslint --config eslint.greenfield.mjs --max-warnings 0 apps packages",
+    "test:greenfield": "npm run test --workspace packages/contracts --workspace packages/domain --workspace apps/api --workspace apps/worker",
+    "gate:greenfield": "npm run typecheck:greenfield && npm run lint:greenfield && npm run test:greenfield"
   },
   "keywords": [],
   "author": {

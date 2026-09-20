@@ -9,6 +9,8 @@ export function trackedSources(output) {
     return /\.(?:[cm]?[jt]s|[jt]sx)$/.test(path)
       && !/(^|\/)(?:node_modules|\.vite|out|coverage|test-results|playwright-report|artifacts|\.worktrees)(\/|$)/.test(path)
       && !/^cloud\/lambdas\/[^/]+\/dist\//.test(path)
+      // The greenfield workspace lints through `npm run lint:greenfield` with eslint.greenfield.mjs.
+      && !/^(?:apps|packages)\//.test(path)
       && !/^build\/generated\//.test(path)
       && !/^native\/(?:safe-log-fs\/build|apple-bridge\/\.build)\//.test(path);
   }).sort();

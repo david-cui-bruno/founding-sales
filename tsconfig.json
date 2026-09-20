@@ -27,6 +27,8 @@
   },
   "exclude": [
     "cloud",
-    "client"
+    "client",
+    "apps",
+    "packages"
   ]
 }

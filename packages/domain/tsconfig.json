@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@fss/contracts": ["../contracts/src/index.ts"]
+    }
+  },
+  "include": ["src/**/*.ts", "db/**/*.ts", "test/**/*.ts", "vitest.config.ts"]
+}

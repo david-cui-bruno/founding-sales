@@ -30,6 +30,10 @@ export default [
       // Lambda packages lint through `npm run lint:tracked` (--no-ignore) with
       // their own resolver below, never through `eslint .`.
       'cloud/lambdas/**',
+      // The greenfield workspace has its own flat config, eslint.greenfield.mjs,
+      // run by `npm run lint:greenfield`. This config never sees those files.
+      'apps/**',
+      'packages/**',
       // Generated output, packaged apps and nested checkouts. ESLint 8 skipped
       // dot-directories (.vite, .worktrees, .build) by default; ESLint 9 does not.
       '**/.*/',
