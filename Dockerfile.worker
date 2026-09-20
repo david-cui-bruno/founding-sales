@@ -72,6 +72,7 @@ COPY packages/domain/policy packages/domain/policy
 COPY packages/domain/suppression packages/domain/suppression
 COPY packages/domain/mail packages/domain/mail
 COPY packages/domain/dial packages/domain/dial
+COPY packages/domain/outbound packages/domain/outbound
 COPY packages/domain/sequences packages/domain/sequences
 COPY packages/domain/templates packages/domain/templates
 COPY packages/contracts/src packages/contracts/src

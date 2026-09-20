@@ -165,9 +165,14 @@ The reverse direction is `completeEmailStep`, a function G7-2 calls rather than 
 because Appendix B's "marked skipped stops and never resends" is not a rule another
 lane should be able to supply a different version of.
 
-`unavailableSendHandoff` is what is wired today: it refuses with `scoped_pause`, so a
-due email step holds with a reason a salesperson can read rather than throwing in a
-worker log.
+`apps/worker/src/handlers/outboundSendHandoff.ts` is what is wired: G7-2's
+`prepareOutboundMessage`, `dispatchOutboundMessage` and `readOutboundOutcome` behind
+this interface, with their refusal codes mapped through their own
+`holdReasonForRefusal`. `prepare` and the outcome read are real; `dispatch` needs the
+Gmail configuration this release hands to nobody, so it refuses with
+`mailbox_disconnected` — which is the truth in a deployment with no connected mailbox,
+and in practice `prepare` says so first. `unavailableSendHandoff` remains as the
+default for a caller that supplies no hand-off at all.
 
 ### 7. FSS never claims a LinkedIn message was sent
 

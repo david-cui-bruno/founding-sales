@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { RepositoryContext } from '@fss/domain/db';
 import { repositoryContext, workspaceScope } from '@fss/domain/db';
-import type { MailResult } from '@fss/domain/mail';
+
 import { runCommand } from '../auth/index.ts';
 import type { AuthDeps, AuthenticatedPrincipal } from '../auth/index.ts';
 import { REFUSAL_STATUS, contextForPrincipal, crmReply, redactError, requirePrincipal } from './crmSupport.ts';
@@ -75,12 +75,25 @@ export async function mailRouteDeps(
   return { ok: true, deps: { auth, request, principal: authenticated.principal } };
 }
 
+/**
+ * What a command's work may answer: a value, or a reason it refused.
+ *
+ * Deliberately a bare `string` for the reason rather than one lane's refusal union.
+ * The mail lane and the outbound lane have different vocabularies — `MailRefusalCode`
+ * and `SendRefusalCode` — and both go into the same receipt column, so the shared
+ * helper takes the looser type and each caller keeps its own narrow one at its own
+ * boundary.
+ */
+export type CommandResult<T> =
+  | { readonly ok: true; readonly value: T }
+  | { readonly ok: false; readonly reason: string };
+
 /** Parse, run inside a command receipt, and reply. */
 export async function runMailCommand<Schema extends z.ZodType<{ commandId: string; clientVersion: string }>, T>(
   deps: MailRouteDeps,
   schema: Schema,
   kind: string,
-  work: (context: RepositoryContext, body: z.infer<Schema>) => Promise<MailResult<T>>,
+  work: (context: RepositoryContext, body: z.infer<Schema>) => Promise<CommandResult<T>>,
 ): Promise<RouteResult> {
   const parsed = schema.safeParse(deps.request.body);
   if (!parsed.success) return { status: REFUSAL_STATUS.malformed_body, body: redactError('malformed_body') };

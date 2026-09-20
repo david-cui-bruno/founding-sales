@@ -33,13 +33,17 @@ import type { DueWorkSource } from '../scheduler/schedulerPass.ts';
  * stops a second one, and `apps/worker/test/sequenceAction.test.ts` proves it by
  * stealing a lease for real rather than by calling the handler twice.
  *
- * ## The send is not wired in this release
+ * ## The hand-off, and what a deployment without Gmail does
  *
- * `unavailableSendHandoff` refuses with `scoped_pause`, so a due email step *holds*
- * with a reason a salesperson can read rather than throwing in a worker log. That is
- * 4.2's rule — a system that cannot send holds — and it is the same shape the mail
- * lane used for its own unwired adapters: real code, no credentials, honest state.
- * G7-2's adapter replaces the argument and nothing else changes.
+ * The bootstrap passes `outboundSendHandoff()`, which is G7-2's fence behind G8's
+ * interface. `prepare` and the outcome read are real; `dispatch` needs a Gmail
+ * configuration this release gives nobody, so a due email step *holds* with the
+ * reason the fence gave rather than throwing in a worker log. That is 4.2's rule — a
+ * system that cannot send holds — and it is the same shape the mail lane used for its
+ * own unwired adapters: real code, no credentials, honest state.
+ *
+ * `unavailableSendHandoff` is still the default when no hand-off is supplied at all,
+ * which is what a test that wants nothing sent asks for.
  */
 
 /**

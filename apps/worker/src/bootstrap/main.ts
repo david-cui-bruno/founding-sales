@@ -5,6 +5,7 @@ import { defaultTodaySources } from '@fss/domain/today';
 import { dueSequenceWorkSource } from '@fss/domain/sequences';
 import { WORKER_EXIT_CODES } from '../index.ts';
 import { mailHandlers } from '../handlers/mail.ts';
+import { outboundSendHandoff } from '../handlers/outboundSendHandoff.ts';
 import { researchHandlers } from '../handlers/research.ts';
 import { sequenceActionJobHandler, sequenceActionSource } from '../handlers/sequenceAction.ts';
 import { suppressionFinalizeJobHandler } from '../handlers/suppressionFinalize.ts';
@@ -50,9 +51,11 @@ function registerHandlers(registry: HandlerRegistry): HandlerRegistry {
   registry.register(
     todayBuildJobHandler({ sources: [...defaultTodaySources(), dueSequenceWorkSource()] }),
   );
-  // The send is not wired in this release, so a due email step holds with a reason
-  // rather than throwing; see the note in `handlers/sequenceAction.ts`.
-  registry.register(sequenceActionJobHandler());
+  // The hand-off is G7-2's fence, adapted. `prepare` and the outcome read are real;
+  // `dispatch` needs the Gmail configuration this release does not hand out, so a due
+  // email step holds with the reason the fence gave rather than throwing. See
+  // `handlers/outboundSendHandoff.ts`.
+  registry.register(sequenceActionJobHandler({ sendHandoff: outboundSendHandoff() }));
   for (const handler of researchHandlers({ providers: {} })) registry.register(handler);
   for (const handler of mailHandlers(undefined)) registry.register(handler);
   return registry;

@@ -15,6 +15,7 @@
     "./research": "./research/index.ts",
     "./research/testing": "./research/testing/fixtures.ts",
     "./mail": "./mail/index.ts",
+    "./outbound": "./outbound/index.ts",
     "./today": "./today/index.ts",
     "./sequences": "./sequences/index.ts",
     "./templates": "./templates/index.ts"

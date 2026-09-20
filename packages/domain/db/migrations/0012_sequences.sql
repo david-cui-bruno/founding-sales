@@ -799,3 +799,24 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON sequence_event_cursors TO app_runtime, m
 
 GRANT SELECT, INSERT ON step_execution_shifts TO app_runtime, migration;
 REVOKE UPDATE, DELETE, TRUNCATE ON step_execution_shifts FROM app_runtime, migration;
+
+-- ---------------------------------------------------------------------------
+-- The two foreign keys migration 0010 left for this one (specification 11.2, 12.5)
+--
+-- `0010_outbound.sql` says it beside the columns: "Exactly one origin. Neither table
+-- exists yet; G8's 0012 adds the foreign keys." Both columns are nullable there, and
+-- stay nullable here — a draft send has no enrollment and no step execution, and
+-- 0010's own CHECK is what makes exactly one origin true.
+--
+-- They are two separate keys rather than one composite key through
+-- `step_executions_semantic_key (workspace_id, id, enrollment_id)`, which would have
+-- been the stronger statement. A composite key with a NULL component is not checked
+-- at all under MATCH SIMPLE, and 0010 permits a fence with a step execution and no
+-- enrollment; the composite would therefore have silently stopped enforcing the half
+-- that matters most. Two keys are checked independently and both always apply.
+-- ---------------------------------------------------------------------------
+ALTER TABLE outbound_messages
+  ADD CONSTRAINT outbound_messages_enrollment_fkey
+    FOREIGN KEY (workspace_id, enrollment_id) REFERENCES sequence_enrollments (workspace_id, id),
+  ADD CONSTRAINT outbound_messages_step_execution_fkey
+    FOREIGN KEY (workspace_id, step_execution_id) REFERENCES step_executions (workspace_id, id);

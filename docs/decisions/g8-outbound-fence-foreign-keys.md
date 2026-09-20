@@ -1,17 +1,20 @@
-# G8: the two foreign keys on to `outbound_messages` are not in 0012 yet
+# G8: the two foreign keys on to `outbound_messages`
 
 **Date:** 20 September 2026 · **Lane:** G8 sequences · **Spec:** 11.2, 12.5, Appendix B
 
 ## The situation
 
-G7-2's migration 0010 creates `outbound_messages` with, per the coordinator's relay,
-nullable `enrollment_id` and `step_execution_id` columns and a partial unique index on
+G7-2's migration 0010 creates `outbound_messages` with nullable `enrollment_id` and
+`step_execution_id` columns and a partial unique index on
 `(workspace_id, step_execution_id)`. That index is the database half of Appendix B's
-first row — "uniqueness creates or reuses one fence" — and it is what makes the hand-off
-in `packages/domain/sequences/sendHandoff.ts` idempotent by step execution.
+first row — "uniqueness creates or reuses one fence" — and it is what makes the
+hand-off in `packages/domain/sequences/sendHandoff.ts` idempotent by step execution.
+The comment beside those columns says what was left undone: "Neither table exists yet;
+G8's 0012 adds the foreign keys."
 
-0010 was not on `origin/main` when this lane finished (`origin/main` is 67c85622,
-migrations 0001–0009). Migration 0012 therefore does **not** add:
+0010 was not on `origin/main` when this lane first finished, so this document was
+written as an instruction to whoever merged the two branches. G7-2 merged the same day
+(`origin/main` f0bba83e), this branch merged it, and migration 0012 now ends with:
 
 ```sql
 ALTER TABLE outbound_messages
@@ -21,48 +24,57 @@ ALTER TABLE outbound_messages
     FOREIGN KEY (workspace_id, step_execution_id) REFERENCES step_executions (workspace_id, id);
 ```
 
-## Decision
+Appending to 0012 rather than writing an 0013 is correct and not a rewrite of applied
+history: 0012 is the last migration and has been applied nowhere.
 
-Leave them out rather than guess at G7-2's column names, and record the exact statement
-here so that whoever merges the two branches adds four lines rather than re-deriving
-them.
+## Two keys rather than one composite key
 
-The coordinator's instruction was to write the adapter and the two keys at the final
-merge if 0010 had landed, and to leave this document if it had not. It had not.
+`step_executions_semantic_key` is `(workspace_id, id, enrollment_id)`, so a composite
+key through it would have said something stronger — that a fence's enrollment and its
+step execution agree. It was rejected because 0010 permits a fence with a step
+execution and no enrollment (`enrollment_id IS NULL OR step_execution_id IS NOT NULL`),
+and a composite foreign key with a NULL component is not checked at all under the
+default `MATCH SIMPLE`. The stronger statement would therefore have silently stopped
+enforcing the half that matters most. Two keys are checked independently and both
+always apply.
 
-## What is lost until they are added
+## What it cost, which was not nothing
 
-Nothing at runtime. The hand-off is an interface in this lane and an adapter in G7-2's;
-neither reads a foreign key. What the keys buy is the same thing every other composite
-key in this schema buys: a fence naming an enrollment that does not exist, or an
-enrollment in another workspace, becomes unrepresentable rather than merely unlikely.
+Three fixtures were minting step-execution uuids that named no row, which was lawful
+until these keys existed and is not now. `packages/domain/db/testing/stepExecutions.ts`
+is the one place that knows how to make a real one — a contact, an enrollment and one
+execution against a published one-step sequence version that is created once per
+workspace and reused — and `outboundFixtures.ts`, `outboundCases.ts`,
+`outboundWorld.ts` and the worker's reconciliation probe all call it.
 
-## What to do
+It lives in `db/testing` rather than in either lane's support directory because the
+worker's test needs it too and `@fss/domain/db/testing` is the subpath apps already
+import their harness from. That directory is deleted from both images
+(`RUN rm -rf packages/domain/db/testing`), so nothing ships.
 
-When 0010 and 0011 are both on main, merge `origin/main` into `g8/sequences`, confirm
-the column names against G7-2's migration, and add the `ALTER TABLE` above to the end
-of `0012_sequences.sql` — it is the last migration and has not been applied anywhere, so
-appending to it is correct rather than a rewrite of applied history.
+The two new constraints have their failing insert in `outboundCases.ts` beside the
+other `outbound_messages` cases, not in `sequenceCases.ts`: the table they constrain is
+that one, and a reader asking what `outbound_messages` refuses should find all of it in
+one file. `constraints.test.ts`'s coverage tripwire is what makes that a rule rather
+than a preference.
 
-## The adapter, from the names G7-2 settled on
+## The adapter
 
-The coordinator relayed them from `packages/domain/outbound/fence.ts` (branch
-`g7/sending`, HEAD bf355f5e), re-exported by `packages/domain/outbound/index.ts`. The
-adapter is three lines of plumbing and no logic:
+`apps/worker/src/handlers/outboundSendHandoff.ts`, wired into
+`sequenceActionJobHandler` in the worker bootstrap:
 
 | `SendHandoff` | G7-2 |
 | --- | --- |
-| `prepare(context, request)` | `prepareOutboundMessage(context, request)` → `SendResult<{ outboundMessageId, created }>` |
-| `dispatch(context, { outboundMessageId })` | `dispatchOutboundMessage(context, deps, { outboundMessageId })`, with `deps: OutboundSendDeps` closed over at construction |
-| `readOutcome(context, stepExecutionId)` | `readOutboundOutcome(context, stepExecutionId)` → `{ state, outboundMessageId, dispatchedAt, heldReason, adminResolution }` |
+| `prepare(context, request)` | `prepareOutboundMessage(context, request)` |
+| `dispatch(context, { outboundMessageId })` | `dispatchOutboundMessage(context, deps, { outboundMessageId })` |
+| `readOutcome(context, stepExecutionId)` | `readOutboundOutcome(context, stepExecutionId)` |
 
-`OutboundEmailRequest` already matches field for field, including `businessDate`, which
-was added to this lane's request for exactly that reason. G7-2's request types
-`enrollmentId`, `opportunityId`, `contactId`, `emailAddressId` and `ruleVersion` as
-optional and this lane always supplies them, which is the direction that composes.
-`OutboundOutcome.state` is this lane's `OutboundFenceState` including `'absent'`.
+`OutboundEmailRequest` matches field for field, including `businessDate`, which was
+added to this lane's request for exactly that reason. The refusal vocabularies are
+mapped by G7-2's own `holdReasonForRefusal`, so there is one table and not two.
 
-Wire it into `sequenceActionJobHandler` in `apps/worker/src/bootstrap/main.ts`,
-replacing `unavailableSendHandoff`. Nothing else changes: `dispatchPreparedStep` already
-dispatches after the step's transaction commits, and already treats a `held` fence as a
-step to ask about again rather than a step that is over.
+`deps` is optional and absent in this release, because the change that reads a
+deployment's Gmail client secret and KMS key is reviewed on its own — the same
+boundary `mailHandlers(undefined)` respects. An absent `deps` refuses `dispatch` with
+`mailbox_disconnected`, and in practice `prepareOutboundMessage` refuses first, because
+a fence needs a mailbox to name.
