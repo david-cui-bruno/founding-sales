@@ -15,6 +15,13 @@ import {
   type PushTokenVerifier,
 } from '@fss/domain/mail';
 import { journalObjectKey, type SuppressionJournal, type SuppressionJournalRecord } from '@fss/domain/suppression';
+import {
+  createGoogleClient,
+  httpFetch as authHttpFetch,
+  type GoogleClient,
+  type GoogleOidcConfig,
+  type SessionPolicy,
+} from '../auth/index.ts';
 import type { LogFields } from './log.ts';
 import {
   journalBody,
@@ -53,11 +60,15 @@ import type { MailRoutingDeps } from '../routes/types.ts';
  * It is now read, so a release that has passed its gate can turn it on without a code
  * change, and `false` is still what an unset variable means.
  *
- * Google sign-in (`ApiOptions.auth`) is deliberately **not** wired here. It is G2's
- * configuration, this lane's brief does not name it, and an OIDC client half-built by
- * a release lane is worse than one that is honestly absent: the API serves `/healthz`,
- * `/readyz` and the client-version notice and refuses the rest, which is what a
- * deployment without its Google configuration should do.
+ * **Google sign-in.** G12 left `ApiOptions.auth` absent on purpose and said why: an
+ * OIDC client half-built by a release lane is worse than one that is honestly missing.
+ * G12b builds it whole. A live deployment reads the `google-oidc-client` secret, fixes
+ * the redirect URI from `FSS_PUBLIC_ORIGIN`, restricts `hd` to the Workspace domain the
+ * task environment carries, and takes the PKCE/state HMAC key from
+ * `session-signing-key`. Any part missing is a refusal to start, because an API with no
+ * identity answers `/healthz`, `/readyz` and the client-version notice and refuses
+ * every command — a deployment nobody can sign in to, which is not a state to reach by
+ * omission. A rehearsal names its own client, exactly as it names its own push verifier.
  */
 
 export type DeploymentConfigErrorCode =
@@ -97,6 +108,9 @@ export const DEPLOYMENT_ENVIRONMENT_VARIABLES = Object.freeze({
   journalBucket: 'FSS_JOURNAL_BUCKET',
   pushAudience: 'FSS_GMAIL_PUSH_AUDIENCE',
   pushServiceAccount: 'FSS_GMAIL_PUSH_SERVICE_ACCOUNT',
+  /** Public identifiers `infra/modules/stack` puts in both task definitions (G12b). */
+  pushTopic: 'FSS_GMAIL_PUSH_TOPIC',
+  hostedDomain: 'FSS_GOOGLE_HOSTED_DOMAIN',
   sendingEnabled: 'FSS_SENDING_ENABLED',
   researchProviders: 'FSS_RESEARCH_PROVIDERS',
   gmailOAuthClient: 'google-gmail-oauth-client',
@@ -112,6 +126,31 @@ const VARIABLES = DEPLOYMENT_ENVIRONMENT_VARIABLES;
 /** Google's JWKS for service-account OIDC tokens. A public, documented endpoint. */
 export const GOOGLE_OIDC_CERTS_URL = 'https://www.googleapis.com/oauth2/v3/certs';
 
+/**
+ * Google's OpenID Connect issuer and discovery document.
+ *
+ * Constants rather than configuration: `createGoogleClient` refuses a discovery
+ * document whose `issuer` differs and refuses any endpoint it names at another origin,
+ * so making these settable would only widen what a deployment can be pointed at.
+ */
+export const GOOGLE_OIDC_ISSUER = 'https://accounts.google.com';
+export const GOOGLE_OIDC_DISCOVERY_URL = 'https://accounts.google.com/.well-known/openid-configuration';
+
+/** 5.1's "bounded clock skew". */
+export const OIDC_CLOCK_SKEW_SECONDS = 60;
+
+/**
+ * Specification 5.3 as numbers: sessions of about an hour, a device-bound credential
+ * that rotates on every use, full Google sign-in every 30 days, and a sign-in that may
+ * sit in the browser for ten minutes before it is dead.
+ */
+export const DEPLOYED_SESSION_POLICY: SessionPolicy = Object.freeze({
+  accessSessionSeconds: 3600,
+  refreshCredentialSeconds: 30 * 24 * 3600,
+  fullSignInSeconds: 30 * 24 * 3600,
+  authorizationRequestSeconds: 600,
+});
+
 function required(environment: Environment, name: string): string {
   const value = environment[name]?.trim();
   if (value === undefined || value.length === 0) {
@@ -123,9 +162,13 @@ function required(environment: Environment, name: string): string {
 export interface GoogleClientBundle {
   readonly clientId: string;
   readonly clientSecret: string;
-  readonly pushTopic: string;
-  readonly hostedDomain: string;
+  /** Public identifiers, now carried by the environment; the secret is the fallback. */
+  readonly pushTopic: string | null;
+  readonly hostedDomain: string | null;
 }
+
+/** Which of the two places a public identifier was actually read from. */
+export type PublicIdentifierSource = 'environment' | 'secret';
 
 /**
  * The same JSON the worker reads, parsed by the same rules.
@@ -134,6 +177,11 @@ export interface GoogleClientBundle {
  * workspaces with no dependency between them, and a shared home for it would have to
  * be `packages/domain`, which this lane does not own. The release suite asserts the
  * two agree on every field name.
+ *
+ * Both secrets — `google-gmail-oauth-client` and `google-oidc-client` — have this
+ * shape. Only the client id and secret are required: `push_topic` and `hosted_domain`
+ * are public identifiers that the task environment carries since G12b, and they are
+ * read here only as a one-release fallback.
  */
 export function readGoogleClientBundle(raw: string, variableName: string): GoogleClientBundle {
   let parsed: unknown;
@@ -153,12 +201,41 @@ export function readGoogleClientBundle(raw: string, variableName: string): Googl
     }
     return value.trim();
   };
+  const optional = (name: string): string | null => {
+    const value = bundle[name];
+    return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+  };
   return {
     clientId: field('client_id'),
     clientSecret: field('client_secret'),
-    pushTopic: field('push_topic'),
-    hostedDomain: field('hosted_domain'),
+    pushTopic: optional('push_topic'),
+    hostedDomain: optional('hosted_domain'),
   };
+}
+
+/**
+ * A public identifier the task environment carries, with the secret as fallback.
+ *
+ * The environment wins when both are present, so an operator who has re-applied the
+ * infrastructure does not also have to rewrite the secret. When neither has it, the
+ * refusal names *both* places it looked.
+ */
+export function resolvePublicIdentifier(
+  environment: Environment,
+  variableName: string,
+  fallback: string | null,
+  secretName: string,
+  secretField: string,
+): { readonly value: string; readonly source: PublicIdentifierSource } {
+  const fromEnvironment = environment[variableName]?.trim();
+  if (fromEnvironment !== undefined && fromEnvironment.length > 0) {
+    return { value: fromEnvironment, source: 'environment' };
+  }
+  if (fallback !== null) return { value: fallback, source: 'secret' };
+  throw new DeploymentConfigError(
+    'MISSING',
+    `${variableName} is not set and ${secretName} carries no ${secretField}`,
+  );
 }
 
 /**
@@ -264,12 +341,29 @@ export function googleOidcPushTokenVerifier(options: {
   };
 }
 
+/**
+ * Everything G2's `AuthDeps` needs that is not a database session.
+ *
+ * `bootstrap/main.ts` adds the session, the clock, the random source and the
+ * container's client-version range; nothing here touches a row, so it can all be
+ * decided before a socket or a connection is opened.
+ */
+export interface ApiSignIn {
+  readonly oidc: GoogleOidcConfig;
+  readonly sessions: SessionPolicy;
+  /** 32 bytes or more. Also the HMAC the PKCE verifier is derived from (g2-pkce). */
+  readonly stateSigningKey: Buffer;
+  readonly google: GoogleClient;
+}
+
 export interface ApiDeployment {
   readonly environmentName: string;
   readonly dependencies: DependencySelection;
   /** Absent when `dependencies` is `none`; the four mail paths then answer not_found. */
   readonly mail: MailRoutingDeps | undefined;
   readonly mailConfig: MailPublicConfig | undefined;
+  /** Absent only when `dependencies` is `none`, which production refuses. */
+  readonly auth: ApiSignIn | undefined;
   readonly suppressionJournal: SuppressionJournal;
   readonly journalDescription: 's3' | 'local_noop';
   /** 16.2's deployment half. False unless the variable says true. */
@@ -277,6 +371,9 @@ export interface ApiDeployment {
   readonly envelopeSource: 'kms' | 'local' | 'absent';
   readonly gmailSource: 'https' | 'recorded' | 'absent';
   readonly pushVerifierSource: 'google_jwks' | 'fixture' | 'absent';
+  readonly signInSource: 'google' | 'fixture' | 'absent';
+  readonly pushTopicSource: PublicIdentifierSource | 'absent';
+  readonly hostedDomainSource: PublicIdentifierSource | 'absent';
 }
 
 function dependencySelection(environment: Environment): DependencySelection {
@@ -318,6 +415,8 @@ export interface ReadApiDeploymentOptions {
   readonly putObject?: JournalPutObject | undefined;
   /** A rehearsal supplies its own; `live` never does. */
   readonly pushVerifier?: PushTokenVerifier | undefined;
+  /** G2's OpenID Connect client. A rehearsal names its fake; `live` builds the real one. */
+  readonly signInClient?: GoogleClient | undefined;
 }
 
 export async function readApiDeployment(
@@ -343,12 +442,16 @@ export async function readApiDeployment(
       dependencies,
       mail: undefined,
       mailConfig: undefined,
+      auth: undefined,
       suppressionJournal,
       journalDescription: resolved.description,
       sendingEnabled,
       envelopeSource: 'absent',
       gmailSource: 'absent',
       pushVerifierSource: 'absent',
+      signInSource: 'absent',
+      pushTopicSource: 'absent',
+      hostedDomainSource: 'absent',
     };
   }
 
@@ -357,6 +460,20 @@ export async function readApiDeployment(
     VARIABLES.gmailOAuthClient,
   );
   const origin = required(environment, VARIABLES.publicOrigin).replace(/\/+$/u, '');
+  const pushTopic = resolvePublicIdentifier(
+    environment,
+    VARIABLES.pushTopic,
+    bundle.pushTopic,
+    VARIABLES.gmailOAuthClient,
+    'push_topic',
+  );
+  const hostedDomain = resolvePublicIdentifier(
+    environment,
+    VARIABLES.hostedDomain,
+    bundle.hostedDomain,
+    VARIABLES.gmailOAuthClient,
+    'hosted_domain',
+  );
   const config: MailPublicConfig = {
     clientId: bundle.clientId,
     redirectUri: `${origin}/oauth/gmail/callback`,
@@ -364,10 +481,10 @@ export async function readApiDeployment(
     tokenEndpoint: 'https://oauth2.googleapis.com/token',
     revocationEndpoint: 'https://oauth2.googleapis.com/revoke',
     apiBaseUrl: 'https://gmail.googleapis.com',
-    pushTopicName: bundle.pushTopic,
+    pushTopicName: pushTopic.value,
     pushAudience: required(environment, VARIABLES.pushAudience),
     pushServiceAccountEmail: required(environment, VARIABLES.pushServiceAccount),
-    hostedDomain: bundle.hostedDomain,
+    hostedDomain: hostedDomain.value,
     baselineDays: 30,
   };
   const stateSigningKey = readSigningKey(
@@ -376,6 +493,20 @@ export async function readApiDeployment(
   );
   const secrets = staticSecretProvider({ gmail_oauth_client_secret: bundle.clientSecret });
 
+  // 5.1's sign-in client, which is *not* the Gmail one: a separate registration with
+  // `openid email profile` only, and one redirect URI per environment fixed by the
+  // API's own hostname (docs/decisions/g2-redirect-target.md).
+  const signInBundle = readGoogleClientBundle(required(environment, VARIABLES.oidcClient), VARIABLES.oidcClient);
+  const oidc: GoogleOidcConfig = {
+    issuer: GOOGLE_OIDC_ISSUER,
+    discoveryUrl: GOOGLE_OIDC_DISCOVERY_URL,
+    clientId: signInBundle.clientId,
+    clientSecret: signInBundle.clientSecret,
+    redirectUri: `${origin}/auth/google/callback`,
+    hostedDomain: hostedDomain.value,
+    clockSkewSeconds: OIDC_CLOCK_SKEW_SECONDS,
+  };
+
   if (dependencies === 'recorded') {
     const pushVerifier = options.pushVerifier;
     if (pushVerifier === undefined) {
@@ -383,6 +514,13 @@ export async function readApiDeployment(
       // make the rehearsal reach the internet; falling back to "accept everything"
       // would make the webhook scenario meaningless.
       throw new DeploymentConfigError('MISSING', 'a recorded deployment must supply its own push verifier');
+    }
+    const signInClient = options.signInClient;
+    if (signInClient === undefined) {
+      // The same rule for the same reason: a rehearsal that reached
+      // accounts.google.com for a discovery document and a key set would be testing
+      // Google's availability, not the release.
+      throw new DeploymentConfigError('MISSING', 'a recorded deployment must supply its own sign-in client');
     }
     return {
       environmentName,
@@ -396,12 +534,16 @@ export async function readApiDeployment(
         pushVerifier,
       },
       mailConfig: config,
+      auth: { oidc, sessions: DEPLOYED_SESSION_POLICY, stateSigningKey, google: signInClient },
       suppressionJournal,
       journalDescription: resolved.description,
       sendingEnabled,
       envelopeSource: 'local',
       gmailSource: 'recorded',
       pushVerifierSource: 'fixture',
+      signInSource: 'fixture',
+      pushTopicSource: pushTopic.source,
+      hostedDomainSource: hostedDomain.source,
     };
   }
 
@@ -420,16 +562,36 @@ export async function readApiDeployment(
       pushVerifier: googleOidcPushTokenVerifier({ fetch: options.fetch ?? httpFetch }),
     },
     mailConfig: config,
+    auth: {
+      oidc,
+      sessions: DEPLOYED_SESSION_POLICY,
+      stateSigningKey,
+      google: createGoogleClient({
+        fetch: options.fetch ?? authHttpFetch,
+        now: () => new Date(),
+      }),
+    },
     suppressionJournal,
     journalDescription: resolved.description,
     sendingEnabled,
     envelopeSource: 'kms',
     gmailSource: 'https',
     pushVerifierSource: 'google_jwks',
+    signInSource: 'google',
+    pushTopicSource: pushTopic.source,
+    hostedDomainSource: hostedDomain.source,
   };
 }
 
-/** The startup line and `--selftest`: which parts are configured, and no value. */
+/**
+ * The startup line and `--selftest`: which parts are configured, and no value.
+ *
+ * Every field is a boolean or one of a closed set. Not the sign-in client id, not the
+ * redirect URI, not the hosted domain — those are public identifiers, but the rule
+ * that this line carries no operator-supplied string is easier to keep than to
+ * re-examine each time somebody adds a field, and `deployment.test.ts` asserts it by
+ * feeding the reader a generated marker and searching the output for it.
+ */
 export function describeDeployment(deployment: ApiDeployment): LogFields {
   return {
     environment: deployment.environmentName,
@@ -440,9 +602,22 @@ export function describeDeployment(deployment: ApiDeployment): LogFields {
     push_verifier: deployment.pushVerifierSource,
     push_audience_configured: (deployment.mailConfig?.pushAudience ?? '').length > 0,
     push_topic_configured: (deployment.mailConfig?.pushTopicName ?? '').length > 0,
+    push_topic_source: deployment.pushTopicSource,
     hosted_domain_configured: (deployment.mailConfig?.hostedDomain ?? '').length > 0,
+    hosted_domain_source: deployment.hostedDomainSource,
     oauth_secret_configured: deployment.mail !== undefined,
     state_signing_key_configured: deployment.mail !== undefined,
+    // 5.1's four parts, each named separately, so a deployment missing one is
+    // readable in the startup line rather than only in the refusal that preceded it.
+    sign_in: deployment.signInSource,
+    // No `sign_in_secret_configured`: the logger redacts any field whose *name* looks
+    // like a credential, so it would print `[redacted]` and say nothing. It is not
+    // needed either — `readGoogleClientBundle` refuses a bundle with no `client_secret`
+    // by name, so `sign_in` being anything but `absent` already means there was one.
+    sign_in_client_configured: (deployment.auth?.oidc.clientId ?? '').length > 0,
+    sign_in_redirect_configured: (deployment.auth?.oidc.redirectUri ?? '').length > 0,
+    sign_in_hosted_domain_configured: (deployment.auth?.oidc.hostedDomain ?? '').length > 0,
+    session_signing_key_configured: (deployment.auth?.stateSigningKey.length ?? 0) >= 32,
     journal: deployment.journalDescription,
     sending_enabled: deployment.sendingEnabled,
   };

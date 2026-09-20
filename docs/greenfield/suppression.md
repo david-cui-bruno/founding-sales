@@ -43,6 +43,23 @@ happens to *enrollments*, not whether the handle is suppressed.
 See `docs/decisions/g4-journal-port.md` for the two failure modes and why the
 surviving-journal one is the safe direction.
 
+**Both processes write it.** The API writes from its three suppression routes; the
+worker writes when mail sync imports a prospect opt-out, which is the commonest way a
+suppression enters the system at all. Until G12b only the API could: `infra/modules/cluster`
+gave the worker `s3:GetObject` and `kms:Decrypt` — read, for Appendix E step 2's replay —
+and the journal bucket policy named the API task role as its one permitted writer, so
+the first opt-out a credentialed worker imported would have been refused by IAM and the
+command would have failed closed. Both task roles now have `s3:PutObject` on the journal
+object prefix and `kms:Encrypt`/`kms:GenerateDataKey` on the journal key, and both are
+named writers in the bucket policy.
+
+Neither has any `s3:Delete*`, and neither sets a per-object retention: the bucket's
+default retention locks every object as it is put, and `s3:PutObjectRetention`,
+`s3:PutObjectLegalHold` and `s3:BypassGovernanceRetention` are denied to *every*
+principal by the bucket policy, so append-only survives an administrator as well as a
+bug. `infra/modules/cluster/tests/services.tftest.hcl` and
+`infra/modules/journal/tests/object_lock.tftest.hcl` assert both halves offline.
+
 The event id is a sha256 of what the event *is* — workspace, scope, canonical key,
 source, and whichever of the command id or the superseded event id identifies this
 assertion. Database time is deliberately not in the digest, because Appendix E replays

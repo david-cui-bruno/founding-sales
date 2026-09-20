@@ -1,6 +1,7 @@
 import { createSign, generateKeyPairSync, randomBytes, type KeyObject } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_PUSH_TOKEN_POLICY, decidePushToken, type HttpFetch } from '@fss/domain/mail';
+import type { GoogleClient } from '../src/auth/index.ts';
 import {
   DEPLOYMENT_ENVIRONMENT_VARIABLES,
   DeploymentConfigError,
@@ -46,6 +47,29 @@ function liveEnvironment(overrides: Record<string, string | undefined> = {}): Re
     [V.pushServiceAccount]: 'fss-prod-gmail-push@example.iam.gserviceaccount.test',
     [V.sendingEnabled]: 'false',
     [V.sessionSigningKey]: randomBytes(48).toString('base64'),
+    // The shape after G12b: the two public identifiers arrive in the task
+    // environment and each secret carries only its own client id and secret.
+    [V.pushTopic]: 'projects/example/topics/fss-prod-gmail-push',
+    [V.hostedDomain]: 'example.test',
+    [V.gmailOAuthClient]: JSON.stringify({
+      client_id: 'example.apps.googleusercontent.test',
+      client_secret: randomBytes(24).toString('hex'),
+    }),
+    [V.oidcClient]: JSON.stringify({
+      client_id: 'signin.apps.googleusercontent.test',
+      client_secret: randomBytes(24).toString('hex'),
+    }),
+    ...overrides,
+  };
+}
+
+/** The shape G12 shipped: both public identifiers inside the Gmail secret. */
+function secretCarriedEnvironment(
+  overrides: Record<string, string | undefined> = {},
+): Record<string, string | undefined> {
+  return liveEnvironment({
+    [V.pushTopic]: undefined,
+    [V.hostedDomain]: undefined,
     [V.gmailOAuthClient]: JSON.stringify({
       client_id: 'example.apps.googleusercontent.test',
       client_secret: randomBytes(24).toString('hex'),
@@ -53,13 +77,23 @@ function liveEnvironment(overrides: Record<string, string | undefined> = {}): Re
       hosted_domain: 'example.test',
     }),
     ...overrides,
-  };
+  });
 }
 
 const loadKms = async (): Promise<never> =>
   await Promise.resolve({ generateDataKey: async () => ({}), decrypt: async () => ({}) } as never);
 
 const putObject = async (): Promise<'written'> => await Promise.resolve('written');
+
+/** A sign-in client that reaches nothing, which is what a rehearsal must name. */
+function fixtureSignInClient(): GoogleClient {
+  return {
+    discovery: async () => await Promise.resolve(null),
+    signingKey: async () => await Promise.resolve(null),
+    exchangeCode: async () => await Promise.resolve({ ok: false, idToken: null }),
+    verifySignature: () => false,
+  };
+}
 
 describe('the live API deployment', () => {
   it('has a durable journal, an https Gmail client, a KMS envelope and Google key verification', async () => {
@@ -98,6 +132,7 @@ describe('the live API deployment', () => {
     V.pushServiceAccount,
     V.gmailOAuthClient,
     V.sessionSigningKey,
+    V.oidcClient,
   ]) {
     it(`refuses to start when ${missing} is absent`, async () => {
       await expect(
@@ -147,11 +182,151 @@ describe('a production API can never reach the unconfigured branch', () => {
   it('a rehearsal with a named verifier uses the recorded client and a local key', async () => {
     const deployment = await readApiDeployment(
       liveEnvironment({ [V.environmentName]: 'rehearsal', [V.dependencies]: 'recorded' }),
-      { loadKms, putObject, pushVerifier: { verify: async () => await Promise.resolve(null) } },
+      {
+        loadKms,
+        putObject,
+        pushVerifier: { verify: async () => await Promise.resolve(null) },
+        signInClient: fixtureSignInClient(),
+      },
     );
     expect(deployment.gmailSource).toBe('recorded');
     expect(deployment.envelopeSource).toBe('local');
     expect(deployment.pushVerifierSource).toBe('fixture');
+  });
+});
+
+/**
+ * Deliverable 2: the Pub/Sub topic and the Workspace domain are public
+ * identifiers `infra/modules/stack` now puts in both task definitions. The
+ * bootstrap reads the environment first and falls back to the secret JSON for
+ * one release.
+ *
+ * ## The vacuous-pass trap
+ *
+ * A reader that ignored the environment would pass a test whose two sources
+ * agreed, so the preference case gives them different values. The reported
+ * source is asserted in every case, so a field that always said `environment`
+ * fails the fallback one.
+ */
+describe('the two public identifiers the task environment now carries', () => {
+  it('prefers the environment over the secret and says which it used', async () => {
+    const deployment = await readApiDeployment(
+      secretCarriedEnvironment({
+        [V.pushTopic]: 'projects/example/topics/from-the-environment',
+        [V.hostedDomain]: 'environment.test',
+      }),
+      { loadKms, putObject },
+    );
+    expect(deployment.mailConfig?.pushTopicName).toBe('projects/example/topics/from-the-environment');
+    expect(deployment.mailConfig?.hostedDomain).toBe('environment.test');
+    expect(deployment.pushTopicSource).toBe('environment');
+    expect(deployment.hostedDomainSource).toBe('environment');
+    // Sign-in restricts `hd` to the same domain, so the two cannot disagree.
+    expect(deployment.auth?.oidc.hostedDomain).toBe('environment.test');
+  });
+
+  it('falls back to the secret JSON for one release, and says so', async () => {
+    const deployment = await readApiDeployment(secretCarriedEnvironment(), { loadKms, putObject });
+    expect(deployment.mailConfig?.pushTopicName).toBe('projects/example/topics/fss-prod-gmail-push');
+    expect(deployment.mailConfig?.hostedDomain).toBe('example.test');
+    expect(deployment.pushTopicSource).toBe('secret');
+    expect(deployment.hostedDomainSource).toBe('secret');
+  });
+
+  for (const [variable, field] of [
+    [V.pushTopic, 'push_topic'],
+    [V.hostedDomain, 'hosted_domain'],
+  ] as const) {
+    it(`refuses when neither the environment nor the secret carries ${field}`, async () => {
+      await expect(
+        readApiDeployment(liveEnvironment({ [variable]: undefined }), { loadKms, putObject }),
+      ).rejects.toThrow(new RegExp(`${variable}.*${field}`, 'u'));
+    });
+  }
+});
+
+/**
+ * Deliverable 3: Google sign-in, which G12 deliberately left absent.
+ *
+ * `ApiOptions.auth` being optional is right for a route test and wrong for
+ * production: an API with no identity serves `/healthz`, `/readyz` and the
+ * client-version notice and refuses every command, which is a deployment
+ * nobody can sign in to. A live deployment therefore builds it or refuses.
+ *
+ * ## The vacuous-pass trap
+ *
+ * Every refusal below would also be produced by a reader that threw on
+ * everything, so the first case is the positive control: the complete live
+ * environment yields a configured sign-in with the fixed redirect URI, the
+ * hosted-domain restriction and a real Google client. Each later case removes
+ * exactly one thing from that same environment.
+ */
+describe('Google sign-in in a live deployment', () => {
+  it('is configured from the sign-in secret, the hostname and the session signing key', async () => {
+    const deployment = await readApiDeployment(liveEnvironment(), { loadKms, putObject });
+    expect(deployment.signInSource).toBe('google');
+    expect(deployment.auth).toBeDefined();
+    expect(deployment.auth?.oidc.clientId).toBe('signin.apps.googleusercontent.test');
+    // Fixed by hostname, exactly as registered with Google
+    // (.context/FSS-GREENFIELD-ACCOUNT-IDENTIFIERS-20260920.md).
+    expect(deployment.auth?.oidc.redirectUri).toBe('https://api.example.test/auth/google/callback');
+    expect(deployment.auth?.oidc.issuer).toBe('https://accounts.google.com');
+    expect(deployment.auth?.oidc.hostedDomain).toBe('example.test');
+    expect(deployment.auth?.stateSigningKey.length).toBeGreaterThanOrEqual(32);
+    expect(deployment.auth?.sessions.accessSessionSeconds).toBe(3600);
+    expect(deployment.auth?.sessions.fullSignInSeconds).toBe(30 * 24 * 3600);
+  });
+
+  it('uses a different client from the Gmail grant, because 5.1 keeps them separate', async () => {
+    const deployment = await readApiDeployment(liveEnvironment(), { loadKms, putObject });
+    expect(deployment.auth?.oidc.clientId).not.toBe(deployment.mailConfig?.clientId);
+  });
+
+  for (const bad of ['not json at all', '[]', '{}', '{"client_id":"a"}', '{"client_secret":"b"}']) {
+    it(`refuses a sign-in secret that is ${bad}`, async () => {
+      await expect(
+        readApiDeployment(liveEnvironment({ [V.oidcClient]: bad }), { loadKms, putObject }),
+      ).rejects.toBeInstanceOf(DeploymentConfigError);
+    });
+  }
+
+  it('refuses when nothing carries the hosted domain, rather than admitting every Google account', async () => {
+    await expect(
+      readApiDeployment(liveEnvironment({ [V.hostedDomain]: undefined }), { loadKms, putObject }),
+    ).rejects.toMatchObject({ code: 'MISSING' });
+  });
+
+  it('a rehearsal must name its own sign-in client rather than reach Google', async () => {
+    await expect(
+      readApiDeployment(liveEnvironment({ [V.environmentName]: 'rehearsal', [V.dependencies]: 'recorded' }), {
+        loadKms,
+        putObject,
+        pushVerifier: { verify: async () => await Promise.resolve(null) },
+      }),
+    ).rejects.toBeInstanceOf(DeploymentConfigError);
+  });
+
+  it('a rehearsal with a named sign-in client says the client is a fixture', async () => {
+    const deployment = await readApiDeployment(
+      liveEnvironment({ [V.environmentName]: 'rehearsal', [V.dependencies]: 'recorded' }),
+      {
+        loadKms,
+        putObject,
+        pushVerifier: { verify: async () => await Promise.resolve(null) },
+        signInClient: fixtureSignInClient(),
+      },
+    );
+    expect(deployment.signInSource).toBe('fixture');
+    expect(deployment.auth).toBeDefined();
+  });
+
+  it('has no sign-in at all when dependencies are none, which production cannot select', async () => {
+    const deployment = await readApiDeployment(
+      liveEnvironment({ [V.environmentName]: 'laptop', [V.dependencies]: 'none' }),
+      { loadKms },
+    );
+    expect(deployment.auth).toBeUndefined();
+    expect(deployment.signInSource).toBe('absent');
   });
 });
 
@@ -255,19 +430,25 @@ describe('the Google key-set push verifier', () => {
 describe('the startup line', () => {
   it('names the parts and no value', async () => {
     const secret = `zz-${randomBytes(12).toString('hex')}-zz`;
+    const signInSecret = `yy-${randomBytes(12).toString('hex')}-yy`;
     const deployment = await readApiDeployment(
       liveEnvironment({
         [V.gmailOAuthClient]: JSON.stringify({
           client_id: 'example.apps.googleusercontent.test',
           client_secret: secret,
-          push_topic: 'projects/example/topics/fss-prod-gmail-push',
-          hosted_domain: 'example.test',
+        }),
+        [V.oidcClient]: JSON.stringify({
+          client_id: 'signin.apps.googleusercontent.test',
+          client_secret: signInSecret,
         }),
       }),
       { loadKms, putObject },
     );
     const described = JSON.stringify(describeDeployment(deployment));
     expect(described).not.toContain(secret);
+    expect(described).not.toContain(signInSecret);
+    // Not the client id either: the line names parts, not values.
+    expect(described).not.toContain('signin.apps.googleusercontent.test');
     expect(JSON.parse(described)).toMatchObject({
       dependencies: 'live',
       gmail_client: 'https',
@@ -275,6 +456,13 @@ describe('the startup line', () => {
       push_verifier: 'google_jwks',
       journal: 's3',
       sending_enabled: false,
+      sign_in: 'google',
+      sign_in_client_configured: true,
+      sign_in_redirect_configured: true,
+      sign_in_hosted_domain_configured: true,
+      session_signing_key_configured: true,
+      push_topic_source: 'environment',
+      hosted_domain_source: 'environment',
     });
   });
 });

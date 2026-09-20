@@ -198,6 +198,48 @@ run "gmail_push_wires_the_audience_the_webhook_must_require" {
     condition     = module.stack.api_environment["FSS_GMAIL_PUSH_SERVICE_ACCOUNT"] != ""
     error_message = "The container must be told which service-account email to accept."
   }
+
+  # The topic `users.watch` names. It was only a Terraform output, so the
+  # bootstraps had to read it out of the operator-written client secret
+  # (docs/decisions/g12-the-credentialed-bootstrap.md). It travels in the task
+  # environment now, to both services: the worker renews the watch and the API
+  # reports the configured topic.
+  assert {
+    condition     = module.stack.api_environment["FSS_GMAIL_PUSH_TOPIC"] == output.gmail_push_topic_id
+    error_message = "The API must be told the topic the watch registers against."
+  }
+
+  assert {
+    condition     = module.stack.worker_environment["FSS_GMAIL_PUSH_TOPIC"] == output.gmail_push_topic_id
+    error_message = "The worker renews the Gmail watch and must be told the same topic."
+  }
+}
+
+run "both_services_are_told_the_workspace_domain" {
+  command = plan
+
+  # 5.1: an id token whose `hd` differs is refused, and 12.1 lets only a mailbox
+  # in this domain connect. A public identifier, so it is a root variable rather
+  # than a field inside a secret.
+  assert {
+    condition     = module.stack.api_environment["FSS_GOOGLE_HOSTED_DOMAIN"] == "usecallie.com"
+    error_message = "The API restricts sign-in and mailbox connection to the Callie Workspace domain."
+  }
+
+  assert {
+    condition     = module.stack.worker_environment["FSS_GOOGLE_HOSTED_DOMAIN"] == "usecallie.com"
+    error_message = "The worker reads the same domain, so the two processes cannot disagree about it."
+  }
+}
+
+run "an_empty_hosted_domain_is_refused" {
+  command = plan
+
+  variables {
+    google_hosted_domain = ""
+  }
+
+  expect_failures = [var.google_hosted_domain]
 }
 
 run "gmail_push_cannot_be_turned_on_without_a_project" {

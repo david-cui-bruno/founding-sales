@@ -123,6 +123,27 @@ startup line names every decision and no credential.
 | `FSS_WORKER_LIVENESS_FILE`, `FSS_LIVENESS_FAILURES` | worker | the health-check file and how many consecutive failures remove it. |
 | `PORT`, `FSS_HTTP_PORT` | api | the listening port. Default 8080. |
 | `FSS_API_HEARTBEAT_MS`, `FSS_API_SHUTDOWN_TIMEOUT_MS` | api | the heartbeat cadence and the drain budget. |
+| `FSS_ENVIRONMENT`, `FSS_DEPENDENCIES` | ✓ | the deployment switch. `production` refuses anything but `live`, and refuses the switch being unset (`docs/decisions/g12-the-credentialed-bootstrap.md`). |
+| `FSS_PUBLIC_ORIGIN` | ✓ | the API's own origin. Both OAuth redirect URIs are derived from it rather than configured twice. |
+| `FSS_JOURNAL_BUCKET`, `FSS_ENVELOPE_KEY_ID` | ✓ | the suppression journal and the refresh-token envelope key. A live process without the bucket refuses (10.2). |
+| `FSS_GMAIL_PUSH_AUDIENCE`, `FSS_GMAIL_PUSH_SERVICE_ACCOUNT` | ✓ | the two claims the webhook checks exactly (Appendix G 27). |
+| `FSS_GMAIL_PUSH_TOPIC` | ✓ | the Pub/Sub topic `users.watch` registers against. From `module.pubsub`; empty when push is off. |
+| `FSS_GOOGLE_HOSTED_DOMAIN` | ✓ | the Callie Workspace domain. Restricts `hd` at sign-in (5.1) and which mailbox may connect (12.1). |
+| `FSS_SENDING_ENABLED` | ✓ | 16.2's deployment half. False unless the value is exactly `true`; anything else is a refusal, never a send. |
+| `FSS_RESEARCH_PROVIDERS` | worker | `none` or `recorded`. A live worker must say which; there is no live research adapter in this build. |
+
+The last two rows of Google configuration are the ones that moved: `FSS_GMAIL_PUSH_TOPIC`
+and `FSS_GOOGLE_HOSTED_DOMAIN` used to travel inside the operator-written
+`google-gmail-oauth-client` secret because nothing in the task environment carried them.
+Both bootstraps read the environment first and the secret second, for one release, and
+report which source they used. `docs/decisions/g12b-two-public-identifiers-move-out-of-the-secret.md`
+says when the fallback goes.
+
+The secrets arrive under their logical Secrets Manager names — `google-gmail-oauth-client`,
+`google-oidc-client`, `session-signing-key`, `device-credential-pepper`,
+`llm-classifier-api-key`, `research-provider-credentials` — because that is what the ECS
+`secrets` block names them. None is ever logged; the startup line reports whether each
+is configured.
 
 ## Metrics, and what is not published
 
@@ -201,3 +222,35 @@ already answer `not_found` for the unknown paths under their own root and becaus
 `GET /firms/<uuid>` cannot be enumerated. The registry refuses a prefix that overlaps
 another module's claim, so the guarantee is the one an exact path gives; see
 `docs/decisions/g3b-route-registry-prefixes.md`.
+
+## Running the old gate on this Mac
+
+`npm run typecheck` and `npm run lint:tracked` are the **old** trees' gate, not the
+greenfield one (`npm run gate:greenfield`). Both fail on a fresh clone with seven
+errors that look alarming and are not:
+
+```
+cloud/lambdas/delegated-worker/src/handler.ts(11,80): error TS2307:
+  Cannot find module '@aws-sdk/client-ssm' or its corresponding type declarations.
+...
+Unable to resolve path to module '@aws-sdk/client-sqs'  import/no-unresolved
+```
+
+**Nothing is wrong with the lambdas.** `cloud/lambdas/*` are independent npm packages
+with their own pinned lock files — `docs/decisions/g1-provider-lock-files.md` and
+`docs/decisions/g0-old-gate-isolation.md` are why — and the root `npm install` does
+not install them. The root `tsconfig.json` and the old ESLint config still *read* their
+sources, so an uninstalled dependency reads as a missing module. `.github/workflows/ci.yml`
+installs each one before it runs the gate, which is why CI is green and a laptop is not:
+
+```bash
+while IFS= read -r -d '' lock; do
+  npm ci --prefix "${lock%/package-lock.json}"
+done < <(git ls-files -z -- 'cloud/lambdas/*/package-lock.json')
+```
+
+Run that once and both commands pass. A greenfield lane does not need to: the old trees
+are frozen until the deletion PRs, no greenfield lane may edit them, and
+`gate:greenfield` excludes them entirely. The honest statement is the one in this
+section rather than a wrapper script that would have to live in the old tree to say it
+— see `docs/decisions/g12b-the-old-gate-needs-a-per-lambda-install.md`.

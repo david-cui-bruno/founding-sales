@@ -87,6 +87,24 @@ const MUTATIONS = [
       'A rehearsal-only scenario with no script is a scenario the workflow never runs, which would leave Appendix G 11 unproved while the suite stayed green.',
   },
   {
+    name: 'the production API stops requiring a sign-in client',
+    file: 'apps/api/src/bootstrap/deployment.ts',
+    find: '  const signInBundle = readGoogleClientBundle(required(environment, VARIABLES.oidcClient), VARIABLES.oidcClient);',
+    replace: "  const signInBundle = { clientId: 'x', clientSecret: 'y', pushTopic: null, hostedDomain: null };",
+    suite: ['run', 'test:release'],
+    because:
+      'G12 shipped the API with no identity at all, which from outside looks exactly like a working deployment that refuses every command. Appendix G 23\'s four replay refusals are dead code without sign-in, so the release suite must go red when a live deployment can start without it.',
+  },
+  {
+    name: 'the bootstrap stops preferring the task environment over the secret',
+    file: 'apps/worker/src/bootstrap/deployment.ts',
+    find: '  const fromEnvironment = environment[variableName]?.trim();\n  if (fromEnvironment !== undefined && fromEnvironment.length > 0) {',
+    replace: '  const fromEnvironment = environment[variableName]?.trim();\n  if (false) {',
+    suite: ['--workspace', 'apps/worker', '--', 'test/deployment.test.ts'],
+    because:
+      'The Pub/Sub topic and the Workspace domain moved into the task environment with the secret as a one-release fallback. A reader that silently kept preferring the secret would leave the apply doing nothing, and the two sources agree in production, so only a test that sets them to different values can tell.',
+  },
+  {
     name: 'the restore drill stops requiring a baseline to reconstruct',
     file: 'infra/scripts/rehearsal-restore-drill.sh',
     find: '  if [ "$count" -lt 1 ]; then',

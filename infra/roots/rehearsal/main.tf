@@ -53,9 +53,10 @@ module "stack" {
   journal_object_lock_mode           = "GOVERNANCE"
   journal_object_lock_retention_days = var.journal_object_lock_retention_days
 
-  alert_emails       = var.alert_emails
-  log_retention_days = var.log_retention_days
-  business_time_zone = var.business_time_zone
+  alert_emails         = var.alert_emails
+  log_retention_days   = var.log_retention_days
+  business_time_zone   = var.business_time_zone
+  google_hosted_domain = var.google_hosted_domain
 
   updates_price_class = "PriceClass_100"
 

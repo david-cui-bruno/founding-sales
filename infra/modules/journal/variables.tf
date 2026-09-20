@@ -18,13 +18,20 @@ variable "aws_account_id" {
   }
 }
 
-variable "writer_role_name" {
+variable "writer_role_names" {
   description = <<-EOT
-    Name of the API task role, the only principal permitted to put an object.
-    Passed as a name rather than an ARN so this module does not depend on the
-    cluster module, which in turn depends on this bucket's ARN.
+    Names of the task roles permitted to put an object: the API, which records
+    suppressions from its own routes, and the worker, which records prospect
+    opt-outs during mail sync (10.2). Passed as names rather than ARNs so this
+    module does not depend on the cluster module, which in turn depends on this
+    bucket's ARN.
   EOT
-  type        = string
+  type        = list(string)
+
+  validation {
+    condition     = length(var.writer_role_names) > 0
+    error_message = "A journal with no named writer would deny every put; name the roles that append events."
+  }
 }
 
 variable "reader_role_names" {

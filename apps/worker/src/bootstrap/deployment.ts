@@ -56,12 +56,13 @@ import {
  * `infra/modules/secrets` created (`google-gmail-oauth-client`, `llm-classifier-api-key`
  * and so on), so those are the environment variable names this file reads. Two
  * *public* identifiers the Gmail lane needs — the Pub/Sub topic `users.watch` names and
- * the Workspace domain a connectable mailbox must belong to — are not in the task
- * environment at all: `gmail_push_topic_id` is only a Terraform output, and the hosted
- * domain is nowhere. Rather than require an infrastructure change to carry two strings,
- * they travel in the same JSON the operator pastes with the client id and secret. See
- * `docs/decisions/g12-the-google-configuration-is-one-secret.md` and
- * `docs/greenfield/release.md`.
+ * the Workspace domain a connectable mailbox must belong to — used to travel in that
+ * same JSON, because nothing in the task environment carried them. G12b put them in
+ * the environment (`FSS_GMAIL_PUSH_TOPIC`, `FSS_GOOGLE_HOSTED_DOMAIN`) through
+ * `infra/modules/stack`'s environment map, and the JSON stays readable as a fallback
+ * for one release. See
+ * `docs/decisions/g12b-two-public-identifiers-move-out-of-the-secret.md` and
+ * `docs/greenfield/release.md` 1.6.
  *
  * Nothing here logs a value. `describeDeployment` names the parts and their sources.
  */
@@ -103,6 +104,9 @@ export const DEPLOYMENT_ENVIRONMENT_VARIABLES = Object.freeze({
   journalBucket: 'FSS_JOURNAL_BUCKET',
   pushAudience: 'FSS_GMAIL_PUSH_AUDIENCE',
   pushServiceAccount: 'FSS_GMAIL_PUSH_SERVICE_ACCOUNT',
+  /** Public identifiers `infra/modules/stack` puts in both task definitions (G12b). */
+  pushTopic: 'FSS_GMAIL_PUSH_TOPIC',
+  hostedDomain: 'FSS_GOOGLE_HOSTED_DOMAIN',
   sendingEnabled: 'FSS_SENDING_ENABLED',
   researchProviders: 'FSS_RESEARCH_PROVIDERS',
   /** The ECS `secrets` block names each entry by its logical Secrets Manager name. */
@@ -126,17 +130,25 @@ function required(environment: Environment, name: string): string {
 /**
  * The Google client bundle an operator pasted, as JSON.
  *
- * Refused rather than defaulted, field by field, because every one of them is a thing
- * a deployment either knows or must not pretend to know. `push_topic` absent means the
- * watch renewal would register against nothing; `hosted_domain` absent means any
- * Google account could connect a mailbox.
+ * The client id and secret are refused rather than defaulted: each is a thing a
+ * deployment either knows or must not pretend to know.
+ *
+ * `push_topic` and `hosted_domain` are **public identifiers** and are now carried by
+ * the task environment (`FSS_GMAIL_PUSH_TOPIC`, `FSS_GOOGLE_HOSTED_DOMAIN`). They
+ * remain readable here for one release so a deployment written against G12's shape
+ * still starts; `resolvePublicIdentifier` prefers the environment and refuses when
+ * neither source has one. See
+ * `docs/decisions/g12b-two-public-identifiers-move-out-of-the-secret.md`.
  */
 export interface GoogleClientBundle {
   readonly clientId: string;
   readonly clientSecret: string;
-  readonly pushTopic: string;
-  readonly hostedDomain: string;
+  readonly pushTopic: string | null;
+  readonly hostedDomain: string | null;
 }
+
+/** Which of the two places a public identifier was actually read from. */
+export type PublicIdentifierSource = 'environment' | 'secret';
 
 export function readGoogleClientBundle(raw: string, variableName: string): GoogleClientBundle {
   let parsed: unknown;
@@ -156,12 +168,42 @@ export function readGoogleClientBundle(raw: string, variableName: string): Googl
     }
     return value.trim();
   };
+  const optional = (name: string): string | null => {
+    const value = bundle[name];
+    return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+  };
   return {
     clientId: field('client_id'),
     clientSecret: field('client_secret'),
-    pushTopic: field('push_topic'),
-    hostedDomain: field('hosted_domain'),
+    pushTopic: optional('push_topic'),
+    hostedDomain: optional('hosted_domain'),
   };
+}
+
+/**
+ * A public identifier the task environment carries, with the secret as fallback.
+ *
+ * The environment wins when both are present, so an operator who has re-applied the
+ * infrastructure does not also have to rewrite the secret. When neither has it the
+ * refusal names *both* places it looked, because "hosted_domain is missing" sends an
+ * operator to the wrong console.
+ */
+export function resolvePublicIdentifier(
+  environment: Environment,
+  variableName: string,
+  fallback: string | null,
+  secretName: string,
+  secretField: string,
+): { readonly value: string; readonly source: PublicIdentifierSource } {
+  const fromEnvironment = environment[variableName]?.trim();
+  if (fromEnvironment !== undefined && fromEnvironment.length > 0) {
+    return { value: fromEnvironment, source: 'environment' };
+  }
+  if (fallback !== null) return { value: fallback, source: 'secret' };
+  throw new DeploymentConfigError(
+    'MISSING',
+    `${variableName} is not set and ${secretName} carries no ${secretField}`,
+  );
 }
 
 /** 12.3's "configured recent-history interval", in days. */
@@ -184,6 +226,9 @@ export interface GmailDeployment {
   /** `kms` in production, `local` in rehearsal. Never a key and never a ciphertext. */
   readonly envelopeSource: 'kms' | 'local';
   readonly gmailSource: 'https' | 'recorded';
+  /** `environment` once the stack module carries it; `secret` is the old shape. */
+  readonly pushTopicSource: PublicIdentifierSource;
+  readonly hostedDomainSource: PublicIdentifierSource;
 }
 
 export interface WorkerDeployment {
@@ -262,9 +307,29 @@ function researchSelection(environment: Environment, dependencies: DependencySel
   return raw;
 }
 
-function mailConfigOf(bundle: GoogleClientBundle, environment: Environment): MailPublicConfig {
+interface ResolvedMailConfig {
+  readonly config: MailPublicConfig;
+  readonly pushTopicSource: PublicIdentifierSource;
+  readonly hostedDomainSource: PublicIdentifierSource;
+}
+
+function mailConfigOf(bundle: GoogleClientBundle, environment: Environment): ResolvedMailConfig {
   const origin = required(environment, VARIABLES.publicOrigin).replace(/\/+$/u, '');
-  return {
+  const pushTopic = resolvePublicIdentifier(
+    environment,
+    VARIABLES.pushTopic,
+    bundle.pushTopic,
+    VARIABLES.gmailOAuthClient,
+    'push_topic',
+  );
+  const hostedDomain = resolvePublicIdentifier(
+    environment,
+    VARIABLES.hostedDomain,
+    bundle.hostedDomain,
+    VARIABLES.gmailOAuthClient,
+    'hosted_domain',
+  );
+  const config: MailPublicConfig = {
     clientId: bundle.clientId,
     // Exactly what is registered with Google. The registration in
     // `.context/FSS-GREENFIELD-ACCOUNT-IDENTIFIERS-20260920.md` is this path on the
@@ -274,12 +339,13 @@ function mailConfigOf(bundle: GoogleClientBundle, environment: Environment): Mai
     tokenEndpoint: 'https://oauth2.googleapis.com/token',
     revocationEndpoint: 'https://oauth2.googleapis.com/revoke',
     apiBaseUrl: 'https://gmail.googleapis.com',
-    pushTopicName: bundle.pushTopic,
+    pushTopicName: pushTopic.value,
     pushAudience: required(environment, VARIABLES.pushAudience),
     pushServiceAccountEmail: required(environment, VARIABLES.pushServiceAccount),
-    hostedDomain: bundle.hostedDomain,
+    hostedDomain: hostedDomain.value,
     baselineDays: DEFAULT_BASELINE_DAYS,
   };
+  return { config, pushTopicSource: pushTopic.source, hostedDomainSource: hostedDomain.source };
 }
 
 /**
@@ -298,7 +364,7 @@ export async function readGmailDeployment(
     required(environment, VARIABLES.gmailOAuthClient),
     VARIABLES.gmailOAuthClient,
   );
-  const config = mailConfigOf(bundle, environment);
+  const { config, pushTopicSource, hostedDomainSource } = mailConfigOf(bundle, environment);
   const secrets = staticSecretProvider({ gmail_oauth_client_secret: bundle.clientSecret });
   const oauth: GmailOAuthConfig = {
     clientId: config.clientId,
@@ -321,6 +387,8 @@ export async function readGmailDeployment(
       secrets,
       envelopeSource: 'local',
       gmailSource: 'recorded',
+      pushTopicSource,
+      hostedDomainSource,
     };
   }
 
@@ -335,6 +403,8 @@ export async function readGmailDeployment(
     secrets,
     envelopeSource: 'kms',
     gmailSource: 'https',
+    pushTopicSource,
+    hostedDomainSource,
   };
 }
 
@@ -395,7 +465,9 @@ export function describeDeployment(deployment: WorkerDeployment): LogFields {
     envelope_key: deployment.gmail?.envelopeSource ?? 'absent',
     push_audience_configured: (deployment.gmail?.config.pushAudience ?? '').length > 0,
     push_topic_configured: (deployment.gmail?.config.pushTopicName ?? '').length > 0,
+    push_topic_source: deployment.gmail?.pushTopicSource ?? 'absent',
     hosted_domain_configured: (deployment.gmail?.config.hostedDomain ?? '').length > 0,
+    hosted_domain_source: deployment.gmail?.hostedDomainSource ?? 'absent',
     oauth_secret_configured: deployment.gmail?.secrets.names().length === 1,
     journal: deployment.journalBucket === null ? 'absent' : 'configured',
     research_providers: deployment.researchProviders,

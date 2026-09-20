@@ -136,6 +136,11 @@ output "api_environment" {
   value       = module.cluster.api_environment
 }
 
+output "worker_environment" {
+  description = "Non-secret worker container environment, for offline assertions."
+  value       = module.cluster.worker_environment
+}
+
 output "resource_names" {
   description = <<-EOT
     Every name this stack claims in the shared account, so a root test can

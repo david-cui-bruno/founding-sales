@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import type { Server } from 'node:http';
 import pg from 'pg';
 import type { QueryResultRowLike, SessionQueryable } from '@fss/domain/db';
@@ -10,6 +11,7 @@ import {
   readApiDeployment,
   type ApiDeployment,
 } from './deployment.ts';
+import type { AuthDeps } from '../auth/index.ts';
 import { JournalConfigurationError } from '../journal/index.ts';
 import { startApiHeartbeat } from './heartbeat.ts';
 import { createLogger, errorFields } from './log.ts';
@@ -33,9 +35,9 @@ import { createApiServer } from '../server.ts';
 /**
  * The client-version range this container publishes (5.3).
  *
- * No Electron build has been released, and the container has no Google configuration,
- * so it mounts no mutating route at all: the range is what `/auth/client-version`
- * would say and nothing depends on it yet. The release lane replaces this constant
+ * The range is what `/auth/client-version` says, and since G12b wired sign-in it is
+ * also what every command is checked against: a client outside it may read the
+ * upgrade instruction and mutate nothing. The release lane replaces this constant
  * with the range of the signed builds it has actually shipped.
  */
 export const CONTAINER_CLIENT_VERSIONS: ClientVersionRange = clientVersionRangeSchema.parse({
@@ -124,10 +126,31 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
   await requestClient.connect();
   await heartbeatClient.connect();
 
+  // 5.1: identity, assembled from what the deployment decided and the connection that
+  // was just opened. `deployment.auth` is absent only when `FSS_DEPENDENCIES=none`,
+  // which a production environment refuses, so a production API always mounts sign-in
+  // or never started.
+  const auth: AuthDeps | undefined =
+    deployment.auth === undefined
+      ? undefined
+      : {
+          db: asSession(requestClient),
+          config: {
+            oidc: deployment.auth.oidc,
+            sessions: deployment.auth.sessions,
+            supportedClientVersions: CONTAINER_CLIENT_VERSIONS,
+            stateSigningKey: deployment.auth.stateSigningKey,
+          },
+          google: deployment.auth.google,
+          now: () => new Date(),
+          randomSecret: () => randomBytes(32).toString('base64url'),
+        };
+
   const server = createApiServer({
     session: asSession(requestClient),
     expectedSystemGeneration: config.expectedSystemGeneration,
     supportedClientVersions: CONTAINER_CLIENT_VERSIONS,
+    ...(auth === undefined ? {} : { auth }),
     // Specification 16.2's deployment half: the release process's statement that the
     // rehearsal gate passed on these digests. It is ANDed with the admin's stored
     // attestation by `effectiveSendingEnabled`, and it is false unless the variable
