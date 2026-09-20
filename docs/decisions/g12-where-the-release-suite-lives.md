@@ -1,6 +1,6 @@
 # The release suite is `test/release/**/*.check.ts`, and the old gates do not see it
 
-**Lane:** G12 · **Files:** `vitest.release.config.ts`, `test/release/tsconfig.json`, `tsconfig.json`, `eslint.config.mjs`, `scripts/lintTracked.mjs`, `package.json`
+**Lane:** G12 · **Files:** `test/release/vitest.config.ts` (moved from the repository root after CI's old source gate linted it there), `test/release/tsconfig.json`, `tsconfig.json`, `eslint.config.mjs`, `scripts/lintTracked.mjs`, `package.json`
 
 ## The problem
 
