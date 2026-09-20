@@ -1,5 +1,6 @@
 import type { ClientVersionRange } from '@fss/contracts';
 import type { SessionQueryable } from '@fss/domain/db';
+import type { SuppressionJournal } from '@fss/domain/suppression';
 import type { AuthDeps } from '../auth/index.ts';
 
 /**
@@ -36,6 +37,12 @@ export interface RoutingOptions {
   readonly auth?: AuthDeps;
   /** Where a person is told to get the current build. A public URL. */
   readonly upgradeUrl: string;
+  /**
+   * The object-locked journal every suppression is written to before its row
+   * (10.2). Always present: `routingOptions` supplies the local no-op when the
+   * deployment has no bucket, so a route never has to decide what to do without one.
+   */
+  readonly suppressionJournal: SuppressionJournal;
 }
 
 export const DEFAULT_UPGRADE_URL = 'https://callie.example/downloads/mac';

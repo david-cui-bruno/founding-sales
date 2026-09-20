@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { SessionQueryable } from '@fss/domain/db';
 import type { ClientVersionRange } from '@fss/contracts';
+import type { SuppressionJournal } from '@fss/domain/suppression';
 import { buildHealthReport } from './health.ts';
 import { MAX_REQUEST_BYTES, REFUSAL_STATUS, checkEnvelope, redactError } from './limits.ts';
 import { authenticate, type AuthDeps } from './auth/index.ts';
@@ -13,6 +14,14 @@ import { routeFirms } from './routes/firms.ts';
 import { routeMerges } from './routes/merges.ts';
 import { routeOpportunities } from './routes/opportunities.ts';
 import { routePipeline } from './routes/pipeline.ts';
+// Lane G4's policy, suppression and dialing surface.
+import { routeCallbacks } from './routes/callbacks.ts';
+import { routeCalls } from './routes/calls.ts';
+import { routeDial } from './routes/dial.ts';
+import { routePauses } from './routes/pauses.ts';
+import { routePostures } from './routes/postures.ts';
+import { routeSuppressions } from './routes/suppressions.ts';
+import { localNoopSuppressionJournal } from './journal/index.ts';
 import { DEFAULT_UPGRADE_URL, type ApiRequest, type RouteResult, type RoutingOptions } from './routes/types.ts';
 
 /**
@@ -37,6 +46,14 @@ export interface ApiOptions {
   readonly auth?: AuthDeps;
   /** Where a person is told to get the current build. Defaults to the public page. */
   readonly upgradeUrl?: string;
+  /**
+   * The object-locked suppression journal (10.2). A deployment without one falls
+   * back to the local no-op, which is right for a laptop and wrong for production;
+   * `requireDurableJournal` in `journal/index.ts` is what a production bootstrap
+   * calls so that a missing bucket is a refusal to start rather than a silently
+   * discarded audit trail.
+   */
+  readonly suppressionJournal?: SuppressionJournal;
 }
 
 export type { ApiRequest, RouteResult } from './routes/types.ts';
@@ -48,6 +65,7 @@ function routingOptions(options: ApiOptions): RoutingOptions {
     sendingEnabled: options.sendingEnabled,
     ...(options.auth === undefined ? {} : { auth: options.auth }),
     upgradeUrl: options.upgradeUrl ?? DEFAULT_UPGRADE_URL,
+    suppressionJournal: options.suppressionJournal ?? localNoopSuppressionJournal(),
   };
 }
 
@@ -96,6 +114,14 @@ export async function dispatch(request: ApiRequest, options: ApiOptions): Promis
     routeOpportunities,
     routePipeline,
     routeMerges,
+    // Lane G4's. Same shape: each answers null for a path that is not its own and
+    // authenticates for itself.
+    routePostures,
+    routeSuppressions,
+    routeDial,
+    routeCalls,
+    routeCallbacks,
+    routePauses,
   ]) {
     const result = await module(request, routing);
     if (result !== null) return result;
