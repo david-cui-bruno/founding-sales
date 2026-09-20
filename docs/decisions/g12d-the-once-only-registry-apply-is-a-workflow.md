@@ -121,5 +121,12 @@ Nothing here has been run. In particular:
   check.
 * whether `fss-rh-deploy` may `ecr:CreateRepository` on `fss-rh-api` (G12c's open
   question, unchanged).
+* whether the provider's `assume_role` block works from a session that is already
+  that role. All three roots carry one, so Terraform assumes `fss-rh-deploy` a second
+  time from the workflow's `fss-rh-deploy` session, and chaining onto the same role
+  needs the role to trust itself. This is not new — the release rehearsal has the same
+  shape — and it is not fixable from this lane, which may not edit `infra/roots`. The
+  runbook says what the failure looks like and that the answer is a trust-policy
+  statement rather than a workflow change.
 * whether the `rehearsal` environment has a required reviewer. If it does, both runs
   wait for an approval, which is a feature here rather than a problem.
