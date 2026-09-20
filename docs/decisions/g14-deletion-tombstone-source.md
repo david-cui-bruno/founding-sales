@@ -1,6 +1,7 @@
 # G14: the deletion tombstone is a prospect opt-out
 
 **Date:** 20 September 2026 · **Lane:** G14 retention · **Spec:** 10.3, 10.2
+**Status:** the decision below was *overruled*. Read the last section first.
 
 ## The requirement
 
@@ -56,9 +57,33 @@ for a distinction nothing currently reads. If a later release wants the finer
 provenance, the migration is a widened CHECK and a backfill of the events this
 command wrote, which `deletion_requests.tombstone_event_ids` makes findable.
 
-## Reported deviation
+## Overruled, 20 September 2026
 
-This is the one place where an honest reading of the spec would have preferred a new
-vocabulary entry and the lane chose an existing one for coordination reasons. The
-coordinator should know, because the audit trail says `prospect_opt_out` for events
-no prospect sent.
+The deviation was reported and the coordinator rejected it, in the right terms: **the
+audit trail must not say `prospect_opt_out` for an admin deletion.** The reasoning
+this lane used — that the vocabulary is closed, cross-lane and mid-flight — is a
+statement about *when* the change can be made, not about whether it should be. It
+should be, and it is the coordinator's to schedule rather than this lane's to decide.
+
+So `prospect_opt_out` is an interim and is marked as one. The replacement is
+`deletion_tombstone`, a source with the same three properties — effective, terminal,
+never salesperson-reversible — and its own name in the audit trail. It lands in this
+lane's migration 0014 at the final merge, once 0011, 0012 and 0013 are on main and
+every lane touching the vocabulary has therefore landed. Five places change together:
+
+1. the `suppression_events_source_known` CHECK, by `ALTER` inside 0014;
+2. `SUPPRESSION_SOURCES` and `suppressionEventSchema` in `@fss/contracts`;
+3. G4's `SuppressionSource` type and its canonicaliser handling;
+4. `TERMINAL_SOURCES` and the effective-suppression read, so the new source is
+   terminal on commit and the salesperson correction path refuses it exactly as
+   Appendix G 30 requires of `prospect_opt_out`;
+5. `commitDeletion`, to record it, and `scenario41.test.ts`, to assert the source
+   rather than only the effect.
+
+The trigger is mechanical rather than remembered. `PENDING_RETENTION_TABLES` carries
+G9's `workspace_settings` with this change named in what it owes, so the moment 0013
+is on main the guard test fails and prints the list above.
+
+Until then, `deletion_requests.tombstone_event_ids` is what makes the interim events
+findable, which is also what makes the backfill a one-statement `UPDATE` rather than
+an archaeology exercise.

@@ -88,11 +88,17 @@ indistinguishable from a kind whose job has been failing quietly for a month.
 
 Two guards keep the registry honest, and both are tests rather than notes.
 
-`PENDING_RETENTION_TABLES` names the tables in-flight lanes will bring — G8's
-`enrollments` and `step_executions`, G7b's classifier output — and what each will
-owe. The test asks the live catalog for each one and fails the build the moment it
-exists. The follow-up cannot be forgotten because the build stops when it becomes
+`PENDING_RETENTION_TABLES` names the tables in-flight lanes will bring — G7b's two
+classifier tables, G8's ten sequence tables, G9's workspace settings — and what each
+will owe. The test asks the live catalog for each one and fails the build the moment
+it exists. The follow-up cannot be forgotten because the build stops when it becomes
 possible.
+
+One entry owes something that is not about its own rows. G9's `workspace_settings`
+arriving means 0013 is on main, which means every lane touching the closed
+suppression vocabulary has landed — and that is the moment the deletion tombstone's
+borrowed `prospect_opt_out` source is replaced by its own `deletion_tombstone`. The
+guard is what remembers it; see `docs/decisions/g14-deletion-tombstone-source.md`.
 
 It has already been paid once. `canceled_drafts` shipped as `declared_pending`
 against G7-2's `outbound_messages`; when that lane merged, the guard failed, and the
@@ -125,7 +131,8 @@ What a commit does:
 * **retains** `opportunities`, `opportunity_stage_events`, `record_merge_events`,
   `crm_domain_events`, `audit_events` and `suppression_events`;
 * **inserts** one handle-scoped suppression tombstone per removed handle, and a
-  firm-scoped one for a firm deletion, each journalled before its row;
+  firm-scoped one for a firm deletion, each journalled before its row — carrying
+  `prospect_opt_out` as an interim source until 0014 adds `deletion_tombstone`;
 * **audits** itself as `deletion.committed`.
 
 Redaction rather than deletion for the two tables is not a compromise; it is what

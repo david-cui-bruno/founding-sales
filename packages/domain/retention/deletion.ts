@@ -37,10 +37,15 @@ import { accept, refuse, type RetentionResult } from './result.ts';
  * A tombstone has to be effective against renewed contact, terminal, and never
  * reversible by a salesperson. `effective_suppressions` is the one authoritative
  * view (10.2), so the tombstone has to be a row in `suppression_events`, and the
- * source vocabulary there is a closed list this lane does not own. Of the four
- * sources a new event may carry, `prospect_opt_out` is the one with exactly those
- * three properties — it is terminal on commit, and Appendix G 30 already proves a
- * salesperson cannot correct one. See docs/decisions/g14-deletion-tombstone-source.md.
+ * source vocabulary there is a closed list this lane does not own.
+ *
+ * `prospect_opt_out` is an **interim**. It has exactly those three properties — it is
+ * terminal on commit, and Appendix G 30 already proves a salesperson cannot correct
+ * one — but the audit trail must not say a prospect opted out when an admin ran a
+ * deletion. The coordinator overruled the borrowing on 20 September; this lane's
+ * migration 0014 adds a `deletion_tombstone` source at the final merge, once every
+ * lane touching the vocabulary has landed, and `PENDING_RETENTION_TABLES` is what
+ * makes the build ask for it. See docs/decisions/g14-deletion-tombstone-source.md.
  *
  * ## Why a preview, and why a hash
  *
@@ -397,6 +402,8 @@ export async function commitDeletion(
   // The tombstones first, while the handles still exist to be read. Every one is
   // journalled before its row by `recordSuppression` (10.2), so a lost journal write
   // fails the command before anything has been deleted.
+  // `tombstone_event_ids` on the request row is what makes these findable later,
+  // which is what turns the `deletion_tombstone` backfill into one UPDATE.
   const tombstoneEventIds: string[] = [];
   for (const handle of measured.handles) {
     const recorded = await recordSuppression(context, {
