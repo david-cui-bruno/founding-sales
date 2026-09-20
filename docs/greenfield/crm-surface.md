@@ -96,10 +96,12 @@ Filters are shared by search and export: `owner` (a member, or unassigned),
 `activeUntil`. An unknown stage key is `stage_unknown` rather than an empty answer —
 "no firms are at that stage" and "there is no such stage" are different facts.
 
-`sequenceStatus` is answered from the fact that lane G8 does not exist yet: no firm is
-enrolled, so `none` restricts nothing and `active`/`stopped` match nothing. A test
-fails the moment `sequence_enrollments` appears, so the branch cannot go on being
-wrong once it becomes wrong.
+`sequenceStatus` reads `sequence_enrollments`, which lane G8's migration 0012 created.
+`active` is a live enrollment for the firm, `none` is the absence of one, and `stopped`
+is the absence of a live one together with the presence of a stopped one — a firm whose
+sequence finished last month is one nobody is contacting today. Until 0012 it was a
+stub, and the test that said so failed the moment the table appeared, which is how it
+stopped being a stub.
 
 `activeSince`/`activeUntil` compare against the latest of the firm's own `updated_at`,
 its last stage event and its last evidence item. Message and call activity join that

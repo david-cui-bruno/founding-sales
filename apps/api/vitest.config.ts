@@ -24,6 +24,12 @@ export default defineConfig({
       '@fss/domain/outbound': fileURLToPath(new URL('../../packages/domain/outbound/index.ts', import.meta.url)),
       '@fss/domain/db': fileURLToPath(new URL('../../packages/domain/db/index.ts', import.meta.url)),
       '@fss/domain/today': fileURLToPath(new URL('../../packages/domain/today/index.ts', import.meta.url)),
+      '@fss/domain/sequences': fileURLToPath(
+        new URL('../../packages/domain/sequences/index.ts', import.meta.url),
+      ),
+      '@fss/domain/templates': fileURLToPath(
+        new URL('../../packages/domain/templates/index.ts', import.meta.url),
+      ),
       '@fss/domain/settings': fileURLToPath(new URL('../../packages/domain/settings/index.ts', import.meta.url)),
       '@fss/domain/dashboard': fileURLToPath(new URL('../../packages/domain/dashboard/index.ts', import.meta.url)),
       '@fss/domain': fileURLToPath(new URL('../../packages/domain/src/index.ts', import.meta.url)),

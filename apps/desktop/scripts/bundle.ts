@@ -1,6 +1,7 @@
 import { copyFile, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { build } from 'esbuild';
+import { BUNDLE_SHARED_FILES, BUNDLE_WINDOWS } from '../src/main/bundleScheme.ts';
 import { RELEASE_STAMP_FILE, type ReleaseStamp } from './releaseStamp.ts';
 
 /**
@@ -77,22 +78,21 @@ export async function bundleApp(input: BundleInput): Promise<void> {
     logLevel: 'silent',
   });
 
-  // One renderer entry point per window: G2's sign-in page, G3b's CRM windows, G6's
-  // Today page, G7b's reply cards and G9's administration window. Each is bundled
-  // separately rather than code split, because a window loads one script and nothing
-  // else — and because the CSP on every page is `script-src 'self'` with no inline
-  // script, so a shared chunk would only be a second file to get wrong.
+  // One renderer entry point per window, and one page per window, both read from
+  // `BUNDLE_WINDOWS`. Each entry is bundled separately rather than code split,
+  // because a window loads one script and nothing else — and because the CSP on
+  // every page is `script-src 'self'` with no inline script, so a shared chunk would
+  // only be a second file to get wrong.
   //
-  // This list and the page list below are two arrays that have to agree: a page
-  // whose entry is missing here is copied into the bundle and then loads nothing.
-  // `settingsPage` was exactly that until this was fixed. The windows-list
-  // refactor (docs/decisions/g9-bundle-scheme-map.md, at G9's final merge) collapses
-  // the two into one declaration that `BUNDLE_FILES` also reads, so the three cannot
-  // disagree again.
-  for (const entry of ['renderer', 'firmWorkspace', 'todayPage', 'replyPage', 'settingsPage'] as const) {
+  // These used to be two hand-written arrays, and the scheme map in
+  // `src/main/bundleScheme.ts` was a third. They disagreed: `settingsPage` was
+  // missing from the entry list, and the scheme map named three paths out of
+  // thirteen, so every window but the first was a 404 in a packaged build. One
+  // declaration now, three readers. See `docs/decisions/g9-bundle-scheme-map.md`.
+  for (const window of BUNDLE_WINDOWS) {
     await build({
-      entryPoints: [source('renderer', `${entry}.ts`)],
-      outfile: target('renderer', `${entry}.js`),
+      entryPoints: [source('renderer', `${window.entry}.ts`)],
+      outfile: target('renderer', `${window.entry}.js`),
       bundle: true,
       platform: 'browser',
       target: 'es2023',
@@ -102,15 +102,8 @@ export async function bundleApp(input: BundleInput): Promise<void> {
     });
   }
 
-  for (const page of [
-    'index.html',
-    'firmWorkspace.html',
-    'today.html',
-    'replyCard.html',
-    'settings.html',
-    'styles.css',
-  ] as const) {
-    await copyFile(source('renderer', page), target('renderer', page));
+  for (const file of [...BUNDLE_WINDOWS.map(window => window.page), ...BUNDLE_SHARED_FILES]) {
+    await copyFile(source('renderer', file), target('renderer', file));
   }
 
   await writeFile(

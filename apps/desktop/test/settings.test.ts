@@ -564,23 +564,31 @@ describe('the window menu', () => {
       today: noop,
       replies: noop,
       firms: noop,
+      sequences: noop,
       administration: noop,
     });
     expect(withAdmin[0]?.submenu.map(item => item.label)).toEqual([
       'Today',
       'Replies',
       'Firms',
+      'Sequences',
       'Administration',
     ]);
-    // G7b's ⌘2 and ⌘3 are the selling windows and keep them; this one takes the
-    // next free key rather than pushing a window somebody uses all day along.
+    // ⌘1 to ⌘4 are the windows somebody sells from and they keep them; this one
+    // takes the next free key rather than pushing a window used all day along.
     expect(withAdmin[0]?.submenu.map(item => item.accelerator)).toEqual([
       'CmdOrCtrl+1',
       'CmdOrCtrl+2',
       'CmdOrCtrl+3',
       'CmdOrCtrl+4',
+      'CmdOrCtrl+5',
     ]);
-    const without = windowMenuTemplate({ today: noop, replies: noop, firms: noop });
-    expect(without[0]?.submenu.map(item => item.label)).toEqual(['Today', 'Replies', 'Firms']);
+    const without = windowMenuTemplate({ today: noop, replies: noop, firms: noop, sequences: noop });
+    expect(without[0]?.submenu.map(item => item.label)).toEqual([
+      'Today',
+      'Replies',
+      'Firms',
+      'Sequences',
+    ]);
   });
 });

@@ -23,7 +23,10 @@
 !packages/domain/dial
 !packages/domain/classification
 !packages/domain/mail
+!packages/domain/dial
 !packages/domain/outbound
+!packages/domain/sequences
+!packages/domain/templates
 !packages/contracts/package.json
 !packages/contracts/src
 

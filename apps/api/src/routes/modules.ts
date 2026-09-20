@@ -28,6 +28,10 @@ import { DIAL_PATHS, routeDial } from './dial.ts';
 import { PAUSE_PATHS, routePauses } from './pauses.ts';
 import { POSTURE_PATHS, routePostures } from './postures.ts';
 import { SUPPRESSION_PATHS, routeSuppressions } from './suppressions.ts';
+// Lane G8's sequences, templates and enrollments.
+import { ENROLLMENT_PATHS, routeEnrollments } from './enrollments.ts';
+import { SEQUENCE_PATHS, routeSequences } from './sequences.ts';
+import { TEMPLATE_PATHS, routeTemplates } from './templates.ts';
 // Lane G9's administration, dashboard and Diagnostics surface.
 import { DASHBOARD_PATHS, routeDashboard } from './dashboard.ts';
 import { DIAGNOSTICS_PATHS, routeDiagnostics } from './diagnostics.ts';
@@ -178,6 +182,15 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     // `/today` and `/today/snooze` separately is what keeps them separable at all.
     moduleOf('today', { paths: TODAY_PATHS }, routeToday, routing),
     moduleOf('snooze', { paths: SNOOZE_PATHS }, routeSnooze, routing),
+    // Lane G8's sequences, templates and enrollments. Exact paths again, and three
+    // modules rather than one: `/sequences` publishes the plan, `/templates`
+    // approves the bytes that may be sent, and `/enrollments` is the only family a
+    // salesperson rather than an admin calls. A single `/sequences` prefix would
+    // have let the plan editor answer for the LinkedIn task card, and the registry
+    // is the only thing that can promise it does not.
+    moduleOf('sequences', { paths: SEQUENCE_PATHS }, routeSequences, routing),
+    moduleOf('templates', { paths: TEMPLATE_PATHS }, routeTemplates, routing),
+    moduleOf('enrollments', { paths: ENROLLMENT_PATHS }, routeEnrollments, routing),
     // Lane G9's administration surface. Exact paths, and three modules rather than
     // one: settings is a read and a command family, the dashboard is one aggregate
     // read and Diagnostics is an operational read with its own visibility rule. A

@@ -2,6 +2,7 @@ import type { SessionQueryable } from '../../../db/queryable.ts';
 import type { SeededWorkspace, TwoWorkspaces } from './fixtures.ts';
 import type { SeededCrm } from './crmFixtures.ts';
 import type { SeededMail } from './mailFixtures.ts';
+import { makeStepExecution } from '../../../db/testing/stepExecutions.ts';
 
 /**
  * Outbound rows for the two-workspace fixture (specification 12.5 to 12.7,
@@ -121,6 +122,20 @@ async function seedWorkspaceOutbound(
   const routeId = route.rows[0]?.id ?? '';
   const routeVersion = route.rows[0]?.version ?? 1;
 
+  // Migration 0012's foreign key means a fence names a step execution that exists.
+  // Appendix G 8 wants the *same* uuid in both workspaces, and the composite primary
+  // key `(workspace_id, id)` is what lets both rows have it.
+  const templateVersionId = template.rows[0]?.id ?? '';
+  const stepExecution = {
+    workspaceId: workspace.workspaceId,
+    firmId: crm.firmId,
+    opportunityId: crm.opportunityId,
+    userId: workspace.salesperson.userId,
+    templateVersionId,
+  };
+  await makeStepExecution(session, { ...stepExecution, id: COLLIDING_STEP_EXECUTION_ID });
+  const preparedStepExecutionId = await makeStepExecution(session, stepExecution);
+
   const commonColumns = `workspace_id, mailbox_id, origin_kind, step_execution_id, firm_id, contact_id,
       opportunity_id, recipient_address, recipient_route_id, recipient_route_version, subject, body,
       template_version_id, rendered_hash, provider_message_id_header, send_at, source_zone,
@@ -171,7 +186,7 @@ async function seedWorkspaceOutbound(
   // A fence that has not moved, for the cases that need one that still can.
   const prepared = await session.query<{ id: string }>(
     `INSERT INTO outbound_messages (${commonColumns})
-     VALUES ($1, $2, 'step_execution', gen_random_uuid(), $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+     VALUES ($1, $2, 'step_execution', $14, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
              $13, TIMESTAMPTZ '${FIXTURE_SEND_AT}', '${FIXTURE_ZONE}', '${FIXTURE_PLACEMENT_RULE}',
              DATE '${FIXTURE_BUSINESS_DATE}')
      RETURNING id`,
@@ -189,6 +204,7 @@ async function seedWorkspaceOutbound(
       template.rows[0]?.id ?? '',
       FIXTURE_HASH,
       `<fss.prepared-${workspace.slug}@sending.example.test>`,
+      preparedStepExecutionId,
     ],
   );
 

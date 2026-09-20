@@ -133,6 +133,11 @@ export {
   todayBuildSource,
   type TodayBuildHandlerOptions,
 } from './handlers/todayBuild.ts';
+export {
+  sequenceActionJobHandler,
+  sequenceActionSource,
+  type SequenceActionHandlerOptions,
+} from './handlers/sequenceAction.ts';
 export { createLogger, errorFields, recordingLogger, type LogFields, type LogLevel, type Logger } from './bootstrap/log.ts';
 export { drain, startLoop, type Loop, type PassOutcome } from './bootstrap/loop.ts';
 export {

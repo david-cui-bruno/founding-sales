@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { app, BrowserWindow, ipcMain, Menu, shell } from 'electron';
+import { app, BrowserWindow, clipboard, ipcMain, Menu, shell } from 'electron';
 import { z } from 'zod';
 import { uuid } from '@fss/contracts';
 import { createApiClient, fetchSend } from './apiClient.ts';
@@ -10,6 +10,7 @@ import {
   openSecondaryWindow,
   registerCrmBridge,
   registerReplyBridge,
+  registerSequenceBridge,
   registerTodayBridge,
   windowMenuTemplate,
 } from './todayWindow.ts';
@@ -153,6 +154,18 @@ export function registerWindows(configuration: DesktopConfiguration, manager: Se
   // token, the online flag and the version gate.
   registerReplyBridge({ api, session });
   registerCrmBridge({ api, session });
+  // G8's editor. The clipboard and the browser open are ports so the bridge itself
+  // imports nothing from Electron and is testable without a window (11.3).
+  registerSequenceBridge({
+    api,
+    session,
+    copyToClipboard: text => {
+      clipboard.writeText(text);
+    },
+    openExternally: async url => {
+      await shell.openExternal(url);
+    },
+  });
   // Lane G9: Settings, the dashboard and Diagnostics, in one window of three screens.
   registerAdminBridge({ api, session });
 
@@ -167,6 +180,7 @@ export function registerWindows(configuration: DesktopConfiguration, manager: Se
   let todayWindow: BrowserWindow | null = null;
   let replyWindow: BrowserWindow | null = null;
   let crmWindow: BrowserWindow | null = null;
+  let sequenceWindow: BrowserWindow | null = null;
   let adminWindow: BrowserWindow | null = null;
   Menu.setApplicationMenu(
     Menu.buildFromTemplate([
@@ -187,8 +201,21 @@ export function registerWindows(configuration: DesktopConfiguration, manager: Se
             crmWindow = window;
           });
         },
+        sequences: () => {
+          void openSecondaryWindow(
+            'Callie — Sequences',
+            renderer('sequenceEditor.html'),
+            sequenceWindow,
+          ).then(window => {
+            sequenceWindow = window;
+          });
+        },
         administration: () => {
-          void openSecondaryWindow('Callie — Administration', renderer('settings.html'), adminWindow).then(window => {
+          void openSecondaryWindow(
+            'Callie — Administration',
+            renderer('settings.html'),
+            adminWindow,
+          ).then(window => {
             adminWindow = window;
           });
         },

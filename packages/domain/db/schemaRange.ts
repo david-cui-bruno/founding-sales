@@ -26,11 +26,12 @@ export const CURRENT_SCHEMA_VERSION = 13;
  *
  * Lanes G5 and G2 shipped migrations 0002 and 0003 from the same main and each widened
  * this constant for its own; lane G3a widened it again for migration 0004, G3b for
- * 0005, G4 for 0006, G10 for 0007, G6 for 0008, G7 for 0009, G7-2 for 0010 and G7b
- * for 0011. A merge that finds two different maxima takes the larger. That is honest
- * only because nothing has been deployed — G0's {1, 1} was never a promise made to a
- * running production binary. From the first real deployment onwards the widening must
- * precede the migration by a release, and the compatibility test will keep saying so.
+ * 0005, G4 for 0006, G10 for 0007, G6 for 0008, G7 for 0009, G7-2 for 0010, G7b for
+ * 0011 and G8 for 0012. A merge that finds two different maxima takes the larger.
+ * That is honest only because nothing has been deployed — G0's {1, 1} was never a
+ * promise made to a running production binary. From the first real deployment onwards
+ * the widening must precede the migration by a release, and the compatibility test
+ * will keep saying so.
  */
 export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 13 };
 
@@ -141,6 +142,27 @@ export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum:
  *
  * The deploy order stays migrate, then worker, then API. Both maxima move to 11.
  *
+ * Migration 0012 (G8) moves both a seventh time, and this lane's reasons are the
+ * same two every widening before it gave.
+ *
+ * The API needs it: `/sequences`, `/sequences/steps`, `/sequences/publish`,
+ * `/templates`, `/enrollments` and `/linkedin/*` read and write `sequences`,
+ * `sequence_versions`, `sequence_steps`, `sequence_enrollments` and
+ * `step_executions`, and the template routes read the five columns 0012 adds to
+ * `template_versions`. An API on a version-11 database could accept an enrollment and
+ * have nowhere to put it.
+ *
+ * The worker needs it: `sequence.action` claims a `step_executions` row, and
+ * `UNIQUE (workspace_id, enrollment_id, step_id)` together with the outbound fence
+ * *is* Appendix C's protection for `step-execution:{id}`. A worker on a version-11
+ * database would be running an at-least-once handler with nothing behind it — the
+ * case G10, G6, G7 and G7b each refused for their own tables, and the one invariant 1
+ * ("no duplicate automated email for the same sequence step") rests on. 0012 also
+ * adds the two foreign keys 0010 left for it, so on a version-11 database a fence
+ * could name an enrollment that does not exist.
+ *
+ * The deploy order stays migrate, then worker, then API. Both maxima move to 12.
+ *
  * Migration 0013 (G9) is the first one that moves the two sides differently, and the
  * difference is the rule working rather than an oversight.
  *
@@ -152,11 +174,11 @@ export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum:
  * answer "sending is off" forever, which is safe and useless; refusing to start says
  * so out loud.
  *
- * The worker's minimum does **not** move past G7b's 11. Nothing in `apps/worker/src`
- * reads `workspace_settings` today: the settings a worker will want — the holiday
- * calendar for business-day delays, which G8 owns in its own table, and the
- * workspace sending attestation, whose send-path read is G12's — are read by code
- * that does not exist yet. The rule from
+ * The worker's minimum does **not** move past G8's 12. Nothing in `apps/worker/src`
+ * reads `workspace_settings` today. The two a worker would plausibly want are read
+ * elsewhere: the holiday calendar is G8's `workspace_holiday_calendars`, which its
+ * own migration raised the worker's minimum for, and the workspace sending
+ * attestation's send-path read is G12's and does not exist yet. The rule from
  * `docs/decisions/g10-worker-schema-minimum.md` is that a binary declares the lowest
  * version on which its *first statement* can succeed, not the lowest it would like,
  * and raising the worker's minimum for a table it never queries would refuse a
@@ -166,7 +188,7 @@ export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum:
  * deployed against would be a self-inflicted outage.
  */
 export const API_SCHEMA_RANGE: SchemaRange = { minimum: 13, maximum: 13 };
-export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 11, maximum: 13 };
+export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 12, maximum: 13 };
 
 export function acceptsSchemaVersion(range: SchemaRange, version: number): boolean {
   return Number.isInteger(version) && version >= range.minimum && version <= range.maximum;
