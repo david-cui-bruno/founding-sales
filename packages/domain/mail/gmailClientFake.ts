@@ -100,7 +100,10 @@ export function recordedGmailClient(fixture: GmailFixture): RecordedGmailClient 
   const vanished = new Set(fixture.vanishedMessageIds ?? []);
   const historyPageSize = fixture.historyPageSize ?? 100;
   const listPageSize = fixture.listPageSize ?? 500;
-  const messages = [...fixture.messages].sort(byHistoryId);
+  // Read the fixture's list on every call rather than once. A test that adds a
+  // message after the client exists is the ordinary case — Gmail receives mail while
+  // FSS is running — and a snapshot taken at construction would make that invisible.
+  const currentMessages = (): readonly GmailFixtureMessage[] => [...fixture.messages].sort(byHistoryId);
 
   const record = (method: string, detail: Readonly<Record<string, unknown>>): void => {
     calls.push({ method, detail });
@@ -114,7 +117,7 @@ export function recordedGmailClient(fixture: GmailFixture): RecordedGmailClient 
   };
 
   const find = (id: string): GmailFixtureMessage | undefined =>
-    vanished.has(id) ? undefined : messages.find(message => message.id === id);
+    vanished.has(id) ? undefined : currentMessages().find(message => message.id === id);
 
   return {
     calls,
@@ -208,7 +211,7 @@ export function recordedGmailClient(fixture: GmailFixture): RecordedGmailClient 
       if (planned !== null) return { ok: false, reason: planned };
       if (expired.has(request.startHistoryId)) return { ok: false, reason: 'history_expired' };
 
-      const after = messages.filter(message => Number(message.historyId) > Number(request.startHistoryId));
+      const after = currentMessages().filter(message => Number(message.historyId) > Number(request.startHistoryId));
       const offset = request.pageToken === undefined ? 0 : Number(request.pageToken);
       if (!Number.isInteger(offset) || offset < 0) {
         throw new GmailClientError('malformed_response', 'the fixture was given a page token it never issued');
@@ -241,7 +244,7 @@ export function recordedGmailClient(fixture: GmailFixture): RecordedGmailClient 
       const planned = refusal();
       if (planned !== null) return { ok: false, reason: planned };
 
-      const inRange = messages.filter(message => {
+      const inRange = currentMessages().filter(message => {
         const seconds = Math.floor(message.internalDateEpochMilliseconds / 1000);
         return seconds >= request.afterEpochSeconds && seconds < request.beforeEpochSeconds;
       });
