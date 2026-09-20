@@ -1,0 +1,153 @@
+import type { PageBlock } from './pageText.ts';
+
+/**
+ * The bounded fact set an extraction provider may return, and the provenance rule
+ * that makes a returned fact admissible.
+ *
+ * Ported from `src/main/research/companyFactExtraction.ts`. The old module was mostly
+ * an HTTP client for one model; what matters here is the part that decided whether to
+ * believe the answer, and that part is pure:
+ *
+ *   * the key must be one of `COMPANY_FACT_KEYS` — a closed set, so a provider cannot
+ *     invent a field that then lands on a firm;
+ *   * the quote must be **byte-identical** to the whole text of the block it names.
+ *     Not a substring, not a normalisation of one: the same string. A provider that
+ *     paraphrases, trims a qualifier, or drops a negation is refused, and that is the
+ *     single rule that keeps a "fact" attributable to something the firm published.
+ *
+ * The old module went further and never sent the quote to the provider at all — it
+ * sent an integer reference per block and reconstructed the quote locally, so the
+ * provider *could not* return text of its own. `ExtractionProvider` keeps that shape:
+ * it returns `{ key, blockId }` and the quote is looked up here.
+ *
+ * Nothing in this file grants any permission. A validated fact is evidence and, at
+ * most, a suggestion.
+ */
+
+/**
+ * The facts a provider may select. `target_fit` names a block showing the firm manages
+ * property for others; `not_target` names one showing it does not (brokerage only,
+ * association only, commercial only, a vendor). Neither selected leaves the verdict
+ * unknown, which is the honest third state.
+ */
+export const COMPANY_FACT_KEYS = [
+  'ownership',
+  'portfolio_description',
+  'residential_scope',
+  'operating_footprint',
+  'maintenance_workflow',
+  'role',
+  'target_fit',
+  'not_target',
+] as const;
+export type CompanyFactKey = (typeof COMPANY_FACT_KEYS)[number];
+
+const FACT_KEYS = new Set<string>(COMPANY_FACT_KEYS);
+
+export function isCompanyFactKey(value: string): value is CompanyFactKey {
+  return FACT_KEYS.has(value);
+}
+
+/** One source of blocks: a fetched page, named by the evidence reference it produced. */
+export interface FactSource {
+  readonly sourceReference: string;
+  readonly blocks: readonly PageBlock[];
+}
+
+/** What an extraction provider returns. Deliberately no text field. */
+export interface FactSelection {
+  readonly key: string;
+  readonly sourceReference: string;
+  readonly blockId: string;
+}
+
+/** A selection that passed the provenance rule, with the quote looked up locally. */
+export interface CompanyFact {
+  readonly key: CompanyFactKey;
+  readonly sourceReference: string;
+  readonly blockId: string;
+  readonly quote: string;
+}
+
+export type FactRefusal = 'unknown_key' | 'unknown_source' | 'unknown_block' | 'duplicate_selection';
+
+export interface FactValidation {
+  readonly facts: readonly CompanyFact[];
+  /** Every selection that was not admitted, and why. Counted for the run record. */
+  readonly refused: readonly { readonly selection: FactSelection; readonly refusal: FactRefusal }[];
+}
+
+/**
+ * Admit the selections a provider returned.
+ *
+ * Total: an unrecognised key, an unknown source, an unknown block or a repeat is
+ * refused and counted rather than throwing, because one bad selection in a page must
+ * not discard the page's other evidence. The caller records the counts; nothing here
+ * decides what the admitted facts are worth.
+ */
+export function validateFactSelections(
+  selections: readonly FactSelection[],
+  sources: readonly FactSource[],
+): FactValidation {
+  const index = new Map<string, Map<string, string>>();
+  for (const source of sources) {
+    const blocks = new Map<string, string>();
+    for (const block of source.blocks) blocks.set(block.id, block.text);
+    index.set(source.sourceReference, blocks);
+  }
+
+  const facts: CompanyFact[] = [];
+  const refused: { selection: FactSelection; refusal: FactRefusal }[] = [];
+  const seen = new Set<string>();
+
+  for (const selection of selections) {
+    if (!isCompanyFactKey(selection.key)) {
+      refused.push({ selection, refusal: 'unknown_key' });
+      continue;
+    }
+    const blocks = index.get(selection.sourceReference);
+    if (blocks === undefined) {
+      refused.push({ selection, refusal: 'unknown_source' });
+      continue;
+    }
+    const quote = blocks.get(selection.blockId);
+    if (quote === undefined || quote.trim() === '') {
+      refused.push({ selection, refusal: 'unknown_block' });
+      continue;
+    }
+    const fingerprint = `${selection.key}\u0000${selection.sourceReference}\u0000${selection.blockId}`;
+    if (seen.has(fingerprint)) {
+      refused.push({ selection, refusal: 'duplicate_selection' });
+      continue;
+    }
+    seen.add(fingerprint);
+    // The quote is the block's *whole* text, looked up here. A provider never supplies
+    // it, so it cannot drop a qualifier or a negation.
+    facts.push({ key: selection.key, sourceReference: selection.sourceReference, blockId: selection.blockId, quote });
+  }
+
+  return { facts, refused };
+}
+
+/**
+ * The firm's target-fit verdict from a validated fact set, or null when the pages did
+ * not say. A `not_target` block wins over a `target_fit` one: the conservative
+ * direction is not to call a firm a prospect when its own site says otherwise.
+ */
+export function targetFitVerdict(facts: readonly CompanyFact[]): 'yes' | 'no' | null {
+  if (facts.some(fact => fact.key === 'not_target')) return 'no';
+  if (facts.some(fact => fact.key === 'target_fit')) return 'yes';
+  return null;
+}
+
+/**
+ * Whether a fact key describes the firm rather than a way to reach a person.
+ *
+ * Section 7.4 permits a "high-confidence non-contact fact" to fill an empty canonical
+ * field. Every key above is non-contact by construction — the extraction set contains
+ * no address, number or name — and this function is the place that says so, so that a
+ * later widening of `COMPANY_FACT_KEYS` has to come past it.
+ */
+export function isNonContactFact(key: CompanyFactKey): boolean {
+  return COMPANY_FACT_KEYS.includes(key);
+}

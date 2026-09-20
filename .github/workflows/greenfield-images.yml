@@ -206,10 +206,18 @@ jobs:
       - name: The images carry no test harness and no development dependency
         run: |
           set -euo pipefail
+          # Named directories do not scale: the PostgreSQL harness lives in
+          # packages/domain/db/testing, the recorded research provider fixtures in
+          # packages/domain/research/testing, and the next lane's will be somewhere
+          # else again. The dockerignore files exclude `**/test/**`, which does not
+          # match a directory called `testing`, so this asks the built image the
+          # general question instead: is there any test directory in it at all?
           for service in api worker; do
-            if docker run --rm --platform linux/arm64 --entrypoint sh "fss-$service:ci" \
-                 -c 'ls packages/domain/db/testing 2>/dev/null'; then
-              echo "::error::fss-$service ships the PostgreSQL test harness"
+            found="$(docker run --rm --platform linux/arm64 --entrypoint sh "fss-$service:ci" \
+              -c 'find packages apps -type d \( -name test -o -name tests -o -name testing \) 2>/dev/null')"
+            if [ -n "$found" ]; then
+              echo "$found"
+              echo "::error::fss-$service ships a test directory; add it to Dockerfile.$service.dockerignore and remove it in Dockerfile.$service"
               exit 1
             fi
             docker run --rm --platform linux/arm64 --entrypoint sh "fss-$service:ci" \
