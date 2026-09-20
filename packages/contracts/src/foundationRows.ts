@@ -1,0 +1,275 @@
+import { z } from 'zod';
+import {
+  blockedActionKindSchema,
+  holdRecoveryActionSchema,
+  holdReasonCodeSchema,
+  holdScopeKindSchema,
+} from './reasonCodes.ts';
+
+/**
+ * Zod schemas for the foundation rows created by migration 0001.
+ *
+ * These describe the rows as the API hands them out and as the worker reads them
+ * back: UTC instants as ISO strings, never a naked local time, and a named zone
+ * wherever a calendar concept appears (specification 14.1).
+ *
+ * The database is still the enforcer. These schemas exist so a row that crossed a
+ * process boundary is checked before it is trusted, not so a check can be skipped
+ * in SQL.
+ */
+
+export const uuid = z.uuid();
+export const instant = z.iso.datetime({ offset: true });
+export const businessDate = z.iso.date();
+/** A sha256 digest as the database stores it: 64 lowercase hex characters. */
+export const sha256Hex = z.string().regex(/^[0-9a-f]{64}$/, 'a sha256 digest in lowercase hex');
+/** E.164, the only spelling a calling identity or phone route is stored in. */
+export const e164 = z.string().regex(/^\+[1-9][0-9]{7,14}$/, 'an E.164 number');
+
+/**
+ * An IANA zone name. Shape only here; `@fss/domain`'s `isKnownTimeZone` asks Intl
+ * whether the runtime actually knows it, because a regex cannot.
+ */
+export const ianaTimeZone = z
+  .string()
+  .regex(/^[A-Za-z][A-Za-z0-9_+-]*(\/[A-Za-z0-9_+-]+){1,2}$/, 'an IANA time-zone name');
+
+export const workspaceSchema = z.strictObject({
+  id: uuid,
+  slug: z.string().regex(/^[a-z0-9][a-z0-9-]{1,62}$/),
+  displayName: z.string().trim().min(1).max(200),
+  businessTimeZone: ianaTimeZone,
+  createdAt: instant,
+  updatedAt: instant,
+});
+export type Workspace = z.infer<typeof workspaceSchema>;
+
+export const userSchema = z.strictObject({
+  id: uuid,
+  /** The durable identifier. Email is display data and is deliberately not unique. */
+  googleSub: z.string().min(1).max(255),
+  email: z.string().max(320),
+  displayName: z.string().trim().min(1).max(200),
+  createdAt: instant,
+  updatedAt: instant,
+});
+export type User = z.infer<typeof userSchema>;
+
+export const membershipRoleSchema = z.enum(['admin', 'salesperson']);
+export type MembershipRole = z.infer<typeof membershipRoleSchema>;
+
+export const workspaceMembershipSchema = z.strictObject({
+  id: uuid,
+  workspaceId: uuid,
+  userId: uuid,
+  role: membershipRoleSchema,
+  status: z.enum(['active', 'inactive']),
+  createdAt: instant,
+  updatedAt: instant,
+  deactivatedAt: instant.nullable(),
+});
+export type WorkspaceMembership = z.infer<typeof workspaceMembershipSchema>;
+
+export const deviceSchema = z.strictObject({
+  id: uuid,
+  workspaceId: uuid,
+  userId: uuid,
+  deviceLabel: z.string().trim().min(1).max(120),
+  /** The server hash only. The plaintext lives in the macOS Keychain and nowhere else. */
+  secretHash: sha256Hex,
+  credentialGeneration: z.number().int().min(1),
+  clientVersion: z.string().regex(/^\d+\.\d+\.\d+$/).nullable(),
+  status: z.enum(['active', 'revoked']),
+  registeredAt: instant,
+  lastSeenAt: instant.nullable(),
+  revokedAt: instant.nullable(),
+});
+export type Device = z.infer<typeof deviceSchema>;
+
+export const callingIdentitySchema = z
+  .strictObject({
+    id: uuid,
+    workspaceId: uuid,
+    /** Null is the reserved future shared line, and it can never be enabled. */
+    ownerUserId: uuid.nullable(),
+    e164,
+    verificationStatus: z.enum(['unverified', 'verified']),
+    enabled: z.boolean(),
+    createdAt: instant,
+    updatedAt: instant,
+  })
+  .refine(row => row.ownerUserId !== null || !row.enabled, 'a shared calling identity stays disabled')
+  .refine(row => !row.enabled || row.verificationStatus === 'verified', 'an enabled identity is verified');
+export type CallingIdentity = z.infer<typeof callingIdentitySchema>;
+
+export const commandReceiptSchema = z.strictObject({
+  workspaceId: uuid,
+  deviceId: uuid,
+  commandId: z.string().regex(/^[0-9a-zA-Z_:-]{1,128}$/),
+  commandKind: z.string().trim().min(1).max(80),
+  payloadHash: sha256Hex,
+  resultStatus: z.enum(['accepted', 'refused']),
+  result: z.unknown().nullable(),
+  createdAt: instant,
+});
+export type CommandReceipt = z.infer<typeof commandReceiptSchema>;
+
+export const auditEventSchema = z.strictObject({
+  id: uuid,
+  workspaceId: uuid,
+  occurredAt: instant,
+  actorKind: z.enum(['user', 'admin', 'system', 'worker']),
+  actorUserId: uuid.nullable(),
+  action: z.string().trim().min(1).max(120),
+  subjectKind: z.string().trim().min(1).max(80),
+  subjectId: z.string().max(200).nullable(),
+  detail: z.record(z.string(), z.unknown()),
+});
+export type AuditEvent = z.infer<typeof auditEventSchema>;
+
+export const suppressionEventSchema = z.strictObject({
+  workspaceId: uuid,
+  eventId: z.string().min(1).max(200),
+  scope: z.enum(['firm', 'handle']),
+  /** Lowercase by construction: the canonicalizer is the only thing that makes one. */
+  canonicalKey: z.string().min(1).max(320),
+  canonicalizerVersion: z.string().regex(/^[a-z0-9._-]{1,40}$/),
+  source: z.enum([
+    'prospect_opt_out',
+    'prospect_do_not_call',
+    'salesperson_manual',
+    'import',
+    'mistaken_entry_correction',
+    'admin_supersession',
+  ]),
+  actorUserId: uuid.nullable(),
+  commandId: z.string().max(128).nullable(),
+  recordedAt: instant,
+  supersedesEventId: z.string().max(200).nullable(),
+  supersessionReason: z.enum(['mistaken_entry', 'correction', 'documented_reconsent']).nullable(),
+});
+export type SuppressionEvent = z.infer<typeof suppressionEventSchema>;
+
+export const activeHoldSchema = z
+  .strictObject({
+    id: uuid,
+    workspaceId: uuid,
+    scopeKind: holdScopeKindSchema,
+    scopeKey: z.string().max(200).nullable(),
+    reasonCode: holdReasonCodeSchema,
+    blockedActionKinds: z.array(blockedActionKindSchema).min(1),
+    sourceEventKind: z.string().trim().min(1).max(80),
+    sourceEventId: z.string().max(200).nullable(),
+    ownerUserId: uuid.nullable(),
+    startedAt: instant,
+    releasedAt: instant.nullable(),
+    recoveryAction: holdRecoveryActionSchema.nullable(),
+  })
+  .refine(row => (row.scopeKind === 'workspace') === (row.scopeKey === null), 'a workspace hold names no scope key');
+export type ActiveHold = z.infer<typeof activeHoldSchema>;
+
+export const administrativePauseSchema = z.strictObject({
+  id: uuid,
+  workspaceId: uuid,
+  scopeKind: z.enum(['workspace', 'owner', 'mailbox', 'opportunity', 'channel', 'all_automation']),
+  scopeKey: z.string().max(200).nullable(),
+  channel: z.enum(['email', 'call', 'linkedin', 'research']).nullable(),
+  reasonCode: holdReasonCodeSchema,
+  reasonNote: z.string().trim().min(1).max(500).nullable(),
+  holdId: uuid,
+  createdByUserId: uuid,
+  createdAt: instant,
+  releasedByUserId: uuid.nullable(),
+  releasedAt: instant.nullable(),
+});
+export type AdministrativePause = z.infer<typeof administrativePauseSchema>;
+
+export const systemGenerationSchema = z.strictObject({
+  generation: z.number().int().min(1),
+  reason: z.enum(['initial', 'restore_completed', 'operator_advance']),
+  establishedAt: instant,
+  establishedByUserId: uuid.nullable(),
+  notes: z.string().trim().min(1).max(1000).nullable(),
+});
+export type SystemGeneration = z.infer<typeof systemGenerationSchema>;
+
+export const RETENTION_DATA_KINDS = [
+  'business_records',
+  'suppression_history',
+  'audit_events',
+  'research_evidence',
+  'unmatched_gmail_metadata',
+  'raw_mime',
+  'matched_message_body',
+  'canceled_drafts',
+  'operational_logs',
+  'database_backups',
+] as const;
+
+export const retentionPolicySchema = z.strictObject({
+  id: uuid,
+  workspaceId: uuid,
+  dataKind: z.enum(RETENTION_DATA_KINDS),
+  /** An ISO 8601 duration, or null for the indefinite dispositions. */
+  retentionInterval: z.string().max(60).nullable(),
+  disposition: z.enum(['delete', 'tombstone', 'retain_indefinitely', 'retain_with_business_record']),
+  effectiveFrom: instant,
+  updatedAt: instant,
+});
+export type RetentionPolicy = z.infer<typeof retentionPolicySchema>;
+
+export const jobStateSchema = z.enum(['queued', 'running', 'retryable', 'done', 'dead']);
+export type JobState = z.infer<typeof jobStateSchema>;
+
+export const jobSchema = z
+  .strictObject({
+    id: uuid,
+    workspaceId: uuid,
+    kind: z.string().regex(/^[a-z][a-z0-9_.-]{1,63}$/),
+    payload: z.record(z.string(), z.unknown()),
+    idempotencyKey: z.string().trim().min(1).max(200),
+    state: jobStateSchema,
+    runAt: instant,
+    notBefore: instant,
+    attemptCount: z.number().int().min(0),
+    maxAttempts: z.number().int().min(1),
+    leaseOwner: z.string().trim().min(1).max(120).nullable(),
+    leaseExpiresAt: instant.nullable(),
+    /** Bounded and redacted: an operator hint, never a message body. */
+    errorDetail: z.string().max(2000).nullable(),
+    createdAt: instant,
+    updatedAt: instant,
+  })
+  .refine(
+    row => (row.state === 'running') === (row.leaseOwner !== null && row.leaseExpiresAt !== null),
+    'a running job holds a lease and nothing else does',
+  );
+export type Job = z.infer<typeof jobSchema>;
+
+export const dailyCounterSchema = z.strictObject({
+  workspaceId: uuid,
+  subjectKind: z.enum(['workspace', 'owner', 'mailbox', 'domain']),
+  subjectKey: z.string().trim().min(1).max(320),
+  counterKind: z.string().regex(/^[a-z][a-z0-9_]{2,63}$/),
+  businessDate,
+  /** The zone that produced the business date, stored beside it (Appendix D). */
+  businessTimeZone: ianaTimeZone,
+  count: z.number().int().min(0),
+  updatedAt: instant,
+});
+export type DailyCounter = z.infer<typeof dailyCounterSchema>;
+
+export const heartbeatSchema = z
+  .strictObject({
+    id: uuid,
+    workspaceId: uuid.nullable(),
+    component: z.enum(['api', 'scheduler', 'worker', 'mailbox']),
+    instanceKey: z.string().trim().min(1).max(200),
+    observedAt: instant,
+    detail: z.record(z.string(), z.unknown()),
+  })
+  .refine(
+    row => (row.component === 'mailbox') === (row.workspaceId !== null),
+    'a mailbox heartbeat is a workspace\'s; a service heartbeat is not',
+  );
+export type Heartbeat = z.infer<typeof heartbeatSchema>;

@@ -1,0 +1,65 @@
+name: Greenfield gate
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  greenfield:
+    # The greenfield workspace only: apps/*, packages/*. The old trees keep the
+    # "Source security gate" workflow, which this job never touches.
+    #
+    # ubuntu, not macos: this job's only host requirement is a PostgreSQL 16 service
+    # container, which GitHub provides on Linux runners. The macOS-specific parts of
+    # the product (Electron packaging, Keychain, tel: handoff) are not in this tree.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          # A throwaway credential for a container that exists for one job and is
+          # reachable only from it. Nothing in the repository depends on this value.
+          POSTGRES_PASSWORD: greenfield-ci
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      # The test harness adopts this cluster instead of starting embedded-postgres.
+      FSS_TEST_POSTGRES_URL: postgresql://postgres:greenfield-ci@127.0.0.1:5432/postgres
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.20.0'
+      - name: Assert the supported Node version
+        run: |
+          node -e "if (process.versions.node !== '24.20.0') process.exit(1)"
+      - name: Assert the service container is PostgreSQL 16
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends postgresql-client >/dev/null
+          version="$(psql "$FSS_TEST_POSTGRES_URL" -tAc 'SHOW server_version')"
+          echo "server_version=$version"
+          case "$version" in 16.*) ;; *) echo "expected PostgreSQL 16"; exit 1;; esac
+      - name: Install
+        # --ignore-scripts: the old trees' postinstall builds Electron and two native
+        # modules, none of which this job runs. The greenfield packages have no build
+        # step, and embedded-postgres is unused here because the service container is.
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund
+      - name: Greenfield gate
+        run: npm run gate:greenfield
