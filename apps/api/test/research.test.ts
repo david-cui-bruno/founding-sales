@@ -35,6 +35,9 @@ describe('research routes', () => {
     sendingEnabled: false,
     auth: fixture.deps,
     upgradeUrl: 'https://callie.example/downloads/mac',
+    // Appendix E step 1: no generation is pinned in a test, which is the
+    // "operator has not pinned one" case rather than a missing option.
+    expectedSystemGeneration: null,
   });
 
   const post = async (

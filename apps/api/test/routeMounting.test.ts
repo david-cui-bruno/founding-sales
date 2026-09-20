@@ -62,6 +62,13 @@ describe('what the API mounts', () => {
       '/import/preview',
       '/pipeline/stages',
       '/readyz',
+      '/research/config',
+      '/research/discover',
+      '/research/enrich',
+      '/research/policy',
+      '/research/providers',
+      '/research/suggestions',
+      '/research/suggestions/review',
       '/search/firms',
     ]);
     expect([...registry.prefixes()]).toEqual([
@@ -155,6 +162,7 @@ describe('what the API mounts', () => {
       'search',
       'import',
       'export',
+      'research',
     ]);
   });
 });
