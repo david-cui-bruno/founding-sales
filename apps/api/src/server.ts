@@ -8,6 +8,11 @@ import { routeAuth } from './routes/auth.ts';
 import { routeAdminDevices } from './routes/admin/devices.ts';
 import { ADMIN_JOBS_PATHS, routeAdminJobs } from './routes/admin/jobs.ts';
 import { routeAdminMemberships } from './routes/admin/memberships.ts';
+import { routeContacts } from './routes/contacts.ts';
+import { routeFirms } from './routes/firms.ts';
+import { routeMerges } from './routes/merges.ts';
+import { routeOpportunities } from './routes/opportunities.ts';
+import { routePipeline } from './routes/pipeline.ts';
 import { DEFAULT_UPGRADE_URL, type ApiRequest, type RouteResult, type RoutingOptions } from './routes/types.ts';
 
 /**
@@ -80,7 +85,18 @@ export async function dispatch(request: ApiRequest, options: ApiOptions): Promis
     if (answer !== null) return answer;
   }
 
-  for (const module of [routeAuth, routeAdminMemberships, routeAdminDevices]) {
+  for (const module of [
+    routeAuth,
+    routeAdminMemberships,
+    routeAdminDevices,
+    // Lane G3a's CRM surface. Each answers null for a path that is not its own and
+    // authenticates for itself, in the same style as the modules above.
+    routeFirms,
+    routeContacts,
+    routeOpportunities,
+    routePipeline,
+    routeMerges,
+  ]) {
     const result = await module(request, routing);
     if (result !== null) return result;
   }

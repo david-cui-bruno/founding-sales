@@ -59,6 +59,51 @@ export const FOUNDATION_LOOKUP_KEYS = {
     ['workspace_id', 'access_token_hash'],
   ],
   device_refresh_credentials: [['workspace_id', 'device_id', 'generation']],
+
+  // Migration 0004 (lane G3a). The three-column keys are the *semantic composite
+  // keys* of specification 7.2: a child row names `(workspace_id, contact_id,
+  // firm_id)` or `(workspace_id, opportunity_id, firm_id)`, so it cannot mix firms.
+  // `contacts` and `opportunities` therefore declare both their own id and the
+  // semantic key, and a lookup by either typechecks.
+  //
+  // The partial unique indexes — one open opportunity per firm, one active primary
+  // contact per firm, one terminal stage of each kind — are deliberately absent: the
+  // registry promises unconditional unique keys, and a partial index is not one.
+  firms: [['workspace_id', 'id']],
+  contacts: [
+    ['workspace_id', 'id'],
+    ['workspace_id', 'id', 'firm_id'],
+  ],
+  phone_routes: [
+    ['workspace_id', 'id'],
+    ['workspace_id', 'firm_id', 'contact_id', 'e164'],
+  ],
+  email_addresses: [
+    ['workspace_id', 'id'],
+    ['workspace_id', 'firm_id', 'contact_id', 'address'],
+  ],
+  evidence_items: [
+    ['workspace_id', 'id'],
+    ['workspace_id', 'firm_id', 'contact_id', 'provider', 'content_hash'],
+  ],
+  pipeline_stages: [
+    ['workspace_id', 'id'],
+    ['workspace_id', 'key'],
+  ],
+  opportunities: [
+    ['workspace_id', 'id'],
+    ['workspace_id', 'id', 'firm_id'],
+  ],
+  opportunity_stage_events: [['workspace_id', 'id']],
+  record_aliases: [['workspace_id', 'id']],
+  record_merge_events: [
+    ['workspace_id', 'id'],
+    ['workspace_id', 'record_kind', 'source_id'],
+  ],
+  crm_domain_events: [
+    ['workspace_id', 'id'],
+    ['workspace_id', 'event_kind', 'dedupe_key'],
+  ],
 } as const satisfies Readonly<Record<string, readonly (readonly ['workspace_id', ...string[]])[]>>;
 
 /** A table a scoped repository may read. `workspaces`, `users` and `heartbeats` are not scoped rows. */

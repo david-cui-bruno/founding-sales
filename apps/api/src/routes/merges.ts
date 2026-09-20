@@ -1,0 +1,111 @@
+import { mergeContactsCommandSchema, mergeFirmsCommandSchema } from '@fss/contracts';
+import { mergeContacts, mergeFirms } from '@fss/domain/crm';
+import { REFUSAL_STATUS, contextForPrincipal, crmReply, redactError, requirePrincipal } from './crmSupport.ts';
+import { runCommand } from '../auth/index.ts';
+import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
+
+/**
+ * Merge commands (specification 7.2, Appendix A "Merge records", Appendix G 37).
+ *
+ * These do not use `runCrmCommand`, for one reason: a merge may refuse with
+ * *conflicts*, and the conflicts have to reach the person so they can resolve them
+ * and post again with `resolutions`. A refusal that carried only a code would leave
+ * them guessing which field disagreed.
+ *
+ * The conflicts are field names and canonical values the caller may already read —
+ * a website, a locality, a title — so returning them crosses no line in Appendix F;
+ * the merge already required the caller to be entitled to change both records.
+ */
+export async function routeMerges(request: ApiRequest, options: RoutingOptions): Promise<RouteResult | null> {
+  if (!request.path.startsWith('/merges')) return null;
+  const auth = options.auth;
+  if (auth === undefined) return { status: REFUSAL_STATUS.not_found, body: redactError('not_found') };
+
+  if (request.method !== 'POST') {
+    return { status: REFUSAL_STATUS.method_not_allowed, body: redactError('method_not_allowed') };
+  }
+
+  const authenticated = await requirePrincipal(auth, request);
+  if (!authenticated.ok) return authenticated.result;
+  const principal = authenticated.principal;
+  const scoped = contextForPrincipal(auth, principal);
+  if (!scoped.ok) return scoped.result;
+
+  if (request.path === '/merges/firms') {
+    const parsed = mergeFirmsCommandSchema.safeParse(request.body);
+    if (!parsed.success) return { status: REFUSAL_STATUS.malformed_body, body: redactError('malformed_body') };
+    const body = parsed.data;
+    let conflicts: unknown = undefined;
+    const outcome = await runCommand(
+      auth,
+      principal,
+      {
+        commandId: body.commandId,
+        kind: 'firm.merged',
+        payload: { sourceFirmId: body.sourceFirmId, targetFirmId: body.targetFirmId, resolutions: body.resolutions ?? null },
+        clientVersion: body.clientVersion,
+      },
+      async context => {
+        const result = await mergeFirms(context, {
+          sourceFirmId: body.sourceFirmId,
+          targetFirmId: body.targetFirmId,
+          resolutions: body.resolutions,
+          commandId: body.commandId,
+        });
+        if (result.ok) return { status: 'accepted', result: result.value };
+        conflicts = result.conflicts;
+        return { status: 'refused', reason: result.reason };
+      },
+    );
+    return withConflicts(crmReply(outcome), conflicts);
+  }
+
+  if (request.path === '/merges/contacts') {
+    const parsed = mergeContactsCommandSchema.safeParse(request.body);
+    if (!parsed.success) return { status: REFUSAL_STATUS.malformed_body, body: redactError('malformed_body') };
+    const body = parsed.data;
+    let conflicts: unknown = undefined;
+    const outcome = await runCommand(
+      auth,
+      principal,
+      {
+        commandId: body.commandId,
+        kind: 'contact.merged',
+        payload: {
+          sourceContactId: body.sourceContactId,
+          targetContactId: body.targetContactId,
+          resolutions: body.resolutions ?? null,
+        },
+        clientVersion: body.clientVersion,
+      },
+      async context => {
+        const result = await mergeContacts(context, {
+          sourceContactId: body.sourceContactId,
+          targetContactId: body.targetContactId,
+          resolutions: body.resolutions,
+          commandId: body.commandId,
+        });
+        if (result.ok) return { status: 'accepted', result: result.value };
+        conflicts = result.conflicts;
+        return { status: 'refused', reason: result.reason };
+      },
+    );
+    return withConflicts(crmReply(outcome), conflicts);
+  }
+
+  return { status: REFUSAL_STATUS.not_found, body: redactError('not_found') };
+}
+
+/**
+ * Attach the conflicts to a refusal body.
+ *
+ * Only on a fresh refusal: a *replayed* refusal answers from the receipt, which
+ * records the reason and not the conflicts, and inventing them again on replay would
+ * mean recomputing a merge the command middleware already decided the answer to.
+ */
+function withConflicts(reply: RouteResult, conflicts: unknown): RouteResult {
+  if (conflicts === undefined) return reply;
+  const body = reply.body as { readonly status?: string };
+  if (body.status !== 'refused') return reply;
+  return { ...reply, body: { ...body, conflicts } };
+}
