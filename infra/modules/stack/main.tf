@@ -230,6 +230,12 @@ module "cluster" {
     FSS_PUBLIC_ORIGIN              = "https://${var.api_hostname}"
     FSS_GMAIL_PUSH_AUDIENCE        = var.enable_gmail_push ? local.push_audience : ""
     FSS_GMAIL_PUSH_SERVICE_ACCOUNT = var.enable_gmail_push ? one(module.pubsub[*].push_service_account_email) : ""
+    # Two public identifiers that used to travel inside the operator-written
+    # Google client secret because nothing carried them (G12's stand-down note).
+    # Empty rather than absent when push is off, so a bootstrap reading the
+    # name learns "not configured" instead of nothing at all.
+    FSS_GMAIL_PUSH_TOPIC     = var.enable_gmail_push ? one(module.pubsub[*].topic_id) : ""
+    FSS_GOOGLE_HOSTED_DOMAIN = var.google_hosted_domain
   })
 
   tags = local.tags

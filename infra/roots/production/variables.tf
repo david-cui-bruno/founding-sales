@@ -187,6 +187,25 @@ variable "business_time_zone" {
   default     = "America/New_York"
 }
 
+variable "google_hosted_domain" {
+  description = <<-EOT
+    The Callie Google Workspace domain. Both task definitions carry it: the API
+    refuses an id token whose `hd` differs (5.1) and a mailbox outside it
+    (12.1), and the worker reads the same value so the two cannot disagree.
+    A public identifier, which is why it is here rather than in a secret.
+  EOT
+  type        = string
+  default     = "usecallie.com"
+
+  # Repeated from the stack module deliberately: this is the operator's input,
+  # and a refusal should name the variable they typed rather than one three
+  # modules down. An empty domain would admit every Google account there is.
+  validation {
+    condition     = can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$", var.google_hosted_domain))
+    error_message = "google_hosted_domain must be a domain name and may not be empty."
+  }
+}
+
 variable "enable_gmail_push" {
   description = "Create the Gmail push topic and subscription in the production Google Cloud project."
   type        = bool

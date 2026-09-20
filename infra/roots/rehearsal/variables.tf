@@ -223,6 +223,21 @@ variable "business_time_zone" {
   default     = "America/New_York"
 }
 
+variable "google_hosted_domain" {
+  description = <<-EOT
+    The Callie Google Workspace domain, the same one production uses: the
+    rehearsal signs in with the same OIDC client under its second registered
+    redirect URI (api.rehearsal.usecallie.com). A public identifier.
+  EOT
+  type        = string
+  default     = "usecallie.com"
+
+  validation {
+    condition     = can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$", var.google_hosted_domain))
+    error_message = "google_hosted_domain must be a domain name and may not be empty."
+  }
+}
+
 variable "enable_gmail_push" {
   description = <<-EOT
     Off by default. Rehearsal must never publish into the production Google

@@ -174,6 +174,31 @@ run "rehearsal_may_be_small_and_single_az" {
   }
 }
 
+run "both_services_are_told_the_workspace_domain" {
+  command = plan
+
+  # The same Workspace, because the rehearsal signs in with the same Google
+  # OIDC client (its second registered redirect URI). The environment carries
+  # it rather than a field inside an operator-pasted secret.
+  assert {
+    condition     = module.stack.api_environment["FSS_GOOGLE_HOSTED_DOMAIN"] == "usecallie.com"
+    error_message = "The rehearsal API restricts sign-in to the Callie Workspace domain."
+  }
+
+  assert {
+    condition     = module.stack.worker_environment["FSS_GOOGLE_HOSTED_DOMAIN"] == "usecallie.com"
+    error_message = "The rehearsal worker reads the same domain."
+  }
+
+  # Push is off in this run, and the variable is still present and empty rather
+  # than absent: a bootstrap that reads it gets "not configured", not a
+  # `KeyError` at plan time and a surprise at boot.
+  assert {
+    condition     = module.stack.api_environment["FSS_GMAIL_PUSH_TOPIC"] == ""
+    error_message = "With push off the topic is empty, not missing."
+  }
+}
+
 run "gmail_push_cannot_be_turned_on_without_its_own_project" {
   command = plan
 

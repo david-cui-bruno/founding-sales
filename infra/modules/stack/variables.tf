@@ -226,6 +226,21 @@ variable "business_time_zone" {
   default     = "America/New_York"
 }
 
+variable "google_hosted_domain" {
+  description = <<-EOT
+    The Callie Google Workspace domain. Specification 5.1 refuses an id token
+    whose `hd` differs, and 12.1 lets only a mailbox in this domain connect.
+    A public identifier, so it travels in the task environment rather than
+    inside an operator-written secret.
+  EOT
+  type        = string
+
+  validation {
+    condition     = can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$", var.google_hosted_domain))
+    error_message = "google_hosted_domain must be a domain name, and it may not be empty: an empty one would admit every Google account."
+  }
+}
+
 # ---------------------------------------------------------------------------
 # Edge
 # ---------------------------------------------------------------------------

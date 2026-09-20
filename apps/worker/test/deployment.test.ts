@@ -50,6 +50,28 @@ function liveEnvironment(overrides: Record<string, string | undefined> = {}): Re
     [V.pushServiceAccount]: 'fss-prod-gmail-push@example.iam.gserviceaccount.test',
     [V.sendingEnabled]: 'false',
     [V.researchProviders]: 'none',
+    // The shape after G12b: the two public identifiers come from the task
+    // definition, and the secret carries only the client id and secret.
+    [V.pushTopic]: 'projects/example/topics/fss-prod-gmail-push',
+    [V.hostedDomain]: 'example.test',
+    [V.gmailOAuthClient]: JSON.stringify({
+      client_id: 'example.apps.googleusercontent.test',
+      client_secret: marker(),
+    }),
+    ...overrides,
+  };
+}
+
+/**
+ * The shape G12 shipped: nothing in the environment, both public identifiers
+ * pasted into the secret beside the client id. Supported for one release.
+ */
+function secretCarriedEnvironment(
+  overrides: Record<string, string | undefined> = {},
+): Record<string, string | undefined> {
+  return liveEnvironment({
+    [V.pushTopic]: undefined,
+    [V.hostedDomain]: undefined,
     [V.gmailOAuthClient]: JSON.stringify({
       client_id: 'example.apps.googleusercontent.test',
       client_secret: marker(),
@@ -57,7 +79,7 @@ function liveEnvironment(overrides: Record<string, string | undefined> = {}): Re
       hosted_domain: 'example.test',
     }),
     ...overrides,
-  };
+  });
 }
 
 /** A KMS transport that reaches nothing, so the live branch is provable offline. */
@@ -128,18 +150,83 @@ describe('the live deployment', () => {
     });
   }
 
-  for (const field of ['client_id', 'client_secret', 'push_topic', 'hosted_domain']) {
+  for (const field of ['client_id', 'client_secret']) {
     it(`refuses a Google client bundle without ${field}`, () => {
-      const bundle: Record<string, string> = {
-        client_id: 'a',
-        client_secret: 'b',
-        push_topic: 'c',
-        hosted_domain: 'd',
-      };
+      const bundle: Record<string, string> = { client_id: 'a', client_secret: 'b' };
       delete bundle[field];
       expect(() => readGoogleClientBundle(JSON.stringify(bundle), V.gmailOAuthClient)).toThrow(
         DeploymentConfigError,
       );
+    });
+  }
+});
+
+/**
+ * Deliverable 2: the Pub/Sub topic and the Workspace domain are public
+ * identifiers that `infra/modules/stack` now puts in both task definitions.
+ * The bootstrap reads the environment first and falls back to the secret JSON
+ * for one release; `docs/decisions/g12b-two-public-identifiers-move-out-of-the-secret.md`
+ * says when the fallback goes.
+ *
+ * ## The vacuous-pass trap
+ *
+ * A reader that ignored the environment entirely would pass a test that set
+ * both sources to the same string. So the preference case sets them to
+ * *different* values and requires the environment's, and every case asserts
+ * the reported source as well as the value — a source field that always said
+ * `environment` would fail the fallback case.
+ */
+describe('the two public identifiers the task environment now carries', () => {
+  it('prefers the environment over the secret and says which it used', async () => {
+    const deployment = await readWorkerDeployment(
+      secretCarriedEnvironment({
+        [V.pushTopic]: 'projects/example/topics/from-the-environment',
+        [V.hostedDomain]: 'environment.test',
+      }),
+      { loadKms: loadKms as never },
+    );
+    expect(deployment.gmail?.config.pushTopicName).toBe('projects/example/topics/from-the-environment');
+    expect(deployment.gmail?.config.hostedDomain).toBe('environment.test');
+    expect(deployment.gmail?.pushTopicSource).toBe('environment');
+    expect(deployment.gmail?.hostedDomainSource).toBe('environment');
+  });
+
+  it('falls back to the secret JSON for one release, and says so', async () => {
+    const deployment = await readWorkerDeployment(secretCarriedEnvironment(), {
+      loadKms: loadKms as never,
+    });
+    expect(deployment.gmail?.config.pushTopicName).toBe('projects/example/topics/fss-prod-gmail-push');
+    expect(deployment.gmail?.config.hostedDomain).toBe('example.test');
+    expect(deployment.gmail?.pushTopicSource).toBe('secret');
+    expect(deployment.gmail?.hostedDomainSource).toBe('secret');
+  });
+
+  for (const [variable, field] of [
+    [V.pushTopic, 'push_topic'],
+    [V.hostedDomain, 'hosted_domain'],
+  ] as const) {
+    it(`refuses when neither the environment nor the secret carries ${field}`, async () => {
+      await expect(
+        readWorkerDeployment(
+          liveEnvironment({
+            [variable]: undefined,
+            [V.gmailOAuthClient]: JSON.stringify({ client_id: 'a', client_secret: marker() }),
+          }),
+          { loadKms: loadKms as never },
+        ),
+      ).rejects.toMatchObject({ code: 'MISSING' });
+    });
+
+    it(`names both places it looked for ${field}`, async () => {
+      await expect(
+        readWorkerDeployment(
+          liveEnvironment({
+            [variable]: undefined,
+            [V.gmailOAuthClient]: JSON.stringify({ client_id: 'a', client_secret: marker() }),
+          }),
+          { loadKms: loadKms as never },
+        ),
+      ).rejects.toThrow(new RegExp(`${variable}.*${field}`, 'u'));
     });
   }
 });
@@ -199,11 +286,10 @@ describe('the startup line', () => {
     const secret = marker();
     const signingLike = marker();
     const environment = liveEnvironment({
+      [V.pushTopic]: `projects/example/topics/${signingLike}`,
       [V.gmailOAuthClient]: JSON.stringify({
         client_id: 'example.apps.googleusercontent.test',
         client_secret: secret,
-        push_topic: `projects/example/topics/${signingLike}`,
-        hosted_domain: 'example.test',
       }),
     });
     const deployment = await readWorkerDeployment(environment, { loadKms: loadKms as never });
@@ -218,7 +304,9 @@ describe('the startup line', () => {
       gmail_client: 'https',
       envelope_key: 'kms',
       push_topic_configured: true,
+      push_topic_source: 'environment',
       hosted_domain_configured: true,
+      hosted_domain_source: 'environment',
       journal: 'configured',
       research_providers: 'none',
       sending_enabled: false,

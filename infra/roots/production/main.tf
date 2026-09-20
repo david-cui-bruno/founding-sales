@@ -47,9 +47,10 @@ module "stack" {
   journal_object_lock_mode           = var.journal_object_lock_mode
   journal_object_lock_retention_days = var.journal_object_lock_retention_days
 
-  alert_emails       = var.alert_emails
-  log_retention_days = 90
-  business_time_zone = var.business_time_zone
+  alert_emails         = var.alert_emails
+  log_retention_days   = 90
+  business_time_zone   = var.business_time_zone
+  google_hosted_domain = var.google_hosted_domain
 
   enable_gmail_push = var.enable_gmail_push
   gcp_project_id    = var.gcp_project_id
