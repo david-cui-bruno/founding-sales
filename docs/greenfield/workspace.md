@@ -59,7 +59,7 @@ Set `FSS_TEST_POSTGRES_VERBOSE=1` to see the server's own log.
 To exercise the CI branch on this machine:
 
 ```
-node scripts/greenfieldServiceClusterCheck.mjs
+node packages/domain/scripts/serviceClusterCheck.mjs
 ```
 
 It starts a cluster, hands its URL to the gate through `FSS_TEST_POSTGRES_URL`, and

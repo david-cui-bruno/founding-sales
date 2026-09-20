@@ -34,7 +34,7 @@ tested rather than asserted in a commit message.
   would never be used by a root-level run. A root file named for the tree it governs
   was the smallest arrangement that keeps the two configs from ever seeing the same
   file.
-* `scripts/greenfieldServiceClusterCheck.mjs` — a developer tool that runs the gate
+* `packages/domain/scripts/serviceClusterCheck.mjs` — a developer tool that runs the gate
   against a service-container-style cluster. Nothing in the product or in CI reads it.
 
 **Reported to the coordinator** rather than assumed: if any of these five files is

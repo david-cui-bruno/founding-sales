@@ -26,7 +26,7 @@ for a container that exists for the length of one job, is reachable only from th
 job's network namespace, and holds nothing but generated test rows. It is not a
 credential to any system. Nothing in the repository or in any environment reads it.
 
-**Proved locally.** `node scripts/greenfieldServiceClusterCheck.mjs` runs the whole
+**Proved locally.** `node packages/domain/scripts/serviceClusterCheck.mjs` runs the whole
 gate against a cluster handed over through `FSS_TEST_POSTGRES_URL`, which is the branch
 CI takes, so that code path is exercised on a developer machine and not only on the
 runner.

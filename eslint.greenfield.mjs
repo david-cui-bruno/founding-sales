@@ -22,6 +22,14 @@ export default [
       globals: { ...globals.node },
     },
   },
+  {
+    // Developer tools in the greenfield tree (packages/*/scripts/**) are plain ESM.
+    files: ['**/*.mjs'],
+    languageOptions: {
+      parserOptions: { ecmaVersion: 'latest', sourceType: 'module' },
+      globals: { ...globals.node },
+    },
+  },
   js.configs.recommended,
   ...tsPlugin.configs['flat/recommended'],
   {

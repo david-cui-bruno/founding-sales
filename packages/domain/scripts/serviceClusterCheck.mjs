@@ -7,7 +7,7 @@
  * so the service-container branch of db/testing/embeddedPostgres.ts is exercised on
  * this machine rather than only on the runner.
  *
- *   node scripts/greenfieldServiceClusterCheck.mjs [npm-script]
+ *   node packages/domain/scripts/serviceClusterCheck.mjs [npm-script]
  *
  * It is a developer tool. Nothing in the product reads it, and CI does not run it.
  *
@@ -24,7 +24,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import EmbeddedPostgres from 'embedded-postgres';
 
-const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const databaseDir = await mkdtemp(join(tmpdir(), 'fss-service-sim-'));
 // A throwaway credential for a loopback cluster that lives for one command.
 const password = `p${Math.random().toString(36).slice(2)}`;
