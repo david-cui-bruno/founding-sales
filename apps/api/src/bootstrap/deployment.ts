@@ -610,8 +610,11 @@ export function describeDeployment(deployment: ApiDeployment): LogFields {
     // 5.1's four parts, each named separately, so a deployment missing one is
     // readable in the startup line rather than only in the refusal that preceded it.
     sign_in: deployment.signInSource,
+    // No `sign_in_secret_configured`: the logger redacts any field whose *name* looks
+    // like a credential, so it would print `[redacted]` and say nothing. It is not
+    // needed either — `readGoogleClientBundle` refuses a bundle with no `client_secret`
+    // by name, so `sign_in` being anything but `absent` already means there was one.
     sign_in_client_configured: (deployment.auth?.oidc.clientId ?? '').length > 0,
-    sign_in_secret_configured: (deployment.auth?.oidc.clientSecret ?? '').length > 0,
     sign_in_redirect_configured: (deployment.auth?.oidc.redirectUri ?? '').length > 0,
     sign_in_hosted_domain_configured: (deployment.auth?.oidc.hostedDomain ?? '').length > 0,
     session_signing_key_configured: (deployment.auth?.stateSigningKey.length ?? 0) >= 32,

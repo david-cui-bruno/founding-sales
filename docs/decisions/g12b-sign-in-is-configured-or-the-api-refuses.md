@@ -68,13 +68,20 @@ client's second registered redirect URI.
 
 ## `--selftest` names parts, never values
 
-`describeDeployment` reports `sign_in` (`google | fixture | absent`) and four booleans:
-client, secret, redirect, hosted domain, plus `session_signing_key_configured`. Not the
-client id, not the redirect URI, not the domain — all three are public identifiers, but
-"this line carries no operator-supplied string" is a rule that survives the next person
-adding a field, and "these particular strings happen to be public" is not. The test
-feeds the reader a generated marker as the secret and a recognisable client id and
+`describeDeployment` reports `sign_in` (`google | fixture | absent`) and three
+booleans: client, redirect, hosted domain, plus `session_signing_key_configured`. Not
+the client id, not the redirect URI, not the domain — all three are public identifiers,
+but "this line carries no operator-supplied string" is a rule that survives the next
+person adding a field, and "these particular strings happen to be public" is not. The
+test feeds the reader a generated marker as the secret and a recognisable client id and
 asserts neither appears.
+
+There is deliberately no `sign_in_secret_configured`. The logger redacts any field
+whose *name* matches a credential pattern, so it would print `[redacted]` and tell an
+operator nothing — which is what the pre-existing `oauth_secret_configured` does today.
+It is also unnecessary: `readGoogleClientBundle` refuses a bundle with no
+`client_secret` by name, so `sign_in` being anything other than `absent` already means
+a secret was present.
 
 ## Where the assertion lives
 
