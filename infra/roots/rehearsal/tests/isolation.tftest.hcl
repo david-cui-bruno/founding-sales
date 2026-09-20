@@ -110,6 +110,42 @@ run "no_name_this_run_claims_can_be_a_production_name" {
 
 }
 
+# The per-run root creates no ECR repository.
+#
+# It used to create `fss-rh-<run>-api` and `fss-rh-<run>-worker`, which cannot work:
+# the images have to be pushed *before* the run exists, the release workflow's
+# environment secrets name the stable `fss-rh-api` and `fss-rh-worker`, and a
+# repository created by a run is destroyed with it. `infra/roots/rehearsal-registry`
+# owns the two stable repositories and is applied once. See
+# docs/decisions/g12c-the-rehearsal-registry-is-its-own-root.md.
+run "the_run_creates_no_repository_of_its_own" {
+  command = plan
+
+  assert {
+    condition     = length(keys(module.stack.repository_urls)) == 0
+    error_message = "A rehearsal run deploys from the stable rehearsal repositories; it does not create its own and take them away again."
+  }
+
+  assert {
+    condition     = length([for name in output.resource_names : name if strcontains(name, "ecr")]) == 0
+    error_message = "No repository name is claimed by the run."
+  }
+}
+
+run "a_run_may_only_deploy_from_the_stable_rehearsal_repositories" {
+  command = plan
+
+  variables {
+    api_image = "123456789012.dkr.ecr.us-east-1.amazonaws.com/fss-prod-api@sha256:0000000000000000000000000000000000000000000000000000000000000001"
+  }
+
+  # The digest is the one proposed for production; the repository it is pulled
+  # from is not. `fss-rh-deploy` has no permission to read a production
+  # repository, so this would fail as an ECR authorization error minutes into a
+  # deployment. It fails at plan time instead, naming the variable.
+  expect_failures = [var.api_image]
+}
+
 run "a_second_run_shares_no_name_with_the_first" {
   command = plan
 
@@ -160,8 +196,132 @@ run "the_production_deployment_role_is_refused" {
   expect_failures = [var.deployment_role_name]
 }
 
+# The same topology answers, at one API task and one worker.
+#
+# A rehearsal that ran on a different architecture, a different instance class or a
+# different task size would deploy the production digests onto a machine production
+# never uses, and 16.2's "the exact immutable artifacts intended for production" would
+# be true of the bytes and false of everything around them.
+run "the_topology_answers_are_the_rehearsal_defaults_at_one_plus_one" {
+  command = plan
+
+  assert {
+    condition = (module.stack.task_runtime_platform.api.cpu_architecture == "ARM64"
+    && module.stack.task_runtime_platform.worker.cpu_architecture == "ARM64")
+    error_message = "The rehearsal must deploy the arm64 images on ARM64 Fargate, exactly as production will."
+  }
+
+  assert {
+    condition     = module.stack.database_shape.instance_class == "db.t4g.small"
+    error_message = "The same instance class as production, so the restore drill measures something production-shaped."
+  }
+
+  assert {
+    condition     = module.stack.database_shape.multi_az
+    error_message = "Multi-AZ, because Appendix E step 1 restores a Multi-AZ instance in production and that is the step the run is timed by."
+  }
+
+  assert {
+    condition = (module.stack.service_shape.api.cpu == "512"
+      && module.stack.service_shape.api.memory == "1024"
+      && module.stack.service_shape.worker.cpu == "512"
+    && module.stack.service_shape.worker.memory == "1024")
+    error_message = "The same 0.5 vCPU / 1 GiB task size as production."
+  }
+
+  assert {
+    condition = (module.stack.service_shape.api.desired_count == 1
+    && module.stack.service_shape.worker.desired_count == 1)
+    error_message = "One of each: the shapes are production's, the counts are not."
+  }
+
+  assert {
+    condition     = module.stack.container_insights == "disabled" && module.stack.waf_enabled == false
+    error_message = "The billed-per-metric options stay off in rehearsal too."
+  }
+
+  assert {
+    condition = (module.stack.database_shape.performance_insights_enabled == false
+    && module.stack.database_shape.monitoring_interval == 0)
+    error_message = "Performance Insights and Enhanced Monitoring stay off."
+  }
+}
+
+# The rehearsal's own deployment flags. `live` here, not `recorded`: G12b made
+# sign-in a start-up requirement and the rehearsal signs in with the real Google
+# OIDC client under its second registered redirect URI
+# (api.rehearsal.usecallie.com). The one step that wants the recorded Gmail fake
+# sets FSS_DEPENDENCIES in the workflow step rather than in the apply.
+run "the_rehearsal_deploys_on_live_dependencies_with_sending_off" {
+  command = plan
+
+  assert {
+    condition = (module.stack.api_environment["FSS_DEPENDENCIES"] == "live"
+    && module.stack.worker_environment["FSS_DEPENDENCIES"] == "live")
+    error_message = "The rehearsal signs in against the rehearsal hostname with the real client, so its deployment is live."
+  }
+
+  assert {
+    condition = (module.stack.api_environment["FSS_SENDING_ENABLED"] == "false"
+    && module.stack.worker_environment["FSS_SENDING_ENABLED"] == "false")
+    error_message = "A rehearsal never sends. Nothing in the workflow sets this true and the default is the refusal."
+  }
+
+  assert {
+    condition     = module.stack.worker_environment["FSS_RESEARCH_PROVIDERS"] == "none"
+    error_message = "The rehearsal worker ships no live research adapter either."
+  }
+}
+
+run "a_rehearsal_may_choose_the_recorded_dependencies_by_name" {
+  command = plan
+
+  variables {
+    dependencies_mode = "recorded"
+  }
+
+  assert {
+    condition     = module.stack.worker_environment["FSS_DEPENDENCIES"] == "recorded"
+    error_message = "A run with no rehearsal Google project may select the recorded fakes — by typing the word, never by omission."
+  }
+}
+
+run "a_rehearsal_apply_cannot_ask_for_no_dependencies_at_all" {
+  command = plan
+
+  variables {
+    dependencies_mode = "none"
+  }
+
+  expect_failures = [var.dependencies_mode]
+}
+
+run "an_architecture_that_is_not_one_of_the_two_is_refused" {
+  command = plan
+
+  variables {
+    cpu_architecture = "aarch64"
+  }
+
+  expect_failures = [var.cpu_architecture]
+}
+
 run "rehearsal_may_be_small_and_single_az" {
   command = plan
+
+  # The default is Multi-AZ (the run above), because the restore drill is the
+  # expensive step and it must restore what production would. Single-AZ stays
+  # *available* for a run investigating something else, and this asserts the
+  # capability rather than the default: production has a stack precondition
+  # refusing single-AZ, and rehearsal deliberately does not.
+  variables {
+    database_multi_az = false
+  }
+
+  assert {
+    condition     = module.stack.database_shape.multi_az == false
+    error_message = "A rehearsal run may still ask for single-AZ; only production refuses it."
+  }
 
   assert {
     condition     = module.stack.destroyable

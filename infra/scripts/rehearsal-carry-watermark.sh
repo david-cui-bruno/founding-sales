@@ -22,6 +22,15 @@
 # and that the carry tooling has no import direction at all — there is a reader for the
 # old table and no writer, so "roll back to the old stack" is not a command that exists.
 #
+# **Only one of the two needs a cutover.** The watermark and the source table do not
+# exist until a cutover is scheduled, and the first release comes before the cutover.
+# With `FSS_CARRY_WATERMARK` and `FSS_CARRY_SOURCE_TABLE` both unset this prints
+# `carry drill skipped: no cutover watermark yet`, records
+# `carry_drill=skipped_no_watermark` so the release record carries the state rather than
+# claiming a pass, and exits 0 — after running the halves above, which need no cutover.
+# One set without the other is a refusal. See
+# `docs/decisions/g12c-the-carry-drill-waits-for-a-cutover.md`.
+#
 # Dry run: FSS_REHEARSAL_DRY_RUN=1 prints the plan and needs no credential.
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rehearsal-common.sh"
@@ -56,7 +65,42 @@ fi
 rehearsal_log "the greenfield roots name no legacy state key"
 
 # ---------------------------------------------------------------------------
-# 3. The export refuses a post-watermark write. A rehearsal with no such write in the
+# 3. Is there a cutover to drill yet?
+#
+#    The watermark is an instant somebody chose and the source table is the old
+#    stack's. Neither exists until a cutover is scheduled, and the first release comes
+#    before the cutover. Inventing a watermark would be worse than skipping: the export
+#    would refuse a made-up table for a made-up reason and a release record would say
+#    Appendix G 20 passed.
+#
+#    So: both absent is a skip, and it says so in one line and in the report, so the
+#    release record carries the drill's verdict rather than an assumption. One absent
+#    is a refusal — half a configuration is somebody halfway through something.
+#
+#    Everything above this point has already run. The half of scenario 20 that is a
+#    property of this repository — the old stack has no writer, no root names a legacy
+#    state key — is checked on every release, cutover or no cutover.
+# ---------------------------------------------------------------------------
+WATERMARK=${FSS_CARRY_WATERMARK:-}
+SOURCE_TABLE=${FSS_CARRY_SOURCE_TABLE:-}
+
+if [ -z "$WATERMARK" ] && [ -z "$SOURCE_TABLE" ]; then
+  printf '%s\n' 'carry drill skipped: no cutover watermark yet'
+  rehearsal_write_report "carry-watermark.txt" \
+    "prefix=$PREFIX old_stack=read_only rollback_target=false carry_drill=skipped_no_watermark"
+  rehearsal_log "Appendix G 20: the writer and legacy-state halves are complete; the export half waits for a cutover"
+  exit 0
+fi
+
+if [ -z "$WATERMARK" ] || [ -z "$SOURCE_TABLE" ]; then
+  echo "FAIL: FSS_CARRY_WATERMARK and FSS_CARRY_SOURCE_TABLE are both or neither." >&2
+  echo "      One without the other is a half-configured drill, and a drill that guessed the" >&2
+  echo "      missing half would report a pass for a rule it never reached." >&2
+  exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# 4. The export refuses a post-watermark write. A rehearsal with no such write in the
 #    source table would pass this trivially, so the absence of one is a failed setup.
 # ---------------------------------------------------------------------------
 rehearsal_log "asserting the export refuses a table with a write after the watermark"
@@ -65,8 +109,8 @@ if rehearsal_dry_run; then
   printf '{"refused":"post_watermark_write","post_watermark_writes":1}\n' > "$REPORTS/carry-watermark.json"
 else
   set +e
-  fss carry export --watermark "${FSS_CARRY_WATERMARK:?the drill must set the watermark it is testing}" \
-    --source "${FSS_CARRY_SOURCE_TABLE:?the drill must name the old table}" \
+  fss carry export --watermark "$WATERMARK" \
+    --source "$SOURCE_TABLE" \
     --report "$REPORTS/carry-watermark.json"
   status=$?
   set -e
@@ -84,5 +128,6 @@ assert report.get("post_watermark_writes", 0) >= 1, (
 assert report.get("refused") == "post_watermark_write", f"the export refused for another reason: {report}"
 PY
 
-rehearsal_write_report "carry-watermark.txt" "prefix=$PREFIX old_stack=read_only rollback_target=false"
+rehearsal_write_report "carry-watermark.txt" \
+  "prefix=$PREFIX old_stack=read_only rollback_target=false carry_drill=ran"
 rehearsal_log "Appendix G 20 complete"

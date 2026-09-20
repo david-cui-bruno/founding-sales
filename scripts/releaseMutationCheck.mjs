@@ -105,6 +105,33 @@ const MUTATIONS = [
       'The Pub/Sub topic and the Workspace domain moved into the task environment with the secret as a one-release fallback. A reader that silently kept preferring the secret would leave the apply doing nothing, and the two sources agree in production, so only a test that sets them to different values can tell.',
   },
   {
+    name: 'the carry drill stops refusing a half-configured cutover',
+    file: 'infra/scripts/rehearsal-carry-watermark.sh',
+    find: 'if [ -z "$WATERMARK" ] || [ -z "$SOURCE_TABLE" ]; then',
+    replace: 'if false; then',
+    suite: ['run', 'test:release'],
+    because:
+      'The carry drill may skip before the cutover, and a skippable step is one that can be skipped by accident. A watermark set with no table must fail rather than quietly drill nothing, so scenario 20 must go red when the refusal is gone.',
+  },
+  {
+    name: 'the release record stops distinguishing a skipped carry drill from a run one',
+    file: 'infra/scripts/rehearsal-release-record.sh',
+    find: '  *carry_drill=skipped_no_watermark*) CARRY_DRILL="skipped_no_watermark" ;;',
+    replace: '  *carry_drill=skipped_no_watermark*) CARRY_DRILL="ran" ;;',
+    suite: ['run', 'test:release'],
+    because:
+      'The record is what an admin reads at enable time. A record claiming the export half ran when it was skipped is the vacuous pass Appendix G 20 exists to prevent, and the two states must be distinguishable.',
+  },
+  {
+    name: 'the prefix guard stops knowing the stable repositories are rehearsal resources',
+    file: 'infra/scripts/rehearsal-common.sh',
+    find: "REHEARSAL_STABLE_NAMES='fss-rh-api fss-rh-worker'",
+    replace: "REHEARSAL_STABLE_NAMES=''",
+    suite: ['run', 'test:release'],
+    because:
+      'fss-rh-api and fss-rh-worker are the only fss-rh- names that carry no run. A guard that classified them as foreign would fail Appendix G 39 for the wrong reason on every release, so the classifier has to name them and the check has to run it.',
+  },
+  {
     name: 'the restore drill stops requiring a baseline to reconstruct',
     file: 'infra/scripts/rehearsal-restore-drill.sh',
     find: '  if [ "$count" -lt 1 ]; then',

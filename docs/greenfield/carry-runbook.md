@@ -92,6 +92,15 @@ same rule.
 **From this instant the old stack is read-only.** Do not open the old Mac app, do not
 re-enable the rule, and do not run any old operator command that writes.
 
+**This instant is also the rehearsal's watermark.** Until you have it there is nothing
+for the rehearsal's carry drill to exercise, so the two `rehearsal` environment secrets
+`FSS_REHEARSAL_CARRY_WATERMARK` and `FSS_REHEARSAL_CARRY_TABLE` do not exist yet and the
+drill prints `carry drill skipped: no cutover watermark yet` — the release record says
+`"carryDrill": "skipped_no_watermark"` rather than claiming a pass. Once you have the
+instant above and the old table's name, set both secrets; from the next rehearsal the
+drill runs. Set one without the other and the step fails on purpose. See
+`docs/decisions/g12c-the-carry-drill-waits-for-a-cutover.md` and `release.md` 1.3.
+
 ## 3. Wait five minutes, then confirm the old worker has stopped
 
 Watch the old worker's log group. **Good result:** no new invocation after the

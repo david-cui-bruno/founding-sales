@@ -81,13 +81,29 @@ variable "api_hostname" {
 }
 
 variable "api_image" {
-  description = "The exact immutable API digest proposed for production."
+  description = <<-EOT
+    The exact immutable API digest proposed for production, pulled from the
+    stable rehearsal repository `fss-rh-api` that
+    `infra/roots/rehearsal-registry` owns. The digest is production's; the
+    repository is not, because `fss-rh-deploy` may read nothing outside
+    `fss-rh-*`.
+  EOT
   type        = string
+
+  validation {
+    condition     = can(regex("/fss-rh-api@sha256:[0-9a-f]{64}$", var.api_image))
+    error_message = "api_image must be <registry>/fss-rh-api@sha256:<64 hex>. A rehearsal run pulls from the rehearsal repositories; the rehearsal role cannot read a production one."
+  }
 }
 
 variable "worker_image" {
-  description = "The exact immutable worker digest proposed for production."
+  description = "The exact immutable worker digest proposed for production, pulled from the stable `fss-rh-worker` repository."
   type        = string
+
+  validation {
+    condition     = can(regex("/fss-rh-worker@sha256:[0-9a-f]{64}$", var.worker_image))
+    error_message = "worker_image must be <registry>/fss-rh-worker@sha256:<64 hex>."
+  }
 }
 
 variable "api_schema_range" {
@@ -107,15 +123,28 @@ variable "worker_schema_range" {
 }
 
 variable "database_multi_az" {
-  description = "Rehearsal may run single-AZ. Production cannot."
+  description = <<-EOT
+    Multi-AZ, like production. G1 defaulted this to false on the reasoning that
+    a rehearsal may be small; G12c changes the default because Appendix E step
+    1 is a point-in-time restore of a *Multi-AZ* instance and that step is what
+    the 180-minute workflow timeout is a guess about. A single-AZ rehearsal
+    measures a restore production will never perform.
+
+    The variable stays, and false is still accepted: a run investigating
+    something unrelated to recovery can be cheaper by saying so.
+  EOT
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "database_instance_class" {
-  description = "RDS instance class. Rehearsal defaults to the smallest usable class."
+  description = <<-EOT
+    The same class as production, `db.t4g.small`. A rehearsal on `db.t4g.micro`
+    would deploy production's digests onto a machine production never uses and
+    report a recovery point objective nobody can act on.
+  EOT
   type        = string
-  default     = "db.t4g.micro"
+  default     = "db.t4g.small"
 }
 
 variable "database_allocated_storage" {
@@ -134,33 +163,44 @@ variable "database_backup_retention_days" {
 }
 
 variable "api_cpu" {
-  description = "Fargate CPU units for the API task."
+  description = "Fargate CPU units for the API task. Production's 0.5 vCPU, because the rehearsal runs the same image under the same limits."
   type        = number
-  default     = 256
+  default     = 512
 }
 
 variable "api_memory" {
-  description = "Fargate memory in MiB for the API task."
+  description = "Fargate memory in MiB for the API task. Production's 1 GiB: a rehearsal that never reached the production memory limit could not observe an OOM production would."
   type        = number
-  default     = 512
+  default     = 1024
 }
 
 variable "worker_cpu" {
-  description = "Fargate CPU units for the worker task."
-  type        = number
-  default     = 256
-}
-
-variable "worker_memory" {
-  description = "Fargate memory in MiB for the worker task."
+  description = "Fargate CPU units for the worker task. Production's 0.5 vCPU."
   type        = number
   default     = 512
 }
 
+variable "worker_memory" {
+  description = "Fargate memory in MiB for the worker task. Production's 1 GiB."
+  type        = number
+  default     = 1024
+}
+
 variable "cpu_architecture" {
-  description = "X86_64 or ARM64. Must match the digests proposed for production."
+  description = <<-EOT
+    X86_64 or ARM64, and the answer is ARM64, the same as production's: the
+    rehearsal deploys the exact digests proposed for production and those are
+    `linux/arm64` manifests. A rehearsal on the other architecture would not
+    start at all, which is the cheapest possible failure and still the wrong
+    one to discover from a stuck deployment rather than from a plan.
+  EOT
   type        = string
-  default     = "X86_64"
+  default     = "ARM64"
+
+  validation {
+    condition     = contains(["X86_64", "ARM64"], var.cpu_architecture)
+    error_message = "cpu_architecture must be exactly X86_64 or ARM64. ECS takes the uppercase enum, not Docker's linux/arm64 spelling."
+  }
 }
 
 variable "api_desired_count" {
@@ -173,6 +213,55 @@ variable "worker_desired_count" {
   description = "Number of worker tasks."
   type        = number
   default     = 1
+}
+
+variable "dependencies_mode" {
+  description = <<-EOT
+    `FSS_DEPENDENCIES` on both task definitions, and the rehearsal default is
+    `live`, the same as production's.
+
+    That is deliberate and it is a change of mind worth stating: an earlier
+    reading of this lane's brief had the rehearsal default to `recorded`. G12b
+    made Google sign-in a start-up requirement, and the rehearsal signs in with
+    the *real* OIDC client under its second registered redirect URI
+    (`api.rehearsal.usecallie.com`), so a `recorded` deployment would not be
+    rehearsing the path production runs. The one step that wants the recorded
+    Gmail fake — the journal replay and Sent reconstruction, where no real
+    rehearsal mailbox exists — sets `FSS_DEPENDENCIES: recorded` on its own
+    workflow step, which is the fake being chosen by name.
+
+    A run against a rehearsal-only Google project can still apply with
+    `recorded`; it is one `-var` and the isolation test asserts it works.
+  EOT
+  type        = string
+  default     = "live"
+
+  validation {
+    condition     = contains(["live", "recorded"], var.dependencies_mode)
+    error_message = "dependencies_mode must be live or recorded. none is the laptop value and a deployed process never reaches its no-op dependencies."
+  }
+}
+
+variable "research_providers" {
+  description = "`FSS_RESEARCH_PROVIDERS` on the rehearsal worker. `none`, as in production: a rehearsal must not reach a paid provider."
+  type        = string
+  default     = "none"
+}
+
+variable "sending_enabled" {
+  description = <<-EOT
+    `FSS_SENDING_ENABLED` on both rehearsal task definitions. Always false, and
+    nothing in the release workflow passes it: a rehearsal that could send would
+    send to whatever addresses the fixtures hold.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "extra_environment" {
+  description = "Any further non-secret environment variable both rehearsal tasks need. Never a credential."
+  type        = map(string)
+  default     = {}
 }
 
 variable "enable_execute_command" {

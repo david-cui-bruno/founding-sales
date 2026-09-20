@@ -140,9 +140,71 @@ variable "worker_desired_count" {
 }
 
 variable "cpu_architecture" {
-  description = "X86_64 or ARM64. ARM64 is the cheaper Fargate rate but the images must be built for it."
+  description = <<-EOT
+    X86_64 or ARM64, and the answer is ARM64 (David, 20 September 2026).
+
+    This is a default rather than a tfvars entry on purpose: `infra/.gitignore`
+    ignores `*.tfvars`, so an answer written there is an answer the repository
+    never sees and CI can never check. `greenfield-images.yml` builds
+    `--platform linux/arm64` and nothing else, so X86_64 here asks Fargate for
+    a manifest that is not in the index: the task never starts, the circuit
+    breaker rolls back, and the error arrives as a pull failure rather than as
+    a plan somebody could have read. `infra/roots/*/tests/isolation.tftest.hcl`
+    asserts the planned task definitions, not this value.
+  EOT
   type        = string
-  default     = "X86_64"
+  default     = "ARM64"
+
+  # Repeated from the cluster module deliberately: a refusal should name the
+  # variable the operator typed, not one three modules down.
+  validation {
+    condition     = contains(["X86_64", "ARM64"], var.cpu_architecture)
+    error_message = "cpu_architecture must be exactly X86_64 or ARM64. ECS takes the uppercase enum, not Docker's linux/arm64 spelling."
+  }
+}
+
+variable "dependencies_mode" {
+  description = <<-EOT
+    `FSS_DEPENDENCIES` on both task definitions. Production is `live`: every
+    real adapter is built from the deployed configuration, and any missing part
+    is a refusal to start rather than a queue that quietly never drains.
+
+    `recorded` is accepted by the validation and refused at run time by both
+    binaries when `FSS_ENVIRONMENT` is production (`PRODUCTION_REQUIRES_LIVE`),
+    so the refusal is not duplicated here. `none` is refused outright: it is the
+    laptop value, and a deployed process must never reach a no-op by omission.
+  EOT
+  type        = string
+  default     = "live"
+
+  validation {
+    condition     = contains(["live", "recorded"], var.dependencies_mode)
+    error_message = "dependencies_mode must be live or recorded. none is the laptop value and a deployed process never reaches its no-op dependencies."
+  }
+}
+
+variable "research_providers" {
+  description = "`FSS_RESEARCH_PROVIDERS` on the worker task definition. `none` says this build ships no live research adapter; it is a declaration, not an accident."
+  type        = string
+  default     = "none"
+}
+
+variable "sending_enabled" {
+  description = <<-EOT
+    `FSS_SENDING_ENABLED` on both task definitions: the deployment half of
+    16.2's send gate. False until the rehearsal gate has passed on the deployed
+    digests; `docs/greenfield/release.md` section 6 step 4 is where it becomes
+    true, and step 5 is the admin attestation that is the other half. Neither
+    alone sends anything.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "extra_environment" {
+  description = "Any further non-secret environment variable both tasks need. Never a credential: secrets reach a container only as a Secrets Manager reference."
+  type        = map(string)
+  default     = {}
 }
 
 variable "container_insights" {

@@ -23,8 +23,12 @@ Read section 1 before doing anything in section 3. Two steps in it take days of 
 | Create the DNS ALIAS | David | It points at a load balancer that does not exist until the first apply. |
 | Confirm the SNS subscription | David | AWS sends an email with a link. Nothing can click it for you. |
 | Grant the Gmail push | David | A Google consent screen in a browser. |
+| **Build and sign the desktop app — last, after the apply** | **CI (`greenfield-desktop.yml`), on prerequisites only David can create** | It needs a Developer ID Application certificate, the nine signing and notarisation secrets (eight of which are unset as of 20 September 2026), three repository variables, and the `desktop-release` GitHub environment; and it refuses to build without `FSS_UPDATE_CHANNEL_URL`, which is the CloudFront hostname the production apply creates. So it cannot come before section 4. `docs/greenfield/install.md` lists every one of them, and the job fails closed naming whichever is missing. |
+| Publish and install the desktop artifact | David | The one step that changes what every Mac sees. |
 | Run the production smoke checks | David or CI | Read-only, safe either way. |
 | **Enable sending** | **David, as an authenticated admin** | 16.2. It is an act, not a step. |
+
+The desktop rows are last on purpose, and 2.0 explains why the obvious order cannot run. Nothing in this table can be done out of order without something below it refusing.
 
 ---
 
@@ -61,18 +65,26 @@ aws iam get-role-policy --role-name fss-prod-deploy --policy-name <name> \
 
 ### 1.3 The `rehearsal` repository environment
 
-`.github/workflows/greenfield-release.yml` puts every AWS step behind a repository environment named `rehearsal`. Create it in the repository settings and give it these secrets:
+`.github/workflows/greenfield-release.yml` puts every AWS step behind a repository environment named `rehearsal`. Create it in the repository settings and give it these **five** secrets:
 
 | Secret | Value |
 |---|---|
 | `FSS_REHEARSAL_ROLE_ARN` | `arn:aws:iam::326255650484:role/fss-rh-deploy` |
-| `FSS_REHEARSAL_API_REPOSITORY` | `326255650484.dkr.ecr.us-east-1.amazonaws.com/fss-rh-api` |
-| `FSS_REHEARSAL_WORKER_REPOSITORY` | `326255650484.dkr.ecr.us-east-1.amazonaws.com/fss-rh-worker` |
+| `FSS_REHEARSAL_API_REPOSITORY` | `326255650484.dkr.ecr.us-east-1.amazonaws.com/fss-rh-api` — `terraform output repository_urls` in `infra/roots/rehearsal-registry` prints it |
+| `FSS_REHEARSAL_WORKER_REPOSITORY` | `326255650484.dkr.ecr.us-east-1.amazonaws.com/fss-rh-worker` — likewise |
 | `FSS_REHEARSAL_CERTIFICATE_ARN` | the wildcard rehearsal certificate |
 | `FSS_REHEARSAL_API_HOSTNAME` | `api.rehearsal.usecallie.com` |
-| `FSS_REHEARSAL_DATABASE_URL` | the rehearsal database URL the suite runs against |
-| `FSS_REHEARSAL_CARRY_WATERMARK` | the cutover watermark instant being drilled |
-| `FSS_REHEARSAL_CARRY_TABLE` | the old table the carry reads |
+
+And these **two**, which are **optional and should not exist until the cutover is scheduled**:
+
+| Secret | Value | Until then |
+|---|---|---|
+| `FSS_REHEARSAL_CARRY_WATERMARK` | the cutover watermark instant being drilled | leave it unset |
+| `FSS_REHEARSAL_CARRY_TABLE` | the old table the carry reads | leave it unset |
+
+With **both** unset the carry step prints exactly `carry drill skipped: no cutover watermark yet`, the release record carries `"carryDrill": "skipped_no_watermark"`, and the halves of Appendix G 20 that need no cutover — the old stack has no writer, no root names a legacy state key — still run. With **one** set the step fails: half a configuration is somebody halfway through something. `docs/decisions/g12c-the-carry-drill-waits-for-a-cutover.md` has the reasoning.
+
+**There is no `FSS_REHEARSAL_DATABASE_URL`, and there must not be.** The database the Appendix G suite runs against is created by the run's own apply and destroyed at its teardown, so a stored URL could only ever name a database that no longer exists. The workflow assembles `FSS_TEST_POSTGRES_URL` inside the job from three outputs of the run's root — the endpoint, the database name, and the RDS-managed master secret read with the rehearsal role — masks it with `::add-mask::` before it can reach a log, and never echoes it. Terraform never saw that password either: `manage_master_user_password` leaves generation and rotation to RDS.
 
 Until the environment exists, the workflow's `rehearsal` job cannot start and its `dry-run` job runs on every pull request without a credential. That is the intended state, not a failure.
 
@@ -177,6 +189,8 @@ docker push "$ACCOUNT.dkr.ecr.$REGION.amazonaws.com/fss-rh-api:$GIT_SHA"
 # ... and the worker.
 ```
 
+`fss-rh-api` and `fss-rh-worker` are **stable** repositories with no run in their names. They belong to `infra/roots/rehearsal-registry`, which is applied once (`infra-apply-runbook.md` 2.1) and never torn down; the per-run rehearsal root creates no repository at all. That is forced by this very step: you are pushing before the run exists, and the workflow's two repository secrets hold one value each. The rehearsal root refuses an image that does not come from those two repositories — `fss-rh-deploy` cannot read a production repository, so a plan-time refusal is better than an authorization error five minutes into a deployment.
+
 The **desktop commit stamp** is the release commit from 2.0 — the same `git rev-parse HEAD` you have been using — and the release record names it. You do not wait for a Mac build to learn it.
 
 ---
@@ -194,15 +208,15 @@ What it does, in order, and why the order is the order:
 
 1. **Refuse anything that is not a digest.** Two `sha256:` values, and they must differ — one image pushed under both names is a mistake the gate can catch and a person cannot.
 2. **Record the production inventory.** So that "teardown could not address production" is measured afterwards rather than asserted.
-3. **Create** the rehearsal root with the run prefix, deploying both digests.
+3. **Create** the rehearsal root with the run prefix, deploying both digests from the stable `fss-rh-api` and `fss-rh-worker` repositories. The run creates no repository of its own and its teardown removes none; `infra/roots/rehearsal-registry` owns those two and was applied once, before the first push.
 4. **Migrate, then deploy the worker, then the API.** Never beside each other: the API's declared schema range needs the migration to have run, the worker may straddle. `infra/scripts/rehearsal-schema-ranges.sh` runs that order and then the refusal cases (Appendix G 22).
 5. **Smoke** with the same `scripts/productionSmoke.mjs` production gets.
 6. **Run the Appendix G suite** (`npm run test:release`) and the **mutation check** (`npm run test:release:mutation`), which breaks each trap in turn and requires the suite to go red.
 7. **Restore drill**, Appendix E steps 1 to 9. It refuses to report a pass unless the baseline contained an accepted send, a reply, a suppression, a CRM edit and a migration — a drill against an empty database proves nothing.
 8. **Suppression journal replay and Gmail reconstruction**, against the recorded fake (no real mailbox in rehearsal unless you provide a rehearsal Google project). The second replay must insert nothing; no send may repeat.
-9. **Carry watermark** (Appendix G 20): the export must refuse a table with a post-watermark write, and the carry tooling must contain no writer at all.
+9. **Carry watermark** (Appendix G 20): the carry tooling must contain no writer at all, and — once a cutover is scheduled and the two optional secrets exist — the export must refuse a table with a post-watermark write. Before the cutover the step prints `carry drill skipped: no cutover watermark yet` and the record says `"carryDrill": "skipped_no_watermark"`. That is not a pass being claimed; it is the state being named.
 10. **Tear down**, always, with bypass-governance.
-11. **Assert nothing with the production prefix was touched**, always.
+11. **Assert nothing with the production prefix was touched**, always. The guard classifies every name it sees: the run's own resources, the two stable rehearsal repositories that carry no run, and anything production's — which it refuses. It runs in dry mode on every pull request, so both branches are exercised without a credential.
 12. **Write the release record**, last. It names the two digests, the desktop stamp, and a `releaseGateReference` you will need in section 6.
 
 If any step fails, steps 10 and 11 still run and no record is written. That is the design: there is no such thing as a partially passed release gate.
@@ -220,7 +234,11 @@ FSS_REHEARSAL_DRY_RUN=1 FSS_REHEARSAL_REPORTS=/tmp/fss-rehearsal \
 
 ## 4. Production apply — David
 
-Follow `docs/greenfield/infra-apply-runbook.md` section 3.2 for the plan and apply. Three things belong to the release rather than to the infrastructure:
+Follow `docs/greenfield/infra-apply-runbook.md` section 3.2 for the plan and apply.
+
+**Read the ECR lines first.** The production registry was bootstrapped by a targeted apply at commit 71d84e00, and `create_registry` has since given that module a `count`. The first plan after this change must show `fss-prod-api` and `fss-prod-worker` as **moved** — `module.stack.module.registry.…` *has moved to* `module.stack.module.registry[0].…` — and then report no changes to them. **A plan that proposes to destroy or replace an ECR repository is not to be applied.** It would delete the images every release record identifies, and the digests in section 6 step 2 would stop resolving. The `moved` block in `infra/modules/stack` is what makes this a state migration; if it is ever removed, this is the failure.
+
+Three things belong to the release rather than to the infrastructure:
 
 **The digests.** `api_image` and `worker_image` are the digests from section 2, not the tags.
 
@@ -243,17 +261,21 @@ and pass them as `api_schema_range` and `worker_schema_range`. A task definition
 | `gcp_project_id` | `callie-fss` | The project that owns the Gmail push topic. |
 | `alert_emails` | `["callie@usecallie.com"]` | Each address confirms once by hand (5.3 below). |
 
-**The deployment environment variables this release adds.** Both task definitions need:
+**The deployment environment variables this release adds.** Both task definitions need them, and all five are Terraform's — there is nothing to type at apply time unless you are changing one:
 
-| Variable | Production value | Set by |
+| Variable | Production value | Root variable |
 |---|---|---|
-| `FSS_DEPENDENCIES` | `live` | you, in `extra_environment` or the plan review |
-| `FSS_RESEARCH_PROVIDERS` | `none` (worker only) | you |
-| `FSS_SENDING_ENABLED` | `false` until section 6 | you |
-| `FSS_GMAIL_PUSH_TOPIC` | the Pub/Sub topic id | Terraform, from `module.pubsub` |
-| `FSS_GOOGLE_HOSTED_DOMAIN` | `usecallie.com` | Terraform, from `google_hosted_domain` |
+| `FSS_DEPENDENCIES` | `live` | `dependencies_mode`, default `live` |
+| `FSS_RESEARCH_PROVIDERS` | `none` (worker only) | `research_providers`, default `none` |
+| `FSS_SENDING_ENABLED` | `false` until section 6 step 4 | `sending_enabled`, default `false` |
+| `FSS_GMAIL_PUSH_TOPIC` | the Pub/Sub topic id | none; derived from `module.pubsub` |
+| `FSS_GOOGLE_HOSTED_DOMAIN` | `usecallie.com` | `google_hosted_domain` |
 
-`FSS_DEPENDENCIES` has no default in production: an unset one is a refusal to start, which is deliberate — see `docs/decisions/g12-the-credentialed-bootstrap.md`. `FSS_RESEARCH_PROVIDERS=none` is a declaration that this build ships no live research adapter, not an accident. The last two are Terraform's and need nothing from you; they are listed so that a startup line reporting `hosted_domain_source: "secret"` reads as "the apply has not landed yet" rather than as a mystery.
+Until G12c none of the first three could be set at all: `extra_environment` existed on the stack module and no root exposed it, so an apply produced two services whose tasks exit at startup naming a variable no plan could set. `docs/decisions/g12c-the-deployment-flags-are-root-variables.md`.
+
+`FSS_DEPENDENCIES` has no default **in the binary**: an unset one is a refusal to start, which is deliberate (`docs/decisions/g12-the-credentialed-bootstrap.md`); the root's default is what makes sure it is never unset. `dependencies_mode` refuses `none` outright and accepts `recorded`, which the binaries then refuse in a production environment — the rule lives in one place rather than two that can disagree. `FSS_RESEARCH_PROVIDERS=none` is a declaration that this build ships no live research adapter, not an accident. The last two need nothing from you; they are listed so that a startup line reporting `hosted_domain_source: "secret"` reads as "the apply has not landed yet" rather than as a mystery.
+
+There is also `extra_environment` (`map(string)`, empty) on both roots, for whatever the next release needs before it earns a variable of its own. Never a credential: secrets reach a container only as a Secrets Manager reference, and the root test asserts no environment name looks like one.
 
 **What the API refuses to start without.** A live API now builds Google sign-in or exits with `api_deployment_refused`. The parts are the `google-oidc-client` secret, `FSS_PUBLIC_ORIGIN` (the redirect is `https://api.usecallie.com/auth/google/callback`, derived rather than configured twice), `FSS_GOOGLE_HOSTED_DOMAIN`, and `session-signing-key`. `--selftest` prints `sign_in`, `sign_in_client_configured`, `sign_in_redirect_configured`, `sign_in_hosted_domain_configured` and `session_signing_key_configured` — names and booleans, never a value. Before G12b the API started without any of it and refused every command; see `docs/decisions/g12b-sign-in-is-configured-or-the-api-refuses.md`.
 
@@ -376,7 +398,7 @@ This comparison is deliberately yours rather than the workflow's. It is the mome
 
 **3. The sending domain passes authentication.** 12.7, and the database enforces it: `sending_domains.automated_sending_enabled` cannot be true without SPF, DKIM, DMARC and a recorded Postmaster review. Set it from the admin surface (`/outbound/authentication`). If it refuses, a check is missing — fix the DNS, not the constraint.
 
-**4. Flip the deployment flag.** Set `FSS_SENDING_ENABLED=true` on both task definitions and re-deploy (worker, then API). This is the release process's statement that the gate passed on these digests.
+**4. Flip the deployment flag.** `terraform apply -var="sending_enabled=true"` in the production root, then re-deploy (worker, then API). That puts `FSS_SENDING_ENABLED=true` on both task definitions; read the plan first, and expect it to change exactly the two task definitions and nothing else. This is the release process's statement that the gate passed on these digests.
 
 **5. Write the attestation, as an authenticated admin.** From the settings page, or:
 
@@ -416,4 +438,6 @@ Nothing in this repository has ever been applied, and the rehearsal workflow has
 1. Whether `resourcegroupstaggingapi get-resources` is readable by the rehearsal role. `rehearsal-prefix-guard.sh` uses it to compare the production inventory before and after; if the role cannot read production at all, the scenario still passes — "could not address" is the claim — but the script will need the read moved to a separate inventory role to produce a useful diff.
 2. Whether the worker task role can write the suppression journal. **Closed by G12b in the plan, unproved in the cloud.** `infra/modules/cluster` now gives the worker `s3:PutObject` on the journal object prefix and `kms:Encrypt`/`kms:GenerateDataKey` on the journal key, and `infra/modules/journal` names both task roles as permitted writers rather than the API alone — so the bucket policy's `DenyWritesFromAnyoneButTheTaskRoles` no longer refuses the worker. Neither role asks for any `s3:Delete*`, and no writer sets a per-object retention: the bucket's own default retention locks every object on put, and `s3:PutObjectRetention` stays denied to everybody. `infra/modules/cluster/tests/services.tftest.hcl` asserts both halves offline. What a plan cannot prove is that the first real opt-out the worker imports actually lands in the bucket; watch the `SuppressionJournalWriteFailures` metric after Gmail sync is first enabled, because a remaining IAM refusal surfaces there and nowhere else.
 3. Whether one day of GOVERNANCE retention is long enough that `--bypass-governance-retention` is only ever needed for a same-day teardown.
-4. How long the whole rehearsal takes. The workflow's timeout is 180 minutes, which is a guess dominated by the Multi-AZ restore in Appendix E step 1.
+4. How long the whole rehearsal takes. The workflow's timeout is 180 minutes, which is a guess dominated by the Multi-AZ restore in Appendix E step 1. The rehearsal database is now `db.t4g.small` and Multi-AZ, like production's (`docs/decisions/g12c-the-topology-answers-are-root-defaults.md`), so that guess is at last a guess about the right operation — and it is the first thing to measure.
+5. Whether `fss-rh-deploy` can read the RDS-managed master secret the database URL is assembled from. The secret is named `rds!db-<id>` by RDS and does not carry the `fss-rh-` prefix the role is scoped by, so its policy probably needs a statement naming the ARN the root outputs. Runbook 6.5 has the detail; symptom is an `AccessDenied` at "Assemble the rehearsal database URL" and no connection string.
+6. Whether the first real rehearsal takes the skip branch of the carry drill, as it should before the cutover, and whether the release record reading `"carryDrill": "skipped_no_watermark"` is legible enough at enable time. Both branches run offline on every pull request; neither has run against AWS.

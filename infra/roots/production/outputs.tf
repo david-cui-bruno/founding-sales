@@ -43,6 +43,16 @@ output "database_master_secret_arn" {
   value       = module.stack.database_master_secret_arn
 }
 
+output "database_name" {
+  description = "Application database name."
+  value       = module.stack.database_name
+}
+
+output "task_runtime_platform" {
+  description = "Operating system family and CPU architecture on each task definition."
+  value       = module.stack.task_runtime_platform
+}
+
 output "repository_urls" {
   description = "ECR repository URLs keyed by service short name."
   value       = module.stack.repository_urls

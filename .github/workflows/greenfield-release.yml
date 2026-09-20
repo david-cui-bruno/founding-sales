@@ -168,6 +168,51 @@ jobs:
           cat "$FSS_REHEARSAL_REPORTS/release-record.json"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
+      - name: The carry drill skips when there is no cutover watermark
+        env:
+          FSS_REHEARSAL_DRY_RUN: '1'
+        run: |
+          set -euo pipefail
+          # The other branch of the step above, which sets both carry variables. Until
+          # the cutover is scheduled neither `FSS_REHEARSAL_CARRY_WATERMARK` nor
+          # `FSS_REHEARSAL_CARRY_TABLE` exists, and the first release is before the
+          # cutover — so this is the branch the first real run takes, and a dry run
+          # that never exercised it would be a dry run of a different workflow.
+          reports="$RUNNER_TEMP/fss-carry-skip"
+          rm -rf "$reports"; mkdir -p "$reports"
+          # Deliberately unset, both of them.
+          output="$(env -u FSS_CARRY_WATERMARK -u FSS_CARRY_SOURCE_TABLE \
+            FSS_REHEARSAL_REPORTS="$reports" \
+            infra/scripts/rehearsal-carry-watermark.sh fss-rh-dryrun)"
+          echo "$output"
+          if ! grep -qxF 'carry drill skipped: no cutover watermark yet' <<<"$output"; then
+            echo "::error::the skip branch did not print its one line"
+            exit 1
+          fi
+          grep -q 'carry_drill=skipped_no_watermark' "$reports/carry-watermark.txt"
+
+          # And the release record carries that state rather than claiming a pass.
+          for report in restore-drill.txt schema-ranges.txt prefix-guard.txt; do
+            echo "prefix=fss-rh-dryrun" > "$reports/$report"
+          done
+          FSS_REHEARSAL_REPORTS="$reports" infra/scripts/rehearsal-release-record.sh \
+            fss-rh-dryrun \
+            "sha256:$(printf 'a%.0s' {1..64})" \
+            "sha256:$(printf 'b%.0s' {1..64})" \
+            "$GITHUB_SHA" pass "$reports/release-record.json"
+          grep -q '"carryDrill": "skipped_no_watermark"' "$reports/release-record.json"
+          cat "$reports/release-record.json"
+
+          # Half a configuration is a refusal, not a skip.
+          for half in FSS_CARRY_WATERMARK=2026-09-21T00:00:00Z FSS_CARRY_SOURCE_TABLE=old-table; do
+            if env -u FSS_CARRY_WATERMARK -u FSS_CARRY_SOURCE_TABLE "$half" \
+                 FSS_REHEARSAL_REPORTS="$reports" \
+                 infra/scripts/rehearsal-carry-watermark.sh fss-rh-dryrun >/dev/null 2>&1; then
+              echo "::error::the carry drill accepted a half-configured cutover ($half)"
+              exit 1
+            fi
+          done
+
       - name: The release record refuses what it must refuse
         env:
           FSS_REHEARSAL_DRY_RUN: '1'
@@ -324,9 +369,47 @@ jobs:
           NODE_OPTIONS="--experimental-transform-types --disable-warning=ExperimentalWarning" \
             node scripts/productionSmoke.mjs --origin "$origin" --canary-age-seconds "$age" --json
 
+      - name: Assemble the rehearsal database URL from this run's own outputs
+        working-directory: infra/roots/rehearsal
+        run: |
+          set -euo pipefail
+          # There is no FSS_REHEARSAL_DATABASE_URL secret and there must not be. The
+          # database this suite runs against is created by the apply four steps up and
+          # destroyed at teardown, so a static secret could only ever name a database
+          # that no longer exists — or, worse, one that does. The master password is
+          # RDS-generated and RDS-rotated; Terraform never saw it and neither does this
+          # repository. Three outputs plus one Secrets Manager read, masked before the
+          # value can reach a log, and nothing is echoed.
+          endpoint="$(terraform output -raw database_endpoint)"
+          database="$(terraform output -raw database_name)"
+          secret_arn="$(terraform output -raw database_master_secret_arn)"
+
+          secret_json="$(aws secretsmanager get-secret-value \
+            --secret-id "$secret_arn" --query SecretString --output text)"
+
+          # Two lines: the encoded password, then the whole URL. Both are masked,
+          # because a later step that logged only the credential — a psql error, say —
+          # would not be covered by masking the whole string. `quote(safe="")` because
+          # a generated password may contain @, / or :, and a naively concatenated URL
+          # would parse as a different host.
+          credentials="$(SECRET_JSON="$secret_json" ENDPOINT="$endpoint" DATABASE="$database" python3 - <<'PY'
+          import json, os, urllib.parse
+          secret = json.loads(os.environ["SECRET_JSON"])
+          user = urllib.parse.quote(secret["username"], safe="")
+          password = urllib.parse.quote(secret["password"], safe="")
+          print(password)
+          print(f"postgresql://{user}:{password}@{os.environ['ENDPOINT']}/{os.environ['DATABASE']}?sslmode=require")
+          PY
+          )"
+          password="${credentials%%$'\n'*}"
+          url="${credentials#*$'\n'}"
+          echo "::add-mask::$password"
+          echo "::add-mask::$url"
+          echo "FSS_TEST_POSTGRES_URL=$url" >> "$GITHUB_ENV"
+          # The host, which is public, and nothing else.
+          echo "connection string assembled for ${database} at ${endpoint%%:*}"
+
       - name: Run the Appendix G suite
-        env:
-          FSS_TEST_POSTGRES_URL: ${{ secrets.FSS_REHEARSAL_DATABASE_URL }}
         run: |
           set -euo pipefail
           npm ci --ignore-scripts --no-audit --no-fund
@@ -362,6 +445,13 @@ jobs:
 
       - name: The data carry watermark and the old stack
         env:
+          # Both optional, and both absent until a cutover is scheduled — an unset
+          # secret renders as the empty string. The script skips its export half when
+          # *both* are empty, printing one line and recording
+          # `carry_drill=skipped_no_watermark` so the release record carries the state
+          # rather than claiming a pass; it refuses when only one is set. The halves
+          # that need no cutover (the old stack has no writer; no root names a legacy
+          # state key) run on every release either way.
           FSS_CARRY_WATERMARK: ${{ secrets.FSS_REHEARSAL_CARRY_WATERMARK }}
           FSS_CARRY_SOURCE_TABLE: ${{ secrets.FSS_REHEARSAL_CARRY_TABLE }}
         run: infra/scripts/rehearsal-carry-watermark.sh '${{ steps.prefix.outputs.prefix }}'

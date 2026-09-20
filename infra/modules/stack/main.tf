@@ -107,12 +107,38 @@ module "observability" {
   tags               = local.tags
 }
 
+# The registry is the one part of the stack that outlives the stack.
+#
+# Production creates its own (`fss-prod-api`, `fss-prod-worker`) and keeps it.
+# A rehearsal *run* must not: the images are pushed before the run exists, the
+# release workflow's environment secrets name the stable `fss-rh-api` and
+# `fss-rh-worker`, and a repository created per run would be deleted with the
+# run. `infra/roots/rehearsal-registry` owns those two and is applied once.
 module "registry" {
   source = "../registry"
+  count  = var.create_registry ? 1 : 0
 
   name_prefix  = var.name_prefix
   force_delete = var.destroyable
   tags         = local.tags
+}
+
+# Production state already holds this module at its un-counted address.
+#
+# David ran `terraform apply -target=module.stack.module.registry` in
+# infra/roots/production at 71d84e00 to bootstrap `fss-prod-api` and
+# `fss-prod-worker` before the first image push (infra-apply-runbook.md 2.2).
+# Adding `count` above renames the address to `module.registry[0]`, and without
+# this block the next production plan would read that as one module destroyed
+# and another created — which, for an ECR repository, means deleting the images
+# every release is identified by.
+#
+# The move is a state operation Terraform performs inside the plan. It is not a
+# change to any resource: the plan should show the two repositories as *moved*
+# and then report no changes to them.
+moved {
+  from = module.registry
+  to   = module.registry[0]
 }
 
 module "secrets" {
@@ -219,8 +245,19 @@ module "cluster" {
   container_insights     = var.container_insights
   enable_execute_command = var.enable_execute_command
 
+  # FSS_RESEARCH_PROVIDERS is the worker's alone: the API has no research
+  # adapter, and a variable a process never reads is a variable that drifts.
+  worker_environment = {
+    FSS_RESEARCH_PROVIDERS = var.research_providers
+  }
+
   environment = merge(var.extra_environment, {
-    FSS_ENVIRONMENT                = var.environment
+    FSS_ENVIRONMENT = var.environment
+    # The three deployment flags of 16.2 and G12's bootstrap. They are first-class
+    # inputs rather than entries in extra_environment because each is refused,
+    # not defaulted, by the process that reads it.
+    FSS_DEPENDENCIES               = var.dependencies_mode
+    FSS_SENDING_ENABLED            = tostring(var.sending_enabled)
     FSS_BUSINESS_TIME_ZONE         = var.business_time_zone
     FSS_DATABASE_HOST              = module.database.address
     FSS_DATABASE_PORT              = tostring(module.database.port)

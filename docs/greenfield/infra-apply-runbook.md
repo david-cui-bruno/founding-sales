@@ -94,7 +94,41 @@ Not infrastructure, but the apply is pointless without them and they take days, 
 
 ## 2. Push the images first
 
-Both services are deployed by **digest**. `api_image` and `worker_image` are validated against `@sha256:<64 hex>`; a tag is refused. The ECR repositories are created by this stack, so the very first apply is a chicken-and-egg:
+Both services are deployed by **digest**. `api_image` and `worker_image` are validated against `@sha256:<64 hex>`; a tag is refused. There are **four** repositories across three roots, and two of them have to exist before anything can be pushed:
+
+| Repository | Created by | When |
+|---|---|---|
+| `fss-prod-api`, `fss-prod-worker` | `infra/roots/production`, `module.stack.module.registry` | targeted first apply, once |
+| `fss-rh-api`, `fss-rh-worker` | `infra/roots/rehearsal-registry` | its own apply, once |
+
+### 2.1 The rehearsal repositories — one apply, then never again
+
+The per-run rehearsal root creates **no** repository (`create_registry = false`). It cannot: the images are pushed before the run exists, the release workflow's environment secrets name two fixed repositories, and a per-run repository would be destroyed with the run — taking the earlier compatible binaries the 4.2 rollback path depends on. `docs/decisions/g12c-the-rehearsal-registry-is-its-own-root.md` has the reasoning.
+
+```bash
+cd infra/roots/rehearsal-registry
+terraform init -backend-config=backend.hcl -backend-config="kms_key_id=<state key arn>"
+terraform plan -out=rehearsal-registry.tfplan     # two aws_ecr_repository, two lifecycle policies
+terraform apply rehearsal-registry.tfplan
+
+terraform output repository_urls
+```
+
+Those two URLs are the values of the `rehearsal` environment's `FSS_REHEARSAL_API_REPOSITORY` and `FSS_REHEARSAL_WORKER_REPOSITORY` secrets (release.md 1.3). Read them from here rather than assembling them by hand.
+
+This root takes no `name_prefix`: `fss-rh` is a literal, because the workflow's secrets name exactly `fss-rh-api` and `fss-rh-worker`. Its state key is `fss/greenfield/rehearsal-registry/terraform.tfstate`, deliberately outside the per-run space `fss/greenfield/rehearsal/<run>/` — `registry` is a legal run suffix, and a run whose state collided with this one would destroy the repositories on teardown. The offline gate checks all of that.
+
+Do not `terraform destroy` this root. `force_delete` is false, so a destroy fails on a repository that still holds images, which is the correct answer.
+
+**The first production plan after this change shows the two repositories as *moved*, never as replaced.** `create_registry` gives `module.stack.module.registry` a `count`, which renames its address to `module.stack.module.registry[0]`; the production state already holds the un-counted address, because the targeted apply in 2.2 below was run at commit 71d84e00. A `moved` block in `infra/modules/stack` migrates the state inside the plan, so the plan reads
+
+```
+module.stack.module.registry.aws_ecr_repository.this["api"] has moved to module.stack.module.registry[0].aws_ecr_repository.this["api"]
+```
+
+and reports **no changes** to either repository. **If a production plan ever proposes to destroy an ECR repository, stop and do not apply it.** Destroying `fss-prod-api` or `fss-prod-worker` deletes the images every release is identified by, including the earlier compatible binaries 4.2's preferred rollback depends on, and the digests in every past release record stop resolving.
+
+### 2.2 The production repositories — the one use of `-target`
 
 ```bash
 # First apply: create the registries only.
@@ -115,6 +149,10 @@ aws ecr describe-images --repository-name fss-prod-api \
 ```
 
 `-target` is used exactly once, for this bootstrap, and never again. The rest of the runbook applies the whole root.
+
+**This has already been done**, at commit 71d84e00, so production state holds the two repositories with immutable tags and scan on push. That is why 2.1's `moved` note exists: the next plan you run against this root migrates their address and changes nothing about them.
+
+The same digests are then pushed to `fss-rh-api` and `fss-rh-worker` so the rehearsal deploys the exact artefacts production will (`release.md` 2.1). The rehearsal root refuses an `api_image` that does not end `/fss-rh-api@sha256:<64 hex>`: `fss-rh-deploy` may read nothing outside `fss-rh-*`, and a plan is a better place to learn that than an ECR authorization error minutes into a deployment.
 
 ## 3. The applies, in order
 
@@ -179,7 +217,8 @@ Read the plan before applying it. Specifically confirm:
 - `aws_db_instance.main` has `multi_az = true`, `deletion_protection = true`, `backup_retention_period = 35`, `storage_encrypted = true`;
 - there is no `aws_nat_gateway` and no `aws_vpc_endpoint`;
 - there is no `aws_secretsmanager_secret_version`;
-- the ALB has exactly one listener, on 443.
+- the ALB has exactly one listener, on 443;
+- the two ECR repositories appear under **"has moved to"** and under nothing else. A plan that proposes to destroy, replace or recreate `fss-prod-api` or `fss-prod-worker` is a plan to delete the images the release record names. Stop; the `moved` block in `infra/modules/stack` is what makes the address change a migration rather than a replacement.
 
 The RDS instance takes 10-20 minutes to become available with Multi-AZ. The ECS services will not stabilise until it is, because the tasks need the database.
 
@@ -305,3 +344,5 @@ Every statement about resource behaviour here comes from the Terraform schema an
 2. Whether the RDS parameter group values are all dynamic. `rds.force_ssl` is static and requires a reboot; the first apply creates the instance with the group attached, so it applies at creation.
 3. Whether `db.t4g.small` is enough for the scheduler's one-minute pass plus Gmail sync. It is a guess based on one salesperson; watch `OldestRunnableJobAgeSeconds` and the CPU credit balance for the first week.
 4. The exact IAM policy text the two deployment roles need. Section 1.1 states the shape and the condition; the statement list will need one round of least-privilege iteration against a real plan.
+5. **Whether `fss-rh-deploy` can read the RDS-managed master secret.** The release workflow assembles the rehearsal database URL in the job from the run's outputs plus `secretsmanager:GetSecretValue` on `database_master_secret_arn` (`docs/decisions/g12c-the-rehearsal-database-url-is-derived.md`). RDS names that secret `rds!db-<id>`, which does **not** begin `fss-rh-`, so a policy scoped purely by name prefix will refuse it. Allow `secretsmanager:GetSecretValue` and `kms:Decrypt` on the specific secret the rehearsal root outputs — not on `*` — or the suite step fails with an `AccessDenied` and no connection string.
+6. Whether `fss-rh-deploy` may create the two durable repositories in `infra/roots/rehearsal-registry`. It should: the names are `fss-rh-api` and `fss-rh-worker` and the condition is on the resource name. It is one apply, and it is the first thing in section 2.
