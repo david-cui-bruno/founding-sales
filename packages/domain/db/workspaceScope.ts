@@ -48,11 +48,9 @@ export function workspaceScope(id: string | WorkspaceId, actor: ScopeActor): Wor
   if (actor.kind === 'user' && !UUID_PATTERN.test(actor.userId)) {
     throw new WorkspaceScopeError('SCOPE_ACTOR_INVALID', 'a user actor names a UUID user id');
   }
-  return {
-    [workspaceScopeBrand]: 'WorkspaceScope',
-    workspaceId: workspaceId(id),
-    actor,
-  } as WorkspaceScope;
+  // The brand is a type-level `unique symbol` with no runtime value: it exists to make
+  // an object literal unassignable to WorkspaceScope, and nothing ever reads it.
+  return { workspaceId: workspaceId(id), actor } as unknown as WorkspaceScope;
 }
 
 /** Whether a scope is an admin's. Admin-only commands ask this, never the caller's word. */
