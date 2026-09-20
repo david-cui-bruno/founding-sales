@@ -75,6 +75,7 @@ COPY packages/domain/classification packages/domain/classification
 COPY packages/domain/mail packages/domain/mail
 COPY packages/domain/dial packages/domain/dial
 COPY packages/domain/outbound packages/domain/outbound
+COPY packages/domain/settings packages/domain/settings
 COPY packages/domain/sequences packages/domain/sequences
 COPY packages/domain/templates packages/domain/templates
 COPY packages/contracts/src packages/contracts/src

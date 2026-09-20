@@ -36,6 +36,8 @@ export const FIXTURE_ZONE = 'UTC';
 export const FIXTURE_BUSINESS_DATE = '2026-09-23';
 
 export const SENDING_DOMAIN = 'example.test';
+/** The rehearsal run this fixture world attests to. A label, never a credential. */
+export const RELEASE_GATE_REFERENCE = 'rehearsal-fixture-world';
 export const TEMPLATE_SUBJECT = 'A short note about your properties';
 export const TEMPLATE_BODY =
   'Hello.\n\nI work with property managers nearby.\n\nSigned off\n1 Example Way\n' +
@@ -143,6 +145,27 @@ export async function createOutboundWorld(): Promise<OutboundWorld> {
       [workspaceId, SENDING_DOMAIN, mailbox.workspace.admin.userId],
     );
 
+    // 16.2's second switch, which G12 wired into the send gate: the admin attestation
+    // naming the rehearsal gate whose digests match the deployment. A world without it
+    // could not send at all, and every scenario here that is about a cap, a window or a
+    // suppression would refuse for a reason it is not about. `sendDeps` supplies the
+    // deployment half for the same reason.
+    //
+    // This *is* the vacuous-pass trap for the outbound suite and it is deliberate: the
+    // mutation check removes these two lines and requires the suite to fail. See
+    // `packages/domain/test/outbound/attestation.test.ts`, which sets both halves
+    // itself rather than relying on this.
+    await context.db.query(
+      `INSERT INTO workspace_settings (workspace_id, setting_key, version, value, change_note, changed_by_user_id)
+       VALUES ($1, 'sending_enabled', 1, $2::jsonb, 'fixture: the rehearsal gate this world stands for', $3)
+       ON CONFLICT (workspace_id, setting_key, version) DO NOTHING`,
+      [
+        workspaceId,
+        JSON.stringify({ enabled: true, releaseGateReference: RELEASE_GATE_REFERENCE }),
+        mailbox.workspace.admin.userId,
+      ],
+    );
+
     const templateId = '22222222-3333-4444-8555-666666666666';
     const contentHash = templateHash(templateId, 1, TEMPLATE_SUBJECT, TEMPLATE_BODY);
     const template = await context.db.query<{ id: string }>(
@@ -186,6 +209,10 @@ export async function createOutboundWorld(): Promise<OutboundWorld> {
       cipher: sync.cipher,
       actor: 'test-worker',
       now: () => new Date(OPEN_INSTANT),
+      // 16.2's deployment half. `decideSend` defaults it to false — fail closed — so a
+      // world that omitted it would hold every send with
+      // `workspace_sending_not_attested` and prove nothing about caps or windows.
+      deploymentSendingEnabled: true,
       ...overrides,
     };
   };

@@ -186,9 +186,29 @@ export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum:
  *
  * Both maxima move to 13, because a binary that refused the database it has just been
  * deployed against would be a self-inflicted outage.
+ *
+ * G12 (release gates) raises the **worker's** minimum to 13 without adding a
+ * migration, and it is the lane 0013's note above said would have to.
+ *
+ * 16.2's sending switch is two facts, and `decideSend` — which runs in the worker,
+ * inside the dispatching transaction — now reads the second of them from
+ * `workspace_settings`. So `packages/domain/outbound/gate.ts` issues a statement
+ * against a table that does not exist before 0013, and a worker on a version-12
+ * database would meet an `undefined_table` error at the one moment it must not: after
+ * the eligibility reads and before the fence is claimed. Under the same rule G10, G6,
+ * G7, G7b and G8 each applied, the binary declares the lowest version on which its
+ * statements can succeed, so the minimum moves rather than the code guessing.
+ *
+ * Failing closed instead — treating a missing table as "not attested" — was the other
+ * option and is worse: it makes a stale deployment look like an admin who has not
+ * enabled sending, which is a supported state an operator would then go and "fix".
+ *
+ * Both ranges are now the strict {13, 13} the coordinator's note anticipated, so
+ * Appendix G 22's "previous image against the new schema" has no overlapping pair and
+ * the scenario asserts the refusal instead. See `test/release/scenario22.check.ts`.
  */
 export const API_SCHEMA_RANGE: SchemaRange = { minimum: 13, maximum: 13 };
-export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 12, maximum: 13 };
+export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 13, maximum: 13 };
 
 export function acceptsSchemaVersion(range: SchemaRange, version: number): boolean {
   return Number.isInteger(version) && version >= range.minimum && version <= range.maximum;

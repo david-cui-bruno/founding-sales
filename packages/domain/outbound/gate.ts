@@ -1,5 +1,7 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { listApplicableHolds } from '../policy/holds.ts';
+import { effectiveSendingEnabled } from '../settings/effective.ts';
+import { readSetting } from '../settings/store.ts';
 import { firstSuppressed } from '../suppression/effective.ts';
 import { EMAIL_WINDOW, localParts } from '../src/index.ts';
 import { effectiveDailyCap, ensureRamp, openSendDay, type RampRow, type SendDayRow } from './ramp.ts';
@@ -42,6 +44,20 @@ import type { OutboundFenceRow } from './fence.ts';
 export interface SendGateDeps {
   /** Database time, so the window and the guard agree with the fence's timestamps. */
   readonly now?: (() => Date) | undefined;
+  /**
+   * 16.2's deployment half: this build's statement that the rehearsal gate passed on
+   * the digests that are deployed.
+   *
+   * It is an argument rather than a configuration read for the reason
+   * `effectiveSendingEnabled` is a pure rule: the fact belongs to the *process*, which
+   * knows which image it is, and a domain function that went looking for it would be
+   * reading an environment variable from inside a transaction.
+   *
+   * Absent means **false**. A caller that forgot to pass it gets a held send and a
+   * refusal that names why, which is the conservative direction: the failure mode of
+   * defaulting the other way is sending from an artifact nobody rehearsed.
+   */
+  readonly deploymentSendingEnabled?: boolean | undefined;
 }
 
 export interface SendPlan {
@@ -127,6 +143,26 @@ export async function decideSend(
   if (mailbox.sync_state !== 'ready') return refuseSend('coverage_incomplete', mailbox.sync_state);
 
   // ------------------------------------------------------------- not yet, then
+  // 16.2: "Production sending remains disabled until all mandatory scenarios for the
+  // affected release class pass, the deployed commit/image digests match the rehearsal
+  // artifacts, and an authenticated admin enables sending."
+  //
+  // Two facts, ANDed by `effectiveSendingEnabled`, and this is the only place in FSS
+  // that reads them before an irreversible action. The stored half is the admin's
+  // attestation carrying the `releaseGateReference` of the rehearsal whose digests
+  // match; the argument is the deployment's own. It is checked before the sending
+  // domain because it is the broader statement: a workspace nobody has enabled must
+  // report that, not the state of its DNS records.
+  const attestation = await readSetting(context, 'sending_enabled');
+  if (!effectiveSendingEnabled(deps.deploymentSendingEnabled ?? false, attestation.value)) {
+    return refuseSend(
+      'workspace_sending_not_attested',
+      // Which half said no, and never the reference itself: it names a rehearsal run,
+      // which is operational detail an operator reads from the settings page.
+      deps.deploymentSendingEnabled === true ? 'workspace' : 'deployment',
+    );
+  }
+
   const domain = await readPrimarySendingDomain(context);
   if (domain === null) return refuseSend('sending_domain_unknown');
   if (!authenticationPasses(domain) || !domain.automatedSendingEnabled) {

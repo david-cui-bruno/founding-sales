@@ -25,6 +25,7 @@
 !packages/domain/mail
 !packages/domain/dial
 !packages/domain/outbound
+!packages/domain/settings
 !packages/domain/sequences
 !packages/domain/templates
 !packages/contracts/package.json
