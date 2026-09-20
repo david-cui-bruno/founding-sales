@@ -157,6 +157,6 @@ export interface SequenceBridge {
 }
 
 declare global {
-  // eslint-disable-next-line no-var -- the preload script installs exactly this.
+  /** The bridge the preload script installs, exactly as G2's `callie` is installed. */
   var callieSequences: SequenceBridge | undefined;
 }

@@ -267,21 +267,54 @@ describe('CRM search', () => {
     expect(until.ok && until.value.hits).toEqual([]);
   });
 
-  it('answers the sequence-status filter honestly while no enrollment table exists', async () => {
-    const none = await searchFirms(context(admin), { filters: { sequenceStatus: 'none' } });
-    expect(none.ok && none.value.hits.length).toBeGreaterThan(0);
-    const enrolled = await searchFirms(context(admin), { filters: { sequenceStatus: 'active' } });
-    expect(enrolled.ok && enrolled.value.hits).toEqual([]);
-  });
-
-  it('fails loudly once the sequences lane adds its table, so this stops being a stub', async () => {
-    const { rows } = await session.query<{ present: boolean }>(
-      "SELECT to_regclass('public.sequence_enrollments') IS NOT NULL AS present",
+  it('answers the sequence-status filter from the enrollment table (7.2)', async () => {
+    // A live enrollment, written directly: this test is about the filter, and the
+    // enrollment command has its own tests in `test/sequences`.
+    const sequenceId = await session.query<{ id: string }>(
+      "INSERT INTO sequences (workspace_id, name, created_by_user_id) VALUES ($1, 'Outreach', $2) RETURNING id",
+      [seeded.alpha.workspaceId, seeded.alpha.admin.userId],
     );
-    expect(
-      rows[0]?.present,
-      'sequence_enrollments now exists: teach searchFirms the real sequence-status filter',
-    ).toBe(false);
+    const versionId = await session.query<{ id: string }>(
+      'INSERT INTO sequence_versions (workspace_id, sequence_id, version) VALUES ($1, $2, 1) RETURNING id',
+      [seeded.alpha.workspaceId, sequenceId.rows[0]?.id],
+    );
+    const enrollment = await session.query<{ id: string }>(
+      `INSERT INTO sequence_enrollments
+         (workspace_id, sequence_version_id, opportunity_id, firm_id, contact_id, assigned_user_id,
+          firm_time_zone, holiday_calendar_version)
+       VALUES ($1, $2, $3, $4, $5, $6, 'America/New_York', 'none.1') RETURNING id`,
+      [
+        seeded.alpha.workspaceId,
+        versionId.rows[0]?.id,
+        crm.alpha.opportunityId,
+        crm.alpha.firmId,
+        crm.alpha.contactId,
+        seeded.alpha.salesperson.userId,
+      ],
+    );
+
+    const active = await searchFirms(context(admin), { filters: { sequenceStatus: 'active' } });
+    expect(active.ok && active.value.hits.map(hit => hit.firm.id)).toEqual([crm.alpha.firmId]);
+
+    const none = await searchFirms(context(admin), { filters: { sequenceStatus: 'none' } });
+    expect(none.ok && none.value.hits.map(hit => hit.firm.id)).not.toContain(crm.alpha.firmId);
+    expect(none.ok && none.value.hits.length).toBeGreaterThan(0);
+
+    // Stopped is the absence of a live enrollment plus the presence of a stopped one.
+    await session.query(
+      `UPDATE sequence_enrollments
+          SET state = 'stopped', ended_at = now(), end_reason = 'admin_stop'
+        WHERE workspace_id = $1 AND id = $2`,
+      [seeded.alpha.workspaceId, enrollment.rows[0]?.id],
+    );
+    const stopped = await searchFirms(context(admin), { filters: { sequenceStatus: 'stopped' } });
+    expect(stopped.ok && stopped.value.hits.map(hit => hit.firm.id)).toEqual([crm.alpha.firmId]);
+    const stillActive = await searchFirms(context(admin), { filters: { sequenceStatus: 'active' } });
+    expect(stillActive.ok && stillActive.value.hits).toEqual([]);
+
+    await session.query('DELETE FROM sequence_enrollments WHERE workspace_id = $1', [
+      seeded.alpha.workspaceId,
+    ]);
   });
 
   it('bounds the answer and says when it was truncated', async () => {

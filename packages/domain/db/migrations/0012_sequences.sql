@@ -48,14 +48,14 @@ ALTER TABLE template_versions
   -- 11.1, and section 17's deferral list. Reserved, and refused.
   ADD CONSTRAINT template_versions_generated_personalization_disabled
     CHECK (personalization_strategy IS DISTINCT FROM 'generated'),
-  -- A generator version, a prompt version, evidence ids or a generated block
-  -- without the strategy that produced them is provenance for nothing.
-  ADD CONSTRAINT template_versions_generation_provenance_complete
-    CHECK (personalization_strategy = 'generated'
-           OR (generator_version IS NULL
-               AND prompt_version IS NULL
-               AND evidence_item_ids IS NULL
-               AND generated_block IS NULL)),
+  -- A generated block without the strategy that produced it is provenance for
+  -- nothing, and the strategy that would explain one is refused by the constraint
+  -- above — so this column is reserved and unreachable until that line is dropped.
+  -- The length bound lives here rather than in a constraint of its own, because a
+  -- bound on a column no row can carry is a constraint no test can reach.
+  ADD CONSTRAINT template_versions_generated_block_reserved
+    CHECK (generated_block IS NULL
+           OR (personalization_strategy = 'generated' AND length(generated_block) <= 2000)),
   ADD CONSTRAINT template_versions_generator_version_bounded
     CHECK (generator_version IS NULL
            OR (btrim(generator_version) <> '' AND length(generator_version) <= 100)),
@@ -63,9 +63,7 @@ ALTER TABLE template_versions
     CHECK (prompt_version IS NULL
            OR (btrim(prompt_version) <> '' AND length(prompt_version) <= 100)),
   ADD CONSTRAINT template_versions_evidence_bounded
-    CHECK (evidence_item_ids IS NULL OR cardinality(evidence_item_ids) <= 20),
-  ADD CONSTRAINT template_versions_generated_block_bounded
-    CHECK (generated_block IS NULL OR length(generated_block) <= 2000);
+    CHECK (evidence_item_ids IS NULL OR cardinality(evidence_item_ids) <= 20);
 
 -- The approval is an approval of bytes. Migration 0009 froze the bytes it knew
 -- about; these five columns would otherwise be editable after approval, and the
@@ -278,10 +276,13 @@ CREATE TABLE sequence_steps (
   CONSTRAINT sequence_steps_delay_unit_known CHECK (delay_unit IN ('elapsed', 'business_days')),
   -- A year of hours, or a year of business days. Beyond that is a typing mistake
   -- nobody meant, and a due instant nobody will be here for.
-  CONSTRAINT sequence_steps_delay_bounded
-    CHECK (delay_amount >= 0
-           AND ((delay_unit = 'elapsed' AND delay_amount <= 8760)
-                OR (delay_unit = 'business_days' AND delay_amount <= 365))),
+  --
+  -- Two constraints rather than one that mentions the unit: a row with an unknown
+  -- unit would otherwise break both this and `delay_unit_known`, and a constraint
+  -- that cannot be broken on its own is a constraint no failing insert can test.
+  CONSTRAINT sequence_steps_delay_bounded CHECK (delay_amount >= 0 AND delay_amount <= 8760),
+  CONSTRAINT sequence_steps_business_days_bounded
+    CHECK (delay_unit <> 'business_days' OR delay_amount <= 365),
   CONSTRAINT sequence_steps_no_answer_is_a_call_step
     CHECK ((channel = 'call_task') = (on_no_answer IS NOT NULL)),
   CONSTRAINT sequence_steps_no_answer_known
@@ -376,7 +377,16 @@ BEGIN
     FROM sequence_versions v
    WHERE v.workspace_id = parent_workspace AND v.id = parent_version;
 
-  IF parent_state IS DISTINCT FROM 'draft' THEN
+  -- No parent at all is not this trigger's refusal to make: the foreign key says so
+  -- a moment later, by name, and a trigger that spoke first would hide it.
+  IF parent_state IS NULL THEN
+    IF TG_OP = 'DELETE' THEN
+      RETURN OLD;
+    END IF;
+    RETURN NEW;
+  END IF;
+
+  IF parent_state <> 'draft' THEN
     RAISE EXCEPTION 'the steps of a published sequence version are immutable'
       USING ERRCODE = 'restrict_violation';
   END IF;
