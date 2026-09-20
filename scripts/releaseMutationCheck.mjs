@@ -150,6 +150,24 @@ const MUTATIONS = [
       'force_delete = false stops a destroy of a repository holding images; nothing but this guard stops a *replacement*, which Terraform proposes as delete-then-create and which would take every image past releases were rehearsed on. The guard is the only reader of a plan no operator can see, so a guard that waves a destroy through must turn the suite red.',
   },
   {
+    name: 'the caller-identity check stops reading the shape of the ARN',
+    file: 'infra/scripts/rehearsal-common.sh',
+    find: 'pattern="^arn:aws[a-z0-9-]*:sts::[0-9]{12}:assumed-role/${role}/.+$"',
+    replace: 'pattern=".*"',
+    suite: ['run', 'test:release'],
+    because:
+      'Every rehearsal terraform command runs with -var=assume_deployment_role=false, so the job\'s ambient credentials are what the apply acts as. A pattern that matches anything would accept a user, another role, or a role whose name merely starts the same way — which is exactly what the old `*fss-rh-*` check did — and scenario 39 has to notice.',
+  },
+  {
+    name: 'the rehearsal apply goes back to assuming the role it already holds',
+    file: '.github/workflows/greenfield-release.yml',
+    find: '            -var="assume_deployment_role=false" \\\n',
+    replace: '',
+    suite: ['run', 'test:release'],
+    because:
+      'Without the flag the provider asks STS to assume fss-rh-deploy from a session that already is fss-rh-deploy, which needs the role to trust itself and is refused at provider configuration. The failure would only ever be seen inside a credentialed run, so the offline check is the only place it can be caught.',
+  },
+  {
     name: 'the restore drill stops requiring a baseline to reconstruct',
     file: 'infra/scripts/rehearsal-restore-drill.sh',
     find: '  if [ "$count" -lt 1 ]; then',

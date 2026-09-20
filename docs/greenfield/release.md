@@ -220,17 +220,18 @@ Actions → *Greenfield release rehearsal* → Run workflow, with:
 What it does, in order, and why the order is the order:
 
 1. **Refuse anything that is not a digest.** Two `sha256:` values, and they must differ — one image pushed under both names is a mistake the gate can catch and a person cannot.
-2. **Record the production inventory.** So that "teardown could not address production" is measured afterwards rather than asserted.
-3. **Create** the rehearsal root with the run prefix, deploying both digests from the stable `fss-rh-api` and `fss-rh-worker` repositories. The run creates no repository of its own and its teardown removes none; `infra/roots/rehearsal-registry` owns those two and was applied once, before the first push.
-4. **Migrate, then deploy the worker, then the API.** Never beside each other: the API's declared schema range needs the migration to have run, the worker may straddle. `infra/scripts/rehearsal-schema-ranges.sh` runs that order and then the refusal cases (Appendix G 22).
-5. **Smoke** with the same `scripts/productionSmoke.mjs` production gets.
-6. **Run the Appendix G suite** (`npm run test:release`) and the **mutation check** (`npm run test:release:mutation`), which breaks each trap in turn and requires the suite to go red.
-7. **Restore drill**, Appendix E steps 1 to 9. It refuses to report a pass unless the baseline contained an accepted send, a reply, a suppression, a CRM edit and a migration — a drill against an empty database proves nothing.
-8. **Suppression journal replay and Gmail reconstruction**, against the recorded fake (no real mailbox in rehearsal unless you provide a rehearsal Google project). The second replay must insert nothing; no send may repeat.
-9. **Carry watermark** (Appendix G 20): the carry tooling must contain no writer at all, and — once a cutover is scheduled and the two optional secrets exist — the export must refuse a table with a post-watermark write. Before the cutover the step prints `carry drill skipped: no cutover watermark yet` and the record says `"carryDrill": "skipped_no_watermark"`. That is not a pass being claimed; it is the state being named.
-10. **Tear down**, always, with bypass-governance.
-11. **Assert nothing with the production prefix was touched**, always. The guard classifies every name it sees: the run's own resources, the two stable rehearsal repositories that carry no run, and anything production's — which it refuses. It runs in dry mode on every pull request, so both branches are exercised without a credential.
-12. **Write the release record**, last. It names the two digests, the desktop stamp, and a `releaseGateReference` you will need in section 6.
+2. **Name the principal.** `infra/scripts/rehearsal-caller-identity.sh fss-rh-deploy` prints `aws sts get-caller-identity --query Arn` and refuses anything that is not `arn:aws:sts::…:assumed-role/fss-rh-deploy/<session>`. Every `terraform` command in this job then runs with `-var="assume_deployment_role=false"`, because this session already *is* the deployment role and the provider must not ask STS to assume the role it already holds (`infra-apply-runbook.md` 1.1). The flag makes the job's own credentials the thing the apply acts as, so this step is what makes it safe; it is the one the teardown repeats.
+3. **Record the production inventory.** So that "teardown could not address production" is measured afterwards rather than asserted.
+4. **Create** the rehearsal root with the run prefix, deploying both digests from the stable `fss-rh-api` and `fss-rh-worker` repositories. The run creates no repository of its own and its teardown removes none; `infra/roots/rehearsal-registry` owns those two and was applied once, before the first push.
+5. **Migrate, then deploy the worker, then the API.** Never beside each other: the API's declared schema range needs the migration to have run, the worker may straddle. `infra/scripts/rehearsal-schema-ranges.sh` runs that order and then the refusal cases (Appendix G 22).
+6. **Smoke** with the same `scripts/productionSmoke.mjs` production gets.
+7. **Run the Appendix G suite** (`npm run test:release`) and the **mutation check** (`npm run test:release:mutation`), which breaks each trap in turn and requires the suite to go red.
+8. **Restore drill**, Appendix E steps 1 to 9. It refuses to report a pass unless the baseline contained an accepted send, a reply, a suppression, a CRM edit and a migration — a drill against an empty database proves nothing.
+9. **Suppression journal replay and Gmail reconstruction**, against the recorded fake (no real mailbox in rehearsal unless you provide a rehearsal Google project). The second replay must insert nothing; no send may repeat.
+10. **Carry watermark** (Appendix G 20): the carry tooling must contain no writer at all, and — once a cutover is scheduled and the two optional secrets exist — the export must refuse a table with a post-watermark write. Before the cutover the step prints `carry drill skipped: no cutover watermark yet` and the record says `"carryDrill": "skipped_no_watermark"`. That is not a pass being claimed; it is the state being named.
+11. **Tear down**, always, with bypass-governance.
+12. **Assert nothing with the production prefix was touched**, always. The guard classifies every name it sees: the run's own resources, the two stable rehearsal repositories that carry no run, and anything production's — which it refuses. It runs in dry mode on every pull request, so both branches are exercised without a credential.
+13. **Write the release record**, last. It names the two digests, the desktop stamp, and a `releaseGateReference` you will need in section 6.
 
 If any step fails, steps 10 and 11 still run and no record is written. That is the design: there is no such thing as a partially passed release gate.
 
@@ -248,6 +249,8 @@ FSS_REHEARSAL_DRY_RUN=1 FSS_REHEARSAL_REPORTS=/tmp/fss-rehearsal \
 ## 4. Production apply — David
 
 Follow `docs/greenfield/infra-apply-runbook.md` section 3.2 for the plan and apply.
+
+**You pass no `assume_deployment_role` here.** It defaults to `true` in every root, which is what a person running a local apply wants: the provider assumes `fss-prod-deploy` for you. The flag is for a session that has already assumed its role — the two rehearsal workflows, and nothing else (`infra-apply-runbook.md` 1.1).
 
 **Read the ECR lines first.** The production registry was bootstrapped by a targeted apply at commit 71d84e00, and `create_registry` has since given that module a `count`. The first plan after this change must show `fss-prod-api` and `fss-prod-worker` as **moved** — `module.stack.module.registry.…` *has moved to* `module.stack.module.registry[0].…` — and then report no changes to them. **A plan that proposes to destroy or replace an ECR repository is not to be applied.** It would delete the images every release record identifies, and the digests in section 6 step 2 would stop resolving. The `moved` block in `infra/modules/stack` is what makes this a state migration; if it is ever removed, this is the failure.
 

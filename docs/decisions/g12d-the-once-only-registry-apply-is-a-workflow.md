@@ -121,12 +121,17 @@ Nothing here has been run. In particular:
   check.
 * whether `fss-rh-deploy` may `ecr:CreateRepository` on `fss-rh-api` (G12c's open
   question, unchanged).
-* whether the provider's `assume_role` block works from a session that is already
-  that role. All three roots carry one, so Terraform assumes `fss-rh-deploy` a second
-  time from the workflow's `fss-rh-deploy` session, and chaining onto the same role
-  needs the role to trust itself. This is not new — the release rehearsal has the same
-  shape — and it is not fixable from this lane, which may not edit `infra/roots`. The
-  runbook says what the failure looks like and that the answer is a trust-policy
-  statement rather than a workflow change.
+* ~~whether the provider's `assume_role` block works from a session that is already
+  that role.~~ **Answered by G12e, and not the way this lane guessed.** It does not:
+  chaining onto the same role needs the role to trust itself, and the refusal arrives
+  at provider configuration during `plan`. The fix is **not** a trust-policy statement
+  admitting `fss-rh-deploy` to itself — that would make Appendix G 39's scoping a
+  convention rather than a boundary. All three roots now take
+  `assume_deployment_role` (default `true`, so a local apply is unchanged and a
+  forgotten flag fails loudly), the `assume_role` block is conditional on it, and both
+  credentialed workflows pass `-var=assume_deployment_role=false` after
+  `infra/scripts/rehearsal-caller-identity.sh` has proved the session really is an
+  assumed-role session of `fss-rh-deploy`.
+  `docs/decisions/g12e-the-provider-does-not-reassume-its-own-session.md`.
 * whether the `rehearsal` environment has a required reviewer. If it does, both runs
   wait for an approval, which is a feature here rather than a problem.

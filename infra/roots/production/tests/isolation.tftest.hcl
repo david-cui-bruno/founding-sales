@@ -433,3 +433,48 @@ run "only_the_load_balancer_faces_the_internet" {
     error_message = "The production worker admits nothing inbound."
   }
 }
+
+# G12e: the provider assumes the deployment role only when the session is not
+# already that role.
+#
+# `assume_deployment_role` chooses a *credential path*, and a mocked plan cannot
+# observe one: `mock_provider "aws"` replaces the provider configuration
+# entirely, so no `assume_role` block, no STS call and no credential chain is
+# exercised by anything below. What these two runs prove is the part a plan can
+# see — the variable exists, production defaults to assuming the role (so a
+# forgotten flag is refused at STS rather than acting as whatever ambient
+# credential the shell was holding), and turning it off changes nothing about
+# what the root creates. That the provider really skips the assumption when the
+# block is absent is a property of the AWS provider, taken from its own schema
+# in `docs/decisions/g12e-the-provider-does-not-reassume-its-own-session.md`.
+run "production_assumes_its_deployment_role_by_default" {
+  command = plan
+
+  assert {
+    condition     = var.assume_deployment_role
+    error_message = "The default is true in every root: section 3.2's local apply is David's user assuming fss-prod-deploy, and a forgotten flag must fail loudly rather than act as an ambient credential."
+  }
+
+  assert {
+    condition     = output.deployment_role_name == "fss-prod-deploy"
+    error_message = "The role the provider assumes is production's, and the flag does not change which one it is."
+  }
+}
+
+run "the_assume_flag_chooses_a_credential_path_and_not_a_plan" {
+  command = plan
+
+  variables {
+    assume_deployment_role = false
+  }
+
+  assert {
+    condition     = output.name_prefix == "fss-prod" && output.deployment_role_name == "fss-prod-deploy"
+    error_message = "Nothing this root creates may depend on how the caller obtained its credentials."
+  }
+
+  assert {
+    condition     = length(output.resource_names) > 0
+    error_message = "The root still plans with the assumption turned off; otherwise the flag would be a way to plan an empty stack."
+  }
+}

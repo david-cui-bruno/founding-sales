@@ -118,6 +118,72 @@ rehearsal_aws() {
   command aws "$@"
 }
 
+# The flag every rehearsal Terraform command carries, and the reason it is safe.
+#
+# `infra/roots/rehearsal` and `infra/roots/rehearsal-registry` assume
+# `deployment_role_name` by default, because a root that acts as whatever credential
+# is lying around is a root nobody can reason about. A workflow session has already
+# assumed `fss-rh-deploy` through GitHub OIDC, and a role cannot be assumed from
+# itself unless it trusts itself — which `fss-rh-deploy` does not and must not
+# (Appendix G 39). So CI turns the assumption off, and the only thing standing between
+# that flag and "run rehearsal Terraform as some other principal" is the check below.
+REHEARSAL_NO_ASSUME_VAR='-var=assume_deployment_role=false'
+
+# Refuse to continue unless this session *is* an assumed-role session of the named
+# rehearsal role.
+#
+#   rehearsal_require_deployment_session fss-rh-deploy
+#
+# `aws sts get-caller-identity --query Arn` is printed: an ARN is a public identifier
+# and naming the principal is the whole point. The shape matters as much as the name —
+# `arn:aws:sts::<account>:assumed-role/<role>/<session>` is a session that assumed the
+# role, while `arn:aws:iam::<account>:user/<name>` is a user who did not — so an ARN
+# that merely contains the role name is refused.
+#
+# Tests and operators can supply the ARN with `FSS_REHEARSAL_CALLER_IDENTITY` instead
+# of calling AWS, which is how the release suite exercises the refusals offline.
+rehearsal_require_deployment_session() {
+  local role=${1:-} identity pattern
+  if [ -z "$role" ]; then
+    echo "FAIL: which role the session must be is not optional" >&2
+    return 1
+  fi
+  # This check exists for the rehearsal roots. It may never be pointed at production:
+  # the production applies are local and the provider does the assuming there.
+  case "$role" in
+    fss-rh-*) : ;;
+    *)
+      echo "FAIL: '$role' is not a rehearsal deployment role; this check is for the fss-rh- namespace" >&2
+      return 1
+      ;;
+  esac
+
+  # Set-but-empty is a judgement too, and it must not become a call: a test asking
+  # "what does this do with no identity at all?" has to be answered offline.
+  if [ "${FSS_REHEARSAL_CALLER_IDENTITY+set}" = "set" ]; then
+    identity=${FSS_REHEARSAL_CALLER_IDENTITY}
+  elif rehearsal_dry_run; then
+    rehearsal_plan "aws sts get-caller-identity --query Arn --output text"
+    rehearsal_plan "refuse unless it reads arn:aws:sts::<account>:assumed-role/$role/<session>"
+    return 0
+  else
+    identity="$(command aws sts get-caller-identity --query Arn --output text)"
+  fi
+
+  echo "caller identity: ${identity:-<none>}"
+
+  pattern="^arn:aws[a-z0-9-]*:sts::[0-9]{12}:assumed-role/${role}/.+$"
+  if [[ ! "$identity" =~ $pattern ]]; then
+    echo "FAIL: this session is ${identity:-<none>}, which is not an assumed-role session of $role." >&2
+    echo "      Rehearsal Terraform runs with ${REHEARSAL_NO_ASSUME_VAR}, so whatever this session is" >&2
+    echo "      is what the apply would act as. Refusing." >&2
+    return 1
+  fi
+
+  rehearsal_log "the session is an assumed-role session of $role, so ${REHEARSAL_NO_ASSUME_VAR} is safe"
+  return 0
+}
+
 # Every Terraform call, for the same reason and with the same guard.
 rehearsal_terraform() {
   rehearsal_refuse_production_arguments "$@"

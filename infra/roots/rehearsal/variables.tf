@@ -34,6 +34,35 @@ variable "deployment_role_name" {
   }
 }
 
+variable "assume_deployment_role" {
+  description = <<-EOT
+    Whether the provider assumes `deployment_role_name` before it calls AWS, or
+    uses the credentials the caller already holds.
+
+    Every apply of this root is a workflow run, and that run's session already
+    *is* `fss-rh-deploy`: `aws-actions/configure-aws-credentials` assumed it
+    through GitHub OIDC before Terraform started. Assuming it a second time is
+    role chaining onto the same role, which needs the role to trust itself.
+    It does not, and it must not: its trust is the OIDC provider and the subject
+    `repo:…:environment:rehearsal` alone (Appendix G 39). So
+    `.github/workflows/greenfield-release.yml` and
+    `infra/scripts/rehearsal-teardown.sh` pass
+    `-var="assume_deployment_role=false"`.
+
+    The default is nevertheless **true**, like production's. A default of false
+    would be a root that silently acts as whatever credential happens to be in
+    the environment; with the default as it is, a caller who does not say
+    otherwise is refused `sts:AssumeRole`, and that refusal is the boundary
+    working rather than a fault. The workflows that pass false prove what the
+    session is first, with `infra/scripts/rehearsal-caller-identity.sh`, which
+    refuses any identity that is not an assumed-role session of
+    `fss-rh-deploy`.
+    `docs/decisions/g12e-the-provider-does-not-reassume-its-own-session.md`.
+  EOT
+  type        = bool
+  default     = true
+}
+
 variable "aws_region" {
   description = "AWS region."
   type        = string

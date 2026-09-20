@@ -225,8 +225,9 @@ describe('Appendix G 39: the rehearsal registry is applied by a workflow, never 
     expect(workflow).toContain('contents: read');
     expect(workflow).toContain('role-to-assume: ${{ secrets.FSS_REHEARSAL_ROLE_ARN }}');
     // And it checks what it got, because an environment pointed at another role is a
-    // configuration mistake no plan would catch.
-    expect(workflow).toContain('is not an fss-rh- role');
+    // configuration mistake no plan would catch — and since G12e the plan runs with
+    // the assumption turned off, so this session is what the apply acts as.
+    expect(workflow).toContain('infra/scripts/rehearsal-caller-identity.sh fss-rh-deploy');
   });
 
   it('references every action by the same commit sha the release workflow pins', () => {
@@ -324,8 +325,160 @@ describe('Appendix G 39: the rehearsal registry is applied by a workflow, never 
       .filter(line => line.startsWith('PLAN '))
       .map(line => (line.slice('PLAN '.length).split(/\s+[<#]/u)[0] ?? '').trim());
 
-    expect(commands.length).toBe(6);
+    expect(commands.length).toBe(7);
     for (const command of commands) expect(workflow, command).toContain(command);
+  });
+});
+
+/**
+ * G12e: the provider does not re-assume the role the session already holds.
+ *
+ * All three roots assumed `deployment_role_name` unconditionally. Locally that is
+ * right — David's user assumes `fss-prod-deploy` — but in CI the job has already
+ * assumed `fss-rh-deploy` through GitHub OIDC, so Terraform would ask STS to assume
+ * `fss-rh-deploy` from a session that already is `fss-rh-deploy`. That succeeds only
+ * if the role trusts itself, which it does not and must not (Appendix G 39). The
+ * answer is a root variable, `assume_deployment_role`, defaulting to true everywhere
+ * and passed as false by the two workflows whose session already holds the role.
+ *
+ * ## The vacuous-pass trap
+ *
+ * `assume_deployment_role=false` means "use whatever credentials this process has",
+ * and a workflow that passed it without proving what those credentials are would have
+ * turned a scoped role into an ambient one — the opposite of scenario 39. Asserting
+ * the flag's presence would pass against exactly that workflow. Closed by requiring
+ * the caller-identity check to appear *before* the flag is used, and by running that
+ * check against six identities offline: a user, a role whose name merely starts the
+ * same way, a different rehearsal role, an ARN with no session, no identity at all,
+ * and the one it must accept.
+ */
+describe('Appendix G 39: the flag that stops the second assumption cannot become an ambient credential', () => {
+  const release = readRepositoryFile('.github/workflows/greenfield-release.yml');
+  const registry = readRepositoryFile(REGISTRY_WORKFLOW_PATH);
+  const teardown = readRepositoryFile('infra/scripts/rehearsal-teardown.sh');
+  const roots = ['production', 'rehearsal', 'rehearsal-registry'] as const;
+
+  it('gives every root the variable, defaulting to assuming the role', () => {
+    for (const root of roots) {
+      const variables = readRepositoryFile(`infra/roots/${root}/variables.tf`);
+      const providers = readRepositoryFile(`infra/roots/${root}/providers.tf`);
+
+      // The default is true in all three, so a caller who forgets the flag is refused
+      // at STS rather than acting as whatever credential the shell was holding.
+      expect(variables, root).toMatch(/variable "assume_deployment_role" \{[\s\S]*?default {5}= true\n\}/u);
+      // And the block is conditional rather than absent: turning the flag off must
+      // not be the only way to configure the provider.
+      expect(providers, root).toContain('dynamic "assume_role"');
+      expect(providers, root).toContain('for_each = var.assume_deployment_role ? [1] : []');
+      expect(providers, root).toContain(
+        'role_arn     = "arn:aws:iam::${var.aws_account_id}:role/${var.deployment_role_name}"',
+      );
+      // The namespace validations G1 and G12c wrote are untouched by this.
+      expect(variables, root).toContain('variable "deployment_role_name"');
+      expect(variables, root).toContain('validation {');
+    }
+  });
+
+  it('passes the flag in exactly the places whose session already holds the role', () => {
+    // The two rehearsal roots, never production: section 3.2's apply is David's user
+    // assuming `fss-prod-deploy`, and there is nothing in this repository that runs it.
+    expect(release).toContain('-var="assume_deployment_role=false"');
+    expect(registry).toContain('-var=assume_deployment_role=false');
+    expect(teardown).toContain('"$REHEARSAL_NO_ASSUME_VAR"');
+    expect(readRepositoryFile('infra/scripts/rehearsal-common.sh')).toContain(
+      "REHEARSAL_NO_ASSUME_VAR='-var=assume_deployment_role=false'",
+    );
+  });
+
+  it('names the principal before it uses the flag, in both workflows and in the teardown', () => {
+    // By line, and only lines that are commands: both files explain the flag in a
+    // comment above the step that runs it, and a prose mention must not be able to
+    // satisfy an ordering assertion about commands.
+    const commandLine = (workflow: string, match: (line: string) => boolean): number =>
+      workflow.split('\n').findIndex(line => !line.trimStart().startsWith('#') && match(line));
+
+    // Only the credentialed job of the release workflow: the dry-run job runs the
+    // check too, and an ordering assertion satisfied by the job that holds no
+    // credential would say nothing about the job that does.
+    const credentialedJob = release.slice(release.indexOf('\n  rehearsal:\n'));
+    expect(credentialedJob.length).toBeGreaterThan(1000);
+
+    for (const [name, workflow] of [
+      ['release', credentialedJob],
+      ['registry', registry],
+    ] as const) {
+      const checkAt = commandLine(workflow, line =>
+        line.includes('infra/scripts/rehearsal-caller-identity.sh fss-rh-deploy'),
+      );
+      const flagAt = commandLine(workflow, line => line.includes('assume_deployment_role=false'));
+      expect(checkAt, name).toBeGreaterThan(-1);
+      expect(flagAt, name).toBeGreaterThan(checkAt);
+    }
+
+    // The teardown runs on `always()`, including after a failure, so it repeats the
+    // check rather than trusting a step that may not have been reached.
+    const checkAt = teardown.indexOf('rehearsal_require_deployment_session');
+    const destroyAt = teardown.indexOf('rehearsal_terraform destroy');
+    expect(checkAt).toBeGreaterThan(-1);
+    expect(destroyAt).toBeGreaterThan(checkAt);
+  });
+
+  it('runs the check rather than describing it: one identity accepted, five refused', () => {
+    const judge = (identity: string, role?: string): boolean => {
+      try {
+        execFileSync(repositoryPath('infra/scripts/rehearsal-caller-identity.sh'), role === undefined ? [] : [role], {
+          // Supplied rather than fetched: this makes no AWS call, which is also how
+          // the release workflow's credential-free dry run exercises it.
+          env: {
+            ...process.env,
+            FSS_REHEARSAL_CALLER_IDENTITY: identity,
+            FSS_REHEARSAL_REPORTS: mkdtempSync(join(tmpdir(), 'fss-identity-')),
+          },
+          encoding: 'utf8',
+          stdio: 'pipe',
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    expect(judge('arn:aws:sts::123456789012:assumed-role/fss-rh-deploy/fss-rh-2026')).toBe(true);
+
+    // A user who happens to be allowed to run the workflow is not the role.
+    expect(judge('arn:aws:iam::123456789012:user/someone')).toBe(false);
+    // A role whose name merely begins the same way. `*fss-rh-*` would have passed it.
+    expect(judge('arn:aws:sts::123456789012:assumed-role/fss-rh-deploy-other/x')).toBe(false);
+    expect(judge('arn:aws:sts::123456789012:assumed-role/fss-rh-readonly/x')).toBe(false);
+    // The role ARN rather than a session of it: the shape is the evidence.
+    expect(judge('arn:aws:sts::123456789012:assumed-role/fss-rh-deploy')).toBe(false);
+    // No identity at all, which is what an unauthenticated call would print.
+    expect(judge('')).toBe(false);
+    // And it refuses to vouch for production, whose applies assume their role in the
+    // provider and never pass this flag.
+    expect(judge('arn:aws:sts::123456789012:assumed-role/fss-prod-deploy/x', 'fss-prod-deploy')).toBe(false);
+  });
+
+  it('is what the runbook and the release document tell the operator', () => {
+    const runbook = readRepositoryFile('docs/greenfield/infra-apply-runbook.md');
+    const releaseDoc = readRepositoryFile('docs/greenfield/release.md');
+    const decision = readRepositoryFile('docs/decisions/g12e-the-provider-does-not-reassume-its-own-session.md');
+    const g12d = readRepositoryFile('docs/decisions/g12d-the-once-only-registry-apply-is-a-workflow.md');
+
+    // Local applies keep the default; the flag is CI's.
+    expect(runbook).toContain('assume_deployment_role');
+    expect(runbook).toContain('rehearsal-caller-identity.sh');
+    expect(releaseDoc).toContain('assume_deployment_role');
+
+    // The provider version this rests on is named, because the behaviour is the
+    // provider's rather than Terraform's.
+    expect(decision).toContain('5.100.0');
+    expect(decision).toContain('assume_role');
+
+    // G12d predicted this failure and could not answer it. The runbook no longer
+    // tells the operator to widen a trust policy.
+    expect(runbook).not.toContain('allowing `arn:aws:iam::326255650484:role/fss-rh-deploy` to assume itself');
+    expect(g12d).toContain('g12e');
   });
 });
 

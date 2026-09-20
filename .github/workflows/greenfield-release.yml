@@ -137,6 +137,35 @@ jobs:
           # And the good one must pass.
           FSS_REHEARSAL_DRY_RUN=1 infra/scripts/rehearsal-prefix-guard.sh fss-rh-dryrun before
 
+      - name: The caller-identity check refuses anything that is not the rehearsal role
+        run: |
+          set -euo pipefail
+          # Every rehearsal terraform command runs with
+          # `-var=assume_deployment_role=false`, so the job's ambient credentials are
+          # what the apply acts as. This is the check that says which principal that
+          # is, and it is tested rather than trusted: five identities it must refuse
+          # and one it must accept, all supplied through FSS_REHEARSAL_CALLER_IDENTITY
+          # so that no AWS call is made here.
+          for bad in 'arn:aws:iam::123456789012:user/someone' \
+                     'arn:aws:sts::123456789012:assumed-role/fss-rh-deploy-other/x' \
+                     'arn:aws:sts::123456789012:assumed-role/fss-rh-readonly/x' \
+                     'arn:aws:sts::123456789012:assumed-role/fss-rh-deploy' \
+                     ''; do
+            if FSS_REHEARSAL_CALLER_IDENTITY="$bad" infra/scripts/rehearsal-caller-identity.sh >/dev/null 2>&1; then
+              echo "::error::the caller-identity check accepted '${bad:-<empty>}'"
+              exit 1
+            fi
+          done
+          FSS_REHEARSAL_CALLER_IDENTITY='arn:aws:sts::123456789012:assumed-role/fss-rh-deploy/fss-rh-dryrun' \
+            infra/scripts/rehearsal-caller-identity.sh
+          # And it may not be pointed at production, whose applies are local and assume
+          # their role in the provider.
+          if FSS_REHEARSAL_CALLER_IDENTITY='arn:aws:sts::123456789012:assumed-role/fss-prod-deploy/x' \
+               infra/scripts/rehearsal-caller-identity.sh fss-prod-deploy >/dev/null 2>&1; then
+            echo "::error::the caller-identity check agreed to vouch for a production role"
+            exit 1
+          fi
+
       - name: Print the plan every rehearsal step would run
         env:
           FSS_REHEARSAL_DRY_RUN: '1'
@@ -152,6 +181,7 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           for step in \
+            "infra/scripts/rehearsal-caller-identity.sh fss-rh-deploy" \
             "infra/scripts/rehearsal-prefix-guard.sh $prefix before" \
             "infra/scripts/rehearsal-schema-ranges.sh $prefix" \
             "infra/scripts/rehearsal-restore-drill.sh $prefix" \
@@ -374,12 +404,15 @@ jobs:
           set -euo pipefail
           # The IAM boundary on fss-rh-deploy is the real protection; this fails fast and
           # legibly if the environment was ever pointed at a different role.
-          identity="$(aws sts get-caller-identity --query Arn --output text)"
-          echo "identity: $identity"
-          case "$identity" in
-            *fss-rh-*) : ;;
-            *) echo "::error::this workflow assumed $identity, which is not an fss-rh- role"; exit 1 ;;
-          esac
+          #
+          # It matters more since G12e: every terraform command below carries
+          # `-var=assume_deployment_role=false`, because this session already *is*
+          # `fss-rh-deploy` and the provider must not ask STS to assume the role it
+          # already holds. That makes these ambient credentials the thing the apply
+          # acts as, so the script refuses any identity that is not an assumed-role
+          # session of `fss-rh-deploy` — a user, another role, or a role whose name
+          # merely starts the same way.
+          infra/scripts/rehearsal-caller-identity.sh fss-rh-deploy
 
       - name: Record the production inventory before anything is created
         run: infra/scripts/rehearsal-prefix-guard.sh "${{ steps.prefix.outputs.prefix }}" before
@@ -392,7 +425,14 @@ jobs:
           terraform init -reconfigure -input=false \
             -backend-config=backend.hcl \
             -backend-config="key=fss/greenfield/rehearsal/${prefix}/terraform.tfstate"
+          # `assume_deployment_role=false`: the root's default is to assume
+          # `fss-rh-deploy`, and this job's session already is it. The step that
+          # printed the caller identity two above is what makes turning the assumption
+          # off safe; `infra/scripts/rehearsal-teardown.sh` repeats both, because the
+          # teardown runs on `always()` and must not destroy anything as a principal
+          # nobody checked.
           terraform apply -auto-approve -input=false \
+            -var="assume_deployment_role=false" \
             -var="name_prefix=${prefix}" \
             -var="api_image=${{ secrets.FSS_REHEARSAL_API_REPOSITORY }}@${{ inputs.api_image_digest }}" \
             -var="worker_image=${{ secrets.FSS_REHEARSAL_WORKER_REPOSITORY }}@${{ inputs.worker_image_digest }}" \

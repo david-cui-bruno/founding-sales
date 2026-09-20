@@ -369,3 +369,51 @@ run "gmail_push_cannot_be_turned_on_without_its_own_project" {
 
   expect_failures = [var.gcp_project_id]
 }
+
+# G12e: the release workflow's session is already `fss-rh-deploy`, so the
+# provider must not ask STS to assume it a second time.
+#
+# The default is true here as it is in production, even though every apply of
+# this root is a workflow run: a default of false would mean a root that acts as
+# whatever credential is lying around whenever somebody forgets the flag, and a
+# root whose refusal — `sts:AssumeRole` on a role that trusts only the OIDC
+# subject — is the boundary working. `.github/workflows/greenfield-release.yml`
+# and `infra/scripts/rehearsal-teardown.sh` pass `assume_deployment_role=false`
+# explicitly, after `infra/scripts/rehearsal-caller-identity.sh` has proved the
+# session really is `fss-rh-deploy`.
+#
+# A tftest cannot observe any of that: `mock_provider "aws"` replaces the
+# provider configuration, so the credential chain is not exercised here even in
+# principle. These runs prove the variable exists, its default, and that the
+# plan is the same either way.
+run "the_rehearsal_root_assumes_its_deployment_role_by_default" {
+  command = plan
+
+  assert {
+    condition     = var.assume_deployment_role
+    error_message = "A forgotten flag must be refused at STS, not run as an ambient credential; the default is true in all three roots."
+  }
+
+  assert {
+    condition     = output.deployment_role_name == "fss-rh-deploy"
+    error_message = "The role is the rehearsal one whether or not the provider is the thing that assumes it."
+  }
+}
+
+run "the_assume_flag_chooses_a_credential_path_and_not_a_plan" {
+  command = plan
+
+  variables {
+    assume_deployment_role = false
+  }
+
+  assert {
+    condition     = startswith(output.name_prefix, "fss-rh-") && output.deployment_role_name == "fss-rh-deploy"
+    error_message = "Nothing this root creates may depend on how the caller obtained its credentials."
+  }
+
+  assert {
+    condition     = alltrue([for name in output.resource_names : !strcontains(name, "fss-prod")])
+    error_message = "The namespace refusal is a property of the root, not of the credential path, so it holds with the assumption turned off too."
+  }
+}
