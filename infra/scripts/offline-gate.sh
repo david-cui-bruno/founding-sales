@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# The same offline gate the greenfield-infra workflow runs, so it can be run
+# by hand from the repository root before pushing.
+#
+#   TERRAFORM=/path/to/terraform infra/scripts/offline-gate.sh
+#
+# Never configures a backend, never runs plan or apply against one, and never
+# needs an AWS or Google credential.
+set -euo pipefail
+
+terraform_bin=${TERRAFORM:-terraform}
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+cd "$root"
+
+echo "==> terraform fmt"
+"$terraform_bin" fmt -check -recursive infra
+
+echo "==> structural policy checks"
+fail=0
+check() {
+  local description=$1 pattern=$2
+  shift 2
+  if grep -rInE "$pattern" "$@" >/dev/null 2>&1; then
+    echo "FAIL: $description"
+    grep -rInE "$pattern" "$@" || true
+    fail=1
+  fi
+}
+
+check "infra must declare no NAT gateway and no VPC endpoint" \
+  'resource "aws_(nat_gateway|eip|vpc_endpoint[a-z_]*)"' infra
+
+check "infra must never write a secret value or generate a password" \
+  'resource "(aws_secretsmanager_secret_version|aws_ssm_parameter|random_password|random_string|random_id)"' infra
+
+check "security-group rules must come from the network module inventory" \
+  'resource "aws_(security_group_rule|vpc_security_group_(in|e)gress_rule)"' \
+  infra/modules/cluster infra/modules/database infra/modules/edge infra/modules/stack infra/roots
+
+check "a greenfield root must never point at a legacy state key" \
+  '^[^#]*cloud/(terraform|delegated-worker)' infra/roots
+
+if [ "$(grep -c 'resource "aws_vpc_security_group_ingress_rule"' infra/modules/network/main.tf)" != "1" ] \
+   || [ "$(grep -c 'resource "aws_vpc_security_group_egress_rule"' infra/modules/network/main.tf)" != "1" ]; then
+  echo "FAIL: the network module must generate its rules from exactly one for_each resource per direction"
+  fail=1
+fi
+
+production_key=$(grep -E '^key ' infra/roots/production/backend.hcl | cut -d'"' -f2)
+rehearsal_key=$(grep -E '^key ' infra/roots/rehearsal/backend.hcl | cut -d'"' -f2)
+if [ "$production_key" = "$rehearsal_key" ]; then
+  echo "FAIL: the two roots share a state key"
+  fail=1
+fi
+case "$production_key" in fss/greenfield/production/*) ;; *) echo "FAIL: production state key is not under fss/greenfield/production/"; fail=1 ;; esac
+case "$rehearsal_key" in fss/greenfield/rehearsal/*) ;; *) echo "FAIL: rehearsal state key is not under fss/greenfield/rehearsal/"; fail=1 ;; esac
+if grep -rInE '(access_key|secret_key|token|password)' infra/roots/*/backend.hcl >/dev/null 2>&1; then
+  echo "FAIL: a backend file carries a credential-looking value"
+  fail=1
+fi
+
+[ "$fail" -eq 0 ] || exit 1
+echo "structural policy checks passed"
+
+echo "==> validate and test every module and root"
+status=0
+while IFS= read -r directory; do
+  echo "--- $directory"
+  (
+    cd "$directory"
+    "$terraform_bin" init -backend=false -input=false -no-color >/dev/null
+    "$terraform_bin" validate -no-color
+    if compgen -G "tests/*.tftest.hcl" >/dev/null; then
+      "$terraform_bin" test -no-color
+    else
+      echo "no test files in $directory"
+    fi
+  ) || status=1
+done < <(find infra/modules infra/roots -mindepth 1 -maxdepth 1 -type d | sort)
+
+exit "$status"

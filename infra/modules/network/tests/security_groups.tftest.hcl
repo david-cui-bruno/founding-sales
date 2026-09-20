@@ -73,7 +73,7 @@ run "database_admits_only_the_two_task_groups" {
   command = plan
 
   assert {
-    condition = sort([for name, rule in output.ingress_rules : rule.source_group if rule.group == "database"]) == tolist(["api_task", "worker_task"])
+    condition     = sort([for name, rule in output.ingress_rules : rule.source_group if rule.group == "database"]) == tolist(["api_task", "worker_task"])
     error_message = "RDS ingress must come from exactly the API task and worker task security groups."
   }
 
