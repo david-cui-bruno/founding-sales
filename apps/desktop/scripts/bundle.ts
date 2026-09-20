@@ -95,7 +95,7 @@ export async function bundleApp(input: BundleInput): Promise<void> {
     });
   }
 
-  for (const page of ['index.html', 'firmWorkspace.html', 'today.html', 'styles.css'] as const) {
+  for (const page of ['index.html', 'firmWorkspace.html', 'today.html', 'settings.html', 'styles.css'] as const) {
     await copyFile(source('renderer', page), target('renderer', page));
   }
 

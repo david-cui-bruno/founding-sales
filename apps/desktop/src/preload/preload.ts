@@ -2,14 +2,16 @@ import { contextBridge, ipcRenderer } from 'electron';
 import { IPC_CHANNELS } from '../main/ipc.ts';
 import { CRM_IPC_CHANNELS } from '../main/crmBridge.ts';
 import { TODAY_IPC_CHANNELS } from '../main/todayBridge.ts';
+import { ADMIN_IPC_CHANNELS } from '../main/settingsBridge.ts';
 import { desktopStateSchema, type DesktopBridge, type DesktopState } from '../shared/contract.ts';
 import type { CrmBridge, CrmState } from '../renderer/firmWorkspaceContract.ts';
 import { todayStateSchema, type TodayBridge, type TodayState } from '../renderer/todayContract.ts';
+import type { AdminBridge, AdminState } from '../renderer/settingsContract.ts';
 
 /**
  * The bridges, and the whole of what a renderer can reach (specification 14.2).
  *
- * One preload script serves all three windows, because Electron gives a window one
+ * One preload script serves all four windows, because Electron gives a window one
  * preload and a window only ever calls the bridge it was built for. Installing all
  * three is not a widening: every channel below is answered by a main-process handler
  * that exists, and a window that never calls one has reached nothing.
@@ -40,6 +42,15 @@ const invokeToday = async (channel: string, argument?: unknown): Promise<TodaySt
 const invokeCrm = async (channel: string, argument?: unknown): Promise<CrmState> =>
   (await ipcRenderer.invoke(channel, argument)) as CrmState;
 
+/**
+ * `callieAdmin` follows `callieCrm` rather than `callieToday`: `AdminState` is
+ * composed from `@fss/contracts` schemas that the main-process bridge has already
+ * parsed the server's answer with, so a second schema here would be a second
+ * definition of the same contract and the two would disagree the day one changed.
+ */
+const invokeAdmin = async (channel: string, argument?: unknown): Promise<AdminState> =>
+  (await ipcRenderer.invoke(channel, argument)) as AdminState;
+
 const bridge: DesktopBridge = {
   state: async () => await invokeDesktop(IPC_CHANNELS.state),
   signIn: async input => await invokeDesktop(IPC_CHANNELS.signIn, input),
@@ -66,6 +77,20 @@ const crm: CrmBridge = {
   resolveMerge: async input => await invokeCrm(CRM_IPC_CHANNELS.resolveMerge, input),
 };
 
+const admin: AdminBridge = {
+  state: async () => await invokeAdmin(ADMIN_IPC_CHANNELS.state),
+  show: async input => await invokeAdmin(ADMIN_IPC_CHANNELS.show, input),
+  saveSetting: async input => await invokeAdmin(ADMIN_IPC_CHANNELS.saveSetting, input),
+  openHistory: async input => await invokeAdmin(ADMIN_IPC_CHANNELS.openHistory, input),
+  loadDashboard: async input => await invokeAdmin(ADMIN_IPC_CHANNELS.loadDashboard, input),
+  createStage: async input => await invokeAdmin(ADMIN_IPC_CHANNELS.createStage, input),
+  renameStage: async input => await invokeAdmin(ADMIN_IPC_CHANNELS.renameStage, input),
+  reorderStages: async input => await invokeAdmin(ADMIN_IPC_CHANNELS.reorderStages, input),
+  retireStage: async input => await invokeAdmin(ADMIN_IPC_CHANNELS.retireStage, input),
+  acknowledgeAlert: async input => await invokeAdmin(ADMIN_IPC_CHANNELS.acknowledgeAlert, input),
+};
+
 contextBridge.exposeInMainWorld('callie', bridge);
 contextBridge.exposeInMainWorld('callieToday', today);
 contextBridge.exposeInMainWorld('callieCrm', crm);
+contextBridge.exposeInMainWorld('callieAdmin', admin);

@@ -8,6 +8,7 @@ import {
   HARD_MAILBOX_DAILY_CEILING,
   SETTING_KEYS,
 } from '@fss/contracts';
+import { withTransaction } from '../../db/queryable.ts';
 import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
 import {
@@ -218,14 +219,17 @@ describe('workspace settings', () => {
   });
 
   it('serializes two admins saving the same slice at the same instant', async () => {
-    // Two backend connections, two transactions, one advisory lock. Without the lock
-    // both would read version n and one would take a unique violation, which aborts
-    // the transaction and loses the command receipt with it.
+    // Two backend connections, two *transactions*, one advisory lock. The lock is
+    // `pg_advisory_xact_lock`, so it is held for the transaction and not for the
+    // statement — which is why each call is wrapped here exactly as `runCommand`
+    // wraps it in production, with the receipt and the mutation in one transaction
+    // (5.3). Outside a transaction the guard still refuses safely with
+    // `setting_version_conflict`; it simply does not queue.
     const second = await database.appRuntimeSession();
     const other = repositoryContext(admin.scope, second);
 
     const [left, right] = await Promise.all([
-      updateSetting(admin, {
+      withTransaction(database.session, async () => await updateSetting(admin, {
         settingKey: 'postal_footer',
         value: {
           organizationName: 'Callie',
@@ -236,8 +240,8 @@ describe('workspace settings', () => {
           countryCode: 'US',
         },
         changeNote: 'first save',
-      }),
-      updateSetting(other, {
+      })),
+      withTransaction(second, async () => await updateSetting(other, {
         settingKey: 'postal_footer',
         value: {
           organizationName: 'Callie',
@@ -248,7 +252,7 @@ describe('workspace settings', () => {
           countryCode: 'US',
         },
         changeNote: 'second save',
-      }),
+      })),
     ]);
 
     expect(left.ok, 'the first save').toBe(true);

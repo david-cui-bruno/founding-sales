@@ -213,8 +213,16 @@ export async function updateSetting(
 
   if (previous !== undefined) {
     const superseded = await context.db.query(
+      // `greatest(now(), changed_at)` rather than `now()`: `now()` is the
+      // *transaction start* instant, and under the advisory lock the superseding
+      // transaction may well have begun before the one whose row it is retiring
+      // committed. Plain `now()` would then be earlier than `changed_at` and
+      // `workspace_settings_superseded_not_before_changed` would refuse it — which
+      // is the constraint doing its job on a value that was wrong, not a constraint
+      // that is too strict. A zero-length validity window is the honest answer for
+      // two versions written in the same instant.
       `UPDATE workspace_settings
-          SET superseded_at = now(), superseded_by_version = $4
+          SET superseded_at = greatest(now(), changed_at), superseded_by_version = $4
         WHERE workspace_id = $1 AND setting_key = $2 AND version = $3 AND superseded_at IS NULL`,
       [context.scope.workspaceId, input.settingKey, previousVersion, nextVersion],
     );

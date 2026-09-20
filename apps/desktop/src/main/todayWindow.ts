@@ -156,6 +156,9 @@ export async function openSecondaryWindow(
 export function windowMenuTemplate(open: {
   readonly today: () => void;
   readonly firms: () => void;
+  /** Lane G9's Settings, Dashboard and Diagnostics window. Optional so a caller
+   * that has not wired it yet still gets the first two. */
+  readonly administration?: (() => void) | undefined;
 }): readonly { readonly label: string; readonly submenu: readonly { readonly label: string; readonly accelerator: string; readonly click: () => void }[] }[] {
   return [
     {
@@ -163,6 +166,9 @@ export function windowMenuTemplate(open: {
       submenu: [
         { label: 'Today', accelerator: 'CmdOrCtrl+1', click: open.today },
         { label: 'Firms', accelerator: 'CmdOrCtrl+2', click: open.firms },
+        ...(open.administration === undefined
+          ? []
+          : [{ label: 'Administration', accelerator: 'CmdOrCtrl+3', click: open.administration }]),
       ],
     },
   ];

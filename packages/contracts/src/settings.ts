@@ -354,3 +354,122 @@ export const settingHistoryRequestSchema = z.strictObject({
   settingKey: settingKeySchema,
   limit: z.number().int().min(1).max(200).optional(),
 });
+
+// ---------------------------------------------------------------------------
+// What the Mac parses back
+// ---------------------------------------------------------------------------
+
+/**
+ * The dashboard and Diagnostics responses, as the client reads them.
+ *
+ * `z.object` rather than `z.strictObject`, and that is the useful property here
+ * rather than a relaxation: an unknown key is *stripped*, so a field a later lane
+ * adds to the server's DTO cannot reach the renderer until this schema names it. A
+ * page cannot display what it did not declare, which is the client half of
+ * "responses are typed and redacted for the caller's visibility class" (14.1).
+ */
+const unavailableSchema = z.object({
+  available: z.literal(false),
+  owner: z.string(),
+  reason: z.string(),
+});
+
+const countByKeySchema = z.object({ key: z.string(), count: z.number() });
+
+export const dashboardResponseSchema = z.object({
+  window: z.object({ from: instant, to: instant }),
+  audience: z.enum(['workspace', 'assigned']),
+  firmsInScope: z.number(),
+  messages: z.object({
+    incomingMatched: z.number(),
+    human: z.number(),
+    uncertain: z.number(),
+    automated: z.number(),
+    bounces: z.number(),
+    optOuts: z.number(),
+  }),
+  replyHandling: z.object({
+    replies: z.number(),
+    handled: z.number(),
+    medianSecondsToHandle: z.number().nullable(),
+    slowestSecondsToHandle: z.number().nullable(),
+  }),
+  calls: z.array(countByKeySchema),
+  stageMovement: z.array(countByKeySchema),
+  holds: z.object({
+    open: z.number(),
+    byReason: z.array(
+      z.object({ reasonCode: z.string(), count: z.number(), oldestAgeSeconds: z.number() }),
+    ),
+  }),
+  suppressions: z.array(countByKeySchema),
+  sending: z.union([unavailableSchema, z.object({ available: z.literal(true) }).loose()]),
+  enrollments: z.union([unavailableSchema, z.object({ available: z.literal(true) }).loose()]),
+  classifier: z.union([unavailableSchema, z.object({ available: z.literal(true) }).loose()]),
+});
+export type DashboardResponse = z.infer<typeof dashboardResponseSchema>;
+
+export const diagnosticsResponseSchema = z.object({
+  restore: z.object({
+    systemGeneration: z.number().nullable(),
+    expectedSystemGeneration: z.number().nullable(),
+    mismatch: z.boolean(),
+  }),
+  schema: z.object({
+    appliedVersion: z.number(),
+    declaredRange: z.object({ minimum: z.number(), maximum: z.number() }),
+    accepted: z.boolean(),
+  }),
+  clientVersions: clientVersionRangeSchema,
+  sending: z.object({
+    deploymentEnabled: z.boolean(),
+    adminEnabled: z.boolean(),
+    effective: z.boolean(),
+  }),
+  jobs: z.object({
+    runnable: z.number(),
+    running: z.number(),
+    retryable: z.number(),
+    dead: z.number(),
+    oldestRunnableAgeSeconds: z.number().nullable(),
+    oldestDeadAgeSeconds: z.number().nullable(),
+  }),
+  heartbeats: z.array(
+    z.object({
+      component: z.string(),
+      instanceKey: z.string(),
+      ageSeconds: z.number(),
+      expectedIntervalSeconds: z.number(),
+      fresh: z.boolean(),
+    }),
+  ),
+  canaryCompletionAgeSeconds: z.number().nullable(),
+  alerts: z.array(
+    z.object({
+      id: uuid,
+      alertKey: z.string(),
+      severity: z.enum(['critical', 'warning']),
+      raisedAt: instant,
+      acknowledgedAt: instant.nullable(),
+      runbookPath: z.string().nullable(),
+    }),
+  ),
+  mailboxes: z.array(
+    z.object({
+      mailboxId: uuid,
+      ownerUserId: uuid,
+      status: z.string(),
+      syncState: z.string(),
+      coverageWatermarkAt: instant.nullable(),
+      lastSyncedAt: instant.nullable(),
+      lastSyncError: z.string().nullable(),
+      watchExpiresAt: instant.nullable(),
+      hoursToWatchExpiry: z.number().nullable(),
+      automationHeld: z.boolean(),
+    }),
+  ),
+  mailboxVisibility: z.enum(['all', 'own']),
+});
+export type DiagnosticsResponse = z.infer<typeof diagnosticsResponseSchema>;
+
+export const settingsResponseSchema = settingsSnapshotSchema;
