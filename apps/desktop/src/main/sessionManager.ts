@@ -57,6 +57,19 @@ export interface SessionManager {
   refreshToday(): Promise<DesktopState>;
   /** The gate every mutating action passes. Never bypassed by a view. */
   mayMutateNow(): Promise<{ readonly allowed: true } | { readonly allowed: false; readonly refusal: MutationRefusal }>;
+  /**
+   * The live access token, or null.
+   *
+   * The Today and CRM windows call endpoints `apiClient` does not know about, and they
+   * have to present the same session this manager owns. It goes through `liveSession`
+   * like every other caller, so the renewal stays serialised — which is the whole
+   * point of this file, and the reason a second holder of the refresh credential is
+   * not an option (5.3: "Reuse revokes the device").
+   *
+   * It is deliberately not on the renderer's bridge. A token that crossed the
+   * preload boundary would be a token in a page's memory.
+   */
+  accessToken(): Promise<string | null>;
   /** How many renewals actually reached the API. The serialisation test reads this. */
   renewalCount(): number;
 }
@@ -192,6 +205,11 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
 
   return {
     renewalCount: () => renewals,
+
+    async accessToken() {
+      const live = await liveSession();
+      return live === null ? null : live.accessToken;
+    },
 
     async state() {
       await ensureLoaded();

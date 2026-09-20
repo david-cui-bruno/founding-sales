@@ -18,7 +18,7 @@ export interface SchemaRange {
 }
 
 /** The highest migration version this source tree contains. */
-export const CURRENT_SCHEMA_VERSION = 7;
+export const CURRENT_SCHEMA_VERSION = 8;
 
 /**
  * The range the release before this one declared. Widen this one release ahead of the
@@ -26,13 +26,13 @@ export const CURRENT_SCHEMA_VERSION = 7;
  *
  * Lanes G5 and G2 shipped migrations 0002 and 0003 from the same main and each widened
  * this constant for its own; lane G3a widened it again for migration 0004, G3b for
- * 0005, G4 for 0006 and G10 for 0007. A merge that finds two different maxima takes
- * the larger. That is honest only because nothing has been deployed — G0's {1, 1} was
- * never a promise made to a running production binary. From the first real deployment
- * onwards the widening must precede the migration by a release, and the compatibility
- * test will keep saying so.
+ * 0005, G4 for 0006, G10 for 0007 and G6 for 0008. A merge that finds two different
+ * maxima takes the larger. That is honest only because nothing has been deployed —
+ * G0's {1, 1} was never a promise made to a running production binary. From the first
+ * real deployment onwards the widening must precede the migration by a release, and
+ * the compatibility test will keep saying so.
  */
-export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 7 };
+export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 8 };
 
 /**
  * Both services need migration 0002's shape: the API's dead-job list reads `dead_at`
@@ -64,12 +64,21 @@ export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum:
  * *are* their declared idempotency protection. A worker on a version-6 database would
  * run those handlers with no uniqueness behind them, which is the one thing a schema
  * range exists to prevent, so it refuses to start instead rather than accepting {6, 7}.
- * `docs/decisions/g10-worker-schema-minimum.md` says what that gives up. Both maxima
- * move to 7: a binary that refused the database it has just been deployed against
- * would be a self-inflicted outage.
+ * `docs/decisions/g10-worker-schema-minimum.md` says what that gives up.
+ *
+ * Migration 0008 (G6) moves both a third time, by the same rule that document states:
+ * a binary declares the lowest version on which its *first statement* can succeed, not
+ * the lowest it would like. The API's `/today`, `/today/firm` and `/today/snooze` read
+ * and write `today_snapshots`, `today_items` and `today_snoozes`; the worker's
+ * `today.build` handler calls `today_upsert_item`, and `UNIQUE(workspace_id,
+ * snapshot_date, firm_id, item_key)` inside it *is* that handler's declared
+ * `business_uniqueness` protection — so a worker on a version-7 database would be a
+ * worker running an at-least-once handler with nothing behind it, which is exactly the
+ * case G10 refused. Both maxima move to 8: a binary that refused the database it has
+ * just been deployed against would be a self-inflicted outage.
  */
-export const API_SCHEMA_RANGE: SchemaRange = { minimum: 7, maximum: 7 };
-export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 7, maximum: 7 };
+export const API_SCHEMA_RANGE: SchemaRange = { minimum: 8, maximum: 8 };
+export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 8, maximum: 8 };
 
 export function acceptsSchemaVersion(range: SchemaRange, version: number): boolean {
   return Number.isInteger(version) && version >= range.minimum && version <= range.maximum;

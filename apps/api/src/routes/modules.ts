@@ -21,6 +21,9 @@ import { DIAL_PATHS, routeDial } from './dial.ts';
 import { PAUSE_PATHS, routePauses } from './pauses.ts';
 import { POSTURE_PATHS, routePostures } from './postures.ts';
 import { SUPPRESSION_PATHS, routeSuppressions } from './suppressions.ts';
+// Lane G6's Today list.
+import { SNOOZE_PATHS, routeSnooze } from './snooze.ts';
+import { TODAY_PATHS, routeToday } from './today.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
 /**
@@ -137,5 +140,12 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     // path under that root is a typo in a command an admin is about to spend money
     // with, and `not_found` from the registry says so before any module sees it.
     moduleOf('research', { paths: RESEARCH_PATHS }, routeResearch, routing),
+    // Lane G6's Today list. Exact paths, and two modules rather than one: the list
+    // and the expansion are reads, the two snooze paths are commands with receipts,
+    // and a `/today` prefix would have let one claim answer for both. The registry
+    // refuses a prefix that swallows another module's exact path, so declaring
+    // `/today` and `/today/snooze` separately is what keeps them separable at all.
+    moduleOf('today', { paths: TODAY_PATHS }, routeToday, routing),
+    moduleOf('snooze', { paths: SNOOZE_PATHS }, routeSnooze, routing),
   ];
 }
