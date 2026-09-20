@@ -18,7 +18,7 @@ export interface SchemaRange {
 }
 
 /** The highest migration version this source tree contains. */
-export const CURRENT_SCHEMA_VERSION = 9;
+export const CURRENT_SCHEMA_VERSION = 12;
 
 /**
  * The range the release before this one declared. Widen this one release ahead of the
@@ -32,7 +32,7 @@ export const CURRENT_SCHEMA_VERSION = 9;
  * the first real deployment onwards the widening must precede the migration by a
  * release, and the compatibility test will keep saying so.
  */
-export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 9 };
+export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 12 };
 
 /**
  * Both services need migration 0002's shape: the API's dead-job list reads `dead_at`
@@ -101,9 +101,28 @@ export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum:
  * which is what the widened previous-release range above is for (Appendix G 22). Both
  * maxima move to 9: a binary that refused the database it has just been deployed
  * against would be a self-inflicted outage.
+ *
+ * Migration 0012 (G8) moves both a fifth time, and this lane's reasons are the same
+ * two the last three gave.
+ *
+ * The API needs it: `/sequences`, `/sequences/steps`, `/sequences/publish`,
+ * `/templates`, `/enrollments` and `/linkedin/*` read and write `sequences`,
+ * `sequence_versions`, `sequence_steps`, `sequence_enrollments` and
+ * `step_executions`, and the template routes read the five columns 0012 adds to
+ * `template_versions`. An API on a version-11 database could accept an enrollment
+ * and have nowhere to put it.
+ *
+ * The worker needs it: `sequence.action` claims a `step_executions` row, and
+ * `UNIQUE (workspace_id, enrollment_id, step_id)` together with the outbound fence
+ * *is* Appendix C's protection for `step-execution:{id}`. A worker on a version-11
+ * database would be running an at-least-once handler with nothing behind it — the
+ * case G10, G6 and G7 each refused for their own tables, and the one invariant 1
+ * ("no duplicate automated email for the same sequence step") rests on.
+ *
+ * The deploy order stays migrate, then worker, then API.
  */
-export const API_SCHEMA_RANGE: SchemaRange = { minimum: 9, maximum: 9 };
-export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 9, maximum: 9 };
+export const API_SCHEMA_RANGE: SchemaRange = { minimum: 12, maximum: 12 };
+export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 12, maximum: 12 };
 
 export function acceptsSchemaVersion(range: SchemaRange, version: number): boolean {
   return Number.isInteger(version) && version >= range.minimum && version <= range.maximum;
