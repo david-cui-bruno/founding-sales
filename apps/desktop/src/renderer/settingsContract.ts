@@ -84,6 +84,19 @@ export interface SetSendingCapInput {
   readonly raiseTo?: number | null;
 }
 
+/**
+ * A new holiday calendar, which supersedes rather than edits.
+ *
+ * The version is named by the person, not generated, because it is the label that
+ * will appear frozen on every due instant computed under it — and a name somebody
+ * chose ("2027-federal") is readable in an incident where a serial number is not.
+ */
+export interface RecordHolidayCalendarInput {
+  readonly version: string;
+  /** Local calendar dates, `YYYY-MM-DD`. */
+  readonly dates: readonly string[];
+}
+
 /** 12.7's checklist, which is a person saying they looked: FSS never queries DNS. */
 export interface RecordSendingAuthenticationInput {
   readonly domain: string;
@@ -131,6 +144,7 @@ export interface AdminBridge {
   acknowledgeAlert(input: { readonly alertId: string }): Promise<AdminState>;
   setSendingCap(input: SetSendingCapInput): Promise<AdminState>;
   recordSendingAuthentication(input: RecordSendingAuthenticationInput): Promise<AdminState>;
+  recordHolidayCalendar(input: RecordHolidayCalendarInput): Promise<AdminState>;
 }
 
 declare global {

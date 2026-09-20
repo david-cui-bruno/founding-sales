@@ -100,12 +100,25 @@ is gated on role in the view rather than offering a control that answers 403.
    per member. And the salesperson's copy of the *dashboard's* posture keeps the
    same row-3 rule: their own mailbox's ramp, and no domain checklist at all,
    because the checklist is admin configuration.
-2. After 0012 lands: point the calendar editor at G8's command, or — if G8 exposes
-   none — add one in `packages/domain/settings` writing to G8's table, and record
-   that here.
-3. `WORKER_SCHEMA_RANGE.minimum` stays where G7-2 left it (10) for this lane: with
-   both slices gone, no worker code path reads `workspace_settings` at all, so this
-   lane's migration raises neither end of the worker's range.
+2. ~~After 0012 lands: point the calendar editor at G8's command.~~ **Done**, 20
+   September 2026. G8 exposes both halves, so no command was added here: the
+   settings page posts to `POST /sequences/holidays` and shows the current calendar
+   from `currentHolidayCalendar`, read in `GET /settings` and carried in the
+   snapshot. No calendar data is stored by this lane.
+
+   Two things the surface had to get right, both of which follow from the calendar
+   being *versioned* rather than edited. The version box is empty rather than
+   prefilled with the current name — a supersession needs a new name, and offering
+   the taken one invites a refusal the person did not expect. And the section is
+   shown to a salesperson, inert, rather than hidden: somebody whose step was
+   delayed by a holiday is entitled to see which holiday, and `/settings` is a read
+   any member may make for exactly that reason.
+3. `WORKER_SCHEMA_RANGE.minimum` stays where the lane before it left it — 12, after
+   G8 — for this lane: with both slices gone, no worker code path reads
+   `workspace_settings` at all, so migration 0013 raises neither end of the worker's
+   range. It is the only migration in the tree that moves the two sides differently,
+   and that is the rule in `g10-worker-schema-minimum.md` working rather than an
+   oversight.
 
 ## The third slice, which stays: `sending_enabled`
 

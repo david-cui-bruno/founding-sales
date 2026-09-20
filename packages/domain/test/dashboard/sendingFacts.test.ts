@@ -151,8 +151,12 @@ describe("the dashboard's sending figures", () => {
 
   it('says which breakdowns no table can answer rather than showing them empty', async () => {
     const theAdmins = await facts(admin);
-    expect(theAdmins.bySequence).toMatchObject({ available: false, owner: 'G8' });
-    expect(theAdmins.bySegment).toMatchObject({ available: false, owner: 'G8' });
+    // `bySequence` is real since G8 landed: this fixture's fence is a draft send
+    // with no enrollment, and `none` is the honest key for one.
+    expect(theAdmins.bySequence).toEqual([{ key: 'none', sent: 1, replies: 1, positiveReplies: 1 }]);
+    // `bySegment` is the one that stayed unavailable, and now provably: migrations
+    // 0001 to 0013 define no segment anywhere, so there is nobody to own it.
+    expect(theAdmins.bySegment).toMatchObject({ available: false, owner: 'unassigned' });
   });
 
   it('shows an admin the domain posture and every ramp', async () => {

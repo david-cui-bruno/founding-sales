@@ -67,6 +67,28 @@ test("an admin edits G7-2's checklist and cap, and the guard has no control", as
   expect(call?.argument).toEqual({ mailboxId: '44444444-4444-4444-8444-444444444444', raiseTo: 25 });
 });
 
+test("replaces the holiday calendar through G8's command, by naming a new version", async ({ page }) => {
+  server = await startSettingsTestServer(adminState());
+  await page.goto(server.url);
+
+  await expect(page.getByTestId('holidays-current')).toContainText('2026-federal');
+  await expect(page.getByTestId('holiday-dates')).toHaveValue('2026-12-25');
+  // The version box is empty rather than prefilled: a calendar is superseded, so
+  // the name has to be a new one and offering the taken one invites a refusal.
+  await expect(page.getByTestId('holiday-version')).toHaveValue('');
+
+  await page.getByTestId('holiday-version').fill('2027-federal');
+  await page.getByTestId('holiday-dates').fill('2027-01-01\n\n  2027-07-05  ');
+  await page.getByTestId('holidays-save').click();
+
+  const call = server.calls.find(entry => entry.method === 'recordHolidayCalendar');
+  // Blank lines dropped and whitespace trimmed; nothing else interpreted here.
+  expect(call?.argument).toEqual({
+    version: '2027-federal',
+    dates: ['2027-01-01', '2027-07-05'],
+  });
+});
+
 test('a salesperson is offered no sending section at all', async ({ page }) => {
   server = await startSettingsTestServer(
     adminState({ role: 'salesperson', sendingAdmin: sendingPosture() }),
@@ -77,6 +99,10 @@ test('a salesperson is offered no sending section at all', async ({ page }) => {
   // and a control that exists only to be refused teaches nothing.
   await expect(page.getByTestId('sending-admin')).toHaveCount(0);
   await expect(page.getByTestId('value-postal_footer')).toBeDisabled();
+  // The calendar is different: shown, inert. A salesperson whose step was delayed
+  // by a holiday is entitled to see which holiday.
+  await expect(page.getByTestId('holidays-current')).toContainText('2026-federal');
+  await expect(page.getByTestId('holidays-save')).toBeDisabled();
 });
 
 test('a salesperson sees the same page with every control inert and a reason', async ({ page }) => {

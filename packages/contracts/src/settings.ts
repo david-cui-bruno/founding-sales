@@ -255,11 +255,30 @@ export const settingsSnapshotSchema = z.strictObject({
       ownedBy: z.string(),
     }),
   ),
+  /**
+   * G8's current workspace holiday calendar, carried here so the settings page can
+   * show what it is about to replace. Not stored by this lane: a version is frozen
+   * onto every due instant G8 computes, so the calendar has to be a versioned row of
+   * its own rather than a slice of a settings blob.
+   */
+  holidayCalendar: z.strictObject({
+    version: z.string(),
+    /** Local calendar dates, `YYYY-MM-DD`, sorted. */
+    dates: z.array(z.string()),
+  }),
   /** The deployment half of 16.2, read-only. `sending_enabled` is the admin's half. */
   deploymentSendingEnabled: z.boolean(),
   /** Both halves, ANDed. What the sending code actually asks. */
   effectiveSendingEnabled: z.boolean(),
 });
+
+/** The calendar command the settings page sends, which is G8's `/sequences/holidays`. */
+export const recordHolidayCalendarCommandSchema = z.strictObject({
+  /** A new version name: an edit supersedes, it never rewrites. */
+  version: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,39}$/u),
+  dates: z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/u)).max(400),
+});
+export type RecordHolidayCalendarCommand = z.infer<typeof recordHolidayCalendarCommandSchema>;
 export type SettingsSnapshot = z.infer<typeof settingsSnapshotSchema>;
 
 // ---------------------------------------------------------------------------

@@ -83,6 +83,14 @@ export interface AdminView {
   readonly sending: { readonly line: string; readonly editable: boolean } | null;
   /** G7-2's section. Null for anybody who is not an admin. */
   readonly sendingAdmin: SendingAdminSectionView | null;
+  /** G8's holiday calendar: what it is now, and whether this person may replace it. */
+  readonly holidays: {
+    readonly version: string;
+    readonly dates: readonly string[];
+    readonly line: string;
+    readonly editable: boolean;
+    readonly notEditableBecause: string | null;
+  } | null;
   readonly stages: readonly {
     readonly key: string;
     readonly label: string;
@@ -121,6 +129,31 @@ function provenanceOf(entry: { version: number; changedAt: string | null }): str
 
 function seconds(value: number | null): string {
   return value === null ? 'never' : `${String(Math.round(value))}s`;
+}
+
+/** `key: count, key: count`, or "none" for an empty breakdown. Never a bare blank. */
+function keyed(value: unknown): string {
+  if (!Array.isArray(value) || value.length === 0) return 'none';
+  return value
+    .map(entry => {
+      const row = entry as { key?: unknown; count?: unknown };
+      return `${String(row.key)}: ${String(row.count)}`;
+    })
+    .join(', ');
+}
+
+/**
+ * 13.4's drift, as a sentence that is honest when nobody has confirmed anything.
+ *
+ * A rate of null is not zero: "nobody corrected the model" and "nobody looked at a
+ * reply" are the same numerator and completely different news.
+ */
+function driftLine(facts: Readonly<Record<string, unknown>>): string {
+  const confirmations = Number(facts['confirmations']);
+  if (confirmations === 0) return 'No reply was confirmed in this window, so there is no drift to report.';
+  const rate = facts['correctionRate'];
+  const percent = typeof rate === 'number' ? `${String(Math.round(rate * 100))}%` : 'unknown';
+  return `${String(facts['corrected'])} corrected of ${String(confirmations)} confirmed (${percent}). By suggester: ${keyed(facts['correctedBySuggester'])}.`;
 }
 
 export function adminViewOf(state: AdminState): AdminView {
@@ -175,6 +208,22 @@ export function adminViewOf(state: AdminState): AdminView {
     elsewhere,
     sending,
     sendingAdmin: sendingAdminSection(state, reason),
+    holidays:
+      state.settings === null
+        ? null
+        : {
+            version: state.settings.holidayCalendar.version,
+            dates: state.settings.holidayCalendar.dates,
+            // A calendar is superseded, never edited, so the current version is
+            // named: the next one has to be a different name, and a person about to
+            // choose one should see what is taken.
+            line:
+              state.settings.holidayCalendar.dates.length === 0
+                ? `No holidays are configured (version "${state.settings.holidayCalendar.version}"). Weekends are skipped by the rule, not by this list.`
+                : `Version "${state.settings.holidayCalendar.version}": ${String(state.settings.holidayCalendar.dates.length)} dates.`,
+            editable,
+            notEditableBecause: reason,
+          },
     stages,
     panels: [...dashboardPanels(state), ...diagnosticsPanels(state)],
     alerts: (state.diagnostics?.alerts ?? []).map(alert => ({
@@ -252,6 +301,13 @@ function dashboardPanels(state: AdminState): readonly PanelView[] {
   const absence = (figure: { available: boolean; owner?: string; reason?: string }): string | null =>
     figure.available ? null : `Not in this build (${figure.owner ?? 'unknown'}): ${figure.reason ?? ''}`.trim();
 
+  /** Lines only when the figure exists. An unavailable panel shows its reason alone. */
+  const linesOf = (
+    figure: { available: boolean },
+    render: (facts: Readonly<Record<string, unknown>>) => readonly string[],
+  ): readonly string[] =>
+    figure.available ? render(figure as unknown as Readonly<Record<string, unknown>>) : [];
+
   return [
     {
       title: 'Scope',
@@ -295,13 +351,33 @@ function dashboardPanels(state: AdminState): readonly PanelView[] {
       unavailable: null,
     },
     {
+      title: 'Sequences',
+      lines: linesOf(dashboard.enrollments, facts => [
+        `${String(facts['started'])} started; ${String(facts['active'])} active now, ${String(facts['reviewRequired'])} awaiting review.`,
+        `Ended: ${keyed(facts['ended'])}`,
+        `Steps completed: ${keyed(facts['stepsCompleted'])}`,
+        `Held now: ${keyed(facts['heldSteps'])}`,
+      ]),
+      unavailable: absence(dashboard.enrollments),
+    },
+    {
       title: 'LinkedIn',
-      lines: [],
+      lines: linesOf(dashboard.enrollments, facts => [
+        `${String(facts['linkedinHandoffs'])} handed off.`,
+        `Recorded: ${String(facts['linkedinRecordedReplies'])} replied, ${String(facts['linkedinNoEngagement'])} no engagement.`,
+      ]),
       unavailable: absence(dashboard.enrollments),
     },
     {
       title: 'Classifier',
-      lines: [],
+      lines: linesOf(dashboard.classifier, facts => [
+        `${facts['enabled'] === true ? 'Enabled' : 'Disabled'}: ${String(facts['modelName'])} at effort ${String(facts['effort'])}, cap ${String(facts['dailyCallCap'])} a day.`,
+        `${String(facts['callsAttempted'])} attempts, ${String(facts['callsSent'])} sent. ${keyed(facts['byOutcome'])}`,
+        // Tokens, not money: nothing in this build records a price, and a figure in
+        // dollars here would be this page inventing one.
+        `Tokens: ${String(facts['inputTokens'])} in (${String(facts['cachedInputTokens'])} cached), ${String(facts['outputTokens'])} out.`,
+        driftLine(facts),
+      ]),
       unavailable: absence(dashboard.classifier),
     },
   ];

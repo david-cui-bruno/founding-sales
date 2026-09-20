@@ -64,7 +64,52 @@ shape only works if each figure stays honest:
   siblings are numbers. That is the shape working at a finer grain than a whole
   source, and it is why `Breakdown[] | Unavailable` is worth the union.
 
-## The remaining two, at the final merge
+## All three are wired
+
+Done at the final merge, 20 September 2026, with 0001–0013 on one branch.
+
+`enrollments` reads G8's `sequence_enrollments`, `step_executions` and
+`enrollment_linkedin_results`. The shape it forced is worth recording: a *transition*
+belongs to the window it happened in, a *state* does not. "Started" and "ended" are
+the window's; "active", "awaiting review" and "held" are now's. Reporting how many
+were active *during* a window would need a history table G8 did not build, and the
+figure an operator actually wants is the present one — fourteen holds is something to
+go and clear; fourteen holds at some point last month is not.
+
+`classifier` reads G7b's `mail_classification_calls` and `mail_reply_confirmations`,
+and **reports no money**. The table records tokens and latency; nothing in this build
+records a price. Multiplying by a rate hard-coded in a dashboard query would produce
+a number that goes stale the next time a price list changes and that nobody would
+catch, because a plausible wrong figure looks exactly like a right one. Tokens are
+what was measured, so tokens are what is shown.
+
+Drift is reported as corrections *against* acceptances, never alone: ten corrections
+is excellent out of a thousand and alarming out of twelve. The rate is null rather
+than zero when nobody confirmed anything, and the view says so in words.
+`correctedBySuggester` splits it by `deterministic`, `model` or `none`, because 12.4
+lets the model say only `uncertain` — a correction against a deterministic suggestion
+and one against the model's are different bugs in different places.
+
+`bySequence` became real at the same time, joining the fence's `enrollment_id`
+through `sequence_enrollments` to `sequence_versions.sequence_id`. It keys on the
+sequence rather than the version, because 13.4 asks how a sequence performs and a
+version bump is not a different sequence. A draft send has no enrollment and keys as
+`none`, which is honest: 12.5 makes a draft a first-class origin, not an anomaly.
+
+### The one figure that stayed unavailable, and why that is the shape working
+
+`bySegment`. Migrations 0001 to 0013 define no segment anywhere — not on `firms`, not
+on an enrollment, nowhere. 13.4 asks for the breakdown and nothing in the system has
+decided what a segment *is*. So it answers
+`{ available: false, owner: 'unassigned', reason: 'no table in this build records a
+segment…' }` while every figure beside it is a number.
+
+That is the point of the union type rather than an embarrassment about it. The
+alternative was an empty array, which a person reads as "no sends had a segment", and
+the truth is "nobody has defined one". `owner: 'unassigned'` rather than a lane name
+is the accurate answer to "who will supply this": nobody has been asked to.
+
+## The remaining two, at the final merge — now done
 
 Directed by the coordinator on 20 September 2026, once 0011 (G7b) was on main and
 0012 (G8) was next: **wire both remaining methods at the final merge, so that no

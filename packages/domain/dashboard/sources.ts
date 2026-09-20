@@ -52,6 +52,12 @@ export interface Unavailable {
   readonly reason: string;
 }
 
+/** A count against a key from a closed set or an opaque identifier. Never a name. */
+export interface KeyedCount {
+  readonly key: string;
+  readonly count: number;
+}
+
 export interface Breakdown {
   readonly key: string;
   readonly sent: number;
@@ -128,27 +134,60 @@ export interface SendingFacts {
   readonly bySegment: readonly Breakdown[] | Unavailable;
 }
 
-/** 13.4's LinkedIn and enrollment half. Owned by G8. */
+/** 13.4's LinkedIn and enrollment half. Read from G8's tables (migration 0012). */
 export interface EnrollmentFacts {
   readonly available: true;
-  readonly activeEnrollments: number;
-  readonly heldEnrollments: number;
+  /** Enrollments that started inside the window. */
+  readonly started: number;
+  /** Live now, not inside the window: a state is a fact about this instant. */
+  readonly active: number;
+  readonly reviewRequired: number;
+  /** Ended inside the window, by `end_reason`. */
+  readonly ended: readonly KeyedCount[];
+  /** Step executions completed inside the window, by channel. */
+  readonly stepsCompleted: readonly KeyedCount[];
+  /** Held now, by hold reason code — the vocabulary `hold_reason_codes` fixes. */
+  readonly heldSteps: readonly KeyedCount[];
+  /** 11.4's LinkedIn task: handed to a person, and what they recorded afterwards. */
   readonly linkedinHandoffs: number;
   readonly linkedinRecordedReplies: number;
+  readonly linkedinNoEngagement: number;
 }
 
-/** 13.4's "classifier cost and drift". Owned by G7b. */
+/**
+ * 13.4's "classifier cost and drift". Read from G7b's tables (migration 0011).
+ *
+ * **There is no money figure, on purpose.** `mail_classification_calls` records
+ * tokens and latency; nothing in this build records a price, and a dashboard that
+ * multiplied tokens by a rate hard-coded here would be quoting a number that goes
+ * stale silently the next time a price list changes. Tokens are what was measured,
+ * so tokens are what is reported.
+ */
 export interface ClassifierFacts {
   readonly available: true;
-  readonly messagesClassified: number;
-  readonly totalCostMicros: number;
-  readonly modelVersion: string | null;
-  readonly promptVersion: string | null;
-  /**
-   * How often the model's suggestion differed from the disposition a person
-   * confirmed, as a fraction of confirmed messages. Null when nobody confirmed one.
-   */
-  readonly disagreementRate: number | null;
+  readonly enabled: boolean;
+  readonly modelName: string;
+  readonly effort: string;
+  readonly dailyCallCap: number;
+  /** Every prompt version seen in the window, so a change of prompt is visible. */
+  readonly promptVersions: readonly string[];
+  /** Every attempt, including the ones that deliberately sent nothing. */
+  readonly callsAttempted: number;
+  readonly callsSent: number;
+  /** `accepted`, `refusal`, `malformed`, `disabled`, `capped`, `not_applicable`, … */
+  readonly byOutcome: readonly KeyedCount[];
+  readonly inputTokens: number;
+  readonly cachedInputTokens: number;
+  readonly outputTokens: number;
+  readonly totalLatencyMs: number;
+  /** Drift: a person confirmed a reply, and whether they changed the suggestion. */
+  readonly confirmations: number;
+  readonly accepted: number;
+  readonly corrected: number;
+  /** `corrected / confirmations`. Null when nobody confirmed one in the window. */
+  readonly correctionRate: number | null;
+  /** Corrections by who suggested: `deterministic`, `model` or `none`. */
+  readonly correctedBySuggester: readonly KeyedCount[];
 }
 
 export interface DashboardSources {

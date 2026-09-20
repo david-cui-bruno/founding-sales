@@ -219,6 +219,15 @@ describe('the administration surface', () => {
     const elsewhere = (answer.body['elsewhere'] as readonly { topic: string }[]).map(entry => entry.topic);
     expect(elsewhere).toContain('Workspace holidays');
     expect(elsewhere).toContain('Sending caps and the ramp');
+    // G8's calendar has a path now, not a "pending" string, and the current
+    // calendar rides along in the snapshot so the page can offer an edit of it.
+    const holidays = (answer.body['elsewhere'] as readonly { topic: string; path: string }[]).find(
+      entry => entry.topic === 'Workspace holidays',
+    );
+    expect(holidays?.path).toBe('/sequences/holidays');
+    // G8's empty calendar, not an error: weekends are in the rule, so a workspace
+    // that observes no holidays is a correctly configured workspace.
+    expect(answer.body['holidayCalendar']).toEqual({ version: 'none.1', dates: [] });
   });
 
   it('answers the dashboard for a named window and refuses one without', async () => {
@@ -228,11 +237,14 @@ describe('the administration surface', () => {
     expect(answer.status).toBe(200);
     // The audience is decided from the scope and never taken from the request.
     expect(answer.body['audience']).toBe('assigned');
-    // G7-2's tables are on main, so the sending figures are real; the two whose
-    // lanes have not landed still say so rather than rendering as zero.
+    // Every lane has landed, so every figure is real. The one thing still
+    // unavailable is the segment breakdown, and it is unavailable because no table
+    // in the build has a segment rather than because a lane is late.
     expect(answer.body['sending']).toMatchObject({ available: true, sent: 0 });
-    expect(answer.body['enrollments']).toMatchObject({ available: false, owner: 'G8' });
-    expect(answer.body['classifier']).toMatchObject({ available: false, owner: 'G7b' });
+    expect(answer.body['enrollments']).toMatchObject({ available: true, started: 0 });
+    expect(answer.body['classifier']).toMatchObject({ available: true, callsAttempted: 0 });
+    const sending = answer.body['sending'] as { bySegment: unknown };
+    expect(sending.bySegment).toMatchObject({ available: false, owner: 'unassigned' });
 
     expect((await call('POST', '/dashboard', salespersonToken, {})).status).toBe(400);
     expect(

@@ -27,12 +27,13 @@ export const SETTINGS_ELSEWHERE: readonly SettingsElsewhere[] = Object.freeze([
   { topic: 'Memberships and roles', path: '/admin/memberships', ownedBy: 'G2 identity' },
   { topic: 'Devices', path: '/admin/devices', ownedBy: 'G2 identity' },
   { topic: 'Pipeline stages', path: '/pipeline/stages', ownedBy: 'G9 (this lane), over G3a tables' },
-  // Pending rather than absent: the calendar is G8's `workspace_holiday_calendars`
-  // (migration 0012) and its command path is not decided yet, so the settings page
-  // says so instead of silently omitting a slice a person will look for. The final
-  // merge after 0012 replaces this one string; see
+  // G8's `workspace_holiday_calendars`, versioned because every stored due instant
+  // freezes the calendar version it was computed from. The settings page shows the
+  // current calendar — read through G8's `currentHolidayCalendar` and carried in the
+  // settings snapshot — and edits it with G8's own command. No calendar data lives
+  // in `workspace_settings`; see
   // docs/decisions/g9-two-slices-that-belong-to-other-lanes.md.
-  { topic: 'Workspace holidays', path: 'pending: G8 migration 0012', ownedBy: 'G8 sequences' },
+  { topic: 'Workspace holidays', path: '/sequences/holidays', ownedBy: 'G8 sequences' },
   // G7-2's, and its paths are known: `setAdminCap` on `mailbox_send_ramp`, and the
   // authentication checklist and per-domain enable on `sending_domains`. Both are
   // admin-only with a redacted 403, so the settings page gates the section on role

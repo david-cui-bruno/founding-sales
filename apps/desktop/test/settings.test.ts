@@ -73,6 +73,7 @@ const settingsBody = (overrides: Record<string, unknown> = {}) => ({
     },
   ],
   elsewhere: [{ topic: 'Research limits', path: '/research/config', ownedBy: 'G10 research' }],
+  holidayCalendar: { version: 'none.1', dates: [] },
   deploymentSendingEnabled: false,
   effectiveSendingEnabled: false,
   ...overrides,
@@ -248,6 +249,7 @@ describe('the administration bridge', () => {
       'callie:admin:acknowledge-alert',
       'callie:admin:set-sending-cap',
       'callie:admin:record-sending-authentication',
+      'callie:admin:record-holiday-calendar',
     ]);
   });
 
@@ -359,6 +361,32 @@ describe('the administration bridge', () => {
       postmasterReviewed: true,
       automatedSendingEnabled: true,
     });
+  });
+
+  it("sends a new holiday calendar to G8's command and re-reads the settings", async () => {
+    const { api, calls } = scriptedApi({
+      '/settings': { status: 200, body: settingsBody() },
+      '/pipeline/stages': { status: 200, body: stagesBody },
+      '/outbound/status': { status: 200, body: outboundStatusBody() },
+      '/diagnostics': { status: 200, body: diagnosticsBody(MAILBOX_ID) },
+      '/sequences/holidays': {
+        status: 200,
+        body: { status: 'accepted', replayed: false, result: { version: '2027-federal' } },
+      },
+    });
+    const bridge = createAdminBridge({ api, session: { state: async () => await Promise.resolve(session()) } });
+    await bridge.state();
+    const before = calls.length;
+    await bridge.recordHolidayCalendar({ version: '2027-federal', dates: ['2027-01-01'] });
+
+    // G8's path, not one of this lane's: the calendar is a versioned row whose
+    // version is frozen onto every due instant computed under it.
+    const sent = calls.find(call => call.path === '/sequences/holidays')?.body as Record<string, unknown>;
+    expect(sent['version']).toBe('2027-federal');
+    expect(sent['dates']).toEqual(['2027-01-01']);
+    expect(typeof sent['commandId']).toBe('string');
+    // Re-read through `/settings`, which is where the current calendar is carried.
+    expect(calls.slice(before).map(call => call.path)).toContain('/settings');
   });
 
   it('keeps a refusal from the sending commands as the notice, unchanged', async () => {
@@ -554,6 +582,22 @@ describe('the administration view', () => {
   it('shows a salesperson no sending section at all', () => {
     const view = adminViewOf({ ...withSettings(), role: 'salesperson' });
     expect(view.sendingAdmin).toBeNull();
+    // The calendar is not hidden from them, only made inert: a salesperson whose
+    // step was delayed by a holiday is entitled to see which holiday.
+    expect(view.holidays?.editable).toBe(false);
+    expect(view.holidays?.notEditableBecause).toBe('admin_only');
+  });
+
+  it("names G8's calendar and says weekends are not in it", () => {
+    const view = adminViewOf(withSettings());
+    expect(view.holidays?.line).toContain('No holidays are configured');
+    expect(view.holidays?.line).toContain('Weekends are skipped by the rule');
+
+    const configured = adminViewOf(
+      withSettings({ holidayCalendar: { version: '2026-federal', dates: ['2026-12-25'] } }),
+    );
+    expect(configured.holidays?.line).toBe('Version "2026-federal": 1 dates.');
+    expect(configured.holidays?.editable).toBe(true);
   });
 });
 

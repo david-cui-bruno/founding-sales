@@ -141,6 +141,8 @@ const admin: AdminBridge = {
   setSendingCap: async input => await invokeAdmin(ADMIN_IPC_CHANNELS.setSendingCap, input),
   recordSendingAuthentication: async input =>
     await invokeAdmin(ADMIN_IPC_CHANNELS.recordSendingAuthentication, input),
+  recordHolidayCalendar: async input =>
+    await invokeAdmin(ADMIN_IPC_CHANNELS.recordHolidayCalendar, input),
 };
 
 contextBridge.exposeInMainWorld('callie', bridge);

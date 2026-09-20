@@ -234,26 +234,43 @@ describe('the dashboard', () => {
       enrollments: async () =>
         await Promise.resolve({
           available: true,
-          activeEnrollments: 4,
-          heldEnrollments: 1,
+          started: 5,
+          active: 4,
+          reviewRequired: 1,
+          ended: [{ key: 'completed', count: 1 }],
+          stepsCompleted: [{ key: 'email', count: 6 }],
+          heldSteps: [{ key: 'scoped_pause', count: 1 }],
           linkedinHandoffs: 2,
           linkedinRecordedReplies: 1,
+          linkedinNoEngagement: 0,
         }),
       classifier: async () =>
         await Promise.resolve({
           available: true,
-          messagesClassified: 9,
-          totalCostMicros: 4200,
-          modelVersion: 'fixture-model.1',
-          promptVersion: 'fixture-prompt.1',
-          disagreementRate: 0.1,
+          enabled: true,
+          modelName: 'claude-opus-5',
+          effort: 'low',
+          dailyCallCap: 500,
+          promptVersions: ['fixture-prompt.1'],
+          callsAttempted: 9,
+          callsSent: 7,
+          byOutcome: [{ key: 'accepted', count: 7 }],
+          inputTokens: 4200,
+          cachedInputTokens: 0,
+          outputTokens: 210,
+          totalLatencyMs: 9000,
+          confirmations: 10,
+          accepted: 9,
+          corrected: 1,
+          correctionRate: 0.1,
+          correctedBySuggester: [{ key: 'model', count: 1 }],
         }),
     };
 
     const theirs = await readDashboard(assignee, { window: WINDOW, sources: fake });
     expect(theirs.sending).toMatchObject({ available: true, sent: 12, held: 2 });
     expect(theirs.enrollments).toMatchObject({ linkedinHandoffs: 2 });
-    expect(theirs.classifier).toMatchObject({ disagreementRate: 0.1 });
+    expect(theirs.classifier).toMatchObject({ correctionRate: 0.1 });
     // The source is told whose figures to compute, so a later real implementation
     // cannot accidentally answer workspace-wide for a salesperson.
     expect(seen).toEqual([

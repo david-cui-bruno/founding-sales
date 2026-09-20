@@ -142,6 +142,24 @@ that forbids enabling without all four — it shows the refusal rather than gues
 it. Nothing is clamped on the client: a raise above 75 comes back as a refusal an
 admin reads, not a silent 75.
 
+## Workspace holidays
+
+G8's, not this lane's. `workspace_holiday_calendars` is versioned because every due
+instant G8 stores freezes the calendar version it was computed under, so a calendar
+is superseded rather than edited — which is precisely why it could not be a slice of
+`workspace_settings`, where a jsonb blob has no version another row can freeze.
+
+The settings page owns the surface and G8 owns the write. `GET /settings` carries the
+current calendar, read through G8's `currentHolidayCalendar`; the editor posts to
+`POST /sequences/holidays`. The version box is empty rather than prefilled, because a
+supersession needs a new name and offering the taken one invites a refusal. The
+section is shown to a salesperson, inert: somebody whose step was delayed by a
+holiday is entitled to see which holiday.
+
+An empty calendar is a correct calendar, not an error. Weekends are skipped by the
+rule rather than by the list, so a workspace that observes no holidays is a
+configured workspace and the page says so in those words.
+
 ## Production sending
 
 Two switches, ANDed: the deployment flag the release process sets and the
@@ -177,20 +195,31 @@ workspace for an admin, assigned firms for a salesperson. See
 of two salespeople with one firm each, a workspace-wide count *is* the other person's
 count.
 
-Some of 13.4's figures read tables other lanes own. They are behind
-`DashboardSources`, whose default answers `{ available: false, owner, reason }`, and
-the Mac renders that as "not in this build (G8)" rather than as zero. Zero is a
-measurement.
+Several of 13.4's figures read tables other lanes own. They sit behind
+`DashboardSources`, an interface whose default answers
+`{ available: false, owner, reason }` so that a figure nobody can compute says so
+rather than rendering as zero. Zero is a measurement.
 
-G7-2's half is wired: sends, holds, `unknown_terminal` fences, 12.5's two admin
-resolutions, provider deferrals, unhealthy send days, the domain and ramp posture,
-and the breakdowns by template version, weekday and local send hour — the last two
-computed in the fence's own `source_zone`, so "nine in the morning" means nine in the
-morning where the firm is. Replies are matched by Gmail thread. Enrollments (G8) and
-the classifier (G7b) still say they are not in this build, and so do the
-`bySequence` and `bySegment` breakdowns, because the sequence a fence belongs to is
-G8's table and nothing in this build records a segment. See
-`docs/decisions/g9-dashboard-sources.md`.
+All three methods are now implemented against real tables:
+
+* **sending** (G7-2) — sends, holds, `unknown_terminal` fences, 12.5's two admin
+  resolutions, provider deferrals, unhealthy send days, the domain and ramp posture,
+  and breakdowns by sequence, template version, weekday and local send hour. The last
+  two are computed in the fence's own `source_zone`, so "nine in the morning" means
+  nine in the morning where the firm is. Replies are matched by Gmail thread.
+* **enrollments** (G8) — started and ended over the window; active, awaiting review
+  and held *now*. The two kinds are named differently rather than blended: a state
+  is a fact about this instant, and "fourteen holds" is something to go and clear
+  while "fourteen holds at some point last month" is not.
+* **classifier** (G7b) — model, effort, cap, prompt versions seen, calls attempted
+  and sent, outcomes, tokens, latency, and drift as corrections against acceptances.
+  **There is no money figure**: the table records tokens, nothing records a price,
+  and a rate hard-coded into a dashboard query would go stale silently.
+
+One figure is still unavailable and will stay so until somebody decides what it
+means: `bySegment`. No migration from 0001 to 0013 records a segment anywhere, so it
+answers `owner: 'unassigned'` — nobody has been asked to supply it — while every
+figure beside it is a number. See `docs/decisions/g9-dashboard-sources.md`.
 
 ## Diagnostics
 

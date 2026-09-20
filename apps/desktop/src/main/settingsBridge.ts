@@ -10,6 +10,7 @@ import type {
   AdminScreen,
   AdminState,
   PipelineStageRowView,
+  RecordHolidayCalendarInput,
   RecordSendingAuthenticationInput,
   SaveSettingInput,
   SetSendingCapInput,
@@ -45,6 +46,7 @@ export const ADMIN_IPC_CHANNELS = {
   acknowledgeAlert: 'callie:admin:acknowledge-alert',
   setSendingCap: 'callie:admin:set-sending-cap',
   recordSendingAuthentication: 'callie:admin:record-sending-authentication',
+  recordHolidayCalendar: 'callie:admin:record-holiday-calendar',
 } as const;
 export type AdminIpcChannel = (typeof ADMIN_IPC_CHANNELS)[keyof typeof ADMIN_IPC_CHANNELS];
 
@@ -127,6 +129,7 @@ export interface AdminBridgeHost {
   acknowledgeAlert(input: { readonly alertId: string }): Promise<AdminState>;
   setSendingCap(input: SetSendingCapInput): Promise<AdminState>;
   recordSendingAuthentication(input: RecordSendingAuthenticationInput): Promise<AdminState>;
+  recordHolidayCalendar(input: RecordHolidayCalendarInput): Promise<AdminState>;
 }
 
 /** The last 30 days, in UTC. A window the page shows and a person may change. */
@@ -417,6 +420,22 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
         value => value,
       );
       return await afterCommand(outcome, loadSending);
+    },
+
+    async recordHolidayCalendar(input) {
+      // G8's command, not one of this lane's. The calendar is a versioned row whose
+      // version is frozen onto every due instant computed under it, which is why it
+      // is not a slice of `workspace_settings` — see
+      // docs/decisions/g9-two-slices-that-belong-to-other-lanes.md. The settings
+      // page owns the surface; G8 owns the write.
+      const outcome = await deps.api.command(
+        '/sequences/holidays',
+        { version: input.version, dates: [...input.dates] },
+        value => value,
+      );
+      // Reloaded through `/settings`, because that is where the current calendar is
+      // carried: the page never patches its own copy from a command's answer.
+      return await afterCommand(outcome, loadSettings);
     },
   };
 }

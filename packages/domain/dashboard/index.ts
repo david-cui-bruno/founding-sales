@@ -16,6 +16,7 @@ export {
   type DashboardWindow,
   type DomainPosture,
   type EnrollmentFacts,
+  type KeyedCount,
   type RampPosture,
   type SendingFacts,
   type SendingPosture,
@@ -23,6 +24,8 @@ export {
 } from './sources.ts';
 
 export { liveDashboardSources, sendingFacts } from './sendingSource.ts';
+export { enrollmentFacts } from './enrollmentSource.ts';
+export { classifierFacts } from './classifierSource.ts';
 
 export {
   readDashboard,

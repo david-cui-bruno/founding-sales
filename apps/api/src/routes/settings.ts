@@ -10,6 +10,7 @@ import {
   readSettingHistory,
   updateSetting,
 } from '@fss/domain/settings';
+import { currentHolidayCalendar } from '@fss/domain/sequences';
 import { REFUSAL_STATUS, contextForPrincipal, policyRouteDeps, redactError, runPolicyCommand } from './dialSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
@@ -25,6 +26,11 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  * is the acceptance criterion in this lane's brief: the receipt, the payload hash,
  * the device and the mutation commit together (5.3), so a replayed save returns the
  * original version rather than writing a second one.
+ *
+ * The snapshot also carries the workspace holiday calendar, which this lane does
+ * not store: it is G8's `workspace_holiday_calendars`, read through G8's
+ * `currentHolidayCalendar`. A page that could not show the current calendar could
+ * not offer an edit of it, and the edit goes to G8's command.
  *
  * `/settings/history` is a POST and a read. It carries no personal data, so
  * `docs/decisions/g3b-reads-are-posts.md`'s argument about query strings does not
@@ -53,6 +59,11 @@ export async function routeSettings(request: ApiRequest, options: RoutingOptions
       body: {
         settings,
         elsewhere: SETTINGS_ELSEWHERE,
+        // G8's table, read through G8's function and never copied into
+        // `workspace_settings`. The settings page has to show the calendar to let
+        // anybody edit it, and the edit itself goes to `POST /sequences/holidays`.
+        // See docs/decisions/g9-two-slices-that-belong-to-other-lanes.md.
+        holidayCalendar: await currentHolidayCalendar(scoped.context),
         // 16.2 is two switches ANDed. Both are shown, because an admin who has
         // enabled sending and still cannot send needs to see which half is off.
         deploymentSendingEnabled: options.sendingEnabled,

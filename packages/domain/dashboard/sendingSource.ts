@@ -4,8 +4,9 @@ import {
   effectiveDailyCap,
   readPrimarySendingDomain,
 } from '../outbound/index.ts';
+import { classifierFacts } from './classifierSource.ts';
+import { enrollmentFacts } from './enrollmentSource.ts';
 import {
-  unavailableDashboardSources,
   type Breakdown,
   type DashboardAudience,
   type DashboardSources,
@@ -13,7 +14,6 @@ import {
   type RampPosture,
   type SendingFacts,
   type SendingPosture,
-  type Unavailable,
 } from './sources.ts';
 
 /**
@@ -58,8 +58,6 @@ import {
  * the domain checklist is admin configuration, and a ramp is mailbox diagnostics,
  * which row 3 gives to the mailbox's owner or an admin.
  */
-
-const G8 = (reason: string): Unavailable => ({ available: false, owner: 'G8', reason });
 
 type CountRow = {
   readonly [column: string]: unknown;
@@ -136,9 +134,19 @@ export async function sendingFacts(
   const breakdowns = await context.db.query<BreakdownRow>(
     `WITH visible AS (${VISIBLE_FENCES}),
           sent AS (
-            SELECT id, mailbox_id, template_version_id, sent_at, source_zone, provider_thread_id
-              FROM visible
-             WHERE state = 'sent' AND sent_at >= $2::timestamptz AND sent_at < $3::timestamptz
+            -- The fence carries an enrollment id; which sequence that is takes two
+            -- joins through G8 tables, and the answer is the sequence rather than
+            -- the version, because 13.4 asks how a sequence performs and a version
+            -- bump is not a different sequence.
+            SELECT v.id, v.mailbox_id, v.template_version_id, v.sent_at, v.source_zone,
+                   v.provider_thread_id, sv.sequence_id
+              FROM visible v
+              LEFT JOIN sequence_enrollments e
+                ON e.workspace_id = $1 AND e.id = v.enrollment_id
+              LEFT JOIN sequence_versions sv
+                ON sv.workspace_id = $1 AND sv.id = e.sequence_version_id
+             WHERE v.state = 'sent'
+               AND v.sent_at >= $2::timestamptz AND v.sent_at < $3::timestamptz
           ),
           replied AS (
             SELECT s.id,
@@ -158,7 +166,8 @@ export async function sendingFacts(
              GROUP BY s.id
           ),
           joined AS (
-            SELECT s.template_version_id, s.sent_at, s.source_zone, r.replies, r.positive_replies
+            SELECT s.template_version_id, s.sequence_id, s.sent_at, s.source_zone,
+                   r.replies, r.positive_replies
               FROM sent s JOIN replied r ON r.id = s.id
           )
      SELECT 'template' AS dimension,
@@ -166,6 +175,12 @@ export async function sendingFacts(
             count(*)::text AS sent,
             sum(replies)::text AS replies,
             sum(positive_replies)::text AS positive_replies
+       FROM joined GROUP BY 1, 2
+     UNION ALL
+     -- The literal none is a real answer here: a draft has no enrollment, and 12.5
+     -- makes a draft send a first-class origin rather than an anomaly.
+     SELECT 'sequence', coalesce(sequence_id::text, 'none'),
+            count(*)::text, sum(replies)::text, sum(positive_replies)::text
        FROM joined GROUP BY 1, 2
      UNION ALL
      SELECT 'weekday',
@@ -221,8 +236,16 @@ export async function sendingFacts(
     byTemplateVersion: of('template'),
     byWeekday: of('weekday'),
     byLocalSendHour: of('hour'),
-    bySequence: G8('sequences and enrollments are not in this build'),
-    bySegment: G8('nothing in this build records a segment to group by'),
+    bySequence: of('sequence'),
+    // Still unavailable, and now provably rather than pending: G8's 0012 landed and
+    // records no segment either, so no table in this build has one. 13.4 asks for
+    // the breakdown; nothing has yet decided what a segment *is*. A zero here would
+    // be a measurement of something nobody has defined.
+    bySegment: {
+      available: false,
+      owner: 'unassigned',
+      reason: 'no table in this build records a segment, and none of 0001–0013 defines one',
+    },
   };
 }
 
@@ -275,10 +298,12 @@ async function sendingPosture(
 }
 
 /**
- * What the API supplies: sending read from G7-2's tables, the other two still
- * declared unavailable until their lanes land.
+ * What the API supplies. Every method reads a table that exists.
+ *
+ * `unavailableDashboardSources()` stays exported and stays tested: it is what a
+ * caller uses when a source is deliberately not wired, and it is the shape the next
+ * figure whose table does not exist yet will take.
  */
 export function liveDashboardSources(): DashboardSources {
-  const absent = unavailableDashboardSources();
-  return { ...absent, sending: sendingFacts };
+  return { sending: sendingFacts, enrollments: enrollmentFacts, classifier: classifierFacts };
 }

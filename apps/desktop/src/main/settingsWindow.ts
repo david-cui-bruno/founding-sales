@@ -148,5 +148,18 @@ export function registerAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
     });
   });
 
+  handleOnce(ADMIN_IPC_CHANNELS.recordHolidayCalendar, async argument => {
+    const input = argument as { version?: unknown; dates?: unknown } | null;
+    const version = text(input?.version);
+    const dates = input?.dates;
+    // Shape only. Which dates are valid, and whether the version is already taken,
+    // are the server's to say: a client that pre-judged them would be a second
+    // implementation of a rule that has to have exactly one.
+    if (version === null || !Array.isArray(dates) || !dates.every(date => typeof date === 'string')) {
+      return await host.state();
+    }
+    return await host.recordHolidayCalendar({ version, dates });
+  });
+
   return host;
 }

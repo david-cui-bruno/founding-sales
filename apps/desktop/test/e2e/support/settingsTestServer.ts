@@ -66,6 +66,7 @@ export function settingsSnapshot(overrides: Record<string, unknown> = {}): NonNu
       { topic: 'Research limits', path: '/research/config', ownedBy: 'G10 research' },
       { topic: 'Sending caps and the ramp', path: '/outbound/cap', ownedBy: 'G7-2 sending' },
     ],
+    holidayCalendar: { version: '2026-federal', dates: ['2026-12-25'] },
     deploymentSendingEnabled: false,
     effectiveSendingEnabled: false,
     ...overrides,
@@ -175,7 +176,7 @@ export function adminState(overrides: Partial<AdminState> = {}): AdminState {
   };
 }
 
-/** The bridge the browser gets. The same twelve methods the preload script exposes. */
+/** The bridge the browser gets. The same thirteen methods the preload script exposes. */
 const BRIDGE_SCRIPT = `
 globalThis.callieAdmin = {
   async state() { return await ask('state'); },
@@ -190,6 +191,7 @@ globalThis.callieAdmin = {
   async acknowledgeAlert(input) { return await ask('acknowledgeAlert', input); },
   async setSendingCap(input) { return await ask('setSendingCap', input); },
   async recordSendingAuthentication(input) { return await ask('recordSendingAuthentication', input); },
+  async recordHolidayCalendar(input) { return await ask('recordHolidayCalendar', input); },
 };
 async function ask(method, argument) {
   const response = await fetch('/bridge/' + method, {

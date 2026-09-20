@@ -157,6 +157,7 @@ function renderSettings(root: HTMLElement, view: ReturnType<typeof adminViewOf>)
   }
   root.append(stages);
 
+  renderHolidays(root, view);
   renderSendingAdmin(root, view);
 
   const elsewhere = element('ul', { className: 'elsewhere', testId: 'elsewhere' });
@@ -164,6 +165,62 @@ function renderSettings(root: HTMLElement, view: ReturnType<typeof adminViewOf>)
     elsewhere.append(element('li', { text: `${entry.topic} — ${entry.path} (${entry.ownedBy})` }));
   }
   root.append(elsewhere);
+}
+
+/**
+ * G8's holiday calendar, edited here and written by G8's command.
+ *
+ * A calendar is superseded, never edited in place, because every due instant G8
+ * stores freezes the calendar version it was computed under. So the control asks for
+ * a *new version name* alongside the dates, and the current version is shown beside
+ * it rather than prefilled — prefilling it would invite a name that is already taken
+ * and a refusal the person did not expect.
+ *
+ * The dates are one per line, which is the shape a person pastes from a payroll
+ * calendar. Splitting is all this does; whether a date is valid, whether there are
+ * too many and whether the version is taken are the server's answers.
+ */
+function renderHolidays(root: HTMLElement, view: ReturnType<typeof adminViewOf>): void {
+  const holidays = view.holidays;
+  if (holidays === null) return;
+
+  const block = element('section', { className: 'holidays', testId: 'holidays' });
+  block.append(element('h2', { text: 'Workspace holidays' }));
+  block.append(element('p', { text: holidays.line, testId: 'holidays-current' }));
+
+  const version = document.createElement('input');
+  version.type = 'text';
+  version.placeholder = 'A name for the new version';
+  version.disabled = !holidays.editable;
+  version.dataset['testid'] = 'holiday-version';
+  block.append(version);
+
+  const dates = document.createElement('textarea');
+  dates.value = holidays.dates.join('\n');
+  dates.disabled = !holidays.editable;
+  dates.dataset['testid'] = 'holiday-dates';
+  block.append(dates);
+
+  const save = element('button', { text: 'Replace calendar' });
+  save.dataset['testid'] = 'holidays-save';
+  (save as HTMLButtonElement).disabled = !holidays.editable;
+  save.addEventListener('click', () => {
+    apply(
+      bridge().recordHolidayCalendar({
+        version: version.value,
+        dates: dates.value
+          .split('\n')
+          .map(line => line.trim())
+          .filter(line => line.length > 0),
+      }),
+    );
+  });
+  block.append(save);
+
+  if (holidays.notEditableBecause !== null) {
+    block.append(element('p', { className: 'inert', text: holidays.notEditableBecause }));
+  }
+  root.append(block);
 }
 
 /**
