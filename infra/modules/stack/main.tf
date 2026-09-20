@@ -102,7 +102,9 @@ module "observability" {
   aws_region     = var.aws_region
   aws_account_id = var.aws_account_id
   retention_days = var.log_retention_days
-  tags           = local.tags
+  # David's decision of 20 Sep 2026: logs and alerts share one key (five keys, not six).
+  shared_with_alerts = true
+  tags               = local.tags
 }
 
 module "registry" {
@@ -240,6 +242,7 @@ module "alerts" {
   aws_account_id   = var.aws_account_id
   alert_emails     = var.alert_emails
   metric_namespace = module.observability.metric_namespace
+  kms_key_arn      = module.observability.kms_key_arn
   tags             = local.tags
 }
 
