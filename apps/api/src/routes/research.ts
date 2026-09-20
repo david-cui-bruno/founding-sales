@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { RepositoryContext, SessionQueryable } from '@fss/domain/db';
+import type { RepositoryContext } from '@fss/domain/db';
 import {
   activeRoutePolicy,
   enqueueDiscoveryPage,
@@ -8,6 +8,7 @@ import {
   listProviders,
   listSuggestions,
   publishRoutePolicy,
+  readBusinessTimeZone,
   readProviderLedger,
   readResearchSettings,
   reviewSuggestion,
@@ -52,11 +53,12 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  * claims. A request that called a provider would also mean an admin's browser tab
  * holding a transaction open across somebody else's network.
  *
- * `enqueue*` takes a `SessionQueryable` as well as the context, because `enqueueJob`
- * is one of G5's operational functions and takes a session rather than a scope
- * (docs/decisions/g5-queue-scope.md). Inside `runCommand` that session is the same
- * connection as the transaction, so the job row and the receipt commit together —
- * which is Appendix A's "Import batch" row applied to a research sweep.
+ * `enqueue*` takes a `Queryable` as well as the context, because `enqueueJob` is one
+ * of G5's operational functions and names `workspace_id` itself rather than taking a
+ * scope (docs/decisions/g5-queue-scope.md). Passing `repository.db` is what makes the
+ * job row and the receipt commit together, because inside `runCommand` that is the
+ * connection the transaction is open on — Appendix A's "Import batch" row applied to a
+ * research sweep.
  */
 
 const commandEnvelope = {
@@ -240,7 +242,7 @@ export async function routeResearch(request: ApiRequest, options: RoutingOptions
 
     case '/research/discover':
       return await runResearchCommand(deps, discoverCommandSchema, 'research.page_enqueued', async (repository, body) =>
-        await enqueueDiscoveryPage(repository, repository.db as SessionQueryable, {
+        await enqueueDiscoveryPage(repository, repository.db, {
           query: body.query,
           pageToken: body.pageToken,
           providerKey: body.providerKey,
@@ -250,7 +252,7 @@ export async function routeResearch(request: ApiRequest, options: RoutingOptions
 
     case '/research/enrich':
       return await runResearchCommand(deps, enrichCommandSchema, 'research.firm_enqueued', async (repository, body) =>
-        await enqueueFirmEnrichment(repository, repository.db as SessionQueryable, {
+        await enqueueFirmEnrichment(repository, repository.db, {
           firmId: body.firmId,
           providerKey: body.providerKey,
           extractionProviderKey: body.extractionProviderKey,
@@ -283,7 +285,6 @@ async function read(
     const at = new Date().toISOString();
     const settings = await readResearchSettings(context);
     if (settings === null) return { status: REFUSAL_STATUS.not_found, body: redactError('not_found') };
-    const { readBusinessTimeZone } = await import('@fss/domain/research');
     const businessTimeZone = await readBusinessTimeZone(context);
     return {
       status: 200,

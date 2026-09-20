@@ -590,7 +590,7 @@ describe('research commands', () => {
       await inRolledBackTransaction(adminScope, async context => {
         await enableResearch(context);
         await suppress(context, crm.alpha.firmId, 'suppress-alpha-2');
-        const enqueued = await enqueueFirmEnrichment(context, context.db as SessionQueryable, {
+        const enqueued = await enqueueFirmEnrichment(context, context.db, {
           firmId: crm.alpha.firmId,
           providerKey: 'company_page',
           at: AT,
@@ -634,8 +634,6 @@ describe('research commands', () => {
     it('refuses to enqueue once the day\'s page ceiling is used', async () => {
       await inRolledBackTransaction(adminScope, async context => {
         await enableResearch(context, { dailyPageCeiling: 2 });
-        const session2 = context.db as SessionQueryable;
-
         // Two pages consume the day's two units.
         for (const query of ['sweep one', 'sweep two']) {
           const claimed = await claimResearchClearance(context, {
@@ -650,7 +648,7 @@ describe('research commands', () => {
           ok: false,
           reason: 'daily_ceiling_reached',
         });
-        const enqueued = await enqueueDiscoveryPage(context, session2, {
+        const enqueued = await enqueueDiscoveryPage(context, context.db, {
           query: 'one sweep too many',
           providerKey: 'places',
           at: AT,

@@ -1,4 +1,4 @@
-import type { SessionQueryable } from '../db/queryable.ts';
+import type { Queryable } from '../db/queryable.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { decideAdminOnly } from '../crm/authorization.ts';
 import { enqueueJob, jobIdempotencyKey } from '../jobs/index.ts';
@@ -74,7 +74,7 @@ export interface EnqueuedResearchJob {
  */
 export async function enqueueDiscoveryPage(
   context: RepositoryContext,
-  session: SessionQueryable,
+  db: Queryable,
   input: {
     readonly query: string;
     readonly pageToken?: string | null | undefined;
@@ -99,7 +99,7 @@ export async function enqueueDiscoveryPage(
     providerKey: input.providerKey,
     requestedByUserId: context.scope.actor.kind === 'user' ? context.scope.actor.userId : null,
   };
-  const outcome = await enqueueJob(session, {
+  const outcome = await enqueueJob(db, {
     workspaceId: context.scope.workspaceId,
     kind: 'research.page',
     idempotencyKey: key,
@@ -118,7 +118,7 @@ export async function enqueueDiscoveryPage(
  */
 export async function enqueueFirmEnrichment(
   context: RepositoryContext,
-  session: SessionQueryable,
+  db: Queryable,
   input: {
     readonly firmId: string;
     readonly providerKey: string;
@@ -142,7 +142,7 @@ export async function enqueueFirmEnrichment(
     providerKey: input.providerKey,
     extractionProviderKey: input.extractionProviderKey ?? null,
   };
-  const outcome = await enqueueJob(session, {
+  const outcome = await enqueueJob(db, {
     workspaceId: context.scope.workspaceId,
     kind: 'research.firm',
     idempotencyKey: key,
