@@ -45,8 +45,13 @@ export const FOUNDATION_LOOKUP_KEYS = {
     ['workspace_id', 'subject_kind', 'subject_key', 'counter_kind', 'business_date'],
   ],
 
-  // ---------------------------------------------------------------- migration 0003
-  // `oidc_authorization_requests` is deliberately absent: it is looked up before
+  // Migration 0002. `critical_alerts` also has a partial unique index on
+  // (workspace_id, alert_key) WHERE resolved_at IS NULL; a partial index is not
+  // declarable here, because the registry promises an unconditional unique key.
+  canary_runs: [['workspace_id', 'quarter_hour']],
+  critical_alerts: [['workspace_id', 'id']],
+
+  // Migration 0003. `oidc_authorization_requests` is deliberately absent: it is looked up before
   // there is an authenticated caller, so it has no workspace-scoped key at all.
   // See docs/decisions/g2-oidc-request-lookup.md.
   sessions: [
@@ -71,7 +76,9 @@ export const FOUNDATION_TABLES = [
   'administrative_pauses',
   'audit_events',
   'calling_identities',
+  'canary_runs',
   'command_receipts',
+  'critical_alerts',
   'daily_counters',
   'devices',
   'heartbeats',

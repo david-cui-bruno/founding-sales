@@ -1,108 +1,80 @@
-# G2: what the coordinator has to do when G5 and G2 meet
+# G2: how G5 and G2 were merged, and how the jobs route is mounted
 
-Lanes G2 and G5 branched from the same main and both added a migration. `main` had not
-moved when G2 finished, so G2 could not do the merge itself. This is the whole of what
-is left, written out so it is mechanical.
+Lanes G2 and G5 branched from the same main and both added a migration. G5 landed
+first (PR 130); this note records how G2 merged onto it, because every one of these
+was a choice rather than a transcription.
 
-## 1. Migration 0002
+## Migration numbering
 
-Delete `packages/domain/db/migrations/0002_reserved_for_jobs_lane.sql` and keep G5's
-real `0002`. The placeholder exists only so that G2's branch could run its own gate:
-`loadMigrations` refuses a gap between 0001 and 0003, and that guard is correct and
-stays.
+G2's branch carried a placeholder `0002_reserved_for_jobs_lane.sql` so that its own
+gate could run: `loadMigrations` refuses a gap between 0001 and 0003, and that guard is
+correct and stays. The merge deleted the placeholder and kept G5's real `0002_jobs.sql`.
+No long-lived database ever applied the placeholder — greenfield test databases are
+created and dropped per run, and no production database exists — so the checksum it
+would have recorded is nowhere.
 
-Nothing outside the migrations directory names migration 0002, so there is nothing
-else to change. No long-lived database ever applied the placeholder — greenfield test
-databases are created and dropped per run, and no production database exists — so the
-checksum it would have recorded is not a problem anywhere.
-
-## 2. `packages/domain/db/schemaRange.ts`
-
-Both lanes edited the same four lines. The resolved values:
+## Schema ranges
 
 ```ts
-export const CURRENT_SCHEMA_VERSION = 3;
-export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 3 };
-export const API_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 3 };
-export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 3 };
+CURRENT_SCHEMA_VERSION         = 3
+PREVIOUS_RELEASE_SCHEMA_RANGE  = { minimum: 1, maximum: 3 }
+API_SCHEMA_RANGE               = { minimum: 3, maximum: 3 }
+WORKER_SCHEMA_RANGE            = { minimum: 2, maximum: 3 }
 ```
 
-A maximum of 3 accepts 2 as well, so there is nothing to add for G5. Keep G2's comment
-explaining why the widening is in the same pull request as the migration — it is only
-allowed because no release has shipped.
+The previous release's range takes the union, which is just `{1, 3}`. That widening
+sits in the same pull request as the migration it covers, which is only honest because
+nothing has been deployed; `docs/decisions/g5-schema-range.md` makes the same point and
+both notes say so.
 
-One test asserts the range: `apps/api/test/api.test.ts` expects
-`declaredRange: { minimum: 1, maximum: 3 }` and `databaseVersion: 3`. If G5 changed the
-same assertion to 2, take 3.
+The service ranges are not the union, and this is the part worth reading twice. G5's
+rule is that "a binary that needs a column states so rather than starting and failing
+on the first statement", and applying it to each service separately gives two different
+answers:
 
-## 3. `packages/domain/db/lookupKeys.ts`
+* **The API needs 0002 and 0003.** It reads `dead_at` and `requeued_count` for the
+  dead-job list, and no session, device credential or authorization request exists
+  before 0003 — an API on a version-2 database could not authenticate anybody. Minimum
+  3.
+* **The worker needs 0002 only.** It writes `fencing_token`; it reads none of the
+  identity tables. Minimum 2.
 
-Both lanes appended entries. G2's are at the end of `FOUNDATION_LOOKUP_KEYS`
-(`sessions`, `device_refresh_credentials`) and it also added a second key tuple to
-`command_receipts`. Take both lanes' additions; they touch different keys.
+That difference is the point rather than an untidiness. Appendix G 22 asks that "old
+API with new worker and reverse across every expand/contract phase obey schema ranges",
+and a worker that still accepts 2 is exactly what lets a rolling deployment put a new
+API beside an old worker without the worker refusing to start.
 
-## 4. `packages/domain/test/db/constraints.test.ts`
+## The other three conflicts
 
-G2 moved its cases into their own file (`support/identityCases.ts`) and appended one
-spread at the end of the `cases` array, precisely so this merge would not be a fight in
-the middle of a thousand-line literal. If G5 did the same, both spreads go in. If G5
-edited the array inline, keep both.
+* `lookupKeys.ts` — both lanes appended; both appends kept. G5's `canary_runs` and
+  `critical_alerts`, G2's `sessions` and `device_refresh_credentials`.
+* `constraints.test.ts` — both appended to the `cases` array. G5's cases are inline;
+  G2's are a spread of `support/identityCases.ts`, which is why the merge was a
+  two-line resolution rather than an argument in the middle of a 1,300-line literal.
+  Later lanes should use the separate file.
+* The two service tests assert the ranges above.
 
-## 5. tsconfig and vitest aliases
+## Mounting `routeAdminJobs`
 
-G5 adds `@fss/domain/jobs` alias lines to `apps/api` and `apps/worker`. G2 did not
-touch those two files, so this should not conflict; if it does, it is adjacent-line and
-both sides are additive.
+G5 left the route implemented, tested and unmounted because mounting it needs a
+verified principal, which is G2's work. G2's dispatcher takes modules shaped
+`(request, options) => Promise<RouteResult | null>` and `routeAdminJobs` has its own
+shape, so the mount is a short adapter in `dispatch`, before the module loop.
 
-`apps/desktop` is new and needs no jobs alias: the Mac never sees a job.
+Two things about it that are decisions:
 
-## 6. Mounting `routeAdminJobs`
+**A salesperson's principal is passed through rather than flattened to `null`.** G5's
+module answers 401 for a null principal and 403 for a non-admin, and both bodies are
+the same redacted sentence — so the distinction is visible to an operator reading
+status codes without telling a salesperson which endpoints exist. Flattening would have
+thrown that away for nothing. `identity.test.ts` asserts both statuses and that the two
+bodies are identical.
 
-G5 left the route implemented, tested and unmounted, because mounting it needs G2's
-verified principal. G2's dispatcher takes modules of the shape
-`(request, options) => Promise<RouteResult | null>`, and `routeAdminJobs` has its own
-shape, so the mount is an adapter rather than a name in the list.
-
-In `apps/api/src/server.ts`, add the imports:
-
-```ts
-import { ADMIN_JOBS_PATHS, routeAdminJobs } from './routes/admin/jobs.ts';
-import { authenticate } from './auth/index.ts';
-```
-
-and, inside `dispatch`, immediately before the `for (const module of […])` loop:
-
-```ts
-  // G5's admin job and alert routes. They take a verified principal rather than a
-  // request, so authentication happens here and a non-admin arrives as `null` — which
-  // those routes refuse. The domain commands check `isAdminScope` again, so this is
-  // the first of two gates rather than the only one.
-  if (routing.auth !== undefined && (ADMIN_JOBS_PATHS as readonly string[]).includes(request.path)) {
-    const outcome = await authenticate(routing.auth, request.headers['authorization']);
-    const principal = outcome.authenticated && outcome.principal.role === 'admin' ? outcome.principal : null;
-    const answer = await routeAdminJobs({
-      method: request.method,
-      path: request.path,
-      principal,
-      body: request.body as Readonly<Record<string, unknown>> | undefined,
-      db: routing.auth.db,
-    });
-    if (answer !== null) return answer;
-  }
-```
+**The paths come from `ADMIN_JOBS_PATHS`, not a prefix match.** A future
+`/admin/jobs/something-else` is `not_found` from the dispatcher rather than silently
+falling into G5's module and out of its `switch`.
 
 `AuthenticatedPrincipal` has every field of `VerifiedPrincipal` and one more
-(`sessionId`), so it is assignable and no conversion is needed.
-
-Two things to notice about that adapter:
-
-* **A non-admin arrives as `null`, not as a principal.** G5's routes refuse a null
-  principal with a redacted `unauthenticated`, which is deliberately the same answer a
-  stranger gets: an admin-only endpoint must not tell a salesperson it exists.
-* **The paths are taken from `ADMIN_JOBS_PATHS`** rather than a prefix match, so a
-  future `/admin/jobs/anything-else` is `not_found` from the dispatcher rather than
-  silently falling into G5's module.
-
-A test worth adding with the mount: a salesperson's session gets 403 on each of the
-four paths, and no session gets 401 — the shape `identity.test.ts` already uses for
-`/admin/memberships` and `/admin/devices`.
+(`sessionId`), so it is assignable with no conversion. `authenticate` is the only thing
+that makes one, so a revoked device or an ended membership never becomes a principal at
+all — it arrives as `null` and gets the 401.

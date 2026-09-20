@@ -567,6 +567,27 @@ describe('the routes', () => {
     expect(rows[0]?.status).toBe('active');
   });
 
+  it("puts lane G5's job and alert routes behind an admin session", async () => {
+    const salesperson = await signIn(fixture.alpha, fixture.alpha.salesperson);
+    const admin = await signIn(fixture.alpha, fixture.alpha.admin);
+
+    for (const path of ['/admin/jobs/dead', '/admin/alerts']) {
+      // No session at all is 401; a salesperson's is 403 — and both bodies say the
+      // same redacted thing, so neither tells a salesperson the endpoint exists.
+      const anonymous = await route('GET', path, options());
+      expect(anonymous.status, path).toBe(401);
+      const asSalesperson = await route('GET', path, options(), {
+        headers: { authorization: `Bearer ${salesperson.accessToken}` },
+      });
+      expect(asSalesperson.status, path).toBe(403);
+      expect(asSalesperson.body).toEqual(anonymous.body);
+      const asAdmin = await route('GET', path, options(), {
+        headers: { authorization: `Bearer ${admin.accessToken}` },
+      });
+      expect(asAdmin.status, path).toBe(200);
+    }
+  });
+
   it('still refuses an unknown path rather than falling through', async () => {
     expect(await route('GET', '/auth/whatever', options())).toMatchObject({ status: 404 });
     expect(await route('GET', '/firms', options())).toMatchObject({ status: 404 });

@@ -1106,10 +1106,226 @@ const cases: readonly Case[] = [
       ),
   },
 
+  // ------------------------------------------------------- jobs (migration 0002)
+  {
+    constraint: 'jobs_fencing_token_nonnegative',
+    run: async f =>
+      await f.session.query(
+        "INSERT INTO jobs (workspace_id, kind, payload, idempotency_key, fencing_token) VALUES ($1, 'canary', '{}'::jsonb, 'canary:fence', -1)",
+        [workspace(f)],
+      ),
+  },
+  {
+    constraint: 'jobs_requeued_count_nonnegative',
+    run: async f =>
+      await f.session.query(
+        "INSERT INTO jobs (workspace_id, kind, payload, idempotency_key, requeued_count) VALUES ($1, 'canary', '{}'::jsonb, 'canary:requeued', -1)",
+        [workspace(f)],
+      ),
+  },
+  {
+    constraint: 'jobs_error_code_shape',
+    run: async f =>
+      await f.session.query(
+        "INSERT INTO jobs (workspace_id, kind, payload, idempotency_key, error_code) VALUES ($1, 'canary', '{}'::jsonb, 'canary:code', 'Provider Refused')",
+        [workspace(f)],
+      ),
+  },
+  {
+    // NOT VALID, so migration 0001's rows are untouched; every new write is checked.
+    constraint: 'jobs_completed_at_consistent',
+    run: async f =>
+      await f.session.query(
+        "INSERT INTO jobs (workspace_id, kind, payload, idempotency_key, state) VALUES ($1, 'canary', '{}'::jsonb, 'canary:done', 'done')",
+        [workspace(f)],
+      ),
+  },
+  {
+    constraint: 'jobs_dead_at_consistent',
+    run: async f =>
+      await f.session.query(
+        "INSERT INTO jobs (workspace_id, kind, payload, idempotency_key, state) VALUES ($1, 'canary', '{}'::jsonb, 'canary:dead', 'dead')",
+        [workspace(f)],
+      ),
+  },
+  {
+    // A dead job keeps its payload: an audited admin requeue has to have one to run.
+    constraint: 'jobs_payload_archived_only_when_done',
+    run: async f =>
+      await f.session.query(
+        "INSERT INTO jobs (workspace_id, kind, payload, idempotency_key, payload_archived_at) VALUES ($1, 'canary', '{}'::jsonb, 'canary:archived', now())",
+        [workspace(f)],
+      ),
+  },
+
+  // ------------------------------------------------- heartbeats (migration 0002)
+  {
+    constraint: 'heartbeats_expected_interval_positive',
+    run: async f =>
+      await f.session.query(
+        "INSERT INTO heartbeats (component, instance_key, observed_at, expected_interval_seconds) VALUES ('worker', 'worker-interval', now(), 0)",
+      ),
+  },
+
+  // ------------------------------------------------ canary_runs (migration 0002)
+  {
+    constraint: 'canary_runs_pkey',
+    run: async f => {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        await f.session.query(
+          "INSERT INTO canary_runs (workspace_id, quarter_hour) VALUES ($1, TIMESTAMPTZ '2026-09-21 14:00:00+00')",
+          [workspace(f)],
+        );
+      }
+      return null;
+    },
+  },
+  {
+    constraint: 'canary_runs_workspace_id_fkey',
+    run: async f =>
+      await f.session.query(
+        "INSERT INTO canary_runs (workspace_id, quarter_hour) VALUES ('00000000-0000-4000-8000-000000000000', TIMESTAMPTZ '2026-09-21 14:00:00+00')",
+      ),
+  },
+  {
+    constraint: 'canary_runs_quarter_hour_aligned',
+    run: async f =>
+      await f.session.query(
+        "INSERT INTO canary_runs (workspace_id, quarter_hour) VALUES ($1, TIMESTAMPTZ '2026-09-21 14:07:00+00')",
+        [workspace(f)],
+      ),
+  },
+  {
+    constraint: 'canary_runs_completed_after_insert',
+    run: async f =>
+      await f.session.query(
+        "INSERT INTO canary_runs (workspace_id, quarter_hour, completed_at, completed_by) VALUES ($1, TIMESTAMPTZ '2026-09-21 14:15:00+00', now() - INTERVAL '1 day', 'worker-1')",
+        [workspace(f)],
+      ),
+  },
+  {
+    constraint: 'canary_runs_completion_attributed',
+    run: async f =>
+      await f.session.query(
+        "INSERT INTO canary_runs (workspace_id, quarter_hour, completed_at) VALUES ($1, TIMESTAMPTZ '2026-09-21 14:30:00+00', now())",
+        [workspace(f)],
+      ),
+  },
+  {
+    constraint: 'canary_runs_completed_by_bounded',
+    run: async f =>
+      await f.session.query(
+        "INSERT INTO canary_runs (workspace_id, quarter_hour, completed_at, completed_by) VALUES ($1, TIMESTAMPTZ '2026-09-21 14:45:00+00', now(), '   ')",
+        [workspace(f)],
+      ),
+  },
+
+  // -------------------------------------------- critical_alerts (migration 0002)
+  {
+    constraint: 'critical_alerts_pkey',
+    run: async f => {
+      const created = await f.session.query<{ id: string }>(
+        "INSERT INTO critical_alerts (workspace_id, alert_key) VALUES ($1, 'canary_stale') RETURNING id",
+        [workspace(f)],
+      );
+      return await f.session.query(
+        "INSERT INTO critical_alerts (workspace_id, id, alert_key) VALUES ($1, $2, 'dead_job_unresolved')",
+        [workspace(f), created.rows[0]?.id],
+      );
+    },
+  },
+  {
+    constraint: 'critical_alerts_workspace_id_fkey',
+    run: async f =>
+      await f.session.query(
+        "INSERT INTO critical_alerts (workspace_id, alert_key) VALUES ('00000000-0000-4000-8000-000000000000', 'canary_stale')",
+      ),
+  },
+  {
+    // The acknowledger must be a member of this workspace: the composite key is what
+    // stops another workspace's admin silencing this one's alert.
+    constraint: 'critical_alerts_acknowledger_fkey',
+    run: async f =>
+      await f.session.query(
+        "INSERT INTO critical_alerts (workspace_id, alert_key, acknowledged_at, acknowledged_by_user_id) VALUES ($1, 'canary_stale', now(), $2)",
+        [workspace(f), f.seeded.beta.admin.userId],
+      ),
+  },
+  {
+    constraint: 'critical_alerts_key_shape',
+    run: async f =>
+      await f.session.query("INSERT INTO critical_alerts (workspace_id, alert_key) VALUES ($1, 'Canary Stale')", [
+        workspace(f),
+      ]),
+  },
+  {
+    constraint: 'critical_alerts_severity_known',
+    run: async f =>
+      await f.session.query(
+        "INSERT INTO critical_alerts (workspace_id, alert_key, severity) VALUES ($1, 'canary_stale', 'info')",
+        [workspace(f)],
+      ),
+  },
+  {
+    constraint: 'critical_alerts_detail_is_object',
+    run: async f =>
+      await f.session.query(
+        "INSERT INTO critical_alerts (workspace_id, alert_key, detail) VALUES ($1, 'canary_stale', '42'::jsonb)",
+        [workspace(f)],
+      ),
+  },
+  {
+    constraint: 'critical_alerts_acknowledgement_attributed',
+    run: async f =>
+      await f.session.query(
+        "INSERT INTO critical_alerts (workspace_id, alert_key, acknowledged_at) VALUES ($1, 'canary_stale', now())",
+        [workspace(f)],
+      ),
+  },
+  {
+    constraint: 'critical_alerts_acknowledged_after_raise',
+    run: async f =>
+      await f.session.query(
+        "INSERT INTO critical_alerts (workspace_id, alert_key, acknowledged_at, acknowledged_by_user_id) VALUES ($1, 'canary_stale', now() - INTERVAL '1 day', $2)",
+        [workspace(f), admin(f)],
+      ),
+  },
+  {
+    constraint: 'critical_alerts_resolved_after_raise',
+    run: async f =>
+      await f.session.query(
+        "INSERT INTO critical_alerts (workspace_id, alert_key, resolved_at) VALUES ($1, 'canary_stale', now() - INTERVAL '1 day')",
+        [workspace(f)],
+      ),
+  },
+  {
+    constraint: 'critical_alerts_observed_after_raise',
+    run: async f =>
+      await f.session.query(
+        "INSERT INTO critical_alerts (workspace_id, alert_key, last_observed_at) VALUES ($1, 'canary_stale', now() - INTERVAL '1 day')",
+        [workspace(f)],
+      ),
+  },
+  {
+    // The partial unique index: one open alert per key, so a recurring condition
+    // updates the open row rather than filling the table.
+    constraint: 'critical_alerts_one_open_per_key',
+    run: async f => {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        await f.session.query("INSERT INTO critical_alerts (workspace_id, alert_key) VALUES ($1, 'canary_stale')", [
+          workspace(f),
+        ]);
+      }
+      return null;
+    },
+  },
+
   // Later migrations bring their cases in from their own file, so two lanes adding a
   // migration at the same time never both edit the middle of this array.
   ...IDENTITY_CONSTRAINT_CASES,
+
 ];
+
 
 describe('foundation constraints', () => {
   let database: TestDatabase;

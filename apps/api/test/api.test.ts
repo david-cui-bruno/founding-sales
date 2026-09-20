@@ -119,7 +119,7 @@ describe('the health route against a real database', () => {
     expect(report).toEqual({
       status: 'serving',
       component: 'api',
-      schema: { declaredRange: { minimum: 1, maximum: 3 }, databaseVersion: 3, accepted: true, reason: null },
+      schema: { declaredRange: { minimum: 3, maximum: 3 }, databaseVersion: 3, accepted: true, reason: null },
       systemGeneration: 1,
       supportedClientVersions: CLIENT_VERSIONS,
       sendingEnabled: false,

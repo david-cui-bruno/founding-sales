@@ -3,9 +3,10 @@ import type { SessionQueryable } from '@fss/domain/db';
 import type { ClientVersionRange } from '@fss/contracts';
 import { buildHealthReport } from './health.ts';
 import { MAX_REQUEST_BYTES, REFUSAL_STATUS, checkEnvelope, redactError } from './limits.ts';
-import type { AuthDeps } from './auth/index.ts';
+import { authenticate, type AuthDeps } from './auth/index.ts';
 import { routeAuth } from './routes/auth.ts';
 import { routeAdminDevices } from './routes/admin/devices.ts';
+import { ADMIN_JOBS_PATHS, routeAdminJobs } from './routes/admin/jobs.ts';
 import { routeAdminMemberships } from './routes/admin/memberships.ts';
 import { DEFAULT_UPGRADE_URL, type ApiRequest, type RouteResult, type RoutingOptions } from './routes/types.ts';
 
@@ -55,6 +56,28 @@ export async function dispatch(request: ApiRequest, options: ApiOptions): Promis
     // A degraded API still answers 200 on /health: the load balancer's decision and the
     // operator's are different questions, and the body says which one this is.
     return { status: 200, body: await buildHealthReport(options) };
+  }
+
+  // Lane G5's admin job and alert routes. They take a verified principal rather than a
+  // request, which is why they arrived unmounted: producing one is this lane's session
+  // and device verification. `authenticate` is the only thing that makes a principal,
+  // so a revoked device or an ended membership never becomes one and arrives as null.
+  //
+  // A salesperson's principal is passed through rather than flattened to null: G5's
+  // module refuses a non-admin itself, with `unauthenticated`'s redacted sentence, so
+  // an admin-only endpoint still does not tell a salesperson it exists. The domain
+  // commands behind it check `isAdminScope` again — this is the first of two gates.
+  if (routing.auth !== undefined && (ADMIN_JOBS_PATHS as readonly string[]).includes(request.path)) {
+    const outcome = await authenticate(routing.auth, request.headers['authorization']);
+    const principal = outcome.authenticated ? outcome.principal : null;
+    const answer = await routeAdminJobs({
+      method: request.method,
+      path: request.path,
+      principal,
+      body: request.body as Readonly<Record<string, unknown>> | undefined,
+      db: routing.auth.db,
+    });
+    if (answer !== null) return answer;
   }
 
   for (const module of [routeAuth, routeAdminMemberships, routeAdminDevices]) {

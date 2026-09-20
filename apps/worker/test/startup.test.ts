@@ -26,7 +26,7 @@ describe('worker startup', () => {
     expect(report).toEqual({
       component: 'worker',
       outcome: 'ready',
-      declaredRange: { minimum: 1, maximum: 3 },
+      declaredRange: { minimum: 2, maximum: 3 },
       databaseVersion: 3,
       systemGeneration: 1,
       reason: null,
@@ -75,7 +75,7 @@ describe('worker startup', () => {
     expect(JSON.parse(startupLogLine(report))).toEqual({
       component: 'worker',
       outcome: 'ready',
-      schemaRange: '1-3',
+      schemaRange: '2-3',
       databaseVersion: 3,
       systemGeneration: 1,
       reason: null,
