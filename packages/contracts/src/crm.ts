@@ -37,6 +37,12 @@ export const CRM_REFUSAL_CODES = [
   'assignee_unknown',
   'stage_unknown',
   'stage_retired',
+  // Stage administration (8.1: "rename, reorder, add, or retire *nonterminal*
+  // stages"). `stage_terminal` is the refusal all four verbs give for Won and Lost;
+  // `stage_last_active` refuses retiring the only stage a reopen could start at.
+  'stage_key_exists',
+  'stage_terminal',
+  'stage_last_active',
   'opportunity_unknown',
   'opportunity_closed',
   'opportunity_open_exists',

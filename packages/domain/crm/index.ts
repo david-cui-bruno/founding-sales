@@ -116,6 +116,23 @@ export {
 } from './pipeline.ts';
 
 export {
+  createPipelineStage,
+  renamePipelineStage,
+  reorderPipelineStages,
+  retirePipelineStage,
+  type CreatePipelineStageInput,
+  type RenamePipelineStageInput,
+  type ReorderPipelineStagesInput,
+  type RetirePipelineStageOutcome,
+} from './stageAdmin.ts';
+
+export {
+  readPipelineBoardForActor,
+  type PipelineBoardColumn,
+  type PipelineBoardDto,
+} from './board.ts';
+
+export {
   canonicalFirmOf,
   listFirmAliases,
   mergeContacts,

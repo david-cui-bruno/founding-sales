@@ -28,6 +28,10 @@ export const CRM_REFUSAL_CODES = [
   // Pipeline
   'stage_unknown',
   'stage_retired',
+  // Stage administration (8.1: "rename, reorder, add, or retire *nonterminal* stages")
+  'stage_key_exists',
+  'stage_terminal',
+  'stage_last_active',
   'opportunity_unknown',
   'opportunity_closed',
   'opportunity_open_exists',
