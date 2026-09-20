@@ -23,7 +23,12 @@ export const FOUNDATION_LOOKUP_KEYS = {
     ['workspace_id', 'id'],
     ['workspace_id', 'e164'],
   ],
-  command_receipts: [['workspace_id', 'device_id', 'command_id']],
+  command_receipts: [
+    ['workspace_id', 'device_id', 'command_id'],
+    // Migration 0003: one command id per workspace, so a second device presenting a
+    // command id another device already used is refused by the database.
+    ['workspace_id', 'command_id'],
+  ],
   audit_events: [['workspace_id', 'id']],
   suppression_events: [['workspace_id', 'event_id']],
   active_holds: [['workspace_id', 'id']],
@@ -39,6 +44,16 @@ export const FOUNDATION_LOOKUP_KEYS = {
   daily_counters: [
     ['workspace_id', 'subject_kind', 'subject_key', 'counter_kind', 'business_date'],
   ],
+
+  // ---------------------------------------------------------------- migration 0003
+  // `oidc_authorization_requests` is deliberately absent: it is looked up before
+  // there is an authenticated caller, so it has no workspace-scoped key at all.
+  // See docs/decisions/g2-oidc-request-lookup.md.
+  sessions: [
+    ['workspace_id', 'id'],
+    ['workspace_id', 'access_token_hash'],
+  ],
+  device_refresh_credentials: [['workspace_id', 'device_id', 'generation']],
 } as const satisfies Readonly<Record<string, readonly (readonly ['workspace_id', ...string[]])[]>>;
 
 /** A table a scoped repository may read. `workspaces`, `users` and `heartbeats` are not scoped rows. */

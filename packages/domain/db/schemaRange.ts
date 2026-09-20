@@ -18,13 +18,23 @@ export interface SchemaRange {
 }
 
 /** The highest migration version this source tree contains. */
-export const CURRENT_SCHEMA_VERSION = 1;
+export const CURRENT_SCHEMA_VERSION = 3;
 
-/** The range the release before this one declared. Widen this one release ahead of the migration. */
-export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 1 };
+/**
+ * The range the release before this one declared. Widen this one release ahead of the
+ * migration.
+ *
+ * Lane G2 widened the maximum to 3 in the same pull request as migration 0003, which
+ * the expand/migrate/contract rule permits only because no release has shipped yet:
+ * there is no previous binary in production to be surprised by version 3. Lane G5
+ * widened it to 2 for its own migration at the same time; the coordinator resolves
+ * the final maximum on merge. From the first shipped release onwards the widening
+ * moves back to one release ahead of the migration that needs it.
+ */
+export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 3 };
 
-export const API_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 1 };
-export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 1 };
+export const API_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 3 };
+export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 3 };
 
 export function acceptsSchemaVersion(range: SchemaRange, version: number): boolean {
   return Number.isInteger(version) && version >= range.minimum && version <= range.maximum;
