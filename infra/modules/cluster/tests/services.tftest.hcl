@@ -50,7 +50,12 @@ run "the_two_services_have_separate_task_and_execution_roles" {
   }
 }
 
-run "only_the_api_task_role_may_append_to_the_journal" {
+# Specification 10.2: "Each event and supersession ... is written to the
+# object-locked S3 journal before acknowledgement." Both processes record
+# suppressions — the API from its three write routes, the worker when mail sync
+# imports a prospect opt-out — so both must be able to put. Neither may ever
+# delete: an append-only journal that one of its writers can erase is not one.
+run "both_task_roles_may_append_to_the_journal_and_neither_may_delete" {
   command = plan
 
   assert {
@@ -65,8 +70,59 @@ run "only_the_api_task_role_may_append_to_the_journal" {
     condition = length([
       for statement in jsondecode(aws_iam_role_policy.worker_task.policy).Statement :
       statement if contains(statement.Action, "s3:PutObject")
-    ]) == 0
-    error_message = "The worker must never be able to write the suppression journal."
+    ]) == 1
+    error_message = "The worker records prospect opt-outs during mail sync and must journal them before acknowledging."
+  }
+
+  # Scoped to the journal object prefix and nothing else. A put granted on "*"
+  # would be a worker that can write any bucket in the account.
+  assert {
+    condition = alltrue(flatten([
+      for policy in [aws_iam_role_policy.api_task.policy, aws_iam_role_policy.worker_task.policy] : [
+        for statement in jsondecode(policy).Statement :
+        statement.Resource == ["arn:aws:s3:::fss-test-suppression-journal-123456789012/*"]
+        if contains(statement.Action, "s3:PutObject")
+      ]
+    ]))
+    error_message = "A journal put is granted on the journal object prefix only."
+  }
+
+  # The bucket applies its own default retention on every put, so no writer sets
+  # per-object retention and the bucket policy denies s3:PutObjectRetention to
+  # everybody. Granting it here would be a permission with nothing behind it.
+  assert {
+    condition = alltrue(flatten([
+      for policy in [aws_iam_role_policy.api_task.policy, aws_iam_role_policy.worker_task.policy] : [
+        for statement in jsondecode(policy).Statement :
+        !contains(statement.Action, "s3:PutObjectRetention")
+        && !contains(statement.Action, "s3:PutObjectLegalHold")
+        && !contains(statement.Action, "s3:BypassGovernanceRetention")
+      ]
+    ]))
+    error_message = "Neither task role weakens an object lock; the bucket's default retention is the only one."
+  }
+
+  assert {
+    condition = alltrue(flatten([
+      for policy in [aws_iam_role_policy.api_task.policy, aws_iam_role_policy.worker_task.policy] : [
+        for statement in jsondecode(policy).Statement :
+        alltrue([for action in statement.Action : !startswith(action, "s3:Delete")])
+      ]
+    ]))
+    error_message = "Neither task role may delete anything in the journal."
+  }
+
+  # Writing a KMS-encrypted object needs a data key. Reading one needs Decrypt.
+  # Both roles do both, on the journal key only.
+  assert {
+    condition = alltrue(flatten([
+      for policy in [aws_iam_role_policy.api_task.policy, aws_iam_role_policy.worker_task.policy] : [
+        for statement in jsondecode(policy).Statement :
+        contains(statement.Action, "kms:GenerateDataKey") && contains(statement.Action, "kms:Encrypt")
+        if statement.Resource == ["arn:aws:kms:us-east-1:123456789012:key/11111111-2222-4333-8444-555555555551"]
+      ]
+    ]))
+    error_message = "Both task roles need GenerateDataKey and Encrypt on the journal key to write an encrypted object."
   }
 
   assert {

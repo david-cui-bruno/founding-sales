@@ -129,7 +129,7 @@ module "journal" {
 
   name_prefix                = var.name_prefix
   aws_account_id             = var.aws_account_id
-  writer_role_name           = local.api_task_role_name
+  writer_role_names          = [local.api_task_role_name, local.worker_task_role_name]
   reader_role_names          = [local.worker_task_role_name]
   object_lock_mode           = var.journal_object_lock_mode
   object_lock_retention_days = var.journal_object_lock_retention_days

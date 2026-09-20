@@ -2,7 +2,9 @@
 #
 # The API and the worker are separate services with separate task roles and
 # separate execution roles, so the worker's Gmail and research reach is not the
-# API's, and only the API can append to the suppression journal.
+# API's. Both may append to the suppression journal and neither may delete from
+# it: 10.2 requires the journal write before acknowledgement, and the worker
+# records prospect opt-outs during mail sync.
 #
 # Images are digests. A tag is refused by variable validation, because the
 # release gate compares the digest that passed rehearsal with the digest that
@@ -218,15 +220,29 @@ resource "aws_iam_role_policy" "worker_task" {
     Version = "2012-10-17"
     Statement = [
       {
+        # 10.2: the worker's mail pipeline records prospect opt-outs during sync
+        # and must journal them *before* acknowledging. No delete, in any form:
+        # the bucket policy denies deletion to every principal and this policy
+        # never asks for it, so the journal stays append-only from both sides.
+        Sid      = "AppendSuppressionEvents"
+        Effect   = "Allow"
+        Action   = ["s3:PutObject"]
+        Resource = [local.journal_object_arn]
+      },
+      {
         Sid      = "ReplayTheJournalAfterRestore"
         Effect   = "Allow"
         Action   = ["s3:GetObject", "s3:GetObjectVersion", "s3:ListBucket", "s3:ListBucketVersions"]
         Resource = [var.journal_bucket_arn, local.journal_object_arn]
       },
       {
-        Sid      = "ReadTheJournalKey"
+        # Encrypt and GenerateDataKey are what a put into an SSE-KMS bucket
+        # needs; Decrypt is what Appendix E step 2's replay needs. The bucket's
+        # own default retention locks each object, so no writer ever sets one
+        # and s3:PutObjectRetention is denied to everybody, including these two.
+        Sid      = "UseTheJournalKey"
         Effect   = "Allow"
-        Action   = ["kms:Decrypt"]
+        Action   = ["kms:Encrypt", "kms:Decrypt", "kms:GenerateDataKey"]
         Resource = [var.journal_kms_key_arn]
       },
       {

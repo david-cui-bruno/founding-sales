@@ -6,21 +6,28 @@
 # this bucket from the restore point minus one hour (Appendix E step 2), so the
 # worker needs read and nobody needs delete.
 #
+# Both task roles write. The API records suppressions from its three write
+# routes; the worker records prospect opt-outs while mail sync reads them, and
+# 10.2 requires the journal write before acknowledgement either way. Neither
+# deletes.
+#
 # The bucket policy is written as deny-first: deletion and lock weakening are
 # denied to every principal, and PutObject is denied to every principal whose
-# ARN is not the API task role. Allow statements alone would leave an
-# administrator able to delete history; these denies do not.
+# ARN is not one of the named writer roles. Allow statements alone would leave
+# an administrator able to delete history; these denies do not.
 
 locals {
   bucket_name = "${var.name_prefix}-suppression-journal-${var.aws_account_id}"
 
-  writer_role_arn = "arn:aws:iam::${var.aws_account_id}:role/${var.writer_role_name}"
+  writer_role_arns = [for role in var.writer_role_names : "arn:aws:iam::${var.aws_account_id}:role/${role}"]
 
   # Both the role ARN and the ARN a task presents once it has assumed the role.
-  writer_principal_patterns = [
-    local.writer_role_arn,
-    "arn:aws:sts::${var.aws_account_id}:assumed-role/${var.writer_role_name}/*",
-  ]
+  writer_principal_patterns = flatten([
+    for role in var.writer_role_names : [
+      "arn:aws:iam::${var.aws_account_id}:role/${role}",
+      "arn:aws:sts::${var.aws_account_id}:assumed-role/${role}/*",
+    ]
+  ])
 
   reader_principal_patterns = concat(
     local.writer_principal_patterns,
@@ -143,7 +150,7 @@ locals {
           Resource = local.bucket_resources
         },
         {
-          Sid       = "DenyWritesFromAnyoneButTheApiTaskRole"
+          Sid       = "DenyWritesFromAnyoneButTheTaskRoles"
           Effect    = "Deny"
           Principal = { AWS = ["*"] }
           Action    = ["s3:PutObject"]
@@ -159,9 +166,9 @@ locals {
           Condition = { ArnNotLike = { "aws:PrincipalArn" = local.reader_principal_patterns } }
         },
         {
-          Sid       = "AllowTheApiTaskRoleToAppendEvents"
+          Sid       = "AllowTheTaskRolesToAppendEvents"
           Effect    = "Allow"
-          Principal = { AWS = [local.writer_role_arn] }
+          Principal = { AWS = local.writer_role_arns }
           Action    = ["s3:PutObject"]
           Resource  = ["${aws_s3_bucket.journal.arn}/*"]
         },
@@ -170,7 +177,7 @@ locals {
         {
           Sid       = "AllowTheTaskRolesToReplayTheJournal"
           Effect    = "Allow"
-          Principal = { AWS = concat([local.writer_role_arn], local.reader_role_arns) }
+          Principal = { AWS = distinct(concat(local.writer_role_arns, local.reader_role_arns)) }
           Action    = ["s3:GetObject", "s3:GetObjectVersion", "s3:ListBucket", "s3:ListBucketVersions"]
           Resource  = local.bucket_resources
         },
