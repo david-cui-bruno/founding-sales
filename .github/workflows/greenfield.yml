@@ -73,7 +73,7 @@ jobs:
         # G12b, which meant a pull request could land a vacuous test and the
         # gate would not notice until release day.
         #
-        # Seven mutations, each re-running one suite. None of the three suites
-        # it re-runs touches PostgreSQL, so it is about ten seconds of wall
-        # clock and the job timeout carries it comfortably.
+        # Nine mutations, each re-running one suite. None of the suites it
+        # re-runs touches PostgreSQL, so it is about ten seconds of wall clock
+        # and the job timeout carries it comfortably.
         run: npm run test:release:mutation
