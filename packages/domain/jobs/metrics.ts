@@ -10,7 +10,7 @@ import { readHeartbeats, type HeartbeatComponent } from './heartbeats.ts';
  * metric an alarm reads, and `infra/modules/observability/main.tf` names the ones
  * derived from log events. `METRIC_OWNERS` below claims one of three things about
  * each of those names — this lane emits it, a log filter derives it, or a later lane
- * owns it — and `test/jobs/metrics.test.ts` reads the two Terraform files and fails
+ * owns it — and `test/jobs/observability.test.ts` reads the two Terraform files and fails
  * if a name exists there without a claim here, or here without existing there. A
  * metric nobody emits is an alarm that never fires, which is worse than no alarm.
  *
@@ -174,6 +174,10 @@ export async function collectJobMetrics(db: Queryable): Promise<MetricDatum[]> {
     data.push({ name: 'UnacknowledgedCriticalAlertAgeSeconds', value: unacknowledged, unit: 'Seconds' });
   }
 
+  // One datapoint per component, not per instance: the alarms are `Sum < 1`, so "any
+  // instance of this component is alive" is the question they ask. Per-mailbox
+  // dimensions belong to the lane that connects mailboxes, which is also the lane that
+  // will want to know *which* one went quiet.
   const freshest = new Map<HeartbeatComponent, boolean>();
   for (const heartbeat of await readHeartbeats(db)) {
     freshest.set(heartbeat.component, (freshest.get(heartbeat.component) ?? false) || heartbeat.fresh);

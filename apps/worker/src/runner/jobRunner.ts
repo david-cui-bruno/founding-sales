@@ -158,6 +158,10 @@ export interface RunOnceReport {
 export async function runOnce(session: SessionQueryable, options: RunOnceOptions): Promise<RunOnceReport> {
   const reclaimed = await reclaimExpiredLeases(session, { limit: Math.max(options.limit, 10) });
 
+  // One claim for every registered kind, so the lease has to cover the slowest of
+  // them. Over-leasing only delays a reclaim after a crash; under-leasing would let a
+  // second worker claim a job the first is still running, which the fencing token
+  // survives but which wastes the attempt.
   const handlers = options.registry.all();
   const leaseSeconds = handlers.reduce((longest, handler) => Math.max(longest, handler.leaseSeconds), 60);
   const claims = await claimJobs(session, {
