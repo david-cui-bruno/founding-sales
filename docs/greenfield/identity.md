@@ -1,0 +1,179 @@
+# Identity: sign-in, sessions, devices, commands and audit
+
+Specification revision 3, sections 5.1, 5.2, 5.3, 6 and 14, and Appendix G 23, 24 and
+40. This is how a person gets into Callie and how the API decides, on every single
+command, that they may still be there.
+
+## The short version
+
+A Callie Google account, in the system browser, with PKCE and one-time state and
+nonce. The API's own HTTPS endpoint is where Google sends the browser back. The Mac
+collects its grant with a secret it generated itself. After that the Mac holds three
+things: a device secret, an access token good for an hour, and a refresh credential
+that rotates every time it is used. Reuse of a spent credential revokes the device.
+Membership and device revocation are checked on every command. Every mutating command
+carries an id, and its receipt commits with the mutation.
+
+## Sign-in, move by move
+
+```
+Mac                         API                         Google (system browser)
+ |  POST /auth/sign-in/start |                           |
+ |-------------------------->|  row: sha256(state),      |
+ |  { authorizationUrl,      |       sha256(nonce),      |
+ |    handoffSecret }        |       sha256(handoff),    |
+ |<--------------------------|       S256 challenge      |
+ |                                                       |
+ |  shell.openExternal(authorizationUrl) ----------------->|
+ |                                                       |  person signs in
+ |                           |  GET /auth/google/callback |
+ |                           |<---------------------------|
+ |                           |  consume state row,        |
+ |                           |  exchange code (PKCE),     |
+ |                           |  validate id token,        |
+ |                           |  require membership        |
+ |                           |  --> status = authenticated|
+ |  POST /auth/sign-in/claim |                           |
+ |-------------------------->|  consume row again;        |
+ |  { grant }                |  mint device secret,       |
+ |<--------------------------|  access token, credential  |
+```
+
+Why the API's callback rather than a loopback port or a `callie://` scheme:
+`docs/decisions/g2-redirect-target.md`, which is also the note that says exactly which
+OAuth client David creates and with which redirect URIs.
+
+### What makes each replay fail
+
+| Replay | Why it fails |
+|---|---|
+| A `state` we never issued | No row with that digest. |
+| A `state` already used | The consuming `UPDATE` has `status = 'pending'` in its `WHERE`, so the second callback changes no row — and never reaches Google. |
+| An id token carrying another request's `nonce` | The row's `nonce_hash` is compared to `sha256(nonce)` from the token. |
+| The authorization `code` again | Google answers `invalid_grant`; the API answers `token_exchange_failed`. |
+| A token minted for another `aud` or `azp` | Both are compared to the configured client id, and `aud` must be exactly it — an array with a second audience is refused. |
+| A handoff secret twice | The claim's `UPDATE` has `status = 'authenticated'`; the second is `already_claimed`. |
+
+Every one of those has a test in `apps/api/test/auth/scenarios.test.ts`.
+
+### What the id token must say
+
+Issuer, audience, `azp` where present, RS256 signature against Google's current
+published keys, `exp`/`iat`/`nbf` within the configured skew, the request's nonce,
+`email_verified = true`, `hd` equal to the configured Workspace domain, and a `sub`.
+`sub` is the durable identity; email is display data and is deliberately not unique in
+the `users` table, because two Callie people may share an alias and a changed address
+must not create a second account.
+
+An unrecognised `kid` refreshes the key set once, no more often than a minute, which
+is what a real Google rotation looks like from here. `alg` must be `RS256`: nothing
+unsigned ever has its claims read, so `alg: none` cannot argue its way past the issuer
+check.
+
+**A domain account alone is not access.** The `users` row is created on first
+successful sign-in, and then an active `workspace_memberships` row is required — at
+the callback, again at the claim, and again on every command.
+
+## What the Mac holds
+
+| Thing | Where | Lifetime |
+|---|---|---|
+| Device secret | macOS Keychain | Until the device is revoked |
+| Refresh credential | macOS Keychain | Rotates on every use; 30 days at the outside |
+| Access token | Memory | About an hour |
+| Device record (ids, label, API address) | `device.json`, mode 0600 | Until sign-out |
+| Today list | `today.cache`, AES-256-GCM | 24 hours |
+
+Server-side, all three secrets exist only as sha256 digests, and the `CHECK`
+constraints in migration 0003 refuse anything that is not one — so a plaintext
+credential cannot be written by mistake.
+
+The credentials name their own workspace (`fssa1.<workspace>.<secret>`), which is what
+lets an unauthenticated lookup still begin with `workspace_id`:
+`docs/decisions/g2-session-token-shape.md`.
+
+## Renewal, and what reuse means
+
+`device_refresh_credentials` has one row per generation and a partial unique index
+that allows exactly one `active` row per device. A renewal spends the old row
+(`rotated`, with `used_at`) before the new one exists, so a rotation that forgot to
+spend the old one cannot commit.
+
+Presenting a `rotated` generation is reuse: the device is revoked, its sessions end,
+its live credential is spent, and a full Google sign-in is required. Presenting a
+`revoked` one is not reuse — it was taken away deliberately, by an admin, a sign-out
+or a membership ending — and says `credential_unknown`.
+
+The Mac serialises renewal for exactly this reason. Four views noticing an expired
+session at the same moment share one in-flight promise, so the credential is presented
+once. `apps/desktop/test/desktop.test.ts` asserts the renewal count.
+
+The 30-day boundary lives on the session as `reauthenticate_after` and is carried
+forward unchanged by every renewal, so the chain cannot extend itself. Both the access
+session and the refresh credential are clipped to it.
+
+## Commands
+
+`runCommand` in `apps/api/src/auth/commands.ts` is the only way a mutation happens.
+It checks the client version, builds the workspace scope from the verified principal,
+hashes the payload canonically, runs the route's work and writes the receipt in one
+transaction.
+
+* Same id, same payload, same device: the original result, `replayed: true`.
+* Same id, different payload: `command_payload_mismatch`.
+* Same id, different device: `command_device_mismatch` — and the database enforces it,
+  because `(workspace_id, command_id)` is unique
+  (`docs/decisions/g2-command-id-uniqueness.md`).
+* `authorize_dial`: the receipt carries no result at all, so a replay is never
+  actionable. Migration 0001 refuses a row of that kind that has one.
+
+**A pre-flight refusal writes no receipt.** An outdated client, a revoked device, an
+inactive membership — none of those reached a command, so none of them consumes its
+id. That is what makes the upgrade path work: the Mac updates and retries the same
+command id, and it is still free.
+
+## The client-version range
+
+`GET /auth/client-version` is readable by anyone, at any version, with no session. It
+is the one thing an outdated client may read, and it says what to install. Everything
+else an outdated client tries — starting a sign-in, claiming, renewing, any command —
+is `client_upgrade_required` with HTTP 426.
+
+The Mac enforces the same rule locally so that it does not offer a person a button
+that cannot work, but the API is the authority and checks independently.
+
+## Audit and the read matrix
+
+`audit_events` is append-only by privilege: `UPDATE`, `DELETE` and `TRUNCATE` are
+revoked from both application roles in migration 0001. Sign-ins, sign-in refusals,
+device revocations, membership changes and deactivations all write one.
+
+`decideSensitiveRead` is Appendix F as a pure function: an admin may read anything,
+and every admin read of a row they are not the assignee or mailbox owner of is
+audited; a salesperson reads only their own, and those are ordinary work. Message
+bodies, drafts and mailbox diagnostics do not exist yet — the rule that will govern
+them does, so the slice that adds them inherits it.
+
+## Where everything is
+
+```
+apps/api/src/auth/config.ts        what identity needs that is not a row
+apps/api/src/auth/googleClient.ts  discovery, JWKS with caching and rotation, token exchange
+apps/api/src/auth/idToken.ts       every claim the specification names, each its own refusal
+apps/api/src/auth/signIn.ts        start, callback, claim
+apps/api/src/auth/sessions.ts      devices, sessions, rotation, reuse, revocation
+apps/api/src/auth/commands.ts      the command middleware every later route uses
+apps/api/src/auth/audit.ts         append-only events and the read matrix
+apps/api/src/routes/auth.ts        the six routes above
+apps/api/src/routes/admin/         memberships and devices
+packages/contracts/src/auth.ts     the wire contract and the closed refusal set
+packages/domain/db/migrations/0003_identity.sql
+apps/desktop/                      the Mac
+```
+
+## Running the tests
+
+```
+npm run gate:greenfield       # everything, including the desktop rules
+npm run test:desktop:e2e      # the window, in chromium
+```

@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
 import type { SessionQueryable } from '../../db/queryable.ts';
 import { payloadHash, seedTwoWorkspaces, type TwoWorkspaces } from './support/fixtures.ts';
+import { IDENTITY_CONSTRAINT_CASES } from './support/identityCases.ts';
 
 /**
  * A failing insert for every foundation constraint.
@@ -1318,6 +1319,11 @@ const cases: readonly Case[] = [
       return null;
     },
   },
+
+  // Later migrations bring their cases in from their own file, so two lanes adding a
+  // migration at the same time never both edit the middle of this array.
+  ...IDENTITY_CONSTRAINT_CASES,
+
 ];
 
 
