@@ -8,7 +8,7 @@ import {
   type WorkspaceScope,
 } from '../../db/workspaceScope.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
-import { seedCrm, stageIdByKey, type SeededCrm } from '../db/support/crmFixtures.ts';
+import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
 import {
   addEmailRoute,
   addPhoneRoute,
@@ -177,25 +177,32 @@ describe('CRM commands', () => {
       const reassigning = await database.appRuntimeSession();
       const mutating = await database.appRuntimeSession();
 
-      await reassigning.query('BEGIN');
-      const reassigned = await reassignFirm(contextOn(reassigning, admin), {
-        firmId: crm.alpha.firmId,
-        toUserId: strangerUserId,
-        reason: 'territory change',
-      });
-      expect(reassigned).toMatchObject({ ok: true });
+      try {
+        await reassigning.query('BEGIN');
+        const reassigned = await reassignFirm(contextOn(reassigning, admin), {
+          firmId: crm.alpha.firmId,
+          toUserId: strangerUserId,
+          reason: 'territory change',
+        });
+        expect(reassigned).toMatchObject({ ok: true });
 
-      // The former assignee's mutation starts while the reassignment is uncommitted.
-      // It blocks on the firm's row lock rather than reading the stale assignee.
-      await mutating.query('BEGIN');
-      const blocked = updateFirm(contextOn(mutating, assignee), {
-        firmId: crm.alpha.firmId,
-        patch: { name: 'Renamed by the former owner' },
-      });
+        // The former assignee's mutation starts while the reassignment is uncommitted.
+        // It blocks on the firm's row lock rather than reading the stale assignee.
+        await mutating.query('BEGIN');
+        const blocked = updateFirm(contextOn(mutating, assignee), {
+          firmId: crm.alpha.firmId,
+          patch: { name: 'Renamed by the former owner' },
+        });
 
-      await reassigning.query('COMMIT');
-      expect(await blocked).toMatchObject({ ok: false, reason: 'not_assigned' });
-      await mutating.query('ROLLBACK');
+        await reassigning.query('COMMIT');
+        expect(await blocked).toMatchObject({ ok: false, reason: 'not_assigned' });
+      } finally {
+        // A failed assertion must not leave a row lock behind: every later test in
+        // this file touches the same firm, and they would all time out instead of
+        // reporting the one thing that actually broke.
+        await mutating.query('ROLLBACK');
+        await reassigning.query('ROLLBACK');
+      }
 
       // Put the assignment back for the rest of the file.
       await session.query('UPDATE firms SET assigned_user_id = $3 WHERE workspace_id = $1 AND id = $2', [
@@ -210,34 +217,43 @@ describe('CRM commands', () => {
     });
 
     it('records the reassignment hold, the transfer hook and the audit event in one transaction', async () => {
-      const worker = await database.appRuntimeSession();
-      await worker.query('BEGIN');
-      const outcome = await reassignFirm(contextOn(worker, admin), {
-        firmId: crm.alpha.firmId,
-        toUserId: strangerUserId,
-        reason: 'territory change',
+      await inRolledBackTransaction(admin, async context => {
+        const outcome = await reassignFirm(context, {
+          firmId: crm.alpha.firmId,
+          toUserId: strangerUserId,
+          reason: 'territory change',
+        });
+        expect(outcome).toMatchObject({ ok: true });
+        if (!outcome.ok) return;
+        const { holdId } = outcome.value;
+
+        const holds = await context.db.query<{ scope_key: string; blocked_action_kinds: string[] }>(
+          'SELECT scope_key, blocked_action_kinds FROM active_holds WHERE workspace_id = $1 AND id = $2',
+          [seeded.alpha.workspaceId, holdId],
+        );
+        expect(holds.rows).toHaveLength(1);
+        expect(holds.rows[0]?.scope_key).toBe(crm.alpha.firmId);
+        expect(holds.rows[0]?.blocked_action_kinds).toContain('email_send');
+
+        // The transfer hook and the audit event are in the same transaction as the
+        // assignee change; they are matched by this reassignment's own hold id, so an
+        // earlier committed reassignment in this file cannot make the count agree by
+        // accident.
+        const events = await context.db.query<{ event_kind: string }>(
+          `SELECT event_kind FROM crm_domain_events
+            WHERE workspace_id = $1 AND event_kind = 'firm.reassigned' AND dedupe_key = $2`,
+          [seeded.alpha.workspaceId, `${crm.alpha.firmId}:${holdId}`],
+        );
+        expect(events.rows).toHaveLength(1);
+
+        const audits = await context.db.query<{ detail: { holdId?: string; toUserId?: string } }>(
+          `SELECT detail FROM audit_events
+            WHERE workspace_id = $1 AND action = 'firm.reassigned' AND subject_id = $2
+            ORDER BY occurred_at DESC LIMIT 1`,
+          [seeded.alpha.workspaceId, crm.alpha.firmId],
+        );
+        expect(audits.rows[0]?.detail.toUserId).toBe(strangerUserId);
       });
-      expect(outcome).toMatchObject({ ok: true });
-
-      const holds = await worker.query<{ reason_code: string; scope_key: string; blocked_action_kinds: string[] }>(
-        "SELECT reason_code, scope_key, blocked_action_kinds FROM active_holds WHERE workspace_id = $1 AND reason_code = 'reassignment' AND released_at IS NULL",
-        [seeded.alpha.workspaceId],
-      );
-      expect(holds.rows).toHaveLength(1);
-      expect(holds.rows[0]?.scope_key).toBe(crm.alpha.firmId);
-
-      const events = await worker.query<{ event_kind: string }>(
-        "SELECT event_kind FROM crm_domain_events WHERE workspace_id = $1 AND firm_id = $2 AND event_kind = 'firm.reassigned'",
-        [seeded.alpha.workspaceId, crm.alpha.firmId],
-      );
-      expect(events.rows).toHaveLength(1);
-
-      const audits = await worker.query<{ action: string }>(
-        "SELECT action FROM audit_events WHERE workspace_id = $1 AND action = 'firm.reassigned'",
-        [seeded.alpha.workspaceId],
-      );
-      expect(audits.rows).toHaveLength(1);
-      await worker.query('ROLLBACK');
     });
   });
 
@@ -555,31 +571,35 @@ describe('CRM commands', () => {
       );
       const duplicateId = duplicate.rows[0]?.id ?? '';
 
-      // Research writes evidence against the source firm and has not committed.
-      await enriching.query('BEGIN');
-      await recordEvidence(contextOn(enriching, admin), {
-        firmId: duplicateId,
-        provider: 'places',
-        sourceReference: 'raced-ref',
-        contentHash: 'c'.repeat(64),
-      });
+      try {
+        // Research writes evidence against the source firm and has not committed.
+        await enriching.query('BEGIN');
+        await recordEvidence(contextOn(enriching, admin), {
+          firmId: duplicateId,
+          provider: 'places',
+          sourceReference: 'raced-ref',
+          contentHash: 'c'.repeat(64),
+        });
 
-      // The merge takes the source firm's row lock, so it cannot run past the
-      // uncommitted enrichment and lose it.
-      await merging.query('BEGIN');
-      const pending = mergeFirms(contextOn(merging, admin), {
-        sourceFirmId: duplicateId,
-        targetFirmId: crm.alpha.firmId,
-      });
-      await enriching.query('COMMIT');
-      expect(await pending).toMatchObject({ ok: true });
+        // The merge takes the source firm's row lock, so it cannot run past the
+        // uncommitted enrichment and lose it.
+        await merging.query('BEGIN');
+        const pending = mergeFirms(contextOn(merging, admin), {
+          sourceFirmId: duplicateId,
+          targetFirmId: crm.alpha.firmId,
+        });
+        await enriching.query('COMMIT');
+        expect(await pending).toMatchObject({ ok: true });
 
-      const moved = await merging.query<{ count: string }>(
-        'SELECT count(*) AS count FROM evidence_items WHERE workspace_id = $1 AND firm_id = $2 AND source_reference = $3',
-        [seeded.alpha.workspaceId, crm.alpha.firmId, 'raced-ref'],
-      );
-      expect(Number(moved.rows[0]?.count)).toBe(1);
-      await merging.query('ROLLBACK');
+        const moved = await merging.query<{ count: string }>(
+          'SELECT count(*) AS count FROM evidence_items WHERE workspace_id = $1 AND firm_id = $2 AND source_reference = $3',
+          [seeded.alpha.workspaceId, crm.alpha.firmId, 'raced-ref'],
+        );
+        expect(Number(moved.rows[0]?.count)).toBe(1);
+      } finally {
+        await merging.query('ROLLBACK');
+        await enriching.query('ROLLBACK');
+      }
       await session.query('DELETE FROM evidence_items WHERE workspace_id = $1 AND firm_id = $2', [
         seeded.alpha.workspaceId,
         duplicateId,

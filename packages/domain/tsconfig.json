@@ -6,7 +6,7 @@
       "@fss/contracts": ["../contracts/src/index.ts"]
     }
   },
-  "include": ["src/**/*.ts", "db/**/*.ts", "jobs/**/*.ts", "test/**/*.ts", "vitest.config.ts"],
+  "include": ["src/**/*.ts", "db/**/*.ts", "jobs/**/*.ts", "crm/**/*.ts", "test/**/*.ts", "vitest.config.ts"],
   "// exclude": "test/oracle imports the OLD trees by relative path to run their modules as an oracle. Those files are written against the old, looser tsconfig; typechecking them under the greenfield strict settings would report errors in code this lane does not own. Vitest still runs them. See docs/decisions/g0-oracle-imports.md.",
   "exclude": ["test/oracle/**"]
 }

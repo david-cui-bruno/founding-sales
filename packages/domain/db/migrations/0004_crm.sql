@@ -16,7 +16,11 @@
 --   * The **semantic composite keys** of section 7.2 — `(workspace_id, contact_id,
 --     firm_id)` and `(workspace_id, opportunity_id, firm_id)` — are real unique keys
 --     that child tables reference, so an enrollment, a route or a stage event cannot
---     mix firms even when both ids exist.
+--     mix firms even when both ids exist. Those references are `ON UPDATE CASCADE`,
+--     because a firm merge moves a contact and an opportunity to another firm and
+--     every child's copy of `firm_id` has to move with it — including the rows in
+--     append-only tables, which no application role may UPDATE and which therefore
+--     could not be moved any other way.
 --   * Every promise the prose makes is a constraint with a failing-insert case in
 --     `test/db/support/crmCases.ts`: one open opportunity per firm, one active primary
 --     contact per firm, Lost needs a reason, a usable route needs its policy version.
@@ -146,7 +150,7 @@ CREATE TABLE contacts (
   CONSTRAINT contacts_semantic_key UNIQUE (workspace_id, id, firm_id),
   CONSTRAINT contacts_firm_fkey FOREIGN KEY (workspace_id, firm_id) REFERENCES firms (workspace_id, id),
   CONSTRAINT contacts_merged_into_fkey FOREIGN KEY (workspace_id, merged_into_contact_id, firm_id)
-    REFERENCES contacts (workspace_id, id, firm_id),
+    REFERENCES contacts (workspace_id, id, firm_id) ON UPDATE CASCADE,
   CONSTRAINT contacts_full_name_present CHECK (btrim(full_name) <> '' AND length(full_name) <= 200),
   CONSTRAINT contacts_title_bounded CHECK (title IS NULL OR (btrim(title) <> '' AND length(title) <= 200)),
   CONSTRAINT contacts_linkedin_url_shape
@@ -215,7 +219,7 @@ CREATE TABLE phone_routes (
   CONSTRAINT phone_routes_pkey PRIMARY KEY (workspace_id, id),
   CONSTRAINT phone_routes_firm_fkey FOREIGN KEY (workspace_id, firm_id) REFERENCES firms (workspace_id, id),
   CONSTRAINT phone_routes_contact_fkey FOREIGN KEY (workspace_id, contact_id, firm_id)
-    REFERENCES contacts (workspace_id, id, firm_id),
+    REFERENCES contacts (workspace_id, id, firm_id) ON UPDATE CASCADE,
   -- NULLS NOT DISTINCT: two firm-level rows with the same number at one firm collide,
   -- which is the point; PostgreSQL 15 and later treat the two NULLs as equal here.
   CONSTRAINT phone_routes_one_per_association
@@ -267,7 +271,7 @@ CREATE TABLE email_addresses (
   CONSTRAINT email_addresses_pkey PRIMARY KEY (workspace_id, id),
   CONSTRAINT email_addresses_firm_fkey FOREIGN KEY (workspace_id, firm_id) REFERENCES firms (workspace_id, id),
   CONSTRAINT email_addresses_contact_fkey FOREIGN KEY (workspace_id, contact_id, firm_id)
-    REFERENCES contacts (workspace_id, id, firm_id),
+    REFERENCES contacts (workspace_id, id, firm_id) ON UPDATE CASCADE,
   CONSTRAINT email_addresses_one_per_association
     UNIQUE NULLS NOT DISTINCT (workspace_id, firm_id, contact_id, address),
   -- Canonical means lower-cased here, the same spelling the suppression canonicalizer
@@ -352,9 +356,10 @@ CREATE TABLE evidence_items (
   CONSTRAINT evidence_items_pkey PRIMARY KEY (workspace_id, id),
   CONSTRAINT evidence_items_firm_fkey FOREIGN KEY (workspace_id, firm_id) REFERENCES firms (workspace_id, id),
   CONSTRAINT evidence_items_contact_fkey FOREIGN KEY (workspace_id, contact_id, firm_id)
-    REFERENCES contacts (workspace_id, id, firm_id),
+    REFERENCES contacts (workspace_id, id, firm_id) ON UPDATE CASCADE,
   -- Appendix C: "provider result/evidence uniqueness". One provider result per firm.
-  CONSTRAINT evidence_items_one_per_result UNIQUE (workspace_id, firm_id, provider, content_hash),
+  CONSTRAINT evidence_items_one_per_result
+    UNIQUE NULLS NOT DISTINCT (workspace_id, firm_id, contact_id, provider, content_hash),
   CONSTRAINT evidence_items_provider_shape CHECK (provider ~ '^[a-z][a-z0-9_.-]{1,63}$'),
   CONSTRAINT evidence_items_source_reference_present
     CHECK (btrim(source_reference) <> '' AND length(source_reference) <= 500),
@@ -480,7 +485,7 @@ CREATE TABLE opportunities (
   CONSTRAINT opportunities_stage_fkey FOREIGN KEY (workspace_id, stage_id)
     REFERENCES pipeline_stages (workspace_id, id),
   CONSTRAINT opportunities_reopened_from_fkey FOREIGN KEY (workspace_id, reopened_from_opportunity_id, firm_id)
-    REFERENCES opportunities (workspace_id, id, firm_id),
+    REFERENCES opportunities (workspace_id, id, firm_id) ON UPDATE CASCADE,
   CONSTRAINT opportunities_status_known CHECK (status IN ('open', 'won', 'lost')),
   CONSTRAINT opportunities_control_mode_known CHECK (control_mode IN ('automated', 'manual')),
   -- Manual mode always says what made it manual (7.3): a confirmed reply, a call
@@ -538,7 +543,7 @@ CREATE TABLE opportunity_stage_events (
   CONSTRAINT opportunity_stage_events_pkey PRIMARY KEY (workspace_id, id),
   CONSTRAINT opportunity_stage_events_opportunity_fkey
     FOREIGN KEY (workspace_id, opportunity_id, firm_id)
-    REFERENCES opportunities (workspace_id, id, firm_id),
+    REFERENCES opportunities (workspace_id, id, firm_id) ON UPDATE CASCADE,
   CONSTRAINT opportunity_stage_events_from_stage_fkey FOREIGN KEY (workspace_id, from_stage_id)
     REFERENCES pipeline_stages (workspace_id, id),
   CONSTRAINT opportunity_stage_events_to_stage_fkey FOREIGN KEY (workspace_id, to_stage_id)
@@ -579,7 +584,7 @@ CREATE TABLE record_aliases (
   CONSTRAINT record_aliases_pkey PRIMARY KEY (workspace_id, id),
   CONSTRAINT record_aliases_firm_fkey FOREIGN KEY (workspace_id, firm_id) REFERENCES firms (workspace_id, id),
   CONSTRAINT record_aliases_contact_fkey FOREIGN KEY (workspace_id, contact_id, firm_id)
-    REFERENCES contacts (workspace_id, id, firm_id),
+    REFERENCES contacts (workspace_id, id, firm_id) ON UPDATE CASCADE,
   CONSTRAINT record_aliases_unique
     UNIQUE NULLS NOT DISTINCT (workspace_id, firm_id, contact_id, alias_kind, alias_value),
   CONSTRAINT record_aliases_record_kind_known CHECK (record_kind IN ('firm', 'contact')),
@@ -656,9 +661,9 @@ CREATE TABLE crm_domain_events (
   CONSTRAINT crm_domain_events_dedupe UNIQUE (workspace_id, event_kind, dedupe_key),
   CONSTRAINT crm_domain_events_firm_fkey FOREIGN KEY (workspace_id, firm_id) REFERENCES firms (workspace_id, id),
   CONSTRAINT crm_domain_events_opportunity_fkey FOREIGN KEY (workspace_id, opportunity_id, firm_id)
-    REFERENCES opportunities (workspace_id, id, firm_id),
+    REFERENCES opportunities (workspace_id, id, firm_id) ON UPDATE CASCADE,
   CONSTRAINT crm_domain_events_contact_fkey FOREIGN KEY (workspace_id, contact_id, firm_id)
-    REFERENCES contacts (workspace_id, id, firm_id),
+    REFERENCES contacts (workspace_id, id, firm_id) ON UPDATE CASCADE,
   CONSTRAINT crm_domain_events_kind_known
     CHECK (event_kind IN ('opportunity.terminal_stop', 'opportunity.manual_mode', 'opportunity.reopened',
                           'firm.reassigned', 'firm.merged', 'contact.merged', 'route.retired')),

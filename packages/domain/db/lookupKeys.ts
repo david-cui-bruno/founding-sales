@@ -84,7 +84,7 @@ export const FOUNDATION_LOOKUP_KEYS = {
   ],
   evidence_items: [
     ['workspace_id', 'id'],
-    ['workspace_id', 'firm_id', 'provider', 'content_hash'],
+    ['workspace_id', 'firm_id', 'contact_id', 'provider', 'content_hash'],
   ],
   pipeline_stages: [
     ['workspace_id', 'id'],
