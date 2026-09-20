@@ -45,6 +45,26 @@ const scopeFor = (
 const salespersonContext = (db: SessionQueryable = database.session): RepositoryContext =>
   scopeFor(seeded.alpha.workspaceId, seeded.alpha.salesperson.userId, 'salesperson', db);
 
+/**
+ * Run one unit of work in a real transaction, the way `runCommand` and the job
+ * runner do in production. It matters here rather than being tidiness: the
+ * correction claims the decision before it writes the event that satisfies
+ * `suppression_finalizations_correction_fkey`, and that constraint is only deferred
+ * until commit.
+ */
+async function inTransaction<T>(work: (session: SessionQueryable) => Promise<T>): Promise<T> {
+  const session = await database.appRuntimeSession();
+  await session.query('BEGIN');
+  try {
+    const value = await work(session);
+    await session.query('COMMIT');
+    return value;
+  } catch (error) {
+    await session.query('ROLLBACK');
+    throw error;
+  }
+}
+
 const dialInput = (): {
   firmId: string;
   contactId: string;
@@ -242,46 +262,150 @@ describe('scenario 29: correction races the finalizer, and one of them wins', ()
     expect(await authorizeDial(context, dialInput())).toEqual({ allowed: false, reason: 'firm_suppressed' });
   });
 
-  it('lets exactly one of the correction and the finalizer win', async () => {
+  it('lets the correction win when it claims first, and releases only its own hold', async () => {
+    const context = salespersonContext();
+    // A handle nothing else in this file touches: scenario 29's first case already
+    // suppressed the firm key for good, and a lifted suppression has to be provably
+    // lifted rather than shadowed by somebody else's event on the same key.
+    const recorded = await recordSuppression(context, {
+      scope: 'handle',
+      value: '+14015550188',
+      firmId: crm.alpha.firmId,
+      source: 'salesperson_manual',
+      commandId: 'cmd-correct-first',
+      journal: recordingSuppressionJournal(),
+    });
+    if (!recorded.ok) throw new Error(`expected an event, got ${recorded.reason}`);
+    const deadline = recorded.value.correctionDeadline;
+    if (deadline === null) throw new Error('a manual suppression has a correction deadline');
+
+    // A second, unrelated hold on the same firm. Section 4.3: "clearing one hold
+    // never clears another", and this is the one that must survive.
+    const other = await database.session.query<{ id: string }>(
+      `INSERT INTO active_holds (workspace_id, scope_kind, scope_key, reason_code, blocked_action_kinds,
+                                 source_event_kind, source_event_id)
+       VALUES ($1, 'firm', $2, 'uncertain_reply', ARRAY['dial_authorization']::text[], 'message.received', 'other-event')
+       RETURNING id`,
+      [seeded.alpha.workspaceId, crm.alpha.firmId],
+    );
+
+    const correction = await inTransaction(async session =>
+      await recordCorrection(salespersonContext(session), {
+        eventId: recorded.value.eventId,
+        commandId: 'cmd-correct-first-correction',
+        journal: recordingSuppressionJournal(),
+      }),
+    );
+    if (!correction.ok) throw new Error(`expected the correction to win, got ${correction.reason}`);
+    expect(correction.value.releasedHoldIds).toHaveLength(1);
+    expect(correction.value.blockedMilliseconds).toBeGreaterThanOrEqual(0);
+
+    // The suppression is lifted, the other hold is not.
+    expect(await isSuppressed(context, { scope: 'handle', canonicalKey: '+14015550188' })).toBeNull();
+    const survivor = await database.session.query<{ released_at: Date | null }>(
+      'SELECT released_at FROM active_holds WHERE workspace_id = $1 AND id = $2',
+      [seeded.alpha.workspaceId, other.rows[0]?.id],
+    );
+    expect(survivor.rows[0]?.released_at).toBeNull();
+
+    // And the finalizer that wakes at the deadline loses, atomically.
+    const finalizerContext = repositoryContext(
+      workspaceScope(seeded.alpha.workspaceId, { kind: 'system', component: 'worker' }),
+      database.session,
+    );
+    expect(await finalizeManualSuppression(finalizerContext, { eventId: recorded.value.eventId, at: deadline })).toBe(
+      'lost_to_correction',
+    );
+
+    await database.session.query('UPDATE active_holds SET released_at = now() WHERE workspace_id = $1 AND id = $2', [
+      seeded.alpha.workspaceId,
+      other.rows[0]?.id,
+    ]);
+  });
+
+  it('lets the finalizer win when it claims first, and the correction is refused', async () => {
     const context = salespersonContext();
     const recorded = await recordSuppression(context, {
       scope: 'handle',
       value: '+14015550155',
       firmId: crm.alpha.firmId,
       source: 'salesperson_manual',
-      commandId: 'cmd-race-suppress',
+      commandId: 'cmd-finalize-first',
       journal: recordingSuppressionJournal(),
     });
     if (!recorded.ok) throw new Error(`expected an event, got ${recorded.reason}`);
-    const eventId = recorded.value.eventId;
+    const deadline = recorded.value.correctionDeadline;
+    if (deadline === null) throw new Error('a manual suppression has a correction deadline');
 
-    const one = await database.appRuntimeSession();
-    const two = await database.appRuntimeSession();
-    const correctionContext = salespersonContext(one);
     const finalizerContext = repositoryContext(
       workspaceScope(seeded.alpha.workspaceId, { kind: 'system', component: 'worker' }),
-      two,
+      database.session,
+    );
+    expect(await finalizeManualSuppression(finalizerContext, { eventId: recorded.value.eventId, at: deadline })).toBe(
+      'finalized',
+    );
+    // Idempotent: the same job run twice writes once.
+    expect(await finalizeManualSuppression(finalizerContext, { eventId: recorded.value.eventId, at: deadline })).toBe(
+      'already_finalized',
     );
 
-    const [correction, finalization] = await Promise.all([
-      recordCorrection(correctionContext, {
-        eventId,
-        commandId: 'cmd-race-correct',
+    const correction = await inTransaction(async session =>
+      await recordCorrection(salespersonContext(session), {
+        eventId: recorded.value.eventId,
+        commandId: 'cmd-finalize-first-correction',
         journal: recordingSuppressionJournal(),
       }),
-      finalizeManualSuppression(finalizerContext, { eventId, at: 'now' }),
-    ]);
-
-    const correctionWon = correction.ok;
-    const finalizerWon = finalization === 'finalized';
-    expect(correctionWon !== finalizerWon).toBe(true);
+    );
+    expect(correction).toEqual({ ok: false, reason: 'already_finalized' });
+    // Never contact: the suppression the finalizer made terminal is still effective.
+    expect(await isSuppressed(context, { scope: 'handle', canonicalKey: '+14015550155' })).not.toBeNull();
 
     const { rows } = await database.session.query<{ outcome: string }>(
       'SELECT outcome FROM suppression_finalizations WHERE workspace_id = $1 AND event_id = $2',
-      [seeded.alpha.workspaceId, eventId],
+      [seeded.alpha.workspaceId, recorded.value.eventId],
     );
     expect(rows).toHaveLength(1);
-    expect(rows[0]?.outcome).toBe(correctionWon ? 'corrected' : 'finalized');
+    expect(rows[0]?.outcome).toBe('finalized');
+  });
+
+  it('serializes two corrections racing on two connections into one winner', async () => {
+    const context = salespersonContext();
+    const recorded = await recordSuppression(context, {
+      scope: 'handle',
+      value: '+14015550177',
+      firmId: crm.alpha.firmId,
+      source: 'salesperson_manual',
+      commandId: 'cmd-two-corrections',
+      journal: recordingSuppressionJournal(),
+    });
+    if (!recorded.ok) throw new Error(`expected an event, got ${recorded.reason}`);
+
+    const one = await database.appRuntimeSession();
+    const two = await database.appRuntimeSession();
+    const attempt = async (session: SessionQueryable, commandId: string): Promise<boolean> => {
+      await session.query('BEGIN');
+      try {
+        const outcome = await recordCorrection(salespersonContext(session), {
+          eventId: recorded.value.eventId,
+          commandId,
+          journal: recordingSuppressionJournal(),
+        });
+        await session.query(outcome.ok ? 'COMMIT' : 'ROLLBACK');
+        return outcome.ok;
+      } catch (error) {
+        await session.query('ROLLBACK');
+        throw error;
+      }
+    };
+
+    const results = await Promise.all([attempt(one, 'cmd-race-a'), attempt(two, 'cmd-race-b')]);
+    expect(results.filter(Boolean)).toHaveLength(1);
+
+    const { rows } = await database.session.query<{ count: string }>(
+      "SELECT count(*) AS count FROM suppression_events WHERE workspace_id = $1 AND supersedes_event_id = $2",
+      [seeded.alpha.workspaceId, recorded.value.eventId],
+    );
+    expect(Number(rows[0]?.count)).toBe(1);
   });
 });
 

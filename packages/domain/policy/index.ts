@@ -18,6 +18,8 @@ export {
   type PolicyResult,
 } from './types.ts';
 
+export { databaseNow } from './clock.ts';
+
 export {
   listApplicableHolds,
   openHold,

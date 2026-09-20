@@ -182,8 +182,14 @@ CREATE TABLE suppression_finalizations (
   CONSTRAINT suppression_finalizations_pkey PRIMARY KEY (workspace_id, event_id),
   CONSTRAINT suppression_finalizations_event_fkey FOREIGN KEY (workspace_id, event_id)
     REFERENCES suppression_events (workspace_id, event_id),
+  -- DEFERRABLE INITIALLY DEFERRED, and that is load-bearing. The correction claims
+  -- the decision *before* it writes the event that supersedes the original, because
+  -- the claim is the serialization point: a correction that inserted its event first
+  -- and then lost the race would have lifted a suppression the finalizer made
+  -- terminal. Naming an event that does not exist yet is only legal until commit,
+  -- which is exactly the window the claim needs.
   CONSTRAINT suppression_finalizations_correction_fkey FOREIGN KEY (workspace_id, correction_event_id)
-    REFERENCES suppression_events (workspace_id, event_id),
+    REFERENCES suppression_events (workspace_id, event_id) DEFERRABLE INITIALLY DEFERRED,
   CONSTRAINT suppression_finalizations_decider_fkey FOREIGN KEY (workspace_id, decided_by_user_id)
     REFERENCES workspace_memberships (workspace_id, user_id),
   CONSTRAINT suppression_finalizations_outcome_known CHECK (outcome IN ('finalized', 'corrected')),
