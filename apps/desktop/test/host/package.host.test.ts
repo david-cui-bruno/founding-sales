@@ -1,11 +1,14 @@
 import { execFileSync, spawn } from 'node:child_process';
 import { appendFile, mkdtemp, rm } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type * as AsarModule from '@electron/asar';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { APP_URL_SCHEME } from '../../scripts/bundle.ts';
 import { packageDesktop, type PackagedApp } from '../../scripts/package.ts';
 import { verifyPackagedApp } from '../../scripts/verifyPackage.ts';
+import { BUNDLE_SHARED_FILES, BUNDLE_WINDOWS } from '../../src/main/bundleScheme.ts';
 import { dumpLaunchServices, handlersForScheme, LSREGISTER } from '../../src/main/launchServices.ts';
 import { DESKTOP_ROOT, HOST_TESTS_ENABLED } from './support/hostGate.ts';
 
@@ -58,6 +61,57 @@ describe.skipIf(!HOST_TESTS_ENABLED)('the package verifier, on a real bundle', (
     expect(outcome.report.entitlements).toEqual({ ok: true });
     expect(outcome.report.stamp?.channel).toBe('local-smoke');
   });
+
+  /**
+   * G13b deliverable 3, on the artifact rather than on the declaration.
+   *
+   * `bundleScheme.test.ts` proves the map answers every declared window; it reads
+   * nothing from a bundle, because a unit test has no bundle to read. This opens the
+   * asar a packager actually produced and asks the shipped handler for each window's
+   * page and script — the same 404 a person would get, from the same function the app
+   * installs. Until this existed, no test opened a packaged build and loaded all six
+   * windows, which is precisely the gap `docs/decisions/g9-bundle-scheme-map.md`
+   * recorded under "what is still not tested".
+   */
+  it('serves every declared window out of the packaged asar', async () => {
+    const outcome = await verifyPackagedApp(built.appPath, {
+      mode: 'integrity',
+      expectedCommitSha: built.stamp.commitSha,
+    });
+    const serving = outcome.report.bundleServing;
+
+    expect(serving).not.toBeNull();
+    expect(serving?.windows.map(window => window.page)).toEqual(BUNDLE_WINDOWS.map(window => window.page));
+    for (const window of serving?.windows ?? []) {
+      expect(window.pageStatus, window.page).toBe(200);
+      expect(window.scriptStatus, window.entry).toBe(200);
+      expect(window.declaredEntryLoaded, window.page).toBe(true);
+      expect(window.pageScripts.map(script => script.status), window.page).toEqual([200]);
+    }
+    // And the other direction: nothing shipped that the closed map will not answer.
+    expect(serving?.unserved).toEqual([]);
+    expect(serving?.ok).toBe(true);
+    expect(outcome.failures).not.toContain('bundle_window_unreachable');
+    expect(outcome.failures).not.toContain('bundle_file_unserved');
+  });
+
+  it('packs exactly the pages, scripts and shared files the windows declare', async () => {
+    // The list the check walked, stated once so a window added without a page — or a
+    // page left behind after a window was removed — reads as a diff rather than as a
+    // boolean.
+    const expected = [
+      ...BUNDLE_WINDOWS.flatMap(window => [window.page, `${window.entry}.js`]),
+      ...BUNDLE_SHARED_FILES,
+    ].sort();
+    const asar = createRequire(import.meta.url)('@electron/asar') as typeof AsarModule;
+    const packed = asar
+      .listPackage(join(built.appPath, 'Contents', 'Resources', 'app.asar'), { isPack: false })
+      .filter(entry => entry.startsWith('/renderer/'))
+      .map(entry => entry.slice('/renderer/'.length))
+      .sort();
+
+    expect(packed).toEqual(expected);
+  }, 180_000);
 
   it('refuses the smoke build as a release', async () => {
     const outcome = await verifyPackagedApp(built.appPath, { mode: 'release', expectedCommitSha: built.stamp.commitSha });

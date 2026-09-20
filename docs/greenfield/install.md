@@ -21,6 +21,13 @@ apps/desktop/src/main/updateChannel.ts what the Mac will and will not install
 .github/workflows/greenfield-desktop.yml
 ```
 
+**Where this sits in a release.** The desktop build is the *last* step, after the
+rehearsal and after the production apply, because it needs a CloudFront hostname that
+the apply creates. `docs/greenfield/release.md` section 2.0 is the order, and it is not
+rearrangeable. As of 20 September 2026 eight of the nine signing secrets are not set and
+`FSS_UPDATE_CHANNEL_URL` does not exist, so the release job fails closed at its first
+step and names them; the host job, which needs nothing, runs on every pull request.
+
 ## What David must set
 
 Nine repository secrets and three repository variables. Everything in the first list
@@ -65,23 +72,65 @@ once because it will refuse a manifest signed by the new key.
 | Name | Example | Why |
 |---|---|---|
 | `FSS_API_BASE_URL` | `https://api.usecallie.com` | Compiled into the build; the Mac talks to nothing else |
-| `FSS_UPDATE_CHANNEL_URL` | `https://d111111abcdef8.cloudfront.net/` | `distribution_domain_name` from `infra/modules/updates` |
+| `FSS_UPDATE_CHANNEL_URL` | `https://d111111abcdef8.cloudfront.net/` | `distribution_domain_name` from `infra/modules/updates`, with `https://` and a trailing slash |
 | `FSS_DESKTOP_APP_VERSION` | `1.0.0` | The release's version. A release refuses to build at `0.0.0` |
+
+All three are compiled into the bundle and therefore covered by its signature; none can
+be changed afterwards. The release job refuses, naming each absent one, before it
+installs anything.
+
+`FSS_UPDATE_CHANNEL_URL` is the one that will be missing the first time, and not by
+mistake: the CloudFront hostname exists only after the first production apply, and
+GitHub will not store an empty variable. So the first release cannot be built until the
+infrastructure it updates from exists — which is why `docs/greenfield/release.md`
+section 2.0 puts the apply before the desktop build. Take the value from the apply:
+
+```bash
+cd infra/roots/production
+terraform output -raw updates_distribution_domain_name   # d111111abcdef8.cloudfront.net
+```
+
+and set the variable to `https://` + that + `/`. `docs/decisions/g13b-an-absent-channel-url-is-a-refusal.md`
+says why an absent one is a refusal rather than a default: a build that fell back to an
+unapplied hostname would install once, check a name that does not resolve every six
+hours, and never update — with no alarm and no symptom until the day the API raises the
+minimum version and the upgrade prompt leads nowhere.
 
 ## Building a release
 
-`Actions → Greenfield desktop → Run workflow`, with **release** ticked. Without it,
-the workflow runs only the host job, which needs no credential at all.
+`Actions → Greenfield desktop → Run workflow`, on the release commit, with **release**
+ticked and `desktop_commit_stamp` set to that same commit. Without **release**, the
+workflow runs only the host job, which needs no credential at all and runs on every
+pull request.
 
-The release job stops at the first step if any of the nine secrets is absent, and
-says which ones by name. It never prints a value: the certificate reaches `security`
-through a file it overwrites and deletes, the passwords reach `codesign` and
-`notarytool` through the environment, and the only description of the configuration
-that is ever printed names variables (`describeSigningPlan`, asserted by a test to
-contain no value).
+The stamp field is the release record's (`docs/greenfield/release.md` section 2.0): the
+desktop commit stamp *is* the release commit, known before any build, and the workflow
+refuses a value that is not the commit the run is on. Leave it empty only for a build
+that precedes its rehearsal.
 
-Then: build, sign, notarize, staple, verify, sign the manifest. The verification is
-the gate, and it is the same code a person could run against a downloaded bundle:
+Four refusals come before anything is installed, and each names what is wrong:
+
+1. any of the nine secrets absent — by name;
+2. any of the three variables absent — by name, and `FSS_UPDATE_CHANNEL_URL` is the
+   one that will be missing first;
+3. `FSS_DESKTOP_APP_VERSION` still at the placeholder `0.0.0`, which is below every
+   minimum the API could publish and would ship a client that can neither mutate nor
+   upgrade past itself;
+4. `desktop_commit_stamp` that is not this run's commit.
+
+A fifth comes after the install and before the build: a working tree that is not clean.
+`npm ci` is the step most able to have changed something, so the check is after it;
+`packageDesktop` and the stamp schema refuse a dirty tree as well, and this one is
+simply the version that fails in five seconds and names the files.
+
+No step ever prints a value: the certificate reaches `security` through a file it
+overwrites and deletes, the passwords reach `codesign` and `notarytool` through the
+environment, and the only description of the configuration that is ever printed names
+variables (`describeSigningPlan`, asserted by a test to contain no value).
+
+Then: build, sign, notarize, staple, verify, sign the manifest, compare the stamp with
+the commit, print the summary, upload. The verification is the gate, and it is the same
+code a person could run against a downloaded bundle:
 
 ```
 npm run verify:desktop:package -- /Applications/Callie.app
@@ -103,7 +152,9 @@ It checks, and refuses unless all of it holds:
   hardened runtime and a secure timestamp, and a team identifier;
 * the entitlements are exactly `com.apple.security.cs.allow-jit` and nothing else;
 * a notarization ticket is stapled and Gatekeeper says `source=Notarized Developer ID`;
-* the update public key is present in the packed JavaScript, not merely in the stamp.
+* the update public key is present in the packed JavaScript, not merely in the stamp;
+* every window declared in `BUNDLE_WINDOWS` resolves inside the packaged asar, and
+  nothing was packed that the scheme will not serve (below).
 
 `--integrity` runs everything that does not need Apple. That is what the host job
 uses, and it is the only mode a smoke build can pass.
@@ -126,14 +177,56 @@ one line rather than three lists to keep equal. `bundleScheme.test.ts` asserts t
 every declared page and script resolves and that each page's script tag matches the
 entry its window declares. See `docs/decisions/g9-bundle-scheme-map.md`.
 
-### Getting the artifact off the runner
+That derivation makes "a declared window is in the map" true by construction, and it
+cannot say anything about a *bundle*. So `verify:desktop:package` opens the asar and
+asks the shipped handler for each window — the same 404 a person would get — and
+refuses on either of two findings:
 
-**Open, for the coordinator and David.** The release job builds, verifies and signs,
-and then the runner is destroyed. Carrying the artifact away needs either
-`actions/upload-artifact` (a third action, which must be pinned to a digest somebody
-has checked) or an OIDC role that can write to the bucket (which is the better answer
-and belongs with the lane that owns AWS identity). Until one of those is decided, a
-release is built on a Mac that holds the certificate:
+* `bundle_window_unreachable`: a declared window whose page or script is not in the
+  archive, or whose page loads a script the map will not serve;
+* `bundle_file_unserved`: a file the build put in `renderer/` that the closed map does
+  not answer, which is the original bug seen from the artifact's side.
+
+Both were proved by breaking them on real packaged bundles before the check landed, and
+neither needs Apple, so `--integrity` checks them too. If you ever see either code, the
+window named in the report is broken on every Mac that installs that build.
+`docs/decisions/g13b-what-the-packaged-window-check-proves.md`.
+
+### What the run leaves behind
+
+Two things, and they are the whole release.
+
+**The step summary**, which is the record. Four public facts — version, commit, the
+artifact's sha256, its size — plus the channel path and the artifact's name. Nothing
+else is ever printed; the signing configuration is described by variable name and a
+test asserts that description contains no value.
+
+**The artifact**, named `callie-macos-arm64-<version>`, at the top of the run page.
+Inside it:
+
+```
+Callie-1.0.0-arm64.zip   the signed, notarized, stapled bundle, zipped with ditto
+latest.json              the manifest, signed with the Ed25519 update key
+```
+
+GitHub wraps any download in a zip of its own, so a download is
+`callie-macos-arm64-1.0.0.zip` and there is one unzip before the two files appear.
+
+The upload uses `actions/upload-artifact` pinned to
+`ea165f8d65b6e75b540449e92b4886f43607fa02` — v4.6.2, resolved with `git ls-remote` and
+confirmed to be a commit rather than a tag object
+(`docs/decisions/g13b-the-artifact-leaves-on-a-pinned-action.md`). It runs only after
+the verifier passed, the manifest was signed and the stamp matched the commit, and it
+has no `if: always()`: a build that failed any of those has nothing worth downloading.
+
+Publishing is still yours (below). The alternative — an OIDC role that writes straight
+to the bucket — is the better long-run answer and belongs to the lane that owns AWS
+identity; it is not a thing to improvise on a runner that holds a Developer ID
+certificate.
+
+### Building one by hand instead
+
+Only on a Mac that holds the certificate, and only when CI cannot run:
 
 ```
 export FSS_DESKTOP_APP_VERSION=1.0.0
@@ -146,16 +239,34 @@ FSS_UPDATE_SIGNING_KEY=... node --experimental-strip-types \
   apps/desktop/scripts/publishUpdate.ts ./out/Callie-darwin-arm64/Callie.app ./channel
 ```
 
-The CI release job is then the reference: its step summary prints the version, the
-commit, the artifact's sha256 and its size, and a hand-built artifact of the same
-commit must match on version and commit. The zip's own digest will differ — a
-notarization ticket is stapled per submission — which is why the manifest carries the
-digest of the artifact actually published.
+The CI release job is then the reference: a hand-built artifact of the same commit must
+match it on version and commit. The zip's own digest will differ — a notarization ticket
+is stapled per submission — which is why the manifest carries the digest of the artifact
+actually published. Build from a committed tree: the packager refuses a dirty one, and
+the stamp schema refuses `channel: release` with `dirty: true`.
 
 ## Publishing to the channel
 
 No AWS credential exists in this repository, so this is an operator step against a
-directive, with `bucket_name` and `distribution_id` from `infra/modules/updates`:
+directive, from the two files you just downloaded.
+
+The production root exports only the hostname, because that is the only one a build
+needs. The other two you derive or look up once and write down:
+
+```bash
+cd infra/roots/production
+terraform output -raw updates_distribution_domain_name     # d111111abcdef8.cloudfront.net
+
+# The bucket is "<name_prefix>-updates-<account>", from infra/modules/updates:
+BUCKET="fss-prod-updates-326255650484"
+
+# The distribution, by the hostname the output printed:
+DISTRIBUTION="$(aws cloudfront list-distributions \
+  --query "DistributionList.Items[?DomainName=='d111111abcdef8.cloudfront.net'].Id" \
+  --output text)"
+```
+
+Then, with `VERSION` the version the run summary printed:
 
 ```
 aws s3 cp "Callie-$VERSION-arm64.zip" \
@@ -165,6 +276,15 @@ aws s3 cp latest.json "s3://$BUCKET/releases/darwin-arm64/latest.json" \
 aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION" \
   --paths '/releases/darwin-arm64/latest.json'
 ```
+
+Check it from outside AWS before telling anyone, because the bucket is private and
+CloudFront is the only way in:
+
+```bash
+curl -fsS "https://$DOMAIN/releases/darwin-arm64/latest.json" | head -20
+```
+
+That is exactly the request every Mac makes.
 
 The zip first. A manifest naming an object that is not there yet is a manifest every
 Mac refuses — safe, but it looks like an outage. The bucket keeps superseded versions
@@ -219,32 +339,105 @@ and it is a test — `apps/desktop/test/packaging/scenario40.test.ts`.
 G13a deliverable 3. It proves two things no test can: that a fresh Mac opens the app
 without a Gatekeeper prompt, and that a real update arrives from the real channel.
 
-**Before starting**, the nine secrets and three variables above must be set, and
-`infra/modules/updates` must be applied so the CloudFront hostname exists.
+**Before starting**, all of this must already be true, and each has its own page:
 
-1. Build and publish **1.0.0** by the steps above. Verify it — do not skip
-   `verify:desktop:package`; it is the only thing that will tell you the ticket is
-   stapled before a Mac tells you it is not.
-2. On a Mac that has never held Callie (a fresh account is enough; the point is an
-   empty Keychain and an empty Launch Services entry), download, unzip, drag to
-   Applications, open. **Expected: no warning of any kind.** A warning means the
-   notarization did not staple, and the answer is step 1 again, not "Open Anyway".
-3. Sign in. **Expected: the system browser opens on `accounts.google.com`, and no
-   Keychain dialog appears at any point.**
-4. Now publish **1.0.1** — any trivial change, or the same tree with the version
-   bumped. Same build, same verification, same upload.
-5. Back on the test Mac, quit Callie and open it again. **Expected: within a few
-   seconds, "Callie 1.0.1 is available". Accept it.** The zip appears in Downloads and
-   Finder opens on it.
-6. Replace the app, open it again, and check the version.
-7. The adversarial half, which is the part worth doing. Edit `latest.json` in the
-   bucket — change one character of `releaseVersion` — and re-upload with an
-   invalidation. Open Callie. **Expected: no prompt at all.** The app refuses a
-   manifest whose signature no longer matches and says nothing to the person, because
-   there is nothing they could usefully do. Then put the real `latest.json` back.
+- the production Terraform is applied, so the CloudFront distribution exists
+  (`docs/greenfield/infra-apply-runbook.md`);
+- the nine secrets and three variables above are set, `FSS_UPDATE_CHANNEL_URL` from
+  that apply;
+- `FSS_DESKTOP_APP_VERSION` is `1.0.0`;
+- you are on a Mac that has never held Callie. A fresh macOS user account is enough:
+  the point is an empty login Keychain and an empty Launch Services entry, so that
+  "no dialog appeared" means something.
 
-If step 7 offers an update, stop and report it: the signature check is not doing
-anything, and every later release is a way onto that Mac.
+Set aside about an hour. Notarization is a round trip to Apple and usually takes
+minutes, occasionally longer, and you will do it twice.
+
+### 1 — build and publish 1.0.0
+
+Run *Greenfield desktop* with **release** ticked and `desktop_commit_stamp` set to the
+commit. When it finishes, read the summary: version `1.0.0`, the commit, a sha256, a
+size. Download `callie-macos-arm64-1.0.0`, unzip it once, and publish the two files by
+the commands in "Publishing to the channel" — **zip first, manifest second**. Then:
+
+```bash
+curl -fsS "https://$DOMAIN/releases/darwin-arm64/latest.json" | head -20
+```
+
+**Expected:** a manifest whose `releaseVersion` is `1.0.0` and whose `commitSha` is the
+commit the summary printed. If the run failed instead, it named what was absent; nothing
+here guesses.
+
+### 2 — install it, and watch for a prompt that should not come
+
+Download the zip from the channel (`https://$DOMAIN/releases/darwin-arm64/1.0.0/Callie-1.0.0-arm64.zip`),
+double-click to unzip, drag `Callie.app` to `/Applications`, open it.
+
+**Expected: no warning of any kind.** That is what notarization buys: macOS checks the
+stapled ticket without a network call, finds a Developer ID signature it trusts, and
+opens the app.
+
+If you get *"Apple could not verify Callie is free of malware"*, **stop**. The honest
+response is to go back to step 1, not to right-click-open. You can find out which check
+failed without guessing:
+
+```bash
+npm run verify:desktop:package -- /Applications/Callie.app
+```
+
+### 3 — sign in
+
+**Expected: the system browser opens on `accounts.google.com`, and no Keychain dialog
+appears at any point.** The device secret goes into the login keychain silently
+(`docs/decisions/g13-keychain-acl.md` is why that took a fix). A Keychain prompt here is
+a real finding — report it.
+
+Leave the app signed in. The next step needs a running installation to update.
+
+### 4 — publish 1.0.1
+
+Set the repository variable `FSS_DESKTOP_APP_VERSION` to `1.0.1`. Any commit will do —
+the same tree is fine, since the version comes from the variable, not from the tree —
+but run the workflow on a real commit and pass it as `desktop_commit_stamp`. Same
+verification, same download, same publish.
+
+### 5 — receive it
+
+On the test Mac, quit Callie and open it again.
+
+**Expected: within a few seconds, "Callie 1.0.1 is available".** Accept it. The verified
+zip is written to Downloads and Finder opens on it. Replace `Callie` in Applications,
+open it, and confirm the version.
+
+It does not swap the running bundle in place; `docs/decisions/g13-update-application.md`
+says why not.
+
+### 6 — the adversarial half, which is the part worth doing
+
+Take the published `latest.json`, change **one character** of `releaseVersion` — make it
+`1.0.2` — and re-upload it with an invalidation. Do not re-sign it. Then quit Callie and
+open it.
+
+**Expected: no prompt at all, and no message.** The app checks the Ed25519 signature
+over a canonical encoding of the document against the public key compiled into the
+build, finds it no longer matches, and stops. It says nothing to the person, because
+there is nothing they could usefully do about it.
+
+**If it offers you 1.0.2, stop and report it.** The signature check is not doing
+anything, which means the channel is a way onto that Mac and so is anything between the
+Mac and the channel.
+
+Then put the real `latest.json` back, invalidate again, and confirm with `curl` that the
+channel serves the signed one.
+
+### What this proved, and what it did not
+
+Proved: a fresh Mac opens the app with no Gatekeeper prompt; a real update crosses the
+real channel; a tampered manifest is refused on a real Mac by the real key.
+
+Not proved: scenario 40's other half, the minimum-version block. That is a test
+(`apps/desktop/test/packaging/scenario40.test.ts`) and it needs the API to raise the
+minimum, which is not something to do to a live workspace to watch a dialog.
 
 ## Running the tests
 
@@ -252,6 +445,22 @@ anything, and every later release is a way onto that Mac.
 npm run gate:greenfield        # includes the desktop rules, the update channel and scenario 40
 npm run test:desktop:e2e       # the window, in chromium
 npm run test:desktop:host      # macOS only: real Keychain, a real bundle, Launch Services
+```
+
+The gate also reads `.github/workflows/greenfield-desktop.yml`
+(`test/packaging/releaseWorkflow.test.ts`): every action pinned to a commit sha, every
+secret only ever the value of an env entry named after it, no shell tracing, the
+dirty-tree refusal before the build, a summary of public facts only, and a host job
+holding no credential. Editing the workflow without reading that test is how a pin
+becomes a tag again.
+
+An unsigned smoke package, locally, which passes everything that does not need Apple —
+including the window check — takes about a minute:
+
+```
+FSS_DESKTOP_PACKAGE_MODE=local-smoke FSS_DESKTOP_APP_VERSION=1.5.0 \
+  npm run package:desktop -- /tmp/callie-smoke
+npm run verify:desktop:package -- /tmp/callie-smoke/Callie-darwin-arm64/Callie.app --integrity
 ```
 
 The host layer needs the Electron binary, which the documented install deliberately

@@ -12,15 +12,21 @@ name: Greenfield desktop
 #
 #   release  runs only when asked, needs every Apple secret David sets, and
 #            fails closed and by name when one is missing. It is the real path:
-#            Developer ID, hardened runtime, notarization, stapling, and a
-#            signed update manifest. It uploads nothing, because no AWS
-#            credential exists in this repository.
+#            Developer ID, hardened runtime, notarization, stapling, a signed
+#            update manifest, and an artifact a person can download from the run.
+#            It reaches no cloud: publishing to the channel is David's operator
+#            step, because no AWS credential exists in this repository.
 #
 # No step prints a secret. Values reach `codesign`, `notarytool` and Node
 # through the environment or through a file the runner deletes; nothing is
 # echoed, no step sets `-x`, and `describeSigningPlan` (apps/desktop/scripts/
 # signing.ts) is the only thing that describes the configuration, by variable
 # name. A test asserts that its output contains no value.
+#
+# `apps/desktop/test/packaging/releaseWorkflow.test.ts` reads this file on every
+# change: every action pinned to a commit sha, every secret only ever the value
+# of an env entry named after it, the dirty-tree refusal before the build, and
+# the host job holding no credential at all.
 
 on:
   pull_request:
@@ -43,6 +49,11 @@ on:
         description: 'Build, sign, notarize and staple a release. Needs every Apple secret.'
         type: boolean
         default: false
+      desktop_commit_stamp:
+        description: 'The commit the release record names. Must equal the commit this run is on; leave empty before the rehearsal has run.'
+        type: string
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -181,6 +192,62 @@ jobs:
           fi
           echo "every required secret is present"
 
+      - name: Every variable this release needs, by name
+        env:
+          FSS_API_BASE_URL: ${{ vars.FSS_API_BASE_URL }}
+          FSS_UPDATE_CHANNEL_URL: ${{ vars.FSS_UPDATE_CHANNEL_URL }}
+          FSS_DESKTOP_APP_VERSION: ${{ vars.FSS_DESKTOP_APP_VERSION }}
+        run: |
+          set -euo pipefail
+          # These three are public — two hostnames and a version — and each is
+          # compiled into the bundle. A build missing one is not a release that
+          # somebody could fix afterwards: the values are inside the signature.
+          #
+          # FSS_UPDATE_CHANNEL_URL is the one that is normally absent, and the
+          # reason is in the order rather than in a mistake: the CloudFront
+          # hostname exists only after the first production apply, and GitHub
+          # will not hold an empty variable. Until then a release cannot be
+          # built, because a build with no channel installs once and never
+          # updates. docs/greenfield/release.md section 2 has the order.
+          missing=()
+          for name in FSS_API_BASE_URL FSS_UPDATE_CHANNEL_URL FSS_DESKTOP_APP_VERSION; do
+            [ -z "${!name:-}" ] && missing+=("$name")
+          done
+          if [ "${#missing[@]}" -ne 0 ]; then
+            echo "::error::this release cannot be built; absent repository variables: ${missing[*]}"
+            exit 1
+          fi
+          # The workspace placeholder. 0.0.0 is below every minimum the API could
+          # publish, so it would ship a client that cannot mutate and cannot be
+          # upgraded past itself (specification 5.3).
+          if [ "$FSS_DESKTOP_APP_VERSION" = "0.0.0" ]; then
+            echo "::error::FSS_DESKTOP_APP_VERSION is 0.0.0, which is the placeholder, not a release version"
+            exit 1
+          fi
+          echo "every required variable is present"
+
+      - name: This build is of the commit the release record names
+        env:
+          DESKTOP_COMMIT_STAMP: ${{ inputs.desktop_commit_stamp }}
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # Specification 16.2: "the deployed commit/image digests match the
+          # rehearsal artifacts". The rehearsal records a `desktop_commit_stamp`;
+          # the stamp inside this bundle's asar has to be the same commit, and
+          # the cheapest place to find out is before ninety minutes of building
+          # and notarizing rather than after.
+          #
+          # Empty is allowed, because the first release of a commit may be built
+          # before the rehearsal has run against it. It is then recorded, not
+          # compared, and the comparison happens in the other direction: David
+          # passes this run's commit to the rehearsal.
+          echo "release commit: $RELEASE_COMMIT"
+          if [ -n "$DESKTOP_COMMIT_STAMP" ] && [ "$DESKTOP_COMMIT_STAMP" != "$RELEASE_COMMIT" ]; then
+            echo "::error::desktop_commit_stamp ($DESKTOP_COMMIT_STAMP) is not the commit this run is on ($RELEASE_COMMIT)"
+            exit 1
+          fi
+
       - name: Install
         run: |
           set -euo pipefail
@@ -222,6 +289,25 @@ jobs:
           echo "developer id identities available: $count"
           test "$count" -ge 1
 
+      - name: The tree this is built from is the tree that was committed
+        run: |
+          set -euo pipefail
+          # `packageDesktop` refuses a dirty tree too, and the stamp schema
+          # refuses `channel: release` with `dirty: true`, so this is the third
+          # lock on the same door. It is here because it is the one that fails
+          # in five seconds and names the files, rather than after the install
+          # and inside a build script's error message.
+          #
+          # `npm ci` is the step most able to have changed something: a
+          # lifecycle script, a rewritten lockfile, a generated file. It has
+          # already run.
+          if [ -n "$(git status --porcelain=v1 --untracked-files=all)" ]; then
+            echo "::error::the working tree is not clean, so this build cannot claim a commit"
+            git status --porcelain=v1 --untracked-files=all
+            exit 1
+          fi
+          echo "clean at $(git rev-parse HEAD)"
+
       - name: Build, sign, notarize and staple
         env:
           FSS_DESKTOP_PACKAGE_MODE: release
@@ -246,7 +332,10 @@ jobs:
           test -n "$app"
           # Signature, Developer ID authority, hardened runtime, secure
           # timestamp, entitlements, fuses, stapled ticket, Gatekeeper, the
-          # commit stamp and the embedded update key.
+          # commit stamp, the embedded update key — and, since G13b, that every
+          # window declared in BUNDLE_WINDOWS actually resolves inside the
+          # packaged asar, and that nothing was packed the closed scheme map
+          # will not serve.
           npm run verify:desktop:package -- "$app"
 
       - name: Sign the update manifest
@@ -260,18 +349,40 @@ jobs:
           node --experimental-strip-types --disable-warning=ExperimentalWarning \
             apps/desktop/scripts/publishUpdate.ts "$app" "$RUNNER_TEMP/channel"
 
+      - name: The stamp inside the bundle is this commit
+        env:
+          DESKTOP_COMMIT_STAMP: ${{ inputs.desktop_commit_stamp }}
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # The manifest's `commitSha` is read out of the release stamp, which is
+          # inside the asar and therefore inside the signature — so this compares
+          # the signed artifact with the commit, not the build log with itself.
+          #
+          # The first comparison is the one specification 16.2 asks for: the
+          # thing rehearsed and the thing published are one commit. The second
+          # repeats the input check against the artifact rather than against the
+          # workflow's idea of it.
+          manifest="$RUNNER_TEMP/channel/latest.json"
+          stamped="$(node -e 'process.stdout.write(require(process.argv[1]).manifest.commitSha)' "$manifest")"
+          if [ "$stamped" != "$RELEASE_COMMIT" ]; then
+            echo "::error::the bundle is stamped $stamped and this run is on $RELEASE_COMMIT"
+            exit 1
+          fi
+          if [ -n "$DESKTOP_COMMIT_STAMP" ] && [ "$stamped" != "$DESKTOP_COMMIT_STAMP" ]; then
+            echo "::error::the bundle is stamped $stamped and the release record names $DESKTOP_COMMIT_STAMP"
+            exit 1
+          fi
+          echo "stamp, commit and release record agree on $stamped"
+
       - name: Record what was built
         run: |
           set -euo pipefail
-          # The artifact does not leave this runner. Adding a step that carried
-          # it off would mean pinning a third action to a digest, and this lane
-          # will not write an action reference it has not verified — see
-          # docs/greenfield/install.md, "Getting the artifact off the runner",
-          # which is a decision for the coordinator and David, not a default.
-          #
-          # What is recorded is enough to compare a later hand-built artifact
-          # against this one: the version, the commit, the digest the manifest
-          # signed, and the channel path it belongs at.
+          # Public facts only: a version, a commit, a digest and a byte count.
+          # Enough to compare a later hand-built artifact of the same commit
+          # against this one — the zip's own digest will differ, because a
+          # notarization ticket is stapled per submission, which is why the
+          # manifest carries the digest of the artifact actually published.
           manifest="$RUNNER_TEMP/channel/latest.json"
           version="$(node -e 'process.stdout.write(require(process.argv[1]).manifest.releaseVersion)' "$manifest")"
           commit="$(node -e 'process.stdout.write(require(process.argv[1]).manifest.commitSha)' "$manifest")"
@@ -285,7 +396,33 @@ jobs:
             echo "- artifact sha256: \`$digest\`"
             echo "- artifact bytes: \`$size\`"
             echo "- channel path: \`releases/darwin-arm64/latest.json\`"
+            echo "- download: the \`callie-macos-arm64-$version\` artifact on this run"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # actions/upload-artifact v4.6.2. Resolved on 20 September 2026 with
+      # `git ls-remote --tags https://github.com/actions/upload-artifact.git`:
+      # refs/tags/v4.6.2 and refs/tags/v4 both name this object, and neither has
+      # a peeled `^{}` entry, so it is a commit and not an annotated tag.
+      # docs/decisions/g13b-the-artifact-leaves-on-a-pinned-action.md.
+      #
+      # This is how the release leaves the runner. The alternative — an OIDC
+      # role that writes straight to the bucket — is better and belongs to the
+      # lane that owns AWS identity; it is not a thing to improvise on a runner
+      # holding a Developer ID certificate. David downloads the zip and the
+      # manifest and publishes them himself, which keeps the one step that
+      # changes what every Mac installs a deliberate act.
+      #
+      # `compression-level: 0` because the zip is already compressed and
+      # upload-artifact would zip it again; retention is the GitHub maximum for
+      # a private repository, so a release stays downloadable for a quarter.
+      - name: Carry the release off the runner
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: callie-macos-arm64-${{ vars.FSS_DESKTOP_APP_VERSION }}
+          path: ${{ runner.temp }}/channel
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 90
 
       - name: Remove the temporary keychain
         if: always()
@@ -297,8 +434,10 @@ jobs:
 # ---------------------------------------------------------------------------
 # Publishing, which happens outside CI because no AWS credential exists here.
 #
-# Against a directive, with an operator's session, from the artifact this
-# workflow produced:
+# Download the `callie-macos-arm64-<version>` artifact from the run; it holds
+# `Callie-<version>-arm64.zip` and `latest.json`. GitHub wraps a download in a
+# zip of its own, so there is one unzip before these commands. Then, against a
+# directive, with an operator's session:
 #
 #   aws s3 cp "Callie-$VERSION-arm64.zip" \
 #     "s3://$BUCKET/releases/darwin-arm64/$VERSION/Callie-$VERSION-arm64.zip"

@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type * as AsarModule from '@electron/asar';
+import { answerBundleRequest, BUNDLE_ORIGIN, BUNDLE_WINDOWS } from '../src/main/bundleScheme.ts';
 import { APP_BUNDLE_ID, APP_URL_SCHEME } from './bundle.ts';
 import { ALLOWED_USAGE_DESCRIPTIONS, usageDescriptionKeys } from './package.ts';
 import { compareEntitlements, parseEntitlementsPlist, type EntitlementComparison } from './entitlements.ts';
@@ -53,7 +54,35 @@ export type VerificationFailure =
   | 'team_identifier_absent'
   | 'notarization_ticket_absent'
   | 'gatekeeper_rejected'
-  | 'update_public_key_absent';
+  | 'update_public_key_absent'
+  | 'bundle_window_unreachable'
+  | 'bundle_file_unserved';
+
+/** What one declared window's two files did when the packaged scheme was asked for them. */
+export interface BundleWindowServing {
+  readonly page: string;
+  readonly entry: string;
+  readonly pageStatus: number;
+  readonly scriptStatus: number;
+  /** Every `<script src>` the packaged page carries, and what the scheme answers. */
+  readonly pageScripts: readonly { readonly src: string; readonly status: number }[];
+  /** The page's script tags include the entry its window declares. */
+  readonly declaredEntryLoaded: boolean;
+}
+
+export interface BundleServingReport {
+  readonly windows: readonly BundleWindowServing[];
+  /** Files inside the packaged renderer directory the closed map will not serve. */
+  readonly unserved: readonly string[];
+  readonly ok: boolean;
+}
+
+/** The packaged renderer directory, as the two operations this check needs. */
+export interface PackagedRenderer {
+  /** Renderer-relative names the bundle holds, e.g. `index.html`. */
+  list(): readonly string[];
+  read(rendererRelativePath: string): Promise<Uint8Array>;
+}
 
 export interface VerificationReport {
   readonly appPath: string;
@@ -73,6 +102,8 @@ export interface VerificationReport {
   /** Read out of the packed JavaScript, not out of the stamp. */
   readonly embeddedUpdatePublicKey: string;
   readonly usageDescriptions: readonly string[];
+  /** Null only when the asar could not be opened at all. */
+  readonly bundleServing: BundleServingReport | null;
 }
 
 export interface VerificationOutcome {
@@ -121,6 +152,20 @@ export async function verifyPackagedApp(appPath: string, options: VerifyOptions)
 
   const { stamp, packedMain } = readFromAsar(asarPath);
   if (stamp === null) fail('stamp_unreadable');
+
+  // Every declared window, asked of the packaged bundle through the handler the app
+  // installs. Not an Apple question, so it is checked in both modes: a build whose
+  // windows 404 is broken whoever signed it.
+  let bundleServing: BundleServingReport | null = null;
+  try {
+    bundleServing = await checkBundleServing(packagedRenderer(asarPath));
+  } catch {
+    bundleServing = null;
+  }
+  if (bundleServing === null || bundleServing.windows.some(window => !windowServed(window))) {
+    fail('bundle_window_unreachable');
+  }
+  if (bundleServing !== null && bundleServing.unserved.length > 0) fail('bundle_file_unserved');
   if (stamp !== null && options.expectedCommitSha !== undefined && stamp.commitSha !== options.expectedCommitSha) {
     fail('stamp_commit_mismatch');
   }
@@ -215,7 +260,106 @@ export async function verifyPackagedApp(appPath: string, options: VerifyOptions)
       gatekeeper,
       embeddedUpdatePublicKey,
       usageDescriptions,
+      bundleServing,
     },
+  };
+}
+
+/** Where the bundle's pages and scripts live inside the asar. */
+const RENDERER_DIRECTORY = 'renderer';
+
+/**
+ * Does every window actually load out of this bundle? (G13b deliverable 3.)
+ *
+ * G9 made `BUNDLE_WINDOWS` the one declaration three things read, which makes "a
+ * declared window is in the scheme's map" structurally true. It cannot make either of
+ * the two statements that are about the *artifact*:
+ *
+ *   * the file a window names is inside the asar — a copy step that silently skipped
+ *     one leaves a window that 404s on a Mac and nowhere else;
+ *   * nothing is inside the asar that the closed map refuses to serve — which is the
+ *     exact shape of the bug G9 fixed, five pages shipped and three paths answered.
+ *
+ * Both are asked through `answerBundleRequest`, the handler the packaged app itself
+ * installs, so this is the same 404 a person would get rather than a second opinion
+ * about it. The archive arrives as two functions so the gate can run this against a
+ * fabricated bundle and the host layer against a real one.
+ */
+export async function checkBundleServing(bundle: PackagedRenderer): Promise<BundleServingReport> {
+  const read = async (path: string): Promise<Uint8Array> => await bundle.read(path);
+  const statusOf = async (file: string): Promise<number> =>
+    (await answerBundleRequest('', `${BUNDLE_ORIGIN}/${file}`, read)).status;
+
+  const windows: BundleWindowServing[] = [];
+  for (const window of BUNDLE_WINDOWS) {
+    const pageStatus = await statusOf(window.page);
+    const scriptStatus = await statusOf(`${window.entry}.js`);
+    const pageScripts: { readonly src: string; readonly status: number }[] = [];
+    if (pageStatus === 200) {
+      const html = new TextDecoder().decode(await bundle.read(window.page));
+      for (const match of html.matchAll(/<script[^>]*\ssrc="([^"]+)"/gu)) {
+        const src = match[1] ?? '';
+        // A page's own relative reference. Anything that is not a name in the map —
+        // an absolute URL, another origin, a path that climbs — answers 404 here for
+        // the same reason Chromium would refuse it under `script-src 'self'`.
+        pageScripts.push({ src, status: await statusOf(src.replace(/^\.\//u, '')) });
+      }
+    }
+    windows.push({
+      page: window.page,
+      entry: window.entry,
+      pageStatus,
+      scriptStatus,
+      pageScripts,
+      declaredEntryLoaded: pageScripts.some(script => script.src === `./${window.entry}.js`),
+    });
+  }
+
+  const unserved: string[] = [];
+  for (const file of bundle.list()) {
+    if ((await statusOf(file)) !== 200) unserved.push(file);
+  }
+
+  return { windows, unserved, ok: windows.every(windowServed) && unserved.length === 0 };
+}
+
+/** One window is served when its page loads, its script loads, and the page loads it. */
+export function windowServed(window: BundleWindowServing): boolean {
+  return (
+    window.pageStatus === 200 &&
+    window.scriptStatus === 200 &&
+    window.declaredEntryLoaded &&
+    window.pageScripts.length > 0 &&
+    window.pageScripts.every(script => script.status === 200)
+  );
+}
+
+/**
+ * The renderer directory as it exists inside the packed archive.
+ *
+ * `listPackage` reports directories as well as files, so each entry is stated: a
+ * directory under `renderer/` is not a servable name, and reporting one as unserved
+ * would be a finding about the archive's shape rather than about the windows.
+ */
+function packagedRenderer(asarPath: string): PackagedRenderer {
+  const asar = require('@electron/asar') as typeof AsarModule;
+  const prefix = `/${RENDERER_DIRECTORY}/`;
+  return {
+    list: () =>
+      asar
+        .listPackage(asarPath, { isPack: false })
+        .filter(entry => entry.startsWith(prefix))
+        .map(entry => entry.slice(prefix.length))
+        .filter(name => {
+          if (name.length === 0) return false;
+          try {
+            return !('files' in asar.statFile(asarPath, join(RENDERER_DIRECTORY, name)));
+          } catch {
+            return false;
+          }
+        }),
+    read: async name =>
+      await Promise.resolve(new Uint8Array(asar.extractFile(asarPath, join(RENDERER_DIRECTORY, name)))),
   };
 }
 
@@ -237,6 +381,7 @@ function emptyReport(appPath: string): VerificationReport {
     gatekeeper: null,
     embeddedUpdatePublicKey: '',
     usageDescriptions: [],
+    bundleServing: null,
   };
 }
 
