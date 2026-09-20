@@ -47,6 +47,10 @@ export async function raiseCriticalAlert(db: Queryable, input: RaiseAlertInput):
        INSERT INTO critical_alerts (workspace_id, alert_key, severity, detail)
        SELECT $1, $2, $3, $4::jsonb
         WHERE NOT EXISTS (SELECT 1 FROM updated)
+       -- Two tasks raising the same condition in the same instant both see no row to
+       -- update; the partial unique index is what decides, and the loser inserts
+       -- nothing rather than failing. The read below then finds the winner's row.
+       ON CONFLICT (workspace_id, alert_key) WHERE resolved_at IS NULL DO NOTHING
        RETURNING id
      )
      SELECT id, false AS raised FROM updated
@@ -55,8 +59,15 @@ export async function raiseCriticalAlert(db: Queryable, input: RaiseAlertInput):
     [input.workspaceId, input.alertKey, input.severity ?? 'critical', JSON.stringify(input.detail ?? {})],
   );
   const row = rows[0];
-  if (row === undefined) throw new Error(`raising ${input.alertKey} returned no row`);
-  return { id: row.id, alertKey: input.alertKey, raised: row.raised };
+  if (row !== undefined) return { id: row.id, alertKey: input.alertKey, raised: row.raised };
+
+  const existing = await db.query<{ id: string }>(
+    'SELECT id FROM critical_alerts WHERE workspace_id = $1 AND alert_key = $2 AND resolved_at IS NULL',
+    [input.workspaceId, input.alertKey],
+  );
+  const open = existing.rows[0];
+  if (open === undefined) throw new Error(`raising ${input.alertKey} neither inserted nor found an open alert`);
+  return { id: open.id, alertKey: input.alertKey, raised: false };
 }
 
 /** Close a condition. Resolving is not acknowledging: a resolved alert is simply over. */
