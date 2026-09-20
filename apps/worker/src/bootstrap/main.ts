@@ -11,7 +11,9 @@ import {
   describeClassifier,
   type ClassifyWorkerOptions,
 } from '../handlers/classify.ts';
-import { mailHandlers } from '../handlers/mail.ts';
+import type { OutboundSendDeps } from '@fss/domain/outbound';
+import type { SuppressionJournal } from '@fss/domain/suppression';
+import { mailHandlers, todayReplyPromoter, type MailWorkerOptions } from '../handlers/mail.ts';
 import { outboundSendHandoff } from '../handlers/outboundSendHandoff.ts';
 import { researchHandlers } from '../handlers/research.ts';
 import { sequenceActionJobHandler, sequenceActionSource } from '../handlers/sequenceAction.ts';
@@ -20,43 +22,53 @@ import { todayBuildJobHandler, todayBuildSource } from '../handlers/todayBuild.t
 import { mailSources } from '../scheduler/mailSources.ts';
 import { canarySource } from '../scheduler/sources.ts';
 import { ConfigError, describeWorkerConfig, readWorkerConfig, type WorkerConfig } from './config.ts';
+import {
+  DeploymentConfigError,
+  describeDeployment,
+  loadS3SuppressionJournal,
+  readWorkerDeployment,
+  type WorkerDeployment,
+} from './deployment.ts';
 import { createLogger, errorFields, type Logger } from './log.ts';
 import { WorkerStartupRefusal, startWorker } from './worker.ts';
 
 /**
- * Every handler this image runs.
+ * Every handler this image runs, and the deployment decides which.
  *
- * The research handlers are registered only for the provider kinds this process was
- * given, and in this release it was given none: the live Places, page-fetch and
- * extraction adapters are a separate reviewed change, and the only implementations in
- * the repository are the recorded fixtures the tests use. So `research.page` and
- * `research.firm` jobs wait in the queue unclaimed rather than being failed four times
- * each — which is the honest state, and the reason `enqueueDiscoveryPage` is an admin
- * command rather than a scheduler source (docs/decisions/g10-no-scheduler-source.md).
+ * Until G12 this function registered `mailHandlers(undefined)` and
+ * `researchHandlers({ providers: {} })` unconditionally, and the long comment here
+ * explained — honestly — that the change which reads a deployment's client secret and
+ * KMS key was reviewed on its own. `bootstrap/deployment.ts` is that change. The
+ * shape it preserves is the one that was right: a kind whose adapter this process was
+ * not given is left **unclaimed in the queue** rather than failed four times into a
+ * dead job and a critical alarm. The queue is durable; the work waits.
  *
- * The three `mail.*` handlers are registered on the same terms and for the same
- * reason: `mailHandlers` is given no Gmail configuration in this release, so
- * `mail.sync`, `mail.recover` and `mail.watch_renew` wait in the queue unclaimed. The
- * adapters they need are real — `createGmailHttpClient` speaks the Gmail API and
- * `kmsDataKeyWrapper` unwraps the envelope key — but the change that reads a
- * deployment's client secret and KMS key and hands them over is the one that
- * introduces live credentials, and it is reviewed on its own.
+ * What is new is that the absence is now always a decision somebody made.
+ * `FSS_DEPENDENCIES=none` is a value an operator typed, and a production deployment
+ * cannot have it: `readWorkerDeployment` refuses to return at all. So the difference
+ * between "this laptop has no Gmail" and "production lost its Gmail configuration" is
+ * the difference between a worker that starts and a worker that does not.
  *
- * The mail *scheduler sources* are registered unconditionally, and that is not an
- * inconsistency. A source only inserts rows: with no mailboxes connected it finds
- * nothing, and with mailboxes connected it keeps the queue truthful about what is
- * owed whether or not this image can claim it.
+ * The mail *scheduler sources* stay registered unconditionally, and that is still not
+ * an inconsistency. A source only inserts rows: with no mailboxes connected it finds
+ * nothing, and with mailboxes connected it keeps the queue truthful about what is owed
+ * whether or not this image can claim it.
  *
- * `classify.reply` (G7b) follows the same shape with one difference worth naming:
- * its adapter is built here, from `FSS_LLM_CLASSIFIER_API_KEY`, because there is
- * exactly one secret and no second configuration object to review. A deployment
- * without the key registers no handler; a deployment with `FSS_CLASSIFIER=off`
- * registers it and each job records a `disabled` attempt having sent nothing.
+ * `classify.reply` (G7b) keeps its own switch as well as the deployment's, because the
+ * two say different things: `FSS_CLASSIFIER=off` is an operator who has decided not to
+ * spend, and each job then records a `disabled` attempt having sent nothing.
  */
+export interface HandlerComposition {
+  readonly classifier: ClassifyWorkerOptions | undefined;
+  readonly mail: MailWorkerOptions | undefined;
+  readonly send: OutboundSendDeps | undefined;
+}
+
 function registerHandlers(
   registry: HandlerRegistry,
-  classifier: ClassifyWorkerOptions | undefined,
+  composition: HandlerComposition,
 ): HandlerRegistry {
+  const { classifier } = composition;
   registry.register(canaryHandler());
   registry.register(suppressionFinalizeJobHandler());
   // 8.2's lane 3 is due sequence work, and G6 left `TodaySource` as the seam for it.
@@ -71,9 +83,17 @@ function registerHandlers(
   // `dispatch` needs the Gmail configuration this release does not hand out, so a due
   // email step holds with the reason the fence gave rather than throwing. See
   // `handlers/outboundSendHandoff.ts`.
-  registry.register(sequenceActionJobHandler({ sendHandoff: outboundSendHandoff() }));
+  registry.register(
+    sequenceActionJobHandler({
+      sendHandoff: outboundSendHandoff(
+        composition.send === undefined ? {} : { deps: composition.send },
+      ),
+    }),
+  );
+  // 7.4's providers have no live adapter in this repository, so the deployment
+  // declares their absence rather than discovering it; see `deployment.ts`.
   for (const handler of researchHandlers({ providers: {} })) registry.register(handler);
-  for (const handler of mailHandlers(undefined)) registry.register(handler);
+  for (const handler of mailHandlers(composition.mail)) registry.register(handler);
   for (const handler of classifyHandlers(classifier)) registry.register(handler);
   return registry;
 }
@@ -134,6 +154,66 @@ async function connect(connectionString: string, count: number): Promise<pg.Clie
   return clients;
 }
 
+/**
+ * Turn the deployment into the three objects the handlers take.
+ *
+ * `mailHandlers` and the send hand-off want the same Gmail client, the same OAuth
+ * configuration and the same envelope cipher, so they are built once and shared —
+ * which is also what makes "the worker sends through the mailbox it syncs" true by
+ * construction rather than by two configurations happening to agree.
+ *
+ * The journal is the one part built here rather than in `deployment.ts`, because it
+ * needs a bucket *and* a region at once and because loading an SDK is a side effect a
+ * configuration reader should not have.
+ */
+export async function composeHandlers(
+  deployment: WorkerDeployment,
+  classifier: ClassifyWorkerOptions | undefined,
+  options: {
+    readonly journal?: SuppressionJournal | undefined;
+    readonly region?: string | undefined;
+  } = {},
+): Promise<HandlerComposition> {
+  const gmail = deployment.gmail;
+  if (gmail === undefined) return { classifier, mail: undefined, send: undefined };
+
+  const journal =
+    options.journal ??
+    (deployment.journalBucket === null
+      ? undefined
+      : await loadS3SuppressionJournal({
+          bucket: deployment.journalBucket,
+          region: options.region ?? '',
+        }));
+  if (journal === undefined) {
+    // Only reachable with `FSS_DEPENDENCIES=recorded` and no bucket: `live` refuses in
+    // `readWorkerDeployment`. A rehearsal without a bucket registers no mail handler
+    // rather than one that could acknowledge an opt-out it cannot journal.
+    return { classifier, mail: undefined, send: undefined };
+  }
+
+  return {
+    classifier,
+    mail: {
+      gmail: gmail.gmail,
+      oauth: gmail.oauth,
+      cipher: gmail.cipher,
+      journal,
+      replyPromoter: todayReplyPromoter(),
+      pushTopicName: gmail.config.pushTopicName,
+    },
+    send: {
+      gmail: gmail.gmail,
+      oauth: gmail.oauth,
+      cipher: gmail.cipher,
+      actor: 'worker',
+      // 16.2's deployment half. `decideSend` defaults it to false, so a composition
+      // that forgot it would hold every send rather than send one.
+      deploymentSendingEnabled: deployment.sendingEnabled,
+    },
+  };
+}
+
 export async function main(argv: readonly string[], environment: NodeJS.ProcessEnv): Promise<number> {
   let config: WorkerConfig;
   const bootLog = createLogger({ component: 'worker', instanceKey: 'boot' });
@@ -148,9 +228,29 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
   }
 
   const log = createLogger({ component: 'worker', instanceKey: config.instanceKey });
+
+  // Everything the deployment was given, decided before a socket is opened. A live
+  // deployment missing any part refuses here rather than starting a worker that claims
+  // nothing and says nothing about why.
+  let deployment: WorkerDeployment;
+  try {
+    deployment = await readWorkerDeployment(environment);
+  } catch (error) {
+    log.log('error', 'worker_deployment_refused', {
+      ...errorFields(error),
+      code: error instanceof DeploymentConfigError ? error.code : null,
+    });
+    return WORKER_EXIT_CODES.configurationInvalid;
+  }
+
   if (argv.includes('--selftest')) {
-    // No database, no AWS, no signal handler: this is the image smoke test.
-    log.log('info', 'worker_selftest', describeWorkerConfig(config));
+    // No database, no AWS, no signal handler: this is the image smoke test. The
+    // deployment line names which parts are configured and never what any of them is.
+    log.log('info', 'worker_selftest', {
+      ...describeWorkerConfig(config),
+      ...describeDeployment(deployment),
+      ...describeClassifier(await classifyWorkerOptions(environment)),
+    });
     return WORKER_EXIT_CODES.ok;
   }
 
@@ -159,7 +259,14 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
   // runs, so the backlog is truthful about what is owed. `describeClassifier` says
   // whether a key is configured and never what it is.
   const classifier = await classifyWorkerOptions(environment);
-  log.log('info', 'worker_configuration', { ...describeWorkerConfig(config), ...describeClassifier(classifier) });
+  const composition = await composeHandlers(deployment, classifier, {
+    ...(config.metrics.region === null ? {} : { region: config.metrics.region }),
+  });
+  log.log('info', 'worker_configuration', {
+    ...describeWorkerConfig(config),
+    ...describeClassifier(classifier),
+    ...describeDeployment(deployment),
+  });
 
   const sink = await createSink(config, log);
   // One connection for the scheduler's advisory lock, one per runner slot, one for the
@@ -175,7 +282,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
         runners: sessions.slice(1, 1 + config.concurrency),
         metrics: sessions[1 + config.concurrency] as SessionQueryable,
       },
-      registry: registerHandlers(new HandlerRegistry(), classifier),
+      registry: registerHandlers(new HandlerRegistry(), composition),
       sources: [
         canarySource(),
         todayBuildSource(),
