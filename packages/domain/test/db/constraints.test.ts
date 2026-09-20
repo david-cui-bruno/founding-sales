@@ -8,6 +8,7 @@ import { POLICY_CONSTRAINT_CASES } from './support/policyCases.ts';
 import { RESEARCH_CONSTRAINT_CASES } from './support/researchCases.ts';
 import { MAIL_CONSTRAINT_CASES } from './support/mailCases.ts';
 import { TODAY_CONSTRAINT_CASES } from './support/todayCases.ts';
+import { CLASSIFICATION_CONSTRAINT_CASES } from './support/classificationCases.ts';
 import { seedCrm, type SeededCrm } from './support/crmFixtures.ts';
 import { seedMail, type SeededMail } from './support/mailFixtures.ts';
 
@@ -1346,6 +1347,7 @@ const cases: readonly Case[] = [
   ...RESEARCH_CONSTRAINT_CASES,
   ...MAIL_CONSTRAINT_CASES,
   ...TODAY_CONSTRAINT_CASES,
+  ...CLASSIFICATION_CONSTRAINT_CASES,
 ];
 
 

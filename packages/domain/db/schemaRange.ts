@@ -18,7 +18,7 @@ export interface SchemaRange {
 }
 
 /** The highest migration version this source tree contains. */
-export const CURRENT_SCHEMA_VERSION = 9;
+export const CURRENT_SCHEMA_VERSION = 11;
 
 /**
  * The range the release before this one declared. Widen this one release ahead of the
@@ -26,13 +26,13 @@ export const CURRENT_SCHEMA_VERSION = 9;
  *
  * Lanes G5 and G2 shipped migrations 0002 and 0003 from the same main and each widened
  * this constant for its own; lane G3a widened it again for migration 0004, G3b for
- * 0005, G4 for 0006, G10 for 0007, G6 for 0008 and G7 for 0009. A merge that finds
- * two different maxima takes the larger. That is honest only because nothing has been
- * deployed — G0's {1, 1} was never a promise made to a running production binary. From
- * the first real deployment onwards the widening must precede the migration by a
- * release, and the compatibility test will keep saying so.
+ * 0005, G4 for 0006, G10 for 0007, G6 for 0008, G7 for 0009, G7-2 for 0010 and G7b
+ * for 0011. A merge that finds two different maxima takes the larger. That is honest
+ * only because nothing has been deployed — G0's {1, 1} was never a promise made to a
+ * running production binary. From the first real deployment onwards the widening must
+ * precede the migration by a release, and the compatibility test will keep saying so.
  */
-export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 9 };
+export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 11 };
 
 /**
  * Both services need migration 0002's shape: the API's dead-job list reads `dead_at`
@@ -101,9 +101,27 @@ export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum:
  * which is what the widened previous-release range above is for (Appendix G 22). Both
  * maxima move to 9: a binary that refused the database it has just been deployed
  * against would be a self-inflicted outage.
+ *
+ * Migration 0011 (G7b) moves both a fifth time, and again with a reason on each side.
+ *
+ * The API needs it: `/replies`, `/replies/card` and `/replies/confirm` read
+ * `mail_message_classifications`' three new columns and write
+ * `mail_reply_confirmations`, and `/replies/settings` reads `classifier_settings`.
+ * An API on a version-10 database could render a reply card with no proposed
+ * disposition and then accept a confirmation it had nowhere to put, which would lose
+ * the one record 12.4 requires of a corrected classification.
+ *
+ * The worker needs it: `classify.reply` declares `business_uniqueness`, and the
+ * uniqueness it means is `mail_message_classifications_one_per_layer` together with
+ * the new columns the row carries. A worker on a version-10 database would be
+ * running an at-least-once handler that spends money at a provider with nothing
+ * behind it — the same case G10, G6 and G7 each refused for their own tables — and
+ * it could not record what the call cost, which 13.4 asks for.
+ *
+ * The deploy order stays migrate, then worker, then API. Both maxima move to 11.
  */
-export const API_SCHEMA_RANGE: SchemaRange = { minimum: 9, maximum: 9 };
-export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 9, maximum: 9 };
+export const API_SCHEMA_RANGE: SchemaRange = { minimum: 11, maximum: 11 };
+export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 11, maximum: 11 };
 
 export function acceptsSchemaVersion(range: SchemaRange, version: number): boolean {
   return Number.isInteger(version) && version >= range.minimum && version <= range.maximum;
