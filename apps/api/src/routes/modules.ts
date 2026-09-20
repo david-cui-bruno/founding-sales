@@ -25,6 +25,10 @@ import { DIAL_PATHS, routeDial } from './dial.ts';
 import { PAUSE_PATHS, routePauses } from './pauses.ts';
 import { POSTURE_PATHS, routePostures } from './postures.ts';
 import { SUPPRESSION_PATHS, routeSuppressions } from './suppressions.ts';
+// Lane G8's sequences, templates and enrollments.
+import { ENROLLMENT_PATHS, routeEnrollments } from './enrollments.ts';
+import { SEQUENCE_PATHS, routeSequences } from './sequences.ts';
+import { TEMPLATE_PATHS, routeTemplates } from './templates.ts';
 // Lane G6's Today list.
 import { SNOOZE_PATHS, routeSnooze } from './snooze.ts';
 import { TODAY_PATHS, routeToday } from './today.ts';
@@ -160,5 +164,14 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     // `/today` and `/today/snooze` separately is what keeps them separable at all.
     moduleOf('today', { paths: TODAY_PATHS }, routeToday, routing),
     moduleOf('snooze', { paths: SNOOZE_PATHS }, routeSnooze, routing),
+    // Lane G8's sequences, templates and enrollments. Exact paths again, and three
+    // modules rather than one: `/sequences` publishes the plan, `/templates`
+    // approves the bytes that may be sent, and `/enrollments` is the only family a
+    // salesperson rather than an admin calls. A single `/sequences` prefix would
+    // have let the plan editor answer for the LinkedIn task card, and the registry
+    // is the only thing that can promise it does not.
+    moduleOf('sequences', { paths: SEQUENCE_PATHS }, routeSequences, routing),
+    moduleOf('templates', { paths: TEMPLATE_PATHS }, routeTemplates, routing),
+    moduleOf('enrollments', { paths: ENROLLMENT_PATHS }, routeEnrollments, routing),
   ];
 }

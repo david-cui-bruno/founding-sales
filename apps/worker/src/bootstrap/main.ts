@@ -4,6 +4,7 @@ import { HandlerRegistry, canaryHandler, createCloudWatchSink, loadCloudWatchTra
 import { WORKER_EXIT_CODES } from '../index.ts';
 import { mailHandlers } from '../handlers/mail.ts';
 import { researchHandlers } from '../handlers/research.ts';
+import { sequenceActionJobHandler, sequenceActionSource } from '../handlers/sequenceAction.ts';
 import { suppressionFinalizeJobHandler } from '../handlers/suppressionFinalize.ts';
 import { todayBuildJobHandler, todayBuildSource } from '../handlers/todayBuild.ts';
 import { mailSources } from '../scheduler/mailSources.ts';
@@ -40,6 +41,9 @@ function registerHandlers(registry: HandlerRegistry): HandlerRegistry {
   registry.register(canaryHandler());
   registry.register(suppressionFinalizeJobHandler());
   registry.register(todayBuildJobHandler());
+  // The send is not wired in this release, so a due email step holds with a reason
+  // rather than throwing; see the note in `handlers/sequenceAction.ts`.
+  registry.register(sequenceActionJobHandler());
   for (const handler of researchHandlers({ providers: {} })) registry.register(handler);
   for (const handler of mailHandlers(undefined)) registry.register(handler);
   return registry;
@@ -138,7 +142,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
         metrics: sessions[1 + config.concurrency] as SessionQueryable,
       },
       registry: registerHandlers(new HandlerRegistry()),
-      sources: [canarySource(), todayBuildSource(), ...mailSources()],
+      sources: [canarySource(), todayBuildSource(), sequenceActionSource(), ...mailSources()],
       sink,
       log,
     });
