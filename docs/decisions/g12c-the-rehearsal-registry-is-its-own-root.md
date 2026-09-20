@@ -27,6 +27,16 @@ Three things make that impossible rather than merely awkward:
 **A third root, `infra/roots/rehearsal-registry`**, applied once by `fss-rh-deploy`,
 holding exactly two repositories: `fss-rh-api` and `fss-rh-worker`.
 
+> **Who applies it, corrected by G12d (20 September 2026).** Not the operator. This
+> lane's runbook entry had David run `terraform apply` here; he was refused
+> `sts:AssumeRole`, because `fss-rh-deploy` trusts the GitHub OIDC provider and the
+> subject `repo:david-cui-bruno/founding-sales:environment:rehearsal` alone. The trust
+> stays as it is — it is this scenario's whole point — and the apply moved into
+> `.github/workflows/greenfield-rehearsal-registry.yml`, a dispatch-only workflow with
+> one job in the `rehearsal` environment, plan-only by default and behind a plan guard
+> that refuses any type this root does not create, any name outside `fss-rh-` and any
+> destroy or replacement. `docs/decisions/g12d-the-once-only-registry-apply-is-a-workflow.md`.
+
 * `name_prefix` is a **local, not a variable**. The workflow's secrets name those two
   strings; a root that could be applied under another prefix would produce repositories
   nothing points at. There is no `-var` that changes what this root creates.

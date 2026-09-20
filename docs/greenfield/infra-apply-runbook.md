@@ -17,6 +17,7 @@ Read section 1 in full before running anything in section 3. The order matters: 
 | Lock table | `callie-sourcing-tflock` (already exists) |
 | Production state key | `fss/greenfield/production/terraform.tfstate` |
 | Rehearsal state key | `fss/greenfield/rehearsal/<run>/terraform.tfstate` |
+| Rehearsal registry state key | `fss/greenfield/rehearsal-registry/terraform.tfstate` — deliberately outside the per-run space (2.1) |
 
 Neither root provisions, modifies or grants access to the state bucket or the lock table. They are inputs.
 
@@ -41,6 +42,8 @@ Create two roles in `326255650484`:
 |---|---|---|
 | `fss-prod-deploy` | David's admin principal (and, later, the release workflow's OIDC provider) | may act on resources whose name begins `fss-prod`, plus the account-wide services that have no resource namespace |
 | `fss-rh-deploy` | the CI rehearsal workflow's OIDC provider | **may act only on resources whose name begins `fss-rh-`** |
+
+**You never assume `fss-rh-deploy`.** It trusts the GitHub OIDC provider and the subject `repo:david-cui-bruno/founding-sales:environment:rehearsal` alone, so every apply and every teardown in the `fss-rh-` namespace is a workflow run in the `rehearsal` environment: the release rehearsal (`greenfield-release.yml`) and the one registry apply (`greenfield-rehearsal-registry.yml`, section 2.1). A local `terraform apply` against either rehearsal root is refused `sts:AssumeRole`, and that refusal is the boundary working. `fss-prod-deploy`, by contrast, is yours: section 3.2's production applies are local commands.
 
 The scoping on `fss-rh-deploy` is what makes Appendix G scenario 39 true in the cloud rather than only in the plan. The `fss-rh-` condition belongs on every statement that supports a resource ARN, including `iam:DeleteRole`, `rds:DeleteDBInstance`, `s3:DeleteBucket`, `ecs:DeleteService`, `secretsmanager:DeleteSecret` and `kms:ScheduleKeyDeletion`. Where a service has no resource-level permission, use a `aws:ResourceTag/NamePrefix` condition against the tag the stack sets on every resource.
 
@@ -105,16 +108,25 @@ Both services are deployed by **digest**. `api_image` and `worker_image` are val
 
 The per-run rehearsal root creates **no** repository (`create_registry = false`). It cannot: the images are pushed before the run exists, the release workflow's environment secrets name two fixed repositories, and a per-run repository would be destroyed with the run — taking the earlier compatible binaries the 4.2 rollback path depends on. `docs/decisions/g12c-the-rehearsal-registry-is-its-own-root.md` has the reasoning.
 
-```bash
-cd infra/roots/rehearsal-registry
-terraform init -backend-config=backend.hcl -backend-config="kms_key_id=<state key arn>"
-terraform plan -out=rehearsal-registry.tfplan     # two aws_ecr_repository, two lifecycle policies
-terraform apply rehearsal-registry.tfplan
+**You cannot apply this root from your Mac, and you should not try.** `fss-rh-deploy` trusts the GitHub OIDC provider and the subject `repo:david-cui-bruno/founding-sales:environment:rehearsal`, and nothing else; a `terraform apply` here is refused `sts:AssumeRole`, which is the trust policy working rather than a fault. **You never assume `fss-rh-deploy`.** The apply is a workflow run:
 
-terraform output repository_urls
+> Actions → **Greenfield rehearsal registry apply** → Run workflow, on the commit you are releasing.
+>
+> 1. **Leave `apply` unticked.** The run plans, guards the plan and prints it in the run summary. Nothing is created.
+> 2. Read the summary. It must create exactly `fss-rh-api` and `fss-rh-worker` with their two lifecycle policies, and it must destroy nothing. The run's own plan guard refuses anything else, but the guard is the second reader, not the first.
+> 3. Run the workflow **again, on the same commit, with `apply` ticked.** It applies the same saved plan and then prints `aws ecr describe-repositories` for the two names.
+
+The two repository URLs in that last table are the values of the `rehearsal` environment's `FSS_REHEARSAL_API_REPOSITORY` and `FSS_REHEARSAL_WORKER_REPOSITORY` secrets (release.md 1.3). Read them from the run summary rather than assembling them by hand.
+
+The workflow needs one more `rehearsal` environment secret than the release workflow does — `FSS_REHEARSAL_STATE_KMS_KEY_ARN`, the state bucket's KMS key, optional; without it the bucket's default encryption applies. `release.md` 1.3 lists it. The commands the workflow runs are printed with no credential by every pull request that touches it, and by hand with:
+
+```bash
+infra/scripts/rehearsal-registry-guard.sh commands
 ```
 
-Those two URLs are the values of the `rehearsal` environment's `FSS_REHEARSAL_API_REPOSITORY` and `FSS_REHEARSAL_WORKER_REPOSITORY` secrets (release.md 1.3). Read them from here rather than assembling them by hand.
+**If the *plan* is refused at provider configuration:** all three roots' `providers.tf` carry an `assume_role` block, so Terraform assumes `fss-rh-deploy` a second time from the session the workflow already holds as `fss-rh-deploy`. Role chaining onto the same role needs that role's trust policy to admit itself. The release rehearsal has exactly the same shape, so if this fails, so will that; the fix is a trust-policy statement allowing `arn:aws:iam::326255650484:role/fss-rh-deploy` to assume itself, not a change to this workflow.
+
+**If `init` is refused:** `fss-rh-deploy`'s state-bucket grant may be scoped to `fss/greenfield/rehearsal/*`, the per-run space, which excludes this root's key by construction — check that the role allows `s3:GetObject`/`s3:PutObject` on `arn:aws:s3:::callie-sourcing-tfstate-326255650484/fss/greenfield/rehearsal-registry/terraform.tfstate` (and on the same key plus `.tflock`, since `use_lockfile = true`), `s3:ListBucket` on `arn:aws:s3:::callie-sourcing-tfstate-326255650484` for that prefix, `dynamodb:GetItem`/`PutItem`/`DeleteItem` on `arn:aws:dynamodb:us-east-1:326255650484:table/callie-sourcing-tflock` for the lock items `callie-sourcing-tfstate-326255650484/fss/greenfield/rehearsal-registry/terraform.tfstate` and `…-md5`, and `kms:Decrypt`/`Encrypt`/`GenerateDataKey` on the state key if one is set.
 
 This root takes no `name_prefix`: `fss-rh` is a literal, because the workflow's secrets name exactly `fss-rh-api` and `fss-rh-worker`. Its state key is `fss/greenfield/rehearsal-registry/terraform.tfstate`, deliberately outside the per-run space `fss/greenfield/rehearsal/<run>/` — `registry` is a legal run suffix, and a run whose state collided with this one would destroy the repositories on teardown. The offline gate checks all of that.
 
@@ -129,6 +141,8 @@ module.stack.module.registry.aws_ecr_repository.this["api"] has moved to module.
 and reports **no changes** to either repository. **If a production plan ever proposes to destroy an ECR repository, stop and do not apply it.** Destroying `fss-prod-api` or `fss-prod-worker` deletes the images every release is identified by, including the earlier compatible binaries 4.2's preferred rollback depends on, and the digests in every past release record stop resolving.
 
 ### 2.2 The production repositories — the one use of `-target`
+
+Unlike 2.1, this one **is** a local command. `fss-prod-deploy` is trusted by your admin principal; `fss-rh-deploy` is not trusted by anything but the `rehearsal` environment, which is why the rehearsal registry apply above is a workflow run and this is not.
 
 ```bash
 # First apply: create the registries only.
