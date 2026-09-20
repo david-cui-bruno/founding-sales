@@ -10,7 +10,7 @@ output "topic_name" {
 
 output "kms_key_arn" {
   description = "Customer key protecting the alert topic."
-  value       = aws_kms_key.alerts.arn
+  value       = local.topic_key_arn
 }
 
 output "alarm_names" {
