@@ -35,11 +35,20 @@ export type ParseResult =
   | { readonly ok: true; readonly value: ParsedCarryCommand }
   | { readonly ok: false; readonly reason: ParseRefusal; readonly detail: string };
 
-/** Which `--name value` options each subcommand requires. */
+/**
+ * Which `--name value` options each subcommand requires.
+ *
+ * The cipher's options are not here: which key opens the artifact is
+ * `cipherChoice`'s decision, because it depends on the direction and on whether the
+ * run is a rehearsal. Everything in these lists is a public identifier — a path, a
+ * region, a table name, a workspace id, or the *name* of an environment variable.
+ * Never a connection string, a password or a key: an argument list is visible in
+ * `ps` and ends up in a shell history file.
+ */
 export const REQUIRED_OPTIONS: Readonly<Record<CarrySubcommand, readonly string[]>> = Object.freeze({
-  export: ['watermark', 'out', 'receipt', 'table', 'old-workspace', 'region', 'recipient', 'artifact-id'],
+  export: ['watermark', 'out', 'receipt', 'table', 'old-workspace', 'region', 'artifact-id'],
   verify: ['artifact', 'receipt'],
-  import: ['artifact', 'receipt', 'identity', 'workspace', 'database-url-env', 'journal-bucket', 'region'],
+  import: ['artifact', 'receipt', 'workspace', 'database-url-env', 'journal-bucket', 'region'],
   shred: ['artifact', 'receipt', 'workspace', 'database-url-env'],
 });
 
@@ -86,33 +95,54 @@ const write = (line: string): void => {
   process.stdout.write(`${line}\n`);
 };
 
+export type CipherChoice =
+  | { readonly ok: true; readonly kind: 'age'; readonly recipient: string; readonly identityFile: string; readonly command: string }
+  | { readonly ok: true; readonly kind: 'local'; readonly keyFile: string }
+  | { readonly ok: false; readonly missing: 'recipient' | 'identity' };
+
 /**
- * The cipher for a run.
+ * Which key opens or seals the artifact. Pure, so the whole decision is testable.
  *
  * `--recipient` seals and `--identity` opens; both choose `age`, which is the
- * production path. `--local-key-file` is the rehearsal path on a machine with no
- * `age`: it reads a 32-byte key from a file, and that file is the operator's problem
- * for exactly as long as the rehearsal lasts. There is no third option and no key on
- * a command line.
+ * production path. `--local-key-file` overrides both and is the rehearsal path on a
+ * machine with no `age`: it names a file holding a 32-byte key, and that file is the
+ * operator's problem for exactly as long as the rehearsal lasts. There is no third
+ * option and no key on a command line.
  *
  * The direction is a parameter because the two halves need different options, and an
  * `age --decrypt --identity ''` would otherwise fail with the binary's own message
- * rather than with an instruction.
+ * instead of with an instruction.
  */
+export function cipherChoice(
+  options: Readonly<Record<string, string>>,
+  direction: 'seal' | 'open',
+): CipherChoice {
+  const keyFile = options['local-key-file'];
+  if (keyFile !== undefined) return { ok: true, kind: 'local', keyFile };
+  const needed = direction === 'seal' ? 'recipient' : 'identity';
+  if (options[needed] === undefined) return { ok: false, missing: needed };
+  return {
+    ok: true,
+    kind: 'age',
+    recipient: options['recipient'] ?? '',
+    identityFile: options['identity'] ?? '',
+    command: options['age-command'] ?? 'age',
+  };
+}
+
 async function cipherFor(
   options: Readonly<Record<string, string>>,
   direction: 'seal' | 'open',
 ): Promise<ArtifactCipher> {
-  const localKeyFile = options['local-key-file'];
-  if (localKeyFile !== undefined) return aesGcmCipher(await readFile(localKeyFile));
-  const needed = direction === 'seal' ? 'recipient' : 'identity';
-  if (options[needed] === undefined) {
-    throw new Error(`--${needed} is required to ${direction} an artifact, or --local-key-file for a rehearsal`);
+  const choice = cipherChoice(options, direction);
+  if (!choice.ok) {
+    throw new Error(`--${choice.missing} is required to ${direction} an artifact, or --local-key-file for a rehearsal`);
   }
+  if (choice.kind === 'local') return aesGcmCipher(await readFile(choice.keyFile));
   return ageCipher({
-    command: options['age-command'] ?? 'age',
-    recipient: options['recipient'] ?? '',
-    identityFile: options['identity'] ?? '',
+    command: choice.command,
+    recipient: choice.recipient,
+    identityFile: choice.identityFile,
     run: spawnCommand,
   });
 }

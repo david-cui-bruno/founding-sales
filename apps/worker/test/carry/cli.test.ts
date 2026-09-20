@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CARRY_SUBCOMMANDS, REQUIRED_OPTIONS, parseCarryCommand } from '../../tools/carry/cli.ts';
+import { CARRY_SUBCOMMANDS, REQUIRED_OPTIONS, cipherChoice, parseCarryCommand } from '../../tools/carry/cli.ts';
 
 /**
  * The carry's argument surface (lane G11).
@@ -66,16 +66,47 @@ describe('the carry command line', () => {
     // ends up in a shell history file.
     expect(REQUIRED_OPTIONS.import).toContain('database-url-env');
     expect(REQUIRED_OPTIONS.shred).toContain('database-url-env');
-    for (const options of Object.values(REQUIRED_OPTIONS)) {
-      expect(options).not.toContain('database-url');
-      expect(options).not.toContain('password');
-      expect(options).not.toContain('key');
-    }
   });
 
-  it('takes the decryption identity as a file path and the recipient as a public key', () => {
-    expect(REQUIRED_OPTIONS.import).toContain('identity');
-    expect(REQUIRED_OPTIONS.export).toContain('recipient');
-    expect(REQUIRED_OPTIONS.export).not.toContain('identity');
+  it('names no option that could hold a key or a connection string', () => {
+    for (const options of Object.values(REQUIRED_OPTIONS)) {
+      for (const forbidden of ['database-url', 'password', 'key', 'secret', 'token', 'local-key-file']) {
+        expect(options).not.toContain(forbidden);
+      }
+    }
+  });
+});
+
+describe('which key opens the artifact', () => {
+  it('seals to a recipient and opens with an identity file', () => {
+    const seal = cipherChoice({ recipient: 'age1notarealrecipient', identity: '/Volumes/carry/identity.txt' }, 'seal');
+    expect(seal).toEqual({
+      ok: true,
+      kind: 'age',
+      recipient: 'age1notarealrecipient',
+      identityFile: '/Volumes/carry/identity.txt',
+      command: 'age',
+    });
+    const open = cipherChoice({ identity: '/Volumes/carry/identity.txt' }, 'open');
+    expect(open.ok && open.kind).toBe('age');
+  });
+
+  it('refuses to open without an identity rather than running age with an empty path', () => {
+    const open = cipherChoice({ recipient: 'age1notarealrecipient' }, 'open');
+    expect(open).toEqual({ ok: false, missing: 'identity' });
+  });
+
+  it('refuses to seal without a recipient', () => {
+    expect(cipherChoice({ identity: '/Volumes/carry/identity.txt' }, 'seal')).toEqual({ ok: false, missing: 'recipient' });
+  });
+
+  it('lets a rehearsal name a key file instead, in both directions', () => {
+    for (const direction of ['seal', 'open'] as const) {
+      expect(cipherChoice({ 'local-key-file': '/tmp/rehearsal.key' }, direction)).toEqual({
+        ok: true,
+        kind: 'local',
+        keyFile: '/tmp/rehearsal.key',
+      });
+    }
   });
 });
