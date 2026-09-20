@@ -15,6 +15,7 @@
       "@fss/domain/suppression": ["../../packages/domain/suppression/index.ts"],
       "@fss/domain/dial": ["../../packages/domain/dial/index.ts"],
       "@fss/domain/today": ["../../packages/domain/today/index.ts"],
+      "@fss/domain/retention": ["../../packages/domain/retention/index.ts"],
       "@fss/domain/db/testing": ["../../packages/domain/db/testing/index.ts"]
     }
   },

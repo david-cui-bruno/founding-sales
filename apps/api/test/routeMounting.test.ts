@@ -57,8 +57,11 @@ describe('what the API mounts', () => {
     expect([...registry.paths()]).toEqual([
       '/admin/alerts',
       '/admin/alerts/acknowledge',
+      '/admin/departure/commit',
+      '/admin/departure/preview',
       '/admin/jobs/dead',
       '/admin/jobs/requeue',
+      '/attachments/open',
       '/callbacks',
       '/callbacks/complete',
       '/calls',
@@ -94,6 +97,11 @@ describe('what the API mounts', () => {
       '/research/providers',
       '/research/suggestions',
       '/research/suggestions/review',
+      '/retention/deletions/commit',
+      '/retention/deletions/preview',
+      '/retention/policies',
+      '/retention/run',
+      '/retention/runs',
       '/search/firms',
       '/suppressions',
       '/suppressions/correct',
@@ -152,6 +160,32 @@ describe('what the API mounts', () => {
     expect(registry.moduleFor('/admin/jobs/dead')?.name).toBe('admin-jobs');
     expect(registry.moduleFor('/admin/memberships/role')?.name).toBe('admin-memberships');
     expect(registry.moduleFor('/admin/something-else')).toBeUndefined();
+  });
+
+  it('mounts the retention, departure and attachment paths as exact claims and nothing beside them', () => {
+    const registry = registryFor(options());
+    expect(registry.moduleFor('/retention/policies')?.name).toBe('retention');
+    expect(registry.moduleFor('/retention/deletions/commit')?.name).toBe('retention');
+    expect(registry.moduleFor('/admin/departure/commit')?.name).toBe('departure');
+    expect(registry.moduleFor('/attachments/open')?.name).toBe('attachments');
+    // A typo near a command that deletes prospect data is nobody's path.
+    expect(registry.moduleFor('/retention')).toBeUndefined();
+    expect(registry.moduleFor('/retention/deletions')).toBeUndefined();
+    expect(registry.moduleFor('/retention/deletions/committ')).toBeUndefined();
+    expect(registry.moduleFor('/admin/departure')).toBeUndefined();
+    expect(registry.moduleFor('/attachments')).toBeUndefined();
+  });
+
+  it('answers the retention and departure paths with not_found when the deployment has no identity configuration', async () => {
+    for (const path of [
+      '/retention/policies',
+      '/retention/deletions/commit',
+      '/admin/departure/preview',
+      '/attachments/open',
+    ]) {
+      const result = await route(path === '/retention/policies' ? 'GET' : 'POST', path, options());
+      expect(result.status, path).toBe(404);
+    }
   });
 
   it('refuses a prefix that swallows another module’s exact path', () => {
@@ -231,6 +265,9 @@ describe('what the API mounts', () => {
       'messages',
       'today',
       'snooze',
+      'retention',
+      'departure',
+      'attachments',
     ]);
   });
 });

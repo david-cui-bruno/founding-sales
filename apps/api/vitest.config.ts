@@ -20,6 +20,7 @@ export default defineConfig({
       '@fss/domain/mail': fileURLToPath(new URL('../../packages/domain/mail/index.ts', import.meta.url)),
       '@fss/domain/db': fileURLToPath(new URL('../../packages/domain/db/index.ts', import.meta.url)),
       '@fss/domain/today': fileURLToPath(new URL('../../packages/domain/today/index.ts', import.meta.url)),
+      '@fss/domain/retention': fileURLToPath(new URL('../../packages/domain/retention/index.ts', import.meta.url)),
       '@fss/domain': fileURLToPath(new URL('../../packages/domain/src/index.ts', import.meta.url)),
     },
   },
