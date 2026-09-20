@@ -17,19 +17,28 @@
 -- ---------------------------------------------------------------------------
 -- Roles
 --
--- Roles are cluster-wide, and one cluster hosts one database per test file, so
--- they are created idempotently. app_runtime is the application's role; migration
--- is the role that applies this file. Neither may UPDATE or DELETE an append-only
--- table, and that is enforced by privilege, not by convention.
+-- Roles are cluster-wide, and one cluster hosts one database per test file, so two
+-- migrations may reach this block at the same moment. `IF NOT EXISTS` would be a
+-- check-then-create race, and the loser's CREATE ROLE reports unique_violation on
+-- pg_authid rather than duplicate_object. Both are caught, each inside its own
+-- subtransaction, so the rest of the migration is untouched.
+--
+-- app_runtime is the application's role; migration is the role that applies this
+-- file. Neither may UPDATE or DELETE an append-only table, and that is enforced by
+-- privilege, not by convention.
 -- ---------------------------------------------------------------------------
 DO $roles$
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'app_runtime') THEN
+  BEGIN
     CREATE ROLE app_runtime NOLOGIN;
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'migration') THEN
+  EXCEPTION WHEN duplicate_object OR unique_violation THEN
+    NULL;
+  END;
+  BEGIN
     CREATE ROLE migration NOLOGIN;
-  END IF;
+  EXCEPTION WHEN duplicate_object OR unique_violation THEN
+    NULL;
+  END;
 END
 $roles$;
 
