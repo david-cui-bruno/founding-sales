@@ -136,6 +136,38 @@ export const FOUNDATION_LOOKUP_KEYS = {
   ],
   callbacks: [['workspace_id', 'id']],
 
+  // Migration 0007 (lane G10). The two keys that carry Appendix C's research
+  // idempotency are declared here rather than assembled at a call site:
+  // `(workspace_id, query_hash, page_hash)` is `research:{query_hash}:{page_hash}`
+  // and `(workspace_id, firm_id, revision)` is `research-firm:{firm}:{revision}`.
+  //
+  // `research_settings` and `firm_locations` are keyed by the workspace and the firm
+  // alone, because there is exactly one of each; `research_route_policies` declares
+  // its version, which is the handle the routes it promoted carry.
+  //
+  // `research_suggestions_open_by_firm` is deliberately absent: it is a partial index
+  // that is not unique at all, and the registry promises unique lookup keys.
+  research_settings: [['workspace_id']],
+  research_providers: [['workspace_id', 'provider_key']],
+  research_provider_ledger: [['workspace_id', 'provider_key', 'business_date']],
+  research_route_policies: [
+    ['workspace_id', 'id'],
+    ['workspace_id', 'version'],
+  ],
+  research_pages: [
+    ['workspace_id', 'id'],
+    ['workspace_id', 'query_hash', 'page_hash'],
+  ],
+  firm_locations: [['workspace_id', 'firm_id']],
+  research_firm_runs: [
+    ['workspace_id', 'id'],
+    ['workspace_id', 'firm_id', 'revision'],
+  ],
+  research_suggestions: [
+    ['workspace_id', 'id'],
+    ['workspace_id', 'firm_id', 'kind', 'dedupe_key'],
+  ],
+
   // Migration 0008 (lane G6). The card's declared key *is* section 8.2's
   // `UNIQUE(workspace_id, snapshot_date, firm_id)`, because that triple is the card's
   // identity and it is the primary key: a firm appears once on a date, and a

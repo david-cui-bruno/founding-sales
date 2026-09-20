@@ -12,6 +12,7 @@ import { IMPORT_PATHS, routeImport } from './import.ts';
 import { routeMerges } from './merges.ts';
 import { routeOpportunities } from './opportunities.ts';
 import { routePipeline } from './pipeline.ts';
+import { RESEARCH_PATHS, routeResearch } from './research.ts';
 import { SEARCH_PATHS, routeSearch } from './search.ts';
 // Lane G4's policy, suppression and dialing surface.
 import { CALLBACK_PATHS, routeCallbacks } from './callbacks.ts';
@@ -130,5 +131,11 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     moduleOf('calls', { paths: CALL_PATHS }, routeCalls, routing),
     moduleOf('callbacks', { paths: CALLBACK_PATHS }, routeCallbacks, routing),
     moduleOf('pauses', { paths: PAUSE_PATHS }, routePauses, routing),
+    // Lane G10's research surface: the admin configuration, the versioned route
+    // thresholds with their history, the suggestion review queue and the two enqueue
+    // commands. Exact paths, and deliberately not a `/research` prefix: an unknown
+    // path under that root is a typo in a command an admin is about to spend money
+    // with, and `not_found` from the registry says so before any module sees it.
+    moduleOf('research', { paths: RESEARCH_PATHS }, routeResearch, routing),
   ];
 }

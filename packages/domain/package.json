@@ -12,6 +12,8 @@
     "./policy": "./policy/index.ts",
     "./suppression": "./suppression/index.ts",
     "./dial": "./dial/index.ts",
+    "./research": "./research/index.ts",
+    "./research/testing": "./research/testing/fixtures.ts",
     "./today": "./today/index.ts"
   },
   "scripts": {

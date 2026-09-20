@@ -25,12 +25,12 @@ export const CURRENT_SCHEMA_VERSION = 8;
  * migration.
  *
  * Lanes G5 and G2 shipped migrations 0002 and 0003 from the same main and each widened
- * this constant for its own; lane G3a widened it again for migration 0004, and G3b for
- * 0005, and G4 for 0006. G10 widens it for 0007 and G6 for 0008, so a merge that finds
- * two different maxima takes the larger. That is honest only because nothing has been
- * deployed — G0's {1, 1} was never a promise made to a running production binary.
- * From the first real deployment onwards the widening must precede the migration by a
- * release, and the compatibility test will keep saying so.
+ * this constant for its own; lane G3a widened it again for migration 0004, G3b for
+ * 0005, G4 for 0006, G10 for 0007 and G6 for 0008. A merge that finds two different
+ * maxima takes the larger. That is honest only because nothing has been deployed —
+ * G0's {1, 1} was never a promise made to a running production binary. From the first
+ * real deployment onwards the widening must precede the migration by a release, and
+ * the compatibility test will keep saying so.
  */
 export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 8 };
 
@@ -51,26 +51,31 @@ export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum:
  * Migration 0005 (G3b) adds no column and no table — only the trigram indexes CRM
  * search is fast with and correct without — so it moved neither minimum. Migration
  * 0006 does: the worker needs it because `suppression.finalize` writes
- * `suppression_finalizations`, so the worker's minimum moves from 2 to 6 for the first
+ * `suppression_finalizations`, so the worker's minimum moved from 2 to 6 for the first
  * time in this tree. The deploy order is migrate, then worker, then API, so the worker
  * never meets an older schema; a rolling step that runs two worker versions has both
  * understanding 0006, which is what the widened previous-release range above is for
- * (Appendix G 22). Both maxima move to 6: a binary that refused the database it has
+ * (Appendix G 22).
+ *
+ * Migration 0007 (G10) moves both again. The API's research routes read
+ * `research_settings`, `research_providers`, `research_route_policies` and
+ * `research_suggestions`, and the worker's two research handlers write
+ * `research_pages` and `research_firm_runs` — the tables whose unique constraints
+ * *are* their declared idempotency protection. A worker on a version-6 database would
+ * run those handlers with no uniqueness behind them, which is the one thing a schema
+ * range exists to prevent, so it refuses to start instead rather than accepting {6, 7}.
+ * `docs/decisions/g10-worker-schema-minimum.md` says what that gives up.
+ *
+ * Migration 0008 (G6) moves both a third time, by the same rule that document states:
+ * a binary declares the lowest version on which its *first statement* can succeed, not
+ * the lowest it would like. The API's `/today`, `/today/firm` and `/today/snooze` read
+ * and write `today_snapshots`, `today_items` and `today_snoozes`; the worker's
+ * `today.build` handler calls `today_upsert_item`, and `UNIQUE(workspace_id,
+ * snapshot_date, firm_id, item_key)` inside it *is* that handler's declared
+ * `business_uniqueness` protection — so a worker on a version-7 database would be a
+ * worker running an at-least-once handler with nothing behind it, which is exactly the
+ * case G10 refused. Both maxima move to 8: a binary that refused the database it has
  * just been deployed against would be a self-inflicted outage.
- *
- * Migration 0008 (lane G6) moves both minima again, and for the same reason both are
- * moved rather than only one. The rule is the one `docs/decisions/g5-schema-range.md`
- * and `docs/decisions/g10-worker-schema-minimum.md` state: a binary declares the
- * lowest version on which its *first statement* can succeed, not the lowest version it
- * would like. The API's `/today`, `/today/firm` and `/today/snooze` read and write
- * `today_snapshots`, `today_items` and `today_snoozes`; the worker's `today.build`
- * handler calls `today_upsert_item`, which does not exist before 0008. Neither could
- * do anything useful against a version-7 database except fail on its first query, and
- * 4.2 wants that to be a refusal at startup instead.
- *
- * The deploy order is migrate, then worker, then API, so neither binary ever meets an
- * older schema, and a rolling step that runs two worker versions has both understanding
- * 0008 — which is what the widened previous-release range above is for (Appendix G 22).
  */
 export const API_SCHEMA_RANGE: SchemaRange = { minimum: 8, maximum: 8 };
 export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 8, maximum: 8 };
