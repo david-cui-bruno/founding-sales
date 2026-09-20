@@ -18,6 +18,8 @@ import { GMAIL_PATHS, routeGmail } from './gmail.ts';
 import { PUBSUB_PATHS, routePubSub } from './pubsub.ts';
 import { MESSAGE_PATHS, routeMessages } from './messages.ts';
 import { OUTBOUND_PATHS, routeOutbound } from './outbound.ts';
+// Lane G7b's reply cards and the classifier's configuration.
+import { REPLY_PATHS, routeReplies } from './replies.ts';
 import { SEARCH_PATHS, routeSearch } from './search.ts';
 // Lane G4's policy, suppression and dialing surface.
 import { CALLBACK_PATHS, routeCallbacks } from './callbacks.ts';
@@ -154,6 +156,12 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     moduleOf('gmail', { paths: GMAIL_PATHS }, routeGmail, routing),
     moduleOf('gmail-push', { paths: PUBSUB_PATHS }, routePubSub, routing),
     moduleOf('messages', { paths: MESSAGE_PATHS }, routeMessages, routing),
+    // Lane G7b's reply cards (8.3). Exact paths, and `/replies/settings` is
+    // separate from `/replies/settings/update` for the reason the two snooze paths
+    // are separate from `/today`: a read and a command under one prefix would let
+    // one claim answer for both, and the registry can only promise about the paths
+    // it was told.
+    moduleOf('replies', { paths: REPLY_PATHS }, routeReplies, routing),
     // Lane G7-2's four admin surfaces. Exact paths, and not an `/outbound` prefix:
     // an unknown path under that root is a typo in a command that marks a send
     // delivered or opens the sending gate, and `not_found` from the registry says so

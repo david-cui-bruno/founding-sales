@@ -2,23 +2,27 @@ import { contextBridge, ipcRenderer } from 'electron';
 import { IPC_CHANNELS } from '../main/ipc.ts';
 import { CRM_IPC_CHANNELS } from '../main/crmBridge.ts';
 import { TODAY_IPC_CHANNELS } from '../main/todayBridge.ts';
+import { REPLY_IPC_CHANNELS } from '../main/replyBridge.ts';
 import { desktopStateSchema, type DesktopBridge, type DesktopState } from '../shared/contract.ts';
 import type { CrmBridge, CrmState } from '../renderer/firmWorkspaceContract.ts';
 import { todayStateSchema, type TodayBridge, type TodayState } from '../renderer/todayContract.ts';
+import { replyStateSchema, type ReplyBridge, type ReplyState } from '../renderer/replyContract.ts';
 
 /**
  * The bridges, and the whole of what a renderer can reach (specification 14.2).
  *
- * One preload script serves all three windows, because Electron gives a window one
+ * One preload script serves all four windows, because Electron gives a window one
  * preload and a window only ever calls the bridge it was built for. Installing all
- * three is not a widening: every channel below is answered by a main-process handler
+ * four is not a widening: every channel below is answered by a main-process handler
  * that exists, and a window that never calls one has reached nothing.
  *
  * Parsing on this side as well as on the main side is not paranoia about our own
  * code: it is what makes the renderer's type a guarantee rather than a hope, and it
  * means a state that grew a field it should not have — a token, a body — fails here
- * instead of reaching the page. `desktopStateSchema` and `todayStateSchema` are
- * `strictObject`, so an extra field is an error.
+ * instead of reaching the page. `desktopStateSchema`, `todayStateSchema` and
+ * `replyStateSchema` are `strictObject`, so an extra field is an error. The reply
+ * state is the one that carries a message body on purpose, which is exactly why it
+ * is parsed on both sides rather than passed through.
  *
  * `callieCrm` is the exception, and deliberately. `CrmState` is an interface rather
  * than a Zod schema — G3b composed it from `@fss/contracts` DTOs that are already
@@ -35,6 +39,11 @@ const invokeDesktop = async (channel: string, argument?: unknown): Promise<Deskt
 const invokeToday = async (channel: string, argument?: unknown): Promise<TodayState> => {
   const answer: unknown = await ipcRenderer.invoke(channel, argument);
   return todayStateSchema.parse(answer);
+};
+
+const invokeReplies = async (channel: string, argument?: unknown): Promise<ReplyState> => {
+  const answer: unknown = await ipcRenderer.invoke(channel, argument);
+  return replyStateSchema.parse(answer);
 };
 
 const invokeCrm = async (channel: string, argument?: unknown): Promise<CrmState> =>
@@ -57,6 +66,20 @@ const today: TodayBridge = {
   recordOutcome: async input => await invokeToday(TODAY_IPC_CHANNELS.recordOutcome, input),
 };
 
+/**
+ * Five methods, and none of them closes an opportunity, records a suppression,
+ * releases a hold or resumes automation. 12.4 gives those to the deterministic layer
+ * or to a person on another surface, and a renderer that cannot name them cannot ask
+ * for them however the page is edited later.
+ */
+const replies: ReplyBridge = {
+  state: async () => await invokeReplies(REPLY_IPC_CHANNELS.state),
+  refresh: async () => await invokeReplies(REPLY_IPC_CHANNELS.refresh),
+  open: async input => await invokeReplies(REPLY_IPC_CHANNELS.open, input),
+  collapse: async () => await invokeReplies(REPLY_IPC_CHANNELS.collapse),
+  confirm: async input => await invokeReplies(REPLY_IPC_CHANNELS.confirm, input),
+};
+
 const crm: CrmBridge = {
   state: async () => await invokeCrm(CRM_IPC_CHANNELS.state),
   openFirm: async input => await invokeCrm(CRM_IPC_CHANNELS.openFirm, input),
@@ -69,3 +92,4 @@ const crm: CrmBridge = {
 contextBridge.exposeInMainWorld('callie', bridge);
 contextBridge.exposeInMainWorld('callieToday', today);
 contextBridge.exposeInMainWorld('callieCrm', crm);
+contextBridge.exposeInMainWorld('callieReplies', replies);
