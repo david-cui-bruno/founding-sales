@@ -264,6 +264,26 @@ describe('Appendix G 39: the rehearsal registry is applied by a workflow, never 
     expect(workflow).toContain('aws ecr describe-repositories --repository-names fss-rh-api fss-rh-worker');
   });
 
+  it('is what the runbook tells the operator to do, instead of a command that is refused', () => {
+    const runbook = readRepositoryFile('docs/greenfield/infra-apply-runbook.md');
+    const releaseDoc = readRepositoryFile('docs/greenfield/release.md');
+
+    // The instruction that sent the operator at `sts:AssumeRole` was a local
+    // `terraform apply` in this root. It must not still be there.
+    const section = runbook.slice(
+      runbook.indexOf('### 2.1 The rehearsal repositories'),
+      runbook.indexOf('### 2.2 The production repositories'),
+    );
+    expect(section).toContain('Greenfield rehearsal registry apply');
+    expect(section).toContain('You never assume `fss-rh-deploy`');
+    expect(section).not.toMatch(/^terraform apply/mu);
+    // And the one thing a reader needs when init is refused: the exact objects.
+    expect(section).toContain('arn:aws:s3:::callie-sourcing-tfstate-326255650484/fss/greenfield/rehearsal-registry/terraform.tfstate');
+    expect(section).toContain('arn:aws:dynamodb:us-east-1:326255650484:table/callie-sourcing-tflock');
+
+    expect(releaseDoc).toContain('FSS_REHEARSAL_STATE_KMS_KEY_ARN');
+  });
+
   it('has a shell block in every step that bash can parse', () => {
     // A dispatch-only workflow is never run by accident, which means a syntax error
     // in it is discovered on the one run that costs something. `bash -n` here is the

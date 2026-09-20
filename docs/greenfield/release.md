@@ -16,6 +16,7 @@ Read section 1 before doing anything in section 3. Two steps in it take days of 
 |---|---|---|
 | Build the images | CI (`greenfield-images.yml`) | Reproducible, and it proves the production dependency set loads. |
 | **Push the images to ECR** | **David** | No AWS credential exists in this repository and none is wanted. `--push` prints the digest; that digest is the release's identity. |
+| **Apply the rehearsal registry — once, ever, before the first push** | **CI (`greenfield-rehearsal-registry.yml`), dispatched by David twice: plan, then apply** | Same reason as the row below: `fss-rh-deploy` is assumable only from the `rehearsal` environment. `infra-apply-runbook.md` 2.1. |
 | Run the rehearsal | CI (`greenfield-release.yml`) | It needs the `fss-rh-deploy` role, which only the OIDC provider may assume, and it must tear the environment down even when a step fails. |
 | Write the release record | CI, last | So a record can only exist for a run that finished. |
 | Apply production Terraform | David | A plan should be read by a person before it is applied. |
@@ -65,7 +66,9 @@ aws iam get-role-policy --role-name fss-prod-deploy --policy-name <name> \
 
 ### 1.3 The `rehearsal` repository environment
 
-`.github/workflows/greenfield-release.yml` puts every AWS step behind a repository environment named `rehearsal`. Create it in the repository settings and give it these **five** secrets:
+`.github/workflows/greenfield-release.yml` puts every AWS step behind a repository environment named `rehearsal`. So does `.github/workflows/greenfield-rehearsal-registry.yml`, the one-off apply of the durable rehearsal repositories (`infra-apply-runbook.md` 2.1) — the environment is the only OIDC subject `fss-rh-deploy` trusts, which is why neither of them is a command you can run on your Mac.
+
+Create it in the repository settings and give it these **five** secrets:
 
 | Secret | Value |
 |---|---|
@@ -74,6 +77,14 @@ aws iam get-role-policy --role-name fss-prod-deploy --policy-name <name> \
 | `FSS_REHEARSAL_WORKER_REPOSITORY` | `326255650484.dkr.ecr.us-east-1.amazonaws.com/fss-rh-worker` — likewise |
 | `FSS_REHEARSAL_CERTIFICATE_ARN` | the wildcard rehearsal certificate |
 | `FSS_REHEARSAL_API_HOSTNAME` | `api.rehearsal.usecallie.com` |
+
+And **one more, optional**, which only the registry apply reads:
+
+| Secret | Value | If it is absent |
+|---|---|---|
+| `FSS_REHEARSAL_STATE_KMS_KEY_ARN` | the KMS key the Terraform state bucket is encrypted with, `arn:aws:kms:us-east-1:326255650484:key/…` | `terraform init` runs without `kms_key_id` and the bucket's default encryption applies, which is what the per-run rehearsal root already does. The run prints *whether* the secret was supplied, never its value. |
+
+It is an identifier rather than a credential; it is an environment secret because that is where the other account-specific values live.
 
 And these **two**, which are **optional and should not exist until the cutover is scheduled**:
 
@@ -188,6 +199,8 @@ docker tag "$ACCOUNT.dkr.ecr.$REGION.amazonaws.com/fss-prod-api:$GIT_SHA" \
 docker push "$ACCOUNT.dkr.ecr.$REGION.amazonaws.com/fss-rh-api:$GIT_SHA"
 # ... and the worker.
 ```
+
+**Before the first release only:** those two repositories do not exist until the registry root has been applied, and that apply is not a command — `fss-rh-deploy` is assumable only from the `rehearsal` environment. Run Actions → **Greenfield rehearsal registry apply** with `apply` unticked, read the plan in the summary, then run it again with `apply` ticked. `infra-apply-runbook.md` 2.1 has the detail. Every later release skips this: it happens once, ever.
 
 `fss-rh-api` and `fss-rh-worker` are **stable** repositories with no run in their names. They belong to `infra/roots/rehearsal-registry`, which is applied once (`infra-apply-runbook.md` 2.1) and never torn down; the per-run rehearsal root creates no repository at all. That is forced by this very step: you are pushing before the run exists, and the workflow's two repository secrets hold one value each. The rehearsal root refuses an image that does not come from those two repositories — `fss-rh-deploy` cannot read a production repository, so a plan-time refusal is better than an authorization error five minutes into a deployment.
 
