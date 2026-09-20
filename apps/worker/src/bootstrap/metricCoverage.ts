@@ -50,19 +50,9 @@ export const APPLICATION_RAISED_METRICS: Readonly<Record<string, ApplicationRais
     detail: 'today list',
     why: 'no today_snapshots table exists yet; 13.3 alarms at 05:10 workspace time',
   },
-  GmailWatchHoursToExpiry: {
-    raisedBy: 'later_lane',
-    detail: 'gmail mailboxes',
-    why: 'no mailbox watch state exists yet; 13.3 alarms two days before expiry',
-  },
   MailboxDisconnectedHours: {
     raisedBy: 'later_lane',
     detail: 'gmail mailboxes',
     why: 'no mailbox connection state exists yet; 13.3 alarms at 48 hours',
-  },
-  MailboxCheckHeartbeat: {
-    raisedBy: 'later_lane',
-    detail: 'gmail mailboxes',
-    why: 'the worker publishes it as soon as a mailbox records a heartbeat; none can yet',
   },
 });

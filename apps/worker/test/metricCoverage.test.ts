@@ -105,6 +105,40 @@ describe('every alarm metric has something that emits it', () => {
     // The API records its own heartbeat; the worker publishes it (ApiHeartbeat).
     await recordHeartbeat(database.session, { component: 'api', instanceKey: 'api-test' });
 
+    // A connected mailbox with a live watch, so the mail lane's gauges have
+    // something to report: GmailWatchHoursToExpiry and MailboxCheckHeartbeat. Both
+    // are deliberately silent when there is no mailbox — the alarms treat missing
+    // data as not breaching, and a deployment with no Gmail connected is not a
+    // deployment whose watch is about to lapse.
+    const mailWorkspace = workspaces[0] ?? '';
+    const user = await database.session.query<{ id: string }>(
+      `INSERT INTO users (google_sub, email, display_name)
+       VALUES ('metric-coverage-sub', 'sales@example.test', 'Sales Person') RETURNING id`,
+    );
+    const ownerUserId = user.rows[0]?.id ?? '';
+    await database.session.query(
+      "INSERT INTO workspace_memberships (workspace_id, user_id, role) VALUES ($1, $2, 'salesperson')",
+      [mailWorkspace, ownerUserId],
+    );
+    const mailbox = await database.session.query<{ id: string }>(
+      `INSERT INTO mailboxes (workspace_id, owner_user_id, email_address, sync_state,
+                              baseline_from_at, baseline_completed_at)
+       VALUES ($1, $2, 'sales@example.test', 'ready', now() - interval '30 days', now())
+       RETURNING id`,
+      [mailWorkspace, ownerUserId],
+    );
+    const mailboxId = mailbox.rows[0]?.id ?? '';
+    await database.session.query(
+      `INSERT INTO mailbox_watches (workspace_id, mailbox_id, generation, topic_name, expires_at)
+       VALUES ($1, $2, 1, 'projects/callie-fss/topics/fss-test-gmail-push', now() + interval '6 days')`,
+      [mailWorkspace, mailboxId],
+    );
+    await recordHeartbeat(database.session, {
+      component: 'mailbox',
+      workspaceId: mailWorkspace,
+      instanceKey: mailboxId,
+    });
+
     const sink = recordingMetricSink();
     const worker = await startWorker({
       config: readWorkerConfig({
@@ -130,7 +164,12 @@ describe('every alarm metric has something that emits it', () => {
     });
 
     const deadline = Date.now() + 15_000;
-    const wanted = ['CanaryCompletionAgeSeconds', 'OldestRunnableJobAgeSeconds', 'DeadJobOldestAgeSeconds'];
+    const wanted = [
+      'CanaryCompletionAgeSeconds',
+      'OldestRunnableJobAgeSeconds',
+      'DeadJobOldestAgeSeconds',
+      'GmailWatchHoursToExpiry',
+    ];
     while (Date.now() < deadline && !wanted.every(name => sink.published.some(datum => datum.name === name))) {
       await new Promise(resolve => setTimeout(resolve, 20));
     }
@@ -151,6 +190,8 @@ describe('every alarm metric has something that emits it', () => {
       'DeadJobOldestAgeSeconds',
       'CanaryCompletionAgeSeconds',
       'UnacknowledgedCriticalAlertAgeSeconds',
+      'MailboxCheckHeartbeat',
+      'GmailWatchHoursToExpiry',
     ]) {
       expect([...published].includes(name), `${name} was never published by the worker`).toBe(true);
     }

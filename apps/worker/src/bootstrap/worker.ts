@@ -1,5 +1,6 @@
 import type { SessionQueryable } from '@fss/domain/db';
 import { collectJobMetrics, type HandlerRegistry, type MetricSink } from '@fss/domain/jobs';
+import { collectMailMetrics } from '@fss/domain/mail';
 import { checkWorkerStartup, restoreSuspected, type WorkerStartupReport } from '../index.ts';
 import { runOnce } from '../runner/jobRunner.ts';
 import { runSchedulerPass, type DueWorkSource } from '../scheduler/schedulerPass.ts';
@@ -206,7 +207,12 @@ export async function startWorker(options: WorkerProcessOptions): Promise<Worker
     intervalMilliseconds: config.metricsIntervalMilliseconds,
     onError: onError('metrics'),
     run: async () => {
-      const data = await collectJobMetrics(sessions.metrics);
+      // The job, heartbeat, canary and alert gauges, then the mail lane's two.
+      // `GmailWatchHoursToExpiry` is published only when there is a connected
+      // mailbox to publish it for: the alarm treats missing data as not breaching,
+      // so a deployment with no mailbox and one with a healthy mailbox look the
+      // same to it, which is right — neither is a watch about to lapse.
+      const data = [...(await collectJobMetrics(sessions.metrics)), ...(await collectMailMetrics(sessions.metrics))];
       await options.sink.publish(data);
       metricPublications += 1;
       liveness.report('metrics', true);

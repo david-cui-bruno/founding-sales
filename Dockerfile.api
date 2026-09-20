@@ -73,6 +73,7 @@ COPY packages/domain/research packages/domain/research
 COPY packages/domain/src packages/domain/src
 COPY packages/domain/policy packages/domain/policy
 COPY packages/domain/suppression packages/domain/suppression
+COPY packages/domain/mail packages/domain/mail
 COPY packages/domain/dial packages/domain/dial
 COPY packages/contracts/src packages/contracts/src
 

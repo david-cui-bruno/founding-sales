@@ -119,6 +119,56 @@ export async function listConnectedMailboxes(context: RepositoryContext): Promis
   return rows.map(toMailbox);
 }
 
+/**
+ * 12.3's reconciliation sweep: how long a connected mailbox may go unsynced before
+ * the scheduler coalesces a `mail.sync` for it regardless of push.
+ *
+ * The sweep exists because push is a hint and not a guarantee. A notification can be
+ * lost in three ordinary ways — the watch lapsed, Pub/Sub exhausted its retention
+ * while the API was down, the webhook refused a token during a rotation — and each
+ * one is silent. Without the sweep a mailbox stops importing mail and nothing says
+ * so; with it the worst case is this many minutes of latency. It is also what
+ * continues a run that stopped at its page cap, since a capped `mail.sync` cannot
+ * re-arm itself from inside the runner's transaction.
+ */
+export const MAIL_RECONCILE_INTERVAL_MINUTES = 5;
+
+export interface MailboxDueRow {
+  readonly workspaceId: string;
+  readonly mailboxId: string;
+  readonly historyId: string | null;
+}
+
+/**
+ * Every connected mailbox the reconciliation sweep should coalesce a sync for, across
+ * every workspace.
+ *
+ * Unscoped, and deliberately: the scheduler pass runs once for the deployment, not
+ * once per workspace, and it holds an advisory lock while it does. The workspace id
+ * comes back on each row so the job it inserts is scoped correctly.
+ *
+ * A mailbox that is `baseline_pending` or `recovering` is skipped. Both are already
+ * covered by `mail.recover` and its own re-arm source, and a `mail.sync` against a
+ * mailbox with no proven baseline would only re-open the recovery it is already in.
+ */
+export async function listMailboxesDueForSync(
+  db: Queryable,
+  nowIso: string,
+  intervalMinutes: number = MAIL_RECONCILE_INTERVAL_MINUTES,
+): Promise<readonly MailboxDueRow[]> {
+  const { rows } = await db.query<{ workspace_id: string; id: string; history_id: string | null }>(
+    `SELECT workspace_id, id, history_id
+       FROM mailboxes
+      WHERE status = 'connected'
+        AND sync_state = 'ready'
+        AND (last_synced_at IS NULL
+             OR last_synced_at <= $1::timestamptz - make_interval(mins => $2::integer))
+      ORDER BY id`,
+    [nowIso, intervalMinutes],
+  );
+  return rows.map(row => ({ workspaceId: row.workspace_id, mailboxId: row.id, historyId: row.history_id }));
+}
+
 export interface InsertMailboxInput {
   readonly ownerUserId: string;
   readonly emailAddress: string;

@@ -2,8 +2,10 @@ import pg from 'pg';
 import type { QueryResultRowLike, SessionQueryable } from '@fss/domain/db';
 import { HandlerRegistry, canaryHandler, createCloudWatchSink, loadCloudWatchTransport } from '@fss/domain/jobs';
 import { WORKER_EXIT_CODES } from '../index.ts';
+import { mailHandlers } from '../handlers/mail.ts';
 import { researchHandlers } from '../handlers/research.ts';
 import { suppressionFinalizeJobHandler } from '../handlers/suppressionFinalize.ts';
+import { mailSources } from '../scheduler/mailSources.ts';
 import { canarySource } from '../scheduler/sources.ts';
 import { ConfigError, describeWorkerConfig, readWorkerConfig, type WorkerConfig } from './config.ts';
 import { createLogger, errorFields, type Logger } from './log.ts';
@@ -19,11 +21,25 @@ import { WorkerStartupRefusal, startWorker } from './worker.ts';
  * `research.firm` jobs wait in the queue unclaimed rather than being failed four times
  * each — which is the honest state, and the reason `enqueueDiscoveryPage` is an admin
  * command rather than a scheduler source (docs/decisions/g10-no-scheduler-source.md).
+ *
+ * The three `mail.*` handlers are registered on the same terms and for the same
+ * reason: `mailHandlers` is given no Gmail configuration in this release, so
+ * `mail.sync`, `mail.recover` and `mail.watch_renew` wait in the queue unclaimed. The
+ * adapters they need are real — `createGmailHttpClient` speaks the Gmail API and
+ * `kmsDataKeyWrapper` unwraps the envelope key — but the change that reads a
+ * deployment's client secret and KMS key and hands them over is the one that
+ * introduces live credentials, and it is reviewed on its own.
+ *
+ * The mail *scheduler sources* are registered unconditionally, and that is not an
+ * inconsistency. A source only inserts rows: with no mailboxes connected it finds
+ * nothing, and with mailboxes connected it keeps the queue truthful about what is
+ * owed whether or not this image can claim it.
  */
 function registerHandlers(registry: HandlerRegistry): HandlerRegistry {
   registry.register(canaryHandler());
   registry.register(suppressionFinalizeJobHandler());
   for (const handler of researchHandlers({ providers: {} })) registry.register(handler);
+  for (const handler of mailHandlers(undefined)) registry.register(handler);
   return registry;
 }
 
@@ -120,7 +136,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
         metrics: sessions[1 + config.concurrency] as SessionQueryable,
       },
       registry: registerHandlers(new HandlerRegistry()),
-      sources: [canarySource()],
+      sources: [canarySource(), ...mailSources()],
       sink,
       log,
     });
