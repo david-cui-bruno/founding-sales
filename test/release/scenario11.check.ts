@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mustBeRehearsed, readRepositoryFile } from './support/coverage.ts';
+import { mustBeRehearsed, readRepositoryFile, repositoryPath } from './support/coverage.ts';
 
 /**
  * Appendix G 11: "A restore predating an accepted send, reply, suppression, ordinary
@@ -49,5 +49,53 @@ describe('Appendix G 11: the restore drill is nine steps and has something to re
 
     const script = readRepositoryFile('infra/scripts/rehearsal-restore-drill.sh');
     expect(script).toContain('restore-report.json');
+  });
+
+  it('actually refuses a baseline with nothing to reconstruct', async () => {
+    // Asserting that the refusal is *written* would pass against a refusal somebody had
+    // commented out, so the script is run. In dry-run mode it reaches nothing — every
+    // `aws` and `fss` call prints a plan — and it honours a baseline the caller placed,
+    // which is how an empty one can be handed to it offline.
+    const { mkdtempSync, writeFileSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { execFileSync } = await import('node:child_process');
+
+    const reports = mkdtempSync(join(tmpdir(), 'fss-drill-'));
+    writeFileSync(
+      join(reports, 'baseline.json'),
+      JSON.stringify({ sends: 0, replies: 0, suppressions: 0, crm_edits: 0, migrations: 0 }),
+    );
+
+    let exitCode = 0;
+    let output = '';
+    try {
+      execFileSync(repositoryPath('infra/scripts/rehearsal-restore-drill.sh'), ['fss-rh-empty'], {
+        env: { ...process.env, FSS_REHEARSAL_DRY_RUN: '1', FSS_REHEARSAL_REPORTS: reports },
+        encoding: 'utf8',
+        stdio: 'pipe',
+      });
+    } catch (error) {
+      const failure = error as { status?: number; stderr?: string; stdout?: string };
+      exitCode = failure.status ?? 1;
+      output = `${failure.stderr ?? ''}${failure.stdout ?? ''}`;
+    }
+    expect(exitCode, 'the drill reported a pass against a baseline with nothing in it').not.toBe(0);
+    expect(output).toContain('the drill baseline has no sends');
+  });
+
+  it('and reports a pass when there is something to reconstruct, so the refusal is not free', async () => {
+    const { mkdtempSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { execFileSync } = await import('node:child_process');
+
+    const reports = mkdtempSync(join(tmpdir(), 'fss-drill-'));
+    const output = execFileSync(repositoryPath('infra/scripts/rehearsal-restore-drill.sh'), ['fss-rh-full'], {
+      env: { ...process.env, FSS_REHEARSAL_DRY_RUN: '1', FSS_REHEARSAL_REPORTS: reports },
+      encoding: 'utf8',
+      stdio: 'pipe',
+    });
+    expect(output).toContain('Appendix E steps 1 to 9 complete');
   });
 });

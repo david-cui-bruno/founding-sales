@@ -38,6 +38,7 @@ export default defineConfig({
         new URL('packages/domain/classification/index.ts', import.meta.url),
       ),
       '@fss/domain/outbound': fileURLToPath(new URL('packages/domain/outbound/index.ts', import.meta.url)),
+      '@fss/domain/retention': fileURLToPath(new URL('packages/domain/retention/index.ts', import.meta.url)),
       '@fss/domain/db': fileURLToPath(new URL('packages/domain/db/index.ts', import.meta.url)),
       '@fss/domain/today': fileURLToPath(new URL('packages/domain/today/index.ts', import.meta.url)),
       '@fss/domain/sequences': fileURLToPath(new URL('packages/domain/sequences/index.ts', import.meta.url)),

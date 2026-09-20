@@ -8,6 +8,7 @@
       "@fss/domain/mail": ["../../packages/domain/mail/index.ts"],
       "@fss/domain/classification": ["../../packages/domain/classification/index.ts"],
       "@fss/domain/outbound": ["../../packages/domain/outbound/index.ts"],
+      "@fss/domain/retention": ["../../packages/domain/retention/index.ts"],
       "@fss/domain/db": ["../../packages/domain/db/index.ts"],
       "@fss/domain/jobs": ["../../packages/domain/jobs/index.ts"],
       "@fss/domain/crm": ["../../packages/domain/crm/index.ts"],
