@@ -41,6 +41,22 @@ export function firmSuppressionKey(firmId: string): string {
 }
 
 /**
+ * The `suppression_events.source` values that *are* a suppression.
+ *
+ * The other two — `mistaken_entry_correction` and `admin_supersession` — are rows in
+ * the same table, with the same scope and the same canonical key, that lift the event
+ * they reference. Reading them as suppressions in their own right is a real bug and
+ * the test for "a superseded firm is researchable again" is the one that found it:
+ * every supersession would have re-suppressed the firm it was written to release.
+ */
+export const SUPPRESSING_SOURCES: readonly string[] = Object.freeze([
+  'prospect_opt_out',
+  'prospect_do_not_call',
+  'salesperson_manual',
+  'import',
+]);
+
+/**
  * True when a live firm-wide do-not-contact suppression covers this firm.
  *
  * Fails closed on purpose: anything that is not demonstrably superseded counts.
@@ -53,12 +69,13 @@ export async function isFirmSuppressed(context: RepositoryContext, firmId: strin
         WHERE e.workspace_id = $1
           AND e.scope = 'firm'
           AND e.canonical_key = $2
+          AND e.source = ANY($3::text[])
           AND NOT EXISTS (
             SELECT 1 FROM suppression_events s
              WHERE s.workspace_id = e.workspace_id AND s.supersedes_event_id = e.event_id
           )
      ) AS live`,
-    [context.scope.workspaceId, firmSuppressionKey(firmId)],
+    [context.scope.workspaceId, firmSuppressionKey(firmId), [...SUPPRESSING_SOURCES]],
   );
   return rows[0]?.live === true;
 }
@@ -80,11 +97,12 @@ export async function suppressedFirmIds(
       WHERE e.workspace_id = $1
         AND e.scope = 'firm'
         AND e.canonical_key = ANY($2::text[])
+        AND e.source = ANY($3::text[])
         AND NOT EXISTS (
           SELECT 1 FROM suppression_events s
            WHERE s.workspace_id = e.workspace_id AND s.supersedes_event_id = e.event_id
         )`,
-    [context.scope.workspaceId, firmIds.map(firmSuppressionKey)],
+    [context.scope.workspaceId, firmIds.map(firmSuppressionKey), [...SUPPRESSING_SOURCES]],
   );
   return new Set(rows.map(row => row.canonical_key));
 }

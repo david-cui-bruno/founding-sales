@@ -160,7 +160,12 @@ export {
   type ResearchWorkKind,
 } from './ceilings.ts';
 
-export { firmSuppressionKey, isFirmSuppressed, suppressedFirmIds } from './suppression.ts';
+export {
+  SUPPRESSING_SOURCES,
+  firmSuppressionKey,
+  isFirmSuppressed,
+  suppressedFirmIds,
+} from './suppression.ts';
 
 export {
   AUTOMATIC_FILL_CONFIDENCE,

@@ -2,6 +2,7 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { decideFirmMutation } from '../crm/authorization.ts';
 import { recordCrmAuditEvent } from '../crm/audit.ts';
 import { loadFirmForUpdate } from '../crm/firms.ts';
+import { canonicalFirmOf } from '../crm/merges.ts';
 import {
   accept,
   isFillableCanonicalField,
@@ -43,6 +44,21 @@ import {
  *      suggestion stays `proposed`;
  *   3. migration 0005's `research_suggestions_only_facts_apply` refuses an `applied`
  *      row of any other kind, so a future caller that tries cannot even record it.
+ *
+ * ## Suggestions and merges
+ *
+ * `mergeFirms` re-points the children G3a knows about; it does not know about this
+ * table, and this lane does not edit `merges.ts`. So a suggestion written against a
+ * firm that is later merged stays on the source row — which is exactly what
+ * `docs/decisions/g3a-merge-preservation.md` does with everything it cannot move:
+ * nothing is deleted, the source keeps `status = 'merged'` and a pointer, and its
+ * children remain readable.
+ *
+ * The *reads* follow the pointer instead. `listSuggestions` returns a merged source's
+ * suggestions under the canonical firm, and `reviewSuggestion` authorizes against the
+ * canonical firm and writes its field. So a merge loses no suggestion and leaves none
+ * unreviewable, without rewriting history. Recorded in
+ * `docs/decisions/g10-suggestions-follow-merges.md`.
  */
 
 /**
@@ -279,15 +295,21 @@ export async function listSuggestions(
 ): Promise<readonly SuggestionSummary[]> {
   const actor = context.scope.actor;
   const restrictToAssignee = actor.kind === 'user' && actor.role !== 'admin' ? actor.userId : null;
+  // `canonical` is the firm a suggestion belongs to *now*: itself, or the firm its own
+  // was merged into. One hop, which is the depth a merge of a merged record can reach
+  // before `decideFirmMutation` refuses the source as `firm_merged`.
   const { rows } = await context.db.query<ResearchSuggestionRow>(
     `SELECT s.id, s.firm_id, s.contact_id, s.kind, s.field_key, s.proposed_value, s.confidence,
             s.provider_key, s.evidence_id, s.duplicate_firm_id, s.dedupe_key, s.state
        FROM research_suggestions s
-       JOIN firms f ON f.workspace_id = s.workspace_id AND f.id = s.firm_id
+       JOIN firms own ON own.workspace_id = s.workspace_id AND own.id = s.firm_id
+       JOIN firms canonical
+         ON canonical.workspace_id = s.workspace_id
+        AND canonical.id = COALESCE(own.merged_into_firm_id, own.id)
       WHERE s.workspace_id = $1
-        AND ($2::uuid IS NULL OR s.firm_id = $2::uuid)
+        AND ($2::uuid IS NULL OR canonical.id = $2::uuid)
         AND ($3::text IS NULL OR s.state = $3::text)
-        AND ($4::uuid IS NULL OR f.assigned_user_id = $4::uuid)
+        AND ($4::uuid IS NULL OR canonical.assigned_user_id = $4::uuid)
       ORDER BY s.created_at DESC, s.id
       LIMIT $5`,
     [
@@ -343,7 +365,11 @@ export async function reviewSuggestion(
   if (suggestion === undefined) return refuse('suggestion_unknown');
   if (suggestion.state !== 'proposed') return refuse('suggestion_already_reviewed');
 
-  const firm = await loadFirmForUpdate(context, suggestion.firm_id);
+  // A suggestion on a firm that has since been merged is reviewed against the record
+  // it became. Without this, a merge would leave its source's suggestions permanently
+  // unreviewable, refused as `firm_merged` by a person who did nothing wrong.
+  const canonicalId = (await canonicalFirmOf(context, suggestion.firm_id)) ?? suggestion.firm_id;
+  const firm = await loadFirmForUpdate(context, canonicalId);
   if (firm === null) return refuse('firm_unknown');
   const decision = decideFirmMutation(context, firm);
   if (!decision.permitted) return refuse(decision.reason === 'firm_merged' ? 'firm_merged' : 'not_assigned');
@@ -364,14 +390,14 @@ export async function reviewSuggestion(
     const previous = readFirmField(firm, suggestion.field_key);
     const { rowCount } = await context.db.query(
       `UPDATE firms SET ${suggestion.field_key} = $3, updated_at = now() WHERE workspace_id = $1 AND id = $2`,
-      [context.scope.workspaceId, suggestion.firm_id, suggestion.proposed_value],
+      [context.scope.workspaceId, canonicalId, suggestion.proposed_value],
     );
     fieldWritten = (rowCount ?? 0) === 1;
     if (fieldWritten) {
       await recordCrmAuditEvent(context, {
         action: 'research.suggestion_field_written',
         subjectKind: 'firm',
-        subjectId: suggestion.firm_id,
+        subjectId: canonicalId,
         detail: {
           field: suggestion.field_key,
           suggestionId: suggestion.id,
@@ -392,7 +418,7 @@ export async function reviewSuggestion(
     action: `research.suggestion_${input.decision}`,
     subjectKind: 'research_suggestion',
     subjectId: input.suggestionId,
-    detail: { firmId: suggestion.firm_id, kind: suggestion.kind, fieldWritten },
+    detail: { firmId: canonicalId, kind: suggestion.kind, fieldWritten },
   });
 
   return accept({ suggestionId: input.suggestionId, state: input.decision, fieldWritten });
