@@ -18,12 +18,12 @@ function runCarryDrill(
 ): { readonly exitCode: number; readonly output: string; readonly reports: string } {
   const reports = mkdtempSync(join(tmpdir(), 'fss-carry-'));
   const environment: Record<string, string> = { ...process.env } as Record<string, string>;
-  delete environment.FSS_CARRY_WATERMARK;
-  delete environment.FSS_CARRY_SOURCE_TABLE;
-  environment.FSS_REHEARSAL_DRY_RUN = '1';
-  environment.FSS_REHEARSAL_REPORTS = reports;
-  if (carry.watermark !== undefined) environment.FSS_CARRY_WATERMARK = carry.watermark;
-  if (carry.table !== undefined) environment.FSS_CARRY_SOURCE_TABLE = carry.table;
+  delete environment['FSS_CARRY_WATERMARK'];
+  delete environment['FSS_CARRY_SOURCE_TABLE'];
+  environment['FSS_REHEARSAL_DRY_RUN'] = '1';
+  environment['FSS_REHEARSAL_REPORTS'] = reports;
+  if (carry.watermark !== undefined) environment['FSS_CARRY_WATERMARK'] = carry.watermark;
+  if (carry.table !== undefined) environment['FSS_CARRY_SOURCE_TABLE'] = carry.table;
 
   try {
     const output = execFileSync(repositoryPath('infra/scripts/rehearsal-carry-watermark.sh'), [prefix], {
@@ -159,11 +159,11 @@ describe('Appendix G 20: the carry refuses what the old stack wrote after the wa
     it('reports skipped_no_watermark only when the drill reported it', () => {
       const { reports } = runCarryDrill('fss-rh-check', {});
       const record = runReleaseRecord(reports, 'prefix=fss-rh-check carry_drill=skipped_no_watermark');
-      expect(record.carryDrill).toBe('skipped_no_watermark');
+      expect(record['carryDrill']).toBe('skipped_no_watermark');
       // The record still refuses to exist for a run that did not finish; the drill
       // being skipped is not the same fact as the suite being red.
-      expect(record.suite).toBe('pass');
-      expect(record.enablesSending).toBe(false);
+      expect(record['suite']).toBe('pass');
+      expect(record['enablesSending']).toBe(false);
     });
 
     it('reports ran when the drill ran, so the two states are distinguishable', () => {
@@ -172,7 +172,7 @@ describe('Appendix G 20: the carry refuses what the old stack wrote after the wa
         table: 'rehearsal-old-table',
       });
       const record = runReleaseRecord(reports, 'prefix=fss-rh-check old_stack=read_only carry_drill=ran');
-      expect(record.carryDrill).toBe('ran');
+      expect(record['carryDrill']).toBe('ran');
     });
   });
 
