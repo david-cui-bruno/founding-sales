@@ -77,12 +77,19 @@ export async function bundleApp(input: BundleInput): Promise<void> {
     logLevel: 'silent',
   });
 
-  // Three renderer entry points, one per window: G2's sign-in page, G3b's CRM
-  // windows and this lane's Today page. Each is bundled separately rather than code
-  // split, because a window loads one script and nothing else — and because the CSP
-  // on every page is `script-src 'self'` with no inline script, so a shared chunk
-  // would only be a second file to get wrong.
-  for (const entry of ['renderer', 'firmWorkspace', 'todayPage'] as const) {
+  // One renderer entry point per window: G2's sign-in page, G3b's CRM windows, G6's
+  // Today page and G9's administration window. Each is bundled separately rather
+  // than code split, because a window loads one script and nothing else — and
+  // because the CSP on every page is `script-src 'self'` with no inline script, so a
+  // shared chunk would only be a second file to get wrong.
+  //
+  // This list and the page list below are two arrays that have to agree: a page
+  // whose entry is missing here is copied into the bundle and then loads nothing.
+  // `settingsPage` was exactly that until this was fixed. The windows-list
+  // refactor (docs/decisions/g9-bundle-scheme-map.md, at G9's final merge) collapses
+  // the two into one declaration that `BUNDLE_FILES` also reads, so the three cannot
+  // disagree again.
+  for (const entry of ['renderer', 'firmWorkspace', 'todayPage', 'settingsPage'] as const) {
     await build({
       entryPoints: [source('renderer', `${entry}.ts`)],
       outfile: target('renderer', `${entry}.js`),
