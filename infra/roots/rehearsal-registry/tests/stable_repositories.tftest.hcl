@@ -90,3 +90,39 @@ run "a_production_deployment_role_is_refused" {
 
   expect_failures = [var.deployment_role_name]
 }
+
+# G12e: this root's only apply is a workflow run whose session is already
+# `fss-rh-deploy`, so `.github/workflows/greenfield-rehearsal-registry.yml`
+# plans with `assume_deployment_role=false` — the provider must not ask STS to
+# assume the role the session already holds, because that role trusts the OIDC
+# provider and nothing else, least of all itself.
+#
+# The default stays true so that the flag is something a caller says out loud.
+# A mocked plan cannot see a credential chain; these runs prove the variable
+# exists, its default, and that the two repositories are the same either way.
+run "the_registry_root_assumes_its_deployment_role_by_default" {
+  command = plan
+
+  assert {
+    condition     = var.assume_deployment_role
+    error_message = "The default is true in all three roots, so a forgotten flag fails at STS rather than acting as an ambient credential."
+  }
+}
+
+run "the_assume_flag_chooses_a_credential_path_and_not_a_plan" {
+  command = plan
+
+  variables {
+    assume_deployment_role = false
+  }
+
+  assert {
+    condition     = length(output.resource_names) == 2
+    error_message = "This root claims exactly two names however the caller obtained its credentials."
+  }
+
+  assert {
+    condition     = module.registry.repository_names["api"] == "fss-rh-api" && module.registry.repository_names["worker"] == "fss-rh-worker"
+    error_message = "The names the workflow secrets point at do not depend on the credential path."
+  }
+}
