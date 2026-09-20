@@ -50,6 +50,23 @@ export interface TodayTaskDto {
   readonly snoozeUntil: string | null;
 }
 
+/**
+ * One dialable number on the expanded card (9.1, 9.2).
+ *
+ * The version is here because `authorizeDial` compares it: "Authorization uses the
+ * route version displayed on the card, preventing a stale client from dialing a
+ * replaced or retired number." Sending it with the tasks rather than from a second
+ * endpoint is what makes "the version the card displays" a version the card was
+ * actually given, at the same instant as everything else on it.
+ */
+export interface TodayRouteDto {
+  readonly routeId: string;
+  readonly contactId: string | null;
+  readonly e164: string;
+  readonly version: number;
+  readonly eligibility: string;
+}
+
 export interface TodayFirmDto {
   readonly firmId: string;
   readonly firmName: string;
@@ -57,6 +74,16 @@ export interface TodayFirmDto {
   readonly lane: TodayLane;
   readonly counts: TodayCounts;
   readonly tasks: readonly TodayTaskDto[];
+  readonly routes: readonly TodayRouteDto[];
+  /**
+   * The acting salesperson's own active verified number, or null.
+   *
+   * 9.1: a calling identity "must be active and owned by the acting salesperson", so
+   * there is nothing here for the client to choose and no reason for it to hold a
+   * list. Null is a card with no Call button, which is the honest state for an actor
+   * who has not had a number verified.
+   */
+  readonly callingIdentityId: string | null;
 }
 
 /** Which assignee's list a scope may read, or undefined for "every one". */
@@ -118,6 +145,37 @@ export async function readTodayFirm(
   if (card === undefined) return null;
 
   const items = await listTodayItems(context, { businessDate: snapshotDate, firmId: input.firmId });
+
+  // Unretired numbers at this firm, with the version `authorizeDial` will compare.
+  // Candidates are included and marked rather than hidden: "no number" and "a number
+  // nobody has confirmed" are different facts (9.1).
+  const routes = await context.db.query<{
+    id: string;
+    contact_id: string | null;
+    e164: string;
+    version: number;
+    eligibility: string;
+  }>(
+    `SELECT id, contact_id, e164, version, eligibility
+       FROM phone_routes
+      WHERE workspace_id = $1 AND firm_id = $2 AND eligibility <> 'retired'
+      ORDER BY eligibility, e164`,
+    [context.scope.workspaceId, input.firmId],
+  );
+
+  const actor = context.scope.actor;
+  const identity =
+    actor.kind === 'user'
+      ? await context.db.query<{ id: string }>(
+          `SELECT id FROM calling_identities
+            WHERE workspace_id = $1 AND owner_user_id = $2 AND enabled = true
+              AND verification_status = 'verified'
+            ORDER BY created_at, id
+            LIMIT 1`,
+          [context.scope.workspaceId, actor.userId],
+        )
+      : { rows: [] as { id: string }[] };
+
   return {
     firmId: card.firmId,
     firmName: card.firmName,
@@ -135,5 +193,13 @@ export async function readTodayFirm(
       automated: item.automated,
       snoozeUntil: item.snoozeUntil,
     })),
+    routes: routes.rows.map(row => ({
+      routeId: row.id,
+      contactId: row.contact_id,
+      e164: row.e164,
+      version: Number(row.version),
+      eligibility: row.eligibility,
+    })),
+    callingIdentityId: identity.rows[0]?.id ?? null,
   };
 }

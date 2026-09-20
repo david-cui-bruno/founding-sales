@@ -82,5 +82,6 @@ export {
   type TodayCardDto,
   type TodayFirmDto,
   type TodayListDto,
+  type TodayRouteDto,
   type TodayTaskDto,
 } from './dto.ts';

@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <!--
+      The same policy as the other two windows: one local script, no remote code, no
+      inline script, no eval. `connect-src 'none'` is deliberate — the renderer never
+      talks to the network itself, only to the main process across the bridge.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Callie — Today</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main id="app"></main>
+    <script type="module" src="./todayPage.js"></script>
+  </body>
+</html>
