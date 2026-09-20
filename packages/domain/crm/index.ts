@@ -126,6 +126,7 @@ export {
 } from './merges.ts';
 
 export {
+  firmIdentityDtoOf,
   listFirmsForActor,
   readFirmForActor,
   type ContactDto,
@@ -134,3 +135,53 @@ export {
   type FirmReadDto,
   type RouteDto,
 } from './dto.ts';
+
+export {
+  DEFAULT_SEARCH_LIMIT,
+  MAX_SEARCH_LIMIT,
+  NARROW_MATCH_FIELDS,
+  SEARCH_MATCH_FIELDS,
+  SEQUENCE_STATUS_FILTERS,
+  WIDE_MATCH_FIELDS,
+  likePattern,
+  searchFirms,
+  type SearchFilters,
+  type SearchHit,
+  type SearchInput,
+  type SearchMatchField,
+  type SearchOutcome,
+  type SequenceStatusFilter,
+} from './search.ts';
+
+export {
+  IMPORT_COLUMNS,
+  IMPORT_ISSUE_CODES,
+  MAX_IMPORT_ROWS,
+  canonicalE164,
+  commitImportRow,
+  parseCsv,
+  previewCsvImport,
+  type CsvRefusal,
+  type CsvRow,
+  type ImportColumn,
+  type ImportContactDraft,
+  type ImportFirmDraft,
+  type ImportIssue,
+  type ImportIssueCode,
+  type ImportPreview,
+  type ImportPreviewRow,
+  type ImportRouteDraft,
+  type ImportRowCommitted,
+  type ImportRowOutcome,
+  type ParsedCsv,
+} from './import.ts';
+
+export { exportFirms, type ExportInput, type FirmExport } from './exports.ts';
+
+export {
+  readFirmPage,
+  type FirmHoldDto,
+  type FirmPageDto,
+  type OpportunitySummaryDto,
+  type StageEventDto,
+} from './firmPage.ts';

@@ -1,19 +1,25 @@
 import { connect, type AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing';
+import { clientVersionRangeSchema } from '@fss/contracts';
 import { MAX_REQUEST_BYTES } from '../src/limits.ts';
-import { createBootstrapServer } from '../src/bootstrap/server.ts';
+import { createApiServer } from '../src/server.ts';
 import { recordingLogger } from '../src/bootstrap/log.ts';
 
 /**
- * The API container's own HTTP surface, over a real socket.
+ * The API's HTTP surface, over a real socket.
  *
  * The load balancer in `infra/modules/edge` health-checks `/healthz` and the container
  * health check in `infra/modules/cluster` calls the same path on the loopback address.
  * Both are asserted here against the server the image actually runs, because a
  * readiness path that only exists in a unit test takes a whole service out of rotation.
+ *
+ * Until lane G3b this exercised a second server — `bootstrap/server.ts` — that existed
+ * because `server.ts` belonged to the identity lane. There is one server now, and it
+ * is the one `Dockerfile.api` runs, so these assertions are about the real thing
+ * rather than about its twin.
  */
-describe('the API bootstrap server', () => {
+describe('the API server over a socket', () => {
   let database: TestDatabase;
   let origin: string;
   let port: number;
@@ -21,9 +27,11 @@ describe('the API bootstrap server', () => {
 
   beforeAll(async () => {
     database = await createTestDatabase();
-    const server = createBootstrapServer({
+    const server = createApiServer({
       session: database.session,
       expectedSystemGeneration: null,
+      supportedClientVersions: clientVersionRangeSchema.parse({ minimum: '1.0.0', maximum: '1.0.0' }),
+      sendingEnabled: false,
       log: recordingLogger(),
     });
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));

@@ -179,6 +179,12 @@ export async function startTestServer(initial: DesktopState): Promise<TestServer
       state = value;
     },
     stop: async () => {
+      // `close` waits for every open connection, and the page holds a keep-alive
+      // socket after its last request. With one spec file the process exited before
+      // anybody noticed; with two, the second file's first test waits behind the
+      // first file's `afterEach` and the run times out. Closing the sockets first is
+      // the whole fix, and `crmTestServer.ts` does the same.
+      server.closeAllConnections();
       await new Promise<void>((resolve, reject) => {
         server.close(error => {
           if (error) reject(error);
