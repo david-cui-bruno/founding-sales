@@ -47,6 +47,7 @@ packages/domain/sequences/linkedin.ts    open-and-copy, undo, replied / no engag
 packages/domain/sequences/resume.ts      the union shift and the long-hold review
 packages/domain/sequences/terminalStops.ts the subscription to G3a's outbox
 packages/domain/sequences/todaySource.ts lane 3 of the Today list
+packages/domain/sequences/recoveryFloor.ts the enrollment half of 12.3's floor
 packages/domain/sequences/migration.ts   the audited enrollment migration
 packages/domain/sequences/variables.ts   deterministic variables from CRM data
 

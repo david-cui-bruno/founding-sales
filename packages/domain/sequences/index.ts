@@ -172,3 +172,5 @@ export {
   templateVariablesFor,
   type TemplateVariableName,
 } from './variables.ts';
+
+export { enrollmentFloor } from './recoveryFloor.ts';
