@@ -18,7 +18,7 @@ export interface SchemaRange {
 }
 
 /** The highest migration version this source tree contains. */
-export const CURRENT_SCHEMA_VERSION = 9;
+export const CURRENT_SCHEMA_VERSION = 13;
 
 /**
  * The range the release before this one declared. Widen this one release ahead of the
@@ -32,7 +32,7 @@ export const CURRENT_SCHEMA_VERSION = 9;
  * the first real deployment onwards the widening must precede the migration by a
  * release, and the compatibility test will keep saying so.
  */
-export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 9 };
+export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 13 };
 
 /**
  * Both services need migration 0002's shape: the API's dead-job list reads `dead_at`
@@ -101,9 +101,32 @@ export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum:
  * which is what the widened previous-release range above is for (Appendix G 22). Both
  * maxima move to 9: a binary that refused the database it has just been deployed
  * against would be a self-inflicted outage.
+ *
+ * Migration 0013 (G9) is the first one that moves the two sides differently, and the
+ * difference is the rule working rather than an oversight.
+ *
+ * The API's minimum moves to 13. `GET /settings`, `POST /settings/update` and
+ * `POST /settings/history` read and write `workspace_settings`, and `GET /diagnostics`
+ * reads it too. An API on a version-12 database could not answer what the postal
+ * footer or the sending limits are, and — worse — `effectiveSendingEnabled` would
+ * have no admin half of 16.2's two switches to read. Fail closed would make it
+ * answer "sending is off" forever, which is safe and useless; refusing to start says
+ * so out loud.
+ *
+ * The worker's minimum does **not** move. Nothing in `apps/worker/src` reads
+ * `workspace_settings` today: the settings a worker will want — the holiday calendar
+ * for business-day delays, the effective mailbox cap — are read by G8's sequence
+ * execution, which does not exist yet. The rule from
+ * `docs/decisions/g10-worker-schema-minimum.md` is that a binary declares the lowest
+ * version on which its *first statement* can succeed, not the lowest it would like,
+ * and raising the worker's minimum for a table it never queries would refuse a
+ * database for no reason. G8 raises it when it adds the read.
+ *
+ * Both maxima move to 13, because a binary that refused the database it has just been
+ * deployed against would be a self-inflicted outage.
  */
-export const API_SCHEMA_RANGE: SchemaRange = { minimum: 9, maximum: 9 };
-export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 9, maximum: 9 };
+export const API_SCHEMA_RANGE: SchemaRange = { minimum: 13, maximum: 13 };
+export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 9, maximum: 13 };
 
 export function acceptsSchemaVersion(range: SchemaRange, version: number): boolean {
   return Number.isInteger(version) && version >= range.minimum && version <= range.maximum;
