@@ -63,3 +63,28 @@ shape only works if each figure stays honest:
   So `bySequence` and `bySegment` are `Unavailable` with `owner: 'G8'` while their
   siblings are numbers. That is the shape working at a finer grain than a whole
   source, and it is why `Breakdown[] | Unavailable` is worth the union.
+
+## The remaining two, at the final merge
+
+Directed by the coordinator on 20 September 2026, once 0011 (G7b) was on main and
+0012 (G8) was next: **wire both remaining methods at the final merge, so that no
+figure is left declared-unavailable unless it truly has no source.** The bar moved
+from "the lane that lands the table wires it" to "the last window lane leaves the
+dashboard whole", which is the right bar now that this lane is the last one in.
+
+`classifier` reads G7b's `mail_classification_calls` and `mail_reply_confirmations`
+(migration 0011). It must carry the model, the prompt version, the cost, and the
+corrected-versus-accepted rates — "drift" in 13.4 is not a vibe, it is how often a
+person changed the disposition the model proposed, and that only means anything
+beside how often they accepted it.
+
+`enrollments` reads G8's tables (migration 0012), which also retires the two
+breakdowns above: `bySequence` becomes real once a fence's `enrollment_id` can be
+joined to a sequence, and `bySegment` becomes real if G8's enrolment records a
+segment — and stays `Unavailable` if it does not, because a figure with no source
+says so rather than rendering as zero. That is the rule, not an exception to it.
+
+Both follow the same rules the sending source set: counts over the firms the caller
+may see at row-two visibility, anything that is not a firm fact placed by Appendix F
+instead, and every key an opaque identifier or a member of a closed set, never a
+name.
