@@ -51,6 +51,9 @@
     "lint:greenfield": "eslint --config eslint.greenfield.mjs --max-warnings 0 apps packages",
     "test:greenfield": "npm run test --workspace packages/contracts && npm run test --workspace packages/domain && npm run test --workspace apps/api && npm run test --workspace apps/worker && npm run test --workspace apps/desktop",
     "test:desktop:e2e": "npm run test:e2e --workspace apps/desktop",
+    "test:desktop:host": "FSS_HOST_TESTS=1 npm run test:host --workspace apps/desktop",
+    "package:desktop": "npm run package --workspace apps/desktop --",
+    "verify:desktop:package": "npm run verify:package --workspace apps/desktop --",
     "gate:greenfield": "npm run typecheck:greenfield && npm run lint:greenfield && npm run test:greenfield"
   },
   "keywords": [],
