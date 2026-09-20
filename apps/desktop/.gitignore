@@ -1,0 +1,3 @@
+# Playwright's own output. The specs are the artefact; these are not.
+test-results/
+playwright-report/
