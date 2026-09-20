@@ -1,10 +1,11 @@
 /**
  * The API process bootstrap.
  *
- * `apps/api/src/server.ts` and `apps/api/src/index.ts` belong to the identity lane
- * while that is in flight, so nothing this lane wrote edits them. Everything the
- * coordinator has to mount is exported here, and `docs/greenfield/processes.md` names
- * the exact lines to add to `server.ts` once G2 has merged.
+ * G5b wrote these while `apps/api/src/server.ts` belonged to the identity lane, and
+ * kept a second HTTP surface (`bootstrap/server.ts`) so the image had something to
+ * run. Lane G3b did the wiring `docs/greenfield/processes.md` described and deleted
+ * that duplicate: `createApiServer` in `apps/api/src/server.ts` is now the only
+ * server, it mounts this registry, and `bootstrap/main.ts` is what the image runs.
  */
 
 export {
@@ -53,4 +54,3 @@ export {
   type RouteRegistry,
 } from './routeRegistry.ts';
 export { adminJobsModule, mountedRoutes } from './routes.ts';
-export { createBootstrapServer, type BootstrapServerOptions } from './server.ts';

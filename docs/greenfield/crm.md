@@ -220,10 +220,14 @@ refuses as `firm_merged`.
 
 ## What is deliberately not here
 
-* **Search, filters, CSV import and export** — lane G3b.
-* **Stage administration** (rename, reorder, add, retire) — lane G3b, with the rest of
-  the configuration surface. This lane fixes the table, the seeded default and the
-  constraints.
+* **Search, filters, CSV import and export** — lane G3b, and they are here now:
+  `docs/greenfield/crm-surface.md`.
+* **Stage administration** (rename, reorder, add, retire) — *still unowned*. This note
+  assigned it to G3b; G3b's brief did not, and G3b built the search, import, export
+  and desktop deliverables it lists instead. The table, the seeded default, the
+  position-uniqueness deferral a reorder needs and the terminal-stage constraints all
+  exist; the admin commands over them do not. Section 8.1's "Admins may rename,
+  reorder, add, or retire nonterminal stages" is the gap.
 * **Suppression and dial authorization** — lane G4. This lane records the route
   eligibility and the firm zone that `authorizeDial` reads.
 * **Enrollments, executions and outbound fences** — lane G8. This lane raises the

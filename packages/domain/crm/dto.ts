@@ -85,7 +85,14 @@ export type FirmReadDto =
   | { readonly visibility: 'any_active_member'; readonly firm: FirmIdentityDto }
   | { readonly visibility: 'assigned_or_admin'; readonly firm: FirmDetailDto };
 
-function identityOf(
+/**
+ * Appendix F row 1, from a firm row and its open opportunity.
+ *
+ * Exported because CRM search and CRM export build the same narrow DTO from rows
+ * they selected themselves, and a second copy of this mapping is a second place for
+ * a later field to be added to only one of them.
+ */
+export function firmIdentityDtoOf(
   firm: FirmRow,
   opportunity: { stageKey: string | null; status: 'open' | 'won' | 'lost' | null; controlMode: 'automated' | 'manual' | null; openedAt: string | null },
 ): FirmIdentityDto {
@@ -134,7 +141,7 @@ export async function readFirmForActor(
 
   const visibility: FirmReadVisibility = decideFirmRead(context, firm);
   if (visibility === 'any_active_member') {
-    return accept({ visibility, firm: identityOf(firm, summary) });
+    return accept({ visibility, firm: firmIdentityDtoOf(firm, summary) });
   }
 
   if (firmReadIsAudited(context, firm)) {
@@ -157,7 +164,7 @@ export async function readFirmForActor(
   return accept({
     visibility,
     firm: {
-      ...identityOf(firm, summary),
+      ...firmIdentityDtoOf(firm, summary),
       addressLine: firm.address_line,
       postalCode: firm.postal_code,
       countryCode: firm.country_code,
@@ -206,7 +213,7 @@ export async function listFirmsForActor(
     [context.scope.workspaceId, Math.trunc(options.limit ?? 200)],
   );
   return rows.map(row =>
-    identityOf(row, {
+    firmIdentityDtoOf(row, {
       stageKey: row.stage_key,
       status: row.opportunity_status,
       controlMode: row.control_mode,
