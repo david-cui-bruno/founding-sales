@@ -77,12 +77,18 @@ export async function bundleApp(input: BundleInput): Promise<void> {
     logLevel: 'silent',
   });
 
-  // Three renderer entry points, one per window: G2's sign-in page, G3b's CRM
-  // windows and this lane's Today page. Each is bundled separately rather than code
-  // split, because a window loads one script and nothing else — and because the CSP
-  // on every page is `script-src 'self'` with no inline script, so a shared chunk
-  // would only be a second file to get wrong.
-  for (const entry of ['renderer', 'firmWorkspace', 'todayPage', 'sequenceEditor'] as const) {
+  // Five renderer entry points, one per window: G2's sign-in page, G3b's CRM
+  // windows, G6's Today page, G7b's reply cards and G8's sequence editor. Each is
+  // bundled separately rather than code split, because a window loads one script and
+  // nothing else — and because the CSP on every page is `script-src 'self'` with no
+  // inline script, so a shared chunk would only be a second file to get wrong.
+  for (const entry of [
+    'renderer',
+    'firmWorkspace',
+    'todayPage',
+    'replyPage',
+    'sequenceEditor',
+  ] as const) {
     await build({
       entryPoints: [source('renderer', `${entry}.ts`)],
       outfile: target('renderer', `${entry}.js`),
@@ -99,6 +105,7 @@ export async function bundleApp(input: BundleInput): Promise<void> {
     'index.html',
     'firmWorkspace.html',
     'today.html',
+    'replyCard.html',
     'sequenceEditor.html',
     'styles.css',
   ] as const) {

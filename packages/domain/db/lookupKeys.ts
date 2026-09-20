@@ -260,6 +260,16 @@ export const FOUNDATION_LOOKUP_KEYS = {
     ['workspace_id', 'id'],
     ['workspace_id', 'mailbox_id', 'business_date'],
   ],
+  // Migration 0011 (lane G7b). `classifier_settings` is keyed by the workspace
+  // alone, because there is exactly one row of it per workspace — the same shape as
+  // `research_settings`. `mail_reply_confirmations` declares the key that makes a
+  // second confirmation of one message a database refusal rather than a race.
+  classifier_settings: [['workspace_id']],
+  mail_classification_calls: [['workspace_id', 'id']],
+  mail_reply_confirmations: [
+    ['workspace_id', 'id'],
+    ['workspace_id', 'mail_message_id'],
+  ],
 } as const satisfies Readonly<Record<string, readonly (readonly ['workspace_id', ...string[]])[]>>;
 
 /** A table a scoped repository may read. `workspaces`, `users` and `heartbeats` are not scoped rows. */

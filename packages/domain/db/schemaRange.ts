@@ -26,11 +26,12 @@ export const CURRENT_SCHEMA_VERSION = 12;
  *
  * Lanes G5 and G2 shipped migrations 0002 and 0003 from the same main and each widened
  * this constant for its own; lane G3a widened it again for migration 0004, G3b for
- * 0005, G4 for 0006, G10 for 0007, G6 for 0008, G7 for 0009 and 0010, and G8 for
- * 0012. A merge that finds two different maxima takes the larger. That is honest only
- * because nothing has been deployed — G0's {1, 1} was never a promise made to a running production binary. From
- * the first real deployment onwards the widening must precede the migration by a
- * release, and the compatibility test will keep saying so.
+ * 0005, G4 for 0006, G10 for 0007, G6 for 0008, G7 for 0009, G7-2 for 0010, G7b for
+ * 0011 and G8 for 0012. A merge that finds two different maxima takes the larger.
+ * That is honest only because nothing has been deployed — G0's {1, 1} was never a
+ * promise made to a running production binary. From the first real deployment onwards
+ * the widening must precede the migration by a release, and the compatibility test
+ * will keep saying so.
  */
 export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 12 };
 
@@ -121,24 +122,44 @@ export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum:
  * admin's "mark this delivered" and have nowhere to record it, which is worse than
  * refusing: the admin would believe the sequence had been unblocked.
  *
- * Migration 0012 (G8) moves both a sixth time, and this lane's reasons are the same
- * two every widening before it gave.
+ * Both maxima move to 10, on the same reasoning as every widening before it.
+ *
+ * Migration 0011 (G7b) moves both a sixth time, and again with a reason on each side.
+ *
+ * The API needs it: `/replies`, `/replies/card` and `/replies/confirm` read
+ * `mail_message_classifications`' three new columns and write
+ * `mail_reply_confirmations`, and `/replies/settings` reads `classifier_settings`.
+ * An API on a version-10 database could render a reply card with no proposed
+ * disposition and then accept a confirmation it had nowhere to put, which would lose
+ * the one record 12.4 requires of a corrected classification.
+ *
+ * The worker needs it: `classify.reply` declares `business_uniqueness`, and the
+ * uniqueness it means is `mail_message_classifications_one_per_layer` together with
+ * the new columns the row carries. A worker on a version-10 database would be
+ * running an at-least-once handler that spends money at a provider with nothing
+ * behind it — the same case G10, G6 and G7 each refused for their own tables — and
+ * it could not record what the call cost, which 13.4 asks for.
+ *
+ * Migration 0012 (G8) moves both a seventh time, and this lane's reasons are the
+ * same two every widening before it gave.
  *
  * The API needs it: `/sequences`, `/sequences/steps`, `/sequences/publish`,
  * `/templates`, `/enrollments` and `/linkedin/*` read and write `sequences`,
  * `sequence_versions`, `sequence_steps`, `sequence_enrollments` and
  * `step_executions`, and the template routes read the five columns 0012 adds to
- * `template_versions`. An API on a version-11 database could accept an enrollment
- * and have nowhere to put it.
+ * `template_versions`. An API on a version-11 database could accept an enrollment and
+ * have nowhere to put it.
  *
  * The worker needs it: `sequence.action` claims a `step_executions` row, and
  * `UNIQUE (workspace_id, enrollment_id, step_id)` together with the outbound fence
  * *is* Appendix C's protection for `step-execution:{id}`. A worker on a version-11
  * database would be running an at-least-once handler with nothing behind it — the
- * case G10, G6 and G7 each refused for their own tables, and the one invariant 1
- * ("no duplicate automated email for the same sequence step") rests on.
+ * case G10, G6, G7 and G7b each refused for their own tables, and the one invariant 1
+ * ("no duplicate automated email for the same sequence step") rests on. 0012 also
+ * adds the two foreign keys 0010 left for it, so on a version-11 database a fence
+ * could name an enrollment that does not exist.
  *
- * The deploy order stays migrate, then worker, then API.
+ * The deploy order stays migrate, then worker, then API. Both maxima move to 12.
  */
 export const API_SCHEMA_RANGE: SchemaRange = { minimum: 12, maximum: 12 };
 export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 12, maximum: 12 };

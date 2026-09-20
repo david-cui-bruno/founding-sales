@@ -70,6 +70,8 @@ COPY packages/domain/src packages/domain/src
 COPY packages/domain/crm packages/domain/crm
 COPY packages/domain/policy packages/domain/policy
 COPY packages/domain/suppression packages/domain/suppression
+COPY packages/domain/dial packages/domain/dial
+COPY packages/domain/classification packages/domain/classification
 COPY packages/domain/mail packages/domain/mail
 COPY packages/domain/dial packages/domain/dial
 COPY packages/domain/outbound packages/domain/outbound

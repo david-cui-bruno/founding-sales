@@ -28,6 +28,7 @@
 !packages/domain/src
 !packages/domain/policy
 !packages/domain/suppression
+!packages/domain/classification
 !packages/domain/mail
 !packages/domain/outbound
 !packages/domain/dial

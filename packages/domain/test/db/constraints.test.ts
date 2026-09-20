@@ -9,6 +9,7 @@ import { RESEARCH_CONSTRAINT_CASES } from './support/researchCases.ts';
 import { MAIL_CONSTRAINT_CASES } from './support/mailCases.ts';
 import { TODAY_CONSTRAINT_CASES } from './support/todayCases.ts';
 import { SEQUENCE_CONSTRAINT_CASES } from './support/sequenceCases.ts';
+import { CLASSIFICATION_CONSTRAINT_CASES } from './support/classificationCases.ts';
 import { seedCrm, type SeededCrm } from './support/crmFixtures.ts';
 import { seedMail, type SeededMail } from './support/mailFixtures.ts';
 import { OUTBOUND_CONSTRAINT_CASES } from './support/outboundCases.ts';
@@ -1351,9 +1352,9 @@ const cases: readonly Case[] = [
   ...MAIL_CONSTRAINT_CASES,
   ...TODAY_CONSTRAINT_CASES,
   ...OUTBOUND_CONSTRAINT_CASES,
+  ...CLASSIFICATION_CONSTRAINT_CASES,
   ...SEQUENCE_CONSTRAINT_CASES,
 ];
-
 
 describe('foundation constraints', () => {
   let database: TestDatabase;

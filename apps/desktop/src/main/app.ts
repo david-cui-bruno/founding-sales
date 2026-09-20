@@ -9,6 +9,7 @@ import { createDialApi, createTelLaunchDriver } from './telHandoff.ts';
 import {
   openSecondaryWindow,
   registerCrmBridge,
+  registerReplyBridge,
   registerSequenceBridge,
   registerTodayBridge,
   windowMenuTemplate,
@@ -119,12 +120,12 @@ export async function openWindow(configuration: DesktopConfiguration): Promise<B
 }
 
 /**
- * Register the Today and CRM bridges and put their windows on the menu.
+ * Register the Today, reply and CRM bridges and put their windows on the menu.
  *
  * This is the wiring G3b's renderer has been waiting for: `firmWorkspace.ts` reads
  * `globalThis.callieCrm`, the preload script installs it, and nothing until now
  * answered the channels behind it. The Today window is the third, on the same
- * pattern.
+ * pattern, and G7b's reply cards are the fourth.
  *
  * The windows are reachable from the application menu rather than from a button on
  * G2's page, because this lane does not own `renderer.ts` — and because on macOS the
@@ -147,6 +148,10 @@ export function registerWindows(configuration: DesktopConfiguration, manager: Se
     handoff: createDialHandoff({ driver: createTelLaunchDriver(), api: createDialApi(api) }),
     session,
   });
+  // 8.3's reply cards. The same `AuthedClient` and the same session manager: the
+  // reply state is never cached, so it needs nothing from the offline cache but the
+  // token, the online flag and the version gate.
+  registerReplyBridge({ api, session });
   registerCrmBridge({ api, session });
   // G8's editor. The clipboard and the browser open are ports so the bridge itself
   // imports nothing from Electron and is testable without a window (11.3).
@@ -170,6 +175,7 @@ export function registerWindows(configuration: DesktopConfiguration, manager: Se
   });
 
   let todayWindow: BrowserWindow | null = null;
+  let replyWindow: BrowserWindow | null = null;
   let crmWindow: BrowserWindow | null = null;
   let sequenceWindow: BrowserWindow | null = null;
   Menu.setApplicationMenu(
@@ -179,6 +185,11 @@ export function registerWindows(configuration: DesktopConfiguration, manager: Se
         today: () => {
           void openSecondaryWindow('Callie — Today', renderer('today.html'), todayWindow).then(window => {
             todayWindow = window;
+          });
+        },
+        replies: () => {
+          void openSecondaryWindow('Callie — Replies', renderer('replyCard.html'), replyWindow).then(window => {
+            replyWindow = window;
           });
         },
         firms: () => {
