@@ -1,0 +1,206 @@
+name: Greenfield images
+
+# Builds the two linux/arm64 container images and prints their digests.
+#
+# It never pushes. No AWS credential exists in this repository and none is
+# wanted here: the release procedure (specification 16.2) compares the digest
+# that passed rehearsal with the digest that is deployed, so the push is an
+# operator step run against a directive, documented at the bottom of this file
+# and in docs/greenfield/infra-apply-runbook.md.
+#
+# The build proves three things that a unit test cannot: the production
+# dependency set is enough to load the process, the entry point runs on Node
+# 24 with no build step, and the image is arm64 — which is what the task
+# definition's `runtime_platform` demands and what an x86 image fails at with
+# an exec format error long after it looked fine locally.
+
+on:
+  pull_request:
+    paths:
+      - 'Dockerfile.api'
+      - 'Dockerfile.worker'
+      - 'Dockerfile.api.dockerignore'
+      - 'Dockerfile.worker.dockerignore'
+      - 'apps/**'
+      - 'packages/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/greenfield-images.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'Dockerfile.api'
+      - 'Dockerfile.worker'
+      - 'apps/**'
+      - 'packages/**'
+      - 'package-lock.json'
+      - '.github/workflows/greenfield-images.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  images:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Refuse any ambient cloud credential
+        run: |
+          set -euo pipefail
+          # This workflow must behave identically with and without credentials.
+          # If one is present the workflow has been changed in a way this lane
+          # did not intend, so stop rather than risk a push or an API call.
+          for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN \
+                      AWS_PROFILE AWS_ROLE_ARN AWS_WEB_IDENTITY_TOKEN_FILE; do
+            if [ -n "${!name:-}" ]; then
+              echo "::error::$name is set. The greenfield image build never pushes and must never hold a cloud credential."
+              exit 1
+            fi
+          done
+
+      - name: Register the arm64 interpreter
+        run: |
+          set -euo pipefail
+          # The runner is x86_64 and both images are arm64, so every RUN step
+          # is emulated. qemu-user-static comes from the distribution rather
+          # than from a third-party image, so nothing unpinned runs privileged.
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends qemu-user-static binfmt-support >/dev/null
+          docker buildx create --name fss-images --driver docker-container --use
+          docker buildx inspect --bootstrap fss-images
+
+      - name: Assert the builder can produce linux/arm64
+        run: |
+          set -euo pipefail
+          platforms="$(docker buildx inspect fss-images | sed -n 's/^Platforms: *//p')"
+          echo "platforms: $platforms"
+          case "$platforms" in
+            *linux/arm64*) ;;
+            *) echo "::error::this builder cannot produce linux/arm64; the images would be built for the wrong architecture"; exit 1 ;;
+          esac
+
+      - name: Build the API image
+        run: |
+          set -euo pipefail
+          docker buildx build \
+            --builder fss-images \
+            --platform linux/arm64 \
+            --file Dockerfile.api \
+            --build-arg "GIT_REVISION=${GITHUB_SHA}" \
+            --provenance=false \
+            --metadata-file api-metadata.json \
+            --tag fss-api:ci \
+            --load \
+            .
+
+      - name: Build the worker image
+        run: |
+          set -euo pipefail
+          docker buildx build \
+            --builder fss-images \
+            --platform linux/arm64 \
+            --file Dockerfile.worker \
+            --build-arg "GIT_REVISION=${GITHUB_SHA}" \
+            --provenance=false \
+            --metadata-file worker-metadata.json \
+            --tag fss-worker:ci \
+            --load \
+            .
+
+      - name: Print the digests
+        run: |
+          set -euo pipefail
+          for service in api worker; do
+            echo "::group::$service"
+            cat "$service-metadata.json"
+            digest="$(jq -r '.["containerimage.digest"] // .["containerimage.config.digest"] // "unknown"' "$service-metadata.json")"
+            image_id="$(docker image inspect "fss-$service:ci" --format '{{.Id}}')"
+            architecture="$(docker image inspect "fss-$service:ci" --format '{{.Architecture}}')"
+            echo "service=$service digest=$digest image_id=$image_id architecture=$architecture"
+            test "$architecture" = "arm64"
+            {
+              echo "### fss-$service"
+              echo ""
+              echo "- digest: \`$digest\`"
+              echo "- image id: \`$image_id\`"
+              echo "- architecture: \`$architecture\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::endgroup::"
+          done
+
+      - name: The images load their own code and refuse a bad environment
+        run: |
+          set -euo pipefail
+          # --selftest reads the environment, prints the decisions and exits.
+          # It opens no socket, no database and no AWS client, so this proves
+          # the production dependency set without reaching anything.
+          docker run --rm --platform linux/arm64 \
+            -e FSS_SCHEMA_MIN=2 -e FSS_SCHEMA_MAX=2 \
+            -e DATABASE_URL='postgresql://ci.invalid/fss' \
+            fss-api:ci --selftest
+          docker run --rm --platform linux/arm64 \
+            -e FSS_SCHEMA_MIN=2 -e FSS_SCHEMA_MAX=2 \
+            -e DATABASE_URL='postgresql://ci.invalid/fss' \
+            fss-worker:ci --selftest
+
+          # A task definition that declares a schema range the image does not
+          # accept is a stale deployment, and both processes refuse it.
+          for service in api worker; do
+            if docker run --rm --platform linux/arm64 \
+                 -e FSS_SCHEMA_MIN=1 -e FSS_SCHEMA_MAX=1 \
+                 -e DATABASE_URL='postgresql://ci.invalid/fss' \
+                 "fss-$service:ci" --selftest; then
+              echo "::error::fss-$service accepted a declared schema range it does not support"
+              exit 1
+            fi
+          done
+
+      - name: The images run as a non-root user
+        run: |
+          set -euo pipefail
+          for service in api worker; do
+            user="$(docker image inspect "fss-$service:ci" --format '{{.Config.User}}')"
+            echo "fss-$service user: $user"
+            test "$user" = "node"
+            uid="$(docker run --rm --platform linux/arm64 --entrypoint id "fss-$service:ci" -u)"
+            test "$uid" != "0"
+          done
+
+      - name: The images carry no test harness and no development dependency
+        run: |
+          set -euo pipefail
+          for service in api worker; do
+            if docker run --rm --platform linux/arm64 --entrypoint sh "fss-$service:ci" \
+                 -c 'ls packages/domain/db/testing 2>/dev/null'; then
+              echo "::error::fss-$service ships the PostgreSQL test harness"
+              exit 1
+            fi
+            docker run --rm --platform linux/arm64 --entrypoint sh "fss-$service:ci" \
+              -c '! ls node_modules/vitest node_modules/typescript node_modules/embedded-postgres 2>/dev/null'
+          done
+
+# ---------------------------------------------------------------------------
+# Pushing, which happens outside CI because no credential exists here.
+#
+# Against a directive, with an operator's session, from a checkout of the exact
+# commit this workflow built:
+#
+#   aws ecr get-login-password --region "$REGION" \
+#     | docker login --username AWS --password-stdin "$ACCOUNT.dkr.ecr.$REGION.amazonaws.com"
+#   docker buildx build --platform linux/arm64 --file Dockerfile.api \
+#     --tag "$ACCOUNT.dkr.ecr.$REGION.amazonaws.com/fss-api:$GIT_SHA" --push .
+#   docker buildx build --platform linux/arm64 --file Dockerfile.worker \
+#     --tag "$ACCOUNT.dkr.ecr.$REGION.amazonaws.com/fss-worker:$GIT_SHA" --push .
+#
+# `--push` prints the manifest digest. That digest, not the tag, is what
+# `infra/modules/cluster` accepts: its `api_image` and `worker_image`
+# variables refuse a mutable tag, because the release gate compares the digest
+# that passed rehearsal with the digest that is deployed.
+# ---------------------------------------------------------------------------

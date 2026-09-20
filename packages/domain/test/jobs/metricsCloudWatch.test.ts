@@ -3,6 +3,7 @@ import {
   CLOUDWATCH_MAX_DATA_PER_REQUEST,
   cloudWatchPutMetricData,
   createCloudWatchSink,
+  loadCloudWatchTransport,
   type CloudWatchTransport,
   type PutMetricDataInput,
 } from '../../jobs/metricsCloudWatch.ts';
@@ -96,5 +97,13 @@ describe('the CloudWatch metric publisher', () => {
     await expect(
       sink.publish([{ name: 'NotAMetric', value: 1, unit: 'Count' } as unknown as MetricDatum]),
     ).rejects.toBeInstanceOf(MetricError);
+  });
+
+  it('resolves the SDK the lazy import names', async () => {
+    // Construction only. The SDK resolves credentials and opens a connection when a
+    // command is sent, and no command is sent here: this asserts the one thing a lazy
+    // import can break silently, which is that the specifier is still installed.
+    const transport = await loadCloudWatchTransport('us-east-1');
+    expect(typeof transport.send).toBe('function');
   });
 });
