@@ -57,6 +57,7 @@ on:
   pull_request:
     paths:
       - '.github/workflows/greenfield-release.yml'
+      - '.github/workflows/greenfield-rehearsal-registry.yml'
       - 'infra/scripts/rehearsal-*.sh'
       - 'scripts/productionSmoke.mjs'
       - 'test/release/**'
@@ -64,6 +65,7 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/greenfield-release.yml'
+      - '.github/workflows/greenfield-rehearsal-registry.yml'
       - 'infra/scripts/rehearsal-*.sh'
 
 permissions:
@@ -233,6 +235,55 @@ jobs:
           refuse fss-rh-dryrun 'fss-api:latest' "$good_worker" "$GITHUB_SHA" pass "$out"
           refuse fss-rh-dryrun "$good_api" "$good_api" "$GITHUB_SHA" pass "$out"
           refuse fss-prod "$good_api" "$good_worker" "$GITHUB_SHA" pass "$out"
+
+      - name: Print the plan the rehearsal registry apply would run
+        env:
+          FSS_REHEARSAL_DRY_RUN: '1'
+        run: |
+          set -euo pipefail
+          # `.github/workflows/greenfield-rehearsal-registry.yml` is dispatch-only and
+          # runs in the `rehearsal` environment, so nothing on a pull request can
+          # exercise it. What a pull request can do is read it: this prints every
+          # terraform and aws invocation that workflow makes, in order, with no
+          # credential, and `test/release/scenario39.check.ts` requires every printed
+          # line to appear in the workflow that runs it.
+          {
+            echo '### Rehearsal registry apply plan'
+            echo ''
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          infra/scripts/rehearsal-registry-guard.sh commands | tee -a "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: The rehearsal registry plan guard refuses what it must refuse
+        run: |
+          set -euo pipefail
+          # The guard is the whole of the judgement an operator used to make by
+          # reading a plan in a terminal, so it is tested rather than trusted. Four
+          # plans it must refuse and one it must accept, with no credential.
+          work="$(mktemp -d "$RUNNER_TEMP/fss-registry-plan.XXXXXX")"
+          resource() {
+            printf '{"address":"module.registry.%s","module_address":"module.registry","mode":"managed","type":"%s","name":"this","change":{"actions":["%s"],"before":null,"after":{"name":"%s"}}}' \
+              "$1" "$2" "$3" "$4"
+          }
+          good="$(resource 'aws_ecr_repository.this[0]' aws_ecr_repository create fss-rh-api)"
+          worker="$(resource 'aws_ecr_repository.this[1]' aws_ecr_repository create fss-rh-worker)"
+          printf '{"resource_changes":[%s,%s]}' "$good" "$worker" > "$work/good.json"
+          printf '{"resource_changes":[%s,%s]}' \
+            "$(resource 'aws_ecr_repository.this[0]' aws_ecr_repository delete fss-rh-api)" "$worker" > "$work/destroy.json"
+          printf '{"resource_changes":[%s,%s]}' \
+            "$good" "$(resource 'aws_ecr_repository_policy.this[0]' aws_ecr_repository_policy create fss-rh-api)" > "$work/type.json"
+          printf '{"resource_changes":[%s,%s]}' \
+            "$good" "$(resource 'aws_ecr_repository.this[1]' aws_ecr_repository create fss-prod-worker)" > "$work/name.json"
+          printf '{"planned_values":{}}' > "$work/shape.json"
+
+          FSS_REHEARSAL_REPORTS="$work" infra/scripts/rehearsal-registry-guard.sh plan "$work/good.json"
+          for bad in destroy type name shape missing; do
+            if FSS_REHEARSAL_REPORTS="$work" infra/scripts/rehearsal-registry-guard.sh plan "$work/$bad.json" >/dev/null 2>&1; then
+              echo "::error::the rehearsal registry plan guard accepted the $bad plan"
+              exit 1
+            fi
+          done
 
       - name: The production smoke script is safe by construction
         run: |

@@ -411,9 +411,11 @@ export const SCENARIOS: readonly Scenario[] = Object.freeze([
       'infra/roots/rehearsal/tests/isolation.tftest.hcl',
       'infra/scripts/offline-gate.sh',
       'infra/scripts/rehearsal-prefix-guard.sh',
+      'infra/scripts/rehearsal-registry-guard.sh',
+      '.github/workflows/greenfield-rehearsal-registry.yml',
     ),
-    trap: 'Two plans that differ in every value are isolated by accident; and an offline plan cannot prove an IAM boundary.',
-    closedBy: 'The offline tests pin the state-key prefixes and the name-prefix refusals; the rehearsal script asserts after teardown that nothing with the production prefix was touched.',
+    trap: 'Two plans that differ in every value are isolated by accident; an offline plan cannot prove an IAM boundary; and a workflow holding the role proves nothing about the plan it applies.',
+    closedBy: 'The offline tests pin the state-key prefixes and the name-prefix refusals; the rehearsal script asserts after teardown that nothing with the production prefix was touched; and the registry apply runs in the rehearsal environment behind a plan guard that is exercised against a plan it must refuse.',
     script: 'infra/scripts/rehearsal-prefix-guard.sh',
   },
   {

@@ -132,6 +132,24 @@ const MUTATIONS = [
       'fss-rh-api and fss-rh-worker are the only fss-rh- names that carry no run. A guard that classified them as foreign would fail Appendix G 39 for the wrong reason on every release, so the classifier has to name them and the check has to run it.',
   },
   {
+    name: 'the rehearsal registry apply stops running in the rehearsal environment',
+    file: '.github/workflows/greenfield-rehearsal-registry.yml',
+    find: '    environment: rehearsal\n',
+    replace: '',
+    suite: ['run', 'test:release'],
+    because:
+      'fss-rh-deploy trusts only the OIDC subject repo:…:environment:rehearsal, so a job without the environment cannot assume it — and would fail at the role step rather than at review. The scenario 39 check has to notice the declaration leaving.',
+  },
+  {
+    name: 'the registry plan guard stops refusing a destroy',
+    file: 'infra/scripts/rehearsal-registry-guard.sh',
+    find: '    if "delete" in actions:',
+    replace: '    if False:',
+    suite: ['run', 'test:release'],
+    because:
+      'force_delete = false stops a destroy of a repository holding images; nothing but this guard stops a *replacement*, which Terraform proposes as delete-then-create and which would take every image past releases were rehearsed on. The guard is the only reader of a plan no operator can see, so a guard that waves a destroy through must turn the suite red.',
+  },
+  {
     name: 'the restore drill stops requiring a baseline to reconstruct',
     file: 'infra/scripts/rehearsal-restore-drill.sh',
     find: '  if [ "$count" -lt 1 ]; then',

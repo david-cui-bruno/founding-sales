@@ -1,5 +1,6 @@
-import { execFileSync } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -119,5 +120,266 @@ describe('Appendix G 39: the two roots cannot address each other', () => {
     // difference between a rule and a string comparison somebody got lucky with.
     expect(rehearsal).toContain('run "a_prefix_that_merely_starts_like_production_is_refused"');
     expect(rehearsal).toContain('expect_failures');
+  });
+});
+
+/**
+ * G12d: the third root's one apply is a workflow run, not a command in a terminal.
+ *
+ * `fss-rh-deploy` trusts the GitHub OIDC provider and the subject
+ * `repo:david-cui-bruno/founding-sales:environment:rehearsal`, and nothing else —
+ * which is Appendix G 39's "distinct roles" clause taken seriously. The operator
+ * tried `terraform apply` in `infra/roots/rehearsal-registry` and was refused
+ * `sts:AssumeRole`. That refusal is the design working, so the apply moves to a
+ * workflow that runs in that environment rather than the trust policy moving to
+ * admit a laptop.
+ *
+ * ## The vacuous-pass trap
+ *
+ * A workflow that declares the environment and then applies whatever Terraform
+ * proposes has moved the credential without moving the judgement: nobody reads the
+ * plan, because nobody can — the plan exists only inside a run. Asserting the
+ * workflow's text would pass against a guard that approves everything. Closed by
+ * running the guard against fabricated plans, one acceptable and four not, and
+ * requiring the refusals; and by requiring the default run to be plan-only, so the
+ * apply is a second dispatch a person makes after reading a summary.
+ */
+
+const REGISTRY_WORKFLOW_PATH = '.github/workflows/greenfield-rehearsal-registry.yml';
+const REGISTRY_GUARD_PATH = 'infra/scripts/rehearsal-registry-guard.sh';
+
+/** One entry of `terraform show -json`'s `resource_changes`. */
+function planned(
+  address: string,
+  type: string,
+  actions: readonly string[],
+  after: Readonly<Record<string, string>>,
+): Readonly<Record<string, unknown>> {
+  return {
+    address,
+    module_address: address.startsWith('module.registry.') ? 'module.registry' : '',
+    mode: 'managed',
+    type,
+    name: 'this',
+    change: { actions, before: null, after },
+  };
+}
+
+/** The plan `infra/roots/rehearsal-registry` produces on the one apply. */
+function goodPlan(): Readonly<Record<string, unknown>> {
+  return {
+    format_version: '1.2',
+    resource_changes: [
+      planned('module.registry.aws_ecr_repository.this["api"]', 'aws_ecr_repository', ['create'], {
+        name: 'fss-rh-api',
+      }),
+      planned('module.registry.aws_ecr_repository.this["worker"]', 'aws_ecr_repository', ['create'], {
+        name: 'fss-rh-worker',
+      }),
+      planned('module.registry.aws_ecr_lifecycle_policy.this["api"]', 'aws_ecr_lifecycle_policy', ['create'], {
+        repository: 'fss-rh-api',
+      }),
+      planned('module.registry.aws_ecr_lifecycle_policy.this["worker"]', 'aws_ecr_lifecycle_policy', ['create'], {
+        repository: 'fss-rh-worker',
+      }),
+    ],
+  };
+}
+
+function runGuard(plan: unknown): { readonly accepted: boolean; readonly output: string } {
+  const directory = mkdtempSync(join(tmpdir(), 'fss-registry-plan-'));
+  const file = join(directory, 'plan.json');
+  writeFileSync(file, JSON.stringify(plan));
+  try {
+    return {
+      accepted: true,
+      output: execFileSync(repositoryPath(REGISTRY_GUARD_PATH), ['plan', file], {
+        env: { ...process.env, FSS_REHEARSAL_REPORTS: directory },
+        encoding: 'utf8',
+        stdio: 'pipe',
+      }),
+    };
+  } catch (error) {
+    const failure = error as { stdout?: string; stderr?: string };
+    return { accepted: false, output: `${failure.stdout ?? ''}\n${failure.stderr ?? ''}` };
+  }
+}
+
+describe('Appendix G 39: the rehearsal registry is applied by a workflow, never from a laptop', () => {
+  const workflow = readRepositoryFile(REGISTRY_WORKFLOW_PATH);
+  const release = readRepositoryFile('.github/workflows/greenfield-release.yml');
+
+  it('is dispatch-only, so nothing a push or a pull request does can reach the role', () => {
+    const triggers = workflow.slice(workflow.indexOf('\non:'), workflow.indexOf('\npermissions:'));
+
+    expect(triggers).toContain('workflow_dispatch:');
+    expect(triggers).not.toContain('pull_request');
+    expect(triggers).not.toContain('push:');
+    expect(triggers).not.toContain('schedule:');
+    expect(triggers).not.toContain('workflow_call');
+  });
+
+  it('declares the rehearsal environment, which is the only subject the role trusts', () => {
+    expect(workflow).toContain('environment: rehearsal');
+    expect(workflow).toContain('id-token: write');
+    expect(workflow).toContain('contents: read');
+    expect(workflow).toContain('role-to-assume: ${{ secrets.FSS_REHEARSAL_ROLE_ARN }}');
+    // And it checks what it got, because an environment pointed at another role is a
+    // configuration mistake no plan would catch.
+    expect(workflow).toContain('is not an fss-rh- role');
+  });
+
+  it('references every action by the same commit sha the release workflow pins', () => {
+    const references = [...workflow.matchAll(/uses:\s*(\S+)/gu)].map(match => match[1] ?? '');
+
+    expect(references.length).toBeGreaterThan(0);
+    for (const reference of references) {
+      expect(reference, reference).toMatch(/^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/u);
+      // The same pin, not merely a pin: two files pinning different commits of
+      // configure-aws-credentials is two different credential paths.
+      expect(release, reference).toContain(reference);
+    }
+    const version = /TERRAFORM_VERSION: '([\d.]+)'/u.exec(workflow)?.[1];
+    expect(version).toBe(/TERRAFORM_VERSION: '([\d.]+)'/u.exec(release)?.[1]);
+  });
+
+  it('initializes the backend the runbook names, and the key that is not a run’s', () => {
+    expect(workflow).toContain('infra/roots/rehearsal-registry');
+    expect(workflow).toContain('callie-sourcing-tfstate-326255650484');
+    expect(workflow).toContain('callie-sourcing-tflock');
+    expect(workflow).toContain('fss/greenfield/rehearsal-registry/terraform.tfstate');
+    expect(workflow).toContain('FSS_REHEARSAL_STATE_KMS_KEY_ARN');
+  });
+
+  it('defaults to plan-only, and the guard runs before the apply rather than beside it', () => {
+    expect(workflow).toMatch(/apply:\s*\n\s+description:[^\n]*\n\s+required: false\n\s+type: boolean\n\s+default: false/u);
+
+    const guardAt = workflow.indexOf('rehearsal-registry-guard.sh plan');
+    const applyAt = workflow.indexOf('apply -input=false');
+    expect(guardAt).toBeGreaterThan(-1);
+    expect(applyAt).toBeGreaterThan(guardAt);
+    // The apply step and the final read-back are both conditional on the input, so
+    // the run an operator makes first cannot change anything.
+    expect(workflow).toContain("if: ${{ inputs.apply }}");
+    expect(workflow).toContain('aws ecr describe-repositories --repository-names fss-rh-api fss-rh-worker');
+  });
+
+  it('has a shell block in every step that bash can parse', () => {
+    // A dispatch-only workflow is never run by accident, which means a syntax error
+    // in it is discovered on the one run that costs something. `bash -n` here is the
+    // cheapest possible substitute for the run nobody can make.
+    const require = createRequire(import.meta.url);
+    const yaml = createRequire(require.resolve('eslint/package.json'))('js-yaml') as {
+      load: (source: string) => unknown;
+    };
+    const parsed = yaml.load(workflow) as { jobs: Record<string, { steps: { run?: string }[] }> };
+    const scripts = Object.values(parsed.jobs)
+      .flatMap(job => job.steps)
+      .map(step => step.run)
+      .filter((run): run is string => typeof run === 'string');
+
+    expect(scripts.length).toBeGreaterThan(4);
+    for (const script of scripts) {
+      const parse = spawnSync('/bin/bash', ['-n'], {
+        input: script.replace(/\$\{\{[^}]+\}\}/gu, 'fixture'),
+        encoding: 'utf8',
+      });
+      expect(parse.status, `${script.slice(0, 80)}\n${parse.stderr}`).toBe(0);
+    }
+  });
+
+  it('prints the plan of its own commands in the release dry run, on every pull request', () => {
+    expect(release).toContain(REGISTRY_WORKFLOW_PATH);
+    expect(release).toContain(`${REGISTRY_GUARD_PATH} commands`);
+
+    // And the printed plan is the workflow's commands rather than a description of
+    // them: every command the guard prints has to appear in the file that runs it.
+    const printed = execFileSync(repositoryPath(REGISTRY_GUARD_PATH), ['commands'], {
+      env: { ...process.env, FSS_REHEARSAL_DRY_RUN: '1' },
+      encoding: 'utf8',
+      stdio: 'pipe',
+    });
+    const commands = printed
+      .split('\n')
+      .filter(line => line.startsWith('PLAN '))
+      .map(line => (line.slice('PLAN '.length).split(/\s+[<#]/u)[0] ?? '').trim());
+
+    expect(commands.length).toBe(6);
+    for (const command of commands) expect(workflow, command).toContain(command);
+  });
+});
+
+describe('Appendix G 39: the plan guard is what reads the plan nobody can read', () => {
+  it('accepts the plan this root actually produces', () => {
+    const { accepted, output } = runGuard(goodPlan());
+
+    expect(output).toContain('create=4');
+    expect(output).toContain('destroy=0');
+    expect(accepted).toBe(true);
+  });
+
+  it('refuses a plan that destroys or replaces anything', () => {
+    const plan = goodPlan();
+    const changes = [...(plan['resource_changes'] as readonly unknown[])];
+    changes[0] = planned('module.registry.aws_ecr_repository.this["api"]', 'aws_ecr_repository', ['delete', 'create'], {
+      name: 'fss-rh-api',
+    });
+    const { accepted, output } = runGuard({ ...plan, resource_changes: changes });
+
+    // `force_delete = false` stops a destroy of a repository that holds images; it
+    // does not stop a replacement, which is the same deletion wearing a create.
+    expect(accepted).toBe(false);
+    expect(output).toContain('would be destroyed or replaced');
+  });
+
+  it('refuses a resource type this root does not create', () => {
+    const plan = goodPlan();
+    const changes = [
+      ...(plan['resource_changes'] as readonly unknown[]),
+      planned('module.registry.aws_ecr_repository_policy.this["api"]', 'aws_ecr_repository_policy', ['create'], {
+        repository: 'fss-rh-api',
+      }),
+    ];
+    const { accepted, output } = runGuard({ ...plan, resource_changes: changes });
+
+    expect(accepted).toBe(false);
+    expect(output).toContain('aws_ecr_repository_policy');
+  });
+
+  it('refuses a name outside the rehearsal namespace', () => {
+    const plan = goodPlan();
+    const changes = [...(plan['resource_changes'] as readonly unknown[])];
+    changes[1] = planned('module.registry.aws_ecr_repository.this["worker"]', 'aws_ecr_repository', ['create'], {
+      name: 'fss-prod-worker',
+    });
+    const { accepted, output } = runGuard({ ...plan, resource_changes: changes });
+
+    expect(accepted).toBe(false);
+    expect(output).toContain('fss-prod-worker');
+  });
+
+  it('refuses a resource it cannot name, rather than assuming it is one of the four', () => {
+    const plan = goodPlan();
+    const changes = [
+      ...(plan['resource_changes'] as readonly unknown[]),
+      planned('aws_ecr_repository.loose', 'aws_ecr_repository', ['create'], {}),
+    ];
+    const { accepted, output } = runGuard({ ...plan, resource_changes: changes });
+
+    expect(accepted).toBe(false);
+    expect(output).toContain('no readable name');
+  });
+
+  it('refuses a plan file that is not there, which is the shape a skipped step takes', () => {
+    let refused = false;
+    try {
+      execFileSync(repositoryPath(REGISTRY_GUARD_PATH), ['plan', join(tmpdir(), 'fss-no-such-plan.json')], {
+        encoding: 'utf8',
+        stdio: 'pipe',
+      });
+    } catch {
+      refused = true;
+    }
+    expect(refused).toBe(true);
   });
 });
