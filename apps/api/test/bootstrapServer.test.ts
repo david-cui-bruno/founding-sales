@@ -1,4 +1,4 @@
-import type { AddressInfo } from 'node:net';
+import { connect, type AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing';
 import { MAX_REQUEST_BYTES } from '../src/limits.ts';
@@ -16,6 +16,7 @@ import { recordingLogger } from '../src/bootstrap/log.ts';
 describe('the API bootstrap server', () => {
   let database: TestDatabase;
   let origin: string;
+  let port: number;
   let close: () => Promise<void>;
 
   beforeAll(async () => {
@@ -27,7 +28,8 @@ describe('the API bootstrap server', () => {
     });
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
     const address = server.address() as AddressInfo;
-    origin = `http://127.0.0.1:${String(address.port)}`;
+    port = address.port;
+    origin = `http://127.0.0.1:${String(port)}`;
     close = async () => new Promise<void>(resolve => server.close(() => resolve()));
   });
 
@@ -51,15 +53,31 @@ describe('the API bootstrap server', () => {
   });
 
   it('refuses a body larger than the limit without reading it', async () => {
-    const response = await fetch(`${origin}/admin/jobs/requeue`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      // The client sets Content-Length from the body; the server refuses on the
-      // declared length, before it reads a byte.
-      body: 'x'.repeat(MAX_REQUEST_BYTES + 1),
+    // A raw socket, because the refusal happens *before* the body: the request line
+    // and the headers are sent, not one byte of the megabyte they promise, and the
+    // 413 comes back anyway. A fetch client would still be writing when it arrived.
+    const status = await new Promise<string>((resolve, reject) => {
+      const socket = connect(port, '127.0.0.1', () => {
+        socket.write(
+          [
+            'POST /admin/jobs/requeue HTTP/1.1',
+            `Host: 127.0.0.1:${String(port)}`,
+            'Content-Type: application/json',
+            `Content-Length: ${String(MAX_REQUEST_BYTES + 1)}`,
+            '',
+            '',
+          ].join('\r\n'),
+        );
+      });
+      socket.setEncoding('utf8');
+      socket.once('data', chunk => {
+        socket.destroy();
+        resolve(String(chunk));
+      });
+      socket.once('error', reject);
     });
-    expect(response.status).toBe(413);
-    expect(await response.json()).toMatchObject({ error: 'payload_too_large' });
+    expect(status).toContain('HTTP/1.1 413');
+    expect(status).toContain('payload_too_large');
   });
 
   it('refuses a content type that is not JSON', async () => {

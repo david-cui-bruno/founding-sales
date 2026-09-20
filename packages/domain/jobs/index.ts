@@ -115,6 +115,25 @@ export {
 } from './metrics.ts';
 
 /**
+ * The real CloudWatch publisher. The only module in the tree that loads an AWS SDK,
+ * and it loads it lazily inside `loadCloudWatchTransport`, so importing this index
+ * costs nothing in a process that never publishes.
+ */
+export {
+  CLOUDWATCH_MAX_DATA_PER_REQUEST,
+  cloudWatchPutMetricData,
+  createCloudWatchSink,
+  loadCloudWatchTransport,
+  toCloudWatchDatum,
+  type CloudWatchDatum,
+  type CloudWatchDimension,
+  type CloudWatchOptions,
+  type CloudWatchSinkOptions,
+  type CloudWatchTransport,
+  type PutMetricDataInput,
+} from './metricsCloudWatch.ts';
+
+/**
  * The transaction advisory lock the one-minute scheduler pass holds (13.1).
  *
  * A stable literal, not a hash of a version, a deployment id or a table name: two
