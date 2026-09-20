@@ -15,6 +15,7 @@
     "./research": "./research/index.ts",
     "./research/testing": "./research/testing/fixtures.ts",
     "./mail": "./mail/index.ts",
+    "./classification": "./classification/index.ts",
     "./outbound": "./outbound/index.ts",
     "./today": "./today/index.ts",
     "./settings": "./settings/index.ts",
@@ -25,6 +26,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.127.0",
     "@aws-sdk/client-cloudwatch": "^3.1136.0",
     "@fss/contracts": "*",
     "pg": "^8.13.1"

@@ -26,11 +26,11 @@ export const CURRENT_SCHEMA_VERSION = 13;
  *
  * Lanes G5 and G2 shipped migrations 0002 and 0003 from the same main and each widened
  * this constant for its own; lane G3a widened it again for migration 0004, G3b for
- * 0005, G4 for 0006, G10 for 0007, G6 for 0008 and G7 for 0009 and 0010. A merge
- * that finds two different maxima takes the larger. That is honest only because nothing has been
- * deployed — G0's {1, 1} was never a promise made to a running production binary. From
- * the first real deployment onwards the widening must precede the migration by a
- * release, and the compatibility test will keep saying so.
+ * 0005, G4 for 0006, G10 for 0007, G6 for 0008, G7 for 0009, G7-2 for 0010 and G7b
+ * for 0011. A merge that finds two different maxima takes the larger. That is honest
+ * only because nothing has been deployed — G0's {1, 1} was never a promise made to a
+ * running production binary. From the first real deployment onwards the widening must
+ * precede the migration by a release, and the compatibility test will keep saying so.
  */
 export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 13 };
 
@@ -121,6 +121,26 @@ export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum:
  * admin's "mark this delivered" and have nowhere to record it, which is worse than
  * refusing: the admin would believe the sequence had been unblocked.
  *
+ * Both maxima move to 10, on the same reasoning as every widening before it.
+ *
+ * Migration 0011 (G7b) moves both a sixth time, and again with a reason on each side.
+ *
+ * The API needs it: `/replies`, `/replies/card` and `/replies/confirm` read
+ * `mail_message_classifications`' three new columns and write
+ * `mail_reply_confirmations`, and `/replies/settings` reads `classifier_settings`.
+ * An API on a version-10 database could render a reply card with no proposed
+ * disposition and then accept a confirmation it had nowhere to put, which would lose
+ * the one record 12.4 requires of a corrected classification.
+ *
+ * The worker needs it: `classify.reply` declares `business_uniqueness`, and the
+ * uniqueness it means is `mail_message_classifications_one_per_layer` together with
+ * the new columns the row carries. A worker on a version-10 database would be
+ * running an at-least-once handler that spends money at a provider with nothing
+ * behind it — the same case G10, G6 and G7 each refused for their own tables — and
+ * it could not record what the call cost, which 13.4 asks for.
+ *
+ * The deploy order stays migrate, then worker, then API. Both maxima move to 11.
+ *
  * Migration 0013 (G9) is the first one that moves the two sides differently, and the
  * difference is the rule working rather than an oversight.
  *
@@ -132,7 +152,7 @@ export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum:
  * answer "sending is off" forever, which is safe and useless; refusing to start says
  * so out loud.
  *
- * The worker's minimum does **not** move past G7-2's 10. Nothing in `apps/worker/src`
+ * The worker's minimum does **not** move past G7b's 11. Nothing in `apps/worker/src`
  * reads `workspace_settings` today: the settings a worker will want — the holiday
  * calendar for business-day delays, which G8 owns in its own table, and the
  * workspace sending attestation, whose send-path read is G12's — are read by code
@@ -146,7 +166,7 @@ export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum:
  * deployed against would be a self-inflicted outage.
  */
 export const API_SCHEMA_RANGE: SchemaRange = { minimum: 13, maximum: 13 };
-export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 10, maximum: 13 };
+export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 11, maximum: 13 };
 
 export function acceptsSchemaVersion(range: SchemaRange, version: number): boolean {
   return Number.isInteger(version) && version >= range.minimum && version <= range.maximum;

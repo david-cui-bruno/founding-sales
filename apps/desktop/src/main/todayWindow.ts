@@ -1,16 +1,17 @@
 import { BrowserWindow, ipcMain, shell } from 'electron';
 import { CRM_IPC_CHANNELS, createCrmBridge, type CrmBridgeDeps, type CrmBridgeHost } from './crmBridge.ts';
 import { TODAY_IPC_CHANNELS, createTodayBridge, type TodayBridgeDeps, type TodayBridgeHost } from './todayBridge.ts';
+import { REPLY_IPC_CHANNELS, createReplyBridge, type ReplyBridgeDeps, type ReplyBridgeHost } from './replyBridge.ts';
 
 /**
- * The two windows beside G2's, and the channels that feed them
- * (specification 8.2, 14.2).
+ * The three windows beside G2's, and the channels that feed them
+ * (specification 8.2, 8.3, 14.2).
  *
  * G2 opened one window; G3b wrote a second renderer and a contract for its bridge and
- * stopped there; this lane adds the third and wires both. They are separate windows
- * rather than screens inside one, which is the choice G3b's own note records: the
- * Today window is the one a person leaves open all day and has to stay small and
- * fast, and the CRM windows are opened, used and closed.
+ * stopped there; G6 added the third and wired both; G7b adds the reply cards. They
+ * are separate windows rather than screens inside one, which is the choice G3b's own
+ * note records: the Today window is the one a person leaves open all day and has to
+ * stay small and fast, and the others are opened, used and closed.
  *
  * Every window is built the same way as G2's: context isolation on, node integration
  * off, sandboxed, no `webview`, and every link out to the system browser. The only
@@ -78,6 +79,53 @@ export function registerTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
       return await host.state();
     }
     return await host.recordOutcome(input as unknown as Parameters<TodayBridgeHost['recordOutcome']>[0]);
+  });
+  return host;
+}
+
+/**
+ * The reply cards (8.3, 12.4).
+ *
+ * Five channels, and the argument checking is the same as everywhere else in this
+ * file: the renderer's word is never taken for a shape, and a malformed request is
+ * the current state back rather than an argument passed on to the API.
+ *
+ * `confirm` is the consequential one, so it is checked field by field rather than
+ * cast. A confirmation with no disposition is not a confirmation, and a callback the
+ * renderer sent as something other than the three strings the contract names would be
+ * an instant somebody has to guess at — which is the one thing 12.4 will not have.
+ */
+export function registerReplyBridge(deps: ReplyBridgeDeps): ReplyBridgeHost {
+  const host = createReplyBridge(deps);
+  handleOnce(REPLY_IPC_CHANNELS.state, async () => await host.state());
+  handleOnce(REPLY_IPC_CHANNELS.refresh, async () => await host.refresh());
+  handleOnce(REPLY_IPC_CHANNELS.open, async argument => {
+    const messageId = (argument as { messageId?: unknown } | null)?.messageId;
+    return typeof messageId === 'string' ? await host.open({ messageId }) : await host.state();
+  });
+  handleOnce(REPLY_IPC_CHANNELS.collapse, async () => await host.collapse());
+  handleOnce(REPLY_IPC_CHANNELS.confirm, async argument => {
+    const input = argument as Record<string, unknown> | null;
+    if (input === null || typeof input['messageId'] !== 'string' || typeof input['disposition'] !== 'string') {
+      return await host.state();
+    }
+    const raw = input['callback'] as Record<string, unknown> | null | undefined;
+    const callback =
+      raw === null || raw === undefined
+        ? null
+        : typeof raw['localDate'] === 'string' &&
+            typeof raw['localTime'] === 'string' &&
+            typeof raw['sourceTimeZone'] === 'string'
+          ? { localDate: raw['localDate'], localTime: raw['localTime'], sourceTimeZone: raw['sourceTimeZone'] }
+          : undefined;
+    if (callback === undefined) return await host.state();
+    return await host.confirm({
+      messageId: input['messageId'],
+      disposition: input['disposition'] as Parameters<ReplyBridgeHost['confirm']>[0]['disposition'],
+      callback,
+      firmWideOptOut: input['firmWideOptOut'] === true,
+      note: typeof input['note'] === 'string' ? input['note'] : '',
+    });
   });
   return host;
 }
@@ -155,6 +203,7 @@ export async function openSecondaryWindow(
  */
 export function windowMenuTemplate(open: {
   readonly today: () => void;
+  readonly replies: () => void;
   readonly firms: () => void;
   /** Lane G9's Settings, Dashboard and Diagnostics window. Optional so a caller
    * that has not wired it yet still gets the first two. */
@@ -165,10 +214,11 @@ export function windowMenuTemplate(open: {
       label: 'Window',
       submenu: [
         { label: 'Today', accelerator: 'CmdOrCtrl+1', click: open.today },
-        { label: 'Firms', accelerator: 'CmdOrCtrl+2', click: open.firms },
+        { label: 'Replies', accelerator: 'CmdOrCtrl+2', click: open.replies },
+        { label: 'Firms', accelerator: 'CmdOrCtrl+3', click: open.firms },
         ...(open.administration === undefined
           ? []
-          : [{ label: 'Administration', accelerator: 'CmdOrCtrl+3', click: open.administration }]),
+          : [{ label: 'Administration', accelerator: 'CmdOrCtrl+4', click: open.administration }]),
       ],
     },
   ];

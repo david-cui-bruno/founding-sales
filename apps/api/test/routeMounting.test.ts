@@ -98,6 +98,11 @@ describe('what the API mounts', () => {
       '/postures/record',
       '/postures/revoke',
       '/readyz',
+      '/replies',
+      '/replies/card',
+      '/replies/confirm',
+      '/replies/settings',
+      '/replies/settings/update',
       '/research/config',
       '/research/discover',
       '/research/enrich',
@@ -207,6 +212,18 @@ describe('what the API mounts', () => {
     }
   });
 
+  it('keeps the reply read and the reply commands separate paths', () => {
+    // A `/replies` prefix would have let one claim answer for the list, the card,
+    // the confirmation and the configuration alike. 8.3's confirmation has
+    // consequences, and the registry can only promise about the paths it was told.
+    const registry = registryFor(options());
+    for (const path of ['/replies', '/replies/card', '/replies/confirm', '/replies/settings']) {
+      expect(registry.moduleFor(path)?.name, path).toBe('replies');
+    }
+    expect(registry.moduleFor('/replies/confirm-all')).toBeUndefined();
+    expect(registry.moduleFor('/replies/settings/reset')).toBeUndefined();
+  });
+
   it('answers a path nobody mounted with a redacted not_found and touches no database', async () => {
     for (const path of ['/', '/commands', '/health/', '/firmsomething']) {
       const result = await route('GET', path, options());
@@ -243,6 +260,7 @@ describe('what the API mounts', () => {
       'gmail',
       'gmail-push',
       'messages',
+      'replies',
       'outbound',
       'today',
       'snooze',

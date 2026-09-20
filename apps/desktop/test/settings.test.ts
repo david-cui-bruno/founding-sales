@@ -560,9 +560,27 @@ describe('the administration view', () => {
 describe('the window menu', () => {
   it('offers the administration window and still works without it', () => {
     const noop = (): void => undefined;
-    const withAdmin = windowMenuTemplate({ today: noop, firms: noop, administration: noop });
-    expect(withAdmin[0]?.submenu.map(item => item.label)).toEqual(['Today', 'Firms', 'Administration']);
-    const without = windowMenuTemplate({ today: noop, firms: noop });
-    expect(without[0]?.submenu.map(item => item.label)).toEqual(['Today', 'Firms']);
+    const withAdmin = windowMenuTemplate({
+      today: noop,
+      replies: noop,
+      firms: noop,
+      administration: noop,
+    });
+    expect(withAdmin[0]?.submenu.map(item => item.label)).toEqual([
+      'Today',
+      'Replies',
+      'Firms',
+      'Administration',
+    ]);
+    // G7b's ⌘2 and ⌘3 are the selling windows and keep them; this one takes the
+    // next free key rather than pushing a window somebody uses all day along.
+    expect(withAdmin[0]?.submenu.map(item => item.accelerator)).toEqual([
+      'CmdOrCtrl+1',
+      'CmdOrCtrl+2',
+      'CmdOrCtrl+3',
+      'CmdOrCtrl+4',
+    ]);
+    const without = windowMenuTemplate({ today: noop, replies: noop, firms: noop });
+    expect(without[0]?.submenu.map(item => item.label)).toEqual(['Today', 'Replies', 'Firms']);
   });
 });
