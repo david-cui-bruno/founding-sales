@@ -69,13 +69,14 @@ export const spawnCommand: RunCommand = async (command, args, input) =>
   await new Promise<Buffer>((resolve, reject) => {
     const child = spawn(command, [...args], { stdio: ['pipe', 'pipe', 'pipe'] });
     const out: Buffer[] = [];
-    const err: Buffer[] = [];
     child.stdout.on('data', chunk => out.push(Buffer.from(chunk as Buffer)));
-    child.stderr.on('data', chunk => err.push(Buffer.from(chunk as Buffer)));
+    // stderr is drained and discarded. It has to be drained — a full pipe would
+    // deadlock the child — and it must not be kept, because `age`'s own messages
+    // name key paths and this buffer would end up in an error a person pastes.
+    child.stderr.resume();
     child.on('error', reject);
     child.on('close', code => {
       if (code === 0) resolve(Buffer.concat(out));
-      // The command's own stderr may name a key path; only its exit code is reported.
       else reject(new Error(`${command} exited with ${String(code ?? -1)}`));
     });
     child.stdin.end(input);
@@ -88,14 +89,26 @@ const write = (line: string): void => {
 /**
  * The cipher for a run.
  *
- * `--recipient` and `--identity` choose `age`, which is the production path.
- * `--local-key-file` is the rehearsal path on a machine with no `age`: it reads a
- * 32-byte key from a file, and that file is the operator's problem for exactly as
- * long as the rehearsal lasts. There is no third option and no key on a command line.
+ * `--recipient` seals and `--identity` opens; both choose `age`, which is the
+ * production path. `--local-key-file` is the rehearsal path on a machine with no
+ * `age`: it reads a 32-byte key from a file, and that file is the operator's problem
+ * for exactly as long as the rehearsal lasts. There is no third option and no key on
+ * a command line.
+ *
+ * The direction is a parameter because the two halves need different options, and an
+ * `age --decrypt --identity ''` would otherwise fail with the binary's own message
+ * rather than with an instruction.
  */
-async function cipherFor(options: Readonly<Record<string, string>>): Promise<ArtifactCipher> {
+async function cipherFor(
+  options: Readonly<Record<string, string>>,
+  direction: 'seal' | 'open',
+): Promise<ArtifactCipher> {
   const localKeyFile = options['local-key-file'];
   if (localKeyFile !== undefined) return aesGcmCipher(await readFile(localKeyFile));
+  const needed = direction === 'seal' ? 'recipient' : 'identity';
+  if (options[needed] === undefined) {
+    throw new Error(`--${needed} is required to ${direction} an artifact, or --local-key-file for a rehearsal`);
+  }
   return ageCipher({
     command: options['age-command'] ?? 'age',
     recipient: options['recipient'] ?? '',
@@ -163,7 +176,7 @@ export async function main(argv: readonly string[]): Promise<number> {
       const result = await runCarryExport({
         reader,
         watermarkFlag: await readFile(options['watermark'] ?? '', 'utf8').catch(() => null),
-        cipher: await cipherFor(options),
+        cipher: await cipherFor(options, 'seal'),
         now: new Date(),
         artifactId: options['artifact-id'] ?? '',
       });
@@ -182,7 +195,7 @@ export async function main(argv: readonly string[]): Promise<number> {
       const opened = await openArtifact({
         sealed: await readFile(options['artifact'] ?? ''),
         receipt,
-        cipher: await cipherFor(options),
+        cipher: await cipherFor(options, 'open'),
       });
       if (!opened.ok) {
         console.error(`carry verify refused: ${opened.reason}`);
@@ -199,7 +212,7 @@ export async function main(argv: readonly string[]): Promise<number> {
       const opened = await openArtifact({
         sealed: await readFile(options['artifact'] ?? ''),
         receipt,
-        cipher: await cipherFor(options),
+        cipher: await cipherFor(options, 'open'),
       });
       if (!opened.ok) {
         console.error(`carry import refused: ${opened.reason}`);
