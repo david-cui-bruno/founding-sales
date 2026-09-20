@@ -246,6 +246,21 @@ oversight: a firm typed in by hand has an address and no coordinate. See
   G14's retention batch.
 * **LinkedIn.** `researchSourcePolicy` calls it `manual_only`, and nothing reads it.
 
+## Shipping it
+
+`Dockerfile.api`, `Dockerfile.worker` and their `.dockerignore` files are allow-lists of
+directories, not deny-lists: a package a process imports but nobody listed is simply
+absent from the image, and the container dies at start-up with `ERR_MODULE_NOT_FOUND`.
+`packages/domain/research` is listed in all four, and so is `packages/domain/crm`,
+because research reaches into it. Both images also `rm -rf
+packages/domain/research/testing`, since `**/test/**` does not match a directory called
+`testing` and the recorded provider fixtures are test data.
+
+The last block of `test/research/rules.test.ts` checks this without Docker: it reads
+which `@fss/domain/*` subpaths each app's own source imports, adds the siblings this
+package reaches, and asserts every one of them appears in that image's `COPY` lines and
+allow-list.
+
 ## Running the tests
 
 ```

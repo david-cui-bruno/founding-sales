@@ -599,3 +599,55 @@ describe('duplicate pair identity', () => {
     expect(websiteHost(null)).toBeNull();
   });
 });
+describe('the container images ship this package (the PR 135 lesson)', () => {
+  // `Dockerfile.*` and `Dockerfile.*.dockerignore` are allow-lists of
+  // directories, so a package a process imports but nobody listed is simply
+  // absent from the image and the container dies with ERR_MODULE_NOT_FOUND —
+  // which is how G3b's `packages/domain/crm` was lost. Docker is not available
+  // on a development machine, so this is the cheap check that runs anyway.
+  const repositoryRoot = fileURLToPath(new URL('../../../../', import.meta.url));
+  const readRoot = (name: string): string => readFileSync(join(repositoryRoot, name), 'utf8');
+
+  // Which `@fss/domain/<name>` subpaths each process's own source imports, plus
+  // the subpaths this package reaches into from inside. Both have to be in the
+  // image; only the first is visible in the app's own files.
+  const RESEARCH_REACHES = ['crm', 'db', 'jobs', 'src'] as const;
+
+  it('research reaches exactly the sibling directories this test claims', () => {
+    const reached = new Set<string>();
+    for (const file of researchSourceFiles()) {
+      for (const match of readFileSync(file, 'utf8').matchAll(/from '\.\.\/([a-z]+)\//gu)) {
+        reached.add(match[1] as string);
+      }
+    }
+    expect([...reached].sort()).toEqual([...RESEARCH_REACHES]);
+  });
+
+  for (const service of ['api', 'worker'] as const) {
+    it(`the ${service} image copies every domain directory its process loads`, () => {
+      const dockerfile = readRoot(`Dockerfile.${service}`);
+      const ignore = readRoot(`Dockerfile.${service}.dockerignore`);
+      const source = researchSourceFiles(join(repositoryRoot, 'apps', service, 'src'));
+      const imported = new Set<string>();
+      for (const file of source) {
+        for (const match of readFileSync(file, 'utf8').matchAll(/from '@fss\/domain\/([a-z]+)'/gu)) {
+          imported.add(match[1] as string);
+        }
+      }
+      // Nothing is asserted about which directories a process happens to import;
+      // whatever they are, and whatever they reach, the image has to carry them.
+      if (!imported.has('research')) return;
+      for (const directory of [...imported, ...RESEARCH_REACHES]) {
+        expect(dockerfile).toContain(`COPY packages/domain/${directory} packages/domain/${directory}`);
+        expect(ignore).toContain(`!packages/domain/${directory}`);
+      }
+    });
+
+    it(`the ${service} image leaves the recorded fixtures out`, () => {
+      // `**/test/**` does not match a directory called `testing`, so the
+      // fixtures would otherwise ride into production inside `research`.
+      expect(readRoot(`Dockerfile.${service}.dockerignore`)).toContain('packages/domain/research/testing');
+      expect(readRoot(`Dockerfile.${service}`)).toMatch(/RUN rm -rf .*packages\/domain\/research\/testing/u);
+    });
+  }
+});
