@@ -590,6 +590,8 @@ describe('the routes', () => {
 
   it('still refuses an unknown path rather than falling through', async () => {
     expect(await route('GET', '/auth/whatever', options())).toMatchObject({ status: 404 });
-    expect(await route('GET', '/firms', options())).toMatchObject({ status: 404 });
+    // `/firms` was this example until lane G3a mounted it. An unmounted path is the
+    // point; a mounted one now answers 401, which is a different (and correct) thing.
+    expect(await route('GET', '/nothing-mounted-here', options())).toMatchObject({ status: 404 });
   });
 });

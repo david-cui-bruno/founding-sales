@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing';
+import { CURRENT_SCHEMA_VERSION, WORKER_SCHEMA_RANGE } from '@fss/domain/db';
 import { WORKER_EXIT_CODES, checkWorkerStartup, restoreSuspected, startupLogLine } from '../src/index.ts';
 
 /**
@@ -26,8 +27,10 @@ describe('worker startup', () => {
     expect(report).toEqual({
       component: 'worker',
       outcome: 'ready',
-      declaredRange: { minimum: 2, maximum: 3 },
-      databaseVersion: 3,
+      // From the constants rather than repeated here, so widening the range for a
+      // new migration is one edit in `schemaRange.ts` and not three in tests.
+      declaredRange: { minimum: WORKER_SCHEMA_RANGE.minimum, maximum: WORKER_SCHEMA_RANGE.maximum },
+      databaseVersion: CURRENT_SCHEMA_VERSION,
       systemGeneration: 1,
       reason: null,
       exitCode: WORKER_EXIT_CODES.ok,
@@ -75,8 +78,8 @@ describe('worker startup', () => {
     expect(JSON.parse(startupLogLine(report))).toEqual({
       component: 'worker',
       outcome: 'ready',
-      schemaRange: '2-3',
-      databaseVersion: 3,
+      schemaRange: `${String(WORKER_SCHEMA_RANGE.minimum)}-${String(WORKER_SCHEMA_RANGE.maximum)}`,
+      databaseVersion: CURRENT_SCHEMA_VERSION,
       systemGeneration: 1,
       reason: null,
     });

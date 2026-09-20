@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing';
+import { API_SCHEMA_RANGE, CURRENT_SCHEMA_VERSION } from '@fss/domain/db';
 import { clientVersionRangeSchema } from '@fss/contracts';
 import {
   MAX_REQUEST_BYTES,
@@ -119,7 +120,14 @@ describe('the health route against a real database', () => {
     expect(report).toEqual({
       status: 'serving',
       component: 'api',
-      schema: { declaredRange: { minimum: 3, maximum: 3 }, databaseVersion: 3, accepted: true, reason: null },
+      // From the constants rather than repeated here: the next lane to add a
+      // migration widens `schemaRange.ts` and this keeps agreeing with it.
+      schema: {
+        declaredRange: { minimum: API_SCHEMA_RANGE.minimum, maximum: API_SCHEMA_RANGE.maximum },
+        databaseVersion: CURRENT_SCHEMA_VERSION,
+        accepted: true,
+        reason: null,
+      },
       systemGeneration: 1,
       supportedClientVersions: CLIENT_VERSIONS,
       sendingEnabled: false,
