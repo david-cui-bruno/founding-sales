@@ -5,6 +5,7 @@ import { WORKER_EXIT_CODES } from '../index.ts';
 import { mailHandlers } from '../handlers/mail.ts';
 import { researchHandlers } from '../handlers/research.ts';
 import { suppressionFinalizeJobHandler } from '../handlers/suppressionFinalize.ts';
+import { todayBuildJobHandler, todayBuildSource } from '../handlers/todayBuild.ts';
 import { mailSources } from '../scheduler/mailSources.ts';
 import { canarySource } from '../scheduler/sources.ts';
 import { ConfigError, describeWorkerConfig, readWorkerConfig, type WorkerConfig } from './config.ts';
@@ -38,6 +39,7 @@ import { WorkerStartupRefusal, startWorker } from './worker.ts';
 function registerHandlers(registry: HandlerRegistry): HandlerRegistry {
   registry.register(canaryHandler());
   registry.register(suppressionFinalizeJobHandler());
+  registry.register(todayBuildJobHandler());
   for (const handler of researchHandlers({ providers: {} })) registry.register(handler);
   for (const handler of mailHandlers(undefined)) registry.register(handler);
   return registry;
@@ -136,7 +138,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
         metrics: sessions[1 + config.concurrency] as SessionQueryable,
       },
       registry: registerHandlers(new HandlerRegistry()),
-      sources: [canarySource(), ...mailSources()],
+      sources: [canarySource(), todayBuildSource(), ...mailSources()],
       sink,
       log,
     });

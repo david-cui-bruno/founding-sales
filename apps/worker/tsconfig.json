@@ -12,8 +12,9 @@
       "@fss/domain/research": ["../../packages/domain/research/index.ts"],
       "@fss/domain/research/testing": ["../../packages/domain/research/testing/fixtures.ts"],
       "@fss/domain/suppression": ["../../packages/domain/suppression/index.ts"],
+      "@fss/domain/today": ["../../packages/domain/today/index.ts"],
       "@fss/domain/db/testing": ["../../packages/domain/db/testing/index.ts"]
     }
   },
-  "include": ["src/**/*.ts", "test/**/*.ts", "vitest.config.ts"]
+  "include": ["src/**/*.ts", "test/**/*.ts", "tools/**/*.ts", "vitest.config.ts"]
 }

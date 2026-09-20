@@ -25,14 +25,16 @@ signature, and every call site takes it as a dependency. There are two fakes:
 `pendingReplyPromoter()`, which counts deferrals for a process that has the mail lane
 but not the today lane.
 
-Wiring the real one is a one-line adapter in `apps/worker/src/handlers/mail.ts` once
-`0008_today.sql` is on `main`:
+`0008_today.sql` reached `main` while this lane was finishing, so the real adapter is
+now wired: `todayReplyPromoter()` in `apps/worker/src/handlers/mail.ts` forwards to
+`promoteReply` and does nothing else. `packages/domain/today` was already in both image
+allow-lists by then, so nothing moved there.
 
-```ts
-replyPromoter: { promote: async (context, input) => { await promoteReply(context, input); } }
-```
-
-and `packages/domain/today` joins the two image allow-lists.
+`pendingReplyPromoter` stays. A process that has the mail lane and not the today lane
+is no longer the repository's state, but it is still a state a deployment can be in
+during a rolling step, and counting the deferrals is better than a crash — the
+`reply_lane_entry` effect row is written either way, so the reply appears on the card
+the next time Today is built.
 
 ## Why a port rather than waiting
 
@@ -49,6 +51,10 @@ boundary rather than the call:
 * `recordingReplyPromoter` records the `RepositoryContext` it was handed, and the
   scenario test asserts it is the *same* session the message and its holds were
   written on. A promoter that opened its own connection would fail that assertion.
+* The production adapter is tested the other way round, in
+  `apps/worker/test/mailHandlers.test.ts`: it promotes inside an open transaction and
+  the test rolls back, then asserts the `today_items` row is gone. An adapter with its
+  own connection would leave it behind.
 * The arguments are asserted exactly: firm, message and `receivedAt`, with `contactId`
   present only when the match named a contact.
 * `replyItemKey(id)` is in the mail lane and spells `reply-message:<id>`, so a

@@ -26,11 +26,11 @@ export const CURRENT_SCHEMA_VERSION = 9;
  *
  * Lanes G5 and G2 shipped migrations 0002 and 0003 from the same main and each widened
  * this constant for its own; lane G3a widened it again for migration 0004, G3b for
- * 0005, G4 for 0006 and G10 for 0007. Lane G7 widens it for 0009, which arrives after
- * G6's 0008. A merge that finds two different maxima takes the larger. That is honest
- * only because nothing has been deployed — G0's {1, 1} was never a promise made to a
- * running production binary. From the first real deployment onwards the widening must
- * precede the migration by a release, and the compatibility test will keep saying so.
+ * 0005, G4 for 0006, G10 for 0007, G6 for 0008 and G7 for 0009. A merge that finds
+ * two different maxima takes the larger. That is honest only because nothing has been
+ * deployed — G0's {1, 1} was never a promise made to a running production binary. From
+ * the first real deployment onwards the widening must precede the migration by a
+ * release, and the compatibility test will keep saying so.
  */
 export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 9 };
 
@@ -66,23 +66,35 @@ export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum:
  * range exists to prevent, so it refuses to start instead rather than accepting {6, 7}.
  * `docs/decisions/g10-worker-schema-minimum.md` says what that gives up.
  *
- * Migration 0009 (lane G7) moves both minima to 9, and for the same reason on both
- * sides rather than by habit.
+ * Migration 0008 (G6) moves both a third time, by the same rule that document states:
+ * a binary declares the lowest version on which its *first statement* can succeed, not
+ * the lowest it would like. The API's `/today`, `/today/firm` and `/today/snooze` read
+ * and write `today_snapshots`, `today_items` and `today_snoozes`; the worker's
+ * `today.build` handler calls `today_upsert_item`, and `UNIQUE(workspace_id,
+ * snapshot_date, firm_id, item_key)` inside it *is* that handler's declared
+ * `business_uniqueness` protection — so a worker on a version-7 database would be a
+ * worker running an at-least-once handler with nothing behind it, which is exactly the
+ * case G10 refused.
  *
- * The API needs it: `/gmail/connect`, `/gmail/callback`, `/gmail/disconnect`, the
- * Pub/Sub webhook and the message view read and write `mailboxes`, `mailbox_tokens`
- * and `gmail_push_notifications`. An API on a version-8 database could accept a
- * Google authorization code and then have nowhere to put the grant, which is the one
- * outcome worse than refusing the connection: the code is single-use, so the
- * salesperson would have to start again and the API would have leaked a grant nobody
- * can revoke through FSS.
+ * Migration 0009 (G7) moves both a fourth time, and for a reason on each side rather
+ * than by habit.
+ *
+ * The API needs it: `/gmail/connect`, `/oauth/gmail/callback`, `/gmail/disconnect`,
+ * the Pub/Sub webhook and the message view read and write `mailboxes`,
+ * `mailbox_tokens` and `gmail_push_notifications`. An API on a version-8 database
+ * could accept a Google authorization code and then have nowhere to put the grant,
+ * which is the one outcome worse than refusing the connection: the code is single-use,
+ * so the salesperson would have to start again and the API would have leaked a grant
+ * nobody can revoke through FSS.
  *
  * The worker needs it: `mail.sync`, `mail.recover` and `mail.watch_renew` read the
  * compare-and-set cursor and the coverage watermark on `mailboxes` and write
  * `mail_messages` and `mail_message_effects`. A worker without them could not prove
  * coverage, and a mailbox whose coverage cannot be proved must hold every automated
  * step rather than proceed (4.2) — so the honest failure is the process refusing to
- * start, which is what a minimum of 9 produces.
+ * start, which is what a minimum of 9 produces. It is also the same refusal G10 and G6
+ * each made for their own tables: a `business_uniqueness` handler on a database
+ * without its unique index is an at-least-once handler with nothing behind it.
  *
  * The deploy order stays migrate, then worker, then API, so neither binary meets an
  * older schema; a rolling step that runs two workers has both understanding 0009,

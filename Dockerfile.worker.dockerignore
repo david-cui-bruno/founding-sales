@@ -15,6 +15,7 @@
 !packages/domain/crm
 !packages/domain/jobs
 !packages/domain/research
+!packages/domain/today
 !packages/domain/src
 !packages/domain/crm
 !packages/domain/policy

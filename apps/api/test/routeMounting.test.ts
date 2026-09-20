@@ -99,6 +99,10 @@ describe('what the API mounts', () => {
       '/suppressions/correct',
       '/suppressions/record',
       '/suppressions/supersede',
+      '/today',
+      '/today/firm',
+      '/today/snooze',
+      '/today/snooze/cancel',
     ]);
     expect([...registry.prefixes()]).toEqual([
       '/admin/devices',
@@ -225,6 +229,8 @@ describe('what the API mounts', () => {
       'gmail',
       'gmail-push',
       'messages',
+      'today',
+      'snooze',
     ]);
   });
 });

@@ -65,6 +65,7 @@ COPY packages/domain/db packages/domain/db
 COPY packages/domain/crm packages/domain/crm
 COPY packages/domain/jobs packages/domain/jobs
 COPY packages/domain/research packages/domain/research
+COPY packages/domain/today packages/domain/today
 COPY packages/domain/src packages/domain/src
 COPY packages/domain/crm packages/domain/crm
 COPY packages/domain/policy packages/domain/policy

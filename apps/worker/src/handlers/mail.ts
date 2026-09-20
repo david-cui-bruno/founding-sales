@@ -11,6 +11,7 @@ import {
   type ReplyPromoter,
 } from '@fss/domain/mail';
 import type { SuppressionJournal } from '@fss/domain/suppression';
+import { promoteReply } from '@fss/domain/today';
 
 /**
  * The three `mail.*` handlers, composed for this process (12.3, Appendix C).
@@ -52,7 +53,7 @@ export interface MailWorkerOptions {
   readonly cipher: EnvelopeCipher;
   /** 10.2: the object-locked journal every suppression is written to before its row. */
   readonly journal: SuppressionJournal;
-  /** G6's `promoteReply`, behind the port. See `docs/decisions/g7-reply-lane-port.md`. */
+  /** `todayReplyPromoter()` in production. See `docs/decisions/g7-reply-lane-port.md`. */
   readonly replyPromoter: ReplyPromoter;
   /** The fully qualified Pub/Sub topic `infra/modules/pubsub` outputs. */
   readonly pushTopicName: string;
@@ -93,6 +94,34 @@ export function mailHandlers(options: MailWorkerOptions | undefined): readonly J
       { ...(options.maxAttempts === undefined ? {} : { maxAttempts: options.maxAttempts }) },
     ),
   ];
+}
+
+/**
+ * The production `ReplyPromoter`: G6's `promoteReply`, on the caller's context.
+ *
+ * This is the whole of the adapter `docs/decisions/g7-reply-lane-port.md` said would
+ * replace `pendingReplyPromoter` once `0008_today.sql` landed, and the important
+ * thing about it is what it does *not* do. It takes the `RepositoryContext` it is
+ * handed and passes it straight through, so the today item is written on the same
+ * session, inside the same transaction, as the message, its match candidates and
+ * their holds — which is what Appendix A's "Record uncertain or ambiguous reply"
+ * means and what the recording fake asserts in the tests. An adapter that opened its
+ * own connection would type-check and quietly break the flow.
+ *
+ * `promoteReply` returns the item id; the port returns nothing, because the mail lane
+ * has no use for it and a return value it ignored would invite someone to store it.
+ */
+export function todayReplyPromoter(): ReplyPromoter {
+  return {
+    promoteReply: async (context, promotion) => {
+      await promoteReply(context, {
+        firmId: promotion.firmId,
+        ...(promotion.contactId === undefined ? {} : { contactId: promotion.contactId }),
+        messageId: promotion.messageId,
+        receivedAt: promotion.receivedAt,
+      });
+    },
+  };
 }
 
 /** The kinds a fully configured mail worker claims. Read by the startup log line. */

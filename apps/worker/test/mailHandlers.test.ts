@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing';
 import { repositoryContext, workspaceScope, type RepositoryContext, type SessionQueryable } from '@fss/domain/db';
@@ -21,7 +21,7 @@ import {
 } from '@fss/domain/mail';
 import { recordingSuppressionJournal } from '@fss/domain/suppression';
 import { runClaimedJob } from '../src/runner/jobRunner.ts';
-import { MAIL_JOB_KINDS, mailHandlers, type MailWorkerOptions } from '../src/handlers/mail.ts';
+import { MAIL_JOB_KINDS, mailHandlers, todayReplyPromoter, type MailWorkerOptions } from '../src/handlers/mail.ts';
 import { mailRecoverySource, mailSyncReconciliationSource, watchRenewalSource } from '../src/scheduler/mailSources.ts';
 
 /**
@@ -177,6 +177,35 @@ describe('the mail handlers and scheduler sources', () => {
     );
     return Number(rows[0]?.count ?? '0');
   };
+
+  // ------------------------------------------------------- the reply lane adapter
+  it('promotes a reply on the caller\'s transaction, so a rollback takes the item with it', async () => {
+    const firm = await session.query<{ id: string }>(
+      `INSERT INTO firms (workspace_id, name, region_code, postal_code)
+       VALUES ($1, 'Northgate Residential Management', 'TX', '79901') RETURNING id`,
+      [workspaceId],
+    );
+    const firmId = firm.rows[0]?.id ?? '';
+    const messageId = randomUUID();
+
+    // Appendix A puts the today item in the *same* transaction as the message, its
+    // candidates and their holds. An adapter that opened its own connection would
+    // type-check and quietly break that, so the test rolls back and looks.
+    await session.query('BEGIN');
+    await todayReplyPromoter().promoteReply(context, { firmId, messageId, receivedAt: NOW });
+    const inside = await session.query<{ kind: string }>(
+      'SELECT kind FROM today_items WHERE workspace_id = $1 AND item_key = $2',
+      [workspaceId, `reply-message:${messageId}`],
+    );
+    expect(inside.rows.map(row => row.kind)).toEqual(['reply']);
+    await session.query('ROLLBACK');
+
+    const after = await session.query<{ count: string }>(
+      'SELECT count(*) AS count FROM today_items WHERE workspace_id = $1 AND item_key = $2',
+      [workspaceId, `reply-message:${messageId}`],
+    );
+    expect(after.rows[0]?.count).toBe('0');
+  });
 
   // ------------------------------------------------------------- registration
   it('declares the protection Appendix C gives each kind, or the registry refuses it', () => {

@@ -24,6 +24,7 @@
 !packages/domain/db
 !packages/domain/jobs
 !packages/domain/research
+!packages/domain/today
 !packages/domain/src
 !packages/domain/policy
 !packages/domain/suppression

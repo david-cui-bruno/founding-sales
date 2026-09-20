@@ -1,8 +1,17 @@
 import { join } from 'node:path';
-import { app, BrowserWindow, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, Menu, shell } from 'electron';
 import { z } from 'zod';
 import { uuid } from '@fss/contracts';
 import { createApiClient, fetchSend } from './apiClient.ts';
+import { createAuthedClient } from './authedClient.ts';
+import { createDialHandoff } from './dialHandoff.ts';
+import { createDialApi, createTelLaunchDriver } from './telHandoff.ts';
+import {
+  openSecondaryWindow,
+  registerCrmBridge,
+  registerTodayBridge,
+  windowMenuTemplate,
+} from './todayWindow.ts';
 import { createDeviceStore } from './deviceStore.ts';
 import { createKeychainVault } from './keychain.ts';
 import { createOfflineCache } from './offlineCache.ts';
@@ -108,10 +117,72 @@ export async function openWindow(configuration: DesktopConfiguration): Promise<B
   return window;
 }
 
+/**
+ * Register the Today and CRM bridges and put their windows on the menu.
+ *
+ * This is the wiring G3b's renderer has been waiting for: `firmWorkspace.ts` reads
+ * `globalThis.callieCrm`, the preload script installs it, and nothing until now
+ * answered the channels behind it. The Today window is the third, on the same
+ * pattern.
+ *
+ * The windows are reachable from the application menu rather than from a button on
+ * G2's page, because this lane does not own `renderer.ts` — and because on macOS the
+ * menu is where a window that is not the front one is found anyway.
+ */
+export function registerWindows(configuration: DesktopConfiguration, manager: SessionManager): void {
+  const api = createAuthedClient({
+    baseUrl: configuration.apiBaseUrl,
+    clientVersion: configuration.clientVersion,
+    send: fetchSend,
+    accessToken: async () => await manager.accessToken(),
+  });
+  const session = { state: async () => await manager.state(), refreshToday: async () => await manager.refreshToday() };
+
+  registerTodayBridge({
+    api,
+    // G4's handoff logic, bound to macOS through `telHandoff.ts`: the launch-services
+    // probe for the setup proof and `shell.openExternal` for the open, with every
+    // scheme but `tel:` unreachable from that module. There is no Swift helper (2).
+    handoff: createDialHandoff({ driver: createTelLaunchDriver(), api: createDialApi(api) }),
+    session,
+  });
+  registerCrmBridge({ api, session });
+
+  const renderer = (name: string): { readonly pageFile: string; readonly pageUrl?: string; readonly preloadEntry: string } => ({
+    preloadEntry: configuration.preloadEntry,
+    pageFile: join(configuration.rendererEntry, '..', name),
+    ...(configuration.rendererUrl === undefined
+      ? {}
+      : { pageUrl: new URL(name, configuration.rendererUrl).toString() }),
+  });
+
+  let todayWindow: BrowserWindow | null = null;
+  let crmWindow: BrowserWindow | null = null;
+  Menu.setApplicationMenu(
+    Menu.buildFromTemplate([
+      ...(Menu.getApplicationMenu()?.items.map(item => item as unknown as Electron.MenuItemConstructorOptions) ?? []),
+      ...(windowMenuTemplate({
+        today: () => {
+          void openSecondaryWindow('Callie — Today', renderer('today.html'), todayWindow).then(window => {
+            todayWindow = window;
+          });
+        },
+        firms: () => {
+          void openSecondaryWindow('Callie — CRM', renderer('firmWorkspace.html'), crmWindow).then(window => {
+            crmWindow = window;
+          });
+        },
+      }) as unknown as Electron.MenuItemConstructorOptions[]),
+    ]),
+  );
+}
+
 /** The entry point. Kept tiny so that everything above it is testable without Electron. */
 export async function start(configuration: DesktopConfiguration): Promise<void> {
   await app.whenReady();
-  registerBridge(buildSessionManager(configuration));
+  const manager = buildSessionManager(configuration);
+  registerBridge(manager);
+  registerWindows(configuration, manager);
   await openWindow(configuration);
   app.on('window-all-closed', () => {
     app.quit();
