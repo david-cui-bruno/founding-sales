@@ -14,10 +14,15 @@ export {
   type DashboardAudience,
   type DashboardSources,
   type DashboardWindow,
+  type DomainPosture,
   type EnrollmentFacts,
+  type RampPosture,
   type SendingFacts,
+  type SendingPosture,
   type Unavailable,
 } from './sources.ts';
+
+export { liveDashboardSources, sendingFacts } from './sendingSource.ts';
 
 export {
   readDashboard,

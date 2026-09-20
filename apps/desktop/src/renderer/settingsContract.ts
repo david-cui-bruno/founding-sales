@@ -38,6 +38,60 @@ export interface AdminState {
   readonly stages: readonly PipelineStageRowView[];
   /** The history of one slice, when a person opened it. */
   readonly history: SettingHistoryView | null;
+  /**
+   * G7-2's sending posture, for the section that edits it. Null for a salesperson:
+   * every `/outbound/*` path is admin-only with a redacted 403, so their page does
+   * not ask and offers no control.
+   */
+  readonly sendingAdmin: SendingAdminView | null;
+}
+
+/**
+ * What `/outbound/status` said, kept verbatim.
+ *
+ * Nothing here is derived on the client. `authenticationPasses` is the server's
+ * answer to 12.7's four-part checklist and `effectiveCap` is the ramp the server
+ * computed from `healthy_sending_days` — the cap is never stored, and a client that
+ * recomputed it would be a second implementation of 12.7's schedule.
+ */
+export interface SendingAdminView {
+  readonly domain: {
+    readonly domain: string;
+    readonly spfPass: boolean;
+    readonly dkimPass: boolean;
+    readonly dmarcPass: boolean;
+    readonly postmasterReviewedAt: string | null;
+    readonly authenticationPasses: boolean;
+    readonly automatedSendingEnabled: boolean;
+    readonly personalGmailGuardPer24h: number;
+  } | null;
+  /** How much of 12.6's rolling guard the last 24 hours used. */
+  readonly personalGmailRecipients: number;
+  readonly ramps: readonly {
+    readonly mailboxId: string;
+    readonly healthySendingDays: number;
+    readonly effectiveCap: number;
+    readonly adminDailyCap: number | null;
+    readonly raisedDailyCap: number | null;
+    readonly lastHealthFailure: string | null;
+  }[];
+}
+
+/** 12.7's two admin decisions about a cap. Absent and null differ: null clears. */
+export interface SetSendingCapInput {
+  readonly mailboxId: string;
+  readonly lowerTo?: number | null;
+  readonly raiseTo?: number | null;
+}
+
+/** 12.7's checklist, which is a person saying they looked: FSS never queries DNS. */
+export interface RecordSendingAuthenticationInput {
+  readonly domain: string;
+  readonly spfPass: boolean;
+  readonly dkimPass: boolean;
+  readonly dmarcPass: boolean;
+  readonly postmasterReviewed: boolean;
+  readonly automatedSendingEnabled: boolean;
 }
 
 export interface PipelineStageRowView {
@@ -75,6 +129,8 @@ export interface AdminBridge {
   reorderStages(input: { readonly stageKeys: readonly string[] }): Promise<AdminState>;
   retireStage(input: { readonly stageKey: string }): Promise<AdminState>;
   acknowledgeAlert(input: { readonly alertId: string }): Promise<AdminState>;
+  setSendingCap(input: SetSendingCapInput): Promise<AdminState>;
+  recordSendingAuthentication(input: RecordSendingAuthenticationInput): Promise<AdminState>;
 }
 
 declare global {

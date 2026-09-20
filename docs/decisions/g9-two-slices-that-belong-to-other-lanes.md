@@ -81,15 +81,31 @@ is gated on role in the view rather than offering a control that answers 403.
 
 ## Follow-ups at the final merge
 
-1. After 0010 lands: point the Settings window's sending section at
+1. ~~After 0010 lands: point the Settings window's sending section at
    `POST /outbound/cap` and `POST /outbound/authentication`, and implement
-   `DashboardSources.sending` against `mailbox_send_ramp`, `sending_domains` and the
-   outbound fence (see `docs/decisions/g9-dashboard-sources.md`).
+   `DashboardSources.sending`.~~ **Done**, 20 September 2026, when 0010 reached main.
+   The Settings window reads `/outbound/status` for an admin only and posts to
+   `/outbound/cap` and `/outbound/authentication`; `personal_gmail_guard_per_24h` is
+   rendered with no control and the reason beside it. `sendingFacts` in
+   `packages/domain/dashboard/sendingSource.ts` reads `outbound_messages`,
+   `mailbox_send_days`, `mailbox_send_ramp` and `sending_domains`, and
+   `liveDashboardSources()` is passed at the one call site in
+   `apps/api/src/routes/dashboard.ts`.
+
+   Two things the wiring had to decide, both recorded here rather than in code
+   comments alone. `/outbound/status` answers a ramp only for a named mailbox — it
+   has no list form, and adding one is G7-2's call — so the Settings window takes
+   the mailbox ids from `/diagnostics`, which already applies Appendix F row 3 to
+   them, and asks for each ramp by id; `mailboxes_one_per_owner` bounds that at one
+   per member. And the salesperson's copy of the *dashboard's* posture keeps the
+   same row-3 rule: their own mailbox's ramp, and no domain checklist at all,
+   because the checklist is admin configuration.
 2. After 0012 lands: point the calendar editor at G8's command, or — if G8 exposes
    none — add one in `packages/domain/settings` writing to G8's table, and record
    that here.
-3. `WORKER_SCHEMA_RANGE.minimum` stays at 9 for this lane either way: with both
-   slices gone, no worker code path reads `workspace_settings` at all.
+3. `WORKER_SCHEMA_RANGE.minimum` stays where G7-2 left it (10) for this lane: with
+   both slices gone, no worker code path reads `workspace_settings` at all, so this
+   lane's migration raises neither end of the worker's range.
 
 ## The third slice, which stays: `sending_enabled`
 

@@ -2,6 +2,7 @@ import { expect, test } from 'playwright/test';
 import {
   ALERT_ID,
   adminState,
+  sendingPosture,
   startSettingsTestServer,
   type SettingsTestServer,
 } from './support/settingsTestServer.ts';
@@ -39,6 +40,43 @@ test('an admin sees every slice, its provenance, and an editor for each', async 
   await expect(page.getByTestId('elsewhere')).toContainText('/research/config');
   await expect(page.getByTestId('elsewhere')).toContainText('/outbound/cap');
   await expect(page.getByTestId('setting-sending_limits')).toHaveCount(0);
+});
+
+test("an admin edits G7-2's checklist and cap, and the guard has no control", async ({ page }) => {
+  server = await startSettingsTestServer(adminState({ sendingAdmin: sendingPosture() }));
+  await page.goto(server.url);
+
+  // The checklist is incomplete and the page says which part is missing rather than
+  // offering an enable that `sending_domains`' CHECK would refuse.
+  await expect(page.getByTestId('sending-domain')).toContainText('dmarc');
+  await expect(page.getByTestId('sending-record')).toBeEnabled();
+  await expect(page.getByTestId('sending-dmarcPass')).toBeEnabled();
+
+  // 12.6: changing the personal-Gmail guard is a reviewed policy change, so it is
+  // shown and never offered. There is no control with this value behind it.
+  await expect(page.getByTestId('sending-guard')).toContainText('4000');
+  await expect(page.getByTestId('sending-admin')).toContainText('reviewed policy change');
+
+  await expect(page.getByTestId('cap-44444444-4444-4444-8444-444444444444')).toBeEnabled();
+  await expect(page.getByTestId('raiseTo-44444444-4444-4444-8444-444444444444')).toBeEnabled();
+  await expect(page.getByTestId('ramp-44444444-4444-4444-8444-444444444444')).toContainText('cap 5');
+
+  await page.getByTestId('cap-44444444-4444-4444-8444-444444444444').fill('25');
+  await page.getByTestId('raiseTo-44444444-4444-4444-8444-444444444444').click();
+  const call = server.calls.find(entry => entry.method === 'setSendingCap');
+  expect(call?.argument).toEqual({ mailboxId: '44444444-4444-4444-8444-444444444444', raiseTo: 25 });
+});
+
+test('a salesperson is offered no sending section at all', async ({ page }) => {
+  server = await startSettingsTestServer(
+    adminState({ role: 'salesperson', sendingAdmin: sendingPosture() }),
+  );
+  await page.goto(server.url);
+
+  // Not an inert section: every `/outbound/*` path answers them with a redacted 403,
+  // and a control that exists only to be refused teaches nothing.
+  await expect(page.getByTestId('sending-admin')).toHaveCount(0);
+  await expect(page.getByTestId('value-postal_footer')).toBeDisabled();
 });
 
 test('a salesperson sees the same page with every control inert and a reason', async ({ page }) => {

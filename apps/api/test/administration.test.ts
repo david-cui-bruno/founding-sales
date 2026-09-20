@@ -228,7 +228,11 @@ describe('the administration surface', () => {
     expect(answer.status).toBe(200);
     // The audience is decided from the scope and never taken from the request.
     expect(answer.body['audience']).toBe('assigned');
-    expect(answer.body['sending']).toMatchObject({ available: false, owner: 'G7-2' });
+    // G7-2's tables are on main, so the sending figures are real; the two whose
+    // lanes have not landed still say so rather than rendering as zero.
+    expect(answer.body['sending']).toMatchObject({ available: true, sent: 0 });
+    expect(answer.body['enrollments']).toMatchObject({ available: false, owner: 'G8' });
+    expect(answer.body['classifier']).toMatchObject({ available: false, owner: 'G7b' });
 
     expect((await call('POST', '/dashboard', salespersonToken, {})).status).toBe(400);
     expect(

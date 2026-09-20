@@ -48,6 +48,32 @@ export interface PanelView {
   readonly unavailable: string | null;
 }
 
+export interface SendingAdminSectionView {
+  /** The checklist as one sentence, naming what is still missing. */
+  readonly domainLine: string;
+  readonly domain: string | null;
+  readonly editable: boolean;
+  readonly notEditableBecause: string | null;
+  /**
+   * 12.6's rolling personal-Gmail guard. Shown and never offered: G7-2 gave it no
+   * route on purpose, because changing it is a reviewed policy change.
+   */
+  readonly guard: {
+    readonly line: string;
+    readonly editable: false;
+    readonly readOnlyBecause: string;
+  };
+  readonly ramps: readonly {
+    readonly mailboxId: string;
+    readonly line: string;
+    readonly editable: boolean;
+  }[];
+}
+
+/** Why the guard has no control, in the words the page shows. */
+const GUARD_READ_ONLY =
+  'Section 12.6 makes changing the personal-Gmail guard a reviewed policy change, so there is no control for it here.';
+
 export interface AdminView {
   readonly screen: AdminState['screen'];
   readonly notice: string | null;
@@ -55,6 +81,8 @@ export interface AdminView {
   readonly settings: readonly SettingRowView[];
   readonly elsewhere: readonly ElsewhereRowView[];
   readonly sending: { readonly line: string; readonly editable: boolean } | null;
+  /** G7-2's section. Null for anybody who is not an admin. */
+  readonly sendingAdmin: SendingAdminSectionView | null;
   readonly stages: readonly {
     readonly key: string;
     readonly label: string;
@@ -146,6 +174,7 @@ export function adminViewOf(state: AdminState): AdminView {
     settings,
     elsewhere,
     sending,
+    sendingAdmin: sendingAdminSection(state, reason),
     stages,
     panels: [...dashboardPanels(state), ...diagnosticsPanels(state)],
     alerts: (state.diagnostics?.alerts ?? []).map(alert => ({
@@ -153,6 +182,65 @@ export function adminViewOf(state: AdminState): AdminView {
       label: `${alert.severity}: ${alert.alertKey}${alert.acknowledgedAt === null ? '' : ' (acknowledged)'}`,
       runbookPath: alert.runbookPath,
       acknowledgeable: editable && alert.acknowledgedAt === null,
+    })),
+  };
+}
+
+/**
+ * G7-2's sending section (12.6, 12.7).
+ *
+ * Absent rather than inert for a salesperson: every `/outbound/*` path is admin-only
+ * with a redacted 403, and a control that answers 403 is worse than no control.
+ *
+ * The checklist line names what is missing rather than offering an enable the
+ * database will refuse — `sending_domains` has a CHECK forbidding
+ * `automated_sending_enabled` without all four — but it decides nothing: what
+ * "passes" means is `authenticationPasses` as the server computed it.
+ */
+function sendingAdminSection(state: AdminState, reason: string | null): SendingAdminSectionView | null {
+  const posture = state.sendingAdmin;
+  if (state.role !== 'admin' || posture === null) return null;
+  const editable = reason === null;
+  const domain = posture.domain;
+
+  const missing =
+    domain === null
+      ? []
+      : [
+          domain.spfPass ? null : 'spf',
+          domain.dkimPass ? null : 'dkim',
+          domain.dmarcPass ? null : 'dmarc',
+          domain.postmasterReviewedAt === null ? 'postmaster review' : null,
+        ].filter((item): item is string => item !== null);
+
+  const domainLine =
+    domain === null
+      ? 'No sending domain is configured.'
+      : domain.authenticationPasses
+        ? `${domain.domain}: authentication passes; automated sending ${domain.automatedSendingEnabled ? 'enabled' : 'not enabled'}.`
+        : `${domain.domain}: authentication incomplete — still needed: ${missing.join(', ')}.`;
+
+  return {
+    domainLine,
+    domain: domain?.domain ?? null,
+    editable,
+    notEditableBecause: reason,
+    guard: {
+      line:
+        domain === null
+          ? `Personal-Gmail guard: unknown. ${String(posture.personalGmailRecipients)} recipients in the last 24 hours.`
+          : `Personal-Gmail guard: ${String(domain.personalGmailGuardPer24h)} per 24 hours, ${String(posture.personalGmailRecipients)} used.`,
+      editable: false,
+      readOnlyBecause: GUARD_READ_ONLY,
+    },
+    ramps: posture.ramps.map(ramp => ({
+      mailboxId: ramp.mailboxId,
+      line: `${String(ramp.healthySendingDays)} healthy days, cap ${String(ramp.effectiveCap)}${
+        ramp.adminDailyCap === null ? '' : ` (lowered to ${String(ramp.adminDailyCap)})`
+      }${ramp.raisedDailyCap === null ? '' : ` (raised to ${String(ramp.raisedDailyCap)})`}${
+        ramp.lastHealthFailure === null ? '' : `; last health failure: ${ramp.lastHealthFailure}`
+      }.`,
+      editable,
     })),
   };
 }

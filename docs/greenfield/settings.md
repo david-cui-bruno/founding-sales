@@ -131,6 +131,17 @@ reviewed product-policy change — so the settings page renders it read-only. Bo
 `/outbound/*` paths are admin-only with a redacted 403, so the section is gated on
 role rather than offering a control that answers 403.
 
+The Settings window calls all of it. For an admin it reads `/outbound/status` — once
+with no argument for the domain checklist and the guard, then once per mailbox for
+that mailbox's ramp, because the status route has no list form and the mailbox ids
+come from `/diagnostics`, which already applies the read matrix to them. For anyone
+else the section is **absent, not inert**: an `/outbound/*` control offered to a
+salesperson exists only to be refused. The checklist line names which of SPF, DKIM,
+DMARC and the Postmaster review is still missing, and does not pre-empt the CHECK
+that forbids enabling without all four — it shows the refusal rather than guessing
+it. Nothing is clamped on the client: a raise above 75 comes back as a refusal an
+admin reads, not a silent 75.
+
 ## Production sending
 
 Two switches, ANDed: the deployment flag the release process sets and the
@@ -166,11 +177,20 @@ workspace for an admin, assigned firms for a salesperson. See
 of two salespeople with one firm each, a workspace-wide count *is* the other person's
 count.
 
-Six of 13.4's figures read tables that are not on main yet. They are behind
+Some of 13.4's figures read tables other lanes own. They are behind
 `DashboardSources`, whose default answers `{ available: false, owner, reason }`, and
-the Mac renders that as "not in this build (G7-2)" rather than as zero. Zero is a
-measurement. See `docs/decisions/g9-dashboard-sources.md` for the wiring the owning
-lanes do.
+the Mac renders that as "not in this build (G8)" rather than as zero. Zero is a
+measurement.
+
+G7-2's half is wired: sends, holds, `unknown_terminal` fences, 12.5's two admin
+resolutions, provider deferrals, unhealthy send days, the domain and ramp posture,
+and the breakdowns by template version, weekday and local send hour — the last two
+computed in the fence's own `source_zone`, so "nine in the morning" means nine in the
+morning where the firm is. Replies are matched by Gmail thread. Enrollments (G8) and
+the classifier (G7b) still say they are not in this build, and so do the
+`bySequence` and `bySegment` breakdowns, because the sequence a fence belongs to is
+G8's table and nothing in this build records a segment. See
+`docs/decisions/g9-dashboard-sources.md`.
 
 ## Diagnostics
 

@@ -128,6 +128,33 @@ export function diagnostics(): NonNullable<AdminState['diagnostics']> {
   } as NonNullable<AdminState['diagnostics']>;
 }
 
+/** G7-2's posture, as `/outbound/status` would answer it: checklist incomplete. */
+export function sendingPosture(): NonNullable<AdminState['sendingAdmin']> {
+  return {
+    domain: {
+      domain: 'sending.example.test',
+      spfPass: true,
+      dkimPass: true,
+      dmarcPass: false,
+      postmasterReviewedAt: null,
+      authenticationPasses: false,
+      automatedSendingEnabled: false,
+      personalGmailGuardPer24h: 4000,
+    },
+    personalGmailRecipients: 17,
+    ramps: [
+      {
+        mailboxId: '44444444-4444-4444-8444-444444444444',
+        healthySendingDays: 3,
+        effectiveCap: 5,
+        adminDailyCap: null,
+        raisedDailyCap: null,
+        lastHealthFailure: null,
+      },
+    ],
+  };
+}
+
 export function adminState(overrides: Partial<AdminState> = {}): AdminState {
   return {
     screen: 'settings',
@@ -143,11 +170,12 @@ export function adminState(overrides: Partial<AdminState> = {}): AdminState {
       { key: 'won', displayName: 'Won', position: 2, terminalKind: 'won', retired: false },
     ],
     history: null,
+    sendingAdmin: null,
     ...overrides,
   };
 }
 
-/** The bridge the browser gets. The same ten methods the preload script exposes. */
+/** The bridge the browser gets. The same twelve methods the preload script exposes. */
 const BRIDGE_SCRIPT = `
 globalThis.callieAdmin = {
   async state() { return await ask('state'); },
@@ -160,6 +188,8 @@ globalThis.callieAdmin = {
   async reorderStages(input) { return await ask('reorderStages', input); },
   async retireStage(input) { return await ask('retireStage', input); },
   async acknowledgeAlert(input) { return await ask('acknowledgeAlert', input); },
+  async setSendingCap(input) { return await ask('setSendingCap', input); },
+  async recordSendingAuthentication(input) { return await ask('recordSendingAuthentication', input); },
 };
 async function ask(method, argument) {
   const response = await fetch('/bridge/' + method, {

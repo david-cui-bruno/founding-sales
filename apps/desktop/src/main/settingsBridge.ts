@@ -10,7 +10,9 @@ import type {
   AdminScreen,
   AdminState,
   PipelineStageRowView,
+  RecordSendingAuthenticationInput,
   SaveSettingInput,
+  SetSendingCapInput,
 } from '../renderer/settingsContract.ts';
 import type { AuthedClient } from './authedClient.ts';
 
@@ -41,6 +43,8 @@ export const ADMIN_IPC_CHANNELS = {
   reorderStages: 'callie:admin:reorder-stages',
   retireStage: 'callie:admin:retire-stage',
   acknowledgeAlert: 'callie:admin:acknowledge-alert',
+  setSendingCap: 'callie:admin:set-sending-cap',
+  recordSendingAuthentication: 'callie:admin:record-sending-authentication',
 } as const;
 export type AdminIpcChannel = (typeof ADMIN_IPC_CHANNELS)[keyof typeof ADMIN_IPC_CHANNELS];
 
@@ -57,6 +61,45 @@ const historySchema = z.object({
   ),
 });
 const acknowledgedSchema = z.object({ acknowledged: z.literal(true), alertKey: z.string() });
+
+/**
+ * `POST /outbound/status`, G7-2's read.
+ *
+ * Parsed here rather than imported from `@fss/contracts` because G7-2 built that
+ * route's body inline and published no schema for it. This is the narrowest
+ * description of the parts this window shows — `.loose()` so a field G7-2 adds does
+ * not break the page, and every field this file reads is named, so one they remove
+ * does.
+ */
+const outboundStatusSchema = z
+  .object({
+    domain: z
+      .object({
+        domain: z.string(),
+        spfPass: z.boolean(),
+        dkimPass: z.boolean(),
+        dmarcPass: z.boolean(),
+        postmasterReviewedAt: z.string().nullable(),
+        authenticationPasses: z.boolean(),
+        automatedSendingEnabled: z.boolean(),
+        personalGmailGuardPer24h: z.number(),
+      })
+      .loose()
+      .nullable(),
+    personalGmailRecipients: z.number(),
+    ramp: z
+      .object({
+        mailboxId: z.string(),
+        healthySendingDays: z.number(),
+        effectiveCap: z.number(),
+        adminDailyCap: z.number().nullable(),
+        raisedDailyCap: z.number().nullable(),
+        lastHealthFailure: z.string().nullable(),
+      })
+      .loose()
+      .nullable(),
+  })
+  .loose();
 
 export interface AdminBridgeDeps {
   readonly api: AuthedClient;
@@ -82,6 +125,8 @@ export interface AdminBridgeHost {
   reorderStages(input: { readonly stageKeys: readonly string[] }): Promise<AdminState>;
   retireStage(input: { readonly stageKey: string }): Promise<AdminState>;
   acknowledgeAlert(input: { readonly alertId: string }): Promise<AdminState>;
+  setSendingCap(input: SetSendingCapInput): Promise<AdminState>;
+  recordSendingAuthentication(input: RecordSendingAuthenticationInput): Promise<AdminState>;
 }
 
 /** The last 30 days, in UTC. A window the page shows and a person may change. */
@@ -100,6 +145,7 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
   let diagnostics: AdminState['diagnostics'] = null;
   let stages: readonly PipelineStageRowView[] = [];
   let history: AdminState['history'] = null;
+  let sendingAdmin: AdminState['sendingAdmin'] = null;
   let window = defaultWindow(clock());
 
   const snapshot = async (): Promise<AdminState> => {
@@ -115,6 +161,77 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
       diagnostics,
       stages,
       history,
+      sendingAdmin,
+    };
+  };
+
+  const isAdmin = async (): Promise<boolean> => (await deps.session.state()).device?.role === 'admin';
+
+  /**
+   * G7-2's sending posture, in three reads, for an admin only.
+   *
+   * `/outbound/status` answers the domain checklist and the guard with no argument,
+   * but a ramp only for a named mailbox — there is no list form, and adding one is
+   * G7-2's decision to make, not this window's. So the mailbox ids come from
+   * `/diagnostics`, which already applies Appendix F row 3 to them, and each ramp is
+   * asked for by id. `mailboxes_one_per_owner` bounds that at one per member.
+   *
+   * A failure here is not a notice: the sending section simply does not appear. The
+   * settings page has ten other sections and a person who opened it to change the
+   * postal footer should not be told about an outbound read they did not ask for.
+   */
+  const loadSending = async (): Promise<void> => {
+    if (!(await isAdmin())) {
+      sendingAdmin = null;
+      return;
+    }
+    const status = await deps.api.read('/outbound/status', value => outboundStatusSchema.parse(value));
+    if (!status.ok) {
+      sendingAdmin = null;
+      return;
+    }
+    const report = await deps.api.read('/diagnostics', value => diagnosticsResponseSchema.parse(value));
+    const collected: {
+      mailboxId: string;
+      healthySendingDays: number;
+      effectiveCap: number;
+      adminDailyCap: number | null;
+      raisedDailyCap: number | null;
+      lastHealthFailure: string | null;
+    }[] = [];
+    if (report.ok) {
+      for (const mailbox of report.value.mailboxes) {
+        const one = await deps.api.read('/outbound/status', value => outboundStatusSchema.parse(value), {
+          mailboxId: mailbox.mailboxId,
+        });
+        if (one.ok && one.value.ramp !== null) {
+          collected.push({
+            mailboxId: one.value.ramp.mailboxId,
+            healthySendingDays: one.value.ramp.healthySendingDays,
+            effectiveCap: one.value.ramp.effectiveCap,
+            adminDailyCap: one.value.ramp.adminDailyCap,
+            raisedDailyCap: one.value.ramp.raisedDailyCap,
+            lastHealthFailure: one.value.ramp.lastHealthFailure,
+          });
+        }
+      }
+    }
+    sendingAdmin = {
+      domain:
+        status.value.domain === null
+          ? null
+          : {
+              domain: status.value.domain.domain,
+              spfPass: status.value.domain.spfPass,
+              dkimPass: status.value.domain.dkimPass,
+              dmarcPass: status.value.domain.dmarcPass,
+              postmasterReviewedAt: status.value.domain.postmasterReviewedAt,
+              authenticationPasses: status.value.domain.authenticationPasses,
+              automatedSendingEnabled: status.value.domain.automatedSendingEnabled,
+              personalGmailGuardPer24h: status.value.domain.personalGmailGuardPer24h,
+            },
+      personalGmailRecipients: status.value.personalGmailRecipients,
+      ramps: collected,
     };
   };
 
@@ -135,6 +252,7 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
         retired: stage.retired,
       }));
     }
+    await loadSending();
   };
 
   const loadDashboardFor = async (next: { readonly from: string; readonly to: string }): Promise<void> => {
@@ -262,6 +380,43 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
         answer.ok ? { ok: true } : { ok: false, reason: answer.reason },
         loadDiagnostics,
       );
+    },
+
+    async setSendingCap(input) {
+      // 12.7: an admin may lower a cap, and may raise a mailbox to 75. The command
+      // refuses above that rather than clamping, and the CHECK refuses above 100.
+      // Neither bound is repeated here: a client that clamped would turn a refusal
+      // an admin should see into a silent change they did not ask for.
+      const outcome = await deps.api.command(
+        '/outbound/cap',
+        {
+          mailboxId: input.mailboxId,
+          // Absent and null are different to `setAdminCap`: null clears the
+          // lowering, absent leaves it alone. Spread so an unset key stays unset.
+          ...(input.lowerTo === undefined ? {} : { lowerTo: input.lowerTo }),
+          ...(input.raiseTo === undefined ? {} : { raiseTo: input.raiseTo }),
+        },
+        value => value,
+      );
+      return await afterCommand(outcome, loadSending);
+    },
+
+    async recordSendingAuthentication(input) {
+      // 12.7's checklist is a person saying they looked: FSS never queries DNS, so
+      // this is a record of a human observation, not a measurement.
+      const outcome = await deps.api.command(
+        '/outbound/authentication',
+        {
+          domain: input.domain,
+          spfPass: input.spfPass,
+          dkimPass: input.dkimPass,
+          dmarcPass: input.dmarcPass,
+          postmasterReviewed: input.postmasterReviewed,
+          automatedSendingEnabled: input.automatedSendingEnabled,
+        },
+        value => value,
+      );
+      return await afterCommand(outcome, loadSending);
     },
   };
 }

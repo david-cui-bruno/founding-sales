@@ -1,5 +1,5 @@
 import { dashboardRequestSchema } from '@fss/contracts';
-import { readDashboard } from '@fss/domain/dashboard';
+import { liveDashboardSources, readDashboard } from '@fss/domain/dashboard';
 import { REFUSAL_STATUS, contextForPrincipal, policyRouteDeps, redactError } from './dialSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
@@ -16,11 +16,15 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  * cannot ask for the workspace and an admin cannot accidentally be narrowed. See
  * `docs/decisions/g9-dashboard-visibility.md`.
  *
- * `sources` is left at its default here, which reports the G7-2, G8 and G7b figures
- * as unavailable with the lane that owns each. When those lanes land, one line in
- * this file passes their implementation.
+ * `sources` supplies the figures whose tables belong to other lanes.
+ * `liveDashboardSources()` reads sending from G7-2's fence and ramp (migration 0010)
+ * and still reports the G8 and G7b figures as unavailable, naming the lane that owns
+ * each. A figure nobody can compute says so rather than rendering as zero.
  */
 export const DASHBOARD_PATHS: readonly string[] = ['/dashboard'];
+
+/** Built once: it holds no state and no connection, only the functions to call. */
+const SOURCES = liveDashboardSources();
 
 export async function routeDashboard(request: ApiRequest, options: RoutingOptions): Promise<RouteResult | null> {
   if (!DASHBOARD_PATHS.includes(request.path)) return null;
@@ -38,5 +42,9 @@ export async function routeDashboard(request: ApiRequest, options: RoutingOption
   const scoped = contextForPrincipal(prepared.deps.auth, prepared.deps.principal);
   if (!scoped.ok) return scoped.result;
 
-  return { status: 200, body: await readDashboard(scoped.context, { window: parsed.data.window }) };
+  const dashboard = await readDashboard(scoped.context, {
+    window: parsed.data.window,
+    sources: SOURCES,
+  });
+  return { status: 200, body: dashboard };
 }

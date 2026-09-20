@@ -88,6 +88,9 @@ const admin: AdminBridge = {
   reorderStages: async input => await invokeAdmin(ADMIN_IPC_CHANNELS.reorderStages, input),
   retireStage: async input => await invokeAdmin(ADMIN_IPC_CHANNELS.retireStage, input),
   acknowledgeAlert: async input => await invokeAdmin(ADMIN_IPC_CHANNELS.acknowledgeAlert, input),
+  setSendingCap: async input => await invokeAdmin(ADMIN_IPC_CHANNELS.setSendingCap, input),
+  recordSendingAuthentication: async input =>
+    await invokeAdmin(ADMIN_IPC_CHANNELS.recordSendingAuthentication, input),
 };
 
 contextBridge.exposeInMainWorld('callie', bridge);

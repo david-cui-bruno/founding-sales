@@ -30,6 +30,14 @@ export function resetAdminWindowRegistrations(): void {
 
 const text = (value: unknown): string | null => (typeof value === 'string' && value.length > 0 ? value : null);
 
+/** A cap bound from the renderer: an integer, an explicit null, or nothing at all. */
+function bound(input: Record<string, unknown> | null, key: string): number | null | undefined {
+  const value = input?.[key];
+  if (value === null) return null;
+  if (typeof value === 'number' && Number.isInteger(value)) return value;
+  return undefined;
+}
+
 export function registerAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
   const host = createAdminBridge(deps);
 
@@ -104,6 +112,40 @@ export function registerAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
   handleOnce(ADMIN_IPC_CHANNELS.acknowledgeAlert, async argument => {
     const alertId = text((argument as { alertId?: unknown } | null)?.alertId);
     return alertId === null ? await host.state() : await host.acknowledgeAlert({ alertId });
+  });
+
+  handleOnce(ADMIN_IPC_CHANNELS.setSendingCap, async argument => {
+    const input = argument as Record<string, unknown> | null;
+    const mailboxId = text(input?.['mailboxId']);
+    if (mailboxId === null) return await host.state();
+    // Absent and null are carried through unchanged: `setAdminCap` reads null as
+    // "clear the lowering" and absence as "leave it alone", and collapsing the two
+    // here would make a control that cannot undo itself. The bounds are the
+    // server's; nothing is clamped on the way.
+    const lowerTo = bound(input, 'lowerTo');
+    const raiseTo = bound(input, 'raiseTo');
+    return await host.setSendingCap({
+      mailboxId,
+      ...(lowerTo === undefined ? {} : { lowerTo }),
+      ...(raiseTo === undefined ? {} : { raiseTo }),
+    });
+  });
+
+  handleOnce(ADMIN_IPC_CHANNELS.recordSendingAuthentication, async argument => {
+    const input = argument as Record<string, unknown> | null;
+    const domain = text(input?.['domain']);
+    const flags = ['spfPass', 'dkimPass', 'dmarcPass', 'postmasterReviewed', 'automatedSendingEnabled'];
+    if (domain === null || flags.some(flag => typeof input?.[flag] !== 'boolean')) {
+      return await host.state();
+    }
+    return await host.recordSendingAuthentication({
+      domain,
+      spfPass: input?.['spfPass'] === true,
+      dkimPass: input?.['dkimPass'] === true,
+      dmarcPass: input?.['dmarcPass'] === true,
+      postmasterReviewed: input?.['postmasterReviewed'] === true,
+      automatedSendingEnabled: input?.['automatedSendingEnabled'] === true,
+    });
   });
 
   return host;

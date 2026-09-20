@@ -96,8 +96,58 @@ const emptyState = (overrides: Partial<AdminState> = {}): AdminState => ({
   diagnostics: null,
   stages: [],
   history: null,
+  sendingAdmin: null,
   ...overrides,
 });
+
+const outboundStatusBody = (overrides: Record<string, unknown> = {}) => ({
+  domain: {
+    domain: 'sending.example.test',
+    spfPass: true,
+    dkimPass: true,
+    dmarcPass: false,
+    postmasterReviewedAt: null,
+    authenticationPasses: false,
+    automatedSendingEnabled: false,
+    personalGmailGuardPer24h: 4000,
+    replyOnlyOptOut: true,
+  },
+  guard: { allowed: true, remaining: 3999 },
+  personalGmailRecipients: 1,
+  doubt: { unknownTerminal: 0, reconciling: 0 },
+  ramp: null,
+  fence: null,
+  ...overrides,
+});
+
+const diagnosticsBody = (mailboxId: string) => ({
+  restore: { systemGeneration: 1, expectedSystemGeneration: null, mismatch: false },
+  schema: { appliedVersion: 11, declaredRange: { minimum: 11, maximum: 11 }, accepted: true },
+  clientVersions: { minimum: '1.0.0', maximum: '2.0.0' },
+  sending: { deploymentEnabled: false, adminEnabled: false, effective: false },
+  jobs: { runnable: 0, running: 0, retryable: 0, dead: 0, oldestRunnableAgeSeconds: null, oldestDeadAgeSeconds: null },
+  heartbeats: [],
+  canaryCompletionAgeSeconds: null,
+  alerts: [],
+  mailboxes: [
+    {
+      mailboxId,
+      ownerUserId: '11111111-1111-4111-8111-111111111111',
+      status: 'connected',
+      syncState: 'ready',
+      coverageWatermarkAt: null,
+      lastSyncedAt: null,
+      lastSyncError: null,
+      generation: 1,
+      watchExpiresAt: null,
+      hoursToWatchExpiry: null,
+      automationHeld: false,
+    },
+  ],
+  mailboxVisibility: 'all',
+});
+
+const MAILBOX_ID = '55555555-5555-4555-8555-555555555555';
 
 describe('the administration bridge', () => {
   it('reads the settings and the pipeline on first open', async () => {
@@ -107,7 +157,7 @@ describe('the administration bridge', () => {
     });
     const bridge = createAdminBridge({ api, session: { state: async () => await Promise.resolve(session()) } });
     const state = await bridge.state();
-    expect(calls.map(call => call.path)).toEqual(['/settings', '/pipeline/stages']);
+    expect(calls.map(call => call.path)).toEqual(['/settings', '/pipeline/stages', '/outbound/status']);
     expect(state.settings?.settings.map(entry => entry.settingKey)).toEqual([
       'alert_thresholds',
       'postal_footer',
@@ -196,7 +246,140 @@ describe('the administration bridge', () => {
       'callie:admin:reorder-stages',
       'callie:admin:retire-stage',
       'callie:admin:acknowledge-alert',
+      'callie:admin:set-sending-cap',
+      'callie:admin:record-sending-authentication',
     ]);
+  });
+
+  it("reads G7-2's sending posture for an admin, and not at all for a salesperson", async () => {
+    const answers = {
+      '/settings': { status: 200, body: settingsBody() },
+      '/pipeline/stages': { status: 200, body: stagesBody },
+      '/outbound/status': {
+        status: 200,
+        body: outboundStatusBody({
+          ramp: {
+            mailboxId: MAILBOX_ID,
+            healthySendingDays: 3,
+            effectiveCap: 5,
+            adminDailyCap: null,
+            raisedDailyCap: null,
+            lastHealthFailure: null,
+          },
+        }),
+      },
+      '/diagnostics': { status: 200, body: diagnosticsBody(MAILBOX_ID) },
+    };
+
+    const admin = scriptedApi(answers);
+    const state = await createAdminBridge({
+      api: admin.api,
+      session: { state: async () => await Promise.resolve(session()) },
+    }).state();
+    expect(state.sendingAdmin?.domain?.domain).toBe('sending.example.test');
+    expect(state.sendingAdmin?.ramps).toEqual([
+      {
+        mailboxId: MAILBOX_ID,
+        healthySendingDays: 3,
+        effectiveCap: 5,
+        adminDailyCap: null,
+        raisedDailyCap: null,
+        lastHealthFailure: null,
+      },
+    ]);
+    // The per-mailbox ramp is asked for by id; `/outbound/status` has no list form.
+    expect(admin.calls.filter(call => call.path === '/outbound/status').at(-1)?.body).toEqual({
+      mailboxId: MAILBOX_ID,
+    });
+
+    // Every `/outbound/*` path is admin-only with a redacted 403, so a salesperson's
+    // page does not ask: a control that cannot work is not offered, and a request
+    // that is going to be refused is not made.
+    const salesperson = scriptedApi(answers);
+    const theirs = await createAdminBridge({
+      api: salesperson.api,
+      session: {
+        state: async () => await Promise.resolve(session({ device: { role: 'salesperson' as const } })),
+      },
+    }).state();
+    expect(theirs.sendingAdmin).toBeNull();
+    expect(salesperson.calls.map(call => call.path)).not.toContain('/outbound/status');
+  });
+
+  it("sends a cap change to G7-2's command and re-reads the posture", async () => {
+    const { api, calls } = scriptedApi({
+      '/settings': { status: 200, body: settingsBody() },
+      '/pipeline/stages': { status: 200, body: stagesBody },
+      '/outbound/status': { status: 200, body: outboundStatusBody() },
+      '/diagnostics': { status: 200, body: diagnosticsBody(MAILBOX_ID) },
+      '/outbound/cap': {
+        status: 200,
+        body: { status: 'accepted', replayed: false, result: { mailboxId: MAILBOX_ID, effectiveCap: 25, healthySendingDays: 3 } },
+      },
+    });
+    const bridge = createAdminBridge({ api, session: { state: async () => await Promise.resolve(session()) } });
+    await bridge.state();
+    const before = calls.length;
+    await bridge.setSendingCap({ mailboxId: MAILBOX_ID, raiseTo: 25 });
+
+    const sent = calls.find(call => call.path === '/outbound/cap')?.body as Record<string, unknown>;
+    expect(sent['mailboxId']).toBe(MAILBOX_ID);
+    expect(sent['raiseTo']).toBe(25);
+    // No `lowerTo` key at all: the command reads an absent key and a null one
+    // differently, and null clears the lowering.
+    expect('lowerTo' in sent).toBe(false);
+    expect(typeof sent['commandId']).toBe('string');
+    expect(calls.slice(before).map(call => call.path)).toContain('/outbound/status');
+  });
+
+  it("sends the authentication checklist and the per-domain enable to G7-2's command", async () => {
+    const { api, calls } = scriptedApi({
+      '/settings': { status: 200, body: settingsBody() },
+      '/pipeline/stages': { status: 200, body: stagesBody },
+      '/outbound/status': { status: 200, body: outboundStatusBody() },
+      '/diagnostics': { status: 200, body: diagnosticsBody(MAILBOX_ID) },
+      '/outbound/authentication': { status: 200, body: { status: 'accepted', replayed: false, result: { domain: 'sending.example.test' } } },
+    });
+    const bridge = createAdminBridge({ api, session: { state: async () => await Promise.resolve(session()) } });
+    await bridge.state();
+    await bridge.recordSendingAuthentication({
+      domain: 'sending.example.test',
+      spfPass: true,
+      dkimPass: true,
+      dmarcPass: true,
+      postmasterReviewed: true,
+      automatedSendingEnabled: true,
+    });
+
+    expect(calls.find(call => call.path === '/outbound/authentication')?.body).toMatchObject({
+      domain: 'sending.example.test',
+      spfPass: true,
+      dkimPass: true,
+      dmarcPass: true,
+      postmasterReviewed: true,
+      automatedSendingEnabled: true,
+    });
+  });
+
+  it('keeps a refusal from the sending commands as the notice, unchanged', async () => {
+    const { api } = scriptedApi({
+      '/settings': { status: 200, body: settingsBody() },
+      '/pipeline/stages': { status: 200, body: stagesBody },
+      '/outbound/status': { status: 200, body: outboundStatusBody() },
+      '/diagnostics': { status: 200, body: diagnosticsBody(MAILBOX_ID) },
+      '/outbound/authentication': { status: 409, body: { error: 'authentication_incomplete' } },
+    });
+    const bridge = createAdminBridge({ api, session: { state: async () => await Promise.resolve(session()) } });
+    await bridge.state();
+    const state = await bridge.recordSendingAuthentication({
+      domain: 'sending.example.test',
+      spfPass: true,
+      dkimPass: false,
+      dmarcPass: true,
+      postmasterReviewed: true,
+      automatedSendingEnabled: true,
+    });
+    expect(state.notice).toBe('authentication_incomplete');
   });
 });
 
@@ -325,6 +508,52 @@ describe('the administration view', () => {
     // Already acknowledged: no second acknowledgement to offer.
     expect(view.alerts[1]?.acknowledgeable).toBe(false);
     expect(view.panels.find(panel => panel.title === 'Restore generation')?.lines[1]).toBe('Matches.');
+  });
+
+  it("renders G7-2's sending section, with the personal-Gmail guard read-only", () => {
+    const view = adminViewOf({
+      ...withSettings(),
+      sendingAdmin: {
+        domain: {
+          domain: 'sending.example.test',
+          spfPass: true,
+          dkimPass: true,
+          dmarcPass: false,
+          postmasterReviewedAt: null,
+          authenticationPasses: false,
+          automatedSendingEnabled: false,
+          personalGmailGuardPer24h: 4000,
+        },
+        personalGmailRecipients: 12,
+        ramps: [
+          {
+            mailboxId: '55555555-5555-4555-8555-555555555555',
+            healthySendingDays: 3,
+            effectiveCap: 5,
+            adminDailyCap: null,
+            raisedDailyCap: null,
+            lastHealthFailure: null,
+          },
+        ],
+      },
+    });
+
+    const section = view.sendingAdmin;
+    expect(section?.editable).toBe(true);
+    expect(section?.domainLine).toContain('sending.example.test');
+    // The CHECK forbids enabling without all four, so the page says which is missing
+    // rather than offering an enable that the database will refuse.
+    expect(section?.domainLine).toContain('dmarc');
+    expect(section?.guard.editable).toBe(false);
+    expect(section?.guard.readOnlyBecause).toContain('reviewed policy change');
+    expect(section?.guard.line).toContain('4000');
+    expect(section?.ramps[0]?.line).toContain('5');
+    expect(section?.ramps[0]?.editable).toBe(true);
+  });
+
+  it('shows a salesperson no sending section at all', () => {
+    const view = adminViewOf({ ...withSettings(), role: 'salesperson' });
+    expect(view.sendingAdmin).toBeNull();
   });
 });
 

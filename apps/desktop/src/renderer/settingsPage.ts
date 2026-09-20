@@ -157,11 +157,106 @@ function renderSettings(root: HTMLElement, view: ReturnType<typeof adminViewOf>)
   }
   root.append(stages);
 
+  renderSendingAdmin(root, view);
+
   const elsewhere = element('ul', { className: 'elsewhere', testId: 'elsewhere' });
   for (const entry of view.elsewhere) {
     elsewhere.append(element('li', { text: `${entry.topic} — ${entry.path} (${entry.ownedBy})` }));
   }
   root.append(elsewhere);
+}
+
+/**
+ * G7-2's sending section: the authentication checklist, the per-mailbox cap, and the
+ * personal-Gmail guard shown without a control.
+ *
+ * It is absent, not disabled, for anyone who is not an admin — `view.sendingAdmin`
+ * is null — because every `/outbound/*` path answers a salesperson with a redacted
+ * 403 and an inert control that exists only to be refused teaches nothing.
+ *
+ * The checkboxes are four separate facts because the command is: 12.7's checklist is
+ * a person recording that they looked, and FSS never queries DNS. The enable is a
+ * fifth, and `sending_domains` has a CHECK that refuses it without the other four —
+ * the page does not pre-empt that refusal, it shows it.
+ */
+function renderSendingAdmin(root: HTMLElement, view: ReturnType<typeof adminViewOf>): void {
+  const section = view.sendingAdmin;
+  if (section === null) return;
+
+  const block = element('section', { className: 'sending-admin', testId: 'sending-admin' });
+  block.append(element('h2', { text: 'Sending domain and caps' }));
+  block.append(element('p', { text: section.domainLine, testId: 'sending-domain' }));
+  block.append(element('p', { className: 'inert', text: section.guard.line, testId: 'sending-guard' }));
+  block.append(element('p', { className: 'inert', text: section.guard.readOnlyBecause }));
+
+  if (section.domain !== null) {
+    const domain = section.domain;
+    const boxes = (['spfPass', 'dkimPass', 'dmarcPass', 'postmasterReviewed', 'automatedSendingEnabled'] as const).map(
+      name => {
+        const label = element('label', { text: name });
+        const box = document.createElement('input');
+        box.type = 'checkbox';
+        box.disabled = !section.editable;
+        box.dataset['testid'] = `sending-${name}`;
+        label.prepend(box);
+        block.append(label);
+        return [name, box] as const;
+      },
+    );
+
+    const record = element('button', { text: 'Record checklist' });
+    record.dataset['testid'] = 'sending-record';
+    (record as HTMLButtonElement).disabled = !section.editable;
+    record.addEventListener('click', () => {
+      const flag = (name: string): boolean => boxes.find(entry => entry[0] === name)?.[1].checked === true;
+      apply(
+        bridge().recordSendingAuthentication({
+          domain,
+          spfPass: flag('spfPass'),
+          dkimPass: flag('dkimPass'),
+          dmarcPass: flag('dmarcPass'),
+          postmasterReviewed: flag('postmasterReviewed'),
+          automatedSendingEnabled: flag('automatedSendingEnabled'),
+        }),
+      );
+    });
+    block.append(record);
+  }
+
+  const ramps = element('ul', { className: 'ramps', testId: 'ramps' });
+  for (const ramp of section.ramps) {
+    const item = element('li', { text: ramp.line });
+    item.dataset['testid'] = `ramp-${ramp.mailboxId}`;
+
+    const amount = document.createElement('input');
+    amount.type = 'number';
+    amount.disabled = !ramp.editable;
+    amount.dataset['testid'] = `cap-${ramp.mailboxId}`;
+    item.append(amount);
+
+    for (const [label, key] of [
+      ['Lower to', 'lowerTo'],
+      ['Raise to', 'raiseTo'],
+    ] as const) {
+      const button = element('button', { text: label });
+      button.dataset['testid'] = `${key}-${ramp.mailboxId}`;
+      (button as HTMLButtonElement).disabled = !ramp.editable;
+      button.addEventListener('click', () => {
+        const value = Number.parseInt(amount.value, 10);
+        if (!Number.isInteger(value)) {
+          amount.setAttribute('aria-invalid', 'true');
+          return;
+        }
+        // The bounds are 12.7's and the server's. Nothing is clamped here: a raise
+        // above 75 must come back as a refusal an admin reads, not a silent 75.
+        apply(bridge().setSendingCap({ mailboxId: ramp.mailboxId, [key]: value }));
+      });
+      item.append(button);
+    }
+    ramps.append(item);
+  }
+  block.append(ramps);
+  root.append(block);
 }
 
 function renderPanels(root: HTMLElement, view: ReturnType<typeof adminViewOf>): void {
