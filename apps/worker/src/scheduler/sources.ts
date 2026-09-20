@@ -7,8 +7,8 @@ import type { DueWorkSource } from './schedulerPass.ts';
  *
  * Only the canary exists in this slice; the sequence, Today, mail-sync, mail-recovery,
  * watch-renewal, research and retention sources are the lanes that own those tables,
- * and each one is a `DueWorkSource` added to the array in `runSchedulerLoop` without
- * touching the pass itself. The Appendix C key builders are in `@fss/domain/jobs`, so
+ * and each one is a `DueWorkSource` added to the `sources` array the pass is given,
+ * without touching the pass itself. The Appendix C key builders are in `@fss/domain/jobs`, so
  * a later lane composes its key rather than inventing one.
  */
 
