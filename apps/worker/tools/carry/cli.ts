@@ -260,7 +260,14 @@ export async function main(argv: readonly string[]): Promise<number> {
           database.session,
         );
         const result = await withTransaction(database.session, async () =>
-          runCarryImport(context, { manifest: opened.value.manifest, records: opened.value.records, journal }),
+          runCarryImport(context, {
+            manifest: opened.value.manifest,
+            records: opened.value.records,
+            journal,
+            // The single-salesperson shortcut. Omitted leaves every firm unassigned,
+            // which is the default and the right answer for more than one.
+            ...(options['assign-to-user'] === undefined ? {} : { assignToUserId: options['assign-to-user'] }),
+          }),
         );
         if (!result.ok) {
           console.error(`carry import refused: ${result.reason} ${JSON.stringify(result.detail)}`);

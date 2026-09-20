@@ -77,12 +77,15 @@ export interface CarryImportReport {
   };
   /** Routes carried alongside their firms. Not a manifest kind; a firm's own data. */
   readonly routes: KindCounts;
+  /** The member every created firm was assigned to, or null when none was named. */
+  readonly assignedToUserId: string | null;
   readonly parity: ParityReport;
 }
 
 export type ImportRefusal =
   | 'post_watermark_record'
   | 'parity_mismatch'
+  | 'assignee_unknown'
   | 'firm_refused'
   | 'evidence_refused'
   | 'suppression_refused'
@@ -104,6 +107,28 @@ export interface CarryImportInput {
   readonly journal: SuppressionJournal;
   /** Supplied once migration 0009 exists. Until then the templates are deferred. */
   readonly templateImporter?: TemplateImporter | undefined;
+  /**
+   * The single-salesperson shortcut: assign every firm this run *creates* to one
+   * active member. Omitted leaves every firm unassigned, which is the default and
+   * the right answer for a workspace with more than one salesperson.
+   *
+   * Only created firms. A firm a previous run already carried keeps whatever
+   * assignment it has: changing one is `reassignFirm`, which is admin-only, opens a
+   * `reassignment` hold and raises a domain event, and a carry has no business doing
+   * any of that behind an operator's back. So a re-run with the flag is still a
+   * no-op, which is what "re-running the import changes nothing" requires.
+   */
+  readonly assignToUserId?: string | undefined;
+}
+
+/** Whether this user is an active member of this workspace (5.1). */
+async function isActiveMember(context: RepositoryContext, userId: string): Promise<boolean> {
+  const { rows } = await context.db.query<{ one: number }>(
+    `SELECT 1 AS one FROM workspace_memberships
+      WHERE workspace_id = $1 AND user_id = $2 AND status = 'active'`,
+    [context.scope.workspaceId, userId],
+  );
+  return rows.length > 0;
 }
 
 /** The command id a carried suppression asserts under. Deterministic, so a replay matches. */
@@ -135,6 +160,13 @@ export async function runCarryImport(
     }
   }
 
+  // Checked once, before anything is written: an assignee who is not an active
+  // member would otherwise be refused by `firms_assignee_fkey` on the first firm and
+  // roll back a run that had already appended to the suppression journal.
+  if (input.assignToUserId !== undefined && !(await isActiveMember(context, input.assignToUserId))) {
+    return { ok: false, reason: 'assignee_unknown', detail: {} };
+  }
+
   const observed: ManifestItem[] = [];
   const firm: { created: number; reused: number } = { created: 0, reused: 0 };
   const evidence = { created: 0, reused: 0 };
@@ -159,6 +191,7 @@ export async function runCarryImport(
             ...(record.firm.website === null ? {} : { website: record.firm.website }),
             ...(record.firm.locality === null ? {} : { locality: record.firm.locality }),
             ...(record.firm.regionCode === null ? {} : { regionCode: record.firm.regionCode }),
+            ...(input.assignToUserId === undefined ? {} : { assignedUserId: input.assignToUserId }),
             externalId: record.firm.firmId,
           });
           if (!created.ok) return { ok: false, reason: 'firm_refused', detail: { code: created.reason } };
@@ -294,6 +327,7 @@ export async function runCarryImport(
       createdAt: input.manifest.createdAt,
       counts: Object.fromEntries(CARRY_KINDS.map(kind => [kind, input.manifest.kinds[kind].count])),
       carried: { firm, evidence, suppression, template, routes },
+      assignedToUserId: input.assignToUserId ?? null,
       parityMatched: parity.matched,
     },
   });
@@ -305,6 +339,7 @@ export async function runCarryImport(
       watermarkAt: input.manifest.watermarkAt,
       carried: { firm, evidence, suppression, template },
       routes,
+      assignedToUserId: input.assignToUserId ?? null,
       parity,
     },
   };
@@ -330,6 +365,7 @@ export function importReport(report: CarryImportReport): string {
     `routes     created ${String(report.routes.created)}  refused ${String(report.routes.reused)}`,
     `suppress   created ${String(report.carried.suppression.created)}  reused ${String(report.carried.suppression.reused)}`,
     `templates  created ${String(report.carried.template.created)}  deferred ${String(report.carried.template.deferred)}`,
+    `assigned   ${report.assignedToUserId === null ? 'nobody (the admin assigns in the CRM)' : report.assignedToUserId}`,
     `parity     ${report.parity.matched ? 'matched' : 'MISMATCH'}`,
   ];
   for (const kind of CARRY_KINDS) {

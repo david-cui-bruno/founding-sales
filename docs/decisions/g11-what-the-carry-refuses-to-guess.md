@@ -70,3 +70,9 @@ the recorded fetch instant, and the excerpt in `detail`. The provider is
 `legacy_research`, because the old record names the pages it fetched and does not
 name a provider per page; inventing one would be a citation the record cannot
 support.
+
+The excerpt is kept rather than dropped because it is the part of the old evidence
+David actually reads when he personalises a first email, and retention (lane G14)
+governs `evidence_items.detail` like any other evidence detail — "research evidence:
+with the firm while provider terms permit" (10.3), which is the row's own rule and
+needs no exception for the carry.

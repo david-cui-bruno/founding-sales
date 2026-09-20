@@ -23,11 +23,11 @@ transact anywhere in `apps/worker/tools/carry`, and a test asserts that surface.
 
 | | |
 |---|---|
-| A terminal in the repository checkout | `export PATH="/opt/homebrew/opt/node@24/bin:/opt/homebrew/bin:$PATH"` |
+| A terminal in the repository checkout, with a full install | `export PATH="/opt/homebrew/opt/node@24/bin:/opt/homebrew/bin:$PATH"`, then `npm install --ignore-scripts --no-audit --no-fund` if you have not already. The two AWS SDK packages the carry loads are devDependencies of `@fss/worker`, so a full install has them and the worker image does not. |
 | AWS credentials for the **operator** role | read on the old table, write on the suppression journal bucket. Not the API task role, not the worker task role. |
 | The `age` binary | `age --version` should answer |
 | Your age **recipient** (public key) | it may be written down; it is public |
-| The removable volume holding your age **identity** | mounted only for steps 7 and 8, unmounted after |
+| The removable volume holding your age **identity** | mounted only for steps 6 and 7, unmounted after |
 | A scratch directory **outside** this repository | e.g. `~/carry-2026-09-21`. The artifact never enters the checkout, and `.gitignore` is not what protects it — the path is. |
 
 Set two shell variables so the commands below read cleanly. Neither is a secret.
@@ -100,17 +100,7 @@ the other one, disable it, and update `disabledAt` before continuing. The export
 refuse anyway — it fails with `post_watermark_items_present` if it finds a record the
 old table wrote after the watermark — but finding out here is cheaper.
 
-## 4. Install the two SDK packages for the length of the carry
-
-```
-npm install --no-save --no-audit --no-fund @aws-sdk/client-dynamodb @aws-sdk/client-s3
-```
-
-**Good result:** `added N packages`. They are deliberately not dependencies of
-`@fss/worker`; step 11 puts the lock file back. See
-`docs/decisions/g11-dynamodb-client-seam.md`.
-
-## 5. Export, under the operator role
+## 4. Export, under the operator role
 
 ```
 node --experimental-transform-types apps/worker/tools/carry/main.ts export \
@@ -143,7 +133,7 @@ suppression    37  <64 hex characters>
 template        5  <64 hex characters>
 ```
 
-Write the four counts down. Step 9 has to produce the same four.
+Write the four counts down. Step 7 has to produce the same four.
 
 **If it refuses**, the reason is one word and it means:
 
@@ -157,12 +147,12 @@ Write the four counts down. Step 9 has to produce the same four.
 
 No artifact is written when it refuses. There is nothing to clean up.
 
-## 6. Move the artifact to the volume you will import from
+## 5. Move the artifact to the volume you will import from
 
 Copy `$CARRY/$ID.fss-carry` and `$CARRY/$ID.receipt.json` to the machine that can
 reach the database, if it is not this one. The receipt holds only counts and digests
 and is safe to keep afterwards; the artifact is prospect data and is shredded in step
-10.
+9.
 
 **Good result:** on the receiving machine,
 
@@ -172,7 +162,7 @@ shasum -a 256 "$CARRY/$ID.fss-carry"
 
 matches `sealed sha256` in the receipt.
 
-## 7. Verify the artifact before you import it
+## 6. Verify the artifact before you import it
 
 Mount the volume holding your age identity.
 
@@ -183,13 +173,13 @@ node --experimental-transform-types apps/worker/tools/carry/main.ts verify \
   --identity /Volumes/PUT-YOUR-VOLUME-HERE/identity.txt
 ```
 
-**Good result:** exit status 0, and counts identical to step 5.
+**Good result:** exit status 0, and counts identical to step 4.
 
 `artifact_digest_mismatch` means the file changed in transit — copy it again.
 `manifest_digest_mismatch` means the receipt and the artifact are from different
 exports. `artifact_unreadable` means the identity does not open it.
 
-## 8. Import
+## 7. Import
 
 ```
 node --experimental-transform-types apps/worker/tools/carry/main.ts import \
@@ -206,6 +196,21 @@ Runs as: the **operator** role for the journal bucket, and the application datab
 role for PostgreSQL. The whole import is one transaction: if anything refuses,
 nothing is written.
 
+**The single-salesperson shortcut.** By default every carried firm arrives
+**unassigned**, and an admin assigns them in the CRM. While Callie has one
+salesperson that is four hundred clicks for a foregone conclusion, so you may add:
+
+```
+  --assign-to-user PUT-THE-SALESPERSON-USER-UUID-HERE
+```
+
+It assigns every firm *this run creates* to that user, refuses with
+`assignee_unknown` before writing anything if they are not an active member of the
+workspace, and records the id in the carry audit row. It does not touch a firm a
+previous run already carried: changing an assignment is `reassignFirm`, which is
+admin-only and opens a `reassignment` hold, and the carry has no business doing that
+behind your back. Leave the flag off the moment there is a second salesperson.
+
 **Good result:** exit status 0 and `parity matched`, with `missing 0`, `unexpected 0`
 and `hash-mismatch 0` on every line:
 
@@ -217,6 +222,7 @@ evidence   created 388  reused 0
 routes     created 690  refused 4
 suppress   created 37  reused 0
 templates  created 0  deferred 5
+assigned   <the user id, or "nobody (the admin assigns in the CRM)">
 parity     matched
 ```
 
@@ -244,15 +250,16 @@ nothing.
 | Reason | Meaning |
 |---|---|
 | `post_watermark_record` | the artifact holds a record written after its own watermark. The artifact is wrong; go back to step 3. |
+| `assignee_unknown` | `--assign-to-user` named someone who is not an active member of this workspace. Nothing was written. |
 | `parity_mismatch` | the counts or hashes disagree. The transaction rolled back; report the per-kind table. |
 | `suppression_firm_absent` | a firm-scoped suppression named a firm that did not come over. Nothing was written. Report it. |
 | `firm_refused`, `evidence_refused`, `suppression_refused` | a domain command refused with a code; report the code. |
 
 Unmount the identity volume now.
 
-## 9. Read the parity report and confirm the four counts
+## 8. Read the parity report and confirm the four counts
 
-Compare the four counts from step 5 with what step 8 reported, and check the
+Compare the four counts from step 4 with what step 7 reported, and check the
 suppressions directly. In `psql`:
 
 ```
@@ -260,7 +267,7 @@ SELECT scope, count(*) FROM effective_suppressions
  WHERE workspace_id = 'PUT-THE-NEW-WORKSPACE-UUID-HERE' GROUP BY scope;
 ```
 
-**Good result:** the total equals the `suppression` count from step 5, and every
+**Good result:** the total equals the `suppression` count from step 4, and every
 carried event's `source` is `import`.
 
 Then find the firms that arrived uncallable, which is expected and deliberate:
@@ -277,7 +284,10 @@ hour. Record an address for the ones you intend to call; see
 `docs/decisions/g11-old-zone-is-not-a-recorded-zone.md`. Nothing else is blocked —
 email windows, research and the Today list all work without it.
 
-## 10. Shred the artifact, with its audit row
+If you did not use `--assign-to-user`, assign the firms in the CRM now. Nothing
+automated can run on an unassigned firm.
+
+## 9. Shred the artifact, with its audit row
 
 ```
 node --experimental-transform-types apps/worker/tools/carry/main.ts shred \
@@ -306,17 +316,7 @@ identity which opens it is unmounted, and that the file is gone. Keep the receip
 is counts and digests only, and it is what proves a year from now which artifact was
 deleted.
 
-## 11. Put the checkout back
-
-```
-git checkout -- package-lock.json
-git status --short
-```
-
-**Good result:** a clean tree. Step 4's `--no-save` install may have touched the lock
-file; nothing else in the checkout changed.
-
-## 12. Close the old stack
+## 10. Close the old stack
 
 The old EventBridge rule stays disabled permanently. The old table stays in place,
 read-only, until a later lane deletes the old trees; it is **not** a rollback target
@@ -333,10 +333,10 @@ the new system as an ordinary suppression. Do not go back to the old table for i
 
 | Kind | Old sort key | Where it lands | State on arrival |
 |---|---|---|---|
-| Firms | `FIRM#`, and `ACCOUNT#` where no `FIRM#` exists | `firms`, with the old id in `record_aliases` | unassigned; zone only where the versioned rule establishes it |
+| Firms | `FIRM#`, and `ACCOUNT#` where no `FIRM#` exists | `firms`, with the old id in `record_aliases` | unassigned unless `--assign-to-user`; zone only where the versioned rule establishes it |
 | Routes | on the firm record | `phone_routes`, `email_addresses` | `candidate`, `source = 'import'` |
-| Evidence | `EVIDENCE#` | `evidence_items`, one row per source | provider `legacy_research`, URL and sha256 preserved |
+| Evidence | `EVIDENCE#` | `evidence_items`, one row per source | provider `legacy_research`, URL, sha256 and excerpt preserved |
 | Suppressions | `SUPPRESS#FIRM#`, `SUPPRESS#<handle>` | `suppression_events`, journalled first | `source = 'import'`, terminal immediately |
-| Templates | `TEMPLATE#` | **not yet** — read and counted only | see step 8 |
+| Templates | `TEMPLATE#` | **not yet** — read and counted only | see step 7 |
 | Postures | — | **never copied** | record them deliberately |
 | Enrollments, sequences, counters, grants, events | — | **never copied** | the new system starts its own |
