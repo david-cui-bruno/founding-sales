@@ -5,6 +5,9 @@ import { payloadHash, seedTwoWorkspaces, type TwoWorkspaces } from './support/fi
 import { IDENTITY_CONSTRAINT_CASES } from './support/identityCases.ts';
 import { CRM_CONSTRAINT_CASES } from './support/crmCases.ts';
 import { POLICY_CONSTRAINT_CASES } from './support/policyCases.ts';
+import { MAIL_CONSTRAINT_CASES } from './support/mailCases.ts';
+import { seedCrm, type SeededCrm } from './support/crmFixtures.ts';
+import { seedMail, type SeededMail } from './support/mailFixtures.ts';
 
 /**
  * A failing insert for every foundation constraint.
@@ -20,6 +23,13 @@ interface Fixture {
   readonly seeded: TwoWorkspaces;
   readonly holdId: string;
   readonly baseSuppressionEventId: string;
+  /**
+   * The CRM and mail rows lane G7's cases start from. Seeded once rather than per
+   * case: a mailbox is unique per owner, so a case that created its own would
+   * spend its first statement inventing a second salesperson.
+   */
+  readonly crm: SeededCrm;
+  readonly mail: SeededMail;
 }
 
 interface Case {
@@ -1331,6 +1341,7 @@ const cases: readonly Case[] = [
   ...IDENTITY_CONSTRAINT_CASES,
   ...CRM_CONSTRAINT_CASES,
   ...POLICY_CONSTRAINT_CASES,
+  ...MAIL_CONSTRAINT_CASES,
 
 ];
 
@@ -1350,11 +1361,15 @@ describe('foundation constraints', () => {
       "INSERT INTO suppression_events (workspace_id, event_id, scope, canonical_key, canonicalizer_version, source) VALUES ($1, 'base-event', 'handle', 'base@example.test', 'v1', 'prospect_opt_out')",
       [seeded.alpha.workspaceId],
     );
+    const crm = await seedCrm(database.session, seeded);
+    const mail = await seedMail(database.session, seeded, crm);
     fixture = {
       session: database.session,
       seeded,
       holdId: hold.rows[0]?.id ?? '',
       baseSuppressionEventId: 'base-event',
+      crm,
+      mail,
     };
   });
 
