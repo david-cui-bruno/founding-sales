@@ -14,6 +14,9 @@
 !packages/domain/db
 !packages/domain/jobs
 !packages/domain/src
+!packages/domain/crm
+!packages/domain/policy
+!packages/domain/suppression
 !packages/contracts/package.json
 !packages/contracts/src
 

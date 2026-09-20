@@ -2,8 +2,17 @@
 # in preference to `.dockerignore`, so each image states its own context and
 # neither has to share a root file with the old trees.
 #
-# Everything is excluded and the four directories the image needs are allowed
-# back in. A deny list would silently ship whatever the next lane adds.
+# Everything is excluded and the directories the image needs are allowed back in.
+# A deny list would silently ship whatever the next lane adds.
+#
+# Lane G4 adds three more, and G3a's `crm` is needed by all of them.
+#
+# The rule this list follows is "every directory the entry point reaches
+# **transitively**", not "every directory apps/api/src names". `@fss/domain/dial`
+# imports from `../crm`, `../policy` and `../suppression`; `../suppression`
+# imports from `../crm` and `../policy` in turn. A list built from the
+# application's own import statements would have shipped `dial` and nothing it
+# stands on, and the container would fail at load with ERR_MODULE_NOT_FOUND.
 *
 
 !package.json
@@ -14,6 +23,10 @@
 !packages/domain/db
 !packages/domain/jobs
 !packages/domain/src
+!packages/domain/crm
+!packages/domain/policy
+!packages/domain/suppression
+!packages/domain/dial
 !packages/contracts/package.json
 !packages/contracts/src
 
