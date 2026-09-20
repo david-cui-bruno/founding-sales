@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing';
-import type { SessionQueryable } from '@fss/domain/db';
+import { WORKER_SCHEMA_RANGE, type SessionQueryable } from '@fss/domain/db';
 import {
   HandlerRegistry,
   canaryHandler,
@@ -63,8 +63,11 @@ async function until(check: () => Promise<boolean>, what: string): Promise<void>
 function testConfig(overrides: Readonly<Record<string, string>> = {}): WorkerConfig {
   return readWorkerConfig({
     FSS_ROLE: 'worker',
-    FSS_SCHEMA_MIN: '2',
-    FSS_SCHEMA_MAX: '2',
+    // Derived, never written down twice: a lane that widens the range widens it here
+    // too, and a task definition that disagrees with the binary is a startup refusal
+    // (bootstrap/config.ts) rather than something a fixture can paper over.
+    FSS_SCHEMA_MIN: String(WORKER_SCHEMA_RANGE.minimum),
+    FSS_SCHEMA_MAX: String(WORKER_SCHEMA_RANGE.maximum),
     DATABASE_URL: 'postgresql://unused.invalid/fss',
     FSS_METRICS: 'off',
     FSS_SCHEDULER_INTERVAL_MS: '25',

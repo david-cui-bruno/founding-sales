@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing';
+import { WORKER_SCHEMA_RANGE } from '@fss/domain/db';
 import {
   HandlerRegistry,
   canaryHandler,
@@ -108,8 +109,8 @@ describe('every alarm metric has something that emits it', () => {
     const worker = await startWorker({
       config: readWorkerConfig({
         FSS_ROLE: 'worker',
-        FSS_SCHEMA_MIN: '2',
-        FSS_SCHEMA_MAX: '2',
+        FSS_SCHEMA_MIN: String(WORKER_SCHEMA_RANGE.minimum),
+        FSS_SCHEMA_MAX: String(WORKER_SCHEMA_RANGE.maximum),
         DATABASE_URL: 'postgresql://unused.invalid/fss',
         FSS_METRICS: 'off',
         FSS_SCHEDULER_INTERVAL_MS: '25',

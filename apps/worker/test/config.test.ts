@@ -39,9 +39,11 @@ describe('worker configuration', () => {
   });
 
   it('refuses a declared schema range that disagrees with the binary', () => {
-    // The task definition says this image accepts 1-1; the image accepts 2-2. One of
-    // the two is a stale deployment, and neither is safe to guess between.
-    const attempt = (): unknown => readWorkerConfig({ ...base, FSS_SCHEMA_MIN: '1', FSS_SCHEMA_MAX: '1' });
+    // The task definition names the range of the release before this one; the image
+    // accepts its own. One of the two is a stale deployment, and neither is safe to
+    // guess between.
+    const stale = String(WORKER_SCHEMA_RANGE.minimum - 1);
+    const attempt = (): unknown => readWorkerConfig({ ...base, FSS_SCHEMA_MIN: stale, FSS_SCHEMA_MAX: stale });
     expect(attempt).toThrow(ConfigError);
     expect(attempt).toThrow(/FSS_SCHEMA_MIN/);
   });

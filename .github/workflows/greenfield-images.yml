@@ -135,6 +135,32 @@ jobs:
             echo "::endgroup::"
           done
 
+      - name: Read the schema ranges the images accept
+        run: |
+          set -euo pipefail
+          # From the source rather than from a literal, because the two ranges
+          # differ (the API needs migration 0003 and the worker does not) and a
+          # lane that widens one must not have to remember this file.
+          # packages/domain/db/schemaRange.ts imports only node built-ins, so
+          # this needs no install.
+          read_range() {
+            node --experimental-transform-types --disable-warning=ExperimentalWarning \
+              --input-type=module -e "
+                const module = await import('./packages/domain/db/schemaRange.ts');
+                const range = module['$1'];
+                process.stdout.write(String(range.minimum) + ' ' + String(range.maximum));
+              "
+          }
+          read api_min api_max <<<"$(read_range API_SCHEMA_RANGE)"
+          read worker_min worker_max <<<"$(read_range WORKER_SCHEMA_RANGE)"
+          echo "api=$api_min-$api_max worker=$worker_min-$worker_max"
+          {
+            echo "API_SCHEMA_MIN=$api_min"
+            echo "API_SCHEMA_MAX=$api_max"
+            echo "WORKER_SCHEMA_MIN=$worker_min"
+            echo "WORKER_SCHEMA_MAX=$worker_max"
+          } >> "$GITHUB_ENV"
+
       - name: The images load their own code and refuse a bad environment
         run: |
           set -euo pipefail
@@ -142,19 +168,23 @@ jobs:
           # It opens no socket, no database and no AWS client, so this proves
           # the production dependency set without reaching anything.
           docker run --rm --platform linux/arm64 \
-            -e FSS_SCHEMA_MIN=2 -e FSS_SCHEMA_MAX=2 \
+            -e "FSS_SCHEMA_MIN=$API_SCHEMA_MIN" -e "FSS_SCHEMA_MAX=$API_SCHEMA_MAX" \
             -e DATABASE_URL='postgresql://ci.invalid/fss' \
             fss-api:ci --selftest
           docker run --rm --platform linux/arm64 \
-            -e FSS_SCHEMA_MIN=2 -e FSS_SCHEMA_MAX=2 \
+            -e "FSS_SCHEMA_MIN=$WORKER_SCHEMA_MIN" -e "FSS_SCHEMA_MAX=$WORKER_SCHEMA_MAX" \
             -e DATABASE_URL='postgresql://ci.invalid/fss' \
             fss-worker:ci --selftest
 
           # A task definition that declares a schema range the image does not
-          # accept is a stale deployment, and both processes refuse it.
+          # accept is a stale deployment, and both processes refuse it. One below
+          # the minimum is always outside it, whatever the ranges become.
           for service in api worker; do
+            minimum="$API_SCHEMA_MIN"
+            [ "$service" = worker ] && minimum="$WORKER_SCHEMA_MIN"
+            stale="$((minimum - 1))"
             if docker run --rm --platform linux/arm64 \
-                 -e FSS_SCHEMA_MIN=1 -e FSS_SCHEMA_MAX=1 \
+                 -e "FSS_SCHEMA_MIN=$stale" -e "FSS_SCHEMA_MAX=$stale" \
                  -e DATABASE_URL='postgresql://ci.invalid/fss' \
                  "fss-$service:ci" --selftest; then
               echo "::error::fss-$service accepted a declared schema range it does not support"
