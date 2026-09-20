@@ -1,0 +1,94 @@
+# syntax=docker/dockerfile:1
+# The FSS API image (specification 4.1, 14.1; lane G5b).
+#
+# linux/arm64: David chose ARM64 Fargate, and `infra/modules/cluster` passes
+# `cpu_architecture` into the task definition's `runtime_platform`. An x86 image
+# on an ARM64 task definition fails to start with an exec format error, so the
+# platform is pinned here rather than left to the builder's host.
+#
+# There is no build step. The greenfield tree is TypeScript that Node runs
+# directly; `--experimental-transform-types` is required rather than plain
+# type stripping because `packages/domain` uses constructor parameter
+# properties, which strip-only mode refuses. See
+# docs/decisions/g5b-typescript-at-runtime.md.
+#
+# The API never publishes metrics, so the AWS SDK is installed (it is a
+# dependency of @fss/domain) and never loaded: the import in
+# packages/domain/jobs/metricsCloudWatch.ts is inside the one function that
+# needs it.
+
+ARG NODE_IMAGE=node:24.20.0-bookworm-slim
+
+# ---------------------------------------------------------------------------
+# Dependencies. Only the three workspaces the API needs, production only,
+# and `--ignore-scripts` so nothing in the lock file gets to run code during
+# the build. The old trees' dependencies (Electron, React, native modules) are
+# never installed: `npm ci --workspace` resolves from the same lock file
+# without pulling the root project's own dependencies in.
+# ---------------------------------------------------------------------------
+FROM --platform=linux/arm64 ${NODE_IMAGE} AS dependencies
+
+WORKDIR /app
+COPY package.json package-lock.json ./
+COPY apps/api/package.json apps/api/
+COPY packages/domain/package.json packages/domain/
+COPY packages/contracts/package.json packages/contracts/
+
+RUN npm ci --ignore-scripts --omit=dev --no-audit --no-fund \
+      --workspace @fss/api \
+      --workspace @fss/domain \
+      --workspace @fss/contracts \
+ && npm cache clean --force
+
+# ---------------------------------------------------------------------------
+# Runtime.
+# ---------------------------------------------------------------------------
+FROM --platform=linux/arm64 ${NODE_IMAGE} AS runtime
+
+ARG GIT_REVISION=unknown
+LABEL org.opencontainers.image.title="fss-api" \
+      org.opencontainers.image.description="Founding Sales System API: HTTPS surface, health, admin commands" \
+      org.opencontainers.image.revision="${GIT_REVISION}" \
+      org.opencontainers.image.licenses="UNLICENSED"
+
+# The transform is a load-time rewrite with no runtime component. The
+# experimental warning is suppressed so every line in the log group stays JSON,
+# which is what the CloudWatch metric filters parse.
+ENV NODE_ENV=production \
+    FSS_ROLE=api \
+    NODE_OPTIONS="--experimental-transform-types --disable-warning=ExperimentalWarning"
+
+WORKDIR /app
+
+COPY --from=dependencies /app/node_modules ./node_modules
+COPY package.json ./
+COPY apps/api/package.json apps/api/
+COPY packages/domain/package.json packages/domain/
+COPY packages/contracts/package.json packages/contracts/
+COPY apps/api/src apps/api/src
+COPY packages/domain/db packages/domain/db
+COPY packages/domain/jobs packages/domain/jobs
+COPY packages/domain/src packages/domain/src
+COPY packages/contracts/src packages/contracts/src
+
+# The test harness is never in the image: it starts a PostgreSQL cluster.
+RUN rm -rf packages/domain/db/testing
+
+# The API writes nothing to disk. The image is ready for
+# `readonlyRootFilesystem` today; the worker's liveness file is the only thing
+# in either process that needs a writable path.
+USER node
+
+# The load balancer target group health-checks the same path
+# (infra/modules/edge/variables.tf, health_check_path).
+EXPOSE 8080
+
+# `infra/modules/cluster/variables.tf` runs the same command through ECS. This
+# one is for `docker run`, so the two cannot drift apart unnoticed.
+HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:' + (process.env.PORT || '8080') + '/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+
+# Node is PID 1 and receives SIGTERM directly, which is what the connection
+# drain in apps/api/src/bootstrap/main.ts is waiting for. No shell form, no
+# init wrapper: a shell would swallow the signal.
+ENTRYPOINT ["node", "apps/api/src/bootstrap/main.ts"]
