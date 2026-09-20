@@ -8,7 +8,10 @@
     "./db": "./db/index.ts",
     "./jobs": "./jobs/index.ts",
     "./db/testing": "./db/testing/index.ts",
-    "./crm": "./crm/index.ts"
+    "./crm": "./crm/index.ts",
+    "./policy": "./policy/index.ts",
+    "./suppression": "./suppression/index.ts",
+    "./dial": "./dial/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
