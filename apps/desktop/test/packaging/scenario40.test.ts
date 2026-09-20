@@ -1,5 +1,5 @@
 import { createServer, type Server } from 'node:http';
-import { AddressInfo } from 'node:net';
+import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import { checkForUpdate, CHANNEL_MANIFEST_PATH, signManifest, type UpdateManifest } from '../../src/main/updateChannel.ts';
 import { createDesktopFixture, type DesktopFixture } from '../support/desktopFixture.ts';
@@ -113,7 +113,7 @@ describe('scenario 40: the API raises the minimum client version', () => {
   });
 
   it('offers exactly one way out: a signed build at or above the new minimum', async () => {
-    const fixture = await signedInAt(OLD_CLIENT);
+    await signedInAt(OLD_CLIENT);
     const keys = generateUpdateKeyPair();
     const channel = await startChannel();
     channel.serve(signManifest(manifestFor(channel.baseUrl, '2.0.0'), keys.privateKey));

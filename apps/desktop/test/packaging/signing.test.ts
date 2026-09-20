@@ -143,7 +143,8 @@ describe('nothing a build prints contains a credential', () => {
 
 describe('the secret names are stated once, for the workflow and the documentation', () => {
   it('keeps the build set and the CI-only set disjoint', () => {
-    const overlap = BUILD_RELEASE_VARIABLES.filter(name => CI_ONLY_RELEASE_VARIABLES.includes(name));
+    const ciOnly: readonly string[] = CI_ONLY_RELEASE_VARIABLES;
+    const overlap = BUILD_RELEASE_VARIABLES.filter(name => ciOnly.includes(name));
     expect(overlap).toEqual([]);
   });
 

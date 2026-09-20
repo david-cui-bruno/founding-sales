@@ -10,13 +10,22 @@
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
-    "test:e2e": "playwright test --config playwright.config.ts"
+    "test:e2e": "playwright test --config playwright.config.ts",
+    "test:host": "vitest run test/host",
+    "package": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/package.ts",
+    "verify:package": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/verifyPackage.ts"
   },
   "dependencies": {
     "@fss/contracts": "*",
     "zod": "^4.5.4"
   },
   "devDependencies": {
+    "@electron/asar": "3.4.1",
+    "@electron/fuses": "2.1.3",
+    "@electron/notarize": "^2.5.0",
+    "@electron/osx-sign": "^1.3.3",
+    "@electron/packager": "^18.4.4",
+    "electron": "44.0.0",
     "esbuild": "0.21.5",
     "playwright": "^1.62.1",
     "typescript": "^5.9.3",

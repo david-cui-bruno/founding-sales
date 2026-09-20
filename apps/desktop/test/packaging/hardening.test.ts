@@ -93,6 +93,7 @@ describe('the fuses the build burns are the fuses the verifier reads', () => {
       OnlyLoadAppFromAsar: true,
       LoadBrowserProcessSpecificV8Snapshot: false,
       GrantFileProtocolExtraPrivileges: false,
+      WasmTrapHandlers: true,
     });
   });
 });

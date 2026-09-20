@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
  * greenfield gate they report as skipped, which is honest: they did not run.
  */
 
-export const HOST_TESTS_ENABLED = process.platform === 'darwin' && process.env.FSS_HOST_TESTS === '1';
+export const HOST_TESTS_ENABLED = process.platform === 'darwin' && process.env['FSS_HOST_TESTS'] === '1';
 
 /** `apps/desktop`, from this file rather than from the working directory. */
 export const DESKTOP_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
