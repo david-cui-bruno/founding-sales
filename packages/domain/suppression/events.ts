@@ -119,8 +119,22 @@ export async function readSuppressionEvent(
 /** The action kinds a suppression's review hold blocks. Everything outbound. */
 const REVIEW_HOLD_BLOCKS = ['email_send', 'call_task', 'linkedin_task', 'dial_authorization', 'enrollment_advance'] as const;
 
-/** The sources a prospect originated, which are terminal the instant they commit (10.2). */
-const TERMINAL_SOURCES: ReadonlySet<string> = new Set(['prospect_opt_out', 'prospect_do_not_call', 'import']);
+/**
+ * The sources that are terminal the instant they commit (10.2).
+ *
+ * The first three are prospect-originated or imported. `deletion_tombstone` is
+ * neither, and it is here for the same reason they are: 10.3's deletion workflow has
+ * already removed the correspondence by the time the tombstone is written, so there
+ * is nothing for a ten-minute review hold to protect and nobody to change their mind.
+ * A deletion tombstone with a correction window would be a window in which contact
+ * could resume with a contact whose handles no longer exist.
+ */
+const TERMINAL_SOURCES: ReadonlySet<string> = new Set([
+  'prospect_opt_out',
+  'prospect_do_not_call',
+  'import',
+  'deletion_tombstone',
+]);
 
 export interface RecordSuppressionInput {
   readonly scope: SuppressionScope;

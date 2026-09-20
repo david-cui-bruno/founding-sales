@@ -270,6 +270,21 @@ export const FOUNDATION_LOOKUP_KEYS = {
     ['workspace_id', 'id'],
     ['workspace_id', 'mail_message_id'],
   ],
+
+  // Migration 0014. `retention_runs` keys on the kind and the period because that
+  // pair *is* Appendix C's "deletion tombstone and bounded range", and `departures`
+  // on the user because one member departs once. `deletion_requests` has only its
+  // id: a firm may be previewed for deletion more than once, and the partial unique
+  // index on `command_id` is not declarable here.
+  retention_runs: [
+    ['workspace_id', 'id'],
+    ['workspace_id', 'data_kind', 'period'],
+  ],
+  deletion_requests: [['workspace_id', 'id']],
+  departures: [
+    ['workspace_id', 'id'],
+    ['workspace_id', 'user_id'],
+  ],
 } as const satisfies Readonly<Record<string, readonly (readonly ['workspace_id', ...string[]])[]>>;
 
 /** A table a scoped repository may read. `workspaces`, `users` and `heartbeats` are not scoped rows. */

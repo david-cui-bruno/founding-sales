@@ -15,6 +15,7 @@ import { mailHandlers } from '../handlers/mail.ts';
 import { outboundSendHandoff } from '../handlers/outboundSendHandoff.ts';
 import { researchHandlers } from '../handlers/research.ts';
 import { sequenceActionJobHandler, sequenceActionSource } from '../handlers/sequenceAction.ts';
+import { retentionBatchJobHandler, retentionSource } from '../handlers/retention.ts';
 import { suppressionFinalizeJobHandler } from '../handlers/suppressionFinalize.ts';
 import { todayBuildJobHandler, todayBuildSource } from '../handlers/todayBuild.ts';
 import { mailSources } from '../scheduler/mailSources.ts';
@@ -52,6 +53,10 @@ import { WorkerStartupRefusal, startWorker } from './worker.ts';
  * exactly one secret and no second configuration object to review. A deployment
  * without the key registers no handler; a deployment with `FSS_CLASSIFIER=off`
  * registers it and each job records a `disabled` attempt having sent nothing.
+ * `retention.batch` is registered unconditionally and needs no configuration at all:
+ * every horizon in section 10.3 is a row in `retention_policies` and every sweep is a
+ * statement against this database. It is the one job kind in this image that reaches
+ * nothing outside PostgreSQL.
  */
 function registerHandlers(
   registry: HandlerRegistry,
@@ -72,6 +77,7 @@ function registerHandlers(
   // email step holds with the reason the fence gave rather than throwing. See
   // `handlers/outboundSendHandoff.ts`.
   registry.register(sequenceActionJobHandler({ sendHandoff: outboundSendHandoff() }));
+  registry.register(retentionBatchJobHandler());
   for (const handler of researchHandlers({ providers: {} })) registry.register(handler);
   for (const handler of mailHandlers(undefined)) registry.register(handler);
   for (const handler of classifyHandlers(classifier)) registry.register(handler);
@@ -180,6 +186,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
         canarySource(),
         todayBuildSource(),
         sequenceActionSource(),
+        retentionSource(),
         ...mailSources(),
         classifyReplySource(),
       ],

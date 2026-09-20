@@ -39,6 +39,10 @@ import { SETTINGS_PATHS, routeSettings } from './settings.ts';
 // Lane G6's Today list.
 import { SNOOZE_PATHS, routeSnooze } from './snooze.ts';
 import { TODAY_PATHS, routeToday } from './today.ts';
+// Lane G14's retention, deletion, departure and attachment surface.
+import { DEPARTURE_PATHS, routeDeparture } from './departure.ts';
+import { RETENTION_PATHS, routeRetention } from './retention.ts';
+import { ATTACHMENT_PATHS, routeAttachments } from './retentionAttachments.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
 /**
@@ -199,5 +203,15 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     moduleOf('settings', { paths: SETTINGS_PATHS }, routeSettings, routing),
     moduleOf('dashboard', { paths: DASHBOARD_PATHS }, routeDashboard, routing),
     moduleOf('diagnostics', { paths: DIAGNOSTICS_PATHS }, routeDiagnostics, routing),
+    // Lane G14. Exact paths throughout, and three modules rather than one: the
+    // retention reads and the deletion commands, the departure pair under `/admin`,
+    // and the attachment link, which is neither an admin command nor a retention
+    // operation but the one read in the system that hands out a Gmail URL. A
+    // `/retention` prefix would also have had to swallow `/admin/departure`, which
+    // the registry refuses for the reason it exists: an unknown path near a command
+    // that deletes prospect data must be `not_found` before any module sees it.
+    moduleOf('retention', { paths: RETENTION_PATHS }, routeRetention, routing),
+    moduleOf('departure', { paths: DEPARTURE_PATHS }, routeDeparture, routing),
+    moduleOf('attachments', { paths: ATTACHMENT_PATHS }, routeAttachments, routing),
   ];
 }
