@@ -175,40 +175,29 @@ builds and prints digests; the push is an operator step against a directive, wri
 at the bottom of the workflow and in `docs/greenfield/infra-apply-runbook.md`. The
 digest, not the tag, is what `infra/modules/cluster` accepts.
 
-## What the coordinator still has to wire
+## How the API is wired (done, lane G3b)
 
-`apps/api/src/server.ts` and `apps/api/src/index.ts` belong to the identity lane while
-that is in flight, so this lane did not touch them. Once G2 has merged, `server.ts`
-delegates to the registry and `bootstrap/server.ts` goes away. Four changes:
+`apps/api/src/server.ts` is the only HTTP surface. `bootstrap/server.ts` was this
+lane's duplicate while `server.ts` belonged to the identity lane, and it is gone;
+`bootstrap/main.ts` calls `createApiServer`.
 
-```ts
-// 1. beside the existing imports
-import { dispatch } from './bootstrap/dispatch.ts';
-import { createRouteRegistry } from './bootstrap/routeRegistry.ts';
-import { mountedRoutes } from './bootstrap/routes.ts';
-import { readBody } from './bootstrap/requestBody.ts';
+* `createApiServer` builds one registry per server —
+  `createRouteRegistry(mountedRoutes([...apiRouteModules(routing), ...extraRoutes]))`
+  — eagerly, so two modules claiming one path refuse when the server is created
+  rather than on the first request that reaches them. `route()` and `dispatch()` get
+  the same registry from a `WeakMap` keyed on the options object.
+* `apps/api/src/routes/modules.ts` is the declaration: which router owns which paths.
+  Adding a route is one line there, or one entry in `ApiOptions.extraRoutes`.
+* `handle()` reads the body with `bootstrap/requestBody.ts` for body-carrying methods
+  only, after `checkEnvelope` and before anything looks at the path.
+* `ApiOptions.expectedSystemGeneration: number | null` is Appendix E step 1 and is
+  what `/readyz` compares against; `bootstrap/config.ts` reads it from the
+  environment.
+* The principal is produced once, in `dispatch`, by `authenticate`. A module is given
+  a principal, never a credential.
 
-// 2. one registry per server, built once
-const registry = createRouteRegistry(mountedRoutes(/* G2's modules */));
-
-// 3. first thing inside route(), before the /health check
-const mounted = await dispatch(registry, {
-  method,
-  path,
-  headers,
-  principal,          // G2's verification, or null
-  body,               // from readBody, for a body-carrying method
-  db: options.session,
-  readiness: { session: options.session, expectedSystemGeneration: options.expectedSystemGeneration },
-});
-if (mounted !== null) return mounted;
-
-// 4. in handle(), for a method that carries a body, before dispatching
-const read = await readBody(request, MAX_REQUEST_BYTES);
-if (!read.accepted) { send(REFUSAL_STATUS[read.code], redactError(read.code)); return; }
-```
-
-`ApiOptions` gains `expectedSystemGeneration: number | null`, which
-`bootstrap/config.ts` already reads from the environment. Until that merge,
-`apps/api/src/bootstrap/main.ts` is what the image runs and it mounts the registry
-itself.
+Most routers are mounted on a **prefix** rather than on exact paths, because they
+already answer `not_found` for the unknown paths under their own root and because
+`GET /firms/<uuid>` cannot be enumerated. The registry refuses a prefix that overlaps
+another module's claim, so the guarantee is the one an exact path gives; see
+`docs/decisions/g3b-route-registry-prefixes.md`.

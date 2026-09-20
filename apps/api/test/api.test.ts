@@ -180,7 +180,12 @@ describe('the health route against a real database', () => {
   });
 
   it('serves /health and refuses everything else', async () => {
-    const options = { session: database.session, supportedClientVersions: CLIENT_VERSIONS, sendingEnabled: false };
+    const options = {
+      session: database.session,
+      supportedClientVersions: CLIENT_VERSIONS,
+      sendingEnabled: false,
+      expectedSystemGeneration: null,
+    };
     expect((await route('GET', '/health', options)).status).toBe(200);
     expect(await route('POST', '/health', options)).toEqual({
       status: REFUSAL_STATUS.method_not_allowed,

@@ -460,6 +460,7 @@ describe('the routes', () => {
     session: fixture.db,
     supportedClientVersions: fixture.deps.config.supportedClientVersions,
     sendingEnabled: false,
+    expectedSystemGeneration: null,
     auth: fixture.deps,
   });
 

@@ -1,10 +1,11 @@
 import type { Server } from 'node:http';
 import pg from 'pg';
 import type { QueryResultRowLike, SessionQueryable } from '@fss/domain/db';
+import { clientVersionRangeSchema, type ClientVersionRange } from '@fss/contracts';
 import { ApiConfigError, describeApiConfig, readApiConfig, type ApiConfig } from './config.ts';
 import { startApiHeartbeat } from './heartbeat.ts';
 import { createLogger, errorFields } from './log.ts';
-import { createBootstrapServer } from './server.ts';
+import { createApiServer } from '../server.ts';
 
 /**
  * The API container's entry point.
@@ -20,6 +21,19 @@ import { createBootstrapServer } from './server.ts';
  * still has to answer `/healthz` and fail `/readyz` so the load balancer takes it out
  * of rotation and an operator can read its logs rather than a crash loop.
  */
+
+/**
+ * The client-version range this container publishes (5.3).
+ *
+ * No Electron build has been released, and the container has no Google configuration,
+ * so it mounts no mutating route at all: the range is what `/auth/client-version`
+ * would say and nothing depends on it yet. The release lane replaces this constant
+ * with the range of the signed builds it has actually shipped.
+ */
+export const CONTAINER_CLIENT_VERSIONS: ClientVersionRange = clientVersionRangeSchema.parse({
+  minimum: '1.0.0',
+  maximum: '1.0.0',
+});
 
 export const API_EXIT_CODES = Object.freeze({
   ok: 0,
@@ -73,9 +87,12 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
   await requestClient.connect();
   await heartbeatClient.connect();
 
-  const server = createBootstrapServer({
+  const server = createApiServer({
     session: asSession(requestClient),
     expectedSystemGeneration: config.expectedSystemGeneration,
+    supportedClientVersions: CONTAINER_CLIENT_VERSIONS,
+    // Specification 16.2: production sending stays disabled until an admin enables it.
+    sendingEnabled: false,
     log,
   });
   const heartbeat = startApiHeartbeat({
