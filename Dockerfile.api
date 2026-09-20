@@ -68,6 +68,7 @@ COPY packages/contracts/package.json packages/contracts/
 COPY apps/api/src apps/api/src
 COPY packages/domain/db packages/domain/db
 COPY packages/domain/jobs packages/domain/jobs
+COPY packages/domain/crm packages/domain/crm
 COPY packages/domain/src packages/domain/src
 COPY packages/contracts/src packages/contracts/src
 

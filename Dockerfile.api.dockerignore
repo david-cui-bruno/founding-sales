@@ -2,7 +2,7 @@
 # in preference to `.dockerignore`, so each image states its own context and
 # neither has to share a root file with the old trees.
 #
-# Everything is excluded and the four directories the image needs are allowed
+# Everything is excluded and the directories the image needs are allowed
 # back in. A deny list would silently ship whatever the next lane adds.
 *
 
@@ -13,6 +13,7 @@
 !packages/domain/package.json
 !packages/domain/db
 !packages/domain/jobs
+!packages/domain/crm
 !packages/domain/src
 !packages/contracts/package.json
 !packages/contracts/src
