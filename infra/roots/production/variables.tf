@@ -25,6 +25,37 @@ variable "deployment_role_name" {
   }
 }
 
+variable "assume_deployment_role" {
+  description = <<-EOT
+    Whether the provider assumes `deployment_role_name` before it calls AWS, or
+    uses the credentials the caller already holds.
+
+    True, and it stays true by default in all three roots. Section 3.2 of
+    `docs/greenfield/infra-apply-runbook.md` is a local apply: David's user
+    assumes `fss-prod-deploy`, and the provider is what does the assuming.
+    Defaulting to false would mean that a caller who forgot the flag acted as
+    whatever ambient credential the shell was holding, which is exactly the
+    failure this flag exists to avoid making possible.
+
+    False is for a session that *is already* the deployment role: a CI job that
+    obtained it through GitHub OIDC with
+    `aws-actions/configure-aws-credentials`. Assuming it again would be role
+    chaining onto the same role, which needs the role to trust itself; the
+    rehearsal role's trust is the GitHub OIDC provider and the subject
+    `repo:…:environment:rehearsal` alone (Appendix G 39), so the second
+    assumption is refused and must stay refused. Only the two rehearsal
+    workflows pass false, and each proves what it is first with
+    `infra/scripts/rehearsal-caller-identity.sh`.
+
+    The flag chooses a credential path and never a plan:
+    `infra/roots/*/tests/*.tftest.hcl` assert the same names and the same
+    outputs with it on and off.
+    `docs/decisions/g12e-the-provider-does-not-reassume-its-own-session.md`.
+  EOT
+  type        = bool
+  default     = true
+}
+
 variable "aws_region" {
   description = "AWS region."
   type        = string
