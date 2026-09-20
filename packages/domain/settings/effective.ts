@@ -35,6 +35,13 @@ import {
  * release process's statement that the gate passed on these digests; the setting is
  * the admin's act. Neither alone is the sentence above, and either alone being
  * sufficient would be a way to send from an artifact nobody rehearsed.
+ *
+ * This is a *pure rule* and takes the deployment flag as an argument rather than
+ * reading configuration for itself, because the caller that matters is not in this
+ * lane: **G12 (release gates) wires the send path's read of this attestation**, and
+ * a third fact has to hold beside these two — G7-2's per-domain
+ * `sending_domains.automated_sending_enabled`, which is the DNS authentication gate
+ * and not this. See `docs/decisions/g9-two-slices-that-belong-to-other-lanes.md`.
  */
 export function effectiveSendingEnabled(deploymentEnabled: boolean, storedSetting: unknown): boolean {
   if (!deploymentEnabled) return false;

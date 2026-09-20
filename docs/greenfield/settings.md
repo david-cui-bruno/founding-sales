@@ -139,6 +139,17 @@ Two switches, ANDed: the deployment flag the release process sets and the
 argument. Every surface shows both separately, because an admin who has enabled
 sending and still cannot send has to see which half is off.
 
+A **third** fact holds beside them and is not this lane's: G7-2's per-domain
+`sending_domains.automated_sending_enabled`, the DNS authentication gate. The two are
+not copies of one another — a domain with perfect authentication that nobody
+rehearsed must not send, and a rehearsed release must not send from a domain that
+fails DMARC — and all three must hold before an automated send. **G12 (release
+gates) wires the send path's read**; this lane owns the storage, the history, the
+admin command and the surfaces. Until G12 lands the attestation is enforced nowhere
+on the send path, which is safe only because both switches are off by default and no
+automated send exists yet. See
+`docs/decisions/g9-two-slices-that-belong-to-other-lanes.md`.
+
 ## The dashboard
 
 One read, `POST /dashboard`, over a window the caller names. The window is required:

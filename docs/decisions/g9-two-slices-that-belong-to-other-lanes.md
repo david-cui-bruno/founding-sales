@@ -91,14 +91,41 @@ is gated on role in the view rather than offering a control that answers 403.
 3. `WORKER_SCHEMA_RANGE.minimum` stays at 9 for this lane either way: with both
    slices gone, no worker code path reads `workspace_settings` at all.
 
-## What was reconsidered and kept
+## The third slice, which stays: `sending_enabled`
 
-`sending_enabled` stays in `workspace_settings`. It is not G7-2's
-`sending_domains.automated_sending_enabled`, which is per sending domain and gated on
-authentication; this is 16.2's *workspace* attestation, gated on the rehearsal gate
-and carrying the `releaseGateReference` the admin is attesting to. The two are ANDed
-with the deployment flag rather than being the same fact
-(`docs/decisions/g9-sending-enable-is-two-switches.md`). If the coordinator reads
-16.2 as satisfied by G7-2's per-domain flag, this slice should go the same way as the
-other two and the decision above is the one to revisit; it is flagged rather than
-assumed.
+Ruled by the coordinator on 20 September 2026, after this lane flagged the overlap.
+
+`sending_enabled` stays in `workspace_settings`, because it and G7-2's
+`sending_domains.automated_sending_enabled` are **two facts, not two copies of one**:
+
+* G7-2's flag is the **per-domain authentication gate**. It says SPF, DKIM and DMARC
+  pass for *this sending domain* and Postmaster Tools has been reviewed, and a CHECK
+  forbids setting it without all four (12.7).
+* This slice is 16.2's **workspace attestation**. It says an authenticated admin
+  enabled production sending against a named `releaseGateReference` — the rehearsal
+  run whose artifact digests match what is deployed. It says nothing about DNS, and
+  G7-2's flag says nothing about the rehearsal.
+
+**Both must hold before an automated send**, together with the deployment flag this
+lane already ANDs in `effectiveSendingEnabled`
+(`docs/decisions/g9-sending-enable-is-two-switches.md`). Neither lane's flag is
+sufficient alone, and neither is a substitute for the other: a domain with perfect
+authentication that nobody rehearsed must not send, and a rehearsed release must not
+send from a domain that fails DMARC.
+
+## Who wires the send path
+
+**Not this lane, and not G7-2.** The read of this attestation on the outbound path is
+**G12's** (release gates), and the coordinator has recorded it in G12's brief. This
+lane owns the storage, the versioned history, the admin command and the surfaces that
+show it; G12 owns the moment before a send when all three are consulted.
+
+That is why `effectiveSendingEnabled` takes the deployment flag as an argument rather
+than reading configuration for itself: it is a pure rule G12 can call from the
+sending path with whatever the deployment says, and it fails to `false` on an
+unreadable setting.
+
+Until G12 lands, this attestation is enforced nowhere on the send path. That is safe
+only because production sending is off by default at both switches and no automated
+send exists yet (G7-2 and G8 are still in flight) — it is a gap in sequencing, not in
+the design, and it closes when G12 does.
