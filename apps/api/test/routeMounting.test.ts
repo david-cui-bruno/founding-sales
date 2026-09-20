@@ -54,10 +54,14 @@ describe('what the API mounts', () => {
       '/admin/alerts/acknowledge',
       '/admin/jobs/dead',
       '/admin/jobs/requeue',
+      '/export/firms',
       '/health',
       '/healthz',
+      '/import/commit',
+      '/import/preview',
       '/pipeline/stages',
       '/readyz',
+      '/search/firms',
     ]);
     expect([...registry.prefixes()]).toEqual([
       '/admin/devices',
@@ -146,6 +150,9 @@ describe('what the API mounts', () => {
       'opportunities',
       'pipeline',
       'merges',
+      'search',
+      'import',
+      'export',
     ]);
   });
 });

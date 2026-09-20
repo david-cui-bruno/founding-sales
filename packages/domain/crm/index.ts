@@ -152,3 +152,28 @@ export {
   type SearchOutcome,
   type SequenceStatusFilter,
 } from './search.ts';
+
+export {
+  IMPORT_COLUMNS,
+  IMPORT_ISSUE_CODES,
+  MAX_IMPORT_ROWS,
+  canonicalE164,
+  commitImportRow,
+  parseCsv,
+  previewCsvImport,
+  type CsvRefusal,
+  type CsvRow,
+  type ImportColumn,
+  type ImportContactDraft,
+  type ImportFirmDraft,
+  type ImportIssue,
+  type ImportIssueCode,
+  type ImportPreview,
+  type ImportPreviewRow,
+  type ImportRouteDraft,
+  type ImportRowCommitted,
+  type ImportRowOutcome,
+  type ParsedCsv,
+} from './import.ts';
+
+export { exportFirms, type ExportInput, type FirmExport } from './exports.ts';

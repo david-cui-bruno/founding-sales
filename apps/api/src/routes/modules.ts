@@ -5,10 +5,13 @@ import { routeAuth } from './auth.ts';
 import { routeAdminDevices } from './admin/devices.ts';
 import { routeAdminMemberships } from './admin/memberships.ts';
 import { routeContacts } from './contacts.ts';
+import { EXPORT_PATHS, routeExport } from './export.ts';
 import { routeFirms } from './firms.ts';
+import { IMPORT_PATHS, routeImport } from './import.ts';
 import { routeMerges } from './merges.ts';
 import { routeOpportunities } from './opportunities.ts';
 import { routePipeline } from './pipeline.ts';
+import { SEARCH_PATHS, routeSearch } from './search.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
 /**
@@ -101,5 +104,11 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     moduleOf('opportunities', { prefixes: ['/opportunities'] }, routeOpportunities, routing),
     moduleOf('pipeline', { paths: ['/pipeline/stages'] }, routePipeline, routing),
     moduleOf('merges', { prefixes: ['/merges'] }, routeMerges, routing),
+    // Lane G3b's CRM surface. Exact paths, which is what every new endpoint should
+    // be: the prefixes above are a record of the routers that already existed in
+    // that shape, not an invitation.
+    moduleOf('search', { paths: SEARCH_PATHS }, routeSearch, routing),
+    moduleOf('import', { paths: IMPORT_PATHS }, routeImport, routing),
+    moduleOf('export', { paths: EXPORT_PATHS }, routeExport, routing),
   ];
 }
