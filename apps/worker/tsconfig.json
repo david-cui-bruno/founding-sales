@@ -14,5 +14,5 @@
       "@fss/domain/db/testing": ["../../packages/domain/db/testing/index.ts"]
     }
   },
-  "include": ["src/**/*.ts", "test/**/*.ts", "vitest.config.ts"]
+  "include": ["src/**/*.ts", "test/**/*.ts", "tools/**/*.ts", "vitest.config.ts"]
 }
