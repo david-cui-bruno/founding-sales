@@ -136,6 +136,55 @@ export const FOUNDATION_LOOKUP_KEYS = {
   ],
   callbacks: [['workspace_id', 'id']],
 
+  // Migration 0009 (lane G7). `mailbox_tokens`, `mail_message_bodies` and the two
+  // generation-keyed tables are keyed by what they are about rather than by an id
+  // of their own: there is one token per mailbox, one body per message, and one
+  // recovery or watch per mailbox generation, and making that the key is what lets
+  // a caller write "the token for this mailbox" without a second lookup.
+  //
+  // Deliberately absent, because the registry promises unconditional unique keys:
+  // `mailbox_watches_one_current`, `mail_messages_one_per_rfc_id` and
+  // `mail_message_matches_one_selected`, all of which are partial.
+  mailboxes: [
+    ['workspace_id', 'id'],
+    ['workspace_id', 'owner_user_id'],
+    ['workspace_id', 'email_address'],
+  ],
+  mailbox_tokens: [['workspace_id', 'mailbox_id']],
+  mailbox_watches: [
+    ['workspace_id', 'id'],
+    ['workspace_id', 'mailbox_id', 'generation'],
+  ],
+  mailbox_recoveries: [
+    ['workspace_id', 'id'],
+    ['workspace_id', 'mailbox_id', 'generation'],
+  ],
+  gmail_push_notifications: [
+    ['workspace_id', 'id'],
+    ['workspace_id', 'provider_message_id'],
+  ],
+  mail_messages: [
+    ['workspace_id', 'id'],
+    ['workspace_id', 'mailbox_id', 'provider_message_id'],
+  ],
+  mail_message_bodies: [['workspace_id', 'mail_message_id']],
+  mail_message_matches: [
+    ['workspace_id', 'id'],
+    ['workspace_id', 'mail_message_id', 'opportunity_id'],
+  ],
+  mail_message_classifications: [
+    ['workspace_id', 'id'],
+    ['workspace_id', 'mail_message_id', 'layer'],
+  ],
+  mail_message_effects: [
+    ['workspace_id', 'id'],
+    ['workspace_id', 'mail_message_id', 'effect_kind', 'target_key'],
+  ],
+  template_versions: [
+    ['workspace_id', 'id'],
+    ['workspace_id', 'template_id', 'version'],
+  ],
+
   // Migration 0007 (lane G10). The two keys that carry Appendix C's research
   // idempotency are declared here rather than assembled at a call site:
   // `(workspace_id, query_hash, page_hash)` is `research:{query_hash}:{page_hash}`

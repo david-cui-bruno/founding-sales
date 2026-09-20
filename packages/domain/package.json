@@ -14,6 +14,7 @@
     "./dial": "./dial/index.ts",
     "./research": "./research/index.ts",
     "./research/testing": "./research/testing/fixtures.ts",
+    "./mail": "./mail/index.ts",
     "./today": "./today/index.ts"
   },
   "scripts": {

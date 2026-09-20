@@ -18,7 +18,7 @@ export interface SchemaRange {
 }
 
 /** The highest migration version this source tree contains. */
-export const CURRENT_SCHEMA_VERSION = 8;
+export const CURRENT_SCHEMA_VERSION = 9;
 
 /**
  * The range the release before this one declared. Widen this one release ahead of the
@@ -26,13 +26,13 @@ export const CURRENT_SCHEMA_VERSION = 8;
  *
  * Lanes G5 and G2 shipped migrations 0002 and 0003 from the same main and each widened
  * this constant for its own; lane G3a widened it again for migration 0004, G3b for
- * 0005, G4 for 0006, G10 for 0007 and G6 for 0008. A merge that finds two different
- * maxima takes the larger. That is honest only because nothing has been deployed —
- * G0's {1, 1} was never a promise made to a running production binary. From the first
- * real deployment onwards the widening must precede the migration by a release, and
- * the compatibility test will keep saying so.
+ * 0005, G4 for 0006, G10 for 0007, G6 for 0008 and G7 for 0009. A merge that finds
+ * two different maxima takes the larger. That is honest only because nothing has been
+ * deployed — G0's {1, 1} was never a promise made to a running production binary. From
+ * the first real deployment onwards the widening must precede the migration by a
+ * release, and the compatibility test will keep saying so.
  */
-export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 8 };
+export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 9 };
 
 /**
  * Both services need migration 0002's shape: the API's dead-job list reads `dead_at`
@@ -74,11 +74,36 @@ export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum:
  * snapshot_date, firm_id, item_key)` inside it *is* that handler's declared
  * `business_uniqueness` protection — so a worker on a version-7 database would be a
  * worker running an at-least-once handler with nothing behind it, which is exactly the
- * case G10 refused. Both maxima move to 8: a binary that refused the database it has
- * just been deployed against would be a self-inflicted outage.
+ * case G10 refused.
+ *
+ * Migration 0009 (G7) moves both a fourth time, and for a reason on each side rather
+ * than by habit.
+ *
+ * The API needs it: `/gmail/connect`, `/oauth/gmail/callback`, `/gmail/disconnect`,
+ * the Pub/Sub webhook and the message view read and write `mailboxes`,
+ * `mailbox_tokens` and `gmail_push_notifications`. An API on a version-8 database
+ * could accept a Google authorization code and then have nowhere to put the grant,
+ * which is the one outcome worse than refusing the connection: the code is single-use,
+ * so the salesperson would have to start again and the API would have leaked a grant
+ * nobody can revoke through FSS.
+ *
+ * The worker needs it: `mail.sync`, `mail.recover` and `mail.watch_renew` read the
+ * compare-and-set cursor and the coverage watermark on `mailboxes` and write
+ * `mail_messages` and `mail_message_effects`. A worker without them could not prove
+ * coverage, and a mailbox whose coverage cannot be proved must hold every automated
+ * step rather than proceed (4.2) — so the honest failure is the process refusing to
+ * start, which is what a minimum of 9 produces. It is also the same refusal G10 and G6
+ * each made for their own tables: a `business_uniqueness` handler on a database
+ * without its unique index is an at-least-once handler with nothing behind it.
+ *
+ * The deploy order stays migrate, then worker, then API, so neither binary meets an
+ * older schema; a rolling step that runs two workers has both understanding 0009,
+ * which is what the widened previous-release range above is for (Appendix G 22). Both
+ * maxima move to 9: a binary that refused the database it has just been deployed
+ * against would be a self-inflicted outage.
  */
-export const API_SCHEMA_RANGE: SchemaRange = { minimum: 8, maximum: 8 };
-export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 8, maximum: 8 };
+export const API_SCHEMA_RANGE: SchemaRange = { minimum: 9, maximum: 9 };
+export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 9, maximum: 9 };
 
 export function acceptsSchemaVersion(range: SchemaRange, version: number): boolean {
   return Number.isInteger(version) && version >= range.minimum && version <= range.maximum;

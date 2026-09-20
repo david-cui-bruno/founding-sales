@@ -67,10 +67,17 @@ describe('what the API mounts', () => {
       '/dial/authorize',
       '/dial/consume',
       '/export/firms',
+      '/gmail/connect',
+      '/gmail/disconnect',
+      '/gmail/status',
       '/health',
       '/healthz',
       '/import/commit',
       '/import/preview',
+      '/integrations/gmail/push',
+      '/messages',
+      '/messages/resolve-ambiguity',
+      '/oauth/gmail/callback',
       '/pauses',
       '/pauses/open',
       '/pauses/release',
@@ -106,6 +113,30 @@ describe('what the API mounts', () => {
       '/merges',
       '/opportunities',
     ]);
+  });
+
+  it('mounts the Gmail callback and the Pub/Sub push path exactly as Google was told them', () => {
+    const registry = registryFor(options());
+    // Both of these are facts about somebody else's configuration: the redirect URI
+    // in Google's console, and `gmail_push_path` in infra/modules/stack, which is
+    // also the OIDC audience the subscription mints its token for. A test pins them
+    // because renaming either in this repository alone breaks a thing that is quiet
+    // about being broken.
+    expect(registry.moduleFor('/oauth/gmail/callback')?.name).toBe('gmail');
+    expect(registry.moduleFor('/integrations/gmail/push')?.name).toBe('gmail-push');
+    // Nothing else lives under either root.
+    expect(registry.moduleFor('/oauth/gmail')).toBeUndefined();
+    expect(registry.moduleFor('/integrations/gmail')).toBeUndefined();
+    expect(registry.moduleFor('/gmail')).toBeUndefined();
+  });
+
+  it('answers the mail paths with not_found when the deployment has no Gmail configuration', async () => {
+    // The same rule `auth` follows: a half-configured deployment serves nothing it
+    // could only half do. `options()` supplies neither.
+    for (const path of ['/gmail/connect', '/gmail/status', '/oauth/gmail/callback', '/integrations/gmail/push']) {
+      const result = await route(path === '/oauth/gmail/callback' ? 'GET' : 'POST', path, options());
+      expect(result.status, path).toBe(404);
+    }
   });
 
   it('routes a firm read whose last segment is an identifier to the firms module', () => {
@@ -195,6 +226,9 @@ describe('what the API mounts', () => {
       'callbacks',
       'pauses',
       'research',
+      'gmail',
+      'gmail-push',
+      'messages',
       'today',
       'snooze',
     ]);

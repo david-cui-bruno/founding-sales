@@ -20,6 +20,7 @@
 !packages/domain/crm
 !packages/domain/policy
 !packages/domain/suppression
+!packages/domain/mail
 !packages/contracts/package.json
 !packages/contracts/src
 
