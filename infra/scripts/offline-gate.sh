@@ -48,12 +48,33 @@ fi
 
 production_key=$(grep -E '^key ' infra/roots/production/backend.hcl | cut -d'"' -f2)
 rehearsal_key=$(grep -E '^key ' infra/roots/rehearsal/backend.hcl | cut -d'"' -f2)
+rehearsal_registry_key=$(grep -E '^key ' infra/roots/rehearsal-registry/backend.hcl | cut -d'"' -f2)
 if [ "$production_key" = "$rehearsal_key" ]; then
   echo "FAIL: the two roots share a state key"
   fail=1
 fi
+if [ "$(printf '%s\n%s\n%s\n' "$production_key" "$rehearsal_key" "$rehearsal_registry_key" | sort -u | wc -l | tr -d ' ')" != "3" ]; then
+  echo "FAIL: the three roots do not have three distinct state keys"
+  fail=1
+fi
 case "$production_key" in fss/greenfield/production/*) ;; *) echo "FAIL: production state key is not under fss/greenfield/production/"; fail=1 ;; esac
 case "$rehearsal_key" in fss/greenfield/rehearsal/*) ;; *) echo "FAIL: rehearsal state key is not under fss/greenfield/rehearsal/"; fail=1 ;; esac
+case "$rehearsal_registry_key" in fss/greenfield/rehearsal-registry/*) ;; *) echo "FAIL: rehearsal registry state key is not under fss/greenfield/rehearsal-registry/"; fail=1 ;; esac
+# The per-run key is fss/greenfield/rehearsal/<run>/terraform.tfstate and "registry"
+# is a legal run suffix, so the durable repositories must not live inside that space:
+# a run that collided with them would destroy them on teardown.
+case "$rehearsal_registry_key" in
+  fss/greenfield/rehearsal/*)
+    echo "FAIL: the rehearsal registry state key is inside the per-run space and a run could collide with it"
+    fail=1
+    ;;
+esac
+# The per-run rehearsal root must not create repositories: they have to exist before
+# the run does, and a run's teardown would take them away.
+if ! grep -q 'create_registry = false' infra/roots/rehearsal/main.tf; then
+  echo "FAIL: the per-run rehearsal root must pass create_registry = false"
+  fail=1
+fi
 if grep -rInE '(access_key|secret_key|token|password)' infra/roots/*/backend.hcl >/dev/null 2>&1; then
   echo "FAIL: a backend file carries a credential-looking value"
   fail=1

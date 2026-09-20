@@ -21,6 +21,44 @@ REHEARSAL_PREFIX_PATTERN='^fss-rh-[a-z0-9-]{3,18}$'
 # The namespace it must never touch, in any command, in any argument.
 PRODUCTION_PREFIX='fss-prod'
 
+# The two rehearsal-namespace resources that carry no run identifier.
+#
+# `infra/roots/rehearsal-registry` owns them and is applied once: the images
+# have to be in ECR before a run exists, and the release workflow's environment
+# secrets name them without a run. They are therefore the only `fss-rh-` names
+# a guard will see that do not contain the run it is checking, and they are
+# rehearsal resources — never production ones — which is what
+# `rehearsal_classify_name` exists to say out loud.
+REHEARSAL_STABLE_NAMES='fss-rh-api fss-rh-worker'
+
+# Print `production`, `rehearsal-run`, `rehearsal-stable` or `foreign` for a
+# resource name, and return non-zero for anything a rehearsal may not address.
+#
+#   rehearsal_classify_name <run prefix> <name>
+rehearsal_classify_name() {
+  local prefix=$1 name=$2 stable
+  case "$name" in
+    "$PRODUCTION_PREFIX"*)
+      echo "production"
+      return 1
+      ;;
+  esac
+  for stable in $REHEARSAL_STABLE_NAMES; do
+    if [ "$name" = "$stable" ]; then
+      echo "rehearsal-stable"
+      return 0
+    fi
+  done
+  case "$name" in
+    "$prefix"*)
+      echo "rehearsal-run"
+      return 0
+      ;;
+  esac
+  echo "foreign"
+  return 1
+}
+
 rehearsal_dry_run() {
   [ "${FSS_REHEARSAL_DRY_RUN:-0}" = "1" ]
 }

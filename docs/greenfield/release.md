@@ -177,6 +177,8 @@ docker push "$ACCOUNT.dkr.ecr.$REGION.amazonaws.com/fss-rh-api:$GIT_SHA"
 # ... and the worker.
 ```
 
+`fss-rh-api` and `fss-rh-worker` are **stable** repositories with no run in their names. They belong to `infra/roots/rehearsal-registry`, which is applied once (`infra-apply-runbook.md` 2.1) and never torn down; the per-run rehearsal root creates no repository at all. That is forced by this very step: you are pushing before the run exists, and the workflow's two repository secrets hold one value each. The rehearsal root refuses an image that does not come from those two repositories — `fss-rh-deploy` cannot read a production repository, so a plan-time refusal is better than an authorization error five minutes into a deployment.
+
 The **desktop commit stamp** is the release commit from 2.0 — the same `git rev-parse HEAD` you have been using — and the release record names it. You do not wait for a Mac build to learn it.
 
 ---
@@ -194,7 +196,7 @@ What it does, in order, and why the order is the order:
 
 1. **Refuse anything that is not a digest.** Two `sha256:` values, and they must differ — one image pushed under both names is a mistake the gate can catch and a person cannot.
 2. **Record the production inventory.** So that "teardown could not address production" is measured afterwards rather than asserted.
-3. **Create** the rehearsal root with the run prefix, deploying both digests.
+3. **Create** the rehearsal root with the run prefix, deploying both digests from the stable `fss-rh-api` and `fss-rh-worker` repositories. The run creates no repository of its own and its teardown removes none; `infra/roots/rehearsal-registry` owns those two and was applied once, before the first push.
 4. **Migrate, then deploy the worker, then the API.** Never beside each other: the API's declared schema range needs the migration to have run, the worker may straddle. `infra/scripts/rehearsal-schema-ranges.sh` runs that order and then the refusal cases (Appendix G 22).
 5. **Smoke** with the same `scripts/productionSmoke.mjs` production gets.
 6. **Run the Appendix G suite** (`npm run test:release`) and the **mutation check** (`npm run test:release:mutation`), which breaks each trap in turn and requires the suite to go red.
@@ -202,7 +204,7 @@ What it does, in order, and why the order is the order:
 8. **Suppression journal replay and Gmail reconstruction**, against the recorded fake (no real mailbox in rehearsal unless you provide a rehearsal Google project). The second replay must insert nothing; no send may repeat.
 9. **Carry watermark** (Appendix G 20): the export must refuse a table with a post-watermark write, and the carry tooling must contain no writer at all.
 10. **Tear down**, always, with bypass-governance.
-11. **Assert nothing with the production prefix was touched**, always.
+11. **Assert nothing with the production prefix was touched**, always. The guard classifies every name it sees: the run's own resources, the two stable rehearsal repositories that carry no run, and anything production's — which it refuses. It runs in dry mode on every pull request, so both branches are exercised without a credential.
 12. **Write the release record**, last. It names the two digests, the desktop stamp, and a `releaseGateReference` you will need in section 6.
 
 If any step fails, steps 10 and 11 still run and no record is written. That is the design: there is no such thing as a partially passed release gate.

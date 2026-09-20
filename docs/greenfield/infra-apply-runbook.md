@@ -94,7 +94,33 @@ Not infrastructure, but the apply is pointless without them and they take days, 
 
 ## 2. Push the images first
 
-Both services are deployed by **digest**. `api_image` and `worker_image` are validated against `@sha256:<64 hex>`; a tag is refused. The ECR repositories are created by this stack, so the very first apply is a chicken-and-egg:
+Both services are deployed by **digest**. `api_image` and `worker_image` are validated against `@sha256:<64 hex>`; a tag is refused. There are **four** repositories across three roots, and two of them have to exist before anything can be pushed:
+
+| Repository | Created by | When |
+|---|---|---|
+| `fss-prod-api`, `fss-prod-worker` | `infra/roots/production`, `module.stack.module.registry` | targeted first apply, once |
+| `fss-rh-api`, `fss-rh-worker` | `infra/roots/rehearsal-registry` | its own apply, once |
+
+### 2.1 The rehearsal repositories — one apply, then never again
+
+The per-run rehearsal root creates **no** repository (`create_registry = false`). It cannot: the images are pushed before the run exists, the release workflow's environment secrets name two fixed repositories, and a per-run repository would be destroyed with the run — taking the earlier compatible binaries the 4.2 rollback path depends on. `docs/decisions/g12c-the-rehearsal-registry-is-its-own-root.md` has the reasoning.
+
+```bash
+cd infra/roots/rehearsal-registry
+terraform init -backend-config=backend.hcl -backend-config="kms_key_id=<state key arn>"
+terraform plan -out=rehearsal-registry.tfplan     # two aws_ecr_repository, two lifecycle policies
+terraform apply rehearsal-registry.tfplan
+
+terraform output repository_urls
+```
+
+Those two URLs are the values of the `rehearsal` environment's `FSS_REHEARSAL_API_REPOSITORY` and `FSS_REHEARSAL_WORKER_REPOSITORY` secrets (release.md 1.3). Read them from here rather than assembling them by hand.
+
+This root takes no `name_prefix`: `fss-rh` is a literal, because the workflow's secrets name exactly `fss-rh-api` and `fss-rh-worker`. Its state key is `fss/greenfield/rehearsal-registry/terraform.tfstate`, deliberately outside the per-run space `fss/greenfield/rehearsal/<run>/` — `registry` is a legal run suffix, and a run whose state collided with this one would destroy the repositories on teardown. The offline gate checks all of that.
+
+Do not `terraform destroy` this root. `force_delete` is false, so a destroy fails on a repository that still holds images, which is the correct answer.
+
+### 2.2 The production repositories — the one use of `-target`
 
 ```bash
 # First apply: create the registries only.
@@ -115,6 +141,8 @@ aws ecr describe-images --repository-name fss-prod-api \
 ```
 
 `-target` is used exactly once, for this bootstrap, and never again. The rest of the runbook applies the whole root.
+
+The same digests are then pushed to `fss-rh-api` and `fss-rh-worker` so the rehearsal deploys the exact artefacts production will (`release.md` 2.1). The rehearsal root refuses an `api_image` that does not end `/fss-rh-api@sha256:<64 hex>`: `fss-rh-deploy` may read nothing outside `fss-rh-*`, and a plan is a better place to learn that than an ECR authorization error minutes into a deployment.
 
 ## 3. The applies, in order
 

@@ -110,8 +110,13 @@ output "worker_task_role_name" {
 }
 
 output "repository_urls" {
-  description = "ECR repository URLs keyed by service short name."
-  value       = module.registry.repository_urls
+  description = "ECR repository URLs keyed by service short name. Empty when this stack creates no registry."
+  value       = var.create_registry ? one(module.registry[*].repository_urls) : {}
+}
+
+output "repository_names" {
+  description = "ECR repository names keyed by service short name. Empty when this stack creates no registry."
+  value       = var.create_registry ? one(module.registry[*].repository_names) : {}
 }
 
 output "secret_names" {
@@ -200,7 +205,7 @@ output "resource_names" {
       module.alerts.critical_composite_alarm_name,
       module.alerts.warning_composite_alarm_name,
     ],
-    values(module.registry.repository_names),
+    var.create_registry ? values(one(module.registry[*].repository_names)) : [],
     values(module.secrets.secret_names),
     values(module.observability.log_group_names),
     module.alerts.alarm_names,

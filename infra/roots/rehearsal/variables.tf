@@ -81,13 +81,29 @@ variable "api_hostname" {
 }
 
 variable "api_image" {
-  description = "The exact immutable API digest proposed for production."
+  description = <<-EOT
+    The exact immutable API digest proposed for production, pulled from the
+    stable rehearsal repository `fss-rh-api` that
+    `infra/roots/rehearsal-registry` owns. The digest is production's; the
+    repository is not, because `fss-rh-deploy` may read nothing outside
+    `fss-rh-*`.
+  EOT
   type        = string
+
+  validation {
+    condition     = can(regex("/fss-rh-api@sha256:[0-9a-f]{64}$", var.api_image))
+    error_message = "api_image must be <registry>/fss-rh-api@sha256:<64 hex>. A rehearsal run pulls from the rehearsal repositories; the rehearsal role cannot read a production one."
+  }
 }
 
 variable "worker_image" {
-  description = "The exact immutable worker digest proposed for production."
+  description = "The exact immutable worker digest proposed for production, pulled from the stable `fss-rh-worker` repository."
   type        = string
+
+  validation {
+    condition     = can(regex("/fss-rh-worker@sha256:[0-9a-f]{64}$", var.worker_image))
+    error_message = "worker_image must be <registry>/fss-rh-worker@sha256:<64 hex>."
+  }
 }
 
 variable "api_schema_range" {

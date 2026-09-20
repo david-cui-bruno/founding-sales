@@ -59,6 +59,31 @@ case "$PHASE" in
   after)
     rehearsal_log "asserting the rehearsal run touched nothing with the production prefix"
 
+    # 0. The names a rehearsal may address, classified rather than assumed.
+    #
+    #    Two rehearsal resources carry no run identifier: the stable ECR
+    #    repositories `fss-rh-api` and `fss-rh-worker`, which exist before the
+    #    run does because the images are pushed before the run does. They are
+    #    rehearsal-namespace resources and a guard that treated an `fss-rh-`
+    #    name without the run in it as "not mine, therefore production's"
+    #    would fail this scenario for the wrong reason. This runs in dry mode
+    #    too, so every pull request exercises both branches.
+    for expected in "${PREFIX}-api" $REHEARSAL_STABLE_NAMES; do
+      verdict="$(rehearsal_classify_name "$PREFIX" "$expected")" || {
+        echo "FAIL: $expected classified as $verdict; it is a rehearsal-namespace resource" >&2
+        exit 1
+      }
+      rehearsal_log "$expected: $verdict"
+    done
+    if rehearsal_classify_name "$PREFIX" "${PRODUCTION_PREFIX}-api" >/dev/null 2>&1; then
+      echo "FAIL: the name classifier accepted a production resource" >&2
+      exit 1
+    fi
+    if rehearsal_classify_name "$PREFIX" "fss-rh-someone-elses-run" >/dev/null 2>&1; then
+      echo "FAIL: the name classifier accepted another run's resource" >&2
+      exit 1
+    fi
+
     # 1. Every resource the state held is a rehearsal resource.
     if rehearsal_dry_run; then
       rehearsal_plan "terraform state list | grep -v '$PREFIX' -> expect empty"
@@ -97,7 +122,8 @@ case "$PHASE" in
       fi
     fi
 
-    rehearsal_write_report "prefix-guard.txt" "prefix=$PREFIX production_untouched=true"
+    rehearsal_write_report "prefix-guard.txt" \
+      "prefix=$PREFIX production_untouched=true stable_repositories=rehearsal"
     rehearsal_log "pass: nothing with the production prefix was addressed"
     ;;
   *)

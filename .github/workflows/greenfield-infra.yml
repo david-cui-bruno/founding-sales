@@ -107,11 +107,18 @@ jobs:
           set -euo pipefail
           production_key=$(grep -E '^key ' infra/roots/production/backend.hcl | cut -d'"' -f2)
           rehearsal_key=$(grep -E '^key ' infra/roots/rehearsal/backend.hcl | cut -d'"' -f2)
-          echo "production: $production_key"
-          echo "rehearsal:  $rehearsal_key"
+          registry_key=$(grep -E '^key ' infra/roots/rehearsal-registry/backend.hcl | cut -d'"' -f2)
+          echo "production:         $production_key"
+          echo "rehearsal:          $rehearsal_key"
+          echo "rehearsal-registry: $registry_key"
           test "$production_key" != "$rehearsal_key"
+          test "$(printf '%s\n%s\n%s\n' "$production_key" "$rehearsal_key" "$registry_key" | sort -u | wc -l | tr -d ' ')" = "3"
           case "$production_key" in fss/greenfield/production/*) ;; *) echo "::error::production state key is not under fss/greenfield/production/"; exit 1 ;; esac
           case "$rehearsal_key" in fss/greenfield/rehearsal/*) ;; *) echo "::error::rehearsal state key is not under fss/greenfield/rehearsal/"; exit 1 ;; esac
+          case "$registry_key" in fss/greenfield/rehearsal-registry/*) ;; *) echo "::error::rehearsal registry state key is not under fss/greenfield/rehearsal-registry/"; exit 1 ;; esac
+          # "registry" is a legal run suffix, so the durable repositories must live
+          # outside the per-run state space or a run could destroy them on teardown.
+          case "$registry_key" in fss/greenfield/rehearsal/*) echo "::error::the rehearsal registry state key is inside the per-run space"; exit 1 ;; esac
           # No backend file may carry a credential-looking value.
           ! grep -rInE '(access_key|secret_key|token|password)' infra/roots/*/backend.hcl
 

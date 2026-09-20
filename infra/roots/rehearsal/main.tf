@@ -45,6 +45,10 @@ module "stack" {
   container_insights     = "disabled"
   enable_execute_command = var.enable_execute_command
 
+  # A run deploys from the stable rehearsal repositories, which exist before it
+  # does and outlive it. infra/roots/rehearsal-registry owns them.
+  create_registry = false
+
   dependencies_mode  = var.dependencies_mode
   research_providers = var.research_providers
   sending_enabled    = var.sending_enabled

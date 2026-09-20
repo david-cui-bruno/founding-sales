@@ -214,6 +214,20 @@ variable "enable_execute_command" {
   default     = false
 }
 
+variable "create_registry" {
+  description = <<-EOT
+    Whether this stack creates its own ECR repositories.
+
+    True for production, which owns `fss-prod-api` and `fss-prod-worker` for as
+    long as it exists. False for a rehearsal *run*: its repositories have to
+    exist before the run does, so they belong to `infra/roots/rehearsal-registry`
+    and are applied once. A per-run registry would also be deleted with the run,
+    taking the images the next run's digests refer to.
+  EOT
+  type        = bool
+  default     = true
+}
+
 variable "dependencies_mode" {
   description = <<-EOT
     `FSS_DEPENDENCIES` on both task definitions: `live` builds every real

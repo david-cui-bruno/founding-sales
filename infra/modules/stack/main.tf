@@ -107,8 +107,16 @@ module "observability" {
   tags               = local.tags
 }
 
+# The registry is the one part of the stack that outlives the stack.
+#
+# Production creates its own (`fss-prod-api`, `fss-prod-worker`) and keeps it.
+# A rehearsal *run* must not: the images are pushed before the run exists, the
+# release workflow's environment secrets name the stable `fss-rh-api` and
+# `fss-rh-worker`, and a repository created per run would be deleted with the
+# run. `infra/roots/rehearsal-registry` owns those two and is applied once.
 module "registry" {
   source = "../registry"
+  count  = var.create_registry ? 1 : 0
 
   name_prefix  = var.name_prefix
   force_delete = var.destroyable

@@ -110,6 +110,42 @@ run "no_name_this_run_claims_can_be_a_production_name" {
 
 }
 
+# The per-run root creates no ECR repository.
+#
+# It used to create `fss-rh-<run>-api` and `fss-rh-<run>-worker`, which cannot work:
+# the images have to be pushed *before* the run exists, the release workflow's
+# environment secrets name the stable `fss-rh-api` and `fss-rh-worker`, and a
+# repository created by a run is destroyed with it. `infra/roots/rehearsal-registry`
+# owns the two stable repositories and is applied once. See
+# docs/decisions/g12c-the-rehearsal-registry-is-its-own-root.md.
+run "the_run_creates_no_repository_of_its_own" {
+  command = plan
+
+  assert {
+    condition     = length(keys(module.stack.repository_urls)) == 0
+    error_message = "A rehearsal run deploys from the stable rehearsal repositories; it does not create its own and take them away again."
+  }
+
+  assert {
+    condition     = length([for name in output.resource_names : name if strcontains(name, "ecr")]) == 0
+    error_message = "No repository name is claimed by the run."
+  }
+}
+
+run "a_run_may_only_deploy_from_the_stable_rehearsal_repositories" {
+  command = plan
+
+  variables {
+    api_image = "123456789012.dkr.ecr.us-east-1.amazonaws.com/fss-prod-api@sha256:0000000000000000000000000000000000000000000000000000000000000001"
+  }
+
+  # The digest is the one proposed for production; the repository it is pulled
+  # from is not. `fss-rh-deploy` has no permission to read a production
+  # repository, so this would fail as an ECR authorization error minutes into a
+  # deployment. It fails at plan time instead, naming the variable.
+  expect_failures = [var.api_image]
+}
+
 run "a_second_run_shares_no_name_with_the_first" {
   command = plan
 

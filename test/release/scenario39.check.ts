@@ -46,6 +46,47 @@ describe('Appendix G 39: the two roots cannot address each other', () => {
     expect(gate).toContain('fss/greenfield/rehearsal/*');
   });
 
+  it('gives the durable rehearsal repositories a third state key, outside the per-run space', () => {
+    const keyOf = (backend: string): string => {
+      const line = backend.split('\n').find(row => row.trimStart().startsWith('key '));
+      return (line ?? '').split('"')[1] ?? '';
+    };
+    const registry = keyOf(readRepositoryFile('infra/roots/rehearsal-registry/backend.hcl'));
+
+    // `registry` is a legal run suffix (`fss-rh-registry`), so a state key under
+    // fss/greenfield/rehearsal/ could be claimed by a run and destroyed on teardown,
+    // taking every image past releases were rehearsed on.
+    expect(registry).toBe('fss/greenfield/rehearsal-registry/terraform.tfstate');
+    expect(registry.startsWith('fss/greenfield/rehearsal/')).toBe(false);
+
+    const gate = readRepositoryFile('infra/scripts/offline-gate.sh');
+    expect(gate).toContain('rehearsal_registry_key');
+    expect(gate).toContain('the rehearsal registry state key is inside the per-run space');
+    // And the per-run root creates no repository of its own.
+    expect(gate).toContain('create_registry = false');
+    expect(readRepositoryFile('infra/roots/rehearsal/main.tf')).toContain('create_registry = false');
+  });
+
+  it('treats the two stable repositories as rehearsal resources, not as production ones', () => {
+    const common = readRepositoryFile('infra/scripts/rehearsal-common.sh');
+    const guard = readRepositoryFile('infra/scripts/rehearsal-prefix-guard.sh');
+
+    // They are the only fss-rh- names a guard sees that do not contain the run, so a
+    // guard reasoning "not mine, therefore production's" would fail this scenario for
+    // the wrong reason. The classifier says which of the four they are.
+    expect(common).toContain("REHEARSAL_STABLE_NAMES='fss-rh-api fss-rh-worker'");
+    expect(common).toContain('rehearsal_classify_name()');
+    expect(common).toContain('rehearsal-stable');
+
+    // And it is exercised rather than described: the after phase classifies the run's
+    // own name, both stable names, a production name and another run's name, and the
+    // dry run reaches all of it without a credential.
+    expect(guard).toContain('rehearsal_classify_name "$PREFIX"');
+    expect(guard).toContain('the name classifier accepted a production resource');
+    expect(guard).toContain("the name classifier accepted another run's resource");
+    expect(guard).toContain('stable_repositories=rehearsal');
+  });
+
   it('makes each root refuse the other’s namespace rather than merely avoid it', () => {
     const production = readRepositoryFile('infra/roots/production/tests/isolation.tftest.hcl');
     const rehearsal = readRepositoryFile('infra/roots/rehearsal/tests/isolation.tftest.hcl');
