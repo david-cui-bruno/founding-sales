@@ -1,6 +1,8 @@
 import pg from 'pg';
 import type { QueryResultRowLike, SessionQueryable } from '@fss/domain/db';
 import { HandlerRegistry, canaryHandler, createCloudWatchSink, loadCloudWatchTransport } from '@fss/domain/jobs';
+import { defaultTodaySources } from '@fss/domain/today';
+import { dueSequenceWorkSource } from '@fss/domain/sequences';
 import { WORKER_EXIT_CODES } from '../index.ts';
 import {
   classifyHandlers,
@@ -10,7 +12,9 @@ import {
   type ClassifyWorkerOptions,
 } from '../handlers/classify.ts';
 import { mailHandlers } from '../handlers/mail.ts';
+import { outboundSendHandoff } from '../handlers/outboundSendHandoff.ts';
 import { researchHandlers } from '../handlers/research.ts';
+import { sequenceActionJobHandler, sequenceActionSource } from '../handlers/sequenceAction.ts';
 import { suppressionFinalizeJobHandler } from '../handlers/suppressionFinalize.ts';
 import { todayBuildJobHandler, todayBuildSource } from '../handlers/todayBuild.ts';
 import { mailSources } from '../scheduler/mailSources.ts';
@@ -55,7 +59,19 @@ function registerHandlers(
 ): HandlerRegistry {
   registry.register(canaryHandler());
   registry.register(suppressionFinalizeJobHandler());
-  registry.register(todayBuildJobHandler());
+  // 8.2's lane 3 is due sequence work, and G6 left `TodaySource` as the seam for it.
+  // The source is composed here rather than added to `defaultTodaySources()` because
+  // `packages/domain/sequences` already imports `packages/domain/today` for the
+  // interface, and the reverse import would be a cycle between two packages that are
+  // shipped in the same image.
+  registry.register(
+    todayBuildJobHandler({ sources: [...defaultTodaySources(), dueSequenceWorkSource()] }),
+  );
+  // The hand-off is G7-2's fence, adapted. `prepare` and the outcome read are real;
+  // `dispatch` needs the Gmail configuration this release does not hand out, so a due
+  // email step holds with the reason the fence gave rather than throwing. See
+  // `handlers/outboundSendHandoff.ts`.
+  registry.register(sequenceActionJobHandler({ sendHandoff: outboundSendHandoff() }));
   for (const handler of researchHandlers({ providers: {} })) registry.register(handler);
   for (const handler of mailHandlers(undefined)) registry.register(handler);
   for (const handler of classifyHandlers(classifier)) registry.register(handler);
@@ -160,7 +176,13 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
         metrics: sessions[1 + config.concurrency] as SessionQueryable,
       },
       registry: registerHandlers(new HandlerRegistry(), classifier),
-      sources: [canarySource(), todayBuildSource(), ...mailSources(), classifyReplySource()],
+      sources: [
+        canarySource(),
+        todayBuildSource(),
+        sequenceActionSource(),
+        ...mailSources(),
+        classifyReplySource(),
+      ],
       sink,
       log,
     });

@@ -2,14 +2,20 @@ import { BrowserWindow, ipcMain, shell } from 'electron';
 import { CRM_IPC_CHANNELS, createCrmBridge, type CrmBridgeDeps, type CrmBridgeHost } from './crmBridge.ts';
 import { TODAY_IPC_CHANNELS, createTodayBridge, type TodayBridgeDeps, type TodayBridgeHost } from './todayBridge.ts';
 import { REPLY_IPC_CHANNELS, createReplyBridge, type ReplyBridgeDeps, type ReplyBridgeHost } from './replyBridge.ts';
+import {
+  SEQUENCE_IPC_CHANNELS,
+  createSequenceBridge,
+  type SequenceBridgeDeps,
+  type SequenceBridgeHost,
+} from './sequenceBridge.ts';
 
 /**
- * The three windows beside G2's, and the channels that feed them
- * (specification 8.2, 8.3, 14.2).
+ * The four windows beside G2's, and the channels that feed them
+ * (specification 8.2, 8.3, 11.1, 14.2).
  *
  * G2 opened one window; G3b wrote a second renderer and a contract for its bridge and
- * stopped there; G6 added the third and wired both; G7b adds the reply cards. They
- * are separate windows rather than screens inside one, which is the choice G3b's own
+ * stopped there; G6 added the third and wired both; G7b added the reply cards and G8
+ * the sequence editor. They are separate windows rather than screens inside one, which is the choice G3b's own
  * note records: the Today window is the one a person leaves open all day and has to
  * stay small and fast, and the others are opened, used and closed.
  *
@@ -162,6 +168,79 @@ export function registerCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
   return host;
 }
 
+/**
+ * Lane G8's sequence editor (11.1, 11.3, 4.3).
+ *
+ * The same shape as the two above: a renderer's word is never taken for a shape, and
+ * a malformed request is the current state back rather than an argument passed on to
+ * the API.
+ */
+export function registerSequenceBridge(deps: SequenceBridgeDeps): SequenceBridgeHost {
+  const host = createSequenceBridge(deps);
+  const withString = (
+    channel: string,
+    field: string,
+    call: (value: string) => Promise<unknown>,
+  ): void => {
+    handleOnce(channel, async argument => {
+      const value = (argument as Record<string, unknown> | null)?.[field];
+      return typeof value === 'string' ? await call(value) : await host.state();
+    });
+  };
+
+  handleOnce(SEQUENCE_IPC_CHANNELS.state, async () => await host.state());
+  withString(SEQUENCE_IPC_CHANNELS.openSequence, 'sequenceId', async sequenceId =>
+    await host.openSequence({ sequenceId }),
+  );
+  withString(SEQUENCE_IPC_CHANNELS.createSequence, 'name', async name =>
+    await host.createSequence({ name }),
+  );
+  withString(SEQUENCE_IPC_CHANNELS.publish, 'sequenceVersionId', async sequenceVersionId =>
+    await host.publish({ sequenceVersionId }),
+  );
+  withString(SEQUENCE_IPC_CHANNELS.retire, 'sequenceVersionId', async sequenceVersionId =>
+    await host.retire({ sequenceVersionId }),
+  );
+  withString(SEQUENCE_IPC_CHANNELS.approveTemplate, 'templateVersionId', async templateVersionId =>
+    await host.approveTemplate({ templateVersionId }),
+  );
+  withString(SEQUENCE_IPC_CHANNELS.completeLinkedIn, 'stepExecutionId', async stepExecutionId =>
+    await host.completeLinkedIn({ stepExecutionId }),
+  );
+  withString(SEQUENCE_IPC_CHANNELS.undoLinkedIn, 'stepExecutionId', async stepExecutionId =>
+    await host.undoLinkedIn({ stepExecutionId }),
+  );
+  withString(SEQUENCE_IPC_CHANNELS.resumeEnrollment, 'enrollmentId', async enrollmentId =>
+    await host.resumeEnrollment({ enrollmentId }),
+  );
+  handleOnce(SEQUENCE_IPC_CHANNELS.enroll, async argument => {
+    const input = argument as Record<string, unknown> | null;
+    if (
+      input === null ||
+      typeof input['sequenceVersionId'] !== 'string' ||
+      typeof input['opportunityId'] !== 'string' ||
+      typeof input['firmId'] !== 'string' ||
+      typeof input['contactId'] !== 'string'
+    ) {
+      return await host.state();
+    }
+    return await host.enroll(input as unknown as Parameters<SequenceBridgeHost['enroll']>[0]);
+  });
+  handleOnce(SEQUENCE_IPC_CHANNELS.recordLinkedInResult, async argument => {
+    const input = argument as Record<string, unknown> | null;
+    const result = input?.['result'];
+    if (
+      input === null ||
+      typeof input['enrollmentId'] !== 'string' ||
+      (result !== 'replied' && result !== 'no_engagement')
+    ) {
+      return await host.state();
+    }
+    return await host.recordLinkedInResult({ enrollmentId: input['enrollmentId'], result });
+  });
+  return host;
+}
+
 /** One window, built exactly as G2 builds its own. Focused rather than duplicated. */
 export async function openSecondaryWindow(
   title: string,
@@ -205,6 +284,7 @@ export function windowMenuTemplate(open: {
   readonly today: () => void;
   readonly replies: () => void;
   readonly firms: () => void;
+  readonly sequences: () => void;
 }): readonly { readonly label: string; readonly submenu: readonly { readonly label: string; readonly accelerator: string; readonly click: () => void }[] }[] {
   return [
     {
@@ -213,6 +293,7 @@ export function windowMenuTemplate(open: {
         { label: 'Today', accelerator: 'CmdOrCtrl+1', click: open.today },
         { label: 'Replies', accelerator: 'CmdOrCtrl+2', click: open.replies },
         { label: 'Firms', accelerator: 'CmdOrCtrl+3', click: open.firms },
+        { label: 'Sequences', accelerator: 'CmdOrCtrl+4', click: open.sequences },
       ],
     },
   ];

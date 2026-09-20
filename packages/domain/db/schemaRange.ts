@@ -18,7 +18,7 @@ export interface SchemaRange {
 }
 
 /** The highest migration version this source tree contains. */
-export const CURRENT_SCHEMA_VERSION = 11;
+export const CURRENT_SCHEMA_VERSION = 12;
 
 /**
  * The range the release before this one declared. Widen this one release ahead of the
@@ -26,13 +26,14 @@ export const CURRENT_SCHEMA_VERSION = 11;
  *
  * Lanes G5 and G2 shipped migrations 0002 and 0003 from the same main and each widened
  * this constant for its own; lane G3a widened it again for migration 0004, G3b for
- * 0005, G4 for 0006, G10 for 0007, G6 for 0008, G7 for 0009, G7-2 for 0010 and G7b
- * for 0011. A merge that finds two different maxima takes the larger. That is honest
- * only because nothing has been deployed — G0's {1, 1} was never a promise made to a
- * running production binary. From the first real deployment onwards the widening must
- * precede the migration by a release, and the compatibility test will keep saying so.
+ * 0005, G4 for 0006, G10 for 0007, G6 for 0008, G7 for 0009, G7-2 for 0010, G7b for
+ * 0011 and G8 for 0012. A merge that finds two different maxima takes the larger.
+ * That is honest only because nothing has been deployed — G0's {1, 1} was never a
+ * promise made to a running production binary. From the first real deployment onwards
+ * the widening must precede the migration by a release, and the compatibility test
+ * will keep saying so.
  */
-export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 11 };
+export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 12 };
 
 /**
  * Both services need migration 0002's shape: the API's dead-job list reads `dead_at`
@@ -139,10 +140,29 @@ export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum:
  * behind it — the same case G10, G6 and G7 each refused for their own tables — and
  * it could not record what the call cost, which 13.4 asks for.
  *
- * The deploy order stays migrate, then worker, then API. Both maxima move to 11.
+ * Migration 0012 (G8) moves both a seventh time, and this lane's reasons are the
+ * same two every widening before it gave.
+ *
+ * The API needs it: `/sequences`, `/sequences/steps`, `/sequences/publish`,
+ * `/templates`, `/enrollments` and `/linkedin/*` read and write `sequences`,
+ * `sequence_versions`, `sequence_steps`, `sequence_enrollments` and
+ * `step_executions`, and the template routes read the five columns 0012 adds to
+ * `template_versions`. An API on a version-11 database could accept an enrollment and
+ * have nowhere to put it.
+ *
+ * The worker needs it: `sequence.action` claims a `step_executions` row, and
+ * `UNIQUE (workspace_id, enrollment_id, step_id)` together with the outbound fence
+ * *is* Appendix C's protection for `step-execution:{id}`. A worker on a version-11
+ * database would be running an at-least-once handler with nothing behind it — the
+ * case G10, G6, G7 and G7b each refused for their own tables, and the one invariant 1
+ * ("no duplicate automated email for the same sequence step") rests on. 0012 also
+ * adds the two foreign keys 0010 left for it, so on a version-11 database a fence
+ * could name an enrollment that does not exist.
+ *
+ * The deploy order stays migrate, then worker, then API. Both maxima move to 12.
  */
-export const API_SCHEMA_RANGE: SchemaRange = { minimum: 11, maximum: 11 };
-export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 11, maximum: 11 };
+export const API_SCHEMA_RANGE: SchemaRange = { minimum: 12, maximum: 12 };
+export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 12, maximum: 12 };
 
 export function acceptsSchemaVersion(range: SchemaRange, version: number): boolean {
   return Number.isInteger(version) && version >= range.minimum && version <= range.maximum;

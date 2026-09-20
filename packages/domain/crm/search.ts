@@ -230,7 +230,24 @@ export async function searchFirms(context: RepositoryContext, input: SearchInput
   if (filters.stageKey !== undefined) conditions.push(`matched.stage_key = ${bind(filters.stageKey)}`);
   if (filters.activeSince !== undefined) conditions.push(`matched.last_activity_at >= ${bind(filters.activeSince)}`);
   if (filters.activeUntil !== undefined) conditions.push(`matched.last_activity_at <= ${bind(filters.activeUntil)}`);
-  if (filters.sequenceStatus === 'active' || filters.sequenceStatus === 'stopped') conditions.push('false');
+  // 7.2's "Filters cover ... sequence status". G3b left this as a stub answering
+  // honestly while no enrollment table existed; lane G8's migration 0012 created one,
+  // and the test that made this a stub fails the gate until it is read. `none` is the
+  // absence of a *live* enrollment, because a firm whose sequence finished last month
+  // is one nobody is contacting today.
+  const liveEnrollment = `EXISTS (SELECT 1 FROM sequence_enrollments se
+                                   WHERE se.workspace_id = matched.workspace_id
+                                     AND se.firm_id = matched.id
+                                     AND se.ended_at IS NULL)`;
+  if (filters.sequenceStatus === 'active') conditions.push(liveEnrollment);
+  if (filters.sequenceStatus === 'none') conditions.push(`NOT ${liveEnrollment}`);
+  if (filters.sequenceStatus === 'stopped') {
+    conditions.push(`NOT ${liveEnrollment}
+                     AND EXISTS (SELECT 1 FROM sequence_enrollments se
+                                  WHERE se.workspace_id = matched.workspace_id
+                                    AND se.firm_id = matched.id
+                                    AND se.state = 'stopped')`);
+  }
   if (filters.holdReasonCode !== undefined) {
     conditions.push(`EXISTS (SELECT 1 FROM active_holds h
                               WHERE h.workspace_id = matched.workspace_id AND h.scope_kind = 'firm'

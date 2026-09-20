@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing';
+import { createTestDatabase, makeStepExecution, type TestDatabase } from '@fss/domain/db/testing';
 import { repositoryContext, workspaceScope, type RepositoryContext, type SessionQueryable } from '@fss/domain/db';
 import {
   HandlerRegistry,
@@ -259,8 +259,17 @@ describe('the mail handlers and scheduler sources', () => {
       [workspaceId, templateId, subject, body, contentHash, ownerUserId],
     );
 
+    // Migration 0012's `outbound_messages_step_execution_fkey`: the fence names a
+    // step execution that exists, so the probe makes one rather than an id.
+    const stepExecutionId = await makeStepExecution(session, {
+      workspaceId,
+      firmId,
+      userId: ownerUserId,
+      templateVersionId: template.rows[0]?.id ?? '',
+    });
+
     const prepared = await prepareOutboundMessage(context, {
-      stepExecutionId: randomUUID(),
+      stepExecutionId,
       firmId,
       ownerUserId,
       templateVersionId: template.rows[0]?.id ?? '',

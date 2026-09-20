@@ -17,7 +17,9 @@
     "./mail": "./mail/index.ts",
     "./classification": "./classification/index.ts",
     "./outbound": "./outbound/index.ts",
-    "./today": "./today/index.ts"
+    "./today": "./today/index.ts",
+    "./sequences": "./sequences/index.ts",
+    "./templates": "./templates/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
