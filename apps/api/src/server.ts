@@ -12,7 +12,13 @@ import { createRouteRegistry, type RouteModule, type RouteRegistry } from './boo
 import { mountedRoutes } from './bootstrap/routes.ts';
 import { apiRouteModules } from './routes/modules.ts';
 import { localNoopSuppressionJournal } from './journal/index.ts';
-import { DEFAULT_UPGRADE_URL, type ApiRequest, type RouteResult, type RoutingOptions } from './routes/types.ts';
+import {
+  DEFAULT_UPGRADE_URL,
+  type ApiRequest,
+  type MailRoutingDeps,
+  type RouteResult,
+  type RoutingOptions,
+} from './routes/types.ts';
 
 /**
  * The API's one handler, and the only one: this is what `Dockerfile.api` runs and
@@ -50,6 +56,12 @@ export interface ApiOptions {
   readonly expectedSystemGeneration: number | null;
   /** Present once the deployment has its Google configuration. */
   readonly auth?: AuthDeps;
+  /**
+   * Present once the deployment has its Gmail configuration (12.1). Without it the
+   * four mail paths answer `not_found`, which is what a deployment that has not been
+   * given a Gmail client id, a Pub/Sub audience and an envelope key should do.
+   */
+  readonly mail?: MailRoutingDeps;
   /** Where a person is told to get the current build. Defaults to the public page. */
   readonly upgradeUrl?: string;
   /**
@@ -74,6 +86,8 @@ function routingOptions(options: ApiOptions): RoutingOptions {
     supportedClientVersions: options.supportedClientVersions,
     sendingEnabled: options.sendingEnabled,
     ...(options.auth === undefined ? {} : { auth: options.auth }),
+    ...(options.mail === undefined ? {} : { mail: options.mail }),
+    ...(options.log === undefined ? {} : { log: options.log }),
     upgradeUrl: options.upgradeUrl ?? DEFAULT_UPGRADE_URL,
     suppressionJournal: options.suppressionJournal ?? localNoopSuppressionJournal(),
   };

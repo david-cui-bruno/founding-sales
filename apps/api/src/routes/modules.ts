@@ -13,6 +13,10 @@ import { routeMerges } from './merges.ts';
 import { routeOpportunities } from './opportunities.ts';
 import { routePipeline } from './pipeline.ts';
 import { RESEARCH_PATHS, routeResearch } from './research.ts';
+// Lane G7's Gmail surface.
+import { GMAIL_PATHS, routeGmail } from './gmail.ts';
+import { PUBSUB_PATHS, routePubSub } from './pubsub.ts';
+import { MESSAGE_PATHS, routeMessages } from './messages.ts';
 import { SEARCH_PATHS, routeSearch } from './search.ts';
 // Lane G4's policy, suppression and dialing surface.
 import { CALLBACK_PATHS, routeCallbacks } from './callbacks.ts';
@@ -137,5 +141,14 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     // path under that root is a typo in a command an admin is about to spend money
     // with, and `not_found` from the registry says so before any module sees it.
     moduleOf('research', { paths: RESEARCH_PATHS }, routeResearch, routing),
+    // Lane G7's Gmail surface. Exact paths again, and two of them are not this
+    // lane's to choose: `/oauth/gmail/callback` is the redirect URI registered in
+    // Google's console, and `/integrations/gmail/push` is both the Pub/Sub push
+    // endpoint and the OIDC audience the subscription mints its token for
+    // (`infra/modules/stack`, `gmail_push_path`). Renaming either without the other
+    // is a consent screen that errors or a webhook that refuses everything.
+    moduleOf('gmail', { paths: GMAIL_PATHS }, routeGmail, routing),
+    moduleOf('gmail-push', { paths: PUBSUB_PATHS }, routePubSub, routing),
+    moduleOf('messages', { paths: MESSAGE_PATHS }, routeMessages, routing),
   ];
 }

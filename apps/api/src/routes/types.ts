@@ -1,7 +1,9 @@
 import type { ClientVersionRange } from '@fss/contracts';
 import type { SessionQueryable } from '@fss/domain/db';
 import type { SuppressionJournal } from '@fss/domain/suppression';
+import type { MailGrantDeps, PushTokenVerifier } from '@fss/domain/mail';
 import type { AuthDeps } from '../auth/index.ts';
+import type { Logger } from '../bootstrap/log.ts';
 
 /**
  * What a route is given and what it hands back.
@@ -43,6 +45,23 @@ export interface RoutingOptions {
    * deployment has no bucket, so a route never has to decide what to do without one.
    */
   readonly suppressionJournal: SuppressionJournal;
+  /**
+   * Everything the Gmail grant, the webhook and the message view need (12.1 to 12.3).
+   *
+   * Absent in a deployment that has not been given its Google configuration, exactly
+   * as `auth` is: the four mail paths then answer `not_found` rather than half
+   * working. The one secret it implies — the OAuth client secret — is not in here; it
+   * is behind `MailGrantDeps.secrets`, which is read at the moment an exchange needs
+   * it and never held.
+   */
+  readonly mail?: MailRoutingDeps;
+  /** The structured log the CloudWatch metric filters read. Absent in unit tests. */
+  readonly log?: Logger | undefined;
+}
+
+export interface MailRoutingDeps extends MailGrantDeps {
+  /** Verifies the Pub/Sub push token's signature. The claims are checked separately. */
+  readonly pushVerifier: PushTokenVerifier;
 }
 
 export const DEFAULT_UPGRADE_URL = 'https://callie.example/downloads/mac';

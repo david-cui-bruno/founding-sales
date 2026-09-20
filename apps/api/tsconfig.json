@@ -5,6 +5,7 @@
     "paths": {
       "@fss/contracts": ["../../packages/contracts/src/index.ts"],
       "@fss/domain": ["../../packages/domain/src/index.ts"],
+      "@fss/domain/mail": ["../../packages/domain/mail/index.ts"],
       "@fss/domain/db": ["../../packages/domain/db/index.ts"],
       "@fss/domain/jobs": ["../../packages/domain/jobs/index.ts"],
       "@fss/domain/crm": ["../../packages/domain/crm/index.ts"],
