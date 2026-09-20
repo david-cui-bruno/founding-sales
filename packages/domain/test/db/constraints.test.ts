@@ -563,7 +563,7 @@ const cases: readonly Case[] = [
   {
     constraint: 'suppression_events_one_direct_supersession',
     run: async f => {
-      // The canonical key matches the base event's on purpose: migration 0005's
+      // The canonical key matches the base event's on purpose: migration 0006's
       // `suppression_events_supersession_same_key` trigger refuses a supersession
       // that changes it, and would otherwise fire on the *first* insert here and
       // hide the unique index this case is about.
@@ -1392,7 +1392,7 @@ describe('foundation constraints', () => {
         JOIN pg_class t ON t.oid = c.conrelid
         JOIN pg_namespace n ON n.oid = t.relnamespace
        WHERE n.nspname = 'public'
-         -- 'x' is the exclusion constraint migration 0005 added for state postures.
+         -- 'x' is the exclusion constraint migration 0006 added for state postures.
          -- It was absent from this list until then, so nothing was uncovered by it;
          -- leaving it out now would have let an exclusion constraint ship untested.
          AND c.contype IN ('c', 'u', 'f', 'p', 't', 'x')

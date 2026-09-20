@@ -14,6 +14,21 @@ import { REFUSAL_STATUS, contextForPrincipal, policyRouteDeps, redactError, runP
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
 /**
+ * The exact paths this module owns, for G5b's route registry.
+ *
+ * Exact rather than a `/postures` prefix: the registry refuses two claims on one
+ * path, and that guarantee is only as sharp as the claim. The `startsWith` guard
+ * in the router below is redundant for a mounted request and kept because the
+ * router is also called directly, by tests and by `route`.
+ */
+export const POSTURE_PATHS: readonly string[] = [
+  '/postures',
+  '/postures/calling-window',
+  '/postures/record',
+  '/postures/revoke',
+];
+
+/**
  * State postures and the configured calling window (specification 9.2, 10.1).
  *
  * Invariant 7: "Software records and enforces legal posture; it does not invent

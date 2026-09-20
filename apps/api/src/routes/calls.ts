@@ -5,6 +5,19 @@ import { REFUSAL_STATUS, contextForPrincipal, policyRouteDeps, redactError, runP
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
 /**
+ * The exact paths this module owns, for G5b's route registry.
+ *
+ * Exact rather than a `/calls` prefix: the registry refuses two claims on one
+ * path, and that guarantee is only as sharp as the claim. The `startsWith` guard
+ * in the router below is redundant for a mounted request and kept because the
+ * router is also called directly, by tests and by `route`.
+ */
+export const CALL_PATHS: readonly string[] = [
+  '/calls',
+  '/calls/log',
+];
+
+/**
  * Call logging (specification 9.1, Appendix A "Log call outcome", Appendix F).
  *
  * "Call logging always records what occurred, even if no valid ticket exists; it

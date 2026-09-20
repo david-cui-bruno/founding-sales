@@ -22,11 +22,13 @@ export {
 export {
   createApiServer,
   dispatch,
+  registryFor,
   route,
   type ApiOptions,
   type ApiRequest,
   type RouteResult,
 } from './server.ts';
+export { apiRouteModules } from './routes/modules.ts';
 export { DEFAULT_UPGRADE_URL, type RoutingOptions } from './routes/types.ts';
 export { routeAuth } from './routes/auth.ts';
 export { routeAdminMemberships } from './routes/admin/memberships.ts';

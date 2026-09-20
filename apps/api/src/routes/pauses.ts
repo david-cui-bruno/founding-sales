@@ -4,6 +4,20 @@ import { REFUSAL_STATUS, contextForPrincipal, policyRouteDeps, redactError, runP
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
 /**
+ * The exact paths this module owns, for G5b's route registry.
+ *
+ * Exact rather than a `/pauses` prefix: the registry refuses two claims on one
+ * path, and that guarantee is only as sharp as the claim. The `startsWith` guard
+ * in the router below is redundant for a mounted request and kept because the
+ * router is also called directly, by tests and by `route`.
+ */
+export const PAUSE_PATHS: readonly string[] = [
+  '/pauses',
+  '/pauses/open',
+  '/pauses/release',
+];
+
+/**
  * Administrative pauses (specification 10.1, 4.3).
  *
  * A pause is a reversible scoped hold with history, never a suppression and never a

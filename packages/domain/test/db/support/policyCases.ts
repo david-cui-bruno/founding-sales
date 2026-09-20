@@ -2,7 +2,7 @@ import type { SessionQueryable } from '../../../db/queryable.ts';
 import type { TwoWorkspaces } from './fixtures.ts';
 
 /**
- * A failing insert for every constraint migration 0005 adds (lane G4: state
+ * A failing insert for every constraint migration 0006 adds (lane G4: state
  * postures, calling windows, suppression finalizations, dial tickets, call logs and
  * callbacks), plus the exclusion constraint and the supersession trigger.
  *

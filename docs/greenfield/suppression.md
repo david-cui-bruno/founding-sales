@@ -15,7 +15,7 @@ anyone but an admin with a documented reason.
 
 ```
 packages/domain/db/migrations/0001_foundation.sql  suppression_events, insert-only by privilege
-packages/domain/db/migrations/0005_policy.sql      the finalization marker, the view,
+packages/domain/db/migrations/0006_policy.sql      the finalization marker, the view,
                                                    the same-key trigger
 packages/domain/suppression/journal.ts             the port, the deterministic id, the fake
 packages/domain/suppression/events.ts              record, correct, supersede

@@ -1,4 +1,4 @@
--- 0005_policy
+-- 0006_policy
 --
 -- Policy, suppression and dialing (specification revision 3: sections 9.1, 9.2,
 -- 10.1, 10.2, 15 and Appendices A, D, E and G). Forward-only; this file never

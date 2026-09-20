@@ -4,6 +4,19 @@ import { REFUSAL_STATUS, contextForPrincipal, policyRouteDeps, redactError, runP
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
 /**
+ * The exact paths this module owns, for G5b's route registry.
+ *
+ * Exact rather than a `/callbacks` prefix: the registry refuses two claims on one
+ * path, and that guarantee is only as sharp as the claim. The `startsWith` guard
+ * in the router below is redundant for a mounted request and kept because the
+ * router is also called directly, by tests and by `route`.
+ */
+export const CALLBACK_PATHS: readonly string[] = [
+  '/callbacks',
+  '/callbacks/complete',
+];
+
+/**
  * Callbacks (specification 9.1, 8.2).
  *
  * There is deliberately no `create` endpoint. A callback is created by the call

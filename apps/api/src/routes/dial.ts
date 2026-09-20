@@ -5,6 +5,19 @@ import { REFUSAL_STATUS, policyRouteDeps, redactError, runPolicyCommand, type Po
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
 /**
+ * The exact paths this module owns, for G5b's route registry.
+ *
+ * Exact rather than a `/dial` prefix: the registry refuses two claims on one
+ * path, and that guarantee is only as sharp as the claim. The `startsWith` guard
+ * in the router below is redundant for a mounted request and kept because the
+ * router is also called directly, by tests and by `route`.
+ */
+export const DIAL_PATHS: readonly string[] = [
+  '/dial/authorize',
+  '/dial/consume',
+];
+
+/**
  * Dial authorization and ticket consumption (specification 9.2, 5.3).
  *
  * Two commands and no reads. There is deliberately no "would this be allowed"

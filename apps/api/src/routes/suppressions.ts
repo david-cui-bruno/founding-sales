@@ -13,6 +13,21 @@ import { REFUSAL_STATUS, contextForPrincipal, policyRouteDeps, redactError, runP
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
 /**
+ * The exact paths this module owns, for G5b's route registry.
+ *
+ * Exact rather than a `/suppressions` prefix: the registry refuses two claims on one
+ * path, and that guarantee is only as sharp as the claim. The `startsWith` guard
+ * in the router below is redundant for a mounted request and kept because the
+ * router is also called directly, by tests and by `route`.
+ */
+export const SUPPRESSION_PATHS: readonly string[] = [
+  '/suppressions',
+  '/suppressions/record',
+  '/suppressions/correct',
+  '/suppressions/supersede',
+];
+
+/**
  * The suppression surface (specification 10.2, 14.1, Appendix A).
  *
  * Three writes and one read. The writes are `record`, `correct` and `supersede`,

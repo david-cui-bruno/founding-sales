@@ -22,8 +22,8 @@
 !packages/domain/package.json
 !packages/domain/db
 !packages/domain/jobs
-!packages/domain/src
 !packages/domain/crm
+!packages/domain/src
 !packages/domain/policy
 !packages/domain/suppression
 !packages/domain/dial

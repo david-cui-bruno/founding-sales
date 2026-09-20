@@ -15,7 +15,7 @@ and the outcome decides what follows.
 ## Where everything is
 
 ```
-packages/domain/db/migrations/0005_policy.sql  the tables, the exclusion constraint,
+packages/domain/db/migrations/0006_policy.sql  the tables, the exclusion constraint,
                                                the supersession trigger, the view
 packages/domain/policy/clock.ts                databaseNow
 packages/domain/policy/holds.ts                list, open, release active_holds

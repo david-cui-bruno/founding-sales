@@ -28,7 +28,7 @@ import { acceptPolicy, refusePolicy, type PolicyResult } from './types.ts';
  * the quotes in the database instead would have made the reference material editable
  * by an application role, which is the one thing invariant 7 is against.
  *
- * **Zero and two rows both fail.** The exclusion constraint in migration 0005 makes
+ * **Zero and two rows both fail.** The exclusion constraint in migration 0006 makes
  * two applicable rows impossible to write; `selectApplicablePosture` in the domain
  * makes zero and two both a refusal to read. Appendix G 25 asks for exactly that
  * asymmetry to be visible from the outside: "policy versions with zero, one, and two

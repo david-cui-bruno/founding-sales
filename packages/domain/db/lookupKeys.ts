@@ -105,7 +105,7 @@ export const FOUNDATION_LOOKUP_KEYS = {
     ['workspace_id', 'event_kind', 'dedupe_key'],
   ],
 
-  // Migration 0005 (lane G4). `suppression_finalizations` is keyed by the event it
+  // Migration 0006 (lane G4). `suppression_finalizations` is keyed by the event it
   // decides rather than by an id of its own: there is one decision per event, and
   // making that the primary key is what lets the correction and the finalizer race
   // for it with a single insert.
