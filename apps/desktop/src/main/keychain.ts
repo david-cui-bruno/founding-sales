@@ -17,6 +17,12 @@ import { spawn } from 'node:child_process';
  * **The process runner is injected.** A test never writes to the real login keychain.
  * The unit tests use an in-memory vault and a fake runner; the adapter that actually
  * shells out is only assembled by the Electron main process.
+ *
+ * **No `-T`.** An earlier version passed `-T ''`, which writes an item whose access
+ * control list trusts no application at all — so reading it back raises a modal
+ * authorization dialog every time. The host layer found it (`test/host/`), and
+ * `docs/decisions/g13-keychain-acl.md` records why the default list, which trusts
+ * the tool that created the item, is the right one here.
  */
 
 export interface SecretVault {
@@ -53,6 +59,9 @@ export const SECURITY_BINARY = '/usr/bin/security';
  *
  * `-U` updates an existing item rather than failing; `-w` with no following value
  * makes `security` read the password from standard input, which it asks for twice.
+ * There is no `-T`: the default access control list trusts the tool that created
+ * the item, and any `-T` we could name (including an empty one) makes every read
+ * raise a dialog.
  */
 export function keychainCommand(
   operation: KeychainOperation,
@@ -65,7 +74,7 @@ export function keychainCommand(
     case 'write':
       return {
         command: SECURITY_BINARY,
-        args: ['add-generic-password', ...identity, '-U', '-T', '', '-w'],
+        args: ['add-generic-password', ...identity, '-U', '-w'],
         stdin: `${input.secret ?? ''}\n${input.secret ?? ''}\n`,
       };
     case 'remove':

@@ -30,6 +30,16 @@ export interface DesktopConfiguration {
   readonly userDataDirectory: string;
   readonly rendererEntry: string;
   readonly preloadEntry: string;
+  /**
+   * Where the window loads the interface from, when it is not a plain file.
+   *
+   * A packaged build serves its own bundle over a privileged custom scheme rather
+   * than over `file://`, because the `GrantFileProtocolExtraPrivileges` fuse is
+   * burned off and Chromium's plain file loader cannot read inside an asar. See
+   * `docs/decisions/g13-bundle-scheme.md`; the development path still loads the
+   * file directly.
+   */
+  readonly rendererUrl?: string;
 }
 
 const signInInputSchema = z.strictObject({
@@ -93,7 +103,8 @@ export async function openWindow(configuration: DesktopConfiguration): Promise<B
     void shell.openExternal(url);
     return { action: 'deny' };
   });
-  await window.loadFile(configuration.rendererEntry);
+  if (configuration.rendererUrl === undefined) await window.loadFile(configuration.rendererEntry);
+  else await window.loadURL(configuration.rendererUrl);
   return window;
 }
 

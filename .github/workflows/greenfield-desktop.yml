@@ -1,0 +1,314 @@
+name: Greenfield desktop
+
+# The macOS half of specification 16.1: "the Electron macOS artifact and host
+# integrations are tested on macOS".
+#
+# Two jobs, and the difference between them is the whole design.
+#
+#   host     always runs, needs no credential at all, and proves the things a
+#            Linux job cannot: the real Keychain, a real packaged bundle that
+#            starts, real Launch Services, and a package verifier that refuses
+#            an unsigned, tampered or ad-hoc build.
+#
+#   release  runs only when asked, needs every Apple secret David sets, and
+#            fails closed and by name when one is missing. It is the real path:
+#            Developer ID, hardened runtime, notarization, stapling, and a
+#            signed update manifest. It uploads nothing, because no AWS
+#            credential exists in this repository.
+#
+# No step prints a secret. Values reach `codesign`, `notarytool` and Node
+# through the environment or through a file the runner deletes; nothing is
+# echoed, no step sets `-x`, and `describeSigningPlan` (apps/desktop/scripts/
+# signing.ts) is the only thing that describes the configuration, by variable
+# name. A test asserts that its output contains no value.
+
+on:
+  pull_request:
+    paths:
+      - 'apps/desktop/**'
+      - 'packages/contracts/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/greenfield-desktop.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/desktop/**'
+      - 'packages/contracts/**'
+      - 'package-lock.json'
+      - '.github/workflows/greenfield-desktop.yml'
+  workflow_dispatch:
+    inputs:
+      release:
+        description: 'Build, sign, notarize and staple a release. Needs every Apple secret.'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '24.20.0'
+
+jobs:
+  host:
+    # arm64. The product ships one architecture and the fuses, the Mach-O check
+    # and the launch would all pass vacuously on an Intel runner.
+    runs-on: macos-15
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.20.0'
+
+      - name: Assert this is an arm64 Mac
+        run: |
+          set -euo pipefail
+          arch="$(uname -m)"
+          echo "arch=$arch"
+          test "$arch" = "arm64"
+
+      - name: Refuse a signing credential in the unsigned job
+        run: |
+          set -euo pipefail
+          # This job must behave identically whether or not the repository holds
+          # the Apple secrets. If one is visible here the workflow has been
+          # changed in a way this lane did not intend, so stop rather than
+          # produce something that looks signed and was not verified as such.
+          for name in FSS_MAC_CERTIFICATE_P12 FSS_MAC_SIGNING_IDENTITY FSS_APPLE_APP_SPECIFIC_PASSWORD \
+                      FSS_UPDATE_SIGNING_KEY; do
+            if [ -n "${!name:-}" ]; then
+              echo "::error::$name is set in the unsigned host job."
+              exit 1
+            fi
+          done
+
+      - name: Install
+        run: |
+          set -euo pipefail
+          # --ignore-scripts for the same reason as the Linux gate: the old
+          # trees' postinstall builds two native modules this job never runs.
+          npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Fetch the Electron binary
+        run: |
+          set -euo pipefail
+          # The one install script this job does need. `npm rebuild electron`
+          # does not run it under the repository's allow-scripts policy.
+          node node_modules/electron/install.js
+          test -d node_modules/electron/dist/Electron.app
+
+      - name: Desktop rules and window layers
+        run: |
+          set -euo pipefail
+          npm run typecheck --workspace apps/desktop
+          npm run test --workspace apps/desktop
+
+      - name: Host integrations on a real Mac
+        run: |
+          set -euo pipefail
+          # Keychain round trip, a packaged bundle that launches, Launch
+          # Services registration, and the verifier refusing what it should.
+          npm run test:desktop:host
+
+      - name: The verifier refuses an unsigned build, from the command line too
+        run: |
+          set -euo pipefail
+          # The same refusal the tests assert, through the entry point an
+          # operator would use, so the exit status is proven and not just the
+          # function's return value.
+          FSS_DESKTOP_PACKAGE_MODE=local-smoke npm run package:desktop -- "$RUNNER_TEMP/smoke"
+          app="$(find "$RUNNER_TEMP/smoke" -maxdepth 2 -name 'Callie.app' -print -quit)"
+          test -n "$app"
+          if npm run verify:desktop:package -- "$app"; then
+            echo "::error::the package verifier accepted an ad-hoc smoke build as a release"
+            exit 1
+          fi
+          npm run verify:desktop:package -- "$app" --integrity
+
+  release:
+    # Only on request. There is nothing to sign on an ordinary pull request, and
+    # notarization is a round trip to Apple that takes minutes.
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.release }}
+    runs-on: macos-15
+    timeout-minutes: 90
+    environment: desktop-release
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.20.0'
+
+      - name: Every secret this release needs, by name
+        env:
+          FSS_MAC_SIGNING_IDENTITY: ${{ secrets.FSS_MAC_SIGNING_IDENTITY }}
+          FSS_MAC_TEAM_ID: ${{ secrets.FSS_MAC_TEAM_ID }}
+          FSS_APPLE_ID: ${{ secrets.FSS_APPLE_ID }}
+          FSS_APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.FSS_APPLE_APP_SPECIFIC_PASSWORD }}
+          FSS_UPDATE_PUBLIC_KEY: ${{ secrets.FSS_UPDATE_PUBLIC_KEY }}
+          FSS_MAC_CERTIFICATE_P12: ${{ secrets.FSS_MAC_CERTIFICATE_P12 }}
+          FSS_MAC_CERTIFICATE_PASSWORD: ${{ secrets.FSS_MAC_CERTIFICATE_PASSWORD }}
+          FSS_MAC_KEYCHAIN_PASSWORD: ${{ secrets.FSS_MAC_KEYCHAIN_PASSWORD }}
+          FSS_UPDATE_SIGNING_KEY: ${{ secrets.FSS_UPDATE_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          # Names only. `${!name}` reads the value to test whether it is empty
+          # and never prints it; GitHub would mask it anyway, and relying on
+          # that is not a reason to write it.
+          missing=()
+          for name in FSS_MAC_SIGNING_IDENTITY FSS_MAC_TEAM_ID FSS_APPLE_ID \
+                      FSS_APPLE_APP_SPECIFIC_PASSWORD FSS_UPDATE_PUBLIC_KEY \
+                      FSS_MAC_CERTIFICATE_P12 FSS_MAC_CERTIFICATE_PASSWORD \
+                      FSS_MAC_KEYCHAIN_PASSWORD FSS_UPDATE_SIGNING_KEY; do
+            [ -z "${!name:-}" ] && missing+=("$name")
+          done
+          if [ "${#missing[@]}" -ne 0 ]; then
+            echo "::error::this release cannot be signed; absent repository secrets: ${missing[*]}"
+            exit 1
+          fi
+          echo "every required secret is present"
+
+      - name: Install
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund
+          node node_modules/electron/install.js
+
+      - name: Import the Developer ID certificate into a temporary keychain
+        env:
+          FSS_MAC_CERTIFICATE_P12: ${{ secrets.FSS_MAC_CERTIFICATE_P12 }}
+          FSS_MAC_CERTIFICATE_PASSWORD: ${{ secrets.FSS_MAC_CERTIFICATE_PASSWORD }}
+          FSS_MAC_KEYCHAIN_PASSWORD: ${{ secrets.FSS_MAC_KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/fss-release.keychain-db"
+          certificate="$RUNNER_TEMP/fss-certificate.p12"
+          # The certificate exists on disk for the length of one import and is
+          # overwritten before it is unlinked, because a deleted file on a
+          # runner image is still a file until the volume goes.
+          printf '%s' "$FSS_MAC_CERTIFICATE_P12" | base64 --decode > "$certificate"
+          security create-keychain -p "$FSS_MAC_KEYCHAIN_PASSWORD" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$FSS_MAC_KEYCHAIN_PASSWORD" "$keychain"
+          # `-P` puts the passphrase in this process's argument vector for the
+          # length of one import. `security import` offers no other way to give
+          # it, and this runner is ephemeral and single-tenant.
+          security import "$certificate" -k "$keychain" -P "$FSS_MAC_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security -x
+          dd if=/dev/zero of="$certificate" bs=1 count="$(stat -f%z "$certificate")" conv=notrunc 2>/dev/null
+          rm -f "$certificate"
+          # Without this, codesign raises a modal dialog for the private key and
+          # a headless runner waits for a click that never comes.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$FSS_MAC_KEYCHAIN_PASSWORD" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          security default-keychain -s "$keychain"
+          # Identities, by count. `find-identity` prints certificate names, and
+          # a Developer ID name contains the team identifier.
+          count="$(security find-identity -v -p codesigning "$keychain" | grep -c 'Developer ID Application' || true)"
+          echo "developer id identities available: $count"
+          test "$count" -ge 1
+
+      - name: Build, sign, notarize and staple
+        env:
+          FSS_DESKTOP_PACKAGE_MODE: release
+          FSS_MAC_SIGNING_IDENTITY: ${{ secrets.FSS_MAC_SIGNING_IDENTITY }}
+          FSS_MAC_TEAM_ID: ${{ secrets.FSS_MAC_TEAM_ID }}
+          FSS_APPLE_ID: ${{ secrets.FSS_APPLE_ID }}
+          FSS_APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.FSS_APPLE_APP_SPECIFIC_PASSWORD }}
+          FSS_UPDATE_PUBLIC_KEY: ${{ secrets.FSS_UPDATE_PUBLIC_KEY }}
+          FSS_API_BASE_URL: ${{ vars.FSS_API_BASE_URL }}
+          FSS_UPDATE_CHANNEL_URL: ${{ vars.FSS_UPDATE_CHANNEL_URL }}
+          FSS_DESKTOP_APP_VERSION: ${{ vars.FSS_DESKTOP_APP_VERSION }}
+        run: |
+          set -euo pipefail
+          npm run package:desktop -- "$RUNNER_TEMP/release"
+
+      - name: Verify the release the way a person receiving it would
+        env:
+          FSS_EXPECTED_COMMIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          app="$(find "$RUNNER_TEMP/release" -maxdepth 2 -name 'Callie.app' -print -quit)"
+          test -n "$app"
+          # Signature, Developer ID authority, hardened runtime, secure
+          # timestamp, entitlements, fuses, stapled ticket, Gatekeeper, the
+          # commit stamp and the embedded update key.
+          npm run verify:desktop:package -- "$app"
+
+      - name: Sign the update manifest
+        env:
+          FSS_UPDATE_SIGNING_KEY: ${{ secrets.FSS_UPDATE_SIGNING_KEY }}
+          FSS_UPDATE_CHANNEL_URL: ${{ vars.FSS_UPDATE_CHANNEL_URL }}
+        run: |
+          set -euo pipefail
+          app="$(find "$RUNNER_TEMP/release" -maxdepth 2 -name 'Callie.app' -print -quit)"
+          mkdir -p "$RUNNER_TEMP/channel"
+          node --experimental-strip-types --disable-warning=ExperimentalWarning \
+            apps/desktop/scripts/publishUpdate.ts "$app" "$RUNNER_TEMP/channel"
+
+      - name: Record what was built
+        run: |
+          set -euo pipefail
+          # The artifact does not leave this runner. Adding a step that carried
+          # it off would mean pinning a third action to a digest, and this lane
+          # will not write an action reference it has not verified — see
+          # docs/greenfield/install.md, "Getting the artifact off the runner",
+          # which is a decision for the coordinator and David, not a default.
+          #
+          # What is recorded is enough to compare a later hand-built artifact
+          # against this one: the version, the commit, the digest the manifest
+          # signed, and the channel path it belongs at.
+          manifest="$RUNNER_TEMP/channel/latest.json"
+          version="$(node -e 'process.stdout.write(require(process.argv[1]).manifest.releaseVersion)' "$manifest")"
+          commit="$(node -e 'process.stdout.write(require(process.argv[1]).manifest.commitSha)' "$manifest")"
+          digest="$(node -e 'process.stdout.write(require(process.argv[1]).manifest.artifact.sha256)' "$manifest")"
+          size="$(node -e 'process.stdout.write(String(require(process.argv[1]).manifest.artifact.sizeBytes))' "$manifest")"
+          {
+            echo "### Callie macOS arm64"
+            echo ""
+            echo "- version: \`$version\`"
+            echo "- commit: \`$commit\`"
+            echo "- artifact sha256: \`$digest\`"
+            echo "- artifact bytes: \`$size\`"
+            echo "- channel path: \`releases/darwin-arm64/latest.json\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove the temporary keychain
+        if: always()
+        run: |
+          set -euo pipefail
+          security default-keychain -s login.keychain-db || true
+          security delete-keychain "$RUNNER_TEMP/fss-release.keychain-db" || true
+
+# ---------------------------------------------------------------------------
+# Publishing, which happens outside CI because no AWS credential exists here.
+#
+# Against a directive, with an operator's session, from the artifact this
+# workflow produced:
+#
+#   aws s3 cp "Callie-$VERSION-arm64.zip" \
+#     "s3://$BUCKET/releases/darwin-arm64/$VERSION/Callie-$VERSION-arm64.zip"
+#   aws s3 cp latest.json \
+#     "s3://$BUCKET/releases/darwin-arm64/latest.json" \
+#     --cache-control 'max-age=300'
+#   aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION" \
+#     --paths '/releases/darwin-arm64/latest.json'
+#
+# The zip goes up first. A manifest that names an object which is not there yet
+# is a manifest every Mac refuses, which is safe but looks like an outage.
+# `infra/modules/updates` prints `bucket_name` and `distribution_id`.
+# ---------------------------------------------------------------------------
