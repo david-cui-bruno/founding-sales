@@ -214,8 +214,58 @@ variable "enable_execute_command" {
   default     = false
 }
 
+variable "dependencies_mode" {
+  description = <<-EOT
+    `FSS_DEPENDENCIES` on both task definitions: `live` builds every real
+    adapter from the deployed configuration, `recorded` selects the rehearsal
+    fakes **by name**. `none` is a laptop value and is not offered here: a
+    deployed process reaching a no-op by omission is the failure
+    `apps/*/src/bootstrap/deployment.ts` exists to prevent, and both binaries
+    refuse `none` when `FSS_ENVIRONMENT` is production anyway.
+  EOT
+  type        = string
+  default     = "live"
+
+  validation {
+    condition     = contains(["live", "recorded"], var.dependencies_mode)
+    error_message = "dependencies_mode must be live or recorded. A deployed process never reaches its no-op dependencies by omission."
+  }
+}
+
+variable "research_providers" {
+  description = <<-EOT
+    `FSS_RESEARCH_PROVIDERS` on the **worker** task definition only; the API
+    has no research adapter. `none` is a declaration that this build ships no
+    live provider, not an accident.
+  EOT
+  type        = string
+  default     = "none"
+
+  validation {
+    condition     = length(trimspace(var.research_providers)) > 0
+    error_message = "research_providers may not be empty. Say none."
+  }
+}
+
+variable "sending_enabled" {
+  description = <<-EOT
+    `FSS_SENDING_ENABLED` on both task definitions. One of the two switches
+    `packages/domain/outbound/gate.ts` reads; the other is the admin
+    attestation naming a release gate. False until 16.2 is satisfied, and
+    false is also what an absent value means to the bootstraps.
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "extra_environment" {
-  description = "Additional non-secret environment variables for both tasks."
+  description = <<-EOT
+    Additional non-secret environment variables for both tasks. The three flags
+    above used to have to travel through here, which is why neither root
+    exposed any of them; it stays for whatever the next release needs before it
+    earns a variable of its own. Never a credential: the root tests assert no
+    environment name looks like one.
+  EOT
   type        = map(string)
   default     = {}
 }

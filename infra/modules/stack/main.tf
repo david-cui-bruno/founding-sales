@@ -219,8 +219,19 @@ module "cluster" {
   container_insights     = var.container_insights
   enable_execute_command = var.enable_execute_command
 
+  # FSS_RESEARCH_PROVIDERS is the worker's alone: the API has no research
+  # adapter, and a variable a process never reads is a variable that drifts.
+  worker_environment = {
+    FSS_RESEARCH_PROVIDERS = var.research_providers
+  }
+
   environment = merge(var.extra_environment, {
-    FSS_ENVIRONMENT                = var.environment
+    FSS_ENVIRONMENT = var.environment
+    # The three deployment flags of 16.2 and G12's bootstrap. They are first-class
+    # inputs rather than entries in extra_environment because each is refused,
+    # not defaulted, by the process that reads it.
+    FSS_DEPENDENCIES               = var.dependencies_mode
+    FSS_SENDING_ENABLED            = tostring(var.sending_enabled)
     FSS_BUSINESS_TIME_ZONE         = var.business_time_zone
     FSS_DATABASE_HOST              = module.database.address
     FSS_DATABASE_PORT              = tostring(module.database.port)

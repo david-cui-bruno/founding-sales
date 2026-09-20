@@ -199,6 +199,55 @@ variable "worker_desired_count" {
   default     = 1
 }
 
+variable "dependencies_mode" {
+  description = <<-EOT
+    `FSS_DEPENDENCIES` on both task definitions, and the rehearsal default is
+    `live`, the same as production's.
+
+    That is deliberate and it is a change of mind worth stating: an earlier
+    reading of this lane's brief had the rehearsal default to `recorded`. G12b
+    made Google sign-in a start-up requirement, and the rehearsal signs in with
+    the *real* OIDC client under its second registered redirect URI
+    (`api.rehearsal.usecallie.com`), so a `recorded` deployment would not be
+    rehearsing the path production runs. The one step that wants the recorded
+    Gmail fake — the journal replay and Sent reconstruction, where no real
+    rehearsal mailbox exists — sets `FSS_DEPENDENCIES: recorded` on its own
+    workflow step, which is the fake being chosen by name.
+
+    A run against a rehearsal-only Google project can still apply with
+    `recorded`; it is one `-var` and the isolation test asserts it works.
+  EOT
+  type        = string
+  default     = "live"
+
+  validation {
+    condition     = contains(["live", "recorded"], var.dependencies_mode)
+    error_message = "dependencies_mode must be live or recorded. none is the laptop value and a deployed process never reaches its no-op dependencies."
+  }
+}
+
+variable "research_providers" {
+  description = "`FSS_RESEARCH_PROVIDERS` on the rehearsal worker. `none`, as in production: a rehearsal must not reach a paid provider."
+  type        = string
+  default     = "none"
+}
+
+variable "sending_enabled" {
+  description = <<-EOT
+    `FSS_SENDING_ENABLED` on both rehearsal task definitions. Always false, and
+    nothing in the release workflow passes it: a rehearsal that could send would
+    send to whatever addresses the fixtures hold.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "extra_environment" {
+  description = "Any further non-secret environment variable both rehearsal tasks need. Never a credential."
+  type        = map(string)
+  default     = {}
+}
+
 variable "enable_execute_command" {
   description = "Allow ECS Exec into a rehearsal task while investigating a scenario."
   type        = bool

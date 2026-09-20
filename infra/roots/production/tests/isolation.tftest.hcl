@@ -248,6 +248,76 @@ run "the_api_task_never_learns_a_secret_by_environment_value" {
   }
 }
 
+# The three deployment flags both binaries refuse to start without, or refuse to
+# guess at. `infra/modules/stack` had `extra_environment` and neither root exposed
+# it, so there was no way to set them from an apply at all: the runbook told the
+# operator to put them "in `extra_environment` or the plan review" and neither
+# existed. See docs/decisions/g12c-the-deployment-flags-are-root-variables.md.
+run "the_deployment_flags_reach_both_containers" {
+  command = plan
+
+  assert {
+    condition = (module.stack.api_environment["FSS_DEPENDENCIES"] == "live"
+    && module.stack.worker_environment["FSS_DEPENDENCIES"] == "live")
+    error_message = "A production deployment runs on live dependencies; an unset switch is a refusal to start, so the apply has to set it."
+  }
+
+  assert {
+    condition = (module.stack.api_environment["FSS_SENDING_ENABLED"] == "false"
+    && module.stack.worker_environment["FSS_SENDING_ENABLED"] == "false")
+    error_message = "16.2: the deployment flag is false until the release gate has passed on these digests and David flips it."
+  }
+
+  assert {
+    condition     = module.stack.worker_environment["FSS_RESEARCH_PROVIDERS"] == "none"
+    error_message = "The worker is told, by name, that this build ships no live research adapter."
+  }
+
+  # Worker only. The API has no research adapter and a variable it never reads is a
+  # variable that will drift.
+  assert {
+    condition     = !contains(keys(module.stack.api_environment), "FSS_RESEARCH_PROVIDERS")
+    error_message = "FSS_RESEARCH_PROVIDERS belongs to the worker alone."
+  }
+}
+
+run "the_flags_are_settable_and_the_escape_hatch_still_exists" {
+  command = plan
+
+  variables {
+    sending_enabled = true
+    extra_environment = {
+      FSS_SOMETHING_LATER = "value"
+    }
+  }
+
+  assert {
+    condition = (module.stack.api_environment["FSS_SENDING_ENABLED"] == "true"
+    && module.stack.worker_environment["FSS_SENDING_ENABLED"] == "true")
+    error_message = "Section 6 step 4 flips this; a variable that could not be set would make the whole run a restatement of its default."
+  }
+
+  assert {
+    condition = (module.stack.api_environment["FSS_SOMETHING_LATER"] == "value"
+    && module.stack.worker_environment["FSS_SOMETHING_LATER"] == "value")
+    error_message = "extra_environment exists on the stack module and must be reachable from the root."
+  }
+}
+
+run "a_production_apply_cannot_ask_for_no_dependencies_at_all" {
+  command = plan
+
+  variables {
+    dependencies_mode = "none"
+  }
+
+  # `none` is a real value the bootstraps accept on a laptop. It must not be
+  # typeable into a root that deploys to AWS: both binaries refuse it when
+  # FSS_ENVIRONMENT is production, and a plan is a better place to learn that
+  # than a crash loop.
+  expect_failures = [var.dependencies_mode]
+}
+
 # The mirror of the rehearsal acceptance case.
 run "a_rehearsal_prefix_is_refused" {
   command = plan

@@ -163,6 +163,50 @@ variable "cpu_architecture" {
   }
 }
 
+variable "dependencies_mode" {
+  description = <<-EOT
+    `FSS_DEPENDENCIES` on both task definitions. Production is `live`: every
+    real adapter is built from the deployed configuration, and any missing part
+    is a refusal to start rather than a queue that quietly never drains.
+
+    `recorded` is accepted by the validation and refused at run time by both
+    binaries when `FSS_ENVIRONMENT` is production (`PRODUCTION_REQUIRES_LIVE`),
+    so the refusal is not duplicated here. `none` is refused outright: it is the
+    laptop value, and a deployed process must never reach a no-op by omission.
+  EOT
+  type        = string
+  default     = "live"
+
+  validation {
+    condition     = contains(["live", "recorded"], var.dependencies_mode)
+    error_message = "dependencies_mode must be live or recorded. none is the laptop value and a deployed process never reaches its no-op dependencies."
+  }
+}
+
+variable "research_providers" {
+  description = "`FSS_RESEARCH_PROVIDERS` on the worker task definition. `none` says this build ships no live research adapter; it is a declaration, not an accident."
+  type        = string
+  default     = "none"
+}
+
+variable "sending_enabled" {
+  description = <<-EOT
+    `FSS_SENDING_ENABLED` on both task definitions: the deployment half of
+    16.2's send gate. False until the rehearsal gate has passed on the deployed
+    digests; `docs/greenfield/release.md` section 6 step 4 is where it becomes
+    true, and step 5 is the admin attestation that is the other half. Neither
+    alone sends anything.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "extra_environment" {
+  description = "Any further non-secret environment variable both tasks need. Never a credential: secrets reach a container only as a Secrets Manager reference."
+  type        = map(string)
+  default     = {}
+}
+
 variable "container_insights" {
   description = "enabled, enhanced or disabled. Billed per metric."
   type        = string

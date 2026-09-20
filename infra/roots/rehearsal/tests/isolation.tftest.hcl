@@ -211,6 +211,55 @@ run "the_topology_answers_are_the_rehearsal_defaults_at_one_plus_one" {
   }
 }
 
+# The rehearsal's own deployment flags. `live` here, not `recorded`: G12b made
+# sign-in a start-up requirement and the rehearsal signs in with the real Google
+# OIDC client under its second registered redirect URI
+# (api.rehearsal.usecallie.com). The one step that wants the recorded Gmail fake
+# sets FSS_DEPENDENCIES in the workflow step rather than in the apply.
+run "the_rehearsal_deploys_on_live_dependencies_with_sending_off" {
+  command = plan
+
+  assert {
+    condition = (module.stack.api_environment["FSS_DEPENDENCIES"] == "live"
+    && module.stack.worker_environment["FSS_DEPENDENCIES"] == "live")
+    error_message = "The rehearsal signs in against the rehearsal hostname with the real client, so its deployment is live."
+  }
+
+  assert {
+    condition = (module.stack.api_environment["FSS_SENDING_ENABLED"] == "false"
+    && module.stack.worker_environment["FSS_SENDING_ENABLED"] == "false")
+    error_message = "A rehearsal never sends. Nothing in the workflow sets this true and the default is the refusal."
+  }
+
+  assert {
+    condition     = module.stack.worker_environment["FSS_RESEARCH_PROVIDERS"] == "none"
+    error_message = "The rehearsal worker ships no live research adapter either."
+  }
+}
+
+run "a_rehearsal_may_choose_the_recorded_dependencies_by_name" {
+  command = plan
+
+  variables {
+    dependencies_mode = "recorded"
+  }
+
+  assert {
+    condition     = module.stack.worker_environment["FSS_DEPENDENCIES"] == "recorded"
+    error_message = "A run with no rehearsal Google project may select the recorded fakes — by typing the word, never by omission."
+  }
+}
+
+run "a_rehearsal_apply_cannot_ask_for_no_dependencies_at_all" {
+  command = plan
+
+  variables {
+    dependencies_mode = "none"
+  }
+
+  expect_failures = [var.dependencies_mode]
+}
+
 run "an_architecture_that_is_not_one_of_the_two_is_refused" {
   command = plan
 

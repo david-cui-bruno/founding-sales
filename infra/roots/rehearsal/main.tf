@@ -45,6 +45,11 @@ module "stack" {
   container_insights     = "disabled"
   enable_execute_command = var.enable_execute_command
 
+  dependencies_mode  = var.dependencies_mode
+  research_providers = var.research_providers
+  sending_enabled    = var.sending_enabled
+  extra_environment  = var.extra_environment
+
   certificate_arn = var.certificate_arn
   api_hostname    = var.api_hostname
   elb_account_id  = var.elb_account_id
