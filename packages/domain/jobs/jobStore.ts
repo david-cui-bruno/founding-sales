@@ -71,7 +71,9 @@ export class JobStoreError extends Error {
   }
 }
 
-interface JobRow {
+// A type alias, not an interface: only an object type gets the implicit index
+// signature `QueryResultRowLike` asks for.
+type JobRow = {
   readonly id: string;
   readonly workspace_id: string;
   readonly kind: string;
@@ -82,7 +84,7 @@ interface JobRow {
   readonly fencing_token: string;
   readonly lease_owner: string;
   readonly lease_expires_at: Date;
-}
+};
 
 function toClaim(row: JobRow): ClaimedJob {
   return {
