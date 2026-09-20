@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   authenticate,
   claimSignIn,
@@ -27,9 +27,17 @@ import {
  */
 
 let fixture: AuthFixture;
+let baseline: Date;
 
 beforeAll(async () => {
   fixture = await createAuthFixture();
+  baseline = fixture.deps.now();
+});
+
+// Several of these move the clock by a month. Resetting here rather than at the end
+// of each test means a failing assertion cannot leave the next test in the future.
+beforeEach(() => {
+  fixture.setNow(baseline);
 });
 
 afterAll(async () => {
@@ -296,7 +304,6 @@ describe('Appendix G 24: a stolen device and a revoked membership', () => {
       });
       expect(stale).toEqual({ renewed: false, refusal: 'reauthentication_required' });
     }
-    fixture.advance(-(30 * 24 * 3_600_000) - 3_600_000 - 1000);
   });
 });
 

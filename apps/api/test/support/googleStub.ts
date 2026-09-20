@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { createSign, generateKeyPairSync, createPublicKey, randomBytes, type KeyObject } from 'node:crypto';
+import { createSign, generateKeyPairSync, randomBytes, type KeyObject } from 'node:crypto';
 
 /**
  * A local stand-in for Google's OpenID Connect provider.
@@ -75,7 +75,7 @@ function newKeyPair(): StubKeyPair {
 }
 
 function jwkOf(pair: StubKeyPair): Record<string, string> {
-  const jwk = createPublicKey(pair.publicKey).export({ format: 'jwk' }) as { n?: string; e?: string };
+  const jwk = pair.publicKey.export({ format: 'jwk' }) as { n?: string; e?: string };
   return { kty: 'RSA', use: 'sig', alg: 'RS256', kid: pair.kid, n: jwk.n ?? '', e: jwk.e ?? '' };
 }
 
@@ -98,13 +98,15 @@ export async function startGoogleStub(): Promise<GoogleStub> {
   let issuer = 'http://127.0.0.1';
 
   const server: Server = createServer((request: IncomingMessage, response: ServerResponse) => {
+    // Every path through the handler answers. A stub that throws and never replies
+    // leaves `fetch` waiting forever, which is a hang rather than a failing test.
+    const send = (status: number, body: unknown, headers: Record<string, string> = {}): void => {
+      const payload = JSON.stringify(body);
+      response.writeHead(status, { 'content-type': 'application/json', ...headers });
+      response.end(payload);
+    };
     void (async () => {
       const path = new URL(request.url ?? '/', issuer).pathname;
-      const send = (status: number, body: unknown, headers: Record<string, string> = {}): void => {
-        const payload = JSON.stringify(body);
-        response.writeHead(status, { 'content-type': 'application/json', ...headers });
-        response.end(payload);
-      };
       if (path === '/.well-known/openid-configuration') {
         send(200, {
           issuer,
@@ -154,7 +156,9 @@ export async function startGoogleStub(): Promise<GoogleStub> {
         return;
       }
       send(404, { error: 'not_found' });
-    })();
+    })().catch((error: unknown) => {
+      send(500, { error: 'stub_failed', detail: String(error) });
+    });
   });
 
   await new Promise<void>(resolve => {
