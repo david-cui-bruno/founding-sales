@@ -8,6 +8,7 @@ import {
   claimJobs,
   completeJob,
   enqueueJob,
+  quarterHourOf,
   reclaimExpiredLeases,
   runTwiceUnderStolenLease,
   type JobHandler,
@@ -18,13 +19,13 @@ import { runClaimedJob, runOnce } from '../src/runner/jobRunner.ts';
  * Appendix G scenario 2: "Worker A pauses past lease, worker B reclaims, A resumes:
  * one business effect, proven by fencing or uniqueness."
  *
- * The lease is not the protection — the lease is only a hint about who is probably
- * working. The protection is the monotonic fencing token on the job row and the
- * handler's own idempotency, and the test below proves both by actually letting A
- * wake up and try.
+ * The lease is not the protection. The lease is a hint about who is probably working;
+ * a paused worker still believes it holds one. The protection is the monotonic fencing
+ * token on the job row and the handler's own idempotency, and the tests below prove it
+ * by actually letting A wake up and try.
  */
 
-const NOW = '2026-09-20T13:00:00.000Z';
+const QUARTER_HOUR = quarterHourOf('2026-09-20T13:07:00.000Z');
 
 /** A business table the fixture handlers write to. Two effects would be two rows. */
 async function createEffectTable(session: SessionQueryable): Promise<void> {
@@ -56,13 +57,13 @@ describe('at-least-once job execution under a stolen lease', () => {
     await database.drop();
   });
 
-  it('gives worker A a stale fencing token after B reclaims, and A writes nothing', async () => {
+  it('gives worker A a stale fencing token after B reclaims, and A finishes nothing', async () => {
     const session = database.session;
     await enqueueJob(session, {
       workspaceId,
       kind: 'canary',
-      idempotencyKey: 'canary:2026-09-20T13:00:00.000Z',
-      payload: { quarterHour: NOW },
+      idempotencyKey: 'canary:plain-steal',
+      payload: { quarterHour: QUARTER_HOUR },
       maxAttempts: 4,
     });
 
@@ -71,7 +72,7 @@ describe('at-least-once job execution under a stolen lease', () => {
     if (claimA === undefined) return;
     expect(claimA.attempt).toBe(1);
 
-    // A's lease expires while A is paused (a stop-the-world GC, a frozen task).
+    // A's lease expires while A is paused: a stop-the-world pause, a frozen task.
     await session.query(
       "UPDATE jobs SET lease_expires_at = now() - INTERVAL '1 second' WHERE workspace_id = $1 AND id = $2",
       [workspaceId, claimA.id],
@@ -86,7 +87,7 @@ describe('at-least-once job execution under a stolen lease', () => {
     expect(BigInt(claimB.fencingToken)).toBeGreaterThan(BigInt(claimA.fencingToken));
 
     expect(await completeJob(session, claimB)).toBe('completed');
-    // A resumes and tries to finish the job it thinks it still owns.
+    // A resumes and tries to finish the job it believes it still owns.
     expect(await completeJob(session, claimA)).toBe('lease_lost');
 
     const { rows } = await database.session.query<{ state: string; attempt_count: number }>(
@@ -99,22 +100,35 @@ describe('at-least-once job execution under a stolen lease', () => {
 
   it('runs every registered handler twice under a stolen lease and records one effect', async () => {
     const registry = new HandlerRegistry();
-    registry.register(canaryHandler());
 
-    // One fixture handler per declared protection, so the harness covers the whole
-    // vocabulary rather than only the kinds this lane happens to have implemented.
+    /**
+     * One fixture handler per declared protection, so the harness covers the whole
+     * vocabulary rather than only the kinds this lane happens to have implemented. The
+     * real handlers land in later lanes and add themselves to this same loop.
+     */
+    const countKeys = async (prefix: string): Promise<number> => {
+      const { rows } = await database.session.query<{ count: string }>(
+        'SELECT count(*) AS count FROM effect_log WHERE workspace_id = $1 AND effect_key LIKE $2',
+        [workspaceId, `${prefix}%`],
+      );
+      return Number(rows[0]?.count);
+    };
+
+    // fencing_token: a plain INSERT with no conflict clause. A second run would raise;
+    // it never runs, because the runner locks the job row by token first.
     const fenced: JobHandler = {
-      kind: 'today.build',
+      kind: 'mail.watch_renew',
       protection: 'fencing_token',
       maxAttempts: 4,
       leaseSeconds: 30,
       handle: async input => {
         await input.session.query('INSERT INTO effect_log (workspace_id, effect_key) VALUES ($1, $2)', [
           input.scope.workspaceId,
-          `today:${input.job.id}`,
+          `watch:${input.job.idempotencyKey}`,
         ]);
       },
     };
+    // business_uniqueness: the handler's own unique key collapses a replay.
     const unique: JobHandler = {
       kind: 'mail.sync',
       protection: 'business_uniqueness',
@@ -127,60 +141,77 @@ describe('at-least-once job execution under a stolen lease', () => {
         );
       },
     };
-    const fenced_outbound: JobHandler = {
+    // outbound_fence: stands in for the prepared -> dispatching transition, which is
+    // irreversible, so this handler runs outside the completion transaction.
+    const outbound: JobHandler = {
       kind: 'sequence.action',
       protection: 'outbound_fence',
       maxAttempts: 4,
       leaseSeconds: 30,
       handle: async input => {
-        // Stands in for the outbound at-most-once fence: the prepared -> dispatching
-        // transition is the thing that authorizes one process, and it is irreversible.
         await input.session.query(
           'INSERT INTO effect_log (workspace_id, effect_key) VALUES ($1, $2) ON CONFLICT DO NOTHING',
           [input.scope.workspaceId, `fence:${input.job.idempotencyKey}`],
         );
       },
     };
-    registry.register(fenced);
-    registry.register(unique);
-    registry.register(fenced_outbound);
+    registry.register(canaryHandler()).register(fenced).register(unique).register(outbound);
 
     expect(new Set(registry.all().map(handler => handler.protection))).toEqual(new Set(IDEMPOTENCY_PROTECTIONS));
 
-    for (const handler of registry.all()) {
+    await database.session.query(
+      'INSERT INTO canary_runs (workspace_id, quarter_hour) VALUES ($1, $2::timestamptz)',
+      [workspaceId, QUARTER_HOUR],
+    );
+    const countCanaryCompletions = async (): Promise<number> => {
+      const { rows } = await database.session.query<{ count: string }>(
+        'SELECT count(*) AS count FROM canary_runs WHERE workspace_id = $1 AND completed_at IS NOT NULL',
+        [workspaceId],
+      );
+      return Number(rows[0]?.count);
+    };
+
+    const probes: readonly { readonly kind: string; readonly countEffects: () => Promise<number> }[] = [
+      { kind: 'canary', countEffects: countCanaryCompletions },
+      { kind: 'mail.watch_renew', countEffects: async () => await countKeys('watch:') },
+      { kind: 'mail.sync', countEffects: async () => await countKeys('mail-sync:') },
+      { kind: 'sequence.action', countEffects: async () => await countKeys('fence:') },
+    ];
+    expect(probes.map(probe => probe.kind).sort()).toEqual(registry.kinds().sort());
+
+    for (const probe of probes) {
       const report = await runTwiceUnderStolenLease({
         session: database.session,
         registry,
         run: runClaimedJob,
         workspaceId,
-        kind: handler.kind,
-        idempotencyKey: `${handler.kind}:stolen-lease`,
-        payload: { quarterHour: NOW },
-        countEffects: async () => {
-          const { rows } = await database.session.query<{ count: string }>(
-            'SELECT count(*) AS count FROM effect_log WHERE workspace_id = $1 AND effect_key LIKE $2',
-            [workspaceId, `%${handler.kind === 'canary' ? '' : 'stolen-lease'}%`],
-          );
-          return Number(rows[0]?.count);
-        },
+        kind: probe.kind,
+        idempotencyKey: `${probe.kind}:stolen-lease`,
+        payload: { quarterHour: QUARTER_HOUR },
+        countEffects: probe.countEffects,
       });
-      expect(report.staleOutcome, `${handler.kind} let a stale lease finish the job`).toBe('lease_lost');
-      expect(report.effectsAfter - report.effectsBefore, `${handler.kind} produced more than one effect`).toBe(1);
+      expect(report.freshOutcome, `${probe.kind} did not complete for the worker that held the lease`).toBe(
+        'completed',
+      );
+      expect(report.staleOutcome, `${probe.kind} let a stale lease finish the job`).toBe('lease_lost');
+      expect(report.effectsAfter - report.effectsBefore, `${probe.kind} produced other than one effect`).toBe(1);
+      expect(BigInt(report.freshFencingToken)).toBeGreaterThan(BigInt(report.staleFencingToken));
     }
   });
 
   it('completes a canary through the runner and records the completion timestamp', async () => {
     const registry = new HandlerRegistry();
     registry.register(canaryHandler());
+    const quarterHour = quarterHourOf('2026-09-20T13:20:00.000Z');
     await database.session.query(
-      "INSERT INTO canary_runs (workspace_id, quarter_hour) VALUES ($1, TIMESTAMPTZ '2026-09-20T13:15:00Z')",
-      [workspaceId],
+      'INSERT INTO canary_runs (workspace_id, quarter_hour) VALUES ($1, $2::timestamptz)',
+      [workspaceId, quarterHour],
     );
     await enqueueJob(database.session, {
       workspaceId,
       kind: 'canary',
-      idempotencyKey: 'canary:2026-09-20T13:15:00.000Z',
-      payload: { quarterHour: '2026-09-20T13:15:00.000Z' },
+      idempotencyKey: `canary:${quarterHour}`,
+      payload: { quarterHour },
       maxAttempts: 4,
     });
 
@@ -189,10 +220,20 @@ describe('at-least-once job execution under a stolen lease', () => {
     expect(report.failed).toBe(0);
 
     const { rows } = await database.session.query<{ completed_at: Date | null; completed_by: string | null }>(
-      "SELECT completed_at, completed_by FROM canary_runs WHERE workspace_id = $1 AND quarter_hour = TIMESTAMPTZ '2026-09-20T13:15:00Z'",
-      [workspaceId],
+      'SELECT completed_at, completed_by FROM canary_runs WHERE workspace_id = $1 AND quarter_hour = $2::timestamptz',
+      [workspaceId, quarterHour],
     );
     expect(rows[0]?.completed_at).not.toBeNull();
     expect(rows[0]?.completed_by).toBe('worker-canary');
+  });
+
+  it('records a worker heartbeat with its expected interval', async () => {
+    const registry = new HandlerRegistry();
+    registry.register(canaryHandler());
+    await runOnce(database.session, { registry, owner: 'worker-heartbeat', limit: 1 });
+    const { rows } = await database.session.query<{ expected_interval_seconds: number }>(
+      "SELECT expected_interval_seconds FROM heartbeats WHERE component = 'worker' AND instance_key = 'worker-heartbeat'",
+    );
+    expect(rows[0]?.expected_interval_seconds).toBe(60);
   });
 });

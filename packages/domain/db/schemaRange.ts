@@ -18,13 +18,20 @@ export interface SchemaRange {
 }
 
 /** The highest migration version this source tree contains. */
-export const CURRENT_SCHEMA_VERSION = 1;
+export const CURRENT_SCHEMA_VERSION = 2;
 
 /** The range the release before this one declared. Widen this one release ahead of the migration. */
-export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 1 };
+export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 2 };
 
-export const API_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 1 };
-export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 1 };
+/**
+ * Both services need migration 0002's shape: the API's dead-job list reads `dead_at`
+ * and `requeued_count`, and the worker's claim writes `fencing_token`. A binary that
+ * needs a column states so rather than starting and failing on the first statement, so
+ * the minimum is 2 and a version-1 database is `database_behind_binary`. That is the
+ * fail-closed reading of 4.2; see docs/decisions/g5-schema-range.md.
+ */
+export const API_SCHEMA_RANGE: SchemaRange = { minimum: 2, maximum: 2 };
+export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 2, maximum: 2 };
 
 export function acceptsSchemaVersion(range: SchemaRange, version: number): boolean {
   return Number.isInteger(version) && version >= range.minimum && version <= range.maximum;
