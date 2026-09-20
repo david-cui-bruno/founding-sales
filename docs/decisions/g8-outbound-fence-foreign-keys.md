@@ -40,9 +40,29 @@ enrollment in another workspace, becomes unrepresentable rather than merely unli
 ## What to do
 
 When 0010 and 0011 are both on main, merge `origin/main` into `g8/sequences`, confirm
-the column names against `0010_outbound.sql`, and add the `ALTER TABLE` above to the end
+the column names against G7-2's migration, and add the `ALTER TABLE` above to the end
 of `0012_sequences.sql` — it is the last migration and has not been applied anywhere, so
-appending to it is correct rather than a rewrite of applied history. Then wire
-`createOutboundSendHandoff` (G7-2's two functions, adapted to `SendHandoff`) into
-`sequenceActionJobHandler` in `apps/worker/src/bootstrap/main.ts`, replacing
-`unavailableSendHandoff`.
+appending to it is correct rather than a rewrite of applied history.
+
+## The adapter, from the names G7-2 settled on
+
+The coordinator relayed them from `packages/domain/outbound/fence.ts` (branch
+`g7/sending`, HEAD bf355f5e), re-exported by `packages/domain/outbound/index.ts`. The
+adapter is three lines of plumbing and no logic:
+
+| `SendHandoff` | G7-2 |
+| --- | --- |
+| `prepare(context, request)` | `prepareOutboundMessage(context, request)` → `SendResult<{ outboundMessageId, created }>` |
+| `dispatch(context, { outboundMessageId })` | `dispatchOutboundMessage(context, deps, { outboundMessageId })`, with `deps: OutboundSendDeps` closed over at construction |
+| `readOutcome(context, stepExecutionId)` | `readOutboundOutcome(context, stepExecutionId)` → `{ state, outboundMessageId, dispatchedAt, heldReason, adminResolution }` |
+
+`OutboundEmailRequest` already matches field for field, including `businessDate`, which
+was added to this lane's request for exactly that reason. G7-2's request types
+`enrollmentId`, `opportunityId`, `contactId`, `emailAddressId` and `ruleVersion` as
+optional and this lane always supplies them, which is the direction that composes.
+`OutboundOutcome.state` is this lane's `OutboundFenceState` including `'absent'`.
+
+Wire it into `sequenceActionJobHandler` in `apps/worker/src/bootstrap/main.ts`,
+replacing `unavailableSendHandoff`. Nothing else changes: `dispatchPreparedStep` already
+dispatches after the step's transaction commits, and already treats a `held` fence as a
+step to ask about again rather than a step that is over.

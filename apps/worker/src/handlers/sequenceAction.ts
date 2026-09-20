@@ -1,7 +1,14 @@
-import { repositoryContext, workspaceScope, type SessionQueryable } from '@fss/domain/db';
+import {
+  repositoryContext,
+  withTransaction,
+  workspaceScope,
+  type SessionQueryable,
+} from '@fss/domain/db';
 import { jobIdempotencyKey, type JobHandler, type JobSpecification } from '@fss/domain/jobs';
 import {
+  CLOCK_CLEARING_HOLDS,
   composeEligibility,
+  dispatchPreparedStep,
   runDueStepExecution,
   unavailableSendHandoff,
   type SendHandoff,
@@ -35,6 +42,17 @@ import type { DueWorkSource } from '../scheduler/schedulerPass.ts';
  * G7-2's adapter replaces the argument and nothing else changes.
  */
 
+/**
+ * What the step's transaction left behind for the dispatch that follows it.
+ *
+ * Carried in an array rather than a nullable local because TypeScript's narrowing
+ * does not follow a value assigned inside a callback back out of it.
+ */
+interface PreparedFence {
+  readonly stepExecutionId: string;
+  readonly outboundMessageId: string;
+}
+
 export interface SequenceActionHandlerOptions {
   readonly maxAttempts?: number;
   readonly leaseSeconds?: number;
@@ -62,13 +80,36 @@ export function sequenceActionJobHandler(options: SequenceActionHandlerOptions =
       }
       const { rows } = await input.session.query<{ now: Date }>('SELECT now() AS now');
       const now = (rows[0]?.now ?? new Date()).toISOString();
-      await runDueStepExecution(
-        repositoryContext(
-          workspaceScope(input.scope.workspaceId, { kind: 'system', component: 'worker' }),
-          input.session,
-        ),
-        { stepExecutionId, now, eligibility, sendHandoff },
+      const context = repositoryContext(
+        workspaceScope(input.scope.workspaceId, { kind: 'system', component: 'worker' }),
+        input.session,
       );
+
+      // 11.2: eligibility is re-read "inside the claiming transaction", and the fence
+      // is prepared in it. The runner does not open one for an `outbound_fence`
+      // handler, so the handler opens its own and commits it before dispatching.
+      const prepared: PreparedFence[] = [];
+      await withTransaction(input.session, async () => {
+        const outcome = await runDueStepExecution(context, {
+          stepExecutionId,
+          now,
+          eligibility,
+          sendHandoff,
+        });
+        if (outcome.kind === 'handed_to_send') {
+          prepared.push({
+            stepExecutionId: outcome.stepExecutionId,
+            outboundMessageId: outcome.outboundMessageId,
+          });
+        }
+      });
+
+      // Appendix B: `prepared → dispatching` and the provider call after it cannot be
+      // rolled back, so they happen after the commit and never inside it.
+      const handed = prepared[0];
+      if (handed !== undefined) {
+        await dispatchPreparedStep(context, { ...handed, sendHandoff, now });
+      }
     },
   };
 }
@@ -82,10 +123,19 @@ export function sequenceActionJobHandler(options: SequenceActionHandlerOptions =
  * `not_before` half is what keeps 11.3's ten-minute LinkedIn grace period honest
  * through a scheduler running in another region.
  *
- * A `held` execution is deliberately not materialized. A hold is cleared by a person
- * or by the lane that opened it, and the resume is what puts the row back to
- * `pending`; a job that claimed a held step every minute would be a queue full of work
- * that cannot proceed and an `oldest runnable job` alarm that means nothing.
+ * A `held` execution is materialized only when its reason is one of the four in
+ * `CLOCK_CLEARING_HOLDS` — a daily cap, a domain guard, a closed window, a reconciling
+ * fence. Those clear with the clock and nobody is going to press anything, and a held
+ * outbound fence returns to `prepared` when its cap clears
+ * (`docs/decisions/g7-held-returns-to-prepared.md`), so a step held for one of them is
+ * waiting, not finished. Every other hold is cleared by a person or by the lane that
+ * opened it, and the resume is what puts the row back to `pending`; claiming those
+ * every minute would be a queue full of work that cannot proceed and an `oldest
+ * runnable job` alarm that means nothing.
+ *
+ * `not_before` is what keeps the four from spinning: `holdExecution` pushes it forward
+ * by the reason's own interval, so the row is invisible here until it is worth asking
+ * again.
  */
 export function sequenceActionSource(): DueWorkSource {
   return {
@@ -96,14 +146,15 @@ export function sequenceActionSource(): DueWorkSource {
            FROM step_executions e
            JOIN sequence_enrollments n
              ON n.workspace_id = e.workspace_id AND n.id = e.enrollment_id
-          WHERE e.state = 'pending'
+          WHERE (e.state = 'pending'
+                 OR (e.state = 'held' AND e.hold_reason_code = ANY($2::text[])))
             AND e.due_at <= $1::timestamptz
             AND e.not_before <= $1::timestamptz
             AND n.ended_at IS NULL
             AND n.state = 'active'
           ORDER BY e.due_at, e.id
           LIMIT 500`,
-        [now],
+        [now, Object.keys(CLOCK_CLEARING_HOLDS)],
       );
       return rows.map(row => ({
         workspaceId: row.workspace_id,

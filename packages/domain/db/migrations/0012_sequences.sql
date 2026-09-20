@@ -581,10 +581,16 @@ CREATE TABLE step_executions (
 
 ALTER TABLE step_executions ADD CONSTRAINT step_executions_pkey PRIMARY KEY (workspace_id, id);
 
--- The scheduler's due-work query. Runnable means pending, due and past its grace.
+-- The scheduler's due-work query. Runnable means unfinished, due and past its grace.
+--
+-- `held` is in the predicate and `pending` is not the whole story, because four of
+-- section 15's reasons clear with the clock rather than with a person — a daily cap,
+-- the domain guard, a closed window, a reconciling fence — and the worker re-arms
+-- those itself. `not_before` is what stops that being a spin: a step held for one of
+-- them has its `not_before` pushed forward by the reason's own interval.
 CREATE INDEX step_executions_runnable
   ON step_executions (workspace_id, due_at, not_before)
-  WHERE state = 'pending';
+  WHERE state IN ('pending', 'held');
 
 CREATE INDEX step_executions_by_enrollment ON step_executions (workspace_id, enrollment_id, ordinal);
 

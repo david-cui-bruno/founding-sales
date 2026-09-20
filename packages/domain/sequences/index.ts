@@ -103,13 +103,16 @@ export {
 } from './eligibility.ts';
 
 export {
+  CLOCK_CLEARING_HOLDS,
   LINKEDIN_UNDO_WINDOW_MILLISECONDS,
   completeEmailStep,
   completeStepExecution,
+  dispatchPreparedStep,
   rescheduleExecution,
   runDueStepExecution,
   type CompleteStepInput,
   type CompletedStep,
+  type DispatchStepOutcome,
   type RescheduleInput,
   type RunDueStepInput,
   type StepRunOutcome,
@@ -120,6 +123,7 @@ export {
   SEND_HANDOFF_REFUSALS,
   recordingSendHandoff,
   unavailableSendHandoff,
+  type DispatchSendOutcome,
   type OutboundEmailRequest,
   type OutboundFenceOutcome,
   type OutboundFenceState,

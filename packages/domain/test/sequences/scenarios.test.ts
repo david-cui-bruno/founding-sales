@@ -9,6 +9,7 @@ import {
   consumeTerminalStops,
   createDraftVersion,
   createSequence,
+  dispatchPreparedStep,
   enrollContact,
   listStepExecutions,
   publishVersion,
@@ -20,6 +21,7 @@ import {
   runDueStepExecution,
   undoLinkedInStep,
   LINKEDIN_UNDO_WINDOW_MILLISECONDS,
+  type RecordingSendHandoff,
 } from '../../sequences/index.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
@@ -526,5 +528,132 @@ describe('the send hand-off is a rendered request, and the fence is G7-2’s', (
       enrollmentId: enrolled.value.enrollmentId,
     });
     expect(holds.map(hold => hold.reasonCode)).toContain('missing_variables');
+  });
+});
+
+describe('dispatch belongs to this lane, and a held fence is not terminal', () => {
+  /** Run the due email step of an enrollment and return what the fence was handed. */
+  async function handOff(
+    handoff: RecordingSendHandoff,
+    enrollmentId: string,
+  ): Promise<{ readonly stepExecutionId: string; readonly outboundMessageId: string }> {
+    await setDue(enrollmentId, '2026-09-21T13:00:00Z');
+    const outcome = await runDueStepExecution(worker(), {
+      enrollmentId,
+      now: '2026-09-21T13:00:00Z',
+      eligibility: allowAllEligibility(),
+      sendHandoff: handoff,
+    });
+    if (outcome.kind !== 'handed_to_send') throw new Error(`the step was ${outcome.kind}`);
+    return { stepExecutionId: outcome.stepExecutionId, outboundMessageId: outcome.outboundMessageId };
+  }
+
+  it('carries the business date the daily cap counts against', async () => {
+    const enrollmentId = await enrollAlpha();
+    const handoff = recordingSendHandoff();
+    await handOff(handoff, enrollmentId);
+    // 09:00 New York on Monday 21 September 2026 is that date, not the UTC one.
+    expect(handoff.prepared[0]?.businessDate).toBe('2026-09-21');
+  });
+
+  it('dispatches after the step transaction and completes the step from the fence', async () => {
+    const enrollmentId = await enrollAlpha();
+    const handoff = recordingSendHandoff();
+    const { stepExecutionId, outboundMessageId } = await handOff(handoff, enrollmentId);
+    handoff.dispatchesTo(stepExecutionId, {
+      state: 'sent',
+      dispatchedAt: '2026-09-21T13:00:05.000Z',
+      heldReason: null,
+    });
+
+    const result = await dispatchPreparedStep(worker(), {
+      stepExecutionId,
+      outboundMessageId,
+      sendHandoff: handoff,
+      now: '2026-09-21T13:00:06Z',
+    });
+    expect(result.kind).toBe('sent');
+    expect(handoff.dispatched).toEqual([outboundMessageId]);
+
+    const executions = await listStepExecutions(worker(), { enrollmentId });
+    const first = executions.find(execution => execution.ordinal === 1);
+    expect(first?.state).toBe('completed');
+    expect(first?.result).toBe('sent');
+    // Appendix B: the successor is counted from the original dispatch time.
+    expect(executions.some(execution => execution.ordinal === 2)).toBe(true);
+  });
+
+  it('returns a capped step to held with a future not_before rather than stopping it', async () => {
+    const enrollmentId = await enrollAlpha();
+    const handoff = recordingSendHandoff();
+    const { stepExecutionId, outboundMessageId } = await handOff(handoff, enrollmentId);
+    handoff.dispatchesTo(stepExecutionId, {
+      state: 'held',
+      dispatchedAt: null,
+      heldReason: 'daily_cap',
+    });
+
+    const now = await databaseNow(worker());
+    const result = await dispatchPreparedStep(worker(), {
+      stepExecutionId,
+      outboundMessageId,
+      sendHandoff: handoff,
+      now,
+    });
+    expect(result).toEqual({ kind: 'held', stepExecutionId, reasonCode: 'daily_cap' });
+
+    const [execution] = await listStepExecutions(worker(), { enrollmentId });
+    expect(execution?.state).toBe('held');
+    expect(execution?.holdReasonCode).toBe('daily_cap');
+    // Not terminal: the cap clears with the clock, so the row waits rather than dying.
+    expect(Date.parse(execution?.notBefore ?? now)).toBeGreaterThan(Date.parse(now));
+    expect(execution?.completedAt ?? null).toBeNull();
+  });
+
+  it('never dispatches a fence twice: an already-sent fence is read, not re-sent', async () => {
+    const enrollmentId = await enrollAlpha();
+    const handoff = recordingSendHandoff();
+    const { stepExecutionId, outboundMessageId } = await handOff(handoff, enrollmentId);
+    handoff.dispatchesTo(stepExecutionId, {
+      state: 'sent',
+      dispatchedAt: '2026-09-21T13:00:05.000Z',
+      heldReason: null,
+    });
+    await dispatchPreparedStep(worker(), {
+      stepExecutionId,
+      outboundMessageId,
+      sendHandoff: handoff,
+      now: '2026-09-21T13:00:06Z',
+    });
+    const again = await dispatchPreparedStep(worker(), {
+      stepExecutionId,
+      outboundMessageId,
+      sendHandoff: handoff,
+      now: '2026-09-21T13:00:07Z',
+    });
+    expect(again.kind).toBe('nothing_to_do');
+    expect(handoff.dispatched).toEqual([outboundMessageId]);
+  });
+
+  it('holds an unknown-terminal fence for the admin resolution Appendix B names', async () => {
+    const enrollmentId = await enrollAlpha();
+    const handoff = recordingSendHandoff();
+    const { stepExecutionId, outboundMessageId } = await handOff(handoff, enrollmentId);
+    handoff.dispatchesTo(stepExecutionId, {
+      state: 'unknown_terminal',
+      dispatchedAt: '2026-09-21T13:00:05.000Z',
+      heldReason: null,
+    });
+    const result = await dispatchPreparedStep(worker(), {
+      stepExecutionId,
+      outboundMessageId,
+      sendHandoff: handoff,
+      now: '2026-09-21T13:00:06Z',
+    });
+    expect(result).toEqual({
+      kind: 'held',
+      stepExecutionId,
+      reasonCode: 'send_unknown_terminal',
+    });
   });
 });

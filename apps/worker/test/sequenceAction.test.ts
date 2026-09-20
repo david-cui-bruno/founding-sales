@@ -51,6 +51,31 @@ describe('the sequence action as a job', () => {
       database.session,
     );
 
+  /**
+   * Put the enrollment back to live.
+   *
+   * A test that lets the cadence run to its end completes the enrollment, and the
+   * source deliberately ignores work belonging to one that has ended.
+   */
+  const reopen = async (): Promise<void> => {
+    await database.session.query(
+      `UPDATE sequence_enrollments
+          SET state = 'active', ended_at = NULL, end_reason = NULL
+        WHERE workspace_id = $1 AND id = $2`,
+      [workspaceId, enrollmentId],
+    );
+  };
+
+  /** How many jobs the scheduler has materialized for one execution. */
+  const jobsFor = async (id: string): Promise<number> => {
+    const { rows } = await database.session.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM jobs
+        WHERE kind = 'sequence.action' AND idempotency_key = $1`,
+      [`step-execution:${id}`],
+    );
+    return Number(rows[0]?.count ?? '0');
+  };
+
   const one = async (sql: string, values: readonly unknown[] = []): Promise<string> => {
     const { rows } = await database.session.query<{ id: string }>(sql, values);
     const id = rows[0]?.id;
@@ -221,15 +246,53 @@ describe('the sequence action as a job', () => {
     expect(report.freshOutcome).toBe('completed');
     expect(report.staleOutcome).not.toBe('completed');
     expect(report.effectsAfter - report.effectsBefore).toBe(1);
+    // One fence prepared, and one dispatch: the stolen lease sends nothing twice.
+    expect(handoff.dispatched).toHaveLength(1);
 
     const executions = await listStepExecutions(worker(), { enrollmentId });
-    expect(executions[0]?.state).toBe('dispatched');
+    const first = executions.find(execution => execution.ordinal === 1);
+    expect(first?.state).toBe('completed');
+    expect(first?.result).toBe('sent');
+  });
+
+  it('asks again about a capped step, and never about one waiting for a person', async () => {
+    await database.session.query("DELETE FROM jobs WHERE kind = 'sequence.action'");
+    await reopen();
+    // A cap clears with the business date, so the step is runnable again once its
+    // `not_before` passes; a template nobody has approved is not.
+    await database.session.query(
+      `UPDATE step_executions
+          SET state = 'held', hold_reason_code = 'daily_cap',
+              completed_at = NULL, completion_source = NULL, result = NULL
+        WHERE workspace_id = $1 AND id = $2`,
+      [workspaceId, executionId],
+    );
+    await runSchedulerPass(database.session, {
+      sources: [sequenceActionSource()],
+      now: '2026-09-18T14:00:00Z',
+    });
+    expect(await jobsFor(executionId)).toBe(1);
+
+    await database.session.query("DELETE FROM jobs WHERE kind = 'sequence.action'");
+    await database.session.query(
+      `UPDATE step_executions SET hold_reason_code = 'template_unapproved'
+        WHERE workspace_id = $1 AND id = $2`,
+      [workspaceId, executionId],
+    );
+    await runSchedulerPass(database.session, {
+      sources: [sequenceActionSource()],
+      now: '2026-09-18T14:00:00Z',
+    });
+    expect(await jobsFor(executionId)).toBe(0);
   });
 
   it('holds a due email step when no send is wired, rather than failing the job', async () => {
     await database.session.query("DELETE FROM jobs WHERE kind = 'sequence.action'");
+    await reopen();
     await database.session.query(
-      `UPDATE step_executions SET state = 'pending', hold_reason_code = NULL
+      `UPDATE step_executions
+          SET state = 'pending', hold_reason_code = NULL,
+              completed_at = NULL, completion_source = NULL, result = NULL
         WHERE workspace_id = $1 AND id = $2`,
       [workspaceId, executionId],
     );

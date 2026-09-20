@@ -3,6 +3,7 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { openHold } from '../policy/index.ts';
 import { placeEmailSend, resolveStepDue, type WorkspaceHolidayCalendar } from '../src/index.ts';
 import { readTemplateVersion, renderTemplateVersion } from '../templates/index.ts';
+import { businessDateOf } from '../today/index.ts';
 import { calendarOfEnrollment, completeEnrollment, stepForCadence, stopEnrollments } from './enrollments.ts';
 import { CHANNEL_ACTION_KINDS, type StepEligibility } from './eligibility.ts';
 import {
@@ -12,7 +13,7 @@ import {
   readSequenceVersion,
   readStepExecution,
 } from './rows.ts';
-import type { OutboundEmailRequest, SendHandoff } from './sendHandoff.ts';
+import { SEND_HANDOFF_REFUSALS, type OutboundEmailRequest, type SendHandoff } from './sendHandoff.ts';
 import {
   acceptSequence,
   refuseSequence,
@@ -47,9 +48,12 @@ import { templateVariablesFor } from './variables.ts';
  * * `held` — one of the eleven eligibility questions said no, with the reason code
  *   section 15 gives it.
  *
- * There is deliberately no "sent". This lane never sends and never learns that
- * something was sent except by reading the fence, which is what
- * `completeEmailStep` is for.
+ * There is deliberately no "sent" among them. `runDueStepExecution` decides bytes and
+ * prepares a fence; it never learns that something was sent. That happens one function
+ * later, in `dispatchPreparedStep`, which runs after the step's transaction has
+ * committed and reads the fence rather than assuming it
+ * (`docs/decisions/g8-this-lane-dispatches.md`), and in `completeEmailStep`, which is
+ * what an administrator's unknown-terminal resolution lands in.
  *
  * ## Which holds this lane opens
  *
@@ -61,6 +65,29 @@ import { templateVariablesFor } from './variables.ts';
  */
 
 export const LINKEDIN_UNDO_WINDOW_MILLISECONDS = 10 * 60 * 1000;
+
+/**
+ * The hold reasons that clear with the clock rather than with a person, and how long
+ * the step waits before asking again.
+ *
+ * Every other reason in section 15 is cleared by somebody: an administrator lifts a
+ * pause, an approver approves a template, a salesperson fixes a route, and the
+ * release re-arms the step through `resumeEnrollment`. These four are not — a daily
+ * cap ends with the business date, a domain guard with its rolling window, a window
+ * with the firm's morning, and a reconciling fence with the Gmail Sent folder — so a
+ * step held for one of them is put back on the queue instead of waiting for a person
+ * who has nothing to do. `not_before` is what keeps that from being a spin: the step
+ * is invisible to the scheduler until the interval has passed.
+ *
+ * `due_at` deliberately does not move, so no shift row is written: the cadence still
+ * says what it said, and only the earliest moment the worker may look again changes.
+ */
+export const CLOCK_CLEARING_HOLDS: Partial<Record<HoldReasonCode, number>> = {
+  daily_cap: 60 * 60 * 1000,
+  domain_cap: 60 * 60 * 1000,
+  outside_email_window: 60 * 60 * 1000,
+  send_unknown_reconciling: 5 * 60 * 1000,
+};
 
 export type StepRunOutcome =
   | {
@@ -208,6 +235,9 @@ async function runEmailStep(
     sendAt: placement.sendAt,
     sourceZone: placement.sourceZone,
     ruleVersion: execution.ruleVersion,
+    // Appendix D: the daily cap counts in the workspace business zone, and the date
+    // is PostgreSQL's so that the cap and the placement agree about midnight.
+    businessDate: await businessDateOf(context, placement.sendAt),
   };
   const prepared = await input.sendHandoff.prepare(context, request);
   if (!prepared.ok) return await holdExecution(context, execution, prepared.reason);
@@ -223,6 +253,86 @@ async function runEmailStep(
     outboundMessageId: prepared.outboundMessageId,
     sendAt: placement.sendAt,
   };
+}
+
+export type DispatchStepOutcome =
+  | { readonly kind: 'sent'; readonly stepExecutionId: string }
+  | { readonly kind: 'held'; readonly stepExecutionId: string; readonly reasonCode: HoldReasonCode }
+  | { readonly kind: 'nothing_to_do' };
+
+/**
+ * Dispatch the fence a due email step prepared, and move the step to what it became.
+ *
+ * Appendix C has no send job kind. The coordinator settled the consequence: nobody on
+ * the sending lane's side picks a prepared fence up, so the lane that prepared it is
+ * the lane that dispatches it. `runDueStepExecution` prepares inside the step's
+ * transaction; this runs *after* that transaction commits, because
+ * `prepared → dispatching` and the provider call after it cannot be rolled back.
+ *
+ * It dispatches only while the fence still reads `prepared`. That is the whole of the
+ * at-most-once discipline on this side: a retry after a stolen lease re-prepares the
+ * same fence (prepare is idempotent by step execution), reads a state that is no
+ * longer `prepared`, and reports rather than sends again.
+ *
+ * A held fence is not terminal — G7-2's `g7-held-returns-to-prepared` says a cap that
+ * clears puts it back — so the step is held with the cap's own reason and a
+ * `not_before` from `CLOCK_CLEARING_HOLDS`, and the scheduler asks again later.
+ */
+export async function dispatchPreparedStep(
+  context: RepositoryContext,
+  input: {
+    readonly stepExecutionId: string;
+    readonly outboundMessageId: string;
+    readonly sendHandoff: SendHandoff;
+    readonly now: string;
+  },
+): Promise<DispatchStepOutcome> {
+  const execution = await readStepExecution(context, input.stepExecutionId);
+  if (execution === null || execution.state !== 'dispatched') return { kind: 'nothing_to_do' };
+
+  let fence = await input.sendHandoff.readOutcome(context, execution.id);
+  if (fence.state === 'prepared') {
+    const dispatched = await input.sendHandoff.dispatch(context, {
+      outboundMessageId: input.outboundMessageId,
+      stepExecutionId: execution.id,
+    });
+    if (!dispatched.ok) return await heldStep(context, execution, dispatched.reason);
+    fence = await input.sendHandoff.readOutcome(context, execution.id);
+  }
+
+  if (fence.state === 'sent') {
+    await completeEmailStep(context, {
+      stepExecutionId: execution.id,
+      result: 'sent',
+      at: fence.dispatchedAt ?? input.now,
+    });
+    return { kind: 'sent', stepExecutionId: execution.id };
+  }
+  if (fence.state === 'held') {
+    return await heldStep(context, execution, holdReasonFrom(fence.heldReason));
+  }
+  if (fence.state === 'unknown_terminal') {
+    // Appendix B: an administrator marks it delivered or skipped; both land in
+    // `completeEmailStep`. Until then the step waits, visible and named.
+    return await heldStep(context, execution, 'send_unknown_terminal');
+  }
+  // `dispatching`, `reconciling` and the absent fence of a lane with no send wired.
+  return await heldStep(context, execution, 'send_unknown_reconciling');
+}
+
+async function heldStep(
+  context: RepositoryContext,
+  execution: StepExecutionRow,
+  reasonCode: HoldReasonCode,
+): Promise<DispatchStepOutcome> {
+  await holdExecution(context, execution, reasonCode);
+  return { kind: 'held', stepExecutionId: execution.id, reasonCode };
+}
+
+/** A fence's own held reason, if it is one of section 15's; `scoped_pause` otherwise. */
+function holdReasonFrom(reason: string | null): HoldReasonCode {
+  const known: readonly string[] = SEND_HANDOFF_REFUSALS;
+  return reason !== null && known.includes(reason) ? (reason as HoldReasonCode) : 'scoped_pause';
 }
 
 async function stepOf(
@@ -265,9 +375,14 @@ async function holdExecution(
   options: { readonly openHoldRow?: boolean; readonly detail?: readonly string[] } = {},
 ): Promise<StepRunOutcome> {
   await context.db.query(
-    `UPDATE step_executions SET state = 'held', hold_reason_code = $3, updated_at = now()
-      WHERE workspace_id = $1 AND id = $2 AND state IN ('pending', 'held')`,
-    [context.scope.workspaceId, execution.id, reasonCode],
+    `UPDATE step_executions
+        SET state = 'held', hold_reason_code = $3,
+            not_before = CASE WHEN $4::double precision > 0
+                              THEN GREATEST(not_before, now() + ($4 * interval '1 millisecond'))
+                              ELSE not_before END,
+            updated_at = now()
+      WHERE workspace_id = $1 AND id = $2 AND state IN ('pending', 'held', 'dispatched')`,
+    [context.scope.workspaceId, execution.id, reasonCode, CLOCK_CLEARING_HOLDS[reasonCode] ?? 0],
   );
 
   if (options.openHoldRow === true) {

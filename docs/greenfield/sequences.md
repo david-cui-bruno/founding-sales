@@ -40,7 +40,7 @@ packages/domain/sequences/rows.ts        every SELECT in the lane, once
 packages/domain/sequences/definitions.ts create, draft, publish, retire
 packages/domain/sequences/calendars.ts   the versioned holiday calendar
 packages/domain/sequences/enrollments.ts enrol, and the terminal stop
-packages/domain/sequences/executions.ts  run a due step; complete it; reschedule it
+packages/domain/sequences/executions.ts  run a due step; dispatch it; complete it
 packages/domain/sequences/eligibility.ts the eleven questions, composed
 packages/domain/sequences/sendHandoff.ts the seam with G7-2, and its recording fake
 packages/domain/sequences/linkedin.ts    open-and-copy, undo, replied / no engagement
@@ -145,8 +145,16 @@ did the cadence originally say" survives every later change.
 
 `SendHandoff.prepare` takes an `OutboundEmailRequest` carrying a rendered subject and
 body, the template version id and its content hash, the frozen route, the placed
-`sendAt` and the rule version that produced it. G7-2 re-checks the hash, freezes the
-envelope, and owns everything from `prepared` onwards.
+`sendAt`, the rule version that produced it and the workspace business date the cap
+counts against. G7-2 re-checks the hash, freezes the envelope, and owns the state
+machine from `prepared` onwards.
+
+Owning the state machine is not the same as driving it. Appendix C has no send job
+kind, so `sequence.action` calls `dispatch` too — after its own transaction commits,
+and only while the fence still reads `prepared`
+(`docs/decisions/g8-this-lane-dispatches.md`). A fence that comes back `held` is a cap
+that has not cleared yet, not a step that is over: `CLOCK_CLEARING_HOLDS` pushes
+`not_before` forward and the scheduler asks again.
 
 The division is not arbitrary. 11.1 holds the step on a missing variable, so
 substitution has to happen *before* a fence exists: a fence prepared for a body reading
@@ -187,10 +195,19 @@ it cannot be rolled back.
 
 The source is one indexed query over `step_executions_runnable`, and both comparisons
 are PostgreSQL's, so no worker's clock decides whether a step is due and the ten-minute
-LinkedIn grace survives a scheduler in another region. A `held` execution is
-deliberately not materialized: a hold is cleared by a person or by the lane that opened
-it, and a job claiming a held step every minute would make the `oldest runnable job`
-alarm mean nothing.
+LinkedIn grace survives a scheduler in another region.
+
+A `held` execution is materialized only for the four reasons in
+`CLOCK_CLEARING_HOLDS` — `daily_cap`, `domain_cap`, `outside_email_window`,
+`send_unknown_reconciling` — because those clear with the clock and nobody is going to
+press anything. Every other hold waits for the person or the lane that owns it, and a
+job claiming one of those every minute would make the `oldest runnable job` alarm mean
+nothing. `not_before` is what keeps the four from spinning.
+
+The handler's shape follows from Appendix B: one narrow transaction that re-reads
+eligibility, renders and prepares the fence, then a commit, then the dispatch. The
+runner already refuses to wrap an `outbound_fence` handler in the completion
+transaction, for the same reason.
 
 ## The terminal stop
 
