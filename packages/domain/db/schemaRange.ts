@@ -18,20 +18,20 @@ export interface SchemaRange {
 }
 
 /** The highest migration version this source tree contains. */
-export const CURRENT_SCHEMA_VERSION = 4;
+export const CURRENT_SCHEMA_VERSION = 5;
 
 /**
  * The range the release before this one declared. Widen this one release ahead of the
  * migration.
  *
  * Lanes G5 and G2 shipped migrations 0002 and 0003 from the same main and each widened
- * this constant for its own; lane G3a widened it again for migration 0004. That is
- * honest only because nothing has been deployed — G0's {1, 1} was never a promise made
- * to a running production binary. From the first real deployment onwards the widening
- * must precede the migration by a release, and the compatibility test will keep saying
- * so.
+ * this constant for its own; lane G3a widened it again for migration 0004, and lane
+ * G10 for the research migration. That is honest only because nothing has been
+ * deployed — G0's {1, 1} was never a promise made to a running production binary. From
+ * the first real deployment onwards the widening must precede the migration by a
+ * release, and the compatibility test will keep saying so.
  */
-export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 4 };
+export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 5 };
 
 /**
  * Both services need migration 0002's shape: the API's dead-job list reads `dead_at`
@@ -45,13 +45,18 @@ export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum:
  * `contacts`, `opportunities` and the default pipeline. Its minimum is therefore 4,
  * for the same reason the minimum was 2 and then 3.
  *
- * The worker reads none of those tables yet, so its minimum is still 2, which is what
- * lets a rolling deployment run an old worker beside a new API (Appendix G 22). Both
- * maxima move to 4: a binary that refused the database it has just been deployed
- * against would be a self-inflicted outage.
+ * The research migration moves both minima. The API's research routes read
+ * `research_settings`, `research_providers`, `research_route_policies` and
+ * `research_suggestions`, and the worker's two research handlers write
+ * `research_pages` and `research_firm_runs` — the tables whose unique constraints
+ * *are* their declared idempotency protection. A worker on a version-4 database would
+ * run those handlers with no uniqueness behind them, which is the one thing a schema
+ * range exists to prevent, so it refuses to start instead. Both maxima move to 5: a
+ * binary that refused the database it has just been deployed against would be a
+ * self-inflicted outage.
  */
-export const API_SCHEMA_RANGE: SchemaRange = { minimum: 4, maximum: 4 };
-export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 2, maximum: 4 };
+export const API_SCHEMA_RANGE: SchemaRange = { minimum: 5, maximum: 5 };
+export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 5, maximum: 5 };
 
 export function acceptsSchemaVersion(range: SchemaRange, version: number): boolean {
   return Number.isInteger(version) && version >= range.minimum && version <= range.maximum;
