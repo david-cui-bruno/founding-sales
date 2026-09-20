@@ -135,6 +135,20 @@ export const FOUNDATION_LOOKUP_KEYS = {
     ['workspace_id', 'command_id'],
   ],
   callbacks: [['workspace_id', 'id']],
+
+  // Migration 0008 (lane G6). The card's declared key *is* section 8.2's
+  // `UNIQUE(workspace_id, snapshot_date, firm_id)`, because that triple is the card's
+  // identity and it is the primary key: a firm appears once on a date, and a
+  // surrogate id would only be a second way to name the same row.
+  //
+  // `today_snoozes_one_active` is deliberately absent: it is partial, and the
+  // registry promises unconditional unique keys.
+  today_snapshots: [['workspace_id', 'snapshot_date', 'firm_id']],
+  today_items: [
+    ['workspace_id', 'id'],
+    ['workspace_id', 'snapshot_date', 'firm_id', 'item_key'],
+  ],
+  today_snoozes: [['workspace_id', 'id']],
 } as const satisfies Readonly<Record<string, readonly (readonly ['workspace_id', ...string[]])[]>>;
 
 /** A table a scoped repository may read. `workspaces`, `users` and `heartbeats` are not scoped rows. */

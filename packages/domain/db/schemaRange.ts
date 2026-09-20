@@ -18,7 +18,7 @@ export interface SchemaRange {
 }
 
 /** The highest migration version this source tree contains. */
-export const CURRENT_SCHEMA_VERSION = 6;
+export const CURRENT_SCHEMA_VERSION = 8;
 
 /**
  * The range the release before this one declared. Widen this one release ahead of the
@@ -26,13 +26,13 @@ export const CURRENT_SCHEMA_VERSION = 6;
  *
  * Lanes G5 and G2 shipped migrations 0002 and 0003 from the same main and each widened
  * this constant for its own; lane G3a widened it again for migration 0004, and G3b for
- * 0005. Lane G4 widens it for 0006, and G10 is in flight with 0007, so a merge that
- * finds two different maxima takes the larger. That is honest only because nothing has
- * been deployed — G0's {1, 1} was never a promise made to a running production binary.
+ * 0005, and G4 for 0006. G10 widens it for 0007 and G6 for 0008, so a merge that finds
+ * two different maxima takes the larger. That is honest only because nothing has been
+ * deployed — G0's {1, 1} was never a promise made to a running production binary.
  * From the first real deployment onwards the widening must precede the migration by a
  * release, and the compatibility test will keep saying so.
  */
-export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 6 };
+export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 8 };
 
 /**
  * Both services need migration 0002's shape: the API's dead-job list reads `dead_at`
@@ -57,9 +57,23 @@ export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum:
  * understanding 0006, which is what the widened previous-release range above is for
  * (Appendix G 22). Both maxima move to 6: a binary that refused the database it has
  * just been deployed against would be a self-inflicted outage.
+ *
+ * Migration 0008 (lane G6) moves both minima again, and for the same reason both are
+ * moved rather than only one. The rule is the one `docs/decisions/g5-schema-range.md`
+ * and `docs/decisions/g10-worker-schema-minimum.md` state: a binary declares the
+ * lowest version on which its *first statement* can succeed, not the lowest version it
+ * would like. The API's `/today`, `/today/firm` and `/today/snooze` read and write
+ * `today_snapshots`, `today_items` and `today_snoozes`; the worker's `today.build`
+ * handler calls `today_upsert_item`, which does not exist before 0008. Neither could
+ * do anything useful against a version-7 database except fail on its first query, and
+ * 4.2 wants that to be a refusal at startup instead.
+ *
+ * The deploy order is migrate, then worker, then API, so neither binary ever meets an
+ * older schema, and a rolling step that runs two worker versions has both understanding
+ * 0008 — which is what the widened previous-release range above is for (Appendix G 22).
  */
-export const API_SCHEMA_RANGE: SchemaRange = { minimum: 6, maximum: 6 };
-export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 6, maximum: 6 };
+export const API_SCHEMA_RANGE: SchemaRange = { minimum: 8, maximum: 8 };
+export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 8, maximum: 8 };
 
 export function acceptsSchemaVersion(range: SchemaRange, version: number): boolean {
   return Number.isInteger(version) && version >= range.minimum && version <= range.maximum;

@@ -5,6 +5,7 @@ import { payloadHash, seedTwoWorkspaces, type TwoWorkspaces } from './support/fi
 import { IDENTITY_CONSTRAINT_CASES } from './support/identityCases.ts';
 import { CRM_CONSTRAINT_CASES } from './support/crmCases.ts';
 import { POLICY_CONSTRAINT_CASES } from './support/policyCases.ts';
+import { TODAY_CONSTRAINT_CASES } from './support/todayCases.ts';
 
 /**
  * A failing insert for every foundation constraint.
@@ -1331,6 +1332,7 @@ const cases: readonly Case[] = [
   ...IDENTITY_CONSTRAINT_CASES,
   ...CRM_CONSTRAINT_CASES,
   ...POLICY_CONSTRAINT_CASES,
+  ...TODAY_CONSTRAINT_CASES,
 
 ];
 

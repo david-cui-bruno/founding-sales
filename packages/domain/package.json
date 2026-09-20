@@ -11,7 +11,8 @@
     "./crm": "./crm/index.ts",
     "./policy": "./policy/index.ts",
     "./suppression": "./suppression/index.ts",
-    "./dial": "./dial/index.ts"
+    "./dial": "./dial/index.ts",
+    "./today": "./today/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
