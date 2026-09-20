@@ -13,6 +13,7 @@ import { routeFirms } from './routes/firms.ts';
 import { routeMerges } from './routes/merges.ts';
 import { routeOpportunities } from './routes/opportunities.ts';
 import { routePipeline } from './routes/pipeline.ts';
+import { routeResearch } from './routes/research.ts';
 import { DEFAULT_UPGRADE_URL, type ApiRequest, type RouteResult, type RoutingOptions } from './routes/types.ts';
 
 /**
@@ -96,6 +97,11 @@ export async function dispatch(request: ApiRequest, options: ApiOptions): Promis
     routeOpportunities,
     routePipeline,
     routeMerges,
+    // Lane G10's research surface: the admin configuration, the versioned route
+    // thresholds with their history, the suggestion review queue, and the two enqueue
+    // commands. Same shape as the CRM modules — it answers null for a path that is
+    // not its own and authenticates for itself.
+    routeResearch,
   ]) {
     const result = await module(request, routing);
     if (result !== null) return result;

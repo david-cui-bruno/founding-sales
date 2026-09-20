@@ -2,10 +2,28 @@ import pg from 'pg';
 import type { QueryResultRowLike, SessionQueryable } from '@fss/domain/db';
 import { HandlerRegistry, canaryHandler, createCloudWatchSink, loadCloudWatchTransport } from '@fss/domain/jobs';
 import { WORKER_EXIT_CODES } from '../index.ts';
+import { researchHandlers } from '../handlers/research.ts';
 import { canarySource } from '../scheduler/sources.ts';
 import { ConfigError, describeWorkerConfig, readWorkerConfig, type WorkerConfig } from './config.ts';
 import { createLogger, errorFields, type Logger } from './log.ts';
 import { WorkerStartupRefusal, startWorker } from './worker.ts';
+
+/**
+ * Every handler this image runs.
+ *
+ * The research handlers are registered only for the provider kinds this process was
+ * given, and in this release it was given none: the live Places, page-fetch and
+ * extraction adapters are a separate reviewed change, and the only implementations in
+ * the repository are the recorded fixtures the tests use. So `research.page` and
+ * `research.firm` jobs wait in the queue unclaimed rather than being failed four times
+ * each — which is the honest state, and the reason `enqueueDiscoveryPage` is an admin
+ * command rather than a scheduler source (docs/decisions/g10-no-scheduler-source.md).
+ */
+function registerHandlers(registry: HandlerRegistry): HandlerRegistry {
+  registry.register(canaryHandler());
+  for (const handler of researchHandlers({ providers: {} })) registry.register(handler);
+  return registry;
+}
 
 /**
  * The worker container's entry point.
@@ -99,7 +117,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
         runners: sessions.slice(1, 1 + config.concurrency),
         metrics: sessions[1 + config.concurrency] as SessionQueryable,
       },
-      registry: new HandlerRegistry().register(canaryHandler()),
+      registry: registerHandlers(new HandlerRegistry()),
       sources: [canarySource()],
       sink,
       log,
