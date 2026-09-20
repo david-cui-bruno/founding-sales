@@ -80,6 +80,13 @@ describe('what the API mounts', () => {
       '/postures/record',
       '/postures/revoke',
       '/readyz',
+      '/research/config',
+      '/research/discover',
+      '/research/enrich',
+      '/research/policy',
+      '/research/providers',
+      '/research/suggestions',
+      '/research/suggestions/review',
       '/search/firms',
       '/suppressions',
       '/suppressions/correct',
@@ -183,6 +190,7 @@ describe('what the API mounts', () => {
       'calls',
       'callbacks',
       'pauses',
+      'research',
     ]);
   });
 });
