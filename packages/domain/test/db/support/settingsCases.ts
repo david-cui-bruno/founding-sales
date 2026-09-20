@@ -72,12 +72,12 @@ export const SETTINGS_CONSTRAINT_CASES: readonly SettingsCase[] = [
       // the partial "current" index is not what refuses this one.
       await f.session.query(
         `INSERT INTO workspace_settings (workspace_id, setting_key, version, value, superseded_at, superseded_by_version)
-         VALUES ($1, 'sending_limits', 1, ${VALUE}, now(), 2)`,
+         VALUES ($1, 'postal_footer', 1, ${VALUE}, now(), 2)`,
         [workspace(f)],
       );
       return await f.session.query(
         `INSERT INTO workspace_settings (workspace_id, setting_key, version, value, superseded_at, superseded_by_version)
-         VALUES ($1, 'sending_limits', 1, ${VALUE}, now(), 2)`,
+         VALUES ($1, 'postal_footer', 1, ${VALUE}, now(), 2)`,
         [workspace(f)],
       );
     },
@@ -85,11 +85,11 @@ export const SETTINGS_CONSTRAINT_CASES: readonly SettingsCase[] = [
   {
     constraint: 'workspace_settings_current',
     run: async f => {
-      await insertCurrent(f, 'holiday_calendar', 1);
+      await insertCurrent(f, 'client_version_range', 1);
       // A second *current* row for the same key, at a different version.
       return await f.session.query(
         `INSERT INTO workspace_settings (workspace_id, setting_key, version, value)
-         VALUES ($1, 'holiday_calendar', 2, ${VALUE})`,
+         VALUES ($1, 'client_version_range', 2, ${VALUE})`,
         [workspace(f)],
       );
     },

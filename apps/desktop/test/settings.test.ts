@@ -57,12 +57,19 @@ const settingsBody = (overrides: Record<string, unknown> = {}) => ({
       changeNote: null,
     },
     {
-      settingKey: 'sending_limits',
-      value: { perMailboxDailyCap: 5, domainRecipientsPer24h: 4000 },
+      settingKey: 'postal_footer',
+      value: {
+        organizationName: 'Callie',
+        addressLine: '1 Example Street',
+        locality: 'Providence',
+        regionCode: 'RI',
+        postalCode: '02903',
+        countryCode: 'US',
+      },
       version: 2,
       changedAt: '2026-09-19T10:00:00.000Z',
       changedByUserId: '11111111-1111-4111-8111-111111111111',
-      changeNote: 'lowered after a bounce',
+      changeNote: 'the office moved',
     },
   ],
   elsewhere: [{ topic: 'Research limits', path: '/research/config', ownedBy: 'G10 research' }],
@@ -103,7 +110,7 @@ describe('the administration bridge', () => {
     expect(calls.map(call => call.path)).toEqual(['/settings', '/pipeline/stages']);
     expect(state.settings?.settings.map(entry => entry.settingKey)).toEqual([
       'alert_thresholds',
-      'sending_limits',
+      'postal_footer',
     ]);
     expect(state.stages.map(stage => stage.key)).toEqual(['new', 'won']);
   });
@@ -151,8 +158,8 @@ describe('the administration bridge', () => {
     const bridge = createAdminBridge({ api, session: { state: async () => await Promise.resolve(session()) } });
     await bridge.state();
     const refused = await bridge.saveSetting({
-      settingKey: 'sending_limits',
-      value: { perMailboxDailyCap: 5, domainRecipientsPer24h: 4000 },
+      settingKey: 'alert_thresholds',
+      value: DEFAULT_ALERT_THRESHOLDS,
       changeNote: 'trying it on',
     });
     expect(refused.notice).toBe('admin_only');

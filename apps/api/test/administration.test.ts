@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { DEFAULT_ALERT_THRESHOLDS, HARD_MAILBOX_DAILY_CEILING, SETTING_KEYS } from '@fss/contracts';
+import { DEFAULT_ALERT_THRESHOLDS, SETTING_KEYS } from '@fss/contracts';
 import { dispatch, type ApiRequest } from '../src/server.ts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from './support/authFixture.ts';
 import { issueSessionFor } from './support/sessionFixture.ts';
@@ -133,8 +133,8 @@ describe('the administration surface', () => {
       '/settings/update',
       salespersonToken,
       command({
-        settingKey: 'sending_limits',
-        value: { perMailboxDailyCap: 5, domainRecipientsPer24h: 4000 },
+        settingKey: 'alert_thresholds',
+        value: { ...DEFAULT_ALERT_THRESHOLDS, canaryStaleSeconds: 600 },
         changeNote: 'trying it on',
       }),
     );
@@ -146,9 +146,9 @@ describe('the administration surface', () => {
       '/settings/update',
       adminToken,
       command({
-        settingKey: 'sending_limits',
-        value: { perMailboxDailyCap: 5, domainRecipientsPer24h: 4000 },
-        changeNote: 'ramp week one',
+        settingKey: 'alert_thresholds',
+        value: { ...DEFAULT_ALERT_THRESHOLDS, canaryStaleSeconds: 600 },
+        changeNote: 'the canary was noisy',
       }),
     );
     expect(accepted.status).toBe(200);
@@ -157,15 +157,15 @@ describe('the administration surface', () => {
     expect(accepted.body).toMatchObject({
       status: 'accepted',
       replayed: false,
-      result: { previousVersion: 0, current: { settingKey: 'sending_limits', version: 1 } },
+      result: { previousVersion: 0, current: { settingKey: 'alert_thresholds', version: 1 } },
     });
   });
 
   it('replays a settings command from its receipt rather than writing a second version', async () => {
     const payload = command({
-      settingKey: 'holiday_calendar',
-      value: { dates: ['2026-12-25'] },
-      changeNote: 'Christmas',
+      settingKey: 'client_version_range',
+      value: { minimum: '1.0.0', maximum: '1.4.0' },
+      changeNote: 'the new build is out',
     });
     const first = await call('POST', '/settings/update', adminToken, payload);
     const again = await call('POST', '/settings/update', adminToken, payload);
@@ -173,47 +173,52 @@ describe('the administration surface', () => {
     expect(again.body).toMatchObject({ status: 'accepted', replayed: true });
     expect((again.body['result'] as { current: { version: number } }).current.version).toBe(1);
 
-    const history = await call('POST', '/settings/history', adminToken, { settingKey: 'holiday_calendar' });
+    const history = await call('POST', '/settings/history', adminToken, { settingKey: 'client_version_range' });
     expect((history.body['versions'] as readonly unknown[]).length).toBe(1);
   });
 
-  it('refuses a value past a safety bound with a named reason and writes no version', async () => {
+  it('refuses a value past a bound with a named reason and writes no version', async () => {
     // The envelope is valid, so this is a 409 rather than a 400: the server chose
-    // the validator from the key, and the value did not pass it. 12.7's ceiling is
-    // not something a client can raise by sending a larger number.
+    // the validator from the key, and the value did not pass it. 13.3's warning
+    // threshold is not something a client can raise above its critical one.
     const answer = await call(
       'POST',
       '/settings/update',
       adminToken,
       command({
-        settingKey: 'sending_limits',
-        value: { perMailboxDailyCap: HARD_MAILBOX_DAILY_CEILING + 1, domainRecipientsPer24h: 4000 },
-        changeNote: 'past the ceiling',
+        settingKey: 'alert_thresholds',
+        value: { ...DEFAULT_ALERT_THRESHOLDS, oldestJobAgeWarningSeconds: 1200 },
+        changeNote: 'warning above critical',
       }),
     );
     expect(answer.status).toBe(409);
     expect(answer.body).toMatchObject({ status: 'refused', reason: 'invalid_value' });
-    const history = await call('POST', '/settings/history', adminToken, { settingKey: 'sending_limits' });
+    const history = await call('POST', '/settings/history', adminToken, { settingKey: 'alert_thresholds' });
     expect((history.body['current'] as { version: number }).version).toBe(1);
   });
 
   it('answers the history of a key with its current version and every earlier one', async () => {
     const history = await call('POST', '/settings/history', salespersonToken, {
-      settingKey: 'sending_limits',
+      settingKey: 'alert_thresholds',
     });
     expect(history.status).toBe(200);
-    expect(history.body['settingKey']).toBe('sending_limits');
+    expect(history.body['settingKey']).toBe('alert_thresholds');
     expect((history.body['current'] as { version: number }).version).toBe(1);
 
     const unknownKey = await call('POST', '/settings/history', adminToken, { settingKey: 'not_a_key' });
     expect(unknownKey.status).toBe(400);
   });
 
-  it('serves the thresholds of 13.3 as configuration', async () => {
+  it('does not serve the slices that belong to other lanes', async () => {
     const answer = await call('GET', '/settings', adminToken);
-    const settings = answer.body['settings'] as readonly { settingKey: string; value: unknown }[];
-    const thresholds = settings.find(entry => entry.settingKey === 'alert_thresholds')?.value;
-    expect(thresholds).toEqual(DEFAULT_ALERT_THRESHOLDS);
+    const keys = (answer.body['settings'] as readonly { settingKey: string }[]).map(entry => entry.settingKey);
+    // The caps are G7-2's (row-level CHECKs) and the calendar is G8's (an immutable
+    // version other rows freeze). This surface links to them; it does not hold them.
+    expect(keys).not.toContain('sending_limits');
+    expect(keys).not.toContain('holiday_calendar');
+    const elsewhere = (answer.body['elsewhere'] as readonly { topic: string }[]).map(entry => entry.topic);
+    expect(elsewhere).toContain('Workspace holidays');
+    expect(elsewhere).toContain('Sending caps and the ramp');
   });
 
   it('answers the dashboard for a named window and refuses one without', async () => {

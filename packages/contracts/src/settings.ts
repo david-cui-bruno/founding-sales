@@ -20,10 +20,10 @@ import { instant, uuid } from './foundationRows.ts';
  * payload.
  *
  * **Bounds that exist for safety are in the schema, not only in a check.** The
- * per-mailbox ceiling of 100 (12.7) and the domain recipient guard of 4,000 (12.6)
- * are maxima in `sendingLimitsSettingSchema`, which the server applies to the value
- * after choosing it by key — so a request that would raise either is refused with
- * `invalid_value` and writes no version. A guard a client can raise is not a guard.
+ * warning threshold must be below the critical one, a client-version range must be
+ * two real semantic versions: the server applies the key's schema to the value after
+ * choosing the schema by key, so a request outside a bound is refused with
+ * `invalid_value` and writes no version. A bound a client can move is not a bound.
  */
 
 // ---------------------------------------------------------------------------
@@ -34,20 +34,29 @@ import { instant, uuid } from './foundationRows.ts';
  * Every configuration slice this lane owns and versions.
  *
  * State postures, calling windows, suppression, research limits and thresholds,
- * memberships, devices and mailboxes are configuration too, and they are *not* here:
- * each already has its own versioned table and its own commands, owned by the lane
- * that built it. Copying them into a second store would give the workspace two
- * answers for the same question. The settings surface reads them through their own
- * endpoints; see `docs/greenfield/settings.md`.
+ * memberships, devices, mailboxes and the **workspace holiday calendar** are
+ * configuration too, and they are *not* here: each already has, or is getting, its
+ * own versioned table and its own commands, owned by the lane that built it. Copying
+ * them into a second store would give the workspace two answers for the same
+ * question. The settings surface reads them through their own endpoints; see
+ * `docs/greenfield/settings.md`.
+ *
+ * Two slices were briefly here and were removed before publication, for the same
+ * reason in two shapes. G8's migration 0012 owns `workspace_holiday_calendars`,
+ * because a business-day delay freezes the calendar *version* on to every stored due
+ * instant and a jsonb slice a later save rewrites cannot be an immutable version.
+ * G7-2's migration 0010 owns `mailbox_send_ramp` and `sending_domains`, because the
+ * per-mailbox cap and the authentication flags carry row-level CHECKs — 75 by
+ * command and 100 by constraint, and no enabling without SPF, DKIM, DMARC and a
+ * reviewed postmaster — that a jsonb blob cannot express. See
+ * `docs/decisions/g9-two-slices-that-belong-to-other-lanes.md`.
  */
 export const SETTING_KEYS = [
   'alert_thresholds',
   'business_time_zone',
   'client_version_range',
-  'holiday_calendar',
   'postal_footer',
   'sending_enabled',
-  'sending_limits',
 ] as const;
 export type SettingKey = (typeof SETTING_KEYS)[number];
 
@@ -140,12 +149,6 @@ export const ianaTimeZoneSchema = z
 export const businessTimeZoneSettingSchema = z.strictObject({ timeZone: ianaTimeZoneSchema });
 export type BusinessTimeZoneSetting = z.infer<typeof businessTimeZoneSettingSchema>;
 
-/** 11.2: "A business-day delay skips weekends and configured workspace holidays." */
-export const holidayCalendarSettingSchema = z.strictObject({
-  dates: z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/u, 'a calendar date')).max(400),
-});
-export type HolidayCalendarSetting = z.infer<typeof holidayCalendarSettingSchema>;
-
 /**
  * 10.1's postal footer. Every automated template carries it; 12.6 is why there is no
  * unsubscribe URL field, and the database refuses a template body that has one.
@@ -159,27 +162,6 @@ export const postalFooterSettingSchema = z.strictObject({
   countryCode: z.string().trim().length(2),
 });
 export type PostalFooterSetting = z.infer<typeof postalFooterSettingSchema>;
-
-/** 12.7's hard automated ceiling. Version one cannot configure past it. */
-export const HARD_MAILBOX_DAILY_CEILING = 100;
-/** 12.6's rolling primary-domain guard while reply-only opt-out is configured. */
-export const DOMAIN_RECIPIENT_GUARD_PER_24H = 4000;
-
-/**
- * 12.7: "Admins may lower caps. After sustained healthy results they may raise a
- * mailbox to 75, but version one has a hard automated ceiling of 100."
- *
- * The ramp itself is not configuration — it is the table in 12.7 and it advances only
- * on evidence. What an admin may set is a cap *over* the ramp, never under-riding it:
- * the effective cap is the lower of the ramp's value and this one.
- */
-export const sendingLimitsSettingSchema = z.strictObject({
-  /** Null means "the ramp decides". A number is an additional ceiling, never a floor. */
-  perMailboxDailyCap: z.number().int().min(0).max(HARD_MAILBOX_DAILY_CEILING).nullable(),
-  /** Lowerable only: 12.6's guard cannot be raised from the client. */
-  domainRecipientsPer24h: z.number().int().min(1).max(DOMAIN_RECIPIENT_GUARD_PER_24H),
-});
-export type SendingLimitsSetting = z.infer<typeof sendingLimitsSettingSchema>;
 
 /**
  * 16.2: "Production sending remains disabled until ... an authenticated admin enables
@@ -207,10 +189,8 @@ export const SETTING_VALUE_SCHEMAS = {
   alert_thresholds: alertThresholdsSchema,
   business_time_zone: businessTimeZoneSettingSchema,
   client_version_range: clientVersionRangeSchema,
-  holiday_calendar: holidayCalendarSettingSchema,
   postal_footer: postalFooterSettingSchema,
   sending_enabled: sendingEnabledSettingSchema,
-  sending_limits: sendingLimitsSettingSchema,
 } as const satisfies Record<SettingKey, z.ZodType>;
 
 /** The value a workspace has before an admin has ever set one. */
@@ -218,10 +198,8 @@ export const DEFAULT_SETTING_VALUES: Readonly<Record<SettingKey, unknown>> = Obj
   alert_thresholds: DEFAULT_ALERT_THRESHOLDS,
   business_time_zone: { timeZone: 'America/New_York' },
   client_version_range: { minimum: '1.0.0', maximum: '1.0.0' },
-  holiday_calendar: { dates: [] },
   postal_footer: null,
   sending_enabled: { enabled: false, releaseGateReference: null },
-  sending_limits: { perMailboxDailyCap: null, domainRecipientsPer24h: DOMAIN_RECIPIENT_GUARD_PER_24H },
 });
 
 // ---------------------------------------------------------------------------

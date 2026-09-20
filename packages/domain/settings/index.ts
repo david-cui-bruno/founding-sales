@@ -12,9 +12,6 @@ export {
 } from './store.ts';
 export {
   alertThresholdsOf,
-  effectiveDomainRecipientGuard,
-  effectiveMailboxDailyCap,
   effectiveSendingEnabled,
-  holidayCalendarOf,
 } from './effective.ts';
 export { SETTINGS_ELSEWHERE, type SettingsElsewhere } from './elsewhere.ts';

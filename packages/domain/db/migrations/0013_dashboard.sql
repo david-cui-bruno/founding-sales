@@ -31,6 +31,24 @@
 -- is worse than one with an awkward settings page, and the awkwardness is solved in
 -- the API by reading each of them through its own endpoint.
 --
+-- Two slices were here for one afternoon and were removed before publication, and
+-- both say the same thing about this table's limits.
+--
+-- G8's migration 0012 owns `workspace_holiday_calendars`, because 11.2's
+-- business-day delay freezes the calendar *version* on to every stored due instant,
+-- and a version a later save rewrites in place is not a version.
+--
+-- G7-2's migration 0010 owns `mailbox_send_ramp` and `sending_domains`, because
+-- 12.7's caps and 12.6's authentication gate are row-level CHECKs -- 75 by command
+-- and 100 by constraint, and no enabling without SPF, DKIM, DMARC and a reviewed
+-- postmaster. A `jsonb` blob cannot carry a constraint, and configuration that
+-- governs outbound mail is exactly where a constraint is worth more than a schema.
+--
+-- The rule both cases draw: this table is for operator knobs nothing joins to and
+-- nothing constrains. Anything a CHECK should hold, or anything whose *version* some
+-- other row freezes, belongs in a table of its own. See
+-- docs/decisions/g9-two-slices-that-belong-to-other-lanes.md.
+--
 -- The workspace business zone is the one overlap, and it is deliberate:
 -- `workspaces.business_time_zone` stays the single value every query reads, and the
 -- setting row beside it is the *history* of how it came to be that value. The command
@@ -79,7 +97,7 @@ CREATE TABLE workspace_settings (
   -- SETTING_KEYS in packages/contracts/src/settings.ts; a test asserts it.
   CONSTRAINT workspace_settings_key_known
     CHECK (setting_key IN ('alert_thresholds', 'business_time_zone', 'client_version_range',
-                           'holiday_calendar', 'postal_footer', 'sending_enabled', 'sending_limits')),
+                           'postal_footer', 'sending_enabled')),
   CONSTRAINT workspace_settings_version_positive CHECK (version >= 1),
   CONSTRAINT workspace_settings_value_is_object CHECK (jsonb_typeof(value) = 'object'),
   CONSTRAINT workspace_settings_note_bounded

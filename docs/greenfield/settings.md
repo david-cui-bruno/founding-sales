@@ -39,9 +39,18 @@ docs/greenfield/runbooks/*.md                      one page per alarm
 
 ## What this lane stores, and what it deliberately does not
 
-`workspace_settings` holds seven slices: the alarm thresholds, the workspace business
-zone, the supported client-version range, the holiday calendar, the postal footer,
-the production sending switch and the sending limits.
+`workspace_settings` holds five slices: the alarm thresholds, the workspace business
+zone, the supported client-version range, the postal footer and the production
+sending attestation.
+
+**The rule that decides what is in it:** a `jsonb` settings slice is for an operator
+knob that nothing joins to, nothing constrains, and nothing freezes a version of.
+Two slices were drafted here and removed before publication for failing that test —
+the holiday calendar, whose *version* every stored due instant freezes (G8's
+`workspace_holiday_calendars`, migration 0012), and the sending limits, whose
+ceilings are row-level CHECKs rather than schema maxima (G7-2's `mailbox_send_ramp`
+and `sending_domains`, migration 0010).
+`docs/decisions/g9-two-slices-that-belong-to-other-lanes.md` is the argument.
 
 Everything else 10.1 lists — state postures, calling windows, research limits and
 route-eligibility thresholds, approved templates, memberships, devices, mailboxes,
@@ -66,10 +75,12 @@ why" is a `SELECT`. `workspace_settings_current`, a partial unique index over
 
 **The key chooses the schema.** The command carries `settingKey` and an opaque
 `value`, and the server picks the validator from `SETTING_VALUE_SCHEMAS`. A client
-cannot nominate which validation applies to its own payload. It is also why 12.7's
-per-mailbox ceiling of 100 and 12.6's domain guard of 4,000 are *maxima in the
-schema*: a request that would raise either is refused with `invalid_value` and writes
-nothing.
+cannot nominate which validation applies to its own payload. It is also how the
+bounds that are relationships are held: 13.3's warning threshold must stay below its
+critical one, and a request that inverts them is refused with `invalid_value` and
+writes nothing. The bounds that are *safety* bounds — 12.7's ceiling, 12.6's guard —
+are not here at all; they are G7-2's CHECKs, because a schema binds the API and a
+constraint binds everything.
 
 **Two admins saving the same slice queue.** `pg_advisory_xact_lock` on
 `(workspace, setting key)`, taken inside the command's transaction. Without it both
@@ -108,6 +119,17 @@ paused". An `email` channel pause blocks `email_send` and nothing else; only a `
 pause or a pause over all automation reaches `dial_authorization`.
 `CHANNEL_BLOCKED_ACTION_KINDS` in `packages/domain/policy/types.ts` is that sentence,
 and `packages/domain/test/policy/policy.test.ts` proves it.
+
+## Sending caps, the ramp and domain authentication
+
+Not this lane's. G7-2's `POST /outbound/cap` sets the admin lower bound and the raise
+to 75 on `mailbox_send_ramp`; `POST /outbound/authentication` records the SPF, DKIM,
+DMARC and Postmaster facts and the per-domain enable on `sending_domains`. The
+per-domain ramp is computed from `healthy_sending_days` and never stored.
+`personal_gmail_guard_per_24h` has no route on purpose — 12.6 calls changing it a
+reviewed product-policy change — so the settings page renders it read-only. Both
+`/outbound/*` paths are admin-only with a redacted 403, so the section is gated on
+role rather than offering a control that answers 403.
 
 ## Production sending
 

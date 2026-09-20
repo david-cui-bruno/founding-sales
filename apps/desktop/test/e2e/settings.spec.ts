@@ -27,27 +27,30 @@ test('an admin sees every slice, its provenance, and an editor for each', async 
 
   await expect(page.getByTestId('heading')).toHaveText('Administration');
   await expect(page.getByTestId('setting-alert_thresholds')).toContainText('Default, never configured');
-  await expect(page.getByTestId('setting-sending_limits')).toContainText('Version 2');
-  await expect(page.getByTestId('value-sending_limits')).toBeEnabled();
-  await expect(page.getByTestId('save-sending_limits')).toBeEnabled();
+  await expect(page.getByTestId('setting-postal_footer')).toContainText('Version 2');
+  await expect(page.getByTestId('value-postal_footer')).toBeEnabled();
+  await expect(page.getByTestId('save-postal_footer')).toBeEnabled();
 
   // 16.2's two switches, read out rather than recombined.
   await expect(page.getByTestId('sending')).toContainText('release process has not enabled');
 
-  // The configuration this store does not own is a link, not a second copy.
+  // The configuration this store does not own is a link, not a second copy. The
+  // sending caps are G7-2's and the holiday calendar is G8's.
   await expect(page.getByTestId('elsewhere')).toContainText('/research/config');
+  await expect(page.getByTestId('elsewhere')).toContainText('/outbound/cap');
+  await expect(page.getByTestId('setting-sending_limits')).toHaveCount(0);
 });
 
 test('a salesperson sees the same page with every control inert and a reason', async ({ page }) => {
   server = await startSettingsTestServer(adminState({ role: 'salesperson' }));
   await page.goto(server.url);
 
-  await expect(page.getByTestId('value-sending_limits')).toBeDisabled();
-  await expect(page.getByTestId('save-sending_limits')).toBeDisabled();
-  await expect(page.getByTestId('setting-sending_limits')).toContainText('admin_only');
+  await expect(page.getByTestId('value-postal_footer')).toBeDisabled();
+  await expect(page.getByTestId('save-postal_footer')).toBeDisabled();
+  await expect(page.getByTestId('setting-postal_footer')).toContainText('admin_only');
   // Reading is not refused: a salesperson whose send was refused by a cap should be
   // able to see the cap.
-  await expect(page.getByTestId('setting-sending_limits')).toContainText('Version 2');
+  await expect(page.getByTestId('setting-postal_footer')).toContainText('Version 2');
 });
 
 test('offline is said once, at the top, and every control is inert', async ({ page }) => {
@@ -109,12 +112,19 @@ test('a refused save is shown as its code and the page is not edited optimistica
   // page has to render the refusal rather than the value that was attempted.
   await page.evaluate(async () => {
     await globalThis.callieAdmin?.saveSetting({
-      settingKey: 'sending_limits',
-      value: { perMailboxDailyCap: 99, domainRecipientsPer24h: 4000 },
+      settingKey: 'postal_footer',
+      value: {
+        organizationName: 'Somebody else',
+        addressLine: '99 Example Street',
+        locality: 'Providence',
+        regionCode: 'RI',
+        postalCode: '02903',
+        countryCode: 'US',
+      },
       changeNote: 'trying it on',
     });
   });
   await page.reload();
-  await expect(page.getByTestId('setting-sending_limits')).toContainText('Version 2');
-  await expect(page.getByTestId('value-sending_limits')).not.toContainText('99');
+  await expect(page.getByTestId('setting-postal_footer')).toContainText('Version 2');
+  await expect(page.getByTestId('value-postal_footer')).not.toContainText('99 Example Street');
 });

@@ -74,10 +74,8 @@ const LABELS: Readonly<Record<string, string>> = Object.freeze({
   alert_thresholds: 'Alarm thresholds',
   business_time_zone: 'Workspace business zone',
   client_version_range: 'Supported client versions',
-  holiday_calendar: 'Workspace holidays',
   postal_footer: 'Postal footer',
   sending_enabled: 'Production sending',
-  sending_limits: 'Sending limits',
 });
 
 /** Why a control is inert, in the order a person would want to be told. */

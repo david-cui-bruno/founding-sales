@@ -5,7 +5,6 @@ import {
   ALERT_THRESHOLD_TERRAFORM_VARIABLES,
   DEFAULT_ALERT_THRESHOLDS,
   DEFAULT_SETTING_VALUES,
-  HARD_MAILBOX_DAILY_CEILING,
   SETTING_KEYS,
 } from '@fss/contracts';
 import { withTransaction } from '../../db/queryable.ts';
@@ -13,10 +12,7 @@ import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
 import {
   alertThresholdsOf,
-  effectiveDomainRecipientGuard,
-  effectiveMailboxDailyCap,
   effectiveSendingEnabled,
-  holidayCalendarOf,
   readCurrentSettings,
   readSetting,
   readSettingHistory,
@@ -87,46 +83,47 @@ describe('workspace settings', () => {
 
   it('refuses a salesperson and writes nothing', async () => {
     const outcome = await updateSetting(salesperson, {
-      settingKey: 'sending_limits',
-      value: { perMailboxDailyCap: 10, domainRecipientsPer24h: 4000 },
+      settingKey: 'client_version_range',
+      value: { minimum: '1.0.0', maximum: '1.4.0' },
       changeNote: 'trying it on',
     });
     expect(outcome).toEqual({ ok: false, reason: 'admin_only' });
-    expect((await readSetting(admin, 'sending_limits')).version).toBe(0);
+    expect((await readSetting(admin, 'client_version_range')).version).toBe(0);
   });
 
-  it('refuses a value its key does not accept, including one that would raise a guard', async () => {
+  it('refuses a value its key does not accept, including one that breaks a bound', async () => {
     const malformed = await updateSetting(admin, {
-      settingKey: 'sending_limits',
-      value: { perMailboxDailyCap: 'ten', domainRecipientsPer24h: 4000 },
-      changeNote: 'a string is not a cap',
+      settingKey: 'alert_thresholds',
+      value: { ...DEFAULT_ALERT_THRESHOLDS, canaryStaleSeconds: 'soon' },
+      changeNote: 'a word is not a number of seconds',
     });
     expect(malformed).toEqual({ ok: false, reason: 'invalid_value' });
 
-    // 12.7's hard ceiling and 12.6's domain guard are maxima in the schema, so a
-    // request past either is malformed rather than merely refused.
-    const overCeiling = await updateSetting(admin, {
-      settingKey: 'sending_limits',
-      value: { perMailboxDailyCap: HARD_MAILBOX_DAILY_CEILING + 1, domainRecipientsPer24h: 4000 },
-      changeNote: 'past the ceiling',
+    // The bound that is a relationship rather than a range: 13.3's warning threshold
+    // must stay below its critical one, or the pair of alarms is meaningless.
+    const inverted = await updateSetting(admin, {
+      settingKey: 'alert_thresholds',
+      value: { ...DEFAULT_ALERT_THRESHOLDS, oldestJobAgeWarningSeconds: 1200 },
+      changeNote: 'warning above critical',
     });
-    expect(overCeiling).toEqual({ ok: false, reason: 'invalid_value' });
+    expect(inverted).toEqual({ ok: false, reason: 'invalid_value' });
 
-    const overGuard = await updateSetting(admin, {
-      settingKey: 'sending_limits',
-      value: { perMailboxDailyCap: null, domainRecipientsPer24h: 4001 },
-      changeNote: 'past the guard',
+    // And a key the schema simply does not know a shape for.
+    const wrongShape = await updateSetting(admin, {
+      settingKey: 'client_version_range',
+      value: { minimum: 'one', maximum: '1.4.0' },
+      changeNote: 'not a semantic version',
     });
-    expect(overGuard).toEqual({ ok: false, reason: 'invalid_value' });
+    expect(wrongShape).toEqual({ ok: false, reason: 'invalid_value' });
 
-    expect((await readSetting(admin, 'sending_limits')).version).toBe(0);
+    expect((await readSetting(admin, 'alert_thresholds')).version).toBe(0);
   });
 
   it('versions every change, supersedes the previous one and keeps the history', async () => {
     const first = await updateSetting(admin, {
-      settingKey: 'sending_limits',
-      value: { perMailboxDailyCap: 10, domainRecipientsPer24h: 4000 },
-      changeNote: 'ramp week one',
+      settingKey: 'alert_thresholds',
+      value: { ...DEFAULT_ALERT_THRESHOLDS, canaryStaleSeconds: 600 },
+      changeNote: 'the canary was noisy',
     });
     expect(first.ok).toBe(true);
     if (!first.ok) return;
@@ -134,40 +131,40 @@ describe('workspace settings', () => {
     expect(first.value.previousVersion).toBe(0);
 
     const second = await updateSetting(admin, {
-      settingKey: 'sending_limits',
-      value: { perMailboxDailyCap: 5, domainRecipientsPer24h: 2000 },
-      changeNote: 'lowered after a bounce',
+      settingKey: 'alert_thresholds',
+      value: { ...DEFAULT_ALERT_THRESHOLDS, canaryStaleSeconds: 420 },
+      changeNote: 'tightened again',
     });
     expect(second.ok).toBe(true);
     if (!second.ok) return;
     expect(second.value.current.version).toBe(2);
     expect(second.value.previousVersion).toBe(1);
 
-    const history = await readSettingHistory(admin, 'sending_limits');
+    const history = await readSettingHistory(admin, 'alert_thresholds');
     expect(history.map(entry => entry.version)).toEqual([2, 1]);
     expect(history[0]?.supersededAt).toBeNull();
     expect(history[1]?.supersededAt).not.toBeNull();
-    expect(history[1]?.changeNote).toBe('ramp week one');
+    expect(history[1]?.changeNote).toBe('the canary was noisy');
     expect(history.every(entry => entry.changedByUserId === seeded.alpha.admin.userId)).toBe(true);
 
     // At most one current version per key. The partial unique index is the invariant;
     // this asserts the command respects it rather than relying on it.
     const currentRows = await database.session.query<{ count: string }>(
       `SELECT count(*)::text AS count FROM workspace_settings
-        WHERE workspace_id = $1 AND setting_key = 'sending_limits' AND superseded_at IS NULL`,
+        WHERE workspace_id = $1 AND setting_key = 'alert_thresholds' AND superseded_at IS NULL`,
       [seeded.alpha.workspaceId],
     );
     expect(currentRows.rows[0]?.count).toBe('1');
   });
 
   it('keeps the other workspace at its default', async () => {
-    expect((await readSetting(betaAdmin, 'sending_limits')).version).toBe(0);
-    expect((await readSetting(betaAdmin, 'sending_limits')).value).toEqual(
-      DEFAULT_SETTING_VALUES.sending_limits,
+    expect((await readSetting(betaAdmin, 'alert_thresholds')).version).toBe(0);
+    expect((await readSetting(betaAdmin, 'alert_thresholds')).value).toEqual(
+      DEFAULT_SETTING_VALUES.alert_thresholds,
     );
     const beta = await updateSetting(betaAdmin, {
-      settingKey: 'sending_limits',
-      value: { perMailboxDailyCap: 25, domainRecipientsPer24h: 4000 },
+      settingKey: 'alert_thresholds',
+      value: { ...DEFAULT_ALERT_THRESHOLDS, deadJobUnresolvedSeconds: 7200 },
       changeNote: 'the other workspace',
     });
     expect(beta.ok).toBe(true);
@@ -175,7 +172,7 @@ describe('workspace settings', () => {
     // Version numbering is per workspace and per key; beta's first change is its
     // version 1 even though alpha is already on 2.
     expect(beta.value.current.version).toBe(1);
-    expect((await readSetting(admin, 'sending_limits')).version).toBe(2);
+    expect((await readSetting(admin, 'alert_thresholds')).version).toBe(2);
   });
 
   it('commits the business zone with the workspace column and refuses an unknown zone', async () => {
@@ -283,27 +280,23 @@ describe('what a stored setting means', () => {
     expect(effectiveSendingEnabled(true, DEFAULT_SETTING_VALUES.sending_enabled)).toBe(false);
   });
 
-  it('takes the lower of the ramp and the configured cap, and never exceeds the ceiling', () => {
-    const configured = { perMailboxDailyCap: 5, domainRecipientsPer24h: 4000 };
-    expect(effectiveMailboxDailyCap(35, configured)).toBe(5);
-    // An admin cannot configure their way past a ramp that has not advanced.
-    expect(effectiveMailboxDailyCap(5, { perMailboxDailyCap: 75, domainRecipientsPer24h: 4000 })).toBe(5);
-    expect(effectiveMailboxDailyCap(35, { perMailboxDailyCap: null, domainRecipientsPer24h: 4000 })).toBe(35);
-    expect(effectiveMailboxDailyCap(500, { perMailboxDailyCap: null, domainRecipientsPer24h: 4000 })).toBe(
-      HARD_MAILBOX_DAILY_CEILING,
-    );
-    expect(effectiveMailboxDailyCap(35, 'nonsense')).toBe(35);
+  it('does not own the sending caps or the domain guard', () => {
+    // 12.7's ramp is computed from healthy sending days and 12.6's guard is a
+    // reviewed policy change; both live on G7-2's `mailbox_send_ramp` and
+    // `sending_domains`, where a CHECK holds 100 and a command holds 75. A second
+    // implementation here could disagree with the constraint, and the constraint is
+    // the one that stops a send.
+    expect(SETTING_KEYS).not.toContain('sending_limits');
+    expect(Object.keys(DEFAULT_SETTING_VALUES)).not.toContain('sending_limits');
   });
 
-  it('reads the domain guard, defaulting to 12.6 s 4,000', () => {
-    expect(effectiveDomainRecipientGuard({ perMailboxDailyCap: null, domainRecipientsPer24h: 1000 })).toBe(1000);
-    expect(effectiveDomainRecipientGuard(null)).toBe(4000);
-  });
-
-  it('names the holiday calendar after the setting version that produced it', () => {
-    const calendar = holidayCalendarOf({ dates: ['2026-12-25', '2026-07-04'] }, 3);
-    expect(calendar).toEqual({ version: 'workspace.3', dates: ['2026-07-04', '2026-12-25'] });
-    expect(holidayCalendarOf('nonsense', 0)).toEqual({ version: 'workspace.0', dates: [] });
+  it('does not own the holiday calendar', () => {
+    // 11.2's business-day delay freezes the calendar *version* on to every stored
+    // due instant, so the calendar needs an immutable version and a table of its
+    // own. That is G8's `workspace_holiday_calendars` (migration 0012), and this
+    // store must not be a second answer to the same question.
+    expect(SETTING_KEYS).not.toContain('holiday_calendar');
+    expect(Object.keys(DEFAULT_SETTING_VALUES)).not.toContain('holiday_calendar');
   });
 
   it('falls back to the release thresholds when the stored value cannot be read', () => {
