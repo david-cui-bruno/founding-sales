@@ -4,6 +4,7 @@ import type { SessionQueryable } from '../../db/queryable.ts';
 import { payloadHash, seedTwoWorkspaces, type TwoWorkspaces } from './support/fixtures.ts';
 import { IDENTITY_CONSTRAINT_CASES } from './support/identityCases.ts';
 import { CRM_CONSTRAINT_CASES } from './support/crmCases.ts';
+import { POLICY_CONSTRAINT_CASES } from './support/policyCases.ts';
 
 /**
  * A failing insert for every foundation constraint.
@@ -562,9 +563,13 @@ const cases: readonly Case[] = [
   {
     constraint: 'suppression_events_one_direct_supersession',
     run: async f => {
+      // The canonical key matches the base event's on purpose: migration 0005's
+      // `suppression_events_supersession_same_key` trigger refuses a supersession
+      // that changes it, and would otherwise fire on the *first* insert here and
+      // hide the unique index this case is about.
       for (const id of ['e-first-supersession', 'e-second-supersession']) {
         await f.session.query(
-          "INSERT INTO suppression_events (workspace_id, event_id, scope, canonical_key, canonicalizer_version, source, supersedes_event_id, supersession_reason) VALUES ($1, $2, 'handle', 'x@example.test', 'v1', 'admin_supersession', $3, 'correction')",
+          "INSERT INTO suppression_events (workspace_id, event_id, scope, canonical_key, canonicalizer_version, source, supersedes_event_id, supersession_reason) VALUES ($1, $2, 'handle', 'base@example.test', 'v1', 'admin_supersession', $3, 'correction')",
           [workspace(f), id, f.baseSuppressionEventId],
         );
       }
@@ -1325,6 +1330,7 @@ const cases: readonly Case[] = [
   // migration at the same time never both edit the middle of this array.
   ...IDENTITY_CONSTRAINT_CASES,
   ...CRM_CONSTRAINT_CASES,
+  ...POLICY_CONSTRAINT_CASES,
 
 ];
 
@@ -1386,7 +1392,10 @@ describe('foundation constraints', () => {
         JOIN pg_class t ON t.oid = c.conrelid
         JOIN pg_namespace n ON n.oid = t.relnamespace
        WHERE n.nspname = 'public'
-         AND c.contype IN ('c', 'u', 'f', 'p', 't')
+         -- 'x' is the exclusion constraint migration 0005 added for state postures.
+         -- It was absent from this list until then, so nothing was uncovered by it;
+         -- leaving it out now would have let an exclusion constraint ship untested.
+         AND c.contype IN ('c', 'u', 'f', 'p', 't', 'x')
          AND t.relname <> 'schema_versions'
     `);
     const partialUniqueIndexes = await database.session.query<{ name: string }>(`

@@ -207,8 +207,13 @@ CREATE TABLE suppression_finalizations (
 -- supersession per event — as a partial unique index. This is the second half, and
 -- it has to be a trigger because a CHECK cannot read another row.
 --
--- Written as a BEFORE trigger so the refusal names this constraint rather than
--- landing as a foreign-key error later in the statement.
+-- AFTER, not BEFORE, and that is the second thing this comment is for. A BEFORE ROW
+-- trigger runs ahead of the table's own CHECK constraints, so it would have reported
+-- "the scope does not match" for a row that was really breaking
+-- `suppression_events_supersession_reason_required` — and the four existing failing-
+-- insert cases for those checks would have started naming this trigger instead. An
+-- AFTER trigger fires once the checks, the unique indexes and the foreign keys have
+-- had their say, which is the order a reader expects.
 -- ---------------------------------------------------------------------------
 CREATE FUNCTION assert_supersession_same_key() RETURNS trigger
 LANGUAGE plpgsql AS $supersession$
@@ -236,7 +241,7 @@ END
 $supersession$;
 
 CREATE TRIGGER suppression_events_supersession_same_key
-  BEFORE INSERT ON suppression_events
+  AFTER INSERT ON suppression_events
   FOR EACH ROW EXECUTE FUNCTION assert_supersession_same_key();
 
 -- ---------------------------------------------------------------------------
