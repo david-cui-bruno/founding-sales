@@ -40,6 +40,22 @@ const FROM = "TIMESTAMPTZ '2026-01-01 00:00:00+00'";
 const REVIEW = "TIMESTAMPTZ '2027-01-01 00:00:00+00'";
 
 let sequence = 0;
+
+/**
+ * A number in the NANP's reserved fictional block, 555-0100 to 555-0199.
+ *
+ * That block holds only a hundred numbers per area code, and this file needs more
+ * than a hundred distinct ones, so the area code varies and the line number stays
+ * inside the block. Every value is guaranteed unassignable; none of them reaches
+ * anybody.
+ */
+const FICTIONAL_AREA_CODES = ['401', '212', '617', '312', '415', '206', '305', '702', '503', '802'];
+function fictionalNumber(): string {
+  sequence += 1;
+  const area = FICTIONAL_AREA_CODES[Math.floor(sequence / 100) % FICTIONAL_AREA_CODES.length] ?? '401';
+  return `+1${area}555${String(100 + (sequence % 100)).padStart(4, '0')}`;
+}
+
 /** A distinct two-letter state per posture, so a case never trips the exclusion by accident. */
 const STATES = ['RI', 'MA', 'TX', 'NY', 'CA', 'CO', 'WA', 'IL', 'OH', 'GA', 'NC', 'SC', 'VA', 'MD', 'PA', 'NJ', 'CT', 'ME', 'VT', 'NH'];
 const nextState = (): string => {
@@ -90,23 +106,21 @@ async function anOpportunity(f: PolicyCaseFixture, firmId: string): Promise<stri
 }
 
 async function aRoute(f: PolicyCaseFixture, firmId: string): Promise<string> {
-  sequence += 1;
   const { rows } = await f.session.query<{ id: string }>(
     `INSERT INTO phone_routes (workspace_id, firm_id, e164, source, retrieved_at, association_confidence,
                                technical_validation, eligibility, eligibility_policy_version)
      VALUES ($1, $2, $3, 'salesperson', now(), 0.900, 'passed', 'usable', 'route-policy.1')
      RETURNING id`,
-    [workspace(f), firmId, `+1401555${String(2000 + (sequence % 8000)).padStart(4, '0')}`],
+    [workspace(f), firmId, fictionalNumber()],
   );
   return rows[0]?.id ?? '';
 }
 
 async function anIdentity(f: PolicyCaseFixture): Promise<string> {
-  sequence += 1;
   const { rows } = await f.session.query<{ id: string }>(
     `INSERT INTO calling_identities (workspace_id, owner_user_id, e164, verification_status, enabled)
      VALUES ($1, $2, $3, 'verified', true) RETURNING id`,
-    [workspace(f), salesperson(f), `+1401555${String(1000 + (sequence % 900)).padStart(4, '0')}`],
+    [workspace(f), salesperson(f), fictionalNumber()],
   );
   return rows[0]?.id ?? '';
 }
@@ -214,7 +228,7 @@ async function aManualSuppression(f: PolicyCaseFixture, eventId: string): Promis
   await f.session.query(
     `INSERT INTO suppression_events (workspace_id, event_id, scope, canonical_key, canonicalizer_version, source, actor_user_id)
      VALUES ($1, $2, 'handle', $3, 'e164-lower.1', 'salesperson_manual', $4)`,
-    [workspace(f), eventId, `+1401555${String(3000 + (sequence += 1)).slice(0, 4)}`, salesperson(f)],
+    [workspace(f), eventId, fictionalNumber(), salesperson(f)],
   );
   return eventId;
 }

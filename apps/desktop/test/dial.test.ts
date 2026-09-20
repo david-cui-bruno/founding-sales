@@ -206,7 +206,7 @@ describe('the tel: handoff', () => {
     const { driver, opened } = workingDriver();
     const { api } = workingApi({
       consume: async () =>
-        await Promise.resolve({ ok: true as const, consumed: { ...CONSUMED, telUri: 'tel:+14015559999' } }),
+        await Promise.resolve({ ok: true as const, consumed: { ...CONSUMED, telUri: 'tel:+14015550199' } }),
     });
     const handoff = createDialHandoff({ driver, api });
     await handoff.checkSetup();
