@@ -137,13 +137,9 @@ export const CLASSIFICATION_CONSTRAINT_CASES: readonly ClassificationCase[] = [
       ),
   },
   {
+    // Also the rule "never a date suffix": `claude-haiku-4-5-20251001` is not one of
+    // the two ids, so the allow-list refuses it without a second constraint.
     constraint: 'classifier_settings_model_known',
-    run: async f => await settings(f, 'model_name', "'claude-3-opus'"),
-  },
-  {
-    // The two allowed ids are complete as they are; a remembered date suffix is a
-    // refusal at the provider rather than a pin.
-    constraint: 'classifier_settings_model_has_no_date_suffix',
     run: async f => await settings(f, 'model_name', "'claude-haiku-4-5-20251001'"),
   },
   {

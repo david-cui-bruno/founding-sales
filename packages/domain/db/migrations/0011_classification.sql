@@ -97,10 +97,13 @@ CREATE INDEX mail_message_classifications_uncertain_deterministic
 -- costs a retry ladder; and the adapter knows per-model facts — Claude Haiku 4.5
 -- rejects `output_config.effort`, Claude Opus 5 takes the server-side `fallbacks`
 -- parameter — that it can only know about models it has been told about.
---
--- `classifier_settings_model_has_no_date_suffix` is the rule the model
--- documentation states: the ids above are complete as they are, and a remembered
--- `-20251001` suffix is a refusal at the provider rather than a pin.
+-- The allow-list is also what enforces "never a date suffix": the ids above are
+-- complete as they are, and a remembered `claude-haiku-4-5-20251001` is a refusal at
+-- the provider rather than a pin. A separate CHECK for the suffix would be a
+-- constraint that can never be the *sole* reason a row is refused, which makes a
+-- failing-insert test depend on the order PostgreSQL happens to evaluate CHECKs in.
+-- `CLASSIFIER_MODELS` in `packages/domain/classification/types.ts` carries the same
+-- rule on the TypeScript side, with its own assertion.
 --
 -- `enabled = false` is the workspace-level half of the classifier's off switch; the
 -- process-level half is the `FSS_CLASSIFIER` environment variable the worker reads.
@@ -122,8 +125,6 @@ CREATE TABLE classifier_settings (
     REFERENCES workspace_memberships (workspace_id, user_id),
   CONSTRAINT classifier_settings_model_known
     CHECK (model_name IN ('claude-opus-5', 'claude-haiku-4-5')),
-  CONSTRAINT classifier_settings_model_has_no_date_suffix
-    CHECK (model_name !~ '-20[0-9]{6}$'),
   CONSTRAINT classifier_settings_effort_known
     CHECK (effort IN ('low', 'medium', 'high', 'xhigh', 'max')),
   CONSTRAINT classifier_settings_output_bounded

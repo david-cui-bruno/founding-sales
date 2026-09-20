@@ -102,7 +102,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function readCallbackProposal(value: unknown): CallbackProposal | null | 'invalid' {
-  if (value === null || value === undefined) return null;
+  if (value === null) return null;
+  // Absent is not the same as null. Every field in the schema is `required`, so a
+  // missing one is a model that did not answer the question it was asked, and the
+  // reader is where that becomes `schema_invalid` rather than a quiet default.
+  if (value === undefined) return 'invalid';
   if (!isRecord(value)) return 'invalid';
   const local = value['local_date_time'];
   const zone = value['time_zone'];
