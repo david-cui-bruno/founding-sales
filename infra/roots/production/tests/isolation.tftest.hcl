@@ -55,6 +55,18 @@ mock_provider "aws" {
 
 mock_provider "google" {
   override_during = plan
+
+  mock_resource "google_service_account" {
+    defaults = {
+      email = "fss-prod-gmail-push@fss-prod-example.iam.gserviceaccount.com"
+    }
+  }
+
+  mock_resource "google_pubsub_topic" {
+    defaults = {
+      id = "projects/fss-prod-example/topics/fss-prod-gmail-push"
+    }
+  }
 }
 
 variables {
@@ -162,6 +174,41 @@ run "a_rehearsal_deployment_role_is_refused" {
   }
 
   expect_failures = [var.deployment_role_name]
+}
+
+run "gmail_push_wires_the_audience_the_webhook_must_require" {
+  command = plan
+
+  variables {
+    enable_gmail_push = true
+    gcp_project_id    = "fss-prod-example"
+  }
+
+  assert {
+    condition     = output.gmail_push_audience == "https://api.example.invalid/integrations/gmail/push"
+    error_message = "The audience the API must require is derived from the API hostname and published as an output."
+  }
+
+  assert {
+    condition     = module.stack.api_environment["FSS_GMAIL_PUSH_AUDIENCE"] == output.gmail_push_audience
+    error_message = "The container must be told the same audience the subscription mints tokens for."
+  }
+
+  assert {
+    condition     = module.stack.api_environment["FSS_GMAIL_PUSH_SERVICE_ACCOUNT"] != ""
+    error_message = "The container must be told which service-account email to accept."
+  }
+}
+
+run "gmail_push_cannot_be_turned_on_without_a_project" {
+  command = plan
+
+  variables {
+    enable_gmail_push = true
+    gcp_project_id    = ""
+  }
+
+  expect_failures = [var.gcp_project_id]
 }
 
 run "only_the_load_balancer_faces_the_internet" {
