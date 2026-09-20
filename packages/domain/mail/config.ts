@@ -56,6 +56,7 @@ export async function resolveGmailOAuthConfig(
     redirectUri: config.redirectUri,
     authorizationEndpoint: config.authorizationEndpoint,
     tokenEndpoint: config.tokenEndpoint,
+    revocationEndpoint: config.revocationEndpoint,
     apiBaseUrl: config.apiBaseUrl,
   };
 }

@@ -245,6 +245,7 @@ export async function createMailWorld(options: MailWorldOptions = {}): Promise<M
       redirectUri: config.redirectUri,
       authorizationEndpoint: config.authorizationEndpoint,
       tokenEndpoint: config.tokenEndpoint,
+      revocationEndpoint: config.revocationEndpoint,
       apiBaseUrl: config.apiBaseUrl,
     },
     cipher,

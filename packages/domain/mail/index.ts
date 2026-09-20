@@ -74,6 +74,20 @@ export {
 } from './gmailClientFake.ts';
 
 export {
+  DEFAULT_MAX_BODY_CHARACTERS,
+  classifyStatus,
+  createGmailHttpClient,
+  httpFetch,
+  readAttachmentReferences,
+  readBodyText,
+  type GmailFailure,
+  type GmailHttpOptions,
+  type HttpFetch,
+  type HttpRequest,
+  type HttpResponse,
+} from './gmailClientHttp.ts';
+
+export {
   ENVELOPE_ALGORITHM,
   EnvelopeError,
   envelopeCipher,
@@ -138,10 +152,12 @@ export {
 
 export {
   MAILBOX_HOLD_BLOCKS,
+  MAIL_RECONCILE_INTERVAL_MINUTES,
   advanceCursor,
   advanceGeneration,
   insertOrReviveMailbox,
   listConnectedMailboxes,
+  listMailboxesDueForSync,
   mailboxAutomationBlocked,
   markMailboxDisconnected,
   openMailboxHold,
@@ -155,6 +171,7 @@ export {
   setSyncState,
   type CursorOutcome,
   type InsertMailboxInput,
+  type MailboxDueRow,
 } from './mailboxes.ts';
 
 export {

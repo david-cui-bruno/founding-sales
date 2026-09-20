@@ -57,6 +57,7 @@ export interface GmailOAuthConfig {
   readonly redirectUri: string;
   readonly authorizationEndpoint: string;
   readonly tokenEndpoint: string;
+  readonly revocationEndpoint: string;
   readonly apiBaseUrl: string;
 }
 
