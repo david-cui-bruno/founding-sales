@@ -114,12 +114,14 @@ jobs:
       - name: The assumed identity is the rehearsal role and nothing else
         run: |
           set -euo pipefail
-          identity="$(aws sts get-caller-identity --query Arn --output text)"
-          echo "identity: $identity"
-          case "$identity" in
-            *fss-rh-*) : ;;
-            *) echo "::error::this workflow assumed $identity, which is not an fss-rh- role"; exit 1 ;;
-          esac
+          # The plan below carries `-var=assume_deployment_role=false`: this session
+          # already *is* `fss-rh-deploy`, and the provider must not ask STS to assume
+          # the role it already holds (that would need the role to trust itself, which
+          # Appendix G 39 says it must not). The flag therefore makes the ambient
+          # credentials the thing the apply acts as, so they are named and judged
+          # here first. An ARN is a public identifier; the script prints it and refuses
+          # anything that is not an assumed-role session of the role named.
+          infra/scripts/rehearsal-caller-identity.sh fss-rh-deploy
 
       - name: Initialize the registry backend
         env:
@@ -150,7 +152,12 @@ jobs:
       - name: Plan
         run: |
           set -euo pipefail
-          terraform -chdir=infra/roots/rehearsal-registry plan -input=false -lock-timeout=5m -out=rehearsal-registry.tfplan
+          # `assume_deployment_role=false`: the root defaults to assuming
+          # `fss-rh-deploy`, which is right on a laptop and wrong here, because the
+          # step above has already made this session that role. The previous step
+          # proved it is. The apply below applies this saved plan, so the flag is on
+          # the plan alone and the two cannot disagree.
+          terraform -chdir=infra/roots/rehearsal-registry plan -input=false -lock-timeout=5m -var=assume_deployment_role=false -out=rehearsal-registry.tfplan
           terraform -chdir=infra/roots/rehearsal-registry show -json rehearsal-registry.tfplan > rehearsal-registry.plan.json
 
       - name: The plan guard, which is what reads the plan nobody else can

@@ -49,6 +49,16 @@ The scoping on `fss-rh-deploy` is what makes Appendix G scenario 39 true in the 
 
 Until those roles exist, `terraform plan` will fail at provider configuration. That is the intended failure: neither root will act as an unconstrained principal.
 
+**Who does the assuming, and the one flag that changes it.** Every root takes `assume_deployment_role`, a boolean **defaulting to `true`**: the provider assumes `deployment_role_name` before it makes a call. That is what your local applies do and there is nothing to pass — sections 2.2 and 3.2 are unchanged.
+
+CI is the exception. `aws-actions/configure-aws-credentials` has already assumed `fss-rh-deploy` through GitHub OIDC before Terraform starts, so the workflow's session **is** the role; assuming it again is role chaining onto the same role, which needs `fss-rh-deploy` to trust itself. It does not, and it must not — its trust is the OIDC subject alone, which is the whole boundary. So both rehearsal workflows pass `-var=assume_deployment_role=false`, and each one first runs
+
+```bash
+infra/scripts/rehearsal-caller-identity.sh fss-rh-deploy
+```
+
+which prints `aws sts get-caller-identity --query Arn` and refuses anything that is not `arn:aws:sts::326255650484:assumed-role/fss-rh-deploy/<session>` — a user, a different role, or a role whose name merely begins the same way. The flag says "use the credentials you already have"; that script is what makes sure they are the right ones. The default stays `true` in all three roots so that a forgotten flag is an `sts:AssumeRole` refusal rather than an apply running as whatever credential happened to be in the environment. `docs/decisions/g12e-the-provider-does-not-reassume-its-own-session.md`.
+
 ### 1.2 The DNS zone and the ACM certificates
 
 1. Decide the production API hostname (`api_hostname`) and the rehearsal hostname. They must differ.
@@ -124,7 +134,7 @@ The workflow needs one more `rehearsal` environment secret than the release work
 infra/scripts/rehearsal-registry-guard.sh commands
 ```
 
-**If the *plan* is refused at provider configuration:** all three roots' `providers.tf` carry an `assume_role` block, so Terraform assumes `fss-rh-deploy` a second time from the session the workflow already holds as `fss-rh-deploy`. Role chaining onto the same role needs that role's trust policy to admit itself. The release rehearsal has exactly the same shape, so if this fails, so will that; the fix is a trust-policy statement allowing `arn:aws:iam::326255650484:role/fss-rh-deploy` to assume itself, not a change to this workflow.
+**The plan is no longer a second assumption of the role this run already holds.** G12d predicted that it would be, and it was: all three roots' `providers.tf` carried an unconditional `assume_role` block, so Terraform asked STS to assume `fss-rh-deploy` from a session that already was `fss-rh-deploy`, and the plan — not the init — was refused. **The answer is not a trust policy that admits the role to itself**, which would turn Appendix G 39's scoping into a convention. The `assume_role` block is conditional on `assume_deployment_role` (section 1.1), this workflow plans with `-var=assume_deployment_role=false`, and the step before it runs `infra/scripts/rehearsal-caller-identity.sh fss-rh-deploy`, which prints the session ARN and refuses anything that is not an assumed-role session of that role. If a plan is still refused at provider configuration, read that printed ARN first: it names the principal the run actually has.
 
 **If `init` is refused:** `fss-rh-deploy`'s state-bucket grant may be scoped to `fss/greenfield/rehearsal/*`, the per-run space, which excludes this root's key by construction — check that the role allows `s3:GetObject`/`s3:PutObject` on `arn:aws:s3:::callie-sourcing-tfstate-326255650484/fss/greenfield/rehearsal-registry/terraform.tfstate` (and on the same key plus `.tflock`, since `use_lockfile = true`), `s3:ListBucket` on `arn:aws:s3:::callie-sourcing-tfstate-326255650484` for that prefix, `dynamodb:GetItem`/`PutItem`/`DeleteItem` on `arn:aws:dynamodb:us-east-1:326255650484:table/callie-sourcing-tflock` for the lock items `callie-sourcing-tfstate-326255650484/fss/greenfield/rehearsal-registry/terraform.tfstate` and `…-md5`, and `kms:Decrypt`/`Encrypt`/`GenerateDataKey` on the state key if one is set.
 
@@ -142,7 +152,7 @@ and reports **no changes** to either repository. **If a production plan ever pro
 
 ### 2.2 The production repositories — the one use of `-target`
 
-Unlike 2.1, this one **is** a local command. `fss-prod-deploy` is trusted by your admin principal; `fss-rh-deploy` is not trusted by anything but the `rehearsal` environment, which is why the rehearsal registry apply above is a workflow run and this is not.
+Unlike 2.1, this one **is** a local command. `fss-prod-deploy` is trusted by your admin principal; `fss-rh-deploy` is not trusted by anything but the `rehearsal` environment, which is why the rehearsal registry apply above is a workflow run and this is not. Nothing here passes `assume_deployment_role`: its default is `true`, and the provider assuming `fss-prod-deploy` on your behalf is exactly what should happen when a person runs this.
 
 ```bash
 # First apply: create the registries only.
@@ -174,6 +184,10 @@ The same digests are then pushed to `fss-rh-api` and `fss-rh-worker` so the rehe
 
 A release that touches schema, sending, suppression, Gmail, restore or job fencing runs the full recovery drill in rehearsal before production sees it (spec 16.2). The rehearsal root deploys **the exact digests proposed for production**.
 
+**This is a workflow run, not a command you type.** `fss-rh-deploy` is assumable only from the `rehearsal` environment (section 1.1), so the commands below are what `.github/workflows/greenfield-release.yml` runs, written out so you can read them; typed on your Mac they are refused `sts:AssumeRole`, and that refusal is the boundary working. Dispatch the workflow instead: `docs/greenfield/release.md` section 3.
+
+Two differences between what the workflow runs and what is written here. It passes **`-var="assume_deployment_role=false"`** on the apply and on the teardown's destroy, because its session already *is* `fss-rh-deploy` and the provider must not assume the role it already holds (section 1.1); and it runs `infra/scripts/rehearsal-caller-identity.sh fss-rh-deploy` first, which prints the session ARN and refuses anything that is not an assumed-role session of that role. Both appear in the credential-free plan every pull request prints.
+
 ```bash
 cd infra/roots/rehearsal
 RUN_ID=$(date -u +%Y%m%d%H%M)
@@ -183,6 +197,7 @@ terraform init -reconfigure \
   -backend-config="kms_key_id=<state key arn>"
 
 terraform plan -out=rehearsal.tfplan \
+  -var="assume_deployment_role=false" \
   -var="name_prefix=fss-rh-${RUN_ID}" \
   -var="certificate_arn=<rehearsal acm arn>" \
   -var="api_hostname=<rehearsal hostname>" \
@@ -199,8 +214,10 @@ terraform apply rehearsal.tfplan
 Run the Appendix G scenarios and `docs/greenfield/restore-drill.md` here. Then tear the run down:
 
 ```bash
-terraform destroy -var="name_prefix=fss-rh-${RUN_ID}" ...same vars...
+terraform destroy -var="assume_deployment_role=false" -var="name_prefix=fss-rh-${RUN_ID}" ...same vars...
 ```
+
+`infra/scripts/rehearsal-teardown.sh` is what the workflow runs, and it repeats the caller-identity check before the destroy: the teardown step runs on `always()`, so it cannot assume the earlier step was reached. An identity that is not `fss-rh-deploy` stops the teardown with the environment still standing, which is the cheaper mistake.
 
 Teardown caveat: the rehearsal journal bucket uses **GOVERNANCE** object lock with a one-day retention. Objects written during the run refuse deletion until that day passes, so a same-day `destroy` leaves the bucket behind. Either wait a day, or have the rehearsal role carry `s3:BypassGovernanceRetention` scoped to `fss-rh-*` buckets only. Do not put that permission on the production role.
 
@@ -222,6 +239,8 @@ terraform plan -out=production.tfplan \
 
 terraform apply production.tfplan
 ```
+
+`assume_deployment_role` is not in that list and must not be: its default is `true`, so the provider assumes `fss-prod-deploy` for you, which is the whole point of a local apply. The flag exists for a session that has *already* assumed its role, which is CI and never you (section 1.1). Passing `false` here would apply as your own admin principal rather than as the scoped deployment role, and nothing in the plan would say so.
 
 `google_hosted_domain` defaults to `usecallie.com` and needs no `-var`; pass one only if the Workspace domain changes. An empty value is refused by variable validation at the root and again in the stack module, because an empty `hd` restriction admits every Google account there is.
 
@@ -346,7 +365,7 @@ A freshly applied stack will show several alarms in `INSUFFICIENT_DATA` until th
 | Change an alarm threshold | the thresholds are variables in `infra/modules/alerts`; surface the one you need in the root and apply. Spec 13.3 says thresholds are configuration versioned with the release. |
 | Rotate a secret value | `aws secretsmanager put-secret-value`, then `--force-new-deployment`. Terraform is not involved. |
 | Add an alert recipient | append to `alert_emails`, apply, then confirm the subscription. |
-| Tear down a rehearsal run | `terraform destroy` in the rehearsal root with the same `name_prefix`; mind the object-lock caveat in 3.1. |
+| Tear down a rehearsal run | The release workflow does it on `always()`, through `infra/scripts/rehearsal-teardown.sh`: caller-identity check, then `terraform destroy` with the same `name_prefix` and `assume_deployment_role=false`. Mind the object-lock caveat in 3.1. |
 
 Never run `terraform destroy` in the production root. Deletion protection on the database and the load balancer will stop it part-way and leave the stack half-removed, which is worse than either state.
 
@@ -360,3 +379,4 @@ Every statement about resource behaviour here comes from the Terraform schema an
 4. The exact IAM policy text the two deployment roles need. Section 1.1 states the shape and the condition; the statement list will need one round of least-privilege iteration against a real plan.
 5. **Whether `fss-rh-deploy` can read the RDS-managed master secret.** The release workflow assembles the rehearsal database URL in the job from the run's outputs plus `secretsmanager:GetSecretValue` on `database_master_secret_arn` (`docs/decisions/g12c-the-rehearsal-database-url-is-derived.md`). RDS names that secret `rds!db-<id>`, which does **not** begin `fss-rh-`, so a policy scoped purely by name prefix will refuse it. Allow `secretsmanager:GetSecretValue` and `kms:Decrypt` on the specific secret the rehearsal root outputs — not on `*` — or the suite step fails with an `AccessDenied` and no connection string.
 6. Whether `fss-rh-deploy` may create the two durable repositories in `infra/roots/rehearsal-registry`. It should: the names are `fss-rh-api` and `fss-rh-worker` and the condition is on the resource name. It is one apply, and it is the first thing in section 2.
+7. **That a CI plan with `assume_deployment_role=false` reaches AWS at all.** With the flag off the provider has no `assume_role` block, which is the ordinary configuration for a process using ambient credentials — but nothing here has been run. The first workflow run is the proof, and the caller-identity step immediately above the plan prints the session ARN, so a failure at provider configuration can be read rather than guessed. The provider version this rests on is `hashicorp/aws` v5.100.0 under `~> 5.60`; `docs/decisions/g12e-the-provider-does-not-reassume-its-own-session.md` has the schema evidence and what to re-check if the roots ever move to v6.

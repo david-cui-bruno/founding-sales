@@ -412,6 +412,7 @@ export const SCENARIOS: readonly Scenario[] = Object.freeze([
       'infra/scripts/offline-gate.sh',
       'infra/scripts/rehearsal-prefix-guard.sh',
       'infra/scripts/rehearsal-registry-guard.sh',
+      'infra/scripts/rehearsal-caller-identity.sh',
       '.github/workflows/greenfield-rehearsal-registry.yml',
     ),
     trap: 'Two plans that differ in every value are isolated by accident; an offline plan cannot prove an IAM boundary; and a workflow holding the role proves nothing about the plan it applies.',

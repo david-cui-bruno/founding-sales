@@ -35,6 +35,14 @@ rehearsal_require_prefix "$PREFIX"
 JOURNAL_BUCKET="${FSS_REHEARSAL_JOURNAL_BUCKET:-${PREFIX}-suppression-journal}"
 rehearsal_refuse_production_arguments "$JOURNAL_BUCKET"
 
+# The destroy below runs with `-var=assume_deployment_role=false`, because this
+# session already is `fss-rh-deploy` and the provider must not assume the role it
+# already holds. That flag hands the question of *which* principal this destroy is to
+# the ambient credentials, so it is answered before anything is deleted: an identity
+# that is not an assumed-role session of `fss-rh-deploy` stops the teardown here, with
+# the environment still standing, rather than issuing deletes as somebody else.
+rehearsal_require_deployment_session "${FSS_REHEARSAL_DEPLOYMENT_ROLE:-fss-rh-deploy}"
+
 rehearsal_log "1/3 deleting the restored database instance the drill created"
 rehearsal_aws rds delete-db-instance \
   --db-instance-identifier "${PREFIX}-pg-restored" \
@@ -62,6 +70,7 @@ fi
 
 rehearsal_log "3/3 destroying the rehearsal root"
 rehearsal_terraform destroy -auto-approve -input=false \
+  "$REHEARSAL_NO_ASSUME_VAR" \
   -var="name_prefix=${PREFIX}"
 
 rehearsal_write_report "teardown.txt" "prefix=$PREFIX destroyed=true"

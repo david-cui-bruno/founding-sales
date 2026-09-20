@@ -58,9 +58,16 @@ REGISTRY_REPOSITORIES='fss-rh-api fss-rh-worker'
 
 # The commands the apply workflow runs, in order. Account-specific values are shown as
 # the name of the thing that supplies them, never as the value.
+#
+# The plan carries `-var=assume_deployment_role=false` because the run's session is
+# already `fss-rh-deploy` and the provider must not ask STS to assume the role it
+# already holds — the refusal G12d could only predict. The line before it is what makes
+# that flag safe: the session is named and judged before Terraform is given it
+# (`docs/decisions/g12e-the-provider-does-not-reassume-its-own-session.md`).
 registry_command_plan() {
+  rehearsal_plan "infra/scripts/rehearsal-caller-identity.sh fss-rh-deploy"
   rehearsal_plan "terraform -chdir=infra/roots/rehearsal-registry init -input=false -backend-config=backend.hcl <plus -backend-config=kms_key_id=… when the FSS_REHEARSAL_STATE_KMS_KEY_ARN environment secret is set>"
-  rehearsal_plan "terraform -chdir=infra/roots/rehearsal-registry plan -input=false -lock-timeout=5m -out=rehearsal-registry.tfplan"
+  rehearsal_plan "terraform -chdir=infra/roots/rehearsal-registry plan -input=false -lock-timeout=5m -var=assume_deployment_role=false -out=rehearsal-registry.tfplan"
   rehearsal_plan "terraform -chdir=infra/roots/rehearsal-registry show -json rehearsal-registry.tfplan > rehearsal-registry.plan.json"
   rehearsal_plan "infra/scripts/rehearsal-registry-guard.sh plan rehearsal-registry.plan.json"
   rehearsal_plan "terraform -chdir=infra/roots/rehearsal-registry apply -input=false -lock-timeout=5m rehearsal-registry.tfplan # only when apply=true"
