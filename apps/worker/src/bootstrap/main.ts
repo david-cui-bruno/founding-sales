@@ -2,6 +2,13 @@ import pg from 'pg';
 import type { QueryResultRowLike, SessionQueryable } from '@fss/domain/db';
 import { HandlerRegistry, canaryHandler, createCloudWatchSink, loadCloudWatchTransport } from '@fss/domain/jobs';
 import { WORKER_EXIT_CODES } from '../index.ts';
+import {
+  classifyHandlers,
+  classifyReplySource,
+  classifyWorkerOptions,
+  describeClassifier,
+  type ClassifyWorkerOptions,
+} from '../handlers/classify.ts';
 import { mailHandlers } from '../handlers/mail.ts';
 import { researchHandlers } from '../handlers/research.ts';
 import { suppressionFinalizeJobHandler } from '../handlers/suppressionFinalize.ts';
@@ -35,13 +42,23 @@ import { WorkerStartupRefusal, startWorker } from './worker.ts';
  * inconsistency. A source only inserts rows: with no mailboxes connected it finds
  * nothing, and with mailboxes connected it keeps the queue truthful about what is
  * owed whether or not this image can claim it.
+ *
+ * `classify.reply` (G7b) follows the same shape with one difference worth naming:
+ * its adapter is built here, from `FSS_LLM_CLASSIFIER_API_KEY`, because there is
+ * exactly one secret and no second configuration object to review. A deployment
+ * without the key registers no handler; a deployment with `FSS_CLASSIFIER=off`
+ * registers it and each job records a `disabled` attempt having sent nothing.
  */
-function registerHandlers(registry: HandlerRegistry): HandlerRegistry {
+function registerHandlers(
+  registry: HandlerRegistry,
+  classifier: ClassifyWorkerOptions | undefined,
+): HandlerRegistry {
   registry.register(canaryHandler());
   registry.register(suppressionFinalizeJobHandler());
   registry.register(todayBuildJobHandler());
   for (const handler of researchHandlers({ providers: {} })) registry.register(handler);
   for (const handler of mailHandlers(undefined)) registry.register(handler);
+  for (const handler of classifyHandlers(classifier)) registry.register(handler);
   return registry;
 }
 
@@ -121,7 +138,12 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
     return WORKER_EXIT_CODES.ok;
   }
 
-  log.log('info', 'worker_configuration', describeWorkerConfig(config));
+  // Lane G7b. Absent unless the deployment injected `FSS_LLM_CLASSIFIER_API_KEY`,
+  // in which case `classify.reply` stays unclaimed in the queue; the source still
+  // runs, so the backlog is truthful about what is owed. `describeClassifier` says
+  // whether a key is configured and never what it is.
+  const classifier = await classifyWorkerOptions(environment);
+  log.log('info', 'worker_configuration', { ...describeWorkerConfig(config), ...describeClassifier(classifier) });
 
   const sink = await createSink(config, log);
   // One connection for the scheduler's advisory lock, one per runner slot, one for the
@@ -137,8 +159,8 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
         runners: sessions.slice(1, 1 + config.concurrency),
         metrics: sessions[1 + config.concurrency] as SessionQueryable,
       },
-      registry: registerHandlers(new HandlerRegistry()),
-      sources: [canarySource(), todayBuildSource(), ...mailSources()],
+      registry: registerHandlers(new HandlerRegistry(), classifier),
+      sources: [canarySource(), todayBuildSource(), ...mailSources(), classifyReplySource()],
       sink,
       log,
     });

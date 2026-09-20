@@ -17,6 +17,8 @@ import { RESEARCH_PATHS, routeResearch } from './research.ts';
 import { GMAIL_PATHS, routeGmail } from './gmail.ts';
 import { PUBSUB_PATHS, routePubSub } from './pubsub.ts';
 import { MESSAGE_PATHS, routeMessages } from './messages.ts';
+// Lane G7b's reply cards and the classifier's configuration.
+import { REPLY_PATHS, routeReplies } from './replies.ts';
 import { SEARCH_PATHS, routeSearch } from './search.ts';
 // Lane G4's policy, suppression and dialing surface.
 import { CALLBACK_PATHS, routeCallbacks } from './callbacks.ts';
@@ -153,6 +155,12 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     moduleOf('gmail', { paths: GMAIL_PATHS }, routeGmail, routing),
     moduleOf('gmail-push', { paths: PUBSUB_PATHS }, routePubSub, routing),
     moduleOf('messages', { paths: MESSAGE_PATHS }, routeMessages, routing),
+    // Lane G7b's reply cards (8.3). Exact paths, and `/replies/settings` is
+    // separate from `/replies/settings/update` for the reason the two snooze paths
+    // are separate from `/today`: a read and a command under one prefix would let
+    // one claim answer for both, and the registry can only promise about the paths
+    // it was told.
+    moduleOf('replies', { paths: REPLY_PATHS }, routeReplies, routing),
     // Lane G6's Today list. Exact paths, and two modules rather than one: the list
     // and the expansion are reads, the two snooze paths are commands with receipts,
     // and a `/today` prefix would have let one claim answer for both. The registry
