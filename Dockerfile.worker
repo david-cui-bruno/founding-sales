@@ -64,6 +64,9 @@ COPY apps/worker/src apps/worker/src
 COPY packages/domain/db packages/domain/db
 COPY packages/domain/jobs packages/domain/jobs
 COPY packages/domain/src packages/domain/src
+COPY packages/domain/crm packages/domain/crm
+COPY packages/domain/policy packages/domain/policy
+COPY packages/domain/suppression packages/domain/suppression
 COPY packages/contracts/src packages/contracts/src
 
 # The test harness is never in the image: it starts a PostgreSQL cluster.

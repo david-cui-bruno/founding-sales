@@ -2,6 +2,7 @@ import pg from 'pg';
 import type { QueryResultRowLike, SessionQueryable } from '@fss/domain/db';
 import { HandlerRegistry, canaryHandler, createCloudWatchSink, loadCloudWatchTransport } from '@fss/domain/jobs';
 import { WORKER_EXIT_CODES } from '../index.ts';
+import { suppressionFinalizeJobHandler } from '../handlers/suppressionFinalize.ts';
 import { canarySource } from '../scheduler/sources.ts';
 import { ConfigError, describeWorkerConfig, readWorkerConfig, type WorkerConfig } from './config.ts';
 import { createLogger, errorFields, type Logger } from './log.ts';
@@ -99,7 +100,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
         runners: sessions.slice(1, 1 + config.concurrency),
         metrics: sessions[1 + config.concurrency] as SessionQueryable,
       },
-      registry: new HandlerRegistry().register(canaryHandler()),
+      registry: new HandlerRegistry().register(canaryHandler()).register(suppressionFinalizeJobHandler()),
       sources: [canarySource()],
       sink,
       log,

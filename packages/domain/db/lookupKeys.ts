@@ -104,6 +104,37 @@ export const FOUNDATION_LOOKUP_KEYS = {
     ['workspace_id', 'id'],
     ['workspace_id', 'event_kind', 'dedupe_key'],
   ],
+
+  // Migration 0006 (lane G4). `suppression_finalizations` is keyed by the event it
+  // decides rather than by an id of its own: there is one decision per event, and
+  // making that the primary key is what lets the correction and the finalizer race
+  // for it with a single insert.
+  //
+  // `dial_tickets(workspace_id, command_id)` and `call_logs(workspace_id,
+  // command_id)` are the command-replay keys of 5.3. The call log's column is
+  // nullable — a call recorded by a job carries no command id — which a unique
+  // index treats as distinct and a lookup by it simply never matches.
+  //
+  // Deliberately absent: `calling_windows_one_current`, which is partial, and the
+  // posture exclusion constraint, which is not a unique index at all.
+  state_postures: [
+    ['workspace_id', 'id'],
+    ['workspace_id', 'state', 'revision'],
+  ],
+  calling_windows: [
+    ['workspace_id', 'id'],
+    ['workspace_id', 'version'],
+  ],
+  suppression_finalizations: [['workspace_id', 'event_id']],
+  dial_tickets: [
+    ['workspace_id', 'id'],
+    ['workspace_id', 'command_id'],
+  ],
+  call_logs: [
+    ['workspace_id', 'id'],
+    ['workspace_id', 'command_id'],
+  ],
+  callbacks: [['workspace_id', 'id']],
 } as const satisfies Readonly<Record<string, readonly (readonly ['workspace_id', ...string[]])[]>>;
 
 /** A table a scoped repository may read. `workspaces`, `users` and `heartbeats` are not scoped rows. */

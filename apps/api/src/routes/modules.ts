@@ -13,6 +13,13 @@ import { routeMerges } from './merges.ts';
 import { routeOpportunities } from './opportunities.ts';
 import { routePipeline } from './pipeline.ts';
 import { SEARCH_PATHS, routeSearch } from './search.ts';
+// Lane G4's policy, suppression and dialing surface.
+import { CALLBACK_PATHS, routeCallbacks } from './callbacks.ts';
+import { CALL_PATHS, routeCalls } from './calls.ts';
+import { DIAL_PATHS, routeDial } from './dial.ts';
+import { PAUSE_PATHS, routePauses } from './pauses.ts';
+import { POSTURE_PATHS, routePostures } from './postures.ts';
+import { SUPPRESSION_PATHS, routeSuppressions } from './suppressions.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
 /**
@@ -112,5 +119,16 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     moduleOf('search', { paths: SEARCH_PATHS }, routeSearch, routing),
     moduleOf('import', { paths: IMPORT_PATHS }, routeImport, routing),
     moduleOf('export', { paths: EXPORT_PATHS }, routeExport, routing),
+    // Lane G4's policy, suppression and dialing surface. Exact paths throughout, for
+    // the reason above. `/dial/authorize` and `/dial/consume` are declared separately
+    // rather than as a `/dial` prefix because a mistyped dialing path must be
+    // `not_found` and not an unauthorized call: the registry is the only thing that
+    // can promise that, and only about the paths it was told.
+    moduleOf('postures', { paths: POSTURE_PATHS }, routePostures, routing),
+    moduleOf('suppressions', { paths: SUPPRESSION_PATHS }, routeSuppressions, routing),
+    moduleOf('dial', { paths: DIAL_PATHS }, routeDial, routing),
+    moduleOf('calls', { paths: CALL_PATHS }, routeCalls, routing),
+    moduleOf('callbacks', { paths: CALLBACK_PATHS }, routeCallbacks, routing),
+    moduleOf('pauses', { paths: PAUSE_PATHS }, routePauses, routing),
   ];
 }

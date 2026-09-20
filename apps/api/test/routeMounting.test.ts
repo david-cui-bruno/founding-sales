@@ -5,6 +5,7 @@ import { RouteRegistryError, createRouteRegistry, type RouteModule } from '../sr
 import { mountedRoutes } from '../src/bootstrap/routes.ts';
 import { apiRouteModules } from '../src/routes/modules.ts';
 import { registryFor, route, type ApiOptions } from '../src/server.ts';
+import { localNoopSuppressionJournal } from '../src/journal/index.ts';
 import { DEFAULT_UPGRADE_URL } from '../src/routes/types.ts';
 
 /**
@@ -41,6 +42,10 @@ const routing = {
   supportedClientVersions: clientVersionRangeSchema.parse({ minimum: '1.0.0', maximum: '1.0.0' }),
   sendingEnabled: false,
   upgradeUrl: DEFAULT_UPGRADE_URL,
+  // Lane G4's routes take the suppression journal from here. The no-op is the right
+  // one for a test that builds a registry and never serves a request; the production
+  // bootstrap calls `requireDurableJournal` instead.
+  suppressionJournal: localNoopSuppressionJournal(),
 };
 
 describe('what the API mounts', () => {
@@ -54,15 +59,32 @@ describe('what the API mounts', () => {
       '/admin/alerts/acknowledge',
       '/admin/jobs/dead',
       '/admin/jobs/requeue',
+      '/callbacks',
+      '/callbacks/complete',
+      '/calls',
+      '/calls/log',
       '/crm/firm-page',
+      '/dial/authorize',
+      '/dial/consume',
       '/export/firms',
       '/health',
       '/healthz',
       '/import/commit',
       '/import/preview',
+      '/pauses',
+      '/pauses/open',
+      '/pauses/release',
       '/pipeline/stages',
+      '/postures',
+      '/postures/calling-window',
+      '/postures/record',
+      '/postures/revoke',
       '/readyz',
       '/search/firms',
+      '/suppressions',
+      '/suppressions/correct',
+      '/suppressions/record',
+      '/suppressions/supersede',
     ]);
     expect([...registry.prefixes()]).toEqual([
       '/admin/devices',
@@ -155,6 +177,12 @@ describe('what the API mounts', () => {
       'search',
       'import',
       'export',
+      'postures',
+      'suppressions',
+      'dial',
+      'calls',
+      'callbacks',
+      'pauses',
     ]);
   });
 });
