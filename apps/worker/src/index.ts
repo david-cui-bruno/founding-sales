@@ -17,6 +17,8 @@ export const WORKER_EXIT_CODES = Object.freeze({
   ok: 0,
   schemaOutOfRange: 10,
   databaseUnreachable: 11,
+  /** The environment the task definition supplied could not be read (bootstrap/config.ts). */
+  configurationInvalid: 12,
 });
 
 export interface WorkerStartupReport {
@@ -103,3 +105,33 @@ export function startupLogLine(report: WorkerStartupReport): string {
     reason: report.reason,
   });
 }
+
+/**
+ * The process itself. `src/index.ts` stays the module surface — the startup check
+ * above is imported by the scheduler and by tests — and the bootstrap below is what
+ * the container runs (`docs/greenfield/processes.md`).
+ */
+export {
+  ConfigError,
+  DEFAULT_DRAIN_TIMEOUT_MILLISECONDS,
+  DEFAULT_LIVENESS_FILE,
+  DEFAULT_METRICS_INTERVAL_MILLISECONDS,
+  DEFAULT_RUNNER_IDLE_MILLISECONDS,
+  DEFAULT_SCHEDULER_INTERVAL_MILLISECONDS,
+  describeWorkerConfig,
+  readWorkerConfig,
+  type MetricMode,
+  type WorkerConfig,
+} from './bootstrap/config.ts';
+export { APPLICATION_RAISED_METRICS, type ApplicationRaisedMetric, type MetricRaiser } from './bootstrap/metricCoverage.ts';
+export { createLiveness, noLiveness, type Liveness } from './bootstrap/liveness.ts';
+export { createLogger, errorFields, recordingLogger, type LogFields, type LogLevel, type Logger } from './bootstrap/log.ts';
+export { drain, startLoop, type Loop, type PassOutcome } from './bootstrap/loop.ts';
+export {
+  WorkerStartupRefusal,
+  startWorker,
+  type WorkerProcessOptions,
+  type WorkerRuntime,
+  type WorkerSessions,
+  type WorkerStopReport,
+} from './bootstrap/worker.ts';
