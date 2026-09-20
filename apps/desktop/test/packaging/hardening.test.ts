@@ -143,4 +143,11 @@ describe('the release stamp says which commit is in the bundle', () => {
   it('refuses a release stamp with no embedded update key', () => {
     expect(() => validateReleaseStamp({ ...stamp, updatePublicKey: '' })).toThrow();
   });
+
+  it('refuses a release at the workspace placeholder version', () => {
+    // 0.0.0 is below every minimum the API could publish, so such a build could
+    // neither mutate nor be upgraded past itself.
+    expect(() => validateReleaseStamp({ ...stamp, appVersion: '0.0.0' })).toThrow();
+    expect(validateReleaseStamp({ ...stamp, channel: 'local-smoke', appVersion: '0.0.0' }).appVersion).toBe('0.0.0');
+  });
 });

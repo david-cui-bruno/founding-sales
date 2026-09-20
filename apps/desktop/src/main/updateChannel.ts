@@ -89,10 +89,15 @@ function canonicalJson(value: unknown): string {
   throw new Error('a manifest cannot contain this');
 }
 
-/** Publish-side. The private key never exists on a Mac running the app. */
-export function signManifest(manifest: UpdateManifest, privateKeyPem: string): SignedUpdateManifest {
+/**
+ * Publish-side. The private key never exists on a Mac running the app.
+ *
+ * Base64 PKCS#8 DER, the same encoding the public half uses, and the only one the
+ * publisher accepts (`docs/decisions/g13-update-key-encoding.md`).
+ */
+export function signManifest(manifest: UpdateManifest, privateKeyBase64: string): SignedUpdateManifest {
   const parsed = updateManifestSchema.parse(manifest);
-  const key = createPrivateKey(privateKeyPem);
+  const key = createPrivateKey({ key: Buffer.from(privateKeyBase64, 'base64'), format: 'der', type: 'pkcs8' });
   const signature = sign(null, canonicalJsonBytes(parsed), key).toString('base64');
   return signedUpdateManifestSchema.parse({ manifest: parsed, signature });
 }

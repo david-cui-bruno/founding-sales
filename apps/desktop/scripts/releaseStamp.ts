@@ -37,6 +37,12 @@ export const releaseStampSchema = z
   })
   .refine(stamp => stamp.channel !== 'release' || stamp.updatePublicKey.length > 0, {
     message: 'a release embeds the update-signing public key',
+  })
+  .refine(stamp => stamp.channel !== 'release' || stamp.appVersion !== '0.0.0', {
+    // The workspace's placeholder version. A release at 0.0.0 is below every
+    // minimum the API could publish, so it would ship a client that cannot
+    // mutate and cannot be upgraded past itself.
+    message: 'a release carries a real version; set FSS_DESKTOP_APP_VERSION',
   });
 
 export type ReleaseStamp = z.infer<typeof releaseStampSchema>;
