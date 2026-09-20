@@ -99,18 +99,23 @@ export async function openPause(context: RepositoryContext, input: OpenPauseInpu
   if (actor.kind !== 'user') return refusePolicy('admin_only');
 
   const keyless = input.scopeKind === 'workspace' || input.scopeKind === 'all_automation';
-  if (keyless !== (input.scopeKey === undefined)) return refusePolicy('invalid_input');
   if ((input.scopeKind === 'channel') !== (input.channel !== undefined)) return refusePolicy('invalid_input');
+  if (keyless && input.scopeKey !== undefined) return refusePolicy('invalid_input');
+  // A channel pause's key *is* its channel: there is one email lane and one call
+  // lane per workspace, and asking the caller to repeat the channel in a second
+  // field would be a second place to get it wrong.
+  const scopeKey = input.scopeKind === 'channel' ? input.channel : input.scopeKey;
+  if (!keyless && scopeKey === undefined) return refusePolicy('invalid_input');
 
   const holdScope = holdScopeOf(input.scopeKind);
   const holdId = await openHold(context, {
     scopeKind: holdScope,
-    ...(keyless ? {} : { scopeKey: input.scopeKind === 'channel' ? (input.channel ?? '') : (input.scopeKey ?? '') }),
+    ...(keyless ? {} : { scopeKey: scopeKey ?? '' }),
     reasonCode: 'scoped_pause',
     blockedActionKinds: blockedKindsOf(input),
     sourceEventKind: 'administrative_pause',
     ...(input.commandId === undefined ? {} : { sourceEventId: input.commandId }),
-    ...(input.scopeKind === 'owner' ? { ownerUserId: input.scopeKey } : {}),
+    ...(input.scopeKind === 'owner' ? { ownerUserId: scopeKey } : {}),
     recoveryAction: 'release_pause',
   });
 
@@ -122,7 +127,7 @@ export async function openPause(context: RepositoryContext, input: OpenPauseInpu
     [
       context.scope.workspaceId,
       input.scopeKind,
-      keyless ? null : (input.scopeKey ?? null),
+      keyless ? null : (scopeKey ?? null),
       input.channel ?? null,
       input.reasonNote ?? null,
       holdId,
