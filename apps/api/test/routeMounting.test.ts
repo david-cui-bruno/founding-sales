@@ -67,8 +67,21 @@ describe('what the API mounts', () => {
       '/calls',
       '/calls/log',
       '/crm/firm-page',
+      '/dashboard',
+      '/diagnostics',
       '/dial/authorize',
       '/dial/consume',
+      '/enrollments',
+      '/enrollments/enroll',
+      '/enrollments/linkedin/complete',
+      '/enrollments/linkedin/result',
+      '/enrollments/linkedin/undo',
+      '/enrollments/migrate/apply',
+      '/enrollments/migrate/approve',
+      '/enrollments/migrate/propose',
+      '/enrollments/resume',
+      '/enrollments/steps',
+      '/enrollments/stop',
       '/export/firms',
       '/gmail/connect',
       '/gmail/disconnect',
@@ -88,12 +101,22 @@ describe('what the API mounts', () => {
       '/pauses',
       '/pauses/open',
       '/pauses/release',
+      '/pipeline/board',
       '/pipeline/stages',
+      '/pipeline/stages/create',
+      '/pipeline/stages/rename',
+      '/pipeline/stages/reorder',
+      '/pipeline/stages/retire',
       '/postures',
       '/postures/calling-window',
       '/postures/record',
       '/postures/revoke',
       '/readyz',
+      '/replies',
+      '/replies/card',
+      '/replies/confirm',
+      '/replies/settings',
+      '/replies/settings/update',
       '/research/config',
       '/research/discover',
       '/research/enrich',
@@ -107,10 +130,25 @@ describe('what the API mounts', () => {
       '/retention/run',
       '/retention/runs',
       '/search/firms',
+      '/sequences',
+      '/sequences/create',
+      '/sequences/holidays',
+      '/sequences/versions',
+      '/sequences/versions/draft',
+      '/sequences/versions/publish',
+      '/sequences/versions/retire',
+      '/sequences/versions/steps',
+      '/settings',
+      '/settings/history',
+      '/settings/update',
       '/suppressions',
       '/suppressions/correct',
       '/suppressions/record',
       '/suppressions/supersede',
+      '/templates',
+      '/templates/approve',
+      '/templates/create',
+      '/templates/retire',
       '/today',
       '/today/firm',
       '/today/snooze',
@@ -231,6 +269,18 @@ describe('what the API mounts', () => {
     }
   });
 
+  it('keeps the reply read and the reply commands separate paths', () => {
+    // A `/replies` prefix would have let one claim answer for the list, the card,
+    // the confirmation and the configuration alike. 8.3's confirmation has
+    // consequences, and the registry can only promise about the paths it was told.
+    const registry = registryFor(options());
+    for (const path of ['/replies', '/replies/card', '/replies/confirm', '/replies/settings']) {
+      expect(registry.moduleFor(path)?.name, path).toBe('replies');
+    }
+    expect(registry.moduleFor('/replies/confirm-all')).toBeUndefined();
+    expect(registry.moduleFor('/replies/settings/reset')).toBeUndefined();
+  });
+
   it('answers a path nobody mounted with a redacted not_found and touches no database', async () => {
     for (const path of ['/', '/commands', '/health/', '/firmsomething']) {
       const result = await route('GET', path, options());
@@ -267,9 +317,16 @@ describe('what the API mounts', () => {
       'gmail',
       'gmail-push',
       'messages',
+      'replies',
       'outbound',
       'today',
       'snooze',
+      'sequences',
+      'templates',
+      'enrollments',
+      'settings',
+      'dashboard',
+      'diagnostics',
       'retention',
       'departure',
       'attachments',

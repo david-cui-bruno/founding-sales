@@ -11,13 +11,15 @@ import { routeFirms } from './firms.ts';
 import { IMPORT_PATHS, routeImport } from './import.ts';
 import { routeMerges } from './merges.ts';
 import { routeOpportunities } from './opportunities.ts';
-import { routePipeline } from './pipeline.ts';
+import { PIPELINE_PATHS, routePipeline } from './pipeline.ts';
 import { RESEARCH_PATHS, routeResearch } from './research.ts';
 // Lane G7's Gmail surface.
 import { GMAIL_PATHS, routeGmail } from './gmail.ts';
 import { PUBSUB_PATHS, routePubSub } from './pubsub.ts';
 import { MESSAGE_PATHS, routeMessages } from './messages.ts';
 import { OUTBOUND_PATHS, routeOutbound } from './outbound.ts';
+// Lane G7b's reply cards and the classifier's configuration.
+import { REPLY_PATHS, routeReplies } from './replies.ts';
 import { SEARCH_PATHS, routeSearch } from './search.ts';
 // Lane G4's policy, suppression and dialing surface.
 import { CALLBACK_PATHS, routeCallbacks } from './callbacks.ts';
@@ -26,6 +28,14 @@ import { DIAL_PATHS, routeDial } from './dial.ts';
 import { PAUSE_PATHS, routePauses } from './pauses.ts';
 import { POSTURE_PATHS, routePostures } from './postures.ts';
 import { SUPPRESSION_PATHS, routeSuppressions } from './suppressions.ts';
+// Lane G8's sequences, templates and enrollments.
+import { ENROLLMENT_PATHS, routeEnrollments } from './enrollments.ts';
+import { SEQUENCE_PATHS, routeSequences } from './sequences.ts';
+import { TEMPLATE_PATHS, routeTemplates } from './templates.ts';
+// Lane G9's administration, dashboard and Diagnostics surface.
+import { DASHBOARD_PATHS, routeDashboard } from './dashboard.ts';
+import { DIAGNOSTICS_PATHS, routeDiagnostics } from './diagnostics.ts';
+import { SETTINGS_PATHS, routeSettings } from './settings.ts';
 // Lane G6's Today list.
 import { SNOOZE_PATHS, routeSnooze } from './snooze.ts';
 import { TODAY_PATHS, routeToday } from './today.ts';
@@ -123,7 +133,7 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     moduleOf('firms', { prefixes: ['/firms'] }, routeFirms, routing),
     moduleOf('contacts', { prefixes: ['/contacts'] }, routeContacts, routing),
     moduleOf('opportunities', { prefixes: ['/opportunities'] }, routeOpportunities, routing),
-    moduleOf('pipeline', { paths: ['/pipeline/stages'] }, routePipeline, routing),
+    moduleOf('pipeline', { paths: PIPELINE_PATHS }, routePipeline, routing),
     moduleOf('merges', { prefixes: ['/merges'] }, routeMerges, routing),
     // Lane G3b's CRM surface. Exact paths, which is what every new endpoint should
     // be: the prefixes above are a record of the routers that already existed in
@@ -158,6 +168,12 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     moduleOf('gmail', { paths: GMAIL_PATHS }, routeGmail, routing),
     moduleOf('gmail-push', { paths: PUBSUB_PATHS }, routePubSub, routing),
     moduleOf('messages', { paths: MESSAGE_PATHS }, routeMessages, routing),
+    // Lane G7b's reply cards (8.3). Exact paths, and `/replies/settings` is
+    // separate from `/replies/settings/update` for the reason the two snooze paths
+    // are separate from `/today`: a read and a command under one prefix would let
+    // one claim answer for both, and the registry can only promise about the paths
+    // it was told.
+    moduleOf('replies', { paths: REPLY_PATHS }, routeReplies, routing),
     // Lane G7-2's four admin surfaces. Exact paths, and not an `/outbound` prefix:
     // an unknown path under that root is a typo in a command that marks a send
     // delivered or opens the sending gate, and `not_found` from the registry says so
@@ -170,6 +186,23 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     // `/today` and `/today/snooze` separately is what keeps them separable at all.
     moduleOf('today', { paths: TODAY_PATHS }, routeToday, routing),
     moduleOf('snooze', { paths: SNOOZE_PATHS }, routeSnooze, routing),
+    // Lane G8's sequences, templates and enrollments. Exact paths again, and three
+    // modules rather than one: `/sequences` publishes the plan, `/templates`
+    // approves the bytes that may be sent, and `/enrollments` is the only family a
+    // salesperson rather than an admin calls. A single `/sequences` prefix would
+    // have let the plan editor answer for the LinkedIn task card, and the registry
+    // is the only thing that can promise it does not.
+    moduleOf('sequences', { paths: SEQUENCE_PATHS }, routeSequences, routing),
+    moduleOf('templates', { paths: TEMPLATE_PATHS }, routeTemplates, routing),
+    moduleOf('enrollments', { paths: ENROLLMENT_PATHS }, routeEnrollments, routing),
+    // Lane G9's administration surface. Exact paths, and three modules rather than
+    // one: settings is a read and a command family, the dashboard is one aggregate
+    // read and Diagnostics is an operational read with its own visibility rule. A
+    // single `/admin` prefix would have swallowed G5's job and alert paths, which
+    // the registry refuses outright.
+    moduleOf('settings', { paths: SETTINGS_PATHS }, routeSettings, routing),
+    moduleOf('dashboard', { paths: DASHBOARD_PATHS }, routeDashboard, routing),
+    moduleOf('diagnostics', { paths: DIAGNOSTICS_PATHS }, routeDiagnostics, routing),
     // Lane G14. Exact paths throughout, and three modules rather than one: the
     // retention reads and the deletion commands, the departure pair under `/admin`,
     // and the attachment link, which is neither an admin command nor a retention

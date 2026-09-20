@@ -4,6 +4,7 @@ import type { SeededCrm } from './crmFixtures.ts';
 import type { SeededMail } from './mailFixtures.ts';
 import type { SeededOutbound } from './outboundFixtures.ts';
 import { FIXTURE_BODY, FIXTURE_SUBJECT } from './outboundFixtures.ts';
+import { makeStepExecution } from '../../../db/testing/stepExecutions.ts';
 
 /**
  * A failing insert for every constraint migration 0010 adds (lane G7-2: the outbound
@@ -87,13 +88,21 @@ async function adminMailbox(f: OutboundCaseFixture): Promise<string> {
   return created.rows[0]?.id ?? '';
 }
 
-/** The columns a lawful fence carries, as SQL expressions, before a case breaks one. */
-function fenceDefaults(f: OutboundCaseFixture): Record<string, string> {
+/**
+ * The columns a lawful fence carries, as SQL expressions, before a case breaks one.
+ *
+ * `step_execution_id` is a row that exists, not a fresh uuid: migration 0012 adds
+ * `outbound_messages_step_execution_fkey`, so an invented id would break that key
+ * first and every case would be testing it instead of its own constraint. A new
+ * execution per fence, because `outbound_messages_one_per_step_execution` allows one
+ * fence each.
+ */
+function fenceDefaults(f: OutboundCaseFixture, stepExecutionId: string): Record<string, string> {
   return {
     workspace_id: u(workspace(f)),
     mailbox_id: u(mailbox(f)),
     origin_kind: t('step_execution'),
-    step_execution_id: 'gen_random_uuid()',
+    step_execution_id: u(stepExecutionId),
     firm_id: u(firm(f)),
     contact_id: u(contact(f)),
     opportunity_id: u(opportunity(f)),
@@ -113,7 +122,14 @@ function fenceDefaults(f: OutboundCaseFixture): Record<string, string> {
 }
 
 async function insertFence(f: OutboundCaseFixture, overrides: Fragments = {}): Promise<unknown> {
-  const row = { ...fenceDefaults(f), ...overrides };
+  const stepExecutionId = await makeStepExecution(f.session, {
+    workspaceId: workspace(f),
+    firmId: firm(f),
+    opportunityId: opportunity(f),
+    userId: f.seeded.alpha.salesperson.userId,
+    templateVersionId: alpha(f).templateVersionId,
+  });
+  const row = { ...fenceDefaults(f, stepExecutionId), ...overrides };
   const columns = Object.keys(row);
   return await f.session.query(
     `INSERT INTO outbound_messages (${columns.join(', ')}) VALUES (${columns.map(name => row[name]).join(', ')})`,
@@ -436,6 +452,18 @@ export const OUTBOUND_CONSTRAINT_CASES: readonly OutboundCase[] = [
     // 12.5: "partial unique indexes enforce one fence per origin."
     constraint: 'outbound_messages_one_per_step_execution',
     run: async f => await insertFence(f, { step_execution_id: u(f.outbound.collidingStepExecutionId) }),
+  },
+  // The two keys 0010 asked for and migration 0012 adds, once the tables they point
+  // at exist. Both are here rather than in `sequenceCases.ts` because the table they
+  // constrain is this one, and a reader looking for what `outbound_messages` refuses
+  // should find all of it in one place.
+  {
+    constraint: 'outbound_messages_step_execution_fkey',
+    run: async f => await insertFence(f, { step_execution_id: u(MISSING) }),
+  },
+  {
+    constraint: 'outbound_messages_enrollment_fkey',
+    run: async f => await insertFence(f, { enrollment_id: u(MISSING) }),
   },
   {
     constraint: 'outbound_messages_one_per_draft',

@@ -74,9 +74,15 @@ COPY packages/domain/today packages/domain/today
 COPY packages/domain/src packages/domain/src
 COPY packages/domain/policy packages/domain/policy
 COPY packages/domain/suppression packages/domain/suppression
+COPY packages/domain/classification packages/domain/classification
 COPY packages/domain/mail packages/domain/mail
 COPY packages/domain/outbound packages/domain/outbound
 COPY packages/domain/dial packages/domain/dial
+COPY packages/domain/sequences packages/domain/sequences
+COPY packages/domain/templates packages/domain/templates
+# Lane G9: administration and the dashboard.
+COPY packages/domain/settings packages/domain/settings
+COPY packages/domain/dashboard packages/domain/dashboard
 COPY packages/domain/retention packages/domain/retention
 COPY packages/contracts/src packages/contracts/src
 

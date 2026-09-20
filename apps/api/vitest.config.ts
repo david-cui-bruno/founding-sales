@@ -18,9 +18,20 @@ export default defineConfig({
       '@fss/domain/suppression': fileURLToPath(new URL('../../packages/domain/suppression/index.ts', import.meta.url)),
       '@fss/domain/dial': fileURLToPath(new URL('../../packages/domain/dial/index.ts', import.meta.url)),
       '@fss/domain/mail': fileURLToPath(new URL('../../packages/domain/mail/index.ts', import.meta.url)),
+      '@fss/domain/classification': fileURLToPath(
+        new URL('../../packages/domain/classification/index.ts', import.meta.url),
+      ),
       '@fss/domain/outbound': fileURLToPath(new URL('../../packages/domain/outbound/index.ts', import.meta.url)),
       '@fss/domain/db': fileURLToPath(new URL('../../packages/domain/db/index.ts', import.meta.url)),
       '@fss/domain/today': fileURLToPath(new URL('../../packages/domain/today/index.ts', import.meta.url)),
+      '@fss/domain/sequences': fileURLToPath(
+        new URL('../../packages/domain/sequences/index.ts', import.meta.url),
+      ),
+      '@fss/domain/templates': fileURLToPath(
+        new URL('../../packages/domain/templates/index.ts', import.meta.url),
+      ),
+      '@fss/domain/settings': fileURLToPath(new URL('../../packages/domain/settings/index.ts', import.meta.url)),
+      '@fss/domain/dashboard': fileURLToPath(new URL('../../packages/domain/dashboard/index.ts', import.meta.url)),
       '@fss/domain/retention': fileURLToPath(new URL('../../packages/domain/retention/index.ts', import.meta.url)),
       '@fss/domain': fileURLToPath(new URL('../../packages/domain/src/index.ts', import.meta.url)),
     },

@@ -139,6 +139,7 @@ export const suppressionEventSchema = z.strictObject({
     'prospect_do_not_call',
     'salesperson_manual',
     'import',
+    'deletion_tombstone',
     'mistaken_entry_correction',
     'admin_supersession',
   ]),

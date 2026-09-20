@@ -57,6 +57,14 @@ export interface RoutingOptions {
   readonly mail?: MailRoutingDeps;
   /** The structured log the CloudWatch metric filters read. Absent in unit tests. */
   readonly log?: Logger | undefined;
+  /**
+   * Appendix E step 1: the generation an operator pinned, or null when none is.
+   *
+   * `/readyz` already reads it through `ReadinessInputs`; Diagnostics shows it beside
+   * the applied generation so a person can see a restore mismatch rather than only
+   * being refused by the load balancer because of one.
+   */
+  readonly expectedSystemGeneration?: number | null | undefined;
 }
 
 export interface MailRoutingDeps extends MailGrantDeps {

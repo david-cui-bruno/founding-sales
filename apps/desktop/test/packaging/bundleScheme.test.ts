@@ -1,9 +1,13 @@
+import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   answerBundleRequest,
   BUNDLE_ENTRY_URL,
   BUNDLE_ORIGIN,
   BUNDLE_PRIVILEGES,
+  BUNDLE_SHARED_FILES,
+  BUNDLE_WINDOWS,
 } from '../../src/main/bundleScheme.ts';
 import { handlersForScheme } from '../../src/main/launchServices.ts';
 
@@ -24,7 +28,7 @@ async function answer(url: string): Promise<{ status: number; read: string[] }> 
   return { status: outcome.status, read };
 }
 
-describe('the bundle scheme answers three paths and refuses everything else', () => {
+describe('the bundle scheme answers every window and refuses everything else', () => {
   it('serves the entry page the window is opened with', async () => {
     const outcome = await answer(BUNDLE_ENTRY_URL);
     expect(outcome.status).toBe(200);
@@ -66,6 +70,45 @@ describe('the bundle scheme answers three paths and refuses everything else', ()
       throw new Error('ENOENT');
     });
     expect(outcome.status).toBe(404);
+  });
+
+  /**
+   * The test the old hand-written map did not have.
+   *
+   * `BUNDLE_FILES` listed three paths while the build shipped five pages and five
+   * scripts, so every window but the first was a 404 in a packaged build. Nothing
+   * caught it because the development path opens windows with `loadFile`, which
+   * never reaches the scheme handler at all.
+   *
+   * So: every declared window's page and script must resolve, and each page's one
+   * module script must be the entry that window declares. A window added to
+   * `BUNDLE_WINDOWS` with a typo in either name fails here rather than in somebody's
+   * packaged build.
+   */
+  it('serves the page and the script of every declared window', async () => {
+    expect(BUNDLE_WINDOWS.length).toBeGreaterThan(1);
+    for (const window of BUNDLE_WINDOWS) {
+      await expect(answer(`${BUNDLE_ORIGIN}/${window.page}`), window.page).resolves.toMatchObject({
+        status: 200,
+      });
+      await expect(answer(`${BUNDLE_ORIGIN}/${window.entry}.js`), window.entry).resolves.toMatchObject({
+        status: 200,
+      });
+    }
+    for (const file of BUNDLE_SHARED_FILES) {
+      await expect(answer(`${BUNDLE_ORIGIN}/${file}`), file).resolves.toMatchObject({ status: 200 });
+    }
+  });
+
+  it('declares, for every window, the entry its page actually loads', async () => {
+    const directory = fileURLToPath(new URL('../../src/renderer/', import.meta.url));
+    for (const window of BUNDLE_WINDOWS) {
+      const html = await readFile(`${directory}${window.page}`, 'utf8');
+      const scripts = [...html.matchAll(/<script[^>]*\ssrc="([^"]+)"/gu)].map(match => match[1]);
+      // One script per page, because the CSP is `script-src 'self'` with no inline
+      // script and a second file would be a second thing to keep in the map.
+      expect(scripts, window.page).toEqual([`./${window.entry}.js`]);
+    }
   });
 
   it('is standard and secure, and grants nothing else', () => {

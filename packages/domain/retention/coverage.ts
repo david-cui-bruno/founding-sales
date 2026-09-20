@@ -1,11 +1,12 @@
 /**
  * What happens to every table in the schema, under retention, deletion and departure.
  *
- * `PENDING_RETENTION_TABLES` names the three in-flight lanes' tables this lane could
- * guess. This registry catches the ones it could not: every table PostgreSQL reports
- * has to appear here, so a lane that adds one and does not say what its rows are
- * under section 10.3 fails the build rather than quietly creating a store of prospect
- * data with no horizon.
+ * `PENDING_RETENTION_TABLES` is the named-in-advance half of the guard, and it is
+ * empty now that G7b, G8 and G9 have landed and their tables are answered for below.
+ * This registry is the half that does not need naming in advance: every table
+ * PostgreSQL reports has to appear here, so a lane that adds one and does not say
+ * what its rows are under section 10.3 fails the build rather than quietly creating a
+ * store of prospect data with no horizon.
  *
  * That is the failure mode worth preventing. A retention policy is not a document;
  * it is a claim about every row in the database, and the only way that claim stays
@@ -26,6 +27,17 @@ export type TableDisposition =
   | 'deletion_redacts'
   /** The departure command revokes, ends or deletes rows here. */
   | 'departure_revokes'
+  /**
+   * The admin deletion workflow terminally stops the row without removing or
+   * blanking it. Nothing personal leaves; what changes is that no worker will act
+   * on it again.
+   */
+  | 'deletion_stops'
+  /**
+   * The departure command opens a `reassignment` hold naming this row, so automation
+   * stops until an admin gives the work a new owner. The row itself is untouched.
+   */
+  | 'departure_holds'
   /** Configuration, catalog or queue mechanics: no prospect or personal data. */
   | 'operational';
 
@@ -123,6 +135,42 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
   sending_domains: coverage(['operational'], 'Callie’s own domain authentication and ramp posture.'),
   mailbox_send_ramp: coverage(['operational'], 'A Callie mailbox’s position in the new-domain ramp.'),
   mailbox_send_days: coverage(['operational'], 'Per-mailbox daily counts; no prospect identity.'),
+
+  // ------------------------------------------------- classification (G7b)
+  classifier_settings: coverage(['operational'], 'Workspace configuration for the reply classifier.'),
+  mail_classification_calls: coverage(
+    ['retained', 'deletion_removes'],
+    'Counts, ids and outcomes only — 0011 keeps no prompt, message text or excerpt here — so it is a cost record rather than a copy of correspondence. It cascades with its message, and a deletion removes the firm’s messages.',
+  ),
+  mail_reply_confirmations: coverage(
+    ['retained', 'deletion_removes'],
+    'A person’s decision about a reply: business history while the firm exists, and removed with the correspondence it is about. Deleted before the messages that would cascade it, because it also references a callback the deletion removes.',
+  ),
+
+  // ---------------------------------------------------- settings (G9, 0013)
+  workspace_settings: coverage(['operational'], 'Workspace configuration and its audited history; no prospect identity.'),
+
+  // ------------------------------------------------------- sequences (G8)
+  workspace_holiday_calendars: coverage(['operational'], 'Versioned holiday sets; Callie’s configuration.'),
+  sequences: coverage(['operational'], 'A named cadence Callie wrote.'),
+  sequence_versions: coverage(['operational'], 'An immutable published plan; Callie’s words, not a prospect’s.'),
+  sequence_steps: coverage(['operational'], 'The steps of a published plan.'),
+  sequence_enrollments: coverage(
+    ['retained', 'deletion_stops', 'departure_holds'],
+    'Business history of who was worked and how: the row stays, its personal fields living on the contact it names. A deletion stops it with `admin_stop`; a departure holds the ones its member was running.',
+  ),
+  step_executions: coverage(
+    ['retained', 'deletion_stops'],
+    'What was due, when it moved and how it finished. A deletion cancels the unexecuted ones; the executed history stays, because 11.1 requires it preserved.',
+  ),
+  step_execution_shifts: coverage(['retained'], 'Append-only schedule history; UPDATE and DELETE revoked.'),
+  enrollment_linkedin_results: coverage(
+    ['deletion_removes'],
+    'The prospect’s own response, recorded by hand — the one row in the sequence tables holding their words, so a deletion removes it.',
+  ),
+  enrollment_migrations: coverage(['retained'], 'The audited admin command of 11.1 and its approval.'),
+  enrollment_migration_items: coverage(['retained'], 'Which enrollment the migration remapped or refused, and why.'),
+  sequence_event_cursors: coverage(['operational'], 'Per-consumer position in the event stream; ids only.'),
 
   // ------------------------------------------------------------- retention
   retention_runs: coverage(['retained'], 'The run ledger and the deletion tombstone; DELETE revoked.'),

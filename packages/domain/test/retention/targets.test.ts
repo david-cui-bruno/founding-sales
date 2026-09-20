@@ -17,17 +17,20 @@ import { RETENTION_DATA_KINDS } from '@fss/contracts';
 /**
  * The retention target registry, and the thing that stops it being forgotten.
  *
- * Three lanes are in flight beside this one and each owns a table that section 10.3
- * has a horizon for: G7-2's outbound drafts (`canceled_drafts`, 30 days), G8's
- * enrollments (held on departure), G7b's classifier output. None of their tables is
- * on main, so none of them can have a sweep written against it today, and a
- * retention lane that shipped without saying so would leave three silent gaps.
+ * Four lanes were in flight beside this one and each owned a table that section 10.3
+ * has an obligation for: G7-2's outbound drafts (`canceled_drafts`, 30 days), G7b's
+ * classifier output, G8's enrollments and executions, G9's settings. None of their
+ * tables was on main, so none could have a sweep written against it, and a retention
+ * lane that shipped without saying so would have left fifteen silent gaps.
  *
- * So they are registered as declared-pending with the tables they will bring, and
- * `PENDING_RETENTION_TABLES` is checked against the live catalog. The moment one of
- * those tables exists, this test fails and names the target that has to be written.
- * That is the whole mechanism: the follow-up cannot be forgotten because the build
- * stops when it becomes possible. See docs/decisions/g14-retention-target-registry.md.
+ * So they were registered as declared-pending with the tables they would bring, and
+ * `PENDING_RETENTION_TABLES` was checked against the live catalog on every run. The
+ * moment one of those tables existed, this test failed and named what had to be
+ * written. That is the whole mechanism, and it was paid twice: G7-2's
+ * `outbound_messages`, and then the other thirteen together at this lane's final
+ * merge. The list is empty now, and the cases below test the mechanism in that state
+ * rather than being deleted with it — an empty guard that still runs is the thing the
+ * next lane needs. See docs/decisions/g14-retention-target-registry.md.
  */
 
 let database: TestDatabase;
@@ -86,12 +89,23 @@ describe('the registry covers the retention table', () => {
 
 describe('the declared-pending guard', () => {
   it('names a lane, a table and the target that has to be written for each', () => {
-    expect(PENDING_RETENTION_TABLES.length).toBeGreaterThan(0);
+    // Empty today, and the shape is still asserted: an entry added later with a
+    // blank `owes` would be a deadline nobody could act on, which is the one way
+    // this mechanism fails quietly.
     for (const pending of PENDING_RETENTION_TABLES) {
       expect(pending.table).toMatch(/^[a-z][a-z0-9_]+$/u);
       expect(pending.lane).toMatch(/^G/u);
       expect(pending.owes.length).toBeGreaterThan(20);
     }
+  });
+
+  it('is empty, because every table it was waiting for has landed and been answered', () => {
+    // The assertion that used to read `length > 0`. Inverting it is not weakening
+    // it: while the list had entries, `length > 0` said the lane had not forgotten
+    // to declare them; now that the work is done, a non-empty list would mean
+    // somebody re-declared a table that is already in the catalog, and the case
+    // below would not catch that if the table had not arrived yet.
+    expect(PENDING_RETENTION_TABLES).toEqual([]);
   });
 
   it('fails the build the moment one of those tables appears without a target', async () => {
@@ -111,15 +125,51 @@ describe('the declared-pending guard', () => {
     ).toEqual([]);
   });
 
-  it('has already been paid once: canceled_drafts was declared pending and is now implemented', () => {
-    // This is the guard working. `outbound_messages` landed with lane G7-2's merge,
-    // the test above failed, and the target was written. It is kept as a test rather
-    // than deleted because it pins the direction of travel: a target may move from
-    // declared-pending to implemented and never back.
+  it('has already been paid: canceled_drafts was declared pending and is now implemented', () => {
+    // This is the guard working the first time. `outbound_messages` landed with lane
+    // G7-2's merge, the case above failed, and the target was written. It is kept as
+    // a test rather than deleted because it pins the direction of travel: a target
+    // may move from declared-pending to implemented and never back.
     const target = retentionTargetFor('canceled_drafts');
     expect(target?.state).toBe('implemented');
     expect(target?.tables).toEqual(expect.arrayContaining(['outbound_messages']));
     expect(PENDING_RETENTION_TABLES.map(pending => pending.table)).not.toContain('outbound_messages');
+  });
+
+  it('has already been paid the second time: every table the other lanes brought is classified', async () => {
+    // The guard working at this lane's final merge. These thirteen were declared
+    // pending against G7b, G8 and G9; all thirteen are on main now, the case above
+    // printed all thirteen sentences, and each one is answered in
+    // `TABLE_RETENTION_COVERAGE`. Naming them here rather than trusting the
+    // catalog sweep means a later lane that drops one from the coverage map is told
+    // which lane's table it just orphaned.
+    const paid = [
+      'mail_classification_calls',
+      'mail_reply_confirmations',
+      'workspace_settings',
+      'workspace_holiday_calendars',
+      'sequence_versions',
+      'sequence_steps',
+      'sequence_enrollments',
+      'step_executions',
+      'step_execution_shifts',
+      'enrollment_linkedin_results',
+      'enrollment_migrations',
+      'enrollment_migration_items',
+      'sequence_event_cursors',
+    ];
+    const { rows } = await database.session.query<{ table_name: string }>(
+      `SELECT c.relname AS table_name
+         FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relname = ANY($1::text[])`,
+      [paid],
+    );
+    // They really are on main; a rename would otherwise make this case vacuous.
+    expect(rows.map(row => row.table_name).sort()).toEqual([...paid].sort());
+    for (const table of paid) {
+      expect(TABLE_RETENTION_COVERAGE[table], `${table} has no retention disposition`).toBeDefined();
+    }
+    expect(PENDING_RETENTION_TABLES.map(pending => pending.table)).not.toEqual(expect.arrayContaining(paid));
   });
 });
 

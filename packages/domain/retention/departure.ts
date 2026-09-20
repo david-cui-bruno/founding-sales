@@ -30,20 +30,30 @@ import { accept, refuse, type RetentionResult } from './result.ts';
  * A departure that deleted the mailbox would delete the firm's history as a side
  * effect of a person leaving, which is the exact opposite of the sentence.
  *
- * ## The firms
+ * ## The firms, and the enrollments
  *
  * The brief asks departure to "hold the departed user's enrollments for
- * reassignment". `enrollments` is lane G8's table and is not on main, so what this
- * command holds is the thing enrollments hang off and the thing an eligibility check
- * already reads: a `reassignment` hold per firm the departed member owns, blocking
- * every automated action kind including `enrollment_advance`. When G8 lands, its
- * pre-action re-read finds that hold and stops, without G8 having to know a departure
- * happened — which is why the hold is the right place for it rather than a column on
- * a table that does not exist yet. `PENDING_RETENTION_TABLES` names the follow-up.
+ * reassignment", and this command opens two kinds of `reassignment` hold to do it:
+ * one per firm the departed member owns, and one per live enrollment assigned to
+ * them. Both block every automated action kind, including `enrollment_advance`.
  *
- * The assignment itself is left alone. Section 5.2 gives assignment to admins, and an
- * admin cannot reassign a firm they cannot see the owner of; nulling the assignee
- * would hide the work that needs a new owner at the moment somebody has to find it.
+ * Two kinds rather than one, because the two sets are not the same set.
+ * `sequence_enrollments.assigned_user_id` is its own column (0012), so an enrollment
+ * the departed member was running may sit at a firm assigned to somebody who is still
+ * here — a firm hold would miss it — and a firm they owned may carry enrollments
+ * assigned to a colleague, which the firm hold catches and should. Holding both is
+ * the only version that covers the departed member's work exactly.
+ *
+ * Neither needs G8 to know a departure happened. `applicableHolds` in
+ * `packages/domain/sequences/resume.ts` already reads the workspace, firm,
+ * opportunity, owner and enrollment scopes before every action, so the hold is read
+ * by code that was written before this command existed — which is why a hold is the
+ * right mechanism here and a column on somebody else's table is not.
+ *
+ * The assignment itself is left alone, on both. Section 5.2 gives assignment to
+ * admins, and an admin cannot reassign work they cannot see the owner of; nulling the
+ * assignee would hide the work that needs a new owner at the moment somebody has to
+ * find it.
  */
 
 export type DepartureRefusal =
@@ -62,6 +72,8 @@ export interface DeparturePreview {
   /** Rows of envelope-encrypted refresh-token material this departure would delete. */
   readonly refreshTokenRows: number;
   readonly assignedFirms: number;
+  /** Live enrollments assigned to this member, which a commit would hold for reassignment. */
+  readonly assignedEnrollments: number;
   /** True when the departure has already happened; a commit would report it, not redo it. */
   readonly alreadyDeparted: boolean;
 }
@@ -76,6 +88,7 @@ export interface DepartureOutcome {
   readonly watchesCancelled: number;
   readonly refreshTokenMaterialDeleted: boolean;
   readonly firmsHeldForReassignment: number;
+  readonly enrollmentsHeldForReassignment: number;
   /** True when this call found the departure already recorded. Nothing was revoked. */
   readonly replayed: boolean;
 }
@@ -172,6 +185,15 @@ export async function previewDeparture(
       "SELECT count(*) AS count FROM firms WHERE workspace_id = $1 AND assigned_user_id = $2 AND status = 'active'",
       [workspace, input.userId],
     ),
+    // Live, which 0012 states as `ended_at IS NULL` and expresses in the state:
+    // `active` and `review_required` are the two that have not ended. A `completed`
+    // or `stopped` enrollment needs no reassignment, because nothing will act on it.
+    assignedEnrollments: await countOf(
+      context,
+      `SELECT count(*) AS count FROM sequence_enrollments
+        WHERE workspace_id = $1 AND assigned_user_id = $2 AND ended_at IS NULL`,
+      [workspace, input.userId],
+    ),
     alreadyDeparted:
       (await countOf(context, 'SELECT count(*) AS count FROM departures WHERE workspace_id = $1 AND user_id = $2', [
         workspace,
@@ -227,6 +249,7 @@ export async function commitDeparture(
       watchesCancelled: recorded.watchesCancelled ?? 0,
       refreshTokenMaterialDeleted: recorded.refreshTokenMaterialDeleted ?? false,
       firmsHeldForReassignment: recorded.firmsHeldForReassignment ?? 0,
+      enrollmentsHeldForReassignment: recorded.enrollmentsHeldForReassignment ?? 0,
       replayed: true,
     });
   }
@@ -298,6 +321,29 @@ export async function commitDeparture(
     [workspace, input.userId, [...HELD_ACTION_KINDS], departureId],
   );
 
+  // And one per live enrollment assigned to them, for the enrollments a firm hold
+  // would not reach. `NOT EXISTS` is the same idempotence guard the firm holds use:
+  // `active_holds` has no unique constraint to conflict on, and a second departure
+  // command for the same member is stopped by `departures_one_per_user` long before
+  // this statement — but a reassignment hold opened by hand should not be doubled.
+  const enrollmentHolds = await context.db.query<{ id: string }>(
+    `INSERT INTO active_holds
+       (workspace_id, scope_kind, scope_key, reason_code, blocked_action_kinds, source_event_kind,
+        source_event_id, owner_user_id, recovery_action)
+     SELECT $1, 'enrollment', e.id::text, 'reassignment', $3::text[], 'membership.departed', $4, $2,
+            'resume_after_review'
+       FROM sequence_enrollments e
+      WHERE e.workspace_id = $1 AND e.assigned_user_id = $2 AND e.ended_at IS NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM active_holds h
+           WHERE h.workspace_id = e.workspace_id AND h.scope_kind = 'enrollment' AND h.scope_key = e.id::text
+             AND h.reason_code = 'reassignment' AND h.source_event_kind = 'membership.departed'
+             AND h.released_at IS NULL
+        )
+     RETURNING id`,
+    [workspace, input.userId, [...HELD_ACTION_KINDS], departureId],
+  );
+
   const outcome: DepartureOutcome = {
     userId: input.userId,
     membershipRevoked: (membershipUpdate.rowCount ?? 0) > 0,
@@ -308,6 +354,7 @@ export async function commitDeparture(
     watchesCancelled: watches.rowCount ?? 0,
     refreshTokenMaterialDeleted: (tokens.rowCount ?? 0) > 0,
     firmsHeldForReassignment: holds.rows.length,
+    enrollmentsHeldForReassignment: enrollmentHolds.rows.length,
     replayed: false,
   };
 
@@ -328,6 +375,7 @@ export async function commitDeparture(
       mailboxesDisconnected: outcome.mailboxesDisconnected,
       refreshTokenMaterialDeleted: outcome.refreshTokenMaterialDeleted,
       firmsHeldForReassignment: outcome.firmsHeldForReassignment,
+      enrollmentsHeldForReassignment: outcome.enrollmentsHeldForReassignment,
     },
   });
 

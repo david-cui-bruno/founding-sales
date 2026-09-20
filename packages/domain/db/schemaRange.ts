@@ -26,12 +26,13 @@ export const CURRENT_SCHEMA_VERSION = 14;
  *
  * Lanes G5 and G2 shipped migrations 0002 and 0003 from the same main and each widened
  * this constant for its own; lane G3a widened it again for migration 0004, G3b for
- * 0005, G4 for 0006, G10 for 0007, G6 for 0008, G7 for 0009 and 0010, and G14 for
- * 0014. A merge that finds two different maxima takes the larger, which is what this
- * one did. That is honest only because nothing has been
- * deployed — G0's {1, 1} was never a promise made to a running production binary. From
- * the first real deployment onwards the widening must precede the migration by a
- * release, and the compatibility test will keep saying so.
+ * 0005, G4 for 0006, G10 for 0007, G6 for 0008, G7 for 0009, G7-2 for 0010, G7b for
+ * 0011, G8 for 0012, G9 for 0013 and G14 for 0014. A merge that finds two different
+ * maxima takes the larger, which is what every one of those merges did.
+ * That is honest only because nothing has been deployed — G0's {1, 1} was never a
+ * promise made to a running production binary. From the first real deployment onwards
+ * the widening must precede the migration by a release, and the compatibility test
+ * will keep saying so.
  */
 export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 14 };
 
@@ -123,22 +124,95 @@ export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum:
  * refusing: the admin would believe the sequence had been unblocked.
  *
  * Both maxima move to 10, on the same reasoning as every widening before it.
+ *
+ * Migration 0011 (G7b) moves both a sixth time, and again with a reason on each side.
+ *
+ * The API needs it: `/replies`, `/replies/card` and `/replies/confirm` read
+ * `mail_message_classifications`' three new columns and write
+ * `mail_reply_confirmations`, and `/replies/settings` reads `classifier_settings`.
+ * An API on a version-10 database could render a reply card with no proposed
+ * disposition and then accept a confirmation it had nowhere to put, which would lose
+ * the one record 12.4 requires of a corrected classification.
+ *
+ * The worker needs it: `classify.reply` declares `business_uniqueness`, and the
+ * uniqueness it means is `mail_message_classifications_one_per_layer` together with
+ * the new columns the row carries. A worker on a version-10 database would be
+ * running an at-least-once handler that spends money at a provider with nothing
+ * behind it — the same case G10, G6 and G7 each refused for their own tables — and
+ * it could not record what the call cost, which 13.4 asks for.
+ *
+ * The deploy order stays migrate, then worker, then API. Both maxima move to 11.
+ *
+ * Migration 0012 (G8) moves both a seventh time, and this lane's reasons are the
+ * same two every widening before it gave.
+ *
+ * The API needs it: `/sequences`, `/sequences/steps`, `/sequences/publish`,
+ * `/templates`, `/enrollments` and `/linkedin/*` read and write `sequences`,
+ * `sequence_versions`, `sequence_steps`, `sequence_enrollments` and
+ * `step_executions`, and the template routes read the five columns 0012 adds to
+ * `template_versions`. An API on a version-11 database could accept an enrollment and
+ * have nowhere to put it.
+ *
+ * The worker needs it: `sequence.action` claims a `step_executions` row, and
+ * `UNIQUE (workspace_id, enrollment_id, step_id)` together with the outbound fence
+ * *is* Appendix C's protection for `step-execution:{id}`. A worker on a version-11
+ * database would be running an at-least-once handler with nothing behind it — the
+ * case G10, G6, G7 and G7b each refused for their own tables, and the one invariant 1
+ * ("no duplicate automated email for the same sequence step") rests on. 0012 also
+ * adds the two foreign keys 0010 left for it, so on a version-11 database a fence
+ * could name an enrollment that does not exist.
+ *
+ * The deploy order stays migrate, then worker, then API. Both maxima move to 12.
+ *
+ * Migration 0013 (G9) is the first one that moves the two sides differently, and the
+ * difference is the rule working rather than an oversight.
+ *
+ * The API's minimum moves to 13. `GET /settings`, `POST /settings/update` and
+ * `POST /settings/history` read and write `workspace_settings`, and `GET /diagnostics`
+ * reads it too. An API on a version-12 database could not answer what the postal
+ * footer or the business time zone is, and — worse — `effectiveSendingEnabled` would
+ * have no admin half of 16.2's two switches to read. Fail closed would make it
+ * answer "sending is off" forever, which is safe and useless; refusing to start says
+ * so out loud.
+ *
+ * The worker's minimum does **not** move past G8's 12. Nothing in `apps/worker/src`
+ * reads `workspace_settings` today. The two a worker would plausibly want are read
+ * elsewhere: the holiday calendar is G8's `workspace_holiday_calendars`, which its
+ * own migration raised the worker's minimum for, and the workspace sending
+ * attestation's send-path read is G12's and does not exist yet. The rule from
+ * `docs/decisions/g10-worker-schema-minimum.md` is that a binary declares the lowest
+ * version on which its *first statement* can succeed, not the lowest it would like,
+ * and raising the worker's minimum for a table it never queries would refuse a
+ * database for no reason. The lane that adds the read raises it.
+ *
+ * Both maxima move to 13, because a binary that refused the database it has just been
+ * deployed against would be a self-inflicted outage.
  */
 /**
- * Migration 0014 (G14) moves both a fifth time, and by the same rule the four
- * paragraphs above applied: a binary declares the lowest version on which its *first
- * statement* can succeed.
+ * Migration 0014 (G14) moves both again, by the same rule every paragraph above
+ * applied: a binary declares the lowest version on which its *first statement* can
+ * succeed, not the lowest it would like.
  *
- * The worker needs it. `retention.batch` declares `business_uniqueness`, and the
+ * **The worker's minimum moves from 12 to 14**, and the jump over 13 is the
+ * interesting part. G9 left the worker at `{12, 13}` rather than `{13, 13}` because
+ * migration 0013 is the dashboard and the settings history, which the worker never
+ * reads — a worker that refused a version-12 database would have been refusing a
+ * database it understood perfectly. That reasoning does not survive this migration.
+ * `retention.batch` runs on the worker, it declares `business_uniqueness`, and the
  * uniqueness it declares is `retention_runs_one_per_period` — Appendix C's "deletion
  * tombstone and bounded range" as one constraint. A worker on a version-13 database
- * would run a retention sweep, delete rows, and have nothing recording that the
- * period was swept or how far; the second attempt would sweep again from a boundary
- * nobody wrote down. That is an at-least-once handler with nothing behind it, which
- * is what G10, G6 and G7 each refused for their own tables, and deleting rows is a
- * worse thing to do twice than inserting them.
+ * would claim no period, sweep, *delete rows*, and record nothing saying how far it
+ * got; the retry would sweep again from a boundary nobody wrote down. That is an
+ * at-least-once handler with nothing behind it, which is what G10, G6 and G7 each
+ * refused for their own tables, and deleting rows is a worse thing to do twice than
+ * inserting them.
  *
- * The API needs it. `/retention/*` and `/admin/departure/*` read and write
+ * So the worker's range is `{14, 14}`: it skips 13 not because it needs 0013's
+ * tables but because 14 is the first version on which its first retention statement
+ * can succeed, and a range is a statement about that instant rather than a union of
+ * the migrations a binary happens to touch.
+ *
+ * **The API needs it too.** `/retention/*` and `/admin/departure/*` read and write
  * `retention_policies` rows, `retention_runs`, `deletion_requests` and `departures`.
  * An API on a version-13 database could accept a deletion commit and then have
  * nowhere to record what it deleted, and an unrecorded deletion is the one outcome

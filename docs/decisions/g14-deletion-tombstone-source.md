@@ -1,7 +1,7 @@
-# G14: the deletion tombstone is a prospect opt-out
+# G14: the deletion tombstone has its own suppression source
 
 **Date:** 20 September 2026 · **Lane:** G14 retention · **Spec:** 10.3, 10.2
-**Status:** the decision below was *overruled*. Read the last section first.
+**Status:** decided and implemented in migration 0014.
 
 ## The requirement
 
@@ -16,74 +16,74 @@ Effective means it has to be a row in `suppression_events`, because
 `effective_suppressions` is "the one authoritative view for email and dialing"
 (10.2). Nothing outside that view can prevent contact.
 
-## The constraint
-
-`suppression_events.source` is a closed CHECK with six values, four of which a new
-event may carry: `prospect_opt_out`, `prospect_do_not_call`, `salesperson_manual`
-and `import`. The same list is a zod enum in `packages/contracts` and a
-`TERMINAL_SOURCES` set in `packages/domain/suppression/events.ts` — three files in
-two other lanes' territory, with G7-2, G8 and G9 in flight against them.
-
 ## Decision
 
-**Reuse `prospect_opt_out` rather than widen the vocabulary.**
+**Migration 0014 adds a seventh value to `suppression_events.source`:
+`deletion_tombstone`.** `commitDeletion` writes it for every handle it removes, and
+for the firm itself when the target is a firm.
 
-It has exactly the three properties, and it has them already proved:
-`TERMINAL_SOURCES` includes it, so the suppression is terminal on commit with no
-review window; and Appendix G scenario 30 — "a prospect opt-out cannot use the
-salesperson correction path" — is an existing passing test that a salesperson cannot
-undo one.
+The three properties are inherited rather than newly written, which is the point of
+choosing an existing mechanism over a new rule:
 
-It is also not a fiction. A documented deletion request *is* prospect-originated:
-somebody asked Callie to stop holding their data and, implicitly, to stop contacting
-them. `prospect_opt_out` is the closest true statement in the vocabulary.
+* **Effective** — it is a row in `suppression_events` like any other, and
+  `SUPPRESSING_SOURCES` in `packages/domain/research/suppression.ts` counts it.
+* **Terminal** — `TERMINAL_SOURCES` in `packages/domain/suppression/events.ts`
+  includes it, so no ten-minute review hold opens. There is nothing for a window to
+  protect: the handles were deleted a statement earlier.
+* **Not salesperson-reversible** — `mayCorrectSuppression` allow-lists
+  `salesperson_manual` and nothing else, so it refuses this source with
+  `not_salesperson_originated` **without being edited at all**. Appendix G 30 already
+  proves that path for `prospect_opt_out`; `scenario41.test.ts` now proves it for
+  this source too.
 
-**The provenance lives where provenance belongs.** The deletion is recorded in
-`deletion_requests` with the event ids it inserted, and in a `deletion.committed`
-audit event. A reader asking "why is this handle suppressed" finds the suppression
-event; asking "which command made it" finds the deletion record by its id.
+**The firm scope is used as well as the handle scope.** A firm deletion inserts a
+firm-scoped tombstone in addition to one per handle, because the firm row survives
+redaction and a rediscovered firm with a new address would otherwise be contactable.
 
-**The firm scope is used too.** A firm deletion inserts a firm-scoped tombstone as
-well as one per handle, because the firm row survives redaction and a rediscovered
-firm with a new address would otherwise be contactable.
+**The source is deliberately absent from `recordSuppressionCommandSchema`.** Only
+`commitDeletion` may mint one; no client may claim a deletion tombstone through the
+ordinary suppression endpoint.
 
-## What was rejected
+## Where the change lands
 
-Adding a `deletion_tombstone` source would have been more precise and would have
-required editing `packages/contracts/src/dial.ts`,
-`packages/contracts/src/foundationRows.ts` and
-`packages/domain/suppression/events.ts` — a closed cross-lane vocabulary, mid-flight,
-for a distinction nothing currently reads. If a later release wants the finer
-provenance, the migration is a widened CHECK and a backfill of the events this
-command wrote, which `deletion_requests.tombstone_event_ids` makes findable.
+Six files, not the five that were planned — the sixth is the interesting one.
 
-## Overruled, 20 September 2026
+1. `packages/domain/db/migrations/0014_retention.sql` — `ALTER TABLE
+   suppression_events` drops and re-adds `suppression_events_source_known` with the
+   widened list. Widening a CHECK is additive, so it is safe to ship with the code
+   that writes it rather than a release ahead of it.
+2. `packages/contracts/src/dial.ts` — `SUPPRESSION_SOURCES`.
+3. `packages/contracts/src/foundationRows.ts` — `suppressionEventSchema.source`.
+4. `packages/domain/suppression/events.ts` — `TERMINAL_SOURCES`.
+5. `packages/domain/retention/deletion.ts` — the two `recordSuppression` calls.
+6. **`packages/domain/research/suppression.ts` — `SUPPRESSING_SOURCES`.** This one
+   was not on the list and had to be found. It is the read that decides whether a
+   firm may be researched again. Omitting the new source would have left a deleted
+   firm rediscoverable by the next research run, which is precisely the outcome
+   "prevent renewed contact" names — a widened vocabulary that one reader does not
+   know about is worse than no widening at all.
 
-The deviation was reported and the coordinator rejected it, in the right terms: **the
-audit trail must not say `prospect_opt_out` for an admin deletion.** The reasoning
-this lane used — that the vocabulary is closed, cross-lane and mid-flight — is a
-statement about *when* the change can be made, not about whether it should be. It
-should be, and it is the coordinator's to schedule rather than this lane's to decide.
+`mayCorrectSuppression` in `packages/domain/src/rules/suppressionCanonicalization.ts`
+needed **no** change, and that is the check that the shape is right: a source whose
+irreversibility has to be specially written is a source that could be forgotten
+somewhere else.
 
-So `prospect_opt_out` is an interim and is marked as one. The replacement is
-`deletion_tombstone`, a source with the same three properties — effective, terminal,
-never salesperson-reversible — and its own name in the audit trail. It lands in this
-lane's migration 0014 at the final merge, once 0011, 0012 and 0013 are on main and
-every lane touching the vocabulary has therefore landed. Five places change together:
+## The first answer, and why it was wrong
 
-1. the `suppression_events_source_known` CHECK, by `ALTER` inside 0014;
-2. `SUPPRESSION_SOURCES` and `suppressionEventSchema` in `@fss/contracts`;
-3. G4's `SuppressionSource` type and its canonicaliser handling;
-4. `TERMINAL_SOURCES` and the effective-suppression read, so the new source is
-   terminal on commit and the salesperson correction path refuses it exactly as
-   Appendix G 30 requires of `prospect_opt_out`;
-5. `commitDeletion`, to record it, and `scenario41.test.ts`, to assert the source
-   rather than only the effect.
+This lane's first draft reused `prospect_opt_out`. The argument was that the
+vocabulary is a closed CHECK shared across three lanes then in flight, that
+`prospect_opt_out` already had all three properties with tests to prove them, and
+that a documented deletion request is in some sense prospect-originated.
 
-The trigger is mechanical rather than remembered. `PENDING_RETENTION_TABLES` carries
-G9's `workspace_settings` with this change named in what it owes, so the moment 0013
-is on main the guard test fails and prints the list above.
+The coordinator rejected it on 20 September in the right terms: **the audit trail
+must not say `prospect_opt_out` for an admin deletion.** The reasoning about the
+closed vocabulary is a statement about *when* the change can be made, not about
+whether it should be — and scheduling is the coordinator's, not a lane's.
 
-Until then, `deletion_requests.tombstone_event_ids` is what makes the interim events
-findable, which is also what makes the backfill a one-statement `UPDATE` rather than
-an archaeology exercise.
+Two things are worth keeping from how the interim was handled. The overrule was
+recorded rather than quietly fixed, so this file shows the wrong answer above the
+right one. And the follow-up was wired into the build rather than into a memory:
+`PENDING_RETENTION_TABLES` carried G9's `workspace_settings` with this change named
+in what it owed, so the moment 0013 landed the guard test failed and printed the work
+to do. It is implemented here because a test demanded it, which is the only kind of
+follow-up that survives a context boundary.

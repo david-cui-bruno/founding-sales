@@ -7,6 +7,7 @@ import {
   type ReconcileDeps,
 } from '../../../outbound/index.ts';
 import { createMailWorld, type MailWorld, type MailWorldMailbox } from '../../mail/support/mailWorld.ts';
+import { makeStepExecution } from '../../../db/testing/stepExecutions.ts';
 
 /**
  * A world with mailboxes that can actually send.
@@ -208,8 +209,6 @@ export async function createOutboundWorld(): Promise<OutboundWorld> {
     };
   };
 
-  let stepCounter = 0;
-
   return {
     ...world,
     alpha,
@@ -224,11 +223,22 @@ export async function createOutboundWorld(): Promise<OutboundWorld> {
       );
     },
     prepare: async (mailbox, overrides = {}) => {
-      stepCounter += 1;
       const firm = firmOf(mailbox);
       const zone = overrides.sourceZone ?? FIXTURE_ZONE;
+      // Migration 0012's foreign key: the fence names a step execution that exists.
+      // An override is honoured rather than replaced, because the scenario that puts
+      // the same id in two workspaces is about exactly that id.
+      const requested = overrides.stepExecutionId;
+      const stepExecutionId = await makeStepExecution(world.database.session, {
+        workspaceId: mailbox.workspace.workspaceId,
+        firmId: firm.firmId,
+        opportunityId: firm.opportunityId,
+        userId: mailbox.workspace.salesperson.userId,
+        templateVersionId: mailbox.templateVersionId,
+        ...(typeof requested === 'string' ? { id: requested } : {}),
+      });
       const request: OutboundEmailRequest = {
-        stepExecutionId: `00000000-0000-4000-9000-${String(stepCounter).padStart(12, '0')}`,
+        stepExecutionId,
         enrollmentId: null,
         firmId: firm.firmId,
         contactId: firm.contactId,

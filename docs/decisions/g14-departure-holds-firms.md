@@ -1,4 +1,4 @@
-# G14: departure holds firms rather than unassigning them
+# G14: departure holds firms and enrollments rather than unassigning them
 
 **Date:** 20 September 2026 · **Lane:** G14 retention · **Spec:** 10.3, 4.3, 5.2
 
@@ -6,23 +6,50 @@
 
 "Holds the departed user's enrollments for reassignment."
 
-`enrollments` is lane G8's table and is not on main. This lane could not hold a row
-that does not exist, and leaving the automation of a departed person's firms
-runnable was not an option.
+When this lane started, `sequence_enrollments` was lane G8's table and was not on
+main. It landed with migration 0012 before this lane published, so the command does
+both halves now, and the interim is recorded below because it is the part worth
+reading.
 
 ## Decision
 
-**One `reassignment` hold per firm the departed member owns**, blocking every
-automated action kind including `enrollment_advance`, with
-`source_event_kind = 'membership.departed'` and
-`recovery_action = 'resume_after_review'`.
+**Two `reassignment` holds**, both blocking every automated action kind including
+`enrollment_advance`, both with `source_event_kind = 'membership.departed'` and
+`recovery_action = 'resume_after_review'`:
 
-Enrollments hang off firms and opportunities, and section 11.2 makes the worker
-re-read "applicable holds" inside the claiming transaction before every external
-action. So the hold stops the enrollments G8 will add without G8 having to know a
-departure happened — which is why the hold is the right place for this rather than a
-column on a table that does not exist yet. `PENDING_RETENTION_TABLES` names the
-follow-up so the build asks for it when `enrollments` lands.
+* one per **firm** the departed member owns (`scope_kind = 'firm'`);
+* one per **live enrollment** assigned to them (`scope_kind = 'enrollment'`, where
+  live is 0012's `ended_at IS NULL`).
+
+**Both, because the two sets are not the same set.**
+`sequence_enrollments.assigned_user_id` is its own column, so an enrollment the
+departed member was running may sit at a firm assigned to a colleague — a firm hold
+alone would miss it — and a firm they owned may carry enrollments assigned to
+somebody else, which the firm hold catches and should, because the firm itself needs
+a new owner. Holding both is the only version that covers the departed member's work
+exactly.
+
+Neither hold requires G8 to know a departure happened. `applicableHolds` in
+`packages/domain/sequences/resume.ts` reads the workspace, firm, opportunity, owner
+and enrollment scopes before every external action, inside the claiming transaction
+(11.2). The hold is therefore read by code written before this command existed, which
+is why a hold is the right mechanism here and a column on somebody else's table is
+not.
+
+**The enrollment itself is untouched.** A departure is not a stop: the work still
+needs doing, by somebody else. 11.2's terminal reasons are about the prospect — they
+replied, they opted out, the stage closed — and "the salesperson left" is not one of
+them. Contrast the deletion workflow, which *does* stop enrollments with `admin_stop`,
+because there the prospect's data is gone and there is nothing left to do.
+
+### The interim, and how it was made to expire
+
+While `sequence_enrollments` was still in flight, the command opened only the
+firm-scoped holds and relied on the fact that enrollments hang off firms. That was a
+real gap and not a complete answer, so it was written into
+`PENDING_RETENTION_TABLES` as something G8's table would owe. When 0012 landed the
+guard test failed and printed the sentence; the direct hold is here because the build
+asked for it.
 
 `reassignment` is an existing reason code from section 15's closed list, and it is
 the accurate one: the firm needs a new owner and its work is blocked until it has

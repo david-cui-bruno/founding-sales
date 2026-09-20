@@ -13,6 +13,7 @@
     "crm/**/*.ts",
     "policy/**/*.ts",
     "suppression/**/*.ts",
+    "classification/**/*.ts",
     "dial/**/*.ts",
     "research/**/*.ts",
     "test/**/*.ts",

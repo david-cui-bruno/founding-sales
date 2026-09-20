@@ -87,6 +87,38 @@ CREATE TRIGGER workspaces_seed_retention_policies
 SELECT seed_default_retention_policies(w.id, TIMESTAMPTZ '2026-09-20 00:00:00+00') FROM workspaces w;
 
 -- ---------------------------------------------------------------------------
+-- suppression_events.source gains `deletion_tombstone` (specification 10.3, 10.2)
+--
+-- "A documented deletion workflow ... retain[s] a minimal normalized suppression
+-- tombstone where needed to prevent renewed contact."
+--
+-- That tombstone has to be a row in `suppression_events`, because
+-- `effective_suppressions` is the one authoritative view for email and dialing. It
+-- needs three properties: effective at once, terminal, and never reversible by a
+-- salesperson. `prospect_opt_out` has all three, and this lane shipped its first
+-- draft borrowing it — but the audit trail would then say a prospect opted out when
+-- an admin ran a deletion, and that is a lie told by a table whose entire purpose is
+-- to be believed.
+--
+-- So the vocabulary gains a seventh value with the same three properties and its own
+-- name. Widening a CHECK is additive: an older binary reading these rows sees a
+-- source it does not recognise, which `SUPPRESSING_SOURCES` in
+-- `packages/domain/research/suppression.ts` fails closed on — anything not
+-- demonstrably superseded counts as suppressing. Under expand/migrate/contract that
+-- is the safe direction, and it is why the widening may ship with the code that
+-- writes it rather than a release ahead of it.
+--
+-- `suppression_events_supersession_consistent` is untouched and still holds: a
+-- deletion tombstone supersedes nothing, so it carries no `supersedes_event_id`.
+-- The constraint keeps its name, so its failing-insert case in
+-- `test/db/constraints.test.ts` keeps covering it.
+-- ---------------------------------------------------------------------------
+ALTER TABLE suppression_events DROP CONSTRAINT suppression_events_source_known;
+ALTER TABLE suppression_events ADD CONSTRAINT suppression_events_source_known
+  CHECK (source IN ('prospect_opt_out', 'prospect_do_not_call', 'salesperson_manual', 'import',
+                    'deletion_tombstone', 'mistaken_entry_correction', 'admin_supersession'));
+
+-- ---------------------------------------------------------------------------
 -- retention_runs (Appendix C, specification 10.3)
 --
 -- One row per workspace, data kind and period. The period is the bounded range's

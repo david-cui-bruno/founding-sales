@@ -88,26 +88,27 @@ indistinguishable from a kind whose job has been failing quietly for a month.
 
 Two guards keep the registry honest, and both are tests rather than notes.
 
-`PENDING_RETENTION_TABLES` names the tables in-flight lanes will bring — G7b's two
-classifier tables, G8's ten sequence tables, G9's workspace settings — and what each
+`PENDING_RETENTION_TABLES` names tables an in-flight lane will bring and what each
 will owe. The test asks the live catalog for each one and fails the build the moment
 it exists. The follow-up cannot be forgotten because the build stops when it becomes
-possible.
+possible — and at the moment somebody is already looking at that area.
 
-One entry owes something that is not about its own rows. G9's `workspace_settings`
-arriving means 0013 is on main, which means every lane touching the closed
-suppression vocabulary has landed — and that is the moment the deletion tombstone's
-borrowed `prospect_opt_out` source is replaced by its own `deletion_tombstone`. The
-guard is what remembers it; see `docs/decisions/g14-deletion-tombstone-source.md`.
-
-It has already been paid once. `canceled_drafts` shipped as `declared_pending`
-against G7-2's `outbound_messages`; when that lane merged, the guard failed, and the
-target was written in the same session. That is the mechanism working rather than a
-story about it.
+**It is empty now, and it was paid twice.** `canceled_drafts` shipped as
+`declared_pending` against G7-2's `outbound_messages`; when that lane merged, the
+guard failed and the target was written. Then 0011, 0012 and 0013 landed, the guard
+printed all thirteen remaining sentences at once — G7b's two classifier tables, G8's
+ten sequence tables, G9's workspace settings — and each was worked off: the
+dispositions, the deletion's two new removals and its terminal stop, departure's
+direct enrollment hold, and the `deletion_tombstone` source that G9's entry carried
+as a second obligation. The mechanism is kept, exported and tested in its empty
+state, because the next lane in that position needs somewhere to put the debt.
 
 `TABLE_RETENTION_COVERAGE` catches what that list could not: it classifies *every*
 table PostgreSQL reports, and the test fails when one is missing. A lane adding a
 table has to say what section 10.3 does with its rows before the gate goes green.
+Its six dispositions became eight at the final merge — `deletion_stops` and
+`departure_holds` — because "terminally stopped, nothing removed" and "held, nothing
+touched" are outcomes the first six could not state without lying.
 
 ## Deletion
 
@@ -122,18 +123,32 @@ has changed since makes the recomputed hash disagree and the commit is refused.
 
 What a commit does:
 
-* **removes** `email_addresses`, `phone_routes`, the firm's `mail_messages` and
-  everything cascading from them, `evidence_items`, `call_logs`, `callbacks`,
-  `dial_tickets`, `today_items`, `today_snoozes`, `record_aliases`,
-  `research_suggestions` and `firm_locations`;
+* **removes** `mail_reply_confirmations` (first, because they reference callbacks),
+  the firm's `mail_messages` and everything cascading from them, `dial_tickets`,
+  `call_logs`, `callbacks`, `today_snoozes`, `today_items`, `phone_routes`,
+  `email_addresses`, `research_suggestions`, `evidence_items`,
+  `enrollment_linkedin_results`, `record_aliases` and `firm_locations`;
+* **stops** live `sequence_enrollments` with 11.2's `admin_stop` and cancels
+  unexecuted `step_executions` — nothing is removed or blanked; what changes is that
+  no worker will act on the plan again;
 * **redacts** `contacts` and, for a firm deletion, `firms` — the name becomes
-  `[deleted]` and the identifying fields become null;
+  `[deleted]` and the identifying fields become null — and the subject and body of
+  any unsent fence;
 * **retains** `opportunities`, `opportunity_stage_events`, `record_merge_events`,
-  `crm_domain_events`, `audit_events` and `suppression_events`;
+  `crm_domain_events`, `audit_events`, `suppression_events` and the executed step
+  history 11.1 requires preserved;
 * **inserts** one handle-scoped suppression tombstone per removed handle, and a
-  firm-scoped one for a firm deletion, each journalled before its row — carrying
-  `prospect_opt_out` as an interim source until 0014 adds `deletion_tombstone`;
+  firm-scoped one for a firm deletion, each journalled before its row, each with
+  source `deletion_tombstone`;
 * **audits** itself as `deletion.committed`.
+
+Two orderings are load-bearing and both are commented in `deletion.ts`. A reply
+confirmation is deleted before the callback it references. And an unsent fence is
+detached from its recipient route before the routes go, because
+`outbound_messages_route_fkey` has no `ON DELETE` clause — which is also why a route
+frozen into a fence that has *dispatched* cannot be removed at all. The preview says
+so, under `retains.email_addresses_pinned_by_a_sent_fence`, and the handle is
+suppressed by a tombstone either way.
 
 Redaction rather than deletion for the two tables is not a compromise; it is what
 the append-only privileges require. See
@@ -147,13 +162,20 @@ never self, never the last active admin.
 The commit revokes the membership, the devices, the sessions and the device refresh
 credentials; cancels the Gmail watch and disconnects the mailbox; **deletes**
 `mailbox_tokens`, which is the envelope-encrypted refresh token and the one
-irreversible removal in the list; and opens a `reassignment` hold on every firm the
-departed member still owns.
+irreversible removal in the list; and opens two kinds of `reassignment` hold — one
+per firm the departed member owns, and one per live enrollment assigned to them.
+
+Both kinds, because `sequence_enrollments.assigned_user_id` is its own column: an
+enrollment the departed member was running may sit at a colleague's firm, and a firm
+hold alone would miss it. `applicableHolds` reads the firm, opportunity, owner and
+enrollment scopes before every action, so neither hold needs G8 to know a departure
+happened.
 
 It deletes nothing else. The mailbox row stays because the firm's correspondence
-hangs off it, the firms stay assigned so an admin can see whose work needs a new
-owner, and the business history is untouched. `departures_one_per_user` makes a
-second command report the first rather than revoke twice.
+hangs off it, the firms stay assigned and the enrollments stay `active` so an admin
+can see whose work needs a new owner, and the business history is untouched.
+`departures_one_per_user` makes a second command report the first rather than revoke
+twice.
 
 `POST /admin/memberships/deactivate` still exists and still does its four
 revocations. This is the complete version; the two are not merged because
@@ -183,7 +205,7 @@ method a caller could use to ask for them.
    is new; most of the time it already exists and is `declared_pending`.
 2. Write the sweep, bounded by `RETENTION_BATCH_LIMIT` and by the policy's boundary.
 3. Move the target to `implemented` and remove its row from
-   `PENDING_RETENTION_TABLES`.
+   `PENDING_RETENTION_TABLES` if it had one.
 4. Add the table to `TABLE_RETENTION_COVERAGE` if it is new.
 5. Add a case to `packages/domain/test/retention/scenario41.test.ts` that seeds a row
    on each side of the boundary. A sweep that takes the fresh row is as wrong as one

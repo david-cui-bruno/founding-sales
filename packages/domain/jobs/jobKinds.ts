@@ -28,6 +28,7 @@ export const JOB_KINDS = [
   'research.page',
   'research.firm',
   'suppression.finalize',
+  'classify.reply',
   'retention.batch',
   'import.batch',
   'canary',
@@ -60,6 +61,13 @@ export const JOB_KIND_PROTECTION: Readonly<Record<JobKind, IdempotencyProtection
   'research.firm': 'business_uniqueness',
   // Event lock and terminal marker.
   'suppression.finalize': 'business_uniqueness',
+  // Lane G7b. Appendix C does not name this work, because revision 3 describes the
+  // classification and not the queue it runs on; Appendix A's "Record uncertain or
+  // ambiguous reply" row does say where it belongs — "LLM classification may be
+  // queued". One model row per message, refused a second time by
+  // `mail_message_classifications_one_per_layer`, which is business uniqueness in
+  // the same sense as every row above it.
+  'classify.reply': 'business_uniqueness',
   // Deletion tombstone over a bounded range.
   'retention.batch': 'business_uniqueness',
   // Command receipt and canonical keys.
@@ -84,6 +92,7 @@ export const jobIdempotencyKey = Object.freeze({
   retentionBatch: (dataKind: string, period: string): string => `retention:${dataKind}:${period}`,
   importBatch: (batchId: string, rowNumber: number): string => `import:${batchId}:${String(rowNumber)}`,
   canary: (quarterHourIso: string): string => `canary:${quarterHourIso}`,
+  classifyReply: (messageId: string): string => `classify-reply:${messageId}`,
 });
 
 /** Fifteen minutes in milliseconds; the canary's period (13.3). */

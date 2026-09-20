@@ -1,9 +1,20 @@
 import pg from 'pg';
 import type { QueryResultRowLike, SessionQueryable } from '@fss/domain/db';
 import { HandlerRegistry, canaryHandler, createCloudWatchSink, loadCloudWatchTransport } from '@fss/domain/jobs';
+import { defaultTodaySources } from '@fss/domain/today';
+import { dueSequenceWorkSource } from '@fss/domain/sequences';
 import { WORKER_EXIT_CODES } from '../index.ts';
+import {
+  classifyHandlers,
+  classifyReplySource,
+  classifyWorkerOptions,
+  describeClassifier,
+  type ClassifyWorkerOptions,
+} from '../handlers/classify.ts';
 import { mailHandlers } from '../handlers/mail.ts';
+import { outboundSendHandoff } from '../handlers/outboundSendHandoff.ts';
 import { researchHandlers } from '../handlers/research.ts';
+import { sequenceActionJobHandler, sequenceActionSource } from '../handlers/sequenceAction.ts';
 import { retentionBatchJobHandler, retentionSource } from '../handlers/retention.ts';
 import { suppressionFinalizeJobHandler } from '../handlers/suppressionFinalize.ts';
 import { todayBuildJobHandler, todayBuildSource } from '../handlers/todayBuild.ts';
@@ -37,18 +48,39 @@ import { WorkerStartupRefusal, startWorker } from './worker.ts';
  * nothing, and with mailboxes connected it keeps the queue truthful about what is
  * owed whether or not this image can claim it.
  *
+ * `classify.reply` (G7b) follows the same shape with one difference worth naming:
+ * its adapter is built here, from `FSS_LLM_CLASSIFIER_API_KEY`, because there is
+ * exactly one secret and no second configuration object to review. A deployment
+ * without the key registers no handler; a deployment with `FSS_CLASSIFIER=off`
+ * registers it and each job records a `disabled` attempt having sent nothing.
  * `retention.batch` is registered unconditionally and needs no configuration at all:
  * every horizon in section 10.3 is a row in `retention_policies` and every sweep is a
  * statement against this database. It is the one job kind in this image that reaches
  * nothing outside PostgreSQL.
  */
-function registerHandlers(registry: HandlerRegistry): HandlerRegistry {
+function registerHandlers(
+  registry: HandlerRegistry,
+  classifier: ClassifyWorkerOptions | undefined,
+): HandlerRegistry {
   registry.register(canaryHandler());
   registry.register(suppressionFinalizeJobHandler());
-  registry.register(todayBuildJobHandler());
+  // 8.2's lane 3 is due sequence work, and G6 left `TodaySource` as the seam for it.
+  // The source is composed here rather than added to `defaultTodaySources()` because
+  // `packages/domain/sequences` already imports `packages/domain/today` for the
+  // interface, and the reverse import would be a cycle between two packages that are
+  // shipped in the same image.
+  registry.register(
+    todayBuildJobHandler({ sources: [...defaultTodaySources(), dueSequenceWorkSource()] }),
+  );
+  // The hand-off is G7-2's fence, adapted. `prepare` and the outcome read are real;
+  // `dispatch` needs the Gmail configuration this release does not hand out, so a due
+  // email step holds with the reason the fence gave rather than throwing. See
+  // `handlers/outboundSendHandoff.ts`.
+  registry.register(sequenceActionJobHandler({ sendHandoff: outboundSendHandoff() }));
   registry.register(retentionBatchJobHandler());
   for (const handler of researchHandlers({ providers: {} })) registry.register(handler);
   for (const handler of mailHandlers(undefined)) registry.register(handler);
+  for (const handler of classifyHandlers(classifier)) registry.register(handler);
   return registry;
 }
 
@@ -128,7 +160,12 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
     return WORKER_EXIT_CODES.ok;
   }
 
-  log.log('info', 'worker_configuration', describeWorkerConfig(config));
+  // Lane G7b. Absent unless the deployment injected `FSS_LLM_CLASSIFIER_API_KEY`,
+  // in which case `classify.reply` stays unclaimed in the queue; the source still
+  // runs, so the backlog is truthful about what is owed. `describeClassifier` says
+  // whether a key is configured and never what it is.
+  const classifier = await classifyWorkerOptions(environment);
+  log.log('info', 'worker_configuration', { ...describeWorkerConfig(config), ...describeClassifier(classifier) });
 
   const sink = await createSink(config, log);
   // One connection for the scheduler's advisory lock, one per runner slot, one for the
@@ -144,8 +181,15 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
         runners: sessions.slice(1, 1 + config.concurrency),
         metrics: sessions[1 + config.concurrency] as SessionQueryable,
       },
-      registry: registerHandlers(new HandlerRegistry()),
-      sources: [canarySource(), todayBuildSource(), retentionSource(), ...mailSources()],
+      registry: registerHandlers(new HandlerRegistry(), classifier),
+      sources: [
+        canarySource(),
+        todayBuildSource(),
+        sequenceActionSource(),
+        retentionSource(),
+        ...mailSources(),
+        classifyReplySource(),
+      ],
       sink,
       log,
     });

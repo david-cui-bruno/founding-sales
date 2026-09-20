@@ -364,11 +364,29 @@ export function retentionTargetFor(dataKind: string): RetentionTarget | undefine
 /**
  * The tables a lane still in flight will bring, and what each of them will owe.
  *
- * `test/retention/targets.test.ts` asks the live catalog for each of these and fails
- * when one exists. That is the whole point: three lanes are landing beside this one,
- * each brings a table with a retention or a departure obligation, and the obligation
- * is invisible until the table is there. A list nobody checks is a comment; a list
- * the build checks is a deadline.
+ * **The list is empty, and that is the finished state rather than a missing one.**
+ *
+ * It was not empty. This lane was written beside three others — G7b's classifier
+ * records, G8's sequences, G9's settings — whose tables were not on main, so no
+ * sweep, no deletion step and no departure hold could be written against them. A
+ * retention lane that shipped in that position and said nothing would have left
+ * fifteen tables with no stated horizon and no way to notice.
+ *
+ * So each one was named here with what it would owe, and
+ * `test/retention/targets.test.ts` asked the live catalog for all of them on every
+ * run. The moment a table arrived, the test failed and printed the sentence saying
+ * what to write. That happened twice: once when G7-2's `outbound_messages` landed
+ * and `canceled_drafts` had to be implemented, and once at this lane's final merge,
+ * when all thirteen remaining names arrived together and were worked off — the
+ * dispositions into `TABLE_RETENTION_COVERAGE`, the deletion's terminal stop and its
+ * two new removals into `deletion.ts`, and the direct enrollment hold into
+ * `departure.ts`.
+ *
+ * The mechanism stays, exported and tested, because the next lane to add a table
+ * with a 10.3 obligation it cannot yet satisfy has somewhere to put it. Until then
+ * `TABLE_RETENTION_COVERAGE` is the guard that needs no foresight: it fails on any
+ * table in the catalog that nobody classified, named in advance or not.
+ * See docs/decisions/g14-retention-target-registry.md.
  */
 export interface PendingRetentionTable {
   readonly table: string;
@@ -376,89 +394,4 @@ export interface PendingRetentionTable {
   readonly owes: string;
 }
 
-export const PENDING_RETENTION_TABLES: readonly PendingRetentionTable[] = Object.freeze([
-  // ------------------------------------------------------------------- G7b
-  //
-  // The classifier's own records. G7-1's `mail_message_classifications` is already
-  // covered — it cascades with its message — but these two are new rows about a
-  // prospect's words, and G7b also adds columns to that table which the cascade will
-  // carry without anyone having to say so.
-  {
-    table: 'mail_classification_calls',
-    lane: 'G7b',
-    owes: 'a retention disposition: a classifier call records the excerpt it reasoned over, which is message content under the unmatched-metadata rule, and the deletion workflow must remove a deleted firm’s.',
-  },
-  {
-    table: 'mail_reply_confirmations',
-    lane: 'G7b',
-    owes: 'a retention disposition: a confirmation names the disposition a salesperson chose for a prospect’s reply, and it follows the message it confirms.',
-  },
-
-  // -------------------------------------------------------------------- G8
-  //
-  // The two the departure command and the deletion workflow both owe something to
-  // are first; the rest need a disposition in `TABLE_RETENTION_COVERAGE` and, where
-  // they carry rendered text or a prospect's words, a sweep or a deletion step.
-  {
-    table: 'sequence_enrollments',
-    lane: 'G8',
-    owes: 'the departure command must hold the departed member’s enrollments directly rather than only through the firm-scoped reassignment hold, and the deletion workflow must terminally stop a deleted firm’s.',
-  },
-  {
-    table: 'step_executions',
-    lane: 'G8',
-    owes: 'the deletion workflow must cancel a deleted firm’s unexecuted steps, because an execution whose contact has been erased would otherwise still be claimed by a worker.',
-  },
-  {
-    table: 'sequence_versions',
-    lane: 'G8',
-    owes: 'a retention disposition: an immutable published version is Callie’s own plan and is almost certainly operational, but it has to be said rather than assumed.',
-  },
-  {
-    table: 'sequence_steps',
-    lane: 'G8',
-    owes: 'a retention disposition, for the same reason as its version: the step text is Callie’s, not a prospect’s, and the registry has to say so.',
-  },
-  {
-    table: 'step_execution_shifts',
-    lane: 'G8',
-    owes: 'a retention disposition: the shift history names an execution and a hold interval, so it follows the execution a deletion cancels.',
-  },
-  {
-    table: 'enrollment_linkedin_results',
-    lane: 'G8',
-    owes: 'a retention disposition and a deletion step: a recorded LinkedIn reply is a prospect’s response and is correspondence.',
-  },
-  {
-    table: 'enrollment_migrations',
-    lane: 'G8',
-    owes: 'a retention disposition: an audited admin migration is operational history, and the deletion workflow needs to know whether its items name a deleted firm.',
-  },
-  {
-    table: 'enrollment_migration_items',
-    lane: 'G8',
-    owes: 'a retention disposition and probably a deletion step, because an item names one enrollment and therefore one contact.',
-  },
-  {
-    table: 'sequence_event_cursors',
-    lane: 'G8',
-    owes: 'a retention disposition: a cursor is queue mechanics and is expected to be operational, which still has to be recorded.',
-  },
-  {
-    table: 'workspace_holiday_calendars',
-    lane: 'G8',
-    owes: 'a retention disposition: a versioned holiday calendar is workspace configuration and holds no prospect data.',
-  },
-
-  // -------------------------------------------------------------------- G9
-  //
-  // This one carries a second obligation that has nothing to do with its own rows.
-  // 0013 landing is the signal that every lane touching the closed suppression
-  // vocabulary has merged, which is when the coordinator directed this lane to
-  // replace the deletion tombstone's borrowed source with its own.
-  {
-    table: 'workspace_settings',
-    lane: 'G9',
-    owes: 'a retention disposition for it and its history table; and — because 0013 on main means every lane touching the suppression vocabulary has landed — the `deletion_tombstone` source change the coordinator directed on 20 September, which this lane’s 0014 must make in the CHECK, the contracts enum, G4’s source type and canonicaliser handling, and the effective-suppression read. See docs/decisions/g14-deletion-tombstone-source.md.',
-  },
-]);
+export const PENDING_RETENTION_TABLES: readonly PendingRetentionTable[] = Object.freeze([]);

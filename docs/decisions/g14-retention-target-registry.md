@@ -50,20 +50,42 @@ So the policy table's vocabulary is untouched and the ledger's is the superset. 
 test asserts the difference is exactly `['job_payloads']`, so the two cannot drift
 apart silently.
 
-## The guard has already been paid once
+## The guard was paid twice
 
-`canceled_drafts` shipped in this branch as `declared_pending`, naming
+**Once, mid-branch.** `canceled_drafts` shipped as `declared_pending`, naming
 `outbound_messages` as lane G7-2's. G7-2 merged while this lane was still open, the
 guard test failed with the sentence it was written to print, and the target was
 implemented before the branch was published.
 
-That is the whole design working in the space of one merge, and it is worth
-recording because the next time it fires the lane that sees it will be somebody
-else's.
+**Once at the final merge.** Migrations 0011, 0012 and 0013 landed together from
+this lane's point of view, and the guard printed all thirteen remaining sentences at
+once: G7b's `mail_classification_calls` and `mail_reply_confirmations`, G8's ten
+sequence tables, G9's `workspace_settings`. Each one named the work, and each one was
+done:
+
+* dispositions for all fifteen new tables in `TABLE_RETENTION_COVERAGE`, including
+  two new disposition values — `deletion_stops` and `departure_holds` — because
+  "stopped but not removed" and "held but not touched" were outcomes the original
+  six could not express honestly;
+* `commitDeletion` removes `enrollment_linkedin_results` (a prospect's own words) and
+  `mail_reply_confirmations` (before the callbacks they reference), terminally stops
+  live enrollments with 11.2's existing `admin_stop`, and cancels unexecuted
+  `step_executions`;
+* `commitDeparture` opens an enrollment-scoped `reassignment` hold per live
+  enrollment the departed member was running, which a firm-scoped hold would not
+  reach — see `g14-departure-holds-firms.md`;
+* and the `deletion_tombstone` source, which G9's entry carried as a second
+  obligation — see `g14-deletion-tombstone-source.md`.
+
+That is the mechanism working across a context boundary, which is the case it was
+built for: the lane that wrote the list was not, in any useful sense, the lane that
+worked it off.
 
 ## What remains pending
 
-`enrollments` and `step_executions` (G8) and the classifier's stored output (G7b).
-The ledger says every day that `canceled_drafts` is swept and that nothing else is
-owed; when those tables land, the departure command owes them a hold and the
-deletion workflow owes them a stop, and the build will say so.
+Nothing. `PENDING_RETENTION_TABLES` is empty, and the mechanism is kept — exported,
+typed, and with its shape still asserted — because the next lane to add a table with
+a 10.3 obligation it cannot yet satisfy needs somewhere to put it. The assertion that
+used to read `length > 0` now reads `toEqual([])`; that is not a weakening, because
+`TABLE_RETENTION_COVERAGE` is the guard that needs no foresight and it covers every
+table in the catalog whether anyone predicted it or not.

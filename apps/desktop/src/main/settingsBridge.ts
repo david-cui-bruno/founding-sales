@@ -1,0 +1,441 @@
+import { z } from 'zod';
+import {
+  dashboardResponseSchema,
+  diagnosticsResponseSchema,
+  pipelineStageDtoSchema,
+  settingsSnapshotSchema,
+  type SettingKey,
+} from '@fss/contracts';
+import type {
+  AdminScreen,
+  AdminState,
+  PipelineStageRowView,
+  RecordHolidayCalendarInput,
+  RecordSendingAuthenticationInput,
+  SaveSettingInput,
+  SetSendingCapInput,
+} from '../renderer/settingsContract.ts';
+import type { AuthedClient } from './authedClient.ts';
+
+/**
+ * The administration window's half of the bridge, in the main process
+ * (specification 10.1, 13.3, 13.4, 14.2).
+ *
+ * The same shape as G6's Today and CRM bridges, and for the same reasons: the
+ * renderer is handed a state and never a token, every mutation goes through
+ * `command` so the 5.3 envelope cannot be forgotten, and a refusal arrives as a
+ * stable code the view turns into one sentence.
+ *
+ * It computes nothing. `effectiveSendingEnabled` is read out of the settings
+ * response rather than recomputed, the dashboard's audience is whatever the server
+ * decided, and a stage's administrability is the terminal flag the server sent. A
+ * client that recomputed any of those would be a second implementation of a rule
+ * that has to have exactly one.
+ */
+
+export const ADMIN_IPC_CHANNELS = {
+  state: 'callie:admin:state',
+  show: 'callie:admin:show',
+  saveSetting: 'callie:admin:save-setting',
+  openHistory: 'callie:admin:open-history',
+  loadDashboard: 'callie:admin:load-dashboard',
+  createStage: 'callie:admin:create-stage',
+  renameStage: 'callie:admin:rename-stage',
+  reorderStages: 'callie:admin:reorder-stages',
+  retireStage: 'callie:admin:retire-stage',
+  acknowledgeAlert: 'callie:admin:acknowledge-alert',
+  setSendingCap: 'callie:admin:set-sending-cap',
+  recordSendingAuthentication: 'callie:admin:record-sending-authentication',
+  recordHolidayCalendar: 'callie:admin:record-holiday-calendar',
+} as const;
+export type AdminIpcChannel = (typeof ADMIN_IPC_CHANNELS)[keyof typeof ADMIN_IPC_CHANNELS];
+
+const stagesSchema = z.object({ stages: z.array(pipelineStageDtoSchema) });
+const historySchema = z.object({
+  settingKey: z.string(),
+  versions: z.array(
+    z.object({
+      version: z.number(),
+      changeNote: z.string().nullable(),
+      changedAt: z.string(),
+      supersededAt: z.string().nullable(),
+    }),
+  ),
+});
+const acknowledgedSchema = z.object({ acknowledged: z.literal(true), alertKey: z.string() });
+
+/**
+ * `POST /outbound/status`, G7-2's read.
+ *
+ * Parsed here rather than imported from `@fss/contracts` because G7-2 built that
+ * route's body inline and published no schema for it. This is the narrowest
+ * description of the parts this window shows — `.loose()` so a field G7-2 adds does
+ * not break the page, and every field this file reads is named, so one they remove
+ * does.
+ */
+const outboundStatusSchema = z
+  .object({
+    domain: z
+      .object({
+        domain: z.string(),
+        spfPass: z.boolean(),
+        dkimPass: z.boolean(),
+        dmarcPass: z.boolean(),
+        postmasterReviewedAt: z.string().nullable(),
+        authenticationPasses: z.boolean(),
+        automatedSendingEnabled: z.boolean(),
+        personalGmailGuardPer24h: z.number(),
+      })
+      .loose()
+      .nullable(),
+    personalGmailRecipients: z.number(),
+    ramp: z
+      .object({
+        mailboxId: z.string(),
+        healthySendingDays: z.number(),
+        effectiveCap: z.number(),
+        adminDailyCap: z.number().nullable(),
+        raisedDailyCap: z.number().nullable(),
+        lastHealthFailure: z.string().nullable(),
+      })
+      .loose()
+      .nullable(),
+  })
+  .loose();
+
+export interface AdminBridgeDeps {
+  readonly api: AuthedClient;
+  readonly session: {
+    state(): Promise<{
+      readonly online: boolean;
+      readonly mayMutate: boolean;
+      readonly device: { readonly role: 'admin' | 'salesperson' } | null;
+    }>;
+  };
+  /** The default dashboard window, so the page has something to show on open. */
+  readonly now?: () => Date;
+}
+
+export interface AdminBridgeHost {
+  state(): Promise<AdminState>;
+  show(input: { readonly screen: AdminScreen }): Promise<AdminState>;
+  saveSetting(input: SaveSettingInput): Promise<AdminState>;
+  openHistory(input: { readonly settingKey: SettingKey }): Promise<AdminState>;
+  loadDashboard(input: { readonly from: string; readonly to: string }): Promise<AdminState>;
+  createStage(input: { readonly key: string; readonly displayName: string }): Promise<AdminState>;
+  renameStage(input: { readonly stageKey: string; readonly displayName: string }): Promise<AdminState>;
+  reorderStages(input: { readonly stageKeys: readonly string[] }): Promise<AdminState>;
+  retireStage(input: { readonly stageKey: string }): Promise<AdminState>;
+  acknowledgeAlert(input: { readonly alertId: string }): Promise<AdminState>;
+  setSendingCap(input: SetSendingCapInput): Promise<AdminState>;
+  recordSendingAuthentication(input: RecordSendingAuthenticationInput): Promise<AdminState>;
+  recordHolidayCalendar(input: RecordHolidayCalendarInput): Promise<AdminState>;
+}
+
+/** The last 30 days, in UTC. A window the page shows and a person may change. */
+function defaultWindow(now: Date): { readonly from: string; readonly to: string } {
+  const to = new Date(now.getTime());
+  const from = new Date(to.getTime() - 30 * 24 * 60 * 60 * 1000);
+  return { from: from.toISOString(), to: to.toISOString() };
+}
+
+export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
+  const clock = deps.now ?? ((): Date => new Date());
+  let screen: AdminScreen = 'settings';
+  let notice: string | null = null;
+  let settings: AdminState['settings'] = null;
+  let dashboard: AdminState['dashboard'] = null;
+  let diagnostics: AdminState['diagnostics'] = null;
+  let stages: readonly PipelineStageRowView[] = [];
+  let history: AdminState['history'] = null;
+  let sendingAdmin: AdminState['sendingAdmin'] = null;
+  let window = defaultWindow(clock());
+
+  const snapshot = async (): Promise<AdminState> => {
+    const session = await deps.session.state();
+    return {
+      screen,
+      role: session.device?.role ?? 'salesperson',
+      online: session.online,
+      mayMutate: session.mayMutate,
+      notice,
+      settings,
+      dashboard,
+      diagnostics,
+      stages,
+      history,
+      sendingAdmin,
+    };
+  };
+
+  const isAdmin = async (): Promise<boolean> => (await deps.session.state()).device?.role === 'admin';
+
+  /**
+   * G7-2's sending posture, in three reads, for an admin only.
+   *
+   * `/outbound/status` answers the domain checklist and the guard with no argument,
+   * but a ramp only for a named mailbox — there is no list form, and adding one is
+   * G7-2's decision to make, not this window's. So the mailbox ids come from
+   * `/diagnostics`, which already applies Appendix F row 3 to them, and each ramp is
+   * asked for by id. `mailboxes_one_per_owner` bounds that at one per member.
+   *
+   * A failure here is not a notice: the sending section simply does not appear. The
+   * settings page has ten other sections and a person who opened it to change the
+   * postal footer should not be told about an outbound read they did not ask for.
+   */
+  const loadSending = async (): Promise<void> => {
+    if (!(await isAdmin())) {
+      sendingAdmin = null;
+      return;
+    }
+    const status = await deps.api.read('/outbound/status', value => outboundStatusSchema.parse(value));
+    if (!status.ok) {
+      sendingAdmin = null;
+      return;
+    }
+    const report = await deps.api.read('/diagnostics', value => diagnosticsResponseSchema.parse(value));
+    const collected: {
+      mailboxId: string;
+      healthySendingDays: number;
+      effectiveCap: number;
+      adminDailyCap: number | null;
+      raisedDailyCap: number | null;
+      lastHealthFailure: string | null;
+    }[] = [];
+    if (report.ok) {
+      for (const mailbox of report.value.mailboxes) {
+        const one = await deps.api.read('/outbound/status', value => outboundStatusSchema.parse(value), {
+          mailboxId: mailbox.mailboxId,
+        });
+        if (one.ok && one.value.ramp !== null) {
+          collected.push({
+            mailboxId: one.value.ramp.mailboxId,
+            healthySendingDays: one.value.ramp.healthySendingDays,
+            effectiveCap: one.value.ramp.effectiveCap,
+            adminDailyCap: one.value.ramp.adminDailyCap,
+            raisedDailyCap: one.value.ramp.raisedDailyCap,
+            lastHealthFailure: one.value.ramp.lastHealthFailure,
+          });
+        }
+      }
+    }
+    sendingAdmin = {
+      domain:
+        status.value.domain === null
+          ? null
+          : {
+              domain: status.value.domain.domain,
+              spfPass: status.value.domain.spfPass,
+              dkimPass: status.value.domain.dkimPass,
+              dmarcPass: status.value.domain.dmarcPass,
+              postmasterReviewedAt: status.value.domain.postmasterReviewedAt,
+              authenticationPasses: status.value.domain.authenticationPasses,
+              automatedSendingEnabled: status.value.domain.automatedSendingEnabled,
+              personalGmailGuardPer24h: status.value.domain.personalGmailGuardPer24h,
+            },
+      personalGmailRecipients: status.value.personalGmailRecipients,
+      ramps: collected,
+    };
+  };
+
+  const loadSettings = async (): Promise<void> => {
+    const answer = await deps.api.read('/settings', value => settingsSnapshotSchema.parse(value));
+    if (!answer.ok) {
+      notice = answer.reason;
+      return;
+    }
+    settings = answer.value;
+    const stageAnswer = await deps.api.read('/pipeline/stages', value => stagesSchema.parse(value));
+    if (stageAnswer.ok) {
+      stages = stageAnswer.value.stages.map(stage => ({
+        key: stage.key,
+        displayName: stage.displayName,
+        position: stage.position,
+        terminalKind: stage.terminalKind,
+        retired: stage.retired,
+      }));
+    }
+    await loadSending();
+  };
+
+  const loadDashboardFor = async (next: { readonly from: string; readonly to: string }): Promise<void> => {
+    window = next;
+    const answer = await deps.api.read('/dashboard', value => dashboardResponseSchema.parse(value), {
+      window: next,
+    });
+    if (!answer.ok) {
+      notice = answer.reason;
+      return;
+    }
+    dashboard = answer.value;
+  };
+
+  const loadDiagnostics = async (): Promise<void> => {
+    const answer = await deps.api.read('/diagnostics', value => diagnosticsResponseSchema.parse(value));
+    if (!answer.ok) {
+      notice = answer.reason;
+      return;
+    }
+    diagnostics = answer.value;
+  };
+
+  /** Run a command, then re-read the slice it changed. Never patch local state. */
+  const afterCommand = async (
+    outcome: { readonly ok: boolean; readonly reason?: string },
+    reload: () => Promise<void>,
+  ): Promise<AdminState> => {
+    if (!outcome.ok) {
+      notice = outcome.reason ?? 'refused';
+      return await snapshot();
+    }
+    notice = null;
+    await reload();
+    return await snapshot();
+  };
+
+  return {
+    async state() {
+      if (settings === null) await loadSettings();
+      return await snapshot();
+    },
+
+    async show(input) {
+      notice = null;
+      screen = input.screen;
+      if (input.screen === 'settings') await loadSettings();
+      if (input.screen === 'dashboard') await loadDashboardFor(window);
+      if (input.screen === 'diagnostics') await loadDiagnostics();
+      return await snapshot();
+    },
+
+    async saveSetting(input) {
+      const outcome = await deps.api.command(
+        '/settings/update',
+        { settingKey: input.settingKey, value: input.value, changeNote: input.changeNote },
+        value => value,
+      );
+      return await afterCommand(outcome, loadSettings);
+    },
+
+    async openHistory(input) {
+      const answer = await deps.api.read('/settings/history', value => historySchema.parse(value), {
+        settingKey: input.settingKey,
+      });
+      if (!answer.ok) {
+        notice = answer.reason;
+        return await snapshot();
+      }
+      history = { settingKey: input.settingKey, versions: answer.value.versions };
+      return await snapshot();
+    },
+
+    async loadDashboard(input) {
+      notice = null;
+      screen = 'dashboard';
+      await loadDashboardFor(input);
+      return await snapshot();
+    },
+
+    async createStage(input) {
+      const outcome = await deps.api.command(
+        '/pipeline/stages/create',
+        { key: input.key, displayName: input.displayName },
+        value => value,
+      );
+      return await afterCommand(outcome, loadSettings);
+    },
+
+    async renameStage(input) {
+      const outcome = await deps.api.command(
+        '/pipeline/stages/rename',
+        { stageKey: input.stageKey, displayName: input.displayName },
+        value => value,
+      );
+      return await afterCommand(outcome, loadSettings);
+    },
+
+    async reorderStages(input) {
+      const outcome = await deps.api.command(
+        '/pipeline/stages/reorder',
+        { stageKeys: [...input.stageKeys] },
+        value => value,
+      );
+      return await afterCommand(outcome, loadSettings);
+    },
+
+    async retireStage(input) {
+      const outcome = await deps.api.command(
+        '/pipeline/stages/retire',
+        { stageKey: input.stageKey },
+        value => value,
+      );
+      return await afterCommand(outcome, loadSettings);
+    },
+
+    async acknowledgeAlert(input) {
+      // G5's acknowledge is not a receipted command: it is admin-only, audited, and
+      // answers `{ acknowledged: true, alertKey }`. Calling it through `command`
+      // would add a command id the endpoint does not read.
+      const answer = await deps.api.read('/admin/alerts/acknowledge', value => acknowledgedSchema.parse(value), {
+        alertId: input.alertId,
+      });
+      return await afterCommand(
+        answer.ok ? { ok: true } : { ok: false, reason: answer.reason },
+        loadDiagnostics,
+      );
+    },
+
+    async setSendingCap(input) {
+      // 12.7: an admin may lower a cap, and may raise a mailbox to 75. The command
+      // refuses above that rather than clamping, and the CHECK refuses above 100.
+      // Neither bound is repeated here: a client that clamped would turn a refusal
+      // an admin should see into a silent change they did not ask for.
+      const outcome = await deps.api.command(
+        '/outbound/cap',
+        {
+          mailboxId: input.mailboxId,
+          // Absent and null are different to `setAdminCap`: null clears the
+          // lowering, absent leaves it alone. Spread so an unset key stays unset.
+          ...(input.lowerTo === undefined ? {} : { lowerTo: input.lowerTo }),
+          ...(input.raiseTo === undefined ? {} : { raiseTo: input.raiseTo }),
+        },
+        value => value,
+      );
+      return await afterCommand(outcome, loadSending);
+    },
+
+    async recordSendingAuthentication(input) {
+      // 12.7's checklist is a person saying they looked: FSS never queries DNS, so
+      // this is a record of a human observation, not a measurement.
+      const outcome = await deps.api.command(
+        '/outbound/authentication',
+        {
+          domain: input.domain,
+          spfPass: input.spfPass,
+          dkimPass: input.dkimPass,
+          dmarcPass: input.dmarcPass,
+          postmasterReviewed: input.postmasterReviewed,
+          automatedSendingEnabled: input.automatedSendingEnabled,
+        },
+        value => value,
+      );
+      return await afterCommand(outcome, loadSending);
+    },
+
+    async recordHolidayCalendar(input) {
+      // G8's command, not one of this lane's. The calendar is a versioned row whose
+      // version is frozen onto every due instant computed under it, which is why it
+      // is not a slice of `workspace_settings` — see
+      // docs/decisions/g9-two-slices-that-belong-to-other-lanes.md. The settings
+      // page owns the surface; G8 owns the write.
+      const outcome = await deps.api.command(
+        '/sequences/holidays',
+        { version: input.version, dates: [...input.dates] },
+        value => value,
+      );
+      // Reloaded through `/settings`, because that is where the current calendar is
+      // carried: the page never patches its own copy from a command's answer.
+      return await afterCommand(outcome, loadSettings);
+    },
+  };
+}

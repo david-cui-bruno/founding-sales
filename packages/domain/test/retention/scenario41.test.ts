@@ -8,6 +8,7 @@ import {
   retentionPeriodOf,
   runRetentionBatch,
 } from '../../retention/index.ts';
+import { mayCorrectSuppression } from '../../src/rules/suppressionCanonicalization.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
 import { seedMail, type SeededMail } from '../db/support/mailFixtures.ts';
@@ -289,11 +290,37 @@ describe('the tombstone survives every retention job', () => {
     }
 
     expect(await tombstoneCount(seeded.alpha.workspaceId)).toBe(before);
-    const { rows } = await database.session.query<{ event_id: string }>(
-      'SELECT event_id FROM suppression_events WHERE workspace_id = $1 AND event_id = $2',
+    const { rows } = await database.session.query<{ event_id: string; source: string; canonical_key: string }>(
+      'SELECT event_id, source, canonical_key FROM suppression_events WHERE workspace_id = $1 AND event_id = $2',
       [seeded.alpha.workspaceId, retention.alpha.tombstoneEventId],
     );
     expect(rows).toHaveLength(1);
+    // Not just that a row survived: that the row still says what it is. A sweep
+    // that rewrote the source would leave the same count and a different meaning,
+    // and `deletion_tombstone` is the value that keeps the audit trail from
+    // claiming a prospect opted out when an admin ran a deletion.
+    expect(rows[0]?.source).toBe('deletion_tombstone');
+    expect(rows[0]?.canonical_key).toBe(retention.alpha.tombstoneKey);
+  });
+
+  it('leaves a deletion tombstone that no salesperson can correct away', () => {
+    // The other half of "prevent renewed contact". A tombstone that survived every
+    // sweep and could then be reversed by one click would prevent nothing, and the
+    // rule that stops it is not written for this source: `mayCorrectSuppression`
+    // allow-lists `salesperson_manual`, so a deletion tombstone is refused by the
+    // rule that was already there (Appendix G 30).
+    const decision = mayCorrectSuppression({
+      event: {
+        source: 'deletion_tombstone',
+        actorUserId: seeded.alpha.admin.userId,
+        recordedAt: '2026-09-20T12:00:00.000Z',
+      },
+      actorUserId: seeded.alpha.admin.userId,
+      // One second later: well inside the ten-minute window a correctable event has.
+      now: '2026-09-20T12:00:01.000Z',
+    });
+    expect(decision.allowed).toBe(false);
+    expect(decision.allowed === false ? decision.refusal : null).toBe('not_salesperson_originated');
   });
 
   it('answers suppression history and business records as retained, never as a sweep', async () => {

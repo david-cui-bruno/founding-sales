@@ -54,6 +54,11 @@ export const SUPPRESSING_SOURCES: readonly string[] = Object.freeze([
   'prospect_do_not_call',
   'salesperson_manual',
   'import',
+  // 10.3's deletion tombstone. It is the *reason* the firm must not be researched
+  // again — the personal data was removed on request — so omitting it here would
+  // have made a deleted firm rediscoverable by the next research run, which is the
+  // one outcome "prevent renewed contact" names.
+  'deletion_tombstone',
 ]);
 
 /**

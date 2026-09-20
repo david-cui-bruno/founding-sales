@@ -32,20 +32,24 @@ import { accept, refuse, type RetentionResult } from './result.ts';
  * cleared, so the history remains readable and nothing in it names a person.
  * See docs/decisions/g14-deletion-is-remove-and-redact.md.
  *
- * ## Why the tombstone is a `prospect_opt_out`
+ * ## The tombstone has its own source
  *
  * A tombstone has to be effective against renewed contact, terminal, and never
  * reversible by a salesperson. `effective_suppressions` is the one authoritative
- * view (10.2), so the tombstone has to be a row in `suppression_events`, and the
- * source vocabulary there is a closed list this lane does not own.
+ * view (10.2), so it has to be a row in `suppression_events`.
  *
- * `prospect_opt_out` is an **interim**. It has exactly those three properties — it is
- * terminal on commit, and Appendix G 30 already proves a salesperson cannot correct
- * one — but the audit trail must not say a prospect opted out when an admin ran a
- * deletion. The coordinator overruled the borrowing on 20 September; this lane's
- * migration 0014 adds a `deletion_tombstone` source at the final merge, once every
- * lane touching the vocabulary has landed, and `PENDING_RETENTION_TABLES` is what
- * makes the build ask for it. See docs/decisions/g14-deletion-tombstone-source.md.
+ * Migration 0014 widens that table's source vocabulary with `deletion_tombstone`,
+ * which has all three properties and its own name. The first draft of this lane
+ * borrowed `prospect_opt_out` because the vocabulary is closed and cross-lane, and
+ * that was wrong: the audit trail would have said a prospect opted out when an admin
+ * ran a deletion. See docs/decisions/g14-deletion-tombstone-source.md.
+ *
+ * Terminal comes from `TERMINAL_SOURCES`, so no ten-minute review hold is opened —
+ * there is nothing left to protect, the handles having just been removed.
+ * Irreversible by a salesperson comes from `mayCorrectSuppression`, which allows
+ * only `salesperson_manual` and therefore refuses this one with
+ * `not_salesperson_originated`. Neither is a new rule written for this source; both
+ * are existing rules it inherits by being what it is.
  *
  * ## Why a preview, and why a hash
  *
@@ -77,6 +81,15 @@ export interface DeletionPreview {
   readonly removes: Readonly<Record<string, number>>;
   /** Rows a commit would clear the identifying fields of, by table. */
   readonly redacts: Readonly<Record<string, number>>;
+  /**
+   * Rows a commit would terminally stop, by table.
+   *
+   * Its own map rather than a line in `redacts`, because stopping an enrollment is
+   * not the same act as clearing a name and an approver should not have to read it
+   * as one. Nothing is removed here and nothing is blanked; what changes is whether
+   * a worker will ever act on the row again.
+   */
+  readonly stops: Readonly<Record<string, number>>;
   /** Rows a commit would leave alone, by table, so an approver is told what stays. */
   readonly retains: Readonly<Record<string, number>>;
   /**
@@ -91,6 +104,7 @@ export interface DeletionOutcome {
   readonly requestId: string;
   readonly removed: Readonly<Record<string, number>>;
   readonly redacted: Readonly<Record<string, number>>;
+  readonly stopped: Readonly<Record<string, number>>;
   readonly tombstoneEventIds: readonly string[];
 }
 
@@ -105,6 +119,19 @@ interface Scope {
 /** `contact_id = $2 OR ($2 IS NULL)` as one predicate, so every count uses the same rule. */
 const contactPredicate = (column: string, parameter: string): string =>
   `(${parameter}::uuid IS NULL OR ${column} = ${parameter}::uuid)`;
+
+/**
+ * The same rule for G7b's confirmations, which carry a firm but no contact.
+ *
+ * A confirmation belongs to a message, and which contact a message is about is the
+ * match row's answer rather than the confirmation's. A firm deletion takes them all;
+ * a contact deletion takes the ones whose message matched that contact. The alias
+ * `c` is the caller's to supply, and both uses below do.
+ */
+const CONFIRMATION_IN_SCOPE = `($2::uuid IS NULL OR EXISTS (
+      SELECT 1 FROM mail_message_matches x
+       WHERE x.workspace_id = c.workspace_id AND x.mail_message_id = c.mail_message_id
+         AND x.contact_id = $2::uuid))`;
 
 async function countOf(
   context: RepositoryContext,
@@ -128,6 +155,7 @@ async function measure(
 ): Promise<{
   readonly removes: Record<string, number>;
   readonly redacts: Record<string, number>;
+  readonly stops: Record<string, number>;
   readonly retains: Record<string, number>;
   readonly handles: string[];
 }> {
@@ -198,6 +226,26 @@ async function measure(
         WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
       byContact,
     ),
+    // G7b. A confirmation would cascade with its message anyway, but it is counted
+    // and deleted in its own right because it also references `callbacks`, which
+    // this workflow removes: a survivor would refuse that delete.
+    mail_reply_confirmations: await countOf(
+      context,
+      `SELECT count(*) AS count FROM mail_reply_confirmations c
+        WHERE c.workspace_id = $1 AND c.firm_id = $3 AND ${CONFIRMATION_IN_SCOPE}`,
+      byContact,
+    ),
+    // G8. A recorded LinkedIn reply is the prospect's own response — the one row in
+    // the sequence tables that holds their words rather than the plan's.
+    enrollment_linkedin_results: await countOf(
+      context,
+      `SELECT count(*) AS count FROM enrollment_linkedin_results r
+        WHERE r.workspace_id = $1 AND r.firm_id = $3 AND EXISTS (
+          SELECT 1 FROM sequence_enrollments e
+           WHERE e.workspace_id = r.workspace_id AND e.id = r.enrollment_id
+             AND ${contactPredicate('e.contact_id', '$2')})`,
+      byContact,
+    ),
     research_suggestions: await countOf(
       context,
       `SELECT count(*) AS count FROM research_suggestions
@@ -236,6 +284,33 @@ async function measure(
     firms: contact === null ? 1 : 0,
   };
 
+  /**
+   * G8's terminal stops. Nothing is removed and nothing is blanked; what changes is
+   * whether a worker will ever act on the row again.
+   *
+   * An enrollment left `active` against a firm whose handles have just been deleted
+   * is a plan the scheduler keeps materializing work for, and every step of it would
+   * hold on a missing route. 11.2's vocabulary already has the right word —
+   * `admin_stop`, the end that is not a prospect signal — so deletion uses it rather
+   * than inventing a reason of its own.
+   */
+  const stops: Record<string, number> = {
+    sequence_enrollments: await countOf(
+      context,
+      `SELECT count(*) AS count FROM sequence_enrollments
+        WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}
+          AND state IN ('active', 'review_required')`,
+      byContact,
+    ),
+    step_executions: await countOf(
+      context,
+      `SELECT count(*) AS count FROM step_executions
+        WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}
+          AND state IN ('pending', 'held')`,
+      byContact,
+    ),
+  };
+
   const retains: Record<string, number> = {
     opportunity_stage_events: await countOf(
       context,
@@ -252,6 +327,23 @@ async function measure(
       'SELECT count(*) AS count FROM opportunities WHERE workspace_id = $1 AND firm_id = $2',
       [workspace, firm],
     ),
+    // The honest line in the report, and the one an approver would otherwise
+    // discover afterwards. An address frozen into the envelope of a fence that has
+    // dispatched cannot be removed: 0010 revokes `DELETE` on `outbound_messages`,
+    // its trigger makes the envelope immutable from the instant an attempt token
+    // exists, and `outbound_messages_route_fkey` has no `ON DELETE` clause — so the
+    // route row is pinned by the same promise that lets Sent-folder reconciliation
+    // find the message afterwards. The address is in the tombstones regardless, so
+    // the handle is suppressed even where the row survives.
+    email_addresses_pinned_by_a_sent_fence: await countOf(
+      context,
+      `SELECT count(DISTINCT a.id) AS count FROM email_addresses a
+         JOIN outbound_messages o
+           ON o.workspace_id = a.workspace_id AND o.recipient_route_id = a.id
+        WHERE a.workspace_id = $1 AND a.firm_id = $3 AND ${contactPredicate('a.contact_id', '$2')}
+          AND o.attempt_token IS NOT NULL`,
+      byContact,
+    ),
   };
 
   const { rows: handleRows } = await context.db.query<{ handle: string }>(
@@ -264,7 +356,7 @@ async function measure(
     byContact,
   );
 
-  return { removes, redacts, retains, handles: handleRows.map(row => row.handle) };
+  return { removes, redacts, stops, retains, handles: handleRows.map(row => row.handle) };
 }
 
 function hashOf(scope: Scope, measured: Awaited<ReturnType<typeof measure>>): string {
@@ -275,6 +367,7 @@ function hashOf(scope: Scope, measured: Awaited<ReturnType<typeof measure>>): st
         contactId: scope.contactId,
         removes: measured.removes,
         redacts: measured.redacts,
+        stops: measured.stops,
         handles: measured.handles,
       }),
     )
@@ -336,7 +429,12 @@ export async function previewDeletion(
       scope.contactId,
       requestedBy,
       // Counts only. The handles are returned to the caller and never written down.
-      JSON.stringify({ removes: measured.removes, redacts: measured.redacts, retains: measured.retains }),
+      JSON.stringify({
+        removes: measured.removes,
+        redacts: measured.redacts,
+        stops: measured.stops,
+        retains: measured.retains,
+      }),
       previewHash,
     ],
   );
@@ -345,7 +443,12 @@ export async function previewDeletion(
     action: 'deletion.previewed',
     subjectKind: input.targetKind,
     subjectId: scope.contactId ?? scope.firmId,
-    detail: { requestId: rows[0]?.id ?? '', removes: measured.removes, redacts: measured.redacts },
+    detail: {
+      requestId: rows[0]?.id ?? '',
+      removes: measured.removes,
+      redacts: measured.redacts,
+      stops: measured.stops,
+    },
   });
 
   return accept({
@@ -356,6 +459,7 @@ export async function previewDeletion(
     previewHash,
     removes: measured.removes,
     redacts: measured.redacts,
+    stops: measured.stops,
     retains: measured.retains,
     tombstoneHandles: measured.handles,
   });
@@ -402,14 +506,13 @@ export async function commitDeletion(
   // The tombstones first, while the handles still exist to be read. Every one is
   // journalled before its row by `recordSuppression` (10.2), so a lost journal write
   // fails the command before anything has been deleted.
-  // `tombstone_event_ids` on the request row is what makes these findable later,
-  // which is what turns the `deletion_tombstone` backfill into one UPDATE.
+  // `tombstone_event_ids` on the request row is what makes these findable later.
   const tombstoneEventIds: string[] = [];
   for (const handle of measured.handles) {
     const recorded = await recordSuppression(context, {
       scope: 'handle',
       value: handle,
-      source: 'prospect_opt_out',
+      source: 'deletion_tombstone',
       commandId: `${input.commandId}:${handle}`,
       journal: input.journal,
     });
@@ -420,7 +523,7 @@ export async function commitDeletion(
     const recorded = await recordSuppression(context, {
       scope: 'firm',
       firmId: scope.firmId,
-      source: 'prospect_opt_out',
+      source: 'deletion_tombstone',
       commandId: input.commandId,
       journal: input.journal,
     });
@@ -437,8 +540,16 @@ export async function commitDeletion(
     removed[table] = rowCount ?? 0;
   };
 
-  // Correspondence first: the messages take their bodies, matches, classifications
-  // and effects with them through migration 0009's cascades.
+  // G7b's confirmations before the messages that would cascade them, because a
+  // confirmation also references a callback this workflow is about to remove.
+  await remove(
+    'mail_reply_confirmations',
+    `DELETE FROM mail_reply_confirmations c
+      WHERE c.workspace_id = $1 AND c.firm_id = $3 AND ${CONFIRMATION_IN_SCOPE}`,
+    byContact,
+  );
+  // Correspondence next: the messages take their bodies, matches, classifications,
+  // classifier calls and effects with them through the cascades of 0009 and 0011.
   await remove(
     'mail_messages',
     `DELETE FROM mail_messages
@@ -474,6 +585,17 @@ export async function commitDeletion(
     `DELETE FROM today_items WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
     byContact,
   );
+  // Detach the unsent fences from the routes that are about to go. 0010's trigger
+  // permits it while there is no attempt token — that is exactly the window in which
+  // an envelope is still editable — and without it the delete below would fail on
+  // `outbound_messages_route_fkey` for any firm that had a draft prepared.
+  await context.db.query(
+    `UPDATE outbound_messages
+        SET recipient_route_id = NULL, recipient_route_version = NULL, updated_at = now()
+      WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}
+        AND attempt_token IS NULL AND recipient_route_id IS NOT NULL`,
+    byContact,
+  );
   await remove(
     'phone_routes',
     `DELETE FROM phone_routes WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
@@ -481,7 +603,11 @@ export async function commitDeletion(
   );
   await remove(
     'email_addresses',
-    `DELETE FROM email_addresses WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
+    `DELETE FROM email_addresses a
+      WHERE a.workspace_id = $1 AND a.firm_id = $3 AND ${contactPredicate('a.contact_id', '$2')}
+        AND NOT EXISTS (
+          SELECT 1 FROM outbound_messages o
+           WHERE o.workspace_id = a.workspace_id AND o.recipient_route_id = a.id)`,
     byContact,
   );
   await remove(
@@ -496,6 +622,15 @@ export async function commitDeletion(
     byContact,
   );
   await remove(
+    'enrollment_linkedin_results',
+    `DELETE FROM enrollment_linkedin_results r
+      WHERE r.workspace_id = $1 AND r.firm_id = $3 AND EXISTS (
+        SELECT 1 FROM sequence_enrollments e
+         WHERE e.workspace_id = r.workspace_id AND e.id = r.enrollment_id
+           AND ${contactPredicate('e.contact_id', '$2')})`,
+    byContact,
+  );
+  await remove(
     'record_aliases',
     `DELETE FROM record_aliases WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
     byContact,
@@ -506,6 +641,32 @@ export async function commitDeletion(
       scope.firmId,
     ]);
   }
+
+  // The stops, after the removals and before the redactions. `step_executions`
+  // first: an execution is the child, and a `pending` one under a `stopped`
+  // enrollment is a row the scheduler still claims. Both updates clear the column
+  // their new state forbids — `hold_reason_code` for a cancelled execution,
+  // `review_union_milliseconds` for a stopped enrollment — because 0012 writes each
+  // of those as an equivalence rather than as a nullable field.
+  const stopped: Record<string, number> = {};
+  const executions = await context.db.query(
+    `UPDATE step_executions
+        SET state = 'cancelled', cancelled_at = now(), cancel_reason = 'deleted under 10.3',
+            hold_reason_code = NULL, updated_at = now()
+      WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}
+        AND state IN ('pending', 'held')`,
+    byContact,
+  );
+  stopped['step_executions'] = executions.rowCount ?? 0;
+  const enrollments = await context.db.query(
+    `UPDATE sequence_enrollments
+        SET state = 'stopped', ended_at = now(), end_reason = 'admin_stop',
+            review_union_milliseconds = NULL, updated_at = now()
+      WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}
+        AND state IN ('active', 'review_required')`,
+    byContact,
+  );
+  stopped['sequence_enrollments'] = enrollments.rowCount ?? 0;
 
   const redacted: Record<string, number> = {};
   const fences = await context.db.query(
@@ -547,7 +708,7 @@ export async function commitDeletion(
       row.id,
       actor.userId,
       input.commandId,
-      JSON.stringify({ removed, redacted }),
+      JSON.stringify({ removed, redacted, stopped }),
       tombstoneEventIds,
     ],
   );
@@ -556,8 +717,8 @@ export async function commitDeletion(
     action: 'deletion.committed',
     subjectKind: row.target_kind,
     subjectId: scope.contactId ?? scope.firmId,
-    detail: { requestId: row.id, removed, redacted, tombstones: tombstoneEventIds.length },
+    detail: { requestId: row.id, removed, redacted, stopped, tombstones: tombstoneEventIds.length },
   });
 
-  return accept({ requestId: row.id, removed, redacted, tombstoneEventIds });
+  return accept({ requestId: row.id, removed, redacted, stopped, tombstoneEventIds });
 }

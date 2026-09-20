@@ -13,3 +13,4 @@ export {
   type TestDatabase,
 } from './testDatabase.ts';
 export { default as globalSetup } from './globalSetup.ts';
+export { makeStepExecution, type StepExecutionFixtureInput } from './stepExecutions.ts';

@@ -11,7 +11,12 @@ import {
   type ReplyPromoter,
 } from '@fss/domain/mail';
 import type { SuppressionJournal } from '@fss/domain/suppression';
-import { mailReconcileHandler, outboundRecoveryFloor } from '@fss/domain/outbound';
+import {
+  combinedRecoveryFloor,
+  mailReconcileHandler,
+  outboundRecoveryFloor,
+} from '@fss/domain/outbound';
+import { enrollmentFloor } from '@fss/domain/sequences';
 import { promoteReply } from '@fss/domain/today';
 
 /**
@@ -61,8 +66,9 @@ export interface MailWorkerOptions {
   /**
    * 12.3's "oldest unresolved outbound message or active enrollment".
    *
-   * Defaults to the outbound half, which G7-2 implemented. G8 supplies the enrollment
-   * half by passing `combinedRecoveryFloor(outboundRecoveryFloor(), enrollmentFloor())`.
+   * Defaults to both halves — G7-2's `outboundRecoveryFloor` and G8's
+   * `enrollmentFloor`, combined so the earlier wins. Supply one only to pin the floor
+   * in a test.
    */
   readonly recoveryFloor?: RecoveryFloorSource | undefined;
   readonly maxAttempts?: number | undefined;
@@ -95,7 +101,12 @@ export function mailHandlers(options: MailWorkerOptions | undefined): readonly J
     mailSyncHandler(
       {
         ...pipeline,
-        recoveryFloor: options.recoveryFloor ?? outboundRecoveryFloor(),
+        // 12.3's "the oldest unresolved outbound message or active enrollment", both
+        // halves now that G8's tables exist. `combinedRecoveryFloor` takes the
+        // earlier of the two, which is what the specification asks for.
+        recoveryFloor:
+          options.recoveryFloor ??
+          combinedRecoveryFloor(outboundRecoveryFloor(), enrollmentFloor()),
       },
       handlerOptions,
     ),

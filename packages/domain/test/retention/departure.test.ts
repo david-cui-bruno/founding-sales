@@ -3,10 +3,12 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
 import type { SessionQueryable } from '../../db/queryable.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
+import { enrollContact } from '../../sequences/index.ts';
 import { commitDeparture, previewDeparture } from '../../retention/index.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
 import { seedMail, type SeededMail } from '../db/support/mailFixtures.ts';
+import { seedSequences, type SeededSequences } from '../sequences/support/sequenceFixtures.ts';
 
 /**
  * Departure (specification 10.3, Appendix F).
@@ -26,6 +28,8 @@ let database: TestDatabase;
 let seeded: TwoWorkspaces;
 let crm: SeededCrm;
 let mail: SeededMail;
+let sequences: SeededSequences;
+let alphaEnrollmentId: string;
 
 const adminContext = (
   workspaceId: string,
@@ -84,6 +88,21 @@ beforeAll(async () => {
   }
   await seedMailboxToken(seeded.alpha.workspaceId, mail.alpha.mailboxId);
   await seedMailboxToken(seeded.beta.workspaceId, mail.beta.mailboxId);
+
+  // A live enrollment the departing salesperson is running, made by G8's own
+  // command. Departure has to hold this directly, not only through its firm.
+  sequences = await seedSequences(database.session, seeded);
+  const enrolled = await enrollContact(
+    salespersonContext(seeded.alpha.workspaceId, seeded.alpha.salesperson.userId),
+    {
+      sequenceVersionId: sequences.alpha.publishedVersionId,
+      opportunityId: crm.alpha.opportunityId,
+      firmId: crm.alpha.firmId,
+      contactId: crm.alpha.contactId,
+    },
+  );
+  if (!enrolled.ok) throw new Error(`the enrollment fixture was refused: ${enrolled.reason}`);
+  alphaEnrollmentId = enrolled.value.enrollmentId;
 });
 
 afterAll(async () => {
@@ -128,6 +147,7 @@ describe('departure leaves business history and removes private material', () =>
     expect(preview.value?.connectedMailboxes).toBe(1);
     expect(preview.value?.refreshTokenRows).toBe(1);
     expect(preview.value?.assignedFirms).toBeGreaterThanOrEqual(0);
+    expect(preview.value?.assignedEnrollments).toBe(1);
 
     expect(
       await count("SELECT count(*) AS count FROM sessions WHERE workspace_id = $1 AND user_id = $2 AND status = 'active'", [
@@ -225,10 +245,12 @@ describe('departure leaves business history and removes private material', () =>
   });
 
   it('holds the departed member’s firms for reassignment rather than unassigning them silently', async () => {
+    // Scoped to `firm`, because the same command also opens enrollment-scoped holds
+    // and the case below is the one that counts those.
     const held = await count(
       `SELECT count(*) AS count FROM active_holds
         WHERE workspace_id = $1 AND reason_code = 'reassignment' AND released_at IS NULL
-          AND source_event_kind = 'membership.departed'`,
+          AND source_event_kind = 'membership.departed' AND scope_kind = 'firm'`,
       [seeded.alpha.workspaceId],
     );
     const assigned = await count(
@@ -247,6 +269,47 @@ describe('departure leaves business history and removes private material', () =>
     );
     expect(rows[0]?.blocked_action_kinds).toContain('enrollment_advance');
     expect(rows[0]?.blocked_action_kinds).toContain('email_send');
+  });
+
+  it('holds the departed member’s live enrollments directly, not only through their firms', async () => {
+    // `sequence_enrollments.assigned_user_id` is its own column, so the set of
+    // enrollments a member runs is not the set of firms they own: an enrollment at a
+    // colleague's firm would be missed by a firm hold alone. This is the hold
+    // `applicableHolds` reads under `scope_kind = 'enrollment'` before every action.
+    const { rows } = await database.session.query<{
+      scope_key: string;
+      recovery_action: string;
+      owner_user_id: string | null;
+      blocked_action_kinds: string[];
+    }>(
+      `SELECT scope_key, recovery_action, owner_user_id, blocked_action_kinds FROM active_holds
+        WHERE workspace_id = $1 AND scope_kind = 'enrollment' AND reason_code = 'reassignment'
+          AND source_event_kind = 'membership.departed' AND released_at IS NULL`,
+      [seeded.alpha.workspaceId],
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.scope_key).toBe(alphaEnrollmentId);
+    expect(rows[0]?.owner_user_id).toBe(seeded.alpha.salesperson.userId);
+    expect(rows[0]?.recovery_action).toBe('resume_after_review');
+    expect(rows[0]?.blocked_action_kinds).toContain('enrollment_advance');
+
+    // The enrollment itself is untouched. A departure is not a stop: the work still
+    // needs doing, by somebody else, and 11.2's terminal reasons are about the
+    // prospect rather than about who was holding the phone.
+    const { rows: enrollment } = await database.session.query<{ state: string; assigned_user_id: string }>(
+      'SELECT state, assigned_user_id FROM sequence_enrollments WHERE workspace_id = $1 AND id = $2',
+      [seeded.alpha.workspaceId, alphaEnrollmentId],
+    );
+    expect(enrollment[0]?.state).toBe('active');
+    expect(enrollment[0]?.assigned_user_id).toBe(seeded.alpha.salesperson.userId);
+
+    // Nothing crossed: beta's enrollment is unheld.
+    expect(
+      await count(
+        "SELECT count(*) AS count FROM active_holds WHERE workspace_id = $1 AND scope_kind = 'enrollment'",
+        [seeded.beta.workspaceId],
+      ),
+    ).toBe(0);
   });
 
   it('is replay safe: a second departure reports the first rather than revoking again', async () => {

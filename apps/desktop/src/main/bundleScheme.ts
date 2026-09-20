@@ -12,11 +12,26 @@ import { join } from 'node:path';
  * back on would trade a real privilege for a convenience; this is the other way out,
  * and it is the one the old client took as well.
  *
- * So the bundle gets its own scheme: standard, secure, and answering three exact
- * paths. `BUNDLE_FILES` is a closed map, so there is no path to traverse and no name
- * to smuggle — a request for anything not in it is a 404 before any filesystem call
- * happens. The renderer's `default-src 'none'` Content-Security-Policy resolves
- * `'self'` to this origin, which is why the shipped `index.html` needs no change.
+ * So the bundle gets its own scheme: standard, secure, and answering a closed set of
+ * exact paths. `BUNDLE_FILES` is a map rather than a directory walk, so there is no
+ * path to traverse and no name to smuggle — a request for anything not in it is a
+ * 404 before any filesystem call happens. The renderer's `default-src 'none'`
+ * Content-Security-Policy resolves `'self'` to this origin, which is why the shipped
+ * pages need no change.
+ *
+ * ## Why the window list lives here rather than in the build script
+ *
+ * It used to be hand-written, and it listed three paths while the build shipped four
+ * pages and four scripts. Every window except the first was a 404 in a packaged
+ * build, and no test saw it because the development path uses `loadFile`. The list
+ * is therefore one declaration per window, here, and three things read it: the
+ * esbuild loop and the copy loop in `scripts/bundle.ts`, and the map below. A window
+ * added in one place is added in all three, which is the only version of this that
+ * stays true. See `docs/decisions/g9-bundle-scheme-map.md`.
+ *
+ * It lives in `src/main` rather than `scripts` because the scheme handler ships and
+ * the build script does not: a shipped file may not import a build script, and the
+ * dependency has to point this way.
  *
  * Nothing here imports Electron, so the answer is a unit test rather than a claim.
  */
@@ -38,11 +53,61 @@ export const BUNDLE_PRIVILEGES = Object.freeze({
   stream: false,
 });
 
-const BUNDLE_FILES = new Map<string, { readonly file: string; readonly type: string }>([
-  ['/index.html', { file: 'index.html', type: 'text/html; charset=utf-8' }],
-  ['/renderer.js', { file: 'renderer.js', type: 'text/javascript; charset=utf-8' }],
-  ['/styles.css', { file: 'styles.css', type: 'text/css; charset=utf-8' }],
+/** One window: the page a `BrowserWindow` loads and the script that page loads. */
+export interface BundleWindow {
+  /** The HTML file, in `src/renderer` and at the root of the bundled renderer. */
+  readonly page: string;
+  /** The entry point: `src/renderer/{entry}.ts`, bundled to `{entry}.js`. */
+  readonly entry: string;
+  /** The lane that owns it, so a stale entry names somebody. */
+  readonly ownedBy: string;
+}
+
+/**
+ * Every window the application can open.
+ *
+ * The order is the order the windows arrived, which is also the order of the Window
+ * menu apart from sign-in.
+ */
+export const BUNDLE_WINDOWS: readonly BundleWindow[] = Object.freeze([
+  { page: 'index.html', entry: 'renderer', ownedBy: 'G2 identity' },
+  { page: 'firmWorkspace.html', entry: 'firmWorkspace', ownedBy: 'G3b CRM' },
+  { page: 'today.html', entry: 'todayPage', ownedBy: 'G6 today' },
+  { page: 'replyCard.html', entry: 'replyPage', ownedBy: 'G7b classifier' },
+  { page: 'sequenceEditor.html', entry: 'sequenceEditor', ownedBy: 'G8 sequences' },
+  { page: 'settings.html', entry: 'settingsPage', ownedBy: 'G9 administration' },
 ]);
+
+/** Copied once and shared by every page. Not a window, so not in the list above. */
+export const BUNDLE_SHARED_FILES: readonly string[] = Object.freeze(['styles.css']);
+
+const CONTENT_TYPES: Readonly<Record<string, string>> = Object.freeze({
+  html: 'text/html; charset=utf-8',
+  js: 'text/javascript; charset=utf-8',
+  css: 'text/css; charset=utf-8',
+});
+
+function typeOf(file: string): string {
+  const extension = file.slice(file.lastIndexOf('.') + 1);
+  const type = CONTENT_TYPES[extension];
+  // A file whose extension nobody declared is not served as a guess: an unknown type
+  // is a mistake in the list above, and the build should stop rather than ship a
+  // page the browser sniffs.
+  if (type === undefined) throw new Error(`no content type is declared for ${file}`);
+  return type;
+}
+
+/**
+ * Derived, never written twice. Every window contributes exactly two paths — its
+ * page and its script — and the shared files contribute one each.
+ */
+export const BUNDLE_FILES: ReadonlyMap<string, { readonly file: string; readonly type: string }> =
+  new Map(
+    [
+      ...BUNDLE_WINDOWS.flatMap(window => [window.page, `${window.entry}.js`]),
+      ...BUNDLE_SHARED_FILES,
+    ].map(file => [`/${file}`, { file, type: typeOf(file) }]),
+  );
 
 export interface BundleAnswer {
   readonly status: number;

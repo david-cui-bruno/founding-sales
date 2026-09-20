@@ -31,11 +31,14 @@ import type { AuthedClient } from './authedClient.ts';
  * envelope cannot be forgotten, and a refusal arrives as a stable code that
  * `firmWorkspaceView.ts` turns into one fixed sentence.
  *
- * The board is assembled here rather than by an endpoint. There is no `/pipeline/board`
- * in the API and this lane does not own one; what exists is the configured stages and
- * the firm list, and putting the firms into their columns is presentation. The one
- * thing it must not invent is *which* firms a person may see — that is the list the
- * API returned, and nothing here adds to it.
+ * The board was assembled here until lane G9 added `POST /pipeline/board`. It is now
+ * one API read: the columns, the firms already in them, and the open opportunity id
+ * for the firms this caller may change. G6 wrote down why that map could not be
+ * filled from `GET /firms` (`docs/decisions/g6-pipeline-board-opportunity-ids.md`)
+ * and G9 answered it (`docs/decisions/g9-pipeline-board-read.md`). What this file
+ * keeps is the fallback: a Firm page still tells the bridge the id of the opportunity
+ * it opened, so a board loaded before the endpoint answered still offers the control
+ * for a firm the person has looked at.
  */
 
 export const CRM_IPC_CHANNELS = {
@@ -50,6 +53,12 @@ export type CrmIpcChannel = (typeof CRM_IPC_CHANNELS)[keyof typeof CRM_IPC_CHANN
 
 const stagesSchema = z.object({ stages: z.array(pipelineStageDtoSchema) });
 const firmsSchema = z.object({ firms: z.array(firmIdentityDtoSchema) });
+/** G9's board read: the columns, and the ids the caller may act on. */
+const boardSchema = z.object({
+  columns: z.array(z.object({ stage: pipelineStageDtoSchema, firms: z.array(firmIdentityDtoSchema) })),
+  opportunityIdByFirmId: z.record(z.string(), z.string()),
+  unplacedFirms: z.array(firmIdentityDtoSchema),
+});
 const mergeRefusalSchema = z.object({ conflicts: z.array(mergeConflictSchema) });
 
 export interface CrmBridgeDeps {
@@ -75,13 +84,11 @@ export interface CrmBridgeHost {
 /**
  * The board, as columns. Retired-and-empty stages are dropped by the renderer.
  *
- * `opportunityIdByFirmId` is what lets a column offer a stage change, and it is
- * deliberately sparse. `GET /firms` returns `FirmIdentityDto`, which carries the open
- * opportunity's *stage* and not its id — Appendix F's first row is about what a
- * colleague may see, and an id is not on it. So the only opportunity ids this window
- * has are the ones a Firm page gave it, and every other column renders G3b's
- * `stage-change-unavailable`. See `docs/decisions/g6-pipeline-board-opportunity-ids.md`;
- * closing the gap is a change to the CRM read, which is not this lane's.
+ * `opportunityIdByFirmId` is what lets a column offer a stage change, and it is still
+ * sparse: the server sends an id only for a firm this caller could actually change,
+ * so a colleague's column renders G3b's `stage-change-unavailable` rather than a
+ * control whose click would be refused. Kept exported because the Firm-page fallback
+ * below composes the same view from the stage list and the firm list.
  */
 export function pipelineViewOf(
   stages: readonly z.infer<typeof pipelineStageDtoSchema>[],
@@ -134,13 +141,30 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
   };
 
   const loadPipeline = async (): Promise<void> => {
+    // One read. The API decides which firms are in it, which columns exist and which
+    // ids this caller may act on; nothing here adds to any of the three.
+    const board = await deps.api.read('/pipeline/board', value => boardSchema.parse(value), {});
+    if (board.ok) {
+      pipeline = {
+        columns: board.value.columns.map(column => ({ stage: column.stage, firms: column.firms })),
+        // The server's map first, then anything a Firm page told this window. The
+        // two agree for a firm in both; the fallback only ever adds a firm the
+        // person has already opened, which is a firm they were already permitted
+        // to see the opportunity of.
+        opportunityIdByFirmId: { ...opportunityIdByFirmId, ...board.value.opportunityIdByFirmId },
+      };
+      screen = 'pipeline';
+      return;
+    }
+
+    // The board endpoint is not answering. Rather than show nothing, fall back to
+    // the two reads that built this view before it existed; every column then
+    // renders `stage-change-unavailable` except the firms already opened.
     const stages = await deps.api.read('/pipeline/stages', value => stagesSchema.parse(value));
     if (!stages.ok) {
       notice = stages.reason;
       return;
     }
-    // The same read the Firm list uses, and the same visibility: the API decides who
-    // is in it, and this only puts them into columns.
     const firms = await deps.api.read('/firms', value => firmsSchema.parse(value));
     pipeline = pipelineViewOf(stages.value.stages, firms.ok ? firms.value.firms : [], opportunityIdByFirmId);
     screen = 'pipeline';

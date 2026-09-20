@@ -195,15 +195,17 @@ async function seedSide(
   const freshDraftFenceId = await fence('fresh-draft', 'held', YESTERDAY);
   const sentFenceId = await fence('sent-long-ago', 'sent', LONG_AGO);
 
-  // The tombstone. Handle-scoped and normalized, which is all 10.3 asks a deletion
-  // to leave behind, and inserted here so every retention test can assert it is
-  // still there afterwards.
+  // The tombstone. Handle-scoped, normalized and sourced `deletion_tombstone`,
+  // which is all 10.3 asks a deletion to leave behind, and inserted here so every
+  // retention test can assert it is still there afterwards. The source is the point
+  // of the row as much as the key is: it is what makes the audit trail say an admin
+  // deleted a record rather than that a prospect asked to be left alone.
   const tombstoneKey = 'erased.person@northwind.example.test';
   const tombstoneEventId = `retention-tombstone-${workspace.slug}`;
   await session.query(
     `INSERT INTO suppression_events (workspace_id, event_id, scope, canonical_key, canonicalizer_version,
                                      source, recorded_at)
-     VALUES ($1, $2, 'handle', $3, 'v1', 'prospect_opt_out', $4::timestamptz)`,
+     VALUES ($1, $2, 'handle', $3, 'v1', 'deletion_tombstone', $4::timestamptz)`,
     [workspace.workspaceId, tombstoneEventId, tombstoneKey, LONG_AGO],
   );
 
