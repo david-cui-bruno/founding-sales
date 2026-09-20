@@ -109,3 +109,9 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "kms_key_arn" {
+  description = "An existing customer key for the alert topic. When set, this module creates no key of its own and the key's policy must already admit cloudwatch.amazonaws.com and events.amazonaws.com (the observability module does so with shared_with_alerts = true). Null creates a dedicated key."
+  type        = string
+  default     = null
+}
