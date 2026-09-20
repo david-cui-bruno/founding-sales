@@ -6,6 +6,7 @@
       "@fss/contracts": ["../../packages/contracts/src/index.ts"],
       "@fss/domain": ["../../packages/domain/src/index.ts"],
       "@fss/domain/db": ["../../packages/domain/db/index.ts"],
+      "@fss/domain/jobs": ["../../packages/domain/jobs/index.ts"],
       "@fss/domain/db/testing": ["../../packages/domain/db/testing/index.ts"]
     }
   },

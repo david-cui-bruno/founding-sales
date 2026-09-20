@@ -39,6 +39,11 @@ export const FOUNDATION_LOOKUP_KEYS = {
   daily_counters: [
     ['workspace_id', 'subject_kind', 'subject_key', 'counter_kind', 'business_date'],
   ],
+  // Migration 0002. `critical_alerts` also has a partial unique index on
+  // (workspace_id, alert_key) WHERE resolved_at IS NULL; a partial index is not
+  // declarable here, because the registry promises an unconditional unique key.
+  canary_runs: [['workspace_id', 'quarter_hour']],
+  critical_alerts: [['workspace_id', 'id']],
 } as const satisfies Readonly<Record<string, readonly (readonly ['workspace_id', ...string[]])[]>>;
 
 /** A table a scoped repository may read. `workspaces`, `users` and `heartbeats` are not scoped rows. */
@@ -56,7 +61,9 @@ export const FOUNDATION_TABLES = [
   'administrative_pauses',
   'audit_events',
   'calling_identities',
+  'canary_runs',
   'command_receipts',
+  'critical_alerts',
   'daily_counters',
   'devices',
   'heartbeats',
