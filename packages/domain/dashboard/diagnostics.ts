@@ -105,6 +105,7 @@ interface MailboxDbRow {
   readonly watch_expires_at: Date | null;
   readonly hours_to_expiry: string | null;
   readonly held: boolean;
+  readonly [column: string]: unknown;
 }
 
 export async function readDiagnostics(
@@ -136,9 +137,6 @@ export async function readDiagnostics(
             count(*) FILTER (WHERE state = 'running')::text AS running,
             count(*) FILTER (WHERE state = 'retryable')::text AS retryable,
             count(*) FILTER (WHERE state = 'dead')::text AS dead,
-            (min(greatest(run_at, not_before))
-               FILTER (WHERE state IN ('queued','retryable') AND run_at <= now() AND not_before <= now())
-             )::text AS oldest_runnable_at,
             extract(epoch FROM now() - min(greatest(run_at, not_before))
               FILTER (WHERE state IN ('queued','retryable') AND run_at <= now() AND not_before <= now()))::text
               AS oldest_runnable,

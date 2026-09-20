@@ -30,6 +30,8 @@
 !packages/domain/suppression
 !packages/domain/mail
 !packages/domain/dial
+!packages/domain/settings
+!packages/domain/dashboard
 !packages/contracts/package.json
 !packages/contracts/src
 

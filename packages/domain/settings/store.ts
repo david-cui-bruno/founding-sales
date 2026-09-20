@@ -71,6 +71,7 @@ interface SettingDbRow {
   readonly changed_by_user_id: string | null;
   readonly changed_at: Date;
   readonly superseded_at: Date | null;
+  readonly [column: string]: unknown;
 }
 
 const COLUMNS = 'setting_key, version, value, change_note, changed_by_user_id, changed_at, superseded_at';

@@ -19,10 +19,11 @@ import { instant, uuid } from './foundationRows.ts';
  * schema from the key. A client cannot choose which validation applies to its own
  * payload.
  *
- * **Bounds that exist for safety are bounds here as well as in the domain.** The
- * per-mailbox ceiling of 100 (12.7) and the domain recipient guard of 4,000 (12.6) are
- * maxima in these schemas, so a request that would exceed them is malformed rather
- * than merely refused. A guard that can be raised from the client is not a guard.
+ * **Bounds that exist for safety are in the schema, not only in a check.** The
+ * per-mailbox ceiling of 100 (12.7) and the domain recipient guard of 4,000 (12.6)
+ * are maxima in `sendingLimitsSettingSchema`, which the server applies to the value
+ * after choosing it by key — so a request that would raise either is refused with
+ * `invalid_value` and writes no version. A guard a client can raise is not a guard.
  */
 
 // ---------------------------------------------------------------------------
@@ -282,3 +283,74 @@ export const settingsSnapshotSchema = z.strictObject({
   effectiveSendingEnabled: z.boolean(),
 });
 export type SettingsSnapshot = z.infer<typeof settingsSnapshotSchema>;
+
+// ---------------------------------------------------------------------------
+// Stage administration (8.1)
+// ---------------------------------------------------------------------------
+
+/**
+ * The commands behind the settings page's pipeline section.
+ *
+ * They are here rather than in `crm.ts` because they are administration: a
+ * salesperson never sends one, and the page that does is the settings page. The
+ * *reads* they change stay in the CRM contract, where the board and the Firm page
+ * find them.
+ *
+ * There is no "create terminal stage" and no "unretire": the workspace has exactly
+ * one Won and one Lost, and a retired stage that came back would change the meaning
+ * of every opportunity that sat in it while it was retired.
+ */
+export const pipelineStageKeySchema = z.string().regex(/^[a-z][a-z0-9_]{1,39}$/u, 'a pipeline stage key');
+export const pipelineStageNameSchema = z.string().trim().min(1).max(80);
+
+export const createPipelineStageCommandSchema = z.strictObject({
+  ...commandEnvelope,
+  key: pipelineStageKeySchema,
+  displayName: pipelineStageNameSchema,
+  /** Among the nonterminal stages, 1-based. Last by default. */
+  position: z.number().int().min(1).max(50).optional(),
+});
+
+export const renamePipelineStageCommandSchema = z.strictObject({
+  ...commandEnvelope,
+  stageKey: pipelineStageKeySchema,
+  displayName: pipelineStageNameSchema,
+});
+
+export const reorderPipelineStagesCommandSchema = z.strictObject({
+  ...commandEnvelope,
+  /** Every nonterminal stage key, in the order they should appear. */
+  stageKeys: z.array(pipelineStageKeySchema).min(1).max(50),
+});
+
+export const retirePipelineStageCommandSchema = z.strictObject({
+  ...commandEnvelope,
+  stageKey: pipelineStageKeySchema,
+});
+
+// ---------------------------------------------------------------------------
+// The dashboard read (13.4)
+// ---------------------------------------------------------------------------
+
+/**
+ * The window a dashboard read is computed over.
+ *
+ * Required rather than defaulted on the server: a figure whose window the caller did
+ * not choose is a figure two people compare and disagree about. The upper bound is
+ * exclusive, so two adjacent windows never double-count a row.
+ */
+export const dashboardWindowSchema = z
+  .strictObject({ from: instant, to: instant })
+  .refine(value => Date.parse(value.from) < Date.parse(value.to), {
+    message: 'the window starts before it ends',
+  });
+
+export const dashboardRequestSchema = z.strictObject({
+  window: dashboardWindowSchema,
+});
+export type DashboardRequest = z.infer<typeof dashboardRequestSchema>;
+
+export const settingHistoryRequestSchema = z.strictObject({
+  settingKey: settingKeySchema,
+  limit: z.number().int().min(1).max(200).optional(),
+});
