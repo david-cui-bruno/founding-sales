@@ -68,3 +68,25 @@ run "an_undocumented_retention_value_is_refused" {
 
   expect_failures = [var.retention_days]
 }
+
+run "sharing_with_alerts_admits_cloudwatch_and_eventbridge_on_the_key" {
+  command = plan
+
+  variables {
+    shared_with_alerts = true
+  }
+
+  assert {
+    condition     = contains([for statement in jsondecode(aws_kms_key.logs.policy).Statement : statement.Sid], "CloudWatchAlarmsPublish")
+    error_message = "A key shared with the alert topic must let cloudwatch.amazonaws.com and events.amazonaws.com use it."
+  }
+}
+
+run "not_sharing_keeps_the_key_policy_to_logs" {
+  command = plan
+
+  assert {
+    condition     = !contains([for statement in jsondecode(aws_kms_key.logs.policy).Statement : statement.Sid], "CloudWatchAlarmsPublish")
+    error_message = "Without sharing, the log key must admit only CloudWatch Logs and the account."
+  }
+}

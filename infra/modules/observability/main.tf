@@ -67,9 +67,22 @@ locals {
 
   log_group_arn_patterns = [for service in var.services : "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/fss/${var.name_prefix}/${service}"]
 
+  alerts_key_statements = var.shared_with_alerts ? [
+    {
+      Sid       = "CloudWatchAlarmsPublish"
+      Effect    = "Allow"
+      Principal = { Service = ["cloudwatch.amazonaws.com", "events.amazonaws.com"] }
+      Action    = ["kms:GenerateDataKey*", "kms:Decrypt"]
+      Resource  = ["*"]
+      Condition = {
+        StringEquals = { "aws:SourceAccount" = [var.aws_account_id] }
+      }
+    },
+  ] : []
+
   log_key_policy = {
     Version = "2012-10-17"
-    Statement = [
+    Statement = concat([
       {
         Sid       = "AccountAdministration"
         Effect    = "Allow"
@@ -93,12 +106,12 @@ locals {
           ArnLike = { "kms:EncryptionContext:aws:logs:arn" = local.log_group_arn_patterns }
         }
       },
-    ]
+    ], local.alerts_key_statements)
   }
 }
 
 resource "aws_kms_key" "logs" {
-  description             = "${var.name_prefix} CloudWatch log groups."
+  description             = var.shared_with_alerts ? "${var.name_prefix} CloudWatch log groups and alert topic." : "${var.name_prefix} CloudWatch log groups."
   enable_key_rotation     = true
   deletion_window_in_days = var.kms_deletion_window_days
   policy                  = jsonencode(local.log_key_policy)

@@ -57,3 +57,9 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "shared_with_alerts" {
+  description = "When true, the log key policy also lets CloudWatch alarms and EventBridge use the key, so the alert topic can share it (five keys instead of six, David's decision of 20 Sep 2026)."
+  type        = bool
+  default     = false
+}

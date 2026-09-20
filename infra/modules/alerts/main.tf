@@ -259,6 +259,8 @@ locals {
 }
 
 resource "aws_kms_key" "alerts" {
+  count = var.kms_key_arn == null ? 1 : 0
+
   description             = "${var.name_prefix} alert topic."
   enable_key_rotation     = true
   deletion_window_in_days = var.kms_deletion_window_days
@@ -268,14 +270,20 @@ resource "aws_kms_key" "alerts" {
 }
 
 resource "aws_kms_alias" "alerts" {
+  count = var.kms_key_arn == null ? 1 : 0
+
   name          = "alias/${local.topic_name}"
-  target_key_id = aws_kms_key.alerts.key_id
+  target_key_id = aws_kms_key.alerts[0].key_id
+}
+
+locals {
+  topic_key_arn = var.kms_key_arn != null ? var.kms_key_arn : aws_kms_key.alerts[0].arn
 }
 
 resource "aws_sns_topic" "alerts" {
   name              = local.topic_name
   display_name      = "FSS alerts"
-  kms_master_key_id = aws_kms_key.alerts.arn
+  kms_master_key_id = local.topic_key_arn
 
   tags = merge(var.tags, { Name = local.topic_name })
 }
