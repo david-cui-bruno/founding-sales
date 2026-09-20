@@ -119,6 +119,13 @@ export const SUPPRESSION_SOURCES = [
   'prospect_do_not_call',
   'salesperson_manual',
   'import',
+  // 10.3's deletion tombstone. Terminal on commit and never salesperson-reversible,
+  // exactly like the two prospect-originated sources, but with its own name so the
+  // audit trail does not claim a prospect opted out when an admin ran a deletion.
+  // Deliberately absent from `recordSuppressionCommandSchema` below: only
+  // `commitDeletion` writes one, and no client may mint one through the ordinary
+  // suppression endpoint.
+  'deletion_tombstone',
   'mistaken_entry_correction',
   'admin_supersession',
 ] as const;

@@ -11,6 +11,7 @@ import { TODAY_CONSTRAINT_CASES } from './support/todayCases.ts';
 import { SEQUENCE_CONSTRAINT_CASES } from './support/sequenceCases.ts';
 import { CLASSIFICATION_CONSTRAINT_CASES } from './support/classificationCases.ts';
 import { SETTINGS_CONSTRAINT_CASES } from './support/settingsCases.ts';
+import { RETENTION_CONSTRAINT_CASES } from './support/retentionCases.ts';
 import { seedCrm, type SeededCrm } from './support/crmFixtures.ts';
 import { seedMail, type SeededMail } from './support/mailFixtures.ts';
 import { OUTBOUND_CONSTRAINT_CASES } from './support/outboundCases.ts';
@@ -831,6 +832,11 @@ const cases: readonly Case[] = [
   {
     constraint: 'retention_policies_pkey',
     run: async f => {
+      // Migration 0014 seeds all ten policy rows for every workspace, so without
+      // this the first insert below breaks `retention_policies_one_per_kind` and the
+      // case never reaches the key it is about. The delete is inside the case's
+      // transaction and rolls back with it.
+      await f.session.query('DELETE FROM retention_policies WHERE workspace_id = $1', [workspace(f)]);
       const created = await f.session.query<{ id: string }>(
         "INSERT INTO retention_policies (workspace_id, data_kind, disposition, retention_interval, effective_from) VALUES ($1, 'raw_mime', 'delete', INTERVAL '7 days', now()) RETURNING id",
         [workspace(f)],
@@ -1356,6 +1362,7 @@ const cases: readonly Case[] = [
   ...CLASSIFICATION_CONSTRAINT_CASES,
   ...SEQUENCE_CONSTRAINT_CASES,
   ...SETTINGS_CONSTRAINT_CASES,
+  ...RETENTION_CONSTRAINT_CASES,
 ];
 
 describe('foundation constraints', () => {

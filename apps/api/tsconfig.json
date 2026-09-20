@@ -19,6 +19,7 @@
       "@fss/domain/today": ["../../packages/domain/today/index.ts"],
       "@fss/domain/settings": ["../../packages/domain/settings/index.ts"],
       "@fss/domain/dashboard": ["../../packages/domain/dashboard/index.ts"],
+      "@fss/domain/retention": ["../../packages/domain/retention/index.ts"],
       "@fss/domain/db/testing": ["../../packages/domain/db/testing/index.ts"]
     }
   },

@@ -17,6 +17,7 @@ import { mailHandlers, todayReplyPromoter, type MailWorkerOptions } from '../han
 import { outboundSendHandoff } from '../handlers/outboundSendHandoff.ts';
 import { researchHandlers } from '../handlers/research.ts';
 import { sequenceActionJobHandler, sequenceActionSource } from '../handlers/sequenceAction.ts';
+import { retentionBatchJobHandler, retentionSource } from '../handlers/retention.ts';
 import { suppressionFinalizeJobHandler } from '../handlers/suppressionFinalize.ts';
 import { todayBuildJobHandler, todayBuildSource } from '../handlers/todayBuild.ts';
 import { mailSources } from '../scheduler/mailSources.ts';
@@ -57,6 +58,11 @@ import { WorkerStartupRefusal, startWorker } from './worker.ts';
  * `classify.reply` (G7b) keeps its own switch as well as the deployment's, because the
  * two say different things: `FSS_CLASSIFIER=off` is an operator who has decided not to
  * spend, and each job then records a `disabled` attempt having sent nothing.
+ *
+ * `retention.batch` (G14) is registered unconditionally and needs no configuration at
+ * all: every horizon in section 10.3 is a row in `retention_policies` and every sweep is
+ * a statement against this database. It is the one job kind in this image that reaches
+ * nothing outside PostgreSQL, so the deployment has nothing to say about it.
  */
 export interface HandlerComposition {
   readonly classifier: ClassifyWorkerOptions | undefined;
@@ -90,6 +96,7 @@ function registerHandlers(
       ),
     }),
   );
+  registry.register(retentionBatchJobHandler());
   // 7.4's providers have no live adapter in this repository, so the deployment
   // declares their absence rather than discovering it; see `deployment.ts`.
   for (const handler of researchHandlers({ providers: {} })) registry.register(handler);
@@ -287,6 +294,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
         canarySource(),
         todayBuildSource(),
         sequenceActionSource(),
+        retentionSource(),
         ...mailSources(),
         classifyReplySource(),
       ],
