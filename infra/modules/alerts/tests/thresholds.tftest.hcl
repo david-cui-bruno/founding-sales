@@ -145,7 +145,7 @@ run "delivery_does_not_depend_on_a_gmail_grant" {
   }
 
   assert {
-    condition     = aws_sns_topic.alerts.kms_master_key_id == aws_kms_key.alerts.arn
+    condition     = aws_sns_topic.alerts.kms_master_key_id == aws_kms_key.alerts[0].arn
     error_message = "The topic is encrypted with a customer key, because CloudWatch cannot publish through the AWS-managed SNS key."
   }
 }
