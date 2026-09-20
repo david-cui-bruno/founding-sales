@@ -30,6 +30,7 @@
 !packages/domain/suppression
 !packages/domain/classification
 !packages/domain/mail
+!packages/domain/outbound
 !packages/domain/dial
 !packages/contracts/package.json
 !packages/contracts/src

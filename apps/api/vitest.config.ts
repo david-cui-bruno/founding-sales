@@ -21,6 +21,7 @@ export default defineConfig({
       '@fss/domain/classification': fileURLToPath(
         new URL('../../packages/domain/classification/index.ts', import.meta.url),
       ),
+      '@fss/domain/outbound': fileURLToPath(new URL('../../packages/domain/outbound/index.ts', import.meta.url)),
       '@fss/domain/db': fileURLToPath(new URL('../../packages/domain/db/index.ts', import.meta.url)),
       '@fss/domain/today': fileURLToPath(new URL('../../packages/domain/today/index.ts', import.meta.url)),
       '@fss/domain': fileURLToPath(new URL('../../packages/domain/src/index.ts', import.meta.url)),

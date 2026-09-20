@@ -231,6 +231,35 @@ export const FOUNDATION_LOOKUP_KEYS = {
   ],
   today_snoozes: [['workspace_id', 'id']],
 
+  // Migration 0010 (lane G7). The fence's second declared key is the one 12.5 asks
+  // for by name — "deterministic Message-ID is unique per mailbox" — and it is
+  // declared here because the Sent-folder reconciliation of Appendix B looks a fence
+  // up by exactly that triple, from a process that has a header and no id.
+  //
+  // The two partial uniques that enforce one fence per origin are deliberately
+  // absent. Both are `WHERE ... IS NOT NULL`, and the registry promises keys that
+  // hold for every row of the table; a lookup by step execution goes through
+  // `readOutboundOutcome`, which knows the column may be null.
+  outbound_messages: [
+    ['workspace_id', 'id'],
+    ['workspace_id', 'mailbox_id', 'provider_message_id_header'],
+  ],
+  outbound_message_events: [
+    ['workspace_id', 'id'],
+    ['workspace_id', 'outbound_message_id', 'sequence_number'],
+  ],
+  sending_domains: [
+    ['workspace_id', 'id'],
+    ['workspace_id', 'domain'],
+  ],
+  mailbox_send_ramp: [
+    ['workspace_id', 'id'],
+    ['workspace_id', 'mailbox_id'],
+  ],
+  mailbox_send_days: [
+    ['workspace_id', 'id'],
+    ['workspace_id', 'mailbox_id', 'business_date'],
+  ],
   // Migration 0011 (lane G7b). `classifier_settings` is keyed by the workspace
   // alone, because there is exactly one row of it per workspace — the same shape as
   // `research_settings`. `mail_reply_confirmations` declares the key that makes a

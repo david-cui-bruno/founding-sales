@@ -73,6 +73,7 @@ COPY packages/domain/suppression packages/domain/suppression
 COPY packages/domain/dial packages/domain/dial
 COPY packages/domain/classification packages/domain/classification
 COPY packages/domain/mail packages/domain/mail
+COPY packages/domain/outbound packages/domain/outbound
 COPY packages/contracts/src packages/contracts/src
 
 # The test harness is never in the image: it starts a PostgreSQL cluster, and

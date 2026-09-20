@@ -11,6 +11,8 @@ import { TODAY_CONSTRAINT_CASES } from './support/todayCases.ts';
 import { CLASSIFICATION_CONSTRAINT_CASES } from './support/classificationCases.ts';
 import { seedCrm, type SeededCrm } from './support/crmFixtures.ts';
 import { seedMail, type SeededMail } from './support/mailFixtures.ts';
+import { OUTBOUND_CONSTRAINT_CASES } from './support/outboundCases.ts';
+import { seedOutbound, type SeededOutbound } from './support/outboundFixtures.ts';
 
 /**
  * A failing insert for every foundation constraint.
@@ -33,6 +35,7 @@ interface Fixture {
    */
   readonly crm: SeededCrm;
   readonly mail: SeededMail;
+  readonly outbound: SeededOutbound;
 }
 
 interface Case {
@@ -1347,9 +1350,9 @@ const cases: readonly Case[] = [
   ...RESEARCH_CONSTRAINT_CASES,
   ...MAIL_CONSTRAINT_CASES,
   ...TODAY_CONSTRAINT_CASES,
+  ...OUTBOUND_CONSTRAINT_CASES,
   ...CLASSIFICATION_CONSTRAINT_CASES,
 ];
-
 
 describe('foundation constraints', () => {
   let database: TestDatabase;
@@ -1368,6 +1371,7 @@ describe('foundation constraints', () => {
     );
     const crm = await seedCrm(database.session, seeded);
     const mail = await seedMail(database.session, seeded, crm);
+    const outbound = await seedOutbound(database.session, seeded, crm, mail);
     fixture = {
       session: database.session,
       seeded,
@@ -1375,6 +1379,7 @@ describe('foundation constraints', () => {
       baseSuppressionEventId: 'base-event',
       crm,
       mail,
+      outbound,
     };
   });
 

@@ -139,6 +139,33 @@ describe('every alarm metric has something that emits it', () => {
       instanceKey: mailboxId,
     });
 
+    // A second mailbox that sent last week and has been disconnected since
+    // yesterday: both halves of 13.3's `MailboxDisconnectedHours`, which is silent
+    // without them and would otherwise alarm on a mailbox nobody has ever used.
+    const departed = await database.session.query<{ id: string }>(
+      `INSERT INTO users (google_sub, email, display_name)
+       VALUES ('metric-coverage-departed', 'departed@example.test', 'Departed Person') RETURNING id`,
+    );
+    const departedUserId = departed.rows[0]?.id ?? '';
+    await database.session.query(
+      "INSERT INTO workspace_memberships (workspace_id, user_id, role) VALUES ($1, $2, 'salesperson')",
+      [mailWorkspace, departedUserId],
+    );
+    const departedMailbox = await database.session.query<{ id: string }>(
+      `INSERT INTO mailboxes (workspace_id, owner_user_id, email_address, status, disconnected_at,
+                              disconnect_reason)
+       VALUES ($1, $2, 'departed@example.test', 'disconnected', now() - interval '3 days',
+               'the grant was revoked')
+       RETURNING id`,
+      [mailWorkspace, departedUserId],
+    );
+    await database.session.query(
+      `INSERT INTO mail_messages (workspace_id, mailbox_id, provider_message_id, provider_thread_id,
+                                  direction, internal_date)
+       VALUES ($1, $2, 'departed-send-1', 'departed-thread-1', 'outgoing', now() - interval '7 days')`,
+      [mailWorkspace, departedMailbox.rows[0]?.id ?? ''],
+    );
+
     const sink = recordingMetricSink();
     const worker = await startWorker({
       config: readWorkerConfig({
@@ -169,6 +196,7 @@ describe('every alarm metric has something that emits it', () => {
       'OldestRunnableJobAgeSeconds',
       'DeadJobOldestAgeSeconds',
       'GmailWatchHoursToExpiry',
+      'MailboxDisconnectedHours',
     ];
     while (Date.now() < deadline && !wanted.every(name => sink.published.some(datum => datum.name === name))) {
       await new Promise(resolve => setTimeout(resolve, 20));
@@ -192,6 +220,7 @@ describe('every alarm metric has something that emits it', () => {
       'UnacknowledgedCriticalAlertAgeSeconds',
       'MailboxCheckHeartbeat',
       'GmailWatchHoursToExpiry',
+      'MailboxDisconnectedHours',
     ]) {
       expect([...published].includes(name), `${name} was never published by the worker`).toBe(true);
     }

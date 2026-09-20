@@ -17,6 +17,7 @@ import { RESEARCH_PATHS, routeResearch } from './research.ts';
 import { GMAIL_PATHS, routeGmail } from './gmail.ts';
 import { PUBSUB_PATHS, routePubSub } from './pubsub.ts';
 import { MESSAGE_PATHS, routeMessages } from './messages.ts';
+import { OUTBOUND_PATHS, routeOutbound } from './outbound.ts';
 // Lane G7b's reply cards and the classifier's configuration.
 import { REPLY_PATHS, routeReplies } from './replies.ts';
 import { SEARCH_PATHS, routeSearch } from './search.ts';
@@ -161,6 +162,11 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     // one claim answer for both, and the registry can only promise about the paths
     // it was told.
     moduleOf('replies', { paths: REPLY_PATHS }, routeReplies, routing),
+    // Lane G7-2's four admin surfaces. Exact paths, and not an `/outbound` prefix:
+    // an unknown path under that root is a typo in a command that marks a send
+    // delivered or opens the sending gate, and `not_found` from the registry says so
+    // before any module sees it.
+    moduleOf('outbound', { paths: OUTBOUND_PATHS }, routeOutbound, routing),
     // Lane G6's Today list. Exact paths, and two modules rather than one: the list
     // and the expansion are reads, the two snooze paths are commands with receipts,
     // and a `/today` prefix would have let one claim answer for both. The registry

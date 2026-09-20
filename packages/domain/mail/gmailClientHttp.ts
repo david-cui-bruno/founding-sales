@@ -13,6 +13,9 @@ import {
   type GmailMessageMetadata,
   type GmailOAuthConfig,
   type GmailProfile,
+  type GmailSendOutcome,
+  type GmailSendRequest,
+  type GmailSentSearchOutcome,
   type GmailTokenOutcome,
   type GmailWatchOutcome,
 } from './gmailClient.ts';
@@ -482,5 +485,124 @@ export function createGmailHttpClient(options: GmailHttpOptions): GmailClient {
       const text = readBodyText(json['payload'] as MessagePart | undefined);
       return { text: text.slice(0, maxBody), truncated: text.length > maxBody };
     },
+
+    sendMessage: async (access, request: GmailSendRequest): Promise<GmailSendOutcome> => {
+      let response: HttpResponse;
+      try {
+        response = await api(
+          access,
+          '/gmail/v1/users/me/messages/send',
+          {},
+          'POST',
+          { raw: Buffer.from(mimeOf(request), 'utf8').toString('base64url') },
+        );
+      } catch (error) {
+        // The request threw. That covers a timeout, a reset connection and a DNS
+        // failure, and in every one of them the bytes may already have reached
+        // Google. Appendix B: "Never resend; enter reconciling."
+        return {
+          ok: false,
+          outcome: 'indeterminate',
+          detail: error instanceof Error ? error.name : 'the send request failed',
+        };
+      }
+
+      if (response.status === 200) {
+        const json = parseJson(response.body);
+        const id = asString(json?.['id']);
+        const threadId = asString(json?.['threadId']);
+        // A 200 whose body cannot be read is *not* a failure to send. Gmail accepted
+        // it; only the receipt is missing, and the Sent search is what recovers it.
+        if (id === null || threadId === null) {
+          return { ok: false, outcome: 'indeterminate', detail: 'the send response had no message id' };
+        }
+        return { ok: true, messageId: id, threadId };
+      }
+
+      // 4xx means Gmail read the request and declined it, so nothing was sent and
+      // the fence may be held. 5xx and everything else may have been accepted before
+      // the error, and must never be retried.
+      if (response.status >= 400 && response.status < 500) {
+        const failure = classifyStatus(response.status, response.body);
+        return {
+          ok: false,
+          outcome: 'refused',
+          reason:
+            failure === 'grant_revoked'
+              ? 'grant_revoked'
+              : failure === 'rate_limited'
+                ? 'rate_limited'
+                : response.status === 400
+                  ? 'recipient_rejected'
+                  : 'provider_refusal',
+        };
+      }
+      return {
+        ok: false,
+        outcome: 'indeterminate',
+        detail: `the send returned status ${String(response.status)}`,
+      };
+    },
+
+    searchSentByMessageId: async (access, rfcMessageId): Promise<GmailSentSearchOutcome> => {
+      // Appendix B: "`rfc822msgid:` search on the sending mailbox". The angle
+      // brackets are not part of the searchable value.
+      const bare = rfcMessageId.replace(/^</, '').replace(/>$/, '');
+      const response = await api(
+        access,
+        '/gmail/v1/users/me/messages',
+        { q: `rfc822msgid:${bare} in:sent`, maxResults: '2' },
+        'GET',
+      );
+      if (response.status !== 200) {
+        const failure = classifyStatus(response.status, response.body);
+        if (failure === 'grant_revoked') return { ok: false, reason: 'grant_revoked' };
+        if (failure === 'rate_limited') return { ok: false, reason: 'rate_limited' };
+        throw new GmailClientError('unexpected_status', 'the Sent search failed', response.status);
+      }
+      const json = parseJson(response.body);
+      const messages = Array.isArray(json?.['messages']) ? (json['messages'] as unknown[]) : [];
+      const first = messages[0];
+      if (typeof first !== 'object' || first === null) return { ok: true, found: null };
+      const id = asString((first as Json)['id']);
+      const threadId = asString((first as Json)['threadId']);
+      if (id === null) return { ok: true, found: null };
+      return { ok: true, found: { messageId: id, threadId: threadId ?? id } };
+    },
   };
+}
+
+/**
+ * The RFC 5322 message a send request becomes.
+ *
+ * Plain text, one recipient, no HTML alternative and no tracking pixel (12.7: "FSS
+ * uses no open-tracking pixels"). The Message-ID is *ours*, written here rather than
+ * left to Gmail, because it is what the Sent-folder reconciliation of Appendix B
+ * searches for and it has to exist before the send rather than after it.
+ *
+ * Header values are stripped of CR and LF. A newline inside a header is header
+ * injection, and the rendered subject comes from a template a person wrote.
+ */
+export function mimeOf(request: GmailSendRequest): string {
+  const clean = (value: string): string => value.replace(/[\r\n]+/g, ' ').trim();
+  const headers = [
+    `From: ${clean(request.from)}`,
+    `To: ${clean(request.to)}`,
+    `Subject: ${encodeHeaderValue(clean(request.subject))}`,
+    `Message-ID: ${clean(request.rfcMessageId)}`,
+    'MIME-Version: 1.0',
+    'Content-Type: text/plain; charset="utf-8"',
+    'Content-Transfer-Encoding: 8bit',
+  ];
+  if (request.inReplyTo !== undefined) headers.push(`In-Reply-To: ${clean(request.inReplyTo)}`);
+  if (request.references !== undefined && request.references.length > 0) {
+    headers.push(`References: ${request.references.map(clean).join(' ')}`);
+  }
+  return `${headers.join('\r\n')}\r\n\r\n${request.body.replace(/\r\n/g, '\n').replace(/\n/g, '\r\n')}`;
+}
+
+/** RFC 2047 encoded-word, but only when the value is not already plain ASCII. */
+function encodeHeaderValue(value: string): string {
+  if (/^[\x20-\x7e]*$/.test(value)) return value;
+  return `=?utf-8?B?${Buffer.from(value, 'utf8').toString('base64')}?=`;
 }

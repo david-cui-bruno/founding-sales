@@ -16,6 +16,7 @@
     "./research/testing": "./research/testing/fixtures.ts",
     "./mail": "./mail/index.ts",
     "./classification": "./classification/index.ts",
+    "./outbound": "./outbound/index.ts",
     "./today": "./today/index.ts"
   },
   "scripts": {
