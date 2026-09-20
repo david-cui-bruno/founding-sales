@@ -10,6 +10,10 @@ export default defineConfig({
       '@fss/domain/db/testing': fileURLToPath(new URL('../../packages/domain/db/testing/index.ts', import.meta.url)),
       '@fss/domain/jobs': fileURLToPath(new URL('../../packages/domain/jobs/index.ts', import.meta.url)),
       '@fss/domain/crm': fileURLToPath(new URL('../../packages/domain/crm/index.ts', import.meta.url)),
+      '@fss/domain/research/testing': fileURLToPath(
+        new URL('../../packages/domain/research/testing/fixtures.ts', import.meta.url),
+      ),
+      '@fss/domain/research': fileURLToPath(new URL('../../packages/domain/research/index.ts', import.meta.url)),
       '@fss/domain/suppression': fileURLToPath(new URL('../../packages/domain/suppression/index.ts', import.meta.url)),
       '@fss/domain/db': fileURLToPath(new URL('../../packages/domain/db/index.ts', import.meta.url)),
       '@fss/domain': fileURLToPath(new URL('../../packages/domain/src/index.ts', import.meta.url)),

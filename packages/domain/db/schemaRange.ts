@@ -25,15 +25,12 @@ export const CURRENT_SCHEMA_VERSION = 9;
  * migration.
  *
  * Lanes G5 and G2 shipped migrations 0002 and 0003 from the same main and each widened
- * this constant for its own; lane G3a widened it again for migration 0004, and G3b for
- * 0005. Lane G4 widens it for 0006, and G10 is in flight with 0007, so a merge that
- * finds two different maxima takes the larger. That is honest only because nothing has
- * been deployed — G0's {1, 1} was never a promise made to a running production binary.
- * From the first real deployment onwards the widening must precede the migration by a
- * release, and the compatibility test will keep saying so.
- *
- * Lane G7 widens it for migration 0009, which arrives after G10's 0007 and G6's 0008;
- * a merge that finds a larger maximum keeps the larger one, as above.
+ * this constant for its own; lane G3a widened it again for migration 0004, G3b for
+ * 0005, G4 for 0006 and G10 for 0007. Lane G7 widens it for 0009, which arrives after
+ * G6's 0008. A merge that finds two different maxima takes the larger. That is honest
+ * only because nothing has been deployed — G0's {1, 1} was never a promise made to a
+ * running production binary. From the first real deployment onwards the widening must
+ * precede the migration by a release, and the compatibility test will keep saying so.
  */
 export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 9 };
 
@@ -54,12 +51,20 @@ export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum:
  * Migration 0005 (G3b) adds no column and no table — only the trigram indexes CRM
  * search is fast with and correct without — so it moved neither minimum. Migration
  * 0006 does: the worker needs it because `suppression.finalize` writes
- * `suppression_finalizations`, so the worker's minimum moves from 2 to 6 for the first
+ * `suppression_finalizations`, so the worker's minimum moved from 2 to 6 for the first
  * time in this tree. The deploy order is migrate, then worker, then API, so the worker
  * never meets an older schema; a rolling step that runs two worker versions has both
  * understanding 0006, which is what the widened previous-release range above is for
- * (Appendix G 22). Both maxima move to 6: a binary that refused the database it has
- * just been deployed against would be a self-inflicted outage.
+ * (Appendix G 22).
+ *
+ * Migration 0007 (G10) moves both again. The API's research routes read
+ * `research_settings`, `research_providers`, `research_route_policies` and
+ * `research_suggestions`, and the worker's two research handlers write
+ * `research_pages` and `research_firm_runs` — the tables whose unique constraints
+ * *are* their declared idempotency protection. A worker on a version-6 database would
+ * run those handlers with no uniqueness behind them, which is the one thing a schema
+ * range exists to prevent, so it refuses to start instead rather than accepting {6, 7}.
+ * `docs/decisions/g10-worker-schema-minimum.md` says what that gives up.
  *
  * Migration 0009 (lane G7) moves both minima to 9, and for the same reason on both
  * sides rather than by habit.
@@ -81,7 +86,9 @@ export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum:
  *
  * The deploy order stays migrate, then worker, then API, so neither binary meets an
  * older schema; a rolling step that runs two workers has both understanding 0009,
- * which is what the widened previous-release range above is for (Appendix G 22).
+ * which is what the widened previous-release range above is for (Appendix G 22). Both
+ * maxima move to 9: a binary that refused the database it has just been deployed
+ * against would be a self-inflicted outage.
  */
 export const API_SCHEMA_RANGE: SchemaRange = { minimum: 9, maximum: 9 };
 export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 9, maximum: 9 };

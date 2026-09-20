@@ -5,6 +5,7 @@ import { payloadHash, seedTwoWorkspaces, type TwoWorkspaces } from './support/fi
 import { IDENTITY_CONSTRAINT_CASES } from './support/identityCases.ts';
 import { CRM_CONSTRAINT_CASES } from './support/crmCases.ts';
 import { POLICY_CONSTRAINT_CASES } from './support/policyCases.ts';
+import { RESEARCH_CONSTRAINT_CASES } from './support/researchCases.ts';
 import { MAIL_CONSTRAINT_CASES } from './support/mailCases.ts';
 import { seedCrm, type SeededCrm } from './support/crmFixtures.ts';
 import { seedMail, type SeededMail } from './support/mailFixtures.ts';
@@ -1341,8 +1342,8 @@ const cases: readonly Case[] = [
   ...IDENTITY_CONSTRAINT_CASES,
   ...CRM_CONSTRAINT_CASES,
   ...POLICY_CONSTRAINT_CASES,
+  ...RESEARCH_CONSTRAINT_CASES,
   ...MAIL_CONSTRAINT_CASES,
-
 ];
 
 
