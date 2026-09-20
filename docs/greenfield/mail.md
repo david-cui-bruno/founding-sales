@@ -182,9 +182,10 @@ operator disconnects one of them.
 
 ## What is deliberately not here
 
-* **Sending.** G7-2: the at-most-once fence, the reputation ramp, the domain guard.
-  `GmailClient` gains `sendMessage` and the `rfc822msgid:` Sent-folder search then;
-  nothing about the read surface changes.
+* **Sending.** G7-2 added it: the at-most-once fence, the reputation ramp and the
+  domain guard, in `packages/domain/outbound` and migration 0010. `GmailClient` gained
+  `sendMessage` and the `rfc822msgid:` Sent-folder search, and nothing about the read
+  surface changed. See `docs/greenfield/sending.md`.
 * **The LLM classifier.** G7b, behind the seam rule 4 describes.
 * **Live credentials.** `mailHandlers(undefined)` in this release, so `mail.sync`,
   `mail.recover` and `mail.watch_renew` wait in the queue unclaimed. Both adapters are

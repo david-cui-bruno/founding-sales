@@ -8,6 +8,7 @@ import {
   listWatchesDue,
   rearmRecoveryJob,
 } from '@fss/domain/mail';
+import { listMailboxesToReconcile } from '@fss/domain/outbound';
 import type { DueWorkSource } from './schedulerPass.ts';
 
 /**
@@ -133,11 +134,44 @@ export function watchRenewalSource(): DueWorkSource {
   };
 }
 
-/** All three, in the order the pass should read them. */
+/**
+ * Every mailbox with a fence owed an observation (12.5, Appendix B).
+ *
+ * Appendix C's key is `mail-reconcile:{mailbox}:{minute}`, so this is the one mail
+ * source whose key carries an instant — which means an ordinary `enqueueJob` is
+ * exactly right, and the minute is what stops a pass that repeats inside one minute
+ * from inserting twice.
+ *
+ * The unit is the mailbox rather than the fence, deliberately. A mailbox with twenty
+ * fences in doubt needs one access token and one job, not twenty of each, and the
+ * handler bounds how many it observes per claim.
+ *
+ * It runs unconditionally, like the others, because an unobserved fence is the worst
+ * state in this system to leave quiet: a send nobody will ever know the outcome of.
+ */
+export function outboundReconcileSource(): DueWorkSource {
+  return {
+    name: 'outbound-reconcile',
+    find: async (session: SessionQueryable, now: string): Promise<readonly JobSpecification[]> => {
+      const minute = `${now.slice(0, 16)}Z`;
+      const due = await listMailboxesToReconcile(session);
+      return due.map(entry => ({
+        workspaceId: entry.workspaceId,
+        kind: 'mail.reconcile',
+        idempotencyKey: jobIdempotencyKey.mailReconcile(entry.mailboxId, minute),
+        payload: { mailboxId: entry.mailboxId },
+        maxAttempts: 4,
+      }));
+    },
+  };
+}
+
+/** All four, in the order the pass should read them. */
 export function mailSources(intervalMinutes?: number): readonly DueWorkSource[] {
   return [
     mailRecoverySource(),
     mailSyncReconciliationSource(intervalMinutes),
     watchRenewalSource(),
+    outboundReconcileSource(),
   ];
 }

@@ -78,6 +78,10 @@ describe('what the API mounts', () => {
       '/messages',
       '/messages/resolve-ambiguity',
       '/oauth/gmail/callback',
+      '/outbound/authentication',
+      '/outbound/cap',
+      '/outbound/resolve',
+      '/outbound/status',
       '/pauses',
       '/pauses/open',
       '/pauses/release',
@@ -229,6 +233,7 @@ describe('what the API mounts', () => {
       'gmail',
       'gmail-push',
       'messages',
+      'outbound',
       'today',
       'snooze',
     ]);

@@ -21,6 +21,7 @@
 !packages/domain/policy
 !packages/domain/suppression
 !packages/domain/mail
+!packages/domain/outbound
 !packages/contracts/package.json
 !packages/contracts/src
 

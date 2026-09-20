@@ -22,9 +22,25 @@ import type { MailDirection } from './types.ts';
  * plausible FSS match" is enforced by the shape of the call rather than by
  * remembering to ignore a field.
  *
- * G7-2 extends this interface with `sendMessage` and `searchSentByMessageId` — the
- * `rfc822msgid:` Sent-folder search of Appendix B. Nothing about the read surface
- * changes when it does.
+ * G7-2 added `sendMessage` and `searchSentByMessageId` — the `rfc822msgid:`
+ * Sent-folder search of Appendix B — and nothing about the read surface changed.
+ *
+ * Those two deserve their own note, because they are the only methods here whose
+ * failure modes are not symmetrical.
+ *
+ * **`sendMessage` may fail in a way that still sent the message.** A timeout, a
+ * dropped connection, a 5xx: the request bytes may have left. So its outcome type
+ * distinguishes `refused` — Gmail answered, and answered no, and nothing was sent —
+ * from `indeterminate`, which is Appendix B's "any request bytes may have left" and
+ * is never retried. A client implementation that reports a timeout as `refused` would
+ * defeat the entire fence, so the distinction is documented on the type rather than
+ * left to a reviewer.
+ *
+ * **`searchSentByMessageId` is the only read that is allowed to be authoritative
+ * about a send.** It is what turns an indeterminate dispatch into `sent` or, after
+ * the observation window, into `unknown_terminal`. Appendix B: "Sent reconciliation
+ * uses `rfc822msgid:` search on the sending mailbox. The `q` parameter requires
+ * `gmail.readonly`; `gmail.metadata` would be insufficient."
  */
 
 export class GmailClientError extends Error {
@@ -180,7 +196,61 @@ export interface GmailClient {
   ): Promise<GmailMessageMetadata | null>;
   /** Only ever called after a plausible match (12.3). */
   getBody(access: GmailAccessGrant, messageId: string): Promise<GmailMessageBody | null>;
+  /**
+   * Send one already-rendered message. Called at most once per fence, by the one
+   * process holding that fence's attempt token (Appendix B).
+   */
+  sendMessage(access: GmailAccessGrant, request: GmailSendRequest): Promise<GmailSendOutcome>;
+  /**
+   * `rfc822msgid:` search of the sending mailbox's Sent folder (Appendix B).
+   *
+   * Returns null when the search ran and found nothing, which is a real answer and
+   * not an error: a message can take minutes to index, so "not yet" and "never" are
+   * the same observation made at different times, and only the observation window
+   * tells them apart.
+   */
+  searchSentByMessageId(
+    access: GmailAccessGrant,
+    rfcMessageId: string,
+  ): Promise<GmailSentSearchOutcome>;
 }
+
+export interface GmailSendRequest {
+  /** Canonical, lower-cased. One recipient: FSS never sends to a list. */
+  readonly to: string;
+  readonly from: string;
+  readonly subject: string;
+  /** Plain text. FSS sends no HTML part and no tracking pixel (12.7). */
+  readonly body: string;
+  /** The deterministic `<...>` header the Sent search will look for. */
+  readonly rfcMessageId: string;
+  /** Set on a reply so Gmail threads it. Absent on a first touch. */
+  readonly inReplyTo?: string | undefined;
+  readonly references?: readonly string[] | undefined;
+}
+
+/**
+ * Three outcomes, and the middle one is the reason this type is not a boolean.
+ *
+ * `sent` — Gmail answered with an id. The message went.
+ * `refused` — Gmail answered, and answered no. Provably nothing was sent, so the
+ *   fence may be held and the step retried later.
+ * `indeterminate` — anything else at all: a timeout, a connection loss, a 5xx, a
+ *   response that could not be parsed. Appendix B: "Never resend; enter reconciling."
+ */
+export type GmailSendOutcome =
+  | { readonly ok: true; readonly messageId: string; readonly threadId: string }
+  | {
+      readonly ok: false;
+      readonly outcome: 'refused';
+      readonly reason: 'grant_revoked' | 'rate_limited' | 'recipient_rejected' | 'provider_refusal';
+    }
+  | { readonly ok: false; readonly outcome: 'indeterminate'; readonly detail: string };
+
+export type GmailSentSearchOutcome =
+  | { readonly ok: true; readonly found: null }
+  | { readonly ok: true; readonly found: { readonly messageId: string; readonly threadId: string } }
+  | { readonly ok: false; readonly reason: 'grant_revoked' | 'rate_limited' };
 
 /**
  * Whether Gmail's label set says the message left this mailbox.

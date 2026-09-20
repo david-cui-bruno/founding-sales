@@ -1,6 +1,7 @@
 import type { SessionQueryable } from '@fss/domain/db';
 import { collectJobMetrics, type HandlerRegistry, type MetricSink } from '@fss/domain/jobs';
 import { collectMailMetrics } from '@fss/domain/mail';
+import { collectOutboundMetrics } from '@fss/domain/outbound';
 import { checkWorkerStartup, restoreSuspected, type WorkerStartupReport } from '../index.ts';
 import { runOnce } from '../runner/jobRunner.ts';
 import { runSchedulerPass, type DueWorkSource } from '../scheduler/schedulerPass.ts';
@@ -212,7 +213,13 @@ export async function startWorker(options: WorkerProcessOptions): Promise<Worker
       // mailbox to publish it for: the alarm treats missing data as not breaching,
       // so a deployment with no mailbox and one with a healthy mailbox look the
       // same to it, which is right — neither is a watch about to lapse.
-      const data = [...(await collectJobMetrics(sessions.metrics)), ...(await collectMailMetrics(sessions.metrics))];
+      const data = [
+        ...(await collectJobMetrics(sessions.metrics)),
+        ...(await collectMailMetrics(sessions.metrics)),
+        // `MailboxDisconnectedHours`, which needed a record of having sent and so
+        // could not be published until `outbound_messages` existed.
+        ...(await collectOutboundMetrics(sessions.metrics)),
+      ];
       await options.sink.publish(data);
       metricPublications += 1;
       liveness.report('metrics', true);

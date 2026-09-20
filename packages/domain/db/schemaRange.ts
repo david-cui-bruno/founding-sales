@@ -18,7 +18,7 @@ export interface SchemaRange {
 }
 
 /** The highest migration version this source tree contains. */
-export const CURRENT_SCHEMA_VERSION = 9;
+export const CURRENT_SCHEMA_VERSION = 10;
 
 /**
  * The range the release before this one declared. Widen this one release ahead of the
@@ -26,13 +26,13 @@ export const CURRENT_SCHEMA_VERSION = 9;
  *
  * Lanes G5 and G2 shipped migrations 0002 and 0003 from the same main and each widened
  * this constant for its own; lane G3a widened it again for migration 0004, G3b for
- * 0005, G4 for 0006, G10 for 0007, G6 for 0008 and G7 for 0009. A merge that finds
- * two different maxima takes the larger. That is honest only because nothing has been
+ * 0005, G4 for 0006, G10 for 0007, G6 for 0008 and G7 for 0009 and 0010. A merge
+ * that finds two different maxima takes the larger. That is honest only because nothing has been
  * deployed — G0's {1, 1} was never a promise made to a running production binary. From
  * the first real deployment onwards the widening must precede the migration by a
  * release, and the compatibility test will keep saying so.
  */
-export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 9 };
+export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 10 };
 
 /**
  * Both services need migration 0002's shape: the API's dead-job list reads `dead_at`
@@ -101,9 +101,30 @@ export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum:
  * which is what the widened previous-release range above is for (Appendix G 22). Both
  * maxima move to 9: a binary that refused the database it has just been deployed
  * against would be a self-inflicted outage.
+ *
+ * Migration 0010 (G7-2) moves both a fifth time, and this is the one where the rule
+ * bites hardest, because the table it adds is the one that makes double sending
+ * impossible.
+ *
+ * The worker needs it beyond argument. Appendix C gives `sequence.action` and
+ * `mail.reconcile` the protection `outbound_fence`, and the fence *is*
+ * `outbound_messages` with its state-machine trigger. A worker on a version-9
+ * database would be a worker whose declared at-most-once protection does not exist —
+ * not degraded, absent — and the failure it would permit is sending the same email
+ * to a prospect twice, which no later correction undoes. Refusing to start is the
+ * only honest behaviour.
+ *
+ * The API needs it for a narrower but equally structural reason: the admin
+ * resolutions of 12.5 (`unknown_terminal` marked delivered or skipped), the ramp and
+ * cap commands of 12.7, and the sending-domain authentication checklist all read and
+ * write tables that arrive here. An API on a version-9 database could accept an
+ * admin's "mark this delivered" and have nowhere to record it, which is worse than
+ * refusing: the admin would believe the sequence had been unblocked.
+ *
+ * Both maxima move to 10, on the same reasoning as every widening before it.
  */
-export const API_SCHEMA_RANGE: SchemaRange = { minimum: 9, maximum: 9 };
-export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 9, maximum: 9 };
+export const API_SCHEMA_RANGE: SchemaRange = { minimum: 10, maximum: 10 };
+export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 10, maximum: 10 };
 
 export function acceptsSchemaVersion(range: SchemaRange, version: number): boolean {
   return Number.isInteger(version) && version >= range.minimum && version <= range.maximum;
