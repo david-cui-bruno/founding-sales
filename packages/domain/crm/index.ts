@@ -177,3 +177,11 @@ export {
 } from './import.ts';
 
 export { exportFirms, type ExportInput, type FirmExport } from './exports.ts';
+
+export {
+  readFirmPage,
+  type FirmHoldDto,
+  type FirmPageDto,
+  type OpportunitySummaryDto,
+  type StageEventDto,
+} from './firmPage.ts';

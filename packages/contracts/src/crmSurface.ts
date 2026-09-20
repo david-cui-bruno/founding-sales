@@ -193,3 +193,57 @@ export const exportResponseSchema = z.strictObject({
   truncated: z.boolean(),
 });
 export type ExportResponse = z.infer<typeof exportResponseSchema>;
+
+// ---------------------------------------------------------------------------
+// The Firm page read (7.2, 7.3, 8.1, 15)
+// ---------------------------------------------------------------------------
+
+export const firmPageRequestSchema = z.strictObject({ firmId: uuid });
+
+export const stageEventDtoSchema = z.strictObject({
+  id: uuid,
+  occurredAt: z.iso.datetime(),
+  fromStageKey: z.string().nullable(),
+  toStageKey: z.string(),
+  actorKind: z.enum(['user', 'admin', 'system', 'worker']),
+  /** Section 8.1: "Lost changes require a reason". Null for every other change. */
+  reason: z.string().nullable(),
+});
+export type StageEventDto = z.infer<typeof stageEventDtoSchema>;
+
+export const firmHoldDtoSchema = z.strictObject({
+  id: uuid,
+  reasonCode: holdReasonCodeSchema,
+  blockedActionKinds: z.array(z.string()),
+  startedAt: z.iso.datetime(),
+  recoveryAction: z.string().nullable(),
+});
+export type FirmHoldDto = z.infer<typeof firmHoldDtoSchema>;
+
+export const opportunitySummaryDtoSchema = z.strictObject({
+  id: uuid,
+  status: z.enum(['open', 'won', 'lost']),
+  stageKey: z.string(),
+  controlMode: z.enum(['automated', 'manual']),
+  controlModeReason: z.string().nullable(),
+  openedAt: z.iso.datetime(),
+  closedAt: z.iso.datetime().nullable(),
+  closeReason: z.string().nullable(),
+});
+
+/**
+ * Two shapes, not one with optional fields. A colleague's Firm page has no
+ * `stageHistory` key at all, rather than an empty array that would say there is
+ * nothing to show instead of saying that this caller may not see it.
+ */
+export const firmPageResponseSchema = z.discriminatedUnion('visibility', [
+  z.strictObject({ visibility: z.literal('any_active_member'), read: firmReadDtoSchema }),
+  z.strictObject({
+    visibility: z.literal('assigned_or_admin'),
+    read: firmReadDtoSchema,
+    opportunity: opportunitySummaryDtoSchema.nullable(),
+    stageHistory: z.array(stageEventDtoSchema),
+    holds: z.array(firmHoldDtoSchema),
+  }),
+]);
+export type FirmPageResponse = z.infer<typeof firmPageResponseSchema>;

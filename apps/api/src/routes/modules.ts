@@ -6,6 +6,7 @@ import { routeAdminDevices } from './admin/devices.ts';
 import { routeAdminMemberships } from './admin/memberships.ts';
 import { routeContacts } from './contacts.ts';
 import { EXPORT_PATHS, routeExport } from './export.ts';
+import { FIRM_PAGE_PATHS, routeFirmPage } from './firmPage.ts';
 import { routeFirms } from './firms.ts';
 import { IMPORT_PATHS, routeImport } from './import.ts';
 import { routeMerges } from './merges.ts';
@@ -107,6 +108,7 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     // Lane G3b's CRM surface. Exact paths, which is what every new endpoint should
     // be: the prefixes above are a record of the routers that already existed in
     // that shape, not an invitation.
+    moduleOf('firm-page', { paths: FIRM_PAGE_PATHS }, routeFirmPage, routing),
     moduleOf('search', { paths: SEARCH_PATHS }, routeSearch, routing),
     moduleOf('import', { paths: IMPORT_PATHS }, routeImport, routing),
     moduleOf('export', { paths: EXPORT_PATHS }, routeExport, routing),

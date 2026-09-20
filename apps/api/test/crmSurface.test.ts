@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   IMPORT_COLUMNS,
   exportResponseSchema,
+  firmPageResponseSchema,
   importCommitResponseSchema,
   importPreviewResponseSchema,
   searchResponseSchema,
@@ -251,6 +252,28 @@ describe('the CRM surface', () => {
     const accepted = importCommitResponseSchema.parse(upgraded.body).results[0];
     expect(accepted?.status).toBe('accepted');
     expect(accepted?.replayed).toBe(false);
+  });
+
+  // ------------------------------------------------------------------ firm page
+  it('serves the Firm page at the caller’s width and refuses an unknown firm as not found', async () => {
+    const found = await post('/search/firms', salespersonToken, { term: 'Bramble' });
+    const firmId = searchResponseSchema.parse(found.body).hits[0]?.firm.id ?? '';
+    expect(firmId).not.toBe('');
+
+    const mine = await post('/crm/firm-page', salespersonToken, { firmId });
+    expect(mine.status).toBe(200);
+    const parsed = firmPageResponseSchema.safeParse(mine.body);
+    expect(parsed.success, JSON.stringify(parsed.error?.issues ?? [])).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data.visibility).toBe('assigned_or_admin');
+
+    // A firm that does not exist and a firm in another workspace are one answer,
+    // and it is the answer an unmounted path gets.
+    const missing = await post('/crm/firm-page', salespersonToken, {
+      firmId: '00000000-0000-4000-8000-000000000000',
+    });
+    expect(missing.status).toBe(404);
+    expect(missing.body).toEqual({ error: 'not_found', message: 'No such endpoint.' });
   });
 
   // --------------------------------------------------------------------- export
