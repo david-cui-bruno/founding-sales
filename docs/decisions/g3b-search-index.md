@@ -49,6 +49,17 @@ a relevance guess.
   supported extensions. The migration creates it with `IF NOT EXISTS` rather than
   assuming it.
 
+  **This is the first migration that needs more than table privileges, and it is a
+  deployment prerequisite worth naming.** `CREATE EXTENSION` on a trusted extension
+  requires `CREATE` on the database — the owner, or `rds_superuser`. Migration 0001
+  creates `migration` as a `NOLOGIN` role and grants it table privileges; whoever the
+  deployment actually connects as has to own the database, which on RDS the master
+  user does. In the test harness migrations run as the database owner, so the local
+  and CI gates prove the statement works but not that the production role may run it.
+  If the infrastructure lane ever narrows the migration login below owner, this line
+  is what breaks, and it breaks loudly at migrate time rather than quietly at query
+  time.
+
 ## The schema range did not move
 
 Migration 0005 adds no table, no column and no constraint — only indexes and the
