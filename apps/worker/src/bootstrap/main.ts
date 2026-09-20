@@ -4,6 +4,7 @@ import { HandlerRegistry, canaryHandler, createCloudWatchSink, loadCloudWatchTra
 import { WORKER_EXIT_CODES } from '../index.ts';
 import { mailHandlers } from '../handlers/mail.ts';
 import { researchHandlers } from '../handlers/research.ts';
+import { retentionBatchJobHandler, retentionSource } from '../handlers/retention.ts';
 import { suppressionFinalizeJobHandler } from '../handlers/suppressionFinalize.ts';
 import { todayBuildJobHandler, todayBuildSource } from '../handlers/todayBuild.ts';
 import { mailSources } from '../scheduler/mailSources.ts';
@@ -35,11 +36,17 @@ import { WorkerStartupRefusal, startWorker } from './worker.ts';
  * inconsistency. A source only inserts rows: with no mailboxes connected it finds
  * nothing, and with mailboxes connected it keeps the queue truthful about what is
  * owed whether or not this image can claim it.
+ *
+ * `retention.batch` is registered unconditionally and needs no configuration at all:
+ * every horizon in section 10.3 is a row in `retention_policies` and every sweep is a
+ * statement against this database. It is the one job kind in this image that reaches
+ * nothing outside PostgreSQL.
  */
 function registerHandlers(registry: HandlerRegistry): HandlerRegistry {
   registry.register(canaryHandler());
   registry.register(suppressionFinalizeJobHandler());
   registry.register(todayBuildJobHandler());
+  registry.register(retentionBatchJobHandler());
   for (const handler of researchHandlers({ providers: {} })) registry.register(handler);
   for (const handler of mailHandlers(undefined)) registry.register(handler);
   return registry;
@@ -138,7 +145,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
         metrics: sessions[1 + config.concurrency] as SessionQueryable,
       },
       registry: registerHandlers(new HandlerRegistry()),
-      sources: [canarySource(), todayBuildSource(), ...mailSources()],
+      sources: [canarySource(), todayBuildSource(), retentionSource(), ...mailSources()],
       sink,
       log,
     });
