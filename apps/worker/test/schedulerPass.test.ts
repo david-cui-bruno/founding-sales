@@ -1,7 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing';
-import { SCHEDULER_ADVISORY_LOCK_KEY, enqueueJob } from '@fss/domain/jobs';
+import { HandlerRegistry, SCHEDULER_ADVISORY_LOCK_KEY, canaryHandler, enqueueJob } from '@fss/domain/jobs';
 import { runSchedulerPass, type DueWorkSource } from '../src/scheduler/schedulerPass.ts';
+import { canarySource } from '../src/scheduler/sources.ts';
+import { runOnce } from '../src/runner/jobRunner.ts';
 
 /**
  * Appendix G scenario 1: "Two scheduler transactions synchronized over one due
@@ -112,6 +114,33 @@ describe('scheduler pass (Appendix G scenario 1)', () => {
     );
     expect(rows.map(row => row.instance_key)).toContain('scheduler-under-test');
     expect(rows[0]?.expected_interval_seconds).toBe(60);
+  });
+
+  it('drives the canary from the scheduler to the worker and back', async () => {
+    const session = await database.appRuntimeSession();
+    const at = '2026-09-20T15:07:00.000Z';
+
+    const first = await runSchedulerPass(session, { sources: [canarySource()], now: at });
+    expect(first.outcome).toBe('ran');
+    // One canary row and one canary job for the workspace's quarter hour.
+    expect(first.inserted).toBe(1);
+
+    // A second pass in the same quarter hour materializes nothing new: the canary row
+    // is refused by its primary key and the job by its idempotency key.
+    const second = await runSchedulerPass(session, { sources: [canarySource()], now: '2026-09-20T15:14:59.000Z' });
+    expect(second.inserted).toBe(0);
+    expect(second.alreadyPresent).toBe(1);
+
+    const registry = new HandlerRegistry();
+    registry.register(canaryHandler());
+    const worked = await runOnce(database.session, { registry, owner: 'worker-canary-loop', limit: 10 });
+    expect(worked.completed).toBe(1);
+
+    const { rows } = await database.session.query<{ completed_at: Date | null }>(
+      "SELECT completed_at FROM canary_runs WHERE quarter_hour = TIMESTAMPTZ '2026-09-20 15:00:00+00'",
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.completed_at).not.toBeNull();
   });
 
   it('refuses to run against a database outside the worker schema range', async () => {

@@ -66,6 +66,9 @@ export interface SchedulerPassReport {
   readonly sources: readonly { readonly name: string; readonly inserted: number; readonly alreadyPresent: number }[];
 }
 
+/** "Once per minute" (13.1). The cadence is written down rather than left to a caller. */
+export const SCHEDULER_PASS_INTERVAL_MILLISECONDS = 60_000;
+
 export const DEFAULT_STATEMENT_TIMEOUT_MILLISECONDS = 5_000;
 export const DEFAULT_PASS_TIMEOUT_MILLISECONDS = 45_000;
 export const SCHEDULER_HEARTBEAT_INTERVAL_SECONDS = 60;
