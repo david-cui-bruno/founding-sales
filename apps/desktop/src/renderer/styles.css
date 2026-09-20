@@ -1,0 +1,81 @@
+/* Enough to make the window legible. The design belongs to a later slice. */
+:root {
+  color-scheme: light dark;
+  font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+}
+
+body {
+  margin: 0;
+  padding: 2rem;
+  line-height: 1.5;
+}
+
+h1 {
+  font-size: 1.6rem;
+  margin: 0 0 1rem;
+}
+
+.banner {
+  margin: 0 0 0.5rem;
+  padding: 0.6rem 0.8rem;
+  border-radius: 6px;
+  border: 1px solid currentColor;
+}
+
+.banner-info {
+  color: #315;
+}
+
+.banner-warning {
+  color: #7a4b00;
+}
+
+.banner-blocking {
+  color: #8a1212;
+  font-weight: 600;
+}
+
+.sign-in label {
+  display: block;
+  margin-bottom: 0.75rem;
+}
+
+.sign-in input {
+  display: block;
+  width: 24rem;
+  max-width: 100%;
+  padding: 0.4rem;
+}
+
+.today ul {
+  list-style: none;
+  padding: 0;
+}
+
+.today li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid rgb(128 128 128 / 30%);
+}
+
+button[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.25rem 1rem;
+}
+
+dt {
+  font-weight: 600;
+}
+
+dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}

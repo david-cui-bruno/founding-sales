@@ -5,8 +5,11 @@ The new tree lives beside the old one in the same repository. The root
 `tests/`, `native/`) are untouched and keep their own gate.
 
 ```
-apps/api          skeleton API: health, request limits, redacted errors, scope wiring
+apps/api          the API: health, request limits, redacted errors, scope wiring,
+                  Google sign-in, sessions, commands, admin routes
 apps/worker       skeleton worker: connects, checks its schema range, exits non-zero
+apps/desktop      the Mac: Electron main, preload, renderer; sign-in, device,
+                  serialised renewal, version gate, expiring encrypted cache
 packages/domain   pure rules (src/rules) and database conventions (db/)
 packages/contracts zod schemas for the foundation rows, reason codes, client versions
 infra/            Terraform (G1 owns it)
@@ -31,11 +34,16 @@ CI does not need the rebuild: it uses a `postgres:16` service container instead.
 ## The gate
 
 ```
-npm run gate:greenfield     # typecheck + lint + tests, all four packages
+npm run gate:greenfield     # typecheck + lint + tests, every greenfield package
 npm run typecheck:greenfield
 npm run lint:greenfield
 npm run test:greenfield
+npm run test:desktop:e2e    # the window, in chromium; not part of the gate
 ```
+
+`test:desktop:e2e` is separate because it needs a chromium binary that
+`npx playwright install chromium` provides and the `--ignore-scripts` install above
+deliberately does not. See `docs/decisions/g2-desktop-test-layers.md`.
 
 The old gate (`npm run typecheck`, `npm test`, `npm run lint`, `npm run lint:tracked`)
 excludes `apps/` and `packages/` and behaves exactly as it did before.
