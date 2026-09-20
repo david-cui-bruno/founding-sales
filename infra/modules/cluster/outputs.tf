@@ -72,3 +72,44 @@ output "secret_environment_names" {
   description = "Environment variable names resolved from Secrets Manager at task start."
   value       = sort(keys(local.task_secrets))
 }
+
+output "service_shape" {
+  description = <<-EOT
+    The size and count each service actually plans, read back from the
+    resources. The root tests assert David's topology answers against this
+    rather than against the variables they were passed, because a default that
+    never reaches a task definition is the failure mode this output exists for.
+  EOT
+  value = {
+    api = {
+      cpu           = aws_ecs_task_definition.api.cpu
+      memory        = aws_ecs_task_definition.api.memory
+      desired_count = aws_ecs_service.api.desired_count
+    }
+    worker = {
+      cpu           = aws_ecs_task_definition.worker.cpu
+      memory        = aws_ecs_task_definition.worker.memory
+      desired_count = aws_ecs_service.worker.desired_count
+    }
+  }
+}
+
+output "task_runtime_platform" {
+  description = <<-EOT
+    The runtime platform each task definition actually declares, read back from
+    the resources rather than echoed from the variable. The images are built
+    `linux/arm64`; a task definition that asks Fargate for X86_64 pulls a
+    manifest that does not exist and the service never stabilises, so the root
+    tests assert this rather than assert the value they passed.
+  EOT
+  value = {
+    api = {
+      operating_system_family = aws_ecs_task_definition.api.runtime_platform[0].operating_system_family
+      cpu_architecture        = aws_ecs_task_definition.api.runtime_platform[0].cpu_architecture
+    }
+    worker = {
+      operating_system_family = aws_ecs_task_definition.worker.runtime_platform[0].operating_system_family
+      cpu_architecture        = aws_ecs_task_definition.worker.runtime_platform[0].cpu_architecture
+    }
+  }
+}

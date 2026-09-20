@@ -38,6 +38,42 @@ output "database_master_secret_arn" {
   value       = module.database.master_user_secret_arn
 }
 
+output "database_name" {
+  description = <<-EOT
+    The application database name. With `database_endpoint` and
+    `database_master_secret_arn` it is everything a connection string needs, and
+    it is why the rehearsal database URL is assembled inside the job from three
+    outputs rather than stored as a static environment secret. See
+    `docs/decisions/g12c-the-rehearsal-database-url-is-derived.md`.
+  EOT
+  value       = module.database.database_name
+}
+
+output "task_runtime_platform" {
+  description = "Operating system family and CPU architecture each task definition declares."
+  value       = module.cluster.task_runtime_platform
+}
+
+output "service_shape" {
+  description = "Task size and desired count per service, read back from the plan."
+  value       = module.cluster.service_shape
+}
+
+output "database_shape" {
+  description = "Instance class, Multi-AZ, storage, retention and the two per-metric billed options."
+  value       = module.database.instance_shape
+}
+
+output "container_insights" {
+  description = "Container Insights setting on the cluster. Billed per metric; David's answer is off."
+  value       = var.container_insights
+}
+
+output "waf_enabled" {
+  description = "Whether a WAFv2 web ACL is attached to the load balancer. David's answer is off."
+  value       = var.enable_waf
+}
+
 output "load_balancer_dns_name" {
   description = "Load balancer hostname. Point the API DNS record at this."
   value       = module.edge.load_balancer_dns_name

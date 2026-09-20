@@ -34,8 +34,23 @@ output "database_endpoint" {
 }
 
 output "database_master_secret_arn" {
-  description = "RDS-managed master user secret ARN."
+  description = <<-EOT
+    RDS-managed master user secret ARN. The release workflow reads this secret
+    with the rehearsal role and assembles `FSS_TEST_POSTGRES_URL` in the job, so
+    no static rehearsal database URL exists as a repository secret. See
+    `docs/decisions/g12c-the-rehearsal-database-url-is-derived.md`.
+  EOT
   value       = module.stack.database_master_secret_arn
+}
+
+output "database_name" {
+  description = "Application database name. The third part of the derived rehearsal database URL."
+  value       = module.stack.database_name
+}
+
+output "task_runtime_platform" {
+  description = "Operating system family and CPU architecture on each task definition."
+  value       = module.stack.task_runtime_platform
 }
 
 output "journal_bucket_name" {

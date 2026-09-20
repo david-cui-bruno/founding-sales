@@ -124,6 +124,99 @@ run "no_name_production_claims_can_be_a_rehearsal_name" {
 
 }
 
+# David's topology answers of 20 September 2026 (docs/decisions/coord-topology-answers.md),
+# asserted against the plan rather than against the variables they were passed.
+#
+# They were written into `terraform.tfvars`, which `infra/.gitignore` ignores, so the
+# answers never reached the repository and both roots still planned X86_64 against
+# `linux/arm64` images. Tfvars stay ignored; the answers are the defaults, and this run
+# is what makes them a fact somebody would have to edit a test to change. See
+# docs/decisions/g12c-the-topology-answers-are-root-defaults.md.
+run "the_topology_answers_are_the_production_defaults" {
+  command = plan
+
+  # The blocker, and the reason this run exists. `greenfield-images.yml` builds
+  # `--platform linux/arm64`; a task definition asking Fargate for X86_64 pulls a
+  # manifest that is not in the index and the service never stabilises.
+  assert {
+    condition     = module.stack.task_runtime_platform.api.cpu_architecture == "ARM64"
+    error_message = "The API task definition must declare ARM64, because that is the only architecture the images are built for."
+  }
+
+  assert {
+    condition     = module.stack.task_runtime_platform.worker.cpu_architecture == "ARM64"
+    error_message = "The worker task definition must declare ARM64 for the same reason."
+  }
+
+  assert {
+    condition = (module.stack.task_runtime_platform.api.operating_system_family == "LINUX"
+    && module.stack.task_runtime_platform.worker.operating_system_family == "LINUX")
+    error_message = "Both tasks are Linux."
+  }
+
+  # Answer 2: db.t4g.small, Multi-AZ, two API tasks and one worker at 0.5 vCPU / 1 GiB.
+  assert {
+    condition     = module.stack.database_shape.instance_class == "db.t4g.small"
+    error_message = "The production database is db.t4g.small."
+  }
+
+  assert {
+    condition     = module.stack.database_shape.multi_az
+    error_message = "The production database is Multi-AZ. main.tf passes the literal; this asserts it reached the instance."
+  }
+
+  assert {
+    condition = (module.stack.service_shape.api.cpu == "512"
+      && module.stack.service_shape.api.memory == "1024"
+      && module.stack.service_shape.worker.cpu == "512"
+    && module.stack.service_shape.worker.memory == "1024")
+    error_message = "Both tasks are 0.5 vCPU and 1 GiB."
+  }
+
+  assert {
+    condition = (module.stack.service_shape.api.desired_count == 2
+    && module.stack.service_shape.worker.desired_count == 1)
+    error_message = "Two API tasks and one worker task."
+  }
+
+  # Answer 5: the five billed-per-metric options stay off. Enhanced Monitoring is not a
+  # root input at all (the database module's monitoring_interval defaults to 0) and
+  # there is no flow-log resource anywhere in infra (docs/decisions/g1-no-flow-logs.md),
+  # so those two are asserted here as the absence they are.
+  assert {
+    condition     = module.stack.database_shape.performance_insights_enabled == false
+    error_message = "Performance Insights stays off."
+  }
+
+  assert {
+    condition     = module.stack.database_shape.monitoring_interval == 0
+    error_message = "Enhanced Monitoring stays off; a non-zero interval would also create a monitoring role."
+  }
+
+  assert {
+    condition     = module.stack.container_insights == "disabled"
+    error_message = "Container Insights stays off."
+  }
+
+  assert {
+    condition     = module.stack.waf_enabled == false
+    error_message = "No WAFv2 web ACL."
+  }
+}
+
+run "an_architecture_that_is_not_one_of_the_two_is_refused" {
+  command = plan
+
+  variables {
+    cpu_architecture = "arm64"
+  }
+
+  # Lowercase is the shape an operator who knows Docker types. ECS takes the
+  # uppercase enum, and the root refuses rather than letting the module three
+  # levels down name a variable nobody typed.
+  expect_failures = [var.cpu_architecture]
+}
+
 run "the_recovery_posture_is_not_a_deployment_time_choice" {
   command = plan
 

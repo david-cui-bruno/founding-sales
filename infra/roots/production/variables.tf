@@ -140,9 +140,27 @@ variable "worker_desired_count" {
 }
 
 variable "cpu_architecture" {
-  description = "X86_64 or ARM64. ARM64 is the cheaper Fargate rate but the images must be built for it."
+  description = <<-EOT
+    X86_64 or ARM64, and the answer is ARM64 (David, 20 September 2026).
+
+    This is a default rather than a tfvars entry on purpose: `infra/.gitignore`
+    ignores `*.tfvars`, so an answer written there is an answer the repository
+    never sees and CI can never check. `greenfield-images.yml` builds
+    `--platform linux/arm64` and nothing else, so X86_64 here asks Fargate for
+    a manifest that is not in the index: the task never starts, the circuit
+    breaker rolls back, and the error arrives as a pull failure rather than as
+    a plan somebody could have read. `infra/roots/*/tests/isolation.tftest.hcl`
+    asserts the planned task definitions, not this value.
+  EOT
   type        = string
-  default     = "X86_64"
+  default     = "ARM64"
+
+  # Repeated from the cluster module deliberately: a refusal should name the
+  # variable the operator typed, not one three modules down.
+  validation {
+    condition     = contains(["X86_64", "ARM64"], var.cpu_architecture)
+    error_message = "cpu_architecture must be exactly X86_64 or ARM64. ECS takes the uppercase enum, not Docker's linux/arm64 spelling."
+  }
 }
 
 variable "container_insights" {

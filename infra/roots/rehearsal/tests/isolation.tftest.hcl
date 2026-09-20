@@ -160,8 +160,83 @@ run "the_production_deployment_role_is_refused" {
   expect_failures = [var.deployment_role_name]
 }
 
+# The same topology answers, at one API task and one worker.
+#
+# A rehearsal that ran on a different architecture, a different instance class or a
+# different task size would deploy the production digests onto a machine production
+# never uses, and 16.2's "the exact immutable artifacts intended for production" would
+# be true of the bytes and false of everything around them.
+run "the_topology_answers_are_the_rehearsal_defaults_at_one_plus_one" {
+  command = plan
+
+  assert {
+    condition = (module.stack.task_runtime_platform.api.cpu_architecture == "ARM64"
+    && module.stack.task_runtime_platform.worker.cpu_architecture == "ARM64")
+    error_message = "The rehearsal must deploy the arm64 images on ARM64 Fargate, exactly as production will."
+  }
+
+  assert {
+    condition     = module.stack.database_shape.instance_class == "db.t4g.small"
+    error_message = "The same instance class as production, so the restore drill measures something production-shaped."
+  }
+
+  assert {
+    condition     = module.stack.database_shape.multi_az
+    error_message = "Multi-AZ, because Appendix E step 1 restores a Multi-AZ instance in production and that is the step the run is timed by."
+  }
+
+  assert {
+    condition = (module.stack.service_shape.api.cpu == "512"
+      && module.stack.service_shape.api.memory == "1024"
+      && module.stack.service_shape.worker.cpu == "512"
+    && module.stack.service_shape.worker.memory == "1024")
+    error_message = "The same 0.5 vCPU / 1 GiB task size as production."
+  }
+
+  assert {
+    condition = (module.stack.service_shape.api.desired_count == 1
+    && module.stack.service_shape.worker.desired_count == 1)
+    error_message = "One of each: the shapes are production's, the counts are not."
+  }
+
+  assert {
+    condition     = module.stack.container_insights == "disabled" && module.stack.waf_enabled == false
+    error_message = "The billed-per-metric options stay off in rehearsal too."
+  }
+
+  assert {
+    condition = (module.stack.database_shape.performance_insights_enabled == false
+    && module.stack.database_shape.monitoring_interval == 0)
+    error_message = "Performance Insights and Enhanced Monitoring stay off."
+  }
+}
+
+run "an_architecture_that_is_not_one_of_the_two_is_refused" {
+  command = plan
+
+  variables {
+    cpu_architecture = "aarch64"
+  }
+
+  expect_failures = [var.cpu_architecture]
+}
+
 run "rehearsal_may_be_small_and_single_az" {
   command = plan
+
+  # The default is Multi-AZ (the run above), because the restore drill is the
+  # expensive step and it must restore what production would. Single-AZ stays
+  # *available* for a run investigating something else, and this asserts the
+  # capability rather than the default: production has a stack precondition
+  # refusing single-AZ, and rehearsal deliberately does not.
+  variables {
+    database_multi_az = false
+  }
+
+  assert {
+    condition     = module.stack.database_shape.multi_az == false
+    error_message = "A rehearsal run may still ask for single-AZ; only production refuses it."
+  }
 
   assert {
     condition     = module.stack.destroyable
