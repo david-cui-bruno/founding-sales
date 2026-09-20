@@ -34,6 +34,8 @@ export default [
       // run by `npm run lint:greenfield`. This config never sees those files.
       'apps/**',
       'packages/**',
+      // The greenfield release suite (Appendix G), same config as apps/ and packages/.
+      'test/release/**',
       // Generated output, packaged apps and nested checkouts. ESLint 8 skipped
       // dot-directories (.vite, .worktrees, .build) by default; ESLint 9 does not.
       '**/.*/',

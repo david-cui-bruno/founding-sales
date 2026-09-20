@@ -1,0 +1,398 @@
+name: Greenfield release rehearsal
+
+# The rehearsal gate of specification 16.2, as a workflow.
+#
+# "Any release touching database schema, sending, suppression, Gmail, restore or job
+# fencing runs the full recovery drill in an ephemeral rehearsal environment. The
+# rehearsal environment deploys the exact immutable API, worker and Electron artifacts
+# intended for production."
+#
+# It creates a run-prefixed rehearsal environment, migrates, deploys the two images by
+# digest in the order migrate → worker → API, smokes, runs the Appendix G suite, runs
+# the restore drill (Appendix E 1 to 9), replays the suppression journal, reconstructs
+# Gmail against the recorded fake, tears the run down with bypass-governance, asserts
+# that nothing with the production prefix was touched, and writes the release record
+# last.
+#
+# ## Four rules this file keeps
+#
+# **CI never pushes an image.** `.github/workflows/greenfield-images.yml` builds and
+# prints digests; David pushes from his Mac against a directive. The digests are inputs
+# here, and the workflow refuses anything that is not `sha256:` plus 64 hex characters —
+# a mutable tag cannot carry the comparison the release gate exists to make.
+#
+# **Every AWS step is behind the `rehearsal` environment.** The job that touches the
+# cloud declares `environment: rehearsal`, which David enables and which carries the
+# only OIDC role this workflow may assume (`fss-rh-deploy`, scoped to `fss-rh-*`). The
+# dry-run job declares no environment and therefore cannot obtain a credential at all.
+#
+# **The dry run is exercised on every change to this file.** It prints the exact plan —
+# every terraform and aws invocation, in order — with no credential present, which is
+# what made it possible to write this lane without ever reaching AWS and is what keeps
+# a later edit from silently acquiring a step nobody read.
+#
+# **Teardown always runs.** A rehearsal environment left standing costs money and, far
+# worse, becomes a second place prospect-shaped data can live. `if: always()`.
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_image_digest:
+        description: 'API image digest, sha256:... (from David''s push)'
+        required: true
+        type: string
+      worker_image_digest:
+        description: 'Worker image digest, sha256:... (from David''s push)'
+        required: true
+        type: string
+      desktop_commit_stamp:
+        description: 'The commit the signed desktop build was made from'
+        required: true
+        type: string
+      run_suffix:
+        description: 'Run identifier; the prefix becomes fss-rh-<suffix>'
+        required: false
+        type: string
+        default: ''
+  pull_request:
+    paths:
+      - '.github/workflows/greenfield-release.yml'
+      - 'infra/scripts/rehearsal-*.sh'
+      - 'scripts/productionSmoke.mjs'
+      - 'test/release/**'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/greenfield-release.yml'
+      - 'infra/scripts/rehearsal-*.sh'
+
+permissions:
+  contents: read
+
+env:
+  TERRAFORM_VERSION: '1.15.8'
+  AWS_REGION: us-east-1
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # The offline half. Runs on every pull request, holds no credential, and proves the
+  # workflow's plan is the plan before anybody runs it for real.
+  # ---------------------------------------------------------------------------
+  dry-run:
+    name: Print the rehearsal plan without credentials
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.20.0'
+
+      - name: Refuse any ambient cloud credential
+        run: |
+          set -euo pipefail
+          # This job must behave identically with and without credentials. A credential
+          # here means the workflow has been changed in a way this lane did not intend,
+          # so stop rather than risk a real call from the unprotected job.
+          for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN \
+                      AWS_PROFILE AWS_ROLE_ARN AWS_WEB_IDENTITY_TOKEN_FILE \
+                      GOOGLE_CREDENTIALS GOOGLE_APPLICATION_CREDENTIALS; do
+            if [ -n "${!name:-}" ]; then
+              echo "::error::$name is set. The rehearsal dry run is offline and must never hold a cloud credential."
+              exit 1
+            fi
+          done
+
+      - name: Every rehearsal script is executable and passes shellcheck-free parsing
+        run: |
+          set -euo pipefail
+          status=0
+          for script in infra/scripts/rehearsal-*.sh; do
+            [ -x "$script" ] || { echo "::error::$script is not executable"; status=1; }
+            bash -n "$script" || { echo "::error::$script does not parse"; status=1; }
+            grep -q 'rehearsal-common.sh' "$script" || [ "$script" = "infra/scripts/rehearsal-common.sh" ] \
+              || { echo "::error::$script does not use the shared prefix guard"; status=1; }
+          done
+          exit "$status"
+
+      - name: The prefix guard refuses a production prefix
+        run: |
+          set -euo pipefail
+          # The guard is the whole of Appendix G 39's script half, so it is tested
+          # rather than trusted. Each of these must fail.
+          for bad in fss-prod fss-prod-deploy fss-rh- '' 'fss-rh-UPPER'; do
+            if FSS_REHEARSAL_DRY_RUN=1 infra/scripts/rehearsal-prefix-guard.sh "$bad" after 2>/dev/null; then
+              echo "::error::the prefix guard accepted '$bad'"
+              exit 1
+            fi
+          done
+          # And the good one must pass.
+          FSS_REHEARSAL_DRY_RUN=1 infra/scripts/rehearsal-prefix-guard.sh fss-rh-dryrun before
+
+      - name: Print the plan every rehearsal step would run
+        env:
+          FSS_REHEARSAL_DRY_RUN: '1'
+          FSS_REHEARSAL_REPORTS: ${{ runner.temp }}/fss-rehearsal
+          FSS_CARRY_WATERMARK: '2026-09-21T00:00:00Z'
+          FSS_CARRY_SOURCE_TABLE: rehearsal-old-table
+        run: |
+          set -euo pipefail
+          prefix=fss-rh-dryrun
+          {
+            echo "### Rehearsal plan for $prefix"
+            echo ''
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          for step in \
+            "infra/scripts/rehearsal-prefix-guard.sh $prefix before" \
+            "infra/scripts/rehearsal-schema-ranges.sh $prefix" \
+            "infra/scripts/rehearsal-restore-drill.sh $prefix" \
+            "infra/scripts/rehearsal-carry-watermark.sh $prefix" \
+            "infra/scripts/rehearsal-teardown.sh $prefix" \
+            "infra/scripts/rehearsal-prefix-guard.sh $prefix after"; do
+            echo "== $step"
+            # shellcheck disable=SC2086
+            $step | tee -a "$GITHUB_STEP_SUMMARY"
+          done
+          # The record is written last, from the reports the steps above produced.
+          infra/scripts/rehearsal-release-record.sh "$prefix" \
+            "sha256:$(printf 'a%.0s' {1..64})" \
+            "sha256:$(printf 'b%.0s' {1..64})" \
+            "$GITHUB_SHA" pass "$FSS_REHEARSAL_REPORTS/release-record.json"
+          cat "$FSS_REHEARSAL_REPORTS/release-record.json"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: The release record refuses what it must refuse
+        env:
+          FSS_REHEARSAL_DRY_RUN: '1'
+          FSS_REHEARSAL_REPORTS: ${{ runner.temp }}/fss-rehearsal
+        run: |
+          set -euo pipefail
+          good_api="sha256:$(printf 'a%.0s' {1..64})"
+          good_worker="sha256:$(printf 'b%.0s' {1..64})"
+          out="$RUNNER_TEMP/record.json"
+          refuse() {
+            if infra/scripts/rehearsal-release-record.sh "$@" 2>/dev/null; then
+              echo "::error::the release record accepted: $*"
+              exit 1
+            fi
+          }
+          # A failed suite, a tag instead of a digest, and one image under both names.
+          refuse fss-rh-dryrun "$good_api" "$good_worker" "$GITHUB_SHA" fail "$out"
+          refuse fss-rh-dryrun 'fss-api:latest' "$good_worker" "$GITHUB_SHA" pass "$out"
+          refuse fss-rh-dryrun "$good_api" "$good_api" "$GITHUB_SHA" pass "$out"
+          refuse fss-prod "$good_api" "$good_worker" "$GITHUB_SHA" pass "$out"
+
+      - name: The production smoke script is safe by construction
+        run: |
+          set -euo pipefail
+          # It must refuse a non-HTTPS origin and it must fail — never skip — when the
+          # canary age was not supplied.
+          if node scripts/productionSmoke.mjs --origin http://example.test 2>/dev/null; then
+            echo "::error::the smoke script accepted a plaintext origin"
+            exit 1
+          fi
+          # Only GET appears in it, and no command id: a smoke check cannot mutate.
+          if grep -nE "method: *'(POST|PUT|PATCH|DELETE)'" scripts/productionSmoke.mjs; then
+            echo "::error::the production smoke script contains a mutating request"
+            exit 1
+          fi
+
+  # ---------------------------------------------------------------------------
+  # The credentialed half. Manual only, and gated behind the repository environment
+  # named `rehearsal`, which David enables and which holds the OIDC role.
+  # ---------------------------------------------------------------------------
+  rehearsal:
+    name: Create, deploy, drill and destroy a rehearsal environment
+    if: github.event_name == 'workflow_dispatch'
+    needs: dry-run
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    environment: rehearsal
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        shell: bash
+    env:
+      FSS_REHEARSAL_REPORTS: ${{ github.workspace }}/.rehearsal-reports
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.20.0'
+
+      # hashicorp/setup-terraform v3
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Refuse anything that is not a digest
+        run: |
+          set -euo pipefail
+          shape='^sha256:[0-9a-f]{64}$'
+          for digest in "${{ inputs.api_image_digest }}" "${{ inputs.worker_image_digest }}"; do
+            if [[ ! "$digest" =~ $shape ]]; then
+              echo "::error::'$digest' is not an image digest. The gate compares digests; a tag is mutable."
+              exit 1
+            fi
+          done
+          if [ "${{ inputs.api_image_digest }}" = "${{ inputs.worker_image_digest }}" ]; then
+            echo "::error::the two digests are identical; one image was pushed under both names"
+            exit 1
+          fi
+
+      - name: Decide the run prefix
+        id: prefix
+        run: |
+          set -euo pipefail
+          suffix='${{ inputs.run_suffix }}'
+          [ -n "$suffix" ] || suffix="$(date -u +%Y%m%d%H%M)"
+          prefix="fss-rh-${suffix}"
+          # The same guard the scripts use, applied before anything is created.
+          FSS_REHEARSAL_DRY_RUN=1 infra/scripts/rehearsal-prefix-guard.sh "$prefix" before
+          echo "prefix=$prefix" >> "$GITHUB_OUTPUT"
+          echo "run prefix: $prefix"
+
+      # aws-actions/configure-aws-credentials v4
+      - name: Assume the rehearsal deployment role
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502
+        with:
+          role-to-assume: ${{ secrets.FSS_REHEARSAL_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: ${{ steps.prefix.outputs.prefix }}
+
+      - name: The assumed identity is the rehearsal role and nothing else
+        run: |
+          set -euo pipefail
+          # The IAM boundary on fss-rh-deploy is the real protection; this fails fast and
+          # legibly if the environment was ever pointed at a different role.
+          identity="$(aws sts get-caller-identity --query Arn --output text)"
+          echo "identity: $identity"
+          case "$identity" in
+            *fss-rh-*) : ;;
+            *) echo "::error::this workflow assumed $identity, which is not an fss-rh- role"; exit 1 ;;
+          esac
+
+      - name: Record the production inventory before anything is created
+        run: infra/scripts/rehearsal-prefix-guard.sh "${{ steps.prefix.outputs.prefix }}" before
+
+      - name: Create the rehearsal environment
+        working-directory: infra/roots/rehearsal
+        run: |
+          set -euo pipefail
+          prefix='${{ steps.prefix.outputs.prefix }}'
+          terraform init -reconfigure -input=false \
+            -backend-config=backend.hcl \
+            -backend-config="key=fss/greenfield/rehearsal/${prefix}/terraform.tfstate"
+          terraform apply -auto-approve -input=false \
+            -var="name_prefix=${prefix}" \
+            -var="api_image=${{ secrets.FSS_REHEARSAL_API_REPOSITORY }}@${{ inputs.api_image_digest }}" \
+            -var="worker_image=${{ secrets.FSS_REHEARSAL_WORKER_REPOSITORY }}@${{ inputs.worker_image_digest }}" \
+            -var="certificate_arn=${{ secrets.FSS_REHEARSAL_CERTIFICATE_ARN }}" \
+            -var="api_hostname=${{ secrets.FSS_REHEARSAL_API_HOSTNAME }}"
+
+      - name: Migrate forward, then deploy the worker, then the API
+        working-directory: infra/roots/rehearsal
+        run: |
+          set -euo pipefail
+          # The order is the coordinator's note of 20 September and Appendix G 22's
+          # subject: the API image needs the migration to have run, the worker may
+          # straddle, so migrate → worker → API and never beside each other.
+          ../../scripts/rehearsal-schema-ranges.sh '${{ steps.prefix.outputs.prefix }}'
+
+      - name: Smoke the rehearsal environment with the production smoke script
+        run: |
+          set -euo pipefail
+          origin="https://${{ secrets.FSS_REHEARSAL_API_HOSTNAME }}"
+          age="$(aws cloudwatch get-metric-statistics --namespace FSS \
+            --metric-name CanaryCompletionAgeSeconds --statistics Maximum \
+            --start-time "$(date -u -d '-1 hour' +%Y-%m-%dT%H:%M:%SZ)" \
+            --end-time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --period 300 \
+            --query 'reverse(sort_by(Datapoints,&Timestamp))[0].Maximum' --output text)"
+          NODE_OPTIONS="--experimental-transform-types --disable-warning=ExperimentalWarning" \
+            node scripts/productionSmoke.mjs --origin "$origin" --canary-age-seconds "$age" --json
+
+      - name: Run the Appendix G suite
+        env:
+          FSS_TEST_POSTGRES_URL: ${{ secrets.FSS_REHEARSAL_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run test:release
+          npm run test:release:mutation
+
+      - name: Restore drill, Appendix E steps 1 to 9
+        run: infra/scripts/rehearsal-restore-drill.sh '${{ steps.prefix.outputs.prefix }}'
+
+      - name: Suppression journal replay and Gmail reconstruction
+        env:
+          # No real mailbox exists in rehearsal unless David provides a rehearsal
+          # Google project, so the Gmail half runs against the recorded fake — chosen
+          # by name, never by omission (apps/*/src/bootstrap/deployment.ts).
+          FSS_DEPENDENCIES: recorded
+        run: |
+          set -euo pipefail
+          # The drill above already ran both (Appendix E steps 2 and 3). This step
+          # asserts the reports it left say what they must, so a drill that silently
+          # skipped a step cannot reach the release record.
+          python3 - "$FSS_REHEARSAL_REPORTS" <<'PY'
+          import json, pathlib, sys
+          reports = pathlib.Path(sys.argv[1])
+          replay = json.loads((reports / "journal-replay.json").read_text())
+          second = json.loads((reports / "journal-replay-second.json").read_text())
+          sent = json.loads((reports / "sent-reconcile.json").read_text())
+          assert replay.get("inserted", 0) >= 1, replay
+          assert second.get("inserted", 0) == 0, second
+          assert sent.get("resent", 0) == 0, sent
+          assert sent.get("tombstones", 0) >= 1, sent
+          print("journal replay idempotent; Gmail reconstruction produced tombstones and no resend")
+          PY
+
+      - name: The data carry watermark and the old stack
+        env:
+          FSS_CARRY_WATERMARK: ${{ secrets.FSS_REHEARSAL_CARRY_WATERMARK }}
+          FSS_CARRY_SOURCE_TABLE: ${{ secrets.FSS_REHEARSAL_CARRY_TABLE }}
+        run: infra/scripts/rehearsal-carry-watermark.sh '${{ steps.prefix.outputs.prefix }}'
+
+      - name: Tear the rehearsal run down
+        if: always()
+        working-directory: infra/roots/rehearsal
+        run: ../../scripts/rehearsal-teardown.sh '${{ steps.prefix.outputs.prefix }}'
+
+      - name: Nothing with the production prefix was touched
+        if: always()
+        working-directory: infra/roots/rehearsal
+        run: ../../scripts/rehearsal-prefix-guard.sh '${{ steps.prefix.outputs.prefix }}' after
+
+      - name: Write the release record, last
+        run: |
+          set -euo pipefail
+          infra/scripts/rehearsal-release-record.sh \
+            '${{ steps.prefix.outputs.prefix }}' \
+            '${{ inputs.api_image_digest }}' \
+            '${{ inputs.worker_image_digest }}' \
+            '${{ inputs.desktop_commit_stamp }}' \
+            pass \
+            "$FSS_REHEARSAL_REPORTS/release-record.json"
+          cat "$FSS_REHEARSAL_REPORTS/release-record.json" >> "$GITHUB_STEP_SUMMARY"
+
+      # actions/upload-artifact v4
+      - name: Keep the reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: rehearsal-reports-${{ steps.prefix.outputs.prefix }}
+          path: ${{ env.FSS_REHEARSAL_REPORTS }}
+          retention-days: 90

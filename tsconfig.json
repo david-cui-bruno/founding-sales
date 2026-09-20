@@ -29,6 +29,7 @@
     "cloud",
     "client",
     "apps",
-    "packages"
+    "packages",
+    "test/release"
   ]
 }

@@ -51,6 +51,18 @@ export const SEND_REFUSAL_CODES = [
   'grant_revoked',
   'coverage_incomplete',
   'automated_sending_disabled',
+  /**
+   * 16.2's other half: the workspace attestation, or the deployment flag, says no.
+   *
+   * `automated_sending_disabled` is the *domain*'s answer — SPF, DKIM, DMARC and the
+   * Postmaster review, on `sending_domains`. This one is the *release*'s answer:
+   * `workspace_settings.sending_enabled` naming the rehearsal gate whose digests match
+   * what is deployed, ANDed with the deployment's own flag. They are deliberately two
+   * codes, because the two are fixed by different people doing different things, and a
+   * single code would send an operator to the DNS records when the answer is that
+   * nobody has enabled the release. See docs/decisions/g12-the-send-gate-reads-both-switches.md.
+   */
+  'workspace_sending_not_attested',
   'sending_domain_unknown',
   'template_unapproved',
   'template_mismatch',
