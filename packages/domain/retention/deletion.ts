@@ -210,6 +210,18 @@ async function measure(
   };
 
   const redacts: Record<string, number> = {
+    // Outbound fences the trigger still lets us touch: `prepared` and `held`, which
+    // are the ones with no attempt token and therefore provably unsent. A fence at or
+    // past `dispatching` is a message that may have left, `DELETE` on the table is
+    // revoked, and migration 0010's trigger refuses to change its envelope — so a
+    // deletion cannot reach it and should not: it is correspondence.
+    outbound_messages: await countOf(
+      context,
+      `SELECT count(*) AS count FROM outbound_messages
+        WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}
+          AND attempt_token IS NULL AND subject <> $4`,
+      [...byContact, REDACTED_NAME],
+    ),
     contacts: await countOf(
       context,
       `SELECT count(*) AS count FROM contacts
@@ -489,6 +501,15 @@ export async function commitDeletion(
   }
 
   const redacted: Record<string, number> = {};
+  const fences = await context.db.query(
+    `UPDATE outbound_messages
+        SET subject = $4, body = $4, updated_at = now()
+      WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}
+        AND attempt_token IS NULL AND subject <> $4`,
+    [...byContact, REDACTED_NAME],
+  );
+  redacted['outbound_messages'] = fences.rowCount ?? 0;
+
   const contacts = await context.db.query(
     `UPDATE contacts
         SET full_name = $4, title = NULL, linkedin_url = NULL, status = 'inactive', is_primary = false,

@@ -111,10 +111,15 @@ describe('the declared-pending guard', () => {
     ).toEqual([]);
   });
 
-  it('keeps the canceled-drafts target declared-pending while its table is absent', () => {
+  it('has already been paid once: canceled_drafts was declared pending and is now implemented', () => {
+    // This is the guard working. `outbound_messages` landed with lane G7-2's merge,
+    // the test above failed, and the target was written. It is kept as a test rather
+    // than deleted because it pins the direction of travel: a target may move from
+    // declared-pending to implemented and never back.
     const target = retentionTargetFor('canceled_drafts');
-    expect(target?.state).toBe('declared_pending');
+    expect(target?.state).toBe('implemented');
     expect(target?.tables).toEqual(expect.arrayContaining(['outbound_messages']));
+    expect(PENDING_RETENTION_TABLES.map(pending => pending.table)).not.toContain('outbound_messages');
   });
 });
 

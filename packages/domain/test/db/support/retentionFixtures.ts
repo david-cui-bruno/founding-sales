@@ -47,6 +47,11 @@ export interface SeededRetentionSide {
   /** A completed job whose payload is past the operational window, and a recent one. */
   readonly oldJobId: string;
   readonly recentJobId: string;
+  /** A held, never-dispatched draft fence past the thirty-day rule, and one inside it. */
+  readonly expiredDraftFenceId: string;
+  readonly freshDraftFenceId: string;
+  /** A sent fence: business correspondence, and the envelope trigger forbids touching it. */
+  readonly sentFenceId: string;
   /** The minimal normalized suppression tombstone that must survive every job. */
   readonly tombstoneEventId: string;
   readonly tombstoneKey: string;
@@ -145,6 +150,51 @@ async function seedSide(
   const oldJobId = await job('retention-old-job', LONG_AGO);
   const recentJobId = await job('retention-recent-job', YESTERDAY);
 
+  // Outbound fences (migration 0010). Two held drafts on either side of the
+  // thirty-day boundary, and one sent fence, because `canceled_drafts` must take the
+  // first and leave the other two — the second is inside its horizon and the third
+  // is correspondence that left.
+  const fence = async (
+    label: string,
+    state: 'held' | 'sent',
+    at: string,
+  ): Promise<string> => {
+    const sent = state === 'sent';
+    const { rows } = await session.query<{ id: string }>(
+      `INSERT INTO outbound_messages
+         (workspace_id, mailbox_id, state, origin_kind, draft_id, firm_id, recipient_address,
+          subject, body, rendered_hash, provider_message_id_header, send_at, source_zone,
+          placement_rule_version, held_at, held_reason, attempt_token, dispatch_started_at,
+          sent_at, provider_message_id, created_at, updated_at)
+       VALUES ($1, $2, $3, 'draft', gen_random_uuid(), $4, 'dana@northwind.example.test',
+               $5, 'The draft nobody sent.', $6, $7, $8::timestamptz, 'America/New_York',
+               'placement.1',
+               CASE WHEN $3 = 'held' THEN $8::timestamptz END,
+               CASE WHEN $3 = 'held' THEN 'daily_cap' END,
+               CASE WHEN $9 THEN gen_random_uuid() END,
+               CASE WHEN $9 THEN $8::timestamptz END,
+               CASE WHEN $9 THEN $8::timestamptz END,
+               CASE WHEN $9 THEN 'provider-' || $5 END,
+               $8::timestamptz, $8::timestamptz)
+       RETURNING id`,
+      [
+        workspace.workspaceId,
+        mailbox.mailboxId,
+        state,
+        crm.firmId,
+        label,
+        'c'.repeat(64),
+        `<fss.${label}.${workspace.slug}@example.test>`,
+        at,
+        sent,
+      ],
+    );
+    return id(rows);
+  };
+  const expiredDraftFenceId = await fence('expired-draft', 'held', LONG_AGO);
+  const freshDraftFenceId = await fence('fresh-draft', 'held', YESTERDAY);
+  const sentFenceId = await fence('sent-long-ago', 'sent', LONG_AGO);
+
   // The tombstone. Handle-scoped and normalized, which is all 10.3 asks a deletion
   // to leave behind, and inserted here so every retention test can assert it is
   // still there afterwards.
@@ -168,6 +218,9 @@ async function seedSide(
     liveEvidenceId,
     oldJobId,
     recentJobId,
+    expiredDraftFenceId,
+    freshDraftFenceId,
+    sentFenceId,
     tombstoneEventId,
     tombstoneKey,
   };

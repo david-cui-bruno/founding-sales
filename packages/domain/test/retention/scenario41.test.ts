@@ -47,6 +47,17 @@ const rowExists = async (table: string, workspaceId: string, rowId: string): Pro
   return rows.length === 1;
 };
 
+const subjectsIn = async (
+  workspaceId: string,
+  id: string,
+): Promise<{ subject: string; body: string } | undefined> => {
+  const { rows } = await database.session.query<{ subject: string; body: string }>(
+    'SELECT subject, body FROM outbound_messages WHERE workspace_id = $1 AND id = $2',
+    [workspaceId, id],
+  );
+  return rows[0];
+};
+
 const tombstoneCount = async (workspaceId: string): Promise<number> => {
   const { rows } = await database.session.query<{ count: string }>(
     'SELECT count(*) AS count FROM suppression_events WHERE workspace_id = $1',
@@ -204,14 +215,43 @@ describe('scenario 41: retention deletes at the boundary and nothing else', () =
     }
   });
 
-  it('reports canceled drafts as declared pending until the lane that owns the table lands', async () => {
+  it('clears a held draft’s subject and body at thirty days, and leaves the fresh one and the sent one alone', async () => {
     const report = await runRetentionBatch(workerContext(seeded.alpha.workspaceId), {
       dataKind: 'canceled_drafts',
       period,
       now: RETENTION_NOW,
     });
-    expect(report.outcome).toBe('declared_pending');
+    expect(report.outcome).toBe('swept');
+    // Redaction, not deletion: migration 0010 revokes DELETE on the fence, because a
+    // fence that could be deleted is an origin that could be given a second one.
     expect(report.rowsDeleted).toBe(0);
+    expect(report.rowsRedacted).toBe(1);
+
+    const subjects = async (id: string): Promise<{ subject: string; body: string } | undefined> => {
+      const { rows } = await database.session.query<{ subject: string; body: string }>(
+        'SELECT subject, body FROM outbound_messages WHERE workspace_id = $1 AND id = $2',
+        [seeded.alpha.workspaceId, id],
+      );
+      return rows[0];
+    };
+    expect((await subjects(retention.alpha.expiredDraftFenceId))?.subject).toBe('[deleted]');
+    expect((await subjects(retention.alpha.expiredDraftFenceId))?.body).toBe('[deleted]');
+    // Inside the horizon.
+    expect((await subjects(retention.alpha.freshDraftFenceId))?.subject).toBe('fresh-draft');
+    // Sent long ago, and business correspondence: 10.3 keeps it with the firm, and
+    // migration 0010's trigger would refuse to change its envelope anyway.
+    expect((await subjects(retention.alpha.sentFenceId))?.subject).toBe('sent-long-ago');
+    // The row itself never goes.
+    const { rows } = await database.session.query<{ count: string }>(
+      'SELECT count(*) AS count FROM outbound_messages WHERE workspace_id = $1',
+      [seeded.alpha.workspaceId],
+    );
+    expect(Number(rows[0]?.count)).toBe(3);
+
+    // And the other workspace's identical draft is untouched.
+    expect((await subjectsIn(seeded.beta.workspaceId, retention.beta.expiredDraftFenceId))?.subject).toBe(
+      'expired-draft',
+    );
   });
 
   it('writes one ledger row per kind and period, and a second run of the same period sweeps nothing', async () => {

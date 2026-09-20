@@ -20,6 +20,12 @@ import {
   type RecordedGmailClient,
 } from '@fss/domain/mail';
 import { recordingSuppressionJournal } from '@fss/domain/suppression';
+import {
+  beginReconciling,
+  claimForDispatch,
+  prepareOutboundMessage,
+  renderedHash,
+} from '@fss/domain/outbound';
 import { runClaimedJob } from '../src/runner/jobRunner.ts';
 import { MAIL_JOB_KINDS, mailHandlers, todayReplyPromoter, type MailWorkerOptions } from '../src/handlers/mail.ts';
 import { mailRecoverySource, mailSyncReconciliationSource, watchRenewalSource } from '../src/scheduler/mailSources.ts';
@@ -128,7 +134,11 @@ describe('the mail handlers and scheduler sources', () => {
       messages: [message('m-1', '1005'), message('m-2', '1008')],
     };
 
-    gmail = recordedGmailClient(fixture);
+    // `indeterminate_but_delivered` is Appendix B's nastiest row: Gmail accepted the
+    // message and the response was lost. The fixture puts it in the Sent folder and
+    // still reports that nobody knows, which is what makes the reconciliation probe
+    // a real one rather than a search for something that was never sent.
+    gmail = recordedGmailClient({ ...fixture, sendBehaviour: 'indeterminate_but_delivered' });
     options = {
       gmail,
       oauth: oauth(),
@@ -222,6 +232,77 @@ describe('the mail handlers and scheduler sources', () => {
     expect(mailHandlers(undefined)).toEqual([]);
   });
 
+  /**
+   * A fence sitting in `reconciling` with its message already in the Sent folder.
+   *
+   * Built through the real transitions rather than by INSERT, because the state
+   * machine's trigger refuses anything else — which is the point of it.
+   */
+  const reconcilingFence = async (): Promise<string> => {
+    const firm = await session.query<{ id: string }>(
+      `INSERT INTO firms (workspace_id, name, region_code, postal_code)
+       VALUES ($1, $2, 'TX', '79901') RETURNING id`,
+      [workspaceId, `Fence Firm ${randomUUID().slice(0, 8)}`],
+    );
+    const firmId = firm.rows[0]?.id ?? '';
+    const body =
+      'Hello.\n\nSigned off\n1 Example Way\nReply "stop" and I will not email you again.';
+    const subject = 'A short note';
+    const templateId = randomUUID();
+    const contentHash = renderedHash(`template:${templateId}`, body);
+    const template = await session.query<{ id: string }>(
+      `INSERT INTO template_versions (workspace_id, template_id, version, name, subject, body,
+                                      content_hash, footer_sign_off, footer_postal_address,
+                                      approved_at, approved_by_user_id)
+       VALUES ($1, $2, 1, 'Probe template', $3, $4, $5, 'Signed off', '1 Example Way', now(), $6)
+       RETURNING id`,
+      [workspaceId, templateId, subject, body, contentHash, ownerUserId],
+    );
+
+    const prepared = await prepareOutboundMessage(context, {
+      stepExecutionId: randomUUID(),
+      firmId,
+      ownerUserId,
+      templateVersionId: template.rows[0]?.id ?? '',
+      templateContentHash: contentHash,
+      toAddress: 'probe.prospect@example.test',
+      subject,
+      body,
+      sendAt: NOW,
+      sourceZone: 'UTC',
+      businessDate: NOW.slice(0, 10),
+    });
+    if (!prepared.ok) throw new Error(`the probe could not prepare a fence: ${prepared.reason}`);
+    const fenceId = prepared.value.outboundMessageId;
+
+    // Dispatch by hand: claim, put the message in the fixture's Sent folder, and
+    // leave the fence in doubt. That is Appendix B's "Gmail success but database
+    // update failed", which is exactly the state a reconciliation exists for.
+    const claim = await claimForDispatch(context, { outboundMessageId: fenceId, actor: 'probe' });
+    if (!claim.ok) throw new Error('the probe could not claim the fence');
+    const fence = await session.query<{ provider_message_id_header: string }>(
+      'SELECT provider_message_id_header FROM outbound_messages WHERE workspace_id = $1 AND id = $2',
+      [workspaceId, fenceId],
+    );
+    await options.gmail.sendMessage(
+      { accessToken: 'probe', expiresAtEpochSeconds: 0 },
+      {
+        to: 'probe.prospect@example.test',
+        from: `sales@${HOSTED_DOMAIN}`,
+        subject,
+        body,
+        rfcMessageId: fence.rows[0]?.provider_message_id_header ?? '',
+      },
+    );
+    await beginReconciling(context, {
+      outboundMessageId: fenceId,
+      detail: 'the probe left it in doubt',
+      windowHours: 24,
+      actor: 'probe',
+    });
+    return fenceId;
+  };
+
   // -------------------------------------------------- Appendix G scenario 2
   it('imports each message once under a stolen lease, not twice', async () => {
     const report = await runTwiceUnderStolenLease({
@@ -298,6 +379,45 @@ describe('the mail handlers and scheduler sources', () => {
     expect(report.staleOutcome).toBe('lease_lost');
     expect(report.effectsAfter - report.effectsBefore).toBe(1);
   });
+
+  it('settles a reconciling fence once under a stolen lease, and never sends', async () => {
+    const fenceId = await reconcilingFence();
+    const sendsBefore = gmail.sends.length;
+    const countSettled = async (): Promise<number> => {
+      const { rows } = await session.query<{ count: string }>(
+        "SELECT count(*) AS count FROM outbound_messages WHERE workspace_id = $1 AND state = 'sent'",
+        [workspaceId],
+      );
+      return Number(rows[0]?.count ?? '0');
+    };
+
+    const report = await runTwiceUnderStolenLease({
+      session,
+      registry: registryFor(),
+      run: runClaimedJob,
+      workspaceId,
+      kind: 'mail.reconcile',
+      idempotencyKey: `mail-reconcile:${mailboxId}:2026-09-21T14:00Z`,
+      payload: { mailboxId },
+      countEffects: countSettled,
+    });
+
+    expect(report.freshOutcome).toBe('completed');
+    expect(report.staleOutcome).toBe('lease_lost');
+    expect(report.effectsAfter - report.effectsBefore).toBe(1);
+    // The strongest assertion in this file: a reconciliation observes. However many
+    // workers ran it, and whatever happened to their leases, nothing was sent.
+    expect(gmail.sends.length).toBe(sendsBefore);
+    expect(await readFenceState(fenceId)).toBe('sent');
+  });
+
+  const readFenceState = async (fenceId: string): Promise<string> => {
+    const { rows } = await session.query<{ state: string }>(
+      'SELECT state FROM outbound_messages WHERE workspace_id = $1 AND id = $2',
+      [workspaceId, fenceId],
+    );
+    return rows[0]?.state ?? 'absent';
+  };
 
   // ----------------------------------------------------------- payload shape
   it('fails a payload it cannot validate rather than running against a row it invented', async () => {

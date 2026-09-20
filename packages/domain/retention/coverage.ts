@@ -114,6 +114,16 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
   mail_message_effects: coverage(['swept', 'retained', 'deletion_removes'], 'Follows its message through the cascade.'),
   template_versions: coverage(['operational'], 'Approved immutable template bodies; Callie’s, not a prospect’s.'),
 
+  // -------------------------------------------------------------- sending
+  outbound_messages: coverage(
+    ['swept', 'retained', 'deletion_redacts'],
+    'A held draft’s subject and body are cleared at thirty days and on deletion; the row never goes, because DELETE is revoked and the fence is what stops a second send.',
+  ),
+  outbound_message_events: coverage(['retained'], 'Append-only transition log; UPDATE and DELETE revoked.'),
+  sending_domains: coverage(['operational'], 'Callie’s own domain authentication and ramp posture.'),
+  mailbox_send_ramp: coverage(['operational'], 'A Callie mailbox’s position in the new-domain ramp.'),
+  mailbox_send_days: coverage(['operational'], 'Per-mailbox daily counts; no prospect identity.'),
+
   // ------------------------------------------------------------- retention
   retention_runs: coverage(['retained'], 'The run ledger and the deletion tombstone; DELETE revoked.'),
   deletion_requests: coverage(['retained'], 'What was previewed and what was committed; DELETE revoked.'),

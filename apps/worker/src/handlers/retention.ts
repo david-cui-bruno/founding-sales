@@ -31,8 +31,8 @@ import type { DueWorkSource } from '../scheduler/schedulerPass.ts';
  * ## Why every kind, including the ones that sweep nothing
  *
  * `RETENTION_LEDGER_KINDS` is all eleven, and the source materializes a job for each
- * one every day, including `audit_events` (retained), `operational_logs` (CloudWatch's)
- * and `canceled_drafts` (a lane still in flight). Those jobs write a ledger row
+ * one every day, including `audit_events` (retained), `suppression_history`
+ * (retained) and `operational_logs` (CloudWatch's). Those jobs write a ledger row
  * saying so and delete nothing.
  *
  * That is deliberate and it is the difference between a retention report and a

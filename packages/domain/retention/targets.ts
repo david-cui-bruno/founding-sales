@@ -62,6 +62,16 @@ export interface RetentionTarget {
 export const RETENTION_BATCH_LIMIT = 500;
 
 /**
+ * What a redacted draft's subject and body become.
+ *
+ * Non-blank, because `outbound_messages_subject_bounded` and
+ * `outbound_messages_body_bounded` require it, and the same placeholder the deletion
+ * workflow uses for a redacted name, so one string means "this was removed on
+ * purpose" everywhere in the schema.
+ */
+export const REDACTED_DRAFT = '[deleted]';
+
+/**
  * 13.2's operational window for a completed job payload, in days.
  *
  * `docs/decisions/g5-payload-archival.md` left it to the caller and defaulted to
@@ -243,6 +253,56 @@ const jobPayloads: RetentionTarget = {
   },
 };
 
+/**
+ * Cancelled or deleted unsent drafts, 30 days (10.3).
+ *
+ * This one is redaction rather than deletion, and the reason is a constraint another
+ * lane put there on purpose. Migration 0010 revokes `DELETE` on `outbound_messages`
+ * from both application roles, because the fence *is* the at-most-once guarantee of
+ * 12.5: a row that could be deleted is an origin that could be given a second fence,
+ * and Appendix B's central promise is that it never is.
+ *
+ * So the row survives its horizon and its content does not. What 10.3 asks to be
+ * removed is a draft — the rendered subject and body of a message to a prospect that
+ * was never sent — and those two columns are exactly what goes. The envelope
+ * identifiers stay, because they are the fence's identity rather than
+ * correspondence.
+ *
+ * Only a `held` draft-origin fence is touched. `prepared` is a draft still waiting;
+ * anything at or past `dispatching` has an attempt token, and migration 0010's
+ * trigger makes the envelope immutable from that instant — which is right, because a
+ * message that may have left is business correspondence and 10.3 keeps that with the
+ * firm. Appendix B defines `held` as "local validation, hold, policy, coverage,
+ * window, or cap failure ... never enter dispatching", so a held fence provably sent
+ * nothing.
+ */
+const canceledDrafts: RetentionTarget = {
+  dataKind: 'canceled_drafts',
+  state: 'implemented',
+  tables: ['outbound_messages'],
+  note: 'A held, unsent draft fence has its rendered subject and body cleared thirty days after it was held; the row stays, because the fence is what stops a second send.',
+  sweep: async (context, input) => {
+    const boundaryAt = requireBoundary(input, 'canceled_drafts');
+    const { rowCount } = await context.db.query(
+      `UPDATE outbound_messages
+          SET subject = $4, body = $4, updated_at = now()
+        WHERE (workspace_id, id) IN (
+          SELECT workspace_id, id FROM outbound_messages
+           WHERE workspace_id = $1
+             AND origin_kind = 'draft'
+             AND state = 'held'
+             AND held_at < $2::timestamptz
+             AND subject <> $4
+           ORDER BY held_at
+           LIMIT $3
+        )`,
+      [context.scope.workspaceId, boundaryAt, input.limit, REDACTED_DRAFT],
+    );
+    const redacted = rowCount ?? 0;
+    return { boundaryAt, rowsDeleted: 0, rowsRedacted: redacted, detail: { outbound_messages: redacted } };
+  },
+};
+
 const retained = (
   dataKind: RetentionLedgerKind,
   tables: readonly string[],
@@ -281,13 +341,7 @@ export const RETENTION_TARGETS: readonly RetentionTarget[] = Object.freeze([
     [],
     'A matched message body is kept with the business correspondence it belongs to, so its horizon is the firm record’s and not a clock.',
   ),
-  {
-    dataKind: 'canceled_drafts',
-    state: 'declared_pending',
-    tables: ['outbound_messages'],
-    sweep: null,
-    note: 'Cancelled or deleted unsent drafts get thirty days, and the rows are lane G7-2’s outbound fences, which are not on main yet.',
-  },
+  canceledDrafts,
   external(
     'operational_logs',
     'Operational application logs are CloudWatch log groups with ninety-day retention (infra/modules/observability); the application stores no log rows.',
@@ -323,11 +377,6 @@ export interface PendingRetentionTable {
 }
 
 export const PENDING_RETENTION_TABLES: readonly PendingRetentionTable[] = Object.freeze([
-  {
-    table: 'outbound_messages',
-    lane: 'G7-2',
-    owes: 'the canceled_drafts target: 10.3 gives a cancelled or deleted unsent draft thirty days, and a held or cancelled fence carries the rendered envelope of a message to a prospect.',
-  },
   {
     table: 'enrollments',
     lane: 'G8',

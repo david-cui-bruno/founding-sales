@@ -4,10 +4,11 @@
 
 ## The problem
 
-Section 10.3 is a table of ten horizons. Three of those rows are about tables that
-do not exist yet: lane G7-2 brings the outbound fences a cancelled draft lives on,
-lane G8 brings enrollments and step executions, lane G7b brings the classifier's
-stored output. This lane could not sweep them and could not wait for them.
+Section 10.3 is a table of ten horizons. Three of those rows were about tables that
+did not exist when this lane started: lane G7-2 brings the outbound fences a
+cancelled draft lives on, lane G8 brings enrollments and step executions, lane G7b
+brings the classifier's stored output. This lane could not sweep them and could not
+wait for them.
 
 A `switch` over the kinds, with no case for those three, would have said nothing at
 all. Worse, it would have looked complete.
@@ -49,8 +50,20 @@ So the policy table's vocabulary is untouched and the ledger's is the superset. 
 test asserts the difference is exactly `['job_payloads']`, so the two cannot drift
 apart silently.
 
-## What this does not do
+## The guard has already been paid once
 
-It does not sweep `canceled_drafts`. That is the point of `declared_pending`: the
-horizon is recorded, the ledger says every day that the sweep did not happen and
-why, and the build fails the moment it becomes writable.
+`canceled_drafts` shipped in this branch as `declared_pending`, naming
+`outbound_messages` as lane G7-2's. G7-2 merged while this lane was still open, the
+guard test failed with the sentence it was written to print, and the target was
+implemented before the branch was published.
+
+That is the whole design working in the space of one merge, and it is worth
+recording because the next time it fires the lane that sees it will be somebody
+else's.
+
+## What remains pending
+
+`enrollments` and `step_executions` (G8) and the classifier's stored output (G7b).
+The ledger says every day that `canceled_drafts` is swept and that nothing else is
+owed; when those tables land, the departure command owes them a hold and the
+deletion workflow owes them a stop, and the build will say so.

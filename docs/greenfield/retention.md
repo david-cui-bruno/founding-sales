@@ -40,12 +40,18 @@ section 10.3:
 | `unmatched_gmail_metadata` | `delete` | 30 days | `retention.batch` |
 | `raw_mime` | `delete` | 7 days | `retention.batch` |
 | `matched_message_body` | `retain_with_business_record` | — | the firm record's horizon |
-| `canceled_drafts` | `delete` | 30 days | lane G7-2, declared pending |
+| `canceled_drafts` | `delete` | 30 days | `retention.batch`, by redaction |
 | `operational_logs` | `delete` | 90 days | the CloudWatch log group |
 | `database_backups` | `delete` | 35 days | the RDS instance |
 
 A workspace with no policy row for a kind sweeps nothing and the ledger says
 `no_policy`. A retention job never invents a horizon.
+
+Two of the sweeps redact rather than delete, and both because another lane revoked
+`DELETE` on purpose. A completed job's payload is emptied and its row and dedupe key
+stay (13.2). A held, never-dispatched draft fence has its rendered subject and body
+cleared and the fence stays, because the fence *is* the at-most-once guarantee of
+12.5 and a row that could be deleted is an origin that could be given a second one.
 
 ## The job
 
@@ -82,11 +88,16 @@ indistinguishable from a kind whose job has been failing quietly for a month.
 
 Two guards keep the registry honest, and both are tests rather than notes.
 
-`PENDING_RETENTION_TABLES` names the tables three in-flight lanes will bring —
-G7-2's `outbound_messages`, G8's `enrollments` and `step_executions`, G7b's
-classifier output — and what each will owe. The test asks the live catalog for each
-one and fails the build the moment it exists. The follow-up cannot be forgotten
-because the build stops when it becomes possible.
+`PENDING_RETENTION_TABLES` names the tables in-flight lanes will bring — G8's
+`enrollments` and `step_executions`, G7b's classifier output — and what each will
+owe. The test asks the live catalog for each one and fails the build the moment it
+exists. The follow-up cannot be forgotten because the build stops when it becomes
+possible.
+
+It has already been paid once. `canceled_drafts` shipped as `declared_pending`
+against G7-2's `outbound_messages`; when that lane merged, the guard failed, and the
+target was written in the same session. That is the mechanism working rather than a
+story about it.
 
 `TABLE_RETENTION_COVERAGE` catches what that list could not: it classifies *every*
 table PostgreSQL reports, and the test fails when one is missing. A lane adding a

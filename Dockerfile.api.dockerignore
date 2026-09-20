@@ -29,6 +29,7 @@
 !packages/domain/policy
 !packages/domain/suppression
 !packages/domain/mail
+!packages/domain/outbound
 !packages/domain/dial
 !packages/domain/retention
 !packages/contracts/package.json
