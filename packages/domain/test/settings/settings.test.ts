@@ -22,6 +22,7 @@ import {
   readSettingHistory,
   updateSetting,
 } from '../../settings/index.ts';
+import { ALL_BLOCKED_ACTION_KINDS, CHANNEL_BLOCKED_ACTION_KINDS } from '../../policy/types.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 
 /**
@@ -312,6 +313,42 @@ describe('what a stored setting means', () => {
     expect(
       alertThresholdsOf({ ...DEFAULT_ALERT_THRESHOLDS, oldestJobAgeWarningSeconds: 1200 }),
     ).toEqual(DEFAULT_ALERT_THRESHOLDS);
+  });
+});
+
+describe('what a sending pause cannot reach', () => {
+  /**
+   * Specification 10.1: "A sending pause does not stop Gmail synchronization,
+   * opt-out processing, Today construction, or manual calling unless calling is
+   * separately paused."
+   *
+   * G4's `test/policy/policy.test.ts` proves the manual-calling half against a real
+   * database. This is the structural half, and it is the stronger one: the reason a
+   * pause cannot stop synchronization, opt-out processing or Today construction is
+   * that `blocked_action_kinds` has no word for any of them. There is no action kind
+   * a pause could name that would reach them, so no future pause scope can either.
+   */
+  it('has no vocabulary for synchronization, opt-out processing or Today construction', () => {
+    expect([...ALL_BLOCKED_ACTION_KINDS].sort()).toEqual([
+      'call_task',
+      'dial_authorization',
+      'email_send',
+      'enrollment_advance',
+      'linkedin_task',
+      'research',
+    ]);
+    for (const forbidden of ['mail_sync', 'opt_out', 'today_build', 'suppression']) {
+      expect([...ALL_BLOCKED_ACTION_KINDS], forbidden).not.toContain(forbidden);
+    }
+  });
+
+  it('blocks exactly one action kind per channel, and email reaches only sending', () => {
+    expect(CHANNEL_BLOCKED_ACTION_KINDS.email).toEqual(['email_send']);
+    // Only a call pause -- or a pause over all automation -- reaches dialling.
+    expect(CHANNEL_BLOCKED_ACTION_KINDS.call).toEqual(['call_task', 'dial_authorization']);
+    expect(CHANNEL_BLOCKED_ACTION_KINDS.email).not.toContain('dial_authorization');
+    expect(CHANNEL_BLOCKED_ACTION_KINDS.linkedin).toEqual(['linkedin_task']);
+    expect(CHANNEL_BLOCKED_ACTION_KINDS.research).toEqual(['research']);
   });
 });
 
