@@ -19,7 +19,7 @@ function fixture(paths, failure = '') {
 }
 it('executes only supported tracked sources without ignores, with literal bounded argv', () => {
   const sources = ['cloud/lambdas/resolver/src/a.ts', 'a space.ts', 'line\nbreak.mjs', '-option.cts', 'config.mts', 'view.tsx', 'script.cjs', ...Array.from({ length: 230 }, (_, i) => `src/${i}.js`)];
-  const { root, run } = fixture([...sources, 'x/node_modules/a.js', 'node_modules/a.js', 'cloud/lambdas/a/dist/index.js', 'apps/api/src/x.ts', 'packages/domain/src/y.ts', '.vite/x.js', 'out/x.js', 'build/generated/x.js', 'native/safe-log-fs/build/x.js', 'native/apple-bridge/.build/x.js', 'coverage/x.js', 'test-results/x.js', 'a.json', 'a.yml', 'a.tf']);
+  const { root, run } = fixture([...sources, 'x/node_modules/a.js', 'node_modules/a.js', 'cloud/lambdas/a/dist/index.js', 'apps/api/src/x.ts', 'packages/domain/src/y.ts', 'test/release/scenario01.check.ts', '.vite/x.js', 'out/x.js', 'build/generated/x.js', 'native/safe-log-fs/build/x.js', 'native/apple-bridge/.build/x.js', 'coverage/x.js', 'test-results/x.js', 'a.json', 'a.yml', 'a.tf']);
   expect(run().status).toBe(0);
   expect(JSON.parse(readFileSync(join(root, 'git-args'), 'utf8'))).toEqual(['ls-files', '-z']);
   const calls = readFileSync(join(root, 'calls'), 'utf8').trim().split('\n').map(JSON.parse);

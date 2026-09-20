@@ -11,6 +11,8 @@ export function trackedSources(output) {
       && !/^cloud\/lambdas\/[^/]+\/dist\//.test(path)
       // The greenfield workspace lints through `npm run lint:greenfield` with eslint.greenfield.mjs.
       && !/^(?:apps|packages)\//.test(path)
+      // test/release is the greenfield release suite and lints with the same config.
+      && !/^test\/release\//.test(path)
       && !/^build\/generated\//.test(path)
       && !/^native\/(?:safe-log-fs\/build|apple-bridge\/\.build)\//.test(path);
   }).sort();

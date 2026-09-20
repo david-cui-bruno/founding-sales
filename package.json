@@ -47,14 +47,16 @@
     "diagnose:startup": "node scripts/diagnoseStartup.mjs",
     "export:cutover": "node scripts/exportCutover.mjs",
     "verify:release": "node scripts/verifyRelease.mjs",
-    "typecheck:greenfield": "npm run typecheck --workspace packages/contracts && npm run typecheck --workspace packages/domain && npm run typecheck --workspace apps/api && npm run typecheck --workspace apps/worker && npm run typecheck --workspace apps/desktop",
-    "lint:greenfield": "eslint --config eslint.greenfield.mjs --max-warnings 0 apps packages",
+    "typecheck:greenfield": "npm run typecheck --workspace packages/contracts && npm run typecheck --workspace packages/domain && npm run typecheck --workspace apps/api && npm run typecheck --workspace apps/worker && npm run typecheck --workspace apps/desktop && tsc --noEmit -p test/release/tsconfig.json",
+    "lint:greenfield": "eslint --config eslint.greenfield.mjs --max-warnings 0 apps packages test/release",
     "test:greenfield": "npm run test --workspace packages/contracts && npm run test --workspace packages/domain && npm run test --workspace apps/api && npm run test --workspace apps/worker && npm run test --workspace apps/desktop",
+    "test:release": "vitest run --config vitest.release.config.ts",
+    "test:release:mutation": "node scripts/releaseMutationCheck.mjs",
     "test:desktop:e2e": "npm run test:e2e --workspace apps/desktop",
     "test:desktop:host": "FSS_HOST_TESTS=1 npm run test:host --workspace apps/desktop",
     "package:desktop": "npm run package --workspace apps/desktop --",
     "verify:desktop:package": "npm run verify:package --workspace apps/desktop --",
-    "gate:greenfield": "npm run typecheck:greenfield && npm run lint:greenfield && npm run test:greenfield"
+    "gate:greenfield": "npm run typecheck:greenfield && npm run lint:greenfield && npm run test:greenfield && npm run test:release"
   },
   "keywords": [],
   "author": {
