@@ -18,7 +18,7 @@ export interface SchemaRange {
 }
 
 /** The highest migration version this source tree contains. */
-export const CURRENT_SCHEMA_VERSION = 12;
+export const CURRENT_SCHEMA_VERSION = 13;
 
 /**
  * The range the release before this one declared. Widen this one release ahead of the
@@ -33,7 +33,7 @@ export const CURRENT_SCHEMA_VERSION = 12;
  * the widening must precede the migration by a release, and the compatibility test
  * will keep saying so.
  */
-export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 12 };
+export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 13 };
 
 /**
  * Both services need migration 0002's shape: the API's dead-job list reads `dead_at`
@@ -140,6 +140,8 @@ export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum:
  * behind it — the same case G10, G6 and G7 each refused for their own tables — and
  * it could not record what the call cost, which 13.4 asks for.
  *
+ * The deploy order stays migrate, then worker, then API. Both maxima move to 11.
+ *
  * Migration 0012 (G8) moves both a seventh time, and this lane's reasons are the
  * same two every widening before it gave.
  *
@@ -160,9 +162,33 @@ export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum:
  * could name an enrollment that does not exist.
  *
  * The deploy order stays migrate, then worker, then API. Both maxima move to 12.
+ *
+ * Migration 0013 (G9) is the first one that moves the two sides differently, and the
+ * difference is the rule working rather than an oversight.
+ *
+ * The API's minimum moves to 13. `GET /settings`, `POST /settings/update` and
+ * `POST /settings/history` read and write `workspace_settings`, and `GET /diagnostics`
+ * reads it too. An API on a version-12 database could not answer what the postal
+ * footer or the business time zone is, and — worse — `effectiveSendingEnabled` would
+ * have no admin half of 16.2's two switches to read. Fail closed would make it
+ * answer "sending is off" forever, which is safe and useless; refusing to start says
+ * so out loud.
+ *
+ * The worker's minimum does **not** move past G8's 12. Nothing in `apps/worker/src`
+ * reads `workspace_settings` today. The two a worker would plausibly want are read
+ * elsewhere: the holiday calendar is G8's `workspace_holiday_calendars`, which its
+ * own migration raised the worker's minimum for, and the workspace sending
+ * attestation's send-path read is G12's and does not exist yet. The rule from
+ * `docs/decisions/g10-worker-schema-minimum.md` is that a binary declares the lowest
+ * version on which its *first statement* can succeed, not the lowest it would like,
+ * and raising the worker's minimum for a table it never queries would refuse a
+ * database for no reason. The lane that adds the read raises it.
+ *
+ * Both maxima move to 13, because a binary that refused the database it has just been
+ * deployed against would be a self-inflicted outage.
  */
-export const API_SCHEMA_RANGE: SchemaRange = { minimum: 12, maximum: 12 };
-export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 12, maximum: 12 };
+export const API_SCHEMA_RANGE: SchemaRange = { minimum: 13, maximum: 13 };
+export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 12, maximum: 13 };
 
 export function acceptsSchemaVersion(range: SchemaRange, version: number): boolean {
   return Number.isInteger(version) && version >= range.minimum && version <= range.maximum;

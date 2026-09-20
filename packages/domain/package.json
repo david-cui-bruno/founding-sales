@@ -19,7 +19,9 @@
     "./outbound": "./outbound/index.ts",
     "./today": "./today/index.ts",
     "./sequences": "./sequences/index.ts",
-    "./templates": "./templates/index.ts"
+    "./templates": "./templates/index.ts",
+    "./settings": "./settings/index.ts",
+    "./dashboard": "./dashboard/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",

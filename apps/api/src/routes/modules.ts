@@ -11,7 +11,7 @@ import { routeFirms } from './firms.ts';
 import { IMPORT_PATHS, routeImport } from './import.ts';
 import { routeMerges } from './merges.ts';
 import { routeOpportunities } from './opportunities.ts';
-import { routePipeline } from './pipeline.ts';
+import { PIPELINE_PATHS, routePipeline } from './pipeline.ts';
 import { RESEARCH_PATHS, routeResearch } from './research.ts';
 // Lane G7's Gmail surface.
 import { GMAIL_PATHS, routeGmail } from './gmail.ts';
@@ -32,6 +32,10 @@ import { SUPPRESSION_PATHS, routeSuppressions } from './suppressions.ts';
 import { ENROLLMENT_PATHS, routeEnrollments } from './enrollments.ts';
 import { SEQUENCE_PATHS, routeSequences } from './sequences.ts';
 import { TEMPLATE_PATHS, routeTemplates } from './templates.ts';
+// Lane G9's administration, dashboard and Diagnostics surface.
+import { DASHBOARD_PATHS, routeDashboard } from './dashboard.ts';
+import { DIAGNOSTICS_PATHS, routeDiagnostics } from './diagnostics.ts';
+import { SETTINGS_PATHS, routeSettings } from './settings.ts';
 // Lane G6's Today list.
 import { SNOOZE_PATHS, routeSnooze } from './snooze.ts';
 import { TODAY_PATHS, routeToday } from './today.ts';
@@ -125,7 +129,7 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     moduleOf('firms', { prefixes: ['/firms'] }, routeFirms, routing),
     moduleOf('contacts', { prefixes: ['/contacts'] }, routeContacts, routing),
     moduleOf('opportunities', { prefixes: ['/opportunities'] }, routeOpportunities, routing),
-    moduleOf('pipeline', { paths: ['/pipeline/stages'] }, routePipeline, routing),
+    moduleOf('pipeline', { paths: PIPELINE_PATHS }, routePipeline, routing),
     moduleOf('merges', { prefixes: ['/merges'] }, routeMerges, routing),
     // Lane G3b's CRM surface. Exact paths, which is what every new endpoint should
     // be: the prefixes above are a record of the routers that already existed in
@@ -187,5 +191,13 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     moduleOf('sequences', { paths: SEQUENCE_PATHS }, routeSequences, routing),
     moduleOf('templates', { paths: TEMPLATE_PATHS }, routeTemplates, routing),
     moduleOf('enrollments', { paths: ENROLLMENT_PATHS }, routeEnrollments, routing),
+    // Lane G9's administration surface. Exact paths, and three modules rather than
+    // one: settings is a read and a command family, the dashboard is one aggregate
+    // read and Diagnostics is an operational read with its own visibility rule. A
+    // single `/admin` prefix would have swallowed G5's job and alert paths, which
+    // the registry refuses outright.
+    moduleOf('settings', { paths: SETTINGS_PATHS }, routeSettings, routing),
+    moduleOf('dashboard', { paths: DASHBOARD_PATHS }, routeDashboard, routing),
+    moduleOf('diagnostics', { paths: DIAGNOSTICS_PATHS }, routeDiagnostics, routing),
   ];
 }

@@ -5,3 +5,4 @@ export * from './auth.ts';
 export * from './crm.ts';
 export * from './crmSurface.ts';
 export * from './dial.ts';
+export * from './settings.ts';

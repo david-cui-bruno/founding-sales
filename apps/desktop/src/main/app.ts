@@ -14,6 +14,7 @@ import {
   registerTodayBridge,
   windowMenuTemplate,
 } from './todayWindow.ts';
+import { registerAdminBridge } from './settingsWindow.ts';
 import { createDeviceStore } from './deviceStore.ts';
 import { createKeychainVault } from './keychain.ts';
 import { createOfflineCache } from './offlineCache.ts';
@@ -165,6 +166,8 @@ export function registerWindows(configuration: DesktopConfiguration, manager: Se
       await shell.openExternal(url);
     },
   });
+  // Lane G9: Settings, the dashboard and Diagnostics, in one window of three screens.
+  registerAdminBridge({ api, session });
 
   const renderer = (name: string): { readonly pageFile: string; readonly pageUrl?: string; readonly preloadEntry: string } => ({
     preloadEntry: configuration.preloadEntry,
@@ -178,6 +181,7 @@ export function registerWindows(configuration: DesktopConfiguration, manager: Se
   let replyWindow: BrowserWindow | null = null;
   let crmWindow: BrowserWindow | null = null;
   let sequenceWindow: BrowserWindow | null = null;
+  let adminWindow: BrowserWindow | null = null;
   Menu.setApplicationMenu(
     Menu.buildFromTemplate([
       ...(Menu.getApplicationMenu()?.items.map(item => item as unknown as Electron.MenuItemConstructorOptions) ?? []),
@@ -204,6 +208,15 @@ export function registerWindows(configuration: DesktopConfiguration, manager: Se
             sequenceWindow,
           ).then(window => {
             sequenceWindow = window;
+          });
+        },
+        administration: () => {
+          void openSecondaryWindow(
+            'Callie — Administration',
+            renderer('settings.html'),
+            adminWindow,
+          ).then(window => {
+            adminWindow = window;
           });
         },
       }) as unknown as Electron.MenuItemConstructorOptions[]),

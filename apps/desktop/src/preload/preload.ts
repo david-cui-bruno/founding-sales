@@ -4,6 +4,7 @@ import { CRM_IPC_CHANNELS } from '../main/crmBridge.ts';
 import { TODAY_IPC_CHANNELS } from '../main/todayBridge.ts';
 import { SEQUENCE_IPC_CHANNELS } from '../main/sequenceBridge.ts';
 import { REPLY_IPC_CHANNELS } from '../main/replyBridge.ts';
+import { ADMIN_IPC_CHANNELS } from '../main/settingsBridge.ts';
 import { desktopStateSchema, type DesktopBridge, type DesktopState } from '../shared/contract.ts';
 import type { CrmBridge, CrmState } from '../renderer/firmWorkspaceContract.ts';
 import { todayStateSchema, type TodayBridge, type TodayState } from '../renderer/todayContract.ts';
@@ -13,13 +14,14 @@ import {
   type SequenceBridge,
   type SequenceState,
 } from '../renderer/sequenceContract.ts';
+import type { AdminBridge, AdminState } from '../renderer/settingsContract.ts';
 
 /**
  * The bridges, and the whole of what a renderer can reach (specification 14.2).
  *
- * One preload script serves all five windows, because Electron gives a window one
+ * One preload script serves all six windows, because Electron gives a window one
  * preload and a window only ever calls the bridge it was built for. Installing all
- * five is not a widening: every channel below is answered by a main-process handler
+ * six is not a widening: every channel below is answered by a main-process handler
  * that exists, and a window that never calls one has reached nothing.
  *
  * Parsing on this side as well as on the main side is not paranoia about our own
@@ -59,6 +61,15 @@ const invokeSequences = async (channel: string, argument?: unknown): Promise<Seq
   const answer: unknown = await ipcRenderer.invoke(channel, argument);
   return sequenceStateSchema.parse(answer);
 };
+
+/**
+ * `callieAdmin` follows `callieCrm` rather than `callieToday`: `AdminState` is
+ * composed from `@fss/contracts` schemas that the main-process bridge has already
+ * parsed the server's answer with, so a second schema here would be a second
+ * definition of the same contract and the two would disagree the day one changed.
+ */
+const invokeAdmin = async (channel: string, argument?: unknown): Promise<AdminState> =>
+  (await ipcRenderer.invoke(channel, argument)) as AdminState;
 
 const bridge: DesktopBridge = {
   state: async () => await invokeDesktop(IPC_CHANNELS.state),
@@ -116,8 +127,27 @@ const sequences: SequenceBridge = {
   resumeEnrollment: async input => await invokeSequences(SEQUENCE_IPC_CHANNELS.resumeEnrollment, input),
 };
 
+const admin: AdminBridge = {
+  state: async () => await invokeAdmin(ADMIN_IPC_CHANNELS.state),
+  show: async input => await invokeAdmin(ADMIN_IPC_CHANNELS.show, input),
+  saveSetting: async input => await invokeAdmin(ADMIN_IPC_CHANNELS.saveSetting, input),
+  openHistory: async input => await invokeAdmin(ADMIN_IPC_CHANNELS.openHistory, input),
+  loadDashboard: async input => await invokeAdmin(ADMIN_IPC_CHANNELS.loadDashboard, input),
+  createStage: async input => await invokeAdmin(ADMIN_IPC_CHANNELS.createStage, input),
+  renameStage: async input => await invokeAdmin(ADMIN_IPC_CHANNELS.renameStage, input),
+  reorderStages: async input => await invokeAdmin(ADMIN_IPC_CHANNELS.reorderStages, input),
+  retireStage: async input => await invokeAdmin(ADMIN_IPC_CHANNELS.retireStage, input),
+  acknowledgeAlert: async input => await invokeAdmin(ADMIN_IPC_CHANNELS.acknowledgeAlert, input),
+  setSendingCap: async input => await invokeAdmin(ADMIN_IPC_CHANNELS.setSendingCap, input),
+  recordSendingAuthentication: async input =>
+    await invokeAdmin(ADMIN_IPC_CHANNELS.recordSendingAuthentication, input),
+  recordHolidayCalendar: async input =>
+    await invokeAdmin(ADMIN_IPC_CHANNELS.recordHolidayCalendar, input),
+};
+
 contextBridge.exposeInMainWorld('callie', bridge);
 contextBridge.exposeInMainWorld('callieToday', today);
 contextBridge.exposeInMainWorld('callieCrm', crm);
 contextBridge.exposeInMainWorld('callieReplies', replies);
 contextBridge.exposeInMainWorld('callieSequences', sequences);
+contextBridge.exposeInMainWorld('callieAdmin', admin);

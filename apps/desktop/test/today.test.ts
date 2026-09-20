@@ -354,6 +354,75 @@ describe('the CRM bridge G3b was waiting for', () => {
   });
 
   it('answers the six methods G3b’s contract declares, and names six channels', async () => {
+    // Lane G9 replaced the two reads this used to make with one board read that
+    // carries the open opportunity id per firm the caller may change
+    // (docs/decisions/g9-pipeline-board-read.md).
+    const { api, calls } = scriptedApi({
+      '/pipeline/board': {
+        status: 200,
+        body: {
+          columns: [{ stage: stage('new', 'New', 1), firms: [] }],
+          opportunityIdByFirmId: {},
+          unplacedFirms: [],
+        },
+      },
+    });
+    const bridge = createCrmBridge({
+      api,
+      session: { state: async () => await Promise.resolve(sessionState()) },
+    });
+    const answer = await bridge.state();
+    expect(answer.screen).toBe('pipeline');
+    expect(answer.role).toBe('salesperson');
+    expect(calls.map(call => call.path)).toEqual(['/pipeline/board']);
+    expect(Object.values(CRM_IPC_CHANNELS)).toHaveLength(6);
+  });
+
+  it('offers a stage change only for the firms the board read named', async () => {
+    const opportunityId = '77777777-7777-4777-8777-777777777777';
+    const identity = (id: string, name: string) => ({
+      id,
+      name,
+      website: null,
+      locality: null,
+      regionCode: null,
+      status: 'active' as const,
+      assignedUserId: null,
+      stageKey: 'new',
+      opportunityStatus: 'open' as const,
+      controlMode: 'automated' as const,
+      openedAt: '2026-09-01T12:00:00.000Z',
+      timeZone: 'America/New_York',
+      timeZoneUnresolvedReason: null,
+    });
+    const { api } = scriptedApi({
+      '/pipeline/board': {
+        status: 200,
+        body: {
+          columns: [
+            {
+              stage: stage('new', 'New', 1),
+              firms: [identity(FIRM_ID, 'Northwind Test Holdings'), identity(OTHER_FIRM_ID, 'Southwind Test Partners')],
+            },
+          ],
+          // Only the caller's own firm. The colleague's column renders G3b's
+          // `stage-change-unavailable`, which is honest: the mutation would be
+          // refused under the firm's row lock anyway.
+          opportunityIdByFirmId: { [FIRM_ID]: opportunityId },
+          unplacedFirms: [],
+        },
+      },
+    });
+    const bridge = createCrmBridge({
+      api,
+      session: { state: async () => await Promise.resolve(sessionState()) },
+    });
+    const answer = await bridge.state();
+    expect(answer.pipeline?.opportunityIdByFirmId[FIRM_ID]).toBe(opportunityId);
+    expect(answer.pipeline?.opportunityIdByFirmId[OTHER_FIRM_ID]).toBeUndefined();
+  });
+
+  it('falls back to the two older reads when the board endpoint does not answer', async () => {
     const { api, calls } = scriptedApi({
       '/pipeline/stages': { status: 200, body: { stages: [stage('new', 'New', 1)] } },
       '/firms': { status: 200, body: { firms: [] } },
@@ -364,9 +433,10 @@ describe('the CRM bridge G3b was waiting for', () => {
     });
     const answer = await bridge.state();
     expect(answer.screen).toBe('pipeline');
-    expect(answer.role).toBe('salesperson');
-    expect(calls.map(call => call.path)).toEqual(['/pipeline/stages', '/firms']);
-    expect(Object.values(CRM_IPC_CHANNELS)).toHaveLength(6);
+    // Showing the columns with no stage controls beats showing nothing; an older
+    // API that has not been deployed yet is a deployment order, not an outage.
+    expect(calls.map(call => call.path)).toEqual(['/pipeline/board', '/pipeline/stages', '/firms']);
+    expect(answer.pipeline?.opportunityIdByFirmId).toEqual({});
   });
 
   it('records a refusal as its code, so G3b’s view maps it to one sentence', async () => {

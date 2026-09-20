@@ -90,6 +90,7 @@ function routingOptions(options: ApiOptions): RoutingOptions {
     ...(options.log === undefined ? {} : { log: options.log }),
     upgradeUrl: options.upgradeUrl ?? DEFAULT_UPGRADE_URL,
     suppressionJournal: options.suppressionJournal ?? localNoopSuppressionJournal(),
+    expectedSystemGeneration: options.expectedSystemGeneration,
   };
 }
 

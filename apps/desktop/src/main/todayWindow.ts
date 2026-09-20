@@ -285,6 +285,9 @@ export function windowMenuTemplate(open: {
   readonly replies: () => void;
   readonly firms: () => void;
   readonly sequences: () => void;
+  /** Lane G9's Settings, Dashboard and Diagnostics window. Optional so a caller
+   * that has not wired it yet still gets the selling windows. */
+  readonly administration?: (() => void) | undefined;
 }): readonly { readonly label: string; readonly submenu: readonly { readonly label: string; readonly accelerator: string; readonly click: () => void }[] }[] {
   return [
     {
@@ -294,6 +297,11 @@ export function windowMenuTemplate(open: {
         { label: 'Replies', accelerator: 'CmdOrCtrl+2', click: open.replies },
         { label: 'Firms', accelerator: 'CmdOrCtrl+3', click: open.firms },
         { label: 'Sequences', accelerator: 'CmdOrCtrl+4', click: open.sequences },
+        // Last, and the only optional one: ⌘1 to ⌘4 are the windows somebody uses
+        // to sell, and administration is the one they open when they are not.
+        ...(open.administration === undefined
+          ? []
+          : [{ label: 'Administration', accelerator: 'CmdOrCtrl+5', click: open.administration }]),
       ],
     },
   ];
