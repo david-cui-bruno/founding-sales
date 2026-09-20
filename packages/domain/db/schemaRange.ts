@@ -18,7 +18,7 @@ export interface SchemaRange {
 }
 
 /** The highest migration version this source tree contains. */
-export const CURRENT_SCHEMA_VERSION = 9;
+export const CURRENT_SCHEMA_VERSION = 14;
 
 /**
  * The range the release before this one declared. Widen this one release ahead of the
@@ -26,13 +26,13 @@ export const CURRENT_SCHEMA_VERSION = 9;
  *
  * Lanes G5 and G2 shipped migrations 0002 and 0003 from the same main and each widened
  * this constant for its own; lane G3a widened it again for migration 0004, G3b for
- * 0005, G4 for 0006, G10 for 0007, G6 for 0008 and G7 for 0009. A merge that finds
+ * 0005, G4 for 0006, G10 for 0007, G6 for 0008, G7 for 0009 and G14 for 0014. A merge that finds
  * two different maxima takes the larger. That is honest only because nothing has been
  * deployed — G0's {1, 1} was never a promise made to a running production binary. From
  * the first real deployment onwards the widening must precede the migration by a
  * release, and the compatibility test will keep saying so.
  */
-export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 9 };
+export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 14 };
 
 /**
  * Both services need migration 0002's shape: the API's dead-job list reads `dead_at`
@@ -102,8 +102,33 @@ export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum:
  * maxima move to 9: a binary that refused the database it has just been deployed
  * against would be a self-inflicted outage.
  */
-export const API_SCHEMA_RANGE: SchemaRange = { minimum: 9, maximum: 9 };
-export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 9, maximum: 9 };
+/**
+ * Migration 0014 (G14) moves both a fifth time, and by the same rule the four
+ * paragraphs above applied: a binary declares the lowest version on which its *first
+ * statement* can succeed.
+ *
+ * The worker needs it. `retention.batch` declares `business_uniqueness`, and the
+ * uniqueness it declares is `retention_runs_one_per_period` — Appendix C's "deletion
+ * tombstone and bounded range" as one constraint. A worker on a version-13 database
+ * would run a retention sweep, delete rows, and have nothing recording that the
+ * period was swept or how far; the second attempt would sweep again from a boundary
+ * nobody wrote down. That is an at-least-once handler with nothing behind it, which
+ * is what G10, G6 and G7 each refused for their own tables, and deleting rows is a
+ * worse thing to do twice than inserting them.
+ *
+ * The API needs it. `/retention/*` and `/admin/departure/*` read and write
+ * `retention_policies` rows, `retention_runs`, `deletion_requests` and `departures`.
+ * An API on a version-13 database could accept a deletion commit and then have
+ * nowhere to record what it deleted, and an unrecorded deletion is the one outcome
+ * 10.3's "every deletion and export is audited" forbids outright. Refusing the
+ * connection is the honest failure.
+ *
+ * The deploy order stays migrate, then worker, then API, so neither binary meets an
+ * older schema; a rolling step that runs two workers has both understanding 0014,
+ * which is what the widened previous-release range above is for (Appendix G 22).
+ */
+export const API_SCHEMA_RANGE: SchemaRange = { minimum: 14, maximum: 14 };
+export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 14, maximum: 14 };
 
 export function acceptsSchemaVersion(range: SchemaRange, version: number): boolean {
   return Number.isInteger(version) && version >= range.minimum && version <= range.maximum;
