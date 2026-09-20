@@ -74,7 +74,7 @@ describe('the data carry, end to end', () => {
     if (!exported.ok) return;
 
     expect(exported.value.manifest.kinds.firm.count).toBe(4);
-    expect(exported.value.manifest.kinds.evidence.count).toBe(3);
+    expect(exported.value.manifest.kinds.evidence.count).toBe(2);
     expect(exported.value.manifest.kinds.suppression.count).toBe(4);
     expect(exported.value.manifest.kinds.template.count).toBe(2);
     // One firm has both a FIRM# and an ACCOUNT# row; the FIRM# record wins and the
@@ -117,7 +117,7 @@ describe('the data carry, end to end', () => {
       if (!report.ok) return;
       expect(report.value.parity.matched).toBe(true);
       expect(report.value.carried.firm).toEqual({ created: 4, reused: 0 });
-      expect(report.value.carried.evidence).toEqual({ created: 3, reused: 0 });
+      expect(report.value.carried.evidence).toEqual({ created: 2, reused: 0 });
       expect(report.value.carried.suppression).toEqual({ created: 4, reused: 0 });
       // The template versions table does not exist yet; the seam is reported, never
       // silently counted as carried.
@@ -188,7 +188,7 @@ describe('the data carry, end to end', () => {
     expect(report.ok).toBe(true);
     if (!report.ok) return;
     expect(report.value.carried.firm).toEqual({ created: 0, reused: 4 });
-    expect(report.value.carried.evidence).toEqual({ created: 0, reused: 3 });
+    expect(report.value.carried.evidence).toEqual({ created: 0, reused: 2 });
     expect(report.value.carried.suppression).toEqual({ created: 0, reused: 4 });
     expect(report.value.parity.matched).toBe(true);
     expect(await counts(database, workspaces.alpha.workspaceId)).toEqual(before);

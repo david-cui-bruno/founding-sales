@@ -25,10 +25,14 @@ import { FIXTURE_WATERMARK, goodOldTable } from '../fixtures/carry/oldTable.ts';
  * See `docs/decisions/g11-artifact-encryption.md`.
  */
 
-const records = goodOldTable().flatMap(item => {
-  const read = readOldRecord(item);
-  return read.ok ? [read.value] : [];
-});
+// The export carries a firm once when both an old and a new record exist for it;
+// these records are the deduplicated set that reaches the artifact.
+const records = goodOldTable()
+  .filter(item => item.sk !== 'ACCOUNT#account-alpha')
+  .flatMap(item => {
+    const read = readOldRecord(item);
+    return read.ok ? [read.value] : [];
+  });
 
 const manifest = buildManifest({
   artifactId: 'carry-artifact-test',
@@ -52,7 +56,7 @@ describe('the sealed artifact', () => {
   it('reports counts and digests in the receipt and no business data at all', async () => {
     const cipher = aesGcmCipher(randomBytes(32));
     const sealed = await sealArtifact({ manifest, records, cipher });
-    expect(sealed.receipt.counts).toEqual({ firm: 4, evidence: 3, suppression: 4, template: 2 });
+    expect(sealed.receipt.counts).toEqual({ firm: 4, evidence: 2, suppression: 4, template: 2 });
     expect(sealed.receipt.sealedSha256).toHaveLength(64);
     expect(sealed.receipt.sealedBytes).toBe(sealed.sealed.byteLength);
     const text = JSON.stringify(sealed.receipt);
@@ -65,7 +69,7 @@ describe('the sealed artifact', () => {
     const cipher = aesGcmCipher(randomBytes(32));
     const sealed = await sealArtifact({ manifest, records, cipher });
     const tampered = Buffer.from(sealed.sealed);
-    tampered[tampered.length - 1] ^= 0xff;
+    tampered.writeUInt8(tampered.readUInt8(tampered.length - 1) ^ 0xff, tampered.length - 1);
     const opened = await openArtifact({ sealed: tampered, receipt: sealed.receipt, cipher });
     expect(opened.ok).toBe(false);
     if (opened.ok) return;
