@@ -19,9 +19,9 @@ import type { AdminBridge, AdminState } from '../renderer/settingsContract.ts';
 /**
  * The bridges, and the whole of what a renderer can reach (specification 14.2).
  *
- * One preload script serves all five windows, because Electron gives a window one
+ * One preload script serves all six windows, because Electron gives a window one
  * preload and a window only ever calls the bridge it was built for. Installing all
- * five is not a widening: every channel below is answered by a main-process handler
+ * six is not a widening: every channel below is answered by a main-process handler
  * that exists, and a window that never calls one has reached nothing.
  *
  * Parsing on this side as well as on the main side is not paranoia about our own

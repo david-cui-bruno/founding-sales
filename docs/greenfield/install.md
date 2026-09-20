@@ -108,6 +108,24 @@ It checks, and refuses unless all of it holds:
 `--integrity` runs everything that does not need Apple. That is what the host job
 uses, and it is the only mode a smoke build can pass.
 
+### Every window is served, not just the first
+
+A packaged build serves its interface over the `callie-app://` scheme rather than
+`file://`, because the file-protocol fuse is burned off and Chromium's plain file
+loader cannot read an asar. Until 20 September 2026 the map behind that scheme was
+hand-written and named three paths, while the build shipped a page and a script per
+window — so in a packaged build every window except sign-in answered 404. It was
+invisible in development, where windows open with `loadFile` and never reach the
+scheme handler.
+
+The map is now derived from one declaration per window, `BUNDLE_WINDOWS` in
+`apps/desktop/src/main/bundleScheme.ts`, which the esbuild loop and the copy loop in
+`scripts/bundle.ts` read as well. A packaged build therefore serves Today, Replies,
+the firm workspace, the sequence editor and administration, and adding a window is
+one line rather than three lists to keep equal. `bundleScheme.test.ts` asserts that
+every declared page and script resolves and that each page's script tag matches the
+entry its window declares. See `docs/decisions/g9-bundle-scheme-map.md`.
+
 ### Getting the artifact off the runner
 
 **Open, for the coordinator and David.** The release job builds, verifies and signs,
