@@ -1,0 +1,19 @@
+# Provider downloads and working directories are disposable. CI re-initializes
+# every module and root with `terraform init -backend=false`.
+.terraform/
+.terraform.tfstate.lock.info
+crash.log
+crash.*.log
+
+# Provider lock files stay out of the repository until a deployment lock file is
+# reviewed and pinned for every target platform. See docs/decisions/g1-provider-lock-files.md.
+.terraform.lock.hcl
+
+# State never belongs in the repository. It lives in the S3 backend.
+*.tfstate
+*.tfstate.*
+
+# Variable files may carry environment detail. Roots take their values from the
+# apply runbook and the deployment role, never from a committed tfvars file.
+*.tfvars
+*.tfvars.json
