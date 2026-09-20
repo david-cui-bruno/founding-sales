@@ -125,6 +125,7 @@ export {
 } from './bootstrap/config.ts';
 export { APPLICATION_RAISED_METRICS, type ApplicationRaisedMetric, type MetricRaiser } from './bootstrap/metricCoverage.ts';
 export { createLiveness, noLiveness, type Liveness } from './bootstrap/liveness.ts';
+export { suppressionFinalizeJobHandler } from './handlers/suppressionFinalize.ts';
 export { createLogger, errorFields, recordingLogger, type LogFields, type LogLevel, type Logger } from './bootstrap/log.ts';
 export { drain, startLoop, type Loop, type PassOutcome } from './bootstrap/loop.ts';
 export {

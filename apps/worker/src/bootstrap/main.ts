@@ -3,6 +3,7 @@ import type { QueryResultRowLike, SessionQueryable } from '@fss/domain/db';
 import { HandlerRegistry, canaryHandler, createCloudWatchSink, loadCloudWatchTransport } from '@fss/domain/jobs';
 import { WORKER_EXIT_CODES } from '../index.ts';
 import { researchHandlers } from '../handlers/research.ts';
+import { suppressionFinalizeJobHandler } from '../handlers/suppressionFinalize.ts';
 import { canarySource } from '../scheduler/sources.ts';
 import { ConfigError, describeWorkerConfig, readWorkerConfig, type WorkerConfig } from './config.ts';
 import { createLogger, errorFields, type Logger } from './log.ts';
@@ -21,6 +22,7 @@ import { WorkerStartupRefusal, startWorker } from './worker.ts';
  */
 function registerHandlers(registry: HandlerRegistry): HandlerRegistry {
   registry.register(canaryHandler());
+  registry.register(suppressionFinalizeJobHandler());
   for (const handler of researchHandlers({ providers: {} })) registry.register(handler);
   return registry;
 }

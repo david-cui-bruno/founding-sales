@@ -20,7 +20,7 @@ not dialable. A discovered firm is on nobody's list until an admin assigns it.
 ## Where everything is
 
 ```
-packages/domain/db/migrations/0005_research.sql  the tables, seeds and privileges
+packages/domain/db/migrations/0007_research.sql  the tables, seeds and privileges
 packages/domain/research/
   types.ts            refusal codes, row shapes, the fillable-field set
   sourcePolicy.ts     which URLs and which addresses research may reach
@@ -62,7 +62,7 @@ Three things make that true rather than intended, and
   person could set;
 * **the only job kinds** that appear in `jobs` are `research.page` and `research.firm`.
 
-The schema is the fourth: there is no column in migration 0005 that could hold an
+The schema is the fourth: there is no column in migration 0007 that could hold an
 enrollment, a fence, a ticket or an opportunity.
 
 ### 2. A provider is an interface, and there are no implementations
@@ -273,6 +273,6 @@ npm run test --workspace apps/api -- test/research.test.ts                    # 
 ```
 
 `packages/domain/test/db/support/researchCases.ts` has a failing insert for every
-constraint migration 0005 adds; the coverage test at the bottom of
+constraint migration 0007 adds; the coverage test at the bottom of
 `test/db/constraints.test.ts` fails the build if a future migration adds one without a
 case.

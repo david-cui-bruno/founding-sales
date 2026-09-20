@@ -9,6 +9,9 @@
     "./jobs": "./jobs/index.ts",
     "./db/testing": "./db/testing/index.ts",
     "./crm": "./crm/index.ts",
+    "./policy": "./policy/index.ts",
+    "./suppression": "./suppression/index.ts",
+    "./dial": "./dial/index.ts",
     "./research": "./research/index.ts",
     "./research/testing": "./research/testing/fixtures.ts"
   },

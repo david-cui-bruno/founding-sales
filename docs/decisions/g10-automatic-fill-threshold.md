@@ -74,7 +74,7 @@ deliberately arrives unassigned — that omitted field is half of invariant 8.
    `propose` for every kind that is not `canonical_field`, every field outside the set,
    every present value and every confidence below the threshold.
 2. The `WHERE <column> IS NULL` clause.
-3. `research_suggestions_only_facts_apply` in migration 0005 refuses an `applied` row
+3. `research_suggestions_only_facts_apply` in migration 0007 refuses an `applied` row
    of any kind but `canonical_field`, so a future caller that tried could not record it
    even if the first two were bypassed.
 

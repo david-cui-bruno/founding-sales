@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { SessionQueryable } from '@fss/domain/db';
 import type { ClientVersionRange } from '@fss/contracts';
+import type { SuppressionJournal } from '@fss/domain/suppression';
 import { MAX_REQUEST_BYTES, REFUSAL_STATUS, checkEnvelope, redactError, type RefusalCode } from './limits.ts';
 import { authenticate, type AuthDeps } from './auth/index.ts';
 import type { VerifiedPrincipal } from './scope.ts';
@@ -10,6 +11,7 @@ import { readBody } from './bootstrap/requestBody.ts';
 import { createRouteRegistry, type RouteModule, type RouteRegistry } from './bootstrap/routeRegistry.ts';
 import { mountedRoutes } from './bootstrap/routes.ts';
 import { apiRouteModules } from './routes/modules.ts';
+import { localNoopSuppressionJournal } from './journal/index.ts';
 import { DEFAULT_UPGRADE_URL, type ApiRequest, type RouteResult, type RoutingOptions } from './routes/types.ts';
 
 /**
@@ -50,6 +52,14 @@ export interface ApiOptions {
   readonly auth?: AuthDeps;
   /** Where a person is told to get the current build. Defaults to the public page. */
   readonly upgradeUrl?: string;
+  /**
+   * The object-locked suppression journal (10.2). A deployment without one falls
+   * back to the local no-op, which is right for a laptop and wrong for production;
+   * `requireDurableJournal` in `journal/index.ts` is what a production bootstrap
+   * calls so that a missing bucket is a refusal to start rather than a silently
+   * discarded audit trail.
+   */
+  readonly suppressionJournal?: SuppressionJournal;
   /** Extra route modules, so a lane mounts without editing this file. */
   readonly extraRoutes?: readonly RouteModule[] | undefined;
   /** The structured log the CloudWatch metric filters read. Absent in unit tests. */
@@ -65,6 +75,7 @@ function routingOptions(options: ApiOptions): RoutingOptions {
     sendingEnabled: options.sendingEnabled,
     ...(options.auth === undefined ? {} : { auth: options.auth }),
     upgradeUrl: options.upgradeUrl ?? DEFAULT_UPGRADE_URL,
+    suppressionJournal: options.suppressionJournal ?? localNoopSuppressionJournal(),
   };
 }
 

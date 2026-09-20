@@ -24,7 +24,7 @@ what lets a rolling deployment run an old worker beside a new API (Appendix G 22
 
 Appendix C gives both research kinds `business_uniqueness`, and that protection is not
 a property of the handler — it is a property of two unique constraints that migration
-0005 creates:
+0007 creates:
 
 ```
 research_pages_one_per_result       UNIQUE (workspace_id, query_hash, page_hash)

@@ -34,7 +34,7 @@ import { accept, numeric, refuse, type ResearchResult, type ResearchRoutePolicyR
  * the policy it names can still be read, including after a later policy raised the
  * threshold: the question an operator asks after tightening a threshold is "which
  * routes were promoted under the old one, and would they still qualify?". So the
- * policy rows are insert-only (migration 0005 revokes UPDATE and DELETE), a new
+ * policy rows are insert-only (migration 0007 revokes UPDATE and DELETE), a new
  * threshold is a new version with its own `effective_from`, and the old version stays
  * exactly as it was when the routes were promoted.
  *

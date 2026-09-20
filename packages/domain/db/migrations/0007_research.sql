@@ -1,4 +1,4 @@
--- 0005_research
+-- 0007_research
 --
 -- Research discovery and enrichment (specification revision 3: 1.1 invariant 8, 7.4,
 -- 9.1's route eligibility, 10.3's evidence retention, 13.2, and Appendix C's

@@ -42,7 +42,7 @@ import {
  *   2. the fill is `UPDATE ... WHERE <column> IS NULL`, so a value that arrived between
  *      the read and the write is not overwritten — the update affects no row and the
  *      suggestion stays `proposed`;
- *   3. migration 0005's `research_suggestions_only_facts_apply` refuses an `applied`
+ *   3. migration 0007's `research_suggestions_only_facts_apply` refuses an `applied`
  *      row of any other kind, so a future caller that tries cannot even record it.
  *
  * ## Suggestions and merges

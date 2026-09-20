@@ -14,7 +14,7 @@ import {
 /**
  * The two research handlers (specification 7.4, 13.2, Appendix C).
  *
- * Appendix C gives both kinds `business_uniqueness`, and migration 0005 is what makes
+ * Appendix C gives both kinds `business_uniqueness`, and migration 0007 is what makes
  * that true: `research_pages` is unique on `(workspace, query_hash, page_hash)` and
  * `research_firm_runs` on `(workspace, firm, revision)`. So the runner commits each
  * handler together with its completion, a worker whose lease was stolen rolls its work

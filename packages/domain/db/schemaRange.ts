@@ -18,7 +18,7 @@ export interface SchemaRange {
 }
 
 /** The highest migration version this source tree contains. */
-export const CURRENT_SCHEMA_VERSION = 5;
+export const CURRENT_SCHEMA_VERSION = 7;
 
 /**
  * The range the release before this one declared. Widen this one release ahead of the
@@ -26,13 +26,13 @@ export const CURRENT_SCHEMA_VERSION = 5;
  *
  * Lanes G5 and G2 shipped migrations 0002 and 0003 from the same main and each widened
  * this constant for its own; lane G3a widened it again for migration 0004, G3b for
- * 0005, and lane G10 for the research migration. A merge that finds two different
- * maxima takes the larger. That is honest only because nothing has been deployed —
- * G0's {1, 1} was never a promise made to a running production binary. From the first
- * real deployment onwards the widening must precede the migration by a release, and
- * the compatibility test will keep saying so.
+ * 0005, G4 for 0006 and G10 for 0007. A merge that finds two different maxima takes
+ * the larger. That is honest only because nothing has been deployed — G0's {1, 1} was
+ * never a promise made to a running production binary. From the first real deployment
+ * onwards the widening must precede the migration by a release, and the compatibility
+ * test will keep saying so.
  */
-export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 5 };
+export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 7 };
 
 /**
  * Both services need migration 0002's shape: the API's dead-job list reads `dead_at`
@@ -43,30 +43,33 @@ export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum:
  * The API additionally needs migration 0003 — no session, device credential or
  * authorization request exists before it, so an API on a version-2 database could not
  * authenticate anybody — and migration 0004, because its CRM routes read `firms`,
- * `contacts`, `opportunities` and the default pipeline. Its minimum is therefore 4,
- * for the same reason the minimum was 2 and then 3.
+ * `contacts`, `opportunities` and the default pipeline. Migration 0006 raises it
+ * again: the dial, suppression, pause and call routes read `state_postures`,
+ * `dial_tickets`, `effective_suppressions`, `call_logs` and `callbacks`, and an API
+ * without them could answer a dial authorization only by inventing one.
  *
- * The worker read none of those tables before this lane, so its minimum was 2, which
- * is what let a rolling deployment run an old worker beside a new API (Appendix G 22).
- * Migration 0005 adds no column and no table — only the trigram indexes CRM search is
- * fast with and correct without — so it moved neither minimum.
+ * Migration 0005 (G3b) adds no column and no table — only the trigram indexes CRM
+ * search is fast with and correct without — so it moved neither minimum. Migration
+ * 0006 does: the worker needs it because `suppression.finalize` writes
+ * `suppression_finalizations`, so the worker's minimum moved from 2 to 6 for the first
+ * time in this tree. The deploy order is migrate, then worker, then API, so the worker
+ * never meets an older schema; a rolling step that runs two worker versions has both
+ * understanding 0006, which is what the widened previous-release range above is for
+ * (Appendix G 22).
  *
- * The research migration moves both. The API's research routes read
+ * Migration 0007 (G10) moves both again. The API's research routes read
  * `research_settings`, `research_providers`, `research_route_policies` and
  * `research_suggestions`, and the worker's two research handlers write
  * `research_pages` and `research_firm_runs` — the tables whose unique constraints
- * *are* their declared idempotency protection. A worker on a database without them
- * would run those handlers with no uniqueness behind them, which is the one thing a
- * schema range exists to prevent, so it refuses to start instead. Both ranges are
- * therefore pinned to the research version rather than reaching back, and
- * `docs/decisions/g10-worker-schema-minimum.md` says what that gives up.
- *
- * NOTE (G10, pending): this lane's migration is renumbered to 0007 once G4's 0006 is
- * on main, and these four numbers move with it. Until then the tree holds two
- * version-5 migrations and `loadMigrations` says so.
+ * *are* their declared idempotency protection. A worker on a version-6 database would
+ * run those handlers with no uniqueness behind them, which is the one thing a schema
+ * range exists to prevent, so it refuses to start instead rather than accepting {6, 7}.
+ * `docs/decisions/g10-worker-schema-minimum.md` says what that gives up. Both maxima
+ * move to 7: a binary that refused the database it has just been deployed against
+ * would be a self-inflicted outage.
  */
-export const API_SCHEMA_RANGE: SchemaRange = { minimum: 5, maximum: 5 };
-export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 5, maximum: 5 };
+export const API_SCHEMA_RANGE: SchemaRange = { minimum: 7, maximum: 7 };
+export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 7, maximum: 7 };
 
 export function acceptsSchemaVersion(range: SchemaRange, version: number): boolean {
   return Number.isInteger(version) && version >= range.minimum && version <= range.maximum;
