@@ -387,7 +387,12 @@ jobs:
           secret_json="$(aws secretsmanager get-secret-value \
             --secret-id "$secret_arn" --query SecretString --output text)"
 
-          mapfile -t parts < <(SECRET_JSON="$secret_json" ENDPOINT="$endpoint" DATABASE="$database" python3 - <<'PY'
+          # Two lines: the encoded password, then the whole URL. Both are masked,
+          # because a later step that logged only the credential — a psql error, say —
+          # would not be covered by masking the whole string. `quote(safe="")` because
+          # a generated password may contain @, / or :, and a naively concatenated URL
+          # would parse as a different host.
+          credentials="$(SECRET_JSON="$secret_json" ENDPOINT="$endpoint" DATABASE="$database" python3 - <<'PY'
           import json, os, urllib.parse
           secret = json.loads(os.environ["SECRET_JSON"])
           user = urllib.parse.quote(secret["username"], safe="")
@@ -395,10 +400,12 @@ jobs:
           print(password)
           print(f"postgresql://{user}:{password}@{os.environ['ENDPOINT']}/{os.environ['DATABASE']}?sslmode=require")
           PY
-          )
-          echo "::add-mask::${parts[0]}"
-          echo "::add-mask::${parts[1]}"
-          echo "FSS_TEST_POSTGRES_URL=${parts[1]}" >> "$GITHUB_ENV"
+          )"
+          password="${credentials%%$'\n'*}"
+          url="${credentials#*$'\n'}"
+          echo "::add-mask::$password"
+          echo "::add-mask::$url"
+          echo "FSS_TEST_POSTGRES_URL=$url" >> "$GITHUB_ENV"
           # The host, which is public, and nothing else.
           echo "connection string assembled for ${database} at ${endpoint%%:*}"
 
