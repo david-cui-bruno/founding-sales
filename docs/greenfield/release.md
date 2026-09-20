@@ -90,24 +90,33 @@ psql "$DATABASE_URL" -c 'CREATE EXTENSION IF NOT EXISTS pg_trgm;'
 
 Do it for the production instance and for each rehearsal instance. If you forget, migration 0005 fails and says so; nothing is damaged, and you run it and migrate again.
 
-### 1.6 The Google client secrets carry two public identifiers as well
+### 1.6 What goes in each Google secret, and what no longer does
 
-This is the one thing in the release that will surprise you, so it is stated here in full.
-
-The task definitions inject Secrets Manager values into environment variables named after the secrets. Two *public* identifiers the Gmail lane needs are not in the task environment at all — `gmail_push_topic_id` is only a Terraform output, and the Workspace domain is nowhere — and carrying them would need a change to `infra/modules/stack`, which the release lane may not make. So they travel in the JSON you paste, beside the client id and secret:
+The task definitions inject Secrets Manager values into environment variables named after the secrets. Each Google secret carries **two fields and no more**:
 
 ```json
-{
-  "client_id": "<the fss-greenfield-gmail web client id>",
-  "client_secret": "<from the Google console>",
-  "push_topic": "projects/callie-fss/topics/fss-prod-gmail-push",
-  "hosted_domain": "usecallie.com"
-}
+{ "client_id": "<from the Google console>", "client_secret": "<from the Google console>" }
 ```
 
-Every one of those four fields is **refused by name** when absent: the process will not start and the log line says which field is missing. Get `push_topic` from `terraform output gmail_push_topic_id` after the first apply.
+Both are refused by name when absent: the process will not start and the log line says which field is missing, never its value. Two secrets have this shape:
 
-`fss-prod/google-oidc-client` takes the same shape for the sign-in client. (Google sign-in is not wired into the API by this lane — see `docs/decisions/g12-the-credentialed-bootstrap.md` — but the secret's shape is settled now so it does not change later.)
+| Secret | Client | Redirect URI Google must have registered |
+|---|---|---|
+| `fss-prod/google-gmail-oauth-client` | `fss-greenfield-gmail` | `https://api.usecallie.com/oauth/gmail/callback` |
+| `fss-prod/google-oidc-client` | `fss-greenfield-oidc` | `https://api.usecallie.com/auth/google/callback` |
+
+They are **different clients**. 5.1 keeps sign-in (`openid email profile`) and the Gmail grant (`gmail.readonly`, `gmail.send`) apart, and the API refuses an id token whose `aud` is not exactly the sign-in client id — so pasting one client into both entries fails at the first sign-in rather than quietly working.
+
+**What changed in G12b.** Two *public* identifiers used to travel inside the Gmail secret because nothing in the task environment carried them. They are now Terraform's, in both services' environment:
+
+| Environment variable | Where the value comes from |
+|---|---|
+| `FSS_GMAIL_PUSH_TOPIC` | `module.pubsub`'s topic, the same string `terraform output gmail_push_topic_id` prints |
+| `FSS_GOOGLE_HOSTED_DOMAIN` | the `google_hosted_domain` root variable, `usecallie.com` |
+
+You set neither by hand; the apply does. The bootstraps still read `push_topic` and `hosted_domain` out of the secret JSON **if the environment does not carry them**, so a deployment written against the older shape still starts — for one release. `docs/decisions/g12b-two-public-identifiers-move-out-of-the-secret.md` says when that fallback goes and what has to be true first. The startup line reports which source each came from (`push_topic_source`, `hosted_domain_source`), so you can confirm the move landed without reading a task definition.
+
+When neither source has one, the process refuses to start and names **both** places it looked.
 
 ---
 
@@ -199,15 +208,27 @@ node --experimental-transform-types --disable-warning=ExperimentalWarning --inpu
 
 and pass them as `api_schema_range` and `worker_schema_range`. A task definition that declares a range the image does not accept is a stale deployment and both binaries refuse to start rather than guess.
 
+**The root variables this release needs.** Beyond the digests and the ranges:
+
+| Root variable | Production value | Why it is here |
+|---|---|---|
+| `google_hosted_domain` | `usecallie.com` (the default) | 5.1 and 12.1. A public identifier, so it belongs in a plan an operator reads, not inside a secret. An empty one is refused by variable validation, because an empty `hd` restriction admits every Google account there is. |
+| `gcp_project_id` | `callie-fss` | The project that owns the Gmail push topic. |
+| `alert_emails` | `["callie@usecallie.com"]` | Each address confirms once by hand (5.3 below). |
+
 **The deployment environment variables this release adds.** Both task definitions need:
 
-| Variable | Production value |
-|---|---|
-| `FSS_DEPENDENCIES` | `live` |
-| `FSS_RESEARCH_PROVIDERS` | `none` (worker only) |
-| `FSS_SENDING_ENABLED` | `false` until section 6 |
+| Variable | Production value | Set by |
+|---|---|---|
+| `FSS_DEPENDENCIES` | `live` | you, in `extra_environment` or the plan review |
+| `FSS_RESEARCH_PROVIDERS` | `none` (worker only) | you |
+| `FSS_SENDING_ENABLED` | `false` until section 6 | you |
+| `FSS_GMAIL_PUSH_TOPIC` | the Pub/Sub topic id | Terraform, from `module.pubsub` |
+| `FSS_GOOGLE_HOSTED_DOMAIN` | `usecallie.com` | Terraform, from `google_hosted_domain` |
 
-`FSS_DEPENDENCIES` has no default in production: an unset one is a refusal to start, which is deliberate — see `docs/decisions/g12-the-credentialed-bootstrap.md`. `FSS_RESEARCH_PROVIDERS=none` is a declaration that this build ships no live research adapter, not an accident.
+`FSS_DEPENDENCIES` has no default in production: an unset one is a refusal to start, which is deliberate — see `docs/decisions/g12-the-credentialed-bootstrap.md`. `FSS_RESEARCH_PROVIDERS=none` is a declaration that this build ships no live research adapter, not an accident. The last two are Terraform's and need nothing from you; they are listed so that a startup line reporting `hosted_domain_source: "secret"` reads as "the apply has not landed yet" rather than as a mystery.
+
+**What the API refuses to start without.** A live API now builds Google sign-in or exits with `api_deployment_refused`. The parts are the `google-oidc-client` secret, `FSS_PUBLIC_ORIGIN` (the redirect is `https://api.usecallie.com/auth/google/callback`, derived rather than configured twice), `FSS_GOOGLE_HOSTED_DOMAIN`, and `session-signing-key`. `--selftest` prints `sign_in`, `sign_in_client_configured`, `sign_in_redirect_configured`, `sign_in_hosted_domain_configured` and `session_signing_key_configured` — names and booleans, never a value. Before G12b the API started without any of it and refused every command; see `docs/decisions/g12b-sign-in-is-configured-or-the-api-refuses.md`.
 
 ### 4.1 The order inside the apply
 
@@ -240,7 +261,7 @@ aws secretsmanager put-secret-value --secret-id fss-prod/google-gmail-oauth-clie
 # paste the JSON from section 1.6, then Ctrl-D.
 ```
 
-Repeat for `google-oidc-client`, `session-signing-key`, `device-credential-pepper`, `llm-classifier-api-key` and `research-provider-credentials`.
+Repeat for `google-oidc-client`, `session-signing-key`, `device-credential-pepper`, `llm-classifier-api-key` and `research-provider-credentials`. The two Google entries take the two-field JSON in section 1.6 and nothing else; the rest are single values.
 
 `file:///dev/stdin` rather than `--secret-string '<value>'` so the value never reaches shell history or the process table. `session-signing-key` and `device-credential-pepper` are **base64 bytes, at least 32 of them, never PEM** — the API refuses PEM by name, because a PEM armour line in a repository is flagged by the history scanner in every commit it ever appeared in:
 
@@ -290,7 +311,7 @@ terraform output gmail_push_topic_id   # projects/callie-fss/topics/fss-prod-gma
 terraform output gmail_push_audience   # https://api.usecallie.com/integrations/gmail/push
 ```
 
-Put `gmail_push_topic_id` into the `push_topic` field of `fss-prod/google-gmail-oauth-client` (section 1.6) if you have not already, and re-deploy.
+Both are in the task environment already (`FSS_GMAIL_PUSH_TOPIC`, `FSS_GMAIL_PUSH_AUDIENCE`); the outputs are here so you can read what the apply decided. Confirm it reached the containers rather than assuming it — the API's startup line says `push_topic_source: "environment"` once it has.
 
 Then connect the mailbox from the Mac client: it opens the Google consent screen in the system browser, you grant `gmail.readonly` and `gmail.send`, and the callback lands on `https://api.usecallie.com/oauth/gmail/callback`. The API validates the exact audience and the exact service-account email on every push; a token with a valid Google signature and the wrong audience is refused (Appendix G 27).
 
@@ -366,6 +387,6 @@ Withdraw either half. The attestation (`enabled: false`) stops it immediately an
 Nothing in this repository has ever been applied, and the rehearsal workflow has never run against AWS. Every command here comes from the AWS documentation, the Terraform schema and the scripts' dry-run output, checked offline. Watch these on the first real run:
 
 1. Whether `resourcegroupstaggingapi get-resources` is readable by the rehearsal role. `rehearsal-prefix-guard.sh` uses it to compare the production inventory before and after; if the role cannot read production at all, the scenario still passes — "could not address" is the claim — but the script will need the read moved to a separate inventory role to produce a useful diff.
-2. Whether the worker task role can write the suppression journal. **It currently cannot:** `infra/modules/cluster` grants the worker `s3:GetObject` and `kms:Decrypt` on the journal and no `s3:PutObject`, but the worker's mail pipeline records prospect opt-outs and 10.2 requires the journal write before acknowledgement. This needs a module change the release lane could not make; it is reported to the coordinator and should be fixed before Gmail sync is enabled in production.
+2. Whether the worker task role can write the suppression journal. **Closed by G12b in the plan, unproved in the cloud.** `infra/modules/cluster` now gives the worker `s3:PutObject` on the journal object prefix and `kms:Encrypt`/`kms:GenerateDataKey` on the journal key, and `infra/modules/journal` names both task roles as permitted writers rather than the API alone — so the bucket policy's `DenyWritesFromAnyoneButTheTaskRoles` no longer refuses the worker. Neither role asks for any `s3:Delete*`, and no writer sets a per-object retention: the bucket's own default retention locks every object on put, and `s3:PutObjectRetention` stays denied to everybody. `infra/modules/cluster/tests/services.tftest.hcl` asserts both halves offline. What a plan cannot prove is that the first real opt-out the worker imports actually lands in the bucket; watch the `SuppressionJournalWriteFailures` metric after Gmail sync is first enabled, because a remaining IAM refusal surfaces there and nowhere else.
 3. Whether one day of GOVERNANCE retention is long enough that `--bypass-governance-retention` is only ever needed for a same-day teardown.
 4. How long the whole rehearsal takes. The workflow's timeout is 180 minutes, which is a guess dominated by the Multi-AZ restore in Appendix E step 1.

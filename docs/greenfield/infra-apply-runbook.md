@@ -73,12 +73,14 @@ Terraform creates six **empty** Secrets Manager entries. It never holds a value 
 
 | Entry | Content |
 |---|---|
-| `fss-prod/google-oidc-client` | sign-in OAuth client id and secret |
-| `fss-prod/google-gmail-oauth-client` | Gmail OAuth client id and secret |
+| `fss-prod/google-oidc-client` | sign-in OAuth client id and secret, as `{"client_id": "...", "client_secret": "..."}` |
+| `fss-prod/google-gmail-oauth-client` | Gmail OAuth client id and secret, same two-field shape |
 | `fss-prod/session-signing-key` | signing material for access sessions |
 | `fss-prod/device-credential-pepper` | server-side pepper for the device credential hash |
 | `fss-prod/llm-classifier-api-key` | reply-classifier provider key |
 | `fss-prod/research-provider-credentials` | approved research provider credentials |
+
+Nothing else goes in either Google entry. The Pub/Sub topic and the Workspace domain are public identifiers and travel in the task environment (`FSS_GMAIL_PUSH_TOPIC`, `FSS_GOOGLE_HOSTED_DOMAIN`), set by the apply from `module.pubsub` and the `google_hosted_domain` root variable; see `docs/greenfield/release.md` 1.6.
 
 The RDS master password is **not** in that list. `manage_master_user_password` hands generation, storage and rotation to RDS, which writes it to its own Secrets Manager secret encrypted with the same customer key. Terraform never sees it and it never appears in state.
 
@@ -169,6 +171,8 @@ terraform plan -out=production.tfplan \
 terraform apply production.tfplan
 ```
 
+`google_hosted_domain` defaults to `usecallie.com` and needs no `-var`; pass one only if the Workspace domain changes. An empty value is refused by variable validation at the root and again in the stack module, because an empty `hd` restriction admits every Google account there is.
+
 Read the plan before applying it. Specifically confirm:
 
 - every name begins `fss-prod`;
@@ -234,7 +238,7 @@ terraform output gmail_push_topic_id     # projects/<project>/topics/fss-prod-gm
 terraform output gmail_push_audience     # https://<hostname>/integrations/gmail/push
 ```
 
-The API must be configured to require exactly that audience and exactly the service account in `push_service_account_email`. A token with a valid Google signature but the wrong audience or the wrong service-account email must be refused (Appendix G scenario 27). The Gmail `users.watch` call names the topic id above.
+The API must be configured to require exactly that audience and exactly the service account in `push_service_account_email`. A token with a valid Google signature but the wrong audience or the wrong service-account email must be refused (Appendix G scenario 27). The Gmail `users.watch` call names the topic id above, which the apply has already put in both task definitions as `FSS_GMAIL_PUSH_TOPIC`.
 
 Push does not work until the API hostname resolves and serves a valid certificate: Pub/Sub will not push to an endpoint it cannot verify.
 

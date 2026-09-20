@@ -43,6 +43,34 @@ Why the API's callback rather than a loopback port or a `callie://` scheme:
 `docs/decisions/g2-redirect-target.md`, which is also the note that says exactly which
 OAuth client David creates and with which redirect URIs.
 
+### How a deployed API is given all this
+
+`apps/api/src/bootstrap/deployment.ts` builds `AuthConfig` at startup and
+`bootstrap/main.ts` adds the database session, the clock and the random source. Four
+inputs, none of them defaulted:
+
+| Part | Where it comes from |
+|---|---|
+| Client id and secret | the `google-oidc-client` Secrets Manager entry, injected by the ECS `secrets` block as `{"client_id": "...", "client_secret": "..."}` |
+| Redirect URI | derived: `FSS_PUBLIC_ORIGIN` + `/auth/google/callback`, so it equals the URI registered with Google rather than being configured twice |
+| Hosted domain | `FSS_GOOGLE_HOSTED_DOMAIN`, the `google_hosted_domain` root variable — the same value the mailbox check uses, so the two cannot disagree |
+| PKCE/state HMAC | `session-signing-key`, base64 bytes, 32 or more, PEM refused by name |
+
+Issuer, discovery URL, clock skew and the four session lifetimes are constants, not
+configuration: `createGoogleClient` already refuses a discovery document whose `issuer`
+differs and any endpoint it names at another origin, so making the issuer settable
+would only widen what a deployment can be pointed at.
+
+**A live deployment that is missing any of the four refuses to start.** Before G12b it
+started without them and mounted no identity at all, which looks from outside exactly
+like a working API that refuses every command. The startup line and `--selftest` name
+each part — `sign_in`, `sign_in_client_configured`, `sign_in_redirect_configured`,
+`sign_in_hosted_domain_configured`, `session_signing_key_configured` — as booleans and
+a closed vocabulary, never a value, not even the public client id. A rehearsal selects
+its own sign-in client explicitly, for the same reason it selects its own push
+verifier: a rehearsal that fetched Google's key set would be testing Google's
+availability. See `docs/decisions/g12b-sign-in-is-configured-or-the-api-refuses.md`.
+
 ### What makes each replay fail
 
 | Replay | Why it fails |
