@@ -166,16 +166,21 @@ append-only by privilege.
 
 | Kind | Who reads it | What it means |
 |---|---|---|
-| `opportunity.terminal_stop` | G8 sequences | Won or Lost: stop every active enrollment for the firm |
-| `opportunity.manual_mode` | G8 sequences | The opportunity is manual; automation never reverses it |
+| `opportunity.terminal_stop` | `sequence.terminal_stop` (G15) | Won or Lost: stop every active enrollment for the opportunity |
+| `opportunity.manual_mode` | `sequence.terminal_stop` (G15) | The opportunity is manual; its active enrollments end terminally (7.3) |
 | `opportunity.reopened` | G8 sequences | An explicit reopen; the old sequence never resumes |
 | `firm.reassigned` | Today (8.2) | Transfer unfinished entries to the new assignee |
 | `firm.merged`, `contact.merged` | search (G3b) | Reindex the target |
 | `route.retired` | G4 dial | A card holding the old version must not dial |
 
 Why not a `jobs` row: Appendix C's job kinds are a closed set the queue owns, no
-handler is registered for any of these yet, and a job nobody handles becomes a dead
-job and then a critical alert. See `docs/decisions/g3a-domain-event-outbox.md`.
+handler was registered for any of these when the table was written, and a job nobody
+handles becomes a dead job and then a critical alert. See
+`docs/decisions/g3a-domain-event-outbox.md`, whose "what would change this" paragraph
+predicted the job kind that now drains the first two rows —
+`sequence.terminal_stop`, in `apps/worker/src/handlers/terminalStop.ts`. The table did
+not change; it gained a reader (lane G15,
+`docs/decisions/g15-the-worker-drains-what-the-lanes-left.md`).
 
 ## Reassignment (Appendix A)
 
@@ -222,16 +227,22 @@ refuses as `firm_merged`.
 
 * **Search, filters, CSV import and export** — lane G3b, and they are here now:
   `docs/greenfield/crm-surface.md`.
-* **Stage administration** (rename, reorder, add, retire) — *still unowned*. This note
-  assigned it to G3b; G3b's brief did not, and G3b built the search, import, export
-  and desktop deliverables it lists instead. The table, the seeded default, the
-  position-uniqueness deferral a reorder needs and the terminal-stage constraints all
-  exist; the admin commands over them do not. Section 8.1's "Admins may rename,
-  reorder, add, or retire nonterminal stages" is the gap.
+* **Stage administration** (rename, reorder, add, retire) — *owned and built*, by lane
+  G9, which this note predates. All four verbs of 8.1's "Admins may rename, reorder,
+  add, or retire nonterminal stages" are functions in
+  `packages/domain/crm/stageAdmin.ts` behind admin-only routes in
+  `apps/api/src/routes/pipeline.ts`, and the adjective is enforced: no command touches
+  a terminal stage, because `changeStage` finds Won and Lost by `terminal_kind` and a
+  workspace that had renamed or retired one would have closed opportunities nobody can
+  create (`docs/decisions/g9-terminal-stages-are-not-administrable.md`). Positions stay
+  contiguous from 1 with the terminal stages last after every command. The note said
+  "still unowned" until lane G15's documentation sweep found it stale.
 * **Suppression and dial authorization** — lane G4. This lane records the route
   eligibility and the firm zone that `authorizeDial` reads.
 * **Enrollments, executions and outbound fences** — lane G8. This lane raises the
-  terminal-stop signal G8 subscribes to.
+  terminal-stop signal, G8 wrote the subscriber, and G15 is what calls it: the
+  `sequence.terminal_stop` job drains `opportunity.terminal_stop` and
+  `opportunity.manual_mode` every pass that finds either outstanding.
 * **Notes, callbacks and message bodies** — they belong in `FirmDetailDto` when their
   lane arrives; the visibility decision that will govern them already exists.
 

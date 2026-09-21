@@ -107,8 +107,20 @@ The lock key is a stable literal, not a hash of a version or a deployment, becau
 "overlapping deployments serialize on the same key" requires two different releases to
 collide on it. It is deliberately not the migration runner's key.
 
-Only the canary source exists today. A later lane adds its source to the array and
-composes its key with `jobIdempotencyKey`; it does not touch the pass.
+A lane adds its source to `workerDueWorkSources()` in `apps/worker/src/bootstrap/main.ts`
+and composes its key with `jobIdempotencyKey`; it does not touch the pass. The registered
+list and the table in `docs/greenfield/processes.md` are compared by
+`apps/worker/test/sourceRegistry.test.ts`, in both directions, because three domain
+functions once sat exported and uncalled for a week with every package's suite green
+(`docs/decisions/g15-the-worker-drains-what-the-lanes-left.md`).
+
+Most sources materialize unconditionally and let their handler no-op — `retention.batch`
+writes a "retained, deleted nothing" ledger row eleven times a workspace a day on
+purpose. `terminal-stop` is the exception: it asks what is outstanding first and inserts
+nothing for a workspace that owes nothing, because a job a minute per workspace would be
+a queue of no-ops and an "oldest runnable job" figure that meant nothing. Its key is the
+head of each stream it drains, so an exhausted job keeps its key and waits for the
+audited requeue rather than filling the dead-job list with one row a minute.
 
 ## Counters, heartbeats, the canary
 

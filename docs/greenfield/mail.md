@@ -180,6 +180,21 @@ in two workspaces. Guessing would deliver one workspace's mail into the other's
 history, which is the worst failure this system has. The refusal is loud and the
 operator disconnects one of them.
 
+## Mailbox lifecycle: the thirty-day rule
+
+A mailbox that has sent automated mail in the last thirty days is not disconnected and
+its Google authorization is not revoked. The reason is 12.6's reply-only opt-out: a
+prospect stops FSS by replying, the reply arrives in the mailbox that wrote to them,
+and a mailbox nobody is syncing is a mailbox in which a "stop" sits unread. Keeping the
+connection alive for thirty days after the last automated send is how the workspace
+makes sure a late stop is still received and honoured. This is the workspace's own
+operating rule, decided by David on 21 September 2026, and not a reading of anybody
+else's requirement. It is a rule people follow and not yet a guard the software
+enforces: nothing in this release refuses a disconnect or a revoke on those grounds,
+and the built guard — a refusal on the disconnect route, with an admin override that is
+audited — belongs to a later lane. Until then it lives here, in
+`docs/greenfield/release.md` section 6, and nowhere else.
+
 ## What is deliberately not here
 
 * **Sending.** G7-2 added it: the at-most-once fence, the reputation ramp and the

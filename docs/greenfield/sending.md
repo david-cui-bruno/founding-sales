@@ -88,12 +88,31 @@ both mean the same thing about Gmail. 12.5: "Neither choice ever releases the sa
 for resend." What the choice decides is what the *sequence* does, and that is G8's to
 read from `readOutboundOutcome`.
 
-### 6. The cap is computed, the counter is conditional
+### 6. The cap is computed, the counter is conditional, and the day has to be closed
 
 12.7's ramp table is a function of one stored number — healthy sending days — so a
 schedule change governs every mailbox the moment it lands. `admin_daily_cap` only
 lowers and `raised_daily_cap` only raises, to at most 75, under a database ceiling of
 100.
+
+That number only grows if somebody closes the day, and until lane G15 nobody did.
+`closeSendDay`, `listDaysToClose`, `recordDaySignal` and `countDirectSend` were built
+and tested here with no caller anywhere, so `healthy_sending_days` was zero for every
+mailbox that had ever existed, the cap was five a day for ever, and the three counters
+`rampHealthFailure` judges a day on were always zero. This rule used to read as though
+the ramp advanced by itself; it does not, and the thing that advances it is
+`outbound.close_send_day`, materialized by `sendDayCloseSource` once the workspace's own
+business date has moved past an open day. The signals are recorded where they are
+learned: a bounce and an opt-out in `mail/effects.ts`, a confirmed opt-out in
+`classification/confirmations.ts`, a provider error in `outbound/send.ts`, and every
+imported outgoing message that has no fence in `mail/pipeline.ts`. See
+`docs/decisions/g15-the-worker-drains-what-the-lanes-left.md`.
+
+The thresholds `rampHealthFailure` uses — `RAMP_MAX_BOUNCE_RATE = 0.05`,
+`RAMP_MAX_OPT_OUT_RATE = 0.1`, `RAMP_RATE_FLOOR = 20`, `RAMP_SMALL_DAY_TOLERANCE = 1` —
+are numbers the specification does not give. David confirmed them unchanged on
+21 September 2026; they are his values, not a lane's invention, and changing them is his
+decision to make.
 
 The day's counter is taken by `UPDATE ... WHERE automated_sent < cap`, in one
 statement. Read-compare-write would let two workers each read four, each decide four is
