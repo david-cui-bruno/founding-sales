@@ -23,9 +23,23 @@ variables {
 run "production_defaults_are_recoverable_and_protected" {
   command = plan
 
+  # By major, and the default is the bare major.
+  #
+  # `"16.8"` was the default until David's fourth credentialed rehearsal was
+  # refused `InvalidParameterCombination: Cannot find version 16.8 for postgres`
+  # — AWS had retired it. `startswith(…, "16")` alone was true of `"16.8"` and
+  # would be true of the next retired minor, so the default itself is asserted:
+  # a pinned minor is a value only a real apply can falsify, and an apply is the
+  # most expensive place in this release to learn anything.
+  # `docs/decisions/g16-postgresql-is-pinned-by-major.md`.
   assert {
-    condition     = aws_db_instance.main.engine == "postgres" && startswith(aws_db_instance.main.engine_version, "16")
-    error_message = "The design targets PostgreSQL 16."
+    condition     = aws_db_instance.main.engine == "postgres" && aws_db_instance.main.engine_version == "16"
+    error_message = "The engine version default is the bare major \"16\". A pinned minor retires on AWS's schedule and the failure arrives during an apply."
+  }
+
+  assert {
+    condition     = aws_db_instance.main.auto_minor_version_upgrade && aws_db_instance.main.allow_major_version_upgrade == false
+    error_message = "A major-only engine_version is only diff-free because auto_minor_version_upgrade is on: the provider treats the configured value as a prefix of the running one. Majors never move on their own."
   }
 
   assert {
@@ -157,4 +171,51 @@ run "the_storage_key_is_the_module_s_own_customer_key" {
     condition     = aws_db_instance.main.kms_key_id == aws_kms_key.database.arn
     error_message = "Storage must be encrypted with the module's customer key, not the AWS-managed key."
   }
+}
+
+# A minor may still be pinned, and a different major may not (G16).
+#
+# ## The vacuous-pass trap
+#
+# Asserting only the default would pass against a module that hard-coded "16"
+# and ignored the variable, and asserting only that a bad value is refused would
+# pass against a validation that refused everything. Closed by taking a pinned
+# minor through to the instance and by refusing a major the design does not
+# target, in the same file as the default.
+run "a_minor_may_be_pinned_deliberately" {
+  command = plan
+
+  variables {
+    engine_version = "16.15"
+  }
+
+  assert {
+    condition     = aws_db_instance.main.engine_version == "16.15"
+    error_message = "A minor stays pinnable: a restore drill may need to hold an instance at the source's exact version."
+  }
+
+  assert {
+    condition     = aws_db_parameter_group.main.family == "postgres16"
+    error_message = "The parameter group family follows the major, whichever minor is named."
+  }
+}
+
+run "another_major_is_a_spec_change_and_is_refused" {
+  command = plan
+
+  variables {
+    engine_version = "17"
+  }
+
+  expect_failures = [var.engine_version]
+}
+
+run "a_version_that_is_not_a_version_is_refused" {
+  command = plan
+
+  variables {
+    engine_version = "16.x"
+  }
+
+  expect_failures = [var.engine_version]
 }
