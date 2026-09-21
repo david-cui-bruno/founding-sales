@@ -22,6 +22,7 @@ export { databaseNow } from './clock.ts';
 
 export {
   listApplicableHolds,
+  listHoldsByReason,
   openHold,
   releaseHold,
   releaseHoldsOfEvent,
