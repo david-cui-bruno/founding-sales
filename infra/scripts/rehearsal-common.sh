@@ -286,6 +286,12 @@ rehearsal_tolerate_absent() {
 # that flag and "run rehearsal Terraform as some other principal" is the check below.
 REHEARSAL_NO_ASSUME_VAR='-var=assume_deployment_role=false'
 
+# The account of the verified session, set by rehearsal_require_deployment_session. The
+# journal module names its bucket `<prefix>-suppression-journal-<account>`, so a
+# teardown that has to name that bucket reads the account from here rather than
+# asking STS a second time. Empty until the check has passed; empty in a dry run.
+REHEARSAL_SESSION_ACCOUNT=''
+
 # Refuse to continue unless this session *is* an assumed-role session of the named
 # rehearsal role.
 #
@@ -337,6 +343,8 @@ rehearsal_require_deployment_session() {
     return 1
   fi
 
+  REHEARSAL_SESSION_ACCOUNT="${identity#arn:*:sts::}"
+  REHEARSAL_SESSION_ACCOUNT="${REHEARSAL_SESSION_ACCOUNT%%:*}"
   rehearsal_log "the session is an assumed-role session of $role, so ${REHEARSAL_NO_ASSUME_VAR} is safe"
   return 0
 }

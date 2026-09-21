@@ -312,9 +312,22 @@ aws s3api put-bucket-policy --bucket "$BUCKET" --policy file:///tmp/journal-orph
 ```
 
 Then Actions → *Greenfield release rehearsal* → `stage = teardown`, `run_suffix =
-202609211659`, and any two well-formed digests that differ. The destroy removes the
-bucket and the four resources that run's state holds, and the post-run guard says
-production was untouched.
+202609211659`, and any two well-formed digests that differ. On 21 September that run
+(Actions 35649752231) destroyed the four resources the state held and the post-run guard
+said production was untouched, but the bucket stood: the state never held the bucket
+itself, and the teardown script of that commit named the journal bucket without the
+account-id suffix the module appends, so its emptying step looked at a bucket that does
+not exist and said "already absent". The finish was by hand, with an administrator's
+session: `aws s3api delete-bucket` on the empty bucket (Object Lock does not prevent
+deleting an empty bucket), then `aws s3api delete-object` on the run's now-empty state
+object. From the commit carrying this paragraph the teardown names the bucket with the
+account of its verified session and, after the destroy, deletes the bucket by name if
+the destroy left it (`journal_bucket=gone` in `teardown.txt`).
+
+What every teardown leaves, by design, is the run's empty state object under
+`fss/greenfield/rehearsal/<prefix>/terraform.tfstate`: Terraform's S3 backend does not
+delete state on destroy. It is a small file; delete it by hand when tidying, and nothing
+else in that bucket.
 
 The alternative is `create` then `teardown` at a commit carrying the journal change,
 which also works — the apply rewrites the policy from the module — but it creates a whole

@@ -912,6 +912,9 @@ case "$1 $2" in
   "s3api list-object-versions")
     echo "An error occurred (NoSuchBucket) when calling the ListObjectVersions operation: no such bucket" >&2
     exit 254 ;;
+  "s3api delete-bucket")
+    echo "An error occurred (NoSuchBucket) when calling the DeleteBucket operation: no such bucket" >&2
+    exit 254 ;;
 esac
 echo "unexpected: $*" >&2; exit 9`;
 
@@ -974,9 +977,12 @@ echo "unexpected: $*" >&2; exit 9`;
     expect(output).toContain('already absent (ClusterNotFoundException)');
     expect(output).toContain('already absent (DBInstanceNotFound)');
     expect(output).toContain('already absent (NoSuchBucket)');
-    expect(output).toContain('4/4 destroying the rehearsal root');
+    expect(output).toContain('4/5 destroying the rehearsal root');
     expect(output).toContain('created nothing to destroy');
-    expect(readFileSync(join(reports, 'teardown.txt'), 'utf8')).toContain('destroyed=nothing_created');
+    expect(output).toContain('5/5 removing the journal bucket if the destroy left it');
+    const report = readFileSync(join(reports, 'teardown.txt'), 'utf8');
+    expect(report).toContain('destroyed=nothing_created');
+    expect(report).toContain('journal_bucket=gone');
   });
 
   it('still destroys when there is something in the state, so tolerance is not silence', () => {
@@ -990,6 +996,42 @@ echo "unexpected: $*" >&2; exit 9`;
     expect(code, output).toBe(0);
     expect(output).toContain('destroy: destroy -auto-approve');
     expect(readFileSync(join(reports, 'teardown.txt'), 'utf8')).toContain('destroyed=true');
+  });
+
+  it('names the journal bucket with the account of the verified session, and deletes it when the destroy left it', () => {
+    // Actions 35649752231 (21 September 2026): the script named the bucket without the
+    // account-id suffix the module appends, listed a bucket that does not exist, was told
+    // NoSuchBucket, and the real bucket outlived a destroy whose state never held it.
+    // Every call is recorded so the order can be checked: the bucket is deleted after the
+    // destroy, never before it.
+    const record = join(mkdtempSync(join(tmpdir(), 'fss-teardown-record-')), 'calls');
+    const { code, output, reports } = teardownWorld({
+      aws: [
+        `echo "aws $*" >> '${record}'`,
+        'case "$*" in',
+        `  *list-object-versions*) echo '{"Objects": []}' ;;`,
+        `  *list-tasks*|*describe-db-snapshots*) echo '[]' ;;`,
+        `  *delete-db-instance*) echo 'An error occurred (DBInstanceNotFound) when calling the DeleteDBInstance operation' >&2; exit 254 ;;`,
+        `  *) echo '{}' ;;`,
+        'esac',
+      ].join('\n'),
+      terraform: [
+        `echo "terraform $*" >> '${record}'`,
+        'if [ "$1" = "state" ]; then echo "module.stack.module.journal.aws_s3_bucket_policy.journal"; else echo "destroy: $*"; fi',
+      ].join('\n'),
+    });
+
+    expect(code, output).toBe(0);
+    const calls = readFileSync(record, 'utf8').split('\n');
+    const bucket = 'fss-rh-nothing-suppression-journal-123456789012';
+    expect(calls.filter(call => call.includes(`--bucket ${bucket} `) || call.endsWith(`--bucket ${bucket}`)).length, calls.join('\n')).toBeGreaterThan(0);
+    // The old name, without the account, never appears.
+    expect(calls.filter(call => /suppression-journal(\s|$)/.test(call))).toEqual([]);
+    const destroyAt = calls.findIndex(call => call.startsWith('terraform destroy'));
+    const deleteAt = calls.findIndex(call => call.includes(`s3api delete-bucket --bucket ${bucket}`));
+    expect(destroyAt, calls.join('\n')).toBeGreaterThan(-1);
+    expect(deleteAt, calls.join('\n')).toBeGreaterThan(destroyAt);
+    expect(readFileSync(join(reports, 'teardown.txt'), 'utf8')).toContain('destroyed=true journal_bucket=gone');
   });
 
   it('refuses to destroy without the file the create step wrote, rather than fail on a missing variable', () => {
@@ -1041,6 +1083,7 @@ case "$1 $2" in
     echo "An error occurred (DBSnapshotNotFound) when calling the DeleteDBSnapshot operation: gone" >&2
     exit 254 ;;
   "s3api list-object-versions") echo '{"Objects": null}' ; exit 0 ;;
+  "s3api delete-bucket") exit 0 ;;
 esac
 echo "unexpected: $*" >&2; exit 9`,
       terraform: 'echo "No state file was found!" >&2; exit 1',
@@ -1175,8 +1218,8 @@ describe('Appendix G 39: the refusal is symmetric, and the wrapper enforces it p
     // A running task holds an elastic network interface in a subnet Terraform is
     // about to delete; the destroy then waits on the subnet and times out, and the
     // report blames the subnet.
-    const stopAt = teardown.indexOf('0/4 stopping any one-off task still running');
-    const destroyAt = teardown.indexOf('4/4 destroying the rehearsal root');
+    const stopAt = teardown.indexOf('0/5 stopping any one-off task still running');
+    const destroyAt = teardown.indexOf('4/5 destroying the rehearsal root');
     expect(stopAt).toBeGreaterThan(-1);
     expect(destroyAt).toBeGreaterThan(stopAt);
     // And every ARN is classified before it is addressed, so another run's task — or
