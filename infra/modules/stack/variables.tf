@@ -385,6 +385,25 @@ variable "journal_object_lock_retention_days" {
   default     = 3650
 }
 
+variable "journal_administrative_principal_arns" {
+  description = <<-EOT
+    IAM role ARNs exempted from every `Deny` in the suppression journal's
+    bucket policy except the transport one, so that the principal which created
+    the bucket can remove it. Empty by default.
+
+    The rehearsal root passes its own deployment role, because a rehearsal
+    environment has to be able to disappear and on 21 September 2026 it could
+    not: the policy denied `s3:DeleteBucketPolicy` and
+    `s3:PutBucketObjectLockConfiguration` to `Principal *`, so the teardown of
+    Actions run 35628963637 left the bucket, its policy, its object lock, its
+    versioning and its public-access block behind. The production root passes
+    nothing unless David sets it.
+    `docs/decisions/g16-the-journal-deny-exempts-its-deployer.md`.
+  EOT
+  type        = list(string)
+  default     = []
+}
+
 variable "alert_emails" {
   description = "Addresses that receive alerts, delivered by SNS independently of any Gmail grant."
   type        = list(string)

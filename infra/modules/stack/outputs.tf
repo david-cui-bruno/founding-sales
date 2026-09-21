@@ -207,6 +207,21 @@ output "journal_object_lock" {
   }
 }
 
+output "journal_policy_json" {
+  description = <<-EOT
+    The rendered suppression-journal bucket policy, so a root's tftest can read
+    every statement rather than trust that the module was called correctly. It
+    is what says whether this environment's deployer can tear its own journal
+    down, which is the question the fourth credentialed rehearsal answered the
+    hard way (`infra/roots/*/tests/journal_teardown.tftest.hcl`).
+
+    A bucket policy is public information: it names roles and actions and holds
+    no value. Every statement references the bucket ARN, which is computed, so
+    this output is unknown until apply — in a real plan as in a mocked one.
+  EOT
+  value       = module.journal.policy_json
+}
+
 output "alert_topic_arn" {
   description = "Alert topic ARN."
   value       = module.alerts.topic_arn

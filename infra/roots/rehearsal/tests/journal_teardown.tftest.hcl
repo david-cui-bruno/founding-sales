@@ -39,6 +39,13 @@
 # exempting statements is compared with the count of non-transport denies so a
 # statement that quietly stopped being a `Deny` cannot make the first assertion
 # true by disappearing.
+#
+# The other two halves of this deliverable are elsewhere, because the rehearsal
+# root passes the exemption as a literal and has no variable a run block could
+# vary: `infra/modules/journal/tests/object_lock.tftest.hcl` has the empty-list
+# and merge cases against the module, and
+# `infra/roots/production/tests/journal_teardown.tftest.hcl` has production's
+# default of nobody and its opt-in.
 
 mock_provider "aws" {
   override_during = apply
@@ -171,26 +178,5 @@ run "every_deny_but_the_transport_one_exempts_this_runs_deployment_role" {
   assert {
     condition     = module.stack.destroyable
     error_message = "A rehearsal journal is force-destroyable; the policy exemption alone would not empty it."
-  }
-}
-
-# The same root, told that nobody is administrative. This is production's
-# posture, asserted here as well as in the production root, because the
-# rehearsal root is where the non-empty list is passed and a module that ignored
-# the variable would pass the run above and this one too.
-run "an_empty_administrative_list_exempts_nobody" {
-  command = apply
-
-  variables {
-    journal_administrative_principal_arns = []
-  }
-
-  assert {
-    condition = alltrue([
-      for statement in jsondecode(module.stack.journal_policy_json).Statement :
-      !can(statement.Condition.ArnNotEquals)
-      if statement.Effect == "Deny"
-    ])
-    error_message = "With no administrative principal named, no deny carries an exemption at all: `\"Condition\": {}` is a statement that claims one and has none."
   }
 }

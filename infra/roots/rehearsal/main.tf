@@ -21,6 +21,13 @@ locals {
   # environment's webhook. Derived from the rehearsal hostname, exactly as
   # production derives its own: a property of the API's route, not of Google.
   push_audience = "https://${var.api_hostname}${var.gmail_push_path}"
+
+  # The role this run's apply, and therefore its teardown, acts as. The same
+  # expression the provider's `assume_role` block builds, and the same ARN
+  # `aws:PrincipalArn` carries for an assumed-role session of it: that key is
+  # the role's ARN, never the session's, which is why the journal's exemption
+  # can be an exact `ArnNotEquals` rather than a pattern.
+  deployment_role_arn = "arn:aws:iam::${var.aws_account_id}:role/${var.deployment_role_name}"
 }
 
 module "stack" {
@@ -78,6 +85,17 @@ module "stack" {
 
   journal_object_lock_mode           = "GOVERNANCE"
   journal_object_lock_retention_days = var.journal_object_lock_retention_days
+
+  # The run's own deployer is exempted from every journal deny but the transport
+  # one, because a rehearsal environment has to be able to disappear and on 21
+  # September it could not: the fourth credentialed run (Actions 35628963637)
+  # was refused `s3:DeleteBucketPolicy` and
+  # `s3:PutBucketObjectLockConfiguration` by the bucket's own policy, and its
+  # `--bypass-governance-retention` emptying step could never have worked
+  # either. Not a variable: there is no value a caller can pass that makes a
+  # rehearsal journal un-removable or that exempts anybody else.
+  # `docs/decisions/g16-the-journal-deny-exempts-its-deployer.md`.
+  journal_administrative_principal_arns = [local.deployment_role_arn]
 
   alert_emails         = var.alert_emails
   log_retention_days   = var.log_retention_days

@@ -119,6 +119,21 @@ resource "aws_s3_bucket_ownership_controls" "journal" {
 locals {
   bucket_resources = [aws_s3_bucket.journal.arn, "${aws_s3_bucket.journal.arn}/*"]
 
+  # The exemption the root names, AND-ed into each deny's own condition.
+  #
+  # Conditions inside one statement are conjunctive, so a deny carrying both
+  # `ArnNotLike` (not a writer) and `ArnNotEquals` (not an administrator) fires
+  # only for a principal that is neither. With the list empty this is `{}` and
+  # the key is omitted from the statement entirely: `"Condition": {}` is a
+  # statement that claims a condition and has none, and a reader of a production
+  # bucket policy should see no exemption at all rather than an empty one.
+  #
+  # `DenyUnencryptedTransport` never takes it. A teardown reaches S3 over TLS
+  # like everything else, and an exemption there would be a hole with no use.
+  administrative_exemption = length(var.administrative_principal_arns) == 0 ? {} : {
+    ArnNotEquals = { "aws:PrincipalArn" = var.administrative_principal_arns }
+  }
+
   policy_document = {
     Version = "2012-10-17"
     Statement = concat(
@@ -131,7 +146,7 @@ locals {
           Resource  = local.bucket_resources
           Condition = { Bool = { "aws:SecureTransport" = ["false"] } }
         },
-        {
+        merge({
           Sid       = "DenyAnyDeletionOrLockWeakening"
           Effect    = "Deny"
           Principal = { AWS = ["*"] }
@@ -148,14 +163,16 @@ locals {
             "s3:PutObjectRetention",
           ]
           Resource = local.bucket_resources
-        },
+          },
+          length(local.administrative_exemption) == 0 ? {} : { Condition = local.administrative_exemption },
+        ),
         {
           Sid       = "DenyWritesFromAnyoneButTheTaskRoles"
           Effect    = "Deny"
           Principal = { AWS = ["*"] }
           Action    = ["s3:PutObject"]
           Resource  = ["${aws_s3_bucket.journal.arn}/*"]
-          Condition = { ArnNotLike = { "aws:PrincipalArn" = local.writer_principal_patterns } }
+          Condition = merge({ ArnNotLike = { "aws:PrincipalArn" = local.writer_principal_patterns } }, local.administrative_exemption)
         },
         {
           Sid       = "DenyReadsFromAnyoneButTheTaskRoles"
@@ -163,7 +180,7 @@ locals {
           Principal = { AWS = ["*"] }
           Action    = ["s3:GetObject", "s3:GetObjectVersion", "s3:ListBucket", "s3:ListBucketVersions"]
           Resource  = local.bucket_resources
-          Condition = { ArnNotLike = { "aws:PrincipalArn" = local.reader_principal_patterns } }
+          Condition = merge({ ArnNotLike = { "aws:PrincipalArn" = local.reader_principal_patterns } }, local.administrative_exemption)
         },
         {
           Sid       = "AllowTheTaskRolesToAppendEvents"

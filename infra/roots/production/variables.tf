@@ -274,6 +274,29 @@ variable "journal_object_lock_retention_days" {
   default     = 3650
 }
 
+variable "journal_administrative_principal_arns" {
+  description = <<-EOT
+    IAM role ARNs exempted from every `Deny` in the production suppression
+    journal's bucket policy except the transport one. **Empty, and it stays
+    empty until David says otherwise.**
+
+    The rehearsal root passes its own deployment role, because a rehearsal
+    environment has to be able to disappear. Production is the opposite case:
+    decision 4 of 21 September 2026 is GOVERNANCE mode with a ten-year
+    retention, and removing the journal is an act of the account root rather
+    than something a release could do by mistake. The variable exists so that
+    the opt-in is one `-var` and a line in a plan David reads, not a change to
+    a module. `docs/decisions/g16-the-journal-deny-exempts-its-deployer.md`.
+
+    The production deployment role is separately denied `s3:GetObject*` and
+    `s3:BypassGovernanceRetention` by its own policy
+    (`infra/policies/deployment-role-policy.json.tftpl`), so naming it here
+    would not on its own let it empty the bucket either.
+  EOT
+  type        = list(string)
+  default     = []
+}
+
 variable "business_time_zone" {
   description = "Workspace business zone for the Today snapshot date."
   type        = string
