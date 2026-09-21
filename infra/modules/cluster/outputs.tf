@@ -93,6 +93,25 @@ output "operations_task_definition_family" {
   value       = aws_ecs_task_definition.operations.family
 }
 
+output "drill_task_definition_family" {
+  description = "Family name of the drill task definition."
+  value       = aws_ecs_task_definition.drill.family
+}
+
+output "one_off_task_families" {
+  description = <<-EOT
+    The three one-off task definition families, which are names rather than
+    ARNs and are therefore known at plan time. The roots assert them: an ARN
+    is unknown until an apply, and a test that could only run against a real
+    account is a test nobody runs.
+  EOT
+  value = [
+    aws_ecs_task_definition.migration.family,
+    aws_ecs_task_definition.operations.family,
+    aws_ecs_task_definition.drill.family,
+  ]
+}
+
 output "drill_task_definition_arn" {
   description = "Task definition `fss drill` runs under. Its own identity: the journal and the migration credential, which neither of the other two may hold together."
   value       = aws_ecs_task_definition.drill.arn

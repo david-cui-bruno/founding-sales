@@ -265,6 +265,8 @@ output "resource_names" {
       module.cluster.worker_service_name,
       module.cluster.api_task_role_name,
       module.cluster.worker_task_role_name,
+      module.cluster.migration_task_role_name,
+      module.cluster.drill_task_role_name,
       module.database.instance_identifier,
       module.database.subnet_group_name,
       module.database.parameter_group_name,
@@ -279,5 +281,11 @@ output "resource_names" {
     values(module.secrets.secret_names),
     values(module.observability.log_group_names),
     module.alerts.alarm_names,
+    module.cluster.one_off_task_families,
   )
+}
+
+output "one_off_task_families" {
+  description = "The three one-off task definition families: migration, operations, drill. Names, so a root test can assert them at plan time."
+  value       = module.cluster.one_off_task_families
 }

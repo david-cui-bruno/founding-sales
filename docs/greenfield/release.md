@@ -345,7 +345,7 @@ These are in the order they unblock each other. Doing 5.3 before 5.2 will not wo
 
 ### 5.1 The secret values, from stdin
 
-Terraform created six empty entries and never holds a value. Fill them:
+Terraform created eight empty entries and never holds a value. Fill them:
 
 ```bash
 aws secretsmanager put-secret-value --secret-id fss-prod/google-gmail-oauth-client \
@@ -354,6 +354,10 @@ aws secretsmanager put-secret-value --secret-id fss-prod/google-gmail-oauth-clie
 ```
 
 Repeat for `google-oidc-client`, `session-signing-key`, `device-credential-pepper`, `llm-classifier-api-key` and `research-provider-credentials`. The two Google entries take the two-field JSON in section 1.6 and nothing else; the rest are single values.
+
+**And the two database entries, which come first — before section 4.1, because the migration task cannot start without them.** `migration-database` takes the RDS-managed master user's JSON copied whole; `app-runtime-database` takes `{"username":"app_runtime_login","password":"<openssl rand -base64 48>","host":"<endpoint host>","port":5432,"dbname":"<database>"}`. `infra-apply-runbook.md` 3.3 has the two commands and the reason the master credentials are what goes in the first one: migration 0001 creates `app_runtime` and `migration` as NOLOGIN group roles, so on a database that has never been migrated there is no other login role that can run DDL and none can be created — the database is private. `fss admin database-users ensure` makes the runtime login user and grants `migration` to the master, so every later `fss migrate` passes its membership check for a reason.
+
+After G12h **nothing in the cluster can read the RDS-managed master secret.** The two services resolve `app-runtime-database`; the migration task resolves `migration-database`; neither can resolve the other's.
 
 `file:///dev/stdin` rather than `--secret-string '<value>'` so the value never reaches shell history or the process table. `session-signing-key` and `device-credential-pepper` are **base64 bytes, at least 32 of them, never PEM** — the API refuses PEM by name, because a PEM armour line in a repository is flagged by the history scanner in every commit it ever appeared in:
 
@@ -491,6 +495,53 @@ The rehearsal workflow was dispatched for the first time on 21 September 2026 (A
 - *"The dry run prints the plan the rehearsal would run."* It did not. The production-inventory read happens only in the credentialed branches of `rehearsal-prefix-guard.sh`, so the dry run never printed it and never judged it — and the rehearsal's own guard refused it on the first real attempt. Fixed: the read is printed in dry mode, and the printed plan is re-scanned by the same guard on every pull request (section 3, step 3).
 - *"Teardown always runs."* It ran and stopped at its first step, because a run that created nothing has no restored instance to delete. Everything after it — the object-locked bucket, the root, the report — was skipped. Fixed: section 3, step 11.
 - The state key, the backend and the KMS key were never exercised: the run never reached `terraform init`. Everything in 8.1 still applies.
+
+### 8.0a What G12h changed, and what it could not test
+
+The first credentialed run stopped before anything was created, and reading the
+scripts in the order the workflow calls them found three things that no offline gate
+could see (the decision record of 21 September, section 2). All three are now closed
+in the plan and none has run against AWS:
+
+- **Nothing in deployment ever ran a migration.** The step was named "migrate, then
+  deploy the worker, then the API" and redeployed two ECS services. Both binaries
+  refuse to start unless the applied schema version is exactly the range they declare,
+  so on a fresh database that was two services that would never start. Closed by
+  `infra/scripts/release-deploy.sh` and the `<prefix>-migration` task definition.
+- **The drill called a command line that did not exist.** G12g wrote it; G12h runs it
+  as one-off ECS tasks, because the database is private and the worker image is the
+  only thing inside the VPC that can reach it.
+- **The release suite was pointed at a database a GitHub runner cannot reach.** It now
+  runs against the job's own `postgres:16` service container, which is what it was
+  built for, and the step that assembled a URL from the rehearsal's outputs is gone.
+
+Watch these, in this order, on the next run:
+
+1. **`secretsmanager:PutSecretValue` on `fss-rh-*`.** The rehearsal fills its own two
+   database entries (section 3, step 5) because it is unattended. If `fss-rh-deploy`
+   does not hold that action the run stops at "Fill the two database entries" with an
+   `AccessDenied`, and the fix is one statement scoped to `arn:aws:secretsmanager:*:*:secret:fss-rh-*`.
+   Production never needs it: David fills both entries by hand.
+2. **Whether the migration task can reach the database at all.** It runs in the public
+   subnets with `assignPublicIp=ENABLED` under the worker security group, which the
+   database security group already admits on 5432 and which admits nothing inbound.
+   That is the same path the worker service uses, so it should work for the same
+   reason — but no task has ever been launched into this VPC. A failure here looks
+   like a task that starts, cannot connect, and exits 21 with `fss_failed`.
+3. **Whether `fss migrate` accepts the RDS master user.** It refuses unless the
+   connected role is a member of `migration`, with an exception only while that role
+   does not exist — which is true on the very first run and false afterwards.
+   `fss admin database-users ensure` grants the membership immediately after, so the
+   second release is the one that tests it. If it refuses with `not_migration_role` on
+   a later release, the grant did not happen and `ensure`'s report says so.
+4. **Whether the task's log stream carries the report.** The drill's answer comes back
+   through CloudWatch, not through a file (`docs/decisions/g12h-the-report-comes-back-in-the-log.md`).
+   If `awslogs` truncates or reorders a large JSON object the capture will fail with
+   "the task printed no JSON report on stdout", which is a legible failure and a real
+   possibility for the step 8 report.
+5. **How long the whole thing takes now.** Every database step costs about a minute of
+   Fargate startup, and there are five of them in a deploy plus two in the drill. The
+   180-minute job timeout was already dominated by the Multi-AZ restore.
 
 ### 8.1 Still unverified
 

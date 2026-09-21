@@ -132,6 +132,63 @@ run "no_name_production_claims_can_be_a_rehearsal_name" {
 # `linux/arm64` images. Tfvars stay ignored; the answers are the defaults, and this run
 # is what makes them a fact somebody would have to edit a test to change. See
 # docs/decisions/g12c-the-topology-answers-are-root-defaults.md.
+# G12h. Production is bootstrapped once, ever, and every apply after that runs the
+# services. So the default is `false` here and `true` in the rehearsal root, and the
+# flag is a value an operator passes rather than a state nobody can see.
+run "production_runs_its_services_unless_an_operator_says_this_is_a_bootstrap" {
+  command = plan
+
+  assert {
+    condition     = module.stack.deployment_plan.bootstrap == false
+    error_message = "An ordinary production apply is not a bootstrap; passing true scales both services to zero, which is a real outage."
+  }
+
+  assert {
+    condition = (module.stack.deployment_plan.api.planned_desired_count == module.stack.deployment_plan.api.declared_desired_count
+    && module.stack.deployment_plan.worker.planned_desired_count == module.stack.deployment_plan.worker.declared_desired_count)
+    error_message = "Outside a bootstrap the plan and the declaration are the same number."
+  }
+
+  # The three one-off task definitions exist in production too, so the rehearsal is a
+  # copy of this rather than of something else. `fss drill` is never launched by a
+  # production release; it is here because the two environments must be the same
+  # shape, which is what makes rehearsing worth anything.
+  assert {
+    condition     = join(",", module.stack.one_off_task_families) == "fss-prod-migration,fss-prod-operations,fss-prod-drill"
+    error_message = "Production carries the same three one-off task definitions the rehearsal drills against."
+  }
+
+  assert {
+    condition = (module.stack.task_network_configuration.assign_public_ip == "ENABLED"
+    && module.stack.task_network_configuration.inbound_rule_count == 0)
+    error_message = "A one-off task needs a public address because there is no NAT gateway, and that is only safe because the worker security group admits nothing inbound."
+  }
+}
+
+run "a_production_bootstrap_creates_both_services_at_zero" {
+  command = plan
+
+  variables {
+    bootstrap = true
+  }
+
+  # A fresh production database has no schema and both binaries refuse to start
+  # unless the applied version is exactly the range they declare. The migration task
+  # cannot be launched until the cluster exists, so the only order that works is:
+  # create at zero, migrate, verify, scale.
+  assert {
+    condition = (module.stack.service_shape.api.desired_count == 0
+    && module.stack.service_shape.worker.desired_count == 0)
+    error_message = "The first apply of a fresh production environment creates both services at desired count zero."
+  }
+
+  assert {
+    condition = (module.stack.deployment_plan.api.declared_desired_count == 2
+    && module.stack.deployment_plan.worker.declared_desired_count == 1)
+    error_message = "The declared counts survive the bootstrap; they are what release-deploy.sh scales to."
+  }
+}
+
 run "the_topology_answers_are_the_production_defaults" {
   command = plan
 

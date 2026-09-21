@@ -352,7 +352,14 @@ variable "enable_waf" {
 # ---------------------------------------------------------------------------
 
 variable "secret_names" {
-  description = "Logical names of the Secrets Manager entries, each created empty."
+  description = <<-EOT
+    Logical names of the Secrets Manager entries, each created empty.
+
+    The last two are the database identities (G12h). They are not optional:
+    `infra/modules/secrets` refuses a list without them, because the cluster's
+    execution-role boundary is drawn along them and a caller who dropped one
+    would otherwise get an index error four modules away.
+  EOT
   type        = list(string)
   default = [
     "google-oidc-client",
@@ -361,6 +368,8 @@ variable "secret_names" {
     "device-credential-pepper",
     "llm-classifier-api-key",
     "research-provider-credentials",
+    "migration-database",
+    "app-runtime-database",
   ]
 }
 

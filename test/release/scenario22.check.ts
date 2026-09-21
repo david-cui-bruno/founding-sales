@@ -125,7 +125,7 @@ describe('Appendix G 22: the declared ranges decide, and a non-overlap is the re
 
     // And the policy is written where an operator reads it, not only here.
     const release = readRepositoryFile('docs/greenfield/release.md');
-    expect(release).toContain('stop-during-migration');
+    expect(release).toContain('Stop-during-migration');
     expect(release).toContain('The database never rolls back');
   });
 
@@ -152,6 +152,35 @@ describe('Appendix G 22: the declared ranges decide, and a non-overlap is the re
       /variable "bootstrap"[\s\S]*?default\s*=\s*false/u,
     );
     expect(readRepositoryFile('.github/workflows/greenfield-release.yml')).toContain('-var="bootstrap=true"');
+  });
+
+  /**
+   * The two identity boundaries, asserted here as well as in Terraform.
+   *
+   * `infra/modules/cluster/tests/migration_identity.tftest.hcl` reads them out of the
+   * planned policy documents, which is the real check — but `terraform test` runs in
+   * `infra/scripts/offline-gate.sh` and not in `npm run test:release`, so a mutation
+   * of either line would leave this suite green. Each is a single expression, and
+   * each is the whole of one of David's conditions.
+   */
+  it('keeps the runtime execution roles away from the migration entry', () => {
+    const cluster = readRepositoryFile('infra/modules/cluster/main.tf');
+    expect(cluster).toContain(
+      'runtime_secret_arns = distinct(concat(values(var.secret_arns), [var.app_runtime_database_secret_arn]))',
+    );
+    // Condition 1: what the services may resolve is the application secrets and the
+    // app_runtime entry. Not the migration entry, and not the RDS-managed master
+    // secret, which after G12h nothing in the cluster reads at all.
+    expect(cluster).not.toContain('runtime_secret_arns = distinct(concat(values(var.secret_arns), [var.app_runtime_database_secret_arn, var.migration_database_secret_arn]))');
+    expect(cluster).not.toContain('database_master_secret_arn');
+  });
+
+  it('fixes the drill’s dependency mode in its task definition, not in a caller', () => {
+    const cluster = readRepositoryFile('infra/modules/cluster/main.tf');
+    // Condition 6: reconcile-sent, recover and watch-renew all reach Gmail when
+    // dependencies are live, so a rehearsal that inherited the root's mode would send
+    // real mail. The tool refuses in any other mode; this is the second lock.
+    expect(cluster).toContain('drill_environment = merge(local.worker_environment, { FSS_DEPENDENCIES = "recorded" })');
   });
 
   it('scales to the count the root declares, read from the plan rather than typed', () => {
