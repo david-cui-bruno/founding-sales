@@ -167,6 +167,7 @@ jobs:
           fi
 
       - name: Print the plan every rehearsal step would run
+        id: plan
         env:
           FSS_REHEARSAL_DRY_RUN: '1'
           FSS_REHEARSAL_REPORTS: ${{ runner.temp }}/fss-rehearsal
@@ -175,6 +176,8 @@ jobs:
         run: |
           set -euo pipefail
           prefix=fss-rh-dryrun
+          plan="$RUNNER_TEMP/rehearsal-plan.txt"
+          : > "$plan"
           {
             echo "### Rehearsal plan for $prefix"
             echo ''
@@ -190,8 +193,9 @@ jobs:
             "infra/scripts/rehearsal-prefix-guard.sh $prefix after"; do
             echo "== $step"
             # shellcheck disable=SC2086
-            $step | tee -a "$GITHUB_STEP_SUMMARY"
+            $step | tee -a "$plan" | tee -a "$GITHUB_STEP_SUMMARY"
           done
+          echo "plan=$plan" >> "$GITHUB_OUTPUT"
           # The record is written last, from the reports the steps above produced.
           infra/scripts/rehearsal-release-record.sh "$prefix" \
             "sha256:$(printf 'a%.0s' {1..64})" \
@@ -199,6 +203,41 @@ jobs:
             "$GITHUB_SHA" pass "$FSS_REHEARSAL_REPORTS/release-record.json"
           cat "$FSS_REHEARSAL_REPORTS/release-record.json"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: The production-name guard reads the plan it just printed
+        run: |
+          set -euo pipefail
+          # The refusal `rehearsal_refuse_production_arguments` makes happens at the
+          # moment a command is issued. A command no pull request ever issues — the
+          # production-inventory read, which only the credentialed `before` and `after`
+          # phases make — was therefore first judged on the first credentialed run, and
+          # it refused itself there (Actions 35548888865, `FAIL: a rehearsal command
+          # names a production resource: Key=Name,Values=fss-prod*`).
+          #
+          # So the printed plan is re-read here, by the same guard: every planned
+          # command that names production must be the one exempt read-only inventory
+          # query, and that query must be present — a plan that stopped reading the
+          # inventory would satisfy a search for the absence of a string while quietly
+          # turning "teardown could not address production" back into an assertion.
+          infra/scripts/rehearsal-prefix-guard.sh fss-rh-dryrun plan '${{ steps.plan.outputs.plan }}'
+
+          # And the guard is tested rather than trusted: three plans it must refuse.
+          work="$(mktemp -d "$RUNNER_TEMP/fss-plan-guard.XXXXXX")"
+          printf 'PLAN aws resourcegroupstaggingapi get-resources --tag-filters Key=Name,Values=fss-prod* --output json\n' \
+            > "$work/unmarked.json"
+          printf 'PLAN aws rds delete-db-instance --db-instance-identifier fss-prod-pg # exempt-read-only-production-inventory\n' \
+            > "$work/mutating.json"
+          printf 'PLAN terraform destroy -var=name_prefix=fss-rh-dryrun\n' > "$work/no-read.json"
+          {
+            printf 'PLAN aws resourcegroupstaggingapi get-resources --tag-filters Key=Name --output json | select names beginning fss-prod # exempt-read-only-production-inventory\n'
+            printf 'PLAN terraform destroy -var=name_prefix=fss-prod\n'
+          } > "$work/beside.json"
+          for bad in unmarked mutating no-read beside; do
+            if infra/scripts/rehearsal-prefix-guard.sh fss-rh-dryrun plan "$work/$bad.json" >/dev/null 2>&1; then
+              echo "::error::the plan guard accepted the $bad plan"
+              exit 1
+            fi
+          done
 
       - name: The carry drill skips when there is no cutover watermark
         env:
@@ -452,11 +491,31 @@ jobs:
         run: |
           set -euo pipefail
           origin="https://${{ secrets.FSS_REHEARSAL_API_HOSTNAME }}"
-          age="$(aws cloudwatch get-metric-statistics --namespace FSS \
-            --metric-name CanaryCompletionAgeSeconds --statistics Maximum \
-            --start-time "$(date -u -d '-1 hour' +%Y-%m-%dT%H:%M:%SZ)" \
-            --end-time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --period 300 \
-            --query 'reverse(sort_by(Datapoints,&Timestamp))[0].Maximum' --output text)"
+          # An environment created minutes ago has not run its canary yet, and an empty
+          # `Datapoints` list makes this query print the literal `None`. Passed through,
+          # `Number('None')` is NaN and the smoke check fails with `age=Nones`, which
+          # says nothing about why. So the metric is waited for, briefly, and then named
+          # as the cause — the smoke script still refuses to *skip* the canary, which is
+          # the rule (`SMOKE_CANARY_AGE_NOT_SUPPLIED`); what changes is that a missing
+          # metric reads as a missing metric.
+          age=None
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            age="$(aws cloudwatch get-metric-statistics --namespace FSS \
+              --metric-name CanaryCompletionAgeSeconds --statistics Maximum \
+              --start-time "$(date -u -d '-1 hour' +%Y-%m-%dT%H:%M:%SZ)" \
+              --end-time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --period 300 \
+              --query 'reverse(sort_by(Datapoints,&Timestamp))[0].Maximum' --output text)"
+            case "$age" in
+              ''|None) echo "no CanaryCompletionAgeSeconds datapoint yet (attempt $attempt)"; sleep 60 ;;
+              *) break ;;
+            esac
+          done
+          case "$age" in
+            ''|None)
+              echo "::error::the rehearsal environment published no CanaryCompletionAgeSeconds datapoint in ten minutes. The scheduler never completed a canary, so the smoke check has nothing to judge."
+              exit 1
+              ;;
+          esac
           NODE_OPTIONS="--experimental-transform-types --disable-warning=ExperimentalWarning" \
             node scripts/productionSmoke.mjs --origin "$origin" --canary-age-seconds "$age" --json
 

@@ -168,6 +168,33 @@ const MUTATIONS = [
       'Without the flag the provider asks STS to assume fss-rh-deploy from a session that already is fss-rh-deploy, which needs the role to trust itself and is refused at provider configuration. The failure would only ever be seen inside a credentialed run, so the offline check is the only place it can be caught.',
   },
   {
+    name: "the inventory exemption stops being read-only",
+    file: 'infra/scripts/rehearsal-common.sh',
+    find: '  if [ "$matched" -ne 1 ]; then',
+    replace: '  if false; then',
+    suite: ['run', 'test:release'],
+    because:
+      'The production-inventory read is the one rehearsal command allowed to name production, and the only thing keeping that from being a hole is the check that it is resourcegroupstaggingapi get-resources and nothing else. Remove it and the same function will issue rds delete-db-instance against fss-prod, so scenario 39 has to go red.',
+  },
+  {
+    name: 'the dry run stops reading the plan it printed',
+    file: 'infra/scripts/rehearsal-prefix-guard.sh',
+    find: '    if [ "$offending" -gt 0 ]; then',
+    replace: '    if false; then',
+    suite: ['run', 'test:release'],
+    because:
+      "The first credentialed rehearsal refused its own inventory read, and no pull request could have caught it because the refusal only happens when the command is issued. The plan scan is the offline half; a scan that refuses nothing would let the next self-refusal through to the next credentialed run.",
+  },
+  {
+    name: 'the teardown starts treating every failure as an absence',
+    file: 'infra/scripts/rehearsal-common.sh',
+    find: '    case "$output" in\n      *"($code)"*)',
+    replace: '    case "$output" in\n      *)',
+    suite: ['run', 'test:release'],
+    because:
+      'A teardown has to survive a run that created nothing, and the way it does that is by reading the AWS error code. A tolerance that matched anything would turn an AccessDenied into "already gone" and report a rehearsal environment destroyed while it was still standing and still holding prospect-shaped data.',
+  },
+  {
     name: 'the restore drill stops requiring a baseline to reconstruct',
     file: 'infra/scripts/rehearsal-restore-drill.sh',
     find: '  if [ "$count" -lt 1 ]; then',
