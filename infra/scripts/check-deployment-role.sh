@@ -98,18 +98,41 @@ the identity and the production inventory|sts:GetCallerIdentity,tag:GetResources
 CHECK_TABLE
 )
 
+# Some actions are authorized against a resource type that is not the group's sample, or
+# against no resource at all, and `simulate-principal-policy` reports an implicit deny
+# for a condition that cannot evaluate against the wrong type. The first real run of this
+# check (21 September) reported ec2:CreateRoute denied against a VPC ARN, kms:CreateKey
+# denied against a key ARN, and refused to simulate CloudFront creation together with
+# CloudFront reads. Each override names the resource the action is actually judged on
+# (`-` for none) and the context that statement needs.
+override_for() { # override_for <action> -> "<resource>|<context>" or ""
+  case "$1" in
+    ec2:CreateRoute|ec2:ReplaceRoute|ec2:DeleteRoute|ec2:AssociateRouteTable|ec2:DisassociateRouteTable)
+      printf '%s|%s\n' "arn:aws:ec2:${REGION}:${ACCOUNT}:route-table/rtb-0000000000000000e" "ec2:ResourceTag/NamePrefix=${PREFIX}-example" ;;
+    ec2:CreateVpc|ec2:CreateInternetGateway|kms:CreateKey|cloudfront:CreateDistributionWithTags|cloudfront:CreateDistribution)
+      printf '%s|%s\n' "-" "aws:RequestTag/NamePrefix=${PREFIX}-example" ;;
+    *) printf '\n' ;;
+  esac
+}
+
 if [ "${FSS_CHECK_ROLE_DRY_RUN:-}" = "1" ]; then
   echo "plan: simulate-principal-policy for arn:aws:iam::${ACCOUNT}:role/${ROLE} in the ${PREFIX} namespace"
   while IFS='|' read -r name actions resource context; do
     [ -n "$name" ] || continue
     echo "plan: $name"
-    printf '%s\n' "$actions" | tr ',' '\n' | sed 's/^/plan:   /'
-    if [ "$resource" = '*' ]; then
-      echo "plan:   with no --resource-arns, because these actions take no resource"
-    else
-      echo "plan:   on $resource"
-    fi
-    [ -z "$context" ] || echo "plan:   with $context"
+    IFS=',' read -r -a action_list <<<"$actions"
+    for action in "${action_list[@]}"; do
+      action_resource="$resource"; action_context="$context"
+      override="$(override_for "$action")"
+      if [ -n "$override" ]; then action_resource="${override%%|*}"; action_context="${override#*|}"; fi
+      echo "plan:   $action"
+      if [ "$action_resource" = '*' ] || [ "$action_resource" = '-' ]; then
+        echo "plan:     with no --resource-arns, because these actions take no resource"
+      else
+        echo "plan:     on $action_resource"
+      fi
+      [ -z "$action_context" ] || echo "plan:     with $action_context"
+    done
   done <<<"$CHECK_GROUPS"
   echo "plan: no call was made"
   exit 0
@@ -121,56 +144,66 @@ evaluated=0
 
 while IFS='|' read -r name actions resource context; do
   [ -n "$name" ] || continue
-
-  simulate_arguments=(
-    iam simulate-principal-policy
-    --policy-source-arn "arn:aws:iam::${ACCOUNT}:role/${ROLE}"
-    --query 'EvaluationResults[].[EvalActionName,EvalDecision]'
-    --output text
-  )
-  # A `*` in the resource column means "the API takes no resource", and the way to say
-  # that to `simulate-principal-policy` is to pass no `--resource-arns` at all: the
-  # parameter documents its own default as every resource, and `*` is not documented as
-  # a legal element of the list. Passing it and finding out is the kind of thing that
-  # should not happen in front of an apply.
-  if [ "$resource" != '*' ]; then
-    simulate_arguments+=(--resource-arns "$resource")
-  fi
-  # `--action-names` takes a list; the shell splits the comma-separated column.
-  IFS=',' read -r -a action_list <<<"$actions"
-  simulate_arguments+=(--action-names "${action_list[@]}")
-
-  if [ -n "$context" ]; then
-    entries=()
-    while IFS= read -r entry; do
-      [ -n "$entry" ] || continue
-      entries+=("ContextKeyName=${entry%%=*},ContextKeyType=string,ContextKeyValues=${entry#*=}")
-    done <<<"$(printf '%s\n' "$context" | tr ';' '\n')"
-    simulate_arguments+=(--context-entries "${entries[@]}")
-  fi
-
   echo "== $name"
-  results=$(command "$AWS" "${simulate_arguments[@]}")
-  if [ -z "$(printf '%s' "$results" | tr -d '[:space:]')" ]; then
-    echo "FAIL: the simulation returned no evaluation for: $actions" >&2
-    echo "      An empty answer is not a pass. Check the role name and the CLI credential." >&2
-    exit 1
-  fi
+  # One action per call. `simulate-principal-policy` refuses to evaluate, in one request,
+  # actions that "require different authorization information" (a creation under a request
+  # tag beside reads of an existing resource), and it reported exactly that for the
+  # CloudFront group on 21 September. One call per action also lets each action be judged
+  # against the resource type it is really authorized on.
+  IFS=',' read -r -a action_list <<<"$actions"
+  for action in "${action_list[@]}"; do
+    action_resource="$resource"; action_context="$context"
+    override="$(override_for "$action")"
+    if [ -n "$override" ]; then action_resource="${override%%|*}"; action_context="${override#*|}"; fi
 
-  while IFS=$'\t' read -r action decision; do
-    [ -n "$action" ] || continue
-    evaluated=$((evaluated + 1))
-    case "$decision" in
-      allowed)
-        allowed=$((allowed + 1))
-        echo "   allowed $action"
-        ;;
-      *)
-        denied=$((denied + 1))
-        echo "   DENIED  $action ($decision) on $resource"
-        ;;
-    esac
-  done <<<"$results"
+    simulate_arguments=(
+      iam simulate-principal-policy
+      --policy-source-arn "arn:aws:iam::${ACCOUNT}:role/${ROLE}"
+      --query 'EvaluationResults[].[EvalActionName,EvalDecision]'
+      --output text
+      --action-names "$action"
+    )
+    # `*` or `-` in the resource column means "the API takes no resource", and the way to
+    # say that to `simulate-principal-policy` is to pass no `--resource-arns` at all: the
+    # parameter documents its own default as every resource, and `*` is not documented as
+    # a legal element of the list.
+    if [ "$action_resource" != '*' ] && [ "$action_resource" != '-' ]; then
+      simulate_arguments+=(--resource-arns "$action_resource")
+    fi
+    if [ -n "$action_context" ]; then
+      entries=()
+      while IFS= read -r entry; do
+        [ -n "$entry" ] || continue
+        entries+=("ContextKeyName=${entry%%=*},ContextKeyType=string,ContextKeyValues=${entry#*=}")
+      done <<<"$(printf '%s\n' "$action_context" | tr ';' '\n')"
+      simulate_arguments+=(--context-entries "${entries[@]}")
+    fi
+
+    results=$(command "$AWS" "${simulate_arguments[@]}")
+    if [ -z "$(printf '%s' "$results" | tr -d '[:space:]')" ]; then
+      echo "FAIL: the simulation returned no evaluation for: $action" >&2
+      echo "      An empty answer is not a pass. Check the role name and the CLI credential." >&2
+      exit 1
+    fi
+    while IFS=$'\t' read -r evaluated_action decision; do
+      [ -n "$evaluated_action" ] || continue
+      evaluated=$((evaluated + 1))
+      case "$decision" in
+        allowed)
+          allowed=$((allowed + 1))
+          echo "   allowed $evaluated_action"
+          ;;
+        *)
+          denied=$((denied + 1))
+          if [ "$action_resource" = '*' ] || [ "$action_resource" = '-' ]; then
+            echo "   DENIED  $evaluated_action ($decision) with no resource"
+          else
+            echo "   DENIED  $evaluated_action ($decision) on $action_resource"
+          fi
+          ;;
+      esac
+    done <<<"$results"
+  done
 done <<<"$CHECK_GROUPS"
 
 # A check that evaluated nothing is the vacuous pass this script exists to avoid: the

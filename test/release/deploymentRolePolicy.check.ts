@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -695,6 +695,45 @@ done`;
     expect(output).toContain('DENIED  cloudwatch:PutCompositeAlarm (implicitDeny)');
     expect(output).toContain('action(s) the next apply needs are denied');
     expect(output).toContain('render-deployment-role-policy.sh fss-rh');
+  });
+
+  it('simulates one action per call, each against the resource it is really authorized on', () => {
+    // The first real run of this check (21 September) taught three things: AWS refuses to
+    // simulate, in one call, actions that need different authorization information
+    // (CreateDistributionWithTags beside GetDistribution → InvalidInput); ec2:CreateRoute
+    // judged against a VPC ARN is an implicit deny because its resource is the route
+    // table; and kms:CreateKey takes no resource at all. A stub records every call.
+    const recording = mkdtempSync(join(tmpdir(), 'fss-simulate-calls-'));
+    const record = stub(
+      `printf '%s\\n' "$*" >> "${join(recording, 'calls.txt')}"\n${ANSWER_EVERY_ACTION.replace('DECISION', 'allowed')}`,
+    );
+    const { code, output } = check(['fss-rh-deploy', 'fss-rh'], { aws: record });
+    expect(code, output).toBe(0);
+    const calls = readFileSync(join(recording, 'calls.txt'), 'utf8').trim().split('\n');
+    expect(calls.length).toBeGreaterThan(80);
+    const actionsOf = (call: string): string[] => {
+      const words = call.split(' ');
+      const at = words.indexOf('--action-names');
+      const names: string[] = [];
+      for (let i = at + 1; i < words.length && !words[i]!.startsWith('--'); i += 1) names.push(words[i]!);
+      return names;
+    };
+    for (const call of calls) {
+      expect(actionsOf(call), `a call carried more than one action: ${call}`).toHaveLength(1);
+    }
+    const callFor = (action: string): string => {
+      const found = calls.find(call => actionsOf(call)[0] === action);
+      expect(found, `no call simulated ${action}`).toBeDefined();
+      return found ?? '';
+    };
+    expect(callFor('ec2:CreateRoute')).toContain(':route-table/');
+    expect(callFor('ec2:CreateRoute')).not.toContain(':vpc/');
+    expect(callFor('ec2:AssociateRouteTable')).toContain(':route-table/');
+    expect(callFor('kms:CreateKey')).not.toContain('--resource-arns');
+    expect(callFor('kms:CreateKey')).toContain('aws:RequestTag/NamePrefix');
+    expect(callFor('cloudfront:CreateDistributionWithTags')).not.toContain('--resource-arns');
+    expect(callFor('cloudfront:GetDistribution')).toContain(':distribution/');
+    expect(callFor('cloudwatch:PutCompositeAlarm')).toContain(':alarm:*');
   });
 
   it('fails rather than passes when the simulation answers nothing', () => {

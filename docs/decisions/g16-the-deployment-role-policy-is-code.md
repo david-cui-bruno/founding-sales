@@ -236,3 +236,8 @@ settles them, in order:
    `secretsmanager:ResourceTag/aws:rds:primaryDBInstanceArn` is really the tag RDS puts on
    a managed master secret (documented; the fallback is a statement naming the ARN the
    root outputs), and why `cloudwatch:PutCompositeAlarm` was denied at all.
+
+## What the first real run of the check taught (21 September, late)
+
+David installed both rendered policies and ran `check-deployment-role.sh fss-rh-deploy fss-rh`. It reported three failures, none of them in the policy: `ec2:CreateRoute` and `ec2:AssociateRouteTable` simulated against a VPC ARN (their resource is the route table, so `ec2:ResourceTag/NamePrefix` could not evaluate and the simulator answered implicit deny); `kms:CreateKey` simulated against a key ARN for an action that takes no resource; and AWS refusing, with `InvalidInput`, to simulate `cloudfront:CreateDistributionWithTags` in the same call as `GetDistribution`, `UpdateDistribution` and `DeleteDistribution`, because they require different authorization information. The check now makes one call per action, and a small override table names, for the actions whose authorization resource differs from the group's sample, the resource type they are really judged on (`-` for none) with the context that statement needs. The release suite drives the script with a recording stub and refuses a call that carries two actions, a `CreateRoute` judged against anything but a route table, a `CreateKey` given a resource, or a composite alarm judged against anything but `alarm:*`.
+
