@@ -97,3 +97,62 @@ output "gmail_push_audience" {
   description = "Exact audience the API requires on a push token."
   value       = module.stack.gmail_push_audience
 }
+
+# ---------------------------------------------------------------------------
+# What the shared deploy script and the run-task wrapper read (G12h).
+#
+# The same outputs the rehearsal root publishes, because David runs the same
+# script locally that CI runs against a rehearsal: one code path, two sets of
+# credentials. `docs/greenfield/infra-apply-runbook.md` 3.2.
+# ---------------------------------------------------------------------------
+
+output "cluster_arn" {
+  description = "Production ECS cluster ARN. One-off tasks are launched against the ARN, never the name."
+  value       = module.stack.cluster_arn
+}
+
+output "worker_log_group_name" {
+  description = "Log group the worker, migration and operations tasks all write to, so one release reads as one correlated log."
+  value       = module.stack.log_group_names["worker"]
+}
+
+output "deployment_plan" {
+  description = "The two one-off task definitions, the declared and planned desired counts, and whether this apply was a bootstrap."
+  value       = module.stack.deployment_plan
+}
+
+output "migration_task_definition_arn" {
+  description = "Task definition for `fss migrate` and `fss admin database-users ensure`."
+  value       = module.stack.migration_task_definition_arn
+}
+
+output "operations_task_definition_arn" {
+  description = "Task definition for `fss verify`, under the worker task role. A release gate after every deploy."
+  value       = module.stack.operations_task_definition_arn
+}
+
+output "drill_task_definition_arn" {
+  description = <<-EOT
+    Task definition for `fss drill`. It exists in production and is never
+    launched by a release: the drill belongs to the rehearsal, and in
+    production `docs/greenfield/restore-drill.md` is followed step by step
+    under the post-restore protocol. It is here so that the two environments
+    are the same shape, which is what makes the rehearsal worth running.
+  EOT
+  value       = module.stack.drill_task_definition_arn
+}
+
+output "migration_database_secret_arn" {
+  description = "Entry the migration credential lives in. Filled once, by hand, from stdin (release.md 5.1)."
+  value       = module.stack.migration_database_secret_arn
+}
+
+output "app_runtime_database_secret_arn" {
+  description = "Entry the services' app_runtime credential lives in. Filled by hand before `fss admin database-users ensure` runs."
+  value       = module.stack.app_runtime_database_secret_arn
+}
+
+output "task_network_configuration" {
+  description = "Subnets, security group and public-address setting a one-off task must be launched with."
+  value       = module.stack.task_network_configuration
+}

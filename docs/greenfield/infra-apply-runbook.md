@@ -235,10 +235,40 @@ terraform plan -out=production.tfplan \
   -var='api_schema_range={min=1,max=1}' \
   -var='worker_schema_range={min=1,max=1}' \
   -var='alert_emails=["<address>"]' \
-  -var="gcp_project_id=<production gcp project>"
+  -var="gcp_project_id=<production gcp project>" \
+  -var="bootstrap=true"          # THE FIRST APPLY ONLY. See below.
 
 terraform apply production.tfplan
 ```
+
+**`bootstrap=true` on the first apply of a brand-new environment, and never again.**
+
+The database it creates is empty, and both binaries refuse to start unless the applied schema version is exactly the range they declare. An apply that started the services would create two of them crash-looping against a schema that does not exist yet, while the task that would fix it had not been launched. So `bootstrap=true` creates both services at **desired count zero**, and `infra/scripts/release-deploy.sh` (3.2a below) migrates and then scales them.
+
+Passing `true` to an environment that is already running scales both services to zero, which is a real outage and never what an ordinary release wants. Every apply after the first one omits it; the default is `false`.
+
+### 3.2a Migrate and start the services — the same script CI runs
+
+```bash
+cd <repository root>
+export FSS_REHEARSAL_REPORTS="$HOME/fss-release-$(date -u +%Y%m%d%H%M)"
+
+# Read it first. No credential is used and nothing is launched.
+FSS_REHEARSAL_DRY_RUN=1 \
+  infra/scripts/release-deploy.sh infra/roots/production fss-prod \
+    --schema-change --worker-digest "<worker digest>"
+
+infra/scripts/release-deploy.sh infra/roots/production fss-prod \
+  --schema-change \
+  --api-digest "<api digest>" \
+  --worker-digest "<worker digest>"
+```
+
+In order: scale to zero if anything is running (API first), `fss migrate` as a one-off ECS task, `fss admin database-users ensure`, `fss verify`, the worker to its declared count, the API to its, and `fss verify` again against the running deployment.
+
+This is **the same script** `.github/workflows/greenfield-release.yml` runs for a rehearsal. The differences are the root in argument one and the credentials in your shell; production applies stay local by decision, because `fss-prod-deploy` trusts no OIDC subject and giving it one is a separate decision nobody has made. `infra/scripts/release-common.sh` refuses a production command that names a rehearsal resource exactly as it refuses the reverse.
+
+It runs the migration as a task inside the VPC because there is no other way: the production database is `publicly_accessible = false`, there is no NAT gateway and no bastion, and nothing on your Mac has a route to it. `docs/greenfield/release.md` 4.1 lists every guard the launch is checked against.
 
 `assume_deployment_role` is not in that list and must not be: its default is `true`, so the provider assumes `fss-prod-deploy` for you, which is the whole point of a local apply. The flag exists for a session that has *already* assumed its role, which is CI and never you (section 1.1). Passing `false` here would apply as your own admin principal rather than as the scoped deployment role, and nothing in the plan would say so.
 
@@ -263,6 +293,33 @@ aws secretsmanager put-secret-value --secret-id fss-prod/google-oidc-client --se
 ```
 
 Use `file:///dev/stdin` rather than `--secret-string '<value>'` so the value never reaches shell history or the process table.
+
+**Two of the eight entries are database identities, and they come first — before 3.2a, because the migration task cannot start without them.**
+
+| Entry | What goes in it | Who reads it |
+|---|---|---|
+| `fss-prod/migration-database` | the RDS-managed master user's JSON, copied whole | the migration execution role, and nothing else in the cluster |
+| `fss-prod/app-runtime-database` | `{"username":"app_runtime_login","password":"<48 random bytes>","host":"<db endpoint host>","port":5432,"dbname":"<db name>"}` | the two services' execution roles, as `DATABASE_SECRET_ARN`; and the migration task, which is what creates the login user |
+
+```bash
+# The master credentials, copied from the entry RDS manages into the one the
+# migration task reads. Neither value is echoed and neither reaches the process table.
+aws secretsmanager get-secret-value \
+  --secret-id "$(terraform -chdir=infra/roots/production output -raw database_master_secret_arn)" \
+  --query SecretString --output text \
+| aws secretsmanager put-secret-value \
+    --secret-id fss-prod/migration-database --secret-string file:///dev/stdin
+
+# The runtime user. You choose the password; nothing else ever sees it.
+openssl rand -base64 48        # copy this
+aws secretsmanager put-secret-value --secret-id fss-prod/app-runtime-database \
+  --secret-string file:///dev/stdin
+# paste {"username":"app_runtime_login","password":"…","host":"…","port":5432,"dbname":"…"}, then Ctrl-D.
+```
+
+Why the master credentials, and why this is not a permanent exception: migration 0001 creates `app_runtime` and `migration` as `NOLOGIN` **group** roles, so on a database that has never been migrated there is no login user that can run DDL and none can be created — the database is private and nothing can reach it. The master is the one credential that exists. `fss migrate` runs as it once, creating the group roles; `fss admin database-users ensure` then creates the `app_runtime_login` user the services connect as and grants `migration` to the master, so every later `fss migrate` passes its membership check for a reason rather than by the absence of one.
+
+What this buys is the boundary David asked for on 21 September: **nothing in the cluster can read the RDS-managed master secret.** The two services resolve `app-runtime-database` and cannot resolve `migration-database`; the migration task resolves `migration-database` and holds no journal, no bucket and no KMS key beyond the one that decrypts its own entry. `infra/modules/cluster/tests/migration_identity.tftest.hcl` asserts all four halves offline.
 
 Then force a new deployment so the tasks pick the values up:
 

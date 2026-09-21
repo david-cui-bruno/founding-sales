@@ -202,6 +202,22 @@ variable "worker_desired_count" {
   default     = 1
 }
 
+variable "bootstrap" {
+  description = <<-EOT
+    True on the first apply of a fresh environment: both services are created
+    at desired count zero and `infra/scripts/release-deploy.sh` scales them
+    after the migration task and `fss verify` succeed, worker before API.
+
+    A fresh environment cannot start its services before the schema exists.
+    Both binaries refuse to start unless the applied schema version is exactly
+    the range they declare, so an apply that created them running would create
+    two services crash-looping on an empty database while the migration task
+    that would fix it had not been launched yet.
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "container_insights" {
   description = "enabled, enhanced or disabled."
   type        = string
@@ -336,7 +352,14 @@ variable "enable_waf" {
 # ---------------------------------------------------------------------------
 
 variable "secret_names" {
-  description = "Logical names of the Secrets Manager entries, each created empty."
+  description = <<-EOT
+    Logical names of the Secrets Manager entries, each created empty.
+
+    The last two are the database identities (G12h). They are not optional:
+    `infra/modules/secrets` refuses a list without them, because the cluster's
+    execution-role boundary is drawn along them and a caller who dropped one
+    would otherwise get an index error four modules away.
+  EOT
   type        = list(string)
   default = [
     "google-oidc-client",
@@ -345,6 +368,8 @@ variable "secret_names" {
     "device-credential-pepper",
     "llm-classifier-api-key",
     "research-provider-credentials",
+    "migration-database",
+    "app-runtime-database",
   ]
 }
 

@@ -184,8 +184,26 @@ variable "secret_arns" {
   default     = {}
 }
 
-variable "database_master_secret_arn" {
-  description = "ARN of the RDS-managed master user secret, injected as DATABASE_SECRET_ARN."
+variable "app_runtime_database_secret_arn" {
+  description = <<-EOT
+    ARN of the Secrets Manager entry holding the `app_runtime` login user's
+    credentials. Injected into both services as DATABASE_SECRET_ARN.
+
+    It is not the RDS-managed master secret, and that is the point (G12h,
+    David's condition of 21 September): the master user may perform DDL, so a
+    service that could resolve it would hold DDL whatever else this module
+    says. Terraform creates the entry empty; `fss admin database-users ensure`,
+    running on the migration task, creates or alters the login user it names.
+  EOT
+  type        = string
+}
+
+variable "migration_database_secret_arn" {
+  description = <<-EOT
+    ARN of the Secrets Manager entry holding the credentials `fss migrate`
+    connects with. Readable by the migration execution role and by nothing
+    else in this module; `tests/migration_identity.tftest.hcl` asserts it.
+  EOT
   type        = string
 }
 
@@ -206,11 +224,6 @@ variable "envelope_kms_key_arn" {
 
 variable "secrets_kms_key_arn" {
   description = "Customer key protecting the Secrets Manager entries."
-  type        = string
-}
-
-variable "database_kms_key_arn" {
-  description = "Customer key protecting the RDS master user secret."
   type        = string
 }
 
@@ -235,6 +248,37 @@ variable "enable_execute_command" {
   description = "Allow ECS Exec into a running task. Off in production; a rehearsal root may turn it on."
   type        = bool
   default     = false
+}
+
+variable "bootstrap" {
+  description = <<-EOT
+    True on the first apply of a fresh environment. Both services are then
+    created at desired count zero and `infra/scripts/release-deploy.sh` scales
+    them after the migration task and `fss verify` have succeeded, worker
+    before API.
+
+    The declared counts are left alone: a bootstrap changes what the services
+    *are* right now, not what they are for, and `output.deployment_plan`
+    reports both so the script's scale-up target is the root's own number
+    rather than a literal in a shell file. There is deliberately no
+    `ignore_changes` on `desired_count` — that would make the count untracked
+    for ever and take away Terraform's ability to scale to zero for the next
+    schema release.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "migration_cpu" {
+  description = "Fargate CPU units for the one-off migration and operations tasks."
+  type        = number
+  default     = 512
+}
+
+variable "migration_memory" {
+  description = "Fargate memory in MiB for the one-off migration and operations tasks."
+  type        = number
+  default     = 1024
 }
 
 variable "tags" {

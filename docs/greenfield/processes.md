@@ -281,15 +281,44 @@ the same dependency set and the same configuration as the worker that starts
 afterwards — `databaseConnection` in `bootstrap/config.ts` and `readWorkerDeployment`
 are imported, not reimplemented.
 
-**How it runs in a deployed environment is decided: in-VPC one-off ECS tasks** (David,
-21 September), which G12h wires. The tool is built for both forms and this lane wires
-neither: `infra/scripts/rehearsal-restore-drill.sh` still writes `fss admin …` and
-refuses when no `fss` executable is on PATH, and nothing in this repository puts one
-there — no package declares a `bin` and no workflow step installs a wrapper. The
-remaining choice is whether the runner gets a wrapper or the drill becomes a
-`run-task` with the command override above.
-`docs/decisions/g12g-the-operations-command-line.md` records that and everything else
-the deployment still lacks for `fss migrate` to run *before* the services start.
+### How it runs in a deployed environment (lane G12h)
+
+**In-VPC one-off ECS tasks** (David, 21 September), and nothing is ever on a PATH.
+`aws ecs run-task --overrides` can replace a container's `command` and **cannot**
+replace its `entryPoint`, and the worker image's entry point is the worker — so the
+three one-off task definitions in `infra/modules/cluster` declare the tool as their
+entry point and take the subcommand as the command. A definition that expected
+otherwise would start a worker every time an operator asked it for a migration.
+
+| Task definition | Identity | Reads | Runs |
+|---|---|---|---|
+| `<prefix>-migration` | `<prefix>-migration-task` / `<prefix>-migration-exec` | `migration-database` as `MIGRATION_DATABASE_SECRET`, `app-runtime-database` as `FSS_RUNTIME_DATABASE_SECRET_ARN`. **No runtime connection at all** | `migrate`, `admin database-users ensure` |
+| `<prefix>-operations` | the worker task role / worker execution role | `app-runtime-database` as `DATABASE_SECRET_ARN`, plus the application secrets | `verify` |
+| `<prefix>-drill` | `<prefix>-drill-task` / `<prefix>-drill-exec` | both connections; journal **read** only; `FSS_DEPENDENCIES=recorded` fixed in the definition | `drill` |
+
+Three rather than one, because of what each needs and what each must not have.
+`verify` runs as the *runtime* identity on purpose: the point of a post-deploy gate is
+to prove the credential the services are about to use reaches the database. `drill`
+needs the suppression journal (step 2 replays it) **and** the migration credential
+(step 7 reapplies migrations forward), and neither of the other two identities may
+hold both — giving them to the migration role would let the DDL identity read the
+journal, and giving them to the worker's role would give the runtime a path to DDL,
+which is the thing David's first condition removes.
+
+`infra/scripts/release-common.sh` is the wrapper. It checks the account, the region,
+the cluster's `Environment` tag, full ARNs in this namespace, the registered image
+digest against the release's, the network against the root's own output, and the
+credential entry the definition resolves — all before the launch. Afterwards it reads
+the `failures` array, refuses a task that never started, refuses a stopped task with
+no exit code, prints `stopCode` and `stoppedReason`, waits out the log-stream create
+race, and records the task ARN so a retry waits on the task already running rather
+than starting a second migration.
+
+**A one-off task's filesystem goes away with the task**, so `--report <path>` writes a
+file nobody can read afterwards. What survives is the log stream: `--capture` writes
+the task's messages to a file on the runner and `release_captured_report` takes the
+command's JSON answer out of it — the last parseable object that is not a log line.
+That is how the drill's report reaches the runner that decides whether it is a pass.
 
 **What it reads.**
 
@@ -298,7 +327,7 @@ the deployment still lacks for `fss migrate` to run *before* the services start.
 | `DATABASE_URL` | every command except `migrate` | the runtime connection, for a laptop or a runner |
 | `DATABASE_SECRET_ARN` | the same | the Secrets Manager **value**, injected by the ECS `secrets` block |
 | `FSS_MIGRATION_DATABASE_URL` | `migrate`, `drill` step 7, `database-users ensure` | the migration user's connection, for a laptop |
-| `MIGRATION_DATABASE_SECRET` | the same | the migration credential's secret **value**. `fss-<env>/database-migration-user`, which holds the RDS master user — the only credential a fresh instance has |
+| `MIGRATION_DATABASE_SECRET` | the same | the migration credential's secret **value**. `<prefix>/migration-database`, which holds the RDS master user — the only credential a fresh instance has |
 | `FSS_RUNTIME_DATABASE_SECRET_ARN` | `database-users ensure` | the runtime credential's secret value, whose `username` and `password` the command creates the login user from. `--runtime-secret` names a different variable |
 | `FSS_DATABASE_HOST` | every command | Appendix E step 1's restored endpoint. It replaces the host of a connection assembled from a secret; a `DATABASE_URL` that names a different host is a refusal rather than an override |
 | `FSS_DEPENDENCIES` | the Gmail commands and `drill` | must be exactly `recorded` for them, or they refuse |

@@ -317,7 +317,10 @@ export interface DrillInvocation {
 }
 
 /** Where a command ends and prose, redirection or shell syntax begins. */
-const TAIL = [' -> ', ' > ', ' >> ', ' >&2', ' | ', ' && ', ' ; ', ')', '#'];
+// `' ('` is here for the same reason `' -> '` is: a planned line says what the command
+// would do and then, in parentheses, where it would run — `(in-VPC task, drill,
+// FSS_DATABASE_HOST=…)` since G12h. That is prose about the launch, not an argument.
+const TAIL = [' -> ', ' > ', ' >> ', ' >&2', ' | ', ' && ', ' ; ', ' (', ')', '#'];
 
 /**
  * Lines that mention `fss` without calling it.

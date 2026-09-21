@@ -82,3 +82,57 @@ output "secret_names" {
   description = "Rehearsal Secrets Manager entry names. Created empty."
   value       = module.stack.secret_names
 }
+
+# ---------------------------------------------------------------------------
+# What the shared deploy script and the run-task wrapper read (G12h).
+#
+# Every one of these is a public identifier, and every one is read from the
+# plan rather than typed into a shell file, so the guards in
+# `infra/scripts/release-common.sh` compare a launch against what Terraform
+# actually created rather than against a literal somebody kept up to date.
+# ---------------------------------------------------------------------------
+
+output "cluster_arn" {
+  description = "Rehearsal ECS cluster ARN. One-off tasks are launched against the ARN, never the name."
+  value       = module.stack.cluster_arn
+}
+
+output "worker_log_group_name" {
+  description = "Log group the worker, migration and operations tasks all write to, so one release reads as one correlated log."
+  value       = module.stack.log_group_names["worker"]
+}
+
+output "deployment_plan" {
+  description = "The two one-off task definitions, the declared and planned desired counts, and whether this apply was a bootstrap."
+  value       = module.stack.deployment_plan
+}
+
+output "migration_task_definition_arn" {
+  description = "Task definition for `fss migrate` and `fss admin database-users ensure`."
+  value       = module.stack.migration_task_definition_arn
+}
+
+output "operations_task_definition_arn" {
+  description = "Task definition for `fss verify`, under the worker task role."
+  value       = module.stack.operations_task_definition_arn
+}
+
+output "drill_task_definition_arn" {
+  description = "Task definition for `fss drill`: the only identity holding both the suppression journal and the migration credential, and the only one fixed at FSS_DEPENDENCIES=recorded."
+  value       = module.stack.drill_task_definition_arn
+}
+
+output "migration_database_secret_arn" {
+  description = "Entry the migration credential lives in. The release workflow fills it from the RDS-managed master secret; production's operator fills it from stdin."
+  value       = module.stack.migration_database_secret_arn
+}
+
+output "app_runtime_database_secret_arn" {
+  description = "Entry the services' app_runtime credential lives in."
+  value       = module.stack.app_runtime_database_secret_arn
+}
+
+output "task_network_configuration" {
+  description = "Subnets, security group and public-address setting a one-off task must be launched with."
+  value       = module.stack.task_network_configuration
+}

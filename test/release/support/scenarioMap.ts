@@ -264,9 +264,16 @@ export const SCENARIOS: readonly Scenario[] = Object.freeze([
       'packages/domain/test/db/migrations.test.ts',
       'apps/worker/test/startup.test.ts',
       'infra/scripts/rehearsal-schema-ranges.sh',
+      // The order is now performed rather than described (G12h). Until 21 September
+      // the step was named "migrate, then worker, then API" and ran two
+      // `update-service` calls; nothing anywhere applied a migration, so on a fresh
+      // database both services would have refused to start for ever.
+      'infra/scripts/release-deploy.sh',
+      'infra/modules/cluster/main.tf',
+      'infra/modules/cluster/tests/migration_identity.tftest.hcl',
     ),
-    trap: 'With both ranges equal to the current version, "every pair is compatible" is true and vacuous.',
-    closedBy: 'The check computes the overlap from the declared ranges and, when there is none, asserts the refusal reason each side gives instead.',
+    trap: 'With both ranges equal to the current version, "every pair is compatible" is true and vacuous; and a deploy order that is a heading rather than a sequence of commands is an order nothing performs.',
+    closedBy: 'The check computes the overlap from the declared ranges and, when there is none, asserts the refusal reason each side gives instead; and it reads the shared deploy script for the positions of migrate, database-users, verify, worker and API, so an order that stopped being an order fails offline.',
     script: 'infra/scripts/rehearsal-schema-ranges.sh',
   },
   {
@@ -425,9 +432,15 @@ export const SCENARIOS: readonly Scenario[] = Object.freeze([
       'infra/scripts/rehearsal-registry-guard.sh',
       'infra/scripts/rehearsal-caller-identity.sh',
       '.github/workflows/greenfield-rehearsal-registry.yml',
+      // G12h: one script is now the code path for both environments, so the refusal
+      // has to be symmetric, and every one-off task launch is a new way to address
+      // the wrong namespace.
+      'infra/scripts/release-common.sh',
+      'test/release/support/runTaskGuards.sh',
+      'infra/scripts/rehearsal-teardown.sh',
     ),
-    trap: 'Two plans that differ in every value are isolated by accident; an offline plan cannot prove an IAM boundary; and a workflow holding the role proves nothing about the plan it applies.',
-    closedBy: 'The offline tests pin the state-key prefixes and the name-prefix refusals; the rehearsal script asserts after teardown that nothing with the production prefix was touched; and the registry apply runs in the rehearsal environment behind a plan guard that is exercised against a plan it must refuse.',
+    trap: 'Two plans that differ in every value are isolated by accident; an offline plan cannot prove an IAM boundary; a workflow holding the role proves nothing about the plan it applies; and a launch guard that refuses everything passes every refusal case while making the release undeployable.',
+    closedBy: 'The offline tests pin the state-key prefixes and the name-prefix refusals; the rehearsal script asserts after teardown that nothing with the production prefix was touched; the registry apply runs in the rehearsal environment behind a plan guard exercised against a plan it must refuse; and every run-task guard is run against a launch it must refuse and one it must allow, with the AWS responses supplied offline.',
     script: 'infra/scripts/rehearsal-prefix-guard.sh',
   },
   {

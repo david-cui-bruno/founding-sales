@@ -109,6 +109,76 @@ output "worker_task_role_name" {
   value       = module.cluster.worker_task_role_name
 }
 
+output "cluster_arn" {
+  description = "ECS cluster ARN. A one-off task is launched against the ARN, never the name: a bare name resolves against whichever account and region the shell holds."
+  value       = module.cluster.cluster_arn
+}
+
+output "migration_task_role_name" {
+  description = "Migration task role name. The identity `fss migrate` runs as, and nothing else in the stack shares it."
+  value       = module.cluster.migration_task_role_name
+}
+
+output "migration_task_definition_arn" {
+  description = "Task definition for `fss migrate` and `fss admin database-users ensure`. A one-off task; there is no service."
+  value       = module.cluster.migration_task_definition_arn
+}
+
+output "operations_task_definition_arn" {
+  description = "Task definition for `fss verify`, under the worker task role."
+  value       = module.cluster.operations_task_definition_arn
+}
+
+output "drill_task_definition_arn" {
+  description = "Task definition for `fss drill`, under its own role: the only identity holding both the journal and the migration credential."
+  value       = module.cluster.drill_task_definition_arn
+}
+
+output "drill_task_role_name" {
+  description = "Drill task role name."
+  value       = module.cluster.drill_task_role_name
+}
+
+output "migration_database_secret_arn" {
+  description = "Entry the migration credential lives in. Created empty; the operator fills it. Readable by the migration execution role alone."
+  value       = module.secrets.migration_database_secret_arn
+}
+
+output "app_runtime_database_secret_arn" {
+  description = "Entry the services' `app_runtime` credential lives in. Created empty; `fss admin database-users ensure` creates the login user it names."
+  value       = module.secrets.app_runtime_database_secret_arn
+}
+
+output "deployment_plan" {
+  description = <<-EOT
+    Everything `infra/scripts/release-deploy.sh` reads before it launches
+    anything: the two one-off task definitions, the declared and planned
+    desired counts, and whether this apply was a bootstrap.
+  EOT
+  value       = module.cluster.deployment_plan
+}
+
+output "task_network_configuration" {
+  description = <<-EOT
+    The network a one-off task must be launched into, so the wrapper asserts
+    the run-task arguments against the plan rather than against a literal.
+
+    Public subnets with `assignPublicIp=ENABLED` under the worker security
+    group: there is no NAT gateway and no interface endpoint, so a task with no
+    public address cannot pull its image, and the worker group is the one the
+    database security group already admits on 5432. The group admits nothing
+    inbound, which is why giving a one-off task a public address costs nothing.
+  EOT
+  value = {
+    subnet_ids         = module.network.public_subnet_ids
+    security_group_id  = module.network.security_group_ids["worker_task"]
+    assign_public_ip   = "ENABLED"
+    database_port      = 5432
+    database_host      = module.database.address
+    inbound_rule_count = length([for name, rule in module.network.ingress_rules : name if rule.group == "worker_task"])
+  }
+}
+
 output "repository_urls" {
   description = "ECR repository URLs keyed by service short name. Empty when this stack creates no registry."
   value       = var.create_registry ? one(module.registry[*].repository_urls) : {}
@@ -195,6 +265,8 @@ output "resource_names" {
       module.cluster.worker_service_name,
       module.cluster.api_task_role_name,
       module.cluster.worker_task_role_name,
+      module.cluster.migration_task_role_name,
+      module.cluster.drill_task_role_name,
       module.database.instance_identifier,
       module.database.subnet_group_name,
       module.database.parameter_group_name,
@@ -209,5 +281,11 @@ output "resource_names" {
     values(module.secrets.secret_names),
     values(module.observability.log_group_names),
     module.alerts.alarm_names,
+    module.cluster.one_off_task_families,
   )
+}
+
+output "one_off_task_families" {
+  description = "The three one-off task definition families: migration, operations, drill. Names, so a root test can assert them at plan time."
+  value       = module.cluster.one_off_task_families
 }

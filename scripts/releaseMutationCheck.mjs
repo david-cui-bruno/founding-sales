@@ -239,6 +239,79 @@ const MUTATIONS = [
     because:
       "Appendix E's replay is the one path that writes suppression rows from outside a command, and a record carries the workspace it belongs to. A replay that inserted another workspace's event would be the only way a suppression could cross a workspace boundary in this system, so the two-workspace case must fail when the check is removed.",
   },
+  {
+    name: 'the run-task wrapper stops comparing the registered image with the release digest',
+    file: 'infra/scripts/release-common.sh',
+    find: '    *"@$expected_digest") ;;',
+    replace: '    *) ;;',
+    suite: ['run', 'test:release'],
+    because:
+      'The release gate is the comparison between the digest that passed rehearsal and the digest that is deployed, and a one-off task is the one place it is made at the moment of use: a migration applied by last release\'s image is a migration nobody rehearsed. Scenario 39 runs the guard against a launch carrying the wrong digest and has to go red when it stops refusing.',
+  },
+  {
+    name: 'a stopped task with no exit code is read as a success',
+    file: 'infra/scripts/release-common.sh',
+    find: '    if code is None:',
+    replace: '    if False:',
+    suite: ['run', 'test:release'],
+    because:
+      'A task that could not pull its image or could not resolve its secret stops with no exitCode at all. `exitCode or 0` is the bug that turns each of those into a green release, so the wrapper must fail on absence and scenario 39 must notice when it does not.',
+  },
+  {
+    name: 'the wrapper stops refusing a credential-shaped environment override',
+    file: 'infra/scripts/release-common.sh',
+    find: "    if printf '%s' \"$override_name\" | grep -qiE '(password|secret|token|credential|private_key|api_key)'; then",
+    replace: '    if false; then',
+    suite: ['run', 'test:release'],
+    because:
+      'The restored instance\'s endpoint travels as an environment override because a hostname is public. A credential must not: an override is visible in `describe-tasks` to anyone who can read the cluster, which is the opposite of the Secrets Manager reference the design uses everywhere else.',
+  },
+  {
+    name: 'a retried step launches a second migration instead of waiting',
+    file: 'infra/scripts/release-common.sh',
+    find: '  if [ -s "$record" ]; then',
+    replace: '  if false; then',
+    suite: ['run', 'test:release'],
+    because:
+      'A re-run job that launched a second `fss migrate` would have it block on the advisory lock, find nothing to apply and exit zero — which looks exactly like success and means the first migration\'s outcome was never read. The recorded task ARN is the only thing that makes a retry wait.',
+  },
+  {
+    name: 'a production command stops refusing a rehearsal resource',
+    file: 'infra/scripts/release-common.sh',
+    find: '          *fss-rh-*)',
+    replace: '          __never_matches__)',
+    suite: ['run', 'test:release'],
+    because:
+      'G12h made one script the code path for both environments, so Appendix G 39\'s refusal has to be symmetric. A production deploy that picked up a rehearsal cluster ARN would scale a rehearsal service and report success, and the rehearsal-side refusal alone would not notice.',
+  },
+  {
+    name: 'the migration entry becomes readable by the services',
+    file: 'infra/modules/cluster/main.tf',
+    find: '  runtime_secret_arns = distinct(concat(values(var.secret_arns), [var.app_runtime_database_secret_arn]))',
+    replace:
+      '  runtime_secret_arns = distinct(concat(values(var.secret_arns), [var.app_runtime_database_secret_arn, var.migration_database_secret_arn]))',
+    suite: ['run', 'test:release'],
+    because:
+      "David's first condition of 21 September is that the runtime task role has no path to DDL credentials. It is one line of a `locals` block, and nothing but the tftest stands between it and a service that can migrate its own database, so scenario 22's infrastructure assertions have to go red when the line changes.",
+  },
+  {
+    name: 'a fresh environment starts its services before the schema exists',
+    file: 'infra/modules/cluster/main.tf',
+    find: '  api_desired_count    = var.bootstrap ? 0 : var.api_desired_count',
+    replace: '  api_desired_count    = var.api_desired_count',
+    suite: ['run', 'test:release'],
+    because:
+      'Both binaries refuse a database whose schema version is not exactly the range they declare, so an apply that created the API running would create it crash-looping against an empty database while the migration task that would fix it had not been launched. The bootstrap is the whole of condition 2 and it is one ternary.',
+  },
+  {
+    name: 'the drill task stops fixing its dependency mode',
+    file: 'infra/modules/cluster/main.tf',
+    find: '  drill_environment = merge(local.worker_environment, { FSS_DEPENDENCIES = "recorded" })',
+    replace: '  drill_environment = local.worker_environment',
+    suite: ['run', 'test:release'],
+    because:
+      '`reconcile-sent`, `recover` and `watch-renew` all reach Gmail when dependencies are live, and a rehearsal that reached a real mailbox would send real mail. The tool refuses in any other mode, and the task definition is the second lock on the same door: with it gone the drill inherits the root\'s mode, which in production is `live`.',
+  },
 ];
 
 function run(script) {

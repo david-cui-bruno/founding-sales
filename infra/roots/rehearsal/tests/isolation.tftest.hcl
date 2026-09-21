@@ -229,10 +229,25 @@ run "the_topology_answers_are_the_rehearsal_defaults_at_one_plus_one" {
     error_message = "The same 0.5 vCPU / 1 GiB task size as production."
   }
 
+  # One of each — eventually. Every rehearsal environment is a fresh one, so the
+  # root's `bootstrap` default is `true` and the apply creates both services at zero
+  # (G12h): the database has no schema yet and both binaries refuse to start unless
+  # the applied version is exactly the range they declare.
+  # `infra/scripts/release-deploy.sh` scales them to the declared counts after the
+  # migration task and `fss verify` succeed, and it reads those counts from
+  # `deployment_plan` rather than from a literal — which is why both numbers are
+  # asserted here rather than only the one the plan happens to show.
   assert {
-    condition = (module.stack.service_shape.api.desired_count == 1
-    && module.stack.service_shape.worker.desired_count == 1)
-    error_message = "One of each: the shapes are production's, the counts are not."
+    condition = (module.stack.deployment_plan.bootstrap
+      && module.stack.deployment_plan.api.planned_desired_count == 0
+    && module.stack.deployment_plan.worker.planned_desired_count == 0)
+    error_message = "A rehearsal apply creates both services at zero; nothing can start before the migration task has run."
+  }
+
+  assert {
+    condition = (module.stack.deployment_plan.api.declared_desired_count == 1
+    && module.stack.deployment_plan.worker.declared_desired_count == 1)
+    error_message = "One of each: the shapes are production's, the counts are not. This is the number the deploy script scales to."
   }
 
   assert {
@@ -244,6 +259,31 @@ run "the_topology_answers_are_the_rehearsal_defaults_at_one_plus_one" {
     condition = (module.stack.database_shape.performance_insights_enabled == false
     && module.stack.database_shape.monitoring_interval == 0)
     error_message = "Performance Insights and Enhanced Monitoring stay off."
+  }
+}
+
+# The same root with the bootstrap off, which is what a re-apply of a standing
+# environment is. Without this run the assertions above would be satisfied by a root
+# that could only ever create services at zero — and Terraform would have lost the
+# ability to scale to zero for the next schema release, which is exactly why
+# `ignore_changes = [desired_count]` was rejected
+# (`docs/decisions/g12h-bootstrap-is-a-root-variable.md`).
+run "a_rehearsal_re_apply_declares_the_real_counts" {
+  command = plan
+
+  variables {
+    bootstrap = false
+  }
+
+  assert {
+    condition = (module.stack.service_shape.api.desired_count == 1
+    && module.stack.service_shape.worker.desired_count == 1)
+    error_message = "With the bootstrap off, Terraform declares the counts the services actually run at."
+  }
+
+  assert {
+    condition     = module.stack.deployment_plan.bootstrap == false
+    error_message = "The plan says which of the two states this apply is."
   }
 }
 

@@ -58,6 +58,98 @@ output "worker_task_definition_arn" {
   value       = aws_ecs_task_definition.worker.arn
 }
 
+output "migration_task_role_arn" {
+  description = "Migration task role ARN. The identity `fss migrate` runs as."
+  value       = aws_iam_role.migration_task.arn
+}
+
+output "migration_task_role_name" {
+  description = "Migration task role name."
+  value       = aws_iam_role.migration_task.name
+}
+
+output "migration_execution_role_arn" {
+  description = "Migration execution role ARN. The only identity in this module that may resolve the migration database entry."
+  value       = aws_iam_role.migration_execution.arn
+}
+
+output "migration_task_definition_arn" {
+  description = "Task definition `fss migrate` and `fss admin database-users ensure` run under. Launched as a one-off task; it has no service."
+  value       = aws_ecs_task_definition.migration.arn
+}
+
+output "migration_task_definition_family" {
+  description = "Family name of the migration task definition, which is what a run-task argument names."
+  value       = aws_ecs_task_definition.migration.family
+}
+
+output "operations_task_definition_arn" {
+  description = "Task definition `fss verify` and `fss drill` run under, as the worker task role."
+  value       = aws_ecs_task_definition.operations.arn
+}
+
+output "operations_task_definition_family" {
+  description = "Family name of the operations task definition."
+  value       = aws_ecs_task_definition.operations.family
+}
+
+output "drill_task_definition_family" {
+  description = "Family name of the drill task definition."
+  value       = aws_ecs_task_definition.drill.family
+}
+
+output "one_off_task_families" {
+  description = <<-EOT
+    The three one-off task definition families, which are names rather than
+    ARNs and are therefore known at plan time. The roots assert them: an ARN
+    is unknown until an apply, and a test that could only run against a real
+    account is a test nobody runs.
+  EOT
+  value = [
+    aws_ecs_task_definition.migration.family,
+    aws_ecs_task_definition.operations.family,
+    aws_ecs_task_definition.drill.family,
+  ]
+}
+
+output "drill_task_definition_arn" {
+  description = "Task definition `fss drill` runs under. Its own identity: the journal and the migration credential, which neither of the other two may hold together."
+  value       = aws_ecs_task_definition.drill.arn
+}
+
+output "drill_task_role_name" {
+  description = "Drill task role name."
+  value       = aws_iam_role.drill_task.name
+}
+
+output "deployment_plan" {
+  description = <<-EOT
+    What `infra/scripts/release-deploy.sh` needs to know, read back from the
+    resources rather than echoed from the variables.
+
+    `declared_desired_count` is what the service is *for*; `planned_desired_count`
+    is what this apply creates it at, which is zero on a bootstrap. The script's
+    scale-up target is the declared number, so the count in the cloud and the
+    count in the root cannot drift apart through a literal in a shell file.
+  EOT
+  value = {
+    bootstrap = var.bootstrap
+    api = {
+      service_name           = aws_ecs_service.api.name
+      declared_desired_count = var.api_desired_count
+      planned_desired_count  = aws_ecs_service.api.desired_count
+    }
+    worker = {
+      service_name           = aws_ecs_service.worker.name
+      declared_desired_count = var.worker_desired_count
+      planned_desired_count  = aws_ecs_service.worker.desired_count
+    }
+    migration_task_definition  = aws_ecs_task_definition.migration.arn
+    operations_task_definition = aws_ecs_task_definition.operations.arn
+    drill_task_definition      = aws_ecs_task_definition.drill.arn
+  }
+}
+
 output "api_environment" {
   description = "Non-secret API environment, for offline assertions. Never contains a credential."
   value       = local.api_environment

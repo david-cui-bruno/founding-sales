@@ -44,6 +44,16 @@ on:
 permissions:
   contents: read
 
+# One apply of this root at a time (G12h, David's condition 7).
+#
+# Two dispatches overlapping would both hold the same Terraform state key, and the
+# second one's `init` would wait on the first's lock or, worse, arrive between the
+# first's plan and its apply. `cancel-in-progress: false`: an apply in flight is not
+# something a later dispatch may interrupt.
+concurrency:
+  group: greenfield-rehearsal-registry
+  cancel-in-progress: false
+
 env:
   TERRAFORM_VERSION: '1.15.8'
   AWS_REGION: us-east-1
