@@ -66,14 +66,29 @@ is seconds, and the cost of not running it is an environment standing at hourly 
 holding prospect-shaped data. The step that writes `run.auto.tfvars.json` runs in every
 stage for the same reason: a teardown that cannot read its variables refuses (G12i).
 
-## Decision 4 — the apply applies the plan the plan stage summarised
+## Decision 4 — one `-var` list, on the plan; the apply reads the file
 
 The create step is now four steps: write the variables, initialise the backend,
-`terraform plan -out`, and `terraform apply <that file>`. The `-var` list lives on the
-plan and the apply passes none of its own. Two consequences, both wanted: the variable
-list is exercised in *every* stage rather than only in the expensive one (which is
-exactly what the second credentialed run died of), and the summary a `plan` run
-published cannot describe an apply different from the one that happens.
+`terraform plan -out`, and `terraform apply`. The `-var` list lives on the plan, which
+every stage runs, and the apply names no variable at all: `run.auto.tfvars.json` is
+auto-loaded from the root directory, which is exactly how G12i already made the
+teardown's `terraform destroy` work. The variable list is therefore exercised in *every*
+stage rather than only in the expensive one — which is what the second credentialed run
+died of — and there is one list rather than two to keep in step. Scenario 39 compares
+the `${{ }}` expressions of the plan step and the variables step and requires the two
+sets to be equal, so a plan pointed at one certificate while the apply reads another is
+a red pull request rather than a surprise during an apply.
+
+**The apply re-plans rather than applying the saved plan file**, which is the obvious
+alternative and was the first implementation. It was withdrawn: how Terraform treats
+`terraform apply <planfile>` in a directory that also holds an auto-loaded variables
+file is behaviour nothing available offline here could settle — `terraform apply` is not
+a command this environment may run, and the answer decides whether the `create` stage
+works at all. A lane that exists to stop discovering repository facts on credentialed
+runs does not get to add one. If someone confirms the behaviour later, applying the
+saved plan is a two-line change and a stronger coupling; the summary would then be a
+description of the apply rather than of a plan taken a minute earlier with the same
+values against the same state.
 
 ## Decision 5 — a plan run publishes addresses and counts, never values
 

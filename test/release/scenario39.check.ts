@@ -1275,19 +1275,38 @@ describe('Appendix G 39: the rehearsal has four stages and each contains the one
     }
   });
 
-  it('plans in every stage and applies the plan it planned, so the two cannot diverge', () => {
+  it('plans in every stage, and the apply names no variable of its own', () => {
     const plan = steps.find(step => step.text.includes('terraform plan'));
     const apply = steps.find(step => step.text.includes('terraform apply'));
     expect(plan, 'no step of the rehearsal job plans').toBeDefined();
     expect(apply, 'no step of the rehearsal job applies').toBeDefined();
     expect([...stagesForCondition(plan?.condition ?? null)]).toEqual([...REHEARSAL_STAGES]);
     expect(plan?.text).toContain('-out="$plan_file"');
-    // The apply takes the saved plan file and passes no variable of its own: a second
-    // `-var` list is a second set of values, and the summary would then describe a
-    // plan that was not the one applied.
-    expect(apply?.text).toContain('terraform apply -input=false "$RUNNER_TEMP/rehearsal.tfplan"');
+    // One `-var` list, on the plan, which every stage runs. The apply takes its
+    // values from `run.auto.tfvars.json`, which Terraform loads automatically from
+    // the root directory and which `terraform destroy` already depends on (G12i). A
+    // second list would be a second set of values to keep in step, and losing two of
+    // eight from one of them is what stopped the second credentialed run.
+    expect(apply?.text).toContain('terraform apply -auto-approve -input=false');
     expect(apply?.text).not.toContain('-var=');
-    expect(apply?.text).not.toContain('-auto-approve');
+  });
+
+  it('gives the plan and the variables file the same expressions, so they cannot drift', () => {
+    // The two are the same values only because they read the same secrets and the
+    // same job environment. Nothing but this compares them, and a plan pointed at one
+    // certificate while the apply reads another would be invisible until the apply.
+    const plan = stepScript('Plan the rehearsal environment, and summarise it without values');
+    const tfvars = stepScript('Write the variables this run plans, applies and tears down with');
+    const expressions = (script: string): readonly string[] =>
+      [...new Set([...script.matchAll(/\$\{\{ ([^}]+) \}\}/gu)].map(match => (match[1] ?? '').trim()))].sort();
+
+    expect(expressions(plan)).toEqual(expressions(tfvars));
+    // A floor: two scripts that reference nothing would compare equal.
+    expect(expressions(plan).length).toBeGreaterThanOrEqual(6);
+    for (const name of ['API_SCHEMA_MIN', 'API_SCHEMA_MAX', 'WORKER_SCHEMA_MIN', 'WORKER_SCHEMA_MAX']) {
+      expect(plan, `the plan does not read ${name}`).toContain(name);
+      expect(tfvars, `the variables file does not read ${name}`).toContain(name);
+    }
   });
 });
 

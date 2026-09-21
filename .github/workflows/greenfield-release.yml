@@ -778,11 +778,19 @@ jobs:
         working-directory: infra/roots/rehearsal
         run: |
           set -euo pipefail
-          # The saved plan, and nothing else: applying the file the step above
-          # summarised is what makes the summary a description of this apply rather
-          # than of a plan somebody could have re-run with different variables. It
-          # carries every `-var` already, which is why none appears here.
-          terraform apply -input=false "$RUNNER_TEMP/rehearsal.tfplan"
+          # No `-var` here, deliberately. `run.auto.tfvars.json` holds every value the
+          # root requires and Terraform loads it automatically from this directory —
+          # the same mechanism `terraform destroy` uses in the teardown (G12i). One
+          # list in one place is what keeps the plan above and this apply the same
+          # values; a second copy is a second thing to forget, and forgetting two of
+          # eight is what stopped the second credentialed run.
+          #
+          # It re-plans rather than applying the plan file the step above saved. How
+          # Terraform treats a saved-plan apply in a directory that also holds an
+          # auto-loaded variables file is behaviour no offline check here could
+          # settle, and a lane whose whole purpose is to stop discovering things on
+          # credentialed runs does not get to introduce one.
+          terraform apply -auto-approve -input=false
 
       - name: Fill the two database entries this run's tasks resolve
         if: contains(fromJSON('["deploy","full"]'), inputs.stage)
