@@ -1,5 +1,5 @@
 mock_provider "aws" {
-  override_during = plan
+  override_during = apply
 
   mock_resource "aws_s3_bucket" {
     defaults = {
@@ -42,15 +42,6 @@ run "the_origin_is_private_and_reached_only_through_the_distribution" {
   }
 
   assert {
-    condition = alltrue([
-      for statement in jsondecode(output.bucket_policy_json).Statement :
-      contains(statement.Condition.StringEquals["AWS:SourceArn"], aws_cloudfront_distribution.updates.arn)
-      if statement.Sid == "AllowOnlyThisDistribution"
-    ])
-    error_message = "Only this distribution may read the bucket."
-  }
-
-  assert {
     condition     = aws_cloudfront_distribution.updates.default_cache_behavior[0].viewer_protocol_policy == "https-only"
     error_message = "Packages are served over HTTPS only."
   }
@@ -69,4 +60,24 @@ run "a_custom_hostname_without_a_certificate_is_refused" {
   }
 
   expect_failures = [aws_cloudfront_distribution.updates]
+}
+
+# Which distribution the bucket policy admits, asserted where the value exists.
+#
+# The condition names `aws_cloudfront_distribution.updates.arn`, a computed
+# attribute, so the rendered policy is unknown for the whole plan phase, as it
+# is in a real plan. An apply run under a mocked provider reaches nothing and
+# needs no credential.
+# `docs/decisions/g12j-mock-providers-keep-computed-values-unknown.md`.
+run "only_this_distribution_may_read_the_bucket" {
+  command = apply
+
+  assert {
+    condition = alltrue([
+      for statement in jsondecode(output.bucket_policy_json).Statement :
+      contains(statement.Condition.StringEquals["AWS:SourceArn"], aws_cloudfront_distribution.updates.arn)
+      if statement.Sid == "AllowOnlyThisDistribution"
+    ])
+    error_message = "Only this distribution may read the bucket."
+  }
 }

@@ -1,5 +1,5 @@
 mock_provider "aws" {
-  override_during = plan
+  override_during = apply
 
   mock_resource "aws_kms_key" {
     defaults = {
@@ -26,11 +26,6 @@ run "log_groups_are_namespaced_encrypted_and_kept_ninety_days" {
   assert {
     condition     = alltrue([for group in aws_cloudwatch_log_group.service : group.retention_in_days == 90])
     error_message = "The retention table says operational logs are kept 90 days."
-  }
-
-  assert {
-    condition     = alltrue([for group in aws_cloudwatch_log_group.service : group.kms_key_id == aws_kms_key.logs.arn])
-    error_message = "Log groups are encrypted with the module's customer key."
   }
 
   assert {
@@ -90,3 +85,20 @@ run "not_sharing_keeps_the_key_policy_to_logs" {
     error_message = "Without sharing, the log key must admit only CloudWatch Logs and the account."
   }
 }
+
+# The key each log group is attached to, asserted where the value exists.
+#
+# `aws_kms_key.logs.arn` is computed, and the mock above supplies mocked values
+# during the apply phase, so this comparison cannot be made during a plan any
+# more than a real one could. An apply run under a mocked provider reaches
+# nothing and needs no credential.
+# `docs/decisions/g12j-mock-providers-keep-computed-values-unknown.md`.
+run "every_log_group_is_encrypted_with_the_module_s_own_key" {
+  command = apply
+
+  assert {
+    condition     = alltrue([for group in aws_cloudwatch_log_group.service : group.kms_key_id == aws_kms_key.logs.arn])
+    error_message = "Log groups are encrypted with the module's customer key."
+  }
+}
+

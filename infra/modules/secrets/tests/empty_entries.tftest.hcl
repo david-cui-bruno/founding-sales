@@ -1,5 +1,5 @@
 mock_provider "aws" {
-  override_during = plan
+  override_during = apply
 
   mock_resource "aws_kms_key" {
     defaults = {
@@ -61,11 +61,6 @@ run "entries_are_namespaced_and_customer_encrypted" {
   }
 
   assert {
-    condition     = alltrue([for secret in aws_secretsmanager_secret.this : secret.kms_key_id == aws_kms_key.secrets.arn])
-    error_message = "Every entry is encrypted with the module's customer key."
-  }
-
-  assert {
     condition     = alltrue([for secret in aws_secretsmanager_secret.this : secret.recovery_window_in_days == 30])
     error_message = "The default recovery window is 30 days."
   }
@@ -93,4 +88,19 @@ run "an_out_of_range_recovery_window_is_refused" {
   }
 
   expect_failures = [var.recovery_window_days]
+}
+
+# The key every entry is attached to, asserted where the value exists.
+#
+# `aws_kms_key.secrets.arn` is computed, and the mock provider above supplies
+# mocked values during the apply phase, so a plan here is as blind as a real
+# one. An apply run under a mocked provider reaches nothing and needs no
+# credential. `docs/decisions/g12j-mock-providers-keep-computed-values-unknown.md`.
+run "every_entry_is_encrypted_with_the_module_s_own_key" {
+  command = apply
+
+  assert {
+    condition     = alltrue([for secret in aws_secretsmanager_secret.this : secret.kms_key_id == aws_kms_key.secrets.arn])
+    error_message = "Every entry is encrypted with the module's customer key."
+  }
 }

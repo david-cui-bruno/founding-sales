@@ -1,5 +1,5 @@
 mock_provider "aws" {
-  override_during = plan
+  override_during = apply
 
   mock_resource "aws_kms_key" {
     defaults = {
@@ -62,8 +62,52 @@ run "the_bucket_is_versioned_locked_and_private" {
   }
 }
 
-run "the_policy_denies_deletion_and_admits_only_the_named_writers" {
+run "compliance_mode_is_available_by_variable" {
   command = plan
+
+  variables {
+    object_lock_mode           = "COMPLIANCE"
+    object_lock_retention_days = 30
+  }
+
+  assert {
+    condition     = aws_s3_bucket_object_lock_configuration.journal.rule[0].default_retention[0].mode == "COMPLIANCE"
+    error_message = "COMPLIANCE mode must be selectable."
+  }
+}
+
+run "a_journal_with_no_writer_is_refused" {
+  command = plan
+
+  variables {
+    writer_role_names = []
+  }
+
+  expect_failures = [var.writer_role_names]
+}
+
+run "an_unknown_lock_mode_is_refused" {
+  command = plan
+
+  variables {
+    object_lock_mode = "NONE"
+  }
+
+  expect_failures = [var.object_lock_mode]
+}
+
+# The rendered bucket policy, asserted where the value exists.
+#
+# Every statement names the bucket ARN, which is a computed attribute, so
+# `output.policy_json` is unknown for the whole plan phase once the mock stops
+# pretending otherwise (`override_during = apply`). A real plan is exactly as
+# blind, which is why this is an apply run; under a mocked provider it reaches
+# nothing and needs no credential. The alternative would be for the module to
+# build the ARN from the bucket name it already knows, which is a change to a
+# policy document and not to a test.
+# `docs/decisions/g12j-mock-providers-keep-computed-values-unknown.md`.
+run "the_policy_denies_deletion_and_admits_only_the_named_writers" {
+  command = apply
 
   assert {
     condition     = length([for statement in jsondecode(output.policy_json).Statement : statement if statement.Sid == "DenyAnyDeletionOrLockWeakening" && statement.Effect == "Deny" && contains(statement.Principal.AWS, "*")]) == 1
@@ -132,38 +176,4 @@ run "the_policy_denies_deletion_and_admits_only_the_named_writers" {
     ]) == 1
     error_message = "Plain HTTP must be denied."
   }
-}
-
-run "compliance_mode_is_available_by_variable" {
-  command = plan
-
-  variables {
-    object_lock_mode           = "COMPLIANCE"
-    object_lock_retention_days = 30
-  }
-
-  assert {
-    condition     = aws_s3_bucket_object_lock_configuration.journal.rule[0].default_retention[0].mode == "COMPLIANCE"
-    error_message = "COMPLIANCE mode must be selectable."
-  }
-}
-
-run "a_journal_with_no_writer_is_refused" {
-  command = plan
-
-  variables {
-    writer_role_names = []
-  }
-
-  expect_failures = [var.writer_role_names]
-}
-
-run "an_unknown_lock_mode_is_refused" {
-  command = plan
-
-  variables {
-    object_lock_mode = "NONE"
-  }
-
-  expect_failures = [var.object_lock_mode]
 }
