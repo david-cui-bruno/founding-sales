@@ -30,9 +30,38 @@ rehearsal_require_prefix "$PREFIX"
 REPORTS="$(rehearsal_report_dir)"
 mkdir -p "$REPORTS"
 
+# Everything below step 0 runs `fss admin ...`, and nothing in this repository
+# installs an `fss` executable: no package declares a `bin`, and no step of
+# `.github/workflows/greenfield-release.yml` puts one on PATH. A drill that discovered
+# that at step 0 would already have been cheap; one that discovered it at step 2 would
+# have created a restored RDS instance first. So it is a precondition, named, before
+# anything is addressed. Dry mode reaches no `fss` at all and so does not need it.
+if ! rehearsal_dry_run && ! command -v fss >/dev/null 2>&1; then
+  echo "FAIL: the restore drill runs 'fss admin ...' and no fss executable is on PATH." >&2
+  echo "      Nothing in this repository declares one (no package.json bin, no install step" >&2
+  echo "      in the release workflow). See docs/greenfield/release.md section 8." >&2
+  exit 1
+fi
+
 # The instants every "restore point minus N" is measured from. Recorded, never guessed.
 DRILL_START="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 RESTORE_TARGET="${FSS_RESTORE_TARGET:-$DRILL_START}"
+
+# `minus` below hands the target to `date`, one branch of which is BSD's
+# `date -j -f %Y-%m-%dT%H:%M:%SZ` and the other GNU's `date -d`. Both parse exactly this
+# shape and neither says anything useful about another one: an operator who exported
+# `FSS_RESTORE_TARGET=2026-09-21 00:00:00` gets a `date: illegal time format` from inside
+# a command substitution and a drill that stopped for no stated reason. The format is
+# therefore checked before it is used, and named in the refusal.
+RESTORE_TARGET_SHAPE='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
+if [[ ! "$RESTORE_TARGET" =~ $RESTORE_TARGET_SHAPE ]]; then
+  echo "FAIL: '$RESTORE_TARGET' is not an instant this drill can measure from." >&2
+  echo "      FSS_RESTORE_TARGET must be YYYY-MM-DDTHH:MM:SSZ, which is what both the GNU" >&2
+  echo "      and the BSD branch of the date arithmetic below parse, and what RDS's" >&2
+  echo "      --restore-time takes." >&2
+  exit 1
+fi
+
 rehearsal_log "drill start $DRILL_START, restore target $RESTORE_TARGET"
 
 minus() { # minus <seconds>
