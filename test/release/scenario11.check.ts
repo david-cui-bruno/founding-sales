@@ -1,3 +1,7 @@
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { mustBeRehearsed, readRepositoryFile, repositoryPath } from './support/coverage.ts';
 
@@ -97,5 +101,77 @@ describe('Appendix G 11: the restore drill is nine steps and has something to re
       stdio: 'pipe',
     });
     expect(output).toContain('Appendix E steps 1 to 9 complete');
+  });
+});
+
+/**
+ * G12f: the drill refuses its own missing preconditions before it creates anything.
+ *
+ * The first credentialed rehearsal never reached this script, but reading the order it
+ * runs in found two ways it would have failed only in the cloud, both after money had
+ * been spent:
+ *
+ *   * `FSS_RESTORE_TARGET` is handed straight to `date`, whose GNU and BSD branches
+ *     both parse exactly `YYYY-MM-DDTHH:MM:SSZ`. Anything else died inside a command
+ *     substitution with `date: illegal time format` and no statement of the cause;
+ *   * every non-dry step runs `fss admin …`, and nothing in this repository builds an
+ *     `fss` executable — no `bin` in any package, no install step in the release
+ *     workflow. The first `command not found` would have arrived at step 0, or, had
+ *     the baseline come from elsewhere, after step 1 had created a restored RDS
+ *     instance nobody was going to use.
+ *
+ * ## The vacuous-pass trap
+ *
+ * A precondition check that runs in dry mode only is a check of the fixture: dry mode
+ * reaches no `fss` and needs none, so a guard that fired there would say nothing about
+ * the credentialed run and would break every pull request. So the `fss` check runs in
+ * the real branch, and it is tested by running the drill with an empty PATH rather than
+ * by reading the script.
+ */
+describe('Appendix G 11: the drill refuses its own missing preconditions', () => {
+  /** Run the drill and report everything it said. */
+  function runDrill(
+    prefix: string,
+    environment: Readonly<Record<string, string>>,
+  ): { readonly code: number; readonly output: string } {
+    const result = spawnSync(repositoryPath('infra/scripts/rehearsal-restore-drill.sh'), [prefix], {
+      encoding: 'utf8',
+      env: { ...process.env, ...environment },
+    });
+    return { code: result.status ?? 1, output: `${result.stdout}${result.stderr}` };
+  }
+
+  it('refuses a restore target the date arithmetic cannot parse', () => {
+    const { code, output } = runDrill('fss-rh-shape', {
+      FSS_REHEARSAL_DRY_RUN: '1',
+      FSS_REHEARSAL_REPORTS: mkdtempSync(join(tmpdir(), 'fss-target-')),
+      FSS_RESTORE_TARGET: '2026-09-21 00:00:00',
+    });
+
+    expect(code).not.toBe(0);
+    expect(output).toContain('is not an instant this drill can measure from');
+  });
+
+  it('accepts one it can, so the refusal is not a refusal of everything', () => {
+    // The positive control: without it, a guard that refused every target would pass
+    // the case above and take the whole drill down with it.
+    const { code, output } = runDrill('fss-rh-shape', {
+      FSS_REHEARSAL_DRY_RUN: '1',
+      FSS_REHEARSAL_REPORTS: mkdtempSync(join(tmpdir(), 'fss-target-ok-')),
+      FSS_RESTORE_TARGET: '2026-09-21T00:00:00Z',
+    });
+
+    expect(code, output).toBe(0);
+    expect(output).toContain('restore target 2026-09-21T00:00:00Z');
+  });
+
+  it('names the missing fss executable rather than dying halfway through the drill', () => {
+    const { code, output } = runDrill('fss-rh-nocli', {
+      FSS_REHEARSAL_REPORTS: mkdtempSync(join(tmpdir(), 'fss-nocli-')),
+      PATH: `${mkdtempSync(join(tmpdir(), 'fss-nopath-'))}:/usr/bin:/bin`,
+    });
+
+    expect(code).not.toBe(0);
+    expect(output).toContain('no fss executable is on PATH');
   });
 });

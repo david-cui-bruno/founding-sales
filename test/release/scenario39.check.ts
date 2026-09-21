@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -554,5 +554,477 @@ describe('Appendix G 39: the plan guard is what reads the plan nobody can read',
       refused = true;
     }
     expect(refused).toBe(true);
+  });
+});
+
+/**
+ * G12f: the guard refused the rehearsal's own production-inventory read.
+ *
+ * Appendix G 39's last clause is measured rather than asserted: the guard records the
+ * production inventory before the run and compares it afterwards, so "teardown could
+ * not address production" is a diff rather than a claim. That read names production,
+ * and `rehearsal_refuse_production_arguments` refuses every argument that names
+ * production — so the first credentialed rehearsal (Actions 35548888865) refused
+ * itself at step 3 with
+ *
+ *   FAIL: a rehearsal command names a production resource: Key=Name,Values=fss-prod*
+ *
+ * and created nothing at all.
+ *
+ * ## The vacuous-pass trap
+ *
+ * The cheap fix is an exception for the string, and it is the wrong one twice over: a
+ * substring exception would let a `delete-db-instance` wearing the same filter through,
+ * and asserting that the guard "has an exception" would pass against a guard that had
+ * stopped refusing anything. Closed by making the exemption a function — one caller,
+ * one read-only operation checked against a list, no caller-supplied arguments — and by
+ * running the guard against every neighbouring case rather than reading it: the read is
+ * accepted, the same query anywhere else is refused, a mutating command naming
+ * production is refused, and a mutating command *claiming the exemption* is refused.
+ */
+
+/** Run a body with `rehearsal-common.sh` sourced, and report what it did. */
+function inCommon(
+  body: string,
+  environment: Readonly<Record<string, string>> = {},
+): { readonly code: number; readonly output: string } {
+  const directory = mkdtempSync(join(tmpdir(), 'fss-common-'));
+  const script = join(directory, 'case.sh');
+  writeFileSync(
+    script,
+    `#!/usr/bin/env bash\nsource ${repositoryPath('infra/scripts/rehearsal-common.sh')}\nset +e\n${body}\n`,
+  );
+  chmodSync(script, 0o755);
+  const result = spawnSync('/bin/bash', [script], {
+    encoding: 'utf8',
+    env: { ...process.env, ...environment },
+  });
+  return { code: result.status ?? 1, output: `${result.stdout}${result.stderr}` };
+}
+
+/** Write an executable stand-in (a fake `aws`, a fake `terraform`) and return its path. */
+function stubCommand(directory: string, name: string, body: string): string {
+  const path = join(directory, name);
+  writeFileSync(path, `#!/usr/bin/env bash\n${body}\n`);
+  chmodSync(path, 0o755);
+  return path;
+}
+
+/** Run one of the rehearsal scripts and report everything it said. */
+function runRehearsalScript(
+  script: string,
+  args: readonly string[],
+  environment: Readonly<Record<string, string>>,
+  cwd?: string,
+): { readonly code: number; readonly output: string } {
+  const result = spawnSync(repositoryPath(script), [...args], {
+    encoding: 'utf8',
+    env: { ...process.env, ...environment },
+    ...(cwd === undefined ? {} : { cwd }),
+  });
+  return { code: result.status ?? 1, output: `${result.stdout}${result.stderr}` };
+}
+
+/** A plan file holding exactly these lines. */
+function planFile(...lines: readonly string[]): string {
+  const directory = mkdtempSync(join(tmpdir(), 'fss-plan-'));
+  const path = join(directory, 'plan.txt');
+  writeFileSync(path, `${lines.join('\n')}\n`);
+  return path;
+}
+
+const GUARD = 'infra/scripts/rehearsal-prefix-guard.sh';
+const PRODUCTION_FILTER = 'Key=Name,Values=fss-prod*';
+
+describe('Appendix G 39: the production-name guard exempts one read-only inventory query', () => {
+  it('accepts the inventory read, and marks the line of the plan that claimed the exemption', () => {
+    const { code, output } = inCommon(
+      'FSS_REHEARSAL_DRY_RUN=1 rehearsal_read_production_inventory resourcegroupstaggingapi get-resources',
+    );
+
+    expect(code).toBe(0);
+    expect(output).toContain('resourcegroupstaggingapi get-resources');
+    expect(output).toContain('exempt-read-only-production-inventory');
+  });
+
+  it('refuses the same query issued through the ordinary wrapper', () => {
+    // The exemption is a caller, not a string. This is the exact command the first
+    // credentialed run made, and it must still be refused everywhere else.
+    const { output } = inCommon(
+      `FSS_REHEARSAL_DRY_RUN=1 rehearsal_aws resourcegroupstaggingapi get-resources --tag-filters '${PRODUCTION_FILTER}'\necho "rc=$?"`,
+    );
+
+    expect(output).toContain(`FAIL: a rehearsal command names a production resource: ${PRODUCTION_FILTER}`);
+    expect(output).toContain('rc=1');
+    // And it did not go on to plan the command anyway: a refusal that returns 0 is a
+    // refusal only while the caller happens to have errexit on.
+    expect(output).not.toContain('PLAN aws resourcegroupstaggingapi');
+  });
+
+  it('refuses a mutating command that names production, wrapper or not', () => {
+    const wrapped = inCommon(
+      'FSS_REHEARSAL_DRY_RUN=1 rehearsal_aws rds delete-db-instance --db-instance-identifier fss-prod-pg\necho "rc=$?"',
+    );
+    expect(wrapped.output).toContain('FAIL: a rehearsal command names a production resource: fss-prod-pg');
+    expect(wrapped.output).toContain('rc=1');
+    expect(wrapped.output).not.toContain('PLAN aws rds delete-db-instance');
+
+    const terraform = inCommon(
+      'FSS_REHEARSAL_DRY_RUN=1 rehearsal_terraform destroy -var=name_prefix=fss-prod\necho "rc=$?"',
+    );
+    expect(terraform.output).toContain('FAIL: a rehearsal command names a production resource');
+    expect(terraform.output).toContain('rc=1');
+  });
+
+  it('refuses a mutating verb from inside the exemption itself', () => {
+    // The read-only constraint is a check over the operation, not a property of the
+    // one literal written in the guard, so it can be violated and must then refuse.
+    const { output } = inCommon(
+      'FSS_REHEARSAL_DRY_RUN=1 rehearsal_read_production_inventory rds delete-db-instance\necho "rc=$?"',
+    );
+
+    expect(output).toContain('may only issue [resourcegroupstaggingapi:get-resources]');
+    expect(output).toContain('rc=1');
+  });
+
+  it('refuses arguments handed to the exemption, so no caller can push a name through it', () => {
+    const { output } = inCommon(
+      `FSS_REHEARSAL_DRY_RUN=1 rehearsal_read_production_inventory resourcegroupstaggingapi get-resources --tag-filters '${PRODUCTION_FILTER}'\necho "rc=$?"`,
+    );
+
+    expect(output).toContain('takes no further arguments');
+    expect(output).toContain('rc=1');
+  });
+
+  it('selects the production names locally, sorted, because the tag filter cannot do it', () => {
+    // `get-resources` tag-filter values are exact matches: `Values=fss-prod*` matches
+    // nothing, which would have made the before/after comparison a comparison of two
+    // empty lists. And the API promises no order, so an unsorted answer would fail the
+    // comparison for no reason.
+    const rows = JSON.stringify([
+      { arn: 'arn:aws:s3:::fss-prod-journal', name: 'fss-prod-journal' },
+      { arn: 'arn:aws:rds:us-east-1:1:db:fss-prod-pg', name: 'fss-prod-pg' },
+      { arn: 'arn:aws:s3:::somebody-elses', name: 'other' },
+    ]);
+    const { code, output } = inCommon(`printf '%s' '${rows}' | rehearsal_select_production_names`);
+
+    expect(code).toBe(0);
+    expect(JSON.parse(output)).toEqual([
+      'arn:aws:rds:us-east-1:1:db:fss-prod-pg',
+      'arn:aws:s3:::fss-prod-journal',
+    ]);
+  });
+
+  it('records a sentinel in dry mode, and the after phase refuses to compare against it', () => {
+    const reports = mkdtempSync(join(tmpdir(), 'fss-inventory-'));
+    const before = runRehearsalScript(GUARD, ['fss-rh-dryrun', 'before'], {
+      FSS_REHEARSAL_DRY_RUN: '1',
+      FSS_REHEARSAL_REPORTS: reports,
+    });
+    expect(before.code).toBe(0);
+    expect(readFileSync(join(reports, 'production-inventory.json'), 'utf8')).toContain(
+      'dry-run: no production inventory was read',
+    );
+
+    // The workflow runs the `before` phase in dry mode when it decides the prefix. If
+    // the real one never ran, comparing production against that file would be a pass
+    // by construction.
+    const stubs = mkdtempSync(join(tmpdir(), 'fss-stub-'));
+    const after = runRehearsalScript(GUARD, ['fss-rh-dryrun', 'after'], {
+      FSS_REHEARSAL_REPORTS: reports,
+      FSS_REHEARSAL_CALLER_IDENTITY: 'arn:aws:sts::123456789012:assumed-role/fss-rh-deploy/x',
+      TERRAFORM: stubCommand(stubs, 'terraform', 'echo "No state file was found!" >&2; exit 1'),
+      FSS_REHEARSAL_AWS_COMMAND: stubCommand(stubs, 'aws', 'echo "[]"'),
+    });
+    expect(after.code).not.toBe(0);
+    expect(after.output).toContain('the only inventory recorded was a dry run');
+  });
+});
+
+describe('Appendix G 39: the dry run reads the plan it printed, so the rehearsal cannot refuse itself', () => {
+  const release = readRepositoryFile('.github/workflows/greenfield-release.yml');
+
+  it('accepts the plan the dry run actually prints today', () => {
+    // Generated rather than fabricated: this is the same sequence the workflow runs,
+    // so a step that acquires a production-named command fails here on the pull
+    // request that adds it.
+    const reports = mkdtempSync(join(tmpdir(), 'fss-planrun-'));
+    const environment = {
+      FSS_REHEARSAL_DRY_RUN: '1',
+      FSS_REHEARSAL_REPORTS: reports,
+      FSS_CARRY_WATERMARK: '2026-09-21T00:00:00Z',
+      FSS_CARRY_SOURCE_TABLE: 'rehearsal-old-table',
+    };
+    const steps: readonly (readonly [string, readonly string[]])[] = [
+      ['infra/scripts/rehearsal-caller-identity.sh', ['fss-rh-deploy']],
+      [GUARD, ['fss-rh-dryrun', 'before']],
+      ['infra/scripts/rehearsal-schema-ranges.sh', ['fss-rh-dryrun']],
+      ['infra/scripts/rehearsal-restore-drill.sh', ['fss-rh-dryrun']],
+      ['infra/scripts/rehearsal-carry-watermark.sh', ['fss-rh-dryrun']],
+      ['infra/scripts/rehearsal-teardown.sh', ['fss-rh-dryrun']],
+      [GUARD, ['fss-rh-dryrun', 'after']],
+    ];
+    let printed = '';
+    for (const [script, args] of steps) {
+      const step = runRehearsalScript(script, args, environment);
+      expect(step.code, `${script} ${args.join(' ')}\n${step.output}`).toBe(0);
+      printed += step.output;
+    }
+    // The read is in the plan at all — before this lane it was invisible offline,
+    // which is why nothing caught it until a credential was spent.
+    expect(printed).toContain('exempt-read-only-production-inventory');
+
+    const directory = mkdtempSync(join(tmpdir(), 'fss-plan-'));
+    const path = join(directory, 'plan.txt');
+    writeFileSync(path, printed);
+    const guard = runRehearsalScript(GUARD, ['fss-rh-dryrun', 'plan', path], {});
+    expect(guard.code, guard.output).toBe(0);
+    expect(guard.output).toContain('no other planned command names production');
+  });
+
+  it('refuses the plan this rehearsal printed before the exemption existed', () => {
+    // The literal command of Actions run 35548888865. Red on the pull request now.
+    const guard = runRehearsalScript(
+      GUARD,
+      [
+        'fss-rh-dryrun',
+        'plan',
+        planFile(
+          `PLAN aws resourcegroupstaggingapi get-resources --tag-filters ${PRODUCTION_FILTER} --query 'ResourceTagMappingList[].ResourceARN' --output json`,
+        ),
+      ],
+      {},
+    );
+
+    expect(guard.code).not.toBe(0);
+    expect(guard.output).toContain('a rehearsal command names a production resource');
+  });
+
+  it('refuses an unmarked production command standing beside a legitimate read', () => {
+    // The refusal that the "no inventory read" case cannot distinguish: a plan with the
+    // exempt read in it and one other command naming production. Without this, a guard
+    // that counted the read and ignored everything else would look identical.
+    const guard = runRehearsalScript(
+      GUARD,
+      [
+        'fss-rh-dryrun',
+        'plan',
+        planFile(
+          'PLAN aws resourcegroupstaggingapi get-resources --tag-filters Key=Name --output json | select names beginning fss-prod # exempt-read-only-production-inventory',
+          'PLAN terraform destroy -var=name_prefix=fss-prod',
+        ),
+      ],
+      {},
+    );
+
+    expect(guard.code).not.toBe(0);
+    expect(guard.output).toContain('a rehearsal command names a production resource');
+    expect(guard.output).toContain("would be refused by the rehearsal's own guard");
+  });
+
+  it('refuses a mutating command that wears the exemption marker', () => {
+    const guard = runRehearsalScript(
+      GUARD,
+      [
+        'fss-rh-dryrun',
+        'plan',
+        planFile(
+          'PLAN aws rds delete-db-instance --db-instance-identifier fss-prod-pg # exempt-read-only-production-inventory',
+        ),
+      ],
+      {},
+    );
+
+    expect(guard.code).not.toBe(0);
+    expect(guard.output).toContain('claims the inventory exemption without being the inventory read');
+  });
+
+  it('refuses a plan with no inventory read at all, which is the shape of a silent deletion', () => {
+    const guard = runRehearsalScript(
+      GUARD,
+      ['fss-rh-dryrun', 'plan', planFile('PLAN terraform destroy -var=name_prefix=fss-rh-dryrun')],
+      {},
+    );
+
+    expect(guard.code).not.toBe(0);
+    expect(guard.output).toContain('the plan contains no production-inventory read');
+  });
+
+  it('refuses a plan file that is not there, which is the shape of a step that did not run', () => {
+    const guard = runRehearsalScript(GUARD, ['fss-rh-dryrun', 'plan', join(tmpdir(), 'fss-no-plan.txt')], {});
+    expect(guard.code).not.toBe(0);
+  });
+
+  it('is run by the credential-free job on every pull request, after the plan is printed', () => {
+    const dryRunJob = release.slice(release.indexOf('\n  dry-run:\n'), release.indexOf('\n  rehearsal:\n'));
+    const printedAt = dryRunJob.indexOf('Print the plan every rehearsal step would run');
+    const guardAt = dryRunJob.indexOf(`${GUARD} fss-rh-dryrun plan`);
+
+    expect(printedAt).toBeGreaterThan(-1);
+    expect(guardAt).toBeGreaterThan(printedAt);
+    // And the job that runs it holds no credential, which is the whole point.
+    expect(dryRunJob).not.toContain('environment: rehearsal');
+    expect(dryRunJob).toContain('The rehearsal dry run is offline and must never hold a cloud credential');
+  });
+});
+
+describe('Appendix G 39: a teardown of a run that created nothing still tears down', () => {
+  /** Everything absent, as it is after a run whose creation step never ran. */
+  const NOTHING_EXISTS = `
+case "$1 $2" in
+  "rds delete-db-instance")
+    echo "An error occurred (DBInstanceNotFound) when calling the DeleteDBInstance operation: not found" >&2
+    exit 254 ;;
+  "rds describe-db-snapshots") echo '[]' ; exit 0 ;;
+  "s3api list-object-versions")
+    echo "An error occurred (NoSuchBucket) when calling the ListObjectVersions operation: no such bucket" >&2
+    exit 254 ;;
+esac
+echo "unexpected: $*" >&2; exit 9`;
+
+  /** A rehearsal root with no state, and stand-ins for the two commands the teardown runs. */
+  function teardownWorld(options: { readonly aws: string; readonly terraform: string }): {
+    readonly code: number;
+    readonly output: string;
+    readonly reports: string;
+  } {
+    const stubs = mkdtempSync(join(tmpdir(), 'fss-teardown-'));
+    const reports = mkdtempSync(join(tmpdir(), 'fss-teardown-reports-'));
+    const result = runRehearsalScript(
+      'infra/scripts/rehearsal-teardown.sh',
+      ['fss-rh-nothing'],
+      {
+        FSS_REHEARSAL_REPORTS: reports,
+        FSS_REHEARSAL_CALLER_IDENTITY: 'arn:aws:sts::123456789012:assumed-role/fss-rh-deploy/x',
+        FSS_REHEARSAL_AWS_COMMAND: stubCommand(stubs, 'aws', options.aws),
+        TERRAFORM: stubCommand(stubs, 'terraform', options.terraform),
+      },
+      stubs,
+    );
+    return { ...result, reports };
+  }
+
+  it('treats every absent thing as already done, and reaches the last step', () => {
+    const { code, output, reports } = teardownWorld({
+      aws: NOTHING_EXISTS,
+      terraform: 'echo "No state file was found!" >&2; exit 1',
+    });
+
+    expect(code, output).toBe(0);
+    // Every one of the four steps ran; before this lane the first stopped the script.
+    expect(output).toContain('already absent (DBInstanceNotFound)');
+    expect(output).toContain('already absent (NoSuchBucket)');
+    expect(output).toContain('4/4 destroying the rehearsal root');
+    expect(output).toContain('created nothing to destroy');
+    expect(readFileSync(join(reports, 'teardown.txt'), 'utf8')).toContain('destroyed=nothing_created');
+  });
+
+  it('still destroys when there is something in the state, so tolerance is not silence', () => {
+    // The positive control. Without it, "skip everything" would pass the test above.
+    const { code, output, reports } = teardownWorld({
+      aws: NOTHING_EXISTS,
+      terraform:
+        'if [ "$1" = "state" ]; then echo "module.stack.aws_s3_bucket.journal"; else echo "destroy: $*"; fi',
+    });
+
+    expect(code, output).toBe(0);
+    expect(output).toContain('destroy: destroy -auto-approve');
+    expect(readFileSync(join(reports, 'teardown.txt'), 'utf8')).toContain('destroyed=true');
+  });
+
+  it('fails on a refusal that is not an absence, because those must not read the same', () => {
+    const { code, output } = teardownWorld({
+      aws: 'echo "An error occurred (AccessDenied) when calling the DeleteDBInstance operation: no" >&2; exit 254',
+      terraform: 'echo "No state file was found!" >&2; exit 1',
+    });
+
+    expect(code).not.toBe(0);
+    expect(output).toContain('did not fail because the resource was absent');
+  });
+
+  it('fails when the state is unreadable for a reason that is not “nothing was created”', () => {
+    const { code, output } = teardownWorld({
+      aws: NOTHING_EXISTS,
+      terraform: 'echo "Error: error loading state: AccessDenied" >&2; exit 1',
+    });
+
+    expect(code).not.toBe(0);
+    expect(output).toContain('not because the run created nothing');
+  });
+
+  it('deletes only this run’s snapshots, and tolerates one that is already gone', () => {
+    const { code, output } = teardownWorld({
+      aws: `
+case "$1 $2" in
+  "rds delete-db-instance") exit 0 ;;
+  "rds describe-db-snapshots") echo '["fss-rh-nothing-final","fss-prod-nightly","fss-rh-someone-else"]' ; exit 0 ;;
+  "rds delete-db-snapshot")
+    echo "An error occurred (DBSnapshotNotFound) when calling the DeleteDBSnapshot operation: gone" >&2
+    exit 254 ;;
+  "s3api list-object-versions") echo '{"Objects": null}' ; exit 0 ;;
+esac
+echo "unexpected: $*" >&2; exit 9`,
+      terraform: 'echo "No state file was found!" >&2; exit 1',
+    });
+
+    expect(code, output).toBe(0);
+    expect(output).toContain('deleting snapshot fss-rh-nothing-final: already absent (DBSnapshotNotFound)');
+    // The classifier, not a prefix match somebody wrote twice.
+    expect(output).not.toContain('fss-prod-nightly');
+    expect(output).not.toContain('deleting snapshot fss-rh-someone-else');
+  });
+
+  it('still measures the production inventory afterwards when nothing was created', () => {
+    // The deliverable of the scenario, and the thing that was lost when the teardown
+    // stopped at its first step: the comparison has to run, and pass, on the run that
+    // created nothing.
+    const stubs = mkdtempSync(join(tmpdir(), 'fss-after-'));
+    const reports = mkdtempSync(join(tmpdir(), 'fss-after-reports-'));
+    const environment = {
+      FSS_REHEARSAL_REPORTS: reports,
+      FSS_REHEARSAL_CALLER_IDENTITY: 'arn:aws:sts::123456789012:assumed-role/fss-rh-deploy/x',
+      FSS_REHEARSAL_AWS_COMMAND: stubCommand(
+        stubs,
+        'aws',
+        `echo '[{"arn":"arn:aws:s3:::fss-prod-journal","name":"fss-prod-journal"}]'`,
+      ),
+      TERRAFORM: stubCommand(stubs, 'terraform', 'echo "No state file was found!" >&2; exit 1'),
+    };
+
+    const before = runRehearsalScript(GUARD, ['fss-rh-nothing', 'before'], environment);
+    expect(before.code, before.output).toBe(0);
+    expect(readFileSync(join(reports, 'production-inventory.json'), 'utf8')).toContain('fss-prod-journal');
+
+    const after = runRehearsalScript(GUARD, ['fss-rh-nothing', 'after'], environment, stubs);
+    expect(after.code, after.output).toBe(0);
+    expect(after.output).toContain('nothing with the production prefix was addressed');
+    expect(readFileSync(join(reports, 'prefix-guard.txt'), 'utf8')).toContain('state_read=false');
+  });
+
+  it('fails the comparison when production changed, so the pass above is not free', () => {
+    const stubs = mkdtempSync(join(tmpdir(), 'fss-changed-'));
+    const reports = mkdtempSync(join(tmpdir(), 'fss-changed-reports-'));
+    const terraform = stubCommand(stubs, 'terraform', 'echo "No state file was found!" >&2; exit 1');
+
+    const before = runRehearsalScript(GUARD, ['fss-rh-nothing', 'before'], {
+      FSS_REHEARSAL_REPORTS: reports,
+      FSS_REHEARSAL_AWS_COMMAND: stubCommand(stubs, 'aws-before', `echo '[{"arn":"arn:a","name":"fss-prod-a"}]'`),
+      TERRAFORM: terraform,
+    });
+    expect(before.code, before.output).toBe(0);
+
+    const after = runRehearsalScript(
+      GUARD,
+      ['fss-rh-nothing', 'after'],
+      {
+        FSS_REHEARSAL_REPORTS: reports,
+        FSS_REHEARSAL_CALLER_IDENTITY: 'arn:aws:sts::123456789012:assumed-role/fss-rh-deploy/x',
+        FSS_REHEARSAL_AWS_COMMAND: stubCommand(stubs, 'aws-after', `echo '[]'`),
+        TERRAFORM: terraform,
+      },
+      stubs,
+    );
+    expect(after.code).not.toBe(0);
+    expect(after.output).toContain('the production inventory changed during the rehearsal run');
   });
 });

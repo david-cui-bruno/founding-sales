@@ -1,9 +1,13 @@
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { effectiveSendingEnabled } from '@fss/domain/settings';
 import { SEND_REFUSAL_CODES } from '@fss/domain/outbound';
 import { DEPLOYMENT_ENVIRONMENT_VARIABLES as WORKER_VARIABLES } from '../../apps/worker/src/bootstrap/deployment.ts';
 import { DEPLOYMENT_ENVIRONMENT_VARIABLES as API_VARIABLES } from '../../apps/api/src/bootstrap/deployment.ts';
-import { mustBeRehearsed, readRepositoryFile } from './support/coverage.ts';
+import { mustBeRehearsed, readRepositoryFile, repositoryPath } from './support/coverage.ts';
 
 /**
  * Appendix G 42: "Authentication passes but production sending remains disabled until
@@ -191,5 +195,74 @@ describe('Appendix G 42: sending stays off until all four agree', () => {
         expect(source, path).toContain('must be true or false');
       }
     });
+  });
+});
+
+/**
+ * G12f: the one exemption is one exemption.
+ *
+ * `rehearsal_read_production_inventory` is allowed to name production because Appendix
+ * G 39's last clause is measured rather than asserted. Appendix G 42's record is the
+ * other thing that reads a production name — the digests it compares are production's —
+ * and it refuses every argument that names one. A change that widened the refusal into
+ * a general allowance would show up here first: the record would accept
+ * `fss-prod` as a rehearsal prefix and write a release gate reference for it.
+ *
+ * ## The vacuous-pass trap
+ *
+ * Asserting that the script still *contains* `rehearsal_refuse_production_arguments`
+ * would pass against a guard whose refusal had become a warning, which is exactly the
+ * shape of the bug this lane fixed (`rehearsal_aws` printed FAIL and returned 0). So
+ * the script is run, with a production prefix and with a production name buried in an
+ * argument that is not the prefix, and both must be refused with nothing written.
+ */
+describe('Appendix G 42: the inventory exemption did not become a general one', () => {
+  const record = 'infra/scripts/rehearsal-release-record.sh';
+  const digest = (letter: string): string => `sha256:${letter.repeat(64)}`;
+
+  function writeRecord(args: readonly string[]): { readonly code: number; readonly output: string } {
+    const reports = mkdtempSync(join(tmpdir(), 'fss-record-'));
+    for (const report of ['restore-drill.txt', 'schema-ranges.txt', 'prefix-guard.txt']) {
+      writeFileSync(join(reports, report), 'prefix=fss-rh-case\n');
+    }
+    writeFileSync(join(reports, 'carry-watermark.txt'), 'carry_drill=skipped_no_watermark\n');
+    const out = join(reports, 'release-record.json');
+    const result = spawnSync(repositoryPath(record), [...args, out], {
+      encoding: 'utf8',
+      env: { ...process.env, FSS_REHEARSAL_REPORTS: reports, FSS_REHEARSAL_DRY_RUN: '1' },
+    });
+    return {
+      code: result.status ?? 1,
+      output: `${result.stdout}${result.stderr}${existsSync(out) ? readFileSync(out, 'utf8') : ''}`,
+    };
+  }
+
+  it('writes a record for a rehearsal prefix, which is the positive control', () => {
+    const { code, output } = writeRecord(['fss-rh-case', digest('a'), digest('b'), 'commit', 'pass']);
+
+    expect(code, output).toBe(0);
+    expect(output).toContain('"releaseGateReference": "fss-rh-case-');
+  });
+
+  it('refuses a production prefix', () => {
+    const { code, output } = writeRecord(['fss-prod', digest('a'), digest('b'), 'commit', 'pass']);
+
+    expect(code).not.toBe(0);
+    expect(output).not.toContain('releaseGateReference');
+  });
+
+  it('refuses a production name anywhere else in its arguments', () => {
+    // The desktop stamp is free text, so it is the argument a production name would
+    // reach the record through.
+    const { code, output } = writeRecord([
+      'fss-rh-case',
+      digest('a'),
+      digest('b'),
+      'fss-prod-desktop',
+      'pass',
+    ]);
+
+    expect(code).not.toBe(0);
+    expect(output).toContain('names a production resource');
   });
 });
