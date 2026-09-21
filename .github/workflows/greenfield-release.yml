@@ -217,17 +217,39 @@ jobs:
             echo ''
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+          # `release-deploy.sh` and `rehearsal-run-task.sh` read the root's outputs,
+          # which a dry run cannot: there is no state and no credential. Every one is
+          # supplied here as an `FSS_RELEASE_OUTPUT_*` fixture, in the shape Terraform
+          # prints, so the plan the dry run shows is the plan the real run makes with
+          # the same code taking the same branches.
+          export FSS_RELEASE_ACCOUNT=123456789012
+          export FSS_RELEASE_CALLER_ACCOUNT=123456789012
+          export FSS_RELEASE_WORKER_DIGEST="sha256:$(printf 'b%.0s' {1..64})"
+          export FSS_RELEASE_OUTPUT_CLUSTER_ARN="arn:aws:ecs:us-east-1:123456789012:cluster/${prefix}-cluster"
+          export FSS_RELEASE_OUTPUT_MIGRATION_TASK_DEFINITION_ARN="arn:aws:ecs:us-east-1:123456789012:task-definition/${prefix}-migration:1"
+          export FSS_RELEASE_OUTPUT_OPERATIONS_TASK_DEFINITION_ARN="arn:aws:ecs:us-east-1:123456789012:task-definition/${prefix}-operations:1"
+          export FSS_RELEASE_OUTPUT_DRILL_TASK_DEFINITION_ARN="arn:aws:ecs:us-east-1:123456789012:task-definition/${prefix}-drill:1"
+          export FSS_RELEASE_OUTPUT_MIGRATION_DATABASE_SECRET_ARN="arn:aws:secretsmanager:us-east-1:123456789012:secret:${prefix}/migration-database-aaaaaa"
+          export FSS_RELEASE_OUTPUT_APP_RUNTIME_DATABASE_SECRET_ARN="arn:aws:secretsmanager:us-east-1:123456789012:secret:${prefix}/app-runtime-database-bbbbbb"
+          export FSS_RELEASE_OUTPUT_WORKER_LOG_GROUP_NAME="/fss/${prefix}/worker"
+          export FSS_RELEASE_OUTPUT_TASK_NETWORK_CONFIGURATION='{"subnet_ids":["subnet-1111111111111111a","subnet-1111111111111111b"],"security_group_id":"sg-1111111111111111b","assign_public_ip":"ENABLED","database_port":5432,"database_host":"'"$prefix"'-pg.example.us-east-1.rds.amazonaws.com","inbound_rule_count":0}'
+          export FSS_RELEASE_OUTPUT_DEPLOYMENT_PLAN='{"bootstrap":true,"api":{"service_name":"'"$prefix"'-api","declared_desired_count":1,"planned_desired_count":0},"worker":{"service_name":"'"$prefix"'-worker","declared_desired_count":1,"planned_desired_count":0}}'
+
           for step in \
             "infra/scripts/rehearsal-caller-identity.sh fss-rh-deploy" \
             "infra/scripts/rehearsal-prefix-guard.sh $prefix before" \
+            "infra/scripts/release-deploy.sh infra/roots/rehearsal $prefix --schema-change --worker-digest $FSS_RELEASE_WORKER_DIGEST" \
             "infra/scripts/rehearsal-schema-ranges.sh $prefix" \
             "infra/scripts/rehearsal-restore-drill.sh $prefix" \
             "infra/scripts/rehearsal-carry-watermark.sh $prefix" \
             "infra/scripts/rehearsal-teardown.sh $prefix" \
             "infra/scripts/rehearsal-prefix-guard.sh $prefix after"; do
             echo "== $step"
+            # Both streams: the value-returning helpers in `release-common.sh` print
+            # their plan line on stderr, because their stdout is the answer a caller
+            # captures (`docs/decisions/g12h-the-report-comes-back-in-the-log.md`).
             # shellcheck disable=SC2086
-            $step | tee -a "$plan" | tee -a "$GITHUB_STEP_SUMMARY"
+            $step 2>&1 | tee -a "$plan" | tee -a "$GITHUB_STEP_SUMMARY"
           done
           echo "plan=$plan" >> "$GITHUB_OUTPUT"
           # The record is written last, from the reports the steps above produced.
