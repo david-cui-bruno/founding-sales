@@ -665,6 +665,11 @@ done`;
     }
     // And the sample ARNs are of the namespace it was asked about, never the other one.
     expect(output).not.toContain('fss-prod');
+    // The groups whose actions take no resource pass no `--resource-arns` rather than
+    // the literal `*`: the parameter documents its own default as every resource and
+    // does not document `*` as a legal element, and finding that out from the CLI in
+    // front of an apply is what this command exists to avoid.
+    expect(output).toContain('with no --resource-arns, because these actions take no resource');
   });
 
   it('passes and counts when every action is allowed', () => {

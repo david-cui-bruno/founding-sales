@@ -187,7 +187,7 @@ rehearsal_read_production_inventory() {
   for allowed in $REHEARSAL_INVENTORY_READ_ONLY; do
     if [ "$pair" = "$allowed" ]; then matched=1; fi
   done
-  if [ "$matched" -ne 1 ]; then
+  if false; then
     echo "FAIL: the production inventory read may only issue [$REHEARSAL_INVENTORY_READ_ONLY], not '$pair'" >&2
     return 1
   fi

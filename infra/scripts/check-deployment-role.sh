@@ -103,7 +103,11 @@ if [ "${FSS_CHECK_ROLE_DRY_RUN:-}" = "1" ]; then
     [ -n "$name" ] || continue
     echo "plan: $name"
     printf '%s\n' "$actions" | tr ',' '\n' | sed 's/^/plan:   /'
-    echo "plan:   on $resource"
+    if [ "$resource" = '*' ]; then
+      echo "plan:   with no --resource-arns, because these actions take no resource"
+    else
+      echo "plan:   on $resource"
+    fi
     [ -z "$context" ] || echo "plan:   with $context"
   done <<<"$CHECK_GROUPS"
   echo "plan: no call was made"
@@ -120,10 +124,17 @@ while IFS='|' read -r name actions resource context; do
   simulate_arguments=(
     iam simulate-principal-policy
     --policy-source-arn "arn:aws:iam::${ACCOUNT}:role/${ROLE}"
-    --resource-arns "$resource"
     --query 'EvaluationResults[].[EvalActionName,EvalDecision]'
     --output text
   )
+  # A `*` in the resource column means "the API takes no resource", and the way to say
+  # that to `simulate-principal-policy` is to pass no `--resource-arns` at all: the
+  # parameter documents its own default as every resource, and `*` is not documented as
+  # a legal element of the list. Passing it and finding out is the kind of thing that
+  # should not happen in front of an apply.
+  if [ "$resource" != '*' ]; then
+    simulate_arguments+=(--resource-arns "$resource")
+  fi
   # `--action-names` takes a list; the shell splits the comma-separated column.
   IFS=',' read -r -a action_list <<<"$actions"
   simulate_arguments+=(--action-names "${action_list[@]}")
