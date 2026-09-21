@@ -17,8 +17,42 @@ run "entries_are_namespaced_and_customer_encrypted" {
   command = plan
 
   assert {
-    condition     = length(aws_secretsmanager_secret.this) == 6
-    error_message = "The default secret set is the six entries the design names."
+    condition     = length(aws_secretsmanager_secret.this) == 8
+    error_message = "The default secret set is the six application entries plus the two database entries G12h added."
+  }
+
+  # G12h, David's condition of 21 September. Two entries rather than one, because
+  # the whole point is that the identity that may read one may not read the other:
+  # `infra/modules/cluster` gives `migration-database` to the migration execution
+  # role alone and `app-runtime-database` to the two services. Both are created
+  # empty here, like the other six, and Terraform never holds either value.
+  assert {
+    condition     = contains(keys(aws_secretsmanager_secret.this), "migration-database")
+    error_message = "The migration user's credentials live in their own entry, not inside another one."
+  }
+
+  assert {
+    condition     = contains(keys(aws_secretsmanager_secret.this), "app-runtime-database")
+    error_message = "The services connect as app_runtime from their own entry, never as the RDS-managed master user."
+  }
+
+  assert {
+    condition = (
+      aws_secretsmanager_secret.this["migration-database"].name == "fss-test/migration-database"
+      && aws_secretsmanager_secret.this["app-runtime-database"].name == "fss-test/app-runtime-database"
+    )
+    error_message = "The two database entries are two entries. One entry read by both identities would be the boundary written down and not built."
+  }
+
+  # And neither of them is part of the application secret set the cluster hands
+  # to both services: they arrive through their own named inputs, under their own
+  # privileges, or they do not arrive at all.
+  assert {
+    condition = (
+      !contains(keys(output.application_secret_arns), "migration-database")
+      && !contains(keys(output.application_secret_arns), "app-runtime-database")
+    )
+    error_message = "A database entry must not reach a task through the general application secret map as well."
   }
 
   assert {

@@ -321,3 +321,25 @@ variable "gcp_region" {
   type        = string
   default     = "us-east1"
 }
+
+variable "bootstrap" {
+  description = <<-EOT
+    True for the first apply of a brand-new production environment, and false
+    for every apply afterwards (G12h; the decision record of 21 September).
+
+    A fresh environment has an empty database, and both binaries refuse to
+    start unless the applied schema version is exactly the range they declare.
+    So the first apply creates both services at desired count zero and
+    `infra/scripts/release-deploy.sh infra/roots/production fss-prod` scales
+    them — worker, then API — after the migration task and `fss verify` have
+    both succeeded.
+
+    Passing `true` to an environment that is already running scales both
+    services to zero. That is a real outage and never what an ordinary release
+    wants; a schema release stops the services through
+    `release-deploy.sh --schema-change`, which restores the declared counts at
+    the end of the same run.
+  EOT
+  type        = bool
+  default     = false
+}

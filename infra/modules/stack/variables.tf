@@ -202,6 +202,22 @@ variable "worker_desired_count" {
   default     = 1
 }
 
+variable "bootstrap" {
+  description = <<-EOT
+    True on the first apply of a fresh environment: both services are created
+    at desired count zero and `infra/scripts/release-deploy.sh` scales them
+    after the migration task and `fss verify` succeed, worker before API.
+
+    A fresh environment cannot start its services before the schema exists.
+    Both binaries refuse to start unless the applied schema version is exactly
+    the range they declare, so an apply that created them running would create
+    two services crash-looping on an empty database while the migration task
+    that would fix it had not been launched yet.
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "container_insights" {
   description = "enabled, enhanced or disabled."
   type        = string

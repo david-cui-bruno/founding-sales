@@ -22,11 +22,27 @@ variable "secret_names" {
     "device-credential-pepper",
     "llm-classifier-api-key",
     "research-provider-credentials",
+    # The two database identities (G12h, David's condition of 21 September).
+    # Separate entries because the point is that the identity which may read one
+    # may not read the other: `infra/modules/cluster` gives the first to the
+    # migration execution role alone and the second to the two services, and
+    # nothing in the cluster may read the RDS-managed master secret at all.
+    "migration-database",
+    "app-runtime-database",
   ]
 
   validation {
     condition     = length(var.secret_names) > 0 && alltrue([for name in var.secret_names : can(regex("^[a-z][a-z0-9-]{2,48}$", name))])
     error_message = "Secret logical names must be lowercase letters, digits or hyphens."
+  }
+
+  # The two database entries are structural, not optional: `outputs.tf` names
+  # them, `infra/modules/cluster` splits its execution-role policies along them,
+  # and a caller who dropped one would otherwise get an index error four modules
+  # away instead of a refusal here.
+  validation {
+    condition     = contains(var.secret_names, "migration-database") && contains(var.secret_names, "app-runtime-database")
+    error_message = "Every environment has a migration-database entry and an app-runtime-database entry; the boundary between the two is what stops a service holding DDL credentials."
   }
 }
 

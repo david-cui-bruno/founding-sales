@@ -42,6 +42,7 @@ module "stack" {
   cpu_architecture       = var.cpu_architecture
   api_desired_count      = var.api_desired_count
   worker_desired_count   = var.worker_desired_count
+  bootstrap              = var.bootstrap
   container_insights     = "disabled"
   enable_execute_command = var.enable_execute_command
 

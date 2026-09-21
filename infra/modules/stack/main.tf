@@ -228,18 +228,23 @@ module "cluster" {
   cpu_architecture     = var.cpu_architecture
   api_desired_count    = var.api_desired_count
   worker_desired_count = var.worker_desired_count
+  bootstrap            = var.bootstrap
 
   target_group_arn      = module.edge.target_group_arn
   api_log_group_name    = module.observability.log_group_names["api"]
   worker_log_group_name = module.observability.log_group_names["worker"]
 
-  secret_arns                = module.secrets.secret_arns
-  database_master_secret_arn = module.database.master_user_secret_arn
-  journal_bucket_arn         = module.journal.bucket_arn
-  journal_kms_key_arn        = module.journal.kms_key_arn
-  envelope_kms_key_arn       = module.secrets.envelope_kms_key_arn
-  secrets_kms_key_arn        = module.secrets.secrets_kms_key_arn
-  database_kms_key_arn       = module.database.kms_key_arn
+  # The application secrets only. The two database entries arrive through their
+  # own named inputs below, so each reaches exactly one execution role and the
+  # cluster's boundary cannot be undone by a key appearing twice.
+  secret_arns                     = module.secrets.application_secret_arns
+  app_runtime_database_secret_arn = module.secrets.app_runtime_database_secret_arn
+  migration_database_secret_arn   = module.secrets.migration_database_secret_arn
+
+  journal_bucket_arn   = module.journal.bucket_arn
+  journal_kms_key_arn  = module.journal.kms_key_arn
+  envelope_kms_key_arn = module.secrets.envelope_kms_key_arn
+  secrets_kms_key_arn  = module.secrets.secrets_kms_key_arn
 
   metric_namespace       = module.observability.metric_namespace
   container_insights     = var.container_insights

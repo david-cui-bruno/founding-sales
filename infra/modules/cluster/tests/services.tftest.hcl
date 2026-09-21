@@ -23,12 +23,12 @@ variables {
   api_log_group_name        = "/fss/fss-test/api"
   worker_log_group_name     = "/fss/fss-test/worker"
 
-  database_master_secret_arn = "arn:aws:secretsmanager:us-east-1:123456789012:secret:rds!db-mock"
-  journal_bucket_arn         = "arn:aws:s3:::fss-test-suppression-journal-123456789012"
-  journal_kms_key_arn        = "arn:aws:kms:us-east-1:123456789012:key/11111111-2222-4333-8444-555555555551"
-  envelope_kms_key_arn       = "arn:aws:kms:us-east-1:123456789012:key/11111111-2222-4333-8444-555555555552"
-  secrets_kms_key_arn        = "arn:aws:kms:us-east-1:123456789012:key/11111111-2222-4333-8444-555555555553"
-  database_kms_key_arn       = "arn:aws:kms:us-east-1:123456789012:key/11111111-2222-4333-8444-555555555554"
+  app_runtime_database_secret_arn = "arn:aws:secretsmanager:us-east-1:123456789012:secret:fss-test/app-runtime-database-cccccc"
+  migration_database_secret_arn   = "arn:aws:secretsmanager:us-east-1:123456789012:secret:fss-test/migration-database-bbbbbb"
+  journal_bucket_arn              = "arn:aws:s3:::fss-test-suppression-journal-123456789012"
+  journal_kms_key_arn             = "arn:aws:kms:us-east-1:123456789012:key/11111111-2222-4333-8444-555555555551"
+  envelope_kms_key_arn            = "arn:aws:kms:us-east-1:123456789012:key/11111111-2222-4333-8444-555555555552"
+  secrets_kms_key_arn             = "arn:aws:kms:us-east-1:123456789012:key/11111111-2222-4333-8444-555555555553"
 }
 
 run "the_two_services_have_separate_task_and_execution_roles" {

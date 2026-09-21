@@ -381,3 +381,17 @@ variable "gcp_region" {
   type        = string
   default     = "us-east1"
 }
+
+variable "bootstrap" {
+  description = <<-EOT
+    True for a rehearsal run, always, because every rehearsal environment is a
+    fresh one: the apply creates it, and its database has no schema until the
+    migration task has run. The release workflow passes `true` and then scales
+    through `infra/scripts/release-deploy.sh`.
+
+    It is a variable rather than a literal so that the rehearsal and production
+    roots take the same input and the shared deploy script has one code path.
+  EOT
+  type        = bool
+  default     = true
+}
