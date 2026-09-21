@@ -906,13 +906,36 @@ esac
 echo "unexpected: $*" >&2; exit 9`;
 
   /** A rehearsal root with no state, and stand-ins for the two commands the teardown runs. */
-  function teardownWorld(options: { readonly aws: string; readonly terraform: string }): {
+  function teardownWorld(options: {
+    readonly aws: string;
+    readonly terraform: string;
+    /** The create step writes this file beside the root; a teardown from a fresh checkout has none. */
+    readonly tfvars?: boolean;
+  }): {
     readonly code: number;
     readonly output: string;
     readonly reports: string;
   } {
     const stubs = mkdtempSync(join(tmpdir(), 'fss-teardown-'));
     const reports = mkdtempSync(join(tmpdir(), 'fss-teardown-reports-'));
+    if (options.tfvars ?? true) {
+      // What the create step leaves: identifiers only, and every variable the root
+      // requires, because `terraform destroy` asks for the same ones `apply` did.
+      writeFileSync(
+        join(stubs, 'run.auto.tfvars.json'),
+        JSON.stringify({
+          assume_deployment_role: false,
+          bootstrap: true,
+          name_prefix: 'fss-rh-nothing',
+          api_image: `123456789012.dkr.ecr.us-east-1.amazonaws.com/fss-rh-api@sha256:${'a'.repeat(64)}`,
+          worker_image: `123456789012.dkr.ecr.us-east-1.amazonaws.com/fss-rh-worker@sha256:${'b'.repeat(64)}`,
+          certificate_arn: 'arn:aws:acm:us-east-1:123456789012:certificate/00000000-0000-0000-0000-000000000000',
+          api_hostname: 'rehearsal.example.invalid',
+          api_schema_range: { min: 14, max: 14 },
+          worker_schema_range: { min: 14, max: 14 },
+        }),
+      );
+    }
     const result = runRehearsalScript(
       'infra/scripts/rehearsal-teardown.sh',
       ['fss-rh-nothing'],
@@ -957,6 +980,24 @@ echo "unexpected: $*" >&2; exit 9`;
     expect(code, output).toBe(0);
     expect(output).toContain('destroy: destroy -auto-approve');
     expect(readFileSync(join(reports, 'teardown.txt'), 'utf8')).toContain('destroyed=true');
+  });
+
+  it('refuses to destroy without the file the create step wrote, rather than fail on a missing variable', () => {
+    // `terraform destroy` requires every variable `apply` did. The second credentialed
+    // run (21 September 2026) showed the apply itself missing two of them; a teardown
+    // that reached destroy with none would have been refused by Terraform and left the
+    // environment standing. The script's refusal names the file and where the recipe is.
+    const { code, output } = teardownWorld({
+      aws: NOTHING_EXISTS,
+      terraform:
+        'if [ "$1" = "state" ]; then echo "module.stack.aws_s3_bucket.journal"; else echo "destroy: $*"; fi',
+      tfvars: false,
+    });
+
+    expect(code, output).toBe(1);
+    expect(output).toContain('run.auto.tfvars.json is absent');
+    expect(output).toContain('release.md section 3 step 13');
+    expect(output).not.toContain('destroy: destroy -auto-approve');
   });
 
   it('fails on a refusal that is not an absence, because those must not read the same', () => {
