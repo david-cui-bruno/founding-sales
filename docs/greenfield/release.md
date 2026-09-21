@@ -220,7 +220,7 @@ Actions → *Greenfield release rehearsal* → Run workflow, with:
 
 ### 3.0 The four stages, and the order to use them in
 
-Until 21 September the workflow had one mode — the whole thirteen-step gate — and the
+Until 21 September the workflow had one mode — the whole gate, all fifteen steps of it — and the
 three credentialed runs of that day each stopped at the first error of a class no
 offline check can see. One error per run, about an hour of attention each. `stage` makes
 the cheap part runnable alone. Each stage runs everything the stage before it runs, plus
@@ -281,12 +281,14 @@ artifact, and the job summary gets this instead, built from `terraform show -jso
 of each change's `address` and `actions` and nothing else:
 
 ```
-resource changes: 87
-  create: 87
+resource changes: <count>
+  create: <count>
 create module.stack.module.cluster.aws_ecs_service.api
 create module.stack.module.cluster.aws_ecs_service.worker
 …
 ```
+
+(A shape, not a measurement: no rehearsal root has ever been planned.)
 
 A second program then refuses to publish that summary if any value of a variable
 assembled from a repository secret appears in it — `api_image`, `worker_image`,
@@ -653,14 +655,16 @@ run with G12i's variables in place.
 
 - *"The apply names every variable the root requires."* It does now. The run got past
   variable evaluation, which is where the second run stopped, and
-  `run.auto.tfvars.json` was written beside the root with all nine entries — so the
-  teardown of a run that had created something would have had the values
-  `terraform destroy` requires. 8.0b's first refutation is closed.
+  `run.auto.tfvars.json` was written beside the root before the apply, in the same
+  step and printing the count it wrote — so the teardown of a run that had created
+  something would have had the values `terraform destroy` requires. 8.0b's first
+  refutation is closed.
 - The per-run state key works a second time: `terraform init -reconfigure` against
   `fss/greenfield/rehearsal/<prefix>/terraform.tfstate` succeeded, as it did on the
   second run. The backend, the lock table and the state KMS key are no longer a guess.
-- The tolerant teardown and the post-run guard behaved again as section 3 steps 13 and
-  14 describe for a run that created nothing, and **no release record was written**.
+- The teardown and the post-run guard ran, as `if: always()` makes them, on a run that
+  had created nothing — the case section 3 step 13 describes — and **no release record
+  was written**, because the record step follows a failed step and is skipped.
 
 **Refuted.**
 

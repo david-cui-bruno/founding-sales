@@ -46,7 +46,8 @@ name: Greenfield release rehearsal
 #   * `plan`   — identity, the production inventory, `terraform init`, the tfvars file,
 #                `terraform plan` with the same variables the apply uses, and a summary
 #                of counts and addresses. Nothing is created.
-#   * `create` — the plan, then `terraform apply` of the plan file it just wrote.
+#   * `create` — the plan, then `terraform apply`, which names no variable of its own
+#                and reads the `run.auto.tfvars.json` the plan stage wrote.
 #   * `deploy` — create, then the two database entries and `release-deploy.sh`, then the
 #                smoke.
 #   * `full`   — everything, and the **only** stage that writes a release record.

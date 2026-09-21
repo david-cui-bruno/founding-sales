@@ -16,8 +16,8 @@ Three credentialed rehearsals on 21 September, three errors, one per run:
 
 Each of the three is a fact about this repository rather than about AWS, each was
 invisible to every offline layer, and each cost about an hour of David's attention —
-because the workflow had exactly one credentialed mode: the whole thirteen-step gate.
-Finding one error per hour is not a rate at which a first release happens.
+because the workflow had exactly one credentialed mode: the whole gate, all fifteen
+steps of it. Finding one error per hour is not a rate at which a first release happens.
 
 David decided on 21 September: the rehearsal gains stages, production stays a local
 apply a person reads, and only the full stage is a release gate.
@@ -118,8 +118,9 @@ best-effort, and it says nothing about a file kept for ninety days.
 
 ## What this does not weaken
 
-Nothing about `full`. It runs the same steps in the same order as before this lane, with
-the single difference that its apply consumes a saved plan. The gate is still the whole
+Nothing about `full`. It runs the same steps in the same order as before this lane; the
+only difference inside it is that the apply is preceded by a plan whose summary is kept,
+and takes its variables from the file rather than from a `-var` list. The gate is still the whole
 of section 3, the record is still written last, still only for a green suite, and still
 refuses a production name in any argument. What changed is that the three cheaper ways
 of *failing before the gate* are now runnable on their own.
