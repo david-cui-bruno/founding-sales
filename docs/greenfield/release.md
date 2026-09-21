@@ -141,6 +141,21 @@ You set neither by hand; the apply does. The bootstraps still read `push_topic` 
 
 When neither source has one, the process refuses to start and names **both** places it looked.
 
+### 1.7 Google application-default credentials, on your Mac
+
+`infra/roots/production` is the only root that declares `provider "google"`, and Terraform configures every provider a configuration requires before it evaluates anything. So a **production** plan or apply needs a working Google credential even when `enable_gmail_push` is false, and without one it stops at provider configuration with "Attempted to load application default credentials … No credentials loaded."
+
+Once per machine, as the account that administers `callie-fss`:
+
+```bash
+gcloud auth application-default login
+gcloud auth application-default set-quota-project callie-fss
+```
+
+`docs/greenfield/infra-apply-runbook.md` **1.3a** has the full procedure: enabling the Pub/Sub API, the two checks that the credential exists and can mint a token without printing any part of it, and why a downloaded service-account key file is refused by name rather than merely discouraged.
+
+Nothing in the **rehearsal** needs this. The rehearsal root declares no Google provider and creates nothing in Google Cloud, which is why a CI run has no Google credential and must not be given one (`docs/decisions/g12j-the-rehearsal-has-no-google-provider.md`).
+
 ---
 
 ## 2. Build and push the images — David, from his Mac
