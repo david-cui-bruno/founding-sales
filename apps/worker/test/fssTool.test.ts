@@ -87,6 +87,10 @@ async function run(
   argv: readonly string[],
   overrides: Record<string, string | undefined> = {},
 ): Promise<{ readonly code: number; readonly stdout: string }> {
+  // The migration credential is its own variable, never `DATABASE_URL`. The embedded
+  // cluster has one superuser, so both point at the same place here; what the tool is
+  // being held to is that it refuses to apply DDL unless the migration credential was
+  // configured *as one*, which the next test proves by leaving it out.
   const printed: string[] = [];
   const spy = vi.spyOn(process.stdout, 'write').mockImplementation(chunk => {
     printed.push(String(chunk));
@@ -94,7 +98,11 @@ async function run(
   });
   const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
   try {
-    const code = await main(argv, { DATABASE_URL: databaseUrl, ...overrides });
+    const code = await main(argv, {
+      DATABASE_URL: databaseUrl,
+      FSS_MIGRATION_DATABASE_URL: databaseUrl,
+      ...overrides,
+    });
     return { code, stdout: printed.join('') };
   } finally {
     spy.mockRestore();
@@ -124,6 +132,36 @@ describe('fss migrate', () => {
     expect(report['role']).toMatchObject({ migrationRoleExists: true });
     // `--report` writes the same bytes to the file the deployment collects.
     expect(readReport('migrate.json')['schemaVersionAfter']).toBe(CURRENT_SCHEMA_VERSION);
+  });
+
+  it('refuses to apply anything with the runtime credential, whatever DATABASE_URL points at', async () => {
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      // The runtime connection is present and usable; the migration one is not
+      // configured, and that is the whole reason for the refusal.
+      expect(await main(['migrate'], { DATABASE_URL: databaseUrl })).toBe(20);
+    } finally {
+      spy.mockRestore();
+      stdout.mockRestore();
+    }
+  });
+
+  it('refuses when the session is app_runtime, whatever flags it was given', async () => {
+    // `app_runtime` may never apply DDL. The refusal is before `--allow-any-role` is
+    // read, so a flag meant for a superuser repair cannot reach it.
+    const stub: SessionQueryable = {
+      query: async (text: string) => {
+        if (text.includes('to_regrole')) {
+          return await Promise.resolve({ rows: [{ role: 'app_runtime', exists: true }] as never[], rowCount: 1 });
+        }
+        throw new Error(`the refusal should have happened before: ${text}`);
+      },
+    };
+    expect(await runMigrate(stub, { allowAnyRole: true })).toMatchObject({
+      ok: false,
+      reason: 'runs_as_app_runtime',
+    });
   });
 
   it('is idempotent: a second run applies nothing and still reports the version', async () => {
@@ -198,7 +236,8 @@ describe('fss --selftest', () => {
     }
     const line = JSON.parse(lines.join('').trim()) as Record<string, unknown>;
     expect(line['event']).toBe('fss_selftest');
-    expect(line['database_source']).toBe('DATABASE_URL');
+    expect(line['database_source']).toBe('url');
+    expect(line['migration_from']).toBe('absent');
     expect(line['journal']).toBe('absent');
   });
 

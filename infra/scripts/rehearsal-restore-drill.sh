@@ -45,7 +45,57 @@ fi
 
 # The instants every "restore point minus N" is measured from. Recorded, never guessed.
 DRILL_START="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-RESTORE_TARGET="${FSS_RESTORE_TARGET:-$DRILL_START}"
+
+# RDS prints `2026-09-20T21:45:00+00:00`, sometimes with a fraction. Both branches of
+# the date arithmetic below parse only `YYYY-MM-DDTHH:MM:SSZ`, and the shape guard
+# after this refuses anything else, so the instant is normalised where it is read.
+to_utc_instant() { # to_utc_instant <RDS timestamp>
+  printf '%sZ\n' "$(printf '%s' "$1" | sed -E 's/\.[0-9]+//; s/(\+00:00|Z)$//')"
+}
+
+# ---------------------------------------------------------------------------
+# The restore point, which RDS chooses and this drill reads rather than names.
+#
+# It used to be `now`: `--restore-time "$DRILL_START"` against an instant that was a
+# second old. RDS restores to a point inside its own continuous backup window, and the
+# latest restorable point lags real time by up to about five minutes (spec 4.1) — so
+# `now` is an instant the source instance cannot be restored to, and the API refuses it
+# with `InvalidRestoreTime`. The drill would have failed at step 1, after the guard, on
+# the first credentialed run.
+#
+# So the restore asks for `--use-latest-restorable-time` and the *baseline* is measured
+# at the instant RDS reports as that point, read from the source instance before the
+# restore is requested. Every `--as-of`, every "restore point minus N" and the reported
+# CRM recovery point are all relative to it.
+#
+# The read happens before the restore, so the real restorable point may have advanced a
+# few seconds by the time RDS acts on it. That drift is in the safe direction and is
+# the reason it is tolerated: the restored database then holds slightly *more* than the
+# baseline counted, so "no suppression was lost" and "no send repeated" are asserted
+# against a floor rather than against a moving target.
+# ---------------------------------------------------------------------------
+if [ -n "${FSS_RESTORE_TARGET:-}" ]; then
+  # An operator naming the point by hand, which is also how the release suite drives
+  # the shape guard offline.
+  RESTORE_TARGET="$FSS_RESTORE_TARGET"
+elif rehearsal_dry_run; then
+  # Dry mode reaches no AWS, so there is no restorable point to read. The drill start
+  # stands in for it and every instant below is derived from it exactly as it would be.
+  RESTORE_TARGET="$DRILL_START"
+  rehearsal_plan "aws rds describe-db-instances --db-instance-identifier ${PREFIX}-pg --query DBInstances[0].LatestRestorableTime"
+else
+  LATEST_RESTORABLE="$(rehearsal_aws rds describe-db-instances \
+    --db-instance-identifier "${PREFIX}-pg" \
+    --query 'DBInstances[0].LatestRestorableTime' --output text)"
+  if [ -z "$LATEST_RESTORABLE" ] || [ "$LATEST_RESTORABLE" = "None" ]; then
+    echo "FAIL: ${PREFIX}-pg reports no LatestRestorableTime, so there is no point to restore to." >&2
+    echo "      A database with continuous backups disabled, or one created seconds ago, cannot" >&2
+    echo "      be point-in-time restored and this drill cannot be run against it." >&2
+    exit 1
+  fi
+  RESTORE_TARGET="$(to_utc_instant "$LATEST_RESTORABLE")"
+  rehearsal_log "RDS reports the latest restorable point as $RESTORE_TARGET"
+fi
 
 # `minus` below hands the target to `date`, one branch of which is BSD's
 # `date -j -f %Y-%m-%dT%H:%M:%SZ` and the other GNU's `date -d`. Both parse exactly this
@@ -57,8 +107,8 @@ RESTORE_TARGET_SHAPE='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
 if [[ ! "$RESTORE_TARGET" =~ $RESTORE_TARGET_SHAPE ]]; then
   echo "FAIL: '$RESTORE_TARGET' is not an instant this drill can measure from." >&2
   echo "      FSS_RESTORE_TARGET must be YYYY-MM-DDTHH:MM:SSZ, which is what both the GNU" >&2
-  echo "      and the BSD branch of the date arithmetic below parse, and what RDS's" >&2
-  echo "      --restore-time takes." >&2
+  echo "      and the BSD branch of the date arithmetic below parse, and what RDS reports as" >&2
+  echo "      LatestRestorableTime once normalised." >&2
   exit 1
 fi
 
@@ -109,12 +159,27 @@ done
 # Step 1. Restore, and prove the generation mismatch holds sending and dialing.
 # ---------------------------------------------------------------------------
 rehearsal_log "step 1: restore to a new instance and confirm sending and dialing are held"
+# `--use-latest-restorable-time` rather than `--restore-time "$RESTORE_TARGET"`: the
+# target above is what RDS *reported* as that point a moment ago, and asking for it by
+# name would fail with `InvalidRestoreTime` the moment the window moved. The baseline
+# was measured at the reported instant, which is the floor every assertion uses.
 rehearsal_aws rds restore-db-instance-to-point-in-time \
   --source-db-instance-identifier "${PREFIX}-pg" \
   --target-db-instance-identifier "${PREFIX}-pg-restored" \
-  --restore-time "$RESTORE_TARGET" \
+  --use-latest-restorable-time \
   --no-publicly-accessible
 rehearsal_aws rds wait db-instance-available --db-instance-identifier "${PREFIX}-pg-restored"
+
+# The lag between the requested point and the actual one is one of the three numbers
+# section 12 of the runbook asks every recurring drill to record, so it is read and
+# logged rather than assumed.
+if rehearsal_dry_run; then
+  rehearsal_plan "aws rds describe-db-instances --db-instance-identifier ${PREFIX}-pg-restored --query DBInstances[0].[InstanceCreateTime,LatestRestorableTime]"
+else
+  rehearsal_log "restored instance instants: $(rehearsal_aws rds describe-db-instances \
+    --db-instance-identifier "${PREFIX}-pg-restored" \
+    --query 'DBInstances[0].[InstanceCreateTime,LatestRestorableTime]' --output text)"
+fi
 
 if rehearsal_dry_run; then
   rehearsal_plan "fss admin holds list --reason restore_in_progress -> expect at least one"

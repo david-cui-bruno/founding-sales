@@ -46,6 +46,40 @@ export const REPORT_FLAG = '--report';
 
 const REPORTABLE = [REPORT_FLAG] as const;
 
+/**
+ * Which dependencies each `fss admin` command is allowed to resolve (David's
+ * condition 2, 21 September).
+ *
+ * Fixed per command, as data, and asserted by a test rather than left to whatever the
+ * environment happens to say:
+ *
+ *   * `database` — PostgreSQL and nothing else. The command never reads the deployment,
+ *     so it cannot reach Gmail, KMS or S3 even if the whole configuration is present.
+ *   * `journal` — the configured suppression-journal bucket, read only, and nothing else.
+ *   * `recorded` — may reach the Gmail seam, and only through the recorded client:
+ *     `FSS_DEPENDENCIES` must be exactly `recorded` or the command refuses. A restore
+ *     reconstruction that sent live Gmail traffic from a command line is not something
+ *     this tool does, and the way to be sure of that is to refuse `live` here rather
+ *     than to trust that nothing downstream sends.
+ */
+export type DependencyMode = 'database' | 'journal' | 'recorded';
+
+export const COMMAND_DEPENDENCIES: Readonly<Record<string, DependencyMode>> = Object.freeze({
+  counts: 'database',
+  'database-users ensure': 'database',
+  'holds list': 'database',
+  'dial-authorize': 'database',
+  'jobs discard-runnable': 'database',
+  'scheduler run-once': 'database',
+  'restore-report': 'database',
+  'system-generation advance': 'database',
+  'mailbox coverage': 'database',
+  'suppression-journal replay': 'journal',
+  'mailbox reconcile-sent': 'recorded',
+  'mailbox recover': 'recorded',
+  'mailbox watch-renew': 'recorded',
+});
+
 export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
   {
     path: ['migrate'],
@@ -76,11 +110,33 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
     summary: 'the applied schema version and both declared ranges. Reads only',
   },
   {
+    path: ['verify'],
+    valueFlags: ['--actor', '--note', ...REPORTABLE],
+    booleanFlags: [],
+    requiredFlags: [],
+    summary: 'schema version, configured parts, and one committed write and read. No business rows',
+  },
+  {
+    path: ['drill'],
+    valueFlags: ['--baseline', '--as-of', '--reports', '--from', '--since', '--admin-user', ...REPORTABLE],
+    booleanFlags: ['--all-mailboxes'],
+    requiredFlags: ['--reports'],
+    oneOf: ['--baseline', '--as-of'],
+    summary: 'Appendix E steps 2 to 9, in one process, stopping at the first step that fails',
+  },
+  {
     path: ['admin', 'counts'],
     valueFlags: ['--as-of', ...REPORTABLE],
     booleanFlags: [],
     requiredFlags: [],
     summary: 'the five protected kinds Appendix G 11 counts, as of an instant',
+  },
+  {
+    path: ['admin', 'database-users', 'ensure'],
+    valueFlags: ['--runtime-secret', ...REPORTABLE],
+    booleanFlags: ['--rotate-password'],
+    requiredFlags: [],
+    summary: 'create or alter the runtime login user from its secret, and grant migration to this user',
   },
   {
     path: ['admin', 'holds', 'list'],
@@ -261,7 +317,19 @@ export interface DrillInvocation {
 }
 
 /** Where a command ends and prose, redirection or shell syntax begins. */
-const TAIL = [' -> ', ' > ', ' >> ', ' | ', ' && ', ' ; ', ')', '#'];
+const TAIL = [' -> ', ' > ', ' >> ', ' >&2', ' | ', ' && ', ' ; ', ')', '#'];
+
+/**
+ * Lines that mention `fss` without calling it.
+ *
+ * Two kinds, both added by G12f: the precondition that asks whether the executable
+ * exists at all, and the `echo` that says it does not. Neither is an invocation, and
+ * treating them as one would make this check fail on a drill that is correct — which
+ * is worse than useless, because the next lane would relax the check rather than fix
+ * the script.
+ */
+const NOT_AN_INVOCATION = /(^|\s)(echo|printf)\s/u;
+const LOOKUP_BEFORE = /(-v|which|type)\s*$/u;
 
 /**
  * Every `fss` invocation in the restore drill script.
@@ -280,8 +348,10 @@ export function drillInvocations(script: string): readonly DrillInvocation[] {
   for (const rawLine of joined.split('\n')) {
     const line = rawLine.trim();
     if (line.startsWith('#')) continue;
+    if (NOT_AN_INVOCATION.test(line)) continue;
     const planned = line.includes('rehearsal_plan');
     for (const match of line.matchAll(/(?:^|[\s"'($])fss\s+(.*)$/gu)) {
+      if (LOOKUP_BEFORE.test(line.slice(0, match.index))) continue;
       let tail = match[1] ?? '';
       for (const boundary of TAIL) {
         const at = tail.indexOf(boundary);

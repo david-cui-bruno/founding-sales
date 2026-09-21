@@ -6,7 +6,7 @@ Appendix E is the post-restore protocol. This document turns its nine steps into
 
 The drill's purpose is not to prove a restore works. RDS point-in-time recovery works. The purpose is to prove that **after** a restore, FSS refuses to send or dial until every protected effect has been reconstructed, and that reconstruction is complete and countable.
 
-Some steps are commands against AWS and Gmail; some are FSS admin commands the other lanes own. Where a step is an FSS command, the command name is given and marked **(FSS)** — the exact CLI or admin-surface shape belongs to the lane that builds it, and this document should be updated when it lands.
+Some steps are commands against AWS and Gmail; some are FSS admin commands. Every one marked **(FSS)** is `apps/worker/src/tools/fss.ts`, which lane G12g built to the shapes this document and `infra/scripts/rehearsal-restore-drill.sh` already asked for; `docs/greenfield/processes.md` has the two invocation forms (a `DATABASE_URL` locally, a command override of the worker image inside the VPC). What is still open is how the rehearsal *reaches* it: the drill refuses when no `fss` is on PATH, and nothing in this repository puts one there.
 
 ## 0. Before you start
 
@@ -37,13 +37,16 @@ A restore drill against an empty database proves nothing. Before taking the rest
 5. at least one ordinary **CRM edit** with no protected effect;
 6. at least one applied **migration**.
 
-Then note the restore target and let the clock run past it while more activity happens, so the restore genuinely loses work:
+Then read the restore target — **RDS chooses it, you do not** — and let the clock run past it while more activity happens, so the restore genuinely loses work:
 
 ```bash
-export RESTORE_TARGET=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+export RESTORE_TARGET=$(aws rds describe-db-instances --db-instance-identifier "${PREFIX}-pg" \
+  --query 'DBInstances[0].LatestRestorableTime' --output text | sed -E 's/\.[0-9]+//; s/\+00:00$//')Z
 echo "restore target: $RESTORE_TARGET"
 # ... generate more sends, replies and suppressions after this instant ...
 ```
+
+`date -u` used to stand here and it was wrong: the latest restorable point lags real time by up to about five minutes (spec 4.1), so "now" is an instant the instance cannot be restored to and `--restore-time` refuses it with `InvalidRestoreTime`. The restore below therefore asks for `--use-latest-restorable-time` and the baseline is measured at the instant RDS reported a moment earlier. Reading it first and restoring second can only mean the restored database holds slightly *more* than the baseline counted, which is the safe direction: every assertion below is "no suppression lost, no send repeated" against a floor.
 
 Record the counts you expect to survive and the counts you expect to be reconstructed:
 
@@ -63,7 +66,7 @@ Restore to a new instance. Never restore over the live identifier.
 aws rds restore-db-instance-to-point-in-time \
   --source-db-instance-identifier "${PREFIX}-pg" \
   --target-db-instance-identifier "${PREFIX}-pg-restored" \
-  --restore-time "$RESTORE_TARGET" \
+  --use-latest-restorable-time \
   --db-subnet-group-name "${PREFIX}-db" \
   --vpc-security-group-ids "$(terraform output -json security_group_ids | python3 -c 'import json,sys; print(json.load(sys.stdin)["database"])')" \
   --no-publicly-accessible \
@@ -93,7 +96,7 @@ aws ecs wait services-stable --cluster "${PREFIX}-cluster" --services "${PREFIX}
 ```bash
 # (FSS) every automated step kind and every dial must refuse with a restore reason code.
 fss admin holds list --reason restore_in_progress
-fss admin dial-authorize --firm <any firm> --route <any route>   # expect: refused, restore in progress
+fss admin dial-authorize --any   # expect: allowed=false, and restore_in_progress among the holds
 ```
 
 And the alarm must have fired. This is the `restore_generation_mismatch` metric filter feeding the immediately-critical alarm:

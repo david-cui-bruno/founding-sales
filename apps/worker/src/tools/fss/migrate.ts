@@ -35,13 +35,15 @@ import {
  * privilege, and the report says which role actually ran.
  */
 
-export type MigrateRefusal = 'not_migration_role' | 'failed';
+export type MigrateRefusal = 'not_migration_role' | 'runs_as_app_runtime' | 'failed';
 
 export interface MigrateRoleReport {
   readonly connectedRole: string;
   /** False on a database the foundation migration has not reached: there is no role yet. */
   readonly migrationRoleExists: boolean;
   readonly isMigrationRole: boolean;
+  /** True when this session is the application's role, which may never apply DDL. */
+  readonly isAppRuntimeRole: boolean;
 }
 
 export interface MigrateReport {
@@ -58,6 +60,8 @@ export type MigrateResult =
 
 /** The role that applies migrations. The same name `db/testing` and 0001 use. */
 export const MIGRATION_ROLE = 'migration';
+/** The application's role. It may never apply DDL, whatever a flag says. */
+export const APP_RUNTIME_ROLE = 'app_runtime';
 
 export async function readMigrationRole(session: SessionQueryable): Promise<MigrateRoleReport> {
   const { rows } = await session.query<{ role: string; exists: boolean }>(
@@ -67,12 +71,23 @@ export async function readMigrationRole(session: SessionQueryable): Promise<Migr
   const row = rows[0];
   const connectedRole = row?.role ?? 'unknown';
   const migrationRoleExists = row?.exists === true;
-  if (!migrationRoleExists) return { connectedRole, migrationRoleExists, isMigrationRole: false };
+  const isAppRuntimeRole = connectedRole === APP_RUNTIME_ROLE;
+  if (!migrationRoleExists || isAppRuntimeRole) {
+    // No second query when the answer cannot change the decision: a database with no
+    // `migration` role has no membership to read, and `app_runtime` is refused whatever
+    // it is a member of.
+    return { connectedRole, migrationRoleExists, isMigrationRole: false, isAppRuntimeRole };
+  }
   const member = await session.query<{ member: boolean }>('SELECT pg_has_role(current_user, $1, $2) AS member', [
     MIGRATION_ROLE,
     'USAGE',
   ]);
-  return { connectedRole, migrationRoleExists, isMigrationRole: member.rows[0]?.member === true };
+  return {
+    connectedRole,
+    migrationRoleExists,
+    isMigrationRole: member.rows[0]?.member === true,
+    isAppRuntimeRole,
+  };
 }
 
 export interface MigrateOptions {
@@ -86,6 +101,17 @@ export interface MigrateOptions {
 
 export async function runMigrate(session: SessionQueryable, options: MigrateOptions = {}): Promise<MigrateResult> {
   const role = await readMigrationRole(session);
+  // Unconditional, and before the flag is read: `--allow-any-role` is for a superuser
+  // repairing a database, never for the application's own credential. A migration
+  // applied as `app_runtime` either fails halfway or succeeds because somebody granted
+  // the application DDL, and the second is worse than the first.
+  if (role.isAppRuntimeRole) {
+    return {
+      ok: false,
+      reason: 'runs_as_app_runtime',
+      detail: `this session is ${APP_RUNTIME_ROLE}; migrations are applied with the migration credential (FSS_MIGRATION_DATABASE_URL or MIGRATION_DATABASE_SECRET)`,
+    };
+  }
   if (role.migrationRoleExists && !role.isMigrationRole && options.allowAnyRole !== true) {
     return {
       ok: false,

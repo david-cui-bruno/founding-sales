@@ -21,10 +21,23 @@ import {
   type AdminInvocation,
   type AdminOutcome,
 } from './fss/admin.ts';
-import { describeToolConfig, readToolConfig, type ToolConfig } from './fss/config.ts';
+import {
+  TOOL_ENVIRONMENT_VARIABLES,
+  describeToolConfig,
+  readToolConfig,
+  type ToolConfig,
+} from './fss/config.ts';
 import { loadS3JournalSource } from './fss/journalSource.ts';
 import { readSchemaVersionReport, runMigrate } from './fss/migrate.ts';
-import { describeCommands, parseFssCommand, type ParsedFssCommand } from './fss/commands.ts';
+import { runVerify } from './fss/verify.ts';
+import { RUNTIME_SECRET_VARIABLE, ensureRuntimeDatabaseUser } from './fss/databaseUsers.ts';
+import { runDrill } from './fss/drill.ts';
+import {
+  COMMAND_DEPENDENCIES,
+  describeCommands,
+  parseFssCommand,
+  type ParsedFssCommand,
+} from './fss/commands.ts';
 
 /**
  * `fss`: the operations command line (lane G12g).
@@ -99,22 +112,30 @@ function asSession(client: pg.Client): SessionQueryable {
 async function resolveMail(
   environment: Readonly<Record<string, string | undefined>>,
   config: ToolConfig,
-): Promise<AdminInvocation['mail']> {
-  const deployment = await readWorkerDeployment(environment as NodeJS.ProcessEnv);
-  const composition = await composeHandlers(deployment, undefined, {
-    ...(config.region === null ? {} : { region: config.region }),
-  });
-  return composition.mail;
+): Promise<{ readonly mail: AdminInvocation['mail'] } | { readonly refusal: AdminOutcome }> {
+  try {
+    const deployment = await readWorkerDeployment(environment as NodeJS.ProcessEnv);
+    const composition = await composeHandlers(deployment, undefined, {
+      ...(config.region === null ? {} : { region: config.region }),
+    });
+    return { mail: composition.mail };
+  } catch (error) {
+    // A deployment missing a part is a refusal an operator can act on, not a crash:
+    // the message names the variable the bootstrap named and never its value.
+    return {
+      refusal: {
+        ok: false,
+        reason: 'deployment_incomplete',
+        detail: error instanceof DeploymentConfigError ? `${error.code}: ${error.message}` : 'the deployment could not be read',
+      },
+    };
+  }
 }
 
 async function resolveJournalSource(config: ToolConfig): Promise<AdminInvocation['journalSource']> {
   if (config.journalBucket === null || config.region === null) return undefined;
   return await loadS3JournalSource({ bucket: config.journalBucket, region: config.region });
 }
-
-/** Which commands need Gmail, and which need the journal. Data, so the list is readable. */
-const NEEDS_GMAIL = new Set(['mailbox reconcile-sent', 'mailbox recover', 'mailbox watch-renew']);
-const NEEDS_JOURNAL = new Set(['suppression-journal replay']);
 
 type AdminRunner = (invocation: AdminInvocation) => Promise<AdminOutcome>;
 
@@ -159,9 +180,51 @@ async function selftest(environment: Readonly<Record<string, string | undefined>
   return FSS_EXIT_CODES.ok;
 }
 
+/**
+ * Everything one command needs, resolved according to its declared dependency mode.
+ *
+ * A `database` command is handed no adapters at all, which is the point: it cannot
+ * reach Gmail, KMS or S3 even in a fully configured production task. A `recorded`
+ * command is refused unless the deployment says `recorded`, so a reconstruction from
+ * a command line can never send live mail.
+ */
+async function adminInvocation(
+  name: string,
+  parsed: ParsedFssCommand,
+  session: SessionQueryable,
+  config: ToolConfig,
+  environment: Readonly<Record<string, string | undefined>>,
+): Promise<AdminInvocation | { readonly refusal: AdminOutcome }> {
+  const mode = COMMAND_DEPENDENCIES[name] ?? 'database';
+  const base: AdminInvocation = {
+    session,
+    config,
+    environment,
+    options: parsed.options,
+    switches: parsed.switches,
+  };
+  if (mode === 'database') return base;
+  if (mode === 'journal') {
+    return { ...base, journalSource: await resolveJournalSource(config) };
+  }
+  if (config.dependencies !== 'recorded') {
+    return {
+      refusal: {
+        ok: false,
+        reason: 'dependencies_not_recorded',
+        detail: `fss admin ${name} reaches the Gmail seam and runs only with FSS_DEPENDENCIES=recorded; this deployment says ${config.dependencies ?? 'nothing'}`,
+      },
+    };
+  }
+  const resolved = await resolveMail(environment, config);
+  if ('refusal' in resolved) return resolved;
+  return { ...base, mail: resolved.mail };
+}
+
 async function runCommand(
   parsed: ParsedFssCommand,
   session: SessionQueryable,
+  migrationSession: SessionQueryable | null,
   config: ToolConfig,
   environment: Readonly<Record<string, string | undefined>>,
 ): Promise<AdminOutcome> {
@@ -169,27 +232,92 @@ async function runCommand(
   const path = spec.path.join(' ');
 
   if (path === 'migrate' || path === 'migrate up') {
-    const outcome = await runMigrate(session, { allowAnyRole: switches.has('--allow-any-role') });
+    if (migrationSession === null) return missingMigrationCredential();
+    const outcome = await runMigrate(migrationSession, { allowAnyRole: switches.has('--allow-any-role') });
     return outcome.ok ? { ok: true, value: { ...outcome.value } } : { ok: false, reason: outcome.reason, detail: outcome.detail };
   }
   if (path === 'migrate status' || path === 'schema-version') {
     return { ok: true, value: { ...(await readSchemaVersionReport(session)) } };
   }
+  if (path === 'verify') {
+    const outcome = await runVerify(session, config, {
+      ...(options['--actor'] === undefined ? {} : { actor: options['--actor'] }),
+      ...(options['--note'] === undefined ? {} : { note: options['--note'] }),
+    });
+    return outcome.ok ? { ok: true, value: { ...outcome.value } } : { ok: false, reason: outcome.reason, detail: outcome.detail };
+  }
+  if (path === 'drill') {
+    // The drill reaches the Gmail seam through steps 3, 4 and 6, so it is bound by the
+    // same rule those commands are: recorded, or refused.
+    if (config.dependencies !== 'recorded') {
+      return {
+        ok: false,
+        reason: 'dependencies_not_recorded',
+        detail: 'fss drill runs Appendix E steps 3, 4 and 6, which reach the Gmail seam, so it runs only with FSS_DEPENDENCIES=recorded',
+      };
+    }
+    const resolvedMail = await resolveMail(environment, config);
+    if ('refusal' in resolvedMail) return resolvedMail.refusal;
+    const adminUserId = options['--admin-user'] ?? environment[TOOL_ENVIRONMENT_VARIABLES.adminUser]?.trim();
+    const outcome = await runDrill({
+      session,
+      ...(migrationSession === null ? {} : { migrationSession }),
+      invocation: {
+        session,
+        config,
+        environment,
+        journalSource: await resolveJournalSource(config),
+        mail: resolvedMail.mail,
+      },
+      ...(options['--baseline'] === undefined ? {} : { baselinePath: options['--baseline'] }),
+      ...(options['--as-of'] === undefined ? {} : { asOf: options['--as-of'] }),
+      reportsDirectory: options['--reports'] ?? '',
+      ...(options['--from'] === undefined ? {} : { replayFrom: options['--from'] }),
+      ...(options['--since'] === undefined ? {} : { since: options['--since'] }),
+      ...(adminUserId === undefined || adminUserId.length === 0 ? {} : { adminUserId }),
+    });
+    if (outcome.ok) return { ok: true, value: { ...outcome.value } };
+    return { ok: false, reason: outcome.reason, detail: outcome.detail };
+  }
 
-  const admin = ADMIN_COMMANDS[spec.path.slice(1).join(' ')];
-  if (admin === undefined) return { ok: false, reason: 'command_unimplemented', detail: path };
+  if (path === 'admin database-users ensure') {
+    // On the migration task, as the migration credential: creating a login role is not
+    // something the application's own user may do, and the runtime credential is the
+    // one this command is about to make work.
+    if (migrationSession === null) return missingMigrationCredential();
+    const variable = options['--runtime-secret'] ?? RUNTIME_SECRET_VARIABLE;
+    const secretValue = environment[variable]?.trim();
+    if (secretValue === undefined || secretValue.length === 0) {
+      return {
+        ok: false,
+        reason: 'secret_variable_missing',
+        detail: `${variable} is not set; --runtime-secret names the environment variable the runtime credential's secret value is injected into, never the credential itself`,
+      };
+    }
+    const outcome = await ensureRuntimeDatabaseUser(migrationSession, {
+      secretValue,
+      rotatePassword: switches.has('--rotate-password'),
+    });
+    return outcome.ok
+      ? { ok: true, value: { ...outcome.value } }
+      : { ok: false, reason: outcome.reason, detail: outcome.detail };
+  }
 
   const name = spec.path.slice(1).join(' ');
-  const invocation: AdminInvocation = {
-    session,
-    config,
-    environment,
-    options,
-    switches,
-    ...(NEEDS_JOURNAL.has(name) ? { journalSource: await resolveJournalSource(config) } : {}),
-    ...(NEEDS_GMAIL.has(name) ? { mail: await resolveMail(environment, config) } : {}),
+  const admin = ADMIN_COMMANDS[name];
+  if (admin === undefined) return { ok: false, reason: 'command_unimplemented', detail: path };
+
+  const resolved = await adminInvocation(name, parsed, session, config, environment);
+  if ('refusal' in resolved) return resolved.refusal;
+  return await admin(resolved);
+}
+
+function missingMigrationCredential(): AdminOutcome {
+  return {
+    ok: false,
+    reason: 'migration_credential_missing',
+    detail: `migrations are applied with the migration user's own credential: set ${TOOL_ENVIRONMENT_VARIABLES.migrationDatabaseUrl}, or inject ${TOOL_ENVIRONMENT_VARIABLES.migrationDatabaseSecret} from fss-<env>/database-migration-user. The runtime DATABASE_URL is never used for this.`,
   };
-  return await admin(invocation);
 }
 
 export async function main(
@@ -220,8 +348,25 @@ export async function main(
   const client = new pg.Client({ connectionString: config.database.connectionString, application_name: 'fss-admin' });
   await client.connect();
   const session = asSession(client);
+  // The migration credential is opened only when it exists, and it is a second
+  // connection rather than a reused one: `migrate` runs as the migration user and every
+  // other command runs as the application's.
+  const migrationClient =
+    config.migrationDatabase === null
+      ? null
+      : new pg.Client({
+          connectionString: config.migrationDatabase.connectionString,
+          application_name: 'fss-migrate',
+        });
   try {
-    const outcome = await runCommand(parsed.value, session, config, environment);
+    if (migrationClient !== null) await migrationClient.connect();
+    const outcome = await runCommand(
+      parsed.value,
+      session,
+      migrationClient === null ? null : asSession(migrationClient),
+      config,
+      environment,
+    );
     if (!outcome.ok) {
       log.log('error', 'fss_refused', { command: parsed.value.spec.path.join(' '), reason: outcome.reason, detail: outcome.detail });
       return FSS_EXIT_CODES.refused;
@@ -236,6 +381,7 @@ export async function main(
     return FSS_EXIT_CODES.failed;
   } finally {
     await client.end().catch(() => undefined);
+    if (migrationClient !== null) await migrationClient.end().catch(() => undefined);
   }
 }
 
