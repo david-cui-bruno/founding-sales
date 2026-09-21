@@ -154,6 +154,34 @@ describe('Appendix G 22: the declared ranges decide, and a non-overlap is the re
     expect(readRepositoryFile('.github/workflows/greenfield-release.yml')).toContain('-var="bootstrap=true"');
   });
 
+  it('names every variable the rehearsal root requires, in the apply and in the file the teardown destroys with', () => {
+    // The second credentialed run (21 September 2026, Actions 35602423640) reached the
+    // apply and was refused: "The root module input variable api_schema_range is not
+    // set". The workflow named six of the root's eight required variables and nothing
+    // compared its list with the root's. This does — and it asks the same of the file
+    // the teardown's `terraform destroy` reads, because destroy requires the same
+    // values and runs on `always()` after the create step's shell is gone.
+    const variables = readRepositoryFile('infra/roots/rehearsal/variables.tf');
+    const required = variables
+      .split(/^variable "/mu)
+      .slice(1)
+      .filter(block => !/^ {2}default\s*=/mu.test(block))
+      .map(block => block.slice(0, block.indexOf('"')));
+    expect(required).toEqual(
+      expect.arrayContaining(['api_image', 'worker_image', 'api_schema_range', 'worker_schema_range']),
+    );
+    const workflow = readRepositoryFile('.github/workflows/greenfield-release.yml');
+    for (const name of required) {
+      expect(workflow, `the apply passes ${name}`).toContain(`-var="${name}=`);
+      expect(workflow, `the create step writes ${name} for the teardown`).toContain(`"${name}": `);
+    }
+    // The ranges come from the source, as the images workflow reads them, never typed.
+    expect(workflow).toContain("const module = await import('./packages/domain/db/schemaRange.ts');");
+    expect(workflow).toContain('python3 - > run.auto.tfvars.json');
+    const teardown = readRepositoryFile('infra/scripts/rehearsal-teardown.sh');
+    expect(teardown).toContain('if [ ! -f run.auto.tfvars.json ]; then');
+  });
+
   /**
    * The two identity boundaries, asserted here as well as in Terraform.
    *

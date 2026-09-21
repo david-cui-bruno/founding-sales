@@ -312,6 +312,15 @@ const MUTATIONS = [
     because:
       '`reconcile-sent`, `recover` and `watch-renew` all reach Gmail when dependencies are live, and a rehearsal that reached a real mailbox would send real mail. The tool refuses in any other mode, and the task definition is the second lock on the same door: with it gone the drill inherits the root\'s mode, which in production is `live`.',
   },
+  {
+    name: 'the rehearsal apply stops naming a variable the root requires',
+    file: '.github/workflows/greenfield-release.yml',
+    find: '            -var="api_schema_range={min=${API_SCHEMA_MIN},max=${API_SCHEMA_MAX}}" \\\n',
+    replace: '',
+    suite: ['run', 'test:release'],
+    because:
+      'The second credentialed run initialised the backend and was refused at the apply because the workflow named six of the eight variables the rehearsal root requires. Scenario 22 now derives the list from variables.tf and reads the workflow for each; drop one line and it has to go red, or the next required variable a lane adds will be found the same way, in the cloud.',
+  },
 ];
 
 function run(script) {

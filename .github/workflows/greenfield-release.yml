@@ -529,11 +529,70 @@ jobs:
       - name: Record the production inventory before anything is created
         run: infra/scripts/rehearsal-prefix-guard.sh "${{ steps.prefix.outputs.prefix }}" before
 
+      - name: Read the schema ranges the images accept
+        run: |
+          set -euo pipefail
+          # From the source, the same way `greenfield-images.yml` reads them, because
+          # `api_schema_range` and `worker_schema_range` are variables the rehearsal
+          # root requires and the apply below has to name them. The second credentialed
+          # run (21 September 2026, Actions 35602423640) initialised the backend and was
+          # refused at the apply with "The root module input variable
+          # api_schema_range is not set": the apply named six of the root's eight
+          # required variables and nothing compared its list with the root's. Scenario
+          # 22 now does.
+          read_range() {
+            node --experimental-transform-types --disable-warning=ExperimentalWarning \
+              --input-type=module -e "
+                const module = await import('./packages/domain/db/schemaRange.ts');
+                const range = module['$1'];
+                process.stdout.write(String(range.minimum) + ' ' + String(range.maximum));
+              "
+          }
+          read api_min api_max <<<"$(read_range API_SCHEMA_RANGE)"
+          read worker_min worker_max <<<"$(read_range WORKER_SCHEMA_RANGE)"
+          echo "api {$api_min,$api_max} worker {$worker_min,$worker_max}"
+          {
+            echo "API_SCHEMA_MIN=$api_min"
+            echo "API_SCHEMA_MAX=$api_max"
+            echo "WORKER_SCHEMA_MIN=$worker_min"
+            echo "WORKER_SCHEMA_MAX=$worker_max"
+          } >> "$GITHUB_ENV"
+
       - name: Create the rehearsal environment
         working-directory: infra/roots/rehearsal
         run: |
           set -euo pipefail
           prefix='${{ steps.prefix.outputs.prefix }}'
+          # Every value the root requires, written to `run.auto.tfvars.json` beside the
+          # root as well as passed as `-var`s below. `terraform destroy` requires the
+          # same variables as `apply`, and it runs in `rehearsal-teardown.sh` on
+          # `always()`, after this shell and its values are gone; the teardown refuses
+          # to destroy without this file rather than fail on a missing variable and
+          # leave the environment standing. `infra/.gitignore` ignores `*.tfvars.json`,
+          # the file lives on this runner only, and it holds identifiers (a prefix, two
+          # digests, an ARN, a hostname, two version ranges), never a value from a
+          # secret entry.
+          PREFIX="$prefix" \
+          API_IMAGE='${{ secrets.FSS_REHEARSAL_API_REPOSITORY }}@${{ inputs.api_image_digest }}' \
+          WORKER_IMAGE='${{ secrets.FSS_REHEARSAL_WORKER_REPOSITORY }}@${{ inputs.worker_image_digest }}' \
+          CERTIFICATE_ARN='${{ secrets.FSS_REHEARSAL_CERTIFICATE_ARN }}' \
+          API_HOSTNAME='${{ secrets.FSS_REHEARSAL_API_HOSTNAME }}' \
+          python3 - > run.auto.tfvars.json <<'PY'
+          import json, os
+          env = os.environ
+          print(json.dumps({
+              "assume_deployment_role": False,
+              "bootstrap": True,
+              "name_prefix": env["PREFIX"],
+              "api_image": env["API_IMAGE"],
+              "worker_image": env["WORKER_IMAGE"],
+              "certificate_arn": env["CERTIFICATE_ARN"],
+              "api_hostname": env["API_HOSTNAME"],
+              "api_schema_range": {"min": int(env["API_SCHEMA_MIN"]), "max": int(env["API_SCHEMA_MAX"])},
+              "worker_schema_range": {"min": int(env["WORKER_SCHEMA_MIN"]), "max": int(env["WORKER_SCHEMA_MAX"])},
+          }, indent=2))
+          PY
+          echo "run.auto.tfvars.json written with $(python3 -c 'import json; print(len(json.load(open("run.auto.tfvars.json"))))') variables"
           terraform init -reconfigure -input=false \
             -backend-config=backend.hcl \
             -backend-config="key=fss/greenfield/rehearsal/${prefix}/terraform.tfstate"
@@ -557,7 +616,9 @@ jobs:
             -var="api_image=${{ secrets.FSS_REHEARSAL_API_REPOSITORY }}@${{ inputs.api_image_digest }}" \
             -var="worker_image=${{ secrets.FSS_REHEARSAL_WORKER_REPOSITORY }}@${{ inputs.worker_image_digest }}" \
             -var="certificate_arn=${{ secrets.FSS_REHEARSAL_CERTIFICATE_ARN }}" \
-            -var="api_hostname=${{ secrets.FSS_REHEARSAL_API_HOSTNAME }}"
+            -var="api_hostname=${{ secrets.FSS_REHEARSAL_API_HOSTNAME }}" \
+            -var="api_schema_range={min=${API_SCHEMA_MIN},max=${API_SCHEMA_MAX}}" \
+            -var="worker_schema_range={min=${WORKER_SCHEMA_MIN},max=${WORKER_SCHEMA_MAX}}"
 
       - name: Fill the two database entries this run's tasks resolve
         working-directory: infra/roots/rehearsal

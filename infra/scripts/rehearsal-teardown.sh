@@ -160,6 +160,7 @@ fi
 rehearsal_log "4/4 destroying the rehearsal root"
 if rehearsal_dry_run; then
   rehearsal_plan "terraform state list -> if the root was never initialised there is nothing to destroy"
+  rehearsal_plan "run.auto.tfvars.json must exist beside the root: destroy requires every variable apply did"
   rehearsal_terraform destroy -auto-approve -input=false \
     "$REHEARSAL_NO_ASSUME_VAR" \
     -var="name_prefix=${PREFIX}"
@@ -190,6 +191,18 @@ else
     rehearsal_log "the rehearsal state is empty, so this run created nothing to destroy"
     DESTROYED=nothing_created
   else
+    # `terraform destroy` requires every variable `apply` did, and this shell has
+    # none of the create step's values. The create step writes them to
+    # `run.auto.tfvars.json` beside the root for exactly this moment (identifiers
+    # only; ignored by `infra/.gitignore`). Refusing here is better than what the
+    # alternative looks like: a destroy refused with "input variable ... is not set"
+    # and a rehearsal environment left standing at hourly cost. To tear down by hand
+    # from a fresh checkout, recreate the file from the release record's two digests
+    # (release.md section 3, step 13).
+    if [ ! -f run.auto.tfvars.json ]; then
+      echo "FAIL: run.auto.tfvars.json is absent beside the rehearsal root, so terraform destroy has no values for the variables the root requires; recreate it as docs/greenfield/release.md section 3 step 13 describes and rerun this teardown" >&2
+      exit 1
+    fi
     rehearsal_terraform destroy -auto-approve -input=false \
       "$REHEARSAL_NO_ASSUME_VAR" \
       -var="name_prefix=${PREFIX}"
