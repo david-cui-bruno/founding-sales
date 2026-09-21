@@ -213,6 +213,14 @@
       }
     },
     {
+      "Sid": "CompositeAlarmsAreEvaluatedAgainstEveryAlarm",
+      "Effect": "Allow",
+      "Action": [
+        "cloudwatch:PutCompositeAlarm"
+      ],
+      "Resource": "arn:aws:cloudwatch:${aws_region}:${aws_account_id}:alarm:*"
+    },
+    {
       "Sid": "OriginAccessControlsCannotCarryATag",
       "Effect": "Allow",
       "Action": [

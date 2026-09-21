@@ -26,292 +26,661 @@
     "OriginAccessControlsCannotCarryATag": "A CloudFront origin access control cannot be tagged and its id is assigned by AWS, so there is neither a name in the ARN nor a request tag to condition on. cloudfront:CreateOriginAccessControl under a RequestTag condition is what denied it on 21 September.",
     "TaskDefinitionApisTakeNoResource": "ecs:DeregisterTaskDefinition, ListTaskDefinitions and ListTaskDefinitionFamilies are documented with no resource-level permission. Registering is separately conditioned on aws:RequestTag/NamePrefix, and a task definition is inert until a service or a run-task names it, both of which are ARN-scoped, and until a task role is passed, which iam:* on role/<prefix>* is scoped by.",
     "AdoptTheVpcDefaultSecurityGroupBeforeItCarriesATag": "The AWS provider revokes the rules on a new VPC's default security group before it tags it, so ec2:ResourceTag/NamePrefix cannot match at the moment of the revoke. The statement is narrowed instead to security groups that carry no NamePrefix tag at all, which excludes every group either environment has ever applied.",
-    "UseTheEnvironmentCertificate": "acm:DescribeCertificate on every certificate in the account and region, because the exact ARN is a repository environment secret and shipping it here would put a value in the repository that the workflow deliberately keeps out. Read-only. Pass FSS_POLICY_CERTIFICATE_ARN to narrow it to the one ARN."
+    "UseTheEnvironmentCertificate": "acm:DescribeCertificate on every certificate in the account and region, because the exact ARN is a repository environment secret and shipping it here would put a value in the repository that the workflow deliberately keeps out. Read-only. Pass FSS_POLICY_CERTIFICATE_ARN to narrow it to the one ARN.",
+    "CompositeAlarmsAreEvaluatedAgainstEveryAlarm": "CloudWatch authorizes cloudwatch:PutCompositeAlarm against arn:aws:cloudwatch:<region>:<account>:alarm:* rather than against the composite alarm's own name, because the alarm rule references other alarms. David's simulation of 21 September showed exactly that: context.resource alarm:*, implicit deny, no matched statement, with the role's cloudwatch:* scoped to alarm:<prefix>*. A wildcard resource carries no tag either, so no tag condition can narrow this; the statement is the one action on alarm:*, and every other alarm action stays scoped by name."
   },
   "terraform_resources": {
     "aws_vpc": {
       "service": "ec2",
       "scope": "tag",
-      "actions": ["ec2:CreateVpc", "ec2:DescribeVpcs", "ec2:DescribeVpcAttribute", "ec2:ModifyVpcAttribute", "ec2:DeleteVpc", "ec2:CreateTags", "ec2:DeleteTags"]
+      "actions": [
+        "ec2:CreateVpc",
+        "ec2:DescribeVpcs",
+        "ec2:DescribeVpcAttribute",
+        "ec2:ModifyVpcAttribute",
+        "ec2:DeleteVpc",
+        "ec2:CreateTags",
+        "ec2:DeleteTags"
+      ]
     },
     "aws_default_security_group": {
       "service": "ec2",
       "scope": "none",
-      "actions": ["ec2:DescribeSecurityGroups", "ec2:RevokeSecurityGroupIngress", "ec2:RevokeSecurityGroupEgress", "ec2:CreateTags"]
+      "actions": [
+        "ec2:DescribeSecurityGroups",
+        "ec2:RevokeSecurityGroupIngress",
+        "ec2:RevokeSecurityGroupEgress",
+        "ec2:CreateTags"
+      ]
     },
     "aws_internet_gateway": {
       "service": "ec2",
       "scope": "tag",
-      "actions": ["ec2:CreateInternetGateway", "ec2:AttachInternetGateway", "ec2:DetachInternetGateway", "ec2:DescribeInternetGateways", "ec2:DeleteInternetGateway", "ec2:CreateTags"]
+      "actions": [
+        "ec2:CreateInternetGateway",
+        "ec2:AttachInternetGateway",
+        "ec2:DetachInternetGateway",
+        "ec2:DescribeInternetGateways",
+        "ec2:DeleteInternetGateway",
+        "ec2:CreateTags"
+      ]
     },
     "aws_subnet": {
       "service": "ec2",
       "scope": "tag",
-      "actions": ["ec2:CreateSubnet", "ec2:DescribeSubnets", "ec2:ModifySubnetAttribute", "ec2:DeleteSubnet", "ec2:CreateTags", "ec2:DeleteTags"]
+      "actions": [
+        "ec2:CreateSubnet",
+        "ec2:DescribeSubnets",
+        "ec2:ModifySubnetAttribute",
+        "ec2:DeleteSubnet",
+        "ec2:CreateTags",
+        "ec2:DeleteTags"
+      ]
     },
     "aws_route_table": {
       "service": "ec2",
       "scope": "tag",
-      "actions": ["ec2:CreateRouteTable", "ec2:DescribeRouteTables", "ec2:DeleteRouteTable", "ec2:CreateTags", "ec2:DeleteTags"]
+      "actions": [
+        "ec2:CreateRouteTable",
+        "ec2:DescribeRouteTables",
+        "ec2:DeleteRouteTable",
+        "ec2:CreateTags",
+        "ec2:DeleteTags"
+      ]
     },
     "aws_route": {
       "service": "ec2",
       "scope": "tag",
-      "actions": ["ec2:CreateRoute", "ec2:ReplaceRoute", "ec2:DeleteRoute", "ec2:DescribeRouteTables"]
+      "actions": [
+        "ec2:CreateRoute",
+        "ec2:ReplaceRoute",
+        "ec2:DeleteRoute",
+        "ec2:DescribeRouteTables"
+      ]
     },
     "aws_route_table_association": {
       "service": "ec2",
       "scope": "tag",
-      "actions": ["ec2:AssociateRouteTable", "ec2:DisassociateRouteTable", "ec2:DescribeRouteTables"]
+      "actions": [
+        "ec2:AssociateRouteTable",
+        "ec2:DisassociateRouteTable",
+        "ec2:DescribeRouteTables"
+      ]
     },
     "aws_security_group": {
       "service": "ec2",
       "scope": "tag",
-      "actions": ["ec2:CreateSecurityGroup", "ec2:DescribeSecurityGroups", "ec2:DeleteSecurityGroup", "ec2:CreateTags", "ec2:DeleteTags"]
+      "actions": [
+        "ec2:CreateSecurityGroup",
+        "ec2:DescribeSecurityGroups",
+        "ec2:DeleteSecurityGroup",
+        "ec2:CreateTags",
+        "ec2:DeleteTags"
+      ]
     },
     "aws_vpc_security_group_ingress_rule": {
       "service": "ec2",
       "scope": "tag",
-      "actions": ["ec2:AuthorizeSecurityGroupIngress", "ec2:RevokeSecurityGroupIngress", "ec2:ModifySecurityGroupRules", "ec2:UpdateSecurityGroupRuleDescriptionsIngress", "ec2:DescribeSecurityGroupRules", "ec2:CreateTags", "ec2:DeleteTags"]
+      "actions": [
+        "ec2:AuthorizeSecurityGroupIngress",
+        "ec2:RevokeSecurityGroupIngress",
+        "ec2:ModifySecurityGroupRules",
+        "ec2:UpdateSecurityGroupRuleDescriptionsIngress",
+        "ec2:DescribeSecurityGroupRules",
+        "ec2:CreateTags",
+        "ec2:DeleteTags"
+      ]
     },
     "aws_vpc_security_group_egress_rule": {
       "service": "ec2",
       "scope": "tag",
-      "actions": ["ec2:AuthorizeSecurityGroupEgress", "ec2:RevokeSecurityGroupEgress", "ec2:ModifySecurityGroupRules", "ec2:UpdateSecurityGroupRuleDescriptionsEgress", "ec2:DescribeSecurityGroupRules", "ec2:CreateTags", "ec2:DeleteTags"]
+      "actions": [
+        "ec2:AuthorizeSecurityGroupEgress",
+        "ec2:RevokeSecurityGroupEgress",
+        "ec2:ModifySecurityGroupRules",
+        "ec2:UpdateSecurityGroupRuleDescriptionsEgress",
+        "ec2:DescribeSecurityGroupRules",
+        "ec2:CreateTags",
+        "ec2:DeleteTags"
+      ]
     },
     "aws_kms_key": {
       "service": "kms",
       "scope": "tag",
       "deny_carve_out": "NoDeploymentKmsDataAccessOutsideThisNamespaceOrTerraformState",
-      "actions": ["kms:CreateKey", "kms:DescribeKey", "kms:GetKeyPolicy", "kms:PutKeyPolicy", "kms:GetKeyRotationStatus", "kms:EnableKeyRotation", "kms:ListResourceTags", "kms:TagResource", "kms:UntagResource", "kms:ScheduleKeyDeletion", "kms:UpdateKeyDescription"]
+      "actions": [
+        "kms:CreateKey",
+        "kms:DescribeKey",
+        "kms:GetKeyPolicy",
+        "kms:PutKeyPolicy",
+        "kms:GetKeyRotationStatus",
+        "kms:EnableKeyRotation",
+        "kms:ListResourceTags",
+        "kms:TagResource",
+        "kms:UntagResource",
+        "kms:ScheduleKeyDeletion",
+        "kms:UpdateKeyDescription"
+      ]
     },
     "aws_kms_alias": {
       "service": "kms",
       "scope": "arn",
-      "actions": ["kms:CreateAlias", "kms:DeleteAlias", "kms:UpdateAlias", "kms:ListAliases"]
+      "actions": [
+        "kms:CreateAlias",
+        "kms:DeleteAlias",
+        "kms:UpdateAlias",
+        "kms:ListAliases"
+      ]
     },
     "aws_db_subnet_group": {
       "service": "rds",
       "scope": "arn",
-      "actions": ["rds:CreateDBSubnetGroup", "rds:ModifyDBSubnetGroup", "rds:DeleteDBSubnetGroup", "rds:DescribeDBSubnetGroups", "rds:AddTagsToResource", "rds:RemoveTagsFromResource", "rds:ListTagsForResource"]
+      "actions": [
+        "rds:CreateDBSubnetGroup",
+        "rds:ModifyDBSubnetGroup",
+        "rds:DeleteDBSubnetGroup",
+        "rds:DescribeDBSubnetGroups",
+        "rds:AddTagsToResource",
+        "rds:RemoveTagsFromResource",
+        "rds:ListTagsForResource"
+      ]
     },
     "aws_db_parameter_group": {
       "service": "rds",
       "scope": "arn",
-      "actions": ["rds:CreateDBParameterGroup", "rds:ModifyDBParameterGroup", "rds:DeleteDBParameterGroup", "rds:DescribeDBParameters", "rds:DescribeDBParameterGroups", "rds:AddTagsToResource", "rds:ListTagsForResource"]
+      "actions": [
+        "rds:CreateDBParameterGroup",
+        "rds:ModifyDBParameterGroup",
+        "rds:DeleteDBParameterGroup",
+        "rds:DescribeDBParameters",
+        "rds:DescribeDBParameterGroups",
+        "rds:AddTagsToResource",
+        "rds:ListTagsForResource"
+      ]
     },
     "aws_db_instance": {
       "service": "rds",
       "scope": "arn",
       "deny_carve_out": "NoDeploymentKmsDataAccessOutsideThisNamespaceOrTerraformState",
-      "actions": ["rds:CreateDBInstance", "rds:ModifyDBInstance", "rds:DeleteDBInstance", "rds:DescribeDBInstances", "rds:CreateDBSnapshot", "rds:DeleteDBSnapshot", "rds:DescribeDBSnapshots", "rds:AddTagsToResource", "rds:ListTagsForResource", "kms:CreateGrant", "kms:DescribeKey"]
+      "actions": [
+        "rds:CreateDBInstance",
+        "rds:ModifyDBInstance",
+        "rds:DeleteDBInstance",
+        "rds:DescribeDBInstances",
+        "rds:CreateDBSnapshot",
+        "rds:DeleteDBSnapshot",
+        "rds:DescribeDBSnapshots",
+        "rds:AddTagsToResource",
+        "rds:ListTagsForResource",
+        "kms:CreateGrant",
+        "kms:DescribeKey"
+      ]
     },
     "aws_iam_role": {
       "service": "iam",
       "scope": "arn",
-      "actions": ["iam:CreateRole", "iam:GetRole", "iam:UpdateAssumeRolePolicy", "iam:DeleteRole", "iam:TagRole", "iam:UntagRole", "iam:ListRoleTags", "iam:PassRole"]
+      "actions": [
+        "iam:CreateRole",
+        "iam:GetRole",
+        "iam:UpdateAssumeRolePolicy",
+        "iam:DeleteRole",
+        "iam:TagRole",
+        "iam:UntagRole",
+        "iam:ListRoleTags",
+        "iam:PassRole"
+      ]
     },
     "aws_iam_role_policy": {
       "service": "iam",
       "scope": "arn",
-      "actions": ["iam:PutRolePolicy", "iam:GetRolePolicy", "iam:DeleteRolePolicy", "iam:ListRolePolicies"]
+      "actions": [
+        "iam:PutRolePolicy",
+        "iam:GetRolePolicy",
+        "iam:DeleteRolePolicy",
+        "iam:ListRolePolicies"
+      ]
     },
     "aws_iam_role_policy_attachment": {
       "service": "iam",
       "scope": "arn",
       "deny_carve_out": "NoManagedPolicyButTheOnesTheStackAttaches",
-      "actions": ["iam:AttachRolePolicy", "iam:DetachRolePolicy", "iam:ListAttachedRolePolicies"]
+      "actions": [
+        "iam:AttachRolePolicy",
+        "iam:DetachRolePolicy",
+        "iam:ListAttachedRolePolicies"
+      ]
     },
     "aws_ecs_cluster": {
       "service": "ecs",
       "scope": "arn",
-      "actions": ["ecs:CreateCluster", "ecs:DescribeClusters", "ecs:UpdateClusterSettings", "ecs:DeleteCluster", "ecs:TagResource", "ecs:UntagResource", "ecs:ListTagsForResource"]
+      "actions": [
+        "ecs:CreateCluster",
+        "ecs:DescribeClusters",
+        "ecs:UpdateClusterSettings",
+        "ecs:DeleteCluster",
+        "ecs:TagResource",
+        "ecs:UntagResource",
+        "ecs:ListTagsForResource"
+      ]
     },
     "aws_ecs_cluster_capacity_providers": {
       "service": "ecs",
       "scope": "arn",
-      "actions": ["ecs:PutClusterCapacityProviders", "ecs:DescribeClusters"]
+      "actions": [
+        "ecs:PutClusterCapacityProviders",
+        "ecs:DescribeClusters"
+      ]
     },
     "aws_ecs_task_definition": {
       "service": "ecs",
       "scope": "none",
-      "actions": ["ecs:RegisterTaskDefinition", "ecs:DeregisterTaskDefinition", "ecs:DescribeTaskDefinition", "ecs:ListTaskDefinitions", "ecs:TagResource", "iam:PassRole"]
+      "actions": [
+        "ecs:RegisterTaskDefinition",
+        "ecs:DeregisterTaskDefinition",
+        "ecs:DescribeTaskDefinition",
+        "ecs:ListTaskDefinitions",
+        "ecs:TagResource",
+        "iam:PassRole"
+      ]
     },
     "aws_ecs_service": {
       "service": "ecs",
       "scope": "arn",
-      "actions": ["ecs:CreateService", "ecs:UpdateService", "ecs:DeleteService", "ecs:DescribeServices", "ecs:TagResource", "ecs:ListTagsForResource", "iam:PassRole"]
+      "actions": [
+        "ecs:CreateService",
+        "ecs:UpdateService",
+        "ecs:DeleteService",
+        "ecs:DescribeServices",
+        "ecs:TagResource",
+        "ecs:ListTagsForResource",
+        "iam:PassRole"
+      ]
     },
     "aws_lb": {
       "service": "elasticloadbalancing",
       "scope": "arn",
-      "actions": ["elasticloadbalancing:CreateLoadBalancer", "elasticloadbalancing:DescribeLoadBalancers", "elasticloadbalancing:DescribeLoadBalancerAttributes", "elasticloadbalancing:ModifyLoadBalancerAttributes", "elasticloadbalancing:SetSecurityGroups", "elasticloadbalancing:SetSubnets", "elasticloadbalancing:DeleteLoadBalancer", "elasticloadbalancing:AddTags", "elasticloadbalancing:RemoveTags"]
+      "actions": [
+        "elasticloadbalancing:CreateLoadBalancer",
+        "elasticloadbalancing:DescribeLoadBalancers",
+        "elasticloadbalancing:DescribeLoadBalancerAttributes",
+        "elasticloadbalancing:ModifyLoadBalancerAttributes",
+        "elasticloadbalancing:SetSecurityGroups",
+        "elasticloadbalancing:SetSubnets",
+        "elasticloadbalancing:DeleteLoadBalancer",
+        "elasticloadbalancing:AddTags",
+        "elasticloadbalancing:RemoveTags"
+      ]
     },
     "aws_lb_target_group": {
       "service": "elasticloadbalancing",
       "scope": "arn",
-      "actions": ["elasticloadbalancing:CreateTargetGroup", "elasticloadbalancing:DescribeTargetGroups", "elasticloadbalancing:ModifyTargetGroup", "elasticloadbalancing:ModifyTargetGroupAttributes", "elasticloadbalancing:DeleteTargetGroup", "elasticloadbalancing:AddTags"]
+      "actions": [
+        "elasticloadbalancing:CreateTargetGroup",
+        "elasticloadbalancing:DescribeTargetGroups",
+        "elasticloadbalancing:ModifyTargetGroup",
+        "elasticloadbalancing:ModifyTargetGroupAttributes",
+        "elasticloadbalancing:DeleteTargetGroup",
+        "elasticloadbalancing:AddTags"
+      ]
     },
     "aws_lb_listener": {
       "service": "elasticloadbalancing",
       "scope": "arn",
-      "actions": ["elasticloadbalancing:CreateListener", "elasticloadbalancing:DescribeListeners", "elasticloadbalancing:ModifyListener", "elasticloadbalancing:DeleteListener", "elasticloadbalancing:AddTags", "acm:DescribeCertificate"]
+      "actions": [
+        "elasticloadbalancing:CreateListener",
+        "elasticloadbalancing:DescribeListeners",
+        "elasticloadbalancing:ModifyListener",
+        "elasticloadbalancing:DeleteListener",
+        "elasticloadbalancing:AddTags",
+        "acm:DescribeCertificate"
+      ]
     },
     "aws_wafv2_web_acl": {
       "service": "wafv2",
       "scope": "arn",
-      "actions": ["wafv2:CreateWebACL", "wafv2:GetWebACL", "wafv2:UpdateWebACL", "wafv2:DeleteWebACL", "wafv2:ListTagsForResource", "wafv2:TagResource"]
+      "actions": [
+        "wafv2:CreateWebACL",
+        "wafv2:GetWebACL",
+        "wafv2:UpdateWebACL",
+        "wafv2:DeleteWebACL",
+        "wafv2:ListTagsForResource",
+        "wafv2:TagResource"
+      ]
     },
     "aws_wafv2_web_acl_association": {
       "service": "wafv2",
       "scope": "arn",
-      "actions": ["wafv2:AssociateWebACL", "wafv2:DisassociateWebACL", "wafv2:GetWebACLForResource"]
+      "actions": [
+        "wafv2:AssociateWebACL",
+        "wafv2:DisassociateWebACL",
+        "wafv2:GetWebACLForResource"
+      ]
     },
     "aws_s3_bucket": {
       "service": "s3",
       "scope": "arn",
-      "actions": ["s3:CreateBucket", "s3:DeleteBucket", "s3:GetBucketLocation", "s3:GetBucketTagging", "s3:PutBucketTagging", "s3:GetBucketAcl", "s3:ListBucket", "s3:ListBucketVersions", "s3:DeleteObject", "s3:DeleteObjectVersion"]
+      "actions": [
+        "s3:CreateBucket",
+        "s3:DeleteBucket",
+        "s3:GetBucketLocation",
+        "s3:GetBucketTagging",
+        "s3:PutBucketTagging",
+        "s3:GetBucketAcl",
+        "s3:ListBucket",
+        "s3:ListBucketVersions",
+        "s3:DeleteObject",
+        "s3:DeleteObjectVersion"
+      ]
     },
     "aws_s3_bucket_policy": {
       "service": "s3",
       "scope": "arn",
-      "actions": ["s3:PutBucketPolicy", "s3:GetBucketPolicy", "s3:DeleteBucketPolicy", "s3:GetBucketPolicyStatus"]
+      "actions": [
+        "s3:PutBucketPolicy",
+        "s3:GetBucketPolicy",
+        "s3:DeleteBucketPolicy",
+        "s3:GetBucketPolicyStatus"
+      ]
     },
     "aws_s3_bucket_versioning": {
       "service": "s3",
       "scope": "arn",
-      "actions": ["s3:PutBucketVersioning", "s3:GetBucketVersioning"]
+      "actions": [
+        "s3:PutBucketVersioning",
+        "s3:GetBucketVersioning"
+      ]
     },
     "aws_s3_bucket_object_lock_configuration": {
       "service": "s3",
       "scope": "arn",
-      "actions": ["s3:PutBucketObjectLockConfiguration", "s3:GetBucketObjectLockConfiguration"]
+      "actions": [
+        "s3:PutBucketObjectLockConfiguration",
+        "s3:GetBucketObjectLockConfiguration"
+      ]
     },
     "aws_s3_bucket_server_side_encryption_configuration": {
       "service": "s3",
       "scope": "arn",
-      "actions": ["s3:PutEncryptionConfiguration", "s3:GetEncryptionConfiguration"]
+      "actions": [
+        "s3:PutEncryptionConfiguration",
+        "s3:GetEncryptionConfiguration"
+      ]
     },
     "aws_s3_bucket_public_access_block": {
       "service": "s3",
       "scope": "arn",
-      "actions": ["s3:PutBucketPublicAccessBlock", "s3:GetBucketPublicAccessBlock"]
+      "actions": [
+        "s3:PutBucketPublicAccessBlock",
+        "s3:GetBucketPublicAccessBlock"
+      ]
     },
     "aws_s3_bucket_ownership_controls": {
       "service": "s3",
       "scope": "arn",
-      "actions": ["s3:PutBucketOwnershipControls", "s3:GetBucketOwnershipControls"]
+      "actions": [
+        "s3:PutBucketOwnershipControls",
+        "s3:GetBucketOwnershipControls"
+      ]
     },
     "aws_s3_bucket_lifecycle_configuration": {
       "service": "s3",
       "scope": "arn",
-      "actions": ["s3:PutLifecycleConfiguration", "s3:GetLifecycleConfiguration"]
+      "actions": [
+        "s3:PutLifecycleConfiguration",
+        "s3:GetLifecycleConfiguration"
+      ]
     },
     "aws_secretsmanager_secret": {
       "service": "secretsmanager",
       "scope": "arn",
       "deny_carve_out": "NoDeploymentKmsDataAccessOutsideThisNamespaceOrTerraformState",
-      "actions": ["secretsmanager:CreateSecret", "secretsmanager:DescribeSecret", "secretsmanager:UpdateSecret", "secretsmanager:DeleteSecret", "secretsmanager:TagResource", "secretsmanager:UntagResource", "secretsmanager:GetResourcePolicy", "kms:GenerateDataKey", "kms:Decrypt", "kms:DescribeKey"]
+      "actions": [
+        "secretsmanager:CreateSecret",
+        "secretsmanager:DescribeSecret",
+        "secretsmanager:UpdateSecret",
+        "secretsmanager:DeleteSecret",
+        "secretsmanager:TagResource",
+        "secretsmanager:UntagResource",
+        "secretsmanager:GetResourcePolicy",
+        "kms:GenerateDataKey",
+        "kms:Decrypt",
+        "kms:DescribeKey"
+      ]
     },
     "aws_cloudwatch_log_group": {
       "service": "logs",
       "scope": "arn",
       "deny_carve_out": "NoDeploymentKmsDataAccessOutsideThisNamespaceOrTerraformState",
-      "actions": ["logs:CreateLogGroup", "logs:DeleteLogGroup", "logs:DescribeLogGroups", "logs:PutRetentionPolicy", "logs:AssociateKmsKey", "logs:TagResource", "logs:UntagResource", "logs:ListTagsForResource", "kms:DescribeKey"]
+      "actions": [
+        "logs:CreateLogGroup",
+        "logs:DeleteLogGroup",
+        "logs:DescribeLogGroups",
+        "logs:PutRetentionPolicy",
+        "logs:AssociateKmsKey",
+        "logs:TagResource",
+        "logs:UntagResource",
+        "logs:ListTagsForResource",
+        "kms:DescribeKey"
+      ]
     },
     "aws_cloudwatch_log_metric_filter": {
       "service": "logs",
       "scope": "arn",
-      "actions": ["logs:PutMetricFilter", "logs:DeleteMetricFilter", "logs:DescribeMetricFilters"]
+      "actions": [
+        "logs:PutMetricFilter",
+        "logs:DeleteMetricFilter",
+        "logs:DescribeMetricFilters"
+      ]
     },
     "aws_cloudwatch_metric_alarm": {
       "service": "cloudwatch",
       "scope": "arn",
-      "actions": ["cloudwatch:PutMetricAlarm", "cloudwatch:DeleteAlarms", "cloudwatch:DescribeAlarms", "cloudwatch:ListTagsForResource", "cloudwatch:TagResource", "cloudwatch:UntagResource"]
+      "actions": [
+        "cloudwatch:PutMetricAlarm",
+        "cloudwatch:DeleteAlarms",
+        "cloudwatch:DescribeAlarms",
+        "cloudwatch:ListTagsForResource",
+        "cloudwatch:TagResource",
+        "cloudwatch:UntagResource"
+      ]
     },
     "aws_cloudwatch_composite_alarm": {
       "service": "cloudwatch",
       "scope": "arn",
-      "actions": ["cloudwatch:PutCompositeAlarm", "cloudwatch:DeleteAlarms", "cloudwatch:DescribeAlarms", "cloudwatch:ListTagsForResource", "cloudwatch:TagResource"]
+      "actions": [
+        "cloudwatch:PutCompositeAlarm",
+        "cloudwatch:DeleteAlarms",
+        "cloudwatch:DescribeAlarms",
+        "cloudwatch:ListTagsForResource",
+        "cloudwatch:TagResource"
+      ]
     },
     "aws_sns_topic": {
       "service": "sns",
       "scope": "arn",
-      "actions": ["sns:CreateTopic", "sns:DeleteTopic", "sns:GetTopicAttributes", "sns:SetTopicAttributes", "sns:TagResource", "sns:UntagResource", "sns:ListTagsForResource"]
+      "actions": [
+        "sns:CreateTopic",
+        "sns:DeleteTopic",
+        "sns:GetTopicAttributes",
+        "sns:SetTopicAttributes",
+        "sns:TagResource",
+        "sns:UntagResource",
+        "sns:ListTagsForResource"
+      ]
     },
     "aws_sns_topic_policy": {
       "service": "sns",
       "scope": "arn",
-      "actions": ["sns:SetTopicAttributes", "sns:GetTopicAttributes"]
+      "actions": [
+        "sns:SetTopicAttributes",
+        "sns:GetTopicAttributes"
+      ]
     },
     "aws_sns_topic_subscription": {
       "service": "sns",
       "scope": "arn",
-      "actions": ["sns:Subscribe", "sns:Unsubscribe", "sns:GetSubscriptionAttributes", "sns:SetSubscriptionAttributes", "sns:ListSubscriptionsByTopic"]
+      "actions": [
+        "sns:Subscribe",
+        "sns:Unsubscribe",
+        "sns:GetSubscriptionAttributes",
+        "sns:SetSubscriptionAttributes",
+        "sns:ListSubscriptionsByTopic"
+      ]
     },
     "aws_ecr_repository": {
       "service": "ecr",
       "scope": "arn",
-      "actions": ["ecr:CreateRepository", "ecr:DeleteRepository", "ecr:DescribeRepositories", "ecr:PutImageTagMutability", "ecr:PutImageScanningConfiguration", "ecr:TagResource", "ecr:UntagResource", "ecr:ListTagsForResource"]
+      "actions": [
+        "ecr:CreateRepository",
+        "ecr:DeleteRepository",
+        "ecr:DescribeRepositories",
+        "ecr:PutImageTagMutability",
+        "ecr:PutImageScanningConfiguration",
+        "ecr:TagResource",
+        "ecr:UntagResource",
+        "ecr:ListTagsForResource"
+      ]
     },
     "aws_ecr_lifecycle_policy": {
       "service": "ecr",
       "scope": "arn",
-      "actions": ["ecr:PutLifecyclePolicy", "ecr:GetLifecyclePolicy", "ecr:DeleteLifecyclePolicy"]
+      "actions": [
+        "ecr:PutLifecyclePolicy",
+        "ecr:GetLifecyclePolicy",
+        "ecr:DeleteLifecyclePolicy"
+      ]
     },
     "aws_cloudfront_origin_access_control": {
       "service": "cloudfront",
       "scope": "none",
-      "actions": ["cloudfront:CreateOriginAccessControl", "cloudfront:GetOriginAccessControl", "cloudfront:GetOriginAccessControlConfig", "cloudfront:UpdateOriginAccessControl", "cloudfront:DeleteOriginAccessControl", "cloudfront:ListOriginAccessControls"]
+      "actions": [
+        "cloudfront:CreateOriginAccessControl",
+        "cloudfront:GetOriginAccessControl",
+        "cloudfront:GetOriginAccessControlConfig",
+        "cloudfront:UpdateOriginAccessControl",
+        "cloudfront:DeleteOriginAccessControl",
+        "cloudfront:ListOriginAccessControls"
+      ]
     },
     "aws_cloudfront_distribution": {
       "service": "cloudfront",
       "scope": "tag",
-      "actions": ["cloudfront:CreateDistribution", "cloudfront:CreateDistributionWithTags", "cloudfront:GetDistribution", "cloudfront:GetDistributionConfig", "cloudfront:UpdateDistribution", "cloudfront:DeleteDistribution", "cloudfront:TagResource", "cloudfront:ListTagsForResource"]
+      "actions": [
+        "cloudfront:CreateDistribution",
+        "cloudfront:CreateDistributionWithTags",
+        "cloudfront:GetDistribution",
+        "cloudfront:GetDistributionConfig",
+        "cloudfront:UpdateDistribution",
+        "cloudfront:DeleteDistribution",
+        "cloudfront:TagResource",
+        "cloudfront:ListTagsForResource"
+      ]
     }
   },
   "action_groups": [
     {
       "name": "terraform backend: the S3 state object, its lock file and the DynamoDB lock item",
-      "roles": ["fss-rh"],
+      "roles": [
+        "fss-rh"
+      ],
       "why": "The release workflow's ambient credential is fss-rh-deploy and the S3 backend uses the ambient credential rather than the provider's assumed role. A production apply is local and its state is read by David's own admin principal, so fss-prod-deploy needs none of this.",
-      "actions": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListBucket", "dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem", "kms:Encrypt", "kms:Decrypt", "kms:GenerateDataKey"]
+      "actions": [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:DeleteObject",
+        "s3:ListBucket",
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:DeleteItem",
+        "kms:Encrypt",
+        "kms:Decrypt",
+        "kms:GenerateDataKey"
+      ]
     },
     {
       "name": "infra/scripts/rehearsal-caller-identity.sh and rehearsal-prefix-guard.sh",
-      "roles": ["fss-rh", "fss-prod"],
+      "roles": [
+        "fss-rh",
+        "fss-prod"
+      ],
       "why": "The identity check and the production-inventory comparison, which are the two reads Appendix G 39 is measured with.",
-      "actions": ["sts:GetCallerIdentity", "tag:GetResources"]
+      "actions": [
+        "sts:GetCallerIdentity",
+        "tag:GetResources"
+      ]
     },
     {
       "name": "infra/scripts/release-common.sh and release-deploy.sh: the one-off tasks and the two services",
-      "roles": ["fss-rh", "fss-prod"],
+      "roles": [
+        "fss-rh",
+        "fss-prod"
+      ],
       "why": "fss migrate, fss admin database-users ensure, fss verify and fss drill run as one-off ECS tasks inside the VPC, and the deploy scales the two services.",
-      "actions": ["ecs:DescribeClusters", "ecs:DescribeTaskDefinition", "ecs:RunTask", "ecs:DescribeTasks", "ecs:StopTask", "ecs:ListTasks", "ecs:UpdateService", "ecs:DescribeServices", "iam:PassRole", "logs:GetLogEvents", "logs:DescribeLogStreams"]
+      "actions": [
+        "ecs:DescribeClusters",
+        "ecs:DescribeTaskDefinition",
+        "ecs:RunTask",
+        "ecs:DescribeTasks",
+        "ecs:StopTask",
+        "ecs:ListTasks",
+        "ecs:UpdateService",
+        "ecs:DescribeServices",
+        "iam:PassRole",
+        "logs:GetLogEvents",
+        "logs:DescribeLogStreams"
+      ]
     },
     {
       "name": "infra/scripts/rehearsal-restore-drill.sh: Appendix E steps 1 to 9",
-      "roles": ["fss-rh"],
+      "roles": [
+        "fss-rh"
+      ],
       "why": "The point-in-time restore, the wait, and the teardown of the restored instance and any snapshot the run left.",
-      "actions": ["rds:RestoreDBInstanceToPointInTime", "rds:DescribeDBInstances", "rds:DescribeDBSnapshots", "rds:DeleteDBInstance", "rds:DeleteDBSnapshot", "kms:CreateGrant", "kms:DescribeKey"]
+      "actions": [
+        "rds:RestoreDBInstanceToPointInTime",
+        "rds:DescribeDBInstances",
+        "rds:DescribeDBSnapshots",
+        "rds:DeleteDBInstance",
+        "rds:DeleteDBSnapshot",
+        "kms:CreateGrant",
+        "kms:DescribeKey"
+      ]
     },
     {
       "name": "infra/scripts/rehearsal-teardown.sh: emptying the object-locked journal bucket",
-      "roles": ["fss-rh"],
+      "roles": [
+        "fss-rh"
+      ],
       "why": "GOVERNANCE object lock with a one-day retention means a same-day destroy has to bypass it, and terraform destroy cannot remove a bucket that still holds a version or a delete marker. Never on production: docs/greenfield/release.md 1.2.",
-      "actions": ["s3:ListBucketVersions", "s3:DeleteObject", "s3:DeleteObjectVersion", "s3:BypassGovernanceRetention"]
+      "actions": [
+        "s3:ListBucketVersions",
+        "s3:DeleteObject",
+        "s3:DeleteObjectVersion",
+        "s3:BypassGovernanceRetention"
+      ]
     },
     {
       "name": "the release workflow's own two database entries",
-      "roles": ["fss-rh"],
+      "roles": [
+        "fss-rh"
+      ],
       "why": "A rehearsal is unattended, so it fills migration-database from the RDS-managed master secret and app-runtime-database from a password generated in the runner. In production David fills both by hand from stdin and the role is denied both actions.",
-      "actions": ["secretsmanager:PutSecretValue", "secretsmanager:GetSecretValue"]
+      "actions": [
+        "secretsmanager:PutSecretValue",
+        "secretsmanager:GetSecretValue"
+      ]
     },
     {
       "name": "the smoke check's canary datapoint",
-      "roles": ["fss-rh", "fss-prod"],
+      "roles": [
+        "fss-rh",
+        "fss-prod"
+      ],
       "why": "scripts/productionSmoke.mjs is handed CanaryCompletionAgeSeconds, which the workflow reads with cloudwatch get-metric-statistics.",
-      "actions": ["cloudwatch:GetMetricStatistics", "cloudwatch:ListMetrics"]
+      "actions": [
+        "cloudwatch:GetMetricStatistics",
+        "cloudwatch:ListMetrics"
+      ]
     }
   ],
   "denied_in_production": {
@@ -320,12 +689,30 @@
     "secretsmanager:GetSecretValue": "Nothing in a production apply reads a secret value. The migration credential is copied between two entries by David's own admin principal, not by the role."
   },
   "run_35628963637": {
-    "cloudwatch:PutCompositeAlarm denied (alerts: aws_cloudwatch_composite_alarm.critical, .warning)": ["cloudwatch:PutCompositeAlarm"],
-    "kms:CreateAlias denied (all five aws_kms_alias)": ["kms:CreateAlias"],
-    "Secrets Manager: Access to KMS is not allowed on all eight aws_secretsmanager_secret": ["kms:GenerateDataKey", "kms:Decrypt", "kms:DescribeKey"],
-    "ec2:AuthorizeSecurityGroupIngress denied (five aws_vpc_security_group_ingress_rule)": ["ec2:AuthorizeSecurityGroupIngress"],
-    "ec2:AuthorizeSecurityGroupEgress denied (three egress rules)": ["ec2:AuthorizeSecurityGroupEgress"],
-    "cloudfront:CreateOriginAccessControl denied": ["cloudfront:CreateOriginAccessControl"],
-    "Teardown: S3 DeleteBucketPolicy and PutBucketObjectLockConfiguration refused by an explicit deny in the resource-based policy": ["s3:DeleteBucketPolicy", "s3:PutBucketObjectLockConfiguration", "s3:BypassGovernanceRetention"]
+    "cloudwatch:PutCompositeAlarm denied (alerts: aws_cloudwatch_composite_alarm.critical, .warning)": [
+      "cloudwatch:PutCompositeAlarm"
+    ],
+    "kms:CreateAlias denied (all five aws_kms_alias)": [
+      "kms:CreateAlias"
+    ],
+    "Secrets Manager: Access to KMS is not allowed on all eight aws_secretsmanager_secret": [
+      "kms:GenerateDataKey",
+      "kms:Decrypt",
+      "kms:DescribeKey"
+    ],
+    "ec2:AuthorizeSecurityGroupIngress denied (five aws_vpc_security_group_ingress_rule)": [
+      "ec2:AuthorizeSecurityGroupIngress"
+    ],
+    "ec2:AuthorizeSecurityGroupEgress denied (three egress rules)": [
+      "ec2:AuthorizeSecurityGroupEgress"
+    ],
+    "cloudfront:CreateOriginAccessControl denied": [
+      "cloudfront:CreateOriginAccessControl"
+    ],
+    "Teardown: S3 DeleteBucketPolicy and PutBucketObjectLockConfiguration refused by an explicit deny in the resource-based policy": [
+      "s3:DeleteBucketPolicy",
+      "s3:PutBucketObjectLockConfiguration",
+      "s3:BypassGovernanceRetention"
+    ]
   }
 }

@@ -913,12 +913,7 @@ per hour.
   calendar on the day of the apply.
   `docs/decisions/g16-postgresql-is-pinned-by-major.md`.
 
-**Unexplained, and carried forward.** `cloudwatch:PutCompositeAlarm` was denied although
-the two composite alarms are named `fss-rh-<run>-critical` and `-warning` and the
-hand-written policy's `cloudwatch:*` covered `alarm:fss-rh-*`. The shipped policy names
-the action explicitly and `infra/scripts/check-deployment-role.sh` asks about it, but
-nobody has yet read the decoded authorization message for that call, so treat a repeat as
-open rather than as a regression.
+**Explained after the run, by simulation.** `cloudwatch:PutCompositeAlarm` was denied although the two composite alarms are named `fss-rh-<run>-critical` and `-warning` and the hand-written policy's `cloudwatch:*` covered `alarm:fss-rh-*`. The errors carried no encoded authorization message, so David ran a read-only `simulate-principal-policy` for the action: CloudWatch authorizes it against `arn:aws:cloudwatch:us-east-1:326255650484:alarm:*`, not the composite alarm's own name, because the alarm rule references other alarms; the result was an implicit deny with no matched statement. The shipped policy therefore allows that one action on `alarm:*` (`CompositeAlarmsAreEvaluatedAgainstEveryAlarm`; a wildcard resource carries no tag, so no condition can narrow it) and `infra/scripts/check-deployment-role.sh` simulates it against that resource.
 
 **What none of this settles.** Everything from the fill step onwards — 8.0a items 2 to 5
 — is still untested: no migration task has ever been launched into a rehearsal VPC, no

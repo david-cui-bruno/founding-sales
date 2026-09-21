@@ -67,7 +67,7 @@ claimed.
    but the Terraform state key, and Secrets Manager checks key use at `CreateSecret`. See
    the next section: this is the one change that needed David's decision.
 
-4. **`cloudwatch:PutCompositeAlarm` denied (both composite alarms).** Unexplained. The
+4. **`cloudwatch:PutCompositeAlarm` denied (both composite alarms).** Explained on 21 September by a read-only `simulate-principal-policy` of David's role: CloudWatch authorizes this action against `alarm:*`, not the composite alarm's own name, because the rule references other alarms (`context.resource` `arn:aws:cloudwatch:us-east-1:326255650484:alarm:*`, implicit deny, no matched statement). The shipped policy allows the one action on `alarm:*` (`CompositeAlarmsAreEvaluatedAgainstEveryAlarm`), unconditionally because a wildcard resource carries no tag, and the check simulates it against that resource. Formerly: The
    alarms are named `<prefix>-critical` and `-warning` and his `cloudwatch:*` covered
    `alarm:fss-rh-*`. The shipped policy names the action explicitly in
    `CloudWatchAlarmsCarryTheNamespaceInTheirName` and the pre-apply check asks about it,
