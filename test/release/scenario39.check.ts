@@ -1432,3 +1432,52 @@ describe('Appendix G 39: a plan run publishes addresses and counts, never values
     expect(script).not.toContain('cat "$plan_log"');
   });
 });
+
+/**
+ * G12k: the stages are written down where the next operator will look for them.
+ *
+ * A stage nobody knows about is a stage nobody runs, and the whole point of this lane
+ * is that David reaches for `plan` before he reaches for `full`. The release document
+ * is where that choice is made, so the check is on the document too.
+ *
+ * ## The vacuous-pass trap
+ *
+ * Asserting that the document mentions the word "stage" would pass against a sentence
+ * that says nothing. Closed by requiring the two errors of the third credentialed run
+ * *verbatim* — they are the evidence for the whole change, and a claim about a run is
+ * worth only as much as the log line behind it — and by requiring the order David uses
+ * the stages in, which is the operational content.
+ */
+describe('Appendix G 39: the stages, and the run that caused them, are in the release document', () => {
+  const release = readRepositoryFile('docs/greenfield/release.md');
+  const decision = readRepositoryFile('docs/decisions/g12k-the-rehearsal-has-stages-and-one-gate.md');
+
+  it('says what each stage proves and that only the full one is the gate', () => {
+    expect(release).toContain('### 3.0 The four stages, and the order to use them in');
+    for (const stage of REHEARSAL_STAGES) expect(release).toContain(`\`${stage}\``);
+    expect(release).toContain('**Only `full` is the gate.**');
+    expect(release).toContain("`if: inputs.stage == 'full'`");
+    // The order, which is the operational content: the local plan comes first.
+    expect(release).toContain('**The local production plan, from your Mac**');
+    expect(release).toContain('**Fix as a batch.**');
+    expect(release).toContain('**Every stage tears down, and every stage re-reads the production inventory.**');
+  });
+
+  it('carries the third run’s two errors verbatim, and why no offline layer saw them', () => {
+    expect(release).toContain('### 8.0c What the third credentialed run proved, and what it refuted');
+    expect(release).toContain('35611374218');
+    expect(release).toContain(
+      'Attempted to load application default credentials since neither `credentials` nor `access_token` was set in the provider block.',
+    );
+    expect(release).toContain('count = var.kms_key_arn == null ? 1 : 0');
+    expect(release).toContain('The "count" value depends on resource attributes that cannot be determined until apply.');
+    expect(release).toContain('override_during = plan');
+  });
+
+  it('records the decision, and that the stages do not weaken the gate', () => {
+    expect(decision).toContain('35611374218');
+    expect(decision).toContain('35602423640');
+    expect(decision).toContain('35548888865');
+    expect(decision).toContain('## What this does not weaken');
+  });
+});
