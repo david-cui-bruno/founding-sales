@@ -855,6 +855,26 @@ describe('Appendix G 39: the dry run reads the plan it printed, so the rehearsal
     expect(guard.code).not.toBe(0);
   });
 
+  it('is written down where the next operator will look for it', () => {
+    const decision = readRepositoryFile(
+      'docs/decisions/g12f-the-rehearsals-own-guard-refused-the-rehearsal.md',
+    );
+    const releaseDoc = readRepositoryFile('docs/greenfield/release.md');
+    const g12 = readRepositoryFile('docs/decisions/g12-what-the-rehearsal-cannot-prove.md');
+
+    // The run, so the claim can be checked against the log rather than believed.
+    expect(decision).toContain('35548888865');
+    expect(decision).toContain('rehearsal_read_production_inventory');
+    expect(releaseDoc).toContain('rehearsal_read_production_inventory');
+    // Section 8 separates what the first run proved from what it refuted; the old
+    // section said the rehearsal had never run at all.
+    expect(releaseDoc).toContain('What the first credentialed run proved, and what it refuted');
+    expect(releaseDoc).toContain('arn:aws:sts::326255650484:assumed-role/fss-rh-deploy/');
+    // And the paragraph that claimed this scenario was proved in rehearsal is corrected
+    // where a reader of that document will meet it.
+    expect(g12).toContain('g12f-the-rehearsals-own-guard-refused-the-rehearsal.md');
+  });
+
   it('is run by the credential-free job on every pull request, after the plan is printed', () => {
     const dryRunJob = release.slice(release.indexOf('\n  dry-run:\n'), release.indexOf('\n  rehearsal:\n'));
     const printedAt = dryRunJob.indexOf('Print the plan every rehearsal step would run');
