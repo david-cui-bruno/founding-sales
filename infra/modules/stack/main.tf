@@ -145,7 +145,13 @@ module "journal" {
   object_lock_mode           = var.journal_object_lock_mode
   object_lock_retention_days = var.journal_object_lock_retention_days
   force_destroy              = var.destroyable
-  tags                       = local.tags
+
+  # Passed through rather than derived from `destroyable`, because "this stack
+  # can be destroyed" and "this principal may weaken the suppression journal"
+  # are different decisions and only a root gets to make the second one.
+  administrative_principal_arns = var.journal_administrative_principal_arns
+
+  tags = local.tags
 }
 
 module "database" {

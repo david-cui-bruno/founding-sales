@@ -177,3 +177,122 @@ run "the_policy_denies_deletion_and_admits_only_the_named_writers" {
     error_message = "Plain HTTP must be denied."
   }
 }
+
+# The deny exemption the root names (G16).
+#
+# `administrative_principal_arns` is how the bucket's own deployer gets through
+# the deny that stopped the fourth credentialed rehearsal's teardown (Actions
+# run 35628963637: `S3 DeleteBucketPolicy … 403 AccessDenied because of an
+# explicit deny in the resource-based policy`, and the same for
+# `PutBucketObjectLockConfiguration`).
+#
+# ## The vacuous-pass trap
+#
+# An exemption asserted only in its non-empty form would pass against a module
+# that ignored the variable and exempted the deployer always — which is
+# production's posture inverted. And an exemption asserted only on the deletion
+# deny would pass against the 21 September shape, where the bucket could be
+# emptied and not deleted. Closed by running both states of the variable, by
+# requiring the *absence* of the condition key when the list is empty rather
+# than an empty condition, by checking the merge with each statement's own
+# `ArnNotLike` rather than its replacement, and by requiring the transport deny
+# to stay unconditioned in both states.
+run "an_empty_administrative_list_leaves_every_deny_as_it_was" {
+  command = apply
+
+  assert {
+    condition = alltrue([
+      for statement in jsondecode(output.policy_json).Statement :
+      !can(statement.Condition.ArnNotEquals)
+      if statement.Effect == "Deny"
+    ])
+    error_message = "With nobody named, no deny may carry an exemption. An empty Condition object is a statement that claims one and has none."
+  }
+
+  # The positive control for the run below: the two principal-scoped denies keep
+  # their own condition, so "no ArnNotEquals" is not true because the conditions
+  # went away.
+  assert {
+    condition = length([
+      for statement in jsondecode(output.policy_json).Statement :
+      statement if can(statement.Condition.ArnNotLike["aws:PrincipalArn"])
+    ]) == 2
+    error_message = "The write and read denies are still scoped by the writer and reader patterns."
+  }
+}
+
+run "a_named_administrator_is_exempted_from_every_deny_but_the_transport_one" {
+  command = apply
+
+  variables {
+    administrative_principal_arns = ["arn:aws:iam::123456789012:role/fss-test-deploy"]
+  }
+
+  assert {
+    condition = length([
+      for statement in jsondecode(output.policy_json).Statement :
+      statement
+      if statement.Effect == "Deny"
+      && statement.Sid != "DenyUnencryptedTransport"
+      && contains(try(statement.Condition.ArnNotEquals["aws:PrincipalArn"], []), "arn:aws:iam::123456789012:role/fss-test-deploy")
+    ]) == 3
+    error_message = "All three non-transport denies must exempt the named administrator: deletion and lock weakening, writes, and reads. Emptying a bucket you cannot then delete is where the fourth credentialed rehearsal stopped."
+  }
+
+  # Merged, not replaced. Conditions inside one statement are conjunctive, so a
+  # deny carrying both keys fires only for a principal that is neither a writer
+  # nor an administrator; a replacement would have opened the journal to
+  # everything that is not the deployer.
+  assert {
+    condition = alltrue([
+      for statement in jsondecode(output.policy_json).Statement :
+      can(statement.Condition.ArnNotLike["aws:PrincipalArn"]) && can(statement.Condition.ArnNotEquals["aws:PrincipalArn"])
+      if statement.Sid == "DenyWritesFromAnyoneButTheTaskRoles" || statement.Sid == "DenyReadsFromAnyoneButTheTaskRoles"
+    ])
+    error_message = "The exemption is merged into each statement's own condition, never in place of it."
+  }
+
+  assert {
+    condition = alltrue([
+      for statement in jsondecode(output.policy_json).Statement :
+      !can(statement.Condition.ArnNotEquals) && can(statement.Condition.Bool["aws:SecureTransport"])
+      if statement.Sid == "DenyUnencryptedTransport"
+    ])
+    error_message = "Plain HTTP stays denied to every principal, deployer included."
+  }
+
+  # The deny still covers governance bypass and lock reconfiguration for
+  # everybody else. The fix is an exemption, not a shorter deny.
+  assert {
+    condition = alltrue([
+      for statement in jsondecode(output.policy_json).Statement :
+      contains(statement.Action, "s3:BypassGovernanceRetention") && contains(statement.Action, "s3:PutBucketObjectLockConfiguration") && contains(statement.Action, "s3:DeleteBucketPolicy")
+      if statement.Sid == "DenyAnyDeletionOrLockWeakening"
+    ])
+    error_message = "The three actions the 21 September teardown was refused stay denied to everyone the root has not named."
+  }
+}
+
+run "an_administrative_principal_that_is_not_an_exact_role_arn_is_refused" {
+  command = plan
+
+  variables {
+    administrative_principal_arns = ["arn:aws:iam::123456789012:role/*"]
+  }
+
+  # A pattern here would exempt every role in the account from the one deny
+  # standing between suppression history and an administrator, and `ArnNotEquals`
+  # would not even treat it as a pattern: it compares the literal string and
+  # exempts nobody. Either way it is not what the caller meant.
+  expect_failures = [var.administrative_principal_arns]
+}
+
+run "a_bare_role_name_is_refused" {
+  command = plan
+
+  variables {
+    administrative_principal_arns = ["fss-test-deploy"]
+  }
+
+  expect_failures = [var.administrative_principal_arns]
+}

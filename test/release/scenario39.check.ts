@@ -7,6 +7,8 @@ import { describe, expect, it } from 'vitest';
 import { mustBeRehearsed, readRepositoryFile, repositoryPath } from './support/coverage.ts';
 import {
   REHEARSAL_STAGES,
+  REHEARSAL_STAGE_CHOICES,
+  ladderStagesForCondition,
   embeddedPythonProgram,
   rehearsalJobSteps,
   stagesForCondition,
@@ -1196,6 +1198,7 @@ describe('Appendix G 39: the refusal is symmetric, and the wrapper enforces it p
 
 /**
  * G12k: the stages nest, and the two steps that clean up belong to all of them.
+ * G16: and the fifth stage is not on that ladder at all.
  *
  * The rehearsal had one credentialed mode, so each of the three runs of 21 September
  * spent about an hour of David's attention to find one error. `stage` — `plan`,
@@ -1203,6 +1206,12 @@ describe('Appendix G 39: the refusal is symmetric, and the wrapper enforces it p
  * introduces is a stage that is not a prefix of the next: a `deploy` that skipped
  * something `create` does would be a deploy of an environment nobody created, and a
  * `plan` that ran a step `full` does not would be a stage nobody designed.
+ *
+ * `teardown` is the fifth dispatch choice and deliberately outside that ladder: it
+ * removes an environment an earlier run created and left, so it plans nothing, applies
+ * nothing and writes no record. Every statement below about nesting is therefore about
+ * the ladder — `ladderStagesForCondition` drops `teardown` before comparing — and the
+ * statements about `teardown` are their own `describe`, further down.
  *
  * ## The vacuous-pass trap
  *
@@ -1216,7 +1225,7 @@ describe('Appendix G 39: the refusal is symmetric, and the wrapper enforces it p
  * it cannot read, because the permissive reading of an unknown condition is "every
  * stage", which is the answer that hides a mistake.
  */
-describe('Appendix G 39: the rehearsal has four stages and each contains the one before it', () => {
+describe('Appendix G 39: the rehearsal has five stages and four of them contain the one before', () => {
   const steps = rehearsalJobSteps();
 
   it('reads a job with every step named, so a parser that found nothing is a failure', () => {
@@ -1228,11 +1237,11 @@ describe('Appendix G 39: the rehearsal has four stages and each contains the one
     expect(steps.map(step => step.name)).toContain('Tear the rehearsal run down');
   });
 
-  it('gives every step a stage set that is a suffix of the four, never a hole in the middle', () => {
+  it('gives every step a ladder stage set that is a suffix of the four, never a hole in the middle', () => {
     for (const step of steps) {
-      const stages = stagesForCondition(step.condition);
-      const suffix = REHEARSAL_STAGES.slice(REHEARSAL_STAGES.length - stages.size);
-      expect([...stages], `${step.name} runs in a set of stages that is not a suffix`).toEqual([...suffix]);
+      const stages = ladderStagesForCondition(step.condition);
+      const suffix = REHEARSAL_STAGES.slice(REHEARSAL_STAGES.length - stages.length);
+      expect([...stages], `${step.name} runs in a set of ladder stages that is not a suffix`).toEqual([...suffix]);
     }
   });
 
@@ -1257,30 +1266,36 @@ describe('Appendix G 39: the rehearsal has four stages and each contains the one
     // "creates nothing" is exactly the claim a broken `if:` would falsify, and the
     // teardown is tolerant of a run that created nothing (it reports
     // `destroyed=nothing_created`), so running it costs a few seconds and buys the
-    // guarantee.
+    // guarantee. They are also the only two steps the `teardown` stage exists to run.
     for (const name of ['Tear the rehearsal run down', 'Nothing with the production prefix was touched']) {
       const step = steps.find(candidate => candidate.name === name);
       expect(step, `the rehearsal job has no step named ${name}`).toBeDefined();
       expect(step?.condition).toBe('always()');
-      for (const stage of REHEARSAL_STAGES) {
+      for (const stage of REHEARSAL_STAGE_CHOICES) {
         expect(stepsForStage(stage, steps).map(candidate => candidate.name), `${stage} skips ${name}`).toContain(name);
       }
     }
     // The teardown needs the variables `terraform destroy` requires (G12i), so the
-    // step that writes them is in every stage too.
-    for (const stage of REHEARSAL_STAGES) {
+    // step that writes them is in every stage too — the `teardown` stage included, and
+    // that is the whole reason a teardown of an orphan works at all from a fresh
+    // checkout: the file is rebuilt from the run's inputs before the destroy.
+    for (const stage of REHEARSAL_STAGE_CHOICES) {
       expect(stepsForStage(stage, steps).map(step => step.name)).toContain(
         'Write the variables this run plans, applies and tears down with',
       );
     }
   });
 
-  it('plans in every stage, and the apply names no variable of its own', () => {
+  it('plans in every ladder stage, and the apply names no variable of its own', () => {
     const plan = steps.find(step => step.text.includes('terraform plan'));
     const apply = steps.find(step => step.text.includes('terraform apply'));
     expect(plan, 'no step of the rehearsal job plans').toBeDefined();
     expect(apply, 'no step of the rehearsal job applies').toBeDefined();
-    expect([...stagesForCondition(plan?.condition ?? null)]).toEqual([...REHEARSAL_STAGES]);
+    expect([...ladderStagesForCondition(plan?.condition ?? null)]).toEqual([...REHEARSAL_STAGES]);
+    // And not in the fifth: a teardown of an orphan must not plan the environment it is
+    // about to destroy, because a plan of a root whose state holds four leftover
+    // resources proposes to create the other hundred and thirty-four.
+    expect([...stagesForCondition(plan?.condition ?? null)]).not.toContain('teardown');
     expect(plan?.text).toContain('-out="$plan_file"');
     // One `-var` list, on the plan, which every stage runs. The apply takes its
     // values from `run.auto.tfvars.json`, which Terraform loads automatically from
@@ -1472,8 +1487,8 @@ describe('Appendix G 39: the stages, and the run that caused them, are in the re
   const decision = readRepositoryFile('docs/decisions/g12k-the-rehearsal-has-stages-and-one-gate.md');
 
   it('says what each stage proves and that only the full one is the gate', () => {
-    expect(release).toContain('### 3.0 The four stages, and the order to use them in');
-    for (const stage of REHEARSAL_STAGES) expect(release).toContain(`\`${stage}\``);
+    expect(release).toContain('### 3.0 The five stages, and the order to use them in');
+    for (const stage of REHEARSAL_STAGE_CHOICES) expect(release).toContain(`\`${stage}\``);
     expect(release).toContain('**Only `full` is the gate.**');
     expect(release).toContain("`if: inputs.stage == 'full'`");
     // The order, which is the operational content: the local plan comes first.

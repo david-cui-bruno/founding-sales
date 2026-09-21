@@ -40,6 +40,44 @@ variable "reader_role_names" {
   default     = []
 }
 
+variable "administrative_principal_arns" {
+  description = <<-EOT
+    Principals exempted from every `Deny` in the bucket policy except the
+    transport one. Empty by default, which is the posture production keeps.
+
+    The denies are written against `Principal *` because an allow list alone
+    would leave an administrator able to delete suppression history. On 21
+    September 2026 that turned out to include the bucket's own deployer:
+    David's fourth credentialed rehearsal (Actions run 35628963637) applied and
+    then could not tear the run down —
+
+        S3 DeleteBucketPolicy … 403 AccessDenied because of an explicit deny in
+        the resource-based policy
+
+    — and the same for `PutBucketObjectLockConfiguration`. With
+    `s3:BypassGovernanceRetention` in the same deny, the teardown script's own
+    `--bypass-governance-retention` emptying step could never have worked
+    either, so no principal but the account root could ever remove the bucket.
+
+    A rehearsal environment has to be able to disappear, so the rehearsal root
+    passes its deployment role ARN here and the production root passes nothing
+    unless David sets the variable (his decision 4 of 21 September: GOVERNANCE,
+    ten years, and production teardown stays a root-user act unless he opts in).
+    `docs/decisions/g16-the-journal-deny-exempts-its-deployer.md`.
+
+    ARNs rather than names, and role ARNs rather than session ARNs:
+    `aws:PrincipalArn` carries the *role* ARN for an assumed-role session, which
+    is why the condition is `ArnNotEquals` on an exact ARN and not a pattern.
+  EOT
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for arn in var.administrative_principal_arns : can(regex("^arn:aws[a-z0-9-]*:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_-]+$", arn))])
+    error_message = "An administrative principal is an exact IAM role ARN. A wildcard or a bare role name here would exempt more than the deployer."
+  }
+}
+
 variable "object_lock_mode" {
   description = "GOVERNANCE or COMPLIANCE. COMPLIANCE cannot be shortened or removed by anyone, including the account root."
   type        = string

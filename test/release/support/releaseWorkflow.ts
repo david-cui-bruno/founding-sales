@@ -14,6 +14,16 @@ import { fileURLToPath } from 'node:url';
  * runs too, and so on up to `full`. That is a property of the `if:` conditions, and
  * this module is what lets a test read them rather than a person.
  *
+ * ## The fifth stage is not a fifth rung
+ *
+ * G16 added `teardown`, which is a dispatch choice and **not** a member of the nesting
+ * ladder: it plans nothing, applies nothing and writes no record, and runs only the
+ * steps before the plan plus the two that always run. So there are two lists.
+ * `REHEARSAL_STAGES` is the ladder, and every monotonicity statement is about it;
+ * `REHEARSAL_STAGE_CHOICES` is what `workflow_dispatch` offers, and `stagesForCondition`
+ * returns sets over that. A check that iterates the ladder where it meant the choices
+ * would silently stop asking about `teardown`, so both are exported and both are used.
+ *
  * ## Why a parser and not a YAML library
  *
  * `js-yaml` and `yaml` are both in `node_modules`, and neither is a declared
@@ -38,7 +48,22 @@ const WORKFLOW_PATH = fileURLToPath(new URL('../../../.github/workflows/greenfie
 /** The stages, in the order in which each contains the one before it. */
 export const REHEARSAL_STAGES = ['plan', 'create', 'deploy', 'full'] as const;
 
-export type RehearsalStage = (typeof REHEARSAL_STAGES)[number];
+/**
+ * Every value `workflow_dispatch` offers, in the order the input lists them.
+ *
+ * `teardown` is last and is outside the ladder above: it removes an environment some
+ * earlier run created and left, so "everything the stage before it runs" is not a
+ * property it has or should have.
+ */
+export const REHEARSAL_STAGE_CHOICES = [...REHEARSAL_STAGES, 'teardown'] as const;
+
+export type RehearsalStage = (typeof REHEARSAL_STAGE_CHOICES)[number];
+
+/** The ladder stages a condition admits, in ladder order, ignoring `teardown`. */
+export function ladderStagesForCondition(condition: string | null): readonly RehearsalStage[] {
+  const admitted = stagesForCondition(condition);
+  return REHEARSAL_STAGES.filter(stage => admitted.has(stage));
+}
 
 export interface WorkflowStep {
   /** Position in the job, from 0, so that order can be asserted. */
@@ -56,7 +81,7 @@ export function releaseWorkflowText(): string {
 }
 
 function isStage(value: string): value is RehearsalStage {
-  return (REHEARSAL_STAGES as readonly string[]).includes(value);
+  return (REHEARSAL_STAGE_CHOICES as readonly string[]).includes(value);
 }
 
 function stepFrom(lines: readonly string[], index: number): WorkflowStep {
@@ -109,10 +134,10 @@ export function rehearsalJobSteps(): readonly WorkflowStep[] {
  * Two grammars, and nothing else: `inputs.stage == 'full'` for a step only the gate
  * runs, and `contains(fromJSON('["deploy","full"]'), inputs.stage)` for a step every
  * stage from one onwards runs. A condition that never mentions `inputs.stage` — the
- * teardown's `always()`, the guard's — runs in all four.
+ * teardown step's `always()`, the guard's — runs in all five.
  */
 export function stagesForCondition(condition: string | null): ReadonlySet<RehearsalStage> {
-  if (condition === null || !condition.includes('inputs.stage')) return new Set(REHEARSAL_STAGES);
+  if (condition === null || !condition.includes('inputs.stage')) return new Set(REHEARSAL_STAGE_CHOICES);
   const trimmed = condition.trim();
 
   const equality = /^inputs\.stage == '([a-z]+)'$/u.exec(trimmed);

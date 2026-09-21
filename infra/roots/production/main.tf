@@ -92,6 +92,12 @@ module "stack" {
   journal_object_lock_mode           = var.journal_object_lock_mode
   journal_object_lock_retention_days = var.journal_object_lock_retention_days
 
+  # Nobody, by default. David's decision 4 of 21 September 2026: GOVERNANCE,
+  # ten years, and tearing the production suppression journal down stays an act
+  # of the account root unless he opts in by setting the variable. The rehearsal
+  # root passes its deployment role here and this one passes his list.
+  journal_administrative_principal_arns = var.journal_administrative_principal_arns
+
   alert_emails         = var.alert_emails
   log_retention_days   = 90
   business_time_zone   = var.business_time_zone

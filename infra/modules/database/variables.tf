@@ -24,13 +24,40 @@ variable "vpc_security_group_ids" {
 }
 
 variable "engine_version" {
-  description = "PostgreSQL engine version. The design targets PostgreSQL 16."
+  description = <<-EOT
+    PostgreSQL engine version, **by major**. The design targets PostgreSQL 16
+    and the default is the bare major, `"16"`.
+
+    It was `"16.8"` until David's fourth credentialed rehearsal, which reached
+    AWS and was refused:
+
+        InvalidParameterCombination: Cannot find version 16.8 for postgres
+
+    AWS had retired 16.8. The versions available in `us-east-1` on 21 September
+    2026 were 16.3, 16.4, 16.9, 16.10, 16.11, 16.12, 16.13, 16.14 and 16.15, and
+    a pinned minor goes away on AWS's schedule rather than ours. Nothing offline
+    can see it: no `terraform validate`, no mocked `terraform test` and no plan
+    ever asks RDS which versions exist, so a pinned minor is discovered by an
+    apply — and an apply is the most expensive place in this release to learn
+    anything.
+
+    With `auto_minor_version_upgrade = true`, which `main.tf` sets, the AWS
+    provider treats a major-only `engine_version` as a prefix: it records the
+    full version AWS chose in state and suppresses the diff for as long as the
+    running version still begins with the configured string. So `"16"` plans as
+    no change against 16.9 or 16.15, and `"16.8"` planned as a change against
+    anything. `docs/decisions/g16-postgresql-is-pinned-by-major.md`.
+
+    A minor **may** still be pinned — to reproduce a bug, or to hold a restored
+    instance at the source's version — and the validation below accepts one.
+    What it refuses is a different major, which is a spec change.
+  EOT
   type        = string
-  default     = "16.8"
+  default     = "16"
 
   validation {
-    condition     = can(regex("^16(\\.|$)", var.engine_version))
-    error_message = "The design targets PostgreSQL 16; a different major version is a spec change."
+    condition     = can(regex("^16(\\.[0-9]+)?$", var.engine_version))
+    error_message = "The design targets PostgreSQL 16, as the bare major \"16\" or as 16.<minor>. A different major version is a spec change."
   }
 }
 

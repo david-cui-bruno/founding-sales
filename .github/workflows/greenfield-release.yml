@@ -37,7 +37,7 @@ name: Greenfield release rehearsal
 # assertion are what protect against a stage condition being wrong, so they are the two
 # steps that may not depend on one.
 #
-# ## Four stages, one gate
+# ## Five stages, one gate, and one that only cleans
 #
 # Three credentialed rehearsals (21 September 2026) each stopped at the first error of a
 # class no offline check can see, and each cost about an hour for one error, because the
@@ -52,16 +52,29 @@ name: Greenfield release rehearsal
 #                smoke.
 #   * `full`   — everything, and the **only** stage that writes a release record.
 #
-# The stages nest: every step of one runs in the next. That is a property of the `if:`
+# Those four nest: every step of one runs in the next. That is a property of the `if:`
 # conditions, and `test/release/support/releaseWorkflow.ts` reads them so that scenario
 # 39 can assert it rather than a reviewer having to. The default is `plan`, so the
 # expensive gate is chosen and never inherited.
+#
+#   * `teardown` — the fifth, and **not** a rung on that ladder. It runs identity, the
+#                production inventory, the tfvars file and `terraform init` against the
+#                prefix named in `run_suffix`, and then the two steps every stage runs:
+#                `rehearsal-teardown.sh` and the production-untouched guard. It does not
+#                plan, does not apply, deploys nothing and writes no record. It exists
+#                to remove an orphan — the fourth credentialed run left
+#                `fss-rh-202609211659` standing when its journal bucket refused its own
+#                teardown — and for any future run whose teardown failed.
+#
+#                `run_suffix` is **required** for it, because an empty suffix becomes the
+#                current UTC timestamp and a teardown of a prefix that names nothing is
+#                a run that reports success for doing nothing.
 
 on:
   workflow_dispatch:
     inputs:
       stage:
-        description: 'How far to go. Only `full` is the release gate.'
+        description: 'How far to go. Only `full` is the release gate; `teardown` only cleans.'
         required: true
         type: choice
         default: 'plan'
@@ -70,6 +83,7 @@ on:
           - create
           - deploy
           - full
+          - teardown
       api_image_digest:
         description: 'API image digest, sha256:... (from David''s push)'
         required: true
@@ -83,7 +97,7 @@ on:
         required: true
         type: string
       run_suffix:
-        description: 'Run identifier; the prefix becomes fss-rh-<suffix>'
+        description: 'Run identifier; the prefix becomes fss-rh-<suffix>. Required when stage is teardown.'
         required: false
         type: string
         default: ''
@@ -92,6 +106,9 @@ on:
       - '.github/workflows/greenfield-release.yml'
       - '.github/workflows/greenfield-rehearsal-registry.yml'
       - 'infra/scripts/rehearsal-*.sh'
+      - 'infra/scripts/render-deployment-role-policy.sh'
+      - 'infra/scripts/check-deployment-role.sh'
+      - 'infra/policies/**'
       - 'scripts/productionSmoke.mjs'
       - 'test/release/**'
   push:
@@ -100,6 +117,9 @@ on:
       - '.github/workflows/greenfield-release.yml'
       - '.github/workflows/greenfield-rehearsal-registry.yml'
       - 'infra/scripts/rehearsal-*.sh'
+      - 'infra/scripts/render-deployment-role-policy.sh'
+      - 'infra/scripts/check-deployment-role.sh'
+      - 'infra/policies/**'
 
 permissions:
   contents: read
@@ -173,6 +193,34 @@ jobs:
               || { echo "::error::$script does not use the shared prefix guard"; status=1; }
           done
           exit "$status"
+
+      - name: The two deployment-role scripts render and plan without a credential
+        env:
+          FSS_CHECK_ROLE_DRY_RUN: '1'
+        run: |
+          set -euo pipefail
+          # These two are not `rehearsal-*.sh` and deliberately do not source the shared
+          # prefix guard: `render-deployment-role-policy.sh` makes no call of any kind,
+          # and `check-deployment-role.sh` is asked about the *production* namespace as
+          # well as the rehearsal one, which the guard exists to refuse. So they are
+          # checked here rather than in the loop above.
+          for script in infra/scripts/render-deployment-role-policy.sh infra/scripts/check-deployment-role.sh; do
+            [ -x "$script" ] || { echo "::error::$script is not executable"; exit 1; }
+            bash -n "$script"
+          done
+
+          # Both documents render, parse as JSON, and fit inside IAM's inline-policy
+          # limit — which the renderer refuses to exceed, so this is the refusal being
+          # exercised as well as the document being produced.
+          for prefix in fss-rh fss-prod; do
+            infra/scripts/render-deployment-role-policy.sh "$prefix" \
+              | python3 -c 'import json,sys; d=json.load(sys.stdin); print(len(d["Statement"]), "statements")'
+            infra/scripts/render-deployment-role-policy.sh "$prefix" --sids
+          done
+
+          # And the pre-apply check prints its plan and makes no call.
+          infra/scripts/check-deployment-role.sh fss-rh-deploy fss-rh | tail -1
+          infra/scripts/check-deployment-role.sh fss-prod-deploy fss-prod | tail -1
 
       - name: The run-task wrapper refuses every launch it must refuse
         env:
@@ -529,6 +577,14 @@ jobs:
         run: |
           set -euo pipefail
           suffix='${{ inputs.run_suffix }}'
+          # A teardown names an environment that already exists, so the timestamp
+          # fallback is exactly wrong for it: `fss-rh-<now>` is a prefix nothing was ever
+          # created under, the teardown would report `destroyed=nothing_created`, and the
+          # orphan this stage exists to remove would still be standing.
+          if [ "${{ inputs.stage }}" = 'teardown' ] && [ -z "$suffix" ]; then
+            echo "::error::stage=teardown needs run_suffix: it names the prefix to destroy, and an empty one becomes a timestamp that names nothing."
+            exit 1
+          fi
           [ -n "$suffix" ] || suffix="$(date -u +%Y%m%d%H%M)"
           prefix="fss-rh-${suffix}"
           # The same guard the scripts use, applied before anything is created.
@@ -644,6 +700,7 @@ jobs:
             -backend-config="key=fss/greenfield/rehearsal/${prefix}/terraform.tfstate"
 
       - name: Plan the rehearsal environment, and summarise it without values
+        if: contains(fromJSON('["plan","create","deploy","full"]'), inputs.stage)
         working-directory: infra/roots/rehearsal
         run: |
           set -euo pipefail
