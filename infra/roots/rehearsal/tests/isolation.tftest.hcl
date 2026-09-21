@@ -52,9 +52,12 @@ mock_provider "aws" {
   }
 }
 
-mock_provider "google" {
-  override_during = plan
-}
+# No `mock_provider "google"`, because there is no Google provider to mock. That
+# absence is the fix: the third credentialed rehearsal's plan was refused Google
+# application-default credentials before it made a single AWS call, and a mocked
+# provider in a test can never catch that — `mock_provider` replaces the
+# configuration the real plan would have had to make.
+# `docs/decisions/g12j-the-rehearsal-has-no-google-provider.md`.
 
 variables {
   aws_account_id      = "123456789012"
@@ -390,24 +393,64 @@ run "both_services_are_told_the_workspace_domain" {
     error_message = "The rehearsal worker reads the same domain."
   }
 
-  # Push is off in this run, and the variable is still present and empty rather
-  # than absent: a bootstrap that reads it gets "not configured", not a
-  # `KeyError` at plan time and a surprise at boot.
+}
+
+# The rehearsal has no Google Cloud project, and its tasks still have to start.
+#
+# Both bootstraps call `required()` on all three push names, so an empty one is
+# `FSS_GMAIL_PUSH_AUDIENCE is not set` and a task that exits rather than a task
+# with push switched off. Until this lane the rehearsal passed three empty
+# strings, which no offline layer objected to and no rehearsal had yet run far
+# enough to discover.
+run "the_rehearsal_tasks_are_told_a_push_audience_they_can_start_with" {
+  command = plan
+
   assert {
-    condition     = module.stack.api_environment["FSS_GMAIL_PUSH_TOPIC"] == ""
-    error_message = "With push off the topic is empty, not missing."
+    condition = alltrue([
+      for name in ["FSS_GMAIL_PUSH_AUDIENCE", "FSS_GMAIL_PUSH_TOPIC", "FSS_GMAIL_PUSH_SERVICE_ACCOUNT"] :
+      length(module.stack.api_environment[name]) > 0 && length(module.stack.worker_environment[name]) > 0
+    ])
+    error_message = "Both binaries read all three push identifiers with required(). An empty value is a task that refuses to start."
+  }
+
+  # The audience is this environment's own webhook URL, derived from its own
+  # hostname. It is the value a locally signed rehearsal push token would have
+  # to carry, and it needs no Google resource to be true.
+  assert {
+    condition     = module.stack.api_environment["FSS_GMAIL_PUSH_AUDIENCE"] == "https://rehearsal.example.invalid/integrations/gmail/push"
+    error_message = "The rehearsal audience is built from the rehearsal hostname and the push path."
+  }
+
+  # The topic is well-formed and names a project that does not exist. Both
+  # halves matter: the shape is what `users.watch` takes, and the name is why
+  # nobody can read a rehearsal as evidence that Gmail push works.
+  assert {
+    condition = (can(regex("^projects/[^/]+/topics/[^/]+$", module.stack.api_environment["FSS_GMAIL_PUSH_TOPIC"]))
+    && strcontains(module.stack.api_environment["FSS_GMAIL_PUSH_TOPIC"], "no-push"))
+    error_message = "The rehearsal topic is a well-formed id in a project that does not exist; a rehearsal registers no Gmail watch."
+  }
+
+  assert {
+    condition     = endswith(module.stack.worker_environment["FSS_GMAIL_PUSH_SERVICE_ACCOUNT"], ".invalid")
+    error_message = "No Google identity may be named here: Google cannot mint a token for an address in the reserved .invalid domain."
   }
 }
 
-run "gmail_push_cannot_be_turned_on_without_its_own_project" {
+# A run that needed a real topic would need its own Google Cloud project, and
+# there is no longer a variable to give it one. The refusal is structural: this
+# root declares no Google provider and calls no Pub/Sub module, and
+# `infra/scripts/offline-gate.sh` refuses to let either come back.
+run "a_rehearsal_may_be_pointed_at_another_webhook_path_without_google" {
   command = plan
 
   variables {
-    enable_gmail_push = true
-    gcp_project_id    = ""
+    gmail_push_path = "/integrations/gmail/push-v2"
   }
 
-  expect_failures = [var.gcp_project_id]
+  assert {
+    condition     = module.stack.api_environment["FSS_GMAIL_PUSH_AUDIENCE"] == "https://rehearsal.example.invalid/integrations/gmail/push-v2"
+    error_message = "The audience follows the path, so the webhook and the token cannot disagree about it."
+  }
 }
 
 # G12e: the release workflow's session is already `fss-rh-deploy`, so the

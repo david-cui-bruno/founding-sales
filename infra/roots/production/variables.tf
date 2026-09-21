@@ -322,6 +322,22 @@ variable "gcp_region" {
   default     = "us-east1"
 }
 
+variable "gmail_push_path" {
+  description = <<-EOT
+    Path on the API that Pub/Sub pushes to. It is the same route in every
+    environment, and this root builds both the push endpoint and the audience
+    from it, so the subscription and the task definitions cannot disagree about
+    what the webhook will accept.
+  EOT
+  type        = string
+  default     = "/integrations/gmail/push"
+
+  validation {
+    condition     = startswith(var.gmail_push_path, "/")
+    error_message = "The push path is a path on the API, beginning with a slash."
+  }
+}
+
 variable "bootstrap" {
   description = <<-EOT
     True for the first apply of a brand-new production environment, and false

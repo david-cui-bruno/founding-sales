@@ -53,6 +53,13 @@ mock_provider "aws" {
   }
 }
 
+# The Google mock keeps `plan`, deliberately, and it is the only one in `infra`
+# that does. The runs below assert that the topic id and the push identity this
+# root creates reach both task definitions, and those are values a real plan
+# does not know: with `override_during = apply` the assertions could not be
+# evaluated at all. The `count` on `module.pubsub` keys off a plain variable, so
+# the unknown-at-plan class this file otherwise guards against cannot hide here.
+# `docs/decisions/g12j-mock-providers-keep-computed-values-unknown.md`.
 mock_provider "google" {
   override_during = plan
 
@@ -409,6 +416,18 @@ run "gmail_push_wires_the_audience_the_webhook_must_require" {
     error_message = "The audience the API must require is derived from the API hostname and published as an output."
   }
 
+  # All three, non-empty, in both task definitions. Each is read with
+  # `required()` by both bootstraps, so an empty one is a service that refuses
+  # to start; this is the same assertion the rehearsal root makes about its own
+  # three values.
+  assert {
+    condition = alltrue([
+      for name in ["FSS_GMAIL_PUSH_AUDIENCE", "FSS_GMAIL_PUSH_TOPIC", "FSS_GMAIL_PUSH_SERVICE_ACCOUNT"] :
+      length(module.stack.api_environment[name]) > 0 && length(module.stack.worker_environment[name]) > 0
+    ])
+    error_message = "Both binaries read all three push identifiers with required(); an empty value is a task that exits at start-up."
+  }
+
   assert {
     condition     = module.stack.api_environment["FSS_GMAIL_PUSH_AUDIENCE"] == output.gmail_push_audience
     error_message = "The container must be told the same audience the subscription mints tokens for."
@@ -424,9 +443,19 @@ run "gmail_push_wires_the_audience_the_webhook_must_require" {
   # (docs/decisions/g12-the-credentialed-bootstrap.md). It travels in the task
   # environment now, to both services: the worker renews the watch and the API
   # reports the configured topic.
+  #
+  # G12j moved `module.pubsub` from the stack into this root, so the string
+  # makes one hop it did not make before: out of the module, into
+  # `module.stack`'s `gmail_push_topic`, and into both task definitions. These
+  # two assertions are what proves the hop.
   assert {
     condition     = module.stack.api_environment["FSS_GMAIL_PUSH_TOPIC"] == output.gmail_push_topic_id
     error_message = "The API must be told the topic the watch registers against."
+  }
+
+  assert {
+    condition     = module.stack.api_environment["FSS_GMAIL_PUSH_SERVICE_ACCOUNT"] == output.gmail_push_service_account
+    error_message = "The webhook accepts exactly one service account, and it is the one the subscription mints tokens for."
   }
 
   assert {

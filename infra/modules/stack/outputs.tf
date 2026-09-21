@@ -232,15 +232,11 @@ output "updates_distribution_domain_name" {
   value       = module.updates.distribution_domain_name
 }
 
-output "gmail_push_topic_id" {
-  description = "Pub/Sub topic id for Gmail watch requests. Null when Gmail push is not created in this environment."
-  value       = one(module.pubsub[*].topic_id)
-}
-
-output "gmail_push_audience" {
-  description = "Exact audience the API must require on a push token. Null when Gmail push is not created."
-  value       = one(module.pubsub[*].push_audience)
-}
+# The two Gmail push outputs are gone from this module: it no longer creates the
+# topic, so echoing back what it was told would only be a second place for the
+# same string to drift. `infra/roots/production` publishes them from
+# `module.pubsub`, which is where they are now created, and both are visible in
+# `api_environment` below either way.
 
 output "api_environment" {
   description = "Non-secret API container environment, for offline assertions."
