@@ -3,7 +3,7 @@ import { jobIdempotencyKey, type JobHandler, type JobSpecification } from '@fss/
 import {
   consumeSuppressionStops,
   consumeTerminalStops,
-  listTerminalStopWork,
+  readTerminalStopWork,
 } from '@fss/domain/sequences';
 import type { DueWorkSource } from '../scheduler/schedulerPass.ts';
 
@@ -71,7 +71,7 @@ export function terminalStopJobHandler(
  * Unlike `retentionSource`, this one materializes nothing for a workspace with nothing
  * owed. A job a minute per workspace would be a queue of no-ops and an `oldest
  * runnable job` figure that meant nothing; the price is that the source has to know
- * what is outstanding, which `listTerminalStopWork` answers in one statement over the
+ * what is outstanding, which `readTerminalStopWork` answers in one statement over the
  * two streams.
  *
  * The key is the pair of stream heads. It advances only when a drain succeeded, so:
@@ -79,19 +79,29 @@ export function terminalStopJobHandler(
  * finalization moves a head and inserts one job; and a job that exhausted its attempts
  * keeps its key, so the work waits for the audited admin requeue 13.2 requires rather
  * than filling the dead-job list with one row a minute.
+ *
+ * One read per workspace rather than one across all of them, because the index that
+ * exists on the outbox leads with `workspace_id` and 13.1 asks for indexed queries.
+ * `retentionSource` walks the workspace list the same way.
  */
 export function terminalStopSource(): DueWorkSource {
   return {
     name: 'terminal-stop',
     find: async (session: SessionQueryable): Promise<readonly JobSpecification[]> => {
-      const work = await listTerminalStopWork(session);
-      return work.map(item => ({
-        workspaceId: item.workspaceId,
-        kind: 'sequence.terminal_stop' as const,
-        idempotencyKey: jobIdempotencyKey.terminalStop(item.outboxHead, item.markerHead),
-        payload: { outboxHead: item.outboxHead, markerHead: item.markerHead },
-        maxAttempts: 4,
-      }));
+      const { rows } = await session.query<{ id: string }>('SELECT id FROM workspaces ORDER BY id');
+      const specifications: JobSpecification[] = [];
+      for (const workspace of rows) {
+        const work = await readTerminalStopWork(session, workspace.id);
+        if (work === null) continue;
+        specifications.push({
+          workspaceId: workspace.id,
+          kind: 'sequence.terminal_stop',
+          idempotencyKey: jobIdempotencyKey.terminalStop(work.outboxHead, work.markerHead),
+          payload: { outboxHead: work.outboxHead, markerHead: work.markerHead },
+          maxAttempts: 4,
+        });
+      }
+      return specifications;
     },
   };
 }

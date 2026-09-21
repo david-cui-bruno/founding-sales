@@ -319,9 +319,8 @@ export async function consumeSuppressionStops(
   return { markersConsumed: markers.size, enrollmentsStopped, executionsCancelled };
 }
 
-/** One workspace with terminal-stop work outstanding, and the head of each stream. */
+/** The head of each terminal-stop stream a workspace has not consumed. */
 export interface TerminalStopWork {
-  readonly workspaceId: string;
   /** The oldest unconsumed outbox event, or null when the cursor has caught up. */
   readonly outboxHead: string | null;
   /** The oldest finalized suppression whose stops are still owed, or null. */
@@ -329,49 +328,51 @@ export interface TerminalStopWork {
 }
 
 /**
- * Every workspace that owes a terminal stop, for the one-minute pass (13.1).
+ * What one workspace owes, for the one-minute pass (13.1), or null when it owes
+ * nothing.
  *
- * Indexed reads and nothing else, and a workspace with nothing owed does not appear —
- * which is what keeps this source from materialising a job a minute for ever. The two
- * heads become the job's idempotency key, so the pass inserts one job per distinct
- * state of the two streams, and the next pass over an unchanged state inserts nothing.
+ * Per workspace rather than across all of them, because 13.1 says the pass "finds due
+ * work through indexed queries" and the index that exists is
+ * `crm_domain_events_by_kind (workspace_id, event_kind, occurred_at)` — leading column
+ * `workspace_id`. A single statement over every workspace at once cannot use it and
+ * would sequentially scan the outbox every minute for ever. `suppression_finalizations`
+ * is the same shape: its primary key is `(workspace_id, event_id)`.
+ *
+ * A workspace that owes nothing returns null and materializes no job, which is what
+ * keeps this source from filling the queue with no-ops. The two heads become the job's
+ * idempotency key, so the pass inserts one job per distinct state of the two streams,
+ * and the next pass over an unchanged state inserts nothing.
  */
-export async function listTerminalStopWork(
+export async function readTerminalStopWork(
   db: Queryable,
-  options: { readonly limit?: number } = {},
-): Promise<readonly TerminalStopWork[]> {
-  const { rows } = await db.query<{
-    workspace_id: string;
-    outbox_head: string | null;
-    marker_head: string | null;
-  }>(
+  workspaceId: string,
+): Promise<TerminalStopWork | null> {
+  const { rows } = await db.query<{ outbox_head: string | null; marker_head: string | null }>(
     `WITH outbox AS (
-       SELECT DISTINCT ON (e.workspace_id) e.workspace_id, e.id::text AS head
+       SELECT e.id::text AS head
          FROM crm_domain_events e
          LEFT JOIN sequence_event_cursors c
-           ON c.workspace_id = e.workspace_id AND c.subscriber = $1
-        WHERE e.event_kind = ANY($2::text[])
+           ON c.workspace_id = e.workspace_id AND c.subscriber = $2
+        WHERE e.workspace_id = $1
+          AND e.event_kind = ANY($3::text[])
           AND (c.last_event_at IS NULL
                OR (e.occurred_at, e.id) > (c.last_event_at, c.last_event_id))
-        ORDER BY e.workspace_id, e.occurred_at, e.id
+        ORDER BY e.occurred_at, e.id
+        LIMIT 1
      ),
      markers AS (
-       SELECT DISTINCT ON (owed.workspace_id) owed.workspace_id, owed.event_id AS head
+       SELECT owed.event_id AS head
          FROM (${OUTSTANDING_SUPPRESSION_STOPS}) AS owed
-        ORDER BY owed.workspace_id, owed.decided_at, owed.event_id
+        WHERE owed.workspace_id = $1
+        ORDER BY owed.decided_at, owed.event_id
+        LIMIT 1
      )
-     SELECT COALESCE(outbox.workspace_id, markers.workspace_id) AS workspace_id,
-            outbox.head AS outbox_head,
-            markers.head AS marker_head
-       FROM outbox
-       FULL OUTER JOIN markers ON markers.workspace_id = outbox.workspace_id
-      ORDER BY 1
-      LIMIT $3`,
-    [TERMINAL_STOP_SUBSCRIBER, [...TERMINAL_STOP_EVENT_KINDS], Math.trunc(options.limit ?? 200)],
+     SELECT (SELECT head FROM outbox) AS outbox_head,
+            (SELECT head FROM markers) AS marker_head`,
+    [workspaceId, TERMINAL_STOP_SUBSCRIBER, [...TERMINAL_STOP_EVENT_KINDS]],
   );
-  return rows.map(row => ({
-    workspaceId: row.workspace_id,
-    outboxHead: row.outbox_head,
-    markerHead: row.marker_head,
-  }));
+  const row = rows[0];
+  if (row === undefined) return null;
+  if (row.outbox_head === null && row.marker_head === null) return null;
+  return { outboxHead: row.outbox_head, markerHead: row.marker_head };
 }

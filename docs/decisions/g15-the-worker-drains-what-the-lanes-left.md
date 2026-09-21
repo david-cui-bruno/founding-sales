@@ -53,6 +53,17 @@ cost is that a failure rolls back every firm's stops in that pass rather than on
 firm's; the benefit is that the cursor cannot disagree with the stops, which is the
 property that makes the whole thing exactly-once in practice.
 
+### The source reads one workspace at a time, because the index does
+
+`terminalStopSource` walks `SELECT id FROM workspaces` and asks
+`readTerminalStopWork(session, workspaceId)` for each, the way `retentionSource` walks
+the same list. The first draft asked one statement for every workspace at once, which
+is shorter and wrong: the index on the outbox is `crm_domain_events_by_kind
+(workspace_id, event_kind, occurred_at)`, leading column `workspace_id`, so a
+workspace-blind statement cannot use it and would sequentially scan the outbox every
+minute for ever. 13.1 says the pass "finds due work through indexed queries".
+`suppression_finalizations` is the same shape — primary key `(workspace_id, event_id)`.
+
 ### The marker reader has no cursor, and that is better
 
 `suppression_finalizations.event_id` is a sha256 hex string; `last_event_id` is a uuid.

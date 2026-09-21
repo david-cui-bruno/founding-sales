@@ -154,7 +154,7 @@ export {
   TERMINAL_STOP_SUBSCRIBER,
   consumeSuppressionStops,
   consumeTerminalStops,
-  listTerminalStopWork,
+  readTerminalStopWork,
   type SuppressionStopReport,
   type TerminalStopReport,
   type TerminalStopWork,
