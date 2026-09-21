@@ -93,6 +93,16 @@ output "operations_task_definition_family" {
   value       = aws_ecs_task_definition.operations.family
 }
 
+output "drill_task_definition_arn" {
+  description = "Task definition `fss drill` runs under. Its own identity: the journal and the migration credential, which neither of the other two may hold together."
+  value       = aws_ecs_task_definition.drill.arn
+}
+
+output "drill_task_role_name" {
+  description = "Drill task role name."
+  value       = aws_iam_role.drill_task.name
+}
+
 output "deployment_plan" {
   description = <<-EOT
     What `infra/scripts/release-deploy.sh` needs to know, read back from the
@@ -117,6 +127,7 @@ output "deployment_plan" {
     }
     migration_task_definition  = aws_ecs_task_definition.migration.arn
     operations_task_definition = aws_ecs_task_definition.operations.arn
+    drill_task_definition      = aws_ecs_task_definition.drill.arn
   }
 }
 

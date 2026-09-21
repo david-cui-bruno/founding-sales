@@ -38,9 +38,12 @@ if [ -z "$STEP" ]; then
 fi
 
 case "$KIND" in
-  migration | operations) ;;
+  migration | operations | drill) ;;
   *)
-    echo "FAIL: '${KIND:-<empty>}' is not a task definition this rehearsal has. It is 'migration' (the DDL identity) or 'operations' (the runtime identity)." >&2
+    echo "FAIL: '${KIND:-<empty>}' is not a task definition this rehearsal has." >&2
+    echo "      'migration' is the DDL identity, 'operations' is the runtime identity that runs" >&2
+    echo "      fss verify, and 'drill' is the only one holding both — see" >&2
+    echo "      docs/decisions/g12h-three-one-off-identities.md." >&2
     exit 1
     ;;
 esac
@@ -57,13 +60,23 @@ NETWORK_PLAN="$(release_output "$ROOT_DIRECTORY" task_network_configuration json
 LOG_GROUP="$(release_output "$ROOT_DIRECTORY" worker_log_group_name)"
 DATABASE_HOST="$(release_json_path "${NETWORK_PLAN:-}" "database_host")"
 
-if [ "$KIND" = "migration" ]; then
-  TASK_DEFINITION="$(release_output "$ROOT_DIRECTORY" migration_task_definition_arn)"
-  SECRET_ARN="$(release_output "$ROOT_DIRECTORY" migration_database_secret_arn)"
-else
-  TASK_DEFINITION="$(release_output "$ROOT_DIRECTORY" operations_task_definition_arn)"
-  SECRET_ARN="$(release_output "$ROOT_DIRECTORY" app_runtime_database_secret_arn)"
-fi
+# Which definition, and which entry the wrapper checks its `DATABASE_SECRET_ARN`
+# reference against. The migration task carries no runtime connection at all — the
+# tool never falls back to one for `migrate` — so there is nothing to check there.
+case "$KIND" in
+  migration)
+    TASK_DEFINITION="$(release_output "$ROOT_DIRECTORY" migration_task_definition_arn)"
+    SECRET_ARN=''
+    ;;
+  drill)
+    TASK_DEFINITION="$(release_output "$ROOT_DIRECTORY" drill_task_definition_arn)"
+    SECRET_ARN="$(release_output "$ROOT_DIRECTORY" app_runtime_database_secret_arn)"
+    ;;
+  *)
+    TASK_DEFINITION="$(release_output "$ROOT_DIRECTORY" operations_task_definition_arn)"
+    SECRET_ARN="$(release_output "$ROOT_DIRECTORY" app_runtime_database_secret_arn)"
+    ;;
+esac
 
 # The digest is the release gate at the moment of use, so it is required rather than
 # defaulted: a wrapper given no digest cannot tell a task running this release's image
@@ -80,14 +93,22 @@ fi
 # identifier, safe in `describe-tasks` — and the credential stays a secret reference
 # the execution role resolves. Nothing about the restored instance is ever an
 # argument.
-ENVIRONMENT_OVERRIDES=()
+EXTRA=()
 if [ -n "${FSS_RESTORED_DATABASE_HOST:-}" ]; then
-  ENVIRONMENT_OVERRIDES=(--env "FSS_DATABASE_HOST=${FSS_RESTORED_DATABASE_HOST}")
+  EXTRA+=(--env "FSS_DATABASE_HOST=${FSS_RESTORED_DATABASE_HOST}")
   rehearsal_log "$STEP targets the restored instance at ${FSS_RESTORED_DATABASE_HOST}"
 fi
 
+# A one-off task's filesystem goes away with the task, so a `--report` file written
+# inside it is unreadable afterwards. `FSS_RELEASE_CAPTURE` names a file the wrapper
+# writes the task's log messages into, and `release_captured_report` reads the JSON
+# answer back out of it.
+if [ -n "${FSS_RELEASE_CAPTURE:-}" ]; then
+  EXTRA+=(--capture "${FSS_RELEASE_CAPTURE}")
+fi
+
 release_run_task \
-  ${ENVIRONMENT_OVERRIDES[@]+"${ENVIRONMENT_OVERRIDES[@]}"} \
+  ${EXTRA[@]+"${EXTRA[@]}"} \
   --step "$STEP" \
   --environment rehearsal \
   --prefix "$PREFIX" \

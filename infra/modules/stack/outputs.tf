@@ -125,8 +125,18 @@ output "migration_task_definition_arn" {
 }
 
 output "operations_task_definition_arn" {
-  description = "Task definition for `fss verify` and `fss drill`, under the worker task role."
+  description = "Task definition for `fss verify`, under the worker task role."
   value       = module.cluster.operations_task_definition_arn
+}
+
+output "drill_task_definition_arn" {
+  description = "Task definition for `fss drill`, under its own role: the only identity holding both the journal and the migration credential."
+  value       = module.cluster.drill_task_definition_arn
+}
+
+output "drill_task_role_name" {
+  description = "Drill task role name."
+  value       = module.cluster.drill_task_role_name
 }
 
 output "migration_database_secret_arn" {

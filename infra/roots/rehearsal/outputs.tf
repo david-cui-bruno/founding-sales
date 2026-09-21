@@ -113,8 +113,13 @@ output "migration_task_definition_arn" {
 }
 
 output "operations_task_definition_arn" {
-  description = "Task definition for `fss verify` and `fss drill`, under the worker task role."
+  description = "Task definition for `fss verify`, under the worker task role."
   value       = module.stack.operations_task_definition_arn
+}
+
+output "drill_task_definition_arn" {
+  description = "Task definition for `fss drill`: the only identity holding both the suppression journal and the migration credential, and the only one fixed at FSS_DEPENDENCIES=recorded."
+  value       = module.stack.drill_task_definition_arn
 }
 
 output "migration_database_secret_arn" {

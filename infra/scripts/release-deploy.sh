@@ -99,7 +99,6 @@ rehearsal_log "deploying $PREFIX from $ROOT_DIRECTORY ($ENVIRONMENT), schema_cha
 CLUSTER_ARN="$(release_output "$ROOT_DIRECTORY" cluster_arn)"
 MIGRATION_TASK_DEFINITION="$(release_output "$ROOT_DIRECTORY" migration_task_definition_arn)"
 OPERATIONS_TASK_DEFINITION="$(release_output "$ROOT_DIRECTORY" operations_task_definition_arn)"
-MIGRATION_SECRET_ARN="$(release_output "$ROOT_DIRECTORY" migration_database_secret_arn)"
 RUNTIME_SECRET_ARN="$(release_output "$ROOT_DIRECTORY" app_runtime_database_secret_arn)"
 NETWORK_PLAN="$(release_output "$ROOT_DIRECTORY" task_network_configuration json)"
 DEPLOYMENT_PLAN="$(release_output "$ROOT_DIRECTORY" deployment_plan json)"
@@ -137,10 +136,11 @@ one_off() { # one_off <step> <task definition> <container> <command word>...
   local step=$1 task_definition=$2 container=$3 secret_arn
   shift 3
   # Each task definition resolves its own credential entry, and the wrapper checks
-  # that the registered reference is the one this release names. The migration task
-  # and the operations task deliberately do not share an entry.
+  # that the registered `DATABASE_SECRET_ARN` reference is the one this release
+  # names. The migration task deliberately carries no runtime connection — the tool
+  # never falls back to one for `migrate` — so there is nothing to check there.
   if [ "$container" = "migration" ]; then
-    secret_arn=$MIGRATION_SECRET_ARN
+    secret_arn=''
   else
     secret_arn=$RUNTIME_SECRET_ARN
   fi

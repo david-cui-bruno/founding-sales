@@ -427,7 +427,7 @@ release_task_record_path() {
 release_run_task() {
   local step='' environment='' prefix='' account='' region=''
   local cluster='' task_definition='' container='' network_plan='' image_digest=''
-  local database_host='' secret_arn='' log_group='' log_stream_prefix=''
+  local database_host='' secret_arn='' log_group='' log_stream_prefix='' capture=''
   local timeout_seconds=$RELEASE_DEFAULT_TIMEOUT_SECONDS
   local -a command_words=()
   local -a environment_overrides=()
@@ -449,6 +449,7 @@ release_run_task() {
       --secret-arn) secret_arn=$2; shift 2 ;;
       --log-group) log_group=$2; shift 2 ;;
       --log-stream-prefix) log_stream_prefix=$2; shift 2 ;;
+      --capture) capture=$2; shift 2 ;;
       --timeout-seconds) timeout_seconds=$2; shift 2 ;;
       --) shift; command_words=("$@"); break ;;
       *)
@@ -659,7 +660,53 @@ for failure in json.loads(os.environ["FSS_JSON"]).get("failures") or []:
   described="$(release_describe_task "$environment" "$cluster" "$task_arn")"
   release_report_task "$step" "$described" "$container" || return 1
 
-  release_print_task_logs "$environment" "$log_group" "$log_stream_prefix" "$container" "$task_arn"
+  release_print_task_logs "$environment" "$log_group" "$log_stream_prefix" "$container" "$task_arn" "$capture"
+  return 0
+}
+
+# The JSON object a command printed on stdout, out of the captured log lines.
+#
+#   release_captured_report <captured file> <destination>
+#
+# A one-off task's filesystem goes away with the task, so a `--report` file written
+# inside it cannot be read afterwards. What survives is the log stream, and the tool's
+# contract is one JSON object on stdout per command with every log line on stderr — so
+# the answer is the last parseable JSON object in the capture. Refusing when there is
+# none is the point: a drill whose report could not be read is a drill that did not
+# report, not one that passed.
+release_captured_report() {
+  local captured=$1 destination=$2
+  if [ ! -s "$captured" ]; then
+    echo "FAIL: nothing was captured from the task's log stream, so its report cannot be read." >&2
+    return 1
+  fi
+  if ! FSS_CAPTURED="$captured" FSS_DESTINATION="$destination" python3 -c '
+import json, os, sys
+
+found = None
+for line in open(os.environ["FSS_CAPTURED"], encoding="utf-8"):
+    text = line.strip()
+    if not text.startswith("{"):
+        continue
+    try:
+        candidate = json.loads(text)
+    except ValueError:
+        continue
+    # The tool logs JSON to stderr too, and awslogs interleaves both streams. A log
+    # line always carries `level` and `event`; the answer never does.
+    if isinstance(candidate, dict) and "level" in candidate and "event" in candidate:
+        continue
+    found = candidate
+if found is None:
+    sys.exit(1)
+with open(os.environ["FSS_DESTINATION"], "w", encoding="utf-8") as handle:
+    json.dump(found, handle, indent=2)
+    handle.write("\n")
+'; then
+    echo "FAIL: the task printed no JSON report on stdout; see the log lines above." >&2
+    return 1
+  fi
+  rehearsal_log "report read from the task's log stream into $destination"
   return 0
 }
 
@@ -755,7 +802,7 @@ print("exit|{}".format(worst))
 # as "no output" throws away the one message that says what happened, so it is retried
 # for a bounded time and then reported as an absence rather than swallowed.
 release_print_task_logs() {
-  local environment=$1 log_group=$2 stream_prefix=$3 container=$4 task_arn=$5
+  local environment=$1 log_group=$2 stream_prefix=$3 container=$4 task_arn=$5 capture=${6:-}
   [ -n "$log_group" ] || return 0
   [ -n "$stream_prefix" ] || return 0
 
@@ -800,9 +847,21 @@ release_print_task_logs() {
   # Only the `message` field of each event. The tool writes JSON log lines and never
   # puts a value in one; printing the raw response would print whatever else
   # CloudWatch chose to include.
-  FSS_JSON="${events:-null}" python3 -c '
+  #
+  # `--capture` writes the same messages, unindented, to a file, because a one-off
+  # task's filesystem goes away with the task and its log stream is the only thing
+  # that survives. `release_captured_report` reads the command's JSON answer back out
+  # of it.
+  FSS_JSON="${events:-null}" FSS_CAPTURE="$capture" python3 -c '
 import json, os
+capture = os.environ["FSS_CAPTURE"]
+handle = open(capture, "w", encoding="utf-8") if capture else None
 for event in (json.loads(os.environ["FSS_JSON"]) or {}).get("events") or []:
-    print("  " + str(event.get("message", "")).rstrip())
+    message = str(event.get("message", "")).rstrip()
+    print("  " + message)
+    if handle is not None:
+        handle.write(message + "\n")
+if handle is not None:
+    handle.close()
 '
 }

@@ -46,7 +46,7 @@ variables {
   secrets_kms_key_arn  = "arn:aws:kms:us-east-1:123456789012:key/11111111-2222-4333-8444-555555555553"
 }
 
-run "six_identities_and_no_two_of_them_are_the_same" {
+run "eight_identities_and_no_two_of_them_are_the_same" {
   command = plan
 
   assert {
@@ -57,8 +57,10 @@ run "six_identities_and_no_two_of_them_are_the_same" {
       aws_iam_role.worker_execution.name,
       aws_iam_role.migration_task.name,
       aws_iam_role.migration_execution.name,
-    ])) == 6
-    error_message = "The migration identity is its own task role and its own execution role, distinct from both services'."
+      aws_iam_role.drill_task.name,
+      aws_iam_role.drill_execution.name,
+    ])) == 8
+    error_message = "The migration identity and the drill identity are each their own task role and execution role, distinct from both services'."
   }
 
   assert {
@@ -88,6 +90,24 @@ run "only_the_migration_execution_role_may_read_the_migration_secret" {
       ]
     ]))
     error_message = "Neither runtime execution role may resolve the migration user's credential. That is the path to DDL David's condition removes."
+  }
+
+  # And no task definition a *service* uses carries it either, which is the same
+  # rule read from the other end: an execution role that could not resolve it is
+  # only half the answer if a definition still names it.
+  assert {
+    condition = alltrue(flatten([
+      for definitions in [
+        jsondecode(aws_ecs_task_definition.api.container_definitions),
+        jsondecode(aws_ecs_task_definition.worker.container_definitions),
+        jsondecode(aws_ecs_task_definition.operations.container_definitions),
+        ] : [
+        for container in definitions : [
+          for reference in container.secrets : reference.valueFrom != var.migration_database_secret_arn
+        ]
+      ]
+    ]))
+    error_message = "No service task definition, and not the operations one either, may reference the migration entry."
   }
 
   # And the boundary is symmetric on the other side: the migration identity holds
@@ -204,6 +224,19 @@ run "the_migration_task_definition_is_the_worker_image_under_the_migration_ident
     error_message = "Its default command is `fss migrate`; every other use is an explicit override."
   }
 
+  # The names the tool actually reads (`TOOL_ENVIRONMENT_VARIABLES` and
+  # `RUNTIME_SECRET_VARIABLE`). `fss migrate` never falls back to the runtime
+  # connection, so this definition carries no `DATABASE_SECRET_ARN` at all: a
+  # migration applied with the application's credential is not a mistake that can
+  # be made from here.
+  assert {
+    condition = length(setsubtract(
+      toset([for reference in jsondecode(aws_ecs_task_definition.migration.container_definitions)[0].secrets : reference.name]),
+      toset(["MIGRATION_DATABASE_SECRET", "FSS_RUNTIME_DATABASE_SECRET_ARN"]),
+    )) == 0
+    error_message = "The migration task carries the migration credential and the runtime entry's value, and no runtime connection."
+  }
+
   # A migration is not a long-lived service and must never be restarted by a health
   # check: it runs once, exits, and the wrapper reads the exit code.
   assert {
@@ -235,6 +268,54 @@ run "the_operations_task_definition_is_the_runtime_identity_with_the_tool_as_its
       secret.valueFrom != var.migration_database_secret_arn
     ])
     error_message = "The operations task holds the runtime credential, never the migration one."
+  }
+}
+
+# `fss drill` is the one command that needs both, so it is the one identity that has
+# both — and it is neither of the other two.
+run "the_drill_is_its_own_identity_because_it_needs_the_journal_and_the_migration_credential" {
+  command = plan
+
+  assert {
+    condition     = aws_ecs_task_definition.drill.task_role_arn == aws_iam_role.drill_task.arn
+    error_message = "The drill runs as its own task role, not the worker's and not the migration's."
+  }
+
+  assert {
+    condition = length(setsubtract(
+      toset(["DATABASE_SECRET_ARN", "MIGRATION_DATABASE_SECRET"]),
+      toset([for reference in jsondecode(aws_ecs_task_definition.drill.container_definitions)[0].secrets : reference.name]),
+    )) == 0
+    error_message = "Appendix E steps 2 to 6 are the application's work and step 7 is DDL, so the drill carries both connections."
+  }
+
+  # Read, never write. A drill that could append to the journal could manufacture
+  # the evidence step 2 is checked against.
+  assert {
+    condition = alltrue([
+      for statement in jsondecode(aws_iam_role_policy.drill_task.policy).Statement :
+      alltrue([for action in statement.Action : action != "s3:PutObject" && !startswith(action, "s3:Delete")])
+    ])
+    error_message = "The drill task role reads the suppression journal and never writes it."
+  }
+
+  # `recorded`, fixed in the definition. A rehearsal that reached a real mailbox
+  # would send real mail, and a mode the caller passes is a mode the caller can
+  # forget (David's condition 6).
+  assert {
+    condition = length([
+      for variable in jsondecode(aws_ecs_task_definition.drill.container_definitions)[0].environment :
+      variable if variable.name == "FSS_DEPENDENCIES" && variable.value == "recorded"
+    ]) == 1
+    error_message = "The drill task definition fixes FSS_DEPENDENCIES=recorded; reconcile-sent, recover and watch-renew all reach Gmail when it is live."
+  }
+
+  # And the worker service does not inherit that. The drill's mode is set on the
+  # drill's definition alone; a `recorded` leaking into the service would be a
+  # rehearsal deploying something other than what production deploys.
+  assert {
+    condition     = !contains(keys(output.worker_environment), "FSS_DEPENDENCIES")
+    error_message = "The worker service's dependency mode comes from the root (var.environment), never from the drill's definition."
   }
 }
 

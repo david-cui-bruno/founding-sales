@@ -9,37 +9,68 @@ import {
 } from '../src/tools/fss/commands.ts';
 
 /**
- * The operations command line's argument surface (lane G12g).
+ * The operations command line's argument surface (lane G12g; rewired by G12h).
  *
- * `infra/scripts/rehearsal-restore-drill.sh` is the only caller that matters, and it
- * calls a tool that did not exist: fourteen `fss admin` invocations, two output
- * conventions (JSON on stdout, a bare integer for `--count`) and a report file. This
- * suite is the contract in both directions — the parser accepts what the drill sends,
- * and nothing else.
+ * The shell scripts are the callers that matter, and they called a tool this
+ * repository did not have. This suite is the contract in both directions — the parser
+ * accepts what they send, and nothing else.
+ *
+ * ## What changed in G12h, and what did not
+ *
+ * The drill used to make fourteen `fss admin` calls from the runner. It cannot: the
+ * rehearsal database is private and a GitHub runner has no route to it. So the
+ * database work is now two one-off ECS tasks — `fss admin counts` for the baseline and
+ * `fss drill` for steps 1 to 9 — and `infra/scripts/release-deploy.sh` makes three
+ * more (`migrate`, `admin database-users ensure`, `verify`). The fourteen admin
+ * commands still run; they run *inside* `fss drill`, which calls them as functions, so
+ * `apps/worker/test/fssSurface.test.ts` is where their behaviour is asserted and this
+ * is where their spelling on a command line is.
+ *
+ * Both scripts are read, because both now invoke the tool and a floor drawn from one
+ * of them would go quiet the moment the other grew a command.
  *
  * ## The vacuous-pass trap, named
  *
  * A test that asserted "the parser accepts `fss admin counts --as-of X`" would pass
  * against a parser that accepts everything, which is the one behaviour that makes a
- * misspelt flag in the drill silently do nothing at three in the morning. So the
- * drill's own text is the input — extracted from the script rather than retyped, so a
- * drill that adds a command fails here until the tool has it — and every case is
- * paired with a refusal: an unknown subcommand, an unknown flag, a value flag with no
- * value, a missing required flag.
+ * misspelt flag in a script silently do nothing at three in the morning. So the
+ * scripts' own text is the input — extracted rather than retyped, so a script that
+ * adds a command fails here until the tool has it — and every case is paired with a
+ * refusal: an unknown subcommand, an unknown flag, a value flag with no value, a
+ * missing required flag.
  */
 
-const DRILL = fileURLToPath(new URL('../../../infra/scripts/rehearsal-restore-drill.sh', import.meta.url));
+const CALLERS = [
+  'infra/scripts/rehearsal-restore-drill.sh',
+  'infra/scripts/release-deploy.sh',
+] as const;
 
-const SCRIPT = readFileSync(DRILL, 'utf8');
-const INVOCATIONS = drillInvocations(SCRIPT);
+const INVOCATIONS = CALLERS.flatMap(relative =>
+  drillInvocations(readFileSync(fileURLToPath(new URL(`../../../${relative}`, import.meta.url)), 'utf8')),
+);
 
-describe('the fss command line accepts every invocation the restore drill makes', () => {
-  it('finds every `fss` invocation in the drill, planned and real', () => {
+describe('the fss command line accepts every invocation the release scripts make', () => {
+  it('finds every `fss` invocation in both scripts, planned and real', () => {
     // A floor on purpose: an extractor that silently found none would make every case
-    // below vacuous, and the drill is the specification here.
-    expect(INVOCATIONS.length).toBeGreaterThanOrEqual(14);
+    // below vacuous, and the scripts are the specification here. Five is the number of
+    // distinct commands the release actually issues — `admin counts`, `drill`,
+    // `migrate`, `admin database-users ensure`, `verify` — and each appears at least
+    // once in a planned line and once in a real one.
+    expect(INVOCATIONS.length).toBeGreaterThanOrEqual(5);
     expect(INVOCATIONS.some(invocation => invocation.planned)).toBe(true);
     expect(INVOCATIONS.some(invocation => !invocation.planned)).toBe(true);
+
+    // And the five are named, so a script that stopped calling one of them — which is
+    // how "nothing migrates the database" happened in the first place — fails here.
+    // The words before the first flag: `['admin','counts','--as-of','…']` is
+    // `admin counts`. A flag's *value* is not part of the command's name.
+    const commands = INVOCATIONS.map(invocation => {
+      const flagAt = invocation.argv.findIndex(word => word.startsWith('--'));
+      return (flagAt < 0 ? invocation.argv : invocation.argv.slice(0, flagAt)).join(' ');
+    });
+    for (const expected of ['admin counts', 'drill', 'migrate', 'admin database-users ensure', 'verify']) {
+      expect(commands, `no release script invokes \`fss ${expected}\``).toContain(expected);
+    }
   });
 
   it.each(INVOCATIONS.map(invocation => [invocation.text, invocation] as const))(

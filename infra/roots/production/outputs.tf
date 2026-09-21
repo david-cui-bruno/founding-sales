@@ -127,8 +127,19 @@ output "migration_task_definition_arn" {
 }
 
 output "operations_task_definition_arn" {
-  description = "Task definition for `fss verify` and `fss drill`, under the worker task role."
+  description = "Task definition for `fss verify`, under the worker task role. A release gate after every deploy."
   value       = module.stack.operations_task_definition_arn
+}
+
+output "drill_task_definition_arn" {
+  description = <<-EOT
+    Task definition for `fss drill`. It exists in production and is never
+    launched by a release: the drill belongs to the rehearsal, and in
+    production `docs/greenfield/restore-drill.md` is followed step by step
+    under the post-restore protocol. It is here so that the two environments
+    are the same shape, which is what makes the rehearsal worth running.
+  EOT
+  value       = module.stack.drill_task_definition_arn
 }
 
 output "migration_database_secret_arn" {

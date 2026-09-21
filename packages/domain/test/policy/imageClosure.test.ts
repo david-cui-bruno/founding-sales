@@ -128,5 +128,56 @@ describe.each(IMAGES.map(image => [image.name, image] as const))(
       // A sanity check on the closure itself: it can only grow.
       for (const direct of directlyImported(image.applicationSource)) expect(needed).toContain(direct);
     });
+
+    /**
+     * The other half of the same failure, found by G12h on 21 September.
+     *
+     * Both images run `npm ci --omit=dev`, so a package in `devDependencies` is not
+     * in the image at all — and `apps/worker/src/bootstrap/deployment.ts` imported
+     * `@aws-sdk/client-s3`, which was a devDependency of `@fss/worker`. Every test
+     * passed, because a laptop and a runner install the dev tree; the suppression
+     * journal write of 10.2 and the restore replay of Appendix E.2 would both have
+     * failed at run time, inside the container, with `ERR_MODULE_NOT_FOUND` — and
+     * only after a real opt-out or a real restore.
+     *
+     * The import is dynamic (`await import(specifier)`), so no bundler and no
+     * `tsc` would have noticed either. This reads the specifiers out of the source
+     * and compares them with the workspace's own `dependencies`.
+     */
+    it('declares every third-party package its source imports as a runtime dependency', () => {
+      const workspace = JSON.parse(
+        readFileSync(join(image.applicationSource, '..', 'package.json'), 'utf8'),
+      ) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
+      const runtime = new Set(Object.keys(workspace.dependencies ?? {}));
+      const development = new Set(Object.keys(workspace.devDependencies ?? {}));
+
+      const imported = new Set<string>();
+      for (const file of typescriptFiles(image.applicationSource)) {
+        const text = readFileSync(file, 'utf8');
+        // Static `from '<package>'`, and the dynamic form these bootstraps use:
+        // `const specifier = '@aws-sdk/client-s3'` followed by `await import(specifier)`.
+        for (const match of text.matchAll(/(?:from|import\(|specifier = )'(@?[a-z0-9][a-z0-9@/._-]*)'/gu)) {
+          const specifier = match[1];
+          if (specifier === undefined) continue;
+          if (specifier.startsWith('.') || specifier.startsWith('node:')) continue;
+          // A workspace package, or one of its subpath exports.
+          const packageName = specifier.startsWith('@')
+            ? specifier.split('/').slice(0, 2).join('/')
+            : (specifier.split('/')[0] ?? specifier);
+          imported.add(packageName);
+        }
+      }
+
+      const shipped = [...imported].filter(name => runtime.has(name)).sort();
+      const missing = [...imported].filter(name => !runtime.has(name)).sort();
+      expect(
+        missing,
+        `these packages are imported by ${image.name}'s source and are not in its dependencies, so ` +
+          `npm ci --omit=dev leaves them out of the image: ${missing.join(', ')}` +
+          (missing.some(name => development.has(name)) ? ' (they are devDependencies)' : ''),
+      ).toEqual([]);
+      // And the check itself cannot pass by finding nothing.
+      expect(shipped.length).toBeGreaterThan(0);
+    });
   },
 );
