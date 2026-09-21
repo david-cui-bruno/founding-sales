@@ -134,7 +134,7 @@ They are **different clients**. 5.1 keeps sign-in (`openid email profile`) and t
 
 | Environment variable | Where the value comes from |
 |---|---|
-| `FSS_GMAIL_PUSH_TOPIC` | `module.pubsub`'s topic, the same string `terraform output gmail_push_topic_id` prints |
+| `FSS_GMAIL_PUSH_TOPIC` | the production root's `module.pubsub` topic, the same string `terraform output gmail_push_topic_id` prints |
 | `FSS_GOOGLE_HOSTED_DOMAIN` | the `google_hosted_domain` root variable, `usecallie.com` |
 
 You set neither by hand; the apply does. The bootstraps still read `push_topic` and `hosted_domain` out of the secret JSON **if the environment does not carry them**, so a deployment written against the older shape still starts — for one release. `docs/decisions/g12b-two-public-identifiers-move-out-of-the-secret.md` says when that fallback goes and what has to be true first. The startup line reports which source each came from (`push_topic_source`, `hosted_domain_source`), so you can confirm the move landed without reading a task definition.
@@ -301,7 +301,7 @@ and pass them as `api_schema_range` and `worker_schema_range`. A task definition
 | `FSS_DEPENDENCIES` | `live` | `dependencies_mode`, default `live` |
 | `FSS_RESEARCH_PROVIDERS` | `none` (worker only) | `research_providers`, default `none` |
 | `FSS_SENDING_ENABLED` | `false` until section 6 step 4 | `sending_enabled`, default `false` |
-| `FSS_GMAIL_PUSH_TOPIC` | the Pub/Sub topic id | none; derived from `module.pubsub` |
+| `FSS_GMAIL_PUSH_TOPIC` | the Pub/Sub topic id | none; derived from the production root's `module.pubsub` (G12j moved it out of the stack; the rehearsal passes a placeholder) |
 | `FSS_GOOGLE_HOSTED_DOMAIN` | `usecallie.com` | `google_hosted_domain` |
 
 Until G12c none of the first three could be set at all: `extra_environment` existed on the stack module and no root exposed it, so an apply produced two services whose tasks exit at startup naming a variable no plan could set. `docs/decisions/g12c-the-deployment-flags-are-root-variables.md`.
