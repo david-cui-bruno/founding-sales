@@ -41,6 +41,29 @@ One process, three loops, one connection each.
 would overlap itself and the two would fight over the same advisory lock. Each pass
 waits for the previous one to finish and then waits the interval.
 
+**The due-work sources.** `workerDueWorkSources()` in `apps/worker/src/bootstrap/main.ts`
+is the list every pass reads, and `fss admin scheduler run-once` — Appendix E step 5's
+"rematerialise from business state" — reads the same function rather than a list of its
+own. A source only inserts rows, so running one from a command line is safe; a source
+that talked to anything outside PostgreSQL would be a bug.
+
+| Source | What it materializes |
+|---|---|
+| `canary` | One `canary_runs` row per workspace per quarter hour (13.3) |
+| `today-build` | The morning list, once per workspace per business date (8.2) |
+| `sequence-action` | Every due or clock-held step execution (11.2) |
+| `terminal-stop` | The terminal stops the CRM outbox and the suppression marker owe (7.3, 8.1, 10.2) |
+| `send-day-close` | Each open send day the workspace's own calendar has moved past (12.7) |
+| `retention-batch` | Eleven sweeps per workspace per UTC day (10.3) |
+| `mail-recovery`, `mail-sync-reconcile`, `mail-watch-renewal`, `outbound-reconcile` | 12.3's coverage and Appendix B's fence |
+| `classify-reply` | One LLM classification per reply inside its window (12.4) |
+
+That table is the contract, not a description: `apps/worker/test/sourceRegistry.test.ts`
+reads it and fails when the registered list and the documented one differ in either
+direction. Three functions were built, tested and left with no caller for a week
+because nothing compared the two (the 21 September deviations sweep;
+`docs/decisions/g15-the-worker-drains-what-the-lanes-left.md`).
+
 **The runner slots.** One per unit of configured concurrency, one connection each,
 because two slots cannot share a connection — a transaction is not shareable.
 Concurrency is one by default. A slot that claimed work asks for more immediately; a

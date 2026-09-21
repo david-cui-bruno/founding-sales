@@ -807,3 +807,228 @@ describe('the Gmail watch (12.3, 13.3)', () => {
     expect(due.find(row => row.mailboxId === w.beta.mailboxId)?.generation).toBe(1);
   });
 });
+
+/**
+ * What the import tells 12.7's ramp (lane G15).
+ *
+ * G7-2 built `countDirectSend` and `recordDaySignal` and no caller. The counters they
+ * write are the whole of `rampHealthFailure`'s evidence, so until this lane every day
+ * was judged on zeros and `mailbox_send_days.direct_sent` was always zero however much
+ * a salesperson sent by hand.
+ *
+ * Every instant below comes from the clock. The business date is read back from
+ * PostgreSQL in the workspace's own zone, which is where `mailbox_send_days` keeps its
+ * calendar (migration 0010), and not from `Intl` on this host.
+ */
+describe('the import feeds the reputation ramp (12.7)', () => {
+  /** The workspace business date of an instant, PostgreSQL's answer and no other. */
+  const businessDateOfInstant = async (w: MailWorld, workspaceId: string, instant: string): Promise<string> => {
+    const { rows } = await w.database.session.query<{ date: string }>(
+      `SELECT (($2::timestamptz AT TIME ZONE business_time_zone)::date)::text AS date
+         FROM workspaces WHERE id = $1`,
+      [workspaceId, instant],
+    );
+    const date = rows[0]?.date;
+    if (date === undefined) throw new Error('the workspace has no business zone');
+    return date;
+  };
+
+  const day = async (
+    w: MailWorld,
+    workspaceId: string,
+    mailboxId: string,
+    businessDate: string,
+  ): Promise<{ automated_sent: number; direct_sent: number; bounces: number; opt_outs: number } | undefined> => {
+    const { rows } = await w.database.session.query<{
+      automated_sent: number;
+      direct_sent: number;
+      bounces: number;
+      opt_outs: number;
+    }>(
+      `SELECT automated_sent, direct_sent, bounces, opt_outs FROM mailbox_send_days
+        WHERE workspace_id = $1 AND mailbox_id = $2 AND business_date = $3::date`,
+      [workspaceId, mailboxId, businessDate],
+    );
+    return rows[0];
+  };
+
+  it('counts an imported direct send against the day, once however often it is imported', async () => {
+    world = await createMailWorld();
+    const w = world;
+    await completeBaseline(w, w.alpha);
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+    const sentAt = Date.now();
+
+    w.alpha.messages.push(
+      fixtureMessage({
+        id: 'headroom1',
+        historyId: '1200',
+        from: w.alpha.address,
+        to: PROSPECT,
+        labelIds: ['SENT'],
+        internalDateEpochMilliseconds: sentAt,
+      }),
+    );
+
+    const first = await runMailSync(context, w.syncDeps(w.alpha), { mailboxId: w.alpha.mailboxId });
+    expect(first.directSendsCounted).toBe(1);
+    expect(first.automatedSendsRecognised).toBe(0);
+
+    const businessDate = await businessDateOfInstant(
+      w,
+      context.scope.workspaceId,
+      new Date(sentAt).toISOString(),
+    );
+    const counted = await day(w, context.scope.workspaceId, w.alpha.mailboxId, businessDate);
+    expect(counted?.direct_sent).toBe(1);
+    // 12.7: a direct send is never counted against the automated cap, because the cap
+    // is FSS's own restraint and a person writing their own email is not FSS.
+    expect(counted?.automated_sent).toBe(0);
+
+    // The same message again — a duplicate push, a recovery pass. `recordMessage`
+    // inserts nothing, so nothing is counted.
+    await w.database.session.query(
+      "UPDATE mailboxes SET history_id = '1199' WHERE workspace_id = $1 AND id = $2",
+      [context.scope.workspaceId, w.alpha.mailboxId],
+    );
+    const second = await runMailSync(context, w.syncDeps(w.alpha), { mailboxId: w.alpha.mailboxId });
+    expect(second.directSendsCounted).toBe(0);
+    const again = await day(w, context.scope.workspaceId, w.alpha.mailboxId, businessDate);
+    expect(again?.direct_sent).toBe(1);
+
+    // And nothing reached the other workspace's mailbox.
+    const betaDay = await day(w, w.beta.workspace.workspaceId, w.beta.mailboxId, businessDate);
+    expect(betaDay).toBeUndefined();
+  });
+
+  it('recognises its own send by its fence, and neither counts it nor makes the firm manual', async () => {
+    world = await createMailWorld();
+    const w = world;
+    await completeBaseline(w, w.alpha);
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+    const sentAt = Date.now();
+    const rfcMessageId = 'fss.11111111-2222-4333-8444-555555555555@example.test';
+
+    // The fence FSS wrote before it sent, with the deterministic Message-ID the
+    // provider then echoes back through the sync. `draft` origin, because this test is
+    // about the header and not about a step execution.
+    await w.database.session.query(
+      `INSERT INTO outbound_messages
+         (workspace_id, mailbox_id, origin_kind, draft_id, firm_id, recipient_address,
+          subject, body, rendered_hash, provider_message_id_header, send_at, source_zone,
+          placement_rule_version)
+       VALUES ($1, $2, 'draft', gen_random_uuid(), $3, $4, 'A short note',
+               'A body with a stop line.', repeat('a', 64), $5, now(), 'UTC', 'email-window.1')`,
+      [context.scope.workspaceId, w.alpha.mailboxId, w.crm.alpha.firmId, PROSPECT, `<${rfcMessageId}>`],
+    );
+
+    w.alpha.messages.push(
+      fixtureMessage({
+        id: 'fsssend1',
+        historyId: '1210',
+        from: w.alpha.address,
+        to: PROSPECT,
+        labelIds: ['SENT'],
+        messageId: rfcMessageId,
+        internalDateEpochMilliseconds: sentAt,
+      }),
+    );
+
+    const report = await runMailSync(context, w.syncDeps(w.alpha), { mailboxId: w.alpha.mailboxId });
+    expect(report.automatedSendsRecognised).toBe(1);
+    // Counted once, at dispatch, by `countAutomatedSend`. A second count here would
+    // double every sequence email in the day's headroom.
+    expect(report.directSendsCounted).toBe(0);
+    // 7.3 reserves manual mode for a *direct* send. Switching here would terminally
+    // stop the enrollment that had just sent step one.
+    expect(report.directSendsSwitchedToManual).toBe(0);
+
+    const events = await w.database.session.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM crm_domain_events
+        WHERE workspace_id = $1 AND event_kind = 'opportunity.manual_mode'`,
+      [context.scope.workspaceId],
+    );
+    expect(events.rows[0]?.count).toBe('0');
+
+    const businessDate = await businessDateOfInstant(
+      w,
+      context.scope.workspaceId,
+      new Date(sentAt).toISOString(),
+    );
+    expect(await day(w, context.scope.workspaceId, w.alpha.mailboxId, businessDate)).toBeUndefined();
+  });
+
+  it('records a bounce and an opt-out against the day the ramp reads', async () => {
+    world = await createMailWorld();
+    const w = world;
+    await completeBaseline(w, w.alpha);
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+    const arrivedAt = Date.now();
+    const businessDate = await businessDateOfInstant(
+      w,
+      context.scope.workspaceId,
+      new Date(arrivedAt).toISOString(),
+    );
+
+    // A sending day the mailbox opened by sending. `recordDaySignal` is a bare
+    // `UPDATE`, deliberately: a day with no automated sends is not a sending day, so
+    // there is nothing for a bounce to be a proportion of.
+    await w.database.session.query(
+      `INSERT INTO mailbox_send_days (workspace_id, mailbox_id, business_date, automated_sent, cap_granted)
+       VALUES ($1, $2, $3::date, 4, 5)`,
+      [context.scope.workspaceId, w.alpha.mailboxId, businessDate],
+    );
+
+    // The opt-out first, because the bounce invalidates the prospect's route and a
+    // reply arriving afterwards has nothing left to match on.
+    w.alpha.messages.push(
+      fixtureMessage({
+        id: 'rampoptout1',
+        historyId: '1220',
+        from: PROSPECT,
+        to: w.alpha.address,
+        body: 'Please stop emailing me.',
+        internalDateEpochMilliseconds: arrivedAt,
+      }),
+    );
+    await runMailSync(context, w.syncDeps(w.alpha), { mailboxId: w.alpha.mailboxId });
+
+    // The daemon is a route on the same firm, which is how a bounce report matches at
+    // all — the same fixture the route-invalidation scenario above uses.
+    await w.database.session.query(
+      `INSERT INTO email_addresses (workspace_id, firm_id, address, source, retrieved_at,
+                                    association_confidence, technical_validation, eligibility,
+                                    eligibility_policy_version)
+       VALUES ($1, $2, 'mailer-daemon@northwind.example.test', 'research_provider',
+               now(), 0.9, 'passed', 'usable', 'route-policy.1')`,
+      [context.scope.workspaceId, w.crm.alpha.firmId],
+    );
+    w.alpha.messages.push(
+      fixtureMessage({
+        id: 'rampbounce1',
+        historyId: '1221',
+        from: 'mailer-daemon@northwind.example.test',
+        to: w.alpha.address,
+        subject: 'Delivery Status Notification (Failure)',
+        body: 'Delivery has failed to these recipients: address not found.',
+        internalDateEpochMilliseconds: arrivedAt,
+      }),
+    );
+    await runMailSync(context, w.syncDeps(w.alpha), { mailboxId: w.alpha.mailboxId });
+
+    const counted = await day(w, context.scope.workspaceId, w.alpha.mailboxId, businessDate);
+    expect(counted?.opt_outs).toBe(1);
+    expect(counted?.bounces).toBe(1);
+
+    // Twice is once: the `mail_message_effects` uniqueness that makes each effect
+    // happen once is the same guard the count sits behind.
+    await w.database.session.query(
+      "UPDATE mailboxes SET history_id = '1219' WHERE workspace_id = $1 AND id = $2",
+      [context.scope.workspaceId, w.alpha.mailboxId],
+    );
+    await runMailSync(context, w.syncDeps(w.alpha), { mailboxId: w.alpha.mailboxId });
+    const again = await day(w, context.scope.workspaceId, w.alpha.mailboxId, businessDate);
+    expect(again?.bounces).toBe(1);
+    expect(again?.opt_outs).toBe(1);
+  });
+});

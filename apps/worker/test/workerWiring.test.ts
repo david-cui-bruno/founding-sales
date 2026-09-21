@@ -1,11 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '@fss/domain/db';
-import { HandlerRegistry } from '@fss/domain/jobs';
+import { HandlerRegistry, runTwiceUnderStolenLease } from '@fss/domain/jobs';
 import { changeStage } from '@fss/domain/crm';
 import { recordSuppression, recordingSuppressionJournal } from '@fss/domain/suppression';
 import { SENDING_STOP_LINE, templateContentHash } from '@fss/domain';
-import { runOnce } from '../src/runner/jobRunner.ts';
+import { runClaimedJob, runOnce } from '../src/runner/jobRunner.ts';
 import { runSchedulerPass } from '../src/scheduler/schedulerPass.ts';
 import { workerDueWorkSources } from '../src/bootstrap/main.ts';
 import { terminalStopJobHandler } from '../src/handlers/terminalStop.ts';
@@ -20,9 +20,11 @@ import { sendDayCloseJobHandler } from '../src/handlers/sendDayClose.ts';
  * function directly would have passed on main, which is exactly the failure this
  * lane exists to close.
  *
- * Two workspaces throughout, with colliding identifiers: the same enrollment uuid,
- * the same mailbox address local part, the same business date. Alpha is acted on and
- * beta must be untouched afterwards.
+ * Three workspaces, every one of them holding the *same* enrollment and step-execution
+ * uuid — `(workspace_id, id)` is what lets them — and the same firm name, contact name
+ * and business date. Alpha and beta are the pair each case acts on and checks across;
+ * gamma is untouched by them and is where the two stolen-lease probes run, so a probe
+ * cannot pass on work an earlier case had already done.
  *
  * No fixture instant is a literal. Everything is derived from the database's clock,
  * because a suite pinned to a date stops testing its subject the day the date passes
@@ -50,6 +52,8 @@ describe('the worker drains what the lanes left', () => {
   let database: TestDatabase;
   let alpha: Seeded;
   let beta: Seeded;
+  /** A third workspace, untouched by the cases above, for the stolen-lease probes. */
+  let gamma: Seeded;
 
   const ctx = (seeded: Seeded, actor: 'system' | 'admin' = 'system'): RepositoryContext =>
     repositoryContext(
@@ -275,6 +279,7 @@ describe('the worker drains what the lanes left', () => {
     database = await createTestDatabase();
     alpha = await seed('alpha');
     beta = await seed('beta');
+    gamma = await seed('gamma');
   });
 
   afterAll(async () => {
@@ -437,5 +442,102 @@ describe('the worker drains what the lanes left', () => {
       [alpha.workspaceId, alpha.mailboxId],
     );
     expect(ramp.rows[0]?.healthy_sending_days).toBe(1);
+  });
+
+  // -----------------------------------------------------------------------
+  // 5. Appendix G 2, for both new handlers
+  //
+  // `docs/greenfield/jobs.md`: "A lane that registers a new handler adds a probe
+  // and proves one business effect." `runTwiceUnderStolenLease` expires the lease,
+  // reclaims it, lets a second worker finish and then lets the first wake up, which
+  // is a real theft rather than two calls in a row.
+  // -----------------------------------------------------------------------
+  it('stops the enrollments once under a real stolen lease', async () => {
+    const closed = await changeStage(ctx(gamma, 'admin'), {
+      opportunityId: gamma.opportunityId,
+      toStageKey: 'lost',
+      reason: 'no budget this year',
+    });
+    expect(closed.ok).toBe(true);
+
+    const registry = new HandlerRegistry().register(terminalStopJobHandler());
+    const report = await runTwiceUnderStolenLease({
+      session: database.session,
+      registry,
+      run: runClaimedJob,
+      workspaceId: gamma.workspaceId,
+      kind: 'sequence.terminal_stop',
+      idempotencyKey: 'terminal-stop:probe:none',
+      payload: { outboxHead: null, markerHead: null },
+      countEffects: async () => await auditCount(gamma, 'enrollment.terminally_stopped'),
+    });
+
+    expect(report.freshOutcome).toBe('completed');
+    expect(report.staleOutcome).not.toBe('completed');
+    expect(report.effectsAfter - report.effectsBefore).toBe(1);
+    expect(await activeEnrollments(gamma)).toBe(0);
+    const { rows } = await database.session.query<{ end_reason: string }>(
+      'SELECT end_reason FROM sequence_enrollments WHERE workspace_id = $1 AND id = $2',
+      [gamma.workspaceId, gamma.enrollmentId],
+    );
+    expect(rows[0]?.end_reason).toBe('stage_lost');
+  });
+
+  it('advances the ramp once under a real stolen lease', async () => {
+    const yesterday = await businessDate(gamma.workspaceId, -1);
+    await database.session.query(
+      `INSERT INTO mailbox_send_days (workspace_id, mailbox_id, business_date, automated_sent, cap_granted)
+       VALUES ($1, $2, $3::date, 3, 5)`,
+      [gamma.workspaceId, gamma.mailboxId, yesterday],
+    );
+
+    const healthyDays = async (): Promise<number> => {
+      const { rows } = await database.session.query<{ healthy_sending_days: number }>(
+        'SELECT healthy_sending_days FROM mailbox_send_ramp WHERE workspace_id = $1 AND mailbox_id = $2',
+        [gamma.workspaceId, gamma.mailboxId],
+      );
+      return rows[0]?.healthy_sending_days ?? 0;
+    };
+
+    const registry = new HandlerRegistry().register(sendDayCloseJobHandler());
+    const report = await runTwiceUnderStolenLease({
+      session: database.session,
+      registry,
+      run: runClaimedJob,
+      workspaceId: gamma.workspaceId,
+      kind: 'outbound.close_send_day',
+      idempotencyKey: `send-day-close:${gamma.mailboxId}:${yesterday}`,
+      payload: { mailboxId: gamma.mailboxId, businessDate: yesterday },
+      countEffects: healthyDays,
+    });
+
+    expect(report.freshOutcome).toBe('completed');
+    expect(report.staleOutcome).not.toBe('completed');
+    expect(report.effectsAfter - report.effectsBefore).toBe(1);
+    expect(await healthyDays()).toBe(1);
+  });
+
+  it('refuses a payload naming another workspace’s mailbox rather than closing nothing', async () => {
+    const yesterday = await businessDate(gamma.workspaceId, -1);
+    const registry = new HandlerRegistry().register(sendDayCloseJobHandler());
+    const handler = registry.get('outbound.close_send_day');
+    await expect(
+      handler?.handle({
+        session: database.session,
+        scope: workspaceScope(gamma.workspaceId, { kind: 'system', component: 'worker' }),
+        job: {
+          id: '00000000-0000-4000-8000-000000000000',
+          workspaceId: gamma.workspaceId,
+          kind: 'outbound.close_send_day',
+          payload: { mailboxId: alpha.mailboxId, businessDate: yesterday },
+          idempotencyKey: 'send-day-close:cross-workspace',
+          attempt: 1,
+          maxAttempts: 4,
+          fencingToken: '1',
+          leaseOwner: 'g15-test',
+          leaseExpiresAt: await databaseInstant(),
+        },
+      }),
+    ).rejects.toThrow(/no such mailbox/u);
   });
 });
