@@ -4,7 +4,7 @@
 # rule resources are generated from, so a rule cannot exist outside it.
 
 mock_provider "aws" {
-  override_during = plan
+  override_during = apply
 }
 
 variables {

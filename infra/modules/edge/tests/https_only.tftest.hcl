@@ -1,5 +1,5 @@
 mock_provider "aws" {
-  override_during = plan
+  override_during = apply
 
   mock_resource "aws_s3_bucket" {
     defaults = {
@@ -13,6 +13,16 @@ mock_provider "aws" {
       arn      = "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/fss-test-alb/1111111111111111"
       dns_name = "fss-test-alb-1111111111.us-east-1.elb.amazonaws.com"
       zone_id  = "Z35SXDOTRQ7X7K"
+    }
+  }
+
+  # The listener validates that its default action names something ARN-shaped, so
+  # a generated placeholder is refused: "default_action.0.target_group_arn
+  # (s8v0vr7p) is an invalid ARN". Only the apply run at the end of this file
+  # reaches that check, because only an apply resolves the attribute at all.
+  mock_resource "aws_lb_target_group" {
+    defaults = {
+      arn = "arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/fss-test-api/1111111111111111"
     }
   }
 }
@@ -64,8 +74,8 @@ run "access_logs_are_enabled_and_private" {
   command = plan
 
   assert {
-    condition     = aws_lb.main.access_logs[0].enabled && aws_lb.main.access_logs[0].bucket == aws_s3_bucket.access_logs.id
-    error_message = "Access logs must be delivered to the module's own bucket."
+    condition     = aws_lb.main.access_logs[0].enabled
+    error_message = "Access logs must be enabled."
   }
 
   assert {
@@ -139,4 +149,20 @@ run "a_certificate_that_is_not_an_acm_arn_is_refused" {
   }
 
   expect_failures = [var.certificate_arn]
+}
+
+# Which bucket the access logs land in, asserted where the value exists.
+#
+# `aws_s3_bucket.access_logs.id` is computed, and the mock provider supplies
+# mocked values during the apply phase, so this comparison cannot be made during
+# a plan any more than a real one could. An apply run under a mocked provider
+# reaches nothing and needs no credential.
+# `docs/decisions/g12j-mock-providers-keep-computed-values-unknown.md`.
+run "the_access_log_bucket_is_the_module_s_own" {
+  command = apply
+
+  assert {
+    condition     = aws_lb.main.access_logs[0].bucket == aws_s3_bucket.access_logs.id
+    error_message = "Access logs must be delivered to the module's own bucket."
+  }
 }

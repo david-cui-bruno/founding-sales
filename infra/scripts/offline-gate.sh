@@ -40,6 +40,37 @@ check "security-group rules must come from the network module inventory" \
 check "a greenfield root must never point at a legacy state key" \
   '^[^#]*cloud/(terraform|delegated-worker)' infra/roots
 
+# The class of error the third credentialed rehearsal stopped on (21 September
+# 2026): `count = var.kms_key_arn == null ? 1 : 0`, where the ARN belongs to a
+# key the same apply creates. Terraform refuses such a plan before it touches
+# AWS, and no offline layer here could see it, because `validate` never
+# evaluates a count and the module's own tests passed a literal. The fix is
+# always an input the caller states; the grep is so the next one is caught in a
+# pull request. `docs/decisions/g12j-the-alert-key-is-a-boolean-not-a-null-check.md`.
+check "a count or for_each must not test for null a value another apply computes" \
+  '^[^#]*(count|for_each) *=[^#]*(var|local|module|data)\.[A-Za-z0-9_.]+ *(==|!=) *null' infra
+
+# Google Cloud belongs to one root and one module.
+#
+# A required provider is a *configured* provider: Terraform configures every
+# provider a module declares before it evaluates anything, so `module "pubsub"`
+# with `count = 0` in `infra/modules/stack` still made every rehearsal plan ask
+# for Google application-default credentials, and CI has none (David's third
+# credentialed rehearsal, 21 September 2026). `infra/roots/production` is the
+# only root with a Google Cloud project; `infra/modules/pubsub` is the module it
+# calls. Anywhere else, including a `mock_provider "google"` in a test file of
+# another root, is the refusal coming back.
+# `docs/decisions/g12j-the-rehearsal-has-no-google-provider.md`.
+google_files=$(grep -rIlE '^[^#]*(hashicorp/google|provider "google"|/pubsub")' \
+  --include='*.tf' --include='*.tftest.hcl' infra \
+  | grep -v '^infra/modules/pubsub/' \
+  | grep -v '^infra/roots/production/' || true)
+if [ -n "$google_files" ]; then
+  echo "FAIL: only infra/roots/production and infra/modules/pubsub may name the Google provider or the pubsub module"
+  echo "$google_files"
+  fail=1
+fi
+
 if [ "$(grep -c 'resource "aws_vpc_security_group_ingress_rule"' infra/modules/network/main.tf)" != "1" ] \
    || [ "$(grep -c 'resource "aws_vpc_security_group_egress_rule"' infra/modules/network/main.tf)" != "1" ]; then
   echo "FAIL: the network module must generate its rules from exactly one for_each resource per direction"

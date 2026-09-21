@@ -4,7 +4,7 @@
 # Plan-time mock values are syntactically valid and entirely fictitious.
 # 123456789012 is the AWS documentation example account, never a real one.
 mock_provider "aws" {
-  override_during = plan
+  override_during = apply
 
   mock_resource "aws_kms_key" {
     defaults = {
@@ -34,8 +34,8 @@ run "production_defaults_are_recoverable_and_protected" {
   }
 
   assert {
-    condition     = aws_db_instance.main.storage_encrypted && aws_db_instance.main.kms_key_id == aws_kms_key.database.arn
-    error_message = "Storage must be encrypted with the module's customer key, not the AWS-managed key."
+    condition     = aws_db_instance.main.storage_encrypted
+    error_message = "Storage must be encrypted."
   }
 
   assert {
@@ -140,4 +140,21 @@ run "a_retention_longer_than_the_rds_maximum_is_refused" {
   }
 
   expect_failures = [var.backup_retention_days]
+}
+
+# Which key the storage is encrypted with, asserted where the value exists.
+#
+# `aws_kms_key.database.arn` is computed, and the mock provider supplies mocked
+# values during the apply phase, so this comparison cannot be made during a plan
+# any more than a real one could. An apply run under a mocked provider reaches
+# nothing and needs no credential. The distinction this keeps alive is the one
+# that matters: the module's own customer key, never the AWS-managed RDS key.
+# `docs/decisions/g12j-mock-providers-keep-computed-values-unknown.md`.
+run "the_storage_key_is_the_module_s_own_customer_key" {
+  command = apply
+
+  assert {
+    condition     = aws_db_instance.main.kms_key_id == aws_kms_key.database.arn
+    error_message = "Storage must be encrypted with the module's customer key, not the AWS-managed key."
+  }
 }

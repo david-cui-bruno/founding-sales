@@ -134,12 +134,27 @@ They are **different clients**. 5.1 keeps sign-in (`openid email profile`) and t
 
 | Environment variable | Where the value comes from |
 |---|---|
-| `FSS_GMAIL_PUSH_TOPIC` | `module.pubsub`'s topic, the same string `terraform output gmail_push_topic_id` prints |
+| `FSS_GMAIL_PUSH_TOPIC` | the production root's `module.pubsub` topic, the same string `terraform output gmail_push_topic_id` prints |
 | `FSS_GOOGLE_HOSTED_DOMAIN` | the `google_hosted_domain` root variable, `usecallie.com` |
 
 You set neither by hand; the apply does. The bootstraps still read `push_topic` and `hosted_domain` out of the secret JSON **if the environment does not carry them**, so a deployment written against the older shape still starts — for one release. `docs/decisions/g12b-two-public-identifiers-move-out-of-the-secret.md` says when that fallback goes and what has to be true first. The startup line reports which source each came from (`push_topic_source`, `hosted_domain_source`), so you can confirm the move landed without reading a task definition.
 
 When neither source has one, the process refuses to start and names **both** places it looked.
+
+### 1.7 Google application-default credentials, on your Mac
+
+`infra/roots/production` is the only root that declares `provider "google"`, and Terraform configures every provider a configuration requires before it evaluates anything. So a **production** plan or apply needs a working Google credential even when `enable_gmail_push` is false, and without one it stops at provider configuration with "Attempted to load application default credentials … No credentials loaded."
+
+Once per machine, as the account that administers `callie-fss`:
+
+```bash
+gcloud auth application-default login
+gcloud auth application-default set-quota-project callie-fss
+```
+
+`docs/greenfield/infra-apply-runbook.md` **1.3a** has the full procedure: enabling the Pub/Sub API, the two checks that the credential exists and can mint a token without printing any part of it, and why a downloaded service-account key file is refused by name rather than merely discouraged.
+
+Nothing in the **rehearsal** needs this. The rehearsal root declares no Google provider and creates nothing in Google Cloud, which is why a CI run has no Google credential and must not be given one (`docs/decisions/g12j-the-rehearsal-has-no-google-provider.md`).
 
 ---
 
@@ -286,7 +301,7 @@ and pass them as `api_schema_range` and `worker_schema_range`. A task definition
 | `FSS_DEPENDENCIES` | `live` | `dependencies_mode`, default `live` |
 | `FSS_RESEARCH_PROVIDERS` | `none` (worker only) | `research_providers`, default `none` |
 | `FSS_SENDING_ENABLED` | `false` until section 6 step 4 | `sending_enabled`, default `false` |
-| `FSS_GMAIL_PUSH_TOPIC` | the Pub/Sub topic id | none; derived from `module.pubsub` |
+| `FSS_GMAIL_PUSH_TOPIC` | the Pub/Sub topic id | none; derived from the production root's `module.pubsub` (G12j moved it out of the stack; the rehearsal passes a placeholder) |
 | `FSS_GOOGLE_HOSTED_DOMAIN` | `usecallie.com` | `google_hosted_domain` |
 
 Until G12c none of the first three could be set at all: `extra_environment` existed on the stack module and no root exposed it, so an apply produced two services whose tasks exit at startup naming a variable no plan could set. `docs/decisions/g12c-the-deployment-flags-are-root-variables.md`.

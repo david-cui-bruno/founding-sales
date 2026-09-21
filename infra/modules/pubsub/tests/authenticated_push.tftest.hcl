@@ -1,5 +1,5 @@
 mock_provider "google" {
-  override_during = plan
+  override_during = apply
 
   mock_resource "google_service_account" {
     defaults = {
@@ -28,11 +28,6 @@ run "push_is_authenticated_with_an_exact_audience" {
   assert {
     condition     = google_pubsub_subscription.gmail_push.push_config[0].oidc_token[0].audience == var.push_audience
     error_message = "Pub/Sub must present a token minted for the exact audience the webhook requires."
-  }
-
-  assert {
-    condition     = google_pubsub_subscription.gmail_push.push_config[0].oidc_token[0].service_account_email == google_service_account.push.email
-    error_message = "The token must be minted for the dedicated push service account."
   }
 
   assert {
@@ -78,4 +73,21 @@ run "an_empty_audience_is_refused" {
   }
 
   expect_failures = [var.push_audience]
+}
+
+# Which identity the token is minted for, asserted where the value exists.
+#
+# A service account's email is a computed attribute, and the mock above supplies
+# mocked values during the apply phase, so a plan here knows no more than a real
+# plan does. An apply run under a mocked provider makes no Google call and needs
+# no credential. This is the one place in `infra` where an apply run touches the
+# Google provider at all: `infra/roots/production` is the only root that
+# declares it. `docs/decisions/g12j-mock-providers-keep-computed-values-unknown.md`.
+run "the_token_is_minted_for_the_dedicated_push_service_account" {
+  command = apply
+
+  assert {
+    condition     = google_pubsub_subscription.gmail_push.push_config[0].oidc_token[0].service_account_email == google_service_account.push.email
+    error_message = "The token must be minted for the dedicated push service account."
+  }
 }

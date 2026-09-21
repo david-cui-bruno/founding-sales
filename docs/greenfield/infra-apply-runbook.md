@@ -78,7 +78,45 @@ The DNS A/ALIAS record for the API hostname is created **after** the first apply
    - the **sign-in** client, for the Google OpenID Connect authorization-code flow with PKCE in the system browser;
    - the **Gmail** client, for the separate `gmail.readonly` + `gmail.send` grant.
 5. Keep both client secrets to hand for step 1.4. Do not put either in a file in the repository, in a `tfvars` file, or in a shell history line.
-6. If a rehearsal environment will exercise Gmail push, create a **separate** rehearsal project. `enable_gmail_push` in the rehearsal root refuses to turn on without its own `gcp_project_id`; that refusal is asserted offline.
+6. **No rehearsal Google Cloud project, ever.** The Pub/Sub topic and its push subscription belong to `infra/roots/production` alone; the rehearsal root declares no Google provider, has no `gcp_project_id`, and creates nothing in Google Cloud. A rehearsal's Gmail is the recorded fake and its webhook is exercised offline with locally signed tokens, so a rehearsal project would be a second cloud trust relationship that proves nothing. Its two task definitions carry a derived audience and two public placeholders naming a project that does not exist; `docs/decisions/g12j-the-rehearsal-has-no-google-provider.md` lists the values and why they are not blank.
+
+### 1.3a Google application-default credentials, on your Mac, before any production plan
+
+`infra/roots/production` is the one root that declares `provider "google"`. Terraform configures **every** provider a configuration requires before it evaluates anything, whether or not a resource uses it, so a production plan needs a working Google credential even when `enable_gmail_push` is false. Without one it stops with
+
+```
+Error: Attempted to load application default credentials since neither `credentials`
+nor `access_token` was set in the provider block. No credentials loaded.
+```
+
+which is exactly where the third credentialed rehearsal stopped, in CI, on 21 September 2026.
+
+Once per machine, as the account that administers `callie-fss`:
+
+```bash
+gcloud auth application-default login
+gcloud auth application-default set-quota-project callie-fss
+gcloud services enable pubsub.googleapis.com --project callie-fss
+```
+
+Then confirm the credential exists, without printing any part of it:
+
+```bash
+test -f "$HOME/.config/gcloud/application_default_credentials.json" \
+  && echo "ADC present" || echo "ADC MISSING: run gcloud auth application-default login"
+
+gcloud auth application-default print-access-token >/dev/null \
+  && echo "ADC token mints" || echo "ADC BROKEN: re-run the login"
+
+gcloud services list --enabled --project callie-fss --filter=pubsub \
+  --format='value(config.name)'   # expect pubsub.googleapis.com
+```
+
+Never `cat` that file, never echo a token, and never paste one into a variable, a `tfvars` file or a shell line. Note the second command deliberately redirects its output: it proves a token can be minted and shows nothing of it.
+
+**A service-account key file is refused by name.** Do not create one, do not download one, and do not set `GOOGLE_APPLICATION_CREDENTIALS` or the provider's `credentials` argument to a path. David's rule is that no key is pasted anywhere, and a downloaded Google key is a long-lived credential in a file no rotation reaches. Application-default credentials from an interactive login expire and are revocable; that is the whole difference. If you find such a file, delete it and re-run the login.
+
+The provider block in `infra/roots/production/providers.tf` names only `project` and `region`: there is no `credentials` and no `access_token` argument to fill in, which is why the failure above is the one you get rather than a quiet wrong-identity apply.
 
 ### 1.4 The secret values
 
@@ -179,6 +217,51 @@ aws ecr describe-images --repository-name fss-prod-api \
 The same digests are then pushed to `fss-rh-api` and `fss-rh-worker` so the rehearsal deploys the exact artefacts production will (`release.md` 2.1). The rehearsal root refuses an `api_image` that does not end `/fss-rh-api@sha256:<64 hex>`: `fss-rh-deploy` may read nothing outside `fss-rh-*`, and a plan is a better place to learn that than an ECR authorization error minutes into a deployment.
 
 ## 3. The applies, in order
+
+### 3.0 Plan first
+
+**After any change to `infra/`, the first credentialed action is a local production plan, written to a file and not applied. It comes before dispatching a rehearsal.**
+
+The reason is arithmetic rather than caution. Three credentialed runs have now been spent, and each one stopped on a different error that no offline layer in this repository can see:
+
+| Run | Stopped on | Why offline could not see it |
+|---|---|---|
+| 35602423640 | `The root module input variable "api_schema_range" is not set` | `terraform test` supplies its own variables; the dry-run job never runs Terraform |
+| 35611374218 | `provider["registry.terraform.io/hashicorp/google"]` had no credentials | `mock_provider` *replaces* the provider configuration, so no test can exercise one |
+| 35611374218 | `Invalid count argument` on `count = var.kms_key_arn == null ? 1 : 0` | `validate` never evaluates a `count`, and the module's tests passed a literal ARN |
+
+`terraform validate`, `terraform test` with mocked providers and `FSS_REHEARSAL_DRY_RUN=1` are all worth running and none of them configures a provider or evaluates an expression against a value that is unknown until apply. A real `plan` does both. A rehearsal costs 20 to 180 minutes and an hourly bill to learn the same thing.
+
+```bash
+cd infra/roots/production
+terraform init -backend-config=backend.hcl -backend-config="kms_key_id=<state key arn>"
+
+terraform plan -out=production.tfplan \
+  -var="certificate_arn=<production acm arn>" \
+  -var="api_hostname=<production hostname>" \
+  -var="api_image=<api digest>" \
+  -var="worker_image=<worker digest>" \
+  -var='api_schema_range={min=1,max=1}' \
+  -var='worker_schema_range={min=1,max=1}' \
+  -var='alert_emails=["<address>"]' \
+  -var="gcp_project_id=callie-fss" \
+  -var="bootstrap=true"
+```
+
+This needs the AWS credential of section 1.1 **and** the Google application-default credential of section 1.3a. The plan file is a read-only artefact here: **nothing in this section applies it.** Section 3.2 is where an apply happens, from a plan you have read.
+
+A clean first plan shows:
+
+- every name beginning `fss-prod`, and no `fss-rh-` anywhere;
+- the two ECR repositories under **"has moved to"** — `module.stack.module.registry` to `module.stack.module.registry[0]` — and under nothing else. A plan that proposes to destroy, replace or recreate `fss-prod-api` or `fss-prod-worker` is a plan to delete the images the release record names. Stop there;
+- **five** task definitions: `fss-prod-api`, `fss-prod-worker`, `fss-prod-migration`, `fss-prod-operations`, `fss-prod-drill`. Three of them are one-off families with no service;
+- both ECS services created with `desired_count = 0`, because this plan passes `bootstrap=true`. `release-deploy.sh` scales them afterwards. Without `bootstrap=true` the counts are 2 and 1;
+- **eight** `aws_secretsmanager_secret` entries and **no** `aws_secretsmanager_secret_version` at all. Terraform creates the entries empty and never holds a value; the offline gate refuses a version resource outright;
+- exactly one `aws_lb_listener`, on port 443. There is no port-80 listener by decision (`docs/decisions/g1-no-plaintext-listener.md`);
+- no `aws_nat_gateway` and no `aws_vpc_endpoint`;
+- four Google resources created — service account, topic, publisher binding, push subscription — and **not** moved. They have never been applied anywhere, so a `moved` line for any of them would mean something has gone wrong.
+
+**Terraform reports every independent plan-time error in one run.** It does not stop at the first: the third rehearsal printed the Google credential failure and the `count` failure together, from different parts of the graph. So when a plan fails, send the **whole** list, not the first paragraph; two errors mean two changes, and fixing one and re-dispatching a rehearsal is how a run gets spent on an error that was already on the screen.
 
 ### 3.1 Rehearsal first, always
 

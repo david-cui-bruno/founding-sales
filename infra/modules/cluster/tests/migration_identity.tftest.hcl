@@ -10,13 +10,46 @@
 # boundary nobody checked; these read the JSON.
 
 mock_provider "aws" {
-  override_during = plan
+  override_during = apply
 
   mock_resource "aws_iam_role" {
     defaults = {
       arn = "arn:aws:iam::123456789012:role/mock"
       id  = "mock"
     }
+  }
+}
+
+# The provider mock gives every `aws_iam_role` the same ARN, which would make any
+# "this definition carries that role" comparison true whichever role it actually
+# referenced. These four give the roles the assertions name an ARN of their own,
+# so the last run in this file can fail. Like the provider mock they take effect
+# during the apply phase, which is why that run is an apply run.
+override_resource {
+  target = aws_iam_role.migration_task
+  values = {
+    arn = "arn:aws:iam::123456789012:role/fss-test-migration-task"
+  }
+}
+
+override_resource {
+  target = aws_iam_role.migration_execution
+  values = {
+    arn = "arn:aws:iam::123456789012:role/fss-test-migration-exec"
+  }
+}
+
+override_resource {
+  target = aws_iam_role.worker_task
+  values = {
+    arn = "arn:aws:iam::123456789012:role/fss-test-worker-task"
+  }
+}
+
+override_resource {
+  target = aws_iam_role.drill_task
+  values = {
+    arn = "arn:aws:iam::123456789012:role/fss-test-drill-task"
   }
 }
 
@@ -199,16 +232,6 @@ run "the_migration_task_definition_is_the_worker_image_under_the_migration_ident
     error_message = "The migration task runs the worker image at the release digest, not some other artifact."
   }
 
-  assert {
-    condition     = aws_ecs_task_definition.migration.task_role_arn == aws_iam_role.migration_task.arn
-    error_message = "The migration task definition carries the migration task role."
-  }
-
-  assert {
-    condition     = aws_ecs_task_definition.migration.execution_role_arn == aws_iam_role.migration_execution.arn
-    error_message = "The migration task definition carries the migration execution role, which is what resolves the DDL credential."
-  }
-
   # `command` is appended to the image's ENTRYPOINT, which is the worker's
   # `bootstrap/main.ts`. So the entry point is replaced here rather than overridden at
   # run time: `aws ecs run-task --overrides` can replace a command and cannot replace
@@ -253,11 +276,6 @@ run "the_operations_task_definition_is_the_runtime_identity_with_the_tool_as_its
   command = plan
 
   assert {
-    condition     = aws_ecs_task_definition.operations.task_role_arn == aws_iam_role.worker_task.arn
-    error_message = "`fss verify` and `fss drill` run as the worker task role, so a verify that passes proves the runtime identity reaches the database."
-  }
-
-  assert {
     condition     = jsondecode(aws_ecs_task_definition.operations.container_definitions)[0].entryPoint == ["node", "apps/worker/src/tools/fss.ts"]
     error_message = "The operations container's entry point is the tool."
   }
@@ -275,11 +293,6 @@ run "the_operations_task_definition_is_the_runtime_identity_with_the_tool_as_its
 # both — and it is neither of the other two.
 run "the_drill_is_its_own_identity_because_it_needs_the_journal_and_the_migration_credential" {
   command = plan
-
-  assert {
-    condition     = aws_ecs_task_definition.drill.task_role_arn == aws_iam_role.drill_task.arn
-    error_message = "The drill runs as its own task role, not the worker's and not the migration's."
-  }
 
   assert {
     condition = length(setsubtract(
@@ -366,5 +379,51 @@ run "an_ordinary_apply_creates_the_services_at_their_declared_count" {
   assert {
     condition     = output.deployment_plan.bootstrap == false
     error_message = "The plan says which of the two states this apply is."
+  }
+}
+
+# Which identity each one-off task definition carries, asserted where the values
+# exist.
+#
+# A role ARN is a computed attribute and the mock supplies mocked values during
+# the apply phase, so no plan here can compare one, exactly as a real plan
+# cannot. The four `override_resource` blocks at the top of this file give the
+# roles named below ARNs of their own, so this run fails if a definition
+# references the wrong role rather than passing on a shared mock default. That
+# the eight identities are eight is asserted by name in the first run, which a
+# plan can see.
+# `docs/decisions/g12j-mock-providers-keep-computed-values-unknown.md`.
+run "each_one_off_task_definition_carries_the_identity_it_is_for" {
+  command = apply
+
+  assert {
+    condition     = aws_ecs_task_definition.migration.task_role_arn == aws_iam_role.migration_task.arn
+    error_message = "The migration task definition carries the migration task role."
+  }
+
+  assert {
+    condition     = aws_ecs_task_definition.migration.execution_role_arn == aws_iam_role.migration_execution.arn
+    error_message = "The migration task definition carries the migration execution role, which is what resolves the DDL credential."
+  }
+
+  assert {
+    condition     = aws_ecs_task_definition.operations.task_role_arn == aws_iam_role.worker_task.arn
+    error_message = "`fss verify` and `fss drill` run as the worker task role, so a verify that passes proves the runtime identity reaches the database."
+  }
+
+  assert {
+    condition     = aws_ecs_task_definition.drill.task_role_arn == aws_iam_role.drill_task.arn
+    error_message = "The drill runs as its own task role, not the worker's and not the migration's."
+  }
+
+  # And no two of the three are the same identity, which the shared mock default
+  # would otherwise hide.
+  assert {
+    condition = length(distinct([
+      aws_ecs_task_definition.migration.task_role_arn,
+      aws_ecs_task_definition.operations.task_role_arn,
+      aws_ecs_task_definition.drill.task_role_arn,
+    ])) == 3
+    error_message = "Migration, operations and drill are three identities, not one address repeated."
   }
 }

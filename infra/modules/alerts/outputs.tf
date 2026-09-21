@@ -13,6 +13,16 @@ output "kms_key_arn" {
   value       = local.topic_key_arn
 }
 
+output "created_own_kms_key" {
+  description = <<-EOT
+    Whether this module created the topic key, or was given one.
+
+    A boolean the plan always knows, so a caller can assert the decision even
+    when the key it passed is created in the same apply and its ARN is unknown.
+  EOT
+  value       = length(aws_kms_key.alerts) == 1
+}
+
 output "alarm_names" {
   description = "Every metric alarm name."
   value       = sort(concat([for alarm in aws_cloudwatch_metric_alarm.this : alarm.alarm_name], [aws_cloudwatch_metric_alarm.all_sequences_held.alarm_name]))

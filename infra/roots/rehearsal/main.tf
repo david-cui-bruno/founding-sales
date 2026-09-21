@@ -6,6 +6,22 @@
 #
 # Appendix G's destructive scenarios run here, on the exact image digests
 # proposed for production, and never against production.
+#
+# This root declares no Google provider and creates nothing in Google Cloud.
+# There is no rehearsal Google Cloud project and there will not be one, so
+# `terraform plan` here needs no Google credential; the third credentialed
+# rehearsal was refused application-default credentials before it reached AWS
+# because `infra/modules/stack` required the provider for a `module "pubsub"`
+# it never instantiated. The three Gmail push identifiers the task definitions
+# carry are values, below.
+# `docs/decisions/g12j-the-rehearsal-has-no-google-provider.md`.
+
+locals {
+  # The audience a push token would have to carry to be accepted by *this*
+  # environment's webhook. Derived from the rehearsal hostname, exactly as
+  # production derives its own: a property of the API's route, not of Google.
+  push_audience = "https://${var.api_hostname}${var.gmail_push_path}"
+}
 
 module "stack" {
   source = "../../modules/stack"
@@ -70,6 +86,13 @@ module "stack" {
 
   updates_price_class = "PriceClass_100"
 
-  enable_gmail_push = var.enable_gmail_push
-  gcp_project_id    = var.gcp_project_id
+  # Both bootstraps call `required()` on all three of these, so an empty value
+  # is a rehearsal whose tasks refuse to start, not a rehearsal with push
+  # switched off. The audience is real for this hostname; the topic and the push
+  # identity name a Google project that does not exist, because no rehearsal
+  # registers a Gmail watch: its Gmail is the recorded fake and the webhook is
+  # exercised offline with locally signed tokens.
+  gmail_push_audience        = local.push_audience
+  gmail_push_topic           = var.gmail_push_topic
+  gmail_push_service_account = var.gmail_push_service_account
 }

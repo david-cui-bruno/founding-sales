@@ -30,7 +30,10 @@ provider "aws" {
   }
 }
 
-provider "google" {
-  project = var.gcp_project_id == "" ? null : var.gcp_project_id
-  region  = var.gcp_region
-}
+# There is no `provider "google"` here.
+#
+# Terraform configures every provider a root requires before it plans anything,
+# so declaring one is asking for its credential. CI has no Google credential and
+# must not have one: the rehearsal's Gmail is the recorded fake, and the topic
+# and subscription belong to `infra/roots/production` alone.
+# `docs/decisions/g12j-the-rehearsal-has-no-google-provider.md`.

@@ -356,30 +356,61 @@ variable "google_hosted_domain" {
   }
 }
 
-variable "enable_gmail_push" {
-  description = <<-EOT
-    Off by default. Rehearsal must never publish into the production Google
-    Cloud project; turning it on requires its own gcp_project_id.
-  EOT
-  type        = bool
-  default     = false
-}
+# ---------------------------------------------------------------------------
+# Gmail push, without a Google Cloud project.
+#
+# `enable_gmail_push`, `gcp_project_id` and `gcp_region` are gone. A rehearsal
+# never creates a Pub/Sub topic: it has no project, it must never publish into
+# production's, and the provider it required was refused
+# application-default credentials in CI before the plan reached AWS.
+#
+# What remains is what the two task definitions carry. Both binaries read all
+# three names with `required()` at start-up (`apps/api/src/bootstrap/deployment.ts`,
+# `apps/worker/src/bootstrap/deployment.ts`), so an empty value is a task that
+# refuses to start; these are the values that let a rehearsal environment boot.
+# `docs/decisions/g12j-the-rehearsal-has-no-google-provider.md`.
+# ---------------------------------------------------------------------------
 
-variable "gcp_project_id" {
-  description = "A rehearsal-only Google Cloud project. Never the production project."
+variable "gmail_push_path" {
+  description = "Path on the API that a push notification would be delivered to. The same route in every environment; the audience below is built from it."
   type        = string
-  default     = ""
+  default     = "/integrations/gmail/push"
 
   validation {
-    condition     = !var.enable_gmail_push || var.gcp_project_id != ""
-    error_message = "Gmail push needs a rehearsal-only Google Cloud project id. A rehearsal run must never publish into the production project."
+    condition     = startswith(var.gmail_push_path, "/")
+    error_message = "The push path is a path on the API, beginning with a slash."
   }
 }
 
-variable "gcp_region" {
-  description = "Google Cloud region for the provider."
+variable "gmail_push_topic" {
+  description = <<-EOT
+    `FSS_GMAIL_PUSH_TOPIC` on both rehearsal task definitions.
+
+    A public identifier naming a Google Cloud project that does not exist, and
+    that is the point: a rehearsal registers no Gmail watch, so nothing ever
+    names this topic to Google. It is well-formed
+    (`projects/<project>/topics/<name>`, which is what `users.watch` takes) so
+    that a rehearsal exercises the same parsing production will, and it is
+    obviously not a real project so that nobody reads a rehearsal log as
+    evidence that push works. Spec 16.2's Gmail path is proved in production,
+    never here: `docs/decisions/g12-what-the-rehearsal-cannot-prove.md`.
+  EOT
   type        = string
-  default     = "us-east1"
+  default     = "projects/fss-rehearsal-no-push/topics/fss-rehearsal-no-push"
+}
+
+variable "gmail_push_service_account" {
+  description = <<-EOT
+    `FSS_GMAIL_PUSH_SERVICE_ACCOUNT` on both rehearsal task definitions: the one
+    address whose push token the webhook would accept.
+
+    The default is in the reserved `.invalid` domain rather than the
+    `iam.gserviceaccount.com` one, because no such identity exists and Google
+    cannot mint a token for it. A rehearsal that needed a real one would be a
+    rehearsal with its own Google project, which is not a thing this design has.
+  EOT
+  type        = string
+  default     = "gmail-push@fss-rehearsal-no-push.invalid"
 }
 
 variable "bootstrap" {

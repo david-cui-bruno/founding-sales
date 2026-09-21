@@ -5,7 +5,7 @@
 # below is an AWS documentation example value.
 
 mock_provider "aws" {
-  override_during = plan
+  override_during = apply
 
   mock_resource "aws_ecr_repository" {
     defaults = {
