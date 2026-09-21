@@ -32,11 +32,44 @@ name: Greenfield release rehearsal
 # a later edit from silently acquiring a step nobody read.
 #
 # **Teardown always runs.** A rehearsal environment left standing costs money and, far
-# worse, becomes a second place prospect-shaped data can live. `if: always()`.
+# worse, becomes a second place prospect-shaped data can live. `if: always()` — and
+# deliberately *not* `if: always() && <stage>`: the teardown and the production-prefix
+# assertion are what protect against a stage condition being wrong, so they are the two
+# steps that may not depend on one.
+#
+# ## Four stages, one gate
+#
+# Three credentialed rehearsals (21 September 2026) each stopped at the first error of a
+# class no offline check can see, and each cost about an hour for one error, because the
+# workflow had one mode. The `stage` input makes the cheap part runnable alone:
+#
+#   * `plan`   — identity, the production inventory, `terraform init`, the tfvars file,
+#                `terraform plan` with the same variables the apply uses, and a summary
+#                of counts and addresses. Nothing is created.
+#   * `create` — the plan, then `terraform apply`, which names no variable of its own
+#                and reads the `run.auto.tfvars.json` the plan stage wrote.
+#   * `deploy` — create, then the two database entries and `release-deploy.sh`, then the
+#                smoke.
+#   * `full`   — everything, and the **only** stage that writes a release record.
+#
+# The stages nest: every step of one runs in the next. That is a property of the `if:`
+# conditions, and `test/release/support/releaseWorkflow.ts` reads them so that scenario
+# 39 can assert it rather than a reviewer having to. The default is `plan`, so the
+# expensive gate is chosen and never inherited.
 
 on:
   workflow_dispatch:
     inputs:
+      stage:
+        description: 'How far to go. Only `full` is the release gate.'
+        required: true
+        type: choice
+        default: 'plan'
+        options:
+          - plan
+          - create
+          - deploy
+          - full
       api_image_digest:
         description: 'API image digest, sha256:... (from David''s push)'
         required: true
@@ -558,7 +591,7 @@ jobs:
             echo "WORKER_SCHEMA_MAX=$worker_max"
           } >> "$GITHUB_ENV"
 
-      - name: Create the rehearsal environment
+      - name: Write the variables this run plans, applies and tears down with
         working-directory: infra/roots/rehearsal
         run: |
           set -euo pipefail
@@ -572,6 +605,10 @@ jobs:
           # the file lives on this runner only, and it holds identifiers (a prefix, two
           # digests, an ARN, a hostname, two version ranges), never a value from a
           # secret entry.
+          #
+          # This runs in every stage, including `plan`: the teardown runs in every
+          # stage too, and a teardown that cannot read its variables is a teardown that
+          # refuses (G12i).
           PREFIX="$prefix" \
           API_IMAGE='${{ secrets.FSS_REHEARSAL_API_REPOSITORY }}@${{ inputs.api_image_digest }}' \
           WORKER_IMAGE='${{ secrets.FSS_REHEARSAL_WORKER_REPOSITORY }}@${{ inputs.worker_image_digest }}' \
@@ -593,15 +630,33 @@ jobs:
           }, indent=2))
           PY
           echo "run.auto.tfvars.json written with $(python3 -c 'import json; print(len(json.load(open("run.auto.tfvars.json"))))') variables"
+
+      - name: Initialise the backend for this run's state key
+        working-directory: infra/roots/rehearsal
+        run: |
+          set -euo pipefail
+          prefix='${{ steps.prefix.outputs.prefix }}'
+          # Per-run state, so two runs cannot collide and a teardown cannot address
+          # another run's resources (Appendix G 39). Every stage initialises: a plan
+          # reads the same state an apply would write.
           terraform init -reconfigure -input=false \
             -backend-config=backend.hcl \
             -backend-config="key=fss/greenfield/rehearsal/${prefix}/terraform.tfstate"
+
+      - name: Plan the rehearsal environment, and summarise it without values
+        working-directory: infra/roots/rehearsal
+        run: |
+          set -euo pipefail
+          prefix='${{ steps.prefix.outputs.prefix }}'
+          plan_file="$RUNNER_TEMP/rehearsal.tfplan"
+          plan_log="$RUNNER_TEMP/terraform-plan.txt"
+
           # `assume_deployment_role=false`: the root's default is to assume
           # `fss-rh-deploy`, and this job's session already is it. The step that
-          # printed the caller identity two above is what makes turning the assumption
-          # off safe; `infra/scripts/rehearsal-teardown.sh` repeats both, because the
-          # teardown runs on `always()` and must not destroy anything as a principal
-          # nobody checked.
+          # printed the caller identity is what makes turning the assumption off safe;
+          # `infra/scripts/rehearsal-teardown.sh` repeats both, because the teardown
+          # runs on `always()` and must not destroy anything as a principal nobody
+          # checked.
           #
           # `bootstrap=true`: every rehearsal environment is a fresh one, its database
           # has no schema, and both binaries refuse to start unless the applied schema
@@ -609,7 +664,15 @@ jobs:
           # services at desired count zero and `infra/scripts/release-deploy.sh`
           # scales them after the migration task and `fss verify` have succeeded
           # (G12h; David's conditions 1 and 2).
-          terraform apply -auto-approve -input=false \
+          #
+          # The plan's own output is values — every variable it resolved and every
+          # attribute it can already see — so it goes to a file in the runner's
+          # temporary directory rather than to the log, and the step summary gets
+          # counts and addresses instead. Diagnostics are on stderr and still reach
+          # the log, which is what this stage exists to show; on a failure the tail of
+          # the plan output follows them, because a plan that stops is the thing the
+          # operator came for.
+          if ! terraform plan -input=false -lock-timeout=5m -out="$plan_file" \
             -var="assume_deployment_role=false" \
             -var="bootstrap=true" \
             -var="name_prefix=${prefix}" \
@@ -618,9 +681,120 @@ jobs:
             -var="certificate_arn=${{ secrets.FSS_REHEARSAL_CERTIFICATE_ARN }}" \
             -var="api_hostname=${{ secrets.FSS_REHEARSAL_API_HOSTNAME }}" \
             -var="api_schema_range={min=${API_SCHEMA_MIN},max=${API_SCHEMA_MAX}}" \
-            -var="worker_schema_range={min=${WORKER_SCHEMA_MIN},max=${WORKER_SCHEMA_MAX}}"
+            -var="worker_schema_range={min=${WORKER_SCHEMA_MIN},max=${WORKER_SCHEMA_MAX}}" > "$plan_log"; then
+            echo "::error::terraform plan failed. Its last forty lines follow; the diagnostics are above, on stderr."
+            tail -40 "$plan_log"
+            exit 1
+          fi
+
+          terraform show -json "$plan_file" > "$RUNNER_TEMP/rehearsal-plan.json"
+          summary="$RUNNER_TEMP/rehearsal-plan-summary.txt"
+          python3 - "$RUNNER_TEMP/rehearsal-plan.json" > "$summary" <<'PY'
+          # rehearsal-plan-summary: what the plan would do, as counts and addresses.
+          #
+          # It reads `address` and `change.actions` and nothing else. Never `before`,
+          # `after`, `after_unknown`, `after_sensitive`, `variables` or `configuration`:
+          # those are the values, and this summary is written to the step summary and
+          # kept as an artifact for ninety days.
+          import collections, json, pathlib, sys
+
+          plan = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          counts = collections.Counter()
+          lines = []
+          for change in plan.get("resource_changes") or []:
+              actions = "+".join(change.get("change", {}).get("actions") or ["unknown"])
+              address = change.get("address") or "unknown"
+              counts[actions] += 1
+              lines.append(f"{actions} {address}")
+          print(f"resource changes: {len(lines)}")
+          for action in sorted(counts):
+              print(f"  {action}: {counts[action]}")
+          for line in sorted(lines):
+              print(line)
+          PY
+
+          python3 - "$summary" run.auto.tfvars.json <<'PY'
+          # rehearsal-plan-summary-guard: no value this run holds reaches the summary.
+          #
+          # The generator above prints addresses, so this is the second lock on the
+          # same door: it refuses if any value of a variable assembled from a
+          # repository secret appears in what is about to be published. The prefix and
+          # the two schema ranges are exempt by name — the prefix is in the job title,
+          # the log and every report — and a run.auto.tfvars.json that has stopped
+          # naming the secret-backed four is a guard checking nothing, so that is a
+          # refusal too.
+          import json, pathlib, sys
+
+          summary = pathlib.Path(sys.argv[1]).read_text()
+          variables = json.loads(pathlib.Path(sys.argv[2]).read_text())
+          public = {"name_prefix", "bootstrap", "assume_deployment_role", "api_schema_range", "worker_schema_range"}
+          secret_backed = ("api_image", "worker_image", "certificate_arn", "api_hostname")
+
+          absent = [name for name in secret_backed if name not in variables]
+          if absent:
+              raise SystemExit(f"FAIL: run.auto.tfvars.json names none of {absent}; this guard would check nothing")
+
+          def texts(value):
+              if isinstance(value, str):
+                  yield value
+                  # `<repository>@<digest>`: a half of it leaking is still a leak.
+                  for part in value.split("@"):
+                      yield part
+              elif isinstance(value, dict):
+                  for item in value.values():
+                      yield from texts(item)
+              elif isinstance(value, list):
+                  for item in value:
+                      yield from texts(item)
+
+          checked = 0
+          for name, value in variables.items():
+              if name in public:
+                  continue
+              checked += 1
+              for text in texts(value):
+                  if len(text) >= 8 and text in summary:
+                      raise SystemExit(f"FAIL: the plan summary contains the value of {name}")
+          if checked < len(secret_backed):
+              raise SystemExit("FAIL: fewer values were checked than this run holds")
+          print(f"the plan summary holds no value of the {checked} secret-backed variables")
+          PY
+
+          if ! grep -qE '^resource changes: [1-9]' "$summary"; then
+            echo "::warning::the plan proposes no resource changes. On a fresh per-run state key that means the root would create nothing."
+          fi
+          mkdir -p "$FSS_REHEARSAL_REPORTS"
+          cp "$summary" "$FSS_REHEARSAL_REPORTS/plan-summary.txt"
+          {
+            echo "### Rehearsal ${prefix}: terraform plan"
+            echo ''
+            echo '```'
+            cat "$summary"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat "$summary"
+
+      - name: Create the rehearsal environment
+        if: contains(fromJSON('["create","deploy","full"]'), inputs.stage)
+        working-directory: infra/roots/rehearsal
+        run: |
+          set -euo pipefail
+          # No `-var` here, deliberately. `run.auto.tfvars.json` holds every value the
+          # root requires and Terraform loads it automatically from this directory —
+          # the same mechanism `terraform destroy` uses in the teardown (G12i). One
+          # list in one place is what keeps the plan above and this apply the same
+          # values; a second copy is a second thing to forget, and forgetting two of
+          # eight is what stopped the second credentialed run.
+          #
+          # It re-plans rather than applying the plan file the step above saved. How
+          # Terraform treats a saved-plan apply in a directory that also holds an
+          # auto-loaded variables file is behaviour no offline check here could
+          # settle, and a lane whose whole purpose is to stop discovering things on
+          # credentialed runs does not get to introduce one.
+          terraform apply -auto-approve -input=false
 
       - name: Fill the two database entries this run's tasks resolve
+        if: contains(fromJSON('["deploy","full"]'), inputs.stage)
         working-directory: infra/roots/rehearsal
         run: |
           set -euo pipefail
@@ -674,6 +848,7 @@ jobs:
           echo "both database entries filled for ${database} at ${endpoint%%:*}"
 
       - name: Migrate forward, then deploy the worker, then the API
+        if: contains(fromJSON('["deploy","full"]'), inputs.stage)
         env:
           FSS_RELEASE_WORKER_DIGEST: ${{ inputs.worker_image_digest }}
         run: |
@@ -691,12 +866,14 @@ jobs:
             --worker-digest '${{ inputs.worker_image_digest }}'
 
       - name: The declared schema ranges, against the deployed images
+        if: inputs.stage == 'full'
         run: |
           set -euo pipefail
           # Appendix G 22's own half: the reverse cases, which only ECS can answer.
           infra/scripts/rehearsal-schema-ranges.sh '${{ steps.prefix.outputs.prefix }}'
 
       - name: Smoke the rehearsal environment with the production smoke script
+        if: contains(fromJSON('["deploy","full"]'), inputs.stage)
         run: |
           set -euo pipefail
           origin="https://${{ secrets.FSS_REHEARSAL_API_HOSTNAME }}"
@@ -729,6 +906,7 @@ jobs:
             node scripts/productionSmoke.mjs --origin "$origin" --canary-age-seconds "$age" --json
 
       - name: Release suite (recorded mode, runner)
+        if: inputs.stage == 'full'
         env:
           # The 42 scenarios run in the runner against the job's own PostgreSQL 16
           # service container, which is what they were built for (`test:greenfield`
@@ -748,11 +926,13 @@ jobs:
           npm run test:release:mutation
 
       - name: Restore drill, Appendix E steps 1 to 9
+        if: inputs.stage == 'full'
         env:
           FSS_RELEASE_WORKER_DIGEST: ${{ inputs.worker_image_digest }}
         run: infra/scripts/rehearsal-restore-drill.sh '${{ steps.prefix.outputs.prefix }}'
 
       - name: Suppression journal replay and Gmail reconstruction
+        if: inputs.stage == 'full'
         env:
           # No real mailbox exists in rehearsal unless David provides a rehearsal
           # Google project, so the Gmail half runs against the recorded fake — chosen
@@ -777,6 +957,7 @@ jobs:
           PY
 
       - name: The data carry watermark and the old stack
+        if: inputs.stage == 'full'
         env:
           # Both optional, and both absent until a cutover is scheduled — an unset
           # secret renders as the empty string. The script skips its export half when
@@ -800,6 +981,7 @@ jobs:
         run: ../../scripts/rehearsal-prefix-guard.sh '${{ steps.prefix.outputs.prefix }}' after
 
       - name: Write the release record, last
+        if: inputs.stage == 'full'
         run: |
           set -euo pipefail
           infra/scripts/rehearsal-release-record.sh \

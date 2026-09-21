@@ -321,6 +321,33 @@ const MUTATIONS = [
     because:
       'The second credentialed run initialised the backend and was refused at the apply because the workflow named six of the eight variables the rehearsal root requires. Scenario 22 now derives the list from variables.tf and reads the workflow for each; drop one line and it has to go red, or the next required variable a lane adds will be found the same way, in the cloud.',
   },
+  {
+    name: 'any stage can write a release record',
+    file: '.github/workflows/greenfield-release.yml',
+    find: "      - name: Write the release record, last\n        if: inputs.stage == 'full'\n",
+    replace: '      - name: Write the release record, last\n',
+    suite: ['run', 'test:release'],
+    because:
+      'The `plan`, `create` and `deploy` stages exist so that a plan-time error costs a minute instead of an hour, and none of them proves what 16.2 asks of a release. The one thing they must be unable to produce is the artifact an admin points at when enabling sending, and the whole of that impossibility is this `if:`. Appendix G 42 has to go red when it goes.',
+  },
+  {
+    name: 'a plan run applies what it planned',
+    file: '.github/workflows/greenfield-release.yml',
+    find: "      - name: Create the rehearsal environment\n        if: contains(fromJSON('[\"create\",\"deploy\",\"full\"]'), inputs.stage)\n",
+    replace: '      - name: Create the rehearsal environment\n',
+    suite: ['run', 'test:release'],
+    because:
+      'A `plan` stage that applied would be the opposite of the thing it was added for: the cheap, repeatable, creates-nothing run that David uses to find the next plan-time error. The condition is one line, its absence is invisible until a run creates an environment nobody asked for, and the monotonicity check is the only reader of it.',
+  },
+  {
+    name: 'the plan summary guard stops looking for the values it holds',
+    file: '.github/workflows/greenfield-release.yml',
+    find: '                  if len(text) >= 8 and text in summary:\n',
+    replace: '                  if False:\n',
+    suite: ['run', 'test:release'],
+    because:
+      'The plan summary goes to the job summary and to a ninety-day artifact, and `terraform show -json` carries every value the plan resolved — the two image references, the certificate ARN and the hostname, all assembled from repository secrets. The summariser prints addresses, and this guard is the second lock on the same door; scenario 39 runs it against a summary that leaks one and must go red when it stops refusing.',
+  },
 ];
 
 function run(script) {

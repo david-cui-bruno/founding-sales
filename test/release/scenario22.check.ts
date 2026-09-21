@@ -8,6 +8,7 @@ import {
   type SchemaRange,
 } from '@fss/domain/db';
 import { mustBeRehearsed, readRepositoryFile } from './support/coverage.ts';
+import { stepScript } from './support/releaseWorkflow.ts';
 
 /**
  * Appendix G 22: "Old API with new worker and reverse across every expand/contract
@@ -154,13 +155,18 @@ describe('Appendix G 22: the declared ranges decide, and a non-overlap is the re
     expect(readRepositoryFile('.github/workflows/greenfield-release.yml')).toContain('-var="bootstrap=true"');
   });
 
-  it('names every variable the rehearsal root requires, in the apply and in the file the teardown destroys with', () => {
+  it('names every variable the rehearsal root requires, in the plan and in the file the teardown destroys with', () => {
     // The second credentialed run (21 September 2026, Actions 35602423640) reached the
     // apply and was refused: "The root module input variable api_schema_range is not
     // set". The workflow named six of the root's eight required variables and nothing
     // compared its list with the root's. This does — and it asks the same of the file
     // the teardown's `terraform destroy` reads, because destroy requires the same
     // values and runs on `always()` after the create step's shell is gone.
+    //
+    // G12k moved the `-var` list on to `terraform plan`, which every stage runs, and
+    // the apply consumes the plan file it wrote. So the list is asked of the step that
+    // carries it rather than of the file as a whole: a `-var` in a comment, or in a
+    // step that no longer runs, would otherwise satisfy this.
     const variables = readRepositoryFile('infra/roots/rehearsal/variables.tf');
     const required = variables
       .split(/^variable "/mu)
@@ -170,14 +176,16 @@ describe('Appendix G 22: the declared ranges decide, and a non-overlap is the re
     expect(required).toEqual(
       expect.arrayContaining(['api_image', 'worker_image', 'api_schema_range', 'worker_schema_range']),
     );
-    const workflow = readRepositoryFile('.github/workflows/greenfield-release.yml');
+    const plan = stepScript('Plan the rehearsal environment, and summarise it without values');
+    const tfvars = stepScript('Write the variables this run plans, applies and tears down with');
     for (const name of required) {
-      expect(workflow, `the apply passes ${name}`).toContain(`-var="${name}=`);
-      expect(workflow, `the create step writes ${name} for the teardown`).toContain(`"${name}": `);
+      expect(plan, `the plan passes ${name}`).toContain(`-var="${name}=`);
+      expect(tfvars, `the variables step writes ${name} for the teardown`).toContain(`"${name}": `);
     }
     // The ranges come from the source, as the images workflow reads them, never typed.
+    const workflow = readRepositoryFile('.github/workflows/greenfield-release.yml');
     expect(workflow).toContain("const module = await import('./packages/domain/db/schemaRange.ts');");
-    expect(workflow).toContain('python3 - > run.auto.tfvars.json');
+    expect(tfvars).toContain('python3 - > run.auto.tfvars.json');
     const teardown = readRepositoryFile('infra/scripts/rehearsal-teardown.sh');
     expect(teardown).toContain('if [ ! -f run.auto.tfvars.json ]; then');
   });

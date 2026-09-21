@@ -227,30 +227,118 @@ The **desktop commit stamp** is the release commit from 2.0 — the same `git re
 
 Actions → *Greenfield release rehearsal* → Run workflow, with:
 
+- `stage` — how far this run goes: `plan` (the default), `create`, `deploy` or `full`. Only `full` is the release gate; read 3.0 before choosing anything else.
 - `api_image_digest` — from the push above;
 - `worker_image_digest` — likewise;
 - `desktop_commit_stamp`;
 - `run_suffix` — optional; the prefix becomes `fss-rh-<suffix>`, or `fss-rh-<UTC timestamp>`.
 
-What it does, in order, and why the order is the order:
+### 3.0 The four stages, and the order to use them in
 
-1. **Refuse anything that is not a digest.** Two `sha256:` values, and they must differ — one image pushed under both names is a mistake the gate can catch and a person cannot.
-2. **Name the principal.** `infra/scripts/rehearsal-caller-identity.sh fss-rh-deploy` prints `aws sts get-caller-identity --query Arn` and refuses anything that is not `arn:aws:sts::…:assumed-role/fss-rh-deploy/<session>`. Every `terraform` command in this job then runs with `-var="assume_deployment_role=false"`, because this session already *is* the deployment role and the provider must not ask STS to assume the role it already holds (`infra-apply-runbook.md` 1.1). The flag makes the job's own credentials the thing the apply acts as, so this step is what makes it safe; it is the one the teardown repeats.
-3. **Record the production inventory.** So that "teardown could not address production" is measured afterwards rather than asserted. This is the one rehearsal command that names a production resource on purpose, and on the first credentialed run (Actions 35548888865) the rehearsal's own guard refused it — `FAIL: a rehearsal command names a production resource: Key=Name,Values=fss-prod*` — before anything was created. It is now issued through one named function, `rehearsal_read_production_inventory` in `infra/scripts/rehearsal-common.sh`, which is the only caller exempt from the refusal, may issue only `resourcegroupstaggingapi get-resources`, and builds its own filter so no caller can push a name through it. Every other command naming `fss-prod` — including a mutating one wearing the same filter — is still refused. The dry run prints the read with an `exempt-read-only-production-inventory` marker and `infra/scripts/rehearsal-prefix-guard.sh <prefix> plan <file>` re-applies the refusal to that printed plan on every pull request, so a rehearsal that would refuse itself is red before a credential is spent.
-4. **Create** the rehearsal root with the run prefix and `bootstrap=true`, deploying both digests from the stable `fss-rh-api` and `fss-rh-worker` repositories. **Both services are created at desired count zero.** A fresh environment's database has no schema, and both binaries refuse to start unless the applied schema version is exactly the range they declare — so an apply that started them would create two services crash-looping against an empty database while the task that would fix it had not been launched. The run creates no repository of its own and its teardown removes none; `infra/roots/rehearsal-registry` owns those two and was applied once, before the first push.
-5. **Fill the two database entries.** Terraform creates every Secrets Manager entry empty and never holds a value. In production you fill these two by hand (5.1); a rehearsal is unattended and an hour long, so it fills its own: `migration-database` takes the RDS-managed master credentials, because on a database that has never been migrated there is no other login role that can run DDL, and `app-runtime-database` takes a password generated in the runner. Both are masked before they can reach a log. This needs `secretsmanager:PutSecretValue` on `fss-rh-*` secrets on `fss-rh-deploy` — see 8.1.
-6. **Migrate, then deploy the worker, then the API.** `infra/scripts/release-deploy.sh infra/roots/rehearsal <prefix> --schema-change` — the *same script* you run locally for production (section 4.1). It scales to zero if anything is running, runs `fss migrate` as a one-off ECS task inside the VPC, then `fss admin database-users ensure`, then `fss verify`, then the worker to its declared count, then the API, then `fss verify` again against the running deployment. Never beside each other: the API's declared schema range needs the migration to have run. Until 21 September nothing in deployment ran a migration at all; the step was named for an order it did not perform.
-7. **The declared ranges, against the deployed images** (`infra/scripts/rehearsal-schema-ranges.sh`): Appendix G 22's refusal cases, which only a real ECS task can answer.
-8. **Smoke** with the same `scripts/productionSmoke.mjs` production gets.
-9. **Release suite (recorded mode, runner)**: the 42 scenarios (`npm run test:release`) and the **mutation check** (`npm run test:release:mutation`), which breaks each trap in turn and requires the suite to go red. They run in the runner against the job's own `postgres:16` service container, which is what they were built for. They do **not** touch the rehearsal database and could not: it is private — `publicly_accessible = false`, no NAT gateway, no bastion — so the step that used to assemble a URL from the rehearsal's outputs could never have connected. What runs against the rehearsal database is `fss verify` and `fss drill`, inside the VPC.
-10. **Restore drill**, Appendix E steps 1 to 9. The runner keeps the control plane (reading the latest restorable point, the restore itself, the wait, the teardown); two in-VPC tasks do the database work — `fss admin counts` for the baseline on the source, then one `fss drill` against the restored instance for steps 1 to 9, with one correlated log and per-step JSON. The runner reads the report and decides whether it is a pass, so a change to the tool cannot quietly relax the gate. It refuses to report a pass unless the baseline contained an accepted send, a reply, a suppression, a CRM edit and a migration — a drill against an empty database proves nothing. The drill task is fixed at `FSS_DEPENDENCIES=recorded` **in its task definition**, because `reconcile-sent`, `recover` and `watch-renew` all reach Gmail when it is live and a mode a caller passes is a mode a caller can forget.
-11. **Suppression journal replay and Gmail reconstruction**, against the recorded fake (no real mailbox in rehearsal unless you provide a rehearsal Google project). The second replay must insert nothing; no send may repeat. The drill above already ran both; this step reads the reports it left, which the drill wrote out of the captured task report under the names they have always had.
-12. **Carry watermark** (Appendix G 20): the carry tooling must contain no writer at all, and — once a cutover is scheduled and the two optional secrets exist — the export must refuse a table with a post-watermark write. Before the cutover the step prints `carry drill skipped: no cutover watermark yet` and the record says `"carryDrill": "skipped_no_watermark"`. That is not a pass being claimed; it is the state being named.
-13. **Tear down**, always, with bypass-governance — and tolerantly. The teardown is five steps (any one-off task still running, the restored instance, any manual snapshot carrying the run prefix, the object-locked journal objects, the root), and each treats the AWS error code for absence as "already done" rather than as a failure, because `if: always()` means it runs after a creation that never happened. A failure that is *not* an absence — an `AccessDenied`, a throttle — still stops it, and an unreadable state that is not "the root was never initialised" still stops it. The report says which: `destroyed=true`, or `destroyed=nothing_created`. `terraform destroy` requires every variable `apply` did, so the create step writes them to `run.auto.tfvars.json` beside the rehearsal root (identifiers only, ignored by `infra/.gitignore`) and the teardown refuses to destroy without that file rather than fail on a missing variable and leave the environment standing. To tear a run down by hand from a fresh checkout, recreate the file first: `name_prefix`, `api_image` and `worker_image` (`<repository>@<digest>`, from the release record or the run's inputs), `certificate_arn`, `api_hostname`, `assume_deployment_role: false`, `bootstrap: true`, and the two schema ranges read from `packages/domain/db/schemaRange.ts`; then run `rehearsal-teardown.sh <prefix>` from the root directory as the `fss-rh-deploy` session.
-14. **Assert nothing with the production prefix was touched**, always, including on a run that created nothing. The guard classifies every name it sees: the run's own resources, the two stable rehearsal repositories that carry no run, and anything production's — which it refuses. A state it cannot list is reported as "the run created nothing" rather than swallowed, and the inventory comparison still runs. An inventory recorded only by a dry run is refused rather than compared: the workflow records the sentinel `["dry-run: no production inventory was read"]` when it validates the prefix, and comparing production against that would be a pass nobody earned. The guard runs in dry mode on every pull request, so every branch is exercised without a credential.
-15. **Write the release record**, last. It names the two digests, the desktop stamp, and a `releaseGateReference` you will need in section 6.
+Until 21 September the workflow had one mode — the whole gate, all fifteen steps of it — and the
+three credentialed runs of that day each stopped at the first error of a class no
+offline check can see. One error per run, about an hour of attention each. `stage` makes
+the cheap part runnable alone. Each stage runs everything the stage before it runs, plus
+its own steps.
 
-If any step fails, steps 13 and 14 still run and no record is written. That is the design: there is no such thing as a partially passed release gate.
+| `stage` | what it adds | what it proves | roughly |
+| --- | --- | --- | --- |
+| `plan` (default) | the identity check, the production inventory, `terraform init` against this run's own state key, `run.auto.tfvars.json`, `terraform plan` with the same variables the apply uses, and a summary | that the rehearsal root can be **planned** in this account with these variables: every required variable is passed, every provider it needs can be configured, and no `count` depends on a value unknown until apply | a few minutes |
+| `create` | `terraform apply`, taking its values from the `run.auto.tfvars.json` the plan stage wrote | that the plan can be **applied**: quotas, service limits, IAM, the order Terraform chooses, and whether a fresh environment comes up at all | the apply, dominated by the Multi-AZ RDS instance |
+| `deploy` | the two database entries, `infra/scripts/release-deploy.sh` and the smoke | that a fresh environment can be **migrated and started**: the migration task's networking, whether `fss migrate` accepts the RDS master user, the schema-range refusals both binaries make on startup, and whether a canary datapoint ever appears | the deploy, five one-off tasks of about a minute each |
+| `full` | the declared ranges against the deployed images, the release suite and the mutation check, the restore drill, the journal replay and Gmail reconstruction, the carry drill, and the release record | the release gate of 16.2, which is everything in the numbered list below | up to the 180-minute timeout |
+
+**Only `full` is the gate.** It is the only stage that runs
+`infra/scripts/rehearsal-release-record.sh`, and that is the step's own condition
+(`if: inputs.stage == 'full'`) rather than a convention: a `plan`, `create` or `deploy`
+run cannot write a release record, and so cannot produce the `releaseGateReference`
+section 6 asks for before sending can be enabled. The default is `plan`, so the
+expensive run is always chosen and never inherited.
+
+**What a `plan` run needs from you.** Two well-formed digests that differ, and a
+commit stamp. Nothing reads the stamp before the release record, and nothing anywhere
+— no data source, no registry call — checks that the two digests exist: Terraform
+only assembles `<repository>@<digest>` into the task definitions. So a `plan` run can
+be made before the images are pushed, which is most of what makes it the cheap loop
+it is meant to be. `create` onwards needs the real ones.
+
+**The order to use them in.**
+
+1. **The local production plan, from your Mac** — `infra-apply-runbook.md`, "Plan
+   first". It is the cheapest credentialed reading of the Terraform there is, it shows
+   values you can read, and it finds the same class of error. Do this after every
+   Terraform change, before anything in CI.
+2. **CI `plan`.** The rehearsal root is not the production root: a different prefix, a
+   different set of variables, and — after G12j — no Google provider at all, where
+   production has one and needs your application-default credentials (1.7). A clean
+   production plan does not imply a clean rehearsal plan, or the other way round.
+3. **Fix as a batch.** Terraform reports every *independent* plan-time error in one
+   run, so read the whole list before changing anything. The third credentialed run
+   reported two errors at once and they had nothing to do with each other (8.0c).
+4. **`create`**, once the plan is clean.
+5. **`deploy`**, once the create is clean.
+6. **`full`**, which is the release gate, once the deploy is clean.
+
+A stage is worth running only when the one before it passed. Running `full` first is
+what the three runs of 21 September did, and it cost about an hour per error.
+
+**Every stage tears down, and every stage re-reads the production inventory.** Steps 13
+and 14 of the list below keep `if: always()` and carry no stage condition at all. They
+are what protects against a stage condition being wrong, so they may not depend on one:
+if the apply's condition were ever mistyped, a `plan` run would create an environment,
+and the step that destroys it must not be reading the same input. The teardown is
+tolerant of a run that created nothing — it reports `destroyed=nothing_created` — so on
+a `plan` run it costs seconds.
+
+**What a `plan` run prints.** The plan's own output is values: both image references,
+the certificate ARN, the hostname, and every attribute Terraform can already resolve.
+It goes to a file in the runner's temporary directory, which is not the reports
+artifact, and the job summary gets this instead, built from `terraform show -json` out
+of each change's `address` and `actions` and nothing else:
+
+```
+resource changes: <count>
+  create: <count>
+create module.stack.module.cluster.aws_ecs_service.api
+create module.stack.module.cluster.aws_ecs_service.worker
+…
+```
+
+(A shape, not a measurement: no rehearsal root has ever been planned.)
+
+A second program then refuses to publish that summary if any value of a variable
+assembled from a repository secret appears in it — `api_image`, `worker_image`,
+`certificate_arn`, `api_hostname`, and each half of an `<repository>@<digest>` pair —
+and refuses just as loudly if `run.auto.tfvars.json` has stopped naming those four, so
+that a guard with nothing to look for is a failure rather than a pass. Both programs are
+lifted out of the workflow and run by `test/release/scenario39.check.ts` against a
+summary that leaks a hostname and one that does not. Terraform's diagnostics are on
+stderr and still reach the log, which is what the stage exists to show.
+
+What none of these stages proves is in 8.1, and the rehearsal's permanent limits are in
+`docs/decisions/g12-what-the-rehearsal-cannot-prove.md`.
+
+What the `full` stage does, in order, and why the order is the order. Each item is
+tagged with the earliest stage that runs it, and a stage runs everything the stages
+before it run:
+
+1. [plan] **Refuse anything that is not a digest.** Two `sha256:` values, and they must differ — one image pushed under both names is a mistake the gate can catch and a person cannot.
+2. [plan] **Name the principal.** `infra/scripts/rehearsal-caller-identity.sh fss-rh-deploy` prints `aws sts get-caller-identity --query Arn` and refuses anything that is not `arn:aws:sts::…:assumed-role/fss-rh-deploy/<session>`. Every `terraform` command in this job then runs with `-var="assume_deployment_role=false"`, because this session already *is* the deployment role and the provider must not ask STS to assume the role it already holds (`infra-apply-runbook.md` 1.1). The flag makes the job's own credentials the thing the apply acts as, so this step is what makes it safe; it is the one the teardown repeats.
+3. [plan] **Record the production inventory.** So that "teardown could not address production" is measured afterwards rather than asserted. This is the one rehearsal command that names a production resource on purpose, and on the first credentialed run (Actions 35548888865) the rehearsal's own guard refused it — `FAIL: a rehearsal command names a production resource: Key=Name,Values=fss-prod*` — before anything was created. It is now issued through one named function, `rehearsal_read_production_inventory` in `infra/scripts/rehearsal-common.sh`, which is the only caller exempt from the refusal, may issue only `resourcegroupstaggingapi get-resources`, and builds its own filter so no caller can push a name through it. Every other command naming `fss-prod` — including a mutating one wearing the same filter — is still refused. The dry run prints the read with an `exempt-read-only-production-inventory` marker and `infra/scripts/rehearsal-prefix-guard.sh <prefix> plan <file>` re-applies the refusal to that printed plan on every pull request, so a rehearsal that would refuse itself is red before a credential is spent.
+4. [plan, then create] **Plan, then create.** The variables the root requires are written to `run.auto.tfvars.json` beside the root, the backend is initialised against this run's own state key, and `terraform plan -out` is run with the whole `-var` list. The `create` stage then applies, and names **no variable of its own**: Terraform loads `run.auto.tfvars.json` automatically from the root directory, which is the same mechanism the teardown's `terraform destroy` depends on. One list in one place is what keeps the plan and the apply the same values. The apply creates the rehearsal root with the run prefix and `bootstrap=true`, deploying both digests from the stable `fss-rh-api` and `fss-rh-worker` repositories. **Both services are created at desired count zero.** A fresh environment's database has no schema, and both binaries refuse to start unless the applied schema version is exactly the range they declare — so an apply that started them would create two services crash-looping against an empty database while the task that would fix it had not been launched. The run creates no repository of its own and its teardown removes none; `infra/roots/rehearsal-registry` owns those two and was applied once, before the first push.
+5. [deploy] **Fill the two database entries.** Terraform creates every Secrets Manager entry empty and never holds a value. In production you fill these two by hand (5.1); a rehearsal is unattended and an hour long, so it fills its own: `migration-database` takes the RDS-managed master credentials, because on a database that has never been migrated there is no other login role that can run DDL, and `app-runtime-database` takes a password generated in the runner. Both are masked before they can reach a log. This needs `secretsmanager:PutSecretValue` on `fss-rh-*` secrets on `fss-rh-deploy` — see 8.1.
+6. [deploy] **Migrate, then deploy the worker, then the API.** `infra/scripts/release-deploy.sh infra/roots/rehearsal <prefix> --schema-change` — the *same script* you run locally for production (section 4.1). It scales to zero if anything is running, runs `fss migrate` as a one-off ECS task inside the VPC, then `fss admin database-users ensure`, then `fss verify`, then the worker to its declared count, then the API, then `fss verify` again against the running deployment. Never beside each other: the API's declared schema range needs the migration to have run. Until 21 September nothing in deployment ran a migration at all; the step was named for an order it did not perform.
+7. [full] **The declared ranges, against the deployed images** (`infra/scripts/rehearsal-schema-ranges.sh`): Appendix G 22's refusal cases, which only a real ECS task can answer.
+8. [deploy] **Smoke** with the same `scripts/productionSmoke.mjs` production gets.
+9. [full] **Release suite (recorded mode, runner)**: the 42 scenarios (`npm run test:release`) and the **mutation check** (`npm run test:release:mutation`), which breaks each trap in turn and requires the suite to go red. They run in the runner against the job's own `postgres:16` service container, which is what they were built for. They do **not** touch the rehearsal database and could not: it is private — `publicly_accessible = false`, no NAT gateway, no bastion — so the step that used to assemble a URL from the rehearsal's outputs could never have connected. What runs against the rehearsal database is `fss verify` and `fss drill`, inside the VPC.
+10. [full] **Restore drill**, Appendix E steps 1 to 9. The runner keeps the control plane (reading the latest restorable point, the restore itself, the wait, the teardown); two in-VPC tasks do the database work — `fss admin counts` for the baseline on the source, then one `fss drill` against the restored instance for steps 1 to 9, with one correlated log and per-step JSON. The runner reads the report and decides whether it is a pass, so a change to the tool cannot quietly relax the gate. It refuses to report a pass unless the baseline contained an accepted send, a reply, a suppression, a CRM edit and a migration — a drill against an empty database proves nothing. The drill task is fixed at `FSS_DEPENDENCIES=recorded` **in its task definition**, because `reconcile-sent`, `recover` and `watch-renew` all reach Gmail when it is live and a mode a caller passes is a mode a caller can forget.
+11. [full] **Suppression journal replay and Gmail reconstruction**, against the recorded fake (no real mailbox in rehearsal unless you provide a rehearsal Google project). The second replay must insert nothing; no send may repeat. The drill above already ran both; this step reads the reports it left, which the drill wrote out of the captured task report under the names they have always had.
+12. [full] **Carry watermark** (Appendix G 20): the carry tooling must contain no writer at all, and — once a cutover is scheduled and the two optional secrets exist — the export must refuse a table with a post-watermark write. Before the cutover the step prints `carry drill skipped: no cutover watermark yet` and the record says `"carryDrill": "skipped_no_watermark"`. That is not a pass being claimed; it is the state being named.
+13. [every stage] **Tear down**, always, with bypass-governance — and tolerantly. The teardown is five steps (any one-off task still running, the restored instance, any manual snapshot carrying the run prefix, the object-locked journal objects, the root), and each treats the AWS error code for absence as "already done" rather than as a failure, because `if: always()` means it runs after a creation that never happened. A failure that is *not* an absence — an `AccessDenied`, a throttle — still stops it, and an unreadable state that is not "the root was never initialised" still stops it. The report says which: `destroyed=true`, or `destroyed=nothing_created`. `terraform destroy` requires every variable `apply` did, so the step that opens item 4 writes them to `run.auto.tfvars.json` beside the rehearsal root (identifiers only, ignored by `infra/.gitignore`) and the teardown refuses to destroy without that file rather than fail on a missing variable and leave the environment standing. To tear a run down by hand from a fresh checkout, recreate the file first: `name_prefix`, `api_image` and `worker_image` (`<repository>@<digest>`, from the release record or the run's inputs), `certificate_arn`, `api_hostname`, `assume_deployment_role: false`, `bootstrap: true`, and the two schema ranges read from `packages/domain/db/schemaRange.ts`; then run `rehearsal-teardown.sh <prefix>` from the root directory as the `fss-rh-deploy` session.
+14. [every stage] **Assert nothing with the production prefix was touched**, always, including on a run that created nothing. The guard classifies every name it sees: the run's own resources, the two stable rehearsal repositories that carry no run, and anything production's — which it refuses. A state it cannot list is reported as "the run created nothing" rather than swallowed, and the inventory comparison still runs. An inventory recorded only by a dry run is refused rather than compared: the workflow records the sentinel `["dry-run: no production inventory was read"]` when it validates the prefix, and comparing production against that would be a pass nobody earned. The guard runs in dry mode on every pull request, so every branch is exercised without a credential.
+15. [full] **Write the release record**, last. It names the two digests, the desktop stamp, and a `releaseGateReference` you will need in section 6.
+
+If any step fails, steps 13 and 14 still run and no record is written. That is the design: there is no such thing as a partially passed release gate — and it is why a `plan`, `create` or `deploy` run writes no record either. A stage that stopped early and a stage that was never asked to go that far look the same to section 6, which is the correct answer to both.
 
 ### 3.1 Watching it without credentials
 
@@ -573,6 +661,77 @@ Dispatched on 21 September 2026 at commit 02cd48e7 (Actions run 35602423640, aft
 - *"The apply names every variable the root requires."* It named six of eight. `api_schema_range` and `worker_schema_range` have no default in `infra/roots/rehearsal/variables.tf`, and the apply was refused at variable evaluation with "The root module input variable api_schema_range is not set". Nothing had ever compared the workflow's `-var` list with the root's required variables: the dry-run job never runs `terraform`, and the offline gate's `terraform test` sets its own variables. Fixed: the workflow reads both ranges from the source (as `greenfield-images.yml` does) and passes them; scenario 22 derives the required list from `variables.tf` and reads the workflow for each name, with a mutation that removes one line.
 - *"The teardown can destroy what the apply created."* Untested by this run, but the same reading shows it could not have: `terraform destroy` requires the same variables and the teardown passed only `name_prefix`. On a run that got past the apply, the teardown would have been refused and the environment left standing. Fixed: the create step writes `run.auto.tfvars.json` beside the root and the teardown refuses without it (section 3, step 13).
 - Everything from the fill step onwards — 8.0a items 2 to 5 — is still untested.
+
+### 8.0c What the third credentialed run proved, and what it refuted
+
+Dispatched on 21 September 2026 at commit 845c6ed5 (Actions run 35611374218), the first
+run with G12i's variables in place.
+
+**Proved.**
+
+- *"The apply names every variable the root requires."* It does now. The run got past
+  variable evaluation, which is where the second run stopped, and
+  `run.auto.tfvars.json` was written beside the root before the apply, in the same
+  step and printing the count it wrote — so the teardown of a run that had created
+  something would have had the values `terraform destroy` requires. 8.0b's first
+  refutation is closed.
+- The per-run state key works a second time: `terraform init -reconfigure` against
+  `fss/greenfield/rehearsal/<prefix>/terraform.tfstate` succeeded, as it did on the
+  second run. The backend, the lock table and the state KMS key are no longer a guess.
+- The teardown and the post-run guard ran, as `if: always()` makes them, on a run that
+  had created nothing — the case section 3 step 13 describes — and **no release record
+  was written**, because the record step follows a failed step and is skipped.
+
+**Refuted.**
+
+*"The rehearsal root can be planned in CI."* It cannot, or could not: `terraform plan`
+failed with two independent errors before it reached AWS at all.
+
+```
+Error: Attempted to load application default credentials since neither `credentials` nor `access_token` was set in the provider block. No credentials loaded.
+  with provider["registry.terraform.io/hashicorp/google"], on providers.tf line 33, in provider "google"
+
+Error: Invalid count argument
+  on ../../modules/alerts/main.tf line 262: count = var.kms_key_arn == null ? 1 : 0
+  The "count" value depends on resource attributes that cannot be determined until apply.
+```
+
+Neither is an AWS fact and neither had anything to do with the other; Terraform reports
+independent plan-time errors together, which is the one piece of luck in the sequence.
+
+**Why no offline layer saw either of them.** Three layers run on every pull request and
+all three are blind to plan-time reality in the same way:
+
+- `terraform validate` and `terraform fmt` never configure a provider, so a provider
+  that cannot obtain a credential is not a validation error. At 845c6ed5 the rehearsal
+  required the Google provider only because `infra/modules/stack` held `module
+  "pubsub"`, and Terraform configures every *required* provider during plan even when
+  the module has zero instances. G12j moves that module to the production root and
+  removes the provider and the `gcp_*` variables from the rehearsal root, so the
+  rehearsal no longer declares it at all.
+- `terraform test` with `mock_provider` sets `override_during = plan`, which makes
+  computed attributes **known** during plan — the opposite of what a real plan does.
+  The alerts module's own tests also pass a literal `kms_key_arn`, so the expression
+  `count = var.kms_key_arn == null ? 1 : 0` was never evaluated against the unknown the
+  stack actually passes it (`module.observability.kms_key_arn`, a key created in the
+  same apply).
+- The dry-run job scans the scripts and prints their plan; it runs no `terraform` at
+  all, by design, because it holds no credential.
+
+The discovery tool for this class is a real `terraform plan` and nothing else. Both
+errors are G12j's: the alerts module takes a plan-time-known boolean instead of testing
+the ARN for null, `module "pubsub"` moves to the production root so the rehearsal
+requires no Google provider, and the mock providers keep computed values unknown so
+`terraform test` reproduces a real plan. G12k is the other half: the rehearsal workflow
+gained the `plan` stage (3.0), so the next error of this class costs minutes rather than
+a whole gate, and the local production plan (`infra-apply-runbook.md`, "Plan first")
+comes before even that.
+
+Three runs, three errors, one per run, each of a class the pull request could not see:
+a guard refusing its own read (8.0), two unpassed required variables (8.0b), and a
+provider with no credential beside a `count` on an unknown (here). The rule they add up
+to is in COMMON-G and in the decision record
+`docs/decisions/g12k-the-rehearsal-has-stages-and-one-gate.md`.
 
 ### 8.1 Still unverified
 
