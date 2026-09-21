@@ -45,9 +45,63 @@ Create two roles in `326255650484`:
 
 **You never assume `fss-rh-deploy`.** It trusts the GitHub OIDC provider and the subject `repo:david-cui-bruno/founding-sales:environment:rehearsal` alone, so every apply and every teardown in the `fss-rh-` namespace is a workflow run in the `rehearsal` environment: the release rehearsal (`greenfield-release.yml`) and the one registry apply (`greenfield-rehearsal-registry.yml`, section 2.1). A local `terraform apply` against either rehearsal root is refused `sts:AssumeRole`, and that refusal is the boundary working. `fss-prod-deploy`, by contrast, is yours: section 3.2's production applies are local commands.
 
-The scoping on `fss-rh-deploy` is what makes Appendix G scenario 39 true in the cloud rather than only in the plan. The `fss-rh-` condition belongs on every statement that supports a resource ARN, including `iam:DeleteRole`, `rds:DeleteDBInstance`, `s3:DeleteBucket`, `ecs:DeleteService`, `secretsmanager:DeleteSecret` and `kms:ScheduleKeyDeletion`. Where a service has no resource-level permission, use a `aws:ResourceTag/NamePrefix` condition against the tag the stack sets on every resource.
+The scoping on `fss-rh-deploy` is what makes Appendix G scenario 39 true in the cloud rather than only in the plan. The `fss-rh` condition belongs on every statement that supports a resource ARN, including `iam:DeleteRole`, `rds:DeleteDBInstance`, `s3:DeleteBucket`, `ecs:DeleteService`, `secretsmanager:DeleteSecret` and `kms:ScheduleKeyDeletion`. Where a service has no resource-level permission, use a `aws:ResourceTag/NamePrefix` condition against the tag the stack sets on every resource.
 
 Until those roles exist, `terraform plan` will fail at provider configuration. That is the intended failure: neither root will act as an unconstrained principal.
+
+#### 1.1a The policies are in the repository. These are the commands.
+
+**This section used to be the policy.** It described the two roles in prose and the repository shipped no document, so both policies were written from that prose — and on 21 September the fourth credentialed rehearsal (Actions run 35628963637) applied with them and reported 25 errors in six classes, then failed its teardown and left a bucket behind. Six classes, one run, none of them visible to any offline check here, because there was nothing offline to check.
+
+The policy is now `infra/policies/deployment-role-policy.json.tftpl`, rendered by a script that makes no call, and `test/release/deploymentRolePolicy.check.ts` walks every `resource "aws_*"` type in `infra/modules` and `infra/roots` and fails when one of them needs an action the rendered policy does not allow — or allows and then cancels with a blanket deny, which is what happened to all eight Secrets Manager entries. `infra/policies/terraform-resource-actions.json` is the map it reads, one entry per resource type, and it is meant to be read. `docs/decisions/g16-the-deployment-role-policy-is-code.md` lists every change against David's hand-written policies.
+
+**Read the document before you put it.** It is a whole inline policy, not a delta: `put-role-policy` replaces the policy of that name entirely.
+
+```bash
+cd <repo root>
+
+# 1. Render both, and read them.
+infra/scripts/render-deployment-role-policy.sh fss-rh   > /tmp/fss-rh-deploy-scope.json
+infra/scripts/render-deployment-role-policy.sh fss-prod > /tmp/fss-prod-deploy-scope.json
+
+infra/scripts/render-deployment-role-policy.sh fss-rh   --sids   # what is in it, by effect
+infra/scripts/render-deployment-role-policy.sh fss-prod --sids
+
+# What is about to change, against what the role holds today.
+diff <(aws iam get-role-policy --role-name fss-rh-deploy --policy-name fss-rh-deploy-scope \
+         --query PolicyDocument | python3 -m json.tool) \
+     <(python3 -m json.tool /tmp/fss-rh-deploy-scope.json) || true
+
+# 2. Put them. The policy name is the one the roles already carry.
+aws iam put-role-policy --role-name fss-rh-deploy --policy-name fss-rh-deploy-scope \
+  --policy-document file:///tmp/fss-rh-deploy-scope.json
+
+aws iam put-role-policy --role-name fss-prod-deploy --policy-name fss-prod-deploy-scope \
+  --policy-document file:///tmp/fss-prod-deploy-scope.json
+```
+
+To keep the exact certificate ARNs the hand-written policies named, pass them; the default is every certificate in the account and region, because the ARNs themselves are the `rehearsal` environment secret `FSS_REHEARSAL_CERTIFICATE_ARN` and its production counterpart, and a repository that shipped them would hold a value the workflow deliberately keeps out of it. `acm:DescribeCertificate` is read-only either way.
+
+```bash
+FSS_POLICY_CERTIFICATE_ARN=arn:aws:acm:us-east-1:326255650484:certificate/<rehearsal id> \
+  infra/scripts/render-deployment-role-policy.sh fss-rh > /tmp/fss-rh-deploy-scope.json
+```
+
+**3. Then the check, before any apply.** Read-only: it calls `aws iam simulate-principal-policy`, which evaluates a policy and performs nothing, against sample ARNs of the namespace that need not exist. It asks about every action of run 35628963637 and at least one per service, prints allowed or denied for each, and exits non-zero on any denial.
+
+```bash
+infra/scripts/check-deployment-role.sh fss-rh-deploy   fss-rh
+infra/scripts/check-deployment-role.sh fss-prod-deploy fss-prod
+
+# What it would ask, without asking: no credential, no call.
+FSS_CHECK_ROLE_DRY_RUN=1 infra/scripts/check-deployment-role.sh fss-rh-deploy fss-rh
+```
+
+Each role is asked only about its own namespace and the command refuses the other pairing, because simulating `fss-rh-deploy` against `fss-prod*` would print a wall of denials that are the boundary working and say nothing about the apply you are about to run.
+
+**And the one permission that must never appear on the production role.** `s3:BypassGovernanceRetention` is in the rehearsal document and denied outright in the production one, because a production suppression journal that its deployer can empty is not an append-only record and Appendix E step 2 stops being a recovery. The check is in `docs/greenfield/release.md` 1.2 and the release suite asserts both halves.
+
+**The trust policies are not this lane's and are not in the repository.** `fss-rh-deploy` trusts the GitHub OIDC provider and the subject `repo:david-cui-bruno/founding-sales:environment:rehearsal`; `fss-prod-deploy` trusts David's admin principal. Neither is touched by anything above: `put-role-policy` writes the permission policy, never the trust relationship.
 
 **Who does the assuming, and the one flag that changes it.** Every root takes `assume_deployment_role`, a boolean **defaulting to `true`**: the provider assumes `deployment_role_name` before it makes a call. That is what your local applies do and there is nothing to pass — sections 2.2 and 3.2 are unchanged.
 
@@ -516,7 +570,7 @@ Every statement about resource behaviour here comes from the Terraform schema an
 1. Whether ALB access-log delivery in `us-east-1` is accepted from the `logdelivery.elasticloadbalancing.amazonaws.com` service principal alone. If the load balancer reports an access-log permission error, set `elb_account_id` to the documented Elastic Load Balancing account for `us-east-1` and re-apply; the bucket policy adds the extra statement.
 2. Whether the RDS parameter group values are all dynamic. `rds.force_ssl` is static and requires a reboot; the first apply creates the instance with the group attached, so it applies at creation.
 3. Whether `db.t4g.small` is enough for the scheduler's one-minute pass plus Gmail sync. It is a guess based on one salesperson; watch `OldestRunnableJobAgeSeconds` and the CPU credit balance for the first week.
-4. The exact IAM policy text the two deployment roles need. Section 1.1 states the shape and the condition; the statement list will need one round of least-privilege iteration against a real plan.
+4. ~~The exact IAM policy text the two deployment roles need.~~ **Closed as prose, open as a cloud fact.** The policy is now `infra/policies/deployment-role-policy.json.tftpl`, both documents are rendered by `infra/scripts/render-deployment-role-policy.sh`, and the release suite fails when a resource type in this tree needs an action they do not allow (1.1a). What is still unverified is whether AWS agrees: every condition key and every resource-ARN shape below comes from the service authorization reference, and the only thing that settles them is `infra/scripts/check-deployment-role.sh` against the real roles, then a plan, then an apply.
 5. **Whether `fss-rh-deploy` can read the RDS-managed master secret.** The release workflow assembles the rehearsal database URL in the job from the run's outputs plus `secretsmanager:GetSecretValue` on `database_master_secret_arn` (`docs/decisions/g12c-the-rehearsal-database-url-is-derived.md`). RDS names that secret `rds!db-<id>`, which does **not** begin `fss-rh-`, so a policy scoped purely by name prefix will refuse it. Allow `secretsmanager:GetSecretValue` and `kms:Decrypt` on the specific secret the rehearsal root outputs — not on `*` — or the suite step fails with an `AccessDenied` and no connection string.
 6. Whether `fss-rh-deploy` may create the two durable repositories in `infra/roots/rehearsal-registry`. It should: the names are `fss-rh-api` and `fss-rh-worker` and the condition is on the resource name. It is one apply, and it is the first thing in section 2.
 7. **That a CI plan with `assume_deployment_role=false` reaches AWS at all.** With the flag off the provider has no `assume_role` block, which is the ordinary configuration for a process using ambient credentials — but nothing here has been run. The first workflow run is the proof, and the caller-identity step immediately above the plan prints the session ARN, so a failure at provider configuration can be read rather than guessed. The provider version this rests on is `hashicorp/aws` v5.100.0 under `~> 5.60`; `docs/decisions/g12e-the-provider-does-not-reassume-its-own-session.md` has the schema evidence and what to re-check if the roots ever move to v6.

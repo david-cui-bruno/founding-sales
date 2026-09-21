@@ -1,0 +1,397 @@
+{
+  "Comment": [
+    "FSS greenfield deployment-role policy, as code.",
+    "",
+    "Rendered by infra/scripts/render-deployment-role-policy.sh <fss-rh|fss-prod>; it replaces the whole",
+    "inline policy named <prefix>-deploy-scope on <prefix>-deploy. The structure and most of the Sids are",
+    "David's, retrieved from the two live roles on 21 September 2026; what changed is listed in",
+    "docs/decisions/g16-the-deployment-role-policy-is-code.md, statement by statement, against the 25 errors",
+    "of Actions run 35628963637.",
+    "",
+    "${name_prefix} is the only argument. Everything else is derived from it: the namespace glob",
+    "${name_prefix}*, the deployment role ARN, the Terraform state key glob, and which of the two",
+    "per-role Sid sets the renderer emits (RENDER_ONLY_FOR in the script; the rehearsal keeps the state and",
+    "bypass-governance statements, production keeps the blanket data deny).",
+    "",
+    "Scoping, in the order the services allow it: by the name in the ARN where the ARN carries one; by",
+    "aws:RequestTag/NamePrefix at creation and ec2:ResourceTag/NamePrefix or aws:ResourceTag/NamePrefix",
+    "afterwards where it does not (EC2, KMS keys, CloudFront distributions); Resource * with no condition only",
+    "where the API has no resource at all, which is the read-only metadata statement, the ECS task-definition",
+    "APIs and the CloudFront origin access controls.",
+    "",
+    "IAM ignores white space when it measures an inline policy against the 10,240-character limit, so this file",
+    "is indented for a reader and the renderer checks the measured size anyway.",
+    "",
+    "AWS would ignore this key; the renderer removes it, because a document that carries its own commentary",
+    "into IAM is one nobody can diff against aws iam get-role-policy."
+  ],
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AccountMetadata",
+      "Effect": "Allow",
+      "Action": [
+        "acm:DescribeCertificate",
+        "cloudfront:Get*",
+        "cloudfront:List*",
+        "cloudwatch:Describe*",
+        "cloudwatch:Get*",
+        "cloudwatch:List*",
+        "ec2:Describe*",
+        "ec2:GetSecurityGroupsForVpc",
+        "ecr:Describe*",
+        "ecr:GetAuthorizationToken",
+        "ecr:List*",
+        "ecs:Describe*",
+        "ecs:List*",
+        "elasticloadbalancing:Describe*",
+        "kms:ListAliases",
+        "kms:ListKeys",
+        "logs:Describe*",
+        "logs:List*",
+        "rds:Describe*",
+        "s3:ListAllMyBuckets",
+        "secretsmanager:ListSecrets",
+        "sns:List*",
+        "sts:GetCallerIdentity",
+        "tag:GetResources",
+        "wafv2:Get*",
+        "wafv2:List*"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "NamedResourcesInThisNamespace",
+      "Effect": "Allow",
+      "Action": [
+        "cloudwatch:*",
+        "ecr:*",
+        "ecs:*",
+        "elasticloadbalancing:*",
+        "iam:*",
+        "logs:*",
+        "rds:*",
+        "s3:*",
+        "secretsmanager:*",
+        "sns:*",
+        "wafv2:*"
+      ],
+      "Resource": [
+        "arn:aws:cloudwatch:${aws_region}:${aws_account_id}:alarm:${name_prefix}*",
+        "arn:aws:ecr:${aws_region}:${aws_account_id}:repository/${name_prefix}*",
+        "arn:aws:ecs:${aws_region}:${aws_account_id}:cluster/${name_prefix}*",
+        "arn:aws:ecs:${aws_region}:${aws_account_id}:service/${name_prefix}*/*",
+        "arn:aws:ecs:${aws_region}:${aws_account_id}:task/${name_prefix}*/*",
+        "arn:aws:ecs:${aws_region}:${aws_account_id}:task-definition/${name_prefix}*:*",
+        "arn:aws:elasticloadbalancing:${aws_region}:${aws_account_id}:loadbalancer/app/${name_prefix}*/*",
+        "arn:aws:elasticloadbalancing:${aws_region}:${aws_account_id}:targetgroup/${name_prefix}*/*",
+        "arn:aws:elasticloadbalancing:${aws_region}:${aws_account_id}:listener/app/${name_prefix}*/*/*",
+        "arn:aws:elasticloadbalancing:${aws_region}:${aws_account_id}:listener-rule/app/${name_prefix}*/*/*/*",
+        "arn:aws:iam::${aws_account_id}:role/${name_prefix}*",
+        "arn:aws:logs:${aws_region}:${aws_account_id}:log-group:/fss/${name_prefix}*",
+        "arn:aws:logs:${aws_region}:${aws_account_id}:log-group:/fss/${name_prefix}*:log-stream:*",
+        "arn:aws:rds:${aws_region}:${aws_account_id}:db:${name_prefix}*",
+        "arn:aws:rds:${aws_region}:${aws_account_id}:pg:${name_prefix}*",
+        "arn:aws:rds:${aws_region}:${aws_account_id}:subgrp:${name_prefix}*",
+        "arn:aws:rds:${aws_region}:${aws_account_id}:snapshot:${name_prefix}*",
+        "arn:aws:s3:::${name_prefix}*",
+        "arn:aws:s3:::${name_prefix}*/*",
+        "arn:aws:secretsmanager:${aws_region}:${aws_account_id}:secret:${name_prefix}*",
+        "arn:aws:sns:${aws_region}:${aws_account_id}:${name_prefix}*",
+        "arn:aws:sns:${aws_region}:${aws_account_id}:${name_prefix}*:*",
+        "arn:aws:wafv2:${aws_region}:${aws_account_id}:regional/webacl/${name_prefix}*/*"
+      ]
+    },
+    {
+      "Sid": "NamedKmsAliasesInThisNamespace",
+      "Effect": "Allow",
+      "Action": "kms:*",
+      "Resource": "arn:aws:kms:${aws_region}:${aws_account_id}:alias/${name_prefix}*"
+    },
+    {
+      "Sid": "CreateTaggedResourcesInThisNamespace",
+      "Effect": "Allow",
+      "Action": [
+        "cloudfront:CreateDistribution",
+        "cloudfront:CreateDistributionWithTags",
+        "ec2:Create*",
+        "ec2:AuthorizeSecurityGroupIngress",
+        "ec2:AuthorizeSecurityGroupEgress",
+        "ecs:CreateCluster",
+        "ecs:RegisterTaskDefinition",
+        "ecs:TagResource",
+        "elasticloadbalancing:Create*",
+        "elasticloadbalancing:AddTags",
+        "kms:CreateKey"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringLike": {
+          "aws:RequestTag/NamePrefix": "${name_prefix}*"
+        }
+      }
+    },
+    {
+      "Sid": "ManageTaggedEc2ResourcesInThisNamespace",
+      "Effect": "Allow",
+      "Action": "ec2:*",
+      "Resource": "*",
+      "Condition": {
+        "StringLike": {
+          "ec2:ResourceTag/NamePrefix": "${name_prefix}*"
+        }
+      }
+    },
+    {
+      "Sid": "AdoptTheVpcDefaultSecurityGroupBeforeItCarriesATag",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:RevokeSecurityGroupIngress",
+        "ec2:RevokeSecurityGroupEgress",
+        "ec2:CreateTags"
+      ],
+      "Resource": "arn:aws:ec2:${aws_region}:${aws_account_id}:security-group/*",
+      "Condition": {
+        "Null": {
+          "ec2:ResourceTag/NamePrefix": "true"
+        }
+      }
+    },
+    {
+      "Sid": "ManageTaggedKmsKeysInThisNamespace",
+      "Effect": "Allow",
+      "Action": [
+        "kms:CancelKeyDeletion",
+        "kms:CreateAlias",
+        "kms:CreateGrant",
+        "kms:Decrypt",
+        "kms:DeleteAlias",
+        "kms:DescribeKey",
+        "kms:DisableKey",
+        "kms:DisableKeyRotation",
+        "kms:EnableKey",
+        "kms:EnableKeyRotation",
+        "kms:Encrypt",
+        "kms:GenerateDataKey",
+        "kms:GenerateDataKeyWithoutPlaintext",
+        "kms:GetKeyPolicy",
+        "kms:GetKeyRotationStatus",
+        "kms:ListGrants",
+        "kms:ListResourceTags",
+        "kms:PutKeyPolicy",
+        "kms:ReEncryptFrom",
+        "kms:ReEncryptTo",
+        "kms:RetireGrant",
+        "kms:RevokeGrant",
+        "kms:ScheduleKeyDeletion",
+        "kms:TagResource",
+        "kms:UntagResource",
+        "kms:UpdateAlias",
+        "kms:UpdateKeyDescription"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringLike": {
+          "aws:ResourceTag/NamePrefix": "${name_prefix}*"
+        }
+      }
+    },
+    {
+      "Sid": "ManageTaggedCloudFrontResourcesInThisNamespace",
+      "Effect": "Allow",
+      "Action": [
+        "cloudfront:DeleteDistribution",
+        "cloudfront:GetDistribution",
+        "cloudfront:GetDistributionConfig",
+        "cloudfront:TagResource",
+        "cloudfront:UntagResource",
+        "cloudfront:UpdateDistribution"
+      ],
+      "Resource": "arn:aws:cloudfront::${aws_account_id}:distribution/*",
+      "Condition": {
+        "StringLike": {
+          "aws:ResourceTag/NamePrefix": "${name_prefix}*"
+        }
+      }
+    },
+    {
+      "Sid": "OriginAccessControlsCannotCarryATag",
+      "Effect": "Allow",
+      "Action": [
+        "cloudfront:CreateOriginAccessControl",
+        "cloudfront:GetOriginAccessControl",
+        "cloudfront:GetOriginAccessControlConfig",
+        "cloudfront:UpdateOriginAccessControl",
+        "cloudfront:DeleteOriginAccessControl",
+        "cloudfront:ListOriginAccessControls"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "TaskDefinitionApisTakeNoResource",
+      "Effect": "Allow",
+      "Action": [
+        "ecs:DeregisterTaskDefinition",
+        "ecs:ListTaskDefinitionFamilies",
+        "ecs:ListTaskDefinitions"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "UseTheEnvironmentCertificate",
+      "Effect": "Allow",
+      "Action": "acm:DescribeCertificate",
+      "Resource": "${certificate_arn}"
+    },
+    {
+      "Sid": "NoSelfModificationOfTheDeploymentRole",
+      "Effect": "Deny",
+      "Action": "iam:*",
+      "Resource": "${deployment_role_arn}"
+    },
+    {
+      "Sid": "NoManagedPolicyButTheOnesTheStackAttaches",
+      "Effect": "Deny",
+      "Action": "iam:AttachRolePolicy",
+      "Resource": "*",
+      "Condition": {
+        "ArnNotEquals": {
+          "iam:PolicyARN": [
+            "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy",
+            "arn:aws:iam::aws:policy/service-role/AmazonRDSEnhancedMonitoringRole"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "NoDeploymentKmsDataAccessOutsideThisNamespaceOrTerraformState",
+      "Effect": "Deny",
+      "Action": [
+        "kms:Decrypt",
+        "kms:Encrypt",
+        "kms:GenerateDataKey*",
+        "kms:ReEncrypt*"
+      ],
+      "NotResource": "${state_kms_key_arn}",
+      "Condition": {
+        "StringNotLike": {
+          "aws:ResourceTag/NamePrefix": "${name_prefix}*"
+        }
+      }
+    },
+    {
+      "Sid": "BypassGovernanceOnRehearsalBucketsOnly",
+      "Effect": "Allow",
+      "Action": [
+        "s3:BypassGovernanceRetention",
+        "s3:DeleteObject",
+        "s3:DeleteObjectVersion"
+      ],
+      "Resource": "arn:aws:s3:::${name_prefix}*/*"
+    },
+    {
+      "Sid": "FillThisNamespacesDatabaseEntries",
+      "Effect": "Allow",
+      "Action": "secretsmanager:PutSecretValue",
+      "Resource": "arn:aws:secretsmanager:${aws_region}:${aws_account_id}:secret:${name_prefix}*"
+    },
+    {
+      "Sid": "ReadTheRdsManagedMasterSecretOfThisNamespacesInstance",
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:DescribeSecret",
+        "secretsmanager:GetSecretValue"
+      ],
+      "Resource": "arn:aws:secretsmanager:${aws_region}:${aws_account_id}:secret:rds!db-*",
+      "Condition": {
+        "StringLike": {
+          "secretsmanager:ResourceTag/aws:rds:primaryDBInstanceArn": "arn:aws:rds:${aws_region}:${aws_account_id}:db:${name_prefix}*"
+        }
+      }
+    },
+    {
+      "Sid": "NoDeploymentSecretValueAccessButTheRdsManagedMasterSecret",
+      "Effect": "Deny",
+      "Action": "secretsmanager:GetSecretValue",
+      "Resource": "*",
+      "Condition": {
+        "StringNotLike": {
+          "secretsmanager:ResourceTag/aws:rds:primaryDBInstanceArn": "arn:aws:rds:${aws_region}:${aws_account_id}:db:${name_prefix}*"
+        }
+      }
+    },
+    {
+      "Sid": "NoDeploymentS3DataAccessOutsideTerraformState",
+      "Effect": "Deny",
+      "Action": "s3:GetObject*",
+      "NotResource": [
+        "arn:aws:s3:::${state_bucket}/${state_key_glob}"
+      ]
+    },
+    {
+      "Sid": "ThisNamespacesStateObjects",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject"
+      ],
+      "Resource": "arn:aws:s3:::${state_bucket}/${state_key_glob}"
+    },
+    {
+      "Sid": "ThisNamespacesStateLockFileCleanup",
+      "Effect": "Allow",
+      "Action": "s3:DeleteObject",
+      "Resource": "arn:aws:s3:::${state_bucket}/${state_key_glob}.tflock"
+    },
+    {
+      "Sid": "ThisNamespacesStateList",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::${state_bucket}",
+      "Condition": {
+        "StringLike": {
+          "s3:prefix": "${state_key_glob}"
+        }
+      }
+    },
+    {
+      "Sid": "ThisNamespacesStateDynamoLock",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:DeleteItem"
+      ],
+      "Resource": "arn:aws:dynamodb:${aws_region}:${aws_account_id}:table/${lock_table}",
+      "Condition": {
+        "ForAllValues:StringLike": {
+          "dynamodb:LeadingKeys": [
+            "${state_bucket}/${state_key_glob}",
+            "${state_bucket}/${state_key_glob}-md5"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "UseTerraformStateKmsKey",
+      "Effect": "Allow",
+      "Action": [
+        "kms:Decrypt",
+        "kms:Encrypt",
+        "kms:GenerateDataKey"
+      ],
+      "Resource": "${state_kms_key_arn}"
+    },
+    {
+      "Sid": "NoDeploymentDataAccess",
+      "Effect": "Deny",
+      "Action": [
+        "s3:GetObject*",
+        "s3:BypassGovernanceRetention",
+        "secretsmanager:GetSecretValue",
+        "secretsmanager:PutSecretValue"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
