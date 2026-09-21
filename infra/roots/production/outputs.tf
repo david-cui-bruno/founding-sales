@@ -89,13 +89,18 @@ output "updates_distribution_domain_name" {
 }
 
 output "gmail_push_topic_id" {
-  description = "Pub/Sub topic id for Gmail watch requests."
-  value       = module.stack.gmail_push_topic_id
+  description = "Pub/Sub topic id for Gmail watch requests. Empty when this apply did not create the topic."
+  value       = var.enable_gmail_push ? one(module.pubsub[*].topic_id) : ""
 }
 
 output "gmail_push_audience" {
-  description = "Exact audience the API requires on a push token."
-  value       = module.stack.gmail_push_audience
+  description = "Exact audience the API requires on a push token, derived from the API hostname."
+  value       = local.push_audience
+}
+
+output "gmail_push_service_account" {
+  description = "Service account the push token is issued for. The webhook accepts this address and no other."
+  value       = var.enable_gmail_push ? one(module.pubsub[*].push_service_account_email) : ""
 }
 
 # ---------------------------------------------------------------------------

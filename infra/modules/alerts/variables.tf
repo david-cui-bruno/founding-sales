@@ -110,8 +110,46 @@ variable "tags" {
   default     = {}
 }
 
+variable "create_kms_key" {
+  description = <<-EOT
+    Whether this module creates the customer key that encrypts the alert topic.
+
+    It is a boolean the caller states rather than `kms_key_arn == null`, and the
+    difference is the whole reason this variable exists. The ARN a real stack
+    passes is `module.observability.kms_key_arn`, a key created in the *same*
+    apply: while Terraform plans, that value is unknown — not even its nullness
+    is decided — and a `count` that depends on an unknown is refused before AWS
+    is touched ("The count value depends on resource attributes that cannot be
+    determined until apply"). David's third credentialed rehearsal stopped
+    there, in `terraform plan`, on the expression this replaces.
+
+    `docs/decisions/g12j-the-alert-key-is-a-boolean-not-a-null-check.md`.
+  EOT
+  type        = bool
+  default     = true
+
+  validation {
+    # Fail closed, and fail where the plan can see it. With a literal null ARN
+    # this is refused at plan time and names the variable the caller typed. With
+    # an ARN created in the same apply the condition is unknown while planning,
+    # so Terraform defers the check to the apply, where the ARN is a string and
+    # the answer is real. Either way there is no path to an alert topic with no
+    # key at all.
+    condition     = var.create_kms_key || var.kms_key_arn != null
+    error_message = "create_kms_key = false means the topic is encrypted with a key it was given, so kms_key_arn must be set. An alert topic with no customer key is not one of the options: CloudWatch cannot publish through the AWS-managed SNS key."
+  }
+}
+
 variable "kms_key_arn" {
-  description = "An existing customer key for the alert topic. When set, this module creates no key of its own and the key's policy must already admit cloudwatch.amazonaws.com and events.amazonaws.com (the observability module does so with shared_with_alerts = true). Null creates a dedicated key."
+  description = <<-EOT
+    An existing customer key for the alert topic, read only when
+    `create_kms_key` is false. Its policy must already admit
+    cloudwatch.amazonaws.com and events.amazonaws.com; the observability module
+    does so with `shared_with_alerts = true`, which is how logs and alerts share
+    one key (David, 20 September 2026).
+
+    It may be a value this apply computes. Nothing in this module branches on it.
+  EOT
   type        = string
   default     = null
 }

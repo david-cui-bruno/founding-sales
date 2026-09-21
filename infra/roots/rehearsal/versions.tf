@@ -8,10 +8,8 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.60"
     }
-    google = {
-      source  = "hashicorp/google"
-      version = "~> 6.0"
-    }
+    # No Google provider. A required provider is a configured provider, and a
+    # configured Google provider is a credential CI does not have.
   }
 
   # Intentionally unconfigured here. CI initializes one state object per run:

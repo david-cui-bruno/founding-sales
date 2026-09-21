@@ -300,7 +300,19 @@ variable "google_hosted_domain" {
 }
 
 variable "enable_gmail_push" {
-  description = "Create the Gmail push topic and subscription in the production Google Cloud project."
+  description = <<-EOT
+    Create the Gmail push topic and subscription in the production Google Cloud
+    project. The default is true and a production deployment wants it: with push
+    off, `FSS_GMAIL_PUSH_TOPIC` and `FSS_GMAIL_PUSH_SERVICE_ACCOUNT` are empty,
+    and both binaries read them with `required()`, so the API and the worker
+    would refuse to start. Turning it off is for a plan you are reading, not for
+    an environment you intend to run.
+
+    It does not control whether the Google provider is configured. Terraform
+    configures every provider this root requires before it evaluates anything,
+    so a production plan needs application-default credentials either way;
+    `docs/greenfield/infra-apply-runbook.md` 1.3a.
+  EOT
   type        = bool
   default     = true
 }
@@ -320,6 +332,22 @@ variable "gcp_region" {
   description = "Google Cloud region for the provider."
   type        = string
   default     = "us-east1"
+}
+
+variable "gmail_push_path" {
+  description = <<-EOT
+    Path on the API that Pub/Sub pushes to. It is the same route in every
+    environment, and this root builds both the push endpoint and the audience
+    from it, so the subscription and the task definitions cannot disagree about
+    what the webhook will accept.
+  EOT
+  type        = string
+  default     = "/integrations/gmail/push"
+
+  validation {
+    condition     = startswith(var.gmail_push_path, "/")
+    error_message = "The push path is a path on the API, beginning with a slash."
+  }
 }
 
 variable "bootstrap" {

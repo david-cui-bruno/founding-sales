@@ -24,16 +24,6 @@ locals {
   # depending on the module that depends on the journal.
   api_task_role_name    = "${var.name_prefix}-api-task"
   worker_task_role_name = "${var.name_prefix}-worker-task"
-
-  # Google service account ids are capped at 30 characters.
-  service_account_stem = trimsuffix(
-    length(var.name_prefix) > 18 ? substr(var.name_prefix, 0, 18) : var.name_prefix,
-    "-",
-  )
-  push_service_account_id = "${local.service_account_stem}-gmail-push"
-
-  push_endpoint = "https://${var.api_hostname}${var.gmail_push_path}"
-  push_audience = "https://${var.api_hostname}${var.gmail_push_path}"
 }
 
 # The structural isolation guard. Everything downstream inherits name_prefix,
@@ -74,11 +64,6 @@ resource "terraform_data" "environment_guard" {
     precondition {
       condition     = !local.is_production || var.enable_execute_command == false
       error_message = "ECS Exec into a production task is not a deployment-time option."
-    }
-
-    precondition {
-      condition     = !var.enable_gmail_push || var.gcp_project_id != ""
-      error_message = "Gmail push needs its own Google Cloud project id. Rehearsal must never publish into the production project."
     }
   }
 }
@@ -261,23 +246,29 @@ module "cluster" {
     # The three deployment flags of 16.2 and G12's bootstrap. They are first-class
     # inputs rather than entries in extra_environment because each is refused,
     # not defaulted, by the process that reads it.
-    FSS_DEPENDENCIES               = var.dependencies_mode
-    FSS_SENDING_ENABLED            = tostring(var.sending_enabled)
-    FSS_BUSINESS_TIME_ZONE         = var.business_time_zone
-    FSS_DATABASE_HOST              = module.database.address
-    FSS_DATABASE_PORT              = tostring(module.database.port)
-    FSS_DATABASE_NAME              = module.database.database_name
-    FSS_JOURNAL_BUCKET             = module.journal.bucket_name
-    FSS_ENVELOPE_KEY_ID            = module.secrets.envelope_kms_key_id
-    FSS_PUBLIC_ORIGIN              = "https://${var.api_hostname}"
-    FSS_GMAIL_PUSH_AUDIENCE        = var.enable_gmail_push ? local.push_audience : ""
-    FSS_GMAIL_PUSH_SERVICE_ACCOUNT = var.enable_gmail_push ? one(module.pubsub[*].push_service_account_email) : ""
-    # Two public identifiers that used to travel inside the operator-written
-    # Google client secret because nothing carried them (G12's stand-down note).
-    # Empty rather than absent when push is off, so a bootstrap reading the
-    # name learns "not configured" instead of nothing at all.
-    FSS_GMAIL_PUSH_TOPIC     = var.enable_gmail_push ? one(module.pubsub[*].topic_id) : ""
-    FSS_GOOGLE_HOSTED_DOMAIN = var.google_hosted_domain
+    FSS_DEPENDENCIES       = var.dependencies_mode
+    FSS_SENDING_ENABLED    = tostring(var.sending_enabled)
+    FSS_BUSINESS_TIME_ZONE = var.business_time_zone
+    FSS_DATABASE_HOST      = module.database.address
+    FSS_DATABASE_PORT      = tostring(module.database.port)
+    FSS_DATABASE_NAME      = module.database.database_name
+    FSS_JOURNAL_BUCKET     = module.journal.bucket_name
+    FSS_ENVELOPE_KEY_ID    = module.secrets.envelope_kms_key_id
+    FSS_PUBLIC_ORIGIN      = "https://${var.api_hostname}"
+    # The three Gmail push identifiers are inputs, not resources this module
+    # creates. The Pub/Sub topic and its push subscription live in
+    # `infra/roots/production`, which is the only root with a Google Cloud
+    # project, so this module requires no Google provider and a rehearsal plan
+    # needs no Google credential
+    # (`docs/decisions/g12j-the-rehearsal-has-no-google-provider.md`).
+    #
+    # All three are public identifiers, and all three are read by
+    # `required()` in both bootstraps: an empty one is a task that refuses to
+    # start, not a task with push switched off.
+    FSS_GMAIL_PUSH_AUDIENCE        = var.gmail_push_audience
+    FSS_GMAIL_PUSH_SERVICE_ACCOUNT = var.gmail_push_service_account
+    FSS_GMAIL_PUSH_TOPIC           = var.gmail_push_topic
+    FSS_GOOGLE_HOSTED_DOMAIN       = var.google_hosted_domain
   })
 
   tags = local.tags
@@ -290,8 +281,16 @@ module "alerts" {
   aws_account_id   = var.aws_account_id
   alert_emails     = var.alert_emails
   metric_namespace = module.observability.metric_namespace
-  kms_key_arn      = module.observability.kms_key_arn
-  tags             = local.tags
+
+  # Logs and alerts share one key (David, 20 September 2026), and the literal
+  # false is how the alerts module learns that at plan time. The ARN beside it
+  # belongs to a key this same apply creates, so its value, and even its
+  # nullness, is unknown while Terraform plans; a `count` that read it was the
+  # second error of the third credentialed rehearsal.
+  create_kms_key = false
+  kms_key_arn    = module.observability.kms_key_arn
+
+  tags = local.tags
 }
 
 module "updates" {
@@ -304,18 +303,13 @@ module "updates" {
   tags           = local.tags
 }
 
-module "pubsub" {
-  source = "../pubsub"
-  count  = var.enable_gmail_push ? 1 : 0
-
-  gcp_project_id          = var.gcp_project_id
-  name_prefix             = var.name_prefix
-  push_service_account_id = local.push_service_account_id
-  push_endpoint           = local.push_endpoint
-  push_audience           = local.push_audience
-
-  labels = {
-    environment = var.environment
-    managed_by  = "terraform"
-  }
-}
+# There is no `module "pubsub"` here any more.
+#
+# It was the only Google resource in the stack, and `count = 0` did not make it
+# free: Terraform configures every provider a module *requires* during the plan,
+# so a rehearsal plan in CI asked for Google application-default credentials and
+# was refused before it reached AWS (David's third credentialed rehearsal, 21
+# September 2026). Only production has a Google Cloud project, so only
+# `infra/roots/production` calls the module, and it passes the topic id, the push
+# service account and the audience into this module as three strings.
+# `docs/decisions/g12j-the-rehearsal-has-no-google-provider.md`.

@@ -407,26 +407,64 @@ variable "updates_price_class" {
 # Gmail push
 # ---------------------------------------------------------------------------
 
-variable "enable_gmail_push" {
-  description = <<-EOT
-    Create the Google Cloud Pub/Sub topic and push subscription. A rehearsal
-    root leaves this off unless it has its own Google Cloud project; it must
-    never publish into the production project.
-  EOT
-  type        = bool
-  default     = false
-}
+# This module creates nothing in Google Cloud and requires no Google provider.
+# The topic and its push subscription belong to `infra/roots/production`, the
+# one root with a project; each root passes the three identifiers its task
+# definitions carry. Terraform configures every provider a module *requires*
+# during a plan, even with no instances of it, which is why `module "pubsub"`
+# with `count = 0` still asked CI for a Google credential.
+# `docs/decisions/g12j-the-rehearsal-has-no-google-provider.md`.
+#
+# Each of the three is validated for shape and not for presence. An empty value
+# means "this environment was not told", which both bootstraps refuse at
+# start-up by name; a wrong *shape* is something a plan can catch, and a value
+# the same apply computes is unknown while planning, so the check is deferred
+# to the apply rather than skipped.
 
-variable "gcp_project_id" {
-  description = "Google Cloud project that owns the Gmail push topic."
+variable "gmail_push_topic" {
+  description = <<-EOT
+    `FSS_GMAIL_PUSH_TOPIC` on both task definitions: the fully qualified Pub/Sub
+    topic id `users.watch` registers against, `projects/<project>/topics/<name>`.
+    Production passes `module.pubsub[0].topic_id`, a value that apply computes.
+  EOT
   type        = string
   default     = ""
+
+  validation {
+    condition     = var.gmail_push_topic == "" || can(regex("^projects/[^/]+/topics/[^/]+$", var.gmail_push_topic))
+    error_message = "A Pub/Sub topic id is projects/<project>/topics/<name>. A bare topic name is not what users.watch takes."
+  }
 }
 
-variable "gmail_push_path" {
-  description = "Path on the API that Pub/Sub pushes to."
+variable "gmail_push_audience" {
+  description = <<-EOT
+    `FSS_GMAIL_PUSH_AUDIENCE` on both task definitions: the exact audience the
+    webhook requires in a push token. It is derived from the API hostname and
+    the push path, so it needs no Google resource and every root can always
+    supply it.
+  EOT
   type        = string
-  default     = "/integrations/gmail/push"
+  default     = ""
+
+  validation {
+    condition     = var.gmail_push_audience == "" || startswith(var.gmail_push_audience, "https://")
+    error_message = "The push audience is the HTTPS URL of the webhook. A notification carries a mailbox address and must never travel in the clear."
+  }
+}
+
+variable "gmail_push_service_account" {
+  description = <<-EOT
+    `FSS_GMAIL_PUSH_SERVICE_ACCOUNT` on both task definitions: the one service
+    account whose OIDC token the webhook accepts. Production passes
+    `module.pubsub[0].push_service_account_email`.
+  EOT
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.gmail_push_service_account == "" || can(regex("^[^@[:space:]]+@[^@[:space:]]+$", var.gmail_push_service_account))
+    error_message = "The push service account is an email address, and the webhook compares it exactly."
+  }
 }
 
 variable "extra_tags" {
