@@ -1,5 +1,8 @@
+# Mocked attributes stay unknown for the whole plan phase, as a real provider's
+# are. Nothing below may compare one; the assertions are over declared
+# arguments, module outputs and the alarm inventory.
 mock_provider "aws" {
-  override_during = plan
+  override_during = apply
 
   mock_resource "aws_kms_key" {
     defaults = {
@@ -100,8 +103,13 @@ run "the_three_immediately_critical_conditions_alarm_on_one_datapoint" {
   }
 }
 
+# An apply run, because two of these assertions are about the topic ARN, and an
+# ARN is a value only the apply knows. Mocked providers make the apply offline:
+# no credential, no call, and the values are the mock defaults above. Asserting
+# them during a plan would need `override_during = plan`, which is the setting
+# that hid the rehearsal's error.
 run "criticals_roll_up_into_one_composite_that_notifies_the_topic" {
-  command = plan
+  command = apply
 
   assert {
     condition     = strcontains(aws_cloudwatch_composite_alarm.critical.alarm_rule, "ALARM(\"fss-test-suppression-journal-failure\")")
@@ -132,7 +140,7 @@ run "criticals_roll_up_into_one_composite_that_notifies_the_topic" {
 }
 
 run "delivery_does_not_depend_on_a_gmail_grant" {
-  command = plan
+  command = apply
 
   assert {
     condition     = alltrue([for subscription in aws_sns_topic_subscription.email : subscription.protocol == "email"])
@@ -145,8 +153,13 @@ run "delivery_does_not_depend_on_a_gmail_grant" {
   }
 
   assert {
-    condition     = aws_sns_topic.alerts.kms_master_key_id == aws_kms_key.alerts[0].arn
+    condition     = output.created_own_kms_key && aws_sns_topic.alerts.kms_master_key_id == aws_kms_key.alerts[0].arn
     error_message = "The topic is encrypted with a customer key, because CloudWatch cannot publish through the AWS-managed SNS key."
+  }
+
+  assert {
+    condition     = aws_kms_key.alerts[0].enable_key_rotation && length(aws_kms_alias.alerts) == 1
+    error_message = "The key it creates rotates and carries an alias an operator can read in the console."
   }
 }
 

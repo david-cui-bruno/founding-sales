@@ -290,8 +290,16 @@ module "alerts" {
   aws_account_id   = var.aws_account_id
   alert_emails     = var.alert_emails
   metric_namespace = module.observability.metric_namespace
-  kms_key_arn      = module.observability.kms_key_arn
-  tags             = local.tags
+
+  # Logs and alerts share one key (David, 20 September 2026), and the literal
+  # false is how the alerts module learns that at plan time. The ARN beside it
+  # belongs to a key this same apply creates, so its value, and even its
+  # nullness, is unknown while Terraform plans; a `count` that read it was the
+  # second error of the third credentialed rehearsal.
+  create_kms_key = false
+  kms_key_arn    = module.observability.kms_key_arn
+
+  tags = local.tags
 }
 
 module "updates" {

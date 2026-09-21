@@ -40,6 +40,11 @@ run "a_key_created_in_the_same_apply_plans" {
   }
 
   assert {
+    condition     = output.created_own_kms_key == false
+    error_message = "Given a key, the alerts module must create none of its own, and it must decide that from a value the plan knows rather than from the ARN."
+  }
+
+  assert {
     condition     = output.topic_name == "fss-test-alerts"
     error_message = "The topic is still named from the prefix."
   }

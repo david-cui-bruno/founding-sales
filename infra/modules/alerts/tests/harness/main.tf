@@ -37,13 +37,15 @@ module "alerts" {
   metric_namespace = "FSS/test"
 
   # David's decision of 20 September 2026: logs and alerts share one key, so
-  # the stack creates none here and passes the one it already has.
-  kms_key_arn = aws_kms_key.shared.arn
+  # the stack creates none here and passes the one it already has. The literal
+  # false is the whole fix: it is a value the plan knows.
+  create_kms_key = false
+  kms_key_arn    = aws_kms_key.shared.arn
 }
 
-output "topic_key_arn" {
-  description = "The key the topic is encrypted with."
-  value       = module.alerts.kms_key_arn
+output "created_own_kms_key" {
+  description = "Whether the alerts module created a key of its own."
+  value       = module.alerts.created_own_kms_key
 }
 
 output "alarm_names" {
