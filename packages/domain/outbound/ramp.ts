@@ -1,5 +1,7 @@
 import type { Queryable } from '../db/queryable.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
+import { listApplicableHolds } from '../policy/holds.ts';
+import { authenticationPasses, readPrimarySendingDomain } from './domainGuard.ts';
 import {
   RAMP_ADMIN_RAISE_LIMIT,
   RAMP_HARD_CEILING,
@@ -451,21 +453,79 @@ export async function recordDaySignal(
   );
 }
 
-/** Every mailbox with an open day older than the given business date, for the sweep. */
+/**
+ * Every mailbox with an open day older than the given business date, for the sweep.
+ *
+ * `workspaceId` narrows it to one workspace, which is what the scheduler source wants:
+ * `mailbox_send_days.business_date` is in the *workspace's* zone (migration 0010 says
+ * so beside the column), so "yesterday" is a different date for two workspaces in
+ * different zones and one global cut-off would close one of them a day early.
+ */
 export async function listDaysToClose(
   db: Queryable,
   beforeBusinessDate: string,
+  options: { readonly workspaceId?: string | undefined; readonly limit?: number | undefined } = {},
 ): Promise<readonly { readonly workspaceId: string; readonly mailboxId: string; readonly businessDate: string }[]> {
   const { rows } = await db.query<{ workspace_id: string; mailbox_id: string; business_date: Date | string }>(
     `SELECT workspace_id, mailbox_id, business_date
        FROM mailbox_send_days
       WHERE closed_at IS NULL AND business_date < $1::date
-      ORDER BY business_date`,
-    [beforeBusinessDate],
+        AND ($2::uuid IS NULL OR workspace_id = $2)
+      ORDER BY business_date, mailbox_id
+      LIMIT $3`,
+    [beforeBusinessDate, options.workspaceId ?? null, Math.trunc(options.limit ?? 500)],
   );
   return rows.map(row => ({
     workspaceId: row.workspace_id,
     mailboxId: row.mailbox_id,
     businessDate: asDate(row.business_date) ?? beforeBusinessDate,
   }));
+}
+
+/**
+ * The three health conditions of 12.7 that are not counters on the day itself.
+ *
+ * "The ramp advances only with passing authentication, healthy mailbox coverage, no
+ * provider rate-limit or reputation warning, and acceptable bounce and opt-out
+ * signals." The last clause is `mailbox_send_days`; the first three are read here,
+ * from the same rows the send gate reads before every send, so a day cannot be judged
+ * healthy on facts the gate would have refused:
+ *
+ *   * **authentication** — the workspace's primary sending domain has SPF, DKIM and
+ *     DMARC recorded as passing and automated sending enabled. 12.7's gate is an
+ *     admin's checklist, never a DNS lookup (`docs/decisions/g7-no-dns-lookup.md`).
+ *   * **coverage** — the mailbox is `ready` and no open hold blocks `email_send` for
+ *     it or for its owner, which is `decideSend`'s own pair of checks.
+ *   * **provider warning** — FSS subscribes to no Postmaster Tools feed, so the only
+ *     provider complaint it can observe is an error during dispatch, and that is
+ *     already counted on the day as `provider_errors`. Reporting a second, unsourced
+ *     boolean would be inventing a signal; this one is always false and the counter
+ *     does the work. Named in the decision record as a known limit of version one.
+ *
+ * `null` means the mailbox is not this workspace's, which is a payload naming
+ * somebody else's mailbox rather than a day that cannot be judged.
+ */
+export async function readSendDayHealth(
+  context: RepositoryContext,
+  mailboxId: string,
+): Promise<Omit<RampHealthSignals, 'automatedSent' | 'bounces' | 'optOuts' | 'providerErrors'> | null> {
+  const { rows } = await context.db.query<{ sync_state: string; owner_user_id: string }>(
+    'SELECT sync_state, owner_user_id FROM mailboxes WHERE workspace_id = $1 AND id = $2',
+    [context.scope.workspaceId, mailboxId],
+  );
+  const mailbox = rows[0];
+  if (mailbox === undefined) return null;
+
+  const domain = await readPrimarySendingDomain(context);
+  const holds = await listApplicableHolds(context, {
+    actionKind: 'email_send',
+    ownerUserId: mailbox.owner_user_id,
+    mailboxId,
+  });
+
+  return {
+    authenticationPasses: domain !== null && authenticationPasses(domain) && domain.automatedSendingEnabled,
+    coverageHealthy: mailbox.sync_state === 'ready' && holds.length === 0,
+    providerWarning: false,
+  };
 }

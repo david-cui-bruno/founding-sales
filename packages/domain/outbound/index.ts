@@ -57,6 +57,7 @@ export {
   openSendDay,
   rampHealthFailure,
   readRamp,
+  readSendDayHealth,
   recordDaySignal,
   scheduledCap,
   setAdminCap,
@@ -85,6 +86,7 @@ export {
 export {
   beginReconciling,
   claimForDispatch,
+  fenceForOutgoingMessage,
   holdFence,
   markUnknownTerminal,
   prepareOutboundMessage,

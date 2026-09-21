@@ -156,6 +156,19 @@ At the deadline it claims, releases the `manual_suppression_review` holds its ev
 opened, and stops. The terminal enrollment stops belong to the sequences lane, which
 reads the marker.
 
+**And it is read now.** `consumeSuppressionStops` in
+`packages/domain/sequences/terminalStops.ts`, called by the `sequence.terminal_stop`
+job, takes every `suppression_finalizations` row with `outcome = 'finalized'` whose
+event is still effective and stops each live enrollment it covers — the firm's, for a
+firm-wide do-not-contact; whichever contacts hold the handle, for a handle. It keeps no
+cursor: a marker whose stops have happened covers no live enrollment and so offers
+nothing to do, which makes the drain idempotent without a column to advance. Until lane
+G15 nothing read the marker at all, so a prospect's opt-out suppressed the handle —
+`effective_suppressions` and the send gate refused every send from the moment it
+committed, which is why this was an enrollment-state gap and never a sending leak — and
+left the enrollment running until its next step held.
+`docs/decisions/g15-the-worker-drains-what-the-lanes-left.md`.
+
 ## Running the tests
 
 ```

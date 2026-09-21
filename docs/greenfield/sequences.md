@@ -218,14 +218,34 @@ transaction, for the same reason.
 ## The terminal stop
 
 G3a emits `opportunity.terminal_stop` into `crm_domain_events` in the transaction that
-closes an opportunity. `consumeTerminalStops` reads the stream after this lane's own
-high-water mark, stops every live enrollment of the opportunity and cancels everything
-unexecuted, and advances the cursor in the same transaction.
+closes an opportunity, and `opportunity.manual_mode` in the transaction that makes one
+manual. `consumeTerminalStops` reads both kinds after this lane's own high-water mark,
+stops every live enrollment the event covers, cancels everything unexecuted, writes one
+`enrollment.terminally_stopped` audit event per enrollment, and advances the cursor in
+the same transaction.
 
 The cursor is a `(occurred_at, id)` keyset rather than a timestamp, because two events
 written in one transaction share `now()` to the microsecond. It is only an
 optimisation: stopping is idempotent, so a replay stops nothing twice. See
 `docs/decisions/g8-outbox-cursor.md`.
+
+`consumeSuppressionStops` is the second stream. G4's `suppression_finalizations` marker
+with `outcome = 'finalized'` is Appendix C's "terminal marker" — an event whose terminal
+enrollment stops are owed — and it has no cursor, because the marker's event id is a
+sha256 string and `sequence_event_cursors.last_event_id` is a uuid. What it uses instead
+is stronger: the work *is* the set of live enrollments a still-effective suppression
+covers, read through `effective_suppressions` with the same firm-and-handle query
+`suppressionSource()` uses in `eligibility.ts`, so the enrollments a suppression stops
+are the enrollments the eligibility read refuses. A marker whose stops have happened
+offers nothing to do; an enrollment created after a suppression is stopped rather than
+missed.
+
+**Who calls them.** `apps/worker/src/handlers/terminalStop.ts`, as the
+`sequence.terminal_stop` job, materialized by `terminalStopSource` when either stream
+owes a workspace anything. Until lane G15 nothing called either function at all: closing
+an opportunity Won stopped no enrollment, and a confirmed human reply set the control
+mode and left the sequence running, which is invariant 3. See
+`docs/decisions/g15-the-worker-drains-what-the-lanes-left.md`.
 
 ## Adding a step channel, or a terminal condition
 
