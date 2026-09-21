@@ -108,14 +108,171 @@ rehearsal_refuse_production_arguments() {
   return 0
 }
 
+# The AWS CLI a rehearsal script invokes. A seam, exactly like `${TERRAFORM:-terraform}`
+# below, and it exists for the same reason: the not-found branches of the teardown have
+# to be exercised offline, and the only honest way to exercise "the CLI said the
+# instance does not exist" is to have something say it. Production never sets it.
+rehearsal_aws_command() {
+  echo "${FSS_REHEARSAL_AWS_COMMAND:-aws}"
+}
+
 # Every AWS call in every rehearsal script goes through this.
 rehearsal_aws() {
-  rehearsal_refuse_production_arguments "$@"
+  # `|| return 1`, not a bare call: a refusal must be the function's answer even when
+  # the caller has errexit suppressed — inside an `if`, a `&&` chain or a command
+  # substitution — or the guard would print FAIL and issue the command anyway.
+  rehearsal_refuse_production_arguments "$@" || return 1
   if rehearsal_dry_run; then
     rehearsal_plan "aws $*"
     return 0
   fi
-  command aws "$@"
+  command "$(rehearsal_aws_command)" "$@"
+}
+
+# ---------------------------------------------------------------------------
+# The one exemption from the refusal above, and the shape that keeps it one.
+#
+# Appendix G 39's last clause — "rehearsal teardown cannot address production
+# resources" — is *measured* rather than asserted: `rehearsal-prefix-guard.sh` records
+# the production inventory before the run and compares it afterwards
+# (`docs/greenfield/release.md` 3, step 3). A comparison needs a read, and a read of
+# production names production. The guard above refused it, and that is exactly how far
+# the first credentialed rehearsal got (Actions run 35548888865):
+#
+#   FAIL: a rehearsal command names a production resource: Key=Name,Values=fss-prod*
+#
+# The exemption is structural, not an allow-listed string:
+#
+#   1. one function may make the read, `rehearsal_read_production_inventory`;
+#   2. it checks the service and operation it is about to run against a list of
+#      read-only ones, so the constraint is a test over a value rather than a property
+#      of a literal nobody varies — a mutating verb is refused even from in here;
+#   3. it builds the production filter itself and takes no further arguments, so no
+#      caller can push a production name through it;
+#   4. `rehearsal_aws`, `rehearsal_terraform` and `rehearsal_refuse_production_arguments`
+#      are untouched: every other command naming `fss-prod` is still refused.
+#
+# The plan the dry run prints carries `REHEARSAL_INVENTORY_MARKER` on this one line, and
+# `rehearsal-prefix-guard.sh <prefix> plan <file>` re-runs the same refusal over that
+# printed plan — so a rehearsal that would refuse itself is red on the pull request
+# rather than on the next credentialed run.
+
+# Service and operation pairs the production-inventory read may issue. Read-only by
+# name. Paging is the CLI's (`get-resources` auto-paginates), so no second verb is
+# needed; if one ever is, it is added here and nowhere else.
+REHEARSAL_INVENTORY_READ_ONLY='resourcegroupstaggingapi:get-resources'
+
+# The token that marks the one exempt line of a printed plan.
+REHEARSAL_INVENTORY_MARKER='exempt-read-only-production-inventory'
+
+# What a dry run records in place of an inventory it never read. The `after` phase
+# refuses to compare a real inventory against this: comparing today's production with a
+# fabricated empty list is the vacuous pass this scenario exists to prevent, and the
+# workflow's own "decide the run prefix" step runs the `before` phase in dry mode.
+REHEARSAL_DRY_RUN_INVENTORY='["dry-run: no production inventory was read"]'
+
+# Read the production inventory. The only rehearsal command that may name production.
+#
+#   rehearsal_read_production_inventory <service> <operation>
+#
+# Prints a sorted JSON array of the ARNs of every resource whose `Name` tag begins with
+# the production prefix. Sorted because the API does not promise an order and an
+# unstable order would fail the before/after comparison for no reason; selected locally
+# because `get-resources` tag-filter values are exact matches and do not accept the
+# `fss-prod*` wildcard the first version passed — which would have made the comparison
+# a comparison of two empty lists.
+rehearsal_read_production_inventory() {
+  local service=${1:-} operation=${2:-} pair allowed matched=0
+  pair="$service:$operation"
+  for allowed in $REHEARSAL_INVENTORY_READ_ONLY; do
+    if [ "$pair" = "$allowed" ]; then matched=1; fi
+  done
+  if [ "$matched" -ne 1 ]; then
+    echo "FAIL: the production inventory read may only issue [$REHEARSAL_INVENTORY_READ_ONLY], not '$pair'" >&2
+    return 1
+  fi
+  shift 2
+  if [ "$#" -ne 0 ]; then
+    echo "FAIL: the production inventory read takes no further arguments; it builds its own filter: $*" >&2
+    return 1
+  fi
+
+  # Dry mode prints the line and reads nothing, like every other rehearsal command:
+  # the caller writes `REHEARSAL_DRY_RUN_INVENTORY` where the answer would have gone,
+  # so the plan on stdout stays a plan and the file stays a file.
+  if rehearsal_dry_run; then
+    rehearsal_plan "aws $service $operation --tag-filters Key=Name --output json" \
+      "| select names beginning ${PRODUCTION_PREFIX} # $REHEARSAL_INVENTORY_MARKER"
+    return 0
+  fi
+
+  command "$(rehearsal_aws_command)" "$service" "$operation" \
+    --tag-filters "Key=Name" \
+    --query 'ResourceTagMappingList[].{arn:ResourceARN,name:Tags[?Key==`Name`]|[0].Value}' \
+    --output json | rehearsal_select_production_names
+}
+
+# The local half of the read: everything whose Name tag begins with the production
+# prefix, sorted, as a JSON array. An empty result is an empty array, never an error —
+# an account with no production resources yet is a fact, not a failure.
+rehearsal_select_production_names() {
+  FSS_PRODUCTION_PREFIX="$PRODUCTION_PREFIX" python3 -c '
+import json, os, sys
+
+prefix = os.environ["FSS_PRODUCTION_PREFIX"]
+rows = json.load(sys.stdin) or []
+arns = sorted(
+    row["arn"]
+    for row in rows
+    if isinstance(row.get("name"), str) and row["name"].startswith(prefix) and row.get("arn")
+)
+json.dump(arns, sys.stdout, indent=2)
+sys.stdout.write("\n")
+'
+}
+
+# A cleanup step that finds nothing to clean is done, not failed.
+#
+#   rehearsal_tolerate_absent <what> <command> [argument...]
+#
+# The first credentialed rehearsal created nothing — the inventory read above refused
+# before the apply — and the teardown then failed with `DBInstance
+# fss-rh-…-pg-restored not found`, which stopped it before it reached the bucket and
+# the root. A teardown that cannot run after a failed creation is a teardown that runs
+# least often exactly when it matters most.
+#
+# Absence is recognised by the AWS error *code*, in parentheses, as the CLI prints it.
+# Nothing else is tolerated: an `AccessDenied`, a throttle or a timeout still fails,
+# because "the thing is gone" and "I was not allowed to look" must not be the same
+# outcome.
+REHEARSAL_ABSENCE_ERROR_CODES='DBInstanceNotFound DBInstanceNotFoundFault DBSnapshotNotFound DBSnapshotNotFoundFault NoSuchBucket ResourceNotFoundException ClusterNotFoundException ServiceNotFoundException NoSuchEntity'
+
+rehearsal_tolerate_absent() {
+  local what=$1
+  shift
+  local output status code
+  set +e
+  output="$("$@" 2>&1)"
+  status=$?
+  set -e
+  if [ "$status" -eq 0 ]; then
+    if [ -n "$output" ]; then printf '%s\n' "$output"; fi
+    return 0
+  fi
+  # The verdict goes to stderr, never to stdout: callers capture the command's own
+  # output in a command substitution, and a log line landing in a JSON document is the
+  # sort of thing that turns a tolerated absence into an unreadable failure.
+  for code in $REHEARSAL_ABSENCE_ERROR_CODES; do
+    case "$output" in
+      *"($code)"*)
+        rehearsal_log "$what: already absent ($code), so this step is done" >&2
+        return 0
+        ;;
+    esac
+  done
+  printf '%s\n' "$output" >&2
+  echo "FAIL: $what did not fail because the resource was absent; it failed for another reason" >&2
+  return 1
 }
 
 # The flag every rehearsal Terraform command carries, and the reason it is safe.
@@ -186,7 +343,7 @@ rehearsal_require_deployment_session() {
 
 # Every Terraform call, for the same reason and with the same guard.
 rehearsal_terraform() {
-  rehearsal_refuse_production_arguments "$@"
+  rehearsal_refuse_production_arguments "$@" || return 1
   if rehearsal_dry_run; then
     rehearsal_plan "terraform $*"
     return 0

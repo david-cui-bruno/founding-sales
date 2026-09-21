@@ -57,6 +57,13 @@ name prefixes, under mocked providers, with each root refusing the other's prefi
 `fss-prod`, the identity that ran it was an `fss-rh-` role, and the production resource
 inventory is byte-identical before and after.
 
+**Refuted, 21 September 2026.** "Proved in rehearsal" above was written before any
+rehearsal had run. The first one refused its own production-inventory read and created
+nothing, so none of that paragraph has happened yet. See
+`docs/decisions/g12f-the-rehearsals-own-guard-refused-the-rehearsal.md` and
+`docs/greenfield/release.md` 8.0 for what the run did prove (OIDC, the assumed-role
+session, `if: always()`, and no release record) and what it refuted.
+
 **Only asserted.** The IAM boundary itself. `fss-rh-deploy`'s condition on `fss-rh-*` is
 what makes the last clause true, and a workflow run cannot prove a permission it never
 attempts to use. `rehearsal-common.sh` refuses any argument naming the production prefix

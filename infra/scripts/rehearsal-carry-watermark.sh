@@ -104,6 +104,14 @@ fi
 #    source table would pass this trivially, so the absence of one is a failed setup.
 # ---------------------------------------------------------------------------
 rehearsal_log "asserting the export refuses a table with a write after the watermark"
+# Same precondition as the restore drill, and for the same reason: `fss` is not built
+# by anything in this repository, and a cutover-day drill that found that out here
+# would have found it out too late. Dry mode reaches no `fss`.
+if ! rehearsal_dry_run && ! command -v fss >/dev/null 2>&1; then
+  echo "FAIL: the carry drill runs 'fss carry export' and no fss executable is on PATH." >&2
+  echo "      See docs/greenfield/release.md section 8." >&2
+  exit 1
+fi
 if rehearsal_dry_run; then
   rehearsal_plan "fss carry export --watermark <instant> --source <old table> -> expect refusal post_watermark_write"
   printf '{"refused":"post_watermark_write","post_watermark_writes":1}\n' > "$REPORTS/carry-watermark.json"
