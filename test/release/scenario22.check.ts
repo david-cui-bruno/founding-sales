@@ -72,16 +72,110 @@ describe('Appendix G 22: the declared ranges decide, and a non-overlap is the re
     expect(refusalFor(WORKER_SCHEMA_RANGE, WORKER_SCHEMA_RANGE.maximum + 1)).toBe('database_ahead_of_binary');
   });
 
-  it('the rehearsal script reads the ranges from the source and keeps the deploy order', () => {
+  it('the rehearsal script reads the ranges from the source rather than from a literal', () => {
     const script = readRepositoryFile('infra/scripts/rehearsal-schema-ranges.sh');
     expect(script).toContain('packages/domain/db/schemaRange.ts');
     expect(script).toContain('API_SCHEMA_RANGE');
     expect(script).toContain('WORKER_SCHEMA_RANGE');
     expect(script).toContain('PREVIOUS_RELEASE_SCHEMA_RANGE');
-    // migrate → worker → API, and never beside each other.
-    const workerAt = script.indexOf('-worker" --force-new-deployment');
-    const apiAt = script.indexOf('-api" --force-new-deployment');
-    expect(workerAt).toBeGreaterThan(-1);
-    expect(apiAt).toBeGreaterThan(workerAt);
+  });
+
+  /**
+   * G12h. Until 21 September the deploy order was a heading and not a deployment.
+   *
+   * `rehearsal-schema-ranges.sh` was named "migrate, then worker, then API" and did
+   * two `update-service --force-new-deployment` calls; nothing anywhere ran a
+   * migration, and both binaries refuse to start unless the applied schema version is
+   * exactly the range they declare. On a fresh database that is two services that
+   * never start. These assert the order is now performed rather than described.
+   */
+  it('performs the order in the shared deploy script: migrate, users, verify, worker, API', () => {
+    const script = readRepositoryFile('infra/scripts/release-deploy.sh');
+    const at = (needle: string): number => {
+      const index = script.indexOf(needle);
+      expect(index, `release-deploy.sh does not ${needle}`).toBeGreaterThan(-1);
+      return index;
+    };
+
+    const migrate = at('one_off migrate "$MIGRATION_TASK_DEFINITION" migration migrate');
+    const users = at('one_off database-users "$MIGRATION_TASK_DEFINITION" migration admin database-users ensure');
+    const verify = at('one_off verify-schema "$OPERATIONS_TASK_DEFINITION" operations verify');
+    const worker = at('scale "$WORKER_SERVICE" "$WORKER_TARGET"');
+    const api = at('scale "$API_SERVICE" "$API_TARGET"');
+    const verifyDeployed = at('one_off verify-deployed "$OPERATIONS_TASK_DEFINITION" operations verify');
+
+    expect(users).toBeGreaterThan(migrate);
+    expect(verify).toBeGreaterThan(users);
+    expect(worker).toBeGreaterThan(verify);
+    expect(api).toBeGreaterThan(worker);
+    // A release gate after every deploy, not only before it.
+    expect(verifyDeployed).toBeGreaterThan(api);
+  });
+
+  it('stops during a schema migration and never rolls the database back', () => {
+    const script = readRepositoryFile('infra/scripts/release-deploy.sh');
+    // API first, so no request reaches a schema that is about to move.
+    const stop = script.indexOf('scale "$API_SERVICE" 0');
+    const stopWorker = script.indexOf('scale "$WORKER_SERVICE" 0');
+    expect(stop).toBeGreaterThan(-1);
+    expect(stopWorker).toBeGreaterThan(stop);
+    expect(script.indexOf('scale "$API_SERVICE" 0')).toBeLessThan(
+      script.indexOf('one_off migrate "$MIGRATION_TASK_DEFINITION"'),
+    );
+
+    // And the policy is written where an operator reads it, not only here.
+    const release = readRepositoryFile('docs/greenfield/release.md');
+    expect(release).toContain('stop-during-migration');
+    expect(release).toContain('The database never rolls back');
+  });
+
+  it('creates a fresh environment at desired count zero rather than crash-looping it', () => {
+    // Both binaries refuse an unmigrated database, so an apply that started them
+    // would create two services failing against an empty schema while the task that
+    // would fix it had not been launched. `bootstrap` is the root variable that says
+    // which of the two states an apply is.
+    const cluster = readRepositoryFile('infra/modules/cluster/main.tf');
+    expect(cluster).toContain('api_desired_count    = var.bootstrap ? 0 : var.api_desired_count');
+    expect(cluster).toContain('worker_desired_count = var.bootstrap ? 0 : var.worker_desired_count');
+    // Never `ignore_changes` on the count: that would make it untracked for ever and
+    // take away Terraform's ability to scale to zero for the next schema release.
+    expect(cluster).not.toContain('ignore_changes = [desired_count]');
+
+    for (const root of ['infra/roots/rehearsal/main.tf', 'infra/roots/production/main.tf']) {
+      expect(readRepositoryFile(root)).toContain('bootstrap              = var.bootstrap');
+    }
+    // The rehearsal creates a fresh environment every time, so its default is true.
+    expect(readRepositoryFile('infra/roots/rehearsal/variables.tf')).toMatch(
+      /variable "bootstrap"[\s\S]*?default\s*=\s*true/u,
+    );
+    expect(readRepositoryFile('infra/roots/production/variables.tf')).toMatch(
+      /variable "bootstrap"[\s\S]*?default\s*=\s*false/u,
+    );
+    expect(readRepositoryFile('.github/workflows/greenfield-release.yml')).toContain('-var="bootstrap=true"');
+  });
+
+  it('scales to the count the root declares, read from the plan rather than typed', () => {
+    // A literal in a shell file is a number that drifts from the one in the root.
+    const script = readRepositoryFile('infra/scripts/release-deploy.sh');
+    expect(script).toContain('release_output "$ROOT_DIRECTORY" deployment_plan json');
+    expect(script).toContain('"api.declared_desired_count"');
+    expect(script).toContain('"worker.declared_desired_count"');
+
+    const outputs = readRepositoryFile('infra/modules/cluster/outputs.tf');
+    expect(outputs).toContain('declared_desired_count = var.api_desired_count');
+    expect(outputs).toContain('planned_desired_count  = aws_ecs_service.api.desired_count');
+  });
+
+  it('is the same code path in production, under the operator’s own credentials', () => {
+    const script = readRepositoryFile('infra/scripts/release-deploy.sh');
+    // The environment comes from the prefix, and the root must agree with it.
+    expect(script).toContain('release_environment_for_prefix "$PREFIX"');
+    expect(script).toContain('production:*roots/production');
+    expect(script).toContain('rehearsal:*roots/rehearsal');
+
+    const workflow = readRepositoryFile('.github/workflows/greenfield-release.yml');
+    expect(workflow).toContain('infra/scripts/release-deploy.sh infra/roots/rehearsal');
+    const runbook = readRepositoryFile('docs/greenfield/infra-apply-runbook.md');
+    expect(runbook).toContain('infra/scripts/release-deploy.sh infra/roots/production fss-prod');
   });
 });

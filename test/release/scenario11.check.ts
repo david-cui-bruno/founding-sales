@@ -165,14 +165,30 @@ describe('Appendix G 11: the drill refuses its own missing preconditions', () =>
     expect(output).toContain('restore target 2026-09-21T00:00:00Z');
   });
 
-  it('names the missing fss executable rather than dying halfway through the drill', () => {
-    const { code, output } = runDrill('fss-rh-nocli', {
-      FSS_REHEARSAL_REPORTS: mkdtempSync(join(tmpdir(), 'fss-nocli-')),
-      PATH: `${mkdtempSync(join(tmpdir(), 'fss-nopath-'))}:/usr/bin:/bin`,
+  /**
+   * G12h replaced the second precondition rather than removing it.
+   *
+   * `fss` is not on this machine's PATH and never will be: the database is private,
+   * so every command that touches it runs as a one-off ECS task using the worker
+   * image, and the tool is a command override of that image. What the drill needs
+   * before it creates anything is the release's worker digest, because the wrapper
+   * refuses to launch a task whose registered image is anything else — which is the
+   * release gate at the moment of use. A drill that reconstructed a restored database
+   * with last release's image would pass and prove nothing about this one.
+   *
+   * The refusal is still in the credentialed branch and still tested by running the
+   * script rather than by reading it.
+   */
+  it('refuses to start without the digest the wrapper checks every launch against', () => {
+    const { code, output } = runDrill('fss-rh-nodigest', {
+      FSS_REHEARSAL_REPORTS: mkdtempSync(join(tmpdir(), 'fss-nodigest-')),
+      FSS_RELEASE_WORKER_DIGEST: '',
     });
 
     expect(code).not.toBe(0);
-    expect(output).toContain('no fss executable is on PATH');
+    expect(output).toContain('FSS_RELEASE_WORKER_DIGEST is not set');
+    // And it refuses *before* the restore, not after an RDS instance exists.
+    expect(output).not.toContain('restore-db-instance-to-point-in-time');
   });
 });
 
@@ -242,9 +258,16 @@ describe('Appendix G 11: the drill calls commands that exist, at an instant RDS 
 
   it('calls only commands the tool accepts, with the flags it accepts', async () => {
     const { drillInvocations, parseFssCommand } = await import('../../apps/worker/src/tools/fss/commands.ts');
-    const script = readRepositoryFile('infra/scripts/rehearsal-restore-drill.sh');
-    const invocations = drillInvocations(script);
-    expect(invocations.length, 'the extractor found no fss invocation at all').toBeGreaterThanOrEqual(14);
+    // Both release scripts, because G12h moved the database work into two one-off
+    // tasks (`admin counts` and `drill`) and put three more in the deploy script.
+    // The fourteen admin commands still run — inside `fss drill`, which calls them
+    // as functions — and `apps/worker/test/fssSurface.test.ts` is where each one's
+    // behaviour is asserted.
+    const invocations = [
+      'infra/scripts/rehearsal-restore-drill.sh',
+      'infra/scripts/release-deploy.sh',
+    ].flatMap(path => drillInvocations(readRepositoryFile(path)));
+    expect(invocations.length, 'the extractor found no fss invocation at all').toBeGreaterThanOrEqual(5);
     for (const invocation of invocations) {
       const parsed = parseFssCommand(invocation.argv);
       // A planned line carries prose after the command, so a missing *required* flag is

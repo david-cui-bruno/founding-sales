@@ -892,6 +892,9 @@ describe('Appendix G 39: a teardown of a run that created nothing still tears do
   /** Everything absent, as it is after a run whose creation step never ran. */
   const NOTHING_EXISTS = `
 case "$1 $2" in
+  "ecs list-tasks")
+    echo "An error occurred (ClusterNotFoundException) when calling the ListTasks operation: not found" >&2
+    exit 254 ;;
   "rds delete-db-instance")
     echo "An error occurred (DBInstanceNotFound) when calling the DeleteDBInstance operation: not found" >&2
     exit 254 ;;
@@ -931,7 +934,11 @@ echo "unexpected: $*" >&2; exit 9`;
     });
 
     expect(code, output).toBe(0);
-    // Every one of the four steps ran; before this lane the first stopped the script.
+    // Every one of the five steps ran; before G12f the first stopped the script.
+    // Step 0 is G12h's: a one-off task still running holds an elastic network
+    // interface in a subnet the destroy is about to delete, and a cluster that was
+    // never created is an absence like any other.
+    expect(output).toContain('already absent (ClusterNotFoundException)');
     expect(output).toContain('already absent (DBInstanceNotFound)');
     expect(output).toContain('already absent (NoSuchBucket)');
     expect(output).toContain('4/4 destroying the rehearsal root');
@@ -976,6 +983,7 @@ echo "unexpected: $*" >&2; exit 9`;
     const { code, output } = teardownWorld({
       aws: `
 case "$1 $2" in
+  "ecs list-tasks") echo '[]' ; exit 0 ;;
   "rds delete-db-instance") exit 0 ;;
   "rds describe-db-snapshots") echo '["fss-rh-nothing-final","fss-prod-nightly","fss-rh-someone-else"]' ; exit 0 ;;
   "rds delete-db-snapshot")
@@ -1046,5 +1054,93 @@ echo "unexpected: $*" >&2; exit 9`,
     );
     expect(after.code).not.toBe(0);
     expect(after.output).toContain('the production inventory changed during the rehearsal run');
+  });
+});
+
+/**
+ * G12h: the same clause read from the other direction, and the wrapper that makes it
+ * true at the moment a task is launched.
+ *
+ * Until 21 September every rehearsal script refused an argument naming `fss-prod` and
+ * nothing refused the reverse, because nothing in this repository ran against
+ * production. `infra/scripts/release-deploy.sh` does: it is one code path for the
+ * rehearsal in CI and for David's local production deploy, so a production command
+ * that picked up a rehearsal ARN from a stale shell would scale a rehearsal service
+ * and report success.
+ *
+ * ## The vacuous-pass trap
+ *
+ * Reading the guards out of the source would pass against a wrapper that refuses
+ * everything, and a wrapper that refuses everything is a release that cannot deploy —
+ * discovered in the cloud, on a credentialed run, after an apply. So the guards are
+ * *run*: `test/release/support/runTaskGuards.sh` puts each one against a launch it
+ * must refuse **and** against one it must allow, with every AWS response supplied
+ * through an `FSS_RELEASE_*` variable so nothing reaches a network.
+ */
+describe('Appendix G 39: the refusal is symmetric, and the wrapper enforces it per launch', () => {
+  it('runs every wrapper guard against a launch it must refuse and one it must allow', () => {
+    const reports = mkdtempSync(join(tmpdir(), 'fss-wrapper-'));
+    const output = execFileSync('bash', [repositoryPath('test/release/support/runTaskGuards.sh')], {
+      env: { ...process.env, FSS_REHEARSAL_REPORTS: reports },
+      encoding: 'utf8',
+      stdio: 'pipe',
+    });
+    expect(output).toContain('0 problem(s)');
+    // A floor, so a suite that silently exercised nothing is a failure rather than a
+    // pass: the guard list in the wrapper's own header has sixteen entries.
+    const exercised = Number(/(\d+) wrapper guard\(s\) exercised/u.exec(output)?.[1] ?? '0');
+    expect(exercised).toBeGreaterThanOrEqual(16);
+  });
+
+  it('refuses a rehearsal name from production and a production name from a rehearsal', () => {
+    const common = readRepositoryFile('infra/scripts/release-common.sh');
+    expect(common).toContain('release_refuse_foreign_arguments()');
+    expect(common).toContain('a production command names a rehearsal resource');
+    expect(common).toContain('rehearsal_refuse_production_arguments "$@" || return 1');
+    // The command's own arguments are read too: a `--report /tmp/fss-prod-…` path in
+    // a rehearsal is still a production name.
+    expect(common).toContain('release_refuse_foreign_arguments "$environment" "${command_words[@]}"');
+  });
+
+  it('gives both credentialed workflows a concurrency group and never cancels one in flight', () => {
+    for (const path of [
+      '.github/workflows/greenfield-release.yml',
+      '.github/workflows/greenfield-rehearsal-registry.yml',
+    ]) {
+      const workflow = readRepositoryFile(path);
+      expect(workflow, `${path} declares no concurrency group`).toMatch(/^concurrency:$/mu);
+      // Two rehearsals overlapping share the account, the two stable repositories and
+      // the production-inventory comparison, which is recorded before a run and
+      // compared after it. And a teardown that runs on `always()` must not be
+      // cancelled: a cancelled run still has an environment standing.
+      expect(workflow, `${path} cancels a run that is already holding the namespace`).toContain(
+        'cancel-in-progress: false',
+      );
+    }
+  });
+
+  it('stops every one-off task before the teardown deletes the subnets they are in', () => {
+    const teardown = readRepositoryFile('infra/scripts/rehearsal-teardown.sh');
+    // A running task holds an elastic network interface in a subnet Terraform is
+    // about to delete; the destroy then waits on the subnet and times out, and the
+    // report blames the subnet.
+    const stopAt = teardown.indexOf('0/4 stopping any one-off task still running');
+    const destroyAt = teardown.indexOf('4/4 destroying the rehearsal root');
+    expect(stopAt).toBeGreaterThan(-1);
+    expect(destroyAt).toBeGreaterThan(stopAt);
+    // And every ARN is classified before it is addressed, so another run's task — or
+    // production's — is never a candidate.
+    expect(teardown).toContain('rehearsal_classify_name "$PREFIX" "${task_arn##*:task/}"');
+  });
+
+  it('runs the 42 scenarios in the runner, against a service container, never the rehearsal database', () => {
+    const workflow = readRepositoryFile('.github/workflows/greenfield-release.yml');
+    expect(workflow).toContain('name: Release suite (recorded mode, runner)');
+    expect(workflow).toContain('image: postgres:16');
+    // The rehearsal database is private: no NAT, no bastion, `publicly_accessible =
+    // false`. The step that assembled a URL from the rehearsal's outputs could never
+    // have connected to it, and it is gone.
+    expect(workflow).not.toContain("Assemble the rehearsal database URL from this run's own outputs");
+    expect(workflow).not.toContain('sslmode=require');
   });
 });
