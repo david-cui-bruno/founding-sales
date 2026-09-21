@@ -1,4 +1,5 @@
-import { readRepositoryFile } from './coverage.ts';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 /**
  * The credentialed rehearsal job, read as steps and stages.
@@ -32,7 +33,7 @@ import { readRepositoryFile } from './coverage.ts';
  * anything outside the two grammars the workflow uses.
  */
 
-const WORKFLOW_PATH = '.github/workflows/greenfield-release.yml';
+const WORKFLOW_PATH = fileURLToPath(new URL('../../../.github/workflows/greenfield-release.yml', import.meta.url));
 
 /** The stages, in the order in which each contains the one before it. */
 export const REHEARSAL_STAGES = ['plan', 'create', 'deploy', 'full'] as const;
@@ -51,7 +52,7 @@ export interface WorkflowStep {
 }
 
 export function releaseWorkflowText(): string {
-  return readRepositoryFile(WORKFLOW_PATH);
+  return readFileSync(WORKFLOW_PATH, 'utf8');
 }
 
 function isStage(value: string): value is RehearsalStage {

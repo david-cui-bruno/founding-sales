@@ -5,6 +5,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { mustBeRehearsed, readRepositoryFile, repositoryPath } from './support/coverage.ts';
+import {
+  REHEARSAL_STAGES,
+  embeddedPythonProgram,
+  rehearsalJobSteps,
+  stagesForCondition,
+  stepScript,
+  stepsForStage,
+} from './support/releaseWorkflow.ts';
 
 /**
  * Appendix G 39: "Production and rehearsal Terraform plans use distinct state keys,
@@ -1183,5 +1191,244 @@ describe('Appendix G 39: the refusal is symmetric, and the wrapper enforces it p
     // have connected to it, and it is gone.
     expect(workflow).not.toContain("Assemble the rehearsal database URL from this run's own outputs");
     expect(workflow).not.toContain('sslmode=require');
+  });
+});
+
+/**
+ * G12k: the stages nest, and the two steps that clean up belong to all of them.
+ *
+ * The rehearsal had one credentialed mode, so each of the three runs of 21 September
+ * spent about an hour of David's attention to find one error. `stage` — `plan`,
+ * `create`, `deploy`, `full` — makes the cheap part runnable alone. The risk it
+ * introduces is a stage that is not a prefix of the next: a `deploy` that skipped
+ * something `create` does would be a deploy of an environment nobody created, and a
+ * `plan` that ran a step `full` does not would be a stage nobody designed.
+ *
+ * ## The vacuous-pass trap
+ *
+ * Reading the conditions out of the file and asserting the strings would pass against
+ * a workflow where they were never evaluated, and asserting "every step has a stage
+ * condition" would pass against four stages that all run everything. Closed by turning
+ * each condition into the set of stages it admits, requiring that set to be a suffix of
+ * `[plan, create, deploy, full]` for every step, and requiring each stage to run
+ * *strictly more* steps than the one before it — so a `create` identical to `plan` is a
+ * failure rather than a tautology. `stagesForCondition` refuses any condition grammar
+ * it cannot read, because the permissive reading of an unknown condition is "every
+ * stage", which is the answer that hides a mistake.
+ */
+describe('Appendix G 39: the rehearsal has four stages and each contains the one before it', () => {
+  const steps = rehearsalJobSteps();
+
+  it('reads a job with every step named, so a parser that found nothing is a failure', () => {
+    // The floor. Everything below is derived from this list, and a reader that
+    // silently matched no steps would make each of those assertions vacuously true.
+    expect(steps.length).toBeGreaterThanOrEqual(20);
+    for (const step of steps) expect(step.name.length, `step ${String(step.index)} has no name`).toBeGreaterThan(3);
+    expect(steps.map(step => step.name)).toContain('Write the release record, last');
+    expect(steps.map(step => step.name)).toContain('Tear the rehearsal run down');
+  });
+
+  it('gives every step a stage set that is a suffix of the four, never a hole in the middle', () => {
+    for (const step of steps) {
+      const stages = stagesForCondition(step.condition);
+      const suffix = REHEARSAL_STAGES.slice(REHEARSAL_STAGES.length - stages.size);
+      expect([...stages], `${step.name} runs in a set of stages that is not a suffix`).toEqual([...suffix]);
+    }
+  });
+
+  it('runs strictly more with each stage, so no two stages are the same run', () => {
+    for (const [index, stage] of REHEARSAL_STAGES.entries()) {
+      if (index === 0) continue;
+      const earlier = REHEARSAL_STAGES[index - 1] ?? 'plan';
+      const previous = stepsForStage(earlier, steps).map(step => step.name);
+      const current = stepsForStage(stage, steps).map(step => step.name);
+      for (const name of previous) {
+        expect(current, `${stage} does not run ${name}, which ${earlier} does`).toContain(name);
+      }
+      expect(current.length, `${stage} adds nothing to the stage before it`).toBeGreaterThan(previous.length);
+    }
+    // And the cheapest stage is a real run rather than a shell: it plans.
+    expect(stepsForStage('plan', steps).length).toBeGreaterThanOrEqual(10);
+  });
+
+  it('tears down and re-reads the production inventory in every stage, unconditionally', () => {
+    // These two are what protect against a stage condition being wrong, so neither may
+    // depend on one: `always()` and nothing else. A `plan` run creates nothing, but
+    // "creates nothing" is exactly the claim a broken `if:` would falsify, and the
+    // teardown is tolerant of a run that created nothing (it reports
+    // `destroyed=nothing_created`), so running it costs a few seconds and buys the
+    // guarantee.
+    for (const name of ['Tear the rehearsal run down', 'Nothing with the production prefix was touched']) {
+      const step = steps.find(candidate => candidate.name === name);
+      expect(step, `the rehearsal job has no step named ${name}`).toBeDefined();
+      expect(step?.condition).toBe('always()');
+      for (const stage of REHEARSAL_STAGES) {
+        expect(stepsForStage(stage, steps).map(candidate => candidate.name), `${stage} skips ${name}`).toContain(name);
+      }
+    }
+    // The teardown needs the variables `terraform destroy` requires (G12i), so the
+    // step that writes them is in every stage too.
+    for (const stage of REHEARSAL_STAGES) {
+      expect(stepsForStage(stage, steps).map(step => step.name)).toContain(
+        'Write the variables this run plans, applies and tears down with',
+      );
+    }
+  });
+
+  it('plans in every stage and applies the plan it planned, so the two cannot diverge', () => {
+    const plan = steps.find(step => step.text.includes('terraform plan'));
+    const apply = steps.find(step => step.text.includes('terraform apply'));
+    expect(plan, 'no step of the rehearsal job plans').toBeDefined();
+    expect(apply, 'no step of the rehearsal job applies').toBeDefined();
+    expect([...stagesForCondition(plan?.condition ?? null)]).toEqual([...REHEARSAL_STAGES]);
+    expect(plan?.text).toContain('-out="$plan_file"');
+    // The apply takes the saved plan file and passes no variable of its own: a second
+    // `-var` list is a second set of values, and the summary would then describe a
+    // plan that was not the one applied.
+    expect(apply?.text).toContain('terraform apply -input=false "$RUNNER_TEMP/rehearsal.tfplan"');
+    expect(apply?.text).not.toContain('-var=');
+    expect(apply?.text).not.toContain('-auto-approve');
+  });
+});
+
+/**
+ * G12k: what a `plan` run is allowed to print.
+ *
+ * The plan stage exists to be run often and read quickly, and its output is published
+ * twice — to the job summary and to the ninety-day reports artifact. `terraform plan`
+ * prints values: the image references, the certificate ARN, the hostname, every
+ * attribute it can already resolve. So the summary is built from the machine-readable
+ * plan, out of `address` and `change.actions` and nothing else.
+ *
+ * ## The vacuous-pass trap
+ *
+ * Asserting that the workflow contains a python program that looks careful would pass
+ * against a program that had stopped being run, and against one whose refusal had
+ * become a print. So both programs are lifted out of the workflow and executed: the
+ * summariser against a plan whose values are secret-shaped, and the guard against a
+ * summary that carries one, against a summary that does not, and against a variables
+ * file that has stopped naming the values it is supposed to be looking for.
+ */
+describe('Appendix G 39: a plan run publishes addresses and counts, never values', () => {
+  const script = stepScript('Plan the rehearsal environment, and summarise it without values');
+  /** Secret-shaped, written here: nothing in this repository holds a real one. */
+  const HOSTNAME = 'rehearsal-api.example.invalid';
+  const CERTIFICATE = 'arn:aws:acm:us-east-1:123456789012:certificate/11111111-2222-3333-4444-555555555555';
+  const IMAGE = `123456789012.dkr.ecr.us-east-1.amazonaws.com/fss-rh-api@sha256:${'c'.repeat(64)}`;
+
+  function python(program: string, args: readonly string[]): { readonly code: number; readonly output: string } {
+    const result = spawnSync('python3', ['-', ...args], { encoding: 'utf8', input: program });
+    return { code: result.status ?? 1, output: `${result.stdout}${result.stderr}` };
+  }
+
+  function variablesFile(overrides: Readonly<Record<string, unknown>> = {}): string {
+    const directory = mkdtempSync(join(tmpdir(), 'fss-tfvars-'));
+    const path = join(directory, 'run.auto.tfvars.json');
+    const variables: Record<string, unknown> = {
+      assume_deployment_role: false,
+      bootstrap: true,
+      name_prefix: 'fss-rh-case',
+      api_image: IMAGE,
+      worker_image: IMAGE.replace('fss-rh-api', 'fss-rh-worker'),
+      certificate_arn: CERTIFICATE,
+      api_hostname: HOSTNAME,
+      api_schema_range: { min: 1, max: 1 },
+      worker_schema_range: { min: 1, max: 1 },
+      ...overrides,
+    };
+    for (const [name, value] of Object.entries(overrides)) {
+      if (value === undefined) delete variables[name];
+    }
+    writeFileSync(path, JSON.stringify(variables, null, 2));
+    return path;
+  }
+
+  it('prints one line per resource change, with the action and the address', () => {
+    const summariser = embeddedPythonProgram(script, 'rehearsal-plan-summary:');
+    const directory = mkdtempSync(join(tmpdir(), 'fss-planjson-'));
+    const path = join(directory, 'plan.json');
+    // The shape `terraform show -json` produces, carrying the values a real one has.
+    writeFileSync(
+      path,
+      JSON.stringify({
+        format_version: '1.2',
+        variables: { api_hostname: { value: HOSTNAME } },
+        resource_changes: [
+          {
+            address: 'module.stack.module.cluster.aws_ecs_service.api',
+            change: { actions: ['create'], before: null, after: { name: 'fss-rh-case-api', image: IMAGE } },
+          },
+          {
+            address: 'module.stack.module.network.aws_lb_listener.https',
+            change: { actions: ['create'], before: null, after: { certificate_arn: CERTIFICATE } },
+          },
+          {
+            address: 'module.stack.module.database.aws_db_instance.this',
+            change: { actions: ['no-op'], before: {}, after: {} },
+          },
+        ],
+      }),
+    );
+
+    const { code, output } = python(summariser, [path]);
+
+    expect(code, output).toBe(0);
+    expect(output).toContain('resource changes: 3');
+    expect(output).toContain('  create: 2');
+    expect(output).toContain('  no-op: 1');
+    expect(output).toContain('create module.stack.module.cluster.aws_ecs_service.api');
+    // The positive control above is what makes these three mean something.
+    expect(output).not.toContain(HOSTNAME);
+    expect(output).not.toContain(CERTIFICATE);
+    expect(output).not.toContain(IMAGE);
+  });
+
+  it('refuses to publish a summary that carries a value the run holds', () => {
+    const guard = embeddedPythonProgram(script, 'rehearsal-plan-summary-guard:');
+    const directory = mkdtempSync(join(tmpdir(), 'fss-summary-'));
+    const clean = join(directory, 'clean.txt');
+    writeFileSync(clean, 'resource changes: 1\n  create: 1\ncreate module.stack.module.cluster.aws_ecs_service.api\n');
+    const leaking = join(directory, 'leaking.txt');
+    writeFileSync(leaking, `resource changes: 1\n  create: 1\ncreate ${HOSTNAME}\n`);
+    const partial = join(directory, 'partial.txt');
+    // Half of an image reference is still the account and the repository.
+    writeFileSync(partial, `resource changes: 1\n  create: 1\ncreate ${IMAGE.split('@')[0] ?? ''}\n`);
+
+    const accepted = python(guard, [clean, variablesFile()]);
+    expect(accepted.code, accepted.output).toBe(0);
+    expect(accepted.output).toContain('holds no value of the 4 secret-backed variables');
+
+    const refused = python(guard, [leaking, variablesFile()]);
+    expect(refused.code).not.toBe(0);
+    expect(refused.output).toContain('the plan summary contains the value of api_hostname');
+
+    const half = python(guard, [partial, variablesFile()]);
+    expect(half.code).not.toBe(0);
+    expect(half.output).toContain('the plan summary contains the value of api_image');
+  });
+
+  it('refuses a variables file that has stopped naming what it is supposed to check', () => {
+    // Otherwise the guard passes by having nothing to look for, which is the shape
+    // this whole suite exists to refuse.
+    const guard = embeddedPythonProgram(script, 'rehearsal-plan-summary-guard:');
+    const directory = mkdtempSync(join(tmpdir(), 'fss-summary-empty-'));
+    const clean = join(directory, 'clean.txt');
+    writeFileSync(clean, 'resource changes: 0\n');
+
+    const { code, output } = python(guard, [clean, variablesFile({ api_hostname: undefined })]);
+
+    expect(code).not.toBe(0);
+    expect(output).toContain('this guard would check nothing');
+  });
+
+  it('keeps the plan output itself out of the log and out of the artifact', () => {
+    // `$RUNNER_TEMP` is not `$FSS_REHEARSAL_REPORTS`, which is what the workflow
+    // uploads for ninety days. The summary is copied there; the plan file, the plan
+    // JSON and the plan's own stdout are not.
+    expect(script).toContain('plan_log="$RUNNER_TEMP/terraform-plan.txt"');
+    expect(script).toContain('> "$plan_log"; then');
+    expect(script).toContain('cp "$summary" "$FSS_REHEARSAL_REPORTS/plan-summary.txt"');
+    expect(script).not.toContain('"$FSS_REHEARSAL_REPORTS/rehearsal-plan.json"');
+    expect(script).not.toContain('cat "$plan_log"');
   });
 });
