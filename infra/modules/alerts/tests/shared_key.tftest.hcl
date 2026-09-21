@@ -28,7 +28,7 @@ run "a_shared_key_means_no_key_of_our_own" {
 
   assert {
     condition     = length(aws_kms_key.alerts) == 0 && length(aws_kms_alias.alerts) == 0
-    error_message = "With kms_key_arn set, the alerts module must not create a key or alias."
+    error_message = "With create_kms_key = false, the alerts module must not create a key or alias."
   }
 
   assert {
