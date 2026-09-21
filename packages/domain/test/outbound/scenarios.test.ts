@@ -13,7 +13,12 @@ import {
   resolveUnknownTerminal,
   setAdminCap,
 } from '../../outbound/index.ts';
-import { CLOSED_INSTANT, createOutboundWorld, type OutboundWorld } from './support/outboundWorld.ts';
+import {
+  CLOSED_INSTANT,
+  FIXTURE_BUSINESS_DATE,
+  createOutboundWorld,
+  type OutboundWorld,
+} from './support/outboundWorld.ts';
 
 /**
  * The at-most-once send, against a real PostgreSQL (Appendix G 5, 12, 16, 33, 36 and
@@ -134,6 +139,16 @@ describe('at-most-once sending', () => {
       [world.alpha.workspace.workspaceId, fenceId],
     );
     expect(held.rows.map(row => row.reason_code)).toContain('send_unknown_reconciling');
+
+    // 12.7's third health condition, wired in lane G15: the dispatch that did not
+    // answer `ok` is the only provider complaint FSS can observe, and the day it
+    // happened on records it. Without this the ramp judged every day on nothing.
+    const signalled = await context().db.query<{ provider_errors: number }>(
+      `SELECT provider_errors FROM mailbox_send_days
+        WHERE workspace_id = $1 AND mailbox_id = $2 AND business_date = $3::date`,
+      [world.alpha.workspace.workspaceId, world.alpha.mailboxId, FIXTURE_BUSINESS_DATE],
+    );
+    expect(signalled.rows[0]?.provider_errors).toBe(1);
 
     const settled = await reconcileOutboundMessage(context(), world.reconcileDeps(world.alpha, { gmail }), {
       outboundMessageId: fenceId,
@@ -399,14 +414,21 @@ describe('at-most-once sending', () => {
     expect(report.refusal).toBe('domain_guard');
     expect(gmail.sends).toHaveLength(0);
 
-    // The hold is workspace-scoped, because holding one firm would let the next
-    // firm's send breach the same guard.
-    const holds = await ctx.db.query<{ scope_kind: string; reason_code: string }>(
-      `SELECT scope_kind, reason_code FROM active_holds
+    // The hold is firm-scoped, like every other fence hold. A workspace-scoped one
+    // would block every send including the ones to recipients Google's personal-Gmail
+    // rule does not cover, which is a self-inflicted outage on unaffected traffic;
+    // 12.6 says the guard "holds further *affected* sends".
+    // `docs/decisions/g7-domain-guard-scope.md` records the version that got this
+    // wrong and the scenario that caught it. The comment here said the opposite until
+    // lane G15, so the scope is asserted now rather than described.
+    const holds = await ctx.db.query<{ scope_kind: string; scope_key: string | null; reason_code: string }>(
+      `SELECT scope_kind, scope_key, reason_code FROM active_holds
         WHERE workspace_id = $1 AND source_event_id = $2 AND released_at IS NULL`,
       [workspaceId, blockedId],
     );
     expect(holds.rows[0]?.reason_code).toBe('domain_cap');
+    expect(holds.rows[0]?.scope_kind).toBe('firm');
+    expect(holds.rows[0]?.scope_key).toBe(world.crm.alpha.firmId);
 
     // "It cannot be bypassed with extra mailboxes": the count the guard reads takes
     // no mailbox at all. Structurally there is nothing for a second mailbox to

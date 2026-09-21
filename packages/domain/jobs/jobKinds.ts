@@ -20,6 +20,7 @@ export type IdempotencyProtection = (typeof IDEMPOTENCY_PROTECTIONS)[number];
 
 export const JOB_KINDS = [
   'sequence.action',
+  'sequence.terminal_stop',
   'mail.sync',
   'mail.reconcile',
   'mail.recover',
@@ -30,6 +31,7 @@ export const JOB_KINDS = [
   'suppression.finalize',
   'classify.reply',
   'retention.batch',
+  'outbound.close_send_day',
   'import.batch',
   'canary',
 ] as const;
@@ -45,6 +47,13 @@ export function isJobKind(value: string): value is JobKind {
 export const JOB_KIND_PROTECTION: Readonly<Record<JobKind, IdempotencyProtection>> = Object.freeze({
   // Execution state and the outbound fence; the send itself cannot be rolled back.
   'sequence.action': 'outbound_fence',
+  // Lane G15. Appendix C does not name this work, because revision 3 describes the
+  // terminal stop (7.3, 8.1, 10.2) without saying which process performs it. The
+  // effect is `stopEnrollments`, which touches only enrollments whose `ended_at IS
+  // NULL` and advances its subscriber cursor in the same transaction, so a second run
+  // stops nothing a second time. That is business uniqueness in the same sense as
+  // every row below it.
+  'sequence.terminal_stop': 'business_uniqueness',
   // Message uniqueness and a compare-and-set cursor.
   'mail.sync': 'business_uniqueness',
   // The fence state machine decides; a second reconcile observes, it does not send.
@@ -70,6 +79,12 @@ export const JOB_KIND_PROTECTION: Readonly<Record<JobKind, IdempotencyProtection
   'classify.reply': 'business_uniqueness',
   // Deletion tombstone over a bounded range.
   'retention.batch': 'business_uniqueness',
+  // Lane G15. `mailbox_send_days.closed_at` and `mailbox_send_ramp.last_advanced_on`
+  // are the uniqueness: the advance is `WHERE last_advanced_on IS NULL OR
+  // last_advanced_on < $date`, so closing the same day twice advances the ramp once.
+  // A ramp that could be advanced twice would reach fifty a day in half the time 12.7
+  // allows, which is the outcome the ramp exists to prevent.
+  'outbound.close_send_day': 'business_uniqueness',
   // Command receipt and canonical keys.
   'import.batch': 'business_uniqueness',
   // The completion timestamp, written once.
@@ -89,6 +104,17 @@ export const jobIdempotencyKey = Object.freeze({
   researchPage: (queryHash: string, pageHash: string): string => `research:${queryHash}:${pageHash}`,
   researchFirm: (firmId: string, revision: number): string => `research-firm:${firmId}:${String(revision)}`,
   suppressionFinalize: (eventId: string): string => `suppression-finalize:${eventId}`,
+  /**
+   * The head of the two terminal-stop streams a workspace has not consumed.
+   *
+   * Both halves are in the key because either alone would collapse work the other
+   * stream is owed, and both advance only when the drain that named them succeeded.
+   * A stream with nothing outstanding contributes `none`.
+   */
+  terminalStop: (outboxHead: string | null, markerHead: string | null): string =>
+    `terminal-stop:${outboxHead ?? 'none'}:${markerHead ?? 'none'}`,
+  closeSendDay: (mailboxId: string, businessDate: string): string =>
+    `send-day-close:${mailboxId}:${businessDate}`,
   retentionBatch: (dataKind: string, period: string): string => `retention:${dataKind}:${period}`,
   importBatch: (batchId: string, rowNumber: number): string => `import:${batchId}:${String(rowNumber)}`,
   canary: (quarterHourIso: string): string => `canary:${quarterHourIso}`,

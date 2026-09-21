@@ -4,9 +4,10 @@ import { readFirm, setManualControlMode } from '../crm/index.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { createCallback } from '../dial/index.ts';
 import { listMatches, readMessage } from '../mail/index.ts';
+import { recordDaySignal } from '../outbound/ramp.ts';
 import { releaseHoldsOfEvent } from '../policy/holds.ts';
 import { recordSuppression, type SuppressionJournal } from '../suppression/index.ts';
-import { completeTodayItem } from '../today/index.ts';
+import { businessDateOf, completeTodayItem } from '../today/index.ts';
 import type { ReplyDisposition } from '../src/rules/replyClassification.ts';
 import { REPLY_DISPOSITIONS } from '../src/rules/replyClassification.ts';
 import { listClassifications, proposedDispositionOf } from './store.ts';
@@ -250,6 +251,20 @@ export async function confirmReplyDisposition(
     if (!handle.ok) return refuseClassification('suppression_failed');
     suppressionRecorded = handle.value.eventId;
     consequences.push('handle_suppressed');
+
+    // 12.7's ramp reads the day's opt-outs, and a confirmed `opt_out` is one
+    // (lane G15). Counted here rather than inside `recordSuppression`, because most
+    // suppressions have no mailbox and no day: an import and a do-not-call from a
+    // phone call are not deliverability signals about a mailbox's sending.
+    //
+    // Once per message, because this whole command is one transaction and
+    // `mail_reply_confirmations_one_per_message` refuses the second, so a replay
+    // rolls the count back with it.
+    await recordDaySignal(context, {
+      mailboxId: message.mailboxId,
+      businessDate: await businessDateOf(context, message.internalDate),
+      signal: 'opt_out',
+    });
 
     if (input.firmWideOptOut === true) {
       const firmWide = await recordSuppression(context, {
