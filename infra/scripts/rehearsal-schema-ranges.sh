@@ -53,13 +53,19 @@ current="$(node --experimental-transform-types --disable-warning=ExperimentalWar
 rehearsal_log "api {$api_min,$api_max} worker {$worker_min,$worker_max} previous {$previous_min,$previous_max} schema $current"
 
 # ---------------------------------------------------------------------------
-# The declared order: migrate, then worker, then API.
+# The declared order is not this script's any more (G12h).
+#
+# It used to do the deployment: two `update-service --force-new-deployment` calls and
+# two waits, under a heading that said "migrate, then worker, then API" while nothing
+# anywhere ran a migration. That was the gap David's decision of 21 September closed.
+# The order now lives in `infra/scripts/release-deploy.sh`, which is the one code path
+# for the rehearsal and for production, and which actually migrates — as a one-off
+# ECS task inside the VPC, because the database is private.
+#
+# What is left here is the part that was always this script's: the refusal cases,
+# which a unit test cannot answer because an image either starts or it does not.
 # ---------------------------------------------------------------------------
-rehearsal_log "deploy order: migrate, worker, API"
-rehearsal_aws ecs update-service --cluster "${PREFIX}-cluster" --service "${PREFIX}-worker" --force-new-deployment
-rehearsal_aws ecs wait services-stable --cluster "${PREFIX}-cluster" --services "${PREFIX}-worker"
-rehearsal_aws ecs update-service --cluster "${PREFIX}-cluster" --service "${PREFIX}-api" --force-new-deployment
-rehearsal_aws ecs wait services-stable --cluster "${PREFIX}-cluster" --services "${PREFIX}-api"
+rehearsal_log "deploy order (migrate, worker, API) belongs to release-deploy.sh; this is Appendix G 22's refusal half"
 
 # ---------------------------------------------------------------------------
 # The reverse cases. Each is a `--selftest` with a declared range that disagrees, which

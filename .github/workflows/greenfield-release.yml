@@ -71,6 +71,19 @@ on:
 permissions:
   contents: read
 
+# One rehearsal at a time (G12h, David's condition 7).
+#
+# Two rehearsals overlapping share the account, the two stable ECR repositories and —
+# worse — the production-inventory comparison: each records the inventory before its
+# own run and compares it after, so a second run creating and destroying resources in
+# between makes the first one's comparison meaningless. The teardown is the other
+# half: `if: always()` means a cancelled run still destroys what it made, so
+# `cancel-in-progress` is deliberately **false**. A queued run waits; it does not
+# shoot the one that is already holding the namespace.
+concurrency:
+  group: greenfield-rehearsal
+  cancel-in-progress: false
+
 env:
   TERRAFORM_VERSION: '1.15.8'
   AWS_REGION: us-east-1
@@ -111,17 +124,38 @@ jobs:
             fi
           done
 
-      - name: Every rehearsal script is executable and passes shellcheck-free parsing
+      - name: Every release script is executable and passes shellcheck-free parsing
         run: |
           set -euo pipefail
           status=0
-          for script in infra/scripts/rehearsal-*.sh; do
+          for script in infra/scripts/rehearsal-*.sh infra/scripts/release-*.sh; do
             [ -x "$script" ] || { echo "::error::$script is not executable"; status=1; }
             bash -n "$script" || { echo "::error::$script does not parse"; status=1; }
-            grep -q 'rehearsal-common.sh' "$script" || [ "$script" = "infra/scripts/rehearsal-common.sh" ] \
+            # Every one of them reaches the shared prefix guard, directly or through
+            # `release-common.sh`, which sources `rehearsal-common.sh` itself. G12h
+            # added the second path so that the run-task wrapper could be one engine
+            # used by both environments rather than two copies of the same rules.
+            grep -qE 'rehearsal-common\.sh|release-common\.sh' "$script" \
+              || [ "$script" = "infra/scripts/rehearsal-common.sh" ] \
               || { echo "::error::$script does not use the shared prefix guard"; status=1; }
           done
           exit "$status"
+
+      - name: The run-task wrapper refuses every launch it must refuse
+        env:
+          FSS_REHEARSAL_DRY_RUN: '1'
+          FSS_REHEARSAL_REPORTS: ${{ runner.temp }}/fss-wrapper
+        run: |
+          set -euo pipefail
+          # `aws ecs run-task` is the one call in this release that can do real damage
+          # with the wrong argument, and every guard on it is a judgement an operator
+          # used to make by reading a command line. So each is exercised here, with no
+          # credential, using the `FSS_RELEASE_*` response seams.
+          #
+          # `test/release/scenario22.check.ts` and `scenario39.check.ts` assert the
+          # same refusals from vitest; this is the shell half, and it runs on every
+          # pull request that touches a script.
+          bash test/release/support/runTaskGuards.sh
 
       - name: The prefix guard refuses a production prefix
         run: |
@@ -388,6 +422,23 @@ jobs:
         shell: bash
     env:
       FSS_REHEARSAL_REPORTS: ${{ github.workspace }}/.rehearsal-reports
+    # The release suite's database, in the runner. PostgreSQL 16, which is the
+    # version `infra/modules/database` provisions and the version
+    # `packages/domain/db/testing` starts locally. It is not the rehearsal database
+    # and nothing here can reach that one; see the suite step below.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -470,22 +521,97 @@ jobs:
           # off safe; `infra/scripts/rehearsal-teardown.sh` repeats both, because the
           # teardown runs on `always()` and must not destroy anything as a principal
           # nobody checked.
+          #
+          # `bootstrap=true`: every rehearsal environment is a fresh one, its database
+          # has no schema, and both binaries refuse to start unless the applied schema
+          # version is exactly the range they declare. So the apply creates both
+          # services at desired count zero and `infra/scripts/release-deploy.sh`
+          # scales them after the migration task and `fss verify` have succeeded
+          # (G12h; David's conditions 1 and 2).
           terraform apply -auto-approve -input=false \
             -var="assume_deployment_role=false" \
+            -var="bootstrap=true" \
             -var="name_prefix=${prefix}" \
             -var="api_image=${{ secrets.FSS_REHEARSAL_API_REPOSITORY }}@${{ inputs.api_image_digest }}" \
             -var="worker_image=${{ secrets.FSS_REHEARSAL_WORKER_REPOSITORY }}@${{ inputs.worker_image_digest }}" \
             -var="certificate_arn=${{ secrets.FSS_REHEARSAL_CERTIFICATE_ARN }}" \
             -var="api_hostname=${{ secrets.FSS_REHEARSAL_API_HOSTNAME }}"
 
-      - name: Migrate forward, then deploy the worker, then the API
+      - name: Fill the two database entries this run's tasks resolve
         working-directory: infra/roots/rehearsal
         run: |
           set -euo pipefail
-          # The order is the coordinator's note of 20 September and Appendix G 22's
-          # subject: the API image needs the migration to have run, the worker may
-          # straddle, so migrate → worker → API and never beside each other.
-          ../../scripts/rehearsal-schema-ranges.sh '${{ steps.prefix.outputs.prefix }}'
+          # Terraform creates every Secrets Manager entry empty and never holds a
+          # value. In production David fills these two by hand from stdin (release.md
+          # 5.1). A rehearsal is unattended and lasts an hour, so it fills its own —
+          # which is a real difference from production and is named as one in
+          # `docs/decisions/g12h-the-rehearsal-fills-its-own-database-entries.md`.
+          #
+          # `migration-database` takes the RDS-managed master credentials, because on
+          # a database that has never been migrated there is no other login role that
+          # can run DDL: 0001 creates `app_runtime` and `migration` as NOLOGIN group
+          # roles, and `fss migrate` is the command that creates them.
+          # `app-runtime-database` takes a password generated here and nowhere else;
+          # `fss admin database-users ensure` creates the login user it names.
+          #
+          # Nothing is echoed. Both values are masked before they can reach a log, and
+          # each `put-secret-value` reads from a file descriptor rather than an
+          # argument so neither reaches the process table.
+          master_arn="$(terraform output -raw database_master_secret_arn)"
+          migration_arn="$(terraform output -raw migration_database_secret_arn)"
+          runtime_arn="$(terraform output -raw app_runtime_database_secret_arn)"
+          endpoint="$(terraform output -raw database_endpoint)"
+          database="$(terraform output -raw database_name)"
+
+          master_json="$(aws secretsmanager get-secret-value --secret-id "$master_arn" --query SecretString --output text)"
+          echo "::add-mask::$master_json"
+
+          runtime_password="$(openssl rand -base64 48)"
+          echo "::add-mask::$runtime_password"
+
+          runtime_json="$(SECRET_JSON="$master_json" PASSWORD="$runtime_password" ENDPOINT="$endpoint" DATABASE="$database" python3 - <<'PY'
+          import json, os
+          master = json.loads(os.environ["SECRET_JSON"])
+          host, _, port = os.environ["ENDPOINT"].partition(":")
+          print(json.dumps({
+              "username": "app_runtime_login",
+              "password": os.environ["PASSWORD"],
+              "host": host,
+              "port": int(port or 5432),
+              "dbname": os.environ["DATABASE"],
+          }))
+          PY
+          )"
+          echo "::add-mask::$runtime_json"
+
+          aws secretsmanager put-secret-value --secret-id "$migration_arn" \
+            --secret-string "$master_json" --query 'VersionId' --output text > /dev/null
+          aws secretsmanager put-secret-value --secret-id "$runtime_arn" \
+            --secret-string "$runtime_json" --query 'VersionId' --output text > /dev/null
+          echo "both database entries filled for ${database} at ${endpoint%%:*}"
+
+      - name: Migrate forward, then deploy the worker, then the API
+        env:
+          FSS_RELEASE_WORKER_DIGEST: ${{ inputs.worker_image_digest }}
+        run: |
+          set -euo pipefail
+          # One code path with production (G12h; David's condition 10). The same
+          # script David runs locally under `fss-prod-deploy` runs here under
+          # `fss-rh-deploy`: scale to zero, `fss migrate` as a one-off task inside the
+          # VPC, `fss admin database-users ensure`, `fss verify`, worker, API, verify
+          # again. Never beside each other: the API's declared schema range needs the
+          # migration to have run.
+          infra/scripts/release-deploy.sh infra/roots/rehearsal \
+            '${{ steps.prefix.outputs.prefix }}' \
+            --schema-change \
+            --api-digest '${{ inputs.api_image_digest }}' \
+            --worker-digest '${{ inputs.worker_image_digest }}'
+
+      - name: The declared schema ranges, against the deployed images
+        run: |
+          set -euo pipefail
+          # Appendix G 22's own half: the reverse cases, which only ECS can answer.
+          infra/scripts/rehearsal-schema-ranges.sh '${{ steps.prefix.outputs.prefix }}'
 
       - name: Smoke the rehearsal environment with the production smoke script
         run: |
@@ -519,47 +645,19 @@ jobs:
           NODE_OPTIONS="--experimental-transform-types --disable-warning=ExperimentalWarning" \
             node scripts/productionSmoke.mjs --origin "$origin" --canary-age-seconds "$age" --json
 
-      - name: Assemble the rehearsal database URL from this run's own outputs
-        working-directory: infra/roots/rehearsal
-        run: |
-          set -euo pipefail
-          # There is no FSS_REHEARSAL_DATABASE_URL secret and there must not be. The
-          # database this suite runs against is created by the apply four steps up and
-          # destroyed at teardown, so a static secret could only ever name a database
-          # that no longer exists — or, worse, one that does. The master password is
-          # RDS-generated and RDS-rotated; Terraform never saw it and neither does this
-          # repository. Three outputs plus one Secrets Manager read, masked before the
-          # value can reach a log, and nothing is echoed.
-          endpoint="$(terraform output -raw database_endpoint)"
-          database="$(terraform output -raw database_name)"
-          secret_arn="$(terraform output -raw database_master_secret_arn)"
-
-          secret_json="$(aws secretsmanager get-secret-value \
-            --secret-id "$secret_arn" --query SecretString --output text)"
-
-          # Two lines: the encoded password, then the whole URL. Both are masked,
-          # because a later step that logged only the credential — a psql error, say —
-          # would not be covered by masking the whole string. `quote(safe="")` because
-          # a generated password may contain @, / or :, and a naively concatenated URL
-          # would parse as a different host.
-          credentials="$(SECRET_JSON="$secret_json" ENDPOINT="$endpoint" DATABASE="$database" python3 - <<'PY'
-          import json, os, urllib.parse
-          secret = json.loads(os.environ["SECRET_JSON"])
-          user = urllib.parse.quote(secret["username"], safe="")
-          password = urllib.parse.quote(secret["password"], safe="")
-          print(password)
-          print(f"postgresql://{user}:{password}@{os.environ['ENDPOINT']}/{os.environ['DATABASE']}?sslmode=require")
-          PY
-          )"
-          password="${credentials%%$'\n'*}"
-          url="${credentials#*$'\n'}"
-          echo "::add-mask::$password"
-          echo "::add-mask::$url"
-          echo "FSS_TEST_POSTGRES_URL=$url" >> "$GITHUB_ENV"
-          # The host, which is public, and nothing else.
-          echo "connection string assembled for ${database} at ${endpoint%%:*}"
-
-      - name: Run the Appendix G suite
+      - name: Release suite (recorded mode, runner)
+        env:
+          # The 42 scenarios run in the runner against the job's own PostgreSQL 16
+          # service container, which is what they were built for (`test:greenfield`
+          # uses an embedded PG 16 locally and a service container in CI). They do
+          # not touch the rehearsal database and must not: it is private —
+          # `publicly_accessible = false`, no NAT, no bastion — so a GitHub-hosted
+          # runner cannot reach it, and the step that used to assemble a URL from the
+          # rehearsal's outputs could never have connected (G12h; the decision record
+          # of 21 September, 2.3). What runs against the rehearsal database is
+          # `fss verify` and `fss drill`, inside the VPC.
+          FSS_TEST_POSTGRES_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+          FSS_DEPENDENCIES: recorded
         run: |
           set -euo pipefail
           npm ci --ignore-scripts --no-audit --no-fund
@@ -567,6 +665,8 @@ jobs:
           npm run test:release:mutation
 
       - name: Restore drill, Appendix E steps 1 to 9
+        env:
+          FSS_RELEASE_WORKER_DIGEST: ${{ inputs.worker_image_digest }}
         run: infra/scripts/rehearsal-restore-drill.sh '${{ steps.prefix.outputs.prefix }}'
 
       - name: Suppression journal replay and Gmail reconstruction

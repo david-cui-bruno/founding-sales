@@ -58,6 +58,45 @@ rehearsal_require_deployment_session "${FSS_REHEARSAL_DEPLOYMENT_ROLE:-fss-rh-de
 
 AWS="$(rehearsal_aws_command)"
 
+# ---------------------------------------------------------------------------
+# 0. Stop every task still running in this run's cluster (G12h).
+#
+# The drill and the deployment now launch one-off tasks (`fss migrate`,
+# `fss admin database-users ensure`, `fss verify`, `fss drill`). A run that failed
+# part-way can leave one of them running, and a running task holds an elastic network
+# interface in a subnet Terraform is about to delete: `terraform destroy` then waits
+# on the subnet until it times out, and the report says the teardown failed for a
+# reason that has nothing to do with the subnet.
+#
+# Stopping is by task ARN, and every ARN is classified before it is addressed, so a
+# task belonging to another run — or to production — is never a candidate. A cluster
+# that does not exist is already done.
+# ---------------------------------------------------------------------------
+rehearsal_log "0/4 stopping any one-off task still running in ${PREFIX}-cluster"
+if rehearsal_dry_run; then
+  rehearsal_plan "aws ecs list-tasks --cluster ${PREFIX}-cluster --desired-status RUNNING"
+  rehearsal_plan "  ... stop each, and ClusterNotFoundException means the apply never created it, which is done, not failed"
+else
+  rehearsal_refuse_production_arguments "${PREFIX}-cluster"
+  running="$(rehearsal_tolerate_absent "listing running tasks in ${PREFIX}-cluster" \
+    command "$AWS" ecs list-tasks --cluster "${PREFIX}-cluster" --desired-status RUNNING \
+    --query 'taskArns' --output json)"
+  for task_arn in $(printf '%s' "${running:-[]}" | python3 -c 'import json,sys
+raw = sys.stdin.read().strip() or "[]"
+for arn in json.loads(raw) or []:
+    print(arn)'); do
+    # An ECS task ARN is `.../task/<cluster>/<id>`, so the classifier sees the
+    # cluster name and refuses anything that is not this run's.
+    if [ "$(rehearsal_classify_name "$PREFIX" "${task_arn##*:task/}" || true)" != "rehearsal-run" ]; then
+      rehearsal_log "not this run's task, leaving it alone: $task_arn"
+      continue
+    fi
+    rehearsal_tolerate_absent "stopping $task_arn" \
+      command "$AWS" ecs stop-task --cluster "${PREFIX}-cluster" --task "$task_arn" \
+      --reason "rehearsal teardown" >/dev/null
+  done
+fi
+
 rehearsal_log "1/4 deleting the restored database instance the drill created"
 if rehearsal_dry_run; then
   rehearsal_plan "aws rds delete-db-instance --db-instance-identifier ${PREFIX}-pg-restored --skip-final-snapshot --delete-automated-backups"
