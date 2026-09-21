@@ -946,16 +946,26 @@ distribution with its origin access control, the journal bucket with its lock an
 deny policy — and the teardown destroyed all 125 by name, reported
 `journal_bucket=gone`, and the production guard passed. PR 162's teardown is proved.
 
-**Refuted, once.** `CreateDBInstance` answered `KMSKeyNotAccessibleFault` for the
-database module's own key, created about twenty seconds earlier in the same apply.
-The policy allows every KMS action RDS makes on the caller's behalf on keys tagged
-with the namespace, and the key carried the tag from creation; what had not yet
-happened was the propagation of that tag to KMS's authorization, which the KMS
-Developer Guide bounds at five minutes. The database module now waits that bound
-between the key and the instance, once per key
-(`docs/decisions/g18-a-new-key-is-not-yet-a-usable-key.md`). The CloudTrail record of
-the run's KMS calls is the evidence that confirms or refutes this; the next `create`
-is the test.
+**Refuted, once.** `CreateDBInstance` answered `KMSKeyNotAccessibleFault`, naming the
+database module's own key. The CloudTrail record of the window says what actually
+happened: on that key RDS's `CreateGrant` and `DescribeKey` on the deployer's behalf
+succeeded, and the one refusal was `kms:DescribeKey` on an AWS-managed key of the
+account (`89caff99-…`, `alias/aws/secretsmanager`, the default Secrets Manager key), which RDS
+describes while creating an instance with a managed master password even when a
+customer key is given for the secret. The deployer could
+describe only keys tagged with its namespace, and AWS-managed keys have no tags.
+`kms:DescribeKey` is now account metadata in both role policies, which must be
+rendered and put again before the next stage
+(`docs/decisions/g18-rds-describes-a-default-key-the-deployer-could-not-see.md`).
+
+**A wrong fix, added and removed the same night.** Before the record was read, the
+refusal was explained as tag propagation (the KMS Developer Guide bounds it at five
+minutes) and PR 163 added a five-minute wait between the key and the instance. The
+record shows the tagged key was authorized within twenty seconds; the wait is removed.
+The rule from here: when a service refuses, read that service's own record of the
+refusal (CloudTrail names the action, the resource and the reason) before choosing a
+fix. The message a service returns names the resource the caller specified, not
+necessarily the one it was refused.
 
 ### 8.1 Still unverified
 

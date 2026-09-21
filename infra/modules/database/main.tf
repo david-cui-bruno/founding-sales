@@ -12,12 +12,6 @@
 
 locals {
   identifier = "${var.name_prefix}-pg"
-
-  # How long a freshly created key waits before RDS is asked to use it (see
-  # time_sleep.key_is_visible_to_authorization). AWS: "It might take up to five
-  # minutes for tag and alias changes to affect KMS key authorization." Asserted by
-  # the module's tests.
-  kms_visibility_wait = "300s"
 }
 
 resource "aws_kms_key" "database" {
@@ -31,35 +25,6 @@ resource "aws_kms_key" "database" {
 resource "aws_kms_alias" "database" {
   name          = "alias/${var.name_prefix}-database"
   target_key_id = aws_kms_key.database.key_id
-}
-
-# A key that exists is not yet a key the deployer may use.
-#
-# David's fifth credentialed rehearsal (Actions 35660873276, 21 September) created
-# 125 resources and was refused exactly one: `CreateDBInstance` answered
-# `KMSKeyNotAccessibleFault` for this module's own key, created about twenty seconds
-# earlier in the same apply. The deployment role's policy allows every KMS action RDS
-# makes on the caller's behalf (`DescribeKey`, `CreateGrant`, `GenerateDataKey*`,
-# `Decrypt`) on keys tagged with the namespace, the pre-apply check agrees, and the
-# key carried the tag from its creation. What was not yet true was KMS's own view of
-# that tag. The ABAC page of the KMS Developer Guide: "It might take up to five
-# minutes for tag and alias changes to affect KMS key authorization. Recent changes
-# might be visible in API operations before they affect authorization." RDS asked
-# inside that window. The secrets module's key, asked about ten seconds after its
-# creation, happened to have propagated; this one had not.
-# `docs/decisions/g18-a-new-key-is-not-yet-a-usable-key.md`.
-#
-# So the instance waits the documented bound. The wait is keyed to the key's ARN, so
-# it happens once per key and never on an ordinary apply; five minutes is short
-# beside the twenty a Multi-AZ instance takes to come up, and long beside another
-# thirty-minute rehearsal lost to the same refusal.
-resource "time_sleep" "key_is_visible_to_authorization" {
-  depends_on      = [aws_kms_key.database, aws_kms_alias.database]
-  create_duration = local.kms_visibility_wait
-
-  triggers = {
-    key_arn = aws_kms_key.database.arn
-  }
 }
 
 resource "aws_db_subnet_group" "main" {
@@ -150,9 +115,6 @@ resource "aws_iam_role_policy_attachment" "enhanced_monitoring" {
 }
 
 resource "aws_db_instance" "main" {
-  # The key's tag must have reached KMS's authorization first; see the wait above.
-  depends_on = [time_sleep.key_is_visible_to_authorization]
-
   identifier = local.identifier
 
   engine                      = "postgres"
