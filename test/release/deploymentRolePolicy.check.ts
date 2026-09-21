@@ -432,7 +432,7 @@ describe('the deployment-role policy is code, and the Terraform tree judges it',
       const deny = rendered[prefix].Statement.find(
         statement => statement.Sid === 'NoManagedPolicyButTheOnesTheStackAttaches',
       );
-      const permitted = deny?.Condition?.ArnNotEquals?.['iam:PolicyARN'] as readonly string[] | undefined;
+      const permitted = deny?.Condition?['ArnNotEquals']?.['iam:PolicyARN'] as readonly string[] | undefined;
       expect([...(permitted ?? [])].sort()).toEqual([...attached].sort());
     }
   });
@@ -621,8 +621,8 @@ done`;
     options: { readonly aws?: string; readonly dryRun?: boolean } = {},
   ): { readonly code: number; readonly output: string } {
     const environment: Record<string, string> = { ...process.env } as Record<string, string>;
-    if (options.aws !== undefined) environment.FSS_CHECK_ROLE_AWS = options.aws;
-    if (options.dryRun === true) environment.FSS_CHECK_ROLE_DRY_RUN = '1';
+    if (options.aws !== undefined) environment['FSS_CHECK_ROLE_AWS'] = options.aws;
+    if (options.dryRun === true) environment['FSS_CHECK_ROLE_DRY_RUN'] = '1';
     const result = spawnSync(script, [...args], { encoding: 'utf8', env: environment });
     return { code: result.status ?? 1, output: `${result.stdout}${result.stderr}` };
   }
