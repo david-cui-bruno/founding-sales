@@ -111,6 +111,20 @@ override_for() { # override_for <action> -> "<resource>|<context>" or ""
       printf '%s|%s\n' "arn:aws:ec2:${REGION}:${ACCOUNT}:route-table/rtb-0000000000000000e" "ec2:ResourceTag/NamePrefix=${PREFIX}-example" ;;
     ec2:CreateVpc|ec2:CreateInternetGateway|kms:CreateKey|cloudfront:CreateDistributionWithTags|cloudfront:CreateDistribution)
       printf '%s|%s\n' "-" "aws:RequestTag/NamePrefix=${PREFIX}-example" ;;
+    # ECS judges each action on its own resource type (David's second run, 21 Sep): a service,
+    # a task definition, a task, a container instance. Simulated against the cluster ARN, the
+    # simulator answers implicit deny for all of them while the real calls are allowed.
+    ecs:CreateService|ecs:UpdateService|ecs:DeleteService)
+      printf '%s|%s\n' "arn:aws:ecs:${REGION}:${ACCOUNT}:service/${PREFIX}-example-cluster/${PREFIX}-example-api" "" ;;
+    ecs:RunTask)
+      printf '%s|%s\n' "arn:aws:ecs:${REGION}:${ACCOUNT}:task-definition/${PREFIX}-example-migrate:1" "" ;;
+    ecs:DescribeTasks|ecs:StopTask)
+      printf '%s|%s\n' "arn:aws:ecs:${REGION}:${ACCOUNT}:task/${PREFIX}-example-cluster/0000000000000000000000000000000e" "" ;;
+    ecs:ListTasks)
+      printf '%s|%s\n' "arn:aws:ecs:${REGION}:${ACCOUNT}:container-instance/${PREFIX}-example-cluster/0000000000000000000000000000000e" "" ;;
+    # A target group is its own resource type; the load balancer's ARN is the wrong one.
+    elasticloadbalancing:CreateTargetGroup)
+      printf '%s|%s\n' "arn:aws:elasticloadbalancing:${REGION}:${ACCOUNT}:targetgroup/${PREFIX}-example-api/2222222222222222" "aws:RequestTag/NamePrefix=${PREFIX}-example" ;;
     cloudwatch:PutCompositeAlarm)
       # CloudWatch authorizes a composite alarm against alarm:*, not its own name (David's
       # simulation of 21 September), so every group that names the action judges it there.

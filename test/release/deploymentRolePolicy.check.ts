@@ -733,6 +733,20 @@ done`;
     expect(callFor('kms:CreateKey')).toContain('aws:RequestTag/NamePrefix');
     expect(callFor('cloudfront:CreateDistributionWithTags')).not.toContain('--resource-arns');
     expect(callFor('cloudfront:GetDistribution')).toContain(':distribution/');
+    // ECS: the seven denials of David's second run. Each action is judged on its own
+    // resource type, never on the cluster.
+    for (const action of ['ecs:CreateService', 'ecs:UpdateService', 'ecs:DeleteService']) {
+      expect(callFor(action)).toContain(':service/');
+      expect(callFor(action)).not.toContain(':cluster/');
+    }
+    expect(callFor('ecs:RunTask')).toContain(':task-definition/');
+    expect(callFor('ecs:ListTasks')).toContain(':container-instance/');
+    for (const call of calls.filter(call => actionsOf(call)[0] === 'ecs:DescribeTasks')) {
+      expect(call).toContain(':task/');
+    }
+    expect(callFor('elasticloadbalancing:CreateTargetGroup')).toContain(':targetgroup/');
+    expect(callFor('elasticloadbalancing:CreateTargetGroup')).not.toContain(':loadbalancer/');
+    expect(callFor('elasticloadbalancing:CreateTargetGroup')).toContain('aws:RequestTag/NamePrefix');
     // The composite-alarm action appears in two groups; every call for it is judged
     // against alarm:*, because that is the resource CloudWatch authorizes it on.
     const compositeCalls = calls.filter(call => actionsOf(call)[0] === 'cloudwatch:PutCompositeAlarm');
