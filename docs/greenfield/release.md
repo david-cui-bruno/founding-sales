@@ -933,6 +933,30 @@ per hour.
 `fss migrate` has met the RDS master user, and no drill report has come back through a
 log stream.
 
+### 8.0e What the fifth credentialed run (create, late 21 September) proved and refuted
+
+Actions 35660873276, `stage = create` at ae53e7d2, after both rendered deployment-role
+policies were installed and checked (99 of 99 actions allowed for each role).
+
+**Proved.** The installed rehearsal policy carries a whole environment: 125 resources
+were created — network, both KMS keys and their aliases, the eight secret entries,
+log groups with their metric filters and the alarms, the cluster, five task
+definitions, the task roles, the load balancer and its listener, the CloudFront
+distribution with its origin access control, the journal bucket with its lock and its
+deny policy — and the teardown destroyed all 125 by name, reported
+`journal_bucket=gone`, and the production guard passed. PR 162's teardown is proved.
+
+**Refuted, once.** `CreateDBInstance` answered `KMSKeyNotAccessibleFault` for the
+database module's own key, created about twenty seconds earlier in the same apply.
+The policy allows every KMS action RDS makes on the caller's behalf on keys tagged
+with the namespace, and the key carried the tag from creation; what had not yet
+happened was the propagation of that tag to KMS's authorization, which the KMS
+Developer Guide bounds at five minutes. The database module now waits that bound
+between the key and the instance, once per key
+(`docs/decisions/g18-a-new-key-is-not-yet-a-usable-key.md`). The CloudTrail record of
+the run's KMS calls is the evidence that confirms or refutes this; the next `create`
+is the test.
+
 ### 8.1 Still unverified
 
 Nothing in this repository has ever been applied beyond the four steps above, and no rehearsal environment has ever existed. Every command here comes from the AWS documentation, the Terraform schema and the scripts' dry-run output, checked offline. Watch these on the next real run:
