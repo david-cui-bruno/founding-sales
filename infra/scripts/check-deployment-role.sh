@@ -111,6 +111,10 @@ override_for() { # override_for <action> -> "<resource>|<context>" or ""
       printf '%s|%s\n' "arn:aws:ec2:${REGION}:${ACCOUNT}:route-table/rtb-0000000000000000e" "ec2:ResourceTag/NamePrefix=${PREFIX}-example" ;;
     ec2:CreateVpc|ec2:CreateInternetGateway|kms:CreateKey|cloudfront:CreateDistributionWithTags|cloudfront:CreateDistribution)
       printf '%s|%s\n' "-" "aws:RequestTag/NamePrefix=${PREFIX}-example" ;;
+    cloudwatch:PutCompositeAlarm)
+      # CloudWatch authorizes a composite alarm against alarm:*, not its own name (David's
+      # simulation of 21 September), so every group that names the action judges it there.
+      printf '%s|%s\n' "arn:aws:cloudwatch:${REGION}:${ACCOUNT}:alarm:*" "" ;;
     *) printf '\n' ;;
   esac
 }

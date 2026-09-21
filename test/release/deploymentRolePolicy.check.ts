@@ -733,7 +733,11 @@ done`;
     expect(callFor('kms:CreateKey')).toContain('aws:RequestTag/NamePrefix');
     expect(callFor('cloudfront:CreateDistributionWithTags')).not.toContain('--resource-arns');
     expect(callFor('cloudfront:GetDistribution')).toContain(':distribution/');
-    expect(callFor('cloudwatch:PutCompositeAlarm')).toContain(':alarm:*');
+    // The composite-alarm action appears in two groups; every call for it is judged
+    // against alarm:*, because that is the resource CloudWatch authorizes it on.
+    const compositeCalls = calls.filter(call => actionsOf(call)[0] === 'cloudwatch:PutCompositeAlarm');
+    expect(compositeCalls.length).toBeGreaterThan(0);
+    for (const call of compositeCalls) expect(call).toContain(':alarm:*');
   });
 
   it('fails rather than passes when the simulation answers nothing', () => {
