@@ -196,6 +196,142 @@ builds and prints digests; the push is an operator step against a directive, wri
 at the bottom of the workflow and in `docs/greenfield/infra-apply-runbook.md`. The
 digest, not the tag, is what `infra/modules/cluster` accepts.
 
+## The third process: `fss`, the operations command line (lane G12g)
+
+There is a third thing in the worker image and it is not a service:
+`apps/worker/src/tools/fss.ts`. It exists because two operations have no home
+otherwise — applying migrations, which no deployment step in this repository ever
+did, and the nine steps of Appendix E, which `docs/greenfield/restore-drill.md`
+writes as `fss admin …` commands.
+
+```
+fss migrate [--report <path>] [--allow-any-role]   apply every unapplied migration forward
+fss migrate up | status                            the spellings the restore drill uses
+fss schema-version                                 the applied version and both declared ranges
+fss verify [--actor <name>] [--note <text>]        version, configured parts, and a rolled-back write
+fss drill --reports <dir> (--baseline <path> | --as-of <instant>)
+          [--from <instant>] [--since <instant>] [--admin-user <uuid>]
+fss admin counts --as-of <instant>                 the five protected kinds of Appendix G 11
+fss admin database-users ensure [--runtime-secret <VARIABLE>] [--rotate-password]
+fss admin holds list [--reason|--exclude-reason <code>] [--count]
+fss admin dial-authorize --any | --firm <id> --route <id> --identity <id>
+fss admin suppression-journal replay --from <instant> [--to <instant>]
+fss admin mailbox reconcile-sent | recover --since <instant> --all-mailboxes | --mailbox <id>
+fss admin mailbox watch-renew | coverage --all-mailboxes | --mailbox <id>
+fss admin jobs discard-runnable
+fss admin scheduler run-once
+fss admin restore-report --before <path> --journal <path> --sent <path> --inbox <path> --out <path>
+fss admin system-generation advance --report <step 8 report> [--admin-user <uuid>]
+```
+
+Every command takes `--report <path>` (`--out` for `restore-report`), which writes the
+same JSON the command printed.
+
+**`fss verify`** is what a deployment runs between the migration and the first service:
+the applied version and whether each declared range accepts it, the configured-parts
+report (names and booleans, never values), and one `INSERT` and `SELECT` on `heartbeats`
+inside a transaction that is **rolled back**. It runs as the runtime user, because that
+is whose `INSERT` is in doubt, and it reports `persisted: false` after re-reading — a
+read-only check passes against a user who has lost `INSERT`, a full volume and a read
+replica, and each of those is a deployment that looks ready and is not.
+
+**`fss drill`** runs the restore drill's database-level steps — the baseline counts as of
+the restore instant, the restore holds and the refused dial, the journal replay twice,
+the Sent reconciliation and the inbox recovery, the job discard and the scheduler pass,
+the watch renewal and coverage, the migrations reapplied with both ranges checked, the
+reconciliation report and the generation advance — in one process, writing
+`<dir>/<step>.json` as each step finishes and stopping at the first failure with the
+step named. The runner keeps the control-plane steps: the point-in-time restore, the
+service redeployments, the alarm reads, the snapshots and the teardown.
+
+**`fss admin database-users ensure`** runs on the migration task. It creates or alters
+the runtime login user named in the runtime secret as `LOGIN IN ROLE app_runtime` (0001
+created `app_runtime` and `migration` as NOLOGIN group roles, so the login user is a
+member and holds no privilege of its own) and grants `migration` to the connected user,
+so every later `fss migrate` passes its membership check for a reason. It reports
+`created|altered|unchanged` for the user and `granted|already` for the membership, sets
+a password only when it creates the user or when `--rotate-password` says so, and
+refuses when `app_runtime` or `migration` does not exist — which means `fss migrate` has
+not run.
+
+**Two invocation forms, and no third.** Locally, or on a CI runner with a route to
+the database:
+
+```bash
+export PATH="/opt/homebrew/opt/node@24/bin:$PATH"
+DATABASE_URL=postgresql://... node --experimental-transform-types \
+  --disable-warning=ExperimentalWarning apps/worker/src/tools/fss.ts migrate
+```
+
+and as a command override of the worker image, where `NODE_OPTIONS` already carries
+the transform flags and the ECS `secrets` block already carries the database
+credential:
+
+```bash
+# containerOverrides: [{ "name": "worker",
+#   "command": ["node", "apps/worker/src/tools/fss.ts", "migrate"] }]
+docker run --rm -e DATABASE_URL="$DATABASE_URL" <worker-digest> \
+  node apps/worker/src/tools/fss.ts admin counts
+```
+
+The second form is the one that matters in a deployed environment: the database is
+not publicly reachable, so the tool has to run inside the VPC, and the worker image
+is what is already there. Being the same image is also what makes it the same code,
+the same dependency set and the same configuration as the worker that starts
+afterwards — `databaseConnection` in `bootstrap/config.ts` and `readWorkerDeployment`
+are imported, not reimplemented.
+
+**How it runs in a deployed environment is decided: in-VPC one-off ECS tasks** (David,
+21 September), which G12h wires. The tool is built for both forms and this lane wires
+neither: `infra/scripts/rehearsal-restore-drill.sh` still writes `fss admin …` and
+refuses when no `fss` executable is on PATH, and nothing in this repository puts one
+there — no package declares a `bin` and no workflow step installs a wrapper. The
+remaining choice is whether the runner gets a wrapper or the drill becomes a
+`run-task` with the command override above.
+`docs/decisions/g12g-the-operations-command-line.md` records that and everything else
+the deployment still lacks for `fss migrate` to run *before* the services start.
+
+**What it reads.**
+
+| Variable | Read by | Meaning |
+|---|---|---|
+| `DATABASE_URL` | every command except `migrate` | the runtime connection, for a laptop or a runner |
+| `DATABASE_SECRET_ARN` | the same | the Secrets Manager **value**, injected by the ECS `secrets` block |
+| `FSS_MIGRATION_DATABASE_URL` | `migrate`, `drill` step 7, `database-users ensure` | the migration user's connection, for a laptop |
+| `MIGRATION_DATABASE_SECRET` | the same | the migration credential's secret **value**. `fss-<env>/database-migration-user`, which holds the RDS master user — the only credential a fresh instance has |
+| `FSS_RUNTIME_DATABASE_SECRET_ARN` | `database-users ensure` | the runtime credential's secret value, whose `username` and `password` the command creates the login user from. `--runtime-secret` names a different variable |
+| `FSS_DATABASE_HOST` | every command | Appendix E step 1's restored endpoint. It replaces the host of a connection assembled from a secret; a `DATABASE_URL` that names a different host is a refusal rather than an override |
+| `FSS_DEPENDENCIES` | the Gmail commands and `drill` | must be exactly `recorded` for them, or they refuse |
+| `FSS_JOURNAL_BUCKET`, `AWS_REGION` | `suppression-journal replay` | what the journal is replayed from; without them it refuses rather than replaying nothing |
+| `FSS_ADMIN_USER_ID` | `system-generation advance` | the admin the act is attributed to when `--admin-user` does not name one. Without either, it refuses |
+
+**`migrate` never uses the runtime credential**, and there is no fallback: the runtime
+credential is `app_runtime`'s, and a tool that applied DDL with it would either fail or
+succeed because somebody had granted the application more than it needs. It also refuses
+outright when the connected role *is* `app_runtime`, before `--allow-any-role` is read.
+
+**The dependency mode is fixed per command**, as data in `COMMAND_DEPENDENCIES`, not as
+whatever the environment happens to say: `counts`, `holds list`, `dial-authorize`,
+`jobs discard-runnable`, `scheduler run-once`, `restore-report`, `system-generation
+advance`, `mailbox coverage` and `database-users ensure` reach PostgreSQL and nothing
+else — no deployment is read, so they cannot reach Gmail, KMS or S3 in a fully
+configured production task; `suppression-journal replay` reaches the configured journal
+bucket and nothing else; the three mailbox commands and `drill` reach the Gmail seam and
+run only with `FSS_DEPENDENCIES=recorded`, so a reconstruction from a command line can
+never send live mail.
+
+It does **not** read `FSS_SCHEMA_MIN`/`FSS_SCHEMA_MAX`: `fss migrate` is the command
+that makes those agree, so requiring them to agree first would make it unusable for its
+own purpose.
+
+**What it prints.** One JSON object on stdout per command; `--report <path>` writes the
+same bytes to a file with mode 600; `holds list --count` prints a bare integer, because
+the drill compares it in the shell. Logs and refusals go to **stderr** as one JSON line
+each in the shape the metric filters parse, so stdout stays parseable. Exit codes: 0,
+20 for a refusal an operator has to act on, 21 for a failure, 64 for a usage error.
+`--selftest` reads the configuration, prints the decisions and exits without touching a
+database, exactly as both services' do.
+
 ## How the API is wired (done, lane G3b)
 
 `apps/api/src/server.ts` is the only HTTP surface. `bootstrap/server.ts` was this

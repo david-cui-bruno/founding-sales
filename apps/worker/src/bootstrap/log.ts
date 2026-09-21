@@ -38,7 +38,8 @@ function redactField(name: string, value: LogValue): LogValue {
 }
 
 export interface LoggerOptions {
-  readonly component: 'worker' | 'api';
+  /** `fss` is the operations command line, which shares this log group and shape. */
+  readonly component: 'worker' | 'api' | 'fss';
   readonly instanceKey: string;
   /** Where the line goes. Defaults to stdout, which is what the awslogs driver reads. */
   readonly write?: ((line: string) => void) | undefined;

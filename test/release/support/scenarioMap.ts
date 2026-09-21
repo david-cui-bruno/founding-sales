@@ -153,9 +153,20 @@ export const SCENARIOS: readonly Scenario[] = Object.freeze([
     number: 11,
     title: 'A restore predating an accepted send, reply, suppression, ordinary CRM edit and migration: protected effects reconstruct, the accepted CRM RPO is reported, no send repeats.',
     coverage: 'rehearsal',
-    references: laneTest('docs/greenfield/restore-drill.md', 'infra/scripts/rehearsal-restore-drill.sh'),
-    trap: 'A drill against an empty database reconstructs nothing and passes.',
-    closedBy: 'Step 0.1 of the drill generates all six kinds of activity first, and the script refuses to report a pass when the baseline counts are zero.',
+    references: laneTest(
+      'docs/greenfield/restore-drill.md',
+      'infra/scripts/rehearsal-restore-drill.sh',
+      // The commands the drill calls, and the suite that proves they exist and that the
+      // drill's own invocations parse (G12g). Before it, every `fss admin` line in the
+      // script named a tool this repository did not contain.
+      'apps/worker/src/tools/fss.ts',
+      'apps/worker/src/tools/fss/commands.ts',
+      'apps/worker/test/fssCli.test.ts',
+      'packages/domain/restore/counts.ts',
+      'packages/domain/suppression/replay.ts',
+    ),
+    trap: 'A drill against an empty database reconstructs nothing and passes; or the commands it calls do not exist and the drill fails only in the cloud.',
+    closedBy: 'Step 0.1 of the drill generates all six kinds of activity first, the script refuses to report a pass when the baseline counts are zero, and `apps/worker/test/fssCli.test.ts` parses every `fss` invocation out of the script and requires the tool to accept it.',
     script: 'infra/scripts/rehearsal-restore-drill.sh',
   },
   {

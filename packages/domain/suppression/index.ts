@@ -48,3 +48,14 @@ export {
 } from './finalize.ts';
 
 export { suppressionFinalizeHandler } from './handler.ts';
+
+export {
+  SUPPRESSION_JOURNAL_SCHEMA,
+  parseSuppressionJournalRecord,
+  replaySuppressionJournal,
+  type JournalParseRefusal,
+  type JournalParseResult,
+  type JournalReplayReport,
+  type ReplayInput,
+  type SuppressionJournalSource,
+} from './replay.ts';

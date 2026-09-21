@@ -21,6 +21,7 @@ import { retentionBatchJobHandler, retentionSource } from '../handlers/retention
 import { suppressionFinalizeJobHandler } from '../handlers/suppressionFinalize.ts';
 import { todayBuildJobHandler, todayBuildSource } from '../handlers/todayBuild.ts';
 import { mailSources } from '../scheduler/mailSources.ts';
+import type { DueWorkSource } from '../scheduler/schedulerPass.ts';
 import { canarySource } from '../scheduler/sources.ts';
 import { ConfigError, describeWorkerConfig, readWorkerConfig, type WorkerConfig } from './config.ts';
 import {
@@ -221,6 +222,28 @@ export async function composeHandlers(
   };
 }
 
+/**
+ * Every due-work source the one-minute pass reads (13.1).
+ *
+ * Exported because `src/tools/fss.ts`'s `admin scheduler run-once` is Appendix E step
+ * 5's "rematerialise from business state" and has to be the *same* pass. A tool with
+ * its own list would rematerialise a subset, and the difference would be whichever
+ * lane's source was added after the tool was written.
+ *
+ * Every source inserts rows and talks to nothing outside PostgreSQL, which is what
+ * makes running one from a command line safe.
+ */
+export function workerDueWorkSources(): readonly DueWorkSource[] {
+  return [
+    canarySource(),
+    todayBuildSource(),
+    sequenceActionSource(),
+    retentionSource(),
+    ...mailSources(),
+    classifyReplySource(),
+  ];
+}
+
 export async function main(argv: readonly string[], environment: NodeJS.ProcessEnv): Promise<number> {
   let config: WorkerConfig;
   const bootLog = createLogger({ component: 'worker', instanceKey: 'boot' });
@@ -290,14 +313,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
         metrics: sessions[1 + config.concurrency] as SessionQueryable,
       },
       registry: registerHandlers(new HandlerRegistry(), composition),
-      sources: [
-        canarySource(),
-        todayBuildSource(),
-        sequenceActionSource(),
-        retentionSource(),
-        ...mailSources(),
-        classifyReplySource(),
-      ],
+      sources: workerDueWorkSources(),
       sink,
       log,
     });
