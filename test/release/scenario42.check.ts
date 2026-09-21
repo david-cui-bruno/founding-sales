@@ -9,9 +9,10 @@ import { DEPLOYMENT_ENVIRONMENT_VARIABLES as WORKER_VARIABLES } from '../../apps
 import { DEPLOYMENT_ENVIRONMENT_VARIABLES as API_VARIABLES } from '../../apps/api/src/bootstrap/deployment.ts';
 import { mustBeRehearsed, readRepositoryFile, repositoryPath } from './support/coverage.ts';
 import {
-  REHEARSAL_STAGES,
+  REHEARSAL_STAGE_CHOICES,
   rehearsalJobSteps,
   stagesForCondition,
+  stepScript,
   stepsForStage,
 } from './support/releaseWorkflow.ts';
 
@@ -147,13 +148,14 @@ describe('Appendix G 42: sending stays off until all four agree', () => {
   });
 
   /**
-   * G12k: the rehearsal has four stages and only one of them is the gate.
+   * G12k: the rehearsal has five stages and only one of them is the gate.
    *
    * A `plan`, `create` or `deploy` run is a discovery run — it exists so that the next
    * plan-time error costs a minute rather than an hour — and none of them proves what
-   * 16.2 asks of a release. The thing that must be impossible is a cheap run producing
-   * the artifact an admin later points at when enabling sending, so the release-record
-   * step's `if:` is the whole of that impossibility.
+   * 16.2 asks of a release. G16's `teardown` is not even that: it removes an
+   * environment an earlier run left standing. The thing that must be impossible is any
+   * of the four producing the artifact an admin later points at when enabling sending,
+   * so the release-record step's `if:` is the whole of that impossibility.
    *
    * ## The vacuous-pass trap
    *
@@ -162,7 +164,7 @@ describe('Appendix G 42: sending stays off until all four agree', () => {
    * `inputs.stage != 'plan'` — which lets a `create` run write a record for an
    * environment that was never deployed or drilled. Closed by reading the condition as
    * a set of stages and requiring it to be exactly `{full}`, by requiring the record
-   * step to be absent from the step list of each of the other three, and by the
+   * step to be absent from the step list of each of the other four, and by the
    * positive control that it is present in `full`. The mutation check drops the
    * condition and requires this to go red.
    */
@@ -170,11 +172,11 @@ describe('Appendix G 42: sending stays off until all four agree', () => {
     const steps = rehearsalJobSteps();
     const record = steps.find(step => step.text.includes('rehearsal-release-record.sh'));
 
-    it('offers the four stages and defaults to the cheap one', () => {
+    it('offers the five stages and defaults to the cheap one', () => {
       const workflow = readRepositoryFile('.github/workflows/greenfield-release.yml');
       const input = workflow.slice(workflow.indexOf('      stage:'), workflow.indexOf('  pull_request:'));
       expect(input, 'workflow_dispatch declares no `stage` input').toContain('type: choice');
-      for (const stage of REHEARSAL_STAGES) expect(input).toContain(`          - ${stage}\n`);
+      for (const stage of REHEARSAL_STAGE_CHOICES) expect(input).toContain(`          - ${stage}\n`);
       // The expensive gate is chosen, never inherited from a default.
       expect(input).toContain("default: 'plan'");
     });
@@ -185,8 +187,8 @@ describe('Appendix G 42: sending stays off until all four agree', () => {
       expect([...stagesForCondition(record?.condition ?? null)]).toEqual(['full']);
     });
 
-    it('is not in the step list of a plan, a create or a deploy run', () => {
-      for (const stage of REHEARSAL_STAGES) {
+    it('is not in the step list of a plan, a create, a deploy or a teardown run', () => {
+      for (const stage of REHEARSAL_STAGE_CHOICES) {
         const names = stepsForStage(stage, steps).map(step => step.name);
         expect(names.includes(record?.name ?? ''), `a ${stage} run writes a release record`).toBe(stage === 'full');
       }
@@ -199,6 +201,105 @@ describe('Appendix G 42: sending stays off until all four agree', () => {
       expect(apply, 'no step of the rehearsal job applies anything').toBeDefined();
       expect([...stagesForCondition(apply?.condition ?? null)]).toEqual(['create', 'deploy', 'full']);
       expect(stepsForStage('plan', steps).map(step => step.name)).not.toContain(apply?.name);
+    });
+  });
+
+  /**
+   * G16: the fifth stage exists to clean, and cleaning is all it may do.
+   *
+   * The fourth credentialed rehearsal (Actions run 35628963637) applied an environment
+   * and then could not remove it: the journal bucket's own policy denied
+   * `s3:DeleteBucketPolicy` and `s3:PutBucketObjectLockConfiguration` to every
+   * principal, so `fss-rh-202609211659` is still standing with a bucket, four resources
+   * in its state, and an hourly cost for the ones that bill. `if: always()` means the
+   * teardown ran; it could not succeed, and nothing in the workflow could be dispatched
+   * to try again without also creating a second environment.
+   *
+   * So `stage = teardown` runs identity, the production inventory, the tfvars file and
+   * `terraform init` against the prefix in `run_suffix`, and then the two steps every
+   * stage runs. Nothing else.
+   *
+   * ## The vacuous-pass trap
+   *
+   * Asserting that the stage exists would pass against a choice nothing reads, and
+   * asserting that it runs the teardown step would pass against a `teardown` that also
+   * planned, applied, deployed and wrote a record — which is a `full` run with a
+   * misleading name, and the expensive mistake this stage is meant to avoid. Closed by
+   * naming the steps it must run *and* by requiring the steps it must not: every step
+   * whose script reaches `terraform plan`, `terraform apply`, `release-deploy.sh`, the
+   * restore drill, the suite or the release record is asserted absent from its step
+   * list. The mutation check adds `teardown` to the create step's condition and
+   * requires this to go red.
+   */
+  describe('the teardown stage cleans, and does nothing else', () => {
+    const steps = rehearsalJobSteps();
+    const names = stepsForStage('teardown', steps).map(step => step.name);
+
+    it('runs identity, the inventory, the variables file, the init, the teardown and the guard', () => {
+      for (const name of [
+        'The assumed identity is the rehearsal role and nothing else',
+        'Record the production inventory before anything is created',
+        'Write the variables this run plans, applies and tears down with',
+        "Initialise the backend for this run's state key",
+        'Tear the rehearsal run down',
+        'Nothing with the production prefix was touched',
+      ]) {
+        expect(names, `a teardown run skips ${name}`).toContain(name);
+      }
+      // The production-untouched guard compares against an inventory the `before` phase
+      // recorded and fails outright without one, so a teardown that skipped the
+      // recording would fail its own last step.
+      expect(names.indexOf('Record the production inventory before anything is created')).toBeLessThan(
+        names.indexOf('Nothing with the production prefix was touched'),
+      );
+    });
+
+    it('creates, deploys, drills and records nothing', () => {
+      const forbidden: Record<string, string> = {
+        'terraform plan': 'plans the environment it is about to destroy',
+        'terraform apply': 'applies',
+        'release-deploy.sh': 'deploys',
+        'rehearsal-restore-drill.sh': 'runs the restore drill',
+        'npm run test:release': 'runs the release suite',
+        'rehearsal-release-record.sh': 'writes a release record',
+      };
+      const running = stepsForStage('teardown', steps);
+      for (const [needle, what] of Object.entries(forbidden)) {
+        // The floor: the needle has to appear somewhere in the job, or "no step of a
+        // teardown run contains it" would be true because nothing does.
+        expect(
+          steps.some(step => step.text.includes(needle)),
+          `no step of the rehearsal job contains ${needle}, so asserting its absence proves nothing`,
+        ).toBe(true);
+        expect(
+          running.filter(step => step.text.includes(needle)).map(step => step.name),
+          `a teardown run ${what}`,
+        ).toEqual([]);
+      }
+    });
+
+    it('refuses an empty run_suffix, because a teardown of a timestamp names nothing', () => {
+      // Every other stage falls back to `fss-rh-<now>`, which is right for a run that
+      // is about to create an environment and exactly wrong for one that is about to
+      // destroy an existing one: the teardown would report `destroyed=nothing_created`
+      // and the orphan would still be there.
+      const prefix = stepScript('Decide the run prefix');
+      expect(prefix).toContain("if [ \"${{ inputs.stage }}\" = 'teardown' ] && [ -z \"$suffix\" ]; then");
+      expect(prefix).toContain('stage=teardown needs run_suffix');
+      // And the fallback is still there for the four stages that want it.
+      expect(prefix).toContain('suffix="$(date -u +%Y%m%d%H%M)"');
+    });
+
+    it('takes the two digests from the inputs, as every stage does', () => {
+      // `terraform destroy` requires every variable `apply` did, and the teardown
+      // refuses without `run.auto.tfvars.json`. For a teardown the digests need only be
+      // well-formed: nothing resolves them, and the resources being destroyed are read
+      // from state. So the variables step is unchanged and the digest refusal still runs.
+      expect(names).toContain('Refuse anything that is not a digest');
+      const tfvars = stepScript('Write the variables this run plans, applies and tears down with');
+      expect(tfvars).toContain('"api_image": ');
+      expect(tfvars).toContain('"worker_image": ');
+      expect(tfvars).toContain('"name_prefix": ');
     });
   });
 

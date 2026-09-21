@@ -40,9 +40,11 @@ The desktop rows are last on purpose, and 2.0 explains why the obvious order can
 From `infra-apply-runbook.md` 1.1, and already done (`.context/FSS-GREENFIELD-ACCOUNT-IDENTIFIERS-20260920.md`):
 
 - `arn:aws:iam::326255650484:role/fss-prod-deploy`
-- `arn:aws:iam::326255650484:role/fss-rh-deploy` — **may act only on resources whose name begins `fss-rh-`.**
+- `arn:aws:iam::326255650484:role/fss-rh-deploy` — **may act only on resources whose name begins `fss-rh`.**
 
 That scoping is Appendix G 39 in the cloud rather than only in the plan. `infra/scripts/rehearsal-prefix-guard.sh` checks the same thing from the other side after every rehearsal, and it refuses before making a call rather than waiting for an `AccessDenied` in a log.
+
+**Their policies are in the repository now, and so are the commands that install them.** Until 21 September both were written by hand from prose in the runbook, and the fourth credentialed rehearsal applied with them and reported 25 errors in six classes (8.0d). `infra-apply-runbook.md` **1.1a** has the three commands — render, read, `put-role-policy` — and the read-only `infra/scripts/check-deployment-role.sh <role> <prefix>` to run before any apply. Do that before section 3 and again before section 4; it takes seconds and it answers the whole class.
 
 ### 1.2 The `fss-rh-deploy` bypass-governance grant
 
@@ -227,19 +229,20 @@ The **desktop commit stamp** is the release commit from 2.0 — the same `git re
 
 Actions → *Greenfield release rehearsal* → Run workflow, with:
 
-- `stage` — how far this run goes: `plan` (the default), `create`, `deploy` or `full`. Only `full` is the release gate; read 3.0 before choosing anything else.
+- `stage` — how far this run goes: `plan` (the default), `create`, `deploy`, `full`, or `teardown`. Only `full` is the release gate; read 3.0 before choosing anything else.
 - `api_image_digest` — from the push above;
 - `worker_image_digest` — likewise;
 - `desktop_commit_stamp`;
-- `run_suffix` — optional; the prefix becomes `fss-rh-<suffix>`, or `fss-rh-<UTC timestamp>`.
+- `run_suffix` — optional, except for `teardown`; the prefix becomes `fss-rh-<suffix>`, or `fss-rh-<UTC timestamp>`.
 
-### 3.0 The four stages, and the order to use them in
+### 3.0 The five stages, and the order to use them in
 
 Until 21 September the workflow had one mode — the whole gate, all fifteen steps of it — and the
 three credentialed runs of that day each stopped at the first error of a class no
 offline check can see. One error per run, about an hour of attention each. `stage` makes
-the cheap part runnable alone. Each stage runs everything the stage before it runs, plus
-its own steps.
+the cheap part runnable alone. Each of the first four runs everything the stage before it
+runs, plus its own steps; `teardown` is not on that ladder and is described under the
+table.
 
 | `stage` | what it adds | what it proves | roughly |
 | --- | --- | --- | --- |
@@ -247,13 +250,42 @@ its own steps.
 | `create` | `terraform apply`, taking its values from the `run.auto.tfvars.json` the plan stage wrote | that the plan can be **applied**: quotas, service limits, IAM, the order Terraform chooses, and whether a fresh environment comes up at all | the apply, dominated by the Multi-AZ RDS instance |
 | `deploy` | the two database entries, `infra/scripts/release-deploy.sh` and the smoke | that a fresh environment can be **migrated and started**: the migration task's networking, whether `fss migrate` accepts the RDS master user, the schema-range refusals both binaries make on startup, and whether a canary datapoint ever appears | the deploy, five one-off tasks of about a minute each |
 | `full` | the declared ranges against the deployed images, the release suite and the mutation check, the restore drill, the journal replay and Gmail reconstruction, the carry drill, and the release record | the release gate of 16.2, which is everything in the numbered list below | up to the 180-minute timeout |
+| `teardown` | nothing, and it takes the plan away: it runs only the steps before `terraform plan` plus the two every stage runs | that a prefix some earlier run left standing is gone | the destroy |
+
+**`teardown` is the stage for an orphan.** It runs the identity check, the production
+inventory, `run.auto.tfvars.json`, `terraform init` against the prefix you name, and then
+the two steps every stage runs — `infra/scripts/rehearsal-teardown.sh` and the
+production-untouched guard. It does not plan, does not apply, deploys nothing, drills
+nothing and writes no record.
+
+`run_suffix` is **required** for it and names an existing prefix. Every other stage falls
+back to `fss-rh-<UTC timestamp>` when you leave it blank, which is right for a run about
+to create an environment and exactly wrong for one about to destroy one: the teardown
+would report `destroyed=nothing_created` and the orphan would still be there. The
+workflow refuses an empty suffix on a `teardown` before it obtains a credential.
+
+It exists because of the fourth credentialed run. `if: always()` brought the teardown up,
+as it always does, and the teardown could not succeed: the journal bucket's own policy
+denied `s3:DeleteBucketPolicy` and `s3:PutBucketObjectLockConfiguration` to every
+principal including the deployer (8.0d). Before this stage there was no way to try again
+without dispatching a run that would also create a second environment.
+
+**For `fss-rh-202609211659` specifically, the order is `create` then `teardown`, and only
+that one time.** That bucket carries the *old* policy, the one with no exemption, and S3
+evaluates the policy on the bucket rather than the one in the repository. `terraform
+apply` at a commit carrying G16's journal change rewrites it — `s3:PutBucketPolicy` was
+never in the deny list — and the destroy then succeeds. Read the plan first: it should
+propose one change to `module.stack.module.journal.aws_s3_bucket_policy.journal` and
+create the rest of the environment, because that run's state holds only four resources.
+Every run after this one applies the fixed policy from the start and needs only
+`teardown`.
 
 **Only `full` is the gate.** It is the only stage that runs
 `infra/scripts/rehearsal-release-record.sh`, and that is the step's own condition
-(`if: inputs.stage == 'full'`) rather than a convention: a `plan`, `create` or `deploy`
-run cannot write a release record, and so cannot produce the `releaseGateReference`
-section 6 asks for before sending can be enabled. The default is `plan`, so the
-expensive run is always chosen and never inherited.
+(`if: inputs.stage == 'full'`) rather than a convention: a `plan`, `create`, `deploy` or
+`teardown` run cannot write a release record, and so cannot produce the
+`releaseGateReference` section 6 asks for before sending can be enabled. The default is
+`plan`, so the expensive run is always chosen and never inherited.
 
 **What a `plan` run needs from you.** Two well-formed digests that differ, and a
 commit stamp. Nothing reads the stamp before the release record, and nothing anywhere
@@ -280,7 +312,13 @@ it is meant to be. `create` onwards needs the real ones.
 6. **`full`**, which is the release gate, once the deploy is clean.
 
 A stage is worth running only when the one before it passed. Running `full` first is
-what the three runs of 21 September did, and it cost about an hour per error.
+what the three runs of 21 September did, and it cost about an hour per error. `teardown`
+is outside that order: run it when a run left something behind, and never as part of a
+release.
+
+Before any of them, run `infra/scripts/check-deployment-role.sh fss-rh-deploy fss-rh`
+(`infra-apply-runbook.md` 1.1a). It is read-only, it takes seconds, and it answers the
+whole class of error the fourth credentialed run spent an apply on.
 
 **Every stage tears down, and every stage re-reads the production inventory.** Steps 13
 and 14 of the list below keep `if: always()` and carry no stage condition at all. They
@@ -288,7 +326,8 @@ are what protects against a stage condition being wrong, so they may not depend 
 if the apply's condition were ever mistyped, a `plan` run would create an environment,
 and the step that destroys it must not be reading the same input. The teardown is
 tolerant of a run that created nothing — it reports `destroyed=nothing_created` — so on
-a `plan` run it costs seconds.
+a `plan` run it costs seconds. Those two steps are also the whole of what a `teardown`
+run does, which is why the stage needed no new step at all.
 
 **What a `plan` run prints.** The plan's own output is values: both image references,
 the certificate ARN, the hostname, and every attribute Terraform can already resolve.
@@ -732,6 +771,111 @@ a guard refusing its own read (8.0), two unpassed required variables (8.0b), and
 provider with no credential beside a `count` on an unknown (here). The rule they add up
 to is in COMMON-G and in the decision record
 `docs/decisions/g12k-the-rehearsal-has-stages-and-one-gate.md`.
+
+### 8.0d What the fourth credentialed run (create) proved and refuted
+
+Dispatched on 21 September 2026 at commit 679460c6 (Actions run 35628963637), the first
+run of G12k's `create` stage, after a `plan` stage that was green in CI (run 35626442598)
+and locally (138 to add).
+
+The apply reported **25 errors**. The teardown then failed and left residue. That is a
+worse-sounding outcome than the three runs before it and a much better one: for the first
+time the run got past the plan and into AWS, so every error is a fact about the account
+rather than about the configuration's shape, and they arrived 25 at a time instead of one
+per hour.
+
+**Proved.**
+
+- *The `plan` stage is worth having.* It was green, and the errors below are all of
+  classes a plan cannot see: IAM denials, a retired engine version, and a resource-based
+  policy refusing its own author. Three runs had been spent one error at a time; this one
+  produced six classes at once, which is what the stage was added for.
+- *`run.auto.tfvars.json` is the one list.* The apply named no variable of its own and
+  took every value from the file the plan stage wrote, and the teardown read the same
+  file. 8.0b's second refutation is closed.
+- *The apply reaches AWS.* Provider configuration, the credential path with
+  `assume_deployment_role=false`, the per-run state key, the lock and the state KMS key
+  all worked, and Terraform got as far as creating resources.
+- *The tolerant teardown runs.* `if: always()` brought it up after a failed apply and it
+  worked through its steps rather than stopping at the first absence, which is what 8.0's
+  second refutation asked for.
+
+**Refuted.**
+
+- *"The deployment role's policy covers the modules."* It does not, in six classes:
+
+  | class | errors |
+  | --- | --- |
+  | `cloudwatch:PutCompositeAlarm` denied | 2 (`aws_cloudwatch_composite_alarm.critical`, `.warning`) |
+  | `kms:CreateAlias` denied | 5 (every `aws_kms_alias`) |
+  | Secrets Manager `Access to KMS is not allowed` | 8 (every `aws_secretsmanager_secret`) |
+  | `ec2:AuthorizeSecurityGroupIngress` denied | 5 (`aws_vpc_security_group_ingress_rule`) |
+  | `ec2:AuthorizeSecurityGroupEgress` denied | 3 (`aws_vpc_security_group_egress_rule`) |
+  | `cloudfront:CreateOriginAccessControl` denied | 1 |
+
+  The cause was structural rather than a list of omissions: `infra-apply-runbook.md` 1.1
+  described the two roles' permissions in prose — "may act only on resources whose name
+  begins `fss-rh-`" — and the repository shipped no policy document, so both roles were
+  written by hand from that prose and nothing offline could compare either with the
+  Terraform it was meant to apply. Closed by G16: the policy is
+  `infra/policies/deployment-role-policy.json.tftpl`, the map from every
+  `resource "aws_*"` type in the tree to the actions it needs is
+  `infra/policies/terraform-resource-actions.json`, and
+  `test/release/deploymentRolePolicy.check.ts` fails when a type needs an action the
+  rendered policy does not allow — or allows and then cancels with a blanket deny, which
+  is what the eight Secrets Manager errors were. The commands are in 1.1a of the runbook
+  and the read-only check is `infra/scripts/check-deployment-role.sh`.
+
+  Two of the six deserve naming because the shape of the mistake is instructive. The
+  security-group *rules* were denied although the security groups were not: the `ec2:*`
+  allow was conditioned on `ec2:ResourceTag/NamePrefix`, and a rule being created carries
+  no resource tag yet, while the `RequestTag` statement beside it covered only
+  `ec2:Create*` and the rule actions are `AuthorizeSecurityGroupIngress` and
+  `AuthorizeSecurityGroupEgress`. And the eight Secrets Manager errors were not a missing
+  allow at all — they were an explicit deny, `kms:GenerateDataKey*` and `kms:Decrypt` on
+  every key but the Terraform state key, which Secrets Manager checks at `CreateSecret`.
+  A policy can refuse a resource it has an allow for, and only an evaluation catches that.
+
+- *"The journal can be torn down."* It cannot, by anybody but the account root.
+  `infra/modules/journal`'s `DenyAnyDeletionOrLockWeakening` names `Principal *` with no
+  exemption and lists `s3:BypassGovernanceRetention`, so the teardown was refused
+
+  ```
+  S3 DeleteBucketPolicy … 403 AccessDenied because of an explicit deny in the resource-based policy
+  ```
+
+  and the same for `PutBucketObjectLockConfiguration` — and the teardown's own
+  `--bypass-governance-retention` emptying step could never have worked either. Residue:
+  the bucket `fss-rh-202609211659-suppression-journal-326255650484` with its policy,
+  object lock (GOVERNANCE, one day), versioning and public-access block, plus one state
+  object `fss/greenfield/rehearsal/fss-rh-202609211659/terraform.tfstate` holding those
+  four resources. Five KMS keys are pending deletion, which is the normal window and
+  needs nothing. Closed by G16's `administrative_principal_arns`: the rehearsal root
+  exempts its own deployment role from every deny but the transport one, production
+  exempts nobody unless David sets a variable
+  (`docs/decisions/g16-the-journal-deny-exempts-its-deployer.md`). 3.0 has the order for
+  recovering that one orphan and the `teardown` stage is how it is dispatched.
+
+- *"16.8 exists."* `InvalidParameterCombination: Cannot find version 16.8 for postgres`.
+  AWS had retired it; `us-east-1` held 16.3, 16.4 and 16.9 through 16.15 that day.
+  `infra/modules/database` now defaults `engine_version` to the bare major `"16"`, which
+  `auto_minor_version_upgrade = true` makes diff-free against whichever minor AWS
+  chooses. Note that the `plan` stage was green with `16.8` in it, so the lesson is not
+  "plan first" — it is that a pinned minor's validity is a fact about AWS's retirement
+  calendar on the day of the apply.
+  `docs/decisions/g16-postgresql-is-pinned-by-major.md`.
+
+**Unexplained, and carried forward.** `cloudwatch:PutCompositeAlarm` was denied although
+the two composite alarms are named `fss-rh-<run>-critical` and `-warning` and the
+hand-written policy's `cloudwatch:*` covered `alarm:fss-rh-*`. The shipped policy names
+the action explicitly and `infra/scripts/check-deployment-role.sh` asks about it, but
+nobody has yet read the decoded authorization message for that call, so treat a repeat as
+open rather than as a regression.
+
+**What none of this settles.** Everything from the fill step onwards — 8.0a items 2 to 5
+— is still untested: no migration task has ever been launched into a rehearsal VPC, no
+`fss migrate` has met the RDS master user, and no drill report has come back through a
+log stream.
 
 ### 8.1 Still unverified
 

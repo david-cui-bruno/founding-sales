@@ -438,6 +438,88 @@ describe('the deployment-role policy is code, and the Terraform tree judges it',
   });
 });
 
+/**
+ * The other half of "the deployer can remove what it created": the bucket policy.
+ *
+ * `infra/modules/journal/tests/object_lock.tftest.hcl` and the two roots'
+ * `journal_teardown.tftest.hcl` are the real checks and they read the rendered policy
+ * statement by statement — but `terraform test` runs in `infra/scripts/offline-gate.sh`
+ * and not in `npm run test:release`, so a mutation of any one of these lines would leave
+ * this suite green. Each is a single expression and each is the whole of one half of the
+ * fix, which is the same reason scenario 22 asserts two lines of
+ * `infra/modules/cluster/main.tf` here as well as in Terraform.
+ *
+ * ## The vacuous-pass trap
+ *
+ * Asserting that the module *mentions* `administrative_principal_arns` would pass
+ * against a module that took the variable and never used it, and asserting that the
+ * rehearsal root passes something would pass against a root passing `[]`. Closed by
+ * asserting the merge expressions verbatim on the two denies that had their own
+ * condition, the conditional-key expression on the one that did not, the transport
+ * deny's absence from all of it, and the two roots' opposite arguments.
+ */
+describe('the journal deny exempts its deployer, and production keeps its posture', () => {
+  const journal = readRepositoryFile('infra/modules/journal/main.tf');
+
+  it('builds the exemption only when the root named somebody', () => {
+    expect(journal).toContain(
+      'administrative_exemption = length(var.administrative_principal_arns) == 0 ? {} : {',
+    );
+    expect(journal).toContain('ArnNotEquals = { "aws:PrincipalArn" = var.administrative_principal_arns }');
+  });
+
+  it('merges it into the two denies that carry a condition of their own, rather than replacing it', () => {
+    // Conditions inside one statement are conjunctive, so a deny carrying both keys
+    // fires only for a principal that is neither a writer nor an administrator. A
+    // replacement would have opened the journal to everything that is not the deployer.
+    expect(journal).toContain(
+      'Condition = merge({ ArnNotLike = { "aws:PrincipalArn" = local.writer_principal_patterns } }, local.administrative_exemption)',
+    );
+    expect(journal).toContain(
+      'Condition = merge({ ArnNotLike = { "aws:PrincipalArn" = local.reader_principal_patterns } }, local.administrative_exemption)',
+    );
+  });
+
+  it('omits the condition key entirely on the deletion deny when nobody is named', () => {
+    // `"Condition": {}` is a statement that claims a condition and has none, and a
+    // reader of a production bucket policy should see no exemption rather than an empty
+    // one.
+    expect(journal).toContain(
+      'length(local.administrative_exemption) == 0 ? {} : { Condition = local.administrative_exemption }',
+    );
+  });
+
+  it('never exempts anybody from the transport deny', () => {
+    const transport = journal.slice(journal.indexOf('Sid       = "DenyUnencryptedTransport"'));
+    const statement = transport.slice(0, transport.indexOf('Sid       = "DenyAnyDeletionOrLockWeakening"'));
+    expect(statement).toContain('Condition = { Bool = { "aws:SecureTransport" = ["false"] } }');
+    expect(statement, 'the transport deny must apply to the deployer too').not.toContain('administrative_exemption');
+  });
+
+  it('is passed the deployment role by the rehearsal root and nothing by production', () => {
+    expect(readRepositoryFile('infra/roots/rehearsal/main.tf')).toContain(
+      'journal_administrative_principal_arns = [local.deployment_role_arn]',
+    );
+    expect(readRepositoryFile('infra/roots/production/main.tf')).toContain(
+      'journal_administrative_principal_arns = var.journal_administrative_principal_arns',
+    );
+    expect(readRepositoryFile('infra/roots/production/variables.tf')).toMatch(
+      /variable "journal_administrative_principal_arns"[\s\S]*?default\s*=\s*\[\]/u,
+    );
+  });
+
+  it('needs the deployment role to hold bypass-governance as well, which only the rehearsal does', () => {
+    // Three things have to be true for a destroy to remove an object-locked bucket that
+    // holds objects inside their retention: force_destroy, the bucket policy, and
+    // s3:BypassGovernanceRetention in IAM. The bucket policy is above; this is the third.
+    const rehearsal = render('fss-rh');
+    const production = render('fss-prod');
+    expect(allowsFor(rehearsal, 's3:BypassGovernanceRetention').length).toBeGreaterThan(0);
+    expect(killedByABlanketDeny(production, 's3:BypassGovernanceRetention')).toBeDefined();
+    expect(readRepositoryFile('infra/modules/journal/main.tf')).toContain('force_destroy       = var.force_destroy');
+  });
+});
+
 describe('the renderer refuses what it cannot render', () => {
   const script = repositoryPath('infra/scripts/render-deployment-role-policy.sh');
   const run = (args: readonly string[]): { readonly code: number; readonly output: string } => {
