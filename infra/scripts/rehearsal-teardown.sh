@@ -14,7 +14,7 @@
 # rehearsal deployment role only; `docs/greenfield/release.md` says why it must never
 # be on the production role and what to check if it ever appears there.
 #
-# The teardown is deliberately in four parts and in this order:
+# The teardown is deliberately in five parts and in this order:
 #
 #   1. the restored instance step 1 of the drill created, which Terraform does not know
 #      about and which would otherwise outlive the run and keep billing;
@@ -22,7 +22,23 @@
 #      worse failure mode: a snapshot outlives the instance and holds the drill's data;
 #   3. the journal objects, with the bypass, because `terraform destroy` cannot delete
 #      a bucket that still has object-locked objects in it;
-#   4. the root itself.
+#   4. the root itself;
+#   5. the journal bucket, if the destroy left it, because Terraform removes only what
+#      its state holds.
+#
+# ## The bucket the first orphan teardown did not see (21 September, Actions 35649752231)
+#
+# The journal module names its bucket `<prefix>-suppression-journal-<account id>`
+# (`infra/modules/journal/main.tf`). Until this revision the script named it without
+# the account, so step 3 listed a bucket that does not exist, was told NoSuchBucket,
+# and said "already absent" — truthfully, about the wrong bucket. The run's state held
+# the bucket's policy, lock configuration, versioning and public-access block and not
+# the bucket, so `Destroy complete! Resources: 4 destroyed.` was also true and the
+# bucket stood. The name now carries the account of the session the check below
+# verified, and step 5 deletes the bucket by name when the destroy has not: it is this
+# run's by construction, step 3 emptied it, and an empty bucket can be deleted whatever
+# its object lock says. A bucket that still has objects is a failure here, not a
+# tolerated absence, because it means step 3 did not do its job.
 #
 # Every one of them goes through `rehearsal_aws`, which refuses any argument naming the
 # production prefix before the call is made.
@@ -45,9 +61,6 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rehearsal-common.sh"
 PREFIX=${1:-}
 rehearsal_require_prefix "$PREFIX"
 
-JOURNAL_BUCKET="${FSS_REHEARSAL_JOURNAL_BUCKET:-${PREFIX}-suppression-journal}"
-rehearsal_refuse_production_arguments "$JOURNAL_BUCKET"
-
 # The destroy below runs with `-var=assume_deployment_role=false`, because this
 # session already is `fss-rh-deploy` and the provider must not assume the role it
 # already holds. That flag hands the question of *which* principal this destroy is to
@@ -55,6 +68,20 @@ rehearsal_refuse_production_arguments "$JOURNAL_BUCKET"
 # that is not an assumed-role session of `fss-rh-deploy` stops the teardown here, with
 # the environment still standing, rather than issuing deletes as somebody else.
 rehearsal_require_deployment_session "${FSS_REHEARSAL_DEPLOYMENT_ROLE:-fss-rh-deploy}"
+
+# The journal bucket, by the name the module gives it. The account is the verified
+# session's (set by the check above); a dry run has no session and shows a placeholder.
+if [ -n "${FSS_REHEARSAL_JOURNAL_BUCKET:-}" ]; then
+  JOURNAL_BUCKET="$FSS_REHEARSAL_JOURNAL_BUCKET"
+elif [ -n "${REHEARSAL_SESSION_ACCOUNT:-}" ]; then
+  JOURNAL_BUCKET="${PREFIX}-suppression-journal-${REHEARSAL_SESSION_ACCOUNT}"
+elif rehearsal_dry_run; then
+  JOURNAL_BUCKET="${PREFIX}-suppression-journal-<account>"
+else
+  echo "FAIL: the session's account is unknown, so the journal bucket cannot be named; set FSS_REHEARSAL_JOURNAL_BUCKET to name it" >&2
+  exit 1
+fi
+rehearsal_refuse_production_arguments "$JOURNAL_BUCKET"
 
 AWS="$(rehearsal_aws_command)"
 
@@ -72,7 +99,7 @@ AWS="$(rehearsal_aws_command)"
 # task belonging to another run — or to production — is never a candidate. A cluster
 # that does not exist is already done.
 # ---------------------------------------------------------------------------
-rehearsal_log "0/4 stopping any one-off task still running in ${PREFIX}-cluster"
+rehearsal_log "0/5 stopping any one-off task still running in ${PREFIX}-cluster"
 if rehearsal_dry_run; then
   rehearsal_plan "aws ecs list-tasks --cluster ${PREFIX}-cluster --desired-status RUNNING"
   rehearsal_plan "  ... stop each, and ClusterNotFoundException means the apply never created it, which is done, not failed"
@@ -97,7 +124,7 @@ for arn in json.loads(raw) or []:
   done
 fi
 
-rehearsal_log "1/4 deleting the restored database instance the drill created"
+rehearsal_log "1/5 deleting the restored database instance the drill created"
 if rehearsal_dry_run; then
   rehearsal_plan "aws rds delete-db-instance --db-instance-identifier ${PREFIX}-pg-restored --skip-final-snapshot --delete-automated-backups"
   rehearsal_plan "  ... and DBInstanceNotFound means the drill never created it, which is done, not failed"
@@ -110,7 +137,7 @@ else
     --delete-automated-backups
 fi
 
-rehearsal_log "2/4 deleting any manual snapshot this run left behind"
+rehearsal_log "2/5 deleting any manual snapshot this run left behind"
 if rehearsal_dry_run; then
   rehearsal_plan "aws rds describe-db-snapshots --snapshot-type manual -> delete every identifier classified as this run's"
 else
@@ -133,7 +160,7 @@ for name in json.loads(raw) or []:
   done
 fi
 
-rehearsal_log "3/4 emptying the object-locked journal bucket with bypass-governance"
+rehearsal_log "3/5 emptying the object-locked journal bucket with bypass-governance"
 if rehearsal_dry_run; then
   rehearsal_plan "list every version in $JOURNAL_BUCKET and delete it with --bypass-governance-retention"
   rehearsal_plan "  ... and NoSuchBucket means the apply never created it, which is done, not failed"
@@ -157,7 +184,7 @@ else
   done
 fi
 
-rehearsal_log "4/4 destroying the rehearsal root"
+rehearsal_log "4/5 destroying the rehearsal root"
 if rehearsal_dry_run; then
   rehearsal_plan "terraform state list -> if the root was never initialised there is nothing to destroy"
   rehearsal_plan "run.auto.tfvars.json must exist beside the root: destroy requires every variable apply did"
@@ -210,5 +237,19 @@ else
   fi
 fi
 
-rehearsal_write_report "teardown.txt" "prefix=$PREFIX destroyed=${DESTROYED}"
+rehearsal_log "5/5 removing the journal bucket if the destroy left it"
+if rehearsal_dry_run; then
+  rehearsal_plan "aws s3api delete-bucket --bucket $JOURNAL_BUCKET"
+  rehearsal_plan "  ... NoSuchBucket means the destroy removed it, which is done; BucketNotEmpty is a failure, because step 3 should have emptied it"
+  JOURNAL_BUCKET_STATE=planned
+else
+  # Terraform removes the bucket only when its state holds it (see the header). The
+  # bucket is this run's by name, step 3 emptied it, and an empty bucket can be deleted
+  # whatever its object lock says. Anything but success or NoSuchBucket is raised.
+  rehearsal_tolerate_absent "deleting $JOURNAL_BUCKET" \
+    command "$AWS" s3api delete-bucket --bucket "$JOURNAL_BUCKET"
+  JOURNAL_BUCKET_STATE=gone
+fi
+
+rehearsal_write_report "teardown.txt" "prefix=$PREFIX destroyed=${DESTROYED} journal_bucket=${JOURNAL_BUCKET_STATE}"
 rehearsal_log "torn down; run rehearsal-prefix-guard.sh $PREFIX after to prove production was untouched"
