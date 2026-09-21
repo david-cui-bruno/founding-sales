@@ -432,7 +432,7 @@ describe('the deployment-role policy is code, and the Terraform tree judges it',
       const deny = rendered[prefix].Statement.find(
         statement => statement.Sid === 'NoManagedPolicyButTheOnesTheStackAttaches',
       );
-      const permitted = deny?.Condition?['ArnNotEquals']?.['iam:PolicyARN'] as readonly string[] | undefined;
+      const permitted = deny?.Condition?.['ArnNotEquals']?.['iam:PolicyARN'] as readonly string[] | undefined;
       expect([...(permitted ?? [])].sort()).toEqual([...attached].sort());
     }
   });
