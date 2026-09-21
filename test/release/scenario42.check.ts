@@ -8,6 +8,12 @@ import { SEND_REFUSAL_CODES } from '@fss/domain/outbound';
 import { DEPLOYMENT_ENVIRONMENT_VARIABLES as WORKER_VARIABLES } from '../../apps/worker/src/bootstrap/deployment.ts';
 import { DEPLOYMENT_ENVIRONMENT_VARIABLES as API_VARIABLES } from '../../apps/api/src/bootstrap/deployment.ts';
 import { mustBeRehearsed, readRepositoryFile, repositoryPath } from './support/coverage.ts';
+import {
+  REHEARSAL_STAGES,
+  rehearsalJobSteps,
+  stagesForCondition,
+  stepsForStage,
+} from './support/releaseWorkflow.ts';
 
 /**
  * Appendix G 42: "Authentication passes but production sending remains disabled until
@@ -137,6 +143,62 @@ describe('Appendix G 42: sending stays off until all four agree', () => {
 
     it('enables nothing by itself', () => {
       expect(script).toContain('"enablesSending": false');
+    });
+  });
+
+  /**
+   * G12k: the rehearsal has four stages and only one of them is the gate.
+   *
+   * A `plan`, `create` or `deploy` run is a discovery run — it exists so that the next
+   * plan-time error costs a minute rather than an hour — and none of them proves what
+   * 16.2 asks of a release. The thing that must be impossible is a cheap run producing
+   * the artifact an admin later points at when enabling sending, so the release-record
+   * step's `if:` is the whole of that impossibility.
+   *
+   * ## The vacuous-pass trap
+   *
+   * Asserting that the workflow *mentions* `stage` would pass against an input nothing
+   * reads, and asserting the record step has some condition would pass against
+   * `inputs.stage != 'plan'` — which lets a `create` run write a record for an
+   * environment that was never deployed or drilled. Closed by reading the condition as
+   * a set of stages and requiring it to be exactly `{full}`, by requiring the record
+   * step to be absent from the step list of each of the other three, and by the
+   * positive control that it is present in `full`. The mutation check drops the
+   * condition and requires this to go red.
+   */
+  describe('only the full stage can write a release record', () => {
+    const steps = rehearsalJobSteps();
+    const record = steps.find(step => step.text.includes('rehearsal-release-record.sh'));
+
+    it('offers the four stages and defaults to the cheap one', () => {
+      const workflow = readRepositoryFile('.github/workflows/greenfield-release.yml');
+      const input = workflow.slice(workflow.indexOf('      stage:'), workflow.indexOf('  pull_request:'));
+      expect(input, 'workflow_dispatch declares no `stage` input').toContain('type: choice');
+      for (const stage of REHEARSAL_STAGES) expect(input).toContain(`          - ${stage}\n`);
+      // The expensive gate is chosen, never inherited from a default.
+      expect(input).toContain("default: 'plan'");
+    });
+
+    it('runs the release record in the full stage and in no other', () => {
+      expect(record, 'no step of the rehearsal job writes a release record').toBeDefined();
+      expect(record?.condition).toBe("inputs.stage == 'full'");
+      expect([...stagesForCondition(record?.condition ?? null)]).toEqual(['full']);
+    });
+
+    it('is not in the step list of a plan, a create or a deploy run', () => {
+      for (const stage of REHEARSAL_STAGES) {
+        const names = stepsForStage(stage, steps).map(step => step.name);
+        expect(names.includes(record?.name ?? ''), `a ${stage} run writes a release record`).toBe(stage === 'full');
+      }
+    });
+
+    it('cannot produce a releaseGateReference from a run that applied nothing', () => {
+      // The other half of the same sentence: a `plan` run creates no environment, so
+      // even a record step that escaped its condition would have nothing to record.
+      const apply = steps.find(step => step.text.includes('terraform apply'));
+      expect(apply, 'no step of the rehearsal job applies anything').toBeDefined();
+      expect([...stagesForCondition(apply?.condition ?? null)]).toEqual(['create', 'deploy', 'full']);
+      expect(stepsForStage('plan', steps).map(step => step.name)).not.toContain(apply?.name);
     });
   });
 
