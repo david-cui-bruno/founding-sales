@@ -52,7 +52,7 @@ locals {
   # Bootstrap: see the variable. Both services are created at zero on the first
   # apply of a fresh environment and scaled by the shared deploy script once the
   # migration task and `fss verify` have succeeded.
-  api_desired_count    = var.api_desired_count
+  api_desired_count    = var.bootstrap ? 0 : var.api_desired_count
   worker_desired_count = var.bootstrap ? 0 : var.worker_desired_count
 
   common_environment = merge(var.environment, {
