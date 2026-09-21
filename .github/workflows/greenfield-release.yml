@@ -106,6 +106,9 @@ on:
       - '.github/workflows/greenfield-release.yml'
       - '.github/workflows/greenfield-rehearsal-registry.yml'
       - 'infra/scripts/rehearsal-*.sh'
+      - 'infra/scripts/render-deployment-role-policy.sh'
+      - 'infra/scripts/check-deployment-role.sh'
+      - 'infra/policies/**'
       - 'scripts/productionSmoke.mjs'
       - 'test/release/**'
   push:
@@ -114,6 +117,9 @@ on:
       - '.github/workflows/greenfield-release.yml'
       - '.github/workflows/greenfield-rehearsal-registry.yml'
       - 'infra/scripts/rehearsal-*.sh'
+      - 'infra/scripts/render-deployment-role-policy.sh'
+      - 'infra/scripts/check-deployment-role.sh'
+      - 'infra/policies/**'
 
 permissions:
   contents: read
@@ -187,6 +193,34 @@ jobs:
               || { echo "::error::$script does not use the shared prefix guard"; status=1; }
           done
           exit "$status"
+
+      - name: The two deployment-role scripts render and plan without a credential
+        env:
+          FSS_CHECK_ROLE_DRY_RUN: '1'
+        run: |
+          set -euo pipefail
+          # These two are not `rehearsal-*.sh` and deliberately do not source the shared
+          # prefix guard: `render-deployment-role-policy.sh` makes no call of any kind,
+          # and `check-deployment-role.sh` is asked about the *production* namespace as
+          # well as the rehearsal one, which the guard exists to refuse. So they are
+          # checked here rather than in the loop above.
+          for script in infra/scripts/render-deployment-role-policy.sh infra/scripts/check-deployment-role.sh; do
+            [ -x "$script" ] || { echo "::error::$script is not executable"; exit 1; }
+            bash -n "$script"
+          done
+
+          # Both documents render, parse as JSON, and fit inside IAM's inline-policy
+          # limit — which the renderer refuses to exceed, so this is the refusal being
+          # exercised as well as the document being produced.
+          for prefix in fss-rh fss-prod; do
+            infra/scripts/render-deployment-role-policy.sh "$prefix" \
+              | python3 -c 'import json,sys; d=json.load(sys.stdin); print(len(d["Statement"]), "statements")'
+            infra/scripts/render-deployment-role-policy.sh "$prefix" --sids
+          done
+
+          # And the pre-apply check prints its plan and makes no call.
+          infra/scripts/check-deployment-role.sh fss-rh-deploy fss-rh | tail -1
+          infra/scripts/check-deployment-role.sh fss-prod-deploy fss-prod | tail -1
 
       - name: The run-task wrapper refuses every launch it must refuse
         env:
