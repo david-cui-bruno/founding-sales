@@ -22,7 +22,8 @@
     "./templates": "./templates/index.ts",
     "./settings": "./settings/index.ts",
     "./dashboard": "./dashboard/index.ts",
-    "./retention": "./retention/index.ts"
+    "./retention": "./retention/index.ts",
+    "./restore": "./restore/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
