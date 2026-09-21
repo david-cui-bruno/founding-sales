@@ -270,13 +270,59 @@ denied `s3:DeleteBucketPolicy` and `s3:PutBucketObjectLockConfiguration` to ever
 principal including the deployer (8.0d). Before this stage there was no way to try again
 without dispatching a run that would also create a second environment.
 
-**For `fss-rh-202609211659` specifically, the order is `create` then `teardown`, and only
-that one time.** That bucket carries the *old* policy, the one with no exemption, and S3
-evaluates the policy on the bucket rather than the one in the repository. `terraform
-apply` at a commit carrying G16's journal change rewrites it — `s3:PutBucketPolicy` was
-never in the deny list — and the destroy then succeeds. Read the plan first: it should
-propose one change to `module.stack.module.journal.aws_s3_bucket_policy.journal` and
-create the rest of the environment, because that run's state holds only four resources.
+**`fss-rh-202609211659` needs one command before its teardown, and only that run does.**
+The exemption is in the repository; the *bucket* carries the old policy, and S3 evaluates
+the policy on the bucket. The good news is that `s3:PutBucketPolicy` was never in the
+deny list — the deny covers deletion and lock weakening, not policy replacement — so the
+policy can be replaced, and it can be replaced by your own admin principal. (An explicit
+`Deny` on `Principal *` in a bucket policy applies to every principal in the account
+including you; what it cannot deny is the account **root**. `PutBucketPolicy` is not
+denied to anybody, which is the whole reason this is recoverable without a root session.)
+
+That run never reached its deploy stage, so nothing was ever written to the bucket: there
+are no journal objects, the one-day GOVERNANCE lock is locking nothing, and no
+bypass-governance is needed.
+
+```bash
+BUCKET=fss-rh-202609211659-suppression-journal-326255650484
+
+# Read what is there now, so the replacement is a decision rather than a guess.
+aws s3api get-bucket-policy --bucket "$BUCKET" --query Policy --output text | python3 -m json.tool
+aws s3api list-object-versions --bucket "$BUCKET" --query 'length(Versions || `[]`)'   # expect 0
+
+# Replace it with one that admits the run's own deployer. Nothing else changes.
+cat > /tmp/journal-orphan-policy.json <<'JSON'
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowTheRehearsalDeployerToRemoveThisOrphan",
+      "Effect": "Allow",
+      "Principal": { "AWS": "arn:aws:iam::326255650484:role/fss-rh-deploy" },
+      "Action": "s3:*",
+      "Resource": [
+        "arn:aws:s3:::fss-rh-202609211659-suppression-journal-326255650484",
+        "arn:aws:s3:::fss-rh-202609211659-suppression-journal-326255650484/*"
+      ]
+    }
+  ]
+}
+JSON
+aws s3api put-bucket-policy --bucket "$BUCKET" --policy file:///tmp/journal-orphan-policy.json
+```
+
+Then Actions → *Greenfield release rehearsal* → `stage = teardown`, `run_suffix =
+202609211659`, and any two well-formed digests that differ. The destroy removes the
+bucket and the four resources that run's state holds, and the post-run guard says
+production was untouched.
+
+The alternative is `create` then `teardown` at a commit carrying the journal change,
+which also works — the apply rewrites the policy from the module — but it creates a whole
+fresh environment, Multi-AZ RDS and all, to fix one bucket policy. Use it only if the
+command above is refused, and read the plan first: it will propose one change to
+`module.stack.module.journal.aws_s3_bucket_policy.journal` and the creation of everything
+else, because that run's state holds only four resources.
+
 Every run after this one applies the fixed policy from the start and needs only
 `teardown`.
 

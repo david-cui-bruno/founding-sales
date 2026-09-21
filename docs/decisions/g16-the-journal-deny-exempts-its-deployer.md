@@ -111,15 +111,23 @@ wrote nothing to it was still stuck, because `DeleteBucketPolicy` and
 
 ## The orphan
 
-`fss-rh-202609211659` is still standing. Its bucket carries the **old** policy, the one
-with no exemption, and a bucket policy is not something `terraform destroy` has to read
-before it deletes — but it is something S3 evaluates before it obeys. So the order for
-that run is: apply the journal change first (`s3:PutBucketPolicy` was never denied —
-nothing in the deny list mentions it), which rewrites the policy with the exemption, then
-destroy. The `teardown` stage of the release workflow runs `terraform init` against that
-run's state key and then `rehearsal-teardown.sh`, which is a `destroy`; for this one
-orphan a `create` stage run at the fixed commit comes first, and `docs/greenfield/release.md`
-3.0 says so. Every future run applies the fixed policy from the start and needs only the
+`fss-rh-202609211659` is still standing, and its bucket carries the **old** policy — S3
+evaluates the policy on the bucket, not the one in the repository.
+
+What makes it recoverable is that `s3:PutBucketPolicy` is not in the deny list. The deny
+covers deletion and lock weakening; replacing the policy is not either. And a bucket
+policy's `Deny` on `Principal *` applies to every principal in the account including
+David's admin user — what it cannot deny is the account **root** — so `put-bucket-policy`
+from his own credentials is enough, and no root session is needed.
+
+That run never reached its deploy stage, so the bucket holds no objects at all: the
+one-day GOVERNANCE lock is locking nothing and no bypass-governance is involved.
+`docs/greenfield/release.md` 3.0 has the exact command and the `stage = teardown`
+dispatch that follows it, and names the alternative — a `create` run at a commit carrying
+this change, which also works and creates a whole Multi-AZ environment to fix one bucket
+policy.
+
+Every run after this one applies the fixed policy from the start and needs only the
 teardown.
 
 ## What is still unverified
