@@ -47,6 +47,10 @@
 # `infra/roots/production/tests/journal_teardown.tftest.hcl` has production's
 # default of nobody and its opt-in.
 
+# The database module waits five minutes between its key and its instance in a real
+# apply; a mocked time provider makes that wait nothing here.
+mock_provider "time" {}
+
 mock_provider "aws" {
   override_during = apply
 

@@ -14,6 +14,10 @@ mock_provider "aws" {
   }
 }
 
+# The wait between the key and the instance is real time in a real apply and must be
+# nothing here: a mocked provider creates the resource without sleeping.
+mock_provider "time" {}
+
 variables {
   name_prefix            = "fss-test"
   subnet_ids             = ["subnet-1111111111111111a", "subnet-1111111111111111b"]
@@ -55,6 +59,14 @@ run "production_defaults_are_recoverable_and_protected" {
   assert {
     condition     = aws_kms_key.database.enable_key_rotation
     error_message = "The database customer key must rotate."
+  }
+
+  # Actions 35660873276 (21 Sep 2026): RDS refused the module's own key, created about
+  # twenty seconds earlier, because its tag had not yet reached KMS's authorization,
+  # which AWS documents as taking up to five minutes. The instance waits that bound.
+  assert {
+    condition     = time_sleep.key_is_visible_to_authorization.create_duration == "300s"
+    error_message = "The instance must wait five minutes after the key is created before RDS is asked to use it: the bound AWS documents for tag changes to affect KMS authorization."
   }
 
   assert {
@@ -170,6 +182,13 @@ run "the_storage_key_is_the_module_s_own_customer_key" {
   assert {
     condition     = aws_db_instance.main.kms_key_id == aws_kms_key.database.arn
     error_message = "Storage must be encrypted with the module's customer key, not the AWS-managed key."
+  }
+
+  # The wait is keyed to the key's ARN (a computed value, so asserted here), which is
+  # what makes a new key wait and an ordinary apply not.
+  assert {
+    condition     = time_sleep.key_is_visible_to_authorization.triggers["key_arn"] == aws_kms_key.database.arn
+    error_message = "The wait must be keyed to the key it waits for."
   }
 }
 
