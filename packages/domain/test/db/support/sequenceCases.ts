@@ -2,6 +2,19 @@ import type { SessionQueryable } from '../../../db/queryable.ts';
 import type { TwoWorkspaces } from './fixtures.ts';
 
 /**
+ * An instant later than any `now()` default the same row takes.
+ *
+ * G8 wrote the literal `'2026-09-21T13:00:00Z'` wherever a case needed a
+ * `superseded_at`, `ended_at`, `published_at` or similar that was "later than the
+ * row's own start". At 13:00 UTC on 21 September 2026 the clock passed it, and five
+ * cases began to trip `..._not_before_...` order checks before the constraint they
+ * were written to trip — the gate went red on a pull request that touched none of
+ * this. The order checks are not what these cases test, so the instant only has to
+ * stay ahead of the clock; an hour is plenty for one test run and never a day.
+ */
+const soon = (): string => new Date(Date.now() + 60 * 60 * 1000).toISOString();
+
+/**
  * A failing insert for every constraint migration 0012 adds, and for the five it adds
  * to `template_versions` (lane G8: sequences, versions, steps, enrollments, step
  * executions, the LinkedIn results, the audited migration and the holiday calendar).
@@ -610,14 +623,14 @@ export const SEQUENCE_CONSTRAINT_CASES: readonly SequenceCase[] = [
         [workspace(f), admin(f)],
       );
       // Superseded, so the one-current index is not the thing that refuses it.
-      return await insertCalendar(f, { id, version: 'holidays.2027', supersededAt: '2026-09-21T13:00:00Z' });
+      return await insertCalendar(f, { id, version: 'holidays.2027', supersededAt: soon() });
     },
   },
   {
     constraint: 'workspace_holiday_calendars_one_per_version',
     run: async f => {
       await insertCalendar(f, { version: 'holidays.2026' });
-      return await insertCalendar(f, { version: 'holidays.2026', supersededAt: '2026-09-21T13:00:00Z' });
+      return await insertCalendar(f, { version: 'holidays.2026', supersededAt: soon() });
     },
   },
   {
@@ -647,7 +660,7 @@ export const SEQUENCE_CONSTRAINT_CASES: readonly SequenceCase[] = [
     run: async f =>
       await insertCalendar(f, {
         effectiveFrom: "TIMESTAMPTZ '2026-09-22 13:00:00+00'",
-        supersededAt: '2026-09-21T13:00:00Z',
+        supersededAt: soon(),
       }),
   },
 
@@ -736,7 +749,7 @@ export const SEQUENCE_CONSTRAINT_CASES: readonly SequenceCase[] = [
     run: async f => {
       const sequenceId = await makeSequence(f);
       await makeVersion(f, sequenceId, 3);
-      return await insertVersion(f, sequenceId, { version: 3, state: 'published', publishedAt: '2026-09-21T13:00:00Z', publishedBy: admin(f) });
+      return await insertVersion(f, sequenceId, { version: 3, state: 'published', publishedAt: soon(), publishedBy: admin(f) });
     },
   },
   {
@@ -748,7 +761,7 @@ export const SEQUENCE_CONSTRAINT_CASES: readonly SequenceCase[] = [
     run: async f =>
       await insertVersion(f, await makeSequence(f), {
         state: 'sketch',
-        publishedAt: '2026-09-21T13:00:00Z',
+        publishedAt: soon(),
         publishedBy: admin(f),
       }),
   },
@@ -757,7 +770,7 @@ export const SEQUENCE_CONSTRAINT_CASES: readonly SequenceCase[] = [
     run: async f =>
       await insertVersion(f, await makeSequence(f), {
         state: 'draft',
-        publishedAt: '2026-09-21T13:00:00Z',
+        publishedAt: soon(),
         publishedBy: admin(f),
       }),
   },
@@ -766,7 +779,7 @@ export const SEQUENCE_CONSTRAINT_CASES: readonly SequenceCase[] = [
     run: async f =>
       await insertVersion(f, await makeSequence(f), {
         state: 'published',
-        publishedAt: '2026-09-21T13:00:00Z',
+        publishedAt: soon(),
         publishedBy: outsider(f),
       }),
   },
@@ -775,9 +788,9 @@ export const SEQUENCE_CONSTRAINT_CASES: readonly SequenceCase[] = [
     run: async f =>
       await insertVersion(f, await makeSequence(f), {
         state: 'retired',
-        publishedAt: '2026-09-21T13:00:00Z',
+        publishedAt: soon(),
         publishedBy: admin(f),
-        retiredAt: '2026-09-21T13:00:00Z',
+        retiredAt: soon(),
         retiredBy: outsider(f),
       }),
   },
@@ -786,7 +799,7 @@ export const SEQUENCE_CONSTRAINT_CASES: readonly SequenceCase[] = [
     run: async f =>
       await insertVersion(f, await makeSequence(f), {
         state: 'retired',
-        publishedAt: '2026-09-21T13:00:00Z',
+        publishedAt: soon(),
         publishedBy: admin(f),
       }),
   },
@@ -795,9 +808,9 @@ export const SEQUENCE_CONSTRAINT_CASES: readonly SequenceCase[] = [
     run: async f =>
       await insertVersion(f, await makeSequence(f), {
         state: 'published',
-        publishedAt: '2026-09-21T13:00:00Z',
+        publishedAt: soon(),
         publishedBy: admin(f),
-        retiredAt: '2026-09-21T13:00:00Z',
+        retiredAt: soon(),
         retiredBy: admin(f),
       }),
   },
@@ -806,7 +819,7 @@ export const SEQUENCE_CONSTRAINT_CASES: readonly SequenceCase[] = [
     run: async f =>
       await insertVersion(f, await makeSequence(f), {
         state: 'retired',
-        publishedAt: '2026-09-21T13:00:00Z',
+        publishedAt: soon(),
         publishedBy: admin(f),
         retiredAt: '2026-09-20T13:00:00Z',
         retiredBy: admin(f),
@@ -1023,7 +1036,7 @@ export const SEQUENCE_CONSTRAINT_CASES: readonly SequenceCase[] = [
       return await insertEnrollment(f, chain, {
         contactId: other,
         state: 'dozing',
-        endedAt: '2026-09-21T13:00:00Z',
+        endedAt: soon(),
         endReason: 'admin_stop',
       });
     },
@@ -1036,7 +1049,7 @@ export const SEQUENCE_CONSTRAINT_CASES: readonly SequenceCase[] = [
       return await insertEnrollment(f, chain, {
         contactId: other,
         state: 'active',
-        endedAt: '2026-09-21T13:00:00Z',
+        endedAt: soon(),
         endReason: 'admin_stop',
       });
     },
@@ -1049,7 +1062,7 @@ export const SEQUENCE_CONSTRAINT_CASES: readonly SequenceCase[] = [
       return await insertEnrollment(f, chain, {
         contactId: other,
         state: 'stopped',
-        endedAt: '2026-09-21T13:00:00Z',
+        endedAt: soon(),
       });
     },
   },
@@ -1061,7 +1074,7 @@ export const SEQUENCE_CONSTRAINT_CASES: readonly SequenceCase[] = [
       return await insertEnrollment(f, chain, {
         contactId: other,
         state: 'stopped',
-        endedAt: '2026-09-21T13:00:00Z',
+        endedAt: soon(),
         endReason: 'they_stopped_answering',
       });
     },
@@ -1224,7 +1237,7 @@ export const SEQUENCE_CONSTRAINT_CASES: readonly SequenceCase[] = [
     run: async f =>
       await insertExecution(f, await makeChain(f), {
         state: 'completed',
-        completedAt: '2026-09-21T13:00:00Z',
+        completedAt: soon(),
         completionSource: 'a_hunch',
         result: 'sent',
       }),
@@ -1234,7 +1247,7 @@ export const SEQUENCE_CONSTRAINT_CASES: readonly SequenceCase[] = [
     run: async f =>
       await insertExecution(f, await makeChain(f), {
         state: 'completed',
-        completedAt: '2026-09-21T13:00:00Z',
+        completedAt: soon(),
         completionSource: 'send',
         result: 'probably_fine',
       }),
@@ -1248,7 +1261,7 @@ export const SEQUENCE_CONSTRAINT_CASES: readonly SequenceCase[] = [
     run: async f =>
       await insertExecution(f, await makeChain(f), {
         state: 'cancelled',
-        cancelledAt: '2026-09-21T13:00:00Z',
+        cancelledAt: soon(),
         cancelReason: '   ',
       }),
   },
@@ -1439,7 +1452,7 @@ export const SEQUENCE_CONSTRAINT_CASES: readonly SequenceCase[] = [
       return await insertMigration(f, first, second, {
         state: 'approved',
         approver: outsider(f),
-        approvedAt: '2026-09-21T13:00:00Z',
+        approvedAt: soon(),
       });
     },
   },
@@ -1465,7 +1478,7 @@ export const SEQUENCE_CONSTRAINT_CASES: readonly SequenceCase[] = [
       const second = await makeVersion(f, await makeSequence(f, 'Two'));
       return await insertMigration(f, first, second, {
         state: 'approved',
-        approvedAt: '2026-09-21T13:00:00Z',
+        approvedAt: soon(),
       });
     },
   },
@@ -1478,7 +1491,7 @@ export const SEQUENCE_CONSTRAINT_CASES: readonly SequenceCase[] = [
       const second = await makeVersion(f, await makeSequence(f, 'Two'));
       return await insertMigration(f, first, second, {
         state: 'applied',
-        appliedAt: '2026-09-21T13:00:00Z',
+        appliedAt: soon(),
       });
     },
   },
@@ -1490,8 +1503,8 @@ export const SEQUENCE_CONSTRAINT_CASES: readonly SequenceCase[] = [
       return await insertMigration(f, first, second, {
         state: 'approved',
         approver: admin(f),
-        approvedAt: '2026-09-21T13:00:00Z',
-        appliedAt: '2026-09-21T13:00:00Z',
+        approvedAt: soon(),
+        appliedAt: soon(),
       });
     },
   },
