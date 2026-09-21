@@ -1,4 +1,6 @@
+import type { Queryable } from '../db/queryable.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
+import { recordCrmAuditEvent } from '../crm/audit.ts';
 import { stopEnrollments } from './enrollments.ts';
 import type { EnrollmentEndReason } from './types.ts';
 
@@ -34,9 +36,52 @@ import type { EnrollmentEndReason } from './types.ts';
  * `admin_stop`: something asked for a terminal stop that the pipeline does not
  * corroborate, and inventing `stage_lost` for it would put a reason in the history
  * that never happened.
+ *
+ * ## Two kinds, not one (lane G15)
+ *
+ * 8.1's close is `opportunity.terminal_stop`. 7.3's other half — "manual is entered by
+ * a confirmed human email reply, user-recorded LinkedIn reply, engaged call outcome,
+ * or direct Gmail send. Current active enrollments end terminally" — is
+ * `opportunity.manual_mode`, and until lane G15 nothing acted on that either, so a
+ * confirmed reply set the control mode and left the sequence running. Invariant 3 says
+ * it must not, so this consumer reads both kinds.
+ *
+ * The end reason for a manual-mode stop is `human_reply`. The closed vocabulary also
+ * holds `engaged_call` and `direct_send`, and the signal does not distinguish them:
+ * every manual-mode event carries `reason_code = 'opportunity_manual'` and a
+ * free-text reason, and parsing English out of a detail column to choose a stored code
+ * would be worse than recording the fact this consumer can prove. The lanes that cause
+ * the other two own the finer reason and should stop in their own transaction
+ * (Appendix A's "commits together");
+ * `docs/decisions/g15-the-worker-drains-what-the-lanes-left.md` records it as the
+ * deviation it is.
+ *
+ * ## The second stream: G4's finalization marker
+ *
+ * `suppression_finalizations` with `outcome = 'finalized'` is Appendix C's "terminal
+ * marker", and migration 0006 says in as many words that "an event with an `outcome =
+ * 'finalized'` row is one whose terminal stops are owed". `consumeSuppressionStops`
+ * is the reader. It has no cursor, and deliberately: the marker's `event_id` is a
+ * sha256 hex string and `sequence_event_cursors.last_event_id` is a uuid, so there is
+ * no keyset to store without a migration this lane may not write. What it uses
+ * instead is stronger — the work *is* the set of live enrollments a still-effective
+ * suppression covers, so a marker whose stops have happened offers nothing, and an
+ * enrollment created after a suppression is stopped rather than missed.
  */
 
 export const TERMINAL_STOP_SUBSCRIBER = 'sequences.terminal_stop';
+
+/**
+ * The outbox kinds that end an enrollment terminally (7.3, 8.1).
+ *
+ * `opportunity.reopened` is deliberately absent: 8.1 says a reopen "never silently
+ * restarts old automation", which is a statement about what must *not* start, and a
+ * reopened opportunity has no live enrollment to stop.
+ */
+export const TERMINAL_STOP_EVENT_KINDS = [
+  'opportunity.terminal_stop',
+  'opportunity.manual_mode',
+] as const;
 
 export interface TerminalStopReport {
   readonly eventsConsumed: number;
@@ -47,6 +92,7 @@ export interface TerminalStopReport {
 interface EventDbRow {
   readonly id: string;
   readonly occurred_at: Date;
+  readonly event_kind: string;
   readonly firm_id: string;
   readonly opportunity_id: string | null;
   readonly [column: string]: unknown;
@@ -73,10 +119,10 @@ export async function consumeTerminalStops(
   const cursor = cursors[0] ?? { last_event_at: null, last_event_id: null };
 
   const { rows: events } = await context.db.query<EventDbRow>(
-    `SELECT id, occurred_at, firm_id, opportunity_id
+    `SELECT id, occurred_at, event_kind, firm_id, opportunity_id
        FROM crm_domain_events
       WHERE workspace_id = $1
-        AND event_kind = 'opportunity.terminal_stop'
+        AND event_kind = ANY($5::text[])
         AND ($2::timestamptz IS NULL OR (occurred_at, id) > ($2::timestamptz, $3::uuid))
       ORDER BY occurred_at, id
       LIMIT $4`,
@@ -85,6 +131,7 @@ export async function consumeTerminalStops(
       cursor.last_event_at,
       cursor.last_event_id,
       Math.trunc(options.limit ?? 200),
+      [...TERMINAL_STOP_EVENT_KINDS],
     ],
   );
   if (events.length === 0) {
@@ -94,7 +141,12 @@ export async function consumeTerminalStops(
   let enrollmentsStopped = 0;
   let executionsCancelled = 0;
   for (const event of events) {
-    const reason = await endReasonFor(context, event.opportunity_id);
+    // 7.3's manual paragraph is firm-wide — "terminally stop every active enrollment
+    // for the firm across contacts" — while 8.1's close is about one opportunity.
+    const reason =
+      event.event_kind === 'opportunity.manual_mode'
+        ? 'human_reply'
+        : await endReasonFor(context, event.opportunity_id);
     const stopped = await stopEnrollments(context, {
       ...(event.opportunity_id === null
         ? { firmId: event.firm_id }
@@ -102,6 +154,7 @@ export async function consumeTerminalStops(
       reason,
       cancelReason: 'terminal_stop',
     });
+    await auditStops(context, stopped.enrollmentIds, reason, event.event_kind);
     enrollmentsStopped += stopped.enrollmentsStopped;
     executionsCancelled += stopped.executionsCancelled;
   }
@@ -135,4 +188,190 @@ async function endReasonFor(
   if (status === 'won') return 'stage_won';
   if (status === 'lost') return 'stage_lost';
   return 'admin_stop';
+}
+
+/**
+ * One audit event per enrollment this consumer ended (5.2, Appendix A).
+ *
+ * `stopEnrollments` writes none, and it should not: it is called by the API's own
+ * command, by the LinkedIn result and by the enrollment's own completion, each of
+ * which audits its own action under its own name. What is audited here is the
+ * *consumption* — the moment the worker acted on a signal somebody else committed —
+ * and `detail` is identifiers and codes, never a note or a name.
+ */
+async function auditStops(
+  context: RepositoryContext,
+  enrollmentIds: readonly string[],
+  reason: EnrollmentEndReason,
+  cause: string,
+): Promise<void> {
+  for (const enrollmentId of enrollmentIds) {
+    await recordCrmAuditEvent(context, {
+      action: 'enrollment.terminally_stopped',
+      subjectKind: 'sequence_enrollment',
+      subjectId: enrollmentId,
+      detail: { reason, cause },
+    });
+  }
+}
+
+export interface SuppressionStopReport {
+  readonly markersConsumed: number;
+  readonly enrollmentsStopped: number;
+  readonly executionsCancelled: number;
+}
+
+/** 10.2's prospect-originated sources, which are terminal the moment they commit. */
+const PROSPECT_SOURCES: ReadonlySet<string> = new Set(['prospect_opt_out', 'prospect_do_not_call']);
+
+/**
+ * The end reason a finalized suppression gives the enrollments it covers.
+ *
+ * A firm-wide do-not-contact is `firm_suppressed`, which is the fact itself. A handle
+ * a prospect asked to stop is `opt_out`. A handle a salesperson suppressed and did not
+ * correct inside the ten minutes is neither — the vocabulary reserves its first five
+ * members for prospect signals — so it is `admin_stop`, the member that means somebody
+ * inside decided.
+ */
+function suppressionEndReason(scope: string, source: string): EnrollmentEndReason {
+  if (scope === 'firm') return 'firm_suppressed';
+  return PROSPECT_SOURCES.has(source) ? 'opt_out' : 'admin_stop';
+}
+
+/**
+ * The live enrollments a still-effective finalized suppression covers.
+ *
+ * The handle arm is `suppressionSource()`'s query in `eligibility.ts`, on purpose: the
+ * set of enrollments a handle suppression stops must be the set the eligibility read
+ * refuses, or a step would be held for a reason no stop ever acted on.
+ * `effective_suppressions` rather than `suppression_events` because 10.2 makes that
+ * view authoritative, and an event an admin superseded before this sweep ran is no
+ * longer a reason to stop anything.
+ */
+const OUTSTANDING_SUPPRESSION_STOPS = `
+  SELECT f.workspace_id, f.event_id, f.decided_at, e.scope, e.source, n.id AS enrollment_id
+    FROM suppression_finalizations f
+    JOIN effective_suppressions e
+      ON e.workspace_id = f.workspace_id AND e.event_id = f.event_id
+    JOIN sequence_enrollments n
+      ON n.workspace_id = f.workspace_id
+     AND n.ended_at IS NULL
+     AND (
+       (e.scope = 'firm' AND e.canonical_key = n.firm_id::text)
+       OR (e.scope = 'handle' AND EXISTS (
+             SELECT 1 FROM email_addresses a
+              WHERE a.workspace_id = n.workspace_id AND a.contact_id = n.contact_id
+                AND a.address = e.canonical_key
+             UNION ALL
+             SELECT 1 FROM phone_routes p
+              WHERE p.workspace_id = n.workspace_id AND p.contact_id = n.contact_id
+                AND p.e164 = e.canonical_key
+           ))
+     )
+   WHERE f.outcome = 'finalized'`;
+
+/**
+ * Stop what the finalization markers still owe, for one workspace.
+ *
+ * Idempotent by construction rather than by a cursor: every row it reads names a live
+ * enrollment, and stopping one removes it from the read. Running twice does the work
+ * once, and a crash between two stops leaves the rest owed rather than lost.
+ */
+export async function consumeSuppressionStops(
+  context: RepositoryContext,
+  options: { readonly limit?: number } = {},
+): Promise<SuppressionStopReport> {
+  const { rows } = await context.db.query<{
+    event_id: string;
+    scope: string;
+    source: string;
+    enrollment_id: string;
+  }>(
+    `SELECT event_id, scope, source, enrollment_id
+       FROM (${OUTSTANDING_SUPPRESSION_STOPS}) AS owed
+      WHERE owed.workspace_id = $1
+      ORDER BY owed.decided_at, owed.event_id, owed.enrollment_id
+      LIMIT $2`,
+    [context.scope.workspaceId, Math.trunc(options.limit ?? 200)],
+  );
+  if (rows.length === 0) {
+    return { markersConsumed: 0, enrollmentsStopped: 0, executionsCancelled: 0 };
+  }
+
+  const markers = new Set<string>();
+  let enrollmentsStopped = 0;
+  let executionsCancelled = 0;
+  for (const row of rows) {
+    markers.add(row.event_id);
+    const reason = suppressionEndReason(row.scope, row.source);
+    // One enrollment at a time, because the covering key differs per row: a firm
+    // suppression covers the firm and a handle suppression covers whichever contacts
+    // hold that handle, and only the enrollment id says both at once.
+    const stopped = await stopEnrollments(context, {
+      enrollmentId: row.enrollment_id,
+      reason,
+      cancelReason: 'suppression_finalized',
+    });
+    await auditStops(context, stopped.enrollmentIds, reason, 'suppression.finalized');
+    enrollmentsStopped += stopped.enrollmentsStopped;
+    executionsCancelled += stopped.executionsCancelled;
+  }
+  return { markersConsumed: markers.size, enrollmentsStopped, executionsCancelled };
+}
+
+/** One workspace with terminal-stop work outstanding, and the head of each stream. */
+export interface TerminalStopWork {
+  readonly workspaceId: string;
+  /** The oldest unconsumed outbox event, or null when the cursor has caught up. */
+  readonly outboxHead: string | null;
+  /** The oldest finalized suppression whose stops are still owed, or null. */
+  readonly markerHead: string | null;
+}
+
+/**
+ * Every workspace that owes a terminal stop, for the one-minute pass (13.1).
+ *
+ * Indexed reads and nothing else, and a workspace with nothing owed does not appear —
+ * which is what keeps this source from materialising a job a minute for ever. The two
+ * heads become the job's idempotency key, so the pass inserts one job per distinct
+ * state of the two streams, and the next pass over an unchanged state inserts nothing.
+ */
+export async function listTerminalStopWork(
+  db: Queryable,
+  options: { readonly limit?: number } = {},
+): Promise<readonly TerminalStopWork[]> {
+  const { rows } = await db.query<{
+    workspace_id: string;
+    outbox_head: string | null;
+    marker_head: string | null;
+  }>(
+    `WITH outbox AS (
+       SELECT DISTINCT ON (e.workspace_id) e.workspace_id, e.id::text AS head
+         FROM crm_domain_events e
+         LEFT JOIN sequence_event_cursors c
+           ON c.workspace_id = e.workspace_id AND c.subscriber = $1
+        WHERE e.event_kind = ANY($2::text[])
+          AND (c.last_event_at IS NULL
+               OR (e.occurred_at, e.id) > (c.last_event_at, c.last_event_id))
+        ORDER BY e.workspace_id, e.occurred_at, e.id
+     ),
+     markers AS (
+       SELECT DISTINCT ON (owed.workspace_id) owed.workspace_id, owed.event_id AS head
+         FROM (${OUTSTANDING_SUPPRESSION_STOPS}) AS owed
+        ORDER BY owed.workspace_id, owed.decided_at, owed.event_id
+     )
+     SELECT COALESCE(outbox.workspace_id, markers.workspace_id) AS workspace_id,
+            outbox.head AS outbox_head,
+            markers.head AS marker_head
+       FROM outbox
+       FULL OUTER JOIN markers ON markers.workspace_id = outbox.workspace_id
+      ORDER BY 1
+      LIMIT $3`,
+    [TERMINAL_STOP_SUBSCRIBER, [...TERMINAL_STOP_EVENT_KINDS], Math.trunc(options.limit ?? 200)],
+  );
+  return rows.map(row => ({
+    workspaceId: row.workspace_id,
+    outboxHead: row.outbox_head,
+    markerHead: row.marker_head,
+  }));
 }

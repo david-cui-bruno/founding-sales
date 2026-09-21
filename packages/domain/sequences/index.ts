@@ -150,9 +150,14 @@ export {
 } from './resume.ts';
 
 export {
+  TERMINAL_STOP_EVENT_KINDS,
   TERMINAL_STOP_SUBSCRIBER,
+  consumeSuppressionStops,
   consumeTerminalStops,
+  listTerminalStopWork,
+  type SuppressionStopReport,
   type TerminalStopReport,
+  type TerminalStopWork,
 } from './terminalStops.ts';
 
 export { dueSequenceWorkSource } from './todaySource.ts';

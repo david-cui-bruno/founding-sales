@@ -8,6 +8,8 @@ import { SENDING_STOP_LINE, templateContentHash } from '@fss/domain';
 import { runOnce } from '../src/runner/jobRunner.ts';
 import { runSchedulerPass } from '../src/scheduler/schedulerPass.ts';
 import { workerDueWorkSources } from '../src/bootstrap/main.ts';
+import { terminalStopJobHandler } from '../src/handlers/terminalStop.ts';
+import { sendDayCloseJobHandler } from '../src/handlers/sendDayClose.ts';
 
 /**
  * The three seams lanes G3a, G4 and G7-2 built and nobody wired (lane G15).
@@ -120,7 +122,9 @@ describe('the worker drains what the lanes left', () => {
     });
     expect(report.outcome).toBe('ran');
     expect(report.externalActions).toBe(0);
-    const registry = new HandlerRegistry();
+    const registry = new HandlerRegistry()
+      .register(terminalStopJobHandler())
+      .register(sendDayCloseJobHandler());
     const run = await runOnce(database.session, { registry, owner: 'g15-test', limit: 50 });
     return { inserted: report.inserted, completed: run.completed, failed: run.failed };
   };

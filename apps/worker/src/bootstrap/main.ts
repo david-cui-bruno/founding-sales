@@ -16,9 +16,11 @@ import type { SuppressionJournal } from '@fss/domain/suppression';
 import { mailHandlers, todayReplyPromoter, type MailWorkerOptions } from '../handlers/mail.ts';
 import { outboundSendHandoff } from '../handlers/outboundSendHandoff.ts';
 import { researchHandlers } from '../handlers/research.ts';
+import { sendDayCloseJobHandler, sendDayCloseSource } from '../handlers/sendDayClose.ts';
 import { sequenceActionJobHandler, sequenceActionSource } from '../handlers/sequenceAction.ts';
 import { retentionBatchJobHandler, retentionSource } from '../handlers/retention.ts';
 import { suppressionFinalizeJobHandler } from '../handlers/suppressionFinalize.ts';
+import { terminalStopJobHandler, terminalStopSource } from '../handlers/terminalStop.ts';
 import { todayBuildJobHandler, todayBuildSource } from '../handlers/todayBuild.ts';
 import { mailSources } from '../scheduler/mailSources.ts';
 import type { DueWorkSource } from '../scheduler/schedulerPass.ts';
@@ -98,6 +100,12 @@ function registerHandlers(
     }),
   );
   registry.register(retentionBatchJobHandler());
+  // Lane G15. Both need no configuration at all and reach nothing outside PostgreSQL,
+  // so like `retention.batch` the deployment has nothing to say about them: one drains
+  // the terminal stops G3a, G4 and G8 left for whoever ran the worker, the other
+  // closes a send day so 12.7's ramp can advance past five a day.
+  registry.register(terminalStopJobHandler());
+  registry.register(sendDayCloseJobHandler());
   // 7.4's providers have no live adapter in this repository, so the deployment
   // declares their absence rather than discovering it; see `deployment.ts`.
   for (const handler of researchHandlers({ providers: {} })) registry.register(handler);
@@ -238,6 +246,8 @@ export function workerDueWorkSources(): readonly DueWorkSource[] {
     canarySource(),
     todayBuildSource(),
     sequenceActionSource(),
+    terminalStopSource(),
+    sendDayCloseSource(),
     retentionSource(),
     ...mailSources(),
     classifyReplySource(),

@@ -57,6 +57,7 @@ export {
   openSendDay,
   rampHealthFailure,
   readRamp,
+  readSendDayHealth,
   recordDaySignal,
   scheduledCap,
   setAdminCap,
