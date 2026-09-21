@@ -254,8 +254,9 @@ it is meant to be. `create` onwards needs the real ones.
    values you can read, and it finds the same class of error. Do this after every
    Terraform change, before anything in CI.
 2. **CI `plan`.** The rehearsal root is not the production root: a different prefix, a
-   different set of variables, a different provider configuration and no Google
-   credential at all. A clean production plan does not imply a clean rehearsal plan.
+   different set of variables, and — after G12j — no Google provider at all, where
+   production has one and needs your application-default credentials (1.7). A clean
+   production plan does not imply a clean rehearsal plan, or the other way round.
 3. **Fix as a batch.** Terraform reports every *independent* plan-time error in one
    run, so read the whole list before changing anything. The third credentialed run
    reported two errors at once and they had nothing to do with each other (8.0c).
@@ -687,10 +688,12 @@ independent plan-time errors together, which is the one piece of luck in the seq
 all three are blind to plan-time reality in the same way:
 
 - `terraform validate` and `terraform fmt` never configure a provider, so a provider
-  that cannot obtain a credential is not a validation error. The rehearsal needs the
-  Google provider only because `infra/modules/stack` contains `module "pubsub"` with
-  `count = var.enable_gmail_push ? 1 : 0`, and Terraform configures every *required*
-  provider during plan even when the module has zero instances.
+  that cannot obtain a credential is not a validation error. At 845c6ed5 the rehearsal
+  required the Google provider only because `infra/modules/stack` held `module
+  "pubsub"`, and Terraform configures every *required* provider during plan even when
+  the module has zero instances. G12j moves that module to the production root and
+  removes the provider and the `gcp_*` variables from the rehearsal root, so the
+  rehearsal no longer declares it at all.
 - `terraform test` with `mock_provider` sets `override_during = plan`, which makes
   computed attributes **known** during plan — the opposite of what a real plan does.
   The alerts module's own tests also pass a literal `kms_key_arn`, so the expression
