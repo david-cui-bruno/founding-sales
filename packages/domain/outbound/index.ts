@@ -86,6 +86,7 @@ export {
 export {
   beginReconciling,
   claimForDispatch,
+  fenceForOutgoingMessage,
   holdFence,
   markUnknownTerminal,
   prepareOutboundMessage,

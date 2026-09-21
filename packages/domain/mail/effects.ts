@@ -3,6 +3,8 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { openHold } from '../policy/holds.ts';
 import { setManualControlMode } from '../crm/pipeline.ts';
 import { recordSuppression, type SuppressionJournal } from '../suppression/index.ts';
+import { recordDaySignal } from '../outbound/ramp.ts';
+import { businessDateOf } from '../today/snapshots.ts';
 import { classifyReply, type ReplyClassification } from '../src/rules/replyClassification.ts';
 import { discardMessageBody } from './messages.ts';
 import type { MatchCandidate } from './matching.ts';
@@ -220,9 +222,17 @@ export async function applyClassificationEffects(
   // never the reporting daemon's address." The daemon is whoever sent the report —
   // `header_from` — and it is exactly the address this must not touch.
   if (classification.class === 'bounce') {
+    // 12.7's ramp reads the day's bounces, and this is where a bounce is learned
+    // about. Counted once per message: the guard below is per candidate, and a bounce
+    // matched to two firms is one bounce from Gmail's point of view (lane G15).
+    let counted = false;
     for (const candidate of candidates) {
       const targetKey = `route:${candidate.opportunityId}`;
       if (!(await effectRecorded(context, { messageId: message.id, kind: 'route_invalidated', targetKey }))) {
+        if (!counted) {
+          await countRampSignal(context, message, 'bounce');
+          counted = true;
+        }
         const invalidated = await invalidateBouncedRoute(context, {
           firmId: candidate.firmId,
           contactId: candidate.contactId,
@@ -265,6 +275,9 @@ export async function applyClassificationEffects(
           journal: input.journal,
         });
         if (recorded.ok) {
+          // 12.7's other ramp signal, counted once per message for the same reason
+          // the bounce is: the effect's own uniqueness is the guard (lane G15).
+          await countRampSignal(context, message, 'opt_out');
           await recordEffect(context, {
             messageId: message.id,
             kind: 'handle_suppressed',
@@ -439,6 +452,33 @@ export async function applyDirectSendEffects(
     switched.push(candidate.opportunityId);
   }
   return { switchedToManual: switched };
+}
+
+/**
+ * Count one ramp signal against the mailbox's day (12.7, lane G15).
+ *
+ * The business date is the message's own `internal_date` in the workspace's zone,
+ * because `mailbox_send_days.business_date` is a workspace-zone calendar and
+ * `businessDateOf` is the one function that computes it — in PostgreSQL, so the answer
+ * cannot differ from the one the send path wrote.
+ *
+ * `recordDaySignal` is a bare `UPDATE`, so a signal for a day the mailbox has no row
+ * for counts nothing, and that is the right behaviour rather than a gap: a day with no
+ * automated sends is not a sending day (`rampHealthFailure` returns `no_sends` for
+ * one), so there is nothing for a bounce to be a proportion of. The cost is that a
+ * bounce arriving after its day has been closed is not counted against it; the
+ * decision record names it.
+ */
+async function countRampSignal(
+  context: RepositoryContext,
+  message: MailMessageRow,
+  signal: 'bounce' | 'opt_out',
+): Promise<void> {
+  await recordDaySignal(context, {
+    mailboxId: message.mailboxId,
+    businessDate: await businessDateOf(context, message.internalDate),
+    signal,
+  });
 }
 
 /** Re-export so a caller needs one import for the deterministic layer. */

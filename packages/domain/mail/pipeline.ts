@@ -1,5 +1,8 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
+import { fenceForOutgoingMessage } from '../outbound/fence.ts';
+import { countDirectSend, effectiveDailyCap, ensureRamp } from '../outbound/ramp.ts';
 import type { SuppressionJournal } from '../suppression/index.ts';
+import { businessDateOf } from '../today/snapshots.ts';
 import { classifyReply } from '../src/rules/replyClassification.ts';
 import {
   applyClassificationEffects,
@@ -11,7 +14,7 @@ import type { GmailAccessGrant, GmailClient, GmailOAuthConfig } from './gmailCli
 import { findMatchCandidates, recordMatches } from './matching.ts';
 import { normalizeMetadata, recordMessage, storeMessageBody } from './messages.ts';
 import type { ReplyPromoter } from './replyLane.ts';
-import { METADATA_HEADERS, type MailboxRow } from './types.ts';
+import { METADATA_HEADERS, type MailMessageRow, type MailboxRow } from './types.ts';
 
 /**
  * What happens to one batch of Gmail message ids, whichever job found them
@@ -42,6 +45,10 @@ export interface MessagePipelineReport {
   readonly holdsOpened: number;
   readonly suppressionsRecorded: number;
   readonly directSendsSwitchedToManual: number;
+  /** Outgoing messages counted against 12.7's operational headroom (lane G15). */
+  readonly directSendsCounted: number;
+  /** Outgoing messages this import matched to a fence FSS had already counted. */
+  readonly automatedSendsRecognised: number;
   /** The newest `internalDate` seen, which is what a coverage watermark may claim. */
   readonly newestInternalDate: string | null;
 }
@@ -55,8 +62,46 @@ export const EMPTY_PIPELINE_REPORT: MessagePipelineReport = Object.freeze({
   holdsOpened: 0,
   suppressionsRecorded: 0,
   directSendsSwitchedToManual: 0,
+  directSendsCounted: 0,
+  automatedSendsRecognised: 0,
   newestInternalDate: null,
 });
+
+/**
+ * Count one imported outgoing message against 12.7's operational headroom (lane G15).
+ *
+ * "All outgoing Gmail messages, including direct sends, count toward operational
+ * headroom. Automated capacity is conservatively reserved so sync lag cannot approach
+ * Google's account ceiling." `countDirectSend` is the `direct_sent` column and it is
+ * deliberately *not* the automated cap: the cap is FSS's own restraint and a person
+ * writing their own email is not FSS.
+ *
+ * A message with a fence is one FSS sent, and `countAutomatedSend` counted it before
+ * it left. Counting it here as well would double every sequence email in the day's
+ * headroom, so the fence lookup is the guard and `stored.inserted` is the other half:
+ * a duplicate push or a recovery pass re-reading the same id inserts no message row
+ * and therefore counts nothing.
+ *
+ * Returns whether it counted, for the report.
+ */
+async function countOutgoingAgainstHeadroom(
+  context: RepositoryContext,
+  message: MailMessageRow,
+): Promise<boolean> {
+  const fenceId = await fenceForOutgoingMessage(context, {
+    mailboxId: message.mailboxId,
+    rfcMessageId: message.rfcMessageId,
+    providerMessageId: message.providerMessageId,
+  });
+  if (fenceId !== null) return false;
+  const ramp = await ensureRamp(context, message.mailboxId);
+  await countDirectSend(context, {
+    mailboxId: message.mailboxId,
+    businessDate: await businessDateOf(context, message.internalDate),
+    cap: effectiveDailyCap(ramp),
+  });
+  return true;
+}
 
 export async function processMessageIds(
   context: RepositoryContext,
@@ -75,6 +120,8 @@ export async function processMessageIds(
   let holdsOpened = 0;
   let suppressionsRecorded = 0;
   let directSendsSwitchedToManual = 0;
+  let directSendsCounted = 0;
+  let automatedSendsRecognised = 0;
   let newestInternalDate: string | null = null;
 
   for (const providerMessageId of input.messageIds) {
@@ -92,6 +139,13 @@ export async function processMessageIds(
       newestInternalDate = stored.message.internalDate;
     }
 
+    // 12.7: "All outgoing Gmail messages, including direct sends, count toward
+    // operational headroom." Before the match, because the headroom is a fact about
+    // the mailbox and an outgoing message nobody could match still left the account.
+    if (stored.message.direction === 'outgoing' && stored.inserted) {
+      if (await countOutgoingAgainstHeadroom(context, stored.message)) directSendsCounted += 1;
+    }
+
     // Step 2: match, in 12.3's order, first rule that finds anything winning.
     const candidates = await findMatchCandidates(context, {
       mailboxId: input.mailbox.id,
@@ -106,11 +160,21 @@ export async function processMessageIds(
     holdsOpened += matches.holdIds.length;
 
     if (stored.message.direction === 'outgoing') {
-      // 12.2 and Appendix G 19. Until G7-2's fence exists, every outgoing message
-      // that matches is a direct send, which is exactly right while FSS has sent
-      // nothing: the fence lookup goes here and changes nothing else.
-      const outcome = await applyDirectSendEffects(context, { message: stored.message, candidates });
-      directSendsSwitchedToManual += outcome.switchedToManual.length;
+      // 12.2 and Appendix G 19, and the fence lookup the comment here used to promise
+      // (lane G15). 7.3 makes a *direct* Gmail send enter manual mode; a sequence step
+      // FSS sent itself is not one, and switching its own opportunity to manual would
+      // terminally stop the enrollment that had just sent step one.
+      const fenceId = await fenceForOutgoingMessage(context, {
+        mailboxId: input.mailbox.id,
+        rfcMessageId: stored.message.rfcMessageId,
+        providerMessageId: stored.message.providerMessageId,
+      });
+      if (fenceId === null) {
+        const outcome = await applyDirectSendEffects(context, { message: stored.message, candidates });
+        directSendsSwitchedToManual += outcome.switchedToManual.length;
+      } else {
+        automatedSendsRecognised += 1;
+      }
       continue;
     }
 
@@ -158,6 +222,8 @@ export async function processMessageIds(
     holdsOpened,
     suppressionsRecorded,
     directSendsSwitchedToManual,
+    directSendsCounted,
+    automatedSendsRecognised,
     newestInternalDate,
   };
 }

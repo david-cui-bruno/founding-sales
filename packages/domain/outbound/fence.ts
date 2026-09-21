@@ -391,6 +391,47 @@ export async function readFenceByStepExecution(
   return row === undefined ? null : toFence(row);
 }
 
+/**
+ * The fence of an outgoing message the sync imported, or null if FSS did not send it
+ * (12.2, 12.7, Appendix G 19; lane G15).
+ *
+ * The mail pipeline learns of *every* outgoing message in the mailbox, including the
+ * ones FSS sent itself, and until this function existed it could not tell them apart.
+ * `packages/domain/mail/pipeline.ts` said so out loud — "until G7-2's fence exists,
+ * every outgoing message that matches is a direct send, which is exactly right while
+ * FSS has sent nothing: the fence lookup goes here". The fence exists now, and what it
+ * costs to keep believing otherwise is two wrong things at once: FSS's own step-one
+ * email would switch its opportunity to manual (7.3 reserves that for a *direct* send),
+ * and 12.7's `direct_sent` counter would double-count a message already counted as
+ * `automated_sent`.
+ *
+ * Two joins, because either can be missing: the deterministic `Message-ID` FSS wrote
+ * before it sent (`<fss.{fence}@{domain}>`, unique per mailbox by
+ * `outbound_messages_one_header_per_mailbox`) and the provider id Gmail returned,
+ * which a fence only carries once it is `sent` or reconciled. `mail_messages.
+ * rfc_message_id` is stored unbracketed and the fence's header bracketed, so the
+ * brackets go back on for the comparison.
+ */
+export async function fenceForOutgoingMessage(
+  context: RepositoryContext,
+  input: {
+    readonly mailboxId: string;
+    readonly rfcMessageId: string | null;
+    readonly providerMessageId: string | null;
+  },
+): Promise<string | null> {
+  const header = input.rfcMessageId === null ? null : `<${input.rfcMessageId}>`;
+  const { rows } = await context.db.query<{ id: string }>(
+    `SELECT id FROM outbound_messages
+      WHERE workspace_id = $1 AND mailbox_id = $2
+        AND ((($3::text IS NOT NULL) AND provider_message_id_header = $3)
+             OR (($4::text IS NOT NULL) AND provider_message_id = $4))
+      LIMIT 1`,
+    [context.scope.workspaceId, input.mailboxId, header, input.providerMessageId],
+  );
+  return rows[0]?.id ?? null;
+}
+
 export interface OutboundOutcome {
   readonly state: OutboundOutcomeState;
   readonly outboundMessageId: string | null;

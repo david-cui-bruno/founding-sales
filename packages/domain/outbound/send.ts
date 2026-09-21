@@ -11,7 +11,7 @@ import {
   type OutboundFenceRow,
 } from './fence.ts';
 import { decideSend, holdReasonForRefusal, type SendGateDeps } from './gate.ts';
-import { countAutomatedSend } from './ramp.ts';
+import { countAutomatedSend, recordDaySignal } from './ramp.ts';
 import { RECONCILE_WINDOW_HOURS, type SendRefusalCode } from './types.ts';
 
 /**
@@ -198,6 +198,17 @@ export async function dispatchOutboundMessage(
   // A `refused` outcome is included, because by the time we learn of it the fence is
   // already `dispatching` and `dispatching` never returns to `prepared`.
   const detail = sent.outcome === 'refused' ? `refused:${sent.reason}` : sent.detail;
+  // 12.7: "The ramp advances only with ... no provider rate-limit or reputation
+  // warning". This is the only place in FSS that hears from the provider at all, so
+  // it is where the day learns it. Counted whether Gmail refused or went quiet: the
+  // ramp's question is whether the day went well, and a day whose sends went into
+  // doubt did not. The counter feeds `rampHealthFailure`'s `provider_warning`, which
+  // is why that rule takes `providerErrors` and not only a boolean (lane G15).
+  await recordDaySignal(context, {
+    mailboxId: plan.mailbox.id,
+    businessDate: plan.day.businessDate,
+    signal: 'provider_error',
+  });
   await beginReconciling(context, {
     outboundMessageId: fence.id,
     detail,
