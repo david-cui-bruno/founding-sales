@@ -103,8 +103,14 @@ function metricMode(environment: Environment): MetricMode {
  * An ARN arriving in that variable means the task definition used `environment`
  * instead of `secrets`, so the process would connect to nothing and report a
  * database-unreachable it could have refused at startup.
+ *
+ * Exported because the operations command line (`src/tools/fss.ts`) has to resolve the
+ * connection the same way and there must not be a second way: the tool runs from a
+ * `DATABASE_URL` on a laptop and as a command override of this image in the VPC, and
+ * in the second case the only thing that carries the credential is the ECS `secrets`
+ * block this function already understands.
  */
-function databaseConnection(environment: Environment): { readonly connectionString: string } {
+export function databaseConnection(environment: Environment): { readonly connectionString: string } {
   const url = environment['DATABASE_URL']?.trim();
   if (url !== undefined && url.length > 0) return { connectionString: url };
 

@@ -175,3 +175,95 @@ describe('Appendix G 11: the drill refuses its own missing preconditions', () =>
     expect(output).toContain('no fss executable is on PATH');
   });
 });
+
+/**
+ * G12g: the drill's commands exist, and the restore point is one RDS can restore to.
+ *
+ * Two findings from reading the drill end to end, both of which would have failed only
+ * in the cloud and only after money had been spent:
+ *
+ *   * every `fss admin …` line named a command line this repository did not contain.
+ *     G12f made the missing executable a precondition; this lane wrote the tool, and
+ *     `apps/worker/test/fssCli.test.ts` parses the drill's own invocations out of the
+ *     script and requires the parser to accept each one, so a drill that grows a
+ *     command fails on a laptop instead of at step 5 of a credentialed run;
+ *   * the restore asked for `--restore-time "$DRILL_START"`, an instant a second old.
+ *     RDS restores to a point inside its continuous backup window, which lags real
+ *     time by up to about five minutes (spec 4.1), so that request is refused with
+ *     `InvalidRestoreTime`. The drill now reads `LatestRestorableTime` before the
+ *     restore, measures the baseline at it, and asks for `--use-latest-restorable-time`.
+ *
+ * ## The vacuous-pass trap
+ *
+ * Asserting that the script *contains* `--use-latest-restorable-time` would pass
+ * against a script that also still passed `--restore-time`, which is the failure. So
+ * the dry run is executed and its plan is read: the restore line must carry the flag
+ * and must not carry an explicit restore time, and the baseline's `--as-of` must be the
+ * instant the plan named rather than a fresh clock reading.
+ */
+describe('Appendix G 11: the drill calls commands that exist, at an instant RDS can restore to', () => {
+  function planOf(environment: Readonly<Record<string, string>>): string {
+    const result = spawnSync(repositoryPath('infra/scripts/rehearsal-restore-drill.sh'), ['fss-rh-plan'], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        FSS_REHEARSAL_DRY_RUN: '1',
+        FSS_REHEARSAL_REPORTS: mkdtempSync(join(tmpdir(), 'fss-plan-')),
+        ...environment,
+      },
+    });
+    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+    return result.stdout;
+  }
+
+  /** The plan with an operator-named target, which is the one whose instants are fixed. */
+  const plan = planOf({ FSS_RESTORE_TARGET: '2026-09-21T00:00:00Z' });
+  /** And the plan with none, which is the branch that reads the point from RDS. */
+  const readingPlan = planOf({});
+
+  it('restores to the latest restorable point rather than to an instant it made up', () => {
+    const restore = plan
+      .split('\n')
+      .find(line => line.includes('restore-db-instance-to-point-in-time'));
+    expect(restore, 'the plan no longer contains the restore at all').toBeDefined();
+    expect(restore).toContain('--use-latest-restorable-time');
+    expect(restore, 'an explicit restore time is the request RDS refuses').not.toContain('--restore-time');
+  });
+
+  it('reads the restorable point before the restore, because the baseline is measured at it', () => {
+    const readAt = readingPlan.indexOf('LatestRestorableTime');
+    const restoreAt = readingPlan.indexOf('restore-db-instance-to-point-in-time');
+    expect(readAt).toBeGreaterThanOrEqual(0);
+    expect(readAt, 'the point has to be known before the baseline and the restore').toBeLessThan(restoreAt);
+    expect(readAt, 'and before the baseline counts').toBeLessThan(readingPlan.indexOf('fss admin counts'));
+    // And it is that instant the counts are taken as of, not a fresh clock reading.
+    expect(plan).toContain('fss admin counts --as-of 2026-09-21T00:00:00Z');
+  });
+
+  it('calls only commands the tool accepts, with the flags it accepts', async () => {
+    const { drillInvocations, parseFssCommand } = await import('../../apps/worker/src/tools/fss/commands.ts');
+    const script = readRepositoryFile('infra/scripts/rehearsal-restore-drill.sh');
+    const invocations = drillInvocations(script);
+    expect(invocations.length, 'the extractor found no fss invocation at all').toBeGreaterThanOrEqual(14);
+    for (const invocation of invocations) {
+      const parsed = parseFssCommand(invocation.argv);
+      // A planned line carries prose after the command, so a missing *required* flag is
+      // expected there; an unknown command or an unknown flag never is.
+      if (!parsed.ok) {
+        expect(parsed.reason, `${invocation.text} is not a command the tool has`).toBe('flag_missing');
+      }
+    }
+  });
+
+  it('ships the tool in the worker image, because the database is not publicly reachable', () => {
+    // The image copies `apps/worker/src`, so the tool travels with the worker and the
+    // `imageClosure` test already covers the domain directories it reaches.
+    expect(readRepositoryFile('Dockerfile.worker')).toContain('COPY apps/worker/src apps/worker/src');
+    expect(readRepositoryFile('Dockerfile.worker')).toContain('COPY packages/domain/restore packages/domain/restore');
+    expect(readRepositoryFile('Dockerfile.worker.dockerignore')).toContain('!packages/domain/restore');
+    // And the two invocation forms are written down where an operator will look.
+    const processes = readRepositoryFile('docs/greenfield/processes.md');
+    expect(processes).toContain('apps/worker/src/tools/fss.ts');
+    expect(processes).toContain('containerOverrides');
+  });
+});

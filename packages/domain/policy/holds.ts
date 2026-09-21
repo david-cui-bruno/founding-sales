@@ -106,6 +106,37 @@ export async function listApplicableHolds(
   return rows.filter(row => row.scope_kind === 'workspace' || row.scope_key !== null).map(toOpenHold);
 }
 
+/**
+ * Every open hold of this workspace, by reason code (Appendix E steps 1 and 9).
+ *
+ * `listApplicableHolds` answers "may this action happen to this subject", which is
+ * the question the send and dial paths ask. The restore protocol asks a different
+ * one: "is a `restore_in_progress` hold in force at all", and afterwards "did
+ * advancing the generation release *only* those". Neither can be answered by the
+ * subject-shaped read — a workspace with a held mailbox and no subject to name would
+ * report nothing — so the reason is the filter and the subject is absent.
+ *
+ * `reason` and `excludeReason` are both optional and both honoured, because the
+ * drill asks for each in turn and the complement has to be the complement of the
+ * same set. An empty filter is every open hold.
+ */
+export async function listHoldsByReason(
+  context: RepositoryContext,
+  filter: { readonly reason?: HoldReasonCode | undefined; readonly excludeReason?: HoldReasonCode | undefined } = {},
+): Promise<readonly OpenHold[]> {
+  const { rows } = await context.db.query<HoldRow>(
+    `SELECT ${HOLD_COLUMNS}
+       FROM active_holds
+      WHERE workspace_id = $1
+        AND released_at IS NULL
+        AND ($2::text IS NULL OR reason_code = $2)
+        AND ($3::text IS NULL OR reason_code <> $3)
+      ORDER BY started_at, id`,
+    [context.scope.workspaceId, filter.reason ?? null, filter.excludeReason ?? null],
+  );
+  return rows.map(toOpenHold);
+}
+
 export interface OpenHoldInput {
   readonly scopeKind: 'workspace' | 'owner' | 'mailbox' | 'firm' | 'opportunity' | 'enrollment' | 'channel';
   readonly scopeKey?: string | undefined;

@@ -203,6 +203,42 @@ const MUTATIONS = [
     because:
       '"A restore drill against an empty database proves nothing." The drill has to fail its own setup rather than report a pass, and the scenario 11 check asserts the refusal is there.',
   },
+  {
+    name: 'the restore drill asks RDS for an instant it cannot restore to',
+    file: 'infra/scripts/rehearsal-restore-drill.sh',
+    find: '  --use-latest-restorable-time \\\n',
+    replace: '  --restore-time "$RESTORE_TARGET" \\\n',
+    suite: ['run', 'test:release'],
+    because:
+      "The latest restorable point lags real time by up to about five minutes, so restoring to an instant the drill chose is refused with InvalidRestoreTime — in the cloud, after the guard, on a credentialed run. Scenario 11 reads the dry-run plan rather than the script's text, so a restore that went back to naming its own time must turn it red.",
+  },
+  {
+    name: 'the fss command line accepts any command at all',
+    file: 'apps/worker/src/tools/fss/commands.ts',
+    find: "    return { ok: false, reason: 'command_unknown', detail: argv.filter(word => !word.startsWith('--')).join(' ') };",
+    replace: '    return { ok: true, value: { spec: FSS_COMMANDS[0], options: {}, switches: new Set() } };',
+    suite: ['--workspace', 'apps/worker', '--', 'test/fssCli.test.ts'],
+    because:
+      'The drill writes fourteen `fss admin` lines and the tool is the only thing that can say whether they are real. A parser that accepted everything would make a misspelt flag in the drill do nothing at all at three in the morning, so the suite that reads the drill has to go red when the refusal is gone.',
+  },
+  {
+    name: 'the operations tool stops fixing the dependency mode per command',
+    file: 'apps/worker/src/tools/fss.ts',
+    find: "  if (config.dependencies !== 'recorded') {\n    return {\n      refusal: {",
+    replace: '  if (false) {\n    return {\n      refusal: {',
+    suite: ['--workspace', 'apps/worker', '--', 'test/fssSurface.test.ts'],
+    because:
+      'David fixed the dependency mode per admin command so that a restore reconstruction run from a command line can never reach live Gmail. If a `live` deployment can run `mailbox recover`, the suite that asserts the refusal must go red rather than the tool trusting that nothing downstream sends.',
+  },
+  {
+    name: 'the journal replay stops keeping the workspaces apart',
+    file: 'packages/domain/suppression/replay.ts',
+    find: '    if (record.workspaceId !== context.scope.workspaceId) {',
+    replace: '    if (false) {',
+    suite: ['--workspace', 'packages/domain', '--', 'test/restore/adminCommands.test.ts'],
+    because:
+      "Appendix E's replay is the one path that writes suppression rows from outside a command, and a record carries the workspace it belongs to. A replay that inserted another workspace's event would be the only way a suppression could cross a workspace boundary in this system, so the two-workspace case must fail when the check is removed.",
+  },
 ];
 
 function run(script) {

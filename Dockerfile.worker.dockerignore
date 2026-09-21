@@ -29,6 +29,7 @@
 !packages/domain/sequences
 !packages/domain/templates
 !packages/domain/retention
+!packages/domain/restore
 !packages/contracts/package.json
 !packages/contracts/src
 

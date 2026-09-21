@@ -16,6 +16,7 @@
     "classification/**/*.ts",
     "dial/**/*.ts",
     "research/**/*.ts",
+    "restore/**/*.ts",
     "test/**/*.ts",
     "vitest.config.ts"
   ],
