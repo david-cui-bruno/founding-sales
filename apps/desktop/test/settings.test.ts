@@ -56,16 +56,11 @@ const settingsBody = (overrides: Record<string, unknown> = {}) => ({
       changedByUserId: null,
       changeNote: null,
     },
+    // `postal_footer` until migration 0015 removed that slice; a configured slice is
+    // still needed here so the bridge has a version and a note to carry.
     {
-      settingKey: 'postal_footer',
-      value: {
-        organizationName: 'Callie',
-        addressLine: '1 Example Street',
-        locality: 'Providence',
-        regionCode: 'RI',
-        postalCode: '02903',
-        countryCode: 'US',
-      },
+      settingKey: 'business_time_zone',
+      value: { timeZone: 'America/Chicago' },
       version: 2,
       changedAt: '2026-09-19T10:00:00.000Z',
       changedByUserId: '11111111-1111-4111-8111-111111111111',
@@ -161,7 +156,7 @@ describe('the administration bridge', () => {
     expect(calls.map(call => call.path)).toEqual(['/settings', '/pipeline/stages', '/outbound/status']);
     expect(state.settings?.settings.map(entry => entry.settingKey)).toEqual([
       'alert_thresholds',
-      'postal_footer',
+      'business_time_zone',
     ]);
     expect(state.stages.map(stage => stage.key)).toEqual(['new', 'won']);
   });

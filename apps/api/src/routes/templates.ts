@@ -45,7 +45,10 @@ const createSchema = z.strictObject({
   subject: z.string().trim().min(1).max(160),
   body: z.string().trim().min(1).max(4000),
   footerSignOff: z.string().trim().min(1).max(300),
-  footerPostalAddress: z.string().trim().min(1).max(200),
+  // No `footerPostalAddress`. The object is strict, so a client that still sends one
+  // is a 400 rather than a field silently dropped: an automated email carries no
+  // postal address (`docs/decisions/g20-automated-email-carries-no-postal-address.md`),
+  // and a caller that believes otherwise should be told.
   requiredVariables: z.array(z.string().trim().min(1).max(60)).max(50),
 });
 
@@ -92,7 +95,7 @@ export async function routeTemplates(
         name: body.name,
         subject: body.subject,
         body: body.body,
-        footer: { signOff: body.footerSignOff, postalAddress: body.footerPostalAddress },
+        footer: { signOff: body.footerSignOff },
         requiredVariables: body.requiredVariables,
       }),
     );

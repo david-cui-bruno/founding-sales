@@ -39,9 +39,12 @@ describe('the template reader and manifest side', () => {
     expect(drafts.every(draft => draft.approvedAt === null)).toBe(true);
     expect(drafts.every(draft => draft.approvedByUserId === null)).toBe(true);
     expect(drafts.every(draft => draft.retiredAt === null)).toBe(true);
-    // The old postal address travelled with the old approval and is not an approval
-    // of anything here; the greenfield footer is configuration, not template text.
-    expect(drafts.every(draft => draft.footerPostalAddress === null)).toBe(true);
+    // The old row in `oldTable.ts` carries `footerPostalAddress` and the draft does
+    // not carry it at all: migration 0015 dropped the column, so the carry has nowhere
+    // to put an address and does not read one
+    // (`docs/decisions/g20-automated-email-carries-no-postal-address.md`).
+    expect(drafts.every(draft => !('footerPostalAddress' in draft))).toBe(true);
+    expect(JSON.stringify(drafts)).not.toContain('postal');
   });
 
   it('carries the old revision as the version, and hashes the text it carries', () => {

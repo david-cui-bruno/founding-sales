@@ -51,7 +51,7 @@ export const SETTINGS_CONSTRAINT_CASES: readonly SettingsCase[] = [
       const id = await insertCurrent(f, 'sending_enabled');
       return await f.session.query(
         `INSERT INTO workspace_settings (id, workspace_id, setting_key, version, value)
-         VALUES ($1, $2, 'postal_footer', 1, ${VALUE})`,
+         VALUES ($1, $2, 'business_time_zone', 1, ${VALUE})`,
         [id, workspace(f)],
       );
     },
@@ -72,12 +72,12 @@ export const SETTINGS_CONSTRAINT_CASES: readonly SettingsCase[] = [
       // the partial "current" index is not what refuses this one.
       await f.session.query(
         `INSERT INTO workspace_settings (workspace_id, setting_key, version, value, superseded_at, superseded_by_version)
-         VALUES ($1, 'postal_footer', 1, ${VALUE}, now(), 2)`,
+         VALUES ($1, 'business_time_zone', 1, ${VALUE}, now(), 2)`,
         [workspace(f)],
       );
       return await f.session.query(
         `INSERT INTO workspace_settings (workspace_id, setting_key, version, value, superseded_at, superseded_by_version)
-         VALUES ($1, 'postal_footer', 1, ${VALUE}, now(), 2)`,
+         VALUES ($1, 'business_time_zone', 1, ${VALUE}, now(), 2)`,
         [workspace(f)],
       );
     },

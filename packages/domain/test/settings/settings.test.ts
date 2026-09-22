@@ -226,29 +226,18 @@ describe('workspace settings', () => {
     const second = await database.appRuntimeSession();
     const other = repositoryContext(admin.scope, second);
 
+    // `sending_enabled` is the one slice no earlier test in this file has written, so
+    // the two saves really are version 1 and version 2. It was `postal_footer` until
+    // migration 0015 removed that slice.
     const [left, right] = await Promise.all([
       withTransaction(database.session, async () => await updateSetting(admin, {
-        settingKey: 'postal_footer',
-        value: {
-          organizationName: 'Callie',
-          addressLine: '1 Example Street',
-          locality: 'Providence',
-          regionCode: 'RI',
-          postalCode: '02903',
-          countryCode: 'US',
-        },
+        settingKey: 'sending_enabled',
+        value: { enabled: true, releaseGateReference: 'rehearsal-2026-09-20-a' },
         changeNote: 'first save',
       })),
       withTransaction(second, async () => await updateSetting(other, {
-        settingKey: 'postal_footer',
-        value: {
-          organizationName: 'Callie',
-          addressLine: '2 Example Street',
-          locality: 'Providence',
-          regionCode: 'RI',
-          postalCode: '02903',
-          countryCode: 'US',
-        },
+        settingKey: 'sending_enabled',
+        value: { enabled: true, releaseGateReference: 'rehearsal-2026-09-20-b' },
         changeNote: 'second save',
       })),
     ]);
@@ -260,7 +249,7 @@ describe('workspace settings', () => {
 
     const currentRows = await database.session.query<{ count: string }>(
       `SELECT count(*)::text AS count FROM workspace_settings
-        WHERE workspace_id = $1 AND setting_key = 'postal_footer' AND superseded_at IS NULL`,
+        WHERE workspace_id = $1 AND setting_key = 'sending_enabled' AND superseded_at IS NULL`,
       [seeded.alpha.workspaceId],
     );
     expect(currentRows.rows[0]?.count).toBe('1');
@@ -364,14 +353,21 @@ describe('the thresholds are one set of numbers', () => {
   });
 
   it('keeps the migration s key set equal to SETTING_KEYS', () => {
-    // Located by suffix rather than by number: the coordinator assigns migration
-    // numbers and a lane develops against the final one while renumbering locally.
-    const file = readdirSync(MIGRATION).find(name => name.endsWith('_dashboard.sql'));
-    expect(file, 'the settings migration is not in packages/domain/db/migrations').toBeDefined();
-    const migration = readFileSync(`${MIGRATION}${file ?? ''}`, 'utf8');
-    const block = /workspace_settings_key_known\s*\n\s*CHECK \(setting_key IN \(([^)]*)\)\)/u.exec(migration)?.[1];
-    expect(block, 'the CHECK is no longer where this test looks for it').toBeDefined();
-    const keys = [...(block ?? '').matchAll(/'([a-z_]+)'/gu)].map(match => match[1]);
+    // The *last* migration that writes the CHECK wins, because a later one may narrow
+    // it: migration 0013 created it with five keys and 0015 replaced it with four when
+    // the postal footer stopped being a slice. Sorting the file names rather than
+    // naming one is also why a renumber during development does not break this: the
+    // coordinator assigns migration numbers.
+    const files = readdirSync(MIGRATION)
+      .filter(name => name.endsWith('.sql'))
+      .sort();
+    const blocks = files
+      .map(name => /workspace_settings_key_known\s*\n\s*CHECK \(setting_key IN \(([^)]*)\)\)/u.exec(
+        readFileSync(`${MIGRATION}${name}`, 'utf8'),
+      )?.[1])
+      .filter((block): block is string => block !== undefined);
+    expect(blocks.length, 'no migration declares workspace_settings_key_known').toBeGreaterThan(0);
+    const keys = [...(blocks.at(-1) ?? '').matchAll(/'([a-z_]+)'/gu)].map(match => match[1]);
     expect(keys.sort()).toEqual([...SETTING_KEYS].sort());
   });
 });

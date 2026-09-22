@@ -181,7 +181,7 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
    *
    * A failure here is not a notice: the sending section simply does not appear. The
    * settings page has ten other sections and a person who opened it to change the
-   * postal footer should not be told about an outbound read they did not ask for.
+   * business time zone should not be told about an outbound read they did not ask for.
    */
   const loadSending = async (): Promise<void> => {
     if (!(await isAdmin())) {

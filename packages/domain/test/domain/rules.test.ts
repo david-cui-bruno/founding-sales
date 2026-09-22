@@ -39,10 +39,10 @@ import {
 
 const NEW_YORK = 'America/New_York';
 
-// A fictional workspace footer. No repository file carries a real contact detail.
+// A fictional workspace sign-off. No repository file carries a real contact detail,
+// and since G20 no footer carries a postal address at all.
 const FOOTER = {
   signOff: 'Best,\nA. Salesperson\nFounder, Example\nexample.test',
-  postalAddress: '1 Example Way, Suite 2, Example City, RI 02900',
 };
 
 describe('suppression canonicalisation', () => {
@@ -360,12 +360,20 @@ describe('templates', () => {
     expect(templateContentHash({ templateId: 'T2', version: 3, subject: 'A note', body })).not.toBe(one);
   });
 
-  it('ends the footer with the postal address and the stop line', () => {
+  it('is the sign-off and the stop line, and nothing between them', () => {
     const footer = footerBlock(FOOTER);
+    expect(footer).toBe(`${FOOTER.signOff}\n${SENDING_STOP_LINE}`);
     expect(footer.endsWith(SENDING_STOP_LINE)).toBe(true);
-    expect(footer).toContain(FOOTER.postalAddress);
-    // An address change leaves an approval behind on purpose.
-    expect(footerBlock({ ...FOOTER, postalAddress: '2 Other Way, Example City, RI 02900' })).not.toBe(footer);
+  });
+
+  it('approves a body that ends with the sign-off and the stop line and carries no address', () => {
+    const withoutAddress = `Hi {firm}, a short note about {city}.\n\n${FOOTER.signOff}\n${SENDING_STOP_LINE}`;
+    expect(templateTextIssues({ subject: 'A note', body: withoutAddress }, rules)).not.toContain(
+      'template_footer_missing',
+    );
+    expect(
+      decideTemplateApproval({ templateId: 'T1', version: 1, subject: 'A short note', body: withoutAddress }, rules),
+    ).toMatchObject({ approved: true });
   });
 
   it('names every rule a body breaks, not only the first', () => {

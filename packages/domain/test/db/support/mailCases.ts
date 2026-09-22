@@ -56,8 +56,8 @@ const WRAPPED = "decode(repeat('0c', 32), 'hex')";
 const CIPHERTEXT = "decode(repeat('0d', 64), 'hex')";
 const EMPTY_BYTES = "decode('', 'hex')";
 
-/** An approvable body: it ends with the reply-to-stop line and names no web link. */
-const BODY = 'Hello.\n\nSigned off\n1 Example Way\nReply "stop" and I will not email you again.';
+/** An approvable body: sign-off, then the reply-to-stop line, no address, no web link. */
+const BODY = 'Hello.\n\nSigned off\nReply "stop" and I will not email you again.';
 
 let sequence = 0;
 /** A value unique within one case run, so a case never trips uniqueness by accident. */
@@ -1275,15 +1275,15 @@ export const MAIL_CONSTRAINT_CASES: readonly MailCase[] = [
     run: async f => {
       const first = await f.session.query<{ id: string }>(
         `INSERT INTO template_versions (workspace_id, template_id, version, name, subject, body, content_hash,
-                                        footer_sign_off, footer_postal_address)
-         VALUES ($1, gen_random_uuid(), 1, 'First', 'Hello', $2, $3, 'Signed off', '1 Example Way')
+                                        footer_sign_off)
+         VALUES ($1, gen_random_uuid(), 1, 'First', 'Hello', $2, $3, 'Signed off')
          RETURNING id`,
         [workspace(f), BODY, HASH],
       );
       return await f.session.query(
         `INSERT INTO template_versions (id, workspace_id, template_id, version, name, subject, body, content_hash,
-                                        footer_sign_off, footer_postal_address)
-         VALUES ($1, $2, gen_random_uuid(), 1, 'Second', 'Hello', $3, $4, 'Signed off', '1 Example Way')`,
+                                        footer_sign_off)
+         VALUES ($1, $2, gen_random_uuid(), 1, 'Second', 'Hello', $3, $4, 'Signed off')`,
         [first.rows[0]?.id, workspace(f), BODY, HASH],
       );
     },
@@ -1293,8 +1293,8 @@ export const MAIL_CONSTRAINT_CASES: readonly MailCase[] = [
     run: async f =>
       await f.session.query(
         `INSERT INTO template_versions (workspace_id, template_id, version, name, subject, body, content_hash,
-                                        footer_sign_off, footer_postal_address)
-         VALUES ($1, gen_random_uuid(), 1, 'Orphan', 'Hello', $2, $3, 'Signed off', '1 Example Way')`,
+                                        footer_sign_off)
+         VALUES ($1, gen_random_uuid(), 1, 'Orphan', 'Hello', $2, $3, 'Signed off')`,
         [MISSING, BODY, HASH],
       ),
   },
@@ -1303,8 +1303,8 @@ export const MAIL_CONSTRAINT_CASES: readonly MailCase[] = [
     run: async f =>
       await f.session.query(
         `INSERT INTO template_versions (workspace_id, template_id, version, name, subject, body, content_hash,
-                                        footer_sign_off, footer_postal_address, approved_at, approved_by_user_id)
-         VALUES ($1, gen_random_uuid(), 1, 'Approved', 'Hello', $2, $3, 'Signed off', '1 Example Way', ${AT}, $4)`,
+                                        footer_sign_off, approved_at, approved_by_user_id)
+         VALUES ($1, gen_random_uuid(), 1, 'Approved', 'Hello', $2, $3, 'Signed off', ${AT}, $4)`,
         [workspace(f), BODY, HASH, otherWorkspaceUser(f)],
       ),
   },
@@ -1316,14 +1316,14 @@ export const MAIL_CONSTRAINT_CASES: readonly MailCase[] = [
       ).rows[0]?.id;
       await f.session.query(
         `INSERT INTO template_versions (workspace_id, template_id, version, name, subject, body, content_hash,
-                                        footer_sign_off, footer_postal_address)
-         VALUES ($1, $2, 1, 'First', 'Hello', $3, $4, 'Signed off', '1 Example Way')`,
+                                        footer_sign_off)
+         VALUES ($1, $2, 1, 'First', 'Hello', $3, $4, 'Signed off')`,
         [workspace(f), templateId, BODY, HASH],
       );
       return await f.session.query(
         `INSERT INTO template_versions (workspace_id, template_id, version, name, subject, body, content_hash,
-                                        footer_sign_off, footer_postal_address)
-         VALUES ($1, $2, 1, 'Again', 'Hello', $3, $4, 'Signed off', '1 Example Way')`,
+                                        footer_sign_off)
+         VALUES ($1, $2, 1, 'Again', 'Hello', $3, $4, 'Signed off')`,
         [workspace(f), templateId, BODY, HASH],
       );
     },
@@ -1333,8 +1333,8 @@ export const MAIL_CONSTRAINT_CASES: readonly MailCase[] = [
     run: async f =>
       await f.session.query(
         `INSERT INTO template_versions (workspace_id, template_id, version, name, subject, body, content_hash,
-                                        footer_sign_off, footer_postal_address)
-         VALUES ($1, gen_random_uuid(), 0, 'Zero', 'Hello', $2, $3, 'Signed off', '1 Example Way')`,
+                                        footer_sign_off)
+         VALUES ($1, gen_random_uuid(), 0, 'Zero', 'Hello', $2, $3, 'Signed off')`,
         [workspace(f), BODY, HASH],
       ),
   },
@@ -1343,8 +1343,8 @@ export const MAIL_CONSTRAINT_CASES: readonly MailCase[] = [
     run: async f =>
       await f.session.query(
         `INSERT INTO template_versions (workspace_id, template_id, version, name, subject, body, content_hash,
-                                        footer_sign_off, footer_postal_address)
-         VALUES ($1, gen_random_uuid(), 1, '   ', 'Hello', $2, $3, 'Signed off', '1 Example Way')`,
+                                        footer_sign_off)
+         VALUES ($1, gen_random_uuid(), 1, '   ', 'Hello', $2, $3, 'Signed off')`,
         [workspace(f), BODY, HASH],
       ),
   },
@@ -1353,8 +1353,8 @@ export const MAIL_CONSTRAINT_CASES: readonly MailCase[] = [
     run: async f =>
       await f.session.query(
         `INSERT INTO template_versions (workspace_id, template_id, version, name, subject, body, content_hash,
-                                        footer_sign_off, footer_postal_address)
-         VALUES ($1, gen_random_uuid(), 1, 'Long subject', repeat('s', 161), $2, $3, 'Signed off', '1 Example Way')`,
+                                        footer_sign_off)
+         VALUES ($1, gen_random_uuid(), 1, 'Long subject', repeat('s', 161), $2, $3, 'Signed off')`,
         [workspace(f), BODY, HASH],
       ),
   },
@@ -1363,8 +1363,8 @@ export const MAIL_CONSTRAINT_CASES: readonly MailCase[] = [
     run: async f =>
       await f.session.query(
         `INSERT INTO template_versions (workspace_id, template_id, version, name, subject, body, content_hash,
-                                        footer_sign_off, footer_postal_address)
-         VALUES ($1, gen_random_uuid(), 1, 'Long body', 'Hello', repeat('b', 4001), $2, 'Signed off', '1 Example Way')`,
+                                        footer_sign_off)
+         VALUES ($1, gen_random_uuid(), 1, 'Long body', 'Hello', repeat('b', 4001), $2, 'Signed off')`,
         [workspace(f), HASH],
       ),
   },
@@ -1373,8 +1373,8 @@ export const MAIL_CONSTRAINT_CASES: readonly MailCase[] = [
     run: async f =>
       await f.session.query(
         `INSERT INTO template_versions (workspace_id, template_id, version, name, subject, body, content_hash,
-                                        footer_sign_off, footer_postal_address)
-         VALUES ($1, gen_random_uuid(), 1, 'Bad hash', 'Hello', $2, 'not-a-digest', 'Signed off', '1 Example Way')`,
+                                        footer_sign_off)
+         VALUES ($1, gen_random_uuid(), 1, 'Bad hash', 'Hello', $2, 'not-a-digest', 'Signed off')`,
         [workspace(f), BODY],
       ),
   },
@@ -1383,28 +1383,22 @@ export const MAIL_CONSTRAINT_CASES: readonly MailCase[] = [
     run: async f =>
       await f.session.query(
         `INSERT INTO template_versions (workspace_id, template_id, version, name, subject, body, content_hash,
-                                        footer_sign_off, footer_postal_address)
-         VALUES ($1, gen_random_uuid(), 1, 'Blank sign-off', 'Hello', $2, $3, '   ', '1 Example Way')`,
+                                        footer_sign_off)
+         VALUES ($1, gen_random_uuid(), 1, 'Blank sign-off', 'Hello', $2, $3, '   ')`,
         [workspace(f), BODY, HASH],
       ),
   },
-  {
-    constraint: 'template_versions_postal_address_bounded',
-    run: async f =>
-      await f.session.query(
-        `INSERT INTO template_versions (workspace_id, template_id, version, name, subject, body, content_hash,
-                                        footer_sign_off, footer_postal_address)
-         VALUES ($1, gen_random_uuid(), 1, 'Blank address', 'Hello', $2, $3, 'Signed off', '   ')`,
-        [workspace(f), BODY, HASH],
-      ),
-  },
+  // `template_versions_postal_address_bounded` stood here until migration 0015 dropped
+  // the column it bounded. The last test in `constraints.test.ts` fails on a case that
+  // names a constraint the database does not have, so a dropped column with its case
+  // left behind is a red gate rather than a quiet pass.
   {
     constraint: 'template_versions_variables_bounded',
     run: async f =>
       await f.session.query(
         `INSERT INTO template_versions (workspace_id, template_id, version, name, subject, body, content_hash,
-                                        footer_sign_off, footer_postal_address, required_variables)
-         VALUES ($1, gen_random_uuid(), 1, 'Too many', 'Hello', $2, $3, 'Signed off', '1 Example Way',
+                                        footer_sign_off, required_variables)
+         VALUES ($1, gen_random_uuid(), 1, 'Too many', 'Hello', $2, $3, 'Signed off',
                  (SELECT array_agg('variable' || n) FROM generate_series(1, 51) AS n))`,
         [workspace(f), BODY, HASH],
       ),
@@ -1414,8 +1408,8 @@ export const MAIL_CONSTRAINT_CASES: readonly MailCase[] = [
     run: async f =>
       await f.session.query(
         `INSERT INTO template_versions (workspace_id, template_id, version, name, subject, body, content_hash,
-                                        footer_sign_off, footer_postal_address, approved_at)
-         VALUES ($1, gen_random_uuid(), 1, 'Half approved', 'Hello', $2, $3, 'Signed off', '1 Example Way', ${AT})`,
+                                        footer_sign_off, approved_at)
+         VALUES ($1, gen_random_uuid(), 1, 'Half approved', 'Hello', $2, $3, 'Signed off', ${AT})`,
         [workspace(f), BODY, HASH],
       ),
   },
@@ -1424,9 +1418,9 @@ export const MAIL_CONSTRAINT_CASES: readonly MailCase[] = [
     run: async f =>
       await f.session.query(
         `INSERT INTO template_versions (workspace_id, template_id, version, name, subject, body, content_hash,
-                                        footer_sign_off, footer_postal_address)
+                                        footer_sign_off)
          VALUES ($1, gen_random_uuid(), 1, 'Web opt out', 'Hello',
-                 'Hello.' || chr(10) || 'Click here to unsubscribe.', $2, 'Signed off', '1 Example Way')`,
+                 'Hello.' || chr(10) || 'Click here to unsubscribe.', $2, 'Signed off')`,
         [workspace(f), HASH],
       ),
   },
@@ -1435,9 +1429,9 @@ export const MAIL_CONSTRAINT_CASES: readonly MailCase[] = [
     run: async f =>
       await f.session.query(
         `INSERT INTO template_versions (workspace_id, template_id, version, name, subject, body, content_hash,
-                                        footer_sign_off, footer_postal_address, approved_at, approved_by_user_id)
+                                        footer_sign_off, approved_at, approved_by_user_id)
          VALUES ($1, gen_random_uuid(), 1, 'No stop line', 'Hello', 'Hello, no footer here.', $2,
-                 'Signed off', '1 Example Way', ${AT}, $3)`,
+                 'Signed off', ${AT}, $3)`,
         [workspace(f), HASH, admin(f)],
       ),
   },
@@ -1446,8 +1440,8 @@ export const MAIL_CONSTRAINT_CASES: readonly MailCase[] = [
     run: async f =>
       await f.session.query(
         `INSERT INTO template_versions (workspace_id, template_id, version, name, subject, body, content_hash,
-                                        footer_sign_off, footer_postal_address, created_at, retired_at)
-         VALUES ($1, gen_random_uuid(), 1, 'Backdated retirement', 'Hello', $2, $3, 'Signed off', '1 Example Way',
+                                        footer_sign_off, created_at, retired_at)
+         VALUES ($1, gen_random_uuid(), 1, 'Backdated retirement', 'Hello', $2, $3, 'Signed off',
                  ${LATER}, ${EARLIER})`,
         [workspace(f), BODY, HASH],
       ),
@@ -1457,8 +1451,8 @@ export const MAIL_CONSTRAINT_CASES: readonly MailCase[] = [
     run: async f =>
       await f.session.query(
         `INSERT INTO template_versions (workspace_id, template_id, version, name, subject, body, content_hash,
-                                        footer_sign_off, footer_postal_address, created_at, updated_at)
-         VALUES ($1, gen_random_uuid(), 1, 'Backdated update', 'Hello', $2, $3, 'Signed off', '1 Example Way',
+                                        footer_sign_off, created_at, updated_at)
+         VALUES ($1, gen_random_uuid(), 1, 'Backdated update', 'Hello', $2, $3, 'Signed off',
                  ${LATER}, ${EARLIER})`,
         [workspace(f), BODY, HASH],
       ),

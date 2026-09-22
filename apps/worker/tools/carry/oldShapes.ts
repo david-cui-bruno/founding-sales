@@ -361,9 +361,10 @@ function readTemplateRecord(item: OldItem): ReadResult {
   if (templateId === null || name === null || subject === null || body === null || revision === null || recordedAt === null) {
     return refuse('record_unreadable', 'template');
   }
-  // `approval` is deliberately not read. Section 2 and 17 carry template *bodies*,
-  // unapproved; an approval recorded against the old footer rule is not an approval
-  // of anything the greenfield send fence would accept.
+  // `approval` is deliberately not read — including the postal address it carries.
+  // Section 2 and 17 carry template *bodies*, unapproved; an approval recorded against
+  // the old footer rule is not an approval of anything the greenfield send fence would
+  // accept, and since migration 0015 there is no column an address could land in.
   return accept({
     kind: 'template',
     oldId: templateId,

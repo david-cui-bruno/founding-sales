@@ -47,6 +47,8 @@ address from `SETTINGS#sending`. In the greenfield the footer is workspace
 configuration, not template text; carrying the old address would look like an
 approval that had been checked against something.
 
+> **Superseded 22 September 2026 by `g20-automated-email-carries-no-postal-address.md`:** the column this paragraph describes no longer exists; carried template versions carry no postal address because no template version does. The paragraph stays as the record of what was decided at the time.
+
 **The old `revision` becomes the `version`.** It is the number the old core bumped on
 every edit, so a workspace that edited T1 twice carries version 3 and
 `UNIQUE (workspace_id, template_id, version)` holds without the carry inventing a

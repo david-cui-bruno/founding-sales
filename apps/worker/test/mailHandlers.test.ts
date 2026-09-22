@@ -246,15 +246,15 @@ describe('the mail handlers and scheduler sources', () => {
     );
     const firmId = firm.rows[0]?.id ?? '';
     const body =
-      'Hello.\n\nSigned off\n1 Example Way\nReply "stop" and I will not email you again.';
+      'Hello.\n\nSigned off\nReply "stop" and I will not email you again.';
     const subject = 'A short note';
     const templateId = randomUUID();
     const contentHash = renderedHash(`template:${templateId}`, body);
     const template = await session.query<{ id: string }>(
       `INSERT INTO template_versions (workspace_id, template_id, version, name, subject, body,
-                                      content_hash, footer_sign_off, footer_postal_address,
+                                      content_hash, footer_sign_off,
                                       approved_at, approved_by_user_id)
-       VALUES ($1, $2, 1, 'Probe template', $3, $4, $5, 'Signed off', '1 Example Way', now(), $6)
+       VALUES ($1, $2, 1, 'Probe template', $3, $4, $5, 'Signed off', now(), $6)
        RETURNING id`,
       [workspaceId, templateId, subject, body, contentHash, ownerUserId],
     );

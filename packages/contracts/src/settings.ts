@@ -55,7 +55,6 @@ export const SETTING_KEYS = [
   'alert_thresholds',
   'business_time_zone',
   'client_version_range',
-  'postal_footer',
   'sending_enabled',
 ] as const;
 export type SettingKey = (typeof SETTING_KEYS)[number];
@@ -149,19 +148,14 @@ export const ianaTimeZoneSchema = z
 export const businessTimeZoneSettingSchema = z.strictObject({ timeZone: ianaTimeZoneSchema });
 export type BusinessTimeZoneSetting = z.infer<typeof businessTimeZoneSettingSchema>;
 
-/**
- * 10.1's postal footer. Every automated template carries it; 12.6 is why there is no
- * unsubscribe URL field, and the database refuses a template body that has one.
+/*
+ * 10.1's postal footer was a slice here until 22 September 2026. David decided an
+ * automated email carries no postal address, so there is nothing to configure and the
+ * slice is gone rather than left empty; migration 0015 removed the key from the
+ * table's CHECK. `docs/decisions/g20-automated-email-carries-no-postal-address.md`.
+ * 12.6 is unaffected: the footer still ends with the reply-to-stop sentence, and
+ * `SENDING_STOP_LINE` in `./templates.ts` is that sentence.
  */
-export const postalFooterSettingSchema = z.strictObject({
-  organizationName: z.string().trim().min(1).max(200),
-  addressLine: z.string().trim().min(1).max(200),
-  locality: z.string().trim().min(1).max(120),
-  regionCode: z.string().trim().min(2).max(3),
-  postalCode: z.string().trim().min(3).max(16),
-  countryCode: z.string().trim().length(2),
-});
-export type PostalFooterSetting = z.infer<typeof postalFooterSettingSchema>;
 
 /**
  * 16.2: "Production sending remains disabled until ... an authenticated admin enables
@@ -189,7 +183,6 @@ export const SETTING_VALUE_SCHEMAS = {
   alert_thresholds: alertThresholdsSchema,
   business_time_zone: businessTimeZoneSettingSchema,
   client_version_range: clientVersionRangeSchema,
-  postal_footer: postalFooterSettingSchema,
   sending_enabled: sendingEnabledSettingSchema,
 } as const satisfies Record<SettingKey, z.ZodType>;
 
@@ -198,7 +191,6 @@ export const DEFAULT_SETTING_VALUES: Readonly<Record<SettingKey, unknown>> = Obj
   alert_thresholds: DEFAULT_ALERT_THRESHOLDS,
   business_time_zone: { timeZone: 'America/New_York' },
   client_version_range: { minimum: '1.0.0', maximum: '1.0.0' },
-  postal_footer: null,
   sending_enabled: { enabled: false, releaseGateReference: null },
 });
 

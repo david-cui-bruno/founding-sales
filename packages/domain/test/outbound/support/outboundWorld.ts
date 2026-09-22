@@ -40,7 +40,7 @@ export const SENDING_DOMAIN = 'example.test';
 export const RELEASE_GATE_REFERENCE = 'rehearsal-fixture-world';
 export const TEMPLATE_SUBJECT = 'A short note about your properties';
 export const TEMPLATE_BODY =
-  'Hello.\n\nI work with property managers nearby.\n\nSigned off\n1 Example Way\n' +
+  'Hello.\n\nI work with property managers nearby.\n\nSigned off\n' +
   'Reply "stop" and I will not email you again.';
 
 export interface OutboundWorldMailbox extends MailWorldMailbox {
@@ -170,9 +170,9 @@ export async function createOutboundWorld(): Promise<OutboundWorld> {
     const contentHash = templateHash(templateId, 1, TEMPLATE_SUBJECT, TEMPLATE_BODY);
     const template = await context.db.query<{ id: string }>(
       `INSERT INTO template_versions (workspace_id, template_id, version, name, subject, body,
-                                      content_hash, footer_sign_off, footer_postal_address,
+                                      content_hash, footer_sign_off,
                                       approved_at, approved_by_user_id)
-       VALUES ($1, $2, 1, 'Opening note', $3, $4, $5, 'Signed off', '1 Example Way', now(), $6)
+       VALUES ($1, $2, 1, 'Opening note', $3, $4, $5, 'Signed off', now(), $6)
        RETURNING id`,
       [workspaceId, templateId, TEMPLATE_SUBJECT, TEMPLATE_BODY, contentHash, mailbox.workspace.admin.userId],
     );

@@ -18,7 +18,7 @@ export interface SchemaRange {
 }
 
 /** The highest migration version this source tree contains. */
-export const CURRENT_SCHEMA_VERSION = 14;
+export const CURRENT_SCHEMA_VERSION = 15;
 
 /**
  * The range the release before this one declared. Widen this one release ahead of the
@@ -27,14 +27,14 @@ export const CURRENT_SCHEMA_VERSION = 14;
  * Lanes G5 and G2 shipped migrations 0002 and 0003 from the same main and each widened
  * this constant for its own; lane G3a widened it again for migration 0004, G3b for
  * 0005, G4 for 0006, G10 for 0007, G6 for 0008, G7 for 0009, G7-2 for 0010, G7b for
- * 0011, G8 for 0012, G9 for 0013 and G14 for 0014. A merge that finds two different
- * maxima takes the larger, which is what every one of those merges did.
+ * 0011, G8 for 0012, G9 for 0013, G14 for 0014 and G20 for 0015. A merge that finds
+ * two different maxima takes the larger, which is what every one of those merges did.
  * That is honest only because nothing has been deployed — G0's {1, 1} was never a
  * promise made to a running production binary. From the first real deployment onwards
  * the widening must precede the migration by a release, and the compatibility test
  * will keep saying so.
  */
-export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 14 };
+export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 15 };
 
 /**
  * Both services need migration 0002's shape: the API's dead-job list reads `dead_at`
@@ -169,8 +169,8 @@ export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum:
  *
  * The API's minimum moves to 13. `GET /settings`, `POST /settings/update` and
  * `POST /settings/history` read and write `workspace_settings`, and `GET /diagnostics`
- * reads it too. An API on a version-12 database could not answer what the postal
- * footer or the business time zone is, and — worse — `effectiveSendingEnabled` would
+ * reads it too. An API on a version-12 database could not answer what the business
+ * time zone is, and — worse — `effectiveSendingEnabled` would
  * have no admin half of 16.2's two switches to read. Fail closed would make it
  * answer "sending is off" forever, which is safe and useless; refusing to start says
  * so out loud.
@@ -247,8 +247,50 @@ export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum:
  * older schema; a rolling step that runs two workers has both understanding 0014,
  * which is what the widened previous-release range above is for (Appendix G 22).
  */
-export const API_SCHEMA_RANGE: SchemaRange = { minimum: 14, maximum: 14 };
-export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 14, maximum: 14 };
+/**
+ * Migration 0015 (G20) is the first **contract** migration in this tree, and it moves
+ * both minima to 15 for a reason the fourteen paragraphs above never had to give.
+ *
+ * Every widening so far was expansion: a lane added a table or a column, and the
+ * binary that read it declared the lowest version on which its first statement could
+ * succeed. 0015 removes one — `template_versions.footer_postal_address`, under
+ * `docs/decisions/g20-automated-email-carries-no-postal-address.md` — so the question
+ * has two halves instead of one.
+ *
+ * **The API's minimum moves to 15 by the usual rule.** `/templates/create` issues an
+ * INSERT that no longer names `footer_postal_address`. On a version-14 database that
+ * column is `NOT NULL` with no default, so the statement fails with
+ * `not_null_violation`: an API that accepted a template body and then had nowhere to
+ * put it. That is the same failure every paragraph above refused.
+ *
+ * **The worker's minimum moves to 15 too, and this one is a choice rather than an
+ * arithmetic.** The worker never writes `template_versions`; it reads it through
+ * `readTemplateVersion` and `templateApprovalSource`, and after this release those
+ * SELECTs name only surviving columns, so a worker's first statement would in fact
+ * succeed on a version-14 database. `{14, 15}` is therefore arguable and is what the
+ * letter of "the lowest version on which its first statement can succeed" gives.
+ *
+ * It is refused because of what a span means here rather than what it permits. The
+ * ranges are what `infra/scripts/rehearsal-schema-ranges.sh` runs the pairs of and
+ * what `verify-schema` gates a production deploy on, and a worker declaring 14 would
+ * be declaring the pre-contract database a supported deployment target for this
+ * image. It is not one: on a version-14 database the API of this same release refuses
+ * to start, so the only environment the declaration admits is half a deployment — a
+ * worker sending mail beside an API that will not answer. `release-deploy.sh` scales
+ * both services to zero, migrates, verifies and scales back up precisely so that
+ * state cannot occur, and a range that admits a state the release procedure forbids
+ * is a promise nobody tests. G9 left the worker behind at `{12, 13}` for a table it
+ * never queried; this table it does query, and the version it queries is 15.
+ *
+ * **Both maxima move to 15** on the same reasoning as every widening before: a binary
+ * that refused the database it has just been deployed against would be a
+ * self-inflicted outage. The previous release's binaries declared 14, so no pair
+ * overlaps and Appendix G 22 asserts the refusal rather than a compatibility that
+ * does not exist — `database_ahead_of_binary` for the old images against the new
+ * schema, which is correct: their SELECTs name a column that is gone.
+ */
+export const API_SCHEMA_RANGE: SchemaRange = { minimum: 15, maximum: 15 };
+export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 15, maximum: 15 };
 
 export function acceptsSchemaVersion(range: SchemaRange, version: number): boolean {
   return Number.isInteger(version) && version >= range.minimum && version <= range.maximum;

@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
+import { SENDING_STOP_LINE } from '../../src/index.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
 import { seedSequences, type SeededSequences } from './support/sequenceFixtures.ts';
@@ -214,14 +215,37 @@ describe('template_versions is extended, not replaced (11.1)', () => {
     ).toMatch(/immutable/i);
   });
 
+  it('accepts a version that names no postal address, in both workspaces (G20)', async () => {
+    // David's 22 September decision: an automated email carries no postal address.
+    // The column is gone, so the insert names it nowhere; the two workspaces use the
+    // same template name, and neither sees the other's row.
+    const body = `Hello.\n\nSam Example\n${SENDING_STOP_LINE}`;
+    for (const workspaceId of [seeded.alpha.workspaceId, seeded.beta.workspaceId]) {
+      const { rows } = await database.session.query<{ id: string }>(
+        `INSERT INTO template_versions
+           (workspace_id, template_id, version, name, subject, body, content_hash, footer_sign_off)
+         VALUES ($1, gen_random_uuid(), 1, 'No address', 'Hello', $2, repeat('a', 64), 'Sam Example')
+         RETURNING id`,
+        [workspaceId, body],
+      );
+      expect(rows[0]?.id, 'the database refused a template version with no address').toBeDefined();
+    }
+    const { rows } = await database.session.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM template_versions
+        WHERE workspace_id = $1 AND name = 'No address'`,
+      [seeded.alpha.workspaceId],
+    );
+    expect(rows[0]?.count).toBe('1');
+  });
+
   it('still refuses an unsubscribe link and still requires the stop line', async () => {
     expect(
       await refusal(
         `INSERT INTO template_versions
            (workspace_id, template_id, version, name, subject, body, content_hash,
-            footer_sign_off, footer_postal_address)
+            footer_sign_off)
          VALUES ($1, gen_random_uuid(), 1, 'Bad', 'Hello', 'Unsubscribe here', repeat('a', 64),
-                 'Sam Example', '1 Example Way')`,
+                 'Sam Example')`,
         [seeded.alpha.workspaceId],
       ),
     ).toMatch(/no_unsubscribe_link/);

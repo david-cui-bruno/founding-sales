@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { SENDING_STOP_LINE } from '@fss/contracts';
 import type { ApiOutcome } from '../src/main/apiClient.ts';
 import type { AuthedClient } from '../src/main/authedClient.ts';
 import { createSequenceBridge, isOpenableProfile } from '../src/main/sequenceBridge.ts';
@@ -24,8 +25,8 @@ import {
 
 const HASH = 'a'.repeat(64);
 const FOOTER_SIGN_OFF = 'Sam Example';
-const FOOTER_POSTAL = '1 Example Way';
-const STOP_LINE = 'Reply "stop" and I will not email you again.';
+/** Imported rather than typed, so the panel and the server's rule cannot disagree. */
+const STOP_LINE = SENDING_STOP_LINE;
 
 const template = (patch: Partial<TemplateVersion> = {}): TemplateVersion => ({
   id: '11111111-1111-4111-8111-111111111111',
@@ -33,10 +34,9 @@ const template = (patch: Partial<TemplateVersion> = {}): TemplateVersion => ({
   version: 1,
   name: 'First touch',
   subject: 'A question',
-  body: `Hello,\n\n${FOOTER_SIGN_OFF}\n${FOOTER_POSTAL}\n${STOP_LINE}`,
+  body: `Hello,\n\n${FOOTER_SIGN_OFF}\n${STOP_LINE}`,
   contentHash: HASH,
   footerSignOff: FOOTER_SIGN_OFF,
-  footerPostalAddress: FOOTER_POSTAL,
   requiredVariables: [],
   approvedAt: '2026-09-01T12:00:00.000Z',
   retiredAt: null,
@@ -136,7 +136,7 @@ describe('the template panel shows the digest and names what is wrong (11.1, 12.
       state([
         template({
           approvedAt: null,
-          body: `Unsubscribe here.\n\n${FOOTER_SIGN_OFF}\n${FOOTER_POSTAL}\n${STOP_LINE}`,
+          body: `Unsubscribe here.\n\n${FOOTER_SIGN_OFF}\n${STOP_LINE}`,
         }),
       ]),
     );

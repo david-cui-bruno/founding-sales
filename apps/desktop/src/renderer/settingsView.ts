@@ -110,7 +110,6 @@ const LABELS: Readonly<Record<string, string>> = Object.freeze({
   alert_thresholds: 'Alarm thresholds',
   business_time_zone: 'Workspace business zone',
   client_version_range: 'Supported client versions',
-  postal_footer: 'Postal footer',
   sending_enabled: 'Production sending',
 });
 

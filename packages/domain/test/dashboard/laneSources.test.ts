@@ -374,7 +374,7 @@ async function seedSequenceWorld(
       firm.contactId,
       firm.opportunityId,
       `prospect.sequenced.${workspace.workspaceId.slice(0, 8)}@example.test`,
-      'Hello.\n\nSigned off\n1 Example Way\nReply "stop" and I will not email you again.',
+      'Hello.\n\nSigned off\nReply "stop" and I will not email you again.',
       templateVersionId,
       `<fss.sequenced.${workspace.workspaceId}@sending.example.test>`,
       `sequenced-${workspace.workspaceId.slice(0, 8)}`,

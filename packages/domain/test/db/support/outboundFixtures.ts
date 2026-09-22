@@ -64,7 +64,7 @@ export const FIXTURE_PLACEMENT_RULE = 'email-window.1';
 
 /** An approvable body: it ends with the reply-to-stop line and names no web link. */
 export const FIXTURE_BODY =
-  'Hello.\n\nSigned off\n1 Example Way\nReply "stop" and I will not email you again.';
+  'Hello.\n\nSigned off\nReply "stop" and I will not email you again.';
 export const FIXTURE_SUBJECT = 'A short note about your properties';
 const FIXTURE_HASH = 'b'.repeat(64);
 
@@ -100,9 +100,9 @@ async function seedWorkspaceOutbound(
   const templateId = '33333333-4444-4555-8666-777777777777';
   const template = await session.query<{ id: string }>(
     `INSERT INTO template_versions (workspace_id, template_id, version, name, subject, body,
-                                    content_hash, footer_sign_off, footer_postal_address,
+                                    content_hash, footer_sign_off,
                                     approved_at, approved_by_user_id)
-     VALUES ($1, $2, 1, 'Fixture template', $3, $4, $5, 'Signed off', '1 Example Way',
+     VALUES ($1, $2, 1, 'Fixture template', $3, $4, $5, 'Signed off',
              TIMESTAMPTZ '2026-09-01 09:00:00+00', $6)
      RETURNING id`,
     [
