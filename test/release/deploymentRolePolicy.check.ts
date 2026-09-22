@@ -84,6 +84,7 @@ interface ActionMap {
   readonly action_groups: readonly ActionGroup[];
   readonly denied_in_production: Readonly<Record<string, string>>;
   readonly run_35628963637: Readonly<Record<string, readonly string[]>>;
+  readonly run_35679472666: Readonly<Record<string, readonly string[]>>;
 }
 
 const PREFIXES = ['fss-rh', 'fss-prod'] as const;
@@ -226,7 +227,7 @@ describe('the deployment-role policy is code, and the Terraform tree judges it',
         expect(action, `${type} names ${action}, which is not a <service>:<Action>`).toMatch(
           /^[a-z0-9-]+:[A-Za-z0-9*]+$/u,
         );
-        expect(action.startsWith(`${entry.service}:`) || ['iam:PassRole', 'kms:CreateGrant', 'kms:DescribeKey', 'kms:GenerateDataKey', 'kms:Decrypt', 'acm:DescribeCertificate'].includes(action), `${type} names ${action} outside its own service without being one of the documented cross-service calls`).toBe(true);
+        expect(action.startsWith(`${entry.service}:`) || ['iam:PassRole', 'kms:CreateGrant', 'kms:DescribeKey', 'kms:GenerateDataKey', 'kms:Decrypt', 'acm:DescribeCertificate', 'secretsmanager:CreateSecret', 'secretsmanager:TagResource'].includes(action), `${type} names ${action} outside its own service without being one of the documented cross-service calls`).toBe(true);
       }
     }
   });
@@ -329,6 +330,33 @@ describe('the deployment-role policy is code, and the Terraform tree judges it',
         expect(missing).toEqual([]);
       });
 
+      it('lets RDS create the managed master secret of this namespace, tagged with the instance ARN, and no other rds! secret', () => {
+        // Run 35679472666 (22 September): CreateDBInstance answered "The user isn't
+        // authorized to create a secret in AWS Secrets Manager". RDS creates the master
+        // secret `rds!db-<uuid>` in the caller's own session, and the only secrets the role
+        // could create were the namespace's own, by name. The statement that fixes it is
+        // narrowed by the one tag RDS puts on the request, whose value is the instance ARN
+        // and therefore carries the namespace; no caller but a service can set an `aws:` tag.
+        const creators = allowsFor(policy, 'secretsmanager:CreateSecret').filter(statement =>
+          asList(statement.Resource).some(resource => resource.includes(':secret:rds!db-')),
+        );
+        expect(creators.map(statement => statement.Sid)).toEqual(['LetRdsCreateThisNamespacesManagedMasterSecret']);
+        const statement = creators[0]!;
+        expect(statementCovers(statement, 'secretsmanager:TagResource')).toBe(true);
+        expect(asList(statement.Action)).toHaveLength(2);
+        const like = statement.Condition?.['StringLike'] as Record<string, string> | undefined;
+        expect(like?.['aws:RequestTag/aws:rds:primaryDBInstanceArn']).toMatch(
+          new RegExp(`^arn:aws:rds:[a-z0-9-]+:\\d{12}:db:${prefix}\\*$`, 'u'),
+        );
+        for (const action of ['secretsmanager:CreateSecret', 'secretsmanager:TagResource']) {
+          expect(killedByABlanketDeny(policy, action), `${prefix} denies ${action} outright`).toBeUndefined();
+        }
+        // The value of that secret stays out of reach of the production role, as before.
+        if (prefix === 'fss-prod') {
+          expect(killedByABlanketDeny(policy, 'secretsmanager:GetSecretValue')).toBeDefined();
+        }
+      });
+
       it('fits inside IAM’s inline-policy limit with room to read', () => {
         const measured = JSON.stringify(policy).replace(/\s/gu, '').length;
         expect(measured, 'IAM measures an inline role policy at 10240 non-white-space characters').toBeLessThan(10_240);
@@ -350,6 +378,24 @@ describe('the deployment-role policy is code, and the Terraform tree judges it',
     expect(stillRefused).toEqual([]);
     // The floor: the six classes are all there, so a map that lost one would be red.
     expect(Object.keys(map.run_35628963637).length).toBeGreaterThanOrEqual(7);
+  });
+
+  it('allows both roles the two Secrets Manager actions run 35679472666 was refused', () => {
+    // One class, one error, the sixth credentialed run. Production creates its instance
+    // the same way, so both roles are asked.
+    const stillRefused: string[] = [];
+    for (const prefix of PREFIXES) {
+      for (const [error, actions] of Object.entries(map.run_35679472666)) {
+        for (const action of actions) {
+          const allowed = allowsFor(rendered[prefix], action).length > 0;
+          const killed = killedByABlanketDeny(rendered[prefix], action) !== undefined;
+          if (!allowed || killed) stillRefused.push(`${prefix}: ${action} (${error})`);
+        }
+      }
+    }
+    expect(stillRefused).toEqual([]);
+    expect(Object.values(map.run_35679472666).flat()).toContain('secretsmanager:CreateSecret');
+    expect(Object.values(map.run_35679472666).flat()).toContain('secretsmanager:TagResource');
   });
 
   it('keeps the three actions production must never hold', () => {
@@ -752,6 +798,24 @@ done`;
     const compositeCalls = calls.filter(call => actionsOf(call)[0] === 'cloudwatch:PutCompositeAlarm');
     expect(compositeCalls.length).toBeGreaterThan(0);
     for (const call of compositeCalls) expect(call).toContain(':alarm:*');
+    // The master secret RDS creates on the caller's behalf (refused 22 September) is judged
+    // on an rds! secret ARN with the request tag RDS sends, and the read afterwards with
+    // the resource tag the secret then carries.
+    expect(callFor('secretsmanager:CreateSecret')).toContain(':secret:fss-rh-example/');
+    const rdsSecretCalls = calls.filter(call => call.includes(':secret:rds!db-'));
+    expect(rdsSecretCalls.map(actionsOf).flat().sort()).toEqual([
+      'secretsmanager:CreateSecret',
+      'secretsmanager:DescribeSecret',
+      'secretsmanager:TagResource',
+    ]);
+    for (const call of rdsSecretCalls.filter(call => !actionsOf(call)[0]!.endsWith('DescribeSecret'))) {
+      expect(call).toContain('ContextKeyName=aws:RequestTag/aws:rds:primaryDBInstanceArn,');
+      expect(call).toContain('ContextKeyValues=arn:aws:rds:');
+      expect(call).toContain(':db:fss-rh-example-pg');
+    }
+    expect(rdsSecretCalls.find(call => actionsOf(call)[0] === 'secretsmanager:DescribeSecret')).toContain(
+      'ContextKeyName=secretsmanager:ResourceTag/aws:rds:primaryDBInstanceArn,',
+    );
   });
 
   it('fails rather than passes when the simulation answers nothing', () => {

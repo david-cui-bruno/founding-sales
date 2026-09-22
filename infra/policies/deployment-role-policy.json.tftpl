@@ -317,6 +317,20 @@
       }
     },
     {
+      "Sid": "LetRdsCreateThisNamespacesManagedMasterSecret",
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:CreateSecret",
+        "secretsmanager:TagResource"
+      ],
+      "Resource": "arn:aws:secretsmanager:${aws_region}:${aws_account_id}:secret:rds!db-*",
+      "Condition": {
+        "StringLike": {
+          "aws:RequestTag/aws:rds:primaryDBInstanceArn": "arn:aws:rds:${aws_region}:${aws_account_id}:db:${name_prefix}*"
+        }
+      }
+    },
+    {
       "Sid": "NoDeploymentSecretValueAccessButTheRdsManagedMasterSecret",
       "Effect": "Deny",
       "Action": "secretsmanager:GetSecretValue",

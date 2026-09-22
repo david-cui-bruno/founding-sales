@@ -967,6 +967,44 @@ refusal (CloudTrail names the action, the resource and the reason) before choosi
 fix. The message a service returns names the resource the caller specified, not
 necessarily the one it was refused.
 
+### 8.0f What the sixth credentialed run (create, 22 September) proved and refuted
+
+Actions 35679472666, `stage = create` at 04816ad9, after both role policies were rendered,
+put and checked again (100 of 100 actions allowed for each role). Plan 35679320156 was
+green on the same commit.
+
+**Proved.** `kms:DescribeKey` as account metadata was the right fix for the fifth run:
+RDS reached past the key and into Secrets Manager. The teardown again destroyed all 125
+resources by name and reported `journal_bucket=gone`; the production guard passed.
+
+**Refuted, once.** `CreateDBInstance` answered `AccessDenied: The user isn't authorized
+to create a secret in AWS Secrets Manager`. With `manage_master_user_password`, RDS
+creates the master secret `rds!db-<uuid>` **in the caller's own session**, tagged
+`aws:rds:primaryDBInstanceArn = <the instance's ARN>`, and the RDS User Guide lists
+`secretsmanager:CreateSecret` and `secretsmanager:TagResource` among the permissions the
+caller must hold for that. The role could create secrets only under its own name prefix
+(`NamedResourcesInThisNamespace`), and `rds!db-` is not it. Both role policies now carry
+`LetRdsCreateThisNamespacesManagedMasterSecret`: those two actions on `secret:rds!db-*`,
+narrowed by `aws:RequestTag/aws:rds:primaryDBInstanceArn` matching this namespace's
+instance ARNs. The tag is an `aws:` system tag that only a service can set, so the
+statement is reachable only through RDS, and only for an instance whose name the
+role could create in the first place
+(`docs/decisions/g23-rds-creates-the-master-secret-in-the-callers-session.md`). The
+policies must be rendered and put again before the next stage; the check now asks about
+these two actions and about describing the secret afterwards, so it reports 103 of 103.
+
+**Also refuted: that the reports artifact was being kept.** The upload step reported
+that nothing under `.rehearsal-reports` was uploaded. `actions/upload-artifact` v4 skips
+hidden paths unless `include-hidden-files: true` is set, which it now is. Every earlier
+run's release record survives only in the job log and the step summary.
+
+**Unproved by this run**, because the instance never existed: whether RDS also needs the
+caller to hold `secretsmanager:DeleteSecret` or `secretsmanager:RotateSecret` on that secret
+at deletion or rotation. The User Guide lists neither among the caller's permissions and
+RDS performs both after the API call has returned, so the statement grants neither. If the
+next teardown's `DeleteDBInstance` is refused, CloudTrail's Secrets Manager record of the
+window says which action to add, and to which statement.
+
 ### 8.1 Still unverified
 
 Nothing in this repository has ever been applied beyond the four steps above, and no rehearsal environment has ever existed. Every command here comes from the AWS documentation, the Terraform schema and the scripts' dry-run output, checked offline. Watch these on the next real run:
@@ -979,5 +1017,5 @@ Nothing in this repository has ever been applied beyond the four steps above, an
 6. Whether the worker task role can write the suppression journal. **Closed by G12b in the plan, unproved in the cloud.** `infra/modules/cluster` now gives the worker `s3:PutObject` on the journal object prefix and `kms:Encrypt`/`kms:GenerateDataKey` on the journal key, and `infra/modules/journal` names both task roles as permitted writers rather than the API alone — so the bucket policy's `DenyWritesFromAnyoneButTheTaskRoles` no longer refuses the worker. Neither role asks for any `s3:Delete*`, and no writer sets a per-object retention: the bucket's own default retention locks every object on put, and `s3:PutObjectRetention` stays denied to everybody. `infra/modules/cluster/tests/services.tftest.hcl` asserts both halves offline. What a plan cannot prove is that the first real opt-out the worker imports actually lands in the bucket; watch the `SuppressionJournalWriteFailures` metric after Gmail sync is first enabled, because a remaining IAM refusal surfaces there and nowhere else.
 7. Whether one day of GOVERNANCE retention is long enough that `--bypass-governance-retention` is only ever needed for a same-day teardown.
 8. How long the whole rehearsal takes. The workflow's timeout is 180 minutes, which is a guess dominated by the Multi-AZ restore in Appendix E step 1. The rehearsal database is now `db.t4g.small` and Multi-AZ, like production's (`docs/decisions/g12c-the-topology-answers-are-root-defaults.md`), so that guess is at last a guess about the right operation — and it is the first thing to measure.
-9. Whether `fss-rh-deploy` can read the RDS-managed master secret the database URL is assembled from. The secret is named `rds!db-<id>` by RDS and does not carry the `fss-rh-` prefix the role is scoped by, so its policy probably needs a statement naming the ARN the root outputs. Runbook 6.5 has the detail; symptom is an `AccessDenied` at "Assemble the rehearsal database URL" and no connection string.
+9. Whether `fss-rh-deploy` can read the RDS-managed master secret the database URL is assembled from. The secret is named `rds!db-<id>` by RDS and does not carry the `fss-rh-` prefix, so `ReadTheRdsManagedMasterSecretOfThisNamespacesInstance` allows `DescribeSecret` and `GetSecretValue` on `rds!db-*` under `secretsmanager:ResourceTag/aws:rds:primaryDBInstanceArn` matching this namespace's instance ARNs. **Creating** it is proved necessary and is now allowed (8.0f); **reading** it has never run, and the condition key's spelling is from the Secrets Manager documentation, not from a credentialed run. The check simulates `DescribeSecret` under that key. Runbook 6.5 has the detail; symptom is an `AccessDenied` at "Assemble the rehearsal database URL" and no connection string.
 10. Whether the first real rehearsal takes the skip branch of the carry drill, as it should before the cutover, and whether the release record reading `"carryDrill": "skipped_no_watermark"` is legible enough at enable time. Both branches run offline on every pull request; neither has run against AWS.
