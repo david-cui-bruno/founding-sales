@@ -5,6 +5,15 @@
 #   infra/scripts/render-deployment-role-policy.sh fss-prod   > /tmp/fss-prod-deploy-scope.json
 #   infra/scripts/render-deployment-role-policy.sh fss-rh --sids     # the Sids, one per line
 #   infra/scripts/render-deployment-role-policy.sh fss-rh --compact  # no indentation
+#   infra/scripts/render-deployment-role-policy.sh fss-rh --pretty --discovery   # see below
+#
+# --discovery (rehearsal only; refused for production) appends the statements of
+# infra/policies/rehearsal-discovery-statements.json.tftpl: one wide allow on the services
+# the Terraform tree uses, and the guards that allow needs. David's decision of 22 September
+# 2026 for one pass of create, deploy and full, after which the CloudTrail record of the pass
+# (infra/scripts/rehearsal-actions-used.sh) is the source of the exact policy. The normal
+# document must be put back, and checked, before the role is used for anything else, and
+# nothing in discovery mode ever touches fss-prod-deploy.
 #
 # `docs/greenfield/infra-apply-runbook.md` 1.1 has the two `aws iam put-role-policy`
 # commands this output is for. The document replaces the whole inline policy named
@@ -50,6 +59,7 @@ set -euo pipefail
 
 PREFIX=${1:-}
 MODE=${2:---pretty}
+DISCOVERY=${3:-}
 
 case "$PREFIX" in
   fss-rh | fss-prod) ;;
@@ -68,12 +78,31 @@ case "$MODE" in
     ;;
 esac
 
+case "$DISCOVERY" in
+  '') ;;
+  --discovery)
+    if [ "$PREFIX" != "fss-rh" ]; then
+      echo "FAIL: --discovery is for the rehearsal role only. The production role is never widened." >&2
+      exit 2
+    fi
+    echo "DISCOVERY MODE: this document widens fss-rh-deploy to the services the tree uses, for one pass" >&2
+    echo "of create, deploy and full. Put the normal document back, and check it, before anything else." >&2
+    ;;
+  *)
+    echo "FAIL: '$DISCOVERY' is not an option; the only third argument is --discovery" >&2
+    exit 2
+    ;;
+esac
+
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 TEMPLATE="$ROOT/infra/policies/deployment-role-policy.json.tftpl"
+DISCOVERY_TEMPLATE="$ROOT/infra/policies/rehearsal-discovery-statements.json.tftpl"
 
 FSS_POLICY_PREFIX="$PREFIX" \
 FSS_POLICY_MODE="$MODE" \
 FSS_POLICY_TEMPLATE="$TEMPLATE" \
+FSS_POLICY_DISCOVERY="$DISCOVERY" \
+FSS_POLICY_DISCOVERY_TEMPLATE="$DISCOVERY_TEMPLATE" \
 FSS_POLICY_ACCOUNT_ID="${FSS_POLICY_ACCOUNT_ID:-326255650484}" \
 FSS_POLICY_REGION="${FSS_POLICY_REGION:-us-east-1}" \
 FSS_POLICY_STATE_BUCKET="${FSS_POLICY_STATE_BUCKET:-callie-sourcing-tfstate-326255650484}" \
@@ -155,6 +184,45 @@ document["Statement"] = [
     for statement in document["Statement"]
     if RENDER_ONLY_FOR.get(statement["Sid"], prefix) == prefix
 ]
+
+# Discovery mode: the rehearsal document plus the wide allow and its guards, appended so
+# that every statement of the normal document, every deny included, is still there.
+if env["FSS_POLICY_DISCOVERY"] == "--discovery":
+    if prefix != "fss-rh":
+        sys.exit("FAIL: --discovery is for the rehearsal role only")
+    discovery_text = open(env["FSS_POLICY_DISCOVERY_TEMPLATE"], encoding="utf-8").read()
+    try:
+        discovery = json.loads(string.Template(discovery_text).substitute(substitutions))
+    except KeyError as missing:
+        sys.exit(f"FAIL: the discovery template names {missing}, which this script does not supply")
+    for statement in discovery["Statement"]:
+        if not statement["Sid"].startswith("Discovery"):
+            sys.exit(f"FAIL: discovery statement {statement['Sid']} must be named Discovery...")
+        if statement["Sid"] in present:
+            sys.exit(f"FAIL: discovery statement {statement['Sid']} collides with the normal document")
+    # The wide allow is Resource "*" with no condition on every service it names, so an
+    # Allow of the normal document whose every action is on one of those services grants
+    # nothing the wide allow does not. Those are left out: with them the document measures
+    # past IAM's 10,240-character limit, and a reader of --sids sees exactly what the role
+    # holds. An Allow with any action outside the set (iam:*, sts, dynamodb, tag) stays,
+    # and every Deny stays.
+    wide = next(s for s in discovery["Statement"] if s["Effect"] == "Allow")
+    wide_services = {action.split(":")[0] for action in wide["Action"] if action.endswith(":*")}
+    def subsumed(statement):
+        if statement["Effect"] != "Allow":
+            return False
+        actions = statement["Action"] if isinstance(statement["Action"], list) else [statement["Action"]]
+        return all(action.split(":")[0] in wide_services for action in actions)
+    kept, dropped = [], []
+    for statement in document["Statement"]:
+        (dropped if subsumed(statement) else kept).append(statement["Sid"])
+    document["Statement"] = [s for s in document["Statement"] if s["Sid"] in kept]
+    document["Statement"].extend(discovery["Statement"])
+    print(
+        f"DISCOVERY MODE: {len(dropped)} scoped Allow statement(s) are inside the wide allow and are not "
+        f"emitted: {', '.join(dropped)}",
+        file=sys.stderr,
+    )
 
 if mode == "--sids":
     for statement in document["Statement"]:

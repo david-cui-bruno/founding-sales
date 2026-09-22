@@ -101,6 +101,32 @@ Each role is asked only about its own namespace and the command refuses the othe
 
 **And the one permission that must never appear on the production role.** `s3:BypassGovernanceRetention` is in the rehearsal document and denied outright in the production one, because a production suppression journal that its deployer can empty is not an append-only record and Appendix E step 2 stops being a recovery. The check is in `docs/greenfield/release.md` 1.2 and the release suite asserts both halves.
 
+#### 1.1b Discovery mode: one wide pass for the rehearsal role, then the exact policy (David's decision, 22 September 2026)
+
+Six credentialed runs each found exactly one missing permission, forty minutes apart, because the services the apply asks for call each other in the caller's session and the message names the wrong resource. David chose to break that loop once: `fss-rh-deploy` holds a wide allow on the services the tree uses for **one** pass of `create`, `deploy` and `full`; the CloudTrail record of that pass is the source of the exact policy; the exact policy is proved by one more run before anything touches production. `fss-prod-deploy` is never widened and the renderer refuses to render discovery for it. `docs/decisions/g25-discovery-mode-for-the-rehearsal-role.md` has the reasoning and the guards.
+
+```bash
+# 1. Render, read, put: the rehearsal role only. The renderer prints what it left out.
+infra/scripts/render-deployment-role-policy.sh fss-rh --sids   --discovery
+infra/scripts/render-deployment-role-policy.sh fss-rh --pretty --discovery > /tmp/fss-rh-deploy-scope.discovery.json
+aws iam put-role-policy --role-name fss-rh-deploy --policy-name fss-rh-deploy-scope \
+  --policy-document file:///tmp/fss-rh-deploy-scope.discovery.json
+
+# 2. The check still runs, and must still pass: the guards must not deny anything the apply needs.
+infra/scripts/check-deployment-role.sh fss-rh-deploy fss-rh
+
+# 3. Note the UTC time, run the stages, note the UTC time.
+# 4. The record of what the role actually asked for, from CloudTrail's 90-day event history (read-only):
+infra/scripts/rehearsal-actions-used.sh 2026-09-22T17:00:00Z 2026-09-22T21:00:00Z fss-rh-deploy > /tmp/fss-rh-actions-used.json
+
+# 5. When the exact policy has merged: put the normal document back, and check it, before anything else.
+infra/scripts/render-deployment-role-policy.sh fss-rh > /tmp/fss-rh-deploy-scope.json
+aws iam put-role-policy --role-name fss-rh-deploy --policy-name fss-rh-deploy-scope --policy-document file:///tmp/fss-rh-deploy-scope.json
+infra/scripts/check-deployment-role.sh fss-rh-deploy fss-rh
+```
+
+What the discovery document holds, exactly: every statement of the normal document except the Allows whose every action is on a widened service (they grant nothing the wide allow does not, and with them the document is past IAM's limit); so the read-only metadata statement, the scoped IAM grant, the lock-table grant, and **every Deny** stay. Added: `DiscoveryAllowOnTheServicesTheTreeUsesRemoveAfterTheFirstFullRun` (`acm`, `cloudfront`, `cloudwatch`, `ec2`, `ecr`, `ecs`, `elasticloadbalancing`, `kms`, `logs`, `rds`, `s3`, `secretsmanager`, `sns`, `wafv2`, and `tag:GetResources`, on `*`; never `iam`, `sts` or `dynamodb`), and six guards: nothing named `fss-prod`, nothing tagged `NamePrefix=fss-prod*`, no tagging as `fss-prod*`, nothing of the old stack or its delegated worker, no change to the state bucket's configuration, no change to the state key. Secret values stay unreadable (the value-read deny is kept), KMS data actions stay inside the namespace (that deny is kept), and S3 data outside the state stays unreadable.
+
 **The trust policies are not this lane's and are not in the repository.** `fss-rh-deploy` trusts the GitHub OIDC provider and the subject `repo:david-cui-bruno/founding-sales:environment:rehearsal`; `fss-prod-deploy` trusts David's admin principal. Neither is touched by anything above: `put-role-policy` writes the permission policy, never the trust relationship.
 
 **Who does the assuming, and the one flag that changes it.** Every root takes `assume_deployment_role`, a boolean **defaulting to `true`**: the provider assumes `deployment_role_name` before it makes a call. That is what your local applies do and there is nothing to pass — sections 2.2 and 3.2 are unchanged.

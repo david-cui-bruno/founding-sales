@@ -1029,6 +1029,22 @@ simulator's `MissingContextValues` beneath it, which is the line that would have
 explained this one. Both policies must be rendered and put again; expect 103 of 103 for
 `fss-rh-deploy` and 102 of 102 for `fss-prod-deploy`.
 
+### 8.0h Discovery mode (David's decision, 22 September, afternoon)
+
+After the sixth run and the step 0 stop that followed it, David asked why so many pull
+requests had moved so little, and the honest answer was the shape of the loop: least
+privilege for a deployment role was being discovered empirically, one refusal per forty
+minute run, because the services the apply asks for call each other in the caller's
+session, the message names the wrong resource, and the database, where the last two
+refusals were, is created after the first 125 resources. He chose to break the loop once.
+For one pass of `create`, `deploy` and `full`, `fss-rh-deploy` holds a wide allow on the
+services the tree uses, with guards (runbook 1.1b; `docs/decisions/g25-discovery-mode-for-
+the-rehearsal-role.md`). The CloudTrail record of that pass, read by
+`infra/scripts/rehearsal-actions-used.sh`, is the source of the exact policy, which one more
+run proves before anything touches production. `fss-prod-deploy` is never widened; the
+renderer refuses to render discovery for it. Every deny of the normal document stays in the
+discovery document, and the wide allow never names IAM, STS or DynamoDB.
+
 ### 8.1 Still unverified
 
 Nothing in this repository has ever been applied beyond the four steps above, and no rehearsal environment has ever existed. Every command here comes from the AWS documentation, the Terraform schema and the scripts' dry-run output, checked offline. Watch these on the next real run:

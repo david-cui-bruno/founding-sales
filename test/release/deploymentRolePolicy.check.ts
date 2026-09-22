@@ -636,6 +636,84 @@ describe('the renderer refuses what it cannot render', () => {
     expect(narrowed.stdout).not.toContain('certificate/*');
   });
 
+  describe('discovery mode, which is David\'s decision of 22 September and never production\'s', () => {
+    // Six credentialed runs found one missing permission each, forty minutes apart. For one
+    // pass of create, deploy and full the rehearsal role holds a wide allow on the services
+    // the tree uses, with guards; the CloudTrail record of the pass is then the source of
+    // the exact policy (docs/decisions/g25-discovery-mode-for-the-rehearsal-role.md).
+    const discovery = (): PolicyDocument => {
+      const result = spawnSync(script, ['fss-rh', '--compact', '--discovery'], { encoding: 'utf8' });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stderr).toContain('DISCOVERY MODE');
+      return JSON.parse(result.stdout) as PolicyDocument;
+    };
+    const normal = (): PolicyDocument =>
+      JSON.parse(spawnSync(script, ['fss-rh', '--compact'], { encoding: 'utf8' }).stdout) as PolicyDocument;
+
+    it('is refused for production and for any third argument but --discovery', () => {
+      const production = run(['fss-prod', '--compact', '--discovery']);
+      expect(production.code).toBe(2);
+      expect(production.output).toContain('production role is never widened');
+      expect(production.output).not.toContain('"Statement"');
+      const typo = run(['fss-rh', '--compact', '--wide']);
+      expect(typo.code).toBe(2);
+    });
+
+    it('is not the default: the normal document carries no Discovery statement', () => {
+      expect(normal().Statement.some(statement => statement.Sid.startsWith('Discovery'))).toBe(false);
+    });
+
+    it('keeps every deny of the normal document and adds the guards', () => {
+      const wide = discovery();
+      const normalDenies = normal().Statement.filter(statement => statement.Effect === 'Deny').map(statement => statement.Sid);
+      expect(normalDenies.length).toBeGreaterThanOrEqual(5);
+      const wideSids = wide.Statement.map(statement => statement.Sid);
+      for (const sid of normalDenies) expect(wideSids, `discovery dropped the deny ${sid}`).toContain(sid);
+      const guards = wide.Statement.filter(statement => statement.Sid.startsWith('DiscoveryGuard'));
+      expect(guards.length).toBeGreaterThanOrEqual(6);
+      for (const guard of guards) expect(guard.Effect).toBe('Deny');
+      expect(JSON.stringify(guards)).toContain('arn:aws:*:*:*:*fss-prod*');
+      expect(JSON.stringify(guards)).toContain('"aws:ResourceTag/NamePrefix":"fss-prod*"');
+      expect(JSON.stringify(guards)).toContain('"aws:RequestTag/NamePrefix":"fss-prod*"');
+      expect(JSON.stringify(guards)).toContain('delegated-worker');
+      expect(JSON.stringify(guards)).toContain('arn:aws:s3:::callie-sourcing-tfstate-326255650484"');
+      expect(JSON.stringify(guards)).toContain('kms:ScheduleKeyDeletion');
+    });
+
+    it('widens no service the tree does not use, and never IAM, STS or DynamoDB', () => {
+      const wide = discovery().Statement.find(statement => statement.Sid.startsWith('DiscoveryAllow'));
+      expect(wide?.Effect).toBe('Allow');
+      expect(wide?.Resource).toBe('*');
+      expect(wide?.Condition).toBeUndefined();
+      const services = asList(wide?.Action).map(action => action.split(':')[0]);
+      for (const forbidden of ['iam', 'sts', 'dynamodb', 'organizations', 'account', 'lambda', 'events', 'cloudtrail']) {
+        expect(services, `the wide allow names ${forbidden}`).not.toContain(forbidden);
+      }
+      const treeServices = new Set(Object.values(actionMap().terraform_resources).map(entry => entry.service));
+      treeServices.delete('iam');
+      for (const service of treeServices) expect(services, `the tree uses ${service}`).toContain(service);
+    });
+
+    it('leaves out only the allows the wide allow already contains, and still fits IAM', () => {
+      const wide = discovery();
+      const wideServices = new Set(
+        asList(wide.Statement.find(statement => statement.Sid.startsWith('DiscoveryAllow'))?.Action)
+          .filter(action => action.endsWith(':*'))
+          .map(action => action.split(':')[0]),
+      );
+      const wideSids = new Set(wide.Statement.map(statement => statement.Sid));
+      for (const statement of normal().Statement) {
+        const subsumed =
+          statement.Effect === 'Allow' && asList(statement.Action).every(action => wideServices.has(action.split(':')[0]!));
+        expect(wideSids.has(statement.Sid), `${statement.Sid}: kept=${String(wideSids.has(statement.Sid))} subsumed=${String(subsumed)}`).toBe(!subsumed);
+      }
+      // The scoped IAM grant and the lock-table grant are outside the widened services and stay.
+      expect(wideSids.has('NamedResourcesInThisNamespace')).toBe(true);
+      expect(wideSids.has('ThisNamespacesStateDynamoLock')).toBe(true);
+      expect(JSON.stringify(wide).replace(/\s/gu, '').length).toBeLessThan(10_240);
+    });
+  });
+
   it('lists the Sids it emits, with their effect, for both roles', () => {
     const rehearsal = run(['fss-rh', '--sids']);
     const production = run(['fss-prod', '--sids']);
