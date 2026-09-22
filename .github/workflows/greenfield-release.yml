@@ -1057,4 +1057,7 @@ jobs:
         with:
           name: rehearsal-reports-${{ steps.prefix.outputs.prefix }}
           path: ${{ env.FSS_REHEARSAL_REPORTS }}
+          # The directory is `.rehearsal-reports`; v4 skips hidden paths unless told not to,
+          # and run 35679472666 uploaded nothing for that reason.
+          include-hidden-files: true
           retention-days: 90

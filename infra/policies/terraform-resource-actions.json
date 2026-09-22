@@ -213,7 +213,9 @@
         "rds:AddTagsToResource",
         "rds:ListTagsForResource",
         "kms:CreateGrant",
-        "kms:DescribeKey"
+        "kms:DescribeKey",
+        "secretsmanager:CreateSecret",
+        "secretsmanager:TagResource"
       ]
     },
     "aws_iam_role": {
@@ -713,6 +715,12 @@
       "s3:DeleteBucketPolicy",
       "s3:PutBucketObjectLockConfiguration",
       "s3:BypassGovernanceRetention"
+    ]
+  },
+  "run_35679472666": {
+    "RDS CreateDBInstance: The user isn't authorized to create a secret in AWS Secrets Manager (aws_db_instance.main, manage_master_user_password)": [
+      "secretsmanager:CreateSecret",
+      "secretsmanager:TagResource"
     ]
   }
 }
