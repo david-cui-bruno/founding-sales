@@ -11,7 +11,7 @@
 # infra/policies/rehearsal-discovery-statements.json.tftpl: one wide allow on the services
 # the Terraform tree uses, and the guards that allow needs. David's decision of 22 September
 # 2026 for one pass of create, deploy and full, after which the CloudTrail record of the pass
-# (infra/scripts/rehearsal-actions-used.sh) is the source of the exact policy. The normal
+# (infra/scripts/deployment-role-actions-used.sh) is the source of the exact policy. The normal
 # document must be put back, and checked, before the role is used for anything else, and
 # nothing in discovery mode ever touches fss-prod-deploy.
 #

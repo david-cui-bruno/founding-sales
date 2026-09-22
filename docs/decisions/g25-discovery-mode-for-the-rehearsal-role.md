@@ -23,7 +23,7 @@ The discovery document measures under 6,000 characters. The check still runs aga
 
 ## What the pass produces
 
-`infra/scripts/rehearsal-actions-used.sh <start> <end> fss-rh-deploy` reads CloudTrail's 90-day event history (read-only, no trail needed, no request parameter printed) and lists every distinct action the role made, with counts, error codes, the services that invoked it on the role's behalf, and up to five resource ARNs. That list, against the normal document and the check's table, is the diff the exact policy is written from.
+`infra/scripts/deployment-role-actions-used.sh <start> <end> fss-rh-deploy` reads CloudTrail's 90-day event history (read-only, no trail needed, no request parameter printed) and lists every distinct action the role made, with counts, error codes, the services that invoked it on the role's behalf, and up to five resource ARNs. That list, against the normal document and the check's table, is the diff the exact policy is written from.
 
 ## What was considered and not done
 

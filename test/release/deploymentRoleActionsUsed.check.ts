@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { repositoryPath } from './support/coverage.ts';
 
 /**
- * `infra/scripts/rehearsal-actions-used.sh` turns CloudTrail's event history into the
+ * `infra/scripts/deployment-role-actions-used.sh` turns CloudTrail's event history into the
  * list of actions a deployment role actually made: the input to deriving the exact
  * policy after the one wide pass David decided on 22 September 2026
  * (`docs/decisions/g25-discovery-mode-for-the-rehearsal-role.md`).
@@ -17,7 +17,7 @@ import { repositoryPath } from './support/coverage.ts';
  * a result (an empty answer, and a window in which the role made nothing).
  */
 describe('the CloudTrail export the exact policy is derived from', () => {
-  const script = repositoryPath('infra/scripts/rehearsal-actions-used.sh');
+  const script = repositoryPath('infra/scripts/deployment-role-actions-used.sh');
 
   function stub(events: readonly Record<string, unknown>[]): string {
     const directory = mkdtempSync(join(tmpdir(), 'fss-cloudtrail-'));

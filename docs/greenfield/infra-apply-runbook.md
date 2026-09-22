@@ -117,7 +117,7 @@ infra/scripts/check-deployment-role.sh fss-rh-deploy fss-rh
 
 # 3. Note the UTC time, run the stages, note the UTC time.
 # 4. The record of what the role actually asked for, from CloudTrail's 90-day event history (read-only):
-infra/scripts/rehearsal-actions-used.sh 2026-09-22T17:00:00Z 2026-09-22T21:00:00Z fss-rh-deploy > /tmp/fss-rh-actions-used.json
+infra/scripts/deployment-role-actions-used.sh 2026-09-22T17:00:00Z 2026-09-22T21:00:00Z fss-rh-deploy > /tmp/fss-rh-actions-used.json
 
 # 5. When the exact policy has merged: put the normal document back, and check it, before anything else.
 infra/scripts/render-deployment-role-policy.sh fss-rh > /tmp/fss-rh-deploy-scope.json

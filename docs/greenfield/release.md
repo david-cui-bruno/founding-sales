@@ -1040,7 +1040,7 @@ refusals were, is created after the first 125 resources. He chose to break the l
 For one pass of `create`, `deploy` and `full`, `fss-rh-deploy` holds a wide allow on the
 services the tree uses, with guards (runbook 1.1b; `docs/decisions/g25-discovery-mode-for-
 the-rehearsal-role.md`). The CloudTrail record of that pass, read by
-`infra/scripts/rehearsal-actions-used.sh`, is the source of the exact policy, which one more
+`infra/scripts/deployment-role-actions-used.sh`, is the source of the exact policy, which one more
 run proves before anything touches production. `fss-prod-deploy` is never widened; the
 renderer refuses to render discovery for it. Every deny of the normal document stays in the
 discovery document, and the wide allow never names IAM, STS or DynamoDB.

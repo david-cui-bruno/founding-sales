@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # List every IAM action a deployment role was seen to make, from CloudTrail's event history.
 #
-#   infra/scripts/rehearsal-actions-used.sh 2026-09-22T17:00:00Z 2026-09-22T21:00:00Z            # fss-rh-deploy
-#   infra/scripts/rehearsal-actions-used.sh 2026-09-22T17:00:00Z 2026-09-22T21:00:00Z fss-rh-deploy > used.json
+#   infra/scripts/deployment-role-actions-used.sh 2026-09-22T17:00:00Z 2026-09-22T21:00:00Z            # fss-rh-deploy
+#   infra/scripts/deployment-role-actions-used.sh 2026-09-22T17:00:00Z 2026-09-22T21:00:00Z fss-rh-deploy > used.json
 #
 # Read-only. The one AWS call is `aws cloudtrail lookup-events`, which reads the 90-day
 # event history of management events and needs no trail. Nothing here is changed and
