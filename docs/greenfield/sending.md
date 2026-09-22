@@ -106,13 +106,47 @@ business date has moved past an open day. The signals are recorded where they ar
 learned: a bounce and an opt-out in `mail/effects.ts`, a confirmed opt-out in
 `classification/confirmations.ts`, a provider error in `outbound/send.ts`, and every
 imported outgoing message that has no fence in `mail/pipeline.ts`. See
-`docs/decisions/g15-the-worker-drains-what-the-lanes-left.md`.
+`docs/decisions/g15-the-worker-drains-what-the-lanes-left.md` and
+`docs/decisions/g22-a-late-bounce-belongs-to-its-send.md`.
 
 The thresholds `rampHealthFailure` uses — `RAMP_MAX_BOUNCE_RATE = 0.05`,
 `RAMP_MAX_OPT_OUT_RATE = 0.1`, `RAMP_RATE_FLOOR = 20`, `RAMP_SMALL_DAY_TOLERANCE = 1` —
 are numbers the specification does not give. David confirmed them unchanged on
 21 September 2026; they are his values, not a lane's invention, and changing them is his
 decision to make.
+
+**A bounce counts against the send that caused it, whenever it arrives** (lane G22).
+`RAMP_MAX_BOUNCE_RATE` is a proportion of one day's automated sends, so a report has to
+land on the day the send went out, not on the morning it was read. `originatingSend`
+joins the report's `In-Reply-To` and `References` against
+`outbound_messages.provider_message_id_header` — 12.3's "Message-ID references against
+FSS fences", from the same headers — and takes the *fence's* `mailbox_id` and
+`business_date`, so a report forwarded into another connected mailbox still counts
+against the mailbox that earned it.
+
+`recordBounceAgainstDay` is what counts it, and it re-judges a day that has already
+closed:
+
+* an open day is counted and not judged, because the close is what judges;
+* a closed day the new count still acquits keeps its verdict;
+* a closed day the new count condemns is flipped to `healthy = false`, its failure is
+  written to `mailbox_send_ramp.last_health_failure`, and `healthy_sending_days` gives
+  back the day it earned — `greatest(n - 1, 0)`, once, guarded by the flip itself;
+* a day already closed unhealthy is counted and nothing is taken, because it never
+  advanced the ramp.
+
+Two details are load-bearing. The re-judgement reuses the *stored verdict* for the
+three non-counter conditions — authentication, coverage, provider warning — rather than
+re-reading them, because `healthy = true` on a closed day is the record that they held
+that day, and a hold opened this morning must not condemn a day it had nothing to do
+with. And `last_advanced_on` does not move, because it is what stops `closeSendDay`
+advancing the same date twice; rewinding it would let a later close re-earn the day
+that was just taken back. The direction is conservative in every case: the cap falls,
+never rises.
+
+A report that names no fence — a daemon that sets neither header, a bounce of a direct
+Gmail send that never had one — still counts on the day it arrived. That is the
+behaviour before this lane and the known limit of version one.
 
 The day's counter is taken by `UPDATE ... WHERE automated_sent < cap`, in one
 statement. Read-compare-write would let two workers each read four, each decide four is

@@ -105,6 +105,19 @@ An opt-out never writes a suppression row itself. It calls G4's `recordSuppressi
 which writes the object-locked journal before the row (10.2). The handle is always
 suppressed; the firm is suppressed only when exactly one candidate matched.
 
+Two of the effects feed 12.7's ramp, and they count on different days. An opt-out is a
+fact about the moment a person asked, so it counts on the day the message arrived. A
+**bounce is a fact about the send that caused it** (lane G22): `countRampSignal` asks
+`originatingSend` for the fence the report's `In-Reply-To` and `References` name, and
+counts against that fence's mailbox and business date — re-judging a day that has
+already closed, which can take the ramp back. A report that names no fence still counts
+where it landed. `docs/greenfield/sending.md` rule 6 has the arithmetic, and
+`docs/decisions/g22-a-late-bounce-belongs-to-its-send.md` the reasoning.
+
+`applyDirectSendEffects` switches the firm to manual with `origin: 'direct_send'`, so
+the enrollment the switch stops records `direct_send` rather than `human_reply`
+(`docs/greenfield/crm.md`, "The manual-mode origin").
+
 ### 6. There is no unsubscribe link, anywhere — and no postal address either
 
 A reply-to-stop footer only. `template_versions` enforces it:
@@ -208,6 +221,27 @@ enforces: nothing in this release refuses a disconnect or a revoke on those grou
 and the built guard — a refusal on the disconnect route, with an admin override that is
 audited — belongs to a later lane. Until then it lives here, in
 `docs/greenfield/release.md` section 6, and nowhere else.
+
+### The per-mailbox thirty-day opt-out window is the same kind of rule
+
+David's 19 September 2026 note asked for a per-mailbox thirty-day opt-out-processing
+window, "tracked per mailbox". The 21 September deviations sweep found no column,
+constraint or code path for it, and David's decision 3 of that day made it a **written
+operational rule for version one**, with a built guard belonging to a later lane. Lane
+G22 re-checked the code and the answer has not changed: there is no window column, no
+expiry on a suppression, and nothing anywhere that refuses or permits an action on the
+strength of a thirty-day clock. `effective_suppressions` has no time term at all, and
+`suppression_events` records no expiry — a suppression is superseded by an explicit,
+audited event or it stands for ever.
+
+The docs are aligned to the code rather than the reverse, and deliberately, because the
+code is already *stronger* than the rule. Invariant 4 is "suppressions are effective
+immediately and database-enforced", and `decideSend` reads `effective_suppressions`
+before every single dispatch (`docs/greenfield/sending.md` rule 3), so a reply-based
+stop takes effect at the next send attempt and never lapses. A window is a deadline for
+processing; FSS has no queue of unprocessed opt-outs to put a deadline on. What version
+one does not have is a *record* that the obligation was met per mailbox, which is what
+the later guard lane is for.
 
 ## What is deliberately not here
 

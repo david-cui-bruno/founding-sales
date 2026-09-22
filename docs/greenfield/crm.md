@@ -167,7 +167,7 @@ append-only by privilege.
 | Kind | Who reads it | What it means |
 |---|---|---|
 | `opportunity.terminal_stop` | `sequence.terminal_stop` (G15) | Won or Lost: stop every active enrollment for the opportunity |
-| `opportunity.manual_mode` | `sequence.terminal_stop` (G15) | The opportunity is manual; its active enrollments end terminally (7.3) |
+| `opportunity.manual_mode` | `sequence.terminal_stop` (G15) | The opportunity is manual; every active enrollment **of the firm** ends terminally (7.3), with the end reason the event's `detail.origin` names (G22) |
 | `opportunity.reopened` | G8 sequences | An explicit reopen; the old sequence never resumes |
 | `firm.reassigned` | Today (8.2) | Transfer unfinished entries to the new assignee |
 | `firm.merged`, `contact.merged` | search (G3b) | Reindex the target |
@@ -242,7 +242,33 @@ refuses as `firm_merged`.
 * **Enrollments, executions and outbound fences** — lane G8. This lane raises the
   terminal-stop signal, G8 wrote the subscriber, and G15 is what calls it: the
   `sequence.terminal_stop` job drains `opportunity.terminal_stop` and
-  `opportunity.manual_mode` every pass that finds either outstanding.
+  `opportunity.manual_mode` every pass that finds either outstanding. Lane G22 moved
+  the *confirmed reply's* stop into the confirmation's own transaction, which is where
+  7.3 and Appendix A put it, and left the drain as the net for the other origins.
+
+### The manual-mode origin (7.3, lane G22)
+
+`setManualControlMode` takes a required `origin`, one of `MANUAL_MODE_ORIGINS` in
+`packages/domain/crm/events.ts`, and writes it into `crm_domain_events.detail.origin`
+beside the free-text reason. It is the fact the terminal-stop consumer turns into an
+`end_reason`, and it is required rather than defaulted so a new caller has to say which
+of 7.3's ways in it is.
+
+| Origin | Written by | End reason |
+|---|---|---|
+| `human_reply` | `confirmReplyDisposition`, `resolveAmbiguity` when the reply is human | `human_reply` |
+| `linkedin_reply` | `recordLinkedInResult` | `linkedin_reply` |
+| `engaged_call` | `logCallOutcome` | `engaged_call` |
+| `direct_send` | `applyDirectSendEffects` | `direct_send` |
+| `salesperson_command` | `POST /opportunities/manual` | `admin_stop` |
+
+`salesperson_command` is a fifth member 7.3 does not list, because an explicit switch
+is a person inside the workspace deciding rather than a prospect signal, and the
+enrollment vocabulary reserves its first five members for prospect signals.
+
+An event written before G22 carries no origin, and `manualModeEndReason` reads that —
+and any origin it does not recognise — as `human_reply`, which is exactly what lane G15
+recorded for all of them. Nothing that reads the old rows changes its answer.
 * **Notes, callbacks and message bodies** — they belong in `FirmDetailDto` when their
   lane arrives; the visibility decision that will govern them already exists.
 
