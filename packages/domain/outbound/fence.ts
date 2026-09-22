@@ -432,6 +432,67 @@ export async function fenceForOutgoingMessage(
   return rows[0]?.id ?? null;
 }
 
+/** The send a delivery report is about, and the day the ramp counted it on. */
+export interface OriginatingSend {
+  readonly outboundMessageId: string;
+  readonly mailboxId: string;
+  readonly businessDate: string;
+}
+
+/**
+ * The FSS send one bounce report refers to (12.4, 12.7, lane G22).
+ *
+ * 12.4: "Bounces invalidate the prospect route frozen on the originating fence." The
+ * originating fence is found the way 12.3 finds any other reference — "RFC Message-ID
+ * references against FSS fences" — from the report's `In-Reply-To` and `References`,
+ * bracketed back up because `mail_messages.rfc_message_id` is stored without brackets
+ * and `provider_message_id_header` with them.
+ *
+ * It is deliberately not narrowed to the mailbox the report arrived in. The fence's
+ * own `mailbox_id` is the mailbox that sent, and 12.7's rate is a property of the
+ * *sending* mailbox's day; a report forwarded into another connected mailbox must
+ * still count against the mailbox that earned it. `provider_message_id_header` carries
+ * the fence uuid, so the value identifies one fence in the workspace whatever mailbox
+ * asks.
+ *
+ * A fence with no `business_date` never reached the counter (it was held before
+ * dispatch), so there is no day to attribute to and this answers null — which the
+ * caller reads as "count it where it landed", the behaviour before this lane.
+ */
+export async function originatingSend(
+  context: RepositoryContext,
+  references: readonly string[],
+): Promise<OriginatingSend | null> {
+  const headers = [...new Set(references.filter(reference => reference.length > 0))].map(
+    reference => `<${reference}>`,
+  );
+  if (headers.length === 0) return null;
+  const { rows } = await context.db.query<{
+    id: string;
+    mailbox_id: string;
+    business_date: Date | string;
+  }>(
+    `SELECT id, mailbox_id, business_date
+       FROM outbound_messages
+      WHERE workspace_id = $1
+        AND provider_message_id_header = ANY($2::text[])
+        AND business_date IS NOT NULL
+      ORDER BY send_at DESC
+      LIMIT 1`,
+    [context.scope.workspaceId, headers],
+  );
+  const row = rows[0];
+  if (row === undefined) return null;
+  return {
+    outboundMessageId: row.id,
+    mailboxId: row.mailbox_id,
+    businessDate:
+      row.business_date instanceof Date
+        ? row.business_date.toISOString().slice(0, 10)
+        : row.business_date,
+  };
+}
+
 export interface OutboundOutcome {
   readonly state: OutboundOutcomeState;
   readonly outboundMessageId: string | null;

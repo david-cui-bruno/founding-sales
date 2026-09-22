@@ -1031,4 +1031,157 @@ describe('the import feeds the reputation ramp (12.7)', () => {
     expect(again?.bounces).toBe(1);
     expect(again?.opt_outs).toBe(1);
   });
+
+  /**
+   * A bounce that arrives after its send day closed (12.7, lane G22, the G15
+   * follow-up).
+   *
+   * G15 counted every bounce against the day it *arrived* and recorded the cost in
+   * `docs/decisions/g15-the-worker-drains-what-the-lanes-left.md`: "a bounce for
+   * yesterday's send, arriving after yesterday's day has been closed, is not counted
+   * against it". A bounce is a fact about the send that caused it, and 12.7's
+   * threshold is a proportion of *that day's* automated sends, so counting it on the
+   * day the report happened to land both understates yesterday and slanders today.
+   *
+   * The report names the send in its `References`, the fence holds the deterministic
+   * Message-ID and the business date the cap counted the send against, and the two
+   * join. Twenty sends is `RAMP_RATE_FLOOR`, so the day is judged on its rate: one
+   * bounce is exactly five per cent, which `RAMP_MAX_BOUNCE_RATE` does not exceed, and
+   * two is ten, which it does.
+   */
+  it('attributes a late bounce to the send day that caused it, and takes the ramp back only when it crosses the threshold', async () => {
+    world = await createMailWorld();
+    const w = world;
+    await completeBaseline(w, w.alpha);
+    const context = w.systemContext(w.alpha.workspace.workspaceId);
+    const workspaceId = context.scope.workspaceId;
+    const arrivedAt = Date.now();
+    const today = await businessDateOfInstant(w, workspaceId, new Date(arrivedAt).toISOString());
+    const { rows: dates } = await w.database.session.query<{ date: string }>(
+      `SELECT ($2::date - 1)::text AS date FROM workspaces WHERE id = $1`,
+      [workspaceId, today],
+    );
+    const yesterday = dates[0]?.date ?? '';
+    expect(yesterday).not.toBe('');
+
+    // Yesterday: twenty automated sends, closed, judged healthy, and a ramp that
+    // counted the day.
+    await w.database.session.query(
+      `INSERT INTO mailbox_send_days
+         (workspace_id, mailbox_id, business_date, automated_sent, cap_granted, healthy, closed_at)
+       VALUES ($1, $2, $3::date, 20, 50, true, now() - interval '1 hour')`,
+      [workspaceId, w.alpha.mailboxId, yesterday],
+    );
+    await w.database.session.query(
+      `INSERT INTO mailbox_send_ramp (workspace_id, mailbox_id, healthy_sending_days, last_advanced_on)
+       VALUES ($1, $2, 6, $3::date)`,
+      [workspaceId, w.alpha.mailboxId, yesterday],
+    );
+    // Today, still open. A bounce counted on the day it arrived would land here, so
+    // this row is what makes the misattribution visible rather than invisible.
+    await w.database.session.query(
+      `INSERT INTO mailbox_send_days (workspace_id, mailbox_id, business_date, automated_sent, cap_granted)
+       VALUES ($1, $2, $3::date, 4, 50)`,
+      [workspaceId, w.alpha.mailboxId, today],
+    );
+
+    const headers = [
+      'fss.aaaaaaaa-1111-4111-8111-111111111111@example.test',
+      'fss.bbbbbbbb-2222-4222-8222-222222222222@example.test',
+    ];
+    for (const header of headers) {
+      await w.database.session.query(
+        `INSERT INTO outbound_messages
+           (workspace_id, mailbox_id, origin_kind, draft_id, firm_id, recipient_address,
+            subject, body, rendered_hash, provider_message_id_header, send_at, source_zone,
+            placement_rule_version, business_date)
+         VALUES ($1, $2, 'draft', gen_random_uuid(), $3, $4, 'A short note',
+                 'A body with a stop line.', repeat('a', 64), $5, now() - interval '1 day',
+                 'UTC', 'email-window.1', $6::date)`,
+        [workspaceId, w.alpha.mailboxId, w.crm.alpha.firmId, PROSPECT, `<${header}>`, yesterday],
+      );
+    }
+
+    // The daemon is a route on the same firm, which is how a report matches at all.
+    await w.database.session.query(
+      `INSERT INTO email_addresses (workspace_id, firm_id, address, source, retrieved_at,
+                                    association_confidence, technical_validation, eligibility,
+                                    eligibility_policy_version)
+       VALUES ($1, $2, 'mailer-daemon@northwind.example.test', 'research_provider',
+               now(), 0.9, 'passed', 'usable', 'route-policy.1')`,
+      [workspaceId, w.crm.alpha.firmId],
+    );
+
+    const ramp = async (): Promise<{ healthy_sending_days: number; last_health_failure: string | null }> => {
+      const { rows } = await w.database.session.query<{
+        healthy_sending_days: number;
+        last_health_failure: string | null;
+      }>(
+        `SELECT healthy_sending_days, last_health_failure FROM mailbox_send_ramp
+          WHERE workspace_id = $1 AND mailbox_id = $2`,
+        [workspaceId, w.alpha.mailboxId],
+      );
+      const row = rows[0];
+      if (row === undefined) throw new Error('the mailbox has no ramp');
+      return row;
+    };
+    const verdict = async (businessDate: string): Promise<boolean | null> => {
+      const { rows } = await w.database.session.query<{ healthy: boolean | null }>(
+        `SELECT healthy FROM mailbox_send_days
+          WHERE workspace_id = $1 AND mailbox_id = $2 AND business_date = $3::date`,
+        [workspaceId, w.alpha.mailboxId, businessDate],
+      );
+      return rows[0]?.healthy ?? null;
+    };
+
+    const bounce = async (id: string, historyId: string, reference: string): Promise<void> => {
+      w.alpha.messages.push(
+        fixtureMessage({
+          id,
+          historyId,
+          from: 'mailer-daemon@northwind.example.test',
+          to: w.alpha.address,
+          subject: 'Delivery Status Notification (Failure)',
+          body: 'Delivery has failed to these recipients: address not found.',
+          references: [reference],
+          internalDateEpochMilliseconds: arrivedAt,
+        }),
+      );
+      await runMailSync(context, w.syncDeps(w.alpha), { mailboxId: w.alpha.mailboxId });
+    };
+
+    await bounce('latebounce1', '1230', headers[0] ?? '');
+
+    // Counted against the send, not against the morning it was read.
+    expect((await day(w, workspaceId, w.alpha.mailboxId, yesterday))?.bounces).toBe(1);
+    expect((await day(w, workspaceId, w.alpha.mailboxId, today))?.bounces).toBe(0);
+    // One in twenty is exactly five per cent, and five per cent is not more than five
+    // per cent: the day stands and the ramp keeps what it earned.
+    expect(await verdict(yesterday)).toBe(true);
+    expect((await ramp()).healthy_sending_days).toBe(6);
+    expect((await ramp()).last_health_failure).toBeNull();
+
+    await bounce('latebounce2', '1231', headers[1] ?? '');
+
+    expect((await day(w, workspaceId, w.alpha.mailboxId, yesterday))?.bounces).toBe(2);
+    expect((await day(w, workspaceId, w.alpha.mailboxId, today))?.bounces).toBe(0);
+    // Ten per cent. The day was never healthy, so the ramp gives back the day it
+    // counted on the strength of it.
+    expect(await verdict(yesterday)).toBe(false);
+    expect((await ramp()).healthy_sending_days).toBe(5);
+    expect((await ramp()).last_health_failure).toBe('bounce_rate');
+
+    // Once, however often the bounce is re-imported: the effect's own uniqueness is
+    // the guard, and the day is not taken back a second time.
+    await w.database.session.query(
+      "UPDATE mailboxes SET history_id = '1229' WHERE workspace_id = $1 AND id = $2",
+      [workspaceId, w.alpha.mailboxId],
+    );
+    await runMailSync(context, w.syncDeps(w.alpha), { mailboxId: w.alpha.mailboxId });
+    expect((await day(w, workspaceId, w.alpha.mailboxId, yesterday))?.bounces).toBe(2);
+    expect((await ramp()).healthy_sending_days).toBe(5);
+
+    // Nothing reached the other workspace, which holds the same firm and address.
+    expect(await day(w, w.beta.workspace.workspaceId, w.beta.mailboxId, yesterday)).toBeUndefined();
+  });
 });

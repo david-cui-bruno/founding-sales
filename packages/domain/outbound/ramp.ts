@@ -454,6 +454,112 @@ export async function recordDaySignal(
 }
 
 /**
+ * What counting one bounce did to the day it belongs to.
+ *
+ * A null answer is a real answer: `mailbox_send_days` has no row for that mailbox and
+ * date, so the day never sent anything automated and there is nothing for a bounce to
+ * be a proportion of (`rampHealthFailure` calls such a day `no_sends`).
+ */
+export interface BounceAgainstDay {
+  readonly businessDate: string;
+  /** True when the day had already been closed when the bounce arrived. */
+  readonly late: boolean;
+  /** Whether the late bounce took back the day the ramp had counted. */
+  readonly ramp: 'unchanged' | 'reversed';
+  readonly failure: RampHealthFailure | null;
+}
+
+/**
+ * Count one bounce against a send day, re-judging a day that has already closed
+ * (12.7, lane G22).
+ *
+ * `recordDaySignal` is a bare `UPDATE`, which is right while the day is open and is
+ * silent once it is not: lane G15 wrote down that "a bounce arriving after its day has
+ * been closed is not counted against it". That is the hole this closes. A bounce is a
+ * fact about the send that caused it, and the day the send happened on is the
+ * denominator 12.7's threshold is a rate over, so a late report must be able to change
+ * a verdict the close already reached.
+ *
+ * **The three non-counter conditions come from the verdict, not from a fresh read.**
+ * `healthy = true` on a closed day *is* the record that authentication passed,
+ * coverage was healthy and no provider warning was seen when the day closed. Asking
+ * `readSendDayHealth` again would judge yesterday on today's mailbox state — a hold
+ * opened this morning would condemn a day it had nothing to do with — so the
+ * re-judgement changes only what the bounce changed.
+ *
+ * **Taking a day back is a decrement, and `last_advanced_on` does not move.** 12.7's
+ * cap is a function of `healthy_sending_days`, so a day that turns out not to have
+ * been healthy must leave the count. `last_advanced_on` stays where it is, because it
+ * is what stops `closeSendDay` advancing the same date twice, and moving it back would
+ * let a later close re-earn the day this call has just removed. The direction is the
+ * conservative one in every case: the cap falls, never rises.
+ *
+ * Reversal happens at most once per day. The first call flips `healthy` to false under
+ * the row lock this function's own `UPDATE` already holds, and every later bounce
+ * finds a day that is no longer healthy and takes nothing.
+ */
+export async function recordBounceAgainstDay(
+  context: RepositoryContext,
+  input: { readonly mailboxId: string; readonly businessDate: string },
+): Promise<BounceAgainstDay | null> {
+  const { rows } = await context.db.query<{
+    automated_sent: number;
+    bounces: number;
+    opt_outs: number;
+    provider_errors: number;
+    closed_at: Date | null;
+    healthy: boolean | null;
+  }>(
+    `UPDATE mailbox_send_days
+        SET bounces = bounces + 1, updated_at = now()
+      WHERE workspace_id = $1 AND mailbox_id = $2 AND business_date = $3::date
+      RETURNING automated_sent, bounces, opt_outs, provider_errors, closed_at, healthy`,
+    [context.scope.workspaceId, input.mailboxId, input.businessDate],
+  );
+  const day = rows[0];
+  if (day === undefined) return null;
+  if (day.closed_at === null) {
+    return { businessDate: input.businessDate, late: false, ramp: 'unchanged', failure: null };
+  }
+  if (day.healthy !== true) {
+    // The day was already condemned, so it never advanced the ramp: there is nothing
+    // to take back and the counter is simply more accurate than it was.
+    return { businessDate: input.businessDate, late: true, ramp: 'unchanged', failure: null };
+  }
+
+  const failure = rampHealthFailure({
+    authenticationPasses: true,
+    coverageHealthy: true,
+    providerWarning: false,
+    automatedSent: day.automated_sent,
+    bounces: day.bounces,
+    optOuts: day.opt_outs,
+    providerErrors: day.provider_errors,
+  });
+  if (failure === null) {
+    return { businessDate: input.businessDate, late: true, ramp: 'unchanged', failure: null };
+  }
+
+  const { rowCount } = await context.db.query(
+    `UPDATE mailbox_send_days SET healthy = false, updated_at = now()
+      WHERE workspace_id = $1 AND mailbox_id = $2 AND business_date = $3::date AND healthy`,
+    [context.scope.workspaceId, input.mailboxId, input.businessDate],
+  );
+  if ((rowCount ?? 0) === 0) {
+    return { businessDate: input.businessDate, late: true, ramp: 'unchanged', failure };
+  }
+  await context.db.query(
+    `UPDATE mailbox_send_ramp
+        SET healthy_sending_days = greatest(healthy_sending_days - 1, 0),
+            last_health_failure = $3,
+            updated_at = now()
+      WHERE workspace_id = $1 AND mailbox_id = $2`,
+    [context.scope.workspaceId, input.mailboxId, failure],
+  );
+  return { businessDate: input.businessDate, late: true, ramp: 'reversed', failure };
+}
+
+/**
  * Every mailbox with an open day older than the given business date, for the sweep.
  *
  * `workspaceId` narrows it to one workspace, which is what the scheduler source wants:
