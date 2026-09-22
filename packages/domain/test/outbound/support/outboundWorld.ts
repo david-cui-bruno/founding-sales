@@ -40,7 +40,7 @@ export const SENDING_DOMAIN = 'example.test';
 export const RELEASE_GATE_REFERENCE = 'rehearsal-fixture-world';
 export const TEMPLATE_SUBJECT = 'A short note about your properties';
 export const TEMPLATE_BODY =
-  'Hello.\n\nI work with property managers nearby.\n\nSigned off\n1 Example Way\n' +
+  'Hello.\n\nI work with property managers nearby.\n\nSigned off\n' +
   'Reply "stop" and I will not email you again.';
 
 export interface OutboundWorldMailbox extends MailWorldMailbox {

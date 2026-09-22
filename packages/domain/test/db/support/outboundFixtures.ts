@@ -64,7 +64,7 @@ export const FIXTURE_PLACEMENT_RULE = 'email-window.1';
 
 /** An approvable body: it ends with the reply-to-stop line and names no web link. */
 export const FIXTURE_BODY =
-  'Hello.\n\nSigned off\n1 Example Way\nReply "stop" and I will not email you again.';
+  'Hello.\n\nSigned off\nReply "stop" and I will not email you again.';
 export const FIXTURE_SUBJECT = 'A short note about your properties';
 const FIXTURE_HASH = 'b'.repeat(64);
 

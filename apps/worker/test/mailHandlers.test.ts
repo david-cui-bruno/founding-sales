@@ -246,7 +246,7 @@ describe('the mail handlers and scheduler sources', () => {
     );
     const firmId = firm.rows[0]?.id ?? '';
     const body =
-      'Hello.\n\nSigned off\n1 Example Way\nReply "stop" and I will not email you again.';
+      'Hello.\n\nSigned off\nReply "stop" and I will not email you again.';
     const subject = 'A short note';
     const templateId = randomUUID();
     const contentHash = renderedHash(`template:${templateId}`, body);

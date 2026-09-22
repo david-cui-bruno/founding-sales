@@ -105,7 +105,7 @@ An opt-out never writes a suppression row itself. It calls G4's `recordSuppressi
 which writes the object-locked journal before the row (10.2). The handle is always
 suppressed; the firm is suppressed only when exactly one candidate matched.
 
-### 6. There is no unsubscribe link, anywhere
+### 6. There is no unsubscribe link, anywhere — and no postal address either
 
 A reply-to-stop footer only. `template_versions` enforces it:
 
@@ -118,6 +118,20 @@ CONSTRAINT template_versions_approved_has_stop_line
 
 and an approved version is immutable by trigger. G8 extends this table with nullable
 columns; it does not create it.
+
+The whole footer is two lines — the workspace sign-off, then
+
+```
+Reply "stop" and I will not email you again.
+```
+
+`footerBlock` in `packages/domain/src/rules/templates.ts` builds it and the approval
+refuses a body that does not end with it (`template_footer_missing`). Between the two
+lines there was a postal address until 22 September 2026; David decided there is
+none, migration 0015 dropped `template_versions.footer_postal_address`, and
+`docs/decisions/g20-automated-email-carries-no-postal-address.md` records the decision
+and the three specification lines it deviates from. Nothing is appended at send time:
+the footer is inside the approved body, which is why the content hash covers it.
 
 ## The matching order
 

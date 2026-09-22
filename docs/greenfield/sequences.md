@@ -33,6 +33,7 @@ packages/domain/src/rules/businessDays.ts         G0: elapsed and business-day d
 packages/domain/src/rules/sendingWindow.ts        G0: the window, the Monday rule, pacing
 packages/domain/src/rules/holds.ts                G0: the union, and the seven-day rule
 packages/domain/src/rules/templates.ts            G0: the content hash and the footer
+                                                  (sign-off + stop line; G20 removed the address)
 
 packages/domain/templates/templates.ts   create, approve, retire, render
 packages/domain/sequences/types.ts       the vocabulary and the refusal codes
@@ -77,6 +78,15 @@ published until somebody approves it.
 columns 11.1 reserves for AI personalization are nullable, `generated` is refused by
 the CHECK beside the one that names it, and the approved-version immutability trigger
 was replaced so that it covers them too.
+
+The footer a version stores is its sign-off, and the block an approval requires the
+body to end with is that sign-off and then `Reply "stop" and I will not email you
+again.` There is no postal address between them and no column for one: migration 0015
+dropped `footer_postal_address` under David's 22 September decision, recorded in
+`docs/decisions/g20-automated-email-carries-no-postal-address.md`. The footer is
+inside the body rather than appended at send time, so the content hash covers it and
+an edit to the footer leaves the approval behind exactly as an edit to the opening
+does.
 
 ### 2. Enrollment and its first execution are one statement
 

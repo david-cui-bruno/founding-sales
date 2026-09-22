@@ -39,9 +39,18 @@ docs/greenfield/runbooks/*.md                      one page per alarm
 
 ## What this lane stores, and what it deliberately does not
 
-`workspace_settings` holds five slices: the alarm thresholds, the workspace business
-zone, the supported client-version range, the postal footer and the production
-sending attestation.
+`workspace_settings` holds four slices: the alarm thresholds, the workspace business
+zone, the supported client-version range and the production sending attestation.
+
+It held a fifth, `postal_footer`, until 22 September 2026. David decided that an
+automated email carries no postal address, so there is nothing to configure: the key
+is gone from `SETTING_KEYS`, migration 0015 deleted every row of the slice and
+narrowed `workspace_settings_key_known` to the four above, and the Mac's
+administration page has no section for it. It is not in `SETTINGS_ELSEWHERE` either,
+because that list is navigation and there is nowhere to go. See
+`docs/decisions/g20-automated-email-carries-no-postal-address.md`. The footer itself
+survives — it is the sign-off and the reply-to-stop line, and it lives on the approved
+template version rather than in configuration.
 
 **The rule that decides what is in it:** a `jsonb` settings slice is for an operator
 knob that nothing joins to, nothing constrains, and nothing freezes a version of.

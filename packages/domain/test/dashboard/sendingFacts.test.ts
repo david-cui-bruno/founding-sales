@@ -231,7 +231,7 @@ function contextFor(
 }
 
 const FIXTURE_BODY =
-  'Hello.\n\nSigned off\n1 Example Way\nReply "stop" and I will not email you again.';
+  'Hello.\n\nSigned off\nReply "stop" and I will not email you again.';
 
 async function insertFence(
   database: TestDatabase,
