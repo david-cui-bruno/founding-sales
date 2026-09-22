@@ -21,6 +21,18 @@
 #   FSS_POLICY_LOCK_TABLE        default callie-sourcing-tflock
 #   FSS_POLICY_STATE_KMS_KEY_ARN default the state bucket's key
 #   FSS_POLICY_CERTIFICATE_ARN   default every certificate in the account and region
+#   FSS_POLICY_CARRY_SOURCE_TABLE  unset by default, and then nothing is rendered
+#
+# `FSS_POLICY_CARRY_SOURCE_TABLE` is the old stack's DynamoDB table — a public
+# identifier, a table name and nothing else. Given it, the rehearsal role gets one
+# read-only statement over that table and its indexes, which is what
+# `infra/scripts/rehearsal-carry-watermark.sh` needs to run `fss carry export` under
+# `fss-rh-deploy` (Appendix G 20). Unset, no such statement exists in either document,
+# because the table does not exist until a cutover is scheduled and a policy naming a
+# table nobody has is a grant nobody can review. Production never gets it at all.
+#
+#   FSS_POLICY_CARRY_SOURCE_TABLE=<the old table> \
+#     infra/scripts/render-deployment-role-policy.sh fss-rh > /tmp/fss-rh-deploy-scope.json
 #
 # The certificate default is a wildcard on purpose. The exact ARNs are the `rehearsal`
 # environment secret `FSS_REHEARSAL_CERTIFICATE_ARN` and its production counterpart, and
@@ -80,6 +92,7 @@ FSS_POLICY_STATE_BUCKET="${FSS_POLICY_STATE_BUCKET:-callie-sourcing-tfstate-3262
 FSS_POLICY_LOCK_TABLE="${FSS_POLICY_LOCK_TABLE:-callie-sourcing-tflock}" \
 FSS_POLICY_STATE_KMS_KEY_ARN="${FSS_POLICY_STATE_KMS_KEY_ARN:-}" \
 FSS_POLICY_CERTIFICATE_ARN="${FSS_POLICY_CERTIFICATE_ARN:-}" \
+FSS_POLICY_CARRY_SOURCE_TABLE="${FSS_POLICY_CARRY_SOURCE_TABLE:-}" \
 python3 - <<'PY'
 # render-deployment-role-policy: one template, one prefix, one document.
 import json
@@ -105,9 +118,11 @@ RENDER_ONLY_FOR = {
     "NoDeploymentS3DataAccessOutsideTerraformState": "fss-rh",
     "ThisNamespacesStateObjects": "fss-rh",
     "ThisNamespacesStateLockFileCleanup": "fss-rh",
+    "ThisRunsStateObjectCleanup": "fss-rh",
     "ThisNamespacesStateList": "fss-rh",
     "ThisNamespacesStateDynamoLock": "fss-rh",
     "UseTerraformStateKmsKey": "fss-rh",
+    "ReadTheOldStackTableForTheCarryDrill": "fss-rh",
     "NoDeploymentDataAccess": "fss-prod",
 }
 
@@ -119,6 +134,41 @@ STATE_KEY_GLOB = {
     "fss-prod": "fss/greenfield/production*",
 }
 
+# The narrower space a *run's own* state object lives in, which is what the teardown
+# deletes. `fss/greenfield/rehearsal/*/terraform.tfstate` cannot reach
+# `fss/greenfield/rehearsal-registry/terraform.tfstate` — the registry key has no `/`
+# after `rehearsal` — and cannot reach production's at all. The production entry is
+# here because `string.Template` needs every name the template mentions; the statement
+# that uses it is rehearsal-only and is never emitted for production.
+RUN_STATE_KEY_GLOB = {
+    "fss-rh": "fss/greenfield/rehearsal/*/terraform.tfstate",
+    "fss-prod": "fss/greenfield/production/terraform.tfstate",
+}
+
+# The old stack's DynamoDB table, when David gives it, and the value that stands in its
+# place when he does not. The statement has to render before it can be filtered out, so
+# the sentinel is what renders; a sentinel that survived into the document would be a
+# grant on a table called `CARRY_SOURCE_TABLE_UNSET`, which is why it is checked for
+# below rather than trusted to be gone.
+CARRY_SOURCE_TABLE_UNSET = "CARRY_SOURCE_TABLE_UNSET"
+CARRY_SOURCE_TABLE_SID = "ReadTheOldStackTableForTheCarryDrill"
+
+carry_source_table = env["FSS_POLICY_CARRY_SOURCE_TABLE"].strip()
+if carry_source_table:
+    # A DynamoDB table name, and nothing that could be an ARN, a path or a production
+    # resource. The value becomes part of a Resource ARN, so a value with a `/` or a
+    # `:` in it would silently widen or misdirect the grant.
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{3,255}", carry_source_table):
+        sys.exit(
+            "FAIL: FSS_POLICY_CARRY_SOURCE_TABLE must be a DynamoDB table name "
+            "(3 to 255 of A-Z a-z 0-9 _ . -) and nothing else; it is substituted into a Resource ARN"
+        )
+    if carry_source_table.startswith("fss-prod"):
+        sys.exit(
+            "FAIL: FSS_POLICY_CARRY_SOURCE_TABLE names a production resource; "
+            "the carry reads the old stack's table, never anything in the fss-prod namespace"
+        )
+
 substitutions = {
     "name_prefix": prefix,
     "aws_account_id": account,
@@ -126,6 +176,8 @@ substitutions = {
     "state_bucket": state_bucket,
     "lock_table": env["FSS_POLICY_LOCK_TABLE"],
     "state_key_glob": STATE_KEY_GLOB[prefix],
+    "run_state_key_glob": RUN_STATE_KEY_GLOB[prefix],
+    "carry_source_table": carry_source_table or CARRY_SOURCE_TABLE_UNSET,
     "deployment_role_arn": f"arn:aws:iam::{account}:role/{prefix}-deploy",
     "state_kms_key_arn": env["FSS_POLICY_STATE_KMS_KEY_ARN"]
     or f"arn:aws:kms:{region}:{account}:key/a321a083-4058-4130-b060-b950e4aa1404",
@@ -154,7 +206,16 @@ document["Statement"] = [
     statement
     for statement in document["Statement"]
     if RENDER_ONLY_FOR.get(statement["Sid"], prefix) == prefix
+    and (statement["Sid"] != CARRY_SOURCE_TABLE_SID or bool(carry_source_table))
 ]
+
+# Fail closed on the sentinel rather than trust the filter above: a renamed Sid would
+# otherwise ship a grant on a table nobody named.
+if CARRY_SOURCE_TABLE_UNSET in json.dumps(document):
+    sys.exit(
+        f"FAIL: {CARRY_SOURCE_TABLE_SID} rendered with no table name. It is emitted only when "
+        "FSS_POLICY_CARRY_SOURCE_TABLE is set, and the filter that drops it names the Sid."
+    )
 
 if mode == "--sids":
     for statement in document["Statement"]:

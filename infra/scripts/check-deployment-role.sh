@@ -24,6 +24,15 @@
 #   FSS_CHECK_ROLE_AWS=<path>  the CLI to use, for the offline test's stub
 #   FSS_CHECK_ROLE_ACCOUNT_ID  default 326255650484
 #   FSS_CHECK_ROLE_REGION      default us-east-1
+#
+# Two groups are the rehearsal namespace's alone, because the statements they are about
+# are rendered for `fss-rh` only and asking production about them would report the
+# boundary as a denial:
+#
+#   * the run's own Terraform state object, which `rehearsal-teardown.sh` step 6/6
+#     reads and deletes;
+#   * the old stack's DynamoDB table, added only when `FSS_POLICY_CARRY_SOURCE_TABLE`
+#     names it — the same variable the renderer takes, so there is one thing to set.
 
 set -euo pipefail
 
@@ -32,6 +41,8 @@ PREFIX=${2:-}
 ACCOUNT=${FSS_CHECK_ROLE_ACCOUNT_ID:-326255650484}
 REGION=${FSS_CHECK_ROLE_REGION:-us-east-1}
 AWS=${FSS_CHECK_ROLE_AWS:-aws}
+STATE_BUCKET=${FSS_POLICY_STATE_BUCKET:-callie-sourcing-tfstate-326255650484}
+CARRY_SOURCE_TABLE=${FSS_POLICY_CARRY_SOURCE_TABLE:-}
 
 usage() {
   echo "usage: $(basename "$0") <fss-rh-deploy|fss-prod-deploy> <fss-rh|fss-prod>" >&2
@@ -98,6 +109,34 @@ the journal bucket, and the teardown of it (refused 21 Sep)|s3:CreateBucket,s3:P
 the identity and the production inventory|sts:GetCallerIdentity,tag:GetResources|*|
 CHECK_TABLE
 )
+
+# The rehearsal's own two, appended rather than written above, because production holds
+# neither statement and a group it must fail is a group that teaches nothing.
+if [ "$PREFIX" = "fss-rh" ]; then
+  # Step 6/6 of the teardown: read the run's state object, and delete it when it is
+  # empty. The read was always allowed by ThisNamespacesStateObjects; the delete is
+  # ThisRunsStateObjectCleanup and is new, and the whole of its scoping is the glob, so
+  # the sample ARN is a run key rather than the bucket.
+  CHECK_GROUPS="${CHECK_GROUPS}
+the run state object the teardown removes|s3:GetObject,s3:DeleteObject|arn:aws:s3:::${STATE_BUCKET}/fss/greenfield/rehearsal/${PREFIX}-example/terraform.tfstate|"
+
+  if [ -n "$CARRY_SOURCE_TABLE" ]; then
+    case "$CARRY_SOURCE_TABLE" in
+      *fss-prod*)
+        echo "FAIL: FSS_POLICY_CARRY_SOURCE_TABLE names a production resource: $CARRY_SOURCE_TABLE" >&2
+        exit 2
+        ;;
+      */* | *:*)
+        echo "FAIL: FSS_POLICY_CARRY_SOURCE_TABLE must be a table name, not a path or an ARN: $CARRY_SOURCE_TABLE" >&2
+        exit 2
+        ;;
+    esac
+    # Appendix G 20's export, which runs under fss-rh-deploy and reads the old stack.
+    # Read-only by construction: the policy grants no write and this asks for none.
+    CHECK_GROUPS="${CHECK_GROUPS}
+the carry export reading the old stack table|dynamodb:DescribeTable,dynamodb:Scan,dynamodb:Query,dynamodb:GetItem|arn:aws:dynamodb:${REGION}:${ACCOUNT}:table/${CARRY_SOURCE_TABLE}|"
+  fi
+fi
 
 # Some actions are authorized against a resource type that is not the group's sample, or
 # against no resource at all, and `simulate-principal-policy` reports an implicit deny

@@ -915,6 +915,9 @@ case "$1 $2" in
   "s3api delete-bucket")
     echo "An error occurred (NoSuchBucket) when calling the DeleteBucket operation: no such bucket" >&2
     exit 254 ;;
+  "s3api get-object")
+    echo "An error occurred (NoSuchKey) when calling the GetObject operation: The specified key does not exist." >&2
+    exit 254 ;;
 esac
 echo "unexpected: $*" >&2; exit 9`;
 
@@ -977,9 +980,9 @@ echo "unexpected: $*" >&2; exit 9`;
     expect(output).toContain('already absent (ClusterNotFoundException)');
     expect(output).toContain('already absent (DBInstanceNotFound)');
     expect(output).toContain('already absent (NoSuchBucket)');
-    expect(output).toContain('4/5 destroying the rehearsal root');
+    expect(output).toContain('4/6 destroying the rehearsal root');
     expect(output).toContain('created nothing to destroy');
-    expect(output).toContain('5/5 removing the journal bucket if the destroy left it');
+    expect(output).toContain('5/6 removing the journal bucket if the destroy left it');
     const report = readFileSync(join(reports, 'teardown.txt'), 'utf8');
     expect(report).toContain('destroyed=nothing_created');
     expect(report).toContain('journal_bucket=gone');
@@ -1084,6 +1087,9 @@ case "$1 $2" in
     exit 254 ;;
   "s3api list-object-versions") echo '{"Objects": null}' ; exit 0 ;;
   "s3api delete-bucket") exit 0 ;;
+  "s3api get-object")
+    echo "An error occurred (NoSuchKey) when calling the GetObject operation: no such key" >&2
+    exit 254 ;;
 esac
 echo "unexpected: $*" >&2; exit 9`,
       terraform: 'echo "No state file was found!" >&2; exit 1',
@@ -1148,6 +1154,174 @@ echo "unexpected: $*" >&2; exit 9`,
     );
     expect(after.code).not.toBe(0);
     expect(after.output).toContain('the production inventory changed during the rehearsal run');
+  });
+
+  /**
+   * Step 6/6, and the one thing every teardown used to leave behind.
+   *
+   * Terraform's S3 backend does not delete a state object on destroy, so every
+   * rehearsal run left `fss/greenfield/rehearsal/<prefix>/terraform.tfstate` in the
+   * state bucket. David removed the first one by hand on 21 September. The teardown
+   * removes its own now — and only its own, and only when it is provably empty.
+   *
+   * ## The vacuous-pass trap
+   *
+   * A teardown that deleted nothing would pass an "it is gone" assertion twice over:
+   * once because the object was never there, and once because nothing looked. Closed
+   * by the positive control below — an object that exists, is read, is deleted by its
+   * exact key, and is deleted *after* the destroy — and by the two refusals, which
+   * assert the delete never happens: a state that still holds resources, and the
+   * durable registry key that belongs to no run.
+   */
+  it('deletes this run’s own empty state object, by its exact key, after the destroy', () => {
+    const record = join(mkdtempSync(join(tmpdir(), 'fss-state-object-')), 'calls');
+    const { code, output, reports } = teardownWorld({
+      aws: [
+        `echo "aws $*" >> '${record}'`,
+        'case "$1 $2" in',
+        '  "s3api get-object")',
+        '    for out; do :; done',
+        `    printf '%s' '{"version":4,"terraform_version":"1.15.8","serial":9,"lineage":"9a1","outputs":{},"resources":[]}' > "$out"`,
+        `    echo '{"ContentLength":96}' ;;`,
+        `  "s3api list-object-versions") echo '{"Objects": []}' ;;`,
+        `  "ecs list-tasks"|"rds describe-db-snapshots") echo '[]' ;;`,
+        `  *) echo '{}' ;;`,
+        'esac',
+      ].join('\n'),
+      terraform: [
+        `echo "terraform $*" >> '${record}'`,
+        'if [ "$1" = "state" ]; then echo "module.stack.aws_s3_bucket.journal"; else echo "destroy: $*"; fi',
+      ].join('\n'),
+    });
+
+    expect(code, output).toBe(0);
+    const calls = readFileSync(record, 'utf8').split('\n');
+    // The bucket is the one `infra/roots/rehearsal/backend.hcl` names, because that is
+    // the file the workflow's init step passes as `-backend-config`.
+    const bucket = /^\s*bucket\s*=\s*"([^"]+)"/mu.exec(
+      readRepositoryFile('infra/roots/rehearsal/backend.hcl'),
+    )?.[1] as string;
+    expect(bucket, 'the rehearsal backend file names no bucket').toBeDefined();
+    const key = 'fss/greenfield/rehearsal/fss-rh-nothing/terraform.tfstate';
+    const deleteAt = calls.indexOf(`aws s3api delete-object --bucket ${bucket} --key ${key}`);
+    const readAt = calls.findIndex(call => call.startsWith(`aws s3api get-object --bucket ${bucket} --key ${key} `));
+    const destroyAt = calls.findIndex(call => call.startsWith('terraform destroy'));
+    expect(readAt, calls.join('\n')).toBeGreaterThan(-1);
+    expect(deleteAt, calls.join('\n')).toBeGreaterThan(readAt);
+    expect(destroyAt, calls.join('\n')).toBeGreaterThan(-1);
+    // After the destroy, never before it: an object deleted first is the record of
+    // what is still standing, thrown away.
+    expect(deleteAt).toBeGreaterThan(destroyAt);
+    // And nothing else in that bucket is ever addressed.
+    for (const call of calls.filter(call => call.includes(bucket))) {
+      expect(call, 'a call named a key outside this run').toContain(key);
+    }
+    expect(readFileSync(join(reports, 'teardown.txt'), 'utf8')).toContain('state_object=removed');
+  });
+
+  it('leaves a state object that still holds resources, and fails rather than reporting a clean teardown', () => {
+    const record = join(mkdtempSync(join(tmpdir(), 'fss-state-full-')), 'calls');
+    const { code, output, reports } = teardownWorld({
+      aws: [
+        `echo "aws $*" >> '${record}'`,
+        'case "$1 $2" in',
+        '  "s3api get-object")',
+        '    for out; do :; done',
+        `    printf '%s' '{"version":4,"lineage":"9a1","resources":[{"type":"aws_s3_bucket","name":"j","instances":[]}]}' > "$out"`,
+        `    echo '{"ContentLength":96}' ;;`,
+        `  "s3api list-object-versions") echo '{"Objects": []}' ;;`,
+        `  "ecs list-tasks"|"rds describe-db-snapshots") echo '[]' ;;`,
+        `  *) echo '{}' ;;`,
+        'esac',
+      ].join('\n'),
+      terraform: 'if [ "$1" = "state" ]; then echo "module.stack.aws_s3_bucket.journal"; else echo "destroy: $*"; fi',
+    });
+
+    expect(code, output).not.toBe(0);
+    expect(output).toContain('1 resource(s)');
+    expect(readFileSync(join(reports, 'teardown.txt'), 'utf8')).toContain('state_object=refused');
+    // The whole of the refusal: no delete was issued.
+    expect(readFileSync(record, 'utf8')).not.toContain('delete-object');
+  });
+
+  it('reports an absent state object rather than failing, because a run that created nothing wrote none', () => {
+    const { code, output, reports } = teardownWorld({
+      aws: NOTHING_EXISTS,
+      terraform: 'echo "No state file was found!" >&2; exit 1',
+    });
+
+    expect(code, output).toBe(0);
+    expect(output).toContain('6/6');
+    expect(readFileSync(join(reports, 'teardown.txt'), 'utf8')).toContain('state_object=absent');
+  });
+
+  it('fails on a read it was not allowed to make, which must not read as an absent object', () => {
+    const { code, output } = teardownWorld({
+      aws: `
+case "$1 $2" in
+  "ecs list-tasks"|"rds describe-db-snapshots") echo '[]' ; exit 0 ;;
+  "rds delete-db-instance") exit 0 ;;
+  "s3api list-object-versions") echo '{"Objects": []}' ; exit 0 ;;
+  "s3api delete-bucket") exit 0 ;;
+  "s3api get-object")
+    echo "An error occurred (AccessDenied) when calling the GetObject operation: no" >&2
+    exit 254 ;;
+esac
+echo "unexpected: $*" >&2; exit 9`,
+      terraform: 'echo "No state file was found!" >&2; exit 1',
+    });
+
+    expect(code).not.toBe(0);
+    expect(output).toContain('did not fail because the resource was absent');
+  });
+
+  it('takes the bucket from the backend file the workflow initialises with, rather than writing it down again', () => {
+    const script = readRepositoryFile('infra/scripts/rehearsal-teardown.sh');
+    const backend = readRepositoryFile('infra/roots/rehearsal/backend.hcl');
+    const bucket = /^\s*bucket\s*=\s*"([^"]+)"/mu.exec(backend)?.[1] as string;
+    expect(bucket.length).toBeGreaterThan(8);
+    expect(script).toContain('backend.hcl');
+    // The failure this closes: a literal that goes on naming the old bucket after the
+    // backend moves, and a teardown that deletes out of it.
+    expect(script.includes(bucket), 'the teardown writes the state bucket down instead of reading it').toBe(false);
+    const common = readRepositoryFile('infra/scripts/rehearsal-common.sh');
+    expect(common.includes(bucket), 'rehearsal-common.sh writes the state bucket down').toBe(false);
+  });
+
+  it('classifies a state key, and refuses the durable registry key by name', () => {
+    // `fss/greenfield/rehearsal-registry/terraform.tfstate` holds the two ECR
+    // repositories every run deploys from. No run may ever delete it, and it is inside
+    // the same `fss/greenfield/rehearsal*` space the role can write, so the refusal is
+    // by name rather than by prefix.
+    const cases: readonly (readonly [string, string, number])[] = [
+      ['fss/greenfield/rehearsal/fss-rh-run/terraform.tfstate', 'rehearsal-run', 0],
+      ['fss/greenfield/rehearsal-registry/terraform.tfstate', 'rehearsal-registry', 1],
+      ['fss/greenfield/production/terraform.tfstate', 'production', 1],
+      ['fss/greenfield/rehearsal/fss-rh-other/terraform.tfstate', 'foreign', 1],
+      ['fss/greenfield/rehearsal/fss-rh-run/terraform.tfstate.backup', 'foreign', 1],
+      ['cloud/terraform/terraform.tfstate', 'foreign', 1],
+    ];
+    for (const [key, expected, status] of cases) {
+      const { code, output } = inCommon(`rehearsal_classify_state_key fss-rh-run '${key}'; echo "status=$?"`);
+      expect(code, output).toBe(0);
+      expect(output, `${key} was not classified ${expected}`).toContain(expected);
+      expect(output, `${key} returned the wrong status`).toContain(`status=${String(status)}`);
+    }
+  });
+
+  it('prints the read, the condition and the delete in the dry run, and says what the lock table keeps', () => {
+    const { code, output } = runRehearsalScript('infra/scripts/rehearsal-teardown.sh', ['fss-rh-dryrun'], {
+      FSS_REHEARSAL_DRY_RUN: '1',
+      FSS_REHEARSAL_REPORTS: mkdtempSync(join(tmpdir(), 'fss-dry-reports-')),
+    });
+    expect(code, output).toBe(0);
+    expect(output).toContain('6/6');
+    expect(output).toContain('s3api get-object --bucket');
+    expect(output).toContain('fss/greenfield/rehearsal/fss-rh-dryrun/terraform.tfstate');
+    expect(output).toContain('zero resources');
+    expect(output).toContain('s3api delete-object --bucket');
+    // The residue the teardown does not remove, named where an operator will see it.
+    expect(output).toContain('-md5');
   });
 });
 
@@ -1218,8 +1392,8 @@ describe('Appendix G 39: the refusal is symmetric, and the wrapper enforces it p
     // A running task holds an elastic network interface in a subnet Terraform is
     // about to delete; the destroy then waits on the subnet and times out, and the
     // report blames the subnet.
-    const stopAt = teardown.indexOf('0/5 stopping any one-off task still running');
-    const destroyAt = teardown.indexOf('4/5 destroying the rehearsal root');
+    const stopAt = teardown.indexOf('0/6 stopping any one-off task still running');
+    const destroyAt = teardown.indexOf('4/6 destroying the rehearsal root');
     expect(stopAt).toBeGreaterThan(-1);
     expect(destroyAt).toBeGreaterThan(stopAt);
     // And every ARN is classified before it is addressed, so another run's task — or

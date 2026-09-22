@@ -14,7 +14,7 @@
 # rehearsal deployment role only; `docs/greenfield/release.md` says why it must never
 # be on the production role and what to check if it ever appears there.
 #
-# The teardown is deliberately in five parts and in this order:
+# The teardown is deliberately in six parts and in this order:
 #
 #   1. the restored instance step 1 of the drill created, which Terraform does not know
 #      about and which would otherwise outlive the run and keep billing;
@@ -24,7 +24,31 @@
 #      a bucket that still has object-locked objects in it;
 #   4. the root itself;
 #   5. the journal bucket, if the destroy left it, because Terraform removes only what
-#      its state holds.
+#      its state holds;
+#   6. the run's own state object, because the S3 backend does not delete state on
+#      destroy — see the section below.
+#
+# ## The state object every run used to leave (21 September)
+#
+# Terraform's S3 backend writes state and never removes it: after a successful destroy
+# the object at `fss/greenfield/rehearsal/<prefix>/terraform.tfstate` is still there,
+# holding an empty resource list. One per run, for ever. David deleted the first by
+# hand. Step 6 deletes it, and only under three conditions, because a state object is
+# the only record of what a failed destroy left standing:
+#
+#   * the destroy completed, or the state was already empty;
+#   * the key is this run's, by equality, classified by
+#     `rehearsal_classify_state_key` — the durable registry key
+#     `fss/greenfield/rehearsal-registry/terraform.tfstate` is refused by name, and so
+#     is production's;
+#   * the object parses as Terraform state and holds zero resources. Anything else is
+#     left where it is and named.
+#
+# What step 6 does **not** remove is the DynamoDB digest item the backend keeps beside
+# the lock, `<bucket>/<key>-md5`. It is tens of bytes, it is keyed by this run's own
+# path so it can collide with nothing, and deleting it is a second mutation in a second
+# service with no second guard. The one case where it matters is documented with its
+# one-line fix in `docs/decisions/g21-the-teardown-removes-its-state-object.md`.
 #
 # ## The bucket the first orphan teardown did not see (21 September, Actions 35649752231)
 #
@@ -83,6 +107,23 @@ else
 fi
 rehearsal_refuse_production_arguments "$JOURNAL_BUCKET"
 
+# This run's state object, derived exactly as the workflow's init step derives it:
+#
+#   terraform init -reconfigure -backend-config=backend.hcl \
+#     -backend-config="key=fss/greenfield/rehearsal/${prefix}/terraform.tfstate"
+#
+# so the bucket is whatever `infra/roots/rehearsal/backend.hcl` says and the key is
+# this prefix's. Both are read rather than written down, and both are classified
+# before the first delete of the run rather than beside the last one.
+REPOSITORY_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+STATE_BUCKET="$(rehearsal_state_bucket "$REPOSITORY_ROOT/infra/roots/rehearsal/backend.hcl")"
+STATE_KEY="$(rehearsal_state_key "$PREFIX")"
+rehearsal_refuse_production_arguments "$STATE_BUCKET" "$STATE_KEY"
+if ! STATE_KEY_CLASS="$(rehearsal_classify_state_key "$PREFIX" "$STATE_KEY")"; then
+  echo "FAIL: $STATE_KEY is a '$STATE_KEY_CLASS' state key; a teardown may delete only this run's" >&2
+  exit 1
+fi
+
 AWS="$(rehearsal_aws_command)"
 
 # ---------------------------------------------------------------------------
@@ -99,7 +140,7 @@ AWS="$(rehearsal_aws_command)"
 # task belonging to another run — or to production — is never a candidate. A cluster
 # that does not exist is already done.
 # ---------------------------------------------------------------------------
-rehearsal_log "0/5 stopping any one-off task still running in ${PREFIX}-cluster"
+rehearsal_log "0/6 stopping any one-off task still running in ${PREFIX}-cluster"
 if rehearsal_dry_run; then
   rehearsal_plan "aws ecs list-tasks --cluster ${PREFIX}-cluster --desired-status RUNNING"
   rehearsal_plan "  ... stop each, and ClusterNotFoundException means the apply never created it, which is done, not failed"
@@ -124,7 +165,7 @@ for arn in json.loads(raw) or []:
   done
 fi
 
-rehearsal_log "1/5 deleting the restored database instance the drill created"
+rehearsal_log "1/6 deleting the restored database instance the drill created"
 if rehearsal_dry_run; then
   rehearsal_plan "aws rds delete-db-instance --db-instance-identifier ${PREFIX}-pg-restored --skip-final-snapshot --delete-automated-backups"
   rehearsal_plan "  ... and DBInstanceNotFound means the drill never created it, which is done, not failed"
@@ -137,7 +178,7 @@ else
     --delete-automated-backups
 fi
 
-rehearsal_log "2/5 deleting any manual snapshot this run left behind"
+rehearsal_log "2/6 deleting any manual snapshot this run left behind"
 if rehearsal_dry_run; then
   rehearsal_plan "aws rds describe-db-snapshots --snapshot-type manual -> delete every identifier classified as this run's"
 else
@@ -160,7 +201,7 @@ for name in json.loads(raw) or []:
   done
 fi
 
-rehearsal_log "3/5 emptying the object-locked journal bucket with bypass-governance"
+rehearsal_log "3/6 emptying the object-locked journal bucket with bypass-governance"
 if rehearsal_dry_run; then
   rehearsal_plan "list every version in $JOURNAL_BUCKET and delete it with --bypass-governance-retention"
   rehearsal_plan "  ... and NoSuchBucket means the apply never created it, which is done, not failed"
@@ -184,7 +225,7 @@ else
   done
 fi
 
-rehearsal_log "4/5 destroying the rehearsal root"
+rehearsal_log "4/6 destroying the rehearsal root"
 if rehearsal_dry_run; then
   rehearsal_plan "terraform state list -> if the root was never initialised there is nothing to destroy"
   rehearsal_plan "run.auto.tfvars.json must exist beside the root: destroy requires every variable apply did"
@@ -237,7 +278,7 @@ else
   fi
 fi
 
-rehearsal_log "5/5 removing the journal bucket if the destroy left it"
+rehearsal_log "5/6 removing the journal bucket if the destroy left it"
 if rehearsal_dry_run; then
   rehearsal_plan "aws s3api delete-bucket --bucket $JOURNAL_BUCKET"
   rehearsal_plan "  ... NoSuchBucket means the destroy removed it, which is done; BucketNotEmpty is a failure, because step 3 should have emptied it"
@@ -251,5 +292,103 @@ else
   JOURNAL_BUCKET_STATE=gone
 fi
 
-rehearsal_write_report "teardown.txt" "prefix=$PREFIX destroyed=${DESTROYED} journal_bucket=${JOURNAL_BUCKET_STATE}"
+rehearsal_log "6/6 removing this run's own state object, which the S3 backend leaves behind"
+STATE_OBJECT_PROBLEM=''
+if rehearsal_dry_run; then
+  rehearsal_plan "aws s3api get-object --bucket $STATE_BUCKET --key $STATE_KEY <file>"
+  rehearsal_plan "  ... delete it only if it parses as Terraform state with zero resources; anything else is left and named"
+  rehearsal_plan "aws s3api delete-object --bucket $STATE_BUCKET --key $STATE_KEY"
+  rehearsal_plan "  ... NoSuchKey means the backend never wrote one, which is done, not failed"
+  rehearsal_plan "  ... the lock table keeps the digest item ${STATE_BUCKET}/${STATE_KEY}-md5, which this teardown does not touch"
+  STATE_OBJECT=planned
+else
+  case "$DESTROYED" in
+    true | nothing_created)
+      # The state object is the only record of what a destroy left standing, so it is
+      # read before it is deleted and deleted only when it says there is nothing left.
+      STATE_WORK="$(mktemp -d)"
+      STATE_BODY="$STATE_WORK/terraform.tfstate"
+      # Not inside the `if` below: a read that failed for any reason but NoSuchKey — an
+      # `AccessDenied`, a throttle — must stop the teardown, and a condition context
+      # suppresses errexit, which would have turned "I was not allowed to look" into
+      # "there is nothing there".
+      set +e
+      rehearsal_tolerate_absent "reading s3://$STATE_BUCKET/$STATE_KEY" \
+        command "$AWS" s3api get-object --bucket "$STATE_BUCKET" --key "$STATE_KEY" "$STATE_BODY" >/dev/null
+      STATE_READ_STATUS=$?
+      set -e
+      if [ "$STATE_READ_STATUS" -ne 0 ]; then
+        echo "FAIL: s3://$STATE_BUCKET/$STATE_KEY could not be read, and not because it was absent" >&2
+        exit 1
+      fi
+      if [ -f "$STATE_BODY" ]; then
+        set +e
+        STATE_VERDICT="$(python3 - "$STATE_BODY" <<'PY'
+# Is this an empty Terraform state? Exit 0 for yes, 2 for "not Terraform state I can
+# read", 3 for "it still holds resources". The verdict is one line on stdout either
+# way, because the teardown report names what was left and why.
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        state = json.load(handle)
+except Exception as error:  # noqa: BLE001 - any unreadable object is the same answer
+    print(f"it did not parse as JSON ({type(error).__name__})")
+    raise SystemExit(2)
+
+if not isinstance(state, dict) or not isinstance(state.get("version"), int) or not isinstance(
+    state.get("lineage"), str
+):
+    print("it parsed, and it is not a Terraform state object (no integer version and string lineage)")
+    raise SystemExit(2)
+
+resources = state.get("resources", [])
+if not isinstance(resources, list):
+    print("its resources member is not a list, so it cannot be read as empty")
+    raise SystemExit(2)
+if resources:
+    print(f"it still holds {len(resources)} resource(s), so the destroy did not finish")
+    raise SystemExit(3)
+
+print(f"empty Terraform state, version {state['version']}, serial {state.get('serial', 'unknown')}")
+raise SystemExit(0)
+PY
+)"
+        STATE_VERDICT_STATUS=$?
+        set -e
+        if [ "$STATE_VERDICT_STATUS" -eq 0 ]; then
+          rehearsal_tolerate_absent "deleting s3://$STATE_BUCKET/$STATE_KEY" \
+            command "$AWS" s3api delete-object --bucket "$STATE_BUCKET" --key "$STATE_KEY" >/dev/null
+          rehearsal_log "removed the ${STATE_KEY_CLASS} state object s3://$STATE_BUCKET/$STATE_KEY: $STATE_VERDICT"
+          STATE_OBJECT=removed
+        else
+          rehearsal_log "left s3://$STATE_BUCKET/$STATE_KEY where it is: $STATE_VERDICT"
+          STATE_OBJECT=refused
+          STATE_OBJECT_PROBLEM="$STATE_VERDICT"
+        fi
+      else
+        rehearsal_log "s3://$STATE_BUCKET/$STATE_KEY is not there, so this run wrote no state to remove"
+        STATE_OBJECT=absent
+      fi
+      rm -rf "$STATE_WORK"
+      ;;
+    *)
+      # Unreachable today: the destroy step either sets one of the two above or exits.
+      # A future branch that does neither must not reach a delete.
+      rehearsal_log "the destroy reported '${DESTROYED}', so the state object stays where it is"
+      STATE_OBJECT=refused
+      STATE_OBJECT_PROBLEM="the destroy reported '${DESTROYED}', which is neither a completed destroy nor an empty state"
+      ;;
+  esac
+fi
+
+rehearsal_write_report "teardown.txt" \
+  "prefix=$PREFIX destroyed=${DESTROYED} journal_bucket=${JOURNAL_BUCKET_STATE} state_object=${STATE_OBJECT}"
+if [ -n "$STATE_OBJECT_PROBLEM" ]; then
+  echo "FAIL: s3://$STATE_BUCKET/$STATE_KEY was not removed: $STATE_OBJECT_PROBLEM" >&2
+  echo "      Everything above this step ran. Read the object before deleting anything by hand." >&2
+  exit 1
+fi
+rehearsal_log "what is left of this run: the lock table's digest item ${STATE_BUCKET}/${STATE_KEY}-md5, and nothing else"
 rehearsal_log "torn down; run rehearsal-prefix-guard.sh $PREFIX after to prove production was untouched"

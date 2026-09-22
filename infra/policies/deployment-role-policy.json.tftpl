@@ -13,6 +13,13 @@
     "per-role Sid sets the renderer emits (RENDER_ONLY_FOR in the script; the rehearsal keeps the state and",
     "bypass-governance statements, production keeps the blanket data deny).",
     "",
+    "Two statements are the rehearsal's alone and are narrower than the state glob above.",
+    "ThisRunsStateObjectCleanup is the delete rehearsal-teardown.sh step 6/6 makes: ${run_state_key_glob}",
+    "reaches a run's own state object and neither the registry key nor production's.",
+    "ReadTheOldStackTableForTheCarryDrill is rendered only when the renderer is given",
+    "FSS_POLICY_CARRY_SOURCE_TABLE, and it is read-only by Appendix G 20: the old stack is not a rollback",
+    "target and the carry tooling contains no writer.",
+    "",
     "Scoping, in the order the services allow it: by the name in the ARN where the ARN carries one; by",
     "aws:RequestTag/NamePrefix at creation and ec2:ResourceTag/NamePrefix or aws:ResourceTag/NamePrefix",
     "afterwards where it does not (EC2, KMS keys, CloudFront distributions); Resource * with no condition only",
@@ -351,6 +358,12 @@
       "Resource": "arn:aws:s3:::${state_bucket}/${state_key_glob}.tflock"
     },
     {
+      "Sid": "ThisRunsStateObjectCleanup",
+      "Effect": "Allow",
+      "Action": "s3:DeleteObject",
+      "Resource": "arn:aws:s3:::${state_bucket}/${run_state_key_glob}"
+    },
+    {
       "Sid": "ThisNamespacesStateList",
       "Effect": "Allow",
       "Action": "s3:ListBucket",
@@ -388,6 +401,20 @@
         "kms:GenerateDataKey"
       ],
       "Resource": "${state_kms_key_arn}"
+    },
+    {
+      "Sid": "ReadTheOldStackTableForTheCarryDrill",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:DescribeTable",
+        "dynamodb:GetItem",
+        "dynamodb:Query",
+        "dynamodb:Scan"
+      ],
+      "Resource": [
+        "arn:aws:dynamodb:${aws_region}:${aws_account_id}:table/${carry_source_table}",
+        "arn:aws:dynamodb:${aws_region}:${aws_account_id}:table/${carry_source_table}/index/*"
+      ]
     },
     {
       "Sid": "NoDeploymentDataAccess",

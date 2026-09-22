@@ -59,6 +59,87 @@ rehearsal_classify_name() {
   return 1
 }
 
+# ---------------------------------------------------------------------------
+# Terraform state objects, which are named nothing like the resources above.
+#
+# A state key is `fss/greenfield/rehearsal/<run>/terraform.tfstate` and carries no
+# `fss-rh-` of its own, so `rehearsal_classify_name` cannot judge one and
+# `rehearsal_refuse_production_arguments` cannot see production's
+# (`fss/greenfield/production/terraform.tfstate` contains no `fss-prod`). The teardown
+# deletes a state object, so the keys get a classifier of their own.
+# ---------------------------------------------------------------------------
+
+# The one state key inside the rehearsal space that belongs to no run.
+#
+# `infra/roots/rehearsal-registry` holds the two durable ECR repositories every run
+# deploys from, and the rehearsal role's own state statements are globbed
+# `fss/greenfield/rehearsal*`, which reaches it. `infra/scripts/offline-gate.sh` keeps
+# the key outside the per-run space so a run cannot collide with it by accident; this
+# refuses it by name so a teardown cannot delete it on purpose. Losing it would leave
+# the repositories holding every rehearsed image with no state to manage them by.
+REHEARSAL_REGISTRY_STATE_KEY='fss/greenfield/rehearsal-registry/terraform.tfstate'
+
+# Where production's state lives, spelled as a path rather than as a resource prefix.
+REHEARSAL_PRODUCTION_STATE_PREFIX='fss/greenfield/production'
+
+# The state key one rehearsal run owns. The workflow derives the same string for
+# `terraform init -backend-config="key=…"`, and this is the only place it is written.
+#
+#   rehearsal_state_key <run prefix>
+rehearsal_state_key() {
+  printf 'fss/greenfield/rehearsal/%s/terraform.tfstate\n' "${1:-}"
+}
+
+# Print `rehearsal-run`, `rehearsal-registry`, `production` or `foreign` for a
+# Terraform state key, and return non-zero for anything a rehearsal may not delete.
+#
+#   rehearsal_classify_state_key <run prefix> <key>
+#
+# Only the run's own key is accepted, and by equality rather than by prefix: a
+# `terraform.tfstate.backup` beside it, another run's key, and the registry's are all
+# refusals, each named so the report says which.
+rehearsal_classify_state_key() {
+  local prefix=$1 key=$2
+  if [ "$key" = "$REHEARSAL_REGISTRY_STATE_KEY" ]; then
+    echo "rehearsal-registry"
+    return 1
+  fi
+  case "$key" in
+    "$REHEARSAL_PRODUCTION_STATE_PREFIX"/* | *"$PRODUCTION_PREFIX"*)
+      echo "production"
+      return 1
+      ;;
+  esac
+  if [ -n "$prefix" ] && [ "$key" = "$(rehearsal_state_key "$prefix")" ]; then
+    echo "rehearsal-run"
+    return 0
+  fi
+  echo "foreign"
+  return 1
+}
+
+# The state bucket the backend file names, read rather than written down again.
+#
+#   rehearsal_state_bucket <path to backend.hcl>
+#
+# The release workflow initialises with
+# `terraform init -backend-config=backend.hcl -backend-config="key=…"`, so the bucket
+# is whatever that file says. A literal here would be a second place to change, and
+# after a backend move the teardown would go on deleting out of the old bucket.
+rehearsal_state_bucket() {
+  local backend=${1:-} bucket
+  if [ ! -f "$backend" ]; then
+    echo "FAIL: the backend file '$backend' is not there, so the state bucket cannot be read" >&2
+    return 1
+  fi
+  bucket="$(sed -n 's/^[[:space:]]*bucket[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$backend" | head -1)"
+  if [ -z "$bucket" ]; then
+    echo "FAIL: '$backend' names no bucket, so the state object cannot be addressed" >&2
+    return 1
+  fi
+  printf '%s\n' "$bucket"
+}
+
 rehearsal_dry_run() {
   [ "${FSS_REHEARSAL_DRY_RUN:-0}" = "1" ]
 }
@@ -245,7 +326,7 @@ sys.stdout.write("\n")
 # Nothing else is tolerated: an `AccessDenied`, a throttle or a timeout still fails,
 # because "the thing is gone" and "I was not allowed to look" must not be the same
 # outcome.
-REHEARSAL_ABSENCE_ERROR_CODES='DBInstanceNotFound DBInstanceNotFoundFault DBSnapshotNotFound DBSnapshotNotFoundFault NoSuchBucket ResourceNotFoundException ClusterNotFoundException ServiceNotFoundException NoSuchEntity'
+REHEARSAL_ABSENCE_ERROR_CODES='DBInstanceNotFound DBInstanceNotFoundFault DBSnapshotNotFound DBSnapshotNotFoundFault NoSuchBucket NoSuchKey ResourceNotFoundException ClusterNotFoundException ServiceNotFoundException NoSuchEntity'
 
 rehearsal_tolerate_absent() {
   local what=$1

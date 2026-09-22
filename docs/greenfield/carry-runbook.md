@@ -92,14 +92,47 @@ same rule.
 **From this instant the old stack is read-only.** Do not open the old Mac app, do not
 re-enable the rule, and do not run any old operator command that writes.
 
+### 2a. Give the rehearsal role read on the old table — **before** the two secrets
+
+The rehearsal's carry drill runs `fss carry export` as `fss-rh-deploy`, and until the
+policy names the old table that role's only DynamoDB grant is the Terraform lock table
+under a `dynamodb:LeadingKeys` condition. Setting the two secrets below without doing
+this first turns the drill on and it fails on permissions, an hour into the next
+rehearsal. So: render, put, check, and only then set the secrets.
+
+The table name is a public identifier and it is the only new input. Nothing else about
+either role changes.
+
+```
+export FSS_POLICY_CARRY_SOURCE_TABLE=PUT-THE-OLD-TABLE-NAME-HERE
+
+infra/scripts/render-deployment-role-policy.sh fss-rh > /tmp/fss-rh-deploy-scope.json
+aws iam put-role-policy --role-name fss-rh-deploy --policy-name fss-rh-deploy-scope \
+  --policy-document file:///tmp/fss-rh-deploy-scope.json
+
+infra/scripts/check-deployment-role.sh fss-rh-deploy fss-rh
+```
+
+**Good result:** the rendered document carries one new statement,
+`ReadTheOldStackTableForTheCarryDrill` — `dynamodb:DescribeTable`, `dynamodb:Scan`,
+`dynamodb:Query` and `dynamodb:GetItem` on `table/<name>` and `table/<name>/index/*`,
+and no write action of any kind (Appendix G 20: the carry tooling contains no writer,
+and the policy says the same thing in IAM). The check then ends `… allowed, 0 denied`
+with four more actions evaluated than before.
+
+`fss-prod-deploy` never gets this statement, with or without the variable set. Do not
+render production with `FSS_POLICY_CARRY_SOURCE_TABLE` expecting a difference; there
+is none, by construction.
+
 **This instant is also the rehearsal's watermark.** Until you have it there is nothing
 for the rehearsal's carry drill to exercise, so the two `rehearsal` environment secrets
 `FSS_REHEARSAL_CARRY_WATERMARK` and `FSS_REHEARSAL_CARRY_TABLE` do not exist yet and the
 drill prints `carry drill skipped: no cutover watermark yet` — the release record says
-`"carryDrill": "skipped_no_watermark"` rather than claiming a pass. Once you have the
-instant above and the old table's name, set both secrets; from the next rehearsal the
-drill runs. Set one without the other and the step fails on purpose. See
-`docs/decisions/g12c-the-carry-drill-waits-for-a-cutover.md` and `release.md` 1.3.
+`"carryDrill": "skipped_no_watermark"` rather than claiming a pass. Once the policy
+above is in place and you have the instant and the old table's name, set both secrets;
+from the next rehearsal the drill runs. Set one without the other and the step fails on
+purpose. See `docs/decisions/g12c-the-carry-drill-waits-for-a-cutover.md` and
+`release.md` 1.3 and 3.0.
 
 ## 3. Wait five minutes, then confirm the old worker has stopped
 
