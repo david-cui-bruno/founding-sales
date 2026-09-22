@@ -85,7 +85,6 @@ the composite alarms, which CloudWatch authorizes against alarm:* (denied 21 Sep
 the origin access control (denied 21 Sep)|cloudfront:CreateOriginAccessControl,cloudfront:GetOriginAccessControl,cloudfront:DeleteOriginAccessControl|*|
 the distribution|cloudfront:CreateDistributionWithTags,cloudfront:GetDistribution,cloudfront:UpdateDistribution,cloudfront:DeleteDistribution|arn:aws:cloudfront::${ACCOUNT}:distribution/E111111111111|aws:ResourceTag/NamePrefix=${PREFIX}-example;aws:RequestTag/NamePrefix=${PREFIX}-example
 the master secret RDS creates on behalf of the caller, tagged with the instance ARN (refused 22 Sep, run 35679472666)|secretsmanager:CreateSecret,secretsmanager:TagResource|arn:aws:secretsmanager:${REGION}:${ACCOUNT}:secret:rds!db-11111111-2222-4333-8444-555555555555-AbCdEf|aws:RequestTag/aws:rds:primaryDBInstanceArn=arn:aws:rds:${REGION}:${ACCOUNT}:db:${PREFIX}-example-pg
-the same secret once it exists, which the deploy stage describes|secretsmanager:DescribeSecret|arn:aws:secretsmanager:${REGION}:${ACCOUNT}:secret:rds!db-11111111-2222-4333-8444-555555555555-AbCdEf|secretsmanager:ResourceTag/aws:rds:primaryDBInstanceArn=arn:aws:rds:${REGION}:${ACCOUNT}:db:${PREFIX}-example-pg
 the database|rds:CreateDBInstance,rds:ModifyDBInstance,rds:DeleteDBInstance,rds:AddTagsToResource,rds:RestoreDBInstanceToPointInTime|arn:aws:rds:${REGION}:${ACCOUNT}:db:${PREFIX}-example-pg|
 the database snapshots the drill leaves|rds:CreateDBSnapshot,rds:DeleteDBSnapshot|arn:aws:rds:${REGION}:${ACCOUNT}:snapshot:${PREFIX}-example-pg-drill|
 the cluster, the services and the one-off tasks|ecs:CreateCluster,ecs:CreateService,ecs:UpdateService,ecs:DeleteService,ecs:RunTask,ecs:DescribeTasks,ecs:ListTasks|arn:aws:ecs:${REGION}:${ACCOUNT}:cluster/${PREFIX}-example-cluster|aws:RequestTag/NamePrefix=${PREFIX}-example
@@ -100,6 +99,17 @@ the journal bucket, and the teardown of it (refused 21 Sep)|s3:CreateBucket,s3:P
 the identity and the production inventory|sts:GetCallerIdentity,tag:GetResources|*|
 CHECK_TABLE
 )
+
+# The rehearsal's own row, appended rather than written above: only the rehearsal role
+# holds ReadTheRdsManagedMasterSecretOfThisNamespacesInstance (the deploy stage assembles
+# the database URL from that secret; production reads no secret value), and a group the
+# production check must fail is a group that teaches nothing. Judged under the global tag
+# key: the simulator refused this row under secretsmanager:ResourceTag/... on 22 September
+# while allowing the request-tag rows beside it.
+if [ "$PREFIX" = "fss-rh" ]; then
+  CHECK_GROUPS="${CHECK_GROUPS}
+the master secret once it exists, which the deploy stage describes (refused under the service tag key, 22 Sep)|secretsmanager:DescribeSecret|arn:aws:secretsmanager:${REGION}:${ACCOUNT}:secret:rds!db-11111111-2222-4333-8444-555555555555-AbCdEf|aws:ResourceTag/aws:rds:primaryDBInstanceArn=arn:aws:rds:${REGION}:${ACCOUNT}:db:${PREFIX}-example-pg"
+fi
 
 # Some actions are authorized against a resource type that is not the group's sample, or
 # against no resource at all, and `simulate-principal-policy` reports an implicit deny
@@ -180,7 +190,10 @@ while IFS='|' read -r name actions resource context; do
     simulate_arguments=(
       iam simulate-principal-policy
       --policy-source-arn "arn:aws:iam::${ACCOUNT}:role/${ROLE}"
-      --query 'EvaluationResults[].[EvalActionName,EvalDecision]'
+      # The third column is what the simulator says it lacked: a condition key named in a
+      # statement that no context entry supplied. The first denial of PR 168's read row
+      # (22 September) was reported bare, and this is the line that would have explained it.
+      --query 'EvaluationResults[].[EvalActionName,EvalDecision,to_string(MissingContextValues)]'
       --output text
       --action-names "$action"
     )
@@ -206,7 +219,7 @@ while IFS='|' read -r name actions resource context; do
       echo "      An empty answer is not a pass. Check the role name and the CLI credential." >&2
       exit 1
     fi
-    while IFS=$'\t' read -r evaluated_action decision; do
+    while IFS=$'\t' read -r evaluated_action decision missing; do
       [ -n "$evaluated_action" ] || continue
       evaluated=$((evaluated + 1))
       case "$decision" in
@@ -221,6 +234,10 @@ while IFS='|' read -r name actions resource context; do
           else
             echo "   DENIED  $evaluated_action ($decision) on $action_resource"
           fi
+          case "${missing:-}" in
+            ''|null|'[]'|None) ;;
+            *) echo "           missing context: $missing" ;;
+          esac
           ;;
       esac
     done <<<"$results"
