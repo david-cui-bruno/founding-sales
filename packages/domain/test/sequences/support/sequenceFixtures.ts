@@ -10,17 +10,17 @@ import type { SeededWorkspace, TwoWorkspaces } from '../../db/support/fixtures.t
  * sequence name, the same template name, the same calendar version — so that every
  * test in this directory is a two-workspace test whether or not it says so.
  *
- * No real person, firm, address or number appears. The footer's sign-off and postal
- * address are obviously fictional strings; a real address in a fixture would be a
- * real address in the repository.
+ * No real person, firm, address or number appears. The footer's sign-off is an
+ * obviously fictional string, and since migration 0015 there is no address anywhere in
+ * it: an automated email carries none
+ * (`docs/decisions/g20-automated-email-carries-no-postal-address.md`).
  */
 
 export const FIXTURE_SIGN_OFF = 'Sam Example\nCallie';
-export const FIXTURE_POSTAL_ADDRESS = '1 Example Way, Suite 100, Providence, RI 02903';
 
 /** A body that satisfies every rule `templateTextIssues` applies, including the footer. */
 export function fixtureBody(opening: string): string {
-  return `${opening}\n\n${FIXTURE_SIGN_OFF}\n${FIXTURE_POSTAL_ADDRESS}\n${SENDING_STOP_LINE}`;
+  return `${opening}\n\n${FIXTURE_SIGN_OFF}\n${SENDING_STOP_LINE}`;
 }
 
 export interface SeededTemplate {
@@ -74,11 +74,11 @@ async function seedTemplate(
     session,
     `INSERT INTO template_versions
        (workspace_id, template_id, version, name, subject, body, content_hash,
-        footer_sign_off, footer_postal_address, required_variables,
+        footer_sign_off, required_variables,
         approved_at, approved_by_user_id, personalization_strategy)
-     VALUES ($1, $2, 1, 'First touch', $3, $4, $5, $6, $7,
+     VALUES ($1, $2, 1, 'First touch', $3, $4, $5, $6,
              ARRAY['firm_name','contact_first_name'],
-             CASE WHEN $8 THEN now() END, CASE WHEN $8 THEN $9::uuid END, 'deterministic')
+             CASE WHEN $7 THEN now() END, CASE WHEN $7 THEN $8::uuid END, 'deterministic')
      RETURNING id`,
     [
       workspace.workspaceId,
@@ -87,7 +87,6 @@ async function seedTemplate(
       body,
       contentHash,
       FIXTURE_SIGN_OFF,
-      FIXTURE_POSTAL_ADDRESS,
       approved,
       workspace.admin.userId,
     ],

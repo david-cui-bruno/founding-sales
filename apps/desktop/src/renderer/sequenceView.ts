@@ -1,3 +1,4 @@
+import { SENDING_STOP_LINE } from '@fss/contracts';
 import type {
   Enrollment,
   LinkedInCard,
@@ -198,8 +199,14 @@ function versionPanel(
   };
 }
 
-const FOOTER_OF = (template: TemplateVersion): string =>
-  `${template.footerSignOff}\n${template.footerPostalAddress}`;
+/**
+ * The block the body must end with (12.6): the sign-off, then the stop line. It
+ * carried a postal address between the two until David's 22 September decision; see
+ * `docs/decisions/g20-automated-email-carries-no-postal-address.md`. The stop line is
+ * `@fss/contracts`' constant, which is the same bytes the server's approval rule
+ * checks for, so the panel cannot drift from the rule it is describing.
+ */
+const FOOTER_OF = (template: TemplateVersion): string => `${template.footerSignOff}\n${SENDING_STOP_LINE}`;
 
 function templatePanel(
   template: TemplateVersion,

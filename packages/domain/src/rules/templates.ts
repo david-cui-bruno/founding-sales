@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { SENDING_STOP_LINE } from '@fss/contracts';
 
 /**
  * Template content hash and footer block (specification 11.1, 12.6).
@@ -9,20 +10,23 @@ import { createHash } from 'node:crypto';
  *   * the content hash covers the exact text that may be sent — identity, version,
  *     subject and body — so an approval is bound to bytes rather than to a name, and
  *     an edit leaves the approval behind;
- *   * a body may not be approved unless it ends with the footer block: the sign-off,
- *     the postal address, and the stop line. The postal address is configuration, not
- *     template text, so one edit changes every footer and an address change
- *     invalidates every approval that was made with the old one.
+ *   * a body may not be approved unless it ends with the footer block.
  *
- * What does not survive is the old module's hard-coded sign-off, which carried a real
- * name, phone number and site. Those are workspace configuration here; no repository
- * file carries a real contact detail.
+ * The block is the sign-off and then the stop line. It carried a postal address
+ * between the two until 22 September 2026;
+ * `docs/decisions/g20-automated-email-carries-no-postal-address.md` records David's
+ * decision that it does not, and the three specification lines that deviates from.
+ * The stop line stays, so 12.6 still holds in full: every automated template explains
+ * how to stop by replying, and no web unsubscribe link is included.
+ *
+ * What does not survive from the old module is its hard-coded sign-off, which carried
+ * a real name, phone number and site. The sign-off is workspace configuration here;
+ * no repository file carries a real contact detail.
  */
 
-/** The one stop line every approved body ends with (specification 12.6: reply-based opt-out, no web link). */
-export const SENDING_STOP_LINE = 'Reply "stop" and I will not email you again.';
+/** The one stop line every approved body ends with. It lives in `@fss/contracts` so the Mac reads the same bytes. */
+export { SENDING_STOP_LINE };
 
-export const POSTAL_ADDRESS_MAX_LENGTH = 200;
 export const TEMPLATE_SUBJECT_MAX_LENGTH = 160;
 export const TEMPLATE_BODY_MAX_LENGTH = 4000;
 export const TEMPLATE_MAX_WORDS = 89;
@@ -42,15 +46,13 @@ export const TEMPLATE_FORBIDDEN_PHRASES: readonly string[] = Object.freeze([
 export interface FooterConfiguration {
   /** The workspace's approved sign-off block. Configuration; never a literal in this repository. */
   readonly signOff: string;
-  /** The postal address the footer carries. Configuration; an approval is bound to it. */
-  readonly postalAddress: string;
   /** Overridable only to test the rule; production uses SENDING_STOP_LINE. */
   readonly stopLine?: string | undefined;
 }
 
-/** The footer block a body must end with: the sign-off, the postal address, the stop line. */
+/** The footer block a body must end with: the sign-off, then the stop line. Nothing between them. */
 export function footerBlock(configuration: FooterConfiguration): string {
-  return `${configuration.signOff.trim()}\n${configuration.postalAddress.trim()}\n${configuration.stopLine ?? SENDING_STOP_LINE}`;
+  return `${configuration.signOff.trim()}\n${configuration.stopLine ?? SENDING_STOP_LINE}`;
 }
 
 export interface TemplateText {
@@ -118,6 +120,9 @@ export function templateTextIssues(text: TemplateText, rules: TemplateRules): st
   if (countWords(body) > TEMPLATE_MAX_WORDS) issues.push('template_body_too_long');
   if (countUrls(body) > TEMPLATE_MAX_URLS) issues.push('template_body_multiple_urls');
 
+  // 12.6: the body ends with the sign-off and then the stop line, so the sentence that
+  // says how to stop is the last thing a prospect reads. `endsWith`, not `includes`:
+  // a stop line buried mid-body is not a footer.
   const footer = footerBlock(rules.footer);
   if (!body.endsWith(footer)) issues.push('template_footer_missing');
   if (rules.requiredSentence !== undefined && !body.includes(rules.requiredSentence)) {

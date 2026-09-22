@@ -28,9 +28,9 @@ test('an admin sees every slice, its provenance, and an editor for each', async 
 
   await expect(page.getByTestId('heading')).toHaveText('Administration');
   await expect(page.getByTestId('setting-alert_thresholds')).toContainText('Default, never configured');
-  await expect(page.getByTestId('setting-postal_footer')).toContainText('Version 2');
-  await expect(page.getByTestId('value-postal_footer')).toBeEnabled();
-  await expect(page.getByTestId('save-postal_footer')).toBeEnabled();
+  await expect(page.getByTestId('setting-business_time_zone')).toContainText('Version 2');
+  await expect(page.getByTestId('value-business_time_zone')).toBeEnabled();
+  await expect(page.getByTestId('save-business_time_zone')).toBeEnabled();
 
   // 16.2's two switches, read out rather than recombined.
   await expect(page.getByTestId('sending')).toContainText('release process has not enabled');
@@ -98,7 +98,7 @@ test('a salesperson is offered no sending section at all', async ({ page }) => {
   // Not an inert section: every `/outbound/*` path answers them with a redacted 403,
   // and a control that exists only to be refused teaches nothing.
   await expect(page.getByTestId('sending-admin')).toHaveCount(0);
-  await expect(page.getByTestId('value-postal_footer')).toBeDisabled();
+  await expect(page.getByTestId('value-business_time_zone')).toBeDisabled();
   // The calendar is different: shown, inert. A salesperson whose step was delayed
   // by a holiday is entitled to see which holiday.
   await expect(page.getByTestId('holidays-current')).toContainText('2026-federal');
@@ -109,12 +109,12 @@ test('a salesperson sees the same page with every control inert and a reason', a
   server = await startSettingsTestServer(adminState({ role: 'salesperson' }));
   await page.goto(server.url);
 
-  await expect(page.getByTestId('value-postal_footer')).toBeDisabled();
-  await expect(page.getByTestId('save-postal_footer')).toBeDisabled();
-  await expect(page.getByTestId('setting-postal_footer')).toContainText('admin_only');
+  await expect(page.getByTestId('value-business_time_zone')).toBeDisabled();
+  await expect(page.getByTestId('save-business_time_zone')).toBeDisabled();
+  await expect(page.getByTestId('setting-business_time_zone')).toContainText('admin_only');
   // Reading is not refused: a salesperson whose send was refused by a cap should be
   // able to see the cap.
-  await expect(page.getByTestId('setting-postal_footer')).toContainText('Version 2');
+  await expect(page.getByTestId('setting-business_time_zone')).toContainText('Version 2');
 });
 
 test('offline is said once, at the top, and every control is inert', async ({ page }) => {
@@ -176,19 +176,12 @@ test('a refused save is shown as its code and the page is not edited optimistica
   // page has to render the refusal rather than the value that was attempted.
   await page.evaluate(async () => {
     await globalThis.callieAdmin?.saveSetting({
-      settingKey: 'postal_footer',
-      value: {
-        organizationName: 'Somebody else',
-        addressLine: '99 Example Street',
-        locality: 'Providence',
-        regionCode: 'RI',
-        postalCode: '02903',
-        countryCode: 'US',
-      },
+      settingKey: 'business_time_zone',
+      value: { timeZone: 'Pacific/Auckland' },
       changeNote: 'trying it on',
     });
   });
   await page.reload();
-  await expect(page.getByTestId('setting-postal_footer')).toContainText('Version 2');
-  await expect(page.getByTestId('value-postal_footer')).not.toContainText('99 Example Street');
+  await expect(page.getByTestId('setting-business_time_zone')).toContainText('Version 2');
+  await expect(page.getByTestId('value-business_time_zone')).not.toContainText('Pacific/Auckland');
 });

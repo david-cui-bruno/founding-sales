@@ -47,9 +47,15 @@ export class CarryTemplateSeamError extends Error {
  * null, which is what section 2's "unapproved template bodies" means and what keeps
  * the immutability trigger out of the carry's way entirely: an unapproved row may
  * still be edited, an approved one may not, and a carry has no authority to approve
- * anything. `footer_postal_address` is null for the same reason — the old approval
- * was bound to an address under the old footer rule, and carrying it would look like
- * an approval that had been checked.
+ * anything.
+ *
+ * The old record's postal address is read nowhere and written nowhere. Migration 0015
+ * dropped `template_versions.footer_postal_address` under David's 22 September
+ * decision (`docs/decisions/g20-automated-email-carries-no-postal-address.md`), so
+ * there is no column to carry it into; the old body's own address block, if it has
+ * one, travels with the body and has to be edited out before the version is approved
+ * here, because the approval refuses a body that does not end with the sign-off and
+ * the stop line.
  */
 export interface TemplateVersionDraft {
   readonly templateId: string;
@@ -57,7 +63,6 @@ export interface TemplateVersionDraft {
   readonly subject: string;
   readonly body: string;
   readonly contentHash: string;
-  readonly footerPostalAddress: null;
   readonly approvedAt: null;
   readonly approvedByUserId: null;
   readonly retiredAt: null;
@@ -95,7 +100,6 @@ export function templateVersionDrafts(records: readonly OldRecord[]): readonly T
         subject: record.template.subject,
         body: record.template.body,
       }),
-      footerPostalAddress: null,
       approvedAt: null,
       approvedByUserId: null,
       retiredAt: null,
@@ -117,8 +121,8 @@ export type TemplateImporter = (
  * ```sql
  * INSERT INTO template_versions
  *   (workspace_id, template_id, version, subject, body, content_hash,
- *    footer_postal_address, approved_at, approved_by_user_id, retired_at)
- * VALUES ($1, $2, $3, $4, $5, $6, NULL, NULL, NULL, NULL)
+ *    approved_at, approved_by_user_id, retired_at)
+ * VALUES ($1, $2, $3, $4, $5, $6, NULL, NULL, NULL)
  * ON CONFLICT ON CONSTRAINT template_versions_one_per_version DO NOTHING
  * ```
  *

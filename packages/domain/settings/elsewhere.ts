@@ -8,6 +8,12 @@
  * govern, and copying them into `workspace_settings` would give the workspace two
  * answers to the same question.
  *
+ * One of them is not anywhere, and that is deliberate: there is no postal footer to
+ * administer. David decided on 22 September 2026 that an automated email carries no
+ * postal address, so the slice was removed rather than moved
+ * (`docs/decisions/g20-automated-email-carries-no-postal-address.md`). It is not in
+ * the list below either, because the list is navigation and there is nowhere to go.
+ *
  * So the settings surface is one page over several endpoints, and this is the list
  * the page renders. It is data rather than prose in a document because the Mac
  * builds its navigation from it, and because a slice that moves should break a test

@@ -243,9 +243,9 @@ describe('template_versions is extended, not replaced (11.1)', () => {
       await refusal(
         `INSERT INTO template_versions
            (workspace_id, template_id, version, name, subject, body, content_hash,
-            footer_sign_off, footer_postal_address)
+            footer_sign_off)
          VALUES ($1, gen_random_uuid(), 1, 'Bad', 'Hello', 'Unsubscribe here', repeat('a', 64),
-                 'Sam Example', '1 Example Way')`,
+                 'Sam Example')`,
         [seeded.alpha.workspaceId],
       ),
     ).toMatch(/no_unsubscribe_link/);

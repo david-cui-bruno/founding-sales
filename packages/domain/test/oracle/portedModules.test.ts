@@ -205,8 +205,10 @@ describe('oracle: calling window', () => {
 describe('oracle: template text rules', () => {
   // The old module's footer requirement is its pinned sign-off; the port takes the
   // sign-off as configuration. Feeding the old sign-off in makes the two comparable.
+  // Neither side carries a postal address: the old module never had one in its
+  // requirement, and since G20 the port does not either.
   const rules = {
-    footer: { signOff: OLD_SIGN_OFF, postalAddress: '1 Example Way, Example City, RI 02900' },
+    footer: { signOff: OLD_SIGN_OFF },
     allowedVariables: ['firm', 'city', 'callback_date', 'next_step', 'my_name', 'my_phone', 'booking_link'],
   };
 

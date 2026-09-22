@@ -114,9 +114,9 @@ async function makeTemplate(f: SequenceCaseFixture, approved = true): Promise<st
     f,
     `INSERT INTO template_versions
        (workspace_id, template_id, version, name, subject, body, content_hash,
-        footer_sign_off, footer_postal_address, approved_at, approved_by_user_id)
+        footer_sign_off, approved_at, approved_by_user_id)
      VALUES ($1, gen_random_uuid(), 1, 'First touch', 'A question',
-             $2, repeat('a', 64), 'Sam Example', '1 Example Way',
+             $2, repeat('a', 64), 'Sam Example',
              CASE WHEN $3 THEN ${NOW} END, CASE WHEN $3 THEN $4::uuid END)
      RETURNING id`,
     [workspace(f), `Hello,\n\n${STOP_LINE}`, approved, admin(f)],
@@ -561,10 +561,10 @@ async function insertTemplateExtension(
   return await f.session.query(
     `INSERT INTO template_versions
        (workspace_id, template_id, version, name, subject, body, content_hash,
-        footer_sign_off, footer_postal_address,
+        footer_sign_off,
         personalization_strategy, generator_version, prompt_version, evidence_item_ids, generated_block)
      VALUES ($1, gen_random_uuid(), 1, 'Extended', 'A question', $2, repeat('b', 64),
-             'Sam Example', '1 Example Way', $3, $4, $5, ${overrides.evidence ?? 'NULL'}::uuid[], $6)`,
+             'Sam Example', $3, $4, $5, ${overrides.evidence ?? 'NULL'}::uuid[], $6)`,
     [
       workspace(f),
       `Hello,\n\n${STOP_LINE}`,

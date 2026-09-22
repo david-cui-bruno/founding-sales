@@ -22,12 +22,12 @@ import { issueSessionFor } from './support/sessionFixture.ts';
  *     the first answer rather than enrolling twice;
  *   * every path in the family refuses an unauthenticated caller.
  *
- * No real business name, address or number appears. The footer's sign-off and postal
- * address are obviously fictional.
+ * No real business name, address or number appears. The footer's sign-off is
+ * obviously fictional, and since migration 0015 the footer has no address in it at
+ * all (`docs/decisions/g20-automated-email-carries-no-postal-address.md`).
  */
 
 const SIGN_OFF = 'Sam Example\nCallie';
-const POSTAL_ADDRESS = '1 Example Way, Suite 100, Providence, RI 02903';
 
 describe('the sequence, template and enrollment routes', () => {
   let fixture: AuthFixture;
@@ -140,7 +140,6 @@ describe('the sequence, template and enrollment routes', () => {
         subject: 'Hello',
         body: 'No footer here at all.',
         footerSignOff: SIGN_OFF,
-        footerPostalAddress: POSTAL_ADDRESS,
         requiredVariables: [],
       }),
     );
@@ -153,14 +152,35 @@ describe('the sequence, template and enrollment routes', () => {
     expect(String(approved.body['reason'] ?? '')).toContain('template_footer_missing');
   });
 
+  it('refuses a create that still names a postal address, rather than dropping the field', async () => {
+    // The create body is a strict object, so an older Mac — or anything else built
+    // against the pre-0015 contract — is told, not quietly obeyed. An automated email
+    // carries no postal address
+    // (`docs/decisions/g20-automated-email-carries-no-postal-address.md`).
+    const refused = await post(
+      '/templates/create',
+      adminToken,
+      command({
+        name: 'Still sending an address',
+        subject: 'Hello',
+        body: `Hello.\n\n${SIGN_OFF}\n${SENDING_STOP_LINE}`,
+        footerSignOff: SIGN_OFF,
+        footerPostalAddress: '1 Example Way, Suite 100, Providence, RI 02903',
+        requiredVariables: [],
+      }),
+    );
+    expect(refused.status).toBe(400);
+    // Redacted: the refusal names no value the caller sent.
+    expect(JSON.stringify(refused.body)).not.toContain('1 Example Way');
+  });
+
   it('creates and approves a template a salesperson may not', async () => {
-    const body = `Hello {contact_first_name},\n\nA note about {firm_name}.\n\n${SIGN_OFF}\n${POSTAL_ADDRESS}\n${SENDING_STOP_LINE}`;
+    const body = `Hello {contact_first_name},\n\nA note about {firm_name}.\n\n${SIGN_OFF}\n${SENDING_STOP_LINE}`;
     const payload = {
       name: 'First touch',
       subject: 'A question about {firm_name}',
       body,
       footerSignOff: SIGN_OFF,
-      footerPostalAddress: POSTAL_ADDRESS,
       requiredVariables: ['firm_name', 'contact_first_name'],
     };
 

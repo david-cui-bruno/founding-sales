@@ -73,7 +73,6 @@ export const templateVersionSchema = z.strictObject({
   body: z.string().min(1).max(4000),
   contentHash: z.string().regex(/^[0-9a-f]{64}$/u),
   footerSignOff: z.string().min(1).max(300),
-  footerPostalAddress: z.string().min(1).max(200),
   requiredVariables: z.array(z.string().min(1).max(60)),
   approvedAt: instant.nullable(),
   retiredAt: instant.nullable(),

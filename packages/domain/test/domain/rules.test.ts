@@ -39,10 +39,10 @@ import {
 
 const NEW_YORK = 'America/New_York';
 
-// A fictional workspace footer. No repository file carries a real contact detail.
+// A fictional workspace sign-off. No repository file carries a real contact detail,
+// and since G20 no footer carries a postal address at all.
 const FOOTER = {
   signOff: 'Best,\nA. Salesperson\nFounder, Example\nexample.test',
-  postalAddress: '1 Example Way, Suite 2, Example City, RI 02900',
 };
 
 describe('suppression canonicalisation', () => {

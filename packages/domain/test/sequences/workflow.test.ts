@@ -24,7 +24,6 @@ import {
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
 import {
-  FIXTURE_POSTAL_ADDRESS,
   FIXTURE_SIGN_OFF,
   fixtureBody,
   seedSequences,
@@ -253,7 +252,7 @@ describe('the template lifecycle (11.1, 12.6)', () => {
       name: 'Too much',
       subject: 'Our pricing for you',
       body: 'No footer.',
-      footer: { signOff: FIXTURE_SIGN_OFF, postalAddress: FIXTURE_POSTAL_ADDRESS },
+      footer: { signOff: FIXTURE_SIGN_OFF },
       requiredVariables: [],
     });
     expect(created.ok).toBe(true);
@@ -274,7 +273,7 @@ describe('the template lifecycle (11.1, 12.6)', () => {
       name: 'Second touch',
       subject: 'Following up',
       body: fixtureBody('A short note.'),
-      footer: { signOff: FIXTURE_SIGN_OFF, postalAddress: FIXTURE_POSTAL_ADDRESS },
+      footer: { signOff: FIXTURE_SIGN_OFF },
       requiredVariables: [],
     };
     const refused = await createTemplateVersion(contextFor('alpha', 'salesperson'), payload);
@@ -304,7 +303,7 @@ describe('the template lifecycle (11.1, 12.6)', () => {
       name: 'Unapproved',
       subject: 'Hello',
       body: fixtureBody('Still a draft.'),
-      footer: { signOff: FIXTURE_SIGN_OFF, postalAddress: FIXTURE_POSTAL_ADDRESS },
+      footer: { signOff: FIXTURE_SIGN_OFF },
       requiredVariables: [],
     });
     expect(draft.ok).toBe(true);

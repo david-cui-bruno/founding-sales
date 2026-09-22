@@ -181,12 +181,12 @@ describe('the worker drains what the lanes left', () => {
 
     const templateId = await one('SELECT gen_random_uuid() AS id');
     const subject = 'A question about {firm_name}';
-    const body = `Hello,\n\nA note.\n\nSam Example\n1 Example Way\n${SENDING_STOP_LINE}`;
+    const body = `Hello,\n\nA note.\n\nSam Example\n${SENDING_STOP_LINE}`;
     const templateVersionId = await one(
       `INSERT INTO template_versions
          (workspace_id, template_id, version, name, subject, body, content_hash,
-          footer_sign_off, footer_postal_address, required_variables, approved_at, approved_by_user_id)
-       VALUES ($1, $2, 1, 'First touch', $3, $4, $5, 'Sam Example', '1 Example Way',
+          footer_sign_off, required_variables, approved_at, approved_by_user_id)
+       VALUES ($1, $2, 1, 'First touch', $3, $4, $5, 'Sam Example',
                ARRAY['firm_name'], now(), $6)
        RETURNING id`,
       [

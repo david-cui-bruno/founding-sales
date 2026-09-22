@@ -46,16 +46,12 @@ export function settingsSnapshot(overrides: Record<string, unknown> = {}): NonNu
         changedByUserId: null,
         changeNote: null,
       },
+      // A configured slice, so the page has provenance to render beside a default.
+      // This was `postal_footer` until migration 0015 removed that slice; there is no
+      // postal footer to administer any more.
       {
-        settingKey: 'postal_footer',
-        value: {
-          organizationName: 'Callie',
-          addressLine: '1 Example Street',
-          locality: 'Providence',
-          regionCode: 'RI',
-          postalCode: '02903',
-          countryCode: 'US',
-        },
+        settingKey: 'business_time_zone',
+        value: { timeZone: 'America/Chicago' },
         version: 2,
         changedAt: '2026-09-19T10:00:00.000Z',
         changedByUserId: ADMIN_ID,

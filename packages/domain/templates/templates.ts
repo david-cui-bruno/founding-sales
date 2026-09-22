@@ -24,7 +24,12 @@ import {
  *   * an approved body carries `Reply "stop"`, by a second CHECK;
  *   * an approved row is immutable by trigger, across every column an approver
  *     approved — migration 0012 extended that trigger to the five personalization
- *     columns 11.1 reserves.
+ *     columns 11.1 reserves, and migration 0015 removed one column from it.
+ *
+ * The footer a version stores is its sign-off alone. Migration 0015 dropped
+ * `footer_postal_address` under David's 22 September decision
+ * (`docs/decisions/g20-automated-email-carries-no-postal-address.md`), so the block
+ * an approval checks for is the sign-off and then the stop line.
  *
  * So this file can be wrong about a rule and the database will still refuse the row.
  * That is the intended division: 11.1's immutability is a property of the data, not
@@ -55,7 +60,6 @@ export interface TemplateVersionRow {
   readonly body: string;
   readonly contentHash: string;
   readonly footerSignOff: string;
-  readonly footerPostalAddress: string;
   readonly requiredVariables: readonly string[];
   readonly approvedAt: string | null;
   readonly retiredAt: string | null;
@@ -63,7 +67,7 @@ export interface TemplateVersionRow {
 }
 
 const COLUMNS = `id, template_id, version, name, subject, body, content_hash, footer_sign_off,
-  footer_postal_address, required_variables, approved_at, retired_at, personalization_strategy`;
+  required_variables, approved_at, retired_at, personalization_strategy`;
 
 interface TemplateDbRow {
   readonly id: string;
@@ -74,7 +78,6 @@ interface TemplateDbRow {
   readonly body: string;
   readonly content_hash: string;
   readonly footer_sign_off: string;
-  readonly footer_postal_address: string;
   readonly required_variables: string[];
   readonly approved_at: Date | null;
   readonly retired_at: Date | null;
@@ -92,7 +95,6 @@ function toTemplate(row: TemplateDbRow): TemplateVersionRow {
     body: row.body,
     contentHash: row.content_hash,
     footerSignOff: row.footer_sign_off,
-    footerPostalAddress: row.footer_postal_address,
     requiredVariables: row.required_variables,
     approvedAt: row.approved_at === null ? null : row.approved_at.toISOString(),
     retiredAt: row.retired_at === null ? null : row.retired_at.toISOString(),
@@ -168,8 +170,8 @@ export async function createTemplateVersion(
   const { rows } = await context.db.query<TemplateDbRow>(
     `INSERT INTO template_versions
        (workspace_id, template_id, version, name, subject, body, content_hash,
-        footer_sign_off, footer_postal_address, required_variables, personalization_strategy)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::text[], 'deterministic')
+        footer_sign_off, required_variables, personalization_strategy)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::text[], 'deterministic')
      RETURNING ${COLUMNS}`,
     [
       context.scope.workspaceId,
@@ -180,7 +182,6 @@ export async function createTemplateVersion(
       input.body,
       contentHash,
       input.footer.signOff,
-      input.footer.postalAddress,
       [...input.requiredVariables],
     ],
   );
@@ -227,7 +228,7 @@ export async function approveTemplateVersion(
       body: current.body,
     },
     {
-      footer: { signOff: current.footer_sign_off, postalAddress: current.footer_postal_address },
+      footer: { signOff: current.footer_sign_off },
       allowedVariables: current.required_variables,
     },
   );
