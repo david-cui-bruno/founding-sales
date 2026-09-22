@@ -1,0 +1,127 @@
+{
+  "Comment": [
+    "FSS rehearsal discovery statements. Appended to the rehearsal role's policy only, and only when",
+    "infra/scripts/render-deployment-role-policy.sh fss-rh is given --discovery. Never rendered for production.",
+    "",
+    "David's decision of 22 September 2026 (docs/decisions/g25-discovery-mode-for-the-rehearsal-role.md): six",
+    "credentialed runs each found exactly one missing permission, forty minutes apart, because the services",
+    "the apply asks for call each other in the caller's session and the message names the wrong resource.",
+    "For one pass of create, deploy and full the rehearsal role holds a wide allow on the services the tree",
+    "uses; the CloudTrail record of that pass (infra/scripts/deployment-role-actions-used.sh) is then the source of",
+    "the exact policy, which is proved by one more run before anything touches production.",
+    "",
+    "Every deny of the normal document stays. These add the guards the wide allow needs: nothing named or",
+    "tagged for production, nothing of the old stack, no change to the Terraform state infrastructure. IAM,",
+    "STS and DynamoDB are not widened at all: the role keeps the scoped grants it has for those."
+  ],
+  "Statement": [
+    {
+      "Sid": "DiscoveryAllowOnTheServicesTheTreeUsesRemoveAfterTheFirstFullRun",
+      "Effect": "Allow",
+      "Action": [
+        "acm:*",
+        "cloudfront:*",
+        "cloudwatch:*",
+        "ec2:*",
+        "ecr:*",
+        "ecs:*",
+        "elasticloadbalancing:*",
+        "kms:*",
+        "logs:*",
+        "rds:*",
+        "s3:*",
+        "secretsmanager:*",
+        "sns:*",
+        "tag:GetResources",
+        "wafv2:*"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "DiscoveryGuardNothingNamedForProduction",
+      "Effect": "Deny",
+      "Action": "*",
+      "Resource": [
+        "arn:aws:*:*:*:*fss-prod*",
+        "arn:aws:s3:::fss-prod*",
+        "arn:aws:iam::${aws_account_id}:role/fss-prod*"
+      ]
+    },
+    {
+      "Sid": "DiscoveryGuardNothingTaggedForProduction",
+      "Effect": "Deny",
+      "Action": "*",
+      "Resource": "*",
+      "Condition": {
+        "StringLike": {
+          "aws:ResourceTag/NamePrefix": "fss-prod*"
+        }
+      }
+    },
+    {
+      "Sid": "DiscoveryGuardNoTaggingForProduction",
+      "Effect": "Deny",
+      "Action": "*",
+      "Resource": "*",
+      "Condition": {
+        "StringLike": {
+          "aws:RequestTag/NamePrefix": "fss-prod*"
+        }
+      }
+    },
+    {
+      "Sid": "DiscoveryGuardTheOldStackAndItsWorker",
+      "Effect": "Deny",
+      "Action": "*",
+      "Resource": [
+        "arn:aws:*:*:*:*delegated-worker*",
+        "arn:aws:secretsmanager:*:*:secret:callie-sourcing*",
+        "arn:aws:sns:*:*:callie-sourcing*",
+        "arn:aws:logs:*:*:log-group:*callie-sourcing*",
+        "arn:aws:kms:*:*:alias/callie-sourcing*",
+        "arn:aws:ecs:*:*:*/callie-sourcing*",
+        "arn:aws:rds:*:*:*:callie-sourcing*",
+        "arn:aws:ecr:*:*:repository/callie-sourcing*"
+      ]
+    },
+    {
+      "Sid": "DiscoveryGuardTheStateBucketsConfiguration",
+      "Effect": "Deny",
+      "Action": [
+        "s3:DeleteBucket",
+        "s3:DeleteBucketPolicy",
+        "s3:PutBucketPolicy",
+        "s3:PutBucketVersioning",
+        "s3:PutLifecycleConfiguration",
+        "s3:PutEncryptionConfiguration",
+        "s3:PutBucketObjectLockConfiguration",
+        "s3:PutBucketPublicAccessBlock",
+        "s3:PutBucketOwnershipControls",
+        "s3:PutBucketAcl",
+        "s3:PutReplicationConfiguration",
+        "s3:PutBucketTagging",
+        "s3:PutBucketLogging"
+      ],
+      "Resource": "arn:aws:s3:::${state_bucket}"
+    },
+    {
+      "Sid": "DiscoveryGuardTheStateKey",
+      "Effect": "Deny",
+      "Action": [
+        "kms:ScheduleKeyDeletion",
+        "kms:DisableKey",
+        "kms:DisableKeyRotation",
+        "kms:PutKeyPolicy",
+        "kms:UpdateKeyDescription",
+        "kms:DeleteImportedKeyMaterial",
+        "kms:CreateAlias",
+        "kms:DeleteAlias",
+        "kms:UpdateAlias",
+        "kms:TagResource",
+        "kms:UntagResource",
+        "kms:RevokeGrant"
+      ],
+      "Resource": "${state_kms_key_arn}"
+    }
+  ]
+}
