@@ -441,6 +441,7 @@ export async function applyDirectSendEffects(
     const outcome = await setManualControlMode(context, {
       opportunityId: candidate.opportunityId,
       reason: 'direct Gmail send by the salesperson',
+      origin: 'direct_send',
     });
     if (!outcome.ok) continue;
     await recordEffect(context, {

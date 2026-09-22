@@ -1,6 +1,7 @@
 import type { Queryable } from '../db/queryable.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { recordCrmAuditEvent } from '../crm/audit.ts';
+import { MANUAL_MODE_ORIGINS, type ManualModeOrigin } from '../crm/events.ts';
 import { stopEnrollments } from './enrollments.ts';
 import type { EnrollmentEndReason } from './types.ts';
 
@@ -46,15 +47,15 @@ import type { EnrollmentEndReason } from './types.ts';
  * confirmed reply set the control mode and left the sequence running. Invariant 3 says
  * it must not, so this consumer reads both kinds.
  *
- * The end reason for a manual-mode stop is `human_reply`. The closed vocabulary also
- * holds `engaged_call` and `direct_send`, and the signal does not distinguish them:
- * every manual-mode event carries `reason_code = 'opportunity_manual'` and a
- * free-text reason, and parsing English out of a detail column to choose a stored code
- * would be worse than recording the fact this consumer can prove. The lanes that cause
- * the other two own the finer reason and should stop in their own transaction
- * (Appendix A's "commits together");
- * `docs/decisions/g15-the-worker-drains-what-the-lanes-left.md` records it as the
- * deviation it is.
+ * The end reason for a manual-mode stop is the event's own origin (lane G22).
+ * `setManualControlMode` writes one of `MANUAL_MODE_ORIGINS` into
+ * `crm_domain_events.detail.origin`, so an engaged call ends its enrollments
+ * `engaged_call` and a direct Gmail send ends them `direct_send`, which is what 7.3's
+ * four ways in and `ENROLLMENT_END_REASONS`' first members have always meant.
+ * `manualModeEndReason` is the map, and an event with no origin — every one written
+ * before this lane — still reads as `human_reply`, which is exactly what G15 recorded,
+ * so no existing reader changes its answer.
+ * `docs/decisions/g22-the-manual-mode-origin.md` records it.
  *
  * ## The second stream: G4's finalization marker
  *
@@ -95,7 +96,36 @@ interface EventDbRow {
   readonly event_kind: string;
   readonly firm_id: string;
   readonly opportunity_id: string | null;
+  /** `detail->>'origin'` for a manual-mode event; null for every other kind. */
+  readonly origin: string | null;
   readonly [column: string]: unknown;
+}
+
+const MANUAL_MODE_END_REASONS: Readonly<Record<ManualModeOrigin, EnrollmentEndReason>> = Object.freeze({
+  human_reply: 'human_reply',
+  linkedin_reply: 'linkedin_reply',
+  engaged_call: 'engaged_call',
+  direct_send: 'direct_send',
+  // A person inside the workspace deciding, which is not one of 7.3's prospect
+  // signals: the vocabulary reserves its first five members for those.
+  salesperson_command: 'admin_stop',
+});
+
+const KNOWN_ORIGINS: ReadonlySet<string> = new Set(MANUAL_MODE_ORIGINS);
+
+/**
+ * The end reason one manual-mode event gives the enrollments it stops.
+ *
+ * An absent or unrecognised origin is `human_reply`, and deliberately: every
+ * `opportunity.manual_mode` row written before lane G22 carries no origin, and
+ * `human_reply` is the reason lane G15 recorded for all of them. A drain that refused
+ * such an event would leave a sequence running after a firm had said no, which is the
+ * one outcome invariant 3 forbids.
+ */
+export function manualModeEndReason(origin: string | null | undefined): EnrollmentEndReason {
+  if (origin === null || origin === undefined) return 'human_reply';
+  if (!KNOWN_ORIGINS.has(origin)) return 'human_reply';
+  return MANUAL_MODE_END_REASONS[origin as ManualModeOrigin];
 }
 
 /**
@@ -119,7 +149,7 @@ export async function consumeTerminalStops(
   const cursor = cursors[0] ?? { last_event_at: null, last_event_id: null };
 
   const { rows: events } = await context.db.query<EventDbRow>(
-    `SELECT id, occurred_at, event_kind, firm_id, opportunity_id
+    `SELECT id, occurred_at, event_kind, firm_id, opportunity_id, detail->>'origin' AS origin
        FROM crm_domain_events
       WHERE workspace_id = $1
         AND event_kind = ANY($5::text[])
@@ -145,7 +175,7 @@ export async function consumeTerminalStops(
     // for the firm across contacts" — while 8.1's close is about one opportunity.
     const reason =
       event.event_kind === 'opportunity.manual_mode'
-        ? 'human_reply'
+        ? manualModeEndReason(event.origin)
         : await endReasonFor(context, event.opportunity_id);
     const stopped = await stopEnrollments(context, {
       ...(event.opportunity_id === null

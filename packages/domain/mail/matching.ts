@@ -412,6 +412,7 @@ export async function resolveAmbiguity(
     const outcome = await setManualControlMode(context, {
       opportunityId: input.selectedOpportunityId,
       reason: 'confirmed human reply',
+      origin: 'human_reply',
     });
     if (!outcome.ok) return refuseMail(outcome.reason === 'not_assigned' ? 'not_assigned' : 'invalid_input');
     manualOpportunityId = input.selectedOpportunityId;

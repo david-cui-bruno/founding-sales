@@ -1,7 +1,7 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { decideFirmMutation } from './authorization.ts';
 import { recordCrmAuditEvent } from './audit.ts';
-import { emitCrmDomainEvent } from './events.ts';
+import { emitCrmDomainEvent, type ManualModeOrigin } from './events.ts';
 import { loadFirmForUpdate } from './firms.ts';
 import {
   accept,
@@ -223,10 +223,22 @@ export async function changeStage(
  * "Automation never reverses manual mode": a caller may move `automated → manual`,
  * and only a person's explicit reopen or a new enrollment moves the other way, which
  * is why there is no `manual → automated` path here at all.
+ *
+ * `origin` is required and is not the same thing as `reason` (lane G22). The reason is
+ * a sentence a person reads; the origin is one of `MANUAL_MODE_ORIGINS`, the fact the
+ * terminal-stop consumer turns into an `end_reason`. It is required rather than
+ * defaulted so that a new caller has to say which of 7.3's four ways in it is, instead
+ * of inheriting somebody else's answer — G15 recorded `human_reply` for every one of
+ * them precisely because the signal did not carry this.
  */
 export async function setManualControlMode(
   context: RepositoryContext,
-  input: { readonly opportunityId: string; readonly reason: string; readonly commandId?: string | undefined },
+  input: {
+    readonly opportunityId: string;
+    readonly reason: string;
+    readonly origin: ManualModeOrigin;
+    readonly commandId?: string | undefined;
+  },
 ): Promise<CrmResult<OpportunityRow>> {
   const opportunity = await loadOpportunityForUpdate(context, input.opportunityId);
   if (opportunity === null) return refuse('opportunity_unknown');
@@ -254,13 +266,13 @@ export async function setManualControlMode(
     dedupeKey: `${updated.id}:${instantLabel(updated['control_mode_changed_at'])}`,
     reasonCode: 'opportunity_manual',
     commandId: input.commandId,
-    detail: { reason: input.reason.trim() },
+    detail: { reason: input.reason.trim(), origin: input.origin },
   });
   await recordCrmAuditEvent(context, {
     action: 'opportunity.manual',
     subjectKind: 'opportunity',
     subjectId: updated.id,
-    detail: { firmId: updated.firm_id },
+    detail: { firmId: updated.firm_id, origin: input.origin },
   });
   return accept(updated);
 }

@@ -226,6 +226,7 @@ export async function confirmReplyDisposition(
   const manual = await setManualControlMode(context, {
     opportunityId: chosen.opportunityId,
     reason: `confirmed reply disposition: ${input.disposition}`,
+    origin: 'human_reply',
   });
   if (!manual.ok) {
     return refuseClassification(manual.reason === 'not_assigned' ? 'not_assigned' : 'invalid_input');

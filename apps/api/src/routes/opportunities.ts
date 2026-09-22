@@ -64,6 +64,9 @@ export async function routeOpportunities(request: ApiRequest, options: RoutingOp
         await setManualControlMode(repository, {
           opportunityId: body.opportunityId,
           reason: body.reason,
+          // A person inside the workspace deciding, not one of 7.3's prospect
+          // signals: the stop the worker drains records `admin_stop` (lane G22).
+          origin: 'salesperson_command',
           commandId: body.commandId,
         }),
       );
