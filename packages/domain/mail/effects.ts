@@ -3,7 +3,8 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { openHold } from '../policy/holds.ts';
 import { setManualControlMode } from '../crm/pipeline.ts';
 import { recordSuppression, type SuppressionJournal } from '../suppression/index.ts';
-import { recordDaySignal } from '../outbound/ramp.ts';
+import { originatingSend } from '../outbound/fence.ts';
+import { recordBounceAgainstDay, recordDaySignal } from '../outbound/ramp.ts';
 import { businessDateOf } from '../today/snapshots.ts';
 import { classifyReply, type ReplyClassification } from '../src/rules/replyClassification.ts';
 import { discardMessageBody } from './messages.ts';
@@ -441,6 +442,7 @@ export async function applyDirectSendEffects(
     const outcome = await setManualControlMode(context, {
       opportunityId: candidate.opportunityId,
       reason: 'direct Gmail send by the salesperson',
+      origin: 'direct_send',
     });
     if (!outcome.ok) continue;
     await recordEffect(context, {
@@ -455,25 +457,49 @@ export async function applyDirectSendEffects(
 }
 
 /**
- * Count one ramp signal against the mailbox's day (12.7, lane G15).
+ * Count one ramp signal against the day it belongs to (12.7, lanes G15 and G22).
  *
- * The business date is the message's own `internal_date` in the workspace's zone,
- * because `mailbox_send_days.business_date` is a workspace-zone calendar and
- * `businessDateOf` is the one function that computes it — in PostgreSQL, so the answer
- * cannot differ from the one the send path wrote.
+ * An opt-out is a fact about the moment a person asked, so it counts on the day it
+ * arrived: the business date is the message's own `internal_date` in the workspace's
+ * zone, computed by `businessDateOf` in PostgreSQL so it cannot differ from the date
+ * the send path wrote. `recordDaySignal` is a bare `UPDATE`, so an opt-out on a day
+ * with no automated sends counts nothing, which is right — a day with no sends is not
+ * a sending day and there is nothing to be a proportion of.
  *
- * `recordDaySignal` is a bare `UPDATE`, so a signal for a day the mailbox has no row
- * for counts nothing, and that is the right behaviour rather than a gap: a day with no
- * automated sends is not a sending day (`rampHealthFailure` returns `no_sends` for
- * one), so there is nothing for a bounce to be a proportion of. The cost is that a
- * bounce arriving after its day has been closed is not counted against it; the
- * decision record names it.
+ * A **bounce is a fact about the send that caused it** (lane G22), and 12.7's
+ * threshold is a rate over *that* day's automated sends. The report names the send in
+ * its `In-Reply-To` and `References`; the fence holds the deterministic Message-ID and
+ * the business date the cap counted the send against, so the two join and the bounce
+ * lands on the right day even when it arrives the next morning. A day that has already
+ * closed is re-judged on the new count and can take the ramp back —
+ * `recordBounceAgainstDay` does that and says so.
+ *
+ * When the report names no fence — a daemon that sets neither header, a bounce of a
+ * direct Gmail send that never had one — the arrival date is the honest fallback and
+ * the behaviour is what it was before this lane. Named here so it is a known limit and
+ * not a surprise.
  */
 async function countRampSignal(
   context: RepositoryContext,
   message: MailMessageRow,
   signal: 'bounce' | 'opt_out',
 ): Promise<void> {
+  if (signal === 'bounce') {
+    const origin = await originatingSend(context, [
+      ...(message.inReplyTo === null ? [] : [message.inReplyTo]),
+      ...message.referenceMessageIds,
+    ]);
+    await recordBounceAgainstDay(
+      context,
+      origin === null
+        ? {
+            mailboxId: message.mailboxId,
+            businessDate: await businessDateOf(context, message.internalDate),
+          }
+        : { mailboxId: origin.mailboxId, businessDate: origin.businessDate },
+    );
+    return;
+  }
   await recordDaySignal(context, {
     mailboxId: message.mailboxId,
     businessDate: await businessDateOf(context, message.internalDate),

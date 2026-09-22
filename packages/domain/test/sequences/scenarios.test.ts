@@ -2,7 +2,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
 import { databaseNow, listApplicableHolds, openHold, releaseHold } from '../../policy/index.ts';
-import { changeStage, emitCrmDomainEvent } from '../../crm/index.ts';
+import { changeStage, emitCrmDomainEvent, setManualControlMode } from '../../crm/index.ts';
+import { enrollmentFacts } from '../../dashboard/index.ts';
 import { LONG_HOLD_REVIEW_MILLISECONDS } from '../../src/index.ts';
 import {
   allowAllEligibility,
@@ -329,6 +330,82 @@ describe('the terminal stop arrives through the outbox, and is consumed once', (
     });
     const report = await consumeTerminalStops(worker('alpha'));
     expect(report.enrollmentsStopped).toBe(0);
+  });
+});
+
+describe('the manual-mode stop records the origin it came from (7.3, G15 follow-up)', () => {
+  /**
+   * 7.3 names four ways into manual mode and `ENROLLMENT_END_REASONS` has a member for
+   * each of them. G15 recorded `human_reply` for all of them, because the event said
+   * only `reason_code = 'opportunity_manual'` and a free-text reason. The origin is now
+   * on the event, so the end reason is the one that happened.
+   */
+  const originCases = [
+    ['human_reply', 'human_reply'],
+    ['engaged_call', 'engaged_call'],
+    ['direct_send', 'direct_send'],
+    ['linkedin_reply', 'linkedin_reply'],
+    ['salesperson_command', 'admin_stop'],
+  ] as const;
+
+  for (const [origin, endReason] of originCases) {
+    it(`ends the enrollment with ${endReason} when the origin is ${origin}`, async () => {
+      const enrollmentId = await enrollAlpha();
+      const manual = await setManualControlMode(contextFor('alpha', 'salesperson'), {
+        opportunityId: crm.alpha.opportunityId,
+        reason: 'the fixture switched the opportunity to manual',
+        origin,
+      });
+      expect(manual.ok).toBe(true);
+
+      const report = await consumeTerminalStops(worker());
+      expect(report.enrollmentsStopped).toBe(1);
+      expect((await readEnrollment(worker(), { enrollmentId }))?.endReason).toBe(endReason);
+    });
+  }
+
+  it('reads an event written before the origin existed as human_reply (every existing reader keeps working)', async () => {
+    const enrollmentId = await enrollAlpha();
+    // Exactly the row `setManualControlMode` wrote before this lane: a reason code, a
+    // free-text detail, and no origin at all.
+    await database.session.query(
+      `UPDATE opportunities SET control_mode = 'manual', control_mode_reason = 'legacy',
+              control_mode_changed_at = now()
+        WHERE workspace_id = $1 AND id = $2`,
+      [seeded.alpha.workspaceId, crm.alpha.opportunityId],
+    );
+    await emitCrmDomainEvent(contextFor('alpha', 'admin'), {
+      kind: 'opportunity.manual_mode',
+      firmId: crm.alpha.firmId,
+      opportunityId: crm.alpha.opportunityId,
+      dedupeKey: `manual-mode:legacy:${crm.alpha.opportunityId}`,
+      reasonCode: 'opportunity_manual',
+      detail: { reason: 'confirmed reply disposition: interested' },
+    });
+
+    const report = await consumeTerminalStops(worker());
+    expect(report.enrollmentsStopped).toBe(1);
+    expect((await readEnrollment(worker(), { enrollmentId }))?.endReason).toBe('human_reply');
+  });
+
+  it("shows the precise reason on the dashboard's lane source", async () => {
+    await enrollAlpha();
+    const manual = await setManualControlMode(contextFor('alpha', 'salesperson'), {
+      opportunityId: crm.alpha.opportunityId,
+      reason: 'the prospect answered the phone and engaged',
+      origin: 'engaged_call',
+    });
+    expect(manual.ok).toBe(true);
+    await consumeTerminalStops(worker());
+
+    const now = await databaseNow(worker());
+    const facts = await enrollmentFacts(
+      contextFor('alpha', 'admin'),
+      { from: new Date(Date.parse(now) - 3_600_000).toISOString(), to: new Date(Date.parse(now) + 3_600_000).toISOString() },
+      { onlyAssignedTo: null },
+    );
+    expect(facts.ended).toContainEqual({ key: 'engaged_call', count: 1 });
+    expect(facts.ended.map(entry => entry.key)).not.toContain('human_reply');
   });
 });
 

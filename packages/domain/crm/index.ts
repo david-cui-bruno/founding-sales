@@ -43,10 +43,12 @@ export { recordCrmAuditEvent } from './audit.ts';
 
 export {
   CRM_DOMAIN_EVENT_KINDS,
+  MANUAL_MODE_ORIGINS,
   emitCrmDomainEvent,
   readCrmDomainEvents,
   type CrmDomainEventInput,
   type CrmDomainEventKind,
+  type ManualModeOrigin,
 } from './events.ts';
 
 export {

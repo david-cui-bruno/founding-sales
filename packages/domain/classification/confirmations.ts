@@ -6,6 +6,7 @@ import { createCallback } from '../dial/index.ts';
 import { listMatches, readMessage } from '../mail/index.ts';
 import { recordDaySignal } from '../outbound/ramp.ts';
 import { releaseHoldsOfEvent } from '../policy/holds.ts';
+import { applyManualModeStop } from '../sequences/terminalStops.ts';
 import { recordSuppression, type SuppressionJournal } from '../suppression/index.ts';
 import { businessDateOf, completeTodayItem } from '../today/index.ts';
 import type { ReplyDisposition } from '../src/rules/replyClassification.ts';
@@ -226,11 +227,31 @@ export async function confirmReplyDisposition(
   const manual = await setManualControlMode(context, {
     opportunityId: chosen.opportunityId,
     reason: `confirmed reply disposition: ${input.disposition}`,
+    origin: 'human_reply',
   });
   if (!manual.ok) {
     return refuseClassification(manual.reason === 'not_assigned' ? 'not_assigned' : 'invalid_input');
   }
   consequences.push('opportunity_manual');
+
+  // 7.3, and Appendix A's "Confirm human reply" row: the same transaction that sets
+  // manual "terminally stop[s] every active enrollment for the firm across contacts"
+  // and cancels the unclaimed executions. G15's worker drain does this for the
+  // `opportunity.manual_mode` signal and stays the net for the origins nothing
+  // commits at the source, but a stop that waits for the next one-minute pass leaves
+  // the sequence live in between, and a pass that fails for a reason of its own takes
+  // the stop back with it. Running both is safe: `stopEnrollments` matches
+  // `ended_at IS NULL`, so the drain finds nothing left to do and audits nothing.
+  //
+  // `consequences` gains no member for it. `mail_reply_confirmations_consequences_known`
+  // is a closed list and widening it would need a migration this lane does not need:
+  // `opportunity_manual` is already the consequence, the stop is what 7.3 says that
+  // consequence *is*, and `enrollment.terminally_stopped` is the audited record of it.
+  await applyManualModeStop(context, {
+    firmId: chosen.firmId,
+    origin: 'human_reply',
+    cause: 'reply.confirmed',
+  });
 
   let suppressionRecorded: string | null = null;
   if (input.disposition === 'opt_out') {

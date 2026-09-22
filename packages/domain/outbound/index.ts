@@ -58,10 +58,12 @@ export {
   rampHealthFailure,
   readRamp,
   readSendDayHealth,
+  recordBounceAgainstDay,
   recordDaySignal,
   scheduledCap,
   setAdminCap,
   type AdminCapOutcome,
+  type BounceAgainstDay,
   type CloseDayOutcome,
   type RampHealthFailure,
   type RampHealthSignals,
@@ -89,6 +91,7 @@ export {
   fenceForOutgoingMessage,
   holdFence,
   markUnknownTerminal,
+  originatingSend,
   prepareOutboundMessage,
   readFence,
   readFenceByStepExecution,
@@ -104,6 +107,7 @@ export {
   type OutboundEmailRequest,
   type OutboundFenceRow,
   type OutboundOutcome,
+  type OriginatingSend,
   type PreparedFence,
 } from './fence.ts';
 

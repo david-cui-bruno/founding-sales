@@ -45,6 +45,37 @@ export const CRM_DOMAIN_EVENT_KINDS = [
 ] as const;
 export type CrmDomainEventKind = (typeof CRM_DOMAIN_EVENT_KINDS)[number];
 
+/**
+ * How an opportunity came to be manual (7.3, lane G22).
+ *
+ * 7.3 names four ways in — "a confirmed human email reply, user-recorded LinkedIn
+ * reply, engaged call outcome, or direct Gmail send" — and `ENROLLMENT_END_REASONS`
+ * has a member for each of them. Lane G15 drained the `opportunity.manual_mode`
+ * signal and had to record `human_reply` for all four, because the event carried only
+ * `reason_code = 'opportunity_manual'` and a free-text reason, and parsing English out
+ * of a detail column to choose a stored code would have been worse than recording the
+ * one fact the consumer could prove.
+ *
+ * The origin is that fact, written by the caller that knows it, into
+ * `crm_domain_events.detail.origin` — a jsonb column that already exists, so nothing
+ * here needs a migration. A fifth member, `salesperson_command`, is the explicit
+ * `POST /opportunities/manual`: a person inside deciding, which 7.3 does not list
+ * because it is not a prospect signal, and which the enrollment vocabulary calls
+ * `admin_stop`.
+ *
+ * An event written before this lane carries no origin at all, and every reader still
+ * works: `manualModeEndReason` maps an absent or unrecognised origin to `human_reply`,
+ * which is exactly what G15 recorded.
+ */
+export const MANUAL_MODE_ORIGINS = [
+  'human_reply',
+  'linkedin_reply',
+  'engaged_call',
+  'direct_send',
+  'salesperson_command',
+] as const;
+export type ManualModeOrigin = (typeof MANUAL_MODE_ORIGINS)[number];
+
 export interface CrmDomainEventInput {
   readonly kind: CrmDomainEventKind;
   readonly firmId: string;

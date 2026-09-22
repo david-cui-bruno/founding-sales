@@ -240,6 +240,7 @@ export async function recordLinkedInResult(
   const manual = await setManualControlMode(context, {
     opportunityId: enrollment.opportunityId,
     reason: 'A LinkedIn reply was recorded by the salesperson.',
+    origin: 'linkedin_reply',
     ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
   });
   if (!manual.ok) return refuseSequence('opportunity_unknown');

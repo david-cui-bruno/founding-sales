@@ -234,6 +234,40 @@ stops every live enrollment the event covers, cancels everything unexecuted, wri
 `enrollment.terminally_stopped` audit event per enrollment, and advances the cursor in
 the same transaction.
 
+What an event covers differs by kind, and matches the sentence each one comes from:
+8.1's close is about one opportunity, while 7.3's manual paragraph is firm-wide —
+"terminally stop every active enrollment for the firm across contacts", which Appendix
+A's "Confirm human reply" row repeats as "all firm enrollments". Lane G22 widened the
+manual arm to the firm accordingly.
+
+The end reason for a manual-mode stop is the event's own `detail.origin`, through
+`manualModeEndReason`: an engaged call ends its enrollments `engaged_call`, a direct
+Gmail send `direct_send`, an explicit `POST /opportunities/manual` `admin_stop`. The
+table is in `docs/greenfield/crm.md`. An event with no origin — every one written
+before lane G22 — still reads as `human_reply`, which is what lane G15 recorded, so the
+drain never refuses an old row and no reader changes its answer.
+
+### The confirmed reply stops in its own transaction (lane G22)
+
+7.3 does not describe this stop as background work: "A confirmed human reply performs
+**one transaction**: record and classify the message; set manual; terminally stop every
+active enrollment for the firm across contacts; cancel unclaimed executions; hold any
+irreversible dispatch fence; create or promote the reply-lane Today entry; and write
+the audit event." So `confirmReplyDisposition` calls `applyManualModeStop` itself,
+inside the command's transaction, and the drain is the net rather than the mechanism.
+
+Running both is safe, and that is the design rather than a tolerance:
+`stopEnrollments` matches `ended_at IS NULL`, so the drain reads the same event through
+its keyset cursor, finds nothing live, stops nothing and audits nothing. The idempotence
+is keyed on the event — the cursor never re-reads a consumed row — and backed by the
+enrollment's own end, which no replay can undo.
+
+The confirmation gains no new `consequences` member for it.
+`mail_reply_confirmations_consequences_known` is a closed list, widening it would need
+a migration, and nothing is missing: `opportunity_manual` is the consequence 8.3 names,
+the stop is what 7.3 says that consequence *is*, and `enrollment.terminally_stopped` is
+the audited record of each enrollment it ended.
+
 The cursor is a `(occurred_at, id)` keyset rather than a timestamp, because two events
 written in one transaction share `now()` to the microsecond. It is only an
 optimisation: stopping is idempotent, so a replay stops nothing twice. See
@@ -255,7 +289,8 @@ missed.
 owes a workspace anything. Until lane G15 nothing called either function at all: closing
 an opportunity Won stopped no enrollment, and a confirmed human reply set the control
 mode and left the sequence running, which is invariant 3. See
-`docs/decisions/g15-the-worker-drains-what-the-lanes-left.md`.
+`docs/decisions/g15-the-worker-drains-what-the-lanes-left.md` and
+`docs/decisions/g22-the-manual-mode-origin.md`.
 
 ## Adding a step channel, or a terminal condition
 

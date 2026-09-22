@@ -129,6 +129,7 @@ export async function logCallOutcome(
     const changed = await setManualControlMode(context, {
       opportunityId: opportunity.id,
       reason: manualReasonFor(input.outcome),
+      origin: 'engaged_call',
       ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
     });
     if (!changed.ok) return refusePolicy('invalid_input');

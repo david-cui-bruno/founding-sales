@@ -152,8 +152,10 @@ export {
 export {
   TERMINAL_STOP_EVENT_KINDS,
   TERMINAL_STOP_SUBSCRIBER,
+  applyManualModeStop,
   consumeSuppressionStops,
   consumeTerminalStops,
+  manualModeEndReason,
   readTerminalStopWork,
   type SuppressionStopReport,
   type TerminalStopReport,
