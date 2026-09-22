@@ -881,7 +881,7 @@ done`);
     expect(describes(rehearsal.output)).toBe(2);
     expect(describes(production.output)).toBe(1);
     expect(production.output).not.toContain('aws:ResourceTag/aws:rds:primaryDBInstanceArn');
-    const rows = (output: string): number => output.split('\n').filter(line => /^plan:   [a-z0-9-]+:[A-Za-z]/u.test(line)).length;
+    const rows = (output: string): number => output.split('\n').filter(line => /^plan: {3}[a-z0-9-]+:[A-Za-z]/u.test(line)).length;
     expect(rows(rehearsal.output) - rows(production.output)).toBe(1);
   });
 
