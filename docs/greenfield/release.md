@@ -324,10 +324,35 @@ object. From the commit carrying this paragraph the teardown names the bucket wi
 account of its verified session and, after the destroy, deletes the bucket by name if
 the destroy left it (`journal_bucket=gone` in `teardown.txt`).
 
-What every teardown leaves, by design, is the run's empty state object under
-`fss/greenfield/rehearsal/<prefix>/terraform.tfstate`: Terraform's S3 backend does not
-delete state on destroy. It is a small file; delete it by hand when tidying, and nothing
-else in that bucket.
+**What a teardown leaves now: the lock table's digest item, and nothing else.** Until
+the commit carrying this paragraph it also left the run's state object under
+`fss/greenfield/rehearsal/<prefix>/terraform.tfstate`, because Terraform's S3 backend
+does not delete state on destroy — one file per run, for ever, and David removed the
+first by hand on 21 September. Step 6/6 of the teardown removes it: it reads the object
+at the key this run's `terraform init` used, and deletes it **only** when the object
+parses as Terraform state holding zero resources. The report line is
+`state_object=removed`, `state_object=absent` (a run that created nothing wrote none)
+or `state_object=refused`, and `refused` fails the step rather than reporting a clean
+teardown, because a state that still holds resources is the record of something still
+standing. A read the role is not allowed to make still stops the teardown; only
+`NoSuchKey` reads as absence.
+
+Nothing outside `fss/greenfield/rehearsal/<this prefix>/` can be addressed: the key is
+derived from the run prefix and classified before the teardown's first delete, the
+durable registry key `fss/greenfield/rehearsal-registry/terraform.tfstate` is refused
+by name, and the grant the delete uses
+(`ThisRunsStateObjectCleanup`, `s3:DeleteObject` on
+`fss/greenfield/rehearsal/*/terraform.tfstate`) reaches neither the registry key nor
+production's.
+
+What is left is the DynamoDB digest item the S3 backend keeps beside the lock,
+`<bucket>/<key>-md5`. It is tens of bytes and keyed by this run's own path, so it can
+collide with nothing — **unless you re-create a prefix you have already torn down**,
+in which case Terraform reads the digest, finds no object, and stops with "state data
+in S3 does not have the expected content". Use a new suffix, or delete the one item:
+`aws dynamodb delete-item --table-name callie-sourcing-tflock --key '{"LockID":{"S":"<bucket>/<key>-md5"}}'`.
+`docs/decisions/g21-the-teardown-removes-its-state-object.md` says why the item is not
+deleted by the teardown itself.
 
 The alternative is `create` then `teardown` at a commit carrying the journal change,
 which also works — the apply rewrites the policy from the module — but it creates a whole
@@ -431,8 +456,8 @@ before it run:
 9. [full] **Release suite (recorded mode, runner)**: the 42 scenarios (`npm run test:release`) and the **mutation check** (`npm run test:release:mutation`), which breaks each trap in turn and requires the suite to go red. They run in the runner against the job's own `postgres:16` service container, which is what they were built for. They do **not** touch the rehearsal database and could not: it is private — `publicly_accessible = false`, no NAT gateway, no bastion — so the step that used to assemble a URL from the rehearsal's outputs could never have connected. What runs against the rehearsal database is `fss verify` and `fss drill`, inside the VPC.
 10. [full] **Restore drill**, Appendix E steps 1 to 9. The runner keeps the control plane (reading the latest restorable point, the restore itself, the wait, the teardown); two in-VPC tasks do the database work — `fss admin counts` for the baseline on the source, then one `fss drill` against the restored instance for steps 1 to 9, with one correlated log and per-step JSON. The runner reads the report and decides whether it is a pass, so a change to the tool cannot quietly relax the gate. It refuses to report a pass unless the baseline contained an accepted send, a reply, a suppression, a CRM edit and a migration — a drill against an empty database proves nothing. The drill task is fixed at `FSS_DEPENDENCIES=recorded` **in its task definition**, because `reconcile-sent`, `recover` and `watch-renew` all reach Gmail when it is live and a mode a caller passes is a mode a caller can forget.
 11. [full] **Suppression journal replay and Gmail reconstruction**, against the recorded fake (no real mailbox in rehearsal unless you provide a rehearsal Google project). The second replay must insert nothing; no send may repeat. The drill above already ran both; this step reads the reports it left, which the drill wrote out of the captured task report under the names they have always had.
-12. [full] **Carry watermark** (Appendix G 20): the carry tooling must contain no writer at all, and — once a cutover is scheduled and the two optional secrets exist — the export must refuse a table with a post-watermark write. Before the cutover the step prints `carry drill skipped: no cutover watermark yet` and the record says `"carryDrill": "skipped_no_watermark"`. That is not a pass being claimed; it is the state being named.
-13. [every stage] **Tear down**, always, with bypass-governance — and tolerantly. The teardown is five steps (any one-off task still running, the restored instance, any manual snapshot carrying the run prefix, the object-locked journal objects, the root), and each treats the AWS error code for absence as "already done" rather than as a failure, because `if: always()` means it runs after a creation that never happened. A failure that is *not* an absence — an `AccessDenied`, a throttle — still stops it, and an unreadable state that is not "the root was never initialised" still stops it. The report says which: `destroyed=true`, or `destroyed=nothing_created`. `terraform destroy` requires every variable `apply` did, so the step that opens item 4 writes them to `run.auto.tfvars.json` beside the rehearsal root (identifiers only, ignored by `infra/.gitignore`) and the teardown refuses to destroy without that file rather than fail on a missing variable and leave the environment standing. To tear a run down by hand from a fresh checkout, recreate the file first: `name_prefix`, `api_image` and `worker_image` (`<repository>@<digest>`, from the release record or the run's inputs), `certificate_arn`, `api_hostname`, `assume_deployment_role: false`, `bootstrap: true`, and the two schema ranges read from `packages/domain/db/schemaRange.ts`; then run `rehearsal-teardown.sh <prefix>` from the root directory as the `fss-rh-deploy` session.
+12. [full] **Carry watermark** (Appendix G 20): the carry tooling must contain no writer at all, and — once a cutover is scheduled and the two optional secrets exist — the export must refuse a table with a post-watermark write. Before the cutover the step prints `carry drill skipped: no cutover watermark yet` and the record says `"carryDrill": "skipped_no_watermark"`. That is not a pass being claimed; it is the state being named. **The export runs as `fss-rh-deploy` and reads the old stack's table, so the policy has to name that table before the two secrets are set.** Render with the name and put the policy first — `FSS_POLICY_CARRY_SOURCE_TABLE=<the old table> infra/scripts/render-deployment-role-policy.sh fss-rh` — which adds one read-only statement, `ReadTheOldStackTableForTheCarryDrill`, over `table/<name>` and `table/<name>/index/*` and no write of any kind. Unset, the statement does not exist; production never gets it. The order and the commands are `carry-runbook.md` 2a.
+13. [every stage] **Tear down**, always, with bypass-governance — and tolerantly. The teardown is six steps (any one-off task still running, the restored instance, any manual snapshot carrying the run prefix, the object-locked journal objects, the root, and this run's own Terraform state object), and each treats the AWS error code for absence as "already done" rather than as a failure, because `if: always()` means it runs after a creation that never happened. A failure that is *not* an absence — an `AccessDenied`, a throttle — still stops it, and an unreadable state that is not "the root was never initialised" still stops it. The report says which: `destroyed=true`, or `destroyed=nothing_created`. `terraform destroy` requires every variable `apply` did, so the step that opens item 4 writes them to `run.auto.tfvars.json` beside the rehearsal root (identifiers only, ignored by `infra/.gitignore`) and the teardown refuses to destroy without that file rather than fail on a missing variable and leave the environment standing. To tear a run down by hand from a fresh checkout, recreate the file first: `name_prefix`, `api_image` and `worker_image` (`<repository>@<digest>`, from the release record or the run's inputs), `certificate_arn`, `api_hostname`, `assume_deployment_role: false`, `bootstrap: true`, and the two schema ranges read from `packages/domain/db/schemaRange.ts`; then run `rehearsal-teardown.sh <prefix>` from the root directory as the `fss-rh-deploy` session.
 14. [every stage] **Assert nothing with the production prefix was touched**, always, including on a run that created nothing. The guard classifies every name it sees: the run's own resources, the two stable rehearsal repositories that carry no run, and anything production's — which it refuses. A state it cannot list is reported as "the run created nothing" rather than swallowed, and the inventory comparison still runs. An inventory recorded only by a dry run is refused rather than compared: the workflow records the sentinel `["dry-run: no production inventory was read"]` when it validates the prefix, and comparing production against that would be a pass nobody earned. The guard runs in dry mode on every pull request, so every branch is exercised without a credential.
 15. [full] **Write the release record**, last. It names the two digests, the desktop stamp, and a `releaseGateReference` you will need in section 6.
 
@@ -967,6 +992,27 @@ refusal (CloudTrail names the action, the resource and the reason) before choosi
 fix. The message a service returns names the resource the caller specified, not
 necessarily the one it was refused.
 
+### 8.0f The two residues of 21 September, and which of them is closed
+
+Two things outlived a destroy on 21 September and both were finished by hand with an
+administrator's session: the journal bucket, whose name the teardown got wrong (8.0d,
+closed by PR 162 and proved by the fifth run's `journal_bucket=gone`), and the run's
+Terraform state object, which no version of the teardown had ever addressed because
+the S3 backend does not delete state on destroy.
+
+**The state object is closed as of this commit**, offline. Step 6/6 reads the object at
+the key this run's `terraform init` used — the bucket from
+`infra/roots/rehearsal/backend.hcl`, the key from the run prefix — and deletes it only
+when it parses as Terraform state with zero resources; `teardown.txt` now carries
+`state_object=removed|absent|refused`. The delete needs a grant the role did not have,
+`ThisRunsStateObjectCleanup`, so **both rendered policies must be put again before the
+next stage** (the same sentence 8.0e ends with, for the same reason), and
+`infra/scripts/check-deployment-role.sh fss-rh-deploy fss-rh` answers whether they
+took: it asks about two more actions than it used to.
+
+What no offline layer can show is the delete succeeding against S3 and the report line
+reading `removed` rather than `absent`. That is 8.1 item 11.
+
 ### 8.1 Still unverified
 
 Nothing in this repository has ever been applied beyond the four steps above, and no rehearsal environment has ever existed. Every command here comes from the AWS documentation, the Terraform schema and the scripts' dry-run output, checked offline. Watch these on the next real run:
@@ -981,3 +1027,5 @@ Nothing in this repository has ever been applied beyond the four steps above, an
 8. How long the whole rehearsal takes. The workflow's timeout is 180 minutes, which is a guess dominated by the Multi-AZ restore in Appendix E step 1. The rehearsal database is now `db.t4g.small` and Multi-AZ, like production's (`docs/decisions/g12c-the-topology-answers-are-root-defaults.md`), so that guess is at last a guess about the right operation — and it is the first thing to measure.
 9. Whether `fss-rh-deploy` can read the RDS-managed master secret the database URL is assembled from. The secret is named `rds!db-<id>` by RDS and does not carry the `fss-rh-` prefix the role is scoped by, so its policy probably needs a statement naming the ARN the root outputs. Runbook 6.5 has the detail; symptom is an `AccessDenied` at "Assemble the rehearsal database URL" and no connection string.
 10. Whether the first real rehearsal takes the skip branch of the carry drill, as it should before the cutover, and whether the release record reading `"carryDrill": "skipped_no_watermark"` is legible enough at enable time. Both branches run offline on every pull request; neither has run against AWS.
+11. Whether step 6/6 of the teardown actually removes the state object. The read has always been allowed (`ThisNamespacesStateObjects`); the delete is the new `ThisRunsStateObjectCleanup` and no rendered policy carrying it has been put yet. Symptom of a policy that was not re-put: `FAIL: … could not be read, and not because it was absent` (on `s3:GetObject`, which would mean something else is wrong) or the `rehearsal_tolerate_absent` failure on the delete. Expected on a healthy run: `state_object=removed` in `teardown.txt`, and `state_object=absent` on a `plan` or `teardown` stage that created nothing. Watch too that the object Terraform leaves after a destroy really does carry `"resources": []` — if it does not, the step refuses and fails, which is the intended direction but would need the object looked at once.
+12. Whether the carry read grant is enough for `fss carry export`. The four actions are what a full-table scan with indexes needs, but the export is another lane's tool and has never run; if it reaches `dynamodb:DescribeContinuousBackups` or an export API, that is one more action and a re-render. The statement renders only when `FSS_POLICY_CARRY_SOURCE_TABLE` is given, so before the cutover it is absent from the installed policy and nothing about it can be verified at all.

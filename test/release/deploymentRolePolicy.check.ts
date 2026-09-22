@@ -95,9 +95,26 @@ const STATE_KEY_TOKEN: Record<Prefix, string> = {
   'fss-prod': 'fss/greenfield/production',
 };
 
-function render(prefix: Prefix, mode = '--compact'): PolicyDocument {
+function renderRaw(
+  prefix: string,
+  mode = '--compact',
+  environment: Readonly<Record<string, string>> = {},
+): { readonly code: number; readonly output: string } {
   const result = spawnSync(repositoryPath('infra/scripts/render-deployment-role-policy.sh'), [prefix, mode], {
     encoding: 'utf8',
+    env: { ...process.env, ...environment },
+  });
+  return { code: result.status ?? 1, output: `${result.stdout}${result.stderr}` };
+}
+
+function render(
+  prefix: Prefix,
+  mode = '--compact',
+  environment: Readonly<Record<string, string>> = {},
+): PolicyDocument {
+  const result = spawnSync(repositoryPath('infra/scripts/render-deployment-role-policy.sh'), [prefix, mode], {
+    encoding: 'utf8',
+    env: { ...process.env, ...environment },
   });
   expect(result.status, `rendering ${prefix}: ${result.stdout}${result.stderr}`).toBe(0);
   return JSON.parse(result.stdout) as PolicyDocument;
@@ -167,6 +184,42 @@ function scopedDeniesFor(policy: PolicyDocument, action: string): readonly Polic
 
 function allowsFor(policy: PolicyDocument, action: string): readonly PolicyStatement[] {
   return policy.Statement.filter(statement => statement.Effect === 'Allow' && statementCovers(statement, action));
+}
+
+/** IAM's resource glob, which is the action glob over an ARN: `*` any run, `?` one character. */
+function resourceMatches(pattern: string, resource: string): boolean {
+  const expression = pattern.replace(/[.+^${}()|[\]\\]/gu, '\\$&').replace(/\*/gu, '.*').replace(/\?/gu, '.');
+  return new RegExp(`^${expression}$`, 'u').test(resource);
+}
+
+/** Whether a statement's `Resource` (or its `NotResource` complement) reaches one ARN. */
+function reaches(statement: PolicyStatement, resource: string): boolean {
+  const resources = asList(statement.Resource);
+  if (resources.length > 0) return resources.some(pattern => resourceMatches(pattern, resource));
+  const excluded = asList(statement.NotResource);
+  if (excluded.length > 0) return !excluded.some(pattern => resourceMatches(pattern, resource));
+  return false;
+}
+
+/**
+ * IAM's decision for one action on one ARN, with no request context supplied.
+ *
+ * A conditioned statement is skipped rather than guessed at, which is the same choice
+ * `simulate-principal-policy` makes when the key is not supplied: it cannot evaluate.
+ * Every statement this is used on is unconditioned, and the point of the function is
+ * that "the policy contains the action" and "the policy allows it *here*" are
+ * different questions — the first is what let `fss/greenfield/rehearsal*` read as a
+ * grant on the registry key.
+ */
+function decisionFor(policy: PolicyDocument, action: string, resource: string): 'allow' | 'deny' | 'implicit' {
+  const applies = (statement: PolicyStatement, effect: 'Allow' | 'Deny'): boolean =>
+    statement.Effect === effect &&
+    statement.Condition === undefined &&
+    statementCovers(statement, action) &&
+    reaches(statement, resource);
+  if (policy.Statement.some(statement => applies(statement, 'Deny'))) return 'deny';
+  if (policy.Statement.some(statement => applies(statement, 'Allow'))) return 'allow';
+  return 'implicit';
 }
 
 /** Every `resource "aws_*"` type declared under infra/modules and infra/roots. */
@@ -398,6 +451,7 @@ describe('the deployment-role policy is code, and the Terraform tree judges it',
       'ThisNamespacesStateList',
       'ThisNamespacesStateLockFileCleanup',
       'ThisNamespacesStateObjects',
+      'ThisRunsStateObjectCleanup',
       'UseTerraformStateKmsKey',
     ]);
     expect(productionOnly).toEqual(['NoDeploymentDataAccess']);
@@ -435,6 +489,225 @@ describe('the deployment-role policy is code, and the Terraform tree judges it',
       const permitted = deny?.Condition?.['ArnNotEquals']?.['iam:PolicyARN'] as readonly string[] | undefined;
       expect([...(permitted ?? [])].sort()).toEqual([...attached].sort());
     }
+  });
+});
+
+/**
+ * Two grants the rehearsal role did not have, and the two things that keep them small.
+ *
+ * `infra/scripts/rehearsal-teardown.sh` step 6/6 deletes the run's own state object,
+ * and `infra/scripts/rehearsal-carry-watermark.sh` reads the old stack's DynamoDB
+ * table for the carry drill (Appendix G 20). Before this the role could read its state
+ * objects and delete only the `.tflock` beside them, and its only DynamoDB grant was
+ * the lock table under `dynamodb:LeadingKeys` — so the first would have failed with
+ * AccessDenied on the delete and the second on every call.
+ *
+ * ## The vacuous-pass trap
+ *
+ * "The policy names `s3:DeleteObject`" is true of the role already, on a different
+ * resource, and "the policy names `dynamodb:Scan`" would be satisfied by a grant on
+ * `*`. Closed by evaluating each action *against an ARN*: the run's state key is
+ * allowed and the registry key and production's are not; the carry table is allowed
+ * and any other table is not. And a grant that renders unconditionally would pass a
+ * "it is there" assertion, so the absence is asserted too — with no table name given,
+ * and for production with one given.
+ */
+describe('the teardown deletes its own state object, and the carry drill may read the old table', () => {
+  const STATE_BUCKET = 'callie-sourcing-tfstate-326255650484';
+  const CARRY_TABLE = 'callie-sourcing-old-table';
+  const stateObject = (key: string): string => `arn:aws:s3:::${STATE_BUCKET}/${key}`;
+
+  it('lets the rehearsal role delete a run’s state object and nothing else in that space', () => {
+    const policy = render('fss-rh');
+    const statement = policy.Statement.find(entry => entry.Sid === 'ThisRunsStateObjectCleanup');
+    expect(statement, 'the rehearsal role has no statement for its own state object').toBeDefined();
+    expect(asList(statement?.Action)).toEqual(['s3:DeleteObject']);
+    expect(asList(statement?.Resource)).toEqual([
+      `arn:aws:s3:::${STATE_BUCKET}/fss/greenfield/rehearsal/*/terraform.tfstate`,
+    ]);
+    expect(statement?.Condition).toBeUndefined();
+
+    // Evaluated against ARNs, because the glob is the whole of the scoping.
+    expect(
+      decisionFor(policy, 's3:DeleteObject', stateObject('fss/greenfield/rehearsal/fss-rh-202609212300/terraform.tfstate')),
+    ).toBe('allow');
+    // The durable registry state, which holds the two ECR repositories every run
+    // deploys from. `fss/greenfield/rehearsal*` reaches it; this glob must not.
+    expect(
+      decisionFor(policy, 's3:DeleteObject', stateObject('fss/greenfield/rehearsal-registry/terraform.tfstate')),
+    ).toBe('implicit');
+    expect(
+      decisionFor(policy, 's3:DeleteObject', stateObject('fss/greenfield/production/terraform.tfstate')),
+    ).toBe('implicit');
+    // The positive control for the evaluator itself: reading the run's state is a
+    // grant the role has had all along, so "implicit" above is not what it answers to
+    // everything.
+    expect(
+      decisionFor(policy, 's3:GetObject', stateObject('fss/greenfield/rehearsal/fss-rh-202609212300/terraform.tfstate')),
+    ).toBe('allow');
+  });
+
+  it('never gives production a state-object delete', () => {
+    const policy = render('fss-prod');
+    expect(policy.Statement.find(entry => entry.Sid === 'ThisRunsStateObjectCleanup')).toBeUndefined();
+    expect(decisionFor(policy, 's3:DeleteObject', stateObject('fss/greenfield/production/terraform.tfstate'))).toBe(
+      'implicit',
+    );
+  });
+
+  it('renders the carry read only when the renderer is given the old table’s name', () => {
+    // Appendix G 20's export runs under `fss-rh-deploy` and reads a table that is not
+    // in this repository and does not exist until a cutover is scheduled. A name David
+    // supplies is a public identifier; an unset variable renders nothing at all.
+    const without = render('fss-rh');
+    expect(without.Statement.find(entry => entry.Sid === 'ReadTheOldStackTableForTheCarryDrill')).toBeUndefined();
+    expect(JSON.stringify(without)).not.toContain('dynamodb:Scan');
+
+    const policy = render('fss-rh', '--compact', { FSS_POLICY_CARRY_SOURCE_TABLE: CARRY_TABLE });
+    const statement = policy.Statement.find(entry => entry.Sid === 'ReadTheOldStackTableForTheCarryDrill');
+    expect(statement, 'the table name was given and no statement was rendered').toBeDefined();
+    expect(statement?.Effect).toBe('Allow');
+    expect([...asList(statement?.Action)].sort()).toEqual([
+      'dynamodb:DescribeTable',
+      'dynamodb:GetItem',
+      'dynamodb:Query',
+      'dynamodb:Scan',
+    ]);
+    expect(asList(statement?.Resource)).toEqual([
+      `arn:aws:dynamodb:us-east-1:326255650484:table/${CARRY_TABLE}`,
+      `arn:aws:dynamodb:us-east-1:326255650484:table/${CARRY_TABLE}/index/*`,
+    ]);
+  });
+
+  it('is read-only: no write action of any kind reaches the old table', () => {
+    // Specification 4.2 and Appendix G 20: the old stack is read-only and is never a
+    // rollback target, and `infra/scripts/rehearsal-carry-watermark.sh` proves the
+    // tooling contains no writer. This is the same claim in IAM, so that a writer
+    // added later has no permission even before the script notices it.
+    const policy = render('fss-rh', '--compact', { FSS_POLICY_CARRY_SOURCE_TABLE: CARRY_TABLE });
+    const table = `arn:aws:dynamodb:us-east-1:326255650484:table/${CARRY_TABLE}`;
+    for (const action of [
+      'dynamodb:PutItem',
+      'dynamodb:UpdateItem',
+      'dynamodb:DeleteItem',
+      'dynamodb:BatchWriteItem',
+      'dynamodb:DeleteTable',
+      'dynamodb:UpdateTable',
+      'dynamodb:TransactWriteItems',
+      'dynamodb:RestoreTableFromBackup',
+    ]) {
+      expect(decisionFor(policy, action, table), `the carry grant allows ${action}`).toBe('implicit');
+    }
+    for (const action of ['dynamodb:Scan', 'dynamodb:Query', 'dynamodb:GetItem', 'dynamodb:DescribeTable']) {
+      expect(decisionFor(policy, action, table), `the carry drill cannot ${action}`).toBe('allow');
+      expect(decisionFor(policy, action, `${table}/index/by-domain`)).toBe('allow');
+    }
+    // And no other table, including the Terraform lock table, is reachable by it.
+    expect(decisionFor(policy, 'dynamodb:Scan', 'arn:aws:dynamodb:us-east-1:326255650484:table/callie-sourcing-tflock')).toBe(
+      'implicit',
+    );
+  });
+
+  it('never gives production the carry read, even when the name is set', () => {
+    const policy = render('fss-prod', '--compact', { FSS_POLICY_CARRY_SOURCE_TABLE: CARRY_TABLE });
+    expect(policy.Statement.find(entry => entry.Sid === 'ReadTheOldStackTableForTheCarryDrill')).toBeUndefined();
+    expect(JSON.stringify(policy)).not.toContain(CARRY_TABLE);
+    expect(JSON.stringify(policy)).not.toContain('dynamodb:Scan');
+  });
+
+  it('refuses a table name that is not a table name, rather than rendering an ARN nobody meant', () => {
+    for (const name of ['fss-prod-firms', 'table name with spaces', 'arn:aws:dynamodb:us-east-1:1:table/x', 'ab']) {
+      const { code, output } = renderRaw('fss-rh', '--compact', { FSS_POLICY_CARRY_SOURCE_TABLE: name });
+      expect(code, `'${name}' was accepted: ${output}`).not.toBe(0);
+      expect(output).toContain('FSS_POLICY_CARRY_SOURCE_TABLE');
+    }
+  });
+
+  it('leaves no unsubstituted placeholder behind when the carry statement is dropped', () => {
+    // The statement has to render before it can be filtered, so the template is
+    // substituted with a sentinel when there is no table. A sentinel that survived
+    // into the document would be an ARN naming a table called `unset`.
+    for (const prefix of PREFIXES) {
+      const text = JSON.stringify(render(prefix));
+      expect(text).not.toContain('CARRY_SOURCE_TABLE_UNSET');
+      expect(text).not.toContain('${');
+    }
+  });
+
+  it('still fits inside IAM’s inline-policy limit with both grants and a table name', () => {
+    const measured = JSON.stringify(render('fss-rh', '--compact', { FSS_POLICY_CARRY_SOURCE_TABLE: CARRY_TABLE }))
+      .replace(/\s/gu, '')
+      .length;
+    expect(measured, 'IAM measures an inline role policy at 10240 non-white-space characters').toBeLessThan(10_240);
+  });
+
+  it('explains the one Allow the scoping heuristic cannot narrow, in the map a reviewer reads', () => {
+    // The old table's name carries neither the rehearsal prefix nor the state-key path,
+    // so `scopeOf` reads the index wildcard as unscoped. That is a real limit of the
+    // heuristic and not of the statement, and the map is where such a thing is written
+    // down rather than waved through.
+    const map = actionMap();
+    const reason = map.unconditional_sids['ReadTheOldStackTableForTheCarryDrill'];
+    expect(reason, 'the carry read is unscoped by the heuristic and unexplained').toBeDefined();
+    expect((reason ?? '').length).toBeGreaterThan(80);
+    const policy = render('fss-rh', '--compact', { FSS_POLICY_CARRY_SOURCE_TABLE: CARRY_TABLE });
+    const unexplained = policy.Statement.filter(
+      statement =>
+        statement.Effect === 'Allow' &&
+        scopeOf(statement, ['fss-rh', 'fss/greenfield/rehearsal']) === 'unconditional' &&
+        map.unconditional_sids[statement.Sid] === undefined,
+    ).map(statement => statement.Sid);
+    expect(unexplained).toEqual([]);
+  });
+
+  it('asks IAM about the carry read only when the name is given, and only for the rehearsal role', () => {
+    const script = repositoryPath('infra/scripts/check-deployment-role.sh');
+    const plan = (prefix: string, environment: Readonly<Record<string, string>>): string => {
+      const result = spawnSync(script, [`${prefix}-deploy`, prefix], {
+        encoding: 'utf8',
+        env: { ...process.env, FSS_CHECK_ROLE_DRY_RUN: '1', ...environment },
+      });
+      expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+      return `${result.stdout}${result.stderr}`;
+    };
+
+    const withTable = plan('fss-rh', { FSS_POLICY_CARRY_SOURCE_TABLE: CARRY_TABLE });
+    expect(withTable).toContain('dynamodb:Scan');
+    expect(withTable).toContain(`arn:aws:dynamodb:us-east-1:326255650484:table/${CARRY_TABLE}`);
+    // And the delete the teardown now makes, which is asked about every time.
+    expect(withTable).toContain('s3:DeleteObject');
+    expect(withTable).toContain(`arn:aws:s3:::${STATE_BUCKET}/fss/greenfield/rehearsal/`);
+
+    const withoutTable = plan('fss-rh', { FSS_POLICY_CARRY_SOURCE_TABLE: '' });
+    expect(withoutTable).not.toContain('dynamodb:Scan');
+    expect(withoutTable).toContain('s3:DeleteObject');
+
+    const production = plan('fss-prod', { FSS_POLICY_CARRY_SOURCE_TABLE: CARRY_TABLE });
+    expect(production).not.toContain('dynamodb:Scan');
+    expect(production).not.toContain(CARRY_TABLE);
+
+    // The count per role, so a table that quietly lost a line is a failure rather than
+    // a shorter clean run. Production is the base; the rehearsal adds the two state
+    // object actions, and the four carry reads when the name is given.
+    const counted = (text: string): number => text.split('\n').filter(line => /^plan: {3}[a-z0-9-]+:/u.test(line)).length;
+    expect(counted(production)).toBeGreaterThanOrEqual(99);
+    expect(counted(withoutTable)).toBe(counted(production) + 2);
+    expect(counted(withTable)).toBe(counted(withoutTable) + 4);
+  });
+
+  it('tells David to render with the name and put the policy before he sets the two secrets', () => {
+    const runbook = readRepositoryFile('docs/greenfield/carry-runbook.md');
+    expect(runbook).toContain('FSS_POLICY_CARRY_SOURCE_TABLE');
+    expect(runbook).toContain('infra/scripts/render-deployment-role-policy.sh fss-rh');
+    expect(runbook).toContain('aws iam put-role-policy --role-name fss-rh-deploy --policy-name fss-rh-deploy-scope');
+    // The order matters: the secrets turn the drill on, and a drill turned on before
+    // the policy is in place fails on permissions on the next rehearsal.
+    expect(runbook.indexOf('FSS_POLICY_CARRY_SOURCE_TABLE')).toBeLessThan(
+      runbook.indexOf('FSS_REHEARSAL_CARRY_WATERMARK'),
+    );
+    const release = readRepositoryFile('docs/greenfield/release.md');
+    expect(release).toContain('FSS_POLICY_CARRY_SOURCE_TABLE');
+    expect(release).toContain('state_object=');
   });
 });
 
