@@ -172,13 +172,18 @@ export async function consumeTerminalStops(
   let executionsCancelled = 0;
   for (const event of events) {
     // 7.3's manual paragraph is firm-wide — "terminally stop every active enrollment
-    // for the firm across contacts" — while 8.1's close is about one opportunity.
-    const reason =
-      event.event_kind === 'opportunity.manual_mode'
-        ? manualModeEndReason(event.origin)
-        : await endReasonFor(context, event.opportunity_id);
+    // for the firm across contacts", which Appendix A's "Confirm human reply" row
+    // repeats as "all firm enrollments" — while 8.1's close is about one opportunity.
+    // G15 scoped both to the opportunity, which every `opportunity.%` event names, so
+    // an enrollment still live against a firm's earlier closed opportunity survived a
+    // reply that said no. Lane G22 widened the manual arm to the firm, which is the
+    // sentence, and is a widening only ever in the safe direction.
+    const manual = event.event_kind === 'opportunity.manual_mode';
+    const reason = manual
+      ? manualModeEndReason(event.origin)
+      : await endReasonFor(context, event.opportunity_id);
     const stopped = await stopEnrollments(context, {
-      ...(event.opportunity_id === null
+      ...(manual || event.opportunity_id === null
         ? { firmId: event.firm_id }
         : { opportunityId: event.opportunity_id }),
       reason,
@@ -203,6 +208,49 @@ export async function consumeTerminalStops(
   }
 
   return { eventsConsumed: events.length, enrollmentsStopped, executionsCancelled };
+}
+
+/**
+ * The terminal stop a manual-mode transition owes, applied by the caller that caused
+ * it (7.3, Appendix A "Confirm human reply", lane G22).
+ *
+ * 7.3 does not describe this as background work. "A confirmed human reply performs
+ * **one transaction**: record and classify the message; set manual; terminally stop
+ * every active enrollment for the firm across contacts; cancel unclaimed executions;
+ * ... and write the audit event." Appendix A's row is the same list under "commits
+ * together". Lane G15's drain was the first thing that stopped these enrollments at
+ * all, and it is still the net; but a stop that waits for the next one-minute pass
+ * leaves the sequence live in the meantime, and a pass that fails for a reason of its
+ * own — another workspace event in the same batch, the suppression-marker half of the
+ * same job — rolls the stop back with it.
+ *
+ * So the command calls this inside its own transaction, and the drain does the same
+ * work for the origins nobody committed at the source. Running both is safe and is the
+ * point: `stopEnrollments` matches `ended_at IS NULL`, so the second pass finds
+ * nothing live, stops nothing and audits nothing. The idempotence is keyed on the
+ * event — the drain's cursor is a keyset on `(occurred_at, id)` and never re-reads a
+ * consumed row — and backed by the enrollment's own end, which no replay can undo.
+ */
+export async function applyManualModeStop(
+  context: RepositoryContext,
+  input: {
+    readonly firmId: string;
+    readonly origin: ManualModeOrigin;
+    /** What the audit detail calls the cause. The drain uses the event kind. */
+    readonly cause?: string | undefined;
+  },
+): Promise<{ readonly enrollmentsStopped: number; readonly executionsCancelled: number }> {
+  const reason = manualModeEndReason(input.origin);
+  const stopped = await stopEnrollments(context, {
+    firmId: input.firmId,
+    reason,
+    cancelReason: 'terminal_stop',
+  });
+  await auditStops(context, stopped.enrollmentIds, reason, input.cause ?? 'opportunity.manual_mode');
+  return {
+    enrollmentsStopped: stopped.enrollmentsStopped,
+    executionsCancelled: stopped.executionsCancelled,
+  };
 }
 
 async function endReasonFor(
