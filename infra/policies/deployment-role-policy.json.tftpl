@@ -312,7 +312,7 @@
       "Resource": "arn:aws:secretsmanager:${aws_region}:${aws_account_id}:secret:rds!db-*",
       "Condition": {
         "StringLike": {
-          "secretsmanager:ResourceTag/aws:rds:primaryDBInstanceArn": "arn:aws:rds:${aws_region}:${aws_account_id}:db:${name_prefix}*"
+          "aws:ResourceTag/aws:rds:primaryDBInstanceArn": "arn:aws:rds:${aws_region}:${aws_account_id}:db:${name_prefix}*"
         }
       }
     },
@@ -337,7 +337,7 @@
       "Resource": "*",
       "Condition": {
         "StringNotLike": {
-          "secretsmanager:ResourceTag/aws:rds:primaryDBInstanceArn": "arn:aws:rds:${aws_region}:${aws_account_id}:db:${name_prefix}*"
+          "aws:ResourceTag/aws:rds:primaryDBInstanceArn": "arn:aws:rds:${aws_region}:${aws_account_id}:db:${name_prefix}*"
         }
       }
     },

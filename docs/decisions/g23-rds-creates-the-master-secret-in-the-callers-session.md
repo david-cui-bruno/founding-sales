@@ -41,3 +41,5 @@ Nothing that was decided; the fifth run's fix stands. What it corrects is the be
 ## Consequences
 
 Each deployment role can create the master secret of its own namespace's instances and nothing else under `rds!`. The production role still cannot read any secret value. The rehearsal `create` stage on the next commit is the proof of the creation; the `deploy` stage is the proof of the read.
+
+**Addendum, 22 September, later.** The check row this record added for the read (`DescribeSecret` under `secretsmanager:ResourceTag/aws:rds:primaryDBInstanceArn`) was the first denial at 01968250. See `g24-the-master-secret-is-read-by-the-global-tag-key.md`.

@@ -357,6 +357,28 @@ describe('the deployment-role policy is code, and the Terraform tree judges it',
         }
       });
 
+      it('reads the master secret, and denies every other value read, by the global tag key', () => {
+        // Step 0 at 01968250 (22 September): the check's first simulation of the read
+        // statement was an implicit deny under `secretsmanager:ResourceTag/aws:rds:...`
+        // while the creation rows under `aws:RequestTag/aws:rds:...` were allowed. Secrets
+        // Manager honours both keys on DescribeSecret and GetSecretValue (the service
+        // reference lists both), so the policy uses the one the simulator evaluates.
+        const key = 'aws:ResourceTag/aws:rds:primaryDBInstanceArn';
+        const read = policy.Statement.find(s => s.Sid === 'ReadTheRdsManagedMasterSecretOfThisNamespacesInstance');
+        const deny = policy.Statement.find(s => s.Sid === 'NoDeploymentSecretValueAccessButTheRdsManagedMasterSecret');
+        if (prefix === 'fss-rh') {
+          // The rehearsal reads the one tagged secret and carves it out of its value-read deny.
+          expect(read?.Condition?.['StringLike']?.[key]).toMatch(new RegExp(`:db:${prefix}\\*$`, 'u'));
+          expect(deny?.Condition?.['StringNotLike']?.[key]).toMatch(new RegExp(`:db:${prefix}\\*$`, 'u'));
+        } else {
+          // Production holds neither statement: it keeps the blanket deny and reads no secret.
+          expect(read).toBeUndefined();
+          expect(deny).toBeUndefined();
+          expect(killedByABlanketDeny(policy, 'secretsmanager:GetSecretValue')?.Sid).toBe('NoDeploymentDataAccess');
+        }
+        expect(JSON.stringify(policy)).not.toContain('secretsmanager:ResourceTag/');
+      });
+
       it('fits inside IAM’s inline-policy limit with room to read', () => {
         const measured = JSON.stringify(policy).replace(/\s/gu, '').length;
         expect(measured, 'IAM measures an inline role policy at 10240 non-white-space characters').toBeLessThan(10_240);
@@ -813,9 +835,54 @@ done`;
       expect(call).toContain('ContextKeyValues=arn:aws:rds:');
       expect(call).toContain(':db:fss-rh-example-pg');
     }
+    // The read is judged under the global tag key: the simulator refused the same row under
+    // secretsmanager:ResourceTag/... on 22 September while allowing the request-tag rows.
     expect(rdsSecretCalls.find(call => actionsOf(call)[0] === 'secretsmanager:DescribeSecret')).toContain(
-      'ContextKeyName=secretsmanager:ResourceTag/aws:rds:primaryDBInstanceArn,',
+      'ContextKeyName=aws:ResourceTag/aws:rds:primaryDBInstanceArn,',
     );
+  });
+
+  it('prints the context the simulator says it lacked, so a denial explains itself', () => {
+    // The 22 September denial of the read row was reported bare; the third column of the
+    // query is MissingContextValues, and the script prints it under the denial.
+    const explaining = stub(`
+collect=0
+for word in "$@"; do
+  case "$word" in
+    --action-names) collect=1; continue ;;
+    --*) collect=0; continue ;;
+  esac
+  if [ "$collect" = 1 ]; then
+    if [ "$word" = secretsmanager:DescribeSecret ]; then
+      printf '%s\\timplicitDeny\\t["aws:ResourceTag/aws:rds:primaryDBInstanceArn"]\\n' "$word"
+    else
+      printf '%s\\tallowed\\tnull\\n' "$word"
+    fi
+  fi
+done`);
+    const { code, output } = check(['fss-rh-deploy', 'fss-rh'], { aws: explaining });
+    expect(code).toBe(1);
+    expect(output).toContain('DENIED  secretsmanager:DescribeSecret (implicitDeny)');
+    expect(output).toContain('missing context: ["aws:ResourceTag/aws:rds:primaryDBInstanceArn"]');
+    // An allowed line with `null` in the third column prints nothing extra.
+    expect(output).not.toContain('missing context: null');
+  });
+
+  it('asks the rehearsal role alone about reading the master secret, which production never holds', () => {
+    const rehearsal = check(['fss-rh-deploy', 'fss-rh'], { dryRun: true });
+    const production = check(['fss-prod-deploy', 'fss-prod'], { dryRun: true });
+    expect(rehearsal.code).toBe(0);
+    expect(production.code).toBe(0);
+    expect(rehearsal.output).toContain('plan:   secretsmanager:DescribeSecret');
+    expect(rehearsal.output).toContain('with aws:ResourceTag/aws:rds:primaryDBInstanceArn=arn:aws:rds:');
+    // Production creates the rds! secret through RDS like the rehearsal (the common row), but
+    // describes only its own named entries: one DescribeSecret row against two.
+    const describes = (output: string): number => output.split('\n').filter(line => line === 'plan:   secretsmanager:DescribeSecret').length;
+    expect(describes(rehearsal.output)).toBe(2);
+    expect(describes(production.output)).toBe(1);
+    expect(production.output).not.toContain('aws:ResourceTag/aws:rds:primaryDBInstanceArn');
+    const rows = (output: string): number => output.split('\n').filter(line => /^plan: {3}[a-z0-9-]+:[A-Za-z]/u.test(line)).length;
+    expect(rows(rehearsal.output) - rows(production.output)).toBe(1);
   });
 
   it('fails rather than passes when the simulation answers nothing', () => {

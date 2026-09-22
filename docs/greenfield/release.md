@@ -1005,6 +1005,30 @@ RDS performs both after the API call has returned, so the statement grants neith
 next teardown's `DeleteDBInstance` is refused, CloudTrail's Secrets Manager record of the
 window says which action to add, and to which statement.
 
+### 8.0g What step 0 at 01968250 found: the read row, refused by the simulator
+
+Both policies rendered from 01968250 were installed, and the rehearsal role's check
+reported one denial, the first time the read statement had ever been simulated:
+
+```
+DENIED  secretsmanager:DescribeSecret (implicitDeny) on arn:aws:secretsmanager:us-east-1:326255650484:secret:rds!db-11111111-…-AbCdEf
+```
+
+The row supplied `secretsmanager:ResourceTag/aws:rds:primaryDBInstanceArn` as context, which
+is the key `ReadTheRdsManagedMasterSecretOfThisNamespacesInstance` was conditioned on. The
+creation rows beside it, conditioned on `aws:RequestTag/aws:rds:primaryDBInstanceArn` with
+the same colons in the tag key, were allowed. AWS's service reference for Secrets Manager
+lists both `aws:ResourceTag/${TagKey}` and `secretsmanager:ResourceTag/tag-key` on
+`DescribeSecret` and `GetSecretValue`, so the service honours either; the simulator, on
+this evidence, evaluates the global family and not the service-specific one for this key.
+The two read-side conditions (the allow, and the deny of every other `GetSecretValue`) now
+use `aws:ResourceTag/aws:rds:primaryDBInstanceArn`, the check row asks under that key and
+only of the rehearsal role (production holds no read statement, by design, and the row as
+PR 168 wrote it would have failed the production check), and a denial now prints the
+simulator's `MissingContextValues` beneath it, which is the line that would have
+explained this one. Both policies must be rendered and put again; expect 103 of 103 for
+`fss-rh-deploy` and 102 of 102 for `fss-prod-deploy`.
+
 ### 8.1 Still unverified
 
 Nothing in this repository has ever been applied beyond the four steps above, and no rehearsal environment has ever existed. Every command here comes from the AWS documentation, the Terraform schema and the scripts' dry-run output, checked offline. Watch these on the next real run:
@@ -1017,5 +1041,5 @@ Nothing in this repository has ever been applied beyond the four steps above, an
 6. Whether the worker task role can write the suppression journal. **Closed by G12b in the plan, unproved in the cloud.** `infra/modules/cluster` now gives the worker `s3:PutObject` on the journal object prefix and `kms:Encrypt`/`kms:GenerateDataKey` on the journal key, and `infra/modules/journal` names both task roles as permitted writers rather than the API alone — so the bucket policy's `DenyWritesFromAnyoneButTheTaskRoles` no longer refuses the worker. Neither role asks for any `s3:Delete*`, and no writer sets a per-object retention: the bucket's own default retention locks every object on put, and `s3:PutObjectRetention` stays denied to everybody. `infra/modules/cluster/tests/services.tftest.hcl` asserts both halves offline. What a plan cannot prove is that the first real opt-out the worker imports actually lands in the bucket; watch the `SuppressionJournalWriteFailures` metric after Gmail sync is first enabled, because a remaining IAM refusal surfaces there and nowhere else.
 7. Whether one day of GOVERNANCE retention is long enough that `--bypass-governance-retention` is only ever needed for a same-day teardown.
 8. How long the whole rehearsal takes. The workflow's timeout is 180 minutes, which is a guess dominated by the Multi-AZ restore in Appendix E step 1. The rehearsal database is now `db.t4g.small` and Multi-AZ, like production's (`docs/decisions/g12c-the-topology-answers-are-root-defaults.md`), so that guess is at last a guess about the right operation — and it is the first thing to measure.
-9. Whether `fss-rh-deploy` can read the RDS-managed master secret the database URL is assembled from. The secret is named `rds!db-<id>` by RDS and does not carry the `fss-rh-` prefix, so `ReadTheRdsManagedMasterSecretOfThisNamespacesInstance` allows `DescribeSecret` and `GetSecretValue` on `rds!db-*` under `secretsmanager:ResourceTag/aws:rds:primaryDBInstanceArn` matching this namespace's instance ARNs. **Creating** it is proved necessary and is now allowed (8.0f); **reading** it has never run, and the condition key's spelling is from the Secrets Manager documentation, not from a credentialed run. The check simulates `DescribeSecret` under that key. Runbook 6.5 has the detail; symptom is an `AccessDenied` at "Assemble the rehearsal database URL" and no connection string.
+9. Whether `fss-rh-deploy` can read the RDS-managed master secret the database URL is assembled from. The secret is named `rds!db-<id>` by RDS and does not carry the `fss-rh-` prefix, so `ReadTheRdsManagedMasterSecretOfThisNamespacesInstance` allows `DescribeSecret` and `GetSecretValue` on `rds!db-*` under `aws:ResourceTag/aws:rds:primaryDBInstanceArn` matching this namespace's instance ARNs (the global key since 8.0g; the service-specific one was refused by the simulator). **Creating** it is proved necessary and is now allowed (8.0f); **reading** it has never run against the service. The check simulates `DescribeSecret` under that key. Runbook 6.5 has the detail; symptom is an `AccessDenied` at "Assemble the rehearsal database URL" and no connection string.
 10. Whether the first real rehearsal takes the skip branch of the carry drill, as it should before the cutover, and whether the release record reading `"carryDrill": "skipped_no_watermark"` is legible enough at enable time. Both branches run offline on every pull request; neither has run against AWS.

@@ -658,8 +658,11 @@ export const SEQUENCE_CONSTRAINT_CASES: readonly SequenceCase[] = [
   {
     constraint: 'workspace_holiday_calendars_superseded_not_before_effective',
     run: async f =>
+      // Superseded an hour from now, effective two days from now: always before, whatever
+      // the clock says. The first version fixed `effective_from` at 13:00 UTC on 22 Sep
+      // 2026 and the case passed only until noon that day.
       await insertCalendar(f, {
-        effectiveFrom: "TIMESTAMPTZ '2026-09-22 13:00:00+00'",
+        effectiveFrom: "NOW() + INTERVAL '2 days'",
         supersededAt: soon(),
       }),
   },
