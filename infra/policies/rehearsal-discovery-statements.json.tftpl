@@ -12,7 +12,12 @@
     "",
     "Every deny of the normal document stays. These add the guards the wide allow needs: nothing named or",
     "tagged for production, nothing of the old stack, no change to the Terraform state infrastructure. IAM,",
-    "STS and DynamoDB are not widened at all: the role keeps the scoped grants it has for those."
+    "STS and DynamoDB are not widened at all: the role keeps the scoped grants it has for those.",
+    "",
+    "IAM's ARN grammar: the partition and the service segment must be literal; region, account and the",
+    "resource may carry wildcards. put-role-policy refused the first version of these guards for",
+    "arn:aws:*:*:*:*fss-prod* (Resource vendor must be fully qualified), so every guard names its service",
+    "and the renderer refuses any resource that does not."
   ],
   "Statement": [
     {
@@ -42,9 +47,27 @@
       "Effect": "Deny",
       "Action": "*",
       "Resource": [
-        "arn:aws:*:*:*:*fss-prod*",
+        "arn:aws:cloudwatch:*:*:alarm:fss-prod*",
+        "arn:aws:ecr:*:*:repository/fss-prod*",
+        "arn:aws:ecs:*:*:cluster/fss-prod*",
+        "arn:aws:ecs:*:*:service/fss-prod*",
+        "arn:aws:ecs:*:*:task/fss-prod*",
+        "arn:aws:ecs:*:*:task-definition/fss-prod*",
+        "arn:aws:elasticloadbalancing:*:*:loadbalancer/app/fss-prod*",
+        "arn:aws:elasticloadbalancing:*:*:targetgroup/fss-prod*",
+        "arn:aws:elasticloadbalancing:*:*:listener/app/fss-prod*",
+        "arn:aws:elasticloadbalancing:*:*:listener-rule/app/fss-prod*",
+        "arn:aws:iam::*:role/fss-prod*",
+        "arn:aws:kms:*:*:alias/fss-prod*",
+        "arn:aws:logs:*:*:log-group:/fss/fss-prod*",
+        "arn:aws:rds:*:*:db:fss-prod*",
+        "arn:aws:rds:*:*:pg:fss-prod*",
+        "arn:aws:rds:*:*:subgrp:fss-prod*",
+        "arn:aws:rds:*:*:snapshot:fss-prod*",
         "arn:aws:s3:::fss-prod*",
-        "arn:aws:iam::${aws_account_id}:role/fss-prod*"
+        "arn:aws:secretsmanager:*:*:secret:fss-prod*",
+        "arn:aws:sns:*:*:fss-prod*",
+        "arn:aws:wafv2:*:*:regional/webacl/fss-prod*"
       ]
     },
     {
@@ -74,7 +97,14 @@
       "Effect": "Deny",
       "Action": "*",
       "Resource": [
-        "arn:aws:*:*:*:*delegated-worker*",
+        "arn:aws:logs:*:*:log-group:*delegated-worker*",
+        "arn:aws:s3:::*delegated-worker*",
+        "arn:aws:secretsmanager:*:*:secret:*delegated-worker*",
+        "arn:aws:sns:*:*:*delegated-worker*",
+        "arn:aws:kms:*:*:alias/*delegated-worker*",
+        "arn:aws:ecr:*:*:repository/*delegated-worker*",
+        "arn:aws:ecs:*:*:*delegated-worker*",
+        "arn:aws:rds:*:*:*delegated-worker*",
         "arn:aws:secretsmanager:*:*:secret:callie-sourcing*",
         "arn:aws:sns:*:*:callie-sourcing*",
         "arn:aws:logs:*:*:log-group:*callie-sourcing*",
@@ -102,7 +132,10 @@
         "s3:PutBucketTagging",
         "s3:PutBucketLogging"
       ],
-      "Resource": "arn:aws:s3:::${state_bucket}"
+      "Resource": [
+        "arn:aws:s3:::${state_bucket}",
+        "arn:aws:s3:::callie-sourcing*"
+      ]
     },
     {
       "Sid": "DiscoveryGuardTheStateKey",

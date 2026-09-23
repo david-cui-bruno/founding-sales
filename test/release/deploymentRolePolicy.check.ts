@@ -659,6 +659,39 @@ describe('the renderer refuses what it cannot render', () => {
       expect(typo.code).toBe(2);
     });
 
+    it('names a literal service in every resource of both documents, as IAM requires', () => {
+      for (const document of [normal(), discovery()]) {
+        for (const statement of document.Statement) {
+          for (const arn of [...asList(statement.Resource), ...asList(statement.NotResource)]) {
+            if (arn === '*') continue;
+            expect(arn, `${statement.Sid}: ${arn}`).toMatch(/^arn:aws:[a-z0-9-]+:/u);
+          }
+        }
+      }
+    });
+
+    it('refuses a discovery template whose resource has a wildcard service, before any put can', () => {
+      const directory = mkdtempSync(join(tmpdir(), 'fss-discovery-template-'));
+      const template = join(directory, 'bad.json.tftpl');
+      writeFileSync(
+        template,
+        JSON.stringify({
+          Statement: [
+            { Sid: 'DiscoveryAllowX', Effect: 'Allow', Action: ['ec2:*'], Resource: '*' },
+            { Sid: 'DiscoveryGuardX', Effect: 'Deny', Action: '*', Resource: ['arn:aws:*:*:*:*fss-prod*'] },
+          ],
+        }),
+      );
+      const result = spawnSync(script, ['fss-rh', '--compact', '--discovery'], {
+        encoding: 'utf8',
+        env: { ...process.env, FSS_POLICY_DISCOVERY_TEMPLATE: template },
+      });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain('service segment is not literal');
+      expect(result.stderr).toContain('DiscoveryGuardX');
+      expect(result.stdout).toBe('');
+    });
+
     it('is not the default: the normal document carries no Discovery statement', () => {
       expect(normal().Statement.some(statement => statement.Sid.startsWith('Discovery'))).toBe(false);
     });
@@ -672,7 +705,17 @@ describe('the renderer refuses what it cannot render', () => {
       const guards = wide.Statement.filter(statement => statement.Sid.startsWith('DiscoveryGuard'));
       expect(guards.length).toBeGreaterThanOrEqual(6);
       for (const guard of guards) expect(guard.Effect).toBe('Deny');
-      expect(JSON.stringify(guards)).toContain('arn:aws:*:*:*:*fss-prod*');
+      // Production's version of every named shape the role can address, one per service: IAM
+      // refused the single arn:aws:*:*:*:*fss-prod* on 22 September (the service segment must
+      // be literal), and a guard that names fewer shapes than the grant is a gap.
+      const named = normal().Statement.find(statement => statement.Sid === 'NamedResourcesInThisNamespace');
+      const productionGuard = guards.find(statement => statement.Sid === 'DiscoveryGuardNothingNamedForProduction');
+      const guarded = asList(productionGuard?.Resource);
+      for (const shape of asList(named?.Resource)) {
+        const production = shape.replace(/us-east-1|326255650484/gu, '*').replace('fss-rh*', 'fss-prod*');
+        const covered = guarded.some(guard => production === guard || production.startsWith(`${guard.replace(/\*$/u, '')}`));
+        expect(covered, `no guard covers production's ${shape}`).toBe(true);
+      }
       expect(JSON.stringify(guards)).toContain('"aws:ResourceTag/NamePrefix":"fss-prod*"');
       expect(JSON.stringify(guards)).toContain('"aws:RequestTag/NamePrefix":"fss-prod*"');
       expect(JSON.stringify(guards)).toContain('delegated-worker');
