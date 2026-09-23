@@ -69,7 +69,13 @@ export interface ToolConnection {
 }
 
 export interface ToolConfig {
-  readonly database: ToolConnection;
+  /**
+   * The application's connection. Null only when `readToolConfig` was asked for an
+   * optional runtime connection and none is configured: the migration task definition
+   * carries the migration credential and nothing the application connects with, so
+   * `fss migrate` is the one command that runs without it.
+   */
+  readonly database: ToolConnection | null;
   /** Null when no migration credential is configured; `fss migrate` then refuses. */
   readonly migrationDatabase: ToolConnection | null;
   readonly environmentName: string;
@@ -120,6 +126,19 @@ function runtimeConnection(environment: Environment): ToolConnection {
 }
 
 /**
+ * The runtime connection when one is configured, null when neither variable is set.
+ * A variable that is set but wrong (an ARN instead of a value, a secret missing a
+ * field, a host that disagrees) is still a refusal: only the *absence* is tolerated,
+ * and only for the caller that asked.
+ */
+function optionalRuntimeConnection(environment: Environment): ToolConnection | null {
+  if (trimmed(environment, V.databaseUrl) === undefined && trimmed(environment, V.databaseSecret) === undefined) {
+    return null;
+  }
+  return runtimeConnection(environment);
+}
+
+/**
  * The migration user's connection, or null.
  *
  * `databaseConnection` parses the Secrets Manager value shape, so the migration secret
@@ -135,11 +154,22 @@ function migrationConnection(environment: Environment): ToolConnection | null {
   return applyHostOverride(connectionString, 'secret', trimmed(environment, V.databaseHost));
 }
 
-export function readToolConfig(environment: Environment): ToolConfig {
+export interface ReadToolConfigOptions {
+  /**
+   * `required` (the default) refuses when no runtime connection is configured, as every
+   * command but `migrate` needs one. `optional` leaves `database` null instead; `fss
+   * migrate` passes it, because the migration task definition deliberately injects no
+   * `DATABASE_SECRET_ARN` (infra/modules/cluster, `migration_task_secrets`).
+   */
+  readonly runtimeConnection?: 'required' | 'optional';
+}
+
+export function readToolConfig(environment: Environment, options: ReadToolConfigOptions = {}): ToolConfig {
   const region = trimmed(environment, DEPLOYMENT_ENVIRONMENT_VARIABLES.region);
   const bucket = trimmed(environment, DEPLOYMENT_ENVIRONMENT_VARIABLES.journalBucket);
   return {
-    database: runtimeConnection(environment),
+    database:
+      options.runtimeConnection === 'optional' ? optionalRuntimeConnection(environment) : runtimeConnection(environment),
     migrationDatabase: migrationConnection(environment),
     environmentName: trimmed(environment, DEPLOYMENT_ENVIRONMENT_VARIABLES.environmentName) ?? 'unset',
     region: region ?? null,
@@ -157,8 +187,8 @@ export function describeToolConfig(config: ToolConfig): LogFields {
   return {
     tool: 'fss',
     environment: config.environmentName,
-    database_source: config.database.source,
-    database_host_source: config.database.hostSource,
+    database_source: config.database === null ? 'absent' : config.database.source,
+    database_host_source: config.database === null ? 'absent' : config.database.hostSource,
     // `migration_from`, not `migration_credential`: `log.ts` redacts any field whose
     // *name* looks like a credential, and this one is a source, not a value.
     migration_from: config.migrationDatabase === null ? 'absent' : config.migrationDatabase.source,

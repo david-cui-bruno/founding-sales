@@ -33,6 +33,33 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));
 /** @type {{name: string, file: string, find: string, replace: string, suite: string[], because: string}[]} */
 const MUTATIONS = [
   {
+    name: 'the tool demands the runtime connection for migrate again',
+    file: 'apps/worker/src/tools/fss.ts',
+    find: "readToolConfig(environment, { runtimeConnection: migrateOnly ? 'optional' : 'required' })",
+    replace: 'readToolConfig(environment)',
+    suite: ['--workspace', 'apps/worker', '--', 'test/fssTool.test.ts'],
+    because:
+      'The migration task definition injects MIGRATION_DATABASE_SECRET and no DATABASE_SECRET_ARN (tests/migration_identity.tftest.hcl). Runs 35812168524 and 35817370929 of 23 September 2026 exited 20 before touching the database because the tool read the runtime connection first for every command.',
+  },
+  {
+    name: 'the log fetch stops waiting for a stream that is still empty',
+    file: 'infra/scripts/release-common.sh',
+    find: '        if [ "$waited" -lt "$RELEASE_LOG_GRACE_SECONDS" ]; then\n          sleep "$RELEASE_LOG_POLL_SECONDS"',
+    replace: '        if false; then\n          sleep "$RELEASE_LOG_POLL_SECONDS"',
+    suite: ['run', 'test:release'],
+    because:
+      'The awslogs driver delivers a stopped container’s last lines seconds after ECS reports the stop. Both runs of 23 September 2026 read the stream in that gap and the job log carried nothing of what the container said.',
+  },
+  {
+    name: 'a one-off task’s log stops being kept beside its ARN',
+    file: 'infra/scripts/release-common.sh',
+    find: '  capture=${capture:-${record%.arn}.log}',
+    replace: '  capture=${capture:-}',
+    suite: ['run', 'test:release'],
+    because:
+      'The teardown destroys the log group minutes after the task; the copy in .rehearsal-reports/tasks is what the artifact keeps of the container’s own words.',
+  },
+  {
     name: 'the outbound world stops attesting to a release gate',
     file: 'packages/domain/test/outbound/support/outboundWorld.ts',
     find: "VALUES ($1, 'sending_enabled', 1, $2::jsonb, 'fixture: the rehearsal gate this world stands for', $3)",

@@ -134,6 +134,59 @@ describe('fss migrate', () => {
     expect(readReport('migrate.json')['schemaVersionAfter']).toBe(CURRENT_SCHEMA_VERSION);
   });
 
+  it('runs with the migration credential alone, the way the migration task definition is shaped', async () => {
+    // infra/modules/cluster injects exactly MIGRATION_DATABASE_SECRET and
+    // FSS_RUNTIME_DATABASE_SECRET_ARN into the migration task, and no DATABASE_SECRET_ARN
+    // (tests/migration_identity.tftest.hcl). Both runs of 23 September 2026 exited 20 here
+    // because the tool demanded the runtime connection before it looked at the command.
+    const url = new URL(databaseUrl);
+    const secret = JSON.stringify({
+      username: decodeURIComponent(url.username),
+      password: decodeURIComponent(url.password),
+      host: url.hostname,
+      port: Number(url.port || 5432),
+      dbname: url.pathname.slice(1),
+    });
+    const printed: string[] = [];
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(chunk => {
+      printed.push(String(chunk));
+      return true;
+    });
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const code = await main(['migrate', '--report', join(reports, 'migrate-secret-only.json')], {
+        MIGRATION_DATABASE_SECRET: secret,
+        FSS_RUNTIME_DATABASE_SECRET_ARN: secret,
+      });
+      expect(code).toBe(0);
+    } finally {
+      stdout.mockRestore();
+      stderr.mockRestore();
+    }
+    const report = JSON.parse(printed.join('')) as Record<string, unknown>;
+    expect(report['schemaVersionAfter']).toBe(CURRENT_SCHEMA_VERSION);
+    expect(readReport('migrate-secret-only.json')['schemaVersionAfter']).toBe(CURRENT_SCHEMA_VERSION);
+  });
+
+  it('every other command still refuses without the runtime credential, and names both variables', async () => {
+    const lines: string[] = [];
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(chunk => {
+      lines.push(String(chunk));
+      return true;
+    });
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      expect(await main(['migrate', 'status'], { FSS_MIGRATION_DATABASE_URL: databaseUrl })).toBe(20);
+    } finally {
+      stderr.mockRestore();
+      stdout.mockRestore();
+    }
+    const output = lines.join('');
+    expect(output).toContain('fss_configuration_refused');
+    expect(output).toContain('DATABASE_SECRET_ARN');
+    expect(output).not.toContain(databaseUrl);
+  });
+
   it('refuses to apply anything with the runtime credential, whatever DATABASE_URL points at', async () => {
     const spy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
