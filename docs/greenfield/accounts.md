@@ -288,6 +288,24 @@ aws iam put-role-policy --role-name fss-rh-deploy \
   --policy-document file:///tmp/fss-rh-deploy-scope.json
 ```
 
+Also before the first apply in this account: the three service-linked roles the stack
+leans on. ECS, the load balancer service and RDS each create their own service-linked
+role on first use, and they do it **through the caller's credentials**. The first
+discovery pass in the old account (23 September 2026, CloudTrail) showed ECS calling
+`iam:CreateServiceLinkedRole` on `fss-rh-deploy`'s behalf and being refused; it was
+harmless there only because `AWSServiceRoleForECS` had existed since April. A fresh
+account has none of them, and the deployment role is not allowed to create IAM roles, so
+create them once with your administrator profile. The call is idempotent: a second run
+answers `InvalidInput` for a role that already exists, which is the wanted state.
+
+```bash
+for service in ecs.amazonaws.com elasticloadbalancing.amazonaws.com rds.amazonaws.com; do
+  aws iam create-service-linked-role --aws-service-name "$service" \
+    --query 'Role.RoleName' --output text || true
+done
+aws iam get-role --role-name AWSServiceRoleForECS --query 'Role.RoleName' --output text   # expect AWSServiceRoleForECS
+```
+
 And the read-only check, before any apply:
 
 ```bash
@@ -305,6 +323,9 @@ written against.
 ---
 
 ## 7. `fss-prod-deploy`, in the production account
+
+The three service-linked roles from section 6 are per account: run the same loop here
+with your administrator profile before the first production apply.
 
 Production applies stay local and the provider does the assuming. That model does not
 change: `fss-prod-deploy` trusts **your** principal and no OIDC subject, so there is no
