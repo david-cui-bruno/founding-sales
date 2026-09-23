@@ -211,11 +211,38 @@ rehearsal_log "step 1: restore to a new instance"
 # target above is what RDS *reported* as that point a moment ago, and asking for it by
 # name would fail with `InvalidRestoreTime` the moment the window moved. The baseline
 # was measured at the reported instant, which is the floor every assertion uses.
+# Where the restored instance lives: the source instance's own subnet group, parameter
+# group and security groups, read from the source rather than assumed. Left unnamed,
+# RDS places a point-in-time restore in the VPC's *default* security group (API
+# reference: "Default: The default EC2 VPC security group for the DB subnet group's
+# VPC"), which this stack deliberately empties, and in the engine's default parameter
+# group, which the deployment role is not allowed to name. The independent review of
+# 22 September found both before the first drill did.
+if rehearsal_dry_run; then
+  rehearsal_plan "aws rds describe-db-instances --db-instance-identifier ${PREFIX}-pg --query DBInstances[0].[DBSubnetGroup.DBSubnetGroupName,DBParameterGroups[0].DBParameterGroupName,join(',',VpcSecurityGroups[].VpcSecurityGroupId)]"
+  SOURCE_SUBNET_GROUP="${PREFIX}-db"
+  SOURCE_PARAMETER_GROUP="${PREFIX}-pg16"
+  SOURCE_SECURITY_GROUPS="sg-0000000000000000e"
+else
+  read -r SOURCE_SUBNET_GROUP SOURCE_PARAMETER_GROUP SOURCE_SECURITY_GROUPS <<<"$(rehearsal_aws rds describe-db-instances \
+    --db-instance-identifier "${PREFIX}-pg" \
+    --query 'DBInstances[0].[DBSubnetGroup.DBSubnetGroupName,DBParameterGroups[0].DBParameterGroupName,join(`,`,VpcSecurityGroups[].VpcSecurityGroupId)]' --output text)"
+  for value in "$SOURCE_SUBNET_GROUP" "$SOURCE_PARAMETER_GROUP" "$SOURCE_SECURITY_GROUPS"; do
+    if [ -z "$value" ] || [ "$value" = "None" ]; then
+      echo "FAIL: ${PREFIX}-pg did not report its subnet group, parameter group and security groups; the restore cannot be placed." >&2
+      exit 1
+    fi
+  done
+  rehearsal_log "restore placement: subnet group $SOURCE_SUBNET_GROUP, parameter group $SOURCE_PARAMETER_GROUP, security groups $SOURCE_SECURITY_GROUPS"
+fi
 rehearsal_aws rds restore-db-instance-to-point-in-time \
   --source-db-instance-identifier "${PREFIX}-pg" \
   --target-db-instance-identifier "${PREFIX}-pg-restored" \
   --use-latest-restorable-time \
-  --no-publicly-accessible
+  --no-publicly-accessible \
+  --db-subnet-group-name "$SOURCE_SUBNET_GROUP" \
+  --db-parameter-group-name "$SOURCE_PARAMETER_GROUP" \
+  --vpc-security-group-ids "$SOURCE_SECURITY_GROUPS"
 rehearsal_aws rds wait db-instance-available --db-instance-identifier "${PREFIX}-pg-restored"
 
 # The lag between the requested point and the actual one is one of the three numbers

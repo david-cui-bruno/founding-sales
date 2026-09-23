@@ -556,7 +556,7 @@ aws secretsmanager put-secret-value --secret-id fss-prod/google-gmail-oauth-clie
 
 Repeat for `google-oidc-client`, `session-signing-key`, `device-credential-pepper`, `llm-classifier-api-key` and `research-provider-credentials`. The two Google entries take the two-field JSON in section 1.6 and nothing else; the rest are single values.
 
-**And the two database entries, which come first — before section 4.1, because the migration task cannot start without them.** `migration-database` takes the RDS-managed master user's JSON copied whole; `app-runtime-database` takes `{"username":"app_runtime_login","password":"<openssl rand -base64 48>","host":"<endpoint host>","port":5432,"dbname":"<database>"}`. `infra-apply-runbook.md` 3.3 has the two commands and the reason the master credentials are what goes in the first one: migration 0001 creates `app_runtime` and `migration` as NOLOGIN group roles, so on a database that has never been migrated there is no other login role that can run DDL and none can be created — the database is private. `fss admin database-users ensure` makes the runtime login user and grants `migration` to the master, so every later `fss migrate` passes its membership check for a reason.
+**And the two database entries, which come first — before section 4.1, because the migration task cannot start without them.** `migration-database` takes the RDS-managed master user's `username` and `password` together with this instance's `host`, `port` and `dbname` (the master JSON carries only the credentials; `fss migrate` needs all five, which the independent review of 22 September caught before the first deploy did); `app-runtime-database` takes `{"username":"app_runtime_login","password":"<openssl rand -base64 48>","host":"<endpoint host>","port":5432,"dbname":"<database>"}`. `infra-apply-runbook.md` 3.3 has the two commands and the reason the master credentials are what goes in the first one: migration 0001 creates `app_runtime` and `migration` as NOLOGIN group roles, so on a database that has never been migrated there is no other login role that can run DDL and none can be created — the database is private. `fss admin database-users ensure` makes the runtime login user and grants `migration` to the master, so every later `fss migrate` passes its membership check for a reason.
 
 After G12h **nothing in the cluster can read the RDS-managed master secret.** The two services resolve `app-runtime-database`; the migration task resolves `migration-database`; neither can resolve the other's.
 
@@ -1053,6 +1053,26 @@ segment; the guards now name production's version of every named shape the role 
 address, one per service, the renderer refuses any resource whose service segment is not
 literal, and the runbook validates every document with `accessanalyzer validate-policy`
 (read-only) before it is put.
+
+### 8.0i What the independent review found before the discovery pass (22 September, night)
+
+An independent read-only review of the tree against AWS's service reference found four
+things that would have stopped the pass at `deploy` or `full`, each fixed before the pass
+ran: the migration entry was filled with the master JSON alone, which carries no host,
+port or database name, so `fss migrate` could not build a connection (now assembled like
+the runtime entry); the drill's point-in-time restore named no subnet group, parameter
+group or security groups, so RDS would have placed it in the VPC's emptied default group
+(now placed where the source instance lives, read from the source); nothing pointed the
+rehearsal hostname at this run's load balancer, so the smoke had no DNS path (the runner
+now resolves the hostname to the load balancer's addresses through `/etc/hosts`, keeping
+Host, SNI and the certificate honest); and the teardown destroyed the subnet group while
+the restored instance was still deleting (now waits). Two policy findings were taken as
+well: `cloudfront:TagResource` joins the tagged-creation statement, because the service
+reference no longer lists `CreateDistributionWithTags` as an action; and the discovery
+allow no longer names `s3`, `ecr`, `sns` or `acm`, none of which ever refused a run, since
+`s3:*` on `*` would have let the rehearsal role at production's state object in the
+shared bucket, which a seventh guard now also denies by name. Whether RDS needs
+`secretsmanager:DeleteSecret` from the caller at teardown remains for the pass to show.
 
 ### 8.1 Still unverified
 

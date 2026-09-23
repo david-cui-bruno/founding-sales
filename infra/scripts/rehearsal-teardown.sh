@@ -128,6 +128,7 @@ rehearsal_log "1/5 deleting the restored database instance the drill created"
 if rehearsal_dry_run; then
   rehearsal_plan "aws rds delete-db-instance --db-instance-identifier ${PREFIX}-pg-restored --skip-final-snapshot --delete-automated-backups"
   rehearsal_plan "  ... and DBInstanceNotFound means the drill never created it, which is done, not failed"
+  rehearsal_plan "aws rds wait db-instance-deleted --db-instance-identifier ${PREFIX}-pg-restored"
 else
   rehearsal_refuse_production_arguments "${PREFIX}-pg-restored"
   rehearsal_tolerate_absent "deleting ${PREFIX}-pg-restored" \
@@ -135,6 +136,13 @@ else
     --db-instance-identifier "${PREFIX}-pg-restored" \
     --skip-final-snapshot \
     --delete-automated-backups
+  # DeleteDBInstance returns at once and the instance stays `deleting` for minutes,
+  # holding the subnet group and its security groups; `terraform destroy` below would
+  # meet InvalidDBSubnetGroupStateFault and DependencyViolation. The waiter returns as
+  # soon as the instance is gone, and DBInstanceNotFound is its success.
+  rehearsal_tolerate_absent "waiting for ${PREFIX}-pg-restored to finish deleting" \
+    command "$AWS" rds wait db-instance-deleted \
+    --db-instance-identifier "${PREFIX}-pg-restored"
 fi
 
 rehearsal_log "2/5 deleting any manual snapshot this run left behind"
