@@ -1074,6 +1074,37 @@ allow no longer names `s3`, `ecr`, `sns` or `acm`, none of which ever refused a 
 shared bucket, which a seventh guard now also denies by name. Whether RDS needs
 `secretsmanager:DeleteSecret` from the caller at teardown remains for the pass to show.
 
+### 8.0j What the first two `deploy` attempts proved: the migration task never reached the database (23 September, night)
+
+Runs 35812168524 (at 1d9b8671, the operator's) and 35817370929 (at 555f0624, the first
+the coordinator dispatched itself) both created the environment, filled the two database
+entries, launched the migration task and stopped at `migrate: container migration exited
+20`, with not one line of what the container said. CloudTrail showed the task launched at
+once, its execution role reading both entries, no call by the task role and no refusal
+anywhere; the container stopped about a minute after launch. The cause was in the tool:
+`fss` read its configuration the same way for every command, and the *runtime*
+connection came first — `neither DATABASE_URL nor DATABASE_SECRET_ARN is set`, exit 20,
+before the command was looked at. The migration task definition carries exactly
+`MIGRATION_DATABASE_SECRET` and `FSS_RUNTIME_DATABASE_SECRET_ARN` and, by design, no
+`DATABASE_SECRET_ARN` (`infra/modules/cluster`, `tests/migration_identity.tftest.hcl`):
+a migration applied with the application's credential must not be possible from there.
+The Terraform test asserted the names; nothing asserted that the tool could start with
+them. The 8.0i fix to the migration entry's shape was necessary and was never reached.
+
+`fss migrate` is now the one command that reads its configuration with the runtime
+connection optional; every other command still refuses without one, up front and naming
+both variables. `apps/worker/test/fssTool.test.ts` runs `migrate` with exactly the two
+names the task definition injects, and a mutation puts the old demand back.
+
+The silence was a second defect. `release_print_task_logs` read the stream in the
+seconds between ECS reporting the stop and the awslogs driver delivering the last lines,
+found it empty, and printed nothing; it also returned without a word when given no log
+group name. It now waits for a stream that exists but is still empty the way it already
+waited for one that did not exist, always says which stream it read or why it read
+nothing, and the wrapper keeps a copy of every one-off task's log beside its ARN record
+under `.rehearsal-reports/tasks/`, which the artifact collects before the teardown
+destroys the log group. `test/release/oneOffTaskLogs.check.ts`, with two mutations.
+
 ### 8.1 Still unverified
 
 Nothing in this repository has ever been applied beyond the four steps above, and no rehearsal environment has ever existed. Every command here comes from the AWS documentation, the Terraform schema and the scripts' dry-run output, checked offline. Watch these on the next real run:

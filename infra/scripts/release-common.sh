@@ -58,6 +58,11 @@ RELEASE_DEFAULT_TIMEOUT_SECONDS=1200
 # stops quickly can be described before its stream exists, and treating that as "no
 # output" loses exactly the message that says why it stopped.
 RELEASE_LOG_GRACE_SECONDS=60
+# How long to wait between looks at a log stream that exists but is still empty. The
+# awslogs driver delivers a stopped container's last lines a few seconds after ECS
+# reports it stopped; the two runs of 23 September 2026 read the stream in that gap and
+# printed nothing, and the teardown then destroyed the log group with the answer in it.
+RELEASE_LOG_POLL_SECONDS=${RELEASE_LOG_POLL_SECONDS:-5}
 
 # A plan line from a helper whose *stdout is the answer*.
 #
@@ -584,6 +589,10 @@ json.dump({"awsvpcConfiguration": {
   # success and is not.
   local record task_arn=''
   record="$(release_task_record_path "$step")"
+  # The log stream is the only thing of a one-off task that outlives it, and the
+  # teardown destroys the log group minutes later. Keep a copy beside the task's ARN
+  # unless the caller named its own capture file.
+  capture=${capture:-${record%.arn}.log}
   if [ -s "$record" ]; then
     task_arn="$(cat "$record")"
     rehearsal_log "$step: a task was already launched for this step; waiting on it rather than launching another"
@@ -803,8 +812,11 @@ print("exit|{}".format(worst))
 # for a bounded time and then reported as an absence rather than swallowed.
 release_print_task_logs() {
   local environment=$1 log_group=$2 stream_prefix=$3 container=$4 task_arn=$5 capture=${6:-}
-  [ -n "$log_group" ] || return 0
-  [ -n "$stream_prefix" ] || return 0
+  # Silence here has cost two rehearsal runs. Say why nothing is printed.
+  if [ -z "$log_group" ] || [ -z "$stream_prefix" ]; then
+    rehearsal_log "$container: no log group or stream prefix was given, so the task's own output is not shown" >&2
+    return 0
+  fi
 
   local task_id stream events waited=0
   task_id=${task_arn##*/}
@@ -829,8 +841,8 @@ release_print_task_logs() {
               rehearsal_log "no log stream $stream after ${RELEASE_LOG_GRACE_SECONDS}s; the task produced no output CloudWatch kept" >&2
               return 0
             fi
-            sleep 5
-            waited=$((waited + 5))
+            sleep "$RELEASE_LOG_POLL_SECONDS"
+            waited=$((waited + RELEASE_LOG_POLL_SECONDS))
             continue
             ;;
           *)
@@ -840,9 +852,22 @@ release_print_task_logs() {
             ;;
         esac
       fi
+      # The stream exists but holds nothing yet: the driver is still delivering. Wait
+      # for it the same way, rather than printing nothing and moving on.
+      if [ "$(FSS_JSON="${events:-null}" python3 -c 'import json, os; print(len((json.loads(os.environ["FSS_JSON"]) or {}).get("events") or []))')" = "0" ]; then
+        if [ "$waited" -lt "$RELEASE_LOG_GRACE_SECONDS" ]; then
+          sleep "$RELEASE_LOG_POLL_SECONDS"
+          waited=$((waited + RELEASE_LOG_POLL_SECONDS))
+          continue
+        fi
+        rehearsal_log "log stream $stream in $log_group held no events after ${RELEASE_LOG_GRACE_SECONDS}s" >&2
+        return 0
+      fi
     fi
     break
   done
+
+  rehearsal_log "$container: log stream $stream in $log_group${capture:+ (kept in $capture)}"
 
   # Only the `message` field of each event. The tool writes JSON log lines and never
   # puts a value in one; printing the raw response would print whatever else

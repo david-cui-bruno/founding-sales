@@ -223,7 +223,7 @@ async function adminInvocation(
 
 async function runCommand(
   parsed: ParsedFssCommand,
-  session: SessionQueryable,
+  session: SessionQueryable | null,
   migrationSession: SessionQueryable | null,
   config: ToolConfig,
   environment: Readonly<Record<string, string | undefined>>,
@@ -236,6 +236,9 @@ async function runCommand(
     const outcome = await runMigrate(migrationSession, { allowAnyRole: switches.has('--allow-any-role') });
     return outcome.ok ? { ok: true, value: { ...outcome.value } } : { ok: false, reason: outcome.reason, detail: outcome.detail };
   }
+  // `migrate` is the one command that runs without the application's connection (the
+  // migration task definition injects none). Everything below needs it.
+  if (session === null) return missingRuntimeCredential();
   if (path === 'migrate status' || path === 'schema-version') {
     return { ok: true, value: { ...(await readSchemaVersionReport(session)) } };
   }
@@ -312,6 +315,14 @@ async function runCommand(
   return await admin(resolved);
 }
 
+function missingRuntimeCredential(): AdminOutcome {
+  return {
+    ok: false,
+    reason: 'runtime_credential_missing',
+    detail: `every command but migrate connects with the application's credential: set ${TOOL_ENVIRONMENT_VARIABLES.databaseUrl}, or inject ${TOOL_ENVIRONMENT_VARIABLES.databaseSecret} through the task definition's secrets block`,
+  };
+}
+
 function missingMigrationCredential(): AdminOutcome {
   return {
     ok: false,
@@ -334,9 +345,14 @@ export async function main(
   }
 
   const log = toolLogger(parsed.value.spec.path.join('-'));
+  // The migration task definition carries the migration credential and nothing the
+  // application connects with, so `migrate` reads its configuration with the runtime
+  // connection optional. Every other command still refuses without one, up front.
+  const commandPath = parsed.value.spec.path.join(' ');
+  const migrateOnly = commandPath === 'migrate' || commandPath === 'migrate up';
   let config: ToolConfig;
   try {
-    config = readToolConfig(environment);
+    config = readToolConfig(environment, { runtimeConnection: migrateOnly ? 'optional' : 'required' });
   } catch (error) {
     log.log('error', 'fss_configuration_refused', {
       ...errorFields(error),
@@ -345,9 +361,12 @@ export async function main(
     return FSS_EXIT_CODES.refused;
   }
 
-  const client = new pg.Client({ connectionString: config.database.connectionString, application_name: 'fss-admin' });
-  await client.connect();
-  const session = asSession(client);
+  const client =
+    config.database === null
+      ? null
+      : new pg.Client({ connectionString: config.database.connectionString, application_name: 'fss-admin' });
+  if (client !== null) await client.connect();
+  const session = client === null ? null : asSession(client);
   // The migration credential is opened only when it exists, and it is a second
   // connection rather than a reused one: `migrate` runs as the migration user and every
   // other command runs as the application's.
@@ -380,7 +399,7 @@ export async function main(
     log.log('error', 'fss_failed', { command: parsed.value.spec.path.join(' '), ...errorFields(error), code: error instanceof DeploymentConfigError ? error.code : null });
     return FSS_EXIT_CODES.failed;
   } finally {
-    await client.end().catch(() => undefined);
+    if (client !== null) await client.end().catch(() => undefined);
     if (migrationClient !== null) await migrationClient.end().catch(() => undefined);
   }
 }
