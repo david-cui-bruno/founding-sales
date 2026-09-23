@@ -908,6 +908,7 @@ case "$1 $2" in
   "rds delete-db-instance")
     echo "An error occurred (DBInstanceNotFound) when calling the DeleteDBInstance operation: not found" >&2
     exit 254 ;;
+  "rds wait") exit 0 ;;
   "rds describe-db-snapshots") echo '[]' ; exit 0 ;;
   "s3api list-object-versions")
     echo "An error occurred (NoSuchBucket) when calling the ListObjectVersions operation: no such bucket" >&2
@@ -1031,6 +1032,13 @@ echo "unexpected: $*" >&2; exit 9`;
     const deleteAt = calls.findIndex(call => call.includes(`s3api delete-bucket --bucket ${bucket}`));
     expect(destroyAt, calls.join('\n')).toBeGreaterThan(-1);
     expect(deleteAt, calls.join('\n')).toBeGreaterThan(destroyAt);
+    // The restored instance's deletion is waited for before the destroy that would meet
+    // its subnet group and security groups still held (independent review, 22 September).
+    const instanceDeleteAt = calls.findIndex(call => call.includes('rds delete-db-instance --db-instance-identifier fss-rh-nothing-pg-restored'));
+    const waitAt = calls.findIndex(call => call.includes('rds wait db-instance-deleted --db-instance-identifier fss-rh-nothing-pg-restored'));
+    expect(instanceDeleteAt, calls.join('\n')).toBeGreaterThan(-1);
+    expect(waitAt, calls.join('\n')).toBeGreaterThan(instanceDeleteAt);
+    expect(waitAt).toBeLessThan(destroyAt);
     expect(readFileSync(join(reports, 'teardown.txt'), 'utf8')).toContain('destroyed=true journal_bucket=gone');
   });
 
@@ -1078,6 +1086,7 @@ echo "unexpected: $*" >&2; exit 9`;
 case "$1 $2" in
   "ecs list-tasks") echo '[]' ; exit 0 ;;
   "rds delete-db-instance") exit 0 ;;
+  "rds wait") exit 0 ;;
   "rds describe-db-snapshots") echo '["fss-rh-nothing-final","fss-prod-nightly","fss-rh-someone-else"]' ; exit 0 ;;
   "rds delete-db-snapshot")
     echo "An error occurred (DBSnapshotNotFound) when calling the DeleteDBSnapshot operation: gone" >&2

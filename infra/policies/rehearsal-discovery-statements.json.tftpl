@@ -11,8 +11,11 @@
     "the exact policy, which is proved by one more run before anything touches production.",
     "",
     "Every deny of the normal document stays. These add the guards the wide allow needs: nothing named or",
-    "tagged for production, nothing of the old stack, no change to the Terraform state infrastructure. IAM,",
-    "STS and DynamoDB are not widened at all: the role keeps the scoped grants it has for those.",
+    "tagged for production, nothing of the old stack, no change to the Terraform state infrastructure, and",
+    "no touch of production's state objects. IAM, STS and DynamoDB are not widened at all, and neither are",
+    "S3, ECR, SNS and ACM: none of the four ever refused a run, and widening S3 would have let this role at",
+    "every other state object in the shared bucket (independent review, 22 September). The scoped",
+    "statements for those four stay in the document.",
     "",
     "IAM's ARN grammar: the partition and the service segment must be literal; region, account and the",
     "resource may carry wildcards. put-role-policy refused the first version of these guards for",
@@ -24,19 +27,15 @@
       "Sid": "DiscoveryAllowOnTheServicesTheTreeUsesRemoveAfterTheFirstFullRun",
       "Effect": "Allow",
       "Action": [
-        "acm:*",
         "cloudfront:*",
         "cloudwatch:*",
         "ec2:*",
-        "ecr:*",
         "ecs:*",
         "elasticloadbalancing:*",
         "kms:*",
         "logs:*",
         "rds:*",
-        "s3:*",
         "secretsmanager:*",
-        "sns:*",
         "tag:GetResources",
         "wafv2:*"
       ],
@@ -113,6 +112,16 @@
         "arn:aws:rds:*:*:*:callie-sourcing*",
         "arn:aws:ecr:*:*:repository/callie-sourcing*"
       ]
+    },
+    {
+      "Sid": "DiscoveryGuardProductionsStateObjects",
+      "Effect": "Deny",
+      "Action": [
+        "s3:GetObject*",
+        "s3:PutObject*",
+        "s3:DeleteObject*"
+      ],
+      "Resource": "arn:aws:s3:::${state_bucket}/fss/greenfield/production*"
     },
     {
       "Sid": "DiscoveryGuardTheStateBucketsConfiguration",

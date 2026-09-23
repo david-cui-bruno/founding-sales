@@ -898,8 +898,27 @@ jobs:
           )"
           echo "::add-mask::$runtime_json"
 
+          # The master JSON RDS writes carries username and password and nothing else;
+          # `fss migrate` assembles its connection from five fields (bootstrap/config.ts
+          # requires host, port and dbname too). The independent review of 22 September
+          # found this before the first deploy did.
+          migration_json="$(SECRET_JSON="$master_json" ENDPOINT="$endpoint" DATABASE="$database" python3 - <<'PY'
+          import json, os
+          master = json.loads(os.environ["SECRET_JSON"])
+          host, _, port = os.environ["ENDPOINT"].partition(":")
+          print(json.dumps({
+              "username": master["username"],
+              "password": master["password"],
+              "host": host,
+              "port": int(port or 5432),
+              "dbname": os.environ["DATABASE"],
+          }))
+          PY
+          )"
+          echo "::add-mask::$migration_json"
+
           aws secretsmanager put-secret-value --secret-id "$migration_arn" \
-            --secret-string "$master_json" --query 'VersionId' --output text > /dev/null
+            --secret-string "$migration_json" --query 'VersionId' --output text > /dev/null
           aws secretsmanager put-secret-value --secret-id "$runtime_arn" \
             --secret-string "$runtime_json" --query 'VersionId' --output text > /dev/null
           echo "both database entries filled for ${database} at ${endpoint%%:*}"
@@ -934,6 +953,23 @@ jobs:
         run: |
           set -euo pipefail
           origin="https://${{ secrets.FSS_REHEARSAL_API_HOSTNAME }}"
+          # Nothing in the tree publishes DNS for the rehearsal hostname, and this run's
+          # load balancer has a fresh AWS-assigned name, so the hostname resolves to
+          # nothing the smoke could reach. The runner is told where it is: the load
+          # balancer's addresses go into /etc/hosts for the hostname, so the request
+          # carries the real Host header and SNI and the certificate validates as it
+          # would for a user. Production has a real record (runbook 6); a rehearsal has
+          # this line.
+          alb="$(terraform -chdir=infra/roots/rehearsal output -raw load_balancer_dns_name)"
+          addresses="$(getent ahostsv4 "$alb" | awk '{print $1}' | sort -u | head -2)"
+          if [ -z "$addresses" ]; then
+            echo "::error::the load balancer $alb resolved to no address, so the smoke check has nowhere to send its requests"
+            exit 1
+          fi
+          for address in $addresses; do
+            echo "$address ${{ secrets.FSS_REHEARSAL_API_HOSTNAME }}" | sudo tee -a /etc/hosts > /dev/null
+          done
+          echo "the rehearsal hostname now resolves to this run's load balancer for the rest of this job"
           # An environment created minutes ago has not run its canary yet, and an empty
           # `Datapoints` list makes this query print the literal `None`. Passed through,
           # `Number('None')` is NaN and the smoke check fails with `age=Nones`, which

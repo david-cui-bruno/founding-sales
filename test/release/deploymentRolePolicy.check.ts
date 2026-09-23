@@ -723,18 +723,38 @@ describe('the renderer refuses what it cannot render', () => {
       expect(JSON.stringify(guards)).toContain('kms:ScheduleKeyDeletion');
     });
 
-    it('widens no service the tree does not use, and never IAM, STS or DynamoDB', () => {
+    it('widens only services that have refused a run, and never IAM, STS, DynamoDB or S3', () => {
       const wide = discovery().Statement.find(statement => statement.Sid.startsWith('DiscoveryAllow'));
       expect(wide?.Effect).toBe('Allow');
       expect(wide?.Resource).toBe('*');
       expect(wide?.Condition).toBeUndefined();
       const services = asList(wide?.Action).map(action => action.split(':')[0]);
-      for (const forbidden of ['iam', 'sts', 'dynamodb', 'organizations', 'account', 'lambda', 'events', 'cloudtrail']) {
+      // IAM is the escalation path; S3 holds every stack's state in the shared bucket
+      // (the independent review of 22 September showed s3:* would have let the role
+      // delete production's state object); ECR, SNS and ACM never refused anything.
+      for (const forbidden of ['iam', 'sts', 'dynamodb', 's3', 'ecr', 'sns', 'acm', 'organizations', 'account', 'lambda', 'events', 'cloudtrail']) {
         expect(services, `the wide allow names ${forbidden}`).not.toContain(forbidden);
       }
       const treeServices = new Set(Object.values(actionMap().terraform_resources).map(entry => entry.service));
-      treeServices.delete('iam');
-      for (const service of treeServices) expect(services, `the tree uses ${service}`).toContain(service);
+      for (const service of services) {
+        if (service === undefined || service === 'tag') continue;
+        expect(treeServices.has(service), `the wide allow names ${service}, which the tree does not use`).toBe(true);
+      }
+      // The services that have refused a credentialed run, or that deploy has yet to exercise, are in.
+      for (const service of ['cloudwatch', 'kms', 'secretsmanager', 'ec2', 'cloudfront', 'rds', 'ecs', 'elasticloadbalancing', 'logs']) {
+        expect(services).toContain(service);
+      }
+    });
+
+    it('keeps the scoped S3 statements and guards production\'s state objects by name', () => {
+      const wide = discovery();
+      const sids = wide.Statement.map(statement => statement.Sid);
+      expect(sids).toContain('ThisNamespacesStateObjects');
+      expect(sids).toContain('NoDeploymentS3DataAccessOutsideTerraformState');
+      const guard = wide.Statement.find(statement => statement.Sid === 'DiscoveryGuardProductionsStateObjects');
+      expect(guard?.Effect).toBe('Deny');
+      expect(asList(guard?.Resource)).toEqual(['arn:aws:s3:::callie-sourcing-tfstate-326255650484/fss/greenfield/production*']);
+      expect(asList(guard?.Action)).toEqual(['s3:GetObject*', 's3:PutObject*', 's3:DeleteObject*']);
     });
 
     it('leaves out only the allows the wide allow already contains, and still fits IAM', () => {
