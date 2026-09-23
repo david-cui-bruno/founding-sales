@@ -353,7 +353,7 @@ rehearsal_aws rds wait db-instance-available --db-instance-identifier "${PREFIX}
 # Secrets Manager entry still names the right user.
 if rehearsal_dry_run; then
   rehearsal_plan "aws rds describe-db-instances --db-instance-identifier ${PREFIX}-pg-restored --query DBInstances[0].[Endpoint.Address,InstanceCreateTime,LatestRestorableTime]"
-  RESTORED_HOST="${PREFIX}-pg-restored.dryrun.us-east-1.rds.amazonaws.com"
+  RESTORED_HOST="${PREFIX}-pg-restored.dryrun.${AWS_REGION:-us-east-1}.rds.amazonaws.com"
 else
   read -r RESTORED_HOST RESTORED_CREATED RESTORED_LATEST <<<"$(rehearsal_aws rds describe-db-instances \
     --db-instance-identifier "${PREFIX}-pg-restored" \
