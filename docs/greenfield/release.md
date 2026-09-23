@@ -42,6 +42,8 @@ From `infra-apply-runbook.md` 1.1, and already done (`.context/FSS-GREENFIELD-AC
 - `arn:aws:iam::326255650484:role/fss-prod-deploy`
 - `arn:aws:iam::326255650484:role/fss-rh-deploy` — **may act only on resources whose name begins `fss-rh`.**
 
+Those two ARNs are the shared account's, and the shared account is the tree's **default**, not its assumption: the account, the region, the state backend and the role ARNs are all parameters. David decided on 22 September 2026 to move the rehearsal and production into two dedicated member accounts under Organizations before the first production release. **`docs/greenfield/accounts.md`** is the checklist he performs by hand, in order — the accounts, the state bootstrap, the OIDC provider and the exact subject, the two roles, the registries, the certificates, the eight empty secret entries, and the GitHub secrets and variables below that change. Nothing in the shared account is deleted by it, and the old worker keeps running there until its own cutover.
+
 That scoping is Appendix G 39 in the cloud rather than only in the plan. `infra/scripts/rehearsal-prefix-guard.sh` checks the same thing from the other side after every rehearsal, and it refuses before making a call rather than waiting for an `AccessDenied` in a log.
 
 **Their policies are in the repository now, and so are the commands that install them.** Until 21 September both were written by hand from prose in the runbook, and the fourth credentialed rehearsal applied with them and reported 25 errors in six classes (8.0d). `infra-apply-runbook.md` **1.1a** has the three commands — render, read, `put-role-policy` — and the read-only `infra/scripts/check-deployment-role.sh <role> <prefix>` to run before any apply. Do that before section 3 and again before section 4; it takes seconds and it answers the whole class.
@@ -87,6 +89,16 @@ And **one more, optional**, which only the registry apply reads:
 | `FSS_REHEARSAL_STATE_KMS_KEY_ARN` | the KMS key the Terraform state bucket is encrypted with, `arn:aws:kms:us-east-1:326255650484:key/…` | `terraform init` runs without `kms_key_id` and the bucket's default encryption applies, which is what the per-run rehearsal root already does. The run prints *whether* the secret was supplied, never its value. |
 
 It is an identifier rather than a credential; it is an environment secret because that is where the other account-specific values live.
+
+And three **repository variables**, all optional. Unset, both workflows behave exactly as they do today; set, they are how a dedicated AWS account states itself (`docs/greenfield/accounts.md` 11).
+
+| Variable | Value | What it does |
+|---|---|---|
+| `FSS_REHEARSAL_ACCOUNT_ID` | the rehearsal account's twelve digits | Cross-checked against the account the workflow's OIDC session actually belongs to; the run fails if they differ. The account the apply uses is always the session's, so this is a second statement of the same fact rather than a source of truth. |
+| `FSS_REHEARSAL_STATE_BUCKET` | the rehearsal account's Terraform state bucket | Cross-checked against `infra/roots/rehearsal-registry/backend.hcl`. Catches an account that moved while the backend file did not, which would otherwise write state into the old account and say nothing. |
+| `FSS_AWS_REGION` | the region, if it is not `us-east-1` | Sets `AWS_REGION` in both rehearsal workflows and `TF_VAR_aws_region` for the plan. |
+
+Neither workflow contains an account id or a state bucket name at all: the account is read from the session, and the bucket and lock table from the root's own `backend.hcl`. `test/release/accountAgnostic.check.ts` is what keeps that true.
 
 And these **two**, which are **optional and should not exist until the cutover is scheduled**:
 

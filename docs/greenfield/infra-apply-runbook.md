@@ -11,15 +11,17 @@ Read section 1 in full before running anything in section 3. The order matters: 
 | Thing | Value |
 |---|---|
 | Terraform | 1.15.8 locally and in CI (`.github/workflows/greenfield-infra.yml`). The roots declare `>= 1.10.0`; the floor is the S3 native state lock. |
-| Region | `us-east-1` |
-| Account | `326255650484` |
-| State bucket | `callie-sourcing-tfstate-326255650484` (already exists; created once by `cloud/scripts/bootstrap-terraform-state.sh`) |
-| Lock table | `callie-sourcing-tflock` (already exists) |
+| Region | `us-east-1` — `var.aws_region`, `FSS_POLICY_REGION`, `FSS_CHECK_ROLE_REGION`, `vars.FSS_AWS_REGION` |
+| Account | `326255650484` — `var.aws_account_id` (`TF_VAR_aws_account_id` or `-var`), `FSS_POLICY_ACCOUNT_ID`, `FSS_CHECK_ROLE_ACCOUNT_ID` |
+| State bucket | `callie-sourcing-tfstate-326255650484` (already exists; created once by `cloud/scripts/bootstrap-terraform-state.sh`) — `infra/roots/<root>/backend.hcl`, `FSS_POLICY_STATE_BUCKET` |
+| Lock table | `callie-sourcing-tflock` (already exists) — `infra/roots/<root>/backend.hcl`, `FSS_POLICY_LOCK_TABLE` |
 | Production state key | `fss/greenfield/production/terraform.tfstate` |
 | Rehearsal state key | `fss/greenfield/rehearsal/<run>/terraform.tfstate` |
 | Rehearsal registry state key | `fss/greenfield/rehearsal-registry/terraform.tfstate` — deliberately outside the per-run space (2.1) |
 
 Neither root provisions, modifies or grants access to the state bucket or the lock table. They are inputs.
+
+**Every value in that table is a parameter, and the values above are its default.** The account, the region, the state bucket, the lock table and the state KMS key are supplied by variable, environment variable or `-backend-config`; nothing under `infra/**/*.tf`, no workflow and no script decides which account an apply is in. That is what lets the rehearsal and production move into dedicated AWS accounts under Organizations, which David decided on 22 September 2026: **`docs/greenfield/accounts.md`** is the per-account checklist, in order, and `test/release/accountAgnostic.check.ts` is what keeps the tree able to follow it. Every command in this runbook can be given another account by exporting the variables named above; run with none, it does exactly what it did before.
 
 Run the offline gate before any apply. It is the same gate CI runs and it needs no credentials:
 
