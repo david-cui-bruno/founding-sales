@@ -52,16 +52,22 @@ case "$ROLE" in
 esac
 
 # The CLI paginates lookup-events itself; --output json returns every page as one document.
-events=$(command "$AWS" cloudtrail lookup-events \
+# It lands in a file, never in an argument: a rehearsal window holds thousands of events and
+# the first real run of this script (23 September) hit the kernel's argument-size limit
+# passing them to Python on the command line.
+work="$(mktemp -d "${TMPDIR:-/tmp}/fss-actions-used.XXXXXX")"
+trap 'rm -rf "$work"' EXIT
+events_file="$work/events.json"
+command "$AWS" cloudtrail lookup-events \
   --start-time "$START" --end-time "$END" \
-  --query 'Events[].CloudTrailEvent' --output json)
+  --query 'Events[].CloudTrailEvent' --output json > "$events_file"
 
-if [ -z "$(printf '%s' "$events" | tr -d '[:space:]')" ]; then
+if [ ! -s "$events_file" ] || [ -z "$(tr -d '[:space:]' < "$events_file")" ]; then
   echo "FAIL: CloudTrail returned nothing for the window. Check the timestamps and the credential." >&2
   exit 1
 fi
 
-FSS_ACTIONS_USED_ROLE="$ROLE" FSS_ACTIONS_USED_WINDOW="$START..$END" python3 - "$events" <<'PY'
+FSS_ACTIONS_USED_ROLE="$ROLE" FSS_ACTIONS_USED_WINDOW="$START..$END" FSS_ACTIONS_USED_FILE="$events_file" python3 - <<'PY'
 import json
 import os
 import sys
@@ -69,7 +75,8 @@ from collections import defaultdict
 
 role = os.environ["FSS_ACTIONS_USED_ROLE"]
 marker = f":assumed-role/{role}/"
-raw = json.loads(sys.argv[1])
+with open(os.environ["FSS_ACTIONS_USED_FILE"], encoding="utf-8") as handle:
+    raw = json.load(handle)
 if not isinstance(raw, list):
     sys.exit("FAIL: the CLI answer was not a list of events")
 

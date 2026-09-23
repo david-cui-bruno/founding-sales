@@ -105,6 +105,25 @@ describe('the CloudTrail export the exact policy is derived from', () => {
     expect(stderr).toContain('refused: secretsmanager:CreateSecret');
   });
 
+  it('takes a real window of thousands of events, which no argument list could carry', () => {
+    // The first real run (23 September 2026) failed with "Argument list too long": the
+    // whole event list had been passed to Python as one argument. The events now travel
+    // through a file. Six thousand events is a plausible create-to-full window.
+    const many: Record<string, unknown>[] = [];
+    for (let i = 0; i < 6000; i += 1) {
+      many.push(byTheRole(i % 2 === 0 ? 'ec2.amazonaws.com' : 'ecs.amazonaws.com', i % 2 === 0 ? 'DescribeVpcs' : 'DescribeTasks', {
+        resources: [{ ARN: `arn:aws:ec2:us-east-1:326255650484:vpc/vpc-${String(i).padStart(17, '0')}` }],
+      }));
+    }
+    const { code, stdout, stderr } = run(['2026-09-23T02:24:00Z', '2026-09-23T06:00:00Z'], stub(many));
+    expect(code, stderr).toBe(0);
+    const report = JSON.parse(stdout) as { events: number; actions: { action: string; count: number; resources: string[] }[] };
+    expect(report.events).toBe(6000);
+    expect(report.actions.map(row => row.action)).toEqual(['ec2:DescribeVpcs', 'ecs:DescribeTasks']);
+    expect(report.actions[0]?.count).toBe(3000);
+    expect(report.actions[0]?.resources.length).toBeLessThanOrEqual(5);
+  });
+
   it('fails rather than reports when the window holds nothing by the role, or nothing at all', () => {
     const nobody = stub([{ eventSource: 'ec2.amazonaws.com', eventName: 'DescribeVpcs', userIdentity: { arn: 'arn:aws:iam::326255650484:user/x' } }]);
     const { code, stderr } = run(['2026-09-22T17:00:00Z', '2026-09-22T21:00:00Z'], nobody);
