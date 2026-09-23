@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -105,6 +105,69 @@ describe('the one-off task log fetch, after the two silent runs of 23 September 
     expect(code).toBe(0);
     expect(output).toContain('no log group or stream prefix was given');
     expect(readFileSync(aws.calls, 'utf8').trim(), 'nothing was fetched').toBe('0');
+  });
+
+  it('the wrapper prints and keeps a FAILED task’s log before it returns the failure', () => {
+    // Run 35876269976 (23 September 2026) printed "container migration exited 21" and
+    // nothing else: the wrapper returned on the verdict before it ever fetched the log.
+    // Every guard the wrapper runs first has a fixture hook, so this drives the whole
+    // path with a recorded ARN (no launch), a stopped task with exit 21, and one log line.
+    const reports = mkdtempSync(join(tmpdir(), 'fss-reports-'));
+    mkdirSync(join(reports, 'tasks'));
+    writeFileSync(join(reports, 'tasks', 'migrate.arn'), `${TASK_ARN}\n`);
+    const digest = `sha256:${'a'.repeat(64)}`;
+    const plan = JSON.stringify({
+      subnet_ids: ['subnet-0a'],
+      security_group_id: 'sg-0a',
+      assign_public_ip: 'ENABLED',
+      inbound_rule_count: 0,
+    });
+    const directory = mkdtempSync(join(tmpdir(), 'fss-task-logs-'));
+    const script = join(directory, 'case.sh');
+    writeFileSync(
+      script,
+      [
+        '#!/usr/bin/env bash',
+        `source ${repositoryPath('infra/scripts/release-common.sh')}`,
+        'set +e',
+        'release_run_task --step migrate --environment rehearsal --prefix fss-rh-x --account 111111111111 --region us-east-1 \\',
+        '  --cluster arn:aws:ecs:us-east-1:111111111111:cluster/fss-rh-x-cluster \\',
+        '  --task-definition arn:aws:ecs:us-east-1:111111111111:task-definition/fss-rh-x-migration:1 \\',
+        `  --container migration --network-plan '${plan}' --image-digest ${digest} \\`,
+        '  --log-group /fss/fss-rh-x/worker --log-stream-prefix migration -- migrate',
+        'echo "wrapper exit $?"',
+        '',
+      ].join('\n'),
+    );
+    chmodSync(script, 0o755);
+    const result = spawnSync('/bin/bash', [script], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        FSS_REHEARSAL_REPORTS: reports,
+        FSS_RELEASE_CALLER_ACCOUNT: '111111111111',
+        FSS_RELEASE_CLUSTER_TAGS: JSON.stringify([{ key: 'Environment', value: 'rehearsal' }]),
+        FSS_RELEASE_TASK_DEFINITION: '',
+        FSS_RELEASE_DESCRIBE_TASKS: JSON.stringify({
+          tasks: [
+            {
+              lastStatus: 'STOPPED',
+              stopCode: 'EssentialContainerExited',
+              stoppedReason: 'Essential container in task exited',
+              containers: [{ name: 'migration', exitCode: 21 }],
+            },
+          ],
+        }),
+        FSS_RELEASE_LOG_EVENTS: JSON.stringify({ events: [{ message: REFUSAL }] }),
+      },
+    });
+    const output = `${result.stdout}${result.stderr}`;
+    expect(output, output).toContain('FAIL: migrate exited 21');
+    expect(output).toContain('wrapper exit 1');
+    // The log came out, after the verdict and before the return.
+    expect(output.indexOf('exited 21')).toBeLessThan(output.indexOf('fss_configuration_refused'));
+    expect(output).toContain('kept in');
+    expect(readFileSync(join(reports, 'tasks', 'migrate.log'), 'utf8').trim()).toBe(REFUSAL);
   });
 
   it('the wrapper keeps every one-off task’s log beside its ARN record unless the caller named a capture', () => {

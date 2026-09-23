@@ -667,10 +667,13 @@ for failure in json.loads(os.environ["FSS_JSON"]).get("failures") or []:
 
   local described
   described="$(release_describe_task "$environment" "$cluster" "$task_arn")"
-  release_report_task "$step" "$described" "$container" || return 1
-
+  # The verdict first, but the log whatever the verdict: a task that failed is the one
+  # whose output matters, and until 23 September 2026 a non-zero exit returned here
+  # before the fetch below ever ran (run 35876269976 printed "exited 21" and nothing else).
+  local verdict=0
+  release_report_task "$step" "$described" "$container" || verdict=1
   release_print_task_logs "$environment" "$log_group" "$log_stream_prefix" "$container" "$task_arn" "$capture"
-  return 0
+  return "$verdict"
 }
 
 # The JSON object a command printed on stdout, out of the captured log lines.

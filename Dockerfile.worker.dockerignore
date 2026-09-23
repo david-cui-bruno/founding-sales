@@ -7,6 +7,7 @@
 *
 
 !package.json
+!certs/rds-global-bundle.pem
 !package-lock.json
 !apps/worker/package.json
 !apps/worker/src

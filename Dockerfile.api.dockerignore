@@ -16,6 +16,7 @@
 *
 
 !package.json
+!certs/rds-global-bundle.pem
 !package-lock.json
 !apps/api/package.json
 !apps/api/src

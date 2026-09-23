@@ -1105,6 +1105,36 @@ nothing, and the wrapper keeps a copy of every one-off task's log beside its ARN
 under `.rehearsal-reports/tasks/`, which the artifact collects before the teardown
 destroys the log group. `test/release/oneOffTaskLogs.check.ts`, with two mutations.
 
+### 8.0k What the third `deploy` attempt proved: the database refuses a plain connection (23 September, morning)
+
+Run 35876269976 (4afdeab9, the first with the 8.0j fix in the worker image) created the
+environment, filled both entries, launched the migration task and stopped at
+`migrate: container migration exited 21` — one code further than before, and this time
+with the container's own lines in the job log and in `tasks/migrate.log`. The tool built
+its configuration, opened the migration connection, and the database refused the
+handshake: `infra/modules/database` sets `rds.force_ssl = 1`, the `pg` driver sends no
+TLS unless `PGSSLMODE` or an `ssl` option says so, and nothing in the tree said so. No
+process had ever reached the real database before this one; the parameter had been in
+the Terraform tests since the module was written, and nothing tied it to the images.
+Had the handshake been accepted, verification would have failed next: Node's bundled
+roots do not include Amazon RDS.
+
+Both images now set `PGSSLMODE=verify-full` and `NODE_EXTRA_CA_CERTS` pointing at AWS's
+public RDS bundle, vendored at `certs/rds-global-bundle.pem` with its provenance in
+`certs/README.md`. Every connection the API, the worker, `fss migrate`, the drill and the
+operations task make is encrypted, the certificate is verified against the RDS
+authorities, and the hostname is checked. `test/release/databaseTls.check.ts` ties the
+parameter, the two Dockerfiles, the two ignore files and the bundle's hash together, and
+two mutations guard it: the image dropping to `no-verify`, and the database ceasing to
+force SSL.
+
+The run also showed that 8.0j's log fetch had not yet earned its keep: `release_run_task`
+returned on the non-zero verdict before it reached the fetch, so a *failed* task — the
+only kind whose output matters — still printed nothing and kept nothing. The verdict is
+now taken first, the log fetched whatever it was, and the failure returned after;
+`oneOffTaskLogs.check.ts` drives the whole wrapper through its fixture hooks with a
+stopped task that exited 21 and asserts the line and the kept copy, with a mutation.
+
 ### 8.1 Still unverified
 
 Nothing in this repository has ever been applied beyond the four steps above, and no rehearsal environment has ever existed. Every command here comes from the AWS documentation, the Terraform schema and the scripts' dry-run output, checked offline. Watch these on the next real run:
