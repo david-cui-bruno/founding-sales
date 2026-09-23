@@ -564,6 +564,74 @@ describe('the journal deny exempts its deployer, and production keeps its postur
     expect(statement, 'the transport deny must apply to the deployer too').not.toContain('administrative_exemption');
   });
 
+  it('splits the reads deny so that seeing the bucket is not reading it', () => {
+    // 23 September 2026: `fss-prod-deploy` created the bucket and was then refused its own
+    // `HeadBucket`, which S3 authorises as `s3:ListBucket`. The AWS provider reads a 403
+    // there as "the bucket is gone", so the next plan dropped `aws_s3_bucket.journal` from
+    // state and proposed to create it again; applying that plan deleted the
+    // server-side-encryption configuration and the ownership controls before the policy
+    // and the object lock refused to go.
+    expect(journal).toContain('Sid       = "DenyObjectReadsFromAnyoneButTheTaskRoles"');
+    expect(journal).toContain('Sid       = "DenyListingFromAnyoneButTheTaskRolesAndTheDeployer"');
+
+    const reads = journal.slice(journal.indexOf('Sid       = "DenyObjectReadsFromAnyoneButTheTaskRoles"'));
+    const objectReads = reads.slice(0, reads.indexOf('Sid       = "DenyListingFromAnyoneButTheTaskRolesAndTheDeployer"'));
+    expect(objectReads).toContain('Action    = ["s3:GetObject", "s3:GetObjectVersion", "s3:ListBucketVersions"]');
+    expect(objectReads, 'a listing action left in the object-reads deny would refuse HeadBucket again').not.toContain(
+      's3:ListBucket"',
+    );
+
+    // Listing is a bucket-level action: `arn:aws:s3:::bucket/*` is not a resource
+    // `s3:ListBucket` is ever evaluated against.
+    const listing = reads.slice(reads.indexOf('Sid       = "DenyListingFromAnyoneButTheTaskRolesAndTheDeployer"'));
+    expect(listing).toContain('Action    = ["s3:ListBucket"]');
+    expect(listing).toContain('Resource  = [aws_s3_bucket.journal.arn]');
+    expect(listing).toContain(
+      'Condition = merge({ ArnNotLike = { "aws:PrincipalArn" = local.reader_principal_patterns } }, local.listing_exemption)',
+    );
+  });
+
+  it('builds one ArnNotEquals for the listing deny out of both lists', () => {
+    // Two exemptions, one condition key. `merge` of two maps that both carry
+    // `ArnNotEquals` keeps the last and drops the other without saying so, so the two
+    // lists are combined before the condition is built.
+    expect(journal).toContain(
+      'listing_deny_exempt_arns = distinct(concat(var.administrative_principal_arns, var.bucket_listing_principal_arns))',
+    );
+    expect(journal).toContain('listing_exemption = length(local.listing_deny_exempt_arns) == 0 ? {} : {');
+    expect(journal).toContain('ArnNotEquals = { "aws:PrincipalArn" = local.listing_deny_exempt_arns }');
+  });
+
+  it('is passed the deployer as a listing principal by both roots, production included', () => {
+    // Not the opt-in that `administrative_principal_arns` is: an environment whose
+    // deployer cannot see its own bucket destroys it by accident, which is what the first
+    // production apply did to the encryption configuration and the ownership controls.
+    for (const root of ['infra/roots/rehearsal/main.tf', 'infra/roots/production/main.tf']) {
+      expect(readRepositoryFile(root)).toContain('journal_listing_principal_arns = [local.deployment_role_arn]');
+      expect(readRepositoryFile(root)).toContain(
+        'deployment_role_arn = "arn:aws:iam::${var.aws_account_id}:role/${var.deployment_role_name}"',
+      );
+    }
+    expect(readRepositoryFile('infra/modules/stack/main.tf')).toContain(
+      'bucket_listing_principal_arns = var.journal_listing_principal_arns',
+    );
+  });
+
+  it('still denies the production deployer every object in the journal', () => {
+    // Listing is not reading, in the bucket policy and in IAM both.
+    const production = render('fss-prod');
+    expect(killedByABlanketDeny(production, 's3:GetObject')).toBeDefined();
+
+    // And the other half of the fix: the bucket policy letting the deployer list is
+    // worth nothing unless IAM allows the action too. `NoDeploymentDataAccess` denies
+    // `s3:GetObject*` and says nothing about listing.
+    expect(allowsFor(production, 's3:ListBucket').length).toBeGreaterThan(0);
+    expect(killedByABlanketDeny(production, 's3:ListBucket')).toBeUndefined();
+    expect(journal).toContain(
+      'Condition = merge({ ArnNotLike = { "aws:PrincipalArn" = local.reader_principal_patterns } }, local.administrative_exemption)',
+    );
+  });
+
   it('is passed the deployment role by the rehearsal root and nothing by production', () => {
     expect(readRepositoryFile('infra/roots/rehearsal/main.tf')).toContain(
       'journal_administrative_principal_arns = [local.deployment_role_arn]',

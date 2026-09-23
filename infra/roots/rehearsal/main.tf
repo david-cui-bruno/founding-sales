@@ -97,6 +97,15 @@ module "stack" {
   # `docs/decisions/g16-the-journal-deny-exempts-its-deployer.md`.
   journal_administrative_principal_arns = [local.deployment_role_arn]
 
+  # And the same role may see the bucket, which is a separate thing from being
+  # exempt from every deny: `HeadBucket` is `s3:ListBucket`, and the provider
+  # reads a refusal there as "the bucket is gone". The rehearsal bucket
+  # `fss-rh-202609211659-suppression-journal-326255650484` was left behind for
+  # the deny above; the production apply of 23 September proved the same deny
+  # also makes a deployer recreate the bucket it already has.
+  # `docs/decisions/g37-the-deployer-may-list-the-journal-but-never-read-it.md`.
+  journal_listing_principal_arns = [local.deployment_role_arn]
+
   alert_emails         = var.alert_emails
   log_retention_days   = var.log_retention_days
   business_time_zone   = var.business_time_zone

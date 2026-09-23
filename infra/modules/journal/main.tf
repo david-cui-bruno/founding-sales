@@ -15,6 +15,12 @@
 # denied to every principal, and PutObject is denied to every principal whose
 # ARN is not one of the named writer roles. Allow statements alone would leave
 # an administrator able to delete history; these denies do not.
+#
+# Reads are denied in two statements rather than one. Object content and the
+# version list are denied to every principal but the task roles; enumerating the
+# bucket's keys is also denied, but exempts the principal the root names as the
+# deployer, because `HeadBucket` is authorised as `s3:ListBucket` and a deployer
+# refused it concludes that the bucket it created does not exist.
 
 locals {
   bucket_name = "${var.name_prefix}-suppression-journal-${var.aws_account_id}"
@@ -134,6 +140,26 @@ locals {
     ArnNotEquals = { "aws:PrincipalArn" = var.administrative_principal_arns }
   }
 
+  # Seeing the bucket is not reading it.
+  #
+  # `HeadBucket` is authorised as `s3:ListBucket`, and the AWS provider reads a
+  # 403 there as "the bucket is gone". On 23 September 2026 the first production
+  # apply created this bucket as `fss-prod-deploy` and was then refused the head
+  # request, so the next plan dropped it from state and proposed to create it
+  # again — deleting the encryption configuration and the ownership controls on
+  # the way past, because no deny covers those. The listing deny below exempts
+  # the deployer; the object-read deny above it does not, so the deployer can
+  # enumerate keys and read nothing.
+  #
+  # One `ArnNotEquals`, not two. The administrative and listing exemptions are
+  # separate lists and the same condition key, so merging two maps would silently
+  # drop whichever came first; they are combined into the one key S3 evaluates.
+  listing_deny_exempt_arns = distinct(concat(var.administrative_principal_arns, var.bucket_listing_principal_arns))
+
+  listing_exemption = length(local.listing_deny_exempt_arns) == 0 ? {} : {
+    ArnNotEquals = { "aws:PrincipalArn" = local.listing_deny_exempt_arns }
+  }
+
   policy_document = {
     Version = "2012-10-17"
     Statement = concat(
@@ -175,12 +201,24 @@ locals {
           Condition = merge({ ArnNotLike = { "aws:PrincipalArn" = local.writer_principal_patterns } }, local.administrative_exemption)
         },
         {
-          Sid       = "DenyReadsFromAnyoneButTheTaskRoles"
+          Sid       = "DenyObjectReadsFromAnyoneButTheTaskRoles"
           Effect    = "Deny"
           Principal = { AWS = ["*"] }
-          Action    = ["s3:GetObject", "s3:GetObjectVersion", "s3:ListBucket", "s3:ListBucketVersions"]
+          Action    = ["s3:GetObject", "s3:GetObjectVersion", "s3:ListBucketVersions"]
           Resource  = local.bucket_resources
           Condition = merge({ ArnNotLike = { "aws:PrincipalArn" = local.reader_principal_patterns } }, local.administrative_exemption)
+        },
+        # Listing is a bucket-level action: `s3:ListBucket` is authorised
+        # against the bucket ARN and never against the object one, which is why
+        # this statement names the bucket alone rather than
+        # `local.bucket_resources`.
+        {
+          Sid       = "DenyListingFromAnyoneButTheTaskRolesAndTheDeployer"
+          Effect    = "Deny"
+          Principal = { AWS = ["*"] }
+          Action    = ["s3:ListBucket"]
+          Resource  = [aws_s3_bucket.journal.arn]
+          Condition = merge({ ArnNotLike = { "aws:PrincipalArn" = local.reader_principal_patterns } }, local.listing_exemption)
         },
         {
           Sid       = "AllowTheTaskRolesToAppendEvents"

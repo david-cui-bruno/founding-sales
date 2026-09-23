@@ -146,3 +146,20 @@ Nothing here has been applied. Specifically:
   what makes the orphan recoverable at all. Read off the policy in `main.tf` and off the
   bucket by `aws s3api get-bucket-policy`, which is the first thing to do before the
   teardown stage is dispatched for that run.
+
+## Addendum, 23 September 2026: the same deny also made the deployer recreate the bucket
+
+The first production apply found the second half of this. `DenyReadsFromAnyoneButTheTaskRoles`
+covered `s3:ListBucket`, which is how S3 authorises `HeadBucket`, so `fss-prod-deploy`
+could not ask whether the bucket it had just created existed — and production names no
+administrative principal, by decision 4 above. The AWS provider reads a 403 on
+`HeadBucket` as "the bucket is gone": it dropped `aws_s3_bucket.journal` from state,
+planned to create it again, and in applying that plan deleted the server-side-encryption
+configuration and the ownership controls, which no deny covers. The deny that made this
+lane's teardown fail closed made the next one fail open.
+
+The reads deny is now two statements, and the listing half exempts the principal each root
+names as its deployer — in production too, unconditionally, because this one is not an
+opt-in. The posture decided here is otherwise unchanged: production exempts nobody from
+deletion, lock weakening, writes or object reads.
+`docs/decisions/g37-the-deployer-may-list-the-journal-but-never-read-it.md`.

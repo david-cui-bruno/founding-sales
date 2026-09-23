@@ -23,9 +23,15 @@
 # entirely, and it is also true of a module that lost the exemption code
 # altogether — in which case the rehearsal would silently go back to leaving a
 # bucket behind and this file would stay green. Closed by running the same root
-# twice: once at its default, where no deny may carry an `ArnNotEquals`, and
-# once with a principal named, where three of the four must. The second run is
-# the positive control for the first.
+# twice: once at its default, where no deny but the listing one may carry an
+# `ArnNotEquals`, and once with a principal named, where every deny but the
+# transport one must. The second run is the positive control for the first.
+#
+# The listing deny is the exception in the first run and it is deliberate (G37):
+# production passes its own deployment role there unconditionally, because
+# `HeadBucket` is `s3:ListBucket` and a deployer refused it concludes the bucket
+# it created is gone. That exemption is asserted to be exactly one role, on the
+# bucket ARN, on that statement and no other.
 
 mock_provider "aws" {
   override_during = apply
@@ -118,9 +124,36 @@ run "production_exempts_nobody_from_the_journal_denies" {
     condition = alltrue([
       for statement in jsondecode(module.stack.journal_policy_json).Statement :
       !can(statement.Condition.ArnNotEquals)
-      if statement.Effect == "Deny"
+      if statement.Effect == "Deny" && statement.Sid != "DenyListingFromAnyoneButTheTaskRolesAndTheDeployer"
     ])
-    error_message = "Production's journal exempts nobody by default. An exemption that appeared here without David setting the variable would be the rehearsal's posture on the production record."
+    error_message = "Production's journal exempts nobody from deletion, writes or object reads by default. An exemption that appeared there without David setting the variable would be the rehearsal's posture on the production record."
+  }
+
+  # The one exemption production does carry, and it is not an opt-in (G37):
+  # `fss-prod-deploy` may see that the bucket exists. The first production apply
+  # created the bucket, was refused its own `HeadBucket` — which is authorised as
+  # `s3:ListBucket` — and the next plan read the 403 as "the bucket is gone",
+  # proposed to create it again, and deleted the encryption configuration and the
+  # ownership controls before the policy and the object lock refused to go.
+  assert {
+    condition = alltrue([
+      for statement in jsondecode(module.stack.journal_policy_json).Statement :
+      statement.Condition.ArnNotEquals["aws:PrincipalArn"] == ["arn:aws:iam::123456789012:role/fss-prod-deploy"]
+      && statement.Resource == ["arn:aws:s3:::mock-bucket"]
+      if statement.Sid == "DenyListingFromAnyoneButTheTaskRolesAndTheDeployer"
+    ])
+    error_message = "The production deployer may list the journal bucket, and only the bucket. A deployer that cannot see its own bucket recreates it."
+  }
+
+  # Listing is not reading. Naming the deployer on the listing deny must move no
+  # object and no version list within its reach.
+  assert {
+    condition = alltrue([
+      for statement in jsondecode(module.stack.journal_policy_json).Statement :
+      !can(statement.Condition.ArnNotEquals) && !contains(statement.Action, "s3:ListBucket")
+      if statement.Sid == "DenyObjectReadsFromAnyoneButTheTaskRoles"
+    ])
+    error_message = "Production's object-read deny exempts nobody, and the listing action is no longer in it."
   }
 
   # Ten years and GOVERNANCE, which is the other half of decision 4.
@@ -149,8 +182,8 @@ run "david_can_opt_in_to_a_production_teardown_by_naming_a_principal" {
       if statement.Effect == "Deny"
       && statement.Sid != "DenyUnencryptedTransport"
       && contains(try(statement.Condition.ArnNotEquals["aws:PrincipalArn"], []), "arn:aws:iam::123456789012:role/fss-prod-deploy")
-    ]) == 3
-    error_message = "With a principal named, the three non-transport denies exempt it. Without this the run above would pass against a module that had lost the exemption entirely."
+    ]) == 4
+    error_message = "With a principal named, the four non-transport denies exempt it: deletion and lock weakening, writes, object reads, and listing, which already exempted the deployer by name. Without this the run above would pass against a module that had lost the exemption entirely."
   }
 
   assert {
