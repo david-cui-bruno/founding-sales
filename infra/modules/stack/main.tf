@@ -151,6 +151,11 @@ module "journal" {
   # are different decisions and only a root gets to make the second one.
   administrative_principal_arns = var.journal_administrative_principal_arns
 
+  # And, in both environments, the principal that created the bucket may see
+  # that it exists: `HeadBucket` is `s3:ListBucket`, and a provider refused it
+  # concludes the bucket is gone.
+  bucket_listing_principal_arns = var.journal_listing_principal_arns
+
   tags = local.tags
 }
 

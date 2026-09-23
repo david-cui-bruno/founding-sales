@@ -404,6 +404,25 @@ variable "journal_administrative_principal_arns" {
   default     = []
 }
 
+variable "journal_listing_principal_arns" {
+  description = <<-EOT
+    IAM role ARNs exempted from the suppression journal's *listing* deny alone,
+    so that the principal which created the bucket can see that it exists.
+    Both roots pass their own deployment role, production included.
+
+    `HeadBucket` is authorised as `s3:ListBucket` and the AWS provider reads a
+    403 there as "the bucket is gone". The first production apply, on 23
+    September 2026, created the bucket as `fss-prod-deploy` and was refused its
+    own head request; the next plan dropped it from state, proposed to create it
+    again, and deleted the encryption configuration and the ownership controls
+    before the policy and the object lock refused. Listing only: an exemption
+    here reads no object and no version list.
+    `docs/decisions/g37-the-deployer-may-list-the-journal-but-never-read-it.md`.
+  EOT
+  type        = list(string)
+  default     = []
+}
+
 variable "alert_emails" {
   description = "Addresses that receive alerts, delivered by SNS independently of any Gmail grant."
   type        = list(string)

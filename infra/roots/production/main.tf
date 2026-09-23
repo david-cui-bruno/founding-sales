@@ -25,6 +25,12 @@ locals {
   # audience is passed to the stack whether or not the topic is created.
   push_endpoint = "https://${var.api_hostname}${var.gmail_push_path}"
   push_audience = "https://${var.api_hostname}${var.gmail_push_path}"
+
+  # The role this apply acts as: the same expression the provider's
+  # `assume_role` block builds, and the same ARN `aws:PrincipalArn` carries for
+  # an assumed-role session of it, which is why the journal's listing exemption
+  # can be an exact `ArnNotEquals` rather than a pattern.
+  deployment_role_arn = "arn:aws:iam::${var.aws_account_id}:role/${var.deployment_role_name}"
 }
 
 module "pubsub" {
@@ -97,6 +103,17 @@ module "stack" {
   # of the account root unless he opts in by setting the variable. The rehearsal
   # root passes its deployment role here and this one passes his list.
   journal_administrative_principal_arns = var.journal_administrative_principal_arns
+
+  # Not the same decision, and not an opt-in. The deployer may *see* the bucket
+  # it created: `HeadBucket` is `s3:ListBucket`, the AWS provider reads the 403
+  # the deny returned as "the bucket is gone", and the first production apply
+  # (23 September 2026) therefore dropped the bucket from state, planned to
+  # create it again, and deleted its encryption configuration and ownership
+  # controls before the policy and the object lock refused to go. Listing is not
+  # reading: `s3:GetObject*` stays denied to this role by the bucket policy and
+  # by `infra/policies/deployment-role-policy.json.tftpl` both.
+  # `docs/decisions/g37-the-deployer-may-list-the-journal-but-never-read-it.md`.
+  journal_listing_principal_arns = [local.deployment_role_arn]
 
   alert_emails         = var.alert_emails
   log_retention_days   = 90

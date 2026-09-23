@@ -169,6 +169,57 @@ run "the_policy_denies_deletion_and_admits_only_the_named_writers" {
     error_message = "The worker must be able to read the journal to replay suppressions after a restore."
   }
 
+  # Reads are two statements, not one (G37). Content and the version list are
+  # denied to everyone but the task roles; enumerating keys is denied in its own
+  # statement so the deployer can be let through that one and no other.
+  assert {
+    condition = length([
+      for statement in jsondecode(output.policy_json).Statement :
+      statement if statement.Sid == "DenyObjectReadsFromAnyoneButTheTaskRoles" && statement.Effect == "Deny" && contains(statement.Principal.AWS, "*")
+    ]) == 1
+    error_message = "Object content and the version list must be denied to every principal but the named readers."
+  }
+
+  assert {
+    condition = length([
+      for statement in jsondecode(output.policy_json).Statement :
+      statement if statement.Sid == "DenyListingFromAnyoneButTheTaskRolesAndTheDeployer" && statement.Effect == "Deny" && contains(statement.Principal.AWS, "*")
+    ]) == 1
+    error_message = "Listing must be denied in a statement of its own; it is the one a deployer is exempted from."
+  }
+
+  # The whole of the split. `s3:ListBucket` staying in the object-reads deny is
+  # the 23 September shape: the deployer would be refused `HeadBucket` whatever
+  # the listing statement said, because a deny anywhere is final.
+  assert {
+    condition = alltrue([
+      for statement in jsondecode(output.policy_json).Statement :
+      !contains(statement.Action, "s3:ListBucket")
+      if statement.Sid == "DenyObjectReadsFromAnyoneButTheTaskRoles"
+    ])
+    error_message = "s3:ListBucket must not appear in the object-reads deny; the deployer's exemption from the listing deny would count for nothing."
+  }
+
+  assert {
+    condition = alltrue([
+      for statement in jsondecode(output.policy_json).Statement :
+      contains(statement.Action, "s3:GetObject") && contains(statement.Action, "s3:GetObjectVersion") && contains(statement.Action, "s3:ListBucketVersions")
+      if statement.Sid == "DenyObjectReadsFromAnyoneButTheTaskRoles"
+    ])
+    error_message = "Object content, object versions and the version list stay denied to everyone but the task roles."
+  }
+
+  # Listing is a bucket-level action: `arn:aws:s3:::bucket/*` is not a resource
+  # `s3:ListBucket` is ever evaluated against.
+  assert {
+    condition = alltrue([
+      for statement in jsondecode(output.policy_json).Statement :
+      statement.Action == ["s3:ListBucket"] && statement.Resource == ["arn:aws:s3:::fss-test-suppression-journal-123456789012"]
+      if statement.Sid == "DenyListingFromAnyoneButTheTaskRolesAndTheDeployer"
+    ])
+    error_message = "The listing deny covers s3:ListBucket on the bucket ARN and nothing else."
+  }
+
   assert {
     condition = length([
       for statement in jsondecode(output.policy_json).Statement :
@@ -216,8 +267,8 @@ run "an_empty_administrative_list_leaves_every_deny_as_it_was" {
     condition = length([
       for statement in jsondecode(output.policy_json).Statement :
       statement if can(statement.Condition.ArnNotLike["aws:PrincipalArn"])
-    ]) == 2
-    error_message = "The write and read denies are still scoped by the writer and reader patterns."
+    ]) == 3
+    error_message = "The write, object-read and listing denies are still scoped by the writer and reader patterns."
   }
 }
 
@@ -235,8 +286,8 @@ run "a_named_administrator_is_exempted_from_every_deny_but_the_transport_one" {
       if statement.Effect == "Deny"
       && statement.Sid != "DenyUnencryptedTransport"
       && contains(try(statement.Condition.ArnNotEquals["aws:PrincipalArn"], []), "arn:aws:iam::123456789012:role/fss-test-deploy")
-    ]) == 3
-    error_message = "All three non-transport denies must exempt the named administrator: deletion and lock weakening, writes, and reads. Emptying a bucket you cannot then delete is where the fourth credentialed rehearsal stopped."
+    ]) == 4
+    error_message = "All four non-transport denies must exempt the named administrator: deletion and lock weakening, writes, object reads, and listing. Emptying a bucket you cannot then delete is where the fourth credentialed rehearsal stopped."
   }
 
   # Merged, not replaced. Conditions inside one statement are conjunctive, so a
@@ -247,7 +298,7 @@ run "a_named_administrator_is_exempted_from_every_deny_but_the_transport_one" {
     condition = alltrue([
       for statement in jsondecode(output.policy_json).Statement :
       can(statement.Condition.ArnNotLike["aws:PrincipalArn"]) && can(statement.Condition.ArnNotEquals["aws:PrincipalArn"])
-      if statement.Sid == "DenyWritesFromAnyoneButTheTaskRoles" || statement.Sid == "DenyReadsFromAnyoneButTheTaskRoles"
+      if statement.Sid == "DenyWritesFromAnyoneButTheTaskRoles" || statement.Sid == "DenyObjectReadsFromAnyoneButTheTaskRoles"
     ])
     error_message = "The exemption is merged into each statement's own condition, never in place of it."
   }
@@ -295,4 +346,147 @@ run "a_bare_role_name_is_refused" {
   }
 
   expect_failures = [var.administrative_principal_arns]
+}
+
+# The listing exemption (G37).
+#
+# `bucket_listing_principal_arns` is how the bucket's own deployer gets through
+# the one deny that stopped the first production apply. `HeadBucket` is
+# authorised as `s3:ListBucket`; the provider read the 403 as "the bucket is
+# gone", dropped `aws_s3_bucket.journal` from state, planned to create it again
+# and — applying that plan — deleted the encryption configuration and the
+# ownership controls before the policy and the object lock refused to go.
+#
+# ## The vacuous-pass trap
+#
+# An exemption asserted only in its non-empty form would pass against a module
+# that exempted the deployer always, which is not a posture either root asked
+# for. An exemption asserted only on the listing deny's condition would pass
+# against a module that had also let the deployer read objects, which is the
+# thing this split exists to prevent. And asserting each exemption separately
+# would pass against the map merge that silently drops one of two `ArnNotEquals`
+# keys — the bug this shape was written to avoid. Closed by running the variable
+# alone, running it beside the administrative one with a different ARN and
+# counting the combined list, running it with the same ARN and requiring one
+# entry, and requiring the object-read deny to stay un-exempted in the first
+# case.
+run "a_named_listing_principal_may_enumerate_the_bucket_and_read_nothing" {
+  command = apply
+
+  variables {
+    bucket_listing_principal_arns = ["arn:aws:iam::123456789012:role/fss-test-deploy"]
+  }
+
+  assert {
+    condition = alltrue([
+      for statement in jsondecode(output.policy_json).Statement :
+      contains(try(statement.Condition.ArnNotEquals["aws:PrincipalArn"], []), "arn:aws:iam::123456789012:role/fss-test-deploy")
+      if statement.Sid == "DenyListingFromAnyoneButTheTaskRolesAndTheDeployer"
+    ])
+    error_message = "The listing deny must exempt the principal the root named, or the deployer cannot HeadBucket the bucket it created."
+  }
+
+  # Merged, not replaced: a deny carrying both keys fires only for a principal
+  # that is neither a reader nor the deployer. A replacement would have let
+  # anyone who is not the deployer list the journal.
+  assert {
+    condition = alltrue([
+      for statement in jsondecode(output.policy_json).Statement :
+      can(statement.Condition.ArnNotLike["aws:PrincipalArn"]) && can(statement.Condition.ArnNotEquals["aws:PrincipalArn"])
+      if statement.Sid == "DenyListingFromAnyoneButTheTaskRolesAndTheDeployer"
+    ])
+    error_message = "The listing exemption is merged into the statement's own reader condition, never in place of it."
+  }
+
+  # Listing only. Naming a principal here must not move one object, one object
+  # version or the version list within its reach.
+  assert {
+    condition = length([
+      for statement in jsondecode(output.policy_json).Statement :
+      statement if statement.Effect == "Deny" && can(statement.Condition.ArnNotEquals)
+    ]) == 1
+    error_message = "Only the listing deny may carry an exemption when only the listing variable is set. Deletion, writes and object reads stay denied to the deployer."
+  }
+
+  assert {
+    condition = alltrue([
+      for statement in jsondecode(output.policy_json).Statement :
+      !can(statement.Condition.ArnNotEquals)
+      if statement.Sid == "DenyObjectReadsFromAnyoneButTheTaskRoles"
+    ])
+    error_message = "A deployer that may list the bucket still may not read a suppression event out of it."
+  }
+}
+
+run "both_exemptions_meet_in_one_arnnotequals_list" {
+  command = apply
+
+  variables {
+    administrative_principal_arns = ["arn:aws:iam::123456789012:role/fss-test-admin"]
+    bucket_listing_principal_arns = ["arn:aws:iam::123456789012:role/fss-test-deploy"]
+  }
+
+  # Two lists, one condition key. Merging two maps would keep whichever came
+  # last and drop the other exemption without saying so.
+  assert {
+    condition = alltrue([
+      for statement in jsondecode(output.policy_json).Statement :
+      length(statement.Condition.ArnNotEquals["aws:PrincipalArn"]) == 2
+      && contains(statement.Condition.ArnNotEquals["aws:PrincipalArn"], "arn:aws:iam::123456789012:role/fss-test-admin")
+      && contains(statement.Condition.ArnNotEquals["aws:PrincipalArn"], "arn:aws:iam::123456789012:role/fss-test-deploy")
+      if statement.Sid == "DenyListingFromAnyoneButTheTaskRolesAndTheDeployer"
+    ])
+    error_message = "With both variables set the listing deny must exempt both principals from one ArnNotEquals list."
+  }
+
+  # And the listing principal gets no further than listing: the object-read deny
+  # carries the administrator alone.
+  assert {
+    condition = alltrue([
+      for statement in jsondecode(output.policy_json).Statement :
+      statement.Condition.ArnNotEquals["aws:PrincipalArn"] == ["arn:aws:iam::123456789012:role/fss-test-admin"]
+      if statement.Sid == "DenyObjectReadsFromAnyoneButTheTaskRoles"
+    ])
+    error_message = "The object-read deny exempts the administrator the root named and nobody else."
+  }
+}
+
+run "one_role_named_twice_is_exempted_once" {
+  command = apply
+
+  # What both roots do: the deployment role is the listing principal, and in a
+  # rehearsal it is the administrative principal as well.
+  variables {
+    administrative_principal_arns = ["arn:aws:iam::123456789012:role/fss-test-deploy"]
+    bucket_listing_principal_arns = ["arn:aws:iam::123456789012:role/fss-test-deploy"]
+  }
+
+  assert {
+    condition = alltrue([
+      for statement in jsondecode(output.policy_json).Statement :
+      statement.Condition.ArnNotEquals["aws:PrincipalArn"] == ["arn:aws:iam::123456789012:role/fss-test-deploy"]
+      if statement.Sid == "DenyListingFromAnyoneButTheTaskRolesAndTheDeployer"
+    ])
+    error_message = "A role named by both variables belongs in the condition once."
+  }
+}
+
+run "a_listing_principal_that_is_not_an_exact_role_arn_is_refused" {
+  command = plan
+
+  variables {
+    bucket_listing_principal_arns = ["arn:aws:iam::123456789012:role/*"]
+  }
+
+  expect_failures = [var.bucket_listing_principal_arns]
+}
+
+run "a_bare_listing_role_name_is_refused" {
+  command = plan
+
+  variables {
+    bucket_listing_principal_arns = ["fss-test-deploy"]
+  }
+
+  expect_failures = [var.bucket_listing_principal_arns]
 }

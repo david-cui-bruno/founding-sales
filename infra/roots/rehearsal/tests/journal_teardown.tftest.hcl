@@ -39,6 +39,13 @@
 # exempting statements is compared with the count of non-transport denies so a
 # statement that quietly stopped being a `Deny` cannot make the first assertion
 # true by disappearing.
+
+# Since G37 the reads deny is two statements, and the second of them — listing —
+# is the one the rehearsal root exempts twice over: once as its administrator
+# and once as the principal that may see the bucket. A rehearsal is where the
+# recreate-and-strip failure of 23 September would have been found first, had
+# the run that left `fss-rh-202609211659-suppression-journal-326255650484`
+# behind ever been planned a second time.
 #
 # The other two halves of this deliverable are elsewhere, because the rehearsal
 # root passes the exemption as a literal and has no variable a run block could
@@ -145,8 +152,20 @@ run "every_deny_but_the_transport_one_exempts_this_runs_deployment_role" {
     condition = length([
       for statement in jsondecode(module.stack.journal_policy_json).Statement :
       statement if statement.Effect == "Deny" && statement.Sid != "DenyUnencryptedTransport"
-    ]) == 3
-    error_message = "The journal has three non-transport denies — deletion and lock weakening, writes, reads — and each of them has to be exempted by name."
+    ]) == 4
+    error_message = "The journal has four non-transport denies — deletion and lock weakening, writes, object reads, listing — and each of them has to be exempted by name."
+  }
+
+  # The rehearsal names the same role twice, as its administrator and as the
+  # principal that may see the bucket, and one role belongs in a condition once
+  # (G37). A second `ArnNotEquals` key would have dropped one of the two.
+  assert {
+    condition = alltrue([
+      for statement in jsondecode(module.stack.journal_policy_json).Statement :
+      statement.Condition.ArnNotEquals["aws:PrincipalArn"] == ["arn:aws:iam::123456789012:role/fss-rh-deploy"]
+      if statement.Sid == "DenyListingFromAnyoneButTheTaskRolesAndTheDeployer"
+    ])
+    error_message = "The listing deny exempts this run's deployment role, once."
   }
 
   # The deny that must never be exempted. Plain HTTP is refused to everybody,

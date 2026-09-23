@@ -1181,6 +1181,62 @@ fill is a failure rather than a silent gap. Section 4.1 says every entry first; 
 now about changing a value. `test/release/secretEntriesFilled.check.ts` ties the stack's
 list, the workflow step and the two sections together, with a mutation.
 
+### 8.0n What the first production apply proved: the deployer could not see its journal (23 September, evening)
+
+The first apply against `fss-prod` ran twice, and the second run is the one with a
+finding in it.
+
+**Run 1** created 134 of 138 resources and stopped on something unrelated to AWS
+entirely: the Pub/Sub push subscription could not be given its identity, because
+`constraints/iam.allowedPolicyMemberDomains` on the Google organisation refuses
+`gmail-api-push@system.gserviceaccount.com` — a member outside the allowed domains. A
+project-level override on `callie-fss` was set so the binding could be made, and it is to
+be removed once the subscription exists; the organisation policy is the right default and
+this project is the only exception it needs. Nothing about the journal is involved and
+nothing in this repository could have planned around it.
+
+**Run 2** is the finding. The plan proposed to create the suppression-journal bucket that
+run 1 had already created, and to replace every resource hanging off it. CloudTrail names
+the creator: `arn:aws:sts::…:assumed-role/fss-prod-deploy/fss-prod-terraform`,
+`CreateBucket` at 17:36:12Z. What happened in between is that the bucket's own policy
+denied `s3:ListBucket` to `Principal *` with no exemption in production —
+**`HeadBucket` is authorised as `s3:ListBucket`** — so the role that created the bucket
+was refused when it asked whether the bucket existed, and the AWS provider reads a 403 on
+`HeadBucket` as "the bucket is gone". It removed `aws_s3_bucket.journal` from state and
+planned a create.
+
+Applying that plan cost two resources. The deletions it attempted were refused where
+`DenyAnyDeletionOrLockWeakening` covers them — the bucket policy and the object-lock
+configuration both survived, which is the deny doing its job — and went through where
+nothing covers them: the **server-side-encryption configuration** and the **ownership
+controls** were deleted. A deny list protects what it lists.
+
+The same cause explains `fss-rh-202609211659-suppression-journal-326255650484`, the
+rehearsal bucket left standing on 21 September, which was created before the rehearsal
+root passed any exemption at all (8.0d).
+
+**The repair, in order.** The account administrator replaced the live bucket policy with
+`put-bucket-policy`, dropping `s3:ListBucket` from the reads deny — a bucket policy's
+`Deny` on `Principal *` binds every principal in the account but not the account root,
+and `s3:PutBucketPolicy` is not in the deny list, which is what makes a bucket in this
+state recoverable at all. Then `terraform import` brought `module.stack.module.journal.aws_s3_bucket.journal`
+back into state, run under the deploy role so the import reads the bucket the way the
+apply will. Then `plan` and `apply` at the fixed commit, which restores the encryption
+configuration and the ownership controls and writes the two-statement policy.
+
+**What the fix is.** `infra/modules/journal` now denies object reads and listing in two
+statements. `DenyObjectReadsFromAnyoneButTheTaskRoles` keeps `s3:GetObject`,
+`s3:GetObjectVersion` and `s3:ListBucketVersions`, exempting only an administrative
+principal the root names — nobody, in production.
+`DenyListingFromAnyoneButTheTaskRolesAndTheDeployer` covers `s3:ListBucket` on the bucket
+ARN alone and exempts the principal the root passes as
+`journal_listing_principal_arns`, which **both** roots set to their own deployment role
+and production sets unconditionally: an environment whose deployer cannot see its bucket
+recreates it. Listing is not reading — the deployer may enumerate keys and is denied every
+object by the bucket policy and by `NoDeploymentDataAccess` in its own IAM policy.
+`docs/decisions/g37-the-deployer-may-list-the-journal-but-never-read-it.md`, with the
+module test, both roots' teardown tests, the release check and a mutation.
+
 ### 8.1 Still unverified
 
 Nothing in this repository has ever been applied beyond the four steps above, and no rehearsal environment has ever existed. Every command here comes from the AWS documentation, the Terraform schema and the scripts' dry-run output, checked offline. Watch these on the next real run:

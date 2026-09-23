@@ -78,6 +78,41 @@ variable "administrative_principal_arns" {
   }
 }
 
+variable "bucket_listing_principal_arns" {
+  description = <<-EOT
+    Principals exempted from the *listing* deny alone, so that the principal
+    which created the bucket can see that it still exists. `HeadBucket` is
+    authorised as `s3:ListBucket`, and the AWS provider reads a 403 there as
+    "the bucket is gone": on 23 September 2026 the first production apply
+    created this bucket as `fss-prod-deploy` and was then refused its own
+    `HeadBucket`, so the next plan dropped `aws_s3_bucket.journal` from state,
+    proposed to create it again, and in applying that plan deleted the
+    server-side-encryption configuration and the ownership controls before the
+    policy and the object lock refused to go. A deployer that cannot see its own
+    bucket recreates it and strips whatever the deny does not cover.
+
+    Listing, never content. This exemption is merged into
+    `DenyListingFromAnyoneButTheTaskRolesAndTheDeployer` and into nothing else,
+    so a principal named here may enumerate keys and still read no object, no
+    object version and no version list. Both roots pass their own deployment
+    role, production included: unlike `administrative_principal_arns` this is
+    not an opt-in, because an environment whose deployer cannot see its bucket
+    destroys it by accident.
+    `docs/decisions/g37-the-deployer-may-list-the-journal-but-never-read-it.md`.
+
+    ARNs rather than names, and role ARNs rather than session ARNs:
+    `aws:PrincipalArn` carries the *role* ARN for an assumed-role session, which
+    is why the condition is `ArnNotEquals` on an exact ARN and not a pattern.
+  EOT
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for arn in var.bucket_listing_principal_arns : can(regex("^arn:aws[a-z0-9-]*:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_-]+$", arn))])
+    error_message = "A listing principal is an exact IAM role ARN. A wildcard or a bare role name here would let more than the deployer enumerate suppression events."
+  }
+}
+
 variable "object_lock_mode" {
   description = "GOVERNANCE or COMPLIANCE. COMPLIANCE cannot be shortened or removed by anyone, including the account root."
   type        = string
