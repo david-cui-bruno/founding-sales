@@ -139,7 +139,11 @@ concurrency:
 
 env:
   TERRAFORM_VERSION: '1.15.8'
-  AWS_REGION: us-east-1
+  # A per-account value, so it is a repository variable with the region this tree
+  # started in as its default assignment. The account is not named anywhere in this
+  # file at all: the rehearsal job reads it from the session it verified.
+  # `docs/greenfield/accounts.md`.
+  AWS_REGION: ${{ vars.FSS_AWS_REGION || 'us-east-1' }}
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -617,6 +621,31 @@ jobs:
           # session of `fss-rh-deploy` — a user, another role, or a role whose name
           # merely starts the same way.
           infra/scripts/rehearsal-caller-identity.sh fss-rh-deploy
+
+      - name: The account this rehearsal is in, from the session that was just verified
+        env:
+          DECLARED_ACCOUNT: ${{ vars.FSS_REHEARSAL_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          # No account id is written in this file. `infra/roots/rehearsal` takes the
+          # account as a variable — `allowed_account_ids` and the deployment role ARN
+          # are both built from it — and the account this run is in is the account the
+          # session verified above belongs to. So moving the rehearsal into its own
+          # AWS account is a change to GitHub settings and to
+          # `infra/roots/rehearsal/backend.hcl`, never to this workflow.
+          #
+          # `vars.FSS_REHEARSAL_ACCOUNT_ID`, when the repository sets it, is a second
+          # statement of the same fact, and the two must agree: an environment pointed
+          # at the wrong account is a configuration mistake no plan would catch.
+          # `docs/greenfield/accounts.md`.
+          account="$(aws sts get-caller-identity --query Account --output text)"
+          echo "the session belongs to account ${account}"
+          if [ -n "${DECLARED_ACCOUNT:-}" ] && [ "${DECLARED_ACCOUNT}" != "${account}" ]; then
+            echo "FAIL: the rehearsal environment declares account ${DECLARED_ACCOUNT} and this session is in ${account}" >&2
+            exit 1
+          fi
+          echo "TF_VAR_aws_account_id=${account}" >> "$GITHUB_ENV"
+          echo "TF_VAR_aws_region=${AWS_REGION}" >> "$GITHUB_ENV"
 
       - name: Record the production inventory before anything is created
         run: infra/scripts/rehearsal-prefix-guard.sh "${{ steps.prefix.outputs.prefix }}" before

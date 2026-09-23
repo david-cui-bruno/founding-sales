@@ -56,13 +56,19 @@ concurrency:
 
 env:
   TERRAFORM_VERSION: '1.15.8'
-  AWS_REGION: us-east-1
-  # The backend the runbook names (section 0). Public identifiers, all three of them;
-  # the state key is deliberately outside the per-run space `fss/greenfield/rehearsal/`,
-  # because `registry` is a legal run suffix and a run that collided with this state
-  # would destroy the durable repositories on teardown.
-  STATE_BUCKET: callie-sourcing-tfstate-326255650484
-  STATE_LOCK_TABLE: callie-sourcing-tflock
+  # Region and account are per-account values, so neither is a literal here. The
+  # region comes from a repository variable with the region this tree started in as
+  # its default assignment; the account is read from the session this job verified
+  # (and cross-checked against `vars.FSS_REHEARSAL_ACCOUNT_ID` when that is set), so
+  # moving the rehearsal into its own AWS account changes GitHub settings and
+  # `infra/roots/rehearsal-registry/backend.hcl`, never this file.
+  # `docs/greenfield/accounts.md`.
+  AWS_REGION: ${{ vars.FSS_AWS_REGION || 'us-east-1' }}
+  # The state key is deliberately outside the per-run space
+  # `fss/greenfield/rehearsal/`, because `registry` is a legal run suffix and a run
+  # that collided with this state would destroy the durable repositories on
+  # teardown. It names a root, not an account, so it is the one backend value that
+  # is the same everywhere and the only one this file states.
   STATE_KEY: fss/greenfield/rehearsal-registry/terraform.tfstate
 
 jobs:
@@ -133,9 +139,39 @@ jobs:
           # anything that is not an assumed-role session of the role named.
           infra/scripts/rehearsal-caller-identity.sh fss-rh-deploy
 
+      - name: The account this apply is in, and the backend that belongs to it
+        env:
+          DECLARED_ACCOUNT: ${{ vars.FSS_REHEARSAL_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          # No account id is written in this file. The account is the one the verified
+          # session belongs to; `vars.FSS_REHEARSAL_ACCOUNT_ID`, when the repository
+          # sets it, is a second statement of the same fact and the two must agree —
+          # a rehearsal environment pointed at the wrong account is a configuration
+          # mistake no plan would catch. `docs/greenfield/accounts.md`.
+          account="$(aws sts get-caller-identity --query Account --output text)"
+          echo "the session belongs to account ${account}"
+          if [ -n "${DECLARED_ACCOUNT:-}" ] && [ "${DECLARED_ACCOUNT}" != "${account}" ]; then
+            echo "FAIL: the rehearsal environment declares account ${DECLARED_ACCOUNT} and this session is in ${account}" >&2
+            exit 1
+          fi
+          # The root takes the account and the region as variables, so the provider's
+          # allowed_account_ids and the role ARN it builds follow the account rather
+          # than a default written into Terraform.
+          echo "TF_VAR_aws_account_id=${account}" >> "$GITHUB_ENV"
+          echo "TF_VAR_aws_region=${AWS_REGION}" >> "$GITHUB_ENV"
+          # The bucket and the lock table are `backend.hcl`'s, because that file is
+          # the per-account backend file and having two copies of an account-specific
+          # value is how they come to disagree.
+          {
+            echo "STATE_BUCKET=$(grep -E '^bucket ' infra/roots/rehearsal-registry/backend.hcl | cut -d'"' -f2)"
+            echo "STATE_LOCK_TABLE=$(grep -E '^dynamodb_table ' infra/roots/rehearsal-registry/backend.hcl | cut -d'"' -f2)"
+          } >> "$GITHUB_ENV"
+
       - name: Initialize the registry backend
         env:
           FSS_REHEARSAL_STATE_KMS_KEY_ARN: ${{ secrets.FSS_REHEARSAL_STATE_KMS_KEY_ARN }}
+          DECLARED_STATE_BUCKET: ${{ vars.FSS_REHEARSAL_STATE_BUCKET }}
         run: |
           set -euo pipefail
           # `backend.hcl` carries the bucket, the key, the region, the lock table and
@@ -152,12 +188,26 @@ jobs:
             echo "state encryption: no FSS_REHEARSAL_STATE_KMS_KEY_ARN secret, so the bucket's default encryption applies"
             terraform -chdir=infra/roots/rehearsal-registry init -input=false -backend-config=backend.hcl
           fi
-          # The three names the runbook pins, asserted against the file rather than
-          # trusted: an init that silently picked up another key would put the durable
-          # repositories inside a rehearsal run's state space.
-          grep -qF "bucket         = \"${STATE_BUCKET}\"" infra/roots/rehearsal-registry/backend.hcl
+          # The state key is the one backend value this workflow states, because it
+          # names a root rather than an account, and it is what keeps the durable
+          # repositories out of a rehearsal run's state space. Asserted against the
+          # file rather than trusted: an init that silently picked up another key
+          # would put them inside it.
           grep -qF "key            = \"${STATE_KEY}\"" infra/roots/rehearsal-registry/backend.hcl
-          grep -qF "dynamodb_table = \"${STATE_LOCK_TABLE}\"" infra/roots/rehearsal-registry/backend.hcl
+          # The bucket and the lock table are the account's, read out of the same file
+          # in the step above. A file that lost one would init against the caller's
+          # default backend, so neither may be empty.
+          [ -n "${STATE_BUCKET}" ] || { echo "FAIL: backend.hcl names no state bucket" >&2; exit 1; }
+          [ -n "${STATE_LOCK_TABLE}" ] || { echo "FAIL: backend.hcl names no lock table" >&2; exit 1; }
+          # And when the repository declares which bucket this environment's state
+          # lives in, the file must be that one: a rehearsal moved to its own account
+          # whose backend.hcl was never updated would write its state into the old
+          # account and be told nothing. `docs/greenfield/accounts.md`.
+          if [ -n "${DECLARED_STATE_BUCKET:-}" ] && [ "${DECLARED_STATE_BUCKET}" != "${STATE_BUCKET}" ]; then
+            echo "FAIL: the rehearsal environment declares state bucket ${DECLARED_STATE_BUCKET} and backend.hcl names ${STATE_BUCKET}" >&2
+            exit 1
+          fi
+          echo "state: s3://${STATE_BUCKET}/${STATE_KEY}, lock table ${STATE_LOCK_TABLE}"
 
       - name: Plan
         run: |
