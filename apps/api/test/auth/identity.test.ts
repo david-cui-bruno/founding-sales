@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { sessionGrantSchema } from '@fss/contracts';
+import { PROVISIONAL_GOOGLE_SUB_PREFIX, sessionGrantSchema } from '@fss/contracts';
 import {
   authenticate,
   canonicalJson,
@@ -594,5 +594,115 @@ describe('the routes', () => {
     // `/firms` was this example until lane G3a mounted it. An unmounted path is the
     // point; a mounted one now answers 401, which is a different (and correct) thing.
     expect(await route('GET', '/nothing-mounted-here', options())).toMatchObject({ status: 404 });
+  });
+});
+
+/**
+ * The bootstrapped admin's first sign-in (lane g39).
+ *
+ * `fss admin workspace bootstrap` writes the first `users` row before that person has
+ * ever presented an id token, with `google_sub` set to the sentinel prefix and the
+ * e-mail after it, because the real `sub` is Google's to mint. This is the other half:
+ * the first successful sign-in with that address replaces the sentinel with the real
+ * `sub`, and the membership check the operator already wrote then passes.
+ *
+ * ## The vacuous-pass trap
+ *
+ * "The sign-in succeeded" proves nothing: it would also succeed by creating a *second*
+ * `users` row and leaving the provisional one — and the membership hangs off the
+ * provisional row's id, so that sign-in would then be refused `membership_required`
+ * for ever while looking, from outside, like a person who simply has no access. So
+ * every case counts the rows for the address and asserts which id the grant carries.
+ * The two negative cases close the other direction: a sign-in by somebody else must
+ * not consume a pending row, and an address that already has a real account must not
+ * have it overwritten — which is the whole of the `NOT EXISTS` guard.
+ */
+describe('a provisional admin row is adopted at first sign-in', () => {
+  async function provision(
+    workspace: SeededWorkspace,
+    email: string,
+    options: { readonly withMembership?: boolean } = {},
+  ): Promise<string> {
+    const { rows } = await fixture.db.query<{ id: string }>(
+      'INSERT INTO users (google_sub, email, display_name) VALUES ($1, $2, $3) RETURNING id',
+      [`${PROVISIONAL_GOOGLE_SUB_PREFIX}${email}`, email, email.split('@')[0] ?? 'admin'],
+    );
+    const userId = rows[0]?.id ?? '';
+    if (options.withMembership !== false) {
+      await fixture.db.query(
+        "INSERT INTO workspace_memberships (workspace_id, user_id, role) VALUES ($1, $2, 'admin')",
+        [workspace.workspaceId, userId],
+      );
+    }
+    return userId;
+  }
+
+  const subsFor = async (email: string): Promise<readonly string[]> => {
+    const { rows } = await fixture.db.query<{ google_sub: string }>(
+      'SELECT google_sub FROM users WHERE email = $1 ORDER BY created_at, id',
+      [email],
+    );
+    return rows.map(row => row.google_sub);
+  };
+
+  it('replaces the sentinel with the real sub, keeps one row, and the membership then passes', async () => {
+    const email = `bootstrap-admin-${randomUUID().slice(0, 8)}@${fixture.hostedDomain}`;
+    const userId = await provision(fixture.alpha, email);
+    const googleSub = `1077${randomUUID().replaceAll('-', '').slice(0, 14)}`;
+
+    const grant = await signIn(fixture.alpha, { googleSub, email });
+    // The same row: the membership the operator wrote hangs off this id, so a sign-in
+    // that made a second user would be refused `membership_required` for ever.
+    expect(grant.userId).toBe(userId);
+    expect(grant.role).toBe('admin');
+    expect(await subsFor(email)).toEqual([googleSub]);
+
+    const audited = await fixture.db.query<{ action: string }>(
+      "SELECT action FROM audit_events WHERE workspace_id = $1 AND action = 'auth.provisional_user_adopted' AND subject_id = $2",
+      [fixture.alpha.workspaceId, userId],
+    );
+    expect(audited.rows.length).toBe(1);
+
+    // And a second sign-in adopts nothing, because there is nothing left to adopt.
+    await signIn(fixture.alpha, { googleSub, email });
+    const again = await fixture.db.query<{ count: string }>(
+      "SELECT count(*)::text AS count FROM audit_events WHERE action = 'auth.provisional_user_adopted' AND subject_id = $1",
+      [userId],
+    );
+    expect(again.rows[0]?.count).toBe('1');
+  });
+
+  it('is not consumed by somebody else signing in', async () => {
+    const email = `bootstrap-untouched-${randomUUID().slice(0, 8)}@${fixture.hostedDomain}`;
+    await provision(fixture.beta, email, { withMembership: false });
+
+    // A different person, with their own address and their own membership.
+    await signIn(fixture.beta, fixture.beta.salesperson);
+
+    expect(await subsFor(email)).toEqual([`${PROVISIONAL_GOOGLE_SUB_PREFIX}${email}`]);
+  });
+
+  it('never overwrites an account that already has a real sub for the same address', async () => {
+    // The order that makes the guard matter: the person signed in before anybody
+    // bootstrapped them, so a pending row and a real row carry the same address.
+    const email = fixture.alpha.admin.email;
+    const pendingId = await provision(fixture.alpha, email, { withMembership: false });
+
+    const grant = await signIn(fixture.alpha, fixture.alpha.admin);
+    expect(grant.userId).toBe(fixture.alpha.admin.userId);
+
+    const pending = await fixture.db.query<{ google_sub: string }>(
+      'SELECT google_sub FROM users WHERE id = $1',
+      [pendingId],
+    );
+    expect(pending.rows[0]?.google_sub).toBe(`${PROVISIONAL_GOOGLE_SUB_PREFIX}${email}`);
+    const real = await fixture.db.query<{ google_sub: string }>('SELECT google_sub FROM users WHERE id = $1', [
+      fixture.alpha.admin.userId,
+    ]);
+    expect(real.rows[0]?.google_sub).toBe(fixture.alpha.admin.googleSub);
+
+    // Cleanup: this row shares an address with a real account, and the ambiguity is
+    // the tool's refusal rather than something later cases here should inherit.
+    await fixture.db.query('DELETE FROM users WHERE id = $1', [pendingId]);
   });
 });

@@ -55,6 +55,32 @@ export const userSchema = z.strictObject({
 });
 export type User = z.infer<typeof userSchema>;
 
+/**
+ * The `google_sub` a bootstrapped admin's `users` row carries until that person has
+ * signed in for the first time (lane g39).
+ *
+ * `fss admin workspace bootstrap` has to create the first `users` row before anybody
+ * has ever presented an id token, and `google_sub` is `NOT NULL UNIQUE` because it is
+ * the durable identity. The real `sub` is not knowable then: Google mints it, it is a
+ * decimal string of digits, and nothing outside a signed token may assert one. So the
+ * row is written with this sentinel and the e-mail after it, and the first successful
+ * sign-in with that e-mail replaces it with the real `sub`
+ * (`apps/api/src/auth/signIn.ts`).
+ *
+ * The prefix is a single constant in one module because two copies of it are two
+ * facts that can disagree: a tool that wrote `pending:` and an API that adopted
+ * `pending-email:` would leave a workspace whose admin can never sign in, and nothing
+ * would say so. It contains a character no Google `sub` has — a `sub` is digits — so
+ * a sentinel can never collide with a real identity, and a sentinel row can never be
+ * produced by the sign-in path, only by an operator holding the runtime credential.
+ */
+export const PROVISIONAL_GOOGLE_SUB_PREFIX = 'pending-email:';
+
+/** The sentinel `google_sub` for one e-mail address. Lowercased, as the row is. */
+export function provisionalGoogleSub(email: string): string {
+  return `${PROVISIONAL_GOOGLE_SUB_PREFIX}${email.toLowerCase()}`;
+}
+
 export const membershipRoleSchema = z.enum(['admin', 'salesperson']);
 export type MembershipRole = z.infer<typeof membershipRoleSchema>;
 

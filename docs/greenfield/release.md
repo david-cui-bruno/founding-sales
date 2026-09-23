@@ -248,7 +248,7 @@ table.
 | --- | --- | --- | --- |
 | `plan` (default) | the identity check, the production inventory, `terraform init` against this run's own state key, `run.auto.tfvars.json`, `terraform plan` with the same variables the apply uses, and a summary | that the rehearsal root can be **planned** in this account with these variables: every required variable is passed, every provider it needs can be configured, and no `count` depends on a value unknown until apply | a few minutes |
 | `create` | `terraform apply`, taking its values from the `run.auto.tfvars.json` the plan stage wrote | that the plan can be **applied**: quotas, service limits, IAM, the order Terraform chooses, and whether a fresh environment comes up at all | the apply, dominated by the Multi-AZ RDS instance |
-| `deploy` | the two database entries, `infra/scripts/release-deploy.sh` and the smoke | that a fresh environment can be **migrated and started**: the migration task's networking, whether `fss migrate` accepts the RDS master user, the schema-range refusals both binaries make on startup, and whether a canary datapoint ever appears | the deploy, five one-off tasks of about a minute each |
+| `deploy` | the two database entries, `infra/scripts/release-deploy.sh`, `infra/scripts/release-bootstrap-workspace.sh` and the smoke | that a fresh environment can be **migrated and started**: the migration task's networking, whether `fss migrate` accepts the RDS master user, the schema-range refusals both binaries make on startup, and whether a canary datapoint ever appears | the deploy, five one-off tasks of about a minute each |
 | `full` | the declared ranges against the deployed images, the release suite and the mutation check, the restore drill, the journal replay and Gmail reconstruction, the carry drill, and the release record | the release gate of 16.2, which is everything in the numbered list below | up to the 180-minute timeout |
 | `teardown` | nothing, and it takes the plan away: it runs only the steps before `terraform plan` plus the two every stage runs | that a prefix some earlier run left standing is gone | the destroy |
 
@@ -426,6 +426,8 @@ before it run:
 4. [plan, then create] **Plan, then create.** The variables the root requires are written to `run.auto.tfvars.json` beside the root, the backend is initialised against this run's own state key, and `terraform plan -out` is run with the whole `-var` list. The `create` stage then applies, and names **no variable of its own**: Terraform loads `run.auto.tfvars.json` automatically from the root directory, which is the same mechanism the teardown's `terraform destroy` depends on. One list in one place is what keeps the plan and the apply the same values. The apply creates the rehearsal root with the run prefix and `bootstrap=true`, deploying both digests from the stable `fss-rh-api` and `fss-rh-worker` repositories. **Both services are created at desired count zero.** A fresh environment's database has no schema, and both binaries refuse to start unless the applied schema version is exactly the range they declare — so an apply that started them would create two services crash-looping against an empty database while the task that would fix it had not been launched. The run creates no repository of its own and its teardown removes none; `infra/roots/rehearsal-registry` owns those two and was applied once, before the first push.
 5. [deploy] **Fill every secret entry.** Terraform creates every Secrets Manager entry empty and never holds a value. In production you fill these two by hand (5.1); a rehearsal is unattended and an hour long, so it fills its own: `migration-database` takes the RDS-managed master credentials, because on a database that has never been migrated there is no other login role that can run DDL, and `app-runtime-database` takes a password generated in the runner. Both are masked before they can reach a log. This needs `secretsmanager:PutSecretValue` on `fss-rh-*` secrets on `fss-rh-deploy` — see 8.1.
 6. [deploy] **Migrate, then deploy the worker, then the API.** `infra/scripts/release-deploy.sh infra/roots/rehearsal <prefix> --schema-change` — the *same script* you run locally for production (section 4.1). It scales to zero if anything is running, runs `fss migrate` as a one-off ECS task inside the VPC, then `fss admin database-users ensure`, then `fss verify`, then the worker to its declared count, then the API, then `fss verify` again against the running deployment. Never beside each other: the API's declared schema range needs the migration to have run. Until 21 September nothing in deployment ran a migration at all; the step was named for an order it did not perform.
+
+    [deploy] **Then the first workspace and its admin**, as its own step between this one and item 7: `infra/scripts/release-bootstrap-workspace.sh infra/roots/rehearsal <prefix> --worker-digest D --slug rehearsal --display-name Rehearsal --admin-email rehearsal-admin@usecallie.com`. A migrated database has no `workspaces` row, and the scheduler's canary is inserted once per workspace — so an environment without one publishes no `CanaryCompletionAgeSeconds`, the `canary_stale` alarm breaches, and item 8's smoke has nothing to judge. That is exactly how the eighth full run failed (8.0p). It is the same script production runs, with `--environment production` (5.1a) and different values.
 7. [full] **The declared ranges, against the deployed images** (`infra/scripts/rehearsal-schema-ranges.sh <prefix> --api-digest D --worker-digest D`): Appendix G 22's refusal cases, which only a real ECS task can answer. Each service image is launched as a one-off `--selftest` task through the same wrapper the deploy uses, with a declared schema range one below the one it was built with, and the *container* must refuse it — exit 12, `configurationInvalid` in both `API_EXIT_CODES` and `WORKER_EXIT_CODES`. The overlap case, the previous release's image against the current schema, runs **only when a `<prefix>-<service>-previous` task definition is actually registered**: nothing in this repository registers one and a first release has no previous image at all, so the report says `skipped_no_previous` rather than claiming a pass (8.0o).
 8. [deploy] **Smoke** with the same `scripts/productionSmoke.mjs` production gets.
 9. [full] **Release suite (recorded mode, runner)**: the 42 scenarios (`npm run test:release`) and the **mutation check** (`npm run test:release:mutation`), which breaks each trap in turn and requires the suite to go red. They run in the runner against the job's own `postgres:16` service container, which is what they were built for. They do **not** touch the rehearsal database and could not: it is private — `publicly_accessible = false`, no NAT gateway, no bastion — so the step that used to assemble a URL from the rehearsal's outputs could never have connected. What runs against the rehearsal database is `fss verify` and `fss drill`, inside the VPC.
@@ -550,9 +552,9 @@ Why a script rather than four commands you can see:
 
 ---
 
-## 5. The four manual steps after the apply
+## 5. The five manual steps after the apply
 
-These are in the order they unblock each other. Doing 5.3 before 5.2 will not work, because Pub/Sub will not push to an endpoint whose certificate it cannot verify.
+These are in the order they unblock each other. Doing 5.3 before 5.2 will not work, because Pub/Sub will not push to an endpoint whose certificate it cannot verify. 5.1 comes before the apply's deploy (4.1) and 5.1a comes after it, because 5.1a runs a command against the deployed database.
 
 ### 5.1 The secret values, from stdin
 
@@ -579,6 +581,38 @@ openssl rand -base64 48   # then paste that
 
 If a value changes later, put the new value and force a new deployment of both services
 so the tasks read it.
+
+### 5.1a The first workspace and its admin
+
+Run this **after 4.1** — it is one command against the migrated, deployed database — and **before 5.2 and the smoke**.
+
+```bash
+infra/scripts/release-bootstrap-workspace.sh infra/roots/production fss-prod \
+  --environment production \
+  --worker-digest <the worker digest this release is about> \
+  --slug callie --display-name Callie --admin-email callie@usecallie.com
+```
+
+It launches `fss admin workspace bootstrap` as a one-off task on the **operations** task definition, inside the VPC, under the runtime credential — the same wrapper, the same digest comparison and the same log-stream read as every other one-off task in 4.1. `--environment production` is required and is the only argument that differs from the rehearsal's: this command writes the first business rows of the environment, and production is named out loud or not at all.
+
+It prints the tool's JSON report and writes a summary line into the reports directory as `bootstrap-workspace.txt`:
+
+```json
+{
+  "workspace": { "id": "…-…-…-…-…", "slug": "callie", "displayName": "Callie",
+                 "businessTimeZone": "America/New_York", "outcome": "created" },
+  "admin": { "userId": "…", "email": "callie@usecallie.com", "outcome": "provisional_created" },
+  "membership": { "role": "admin", "outcome": "created" }
+}
+```
+
+**`workspace.id` is what the desktop asks for.** The Mac's sign-in form has a Workspace field (`apps/desktop/src/renderer/renderer.ts`), and the UUID above is what goes in it. Keep the line; nothing else prints it.
+
+**`admin.outcome: provisional_created` is normal on a first run.** The real Google `sub` cannot be known before that person signs in, so the row carries the sentinel `pending-email:<address>` until the first successful sign-in replaces it — `docs/greenfield/identity.md` and `docs/decisions/g39-the-first-workspace-and-its-admin-are-bootstrapped.md`. A row that says `adopted_user` means that address already had an account, which is also fine.
+
+**Re-running is safe.** The command is idempotent in one transaction: it selects the workspace by slug and inserts only if it is absent, reuses the admin row it finds, and creates, leaves alone or reactivates the membership. A second run reports `existing`/`provisional_existing`/`existing` and writes no new row. It refuses a malformed slug, address or zone with exit 20 before touching the database.
+
+**The `canary_stale` alarm breaches until this has run, and that is correct.** The scheduler's canary is inserted once per workspace (`apps/worker/src/scheduler/sources.ts`, `SELECT id FROM workspaces`), so an environment with no workspace publishes no `CanaryCompletionAgeSeconds` at all — and the alarm is `treat_missing_data = "breaching"` on purpose (`infra/modules/alerts/main.tf`). Expect the alarm to clear within a couple of minutes of this step: the scheduler runs every 60 seconds and the metrics publisher every 60 seconds. The smoke check in section 6 reads that same metric and has nothing to judge before this step, which is exactly how the eighth full rehearsal failed (8.0p).
 
 ### 5.2 The DNS ALIAS
 
@@ -1292,6 +1326,52 @@ a first release with no previous image, a registered previous image, an image th
 accepts the stale range, and a container that stops for some other reason — and a
 mutation puts the run-task reading back to prove the suite goes red when it does.
 
+### 8.0p What the eighth full run proved: everything up to the smoke, and no first workspace (23 September, night)
+
+Run 35919040315 (12b559e7) went further than any run before it. Create, the secret
+fill, **step 17** (stop, `fss migrate`, `fss admin database-users ensure`, `fss verify`,
+worker, API, `fss verify` again) and **step 18**, the schema-range refusals that lane
+g38 had just rewritten, all passed. Both reverse cases behaved as 8.0o said they would:
+no previous image is registered on a first release, so the overlap case recorded
+`skipped_no_previous`, and both stale cases refused the declared range at startup with
+exit 12.
+
+**Step 19, the production smoke, then failed after ten minutes**: "the rehearsal
+environment published no `CanaryCompletionAgeSeconds` datapoint in ten minutes". Ten
+one-minute attempts, no datapoint, and the step said so rather than passing `None`
+through — which is the improvement a previous lane made to this step and the reason the
+message named the cause instead of printing `age=Nones`.
+
+**Nothing was wrong with the smoke, the metric filter, the scheduler or the worker.**
+`apps/worker/src/scheduler/sources.ts` inserts one canary **per workspace**:
+`SELECT id FROM workspaces`. A freshly migrated database has no workspace row, so the
+scheduler correctly found nothing due, emitted no canary, and published no datapoint.
+The `canary_stale` alarm is `treat_missing_data = "breaching"`, so the environment also
+sat in ALARM for being empty rather than for being broken.
+
+**Underneath it was a larger gap, and it was about production rather than the
+rehearsal.** `apps/api/src/auth/signIn.ts` refuses with `workspace_unknown` unless the
+`workspaces` row exists and with `membership_required` unless an **active**
+`workspace_memberships` row exists — while the `users` row is written only at the end of
+a successful sign-in. Three rows that each presuppose the others, and nothing in `apps/`
+or `packages/` inserted the first of them: `grep 'INSERT INTO workspaces'` found tests
+and nothing else. A production release would have deployed cleanly, passed both
+verifies, and left David with an API nobody could sign in to and an alarm nobody could
+clear. `docs/greenfield/identity.md` stated the requirement and never said who creates
+the first membership; `apps/api/src/routes/admin/memberships.ts` needs an authenticated
+admin, which is the thing that cannot exist yet.
+
+**What changed (lane g39).** `fss admin workspace bootstrap` creates the workspace, a
+**provisional** admin `users` row and an active `admin` membership in one idempotent
+transaction, under the runtime credential, with an `audit_events` row; the first
+successful sign-in with that address replaces the sentinel `google_sub` with the real
+Google `sub` and records `auth.provisional_user_adopted`.
+`infra/scripts/release-bootstrap-workspace.sh` runs it through the same wrapper every
+other one-off task uses, and the rehearsal runs it between steps 17 and 18. Production
+runs the same script with `--environment production`, which is section 5.1a. The smoke
+step needed no change: the scheduler's 60-second pass and the metrics publisher's
+60-second pass both fit inside its ten-minute wait.
+
 ### 8.1 Still unverified
 
 Nothing in this repository has ever been applied beyond the four steps above, and no rehearsal environment has ever existed. Every command here comes from the AWS documentation, the Terraform schema and the scripts' dry-run output, checked offline. Watch these on the next real run:
@@ -1299,7 +1379,7 @@ Nothing in this repository has ever been applied beyond the four steps above, an
 1. Whether `resourcegroupstaggingapi get-resources` is readable by the rehearsal role. `rehearsal-prefix-guard.sh` uses it to compare the production inventory before and after; if the role cannot read production at all, the scenario still passes — "could not address" is the claim — but the script will need the read moved to a separate inventory role to produce a useful diff. Two things about that read changed in G12f and neither could be tested against AWS: the tag filter is now `Key=Name` with no value, because `get-resources` matches tag values exactly and `Values=fss-prod*` would have matched nothing and made the comparison a comparison of two empty lists; and the production names are selected and **sorted** locally, because the API promises no order and an unstable one would fail the comparison for no reason. If the account holds many `Name`-tagged resources, this read is now larger than it was.
 2. Whether the drill can run at all: **nothing in this repository builds an `fss` executable.** No package declares a `bin`, and no step of the release workflow installs one, so every non-dry `fss admin …` in `rehearsal-restore-drill.sh` and every `fss carry export` in `rehearsal-carry-watermark.sh` would fail with `command not found`. Both scripts now refuse up front and say so, rather than discovering it after a restored RDS instance exists — but the CLI itself is another lane's, and the drill cannot pass until it lands.
 3. Whether `--restore-time "$RESTORE_TARGET"` is acceptable to RDS. The drill defaults the target to *now*, and RDS refuses a restore time later than `LatestRestorableTime`, which trails the present by several minutes. The likely fix is `--use-latest-restorable-time` when no explicit target was given, but that changes which instant the baseline counts are `--as-of`, so it is not a change to make blind. Expect `InvalidRestoreTime` on the first run that reaches Appendix E step 1.
-4. Whether the rehearsal environment publishes a `CanaryCompletionAgeSeconds` datapoint before the smoke step asks for one. It will not have, for the first minutes of its life; the step now waits up to ten minutes and then fails naming the cause, rather than passing the literal `None` through to `Number()` and reporting `age=Nones`.
+4. Whether the rehearsal environment publishes a `CanaryCompletionAgeSeconds` datapoint before the smoke step asks for one. **Answered, on 23 September: it did not, and the cause was that no workspace existed** (8.0p). The canary is inserted once per workspace, and the run now bootstraps one between steps 17 and 18; what is still unmeasured is how long the first datapoint takes after that — the scheduler's 60-second pass and the metrics publisher's 60-second pass say about two minutes, and the smoke step waits ten and then fails naming the cause rather than passing the literal `None` through to `Number()` and reporting `age=Nones`.
 5. That `resourcegroupstaggingapi` is regional. The inventory only ever sees `us-east-1`, which is where everything is — but a production resource created in another region is outside the comparison and always will be.
 6. Whether the worker task role can write the suppression journal. **Closed by G12b in the plan, unproved in the cloud.** `infra/modules/cluster` now gives the worker `s3:PutObject` on the journal object prefix and `kms:Encrypt`/`kms:GenerateDataKey` on the journal key, and `infra/modules/journal` names both task roles as permitted writers rather than the API alone — so the bucket policy's `DenyWritesFromAnyoneButTheTaskRoles` no longer refuses the worker. Neither role asks for any `s3:Delete*`, and no writer sets a per-object retention: the bucket's own default retention locks every object on put, and `s3:PutObjectRetention` stays denied to everybody. `infra/modules/cluster/tests/services.tftest.hcl` asserts both halves offline. What a plan cannot prove is that the first real opt-out the worker imports actually lands in the bucket; watch the `SuppressionJournalWriteFailures` metric after Gmail sync is first enabled, because a remaining IAM refusal surfaces there and nowhere else.
 7. Whether one day of GOVERNANCE retention is long enough that `--bypass-governance-retention` is only ever needed for a same-day teardown.
