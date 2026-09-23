@@ -57,15 +57,30 @@ variable "assume_deployment_role" {
 }
 
 variable "aws_region" {
-  description = "AWS region."
+  description = "AWS region. The default is the region this tree started in; a dedicated account states its own."
   type        = string
   default     = "us-east-1"
 }
 
 variable "aws_account_id" {
-  description = "AWS account id. The provider refuses to act against any other account."
+  description = <<-EOT
+    The AWS account this root deploys into. The provider refuses to act against
+    any other account.
+
+    The default is the shared account the tree started in, which is why nothing
+    changes today. The dedicated production account states its own with
+    `TF_VAR_aws_account_id`, `-var` or a tfvars file, and edits no Terraform;
+    `docs/greenfield/accounts.md` is the checklist. Production applies stay local
+    and the provider does the assuming, so this is also the account the
+    `fss-prod-deploy` ARN is built from.
+  EOT
   type        = string
   default     = "326255650484"
+
+  validation {
+    condition     = can(regex("^[0-9]{12}$", var.aws_account_id))
+    error_message = "An AWS account id is twelve digits and nothing else."
+  }
 }
 
 variable "availability_zones" {
