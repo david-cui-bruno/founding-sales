@@ -40,6 +40,33 @@ check "security-group rules must come from the network module inventory" \
 check "a greenfield root must never point at a legacy state key" \
   '^[^#]*cloud/(terraform|delegated-worker)' infra/roots
 
+# An account id written into Terraform is an account this tree can only ever deploy
+# into, and the owner is moving the rehearsal and production into dedicated accounts
+# (`docs/greenfield/accounts.md`). Every root takes `aws_account_id` as a variable and
+# builds every ARN from it, so the one place twelve digits may appear outside a test
+# fixture is that variable's own `default` — which is what keeps today's behaviour for
+# a caller who states no account.
+account_literals=$(grep -rInE '[0-9]{12}' --include='*.tf' infra/modules infra/roots \
+  | grep -v '/tests/' \
+  | grep -vE ':[0-9]+: *default +=' || true)
+if [ -n "$account_literals" ]; then
+  echo "FAIL: a Terraform file names an account id outside a variable default"
+  echo "$account_literals"
+  fail=1
+fi
+
+# And the backend files are the per-account files, so each one must name a bucket, a
+# region and a lock table. A file that lost one would init against whatever backend
+# the caller's own configuration or environment supplies, silently.
+for backend_file in infra/roots/*/backend.hcl; do
+  for backend_setting in bucket region dynamodb_table key; do
+    if ! grep -qE "^${backend_setting} +=" "$backend_file"; then
+      echo "FAIL: $backend_file names no $backend_setting"
+      fail=1
+    fi
+  done
+done
+
 # The class of error the third credentialed rehearsal stopped on (21 September
 # 2026): `count = var.kms_key_arn == null ? 1 : 0`, where the ARN belongs to a
 # key the same apply creates. Terraform refuses such a plan before it touches
