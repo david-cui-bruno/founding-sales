@@ -56,10 +56,15 @@ LABEL org.opencontainers.image.title="fss-api" \
 # which is what the CloudWatch metric filters parse.
 ENV NODE_ENV=production \
     FSS_ROLE=api \
-    NODE_OPTIONS="--experimental-transform-types --disable-warning=ExperimentalWarning"
+    NODE_OPTIONS="--experimental-transform-types --disable-warning=ExperimentalWarning" \
+    PGSSLMODE=verify-full \
+    NODE_EXTRA_CA_CERTS=/app/certs/rds-global-bundle.pem
 
 WORKDIR /app
 
+# The database forces TLS (infra/modules/database: rds.force_ssl = 1) and Node's roots do
+# not include Amazon RDS. certs/README.md says where the bundle comes from and how to refresh it.
+COPY certs/rds-global-bundle.pem certs/rds-global-bundle.pem
 COPY --from=dependencies /app/node_modules ./node_modules
 COPY package.json ./
 COPY apps/api/package.json apps/api/

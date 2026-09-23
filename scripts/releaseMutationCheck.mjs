@@ -33,6 +33,33 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));
 /** @type {{name: string, file: string, find: string, replace: string, suite: string[], because: string}[]} */
 const MUTATIONS = [
   {
+    name: 'the wrapper stops fetching a failed task’s log',
+    file: 'infra/scripts/release-common.sh',
+    find: '  release_report_task "$step" "$described" "$container" || verdict=1\n',
+    replace: '  release_report_task "$step" "$described" "$container" || return 1\n',
+    suite: ['run', 'test:release'],
+    because:
+      'A failed one-off task is the one whose output matters. Run 35876269976 (23 September 2026) printed "container migration exited 21" and nothing else, because the wrapper returned on the verdict before the fetch.',
+  },
+  {
+    name: 'the worker image stops verifying the database\u2019s certificate',
+    file: 'Dockerfile.worker',
+    find: '    PGSSLMODE=verify-full \\\n',
+    replace: '    PGSSLMODE=no-verify \\\n',
+    suite: ['run', 'test:release'],
+    because:
+      'rds.force_ssl = 1 refuses a plain connection and Node\u2019s roots do not include Amazon RDS. no-verify would connect to anything that answers on the port; verify-full plus the RDS bundle is the contract. Run 35876269976 (23 September 2026) was the first process to reach the real database, and it was refused at the handshake.',
+  },
+  {
+    name: 'the database stops forcing SSL',
+    file: 'infra/modules/database/main.tf',
+    find: '    name  = "rds.force_ssl"\n    value = "1"',
+    replace: '    name  = "rds.force_ssl"\n    value = "0"',
+    suite: ['run', 'test:release'],
+    because:
+      'The images verify TLS because the database demands it; a parameter group that stopped demanding it would let a misconfigured client fall back to plaintext unnoticed. The two are one contract.',
+  },
+  {
     name: 'the tool demands the runtime connection for migrate again',
     file: 'apps/worker/src/tools/fss.ts',
     find: "readToolConfig(environment, { runtimeConnection: migrateOnly ? 'optional' : 'required' })",
