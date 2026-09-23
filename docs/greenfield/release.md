@@ -1045,6 +1045,15 @@ run proves before anything touches production. `fss-prod-deploy` is never widene
 renderer refuses to render discovery for it. Every deny of the normal document stays in the
 discovery document, and the wide allow never names IAM, STS or DynamoDB.
 
+**The first discovery document was refused by `put-role-policy`** (22 September, evening):
+`Resource vendor must be fully qualified and cannot contain regexes`, for the two guards
+written as `arn:aws:*:*:*:*fss-prod*` and `arn:aws:*:*:*:*delegated-worker*`. The put is
+atomic, so the role kept its normal document. IAM's ARN grammar requires a literal service
+segment; the guards now name production's version of every named shape the role can
+address, one per service, the renderer refuses any resource whose service segment is not
+literal, and the runbook validates every document with `accessanalyzer validate-policy`
+(read-only) before it is put.
+
 ### 8.1 Still unverified
 
 Nothing in this repository has ever been applied beyond the four steps above, and no rehearsal environment has ever existed. Every command here comes from the AWS documentation, the Terraform schema and the scripts' dry-run output, checked offline. Watch these on the next real run:

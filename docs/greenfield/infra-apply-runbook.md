@@ -55,7 +55,7 @@ Until those roles exist, `terraform plan` will fail at provider configuration. T
 
 The policy is now `infra/policies/deployment-role-policy.json.tftpl`, rendered by a script that makes no call, and `test/release/deploymentRolePolicy.check.ts` walks every `resource "aws_*"` type in `infra/modules` and `infra/roots` and fails when one of them needs an action the rendered policy does not allow — or allows and then cancels with a blanket deny, which is what happened to all eight Secrets Manager entries. `infra/policies/terraform-resource-actions.json` is the map it reads, one entry per resource type, and it is meant to be read. `docs/decisions/g16-the-deployment-role-policy-is-code.md` lists every change against David's hand-written policies.
 
-**Read the document before you put it.** It is a whole inline policy, not a delta: `put-role-policy` replaces the policy of that name entirely.
+**Read the document before you put it.** It is a whole inline policy, not a delta: `put-role-policy` replaces the policy of that name entirely. **Validate it before you put it**, read-only: `aws accessanalyzer validate-policy --policy-type IDENTITY_POLICY --policy-document file:///tmp/<file>.json --query 'findings[?findingType==`ERROR`]'` must print `[]`. The renderer checks the ARN grammar it knows about (a literal service segment in every resource); Access Analyzer checks the rest as IAM itself will.
 
 ```bash
 cd <repo root>
@@ -106,9 +106,14 @@ Each role is asked only about its own namespace and the command refuses the othe
 Six credentialed runs each found exactly one missing permission, forty minutes apart, because the services the apply asks for call each other in the caller's session and the message names the wrong resource. David chose to break that loop once: `fss-rh-deploy` holds a wide allow on the services the tree uses for **one** pass of `create`, `deploy` and `full`; the CloudTrail record of that pass is the source of the exact policy; the exact policy is proved by one more run before anything touches production. `fss-prod-deploy` is never widened and the renderer refuses to render discovery for it. `docs/decisions/g25-discovery-mode-for-the-rehearsal-role.md` has the reasoning and the guards.
 
 ```bash
-# 1. Render, read, put: the rehearsal role only. The renderer prints what it left out.
+# 1. Render, read, validate, put: the rehearsal role only. The renderer prints what it left out.
 infra/scripts/render-deployment-role-policy.sh fss-rh --sids   --discovery
 infra/scripts/render-deployment-role-policy.sh fss-rh --pretty --discovery > /tmp/fss-rh-deploy-scope.discovery.json
+# Read-only: IAM Access Analyzer parses the document as IAM will and reports grammar errors
+# (the first discovery document failed put-role-policy on a wildcard service segment, 22 Sep).
+aws accessanalyzer validate-policy --policy-type IDENTITY_POLICY \
+  --policy-document file:///tmp/fss-rh-deploy-scope.discovery.json \
+  --query 'findings[?findingType==`ERROR`]' --output json          # expect []
 aws iam put-role-policy --role-name fss-rh-deploy --policy-name fss-rh-deploy-scope \
   --policy-document file:///tmp/fss-rh-deploy-scope.discovery.json
 

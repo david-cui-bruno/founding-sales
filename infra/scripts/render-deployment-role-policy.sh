@@ -30,6 +30,7 @@
 #   FSS_POLICY_LOCK_TABLE        default callie-sourcing-tflock
 #   FSS_POLICY_STATE_KMS_KEY_ARN default the state bucket's key
 #   FSS_POLICY_CERTIFICATE_ARN   default every certificate in the account and region
+#   FSS_POLICY_DISCOVERY_TEMPLATE  the discovery statements file; the offline test's hook, never set otherwise
 #
 # The certificate default is a wildcard on purpose. The exact ARNs are the `rehearsal`
 # environment secret `FSS_REHEARSAL_CERTIFICATE_ARN` and its production counterpart, and
@@ -102,7 +103,7 @@ FSS_POLICY_PREFIX="$PREFIX" \
 FSS_POLICY_MODE="$MODE" \
 FSS_POLICY_TEMPLATE="$TEMPLATE" \
 FSS_POLICY_DISCOVERY="$DISCOVERY" \
-FSS_POLICY_DISCOVERY_TEMPLATE="$DISCOVERY_TEMPLATE" \
+FSS_POLICY_DISCOVERY_TEMPLATE="${FSS_POLICY_DISCOVERY_TEMPLATE:-$DISCOVERY_TEMPLATE}" \
 FSS_POLICY_ACCOUNT_ID="${FSS_POLICY_ACCOUNT_ID:-326255650484}" \
 FSS_POLICY_REGION="${FSS_POLICY_REGION:-us-east-1}" \
 FSS_POLICY_STATE_BUCKET="${FSS_POLICY_STATE_BUCKET:-callie-sourcing-tfstate-326255650484}" \
@@ -223,6 +224,28 @@ if env["FSS_POLICY_DISCOVERY"] == "--discovery":
         f"emitted: {', '.join(dropped)}",
         file=sys.stderr,
     )
+
+# IAM's ARN grammar, checked here rather than by put-role-policy in the middle of a release:
+# the partition and the service segment are literal (`Resource vendor must be fully qualified
+# and cannot contain regexes`, 22 September 2026, for arn:aws:*:*:*:*fss-prod*); region,
+# account and the resource may carry wildcards; a bare `*` is the only non-ARN form.
+ARN_PARTS = 6
+for statement in document["Statement"]:
+    for field in ("Resource", "NotResource"):
+        value = statement.get(field)
+        if value is None:
+            continue
+        for arn in value if isinstance(value, list) else [value]:
+            if arn == "*":
+                continue
+            parts = arn.split(":", ARN_PARTS - 1)
+            if len(parts) != ARN_PARTS or parts[0] != "arn" or parts[1] != "aws":
+                sys.exit(f"FAIL: {statement['Sid']} names a resource that is not an ARN: {arn}")
+            if not re.fullmatch(r"[a-z0-9-]+", parts[2]):
+                sys.exit(
+                    f"FAIL: {statement['Sid']} names a resource whose service segment is not literal: {arn}. "
+                    "IAM requires the service to be fully qualified; write one resource per service."
+                )
 
 if mode == "--sids":
     for statement in document["Statement"]:
