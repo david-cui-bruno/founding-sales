@@ -424,15 +424,24 @@ release_task_record_path() {
 #                  --network-plan <json> --image-digest <sha256:...>
 #                  [--database-host <host>] [--secret-arn <arn>]
 #                  [--log-group <name>] [--log-stream-prefix <prefix>]
-#                  [--timeout-seconds <n>]
+#                  [--timeout-seconds <n>] [--expect-exit <code>]
 #                  -- <command word>...
 #
 # Prints the task's log lines and returns the container's exit code. Returns non-zero
 # for every one of the ways `run-task` can fail to tell you anything.
+#
+# `--expect-exit` is which code this step calls success, and it defaults to 0. It
+# exists because one step's pass *is* a non-zero exit: Appendix G 22 launches a service
+# image with a declared schema range it does not accept and the whole assertion is that
+# the container refuses at startup with `configurationInvalid`
+# (`infra/scripts/rehearsal-schema-ranges.sh`). The comparison belongs here, where the
+# exit code is already read out of `describe-tasks`, rather than in a caller parsing
+# this function's output.
 release_run_task() {
   local step='' environment='' prefix='' account='' region=''
   local cluster='' task_definition='' container='' network_plan='' image_digest=''
   local database_host='' secret_arn='' log_group='' log_stream_prefix='' capture=''
+  local expect_exit=0
   local timeout_seconds=$RELEASE_DEFAULT_TIMEOUT_SECONDS
   local -a command_words=()
   local -a environment_overrides=()
@@ -456,6 +465,7 @@ release_run_task() {
       --log-stream-prefix) log_stream_prefix=$2; shift 2 ;;
       --capture) capture=$2; shift 2 ;;
       --timeout-seconds) timeout_seconds=$2; shift 2 ;;
+      --expect-exit) expect_exit=$2; shift 2 ;;
       --) shift; command_words=("$@"); break ;;
       *)
         echo "FAIL: release_run_task does not take '$1'" >&2
@@ -466,6 +476,10 @@ release_run_task() {
 
   if [ "${#command_words[@]}" -eq 0 ]; then
     echo "FAIL: release_run_task needs a command after --. A one-off task with no command is the task definition's default, which is never what a caller meant." >&2
+    return 1
+  fi
+  if ! [[ "$expect_exit" =~ ^[0-9]+$ ]]; then
+    echo "FAIL: --expect-exit takes the exit code this step calls success, not '${expect_exit:-<empty>}'" >&2
     return 1
   fi
   for field in step environment prefix account region cluster task_definition container network_plan image_digest; do
@@ -671,7 +685,7 @@ for failure in json.loads(os.environ["FSS_JSON"]).get("failures") or []:
   # whose output matters, and until 23 September 2026 a non-zero exit returned here
   # before the fetch below ever ran (run 35876269976 printed "exited 21" and nothing else).
   local verdict=0
-  release_report_task "$step" "$described" "$container" || verdict=1
+  release_report_task "$step" "$described" "$container" "$expect_exit" || verdict=1
   release_print_task_logs "$environment" "$log_group" "$log_stream_prefix" "$container" "$task_arn" "$capture"
   return "$verdict"
 }
@@ -741,8 +755,13 @@ release_describe_task() {
 # secret that could not be resolved, a task killed for capacity. `exitCode or 0` is the
 # bug that turns each of those into a green release, so absence is a failure with its
 # own message.
+#
+# The fourth argument is the code this step calls success (see `--expect-exit` above);
+# it defaults to 0, and a step expecting a refusal fails on a zero exactly as an
+# ordinary step fails on a non-zero. Absence of an exit code is a failure either way:
+# "the container refused" and "the container never ran" must not be the same outcome.
 release_report_task() {
-  local step=$1 described=$2 container=$3
+  local step=$1 described=$2 container=$3 expected=${4:-0}
   if [ -z "$described" ]; then
     rehearsal_log "$step: no task description available (dry run)"
     return 0
@@ -793,8 +812,15 @@ print("exit|{}".format(worst))
     case "$kind" in
       info) rehearsal_log "$step: $detail" ;;
       exit)
-        if [ "$detail" != "0" ]; then
+        if [ "$detail" = "$expected" ]; then
+          if [ "$expected" != "0" ]; then
+            rehearsal_log "$step: exited $detail, which is the code this step requires"
+          fi
+        elif [ "$expected" = "0" ]; then
           echo "FAIL: $step exited $detail" >&2
+          failed=1
+        else
+          echo "FAIL: $step exited $detail and this step requires exit $expected" >&2
           failed=1
         fi
         ;;

@@ -77,6 +77,14 @@ if ! rehearsal_dry_run && [ -z "${FSS_RELEASE_WORKER_DIGEST:-}" ]; then
   echo "      The release workflow passes the dispatched worker digest; see docs/greenfield/release.md section 3." >&2
   exit 1
 fi
+# Step 7 below runs `rehearsal-schema-ranges.sh`, which launches the API task
+# definition as well as the worker's and wants the same guarantee about each. Named
+# here, with the other one, rather than discovered after a restored instance exists.
+if ! rehearsal_dry_run && [ -z "${FSS_RELEASE_API_DIGEST:-}" ]; then
+  echo "FAIL: FSS_RELEASE_API_DIGEST is not set, and step 7 launches the API image too." >&2
+  echo "      The release workflow passes the dispatched API digest; see docs/greenfield/release.md section 3." >&2
+  exit 1
+fi
 
 # The instants every "restore point minus N" is measured from. Recorded, never guessed.
 DRILL_START="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -420,6 +428,9 @@ PY
 # the result. This is the part only ECS can answer, and it is the runner's.
 # ---------------------------------------------------------------------------
 rehearsal_log "step 7: the declared ranges, against the deployed images"
+# The two digests travel in the environment — `FSS_RELEASE_API_DIGEST` and
+# `FSS_RELEASE_WORKER_DIGEST`, checked above — exactly as they do for
+# `rehearsal-run-task.sh`, so this call stays the prefix and nothing else.
 "$(dirname "${BASH_SOURCE[0]}")/rehearsal-schema-ranges.sh" "$PREFIX"
 
 rehearsal_write_report "restore-drill.txt" \

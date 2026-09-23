@@ -1,3 +1,7 @@
+import { spawnSync } from 'node:child_process';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   API_SCHEMA_RANGE,
@@ -7,7 +11,7 @@ import {
   acceptsSchemaVersion,
   type SchemaRange,
 } from '@fss/domain/db';
-import { mustBeRehearsed, readRepositoryFile } from './support/coverage.ts';
+import { mustBeRehearsed, readRepositoryFile, repositoryPath } from './support/coverage.ts';
 import { stepScript } from './support/releaseWorkflow.ts';
 
 /**
@@ -242,5 +246,279 @@ describe('Appendix G 22: the declared ranges decide, and a non-overlap is the re
     expect(workflow).toContain('infra/scripts/release-deploy.sh infra/roots/rehearsal');
     const runbook = readRepositoryFile('docs/greenfield/infra-apply-runbook.md');
     expect(runbook).toContain('infra/scripts/release-deploy.sh infra/roots/production fss-prod');
+  });
+});
+
+/**
+ * Lane g38: the refusal half measures the container, not the API call.
+ *
+ * The seventh full rehearsal (Actions 35905867795, 23 September 2026) was the first to
+ * reach this step, and it failed in one second. Both defects were this script's, and
+ * both were the same mistake wearing different clothes — a step that asserted
+ * something cheaper than what it claimed:
+ *
+ *   * the overlap case launched `<prefix>-<service>-previous`, a family nothing in
+ *     this repository registers (`infra/modules/cluster` registers `-api`, `-worker`,
+ *     `-migration`, `-operations` and `-drill`), and on a first release there is no
+ *     previous image at all;
+ *   * the stale case called the CLI directly, outside the wrapper, with no
+ *     `--network-configuration` — which an `awsvpc` task definition cannot be launched
+ *     without — and read the failure of that client-side-refused call as the refusal
+ *     it was hunting for. It passed every time and measured nothing.
+ *
+ * So the vacuous-pass trap is exact: **a launch whose exit code nobody reads**. The
+ * checks below drive the script offline against a fake CLI and require it to fail both
+ * when the container exits 0 (the image accepted a range it does not support) and when
+ * it exits anything else (it stopped for some other reason).
+ */
+
+const SCHEMA_RANGES = 'infra/scripts/rehearsal-schema-ranges.sh';
+const CHECK_PREFIX = 'fss-rh-check';
+const CHECK_API_DIGEST = `sha256:${'a'.repeat(64)}`;
+const CHECK_WORKER_DIGEST = `sha256:${'b'.repeat(64)}`;
+const CHECK_PREVIOUS_DIGEST = `sha256:${'c'.repeat(64)}`;
+
+interface RunOptions {
+  /** What the stale case's container exits with. 12 is the refusal both images give. */
+  readonly staleExit: number;
+  /** Whether anything registers `<prefix>-<service>-previous`. */
+  readonly previousRegistered?: boolean;
+  /** What the overlap case's container exits with, when there is one to run. */
+  readonly previousExit?: number;
+}
+
+interface SchemaRangeRun {
+  readonly code: number;
+  readonly output: string;
+  /** The report the script writes, or null when it stopped before writing one. */
+  readonly report: string | null;
+}
+
+/**
+ * A fake AWS CLI answering exactly the four calls this step makes, and refusing
+ * anything else so a call added later cannot pass unnoticed.
+ */
+function stubAws(directory: string, options: RunOptions): string {
+  const path = join(directory, 'aws');
+  const absent =
+    'An error occurred (ClientException) when calling the DescribeTaskDefinition operation: Unable to describe task definition.';
+  const missingPrevious = [
+    '    *-previous)',
+    `      echo "${absent}" >&2`,
+    '      exit 254 ;;',
+  ];
+  const lines = [
+    '#!/usr/bin/env bash',
+    'service=$1; operation=$2; shift 2',
+    'target=""; tasks=""',
+    'while [ "$#" -gt 0 ]; do',
+    '  case "$1" in',
+    '    --task-definition) target=$2 ;;',
+    '    --tasks) tasks=$2 ;;',
+    '  esac',
+    '  shift',
+    'done',
+    '# Both a family name and a full ARN reach this stub; the family is what it keys on.',
+    'family="${target##*/}"; family="${family%%:*}"',
+    'container=api; case "$family" in *worker*) container=worker ;; esac',
+    'case "$family" in',
+    `  *-previous) digest='${CHECK_PREVIOUS_DIGEST}' ;;`,
+    `  *worker*) digest='${CHECK_WORKER_DIGEST}' ;;`,
+    `  *) digest='${CHECK_API_DIGEST}' ;;`,
+    'esac',
+    'if [ "$service" = ecs ] && [ "$operation" = describe-task-definition ]; then',
+    '  case "$family" in',
+    ...(options.previousRegistered === true ? [] : missingPrevious),
+    '  esac',
+    '  cat <<JSON',
+    '{"taskDefinitionArn": "arn:aws:ecs:us-east-1:111111111111:task-definition/$family:1",',
+    ' "containerDefinitions": [{"name": "$container",',
+    '  "image": "111111111111.dkr.ecr.us-east-1.amazonaws.com/fss-rh-$container@$digest",',
+    '  "environment": [{"name": "FSS_DATABASE_HOST", "value": "fss-rh-check-pg.example.com"}],',
+    '  "secrets": [{"name": "DATABASE_SECRET_ARN", "valueFrom": "arn:aws:secretsmanager:us-east-1:111111111111:secret:fss-rh-check/app-runtime-database-bbbbbb"}],',
+    '  "logConfiguration": {"logDriver": "awslogs", "options": {"awslogs-group": "/fss/fss-rh-check/$container", "awslogs-stream-prefix": "$container"}}}]}',
+    'JSON',
+    '  exit 0',
+    'fi',
+    'if [ "$service" = ecs ] && [ "$operation" = run-task ]; then',
+    '  cat <<JSON',
+    '{"tasks": [{"taskArn": "arn:aws:ecs:us-east-1:111111111111:task/fss-rh-check-cluster/$family"}], "failures": []}',
+    'JSON',
+    '  exit 0',
+    'fi',
+    'if [ "$service" = ecs ] && [ "$operation" = describe-tasks ]; then',
+    `  code=${String(options.staleExit)}`,
+    `  case "$tasks" in *-previous) code=${String(options.previousExit ?? 0)} ;; esac`,
+    '  cat <<JSON',
+    '{"tasks": [{"lastStatus": "STOPPED", "stopCode": "EssentialContainerExited", "stoppedReason": "Essential container in task exited", "containers": [{"name": "$container", "exitCode": $code}]}]}',
+    'JSON',
+    '  exit 0',
+    'fi',
+    'echo "unexpected: $service $operation $*" >&2',
+    'exit 1',
+    '',
+  ];
+  writeFileSync(path, lines.join('\n'));
+  chmodSync(path, 0o755);
+  return path;
+}
+
+/** The whole step, offline: no credential, no terraform, no network. */
+function runSchemaRanges(options: RunOptions): SchemaRangeRun {
+  const directory = mkdtempSync(join(tmpdir(), 'fss-schema-ranges-'));
+  const reports = mkdtempSync(join(tmpdir(), 'fss-schema-reports-'));
+  const result = spawnSync(
+    repositoryPath(SCHEMA_RANGES),
+    [CHECK_PREFIX, '--api-digest', CHECK_API_DIGEST, '--worker-digest', CHECK_WORKER_DIGEST],
+    {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        FSS_REHEARSAL_REPORTS: reports,
+        FSS_REHEARSAL_AWS_COMMAND: stubAws(directory, options),
+        AWS_REGION: 'us-east-1',
+        FSS_RELEASE_ACCOUNT: '111111111111',
+        FSS_RELEASE_CALLER_ACCOUNT: '111111111111',
+        FSS_RELEASE_CLUSTER_TAGS: JSON.stringify([{ key: 'Environment', value: 'rehearsal' }]),
+        FSS_RELEASE_OUTPUT_CLUSTER_ARN: 'arn:aws:ecs:us-east-1:111111111111:cluster/fss-rh-check-cluster',
+        FSS_RELEASE_OUTPUT_APP_RUNTIME_DATABASE_SECRET_ARN:
+          'arn:aws:secretsmanager:us-east-1:111111111111:secret:fss-rh-check/app-runtime-database-bbbbbb',
+        FSS_RELEASE_OUTPUT_TASK_NETWORK_CONFIGURATION: JSON.stringify({
+          subnet_ids: ['subnet-0a'],
+          security_group_id: 'sg-0a',
+          assign_public_ip: 'ENABLED',
+          database_port: 5432,
+          database_host: 'fss-rh-check-pg.example.com',
+          inbound_rule_count: 0,
+        }),
+        FSS_RELEASE_LOG_EVENTS: JSON.stringify({
+          events: [
+            { message: '{"level":"error","event":"api_configuration_refused","code":"SCHEMA_RANGE_DISAGREES"}' },
+          ],
+        }),
+      },
+    },
+  );
+  const report = join(reports, 'schema-ranges.txt');
+  return {
+    code: result.status ?? 1,
+    output: `${result.stdout}${result.stderr}`,
+    report: existsSync(report) ? readFileSync(report, 'utf8').trim() : null,
+  };
+}
+
+describe('Appendix G 22 (g38): the refusal cases measure the container, not the API call', () => {
+  const script = readRepositoryFile(SCHEMA_RANGES);
+  /** The script without its prose, so the header may name the call it no longer makes. */
+  const commands = script
+    .split('\n')
+    .filter(line => !line.trimStart().startsWith('#'))
+    .join('\n');
+
+  it('issues no run-task of its own; every launch goes through the one-off wrapper', () => {
+    // Not `command aws ecs run-task`, which is what run 35905867795 found here, and not
+    // `rehearsal_aws ecs run-task` either: that one makes the call and then tells you
+    // nothing about the container it started.
+    expect(commands).not.toContain('command aws ecs run-task');
+    expect(commands).not.toMatch(/ecs run-task/u);
+    expect(commands).toContain('release_run_task \\');
+    // The network plan an `awsvpc` task cannot be launched without, from the root's
+    // own output rather than a literal.
+    expect(commands).toContain('--network-plan "$NETWORK_PLAN"');
+    expect(commands).toContain('release_output "$TERRAFORM_ROOT" task_network_configuration json');
+  });
+
+  it('asks whether the previous task definition exists before it runs one', () => {
+    expect(commands).toContain('family="${PREFIX}-${service}-previous"');
+    expect(commands).toContain('ecs describe-task-definition');
+    // Absence is a fact to record, not a failure: a first release has no previous image.
+    expect(commands).toContain('CASE_VERDICT=skipped_no_previous');
+    // And absence is recognised by what ECS says about an unregistered family, so an
+    // AccessDenied or a throttle is still a failure rather than "there is none".
+    expect(commands).toContain('Unable to describe task definition');
+    expect(commands).toContain('(ClientException)');
+  });
+
+  it('requires the exit code the two images actually give a range they do not accept', () => {
+    const declared = /^SCHEMA_REFUSAL_EXIT_CODE=(\d+)$/mu.exec(script)?.[1];
+    expect(declared, 'the script names the refusal exit code once').toBeDefined();
+    // 12 in both, from two files: API_EXIT_CODES and WORKER_EXIT_CODES. It is *not*
+    // the `fss` tool's 20 — that tool is the migration and operations entry point and
+    // reads no schema range at all, so it can neither give nor withhold this refusal.
+    for (const source of ['apps/api/src/bootstrap/main.ts', 'apps/worker/src/index.ts']) {
+      const code = /configurationInvalid: (\d+)/u.exec(readRepositoryFile(source))?.[1];
+      expect(code, `${source} declares configurationInvalid`).toBe(declared);
+    }
+    for (const config of ['apps/api/src/bootstrap/config.ts', 'apps/worker/src/bootstrap/config.ts']) {
+      expect(readRepositoryFile(config)).toContain('SCHEMA_RANGE_DISAGREES');
+    }
+    // The comparison lives where the exit code is read, rather than in a caller
+    // parsing the wrapper's output.
+    expect(commands).toContain('--expect-exit "$expect"');
+    const wrapper = readRepositoryFile('infra/scripts/release-common.sh');
+    expect(wrapper).toContain('--expect-exit) expect_exit=$2; shift 2 ;;');
+    expect(wrapper).toContain('release_report_task "$step" "$described" "$container" "$expect_exit" || verdict=1');
+  });
+
+  it('the workflow hands this step both digests, as it hands them to the deploy step', () => {
+    const step = stepScript('The declared schema ranges, against the deployed images');
+    expect(step).toContain("--api-digest '${{ inputs.api_image_digest }}'");
+    expect(step).toContain("--worker-digest '${{ inputs.worker_image_digest }}'");
+    // The restore drill runs this script again (Appendix E step 7's control-plane
+    // half) and passes the digests through the environment, so that step names both.
+    const workflow = readRepositoryFile('.github/workflows/greenfield-release.yml');
+    expect(workflow).toContain('FSS_RELEASE_API_DIGEST: ${{ inputs.api_image_digest }}');
+    // And the dry run every pull request prints exercises the same arguments. That
+    // step belongs to the offline job rather than the credentialed one, so it is read
+    // from the file rather than through `stepScript`.
+    expect(workflow).toContain(
+      'infra/scripts/rehearsal-schema-ranges.sh $prefix --api-digest $FSS_RELEASE_API_DIGEST --worker-digest $FSS_RELEASE_WORKER_DIGEST',
+    );
+  });
+
+  it('skips the overlap case on a first release and records the refusal the stale case measured', () => {
+    const run = runSchemaRanges({ staleExit: 12 });
+    expect(run.code, run.output).toBe(0);
+    expect(run.output).toContain('nothing registers fss-rh-check-api-previous');
+    // The container's own words, out of the log stream, whatever the verdict.
+    expect(run.output).toContain('SCHEMA_RANGE_DISAGREES');
+    expect(run.report).toContain('api_overlap=skipped_no_previous');
+    expect(run.report).toContain('api_stale=refused_exit_12');
+    expect(run.report).toContain('worker_overlap=skipped_no_previous');
+    expect(run.report).toContain('worker_stale=refused_exit_12');
+  });
+
+  it('runs the previous image when one is registered, and requires it to start', () => {
+    const run = runSchemaRanges({ staleExit: 12, previousRegistered: true, previousExit: 0 });
+    expect(run.code, run.output).toBe(0);
+    expect(run.output).toContain('fss-rh-check-api-previous is registered');
+    expect(run.report).toContain('api_overlap=ran_exit_0');
+  });
+
+  it('fails when a registered previous image refuses the schema its range accepts', () => {
+    // The other half of the overlap case, and its whole assertion: a previous image
+    // whose declared range accepts this schema must actually start against it.
+    const refused = runSchemaRanges({ staleExit: 12, previousRegistered: true, previousExit: 12 });
+    expect(refused.code).not.toBe(0);
+    expect(refused.output).toContain('did not start against schema');
+    expect(refused.report, 'no report is written for a step that failed').toBeNull();
+  });
+
+  it('fails when the image accepts a declared range it does not support', () => {
+    // Exit 0 is the finding this case exists for, and the one the old script could
+    // never see: it read the run-task API call rather than the container.
+    const run = runSchemaRanges({ staleExit: 0 });
+    expect(run.code).not.toBe(0);
+    expect(run.output).toContain('exited 0 and this step requires exit 12');
+    expect(run.output).toContain('did not refuse the declared range');
+    expect(run.report).toBeNull();
+  });
+
+  it('fails when the container stops for some other reason, and prints the code', () => {
+    // A task that could not pull its image, or a process that died for an unrelated
+    // reason, is not this refusal. Any code but the expected one is a failure.
+    const run = runSchemaRanges({ staleExit: 1 });
+    expect(run.code).not.toBe(0);
+    expect(run.output).toContain('exited 1 and this step requires exit 12');
   });
 });

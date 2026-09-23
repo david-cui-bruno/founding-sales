@@ -33,6 +33,17 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));
 /** @type {{name: string, file: string, find: string, replace: string, suite: string[], because: string}[]} */
 const MUTATIONS = [
   {
+    name: 'the stale schema-range case reads the run-task call again instead of the container',
+    file: 'infra/scripts/rehearsal-schema-ranges.sh',
+    find:
+      '  if ! launch_selftest "schema-stale-$service" "$service" "$definition" "$digest" "$SCHEMA_REFUSAL_EXIT_CODE" \\\n      --env "FSS_SCHEMA_MIN=$stale" --env "FSS_SCHEMA_MAX=$stale"; then\n',
+    replace:
+      '  if ! rehearsal_aws ecs run-task --cluster "$CLUSTER_ARN" --task-definition "$family" --output text >/dev/null; then\n',
+    suite: ['run', 'test:release'],
+    because:
+      'This is the defect run 35905867795 found on 23 September 2026: the case called the CLI directly and treated a successful run-task *API call* as the image accepting the range. The refusal happens inside the container at startup, so the assertion is the container\u2019s exit code \u2014 12, `configurationInvalid` in both API_EXIT_CODES and WORKER_EXIT_CODES. With the launch judged by the API call again, a container that exits 0 or 1 passes, and scenario22 must go red.',
+  },
+  {
     name: 'the rehearsal stops filling one of the six application entries',
     file: '.github/workflows/greenfield-release.yml',
     find: '              session-signing-key|device-credential-pepper)\n',
@@ -53,8 +64,8 @@ const MUTATIONS = [
   {
     name: 'the wrapper stops fetching a failed task’s log',
     file: 'infra/scripts/release-common.sh',
-    find: '  release_report_task "$step" "$described" "$container" || verdict=1\n',
-    replace: '  release_report_task "$step" "$described" "$container" || return 1\n',
+    find: '  release_report_task "$step" "$described" "$container" "$expect_exit" || verdict=1\n',
+    replace: '  release_report_task "$step" "$described" "$container" "$expect_exit" || return 1\n',
     suite: ['run', 'test:release'],
     because:
       'A failed one-off task is the one whose output matters. Run 35876269976 (23 September 2026) printed "container migration exited 21" and nothing else, because the wrapper returned on the verdict before the fetch.',

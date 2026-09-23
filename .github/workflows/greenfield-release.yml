@@ -305,6 +305,7 @@ jobs:
           # the same code taking the same branches.
           export FSS_RELEASE_ACCOUNT=123456789012
           export FSS_RELEASE_CALLER_ACCOUNT=123456789012
+          export FSS_RELEASE_API_DIGEST="sha256:$(printf 'a%.0s' {1..64})"
           export FSS_RELEASE_WORKER_DIGEST="sha256:$(printf 'b%.0s' {1..64})"
           export FSS_RELEASE_OUTPUT_CLUSTER_ARN="arn:aws:ecs:us-east-1:123456789012:cluster/${prefix}-cluster"
           export FSS_RELEASE_OUTPUT_MIGRATION_TASK_DEFINITION_ARN="arn:aws:ecs:us-east-1:123456789012:task-definition/${prefix}-migration:1"
@@ -320,7 +321,7 @@ jobs:
             "infra/scripts/rehearsal-caller-identity.sh fss-rh-deploy" \
             "infra/scripts/rehearsal-prefix-guard.sh $prefix before" \
             "infra/scripts/release-deploy.sh infra/roots/rehearsal $prefix --schema-change --worker-digest $FSS_RELEASE_WORKER_DIGEST" \
-            "infra/scripts/rehearsal-schema-ranges.sh $prefix" \
+            "infra/scripts/rehearsal-schema-ranges.sh $prefix --api-digest $FSS_RELEASE_API_DIGEST --worker-digest $FSS_RELEASE_WORKER_DIGEST" \
             "infra/scripts/rehearsal-restore-drill.sh $prefix" \
             "infra/scripts/rehearsal-carry-watermark.sh $prefix" \
             "infra/scripts/rehearsal-teardown.sh $prefix" \
@@ -980,7 +981,13 @@ jobs:
         run: |
           set -euo pipefail
           # Appendix G 22's own half: the reverse cases, which only ECS can answer.
-          infra/scripts/rehearsal-schema-ranges.sh '${{ steps.prefix.outputs.prefix }}'
+          # Both digests, as the deploy step above is given them: this step launches
+          # the API and the worker task definitions as one-off `--selftest` tasks
+          # through the same wrapper, and that wrapper refuses to launch a task whose
+          # registered image is not the digest this release is about.
+          infra/scripts/rehearsal-schema-ranges.sh '${{ steps.prefix.outputs.prefix }}' \
+            --api-digest '${{ inputs.api_image_digest }}' \
+            --worker-digest '${{ inputs.worker_image_digest }}'
 
       - name: Smoke the rehearsal environment with the production smoke script
         if: contains(fromJSON('["deploy","full"]'), inputs.stage)
@@ -1056,6 +1063,9 @@ jobs:
         if: inputs.stage == 'full'
         env:
           FSS_RELEASE_WORKER_DIGEST: ${{ inputs.worker_image_digest }}
+          # Its step 7 runs `rehearsal-schema-ranges.sh` again, which launches the API
+          # task definition as well as the worker's, so it needs both digests.
+          FSS_RELEASE_API_DIGEST: ${{ inputs.api_image_digest }}
         run: infra/scripts/rehearsal-restore-drill.sh '${{ steps.prefix.outputs.prefix }}'
 
       - name: Suppression journal replay and Gmail reconstruction

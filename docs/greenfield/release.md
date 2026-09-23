@@ -426,7 +426,7 @@ before it run:
 4. [plan, then create] **Plan, then create.** The variables the root requires are written to `run.auto.tfvars.json` beside the root, the backend is initialised against this run's own state key, and `terraform plan -out` is run with the whole `-var` list. The `create` stage then applies, and names **no variable of its own**: Terraform loads `run.auto.tfvars.json` automatically from the root directory, which is the same mechanism the teardown's `terraform destroy` depends on. One list in one place is what keeps the plan and the apply the same values. The apply creates the rehearsal root with the run prefix and `bootstrap=true`, deploying both digests from the stable `fss-rh-api` and `fss-rh-worker` repositories. **Both services are created at desired count zero.** A fresh environment's database has no schema, and both binaries refuse to start unless the applied schema version is exactly the range they declare — so an apply that started them would create two services crash-looping against an empty database while the task that would fix it had not been launched. The run creates no repository of its own and its teardown removes none; `infra/roots/rehearsal-registry` owns those two and was applied once, before the first push.
 5. [deploy] **Fill every secret entry.** Terraform creates every Secrets Manager entry empty and never holds a value. In production you fill these two by hand (5.1); a rehearsal is unattended and an hour long, so it fills its own: `migration-database` takes the RDS-managed master credentials, because on a database that has never been migrated there is no other login role that can run DDL, and `app-runtime-database` takes a password generated in the runner. Both are masked before they can reach a log. This needs `secretsmanager:PutSecretValue` on `fss-rh-*` secrets on `fss-rh-deploy` — see 8.1.
 6. [deploy] **Migrate, then deploy the worker, then the API.** `infra/scripts/release-deploy.sh infra/roots/rehearsal <prefix> --schema-change` — the *same script* you run locally for production (section 4.1). It scales to zero if anything is running, runs `fss migrate` as a one-off ECS task inside the VPC, then `fss admin database-users ensure`, then `fss verify`, then the worker to its declared count, then the API, then `fss verify` again against the running deployment. Never beside each other: the API's declared schema range needs the migration to have run. Until 21 September nothing in deployment ran a migration at all; the step was named for an order it did not perform.
-7. [full] **The declared ranges, against the deployed images** (`infra/scripts/rehearsal-schema-ranges.sh`): Appendix G 22's refusal cases, which only a real ECS task can answer.
+7. [full] **The declared ranges, against the deployed images** (`infra/scripts/rehearsal-schema-ranges.sh <prefix> --api-digest D --worker-digest D`): Appendix G 22's refusal cases, which only a real ECS task can answer. Each service image is launched as a one-off `--selftest` task through the same wrapper the deploy uses, with a declared schema range one below the one it was built with, and the *container* must refuse it — exit 12, `configurationInvalid` in both `API_EXIT_CODES` and `WORKER_EXIT_CODES`. The overlap case, the previous release's image against the current schema, runs **only when a `<prefix>-<service>-previous` task definition is actually registered**: nothing in this repository registers one and a first release has no previous image at all, so the report says `skipped_no_previous` rather than claiming a pass (8.0o).
 8. [deploy] **Smoke** with the same `scripts/productionSmoke.mjs` production gets.
 9. [full] **Release suite (recorded mode, runner)**: the 42 scenarios (`npm run test:release`) and the **mutation check** (`npm run test:release:mutation`), which breaks each trap in turn and requires the suite to go red. They run in the runner against the job's own `postgres:16` service container, which is what they were built for. They do **not** touch the rehearsal database and could not: it is private — `publicly_accessible = false`, no NAT gateway, no bastion — so the step that used to assemble a URL from the rehearsal's outputs could never have connected. What runs against the rehearsal database is `fss verify` and `fss drill`, inside the VPC.
 10. [full] **Restore drill**, Appendix E steps 1 to 9. The runner keeps the control plane (reading the latest restorable point, the restore itself, the wait, the teardown); two in-VPC tasks do the database work — `fss admin counts` for the baseline on the source, then one `fss drill` against the restored instance for steps 1 to 9, with one correlated log and per-step JSON. The runner reads the report and decides whether it is a pass, so a change to the tool cannot quietly relax the gate. It refuses to report a pass unless the baseline contained an accepted send, a reply, a suppression, a CRM edit and a migration — a drill against an empty database proves nothing. The drill task is fixed at `FSS_DEPENDENCIES=recorded` **in its task definition**, because `reconcile-sent`, `recover` and `watch-renew` all reach Gmail when it is live and a mode a caller passes is a mode a caller can forget.
@@ -1236,6 +1236,61 @@ recreates it. Listing is not reading — the deployer may enumerate keys and is 
 object by the bucket policy and by `NoDeploymentDataAccess` in its own IAM policy.
 `docs/decisions/g37-the-deployer-may-list-the-journal-but-never-read-it.md`, with the
 module test, both roots' teardown tests, the release check and a mutation.
+
+### 8.0o What the seventh full run proved: the deploy path, and a step that measured the wrong thing (23 September, evening)
+
+Run 35905867795 (d4e6708d) is the first that reached the far side of step 17. The whole
+deploy path ran against a fresh environment: create took 16 minutes, every secret entry
+was filled, and stop, `fss migrate`, `fss admin database-users ensure`, `fss verify`,
+worker, API and `fss verify` again took 12 more. Every one-off task started, reached the
+database, said what it had done and exited 0 — the four findings of 8.0j to 8.0m,
+closed in one pass.
+
+Step 18, "the declared schema ranges, against the deployed images", then failed in about
+a second, and for reasons of its own.
+`infra/scripts/rehearsal-schema-ranges.sh` carried two defects, both invisible for as
+long as no run ever reached it.
+
+**The overlap case named a task definition nothing creates.**
+`PREVIOUS_RELEASE_SCHEMA_RANGE` is `{1,15}` and the current schema version is 15, so the
+previous release's range accepts it and the overlap branch was the branch the numbers
+chose. It ran `ecs run-task` against `<prefix>-<service>-previous`. No root registers
+such a family — `infra/modules/cluster` registers `-api`, `-worker`, `-migration`,
+`-operations` and `-drill` — and this was a first release, which has no previous image
+anywhere. Whether that definition exists is now a fact the step *reads* before it uses
+one: absent, it records `<service>_overlap=skipped_no_previous` and carries on, because
+having no predecessor is a fact about history rather than a failed test; registered, its
+`--selftest` must exit 0 and a refusal is a failure.
+
+**The stale case measured the wrong thing, and would have passed for ever.** It called
+`command aws ecs run-task` — deliberately outside the wrapper — with `FSS_SCHEMA_MIN`
+and `FSS_SCHEMA_MAX` one below the image's minimum, and read a *successful API call* as
+"the image accepted a range it does not support". Two things are wrong with that. The
+refusal it is hunting for happens inside the container at startup
+(`apps/*/src/bootstrap/config.ts`, `SCHEMA_RANGE_DISAGREES`), not in the `run-task`
+response; and an `awsvpc` task definition cannot be launched without
+`--network-configuration`, which that call never passed — so it was refused
+client-side every time and the case passed vacuously.
+
+**What changed.** Both cases now launch through `release_run_task`, the wrapper every
+other one-off task already uses: it takes the network plan from the root's own output,
+checks the registered image against the digest this release names, waits for the task to
+stop, prints the task's log lines and reads the *container's* exit code. The stale case
+requires exactly 12, which is `configurationInvalid` in both `API_EXIT_CODES` and
+`WORKER_EXIT_CODES` and what either service image returns when the declared range
+disagrees — not the `fss` tool's 20, since that tool is the migration and operations
+entry point and reads no schema range at all. Exit 0 is the failure this case exists to
+catch, and any other code fails with the code printed. The wrapper gained one option for
+it, `--expect-exit`, because a comparison of exit codes belongs where the exit code is
+already read rather than in a caller parsing output.
+
+The step therefore needs both digests, and the workflow hands them to it exactly as it
+hands them to step 17; the restore drill, which runs the same script for its step 7,
+passes them in the environment and refuses up front without them.
+`test/release/scenario22.check.ts` drives the whole script offline against a fake CLI —
+a first release with no previous image, a registered previous image, an image that
+accepts the stale range, and a container that stops for some other reason — and a
+mutation puts the run-task reading back to prove the suite goes red when it does.
 
 ### 8.1 Still unverified
 
