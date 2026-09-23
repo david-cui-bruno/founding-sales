@@ -7,6 +7,7 @@ import {
   drillInvocations,
   parseFssCommand,
 } from '../src/tools/fss/commands.ts';
+import { MIGRATION_IDENTITY_COMMANDS } from '../src/tools/fss.ts';
 
 /**
  * The operations command line's argument surface (lane G12g; rewired by G12h).
@@ -108,5 +109,37 @@ describe('the fss command line accepts every invocation the release scripts make
   it('describes every command it has, so `fss` with no arguments is usable', () => {
     const described = describeCommands();
     for (const command of FSS_COMMANDS) expect(described).toContain(command.path.join(' '));
+  });
+});
+
+describe('the commands release-deploy.sh runs on the migration task definition', () => {
+  // That task definition injects MIGRATION_DATABASE_SECRET and FSS_RUNTIME_DATABASE_SECRET_ARN
+  // and no DATABASE_SECRET_ARN (infra/modules/cluster/tests/migration_identity.tftest.hcl).
+  // A command run there that the tool does not list as a migration-identity command is
+  // refused before it looks at the database: fss migrate on 23 September 2026 (twice),
+  // then fss admin database-users ensure (run 35883201716). The script is the input.
+  const script = readFileSync(
+    fileURLToPath(new URL('../../../infra/scripts/release-deploy.sh', import.meta.url)),
+    'utf8',
+  ).replaceAll('\\\n', ' ');
+  const onMigrationTask = [...script.matchAll(/one_off\s+\S+\s+"\$MIGRATION_TASK_DEFINITION"\s+migration\s+(.+)$/gmu)]
+    .map(match => (match[1] ?? '').split(/\s+/u).filter(word => word.length > 0))
+    .map(argv => {
+      const firstOption = argv.findIndex(word => word.startsWith('--'));
+      return (firstOption === -1 ? argv : argv.slice(0, firstOption)).join(' ');
+    });
+
+  it('the script runs at least migrate and database-users there, and each is a migration-identity command', () => {
+    expect(onMigrationTask).toContain('migrate');
+    expect(onMigrationTask).toContain('admin database-users ensure');
+    for (const command of onMigrationTask) {
+      expect(MIGRATION_IDENTITY_COMMANDS, `${command} runs on the migration task definition`).toContain(command);
+    }
+  });
+
+  it('every migration-identity command is one the parser knows, so the list holds no phantom', () => {
+    for (const command of MIGRATION_IDENTITY_COMMANDS) {
+      expect(parseFssCommand(command.split(' ')).ok, command).toBe(true);
+    }
   });
 });

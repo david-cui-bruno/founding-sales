@@ -168,6 +168,47 @@ describe('fss migrate', () => {
     expect(readReport('migrate-secret-only.json')['schemaVersionAfter']).toBe(CURRENT_SCHEMA_VERSION);
   });
 
+  it('admin database-users ensure runs with the migration credential alone too, as the task definition is shaped', async () => {
+    // Run 35883201716 (23 September 2026) migrated the database and then refused this
+    // command with the exact message migrate had been refused with the run before.
+    const url = new URL(databaseUrl);
+    const migration = JSON.stringify({
+      username: decodeURIComponent(url.username),
+      password: decodeURIComponent(url.password),
+      host: url.hostname,
+      port: Number(url.port || 5432),
+      dbname: url.pathname.slice(1),
+    });
+    const runtimeUser = `fss_rt_${randomUUID().replaceAll('-', '').slice(0, 12)}`;
+    const runtime = JSON.stringify({
+      username: runtimeUser,
+      password: `p${randomUUID().replaceAll('-', '')}`,
+      host: url.hostname,
+      port: Number(url.port || 5432),
+      dbname: url.pathname.slice(1),
+    });
+    const printed: string[] = [];
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(chunk => {
+      printed.push(String(chunk));
+      return true;
+    });
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const code = await main(['admin', 'database-users', 'ensure'], {
+        MIGRATION_DATABASE_SECRET: migration,
+        FSS_RUNTIME_DATABASE_SECRET_ARN: runtime,
+      });
+      expect(code).toBe(0);
+    } finally {
+      stdout.mockRestore();
+      stderr.mockRestore();
+      await session.query(`DROP ROLE IF EXISTS "${runtimeUser}"`).catch(() => undefined);
+    }
+    const report = JSON.parse(printed.join('')) as { user?: { outcome?: string; user?: string } };
+    expect(report.user?.outcome).toBe('created');
+    expect(report.user?.user).toBe(runtimeUser);
+  });
+
   it('every other command still refuses without the runtime credential, and names both variables', async () => {
     const lines: string[] = [];
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(chunk => {

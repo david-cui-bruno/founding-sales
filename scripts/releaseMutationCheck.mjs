@@ -33,6 +33,15 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));
 /** @type {{name: string, file: string, find: string, replace: string, suite: string[], because: string}[]} */
 const MUTATIONS = [
   {
+    name: 'the tool forgets that database-users runs as the migration identity',
+    file: 'apps/worker/src/tools/fss.ts',
+    find: "  'migrate up',\n  'admin database-users ensure',\n",
+    replace: "  'migrate up',\n",
+    suite: ['--workspace', 'apps/worker', '--', 'test/fssCli.test.ts'],
+    because:
+      'release-deploy.sh runs `admin database-users ensure` on the migration task definition, which injects no runtime connection. Run 35883201716 (23 September 2026) migrated the database and then refused this command for the reason migrate had been refused the run before; the script and the set are read together now.',
+  },
+  {
     name: 'the wrapper stops fetching a failed task’s log',
     file: 'infra/scripts/release-common.sh',
     find: '  release_report_task "$step" "$described" "$container" || verdict=1\n',
@@ -62,7 +71,7 @@ const MUTATIONS = [
   {
     name: 'the tool demands the runtime connection for migrate again',
     file: 'apps/worker/src/tools/fss.ts',
-    find: "readToolConfig(environment, { runtimeConnection: migrateOnly ? 'optional' : 'required' })",
+    find: "readToolConfig(environment, { runtimeConnection: migrationIdentity ? 'optional' : 'required' })",
     replace: 'readToolConfig(environment)',
     suite: ['--workspace', 'apps/worker', '--', 'test/fssTool.test.ts'],
     because:
