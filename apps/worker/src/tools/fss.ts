@@ -71,6 +71,23 @@ import {
 
 export const FSS_EXIT_CODES = Object.freeze({ ok: 0, refused: 20, failed: 21, usage: 64 });
 
+/**
+ * The commands `infra/scripts/release-deploy.sh` runs on the *migration* task definition,
+ * which injects `MIGRATION_DATABASE_SECRET` and `FSS_RUNTIME_DATABASE_SECRET_ARN` and, by
+ * design, no `DATABASE_SECRET_ARN` (infra/modules/cluster, `migration_task_secrets`).
+ * They read their configuration with the runtime connection optional and work through
+ * the migration session alone; every other command still refuses without the
+ * application's connection, up front. The list is code rather than a comment because
+ * `fss admin database-users ensure` was refused on 23 September 2026 (run 35883201716)
+ * for exactly the reason `fss migrate` had been the run before, and
+ * `apps/worker/test/fssCli.test.ts` reads the script to keep the two in step.
+ */
+export const MIGRATION_IDENTITY_COMMANDS: readonly string[] = Object.freeze([
+  'migrate',
+  'migrate up',
+  'admin database-users ensure',
+]);
+
 const write = (line: string): void => {
   process.stdout.write(`${line}\n`);
 };
@@ -236,8 +253,30 @@ async function runCommand(
     const outcome = await runMigrate(migrationSession, { allowAnyRole: switches.has('--allow-any-role') });
     return outcome.ok ? { ok: true, value: { ...outcome.value } } : { ok: false, reason: outcome.reason, detail: outcome.detail };
   }
-  // `migrate` is the one command that runs without the application's connection (the
-  // migration task definition injects none). Everything below needs it.
+  if (path === 'admin database-users ensure') {
+    // On the migration task, as the migration credential: creating a login role is not
+    // something the application's own user may do, and the runtime credential is the
+    // one this command is about to make work.
+    if (migrationSession === null) return missingMigrationCredential();
+    const variable = options['--runtime-secret'] ?? RUNTIME_SECRET_VARIABLE;
+    const secretValue = environment[variable]?.trim();
+    if (secretValue === undefined || secretValue.length === 0) {
+      return {
+        ok: false,
+        reason: 'secret_variable_missing',
+        detail: `${variable} is not set; --runtime-secret names the environment variable the runtime credential's secret value is injected into, never the credential itself`,
+      };
+    }
+    const outcome = await ensureRuntimeDatabaseUser(migrationSession, {
+      secretValue,
+      rotatePassword: switches.has('--rotate-password'),
+    });
+    return outcome.ok
+      ? { ok: true, value: { ...outcome.value } }
+      : { ok: false, reason: outcome.reason, detail: outcome.detail };
+  }
+  // The two commands above are MIGRATION_IDENTITY_COMMANDS: they run on the migration
+  // task definition, which injects no runtime connection. Everything below needs one.
   if (session === null) return missingRuntimeCredential();
   if (path === 'migrate status' || path === 'schema-version') {
     return { ok: true, value: { ...(await readSchemaVersionReport(session)) } };
@@ -283,28 +322,6 @@ async function runCommand(
     return { ok: false, reason: outcome.reason, detail: outcome.detail };
   }
 
-  if (path === 'admin database-users ensure') {
-    // On the migration task, as the migration credential: creating a login role is not
-    // something the application's own user may do, and the runtime credential is the
-    // one this command is about to make work.
-    if (migrationSession === null) return missingMigrationCredential();
-    const variable = options['--runtime-secret'] ?? RUNTIME_SECRET_VARIABLE;
-    const secretValue = environment[variable]?.trim();
-    if (secretValue === undefined || secretValue.length === 0) {
-      return {
-        ok: false,
-        reason: 'secret_variable_missing',
-        detail: `${variable} is not set; --runtime-secret names the environment variable the runtime credential's secret value is injected into, never the credential itself`,
-      };
-    }
-    const outcome = await ensureRuntimeDatabaseUser(migrationSession, {
-      secretValue,
-      rotatePassword: switches.has('--rotate-password'),
-    });
-    return outcome.ok
-      ? { ok: true, value: { ...outcome.value } }
-      : { ok: false, reason: outcome.reason, detail: outcome.detail };
-  }
 
   const name = spec.path.slice(1).join(' ');
   const admin = ADMIN_COMMANDS[name];
@@ -346,13 +363,14 @@ export async function main(
 
   const log = toolLogger(parsed.value.spec.path.join('-'));
   // The migration task definition carries the migration credential and nothing the
-  // application connects with, so `migrate` reads its configuration with the runtime
-  // connection optional. Every other command still refuses without one, up front.
+  // application connects with, so the commands that run on it read their configuration
+  // with the runtime connection optional. Every other command still refuses without
+  // one, up front.
   const commandPath = parsed.value.spec.path.join(' ');
-  const migrateOnly = commandPath === 'migrate' || commandPath === 'migrate up';
+  const migrationIdentity = MIGRATION_IDENTITY_COMMANDS.includes(commandPath);
   let config: ToolConfig;
   try {
-    config = readToolConfig(environment, { runtimeConnection: migrateOnly ? 'optional' : 'required' });
+    config = readToolConfig(environment, { runtimeConnection: migrationIdentity ? 'optional' : 'required' });
   } catch (error) {
     log.log('error', 'fss_configuration_refused', {
       ...errorFields(error),

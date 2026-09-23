@@ -1135,6 +1135,22 @@ now taken first, the log fetched whatever it was, and the failure returned after
 `oneOffTaskLogs.check.ts` drives the whole wrapper through its fixture hooks with a
 stopped task that exited 21 and asserts the line and the kept copy, with a mutation.
 
+### 8.0l What the fourth attempt proved: the migration ran; the next command had the same gap (23 September, midday)
+
+Run 35883201716 (bb5eea61) is the first in which `fss migrate` ran against the real
+database: schema 0 to 15, fifteen migrations applied over TLS, and the container's report
+in the job log and in `tasks/migrate.log`. The next command, `fss admin database-users
+ensure`, runs on the same migration task definition and was refused the way `migrate`
+had been the run before: `neither DATABASE_URL nor DATABASE_SECRET_ARN is set`. 8.0j had
+made one command runtime-optional by name; the task definition carries two.
+
+The commands that run as the migration identity are now a list in the tool,
+`MIGRATION_IDENTITY_COMMANDS`, and `apps/worker/test/fssCli.test.ts` reads
+`release-deploy.sh` for every `one_off` on `$MIGRATION_TASK_DEFINITION` and requires each
+to be in that list, and each entry in the list to be a command the parser knows. The
+tool test runs `admin database-users ensure` with exactly the two variables the task
+injects. A mutation removes the entry.
+
 ### 8.1 Still unverified
 
 Nothing in this repository has ever been applied beyond the four steps above, and no rehearsal environment has ever existed. Every command here comes from the AWS documentation, the Terraform schema and the scripts' dry-run output, checked offline. Watch these on the next real run:
