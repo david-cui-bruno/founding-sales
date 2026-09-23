@@ -33,6 +33,15 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));
 /** @type {{name: string, file: string, find: string, replace: string, suite: string[], because: string}[]} */
 const MUTATIONS = [
   {
+    name: 'the rehearsal stops filling one of the six application entries',
+    file: '.github/workflows/greenfield-release.yml',
+    find: '              session-signing-key|device-credential-pepper)\n',
+    replace: '              session-signing-key)\n',
+    suite: ['run', 'test:release'],
+    because:
+      'An ECS task whose secrets block names an empty entry does not start (run 35891175510, 23 September 2026, at fss verify). The step must know every name on the stack\u2019s list; an unknown one is a failure, and this mutation turns a known one into that failure path only if the test reads the arms.',
+  },
+  {
     name: 'the tool forgets that database-users runs as the migration identity',
     file: 'apps/worker/src/tools/fss.ts',
     find: "  'migrate up',\n  'admin database-users ensure',\n",
