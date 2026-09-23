@@ -102,6 +102,24 @@ check.
 successful sign-in, and then an active `workspace_memberships` row is required — at
 the callback, again at the claim, and again on every command.
 
+**So somebody has to write the first membership, and it is an operator, once.** Those
+three rules are circular on a new deployment: sign-in refuses without the workspace,
+refuses again without an active membership, and is the only thing that writes the
+`users` row. `fss admin workspace bootstrap` breaks the circle from outside —
+`infra/scripts/release-bootstrap-workspace.sh`, run as a one-off task under the runtime
+credential (release runbook 5.1a) — and creates the workspace, the first admin's `users`
+row and an active `admin` membership in one idempotent transaction. The real Google
+`sub` cannot be known before that person signs in, so the row is written with
+`google_sub = 'pending-email:<lowercased address>'`; the sentinel prefix is the single
+exported constant `PROVISIONAL_GOOGLE_SUB_PREFIX` in `@fss/contracts`, and no Google
+`sub` can collide with it because a `sub` is a decimal string of digits. The **first**
+successful sign-in with that address replaces the sentinel with the real `sub` and
+records `auth.provisional_user_adopted`; an address that already has a real account is
+never overwritten, because the statement carries a `NOT EXISTS` guard, and a sign-in by
+anybody else adopts nothing. Adoption changes *which row* the sign-in finds and grants
+nothing: the membership check still decides, at the callback, at the claim and on every
+command. `docs/decisions/g39-the-first-workspace-and-its-admin-are-bootstrapped.md`.
+
 ## What the Mac holds
 
 | Thing | Where | Lifetime |

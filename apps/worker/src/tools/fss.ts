@@ -30,6 +30,7 @@ import {
 import { loadS3JournalSource } from './fss/journalSource.ts';
 import { readSchemaVersionReport, runMigrate } from './fss/migrate.ts';
 import { runVerify } from './fss/verify.ts';
+import { bootstrapWorkspace } from './fss/bootstrapWorkspace.ts';
 import { RUNTIME_SECRET_VARIABLE, ensureRuntimeDatabaseUser } from './fss/databaseUsers.ts';
 import { runDrill } from './fss/drill.ts';
 import {
@@ -287,6 +288,21 @@ async function runCommand(
       ...(options['--note'] === undefined ? {} : { note: options['--note'] }),
     });
     return outcome.ok ? { ok: true, value: { ...outcome.value } } : { ok: false, reason: outcome.reason, detail: outcome.detail };
+  }
+  if (path === 'admin workspace bootstrap') {
+    // The runtime identity, like `verify`, and deliberately **not** a
+    // MIGRATION_IDENTITY_COMMAND: it writes three business rows with the credential
+    // the services use, which is the credential whose privileges on those tables are
+    // the thing worth proving. The migration user never touches business data.
+    const outcome = await bootstrapWorkspace(session, {
+      slug: options['--slug'] ?? '',
+      displayName: options['--display-name'] ?? '',
+      adminEmail: options['--admin-email'] ?? '',
+      ...(options['--time-zone'] === undefined ? {} : { timeZone: options['--time-zone'] }),
+    });
+    return outcome.ok
+      ? { ok: true, value: { ...outcome.value } }
+      : { ok: false, reason: outcome.reason, detail: outcome.detail };
   }
   if (path === 'drill') {
     // The drill reaches the Gmail seam through steps 3, 4 and 6, so it is bound by the

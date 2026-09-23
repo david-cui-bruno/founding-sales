@@ -44,6 +44,10 @@ import { MIGRATION_IDENTITY_COMMANDS } from '../src/tools/fss.ts';
 const CALLERS = [
   'infra/scripts/rehearsal-restore-drill.sh',
   'infra/scripts/release-deploy.sh',
+  // g39: the step between the deploy and the schema ranges. It is here for the same
+  // reason the other two are — it names a command, and a script naming a command the
+  // tool does not have is a step that fails inside a container nobody is watching.
+  'infra/scripts/release-bootstrap-workspace.sh',
 ] as const;
 
 const INVOCATIONS = CALLERS.flatMap(relative =>
@@ -53,11 +57,12 @@ const INVOCATIONS = CALLERS.flatMap(relative =>
 describe('the fss command line accepts every invocation the release scripts make', () => {
   it('finds every `fss` invocation in both scripts, planned and real', () => {
     // A floor on purpose: an extractor that silently found none would make every case
-    // below vacuous, and the scripts are the specification here. Five is the number of
+    // below vacuous, and the scripts are the specification here. Six is the number of
     // distinct commands the release actually issues — `admin counts`, `drill`,
-    // `migrate`, `admin database-users ensure`, `verify` — and each appears at least
-    // once in a planned line and once in a real one.
-    expect(INVOCATIONS.length).toBeGreaterThanOrEqual(5);
+    // `migrate`, `admin database-users ensure`, `verify` and, since g39,
+    // `admin workspace bootstrap` — and each appears at least once in a planned line
+    // and once in a real one.
+    expect(INVOCATIONS.length).toBeGreaterThanOrEqual(6);
     expect(INVOCATIONS.some(invocation => invocation.planned)).toBe(true);
     expect(INVOCATIONS.some(invocation => !invocation.planned)).toBe(true);
 
@@ -69,7 +74,14 @@ describe('the fss command line accepts every invocation the release scripts make
       const flagAt = invocation.argv.findIndex(word => word.startsWith('--'));
       return (flagAt < 0 ? invocation.argv : invocation.argv.slice(0, flagAt)).join(' ');
     });
-    for (const expected of ['admin counts', 'drill', 'migrate', 'admin database-users ensure', 'verify']) {
+    for (const expected of [
+      'admin counts',
+      'drill',
+      'migrate',
+      'admin database-users ensure',
+      'verify',
+      'admin workspace bootstrap',
+    ]) {
       expect(commands, `no release script invokes \`fss ${expected}\``).toContain(expected);
     }
   });

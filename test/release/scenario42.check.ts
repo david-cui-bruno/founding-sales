@@ -259,6 +259,7 @@ describe('Appendix G 42: sending stays off until all four agree', () => {
         'terraform plan': 'plans the environment it is about to destroy',
         'terraform apply': 'applies',
         'release-deploy.sh': 'deploys',
+        'release-bootstrap-workspace.sh': 'writes the first workspace and its admin',
         'rehearsal-restore-drill.sh': 'runs the restore drill',
         'npm run test:release': 'runs the release suite',
         'rehearsal-release-record.sh': 'writes a release record',

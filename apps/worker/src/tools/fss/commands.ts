@@ -74,6 +74,7 @@ export const COMMAND_DEPENDENCIES: Readonly<Record<string, DependencyMode>> = Ob
   'restore-report': 'database',
   'system-generation advance': 'database',
   'mailbox coverage': 'database',
+  'workspace bootstrap': 'database',
   'suppression-journal replay': 'journal',
   'mailbox reconcile-sent': 'recorded',
   'mailbox recover': 'recorded',
@@ -190,6 +191,13 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
     requiredFlags: [],
     oneOf: ['--all-mailboxes', '--mailbox'],
     summary: 'the coverage watermark of every mailbox, and whether it is complete',
+  },
+  {
+    path: ['admin', 'workspace', 'bootstrap'],
+    valueFlags: ['--slug', '--display-name', '--admin-email', '--time-zone', ...REPORTABLE],
+    booleanFlags: [],
+    requiredFlags: ['--slug', '--display-name', '--admin-email'],
+    summary: 'the first workspace and its first active admin, in one transaction, idempotently',
   },
   {
     path: ['admin', 'jobs', 'discard-runnable'],

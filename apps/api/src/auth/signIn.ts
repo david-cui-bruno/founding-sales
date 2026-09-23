@@ -1,5 +1,6 @@
 import { withTransaction, type QueryResultRowLike } from '@fss/domain/db';
 import {
+  PROVISIONAL_GOOGLE_SUB_PREFIX,
   clientCompatibility,
   type AuthRefusalCode,
   type ClientVersionRange,
@@ -188,6 +189,46 @@ export async function handleCallback(deps: AuthDeps, input: CallbackInput): Prom
   });
   if (!validated.valid) return await fail(validated.refusal);
 
+  // The provisional row an operator bootstrapped, adopted at its first sign-in (g39).
+  //
+  // `fss admin workspace bootstrap` writes the first admin's `users` row before that
+  // person has ever presented an id token, with `google_sub` set to
+  // `PROVISIONAL_GOOGLE_SUB_PREFIX` and the e-mail after it, because the real `sub` is
+  // Google's to mint and is unknowable then. This is the one statement that turns such
+  // a row into a real account, and it is safe for three reasons worth writing down:
+  //
+  //   1. the e-mail is not the caller's. It comes from an id token whose RS256
+  //      signature, issuer, audience, nonce, `email_verified` and `hd` equal to the
+  //      configured Workspace domain `validateIdToken` has already enforced
+  //      (`apps/api/src/auth/idToken.ts`). Nothing an unauthenticated request says
+  //      reaches `$2`;
+  //   2. a provisional row exists only because somebody holding the runtime database
+  //      credential wrote one. That principal could already write any row in any of
+  //      these three tables, so adoption grants nothing that was not already granted
+  //      by the act of bootstrapping;
+  //   3. the sentinel cannot collide with a real identity. A Google `sub` is a decimal
+  //      string of digits, so no token can ever carry `pending-email:<address>`, and
+  //      the `NOT EXISTS` guard means an address that already has a real account is
+  //      never clobbered — that account is found by the upsert below as it always was.
+  //
+  // Membership is unchanged by this: the check below still decides, and it is checked
+  // again at the claim and on every command.
+  //
+  // `$4` is the prefix, bound rather than interpolated: a constant spliced into SQL
+  // text is a habit that stops being safe the first time the value stops being one.
+  const adopted = await deps.db.query(
+    `UPDATE users
+        SET google_sub = $1, display_name = $3, updated_at = now()
+      WHERE google_sub = $4 || $2
+        AND NOT EXISTS (SELECT 1 FROM users WHERE google_sub = $1)`,
+    [
+      validated.claims.subject,
+      validated.claims.email.toLowerCase(),
+      validated.claims.displayName,
+      PROVISIONAL_GOOGLE_SUB_PREFIX,
+    ],
+  );
+
   // The `users` row is created on first successful sign-in: `sub` is the durable id,
   // and email is display data that may change. Existence still grants nothing — the
   // membership check below is what does, and it is checked again at claim and on
@@ -202,6 +243,17 @@ export async function handleCallback(deps: AuthDeps, input: CallbackInput): Prom
   );
   const userId = user.rows[0]?.id;
   if (userId === undefined) return await fail('membership_required');
+
+  if ((adopted.rowCount ?? 0) === 1) {
+    await recordAuditEvent(deps.db, {
+      workspaceId: request.workspace_id,
+      actor: { userId, role: null, kind: 'user' },
+      action: 'auth.provisional_user_adopted',
+      subjectKind: 'user',
+      subjectId: userId,
+      detail: { adoptedFrom: 'bootstrap' },
+    });
+  }
 
   const membership = await deps.db.query<{ role: string }>(
     "SELECT role FROM workspace_memberships WHERE workspace_id = $1 AND user_id = $2 AND status = 'active'",

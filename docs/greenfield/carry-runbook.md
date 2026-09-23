@@ -190,6 +190,11 @@ exports. `artifact_unreadable` means the identity does not open it.
 
 ## 7. Import
 
+`PUT-THE-NEW-WORKSPACE-UUID-HERE` is the `workspace.id` that
+`infra/scripts/release-bootstrap-workspace.sh` printed (`docs/greenfield/release.md`
+5.1a). A freshly migrated database has no workspace at all, so that step runs before
+this one; the import refuses a workspace that does not exist.
+
 ```
 node --experimental-transform-types apps/worker/tools/carry/main.ts import \
   --artifact "$CARRY/$ID.fss-carry" \

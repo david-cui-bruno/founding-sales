@@ -322,6 +322,7 @@ jobs:
             "infra/scripts/rehearsal-prefix-guard.sh $prefix before" \
             "infra/scripts/release-deploy.sh infra/roots/rehearsal $prefix --schema-change --worker-digest $FSS_RELEASE_WORKER_DIGEST" \
             "infra/scripts/rehearsal-schema-ranges.sh $prefix --api-digest $FSS_RELEASE_API_DIGEST --worker-digest $FSS_RELEASE_WORKER_DIGEST" \
+            "infra/scripts/release-bootstrap-workspace.sh infra/roots/rehearsal $prefix --worker-digest $FSS_RELEASE_WORKER_DIGEST --slug rehearsal --display-name Rehearsal --admin-email rehearsal-admin@usecallie.com" \
             "infra/scripts/rehearsal-restore-drill.sh $prefix" \
             "infra/scripts/rehearsal-carry-watermark.sh $prefix" \
             "infra/scripts/rehearsal-teardown.sh $prefix" \
@@ -975,6 +976,29 @@ jobs:
             --schema-change \
             --api-digest '${{ inputs.api_image_digest }}' \
             --worker-digest '${{ inputs.worker_image_digest }}'
+
+      - name: Bootstrap the rehearsal workspace and its admin
+        if: contains(fromJSON('["deploy","full"]'), inputs.stage)
+        run: |
+          set -euo pipefail
+          # A migrated database has no `workspaces` row, and three things then do not
+          # work: nobody can sign in (`workspace_unknown`, then `membership_required`),
+          # the scheduler's canary source is per workspace and produces nothing, and
+          # the smoke below therefore has no `CanaryCompletionAgeSeconds` datapoint to
+          # judge. That is exactly how run 35919040315 failed on 23 September 2026,
+          # after the whole deploy path had passed for the first time.
+          #
+          # The admin row this writes is provisional: nobody signs in to a rehearsal,
+          # and the environment is destroyed at the end of the job. What is being
+          # rehearsed is the step itself, and the production command differs only in
+          # its root, its prefix, its three values and the `--environment production`
+          # this one does not need.
+          infra/scripts/release-bootstrap-workspace.sh infra/roots/rehearsal \
+            '${{ steps.prefix.outputs.prefix }}' \
+            --worker-digest '${{ inputs.worker_image_digest }}' \
+            --slug rehearsal \
+            --display-name Rehearsal \
+            --admin-email rehearsal-admin@usecallie.com
 
       - name: The declared schema ranges, against the deployed images
         if: inputs.stage == 'full'

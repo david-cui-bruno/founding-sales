@@ -468,6 +468,25 @@ const MUTATIONS = [
     because:
       'This is the first production apply exactly (23 September 2026): `fss-prod-deploy` created the bucket, was refused its own HeadBucket \u2014 which S3 authorises as `s3:ListBucket` \u2014 and the provider read the 403 as "the bucket is gone", dropped it from state, planned to create it again and deleted the encryption configuration and the ownership controls on the way past. `terraform test` proves the rendered condition and runs in the offline gate rather than here, so the release suite asserts the merge expression verbatim and has to notice when the exemption leaves it.',
   },
+  {
+    name: 'sign-in stops adopting the workspace the operator bootstrapped',
+    file: 'apps/api/src/auth/signIn.ts',
+    find: '      WHERE google_sub = $4 || $2\n',
+    replace: '      WHERE google_sub = $1\n',
+    suite: ['run', 'test:release'],
+    because:
+      '`fss admin workspace bootstrap` writes the first admin\u2019s users row with a sentinel google_sub, because the real Google sub cannot be known before that person signs in. This UPDATE is the only thing that turns it into a real account; without it the first sign-in inserts a *second* users row, the membership still hangs off the first, and the person is refused membership_required for ever \u2014 which from outside is indistinguishable from having no access. The release check reads the statement and its NOT EXISTS guard.',
+  },
+  {
+    name: 'a deploy stage stops bootstrapping the first workspace',
+    file: '.github/workflows/greenfield-release.yml',
+    find:
+      "      - name: Bootstrap the rehearsal workspace and its admin\n        if: contains(fromJSON('[\"deploy\",\"full\"]'), inputs.stage)\n",
+    replace: "      - name: Bootstrap the rehearsal workspace and its admin\n        if: inputs.stage == 'teardown'\n",
+    suite: ['run', 'test:release'],
+    because:
+      'Run 35919040315 (23 September 2026) passed create, fill, the deploy path and the schema-range refusals and then failed the smoke: no CanaryCompletionAgeSeconds datapoint in ten minutes, because the canary source is per workspace and a fresh database has none. A deploy that skips this step reproduces that failure exactly, and the step\u2019s stage condition is the whole of the difference.',
+  },
 ];
 
 function run(script) {
