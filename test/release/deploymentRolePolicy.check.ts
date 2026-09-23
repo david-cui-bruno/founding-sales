@@ -909,7 +909,7 @@ done`;
   it('simulates one action per call, each against the resource it is really authorized on', () => {
     // The first real run of this check (21 September) taught three things: AWS refuses to
     // simulate, in one call, actions that need different authorization information
-    // (CreateDistributionWithTags beside GetDistribution → InvalidInput); ec2:CreateRoute
+    // (a distribution creation beside GetDistribution → InvalidInput); ec2:CreateRoute
     // judged against a VPC ARN is an implicit deny because its resource is the route
     // table; and kms:CreateKey takes no resource at all. A stub records every call.
     const recording = mkdtempSync(join(tmpdir(), 'fss-simulate-calls-'));
@@ -940,7 +940,8 @@ done`;
     expect(callFor('ec2:AssociateRouteTable')).toContain(':route-table/');
     expect(callFor('kms:CreateKey')).not.toContain('--resource-arns');
     expect(callFor('kms:CreateKey')).toContain('aws:RequestTag/NamePrefix');
-    expect(callFor('cloudfront:CreateDistributionWithTags')).not.toContain('--resource-arns');
+    expect(callFor('cloudfront:CreateDistribution')).not.toContain('--resource-arns');
+    expect(callFor('cloudfront:CreateDistribution')).toContain('aws:RequestTag/NamePrefix');
     expect(callFor('cloudfront:GetDistribution')).toContain(':distribution/');
     // ECS: the seven denials of David's second run. Each action is judged on its own
     // resource type, never on the cluster.
