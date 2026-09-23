@@ -83,7 +83,7 @@ secrets manager entries (Access to KMS is not allowed, 21 Sep)|secretsmanager:Cr
 alarms, including the two composites (denied 21 Sep)|cloudwatch:PutMetricAlarm,cloudwatch:PutCompositeAlarm,cloudwatch:DeleteAlarms,cloudwatch:DescribeAlarms,cloudwatch:TagResource|arn:aws:cloudwatch:${REGION}:${ACCOUNT}:alarm:${PREFIX}-example-critical|
 the composite alarms, which CloudWatch authorizes against alarm:* (denied 21 Sep)|cloudwatch:PutCompositeAlarm|arn:aws:cloudwatch:${REGION}:${ACCOUNT}:alarm:*|
 the origin access control (denied 21 Sep)|cloudfront:CreateOriginAccessControl,cloudfront:GetOriginAccessControl,cloudfront:DeleteOriginAccessControl|*|
-the distribution|cloudfront:CreateDistributionWithTags,cloudfront:TagResource,cloudfront:GetDistribution,cloudfront:UpdateDistribution,cloudfront:DeleteDistribution|arn:aws:cloudfront::${ACCOUNT}:distribution/E111111111111|aws:ResourceTag/NamePrefix=${PREFIX}-example;aws:RequestTag/NamePrefix=${PREFIX}-example
+the distribution|cloudfront:CreateDistribution,cloudfront:TagResource,cloudfront:GetDistribution,cloudfront:UpdateDistribution,cloudfront:DeleteDistribution|arn:aws:cloudfront::${ACCOUNT}:distribution/E111111111111|aws:ResourceTag/NamePrefix=${PREFIX}-example;aws:RequestTag/NamePrefix=${PREFIX}-example
 the master secret RDS creates on behalf of the caller, tagged with the instance ARN (refused 22 Sep, run 35679472666)|secretsmanager:CreateSecret,secretsmanager:TagResource|arn:aws:secretsmanager:${REGION}:${ACCOUNT}:secret:rds!db-11111111-2222-4333-8444-555555555555-AbCdEf|aws:RequestTag/aws:rds:primaryDBInstanceArn=arn:aws:rds:${REGION}:${ACCOUNT}:db:${PREFIX}-example-pg
 the database|rds:CreateDBInstance,rds:ModifyDBInstance,rds:DeleteDBInstance,rds:AddTagsToResource,rds:RestoreDBInstanceToPointInTime|arn:aws:rds:${REGION}:${ACCOUNT}:db:${PREFIX}-example-pg|
 the database snapshots the drill leaves|rds:CreateDBSnapshot,rds:DeleteDBSnapshot|arn:aws:rds:${REGION}:${ACCOUNT}:snapshot:${PREFIX}-example-pg-drill|
@@ -122,7 +122,7 @@ override_for() { # override_for <action> -> "<resource>|<context>" or ""
   case "$1" in
     ec2:CreateRoute|ec2:ReplaceRoute|ec2:DeleteRoute|ec2:AssociateRouteTable|ec2:DisassociateRouteTable)
       printf '%s|%s\n' "arn:aws:ec2:${REGION}:${ACCOUNT}:route-table/rtb-0000000000000000e" "ec2:ResourceTag/NamePrefix=${PREFIX}-example" ;;
-    ec2:CreateVpc|ec2:CreateInternetGateway|kms:CreateKey|cloudfront:CreateDistributionWithTags|cloudfront:CreateDistribution)
+    ec2:CreateVpc|ec2:CreateInternetGateway|kms:CreateKey|cloudfront:CreateDistribution)
       printf '%s|%s\n' "-" "aws:RequestTag/NamePrefix=${PREFIX}-example" ;;
     # ECS judges each action on its own resource type (David's second run, 21 Sep): a service,
     # a task definition, a task, a container instance. Simulated against the cluster ARN, the

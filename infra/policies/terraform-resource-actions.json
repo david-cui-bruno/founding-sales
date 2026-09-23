@@ -569,7 +569,6 @@
       "scope": "tag",
       "actions": [
         "cloudfront:CreateDistribution",
-        "cloudfront:CreateDistributionWithTags",
         "cloudfront:GetDistribution",
         "cloudfront:GetDistributionConfig",
         "cloudfront:UpdateDistribution",
