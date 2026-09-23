@@ -179,7 +179,7 @@ The desktop commit stamp **is that value**. It is not something a build produces
 | 1 | Fix the release commit; push both images tagged with it (2.1 below) | David | The digests are the release's identity. |
 | 2 | Run the rehearsal with `desktop_commit_stamp` = the release commit (section 3) | CI | The record can name the commit before any Mac build exists, because the stamp is the commit. |
 | 3 | Apply production Terraform (section 4) | David | This is what creates the CloudFront distribution the Mac updates from. |
-| 4 | Set the repository variable `FSS_UPDATE_CHANNEL_URL` to `terraform output -raw` of `distribution_domain_name`, as `https://<host>/` | David | It does not exist until step 3, and GitHub will not hold an empty variable. |
+| 4 | Set the repository variable `FSS_UPDATE_CHANNEL_URL` to `terraform output -raw` of `updates_distribution_domain_name`, as `https://<host>/` | David | It does not exist until step 3, and GitHub will not hold an empty variable. |
 | 5 | Run *Greenfield desktop* with **release** ticked, on the release commit, passing the same commit as `desktop_commit_stamp` | CI | It refuses without step 4, because a build with no channel installs once and never updates. |
 | 6 | Download the artifact, publish it, install it (`docs/greenfield/install.md`) | David | The one step that changes what every Mac sees. |
 
@@ -424,7 +424,7 @@ before it run:
 2. [plan] **Name the principal.** `infra/scripts/rehearsal-caller-identity.sh fss-rh-deploy` prints `aws sts get-caller-identity --query Arn` and refuses anything that is not `arn:aws:sts::…:assumed-role/fss-rh-deploy/<session>`. Every `terraform` command in this job then runs with `-var="assume_deployment_role=false"`, because this session already *is* the deployment role and the provider must not ask STS to assume the role it already holds (`infra-apply-runbook.md` 1.1). The flag makes the job's own credentials the thing the apply acts as, so this step is what makes it safe; it is the one the teardown repeats.
 3. [plan] **Record the production inventory.** So that "teardown could not address production" is measured afterwards rather than asserted. This is the one rehearsal command that names a production resource on purpose, and on the first credentialed run (Actions 35548888865) the rehearsal's own guard refused it — `FAIL: a rehearsal command names a production resource: Key=Name,Values=fss-prod*` — before anything was created. It is now issued through one named function, `rehearsal_read_production_inventory` in `infra/scripts/rehearsal-common.sh`, which is the only caller exempt from the refusal, may issue only `resourcegroupstaggingapi get-resources`, and builds its own filter so no caller can push a name through it. Every other command naming `fss-prod` — including a mutating one wearing the same filter — is still refused. The dry run prints the read with an `exempt-read-only-production-inventory` marker and `infra/scripts/rehearsal-prefix-guard.sh <prefix> plan <file>` re-applies the refusal to that printed plan on every pull request, so a rehearsal that would refuse itself is red before a credential is spent.
 4. [plan, then create] **Plan, then create.** The variables the root requires are written to `run.auto.tfvars.json` beside the root, the backend is initialised against this run's own state key, and `terraform plan -out` is run with the whole `-var` list. The `create` stage then applies, and names **no variable of its own**: Terraform loads `run.auto.tfvars.json` automatically from the root directory, which is the same mechanism the teardown's `terraform destroy` depends on. One list in one place is what keeps the plan and the apply the same values. The apply creates the rehearsal root with the run prefix and `bootstrap=true`, deploying both digests from the stable `fss-rh-api` and `fss-rh-worker` repositories. **Both services are created at desired count zero.** A fresh environment's database has no schema, and both binaries refuse to start unless the applied schema version is exactly the range they declare — so an apply that started them would create two services crash-looping against an empty database while the task that would fix it had not been launched. The run creates no repository of its own and its teardown removes none; `infra/roots/rehearsal-registry` owns those two and was applied once, before the first push.
-5. [deploy] **Fill the two database entries.** Terraform creates every Secrets Manager entry empty and never holds a value. In production you fill these two by hand (5.1); a rehearsal is unattended and an hour long, so it fills its own: `migration-database` takes the RDS-managed master credentials, because on a database that has never been migrated there is no other login role that can run DDL, and `app-runtime-database` takes a password generated in the runner. Both are masked before they can reach a log. This needs `secretsmanager:PutSecretValue` on `fss-rh-*` secrets on `fss-rh-deploy` — see 8.1.
+5. [deploy] **Fill every secret entry.** Terraform creates every Secrets Manager entry empty and never holds a value. In production you fill these two by hand (5.1); a rehearsal is unattended and an hour long, so it fills its own: `migration-database` takes the RDS-managed master credentials, because on a database that has never been migrated there is no other login role that can run DDL, and `app-runtime-database` takes a password generated in the runner. Both are masked before they can reach a log. This needs `secretsmanager:PutSecretValue` on `fss-rh-*` secrets on `fss-rh-deploy` — see 8.1.
 6. [deploy] **Migrate, then deploy the worker, then the API.** `infra/scripts/release-deploy.sh infra/roots/rehearsal <prefix> --schema-change` — the *same script* you run locally for production (section 4.1). It scales to zero if anything is running, runs `fss migrate` as a one-off ECS task inside the VPC, then `fss admin database-users ensure`, then `fss verify`, then the worker to its declared count, then the API, then `fss verify` again against the running deployment. Never beside each other: the API's declared schema range needs the migration to have run. Until 21 September nothing in deployment ran a migration at all; the step was named for an order it did not perform.
 7. [full] **The declared ranges, against the deployed images** (`infra/scripts/rehearsal-schema-ranges.sh`): Appendix G 22's refusal cases, which only a real ECS task can answer.
 8. [deploy] **Smoke** with the same `scripts/productionSmoke.mjs` production gets.
@@ -501,8 +501,18 @@ There is also `extra_environment` (`map(string)`, empty) on both roots, for what
 ### 4.1 The order inside the apply, and the one command that performs it
 
 ```
-pg_trgm extension  →  fss migrate  →  database users  →  fss verify  →  worker  →  API  →  fss verify
+all eight entries filled  →  fss migrate  →  database users  →  fss verify  →  worker  →  API  →  fss verify
 ```
+
+**Every entry first.** Terraform creates the eight Secrets Manager entries empty, and an
+ECS task whose `secrets` block names an entry with no value does not start at all —
+`ResourceInitializationError … can't find the specified secret value for staging label:
+AWSCURRENT`, before the container exists (run 35891175510, 23 September 2026, at `fss
+verify`). Every task definition but the migration's names all eight, so section 5.1's
+six values go in **before** this command, not after it; the two database entries too.
+The rehearsal fills all eight in its own step, six of them with fixtures. The `pg_trgm`
+extension needs no step of its own: migration 0005 creates it, and it is a trusted
+extension the migration role may create.
 
 **You do not type those steps.** They are one script, and it is the same script CI runs for the rehearsal — the only differences are the root in argument one and the credentials in your shell:
 
@@ -546,7 +556,8 @@ These are in the order they unblock each other. Doing 5.3 before 5.2 will not wo
 
 ### 5.1 The secret values, from stdin
 
-Terraform created eight empty entries and never holds a value. Fill them:
+Terraform created eight empty entries and never holds a value. Fill them **before section
+4.1** — no task that names an empty entry starts (see "Every entry first" there):
 
 ```bash
 aws secretsmanager put-secret-value --secret-id fss-prod/google-gmail-oauth-client \
@@ -566,7 +577,8 @@ After G12h **nothing in the cluster can read the RDS-managed master secret.** Th
 openssl rand -base64 48   # then paste that
 ```
 
-Then force a new deployment of both services so the tasks read the values.
+If a value changes later, put the new value and force a new deployment of both services
+so the tasks read it.
 
 ### 5.2 The DNS ALIAS
 
@@ -722,7 +734,7 @@ Watch these, in this order, on the next run:
 
 1. **`secretsmanager:PutSecretValue` on `fss-rh-*`.** The rehearsal fills its own two
    database entries (section 3, step 5) because it is unattended. If `fss-rh-deploy`
-   does not hold that action the run stops at "Fill the two database entries" with an
+   does not hold that action the run stops at "Fill every secret entry" with an
    `AccessDenied`, and the fix is one statement scoped to `arn:aws:secretsmanager:*:*:secret:fss-rh-*`.
    Production never needs it: David fills both entries by hand.
 2. **Whether the migration task can reach the database at all.** It runs in the public
@@ -1150,6 +1162,24 @@ The commands that run as the migration identity are now a list in the tool,
 to be in that list, and each entry in the list to be a command the parser knows. The
 tool test runs `admin database-users ensure` with exactly the two variables the task
 injects. A mutation removes the entry.
+
+### 8.0m What the fifth attempt proved: two commands passed; no task can start on an empty entry (23 September, afternoon)
+
+Run 35891175510 (2e3cc8cc) migrated the database and created the runtime login user
+(`admin database-users ensure` exited 0: `app_runtime_login` created in `app_runtime`,
+`migration` granted to `fss_admin`). The next one-off, `fss verify` on the operations
+task definition, never started: `TaskFailedToStart — ResourceInitializationError: unable
+to pull secrets … device-credential-pepper … can't find the specified secret value for
+staging label: AWSCURRENT`. Terraform creates every entry empty; the rehearsal filled the
+two database entries and nothing else; every task definition but the migration's injects
+all eight. The same order was written into section 5 for production (fill the six after
+the first deploy), and would have stopped the production deploy at the same step.
+
+The rehearsal now fills all eight in the step that filled two, the six with fixtures of
+the shape the code parses, driven by the stack's own list so an entry this step cannot
+fill is a failure rather than a silent gap. Section 4.1 says every entry first; 5.1 is
+now about changing a value. `test/release/secretEntriesFilled.check.ts` ties the stack's
+list, the workflow step and the two sections together, with a mutation.
 
 ### 8.1 Still unverified
 
