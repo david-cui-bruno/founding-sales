@@ -253,14 +253,27 @@ describe('the dependency mode is fixed per command', () => {
   });
 
   it('refuses a Gmail-reaching command in a live deployment rather than sending from a command line', async () => {
+    // The reason, not only the exit code. This live environment is also missing the
+    // Gmail variables, so with the dependency-mode check gone `mailbox recover` still
+    // exits 20, refused `deployment_incomplete` by the Gmail configuration one step
+    // later, and a test that read only the code stayed green (lane g54 found it when the
+    // mutation check first ran this suite for real).
+    const refusal = (stderr: string): unknown =>
+      stderr
+        .split('\n')
+        .filter(line => line.startsWith('{'))
+        .map(line => JSON.parse(line) as Record<string, unknown>)
+        .find(line => line['event'] === 'fss_refused')?.['reason'];
     const live = await run(['admin', 'mailbox', 'recover', '--since', '2026-09-20T00:00:00Z', '--all-mailboxes'], {
       FSS_DEPENDENCIES: 'live',
     });
     expect(live.code).toBe(20);
+    expect(refusal(live.stderr)).toBe('dependencies_not_recorded');
     const drill = await run(['drill', '--as-of', '2026-09-20T00:00:00Z', '--reports', reports], {
       FSS_DEPENDENCIES: 'live',
     });
     expect(drill.code).toBe(20);
+    expect(refusal(drill.stderr)).toBe('dependencies_not_recorded');
   });
 });
 
