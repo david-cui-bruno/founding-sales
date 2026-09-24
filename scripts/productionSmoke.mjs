@@ -23,6 +23,19 @@
 //      passed in, so this script needs no AWS credential of its own; the exact command
 //      to produce it is in `docs/greenfield/release.md`.
 //
+// ## What the canary age is
+//
+// `FSS/CanaryCompletionAgeSeconds` is the newest canary run's **scheduler-to-worker
+// latency**: the gap between the scheduler inserting the run and the worker completing
+// it, and `now() - inserted_at` while it has not been completed
+// (`packages/domain/jobs/canary.ts`). It is not the time since the last completion.
+// That is the distinction this check turns on, because the canary is inserted once per
+// quarter hour: read as a time-since-completion the value sawtooths to 900 on a
+// perfectly healthy system and this check fails for about ten minutes in every fifteen,
+// which is what the first production smoke did on 23 September 2026 (`age=359.441672s`,
+// release.md 8.0r). Read as a latency it stays at a few seconds while the path works
+// and passes 300 within five minutes of the worker stopping, which is what 13.3 asks.
+//
 // ## The vacuous-pass trap
 //
 // A smoke script that treats a missing field as a pass reports green against a build
@@ -38,7 +51,11 @@ import { fileURLToPath } from 'node:url';
 
 const REPOSITORY_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
-/** 13.3: "canary not completed within five minutes". */
+/**
+ * 13.3: "canary not completed within five minutes" — five minutes of *latency* on the
+ * newest run, the same number and the same meaning as the `canary_stale` alarm's
+ * `var.canary_stale_seconds`.
+ */
 export const CANARY_MAXIMUM_AGE_SECONDS = 300;
 
 /** The six checks 16.2 names, in the order this script runs them. */
@@ -182,10 +199,13 @@ export async function runSmoke(options, dependencies = {}) {
     }
   }
 
-  // 13.3: "canary not completed within five minutes". The age comes from CloudWatch,
-  // so it is supplied rather than fetched — and an absent one is a failed check. A
-  // canary that skipped itself when the metric was unavailable would report green
-  // against a scheduler that has been dead for an hour.
+  // 13.3: "canary not completed within five minutes". The age is the newest canary
+  // run's scheduler-to-worker latency — insert to completion, or insert to now while it
+  // is uncompleted — so a healthy system reads a few seconds at any moment rather than
+  // a sawtooth that climbs to 900 between quarter hours (8.0r). It comes from
+  // CloudWatch, so it is supplied rather than fetched — and an absent one is a failed
+  // check. A canary that skipped itself when the metric was unavailable would report
+  // green against a scheduler that has been dead for an hour.
   if (options.canaryAgeSeconds === null || options.canaryAgeSeconds === '') {
     record('canary', false, 'SMOKE_CANARY_AGE_NOT_SUPPLIED');
   } else {

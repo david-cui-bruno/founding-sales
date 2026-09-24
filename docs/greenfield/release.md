@@ -680,6 +680,8 @@ NODE_OPTIONS="--experimental-transform-types --disable-warning=ExperimentalWarni
 
 Six lines, all `PASS`. The sixth reads `PASS sending_disabled (sendingEnabled=false)` — its expected answer is that sending is **off**, which is what makes it meaningful at this point.
 
+**What the canary line measures.** `CanaryCompletionAgeSeconds` is the newest canary run's **scheduler-to-worker latency** — the gap between the scheduler inserting the run and the worker completing it, and `now() - inserted_at` while it is still uncompleted, worst over the newest run of each workspace (`packages/domain/jobs/canary.ts`). It is not the time since the last completion: the canary is inserted once per quarter hour, so that reading sawtooths to 900 on a healthy system and fails this 300-second check for about ten minutes in every fifteen, which is what the first production smoke did (8.0r). A healthy system reads a few seconds here at any moment; a worker that has stopped pushes it past 300 within five minutes, which is the same fact `fss-prod-canary-stale` alarms on.
+
 **2. The digests match.** The release record names two digests. Compare them with what production is actually running:
 
 ```bash
@@ -1424,6 +1426,50 @@ the workspace bootstrap and the schema ranges; the drill script waits for
 baseline, then runs `--phase after` — a second send and a second CRM edit — before
 requesting the restore. Every existing drill assertion is unchanged, including the
 refusal above.
+
+### 8.0r What the first production smoke proved: five of six, and a metric that measured the gap between canaries (23 September, night)
+
+The first production deploy reached section 6.1 and ran `scripts/productionSmoke.mjs`
+against `https://api.usecallie.com`. Five of the six checks passed. The sixth did not:
+
+```
+FAIL canary (age=359.441672s limit=300s)
+```
+
+**Nothing was wrong with production.** The scheduler was inserting canaries, the worker
+was completing them within seconds, and the metrics publisher was publishing every
+minute. `FSS/CanaryCompletionAgeSeconds` was `extract(epoch FROM now() -
+max(completed_at))` — seconds since the newest *completion* — while the canary is
+inserted once per workspace per **quarter hour**
+(`apps/worker/src/scheduler/sources.ts`). Sampled every 60 seconds, that is a sawtooth:
+59, 119, 179, 239, 299, 359, 419, and back to 59 when the next canary completes. The
+smoke read it at 359 and compared it with the 300 that 13.3's "canary not completed
+within five minutes" gives. On a healthy idle system the value is above 300 for roughly
+ten minutes of every fifteen, so the smoke check fails most of the time. The eighth
+rehearsal's smoke passed only because it ran about two minutes after the workspace
+bootstrap (8.0p) — the one moment in the cycle when the value is small.
+
+**The alarm did the same thing, to the operator's inbox.** `fss-prod-canary-stale`
+(threshold `var.canary_stale_seconds` = 300, period 60, two evaluation periods,
+`treat_missing_data = "breaching"`) flapped OK→ALARM→OK three times in the first hour
+and e-mailed on every transition. The operator ran
+`aws cloudwatch disable-alarm-actions --alarm-names fss-prod-canary-stale` to stop the
+mail. **That is temporary and the next `terraform apply` re-enables it**: actions are
+alarm state that the resource sets, so the apply that follows this fix restores them
+without anybody having to remember.
+
+**What changed (lane g41).** The metric keeps its name — the alarm, the dashboard
+runbook, the smoke and the docs all reference it — and changes to the meaning 13.3's
+sentence actually describes: the newest canary run's **scheduler-to-worker latency**.
+For the newest run of each workspace, `completed_at - inserted_at` when it has
+completed and `now() - inserted_at` when it has not, and the worst of those, so one
+workspace whose canary completes normally cannot hide another whose canary never
+completes at all. Null when there is no run, unchanged, which is what the breaching
+treatment of missing data is for. On a healthy system this stays at a few seconds
+whatever the moment; when the worker dies the newest run never completes and the value
+passes 300 within five minutes — which is exactly the alarm and exactly the smoke
+check, and neither the threshold nor the name nor the period had to move.
+`docs/decisions/g41-the-canary-age-is-the-newest-runs-latency.md`.
 
 ### 8.1 Still unverified
 

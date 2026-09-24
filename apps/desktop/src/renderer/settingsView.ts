@@ -429,7 +429,11 @@ function diagnosticsPanels(state: AdminState): readonly PanelView[] {
         ...report.heartbeats.map(
           beat => `${beat.component}/${beat.instanceKey}: ${beat.fresh ? 'fresh' : 'stale'} (${seconds(beat.ageSeconds)})`,
         ),
-        `Canary last completed ${seconds(report.canaryCompletionAgeSeconds)} ago.`,
+        // The latency of the newest canary run, not the time since the last completion
+        // (g41): insert to completion, or insert to now while it is uncompleted.
+        report.canaryCompletionAgeSeconds === null
+          ? 'Newest canary: no run yet.'
+          : `Newest canary: ${seconds(report.canaryCompletionAgeSeconds)} from insert to completion.`,
       ],
       unavailable: null,
     },

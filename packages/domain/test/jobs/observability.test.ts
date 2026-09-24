@@ -164,7 +164,14 @@ describe('counters, heartbeats, the canary and alerts', () => {
     expect(again.inserted).toBe(false);
     expect(again.quarterHour).toBe(quarterHour);
 
-    expect(await canaryCompletionAgeSeconds(database.session)).toBeNull();
+    // The run exists and nobody has completed it, so the metric is already the gap
+    // between the insert and now rather than null (g41): that gap is the thing that
+    // grows past the threshold when the worker is dead.
+    const uncompleted = await canaryCompletionAgeSeconds(database.session);
+    expect(uncompleted).not.toBeNull();
+    expect(uncompleted ?? -1).toBeGreaterThanOrEqual(0);
+    expect(uncompleted ?? -1).toBeLessThan(60);
+
     expect(await completeCanaryRun(database.session, seeded.alpha.workspaceId, quarterHour, 'worker-1')).toBe(true);
     // Written once: a replayed handler does not move the timestamp the alarm reads.
     expect(await completeCanaryRun(database.session, seeded.alpha.workspaceId, quarterHour, 'worker-2')).toBe(false);
@@ -187,6 +194,77 @@ describe('counters, heartbeats, the canary and alerts', () => {
         [seeded.alpha.workspaceId],
       ),
     ).rejects.toMatchObject({ constraint: 'canary_runs_quarter_hour_aligned' });
+  });
+
+  /**
+   * The metric is a **latency**, not a time since the last completion (g41).
+   *
+   * The first production smoke read `age=359.441672s` off a healthy system and failed,
+   * because the canary is inserted once per quarter hour and "seconds since the newest
+   * completion" sawtooths to 900 between them. These four cases are the distinction:
+   * the first is the one the old query could not pass, the second is the failure the
+   * alarm exists for, the third is the one a single newest row would hide, and the
+   * fourth is the absence the alarm's breaching treatment of missing data reads.
+   *
+   * ## The vacuous-pass trap, named
+   *
+   * A case that completed a run and asserted "small" would pass under either meaning,
+   * because a run completed a moment ago is both a short latency and a short time since
+   * completion. Closed by completing a run **twenty minutes ago** with a three-second
+   * latency: the two readings are 3 and 1200, and only one of them is under the
+   * five-minute threshold the alarm and the smoke compare against.
+   */
+  const insertCanaryRow = async (
+    workspaceId: string,
+    quarterHour: string,
+    insertedAgo: string,
+    latency: string | null,
+  ): Promise<void> => {
+    // `now()` is evaluated once per statement, so the two timestamps are exactly
+    // `latency` apart however long the test takes.
+    await database.session.query(
+      latency === null
+        ? `INSERT INTO canary_runs (workspace_id, quarter_hour, inserted_at)
+           VALUES ($1, $2::timestamptz, now() - $3::interval)`
+        : `INSERT INTO canary_runs (workspace_id, quarter_hour, inserted_at, completed_at, completed_by)
+           VALUES ($1, $2::timestamptz, now() - $3::interval, now() - $3::interval + $4::interval, 'worker-1')`,
+      latency === null ? [workspaceId, quarterHour, insertedAgo] : [workspaceId, quarterHour, insertedAgo, latency],
+    );
+  };
+
+  it('is null when no canary run exists at all', async () => {
+    await database.session.query('DELETE FROM canary_runs');
+    expect(await canaryCompletionAgeSeconds(database.session)).toBeNull();
+  });
+
+  it('reads the newest run’s completion latency, not how long ago it completed', async () => {
+    await database.session.query('DELETE FROM canary_runs');
+    // Completed twenty minutes ago, three seconds after it was inserted. The old query
+    // read 1200 here and failed the 300-second check; the latency is 3.
+    await insertCanaryRow(seeded.alpha.workspaceId, '2026-09-21T15:00:00.000Z', '20 minutes', '3 seconds');
+    expect(await canaryCompletionAgeSeconds(database.session)).toBe(3);
+  });
+
+  it('grows with now while the newest run has not been completed', async () => {
+    await database.session.query('DELETE FROM canary_runs');
+    await insertCanaryRow(seeded.alpha.workspaceId, '2026-09-21T15:15:00.000Z', '400 seconds', null);
+    const age = await canaryCompletionAgeSeconds(database.session);
+    // Past 300 within five minutes of the worker stopping, which is the alarm and the
+    // smoke check. A worker that dies now is over the threshold in five minutes.
+    expect(age ?? -1).toBeGreaterThanOrEqual(400);
+    expect(age ?? -1).toBeLessThan(460);
+  });
+
+  it('takes the worst of the workspaces, so a healthy one cannot hide a dead one', async () => {
+    await database.session.query('DELETE FROM canary_runs');
+    // Beta's uncompleted run is the *older* of the two, so a single
+    // `ORDER BY inserted_at DESC LIMIT 1` would read alpha's two seconds and report a
+    // healthy system while beta's worker had not completed anything for ten minutes.
+    await insertCanaryRow(seeded.beta.workspaceId, '2026-09-21T15:30:00.000Z', '600 seconds', null);
+    await insertCanaryRow(seeded.alpha.workspaceId, '2026-09-21T15:45:00.000Z', '60 seconds', '2 seconds');
+    const age = await canaryCompletionAgeSeconds(database.session);
+    expect(age ?? -1).toBeGreaterThanOrEqual(600);
+    expect(age ?? -1).toBeLessThan(660);
   });
 
   // -------------------------------------------------------------------- alerts

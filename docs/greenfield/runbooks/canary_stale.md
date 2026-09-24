@@ -8,6 +8,13 @@ The scheduler-to-worker canary has not completed within five minutes. One row pe
 workspace per quarter hour is inserted by the scheduler and completed by the worker;
 the completion has stopped arriving.
 
+`CanaryCompletionAgeSeconds` is the **latency of the newest run**, not the time since
+the last completion: `completed_at - inserted_at` once the worker has written it,
+`now() - inserted_at` while it has not, worst over the newest run of each workspace. So
+this alarm means a run that was inserted has been sitting uncompleted for longer than
+the threshold — not that fifteen minutes have gone by since the last one, which is
+normal (g41).
+
 ## First checks
 
 1. `GET /diagnostics`: scheduler heartbeat, worker heartbeat, canary age, oldest

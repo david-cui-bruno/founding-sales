@@ -496,6 +496,17 @@ const MUTATIONS = [
     because:
       'This script writes a firm, a contact, an accepted send, two prospect suppressions and a salesperson\u2019s own suppression. Production\u2019s restore drill (runbook section 7) reconstructs a salesperson\u2019s real activity, so seeding it would replace the thing being proved with the thing proving it. `release_environment_for_prefix` classifies and permits `fss-prod`, which is right for the two scripts that genuinely run in both environments and catastrophic here \u2014 and the difference is invisible unless something runs the script with a production prefix and requires it to refuse.',
   },
+  {
+    name: 'the canary metric goes back to measuring the gap between completions',
+    file: 'packages/domain/jobs/canary.ts',
+    find:
+      '    `WITH newest_per_workspace AS (\n       SELECT DISTINCT ON (workspace_id) inserted_at, completed_at\n         FROM canary_runs\n        ORDER BY workspace_id, inserted_at DESC\n     )\n     SELECT max(extract(epoch FROM coalesce(completed_at, now()) - inserted_at))::text AS age_seconds\n       FROM newest_per_workspace`,\n',
+    replace:
+      "    'SELECT extract(epoch FROM now() - max(completed_at))::text AS age_seconds FROM canary_runs',\n",
+    suite: ['run', 'test:release'],
+    because:
+      'This is the first production smoke exactly (23 September 2026): `FAIL canary (age=359.441672s limit=300s)` against a production completing its canaries in seconds. The canary is inserted once per quarter hour, so seconds-since-the-newest-completion sawtooths 59, 119, \u2026, 419 and back to 59 and sits above the 300 the smoke and `fss-prod-canary-stale` compare against for about ten minutes in every fifteen \u2014 the smoke fails most of the time and the alarm flaps into the operator\u2019s inbox. `test/release/canaryAge.check.ts` reads the query and has to go red when the latency expression is replaced by the age one, because a threshold that is right for a latency is nonsense for a sawtooth.',
+  },
 ];
 
 function run(script) {
