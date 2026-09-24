@@ -44,6 +44,10 @@ export const METRIC_OWNERS: Readonly<Record<string, MetricOwner>> = Object.freez
   MailboxCheckHeartbeat: 'jobs',
   OldestRunnableJobAgeSeconds: 'jobs',
   DeadJobOldestAgeSeconds: 'jobs',
+  // The newest canary run's scheduler-to-worker latency — `completed_at - inserted_at`
+  // once the worker has written it, `now() - inserted_at` while it has not, worst over
+  // the newest run of each workspace. Not the time since the last completion, which
+  // sawtooths to 900 between quarter hours and made the alarm flap (g41).
   CanaryCompletionAgeSeconds: 'jobs',
   UnacknowledgedCriticalAlertAgeSeconds: 'jobs',
 

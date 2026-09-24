@@ -139,6 +139,15 @@ scheduler and completed by the worker. Neither heartbeat can prove scheduler-to-
 liveness on its own: a scheduler inserting jobs nobody claims is alive, a worker with
 an empty queue is alive, and the system between them is dead.
 
+`CanaryCompletionAgeSeconds` is that pair read as a **latency**: for the newest run of
+each workspace, `completed_at - inserted_at` once the worker has written it and
+`now() - inserted_at` while it has not, and the worst of those, so one workspace whose
+canary completes normally cannot hide another whose canary never completes. It is
+deliberately *not* the time since the last completion — the canary is inserted once
+every fifteen minutes, so that reading sawtooths to 900 on a perfectly healthy system
+and sits above the five-minute threshold 13.3 names for about ten minutes in every
+fifteen (`docs/decisions/g41-the-canary-age-is-the-newest-runs-latency.md`).
+
 ## Metrics and the repeating critical alert
 
 `METRIC_OWNERS` in `metrics.ts` claims one of three things about every metric the

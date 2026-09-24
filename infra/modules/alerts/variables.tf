@@ -76,7 +76,7 @@ variable "gmail_watch_expiry_hours" {
 }
 
 variable "canary_stale_seconds" {
-  description = "Seconds without a completed canary that alarm. The canary is inserted every 15 minutes and proves scheduler-to-worker completion."
+  description = "The newest canary's scheduler-to-worker latency, in seconds, that alarm: a run inserted and not completed for this long alarms. The canary is inserted once per workspace per quarter hour and proves scheduler-to-worker completion, so this is the gap between the insert and the completion — not the gap between one completion and the next, which sawtooths to 900 on a healthy system (g41)."
   type        = number
   default     = 300
 }

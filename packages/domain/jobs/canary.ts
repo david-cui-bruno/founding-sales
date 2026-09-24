@@ -13,7 +13,7 @@ import { jobIdempotencyKey, quarterHourOf } from './jobKinds.ts';
  * The quarter hour is the identity, so a second insert for the same quarter hour is
  * refused by the primary key rather than by a check the caller has to remember, and
  * the completion is written once — a replayed canary job finds `completed_at` already
- * set and leaves it alone, so the age the alarm reads is the age of the real
+ * set and leaves it alone, so the latency the alarm reads is the latency of the real
  * completion.
  */
 
@@ -57,10 +57,43 @@ export async function completeCanaryRun(
   return (rowCount ?? 0) === 1;
 }
 
-/** Seconds since the newest canary completion, or null when none has ever completed. */
+/**
+ * The newest canary run's scheduler-to-worker latency, in seconds. Null when no run
+ * exists at all — a database with no `canary_runs` row has nothing to say, and the
+ * alarm's `treat_missing_data = "breaching"` is what says it (g39).
+ *
+ * **This is a latency, not an age since the last completion**, and the difference is
+ * the whole of `docs/decisions/g41-the-canary-age-is-the-newest-runs-latency.md`. A
+ * canary is inserted once per workspace per *quarter hour*, so "seconds since the
+ * newest completion" — which this was until g41 — is a sawtooth that climbs to 900
+ * between canaries and spends about ten minutes in every fifteen above the five-minute
+ * threshold 13.3 names. The first production smoke read 359 s off a perfectly healthy
+ * system and failed, and `fss-prod-canary-stale` flapped OK→ALARM→OK three times in
+ * the first hour (release.md 8.0r).
+ *
+ * What 13.3's sentence actually describes is the gap between a run being inserted and
+ * the same run being completed: `completed_at - inserted_at` once the worker has
+ * written it, and `now() - inserted_at` while it has not. On a healthy system that is
+ * a few seconds whatever the moment; when the worker is dead the newest run never
+ * completes and the value passes 300 within five minutes, which is exactly the alarm
+ * and exactly the smoke check.
+ *
+ * **The worst of the newest runs, not the newest run.** The canary is per workspace,
+ * so `DISTINCT ON (workspace_id) … ORDER BY workspace_id, inserted_at DESC` takes each
+ * workspace's newest run and `max` takes the worst latency among them. A single
+ * `ORDER BY inserted_at DESC LIMIT 1` would let one workspace whose canary completes
+ * normally hide another whose canary never completes at all, which is the failure this
+ * metric exists to notice.
+ */
 export async function canaryCompletionAgeSeconds(db: Queryable): Promise<number | null> {
   const { rows } = await db.query<{ age_seconds: string | null }>(
-    'SELECT extract(epoch FROM now() - max(completed_at))::text AS age_seconds FROM canary_runs',
+    `WITH newest_per_workspace AS (
+       SELECT DISTINCT ON (workspace_id) inserted_at, completed_at
+         FROM canary_runs
+        ORDER BY workspace_id, inserted_at DESC
+     )
+     SELECT max(extract(epoch FROM coalesce(completed_at, now()) - inserted_at))::text AS age_seconds
+       FROM newest_per_workspace`,
   );
   const value = rows[0]?.age_seconds;
   return value === null || value === undefined ? null : Number(value);
