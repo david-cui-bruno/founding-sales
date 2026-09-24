@@ -13,6 +13,11 @@ output "destroyable" {
   value       = module.stack.destroyable
 }
 
+output "metric_namespace" {
+  description = "The CloudWatch namespace this run publishes to and alarms on, FSS/<prefix>. The smoke step reads the canary age from here, so it can only ever read this run's metric."
+  value       = module.stack.metric_namespace
+}
+
 output "deployment_role_name" {
   description = "IAM role this root assumes. Scoped to fss-rh-*."
   value       = var.deployment_role_name

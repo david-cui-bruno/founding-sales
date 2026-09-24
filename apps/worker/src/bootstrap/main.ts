@@ -140,23 +140,27 @@ function asSession(client: pg.Client): SessionQueryable {
  * `off` and a missing region both give a validating no-op. `on` with no reachable SDK
  * is a refusal: an operator who asked for metrics and silently got none would be
  * watching alarms that can never fire.
+ *
+ * The namespace is the environment's own, `FSS/<name prefix>`; `readWorkerConfig` has
+ * already refused a worker that would publish without one, so the null case below is
+ * only ever a sink with no transport, which names no namespace to anybody.
  */
 export async function createSink(
   config: WorkerConfig,
   log: Logger,
 ): Promise<ReturnType<typeof createCloudWatchSink>> {
-  const wanted = config.metrics.mode !== 'off' && config.metrics.region !== null;
-  if (!wanted) {
-    log.log('info', 'metrics_disabled', { mode: config.metrics.mode, has_region: config.metrics.region !== null });
-    return createCloudWatchSink({ namespace: config.metrics.namespace, transport: null });
+  const { mode, region, namespace } = config.metrics;
+  if (mode === 'off' || region === null || namespace === null) {
+    log.log('info', 'metrics_disabled', { mode, has_region: region !== null, has_namespace: namespace !== null });
+    return createCloudWatchSink({ namespace: namespace ?? '', transport: null });
   }
   try {
-    const transport = await loadCloudWatchTransport(config.metrics.region ?? '');
-    return createCloudWatchSink({ namespace: config.metrics.namespace, transport });
+    const transport = await loadCloudWatchTransport(region);
+    return createCloudWatchSink({ namespace, transport });
   } catch (error) {
-    if (config.metrics.mode === 'on') throw error;
+    if (mode === 'on') throw error;
     log.log('warn', 'metrics_transport_unavailable', errorFields(error));
-    return createCloudWatchSink({ namespace: config.metrics.namespace, transport: null });
+    return createCloudWatchSink({ namespace, transport: null });
   }
 }
 

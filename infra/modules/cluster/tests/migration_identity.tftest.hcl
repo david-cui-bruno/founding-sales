@@ -66,6 +66,7 @@ variables {
   target_group_arn          = "arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/fss-test-api/1111111111111111"
   api_log_group_name        = "/fss/fss-test/api"
   worker_log_group_name     = "/fss/fss-test/worker"
+  metric_namespace          = "FSS/fss-test"
 
   secret_arns = {
     "session-signing-key" = "arn:aws:secretsmanager:us-east-1:123456789012:secret:fss-test/session-signing-key-aaaaaa"
@@ -207,12 +208,12 @@ run "the_migration_task_role_reaches_nothing_but_the_database" {
   }
 
   assert {
-    condition = alltrue([
+    condition = [
       for statement in jsondecode(aws_iam_role_policy.migration_task.policy).Statement :
-      statement.Condition.StringEquals["cloudwatch:namespace"] == "FSS"
+      statement.Condition.StringEquals["cloudwatch:namespace"]
       if contains(statement.Action, "cloudwatch:PutMetricData")
-    ])
-    error_message = "The one thing it may do outside PostgreSQL is publish its own metrics, in the FSS namespace."
+    ] == [var.metric_namespace]
+    error_message = "The one thing it may do outside PostgreSQL is publish its own metrics, in this environment's namespace."
   }
 }
 

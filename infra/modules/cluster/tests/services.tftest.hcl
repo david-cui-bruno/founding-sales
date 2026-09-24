@@ -22,6 +22,7 @@ variables {
   target_group_arn          = "arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/fss-test-api/1111111111111111"
   api_log_group_name        = "/fss/fss-test/api"
   worker_log_group_name     = "/fss/fss-test/worker"
+  metric_namespace          = "FSS/fss-test"
 
   app_runtime_database_secret_arn = "arn:aws:secretsmanager:us-east-1:123456789012:secret:fss-test/app-runtime-database-cccccc"
   migration_database_secret_arn   = "arn:aws:secretsmanager:us-east-1:123456789012:secret:fss-test/migration-database-bbbbbb"
@@ -125,13 +126,16 @@ run "both_task_roles_may_append_to_the_journal_and_neither_may_delete" {
     error_message = "Both task roles need GenerateDataKey and Encrypt on the journal key to write an encrypted object."
   }
 
+  # Exactly one statement, and it names this environment's namespace. A bare
+  # `alltrue` over the matching statements would pass a policy that had lost
+  # PutMetricData altogether.
   assert {
-    condition = alltrue([
+    condition = [
       for statement in jsondecode(aws_iam_role_policy.worker_task.policy).Statement :
-      statement.Condition.StringEquals["cloudwatch:namespace"] == "FSS"
+      statement.Condition.StringEquals["cloudwatch:namespace"]
       if contains(statement.Action, "cloudwatch:PutMetricData")
-    ])
-    error_message = "Metric publication is scoped to the FSS namespace."
+    ] == ["FSS/fss-test"]
+    error_message = "The worker may publish metrics only into this environment's namespace, FSS/<name_prefix>."
   }
 }
 
@@ -189,6 +193,63 @@ run "schema_ranges_reach_the_containers" {
     ]) == 0
     error_message = "No environment name may look like a credential; secrets arrive only by reference."
   }
+}
+
+# g42, lane g55: one namespace per environment, and every task and every task
+# role in this cluster names the same one. A rehearsal and production share an
+# account, so a task that published into another environment's namespace would
+# feed that environment's alarms; the IAM condition is what makes that
+# impossible rather than merely unlikely.
+run "every_task_publishes_into_this_environment_s_namespace_and_nowhere_else" {
+  command = plan
+
+  assert {
+    condition = (output.api_environment["FSS_METRIC_NAMESPACE"] == "FSS/fss-test"
+    && output.worker_environment["FSS_METRIC_NAMESPACE"] == "FSS/fss-test")
+    error_message = "Both services are told the environment's namespace, FSS/<name_prefix>."
+  }
+
+  assert {
+    condition = alltrue([
+      for definition in [
+        aws_ecs_task_definition.api,
+        aws_ecs_task_definition.worker,
+        aws_ecs_task_definition.migration,
+        aws_ecs_task_definition.operations,
+        aws_ecs_task_definition.drill,
+        ] : [
+        for variable in jsondecode(definition.container_definitions)[0].environment :
+        variable.value if variable.name == "FSS_METRIC_NAMESPACE"
+      ] == ["FSS/fss-test"]
+    ])
+    error_message = "All five task definitions carry FSS_METRIC_NAMESPACE, exactly once, set to this environment's namespace."
+  }
+
+  assert {
+    condition = alltrue([
+      for policy in [
+        aws_iam_role_policy.api_task.policy,
+        aws_iam_role_policy.worker_task.policy,
+        aws_iam_role_policy.migration_task.policy,
+        aws_iam_role_policy.drill_task.policy,
+        ] : [
+        for statement in jsondecode(policy).Statement :
+        statement.Condition.StringEquals["cloudwatch:namespace"]
+        if contains(statement.Action, "cloudwatch:PutMetricData")
+      ] == ["FSS/fss-test"]
+    ])
+    error_message = "Every task role that may publish metrics may publish only into this environment's namespace."
+  }
+}
+
+run "the_bare_fss_namespace_is_refused" {
+  command = plan
+
+  variables {
+    metric_namespace = "FSS"
+  }
+
+  expect_failures = [var.metric_namespace]
 }
 
 run "a_mutable_image_tag_is_refused" {

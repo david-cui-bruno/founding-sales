@@ -10,9 +10,10 @@ mock_provider "aws" {
 }
 
 variables {
-  name_prefix    = "fss-test"
-  aws_region     = "us-east-1"
-  aws_account_id = "123456789012"
+  name_prefix      = "fss-test"
+  aws_region       = "us-east-1"
+  aws_account_id   = "123456789012"
+  metric_namespace = "FSS/fss-test"
 }
 
 run "log_groups_are_namespaced_encrypted_and_kept_ninety_days" {
@@ -45,13 +46,33 @@ run "the_safety_metrics_the_alarms_need_exist" {
     error_message = "Every immediately critical alarm must have a metric filter behind it."
   }
 
+  # Non-empty first: `alltrue` over no filters is true, and would pass a module
+  # that had stopped creating them.
   assert {
-    condition = alltrue([
+    condition = length(aws_cloudwatch_log_metric_filter.this) > 0 && alltrue([
       for filter in aws_cloudwatch_log_metric_filter.this :
-      filter.metric_transformation[0].namespace == "FSS"
+      filter.metric_transformation[0].namespace == "FSS/fss-test"
     ])
-    error_message = "Every metric filter publishes into the FSS namespace."
+    error_message = "Every metric filter publishes into this environment's namespace, FSS/<name_prefix>, which is where its alarms look."
   }
+
+  assert {
+    condition     = output.metric_namespace == "FSS/fss-test"
+    error_message = "The module reports the namespace its filters publish to."
+  }
+}
+
+# The bare namespace is refused rather than defaulted (g42, lane g55). Every
+# environment in the account used to publish there, so a rehearsal's log lines
+# fed production's safety alarms.
+run "the_bare_fss_namespace_is_refused" {
+  command = plan
+
+  variables {
+    metric_namespace = "FSS"
+  }
+
+  expect_failures = [var.metric_namespace]
 }
 
 run "an_undocumented_retention_value_is_refused" {

@@ -143,7 +143,7 @@ startup line names every decision and no credential.
 | `DATABASE_SECRET_ARN` | ✓ | the Secrets Manager **value**, injected by the ECS `secrets` block. An ARN arriving here means the task definition used `environment` instead, and that is refused rather than diagnosed later as "database unreachable". |
 | `DATABASE_URL` | ✓ | the alternative, for a laptop and for rehearsal. |
 | `FSS_EXPECTED_SYSTEM_GENERATION` | ✓ | Appendix E step 1. Absent means the check is not made. |
-| `AWS_REGION`, `FSS_METRIC_NAMESPACE` | ✓ | where metrics go. |
+| `AWS_REGION`, `FSS_METRIC_NAMESPACE` | ✓ | where metrics go. The namespace is the environment's own, `FSS/<name prefix>` (`FSS/fss-prod`, `FSS/fss-rh-<run>`), derived once in `infra/modules/stack`; the task roles may publish nowhere else. It has no default: a worker that would publish (a region is set and `FSS_METRICS` is not `off`) refuses to start without one, and refuses one that is not `FSS/` followed by `FSS_NAME_PREFIX`. The bare `FSS` was shared by every environment in the account (g42, lane g55). |
 | `FSS_METRICS` | worker | `on`, `off` or `auto` (default). `on` with no usable transport is a refusal; `auto` degrades to the validating no-op and says so. |
 | `FSS_WORKER_CONCURRENCY` | worker | runner slots. Default 1. |
 | `FSS_SCHEDULER_INTERVAL_MS`, `FSS_METRICS_INTERVAL_MS`, `FSS_RUNNER_IDLE_MS`, `FSS_DRAIN_TIMEOUT_MS` | worker | the cadences. Defaults are the specification's. |

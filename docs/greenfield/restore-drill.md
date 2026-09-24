@@ -265,7 +265,7 @@ Assertions:
 - no rematerialised job takes an external action while a restore hold is in force. This is the step where a bug would send a duplicate email, so check the outbound fence counts before and after.
 
 ```bash
-aws cloudwatch get-metric-statistics --namespace FSS --metric-name OldestRunnableJobAgeSeconds \
+aws cloudwatch get-metric-statistics --namespace "FSS/${PREFIX}" --metric-name OldestRunnableJobAgeSeconds \
   --statistics Maximum --start-time "$DRILL_START" --end-time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --period 60
 ```
 

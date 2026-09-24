@@ -165,6 +165,41 @@ run "a_second_run_shares_no_name_with_the_first" {
     condition     = alltrue([for name in output.resource_names : !strcontains(name, "fss-rh-default-")])
     error_message = "Two rehearsal runs must not collide."
   }
+
+  assert {
+    condition     = output.metric_namespace == "FSS/fss-rh-second"
+    error_message = "A second concurrent rehearsal run publishes and alarms in its own metric namespace, not the first run's."
+  }
+}
+
+# g42, lane g55. The tenth full run's smoke read production's canary age, because
+# every environment in the account published into the bare FSS namespace and every
+# alarm read it. The namespace is now FSS/<prefix>, derived in the stack, and this
+# run proves it reaches both ends: what the tasks are told to publish into and what
+# every alarm reads. The rehearsal smoke reads `output.metric_namespace`.
+run "the_run_publishes_and_alarms_in_its_own_metric_namespace" {
+  command = plan
+
+  assert {
+    condition     = output.metric_namespace == "FSS/${output.name_prefix}"
+    error_message = "The run's metric namespace is FSS/<its prefix>."
+  }
+
+  assert {
+    condition     = output.metric_namespace != "FSS" && !strcontains(output.metric_namespace, "fss-prod")
+    error_message = "A rehearsal never publishes into the bare namespace or production's."
+  }
+
+  assert {
+    condition = (module.stack.api_environment["FSS_METRIC_NAMESPACE"] == output.metric_namespace
+    && module.stack.worker_environment["FSS_METRIC_NAMESPACE"] == output.metric_namespace)
+    error_message = "Both services are told to publish into the run's namespace."
+  }
+
+  assert {
+    condition     = module.stack.alarm_metric_namespaces == tolist([output.metric_namespace])
+    error_message = "Every alarm this run creates reads the run's namespace and no other."
+  }
 }
 
 # The acceptance case: the isolation test fails if someone sets the rehearsal

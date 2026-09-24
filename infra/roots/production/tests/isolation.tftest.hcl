@@ -131,6 +131,30 @@ run "no_name_production_claims_can_be_a_rehearsal_name" {
 
 }
 
+# g42, lane g55. Production's metrics, metric filters and alarms live in
+# FSS/fss-prod. A rehearsal publishes into FSS/fss-rh-<run>, and its task roles
+# may publish nowhere else, so nothing a rehearsal does can trip or mask one of
+# these alarms, and nothing reading FSS/fss-prod reads a rehearsal's datapoint.
+run "production_publishes_and_alarms_in_its_own_metric_namespace" {
+  command = plan
+
+  assert {
+    condition     = output.metric_namespace == "FSS/fss-prod"
+    error_message = "Production's metric namespace is exactly FSS/fss-prod."
+  }
+
+  assert {
+    condition = (module.stack.api_environment["FSS_METRIC_NAMESPACE"] == "FSS/fss-prod"
+    && module.stack.worker_environment["FSS_METRIC_NAMESPACE"] == "FSS/fss-prod")
+    error_message = "Both production services are told to publish into FSS/fss-prod."
+  }
+
+  assert {
+    condition     = module.stack.alarm_metric_namespaces == tolist(["FSS/fss-prod"])
+    error_message = "Every production alarm reads FSS/fss-prod and no other namespace."
+  }
+}
+
 # David's topology answers of 20 September 2026 (docs/decisions/coord-topology-answers.md),
 # asserted against the plan rather than against the variables they were passed.
 #
