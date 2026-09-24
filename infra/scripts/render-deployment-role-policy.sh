@@ -24,11 +24,17 @@
 # a region, a bucket name, a table name, a KMS key id, an ARN. Nothing here is a
 # credential and nothing here is read from one.
 #
+# Every default below is the shared account this tree started in, so a run with no
+# environment at all renders exactly what it rendered before. A dedicated account
+# states its own; `docs/greenfield/accounts.md` has the four lines to export, and the
+# checklist there is where a new account's values come from.
+#
 #   FSS_POLICY_ACCOUNT_ID        default 326255650484
 #   FSS_POLICY_REGION            default us-east-1
 #   FSS_POLICY_STATE_BUCKET      default callie-sourcing-tfstate-326255650484
 #   FSS_POLICY_LOCK_TABLE        default callie-sourcing-tflock
-#   FSS_POLICY_STATE_KMS_KEY_ARN default the state bucket's key
+#   FSS_POLICY_STATE_KMS_KEY_ID  default a321a083-4058-4130-b060-b950e4aa1404
+#   FSS_POLICY_STATE_KMS_KEY_ARN default the key id above, in this account and region
 #   FSS_POLICY_CERTIFICATE_ARN   default every certificate in the account and region
 #   FSS_POLICY_DISCOVERY_TEMPLATE  the discovery statements file; the offline test's hook, never set otherwise
 #
@@ -108,6 +114,7 @@ FSS_POLICY_ACCOUNT_ID="${FSS_POLICY_ACCOUNT_ID:-326255650484}" \
 FSS_POLICY_REGION="${FSS_POLICY_REGION:-us-east-1}" \
 FSS_POLICY_STATE_BUCKET="${FSS_POLICY_STATE_BUCKET:-callie-sourcing-tfstate-326255650484}" \
 FSS_POLICY_LOCK_TABLE="${FSS_POLICY_LOCK_TABLE:-callie-sourcing-tflock}" \
+FSS_POLICY_STATE_KMS_KEY_ID="${FSS_POLICY_STATE_KMS_KEY_ID:-a321a083-4058-4130-b060-b950e4aa1404}" \
 FSS_POLICY_STATE_KMS_KEY_ARN="${FSS_POLICY_STATE_KMS_KEY_ARN:-}" \
 FSS_POLICY_CERTIFICATE_ARN="${FSS_POLICY_CERTIFICATE_ARN:-}" \
 python3 - <<'PY'
@@ -157,8 +164,11 @@ substitutions = {
     "lock_table": env["FSS_POLICY_LOCK_TABLE"],
     "state_key_glob": STATE_KEY_GLOB[prefix],
     "deployment_role_arn": f"arn:aws:iam::{account}:role/{prefix}-deploy",
+    # The Terraform state key. Its id is a per-account value with the shared
+    # account's as its default assignment above, so the ARN is built in whatever
+    # account and region this render is for and no account is written in here.
     "state_kms_key_arn": env["FSS_POLICY_STATE_KMS_KEY_ARN"]
-    or f"arn:aws:kms:{region}:{account}:key/a321a083-4058-4130-b060-b950e4aa1404",
+    or f"arn:aws:kms:{region}:{account}:key/{env['FSS_POLICY_STATE_KMS_KEY_ID']}",
     "certificate_arn": env["FSS_POLICY_CERTIFICATE_ARN"]
     or f"arn:aws:acm:{region}:{account}:certificate/*",
 }

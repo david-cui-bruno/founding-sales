@@ -91,6 +91,25 @@ jobs:
           check "a greenfield root must never point at a legacy state key" \
             '^[^#]*cloud/(terraform|delegated-worker)' infra/roots
 
+          # An account id written into Terraform is an account this tree can only ever
+          # deploy into, and the rehearsal and production are moving into dedicated
+          # accounts (docs/greenfield/accounts.md). Every root takes aws_account_id as
+          # a variable, so the one place twelve digits may appear outside a test
+          # fixture is that variable's own default — or a comment, which is prose
+          # rather than a decision the file makes (g37 names the bucket a real
+          # rehearsal run left behind, and that name ends in its account). The
+          # release suite reads comments too, with a pattern that admits twelve
+          # digits only where they really are an account id.
+          account_literals=$(grep -rInE '[0-9]{12}' --include='*.tf' infra/modules infra/roots \
+            | grep -v '/tests/' \
+            | grep -vE ':[0-9]+: *#' \
+            | grep -vE ':[0-9]+: *default +=' || true)
+          if [ -n "$account_literals" ]; then
+            echo "::error::a Terraform file names an account id outside a variable default"
+            echo "$account_literals"
+            fail=1
+          fi
+
           # The network module owns exactly the asserted rule set.
           ingress=$(grep -cE '^    [a-z_]+ = \{$' infra/modules/network/main.tf || true)
           if [ "$(grep -c 'resource "aws_vpc_security_group_ingress_rule"' infra/modules/network/main.tf)" != "1" ] \
@@ -119,6 +138,15 @@ jobs:
           # "registry" is a legal run suffix, so the durable repositories must live
           # outside the per-run state space or a run could destroy them on teardown.
           case "$registry_key" in fss/greenfield/rehearsal/*) echo "::error::the rehearsal registry state key is inside the per-run space"; exit 1 ;; esac
+          # Each backend.hcl is its root's per-account file, so each must name a
+          # bucket, a region and a lock table: a file that lost one would init against
+          # whatever backend the caller's own environment supplies, silently.
+          for backend_file in infra/roots/*/backend.hcl; do
+            for backend_setting in bucket region dynamodb_table key; do
+              grep -qE "^${backend_setting} +=" "$backend_file" \
+                || { echo "::error::$backend_file names no $backend_setting"; exit 1; }
+            done
+          done
           # No backend file may carry a credential-looking value.
           ! grep -rInE '(access_key|secret_key|token|password)' infra/roots/*/backend.hcl
 

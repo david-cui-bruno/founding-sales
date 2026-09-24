@@ -64,15 +64,30 @@ variable "assume_deployment_role" {
 }
 
 variable "aws_region" {
-  description = "AWS region."
+  description = "AWS region. The default is the region this tree started in; a dedicated account states its own."
   type        = string
   default     = "us-east-1"
 }
 
 variable "aws_account_id" {
-  description = "AWS account id."
+  description = <<-EOT
+    The AWS account this root deploys into. `providers.tf` passes it to
+    `allowed_account_ids` and builds the deployment role ARN from it, so a
+    credential belonging to any other account is refused before a plan is made.
+
+    The default is the shared account the tree started in, which is why nothing
+    changes today. A dedicated rehearsal account states its own with
+    `TF_VAR_aws_account_id`, `-var` or a tfvars file, and edits no Terraform:
+    `docs/greenfield/accounts.md` is the checklist, and the rehearsal workflows
+    set the variable from the session they verified.
+  EOT
   type        = string
   default     = "326255650484"
+
+  validation {
+    condition     = can(regex("^[0-9]{12}$", var.aws_account_id))
+    error_message = "An AWS account id is twelve digits and nothing else."
+  }
 }
 
 variable "availability_zones" {

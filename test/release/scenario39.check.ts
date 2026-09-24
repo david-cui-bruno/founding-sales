@@ -256,10 +256,22 @@ describe('Appendix G 39: the rehearsal registry is applied by a workflow, never 
 
   it('initializes the backend the runbook names, and the key that is not a run’s', () => {
     expect(workflow).toContain('infra/roots/rehearsal-registry');
-    expect(workflow).toContain('callie-sourcing-tfstate-326255650484');
-    expect(workflow).toContain('callie-sourcing-tflock');
     expect(workflow).toContain('fss/greenfield/rehearsal-registry/terraform.tfstate');
     expect(workflow).toContain('FSS_REHEARSAL_STATE_KMS_KEY_ARN');
+
+    // The bucket and the lock table are per-account values and are no longer written
+    // here: G27 made the tree able to run in a dedicated AWS account, so the workflow
+    // reads them out of the root's own `backend.hcl` — the per-account backend file —
+    // and the state key, which names a root rather than an account, is the one it
+    // states and checks. Two copies of an account-specific value is how they come to
+    // disagree. `docs/greenfield/accounts.md`, `test/release/accountAgnostic.check.ts`.
+    const backend = readRepositoryFile('infra/roots/rehearsal-registry/backend.hcl');
+    expect(backend).toContain('callie-sourcing-tfstate-326255650484');
+    expect(backend).toContain('callie-sourcing-tflock');
+    expect(workflow).toContain("grep -E '^bucket ' infra/roots/rehearsal-registry/backend.hcl");
+    expect(workflow).toContain("grep -E '^dynamodb_table ' infra/roots/rehearsal-registry/backend.hcl");
+    expect(workflow).not.toContain('callie-sourcing-tfstate-326255650484');
+    expect(workflow).not.toContain('callie-sourcing-tflock');
   });
 
   it('defaults to plan-only, and the guard runs before the apply rather than beside it', () => {
