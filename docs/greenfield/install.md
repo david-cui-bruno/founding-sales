@@ -396,14 +396,34 @@ Leave the app signed in. The next step needs a running installation to update.
 
 ### 4 — publish 1.0.1
 
-Set the repository variable `FSS_DESKTOP_APP_VERSION` to `1.0.1`. Any commit will do —
-the same tree is fine, since the version comes from the variable, not from the tree —
-but run the workflow on a real commit and pass it as `desktop_commit_stamp`. Same
-verification, same download, same publish.
+This step was written as a rehearsal of the update path, to be run on any commit. It is
+now the real next release. Desktop 1.0.0 has no way to connect the mailbox
+(`docs/greenfield/release.md` 8.0x). 1.0.1 is the build that adds the **Mailbox** row and
+its **Connect Gmail** button to the "This Mac" card, so it has to be built from the commit
+that carries lane g50, not from any commit.
+
+**First, the API.** An API whose published maximum is 1.0.0 refuses a 1.0.1 client every
+sign-in, renewal and command (`api_behind_client`, answered as `client_upgrade_required`).
+Lane g50 raises `CONTAINER_CLIENT_VERSIONS` to `{ minimum: 1.0.0, maximum: 1.0.1 }`.
+Deploy the API from that commit **before** anything below, and confirm it:
+
+```bash
+curl -fsS https://api.usecallie.com/auth/client-version
+```
+
+**Expected:** `"supported":{"minimum":"1.0.0","maximum":"1.0.1"}`. If the maximum is still
+`1.0.0`, stop. Publishing now would offer every 1.0.0 Mac an update that the API refuses.
+
+**Then the build.** The coordinator sets the repository variable
+`FSS_DESKTOP_APP_VERSION` to `1.0.1`. Run *Greenfield desktop* with **release** ticked on
+the same commit the API was deployed from, and pass that commit as
+`desktop_commit_stamp`. Verify, download and publish it as in step 1, **zip first,
+manifest second**. Expect a manifest whose `releaseVersion` is `1.0.1` and whose
+`commitSha` is that commit.
 
 ### 5 — receive it
 
-On the test Mac, quit Callie and open it again.
+On the Mac, quit Callie and open it again.
 
 **Expected: within a few seconds, "Callie 1.0.1 is available".** Accept it. The verified
 zip is written to Downloads and Finder opens on it. Replace `Callie` in Applications,
@@ -411,6 +431,16 @@ open it, and confirm the version.
 
 It does not swap the running bundle in place; `docs/decisions/g13-update-application.md`
 says why not.
+
+**Then connect the mailbox.** The "This Mac" card now has a **Mailbox** row reading **Not
+connected** and a **Connect Gmail** button. Press it. Google's consent screen opens in
+the system browser, as sign-in's does. Grant `gmail.readonly` and `gmail.send` as
+`callie@usecallie.com`, then come back to Callie. The button reads "Waiting for your
+browser…" until the grant lands, and then the row reads
+`callie@usecallie.com · connected · baseline pending`. There is no Disconnect button (the
+thirty-day rule in `docs/greenfield/mail.md`). If the browser says "Gmail not
+connected", press **Refresh**, then Connect Gmail again. Release runbook 8.0x says how to
+read the refusal.
 
 ### 6 — the adversarial half, which is the part worth doing
 

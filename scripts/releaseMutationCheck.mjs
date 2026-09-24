@@ -571,6 +571,33 @@ const MUTATIONS = [
     because:
       'This is the first production smoke exactly (23 September 2026): `FAIL canary (age=359.441672s limit=300s)` against a production completing its canaries in seconds. The canary is inserted once per quarter hour, so seconds-since-the-newest-completion sawtooths 59, 119, \u2026, 419 and back to 59 and sits above the 300 the smoke and `fss-prod-canary-stale` compare against for about ten minutes in every fifteen \u2014 the smoke fails most of the time and the alarm flaps into the operator\u2019s inbox. `test/release/canaryAge.check.ts` reads the query and has to go red when the latency expression is replaced by the age one, because a threshold that is right for a latency is nonsense for a sawtooth.',
   },
+  {
+    name: 'the Mac stops opening the Gmail consent screen',
+    file: 'apps/desktop/src/main/mailboxBridge.ts',
+    find: '        await deps.openExternally(url);\n',
+    replace: '',
+    suite: ['run', 'test:release', '--', 'test/release/desktopMailbox.check.ts'],
+    because:
+      'This is production\u2019s first sign-in exactly (24 September 2026, 15:08Z): desktop 1.0.0 signed in and had no way to connect Gmail, because nothing in apps/desktop called POST /gmail/connect or opened the consent URL it returns. A bridge that sends the command and never opens the browser is the same outcome with more code, and a check that searched for the path would stay green; desktopMailbox.check.ts drives the bridge and asserts the URL reached the system browser, so it has to go red.',
+  },
+  {
+    name: 'the preload stops exposing the mailbox bridge to the window',
+    file: 'apps/desktop/src/preload/preload.ts',
+    find: "contextBridge.exposeInMainWorld('callieMailbox', mailbox);\n",
+    replace: '',
+    suite: ['run', 'test:release', '--', 'test/release/desktopMailbox.check.ts'],
+    because:
+      'The bridge can be complete and tested and the This Mac card still have nothing to call, which is 1.0.0 from where David sits. The preload is Electron wiring the release suite cannot run, so desktopMailbox.check.ts asserts the exposure line itself and has to go red when it is gone.',
+  },
+  {
+    name: 'the API stops admitting the desktop build that carries the Mailbox row',
+    file: 'apps/api/src/bootstrap/main.ts',
+    find: "  maximum: '1.0.1',\n",
+    replace: "  maximum: '1.0.0',\n",
+    suite: ['run', 'test:release', '--', 'test/release/desktopMailbox.check.ts'],
+    because:
+      'A client above the published maximum is api_behind_client, and runCommand, sign-in and renewal refuse it client_upgrade_required exactly as they refuse one below the minimum. Desktop 1.0.1 is the build with Connect Gmail, so an API still publishing 1.0.0 as its maximum refuses the fix outright; desktopMailbox.check.ts reads the constant the container serves and has to go red.',
+  },
 ];
 
 function run(script) {

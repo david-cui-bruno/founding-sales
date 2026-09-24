@@ -8,6 +8,10 @@ of it FSS deliberately never reads.
 ## The short version
 
 A salesperson connects their Gmail with two scopes: `gmail.readonly` and `gmail.send`.
+The control is on the Mac, from desktop 1.0.1: the **Mailbox** row on the main window's
+"This Mac" card has a **Connect Gmail** button (`apps/desktop/src/main/mailboxBridge.ts`)
+that opens Google's consent screen in the system browser and then shows the address, its
+status and the baseline state, with no Disconnect because of the thirty-day rule below.
 FSS registers a Pub/Sub **watch**, and each notification enqueues a coalescing
 `mail.sync` for that one mailbox. A sync reads Gmail's history from a stored cursor,
 fetches **metadata only** for each new message, tries to match it to an opportunity,

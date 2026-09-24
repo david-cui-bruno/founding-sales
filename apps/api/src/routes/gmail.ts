@@ -1,3 +1,4 @@
+import type { GmailStatus } from '@fss/contracts';
 import {
   beginGmailGrant,
   completeGmailGrant,
@@ -94,6 +95,9 @@ export async function routeGmail(request: ApiRequest, options: RoutingOptions): 
     const mailbox = await readOwnMailbox(scoped.context, deps.principal.userId);
     // Appendix F: the mailbox owner sees their own diagnostics. Nothing here is a
     // credential, and the token's existence is reported as a boolean, never a value.
+    // `satisfies GmailStatus`: the Mac parses this body with the same schema
+    // (`@fss/contracts` `gmailStatusSchema`), so a field renamed here is a type error
+    // rather than a Mailbox row that silently says "Not connected".
     return {
       status: 200,
       body: {
@@ -110,7 +114,7 @@ export async function routeGmail(request: ApiRequest, options: RoutingOptions): 
                 lastSyncedAt: mailbox.lastSyncedAt,
                 lastSyncError: mailbox.lastSyncError,
               },
-      },
+      } satisfies GmailStatus,
     };
   }
 

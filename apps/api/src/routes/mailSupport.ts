@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { MAIL_COMMAND_ENVELOPE, connectMailboxCommandSchema, disconnectMailboxCommandSchema } from '@fss/contracts';
 import type { RepositoryContext } from '@fss/domain/db';
 import { repositoryContext, workspaceScope } from '@fss/domain/db';
 
@@ -15,26 +16,16 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  * in one transaction (5.3), and no route decides for itself whether a caller owns a
  * mailbox — `disconnectMailbox` does, from the row.
  *
- * The command schemas are here rather than in `@fss/contracts` because the Mac does
- * not send any of them yet: the desktop mailbox screen is a later lane, and a shared
- * contract nobody on the other side reads is a contract that drifts. They move to
- * `@fss/contracts` in the pull request that adds the screen.
+ * The connect and disconnect command schemas moved to `@fss/contracts` (`mail.ts`) in
+ * the pull request that gave the Mac its Mailbox row, because the Mac now sends the
+ * first of them and a shared contract is the only kind that cannot drift. They are
+ * re-exported here so the route modules keep one import. The rest stay here: the Mac
+ * does not send them.
  */
 
-const commandEnvelope = {
-  commandId: z.string().uuid(),
-  clientVersion: z.string().min(1).max(32),
-};
+const commandEnvelope = MAIL_COMMAND_ENVELOPE;
 
-export const connectMailboxCommandSchema = z.object(commandEnvelope).strict();
-
-export const disconnectMailboxCommandSchema = z
-  .object({
-    ...commandEnvelope,
-    mailboxId: z.string().uuid(),
-    reason: z.string().trim().min(1).max(200),
-  })
-  .strict();
+export { connectMailboxCommandSchema, disconnectMailboxCommandSchema };
 
 export const resolveAmbiguityCommandSchema = z
   .object({

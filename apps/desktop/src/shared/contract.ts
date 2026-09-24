@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import {
+  MAILBOX_STATUSES,
+  MAILBOX_SYNC_STATES,
   accessTokenSchema,
   clientVersionRangeSchema,
   deviceSecretSchema,
@@ -136,6 +138,61 @@ export interface DesktopBridge {
   refreshToday(): Promise<DesktopState>;
 }
 
+// ---------------------------------------------------------------------------
+// The Mailbox row on "This Mac" (specification 5.1, 12.1, 12.6)
+// ---------------------------------------------------------------------------
+
+/**
+ * What the Mailbox row may be told, and nothing more.
+ *
+ * Desktop 1.0.0 shipped with no way to connect Gmail at all: the API served
+ * `POST /gmail/connect` and `GET /gmail/status` and nothing on the Mac called them
+ * (docs/greenfield/release.md 8.0x). This is the row's whole contract. The address,
+ * the connection status and the baseline state are what the owner needs to see that
+ * the grant worked; the mailbox id, the sync error text and the coverage watermark stay
+ * in the main process, and no field here could carry a token or a consent URL — the
+ * URL goes from the API to `shell.openExternal` without crossing the bridge.
+ */
+export const mailboxStateSchema = z.strictObject({
+  /** What `/gmail/status` last said, or null until a read has answered. */
+  status: z
+    .strictObject({
+      connected: z.boolean(),
+      mailbox: z
+        .strictObject({
+          emailAddress: z.string().min(3).max(320),
+          status: z.enum(MAILBOX_STATUSES),
+          syncState: z.enum(MAILBOX_SYNC_STATES),
+        })
+        .nullable(),
+    })
+    .nullable(),
+  /** True while the consent screen is open and the main process is waiting for the grant. */
+  connecting: z.boolean(),
+  /** Whether a connection may be started now: signed in, online, a supported version, not already waiting. */
+  mayConnect: z.boolean(),
+  /** A stable code — the API's refusal reason or one of the bridge's own — never a sentence. */
+  notice: z.string().min(1).max(80).nullable(),
+});
+export type MailboxState = z.infer<typeof mailboxStateSchema>;
+
+/**
+ * Three methods and no fourth. There is deliberately no `disconnect`: the workspace's
+ * thirty-day rule (docs/greenfield/mail.md, "Mailbox lifecycle") keeps a mailbox that
+ * sent automated mail connected for thirty days, and its guard — a refusal with an
+ * audited admin override — is not built, so a Disconnect button here would be a way
+ * round a rule the software does not yet enforce.
+ */
+export interface MailboxBridge {
+  /** Reads `/gmail/status`. */
+  state(): Promise<MailboxState>;
+  /** Reads `/gmail/status` again and stops waiting for a grant, if it was. */
+  refresh(): Promise<MailboxState>;
+  /** Starts the grant, opens Google's consent screen in the system browser, and waits for it. */
+  connect(): Promise<MailboxState>;
+}
+
 declare global {
   var callie: DesktopBridge | undefined;
+  var callieMailbox: MailboxBridge | undefined;
 }

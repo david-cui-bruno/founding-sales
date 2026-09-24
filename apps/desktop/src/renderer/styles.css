@@ -79,3 +79,18 @@ dd {
   margin: 0;
   font-variant-numeric: tabular-nums;
 }
+
+.device-controls {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.mailbox-hint,
+.mailbox-notice {
+  margin: 0.5rem 0 0;
+}
+
+.mailbox-notice {
+  color: #7a4b00;
+}

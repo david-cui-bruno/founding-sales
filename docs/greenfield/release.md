@@ -199,6 +199,8 @@ The desktop commit stamp **is that value**. It is not something a build produces
 
 **What checks the agreement.** The desktop workflow refuses a `desktop_commit_stamp` that is not the commit the run is on, before it builds; and after it builds it compares the commit in the signed manifest — which is read out of the stamp inside the asar, inside the code signature — with both. At enable time (section 6) you compare the release record's `artifacts.desktopCommitStamp` with the commit the run summary printed. They are the same forty characters or sending does not get enabled.
 
+**The API admits the desktop version first.** Every sign-in, renewal and command is checked against the API's published range (`CONTAINER_CLIENT_VERSIONS` in `apps/api/src/bootstrap/main.ts`), and a client *above* its maximum is refused exactly like one below its minimum. So a desktop build whose `FSS_DESKTOP_APP_VERSION` is newer than the deployed API's maximum is published only after an API that admits it has been deployed. Otherwise every Mac that takes the update is refused everything. 8.0x is the first time this mattered: 1.0.1 needs an API whose maximum is 1.0.1.
+
 **The first release, today.** Eight of the nine desktop signing secrets are not set and this Mac holds only an Apple Development identity, so the release job fails closed at its first step and names them. That is the intended state. `docs/greenfield/install.md` lists every one.
 
 ### 2.1 The images
@@ -788,7 +790,7 @@ terraform output gmail_push_audience   # https://api.usecallie.com/integrations/
 
 Both are in the task environment already (`FSS_GMAIL_PUSH_TOPIC`, `FSS_GMAIL_PUSH_AUDIENCE`); the outputs are here so you can read what the apply decided. Confirm it reached the containers rather than assuming it — the API's startup line says `push_topic_source: "environment"` once it has.
 
-Then connect the mailbox from the Mac client: it opens the Google consent screen in the system browser, you grant `gmail.readonly` and `gmail.send`, and the callback lands on `https://api.usecallie.com/oauth/gmail/callback`. The API validates the exact audience and the exact service-account email on every push; a token with a valid Google signature and the wrong audience is refused (Appendix G 27).
+Then connect the mailbox from the Mac client: on the main window's "This Mac" card, the **Mailbox** row has a **Connect Gmail** button (desktop 1.0.1 and later — 1.0.0 has no such control, 8.0x). It opens the Google consent screen in the system browser, you grant `gmail.readonly` and `gmail.send`, and the callback lands on `https://api.usecallie.com/oauth/gmail/callback`. The row then reads `callie@usecallie.com · connected · baseline pending`. It has no Disconnect, because of the thirty-day rule in `docs/greenfield/mail.md`. The API validates the exact audience and the exact service-account email on every push; a token with a valid Google signature and the wrong audience is refused (Appendix G 27).
 
 ---
 
@@ -2136,9 +2138,149 @@ production since **05:56Z** at `02da3dd5` (8.0v). David's retry of the first rea
 sign-in (section 5.2a) is still pending: no callback has reached the API since the
 redeploy.
 
+### 8.0x What the first sign-in proved: the Mac client had no way to connect the mailbox (24 September, afternoon)
+
+**Sign-in worked.** At **15:08Z** on 24 September David signed in to production from the
+published desktop **1.0.0**, built at `66203322`, against the API that carries lane g45's
+discovery fix (8.0v). It is the first production sign-in that succeeded, and the first
+time the g45 rule met Google's real discovery document, token endpoint and key set. The
+main window — heading **Today**, `apps/desktop/src/renderer/renderer.ts` — showed its
+"This Mac" card with Name, Device, Workspace, Role `admin` and Registered, and two
+buttons: **Sign out** on the card and **Refresh** below it. Role `admin` is the membership
+5.1a bootstrapped. The two log checks section 5.2a asks for are not recorded in this
+section.
+
+**And then there was nothing to press.** Section 5.4 says "connect the mailbox from the
+Mac client: it opens the Google consent screen in the system browser…", and
+`docs/greenfield/mail.md` assumes the same. No control anywhere in the desktop connects
+Gmail. `grep -rn "gmail/connect\|gmail/status\|gmail/disconnect" apps/desktop/src
+packages/contracts/src` finds nothing at `66203322`, while the API serves all four paths
+in `apps/api/src/routes/gmail.ts`:
+
+| Path | What it is |
+|---|---|
+| `POST /gmail/connect` | The authenticated user command `connect_mailbox`. `beginGmailGrant` signs a ten-minute state and returns Google's consent URL. |
+| `GET /gmail/status` | The caller's own mailbox: address, status, baseline state, last sync. |
+| `POST /gmail/disconnect` | The command `disconnect_mailbox`. |
+| `GET /oauth/gmail/callback` | Google's browser redirect. Verifies the state, exchanges the code, creates the mailbox in `baseline_pending`. |
+
+Until a mailbox connects, the two production alarms that wait for one,
+`fss-prod-mailbox-heartbeat-missed` and `fss-prod-gmail-watch-expiring`, stay red, and
+nothing the operator had could clear them.
+
+**Why nothing caught it.** G7 built and tested the API half, and
+`apps/api/src/routes/mailSupport.ts` said the command schemas would move to
+`@fss/contracts` "in the pull request that adds the screen". No lane carried the screen.
+The API tests drive the routes directly, the desktop suite tests what the desktop has,
+and nothing asked whether a client called the routes at all. The rehearsal never signs
+in (8.0u), so no run reached the step where the gap shows.
+
+**The fix (lane g50): a Mailbox row on the "This Mac" card.**
+
+| State | What the row shows | What there is to press |
+|---|---|---|
+| Never connected | **Not connected** | **Connect Gmail** |
+| Waiting for the browser | the same text, and a hint to press Refresh if the browser said "Gmail not connected" | the button reads **Waiting for your browser…**, disabled |
+| Connected | `address · connected · baseline pending`, then `· ready` once the baseline completes | nothing |
+| Revoked or disconnected | `address · revoked` or `address · disconnected` | **Connect Gmail** |
+| Not yet read, or unreadable | **Checking…** or **Unknown** | nothing (Refresh reads it again) |
+
+* Connect Gmail asks the main process, never the renderer (whose policy stays
+  `connect-src 'none'`). `apps/desktop/src/main/mailboxBridge.ts` sends
+  `connect_mailbox` through the same authenticated client every other window uses, so the
+  envelope, the token and the version gate are the session manager's. It opens the
+  returned consent URL with `shell.openExternal`, exactly as sign-in opens Google, and
+  only if it is an `https:` URL. The URL never crosses the bridge.
+* The main process then reads `/gmail/status` every two seconds. It stops when the
+  mailbox is connected, when the grant's signed state expires (ten minutes, the API's
+  own), when the server refuses, or when the person presses Refresh. The row is also read
+  again whenever the window regains focus, which is when a person comes back from the
+  browser.
+* A refusal is one fixed sentence on the card, never a dialog. An unknown code is shown
+  as it came.
+* **There is no Disconnect.** `docs/greenfield/mail.md` ("Mailbox lifecycle: the
+  thirty-day rule") keeps a mailbox that sent automated mail connected for thirty days
+  after its last automated send, and says its guard, a refusal with an audited admin
+  override, belongs to a later lane. A Disconnect button would be a way round a rule the
+  software does not yet enforce, so the row shows status only. `POST /gmail/disconnect`
+  is unchanged.
+* The connect and disconnect command schemas moved to `@fss/contracts`
+  (`packages/contracts/src/mail.ts`) with the two answer shapes. The route's status body
+  is typed against the status shape, and the Mac parses it with the same schema.
+
+**The Gmail callback's token exchange, checked before it runs.** 8.0u's lesson was that a
+Google-side path is first tested by whoever first runs it, and Connect Gmail starts the
+next one. The Gmail grant does **not** use discovery or `exchangeCode`, and applies no
+same-origin or issuer rule. `beginGmailGrant` and `completeGmailGrant`
+(`packages/domain/mail/oauth.ts`) call the `GmailClient` port. The live API gives it
+`createGmailHttpClient`, which posts the code to its configured token endpoint, and
+`readApiDeployment` fixes that to `https://oauth2.googleapis.com/token`, the consent
+screen to `https://accounts.google.com/o/oauth2/v2/auth` and the profile read to
+`https://gmail.googleapis.com`. No id token comes back, because the grant asks for
+`gmail.readonly` and `gmail.send` and not `openid`, so no key set is fetched either.
+Nothing needed changing, and the scopes and the redirect URI
+(`${FSS_PUBLIC_ORIGIN}/oauth/gmail/callback`) are unchanged.
+`apps/api/test/gmailGoogle.test.ts` now holds that in place. It reads the live
+deployment with a `fetch` that answers only Google's real URLs in Google's real shapes.
+It checks that the exchange posts to exactly the token endpoint with the registered
+redirect, that the PKCE verifier matches the consent URL's challenge, that the profile is
+read on `gmail.googleapis.com`, and that the mailbox connects in `baseline_pending`. A
+refused code connects nothing.
+
+**The API has to admit 1.0.1 before 1.0.1 is published.** The API published
+`{ minimum: 1.0.0, maximum: 1.0.0 }` (`CONTAINER_CLIENT_VERSIONS` in
+`apps/api/src/bootstrap/main.ts`). A client above the maximum is `api_behind_client`, and
+sign-in, session renewal and every command refuse it `client_upgrade_required`, exactly as
+they refuse a client below the minimum. So desktop 1.0.1 against today's production API
+could not renew its session, let alone connect a mailbox. This lane raises the maximum to
+**1.0.1** and leaves the minimum at 1.0.0, so the installed 1.0.0 keeps working until it
+takes the update. The order is therefore:
+
+1. build and push both images from the merge commit, and **redeploy the API** (the worker
+   has no change that matters here);
+2. confirm `GET https://api.usecallie.com/auth/client-version` reports
+   `"maximum":"1.0.1"`;
+3. set `FSS_DESKTOP_APP_VERSION` to `1.0.1` and build, publish and install desktop 1.0.1
+   from the same commit (`docs/greenfield/install.md`, "4 — publish 1.0.1");
+4. on the Mac, press **Connect Gmail** on the "This Mac" card and finish the consent
+   screen as `callie@usecallie.com`.
+
+Publishing 1.0.1 before step 1 would offer every 1.0.0 Mac an update that the API
+refuses.
+
+**If the connection is refused at the callback.** The browser page says "Gmail not
+connected" and, by design, says nothing else. `/gmail/status` has no field for why a grant
+was refused, so the row keeps waiting until Refresh or the ten-minute expiry, and its hint
+says so. The API's `refusal` line for the path `/oauth/gmail/callback` carries only the
+status: `400` is the signed state (expired, or not this API's), `403` is the membership,
+and `409` is the grant itself. A `409` can mean Google refused the code, Google returned
+no refresh token, a scope was not granted, the address is outside the Workspace domain, or
+another user already holds the address. The log does not say which, and that is a gap
+worth closing before a second person connects.
+
+**What guards it now.**
+
+* `apps/desktop/test/mailbox.test.ts`: the bridge (connect, then the URL opened, then the
+  status read until connected; refusal; `https:` only; Refresh stops the wait; the expiry;
+  offline versus refusal; no second grant; nothing crosses the bridge but the row) and
+  the row in every state.
+* `apps/desktop/test/e2e/desktop.spec.ts`: the card's exact buttons in each state (Connect
+  Gmail and Sign out; Sign out alone once connected) and a refusal as text with no
+  dialog. Playwright is not in the gate; these ran locally.
+* `test/release/desktopMailbox.check.ts`, with three mutations in
+  `scripts/releaseMutationCheck.mjs`: the bridge stops opening the consent screen, the
+  preload stops exposing the bridge, and the API's maximum goes back to 1.0.0.
+* `apps/api/test/mail.test.ts` parses the connect answer and the status with the shared
+  schemas, and `apps/api/test/gmailGoogle.test.ts` covers the exchange above.
+
+**Still unverified.** No Mac has run 1.0.1, and no Gmail consent has reached the
+production callback. The first real exchange, the first profile read and the first
+baseline all run when David presses Connect Gmail, and the two alarms should clear only
+after that.
+
 ### 8.1 Still unverified
 
-Production was applied, deployed, bootstrapped and smoked at `66203322`, and redeployed at `02da3dd5` between 05:50Z and 05:57Z on 24 September, which carries the sign-in fix (8.0v). The signed desktop build is published at `66203322` (8.0t), and thirteen rehearsal runs have existed (8.0s, 8.0t, 8.0v, 8.0w). The first real sign-in was attempted against the `66203322` deployment and refused by the API's own discovery rule (8.0u). What follows is what that still does not settle. Items 1 to 10 were written before any of it ran, and each carries whatever a later run answered; items 11 to 17 are what is open on 24 September, and the first of them is the release record this release does not have.
+Production was applied, deployed, bootstrapped and smoked at `66203322`, and redeployed at `02da3dd5` between 05:50Z and 05:57Z on 24 September, which carries the sign-in fix (8.0v). The signed desktop build is published at `66203322` (8.0t), and thirteen rehearsal runs have existed (8.0s, 8.0t, 8.0v, 8.0w). The first real sign-in was attempted against the `66203322` deployment and refused by the API's own discovery rule (8.0u); the retry against the g45 fix succeeded at 15:08Z, and showed that desktop 1.0.0 has no way to connect the mailbox (8.0x). What follows is what that still does not settle. Items 1 to 10 were written before any of it ran, and each carries whatever a later run answered; items 11 to 17 are what is open on 24 September, and the first of them is the release record this release does not have.
 
 1. Whether `resourcegroupstaggingapi get-resources` is readable by the rehearsal role. `rehearsal-prefix-guard.sh` uses it to compare the production inventory before and after; if the role cannot read production at all, the scenario still passes — "could not address" is the claim — but the script will need the read moved to a separate inventory role to produce a useful diff. Two things about that read changed in G12f and neither could be tested against AWS: the tag filter is now `Key=Name` with no value, because `get-resources` matches tag values exactly and `Values=fss-prod*` would have matched nothing and made the comparison a comparison of two empty lists; and the production names are selected and **sorted** locally, because the API promises no order and an unstable one would fail the comparison for no reason. If the account holds many `Name`-tagged resources, this read is now larger than it was. **Answered by use:** the read works. The seventh run's guard (8.0o) and the twelfth's (8.0v) both compared real production inventories. The twelfth also showed that the read lists ECS tasks, which carry their service's propagated tags and which ECS forgets about an hour after they stop. Its guard failed on twelve of them aging out while production stood still, and the comparison now sets task ARNs aside on both sides and compares every durable resource, task-definition revisions included (8.0v, lane g47). **Verified on the thirteenth run (8.0w):** the guard set aside three task ARNs on each side and passed.
 2. Whether the drill can run at all: **nothing in this repository builds an `fss` executable.** No package declares a `bin`, and no step of the release workflow installs one, so every non-dry `fss admin …` in `rehearsal-restore-drill.sh` and every `fss carry export` in `rehearsal-carry-watermark.sh` would fail with `command not found`. Both scripts now refuse up front and say so, rather than discovering it after a restored RDS instance exists — but the CLI itself is another lane's, and the drill cannot pass until it lands. **Answered, 23 and 24 September: nothing puts an `fss` on PATH and nothing needs to.** No package declares a `bin` and that is now deliberate — every `fss` invocation is a command override of the worker image on a task definition inside the VPC, launched through `release_run_task`: the deploy's five one-off tasks, the workspace bootstrap, the drill's `fss admin counts`, the drill-evidence seeder and `fss drill` itself all ran that way in the cloud (8.0n to 8.0s). What is still open about the drill is steps 1 to 3, which is item 12.
@@ -2153,7 +2295,7 @@ Production was applied, deployed, bootstrapped and smoked at `66203322`, and red
 11. **A release record.** There is none. Every stage has passed at some commit — create, deploy, the bootstrap, the schema ranges, the smoke, the release suite, the drill's evidence — and the final `full` run at `66203322` (35948178549) ended at the drill step, though not for the reason 8.0s predicted: its credential expired at exactly one hour, inside `aws rds wait db-instance-available`, before the drill could reach the open steps of item 12 (8.0t). The twelfth, at `02da3dd5` (35962272085), renewed its session, passed everything before the drill again, completed the drill's point-in-time restore and stopped at the drill's first task against the restored instance, refused by the run-task wrapper's host check. Its production guard then failed on twelve ECS tasks aging out, a false positive now fixed (8.0v). The thirteenth, at `226d50b4` (35976297919), passed every step but the drill, the teardown and the production guard included. Its drill task started against the restored instance and stopped at its first write, a step-0 baseline file in a directory nothing creates (8.0w). Only a `full` run that passes every step writes a record, so the `releaseGateReference` section 6 step 2 reads before sending can be enabled does not exist yet. It will come from the post-release run that passes the drill.
 12. **The restore drill past its baseline — open, and post-release item 1.** The baseline exists; steps 1 to 3 do not run, for the five reasons 8.0s lists: no dialable subject, no suppression the restore loses, no fence left in `dispatching` or `reconciling`, no mailbox whose recorded envelope key the drill task can unwrap, and an `--at-failure` file nothing writes. Each of them refuses with its own reason rather than passing vacuously, which is why recording them is honest and relaxing an assertion would not be. David chose on 24 September to record them and ship the release path — his option 2, restated after the eleventh run's expiry (8.0t) and unchanged by it — so the drill stays **open** and stays post-release item 1; the drill's Step 1 point-in-time restore is the one part of it the eleventh run did issue, and it was the wait rather than the restore that died. **The twelfth run (8.0v) completed that restore:** `fss-rh-202609240558-pg-restored` was available in about twelve minutes, with its instants logged. It then stopped one step later, when the run-task wrapper refused the drill's one in-VPC task because the restored endpoint travelled as `--database-host` as well as the override. **That first item of the deferred drill work is fixed in code** (lane g48, PR 189): `--database-host` stays the primary host the drill task definition names, and the restored endpoint travels only as the `FSS_DATABASE_HOST` override. **The thirteenth run (8.0w) proved it.** The drill task started against `fss-rh-202609240838-pg-restored` for the first time, and exited 21 after about 25 seconds with `ENOENT: no such file or directory, open '/tmp/fss-drill/step0-baseline.json'`. That makes the **next item** the baseline handoff. The drill is launched with `--as-of` and not `--baseline`, so the baseline the runner measured on the source stays in the runner's `.rehearsal-reports/` and nothing hands it to the drill task. The drill measures step 0 again instead and writes it into `/tmp/fss-drill`, which nothing in the container creates. The baseline has to reach the drill task, as an argument or environment value in the task override or as an object the drill task can read, and the drill needs a reports directory that exists before its first write. Which way the baseline travels is a design choice for the deferred work. The five reasons above come after that. The run that closes this item is also the run that writes item 11's record.
 13. **The signed desktop build — answered, 24 September.** Run 35935100994 never got past importing the Developer ID certificate (8.0s) and the second build was refused at notarization for a team id that did not belong to the Apple ID; the **third**, run 35951921111, signed, notarized, stapled and published Callie 1.0.0 from commit `66203322` to the update channel at 03:37Z, manifest signed and zip `sha256` verified from outside the build (8.0t). What that still does not settle is the far end of it: nobody has installed the published artifact on a Mac, or taken an automatic update from the channel, so Gatekeeper's verdict on a real download and the updater's behaviour against a signed manifest are both unmeasured.
-14. **The first sign-in, and the Gmail consent — sign-in attempted and refused, 24 September.** A live API refuses to start without the sign-in parts (section 4) and production started, so they are configured — which turned out not to be the same as working. The first real sign-in, `callie@usecallie.com` on desktop 1.0.0, was refused `token_exchange_failed` four times between 03:43Z and 04:09Z, because `discovery()` refused Google's own discovery document for naming its token endpoint and key set on `googleapis.com` hosts (8.0u). The fix is lane g45. **It was deployed to production at `02da3dd5`, live from 05:56Z on 24 September (8.0v), and David's retry was still pending when 8.0w was written: no callback has reached the API since the redeploy.** Until a sign-in succeeds, nothing behind sign-in has run either: the adoption of the provisional admin row 5.1a created, which decides whether `admin.outcome: provisional_created` behaves as `docs/greenfield/identity.md` says it will, and the mailbox consent whose callback lands on `https://api.usecallie.com/oauth/gmail/callback` (5.4). That night did establish the rest of the path: the browser leg and the redirect URI work, a probe showed Google accepts the production sign-in client, and the API reaches Google. The next sign-in is section 5.2a, done by the operator right after that deploy, and it closes this item only with a signed-in Mac, `auth.provisional_user_adopted` in the audit log, and neither `oidc_discovery_unavailable` nor `token_exchange_failed` in the API log. Google owns the document and can move an endpoint again; a host outside the rule shows as `oidc_discovery_unavailable` at the start of the next sign-in, not as a silent refusal a minute later.
+14. **The first sign-in, and the Gmail consent — sign-in verified at 15:08Z on 24 September; the mailbox connection is pending desktop 1.0.1.** The first real sign-in, `callie@usecallie.com` on desktop 1.0.0, was refused `token_exchange_failed` four times between 03:43Z and 04:09Z, because `discovery()` refused Google's own discovery document for naming its token endpoint and key set on `googleapis.com` hosts (8.0u). Lane g45's fix went live in production at `02da3dd5` from 05:56Z (8.0v), and David's retry at **15:08Z** signed in: the main window reached **Today** with the "This Mac" card showing Role `admin`, so the membership 5.1a bootstrapped is the one the session carries (8.0x). The audit row `auth.provisional_user_adopted` and the absence of both warn lines, which 5.2a also asks for, are not recorded here. **The Gmail consent has not run, because desktop 1.0.0 has no control that starts it** (8.0x). Lane g50 adds the Mailbox row with Connect Gmail to the "This Mac" card and raises the API's published client maximum to 1.0.1. The API has to be redeployed from that commit **before** desktop 1.0.1 is published (`docs/greenfield/install.md`, "4 — publish 1.0.1"), because an API whose maximum is 1.0.0 refuses a 1.0.1 client everything. The Gmail grant's token exchange uses Google's real hosts and no discovery rule, and `apps/api/test/gmailGoogle.test.ts` now holds that (8.0x). This item closes when the "This Mac" card reads `callie@usecallie.com · connected · baseline pending`, `/gmail/status` agrees, and `fss-prod-mailbox-heartbeat-missed` and `fss-prod-gmail-watch-expiring` clear. A refused callback shows only as a `refusal` line with status 400, 403 or 409 for `/oauth/gmail/callback`, and 8.0x says what each one means.
 15. **Sending.** `FSS_SENDING_ENABLED` is `false` and section 6 has not been run, so nothing has been sent from production. 12.7's authentication checks, the six-week ramp, and the journal's first real write — item 6 above, which surfaces only as `SuppressionJournalWriteFailures` — are all unproved in production.
 16. **The exact rehearsal deployment policy, put back.** `fss-rh-deploy` still carries the discovery document of 8.0h: a wide allow on the services the tree uses, with guards, for one pass of `create`, `deploy` and `full`. The exact policy derived from the CloudTrail record of that pass is put back only after the final run above has passed (`infra-apply-runbook.md` 1.1b, step 5), and until then no rehearsal run proves anything about the policy this release ships. `fss-prod-deploy` was never widened and the renderer refuses to widen it.
 17. **A `full` run that outlasts its credentials, end to end.** The run is longer than the one-hour session the job used to hold, and 8.0t is what that cost: an expired token inside the drill's RDS waiter, a teardown and a production-prefix guard that both failed at their first call, and a leaked environment removed by a separate `stage=teardown` dispatch. The workflow now renews the session before the drill and again — on `always()` — before the teardown, each renewal followed by the identity assertion. **Answered, 24 September (8.0v):** run 35962272085, well past an hour, renewed twice, and both renewed sessions passed `rehearsal-caller-identity.sh`. The teardown then ran cleanly on the second, the first clean teardown of a `full` run since the run grew past an hour. The guard reached its comparison on the same session, and its red was the ECS-task false positive fixed in lane g47, not an authentication failure. **Verified again on the thirteenth run (8.0w):** both renewals and both identity assertions passed, the teardown passed at 09:57Z, and the production guard passed on the same session. The belt-and-braces follow-up — `MaxSessionDuration` 7200 on `fss-rh-deploy` and `role-duration-seconds: 7200` in the workflow — is not done and is deliberately separate: the role lives outside this repository.

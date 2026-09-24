@@ -1,4 +1,4 @@
-import type { DesktopState } from '../shared/contract.ts';
+import type { DesktopState, MailboxState } from '../shared/contract.ts';
 
 /**
  * What the window shows, as a pure function of the state the main process sent.
@@ -88,4 +88,91 @@ export function buildScreenView(state: DesktopState): ScreenView {
     showingCachedList: state.stale && state.today !== null,
     cardCount: state.today === null ? 0 : state.today.cards.length,
   };
+}
+
+// ---------------------------------------------------------------------------
+// The Mailbox row on "This Mac" (release.md 8.0x)
+// ---------------------------------------------------------------------------
+
+export const MAILBOX_ROW_LABEL = 'Mailbox';
+export const CONNECT_GMAIL_LABEL = 'Connect Gmail';
+/** The same words the sign-in button uses while the browser has the person. */
+export const MAILBOX_WAITING_LABEL = 'Waiting for your browser…';
+export const MAILBOX_WAITING_HINT =
+  'Finish in your browser. If it says Gmail not connected, press Refresh, then Connect Gmail again.';
+
+export interface MailboxView {
+  /** The row's value: what the server last said, never a guess. */
+  readonly text: string;
+  /**
+   * The one control. Connect Gmail when there is no connected mailbox; the waiting label,
+   * disabled, while the consent screen is open; nothing once connected. There is never
+   * a Disconnect (see `MailboxBridge` in the shared contract).
+   */
+  readonly action: { readonly label: string; readonly enabled: boolean } | null;
+  readonly hint: string | null;
+  /** A refusal or failure, as one fixed sentence. Plain text on the card, never a dialog. */
+  readonly notice: string | null;
+}
+
+const SYNC_LABELS: Readonly<Record<NonNullable<NonNullable<MailboxState['status']>['mailbox']>['syncState'], string>> =
+  Object.freeze({
+    baseline_pending: 'baseline pending',
+    ready: 'ready',
+    recovering: 'recovering',
+  });
+
+const MAILBOX_NOTICES: Readonly<Record<string, string>> = Object.freeze({
+  offline: 'Callie cannot reach the server.',
+  not_signed_in: 'Sign in before connecting Gmail.',
+  client_upgrade_required: 'This version of Callie is out of date. Install the current build to continue.',
+  mailbox_already_connected: 'Gmail is already connected.',
+  mailbox_connect_timed_out: 'Gmail was not connected in time. Press Connect Gmail to start again.',
+  consent_url_refused: 'The server sent a consent address Callie will not open.',
+  browser_unavailable: 'Callie could not open your browser.',
+  unreadable_answer: 'Callie could not read the server’s answer.',
+  refused: 'The server refused that.',
+});
+
+/** The one place a mailbox code becomes English. Unknown codes are shown as they came. */
+export function mailboxNoticeSentence(code: string): string {
+  return MAILBOX_NOTICES[code] ?? NOTICES[code] ?? code;
+}
+
+/** "callie@usecallie.com · connected · baseline pending". */
+export function mailboxStatusLine(
+  mailbox: NonNullable<NonNullable<MailboxState['status']>['mailbox']>,
+): string {
+  // The baseline state only means something for a mailbox that is connected.
+  return mailbox.status === 'connected'
+    ? [mailbox.emailAddress, mailbox.status, SYNC_LABELS[mailbox.syncState]].join(' · ')
+    : [mailbox.emailAddress, mailbox.status].join(' · ');
+}
+
+/**
+ * The Mailbox row, as a pure function of what the main process sent.
+ *
+ * `waiting` is the page's own flag for the instant between the click and the main
+ * process's first answer, exactly as the sign-in form has one; everything else is the
+ * bridge's word. A row whose status has never been read offers nothing to press: a
+ * connection started blind could be a second grant for a mailbox that is already
+ * connected, and Refresh is one click away.
+ */
+export function buildMailboxView(state: MailboxState | null, options: { readonly waiting?: boolean } = {}): MailboxView {
+  const notice = state?.notice == null ? null : mailboxNoticeSentence(state.notice);
+  if ((options.waiting ?? false) || state?.connecting === true) {
+    const mailbox = state?.status?.mailbox ?? null;
+    return {
+      text: mailbox === null ? 'Not connected' : mailboxStatusLine(mailbox),
+      action: { label: MAILBOX_WAITING_LABEL, enabled: false },
+      hint: MAILBOX_WAITING_HINT,
+      notice,
+    };
+  }
+  if (state === null) return { text: 'Checking…', action: null, hint: null, notice: null };
+  if (state.status === null) return { text: 'Unknown', action: null, hint: null, notice };
+  const mailbox = state.status.mailbox;
+  const text = mailbox === null ? 'Not connected' : mailboxStatusLine(mailbox);
+  if (state.status.connected) return { text, action: null, hint: null, notice };
+  return { text, action: { label: CONNECT_GMAIL_LABEL, enabled: state.mayConnect }, hint: null, notice };
 }
