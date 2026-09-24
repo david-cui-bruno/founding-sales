@@ -89,7 +89,17 @@ export async function startSignIn(deps: AuthDeps, input: StartSignInInput): Prom
     ],
   );
 
+  // The fallback keeps the browser leg working when discovery answers null, and that is
+  // exactly how the 24 September 2026 refusals stayed hidden: the browser went to Google,
+  // the person signed in, and only the callback — which cannot fall back, because the
+  // token endpoint is the thing discovery vouches for — failed. So the fallback says so.
   const discovery = await deps.google.discovery(deps.config.oidc);
+  if (discovery === null) {
+    deps.log?.log('warn', 'oidc_discovery_unavailable', {
+      step: 'sign_in_start',
+      fallback: 'authorization_endpoint',
+    });
+  }
   const authorizationEndpoint =
     discovery?.authorizationEndpoint ?? `${deps.config.oidc.issuer}/o/oauth2/v2/auth`;
   const url = new URL(authorizationEndpoint);
@@ -178,7 +188,17 @@ export async function handleCallback(deps: AuthDeps, input: CallbackInput): Prom
     code: input.code,
     codeVerifier: deriveCodeVerifier(deps.config.stateSigningKey, input.state),
   });
-  if (!exchange.ok || exchange.idToken === null) return await fail('token_exchange_failed');
+  if (!exchange.ok) {
+    // One line, and only the closed reason and Google's own error code. The code, the
+    // verifier, the client secret and the response body stay out of it: the refusal the
+    // audit row records says *that* the exchange failed, and this says why, which is
+    // what the four refusals of 24 September 2026 could not.
+    deps.log?.log('warn', 'token_exchange_failed', {
+      reason: exchange.reason,
+      provider_error: exchange.providerError ?? undefined,
+    });
+    return await fail('token_exchange_failed');
+  }
 
   const validated = await validateIdToken({
     token: exchange.idToken,

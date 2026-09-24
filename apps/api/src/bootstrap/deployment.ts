@@ -130,8 +130,10 @@ export const GOOGLE_OIDC_CERTS_URL = 'https://www.googleapis.com/oauth2/v3/certs
  * Google's OpenID Connect issuer and discovery document.
  *
  * Constants rather than configuration: `createGoogleClient` refuses a discovery
- * document whose `issuer` differs and refuses any endpoint it names at another origin,
- * so making these settable would only widen what a deployment can be pointed at.
+ * document whose `issuer` differs and refuses any endpoint it names anywhere but this
+ * issuer's host or a `.googleapis.com` host over HTTPS — Google's own document puts the
+ * token endpoint and the key set on the latter — so making these settable would only
+ * widen what a deployment can be pointed at.
  */
 export const GOOGLE_OIDC_ISSUER = 'https://accounts.google.com';
 export const GOOGLE_OIDC_DISCOVERY_URL = 'https://accounts.google.com/.well-known/openid-configuration';

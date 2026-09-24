@@ -65,6 +65,26 @@ const asString = (value: unknown): string | null => (typeof value === 'string' &
 const asSeconds = (value: unknown): number | null =>
   typeof value === 'number' && Number.isFinite(value) ? value : null;
 
+const HTTPS_SCHEME = 'https://';
+
+/**
+ * Whether `iss` names the configured issuer, in either of the two forms Google documents.
+ *
+ * Google's own validation guide says the `iss` of an id token "is equal to
+ * `accounts.google.com` or `https://accounts.google.com`", so an exact comparison with
+ * the configured `https://accounts.google.com` would refuse a genuine token
+ * `issuer_mismatch` whenever Google chose the short form. This accepts exactly those two:
+ * the configured issuer, and the configured issuer with its `https://` scheme removed.
+ * Nothing broader — not another scheme, not a suffix, not a case variant, not a trailing
+ * slash. It is the second Google-side check a first real sign-in exercises, and it was
+ * widened on 24 September 2026, before any real token reached it (release runbook 8.0u).
+ */
+function issuerMatches(claimed: string | null, configured: string): boolean {
+  if (claimed === null) return false;
+  if (claimed === configured) return true;
+  return configured.startsWith(HTTPS_SCHEME) && claimed === configured.slice(HTTPS_SCHEME.length);
+}
+
 /** Whether `aud` — which may be a string or an array — contains exactly our client id. */
 function audienceMatches(audience: unknown, clientId: string): boolean {
   if (typeof audience === 'string') return audience === clientId;
@@ -98,7 +118,7 @@ export async function validateIdToken(input: ValidateIdTokenInput): Promise<IdTo
   }
 
   const claims = parts.payload;
-  if (asString(claims['iss']) !== input.config.issuer) return { valid: false, refusal: 'issuer_mismatch' };
+  if (!issuerMatches(asString(claims['iss']), input.config.issuer)) return { valid: false, refusal: 'issuer_mismatch' };
   if (!audienceMatches(claims['aud'], input.config.clientId)) return { valid: false, refusal: 'audience_mismatch' };
 
   // `azp` is present whenever the token was issued to a different party than the

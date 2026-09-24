@@ -1,5 +1,6 @@
 import type { ClientVersionRange } from '@fss/contracts';
 import type { SessionQueryable } from '@fss/domain/db';
+import type { Logger } from '../bootstrap/log.ts';
 import type { GoogleClient } from './googleClient.ts';
 
 /**
@@ -11,7 +12,11 @@ import type { GoogleClient } from './googleClient.ts';
  */
 
 export interface GoogleOidcConfig {
-  /** The `iss` every id token must carry, and the origin the discovery document must agree with. */
+  /**
+   * The `iss` every id token must carry and the discovery document must name. Its host,
+   * or a `.googleapis.com` host over HTTPS, is where every endpoint in that document
+   * must be (`googleClient.ts`, `endpointAllowed`).
+   */
   readonly issuer: string;
   readonly discoveryUrl: string;
   readonly clientId: string;
@@ -54,4 +59,10 @@ export interface AuthDeps {
   readonly now: () => Date;
   /** 32 random bytes, base64url. The only source of a secret in this package. */
   readonly randomSecret: () => string;
+  /**
+   * The API's structured log. Sign-in writes a `warn` when it falls back from discovery
+   * and when a token exchange fails, naming a reason and never a code, a verifier, a
+   * token, the client secret or a response body. Absent in most unit tests.
+   */
+  readonly log?: Logger | undefined;
 }

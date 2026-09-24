@@ -144,6 +144,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
           google: deployment.auth.google,
           now: () => new Date(),
           randomSecret: () => randomBytes(32).toString('base64url'),
+          log,
         };
 
   const server = createApiServer({

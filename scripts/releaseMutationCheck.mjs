@@ -478,6 +478,34 @@ const MUTATIONS = [
       '`fss admin workspace bootstrap` writes the first admin\u2019s users row with a sentinel google_sub, because the real Google sub cannot be known before that person signs in. This UPDATE is the only thing that turns it into a real account; without it the first sign-in inserts a *second* users row, the membership still hangs off the first, and the person is refused membership_required for ever \u2014 which from outside is indistinguishable from having no access. The release check reads the statement and its NOT EXISTS guard.',
   },
   {
+    name: 'discovery goes back to requiring every endpoint at the issuer origin',
+    file: 'apps/api/src/auth/googleClient.ts',
+    find:
+      "  if (url.origin === issuer.origin) return true;\n  if (url.protocol !== 'https:') return false;\n  return url.hostname === issuer.hostname || url.hostname.endsWith('.googleapis.com');\n",
+    replace: '  return url.origin === issuer.origin;\n',
+    suite: ['run', 'test:release'],
+    because:
+      'This is production\u2019s first real sign-in exactly (24 September 2026): four refusals `token_exchange_failed`, because Google\u2019s discovery document names its token endpoint on oauth2.googleapis.com and its key set on www.googleapis.com while the issuer is accounts.google.com, so the same-origin rule answered null and the exchange never ran. The rehearsal has no real Google and the lane tests\u2019 local provider serves every endpoint from one origin, so scenario23 asserts the rule against Google\u2019s real hosts and has to go red when it is put back.',
+  },
+  {
+    name: 'discovery stops requiring HTTPS for a Google API host',
+    file: 'apps/api/src/auth/googleClient.ts',
+    find: "  if (url.protocol !== 'https:') return false;\n",
+    replace: '',
+    suite: ['run', 'test:release'],
+    because:
+      'Widening the rule to Google\u2019s API hosts must not widen it to plain HTTP: a document naming http://oauth2.googleapis.com/token would send the code and the client secret in the clear to whoever is on the path. scenario23\u2019s refusal case includes exactly that endpoint and has to go red.',
+  },
+  {
+    name: 'the id token accepts any issuer',
+    file: 'apps/api/src/auth/idToken.ts',
+    find: '  if (claimed === null) return false;\n  if (claimed === configured) return true;\n',
+    replace: '  return true;\n',
+    suite: ['run', 'test:release'],
+    because:
+      'Widening the issuer check to the two forms Google documents (`https://accounts.google.com` and `accounts.google.com`, 24 September 2026) must not widen it to everything: a validator that accepts any `iss` accepts a token some other issuer signed with a key that happens to be served. scenario23 validates otherwise-perfect tokens whose only fault is the issuer and has to go red.',
+  },
+  {
     name: 'a deploy stage stops bootstrapping the first workspace',
     file: '.github/workflows/greenfield-release.yml',
     find:
