@@ -497,6 +497,15 @@ const MUTATIONS = [
       'Widening the rule to Google\u2019s API hosts must not widen it to plain HTTP: a document naming http://oauth2.googleapis.com/token would send the code and the client secret in the clear to whoever is on the path. scenario23\u2019s refusal case includes exactly that endpoint and has to go red.',
   },
   {
+    name: 'the id token accepts any issuer',
+    file: 'apps/api/src/auth/idToken.ts',
+    find: '  if (claimed === null) return false;\n  if (claimed === configured) return true;\n',
+    replace: '  return true;\n',
+    suite: ['run', 'test:release'],
+    because:
+      'Widening the issuer check to the two forms Google documents (`https://accounts.google.com` and `accounts.google.com`, 24 September 2026) must not widen it to everything: a validator that accepts any `iss` accepts a token some other issuer signed with a key that happens to be served. scenario23 validates otherwise-perfect tokens whose only fault is the issuer and has to go red.',
+  },
+  {
     name: 'a deploy stage stops bootstrapping the first workspace',
     file: '.github/workflows/greenfield-release.yml',
     find:

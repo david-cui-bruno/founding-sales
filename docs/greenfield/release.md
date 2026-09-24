@@ -759,10 +759,9 @@ response body; what each one means:
 A refusal the audit log records with any other code — `hosted_domain_mismatch`,
 `membership_required`, `email_unverified` — is about the account rather than about
 Google's side, and writes neither line. One is about Google's side and is also first
-exercised here: `issuer_mismatch`. The validator compares the id token's `iss` with
-`https://accounts.google.com` exactly (`apps/api/src/auth/idToken.ts`), and Google
-documents `accounts.google.com`, without the scheme, as a second form a token may carry.
-If that refusal appears, that is why.
+exercised here: `issuer_mismatch`. The validator accepts `https://accounts.google.com` and
+`accounts.google.com`, the two forms Google documents (8.0u), so that refusal means the
+token named some other issuer, and it is worth stopping on.
 
 ### 5.3 The SNS confirmation
 
@@ -1935,6 +1934,13 @@ response body:
 
 Had the second existed at 03:43Z the cause would have been in the log before the person
 had finished signing in.
+
+**The second Google-side check, closed before a real token reached it.** The id-token
+validator compared `iss` with `https://accounts.google.com` exactly, and Google documents
+`accounts.google.com` as a second form a genuine token may carry — so it now accepts the
+configured issuer with or without its `https://` scheme and nothing else
+(`apps/api/src/auth/idToken.ts`, held by the same scenario23 check and a mutation that
+accepts any issuer).
 
 **The lesson: the first real sign-in is the first test of this path, so it is a step.**
 The rehearsal cannot exercise Google and should not; the lane tests exercise a Google-shaped

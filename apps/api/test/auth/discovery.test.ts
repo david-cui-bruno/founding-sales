@@ -1,9 +1,11 @@
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createSign, generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   createGoogleClient,
   handleCallback,
+  sha256Hex,
   startSignIn,
+  validateIdToken,
   type GoogleOidcConfig,
   type HttpFetch,
   type HttpRequest,
@@ -67,10 +69,14 @@ interface RecordedRequest {
   readonly request: HttpRequest | undefined;
 }
 
-/** A Google that serves `document` at the discovery URL and `token` to any POST. */
+/**
+ * A Google that serves `document` at the discovery URL, `token` to any POST, and `keys`
+ * as the JWKS at whatever `jwks_uri` the document names.
+ */
 function fakeGoogle(
   document: Readonly<Record<string, unknown>>,
   token: HttpResponse = { status: 404, headers: {}, body: '' },
+  keys: readonly Readonly<Record<string, string>>[] = [],
 ): { readonly fetch: HttpFetch; readonly requests: RecordedRequest[] } {
   const requests: RecordedRequest[] = [];
   const fetch: HttpFetch = (url, request) => {
@@ -83,6 +89,13 @@ function fakeGoogle(
       });
     }
     if (request?.method === 'POST') return Promise.resolve(token);
+    if (url === document['jwks_uri']) {
+      return Promise.resolve({
+        status: 200,
+        headers: { 'content-type': 'application/json', 'cache-control': 'public, max-age=3600' },
+        body: JSON.stringify({ keys }),
+      });
+    }
     return Promise.resolve({ status: 404, headers: {}, body: '' });
   };
   return { fetch, requests };
@@ -220,6 +233,68 @@ describe('a failed token exchange says why', () => {
       providerError: null,
     });
   });
+});
+
+describe('the id token issuer, in both forms Google documents', () => {
+  // Google's validation guide: `iss` "is equal to accounts.google.com or
+  // https://accounts.google.com". The key set is served from Google's real
+  // www.googleapis.com host, through the real discovery document, so this is the whole
+  // path a genuine token takes after the exchange.
+  const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const kid = `k-${randomBytes(8).toString('hex')}`;
+  const exported = publicKey.export({ format: 'jwk' }) as { n?: string; e?: string };
+  const jwk = { kty: 'RSA', use: 'sig', alg: 'RS256', kid, n: exported.n ?? '', e: exported.e ?? '' };
+  const config = productionConfig();
+  const nonce = randomUUID();
+  const subject = '109876543210987654321';
+  const client = createGoogleClient({ fetch: fakeGoogle(GOOGLE_DISCOVERY_DOCUMENT, undefined, [jwk]).fetch, now });
+
+  const segment = (value: unknown): string => Buffer.from(JSON.stringify(value)).toString('base64url');
+  const tokenFrom = (iss: string): string => {
+    const issuedAt = Math.floor(now().getTime() / 1000);
+    const signingInput = `${segment({ alg: 'RS256', kid, typ: 'JWT' })}.${segment({
+      iss,
+      aud: config.clientId,
+      azp: config.clientId,
+      sub: subject,
+      email: 'callie@callie.example',
+      email_verified: true,
+      hd: 'callie.example',
+      nonce,
+      iat: issuedAt,
+      exp: issuedAt + 3600,
+    })}`;
+    const signer = createSign('RSA-SHA256');
+    signer.update(signingInput);
+    return `${signingInput}.${signer.sign(privateKey).toString('base64url')}`;
+  };
+  const validate = async (iss: string): Promise<unknown> =>
+    await validateIdToken({
+      token: tokenFrom(iss),
+      config,
+      google: client,
+      now: now(),
+      expectedNonceHash: sha256Hex(nonce),
+    });
+
+  for (const iss of ['https://accounts.google.com', 'accounts.google.com']) {
+    it(`accepts a token whose iss is ${iss}`, async () => {
+      expect(await validate(iss)).toMatchObject({ valid: true, claims: { subject, hostedDomain: 'callie.example' } });
+    });
+  }
+
+  for (const iss of [
+    'https://accounts.google.com.evil.example',
+    'accounts.google.com.evil.example',
+    'http://accounts.google.com',
+    'https://accounts.google.com/',
+    'ACCOUNTS.GOOGLE.COM',
+    'https://evil.example',
+  ]) {
+    it(`refuses a token whose iss is ${iss} as issuer_mismatch`, async () => {
+      expect(await validate(iss)).toEqual({ valid: false, refusal: 'issuer_mismatch' });
+    });
+  }
 });
 
 describe('sign-in logs what it used to swallow', () => {

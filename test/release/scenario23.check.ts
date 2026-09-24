@@ -1,7 +1,9 @@
-import { randomBytes } from 'node:crypto';
+import { createSign, generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { AUTH_REFUSAL_CODES } from '@fss/contracts';
-import { createGoogleClient, type HttpFetch } from '../../apps/api/src/auth/googleClient.ts';
+import { createGoogleClient, type GoogleClient, type HttpFetch } from '../../apps/api/src/auth/googleClient.ts';
+import { validateIdToken } from '../../apps/api/src/auth/idToken.ts';
+import { sha256Hex } from '../../apps/api/src/auth/tokens.ts';
 import {
   DEPLOYMENT_ENVIRONMENT_VARIABLES,
   GOOGLE_OIDC_DISCOVERY_URL,
@@ -244,6 +246,51 @@ describe("Appendix G 23: the API accepts Google's own discovery document", () =>
         now: () => new Date(),
       });
       expect(await client.discovery(oidc), tokenEndpoint).toBeNull();
+    }
+  });
+
+  /**
+   * The second Google-side check a first real sign-in reaches: the id token's `iss`.
+   * Google documents two forms, `https://accounts.google.com` and `accounts.google.com`,
+   * and an exact comparison with the configured issuer refuses the second. The validator
+   * accepts the configured issuer with and without its `https://` scheme and nothing
+   * else. The vacuous-pass trap is the same pairing as above: a validator that accepted
+   * any issuer passes the positive half, one that refused the short form passes the
+   * negative half, and every token here is otherwise valid, so a refusal can only be the
+   * issuer's.
+   */
+  it("accepts both forms of Google's issuer in an id token, and nothing near them", async () => {
+    const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+    const google: GoogleClient = {
+      ...createGoogleClient({ fetch: serving(googleDocument), now: () => new Date() }),
+      signingKey: async () => await Promise.resolve(publicKey),
+    };
+    const nonce = randomUUID();
+    const segment = (value: unknown): string => Buffer.from(JSON.stringify(value)).toString('base64url');
+    const outcomeFor = async (iss: string): Promise<unknown> => {
+      const issuedAt = Math.floor(Date.now() / 1000);
+      const signingInput = `${segment({ alg: 'RS256', kid: 'release-check', typ: 'JWT' })}.${segment({
+        iss,
+        aud: oidc.clientId,
+        sub: '109876543210987654321',
+        email: 'admin@example.test',
+        email_verified: true,
+        hd: oidc.hostedDomain,
+        nonce,
+        iat: issuedAt,
+        exp: issuedAt + 3600,
+      })}`;
+      const signer = createSign('RSA-SHA256');
+      signer.update(signingInput);
+      const token = `${signingInput}.${signer.sign(privateKey).toString('base64url')}`;
+      return await validateIdToken({ token, config: oidc, google, now: new Date(), expectedNonceHash: sha256Hex(nonce) });
+    };
+
+    for (const iss of ['https://accounts.google.com', 'accounts.google.com']) {
+      expect(await outcomeFor(iss), iss).toMatchObject({ valid: true });
+    }
+    for (const iss of ['https://accounts.google.com.evil.example', 'http://accounts.google.com', 'https://evil.example']) {
+      expect(await outcomeFor(iss), iss).toEqual({ valid: false, refusal: 'issuer_mismatch' });
     }
   });
 });

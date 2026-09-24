@@ -133,9 +133,11 @@ Every one of those has a test in `apps/api/test/auth/scenarios.test.ts`.
 
 ### What the id token must say
 
-Issuer, audience, `azp` where present, RS256 signature against Google's current
-published keys, `exp`/`iat`/`nbf` within the configured skew, the request's nonce,
-`email_verified = true`, `hd` equal to the configured Workspace domain, and a `sub`.
+Issuer — the configured `https://accounts.google.com`, or `accounts.google.com`, the two
+forms Google documents and nothing near them — audience, `azp` where present, RS256
+signature against Google's current published keys, `exp`/`iat`/`nbf` within the
+configured skew, the request's nonce, `email_verified = true`, `hd` equal to the
+configured Workspace domain, and a `sub`.
 `sub` is the durable identity; email is display data and is deliberately not unique in
 the `users` table, because two Callie people may share an alias and a changed address
 must not create a second account.
