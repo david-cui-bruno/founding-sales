@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -288,5 +288,161 @@ describe('Appendix G 11: the drill calls commands that exist, at an instant RDS 
     const processes = readRepositoryFile('docs/greenfield/processes.md');
     expect(processes).toContain('apps/worker/src/tools/fss.ts');
     expect(processes).toContain('containerOverrides');
+  });
+});
+
+/**
+ * Lane g53: the drill task is handed the baseline measured on the source.
+ *
+ * The thirteenth full run (24 September 2026) launched the drill against the restored
+ * instance with `--as-of <restore target>` and no baseline. The drill therefore measured
+ * step 0 again on the restored copy, and died writing it into a reports directory
+ * nothing had created. Had it not died, "no suppression lost" would have been compared
+ * with the restored database's own counts rather than with the source's, measured by the
+ * separate baseline task before the restore. A Fargate task can be handed nothing but
+ * its command, so the baseline now travels in it: `fss drill --baseline-json '<json>'`.
+ *
+ * ## The vacuous-pass trap
+ *
+ * The plan is the only thing a dry run prints, and the real launch is a different line
+ * of the script: a check of the plan alone passes against a script whose plan says
+ * `--baseline-json` while its real `drill_task` still passes `--as-of`. So the real
+ * launch is read through the extractor that also reads `drill_task`, the plan is read
+ * for the value it would hand over, and the value is pushed through the run-task
+ * wrapper to show it arrives in the task's command byte for byte.
+ */
+describe('Appendix G 11: the drill is handed the baseline measured on the source (lane g53)', () => {
+  const SCRIPT = 'infra/scripts/rehearsal-restore-drill.sh';
+
+  /** A baseline as `fss admin counts` prints it, per-workspace breakdown included. */
+  const measured = {
+    asOf: '2026-09-21T00:00:00Z',
+    sends: 2,
+    replies: 3,
+    suppressions: 4,
+    crm_edits: 5,
+    migrations: 30,
+    workspaces: [
+      { workspaceId: '00000000-0000-4000-8000-000000000001', sends: 2, replies: 3, suppressions: 4, crm_edits: 5 },
+    ],
+  };
+  /** What the drill task is handed: the instant and the five counts, on one line. */
+  const handed = '{"asOf":"2026-09-21T00:00:00Z","sends":2,"replies":3,"suppressions":4,"crm_edits":5,"migrations":30}';
+
+  function dryRun(baseline: Readonly<Record<string, unknown>>): { readonly code: number; readonly output: string } {
+    const reports = mkdtempSync(join(tmpdir(), 'fss-g53-drill-'));
+    writeFileSync(join(reports, 'baseline.json'), JSON.stringify(baseline));
+    const result = spawnSync(repositoryPath(SCRIPT), ['fss-rh-handoff'], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        FSS_REHEARSAL_DRY_RUN: '1',
+        FSS_REHEARSAL_REPORTS: reports,
+        FSS_RESTORE_TARGET: '2026-09-21T00:00:00Z',
+      },
+    });
+    return { code: result.status ?? 1, output: `${result.stdout}${result.stderr}` };
+  }
+
+  it('launches the drill with --baseline-json, in the real launch as well as the plan', async () => {
+    const { drillInvocations } = await import('../../apps/worker/src/tools/fss/commands.ts');
+    const launches = drillInvocations(readRepositoryFile(SCRIPT)).filter(invocation => invocation.argv[0] === 'drill');
+    expect(
+      launches.filter(invocation => !invocation.planned).length,
+      'the extractor no longer sees the real drill_task launch, so this check would read the plan alone',
+    ).toBeGreaterThanOrEqual(1);
+    for (const launch of launches) {
+      expect(launch.argv, `${launch.text} does not hand the drill the source baseline`).toContain('--baseline-json');
+      expect(launch.argv, `${launch.text} would measure step 0 again on the restored copy`).not.toContain('--as-of');
+    }
+  });
+
+  it('hands over the instant and the five counts the source measured, on one line', () => {
+    const { code, output } = dryRun(measured);
+    expect(code, output).toBe(0);
+    const line = output.split('\n').find(entry => entry.startsWith('PLAN fss drill '));
+    expect(line, 'the plan no longer launches the drill').toBeDefined();
+    const words = (line ?? '').split(' ');
+    const value = words[words.indexOf('--baseline-json') + 1];
+    expect(value).toBe(handed);
+    expect(JSON.parse(value ?? '')).toEqual({ ...measured, workspaces: undefined });
+    expect(line).not.toContain('--as-of');
+  });
+
+  it('refuses a baseline with no instant before the restore, not in the drill task after it', () => {
+    const { code, output } = dryRun({ ...measured, asOf: undefined });
+    expect(code).not.toBe(0);
+    expect(output).toContain('carries no asOf instant');
+    expect(output).not.toContain('restore-db-instance-to-point-in-time');
+  });
+
+  it('reaches the drill task byte for byte through the run-task wrapper', () => {
+    // The drill's own front door, with the root's outputs and the registered definition
+    // supplied and no credential, exactly as scenario39's g48 case drives it. The
+    // wrapper reads the command one word per line and JSON-encodes each, and refuses any
+    // argument naming production; a value with braces, quotes and colons must survive
+    // both unchanged.
+    const digest = `sha256:${'c'.repeat(64)}`;
+    const secret = 'arn:aws:secretsmanager:us-east-1:123456789012:secret:fss-rh-check/app-runtime-database-a';
+    const command = [
+      'drill',
+      '--reports',
+      '/tmp/fss-drill',
+      '--baseline-json',
+      handed,
+      '--from',
+      '2026-09-20T23:00:00Z',
+      '--since',
+      '2026-09-20T23:50:00Z',
+      '--all-mailboxes',
+    ];
+    const result = spawnSync(
+      repositoryPath('infra/scripts/rehearsal-run-task.sh'),
+      ['fss-rh-check', 'drill', 'drill', '--', ...command],
+      {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          FSS_REHEARSAL_DRY_RUN: '1',
+          FSS_REHEARSAL_REPORTS: mkdtempSync(join(tmpdir(), 'fss-g53-door-')),
+          FSS_RELEASE_CALLER_ACCOUNT: '123456789012',
+          FSS_RELEASE_CLUSTER_TAGS: '[{"key":"Environment","value":"rehearsal"}]',
+          FSS_RELEASE_OUTPUT_CLUSTER_ARN: 'arn:aws:ecs:us-east-1:123456789012:cluster/fss-rh-check-cluster',
+          FSS_RELEASE_OUTPUT_TASK_NETWORK_CONFIGURATION: JSON.stringify({
+            subnet_ids: ['subnet-1111111111111111a', 'subnet-1111111111111111b'],
+            security_group_id: 'sg-1111111111111111b',
+            assign_public_ip: 'ENABLED',
+            database_host: 'fss-rh-check-pg.example',
+            inbound_rule_count: 0,
+          }),
+          FSS_RELEASE_OUTPUT_WORKER_LOG_GROUP_NAME: 'fss-rh-check-worker',
+          FSS_RELEASE_OUTPUT_DRILL_TASK_DEFINITION_ARN:
+            'arn:aws:ecs:us-east-1:123456789012:task-definition/fss-rh-check-drill:1',
+          FSS_RELEASE_OUTPUT_APP_RUNTIME_DATABASE_SECRET_ARN: secret,
+          FSS_RELEASE_TASK_DEFINITION: JSON.stringify({
+            containerDefinitions: [
+              {
+                name: 'drill',
+                image: `123456789012.dkr.ecr.us-east-1.amazonaws.com/fss-rh-worker@${digest}`,
+                environment: [{ name: 'FSS_DATABASE_HOST', value: 'fss-rh-check-pg.example' }],
+                secrets: [{ name: 'DATABASE_SECRET_ARN', valueFrom: secret }],
+              },
+            ],
+          }),
+          FSS_RELEASE_WORKER_DIGEST: digest,
+          FSS_RESTORED_DATABASE_HOST: 'fss-rh-check-pg-restored.example',
+        },
+      },
+    );
+    const output = `${result.stdout}${result.stderr}`;
+    expect(result.status, output).toBe(0);
+    const launch = output.split('\n').find(line => line.startsWith('PLAN aws ecs run-task '));
+    expect(launch, 'the wrapper planned no launch').toBeDefined();
+    const marker = ' --overrides ';
+    const overrides = JSON.parse((launch ?? '').slice((launch ?? '').indexOf(marker) + marker.length)) as {
+      containerOverrides: { name: string; command: string[] }[];
+    };
+    expect(overrides.containerOverrides[0]?.name).toBe('drill');
+    expect(overrides.containerOverrides[0]?.command).toEqual(command);
   });
 });

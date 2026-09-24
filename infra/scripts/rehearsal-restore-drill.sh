@@ -26,7 +26,9 @@
 #
 # A Fargate task's filesystem goes away with the task, so neither report comes back as
 # a file: the wrapper captures the task's log stream and `release_captured_report`
-# reads the JSON answer out of it.
+# reads the JSON answer out of it. For the same reason the source baseline goes *to*
+# the drill task as a value in its command, `--baseline-json`, and never as a file
+# (lane g53).
 #
 # ## The restored instance
 #
@@ -277,6 +279,38 @@ for kind in sends replies suppressions crm_edits migrations; do
   rehearsal_log "baseline $kind=$count"
 done
 
+# The baseline travels to the drill task as a value (lane g53).
+#
+# The drill below runs against the *restored* instance, and "no suppression lost, no
+# send repeated" means something only against the counts measured here, on the source,
+# before the restore. A Fargate task's filesystem is created with it, there is no shared
+# volume and the drill role has no S3, so the one thing that reaches the task is its
+# command override: `fss drill --baseline-json '<json>'`, which the drill writes to its
+# own `step0-baseline.json` and reads as step 8's `--before`. Until this lane the drill
+# was launched with `--as-of` and re-measured step 0 on the restored copy.
+#
+# One line, because `release_run_task` reads the command words one per line; and only
+# the instant and the five counts, because that is all the drill reads and it keeps the
+# override the same size however many workspaces the rehearsal has. All six are public.
+# A baseline with no instant is refused here, before a restored instance exists, rather
+# than by the drill task after one does.
+handed_baseline() { # handed_baseline <baseline file>
+  python3 - "$1" <<'PY'
+import json, sys
+
+document = json.load(open(sys.argv[1]))
+if not isinstance(document.get("asOf"), str) or not document["asOf"]:
+    sys.exit(1)
+kinds = ("asOf", "sends", "replies", "suppressions", "crm_edits", "migrations")
+print(json.dumps({kind: document[kind] for kind in kinds if kind in document}, separators=(",", ":")))
+PY
+}
+if ! BASELINE_JSON="$(handed_baseline "$BASELINE")"; then
+  echo "FAIL: the drill baseline carries no asOf instant, so it cannot be handed to the drill task" >&2
+  exit 1
+fi
+rehearsal_log "baseline handed to the drill task: $BASELINE_JSON"
+
 # ---------------------------------------------------------------------------
 # Step 0b. The work the restore is meant to lose (0.1, lane g40).
 #
@@ -386,7 +420,7 @@ rehearsal_log "restored instance at $RESTORED_HOST"
 rehearsal_log "steps 1 to 9: one in-VPC task against the restored instance"
 DRILL_REPORT="$REPORTS/drill.json"
 if rehearsal_dry_run; then
-  rehearsal_plan "fss drill --reports /tmp/fss-drill --as-of $RESTORE_TARGET --from $REPLAY_FROM --since $SENT_FROM --all-mailboxes (in-VPC task, drill, FSS_DATABASE_HOST=$RESTORED_HOST)"
+  rehearsal_plan "fss drill --reports /tmp/fss-drill --baseline-json $BASELINE_JSON --from $REPLAY_FROM --since $SENT_FROM --all-mailboxes (in-VPC task, drill, FSS_DATABASE_HOST=$RESTORED_HOST)"
   cat > "$DRILL_REPORT" <<'JSON'
 {
   "ok": true,
@@ -412,7 +446,7 @@ JSON
 else
   drill_task drill drill "$REPORTS/drill.log" drill \
     --reports /tmp/fss-drill \
-    --as-of "$RESTORE_TARGET" \
+    --baseline-json "$BASELINE_JSON" \
     --from "$REPLAY_FROM" \
     --since "$SENT_FROM" \
     --all-mailboxes

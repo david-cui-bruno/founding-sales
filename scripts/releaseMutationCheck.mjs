@@ -643,6 +643,24 @@ const MUTATIONS = [
     because:
       'CloudWatch rejects the whole request over one bad member, so without the per-datum retry one refused datum silences the heartbeats beside it, which is the blackout of 24 September. metricsCloudWatch.test.ts rejects any request carrying one named metric and has to go red when the others are not published.',
   },
+  {
+    name: 'the drill stops making its own reports directory',
+    file: 'apps/worker/src/tools/fss/drill.ts',
+    find: '    await mkdir(directory, { recursive: true, mode: 0o700 });\n',
+    replace: '',
+    suite: ['run', 'test', '--workspace', 'apps/worker', '--', 'test/fssSurface.test.ts'],
+    because:
+      "This is the thirteenth full run exactly (24 September 2026): the drill task exited 21 on ENOENT opening /tmp/fss-drill/step0-baseline.json, because nothing in the image or the task definition creates the reports directory. fssSurface.test.ts points --reports at a directory that does not exist and expects the drill to reach step 1, so it has to go red when the directory is not made.",
+  },
+  {
+    name: 'the restore drill launches the drill with an instant again instead of the source baseline',
+    file: 'infra/scripts/rehearsal-restore-drill.sh',
+    find: '    --baseline-json "$BASELINE_JSON" \\\n',
+    replace: '    --as-of "$RESTORE_TARGET" \\\n',
+    suite: ['run', 'test:release', '--', 'test/release/scenario11.check.ts'],
+    because:
+      'Launched with --as-of, the drill measures step 0 again on the restored copy, so "no suppression lost" is compared with the restored database rather than with the source baseline measured before the restore (lane g53). The dry run prints only the plan line, so scenario 11 reads the real drill_task launch through the extractor and has to go red when it passes an instant.',
+  },
 ];
 
 function run(script) {

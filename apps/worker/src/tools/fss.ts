@@ -333,6 +333,7 @@ async function runCommand(
         mail: resolvedMail.mail,
       },
       ...(options['--baseline'] === undefined ? {} : { baselinePath: options['--baseline'] }),
+      ...(options['--baseline-json'] === undefined ? {} : { baselineJson: options['--baseline-json'] }),
       ...(options['--as-of'] === undefined ? {} : { asOf: options['--as-of'] }),
       reportsDirectory: options['--reports'] ?? '',
       ...(options['--from'] === undefined ? {} : { replayFrom: options['--from'] }),

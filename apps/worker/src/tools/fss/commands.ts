@@ -124,10 +124,22 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
   },
   {
     path: ['drill'],
-    valueFlags: ['--baseline', '--as-of', '--reports', '--from', '--since', '--admin-user', ...REPORTABLE],
+    valueFlags: [
+      '--baseline',
+      '--as-of',
+      '--baseline-json',
+      '--reports',
+      '--from',
+      '--since',
+      '--admin-user',
+      ...REPORTABLE,
+    ],
     booleanFlags: ['--all-mailboxes'],
     requiredFlags: ['--reports'],
-    oneOf: ['--baseline', '--as-of'],
+    // Where step 0 comes from, and exactly one: a file, an instant to measure at, or
+    // (lane g53) the source baseline handed over as a value, which is the rehearsal's
+    // form because a one-off task can be handed nothing else.
+    oneOf: ['--baseline', '--as-of', '--baseline-json'],
     summary: 'Appendix E steps 2 to 9, in one process, stopping at the first step that fails',
   },
   {
@@ -359,10 +371,21 @@ const NOT_AN_INVOCATION = /(^|\s)(echo|printf)\s/u;
 const LOOKUP_BEFORE = /(-v|which|type)\s*$/u;
 
 /**
+ * The restore drill's own launcher, `drill_task <step> <kind> <capture> <word>...`.
+ *
+ * The drill's real calls never spell `fss`: they hand the command words to
+ * `rehearsal-run-task.sh` through this function, so until lane g53 only their planned
+ * twins were read and a real call could pass a flag the plan did not. The words after
+ * the three launcher arguments are the command, exactly as the task receives it.
+ */
+const LAUNCHER = /^drill_task\s+\S+\s+\S+\s+\S+\s+(.*)$/u;
+
+/**
  * Every `fss` invocation in the restore drill script.
  *
- * The extractor is deliberately literal: it takes the text after each `fss` word,
- * cuts at the first shell or prose boundary, and replaces every `$VARIABLE` with a
+ * The extractor is deliberately literal: it takes the text after each `fss` word (and
+ * after each `drill_task` launcher's three arguments, see `LAUNCHER`), cuts at the
+ * first shell or prose boundary, and replaces every `$VARIABLE` with a
  * placeholder, because what is being checked is the command and its flag *names* —
  * the values are instants and paths the drill computes at run time.
  *
@@ -377,9 +400,14 @@ export function drillInvocations(script: string): readonly DrillInvocation[] {
     if (line.startsWith('#')) continue;
     if (NOT_AN_INVOCATION.test(line)) continue;
     const planned = line.includes('rehearsal_plan');
+    const tails: string[] = [];
+    const launched = LAUNCHER.exec(line);
+    if (launched !== null) tails.push(launched[1] ?? '');
     for (const match of line.matchAll(/(?:^|[\s"'($])fss\s+(.*)$/gu)) {
       if (LOOKUP_BEFORE.test(line.slice(0, match.index))) continue;
-      let tail = match[1] ?? '';
+      tails.push(match[1] ?? '');
+    }
+    for (let tail of tails) {
       for (const boundary of TAIL) {
         const at = tail.indexOf(boundary);
         if (at >= 0) tail = tail.slice(0, at);
