@@ -10,23 +10,31 @@
 // A test that cannot fail is worse than no test, because it is counted. The way to find
 // out is to break the thing it claims to be testing and watch. This script does that,
 // one mutation at a time, always restoring the file afterwards — including when a run is
-// interrupted, which is why the restore is in a `finally` and the originals are held in
-// memory rather than in a sibling file somebody could leave behind.
+// interrupted, which is why the restore is in a `finally`, the process listens for the
+// signals that would otherwise end it mid-edit, and the originals are held in memory
+// rather than in a sibling file somebody could leave behind.
 //
 // Each mutation names:
 //
 //   * `file`        — what is edited;
 //   * `find`/`replace` — the exact edit, which must match exactly once;
-//   * `suite`       — the vitest invocation that must then FAIL;
+//   * `suite`       — the arguments to `npm` for the vitest run that must then FAIL:
+//                     `['run', 'test:release']`, `['run', 'test:release', '--', '<file>']`
+//                     or `['run', 'test', '--workspace', '<workspace>', '--', '<file>']`;
 //   * `because`     — the trap this proves is closed, in one sentence.
 //
 // A mutation whose `find` does not appear, or appears more than once, is itself a
 // failure: it means the code moved and the mutation is no longer testing what it says.
 // A mutation that leaves the suite GREEN is the finding this script exists for.
+//
+// A red exit status is not a failing test. Each distinct suite runs once unmutated first
+// and must pass, and a mutated run counts as a kill only when vitest itself reports a
+// failure; an npm usage error or a setup that never reached a test is a problem. The
+// rules, and the two ways they were learned, are in `scripts/releaseMutationRunner.mjs`.
 
-import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { runMutationCheck, spawnSuite } from './releaseMutationRunner.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
@@ -57,7 +65,7 @@ const MUTATIONS = [
     file: 'apps/worker/src/tools/fss.ts',
     find: "  'migrate up',\n  'admin database-users ensure',\n",
     replace: "  'migrate up',\n",
-    suite: ['--workspace', 'apps/worker', '--', 'test/fssCli.test.ts'],
+    suite: ['run', 'test', '--workspace', 'apps/worker', '--', 'test/fssCli.test.ts'],
     because:
       'release-deploy.sh runs `admin database-users ensure` on the migration task definition, which injects no runtime connection. Run 35883201716 (23 September 2026) migrated the database and then refused this command for the reason migrate had been refused the run before; the script and the set are read together now.',
   },
@@ -102,7 +110,7 @@ const MUTATIONS = [
     file: 'apps/worker/src/tools/fss.ts',
     find: "readToolConfig(environment, { runtimeConnection: migrationIdentity ? 'optional' : 'required' })",
     replace: 'readToolConfig(environment)',
-    suite: ['--workspace', 'apps/worker', '--', 'test/fssTool.test.ts'],
+    suite: ['run', 'test', '--workspace', 'apps/worker', '--', 'test/fssTool.test.ts'],
     because:
       'The migration task definition injects MIGRATION_DATABASE_SECRET and no DATABASE_SECRET_ARN (tests/migration_identity.tftest.hcl). Runs 35812168524 and 35817370929 of 23 September 2026 exited 20 before touching the database because the tool read the runtime connection first for every command.',
   },
@@ -129,7 +137,7 @@ const MUTATIONS = [
     file: 'packages/domain/test/outbound/support/outboundWorld.ts',
     find: "VALUES ($1, 'sending_enabled', 1, $2::jsonb, 'fixture: the rehearsal gate this world stands for', $3)",
     replace: "VALUES ($1, 'business_time_zone', 1, '{\"timeZone\":\"UTC\"}'::jsonb, 'fixture: not the attestation', $3)",
-    suite: ['--workspace', 'packages/domain', '--', 'test/outbound/'],
+    suite: ['run', 'test', '--workspace', 'packages/domain', '--', 'test/outbound/'],
     because:
       'The fixture seeds 16.2 admin attestation so that cap, window and suppression scenarios refuse for their own reasons. Without it every send must hold, so a suite that still passed would not be reading the attestation at all.',
   },
@@ -138,7 +146,7 @@ const MUTATIONS = [
     file: 'packages/domain/outbound/gate.ts',
     find: 'if (!effectiveSendingEnabled(deps.deploymentSendingEnabled ?? false, attestation.value)) {',
     replace: 'if (false) {',
-    suite: ['--workspace', 'packages/domain', '--', 'test/outbound/attestation.test.ts'],
+    suite: ['run', 'test', '--workspace', 'packages/domain', '--', 'test/outbound/attestation.test.ts'],
     because:
       'Appendix G 42 is four conditions ANDed, and the attestation test is the only place the dispatch path is asked about two of them. Removing the check must fail it.',
   },
@@ -147,7 +155,7 @@ const MUTATIONS = [
     file: 'apps/worker/src/bootstrap/deployment.ts',
     find: "if (environmentName === 'production') {\n      throw new DeploymentConfigError(\n        'DEPENDENCIES_UNSET',",
     replace: "if (false) {\n      throw new DeploymentConfigError(\n        'DEPENDENCIES_UNSET',",
-    suite: ['--workspace', 'apps/worker', '--', 'test/deployment.test.ts'],
+    suite: ['run', 'test', '--workspace', 'apps/worker', '--', 'test/deployment.test.ts'],
     because:
       'The coordinator note asks for a release-gate test that the production path never reaches a no-op by accident. If a production deployment can start with no switch set, that test must go red.',
   },
@@ -156,7 +164,7 @@ const MUTATIONS = [
     file: 'apps/api/src/bootstrap/deployment.ts',
     find: "const suppressionJournal = dependencies === 'live' ? requireDurableJournal(resolved) : resolved.journal;",
     replace: 'const suppressionJournal = resolved.journal;',
-    suite: ['--workspace', 'apps/api', '--', 'test/deployment.test.ts'],
+    suite: ['run', 'test', '--workspace', 'apps/api', '--', 'test/deployment.test.ts'],
     because:
       '10.2 makes the journal write a precondition of acknowledging a suppression. A live API that silently used the local no-op would accept opt-outs with nothing to replay after a restore.',
   },
@@ -192,7 +200,7 @@ const MUTATIONS = [
     file: 'apps/worker/src/bootstrap/deployment.ts',
     find: '  const fromEnvironment = environment[variableName]?.trim();\n  if (fromEnvironment !== undefined && fromEnvironment.length > 0) {',
     replace: '  const fromEnvironment = environment[variableName]?.trim();\n  if (false) {',
-    suite: ['--workspace', 'apps/worker', '--', 'test/deployment.test.ts'],
+    suite: ['run', 'test', '--workspace', 'apps/worker', '--', 'test/deployment.test.ts'],
     because:
       'The Pub/Sub topic and the Workspace domain moved into the task environment with the secret as a one-release fallback. A reader that silently kept preferring the secret would leave the apply doing nothing, and the two sources agree in production, so only a test that sets them to different values can tell.',
   },
@@ -354,7 +362,7 @@ const MUTATIONS = [
     file: 'apps/worker/src/tools/fss/commands.ts',
     find: "    return { ok: false, reason: 'command_unknown', detail: argv.filter(word => !word.startsWith('--')).join(' ') };",
     replace: '    return { ok: true, value: { spec: FSS_COMMANDS[0], options: {}, switches: new Set() } };',
-    suite: ['--workspace', 'apps/worker', '--', 'test/fssCli.test.ts'],
+    suite: ['run', 'test', '--workspace', 'apps/worker', '--', 'test/fssCli.test.ts'],
     because:
       'The drill writes fourteen `fss admin` lines and the tool is the only thing that can say whether they are real. A parser that accepted everything would make a misspelt flag in the drill do nothing at all at three in the morning, so the suite that reads the drill has to go red when the refusal is gone.',
   },
@@ -363,7 +371,7 @@ const MUTATIONS = [
     file: 'apps/worker/src/tools/fss.ts',
     find: "  if (config.dependencies !== 'recorded') {\n    return {\n      refusal: {",
     replace: '  if (false) {\n    return {\n      refusal: {',
-    suite: ['--workspace', 'apps/worker', '--', 'test/fssSurface.test.ts'],
+    suite: ['run', 'test', '--workspace', 'apps/worker', '--', 'test/fssSurface.test.ts'],
     because:
       'David fixed the dependency mode per admin command so that a restore reconstruction run from a command line can never reach live Gmail. If a `live` deployment can run `mailbox recover`, the suite that asserts the refusal must go red rather than the tool trusting that nothing downstream sends.',
   },
@@ -372,7 +380,7 @@ const MUTATIONS = [
     file: 'packages/domain/suppression/replay.ts',
     find: '    if (record.workspaceId !== context.scope.workspaceId) {',
     replace: '    if (false) {',
-    suite: ['--workspace', 'packages/domain', '--', 'test/restore/adminCommands.test.ts'],
+    suite: ['run', 'test', '--workspace', 'packages/domain', '--', 'test/restore/adminCommands.test.ts'],
     because:
       "Appendix E's replay is the one path that writes suppression rows from outside a command, and a record carries the workspace it belongs to. A replay that inserted another workspace's event would be the only way a suppression could cross a workspace boundary in this system, so the two-workspace case must fail when the check is removed.",
   },
@@ -670,51 +678,43 @@ const MUTATIONS = [
     because:
       'This is the tenth full rehearsal exactly (run 35943001092, 23 September 2026): the smoke failed in two seconds on a canary age of 837.9 s that was production\u2019s, because every environment in the account published into the bare FSS namespace and the smoke read it. The step still reads the run\u2019s namespace from the root output and still checks it, so a check that only looked for the output would stay green; metricNamespace.check.ts reads the query itself and has to go red.',
   },
+  {
+    name: 'the mutation runner reads any non-zero exit as a kill again',
+    file: 'scripts/releaseMutationRunner.mjs',
+    find: "  if (run.signal) return { verdict: 'broken', reason: `npm was stopped by ${String(run.signal)}` };\n",
+    replace:
+      "  if (run.signal) return { verdict: 'broken', reason: `npm was stopped by ${String(run.signal)}` };\n  if (run.status !== 0) return { verdict: 'red', reason: 'a non-zero exit' };\n",
+    suite: ['run', 'test:release', '--', 'test/release/mutationRunner.check.ts'],
+    because:
+      'This is how ten mutations were counted as killed from 20 September 2026 until lane g54: their suites had no `run test`, npm answered "Unknown command" and exited 1, and a runner that reads only the exit status called that a failing test. mutationRunner.check.ts feeds the runner that exact npm output, and a setup that never reached a test, and has to go red when either is read as a kill.',
+  },
+  {
+    name: 'the mutation runner runs the mutations of a suite that was red before any mutation',
+    file: 'scripts/releaseMutationRunner.mjs',
+    find: "    if (before?.verdict !== 'green') {\n",
+    replace: '    if (false) {\n',
+    suite: ['run', 'test:release', '--', 'test/release/mutationRunner.check.ts'],
+    because:
+      'A worktree whose embedded PostgreSQL was never hydrated fails every suite in its globalSetup, and on 24 September 2026 the check reported 67 kills and no problems in 33 seconds from exactly that. A suite that is red before anything is broken cannot be red because something was, so its mutations must be reported rather than run; mutationRunner.check.ts gives the runner such a suite and has to go red when a kill is counted from it.',
+  },
 ];
 
-function run(script) {
-  return execFileSync('npm', script, { cwd: ROOT, encoding: 'utf8', stdio: 'pipe' });
+// A listener on each of these keeps Node from exiting mid-mutation with a file still
+// broken; the check stops after restoring it instead. An interactive Ctrl-C reaches the
+// suite's npm as well, which ends that run at once.
+let stopRequested = false;
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+  process.on(signal, () => {
+    stopRequested = true;
+  });
 }
 
-let failures = 0;
-let proven = 0;
-
-for (const mutation of MUTATIONS) {
-  const path = `${ROOT}${mutation.file}`;
-  const original = readFileSync(path, 'utf8');
-  const occurrences = original.split(mutation.find).length - 1;
-  if (occurrences !== 1) {
-    console.error(
-      `MUTATION_STALE ${mutation.name}: the text it edits appears ${String(occurrences)} times in ${mutation.file}`,
-    );
-    failures += 1;
-    continue;
-  }
-
-  try {
-    writeFileSync(path, original.replace(mutation.find, mutation.replace));
-    let stayedGreen = false;
-    try {
-      run(mutation.suite);
-      stayedGreen = true;
-    } catch {
-      stayedGreen = false;
-    }
-    if (stayedGreen) {
-      console.error(`MUTATION_SURVIVED ${mutation.name}`);
-      console.error(`  ${mutation.because}`);
-      console.error(`  The suite stayed green with ${mutation.file} broken, so it is not testing this.`);
-      failures += 1;
-    } else {
-      proven += 1;
-      console.error(`killed: ${mutation.name}`);
-    }
-  } finally {
-    // Always, including on an interrupt: a mutation left in the tree is a broken
-    // repository, and a half-finished run must not be one of the ways that happens.
-    writeFileSync(path, original);
-  }
-}
-
-console.error(`\n${String(proven)} mutation(s) killed, ${String(failures)} problem(s).`);
-process.exitCode = failures === 0 ? 0 : 1;
+const { problems } = await runMutationCheck({
+  mutations: MUTATIONS,
+  runSuite: suite => spawnSuite(ROOT, suite),
+  readFile: file => readFileSync(`${ROOT}${file}`, 'utf8'),
+  writeFile: (file, text) => writeFileSync(`${ROOT}${file}`, text),
+  log: line => console.error(line),
+  stopRequested: () => stopRequested,
+});
+process.exitCode = problems === 0 ? 0 : 1;

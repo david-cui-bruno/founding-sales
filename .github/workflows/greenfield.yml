@@ -14,12 +14,13 @@ jobs:
     # container, which GitHub provides on Linux runners. The macOS-specific parts of
     # the product (Electron packaging, Keychain, tel: handoff) are not in this tree.
     runs-on: ubuntu-24.04
-    # 45, not 20. The "Release mutation check" step runs the whole release suite once
-    # per mutation, about 18 s each, and there are 58 mutations today, so that step
-    # alone takes about 17 minutes after the roughly two-minute gate. The last three
-    # green runs took 17m11s, 18m26s and 19m06s, and PR 188's run (three new mutations)
-    # was cancelled at the 20-minute limit with the mutation check at 17m14s. Every
-    # mutation adds about 18 s, so this limit has to grow as the traps do.
+    # 45, not 20. The "Release mutation check" step is most of this job: it runs each
+    # distinct suite once unmutated, then one suite per mutation, and most mutations
+    # name the whole release suite. At c5ee7508 (67 mutations, before lane g54's
+    # pristine runs and --bail=1) that step took 15m51s of a 19-minute job, and PR 188's
+    # run was cancelled at the old 20-minute limit with the mutation check at 17m14s.
+    # Every mutation that names the whole release suite adds up to about 15 s, so this
+    # limit has to grow as the traps do.
     timeout-minutes: 45
     defaults:
       run:
@@ -79,7 +80,12 @@ jobs:
         # G12b, which meant a pull request could land a vacuous test and the
         # gate would not notice until release day.
         #
-        # Nine mutations, each re-running one suite. None of the suites it
-        # re-runs touches PostgreSQL, so it is about ten seconds of wall clock
-        # and the job timeout carries it comfortably.
+        # Every distinct suite runs once unmutated first and must pass; then each
+        # mutation re-runs its own suite with --bail=1. Most mutations name the
+        # whole release suite, which does use PostgreSQL (the service container
+        # above), so this step is most of the job's wall clock: see
+        # timeout-minutes. A suite that is red before any mutation, or a run that
+        # ends without vitest reporting a failed test (an npm usage error, a setup
+        # that never reached a test), is a problem, never a kill: until lane g54
+        # ten mutations were "killed" by npm answering "Unknown command".
         run: npm run test:release:mutation
