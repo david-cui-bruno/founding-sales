@@ -1,4 +1,12 @@
-import { validateMetricDatum, type MetricDatum, type MetricSink, type PutMetricData } from './metrics.ts';
+import {
+  metricRejectedError,
+  metricRejection,
+  publishValidMetricData,
+  type MetricDatum,
+  type MetricRejection,
+  type MetricSink,
+  type PutMetricData,
+} from './metrics.ts';
 
 /**
  * The one place the AWS SDK is allowed to exist.
@@ -66,18 +74,51 @@ export function toCloudWatchDatum(datum: MetricDatum, at: Date): CloudWatchDatum
   return dimensions.length === 0 ? mapped : { ...mapped, Dimensions: dimensions };
 }
 
-/** G5's `PutMetricData`, implemented over a transport, batched to the API's limit. */
+/**
+ * G5's `PutMetricData`, implemented over a transport, batched to the API's limit.
+ *
+ * CloudWatch rejects a whole request when one member is invalid. So a rejected batch
+ * of more than one datum is retried one datum per request: the good ones are
+ * published and the bad ones are named in one `METRIC_REJECTED` error at the end.
+ * If every datum fails on its own too, the fault is the transport rather than the
+ * data — no credentials, no network — and the batch's error is thrown as it was.
+ */
 export function cloudWatchPutMetricData(transport: CloudWatchTransport, options: CloudWatchOptions = {}): PutMetricData {
   const now = options.now ?? ((): Date => new Date());
   return async (namespace, data) => {
     if (data.length === 0) return;
     const at = now();
+    const send = async (batch: readonly MetricDatum[]): Promise<void> => {
+      await transport.send({ Namespace: namespace, MetricData: batch.map(datum => toCloudWatchDatum(datum, at)) });
+    };
+    const rejected: MetricRejection[] = [];
+    let published = 0;
+    let batchError: unknown = null;
     for (let start = 0; start < data.length; start += CLOUDWATCH_MAX_DATA_PER_REQUEST) {
-      await transport.send({
-        Namespace: namespace,
-        MetricData: data.slice(start, start + CLOUDWATCH_MAX_DATA_PER_REQUEST).map(datum => toCloudWatchDatum(datum, at)),
-      });
+      const batch = data.slice(start, start + CLOUDWATCH_MAX_DATA_PER_REQUEST);
+      try {
+        await send(batch);
+        published += batch.length;
+        continue;
+      } catch (error) {
+        batchError ??= error;
+        if (batch.length === 1) {
+          rejected.push(metricRejection(batch[0] as MetricDatum, error));
+          continue;
+        }
+      }
+      for (const datum of batch) {
+        try {
+          await send([datum]);
+          published += 1;
+        } catch (error) {
+          rejected.push(metricRejection(datum, error));
+        }
+      }
     }
+    if (rejected.length === 0) return;
+    if (published === 0 && data.length > 1) throw batchError;
+    throw metricRejectedError(rejected);
   };
 }
 
@@ -89,7 +130,9 @@ export interface CloudWatchSinkOptions extends CloudWatchOptions {
 
 /**
  * A `MetricSink` over CloudWatch. Validation happens before the transport is touched,
- * so an unknown metric name never leaves the process even when a transport exists.
+ * so an unknown metric name or a unit CloudWatch does not know never leaves the
+ * process even when a transport exists — and never stops the valid data beside it
+ * from being published. What was refused is named in one `METRIC_REJECTED` error.
  */
 export function createCloudWatchSink(options: CloudWatchSinkOptions): MetricSink {
   const publish =
@@ -98,9 +141,10 @@ export function createCloudWatchSink(options: CloudWatchSinkOptions): MetricSink
       : cloudWatchPutMetricData(options.transport, options.now === undefined ? {} : { now: options.now });
   return {
     publish: async (data: readonly MetricDatum[]) => {
-      for (const datum of data) validateMetricDatum(datum);
-      if (publish === null) return;
-      await publish(options.namespace, data);
+      await publishValidMetricData(data, async valid => {
+        if (publish === null) return;
+        await publish(options.namespace, valid);
+      });
     },
   };
 }

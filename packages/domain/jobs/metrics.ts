@@ -18,9 +18,66 @@ import { readHeartbeats, type HeartbeatComponent } from './heartbeats.ts';
  * Locally none is supplied and publishing is a no-op that still validates the data,
  * so a wrong unit or an unknown metric name fails on a laptop rather than in
  * production.
+ *
+ * A refused datum refuses only itself. Every sink publishes the data that passed and
+ * then throws one `METRIC_REJECTED` error naming the data that did not, so one bad
+ * gauge cannot silence the heartbeats beside it. On 24 September 2026 a unit of
+ * `Hours` — which CloudWatch does not have — made `PutMetricData` reject the whole
+ * batch every minute from the first connected mailbox on, and every FSS worker
+ * metric went dark with it.
  */
 
-export type MetricUnit = 'Seconds' | 'Hours' | 'Count' | 'None';
+/**
+ * Every unit `PutMetricData` accepts: the `StandardUnit` enumeration of the
+ * CloudWatch API. A datum carrying anything else fails the whole request with
+ * `InvalidParameterValueException`, so the set is checked here, before sending.
+ */
+export const CLOUDWATCH_STANDARD_UNITS = Object.freeze([
+  'Seconds',
+  'Microseconds',
+  'Milliseconds',
+  'Bytes',
+  'Kilobytes',
+  'Megabytes',
+  'Gigabytes',
+  'Terabytes',
+  'Bits',
+  'Kilobits',
+  'Megabits',
+  'Gigabits',
+  'Terabits',
+  'Percent',
+  'Count',
+  'Bytes/Second',
+  'Kilobytes/Second',
+  'Megabytes/Second',
+  'Gigabytes/Second',
+  'Terabytes/Second',
+  'Bits/Second',
+  'Kilobits/Second',
+  'Megabits/Second',
+  'Gigabits/Second',
+  'Terabits/Second',
+  'Count/Second',
+  'None',
+] as const);
+
+export type CloudWatchUnit = (typeof CLOUDWATCH_STANDARD_UNITS)[number];
+
+/**
+ * The units this tree publishes, narrowed from the CloudWatch set so that a unit
+ * CloudWatch does not know is a type error at the datum that names it. There is no
+ * `Hours`: a gauge in hours is published as `None`, a dimensionless number, because
+ * CloudWatch has no unit for it and the alarms compare the bare number against a
+ * threshold in hours. `Count` is kept for things that are counted.
+ */
+export type MetricUnit = Extract<CloudWatchUnit, 'Seconds' | 'Count' | 'None'>;
+
+export const METRIC_UNITS: readonly MetricUnit[] = Object.freeze(['Seconds', 'Count', 'None']);
+
+export function isCloudWatchUnit(unit: unknown): unit is CloudWatchUnit {
+  return typeof unit === 'string' && (CLOUDWATCH_STANDARD_UNITS as readonly string[]).includes(unit);
+}
 
 export interface MetricDatum {
   readonly name: string;
@@ -85,8 +142,23 @@ const HEARTBEAT_METRIC: Readonly<Record<HeartbeatComponent, string>> = Object.fr
   mailbox: 'MailboxCheckHeartbeat',
 });
 
+export type MetricErrorCode = 'METRIC_UNKNOWN' | 'METRIC_VALUE_INVALID' | 'METRIC_UNIT_INVALID' | 'METRIC_REJECTED';
+
+/** One datum a sink did not publish, and why. Names and units only, never a value. */
+export interface MetricRejection {
+  readonly name: string;
+  readonly unit: string;
+  readonly errorName: string;
+  readonly errorMessage: string;
+}
+
 export class MetricError extends Error {
-  constructor(readonly code: 'METRIC_UNKNOWN' | 'METRIC_VALUE_INVALID', message: string) {
+  constructor(
+    readonly code: MetricErrorCode,
+    message: string,
+    /** For `METRIC_REJECTED`: every datum that was not published. The rest were. */
+    readonly rejected: readonly MetricRejection[] = [],
+  ) {
     super(message);
     this.name = 'MetricError';
   }
@@ -100,6 +172,66 @@ export function validateMetricDatum(datum: MetricDatum): void {
   if (!Number.isFinite(datum.value)) {
     throw new MetricError('METRIC_VALUE_INVALID', `${datum.name} was given a value that is not a number`);
   }
+  if (!isCloudWatchUnit(datum.unit)) {
+    throw new MetricError('METRIC_UNIT_INVALID', `${datum.name} was given the unit ${String(datum.unit)}, which CloudWatch does not accept`);
+  }
+}
+
+export function metricRejection(datum: MetricDatum, error: unknown): MetricRejection {
+  const code = error instanceof MetricError ? error.code : undefined;
+  return {
+    name: String(datum.name),
+    unit: String(datum.unit),
+    errorName: code ?? (error instanceof Error ? error.name : 'unknown'),
+    errorMessage: error instanceof Error ? error.message : 'a value that is not an Error was thrown',
+  };
+}
+
+/** Split a publication into the data that may be sent and the data that may not. */
+export function partitionMetricData(data: readonly MetricDatum[]): {
+  readonly valid: readonly MetricDatum[];
+  readonly rejected: readonly MetricRejection[];
+} {
+  const valid: MetricDatum[] = [];
+  const rejected: MetricRejection[] = [];
+  for (const datum of data) {
+    try {
+      validateMetricDatum(datum);
+      valid.push(datum);
+    } catch (error) {
+      rejected.push(metricRejection(datum, error));
+    }
+  }
+  return { valid, rejected };
+}
+
+/** The one error a partial publication ends in, after everything else was published. */
+export function metricRejectedError(rejected: readonly MetricRejection[]): MetricError {
+  const names = rejected.map(entry => `${entry.name} (${entry.errorName})`).join(', ');
+  return new MetricError('METRIC_REJECTED', `not published: ${names}`, rejected);
+}
+
+/**
+ * Publish what is valid through `send`, then throw once for what was not. Every sink
+ * goes through here, so a laptop, a test and production refuse the same data the
+ * same way and still publish the rest.
+ */
+export async function publishValidMetricData(
+  data: readonly MetricDatum[],
+  send: (valid: readonly MetricDatum[]) => Promise<void>,
+): Promise<void> {
+  const { valid, rejected } = partitionMetricData(data);
+  let later: readonly MetricRejection[] = [];
+  if (valid.length > 0) {
+    try {
+      await send(valid);
+    } catch (error) {
+      if (!(error instanceof MetricError) || error.code !== 'METRIC_REJECTED') throw error;
+      later = error.rejected;
+    }
+  }
+  const all = [...rejected, ...later];
+  if (all.length > 0) throw metricRejectedError(all);
 }
 
 export interface MetricSink {
@@ -118,9 +250,10 @@ export interface MetricSinkOptions {
 export function createMetricSink(options: MetricSinkOptions): MetricSink {
   return {
     publish: async data => {
-      for (const datum of data) validateMetricDatum(datum);
-      if (options.putMetricData === undefined) return;
-      await options.putMetricData(options.namespace, data);
+      await publishValidMetricData(data, async valid => {
+        if (options.putMetricData === undefined) return;
+        await options.putMetricData(options.namespace, valid);
+      });
     },
   };
 }
@@ -131,9 +264,10 @@ export function recordingMetricSink(): MetricSink & { readonly published: Metric
   return {
     published,
     publish: async data => {
-      for (const datum of data) validateMetricDatum(datum);
-      published.push(...data);
-      await Promise.resolve();
+      await publishValidMetricData(data, async valid => {
+        published.push(...valid);
+        await Promise.resolve();
+      });
     },
   };
 }

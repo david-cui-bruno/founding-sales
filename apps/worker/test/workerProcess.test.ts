@@ -6,11 +6,13 @@ import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing';
 import { WORKER_SCHEMA_RANGE, type SessionQueryable } from '@fss/domain/db';
 import {
   HandlerRegistry,
+  MetricError,
   canaryHandler,
   enqueueJob,
   raiseCriticalAlert,
   recordingMetricSink,
   type JobHandler,
+  type MetricSink,
 } from '@fss/domain/jobs';
 import { canarySource } from '../src/scheduler/sources.ts';
 import { readWorkerConfig, type WorkerConfig } from '../src/bootstrap/config.ts';
@@ -322,5 +324,91 @@ describe('the worker process', () => {
     } finally {
       await worker.stop('test');
     }
+  });
+
+  it('keeps the liveness file while CloudWatch rejects every publication (24 September 2026)', async () => {
+    // What production saw from 18:11Z: every PutMetricData refused. The file used to
+    // be removed after three and ECS replaced a worker that was otherwise healthy.
+    const livenessPath = join(temporaryDirectory, 'heartbeat-7');
+    let attempts = 0;
+    const refusing: MetricSink = {
+      publish: async () => {
+        attempts += 1;
+        await Promise.resolve();
+        const error = new Error('The parameter MetricData.member.6.Unit must be a value in the set');
+        error.name = 'InvalidParameterValueException';
+        throw error;
+      },
+    };
+    const log = recordingLogger();
+    const worker = await startWorker({
+      config: testConfig({ FSS_WORKER_LIVENESS_FILE: livenessPath, FSS_LIVENESS_FAILURES: '1' }),
+      sessions: {
+        scheduler: await database.appRuntimeSession(),
+        runners: [await database.appRuntimeSession()],
+        metrics: await database.appRuntimeSession(),
+      },
+      registry: new HandlerRegistry().register(canaryHandler()),
+      sources: [],
+      sink: refusing,
+      log,
+    });
+    try {
+      await until(async () => Promise.resolve(attempts >= 5), 'five refused publications');
+      expect(existsSync(livenessPath), 'a refused publication removed the liveness file').toBe(true);
+      const failures = log.lines.filter(line => line['event'] === 'worker_loop_failed' && line['loop'] === 'metrics');
+      expect(failures.length).toBeGreaterThanOrEqual(5);
+      expect(failures[0]).toMatchObject({ level: 'error', error_name: 'InvalidParameterValueException' });
+    } finally {
+      await worker.stop('test');
+    }
+  });
+
+  it('logs each refused metric by name and counts the publication of the rest', async () => {
+    const livenessPath = join(temporaryDirectory, 'heartbeat-8');
+    const partial: MetricSink = {
+      publish: async () => {
+        await Promise.resolve();
+        throw new MetricError('METRIC_REJECTED', 'not published: GmailWatchHoursToExpiry', [
+          {
+            name: 'GmailWatchHoursToExpiry',
+            unit: 'Hours',
+            errorName: 'METRIC_UNIT_INVALID',
+            errorMessage: 'GmailWatchHoursToExpiry was given the unit Hours, which CloudWatch does not accept',
+          },
+        ]);
+      },
+    };
+    const log = recordingLogger();
+    const worker = await startWorker({
+      config: testConfig({ FSS_WORKER_LIVENESS_FILE: livenessPath, FSS_LIVENESS_FAILURES: '1' }),
+      sessions: {
+        scheduler: await database.appRuntimeSession(),
+        runners: [await database.appRuntimeSession()],
+        metrics: await database.appRuntimeSession(),
+      },
+      registry: new HandlerRegistry().register(canaryHandler()),
+      sources: [],
+      sink: partial,
+      log,
+    });
+    let report;
+    try {
+      await until(
+        async () => Promise.resolve(log.lines.filter(line => line['event'] === 'metric_rejected').length >= 2),
+        'two metric_rejected lines',
+      );
+      expect(existsSync(livenessPath)).toBe(true);
+      expect(log.lines.find(line => line['event'] === 'metric_rejected')).toMatchObject({
+        level: 'error',
+        metric: 'GmailWatchHoursToExpiry',
+        unit: 'Hours',
+        error_name: 'METRIC_UNIT_INVALID',
+      });
+      expect(log.lines.some(line => line['event'] === 'worker_loop_failed' && line['loop'] === 'metrics')).toBe(false);
+    } finally {
+      report = await worker.stop('test');
+    }
+    expect(report.metricPublications).toBeGreaterThanOrEqual(2);
   });
 });
