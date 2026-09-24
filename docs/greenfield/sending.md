@@ -36,10 +36,10 @@ is built around.
 | The one Gmail call | `outbound/send.ts` |
 | Sent-folder reconciliation | `outbound/reconcile.ts` |
 | 12.7's ramp and the daily counters | `outbound/ramp.ts` |
-| 12.6's guard and the DNS checklist | `outbound/domainGuard.ts` |
+| 12.6's guard, the DNS checklist and `registerSendingDomain` | `outbound/domainGuard.ts` |
 | Routes | `apps/api/src/routes/outbound.ts` |
 | Handler and source | `apps/worker/src/handlers/mail.ts`, `scheduler/mailSources.ts` |
-| Tests | `packages/domain/test/outbound/**`, `apps/api/test/outbound.test.ts`, `apps/worker/test/mailHandlers.test.ts` |
+| Tests | `packages/domain/test/outbound/**`, `apps/api/test/outbound.test.ts`, `apps/api/test/sendingDomain.test.ts`, `apps/worker/test/mailHandlers.test.ts` |
 
 ## The eight rules a reader should carry
 
@@ -178,6 +178,55 @@ opened because a cached TXT record looked right is worse than a person who looke
 said so. `sending_domains_enable_requires_authentication` makes the gate a constraint
 rather than a check somebody remembers.
 
+## How a sending domain comes to exist
+
+Every checklist command is an `UPDATE`, so it needs a `sending_domains` row to update.
+Until lane g57 nothing outside the tests and the rehearsal's drill-evidence seed wrote
+one. Production on 24 September 2026 showed the result: `callie@usecallie.com` was
+connected and SPF, DKIM, DMARC and Postmaster Tools all passed, but Administration read
+**"No sending domain is configured."** and showed no checkboxes. The desktop renders the
+checklist only when `/outbound/status` returns a domain, and
+`recordAuthenticationChecklist` answers `domain_unknown` when the row is missing.
+
+`registerSendingDomain(context, { domain, registeredBy })` (`outbound/domainGuard.ts`)
+is now the only thing that creates the row. It has three callers:
+
+| Caller | `registeredBy` | When |
+|---|---|---|
+| The Gmail callback (`apps/api/src/routes/gmail.ts`), after `completeGmailGrant` returns | `mailbox_connect` | Every mailbox connect. This is the zero-step path: the connected address's domain becomes the sending domain. |
+| `fss admin workspace bootstrap --sending-domain <domain>`, through `release-bootstrap-workspace.sh` (release.md 5.1a) | `operator` | A workspace whose mailbox connected before g57. Idempotent, so 5.1a can pass the flag on every re-run. |
+| `POST /outbound/domain` (admin only, `{ domain }`, command receipt `register_sending_domain`) | `admin` | For a future desktop "Add sending domain" control. No desktop build calls it yet. |
+
+It follows four rules, and each has a test:
+
+* **An existing row is returned unchanged.** The insert is `ON CONFLICT DO NOTHING`,
+  and the answer is `existing`. A reconnect or a 5.1a re-run never resets the checklist
+  or the enable.
+* **A new row is primary only if the workspace has none.** Otherwise it is registered
+  beside the primary. A registration never changes which domain the 12.6 guard counts
+  against. When two first registrations race, the loser waits on
+  `sending_domains_one_primary`, inserts nothing, and on its next pass is registered as
+  non-primary.
+* **Personal Gmail is refused** (`personal_gmail_domain`). 12.6 treats `gmail.com` and
+  `googlemail.com` as a recipient class, not as a domain anyone at Callie can vouch for.
+  An `@`, a scheme, a path or an IP address is `domain_invalid`, which is checked against
+  the same pattern as the table's `sending_domains_domain_shape`.
+* **A new row starts with the checklist unticked and sending off.** Sending opens only
+  after an admin records the checklist. Every insert writes a
+  `sending_domain.registered` audit event naming the domain, whether it is primary, and
+  `registeredBy`.
+
+A failure on the connect path never fails the connect. The mailbox, its token and its
+coverage hold are already written when registration runs. A registration that throws
+logs a `warn` line (`sending_domain_registration_failed`) and the consent page still
+says "Gmail connected". A refused registration logs an `info` line
+(`sending_domain_not_registered`, with the reason). A created one logs
+`sending_domain_registered`.
+
+**A mailbox connected before g57 is not registered retroactively.** The callback runs
+only when a mailbox connects, and nothing scans existing mailboxes. That is why the
+bootstrap flag exists.
+
 ## What the gate refuses, and in what order
 
 Ordered by *consequence*, not by cost. A suppressed recipient who is also over the
@@ -240,7 +289,7 @@ Nothing in `packages/domain/outbound` imports anything of G8's.
 
 ```
 npm --workspace @fss/domain run test -- test/outbound
-npm --workspace @fss/api run test -- test/outbound.test.ts
+npm --workspace @fss/api run test -- test/outbound.test.ts test/sendingDomain.test.ts
 npm --workspace @fss/worker run test -- test/mailHandlers.test.ts
 ```
 

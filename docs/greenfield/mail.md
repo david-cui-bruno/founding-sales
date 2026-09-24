@@ -12,7 +12,10 @@ The control is on the Mac, from desktop 1.0.1: the **Mailbox** row on the main w
 "This Mac" card has a **Connect Gmail** button (`apps/desktop/src/main/mailboxBridge.ts`)
 that opens Google's consent screen in the system browser and then shows the address, its
 status and the baseline state, with no Disconnect because of the thirty-day rule below.
-FSS registers a Pub/Sub **watch**, and each notification enqueues a coalescing
+The callback also registers the connected address's domain as the workspace's sending
+domain if it is not registered yet. That registration never changes an existing row
+and never fails the connect (`docs/greenfield/sending.md`, "How a sending domain comes
+to exist"). FSS registers a Pub/Sub **watch**, and each notification enqueues a coalescing
 `mail.sync` for that one mailbox. A sync reads Gmail's history from a stored cursor,
 fetches **metadata only** for each new message, tries to match it to an opportunity,
 and fetches a **body only if it matched**. A matched message is classified by

@@ -211,10 +211,13 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
   },
   {
     path: ['admin', 'workspace', 'bootstrap'],
-    valueFlags: ['--slug', '--display-name', '--admin-email', '--time-zone', ...REPORTABLE],
+    // `--sending-domain` (lane g57) is optional and idempotent like the rest, so 5.1a
+    // can carry it on every re-run: a registered domain is reported and left alone.
+    valueFlags: ['--slug', '--display-name', '--admin-email', '--time-zone', '--sending-domain', ...REPORTABLE],
     booleanFlags: [],
     requiredFlags: ['--slug', '--display-name', '--admin-email'],
-    summary: 'the first workspace and its first active admin, in one transaction, idempotently',
+    summary:
+      'the first workspace, its first active admin and optionally its sending domain, in one transaction, idempotently',
   },
   {
     path: ['admin', 'drill', 'seed-evidence'],

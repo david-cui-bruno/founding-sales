@@ -697,6 +697,26 @@ const MUTATIONS = [
     because:
       'A worktree whose embedded PostgreSQL was never hydrated fails every suite in its globalSetup, and on 24 September 2026 the check reported 67 kills and no problems in 33 seconds from exactly that. A suite that is red before anything is broken cannot be red because something was, so its mutations must be reported rather than run; mutationRunner.check.ts gives the runner such a suite and has to go red when a kill is counted from it.',
   },
+  {
+    name: 'registering a sending domain inserts nothing again',
+    file: 'packages/domain/outbound/domainGuard.ts',
+    find:
+      '      `INSERT INTO sending_domains (workspace_id, domain, is_primary)\n       VALUES ($1::uuid, $2::text, NOT EXISTS (\n         SELECT 1 FROM sending_domains WHERE workspace_id = $1::uuid AND is_primary\n       ))\n       ON CONFLICT DO NOTHING\n       RETURNING ${DOMAIN_COLUMNS}`,\n',
+    replace:
+      '      `SELECT ${DOMAIN_COLUMNS} FROM sending_domains WHERE false AND workspace_id = $1::uuid AND domain = $2::text`,\n',
+    suite: ['run', 'test', '--workspace', 'packages/domain', '--', 'test/outbound/sendingDomainRegistration.test.ts'],
+    because:
+      'This is production on 24 September 2026 (lane g57): the admin had verified SPF, DKIM, DMARC and Postmaster Tools for usecallie.com and Administration read "No sending domain is configured." because nothing in the tree inserted a sending_domains row, and recordAuthenticationChecklist is an UPDATE that answers domain_unknown without one. An idempotence test passes against a function that inserts nothing and reports what it finds, so sendingDomainRegistration.test.ts asserts `created`, reads the primary back and records the checklist on it, and has to go red.',
+  },
+  {
+    name: 'the Gmail callback stops registering the connected mailbox\u2019s domain',
+    file: 'apps/api/src/routes/gmail.ts',
+    find: '    await registerConnectedDomain(auth.db, scoped.context, outcome.value, options.log);\n',
+    replace: '',
+    suite: ['run', 'test', '--workspace', 'apps/api', '--', 'test/sendingDomain.test.ts'],
+    because:
+      'A connected mailbox\u2019s domain is the workspace\u2019s sending domain, and the callback is the only zero-step path to the row 12.7\u2019s checklist is recorded against (lane g57). Without the call the consent page still says "Gmail connected" and every status check still passes, so sendingDomain.test.ts reads sending_domains back after a real callback and has to go red when no row appears.',
+  },
 ];
 
 // A listener on each of these keeps Node from exiting mid-mutation with a file still

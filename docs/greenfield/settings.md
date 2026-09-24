@@ -151,6 +151,17 @@ that forbids enabling without all four — it shows the refusal rather than gues
 it. Nothing is clamped on the client: a raise above 75 comes back as a refusal an
 admin reads, not a silent 75.
 
+The checklist appears only when `/outbound/status` returns a domain. With no
+`sending_domains` row the section reads **"No sending domain is configured."** and shows
+no checkboxes, because there is nothing to record against. Lane g57 made the row
+exist: a mailbox connect registers its address's domain, and for a mailbox connected
+before g57 the operator runs `fss admin workspace bootstrap --sending-domain` (release.md
+5.1a). `POST /outbound/domain` (admin only) creates it too, but the page has no "Add
+sending domain" control yet. Adding one means a new bridge channel and a new desktop
+build, which is a follow-up. Once the row exists, the current build shows the checklist
+with no change. `docs/greenfield/sending.md`, "How a sending domain comes to exist", has
+the rules.
+
 ## Workspace holidays
 
 G8's, not this lane's. `workspace_holiday_calendars` is versioned because every due

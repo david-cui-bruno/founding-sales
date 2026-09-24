@@ -1,5 +1,6 @@
-import { withTransaction, type SessionQueryable } from '@fss/domain/db';
+import { repositoryContext, withTransaction, workspaceScope, type SessionQueryable } from '@fss/domain/db';
 import { isKnownTimeZone } from '@fss/domain';
+import { normalizeSendingDomain, registerSendingDomain } from '@fss/domain/outbound';
 import { PROVISIONAL_GOOGLE_SUB_PREFIX, provisionalGoogleSub } from '@fss/contracts';
 
 /**
@@ -37,6 +38,17 @@ import { PROVISIONAL_GOOGLE_SUB_PREFIX, provisionalGoogleSub } from '@fss/contra
  * two facts that can disagree, and the disagreement would be a workspace whose admin
  * can never sign in.
  *
+ * ## The sending domain, when it is asked for (lane g57)
+ *
+ * `--sending-domain <domain>` registers the workspace's sending domain in the same
+ * transaction, through `registerSendingDomain` — the function the Gmail callback calls
+ * when a mailbox connects. It exists for the workspace whose mailbox connected before
+ * that callback registered anything: production's `callie`, whose Administration
+ * screen read "No sending domain is configured." with the admin's DNS already passing.
+ * It is idempotent in the way the rest of this command is: a domain already registered
+ * is reported `existing` and left exactly as it was, checklist and all, so the flag can
+ * ride on every re-run of 5.1a. The row is primary only if the workspace has none.
+ *
  * ## What it is not
  *
  * It is not a way to grant access. It writes what an operator holding the runtime
@@ -51,7 +63,9 @@ export type BootstrapRefusal =
   | 'display_name_invalid'
   | 'admin_email_invalid'
   | 'admin_email_ambiguous'
-  | 'time_zone_invalid';
+  | 'time_zone_invalid'
+  | 'sending_domain_invalid'
+  | 'sending_domain_personal_gmail';
 
 export type WorkspaceOutcome = 'created' | 'existing';
 export type AdminOutcomeKind = 'provisional_created' | 'provisional_existing' | 'adopted_user';
@@ -74,6 +88,12 @@ export interface BootstrapReport {
     readonly role: 'admin';
     readonly outcome: MembershipOutcome;
   };
+  /** Null when `--sending-domain` was not given. */
+  readonly sendingDomain: {
+    readonly domain: string;
+    readonly isPrimary: boolean;
+    readonly outcome: 'created' | 'existing';
+  } | null;
 }
 
 export type BootstrapResult =
@@ -86,6 +106,8 @@ export interface BootstrapOptions {
   readonly adminEmail: string;
   /** Optional. `America/New_York` is what migration 0001 defaults the column to. */
   readonly timeZone?: string | undefined;
+  /** Optional. Registered through `registerSendingDomain`, idempotently (lane g57). */
+  readonly sendingDomain?: string | undefined;
 }
 
 /** The workspace slug, exactly as `workspaces_slug_shape` in migration 0001 spells it. */
@@ -112,7 +134,15 @@ interface ValidatedInput {
   readonly displayName: string;
   readonly email: string;
   readonly timeZone: string;
+  readonly sendingDomain: string | null;
 }
+
+/**
+ * Who the sending-domain registration acts as. An operator at a command line is not a
+ * user, and `audit_events.actor_kind` has no `operator`, so the scope is the system's —
+ * `system`, the same actor the bootstrap's own audit row names.
+ */
+const OPERATOR_ACTOR = { kind: 'system', component: 'migration' } as const;
 
 /**
  * Every shape, before a statement is sent.
@@ -170,7 +200,31 @@ function validate(options: BootstrapOptions): ValidatedInput | { readonly refusa
     };
   }
 
-  return { slug, displayName, email, timeZone };
+  let sendingDomain: string | null = null;
+  if (options.sendingDomain !== undefined) {
+    const normalized = normalizeSendingDomain(options.sendingDomain);
+    if (!normalized.ok) {
+      return {
+        refusal:
+          normalized.reason === 'personal_gmail_domain'
+            ? {
+                ok: false,
+                reason: 'sending_domain_personal_gmail',
+                detail:
+                  '--sending-domain names a personal Gmail domain; 12.6 treats gmail.com and googlemail.com as a recipient class, and nobody at Callie can attest to their DNS',
+              }
+            : {
+                ok: false,
+                reason: 'sending_domain_invalid',
+                detail:
+                  '--sending-domain takes a host name such as usecallie.com: no @, no scheme, no path, in the shape the sending_domains_domain_shape constraint accepts',
+              },
+      };
+    }
+    sendingDomain = normalized.domain;
+  }
+
+  return { slug, displayName, email, timeZone, sendingDomain };
 }
 
 interface WorkspaceRow {
@@ -217,7 +271,7 @@ export async function bootstrapWorkspace(
 ): Promise<BootstrapResult> {
   const validated = validate(options);
   if ('refusal' in validated) return validated.refusal;
-  const { slug, displayName, email, timeZone } = validated;
+  const { slug, displayName, email, timeZone, sendingDomain } = validated;
 
   try {
     return await withTransaction(session, async (): Promise<BootstrapResult> => {
@@ -333,6 +387,30 @@ export async function bootstrapWorkspace(
         membershipOutcome = 'existing';
       }
 
+      // ---- the sending domain, when asked for ---------------------------------
+      //
+      // After the membership, in the same transaction, so a refusal or a failure here
+      // leaves none of the rows above behind. `registerSendingDomain` writes its own
+      // `sending_domain.registered` audit row when it inserts, and changes nothing when
+      // the domain is already there.
+      let sendingDomainReport: BootstrapReport['sendingDomain'] = null;
+      if (sendingDomain !== null) {
+        const context = repositoryContext(workspaceScope(workspaceId, OPERATOR_ACTOR), session);
+        const registered = await registerSendingDomain(context, { domain: sendingDomain, registeredBy: 'operator' });
+        if (!registered.ok) {
+          // Unreachable: `validate` normalized the same value with the same function.
+          throw new BootstrapRefusalError(
+            registered.reason === 'personal_gmail_domain' ? 'sending_domain_personal_gmail' : 'sending_domain_invalid',
+            `registerSendingDomain refused with ${registered.reason}`,
+          );
+        }
+        sendingDomainReport = {
+          domain: registered.domain.domain,
+          isPrimary: registered.domain.isPrimary,
+          outcome: registered.outcome,
+        };
+      }
+
       // ---- the audit row -----------------------------------------------------
       //
       // `audit_events.actor_kind` is one of `user`, `admin`, `system`, `worker`
@@ -353,6 +431,7 @@ export async function bootstrapWorkspace(
             membership: membershipOutcome,
             role: 'admin',
             adminUserId: userId,
+            sendingDomain: sendingDomainReport?.outcome ?? null,
           }),
         ],
       );
@@ -369,6 +448,7 @@ export async function bootstrapWorkspace(
           },
           admin: { userId, email, outcome: adminOutcome },
           membership: { role: 'admin', outcome: membershipOutcome },
+          sendingDomain: sendingDomainReport,
         },
       };
     });

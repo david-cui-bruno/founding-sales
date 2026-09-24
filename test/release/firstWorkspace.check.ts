@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -269,6 +269,73 @@ describe('g39: the release creates the first workspace, between the deploy and t
     expect(launch).toContain('"--report", "/tmp/fss-bootstrap.json"');
     // One task, not two.
     expect(output.split('\n').filter(line => line.includes('aws ecs run-task')).length).toBe(1);
+  });
+
+  it('passes --sending-domain to the task only when it is given, and summarises the outcome (g57)', () => {
+    // Production's backfill rides on 5.1a: `callie`'s mailbox connected before the
+    // Gmail callback registered anything, so its sending domain is registered by
+    // re-running this script with the flag. A script that parsed the flag and dropped
+    // it would print a plan that looks right and register nothing, so the launch line
+    // itself is read — and the same launch without the flag must not carry it.
+    const prefix = 'fss-rh-dryrun';
+    const plan = (extra: readonly string[]): { readonly output: string; readonly summary: string } => {
+      const reports = mkdtempSync(join(tmpdir(), 'fss-bootstrap-domain-'));
+      const result = spawnSync(
+        repositoryPath(SCRIPT),
+        [
+          'infra/roots/rehearsal',
+          prefix,
+          '--worker-digest',
+          `sha256:${'c'.repeat(64)}`,
+          '--slug',
+          'rehearsal',
+          '--display-name',
+          'Rehearsal',
+          '--admin-email',
+          'rehearsal-admin@usecallie.com',
+          ...extra,
+        ],
+        {
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            FSS_REHEARSAL_DRY_RUN: '1',
+            FSS_REHEARSAL_REPORTS: reports,
+            FSS_RELEASE_ACCOUNT: '123456789012',
+            FSS_RELEASE_CALLER_ACCOUNT: '123456789012',
+            FSS_RELEASE_OUTPUT_CLUSTER_ARN: `arn:aws:ecs:us-east-1:123456789012:cluster/${prefix}-cluster`,
+            FSS_RELEASE_OUTPUT_OPERATIONS_TASK_DEFINITION_ARN: `arn:aws:ecs:us-east-1:123456789012:task-definition/${prefix}-operations:1`,
+            FSS_RELEASE_OUTPUT_APP_RUNTIME_DATABASE_SECRET_ARN: `arn:aws:secretsmanager:us-east-1:123456789012:secret:${prefix}/app-runtime-database-cccccc`,
+            FSS_RELEASE_OUTPUT_WORKER_LOG_GROUP_NAME: `/fss/${prefix}/worker`,
+            FSS_RELEASE_OUTPUT_TASK_NETWORK_CONFIGURATION: JSON.stringify({
+              subnet_ids: ['subnet-1111111111111111a'],
+              security_group_id: 'sg-1111111111111111b',
+              assign_public_ip: 'ENABLED',
+              database_port: 5432,
+              database_host: `${prefix}-pg.example.us-east-1.rds.amazonaws.com`,
+              inbound_rule_count: 0,
+            }),
+          },
+        },
+      );
+      const output = `${result.stdout}${result.stderr}`;
+      expect(result.status, output).toBe(0);
+      return { output, summary: readFileSync(join(reports, 'bootstrap-workspace.txt'), 'utf8') };
+    };
+    const launchOf = (output: string): string => output.split('\n').find(line => line.includes('aws ecs run-task')) ?? '';
+
+    const withDomain = plan(['--sending-domain', 'usecallie.com']);
+    expect(launchOf(withDomain.output)).toContain('"--sending-domain", "usecallie.com"');
+    expect(withDomain.summary).toContain('sending_domain=usecallie.com');
+    const without = plan([]);
+    expect(launchOf(without.output)).not.toContain('--sending-domain');
+    expect(without.summary).toContain('sending_domain=none');
+
+    // And the summary the real run writes names the domain and its outcome, so the
+    // line kept from 5.1a says whether the row was created or already there.
+    const script = readRepositoryFile(SCRIPT);
+    expect(script).toContain('sending_domain_outcome=%s');
+    expect(script).toContain('report.get("sendingDomain")');
   });
 
   it('calls a command the tool has, with flags the tool has, and not as the migration user', async () => {

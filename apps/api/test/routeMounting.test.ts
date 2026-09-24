@@ -96,6 +96,7 @@ describe('what the API mounts', () => {
       '/oauth/gmail/callback',
       '/outbound/authentication',
       '/outbound/cap',
+      '/outbound/domain',
       '/outbound/resolve',
       '/outbound/status',
       '/pauses',

@@ -72,7 +72,13 @@ describe('the outbound admin routes', () => {
   });
 
   it('refuses every outbound path without a session and to a salesperson', async () => {
-    for (const path of ['/outbound/resolve', '/outbound/authentication', '/outbound/cap', '/outbound/status']) {
+    for (const path of [
+      '/outbound/resolve',
+      '/outbound/authentication',
+      '/outbound/cap',
+      '/outbound/domain',
+      '/outbound/status',
+    ]) {
       expect((await post(path, null, command())).status, path).toBe(401);
       const forbidden = await post(path, salespersonToken, command());
       expect(forbidden.status, path).toBe(403);
