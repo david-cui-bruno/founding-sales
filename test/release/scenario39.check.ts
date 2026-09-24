@@ -1192,6 +1192,17 @@ echo "unexpected: $*" >&2; exit 9`,
  * of that run (twelve stopped tasks before, none after, plus the running ones and a
  * replacement) and must pass; and against a new revision, a removed revision, a removed
  * service and a removed cluster, and must fail each time, naming the resource.
+ *
+ * G52: the same, one level down. Run 36032732128 (24 September 2026, prefix
+ * fss-rh-202609241713) failed the comparison with exactly one changed line, an EC2
+ * `network-interface/eni-…` ARN before and a different one after. ECS had replaced the
+ * production worker task during the run, and a Fargate task's elastic network interface
+ * is created and deleted with the task and carries its propagated tags. The cheap fix
+ * here is to drop everything `ec2`, which would stop measuring the VPC, the subnets, the
+ * security groups, the route tables and the internet gateway, the resources an interface
+ * lives in and wears. So the guard is run against interfaces that vanish, appear and are
+ * replaced (pass), and against each of those five replaced while the interfaces churn
+ * beside it (fail, naming the resource and no interface).
  */
 describe('Appendix G 39: the production comparison is between durable resources', () => {
   const ACCOUNT = '123456789012';
@@ -1213,6 +1224,20 @@ describe('Appendix G 39: the production comparison is between durable resources'
   ];
   const task = (index: number): string =>
     ecs(`task/fss-prod-cluster/${index.toString(16).padStart(32, '0')}`);
+  const ec2 = (resource: string): string => `arn:aws:ec2:us-east-1:${ACCOUNT}:${resource}`;
+  /** The network the production tasks run in: durable, and every one of them compared. */
+  const NETWORK: readonly string[] = [
+    ec2('vpc/vpc-0a1b2c3d4e5f60718'),
+    ec2('subnet/subnet-0a1b2c3d4e5f60718'),
+    ec2('security-group/sg-0a1b2c3d4e5f60718'),
+    ec2('route-table/rtb-0a1b2c3d4e5f60718'),
+    ec2('internet-gateway/igw-0a1b2c3d4e5f60718'),
+  ];
+  /** A task's elastic network interface, created and deleted with the task. */
+  const eni = (id: string): string => ec2(`network-interface/eni-${id}`);
+  const WORKER_ENI_BEFORE = eni('0d67a1b2c3d4e5f60');
+  const WORKER_ENI_AFTER = eni('0e2fa1b2c3d4e5f60');
+  const API_ENI = eni('0c11a1b2c3d4e5f60');
   /** The redeploy's stopped tasks: the old service tasks and the one-off migrate, users, verify and bootstrap. */
   const STOPPED = Array.from({ length: 12 }, (_, index) => task(index + 1));
   const RUNNING = [task(0xa1), task(0xa2)];
@@ -1262,8 +1287,8 @@ describe('Appendix G 39: the production comparison is between durable resources'
     expect(code, output).toBe(0);
     expect(output).toContain('nothing with the production prefix was addressed');
     // Said out loud, per side, rather than silently dropped.
-    expect(output).toContain('recorded before the run: 14 ECS task ARN(s) set aside');
-    expect(output).toContain('read now: 3 ECS task ARN(s) set aside');
+    expect(output).toContain('recorded before the run: 14 ECS task ARN(s), 0 network interface ARN(s) set aside');
+    expect(output).toContain('read now: 3 ECS task ARN(s), 0 network interface ARN(s) set aside');
     // The recorded file is still the raw read — the tasks are in it — so the filter
     // is applied to the recorded side at comparison time, which is also what makes a
     // file recorded by an older guard compare correctly.
@@ -1296,6 +1321,58 @@ describe('Appendix G 39: the production comparison is between durable resources'
     }
   });
 
+  it('passes when ECS replaces a task and its network interface goes with it', () => {
+    // Run 36032732128 exactly: the worker task replaced during the run, its interface
+    // eni-0d67… gone and eni-0e2f… in its place; the API task and its interface stay.
+    const { code, output, recorded } = guardAcross(
+      [...DURABLE, ...NETWORK, task(0xa1), task(0xa2), API_ENI, WORKER_ENI_BEFORE],
+      [...DURABLE, ...NETWORK, task(0xa1), task(0xc1), API_ENI, WORKER_ENI_AFTER],
+    );
+
+    expect(code, output).toBe(0);
+    expect(output).toContain('nothing with the production prefix was addressed');
+    // Each class counted separately, per side, rather than silently dropped.
+    expect(output).toContain('recorded before the run: 2 ECS task ARN(s), 2 network interface ARN(s) set aside');
+    expect(output).toContain('read now: 2 ECS task ARN(s), 2 network interface ARN(s) set aside');
+    expect(recorded).toContain(WORKER_ENI_BEFORE);
+  });
+
+  it('passes when an interface only disappears, or only appears', () => {
+    for (const [before, after] of [
+      [[API_ENI, WORKER_ENI_BEFORE], [API_ENI]],
+      [[API_ENI], [API_ENI, WORKER_ENI_AFTER]],
+      [[WORKER_ENI_BEFORE], []],
+    ] as const) {
+      const { code, output } = guardAcross(
+        [...DURABLE, ...NETWORK, ...before],
+        [...DURABLE, ...NETWORK, ...after],
+      );
+
+      expect(code, `${before.join(',')} -> ${after.join(',')}: ${output}`).toBe(0);
+      expect(output).toContain(
+        `recorded before the run: 0 ECS task ARN(s), ${String(before.length)} network interface ARN(s) set aside`,
+      );
+    }
+  });
+
+  it('fails when the VPC, a subnet, a security group, a route table or the gateway is replaced', () => {
+    for (const replaced of NETWORK) {
+      const replacement = replaced.replace('-0a1b2c3d4e5f60718', '-0f9e8d7c6b5a40392');
+      const { code, output } = guardAcross(
+        [...DURABLE, ...NETWORK, task(0xa2), WORKER_ENI_BEFORE],
+        [...DURABLE, ...NETWORK.map(arn => (arn === replaced ? replacement : arn)), task(0xc1), WORKER_ENI_AFTER],
+      );
+
+      expect(code, `${replaced} replaced, and the guard passed`).not.toBe(0);
+      expect(output).toContain('the production inventory changed during the rehearsal run');
+      expect(output).toContain(replaced);
+      expect(output).toContain(replacement);
+      // The diff names the durable change and nothing that came and went with a task.
+      expect(output).not.toContain(':network-interface/');
+      expect(output).not.toContain(':task/fss-prod-cluster/');
+    }
+  });
+
   it('refuses a recording that is not a list of ARNs rather than comparing it', () => {
     const stubs = mkdtempSync(join(tmpdir(), 'fss-durable-bad-'));
     const reports = mkdtempSync(join(tmpdir(), 'fss-durable-bad-reports-'));
@@ -1321,6 +1398,9 @@ describe('Appendix G 39: the production comparison is between durable resources'
     const release = readRepositoryFile('docs/greenfield/release.md');
     expect(release).toContain('### 8.0v What the twelfth full run proved');
     expect(release).toContain('35962272085');
+    // G52's run, in the guard's own item and in the step that names what is compared.
+    expect(release).toContain('36032732128');
+    expect(release).toContain('`network-interface/`');
   });
 });
 

@@ -280,8 +280,8 @@ const MUTATIONS = [
   {
     name: 'the production guard compares ECS tasks again',
     file: 'infra/scripts/rehearsal-prefix-guard.sh',
-    find: 'durable = [arn for arn in arns if not is_ecs_task(arn)]\n',
-    replace: 'durable = list(arns)\n',
+    find: 'tasks = [arn for arn in arns if is_ecs_task(arn)]\n',
+    replace: 'tasks = []\n',
     suite: ['run', 'test:release'],
     because:
       'This is run 35962272085 exactly (24 September 2026): twelve production tasks the redeploy had stopped were recorded at 05:59Z and forgotten by ECS before the 07:10Z comparison, and the guard reported a production touch that never happened. The tagging API lists tasks because they carry propagated tags, and ECS drops a stopped task after about an hour, so scenario 39 runs the guard against that shape and has to go red when tasks are compared again.',
@@ -294,6 +294,24 @@ const MUTATIONS = [
     suite: ['run', 'test:release'],
     because:
       'A new task-definition revision is what a production deploy leaves behind, so it is a production touch and the guard must still see it. `task-definition/…` and `task/…` differ by one character after `task`. A filter that matched the prefix without the slash would quietly stop measuring the one ECS resource that proves a deploy happened, and scenario 39 has to go red when it does.',
+  },
+  {
+    name: 'the production guard compares task network interfaces again',
+    file: 'infra/scripts/rehearsal-prefix-guard.sh',
+    find: 'interfaces = [arn for arn in arns if is_network_interface(arn)]\n',
+    replace: 'interfaces = []\n',
+    suite: ['run', 'test:release'],
+    because:
+      'This is run 36032732128 exactly (24 September 2026): ECS replaced the production worker task during the run, and the guard failed on one changed line, network-interface/eni-0d67\u2026 before and eni-0e2f\u2026 after. A Fargate task\u2019s elastic network interface is created and deleted with the task and carries its propagated tags, so the tagging API lists it; scenario 39 runs the guard against that shape and has to go red when interfaces are compared again.',
+  },
+  {
+    name: 'the production guard sets aside every ec2 resource with the network interfaces',
+    file: 'infra/scripts/rehearsal-prefix-guard.sh',
+    find: 'parts[2] == "ec2" and parts[5].startswith("network-interface/")',
+    replace: 'parts[2] == "ec2"',
+    suite: ['run', 'test:release'],
+    because:
+      'The VPC, the subnets, the security groups, the route tables and the internet gateway are all ec2 ARNs, and they are the durable resources an interface lives in and wears. A filter that matched the service without the resource type would quietly stop measuring the production network, and scenario 39 has to go red when a replaced VPC, subnet or security group passes the guard.',
   },
   {
     name: 'the production guard stops filtering the inventory it recorded',
