@@ -37,14 +37,60 @@ A restore drill against an empty database proves nothing. Before taking the rest
 5. at least one ordinary **CRM edit** with no protected effect;
 6. at least one applied **migration**.
 
+In a deployed environment, one command does all six (lane g40):
+
+```bash
+# (FSS) the five kinds, through the domain's own entry points, idempotently
+fss admin drill seed-evidence --workspace-slug rehearsal --phase before --report /tmp/evidence-before.json
+```
+
+It creates a fixed, recognisable firm, contact, route and opportunity under
+`drill-evidence.invalid`; drives one outbound fence through the real dispatch path
+against the recorded Gmail client until its state is `sent`; ingests a prospect reply
+and a prospect-originated opt-out through the same pipeline the mail sync runs, so the
+reply's confirmation sets the opportunity manual and the opt-out's suppression is
+journalled before its row; records a salesperson's own manual suppression, whose
+ten-minute correction window is still open when the drill runs minutes later; and makes
+one ordinary CRM edit. Each item is reported `created` or `existing`, and the report
+ends with the same five counts `fss admin counts` reports — it calls the same code, so
+the numbers cannot drift from the ones the refusal below reads. A second run adds
+nothing.
+
+The release runs it for you: `.github/workflows/greenfield-release.yml` has a
+`Create the evidence the drill has to reconstruct` step between the workspace bootstrap
+and the schema ranges, which launches
+`infra/scripts/release-seed-drill-evidence.sh … --phase before` on the operations task
+definition.
+
+**Production is never seeded.** Section 7 of the runbook drills production against real
+data, and the sends, replies and suppressions it reconstructs are a salesperson's — a
+fixture in their place would replace the thing being proved. Two guards say so and
+neither depends on the other: the command refuses unless `FSS_DEPENDENCIES` is exactly
+`recorded`, which production's worker never is, and
+`release-seed-drill-evidence.sh` refuses any prefix that is not `fss-rh-<run>` with no
+flag that relaxes it.
+
 Then read the restore target — **RDS chooses it, you do not** — and let the clock run past it while more activity happens, so the restore genuinely loses work:
 
 ```bash
 export RESTORE_TARGET=$(aws rds describe-db-instances --db-instance-identifier "${PREFIX}-pg" \
   --query 'DBInstances[0].LatestRestorableTime' --output text | sed -E 's/\.[0-9]+//; s/\+00:00$//')Z
 echo "restore target: $RESTORE_TARGET"
-# ... generate more sends, replies and suppressions after this instant ...
+# ... generate more activity after this instant, so the restore genuinely loses work:
+# (FSS) a second accepted send and a second ordinary CRM edit, and nothing else
+fss admin drill seed-evidence --workspace-slug rehearsal --phase after --report /tmp/evidence-after.json
 ```
+
+`--phase after` adds a send and an edit and nothing else on purpose: a second
+suppression or a second reply would change what steps 2 and 4 below are reconstructing.
+`infra/scripts/rehearsal-restore-drill.sh` runs it between measuring the baseline and
+requesting the restore, which is the only place it can go.
+
+Because the latest restorable point lags real time, the drill script also **waits** for
+RDS to report a `LatestRestorableTime` later than the `asOf` instant the before-phase
+report recorded, before it reads the restore target at all. Without that wait the target
+would predate the evidence, the restore would land on a database that has none of it,
+and the refusal below would fire with the seeding step having run and worked.
 
 `date -u` used to stand here and it was wrong: the latest restorable point lags real time by up to about five minutes (spec 4.1), so "now" is an instant the instance cannot be restored to and `--restore-time` refuses it with `InvalidRestoreTime`. The restore below therefore asks for `--use-latest-restorable-time` and the baseline is measured at the instant RDS reported a moment earlier. Reading it first and restoring second can only mean the restored database holds slightly *more* than the baseline counted, which is the safe direction: every assertion below is "no suppression lost, no send repeated" against a floor.
 

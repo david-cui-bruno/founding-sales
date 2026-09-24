@@ -164,9 +164,15 @@ export const SCENARIOS: readonly Scenario[] = Object.freeze([
       'apps/worker/test/fssCli.test.ts',
       'packages/domain/restore/counts.ts',
       'packages/domain/suppression/replay.ts',
+      // g40. Step 0.1's six kinds had nowhere to come from in a deployed environment
+      // until this command and this step existed, so the baseline refusal fired on
+      // every fresh rehearsal (run 35930664547, 23 September 2026).
+      'apps/worker/src/tools/fss/drillEvidence.ts',
+      'infra/scripts/release-seed-drill-evidence.sh',
+      'test/release/drillEvidence.check.ts',
     ),
     trap: 'A drill against an empty database reconstructs nothing and passes; or the commands it calls do not exist and the drill fails only in the cloud.',
-    closedBy: 'Step 0.1 of the drill generates all six kinds of activity first, the script refuses to report a pass when the baseline counts are zero, and `apps/worker/test/fssCli.test.ts` parses every `fss` invocation out of the script and requires the tool to accept it.',
+    closedBy: 'Step 0.1 of the drill generates all six kinds of activity first — `fss admin drill seed-evidence` produces five of them through the domain\u2019s own entry points in a deployed rehearsal — the script refuses to report a pass when the baseline counts are zero, and `apps/worker/test/fssCli.test.ts` parses every `fss` invocation out of the script and requires the tool to accept it.',
     script: 'infra/scripts/rehearsal-restore-drill.sh',
   },
   {

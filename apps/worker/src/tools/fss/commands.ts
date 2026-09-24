@@ -76,6 +76,11 @@ export const COMMAND_DEPENDENCIES: Readonly<Record<string, DependencyMode>> = Ob
   'mailbox coverage': 'database',
   'workspace bootstrap': 'database',
   'suppression-journal replay': 'journal',
+  // g40. It drives a fence through the real dispatch path and ingests a reply and an
+  // opt-out through the real pipeline, so it reaches the Gmail seam and is bound by the
+  // same rule `fss drill` is: recorded, or refused. A seed that sent live mail from a
+  // command line is the one thing this mode exists to make impossible.
+  'drill seed-evidence': 'recorded',
   'mailbox reconcile-sent': 'recorded',
   'mailbox recover': 'recorded',
   'mailbox watch-renew': 'recorded',
@@ -198,6 +203,17 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
     booleanFlags: [],
     requiredFlags: ['--slug', '--display-name', '--admin-email'],
     summary: 'the first workspace and its first active admin, in one transaction, idempotently',
+  },
+  {
+    path: ['admin', 'drill', 'seed-evidence'],
+    valueFlags: ['--workspace-slug', '--phase', ...REPORTABLE],
+    booleanFlags: [],
+    // `--phase` is required rather than defaulted for the reason `--all-mailboxes` is
+    // not a default: "before the restore target" and "after it" are opposite halves of
+    // section 0.1, and a phase reached by omission is a seed that silently did the
+    // other one.
+    requiredFlags: ['--workspace-slug', '--phase'],
+    summary: 'the five kinds restore-drill.md 0.1 needs, through the real paths. Rehearsal only',
   },
   {
     path: ['admin', 'jobs', 'discard-runnable'],

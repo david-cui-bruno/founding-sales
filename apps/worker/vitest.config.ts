@@ -28,6 +28,7 @@ export default defineConfig({
       '@fss/domain/templates': fileURLToPath(
         new URL('../../packages/domain/templates/index.ts', import.meta.url),
       ),
+      '@fss/domain/settings': fileURLToPath(new URL('../../packages/domain/settings/index.ts', import.meta.url)),
       '@fss/domain/retention': fileURLToPath(new URL('../../packages/domain/retention/index.ts', import.meta.url)),
       '@fss/domain/restore': fileURLToPath(new URL('../../packages/domain/restore/index.ts', import.meta.url)),
       '@fss/domain/policy': fileURLToPath(new URL('../../packages/domain/policy/index.ts', import.meta.url)),
