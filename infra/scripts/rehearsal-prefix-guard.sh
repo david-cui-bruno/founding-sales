@@ -19,8 +19,8 @@
 #   2. the deployment role the run assumed is `fss-rh-deploy`, not `fss-prod-deploy`;
 #   3. the durable production resources that existed before the run still exist
 #      afterwards, with the same identifiers — so "teardown could not address them" is
-#      measured rather than asserted. Durable means everything but ECS tasks, which ECS
-#      forgets on its own (`durable_inventory`, below).
+#      measured rather than asserted. Durable means everything but ECS tasks and their
+#      network interfaces, which come and go with the tasks (`durable_inventory`, below).
 #
 # `before` records the production inventory; `after` compares. The comparison is the
 # test; recording alone proves nothing, and the script says so if `after` is run with
@@ -56,7 +56,7 @@ production_inventory() {
   rehearsal_read_production_inventory resourcegroupstaggingapi get-resources
 }
 
-# The inventory minus what ECS forgets on its own.
+# The inventory minus what comes and goes with an ECS task.
 #
 #   durable_inventory <which side> < inventory.json
 #
@@ -69,15 +69,29 @@ production_inventory() {
 # 05:50–05:57Z, recorded at 05:59Z while ECS still showed them and aged out by 07:10Z.
 # Production had not moved: both services stayed stable on revision 4 throughout.
 #
+# A task's elastic network interface is the same kind of thing one level down. A Fargate
+# task gets its own interface when it starts and loses it when it stops, and the
+# interface carries the task's propagated tags, so the tagging API lists it too. Run
+# 36032732128 (24 September 2026, prefix fss-rh-202609241713) failed this comparison
+# with exactly one changed line, `arn:aws:ec2:us-east-1:…:network-interface/eni-0d67…`
+# before and `…/eni-0e2f…` after: ECS had replaced the production worker task during
+# the run, because its liveness check was failing and ECS restarts a task whose check
+# fails, and the old task's interface went with it. That is no more a production touch
+# than the task was.
+#
 # So the comparison is between durable resources, and this is the one place that says
 # what durable means: every ARN except one whose service is `ecs` and whose resource
-# part begins `task/`. Parsed rather than matched as a substring, so
+# part begins `task/`, or whose service is `ec2` and whose resource part begins
+# `network-interface/`. Parsed rather than matched as a substring, so
 # `task-definition/fss-prod-api:5` is kept — a new task-definition revision is a
 # production touch and must still fail the guard — and so are the cluster, the
-# services, the log groups, the alarms, the buckets and the roles. A task the rehearsal
-# itself launched into production is not measured here; that direction is refused per
-# launch by `release_refuse_foreign_arguments` in `release-common.sh` (Appendix G 39,
-# the symmetric refusal) and by the identity assertion in step 2.
+# services, the log groups, the alarms, the buckets and the roles; and so is every
+# other `ec2` resource — the VPC, the subnets, the security groups, the route tables,
+# the internet gateway — which is where an interface lives and what it wears. A task
+# the rehearsal itself launched into production is not measured here, and neither is
+# its interface; that direction is refused per launch by
+# `release_refuse_foreign_arguments` in `release-common.sh` (Appendix G 39, the
+# symmetric refusal) and by the identity assertion in step 2.
 #
 # Applied to **both** sides at comparison time, not only to the read, so a `before`
 # file recorded by an older guard — one that kept its tasks — compares correctly too.
@@ -96,16 +110,27 @@ if not isinstance(arns, list):
     sys.stderr.write("FAIL: the production inventory %s is not a list of ARNs\n" % side)
     sys.exit(1)
 
-def is_ecs_task(arn):
+def arn_parts(arn):
+    # arn:partition:service:region:account:resource, where the resource may hold colons.
     parts = arn.split(":", 5) if isinstance(arn, str) else []
-    return len(parts) == 6 and parts[0] == "arn" and parts[2] == "ecs" and parts[5].startswith("task/")
+    return parts if len(parts) == 6 and parts[0] == "arn" else None
 
-durable = [arn for arn in arns if not is_ecs_task(arn)]
-set_aside = len(arns) - len(durable)
-if set_aside:
+def is_ecs_task(arn):
+    parts = arn_parts(arn)
+    return parts is not None and parts[2] == "ecs" and parts[5].startswith("task/")
+
+def is_network_interface(arn):
+    parts = arn_parts(arn)
+    return parts is not None and parts[2] == "ec2" and parts[5].startswith("network-interface/")
+
+tasks = [arn for arn in arns if is_ecs_task(arn)]
+interfaces = [arn for arn in arns if is_network_interface(arn)]
+durable = [arn for arn in arns if arn not in tasks and arn not in interfaces]
+if tasks or interfaces:
     sys.stderr.write(
-        "the production inventory %s: %d ECS task ARN(s) set aside, because ECS forgets a stopped task\n"
-        % (side, set_aside)
+        "the production inventory %s: %d ECS task ARN(s), %d network interface ARN(s) set aside,"
+        " because ECS forgets a stopped task and Fargate deletes the network interface with it\n"
+        % (side, len(tasks), len(interfaces))
     )
 json.dump(durable, sys.stdout, indent=2)
 sys.stdout.write("\n")
@@ -159,7 +184,7 @@ case "$PHASE" in
     if rehearsal_dry_run; then
       rehearsal_plan "terraform state list | grep -v '$PREFIX' -> expect empty"
       rehearsal_plan "aws sts get-caller-identity -> expect an fss-rh- role"
-      rehearsal_plan "compare the durable production inventory (ECS tasks set aside, both sides) with $INVENTORY"
+      rehearsal_plan "compare the durable production inventory (ECS tasks and network interfaces set aside, both sides) with $INVENTORY"
       production_inventory
     else
       # A state that cannot be listed is the shape a run that created nothing takes:
