@@ -2,7 +2,11 @@ import { writeFile } from 'node:fs/promises';
 import pg from 'pg';
 import type { QueryResultRowLike, SessionQueryable } from '@fss/domain/db';
 import { ConfigError } from '../bootstrap/config.ts';
-import { DeploymentConfigError, readWorkerDeployment } from '../bootstrap/deployment.ts';
+import {
+  DEPLOYMENT_ENVIRONMENT_VARIABLES,
+  DeploymentConfigError,
+  readWorkerDeployment,
+} from '../bootstrap/deployment.ts';
 import { composeHandlers } from '../bootstrap/main.ts';
 import { createLogger, errorFields, type Logger } from '../bootstrap/log.ts';
 import {
@@ -33,6 +37,7 @@ import { runVerify } from './fss/verify.ts';
 import { bootstrapWorkspace } from './fss/bootstrapWorkspace.ts';
 import { RUNTIME_SECRET_VARIABLE, ensureRuntimeDatabaseUser } from './fss/databaseUsers.ts';
 import { runDrill } from './fss/drill.ts';
+import { seedDrillEvidence, type DrillEvidencePhase } from './fss/drillEvidence.ts';
 import {
   COMMAND_DEPENDENCIES,
   describeCommands,
@@ -336,6 +341,46 @@ async function runCommand(
     });
     if (outcome.ok) return { ok: true, value: { ...outcome.value } };
     return { ok: false, reason: outcome.reason, detail: outcome.detail };
+  }
+  if (path === 'admin drill seed-evidence') {
+    // The runtime identity, like `verify` and `admin workspace bootstrap`: it writes
+    // business rows with the credential the services use, which is the credential whose
+    // privileges on those tables are the thing worth proving.
+    //
+    // And the same refusal `drill` makes, for a stronger reason. `drill` reconstructs;
+    // this *creates* — a firm, a contact, an enrollment, a fence it drives to `sent`, a
+    // reply and an opt-out it ingests, two suppressions it journals. Production's drill
+    // runs against real data and is never seeded, and `FSS_DEPENDENCIES=live` is what
+    // production's worker says, so `live` is refused here before anything is written.
+    // `infra/scripts/release-seed-drill-evidence.sh` refuses a production prefix
+    // outright as well; neither guard is the other one's excuse.
+    if (config.dependencies !== 'recorded') {
+      return {
+        ok: false,
+        reason: 'dependencies_not_recorded',
+        detail:
+          'fss admin drill seed-evidence writes the activity a restore drill reconstructs and reaches the Gmail seam, so it runs only with FSS_DEPENDENCIES=recorded; production is never seeded',
+      };
+    }
+    const resolvedMail = await resolveMail(environment, config);
+    if ('refusal' in resolvedMail) return resolvedMail.refusal;
+    if (resolvedMail.mail === undefined) {
+      return {
+        ok: false,
+        reason: 'journal_unconfigured',
+        detail: `this deployment composed no mail client; a seeded opt-out is journalled before its row, so ${DEPLOYMENT_ENVIRONMENT_VARIABLES.journalBucket} must name the object-locked bucket`,
+      };
+    }
+    const phase = options['--phase'] ?? '';
+    const outcome = await seedDrillEvidence({
+      session,
+      mail: resolvedMail.mail,
+      workspaceSlug: options['--workspace-slug'] ?? '',
+      phase: phase as DrillEvidencePhase,
+    });
+    return outcome.ok
+      ? { ok: true, value: { ...outcome.value } }
+      : { ok: false, reason: outcome.reason, detail: outcome.detail };
   }
 
 

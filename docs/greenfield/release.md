@@ -249,7 +249,7 @@ table.
 | `plan` (default) | the identity check, the production inventory, `terraform init` against this run's own state key, `run.auto.tfvars.json`, `terraform plan` with the same variables the apply uses, and a summary | that the rehearsal root can be **planned** in this account with these variables: every required variable is passed, every provider it needs can be configured, and no `count` depends on a value unknown until apply | a few minutes |
 | `create` | `terraform apply`, taking its values from the `run.auto.tfvars.json` the plan stage wrote | that the plan can be **applied**: quotas, service limits, IAM, the order Terraform chooses, and whether a fresh environment comes up at all | the apply, dominated by the Multi-AZ RDS instance |
 | `deploy` | the two database entries, `infra/scripts/release-deploy.sh`, `infra/scripts/release-bootstrap-workspace.sh` and the smoke | that a fresh environment can be **migrated and started**: the migration task's networking, whether `fss migrate` accepts the RDS master user, the schema-range refusals both binaries make on startup, and whether a canary datapoint ever appears | the deploy, five one-off tasks of about a minute each |
-| `full` | the declared ranges against the deployed images, the release suite and the mutation check, the restore drill, the journal replay and Gmail reconstruction, the carry drill, and the release record | the release gate of 16.2, which is everything in the numbered list below | up to the 180-minute timeout |
+| `full` | the declared ranges against the deployed images, the release suite and the mutation check, the drill's evidence and the restore drill, the journal replay and Gmail reconstruction, the carry drill, and the release record | the release gate of 16.2, which is everything in the numbered list below | up to the 180-minute timeout |
 | `teardown` | nothing, and it takes the plan away: it runs only the steps before `terraform plan` plus the two every stage runs | that a prefix some earlier run left standing is gone | the destroy |
 
 **`teardown` is the stage for an orphan.** It runs the identity check, the production
@@ -431,6 +431,7 @@ before it run:
 7. [full] **The declared ranges, against the deployed images** (`infra/scripts/rehearsal-schema-ranges.sh <prefix> --api-digest D --worker-digest D`): Appendix G 22's refusal cases, which only a real ECS task can answer. Each service image is launched as a one-off `--selftest` task through the same wrapper the deploy uses, with a declared schema range one below the one it was built with, and the *container* must refuse it — exit 12, `configurationInvalid` in both `API_EXIT_CODES` and `WORKER_EXIT_CODES`. The overlap case, the previous release's image against the current schema, runs **only when a `<prefix>-<service>-previous` task definition is actually registered**: nothing in this repository registers one and a first release has no previous image at all, so the report says `skipped_no_previous` rather than claiming a pass (8.0o).
 8. [deploy] **Smoke** with the same `scripts/productionSmoke.mjs` production gets.
 9. [full] **Release suite (recorded mode, runner)**: the 42 scenarios (`npm run test:release`) and the **mutation check** (`npm run test:release:mutation`), which breaks each trap in turn and requires the suite to go red. They run in the runner against the job's own `postgres:16` service container, which is what they were built for. They do **not** touch the rehearsal database and could not: it is private — `publicly_accessible = false`, no NAT gateway, no bastion — so the step that used to assemble a URL from the rehearsal's outputs could never have connected. What runs against the rehearsal database is `fss verify` and `fss drill`, inside the VPC.
+    [full] **Before it, the evidence the drill has to reconstruct** (lane g40), as its own step between item 6's bootstrap and item 7: `infra/scripts/release-seed-drill-evidence.sh infra/roots/rehearsal <prefix> --worker-digest D --phase before --workspace-slug rehearsal`. `docs/greenfield/restore-drill.md` 0.1 needs an accepted send, a prospect reply, a prospect-originated opt-out, a salesperson's own manual suppression inside its ten-minute window and an ordinary CRM edit to exist *before* the restore target is read, and nothing in this repository could produce any of them in a deployed environment — so the drill's own refusal fired on every fresh rehearsal, which is how the ninth full run ended (8.0q). `fss admin drill seed-evidence` produces all five through the domain's own entry points. The drill then adds `--phase after` between the baseline and the restore, so the restore genuinely loses work, and waits for RDS to report a `LatestRestorableTime` past the evidence before reading the target at all. **Production is never seeded**: the script refuses any prefix that is not `fss-rh-<run>` and the command refuses unless `FSS_DEPENDENCIES=recorded`.
 10. [full] **Restore drill**, Appendix E steps 1 to 9. The runner keeps the control plane (reading the latest restorable point, the restore itself, the wait, the teardown); two in-VPC tasks do the database work — `fss admin counts` for the baseline on the source, then one `fss drill` against the restored instance for steps 1 to 9, with one correlated log and per-step JSON. The runner reads the report and decides whether it is a pass, so a change to the tool cannot quietly relax the gate. It refuses to report a pass unless the baseline contained an accepted send, a reply, a suppression, a CRM edit and a migration — a drill against an empty database proves nothing. The drill task is fixed at `FSS_DEPENDENCIES=recorded` **in its task definition**, because `reconcile-sent`, `recover` and `watch-renew` all reach Gmail when it is live and a mode a caller passes is a mode a caller can forget.
 11. [full] **Suppression journal replay and Gmail reconstruction**, against the recorded fake (no real mailbox in rehearsal unless you provide a rehearsal Google project). The second replay must insert nothing; no send may repeat. The drill above already ran both; this step reads the reports it left, which the drill wrote out of the captured task report under the names they have always had.
 12. [full] **Carry watermark** (Appendix G 20): the carry tooling must contain no writer at all, and — once a cutover is scheduled and the two optional secrets exist — the export must refuse a table with a post-watermark write. Before the cutover the step prints `carry drill skipped: no cutover watermark yet` and the record says `"carryDrill": "skipped_no_watermark"`. That is not a pass being claimed; it is the state being named.
@@ -1371,6 +1372,58 @@ other one-off task uses, and the rehearsal runs it between steps 17 and 18. Prod
 runs the same script with `--environment production`, which is section 5.1a. The smoke
 step needed no change: the scheduler's 60-second pass and the metrics publisher's
 60-second pass both fit inside its ten-minute wait.
+
+### 8.0q What the ninth full run proved: through the release suite, and a drill with nothing to reconstruct (23 September, night)
+
+Run 35930664547 (f44eb6bf) is the first run to reach the restore drill. Create, the
+secret fill, **step 17**, g39's **workspace bootstrap**, g38's **schema-range
+refusals**, the **production smoke** — which 8.0p's missing workspace row had stopped
+for ten minutes on the run before — and the whole **release suite in recorded mode**,
+including the mutation check, all passed.
+
+**Step 22, the restore drill, then failed after 67 seconds.** One in-VPC
+`fss admin counts --as-of <restore target>` task ran against the source, and the script
+refused by design:
+
+```
+FAIL: the drill baseline has no sends, so reconstructing them would prove nothing
+      Appendix G 11 needs an accepted send, a reply, a suppression, a CRM edit and a migration
+```
+
+**The refusal is right, and it could never have been anything else.**
+`docs/greenfield/restore-drill.md` 0.1 lists six things that must exist before the
+restore target is read, and nothing in this repository produced five of them in a
+deployed environment: there was no `fss` command for it and no workflow step, and the
+release suite (step 21) runs on the runner against its own `postgres:16` service
+container rather than against the rehearsal's private database. A fresh environment
+could therefore never pass step 22, however correct everything before it was — and
+`test/release/scenario11.check.ts` and a mutation entry pin the refusal, so relaxing it
+was never the fix.
+
+Two details that only a credentialed run makes visible sit underneath it. RDS's
+`LatestRestorableTime` lags real time by up to about five minutes, so evidence written a
+moment before the target is read is evidence the target *predates* — the restore would
+land on a database without it and the same refusal would fire with the seeding having
+worked. And `--use-latest-restorable-time` acts at the moment RDS is asked, which is
+later than the instant the drill read, so work done in between is in the safe direction:
+the restored database holds slightly more than the baseline counted, and every assertion
+is a floor.
+
+**What changed (lane g40).** `fss admin drill seed-evidence --workspace-slug S --phase
+before|after` produces the five kinds through the domain's own entry points —
+`createFirm`, `addEmailRoute`, `enrollContact`, `prepareOutboundMessage`,
+`dispatchOutboundMessage` against the recorded Gmail client, `processMessageIds`,
+`confirmReplyDisposition`, `recordSuppression`, `updateFirm` — idempotently, reporting
+`created` or `existing` per item and ending with the same five counts `fss admin counts`
+reports, because it calls the same function. `infra/scripts/release-seed-drill-evidence.sh`
+launches it on the operations task definition through the same wrapper every other
+one-off task uses, and refuses any prefix that is not `fss-rh-<run>`: production's drill
+runs against real data and is never seeded. The workflow runs `--phase before` between
+the workspace bootstrap and the schema ranges; the drill script waits for
+`LatestRestorableTime` to pass the `asOf` instant that step recorded, then measures its
+baseline, then runs `--phase after` — a second send and a second CRM edit — before
+requesting the restore. Every existing drill assertion is unchanged, including the
+refusal above.
 
 ### 8.1 Still unverified
 

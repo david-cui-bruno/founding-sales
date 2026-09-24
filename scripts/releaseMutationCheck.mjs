@@ -487,6 +487,15 @@ const MUTATIONS = [
     because:
       'Run 35919040315 (23 September 2026) passed create, fill, the deploy path and the schema-range refusals and then failed the smoke: no CanaryCompletionAgeSeconds datapoint in ten minutes, because the canary source is per workspace and a fresh database has none. A deploy that skips this step reproduces that failure exactly, and the step\u2019s stage condition is the whole of the difference.',
   },
+  {
+    name: 'the drill evidence seeder stops refusing a production prefix',
+    file: 'infra/scripts/release-seed-drill-evidence.sh',
+    find: 'rehearsal_require_prefix "$PREFIX"\n',
+    replace: 'release_environment_for_prefix "$PREFIX" >/dev/null\n',
+    suite: ['run', 'test:release'],
+    because:
+      'This script writes a firm, a contact, an accepted send, two prospect suppressions and a salesperson\u2019s own suppression. Production\u2019s restore drill (runbook section 7) reconstructs a salesperson\u2019s real activity, so seeding it would replace the thing being proved with the thing proving it. `release_environment_for_prefix` classifies and permits `fss-prod`, which is right for the two scripts that genuinely run in both environments and catastrophic here \u2014 and the difference is invisible unless something runs the script with a production prefix and requires it to refuse.',
+  },
 ];
 
 function run(script) {

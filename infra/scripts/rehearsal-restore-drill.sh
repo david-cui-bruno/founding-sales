@@ -97,6 +97,70 @@ to_utc_instant() { # to_utc_instant <RDS timestamp>
 }
 
 # ---------------------------------------------------------------------------
+# The wait, and why the drill cannot read its restore target without it (lane g40).
+#
+# `infra/scripts/release-seed-drill-evidence.sh --phase before` writes the activity
+# step 0.1 requires — an accepted send, a reply, an opt-out, a salesperson's own
+# suppression and a CRM edit — and records the instant it measured them at as `asOf` in
+# `drill-evidence-before.txt`. RDS's continuous backup window lags real time by up to
+# about five minutes (spec 4.1), so the point it will report as `LatestRestorableTime`
+# a moment after that evidence was written is a point *before* the evidence existed:
+# the restore would land on a database without it, the baseline measured at that
+# instant would be empty, and the drill would refuse for the same reason it refused on
+# 23 September 2026 — with the seeding step having run and worked.
+#
+# So the target is not read until the window has caught up. The comparison is on
+# fourteen digits rather than on strings, because `[[ a > b ]]` is a locale collation
+# and this is an ordering of instants.
+RESTORABLE_WAIT_ATTEMPTS=${FSS_RESTORABLE_WAIT_ATTEMPTS:-40}
+RESTORABLE_WAIT_SECONDS=${FSS_RESTORABLE_WAIT_SECONDS:-15}
+EVIDENCE_REPORT="$REPORTS/drill-evidence-before.txt"
+EVIDENCE_AT=''
+if [ -f "$EVIDENCE_REPORT" ]; then
+  EVIDENCE_AT="$(grep -o 'asOf=[^ ]*' "$EVIDENCE_REPORT" | head -1 | cut -d= -f2)"
+fi
+
+digits_of() { # digits_of <instant>
+  local normalised
+  normalised="$(to_utc_instant "$1")"
+  printf '%s\n' "${normalised//[^0-9]/}"
+}
+
+wait_for_restorable_point() { # wait_for_restorable_point <the instant the evidence was written at>
+  local evidence=$1 attempt=1 latest='' seen='' wanted=''
+  if [ -z "$evidence" ]; then
+    # An operator running the drill by hand against an environment somebody else
+    # seeded. There is nothing to wait for and the baseline refusal below is still the
+    # guard; say so rather than wait ten minutes for a file that will never appear.
+    rehearsal_log "no $EVIDENCE_REPORT, so no evidence instant to wait past; the baseline refusal still decides"
+    return 0
+  fi
+  wanted="$(digits_of "$evidence")"
+  while [ "$attempt" -le "$RESTORABLE_WAIT_ATTEMPTS" ]; do
+    latest="$(rehearsal_aws rds describe-db-instances \
+      --db-instance-identifier "${PREFIX}-pg" \
+      --query 'DBInstances[0].LatestRestorableTime' --output text)"
+    if [ -n "$latest" ] && [ "$latest" != "None" ]; then
+      seen="$(digits_of "$latest")"
+      if [ -n "$seen" ] && [ "$seen" -gt "$wanted" ]; then
+        rehearsal_log "the latest restorable point $(to_utc_instant "$latest") is past the evidence at $evidence"
+        return 0
+      fi
+      rehearsal_log "attempt $attempt of $RESTORABLE_WAIT_ATTEMPTS: the restorable point has not reached $evidence yet"
+    else
+      rehearsal_log "attempt $attempt of $RESTORABLE_WAIT_ATTEMPTS: ${PREFIX}-pg reports no LatestRestorableTime yet"
+    fi
+    sleep "$RESTORABLE_WAIT_SECONDS"
+    attempt=$((attempt + 1))
+  done
+  echo "FAIL: ${PREFIX}-pg's latest restorable point never passed the drill evidence written at $evidence." >&2
+  echo "      Waited $RESTORABLE_WAIT_ATTEMPTS attempts of ${RESTORABLE_WAIT_SECONDS}s. A restore target that predates" >&2
+  echo "      the evidence restores a database with nothing in it to reconstruct, which is the vacuous" >&2
+  echo "      pass this drill exists to prevent; see docs/greenfield/restore-drill.md 0.1." >&2
+  return 1
+}
+
+# ---------------------------------------------------------------------------
 # The restore point, which RDS chooses and this drill reads rather than names.
 #
 # It used to be `now`: `--restore-time "$DRILL_START"` against an instant that was a
@@ -125,8 +189,10 @@ elif rehearsal_dry_run; then
   # Dry mode reaches no AWS, so there is no restorable point to read. The drill start
   # stands in for it and every instant below is derived from it exactly as it would be.
   RESTORE_TARGET="$DRILL_START"
+  rehearsal_plan "wait until aws rds describe-db-instances reports a LatestRestorableTime past the asOf in $EVIDENCE_REPORT"
   rehearsal_plan "aws rds describe-db-instances --db-instance-identifier ${PREFIX}-pg --query DBInstances[0].LatestRestorableTime"
 else
+  wait_for_restorable_point "$EVIDENCE_AT" || exit 1
   LATEST_RESTORABLE="$(rehearsal_aws rds describe-db-instances \
     --db-instance-identifier "${PREFIX}-pg" \
     --query 'DBInstances[0].LatestRestorableTime' --output text)"
@@ -210,6 +276,31 @@ for kind in sends replies suppressions crm_edits migrations; do
   fi
   rehearsal_log "baseline $kind=$count"
 done
+
+# ---------------------------------------------------------------------------
+# Step 0b. The work the restore is meant to lose (0.1, lane g40).
+#
+# "Then let the clock run past it while more activity happens, so the restore genuinely
+# loses work." The target has been read and the baseline measured at it; everything
+# from here is after that instant. The after phase adds a second accepted send and a
+# second ordinary CRM edit and nothing else — a second suppression or a second reply
+# would change what steps 2 and 4 are reconstructing, and every assertion below is
+# unchanged by this step because every one of them is a floor.
+#
+# It runs here rather than in the workflow because it has to sit between the baseline
+# and the restore, and the workflow has no seam there. The root is named rather than
+# taken as an argument: `rehearsal_require_prefix` above has already refused anything
+# that is not a rehearsal run, so there is only one root this can be.
+# ---------------------------------------------------------------------------
+rehearsal_log "step 0b: the activity the restore has to lose"
+SEED_EVIDENCE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/release-seed-drill-evidence.sh"
+if rehearsal_dry_run; then
+  rehearsal_plan "$SEED_EVIDENCE infra/roots/rehearsal $PREFIX --worker-digest \$FSS_RELEASE_WORKER_DIGEST --phase after"
+else
+  "$SEED_EVIDENCE" infra/roots/rehearsal "$PREFIX" \
+    --worker-digest "$FSS_RELEASE_WORKER_DIGEST" \
+    --phase after
+fi
 
 # ---------------------------------------------------------------------------
 # Step 1a. Restore. The runner's half of step 1: two RDS calls and a wait.

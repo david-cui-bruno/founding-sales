@@ -323,6 +323,7 @@ jobs:
             "infra/scripts/release-deploy.sh infra/roots/rehearsal $prefix --schema-change --worker-digest $FSS_RELEASE_WORKER_DIGEST" \
             "infra/scripts/rehearsal-schema-ranges.sh $prefix --api-digest $FSS_RELEASE_API_DIGEST --worker-digest $FSS_RELEASE_WORKER_DIGEST" \
             "infra/scripts/release-bootstrap-workspace.sh infra/roots/rehearsal $prefix --worker-digest $FSS_RELEASE_WORKER_DIGEST --slug rehearsal --display-name Rehearsal --admin-email rehearsal-admin@usecallie.com" \
+            "infra/scripts/release-seed-drill-evidence.sh infra/roots/rehearsal $prefix --worker-digest $FSS_RELEASE_WORKER_DIGEST --phase before --workspace-slug rehearsal" \
             "infra/scripts/rehearsal-restore-drill.sh $prefix" \
             "infra/scripts/rehearsal-carry-watermark.sh $prefix" \
             "infra/scripts/rehearsal-teardown.sh $prefix" \
@@ -999,6 +1000,37 @@ jobs:
             --slug rehearsal \
             --display-name Rehearsal \
             --admin-email rehearsal-admin@usecallie.com
+
+      - name: Create the evidence the drill has to reconstruct
+        if: inputs.stage == 'full'
+        env:
+          FSS_RELEASE_WORKER_DIGEST: ${{ inputs.worker_image_digest }}
+        run: |
+          set -euo pipefail
+          # `docs/greenfield/restore-drill.md` 0.1: an accepted send, a prospect reply,
+          # a prospect-originated opt-out, a salesperson's own manual suppression inside
+          # its ten-minute window, an ordinary CRM edit and an applied migration. Nothing
+          # in the tree produced any of the first five in a deployed environment, so the
+          # drill refused on every fresh rehearsal — "the drill baseline has no sends, so
+          # reconstructing them would prove nothing" — which is exactly how run
+          # 35930664547 of 23 September 2026 ended, after the whole path before it had
+          # passed for the first time.
+          #
+          # It runs here, after the workspace exists and before anything measures the
+          # database, and only in `full`: the evidence is for the restore drill, and the
+          # restore drill is a `full` step. Production is never seeded, and the script
+          # has no flag that would let it be: it refuses any prefix that is not
+          # `fss-rh-<run>`, and the tool refuses again inside the container unless
+          # `FSS_DEPENDENCIES` is `recorded`.
+          #
+          # The second half of the evidence — the send and the edit the restore is meant
+          # to lose — is written by the drill itself, between reading the restore target
+          # and requesting the restore, because that is the only place it can go.
+          infra/scripts/release-seed-drill-evidence.sh infra/roots/rehearsal \
+            '${{ steps.prefix.outputs.prefix }}' \
+            --worker-digest '${{ inputs.worker_image_digest }}' \
+            --phase before \
+            --workspace-slug rehearsal
 
       - name: The declared schema ranges, against the deployed images
         if: inputs.stage == 'full'

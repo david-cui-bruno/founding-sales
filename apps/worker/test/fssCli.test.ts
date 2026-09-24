@@ -48,6 +48,10 @@ const CALLERS = [
   // reason the other two are — it names a command, and a script naming a command the
   // tool does not have is a step that fails inside a container nobody is watching.
   'infra/scripts/release-bootstrap-workspace.sh',
+  // g40: the step that writes the activity the drill reconstructs. Same reason again —
+  // a script naming a command the tool does not have is a one-off task that fails
+  // inside a container nobody is watching, minutes after the runner moved on.
+  'infra/scripts/release-seed-drill-evidence.sh',
 ] as const;
 
 const INVOCATIONS = CALLERS.flatMap(relative =>
@@ -57,16 +61,16 @@ const INVOCATIONS = CALLERS.flatMap(relative =>
 describe('the fss command line accepts every invocation the release scripts make', () => {
   it('finds every `fss` invocation in both scripts, planned and real', () => {
     // A floor on purpose: an extractor that silently found none would make every case
-    // below vacuous, and the scripts are the specification here. Six is the number of
+    // below vacuous, and the scripts are the specification here. Seven is the number of
     // distinct commands the release actually issues — `admin counts`, `drill`,
-    // `migrate`, `admin database-users ensure`, `verify` and, since g39,
-    // `admin workspace bootstrap` — and each appears at least once in a planned line
-    // and once in a real one.
-    expect(INVOCATIONS.length).toBeGreaterThanOrEqual(6);
+    // `migrate`, `admin database-users ensure`, `verify`, `admin workspace bootstrap`
+    // since g39 and `admin drill seed-evidence` since g40 — and each appears at least
+    // once in a planned line and once in a real one.
+    expect(INVOCATIONS.length).toBeGreaterThanOrEqual(7);
     expect(INVOCATIONS.some(invocation => invocation.planned)).toBe(true);
     expect(INVOCATIONS.some(invocation => !invocation.planned)).toBe(true);
 
-    // And the five are named, so a script that stopped calling one of them — which is
+    // And the seven are named, so a script that stopped calling one of them — which is
     // how "nothing migrates the database" happened in the first place — fails here.
     // The words before the first flag: `['admin','counts','--as-of','…']` is
     // `admin counts`. A flag's *value* is not part of the command's name.
@@ -81,6 +85,7 @@ describe('the fss command line accepts every invocation the release scripts make
       'admin database-users ensure',
       'verify',
       'admin workspace bootstrap',
+      'admin drill seed-evidence',
     ]) {
       expect(commands, `no release script invokes \`fss ${expected}\``).toContain(expected);
     }
