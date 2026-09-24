@@ -228,6 +228,19 @@ Decide the addresses for `alert_emails`. Each one receives an AWS confirmation e
 
 Not infrastructure, but the apply is pointless without them and they take days, so start them now: SPF, DKIM and DMARC on the Callie sending domain, and Google Postmaster Tools registration. Spec 12.7 makes passing authentication a precondition of enabling automated sending, and the six-week new-domain ramp starts from the first healthy send.
 
+### 1.7 The service quotas that stop an apply
+
+One quota is reached in ordinary use and it is not obvious from the error: **VPCs per Region** (`L-F678F1CE`, service `vpc`), which defaults to **5** in `us-east-1`. Every rehearsal environment is one VPC, production is one, and the account holds unrelated ones, so a rehearsal `create` can fail at `CreateVpc` with nothing wrong with the plan — which is how two runs failed on 23 September. Read it and raise it before the first apply:
+
+```bash
+aws service-quotas get-service-quota --service-code vpc --quota-code L-F678F1CE \
+  --query 'Quota.{name:QuotaName,value:Value}'
+aws service-quotas request-service-quota-increase --service-code vpc \
+  --quota-code L-F678F1CE --desired-value 10
+```
+
+It was raised to 10 on 23 September 2026 and approved the same afternoon. `docs/greenfield/release.md` 8.0s has the two failed runs. Requests are per region and per account, so a new account — the dedicated ones — starts again at 5.
+
 ## 2. Push the images first
 
 Both services are deployed by **digest**. `api_image` and `worker_image` are validated against `@sha256:<64 hex>`; a tag is refused. There are **four** repositories across three roots, and two of them have to exist before anything can be pushed:
@@ -588,7 +601,7 @@ A freshly applied stack will show several alarms in `INSUFFICIENT_DATA` until th
 | Deploy a new digest | edit `api_image` / `worker_image`, `terraform plan`, read it, `terraform apply`. The circuit breaker rolls back a task that cannot pass its health check. |
 | Widen a schema range | change `api_schema_range` / `worker_schema_range` and apply. Expand, migrate, contract: additive migration first, both binaries accepting the range, backfill, then behaviour. |
 | Change an alarm threshold | the thresholds are variables in `infra/modules/alerts`; surface the one you need in the root and apply. Spec 13.3 says thresholds are configuration versioned with the release. |
-| Rotate a secret value | `aws secretsmanager put-secret-value`, then `--force-new-deployment`. Terraform is not involved. |
+| Rotate a secret value | `aws secretsmanager put-secret-value`, then `--force-new-deployment`. Terraform is not involved. **Except `app-runtime-database`**, whose value is a live PostgreSQL password: a put on its own leaves a secret the database refuses. Put the new value, then `fss admin database-users ensure --rotate-password` to alter the role to match, then force the deployment — and never re-put it as part of a redeploy (`release.md` 5.1 and 8.0s). |
 | Add an alert recipient | append to `alert_emails`, apply, then confirm the subscription. |
 | Tear down a rehearsal run | The release workflow does it on `always()`, through `infra/scripts/rehearsal-teardown.sh`: caller-identity check, then `terraform destroy` with the same `name_prefix` and `assume_deployment_role=false`. Mind the object-lock caveat in 3.1. |
 
