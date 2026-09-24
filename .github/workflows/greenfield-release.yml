@@ -14,7 +14,7 @@ name: Greenfield release rehearsal
 # that nothing with the production prefix was touched, and writes the release record
 # last.
 #
-# ## Four rules this file keeps
+# ## Five rules this file keeps
 #
 # **CI never pushes an image.** `.github/workflows/greenfield-images.yml` builds and
 # prints digests; David pushes from his Mac against a directive. The digests are inputs
@@ -25,6 +25,14 @@ name: Greenfield release rehearsal
 # cloud declares `environment: rehearsal`, which David enables and which carries the
 # only OIDC role this workflow may assume (`fss-rh-deploy`, scoped to `fss-rh-*`). The
 # dry-run job declares no environment and therefore cannot obtain a credential at all.
+#
+# **No run relies on a single one-hour session.** `fss-rh-deploy`'s MaxSessionDuration
+# is 3600 seconds and a `full` run is longer than that: on 24 September run
+# 35948178549 expired at exactly one hour, inside the restore drill, and took the
+# teardown and the production-prefix guard with it — a leaked environment and an
+# unverified guard. The credential is therefore assumed three times, not once: at the
+# start, again before the drill, and again — on `always()` — before the teardown, each
+# renewal followed by the same identity assertion.
 #
 # **The dry run is exercised on every change to this file.** It prints the exact plan —
 # every terraform and aws invocation, in order — with no credential present, which is
@@ -1144,6 +1152,43 @@ jobs:
           npm run test:release
           npm run test:release:mutation
 
+      # The session this job assumed at its first step lasts an hour. The action is
+      # given no `role-duration-seconds` and `fss-rh-deploy`'s own MaxSessionDuration
+      # is 3600, so an hour is both the default and the ceiling — and a `full` run is
+      # longer than that. The eleventh full run (Actions 35948178549, 24 September)
+      # spent about seventeen minutes creating, twelve deploying, five on the
+      # bootstrap, the seed, the ranges and the smoke, and fifteen on the release
+      # suite; at exactly one hour the credential expired inside the drill's
+      # `aws rds wait db-instance-available` with `ExpiredToken`, and took the two
+      # always-on steps down with it — the environment leaked and the production-prefix
+      # guard never ran.
+      #
+      # So the session is renewed here, and again before the teardown, and each
+      # renewal is followed by the same identity assertion the first assumption makes:
+      # a renewal is a fresh assumption, and the steps after it act as whatever it
+      # produced. Raising the role's MaxSessionDuration and passing
+      # `role-duration-seconds: 7200` is the belt-and-braces follow-up; the role is
+      # defined outside this workflow, so it is not this change.
+      #
+      # aws-actions/configure-aws-credentials v4, the same pin as the first assumption.
+      - name: Renew the session before the restore drill
+        if: inputs.stage == 'full'
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502
+        with:
+          role-to-assume: ${{ secrets.FSS_REHEARSAL_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: ${{ steps.prefix.outputs.prefix }}
+
+      - name: The renewed identity is the rehearsal role and nothing else
+        if: inputs.stage == 'full'
+        run: |
+          set -euo pipefail
+          # The same check the first assumption gets, for the same reason: from here
+          # on this session is what every AWS call acts as, and a renewal that
+          # silently produced something else would be discovered by the resources it
+          # touched.
+          infra/scripts/rehearsal-caller-identity.sh fss-rh-deploy
+
       - name: Restore drill, Appendix E steps 1 to 9
         if: inputs.stage == 'full'
         env:
@@ -1191,6 +1236,34 @@ jobs:
           FSS_CARRY_WATERMARK: ${{ secrets.FSS_REHEARSAL_CARRY_WATERMARK }}
           FSS_CARRY_SOURCE_TABLE: ${{ secrets.FSS_REHEARSAL_CARRY_TABLE }}
         run: infra/scripts/rehearsal-carry-watermark.sh '${{ steps.prefix.outputs.prefix }}'
+
+      # The last renewal, and the one that matters most: the two steps below run on
+      # `always()`, which is precisely the case where the session may already be gone.
+      # On the eleventh full run both of them failed at their first call —
+      # `GetCallerIdentity … ExpiredToken`, exit 254 — so the run destroyed nothing and
+      # proved nothing about production. Renewing first gives them a fresh hour
+      # whatever happened above, and this step carries `always()` for the same reason
+      # they do: a renewal conditional on success is a renewal that is missing exactly
+      # when it is needed.
+      #
+      # aws-actions/configure-aws-credentials v4, the same pin as the first assumption.
+      - name: Renew the session before the teardown, whatever happened above
+        if: ${{ always() }}
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502
+        with:
+          role-to-assume: ${{ secrets.FSS_REHEARSAL_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: ${{ steps.prefix.outputs.prefix }}
+
+      - name: The renewed identity is still the rehearsal role and nothing else
+        if: ${{ always() }}
+        run: |
+          set -euo pipefail
+          # The teardown destroys and the guard reads production's inventory, so the
+          # question "which principal is this?" has to be answered again here rather
+          # than inherited from a step an hour ago. `rehearsal-teardown.sh` asks it a
+          # third time itself, which is the belt this is the braces for.
+          infra/scripts/rehearsal-caller-identity.sh fss-rh-deploy
 
       - name: Tear the rehearsal run down
         if: always()
