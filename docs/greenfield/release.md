@@ -453,6 +453,15 @@ tolerant of a run that created nothing — it reports `destroyed=nothing_created
 a `plan` run it costs seconds. Those two steps are also the whole of what a `teardown`
 run does, which is why the stage needed no new step at all.
 
+**A run must never rely on a single one-hour session.** `fss-rh-deploy`'s
+`MaxSessionDuration` is 3600 seconds, which is also the default the workflow's
+`configure-aws-credentials` step takes, and a `full` run is longer than an hour — so the
+job assumes the role three times: at the start, again before item 10's restore drill, and
+again, on `always()`, before items 13 and 14. Each renewal is followed by the identity
+check of item 2, because a renewal is a fresh assumption. The eleventh full run held one
+session, expired at exactly one hour inside the drill, and took the teardown and the
+production-prefix guard with it (8.0t).
+
 **What a `plan` run prints.** The plan's own output is values: both image references,
 the certificate ARN, the hostname, and every attribute Terraform can already resolve.
 It goes to a file in the runner's temporary directory, which is not the reports
@@ -497,10 +506,10 @@ before it run:
 8. [deploy] **Smoke** with the same `scripts/productionSmoke.mjs` production gets.
 9. [full] **Release suite (recorded mode, runner)**: the 42 scenarios (`npm run test:release`) and the **mutation check** (`npm run test:release:mutation`), which breaks each trap in turn and requires the suite to go red. They run in the runner against the job's own `postgres:16` service container, which is what they were built for. They do **not** touch the rehearsal database and could not: it is private — `publicly_accessible = false`, no NAT gateway, no bastion — so the step that used to assemble a URL from the rehearsal's outputs could never have connected. What runs against the rehearsal database is `fss verify` and `fss drill`, inside the VPC.
     [full] **Before it, the evidence the drill has to reconstruct** (lane g40), as its own step between item 6's bootstrap and item 7: `infra/scripts/release-seed-drill-evidence.sh infra/roots/rehearsal <prefix> --worker-digest D --phase before --workspace-slug rehearsal`. `docs/greenfield/restore-drill.md` 0.1 needs an accepted send, a prospect reply, a prospect-originated opt-out, a salesperson's own manual suppression inside its ten-minute window and an ordinary CRM edit to exist *before* the restore target is read, and nothing in this repository could produce any of them in a deployed environment — so the drill's own refusal fired on every fresh rehearsal, which is how the ninth full run ended (8.0q). `fss admin drill seed-evidence` produces all five through the domain's own entry points. The drill then adds `--phase after` between the baseline and the restore, so the restore genuinely loses work, and waits for RDS to report a `LatestRestorableTime` past the evidence before reading the target at all. **Production is never seeded**: the script refuses any prefix that is not `fss-rh-<run>` and the command refuses unless `FSS_DEPENDENCIES=recorded`.
-10. [full] **Restore drill**, Appendix E steps 1 to 9. The runner keeps the control plane (reading the latest restorable point, the restore itself, the wait, the teardown); two in-VPC tasks do the database work — `fss admin counts` for the baseline on the source, then one `fss drill` against the restored instance for steps 1 to 9, with one correlated log and per-step JSON. The runner reads the report and decides whether it is a pass, so a change to the tool cannot quietly relax the gate. It refuses to report a pass unless the baseline contained an accepted send, a reply, a suppression, a CRM edit and a migration — a drill against an empty database proves nothing. The drill task is fixed at `FSS_DEPENDENCIES=recorded` **in its task definition**, because `reconcile-sent`, `recover` and `watch-renew` all reach Gmail when it is live and a mode a caller passes is a mode a caller can forget.
+10. [full] **Restore drill**, Appendix E steps 1 to 9, preceded by a session renewal and its identity check. The runner keeps the control plane (reading the latest restorable point, the restore itself, the wait, the teardown); two in-VPC tasks do the database work — `fss admin counts` for the baseline on the source, then one `fss drill` against the restored instance for steps 1 to 9, with one correlated log and per-step JSON. The runner reads the report and decides whether it is a pass, so a change to the tool cannot quietly relax the gate. It refuses to report a pass unless the baseline contained an accepted send, a reply, a suppression, a CRM edit and a migration — a drill against an empty database proves nothing. The drill task is fixed at `FSS_DEPENDENCIES=recorded` **in its task definition**, because `reconcile-sent`, `recover` and `watch-renew` all reach Gmail when it is live and a mode a caller passes is a mode a caller can forget.
 11. [full] **Suppression journal replay and Gmail reconstruction**, against the recorded fake (no real mailbox in rehearsal unless you provide a rehearsal Google project). The second replay must insert nothing; no send may repeat. The drill above already ran both; this step reads the reports it left, which the drill wrote out of the captured task report under the names they have always had.
 12. [full] **Carry watermark** (Appendix G 20): the carry tooling must contain no writer at all, and — once a cutover is scheduled and the two optional secrets exist — the export must refuse a table with a post-watermark write. Before the cutover the step prints `carry drill skipped: no cutover watermark yet` and the record says `"carryDrill": "skipped_no_watermark"`. That is not a pass being claimed; it is the state being named.
-13. [every stage] **Tear down**, always, with bypass-governance — and tolerantly. The teardown is five steps (any one-off task still running, the restored instance, any manual snapshot carrying the run prefix, the object-locked journal objects, the root), and each treats the AWS error code for absence as "already done" rather than as a failure, because `if: always()` means it runs after a creation that never happened. A failure that is *not* an absence — an `AccessDenied`, a throttle — still stops it, and an unreadable state that is not "the root was never initialised" still stops it. The report says which: `destroyed=true`, or `destroyed=nothing_created`. `terraform destroy` requires every variable `apply` did, so the step that opens item 4 writes them to `run.auto.tfvars.json` beside the rehearsal root (identifiers only, ignored by `infra/.gitignore`) and the teardown refuses to destroy without that file rather than fail on a missing variable and leave the environment standing. To tear a run down by hand from a fresh checkout, recreate the file first: `name_prefix`, `api_image` and `worker_image` (`<repository>@<digest>`, from the release record or the run's inputs), `certificate_arn`, `api_hostname`, `assume_deployment_role: false`, `bootstrap: true`, and the two schema ranges read from `packages/domain/db/schemaRange.ts`; then run `rehearsal-teardown.sh <prefix>` from the root directory as the `fss-rh-deploy` session.
+13. [every stage] **Tear down**, always, with bypass-governance — and tolerantly, on a session renewed immediately before it so that a run which has already outlived its first hour can still destroy what it made. The teardown is five steps (any one-off task still running, the restored instance, any manual snapshot carrying the run prefix, the object-locked journal objects, the root), and each treats the AWS error code for absence as "already done" rather than as a failure, because `if: always()` means it runs after a creation that never happened. A failure that is *not* an absence — an `AccessDenied`, a throttle — still stops it, and an unreadable state that is not "the root was never initialised" still stops it. The report says which: `destroyed=true`, or `destroyed=nothing_created`. `terraform destroy` requires every variable `apply` did, so the step that opens item 4 writes them to `run.auto.tfvars.json` beside the rehearsal root (identifiers only, ignored by `infra/.gitignore`) and the teardown refuses to destroy without that file rather than fail on a missing variable and leave the environment standing. To tear a run down by hand from a fresh checkout, recreate the file first: `name_prefix`, `api_image` and `worker_image` (`<repository>@<digest>`, from the release record or the run's inputs), `certificate_arn`, `api_hostname`, `assume_deployment_role: false`, `bootstrap: true`, and the two schema ranges read from `packages/domain/db/schemaRange.ts`; then run `rehearsal-teardown.sh <prefix>` from the root directory as the `fss-rh-deploy` session.
 14. [every stage] **Assert nothing with the production prefix was touched**, always, including on a run that created nothing. The guard classifies every name it sees: the run's own resources, the two stable rehearsal repositories that carry no run, and anything production's — which it refuses. A state it cannot list is reported as "the run created nothing" rather than swallowed, and the inventory comparison still runs. An inventory recorded only by a dry run is refused rather than compared: the workflow records the sentinel `["dry-run: no production inventory was read"]` when it validates the prefix, and comparing production against that would be a pass nobody earned. The guard runs in dry mode on every pull request, so every branch is exercised without a credential.
 15. [full] **Write the release record**, last. It names the two digests, the desktop stamp, and a `releaseGateReference` you will need in section 6.
 
@@ -1713,9 +1722,97 @@ That leaves one question open and it is David's: section 6 step 2 reads a
 and there is no record to read. The recommendation on the table is that sending waits for
 one passing drill rather than for a waiver of the reference.
 
+### 8.0t What the eleventh full run proved: the run outlived its credentials (24 September, night)
+
+**The job held one session, and the session was shorter than the run.** Run 35948178549,
+at the release commit `66203322`, prefix `fss-rh-202609240242`, assumed `fss-rh-deploy`
+exactly once — at the step *Assume the rehearsal deployment role*, about **02:42Z**.
+`aws-actions/configure-aws-credentials` is given a role ARN and a session name and no
+`role-duration-seconds`, so the session lasts the default **3600 seconds**, which is also
+`fss-rh-deploy`'s own `MaxSessionDuration`: an hour is both the default and the ceiling.
+The run is longer than an hour and has been for several releases — create about **17
+minutes**, deploy about **12**, the bootstrap, the evidence seed, the schema ranges and
+the smoke about **5**, the release suite about **15**, and the drill at least **10** more.
+
+At **03:42Z**, exactly one hour in, the credential expired. Three things then happened, in
+this order:
+
+* the restore drill died inside `aws rds wait db-instance-available` —
+  `Waiter DBInstanceAvailable failed: An error occurred (ExpiredToken) …`, exit **255**.
+  Appendix E step 1 had genuinely been issued: the point-in-time restore was accepted and
+  the restored instance `fss-rh-202609240242-pg-restored` was being created when the
+  waiter lost its credential. What failed was the wait, not the restore;
+* *Tear the rehearsal run down* ran, as `if: always()` says it must, and failed at its
+  **first** call — `GetCallerIdentity … ExpiredToken`, exit **254**. Nothing was
+  destroyed. The whole environment leaked, the restored instance with it;
+* *Nothing with the production prefix was touched* ran and failed the same way, at the
+  same first call, for the same reason.
+
+**The release suite had already passed**, at **03:32Z**, at this commit: the 42 scenarios
+and the mutation check both green in the runner, ten minutes before the credential went.
+So nothing about the code under test is implicated in any of this.
+
+**The guard's failure was an authentication failure, not a production touch.** This
+matters more than the leak, because "nothing with the production prefix was touched" is
+the last clause of Appendix G 39 and the run left it unproved rather than disproved. The
+guard never reached its inventory read: it could not obtain an identity, so it made no
+comparison at all. Production was checked by hand immediately afterwards with the admin
+profile — both task definitions still at **revision 3**, both services stable at their
+declared counts — and nothing had moved. The correct reading of that step's red is "the
+run could not tell you", not "the run found something".
+
+**The leaked environment was torn down with a `stage=teardown` dispatch** for the same
+prefix, which is exactly the stage 8.0d created for this shape of failure (3.0). It
+succeeded: a fresh dispatch gets a fresh session, which is the whole of what the original
+teardown was missing.
+
+**The fix: the run renews its session, twice.** `.github/workflows/greenfield-release.yml`
+now assumes the role **three** times rather than once — at the start as before, again
+immediately before the restore drill, and again, on `always()`, immediately before the
+teardown — and each renewal is followed by the same
+`infra/scripts/rehearsal-caller-identity.sh fss-rh-deploy` assertion the first assumption
+gets, because a renewal is a fresh assumption and the steps after it act as whatever it
+produced. The renewal before the teardown carries `always()` for the same reason the
+teardown does: a renewal conditional on the steps above succeeding is a renewal that is
+missing exactly when it is needed. The `teardown` stage gets the same pair — it runs every
+step whose condition is `always()` — so a standalone teardown dispatch is unchanged in
+what it does and now starts its destroy on a session it just obtained.
+
+**The follow-up, which is not this change: 7200 seconds on both sides.** Neither the role
+nor the workflow asks for a longer session, and `role-duration-seconds` above 3600 is
+refused outright while `fss-rh-deploy`'s `MaxSessionDuration` is 3600. Raising the role to
+**7200** and then passing `role-duration-seconds: 7200` here is the belt-and-braces
+version: the renewals make a two-hour run safe on today's role, and a two-hour session
+would make them unnecessary rather than wrong. The role is defined outside this
+repository's per-run state, so it is a separate, deliberate step.
+
+**The desktop release, at the third attempt.** 8.0s left the signed build unverified after
+run 35935100994 failed importing the `.p12`. The **second** build got past the keychain and
+failed at notarization:
+
+```
+HTTP status code: 403. Invalid or inaccessible developer team ID for the provided Apple ID
+```
+
+`FSS_MAC_TEAM_ID` did not belong to the Apple ID in `FSS_APPLE_ID`. Apple reports this as
+an authorization failure on the submission rather than as a bad argument, which is why it
+arrives *after* a successful signing and a full upload. David verified the trio locally
+with `xcrun notarytool history --keychain-profile …` — the command that answers "do these
+three values work together?" in seconds — and re-set the secrets from what that proved.
+
+The **third** build, run **35951921111**, signed, notarized, stapled, and published:
+**Callie 1.0.0**, built from commit `66203322`, manifest signed, and the zip's `sha256`
+verified from outside the build. It reached the update channel at **03:37Z**. Item 13 of
+8.1 is closed by it.
+
+**Post-release, the desktop workflow should preflight.** `xcrun notarytool history
+--apple-id … --team-id … --password …` exercises exactly the credential triple that failed
+here and returns in seconds. Run before the build rather than after it, a wrong team id
+costs a few seconds instead of a full signing, packaging and upload.
+
 ### 8.1 Still unverified
 
-Production is applied, deployed, bootstrapped and smoked at `66203322`, and ten rehearsal runs have existed (8.0s). What follows is what that still does not settle. Items 1 to 10 were written before any of it ran, and each carries whatever a later run answered; items 11 to 16 are what is open on 24 September, and the first of them is the release record this release does not have.
+Production is applied, deployed, bootstrapped and smoked at `66203322`, the signed desktop build is published at the same commit (8.0t), and eleven rehearsal runs have existed (8.0s, 8.0t). What follows is what that still does not settle. Items 1 to 10 were written before any of it ran, and each carries whatever a later run answered; items 11 to 17 are what is open on 24 September, and the first of them is the release record this release does not have.
 
 1. Whether `resourcegroupstaggingapi get-resources` is readable by the rehearsal role. `rehearsal-prefix-guard.sh` uses it to compare the production inventory before and after; if the role cannot read production at all, the scenario still passes — "could not address" is the claim — but the script will need the read moved to a separate inventory role to produce a useful diff. Two things about that read changed in G12f and neither could be tested against AWS: the tag filter is now `Key=Name` with no value, because `get-resources` matches tag values exactly and `Values=fss-prod*` would have matched nothing and made the comparison a comparison of two empty lists; and the production names are selected and **sorted** locally, because the API promises no order and an unstable one would fail the comparison for no reason. If the account holds many `Name`-tagged resources, this read is now larger than it was.
 2. Whether the drill can run at all: **nothing in this repository builds an `fss` executable.** No package declares a `bin`, and no step of the release workflow installs one, so every non-dry `fss admin …` in `rehearsal-restore-drill.sh` and every `fss carry export` in `rehearsal-carry-watermark.sh` would fail with `command not found`. Both scripts now refuse up front and say so, rather than discovering it after a restored RDS instance exists — but the CLI itself is another lane's, and the drill cannot pass until it lands. **Answered, 23 and 24 September: nothing puts an `fss` on PATH and nothing needs to.** No package declares a `bin` and that is now deliberate — every `fss` invocation is a command override of the worker image on a task definition inside the VPC, launched through `release_run_task`: the deploy's five one-off tasks, the workspace bootstrap, the drill's `fss admin counts`, the drill-evidence seeder and `fss drill` itself all ran that way in the cloud (8.0n to 8.0s). What is still open about the drill is steps 1 to 3, which is item 12.
@@ -1727,9 +1824,10 @@ Production is applied, deployed, bootstrapped and smoked at `66203322`, and ten 
 8. How long the whole rehearsal takes. The workflow's timeout is 180 minutes, which is a guess dominated by the Multi-AZ restore in Appendix E step 1. The rehearsal database is now `db.t4g.small` and Multi-AZ, like production's (`docs/decisions/g12c-the-topology-answers-are-root-defaults.md`), so that guess is at last a guess about the right operation — and it is the first thing to measure.
 9. Whether `fss-rh-deploy` can read the RDS-managed master secret the database URL is assembled from. The secret is named `rds!db-<id>` by RDS and does not carry the `fss-rh-` prefix, so `ReadTheRdsManagedMasterSecretOfThisNamespacesInstance` allows `DescribeSecret` and `GetSecretValue` on `rds!db-*` under `aws:ResourceTag/aws:rds:primaryDBInstanceArn` matching this namespace's instance ARNs (the global key since 8.0g; the service-specific one was refused by the simulator). **Creating** it is proved necessary and is now allowed (8.0f); **reading** it has never run against the service. The check simulates `DescribeSecret` under that key. Runbook 6.5 has the detail; symptom is an `AccessDenied` at "Assemble the rehearsal database URL" and no connection string.
 10. Whether the first real rehearsal takes the skip branch of the carry drill, as it should before the cutover, and whether the release record reading `"carryDrill": "skipped_no_watermark"` is legible enough at enable time. Both branches run offline on every pull request; neither has run against AWS.
-11. **A release record.** There is none. Every stage has passed at some commit — create, deploy, the bootstrap, the schema ranges, the smoke, the release suite, the drill's evidence — and the final `full` run at `66203322` (35948178549) is in flight and expected to reach the drill step and fail there, by the decision in 8.0s. Only a `full` run that passes every step writes a record, so the `releaseGateReference` section 6 step 2 reads before sending can be enabled does not exist yet and will come from the post-release run that passes the drill.
-12. **The restore drill past its baseline — open, and post-release item 1.** The baseline exists; steps 1 to 3 do not run, for the five reasons 8.0s lists: no dialable subject, no suppression the restore loses, no fence left in `dispatching` or `reconciling`, no mailbox whose recorded envelope key the drill task can unwrap, and an `--at-failure` file nothing writes. Each of them refuses with its own reason rather than passing vacuously, which is why recording them is honest and relaxing an assertion would not be. David chose on 24 September to record them and ship the release path; the drill is the first thing after it, and the run that closes this item is also the run that writes item 11's record.
-13. **The signed desktop build.** Run 35935100994 never got past importing the Developer ID certificate (8.0s), so nothing has been signed, notarised, stapled, published as an update, or installed from a signed artifact. The `desktop_commit_stamp` a `full` run records is a commit, not evidence that a build of it exists.
+11. **A release record.** There is none. Every stage has passed at some commit — create, deploy, the bootstrap, the schema ranges, the smoke, the release suite, the drill's evidence — and the final `full` run at `66203322` (35948178549) ended at the drill step, though not for the reason 8.0s predicted: its credential expired at exactly one hour, inside `aws rds wait db-instance-available`, before the drill could reach the open steps of item 12 (8.0t). Only a `full` run that passes every step writes a record, so the `releaseGateReference` section 6 step 2 reads before sending can be enabled does not exist yet and will come from the post-release run that renews its session and passes the drill.
+12. **The restore drill past its baseline — open, and post-release item 1.** The baseline exists; steps 1 to 3 do not run, for the five reasons 8.0s lists: no dialable subject, no suppression the restore loses, no fence left in `dispatching` or `reconciling`, no mailbox whose recorded envelope key the drill task can unwrap, and an `--at-failure` file nothing writes. Each of them refuses with its own reason rather than passing vacuously, which is why recording them is honest and relaxing an assertion would not be. David chose on 24 September to record them and ship the release path — his option 2, restated after the eleventh run's expiry (8.0t) and unchanged by it — so the drill stays **open** and stays post-release item 1; the drill's Step 1 point-in-time restore is the one part of it the eleventh run did issue, and it was the wait rather than the restore that died. The run that closes this item is also the run that writes item 11's record.
+13. **The signed desktop build — answered, 24 September.** Run 35935100994 never got past importing the Developer ID certificate (8.0s) and the second build was refused at notarization for a team id that did not belong to the Apple ID; the **third**, run 35951921111, signed, notarized, stapled and published Callie 1.0.0 from commit `66203322` to the update channel at 03:37Z, manifest signed and zip `sha256` verified from outside the build (8.0t). What that still does not settle is the far end of it: nobody has installed the published artifact on a Mac, or taken an automatic update from the channel, so Gatekeeper's verdict on a real download and the updater's behaviour against a signed manifest are both unmeasured.
 14. **The first sign-in, and the Gmail consent.** A live API refuses to start without the sign-in parts (section 4) and production started, so they are configured — which is not the same as used. Nobody has completed the hosted-domain sign-in, adopted the provisional admin row 5.1a created, or granted the mailbox consent whose callback lands on `https://api.usecallie.com/oauth/gmail/callback` (5.4). The first of those also decides whether `admin.outcome: provisional_created` behaves as `docs/greenfield/identity.md` says it will.
 15. **Sending.** `FSS_SENDING_ENABLED` is `false` and section 6 has not been run, so nothing has been sent from production. 12.7's authentication checks, the six-week ramp, and the journal's first real write — item 6 above, which surfaces only as `SuppressionJournalWriteFailures` — are all unproved in production.
 16. **The exact rehearsal deployment policy, put back.** `fss-rh-deploy` still carries the discovery document of 8.0h: a wide allow on the services the tree uses, with guards, for one pass of `create`, `deploy` and `full`. The exact policy derived from the CloudTrail record of that pass is put back only after the final run above has passed (`infra-apply-runbook.md` 1.1b, step 5), and until then no rehearsal run proves anything about the policy this release ships. `fss-prod-deploy` was never widened and the renderer refuses to widen it.
+17. **A `full` run that outlasts its credentials, end to end.** The run is longer than the one-hour session the job used to hold, and 8.0t is what that cost: an expired token inside the drill's RDS waiter, a teardown and a production-prefix guard that both failed at their first call, and a leaked environment removed by a separate `stage=teardown` dispatch. The workflow now renews the session before the drill and again — on `always()` — before the teardown, each renewal followed by the identity assertion. **None of that has run against AWS.** What a credentialed run has to show is that a renewal mid-job succeeds at all (the OIDC token is requested fresh each time), that the renewed session passes `rehearsal-caller-identity.sh`, and that the teardown and the guard complete on it. The belt-and-braces follow-up — `MaxSessionDuration` 7200 on `fss-rh-deploy` and `role-duration-seconds: 7200` in the workflow — is not done and is deliberately separate: the role lives outside this repository.
