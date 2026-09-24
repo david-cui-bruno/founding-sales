@@ -14,7 +14,13 @@ jobs:
     # container, which GitHub provides on Linux runners. The macOS-specific parts of
     # the product (Electron packaging, Keychain, tel: handoff) are not in this tree.
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # 45, not 20. The "Release mutation check" step runs the whole release suite once
+    # per mutation, about 18 s each, and there are 58 mutations today, so that step
+    # alone takes about 17 minutes after the roughly two-minute gate. The last three
+    # green runs took 17m11s, 18m26s and 19m06s, and PR 188's run (three new mutations)
+    # was cancelled at the 20-minute limit with the mutation check at 17m14s. Every
+    # mutation adds about 18 s, so this limit has to grow as the traps do.
+    timeout-minutes: 45
     defaults:
       run:
         shell: bash
