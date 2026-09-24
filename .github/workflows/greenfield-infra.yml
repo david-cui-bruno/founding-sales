@@ -95,9 +95,14 @@ jobs:
           # deploy into, and the rehearsal and production are moving into dedicated
           # accounts (docs/greenfield/accounts.md). Every root takes aws_account_id as
           # a variable, so the one place twelve digits may appear outside a test
-          # fixture is that variable's own default.
+          # fixture is that variable's own default — or a comment, which is prose
+          # rather than a decision the file makes (g37 names the bucket a real
+          # rehearsal run left behind, and that name ends in its account). The
+          # release suite reads comments too, with a pattern that admits twelve
+          # digits only where they really are an account id.
           account_literals=$(grep -rInE '[0-9]{12}' --include='*.tf' infra/modules infra/roots \
             | grep -v '/tests/' \
+            | grep -vE ':[0-9]+: *#' \
             | grep -vE ':[0-9]+: *default +=' || true)
           if [ -n "$account_literals" ]; then
             echo "::error::a Terraform file names an account id outside a variable default"

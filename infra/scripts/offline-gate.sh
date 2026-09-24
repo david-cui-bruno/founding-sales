@@ -46,8 +46,16 @@ check "a greenfield root must never point at a legacy state key" \
 # builds every ARN from it, so the one place twelve digits may appear outside a test
 # fixture is that variable's own `default` — which is what keeps today's behaviour for
 # a caller who states no account.
+#
+# A comment is prose rather than a decision the file makes, and this scan is twelve
+# digits anywhere on the line: `infra/roots/rehearsal/main.tf` names the bucket a real
+# rehearsal run left behind (g37), and that name ends in the account it was left in.
+# `test/release/accountAgnostic.check.ts` reads comments too, with a pattern that
+# admits twelve digits only where they really are an account id, so an ARN written
+# into a comment is still refused there.
 account_literals=$(grep -rInE '[0-9]{12}' --include='*.tf' infra/modules infra/roots \
   | grep -v '/tests/' \
+  | grep -vE ':[0-9]+: *#' \
   | grep -vE ':[0-9]+: *default +=' || true)
 if [ -n "$account_literals" ]; then
   echo "FAIL: a Terraform file names an account id outside a variable default"
