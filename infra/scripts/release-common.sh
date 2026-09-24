@@ -541,15 +541,19 @@ release_run_task() {
   # (e), (g): the digest, the database and the credential entry, read from the
   # registered definition rather than from what the caller believes.
   #
-  # The host is checked against the *effective* one: a drill step pointed at the
-  # restored instance overrides it on purpose, and comparing the definition's value
-  # in that case would refuse the one launch the override exists for.
+  # The definition's host is always compared with `--database-host`, which names the
+  # host the definition was registered with — the primary. A drill step pointed at the
+  # restored instance leaves `--database-host` at the primary and carries the restored
+  # endpoint as the `FSS_DATABASE_HOST` override, which is what the container connects
+  # to and what the log line names as the target. Until lane g48 an override that
+  # differed from `--database-host` switched this comparison off, so a wrong
+  # `--database-host` plus any override was accepted; and the drill passed the restored
+  # endpoint as both, so the comparison ran against it and refused the one launch the
+  # override exists for (run 35962272085, 24 September 2026).
   local definition
   definition="$(release_task_definition "$environment" "$task_definition")"
   if [ -n "$definition" ]; then
-    local definition_host_expectation=$database_host
-    if [ "$effective_host" != "$database_host" ]; then definition_host_expectation=''; fi
-    release_guard_task_definition "$definition" "$container" "$image_digest" "$definition_host_expectation" "$secret_arn" || return 1
+    release_guard_task_definition "$definition" "$container" "$image_digest" "$database_host" "$secret_arn" || return 1
     rehearsal_log "$step: target database host $effective_host"
   fi
 

@@ -138,6 +138,36 @@ judge refused "a credential-shaped environment override" \
 judge allowed "the restored instance's endpoint as an environment override" \
   release_run_task "${BASE[@]}" --env 'FSS_DATABASE_HOST=fss-rh-check-pg-restored.example' -- migrate
 
+# (g) with (h): the drill's launch, and the two ways it has been wrong (lane g48).
+# `--database-host` names the host the task definition was registered with, the
+# primary, and the restored endpoint travels only as the override. Run 35962272085
+# (24 September 2026) passed the restored endpoint as both and was refused after a
+# restore that had succeeded; and until g48 an override that differed from
+# `--database-host` switched the definition's host check off, so a wrong
+# `--database-host` was accepted whenever an override came with it.
+judge refused "the restored endpoint as --database-host while the definition names the primary" \
+  release_run_task "${BASE[@]}" --database-host fss-rh-check-pg-restored.example \
+  --env 'FSS_DATABASE_HOST=fss-rh-check-pg-restored.example' -- drill
+
+judge refused "a --database-host other than the definition's, even with a restored-endpoint override" \
+  release_run_task "${BASE[@]}" --database-host other-pg.example \
+  --env 'FSS_DATABASE_HOST=fss-rh-check-pg-restored.example' -- drill
+
+# And the allowed drill launch says where it is going: the target the log names is the
+# override, not the host the definition was compared with.
+drill_output="$(release_run_task "${BASE[@]}" --step drill-target \
+  --env 'FSS_DATABASE_HOST=fss-rh-check-pg-restored.example' -- drill 2>&1)"
+drill_status=$?
+if [ "$drill_status" -ne 0 ]; then
+  echo "GUARD_TOO_STRICT: the wrapper refused the drill launch with the primary as --database-host and the restored endpoint as the override"
+  failures=$((failures + 1))
+elif ! printf '%s\n' "$drill_output" | grep -qF 'drill-target: target database host fss-rh-check-pg-restored.example'; then
+  echo "GUARD_SURVIVED: the drill launch did not name the restored endpoint as its target database host"
+  failures=$((failures + 1))
+else
+  proven=$((proven + 1))
+fi
+
 # The command is an argument like any other.
 judge refused "a production name in the command's own arguments" \
   release_run_task "${BASE[@]}" -- migrate --report /tmp/fss-prod-migrate.json

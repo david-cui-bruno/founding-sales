@@ -71,6 +71,15 @@ const MUTATIONS = [
       'A failed one-off task is the one whose output matters. Run 35876269976 (23 September 2026) printed "container migration exited 21" and nothing else, because the wrapper returned on the verdict before the fetch.',
   },
   {
+    name: 'the drill passes the restored endpoint as the host the definition is checked against',
+    file: 'infra/scripts/rehearsal-run-task.sh',
+    find: '  --database-host "$DATABASE_HOST" \\\n',
+    replace: '  --database-host "${FSS_RESTORED_DATABASE_HOST:-$DATABASE_HOST}" \\\n',
+    suite: ['run', 'test:release'],
+    because:
+      'This is run 35962272085 exactly (24 September 2026): the point-in-time restore succeeded and the drill\u2019s first task was refused, "this task would connect to \'<prefix>-pg.\u2026\' and the database this release targets is \'<prefix>-pg-restored.\u2026\'", because the front door passed the restored endpoint as --database-host as well as the override, and the task definition names the primary. The wrapper suite calls release_run_task directly and cannot see which host the front door passes, so scenario 39 drives rehearsal-run-task.sh with a restored host and has to go red.',
+  },
+  {
     name: 'the worker image stops verifying the database\u2019s certificate',
     file: 'Dockerfile.worker',
     find: '    PGSSLMODE=verify-full \\\n',
