@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import pg from 'pg';
@@ -109,20 +109,24 @@ function recordedEnvironment(): Record<string, string | undefined> {
 async function run(
   argv: readonly string[],
   overrides: Record<string, string | undefined> = {},
-): Promise<{ readonly code: number; readonly stdout: string }> {
+): Promise<{ readonly code: number; readonly stdout: string; readonly stderr: string }> {
   const printed: string[] = [];
+  const logged: string[] = [];
   const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(chunk => {
     printed.push(String(chunk));
     return true;
   });
-  const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+  const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(chunk => {
+    logged.push(String(chunk));
+    return true;
+  });
   try {
     const code = await main(argv, {
       DATABASE_URL: databaseUrl,
       FSS_MIGRATION_DATABASE_URL: databaseUrl,
       ...overrides,
     });
-    return { code, stdout: printed.join('') };
+    return { code, stdout: printed.join(''), stderr: logged.join('') };
   } finally {
     stdout.mockRestore();
     stderr.mockRestore();
@@ -310,5 +314,112 @@ describe('fss drill', () => {
     // already recorded what it saw — and has not written the step it never reached.
     expect(JSON.parse(readFileSync(join(drillReports, 'step1-restore-holds.json'), 'utf8'))).toHaveProperty('count');
     expect(existsSync(join(drillReports, 'step2-journal-replay.json'))).toBe(false);
+  });
+});
+
+/**
+ * Lane g53: the drill makes its own reports directory, and takes the source baseline
+ * as a value.
+ *
+ * The thirteenth full run (24 September 2026) exited 21 on `ENOENT … open
+ * '/tmp/fss-drill/step0-baseline.json'`: nothing in the container creates the reports
+ * directory. Behind that write was the wrong baseline: launched with `--as-of`, the
+ * drill measured step 0 again on the restored copy rather than using the counts the
+ * runner took on the source. A one-off task can be handed nothing but its command, so
+ * the source baseline now travels as `--baseline-json`.
+ *
+ * ## The vacuous-pass trap
+ *
+ * "The handed baseline was used" could pass against a drill that ignored it and
+ * measured its own, so the database here has nothing in it: a drill that re-measured
+ * would refuse `baseline_empty` at step 0 and never reach step 1. Reaching step 1 is
+ * the proof, together with the handed counts on disk under the name step 8 reads.
+ */
+describe('fss drill --baseline-json, into a reports directory it makes (lane g53)', () => {
+  const handed = {
+    asOf: '2026-09-21T00:00:00.000Z',
+    sends: 2,
+    replies: 3,
+    suppressions: 4,
+    crm_edits: 5,
+    migrations: 30,
+  };
+
+  it('creates the reports directory, writes the handed baseline as step 0 and uses it', async () => {
+    const drillReports = join(mkdtempSync(join(tmpdir(), 'fss-g53-')), 'not', 'there', 'fss-drill');
+    expect(existsSync(drillReports)).toBe(false);
+
+    const { code, stderr } = await run(
+      ['drill', '--reports', drillReports, '--baseline-json', JSON.stringify(handed), '--all-mailboxes'],
+      recordedEnvironment(),
+    );
+
+    // A refusal at step 1 (20), not a thrown ENOENT (21): the directory was made first.
+    expect(code, stderr).toBe(20);
+    expect(stderr).not.toContain('ENOENT');
+    expect(statSync(drillReports).isDirectory()).toBe(true);
+    expect(statSync(drillReports).mode & 0o777).toBe(0o700);
+    expect(JSON.parse(readFileSync(join(drillReports, 'step0-baseline.json'), 'utf8'))).toEqual(handed);
+    const summary = JSON.parse(readFileSync(join(drillReports, 'drill.json'), 'utf8')) as Record<string, unknown>;
+    expect(summary['baselineAt']).toBe(handed.asOf);
+    expect(summary['stoppedAt']).toBe('step1-restore-holds');
+    // Not measured again: the measured form records a step0-baseline step, and a
+    // measurement here would have found an empty database and refused before step 1.
+    const steps = summary['steps'] as readonly Record<string, unknown>[];
+    expect(steps.map(entry => entry['step'])).not.toContain('step0-baseline');
+    expect(stderr).not.toContain('baseline_empty');
+  });
+
+  it('refuses, naming the directory, when the reports directory cannot be made', async () => {
+    const blocker = join(mkdtempSync(join(tmpdir(), 'fss-g53-blocked-')), 'a-file');
+    writeFileSync(blocker, 'not a directory\n');
+    const { code, stderr } = await run(
+      ['drill', '--reports', join(blocker, 'fss-drill'), '--baseline-json', JSON.stringify(handed)],
+      recordedEnvironment(),
+    );
+    expect(code, stderr).toBe(20);
+    expect(stderr).toContain('reports_unwritable');
+  });
+
+  it('refuses a handed baseline that is not a JSON object, or carries no instant, as baseline_unreadable', async () => {
+    const noInstant = JSON.stringify({ ...handed, asOf: undefined });
+    for (const value of ['{"asOf":', '[1,2,3]', 'null', noInstant]) {
+      const drillReports = mkdtempSync(join(tmpdir(), 'fss-g53-unreadable-'));
+      const { code, stderr } = await run(
+        ['drill', '--reports', drillReports, '--baseline-json', value],
+        recordedEnvironment(),
+      );
+      expect(code, value).toBe(20);
+      expect(stderr, value).toContain('baseline_unreadable');
+      expect(existsSync(join(drillReports, 'step1-restore-holds.json')), value).toBe(false);
+    }
+  });
+
+  it('keeps the baseline_empty refusal for a handed baseline with nothing in it', async () => {
+    const { code, stderr } = await run(
+      [
+        'drill',
+        '--reports',
+        mkdtempSync(join(tmpdir(), 'fss-g53-empty-')),
+        '--baseline-json',
+        JSON.stringify({ ...handed, sends: 0 }),
+      ],
+      recordedEnvironment(),
+    );
+    expect(code).toBe(20);
+    expect(stderr).toContain('baseline_empty');
+  });
+
+  it('refuses the handed baseline beside an instant or a file, before a database is opened', async () => {
+    const both = await run(
+      ['drill', '--reports', reports, '--as-of', handed.asOf, '--baseline-json', JSON.stringify(handed)],
+      recordedEnvironment(),
+    );
+    expect(both.code).toBe(64);
+    const file = await run(
+      ['drill', '--reports', reports, '--baseline', join(reports, 'x.json'), '--baseline-json', JSON.stringify(handed)],
+      recordedEnvironment(),
+    );
+    expect(file.code).toBe(64);
   });
 });

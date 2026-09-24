@@ -236,7 +236,7 @@ fss migrate [--report <path>] [--allow-any-role]   apply every unapplied migrati
 fss migrate up | status                            the spellings the restore drill uses
 fss schema-version                                 the applied version and both declared ranges
 fss verify [--actor <name>] [--note <text>]        version, configured parts, and a rolled-back write
-fss drill --reports <dir> (--baseline <path> | --as-of <instant>)
+fss drill --reports <dir> (--baseline <path> | --baseline-json <json> | --as-of <instant>)
           [--from <instant>] [--since <instant>] [--admin-user <uuid>]
 fss admin counts --as-of <instant>                 the five protected kinds of Appendix G 11
 fss admin database-users ensure [--runtime-secret <VARIABLE>] [--rotate-password]

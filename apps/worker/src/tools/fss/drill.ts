@@ -1,4 +1,4 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { SessionQueryable } from '@fss/domain/db';
 import {
@@ -67,10 +67,22 @@ export interface DrillInput {
   readonly invocation: Omit<AdminInvocation, 'options' | 'switches'>;
   /**
    * The baseline `fss admin counts --as-of <restore target>` wrote before the restore.
-   * When absent, `asOf` is given instead and the drill measures the baseline itself.
+   * When neither this nor `baselineJson` is given, `asOf` is, and the drill measures the
+   * baseline itself.
    */
   readonly baselinePath?: string | undefined;
-  /** The instant RDS restored to. Required when no baseline file is given. */
+  /**
+   * The same baseline as a JSON value rather than a file (lane g53, `--baseline-json`).
+   *
+   * This is how the rehearsal hands the drill task the counts it measured on the
+   * *source* before the restore. The drill runs as a one-off Fargate task: its
+   * filesystem is created with it, there is no shared volume and its role has no S3,
+   * so a file on the runner cannot be named here. The value is written to
+   * `<reports>/step0-baseline.json` and that file is the baseline from then on, so
+   * step 8's `--before` reads exactly what was handed over.
+   */
+  readonly baselineJson?: string | undefined;
+  /** The instant RDS restored to. Required when no baseline, as a file or a value, is given. */
   readonly asOf?: string | undefined;
   readonly reportsDirectory: string;
   /** Appendix E.2's "restore point minus one hour". Derived from the baseline when absent. */
@@ -124,35 +136,63 @@ export async function runDrill(input: DrillInput): Promise<DrillResult> {
     switches: new Set(switches),
   });
 
-  // Step 0. The baseline, from the file the runner already wrote or measured here.
+  // The reports directory, before the first write (lane g53). Nothing else creates it:
+  // the worker image makes `/tmp` and nothing under it and the drill task definition
+  // mounts nothing, so `--reports /tmp/fss-drill` did not exist and the thirteenth full
+  // run (24 September 2026) died on its first write with an uncaught ENOENT and exit
+  // 21. A directory that cannot be made is a refusal naming it, not a thrown error.
+  try {
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+  } catch (error) {
+    const code = (error as { code?: unknown }).code;
+    return {
+      ok: false,
+      reason: 'reports_unwritable',
+      detail: `--reports names the directory each step's report is written into, and '${directory}' could not be created (${typeof code === 'string' ? code : 'unknown error'})`,
+    };
+  }
+
+  // Step 0. The baseline: handed over, read from a file, or measured here.
   //
-  // Both forms exist because both callers do: the shell drill writes the baseline
-  // *before* the restore and hands the file over, while an operator running the drill
-  // against an already-restored instance has only the instant. Either way the counts
-  // are as of the instant RDS restored to, never of now.
-  let baselinePath = input.baselinePath;
+  // Three forms, because three callers exist, and exactly one is given (the grammar's
+  // `oneOf`; here a value wins over a file and a file over an instant):
+  //
+  //   * `--baseline-json` is the rehearsal's. The baseline is measured on the *source*
+  //     before the restore, by a separate one-off task, and comes back to the runner
+  //     through that task's log stream; the runner hands it to this task as a value in
+  //     the task override, because nothing else reaches a Fargate task. It is an
+  //     instant and five counts, all public.
+  //   * `--baseline <path>` is an operator's with the file on the same machine.
+  //   * `--as-of <instant>` is an operator's against an already-restored instance with
+  //     only the instant. The drill measures step 0 itself — on the database it is
+  //     connected to, which is the restored copy, so it is the weaker form and never the
+  //     rehearsal's. The rehearsal used to pass it and so compared "no suppression
+  //     lost" against the restored database's own counts (lane g53).
+  //
+  // `--as-of` is not needed beside either baseline form. It is only the instant a
+  // measured baseline is taken at: `replayFrom` and `since` derive from the baseline's
+  // own `asOf` when not given, and step 8's recovery point is measured from it too.
+  let baselinePath: string;
   let baseline: Record<string, unknown>;
-  if (baselinePath === undefined) {
-    if (input.asOf === undefined) {
+  if (input.baselineJson !== undefined) {
+    let handed: unknown;
+    try {
+      handed = JSON.parse(input.baselineJson);
+    } catch {
+      handed = undefined;
+    }
+    if (typeof handed !== 'object' || handed === null || Array.isArray(handed)) {
       return {
         ok: false,
         reason: 'baseline_unreadable',
-        detail: 'name the baseline file with --baseline, or the instant RDS restored to with --as-of',
+        detail: '--baseline-json carries the counts measured on the source before the restore, as one JSON object',
       };
     }
+    baseline = handed as Record<string, unknown>;
     baselinePath = join(directory, 'step0-baseline.json');
-    const measured = await step(
-      'step0-baseline',
-      directory,
-      async () => await countsCommand(invoke({ '--as-of': input.asOf ?? '', '--report': baselinePath ?? '' })),
-      () => null,
-    );
-    steps.push(measured);
-    if (!measured.ok) {
-      return { ok: false, reason: 'baseline_unreadable', detail: measured.failure ?? 'the baseline could not be measured' };
-    }
-    baseline = measured.report as Record<string, unknown>;
-  } else {
+    await writeFile(baselinePath, `${JSON.stringify(baseline, null, 2)}\n`, { mode: 0o600 });
+  } else if (input.baselinePath !== undefined) {
+    baselinePath = input.baselinePath;
     try {
       baseline = JSON.parse(await readFile(baselinePath, 'utf8')) as Record<string, unknown>;
     } catch {
@@ -162,6 +202,28 @@ export async function runDrill(input: DrillInput): Promise<DrillResult> {
         detail: '--baseline names the counts written before the restore, at the instant it restored to',
       };
     }
+  } else {
+    if (input.asOf === undefined) {
+      return {
+        ok: false,
+        reason: 'baseline_unreadable',
+        detail:
+          'hand over the baseline with --baseline-json, name its file with --baseline, or name the instant RDS restored to with --as-of',
+      };
+    }
+    const measuredPath = join(directory, 'step0-baseline.json');
+    baselinePath = measuredPath;
+    const measured = await step(
+      'step0-baseline',
+      directory,
+      async () => await countsCommand(invoke({ '--as-of': input.asOf ?? '', '--report': measuredPath })),
+      () => null,
+    );
+    steps.push(measured);
+    if (!measured.ok) {
+      return { ok: false, reason: 'baseline_unreadable', detail: measured.failure ?? 'the baseline could not be measured' };
+    }
+    baseline = measured.report as Record<string, unknown>;
   }
   const baselineAt = typeof baseline['asOf'] === 'string' ? baseline['asOf'] : '';
   if (baselineAt === '') {

@@ -160,3 +160,68 @@ describe('the commands release-deploy.sh runs on the migration task definition',
     }
   });
 });
+
+/**
+ * Lane g53: where the drill's step 0 comes from, and the launch that decides it.
+ *
+ * The thirteenth full run (24 September 2026) launched `fss drill --as-of <restore
+ * target>` against the restored instance, so the drill measured its baseline again on
+ * the restored copy while the baseline measured on the source sat in the runner's
+ * reports. The drill now takes the source baseline as a value, `--baseline-json`.
+ *
+ * ## The vacuous-pass trap
+ *
+ * The drill script's real launches go through `drill_task` and never spell `fss`, so
+ * an extractor that read only `fss …` lines saw the planned line and nothing else: the
+ * plan could say `--baseline-json` while the real launch still passed `--as-of`. So the
+ * extractor reads the launcher too, and the real launch is asserted here, not the plan.
+ */
+describe('fss drill takes its baseline from exactly one place (lane g53)', () => {
+  const reports = ['--reports', '/tmp/fss-drill'];
+  const handed = '{"asOf":"2026-09-21T00:00:00Z","sends":1,"replies":1,"suppressions":1,"crm_edits":1,"migrations":1}';
+
+  it('accepts the baseline handed over as a value, braces and quotes included', () => {
+    const parsed = parseFssCommand(['drill', ...reports, '--baseline-json', handed, '--all-mailboxes']);
+    expect(parsed).toMatchObject({ ok: true });
+    if (parsed.ok) expect(parsed.value.options['--baseline-json']).toBe(handed);
+  });
+
+  it('refuses any two of --baseline, --as-of and --baseline-json, and none of them', () => {
+    for (const pair of [
+      ['--as-of', '2026-09-21T00:00:00Z', '--baseline-json', handed],
+      ['--baseline', '/tmp/before.json', '--baseline-json', handed],
+      ['--baseline', '/tmp/before.json', '--as-of', '2026-09-21T00:00:00Z'],
+    ]) {
+      expect(parseFssCommand(['drill', ...reports, ...pair]), pair.join(' ')).toMatchObject({
+        ok: false,
+        reason: 'selection_missing',
+      });
+    }
+    expect(parseFssCommand(['drill', ...reports])).toMatchObject({ ok: false, reason: 'selection_missing' });
+    expect(parseFssCommand(['drill', ...reports, '--baseline-json'])).toMatchObject({
+      ok: false,
+      reason: 'flag_value_missing',
+    });
+  });
+
+  it('reads the drill script’s real launches, not only its plan', () => {
+    const drill = drillInvocations(
+      readFileSync(fileURLToPath(new URL('../../../infra/scripts/rehearsal-restore-drill.sh', import.meta.url)), 'utf8'),
+    );
+    const real = drill.filter(invocation => !invocation.planned).map(invocation => invocation.argv.slice(0, 2).join(' '));
+    expect(real, 'the baseline task on the source is launched through drill_task').toContain('admin counts');
+    expect(real, 'and so is the drill against the restored instance').toContain('drill --reports');
+  });
+
+  it('launches the drill with the source baseline, never an instant to measure the restored copy at', () => {
+    const launches = drillInvocations(
+      readFileSync(fileURLToPath(new URL('../../../infra/scripts/rehearsal-restore-drill.sh', import.meta.url)), 'utf8'),
+    ).filter(invocation => invocation.argv[0] === 'drill');
+    expect(launches.filter(invocation => !invocation.planned).length).toBeGreaterThanOrEqual(1);
+    for (const launch of launches) {
+      expect(launch.argv, launch.text).toContain('--baseline-json');
+      expect(launch.argv, launch.text).not.toContain('--as-of');
+      expect(launch.argv, launch.text).not.toContain('--baseline');
+    }
+  });
+});
