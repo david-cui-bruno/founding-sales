@@ -93,6 +93,15 @@ fi
 # identifier, safe in `describe-tasks` — and the credential stays a secret reference
 # the execution role resolves. Nothing about the restored instance is ever an
 # argument.
+#
+# `--database-host` below stays the **primary** host, whatever the override says. It is
+# what the wrapper compares the registered task definition's own `FSS_DATABASE_HOST`
+# with, and the definition names the primary: Terraform wrote it before any restore
+# existed. Run 35962272085 (24 September 2026) passed the restored endpoint there as
+# well, and the wrapper refused the drill's first task after a restore that had
+# succeeded: "this task would connect to '<prefix>-pg.…' and the database this release
+# targets is '<prefix>-pg-restored.…'". The override is what the container connects to,
+# and the wrapper logs it as the step's target database host.
 EXTRA=()
 if [ -n "${FSS_RESTORED_DATABASE_HOST:-}" ]; then
   EXTRA+=(--env "FSS_DATABASE_HOST=${FSS_RESTORED_DATABASE_HOST}")
@@ -119,7 +128,7 @@ release_run_task \
   --container "$KIND" \
   --network-plan "$NETWORK_PLAN" \
   --image-digest "$WORKER_DIGEST" \
-  --database-host "${FSS_RESTORED_DATABASE_HOST:-$DATABASE_HOST}" \
+  --database-host "$DATABASE_HOST" \
   --secret-arn "$SECRET_ARN" \
   --log-group "$LOG_GROUP" \
   --log-stream-prefix "$KIND" \
