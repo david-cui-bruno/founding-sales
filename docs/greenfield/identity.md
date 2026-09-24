@@ -58,8 +58,55 @@ inputs, none of them defaulted:
 
 Issuer, discovery URL, clock skew and the four session lifetimes are constants, not
 configuration: `createGoogleClient` already refuses a discovery document whose `issuer`
-differs and any endpoint it names at another origin, so making the issuer settable
-would only widen what a deployment can be pointed at.
+differs and any endpoint it names on a host the rule below does not admit, so making
+the issuer settable would only widen what a deployment can be pointed at.
+
+### Where the discovery document may send the API
+
+The issuer is `https://accounts.google.com` and the discovery document is read from
+`https://accounts.google.com/.well-known/openid-configuration`. The document names the
+authorization endpoint, the token endpoint and the key set, and the API uses what it
+names — so the document is also the thing an attacker would forge, to send the token
+exchange (which carries the code and the client secret) to their own host.
+
+`endpointAllowed` in `apps/api/src/auth/googleClient.ts` is the rule. Each of the three
+endpoints must be **`https:`, on either the issuer's own hostname or a hostname ending in
+`.googleapis.com`**, Google's documented API hosts. The document's `issuer` must equal the
+configured one exactly. Anything else, and a URL that does not parse, makes `discovery()`
+answer null. The issuer's exact origin is also admitted, which in production is the same
+`https://accounts.google.com` and is plain HTTP only for the loopback provider the tests
+start.
+
+Google's own document is why the rule is not "the issuer's origin". As published on 24
+September 2026 it names:
+
+| Field | Value |
+|---|---|
+| `authorization_endpoint` | `https://accounts.google.com/o/oauth2/v2/auth` |
+| `token_endpoint` | `https://oauth2.googleapis.com/token` |
+| `jwks_uri` | `https://www.googleapis.com/oauth2/v3/certs` |
+
+The first version of this rule required all three to share the issuer's origin. It
+refused Google's real document, and production's first four real sign-ins were refused
+`token_exchange_failed` (release runbook 8.0u). `apps/api/test/auth/discovery.test.ts`
+now runs against that document's shape, with the production issuer and discovery URL,
+and `test/release/scenario23.check.ts` holds the same rule in the release suite.
+
+**What a failure logs.** Two `warn` lines, through the API's structured log, which
+never carry a code, a verifier, a token, the client secret or a response body:
+
+* `event: "oidc_discovery_unavailable"`, `step: "sign_in_start"`: discovery answered null
+  when a sign-in started. Start falls back to `<issuer>/o/oauth2/v2/auth` so the browser
+  leg still works — which is exactly how the first failure stayed hidden until the
+  callback — and now says that it did.
+* `event: "token_exchange_failed"` at the callback, with `reason` one of
+  `discovery_unavailable`, `token_endpoint_status_<n>` or `id_token_absent`, and
+  `provider_error` carrying Google's own `error` code (`invalid_grant`, `invalid_client`,
+  `redirect_uri_mismatch`, …) when the token endpoint answered JSON with one. Never
+  `error_description`.
+
+The audit row the refusal writes (`auth.sign_in_refused`, `refusal: token_exchange_failed`)
+says *that* the exchange failed; the log line says why.
 
 **A live deployment that is missing any of the four refuses to start.** Before G12b it
 started without them and mounted no identity at all, which looks from outside exactly
@@ -78,7 +125,7 @@ availability. See `docs/decisions/g12b-sign-in-is-configured-or-the-api-refuses.
 | A `state` we never issued | No row with that digest. |
 | A `state` already used | The consuming `UPDATE` has `status = 'pending'` in its `WHERE`, so the second callback changes no row — and never reaches Google. |
 | An id token carrying another request's `nonce` | The row's `nonce_hash` is compared to `sha256(nonce)` from the token. |
-| The authorization `code` again | Google answers `invalid_grant`; the API answers `token_exchange_failed`. |
+| The authorization `code` again | Google answers `invalid_grant`; the API answers `token_exchange_failed` and logs `reason: token_endpoint_status_400`, `provider_error: invalid_grant`. |
 | A token minted for another `aud` or `azp` | Both are compared to the configured client id, and `aud` must be exactly it — an array with a second audience is refused. |
 | A handoff secret twice | The claim's `UPDATE` has `status = 'authenticated'`; the second is `already_claimed`. |
 
@@ -204,7 +251,7 @@ them does, so the slice that adds them inherits it.
 
 ```
 apps/api/src/auth/config.ts        what identity needs that is not a row
-apps/api/src/auth/googleClient.ts  discovery, JWKS with caching and rotation, token exchange
+apps/api/src/auth/googleClient.ts  discovery and its endpoint-host rule, JWKS with caching and rotation, token exchange
 apps/api/src/auth/idToken.ts       every claim the specification names, each its own refusal
 apps/api/src/auth/signIn.ts        start, callback, claim
 apps/api/src/auth/sessions.ts      devices, sessions, rotation, reuse, revocation

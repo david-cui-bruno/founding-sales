@@ -1,8 +1,11 @@
 import { randomBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { AUTH_REFUSAL_CODES } from '@fss/contracts';
+import { createGoogleClient, type HttpFetch } from '../../apps/api/src/auth/googleClient.ts';
 import {
   DEPLOYMENT_ENVIRONMENT_VARIABLES,
+  GOOGLE_OIDC_DISCOVERY_URL,
+  GOOGLE_OIDC_ISSUER,
   readApiDeployment,
 } from '../../apps/api/src/bootstrap/deployment.ts';
 import { mustCover, readRepositoryFile } from './support/coverage.ts';
@@ -176,5 +179,71 @@ describe('Appendix G 23: a production API cannot run without sign-in configured'
     );
     expect(deployment.auth?.oidc.hostedDomain).toBe('one-domain.test');
     expect(deployment.mailConfig?.hostedDomain).toBe('one-domain.test');
+  });
+});
+
+/**
+ * The release gate the first real sign-in added (24 September 2026, runbook 8.0u): the
+ * API accepts Google's own discovery document.
+ *
+ * Production refused its first four real sign-ins `token_exchange_failed` because
+ * `discovery()` required every endpoint to share the issuer's origin, and Google's
+ * document puts the token endpoint on `oauth2.googleapis.com` and the key set on
+ * `www.googleapis.com`. The rehearsal never talks to Google and the lane tests' local
+ * provider serves everything from one origin, so nothing before production could see it.
+ * This asserts the rule against Google's real hosts, with the production issuer and
+ * discovery URL constants, behind a `fetch` that reaches nothing.
+ *
+ * ## The vacuous-pass trap
+ *
+ * Each half is the other's control. A client that refused every document would pass the
+ * refusal case, and one that accepted every document would pass the positive case; only
+ * the rule itself passes both. The refusal case moves exactly one field of the same
+ * document, so it cannot be refused for some other reason.
+ */
+describe("Appendix G 23: the API accepts Google's own discovery document", () => {
+  const googleDocument = {
+    issuer: 'https://accounts.google.com',
+    authorization_endpoint: 'https://accounts.google.com/o/oauth2/v2/auth',
+    token_endpoint: 'https://oauth2.googleapis.com/token',
+    userinfo_endpoint: 'https://openidconnect.googleapis.com/v1/userinfo',
+    revocation_endpoint: 'https://oauth2.googleapis.com/revoke',
+    jwks_uri: 'https://www.googleapis.com/oauth2/v3/certs',
+  };
+
+  const oidc = {
+    issuer: GOOGLE_OIDC_ISSUER,
+    discoveryUrl: GOOGLE_OIDC_DISCOVERY_URL,
+    clientId: 'signin.apps.googleusercontent.test',
+    // Generated when the test runs. Nothing in this file is a credential.
+    clientSecret: randomBytes(24).toString('hex'),
+    redirectUri: 'https://api.example.test/auth/google/callback',
+    hostedDomain: 'example.test',
+    clockSkewSeconds: 60,
+  };
+
+  const serving = (document: Record<string, string>): HttpFetch => url =>
+    Promise.resolve(
+      url === GOOGLE_OIDC_DISCOVERY_URL
+        ? { status: 200, headers: {}, body: JSON.stringify(document) }
+        : { status: 404, headers: {}, body: '' },
+    );
+
+  it("the positive control: Google's token endpoint and key set hosts are accepted", async () => {
+    const client = createGoogleClient({ fetch: serving(googleDocument), now: () => new Date() });
+    expect(await client.discovery(oidc)).toMatchObject({
+      tokenEndpoint: 'https://oauth2.googleapis.com/token',
+      jwksUri: 'https://www.googleapis.com/oauth2/v3/certs',
+    });
+  });
+
+  it('a token endpoint on another host, or on a Google host over plain HTTP, is refused', async () => {
+    for (const tokenEndpoint of ['https://evil.example/token', 'http://oauth2.googleapis.com/token']) {
+      const client = createGoogleClient({
+        fetch: serving({ ...googleDocument, token_endpoint: tokenEndpoint }),
+        now: () => new Date(),
+      });
+      expect(await client.discovery(oidc), tokenEndpoint).toBeNull();
+    }
   });
 });

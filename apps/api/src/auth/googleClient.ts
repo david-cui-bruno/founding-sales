@@ -50,10 +50,32 @@ export interface DiscoveryDocument {
   readonly jwksUri: string;
 }
 
-export interface TokenExchangeResult {
-  readonly ok: boolean;
-  readonly idToken: string | null;
-}
+/**
+ * Why a token exchange produced no id token, in a closed vocabulary a log line may carry.
+ *
+ * `discovery_unavailable` is every way `discovery()` can answer null: the document was
+ * unreachable, not JSON, incomplete, for another issuer, or named an endpoint on a host
+ * the rule below refuses. `token_endpoint_status_<n>` is Google's HTTP status, and
+ * `id_token_absent` is a 200 whose body carried no id token.
+ */
+export type TokenExchangeFailureReason =
+  | 'discovery_unavailable'
+  | `token_endpoint_status_${number}`
+  | 'id_token_absent';
+
+export type TokenExchangeResult =
+  | { readonly ok: true; readonly idToken: string }
+  | {
+      readonly ok: false;
+      readonly idToken: null;
+      readonly reason: TokenExchangeFailureReason;
+      /**
+       * Google's own `error` code — `invalid_grant`, `invalid_client`,
+       * `redirect_uri_mismatch` — when the token endpoint answered JSON with one, else
+       * null. Only the code: never `error_description`, and never the body.
+       */
+      readonly providerError: string | null;
+    };
 
 export interface GoogleClient {
   discovery(config: GoogleOidcConfig): Promise<DiscoveryDocument | null>;
@@ -102,6 +124,42 @@ function parseJson(body: string): Record<string, unknown> | null {
 
 const asString = (value: unknown): string | null => (typeof value === 'string' && value.length > 0 ? value : null);
 
+/**
+ * The hosts a discovery document may send this client to.
+ *
+ * Until 24 September 2026 the rule was "the issuer's origin", and Google's own document
+ * does not satisfy it: beside the issuer `https://accounts.google.com` it names the token
+ * endpoint `https://oauth2.googleapis.com/token` and the key set
+ * `https://www.googleapis.com/oauth2/v3/certs`. `discovery()` answered null, the start
+ * step's fallback hid it, and production's first four real sign-ins were refused
+ * `token_exchange_failed` (release runbook 8.0u).
+ *
+ * The attack the rule exists for is unchanged — a document that sends the token exchange,
+ * which carries the client secret and the code, to somebody else's host — so an endpoint
+ * is accepted only when it is `https:` and its hostname is the issuer's own or ends with
+ * `.googleapis.com`, Google's documented API hosts. The issuer's exact origin is also
+ * accepted, which in production is that same `https://accounts.google.com` (a constant in
+ * `bootstrap/deployment.ts`) and is plain HTTP only for the loopback provider the tests
+ * start. A URL that does not parse is refused rather than thrown.
+ */
+function endpointAllowed(endpoint: string, issuer: URL): boolean {
+  let url: URL;
+  try {
+    url = new URL(endpoint);
+  } catch {
+    return false;
+  }
+  if (url.origin === issuer.origin) return true;
+  if (url.protocol !== 'https:') return false;
+  return url.hostname === issuer.hostname || url.hostname.endsWith('.googleapis.com');
+}
+
+/** Google's `error` code from a token-endpoint body, if it has one that looks like a code. */
+function providerErrorOf(body: string): string | null {
+  const error = asString(parseJson(body)?.['error']);
+  return error !== null && /^[A-Za-z0-9_.-]{1,64}$/.test(error) ? error : null;
+}
+
 export function createGoogleClient(options: GoogleClientOptions): GoogleClient {
   const defaultCacheSeconds = options.defaultCacheSeconds ?? 3600;
   const minimumKeyRefreshMs = options.minimumKeyRefreshMs ?? 60_000;
@@ -125,12 +183,15 @@ export function createGoogleClient(options: GoogleClientOptions): GoogleClient {
     if (issuer === null || authorizationEndpoint === null || tokenEndpoint === null || jwksUri === null) return null;
 
     // The document must describe the issuer we were configured for, and every endpoint
-    // it names must live at that same origin. A discovery document that redirects the
-    // token exchange somewhere else is the whole attack.
+    // it names must be on the issuer's host or one of Google's API hosts, over HTTPS
+    // (`endpointAllowed`). A discovery document that redirects the token exchange
+    // somewhere else is the whole attack. Google's real document puts the token endpoint
+    // on oauth2.googleapis.com and the key set on www.googleapis.com, which the old
+    // same-origin rule refused on 24 September 2026.
     if (issuer !== config.issuer) return null;
-    const origin = new URL(config.issuer).origin;
+    const issuerUrl = new URL(config.issuer);
     for (const endpoint of [authorizationEndpoint, tokenEndpoint, jwksUri]) {
-      if (new URL(endpoint).origin !== origin) return null;
+      if (!endpointAllowed(endpoint, issuerUrl)) return null;
     }
 
     const value: DiscoveryDocument = { issuer, authorizationEndpoint, tokenEndpoint, jwksUri };
@@ -190,7 +251,9 @@ export function createGoogleClient(options: GoogleClientOptions): GoogleClient {
 
     async exchangeCode(config, input) {
       const document = await discovery(config);
-      if (document === null) return { ok: false, idToken: null };
+      if (document === null) {
+        return { ok: false, idToken: null, reason: 'discovery_unavailable', providerError: null };
+      }
       const form = new URLSearchParams({
         grant_type: 'authorization_code',
         code: input.code,
@@ -204,10 +267,19 @@ export function createGoogleClient(options: GoogleClientOptions): GoogleClient {
         headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
         body: form.toString(),
       });
-      if (response.status !== 200) return { ok: false, idToken: null };
+      if (response.status !== 200) {
+        return {
+          ok: false,
+          idToken: null,
+          reason: `token_endpoint_status_${response.status}`,
+          providerError: providerErrorOf(response.body),
+        };
+      }
       const body = parseJson(response.body);
       const idToken = body === null ? null : asString(body['id_token']);
-      return idToken === null ? { ok: false, idToken: null } : { ok: true, idToken };
+      return idToken === null
+        ? { ok: false, idToken: null, reason: 'id_token_absent', providerError: null }
+        : { ok: true, idToken };
     },
 
     verifySignature(key, signingInput, signature) {

@@ -8,6 +8,7 @@ export {
   type HttpFetch,
   type HttpRequest,
   type HttpResponse,
+  type TokenExchangeFailureReason,
   type TokenExchangeResult,
 } from './googleClient.ts';
 export { validateIdToken, type IdTokenOutcome, type VerifiedIdTokenClaims } from './idToken.ts';

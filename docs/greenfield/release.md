@@ -631,7 +631,7 @@ Why a script rather than four commands you can see:
 
 ## 5. The five manual steps after the apply
 
-These are in the order they unblock each other. Doing 5.3 before 5.2 will not work, because Pub/Sub will not push to an endpoint whose certificate it cannot verify. 5.1 comes before the apply's deploy (4.1) and 5.1a comes after it, because 5.1a runs a command against the deployed database.
+These are in the order they unblock each other. Doing 5.3 before 5.2 will not work, because Pub/Sub will not push to an endpoint whose certificate it cannot verify. 5.1 comes before the apply's deploy (4.1) and 5.1a comes after it, because 5.1a runs a command against the deployed database. 5.2a comes straight after 5.2, because Google sends the browser back to `api.usecallie.com`, and before 5.4, whose mailbox consent starts from a signed-in Mac.
 
 ### 5.1 The secret values, from stdin
 
@@ -721,6 +721,48 @@ curl -sS -o /dev/null -w '%{http_code} %{ssl_verify_result}\n' https://api.useca
 ```
 
 Expect `200 0`. Expect `http://api.usecallie.com` to **fail to connect** rather than redirect: there is no port 80 listener by design.
+
+### 5.2a The first real sign-in, straight after the deploy
+
+Do this **immediately after 5.2**, yourself, as the admin 5.1a bootstrapped — not later,
+and not left to whoever first needs the app. It is the first time anything exercises
+Google's side of sign-in: no rehearsal step signs in, and the lane tests use a local
+provider, so Google's discovery document, the token exchange, Google's key set and the
+id-token checks against Google's real claims are all untested until this moment. The
+first production sign-in was refused four times for a reason no test could see (8.0u).
+
+1. Install the published desktop build, enter the `workspace.id` from 5.1a, and sign in
+   as `callie@usecallie.com`.
+2. Expect the browser to show **Signed in** and the Mac to leave "Waiting for your
+   browser…" within seconds. This first sign-in also adopts the provisional admin row, and
+   the audit log records `auth.provisional_user_adopted`.
+3. Whether it worked or not, read the API's two sign-in warn lines for the last hour:
+
+```bash
+aws logs filter-log-events --log-group-name /fss/fss-prod/api \
+  --start-time "$(( $(date -u +%s) - 3600 ))000" \
+  --filter-pattern '{ ($.event = "token_exchange_failed") || ($.event = "oidc_discovery_unavailable") }' \
+  --query 'events[].message' --output text
+```
+
+Expect nothing. Neither line ever carries a code, a token, the client secret or a
+response body; what each one means:
+
+| Line | Meaning |
+|---|---|
+| `oidc_discovery_unavailable`, or `token_exchange_failed` with `reason: discovery_unavailable` | The API did not accept Google's discovery document. Fetch `https://accounts.google.com/.well-known/openid-configuration` and compare its `issuer`, `authorization_endpoint`, `token_endpoint` and `jwks_uri` with the rule in `docs/greenfield/identity.md`. This is 8.0u. |
+| `reason: token_endpoint_status_4xx`, `provider_error: invalid_client` or `unauthorized_client` | Google refused the sign-in client: the `google-oidc-client` entry (5.1). |
+| `provider_error: redirect_uri_mismatch` | The client's registered redirect URIs do not include `https://api.usecallie.com/auth/google/callback`. |
+| `provider_error: invalid_grant` | The code was spent or expired, or the PKCE verifier did not match. Sign in once more before reading anything into one of these. |
+| `reason: id_token_absent` | Google answered 200 without an id token, so the `openid` scope did not reach it. |
+
+A refusal the audit log records with any other code — `hosted_domain_mismatch`,
+`membership_required`, `email_unverified` — is about the account rather than about
+Google's side, and writes neither line. One is about Google's side and is also first
+exercised here: `issuer_mismatch`. The validator compares the id token's `iss` with
+`https://accounts.google.com` exactly (`apps/api/src/auth/idToken.ts`), and Google
+documents `accounts.google.com`, without the scheme, as a second form a token may carry.
+If that refusal appears, that is why.
 
 ### 5.3 The SNS confirmation
 
@@ -1810,9 +1852,102 @@ verified from outside the build. It reached the update channel at **03:37Z**. It
 here and returns in seconds. Run before the build rather than after it, a wrong team id
 costs a few seconds instead of a full signing, packaging and upload.
 
+### 8.0u What the first real sign-in proved: the API refused Google's own discovery document (24 September, night)
+
+**Four refusals, one code.** The first real sign-in to production — `callie@usecallie.com`,
+desktop **1.0.0**, workspace slug `callie` — was refused at **03:43Z, 03:46Z, 04:06Z and
+04:09Z** on 24 September. Each time the browser leg worked: Google's consent screen
+opened, the person signed in, and Google redirected to
+`https://api.usecallie.com/auth/google/callback`. Each time the callback answered **400**
+with the refused page, the audit log recorded `auth.sign_in_refused` with
+`refusal: token_exchange_failed`, and the desktop stayed at "Waiting for your browser…",
+because the handoff it polls for was never authenticated. Confirmed at about **04:20Z**.
+
+**The cause was the API's own rule, not Google and not the configuration.**
+`apps/api/src/auth/googleClient.ts` `discovery()` required every endpoint the discovery
+document names to have the **same origin** as the issuer, `https://accounts.google.com`.
+Google's live document, fetched with `curl` from
+`https://accounts.google.com/.well-known/openid-configuration` that night, names three
+hosts:
+
+| Field | Value | Same origin as the issuer? |
+|---|---|---|
+| `authorization_endpoint` | `https://accounts.google.com/o/oauth2/v2/auth` | yes |
+| `token_endpoint` | `https://oauth2.googleapis.com/token` | **no** |
+| `jwks_uri` | `https://www.googleapis.com/oauth2/v3/certs` | **no** |
+
+So `discovery()` answered null for the real document, every time; `exchangeCode()` then
+answered `{ ok: false }` without ever posting to Google, and the callback turned that into
+`token_exchange_failed`. Nothing reached Google's token endpoint on any of the four.
+
+**The start step hid it.** `startSignIn` falls back to `<issuer>/o/oauth2/v2/auth` when
+discovery is null (`apps/api/src/auth/signIn.ts`), and that fallback is right about the
+authorization endpoint — so the half of the flow a person can see worked perfectly, and
+the half that cannot fall back, because the token endpoint is the thing discovery vouches
+for, failed with nothing in the log. The only trace was the audit row, and it said *that*
+the exchange failed, never why.
+
+**What was verified good, so that the fix is the rule and only the rule.** The production
+sign-in client is accepted by Google: a probe of `https://oauth2.googleapis.com/token`
+with the production client id and secret and a deliberately bogus code answered
+`invalid_grant` — "Malformed auth code" — which is Google rejecting the *code* after
+accepting the *client*. The API's network egress reaches Google. The redirect URI the API
+sends is the one registered on the client. None of those needed changing.
+
+**Why nothing caught it before production.** The rehearsal deploys its API `live`, with
+the real sign-in client under the rehearsal redirect URI, but no step of a run ever signs
+in: nobody opens a browser, and the smoke reads `/healthz`, `/readyz`, `/health` and the
+canary age — the unauthenticated surface only. The API reads Google's discovery
+document only when a sign-in starts, so no rehearsal has ever fetched it, and a
+`recorded` deployment could not have either: it must name its own fake sign-in client
+(`docs/decisions/g12b-sign-in-is-configured-or-the-api-refuses.md`), because a rehearsal
+that fetched Google's documents would be testing Google's availability. The lane tests
+run against a local provider (`apps/api/test/support/googleStub.ts`) that serves the
+discovery document, the token endpoint and the key set from **one** loopback origin —
+exactly the shape the old rule accepted. Every test passed against a Google that does not
+exist.
+
+**The fix (lane g45).** An endpoint is accepted iff it is **`https:` and its hostname is
+either the issuer's hostname or ends with `.googleapis.com`** — Google's documented API
+hosts — and the document's `issuer` must still equal the configured one exactly. The
+attack the rule was written for is unchanged and still refused: a document whose token
+endpoint is `https://evil.example/token`, `http://oauth2.googleapis.com/token`, or
+`https://oauth2.googleapis.com.evil.example/token` makes `discovery()` answer null, and no
+code or secret is posted anywhere. `docs/greenfield/identity.md` has the rule beside the
+OIDC configuration. The tests now include Google's real document shape —
+`apps/api/test/auth/discovery.test.ts`, against the production issuer and discovery URL
+constants and an injected `fetch` that reaches nothing — and `test/release/scenario23.check.ts`
+holds the same rule in the release suite, with two mutations in
+`scripts/releaseMutationCheck.mjs` (the same-origin rule put back; the HTTPS requirement
+dropped) that it must go red for.
+
+**Failure is visible now.** `exchangeCode` returns a closed reason —
+`discovery_unavailable`, `token_endpoint_status_<n>`, or `id_token_absent` — plus Google's
+own `error` code when the token endpoint answered JSON with one. Two `warn` lines in the
+API log group, neither carrying a code, a verifier, a token, the client secret or a
+response body:
+
+* `event: "token_exchange_failed"` with `reason` and, where Google gave one,
+  `provider_error` — written once per refused callback, beside the audit row;
+* `event: "oidc_discovery_unavailable"` with `step: "sign_in_start"` — written each time
+  start falls back, so a null discovery is visible at the moment the browser is sent to
+  Google rather than a minute later at the callback.
+
+Had the second existed at 03:43Z the cause would have been in the log before the person
+had finished signing in.
+
+**The lesson: the first real sign-in is the first test of this path, so it is a step.**
+The rehearsal cannot exercise Google and should not; the lane tests exercise a Google-shaped
+fake; so discovery, the token exchange, Google's key set and the id-token validation
+against Google's real claims are first run by whoever first signs in to a production
+deployment. That must be the operator, deliberately, **immediately after the production
+deploy** — not the first person who happens to need the app. It is now section 5.2a,
+with the log query that shows either warn line. Until an API built from the g45 commit is
+deployed to production, sign-in to production cannot succeed.
+
 ### 8.1 Still unverified
 
-Production is applied, deployed, bootstrapped and smoked at `66203322`, the signed desktop build is published at the same commit (8.0t), and eleven rehearsal runs have existed (8.0s, 8.0t). What follows is what that still does not settle. Items 1 to 10 were written before any of it ran, and each carries whatever a later run answered; items 11 to 17 are what is open on 24 September, and the first of them is the release record this release does not have.
+Production is applied, deployed, bootstrapped and smoked at `66203322`, the signed desktop build is published at the same commit (8.0t), and eleven rehearsal runs have existed (8.0s, 8.0t). The first real sign-in was attempted against that deployment and refused by the API's own discovery rule (8.0u). What follows is what that still does not settle. Items 1 to 10 were written before any of it ran, and each carries whatever a later run answered; items 11 to 17 are what is open on 24 September, and the first of them is the release record this release does not have.
 
 1. Whether `resourcegroupstaggingapi get-resources` is readable by the rehearsal role. `rehearsal-prefix-guard.sh` uses it to compare the production inventory before and after; if the role cannot read production at all, the scenario still passes — "could not address" is the claim — but the script will need the read moved to a separate inventory role to produce a useful diff. Two things about that read changed in G12f and neither could be tested against AWS: the tag filter is now `Key=Name` with no value, because `get-resources` matches tag values exactly and `Values=fss-prod*` would have matched nothing and made the comparison a comparison of two empty lists; and the production names are selected and **sorted** locally, because the API promises no order and an unstable one would fail the comparison for no reason. If the account holds many `Name`-tagged resources, this read is now larger than it was.
 2. Whether the drill can run at all: **nothing in this repository builds an `fss` executable.** No package declares a `bin`, and no step of the release workflow installs one, so every non-dry `fss admin …` in `rehearsal-restore-drill.sh` and every `fss carry export` in `rehearsal-carry-watermark.sh` would fail with `command not found`. Both scripts now refuse up front and say so, rather than discovering it after a restored RDS instance exists — but the CLI itself is another lane's, and the drill cannot pass until it lands. **Answered, 23 and 24 September: nothing puts an `fss` on PATH and nothing needs to.** No package declares a `bin` and that is now deliberate — every `fss` invocation is a command override of the worker image on a task definition inside the VPC, launched through `release_run_task`: the deploy's five one-off tasks, the workspace bootstrap, the drill's `fss admin counts`, the drill-evidence seeder and `fss drill` itself all ran that way in the cloud (8.0n to 8.0s). What is still open about the drill is steps 1 to 3, which is item 12.
@@ -1827,7 +1962,7 @@ Production is applied, deployed, bootstrapped and smoked at `66203322`, the sign
 11. **A release record.** There is none. Every stage has passed at some commit — create, deploy, the bootstrap, the schema ranges, the smoke, the release suite, the drill's evidence — and the final `full` run at `66203322` (35948178549) ended at the drill step, though not for the reason 8.0s predicted: its credential expired at exactly one hour, inside `aws rds wait db-instance-available`, before the drill could reach the open steps of item 12 (8.0t). Only a `full` run that passes every step writes a record, so the `releaseGateReference` section 6 step 2 reads before sending can be enabled does not exist yet and will come from the post-release run that renews its session and passes the drill.
 12. **The restore drill past its baseline — open, and post-release item 1.** The baseline exists; steps 1 to 3 do not run, for the five reasons 8.0s lists: no dialable subject, no suppression the restore loses, no fence left in `dispatching` or `reconciling`, no mailbox whose recorded envelope key the drill task can unwrap, and an `--at-failure` file nothing writes. Each of them refuses with its own reason rather than passing vacuously, which is why recording them is honest and relaxing an assertion would not be. David chose on 24 September to record them and ship the release path — his option 2, restated after the eleventh run's expiry (8.0t) and unchanged by it — so the drill stays **open** and stays post-release item 1; the drill's Step 1 point-in-time restore is the one part of it the eleventh run did issue, and it was the wait rather than the restore that died. The run that closes this item is also the run that writes item 11's record.
 13. **The signed desktop build — answered, 24 September.** Run 35935100994 never got past importing the Developer ID certificate (8.0s) and the second build was refused at notarization for a team id that did not belong to the Apple ID; the **third**, run 35951921111, signed, notarized, stapled and published Callie 1.0.0 from commit `66203322` to the update channel at 03:37Z, manifest signed and zip `sha256` verified from outside the build (8.0t). What that still does not settle is the far end of it: nobody has installed the published artifact on a Mac, or taken an automatic update from the channel, so Gatekeeper's verdict on a real download and the updater's behaviour against a signed manifest are both unmeasured.
-14. **The first sign-in, and the Gmail consent.** A live API refuses to start without the sign-in parts (section 4) and production started, so they are configured — which is not the same as used. Nobody has completed the hosted-domain sign-in, adopted the provisional admin row 5.1a created, or granted the mailbox consent whose callback lands on `https://api.usecallie.com/oauth/gmail/callback` (5.4). The first of those also decides whether `admin.outcome: provisional_created` behaves as `docs/greenfield/identity.md` says it will.
+14. **The first sign-in, and the Gmail consent — sign-in attempted and refused, 24 September.** A live API refuses to start without the sign-in parts (section 4) and production started, so they are configured — which turned out not to be the same as working. The first real sign-in, `callie@usecallie.com` on desktop 1.0.0, was refused `token_exchange_failed` four times between 03:43Z and 04:09Z, because `discovery()` refused Google's own discovery document for naming its token endpoint and key set on `googleapis.com` hosts (8.0u). The fix is lane g45, and **until an API built from it is deployed to production nobody can sign in** — so nothing behind sign-in has run either: the adoption of the provisional admin row 5.1a created, which decides whether `admin.outcome: provisional_created` behaves as `docs/greenfield/identity.md` says it will, and the mailbox consent whose callback lands on `https://api.usecallie.com/oauth/gmail/callback` (5.4). That night did establish the rest of the path: the browser leg and the redirect URI work, a probe showed Google accepts the production sign-in client, and the API reaches Google. The next sign-in is section 5.2a, done by the operator right after that deploy, and it closes this item only with a signed-in Mac, `auth.provisional_user_adopted` in the audit log, and neither `oidc_discovery_unavailable` nor `token_exchange_failed` in the API log. Google owns the document and can move an endpoint again; a host outside the rule shows as `oidc_discovery_unavailable` at the start of the next sign-in, not as a silent refusal a minute later.
 15. **Sending.** `FSS_SENDING_ENABLED` is `false` and section 6 has not been run, so nothing has been sent from production. 12.7's authentication checks, the six-week ramp, and the journal's first real write — item 6 above, which surfaces only as `SuppressionJournalWriteFailures` — are all unproved in production.
 16. **The exact rehearsal deployment policy, put back.** `fss-rh-deploy` still carries the discovery document of 8.0h: a wide allow on the services the tree uses, with guards, for one pass of `create`, `deploy` and `full`. The exact policy derived from the CloudTrail record of that pass is put back only after the final run above has passed (`infra-apply-runbook.md` 1.1b, step 5), and until then no rehearsal run proves anything about the policy this release ships. `fss-prod-deploy` was never widened and the renderer refuses to widen it.
 17. **A `full` run that outlasts its credentials, end to end.** The run is longer than the one-hour session the job used to hold, and 8.0t is what that cost: an expired token inside the drill's RDS waiter, a teardown and a production-prefix guard that both failed at their first call, and a leaked environment removed by a separate `stage=teardown` dispatch. The workflow now renews the session before the drill and again — on `always()` — before the teardown, each renewal followed by the identity assertion. **None of that has run against AWS.** What a credentialed run has to show is that a renewal mid-job succeeds at all (the OIDC token is requested fresh each time), that the renewed session passes `rehearsal-caller-identity.sh`, and that the teardown and the guard complete on it. The belt-and-braces follow-up — `MaxSessionDuration` 7200 on `fss-rh-deploy` and `role-duration-seconds: 7200` in the workflow — is not done and is deliberately separate: the role lives outside this repository.

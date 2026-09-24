@@ -90,7 +90,8 @@ function fixtureSignInClient(): GoogleClient {
   return {
     discovery: async () => await Promise.resolve(null),
     signingKey: async () => await Promise.resolve(null),
-    exchangeCode: async () => await Promise.resolve({ ok: false, idToken: null }),
+    exchangeCode: async () =>
+      await Promise.resolve({ ok: false, idToken: null, reason: 'discovery_unavailable', providerError: null }),
     verifySignature: () => false,
   };
 }
