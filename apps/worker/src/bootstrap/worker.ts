@@ -1,5 +1,5 @@
 import type { SessionQueryable } from '@fss/domain/db';
-import { collectJobMetrics, type HandlerRegistry, type MetricSink } from '@fss/domain/jobs';
+import { MetricError, collectJobMetrics, type HandlerRegistry, type MetricDatum, type MetricSink } from '@fss/domain/jobs';
 import { collectMailMetrics } from '@fss/domain/mail';
 import { collectOutboundMetrics } from '@fss/domain/outbound';
 import { checkWorkerStartup, restoreSuspected, type WorkerStartupReport } from '../index.ts';
@@ -22,6 +22,7 @@ import { drain, startLoop, type Loop } from './loop.ts';
  *   second lease to reason about;
  * * **the metric publication** — the operational gauges once a minute through G5's
  *   sink, which is a validating no-op unless the process was given a real transport.
+ *   It is deliberately *not* a liveness signal: see the metrics loop below.
  *
  * Startup refuses a database outside the declared schema range, because an old worker
  * beside a new one under expand/migrate/contract must stop rather than write rows the
@@ -130,10 +131,13 @@ export async function startWorker(options: WorkerProcessOptions): Promise<Worker
   let metricPublications = 0;
   let deadJobWatermark = now().toISOString();
 
-  const onError = (loop: string) => (error: unknown) => {
-    liveness.report(loop, false);
+  const logLoopFailure = (loop: string, error: unknown): void => {
     // `level: error` is what the ApiErrors/WorkerErrors metric filters count.
     log.log('error', 'worker_loop_failed', { loop, ...errorFields(error) });
+  };
+  const onError = (loop: string) => (error: unknown) => {
+    liveness.report(loop, false);
+    logLoopFailure(loop, error);
   };
 
   const schedulerLoop = startLoop({
@@ -203,26 +207,59 @@ export async function startWorker(options: WorkerProcessOptions): Promise<Worker
     });
   });
 
+  // The job, heartbeat, canary and alert gauges, then the mail lane's two.
+  // `GmailWatchHoursToExpiry` is published only when there is a connected mailbox to
+  // publish it for: the alarm treats missing data as not breaching, so a deployment
+  // with no mailbox and one with a healthy mailbox look the same to it, which is
+  // right — neither is a watch about to lapse. `MailboxDisconnectedHours` needed a
+  // record of having sent and so could not be published until `outbound_messages`
+  // existed.
+  const collectors: readonly (readonly [string, (session: SessionQueryable) => Promise<readonly MetricDatum[]>])[] = [
+    ['jobs', collectJobMetrics],
+    ['mail', collectMailMetrics],
+    ['outbound', collectOutboundMetrics],
+  ];
+
+  /**
+   * The metric publication never touches the liveness file.
+   *
+   * Until 24 September 2026 it did: a failed publication counted against liveness
+   * like a failed scheduler pass. That evening the first connected mailbox added a
+   * datum whose unit CloudWatch rejects, every publication failed, the file was
+   * removed after three, and ECS replaced a worker whose scheduler and runners were
+   * healthy — then the replacement, every few minutes. What the file states is that
+   * the scheduler and the runners are making progress against the database; a
+   * metrics API refusing a datum is not that, and the missing heartbeats already
+   * raise their own alarms (missing data is breaching). A collector that fails and a
+   * datum that is refused are each logged by name, and the rest are still published.
+   */
   const metricsLoop = startLoop({
     name: 'metrics',
     intervalMilliseconds: config.metricsIntervalMilliseconds,
-    onError: onError('metrics'),
+    onError: error => logLoopFailure('metrics', error),
     run: async () => {
-      // The job, heartbeat, canary and alert gauges, then the mail lane's two.
-      // `GmailWatchHoursToExpiry` is published only when there is a connected
-      // mailbox to publish it for: the alarm treats missing data as not breaching,
-      // so a deployment with no mailbox and one with a healthy mailbox look the
-      // same to it, which is right — neither is a watch about to lapse.
-      const data = [
-        ...(await collectJobMetrics(sessions.metrics)),
-        ...(await collectMailMetrics(sessions.metrics)),
-        // `MailboxDisconnectedHours`, which needed a record of having sent and so
-        // could not be published until `outbound_messages` existed.
-        ...(await collectOutboundMetrics(sessions.metrics)),
-      ];
-      await options.sink.publish(data);
+      const data: MetricDatum[] = [];
+      for (const [collector, collect] of collectors) {
+        try {
+          data.push(...(await collect(sessions.metrics)));
+        } catch (error) {
+          log.log('error', 'metrics_collect_failed', { collector, ...errorFields(error) });
+        }
+      }
+      try {
+        await options.sink.publish(data);
+      } catch (error) {
+        if (!(error instanceof MetricError) || error.code !== 'METRIC_REJECTED') throw error;
+        for (const refused of error.rejected) {
+          log.log('error', 'metric_rejected', {
+            metric: refused.name,
+            unit: refused.unit,
+            error_name: refused.errorName,
+            error_message: refused.errorMessage,
+          });
+        }
+      }
       metricPublications += 1;
-      liveness.report('metrics', true);
       return 'idle';
     },
   });

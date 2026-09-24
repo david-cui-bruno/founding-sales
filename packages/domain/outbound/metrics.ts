@@ -66,7 +66,10 @@ export async function collectOutboundMetrics(db: Queryable): Promise<readonly Me
   const data: MetricDatum[] = [];
   const disconnected = await mailboxDisconnectedHours(db);
   if (disconnected !== null) {
-    data.push({ name: 'MailboxDisconnectedHours', value: Math.max(disconnected, 0), unit: 'Hours' });
+    // `None`, not `Hours`: CloudWatch has no hour unit and rejects the whole request
+    // over one datum that names it. The value is hours, as the name says, and the
+    // `mailbox_disconnected` alarm compares the bare number with a threshold in hours.
+    data.push({ name: 'MailboxDisconnectedHours', value: Math.max(disconnected, 0), unit: 'None' });
   }
   return data;
 }

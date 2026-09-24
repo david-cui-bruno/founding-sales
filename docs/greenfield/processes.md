@@ -119,10 +119,14 @@ the database hiccups. That is why `/healthz` answers from the process alone.
 
 The worker has no HTTP surface, so its health check stats
 `/tmp/fss-worker-heartbeat`. The file is a statement rather than a timestamp: it is
-written when the schema check passes, rewritten while every loop is succeeding, and
-**removed** after a loop has failed `FSS_LIVENESS_FAILURES` times in a row, so
-`statSync` can actually fail. A task whose database has gone loses its file, fails its
-health check and is replaced.
+written when the schema check passes, rewritten while the scheduler and the runner slots
+are succeeding, and **removed** after one of them has failed `FSS_LIVENESS_FAILURES`
+times in a row, so `statSync` can actually fail. A task whose database has gone loses
+its file, fails its health check and is replaced. The metric publication does not report
+to the file: on 24 September 2026 CloudWatch refusing one datum removed it and ECS
+replaced healthy workers every few minutes (`release.md` 8.0y). A refused metric is
+logged by name as `metric_rejected`, and the missing heartbeat metrics raise their own
+alarms.
 
 If the task definition ever sets `readonlyRootFilesystem`, the worker needs a writable
 tmpfs volume at `/tmp`. The API writes nothing and needs no such volume.

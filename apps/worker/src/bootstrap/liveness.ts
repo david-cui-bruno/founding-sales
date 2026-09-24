@@ -11,10 +11,15 @@ import { dirname } from 'node:path';
  *
  * `statSync` succeeds on a stale file, so existence alone would be a health check that
  * can never fail. The file is therefore a *statement*, not a timestamp: it exists only
- * while every loop is succeeding, and the worker removes it after a loop has failed
- * the configured number of times in a row. A worker whose database is gone loses its
- * file, fails its health check, and is replaced — which is the behaviour spec 4.2 asks
- * for when the alternative is a task that is up and doing nothing.
+ * while every loop that reports here is succeeding, and the worker removes it after
+ * one has failed the configured number of times in a row. A worker whose database is
+ * gone loses its file, fails its health check, and is replaced — which is the
+ * behaviour spec 4.2 asks for when the alternative is a task that is up and doing
+ * nothing.
+ *
+ * The loops that report are the scheduler and the runner slots. The metric
+ * publication does not (24 September 2026): CloudWatch refusing a datum is not a
+ * worker doing nothing, and replacing the task cannot fix it.
  */
 
 export interface Liveness {

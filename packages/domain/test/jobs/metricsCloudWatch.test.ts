@@ -99,6 +99,94 @@ describe('the CloudWatch metric publisher', () => {
     ).rejects.toBeInstanceOf(MetricError);
   });
 
+  it('publishes the rest when one datum carries a unit CloudWatch does not know', async () => {
+    // The 24 September 2026 publication: the sixth datum was the first connected
+    // mailbox's watch gauge, in `Hours`. It is now refused here, by name, and the
+    // five in front of it still go out.
+    const transport = fakeTransport();
+    const sink = createCloudWatchSink({ namespace: 'FSS', transport, now: () => at });
+    const data = [
+      { name: 'WorkerHeartbeat', value: 1, unit: 'Count' },
+      { name: 'SchedulerHeartbeat', value: 1, unit: 'Count' },
+      { name: 'ApiHeartbeat', value: 1, unit: 'Count' },
+      { name: 'MailboxCheckHeartbeat', value: 1, unit: 'Count' },
+      { name: 'CanaryCompletionAgeSeconds', value: 4, unit: 'Seconds' },
+      { name: 'GmailWatchHoursToExpiry', value: 167.5, unit: 'Hours' },
+    ] as unknown as MetricDatum[];
+
+    const refused = await sink.publish(data).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(refused).toBeInstanceOf(MetricError);
+    expect((refused as MetricError).code).toBe('METRIC_REJECTED');
+    expect((refused as MetricError).rejected).toEqual([
+      expect.objectContaining({ name: 'GmailWatchHoursToExpiry', unit: 'Hours', errorName: 'METRIC_UNIT_INVALID' }),
+    ]);
+    expect(transport.sent).toHaveLength(1);
+    expect(transport.sent[0]?.MetricData.map(datum => datum.MetricName)).toEqual([
+      'WorkerHeartbeat',
+      'SchedulerHeartbeat',
+      'ApiHeartbeat',
+      'MailboxCheckHeartbeat',
+      'CanaryCompletionAgeSeconds',
+    ]);
+  });
+
+  it('retries a rejected batch one datum at a time, and names the datum CloudWatch refused', async () => {
+    const sent: PutMetricDataInput[] = [];
+    const rejecting: CloudWatchTransport = {
+      send: async input => {
+        await Promise.resolve();
+        if (input.MetricData.some(datum => datum.MetricName === 'MailboxDisconnectedHours')) {
+          const error = new Error('The parameter MetricData.member.3.Unit must be a value in the set');
+          error.name = 'InvalidParameterValueException';
+          throw error;
+        }
+        sent.push(input);
+      },
+    };
+    const put = cloudWatchPutMetricData(rejecting, { now: () => at });
+    const refused = await put('FSS', [
+      { name: 'WorkerHeartbeat', value: 1, unit: 'Count' },
+      { name: 'SchedulerHeartbeat', value: 1, unit: 'Count' },
+      { name: 'MailboxDisconnectedHours', value: 50, unit: 'None' },
+      { name: 'GmailWatchHoursToExpiry', value: 100, unit: 'None' },
+    ]).then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    expect(refused).toBeInstanceOf(MetricError);
+    expect((refused as MetricError).rejected).toEqual([
+      expect.objectContaining({ name: 'MailboxDisconnectedHours', errorName: 'InvalidParameterValueException' }),
+    ]);
+    expect(sent.flatMap(request => request.MetricData.map(datum => datum.MetricName))).toEqual([
+      'WorkerHeartbeat',
+      'SchedulerHeartbeat',
+      'GmailWatchHoursToExpiry',
+    ]);
+  });
+
+  it('throws the transport error itself when nothing at all could be sent', async () => {
+    const down: CloudWatchTransport = {
+      send: async () => {
+        await Promise.resolve();
+        throw new Error('getaddrinfo ENOTFOUND monitoring.us-east-1.amazonaws.com');
+      },
+    };
+    const put = cloudWatchPutMetricData(down, { now: () => at });
+    const refused = await put('FSS', [
+      { name: 'WorkerHeartbeat', value: 1, unit: 'Count' },
+      { name: 'SchedulerHeartbeat', value: 1, unit: 'Count' },
+    ]).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(refused).toBeInstanceOf(Error);
+    expect(refused).not.toBeInstanceOf(MetricError);
+  });
+
   it('resolves the SDK the lazy import names', async () => {
     // Construction only. The SDK resolves credentials and opens a connection when a
     // command is sent, and no command is sent here: this asserts the one thing a lazy

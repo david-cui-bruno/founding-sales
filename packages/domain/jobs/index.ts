@@ -99,15 +99,21 @@ export {
 } from './criticalAlerts.ts';
 
 export {
+  CLOUDWATCH_STANDARD_UNITS,
   JOB_METRIC_NAMES,
   METRIC_OWNERS,
+  METRIC_UNITS,
   MetricError,
   collectJobMetrics,
   createMetricSink,
+  isCloudWatchUnit,
   recordingMetricSink,
   validateMetricDatum,
+  type CloudWatchUnit,
   type MetricDatum,
+  type MetricErrorCode,
   type MetricOwner,
+  type MetricRejection,
   type MetricSink,
   type MetricSinkOptions,
   type MetricUnit,

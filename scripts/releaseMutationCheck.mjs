@@ -598,6 +598,33 @@ const MUTATIONS = [
     because:
       'A client above the published maximum is api_behind_client, and runCommand, sign-in and renewal refuse it client_upgrade_required exactly as they refuse one below the minimum. Desktop 1.0.1 is the build with Connect Gmail, so an API still publishing 1.0.0 as its maximum refuses the fix outright; desktopMailbox.check.ts reads the constant the container serves and has to go red.',
   },
+  {
+    name: 'the Gmail watch gauge goes back to a unit CloudWatch does not have',
+    file: 'packages/domain/mail/metrics.ts',
+    find: "value: Math.max(watchHours, 0), unit: 'None' });\n",
+    replace: "value: Math.max(watchHours, 0), unit: 'Hours' as 'None' });\n",
+    suite: ['run', 'test', '--workspace', 'packages/domain', '--', 'test/jobs/metricUnits.test.ts'],
+    because:
+      'This is production on 24 September 2026 from 18:11Z: the first connected mailbox added GmailWatchHoursToExpiry in Hours, PutMetricData rejected the whole batch every minute, and every FSS worker metric went dark. The cast defeats the type, which is exactly how a unit slips past the compiler, so metricUnits.test.ts reads every datum literal in the source against the CloudWatch set and has to go red.',
+  },
+  {
+    name: 'a failed metric publication counts against the worker liveness file again',
+    file: 'apps/worker/src/bootstrap/worker.ts',
+    find: "    onError: error => logLoopFailure('metrics', error),\n",
+    replace: "    onError: onError('metrics'),\n",
+    suite: ['run', 'test', '--workspace', 'apps/worker', '--', 'test/workerProcess.test.ts'],
+    because:
+      'On 24 September 2026 three refused publications removed /tmp/fss-worker-heartbeat and ECS stopped fss-prod-worker at 18:15Z for failed health checks, then its replacement, while the scheduler and runners were healthy. workerProcess.test.ts refuses every publication with a liveness threshold of one and has to go red when the file disappears.',
+  },
+  {
+    name: 'a rejected CloudWatch batch is no longer retried one datum at a time',
+    file: 'packages/domain/jobs/metricsCloudWatch.ts',
+    find: '        if (batch.length === 1) {\n',
+    replace: '        if (batch.length >= 1) {\n',
+    suite: ['run', 'test', '--workspace', 'packages/domain', '--', 'test/jobs/metricsCloudWatch.test.ts'],
+    because:
+      'CloudWatch rejects the whole request over one bad member, so without the per-datum retry one refused datum silences the heartbeats beside it, which is the blackout of 24 September. metricsCloudWatch.test.ts rejects any request carrying one named metric and has to go red when the others are not published.',
+  },
 ];
 
 function run(script) {

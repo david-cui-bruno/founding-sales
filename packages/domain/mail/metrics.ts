@@ -67,12 +67,17 @@ export async function collectMailMetrics(
 
   const watchHours = await hoursToSoonestWatchExpiry(db);
   if (watchHours !== null) {
-    data.push({ name: 'GmailWatchHoursToExpiry', value: Math.max(watchHours, 0), unit: 'Hours' });
+    // `None`, not `Hours`: CloudWatch has no unit for hours and rejects the whole
+    // `PutMetricData` request over one datum that names it (24 September 2026, the
+    // first connected mailbox). The value is still hours; the name says so, and the
+    // `gmail_watch_expiring` alarm compares the bare number with a threshold in hours.
+    data.push({ name: 'GmailWatchHoursToExpiry', value: Math.max(watchHours, 0), unit: 'None' });
   }
 
   const disconnectedHours = await mailboxDisconnectedHours(db, options);
   if (disconnectedHours !== null) {
-    data.push({ name: 'MailboxDisconnectedHours', value: Math.max(disconnectedHours, 0), unit: 'Hours' });
+    // Hours as a dimensionless `None`, for the reason given above.
+    data.push({ name: 'MailboxDisconnectedHours', value: Math.max(disconnectedHours, 0), unit: 'None' });
   }
 
   return data;
