@@ -20,13 +20,20 @@ import { createKeychainVault } from './keychain.ts';
 import { createOfflineCache } from './offlineCache.ts';
 import { createSessionManager, type SessionManager } from './sessionManager.ts';
 import { IPC_CHANNELS } from './ipc.ts';
+import {
+  MAILBOX_IPC_CHANNELS,
+  createMailboxBridge,
+  type MailboxBridgeDeps,
+  type MailboxBridgeHost,
+} from './mailboxBridge.ts';
 
 /**
  * The Electron main process.
  *
  * It does four things and no more: build the session manager from real adapters,
  * open one window with context isolation on and node integration off, answer the
- * four bridge channels, and send external links to the system browser. Every rule
+ * four bridge channels (and the Mailbox row's three), and send external links to the
+ * system browser. Every rule
  * about sessions, caches and versions lives in `sessionManager.ts`, which knows
  * nothing about Electron and is therefore tested without it.
  *
@@ -92,6 +99,21 @@ export function registerBridge(manager: SessionManager): void {
   });
   ipcMain.handle(IPC_CHANNELS.signOut, async () => await manager.signOut());
   ipcMain.handle(IPC_CHANNELS.refreshToday, async () => await manager.refreshToday());
+}
+
+/**
+ * The Mailbox row on this window's "This Mac" card (release.md 8.0x).
+ *
+ * Its three channels take no argument, so there is nothing of the renderer's to
+ * validate: whatever it sent is ignored rather than passed on. The consent URL is
+ * opened by `shell.openExternal` inside the bridge and never returned across it.
+ */
+export function registerMailboxBridge(deps: MailboxBridgeDeps): MailboxBridgeHost {
+  const host = createMailboxBridge(deps);
+  ipcMain.handle(MAILBOX_IPC_CHANNELS.state, async () => await host.state());
+  ipcMain.handle(MAILBOX_IPC_CHANNELS.refresh, async () => await host.refresh());
+  ipcMain.handle(MAILBOX_IPC_CHANNELS.connect, async () => await host.connect());
+  return host;
 }
 
 export async function openWindow(configuration: DesktopConfiguration): Promise<BrowserWindow> {
@@ -168,6 +190,15 @@ export function registerWindows(configuration: DesktopConfiguration, manager: Se
   });
   // Lane G9: Settings, the dashboard and Diagnostics, in one window of three screens.
   registerAdminBridge({ api, session });
+  // The Mailbox row on G2's own window: the same token and the same version gate, and
+  // the consent screen in the system browser exactly as sign-in opens it (5.1).
+  registerMailboxBridge({
+    api,
+    session,
+    openExternally: async url => {
+      await shell.openExternal(url);
+    },
+  });
 
   const renderer = (name: string): { readonly pageFile: string; readonly pageUrl?: string; readonly preloadEntry: string } => ({
     preloadEntry: configuration.preloadEntry,

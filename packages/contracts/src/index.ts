@@ -7,3 +7,4 @@ export * from './crmSurface.ts';
 export * from './dial.ts';
 export * from './settings.ts';
 export * from './templates.ts';
+export * from './mail.ts';

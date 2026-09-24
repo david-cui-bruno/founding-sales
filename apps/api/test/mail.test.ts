@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { connectMailboxCommandSchema, gmailConnectResultSchema, gmailStatusSchema } from '@fss/contracts';
 import {
   GMAIL_SCOPES,
   fixturePushTokens,
@@ -147,9 +148,12 @@ describe('Gmail routes', () => {
   });
 
   it('asks Google for gmail.readonly and gmail.send and nothing wider, with no secret in the URL', async () => {
-    const started = await post('/gmail/connect', assigneeToken, command());
+    // The envelope the Mac sends is the shared contract's, and so is the answer it parses.
+    const body = command();
+    expect(connectMailboxCommandSchema.safeParse(body).success).toBe(true);
+    const started = await post('/gmail/connect', assigneeToken, body);
     expect(started.status).toBe(200);
-    const result = started.body['result'] as { authorizationUrl: string };
+    const result = gmailConnectResultSchema.parse(started.body['result']);
     const url = new URL(result.authorizationUrl);
     expect(url.searchParams.get('scope')?.split(' ').sort()).toEqual([...GMAIL_SCOPES].sort());
     expect(url.searchParams.get('code_challenge_method')).toBe('S256');
@@ -174,10 +178,12 @@ describe('Gmail routes', () => {
     expect(String(page.body)).not.toContain(state);
 
     const status = await get('/gmail/status', assigneeToken);
-    const reported = status.body as { connected: boolean; mailbox: { emailAddress: string; syncState: string } };
+    // Parsed with the schema the Mac's Mailbox row uses (`@fss/contracts`), so a shape
+    // the route changes on its own is a failure here, not a row that says "Unknown".
+    const reported = gmailStatusSchema.parse(status.body);
     expect(reported.connected).toBe(true);
-    expect(reported.mailbox.emailAddress).toBe(gmailFixture.emailAddress);
-    expect(reported.mailbox.syncState).toBe('baseline_pending');
+    expect(reported.mailbox?.emailAddress).toBe(gmailFixture.emailAddress);
+    expect(reported.mailbox?.syncState).toBe('baseline_pending');
     expect(JSON.stringify(reported)).not.toContain(gmailFixture.refreshToken ?? 'never');
   });
 

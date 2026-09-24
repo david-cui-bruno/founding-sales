@@ -4,7 +4,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
-import type { DesktopState } from '../../../src/shared/contract.ts';
+import type { DesktopState, MailboxState } from '../../../src/shared/contract.ts';
 
 /**
  * The generated test server the Playwright specs run against.
@@ -27,6 +27,8 @@ export interface TestServer {
   readonly url: string;
   /** Replace the state the bridge answers with, for the next page load or call. */
   setState(state: DesktopState): void;
+  /** What the Mailbox row's bridge answers `connect` with. Connected, unless a test says otherwise. */
+  setConnectAnswer(state: MailboxState): void;
   readonly calls: string[];
   stop(): Promise<void>;
 }
@@ -82,13 +84,42 @@ export function signedInState(overrides: Partial<DesktopState> = {}): DesktopSta
   };
 }
 
-/** The bridge the browser gets. The same four methods the preload script exposes. */
+export const EXAMPLE_MAILBOX_ADDRESS = 'sales@example.test';
+
+/** The Mailbox row before anything is connected: what `/gmail/status` says for a new user. */
+export function notConnectedMailbox(overrides: Partial<MailboxState> = {}): MailboxState {
+  return { status: { connected: false, mailbox: null }, connecting: false, mayConnect: true, notice: null, ...overrides };
+}
+
+/** What the main process answers once the grant has landed and the baseline has started. */
+export function connectedMailbox(overrides: Partial<MailboxState> = {}): MailboxState {
+  return {
+    status: {
+      connected: true,
+      mailbox: { emailAddress: EXAMPLE_MAILBOX_ADDRESS, status: 'connected', syncState: 'baseline_pending' },
+    },
+    connecting: false,
+    mayConnect: true,
+    notice: null,
+    ...overrides,
+  };
+}
+
+/**
+ * The bridges the browser gets: the same four methods `callie` has in the preload
+ * script, and the Mailbox row's three on `callieMailbox`.
+ */
 const BRIDGE_SCRIPT = `
 globalThis.callie = {
   async state() { return await ask('state'); },
   async signIn(input) { return await ask('signIn', input); },
   async signOut() { return await ask('signOut'); },
   async refreshToday() { return await ask('refreshToday'); },
+};
+globalThis.callieMailbox = {
+  async state() { return await ask('mailboxState'); },
+  async refresh() { return await ask('mailboxRefresh'); },
+  async connect() { return await ask('mailboxConnect'); },
 };
 async function ask(method, argument) {
   const response = await fetch('/bridge/' + method, {
@@ -124,7 +155,10 @@ async function readBody(request: IncomingMessage): Promise<unknown> {
   }
 }
 
-export async function startTestServer(initial: DesktopState): Promise<TestServer> {
+export async function startTestServer(
+  initial: DesktopState,
+  initialMailbox: MailboxState = notConnectedMailbox(),
+): Promise<TestServer> {
   const rendererScript = await transpileRenderer();
   const html = (await readFile(`${rendererDirectory}index.html`, 'utf8'))
     // The generated bridge is a second local script; the page's own policy allows it.
@@ -140,6 +174,8 @@ export async function startTestServer(initial: DesktopState): Promise<TestServer
   const styles = await readFile(`${rendererDirectory}styles.css`, 'utf8');
 
   let state = initial;
+  let mailbox = initialMailbox;
+  let connectAnswer = connectedMailbox();
   const calls: string[] = [];
 
   const server: Server = createServer((request: IncomingMessage, response: ServerResponse) => {
@@ -159,6 +195,12 @@ export async function startTestServer(initial: DesktopState): Promise<TestServer
         await readBody(request);
         if (method === 'signIn') state = signedInState();
         if (method === 'signOut') state = signedOutState({ notice: 'signed_out' });
+        if (method.startsWith('mailbox')) {
+          // The real main process holds `connect` open while the browser has the person;
+          // here the grant lands at once, which is all a spec of the window can see.
+          if (method === 'mailboxConnect') mailbox = connectAnswer;
+          return send(200, 'application/json', JSON.stringify(mailbox));
+        }
         return send(200, 'application/json', JSON.stringify(state));
       }
       return send(404, 'text/plain', 'not found');
@@ -177,6 +219,9 @@ export async function startTestServer(initial: DesktopState): Promise<TestServer
     calls,
     setState: value => {
       state = value;
+    },
+    setConnectAnswer: value => {
+      connectAnswer = value;
     },
     stop: async () => {
       // `close` waits for every open connection, and the page holds a keep-alive

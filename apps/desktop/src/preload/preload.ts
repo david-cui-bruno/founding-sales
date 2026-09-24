@@ -5,7 +5,15 @@ import { TODAY_IPC_CHANNELS } from '../main/todayBridge.ts';
 import { SEQUENCE_IPC_CHANNELS } from '../main/sequenceBridge.ts';
 import { REPLY_IPC_CHANNELS } from '../main/replyBridge.ts';
 import { ADMIN_IPC_CHANNELS } from '../main/settingsBridge.ts';
-import { desktopStateSchema, type DesktopBridge, type DesktopState } from '../shared/contract.ts';
+import { MAILBOX_IPC_CHANNELS } from '../main/mailboxBridge.ts';
+import {
+  desktopStateSchema,
+  mailboxStateSchema,
+  type DesktopBridge,
+  type DesktopState,
+  type MailboxBridge,
+  type MailboxState,
+} from '../shared/contract.ts';
 import type { CrmBridge, CrmState } from '../renderer/firmWorkspaceContract.ts';
 import { todayStateSchema, type TodayBridge, type TodayState } from '../renderer/todayContract.ts';
 import { replyStateSchema, type ReplyBridge, type ReplyState } from '../renderer/replyContract.ts';
@@ -21,8 +29,10 @@ import type { AdminBridge, AdminState } from '../renderer/settingsContract.ts';
  *
  * One preload script serves all six windows, because Electron gives a window one
  * preload and a window only ever calls the bridge it was built for. Installing all
- * six is not a widening: every channel below is answered by a main-process handler
- * that exists, and a window that never calls one has reached nothing.
+ * seven bridges is not a widening: every channel below is answered by a main-process
+ * handler that exists, and a window that never calls one has reached nothing.
+ * `callieMailbox` is the seventh, and the only one that serves the same window as
+ * `callie`: G2's page shows the Mailbox row on its "This Mac" card.
  *
  * Parsing on this side as well as on the main side is not paranoia about our own
  * code: it is what makes the renderer's type a guarantee rather than a hope, and it
@@ -42,6 +52,11 @@ import type { AdminBridge, AdminState } from '../renderer/settingsContract.ts';
 const invokeDesktop = async (channel: string, argument?: unknown): Promise<DesktopState> => {
   const answer: unknown = await ipcRenderer.invoke(channel, argument);
   return desktopStateSchema.parse(answer);
+};
+
+const invokeMailbox = async (channel: string): Promise<MailboxState> => {
+  const answer: unknown = await ipcRenderer.invoke(channel);
+  return mailboxStateSchema.parse(answer);
 };
 
 const invokeToday = async (channel: string, argument?: unknown): Promise<TodayState> => {
@@ -76,6 +91,17 @@ const bridge: DesktopBridge = {
   signIn: async input => await invokeDesktop(IPC_CHANNELS.signIn, input),
   signOut: async () => await invokeDesktop(IPC_CHANNELS.signOut),
   refreshToday: async () => await invokeDesktop(IPC_CHANNELS.refreshToday),
+};
+
+/**
+ * The Mailbox row (release.md 8.0x). Three methods and no disconnect — see
+ * `MailboxBridge` in the shared contract for why — and none takes an argument, so
+ * nothing the page does can choose a scope, a redirect or a URL to open.
+ */
+const mailbox: MailboxBridge = {
+  state: async () => await invokeMailbox(MAILBOX_IPC_CHANNELS.state),
+  refresh: async () => await invokeMailbox(MAILBOX_IPC_CHANNELS.refresh),
+  connect: async () => await invokeMailbox(MAILBOX_IPC_CHANNELS.connect),
 };
 
 const today: TodayBridge = {
@@ -146,6 +172,7 @@ const admin: AdminBridge = {
 };
 
 contextBridge.exposeInMainWorld('callie', bridge);
+contextBridge.exposeInMainWorld('callieMailbox', mailbox);
 contextBridge.exposeInMainWorld('callieToday', today);
 contextBridge.exposeInMainWorld('callieCrm', crm);
 contextBridge.exposeInMainWorld('callieReplies', replies);

@@ -1,6 +1,8 @@
 import { expect, test } from 'playwright/test';
 import {
   EXAMPLE_WORKSPACE,
+  connectedMailbox,
+  notConnectedMailbox,
   signedInState,
   signedOutState,
   startTestServer,
@@ -100,4 +102,62 @@ test('a firm name that looks like markup is shown as text', async ({ page }) => 
 
   await expect(page.getByTestId('today-card')).toContainText('<img src=x onerror=alert(1)>');
   await expect(page.locator('img')).toHaveCount(0);
+});
+
+/**
+ * The Mailbox row (release.md 8.0x). Desktop 1.0.0's "This Mac" card had Sign out and
+ * nothing else, and no spec here said what the card should hold — so these name the
+ * card's exact buttons in each state, and a build without Connect Gmail fails here.
+ */
+test('This Mac offers Connect Gmail, and a connected mailbox shows its address and status', async ({ page }) => {
+  server = await startTestServer(signedInState());
+  const dialogs: string[] = [];
+  page.on('dialog', dialog => {
+    dialogs.push(dialog.message());
+    void dialog.dismiss();
+  });
+  await page.goto(server.url);
+
+  const panel = page.getByTestId('device-panel');
+  await expect(panel.getByTestId('mailbox-status')).toHaveText('Not connected');
+  await expect(panel.getByRole('button')).toHaveText(['Connect Gmail', 'Sign out']);
+  await expect(page.getByTestId('mailbox-connect')).toBeEnabled();
+
+  await page.getByTestId('mailbox-connect').click();
+
+  await expect(panel.getByTestId('mailbox-status')).toHaveText('sales@example.test · connected · baseline pending');
+  // Connected: nothing to press but Sign out. No Disconnect — the thirty-day rule.
+  await expect(panel.getByRole('button')).toHaveText(['Sign out']);
+  expect(server.calls).toContain('mailboxConnect');
+  expect(dialogs).toEqual([]);
+});
+
+test('a refused connection is plain text on the card, never a dialog', async ({ page }) => {
+  server = await startTestServer(signedInState());
+  server.setConnectAnswer(notConnectedMailbox({ notice: 'client_upgrade_required' }));
+  const dialogs: string[] = [];
+  page.on('dialog', dialog => {
+    dialogs.push(dialog.message());
+    void dialog.dismiss();
+  });
+  await page.goto(server.url);
+
+  await page.getByTestId('mailbox-connect').click();
+
+  await expect(page.getByTestId('mailbox-notice')).toHaveText(
+    'This version of Callie is out of date. Install the current build to continue.',
+  );
+  await expect(page.getByTestId('mailbox-status')).toHaveText('Not connected');
+  await expect(page.getByTestId('mailbox-connect')).toHaveText('Connect Gmail');
+  expect(dialogs).toEqual([]);
+});
+
+test('a Mac that already has its mailbox shows it on first paint, and Refresh reads it again', async ({ page }) => {
+  server = await startTestServer(signedInState(), connectedMailbox());
+  await page.goto(server.url);
+
+  await expect(page.getByTestId('mailbox-status')).toHaveText('sales@example.test · connected · baseline pending');
+  await expect(page.getByTestId('mailbox-connect')).toHaveCount(0);
+  await page.getByTestId('refresh').click();
+  await expect.poll(() => server.calls.includes('mailboxRefresh')).toBe(true);
 });
