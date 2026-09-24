@@ -17,9 +17,10 @@
 #
 #   1. every resource the rehearsal state ever held is named `fss-rh-<run>`;
 #   2. the deployment role the run assumed is `fss-rh-deploy`, not `fss-prod-deploy`;
-#   3. the production resources that existed before the run still exist afterwards,
-#      with the same identifiers — so "teardown could not address them" is measured
-#      rather than asserted.
+#   3. the durable production resources that existed before the run still exist
+#      afterwards, with the same identifiers — so "teardown could not address them" is
+#      measured rather than asserted. Durable means everything but ECS tasks, which ECS
+#      forgets on its own (`durable_inventory`, below).
 #
 # `before` records the production inventory; `after` compares. The comparison is the
 # test; recording alone proves nothing, and the script says so if `after` is run with
@@ -53,6 +54,62 @@ production_inventory() {
   # claim — but then the comparison is between two errors, so the read is a refusal
   # rather than an empty list when it fails.
   rehearsal_read_production_inventory resourcegroupstaggingapi get-resources
+}
+
+# The inventory minus what ECS forgets on its own.
+#
+#   durable_inventory <which side> < inventory.json
+#
+# The tagging API lists ECS *tasks*, because a service's tasks carry its propagated tags,
+# and a task is not a durable resource: a stopped one stays visible for about an hour and
+# then ECS forgets it. Run 35962272085 (24 September 2026, prefix fss-rh-202609240558)
+# failed this comparison with exactly twelve deleted lines, every one
+# `arn:aws:ecs:us-east-1:…:task/fss-prod-cluster/<id>` — the old service tasks and the
+# one-off migrate, users, verify and bootstrap tasks of the production redeploy at
+# 05:50–05:57Z, recorded at 05:59Z while ECS still showed them and aged out by 07:10Z.
+# Production had not moved: both services stayed stable on revision 4 throughout.
+#
+# So the comparison is between durable resources, and this is the one place that says
+# what durable means: every ARN except one whose service is `ecs` and whose resource
+# part begins `task/`. Parsed rather than matched as a substring, so
+# `task-definition/fss-prod-api:5` is kept — a new task-definition revision is a
+# production touch and must still fail the guard — and so are the cluster, the
+# services, the log groups, the alarms, the buckets and the roles. A task the rehearsal
+# itself launched into production is not measured here; that direction is refused per
+# launch by `release_refuse_foreign_arguments` in `release-common.sh` (Appendix G 39,
+# the symmetric refusal) and by the identity assertion in step 2.
+#
+# Applied to **both** sides at comparison time, not only to the read, so a `before`
+# file recorded by an older guard — one that kept its tasks — compares correctly too.
+# The recorded file itself stays the raw read: it is the evidence of what existed.
+durable_inventory() {
+  FSS_INVENTORY_SIDE="${1:-inventory}" python3 -c '
+import json, os, sys
+
+side = os.environ["FSS_INVENTORY_SIDE"]
+try:
+    arns = json.load(sys.stdin)
+except ValueError as error:
+    sys.stderr.write("FAIL: the production inventory %s is not JSON: %s\n" % (side, error))
+    sys.exit(1)
+if not isinstance(arns, list):
+    sys.stderr.write("FAIL: the production inventory %s is not a list of ARNs\n" % side)
+    sys.exit(1)
+
+def is_ecs_task(arn):
+    parts = arn.split(":", 5) if isinstance(arn, str) else []
+    return len(parts) == 6 and parts[0] == "arn" and parts[2] == "ecs" and parts[5].startswith("task/")
+
+durable = [arn for arn in arns if not is_ecs_task(arn)]
+set_aside = len(arns) - len(durable)
+if set_aside:
+    sys.stderr.write(
+        "the production inventory %s: %d ECS task ARN(s) set aside, because ECS forgets a stopped task\n"
+        % (side, set_aside)
+    )
+json.dump(durable, sys.stdout, indent=2)
+sys.stdout.write("\n")
+'
 }
 
 case "$PHASE" in
@@ -102,7 +159,7 @@ case "$PHASE" in
     if rehearsal_dry_run; then
       rehearsal_plan "terraform state list | grep -v '$PREFIX' -> expect empty"
       rehearsal_plan "aws sts get-caller-identity -> expect an fss-rh- role"
-      rehearsal_plan "compare the production inventory with $INVENTORY"
+      rehearsal_plan "compare the durable production inventory (ECS tasks set aside, both sides) with $INVENTORY"
       production_inventory
     else
       # A state that cannot be listed is the shape a run that created nothing takes:
@@ -155,10 +212,12 @@ case "$PHASE" in
         echo "FAIL: the only inventory recorded was a dry run's, so there is nothing to compare against" >&2
         exit 1
       fi
-      current="$(production_inventory)"
-      if [ "$current" != "$(cat "$INVENTORY")" ]; then
+      # Durable resources only, on both sides (`durable_inventory` above says why).
+      recorded="$(durable_inventory 'recorded before the run' < "$INVENTORY")"
+      current="$(production_inventory | durable_inventory 'read now')"
+      if [ "$current" != "$recorded" ]; then
         echo "FAIL: the production inventory changed during the rehearsal run" >&2
-        diff <(cat "$INVENTORY") <(printf '%s\n' "$current") >&2 || true
+        diff <(printf '%s\n' "$recorded") <(printf '%s\n' "$current") >&2 || true
         exit 1
       fi
     fi

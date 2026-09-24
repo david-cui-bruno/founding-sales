@@ -1173,6 +1173,158 @@ echo "unexpected: $*" >&2; exit 9`,
 });
 
 /**
+ * G47: the comparison counted tasks that ECS forgets on its own.
+ *
+ * Run 35962272085 (24 September 2026, prefix fss-rh-202609240558) passed everything up
+ * to its last step and then failed "Nothing with the production prefix was touched"
+ * with a diff of exactly twelve deleted lines, every one an ECS task in
+ * `fss-prod-cluster`. The tagging API lists tasks because they carry the service's
+ * propagated tags; those twelve were stopped by the production redeploy minutes before
+ * the `before` read, and ECS forgets a stopped task after about an hour, so they aged
+ * out during the run. Production had not moved.
+ *
+ * ## The vacuous-pass trap
+ *
+ * The cheap fix is to drop everything ECS, or everything whose resource part starts
+ * `task`, and it is wrong both ways: a new task-definition revision *is* a production
+ * touch — it is what a deploy leaves behind — and a missing service or cluster is the
+ * thing the scenario exists to notice. So the guard is run, not read, against the shape
+ * of that run (twelve stopped tasks before, none after, plus the running ones and a
+ * replacement) and must pass; and against a new revision, a removed revision, a removed
+ * service and a removed cluster, and must fail each time, naming the resource.
+ */
+describe('Appendix G 39: the production comparison is between durable resources', () => {
+  const ACCOUNT = '123456789012';
+  const ecs = (resource: string): string => `arn:aws:ecs:us-east-1:${ACCOUNT}:${resource}`;
+  const CLUSTER = ecs('cluster/fss-prod-cluster');
+  const API_SERVICE = ecs('service/fss-prod-cluster/fss-prod-api');
+  const WORKER_DEFINITION = ecs('task-definition/fss-prod-worker:4');
+  const DURABLE: readonly string[] = [
+    CLUSTER,
+    API_SERVICE,
+    ecs('service/fss-prod-cluster/fss-prod-worker'),
+    ecs('task-definition/fss-prod-api:4'),
+    WORKER_DEFINITION,
+    `arn:aws:logs:us-east-1:${ACCOUNT}:log-group:fss-prod-api`,
+    `arn:aws:cloudwatch:us-east-1:${ACCOUNT}:alarm:fss-prod-canary-stale`,
+    `arn:aws:rds:us-east-1:${ACCOUNT}:db:fss-prod-pg`,
+    `arn:aws:s3:::fss-prod-journal-${ACCOUNT}`,
+    `arn:aws:iam::${ACCOUNT}:role/fss-prod-api-task`,
+  ];
+  const task = (index: number): string =>
+    ecs(`task/fss-prod-cluster/${index.toString(16).padStart(32, '0')}`);
+  /** The redeploy's stopped tasks: the old service tasks and the one-off migrate, users, verify and bootstrap. */
+  const STOPPED = Array.from({ length: 12 }, (_, index) => task(index + 1));
+  const RUNNING = [task(0xa1), task(0xa2)];
+
+  /** Record `before`, then compare against `after`, the way the workflow does. */
+  function guardAcross(
+    before: readonly string[],
+    after: readonly string[],
+  ): { readonly code: number; readonly output: string; readonly recorded: string } {
+    const stubs = mkdtempSync(join(tmpdir(), 'fss-durable-'));
+    const reports = mkdtempSync(join(tmpdir(), 'fss-durable-reports-'));
+    const terraform = stubCommand(stubs, 'terraform', 'echo "No state file was found!" >&2; exit 1');
+    // What the tagging API answers after `--query`: a task carries the service's
+    // propagated Name tag, which is how it got into the production selection at all.
+    const answer = (arns: readonly string[]): string =>
+      `echo '${JSON.stringify(arns.map(arn => ({ arn, name: 'fss-prod-api' })))}'`;
+
+    const recording = runRehearsalScript(GUARD, ['fss-rh-durable', 'before'], {
+      FSS_REHEARSAL_REPORTS: reports,
+      FSS_REHEARSAL_AWS_COMMAND: stubCommand(stubs, 'aws-before', answer(before)),
+      TERRAFORM: terraform,
+    });
+    expect(recording.code, recording.output).toBe(0);
+
+    const comparison = runRehearsalScript(
+      GUARD,
+      ['fss-rh-durable', 'after'],
+      {
+        FSS_REHEARSAL_REPORTS: reports,
+        FSS_REHEARSAL_CALLER_IDENTITY: `arn:aws:sts::${ACCOUNT}:assumed-role/fss-rh-deploy/x`,
+        FSS_REHEARSAL_AWS_COMMAND: stubCommand(stubs, 'aws-after', answer(after)),
+        TERRAFORM: terraform,
+      },
+      stubs,
+    );
+    return { ...comparison, recorded: readFileSync(join(reports, 'production-inventory.json'), 'utf8') };
+  }
+
+  it('passes when tasks the redeploy stopped age out during the run', () => {
+    // Run 35962272085 exactly: twelve stopped tasks recorded, gone an hour later; the
+    // running service tasks still there; and a replacement task started meanwhile.
+    const { code, output, recorded } = guardAcross(
+      [...DURABLE, ...STOPPED, ...RUNNING],
+      [...DURABLE, ...RUNNING, task(0xb1)],
+    );
+
+    expect(code, output).toBe(0);
+    expect(output).toContain('nothing with the production prefix was addressed');
+    // Said out loud, per side, rather than silently dropped.
+    expect(output).toContain('recorded before the run: 14 ECS task ARN(s) set aside');
+    expect(output).toContain('read now: 3 ECS task ARN(s) set aside');
+    // The recorded file is still the raw read — the tasks are in it — so the filter
+    // is applied to the recorded side at comparison time, which is also what makes a
+    // file recorded by an older guard compare correctly.
+    expect(recorded).toContain(STOPPED[0]);
+  });
+
+  it('fails on a new task-definition revision, because a revision is a production touch', () => {
+    const { code, output } = guardAcross(
+      [...DURABLE, ...STOPPED],
+      [...DURABLE, ecs('task-definition/fss-prod-api:5')],
+    );
+
+    expect(code).not.toBe(0);
+    expect(output).toContain('the production inventory changed during the rehearsal run');
+    expect(output).toContain('task-definition/fss-prod-api:5');
+    // The diff names the durable change and nothing ECS forgot.
+    expect(output).not.toContain(':task/fss-prod-cluster/');
+  });
+
+  it('fails when a revision, a service or the cluster is gone', () => {
+    for (const removed of [WORKER_DEFINITION, API_SERVICE, CLUSTER]) {
+      const { code, output } = guardAcross(
+        [...DURABLE, ...RUNNING],
+        [...DURABLE.filter(arn => arn !== removed), ...RUNNING],
+      );
+
+      expect(code, `${removed} removed, and the guard passed`).not.toBe(0);
+      expect(output).toContain('the production inventory changed during the rehearsal run');
+      expect(output).toContain(removed);
+    }
+  });
+
+  it('refuses a recording that is not a list of ARNs rather than comparing it', () => {
+    const stubs = mkdtempSync(join(tmpdir(), 'fss-durable-bad-'));
+    const reports = mkdtempSync(join(tmpdir(), 'fss-durable-bad-reports-'));
+    writeFileSync(join(reports, 'production-inventory.json'), '{"not": "a list"}\n');
+    const { code, output } = runRehearsalScript(
+      GUARD,
+      ['fss-rh-durable', 'after'],
+      {
+        FSS_REHEARSAL_REPORTS: reports,
+        FSS_REHEARSAL_CALLER_IDENTITY: `arn:aws:sts::${ACCOUNT}:assumed-role/fss-rh-deploy/x`,
+        FSS_REHEARSAL_AWS_COMMAND: stubCommand(stubs, 'aws', `echo '[]'`),
+        TERRAFORM: stubCommand(stubs, 'terraform', 'echo "No state file was found!" >&2; exit 1'),
+      },
+      stubs,
+    );
+
+    expect(code).not.toBe(0);
+    expect(output).toContain('recorded before the run is not a list of ARNs');
+    expect(output).not.toContain('nothing with the production prefix was addressed');
+  });
+
+  it('is written down beside the run that found it', () => {
+    const release = readRepositoryFile('docs/greenfield/release.md');
+    expect(release).toContain('### 8.0v What the twelfth full run proved');
+    expect(release).toContain('35962272085');
+  });
+});
+
+/**
  * G12h: the same clause read from the other direction, and the wrapper that makes it
  * true at the moment a task is launched.
  *
