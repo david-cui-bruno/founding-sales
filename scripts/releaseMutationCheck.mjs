@@ -269,6 +269,33 @@ const MUTATIONS = [
       "The first credentialed rehearsal refused its own inventory read, and no pull request could have caught it because the refusal only happens when the command is issued. The plan scan is the offline half; a scan that refuses nothing would let the next self-refusal through to the next credentialed run.",
   },
   {
+    name: 'the production guard compares ECS tasks again',
+    file: 'infra/scripts/rehearsal-prefix-guard.sh',
+    find: 'durable = [arn for arn in arns if not is_ecs_task(arn)]\n',
+    replace: 'durable = list(arns)\n',
+    suite: ['run', 'test:release'],
+    because:
+      'This is run 35962272085 exactly (24 September 2026): twelve production tasks the redeploy had stopped were recorded at 05:59Z and forgotten by ECS before the 07:10Z comparison, and the guard reported a production touch that never happened. The tagging API lists tasks because they carry propagated tags, and ECS drops a stopped task after about an hour, so scenario 39 runs the guard against that shape and has to go red when tasks are compared again.',
+  },
+  {
+    name: 'the production guard sets aside task-definition revisions with the tasks',
+    file: 'infra/scripts/rehearsal-prefix-guard.sh',
+    find: 'parts[5].startswith("task/")',
+    replace: 'parts[5].startswith("task")',
+    suite: ['run', 'test:release'],
+    because:
+      'A new task-definition revision is what a production deploy leaves behind, so it is a production touch and the guard must still see it. `task-definition/…` and `task/…` differ by one character after `task`. A filter that matched the prefix without the slash would quietly stop measuring the one ECS resource that proves a deploy happened, and scenario 39 has to go red when it does.',
+  },
+  {
+    name: 'the production guard stops filtering the inventory it recorded',
+    file: 'infra/scripts/rehearsal-prefix-guard.sh',
+    find: `      recorded="$(durable_inventory 'recorded before the run' < "$INVENTORY")"\n`,
+    replace: '      recorded="$(cat "$INVENTORY")"\n',
+    suite: ['run', 'test:release'],
+    because:
+      'The recorded file is the raw read, tasks included, so that it stays evidence of what existed and so that a file an older guard recorded compares correctly. The filter therefore has to be applied to the recorded side at comparison time as well as to the fresh read. Filter only one side and the twelve stopped tasks of run 35962272085 fail the guard again.',
+  },
+  {
     name: 'the teardown starts treating every failure as an absence',
     file: 'infra/scripts/rehearsal-common.sh',
     find: '    case "$output" in\n      *"($code)"*)',
