@@ -1111,9 +1111,21 @@ jobs:
           # as the cause — the smoke script still refuses to *skip* the canary, which is
           # the rule (`SMOKE_CANARY_AGE_NOT_SUPPLIED`); what changes is that a missing
           # metric reads as a missing metric.
+          #
+          # And it is read from this run's own namespace. Every environment in the
+          # account used to publish into the bare `FSS`, so the tenth full run's smoke
+          # read production's canary age, 837.9 s, and failed on it (release.md 8.0s,
+          # g42). The namespace is FSS/<prefix>, derived once in infra/modules/stack;
+          # this reads the root output the alarms and the task definitions were built
+          # from, and refuses to read anything but its own run's.
+          namespace="$(terraform -chdir=infra/roots/rehearsal output -raw metric_namespace)"
+          if [ "$namespace" != "FSS/${{ steps.prefix.outputs.prefix }}" ]; then
+            echo "::error::the rehearsal root reports metric namespace '$namespace', not FSS/${{ steps.prefix.outputs.prefix }}; the smoke would read another environment's canary"
+            exit 1
+          fi
           age=None
           for attempt in 1 2 3 4 5 6 7 8 9 10; do
-            age="$(aws cloudwatch get-metric-statistics --namespace FSS \
+            age="$(aws cloudwatch get-metric-statistics --namespace "$namespace" \
               --metric-name CanaryCompletionAgeSeconds --statistics Maximum \
               --start-time "$(date -u -d '-1 hour' +%Y-%m-%dT%H:%M:%SZ)" \
               --end-time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --period 300 \

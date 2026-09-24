@@ -13,6 +13,14 @@ import type { LogFields } from './log.ts';
  * The schema range is read as well as declared. The image knows the range it accepts;
  * the task definition also states one. If they disagree, one of the two is a stale
  * deployment and the conservative option is to stop rather than pick a winner.
+ *
+ * The metric namespace is the same kind of fact (g42, lane g55). `infra/modules/stack`
+ * derives `FSS/<name prefix>` once and the task definition carries it in
+ * `FSS_METRIC_NAMESPACE` beside `FSS_NAME_PREFIX`. There is no default any more: the old
+ * one was the bare `FSS`, which every environment in the account shared, so a rehearsal
+ * worker fed production's alarms and the rehearsal smoke read production's canary age.
+ * A worker that will publish refuses to start without a namespace, and refuses one that
+ * is not `FSS/` followed by its own prefix.
  */
 
 export type ConfigErrorCode = 'MISSING' | 'INVALID' | 'SCHEMA_RANGE_DISAGREES';
@@ -43,7 +51,11 @@ export interface WorkerConfig {
   readonly passTimeoutMilliseconds: number;
   readonly metrics: {
     readonly mode: MetricMode;
-    readonly namespace: string;
+    /**
+     * `FSS/<name prefix>`. Null only when nothing will be published (metrics off, or no
+     * region); a worker that would publish without one is refused at startup.
+     */
+    readonly namespace: string | null;
     readonly region: string | null;
   };
   /** Appendix E step 1. Null when the operator has not pinned a generation. */
@@ -94,6 +106,45 @@ function metricMode(environment: Environment): MetricMode {
   const raw = (environment['FSS_METRICS'] ?? 'auto').trim().toLowerCase();
   if (raw === 'on' || raw === 'off' || raw === 'auto') return raw;
   throw new ConfigError('INVALID', 'FSS_METRICS must be on, off or auto');
+}
+
+/** Every FSS namespace is this followed by the environment's name prefix. */
+export const METRIC_NAMESPACE_ROOT = 'FSS';
+
+/**
+ * The CloudWatch namespace, `FSS/<name prefix>` (g42, lane g55).
+ *
+ * Required whenever the worker would publish: a deployed task always has a region, so
+ * a task definition that lost `FSS_METRIC_NAMESPACE` is a worker that refuses to start,
+ * not one that falls back to a namespace another environment is alarming on. When
+ * nothing is published — metrics off, or no region, which is a laptop or a test — the
+ * namespace is not needed and may be absent.
+ *
+ * When `FSS_NAME_PREFIX` is present (it always is in a task definition) the namespace
+ * must be exactly `FSS/<that prefix>`: two values the task definition derives from one
+ * prefix disagreeing means the definition was edited by hand, and the conservative
+ * answer is the same as for a disagreeing schema range. Without a prefix the bare `FSS`
+ * is still refused, because it is the one namespace that is certainly shared.
+ */
+function metricNamespace(environment: Environment, publishes: boolean, namePrefix: string | null): string | null {
+  const raw = environment['FSS_METRIC_NAMESPACE']?.trim();
+  if (raw === undefined || raw.length === 0) {
+    if (publishes) throw new ConfigError('MISSING', 'FSS_METRIC_NAMESPACE is not set');
+    return null;
+  }
+  if (namePrefix !== null) {
+    if (raw !== `${METRIC_NAMESPACE_ROOT}/${namePrefix}`) {
+      throw new ConfigError('INVALID', 'FSS_METRIC_NAMESPACE must be FSS/ followed by FSS_NAME_PREFIX');
+    }
+    return raw;
+  }
+  if (!raw.startsWith(`${METRIC_NAMESPACE_ROOT}/`) || raw.length === METRIC_NAMESPACE_ROOT.length + 1) {
+    throw new ConfigError(
+      'INVALID',
+      'FSS_METRIC_NAMESPACE must be FSS/<name prefix>; the bare FSS namespace is shared by every environment in the account',
+    );
+  }
+  return raw;
 }
 
 /**
@@ -180,11 +231,15 @@ export function readWorkerConfig(environment: Environment): WorkerConfig {
   }
 
   const region = environment['AWS_REGION']?.trim();
+  const metricRegion = region !== undefined && region.length > 0 ? region : null;
+  const prefix = environment['FSS_NAME_PREFIX']?.trim();
+  const namePrefix = prefix !== undefined && prefix.length > 0 ? prefix : null;
+  const mode = metricMode(environment);
 
   return {
     role: 'worker',
     instanceKey: instanceKey(environment),
-    namePrefix: environment['FSS_NAME_PREFIX']?.trim() ?? null,
+    namePrefix,
     schemaRange: { minimum: WORKER_SCHEMA_RANGE.minimum, maximum: WORKER_SCHEMA_RANGE.maximum },
     concurrency: positiveInteger(environment, 'FSS_WORKER_CONCURRENCY', 1),
     schedulerIntervalMilliseconds: positiveInteger(
@@ -202,9 +257,11 @@ export function readWorkerConfig(environment: Environment): WorkerConfig {
     statementTimeoutMilliseconds: positiveInteger(environment, 'FSS_STATEMENT_TIMEOUT_MS', 5_000),
     passTimeoutMilliseconds: positiveInteger(environment, 'FSS_PASS_TIMEOUT_MS', 45_000),
     metrics: {
-      mode: metricMode(environment),
-      namespace: environment['FSS_METRIC_NAMESPACE']?.trim() ?? 'FSS',
-      region: region !== undefined && region.length > 0 ? region : null,
+      mode,
+      // `createSink` publishes exactly when the mode is not off and a region is known,
+      // so that is when a namespace is required.
+      namespace: metricNamespace(environment, mode !== 'off' && metricRegion !== null, namePrefix),
+      region: metricRegion,
     },
     expectedSystemGeneration:
       expectedGeneration !== undefined && expectedGeneration.length > 0 ? Number(expectedGeneration) : null,

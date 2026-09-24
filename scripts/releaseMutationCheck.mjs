@@ -661,6 +661,15 @@ const MUTATIONS = [
     because:
       'Launched with --as-of, the drill measures step 0 again on the restored copy, so "no suppression lost" is compared with the restored database rather than with the source baseline measured before the restore (lane g53). The dry run prints only the plan line, so scenario 11 reads the real drill_task launch through the extractor and has to go red when it passes an instant.',
   },
+  {
+    name: 'the rehearsal smoke reads the canary age from the bare FSS namespace again',
+    file: '.github/workflows/greenfield-release.yml',
+    find: '            age="$(aws cloudwatch get-metric-statistics --namespace "$namespace" \\\n',
+    replace: '            age="$(aws cloudwatch get-metric-statistics --namespace FSS \\\n',
+    suite: ['run', 'test:release', '--', 'test/release/metricNamespace.check.ts'],
+    because:
+      'This is the tenth full rehearsal exactly (run 35943001092, 23 September 2026): the smoke failed in two seconds on a canary age of 837.9 s that was production\u2019s, because every environment in the account published into the bare FSS namespace and the smoke read it. The step still reads the run\u2019s namespace from the root output and still checks it, so a check that only looked for the output would stay green; metricNamespace.check.ts reads the query itself and has to go red.',
+  },
 ];
 
 function run(script) {

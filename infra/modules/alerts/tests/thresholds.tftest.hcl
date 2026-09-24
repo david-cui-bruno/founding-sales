@@ -19,8 +19,9 @@ mock_provider "aws" {
 }
 
 variables {
-  name_prefix    = "fss-test"
-  aws_account_id = "123456789012"
+  name_prefix      = "fss-test"
+  aws_account_id   = "123456789012"
+  metric_namespace = "FSS/test"
   # Generated at test time, never a real address.
   alert_emails = ["alerts@example.invalid"]
 }
@@ -171,4 +172,45 @@ run "a_recipient_that_is_not_an_address_is_refused" {
   }
 
   expect_failures = [var.alert_emails]
+}
+
+# g42, lane g55: every alarm reads the namespace it was given, and only that one.
+# The value is the stack's FSS/<name_prefix>; the bare FSS every environment in the
+# account used to share is refused at the variable, so a rehearsal's alarms can no
+# longer read production's metrics or the other way round.
+run "every_alarm_reads_the_namespace_it_was_given_and_no_other" {
+  command = plan
+
+  assert {
+    condition = length(aws_cloudwatch_metric_alarm.this) > 0 && alltrue([
+      for alarm in aws_cloudwatch_metric_alarm.this : alarm.namespace == "FSS/test"
+    ])
+    error_message = "Every single-metric alarm reads the environment's namespace."
+  }
+
+  # The metric-math alarm has three queries: the expression and the two metrics
+  # it divides. Both metrics must be read from the same namespace, or the ratio
+  # compares one environment's held enrollments with another's active ones.
+  assert {
+    condition = sort(flatten([
+      for query in aws_cloudwatch_metric_alarm.all_sequences_held.metric_query :
+      [for metric in query.metric : metric.namespace]
+    ])) == tolist(["FSS/test", "FSS/test"])
+    error_message = "Both metrics behind all_sequences_held are read from the environment's namespace."
+  }
+
+  assert {
+    condition     = output.alarm_metric_namespaces == tolist(["FSS/test"])
+    error_message = "The module reports exactly one namespace across all its alarms."
+  }
+}
+
+run "the_bare_fss_namespace_is_refused" {
+  command = plan
+
+  variables {
+    metric_namespace = "FSS"
+  }
+
+  expect_failures = [var.metric_namespace]
 }

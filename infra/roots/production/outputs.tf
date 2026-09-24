@@ -13,6 +13,11 @@ output "destroyable" {
   value       = module.stack.destroyable
 }
 
+output "metric_namespace" {
+  description = "The CloudWatch namespace production publishes to and alarms on: FSS/fss-prod. Every by-hand get-metric-statistics in the runbooks names this, never the bare FSS."
+  value       = module.stack.metric_namespace
+}
+
 output "deployment_role_name" {
   description = "IAM role this root assumes."
   value       = var.deployment_role_name

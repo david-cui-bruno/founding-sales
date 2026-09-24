@@ -24,6 +24,17 @@ locals {
   # depending on the module that depends on the journal.
   api_task_role_name    = "${var.name_prefix}-api-task"
   worker_task_role_name = "${var.name_prefix}-worker-task"
+
+  # One CloudWatch namespace per environment, derived here and nowhere else: the
+  # metric filters (observability), the worker's FSS_METRIC_NAMESPACE and the task
+  # roles' `cloudwatch:namespace` conditions (cluster), and every alarm (alerts)
+  # read this one value. It used to be the bare FSS in all of them, and because
+  # the rehearsal and production share an account, a rehearsal worker published
+  # into production's metric streams: the tenth full run's smoke read production's
+  # canary age (release.md 8.0s), and production's alarms saw rehearsal data.
+  # The prefix is already disjoint by construction (the guard below), so the
+  # namespace is too. `docs/decisions/g55-one-metric-namespace-per-environment.md`.
+  metric_namespace = "FSS/${var.name_prefix}"
 }
 
 # The structural isolation guard. Everything downstream inherits name_prefix,
@@ -87,6 +98,8 @@ module "observability" {
   aws_region     = var.aws_region
   aws_account_id = var.aws_account_id
   retention_days = var.log_retention_days
+  # The metric filters publish into this environment's namespace, never bare FSS.
+  metric_namespace = local.metric_namespace
   # David's decision of 20 Sep 2026: logs and alerts share one key (five keys, not six).
   shared_with_alerts = true
   tags               = local.tags
@@ -242,7 +255,7 @@ module "cluster" {
   envelope_kms_key_arn = module.secrets.envelope_kms_key_arn
   secrets_kms_key_arn  = module.secrets.secrets_kms_key_arn
 
-  metric_namespace       = module.observability.metric_namespace
+  metric_namespace       = local.metric_namespace
   container_insights     = var.container_insights
   enable_execute_command = var.enable_execute_command
 
@@ -291,7 +304,7 @@ module "alerts" {
   name_prefix      = var.name_prefix
   aws_account_id   = var.aws_account_id
   alert_emails     = var.alert_emails
-  metric_namespace = module.observability.metric_namespace
+  metric_namespace = local.metric_namespace
 
   # Logs and alerts share one key (David, 20 September 2026), and the literal
   # false is how the alerts module learns that at plan time. The ARN beside it

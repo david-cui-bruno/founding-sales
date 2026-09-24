@@ -18,6 +18,12 @@ property, and clearing it is how a duplicate email or a prohibited call happens.
 General facts that apply to every page:
 
 - Alerts arrive by SNS email, which does not depend on any salesperson Gmail grant.
+- Every alarm reads its own environment's CloudWatch namespace, `FSS/<prefix>`:
+  `FSS/fss-prod` in production, `FSS/fss-rh-<run>` in a rehearsal. To read a metric
+  by hand, name it: `aws cloudwatch get-metric-statistics --namespace FSS/fss-prod
+  --metric-name <metric> ...`. Nothing publishes to the bare `FSS` any more, so a
+  query there reads only data from before lane g55, and a rehearsal can no longer
+  trip or mask a production alarm.
 - A critical condition repeats while unacknowledged. `POST /admin/alerts/acknowledge`
   stops the repetition; it does not fix anything and it is audited.
 - `GET /diagnostics` is the one read that shows schema version, client-version range,

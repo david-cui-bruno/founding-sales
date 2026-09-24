@@ -13,6 +13,11 @@ output "destroyable" {
   value       = var.destroyable
 }
 
+output "metric_namespace" {
+  description = "The CloudWatch namespace this environment's metrics, metric filters and alarms use: FSS/<name_prefix>. Anything that reads a metric by hand reads it here, never in the bare FSS namespace."
+  value       = local.metric_namespace
+}
+
 output "vpc_id" {
   description = "VPC identifier."
   value       = module.network.vpc_id
@@ -230,6 +235,11 @@ output "alert_topic_arn" {
 output "alarm_names" {
   description = "Every metric alarm name in this environment."
   value       = module.alerts.alarm_names
+}
+
+output "alarm_metric_namespaces" {
+  description = "Every CloudWatch namespace this environment's alarms read. Exactly [metric_namespace], so a root test can assert that no alarm here reads another environment's metrics."
+  value       = module.alerts.alarm_metric_namespaces
 }
 
 output "critical_composite_alarm_name" {

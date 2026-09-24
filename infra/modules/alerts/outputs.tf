@@ -28,6 +28,17 @@ output "alarm_names" {
   value       = sort(concat([for alarm in aws_cloudwatch_metric_alarm.this : alarm.alarm_name], [aws_cloudwatch_metric_alarm.all_sequences_held.alarm_name]))
 }
 
+output "alarm_metric_namespaces" {
+  description = "Every CloudWatch namespace any metric alarm reads, read back from the alarm resources, the metric-math alarm's two queries included. One environment reads exactly one: [var.metric_namespace]."
+  value = sort(distinct(concat(
+    [for alarm in aws_cloudwatch_metric_alarm.this : alarm.namespace],
+    flatten([
+      for query in aws_cloudwatch_metric_alarm.all_sequences_held.metric_query :
+      [for metric in query.metric : metric.namespace]
+    ]),
+  )))
+}
+
 output "critical_composite_alarm_name" {
   description = "Composite alarm over every immediately critical condition."
   value       = aws_cloudwatch_composite_alarm.critical.alarm_name

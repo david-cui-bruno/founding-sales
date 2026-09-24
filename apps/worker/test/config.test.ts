@@ -6,8 +6,8 @@ import { ConfigError, describeWorkerConfig, readWorkerConfig } from '../src/boot
  * The worker's environment contract.
  *
  * The task definition in `infra/modules/cluster/main.tf` is the other half of this
- * file: it sets `FSS_ROLE`, `FSS_SCHEMA_MIN`, `FSS_SCHEMA_MAX`, `FSS_METRIC_NAMESPACE`
- * and `AWS_REGION`, and injects the database secret's *value* into
+ * file: it sets `FSS_ROLE`, `FSS_SCHEMA_MIN`, `FSS_SCHEMA_MAX`, `FSS_METRIC_NAMESPACE`,
+ * `FSS_NAME_PREFIX` and `AWS_REGION`, and injects the database secret's *value* into
  * `DATABASE_SECRET_ARN`. Everything below is what happens when one of those is wrong,
  * and the answer is always the same: refuse at startup, and name the variable rather
  * than its value.
@@ -17,7 +17,8 @@ const base = Object.freeze({
   FSS_ROLE: 'worker',
   FSS_SCHEMA_MIN: String(WORKER_SCHEMA_RANGE.minimum),
   FSS_SCHEMA_MAX: String(WORKER_SCHEMA_RANGE.maximum),
-  FSS_METRIC_NAMESPACE: 'FSS',
+  FSS_METRIC_NAMESPACE: 'FSS/fss-test',
+  FSS_NAME_PREFIX: 'fss-test',
   AWS_REGION: 'us-east-1',
   DATABASE_URL: 'postgresql://app:pw@db.internal:5432/fss',
 });
@@ -31,7 +32,7 @@ describe('worker configuration', () => {
     // The brief: concurrency 1 by default, configurable.
     expect(config.concurrency).toBe(1);
     expect(config.metricsIntervalMilliseconds).toBe(60_000);
-    expect(config.metrics.namespace).toBe('FSS');
+    expect(config.metrics.namespace).toBe('FSS/fss-test');
     expect(config.metrics.region).toBe('us-east-1');
     // The container health check in infra/modules/cluster stats exactly this path.
     expect(config.livenessFilePath).toBe('/tmp/fss-worker-heartbeat');
@@ -102,6 +103,76 @@ describe('worker configuration', () => {
     expect(described).not.toContain('postgresql://');
     expect(described).toContain('"concurrency":3');
     expect(described).toContain('"expectedSystemGeneration":7');
+  });
+
+  describe('the metric namespace (g42, lane g55)', () => {
+    // Every environment in the account used to publish into the bare `FSS`, so the
+    // tenth full rehearsal's smoke read production's canary age and production's alarms
+    // saw rehearsal data. The namespace is now `FSS/<name prefix>`, set by the task
+    // definition, and there is no default for a publishing worker to fall back to.
+    const refusal = (environment: Readonly<Record<string, string | undefined>>): ConfigError => {
+      try {
+        readWorkerConfig(environment);
+      } catch (error) {
+        if (error instanceof ConfigError) return error;
+        throw error;
+      }
+      throw new Error('the configuration was accepted');
+    };
+
+    it('refuses a worker that would publish with no namespace, rather than defaulting to the shared one', () => {
+      for (const unset of [undefined, '', '   ']) {
+        const error = refusal({ ...base, FSS_METRIC_NAMESPACE: unset });
+        expect(error.code).toBe('MISSING');
+        expect(error.message).toContain('FSS_METRIC_NAMESPACE');
+      }
+      // `auto` is the default mode and publishes whenever a region is known, which in a
+      // task definition is always.
+      expect(refusal({ ...base, FSS_METRICS: 'auto', FSS_METRIC_NAMESPACE: undefined }).code).toBe('MISSING');
+      expect(refusal({ ...base, FSS_METRICS: 'on', FSS_METRIC_NAMESPACE: undefined }).code).toBe('MISSING');
+    });
+
+    it('refuses the bare FSS namespace, with or without a prefix beside it', () => {
+      expect(refusal({ ...base, FSS_METRIC_NAMESPACE: 'FSS' }).code).toBe('INVALID');
+      expect(refusal({ ...base, FSS_NAME_PREFIX: undefined, FSS_METRIC_NAMESPACE: 'FSS' }).code).toBe('INVALID');
+      expect(refusal({ ...base, FSS_NAME_PREFIX: undefined, FSS_METRIC_NAMESPACE: 'FSS/' }).code).toBe('INVALID');
+    });
+
+    it('refuses another environment’s namespace, without repeating it', () => {
+      // A rehearsal task definition that names production's namespace is exactly the
+      // defect, and the prefix beside it is what makes that visible at startup.
+      const error = refusal({ ...base, FSS_NAME_PREFIX: 'fss-rh-202609241713', FSS_METRIC_NAMESPACE: 'FSS/fss-prod' });
+      expect(error.code).toBe('INVALID');
+      expect(error.message).toContain('FSS_NAME_PREFIX');
+      expect(error.message).not.toContain('fss-prod');
+      expect(error.message).not.toContain('fss-rh-202609241713');
+    });
+
+    it('accepts FSS/<prefix> for production and for a rehearsal run', () => {
+      expect(
+        readWorkerConfig({ ...base, FSS_NAME_PREFIX: 'fss-prod', FSS_METRIC_NAMESPACE: 'FSS/fss-prod' }).metrics.namespace,
+      ).toBe('FSS/fss-prod');
+      expect(
+        readWorkerConfig({
+          ...base,
+          FSS_NAME_PREFIX: 'fss-rh-202609241713',
+          FSS_METRIC_NAMESPACE: ' FSS/fss-rh-202609241713 ',
+        }).metrics.namespace,
+      ).toBe('FSS/fss-rh-202609241713');
+    });
+
+    it('needs no namespace when nothing will be published', () => {
+      // A laptop or a test: metrics off, or no region to publish to. The sink is then
+      // a validating no-op and a namespace would name nothing.
+      expect(readWorkerConfig({ ...base, FSS_METRICS: 'off', FSS_METRIC_NAMESPACE: undefined }).metrics.namespace).toBeNull();
+      expect(
+        readWorkerConfig({ ...base, AWS_REGION: undefined, FSS_METRIC_NAMESPACE: undefined }).metrics.namespace,
+      ).toBeNull();
+    });
+
+    it('names the namespace in the startup line, which is how an operator checks where metrics went', () => {
+      expect(describeWorkerConfig(readWorkerConfig(base))['metricNamespace']).toBe('FSS/fss-test');
+    });
   });
 
   it('turns metric publication off when the environment says off', () => {

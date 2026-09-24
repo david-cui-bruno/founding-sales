@@ -228,9 +228,13 @@ variable "secrets_kms_key_arn" {
 }
 
 variable "metric_namespace" {
-  description = "CloudWatch namespace the applications publish counters and heartbeats to."
+  description = "CloudWatch namespace the applications publish counters and heartbeats to, and the only one their task roles may publish into. FSS/<name_prefix>, derived once in infra/modules/stack. No default: the bare FSS namespace was shared by every environment in the account (g42)."
   type        = string
-  default     = "FSS"
+
+  validation {
+    condition     = can(regex("^FSS/[a-z][a-z0-9-]{2,31}$", var.metric_namespace))
+    error_message = "metric_namespace must be FSS/<name_prefix>, one namespace per environment. The bare FSS namespace is shared by every environment in the account, so a rehearsal publishing there feeds production's alarms."
+  }
 }
 
 variable "container_insights" {

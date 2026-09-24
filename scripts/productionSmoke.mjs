@@ -2,7 +2,7 @@
 // Production smoke checks (specification 16.2, 13.3).
 //
 //   node scripts/productionSmoke.mjs --origin https://api.usecallie.com \
-//        --canary-age-seconds "$(aws cloudwatch get-metric-statistics ... )" [--json]
+//        --canary-age-seconds "$(aws cloudwatch get-metric-statistics --namespace FSS/fss-prod ... )" [--json]
 //
 // 16.2: "Production receives safe health, schema-range, connectivity, synthetic-canary,
 // and sending-disabled smoke checks." Six checks, all read-only. Every Appendix G case
@@ -21,11 +21,14 @@
 //   3. `/health`   — the operator-facing report, which is where `sendingEnabled` is.
 //   4. the canary age, which is a CloudWatch metric rather than an HTTP field. It is
 //      passed in, so this script needs no AWS credential of its own; the exact command
-//      to produce it is in `docs/greenfield/release.md`.
+//      to produce it is in `docs/greenfield/release.md`. It is read from the
+//      environment's own namespace, `FSS/<prefix>` (`FSS/fss-prod`), never the bare
+//      `FSS` every environment once shared: the tenth full rehearsal's smoke read
+//      production's canary age that way (g42, lane g55).
 //
 // ## What the canary age is
 //
-// `FSS/CanaryCompletionAgeSeconds` is the newest canary run's **scheduler-to-worker
+// `CanaryCompletionAgeSeconds` is the newest canary run's **scheduler-to-worker
 // latency**: the gap between the scheduler inserting the run and the worker completing
 // it, and `now() - inserted_at` while it has not been completed
 // (`packages/domain/jobs/canary.ts`). It is not the time since the last completion.

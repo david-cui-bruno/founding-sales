@@ -35,9 +35,13 @@ variable "alert_emails" {
 }
 
 variable "metric_namespace" {
-  description = "CloudWatch namespace the applications and metric filters publish to."
+  description = "CloudWatch namespace every alarm reads: the one the applications and the metric filters publish to. FSS/<name_prefix>, derived once in infra/modules/stack. No default: the bare FSS namespace was shared by every environment in the account (g42)."
   type        = string
-  default     = "FSS"
+
+  validation {
+    condition     = can(regex("^FSS/[a-z][a-z0-9-]{2,31}$", var.metric_namespace))
+    error_message = "metric_namespace must be FSS/<name_prefix>, one namespace per environment. The bare FSS namespace is shared by every environment in the account, so a rehearsal publishing there feeds production's alarms."
+  }
 }
 
 variable "kms_deletion_window_days" {

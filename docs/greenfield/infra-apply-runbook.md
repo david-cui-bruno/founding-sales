@@ -582,8 +582,9 @@ aws cloudwatch describe-alarms --alarm-name-prefix fss-prod \
 aws cloudwatch describe-alarms --alarm-types CompositeAlarm --alarm-name-prefix fss-prod \
   --query 'CompositeAlarms[].{name:AlarmName,state:StateValue}' --output table
 
-# 6. The canary proves scheduler-to-worker completion.
-aws cloudwatch get-metric-statistics --namespace FSS \
+# 6. The canary proves scheduler-to-worker completion. Production's metrics are in
+#    its own namespace, FSS/fss-prod; nothing publishes to the bare FSS any more.
+aws cloudwatch get-metric-statistics --namespace FSS/fss-prod \
   --metric-name CanaryCompletionAgeSeconds --statistics Maximum \
   --start-time "$(date -u -v-1H +%Y-%m-%dT%H:%M:%SZ)" --end-time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --period 300

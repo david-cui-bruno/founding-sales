@@ -801,7 +801,7 @@ Do not reach this section until every one of these is true. Each is a different 
 **1. The smoke checks pass.**
 
 ```bash
-AGE=$(aws cloudwatch get-metric-statistics --namespace FSS \
+AGE=$(aws cloudwatch get-metric-statistics --namespace FSS/fss-prod \
   --metric-name CanaryCompletionAgeSeconds --statistics Maximum \
   --start-time "$(date -u -v-1H +%Y-%m-%dT%H:%M:%SZ)" \
   --end-time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --period 300 \
@@ -1660,7 +1660,14 @@ alarm that reads it: the rehearsal's smoke read production's datapoint, and
 name-prefix dimension on the emitted metrics, on the alarms and in the smoke's query.
 Dedicated accounts (PR 173) separate them as well, and neither change is a substitute for
 the other — one account holding two environments is exactly this failure, and one metric
-with no dimension would still be ambiguous inside a single account.
+with no dimension would still be ambiguous inside a single account. **Fixed in lane g55,
+with a namespace rather than a dimension:** every environment publishes, filters and
+alarms in `FSS/<prefix>` (`FSS/fss-prod`, `FSS/fss-rh-<run>`), derived once in
+`infra/modules/stack`; each task role may `PutMetricData` into its own namespace only, so a
+rehearsal *cannot* publish into production's; the worker refuses to start without the
+namespace or with one that is not its own prefix's; and the smoke step reads the root's
+`metric_namespace` output. `docs/decisions/g55-one-metric-namespace-per-environment.md`
+says why a namespace and what production sees on the apply that brings it in.
 
 **A cancelled `create` leaves its state lock held, and resources nothing recorded.** Run
 35944594998, at this commit, was cancelled mid-create so that the production apply and
