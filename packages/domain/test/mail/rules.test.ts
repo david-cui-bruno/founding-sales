@@ -34,12 +34,12 @@ import {
  * the signature is valid by construction and the refusal comes from the claims.
  */
 
+// The skew and the age bound are the shipped ones, so a test of either tests what the
+// webhook runs with rather than a copy of it.
 const POLICY = {
-  issuer: DEFAULT_PUSH_TOKEN_POLICY.issuer,
+  ...DEFAULT_PUSH_TOKEN_POLICY,
   audience: 'https://api.example.test/pubsub/gmail',
   serviceAccountEmail: 'fss-test-push@callie-fss.iam.gserviceaccount.test',
-  clockSkewSeconds: 60,
-  maximumAgeSeconds: 600,
 };
 
 const NOW = 1_800_000_000;
@@ -103,6 +103,30 @@ describe('the Pub/Sub push token (Appendix G 27)', () => {
     expect(decidePushToken(claims({ iat: NOW - 5000, exp: NOW + 5000 }), POLICY, NOW)).toEqual({
       accepted: false,
       refusal: 'too_old',
+    });
+  });
+
+  // Pub/Sub presents one token for the whole hour it lives. Production refused every
+  // push past a token's eleventh minute while the bound was 600 s: 138 refusals in
+  // three hours on 24 and 25 September 2026.
+  it('accepts a Google push token for the whole of its hour', () => {
+    expect(decidePushToken(claims({ iat: NOW - 1800, exp: NOW + 1800 }), POLICY, NOW)).toEqual({ accepted: true });
+    expect(decidePushToken(claims({ iat: NOW - 3540, exp: NOW + 60 }), POLICY, NOW)).toEqual({ accepted: true });
+  });
+
+  it('refuses a token more than an hour old, whatever its exp says', () => {
+    // The bound is the hour plus the skew, and not a second more.
+    expect(decidePushToken(claims({ iat: NOW - 3660, exp: NOW + 3600 }), POLICY, NOW)).toEqual({ accepted: true });
+    expect(decidePushToken(claims({ iat: NOW - 3661, exp: NOW + 3600 }), POLICY, NOW)).toEqual({
+      accepted: false,
+      refusal: 'too_old',
+    });
+  });
+
+  it('names a token that is expired and too old expired', () => {
+    expect(decidePushToken(claims({ iat: NOW - 7200, exp: NOW - 3600 }), POLICY, NOW)).toEqual({
+      accepted: false,
+      refusal: 'expired',
     });
   });
 

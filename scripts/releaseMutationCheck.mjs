@@ -974,6 +974,16 @@ const MUTATIONS = [
     because:
       'The runner reads the report and decides the pass so that a change to the tool cannot quietly relax the gate; a runner that asked only for allowed false would pass a probe refused at step 6. scenario11.check.ts hands the runner such a report and has to go red.',
   },
+  // Lane g63: the push token's age bound is the hour Google gives the token.
+  {
+    name: 'the push webhook refuses a Google token after its first ten minutes again',
+    file: 'packages/domain/mail/pushToken.ts',
+    find: '  maximumAgeSeconds: 3600,\n',
+    replace: '  maximumAgeSeconds: 600,\n',
+    suite: ['run', 'test', '--workspace', 'packages/domain', '--', 'test/mail/rules.test.ts'],
+    because:
+      'Pub/Sub presents the same OIDC token for its whole hour, so a 600-second bound refused every push past a token\u2019s eleventh minute as too_old: 138 refusals in three hours in production on 24 and 25 September 2026. rules.test.ts decides a half-hour-old token under the shipped policy and has to go red.',
+  },
 ];
 
 // A listener on each of these keeps Node from exiting mid-mutation with a file still

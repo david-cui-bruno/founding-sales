@@ -188,6 +188,32 @@ Each run is bounded and its continuation is the one-minute scheduler, never itse
 reasoning is in `docs/decisions/g7-sync-transaction-shape.md` and it is the single
 easiest thing in this lane to get wrong.
 
+### The push token
+
+`POST /integrations/gmail/push` takes no session: the OIDC token Pub/Sub presents is its
+authentication. `mail/pushToken.ts` checks the signature against Google's key set, then
+`decidePushToken` checks the claims in 4.1's order: issuer `https://accounts.google.com`,
+the exact audience, the service-account email (compared lower-cased), `email_verified`,
+`exp` not passed (60 s of skew), `iat` not in the future (60 s of skew), and an age of at
+most **one hour** plus the skew. A token that fails any of them is a 401 with one
+redacted body, logged as a `refusal` line with reason `gmail_push_<refusal>` and a
+second with reason `401`, and Pub/Sub retries the message
+(`docs/decisions/g7-webhook-rejection.md`). An accepted push is a 200 and writes no log
+line; its trace is its `gmail_push_notifications` row and the job id recorded on it.
+
+The age bound is the token's own lifetime. Pub/Sub mints the token for an hour and
+presents the same token with every delivery until it mints the next one. Until lane g63
+the bound was ten minutes. On 24 and 25 September 2026 production logged 138
+`gmail_push_too_old` refusals in three hours: every delivery after a token's eleventh
+minute was refused, and the retries carried the same token and were refused too, until
+Google rotated it. Mail kept arriving only through the one-minute check below. The hour is a
+fact about Google, not a deployment setting, so no environment variable changes it.
+
+With the hour as the bound, a genuine Pub/Sub token cannot reach `too_old`: its `exp`
+is an hour after its `iat`, so `expired` refuses it first. A `gmail_push_too_old` line
+now means a Google-signed token that claims a longer life than an hour, and it is worth
+reading before anything else is changed.
+
 ### The mailbox check, once a minute
 
 13.3 alarms on "three missed one-minute mailbox checks", and 12.3 calls the sweep a
