@@ -996,31 +996,10 @@ terraform -chdir=infra/roots/production plan -out=pin.tfplan -var="expected_syst
 ## 8. What this document could not verify
 
 The records of what each credentialed run proved and refuted, and of what each lane's
-change did, 8.0 to 8.0au, are in [`release-records.md`](release-records.md), unchanged. A
+change did, 8.0 to 8.0av, are in [`release-records.md`](release-records.md), unchanged. A
 numbered reference such as "8.0u", in this document or anywhere else, names one of them. From
 25 September 2026 a change is one line in [`changelog.md`](changelog.md) instead, and
 this section holds only what is still unverified.
-
-### 8.0av What lane g89 changed: the root is the greenfield product, and the old app runs only when it changes (25 September)
-
-**What was wrong.** Audit item G10 (`GPT6-ASTRA-EXHAUSTIVE-20260925.md`): the root `package.json` belonged to the unused previous-generation app, so `npm start`, `npm test`, `npm run typecheck` and `npm run lint` meant that app, `npm ci` built its native modules, and `.github/workflows/ci.yml` ran its two macOS jobs, `source` and `client`, on every push and pull request. They waited 20 to 40 minutes for a runner and gated every greenfield change.
-
-**What changed.** `docs/decisions/g89-greenfield-is-the-default.md` has the reasoning, and `docs/greenfield/legacy.md` lists what remains of the old app and how to run it.
-
-- The bare `typecheck`, `lint` and `test` run the greenfield equivalents; there is no bare `start`. Every old script is `legacy:<its old name>`, except `verify:secrets`, which is shared. `gate:greenfield`, `test:desktop:e2e`, `package:desktop` and every script the `greenfield*.yml` workflows call are unchanged.
-- `postinstall` only fetches the Electron binary. The `safe-log-fs` build and the SQLite driver rebuilds are `npm run legacy:setup`, which `source` and `release.yml` run after `npm ci`.
-- `ci.yml` has a `secrets` job (the Gitleaks history and tree scan, with the `linux_x64` Gitleaks 8.30.1 tarball pinned by SHA-256) and a `root-scripts` job (the old ESLint config over the four greenfield files at the root). Both run on Linux, on every change, so a greenfield change no longer waits for a macOS runner. `source` and `client` run only when `old-trees-changed` finds a changed path outside the greenfield-only list. Of the 73 pull requests merged between 20 and 25 September, one, a lock-file change, would have run them.
-- Nothing was deleted: the deletion map's "now" rows were deleted on 18 September, and its other rows each wait on a dependency or are kept.
-
-**No deployment.** Nothing here reaches a running process, an image or a desktop build.
-
-**Test evidence, offline only.**
-
-- `test/release/rootScripts.check.ts` holds the root's shape: the three defaults' exact commands, no bare `start`, the exact list of unprefixed scripts, an install that builds nothing of the old app, and no greenfield script reaching a `legacy:` one. Two mutations were applied by hand and each turned it red: the old `postinstall` restored under its new names, and the whole `package.json` of `main`. Neither is in `scripts/releaseMutationCheck.mjs`.
-- A fresh `npm ci` runs the root `postinstall` as `install-electron --no` only, with no node-gyp, `electron-rebuild` or staging step. `FSS_DESKTOP_PACKAGE_MODE=local-smoke npm run package:desktop` produced `Callie.app` after it, and again with `node_modules/electron/dist` moved aside, so packaging does not need `install-electron`; `docs/greenfield/install.md` says the host tests do.
-- The old tree's own pins of the renamed scripts, `test/verifyRelease.test.mjs` and `test/releaseDocumentation.test.mjs`, pass locally. `old-trees-changed` was run by hand for a pull request, a push, a zero `before` and an empty `before`.
-
-**Still unverified.** Whether `source` and `client` are required status checks, and so whether a skipped run satisfies branch protection as GitHub documents. The new jobs, `source` (with `legacy:setup` and the full old gate) and `client` passed on pull request 229 while `secrets` was still on macOS; the Linux `secrets` job's first run is the one after this record. The `linux_x64` checksum was supplied by the coordinator from the release's checksums file; this lane did not fetch it.
 
 ### 8.1 Still unverified
 

@@ -5,7 +5,7 @@ import { readRepositoryFile } from './support/coverage.ts';
  * The runbook is a runbook, and a change is one line (lane g93, David's decision of
  * 25 September 2026).
  *
- * `docs/greenfield/release.md` had collected a numbered record per lane, 8.0 to 8.0au,
+ * `docs/greenfield/release.md` had collected a numbered record per lane, 8.0 to 8.0av,
  * interleaved with the instructions, until the records were two thirds of the file. They
  * moved verbatim to `docs/greenfield/release-records.md`, which nothing adds to, and a
  * change is now one line of `docs/greenfield/changelog.md`:
@@ -14,7 +14,7 @@ import { readRepositoryFile } from './support/coverage.ts';
  * ## The vacuous-pass traps, named
  *
  * "No line breaks the format" is true of a changelog the reader found no lines in, so
- * the lines are counted first: at least the 48 seeded from the records. "Every record the
+ * the lines are counted first: at least the 49 seeded from the records. "Every record the
  * runbook cites is in the archive" is true of a runbook the pattern found no citation
  * in, so the citations are counted too. And "the runbook holds no record" is checked
  * against a runbook that still has its sections, the first and the last.
@@ -56,7 +56,7 @@ describe('the changelog is one line per change, newest first', () => {
     .filter(line => line.startsWith('- '));
 
   it('has every seeded line and every line after it in the format', () => {
-    expect(lines.length).toBeGreaterThanOrEqual(48);
+    expect(lines.length).toBeGreaterThanOrEqual(49);
     for (const line of lines) expect(line, 'a changelog line is "- YYYY-MM-DD PR <n> (<lane>): <what changed>"').toMatch(LINE);
   });
 

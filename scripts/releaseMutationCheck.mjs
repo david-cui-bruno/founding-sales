@@ -19,6 +19,11 @@
 // lists every mutation, with its area and kind, and checks that each one's kind is known
 // and its text still appears exactly once, without running a suite.
 //
+//   npm run test:release:mutation -- --only '<name>'
+//
+// runs the whole check, its suite unmutated and then mutated, for the one entry of that
+// exact name: how a repaired entry is proved without running every other one.
+//
 // The mutations are in `scripts/mutations/<area>.mjs`, one file per area of the tree,
 // chosen by the file each entry edits (lane g93: one list that every lane appended to
 // made every pull request conflict with every other). Add an entry to the end of its
@@ -64,8 +69,10 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const readFile = file => readFileSync(`${ROOT}${file}`, 'utf8');
 
 const args = process.argv.slice(2);
-if (args.length > 1 || (args.length === 1 && args[0] !== '--list')) {
-  console.error('usage: node scripts/releaseMutationCheck.mjs [--list]');
+const listOnly = args.length === 1 && args[0] === '--list';
+const only = args.length === 2 && args[0] === '--only' ? args[1] : null;
+if (args.length > 0 && !listOnly && only === null) {
+  console.error("usage: node scripts/releaseMutationCheck.mjs [--list | --only '<name>']");
   process.exit(2);
 }
 
@@ -79,9 +86,14 @@ try {
   console.error('\n0 mutation(s) killed, 1 problem(s).');
   process.exit(1);
 }
-const { mutations, areas } = loaded;
+const { areas } = loaded;
+const mutations = only === null ? loaded.mutations : loaded.mutations.filter(mutation => mutation.name === only);
+if (only !== null && mutations.length !== 1) {
+  console.error(`no mutation is named ${JSON.stringify(only)}; \`--list\` prints every name`);
+  process.exit(2);
+}
 
-if (args[0] === '--list') {
+if (listOnly) {
   // Nothing is edited and no suite runs: the list, and whether each entry's text is
   // still where it says, which is step 1 of the check.
   // The loader has already refused an entry filed under the wrong area.

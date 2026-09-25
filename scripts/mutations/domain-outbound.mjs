@@ -10,10 +10,10 @@ export const MUTATIONS = [
     name: 'the outbound world stops attesting to a release gate',
     file: 'packages/domain/test/outbound/support/outboundWorld.ts',
     find: "VALUES ($1, 'sending_enabled', 1, $2::jsonb, 'fixture: the rehearsal gate this world stands for', $3)",
-    replace: "VALUES ($1, 'business_time_zone', 1, '{\"timeZone\":\"UTC\"}'::jsonb, 'fixture: not the attestation', $3)",
+    replace: "VALUES ($1, 'sending_enabled', 1, $2::jsonb || '{\"enabled\":false}'::jsonb, 'fixture: the attestation withdrawn', $3)",
     suite: ['run', 'test', '--workspace', 'packages/domain', '--', 'test/outbound/'],
     because:
-      'The fixture seeds 16.2 admin attestation so that cap, window and suppression scenarios refuse for their own reasons. Without it every send must hold, so a suite that still passed would not be reading the attestation at all.',
+      'The fixture seeds 16.2 admin attestation so that cap, window and suppression scenarios refuse for their own reasons. Without it every send must hold, so a suite that still passed would not be reading the attestation at all. The replacement withdraws the attestation and keeps $2 in the statement: until lane g93 it seeded another setting and dropped $2, PostgreSQL refused the unused parameter ("could not determine data type of parameter $2") in every file\u2019s setup, and the run was broken, never killed (rehearsal at e220f468).',
   },
   {
     name: 'the send gate stops requiring the deployment flag',
