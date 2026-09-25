@@ -6,7 +6,8 @@ import { mustCover } from './support/coverage.ts';
 /**
  * Appendix G 4: "Email, call and LinkedIn steps are due while the Gmail grant is
  * revoked or coverage is stale: all automated steps hold through incomplete
- * recovery."
+ * recovery." LinkedIn was removed on 25 September 2026, so the steps are email and
+ * call.
  *
  * The mail lane proves the behaviour end to end — it revokes the grant against a real
  * mailbox row, runs the sync, and reads the holds back out. What it cannot prove is
@@ -39,7 +40,6 @@ describe('Appendix G 4: a revoked grant holds every automated step kind', () => 
     expect([...MAILBOX_HOLD_BLOCKS].sort()).toEqual([...expected].sort());
     expect(MAILBOX_HOLD_BLOCKS).toContain('email_send');
     expect(MAILBOX_HOLD_BLOCKS).toContain('call_task');
-    expect(MAILBOX_HOLD_BLOCKS).toContain('linkedin_task');
     // "Through incomplete recovery" is this one: the enrollment may not step forward
     // while coverage is unproved, or the hold would be outrun rather than obeyed.
     expect(MAILBOX_HOLD_BLOCKS).toContain('enrollment_advance');

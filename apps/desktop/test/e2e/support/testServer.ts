@@ -76,7 +76,7 @@ export function signedInState(overrides: Partial<DesktopState> = {}): DesktopSta
           firmName: 'Ash & Partners',
           lane: 'reply',
           dueAt: '2026-09-21T13:00:00.000Z',
-          counts: { replies: 1, emailsDue: 0, callsDue: 0, linkedInDue: 0 },
+          counts: { replies: 1, emailsDue: 0, callsDue: 0 },
         },
       ],
     },

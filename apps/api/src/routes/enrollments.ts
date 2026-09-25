@@ -4,16 +4,13 @@ import { databaseNow } from '@fss/domain/policy';
 import {
   applyEnrollmentMigration,
   approveEnrollmentMigration,
-  completeLinkedInStep,
   enrollContact,
   listEnrollments,
   listStepExecutions,
   previewResume,
   proposeEnrollmentMigration,
-  recordLinkedInResult,
   resumeAfterReview,
   stopEnrollments,
-  undoLinkedInStep,
 } from '@fss/domain/sequences';
 import {
   REFUSAL_STATUS,
@@ -25,20 +22,12 @@ import {
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
 /**
- * Enrollment, the LinkedIn task card, the hold review and the audited migration
- * (specification 11.2, 11.3, 4.3, 14.1).
+ * Enrollment, the hold review and the audited migration (specification 11.2, 4.3,
+ * 14.1).
  *
- * Every mutation is a command with a receipt, and two of them are worth naming.
- *
- * `/enrollments/linkedin/complete` is 11.3's "Open LinkedIn & copy message" from the
- * server's side. It returns the profile URL and the text; the client copies and
- * opens. The client's success or failure never changes what the database recorded,
- * because a handoff whose completion depended on the clipboard would be a step the
- * server could not explain afterwards.
- *
- * `/enrollments/linkedin/undo` passes database time rather than the client's: the ten
- * minutes are measured against the database, and a Mac whose clock is fast must not
- * be able to talk its way past the window — or be refused inside it.
+ * Every mutation is a command with a receipt. The LinkedIn task card's three paths
+ * (`/enrollments/linkedin/complete`, `/undo` and `/result`) went with LinkedIn on 25
+ * September 2026.
  */
 export const ENROLLMENT_PATHS: readonly string[] = [
   '/enrollments',
@@ -47,9 +36,6 @@ export const ENROLLMENT_PATHS: readonly string[] = [
   '/enrollments/steps',
   '/enrollments/resume',
   '/enrollments/resume/preview',
-  '/enrollments/linkedin/complete',
-  '/enrollments/linkedin/undo',
-  '/enrollments/linkedin/result',
   '/enrollments/migrate/propose',
   '/enrollments/migrate/approve',
   '/enrollments/migrate/apply',
@@ -72,14 +58,6 @@ const stopSchema = z.strictObject({
 });
 
 const enrollmentSchema = z.strictObject({ ...command, enrollmentId: uuid });
-const executionSchema = z.strictObject({ ...command, stepExecutionId: uuid });
-
-const linkedInResultSchema = z.strictObject({
-  ...command,
-  enrollmentId: uuid,
-  result: z.enum(['replied', 'no_engagement']),
-  note: z.string().trim().min(1).max(500).optional(),
-});
 
 const proposeSchema = z.strictObject({
   ...command,
@@ -125,9 +103,8 @@ export async function routeEnrollments(
     return {
       status: 200,
       body: {
-        // Database time travels with the list, because the Mac compares the LinkedIn
-        // undo deadline against it (11.3) and a Mac whose clock is fast must not be
-        // able to show an undo the server would refuse.
+        // Database time travels with the list, so a deadline the Mac shows is the
+        // server's and never this Mac's clock.
         asOf: await databaseNow(scoped.context),
         enrollments: await listEnrollments(scoped.context, {
           ...(parsed.data.firmId === undefined ? {} : { firmId: parsed.data.firmId }),
@@ -199,32 +176,6 @@ export async function routeEnrollments(
   if (request.path === '/enrollments/resume') {
     return await runPolicyCommand(deps, enrollmentSchema, 'resume_enrollment', async (context, body) =>
       await resumeAfterReview(context, { enrollmentId: body.enrollmentId }),
-    );
-  }
-
-  if (request.path === '/enrollments/linkedin/complete') {
-    return await runPolicyCommand(deps, executionSchema, 'complete_linkedin_step', async (context, body) =>
-      await completeLinkedInStep(context, { stepExecutionId: body.stepExecutionId }),
-    );
-  }
-
-  if (request.path === '/enrollments/linkedin/undo') {
-    return await runPolicyCommand(deps, executionSchema, 'undo_linkedin_step', async (context, body) =>
-      await undoLinkedInStep(context, {
-        stepExecutionId: body.stepExecutionId,
-        now: await databaseNow(context),
-      }),
-    );
-  }
-
-  if (request.path === '/enrollments/linkedin/result') {
-    return await runPolicyCommand(deps, linkedInResultSchema, 'record_linkedin_result', async (context, body) =>
-      await recordLinkedInResult(context, {
-        enrollmentId: body.enrollmentId,
-        result: body.result,
-        ...(body.note === undefined ? {} : { note: body.note }),
-        commandId: body.commandId,
-      }),
     );
   }
 

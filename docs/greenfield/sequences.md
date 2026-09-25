@@ -1,10 +1,11 @@
-# Sequences: versions, enrollments, due work and the LinkedIn handoff
+# Sequences: versions, enrollments and due work
 
 Specification revision 3, section 11 in full, 4.3 (holds shift schedules), 8.2 (lane 3
 is due sequence work), 12.2 and 12.5 (what the send needs from here), Appendix A rows
-*Enroll*, *Complete manual or LinkedIn step*, *LinkedIn undo*, *Migrate enrollments*
-and *Stage change*, Appendix C `step-execution:{id}`, Appendix D, and Appendix G 9, 18,
-26, 28, 31, 32 and 33.
+*Enroll*, *Complete manual step*, *Migrate enrollments* and *Stage change*, Appendix C
+`step-execution:{id}`, Appendix D, and Appendix G 26, 28, 31, 32 and 33. The LinkedIn
+channel (its task, handoff, undo and recorded reply, and Appendix G 9 and 18 with them)
+was removed on 25 September 2026.
 
 ## The short version
 
@@ -17,8 +18,7 @@ one enrollment, and there is exactly one per pair.
 
 The worker claims a due execution, re-reads eleven eligibility questions inside the
 claiming transaction, places an email in the firm's own sending window, renders it, and
-hands finished bytes to the sending lane. A call task and a LinkedIn task are completed
-by a person. Anything that refuses holds the step with the reason section 15 gives it.
+hands finished bytes to the sending lane. A call task is completed by a person. Anything that refuses holds the step with the reason section 15 gives it.
 
 Terminal conditions end enrollments and cancel everything unexecuted. Reversible holds
 shift unexecuted work by the *union* of their intervals, and a union longer than seven
@@ -44,7 +44,6 @@ packages/domain/sequences/enrollments.ts enrol, and the terminal stop
 packages/domain/sequences/executions.ts  run a due step; dispatch it; complete it
 packages/domain/sequences/eligibility.ts the eleven questions, composed
 packages/domain/sequences/sendHandoff.ts the seam with G7-2, and its recording fake
-packages/domain/sequences/linkedin.ts    open-and-copy, undo, replied / no engagement
 packages/domain/sequences/resume.ts      the union shift and the long-hold review
 packages/domain/sequences/terminalStops.ts the subscription to G3a's outbox
 packages/domain/sequences/todaySource.ts lane 3 of the Today list
@@ -200,22 +199,24 @@ Gmail configuration this release hands to nobody, so it refuses with
 and in practice `prepare` says so first. `unavailableSendHandoff` remains as the
 default for a caller that supplies no hand-off at all.
 
-### 7. FSS never claims a LinkedIn message was sent
+### 7. A LinkedIn row stored before 25 September 2026 is unknown
 
-`result = 'handed_off'`, `completion_source = 'open_and_copy'`, and the successor gets a
-ten-minute `not_before` — a grace period, not a delay, so the cadence the salesperson
-reviewed is unchanged. Undo reopens the step and cancels the successor inside those ten
-minutes, measured against *database* time, and fails visibly if the successor's fence is
-already dispatching (Appendix G 9).
+LinkedIn was removed from the code on 25 September 2026 and migration 0012 was not
+changed, so the tables still admit its values. The code treats each one as unknown:
 
-"They replied" and "No engagement" live as long as the enrollment does. A reply is
-terminal and firm-wide: it switches the opportunity to manual and ends every live
-enrollment of the firm, because a prospect who answered on LinkedIn has answered on
-behalf of the firm exactly as much as one who answered by email.
+* a `linkedin_task` execution is held with `long_hold_review` by `runDueStepExecution`
+  and never run, and Today does not list it (`isStepChannel`, `types.ts`); a person stops
+  the enrollment or migrates it onto a version without one;
+* nothing enrols into, publishes, copies into a draft or migrates onto a version that has
+  a `linkedin_task` step;
+* `linkedin_reply` in a version's `stop_conditions` (the column's default still puts it
+  there, and `sequence_versions_stop_conditions_complete` requires it), and
+  `linkedin_reply`, `open_and_copy` or `handed_off` on an enrollment or an execution, are
+  dropped on read (`rows.ts`);
+* `enrollment_linkedin_results` is never written; a deletion still removes its rows.
 
-There is no LinkedIn automation of any kind, and there is no unsubscribe link anywhere
-— `sequence_steps_no_unsubscribe_link` refuses one in a LinkedIn message the same way
-`template_versions_no_unsubscribe_link` refuses one in an email.
+`packages/domain/test/sequences/removedLinkedIn.test.ts` writes each value with SQL and
+proves each rule.
 
 ## The job
 
@@ -227,8 +228,8 @@ runner runs an `outbound_fence` handler *outside* the completion transaction, be
 `prepared → dispatching` and the Gmail call after it cannot be rolled back.
 
 The source is `listStepWakes` (`packages/domain/sequences/wake.ts`), and its time
-comparisons are PostgreSQL's, so no worker's clock decides whether a step is due and
-the ten-minute LinkedIn grace survives a scheduler in another region. It wakes due
+comparisons are PostgreSQL's, so no worker's clock decides whether a step is due. It
+wakes due
 `pending` work; `held` work past its `not_before` that no open hold blocks, asking all
 seven hold scopes as `holdSource` does, so a released hold wakes its steps on the next
 pass; and `dispatched` work that has not moved for ten minutes, whose worker died
@@ -335,8 +336,7 @@ its own.
    nobody answers, with up, down and remove on hover. An empty draft offers **Start from
    the suggested plan** (call on day 0, email on day 2, call on day 4), which fills the
    editor and publishes nothing. Nothing is sent until **Save draft**, which numbers the
-   steps 1..n in list order. No LinkedIn step is offered. A copied step that has one is
-   marked "no longer offered" and can only be removed.
+   steps 1..n in list order.
 4. **Publish** — disabled while the editor holds unsaved changes. A published version
    offers **Edit as a new draft**.
 5. **Enrol** — on the firm's page, not here (`docs/greenfield/crm-surface.md`, "The
@@ -377,7 +377,7 @@ under its lock. See `docs/decisions/g88-founder-authoring-and-review.md`.
 
 ```
 npm run gate:greenfield
-npm --workspace @fss/domain run test -- test/sequences      # G 9, 18, 28, 31, 32, 33
+npm --workspace @fss/domain run test -- test/sequences      # G 28, 31, 32, 33, and stored LinkedIn rows
 npm --workspace @fss/api run test -- test/sequences.test.ts # the routes and the receipts
 npm --workspace @fss/worker run test -- test/sequenceAction.test.ts  # G 1 and G 2
 npm --workspace @fss/worker run test -- test/sequenceActionRearm.test.ts  # the wake, a killed worker, two wakes

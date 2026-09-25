@@ -16,9 +16,13 @@ import { accept, refuse, type ContactRow, type CrmResult } from './types.ts';
  * own, and section 5.2 gives a salesperson "assigned firms". So every command here
  * loads the firm `FOR UPDATE` first — which also serializes two commands racing to
  * make different contacts primary.
+ *
+ * `contacts.linkedin_url` (migration 0004) outlived LinkedIn, which was removed on 25
+ * September 2026. Nothing here reads or writes it; a deletion still clears it
+ * (`retention/deletion.ts`), because a row written before then may hold one.
  */
 
-const CONTACT_COLUMNS = `id, workspace_id, firm_id, full_name, title, linkedin_url, status, is_primary,
+const CONTACT_COLUMNS = `id, workspace_id, firm_id, full_name, title, status, is_primary,
   merged_into_contact_id, created_at, updated_at`;
 
 export async function readContact(
@@ -49,7 +53,6 @@ export interface CreateContactInput {
   readonly firmId: string;
   readonly fullName: string;
   readonly title?: string | undefined;
-  readonly linkedinUrl?: string | undefined;
   readonly isPrimary?: boolean | undefined;
   readonly externalId?: string | undefined;
 }
@@ -67,15 +70,14 @@ export async function createContact(
   if (input.isPrimary === true) await demoteCurrentPrimary(context, input.firmId);
 
   const { rows } = await context.db.query<ContactRow>(
-    `INSERT INTO contacts (workspace_id, firm_id, full_name, title, linkedin_url, is_primary)
-     VALUES ($1, $2, $3, $4, $5, COALESCE($6, false))
+    `INSERT INTO contacts (workspace_id, firm_id, full_name, title, is_primary)
+     VALUES ($1, $2, $3, $4, COALESCE($5, false))
      RETURNING ${CONTACT_COLUMNS}`,
     [
       context.scope.workspaceId,
       input.firmId,
       input.fullName.trim(),
       input.title ?? null,
-      input.linkedinUrl ?? null,
       input.isPrimary ?? null,
     ],
   );
@@ -103,7 +105,6 @@ export async function createContact(
 export interface ContactPatch {
   readonly fullName?: string | undefined;
   readonly title?: string | null | undefined;
-  readonly linkedinUrl?: string | null | undefined;
   readonly status?: 'active' | 'inactive' | undefined;
   readonly isPrimary?: boolean | undefined;
 }
@@ -111,7 +112,6 @@ export interface ContactPatch {
 const CONTACT_PATCH_COLUMNS: Readonly<Record<string, string>> = Object.freeze({
   fullName: 'full_name',
   title: 'title',
-  linkedinUrl: 'linkedin_url',
   status: 'status',
   isPrimary: 'is_primary',
 });

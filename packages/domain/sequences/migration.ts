@@ -2,7 +2,7 @@ import { isAdminScope, type RepositoryContext } from '../db/workspaceScope.ts';
 import { resolveStepDue } from '../src/index.ts';
 import { calendarOfEnrollment, stepForCadence } from './enrollments.ts';
 import { loadEnrollmentForUpdate, readSequenceVersion, unexecutedExecutions } from './rows.ts';
-import { acceptSequence, refuseSequence, type SequenceResult } from './types.ts';
+import { acceptSequence, isStepChannel, refuseSequence, type SequenceResult } from './types.ts';
 
 /**
  * The audited enrollment migration (specification 11.1, Appendix A "Migrate
@@ -66,6 +66,8 @@ export async function proposeEnrollmentMigration(
   const target = await readSequenceVersion(context, input.toSequenceVersionId);
   if (target === null) return refuseSequence('version_unknown');
   if (target.state !== 'published') return refuseSequence('version_not_published');
+  // A version stored before 25 September 2026 may have a LinkedIn step, which nothing runs.
+  if (!target.steps.every(step => isStepChannel(step.channel))) return refuseSequence('step_unknown');
 
   const { rows } = await context.db.query<{ id: string }>(
     `INSERT INTO enrollment_migrations

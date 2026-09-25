@@ -75,7 +75,7 @@ cursor unrepresentable.
 
 12.6: "While a mailbox grant is revoked or coverage unhealthy, every automated step
 kind for that owner is held." So the hold is owner-scoped, not mailbox-scoped, and it
-blocks `email_send`, `call_task`, `linkedin_task` and `enrollment_advance`. Research is
+blocks `email_send`, `call_task` and `enrollment_advance`. Research is
 not a step kind and is not blocked.
 
 `releaseMailboxHold` re-reads the row and refuses to release a `coverage_incomplete`

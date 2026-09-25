@@ -272,12 +272,6 @@ export function registerSequenceBridge(deps: SequenceBridgeDeps): SequenceBridge
   withString(SEQUENCE_IPC_CHANNELS.approveTemplate, 'templateVersionId', async templateVersionId =>
     await host.approveTemplate({ templateVersionId }),
   );
-  withString(SEQUENCE_IPC_CHANNELS.completeLinkedIn, 'stepExecutionId', async stepExecutionId =>
-    await host.completeLinkedIn({ stepExecutionId }),
-  );
-  withString(SEQUENCE_IPC_CHANNELS.undoLinkedIn, 'stepExecutionId', async stepExecutionId =>
-    await host.undoLinkedIn({ stepExecutionId }),
-  );
   withString(SEQUENCE_IPC_CHANNELS.resumeEnrollment, 'enrollmentId', async enrollmentId =>
     await host.resumeEnrollment({ enrollmentId }),
   );
@@ -323,18 +317,6 @@ export function registerSequenceBridge(deps: SequenceBridgeDeps): SequenceBridge
       return await host.state();
     }
     return await host.enroll(input as unknown as Parameters<SequenceBridgeHost['enroll']>[0]);
-  });
-  handleOnce(SEQUENCE_IPC_CHANNELS.recordLinkedInResult, async argument => {
-    const input = argument as Record<string, unknown> | null;
-    const result = input?.['result'];
-    if (
-      input === null ||
-      typeof input['enrollmentId'] !== 'string' ||
-      (result !== 'replied' && result !== 'no_engagement')
-    ) {
-      return await host.state();
-    }
-    return await host.recordLinkedInResult({ enrollmentId: input['enrollmentId'], result });
   });
   return host;
 }

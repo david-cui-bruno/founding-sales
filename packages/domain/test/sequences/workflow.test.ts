@@ -64,7 +64,6 @@ const worker = (workspace: 'alpha' | 'beta' = 'alpha'): RepositoryContext =>
 async function clearEnrollments(): Promise<void> {
   await database.session.query('DELETE FROM enrollment_migration_items');
   await database.session.query('DELETE FROM enrollment_migrations');
-  await database.session.query('DELETE FROM enrollment_linkedin_results');
   await database.session.query('DELETE FROM step_execution_shifts');
   await database.session.query('DELETE FROM step_executions');
   await database.session.query('DELETE FROM sequence_enrollments');
@@ -170,45 +169,27 @@ describe('scenario 32: DST resolves deterministically in the firm’s own zone',
 });
 
 describe('the Today source: lane 3 is due sequence work (8.2)', () => {
-  it('counts emails, calls and LinkedIn tasks separately on one card', async () => {
+  it('counts emails and calls separately on one card', async () => {
     const enrollmentId = await enroll('alpha');
     const now = await databaseNow(worker());
     await setDue('alpha', enrollmentId, now);
 
-    // Walk the enrollment to its second and third steps so all three kinds exist at
-    // once — 8.2's "Expanding the card reveals contact-level tasks".
-    const contacts: string[] = [];
-    for (const name of ['Alex Example', 'Jordan Example']) {
-      const { rows } = await database.session.query<{ id: string }>(
-        `INSERT INTO contacts (workspace_id, firm_id, full_name) VALUES ($1, $2, $3) RETURNING id`,
-        [seeded.alpha.workspaceId, crm.alpha.firmId, name],
-      );
-      contacts.push(rows[0]?.id ?? '');
-    }
-    for (const [index, contactId] of contacts.entries()) {
-      const id = await enroll('alpha', contactId);
-      const executions = await listStepExecutions(worker(), { enrollmentId: id });
-      const first = executions[0];
-      if (first === undefined) continue;
+    // Walk a second enrollment to its second step so both kinds exist at once — 8.2's
+    // "Expanding the card reveals contact-level tasks".
+    const { rows } = await database.session.query<{ id: string }>(
+      `INSERT INTO contacts (workspace_id, firm_id, full_name) VALUES ($1, $2, $3) RETURNING id`,
+      [seeded.alpha.workspaceId, crm.alpha.firmId, 'Alex Example'],
+    );
+    const id = await enroll('alpha', rows[0]?.id ?? '');
+    const first = (await listStepExecutions(worker(), { enrollmentId: id }))[0];
+    if (first !== undefined) {
       await completeStepExecution(worker(), {
         stepExecutionId: first.id,
         completionSource: 'send',
         result: 'sent',
       });
-      if (index === 1) {
-        const second = (await listStepExecutions(worker(), { enrollmentId: id })).find(
-          execution => execution.ordinal === 2,
-        );
-        if (second !== undefined) {
-          await completeStepExecution(worker(), {
-            stepExecutionId: second.id,
-            completionSource: 'call_log',
-            result: 'voicemail_left',
-          });
-        }
-      }
-      await setDue('alpha', id, now);
     }
+    await setDue('alpha', id, now);
 
     const businessDate = await businessDateOf(worker(), now);
     await buildTodaySnapshot(worker(), {
@@ -222,7 +203,6 @@ describe('the Today source: lane 3 is due sequence work (8.2)', () => {
     expect(card).toBeDefined();
     expect(card?.counts.emailsDue).toBe(1);
     expect(card?.counts.callsDue).toBe(1);
-    expect(card?.counts.linkedInDue).toBe(1);
   });
 
   it('does not put one workspace’s due work on the other’s list (G 8)', async () => {

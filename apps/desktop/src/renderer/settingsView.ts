@@ -584,14 +584,6 @@ function dashboardPanels(state: AdminState): readonly PanelView[] {
       unavailable: absence(dashboard.enrollments),
     },
     {
-      title: 'LinkedIn',
-      lines: linesOf(dashboard.enrollments, facts => [
-        `${String(facts['linkedinHandoffs'])} handed off.`,
-        `Recorded: ${String(facts['linkedinRecordedReplies'])} replied, ${String(facts['linkedinNoEngagement'])} no engagement.`,
-      ]),
-      unavailable: absence(dashboard.enrollments),
-    },
-    {
       title: 'Classifier',
       lines: linesOf(dashboard.classifier, facts => [
         `${facts['enabled'] === true ? 'Enabled' : 'Disabled'}: ${String(facts['modelName'])} at effort ${String(facts['effort'])}, cap ${String(facts['dailyCallCap'])} a day.`,

@@ -16,8 +16,7 @@ import type { RecoveryFloorSource } from '../mail/index.ts';
  * The floor answers one question: what can this mailbox have seen that FSS has not?
  * Nothing can have been *seen* before FSS touched the prospect, so the instant that
  * matters is the earliest completed step of a live enrollment — the first email that
- * went out, the first LinkedIn message handed off, the first call logged. A reply to
- * any of them can only postdate it.
+ * went out, the first call logged. A reply to either can only postdate it.
  *
  * That is the same reasoning G7-2 used for taking `dispatch_started_at` rather than
  * `created_at`: the enrollment's `started_at` would extend every recovery back through

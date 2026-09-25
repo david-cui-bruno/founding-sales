@@ -9,6 +9,7 @@ import {
   ENROLLMENT_STATES,
   SEQUENCE_STOP_CONDITIONS,
   SEQUENCE_VERSION_STATES,
+  STEP_CHANNELS,
   STEP_COMPLETION_SOURCES,
   STEP_EXECUTION_STATES,
   STEP_RESULTS,
@@ -27,9 +28,10 @@ import { TODAY_ITEM_KINDS, TODAY_LANES } from '@fss/domain/today';
  * domain actually uses: a value added, removed or reordered on either side fails here,
  * in the API's CI, instead of as an answer a Mac cannot parse.
  *
- * Two lists have no exported array in the domain, and are held to what does exist: the
- * step channel to the domain's `StepChannel` type, and the confirmation consequences to
- * the CHECK constraint that defines them in migration 0011.
+ * The step channel is held to the domain's `StepChannel` type as well as to its array
+ * (the array arrived when LinkedIn was removed on 25 September 2026), and the
+ * confirmation consequences, which have no exported array in the domain, to the CHECK
+ * constraint that defines them in migration 0011.
  */
 
 type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
@@ -40,6 +42,7 @@ describe('the wire vocabularies are the domain’s', () => {
     ['SEQUENCE_STOP_CONDITIONS', wire.SEQUENCE_STOP_CONDITIONS, SEQUENCE_STOP_CONDITIONS],
     ['ENROLLMENT_STATES', wire.ENROLLMENT_STATES, ENROLLMENT_STATES],
     ['ENROLLMENT_END_REASONS', wire.ENROLLMENT_END_REASONS, ENROLLMENT_END_REASONS],
+    ['STEP_CHANNELS', wire.STEP_CHANNELS, STEP_CHANNELS],
     ['STEP_COMPLETION_SOURCES', wire.STEP_COMPLETION_SOURCES, STEP_COMPLETION_SOURCES],
     ['STEP_RESULTS', wire.STEP_RESULTS, STEP_RESULTS],
     // Lane g88: the resume review names each unexecuted step's state.

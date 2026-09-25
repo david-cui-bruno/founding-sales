@@ -118,7 +118,7 @@ export async function readSuppressionEvent(
 }
 
 /** The action kinds a suppression's review hold blocks. Everything outbound. */
-const REVIEW_HOLD_BLOCKS = ['email_send', 'call_task', 'linkedin_task', 'dial_authorization', 'enrollment_advance'] as const;
+const REVIEW_HOLD_BLOCKS = ['email_send', 'call_task', 'dial_authorization', 'enrollment_advance'] as const;
 
 /**
  * The sources that are terminal the instant they commit (10.2).

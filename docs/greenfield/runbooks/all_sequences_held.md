@@ -36,8 +36,8 @@ all (see `worker_heartbeat_missed`).
 ## Symptoms
 
 For fifteen minutes, every live enrollment has been blocked by a counted hold.
-Automated sequence work has stopped: nothing is sending, and no call or LinkedIn step
-is moving forward on Today.
+Automated sequence work has stopped: nothing is sending, and no call step is moving
+forward on Today.
 
 With only a few enrollments the fraction is coarse. With one enrollment, one uncertain
 reply on it is enough.

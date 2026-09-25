@@ -13,19 +13,25 @@ export type TodayLane = (typeof TODAY_LANES)[number];
 /**
  * What one contact task is.
  *
- * Three kinds share the `due_work` lane because 8.2 names one lane for "due sequence
- * work" and the card counts them separately: "replies, emails due, calls due, and
- * LinkedIn tasks due".
+ * Two kinds share the `due_work` lane because 8.2 names one lane for "due sequence
+ * work" and the card counts them separately: "replies, emails due, calls due".
+ *
+ * LinkedIn tasks were removed on 25 September 2026. `today_items_kind_known` (migration
+ * 0008) still admits `linkedin_due`, so a stored item may carry it; `isTodayItemKind` is
+ * how a reader ignores one.
  */
 export const TODAY_ITEM_KINDS = [
   'reply',
   'callback',
   'email_due',
   'call_due',
-  'linkedin_due',
   'new_firm',
 ] as const;
 export type TodayItemKind = (typeof TODAY_ITEM_KINDS)[number];
+
+export function isTodayItemKind(value: string): value is TodayItemKind {
+  return (TODAY_ITEM_KINDS as readonly string[]).includes(value);
+}
 
 export const TODAY_ITEM_STATUSES = ['open', 'snoozed', 'completed', 'cancelled'] as const;
 export type TodayItemStatus = (typeof TODAY_ITEM_STATUSES)[number];
@@ -82,12 +88,14 @@ export function refuseToday<T>(reason: TodayRefusalCode): TodayResult<T> {
   return { ok: false, reason };
 }
 
-/** The aggregate counts 8.2 puts on a card. */
+/**
+ * The aggregate counts 8.2 puts on a card. `today_snapshots.linkedin_due` (migration
+ * 0008) is still maintained by `today_refresh_card` and is not read.
+ */
 export interface TodayCounts {
   readonly replies: number;
   readonly emailsDue: number;
   readonly callsDue: number;
-  readonly linkedInDue: number;
 }
 
 /** One card, as the repository reads it. */

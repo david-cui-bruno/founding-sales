@@ -1,15 +1,15 @@
 import type { TodayItemKind, TodaySource } from '../today/index.ts';
-import type { StepChannel } from './types.ts';
+import { isStepChannel, type StepChannel } from './types.ts';
 
 /**
  * Lane 3 of the Today list: due sequence work (specification 8.2).
  *
  * "Lane precedence is: 1 Replies ... 2 Callbacks ... 3 Due sequence work ... 4 New
- * firms. ... Its card shows aggregate counts such as replies, emails due, calls due,
- * and LinkedIn tasks due."
+ * firms. ... Its card shows aggregate counts such as replies, emails due, calls due"
+ * (LinkedIn tasks due went with LinkedIn on 25 September 2026).
  *
- * Three of the four counts are this source's, and they are three `TodayItemKind`s
- * over one lane, exactly as `packages/domain/today/types.ts` anticipated. G6 left the
+ * Two of the three counts are this source's, and they are two `TodayItemKind`s over
+ * one lane, exactly as `packages/domain/today/types.ts` anticipated. G6 left the
  * `step_execution` source kind in its closed set for this, so nothing in the Today
  * lane changes when this array entry is added to `defaultTodaySources()`.
  *
@@ -27,12 +27,15 @@ import type { StepChannel } from './types.ts';
  * runs it. The same identity in both places means a rebuild upserts the task it
  * already had, and a worker claiming the job and a card showing the task are
  * demonstrably about the same row.
+ *
+ * A step whose channel is not one `isStepChannel` knows — a LinkedIn task stored before
+ * 25 September 2026 — is nobody's task and is not listed; the rebuild cancels the item
+ * an earlier build made for it.
  */
 
 const KIND_OF_CHANNEL: Readonly<Record<StepChannel, TodayItemKind>> = Object.freeze({
   email: 'email_due',
   call_task: 'call_due',
-  linkedin_task: 'linkedin_due',
 });
 
 export function dueSequenceWorkSource(): TodaySource {
@@ -44,7 +47,7 @@ export function dueSequenceWorkSource(): TodaySource {
         id: string;
         firm_id: string;
         contact_id: string;
-        channel: StepChannel;
+        channel: string;
         due_at: Date;
       }>(
         `SELECT e.id, e.firm_id, e.contact_id, e.channel, e.due_at
@@ -60,19 +63,25 @@ export function dueSequenceWorkSource(): TodaySource {
           ORDER BY e.due_at, e.id`,
         [context.scope.workspaceId, input.businessTimeZone, input.businessDate],
       );
-      return rows.map(row => ({
-        firmId: row.firm_id,
-        contactId: row.contact_id,
-        itemKey: `step-execution:${row.id}`,
-        kind: KIND_OF_CHANNEL[row.channel],
-        dueAt: row.due_at.toISOString(),
-        sourceKind: 'step_execution' as const,
-        sourceId: row.id,
-        // 8.2: "Automated sends are not snoozed ad hoc; delaying them creates a
-        // recorded hold." An email step is the automated one; a call task and a
-        // LinkedIn task are things a person does and may snooze.
-        automated: row.channel === 'email',
-      }));
+      return rows.flatMap(row => {
+        const channel = row.channel;
+        if (!isStepChannel(channel)) return [];
+        return [
+          {
+            firmId: row.firm_id,
+            contactId: row.contact_id,
+            itemKey: `step-execution:${row.id}`,
+            kind: KIND_OF_CHANNEL[channel],
+            dueAt: row.due_at.toISOString(),
+            sourceKind: 'step_execution' as const,
+            sourceId: row.id,
+            // 8.2: "Automated sends are not snoozed ad hoc; delaying them creates a
+            // recorded hold." An email step is the automated one; a call task is a thing
+            // a person does and may snooze.
+            automated: channel === 'email',
+          },
+        ];
+      });
     },
   };
 }

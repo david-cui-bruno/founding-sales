@@ -15,13 +15,33 @@ import type { SequenceDelay, StepChannel } from '../src/index.ts';
 
 export type { SequenceDelay, StepChannel };
 
+/**
+ * The channels a step may have.
+ *
+ * LinkedIn was removed on 25 September 2026. Migration 0012's
+ * `sequence_steps_channel_known` and `step_executions_channel_known` still admit
+ * `linkedin_task`, so a row read from either may carry a channel this set does not
+ * know. Such a row is unknown: the worker holds it and never runs it, nothing enrols
+ * into, publishes or migrates onto a version that has one, and Today does not list it.
+ */
+export const STEP_CHANNELS = ['email', 'call_task'] as const satisfies readonly StepChannel[];
+
+export function isStepChannel(value: string): value is StepChannel {
+  return (STEP_CHANNELS as readonly string[]).includes(value);
+}
+
 export const SEQUENCE_VERSION_STATES = ['draft', 'published', 'retired'] as const;
 export type SequenceVersionState = (typeof SEQUENCE_VERSION_STATES)[number];
 
-/** 11.2's five terminal conditions. A version may not opt out of any of them. */
+/**
+ * 11.2's terminal conditions. A version may not opt out of any of them.
+ *
+ * `sequence_versions_stop_conditions_complete` (migration 0012) still requires
+ * `linkedin_reply` in every stored array, and the column's default supplies it, so the
+ * reader drops it (`toVersion` in `rows.ts`).
+ */
 export const SEQUENCE_STOP_CONDITIONS = [
   'human_reply',
-  'linkedin_reply',
   'engaged_call',
   'opt_out_or_suppression',
   'stage_closed',
@@ -32,12 +52,11 @@ export const ENROLLMENT_STATES = ['active', 'review_required', 'completed', 'sto
 export type EnrollmentState = (typeof ENROLLMENT_STATES)[number];
 
 /**
- * Why an enrollment ended. The first five are 11.2's terminal conditions as the
+ * Why an enrollment ended. The first four are 11.2's terminal conditions as the
  * enrollment sees them; the rest are the ends that are not a prospect signal.
  */
 export const ENROLLMENT_END_REASONS = [
   'human_reply',
-  'linkedin_reply',
   'engaged_call',
   'opt_out',
   'firm_suppressed',
@@ -55,11 +74,10 @@ export type EnrollmentEndReason = (typeof ENROLLMENT_END_REASONS)[number];
 export const STEP_EXECUTION_STATES = ['pending', 'held', 'dispatched', 'completed', 'cancelled'] as const;
 export type StepExecutionState = (typeof STEP_EXECUTION_STATES)[number];
 
-export const STEP_COMPLETION_SOURCES = ['open_and_copy', 'call_log', 'send', 'admin', 'system'] as const;
+export const STEP_COMPLETION_SOURCES = ['call_log', 'send', 'admin', 'system'] as const;
 export type StepCompletionSource = (typeof STEP_COMPLETION_SOURCES)[number];
 
 export const STEP_RESULTS = [
-  'handed_off',
   'sent',
   'skipped',
   'no_email',
@@ -134,7 +152,6 @@ export interface SequenceStepRow {
   readonly delay: SequenceDelay;
   readonly onNoAnswer: 'advance' | 'retry_call' | null;
   readonly templateVersionId: string | null;
-  readonly linkedInMessage: string | null;
 }
 
 export interface SequenceVersionRow {

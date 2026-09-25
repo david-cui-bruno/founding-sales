@@ -44,18 +44,19 @@ export function isPublicResearchAddress(address: string): boolean {
   );
 }
 
-export type SourceDisposition = 'candidate' | 'manual_only' | 'blocked';
+export type SourceDisposition = 'candidate' | 'blocked';
 
 /**
  * What research may do with a URL.
  *
  * * `candidate` — an https URL on a public host that a page fetch may request.
- * * `manual_only` — LinkedIn. Section 11.3 makes LinkedIn a human handoff in version
- *   one, so research reads nothing there; a URL may still be *recorded* for a person.
  * * `blocked` — everything else: any other scheme, credentials in the URL, a
  *   non-default port, a bare or private address, a name with no dot, a `.local` name,
- *   and the trade-association directory the old policy blocked because scraping a
- *   membership list is not the same thing as reading a firm's own site.
+ *   the trade-association directory the old policy blocked because scraping a
+ *   membership list is not the same thing as reading a firm's own site, and LinkedIn,
+ *   which research has never read. (Until LinkedIn was removed on 25 September 2026 a
+ *   LinkedIn URL was `manual_only`, for a person's handoff; every caller treated that
+ *   exactly as `blocked`.)
  */
 export function researchSourcePolicy(value: string): SourceDisposition {
   let url: URL;
@@ -79,7 +80,7 @@ export function researchSourcePolicy(value: string): SourceDisposition {
     return 'blocked';
   }
   if (host === 'narpm.org' || host.endsWith('.narpm.org')) return 'blocked';
-  if (host === 'linkedin.com' || host.endsWith('.linkedin.com')) return 'manual_only';
+  if (host === 'linkedin.com' || host.endsWith('.linkedin.com')) return 'blocked';
   return 'candidate';
 }
 

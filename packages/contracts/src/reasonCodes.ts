@@ -78,13 +78,23 @@ export function isRecoverableHoldReason(code: HoldReasonCode): boolean {
 export const BLOCKED_ACTION_KINDS = [
   'email_send',
   'call_task',
-  'linkedin_task',
   'dial_authorization',
   'enrollment_advance',
   'research',
 ] as const;
 export const blockedActionKindSchema = z.enum(BLOCKED_ACTION_KINDS);
 export type BlockedActionKind = z.infer<typeof blockedActionKindSchema>;
+
+/**
+ * The members of a stored `blocked_action_kinds` array this set still knows.
+ *
+ * LinkedIn was removed on 25 September 2026, and `active_holds_blocked_action_kinds_known`
+ * (migration 0001) still admits `linkedin_task`, which holds opened before then carry. A
+ * reader ignores it rather than handing a Mac a kind no schema declares.
+ */
+export function knownBlockedActionKinds(values: readonly string[]): BlockedActionKind[] {
+  return values.filter((value): value is BlockedActionKind => (BLOCKED_ACTION_KINDS as readonly string[]).includes(value));
+}
 
 /** The recovery controls a hold may expose. `null` means the hold exposes none. */
 export const HOLD_RECOVERY_ACTIONS = [

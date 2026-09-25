@@ -34,8 +34,8 @@ import { seedSequences, type SeededSequences } from './support/sequenceFixtures.
  *   `not_before`, so the wake takes it straight after the release; any other held step
  *   waits out its reason's recheck.
  *
- * The seeded version is email at 0 hours, a call at two business days and a LinkedIn
- * task at four, all "after enrollment". Monday 21 September 2026 09:00 New York is
+ * The seeded version is email at 0 hours and a call at two business days, both "after
+ * enrollment". Monday 21 September 2026 09:00 New York is
  * 13:00Z; 08:00 New York on a business day in September is 12:00Z.
  */
 
@@ -68,7 +68,6 @@ afterAll(async () => {
 
 beforeEach(async () => {
   for (const table of [
-    'enrollment_linkedin_results',
     'step_execution_shifts',
     'step_executions',
     'sequence_enrollments',

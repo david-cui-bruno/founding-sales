@@ -87,7 +87,6 @@ export const cachedTodayCardSchema = z.strictObject({
     replies: z.number().int().min(0),
     emailsDue: z.number().int().min(0),
     callsDue: z.number().int().min(0),
-    linkedInDue: z.number().int().min(0),
   }),
 });
 export type CachedTodayCard = z.infer<typeof cachedTodayCardSchema>;

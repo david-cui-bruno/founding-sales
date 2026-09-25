@@ -21,12 +21,12 @@ import {
 
 /**
  * What the sequence editor window is given, and the things it may ask for
- * (specification 11.1, 11.3, 4.3, 14.2).
+ * (specification 11.1, 4.3, 14.2).
  *
  * A third contract beside G2's cache shape and G6's Today shape, for the reason G6
- * gave for its own: this state names contacts, template bodies and LinkedIn message
- * text, none of which may be written to the encrypted 24-hour cache (5.3). Keeping it
- * in a type the cache has never heard of makes that structural rather than remembered.
+ * gave for its own: this state names contacts and template bodies, neither of which
+ * may be written to the encrypted 24-hour cache (5.3). Keeping it in a type the cache
+ * has never heard of makes that structural rather than remembered.
  *
  * Nothing here decides anything. Every field is a shape the API already produced, and
  * the window's whole job is to show it and to disable what cannot be done. In
@@ -35,9 +35,6 @@ import {
  *   * `canPublish` is a server fact, not a client computation — the API refuses a
  *     publish whose email step names an unapproved template, and the window shows
  *     *why* rather than deciding for itself;
- *   * the LinkedIn card carries `undoUntil`, and the window compares it with the
- *     *server's* clock reading, which arrives in `asOf`, because a Mac whose clock is
- *     fast must not be able to show an undo button the server would refuse;
  *   * `contentHash` is displayed verbatim, because 11.1 binds an approval to bytes and
  *     an approver ought to be able to read the digest they are approving.
  */
@@ -61,24 +58,6 @@ export type TemplateVersion = TemplateVersionDto;
 export type Enrollment = EnrollmentDto;
 
 /**
- * The LinkedIn task card (11.3).
- *
- * `message` is the step's frozen text; `linkedInUrl` is the contact's profile.
- * `undoUntil` is present only while the ten-minute window is open, and the window
- * compares it with `asOf` rather than with `Date.now()`.
- */
-export const linkedInCardSchema = z.strictObject({
-  stepExecutionId: uuid,
-  enrollmentId: uuid,
-  contactName: z.string().max(200).nullable(),
-  linkedInUrl: z.string().max(400).nullable(),
-  message: z.string().min(1).max(1200),
-  handedOff: z.boolean(),
-  undoUntil: instant.nullable(),
-});
-export type LinkedInCard = z.infer<typeof linkedInCardSchema>;
-
-/**
  * Why one slice of the window could not be read, or null when it was (lane g78, D06).
  *
  * The refusal code, exactly as the bridge got it. A slice that failed is empty *and*
@@ -95,17 +74,13 @@ export type SequenceReadSlice = (typeof SEQUENCE_READ_SLICES)[number];
  * One step of a draft, as the editor holds it and as it is sent (lane g88, audit G03).
  *
  * No ordinal: a step's number is its place in the list, assigned when the draft is saved,
- * so a reorder can never leave the gap `publishVersion` refuses. No LinkedIn channel is
- * offered by the editor — David dropped LinkedIn — but a draft copied from a version
- * that had one still carries it, and the schema has to be able to say so, or saving that
- * draft would silently delete a step.
+ * so a reorder can never leave the gap `publishVersion` refuses.
  */
 export const draftStepSchema = z.strictObject({
   channel: z.enum(STEP_CHANNELS),
   delay: sequenceDelaySchema,
   onNoAnswer: z.enum(STEP_NO_ANSWER_ACTIONS).nullable(),
   templateVersionId: uuid.nullable(),
-  linkedInMessage: z.string().min(1).max(1200).nullable(),
 });
 export type DraftStep = z.infer<typeof draftStepSchema>;
 
@@ -154,7 +129,6 @@ export const sequenceStateSchema = z.strictObject({
     templates: readErrorSchema,
     enrollments: readErrorSchema,
   }),
-  linkedInCard: linkedInCardSchema.nullable(),
   /** The resume review the person opened, or null (lane g88). */
   resumeReview: resumeReviewSchema.nullable(),
   notice: z.string().max(400).nullable(),
@@ -179,12 +153,6 @@ export interface SequenceBridge {
     readonly opportunityId: string;
     readonly firmId: string;
     readonly contactId: string;
-  }): Promise<SequenceState>;
-  completeLinkedIn(input: { readonly stepExecutionId: string }): Promise<SequenceState>;
-  undoLinkedIn(input: { readonly stepExecutionId: string }): Promise<SequenceState>;
-  recordLinkedInResult(input: {
-    readonly enrollmentId: string;
-    readonly result: 'replied' | 'no_engagement';
   }): Promise<SequenceState>;
   /** Lane g88: read the resume review for one held enrollment. */
   reviewEnrollment(input: { readonly enrollmentId: string }): Promise<SequenceState>;

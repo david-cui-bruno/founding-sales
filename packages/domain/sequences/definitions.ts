@@ -3,6 +3,7 @@ import { readTemplateVersion } from '../templates/index.ts';
 import { listSequenceVersions, readSequenceSteps, readSequenceVersion } from './rows.ts';
 import {
   acceptSequence,
+  isStepChannel,
   refuseSequence,
   type SequenceDelay,
   type SequenceResult,
@@ -14,10 +15,11 @@ import {
 /**
  * Sequence definition and publication (specification 11.1).
  *
- * "`sequences`, immutable `sequence_versions`, and ordered `sequence_steps` define
- * email, call-task, and LinkedIn-task plans with delays and step-specific behavior.
- * Draft versions may change; published versions and steps are immutable by trigger.
- * Editing a published sequence creates a new draft."
+ * `sequences`, immutable `sequence_versions` and ordered `sequence_steps` define email
+ * and call-task plans with delays and step-specific behavior. Draft versions may
+ * change; published versions and steps are immutable by trigger; editing a published
+ * sequence creates a new draft. (The LinkedIn task was removed on 25 September 2026. A
+ * stored step with that channel is refused by the draft check and by publication.)
  *
  * The immutability is the database's — migration 0012's triggers refuse an edit to a
  * published version and refuse an insert, update or delete of its steps. So this file
@@ -48,8 +50,6 @@ export interface DraftStepInput {
   readonly onNoAnswer?: 'advance' | 'retry_call' | undefined;
   /** Required on an email step, refused on any other (11.1). */
   readonly templateVersionId?: string | undefined;
-  /** Required on a LinkedIn step, refused on any other (11.3). */
-  readonly linkedInMessage?: string | undefined;
 }
 
 export interface CreateSequenceInput {
@@ -165,7 +165,6 @@ export async function createDraftVersion(
           delay: step.delay,
           ...(step.onNoAnswer === null ? {} : { onNoAnswer: step.onNoAnswer }),
           ...(step.templateVersionId === null ? {} : { templateVersionId: step.templateVersionId }),
-          ...(step.linkedInMessage === null ? {} : { linkedInMessage: step.linkedInMessage }),
         })));
 
   const written = await replaceDraftSteps(context, { sequenceVersionId, steps });
@@ -208,8 +207,8 @@ export async function replaceDraftSteps(
     await context.db.query(
       `INSERT INTO sequence_steps
          (workspace_id, sequence_version_id, ordinal, channel, delay_unit, delay_amount,
-          on_no_answer, template_version_id, linkedin_message)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+          on_no_answer, template_version_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
       [
         context.scope.workspaceId,
         input.sequenceVersionId,
@@ -219,7 +218,6 @@ export async function replaceDraftSteps(
         step.delay.unit === 'elapsed' ? step.delay.hours : step.delay.days,
         step.onNoAnswer ?? null,
         step.templateVersionId ?? null,
-        step.linkedInMessage ?? null,
       ],
     );
   }
@@ -232,11 +230,11 @@ function validateSteps(steps: readonly DraftStepInput[]): 'invalid_input' | null
   const contiguous = ordinals.every((ordinal, index) => ordinal === index + 1);
   if (!contiguous) return 'invalid_input';
   for (const step of steps) {
+    // A step copied from a version stored before 25 September 2026 may be a LinkedIn task.
+    if (!isStepChannel(step.channel)) return 'invalid_input';
     const needsTemplate = step.channel === 'email';
-    const needsMessage = step.channel === 'linkedin_task';
     const needsRetry = step.channel === 'call_task';
     if (needsTemplate !== (step.templateVersionId !== undefined)) return 'invalid_input';
-    if (needsMessage !== (step.linkedInMessage !== undefined)) return 'invalid_input';
     if (needsRetry !== (step.onNoAnswer !== undefined)) return 'invalid_input';
     const amount = step.delay.unit === 'elapsed' ? step.delay.hours : step.delay.days;
     if (!Number.isInteger(amount) || amount < 0) return 'invalid_input';
@@ -265,6 +263,7 @@ export async function publishVersion(
 
   const ordinals = version.steps.map(step => step.ordinal);
   if (!ordinals.every((ordinal, index) => ordinal === index + 1)) return refuseSequence('invalid_input');
+  if (!version.steps.every(step => isStepChannel(step.channel))) return refuseSequence('invalid_input');
 
   for (const step of version.steps) {
     if (step.templateVersionId === null) continue;

@@ -112,16 +112,9 @@ describe("the dashboard's enrollment and classifier figures", () => {
     expect(facts.stepsCompleted).toEqual([{ key: 'email', count: 1 }]);
   });
 
-  it('counts a LinkedIn handoff and what the person recorded afterwards', async () => {
-    const facts = await enrollmentFacts(admin, WINDOW, WORKSPACE);
-    expect(facts.linkedinHandoffs).toBe(1);
-    expect(facts.linkedinRecordedReplies).toBe(1);
-    expect(facts.linkedinNoEngagement).toBe(0);
-  });
-
   it("shows a colleague none of another salesperson's enrollments", async () => {
     const theirs = await enrollmentFacts(colleague, WINDOW, { onlyAssignedTo: otherUserId });
-    expect(theirs).toMatchObject({ started: 0, active: 0, linkedinHandoffs: 0 });
+    expect(theirs).toMatchObject({ started: 0, active: 0 });
     expect(theirs.heldSteps).toEqual([]);
     // The assignee sees their own, which is what makes the line above an assertion
     // about visibility rather than about an empty database.
@@ -134,7 +127,6 @@ describe("the dashboard's enrollment and classifier figures", () => {
   it("counts none of the other workspace's identical enrollments", async () => {
     const theirs = await enrollmentFacts(betaAdmin, WINDOW, WORKSPACE);
     expect(theirs.started).toBe(2);
-    expect(theirs.linkedinRecordedReplies).toBe(1);
     expect(theirs.active).toBe(FIXTURE_ACTIVE + 1);
   });
 
@@ -258,17 +250,10 @@ async function seedSequenceWorld(
      VALUES ($1, $2, 1, 'email', 'elapsed', 0, $3) RETURNING id`,
     [workspace.workspaceId, versionId, templateVersionId],
   );
-  const linkedinStepId = await id(
-    `INSERT INTO sequence_steps
-       (workspace_id, sequence_version_id, ordinal, channel, delay_unit, delay_amount,
-        linkedin_message)
-     VALUES ($1, $2, 2, 'linkedin_task', 'elapsed', 24, 'A short note.') RETURNING id`,
-    [workspace.workspaceId, versionId],
-  );
   const callStepId = await id(
     `INSERT INTO sequence_steps
        (workspace_id, sequence_version_id, ordinal, channel, delay_unit, delay_amount, on_no_answer)
-     VALUES ($1, $2, 3, 'call_task', 'elapsed', 48, 'advance') RETURNING id`,
+     VALUES ($1, $2, 2, 'call_task', 'elapsed', 48, 'advance') RETURNING id`,
     [workspace.workspaceId, versionId],
   );
 
@@ -294,7 +279,7 @@ async function seedSequenceWorld(
     );
 
   const live = await enrollment('active', null, null);
-  const finished = await enrollment('stopped', '2026-09-10T12:00:00.000Z', 'human_reply');
+  await enrollment('stopped', '2026-09-10T12:00:00.000Z', 'human_reply');
 
   const execution = async (
     enrollmentId: string,
@@ -339,14 +324,6 @@ async function seedSequenceWorld(
     result: 'sent',
   });
   await execution(live, callStepId, 'call_task', 'held', { holdReasonCode: 'daily_cap' });
-  const handoff = await execution(finished, linkedinStepId, 'linkedin_task', 'dispatched');
-
-  await query(
-    `INSERT INTO enrollment_linkedin_results
-       (workspace_id, enrollment_id, firm_id, step_execution_id, result, recorded_by_user_id, recorded_at)
-     VALUES ($1, $2, $3, $4, 'replied', $5, TIMESTAMPTZ '2026-09-04 15:00:00+00')`,
-    [workspace.workspaceId, finished, firm.firmId, handoff, workspace.salesperson.userId],
-  );
 
   // A sent fence that names this enrollment, so `bySequence` has something to join
   // to. It is inserted rather than retro-fitted onto the shared fixture's fence:

@@ -256,7 +256,7 @@ export const PAUSE_SCOPE_KINDS = ['workspace', 'owner', 'mailbox', 'opportunity'
 export const pauseScopeKindSchema = z.enum(PAUSE_SCOPE_KINDS);
 export type PauseScopeKind = z.infer<typeof pauseScopeKindSchema>;
 
-export const PAUSE_CHANNELS = ['email', 'call', 'linkedin', 'research'] as const;
+export const PAUSE_CHANNELS = ['email', 'call', 'research'] as const;
 export const pauseChannelSchema = z.enum(PAUSE_CHANNELS);
 export type PauseChannel = z.infer<typeof pauseChannelSchema>;
 

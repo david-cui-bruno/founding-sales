@@ -35,7 +35,6 @@ export interface SeededSequence {
   readonly publishedVersionId: string;
   readonly emailStepId: string;
   readonly callStepId: string;
-  readonly linkedInStepId: string;
   readonly template: SeededTemplate;
   readonly calendarVersion: string;
 }
@@ -109,7 +108,7 @@ async function seedSequence(session: SessionQueryable, workspace: SeededWorkspac
     [workspace.workspaceId, COLLIDING_SEQUENCE_NAME, workspace.admin.userId],
   );
 
-  // Version 1 is published and carries the three channels; version 2 stays a draft,
+  // Version 1 is published and carries the two channels; version 2 stays a draft,
   // because "editing a published sequence creates a new draft" (11.1) and the tests
   // need one of each.
   const publishedVersionId = await one<{ id: string }>(
@@ -132,15 +131,6 @@ async function seedSequence(session: SessionQueryable, workspace: SeededWorkspac
      VALUES ($1, $2, 2, 'call_task', 'business_days', 2, 'retry_call') RETURNING id`,
     [workspace.workspaceId, publishedVersionId],
   );
-  const linkedInStepId = await one<{ id: string }>(
-    session,
-    `INSERT INTO sequence_steps
-       (workspace_id, sequence_version_id, ordinal, channel, delay_unit, delay_amount, linkedin_message)
-     VALUES ($1, $2, 3, 'linkedin_task', 'business_days', 4, 'Hello — I sent a note last week.')
-     RETURNING id`,
-    [workspace.workspaceId, publishedVersionId],
-  );
-
   await session.query(
     `UPDATE sequence_versions
         SET state = 'published', published_at = now(), published_by_user_id = $3
@@ -166,7 +156,6 @@ async function seedSequence(session: SessionQueryable, workspace: SeededWorkspac
     publishedVersionId,
     emailStepId,
     callStepId,
-    linkedInStepId,
     template,
     calendarVersion: COLLIDING_CALENDAR_VERSION,
   };

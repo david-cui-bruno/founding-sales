@@ -30,7 +30,7 @@ test('a populated version draws both its steps, the template and the held enroll
 
   await expect(page.getByTestId('version-heading')).toHaveText('Version 1 — published');
   await expect(page.getByTestId('step')).toHaveCount(2);
-  await expect(page.getByTestId('step-detail')).toHaveText(['Template email', 'LinkedIn task, opened and copied by hand']);
+  await expect(page.getByTestId('step-detail')).toHaveText(['Template email', 'Call task (move on if nobody answers)']);
   await expect(page.getByTestId('template-label')).toHaveText('First touch v1');
   await expect(page.getByTestId('hold-row')).toHaveCount(1);
   await expect(page.getByTestId('hold-explanation')).toContainText('about 9 days');
@@ -70,7 +70,7 @@ test('a founder fills the suggested plan, changes a delay, saves numbered steps,
   await expect(page.getByTestId('draft-save')).toBeDisabled();
   await page.getByTestId('step-suggested').click();
   await expect(page.getByTestId('step')).toHaveCount(3);
-  // Call, email, call — and no LinkedIn step on offer anywhere (David dropped it).
+  // Call, email, call — and only those two channels on offer.
   await expect(page.getByTestId('step-channel-select').nth(1)).toHaveValue('email');
   await expect(page.getByTestId('step-channel-select').first().locator('option')).toHaveText(['Call', 'Email']);
   await expect(page.getByTestId('step-template').first()).toHaveValue(SEQUENCE_IDS.template);
@@ -85,9 +85,9 @@ test('a founder fills the suggested plan, changes a delay, saves numbered steps,
   expect(saved?.argument).toEqual({
     sequenceVersionId: SEQUENCE_IDS.version,
     steps: [
-      { channel: 'call_task', delay: { unit: 'business_days', days: 0 }, onNoAnswer: 'advance', templateVersionId: null, linkedInMessage: null },
-      { channel: 'email', delay: { unit: 'business_days', days: 2 }, onNoAnswer: null, templateVersionId: SEQUENCE_IDS.template, linkedInMessage: null },
-      { channel: 'call_task', delay: { unit: 'business_days', days: 5 }, onNoAnswer: 'advance', templateVersionId: null, linkedInMessage: null },
+      { channel: 'call_task', delay: { unit: 'business_days', days: 0 }, onNoAnswer: 'advance', templateVersionId: null },
+      { channel: 'email', delay: { unit: 'business_days', days: 2 }, onNoAnswer: null, templateVersionId: SEQUENCE_IDS.template },
+      { channel: 'call_task', delay: { unit: 'business_days', days: 5 }, onNoAnswer: 'advance', templateVersionId: null },
     ],
   });
 });

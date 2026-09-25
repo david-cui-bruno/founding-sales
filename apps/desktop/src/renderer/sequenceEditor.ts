@@ -29,7 +29,7 @@ import {
 } from './sequenceView.ts';
 
 /**
- * The sequence editor window (specification 11.1, 11.3, 4.3, 14.2).
+ * The sequence editor window (specification 11.1, 4.3, 14.2).
  *
  * A fourth entry point beside G2's sign-in page, G3b's firm workspace and G6's Today
  * page, and built the same way: every value reaches the DOM through `textContent`, so
@@ -48,9 +48,7 @@ import {
  * explanation is the worst of both:
  *
  *   * a draft that cannot be published says which reason applies;
- *   * a template that cannot be approved lists every issue the server named (12.6);
- *   * a LinkedIn handoff says "FSS does not know whether it was sent", because 11.3
- *     says the system never claims otherwise.
+ *   * a template that cannot be approved lists every issue the server named (12.6).
  *
  * Content hashes, footers and stop-condition codes are behind "Details".
  */
@@ -222,11 +220,8 @@ function renderDraftEditor(
     main.append(element('span', { className: 'name', text: `Step ${String(index + 1)}`, testId: 'step-number' }));
 
     const channels = EDITOR_CHANNELS.map(channel => ({ value: channel, label: CHANNEL_LABELS[channel] }));
-    // A LinkedIn step copied from an old version is shown for what it is, and can only be removed.
-    const channelOptions =
-      step.channel === 'linkedin_task' ? [...channels, { value: 'linkedin_task', label: CHANNEL_LABELS.linkedin_task, disabled: true }] : channels;
     main.append(
-      select('step-channel-select', channelOptions, step.channel, value => {
+      select('step-channel-select', channels, step.channel, value => {
         if (value !== 'email' && value !== 'call_task') return;
         update(replaceStep(steps, index, { ...newStep(value, []), delay: step.delay }));
       }),
@@ -623,41 +618,6 @@ function renderTemplateForm(root: HTMLElement, draft: TemplateDraft, enabled: bo
   root.append(form);
 }
 
-function renderLinkedIn(root: HTMLElement, screen: ReturnType<typeof sequenceScreen>): void {
-  const panel = screen.linkedIn;
-  if (panel === null) return;
-  const section = element('section', { className: 'linkedin' });
-  section.dataset['testid'] = 'linkedin-card';
-  section.append(element('h2', { text: panel.heading, testId: 'linkedin-heading' }));
-  section.append(element('pre', { className: 'message', text: panel.message, testId: 'linkedin-message' }));
-  section.append(element('p', { className: 'status', text: panel.statusLabel, testId: 'linkedin-status' }));
-
-  const open = button('Open LinkedIn & copy message', 'linkedin-open', panel.canOpenAndCopy);
-  open.addEventListener('click', () => {
-    apply(bridge().completeLinkedIn({ stepExecutionId: panel.stepExecutionId }));
-  });
-  section.append(open);
-
-  const undo = button('Undo', 'linkedin-undo', panel.canUndo);
-  undo.addEventListener('click', () => {
-    apply(bridge().undoLinkedIn({ stepExecutionId: panel.stepExecutionId }));
-  });
-  section.append(undo);
-
-  const replied = button('They replied', 'linkedin-replied', panel.canRecordResult);
-  replied.addEventListener('click', () => {
-    apply(bridge().recordLinkedInResult({ enrollmentId: panel.enrollmentId, result: 'replied' }));
-  });
-  section.append(replied);
-
-  const none = button('No engagement', 'linkedin-none', panel.canRecordResult);
-  none.addEventListener('click', () => {
-    apply(bridge().recordLinkedInResult({ enrollmentId: panel.enrollmentId, result: 'no_engagement' }));
-  });
-  section.append(none);
-  root.append(section);
-}
-
 function renderHoldReview(root: HTMLElement, screen: ReturnType<typeof sequenceScreen>): void {
   if (screen.holdReview.length === 0) return;
   const section = element('section', { className: 'hold-review' });
@@ -764,7 +724,6 @@ export function render(state: SequenceState): void {
   renderVersions(host, screen, state);
   renderUnread(host, screen, 'templates');
   renderTemplates(host, screen, state);
-  renderLinkedIn(host, screen);
   renderUnread(host, screen, 'enrollments');
   renderHoldReview(host, screen);
 }

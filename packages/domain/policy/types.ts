@@ -82,7 +82,6 @@ export const CHANNEL_BLOCKED_ACTION_KINDS: Readonly<Record<PauseChannel, readonl
   Object.freeze({
     email: Object.freeze(['email_send'] as const),
     call: Object.freeze(['call_task', 'dial_authorization'] as const),
-    linkedin: Object.freeze(['linkedin_task'] as const),
     research: Object.freeze(['research'] as const),
   });
 
@@ -90,7 +89,6 @@ export const CHANNEL_BLOCKED_ACTION_KINDS: Readonly<Record<PauseChannel, readonl
 export const ALL_BLOCKED_ACTION_KINDS: readonly BlockedActionKind[] = Object.freeze([
   'email_send',
   'call_task',
-  'linkedin_task',
   'dial_authorization',
   'enrollment_advance',
   'research',

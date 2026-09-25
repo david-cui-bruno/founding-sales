@@ -7,9 +7,9 @@ import type { SequenceState } from '../../../src/renderer/sequenceContract.ts';
 import { EMPTY_SEQUENCE_STATE } from '../../../src/renderer/sequenceView.ts';
 import {
   SEQUENCE_IDS,
+  callStepAnswer,
   emailStepAnswer,
   enrollmentAnswer,
-  linkedInStepAnswer,
   sequenceSummaryAnswer,
   sequenceVersionAnswer,
   templateVersionAnswer,
@@ -52,7 +52,7 @@ export function populatedSequenceState(overrides: Partial<SequenceState> = {}): 
     sequences: [sequenceSummaryAnswer()],
     selectedSequenceId: SEQUENCE_IDS.sequence,
     versions: [
-      sequenceVersionAnswer([emailStepAnswer(SEQUENCE_IDS.template), linkedInStepAnswer()], {
+      sequenceVersionAnswer([emailStepAnswer(SEQUENCE_IDS.template), callStepAnswer()], {
         version: 1,
         state: 'published',
         publishedAt: '2026-09-20T12:00:00.000Z',
@@ -102,9 +102,6 @@ globalThis.callieSequences = {
   async retire(input) { return await ask('retire', input); },
   async approveTemplate(input) { return await ask('approveTemplate', input); },
   async enroll(input) { return await ask('enroll', input); },
-  async completeLinkedIn(input) { return await ask('completeLinkedIn', input); },
-  async undoLinkedIn(input) { return await ask('undoLinkedIn', input); },
-  async recordLinkedInResult(input) { return await ask('recordLinkedInResult', input); },
   async resumeEnrollment(input) { return await ask('resumeEnrollment', input); },
 };
 async function ask(method, argument) {

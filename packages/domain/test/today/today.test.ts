@@ -179,7 +179,7 @@ describe('scenario 33: many contacts at one firm are one card', () => {
     const list = await readTodayList(salesperson(), { now });
     const cards = list.cards.filter(card => card.firmId === crm.alpha.firmId);
     expect(cards).toHaveLength(1);
-    expect(cards[0]?.counts).toEqual({ replies: 0, emailsDue: 5, callsDue: 0, linkedInDue: 0 });
+    expect(cards[0]?.counts).toEqual({ replies: 0, emailsDue: 5, callsDue: 0 });
   });
 
   it('expands to one task per contact, ordered by lane then due instant', async () => {

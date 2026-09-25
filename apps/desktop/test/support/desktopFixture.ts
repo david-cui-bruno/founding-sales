@@ -75,14 +75,14 @@ export function sampleToday(workspaceId: string): CachedToday {
         firmName: 'Ash & Partners',
         lane: 'reply',
         dueAt: '2026-09-21T13:00:00.000Z',
-        counts: { replies: 1, emailsDue: 0, callsDue: 0, linkedInDue: 0 },
+        counts: { replies: 1, emailsDue: 0, callsDue: 0 },
       },
       {
         firmId: randomUUID(),
         firmName: 'Birch Advisory',
         lane: 'due_work',
         dueAt: '2026-09-21T14:00:00.000Z',
-        counts: { replies: 0, emailsDue: 2, callsDue: 1, linkedInDue: 0 },
+        counts: { replies: 0, emailsDue: 2, callsDue: 1 },
       },
     ],
   };

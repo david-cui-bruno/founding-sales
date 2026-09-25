@@ -296,14 +296,15 @@ of 7.3's ways in it is.
 | Origin | Written by | End reason |
 |---|---|---|
 | `human_reply` | `confirmReplyDisposition`, `resolveAmbiguity` when the reply is human | `human_reply` |
-| `linkedin_reply` | `recordLinkedInResult` | `linkedin_reply` |
 | `engaged_call` | `logCallOutcome` | `engaged_call` |
 | `direct_send` | `applyDirectSendEffects` | `direct_send` |
 | `salesperson_command` | `POST /opportunities/manual` | `admin_stop` |
 
-`salesperson_command` is a fifth member 7.3 does not list, because an explicit switch
-is a person inside the workspace deciding rather than a prospect signal, and the
-enrollment vocabulary reserves its first five members for prospect signals.
+`salesperson_command` is a member 7.3 does not list, because an explicit switch is a
+person inside the workspace deciding rather than a prospect signal, and the enrollment
+vocabulary reserves its first four members for prospect signals. The `linkedin_reply`
+origin was removed with LinkedIn on 25 September 2026; an event that still carries it
+reads as `human_reply`, like any origin nothing recognises.
 
 An event written before G22 carries no origin, and `manualModeEndReason` reads that —
 and any origin it does not recognise — as `human_reply`, which is exactly what lane G15

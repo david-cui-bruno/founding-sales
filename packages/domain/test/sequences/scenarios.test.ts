@@ -15,13 +15,9 @@ import {
   listStepExecutions,
   publishVersion,
   readEnrollment,
-  recordLinkedInResult,
   recordingSendHandoff,
-  completeLinkedInStep,
   resumeEnrollment,
   runDueStepExecution,
-  undoLinkedInStep,
-  LINKEDIN_UNDO_WINDOW_MILLISECONDS,
   type RecordingSendHandoff,
 } from '../../sequences/index.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
@@ -29,8 +25,10 @@ import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
 import { seedSequences, type SeededSequences } from './support/sequenceFixtures.ts';
 
 /**
- * Appendix G scenarios 9, 18, 26, 28, 31, 32 and 33, and the terminal stop the
- * coordinator made a requirement of this lane (`docs/decisions/g3a-domain-event-outbox.md`).
+ * Appendix G scenarios 26, 28, 31, 32 and 33, and the terminal stop the coordinator
+ * made a requirement of this lane (`docs/decisions/g3a-domain-event-outbox.md`).
+ * Scenarios 9 and 18 were LinkedIn's; LinkedIn was removed on 25 September 2026, and
+ * `removedLinkedIn.test.ts` proves what a row stored before then does now.
  *
  * Each one is a sentence from the specification that this lane is accepted on, and
  * each is run against a real PostgreSQL with two workspaces seeded, because the
@@ -60,7 +58,6 @@ const worker = (workspace: 'alpha' | 'beta' = 'alpha'): RepositoryContext =>
   );
 
 async function clearEnrollments(): Promise<void> {
-  await database.session.query('DELETE FROM enrollment_linkedin_results');
   await database.session.query('DELETE FROM step_execution_shifts');
   await database.session.query('DELETE FROM step_executions');
   await database.session.query('DELETE FROM sequence_enrollments');
@@ -185,117 +182,6 @@ describe('scenario 32: the email window, Monday mornings, weekends and DST', () 
   });
 });
 
-describe('scenario 9: the LinkedIn successor races the undo', () => {
-  let enrollmentId = '';
-  let linkedInExecutionId = '';
-
-  beforeEach(async () => {
-    enrollmentId = await enrollAlpha();
-    // Fast-forward to the LinkedIn step: complete the first two by hand, the way the
-    // cadence would, so the test is about the third.
-    await database.session.query(
-      `UPDATE step_executions SET state = 'completed', completed_at = now(),
-              completion_source = 'system', result = 'not_applicable'
-        WHERE workspace_id = $1 AND enrollment_id = $2`,
-      [seeded.alpha.workspaceId, enrollmentId],
-    );
-    const created = await database.session.query<{ id: string }>(
-      `INSERT INTO step_executions
-         (workspace_id, enrollment_id, step_id, firm_id, contact_id, channel, ordinal,
-          due_at, not_before, original_due_at, source_zone, rule_version)
-       VALUES ($1, $2, $3, $4, $5, 'linkedin_task', 3, now(), now(), now(), 'America/New_York', 'business-day.1+holidays.2026')
-       RETURNING id`,
-      [
-        seeded.alpha.workspaceId,
-        enrollmentId,
-        sequences.alpha.linkedInStepId,
-        crm.alpha.firmId,
-        crm.alpha.contactId,
-      ],
-    );
-    linkedInExecutionId = created.rows[0]?.id ?? '';
-  });
-
-  it('hands off, creates the successor with a ten-minute grace, and never claims a send', async () => {
-    const completed = await completeLinkedInStep(contextFor('alpha', 'salesperson'), {
-      stepExecutionId: linkedInExecutionId,
-    });
-    expect(completed.ok).toBe(true);
-    if (!completed.ok) return;
-    expect(completed.value.result).toBe('handed_off');
-    expect(completed.value.completionSource).toBe('open_and_copy');
-    // There is no fourth step in the seeded version, so the successor is absent and
-    // the enrollment completes. The grace period is asserted on a version that has one.
-    expect(completed.value.successorNotBefore).toBeNull();
-
-    const executions = await listStepExecutions(worker(), { enrollmentId });
-    const linkedIn = executions.find(execution => execution.id === linkedInExecutionId);
-    expect(linkedIn?.state).toBe('completed');
-  });
-
-  it('undoes inside ten minutes, reopening the step and cancelling the successor', async () => {
-    const completed = await completeLinkedInStep(contextFor('alpha', 'salesperson'), {
-      stepExecutionId: linkedInExecutionId,
-    });
-    expect(completed.ok).toBe(true);
-
-    const undone = await undoLinkedInStep(contextFor('alpha', 'salesperson'), {
-      stepExecutionId: linkedInExecutionId,
-      now: await databaseNow(worker()),
-    });
-    expect(undone.ok).toBe(true);
-    const executions = await listStepExecutions(worker(), { enrollmentId });
-    expect(executions.find(execution => execution.id === linkedInExecutionId)?.state).toBe('pending');
-  });
-
-  it('refuses the undo once the ten-minute window has passed', async () => {
-    await completeLinkedInStep(contextFor('alpha', 'salesperson'), {
-      stepExecutionId: linkedInExecutionId,
-    });
-    const now = await databaseNow(worker());
-    const late = new Date(Date.parse(now) + LINKEDIN_UNDO_WINDOW_MILLISECONDS + 1000).toISOString();
-    const undone = await undoLinkedInStep(contextFor('alpha', 'salesperson'), {
-      stepExecutionId: linkedInExecutionId,
-      now: late,
-    });
-    expect(undone).toEqual({ ok: false, reason: 'undo_window_expired' });
-  });
-});
-
-describe('scenario 18: a recorded LinkedIn reply stops the opportunity', () => {
-  it('switches the opportunity to manual and ends every live enrollment of the firm', async () => {
-    const enrollmentId = await enrollAlpha();
-    const recorded = await recordLinkedInResult(contextFor('alpha', 'salesperson'), {
-      enrollmentId,
-      result: 'replied',
-    });
-    expect(recorded.ok).toBe(true);
-
-    const enrollment = await readEnrollment(worker(), { enrollmentId });
-    expect(enrollment?.state).toBe('stopped');
-    expect(enrollment?.endReason).toBe('linkedin_reply');
-
-    const { rows } = await database.session.query<{ control_mode: string }>(
-      'SELECT control_mode FROM opportunities WHERE workspace_id = $1 AND id = $2',
-      [seeded.alpha.workspaceId, crm.alpha.opportunityId],
-    );
-    expect(rows[0]?.control_mode).toBe('manual');
-
-    const executions = await listStepExecutions(worker(), { enrollmentId });
-    expect(executions.every(execution => execution.state === 'cancelled')).toBe(true);
-  });
-
-  it('records "no engagement" without ending anything (11.3)', async () => {
-    const enrollmentId = await enrollAlpha();
-    const recorded = await recordLinkedInResult(contextFor('alpha', 'salesperson'), {
-      enrollmentId,
-      result: 'no_engagement',
-    });
-    expect(recorded.ok).toBe(true);
-    expect((await readEnrollment(worker(), { enrollmentId }))?.state).toBe('active');
-  });
-});
-
 describe('the terminal stop arrives through the outbox, and is consumed once', () => {
   it('cancels every pending step of the firm in the transaction that consumes the event', async () => {
     const enrollmentId = await enrollAlpha();
@@ -335,7 +221,7 @@ describe('the terminal stop arrives through the outbox, and is consumed once', (
 
 describe('the manual-mode stop records the origin it came from (7.3, G15 follow-up)', () => {
   /**
-   * 7.3 names four ways into manual mode and `ENROLLMENT_END_REASONS` has a member for
+   * 7.3 names the ways into manual mode and `ENROLLMENT_END_REASONS` has a member for
    * each of them. G15 recorded `human_reply` for all of them, because the event said
    * only `reason_code = 'opportunity_manual'` and a free-text reason. The origin is now
    * on the event, so the end reason is the one that happened.
@@ -344,7 +230,6 @@ describe('the manual-mode stop records the origin it came from (7.3, G15 follow-
     ['human_reply', 'human_reply'],
     ['engaged_call', 'engaged_call'],
     ['direct_send', 'direct_send'],
-    ['linkedin_reply', 'linkedin_reply'],
     ['salesperson_command', 'admin_stop'],
   ] as const;
 

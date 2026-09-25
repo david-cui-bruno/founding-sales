@@ -1,18 +1,22 @@
 import type { HoldReasonCode } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
-import type {
-  EnrollmentEndReason,
-  EnrollmentRow,
-  EnrollmentState,
-  SequenceStepRow,
-  SequenceStopCondition,
-  SequenceVersionRow,
-  SequenceVersionState,
-  StepChannel,
-  StepCompletionSource,
-  StepExecutionRow,
-  StepExecutionState,
-  StepResult,
+import {
+  ENROLLMENT_END_REASONS,
+  SEQUENCE_STOP_CONDITIONS,
+  STEP_COMPLETION_SOURCES,
+  STEP_RESULTS,
+  type EnrollmentEndReason,
+  type EnrollmentRow,
+  type EnrollmentState,
+  type SequenceStepRow,
+  type SequenceStopCondition,
+  type SequenceVersionRow,
+  type SequenceVersionState,
+  type StepChannel,
+  type StepCompletionSource,
+  type StepExecutionRow,
+  type StepExecutionState,
+  type StepResult,
 } from './types.ts';
 
 /**
@@ -22,10 +26,23 @@ import type {
  * mappers exist once. A command file that wanted its own would be a second place a
  * column name could be spelled wrongly, and a lane whose tables carry a frozen
  * template version and a frozen zone has a lot of column names.
+ *
+ * LinkedIn was removed on 25 September 2026 and migration 0012 was not changed, so a
+ * stored row may still carry one of its values: `linkedin_reply` in every version's
+ * `stop_conditions` (the column's default and `sequence_versions_stop_conditions_complete`
+ * put it there), and `linkedin_reply`, `open_and_copy` or `handed_off` on a row written
+ * before then. The mappers below drop a value their vocabulary does not know, so no
+ * reader hands one on. A stored `linkedin_task` channel is kept as it is, because it is
+ * what `isStepChannel` refuses on (`types.ts`).
  */
 
+/** `value` when `vocabulary` knows it, and null otherwise. */
+function known<T extends string>(vocabulary: readonly T[], value: string | null): T | null {
+  return value !== null && (vocabulary as readonly string[]).includes(value) ? (value as T) : null;
+}
+
 export const STEP_COLUMNS = `id, sequence_version_id, ordinal, channel, delay_unit, delay_amount,
-  on_no_answer, template_version_id, linkedin_message`;
+  on_no_answer, template_version_id`;
 
 interface StepDbRow {
   readonly id: string;
@@ -36,7 +53,6 @@ interface StepDbRow {
   readonly delay_amount: number;
   readonly on_no_answer: 'advance' | 'retry_call' | null;
   readonly template_version_id: string | null;
-  readonly linkedin_message: string | null;
   readonly [column: string]: unknown;
 }
 
@@ -52,7 +68,6 @@ export function toStep(row: StepDbRow): SequenceStepRow {
         : { unit: 'business_days', days: Number(row.delay_amount) },
     onNoAnswer: row.on_no_answer,
     templateVersionId: row.template_version_id,
-    linkedInMessage: row.linkedin_message,
   };
 }
 
@@ -89,7 +104,9 @@ function toVersion(row: VersionDbRow): Omit<SequenceVersionRow, 'steps'> {
     sequenceId: row.sequence_id,
     version: Number(row.version),
     state: row.state,
-    stopConditions: row.stop_conditions as SequenceStopCondition[],
+    stopConditions: row.stop_conditions.filter((condition): condition is SequenceStopCondition =>
+      (SEQUENCE_STOP_CONDITIONS as readonly string[]).includes(condition),
+    ),
     publishedAt: row.published_at === null ? null : row.published_at.toISOString(),
     retiredAt: row.retired_at === null ? null : row.retired_at.toISOString(),
   };
@@ -140,7 +157,7 @@ interface EnrollmentDbRow {
   readonly state: EnrollmentState;
   readonly started_at: Date;
   readonly ended_at: Date | null;
-  readonly end_reason: EnrollmentEndReason | null;
+  readonly end_reason: string | null;
   readonly firm_time_zone: string;
   readonly holiday_calendar_version: string;
   readonly review_union_milliseconds: string | number | null;
@@ -158,7 +175,7 @@ export function toEnrollment(row: EnrollmentDbRow): EnrollmentRow {
     state: row.state,
     startedAt: row.started_at.toISOString(),
     endedAt: row.ended_at === null ? null : row.ended_at.toISOString(),
-    endReason: row.end_reason,
+    endReason: known<EnrollmentEndReason>(ENROLLMENT_END_REASONS, row.end_reason),
     firmTimeZone: row.firm_time_zone,
     holidayCalendarVersion: row.holiday_calendar_version,
     reviewUnionMilliseconds:
@@ -182,8 +199,7 @@ export async function readEnrollment(
  * The enrollment, locked for update.
  *
  * Every command that ends, holds or reschedules an enrollment takes this first, so
- * the terminal stop and the ten-minute LinkedIn undo cannot interleave halfway
- * through each other's work.
+ * two of them cannot interleave halfway through each other's work.
  */
 export async function loadEnrollmentForUpdate(
   context: RepositoryContext,
@@ -249,8 +265,8 @@ interface ExecutionDbRow {
   readonly rule_version: string;
   readonly attempt_count: number;
   readonly hold_reason_code: HoldReasonCode | null;
-  readonly completion_source: StepCompletionSource | null;
-  readonly result: StepResult | null;
+  readonly completion_source: string | null;
+  readonly result: string | null;
   readonly completed_at: Date | null;
   readonly [column: string]: unknown;
 }
@@ -272,8 +288,8 @@ export function toExecution(row: ExecutionDbRow): StepExecutionRow {
     ruleVersion: row.rule_version,
     attemptCount: Number(row.attempt_count),
     holdReasonCode: row.hold_reason_code,
-    completionSource: row.completion_source,
-    result: row.result,
+    completionSource: known<StepCompletionSource>(STEP_COMPLETION_SOURCES, row.completion_source),
+    result: known<StepResult>(STEP_RESULTS, row.result),
     completedAt: row.completed_at === null ? null : row.completed_at.toISOString(),
   };
 }

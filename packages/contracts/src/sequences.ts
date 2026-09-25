@@ -4,8 +4,7 @@ import { holdReasonCodeSchema } from './reasonCodes.ts';
 
 /**
  * The wire contract of the sequence editor's reads: sequences, versions and their
- * steps, template versions, enrollments and the LinkedIn handoff (specification 11.1,
- * 11.2, 11.3; lane g78).
+ * steps, template versions and enrollments (specification 11.1, 11.2; lane g78).
  *
  * Until lane g78 the Mac kept its own copies of these in
  * `apps/desktop/src/renderer/sequenceContract.ts`, and they had drifted in the way
@@ -26,16 +25,15 @@ import { holdReasonCodeSchema } from './reasonCodes.ts';
  * list, so a value added on one side and not the other is a failing test.
  */
 
-export const STEP_CHANNELS = ['email', 'call_task', 'linkedin_task'] as const;
+export const STEP_CHANNELS = ['email', 'call_task'] as const;
 export type StepChannel = (typeof STEP_CHANNELS)[number];
 
 export const SEQUENCE_VERSION_STATES = ['draft', 'published', 'retired'] as const;
 export type SequenceVersionState = (typeof SEQUENCE_VERSION_STATES)[number];
 
-/** 11.2's five terminal conditions. A version may not opt out of any of them. */
+/** 11.2's terminal conditions. A version may not opt out of any of them. */
 export const SEQUENCE_STOP_CONDITIONS = [
   'human_reply',
-  'linkedin_reply',
   'engaged_call',
   'opt_out_or_suppression',
   'stage_closed',
@@ -49,7 +47,6 @@ export type EnrollmentState = (typeof ENROLLMENT_STATES)[number];
 
 export const ENROLLMENT_END_REASONS = [
   'human_reply',
-  'linkedin_reply',
   'engaged_call',
   'opt_out',
   'firm_suppressed',
@@ -64,10 +61,9 @@ export const ENROLLMENT_END_REASONS = [
 ] as const;
 export type EnrollmentEndReason = (typeof ENROLLMENT_END_REASONS)[number];
 
-export const STEP_COMPLETION_SOURCES = ['open_and_copy', 'call_log', 'send', 'admin', 'system'] as const;
+export const STEP_COMPLETION_SOURCES = ['call_log', 'send', 'admin', 'system'] as const;
 
 export const STEP_RESULTS = [
-  'handed_off',
   'sent',
   'skipped',
   'no_email',
@@ -106,7 +102,6 @@ export const sequenceStepDtoSchema = z.object({
   delay: sequenceDelaySchema,
   onNoAnswer: z.enum(STEP_NO_ANSWER_ACTIONS).nullable(),
   templateVersionId: uuid.nullable(),
-  linkedInMessage: z.string().min(1).max(1200).nullable(),
 });
 export type SequenceStepDto = z.infer<typeof sequenceStepDtoSchema>;
 
@@ -187,31 +182,9 @@ export type SequenceVersionsResponse = z.infer<typeof sequenceVersionsResponseSc
 export const templateVersionsResponseSchema = z.object({ templates: z.array(templateVersionDtoSchema) });
 export type TemplateVersionsResponse = z.infer<typeof templateVersionsResponseSchema>;
 
-/**
- * `POST /enrollments`. `asOf` is database time, which the Mac compares the LinkedIn
- * undo deadline against (11.3) — an instant, not merely a string.
- */
+/** `POST /enrollments`. `asOf` is database time — an instant, not merely a string. */
 export const enrollmentsResponseSchema = z.object({ asOf: instant, enrollments: z.array(enrollmentDtoSchema) });
 export type EnrollmentsResponse = z.infer<typeof enrollmentsResponseSchema>;
-
-/**
- * What `/enrollments/linkedin/complete` returns inside the command envelope:
- * `LinkedInHandoff` in `packages/domain/sequences/linkedin.ts`, which is the completed
- * step plus what the Mac copies and opens. `undoUntil` is always an instant — the
- * window is open the moment the handoff is recorded.
- */
-export const linkedInHandoffResultSchema = z.object({
-  stepExecutionId: uuid,
-  completionSource: z.enum(STEP_COMPLETION_SOURCES),
-  result: z.enum(STEP_RESULTS),
-  successorExecutionId: uuid.nullable(),
-  successorNotBefore: instant.nullable(),
-  enrollmentCompleted: z.boolean(),
-  linkedInUrl: z.string().max(400).nullable(),
-  message: z.string().min(1).max(1200),
-  undoUntil: instant,
-});
-export type LinkedInHandoffResult = z.infer<typeof linkedInHandoffResultSchema>;
 
 // ---------------------------------------------------------------------------
 // The resume review (lane g88, audit G06)

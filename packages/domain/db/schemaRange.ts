@@ -164,7 +164,7 @@ export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum:
  * same two every widening before it gave.
  *
  * The API needs it: `/sequences`, `/sequences/steps`, `/sequences/publish`,
- * `/templates`, `/enrollments` and `/linkedin/*` read and write `sequences`,
+ * `/templates` and `/enrollments` read and write `sequences`,
  * `sequence_versions`, `sequence_steps`, `sequence_enrollments` and
  * `step_executions`, and the template routes read the five columns 0012 adds to
  * `template_versions`. An API on a version-11 database could accept an enrollment and

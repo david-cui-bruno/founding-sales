@@ -241,9 +241,6 @@ describe('the dashboard', () => {
           ended: [{ key: 'completed', count: 1 }],
           stepsCompleted: [{ key: 'email', count: 6 }],
           heldSteps: [{ key: 'scoped_pause', count: 1 }],
-          linkedinHandoffs: 2,
-          linkedinRecordedReplies: 1,
-          linkedinNoEngagement: 0,
         }),
       classifier: async () =>
         await Promise.resolve({
@@ -270,7 +267,7 @@ describe('the dashboard', () => {
 
     const theirs = await readDashboard(assignee, { window: WINDOW, sources: fake });
     expect(theirs.sending).toMatchObject({ available: true, sent: 12, held: 2 });
-    expect(theirs.enrollments).toMatchObject({ linkedinHandoffs: 2 });
+    expect(theirs.enrollments).toMatchObject({ started: 5 });
     expect(theirs.classifier).toMatchObject({ correctionRate: 0.1 });
     // The source is told whose figures to compute, so a later real implementation
     // cannot accidentally answer workspace-wide for a salesperson.

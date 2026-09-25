@@ -89,7 +89,7 @@ export const SCENARIOS: readonly Scenario[] = Object.freeze([
   },
   {
     number: 4,
-    title: 'Email, call and LinkedIn steps are due while the Gmail grant is revoked or coverage is stale: all automated steps hold through incomplete recovery.',
+    title: 'Email and call steps are due while the Gmail grant is revoked or coverage is stale: all automated steps hold through incomplete recovery.',
     coverage: 'lane',
     references: laneTest('packages/domain/test/mail/scenarios.test.ts', 'packages/domain/mail/mailboxes.ts'),
     trap: 'A hold that blocks only email would pass a test that only tried email.',
@@ -143,11 +143,15 @@ export const SCENARIOS: readonly Scenario[] = Object.freeze([
   },
   {
     number: 9,
-    title: 'The LinkedIn successor races undo at 9:59 and 10:00 database time: no early fence.',
+    title: 'The LinkedIn successor races undo at 9:59 and 10:00 database time: no early fence. (LinkedIn was removed on 25 September 2026; what remains is that a stored LinkedIn step never runs.)',
     coverage: 'lane',
-    references: laneTest('packages/domain/test/sequences/scenarios.test.ts', 'apps/desktop/test/sequences.test.ts'),
-    trap: 'A test using the wall clock would pass or fail by when it ran.',
-    closedBy: 'The lane test injects both instants and asserts the two outcomes differ.',
+    references: laneTest(
+      'packages/domain/test/sequences/removedLinkedIn.test.ts',
+      'packages/domain/sequences/executions.ts',
+      'apps/api/test/sequences.test.ts',
+    ),
+    trap: 'A removal that deleted the routes and the editor option would pass while the worker could still run a LinkedIn step stored before the removal, as a task or worse.',
+    closedBy: 'The lane test runs the real worker function over a stored linkedin_task row twice and requires it held with long_hold_review and no send prepared, and the API test requires the three LinkedIn paths to answer not_found.',
   },
   {
     number: 10,
@@ -233,11 +237,11 @@ export const SCENARIOS: readonly Scenario[] = Object.freeze([
   },
   {
     number: 18,
-    title: 'A LinkedIn reply after handoff and before the next email stops the opportunity through the recorded-reply path.',
+    title: 'A LinkedIn reply after handoff and before the next email stops the opportunity through the recorded-reply path. (LinkedIn was removed on 25 September 2026; what remains is that a stored LinkedIn reply is read as no value and still stops.)',
     coverage: 'lane',
-    references: laneTest('packages/domain/test/sequences/scenarios.test.ts'),
-    trap: 'If no successor was scheduled, nothing needed stopping.',
-    closedBy: 'The lane test asserts the successor existed and is terminal afterwards.',
+    references: laneTest('packages/domain/test/sequences/removedLinkedIn.test.ts', 'packages/domain/sequences/rows.ts'),
+    trap: 'A reader that drops a linkedin_reply nobody stored passes by construction, and every version does store one, because migration 0012 requires it.',
+    closedBy: 'The lane test reads the raw stop_conditions and end_reason first and asserts linkedin_reply is there, then that the reader drops it, and that a manual-mode event with that origin still stops the enrollment as human_reply.',
   },
   {
     number: 19,

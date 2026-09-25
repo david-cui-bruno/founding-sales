@@ -69,7 +69,7 @@ const FIRM_CONFLICT_FIELDS: readonly (keyof FirmRow & string)[] = [
   'postal_code',
 ];
 
-const CONTACT_CONFLICT_FIELDS: readonly (keyof ContactRow & string)[] = ['title', 'linkedin_url'];
+const CONTACT_CONFLICT_FIELDS: readonly (keyof ContactRow & string)[] = ['title'];
 
 function conflictsBetween(
   source: Readonly<Record<string, unknown>>,
@@ -277,14 +277,9 @@ export async function mergeContacts(
 
   await context.db.query(
     `UPDATE contacts
-        SET title = COALESCE(title, $3), linkedin_url = COALESCE(linkedin_url, $4), updated_at = now()
+        SET title = COALESCE(title, $3), updated_at = now()
       WHERE workspace_id = $1 AND id = $2`,
-    [
-      context.scope.workspaceId,
-      target.id,
-      resolutions['title'] ?? source.title,
-      resolutions['linkedin_url'] ?? source.linkedin_url,
-    ],
+    [context.scope.workspaceId, target.id, resolutions['title'] ?? source.title],
   );
   await context.db.query(
     `UPDATE contacts

@@ -3,7 +3,6 @@ import { readErrorSentence } from './readError.ts';
 import type {
   DraftStep,
   Enrollment,
-  LinkedInCard,
   ResumeReview,
   SequenceReadSlice,
   SequenceState,
@@ -15,13 +14,13 @@ import type {
 } from './sequenceContract.ts';
 
 /**
- * The sequence editor's view model (specification 11.1, 11.3, 4.3, 14.2).
+ * The sequence editor's view model (specification 11.1, 4.3, 14.2).
  *
  * Pure: a state in, a rendering description out. Every "can this be done" is answered
  * here once and read by the page, so a control that is shown and a control that works
  * cannot disagree — and so the rules can be tested without a browser.
  *
- * Four of the answers are the ones worth reading carefully.
+ * Two of the answers are the ones worth reading carefully.
  *
  * **Publishing is refused for a reason the window can name.** A draft with no steps,
  * a gap in the ordinals, or an email step on an unapproved template: the server
@@ -32,13 +31,7 @@ import type {
  * approval to bytes. The window that let somebody type into an approved body would be
  * a window whose save always failed, because the trigger refuses it.
  *
- * **The undo deadline is the server's.** `remainingUndoMilliseconds` compares
- * `undoUntil` with `state.asOf` — the instant the server reported — and never with
- * the Mac's clock. Appendix G 9 is a race at 9:59 and 10:00 *database* time.
- *
- * **"They replied" and "No engagement" outlive the handoff.** 11.3 keeps both
- * available "for the enrollment's life", so they are enabled whenever the enrollment
- * is live, handed off or not.
+ * The LinkedIn task card and its undo deadline went with LinkedIn on 25 September 2026.
  */
 
 export type PublishRefusal =
@@ -91,20 +84,6 @@ export interface TemplatePanel {
   readonly unsubscribeMentioned: boolean;
 }
 
-export interface LinkedInPanel {
-  readonly stepExecutionId: string;
-  readonly enrollmentId: string;
-  readonly heading: string;
-  readonly message: string;
-  readonly linkedInUrl: string | null;
-  readonly canOpenAndCopy: boolean;
-  readonly canUndo: boolean;
-  readonly remainingUndoMilliseconds: number;
-  /** 11.3: never "sent". */
-  readonly statusLabel: string;
-  readonly canRecordResult: boolean;
-}
-
 export interface HoldReviewRow {
   readonly enrollmentId: string;
   readonly heldForDays: number;
@@ -144,7 +123,6 @@ export interface SequenceScreen {
   readonly sequences: readonly { readonly id: string; readonly name: string; readonly selected: boolean }[];
   readonly versions: readonly VersionPanel[];
   readonly templates: readonly TemplatePanel[];
-  readonly linkedIn: LinkedInPanel | null;
   readonly holdReview: readonly HoldReviewRow[];
   /** The open resume review (lane g88), or null. */
   readonly resumeReview: ResumeReviewPanel | null;
@@ -163,10 +141,7 @@ function delayLabel(step: Pick<SequenceStep, 'delay'>): string {
 
 function stepDetail(step: SequenceStep): string {
   if (step.channel === 'email') return 'Template email';
-  if (step.channel === 'call_task') {
-    return step.onNoAnswer === 'retry_call' ? 'Call task (try again on no answer)' : 'Call task (move on if nobody answers)';
-  }
-  return 'LinkedIn task, opened and copied by hand';
+  return step.onNoAnswer === 'retry_call' ? 'Call task (try again on no answer)' : 'Call task (move on if nobody answers)';
 }
 
 /**
@@ -280,34 +255,6 @@ function templatePanel(
   };
 }
 
-/** How long the undo has left, against the server's clock. Never negative. */
-export function remainingUndoMilliseconds(card: LinkedInCard, asOf: string | null): number {
-  if (card.undoUntil === null || asOf === null) return 0;
-  const remaining = Date.parse(card.undoUntil) - Date.parse(asOf);
-  return Number.isFinite(remaining) && remaining > 0 ? remaining : 0;
-}
-
-function linkedInPanel(
-  card: LinkedInCard,
-  state: SequenceState,
-): LinkedInPanel {
-  const remaining = remainingUndoMilliseconds(card, state.asOf);
-  return {
-    stepExecutionId: card.stepExecutionId,
-    enrollmentId: card.enrollmentId,
-    heading: card.contactName === null ? 'LinkedIn task' : `LinkedIn task — ${card.contactName}`,
-    message: card.message,
-    linkedInUrl: card.linkedInUrl,
-    canOpenAndCopy: !card.handedOff && state.mayMutate && card.linkedInUrl !== null,
-    canUndo: card.handedOff && remaining > 0 && state.mayMutate,
-    remainingUndoMilliseconds: remaining,
-    // 11.3: "FSS never claims the message was sent."
-    statusLabel: card.handedOff ? 'Handed off — FSS does not know whether it was sent' : 'Not sent yet',
-    // Both buttons live as long as the enrollment does.
-    canRecordResult: state.mayMutate,
-  };
-}
-
 function holdReviewRow(enrollment: Enrollment, state: SequenceState): HoldReviewRow {
   const days = Math.round((enrollment.reviewUnionMilliseconds ?? 0) / DAY_MILLISECONDS);
   return {
@@ -343,7 +290,6 @@ export function sequenceScreen(state: SequenceState): SequenceScreen {
       .sort((left, right) => right.version - left.version)
       .map(version => versionPanel(version, state.templates, options)),
     templates: state.templates.map(template => templatePanel(template, options)),
-    linkedIn: state.linkedInCard === null ? null : linkedInPanel(state.linkedInCard, state),
     holdReview: state.heldEnrollments
       .filter(enrollment => enrollment.state === 'review_required')
       .map(enrollment => holdReviewRow(enrollment, state)),
@@ -365,7 +311,6 @@ export const EMPTY_SEQUENCE_STATE: SequenceState = Object.freeze({
   templates: [],
   heldEnrollments: [],
   readErrors: { sequences: null, versions: null, templates: null, enrollments: null },
-  linkedInCard: null,
   resumeReview: null,
   notice: null,
 });
@@ -375,7 +320,7 @@ export const EMPTY_SEQUENCE_STATE: SequenceState = Object.freeze({
 // ---------------------------------------------------------------------------
 
 /**
- * 11.2's five terminal conditions, as the sentence the version shows (lane g88, audit
+ * 11.2's terminal conditions, as the sentence the version shows (lane g88, audit
  * G08). A version may not opt out of any of them (`docs/decisions/g8-stop-conditions-are-mandatory.md`),
  * so the sentence is the same for every version; the codes themselves are behind the
  * version's disclosure for anybody who wants them.
@@ -383,13 +328,12 @@ export const EMPTY_SEQUENCE_STATE: SequenceState = Object.freeze({
 export const STOP_SENTENCE =
   'Stops by itself when they reply, a call connects, they opt out or are suppressed, or the deal is won or lost.';
 
-/** The channels the step editor offers. LinkedIn is not one: David dropped it. */
+/** The channels the step editor offers. */
 export const EDITOR_CHANNELS = ['call_task', 'email'] as const satisfies readonly StepChannel[];
 
 export const CHANNEL_LABELS: Readonly<Record<StepChannel, string>> = Object.freeze({
   call_task: 'Call',
   email: 'Email',
-  linkedin_task: 'LinkedIn task (no longer offered)',
 });
 
 export const NO_ANSWER_LABELS: Readonly<Record<'advance' | 'retry_call', string>> = Object.freeze({
@@ -406,7 +350,6 @@ export function draftStepsOf(version: SequenceVersion): DraftStep[] {
       delay: step.delay.unit === 'elapsed' ? { unit: 'elapsed', hours: step.delay.hours } : { unit: 'business_days', days: step.delay.days },
       onNoAnswer: step.onNoAnswer,
       templateVersionId: step.templateVersionId,
-      linkedInMessage: step.linkedInMessage,
     }));
 }
 
@@ -429,7 +372,6 @@ export function newStep(channel: (typeof EDITOR_CHANNELS)[number], steps: readon
     delay: { unit: 'business_days', days },
     onNoAnswer: channel === 'call_task' ? 'advance' : null,
     templateVersionId: null,
-    linkedInMessage: null,
   };
 }
 
@@ -466,9 +408,9 @@ export function usableTemplates(templates: readonly TemplateVersion[]): readonly
 export function suggestedPlan(templates: readonly TemplateVersion[]): DraftStep[] {
   const template = usableTemplates(templates)[0]?.id ?? null;
   return [
-    { channel: 'call_task', delay: { unit: 'business_days', days: 0 }, onNoAnswer: 'advance', templateVersionId: null, linkedInMessage: null },
-    { channel: 'email', delay: { unit: 'business_days', days: 2 }, onNoAnswer: null, templateVersionId: template, linkedInMessage: null },
-    { channel: 'call_task', delay: { unit: 'business_days', days: 4 }, onNoAnswer: 'advance', templateVersionId: null, linkedInMessage: null },
+    { channel: 'call_task', delay: { unit: 'business_days', days: 0 }, onNoAnswer: 'advance', templateVersionId: null },
+    { channel: 'email', delay: { unit: 'business_days', days: 2 }, onNoAnswer: null, templateVersionId: template },
+    { channel: 'call_task', delay: { unit: 'business_days', days: 4 }, onNoAnswer: 'advance', templateVersionId: null },
   ];
 }
 
@@ -520,7 +462,6 @@ export function stepsForWire(steps: readonly DraftStep[]): readonly Readonly<Rec
     delay: step.delay.unit === 'elapsed' ? { unit: 'elapsed', hours: step.delay.hours } : { unit: 'business_days', days: step.delay.days },
     ...(step.channel === 'call_task' && step.onNoAnswer !== null ? { onNoAnswer: step.onNoAnswer } : {}),
     ...(step.channel === 'email' && step.templateVersionId !== null ? { templateVersionId: step.templateVersionId } : {}),
-    ...(step.channel === 'linkedin_task' && step.linkedInMessage !== null ? { linkedInMessage: step.linkedInMessage } : {}),
   }));
 }
 
@@ -655,7 +596,7 @@ const SEQUENCE_NOTICES: Readonly<Record<string, string>> = Object.freeze({
  * One notice as a sentence. A refused approval arrives as `template_unapproved:` and the
  * issues (`apps/api/src/routes/templates.ts`), and every issue is named, because an author
  * fixing one rule at a time is a worse day than one fixing four at once. A code with no
- * sentence is shown as it is, which is how the existing LinkedIn notices already read.
+ * sentence is shown as it is.
  */
 export function sequenceNotice(code: string): string {
   if (code.startsWith('template_unapproved:')) {

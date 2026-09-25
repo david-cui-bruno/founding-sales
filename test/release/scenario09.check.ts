@@ -1,47 +1,39 @@
 import { describe, expect, it } from 'vitest';
-import { LINKEDIN_UNDO_WINDOW_MILLISECONDS } from '@fss/domain/sequences';
-import { mustCover, readRepositoryFile } from './support/coverage.ts';
+import { STEP_CHANNELS as WIRE_STEP_CHANNELS } from '@fss/contracts';
+import { STEP_CHANNELS, isStepChannel } from '@fss/domain/sequences';
+import { ENROLLMENT_PATHS } from '../../apps/api/src/routes/enrollments.ts';
+import { mustCover } from './support/coverage.ts';
 
 /**
  * Appendix G 9: "The LinkedIn successor races undo at 9:59 and 10:00 database time:
  * no early fence."
  *
- * Two suites hold the two sides. The sequences suite completes a LinkedIn step, undoes
- * it inside the window, and then pushes the instant past the window and asserts
- * `undo_window_expired`; the desktop suite asserts the card still offers the button at
- * 9:59 and has withdrawn it at 10:00, measured against an instant the server gave it.
- * What this check adds is the thing the two halves must agree on to be about the same
- * boundary at all: one exported constant, ten minutes, shared by both.
+ * LinkedIn was removed on 25 September 2026: there is no handoff, so there is no undo
+ * window and no successor to race it. What has to stay true is the thing the race was
+ * about — no LinkedIn step reaches a fence — and it now has a different shape.
+ * Migration 0012 still admits `linkedin_task`, so a step stored before the removal may
+ * still come due, and the worker must hold it rather than run it.
  *
  * ## The vacuous-pass trap
  *
- * A test that read the wall clock would pass or fail by when it happened to run, and
- * worse, would pass most of the time — which is how a boundary bug survives a year.
- * The lane tests close it by injecting both instants explicitly. The residual trap is
- * a second, private copy of the window in the client: a Mac counting down from its own
- * nine or eleven minutes would satisfy both suites separately and still offer an undo
- * the server refuses. Closed here by pinning the constant and asserting the desktop
- * card derives its remaining time from the server's `undoUntil` rather than from a
- * duration of its own.
+ * A removal that deleted the routes and the editor's option would pass every test that
+ * looked for them, while the worker could still take a stored LinkedIn step for a
+ * manual task. The lane test closes it by running the real worker function over a
+ * stored `linkedin_task` row, twice, and requiring `held` with `long_hold_review` and
+ * no send prepared. This check adds the vocabulary: no channel on either side of the
+ * wire is LinkedIn's, and no enrollment path is mounted for it.
  */
 
-describe('Appendix G 9: one ten-minute window, measured by the server', () => {
-  mustCover(9, ['undo_window_expired', 'LINKEDIN_UNDO_WINDOW_MILLISECONDS', 'remainingUndoMilliseconds']);
+describe('Appendix G 9: removed with LinkedIn; a stored LinkedIn step is held and never run', () => {
+  mustCover(9, ['linkedin_task', 'long_hold_review', 'runDueStepExecution', 'isStepChannel', '/enrollments/linkedin/complete']);
 
-  it('is ten minutes, exactly, and exported once', () => {
-    expect(LINKEDIN_UNDO_WINDOW_MILLISECONDS).toBe(10 * 60 * 1000);
-    // 9:59 is inside and 10:00 is outside, which is the whole of Appendix G 9 stated
-    // as arithmetic: the deadline is exclusive.
-    expect(9 * 60 * 1000 + 59_000 < LINKEDIN_UNDO_WINDOW_MILLISECONDS).toBe(true);
-    expect(10 * 60 * 1000 < LINKEDIN_UNDO_WINDOW_MILLISECONDS).toBe(false);
+  it('has no LinkedIn channel on either side of the wire', () => {
+    expect([...STEP_CHANNELS]).toEqual(['email', 'call_task']);
+    expect([...WIRE_STEP_CHANNELS]).toEqual([...STEP_CHANNELS]);
+    expect(isStepChannel('linkedin_task')).toBe(false);
   });
 
-  it('measures the card against the deadline the server sent', () => {
-    // `remainingUndoMilliseconds` takes the card's `undoUntil` and an instant; if it
-    // took a duration and a local start time instead, the Mac would be keeping its
-    // own clock and the two suites could disagree while both stayed green.
-    const desktop = readRepositoryFile('apps/desktop/test/sequences.test.ts');
-    expect(desktop).toContain('undoUntil');
-    expect(desktop).toContain('remainingUndoMilliseconds(card,');
+  it('mounts no LinkedIn enrollment path', () => {
+    expect(ENROLLMENT_PATHS.filter(path => path.includes('linkedin'))).toEqual([]);
   });
 });

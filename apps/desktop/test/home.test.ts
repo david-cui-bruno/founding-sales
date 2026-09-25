@@ -47,16 +47,16 @@ function card(overrides: Partial<TodayCard> & Pick<TodayCard, 'firmId' | 'lane'>
   return {
     firmName: `Firm ${overrides.firmId.slice(0, 4)}`,
     dueAt: '2026-09-25T13:00:00.000Z',
-    counts: { replies: 0, emailsDue: 0, callsDue: 0, linkedInDue: 0 },
+    counts: { replies: 0, emailsDue: 0, callsDue: 0 },
     ...overrides,
   };
 }
 
 const CARDS: readonly TodayCard[] = [
-  card({ firmId: 'a0000000-0000-4000-8000-000000000001', lane: 'reply', counts: { replies: 2, emailsDue: 0, callsDue: 0, linkedInDue: 0 } }),
-  card({ firmId: 'a0000000-0000-4000-8000-000000000002', lane: 'callback', counts: { replies: 0, emailsDue: 1, callsDue: 1, linkedInDue: 0 } }),
-  card({ firmId: 'a0000000-0000-4000-8000-000000000003', lane: 'due_work', counts: { replies: 0, emailsDue: 2, callsDue: 0, linkedInDue: 0 } }),
-  card({ firmId: 'a0000000-0000-4000-8000-000000000004', lane: 'due_work', counts: { replies: 0, emailsDue: 0, callsDue: 1, linkedInDue: 0 } }),
+  card({ firmId: 'a0000000-0000-4000-8000-000000000001', lane: 'reply', counts: { replies: 2, emailsDue: 0, callsDue: 0 } }),
+  card({ firmId: 'a0000000-0000-4000-8000-000000000002', lane: 'callback', counts: { replies: 0, emailsDue: 1, callsDue: 1 } }),
+  card({ firmId: 'a0000000-0000-4000-8000-000000000003', lane: 'due_work', counts: { replies: 0, emailsDue: 2, callsDue: 0 } }),
+  card({ firmId: 'a0000000-0000-4000-8000-000000000004', lane: 'due_work', counts: { replies: 0, emailsDue: 0, callsDue: 1 } }),
   // Three weeks earlier than all the others, and last: the lane decides.
   card({ firmId: 'a0000000-0000-4000-8000-000000000005', lane: 'new_firm', dueAt: '2026-09-04T12:00:00.000Z' }),
 ];

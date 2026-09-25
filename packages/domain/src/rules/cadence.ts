@@ -21,7 +21,7 @@ import { resolveDelay, startAnchoredDueAt, type ResolvedDueInstant, type Sequenc
  * when; it dials nothing, sends nothing and writes nothing.
  */
 
-export type StepChannel = 'email' | 'call_task' | 'linkedin_task';
+export type StepChannel = 'email' | 'call_task';
 
 export interface SequenceStep {
   readonly id: string;

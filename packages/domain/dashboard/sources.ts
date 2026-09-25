@@ -5,10 +5,11 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
  *
  * Section 13.4 asks for emails sent, skipped, held and unknown; reply and
  * positive-reply rates; provider deferrals and reputation warnings; results by
- * sequence, template version, segment, weekday and local send hour; LinkedIn
- * handoffs and recorded replies; and classifier cost and drift. Those read the
- * outbound fence and the sending ramp (G7-2, migration 0010), enrollments and step
- * executions (G8, 0012), and the model classification records (G7b, 0011).
+ * sequence, template version, segment, weekday and local send hour; and classifier
+ * cost and drift. (Its LinkedIn handoffs and recorded replies went with LinkedIn on 25
+ * September 2026.) Those read the outbound fence and the sending ramp (G7-2, migration
+ * 0010), enrollments and step executions (G8, 0012), and the model classification
+ * records (G7b, 0011).
  *
  * All three are live. `liveDashboardSources()` (in `sendingSource.ts`) combines
  * `sendingFacts`, `enrollmentFacts` and `classifierFacts`, and it is what the API
@@ -127,7 +128,7 @@ export interface SendingFacts {
   readonly bySegment: readonly Breakdown[] | Unavailable;
 }
 
-/** 13.4's LinkedIn and enrollment half. Read from G8's tables (migration 0012). */
+/** 13.4's enrollment half. Read from G8's tables (migration 0012). */
 export interface EnrollmentFacts {
   readonly available: true;
   /** Enrollments that started inside the window. */
@@ -141,10 +142,6 @@ export interface EnrollmentFacts {
   readonly stepsCompleted: readonly KeyedCount[];
   /** Held now, by hold reason code — the vocabulary `hold_reason_codes` fixes. */
   readonly heldSteps: readonly KeyedCount[];
-  /** 11.4's LinkedIn task: handed to a person, and what they recorded afterwards. */
-  readonly linkedinHandoffs: number;
-  readonly linkedinRecordedReplies: number;
-  readonly linkedinNoEngagement: number;
 }
 
 /**

@@ -173,10 +173,6 @@ const sequences: SequenceBridge = {
   retire: async input => await invokeSequences(SEQUENCE_IPC_CHANNELS.retire, input),
   approveTemplate: async input => await invokeSequences(SEQUENCE_IPC_CHANNELS.approveTemplate, input),
   enroll: async input => await invokeSequences(SEQUENCE_IPC_CHANNELS.enroll, input),
-  completeLinkedIn: async input => await invokeSequences(SEQUENCE_IPC_CHANNELS.completeLinkedIn, input),
-  undoLinkedIn: async input => await invokeSequences(SEQUENCE_IPC_CHANNELS.undoLinkedIn, input),
-  recordLinkedInResult: async input =>
-    await invokeSequences(SEQUENCE_IPC_CHANNELS.recordLinkedInResult, input),
   resumeEnrollment: async input => await invokeSequences(SEQUENCE_IPC_CHANNELS.resumeEnrollment, input),
 };
 

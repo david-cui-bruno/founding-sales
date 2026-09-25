@@ -68,7 +68,7 @@ describe('a newly connected mailbox (12.3, 4.2)', () => {
     expect(mailbox?.syncState).toBe('baseline_pending');
     expect(mailbox?.coverageWatermarkAt).toBeNull();
 
-    for (const actionKind of ['email_send', 'call_task', 'linkedin_task', 'enrollment_advance'] as const) {
+    for (const actionKind of ['email_send', 'call_task', 'enrollment_advance'] as const) {
       const holds = await listApplicableHolds(context, {
         actionKind,
         ownerUserId: w.alpha.workspace.salesperson.userId,
@@ -667,7 +667,7 @@ describe('coverage, recovery and the grant', () => {
     const mailbox = await readMailbox(context, w.alpha.mailboxId);
     expect(mailbox?.status).toBe('revoked');
 
-    for (const actionKind of ['email_send', 'call_task', 'linkedin_task', 'enrollment_advance'] as const) {
+    for (const actionKind of ['email_send', 'call_task', 'enrollment_advance'] as const) {
       const holds = await listApplicableHolds(context, {
         actionKind,
         ownerUserId: w.alpha.workspace.salesperson.userId,

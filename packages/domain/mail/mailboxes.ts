@@ -33,7 +33,6 @@ import type { MailboxRow, MailboxStatus, MailboxSyncState } from './types.ts';
 export const MAILBOX_HOLD_BLOCKS: readonly BlockedActionKind[] = Object.freeze([
   'email_send',
   'call_task',
-  'linkedin_task',
   'enrollment_advance',
 ]);
 

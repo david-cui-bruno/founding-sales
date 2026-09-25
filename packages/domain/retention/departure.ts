@@ -97,7 +97,6 @@ export interface DepartureOutcome {
 const HELD_ACTION_KINDS = [
   'email_send',
   'call_task',
-  'linkedin_task',
   'dial_authorization',
   'enrollment_advance',
   'research',

@@ -209,7 +209,6 @@ const PAUSED_ACTION_KIND: Readonly<Record<TodayItemKind, string | null>> = Objec
   callback: null,
   email_due: 'email_send',
   call_due: 'call_task',
-  linkedin_due: 'linkedin_task',
   new_firm: null,
 });
 

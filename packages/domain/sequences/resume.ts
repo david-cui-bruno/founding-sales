@@ -1,4 +1,4 @@
-import type { BlockedActionKind, HoldReasonCode } from '@fss/contracts';
+import { knownBlockedActionKinds, type BlockedActionKind, type HoldReasonCode } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import {
   composeHolds,
@@ -12,6 +12,7 @@ import { loadEnrollmentForUpdate, readEnrollment, unexecutedExecutions } from '.
 import { rescheduleExecution } from './shifts.ts';
 import {
   acceptSequence,
+  isStepChannel,
   refuseSequence,
   type EnrollmentRow,
   type SequenceResult,
@@ -75,7 +76,6 @@ import { holdAppliesSql } from './wake.ts';
 const ENROLLMENT_ACTION_KINDS: readonly BlockedActionKind[] = Object.freeze([
   'email_send',
   'call_task',
-  'linkedin_task',
   'enrollment_advance',
 ]);
 
@@ -148,7 +148,7 @@ export async function holdsAffectingEnrollment(
   return rows.map(row => ({
     id: row.id,
     reasonCode: row.reason_code,
-    blockedActionKinds: row.blocked_action_kinds as BlockedActionKind[],
+    blockedActionKinds: knownBlockedActionKinds(row.blocked_action_kinds),
     // A hold that opened before the window counts only from the window's start: it
     // did not delay work that did not exist, or that an earlier resume already moved.
     startedAt: (row.started_at.getTime() < Date.parse(input.since)
@@ -177,15 +177,19 @@ async function resumeWindowStart(
   return applied.toISOString();
 }
 
-/** The channel of the enrollment's next unfinished step, if it has one. */
+/**
+ * The channel of the enrollment's next unfinished step, if it has one and this lane
+ * knows it. A LinkedIn step stored before 25 September 2026 answers as no channel.
+ */
 async function nextChannel(context: RepositoryContext, enrollmentId: string): Promise<StepChannel | undefined> {
-  const { rows } = await context.db.query<{ channel: StepChannel }>(
+  const { rows } = await context.db.query<{ channel: string }>(
     `SELECT channel FROM step_executions
       WHERE workspace_id = $1 AND enrollment_id = $2 AND state IN ('pending', 'held', 'dispatched')
       ORDER BY ordinal, id LIMIT 1`,
     [context.scope.workspaceId, enrollmentId],
   );
-  return rows[0]?.channel;
+  const channel = rows[0]?.channel;
+  return channel !== undefined && isStepChannel(channel) ? channel : undefined;
 }
 
 /**
