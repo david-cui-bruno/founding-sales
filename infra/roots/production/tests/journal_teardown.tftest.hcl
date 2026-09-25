@@ -156,6 +156,21 @@ run "production_exempts_nobody_from_the_journal_denies" {
     error_message = "Production's object-read deny exempts nobody, and the listing action is no longer in it."
   }
 
+  # Appendix E step 2 runs on the drill task, so the drill role has to be one of the
+  # readers the object-read and listing denies exempt. Rehearsal 36089161207 (25 September
+  # 2026) stopped at step 2 with AccessDenied because only the worker role was.
+  assert {
+    condition = alltrue([
+      for statement in jsondecode(module.stack.journal_policy_json).Statement :
+      anytrue([
+        for pattern in flatten([statement.Condition.ArnNotLike["aws:PrincipalArn"]]) :
+        can(regex("fss-prod-drill-task", pattern))
+      ])
+      if contains(["DenyObjectReadsFromAnyoneButTheTaskRoles", "DenyListingFromAnyoneButTheTaskRolesAndTheDeployer"], statement.Sid)
+    ])
+    error_message = "The drill task role must be exempted from the object-read and listing denies, or Appendix E step 2 cannot replay the journal."
+  }
+
   # Ten years and GOVERNANCE, which is the other half of decision 4.
   assert {
     condition     = module.stack.journal_object_lock.mode == "GOVERNANCE" && module.stack.journal_object_lock.retention_days == 3650
