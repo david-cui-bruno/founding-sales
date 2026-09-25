@@ -611,7 +611,10 @@ describe('Appendix E step 3: sends whose fence a restore lost (lane g73)', () =>
       expect(tombstone.ok).toBe(true);
 
       const gmail = clientWithSent([]);
-      expect(await runStep(step.stepExecutionId, gmail)).toBe('sent');
+      // Lane g82: the engine reads an existing fence before it renders anything, so a
+      // `sent` tombstone completes the step at once rather than after a dispatch that
+      // finds it terminal. Nothing is sent either way.
+      expect(await runStep(step.stepExecutionId, gmail)).toBe('completed');
       expect(gmail.sends).toHaveLength(0);
       expect(
         await count('SELECT count(*)::text AS count FROM outbound_messages WHERE workspace_id = $1 AND step_execution_id = $2', [

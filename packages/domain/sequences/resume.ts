@@ -7,9 +7,11 @@ import {
   type HoldRecord,
   type ResumeDecision,
 } from '../src/index.ts';
-import { rescheduleExecution } from './executions.ts';
+import { CHANNEL_ACTION_KINDS, CHANNEL_PAUSE_KEYS } from './eligibility.ts';
 import { loadEnrollmentForUpdate, unexecutedExecutions } from './rows.ts';
-import { acceptSequence, refuseSequence, type SequenceResult } from './types.ts';
+import { rescheduleExecution } from './shifts.ts';
+import { acceptSequence, refuseSequence, type SequenceResult, type StepChannel } from './types.ts';
+import { holdAppliesSql } from './wake.ts';
 
 /**
  * Releasing holds and resuming an enrollment (specification 4.3, 11.2, Appendix G 28
@@ -35,6 +37,31 @@ import { acceptSequence, refuseSequence, type SequenceResult } from './types.ts'
  *
  * The window starts at the enrollment's own `started_at`, so a hold that closed
  * before this contact was ever enrolled does not push their first email out.
+ *
+ * ## Only what has not been applied (lane g82, audit C09)
+ *
+ * A resume used to count every interval since the enrollment started, every time. The
+ * first release of a three-day pause shifted the steps three days; a second, one-day
+ * pause a week later shifted them four — the first three again. Every applied resume
+ * writes its `hold_union` rows in `step_execution_shifts` at one instant, so the window
+ * now starts at the later of the enrollment's start and the last of those rows: an
+ * interval is counted by the first resume that applies it and by no later one. The
+ * seven-day review is asked of that same window, which is the blocking episode that
+ * just ended, not the enrollment's lifetime total.
+ *
+ * ## The holds eligibility asks about (lane g82, audit C10)
+ *
+ * The query matches every scope `active_holds` can carry — mailbox and channel
+ * included, which it used to omit — through the same `holdAppliesSql` the scheduler's
+ * wake uses, and for the action kinds of the work that is actually next: that step's
+ * channel and `enrollment_advance`, as `holdSource` asks. A pause of the call channel
+ * does not shift, or send to review, an enrollment whose next step is an email.
+ *
+ * The holds this enrollment's own fences opened are not counted. They are a dispatch
+ * attempt waiting on its cap or window, or a send in doubt, and 12.5 says a send
+ * confirmed after reconciliation continues "from the original dispatch time" — which
+ * the successor's anchor already honours (`successor.ts`) and a shift by the doubt
+ * would undo.
  */
 
 /** The action kinds an enrollment's work can be blocked under. */
@@ -54,7 +81,17 @@ interface HoldDbRow {
   readonly [column: string]: unknown;
 }
 
-/** Every hold, open or closed, that blocked this enrollment's work since it started. */
+/** The action kinds a step of this channel is blocked under: its own and `enrollment_advance`. */
+function actionKindsOf(channel: StepChannel | undefined): readonly BlockedActionKind[] {
+  return channel === undefined ? ENROLLMENT_ACTION_KINDS : [CHANNEL_ACTION_KINDS[channel], 'enrollment_advance'];
+}
+
+/**
+ * Every hold, open or closed, that blocked this enrollment's work since `since`.
+ *
+ * `channel` is the channel of the enrollment's next unfinished step; absent, every
+ * enrollment action kind is asked and no channel pause matches.
+ */
 export async function holdsAffectingEnrollment(
   context: RepositoryContext,
   input: {
@@ -63,44 +100,85 @@ export async function holdsAffectingEnrollment(
     readonly opportunityId: string;
     readonly ownerUserId: string;
     readonly since: string;
+    readonly channel?: StepChannel | undefined;
   },
 ): Promise<readonly HoldRecord[]> {
+  const applies = holdAppliesSql('h', {
+    workspaceId: '$1::uuid',
+    firmId: '$3::text',
+    opportunityId: '$4::text',
+    ownerUserId: '$5::text',
+    mailboxId: `(SELECT m.id::text FROM mailboxes m
+                  WHERE m.workspace_id = $1::uuid AND m.owner_user_id::text = $5::text)`,
+    enrollmentId: '$6::text',
+    channelKey: '$7::text',
+    actionKinds: '$2::text[]',
+  });
   const { rows } = await context.db.query<HoldDbRow>(
-    `SELECT id, reason_code, blocked_action_kinds, started_at, released_at
-       FROM active_holds
-      WHERE workspace_id = $1
-        AND blocked_action_kinds && $2::text[]
-        AND (released_at IS NULL OR released_at >= $3::timestamptz)
-        AND (
-          scope_kind = 'workspace'
-          OR (scope_kind = 'firm' AND scope_key = $4)
-          OR (scope_kind = 'opportunity' AND scope_key = $5)
-          OR (scope_kind = 'owner' AND scope_key = $6)
-          OR (scope_kind = 'enrollment' AND scope_key = $7)
-        )
-      ORDER BY started_at, id`,
+    `SELECT h.id, h.reason_code, h.blocked_action_kinds, h.started_at, h.released_at
+       FROM active_holds h
+      WHERE ${applies}
+        AND (h.released_at IS NULL OR h.released_at >= $8::timestamptz)
+        AND NOT (h.source_event_kind = 'outbound_message'
+                 AND EXISTS (SELECT 1 FROM outbound_messages f
+                               JOIN step_executions x
+                                 ON x.workspace_id = f.workspace_id AND x.id = f.step_execution_id
+                              WHERE f.workspace_id = $1::uuid
+                                AND x.enrollment_id::text = $6::text
+                                AND f.id::text = h.source_event_id))
+      ORDER BY h.started_at, h.id`,
     [
       context.scope.workspaceId,
-      [...ENROLLMENT_ACTION_KINDS],
-      input.since,
+      [...actionKindsOf(input.channel)],
       input.firmId,
       input.opportunityId,
       input.ownerUserId,
       input.enrollmentId,
+      input.channel === undefined ? null : CHANNEL_PAUSE_KEYS[input.channel],
+      input.since,
     ],
   );
   return rows.map(row => ({
     id: row.id,
     reasonCode: row.reason_code,
     blockedActionKinds: row.blocked_action_kinds as BlockedActionKind[],
-    // A hold that opened before this enrollment counts only from the enrollment's
-    // start: it did not delay work that did not exist.
+    // A hold that opened before the window counts only from the window's start: it
+    // did not delay work that did not exist, or that an earlier resume already moved.
     startedAt: (row.started_at.getTime() < Date.parse(input.since)
       ? new Date(Date.parse(input.since))
       : row.started_at
     ).toISOString(),
     releasedAt: row.released_at === null ? null : row.released_at.toISOString(),
   }));
+}
+
+/**
+ * Where an enrollment's resume window starts: its own start, or the instant the last
+ * applied resume moved its steps, whichever is later (C09).
+ */
+async function resumeWindowStart(
+  context: RepositoryContext,
+  enrollment: { readonly id: string; readonly startedAt: string },
+): Promise<string> {
+  const { rows } = await context.db.query<{ at: Date | null }>(
+    `SELECT max(shifted_at) AS at FROM step_execution_shifts
+      WHERE workspace_id = $1 AND enrollment_id = $2 AND reason = 'hold_union'`,
+    [context.scope.workspaceId, enrollment.id],
+  );
+  const applied = rows[0]?.at ?? null;
+  if (applied === null || applied.getTime() <= Date.parse(enrollment.startedAt)) return enrollment.startedAt;
+  return applied.toISOString();
+}
+
+/** The channel of the enrollment's next unfinished step, if it has one. */
+async function nextChannel(context: RepositoryContext, enrollmentId: string): Promise<StepChannel | undefined> {
+  const { rows } = await context.db.query<{ channel: StepChannel }>(
+    `SELECT channel FROM step_executions
+      WHERE workspace_id = $1 AND enrollment_id = $2 AND state IN ('pending', 'held', 'dispatched')
+      ORDER BY ordinal, id LIMIT 1`,
+    [context.scope.workspaceId, enrollmentId],
+  );
+  return rows[0]?.channel;
 }
 
 export interface ResumeOutcome {
@@ -123,10 +201,21 @@ export interface ResumeOutcome {
  *   * `resume` — every unexecuted step moves forward by the union, each move
  *     recorded as a shift, and the enrollment is active again.
  *
+ * Two callers. The salesperson's explicit resume after a long hold
+ * (`resumeAfterReview`), and — since lane g82 (audit C05) — `runDueStepExecution`
+ * itself, as the first thing it does with a held step the scheduler woke because no
+ * open hold blocks it any more. Releasing a hold is every lane's own statement
+ * (`releaseHoldsOfEvent`, `releasePause`, the mailbox proof); none of them has to know
+ * that a sequence is waiting, because the wake notices the release on the next pass.
+ *
  * The fresh eligibility check 4.3 asks for is the one `runDueStepExecution` performs
- * on the next pass, inside its own claiming transaction. Doing it here as well would
- * be a second answer at a different instant, which is the thing eligibility
- * composition exists to avoid.
+ * straight after, inside the same claiming transaction. Doing it here as well would be
+ * a second answer at a different instant, which is the thing eligibility composition
+ * exists to avoid.
+ *
+ * A shift that finds no unexecuted step to move — the next step is `dispatched` — writes
+ * no row, so its window is counted again by the next resume that does. The successor
+ * of a dispatched step is placed by `successor.ts` from the instant it was sent.
  */
 export async function resumeEnrollment(
   context: RepositoryContext,
@@ -139,14 +228,16 @@ export async function resumeEnrollment(
   const { rows: clock } = await context.db.query<{ now: Date }>('SELECT now() AS now');
   const now = (clock[0]?.now ?? new Date()).toISOString();
 
+  const channel = await nextChannel(context, enrollment.id);
   const holds = await holdsAffectingEnrollment(context, {
     enrollmentId: enrollment.id,
     firmId: enrollment.firmId,
     opportunityId: enrollment.opportunityId,
     ownerUserId: enrollment.assignedUserId,
-    since: enrollment.startedAt,
+    since: await resumeWindowStart(context, enrollment),
+    channel,
   });
-  const composition = composeHolds({ holds, now, actionKinds: ENROLLMENT_ACTION_KINDS });
+  const composition = composeHolds({ holds, now, actionKinds: actionKindsOf(channel) });
   const decision = decideResume(composition);
 
   if (decision.kind === 'still_held') {

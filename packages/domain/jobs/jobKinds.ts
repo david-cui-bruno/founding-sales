@@ -93,7 +93,17 @@ export const JOB_KIND_PROTECTION: Readonly<Record<JobKind, IdempotencyProtection
 
 /** Appendix C, second column. Each builder produces the whole key, dotted prefix and all. */
 export const jobIdempotencyKey = Object.freeze({
-  sequenceAction: (stepExecutionId: string): string => `step-execution:${stepExecutionId}`,
+  /**
+   * Appendix C's `step-execution:{id}`, and the wake it is for (lane g82, audit C02).
+   *
+   * The scheduler always passes the wake — the execution row's version, from
+   * `listStepWakes` — so a step held by a cap or a pause, or left `dispatched` by a
+   * worker that died, gets a new job when its row moves instead of colliding for ever
+   * with the `done` one. The bare form is the key of one look at an execution nobody
+   * has woken, kept for the callers that name a job by its execution alone.
+   */
+  sequenceAction: (stepExecutionId: string, wake?: string): string =>
+    wake === undefined ? `step-execution:${stepExecutionId}` : `step-execution:${stepExecutionId}:${wake}`,
   mailSync: (mailboxId: string): string => `mail-sync:${mailboxId}`,
   mailReconcile: (mailboxId: string, minuteIso: string): string => `mail-reconcile:${mailboxId}:${minuteIso}`,
   mailRecover: (mailboxId: string, generation: number): string =>

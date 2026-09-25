@@ -2982,6 +2982,45 @@ Installed 1.0.0 to 1.0.4 keep working throughout. From then on a 1.x desktop pub
 - whether the `rehearsal` environment makes either run wait for an approval.
 
 `release-promote.sh` and `release-manifest.sh deployed` have run only against stubs.
+### 8.0ao What lane g82 changed: a held or stranded step is woken again, and settled from its fence (25 September)
+
+**The gap.** The audit's lane L-D items were real in code at `0af4ce3c`; lane g79 (8.0ak), which merged first, made a logged call complete or re-arm its step and a released Today pause resume its enrollment, and both now reach the worker through the wake below. Production has no enrollments yet, so none of them has bitten.
+
+- C02: the `sequence.action` key was `step-execution:{id}`. A step held by the cap, a window or a pause completed its job, and when it was due again the scheduler's insert collided with the `done` row. It never ran again.
+- C03: a worker that died between the step's transaction (`dispatched` plus a prepared fence) and the dispatch claim left the fence `prepared`. The retry read `dispatched`, did nothing and completed.
+- C05: releasing a hold woke nothing. Only the salesperson's long-hold resume called `resumeEnrollment`.
+- C09: a second resume shifted the steps by the first hold again.
+- C10: the resume asked five hold scopes of seven, and the scheduler asked none.
+- C11: the successor was always the start-anchored plan. A late email was followed by a call due the same hour, and 12.5's "next delay calculated from the original dispatch time" was never read.
+
+Two more defects surfaced on the way. A capped step's own firm cap hold kept its next run from ever reaching the dispatch that would release it. And an admin's `delivered` or `skipped` on an `unknown_terminal` fence did nothing to the sequence.
+
+**What g82 changes.** `docs/decisions/g82-a-step-is-woken-by-its-row-version.md` has the reasoning.
+
+- **The wake.** The key is `step-execution:{id}:{wake}`, where the wake is the row's `updated_at` in microseconds. A row nobody wrote to is not asked again; a row that moved is a new job. `listStepWakes` never materializes a wake for a step that already has a live job.
+- **What is woken.** Due `pending` work. `held` work past its `not_before` that no open hold blocks, asking all seven scopes as eligibility does (so a released hold wakes its steps on the next pass). `dispatched` work untouched for ten minutes. A step's own fence's holds do not block its own wake.
+- **How long a held step waits.** A step an open hold blocks keeps its `not_before` and sleeps until the release. Any other held step waits out its reason's interval: `CLOCK_CLEARING_HOLDS` as before, fifteen minutes for `send_unknown_terminal`, an hour for the rest.
+- **The run starts from what happened.** An email step with a fence is driven from the fence. `sent` completes it from the original dispatch. `dispatching` and `reconciling` hold it. The admin's answer to `unknown_terminal` continues or stops the sequence and releases the firm's terminal hold. `prepared` and `held` go back to the dispatch path, which now dispatches a `held` fence too and still claims atomically under the send gate. A held step is resumed (4.3) before its eligibility check.
+- **C09, C10.** A resume counts only the window after the last applied resume. It asks all seven scopes for the next step's own action kinds, and ignores holds the enrollment's own fences opened.
+- **C11.** A successor is due at the later of the plan and the plan's gap counted from when the previous step actually happened (for an email, the original dispatch instant). Business-day gaps are counted in business days. A floor-produced due instant's `rule_version` ends `+after-completion`.
+- `SendHandoff.readOutcome` gains the fence id and the admin resolution; `outboundSendHandoff` passes them through.
+- Ten mutations, appended to `scripts/releaseMutationCheck.mjs` (main 136 → 146 at `2d262695`), each applied by hand and killed by its own suite.
+
+**Not done.** C12 (LinkedIn undo) is left. David's decision G09 deletes LinkedIn steps, and that deletion reaches migrations, contracts, API routes, the desktop and Today, most of them other lanes' files. The undo defect stands until then.
+
+**Release class.** Application-only: no migration, no schema range change. Both images change: the domain's resume is also the API's `/enrollments/resume`. Sending stays disabled in production and there are no enrollments, so nothing changes live until the first enrollment. It touches the dispatch hand-off, so it rides the next `full` rehearsal already owed for g70, g73 and g77; otherwise deploy and smoke.
+
+**What the next `full` rehearsal should show.**
+
+1. The release suite passes unchanged. No scenario check drives the wake; `apps/worker/test/sequenceActionRearm.test.ts` and `packages/domain/test/sequences/wake.test.ts` are its proof.
+2. The drill's phases still reach `accepted_send` or `in_doubt_send`. The drill dispatches its own fences and does not run through the wake, so a refusal there is not this lane's.
+3. The scheduler's `sequence-action` source logs no pass that inserts the same step every minute.
+
+**Still unverified.** Measured only on embedded PostgreSQL 16:
+
+- the wake query's cost with many held steps (the `dispatched` arm and the live-job check scan without a dedicated index);
+- a real worker killed mid-claim on Fargate rather than a terminated backend;
+- the hour-long recheck interval, which is reasoned, not measured.
 
 ### 8.1 Still unverified
 

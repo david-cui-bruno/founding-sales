@@ -152,6 +152,13 @@ Every move is a row in `step_execution_shifts`, which is append-only by privileg
 refuses a shift that would move work earlier. `original_due_at` never moves, so "what
 did the cadence originally say" survives every later change.
 
+Since lane g82 a resume counts only the window after the last applied one (the latest
+`hold_union` row), so a second release never shifts by the first hold again, and it asks
+the same seven scopes, for the same action kinds, as `holdSource`. It runs on its own:
+a released hold wakes the steps it blocked on the next scheduler pass, and the run
+resumes them before its eligibility check
+(`docs/decisions/g82-a-step-is-woken-by-its-row-version.md`).
+
 ### 6. The send gets finished bytes, and the fence is G7-2's
 
 `SendHandoff.prepare` takes an `OutboundEmailRequest` carrying a rendered subject and
@@ -162,10 +169,18 @@ machine from `prepared` onwards.
 
 Owning the state machine is not the same as driving it. Appendix C has no send job
 kind, so `sequence.action` calls `dispatch` too — after its own transaction commits,
-and only while the fence still reads `prepared`
-(`docs/decisions/g8-this-lane-dispatches.md`). A fence that comes back `held` is a cap
-that has not cleared yet, not a step that is over: `CLOCK_CLEARING_HOLDS` pushes
-`not_before` forward and the scheduler asks again.
+and only while the fence reads `prepared` or `held`, neither of which ever reached
+Gmail (`docs/decisions/g8-this-lane-dispatches.md`, amended by g82). A fence that comes
+back `held` is a cap that has not cleared yet, not a step that is over:
+`CLOCK_CLEARING_HOLDS` pushes `not_before` forward, the scheduler asks again, and the
+step's next run finds the fence it already has and hands it back to the dispatch path.
+A step whose fence has gone further is settled from it: `sent` completes the step from
+the original dispatch time, an admin's answer to `unknown_terminal` continues or stops
+the sequence.
+
+A successor is due at the start-anchored plan, unless the step before it ran late: then
+the plan's gap between the two steps is counted from when that step actually happened —
+for an email, the original dispatch instant (12.5; `successor.ts`).
 
 The division is not arbitrary. 11.1 holds the step on a missing variable, so
 substitution has to happen *before* a fence exists: a fence prepared for a body reading
@@ -204,21 +219,28 @@ There is no LinkedIn automation of any kind, and there is no unsubscribe link an
 
 ## The job
 
-Appendix C: `sequence.action`, key `step-execution:{id}`, protection `outbound_fence`.
-The protection is not cosmetic — the runner runs an `outbound_fence` handler *outside*
-the completion transaction, because `prepared → dispatching` and the Gmail call after
-it cannot be rolled back.
+Appendix C: `sequence.action`, key `step-execution:{id}:{wake}`, protection
+`outbound_fence`. The wake is the execution row's `updated_at` (lane g82): a row nobody
+has written to since its last job is not asked again, and a row that has moved is a new
+job instead of a collision with the `done` one. The protection is not cosmetic — the
+runner runs an `outbound_fence` handler *outside* the completion transaction, because
+`prepared → dispatching` and the Gmail call after it cannot be rolled back.
 
-The source is one indexed query over `step_executions_runnable`, and both comparisons
-are PostgreSQL's, so no worker's clock decides whether a step is due and the ten-minute
-LinkedIn grace survives a scheduler in another region.
+The source is `listStepWakes` (`packages/domain/sequences/wake.ts`), and its time
+comparisons are PostgreSQL's, so no worker's clock decides whether a step is due and
+the ten-minute LinkedIn grace survives a scheduler in another region. It wakes due
+`pending` work; `held` work past its `not_before` that no open hold blocks, asking all
+seven hold scopes as `holdSource` does, so a released hold wakes its steps on the next
+pass; and `dispatched` work that has not moved for ten minutes, whose worker died
+between the step's commit and the claim. It never materializes a wake for a step that
+already has a live job.
 
-A `held` execution is materialized only for the four reasons in
-`CLOCK_CLEARING_HOLDS` — `daily_cap`, `domain_cap`, `outside_email_window`,
-`send_unknown_reconciling` — because those clear with the clock and nobody is going to
-press anything. Every other hold waits for the person or the lane that owns it, and a
-job claiming one of those every minute would make the `oldest runnable job` alarm mean
-nothing. `not_before` is what keeps the four from spinning.
+`not_before` is what keeps a held step from spinning. A step an open hold blocks keeps
+it and sleeps until the release; any other held step waits out its reason's interval —
+`CLOCK_CLEARING_HOLDS` for caps, windows and a reconciling fence, fifteen minutes for
+`send_unknown_terminal`, an hour for everything else. A step's own fence's holds do not
+block its own wake, because the dispatch path is what releases them. See
+`docs/decisions/g82-a-step-is-woken-by-its-row-version.md`.
 
 The handler's shape follows from Appendix B: one narrow transaction that re-reads
 eligibility, renders and prepares the fence, then a commit, then the dispatch. The
@@ -310,6 +332,7 @@ npm run gate:greenfield
 npm --workspace @fss/domain run test -- test/sequences      # G 9, 18, 28, 31, 32, 33
 npm --workspace @fss/api run test -- test/sequences.test.ts # the routes and the receipts
 npm --workspace @fss/worker run test -- test/sequenceAction.test.ts  # G 1 and G 2
+npm --workspace @fss/worker run test -- test/sequenceActionRearm.test.ts  # the wake, a killed worker, two wakes
 npm --workspace @fss/desktop run test -- test/sequences.test.ts      # the editor
 ```
 

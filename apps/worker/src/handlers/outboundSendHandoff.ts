@@ -74,6 +74,10 @@ export function outboundSendHandoff(options: OutboundSendHandoffOptions = {}): S
         state: outcome.state,
         dispatchedAt: outcome.dispatchedAt,
         heldReason: outcome.heldReason,
+        // Lane g82: the fence a woken step re-dispatches, and the admin's answer to an
+        // `unknown_terminal` one, which is what continues or stops the sequence.
+        outboundMessageId: outcome.outboundMessageId,
+        adminResolution: outcome.adminResolution,
       };
     },
   };

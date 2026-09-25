@@ -120,6 +120,23 @@ export interface OutboundFenceOutcome {
   /** When the irreversible `prepared → dispatching` transition happened, if it has. */
   readonly dispatchedAt: string | null;
   readonly heldReason: string | null;
+  /**
+   * The fence's own id, once one exists (lane g82).
+   *
+   * A step woken again — its cap cleared, its pause released, or its worker died between
+   * the step's transaction and the claim (audit C02, C03) — already has a fence, and the
+   * dispatch it is owed names that fence. Optional so that a hand-off written before
+   * this lane still type-checks; without it the engine falls back to asking `prepare`,
+   * which reuses the one fence.
+   */
+  readonly outboundMessageId?: string | null | undefined;
+  /**
+   * An administrator's answer to an `unknown_terminal` fence (12.5, Appendix B; lane g82).
+   *
+   * `delivered` continues the sequence from the original dispatch time, `skipped` stops
+   * the enrollment. Absent or null while nobody has answered.
+   */
+  readonly adminResolution?: 'delivered' | 'skipped' | null | undefined;
 }
 
 export type DispatchSendOutcome =
@@ -171,6 +188,7 @@ export function recordingSendHandoff(): RecordingSendHandoff {
   const prepared: OutboundEmailRequest[] = [];
   const dispatched: string[] = [];
   const fences = new Map<string, OutboundFenceOutcome>();
+  const fenceIds = new Map<string, string>();
   const afterDispatch = new Map<string, OutboundFenceOutcome>();
   let nextOutcome: PrepareSendOutcome | null = null;
   let nextDispatch: DispatchSendOutcome | null = null;
@@ -190,31 +208,28 @@ export function recordingSendHandoff(): RecordingSendHandoff {
     },
     setOutcome(stepExecutionId, outcome) {
       fences.set(stepExecutionId, outcome);
+      if (typeof outcome.outboundMessageId === 'string') fenceIds.set(stepExecutionId, outcome.outboundMessageId);
     },
     prepare: async (_context, request) => {
       await Promise.resolve();
       const answer = nextOutcome;
       nextOutcome = null;
       if (answer !== null && !answer.ok) return answer;
-      const existing = prepared.find(
-        candidate => candidate.stepExecutionId === request.stepExecutionId,
-      );
+      const existing = fenceIds.get(request.stepExecutionId);
       if (existing !== undefined) {
         // Appendix B: uniqueness reuses one fence rather than creating a second.
-        return { ok: true, outboundMessageId: `fence-${request.stepExecutionId}`, created: false };
+        return { ok: true, outboundMessageId: existing, created: false };
       }
       prepared.push(request);
       counter += 1;
+      const outboundMessageId = answer?.ok === true ? answer.outboundMessageId : `fence-${String(counter)}`;
+      fenceIds.set(request.stepExecutionId, outboundMessageId);
       fences.set(request.stepExecutionId, {
         state: 'prepared',
         dispatchedAt: null,
         heldReason: null,
       });
-      return {
-        ok: true,
-        outboundMessageId: answer?.ok === true ? answer.outboundMessageId : `fence-${String(counter)}`,
-        created: true,
-      };
+      return { ok: true, outboundMessageId, created: true };
     },
     dispatch: async (_context, input) => {
       await Promise.resolve();
@@ -234,7 +249,9 @@ export function recordingSendHandoff(): RecordingSendHandoff {
     },
     readOutcome: async (_context, stepExecutionId) => {
       await Promise.resolve();
-      return fences.get(stepExecutionId) ?? { state: 'absent', dispatchedAt: null, heldReason: null };
+      const fence = fences.get(stepExecutionId);
+      if (fence === undefined) return { state: 'absent', dispatchedAt: null, heldReason: null, outboundMessageId: null };
+      return { outboundMessageId: fenceIds.get(stepExecutionId) ?? null, ...fence };
     },
   };
 }

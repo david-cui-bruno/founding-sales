@@ -110,7 +110,7 @@ export const CHANNEL_ACTION_KINDS: Readonly<Record<StepChannel, BlockedActionKin
 });
 
 /** The key a channel-scoped pause is stored under for a step's channel (10.1). */
-const CHANNEL_PAUSE_KEYS: Readonly<Record<StepChannel, PauseChannel>> = Object.freeze({
+export const CHANNEL_PAUSE_KEYS: Readonly<Record<StepChannel, PauseChannel>> = Object.freeze({
   email: 'email',
   call_task: 'call',
   linkedin_task: 'linkedin',

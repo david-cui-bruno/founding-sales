@@ -106,7 +106,10 @@ export {
 
 export {
   CLOCK_CLEARING_HOLDS,
+  DEFAULT_HOLD_RECHECK_MILLISECONDS,
+  HOLD_RECHECK_MILLISECONDS,
   LINKEDIN_UNDO_WINDOW_MILLISECONDS,
+  holdRecheckMilliseconds,
   completeEmailStep,
   completeStepExecution,
   dispatchPreparedStep,
@@ -165,6 +168,16 @@ export {
 } from './terminalStops.ts';
 
 export { dueSequenceWorkSource } from './todaySource.ts';
+
+export {
+  BLOCKING_HOLD_SQL,
+  DISPATCH_RECOVERY_GRACE_SECONDS,
+  STEP_WAKE_LIMIT,
+  listStepWakes,
+  type StepWake,
+} from './wake.ts';
+
+export { COMPLETION_ANCHOR_RULE_SUFFIX, successorDue, type SuccessorDue, type SuccessorDueInput } from './successor.ts';
 
 export {
   applyEnrollmentMigration,
