@@ -197,6 +197,7 @@ describe('every alarm metric has something that emits it', () => {
       'DeadJobOldestAgeSeconds',
       'GmailWatchHoursToExpiry',
       'MailboxDisconnectedHours',
+      'TodaySnapshotMissing',
     ];
     while (Date.now() < deadline && !wanted.every(name => sink.published.some(datum => datum.name === name))) {
       await new Promise(resolve => setTimeout(resolve, 20));
@@ -221,6 +222,8 @@ describe('every alarm metric has something that emits it', () => {
       'MailboxCheckHeartbeat',
       'GmailWatchHoursToExpiry',
       'MailboxDisconnectedHours',
+      // Published on every pass, 0 or 1, whatever the time of day (lane g67).
+      'TodaySnapshotMissing',
     ]) {
       expect([...published].includes(name), `${name} was never published by the worker`).toBe(true);
     }

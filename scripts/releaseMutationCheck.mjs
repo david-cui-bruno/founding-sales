@@ -1030,6 +1030,25 @@ const MUTATIONS = [
     because:
       'Specification 8.2 orders the list by lane first and the snapshot decides it; Home draws its sections from runs of that order and never repairs it. A client sort by due instant is the plausible mistake \u2014 it puts a three-week-old new firm above today\u2019s callback \u2014 and a second implementation of 8.2 that would disagree with the first the day either changed. today.test.ts keeps the new firm second and has to go red.',
   },
+  // Lane g67: TodaySnapshotMissing has a publisher, and it reads the job rather than the rows.
+  {
+    name: 'the Today gauge counts a materialized today.build job as a built list',
+    file: 'packages/domain/today/metrics.ts',
+    find: "      WHERE j.state = 'done'`,\n",
+    replace: '      WHERE true`,\n',
+    suite: ['run', 'test', '--workspace', 'packages/domain', '--', 'test/today/snapshotMissing.test.ts'],
+    because:
+      'A job that exists is not a list that was built: a queued job is a scheduler that ran and a worker that did not, and a dead one is a build that failed four times. Counting any state as built would hold fss-prod-today-snapshot-absent at OK through exactly the mornings it exists for. snapshotMissing.test.ts reads 1 over a queued, a running and a dead job and has to go red.',
+  },
+  {
+    name: 'the Today gauge owes the list at 05:00, the minute the build is materialized',
+    file: 'packages/domain/today/metrics.ts',
+    find: 'export const TODAY_SNAPSHOT_DEADLINE_LOCAL_MINUTE = 5 * 60 + 10;\n',
+    replace: 'export const TODAY_SNAPSHOT_DEADLINE_LOCAL_MINUTE = 5 * 60;\n',
+    suite: ['run', 'test', '--workspace', 'packages/domain', '--', 'test/today/snapshotMissing.test.ts'],
+    because:
+      'Specification 13.3 alarms at 05:10 workspace time, ten minutes after the 05:00 build, and the build minute is the plausible constant to reach for (the worker\u2019s TODAY_BUILD_LOCAL_MINUTE is 5 * 60). With the deadline at 05:00 every healthy morning reads 1 between the first scheduler pass and the first completion, and one such datapoint fires the critical alarm. snapshotMissing.test.ts reads 0 at 05:09:59 New York time with nothing built and has to go red.',
+  },
 ];
 
 // A listener on each of these keeps Node from exiting mid-mutation with a file still

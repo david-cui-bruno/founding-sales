@@ -2,6 +2,7 @@ import type { SessionQueryable } from '@fss/domain/db';
 import { MetricError, collectJobMetrics, type HandlerRegistry, type MetricDatum, type MetricSink } from '@fss/domain/jobs';
 import { collectMailMetrics } from '@fss/domain/mail';
 import { collectOutboundMetrics } from '@fss/domain/outbound';
+import { collectTodayMetrics } from '@fss/domain/today';
 import { checkWorkerStartup, type WorkerStartupReport } from '../index.ts';
 import { runOnce } from '../runner/jobRunner.ts';
 import { runSchedulerPass, type DueWorkSource } from '../scheduler/schedulerPass.ts';
@@ -219,10 +220,17 @@ export async function startWorker(options: WorkerProcessOptions): Promise<Worker
   // right — neither is a watch about to lapse. `MailboxDisconnectedHours` needed a
   // record of having sent and so could not be published until `outbound_messages`
   // existed.
+  //
+  // `TodaySnapshotMissing` is the opposite: published on every pass, 0 or 1, so the
+  // alarm (missing data ignored) is OK rather than INSUFFICIENT_DATA whenever this
+  // loop runs (lane g67). It is 1 when a workspace is at or past 05:10 local and that
+  // business date's `today.build` job is not `done`. It is handed the same clock the
+  // scheduler pass is, so the business date it checks is the one the pass materializes.
   const collectors: readonly (readonly [string, (session: SessionQueryable) => Promise<readonly MetricDatum[]>])[] = [
     ['jobs', collectJobMetrics],
     ['mail', collectMailMetrics],
     ['outbound', collectOutboundMetrics],
+    ['today', session => collectTodayMetrics(session, { now: now().toISOString() })],
   ];
 
   /**

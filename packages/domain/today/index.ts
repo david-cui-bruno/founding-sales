@@ -85,3 +85,11 @@ export {
   type TodayRouteDto,
   type TodayTaskDto,
 } from './dto.ts';
+
+export {
+  TODAY_METRIC_NAMES,
+  TODAY_SNAPSHOT_DEADLINE_LOCAL_MINUTE,
+  collectTodayMetrics,
+  readTodaySnapshotStatus,
+  type TodaySnapshotReading,
+} from './metrics.ts';

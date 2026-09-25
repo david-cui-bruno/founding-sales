@@ -8,11 +8,12 @@ import { readHeartbeats, type HeartbeatComponent } from './heartbeats.ts';
  *
  * The contract is not ours to invent: `infra/modules/alerts/main.tf` names every
  * metric an alarm reads, and `infra/modules/observability/main.tf` names the ones
- * derived from log events. `METRIC_OWNERS` below claims one of three things about
- * each of those names — this lane emits it, a log filter derives it, or a later lane
- * owns it — and `test/jobs/observability.test.ts` reads the two Terraform files and fails
- * if a name exists there without a claim here, or here without existing there. A
- * metric nobody emits is an alarm that never fires, which is worse than no alarm.
+ * derived from log events. `METRIC_OWNERS` below claims one of four things about
+ * each of those names — this lane emits it, the Today lane's collector emits it, a log
+ * filter derives it, or a later lane owns it — and `test/jobs/observability.test.ts`
+ * reads the two Terraform files and fails if a name exists there without a claim
+ * here, or here without existing there. A metric nobody emits is an alarm that never
+ * fires, which is worse than no alarm.
  *
  * The adapter takes a `putMetricData` function rather than importing an AWS SDK.
  * Locally none is supplied and publishing is a no-op that still validates the data,
@@ -86,7 +87,7 @@ export interface MetricDatum {
   readonly dimensions?: Readonly<Record<string, string>> | undefined;
 }
 
-export type MetricOwner = 'jobs' | 'log_derived' | 'later_lane';
+export type MetricOwner = 'jobs' | 'today' | 'log_derived' | 'later_lane';
 
 /**
  * Every metric name the infrastructure alarms on, and who is responsible for it.
@@ -108,6 +109,11 @@ export const METRIC_OWNERS: Readonly<Record<string, MetricOwner>> = Object.freez
   CanaryCompletionAgeSeconds: 'jobs',
   UnacknowledgedCriticalAlertAgeSeconds: 'jobs',
 
+  // Emitted by `collectTodayMetrics` in `packages/domain/today/metrics.ts` on every
+  // metric pass, from the day's `today.build` job and the workspace zone rather than
+  // from `today_snapshots`, which a workspace with no firms never writes (lane g67).
+  TodaySnapshotMissing: 'today',
+
   // Derived by a CloudWatch metric filter from a structured log event, so a task that
   // cannot reach the metrics API still raises them.
   SuppressionJournalWriteFailures: 'log_derived',
@@ -120,7 +126,6 @@ export const METRIC_OWNERS: Readonly<Record<string, MetricOwner>> = Object.freez
   DeadJobs: 'log_derived',
 
   // Owned by the lanes that build the tables they read.
-  TodaySnapshotMissing: 'later_lane',
   GmailWatchHoursToExpiry: 'later_lane',
   MailboxDisconnectedHours: 'later_lane',
   ActiveEnrollments: 'later_lane',

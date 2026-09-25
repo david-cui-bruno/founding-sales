@@ -2501,6 +2501,9 @@ for one mailbox and hides a stuck one among several. `TodaySnapshotMissing` is p
 by nothing at all (its owner is still `later_lane`), so `fss-prod-today-snapshot-absent`,
 with missing data ignored, stays INSUFFICIENT_DATA after the first 05:00 snapshot as well
 as before it. Both are written down in `docs/greenfield/mail.md` and here, not fixed.
+(Lane g67 gives `TodaySnapshotMissing` a publisher: every metric pass, 1 when a workspace
+is past 05:10 local without that day's `today.build` job `done`, otherwise 0; see
+`docs/greenfield/runbooks/today_snapshot_absent.md`.)
 
 **To close it.** Build the worker image from the merge commit and redeploy the worker.
 No Terraform apply is needed: no alarm changed. On the new task, `MailboxCheckHeartbeat`
