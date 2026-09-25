@@ -1,5 +1,6 @@
 import {
   addRouteCommandSchema,
+  confirmRouteCommandSchema,
   createContactCommandSchema,
   retireRouteCommandSchema,
   updateContactCommandSchema,
@@ -8,6 +9,7 @@ import {
 import {
   addEmailRoute,
   addPhoneRoute,
+  confirmPhoneRoute,
   createContact,
   listContacts,
   retireRoute,
@@ -104,6 +106,13 @@ export async function routeContacts(request: ApiRequest, options: RoutingOptions
           technicalValidation: body.technicalValidation,
           associationConfidence: body.associationConfidence,
         }),
+      );
+    case '/contacts/routes/confirm':
+      // Lane g88: a person confirms a phone number reaches the firm. The command records
+      // who and when (its receipt and its audit event); the route policy decides what
+      // the confirmation makes the route, and the version moves with it.
+      return await runCrmCommand(deps, confirmRouteCommandSchema, 'route.confirmed', async (repository, body) =>
+        await confirmPhoneRoute(repository, { routeId: body.routeId, routeVersion: body.routeVersion }),
       );
     case '/contacts/routes/retire':
       return await runCrmCommand(deps, retireRouteCommandSchema, 'route.retired', async (repository, body) =>

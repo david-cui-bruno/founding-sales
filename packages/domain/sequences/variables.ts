@@ -1,3 +1,4 @@
+import { TEMPLATE_VARIABLE_NAMES, type TemplateVariableName } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 
 /**
@@ -19,16 +20,9 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
  * blank as missing, and a map that carried `''` would be a map that rendered a gap.
  */
 
-export const TEMPLATE_VARIABLE_NAMES = [
-  'firm_name',
-  'firm_locality',
-  'firm_region',
-  'firm_website',
-  'contact_first_name',
-  'contact_full_name',
-  'contact_title',
-] as const;
-export type TemplateVariableName = (typeof TEMPLATE_VARIABLE_NAMES)[number];
+// The list is `@fss/contracts`' since lane g88, so the Mac's template form names the same
+// seven; it is re-exported here so every importer of this module is unchanged.
+export { TEMPLATE_VARIABLE_NAMES, type TemplateVariableName };
 
 const PLACEHOLDER_NAMES = new Set(['n/a', 'na', 'unknown', 'none', 'tbd', 'null']);
 

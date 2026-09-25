@@ -63,6 +63,17 @@ export function render(state: CrmState | null): void {
       onSaveContact: edit => {
         apply(bridge().saveContact(edit));
       },
+      // Lane g88: the Sequences section, and confirming a number.
+      sequences: current.sequences ?? null,
+      onConfirmRoute: request => {
+        apply(bridge().confirmRoute(request));
+      },
+      onOpenOpportunity: () => {
+        apply(bridge().openOpportunity());
+      },
+      onEnroll: request => {
+        apply(bridge().enroll(request));
+      },
     });
     return;
   }

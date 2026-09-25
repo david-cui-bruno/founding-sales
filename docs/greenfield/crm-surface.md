@@ -227,6 +227,23 @@ clear non-actionable state" is a unit test rather than a screenshot.
   the server turns into a demote-and-promote in one transaction. Demoting without
   promoting is not offered: zero primaries is legal, but an unticked box is not a
   decision.
+  The bridge sends the edit as the route's `patch`, and an emptied title as an explicit
+  `null`, because in a patch an absent field means "unchanged" (lane g88; before it,
+  every contact save from the Mac was refused 400).
+* **Confirm this number** (lane g88) — a `candidate` phone number on an assigned page
+  has the button. `POST /contacts/routes/confirm { routeKind: 'phone', routeId,
+  routeVersion }` records the person as the validation: `technical_validation = 'passed'`,
+  confidence 1, and `decideRouteEligibility` still decides. The version bumps, and the
+  receipt plus the `route.phone.confirmed` audit event record who confirmed it and when.
+  A version older than the page is refused `route_version_stale`, a failed number
+  `route_invalid`. An email address is not confirmed by hand. Its validation is
+  deliverability, which a person cannot supply, and the page says so under an
+  unconfirmed address.
+* **Sequences** (lane g88) — the enrolments running at this firm, by sequence name and
+  version, and a contact and a published version to enrol (`/enrollments/enroll`, with the
+  page's firm and open opportunity). A firm with no opportunity is offered **Add to
+  pipeline** (`/opportunities/open`, stage New) first; a Won or Lost firm is not
+  enrolled from here.
 * **Pipeline** — the workspace's configured stages in their order. A retired stage
   with something in it is shown, because "retired stages remain readable"; a retired
   stage is never a destination. A Lost change reveals its reason field and the button
@@ -251,6 +268,8 @@ npm run test --workspace apps/api -- test/capture.test.ts
 npm run test --workspace packages/domain -- test/crm/export.test.ts
 npm run test --workspace packages/domain -- test/crm/firmPage.test.ts
 npm run test --workspace apps/api -- test/crmSurface.test.ts
+npm run test --workspace packages/domain -- test/crm/routeConfirm.test.ts   # Confirm this number
+npm run test --workspace apps/api -- test/founderGaps.test.ts        # confirm, the title patch, the review read
 npm run test:e2e --workspace apps/desktop                              # needs a browser
 ```
 

@@ -20,6 +20,9 @@ export const CRM_REFUSAL_CODES = [
   'contact_merged',
   'route_unknown',
   'route_retired',
+  // Lane g88: a person confirming a number they were not looking at, or one tested dead.
+  'route_version_stale',
+  'route_invalid',
   'evidence_unknown',
   // Authorization (Appendix G 7)
   'not_assigned',

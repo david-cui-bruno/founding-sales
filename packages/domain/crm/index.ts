@@ -94,10 +94,12 @@ export {
 export {
   addEmailRoute,
   addPhoneRoute,
+  confirmPhoneRoute,
   listRoutes,
   retireRoute,
   verifyRoute,
   type AddRouteInput,
+  type ConfirmPhoneRouteInput,
   type EmailRouteInput,
   type PhoneRouteInput,
   type VerifyRouteInput,

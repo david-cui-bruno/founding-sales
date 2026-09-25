@@ -86,6 +86,7 @@ describe('what the API mounts', () => {
       '/enrollments/migrate/approve',
       '/enrollments/migrate/propose',
       '/enrollments/resume',
+      '/enrollments/resume/preview',
       '/enrollments/steps',
       '/enrollments/stop',
       '/export/firms',

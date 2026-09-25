@@ -151,6 +151,12 @@ export function callbackSource(): TodaySource {
  * this lane is for (7.4: "Research never initiates outreach ... enrollment and first
  * contact are deliberate salesperson actions").
  *
+ * "No opportunity at all" means never had one (lane g88, audit C19). The join reads only
+ * the open opportunity, so a firm whose opportunity was Won or Lost used to read as a
+ * firm with none, and came back the next morning as a new firm to call — a client, or
+ * somebody who had said no. A firm with a closed opportunity has been worked; it is not
+ * new, whatever stage a later reopened opportunity stands at.
+ *
  * A firm under a firm-wide do-not-contact is not on the list. 10.2 makes that
  * suppression effective immediately and database-enforced, and putting the firm on
  * somebody's morning list is the one thing it exists to prevent.
@@ -173,6 +179,12 @@ export function newFirmSource(): TodaySource {
           WHERE f.workspace_id = $1
             AND f.status = 'active'
             AND (o.id IS NULL OR s.position = 1)
+            AND NOT EXISTS (
+              SELECT 1 FROM opportunities closed
+               WHERE closed.workspace_id = f.workspace_id
+                 AND closed.firm_id = f.id
+                 AND closed.status <> 'open'
+            )
             AND NOT EXISTS (
               SELECT 1 FROM effective_suppressions e
                WHERE e.workspace_id = f.workspace_id

@@ -151,6 +151,12 @@ export function registerReplyBridge(deps: ReplyBridgeDeps): ReplyBridgeHost {
       note: typeof input['note'] === 'string' ? input['note'] : '',
     });
   });
+  // Lane g88: two ids, and the bridge checks the opportunity is one of the open card's.
+  handleOnce(REPLY_IPC_CHANNELS.resolve, async argument => {
+    const input = argument as { messageId?: unknown; opportunityId?: unknown } | null;
+    if (typeof input?.messageId !== 'string' || typeof input.opportunityId !== 'string') return await host.state();
+    return await host.resolve({ messageId: input.messageId, opportunityId: input.opportunityId });
+  });
   return host;
 }
 
@@ -208,6 +214,19 @@ export function registerCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
     return await host.previewImport({ csv: input.csv, fileName: input.fileName });
   });
   handleOnce(CRM_IPC_CHANNELS.commitImport, async () => await host.commitImport());
+  // Lane g88: the firm and its opportunity are the open page's, so enrolment takes a
+  // version and a contact, and a confirmation a route id and the version on screen.
+  handleOnce(CRM_IPC_CHANNELS.openOpportunity, async () => await host.openOpportunity());
+  handleOnce(CRM_IPC_CHANNELS.enroll, async argument => {
+    const input = argument as { sequenceVersionId?: unknown; contactId?: unknown } | null;
+    if (typeof input?.sequenceVersionId !== 'string' || typeof input.contactId !== 'string') return await host.state();
+    return await host.enroll({ sequenceVersionId: input.sequenceVersionId, contactId: input.contactId });
+  });
+  handleOnce(CRM_IPC_CHANNELS.confirmRoute, async argument => {
+    const input = argument as { routeId?: unknown; routeVersion?: unknown } | null;
+    if (typeof input?.routeId !== 'string' || typeof input.routeVersion !== 'number') return await host.state();
+    return await host.confirmRoute({ routeId: input.routeId, routeVersion: input.routeVersion });
+  });
   return host;
 }
 
@@ -256,6 +275,36 @@ export function registerSequenceBridge(deps: SequenceBridgeDeps): SequenceBridge
   withString(SEQUENCE_IPC_CHANNELS.resumeEnrollment, 'enrollmentId', async enrollmentId =>
     await host.resumeEnrollment({ enrollmentId }),
   );
+  // Lane g88: authoring and the resume review. The steps are passed to the bridge as they
+  // came, and parsed there against the draft step schema; a template draft is five
+  // strings (the template id may be null) or the call is the current state back.
+  withString(SEQUENCE_IPC_CHANNELS.createDraft, 'sequenceId', async sequenceId => await host.createDraft({ sequenceId }));
+  withString(SEQUENCE_IPC_CHANNELS.reviewEnrollment, 'enrollmentId', async enrollmentId =>
+    await host.reviewEnrollment({ enrollmentId }),
+  );
+  handleOnce(SEQUENCE_IPC_CHANNELS.closeReview, async () => await host.closeReview());
+  handleOnce(SEQUENCE_IPC_CHANNELS.saveDraft, async argument => {
+    const input = argument as Record<string, unknown> | null;
+    if (input === null || typeof input['sequenceVersionId'] !== 'string' || !Array.isArray(input['steps'])) {
+      return await host.state();
+    }
+    return await host.saveDraft({ sequenceVersionId: input['sequenceVersionId'], steps: input['steps'] });
+  });
+  handleOnce(SEQUENCE_IPC_CHANNELS.createTemplate, async argument => {
+    const input = argument as Record<string, unknown> | null;
+    const fields = ['name', 'subject', 'body', 'signOff'] as const;
+    const templateId = input?.['templateId'];
+    if (input === null || fields.some(field => typeof input[field] !== 'string') || !(templateId === null || typeof templateId === 'string')) {
+      return await host.state();
+    }
+    return await host.createTemplate({
+      templateId,
+      name: input['name'] as string,
+      subject: input['subject'] as string,
+      body: input['body'] as string,
+      signOff: input['signOff'] as string,
+    });
+  });
   handleOnce(SEQUENCE_IPC_CHANNELS.enroll, async argument => {
     const input = argument as Record<string, unknown> | null;
     if (

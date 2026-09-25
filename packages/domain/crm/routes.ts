@@ -219,6 +219,91 @@ export async function verifyRoute(
   return accept(updated);
 }
 
+export interface ConfirmPhoneRouteInput {
+  readonly routeId: string;
+  /** The version the person was looking at. A route that has changed since is refused. */
+  readonly routeVersion: number;
+}
+
+/**
+ * A person confirms a phone number reaches the firm (lane g88).
+ *
+ * Section 7.4 makes a route `usable` only when a versioned provider/source policy
+ * satisfies both technical validation and association confidence. For a phone number in
+ * version one the person *is* the provider: a call is a `tel:` handoff, nothing Callie
+ * runs sees the line, and the calling-identity lane already made the same judgement for
+ * the number a call leaves on (`docs/decisions/g60-calling-identities-are-attested-in-version-one.md`).
+ * So the confirmation supplies both halves — the number was checked, and it is this
+ * firm's — as `technical_validation = 'passed'` and a confidence of 1, and
+ * `decideRouteEligibility` still decides what that makes the route. Nothing here writes
+ * `usable` itself.
+ *
+ * Who confirmed and when is the audit event (actor, database time) and the command's
+ * receipt; `method: 'person_confirmed'` in its detail is what tells a later reader this
+ * route was vouched for by a person rather than validated by a provider.
+ *
+ * The version bumps, because the eligibility moved and 9.1's card compares against it.
+ * A confirmation of the version the person was not looking at is refused
+ * `route_version_stale`: they confirmed a number, and it may not be this one any more.
+ * A usable route is answered as it is, without a bump. A route that failed validation is
+ * refused `route_invalid`: the policy says a failure is a new retrieval, not a higher
+ * confidence, and a person's word does not overrule a line that was tested dead.
+ *
+ * Email is deliberately absent: `docs/decisions/g88-founder-authoring-and-review.md`.
+ */
+export async function confirmPhoneRoute(
+  context: RepositoryContext,
+  input: ConfirmPhoneRouteInput,
+): Promise<CrmResult<RouteRow>> {
+  const loaded = await loadRouteForUpdate(context, 'phone', input.routeId);
+  if (loaded === null) return refuse('route_unknown');
+  const firm = await loadFirmForUpdate(context, loaded.firm_id);
+  if (firm === null) return refuse('firm_unknown');
+  const decision = decideFirmMutation(context, firm);
+  if (!decision.permitted) return refuse(decision.reason);
+  if (loaded.eligibility === 'retired') return refuse('route_retired');
+  if (Number(loaded.version) !== input.routeVersion) return refuse('route_version_stale');
+  if (loaded.eligibility === 'usable') return accept(loaded);
+  if (loaded.eligibility === 'invalid') return refuse('route_invalid');
+
+  const eligibility = decideRouteEligibility({
+    source: loaded.source,
+    technicalValidation: 'passed',
+    associationConfidence: 1,
+  });
+  if (eligibility.eligibility !== 'usable') return refuse('invalid_input');
+
+  const { rows } = await context.db.query<RouteRow>(
+    `UPDATE phone_routes
+        SET technical_validation = 'passed',
+            association_confidence = 1,
+            eligibility = $3,
+            eligibility_policy_version = $4,
+            version = version + 1,
+            updated_at = now()
+      WHERE workspace_id = $1 AND id = $2
+      RETURNING ${ROUTE_COLUMNS}`,
+    [context.scope.workspaceId, input.routeId, eligibility.eligibility, eligibility.policyVersion],
+  );
+  const updated = rows[0];
+  if (updated === undefined) return refuse('route_unknown');
+
+  await recordCrmAuditEvent(context, {
+    action: 'route.phone.confirmed',
+    subjectKind: 'route',
+    subjectId: input.routeId,
+    detail: {
+      firmId: loaded.firm_id,
+      method: 'person_confirmed',
+      fromVersion: Number(loaded.version),
+      version: Number(updated.version),
+      eligibility: updated.eligibility,
+      policyVersion: updated.eligibility_policy_version,
+    },
+  });
+  return accept(updated);
+}
+
 /**
  * Retire a route (9.1: "Wrong number — retire the route; do not suppress the firm").
  *

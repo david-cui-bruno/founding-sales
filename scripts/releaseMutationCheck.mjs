@@ -2021,6 +2021,114 @@ const MUTATIONS = [
     because:
       'Every claim holds the send gate shared, so two claims to personal Gmail can each count the other as unclaimed and both take the last place under the guard. sendingCeilings.test.ts has a second connection hold the guard lock and claim a fence without committing, requires the dispatch to wait on an advisory lock and then hold at the guard; without the lock it never waits, sends, and the suite has to go red.',
   },
+  {
+    name: 'a Won or Lost firm is a new firm again the next morning',
+    file: 'packages/domain/today/build.ts',
+    find: "                 AND closed.status <> 'open'\n",
+    replace: '                 AND closed.status <> closed.status\n',
+    suite: ['run', 'test', '--workspace', 'packages/domain', '--', 'test/today/newFirms.test.ts'],
+    because:
+      'Audit item C19: the new-firm query joined only the open opportunity, so a firm whose opportunity was Won or Lost read as never contacted and came back on Today as a new firm to call. newFirms.test.ts builds one firm of each kind, requires the Won and Lost ones off the list, and has to go red.',
+  },
+  {
+    name: 'clearing a contact’s title is sent as “leave it unchanged” again',
+    file: 'apps/desktop/src/main/crmBridge.ts',
+    find: '      title: input.title,\n',
+    replace: '      ...(input.title === null ? {} : { title: input.title }),\n',
+    suite: ['run', 'test', '--workspace', 'apps/desktop', '--', 'test/founderGaps.test.ts'],
+    because:
+      'Audit item C20: the editor sent null for an emptied title and the bridge dropped the field, which in a patch means unchanged, so a title could never be cleared. founderGaps.test.ts requires the explicit null in the patch and has to go red.',
+  },
+  {
+    name: 'a person confirms a number that changed since the page showed it',
+    file: 'packages/domain/crm/routes.ts',
+    find: "  if (Number(loaded.version) !== input.routeVersion) return refuse('route_version_stale');\n",
+    replace: '',
+    suite: ['run', 'test', '--workspace', 'packages/domain', '--', 'test/crm/routeConfirm.test.ts'],
+    because:
+      'Lane g88: “Confirm this number” vouches for the number on screen. Without the version check a number replaced since the page was drawn would be made callable on the strength of a confirmation of a different one. routeConfirm.test.ts requires route_version_stale for version 3 of a version-1 route and has to go red.',
+  },
+  {
+    name: 'an email address can be confirmed by hand',
+    file: 'packages/contracts/src/crm.ts',
+    find: "  routeKind: z.literal('phone'),\n",
+    replace: '  routeKind: routeKindSchema,\n',
+    suite: ['run', 'test', '--workspace', 'apps/api', '--', 'test/founderGaps.test.ts'],
+    because:
+      'Lane g88: 7.4 makes an address usable only after a technical validation a person cannot supply, so /contacts/routes/confirm takes phone numbers only and refuses anything else at the door. founderGaps.test.ts (apps/api) requires a 400 for routeKind email and has to go red.',
+  },
+  {
+    name: 'the resume review shows no shift for a hold long enough to need one',
+    file: 'packages/domain/sequences/resume.ts',
+    find: "  const shift = decision.kind === 'still_held' ? 0 : confirmedShiftMilliseconds(decision, composition);\n",
+    replace: "  const shift = decision.kind === 'resume' ? decision.shiftMilliseconds : 0;\n",
+    suite: ['run', 'test', '--workspace', 'packages/domain', '--', 'test/sequences/resumePreview.test.ts'],
+    because:
+      'Audit item G06: the review is only worth reading if its dates are the dates the confirmation applies. A review of a nine-day hold that proposed the current dates would be confirmed and then move every step nine days. resumePreview.test.ts requires the proposed instant to be the one the confirmation writes and has to go red.',
+  },
+  {
+    name: '“Review and resume” resumes without showing the review',
+    file: 'apps/desktop/src/main/sequenceBridge.ts',
+    find: '      if (resumeReview?.preview.enrollmentId !== input.enrollmentId) {\n',
+    replace: '      if (false) {\n',
+    suite: ['run', 'test', '--workspace', 'apps/desktop', '--', 'test/founderGaps.test.ts'],
+    because:
+      'Audit item G06: 4.3 asks the salesperson to review the rendered future steps and then resume, and the button used to resume at once. founderGaps.test.ts requires the first press to load the review and send no resume, and has to go red.',
+  },
+  {
+    name: 'a saved draft is numbered 1, 1, 1',
+    file: 'apps/desktop/src/renderer/sequenceView.ts',
+    find: '    ordinal: index + 1,\n',
+    replace: '    ordinal: 1,\n',
+    suite: ['run', 'test', '--workspace', 'apps/desktop', '--', 'test/founderGaps.test.ts'],
+    because:
+      'Audit item G03: a step’s number is its place in the editor, assigned at save, so a reorder can never leave the gap publishVersion refuses. founderGaps.test.ts requires ordinals 1..n on the wire and has to go red.',
+  },
+  {
+    name: 'a template is written without the sign-off and the stop line',
+    file: 'apps/desktop/src/renderer/sequenceView.ts',
+    find: '  return `${body.trim()}\\n\\n${templateFooter(signOff)}`;\n',
+    replace: '  return body.trim();\n',
+    suite: ['run', 'test', '--workspace', 'apps/desktop', '--', 'test/founderGaps.test.ts'],
+    because:
+      'Audit item G03: 12.6 requires every automated email to end with the sign-off and the stop line, and the approval refuses a body that does not. The form appends it so the founder never has to type it. founderGaps.test.ts requires the composed body and has to go red.',
+  },
+  {
+    name: 'a refused approval says only http_409',
+    file: 'apps/desktop/src/main/sequenceBridge.ts',
+    find: '        notice = (refusal?.success === true ? refusal.data.reason : answer.reason).slice(0, NOTICE_LIMIT);\n',
+    replace: '        notice = answer.reason;\n',
+    suite: ['run', 'test', '--workspace', 'apps/desktop', '--', 'test/founderGaps.test.ts'],
+    because:
+      'Lane g88: the approval’s refusal carries every issue after its code, and the transport keeps a code only up to 80 characters, so three issues became http_409 and the author was told nothing. founderGaps.test.ts requires the whole reason from the refusal body and has to go red.',
+  },
+  {
+    name: 'choosing an ambiguous reply’s conversation also declares it human',
+    file: 'apps/desktop/src/main/replyBridge.ts',
+    find: '        { messageId: input.messageId, selectedOpportunityId: input.opportunityId, human: false },\n',
+    replace: '        { messageId: input.messageId, selectedOpportunityId: input.opportunityId, human: true },\n',
+    suite: ['run', 'test', '--workspace', 'apps/desktop', '--', 'test/reply.test.ts'],
+    because:
+      'Audit item G07: picking the conversation is not answering the reply. human: true would set the firm to manual and stop its enrollments before the person chose a disposition. reply.test.ts requires human false on the resolution and has to go red.',
+  },
+  {
+    name: 'a firm whose opportunity is Lost is enrolled from its page',
+    file: 'apps/desktop/src/main/crmBridge.ts',
+    find: "      if (page === null || page.visibility !== 'assigned_or_admin' || page.opportunity?.status !== 'open') {\n",
+    replace: "      if (page === null || page.visibility !== 'assigned_or_admin' || page.opportunity === null) {\n",
+    suite: ['run', 'test', '--workspace', 'apps/desktop', '--', 'test/founderGaps.test.ts'],
+    because:
+      'Audit item G03: an enrolment serves an open opportunity (11.2), and the Firm page reads the latest one, open or closed. founderGaps.test.ts requires no enrol command for a Lost firm and has to go red.',
+  },
+  {
+    name: 'turning sending off sends an empty release gate reference',
+    file: 'apps/desktop/src/renderer/settingsView.ts',
+    find: "    return { ok: true, value: { enabled: values['enabled'] === true, releaseGateReference: reference === '' ? null : reference } };\n",
+    replace: "    return { ok: true, value: { enabled: values['enabled'] === true, releaseGateReference: reference } };\n",
+    suite: ['run', 'test', '--workspace', 'apps/desktop', '--', 'test/founderGaps.test.ts'],
+    because:
+      'Audit item G08: the sending slice’s reference is null or a trimmed non-empty string (sendingEnabledSettingSchema), and an empty box is null. founderGaps.test.ts round-trips every slice through its typed controls and has to go red.',
+  },
 ];
 
 // A listener on each of these keeps Node from exiting mid-mutation with a file still

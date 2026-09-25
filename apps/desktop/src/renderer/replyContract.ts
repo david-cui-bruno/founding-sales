@@ -11,7 +11,7 @@ import {
 } from '@fss/contracts';
 
 /**
- * What the reply window is given, and the four things it may ask for
+ * What the reply window is given, and the things it may ask for
  * (specification 8.3, 12.4, 14.2).
  *
  * A third contract beside G2's `shared/contract.ts` and G6's `todayContract.ts`, for
@@ -103,6 +103,15 @@ export interface ConfirmReplyRequest {
   readonly note: string;
 }
 
+/**
+ * The conversation a person chose for an ambiguous reply (lane g88, audit G07): one of the
+ * card's own candidates, by its opportunity.
+ */
+export interface ResolveReplyRequest {
+  readonly messageId: string;
+  readonly opportunityId: string;
+}
+
 export interface ReplyBridge {
   state(): Promise<ReplyState>;
   refresh(): Promise<ReplyState>;
@@ -112,6 +121,11 @@ export interface ReplyBridge {
    * no way to ask for it. */
   collapse(): Promise<ReplyState>;
   confirm(input: ConfirmReplyRequest): Promise<ReplyState>;
+  /**
+   * Lane g88: say which conversation an ambiguous reply belongs to. G7's resolution, and
+   * nothing more: it does not answer the reply, set the firm to manual or resume anything.
+   */
+  resolve(input: ResolveReplyRequest): Promise<ReplyState>;
 }
 
 declare global {

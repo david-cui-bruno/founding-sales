@@ -105,6 +105,7 @@ globalThis.callieReplies = {
   async open(input) { return await ask('open', input); },
   async collapse() { return await ask('collapse'); },
   async confirm(input) { return await ask('confirm', input); },
+  async resolve(input) { return await ask('resolve', input); },
 };
 async function ask(method, argument) {
   const response = await fetch('/bridge/' + method, {
@@ -185,6 +186,25 @@ export async function startReplyTestServer(initial: ReplyState): Promise<ReplyTe
             ...state,
             open: null,
             notice: disposition === 'not_interested' ? 'suggests_lost' : 'confirmed',
+          };
+        }
+        if (method === 'resolve' && state.open !== null) {
+          // Lane g88: G7's resolution picked a conversation; the card comes back asking
+          // what the reply means, with the chosen candidate marked.
+          const chosen = (argument as { opportunityId?: string } | null)?.opportunityId;
+          const open = state.open;
+          state = {
+            ...state,
+            open: {
+              ...open,
+              nextAction: 'confirm_disposition',
+              impact: {
+                ...open.impact,
+                ambiguous: false,
+                candidates: open.impact.candidates.map(candidate => ({ ...candidate, selected: candidate.opportunityId === chosen })),
+              },
+            },
+            notice: 'resolved',
           };
         }
         return send(200, 'application/json', JSON.stringify(state));

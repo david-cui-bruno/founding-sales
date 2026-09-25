@@ -3316,6 +3316,72 @@ Eight mutations are appended to `scripts/releaseMutationCheck.mjs` (200 → 208 
 
 **Still unverified.** Nothing here has run in the cloud. The lock's behaviour is measured only on embedded PostgreSQL 16. Google's limits of 2,000 messages and the Workspace recipient ceilings are taken from Google's published figures, not measured, and this lane had no network to re-read them. The ten-day streak and the 500-message reserve are this lane's numbers, not the specification's, and are David's to change.
 
+### 8.0au What lane g88 changed: a founder authors and starts a sequence, reviews a resume, picks a reply's conversation, and confirms a number (25 September)
+
+**What was wrong.** Seven items of the 25 September audit (`GPT6-ASTRA-EXHAUSTIVE-20260925.md`), and the gap 8.0aq left open:
+
+- **G03, P0.** No main-process handler answered the editor's `saveDraft`. Nothing wrote a template, and nothing on the Mac enrolled anybody, so no sequence could be started from the product.
+- **G06.** **Review and resume** resumed on the first press and showed nothing, where 4.3 asks for a review of the rendered future steps first.
+- **G07.** An ambiguous reply listed its candidates as text, and the window could not send G7's resolution, which the confirmation requires.
+- **G08.** Settings edited each slice as JSON and printed endpoint paths, lane names and raw codes. The sequence editor printed content hashes and stop-condition codes.
+- **C19.** A Won or Lost firm came back on Today as a new firm.
+- **C20.** An emptied contact title was dropped, not sent as null. Every contact save from the Mac was a 400, because the bridge did not send the `patch` shape the route reads.
+- **C21.** Already fixed by lane g84 (unplaced firms are listed under **Not in the pipeline yet**); nothing changed.
+- **Routes.** A captured phone number is `candidate`, a call refuses a candidate, and nothing on the Mac could make one usable.
+
+**What changed.** `docs/decisions/g88-founder-authoring-and-review.md` has the rules. The flows are in `docs/greenfield/sequences.md` ("Authoring and starting a sequence on the Mac"), `crm-surface.md` ("The windows") and `settings.md` ("How the page edits them").
+
+- **Authoring (Sequences window).**
+  - **New sequence** makes the sequence and its empty draft.
+  - **New template** takes a name, subject, email and sign-off. The bridge appends the sign-off and the stop line, and declares the variables the text names. The form refuses unknown variables, unsubscribe links and more than 89 words before sending.
+  - **Approve** is its own press, and a refusal lists every issue.
+  - The steps are typed controls: Call or Email, delay, template or no-answer action, with reorder and remove. **Start from the suggested plan** fills the editor and publishes nothing, and **Save draft** numbers the steps.
+  - **Publish** waits for a save.
+- **Enrolment (Firm page).** A Sequences section lists the enrolments running at the firm and enrols a contact in a published version. A firm with no opportunity gets **Add to pipeline** first.
+- **Review and resume.** The new read `POST /enrollments/resume/preview` is computed by the same `resumeDecisionFor` and `shiftDueInstant` the resume runs, and writes nothing. The window shows what held the enrollment and each step's *from → to* date in the firm's zone. **Resume with these dates** is the only control that resumes, and the bridge will not resume an enrollment whose review is not on screen.
+- **Which conversation (reply page).** One radio per candidate, and **This one** sends `POST /messages/resolve-ambiguity` with `human: false`. The bridge refuses an opportunity that is not one of the open card's candidates.
+- **Settings.** Typed controls replace JSON:
+  - a zone picker;
+  - a sending switch and reference;
+  - two version fields;
+  - labelled threshold numbers and a time.
+  Version, provenance and JSON are behind **Details**. Thresholds and versions are behind **Advanced**, and endpoints and lanes behind **Where each is changed**. Reasons are sentences.
+- **Confirm this number (Firm page).**
+  - What it does: `POST /contacts/routes/confirm` records the person as the validation (`passed`, confidence 1), lets the route policy decide, and bumps the version. The receipt and the `route.phone.confirmed` audit event record who confirmed the number and when.
+  - Refusals: a stale version is refused `route_version_stale`, a failed number `route_invalid`.
+  - Phone only: an address's validation is deliverability, which a person cannot supply, and the page says so.
+- **C19.** `newFirmSource` excludes a firm with any closed opportunity.
+- **C20.** The contact save is sent as `{ contactId, patch }`, with the title as given, including `null`.
+
+**No migration.** The schema range is unchanged.
+- New: two endpoints (`/enrollments/resume/preview`, `/contacts/routes/confirm`) and two CRM refusal codes that only the new endpoint returns.
+- Unchanged: no existing response changed shape.
+- The installed 1.0.5 calls neither endpoint.
+- Release class: an app-only API deployment (deploy and smoke), then a desktop release. **The API goes first**, because the new desktop calls both new endpoints.
+- `CONTAINER_CLIENT_VERSIONS` is not changed.
+
+**Test evidence, offline only.**
+
+- `test/release/founderAuthoring.check.ts` drives the shipped Sequences and CRM bridges through the real routes on embedded PostgreSQL:
+  1. A sequence is created. A template is written and approved, which the server allows only because the bridge appended the sign-off and stop line. The suggested plan is saved, then published.
+  2. A refused approval names all its issues past 80 characters.
+  3. A firm is added and its number confirmed: usable at version 2, with the actor in the audit. Enrolment is refused without an opportunity. After **Add to pipeline** it succeeds, and the first step is a call.
+  4. An emptied title is stored as null.
+  5. After a released nine-day hold, pressing resume opens the review without resuming. The confirmation then stores exactly the proposed due instant.
+- Domain: `test/sequences/resumePreview.test.ts`, `test/crm/routeConfirm.test.ts`, `test/today/newFirms.test.ts`.
+- API: `apps/api/test/founderGaps.test.ts`, with `wireDrift` empty and no receipt for the preview.
+- Desktop units: `founderGaps.test.ts` and `reply.test.ts`.
+- Playwright: `sequences.spec.ts`, `firmWorkspace.spec.ts`, `reply.spec.ts`, `settings.spec.ts`.
+
+Twelve mutations are appended to `scripts/releaseMutationCheck.mjs` (217 → 229 at the rebase onto PR 226). Each was applied by hand and turned its own test red.
+
+**Still unverified.** Nothing here has run in Electron or against production. Open:
+
+- Dates are formatted with `Intl` in the firm's zone, but only in Node and Chromium, not on a real Mac.
+- **Email routes still cannot become usable.** An email step to a contact whose only address is `candidate` will hold `route_candidate` once sending opens. A validator is the route policy's work and is owed before about 1 October.
+- Enrolment is from the Firm page only; Today has no enrol control.
+- The reply page's resolve is covered by the API, unit and Playwright tests, but not by a release check.
+
 ### 8.1 Still unverified
 
 Production was applied, deployed, bootstrapped and smoked at `66203322`, and redeployed at `02da3dd5` between 05:50Z and 05:57Z on 24 September, which carries the sign-in fix (8.0v). The signed desktop build is published at `66203322` (8.0t), and thirteen rehearsal runs have existed (8.0s, 8.0t, 8.0v, 8.0w). The first real sign-in was attempted against the `66203322` deployment and refused by the API's own discovery rule (8.0u); the retry against the g45 fix succeeded at 15:08Z, and showed that desktop 1.0.0 has no way to connect the mailbox (8.0x). Desktop 1.0.1 connected the first mailbox at about 18:10Z on 24 September. From 18:11Z CloudWatch refused every worker metric publication over one unit, and ECS replaced the worker every few minutes for failed health checks. That blackout lasts until the g51 fix is deployed (8.0y). What follows is what that still does not settle. Items 1 to 10 were written before any of it ran, and each carries whatever a later run answered; items 11 to 18 are what is open on 24 September, and the first of them is the release record this release does not have.

@@ -1,7 +1,18 @@
 import { localParts } from '@fss/contracts';
 import { element } from './firmDom.ts';
 import { POSTURES_HEADING, POSTURE_HINT, postureFormIssues, type PosturesSectionView } from './postureView.ts';
-import { adminViewOf } from './settingsView.ts';
+import {
+  ADVANCED_SETTINGS,
+  BUSINESS_ZONE_CHOICES,
+  SENDING_CHECK_LABELS,
+  adminViewOf,
+  inertSentence,
+  settingFields,
+  settingSummary,
+  settingValueFrom,
+  type SettingField,
+  type SettingRowView,
+} from './settingsView.ts';
 import type { AdminBridge, AdminScreen, AdminState, RecordPostureInput } from './settingsContract.ts';
 
 /**
@@ -16,11 +27,15 @@ import type { AdminBridge, AdminScreen, AdminState, RecordPostureInput } from '.
  * is the only way anything is written — so a prospect's name in a hold reason or a
  * refusal code cannot become markup.
  *
- * Editing a setting is a textarea of JSON rather than a bespoke form per slice.
- * That is a deliberate version-one choice and it is written down in
- * `docs/decisions/g9-settings-editing-is-json.md`: the server validates by key and
- * refuses with `invalid_value`, seven hand-built forms would be seven more places
- * for the contract to drift, and the person using this is the founder.
+ * Editing a setting was a textarea of JSON until lane g88 (audit G08,
+ * `docs/decisions/g88-founder-authoring-and-review.md`): the founder was typing braces to
+ * change a time zone. Each of the four slices now has typed controls — a zone picker, a
+ * switch and a reference, two version fields, the thresholds as numbers — built from
+ * `settingFields` and read back by `settingValueFrom`, and the server still validates
+ * by key and refuses with `invalid_value`. What was machinery — the version and when it
+ * changed, the value as JSON, the endpoints and lanes the other settings live in — is
+ * behind a "Details" disclosure. A slice this build does not know is edited as JSON
+ * there, so a slice the API gains is never uneditable.
  */
 
 const bridge = (): AdminBridge => {
@@ -107,69 +122,21 @@ function renderSettings(root: HTMLElement, view: ReturnType<typeof adminViewOf>)
     root.append(element('p', { className: 'sending', text: view.sending.line, testId: 'sending' }));
   }
 
+  const routine = view.settings.filter(row => !ADVANCED_SETTINGS.includes(row.settingKey));
+  const advanced = view.settings.filter(row => ADVANCED_SETTINGS.includes(row.settingKey));
   const list = element('ul', { className: 'settings', testId: 'settings' });
-  for (const row of view.settings) {
-    const item = element('li', { className: 'setting' });
-    item.dataset['testid'] = `setting-${row.settingKey}`;
-    item.append(element('h2', { text: row.label }));
-    item.append(element('p', { className: 'provenance', text: row.provenance }));
-
-    const editor = document.createElement('textarea');
-    editor.value = JSON.stringify(row.value, null, 2);
-    editor.disabled = !row.editable;
-    editor.dataset['testid'] = `value-${row.settingKey}`;
-    item.append(editor);
-
-    const note = document.createElement('input');
-    note.type = 'text';
-    note.placeholder = 'Why are you changing this?';
-    note.disabled = !row.editable;
-    note.dataset['testid'] = `note-${row.settingKey}`;
-    item.append(note);
-
-    const save = element('button', { text: 'Save' });
-    save.dataset['testid'] = `save-${row.settingKey}`;
-    (save as HTMLButtonElement).disabled = !row.editable;
-    save.addEventListener('click', () => {
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(editor.value);
-      } catch {
-        // Not a refusal from the server, so it is not a notice: the page says the
-        // value is not readable and sends nothing.
-        editor.setAttribute('aria-invalid', 'true');
-        return;
-      }
-      apply(
-        bridge().saveSetting({
-          settingKey: row.settingKey as Parameters<AdminBridge['saveSetting']>[0]['settingKey'],
-          value: parsed,
-          changeNote: note.value,
-        }),
-      );
-    });
-    item.append(save);
-
-    const history = element('button', { text: 'History' });
-    history.dataset['testid'] = `history-${row.settingKey}`;
-    history.addEventListener('click', () => {
-      apply(
-        bridge().openHistory({
-          settingKey: row.settingKey as Parameters<AdminBridge['openHistory']>[0]['settingKey'],
-        }),
-      );
-    });
-    item.append(history);
-
-    if (row.notEditableBecause !== null) {
-      item.append(element('p', { className: 'inert', text: row.notEditableBecause }));
-    }
-    if (view.history !== null && view.history.settingKey === row.settingKey) {
-      renderHistory(item, view.history);
-    }
-    list.append(item);
-  }
+  for (const row of routine) list.append(renderSettingRow(row, view));
   root.append(list);
+  if (advanced.length > 0) {
+    // Alarm thresholds and the supported versions are the release's business more than
+    // the founder's day, so they are one click further away (lane g88).
+    const more = element('details', { className: 'settings-advanced', testId: 'settings-advanced' });
+    more.append(element('summary', { text: 'Advanced: alarm thresholds and supported Callie versions' }));
+    const advancedList = element('ul', { className: 'settings', testId: 'settings-advanced-list' });
+    for (const row of advanced) advancedList.append(renderSettingRow(row, view));
+    more.append(advancedList);
+    root.append(more);
+  }
 
   const stages = element('ul', { className: 'stages', testId: 'stages' });
   for (const stage of view.stages) {
@@ -183,7 +150,7 @@ function renderSettings(root: HTMLElement, view: ReturnType<typeof adminViewOf>)
       });
       item.append(retire);
     } else if (stage.note !== null) {
-      item.append(element('span', { className: 'inert', text: stage.note }));
+      item.append(element('span', { className: 'inert', text: inertSentence(stage.note) }));
     }
     stages.append(item);
   }
@@ -192,18 +159,191 @@ function renderSettings(root: HTMLElement, view: ReturnType<typeof adminViewOf>)
   renderHolidays(root, view);
   renderSendingAdmin(root, view);
 
-  const elsewhere = element('ul', { className: 'elsewhere', testId: 'elsewhere' });
+  // The settings stored elsewhere, by what they are; where each is changed — the endpoint
+  // and the lane that owns it — is support detail, behind the disclosure (lane g88).
+  const elsewhere = element('div', { className: 'elsewhere-block', testId: 'elsewhere' });
+  elsewhere.append(element('h2', { text: 'Configured elsewhere' }));
+  const topics = element('ul', { className: 'elsewhere' });
   for (const entry of view.elsewhere) {
-    elsewhere.append(
+    topics.append(
       element('li', {
-        text:
-          entry.editedHere === null
-            ? `${entry.topic} — ${entry.path} (${entry.ownedBy})`
-            : `${entry.topic} — edited on this page, under ${entry.editedHere}`,
+        text: entry.editedHere === null ? entry.topic : `${entry.topic} — edited on this page, under ${entry.editedHere}`,
       }),
     );
   }
+  elsewhere.append(topics);
+  const where = view.elsewhere.filter(entry => entry.editedHere === null);
+  if (where.length > 0) {
+    const details = element('details', { className: 'setting-details', testId: 'elsewhere-details' });
+    details.append(element('summary', { text: 'Where each is changed' }));
+    for (const entry of where) {
+      details.append(element('p', { className: 'inert', text: `${entry.topic}: ${entry.path} (${entry.ownedBy})` }));
+    }
+    elsewhere.append(details);
+  }
   root.append(elsewhere);
+}
+
+/** One typed control, labelled, with the test id the specs find it by. */
+function renderField(parent: HTMLElement, settingKey: string, field: SettingField, editable: boolean): () => string | boolean {
+  const wrapper = element('div', { className: 'field' });
+  const id = `field-${settingKey}-${field.key}`;
+  const label = element('label', { text: field.label });
+  label.htmlFor = id;
+  if (field.kind === 'toggle') {
+    const box = element('input', { testId: id });
+    box.type = 'checkbox';
+    box.id = id;
+    box.checked = field.value;
+    box.disabled = !editable;
+    const line = element('label', { className: 'posture-statement' });
+    line.htmlFor = id;
+    line.append(box, element('span', { text: field.label }));
+    wrapper.append(line);
+    parent.append(wrapper);
+    return () => box.checked;
+  }
+  if (field.kind === 'zone') {
+    const zone = element('select', { testId: id });
+    zone.id = id;
+    for (const choice of BUSINESS_ZONE_CHOICES) {
+      const option = element('option', { text: choice.label });
+      option.value = choice.value;
+      zone.append(option);
+    }
+    // A zone the list does not name is still what is in force, and is shown.
+    if (!BUSINESS_ZONE_CHOICES.some(choice => choice.value === field.value)) {
+      const option = element('option', { text: field.value });
+      option.value = field.value;
+      zone.append(option);
+    }
+    zone.value = field.value;
+    zone.disabled = !editable;
+    wrapper.append(label, zone);
+    parent.append(wrapper);
+    return () => zone.value;
+  }
+  const input = element('input', { testId: id });
+  input.id = id;
+  input.disabled = !editable;
+  input.autocomplete = 'off';
+  if (field.kind === 'number') {
+    input.type = 'number';
+    input.min = String(field.min);
+    input.max = String(field.max);
+    input.step = String(field.step);
+    input.value = String(field.value);
+  } else if (field.kind === 'time') {
+    input.type = 'time';
+    input.value = field.value;
+  } else {
+    input.type = 'text';
+    input.value = field.value;
+  }
+  wrapper.append(label, input);
+  if (field.kind === 'text' && field.hint !== null) wrapper.append(element('p', { className: 'hint', text: field.hint }));
+  parent.append(wrapper);
+  return () => input.value;
+}
+
+/**
+ * One setting (lane g88, audit G08): its name, its value in words, typed controls, a note
+ * and Save; History beside Save; and the version, when it changed and the value as JSON
+ * behind "Details".
+ */
+function renderSettingRow(row: SettingRowView, view: ReturnType<typeof adminViewOf>): HTMLElement {
+  const item = element('li', { className: 'setting' });
+  item.dataset['testid'] = `setting-${row.settingKey}`;
+  item.append(element('h2', { text: row.label }));
+  const summary = settingSummary(row.settingKey, row.value);
+  if (summary !== '') item.append(element('p', { className: 'inert', text: summary, testId: `summary-${row.settingKey}` }));
+
+  const fields = settingFields(row.settingKey, row.value);
+  const controls = element('fieldset', { className: 'setting-fields', testId: `value-${row.settingKey}` });
+  controls.disabled = !row.editable;
+  // A disabled fieldset disables every control in it; `aria-disabled` says so to
+  // assistive technology, which reads the group rather than the attribute.
+  if (!row.editable) controls.setAttribute('aria-disabled', 'true');
+  const readers = new Map<string, () => string | boolean>();
+  let raw: HTMLTextAreaElement | null = null;
+  if (fields === null) {
+    // A slice this build has no form for: the JSON, as before, so it stays editable.
+    raw = document.createElement('textarea');
+    raw.value = JSON.stringify(row.value, null, 2);
+    raw.disabled = !row.editable;
+    controls.append(raw);
+  } else {
+    for (const field of fields) readers.set(field.key, renderField(controls, row.settingKey, field, row.editable));
+  }
+  item.append(controls);
+
+  const note = document.createElement('input');
+  note.type = 'text';
+  note.placeholder = 'Why are you changing this?';
+  note.disabled = !row.editable;
+  note.dataset['testid'] = `note-${row.settingKey}`;
+  item.append(note);
+
+  const actions = element('div', { className: 'form-actions' });
+  const save = element('button', { className: 'btn-primary', text: 'Save' });
+  save.dataset['testid'] = `save-${row.settingKey}`;
+  (save as HTMLButtonElement).disabled = !row.editable;
+  save.addEventListener('click', () => {
+    let value: unknown;
+    if (raw !== null) {
+      try {
+        value = JSON.parse(raw.value);
+      } catch {
+        // Not a refusal from the server, so it is not a notice: the page marks the value
+        // unreadable and sends nothing.
+        raw.setAttribute('aria-invalid', 'true');
+        return;
+      }
+    } else {
+      const values: Record<string, string | boolean> = {};
+      for (const [key, reader] of readers) values[key] = reader();
+      const built = settingValueFrom(row.settingKey, values);
+      if (!built.ok) {
+        controls.querySelector(`[data-testid="field-${row.settingKey}-${built.field}"]`)?.setAttribute('aria-invalid', 'true');
+        return;
+      }
+      value = built.value;
+    }
+    apply(
+      bridge().saveSetting({
+        settingKey: row.settingKey as Parameters<AdminBridge['saveSetting']>[0]['settingKey'],
+        value,
+        changeNote: note.value,
+      }),
+    );
+  });
+  actions.append(save);
+
+  const history = element('button', { className: 'btn-quiet', text: 'History' });
+  history.dataset['testid'] = `history-${row.settingKey}`;
+  history.addEventListener('click', () => {
+    apply(
+      bridge().openHistory({
+        settingKey: row.settingKey as Parameters<AdminBridge['openHistory']>[0]['settingKey'],
+      }),
+    );
+  });
+  actions.append(history);
+  item.append(actions);
+
+  if (row.notEditableBecause !== null) {
+    item.append(element('p', { className: 'inert', text: inertSentence(row.notEditableBecause) }));
+  }
+  const details = element('details', { className: 'setting-details', testId: `details-${row.settingKey}` });
+  details.append(element('summary', { text: 'Details' }));
+  details.append(element('p', { className: 'provenance', text: row.provenance }));
+  details.append(element('pre', { text: JSON.stringify(row.value, null, 2), testId: `json-${row.settingKey}` }));
+  item.append(details);
+
+  if (view.history !== null && view.history.settingKey === row.settingKey) {
+    renderHistory(item, view.history);
+  }
+  return item;
 }
 
 /**
@@ -287,7 +427,7 @@ function renderCallingNumber(root: HTMLElement, view: ReturnType<typeof adminVie
 
   block.append(element('p', { className: 'hint', text: section.hint }));
   if (section.notEditableBecause !== null) {
-    block.append(element('p', { className: 'inert', text: section.notEditableBecause }));
+    block.append(element('p', { className: 'inert', text: inertSentence(section.notEditableBecause) }));
   }
   root.append(block);
 }
@@ -560,7 +700,7 @@ function renderHolidays(root: HTMLElement, view: ReturnType<typeof adminViewOf>)
   block.append(save);
 
   if (holidays.notEditableBecause !== null) {
-    block.append(element('p', { className: 'inert', text: holidays.notEditableBecause }));
+    block.append(element('p', { className: 'inert', text: inertSentence(holidays.notEditableBecause) }));
   }
   root.append(block);
 }
@@ -596,7 +736,7 @@ function renderSendingAdmin(root: HTMLElement, view: ReturnType<typeof adminView
     const domain = section.domain;
     const boxes = (['spfPass', 'dkimPass', 'dmarcPass', 'postmasterReviewed', 'automatedSendingEnabled'] as const).map(
       name => {
-        const label = element('label', { text: name });
+        const label = element('label', { text: SENDING_CHECK_LABELS[name] ?? name });
         const box = document.createElement('input');
         box.type = 'checkbox';
         box.disabled = !section.editable;
