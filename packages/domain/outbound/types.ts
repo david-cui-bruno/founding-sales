@@ -174,3 +174,34 @@ export function fenceIdOfMessageId(header: string): string | null {
   const match = /^<fss\.([0-9a-f-]{36})@[^<>@]+>$/.exec(header.trim());
   return match?.[1] ?? null;
 }
+
+const CANONICAL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+
+/**
+ * The fence id a message in one mailbox's Sent folder carries, if FSS sent it from that
+ * mailbox, or null (Appendix E step 3, lane g73).
+ *
+ * The marker is the *whole* deterministic Message-ID, not a prefix of it:
+ * `<fss.{fence uuid}@{the sending mailbox's domain}>`, exactly as
+ * `deterministicMessageId` writes it from the mailbox `prepareOutboundMessage` resolved.
+ * Every FSS send carries it, because the header is written into the fence before the
+ * one Gmail call and the MIME builder copies it verbatim; nothing else Gmail or a person
+ * sends does, because Gmail mints `<CA…@mail.gmail.com>` ids for everything it composes.
+ *
+ * The domain is part of the marker for the step that reads it. A message in this
+ * mailbox's Sent folder whose id has the `fss.<uuid>` shape but another domain was not
+ * written by FSS for this mailbox — a copy, a forward that kept the header, another
+ * system's scheme — and step 3 must not turn it into a tombstone that stops a real step
+ * from sending. Never a subject or body heuristic: those are what a person types.
+ */
+export function fssFenceIdOfSentMessage(header: string, mailboxAddress: string): string | null {
+  const trimmed = header.trim();
+  const fenceId = fenceIdOfMessageId(trimmed);
+  // A fence id is a canonical uuid, because `gen_random_uuid()` minted it. The looser
+  // shape `fenceIdOfMessageId` accepts would let thirty-six hyphens reach a uuid cast
+  // and stop a restore with an exception instead of ignoring a message that is not ours.
+  if (fenceId === null || !CANONICAL_UUID.test(fenceId)) return null;
+  const domain = trimmed.slice(trimmed.lastIndexOf('@') + 1, -1).toLowerCase();
+  const sendingDomain = mailboxAddress.slice(mailboxAddress.lastIndexOf('@') + 1).trim().toLowerCase();
+  return domain === sendingDomain ? fenceId : null;
+}

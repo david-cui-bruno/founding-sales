@@ -319,6 +319,29 @@ describe('the Gmail HTTP client', () => {
     expect(new URL(lastRequest().url, origin).searchParams.get('q')).toBe('after:1757000000 before:1758000000');
   });
 
+  it('lists the Sent folder by the same epoch-second bounds, trash included (lane g73)', async () => {
+    answer('/gmail/v1/users/me/messages', 200, { messages: [{ id: 'm-6' }], nextPageToken: 'next' });
+    const listed = await client.listSentMessageIds(access, {
+      afterEpochSeconds: 1_757_000_000,
+      beforeEpochSeconds: 1_758_000_000,
+      maxResults: 500,
+      pageToken: 'first',
+    });
+    expect(listed).toEqual({ ok: true, messageIds: ['m-6'], nextPageToken: 'next' });
+    const params = new URL(lastRequest().url, origin).searchParams;
+    expect(params.get('q')).toBe('in:sent after:1757000000 before:1758000000');
+    expect(params.get('includeSpamTrash')).toBe('true');
+    expect(params.get('pageToken')).toBe('first');
+
+    answer('/gmail/v1/users/me/messages', 429, { error: { code: 429 } });
+    const limited = await client.listSentMessageIds(access, {
+      afterEpochSeconds: 1_757_000_000,
+      beforeEpochSeconds: 1_758_000_000,
+      maxResults: 500,
+    });
+    expect(limited).toEqual({ ok: false, reason: 'rate_limited' });
+  });
+
   it('registers and stops a watch, and reads a refusal as a refusal', async () => {
     answer('/gmail/v1/users/me/watch', 200, { historyId: '1100', expiration: '1758600000000' });
     const registered = await client.watch(access, { topicName: 'projects/callie-fss/topics/fss-test-gmail-push' });

@@ -31,6 +31,8 @@ import {
   processMessageIds,
   readMailboxForOwner,
   recordedGmailClient,
+  recordedSentMessageId,
+  recordedSentThreadId,
   runMailRecovery,
   startRecovery,
   storeRefreshToken,
@@ -119,6 +121,9 @@ import type { MailWorkerOptions } from '../../handlers/mail.ts';
  * restored copy; `in-flight` is a send left in doubt just before the restore target, for
  * step 3; `after` runs once the restore is requested and adds the activity the restore
  * loses — a send, a CRM edit, and a prospect's journalled opt-out for steps 2 and 4.
+ * Lane g73 adds the send step 3's missing-fence recovery needs: an enrollment made in
+ * `before`, whose step the `after` phase sends, so the restored copy holds the step
+ * pending with no fence while the Sent folder holds its message.
  * Each phase reports what its recorded mailbox holds (`MailboxRecording`), because the
  * drill's own recorded client, in another task, can know the mailbox only from that.
  *
@@ -155,7 +160,10 @@ import type { MailWorkerOptions } from '../../handlers/mail.ts';
  *     the Sent folder proves.
  *   * `after` — run by the drill script once the restore has been requested, so the
  *     restore deterministically loses it: a second send, a second CRM edit, and a
- *     prospect's opt-out, journalled, which is what steps 2 and 4 reconstruct.
+ *     prospect's opt-out, journalled, which is what steps 2 and 4 reconstruct. Lane g73:
+ *     and the send of a step the `before` phase enrolled, whose fence the restored copy
+ *     therefore never has while its step is still there, pending — Appendix E.3's
+ *     "missing fence", which step 3 must tombstone and step 5 must not send again.
  */
 export type DrillEvidencePhase = 'before' | 'in-flight' | 'after';
 
@@ -187,6 +195,13 @@ export interface MailboxRecording {
   readonly historyId: string;
   readonly sentMessageIds: readonly string[];
   readonly messages: readonly GmailFixtureMessage[];
+  /**
+   * The Sent folder's messages, with the metadata a listing returns (lane g73): the
+   * Message-ID, the recipient, the subject and the instant. Step 3 lists the folder for
+   * the sends whose fence the restore lost, and a list of Message-IDs cannot be listed.
+   * Built from the fences the phase vouches for, so a re-run records the same thing.
+   */
+  readonly sentMessages: readonly GmailFixtureMessage[];
 }
 
 export interface DrillEvidenceReport {
@@ -312,7 +327,7 @@ interface EvidenceFirmSpec {
 }
 
 const FIRMS: Readonly<
-  Record<'send' | 'optOut' | 'manual' | 'after' | 'lateOptOut' | 'inFlight', EvidenceFirmSpec>
+  Record<'send' | 'optOut' | 'manual' | 'after' | 'lateOptOut' | 'inFlight' | 'restoreLost', EvidenceFirmSpec>
 > = Object.freeze({
   send: {
     key: 'send',
@@ -366,7 +381,30 @@ const FIRMS: Readonly<
     address: `in-flight@${EVIDENCE_DOMAIN}`,
     opportunity: true,
   },
+  // Lane g73. Enrolled in the `before` phase, so the restored copy has the enrollment
+  // and its pending step; sent in the `after` phase, so the restored copy has no fence.
+  restoreLost: {
+    key: 'restore-lost',
+    name: 'Drill Evidence Restore Lost Send',
+    website: `https://restore-lost.${EVIDENCE_DOMAIN}`,
+    contactName: 'Drill Evidence Restore Lost Contact',
+    address: `restore-lost@${EVIDENCE_DOMAIN}`,
+    opportunity: true,
+  },
 });
+
+/**
+ * The sequence the restore-lost enrollment is in (lane g73): one email step, due thirty
+ * days after enrolment.
+ *
+ * Delayed so that nothing but the `after` phase sends it. A rehearsal's worker is
+ * running against the source while the phases run, and a step due at once would be the
+ * worker's to prepare — its fence would then exist before the restore point, and the
+ * restored copy would hold a `prepared` or `held` fence rather than none. 720 hours is
+ * well under the schema's 8,760 and far past any rehearsal. The `after` phase prepares
+ * and dispatches the step directly, as every seeded send does.
+ */
+const LOST_SEND_SEQUENCE = Object.freeze({ name: 'Drill evidence, restore-lost send', delayHours: 720 });
 
 /**
  * The name the ordinary CRM edit sets, per phase.
@@ -587,9 +625,13 @@ interface Sequence {
   readonly outcome: DrillEvidenceOutcome;
 }
 
-async function ensureSequence(context: RepositoryContext, templateVersionId: string): Promise<Sequence> {
+async function ensureSequence(
+  context: RepositoryContext,
+  templateVersionId: string,
+  spec: { readonly name: string; readonly delayHours: number } = { name: SEQUENCE_NAME, delayHours: 0 },
+): Promise<Sequence> {
   const sequences = await listSequences(context);
-  const found = sequences.find(sequence => sequence.name === SEQUENCE_NAME);
+  const found = sequences.find(sequence => sequence.name === spec.name);
   if (found !== undefined) {
     const versions = await listSequenceVersions(context, found.id);
     const published = versions.find(version => version.state === 'published');
@@ -597,7 +639,7 @@ async function ensureSequence(context: RepositoryContext, templateVersionId: str
   }
   let sequenceId = found?.id;
   if (sequenceId === undefined) {
-    const created = await createSequence(context, { name: SEQUENCE_NAME });
+    const created = await createSequence(context, { name: spec.name });
     if (!created.ok) throw new EvidenceRefusal('sequence', `createSequence refused with ${created.reason}`);
     sequenceId = created.value.id;
   }
@@ -607,7 +649,7 @@ async function ensureSequence(context: RepositoryContext, templateVersionId: str
   // honest shape for a one-step sequence.
   const draft = await createDraftVersion(context, {
     sequenceId,
-    steps: [{ ordinal: 1, channel: 'email', delay: { unit: 'elapsed', hours: 0 }, templateVersionId }],
+    steps: [{ ordinal: 1, channel: 'email', delay: { unit: 'elapsed', hours: spec.delayHours }, templateVersionId }],
   });
   if (!draft.ok) throw new EvidenceRefusal('sequence', `createDraftVersion refused with ${draft.reason}`);
   const published = await publishVersion(context, { sequenceVersionId: draft.value.sequenceVersionId });
@@ -757,6 +799,48 @@ interface SendMaterials {
  * writes one — it and the enrollment are a single statement so that neither can exist
  * without the other.
  */
+/**
+ * The seeded contact's first step execution, enrolling the contact when it has none.
+ *
+ * `enrollContact` is the only exported writer of a step execution, and it writes the
+ * enrollment and the first step in one statement. Found again by contact on a re-run.
+ */
+async function ensureStepExecution(
+  context: RepositoryContext,
+  session: SessionQueryable,
+  workspace: Workspace,
+  seeded: SeededFirm,
+  sequenceVersionId: string,
+  step = 'send',
+): Promise<{ readonly id: string; readonly outcome: DrillEvidenceOutcome }> {
+  const opportunity = seeded.opportunity;
+  if (opportunity === null) throw new EvidenceRefusal(step, 'the sending firm has no open opportunity');
+
+  const { rows: executions } = await session.query<{ id: string }>(
+    `SELECT e.id FROM step_executions AS e
+       JOIN sequence_enrollments AS n ON n.workspace_id = e.workspace_id AND n.id = e.enrollment_id
+      WHERE e.workspace_id = $1 AND e.contact_id = $2
+      ORDER BY e.created_at, e.id
+      LIMIT 1`,
+    [workspace.id, seeded.contactId],
+  );
+  const found = executions[0]?.id;
+  if (found !== undefined) return { id: found, outcome: 'existing' };
+  const enrolled = await withTransaction(
+    session,
+    async () =>
+      await enrollContact(context, {
+        sequenceVersionId,
+        opportunityId: opportunity.id,
+        firmId: seeded.firm.id,
+        contactId: seeded.contactId,
+        assignedUserId: workspace.adminUserId,
+      }),
+  );
+  if (!enrolled.ok) throw new EvidenceRefusal(step, `enrollContact refused with ${enrolled.reason}`);
+  return { id: enrolled.value.firstExecutionId, outcome: 'created' };
+}
+
 async function prepareSeededFence(
   context: RepositoryContext,
   session: SessionQueryable,
@@ -768,31 +852,7 @@ async function prepareSeededFence(
 ): Promise<string> {
   const opportunity = seeded.opportunity;
   if (opportunity === null) throw new EvidenceRefusal('send', 'the sending firm has no open opportunity');
-
-  const { rows: executions } = await session.query<{ id: string }>(
-    `SELECT e.id FROM step_executions AS e
-       JOIN sequence_enrollments AS n ON n.workspace_id = e.workspace_id AND n.id = e.enrollment_id
-      WHERE e.workspace_id = $1 AND e.contact_id = $2
-      ORDER BY e.created_at, e.id
-      LIMIT 1`,
-    [workspace.id, seeded.contactId],
-  );
-  let stepExecutionId = executions[0]?.id;
-  if (stepExecutionId === undefined) {
-    const enrolled = await withTransaction(
-      session,
-      async () =>
-        await enrollContact(context, {
-          sequenceVersionId,
-          opportunityId: opportunity.id,
-          firmId: seeded.firm.id,
-          contactId: seeded.contactId,
-          assignedUserId: workspace.adminUserId,
-        }),
-    );
-    if (!enrolled.ok) throw new EvidenceRefusal('send', `enrollContact refused with ${enrolled.reason}`);
-    stepExecutionId = enrolled.value.firstExecutionId;
-  }
+  const stepExecutionId = (await ensureStepExecution(context, session, workspace, seeded, sequenceVersionId)).id;
 
   const prepared = await prepareOutboundMessage(context, {
     stepExecutionId,
@@ -1118,13 +1178,63 @@ async function deliverInbound(
   return existing;
 }
 
+/**
+ * The Sent folder's messages for the Message-IDs a phase vouches for (lane g73), built
+ * from their fences: the Gmail ids the recorded client gives a message with that id, the
+ * recipient and subject the fence froze, and the instant it left — `sent_at`, or the
+ * dispatch instant of a send left in doubt. From the fences rather than from the
+ * client, so a re-run that sent nothing records exactly what the first run did.
+ */
+async function sentFolderOf(
+  session: SessionQueryable,
+  workspaceId: string,
+  headers: readonly string[],
+): Promise<readonly GmailFixtureMessage[]> {
+  if (headers.length === 0) return [];
+  const { rows } = await session.query<{
+    provider_message_id_header: string;
+    recipient_address: string;
+    subject: string;
+    at: Date;
+  }>(
+    `SELECT provider_message_id_header, recipient_address, subject, coalesce(sent_at, dispatch_started_at) AS at
+       FROM outbound_messages
+      WHERE workspace_id = $1 AND provider_message_id_header = ANY($2::text[])
+        AND coalesce(sent_at, dispatch_started_at) IS NOT NULL
+      ORDER BY provider_message_id_header`,
+    [workspaceId, [...headers]],
+  );
+  return rows.map(row => ({
+    id: recordedSentMessageId(row.provider_message_id_header),
+    threadId: recordedSentThreadId(row.provider_message_id_header),
+    internalDateEpochMilliseconds: row.at.getTime(),
+    labelIds: ['SENT'],
+    headers: {
+      'Message-ID': row.provider_message_id_header,
+      To: row.recipient_address,
+      Subject: row.subject,
+    },
+    historyId: '1',
+  }));
+}
+
 /** The recording a phase reports: the Sent folder it can vouch for and the messages it delivered. */
-function recordingOf(sent: Iterable<string>, messages: readonly GmailFixtureMessage[]): MailboxRecording {
+function recordingOf(
+  sent: Iterable<string>,
+  messages: readonly GmailFixtureMessage[],
+  sentMessages: readonly GmailFixtureMessage[],
+): MailboxRecording {
   const sentMessageIds = [...new Set(sent)].sort();
   // The mailbox's current id is the latest of its messages', compared as Gmail's uint64
   // ids and never through `Number` (lane g76).
   const historyId = messages.reduce((latest, message) => laterHistoryId(latest, message.historyId), '1');
-  return { emailAddress: MAILBOX_ADDRESS, historyId, sentMessageIds, messages: [...messages] };
+  return {
+    emailAddress: MAILBOX_ADDRESS,
+    historyId,
+    sentMessageIds,
+    messages: [...messages],
+    sentMessages: [...sentMessages],
+  };
 }
 
 export async function seedDrillEvidence(input: DrillEvidenceInput): Promise<DrillEvidenceResult> {
@@ -1383,7 +1493,45 @@ export async function seedDrillEvidence(input: DrillEvidenceInput): Promise<Dril
         // A hold step 9 has to leave in force (4.3).
         const pause = await ensureAdministrativePause(admin, session, workspace, optOut);
         note('administrative_pause', pause.outcome, pause.id);
+        // Lane g73: the enrollment whose step the `after` phase sends. Its step is
+        // pending in the restored copy and its fence is not, which is the case
+        // Appendix E.3's missing-fence recovery exists for.
+        const restoreLost = await ensureFirm(admin, workspace, FIRMS.restoreLost);
+        note('restore_lost_firm', restoreLost.outcome, restoreLost.firm.id);
+        const lostSequence = await ensureSequence(admin, template.id, LOST_SEND_SEQUENCE);
+        note('restore_lost_sequence', lostSequence.outcome, lostSequence.versionId);
+        const lostStep = await ensureStepExecution(
+          worker,
+          session,
+          workspace,
+          restoreLost,
+          lostSequence.versionId,
+          'restore_lost_enrollment',
+        );
+        note('restore_lost_enrollment', lostStep.outcome, lostStep.id);
       } else {
+        // ---- the send whose fence the restore loses and whose step it keeps (g73) --
+        //
+        // The step the `before` phase enrolled, prepared and dispatched now through the
+        // real path and the recorded client, so its message is in the Sent folder and its
+        // fence only in the source. The restored copy holds the step pending with no
+        // fence: step 3 must find the message, tombstone the step, and step 5 must not
+        // send it again.
+        const restoreLost = await ensureFirm(admin, workspace, FIRMS.restoreLost);
+        const lostSequence = await ensureSequence(admin, template.id, LOST_SEND_SEQUENCE);
+        const lostSend = await ensureAcceptedSend(
+          worker,
+          session,
+          workspace,
+          restoreLost,
+          template,
+          lostSequence.versionId,
+          { gmail, oauth: mail.oauth, cipher: mail.cipher },
+          at,
+        );
+        note('restore_lost_send', lostSend.outcome, lostSend.outboundMessageId);
+        vouchedSent.push(lostSend.messageIdHeader);
+
         // ---- the prospect opt-out the restore loses (lane g59) ----------------
         //
         // After the restore has been requested, so the restored copy never sees it. It
@@ -1436,7 +1584,11 @@ export async function seedDrillEvidence(input: DrillEvidenceInput): Promise<Dril
         workspaceSlug: workspace.slug,
         phase,
         adminUserId: workspace.adminUserId,
-        mailbox: recordingOf(vouchedSent, inbox.recorded),
+        mailbox: recordingOf(
+          vouchedSent,
+          inbox.recorded,
+          await sentFolderOf(session, workspace.id, [...new Set(vouchedSent)]),
+        ),
         items,
         asOf: counts.asOf,
         sends: counts.sends,

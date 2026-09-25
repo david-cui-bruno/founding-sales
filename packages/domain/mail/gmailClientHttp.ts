@@ -239,6 +239,43 @@ export function createGmailHttpClient(options: GmailHttpOptions): GmailClient {
     return { status: response.status, json: parseJson(response.body) };
   };
 
+  /**
+   * One page of message ids matching `q`, bounded by epoch seconds (Appendix D: never an
+   * ambiguous date string). `prefix` narrows the search; the bounds are always the
+   * request's own.
+   */
+  const listIds = async (
+    access: GmailAccessGrant,
+    prefix: string,
+    request: GmailListRequest,
+    failure: string,
+  ): Promise<GmailListOutcome> => {
+    const response = await api(
+      access,
+      '/gmail/v1/users/me/messages',
+      {
+        q: `${prefix}after:${String(request.afterEpochSeconds)} before:${String(request.beforeEpochSeconds)}`,
+        maxResults: String(request.maxResults),
+        includeSpamTrash: 'true',
+        ...(request.pageToken === undefined ? {} : { pageToken: request.pageToken }),
+      },
+    );
+    if (response.status !== 200) {
+      const classified = classifyStatus(response.status, response.body);
+      if (classified === 'grant_revoked') return { ok: false, reason: 'grant_revoked' };
+      if (classified === 'rate_limited') return { ok: false, reason: 'rate_limited' };
+      throw new GmailClientError('unexpected_status', failure, response.status);
+    }
+    const json = parseJson(response.body);
+    const messageIds: string[] = [];
+    for (const member of Array.isArray(json?.['messages']) ? (json['messages'] as unknown[]) : []) {
+      if (typeof member !== 'object' || member === null) continue;
+      const id = asString((member as Json)['id']);
+      if (id !== null) messageIds.push(id);
+    }
+    return { ok: true, messageIds, nextPageToken: asString(json?.['nextPageToken']) };
+  };
+
   return {
     authorizationUrl(config, input): string {
       const url = new URL(config.authorizationEndpoint);
@@ -420,33 +457,14 @@ export function createGmailHttpClient(options: GmailHttpOptions): GmailClient {
       return { ok: true, records, nextPageToken: asString(json?.['nextPageToken']), historyId };
     },
 
-    listMessageIds: async (access, request: GmailListRequest): Promise<GmailListOutcome> => {
-      // Appendix D: epoch seconds, never an ambiguous date string.
-      const response = await api(
-        access,
-        '/gmail/v1/users/me/messages',
-        {
-          q: `after:${String(request.afterEpochSeconds)} before:${String(request.beforeEpochSeconds)}`,
-          maxResults: String(request.maxResults),
-          includeSpamTrash: 'true',
-          ...(request.pageToken === undefined ? {} : { pageToken: request.pageToken }),
-        },
-      );
-      if (response.status !== 200) {
-        const failure = classifyStatus(response.status, response.body);
-        if (failure === 'grant_revoked') return { ok: false, reason: 'grant_revoked' };
-        if (failure === 'rate_limited') return { ok: false, reason: 'rate_limited' };
-        throw new GmailClientError('unexpected_status', 'the Gmail message listing failed', response.status);
-      }
-      const json = parseJson(response.body);
-      const messageIds: string[] = [];
-      for (const member of Array.isArray(json?.['messages']) ? (json['messages'] as unknown[]) : []) {
-        if (typeof member !== 'object' || member === null) continue;
-        const id = asString((member as Json)['id']);
-        if (id !== null) messageIds.push(id);
-      }
-      return { ok: true, messageIds, nextPageToken: asString(json?.['nextPageToken']) };
-    },
+    listMessageIds: async (access, request: GmailListRequest): Promise<GmailListOutcome> =>
+      await listIds(access, '', request, 'the Gmail message listing failed'),
+
+    // Lane g73: the same listing, narrowed to the Sent folder. Trashed messages stay in
+    // (`includeSpamTrash`), because a salesperson who deleted an FSS email from Sent did
+    // not unsend it, and Appendix E step 3 is looking for sends, not for tidy folders.
+    listSentMessageIds: async (access, request: GmailListRequest): Promise<GmailListOutcome> =>
+      await listIds(access, 'in:sent ', request, 'the Gmail Sent folder listing failed'),
 
     getMetadata: async (access, messageId, headers): Promise<GmailMessageMetadata | null> => {
       const response = await api(

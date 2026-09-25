@@ -96,9 +96,36 @@ export async function readUnresolvedExceptions(db: Queryable): Promise<Unresolve
   };
 }
 
+/**
+ * What step 3's Sent-folder scan could not settle (lane g73), carried into step 8 from
+ * its report because nothing in the database records it: a send with no fence has no
+ * row, and a folder that could not be read has left no trace.
+ *
+ *   * `unattached_sent_message` — an FSS send whose fence the restore lost and which no
+ *     single step could be named for, while a live enrollment could still write to its
+ *     recipient. `id` is the hash of its Message-ID.
+ *   * `sent_folder_unscanned` — a mailbox whose Sent folder the scan could not finish
+ *     reading (a revoked grant, a rate limit, more messages than one pass reads). `id`
+ *     is the mailbox.
+ *
+ * Either one means a send the restored database does not know about may exist, so the
+ * restore holds must not come off (Appendix E step 9) until an operator has dealt with it.
+ */
+export interface UnresolvedSentFolderItem {
+  readonly kind: 'unattached_sent_message' | 'sent_folder_unscanned';
+  readonly workspaceId: string;
+  readonly id: string;
+  readonly detail: string;
+}
+
 /** One line of the report's `unresolved` list: what it is, and which row it is. */
 export interface UnresolvedEntry {
-  readonly kind: 'reconciling' | 'unknown_terminal' | 'ambiguous_hold';
+  readonly kind:
+    | 'reconciling'
+    | 'unknown_terminal'
+    | 'ambiguous_hold'
+    | 'unattached_sent_message'
+    | 'sent_folder_unscanned';
   readonly workspaceId: string;
   readonly id: string;
   readonly detail: string;
@@ -156,6 +183,8 @@ export interface ComposeRestoreReportInput {
   readonly sendsRepeated: number;
   readonly crmRpoSeconds: number;
   readonly unresolved: UnresolvedExceptions;
+  /** Step 3's unsettled Sent-folder items (lane g73), from its report. */
+  readonly sentFolder?: readonly UnresolvedSentFolderItem[] | undefined;
 }
 
 /**
@@ -195,6 +224,7 @@ export function composeRestoreReport(input: ComposeRestoreReportInput): RestoreR
       id: hold.holdId,
       detail: `${hold.reasonCode} since ${hold.startedAt}, still held`,
     })),
+    ...(input.sentFolder ?? []).map(item => ({ ...item })),
   ];
 
   return {

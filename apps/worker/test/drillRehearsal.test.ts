@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from 'node:crypto';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import pg from 'pg';
@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { repositoryContext, workspaceScope, type SessionQueryable } from '@fss/domain/db';
 import { CLUSTER_URL_ENVIRONMENT_VARIABLE, asSession } from '@fss/domain/db/testing';
 import { disableCallingIdentity } from '@fss/domain/dial';
-import { laterHistoryId, type KmsTransport } from '@fss/domain/mail';
+import { laterHistoryId, recordedGmailClient, type KmsTransport } from '@fss/domain/mail';
 import {
   SuppressionJournalError,
   type SuppressionJournalRecord,
@@ -17,6 +17,7 @@ import { readWorkerDeployment } from '../src/bootstrap/deployment.ts';
 import { composeHandlers } from '../src/bootstrap/main.ts';
 import { recordingLogger } from '../src/bootstrap/log.ts';
 import { main } from '../src/tools/fss.ts';
+import { mailboxReconcileSentCommand, restoreReportCommand, type AdminInvocation } from '../src/tools/fss/admin.ts';
 import { readToolConfig } from '../src/tools/fss/config.ts';
 import { runDrill, type DrillReport, type DrillStepReport } from '../src/tools/fss/drill.ts';
 import {
@@ -63,6 +64,10 @@ import type { MailWorkerOptions } from '../src/handlers/mail.ts';
  *     fail step 3 on the same database — the Sent folder the seed filled is the proof.
  *   * "Step 4 passed" could count the before-phase effects. So the copy is checked to
  *     lack the late opt-out, and the effects counted must be ones step 4 applied.
+ *   * "Step 3's missing fence was tombstoned" (lane g73) could be the in-flight fence
+ *     again — a fence the copy still had, which is how the gap stayed green. So the copy is
+ *     checked to hold the restore-lost step pending with no fence, the tombstone is read
+ *     back on that step, and the drill without that one Sent message must fail the check.
  *   * "Step 1's dial was refused" could be a refusal at an earlier step of 9.2 for a
  *     reason of its own — there is no posture for the evidence firms' state — which says
  *     nothing about the restore. So the step must also report `restore_in_progress`
@@ -212,12 +217,30 @@ async function tool(name: string, argv: readonly string[]): Promise<Record<strin
 /** The runner's merge of the phases' recordings, as `rehearsal-restore-drill.sh` does it. */
 function mergedRecording(reports: readonly DrillEvidenceReport[]): MailboxRecording {
   const byId = new Map(reports.flatMap(report => report.mailbox.messages).map(message => [message.id, message]));
+  const sentById = new Map(reports.flatMap(report => report.mailbox.sentMessages).map(message => [message.id, message]));
   return {
     emailAddress: reports[0]?.mailbox.emailAddress ?? '',
     historyId: reports.map(report => report.mailbox.historyId).reduce(laterHistoryId, '1'),
     sentMessageIds: [...new Set(reports.flatMap(report => report.mailbox.sentMessageIds))].sort(),
     messages: [...byId.values()],
+    sentMessages: [...sentById.values()],
   };
+}
+
+/** The fence the after phase sent for the step the before phase enrolled (lane g73). */
+async function restoreLostSend(): Promise<{ readonly header: string; readonly stepExecutionId: string; readonly fenceId: string }> {
+  const { client, session } = await connect(rehearsal.source);
+  try {
+    const { rows } = await session.query<{ id: string; provider_message_id_header: string; step_execution_id: string }>(
+      `SELECT id, provider_message_id_header, step_execution_id FROM outbound_messages
+        WHERE recipient_address = 'restore-lost@drill-evidence.invalid'`,
+    );
+    expect(rows, 'the after phase sent the restore-lost step once').toHaveLength(1);
+    const row = rows[0];
+    return { header: row?.provider_message_id_header ?? '', stepExecutionId: row?.step_execution_id ?? '', fenceId: row?.id ?? '' };
+  } finally {
+    await client.end();
+  }
 }
 
 const counted = async (session: SessionQueryable, sql: string, values: readonly unknown[] = []): Promise<number> => {
@@ -261,6 +284,8 @@ async function seed(
 async function drill(
   options: {
     readonly recording?: boolean;
+    /** Lane g73: edits the merged recording before it is handed over. */
+    readonly editRecording?: (recording: MailboxRecording) => MailboxRecording;
     readonly atFailure?: boolean;
     /** Something done to the fresh copy before the drill runs against it. */
     readonly prepare?: (session: SessionQueryable) => Promise<void>;
@@ -291,7 +316,11 @@ async function drill(
       ...(options.atFailure === false ? {} : { atFailureJson: handed(rehearsal.atFailure) }),
       ...(options.recording === false
         ? {}
-        : { mailboxRecordingJson: JSON.stringify(mergedRecording(Object.values(rehearsal.reports))) }),
+        : {
+            mailboxRecordingJson: JSON.stringify(
+              (options.editRecording ?? (recording => recording))(mergedRecording(Object.values(rehearsal.reports))),
+            ),
+          }),
       expectedGeneration: String(Number(rehearsal.baseline['systemGeneration']) + 1),
       reportsDirectory: reports,
       adminUserId: rehearsal.reports.before.adminUserId,
@@ -382,6 +411,20 @@ describe('the rehearsal leaves the restored copy something to reconstruct (lane 
         await counted(session, 'SELECT count(*)::text AS count FROM suppression_events'),
       ).toBe(Number(rehearsal.baseline['suppressions']));
       expect(Number(rehearsal.atFailure['suppressions'])).toBe(Number(rehearsal.baseline['suppressions']) + 2);
+      // Lane g73: the restore-lost step is in the copy, pending, with no fence at all —
+      // the state Appendix E.3's missing-fence recovery exists for.
+      const restoreLost = await restoreLostSend();
+      expect(
+        await counted(session, "SELECT count(*)::text AS count FROM step_executions WHERE id = $1 AND state = 'pending'", [
+          restoreLost.stepExecutionId,
+        ]),
+      ).toBe(1);
+      expect(
+        await counted(session, 'SELECT count(*)::text AS count FROM outbound_messages WHERE step_execution_id = $1 OR id = $2', [
+          restoreLost.stepExecutionId,
+          restoreLost.fenceId,
+        ]),
+      ).toBe(0);
       // A usable phone route on an assigned firm, and (lane g60) the assignee's attested
       // calling number: the step 1 dial probe's subject, made before the target.
       expect(await counted(session, "SELECT count(*)::text AS count FROM phone_routes WHERE eligibility = 'usable'")).toBe(1);
@@ -400,7 +443,18 @@ describe('the rehearsal leaves the restored copy something to reconstruct (lane 
   it('records the Sent folder of each phase, and the opt-out the after phase delivered', () => {
     expect(rehearsal.reports.before.mailbox.sentMessageIds).toHaveLength(1);
     expect(rehearsal.reports['in-flight'].mailbox.sentMessageIds).toHaveLength(1);
-    expect(rehearsal.reports.after.mailbox.sentMessageIds).toHaveLength(1);
+    // Lane g73: the after phase's two sends — the one to a firm the restore loses, and
+    // the restore-lost step's — each as a message a listing returns, recipient and all.
+    expect(rehearsal.reports.after.mailbox.sentMessageIds).toHaveLength(2);
+    expect(rehearsal.reports.after.mailbox.sentMessages.map(message => message.headers['To']).sort()).toEqual([
+      'after@drill-evidence.invalid',
+      'restore-lost@drill-evidence.invalid',
+    ]);
+    for (const phase of ['before', 'in-flight', 'after'] as const) {
+      const { sentMessageIds, sentMessages } = rehearsal.reports[phase].mailbox;
+      expect(sentMessages.map(message => message.headers['Message-ID']).sort()).toEqual([...sentMessageIds].sort());
+      expect(sentMessages.every(message => message.labelIds?.includes('SENT'))).toBe(true);
+    }
     expect(rehearsal.reports.after.mailbox.messages.map(message => message.id)).toEqual(['fss-drill-evidence-opt-out-2']);
     expect(rehearsal.reports.before.adminUserId).toMatch(/^[0-9a-f-]{36}$/u);
   });
@@ -425,9 +479,11 @@ describe('fss drill against the restored copy (lanes g59 and g60)', () => {
       'step2-journal-replay',
       'step2-journal-replay-second',
       'step3-reconcile-sent',
+      'step3-missing-fence-tombstoned',
       'step4-inbox-recover',
       'step5-jobs-discard',
       'step5-scheduler-run-once',
+      'step5-no-second-send',
       'step6-watch-renew',
       'step6-coverage',
       'step7-migrate',
@@ -460,7 +516,48 @@ describe('fss drill against the restored copy (lanes g59 and g60)', () => {
     expect(bodyOf(report, 'step2-journal-replay')['inserted']).toBe(2);
     expect(bodyOf(report, 'step2-journal-replay-second')['inserted']).toBe(0);
     // Step 3: the fence in doubt, proved by the Sent folder, and nothing sent.
-    expect(bodyOf(report, 'step3-reconcile-sent')).toMatchObject({ tombstones: 1, resent: 0 });
+    expect(bodyOf(report, 'step3-reconcile-sent')).toMatchObject({ tombstones: 1, fences_reconciled: 1, resent: 0 });
+    // Lane g73, Appendix E.3's missing fences: the restore-lost step's send is tombstoned;
+    // the send to the after phase's own firm, which the copy never heard of, is reported
+    // and left; and every Sent folder was read to the end.
+    expect(bodyOf(report, 'step3-reconcile-sent')).toMatchObject({
+      missing_fences_tombstoned: 1,
+      missing_fences_unmatched: 1,
+      missing_fences_unattached: 0,
+      pre_dispatch_fences_marked_sent: 0,
+      mailboxes_unscanned: 0,
+    });
+    const lost = await restoreLostSend();
+    const missing = bodyOf(report, 'step3-missing-fence-tombstoned');
+    expect(missing['tombstones']).toEqual([
+      {
+        outboundMessageId: lost.fenceId,
+        stepExecutionId: lost.stepExecutionId,
+        state: 'sent',
+        reconciledFrom: 'sent_folder_missing_fence',
+        fencesForStep: 1,
+        fencesToRecipient: 1,
+      },
+    ]);
+    // Step 5: the rematerialized jobs sent nothing, and the step still has its one fence.
+    expect(bodyOf(report, 'step5-no-second-send')).toMatchObject({ sends: 0 });
+    {
+      const { client, session } = await connect(copy);
+      try {
+        const tombstone = await session.query<{ state: string; header: string; completed: string }>(
+          `SELECT o.state, o.provider_message_id_header AS header, e.state AS completed
+             FROM outbound_messages o JOIN step_executions e ON e.workspace_id = o.workspace_id AND e.id = o.step_execution_id
+            WHERE o.id = $1`,
+          [lost.fenceId],
+        );
+        expect(tombstone.rows).toEqual([{ state: 'sent', header: lost.header, completed: 'completed' }]);
+        expect(
+          await counted(session, "SELECT count(*)::text AS count FROM outbound_messages WHERE recipient_address = 'restore-lost@drill-evidence.invalid'"),
+        ).toBe(1);
+      } finally {
+        await client.end();
+      }
+    }
     // Step 4: the lost opt-out, recovered from the inbox and reapplied once — its
     // replayed suppression events reached rather than recorded a second time, which is
     // what lets an identity that cannot write the journal reapply it at all. (The counts
@@ -561,6 +658,145 @@ describe('fss drill against the restored copy (lanes g59 and g60)', () => {
     expect(stepOf(report, 'step1-dial-refused')?.failure).toContain(
       'this database has 1 assigned firm(s) with a usable phone route and 0 verified, enabled calling identities',
     );
+  }, 120_000);
+
+  it('fails the missing-fence check when the restore-lost message is not in the Sent folder, so that message is the proof (lane g73)', async () => {
+    const lost = await restoreLostSend();
+    const { report } = await drill({
+      editRecording: recording => ({
+        ...recording,
+        sentMessages: recording.sentMessages.filter(message => message.headers['Message-ID'] !== lost.header),
+      }),
+    });
+    // The surviving in-flight fence still reconciles, exactly as it did while the gap was
+    // green; only the check of its own says that is not Appendix E.3's missing fence.
+    expect(stepOf(report, 'step3-reconcile-sent')?.ok).toBe(true);
+    const missing = stepOf(report, 'step3-missing-fence-tombstoned');
+    expect(missing?.ok).toBe(false);
+    expect(missing?.failure).toContain('no send whose fence the restore lost was tombstoned');
+    expect(report.stoppedAt).toBe('step3-missing-fence-tombstoned');
+  }, 120_000);
+
+  it('fails the drill rather than guess when two live enrollments reach the lost send’s recipient (lane g73)', async () => {
+    const { report, copy } = await drill({
+      prepare: async session => {
+        // A second contact, at another firm, with the same address and a live enrollment
+        // of its own: either could be the step the lost send belonged to.
+        const { rows } = await session.query<{ workspace_id: string; firm_id: string; sequence_version_id: string; assigned_user_id: string }>(
+          `SELECT n.workspace_id, n.firm_id, n.sequence_version_id, n.assigned_user_id FROM sequence_enrollments n
+             JOIN email_addresses a ON a.workspace_id = n.workspace_id AND a.contact_id = n.contact_id
+            WHERE a.address = 'restore-lost@drill-evidence.invalid'`,
+        );
+        const lost = rows[0];
+        if (lost === undefined) throw new Error('the restore-lost enrollment is not in the copy');
+        const other = await session.query<{ id: string; firm_id: string; opportunity_id: string }>(
+          `SELECT f.id AS firm_id, c.id, o.id AS opportunity_id FROM firms f
+             JOIN contacts c ON c.workspace_id = f.workspace_id AND c.firm_id = f.id
+             JOIN opportunities o ON o.workspace_id = f.workspace_id AND o.firm_id = f.id
+            WHERE f.workspace_id = $1 AND f.id <> $2 AND f.name LIKE 'Drill Evidence In Flight%'
+            LIMIT 1`,
+          [lost.workspace_id, lost.firm_id],
+        );
+        const target = other.rows[0];
+        if (target === undefined) throw new Error('no second firm to share the address with');
+        const contact = await session.query<{ id: string }>(
+          "INSERT INTO contacts (workspace_id, firm_id, full_name) VALUES ($1, $2, 'Drill Evidence Shared Inbox') RETURNING id",
+          [lost.workspace_id, target.firm_id],
+        );
+        const contactId = contact.rows[0]?.id ?? '';
+        await session.query(
+          `INSERT INTO email_addresses (workspace_id, firm_id, contact_id, address, source, retrieved_at,
+                                        association_confidence, technical_validation, eligibility, eligibility_policy_version)
+           VALUES ($1, $2, $3, 'restore-lost@drill-evidence.invalid', 'salesperson', now(), 1.000, 'passed', 'usable', 'route-policy.1')`,
+          [lost.workspace_id, target.firm_id, contactId],
+        );
+        await session.query(
+          `INSERT INTO sequence_enrollments
+             (workspace_id, sequence_version_id, opportunity_id, firm_id, contact_id, assigned_user_id,
+              firm_time_zone, holiday_calendar_version)
+           VALUES ($1, $2, $3, $4, $5, $6, 'America/New_York', 'none.1')`,
+          [lost.workspace_id, lost.sequence_version_id, target.opportunity_id, target.firm_id, contactId, lost.assigned_user_id],
+        );
+      },
+    });
+    const sent = bodyOf(report, 'step3-reconcile-sent');
+    expect(sent).toMatchObject({ missing_fences_tombstoned: 0, missing_fences_unattached: 1 });
+    const unattached = (sent['missing_fences'] as Record<string, unknown>[]).filter(line => line['outcome'] === 'unattached');
+    expect(unattached).toHaveLength(1);
+    expect(unattached[0]?.['reason']).toBe('several_live_enrollments');
+    expect(report.stoppedAt).toBe('step3-missing-fence-tombstoned');
+
+    // And step 8, run by hand on the same copy, lists it as an unresolved exception, which
+    // is what refuses step 9 (verifyRestoreReport): the restore holds stay on.
+    const { client, session } = await connect(copy);
+    try {
+      const directory = mkdtempSync(join(tmpdir(), 'fss-g73-report-'));
+      writeFileSync(join(directory, 'before.json'), handed(rehearsal.baseline));
+      writeFileSync(join(directory, 'sent.json'), JSON.stringify(sent));
+      const outcome = await restoreReportCommand({
+        session,
+        config: readToolConfig({ DATABASE_URL: urlFor(copy) }),
+        environment: {},
+        options: { '--before': join(directory, 'before.json'), '--sent': join(directory, 'sent.json') },
+        switches: new Set(),
+      });
+      expect(outcome.ok).toBe(true);
+      if (!outcome.ok) return;
+      const unresolved = outcome.value['unresolved'] as { kind: string }[];
+      expect(unresolved.map(entry => entry.kind)).toContain('unattached_sent_message');
+    } finally {
+      await client.end();
+    }
+  }, 120_000);
+
+  it('reconcile-sent inserts each missing fence once, keeps no recipient in its report, and reads only its window (lane g73)', async () => {
+    const copy = `fss_g73_tool_${randomUUID().replaceAll('-', '')}`;
+    await admin(`CREATE DATABASE "${copy}" TEMPLATE "${rehearsal.restored}"`);
+    created.push(copy);
+    const { client, session } = await connect(copy);
+    try {
+      const recording = mergedRecording(Object.values(rehearsal.reports));
+      const mail = await taskMail(rehearsal.kms, rehearsal.bucket, 'reader');
+      const gmail = recordedGmailClient({ ...recording });
+      const invocation = (since: string): AdminInvocation => ({
+        session,
+        config: readToolConfig({ DATABASE_URL: urlFor(copy) }),
+        environment: {},
+        options: { '--since': since },
+        switches: new Set(['--all-mailboxes']),
+        mail: { ...mail, gmail },
+      });
+      const lost = await restoreLostSend();
+      const lostAt = recording.sentMessages.find(message => message.headers['Message-ID'] === lost.header)
+        ?.internalDateEpochMilliseconds;
+      expect(lostAt).toBeDefined();
+
+      // A window that starts one millisecond after the lost send does not see it.
+      const later = await mailboxReconcileSentCommand(invocation(new Date((lostAt ?? 0) + 1).toISOString()));
+      expect(later.ok).toBe(true);
+      if (later.ok) expect(later.value['missing_fences_tombstoned']).toBe(0);
+
+      const since = new Date(Date.parse(String(rehearsal.baseline['asOf'])) - 600_000).toISOString();
+      const first = await mailboxReconcileSentCommand(invocation(since));
+      expect(first.ok).toBe(true);
+      if (!first.ok) return;
+      expect(first.value).toMatchObject({ missing_fences_tombstoned: 1, missing_fences_unattached: 0, resent: 0 });
+      const text = JSON.stringify(first.value);
+      expect(text).not.toContain('@drill-evidence.invalid');
+      const lines = first.value['missing_fences'] as Record<string, unknown>[];
+      expect(lines.every(line => /^[0-9a-f]{16}$/u.test(String(line['message'])))).toBe(true);
+
+      const fences = await counted(session, 'SELECT count(*)::text AS count FROM outbound_messages');
+      const second = await mailboxReconcileSentCommand(invocation(since));
+      expect(second.ok).toBe(true);
+      if (!second.ok) return;
+      expect(second.value).toMatchObject({ missing_fences_tombstoned: 0, resent: 0 });
+      expect(Number(second.value['sent_folder_present'])).toBe(Number(first.value['sent_folder_present']) + 1);
+      expect(await counted(session, 'SELECT count(*)::text AS count FROM outbound_messages')).toBe(fences);
+      expect(gmail.sends).toHaveLength(0);
+    } finally {
+      await client.end();
+    }
   }, 120_000);
 
   it('fails step 3 on the same copy without the recorded Sent folder, so the recording is the proof', async () => {

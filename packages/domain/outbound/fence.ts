@@ -432,6 +432,254 @@ export async function fenceForOutgoingMessage(
   return rows[0]?.id ?? null;
 }
 
+/**
+ * The fence a Sent-folder message's marker names, in any state, or null (lane g73).
+ *
+ * Two keys, because either identifies it: the fence uuid inside the deterministic
+ * Message-ID (the row's own id), and the header itself in the sending mailbox
+ * (`outbound_messages_one_header_per_mailbox`). After a restore the answer null is the
+ * point of the question — the send happened, and the restored copy never had its fence.
+ */
+export async function readFenceForSentMessage(
+  context: RepositoryContext,
+  input: { readonly fenceId: string; readonly mailboxId: string; readonly rfcMessageId: string },
+): Promise<OutboundFenceRow | null> {
+  const { rows } = await context.db.query<FenceDbRow>(
+    `SELECT ${FENCE_COLUMNS} FROM outbound_messages
+      WHERE workspace_id = $1
+        AND (id = $2::uuid OR (mailbox_id = $3 AND provider_message_id_header = $4))
+      ORDER BY (id = $2::uuid) DESC
+      LIMIT 1`,
+    [context.scope.workspaceId, input.fenceId, input.mailboxId, input.rfcMessageId],
+  );
+  const row = rows[0];
+  return row === undefined ? null : toFence(row);
+}
+
+/**
+ * Where a tombstone says it came from: its ledger event's `reconciled_from`.
+ *
+ * Appendix E step 3, "insert sent tombstones for missing fences". A reader of the ledger
+ * — an incident, the drill's own check — tells a fence Gmail's Sent folder vouched for
+ * after a restore from one the dispatch path wrote by this value and nothing else.
+ */
+export const SENT_TOMBSTONE_PROVENANCE = 'sent_folder_missing_fence';
+
+/** The provenance of a pre-dispatch fence the Sent folder proved had already left. */
+export const SENT_FOLDER_PRE_DISPATCH_PROVENANCE = 'sent_folder_pre_dispatch_fence';
+
+/**
+ * A tombstone's `placement_rule_version`.
+ *
+ * The column records which rule placed a send in its window. Nothing placed this one —
+ * it was recovered — and a rule version that claimed otherwise would be the one lie in
+ * an otherwise honest row. It is also how a reader finds every tombstone with one
+ * predicate.
+ */
+export const SENT_TOMBSTONE_RULE_VERSION = 'restore-tombstone.1';
+
+/**
+ * A tombstone's body.
+ *
+ * Step 3 reads a Sent message's metadata — the header allowlist — and never its body,
+ * so the bytes that left are not in hand, and the fence says so rather than inventing
+ * them. The real body is in the mailbox, and step 4's recovery ingests the message into
+ * `mail_messages` like any other.
+ */
+export const SENT_TOMBSTONE_BODY =
+  'Recovered from the mailbox Sent folder after a database restore (Appendix E step 3). The body was not copied.';
+
+/** When the Sent message's Subject cannot be stored as a fence subject. */
+export const SENT_TOMBSTONE_FALLBACK_SUBJECT = '(recovered from the Sent folder)';
+
+/** A Subject header as a fence subject: one line, within the column's bound, or the fallback. */
+export function tombstoneSubject(subject: string | null): string {
+  const flattened = (subject ?? '').replace(/\s+/gu, ' ').trim().slice(0, 160).trim();
+  // The table refuses a blank subject and any mention of unsubscribing. FSS never sends
+  // either, so a Sent message that has one is not worth an exception mid-restore.
+  if (flattened === '' || /unsubscribe/iu.test(flattened)) return SENT_TOMBSTONE_FALLBACK_SUBJECT;
+  return flattened;
+}
+
+/** Everything a tombstone carries: the Sent message, and the step it is the send of. */
+export interface SentTombstoneInput {
+  /** The fence uuid inside the Message-ID. The tombstone takes the lost fence's own id. */
+  readonly fenceId: string;
+  readonly mailboxId: string;
+  readonly enrollmentId: string;
+  readonly stepExecutionId: string;
+  readonly firmId: string;
+  readonly contactId: string;
+  readonly opportunityId: string;
+  readonly recipientAddress: string;
+  readonly recipientRouteId: string | null;
+  readonly recipientRouteVersion: number | null;
+  readonly subject: string | null;
+  /** The Message-ID exactly as the Sent message carries it, brackets included. */
+  readonly rfcMessageId: string;
+  readonly providerMessageId: string;
+  readonly providerThreadId: string;
+  /** Gmail's internal date for the message: the instant it left. */
+  readonly sentAt: string;
+  /** The workspace business date of `sentAt` (Appendix D), for 12.7's bounce attribution. */
+  readonly businessDate: string;
+  readonly actor?: string | undefined;
+}
+
+/**
+ * Insert a `sent` fence for a send whose fence the restored database never had
+ * (Appendix E step 3, lane g73).
+ *
+ * The row is the fence the lost one would have become, as far as the Sent folder can
+ * say: its own id and Message-ID, so the mail pipeline recognises the message as FSS's
+ * own (`fenceForOutgoingMessage`) and a bounce or reply that references it finds it
+ * (`originatingSend`); the step execution it was the send of, so the sender's own dedupe
+ * key — one fence per step execution, `readFenceByStepExecution` in
+ * `prepareOutboundMessage` — sees it and `dispatchOutboundMessage` answers
+ * `already_terminal`; and Gmail's ids and instant, so a successor is placed from the
+ * original send. It is inserted directly in `sent`, with a token nobody will ever
+ * present, because `sent` is a terminal state and there is no transition *into* it that
+ * would not claim a Gmail call happened now.
+ *
+ * `ON CONFLICT DO NOTHING` on every unique key the table has, so two restores racing,
+ * or a second run of step 3, insert nothing and are told so.
+ */
+export async function insertSentTombstone(
+  context: RepositoryContext,
+  input: SentTombstoneInput,
+): Promise<SendResult<OutboundFenceRow>> {
+  const subject = tombstoneSubject(input.subject);
+  const { rows } = await context.db.query<FenceDbRow>(
+    `INSERT INTO outbound_messages
+       (id, workspace_id, mailbox_id, state, origin_kind, enrollment_id, step_execution_id, firm_id,
+        contact_id, opportunity_id, recipient_address, recipient_route_id, recipient_route_version,
+        subject, body, template_version_id, rendered_hash, provider_message_id_header, send_at,
+        source_zone, placement_rule_version, attempt_token, dispatch_started_at, sent_at,
+        provider_message_id, provider_thread_id, business_date)
+     VALUES ($1, $2, $3, 'sent', 'step_execution', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NULL, $14,
+             $15, $16::timestamptz, 'UTC', $17, gen_random_uuid(), $16::timestamptz, $16::timestamptz,
+             $18, $19, $20::date)
+     ON CONFLICT DO NOTHING
+     RETURNING ${FENCE_COLUMNS}`,
+    [
+      input.fenceId,
+      context.scope.workspaceId,
+      input.mailboxId,
+      input.enrollmentId,
+      input.stepExecutionId,
+      input.firmId,
+      input.contactId,
+      input.opportunityId,
+      input.recipientAddress.toLowerCase(),
+      input.recipientRouteId,
+      input.recipientRouteVersion,
+      subject,
+      SENT_TOMBSTONE_BODY,
+      renderedHash(subject, SENT_TOMBSTONE_BODY),
+      input.rfcMessageId,
+      input.sentAt,
+      SENT_TOMBSTONE_RULE_VERSION,
+      input.providerMessageId,
+      input.providerThreadId,
+      input.businessDate,
+    ],
+  );
+  const row = rows[0];
+  if (row === undefined) return refuseSend('fence_not_ready', 'a fence with this id, header or step already exists');
+  await appendEvent(context, {
+    outboundMessageId: row.id,
+    fromState: null,
+    toState: 'sent',
+    attemptToken: row.attempt_token,
+    actor: input.actor ?? describeActor(context),
+    detail: {
+      reconciled_from: SENT_TOMBSTONE_PROVENANCE,
+      providerMessageId: input.providerMessageId,
+      sentAt: input.sentAt,
+    },
+  });
+  return acceptSend(toFence(row));
+}
+
+/**
+ * Record as `sent` a fence the restored database holds as `prepared` or `held`, whose
+ * Message-ID the Sent folder proves already left (lane g73).
+ *
+ * The restore point fell between the fence's preparation and its dispatch — a fence
+ * prepared at 16:59 and held by the day's cap, released and sent the next morning after
+ * the point the database was restored to. Left alone, the dispatch path would claim it
+ * and send it a second time under the same Message-ID. The machine has no edge from
+ * `prepared` to `sent`, so the fence walks the edges it has, each with its ledger row:
+ * `held → prepared` where it was held — through `releaseFence`, the one edge back to
+ * `prepared` this file has and the one Appendix G 12's check counts — then
+ * `prepared → dispatching` with the dispatch instant set to Gmail's (written once, as
+ * every dispatch instant is), and `dispatching → sent` under the token that claim
+ * minted. The claim is the same atomic `WHERE state = 'prepared'` the dispatch path
+ * uses, so a worker racing it loses exactly as a second worker would.
+ */
+export async function markPreDispatchFenceSent(
+  context: RepositoryContext,
+  input: {
+    readonly outboundMessageId: string;
+    readonly providerMessageId: string;
+    readonly providerThreadId: string;
+    readonly sentAt: string;
+    readonly actor?: string | undefined;
+  },
+): Promise<SendResult<OutboundFenceRow>> {
+  const actor = input.actor ?? describeActor(context);
+  const detail = { reconciled_from: SENT_FOLDER_PRE_DISPATCH_PROVENANCE, providerMessageId: input.providerMessageId };
+  const current = await readFence(context, input.outboundMessageId);
+  if (current?.state === 'held') {
+    // Safe for the reason the edge exists at all: `held` never entered dispatching.
+    await releaseFence(context, { outboundMessageId: input.outboundMessageId, actor });
+  }
+  const claimed = await context.db.query<{ attempt_token: string }>(
+    `UPDATE outbound_messages
+        SET state = 'dispatching', attempt_token = gen_random_uuid(),
+            dispatch_started_at = $3::timestamptz, updated_at = now()
+      WHERE workspace_id = $1 AND id = $2 AND state = 'prepared'
+      RETURNING attempt_token`,
+    [context.scope.workspaceId, input.outboundMessageId, input.sentAt],
+  );
+  const token = claimed.rows[0]?.attempt_token;
+  if (token === undefined) return refuseSend('fence_not_ready');
+  await appendEvent(context, {
+    outboundMessageId: input.outboundMessageId,
+    fromState: 'prepared',
+    toState: 'dispatching',
+    attemptToken: token,
+    actor,
+    detail,
+  });
+  const { rows } = await context.db.query<FenceDbRow>(
+    `UPDATE outbound_messages
+        SET state = 'sent', sent_at = $4::timestamptz, provider_message_id = $5, provider_thread_id = $6,
+            updated_at = now()
+      WHERE workspace_id = $1 AND id = $2 AND attempt_token = $3 AND state = 'dispatching'
+      RETURNING ${FENCE_COLUMNS}`,
+    [
+      context.scope.workspaceId,
+      input.outboundMessageId,
+      token,
+      input.sentAt,
+      input.providerMessageId,
+      input.providerThreadId,
+    ],
+  );
+  const row = rows[0];
+  if (row === undefined) return refuseSend('fence_not_ready');
+  await appendEvent(context, {
+    outboundMessageId: input.outboundMessageId,
+    fromState: 'dispatching',
+    toState: 'sent',
+    attemptToken: token,
+    actor,
+    detail,
+  });
+  return acceptSend(toFence(row));
+}
+
 /** The send a delivery report is about, and the day the ramp counted it on. */
 export interface OriginatingSend {
   readonly outboundMessageId: string;

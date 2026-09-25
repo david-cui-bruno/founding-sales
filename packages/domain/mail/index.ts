@@ -71,6 +71,8 @@ export {
 export {
   fixtureDirection,
   recordedGmailClient,
+  recordedSentMessageId,
+  recordedSentThreadId,
   type GmailFakeCall,
   type GmailFixture,
   type GmailFixtureMessage,

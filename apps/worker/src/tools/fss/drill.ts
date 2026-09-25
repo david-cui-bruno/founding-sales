@@ -1,7 +1,9 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { readSystemGeneration, type SessionQueryable } from '@fss/domain/db';
-import { recordedGmailClient, type GmailFixtureMessage } from '@fss/domain/mail';
+import { recordedGmailClient, type GmailClient, type GmailFixtureMessage } from '@fss/domain/mail';
+import { SENT_TOMBSTONE_PROVENANCE } from '@fss/domain/outbound';
+import { RESTORE_SENT_SCAN_SKEW_SECONDS } from '@fss/domain/restore';
 import { REHEARSAL_MAILBOX_ADDRESS } from '../../bootstrap/deployment.ts';
 import { enforceRestoreGeneration } from '../../bootstrap/restoreGeneration.ts';
 import { createLogger, type Logger } from '../../bootstrap/log.ts';
@@ -268,11 +270,16 @@ function handedObject(text: string): Record<string, unknown> | null {
 function mailboxFromRecording(recording: Record<string, unknown>): Parameters<typeof recordedGmailClient>[0] | string {
   const sent = recording['sentMessageIds'];
   const messages = recording['messages'];
+  // Lane g73: the Sent folder's messages, which step 3 lists for the sends whose fence
+  // the restore lost. Optional, so a recording from before this lane still reads; a
+  // recording that carries it malformed is refused like any other.
+  const sentMessages = recording['sentMessages'] ?? [];
   if (!Array.isArray(sent) || !sent.every(entry => typeof entry === 'string' && entry.length > 0)) {
     return 'sentMessageIds is a list of RFC Message-IDs';
   }
   if (!Array.isArray(messages)) return 'messages is a list of recorded messages';
-  for (const message of messages as unknown[]) {
+  if (!Array.isArray(sentMessages)) return 'sentMessages is a list of recorded messages';
+  for (const message of [...(messages as unknown[]), ...(sentMessages as unknown[])]) {
     const entry = message as Record<string, unknown> | null;
     if (
       entry === null ||
@@ -294,7 +301,88 @@ function mailboxFromRecording(recording: Record<string, unknown>): Parameters<ty
     historyId: typeof historyId === 'string' && historyId.length > 0 ? historyId : '1',
     messages: messages as GmailFixtureMessage[],
     sentMessageIds: sent as string[],
+    sentMessages: sentMessages as GmailFixtureMessage[],
   };
+}
+
+/**
+ * The mail client every drill step runs through, counting the sends made through it
+ * (lane g73).
+ *
+ * `step5-no-second-send` asserts that nothing the drill did sent anything. Step 3's own
+ * count covers step 3; this one covers the whole run, so a later step that sent a
+ * tombstoned step again — the failure Appendix E.3 exists to prevent — is a number
+ * rather than a silence.
+ */
+function countingDrillGmail(gmail: GmailClient): { readonly client: GmailClient; sends(): number } {
+  let sends = 0;
+  return {
+    client: {
+      ...gmail,
+      sendMessage: async (access, request) => {
+        sends += 1;
+        return await gmail.sendMessage(access, request);
+      },
+    },
+    sends: () => sends,
+  };
+}
+
+/** One tombstone step 3 reported, as the database holds it now (lane g73). */
+interface TombstoneCheck {
+  readonly outboundMessageId: string;
+  readonly stepExecutionId: string;
+  readonly state: string | null;
+  readonly reconciledFrom: string | null;
+  readonly fencesForStep: number;
+  readonly fencesToRecipient: number;
+}
+
+/**
+ * Read back each tombstone the step 3 report claims, from the database (lane g73).
+ *
+ * The report is the command's word; the row, its ledger event and the count of fences for
+ * its step are the database's. The count to the recipient is measured here and again
+ * after the scheduler has run, which is how `step5-no-second-send` tells "no second
+ * fence" from "no fence yet". The recipient itself is never written into the report.
+ */
+async function readTombstones(session: SessionQueryable, step3: Readonly<Record<string, unknown>>): Promise<TombstoneCheck[]> {
+  const lines = Array.isArray(step3['missing_fences']) ? (step3['missing_fences'] as Record<string, unknown>[]) : [];
+  const checks: TombstoneCheck[] = [];
+  for (const line of lines.filter(entry => entry['outcome'] === 'tombstoned')) {
+    const outboundMessageId = String(line['outboundMessageId'] ?? '');
+    const stepExecutionId = String(line['stepExecutionId'] ?? '');
+    const { rows } = await session.query<{
+      state: string;
+      reconciled_from: string | null;
+      fences_for_step: string;
+      fences_to_recipient: string;
+    }>(
+      `SELECT o.state,
+              (SELECT e.detail ->> 'reconciled_from' FROM outbound_message_events e
+                WHERE e.workspace_id = o.workspace_id AND e.outbound_message_id = o.id
+                ORDER BY e.sequence_number LIMIT 1) AS reconciled_from,
+              (SELECT count(*) FROM outbound_messages x
+                WHERE x.workspace_id = o.workspace_id AND x.step_execution_id = o.step_execution_id)::text
+                AS fences_for_step,
+              (SELECT count(*) FROM outbound_messages x
+                WHERE x.workspace_id = o.workspace_id AND x.recipient_address = o.recipient_address)::text
+                AS fences_to_recipient
+         FROM outbound_messages o
+        WHERE o.id = $1::uuid AND o.step_execution_id = $2::uuid`,
+      [outboundMessageId, stepExecutionId],
+    );
+    const row = rows[0];
+    checks.push({
+      outboundMessageId,
+      stepExecutionId,
+      state: row?.state ?? null,
+      reconciledFrom: row?.reconciled_from ?? null,
+      fencesForStep: Number(row?.fences_for_step ?? '0'),
+      fencesToRecipient: Number(row?.fences_to_recipient ?? '0'),
+    });
+  }
+  return checks;
 }
 
 export interface GenerationReconciliation {
@@ -365,6 +453,13 @@ export async function runDrill(input: DrillInput): Promise<DrillResult> {
       };
     }
     invocation = { ...invocation, mail: { ...invocation.mail, gmail: recordedGmailClient(fixture) } };
+  }
+  // Lane g73: every send any step makes is counted, whatever client the steps run on.
+  let drillSends: () => number = () => 0;
+  if (invocation.mail !== undefined) {
+    const counting = countingDrillGmail(invocation.mail.gmail);
+    drillSends = counting.sends;
+    invocation = { ...invocation, mail: { ...invocation.mail, gmail: counting.client } };
   }
 
   const invoke = (options: Record<string, string>, switches: readonly string[] = []): AdminInvocation => ({
@@ -498,7 +593,7 @@ export async function runDrill(input: DrillInput): Promise<DrillResult> {
   }
 
   const replayFrom = input.replayFrom ?? minus(baselineAt, 3600);
-  const since = input.since ?? minus(baselineAt, 600);
+  const since = input.since ?? minus(baselineAt, RESTORE_SENT_SCAN_SKEW_SECONDS);
 
   const holdsCount = async (filter: Record<string, string>): Promise<number> => {
     const outcome = await holdsListCommand(invoke(filter, ['--count']));
@@ -620,6 +715,49 @@ export async function runDrill(input: DrillInput): Promise<DrillResult> {
     );
   }
 
+  // Lane g73: Appendix E.3's missing fences, as a check of their own. `step3-reconcile-sent`
+  // can pass on the in-flight fence alone — a fence the restored copy still had — which is
+  // exactly how the gap stayed green. This one needs a tombstone for a send whose fence
+  // the copy never had, read back from the database: its row, its ledger provenance, and
+  // one fence for its step. And every mailbox's Sent folder read to the end, because a
+  // folder half read proves nothing about the half that was not.
+  let tombstones: TombstoneCheck[] = [];
+  if (proceeding(steps)) {
+    const step3 = (steps[steps.length - 1]?.report ?? {}) as Readonly<Record<string, unknown>>;
+    steps.push(
+      await step(
+        'step3-missing-fence-tombstoned',
+        directory,
+        async () => {
+          tombstones = await readTombstones(input.session, step3);
+          return {
+            ok: true,
+            value: {
+              missing_fences_tombstoned: number(step3['missing_fences_tombstoned']),
+              missing_fences_unattached: number(step3['missing_fences_unattached']),
+              mailboxes_unscanned: number(step3['mailboxes_unscanned']),
+              tombstones,
+            },
+          };
+        },
+        report => {
+          if (number(report['mailboxes_unscanned']) !== 0) {
+            return `a mailbox's Sent folder was not read to the end, so a lost send may be unrecorded: ${JSON.stringify(report)}`;
+          }
+          if (!(number(report['missing_fences_tombstoned']) >= 1) || tombstones.length === 0) {
+            return `no send whose fence the restore lost was tombstoned, so Appendix E.3's missing fences were not proved: ${JSON.stringify(report)}`;
+          }
+          const wrong = tombstones.filter(
+            check => check.state !== 'sent' || check.reconciledFrom !== SENT_TOMBSTONE_PROVENANCE || check.fencesForStep !== 1,
+          );
+          return wrong.length === 0
+            ? null
+            : `a reported tombstone is not one sent fence, from the Sent folder, alone on its step: ${JSON.stringify(wrong)}`;
+        },
+      ),
+    );
+  }
+
   if (proceeding(steps)) {
     steps.push(
       await step(
@@ -647,6 +785,44 @@ export async function runDrill(input: DrillInput): Promise<DrillResult> {
         directory,
         async () => await schedulerRunOnceCommand(invoke({})),
         report => (report['outcome'] === 'ran' ? null : `the scheduler pass did not run: ${JSON.stringify(report)}`),
+      ),
+    );
+  }
+  // Lane g73: the tombstoned steps were not sent again. The jobs were rematerialized from
+  // business state a moment ago, so this is the point at which restored sequence work
+  // would have produced a second fence: each tombstoned step still has exactly its one
+  // fence, its recipient no more fences than step 3 left, and no step of this drill has
+  // sent anything through the mail client.
+  if (proceeding(steps)) {
+    steps.push(
+      await step(
+        'step5-no-second-send',
+        directory,
+        async () => {
+          const after = await readTombstones(input.session, (steps.find(entry => entry.step === 'step3-reconcile-sent')?.report ?? {}) as Readonly<Record<string, unknown>>);
+          return {
+            ok: true,
+            value: {
+              sends: drillSends(),
+              tombstones: after.map(check => ({
+                ...check,
+                fencesToRecipientAtStep3: tombstones.find(entry => entry.outboundMessageId === check.outboundMessageId)?.fencesToRecipient ?? null,
+              })),
+            },
+          };
+        },
+        report => {
+          if (number(report['sends']) !== 0) return `the drill sent mail: ${JSON.stringify(report)}`;
+          const checks = Array.isArray(report['tombstones']) ? (report['tombstones'] as Record<string, unknown>[]) : [];
+          if (checks.length === 0) return 'no tombstoned step to check, so a second send was not ruled out';
+          const repeated = checks.filter(
+            check =>
+              number(check['fencesForStep']) !== 1 ||
+              check['state'] !== 'sent' ||
+              number(check['fencesToRecipient']) !== number(check['fencesToRecipientAtStep3']),
+          );
+          return repeated.length === 0 ? null : `a tombstoned step gained a second fence: ${JSON.stringify(repeated)}`;
+        },
       ),
     );
   }

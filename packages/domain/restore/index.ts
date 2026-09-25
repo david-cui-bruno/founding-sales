@@ -11,7 +11,9 @@
  * Nothing here talks to anything but PostgreSQL. The two steps that need Gmail
  * (reconstructing sends from Sent folders, reprocessing inboxes) already exist in
  * `@fss/domain/outbound` and `@fss/domain/mail`, and the tool composes them from the
- * same deployment the worker reads.
+ * same deployment the worker reads. Lane g73's `recoverSentFolderMessage` is the
+ * database half of step 3's missing fences: `scanSentFolder` reads the folder, and this
+ * decides what each FSS send found there means to the restored copy.
  */
 
 export {
@@ -64,4 +66,13 @@ export {
   type UnresolvedEntry,
   type UnresolvedExceptions,
   type UnresolvedFence,
+  type UnresolvedSentFolderItem,
 } from './report.ts';
+
+export {
+  RESTORE_SENT_SCAN_SKEW_SECONDS,
+  recoverSentFolderMessage,
+  type RecoverSentMessageInput,
+  type SentMessageRecovery,
+  type UnattachedReason,
+} from './missingFences.ts';

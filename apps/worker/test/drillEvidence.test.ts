@@ -237,6 +237,9 @@ describe('fss admin drill seed-evidence', () => {
       'dial_route',
       'calling_identity',
       'administrative_pause',
+      'restore_lost_firm',
+      'restore_lost_sequence',
+      'restore_lost_enrollment',
       'crm_edit',
     ]) {
       expect(steps[step], `the report says nothing about ${step}`).toBeDefined();
@@ -296,6 +299,21 @@ describe('fss admin drill seed-evidence', () => {
       )
     ).rows[0]?.header;
     expect(report.mailbox.sentMessageIds).toEqual([sentHeader]);
+    // Lane g73: the same send as the Sent folder lists it — the metadata step 3 reads.
+    expect(report.mailbox.sentMessages).toHaveLength(1);
+    expect(report.mailbox.sentMessages[0]).toMatchObject({
+      labelIds: ['SENT'],
+      headers: { 'Message-ID': sentHeader, To: 'primary@drill-evidence.invalid' },
+    });
+    // And the enrollment whose step the after phase sends: pending, due a month out so
+    // no rehearsal worker prepares it first, and with no fence.
+    const lostStep = await session.query<{ state: string; due_in_days: number; fences: string }>(
+      `SELECT e.state, extract(day FROM e.due_at - now())::int AS due_in_days,
+              (SELECT count(*) FROM outbound_messages o WHERE o.step_execution_id = e.id)::text AS fences
+         FROM step_executions e WHERE e.id = $1`,
+      [steps['restore_lost_enrollment']?.id],
+    );
+    expect(lostStep.rows).toEqual([{ state: 'pending', due_in_days: 29, fences: '0' }]);
     expect(report.mailbox.messages.map(message => message.id).sort()).toEqual([
       'fss-drill-evidence-opt-out-1',
       'fss-drill-evidence-reply-1',
@@ -453,6 +471,7 @@ describe('fss admin drill seed-evidence', () => {
       await countOf('active_holds', "reason_code = 'send_unknown_reconciling' AND released_at IS NULL"),
     ).toBe(1);
     expect(outcome.value.mailbox.sentMessageIds).toEqual([doubt.rows[0]?.header]);
+    expect(outcome.value.mailbox.sentMessages.map(message => message.headers['Message-ID'])).toEqual([doubt.rows[0]?.header]);
     expect(outcome.value.mailbox.messages).toEqual([]);
     // Nothing else moved: no send reached `sent`, no suppression, no edit.
     expect(await countOf('outbound_messages', "state = 'sent'")).toBe(before.sent);
@@ -486,6 +505,9 @@ describe('fss admin drill seed-evidence', () => {
     if (!outcome.ok) return;
     const steps = Object.fromEntries(outcome.value.items.map(item => [item.step, item.outcome]));
     expect(steps['accepted_send']).toBe('created');
+    // Lane g73: the send of the step the before phase enrolled, whose fence the restore
+    // loses while its step survives.
+    expect(steps['restore_lost_send']).toBe('created');
     expect(steps['crm_edit']).toBe('created');
     // 0.1's "let the clock run past it while more activity happens", and lane g59's
     // correction of what that activity has to be: steps 2 and 4 reconstruct what the
@@ -498,7 +520,10 @@ describe('fss admin drill seed-evidence', () => {
     expect(steps['prospect_reply']).toBeUndefined();
     expect(steps['manual_suppression']).toBeUndefined();
 
-    expect(await countOf('outbound_messages', "state = 'sent'")).toBe(before.sends + 1);
+    expect(await countOf('outbound_messages', "state = 'sent'")).toBe(before.sends + 2);
+    expect(
+      await countOf('outbound_messages', "state = 'sent' AND recipient_address = 'restore-lost@drill-evidence.invalid'"),
+    ).toBe(1);
     expect(await countOf('audit_events', "action = 'firm.updated'")).toBe(before.edits + 1);
     // The handle and its one unambiguous firm, each journalled before its row.
     expect(await countOf('suppression_events')).toBe(before.suppressions + 2);
@@ -515,7 +540,11 @@ describe('fss admin drill seed-evidence', () => {
 
     // The recording: the after send in the Sent folder, and the opt-out dated now rather
     // than at the send clock's nine in the morning, so step 4's window contains it.
-    expect(outcome.value.mailbox.sentMessageIds).toHaveLength(1);
+    expect(outcome.value.mailbox.sentMessageIds).toHaveLength(2);
+    expect(outcome.value.mailbox.sentMessages.map(message => message.headers['To']).sort()).toEqual([
+      'after@drill-evidence.invalid',
+      'restore-lost@drill-evidence.invalid',
+    ]);
     const [late] = outcome.value.mailbox.messages;
     expect(late?.id).toBe('fss-drill-evidence-opt-out-2');
     expect(Math.abs((late?.internalDateEpochMilliseconds ?? 0) - Date.now())).toBeLessThan(120_000);
@@ -526,7 +555,7 @@ describe('fss admin drill seed-evidence', () => {
     if (!again.ok) return;
     expect(again.value.items.every(item => item.outcome === 'existing'), JSON.stringify(again.value.items)).toBe(true);
     expect(await countOf('suppression_events')).toBe(before.suppressions + 2);
-    expect(await countOf('outbound_messages', "state = 'sent'")).toBe(before.sends + 1);
+    expect(await countOf('outbound_messages', "state = 'sent'")).toBe(before.sends + 2);
     expect(again.value.mailbox).toEqual(outcome.value.mailbox);
   }, 120_000);
 });

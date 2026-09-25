@@ -80,6 +80,15 @@ miss is not an answer — Gmail's Sent index lags — so the observation repeats
 backoff for 24 hours. A hit back-dates `sent_at` to `dispatch_started_at`, because 12.5
 computes the successor's delay "from the original dispatch time".
 
+After a database restore the Sent folder is also the only record of a send whose fence
+was lost (Appendix E.3, lane g73). `scanSentFolder` lists the folder from the restore
+point minus ten minutes and keeps the messages whose whole Message-ID is FSS's for that
+mailbox (`fssFenceIdOfSentMessage`). `@fss/domain/restore`'s `recoverSentFolderMessage`
+then inserts a `sent` tombstone (`insertSentTombstone`) on the step a lost fence was the
+send of. The tombstone takes the lost fence's own id and Message-ID, so the dedupe key
+in `prepareOutboundMessage` sees it and `dispatchOutboundMessage` answers
+`already_terminal`. See `docs/decisions/g73-missing-fences-are-recovered-from-sent.md`.
+
 ### 5. `unknown_terminal` is terminal, whichever the admin chooses
 
 When the window expires the fence is `unknown_terminal` and there is no transition out

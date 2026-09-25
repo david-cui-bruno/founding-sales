@@ -12,6 +12,7 @@ import {
   kmsDataKeyWrapper,
   localEnvelopeCipher,
   recordedGmailClient,
+  recordedSentMessageId,
   recordedSeamDataKeyWrapper,
   type GmailSendRequest,
   type KmsTransport,
@@ -351,6 +352,45 @@ describe('the recorded Gmail mailbox, across processes (lane g59)', () => {
     expect(await recorded.searchSentByMessageId(access, '<b@example.test>')).toMatchObject({ ok: true, found: { threadId: expect.any(String) } });
     const empty = recordedGmailClient({ emailAddress: 'sales@example.test', historyId: '1', messages: [] });
     expect(await empty.searchSentByMessageId(access, '<b@example.test>')).toEqual({ ok: true, found: null });
+  });
+
+  it('lists its Sent folder by window, with the metadata a delivered message carries (lane g73)', async () => {
+    const sender = recordedGmailClient({ emailAddress: 'sales@example.test', historyId: '1', messages: [] });
+    const sent = await sender.sendMessage(access, request('<d@example.test>'));
+    expect(sent).toMatchObject({ ok: true, messageId: recordedSentMessageId('<d@example.test>') });
+    const [delivered] = sender.sentMessages;
+    expect(delivered).toMatchObject({
+      id: recordedSentMessageId('<d@example.test>'),
+      labelIds: ['SENT'],
+      headers: { 'Message-ID': '<d@example.test>', To: 'prospect@example.test', Subject: 'Hello' },
+    });
+
+    // A second process built from that recording lists it, reads its metadata, and
+    // finds it by Message-ID under the same Gmail id.
+    const at = delivered?.internalDateEpochMilliseconds ?? 0;
+    const reader = recordedGmailClient({
+      emailAddress: 'sales@example.test',
+      historyId: '1',
+      messages: [],
+      sentMessages: sender.sentMessages,
+    });
+    const seconds = Math.floor(at / 1000);
+    const inside = await reader.listSentMessageIds(access, { afterEpochSeconds: seconds, beforeEpochSeconds: seconds + 1, maxResults: 500 });
+    expect(inside).toEqual({ ok: true, messageIds: [delivered?.id], nextPageToken: null });
+    const outside = await reader.listSentMessageIds(access, { afterEpochSeconds: seconds + 1, beforeEpochSeconds: seconds + 60, maxResults: 500 });
+    expect(outside).toEqual({ ok: true, messageIds: [], nextPageToken: null });
+    const metadata = await reader.getMetadata(access, delivered?.id ?? '', ['Message-ID', 'To']);
+    expect(metadata?.headers).toEqual({ 'Message-ID': '<d@example.test>', To: 'prospect@example.test' });
+    expect(await reader.searchSentByMessageId(access, '<d@example.test>')).toMatchObject({
+      ok: true,
+      found: { messageId: delivered?.id },
+    });
+    // The inbox listing is unchanged by a Sent folder: nothing else sees those ids.
+    expect(await reader.listMessageIds(access, { afterEpochSeconds: 0, beforeEpochSeconds: seconds + 60, maxResults: 500 })).toEqual({
+      ok: true,
+      messageIds: [],
+      nextPageToken: null,
+    });
   });
 });
 
