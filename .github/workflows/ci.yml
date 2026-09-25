@@ -111,7 +111,7 @@ jobs:
           # Only the greenfield tree reads these. Everything else is read by the old
           # gates: root package.json and the lock file, .gitleaks.toml, docs/engineering
           # and docs/archive, the other scripts, and this workflow itself.
-          greenfield_only='^(apps/|packages/|infra/|certs/|test/release/|docs/greenfield/|docs/decisions/|\.github/workflows/greenfield[a-z-]*\.yml$|Dockerfile\.(api|worker)(\.dockerignore)?$|tsconfig\.base\.json$|eslint\.greenfield\.mjs$|scripts/(productionSmoke|releaseMutationCheck|releaseMutationRunner)\.mjs$|README\.md$)'
+          greenfield_only='^(apps/|packages/|infra/|certs/|test/release/|docs/greenfield/|docs/decisions/|\.github/workflows/greenfield[a-z-]*\.yml$|Dockerfile\.(api|worker)(\.dockerignore)?$|tsconfig\.base\.json$|eslint\.greenfield\.mjs$|scripts/(productionSmoke|releaseMutationCheck|releaseMutationRunner)\.mjs$|scripts/mutations/[^/]+\.mjs$|README\.md$)'
           base=''
           if [ "$EVENT_NAME" = 'pull_request' ]; then
             # The checkout is the pull request's merge commit. Its first parent is the

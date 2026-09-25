@@ -1355,13 +1355,17 @@ jobs:
           # rehearsal's outputs could never have connected (G12h; the decision record
           # of 21 September, 2.3). What runs against the rehearsal database is
           # `fss verify` and `fss drill`, inside the VPC.
+          #
+          # The release mutation check is not part of a rehearsal (lane g93, David's
+          # decision of 25 September 2026): at about 200 entries it took 45 minutes
+          # and doubled the run. It runs once a day on main in
+          # `greenfield-nightly.yml`, and locally as `npm run test:release:mutation`.
           FSS_TEST_POSTGRES_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
           FSS_DEPENDENCIES: recorded
         run: |
           set -euo pipefail
           npm ci --ignore-scripts --no-audit --no-fund
           npm run test:release
-          npm run test:release:mutation
 
       # The session this job assumed at its first step lasts an hour. The action is
       # given no `role-duration-seconds` and `fss-rh-deploy`'s own MaxSessionDuration

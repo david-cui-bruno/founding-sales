@@ -8,7 +8,7 @@ on:
     - cron: '0 9 * * *'
   # The same check on demand. From the Actions tab it defaults to main; choosing
   # a branch runs it against that branch, which is how a pull request that edits
-  # a trap or scripts/releaseMutationCheck.mjs gets checked before it merges.
+  # a trap or scripts/mutations/*.mjs gets checked before it merges.
   workflow_dispatch:
 permissions:
   contents: read
@@ -21,7 +21,8 @@ jobs:
     # pull-request job (`.github/workflows/greenfield.yml`) keeps typecheck, lint,
     # the workspace tests and the release suite; this job runs the check once a
     # day on main, and `npm run test:release:mutation` still runs it locally.
-    # The rehearsal's `full` stage (`greenfield-release.yml`) runs it as well.
+    # The rehearsal's `full` stage (`greenfield-release.yml`) ran it as well until
+    # lane g93 (25 September 2026); this job is now the only place it runs in CI.
     #
     # What that gives up: before G12b the check ran only in the rehearsal, so a
     # pull request could land a trap that no longer closes and nobody heard until

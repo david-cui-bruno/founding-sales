@@ -1141,7 +1141,9 @@ describe('Appendix G 22 (g70), continued: the stop', () => {
   it('writes the new order where the operator reads it', () => {
     const release = readRepositoryFile('docs/greenfield/release.md');
     expect(release).toContain('infra/scripts/release-stop.sh infra/roots/production fss-prod --environment production');
-    expect(release).toContain('### 8.0af');
+    // The record of the release that ran in the old order moved, verbatim, with the
+    // other 8.0x records (lane g93).
+    expect(readRepositoryFile('docs/greenfield/release-records.md')).toContain('### 8.0af');
     const runbook = readRepositoryFile('docs/greenfield/infra-apply-runbook.md');
     expect(runbook).toContain('infra/scripts/release-stop.sh infra/roots/production fss-prod --environment production');
     // In the order that works: the stop, then the apply, then the deploy.
