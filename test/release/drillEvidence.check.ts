@@ -194,7 +194,7 @@ describe('g40: the release creates the evidence the restore drill reconstructs',
       'during',
     ]);
     expect(wrong.status, wrong.output).not.toBe(0);
-    expect(wrong.output).toContain("--phase takes before or after, not 'during'");
+    expect(wrong.output).toContain("--phase takes before, in-flight or after, not 'during'");
 
     const noDigest = seed(['infra/roots/rehearsal', 'fss-rh-0923', '--phase', 'before']);
     expect(noDigest.status, noDigest.output).not.toBe(0);
@@ -299,16 +299,29 @@ describe('g40: the drill waits for the restore target to pass the evidence', () 
     expect(drill.indexOf('restore-db-instance-to-point-in-time')).toBeGreaterThan(wait);
   });
 
-  it('adds the after phase between the baseline and the restore, and nothing else', () => {
+  it('seeds the in-flight send before the target, and the after phase once the restore is requested', () => {
+    const inFlight = drill.indexOf('--phase in-flight');
+    const wait = drill.indexOf('wait_for_restorable_point "$EVIDENCE_AT"');
     const baseline = drill.indexOf('the drill baseline has no $kind');
     const after = drill.indexOf('--phase after');
-    const restore = drill.indexOf('restore-db-instance-to-point-in-time');
+    const restore = drill.indexOf('rehearsal_aws rds restore-db-instance-to-point-in-time');
+    const available = drill.indexOf('rehearsal_aws rds wait db-instance-available');
+    const launch = drill.indexOf('drill_task drill drill');
+    expect(inFlight, 'the drill never leaves a send in doubt at the target (lane g59)').toBeGreaterThan(-1);
     expect(after, 'the drill never seeds the work the restore is meant to lose').toBeGreaterThan(-1);
+    // Lane g59. The in-flight send is before the wait, so the target the wait produces
+    // is after it and step 3's ten-minute window contains it.
+    expect(inFlight).toBeLessThan(wait);
     // After the baseline, because the baseline is measured at the restore target and
-    // this activity is deliberately later than it; before the restore, because the
-    // restore is what has to lose it.
+    // this activity is deliberately later than it; and after the restore is *requested*
+    // (lane g59), because `--use-latest-restorable-time` restores to whatever point RDS
+    // has when it acts, and only work written after the request is certain to be lost —
+    // steps 2 and 4 now reconstruct exactly that work. Before the drill task, which is
+    // what reconstructs it.
     expect(after).toBeGreaterThan(baseline);
-    expect(after).toBeLessThan(restore);
+    expect(after).toBeGreaterThan(restore);
+    expect(after).toBeLessThan(available);
+    expect(after).toBeLessThan(launch);
     expect(drill).toContain('release-seed-drill-evidence.sh');
 
     // Every assertion the drill already made is still there, unchanged. This is the
@@ -349,6 +362,27 @@ describe('g40: the drill waits for the restore target to pass the evidence', () 
     // polled a helper which returns nothing would sleep for ten minutes in ordinary CI.
     expect(output).toContain('wait until aws rds describe-db-instances reports a LatestRestorableTime');
     expect(output).toContain('--phase after');
+    // Lane g59: the in-flight phase first, then the wait, then the restore, then the
+    // after phase — in the order the plan prints them, which is the order they run.
+    const order = ['--phase in-flight', 'wait until aws rds', 'restore-db-instance-to-point-in-time', '--phase after'].map(
+      marker => output.indexOf(marker),
+    );
+    expect(order.every(at => at >= 0), output).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+  });
+
+  it('plans the in-flight phase as one recorded task on the operations definition (lane g59)', () => {
+    const prefix = 'fss-rh-0925';
+    const planned = seed(
+      ['infra/roots/rehearsal', prefix, '--worker-digest', DIGEST, '--phase', 'in-flight', '--workspace-slug', 'rehearsal'],
+      outputs(prefix),
+    );
+    expect(planned.status, planned.output).toBe(0);
+    const launches = planned.output.split('\n').filter(line => line.includes('aws ecs run-task'));
+    expect(launches).toHaveLength(1);
+    expect(launches[0]).toContain(`${prefix}-operations`);
+    expect(launches[0]).toContain('"--phase", "in-flight"');
+    expect(launches[0]).toContain('{"name": "FSS_DEPENDENCIES", "value": "recorded"}');
   });
 });
 

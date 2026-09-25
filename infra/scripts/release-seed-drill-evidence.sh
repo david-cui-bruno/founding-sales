@@ -2,7 +2,7 @@
 # The activity the restore drill has to reconstruct (lane g40).
 #
 #   infra/scripts/release-seed-drill-evidence.sh <root> <prefix> \
-#       --worker-digest D --phase before|after [--workspace-slug S]
+#       --worker-digest D --phase before|in-flight|after [--workspace-slug S]
 #
 #   infra/scripts/release-seed-drill-evidence.sh infra/roots/rehearsal fss-rh-0923 \
 #       --worker-digest "$digest" --phase before --workspace-slug rehearsal
@@ -36,20 +36,32 @@
 # `FSS_DEPENDENCIES`, because two guards that do not depend on each other is the
 # arrangement that survives one of them being edited.
 #
-# ## The two phases
+# ## The three phases (lane g59 added the middle one and changed the last)
 #
 # `--phase before` runs between the workspace bootstrap and the schema ranges, and
-# writes everything. `--phase after` runs from inside the drill, once it has read the
-# restore target, and adds a second accepted send and a second CRM edit — 0.1's "then
-# let the clock run past it while more activity happens, so the restore genuinely loses
-# work". Nothing else is added in the after phase: a second suppression or a second
-# reply would change what the drill's steps 2 and 4 are reconstructing.
+# writes everything 0.1 lists, plus what the drill's later steps need to find in the
+# restored copy: the firm whose opt-out arrives later, a phone route, and an
+# administrative pause.
+#
+# `--phase in-flight` runs from inside the drill, just before it reads the restore
+# target: one send Gmail delivered and whose response never came back, so its fence is
+# `reconciling` at the target and Appendix E step 3 has a fence the Sent folder proves.
+#
+# `--phase after` runs from inside the drill once the restore has been *requested* —
+# 0.1's "then let the clock run past it while more activity happens, so the restore
+# genuinely loses work". Only work written after the request is certain to be lost:
+# `--use-latest-restorable-time` restores to whatever point RDS has when it acts. It
+# adds a second accepted send, a second CRM edit, and a prospect's opt-out, journalled —
+# which is what steps 2 and 4 reconstruct. (Until lane g59 it added the send and the
+# edit only, so the replay and the recovery had nothing the restore had lost.)
 #
 # The report it writes carries `asOf=`, the instant the tool measured its counts at.
 # `rehearsal-restore-drill.sh` waits until RDS reports a `LatestRestorableTime` later
-# than that instant before it reads the restore target, because the backup window lags
-# real time by up to about five minutes and a target that predated the evidence would
-# restore to a database without it.
+# than the newest such instant before it reads the restore target, because the backup
+# window lags real time by up to about five minutes and a target that predated the
+# evidence would restore to a database without it. The JSON report beside it also
+# carries what the phase's recorded mailbox holds (`mailbox`) and the workspace admin
+# (`adminUserId`), which the drill script hands to `fss drill`.
 #
 # ## What it prints, and where the answer comes from
 #
@@ -80,7 +92,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 if [ -z "$ROOT_DIRECTORY" ] || [ -z "$PREFIX" ] || [ -z "$PHASE" ]; then
-  echo "usage: release-seed-drill-evidence.sh <terraform root> <name prefix> --worker-digest D --phase before|after [--workspace-slug S]" >&2
+  echo "usage: release-seed-drill-evidence.sh <terraform root> <name prefix> --worker-digest D --phase before|in-flight|after [--workspace-slug S]" >&2
   exit 1
 fi
 
@@ -90,12 +102,12 @@ fi
 rehearsal_require_prefix "$PREFIX"
 
 case "$PHASE" in
-  before | after) ;;
+  before | in-flight | after) ;;
   *)
-    echo "FAIL: --phase takes before or after, not '$PHASE'." >&2
-    echo "      'before' writes the evidence the restore target must postdate; 'after' adds the send and" >&2
-    echo "      the edit the restore is meant to lose. There is no default: a phase reached by omission" >&2
-    echo "      is a seed that silently did the other one." >&2
+    echo "FAIL: --phase takes before, in-flight or after, not '$PHASE'." >&2
+    echo "      'before' writes the evidence the restore target must postdate; 'in-flight' leaves a send in" >&2
+    echo "      doubt just before the target; 'after' adds the work the restore is meant to lose. There is" >&2
+    echo "      no default: a phase reached by omission is a seed that silently did another one." >&2
     exit 1
     ;;
 esac

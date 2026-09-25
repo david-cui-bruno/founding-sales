@@ -16,6 +16,7 @@ import {
   newestCrmEditAt,
   readRestoreCounts,
   readUnresolvedExceptions,
+  verifyRestoreReport,
 } from '../../restore/index.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
@@ -404,6 +405,54 @@ describe('fss admin restore-report and system-generation advance', () => {
     expect(report.sends_repeated).toBe(0);
     expect(report.crm_rpo_seconds).toBe(300);
     expect(Array.isArray(report.unresolved)).toBe(true);
+  });
+
+  /**
+   * Lane g59: restore-drill.md step 8's `--at-failure`, which nothing wrote until now.
+   *
+   * The trap: "no suppression lost" measured against the baseline alone passes a restore
+   * that lost every suppression recorded after the target, because the baseline never
+   * had them. With the counts at the moment of failure, that loss is `suppression_lost`
+   * and step 9 refuses; without them the report is what it always was.
+   */
+  it('measures a lost suppression against the moment of failure when it is known, and step 9 refuses it', () => {
+    const counts = (suppressions: number, crmEdits: number): {
+      asOf: string;
+      sends: number;
+      replies: number;
+      suppressions: number;
+      crm_edits: number;
+      migrations: number;
+    } => ({ asOf: AS_OF, sends: 2, replies: 2, suppressions, crm_edits: crmEdits, migrations: 14 });
+    const unresolved = { reconciling: [], unknownTerminal: [], ambiguousHeld: [], deadJobs: 0 };
+
+    const recovered = composeRestoreReport({
+      before: counts(2, 2),
+      atFailure: counts(4, 6),
+      after: counts(4, 3),
+      sendsRepeated: 0,
+      crmRpoSeconds: 300,
+      unresolved,
+    });
+    expect(recovered).toMatchObject({ suppressions_at_failure: 4, crm_edits_at_failure: 6, crm_edits_lost: 3 });
+    expect(verifyRestoreReport(recovered)).toEqual({ ok: true });
+
+    // The journal brought back one of the two: above the baseline, below the failure.
+    const lost = composeRestoreReport({
+      before: counts(2, 2),
+      atFailure: counts(4, 6),
+      after: counts(3, 3),
+      sendsRepeated: 0,
+      crmRpoSeconds: 300,
+      unresolved,
+    });
+    expect(verifyRestoreReport(lost)).toEqual({ ok: false, reason: 'suppression_lost' });
+
+    // Without the moment of failure the report and its verdict are unchanged.
+    const unknown = composeRestoreReport({ before: counts(2, 2), after: counts(3, 3), sendsRepeated: 0, crmRpoSeconds: 0, unresolved });
+    expect(unknown).not.toHaveProperty('suppressions_at_failure');
+    expect(verifyRestoreReport(unknown)).toEqual({ ok: true });
+    expect(verifyRestoreReport({ ...unknown, suppressions_at_failure: 'four' })).toEqual({ ok: false, reason: 'malformed' });
   });
 
   it('refuses to advance the generation for a user who is not an admin', async () => {

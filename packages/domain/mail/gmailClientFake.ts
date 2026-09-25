@@ -104,6 +104,17 @@ export interface GmailFixture {
    * delivered message unknown.
    */
   readonly sentIndexingDelay?: number | undefined;
+  /**
+   * RFC Message-IDs the mailbox's Sent folder already holds when the client is built.
+   *
+   * A recording is of a mailbox, and a mailbox's Sent folder outlives the process that
+   * sent into it. The restore drill runs in a different process from the seed that
+   * sent (lane g59): the seed's client adds each delivered send to its own Sent folder,
+   * reports the folder, and the drill's client is built with it here, so Appendix E
+   * step 3's Sent search answers from what the earlier client delivered rather than
+   * from an empty folder no Gmail mailbox would have.
+   */
+  readonly sentMessageIds?: readonly string[] | undefined;
 }
 
 export interface GmailFakeCall {
@@ -130,6 +141,12 @@ export interface RecordedGmailClient extends GmailClient {
   readonly sends: readonly GmailSendRequest[];
   /** RFC Message-IDs the Sent-folder search was run for, in order. */
   readonly sentSearches: readonly string[];
+  /**
+   * RFC Message-IDs the Sent folder holds now: the fixture's own, and every send this
+   * client delivered (an `accept`, or an `indeterminate_but_delivered` whose response
+   * was dropped). Not the refused or the indeterminate ones, which never arrived.
+   */
+  readonly sentMessageIds: readonly string[];
 }
 
 const byHistoryId = (left: GmailFixtureMessage, right: GmailFixtureMessage): number =>
@@ -142,7 +159,7 @@ export function recordedGmailClient(fixture: GmailFixture): RecordedGmailClient 
   const sends: GmailSendRequest[] = [];
   const sentSearches: string[] = [];
   /** RFC Message-IDs the Sent folder holds, whatever the caller was told. */
-  const sentFolder = new Set<string>();
+  const sentFolder = new Set<string>(fixture.sentMessageIds ?? []);
   const searchesFor = new Map<string, number>();
   const requestedHeaders = new Set<string>();
   const expired = new Set(fixture.expiredHistoryIds ?? []);
@@ -176,6 +193,9 @@ export function recordedGmailClient(fixture: GmailFixture): RecordedGmailClient 
     sentSearches,
     get requestedHeaders(): readonly string[] {
       return [...requestedHeaders];
+    },
+    get sentMessageIds(): readonly string[] {
+      return [...sentFolder];
     },
 
     authorizationUrl(config: GmailOAuthConfig, input): string {

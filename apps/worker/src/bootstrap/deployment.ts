@@ -6,6 +6,7 @@ import {
   loadKmsTransport,
   localDataKeyWrapper,
   recordedGmailClient,
+  recordedSeamDataKeyWrapper,
   staticSecretProvider,
   type EnvelopeCipher,
   type GmailClient,
@@ -223,8 +224,12 @@ export interface GmailDeployment {
   readonly oauth: GmailOAuthConfig;
   readonly cipher: EnvelopeCipher;
   readonly secrets: SecretProvider;
-  /** `kms` in production, `local` in rehearsal. Never a key and never a ciphertext. */
-  readonly envelopeSource: 'kms' | 'local';
+  /**
+   * `kms` in production. In a recorded deployment, `kms_recorded_seam` when the task
+   * carries the environment's envelope key (every deployed rehearsal task does), and
+   * `local` on a laptop or in a test without one. Never a key and never a ciphertext.
+   */
+  readonly envelopeSource: 'kms' | 'kms_recorded_seam' | 'local';
   readonly gmailSource: 'https' | 'recorded';
   /** `environment` once the stack module carries it; `secret` is the old shape. */
   readonly pushTopicSource: PublicIdentifierSource;
@@ -379,13 +384,32 @@ export async function readGmailDeployment(
   if (dependencies === 'recorded') {
     // The rehearsal selection, and it is named rather than inferred. `recordedGmailClient`
     // answers from a fixture and reaches nothing.
+    //
+    // The envelope is the environment's own KMS key when the task carries it (lane g59).
+    // `localDataKeyWrapper` makes a master key per process, so a refresh token the drill
+    // evidence seed wrapped in one task could not be unwrapped by `fss drill` in the next,
+    // and every mailbox step of the drill failed on it. Both tasks carry
+    // `FSS_ENVELOPE_KEY_ID`, so both now wrap and unwrap through the production wrapper,
+    // bound to `RECORDED_SEAM_ENCRYPTION_CONTEXT`: KMS will not decrypt one of these
+    // envelopes for a live process, and the drill's grant is conditioned on that context.
+    // A laptop or a test with no key id keeps the per-process local key, as before.
+    const envelopeKeyId = environment[VARIABLES.envelopeKeyId]?.trim() ?? '';
+    const recordedSeam = envelopeKeyId.length > 0;
+    const cipher = recordedSeam
+      ? envelopeCipher(
+          recordedSeamDataKeyWrapper({
+            keyId: envelopeKeyId,
+            transport: await (options.loadKms ?? loadKmsTransport)(required(environment, VARIABLES.region)),
+          }),
+        )
+      : envelopeCipher(localDataKeyWrapper('rehearsal-envelope'));
     return {
       config,
       gmail: recordedGmailClient({ emailAddress: REHEARSAL_MAILBOX_ADDRESS, historyId: '1', messages: [] }),
       oauth,
-      cipher: envelopeCipher(localDataKeyWrapper('rehearsal-envelope')),
+      cipher,
       secrets,
-      envelopeSource: 'local',
+      envelopeSource: recordedSeam ? 'kms_recorded_seam' : 'local',
       gmailSource: 'recorded',
       pushTopicSource,
       hostedDomainSource,

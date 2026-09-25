@@ -1,5 +1,6 @@
-import { randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
+import { RECORDED_SEAM_ENCRYPTION_CONTEXT, type KmsTransport } from '@fss/domain/mail';
 import {
   DEPLOYMENT_ENVIRONMENT_VARIABLES,
   DeploymentConfigError,
@@ -260,13 +261,101 @@ describe('a production deployment can never reach the unconfigured branch', () =
   });
 });
 
+/**
+ * A KMS stand-in with one master key and KMS's own rule about encryption context: a
+ * `Decrypt` whose context differs from the `GenerateDataKey` that made the blob is
+ * refused. Built per test, so no key exists anywhere but in this process's memory.
+ */
+function contextCheckingKms(): { readonly transport: KmsTransport; readonly calls: string[] } {
+  const master = randomBytes(32);
+  const calls: string[] = [];
+  const label = (context: Readonly<Record<string, string>> | undefined): Buffer =>
+    Buffer.from(JSON.stringify(Object.entries(context ?? {}).sort()));
+  return {
+    calls,
+    transport: {
+      generateDataKey: async input => {
+        calls.push(`generate:${input.KeyId}:${JSON.stringify(input.EncryptionContext ?? {})}`);
+        const plaintext = randomBytes(32);
+        const iv = randomBytes(12);
+        const cipher = createCipheriv('aes-256-gcm', master, iv);
+        cipher.setAAD(label(input.EncryptionContext));
+        const body = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+        return await Promise.resolve({
+          Plaintext: plaintext,
+          CiphertextBlob: Buffer.concat([iv, cipher.getAuthTag(), body]),
+        });
+      },
+      decrypt: async input => {
+        calls.push(`decrypt:${input.KeyId}:${JSON.stringify(input.EncryptionContext ?? {})}`);
+        const blob = Buffer.from(input.CiphertextBlob);
+        const decipher = createDecipheriv('aes-256-gcm', master, blob.subarray(0, 12));
+        decipher.setAAD(label(input.EncryptionContext));
+        decipher.setAuthTag(blob.subarray(12, 28));
+        // Throws on a context mismatch, which is KMS's InvalidCiphertextException.
+        return await Promise.resolve({
+          Plaintext: Buffer.concat([decipher.update(blob.subarray(28)), decipher.final()]),
+        });
+      },
+    },
+  };
+}
+
 describe('the rehearsal deployment selects its fakes by name', () => {
-  it('uses the recorded Gmail client and a local envelope key, and says so', async () => {
+  it('uses the recorded Gmail client and the environment’s envelope key on the recorded seam, and says so', async () => {
+    const kms = contextCheckingKms();
     const deployment = await readWorkerDeployment(
       liveEnvironment({ [V.environmentName]: 'rehearsal', [V.dependencies]: 'recorded' }),
+      { loadKms: async () => await Promise.resolve(kms.transport) },
     );
     expect(deployment.gmail?.gmailSource).toBe('recorded');
+    expect(deployment.gmail?.envelopeSource).toBe('kms_recorded_seam');
+    expect(describeDeployment(deployment)).toMatchObject({ envelope_key: 'kms_recorded_seam' });
+  });
+
+  it('keeps the per-process local key where no envelope key is configured, as a laptop has none', async () => {
+    const deployment = await readWorkerDeployment(
+      liveEnvironment({ [V.environmentName]: 'rehearsal', [V.dependencies]: 'recorded', [V.envelopeKeyId]: undefined }),
+    );
     expect(deployment.gmail?.envelopeSource).toBe('local');
+  });
+
+  /**
+   * Lane g59. The drill evidence seed and `fss drill` are two tasks, and the drill has
+   * to unwrap the refresh token the seed stored. With a per-process local key it could
+   * not; with the environment's key on the recorded seam, two separately read
+   * deployments share it — and a live deployment reading the same row is refused, both
+   * by the key id it records and by KMS's context rule.
+   */
+  it('lets a second recorded process unwrap what the first wrapped, and refuses a live one', async () => {
+    const kms = contextCheckingKms();
+    const recorded = liveEnvironment({ [V.environmentName]: 'rehearsal', [V.dependencies]: 'recorded' });
+    const seed = await readWorkerDeployment(recorded, { loadKms: async () => await Promise.resolve(kms.transport) });
+    const drill = await readWorkerDeployment(recorded, { loadKms: async () => await Promise.resolve(kms.transport) });
+    const plaintext = `token-${randomBytes(8).toString('hex')}`;
+    const envelope = await seed.gmail?.cipher.encrypt(plaintext);
+    expect(envelope).toBeDefined();
+    if (envelope === undefined) return;
+    expect(envelope.keyId).toBe('recorded-seam:arn:aws:kms:us-east-1:000000000000:key/example');
+    expect(await drill.gmail?.cipher.decrypt(envelope)).toBe(plaintext);
+    // KMS itself is asked with the bare key and the recorded context, on both sides.
+    const context = JSON.stringify(RECORDED_SEAM_ENCRYPTION_CONTEXT);
+    expect(kms.calls).toEqual([
+      `generate:arn:aws:kms:us-east-1:000000000000:key/example:${context}`,
+      `decrypt:arn:aws:kms:us-east-1:000000000000:key/example:${context}`,
+    ]);
+
+    // A live process names the bare key, so the row is refused before KMS is asked.
+    const live = await readWorkerDeployment(liveEnvironment({ [V.environmentName]: 'rehearsal' }), {
+      loadKms: async () => await Promise.resolve(kms.transport),
+    });
+    await expect(live.gmail?.cipher.decrypt(envelope)).rejects.toMatchObject({ code: 'KEY_MISMATCH' });
+    // And were that check ever bypassed, KMS refuses a decrypt without the context.
+    const callsBefore = kms.calls.length;
+    await expect(
+      live.gmail?.cipher.decrypt({ ...envelope, keyId: 'arn:aws:kms:us-east-1:000000000000:key/example' }),
+    ).rejects.toThrow();
+    expect(kms.calls.slice(callsBefore)).toEqual(['decrypt:arn:aws:kms:us-east-1:000000000000:key/example:{}']);
   });
 
   it('never selects a fake because a variable was missing', async () => {

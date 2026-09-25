@@ -552,18 +552,28 @@ describe('fss drill --expected-generation, and fss admin restore-holds open (lan
       ],
       recordedEnvironment(),
     );
-    // Stopped, but past step 1's restore-hold assertion: at the dial probe, which finds
-    // no dialable subject in a database with one bare workspace and refuses to call
-    // that a refusal (the vacuous pass step 1's second half exists to prevent).
+    // Past step 1's restore-hold assertion. The dial probe finds no dialable subject in
+    // a database with one bare workspace and refuses to call that a refusal (the vacuous
+    // pass step 1's second half exists to prevent); since lane g59 that is recorded as
+    // unanswered, the drill measures the steps after it, and it stops at the first of
+    // them that fails — here the journal replay, because this test configured no
+    // journal. Still exit 20: a drill with an unanswered step is a failed drill.
     expect(code, stderr).toBe(20);
     const summary = JSON.parse(readFileSync(join(drillReports, 'drill.json'), 'utf8')) as Record<string, unknown>;
-    expect(summary['stoppedAt']).toBe('step1-dial-refused');
+    expect(summary['ok']).toBe(false);
+    expect(summary['stoppedAt']).toBe('step2-journal-replay');
+    expect(summary['unanswered']).toEqual(['step1-dial-refused']);
     const steps = summary['steps'] as readonly Record<string, unknown>[];
-    expect(steps.map(entry => [entry['step'], entry['ok']])).toEqual([
-      ['step1a-generation-check', true],
-      ['step1-restore-holds', true],
-      ['step1-dial-refused', false],
+    expect(steps.map(entry => [entry['step'], entry['ok'], entry['unanswered'] === true])).toEqual([
+      ['step1a-generation-check', true, false],
+      ['step1-restore-holds', true, false],
+      ['step1-dial-refused', false, true],
+      ['step2-journal-replay', false, false],
     ]);
+    expect(readStep(drillReports, 'step1-dial-refused')).toMatchObject({ refused: 'no_dialable_subject' });
+    expect(String(readStep(drillReports, 'step1-dial-refused')['detail'])).toContain(
+      '0 assigned firm(s) with a usable phone route and 0 verified, enabled calling identities',
+    );
     expect(readStep(drillReports, 'step1a-generation-check')).toMatchObject({
       systemGeneration: 1,
       expectedGeneration: 2,
@@ -584,6 +594,48 @@ describe('fss drill --expected-generation, and fss admin restore-holds open (lan
       observed_generation: 1,
       restore_holds_opened: 1,
     });
+  });
+
+  it('prints the report of a drill that failed, on stdout where the runner reads answers (lane g59)', async () => {
+    const drillReports = mkdtempSync(join(tmpdir(), 'fss-g59-printed-'));
+    const { code, stdout } = await run(
+      [
+        'drill',
+        '--reports',
+        drillReports,
+        '--baseline-json',
+        JSON.stringify(handed),
+        '--expected-generation',
+        '2',
+        '--all-mailboxes',
+      ],
+      recordedEnvironment(),
+    );
+    // A report is not a pass: the exit code still says refused.
+    expect(code).toBe(20);
+    const printed = JSON.parse(stdout) as Record<string, unknown>;
+    expect(printed['ok']).toBe(false);
+    expect(printed['unanswered']).toEqual(['step1-dial-refused']);
+    expect((printed['steps'] as readonly unknown[]).length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('refuses an unreadable at-failure value or mailbox recording before any step (lane g59)', async () => {
+    for (const [flag, value, reason] of [
+      ['--at-failure-json', '{"asOf":', 'at_failure_unreadable'],
+      ['--at-failure-json', JSON.stringify({ ...handed, asOf: '2026-09-20T00:00:00.000Z' }), 'at_failure_unreadable'],
+      ['--mailbox-recording-json', '[]', 'mailbox_recording_unreadable'],
+      ['--mailbox-recording-json', JSON.stringify({ sentMessageIds: 'x', messages: [] }), 'mailbox_recording_unreadable'],
+      ['--mailbox-recording-json', JSON.stringify({ sentMessageIds: [], messages: [{ id: 'm' }] }), 'mailbox_recording_unreadable'],
+    ] as const) {
+      const drillReports = mkdtempSync(join(tmpdir(), 'fss-g59-refused-'));
+      const { code, stderr } = await run(
+        ['drill', '--reports', drillReports, '--baseline-json', JSON.stringify(handed), flag, value, '--expected-generation', '2'],
+        recordedEnvironment(),
+      );
+      expect(code, value).toBe(20);
+      expect(stderr, value).toContain(reason);
+      expect(existsSync(join(drillReports, 'step1a-generation-check.json')), value).toBe(false);
+    }
   });
 
   it('admin restore-holds open is idempotent, and refuses a pin it cannot use', async () => {

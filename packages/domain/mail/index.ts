@@ -104,8 +104,11 @@ export {
 } from './envelope.ts';
 
 export {
+  RECORDED_SEAM_ENCRYPTION_CONTEXT,
+  RECORDED_SEAM_KEY_PREFIX,
   kmsDataKeyWrapper,
   loadKmsTransport,
+  recordedSeamDataKeyWrapper,
   type KmsDecryptInput,
   type KmsDecryptOutput,
   type KmsGenerateDataKeyInput,
@@ -285,6 +288,7 @@ export {
 
 export {
   NO_RECOVERY_FLOOR,
+  beginRestoreRecovery,
   listIncompleteRecoveries,
   readRecovery,
   rearmRecoveryJob,

@@ -41,30 +41,53 @@ A restore drill against an empty database proves nothing. Before taking the rest
 5. at least one ordinary **CRM edit** with no protected effect;
 6. at least one applied **migration**.
 
-In a deployed environment, one command does all six (lane g40):
+Those six are what the baseline refusal below counts. They are not everything the steps after it need to find, and until lane g59 this section did not say so: the drill stopped at step 1 on every run, and would have stopped at steps 2, 3, 4, 8 and 9 in turn behind it (`docs/greenfield/release.md` 8.0s, 8.1). The full list, every prerequisite produced through the domain's own entry point and none by an `INSERT`:
+
+| Step | What it has to find | What produces it | When |
+|---|---|---|---|
+| 1, dial probe | an assigned firm with a usable **phone** route, **and** a verified, enabled **calling identity** owned by that firm's assignee | the route: `addPhoneRoute`. The identity: **nothing** — no domain function, command or API route creates or verifies a `calling_identities` row, so nothing seeds one | route in `before`; identity **open** (below) |
+| 2 | a journalled suppression the restore **loses** | a second prospect opt-out, ingested by the mail pipeline (`processMessageIds`), journalled before its row | `after` |
+| 3 | a fence in `dispatching` or `reconciling`, started no earlier than the target minus ten minutes, whose Message-ID the Sent folder holds | one send through `dispatchOutboundMessage` against a recorded Gmail that delivers it and loses the response (Appendix B's fifth scenario), leaving the fence `reconciling` | `in-flight`, just before the target |
+| 4 | an inbox message the restore lost, from a prospect the restored copy knows | the same late opt-out: its reply-lane entry is the reply effect step 4 counts, its firm and handle suppressions the opt-out effects; its firm and contact are made in `before` | `after` |
+| 3, 4, 6 | a mailbox the drill task can read | the environment's KMS envelope key on the recorded seam, and the mailbox recording each phase reports (below) | every phase |
+| 8 | the counts at the moment of failure | `fss admin counts` on the source after the `after` phase, handed to the drill as `--at-failure-json` | after `after` |
+| 9 | a hold other than the restore holds, in force immediately before the advance; an active admin to attribute the advance to | an administrative pause through `openPause`; the workspace admin the seed acted as, handed to the drill as `--admin-user` | `before` |
+
+**Step 1's dial probe stays open.** A calling identity is "a verified Callie outbound number" (9.1), and this build has no path that verifies one: nothing writes `verification_status = 'verified'`. Production has none either, so every dial there is refused at 9.1's second step before the restore pause is consulted, and a refused dial on such a database would prove nothing about the pause. The probe therefore refuses `no_dialable_subject`, and its detail gives the count of each half and names the row it lacks. The drill records that step as failed and **unanswered**, runs every step after it so they are measured, and still fails: its report's `unanswered` names the step, the runner refuses any report with an unanswered step, and no release record is written. A dial that was *authorized* stops the drill where it happens, as it always did. The step closes when a calling identity can be verified through a product path; an `INSERT` of one would be exactly the fixture this section refuses.
+
+**The mailbox, across tasks.** Each phase and the drill are separate one-off tasks, and two things the drill shares with the seed do not survive a process by themselves. Each is handed over rather than faked:
+
+* *the envelope key.* A recorded deployment used to wrap refresh tokens under a master key made per process, so the drill could not unwrap the token the seed stored. A task that carries `FSS_ENVELOPE_KEY_ID` — every deployed rehearsal task does — now wraps through the production KMS wrapper under the encryption context `fss_envelope_seam = recorded`, and labels the row's key id `recorded-seam:<key>`. A live process names the bare key and asks KMS with no context, so it refuses such a row twice over. The drill task role gets `kms:Decrypt` under that context only, and only outside production (`infra/modules/cluster`, `drill_unwraps_recorded_envelopes`). A task without the variable — a laptop, a test — keeps the per-process key;
+* *the mailbox itself.* A recorded Gmail lives in the process that built it. Each phase's JSON report carries what its recorded mailbox holds — the Sent folder it delivered into and the inbound messages it delivered — and the runner merges the three reports and hands the drill `--mailbox-recording-json`. The drill's mail steps run against a recorded client built from that. Nothing in it is a credential, and nothing in it comes from the restored database.
+
+In a deployed environment one command, in three phases, produces all of it (lanes g40 and g59). The first:
 
 ```bash
-# (FSS) the five kinds, through the domain's own entry points, idempotently
+# (FSS) the six kinds, and what steps 1, 4 and 9 need to find later, idempotently
 fss admin drill seed-evidence --workspace-slug rehearsal --phase before --report /tmp/evidence-before.json
 ```
 
 It creates a fixed, recognisable firm, contact, route and opportunity under
-`drill-evidence.invalid`; drives one outbound fence through the real dispatch path
-against the recorded Gmail client until its state is `sent`; ingests a prospect reply
-and a prospect-originated opt-out through the same pipeline the mail sync runs, so the
-reply's confirmation sets the opportunity manual and the opt-out's suppression is
-journalled before its row; records a salesperson's own manual suppression, whose
-ten-minute correction window is still open when the drill runs minutes later; and makes
-one ordinary CRM edit. Each item is reported `created` or `existing`, and the report
-ends with the same five counts `fss admin counts` reports — it calls the same code, so
-the numbers cannot drift from the ones the refusal below reads. A second run adds
-nothing.
+`drill-evidence.invalid`, and a sending domain through `registerSendingDomain`; drives
+one outbound fence through the real dispatch path against the recorded Gmail client
+until its state is `sent`; ingests a prospect reply and a prospect-originated opt-out
+through the same pipeline the mail sync runs, so the reply's confirmation sets the
+opportunity manual and the opt-out's suppression is journalled before its row; records
+a salesperson's own manual suppression, whose ten-minute correction window is still
+open when the drill runs minutes later; makes one ordinary CRM edit; and makes what the
+later steps need to find: the firm whose opt-out arrives after the target, a usable
+phone route, and an administrative pause. Each item is reported `created` or
+`existing`, and the report carries the same five counts `fss admin counts` reports —
+it calls the same code, so the numbers cannot drift from the ones the refusal below
+reads — along with the workspace admin it acted as and its mailbox recording. A second
+run of any phase adds nothing and reports the same recording.
 
-The release runs it for you: `.github/workflows/greenfield-release.yml` has a
+The release runs this phase for you: `.github/workflows/greenfield-release.yml` has a
 `Create the evidence the drill has to reconstruct` step between the workspace bootstrap
 and the schema ranges, which launches
 `infra/scripts/release-seed-drill-evidence.sh … --phase before` on the operations task
-definition.
+definition. `infra/scripts/rehearsal-restore-drill.sh` runs the other two, each where
+this document puts it.
 
 **Production is never seeded.** Section 7 of the runbook drills production against real
 data, and the sends, replies and suppressions it reconstructs are a salesperson's — a
@@ -74,37 +97,36 @@ neither depends on the other: the command refuses unless `FSS_DEPENDENCIES` is e
 `release-seed-drill-evidence.sh` refuses any prefix that is not `fss-rh-<run>` with no
 flag that relaxes it.
 
-Then read the restore target — **RDS chooses it, you do not** — and let the clock run past it while more activity happens, so the restore genuinely loses work:
+Then leave one send in doubt, and read the restore target — **RDS chooses it, you do not**:
 
 ```bash
+# (FSS) one send delivered whose response was lost: the fence step 3 reconciles
+fss admin drill seed-evidence --workspace-slug rehearsal --phase in-flight --report /tmp/evidence-in-flight.json
+# ... wait until LatestRestorableTime is later than that report's asOf, then:
 export RESTORE_TARGET=$(aws rds describe-db-instances --db-instance-identifier "${PREFIX}-pg" \
   --query 'DBInstances[0].LatestRestorableTime' --output text | sed -E 's/\.[0-9]+//; s/\+00:00$//')Z
 echo "restore target: $RESTORE_TARGET"
-# ... generate more activity after this instant, so the restore genuinely loses work:
-# (FSS) a second accepted send and a second ordinary CRM edit, and nothing else
-fss admin drill seed-evidence --workspace-slug rehearsal --phase after --report /tmp/evidence-after.json
 ```
 
-`--phase after` adds a send and an edit and nothing else on purpose: a second
-suppression or a second reply would change what steps 2 and 4 below are reconstructing.
-`infra/scripts/rehearsal-restore-drill.sh` runs it between measuring the baseline and
-requesting the restore, which is the only place it can go.
+The send goes first, the wait second and the target third, because step 3 looks only at
+fences started from the target minus ten minutes: the fence has to be in the restored
+copy and inside that window. The latest restorable point lags real time, so the drill
+script **waits** for RDS to report a `LatestRestorableTime` later than the newest
+evidence instant — the in-flight report's `asOf`, or the before report's where somebody
+else seeded — before it reads the target at all. Without that wait the target would
+predate the evidence, the restore would land on a database that has none of it, and the
+refusal below would fire with the seeding having run and worked.
 
-Because the latest restorable point lags real time, the drill script also **waits** for
-RDS to report a `LatestRestorableTime` later than the `asOf` instant the before-phase
-report recorded, before it reads the restore target at all. Without that wait the target
-would predate the evidence, the restore would land on a database that has none of it,
-and the refusal below would fire with the seeding step having run and worked.
+`date -u` used to stand here and it was wrong: the latest restorable point lags real time by up to about five minutes (spec 4.1), so "now" is an instant the instance cannot be restored to and `--restore-time` refuses it with `InvalidRestoreTime`. The restore below therefore asks for `--use-latest-restorable-time` and the baseline is measured at the instant RDS reported a moment earlier. Reading it first and restoring second can only mean the restored database holds slightly *more* than the baseline counted, which is the safe direction: every assertion below is "no suppression lost, no send repeated" against a floor. It is also why the work the restore is meant to lose is written only **once the restore has been requested** (step 1), and not between the baseline and the request as it was until lane g59: activity in that gap may or may not be in the restored copy, and only a point RDS had not reached when it was asked certainly is not.
 
-`date -u` used to stand here and it was wrong: the latest restorable point lags real time by up to about five minutes (spec 4.1), so "now" is an instant the instance cannot be restored to and `--restore-time` refuses it with `InvalidRestoreTime`. The restore below therefore asks for `--use-latest-restorable-time` and the baseline is measured at the instant RDS reported a moment earlier. Reading it first and restoring second can only mean the restored database holds slightly *more* than the baseline counted, which is the safe direction: every assertion below is "no suppression lost, no send repeated" against a floor.
-
-Record the counts you expect to survive and the counts you expect to be reconstructed:
+Record the counts you expect to survive:
 
 ```bash
-# (FSS) reconciliation baseline
+# (FSS) reconciliation baseline, on the source, at the target
 fss admin counts --as-of "$RESTORE_TARGET" > /tmp/before.json
-fss admin counts > /tmp/at-failure.json
 ```
+
+The counts at the moment of failure come in step 1, after the work the restore loses.
 
 ## Step 1. Restore, and prove the generation mismatch holds sending and dialing
 
@@ -121,9 +143,29 @@ aws rds restore-db-instance-to-point-in-time \
   --vpc-security-group-ids "$(terraform output -json security_group_ids | python3 -c 'import json,sys; print(json.load(sys.stdin)["database"])')" \
   --no-publicly-accessible \
   --db-parameter-group-name "${PREFIX}-pg16"
+```
+
+**As soon as the restore has been requested**, write the work it is meant to lose, and count the source at the moment of failure (lane g59):
+
+```bash
+# (FSS) on the source: a late prospect opt-out, a second accepted send, a second CRM edit
+fss admin drill seed-evidence --workspace-slug rehearsal --phase after --report /tmp/evidence-after.json
+# (FSS) on the source: the counts at the moment of failure, which step 8 compares against
+fss admin counts > /tmp/at-failure.json
 
 aws rds wait db-instance-available --db-instance-identifier "${PREFIX}-pg-restored"
 ```
+
+`--phase after` adds one of each thing a real outage loses. The opt-out is what steps 2
+and 4 reconstruct: the restore loses its row, step 2 replays its suppression from the
+journal, and step 4 recovers the message from the inbox and reapplies its effects. Its
+suppressions' command ids are keyed on the provider's message id rather than the row's,
+so the event step 4 derives on the restored copy is the one step 2 replayed, not a
+second one that the drill task, which cannot append to the journal, would have to
+write. The send and the edit are lost with it; the edit is step 8's RPO, and the send
+is the case step 3 does not yet cover (below). Until lane g59 this phase added only the
+send and the edit and ran between the baseline and the request, so step 2 had nothing to
+replay, and the send could land on either side of the point RDS chose.
 
 Note the actual restorable point RDS used. It may lag the requested target by up to about five minutes (spec 4.1), and that lag is part of what the drill measures:
 
@@ -158,6 +200,14 @@ aws ecs wait services-stable --cluster "${PREFIX}-cluster" --services "${PREFIX}
 fss admin holds list --reason restore_in_progress
 fss admin dial-authorize --any   # expect: allowed=false, and restore_in_progress among the holds
 ```
+
+The dial half needs a subject that could otherwise be dialed: an assigned firm with a
+usable phone route whose assignee owns a verified, enabled calling identity. Nothing in
+this build can verify a calling identity (0.1), so the probe refuses
+`no_dialable_subject` and says which half is missing, rather than calling a refusal for
+a missing number a restore hold. The automated drill records `step1-dial-refused` as
+unanswered and carries on so the later steps are measured; the runner fails the drill
+on it all the same.
 
 And the alarm must have fired. This is the `restore_generation_mismatch` metric filter feeding the immediately-critical alarm. It is one datapoint of one at 60 s and treats missing data as not breaching, so a few minutes after the last mismatch line its *state* is OK again; read its history, which keeps the transition:
 
@@ -238,6 +288,14 @@ Assertions:
 ```bash
 python3 -c "import json;r=json.load(open('/tmp/sent-reconcile.json'));assert r['resent']==0, r"
 ```
+
+What the command does in this build: it reconciles the fences the restored copy holds in
+`dispatching` or `reconciling`, started since `$SENT_FROM`, against the Sent folder, and
+tombstones each one the folder proves delivered. The drill measures that case with the
+in-flight send (0.1): one fence, one tombstone, nothing resent. A send whose fence the
+restored copy never had — the `after` phase's — has no row to tombstone, and inserting
+one for it, the first assertion above, is not implemented (`docs/greenfield/release.md`
+8.1). The drill does not claim it.
 
 ## Step 4. Reprocess every mailbox inbox from the same point
 
@@ -350,6 +408,7 @@ The report must answer, in numbers:
 | Question | Expected |
 |---|---|
 | Suppressions before vs after | equal or greater. **Never fewer.** A lost suppression fails the drill. |
+| Suppressions at failure vs after | equal or greater. A suppression acknowledged before the failure and not back after steps 2 and 4 fails the drill, even when the count is above the baseline. |
 | Sends that repeated | **zero** |
 | Fences left `reconciling` | listed by mailbox with their observation deadline |
 | Fences left `unknown_terminal` | listed, each awaiting an admin delivered/skipped decision |
@@ -357,6 +416,20 @@ The report must answer, in numbers:
 | Ordinary CRM edits lost | the accepted RPO. **Report it; do not hide it.** This is the one category the design accepts losing. |
 | Ambiguous messages still held | listed; they must still be held, not silently resolved |
 | Dead jobs | carried over, still visible to admins |
+
+`--at-failure` is the source counted after the work the restore loses (step 1). With
+it the report adds `at_failure_as_of`, `suppressions_at_failure`, `sends_at_failure`,
+`replies_at_failure`, `crm_edits_at_failure`, `migrations_at_failure` and
+`crm_edits_lost` — the edits at failure minus the edits after, a floor on the RPO in
+edits beside `crm_rpo_seconds` — and step 9 refuses (`report_suppression_lost`) a report
+whose `suppressions_after` is below `suppressions_at_failure`. There is deliberately no
+"sends lost" figure: a tombstone from step 3 can offset a send that was lost, so a
+difference of counts would say less than it seems to. Until lane g59 nothing wrote
+`/tmp/at-failure.json` in the automated drill, and "no suppression lost" was measured
+against the baseline alone, which never had the suppressions recorded after the target.
+The runner hands the drill the at-failure counts as `--at-failure-json`, the drill writes
+them to `step0-at-failure.json` and passes that file here, and the runner requires both
+fields in the report and the after count at or above the at-failure one.
 
 Attach `/tmp/restore-report.json` to the release record. Appendix G scenario 11 is exactly this table.
 
@@ -370,6 +443,11 @@ This is a deliberate human act with a normal active, device-bound admin session.
 # (FSS) refuses unless the step 8 report exists and has no unresolved exception.
 fss admin system-generation advance --report /tmp/restore-report.json
 ```
+
+The advance is attributed to an active admin: `--admin-user`, or `FSS_ADMIN_USER_ID`. The
+automated drill hands it the workspace admin the evidence seed acted as, from the
+`before` report's `adminUserId` (lane g59). The drill was launched without one until
+then, so step 9 would have refused `admin_missing` on the first run to reach it.
 
 Then prove the release was **selective**, which is the part that is easy to get wrong:
 
@@ -385,6 +463,13 @@ Assertions:
 - unexecuted work has shifted by the **union** of blocking intervals, not their sum;
 - any enrollment whose union exceeds seven calendar days is still held for salesperson review and explicit resume;
 - every resume performed a fresh eligibility check.
+
+"Before" means immediately before the advance. The drill counts the holds other than the
+restore holds at that instant, and requires at least one, so selectivity is actually
+tested: the `before` phase's administrative pause is that hold. Until lane g59 the count
+was taken before step 1, so a hold steps 2 to 8 rightly released — step 3 ends the
+in-doubt send's `send_unknown_reconciling` hold once the Sent folder proves delivery —
+was read as one the advance had cleared.
 
 ```bash
 aws cloudwatch describe-alarms --alarm-names "${PREFIX}-restore-generation-mismatch" \
@@ -418,6 +503,8 @@ The drill **passes** when all of these hold:
 8. advancing the generation released **only** the restore holds.
 
 Any single failure fails the release. In particular a repeated send or a lost suppression is not a bug to file and move past; it is invariants 1 and 4 of the specification.
+
+A step the drill could not answer is a failure too. Its report lists it under `unanswered` with the prerequisite it lacked, and runs the steps after it so they are measured, but a report with anything in `unanswered` is not a pass (lane g59). Today that is `step1-dial-refused`, for the reason in 0.1.
 
 ## 12. Recurring drill
 

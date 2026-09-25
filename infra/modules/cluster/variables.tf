@@ -268,6 +268,24 @@ variable "secrets_kms_key_arn" {
   type        = string
 }
 
+variable "drill_unwraps_recorded_envelopes" {
+  description = <<-EOT
+    Whether the drill task role may decrypt with the envelope key, and then only an
+    envelope bound to the recorded seam's encryption context (lane g59).
+
+    `fss drill` has to read the refresh token the drill-evidence seed stored in
+    another task. Both run with FSS_DEPENDENCIES=recorded and wrap through the
+    environment's envelope key with the context
+    `fss_envelope_seam = recorded` (packages/domain/mail/envelopeKms.ts), so this
+    grant is conditioned on that context: the drill identity can unwrap what a
+    recorded seed wrapped and never a real mailbox's token, which a live process
+    wraps without it. The rehearsal sets it; production does not, so production's
+    plan shows no change and its drill role has no envelope grant at all.
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "metric_namespace" {
   description = "CloudWatch namespace the applications publish counters and heartbeats to, and the only one their task roles may publish into. FSS/<name_prefix>, derived once in infra/modules/stack. No default: the bare FSS namespace was shared by every environment in the account (g42)."
   type        = string

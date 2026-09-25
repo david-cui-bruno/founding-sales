@@ -263,6 +263,16 @@ export async function applyClassificationEffects(
   // 12.4: "Explicit deterministic opt-out language suppresses immediately." The
   // handle always; the firm only when there is exactly one candidate, because
   // "unambiguous" is what 12.3's ambiguity protocol means by one plausible firm.
+  //
+  // The command id names the message as Gmail knows it — the mailbox and Gmail's own
+  // message id — and never the `mail_messages` row id (lane g59). The row id is
+  // generated on insert, so after a restore the same opt-out, recovered from the inbox
+  // by Appendix E step 4, is a new row with a new id: keyed on it, the recovery minted
+  // a second event id for a suppression step 2 had already replayed from the journal,
+  // recorded the opt-out twice, and had to append a second journal object — which the
+  // drill identity cannot write, so step 4 could not reapply the opt-out at all. Keyed
+  // on the provider identity, step 4 reaches the replayed event and records it once.
+  const optOutCommand = `mail-message:${message.mailboxId}:${message.providerMessageId}`;
   if (classification.class === 'opt_out') {
     const address = message.headerFrom;
     if (address !== null) {
@@ -272,7 +282,7 @@ export async function applyClassificationEffects(
           scope: 'handle',
           value: address,
           source: 'prospect_opt_out',
-          commandId: `mail-message:${message.id}`,
+          commandId: optOutCommand,
           journal: input.journal,
         });
         if (recorded.ok) {
@@ -304,7 +314,7 @@ export async function applyClassificationEffects(
           scope: 'firm',
           firmId: only.firmId,
           source: 'prospect_opt_out',
-          commandId: `mail-message:${message.id}:firm`,
+          commandId: `${optOutCommand}:firm`,
           journal: input.journal,
         });
         if (recorded.ok) {
