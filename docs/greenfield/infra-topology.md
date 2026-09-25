@@ -127,3 +127,37 @@ Enter, in this order: RDS (db.t4g.small, Multi-AZ, 50 GB gp3, 35-day backup), Fa
 3. The three **cost levers** in section 2 — in particular whether to build arm64 images and whether one API task is acceptable.
 4. The **six KMS keys**, or the consolidation named in section 4.
 5. That **WAF, Performance Insights, Enhanced Monitoring, Container Insights and flow logs stay off** until something asks for them.
+
+## 10. The Google root (lane g85, 25 September 2026)
+
+Section 6's Google Cloud lines are no longer created by the `production` root. Since lane
+g85 they belong to **`infra/roots/production-google`**, a fourth root. It holds the four
+Gmail push objects and nothing else, and its state key is
+`fss/greenfield/production-google/terraform.tfstate`, in the production state bucket and
+lock table. The quantities and pricing dimensions in section 6 are unchanged. Only the
+root that manages them, and the variable column, changed:
+
+| Line item | Root | Variable |
+|---|---|---|
+| Pub/Sub topic `fss-prod-gmail-push` | `production-google` | none; `name_prefix` is fixed at `fss-prod`, the project is `gcp_project_id` (default `callie-fss`) |
+| Pub/Sub push subscription `fss-prod-gmail-push` | `production-google` | `api_hostname` and `gmail_push_path` build its endpoint and audience |
+| Service account `fss-prod-gmail-push`, 1 topic IAM binding | `production-google` | none |
+
+`enable_gmail_push` is gone. The `production` root declares no Google provider and
+creates nothing in Google Cloud. It carries the topic id and the push service account as
+the committed defaults of `gmail_push_topic` and `gmail_push_service_account`, so an
+ordinary production plan needs no Google login (audit O01). The Google root is planned
+only when one of its objects changes, with application-default credentials. The root
+list is now:
+
+```
+roots/
+  production          AWS only, environment = "production", name_prefix = "fss-prod"
+  production-google   Google only: the Gmail push topic, subscription, service account and publisher grant
+  rehearsal           AWS only, name_prefix = "fss-rh-<run>"
+  rehearsal-registry  the two durable rehearsal ECR repositories
+```
+
+`docs/decisions/g85-the-google-provider-has-its-own-root.md` has the reasoning.
+`docs/greenfield/google-root-migration-runbook.md` is the one-time move of the existing
+objects into the new root's state.

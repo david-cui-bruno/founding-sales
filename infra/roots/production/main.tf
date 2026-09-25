@@ -4,26 +4,23 @@
 # value a caller can pass that makes this root destroyable or renames it into
 # the rehearsal namespace.
 #
-# This is also the only root with a Google Cloud project, and therefore the only
-# one that declares the Google provider or creates a Pub/Sub resource. The topic
-# module used to sit inside `infra/modules/stack`, where `count = 0` was not
-# enough to keep it out of a rehearsal plan: Terraform configures every provider
-# a module requires, so CI was asked for a Google credential it does not have
-# and never should. `docs/decisions/g12j-the-rehearsal-has-no-google-provider.md`.
+# It declares no Google provider and creates nothing in Google Cloud, like the
+# rehearsal root. The Gmail push topic, its subscription, the push service account
+# and Gmail's publisher grant belong to `infra/roots/production-google`, a root of
+# their own with a state key of its own, because Terraform configures every
+# provider a configuration requires before it plans anything: while they were
+# `module.pubsub[0]` here, every production plan, an image-only release included,
+# needed a Google login that lapses about every 17 hours, and an expired one held
+# a worker fix back (audit O01). This root carries their public identifiers as
+# values instead. `docs/decisions/g85-the-google-provider-has-its-own-root.md`,
+# and before it `docs/decisions/g12j-the-rehearsal-has-no-google-provider.md`.
 
 locals {
-  # Google caps a service account id at 30 characters.
-  service_account_stem = trimsuffix(
-    length(var.name_prefix) > 18 ? substr(var.name_prefix, 0, 18) : var.name_prefix,
-    "-",
-  )
-  push_service_account_id = "${local.service_account_stem}-gmail-push"
-
-  # The API route Pub/Sub delivers to, and the audience the webhook requires in
-  # the token it delivers with. Both are properties of this environment's own
-  # hostname: no Google resource is involved in deriving them, which is why the
-  # audience is passed to the stack whether or not the topic is created.
-  push_endpoint = "https://${var.api_hostname}${var.gmail_push_path}"
+  # The audience the webhook requires in a push token. A property of this
+  # environment's own hostname and route, not of Google, so it is derived here
+  # rather than read from the Google root; `infra/roots/production-google`
+  # builds the subscription's push endpoint and token audience with this same
+  # expression, and `test/release/googleRoot.check.ts` compares the two.
   push_audience = "https://${var.api_hostname}${var.gmail_push_path}"
 
   # The role this apply acts as: the same expression the provider's
@@ -33,19 +30,24 @@ locals {
   deployment_role_arn = "arn:aws:iam::${var.aws_account_id}:role/${var.deployment_role_name}"
 }
 
-module "pubsub" {
-  source = "../../modules/pubsub"
-  count  = var.enable_gmail_push ? 1 : 0
+# The four Google objects this root created on 23 September 2026 as
+# `module.pubsub[0]`, forgotten and never destroyed.
+#
+# The migration (`docs/greenfield/google-root-migration-runbook.md`) imports them
+# into `infra/roots/production-google` and then removes them from this root's
+# state with `terraform state rm`, which needs no Google credential. This block is
+# the net under that procedure: a plan of this root taken before the state
+# removal, which still needs application-default credentials because the state
+# still names Google objects, shows them as "will no longer be managed by
+# Terraform" instead of as four deletions. A deleted topic stops the Gmail watch,
+# and the publisher grant needed an organisation-policy exception to be made at
+# all (`docs/greenfield/release.md` 8.0n). Once the state holds no `module.pubsub`
+# address the block matches nothing and does nothing.
+removed {
+  from = module.pubsub
 
-  gcp_project_id          = var.gcp_project_id
-  name_prefix             = var.name_prefix
-  push_service_account_id = local.push_service_account_id
-  push_endpoint           = local.push_endpoint
-  push_audience           = local.push_audience
-
-  labels = {
-    environment = "production"
-    managed_by  = "terraform"
+  lifecycle {
+    destroy = false
   }
 }
 
@@ -122,11 +124,14 @@ module "stack" {
   business_time_zone   = var.business_time_zone
   google_hosted_domain = var.google_hosted_domain
 
-  # The audience is always supplied: it is this environment's own webhook URL,
-  # and both binaries call `required()` on it at start-up, so an empty one is a
-  # task that refuses to start rather than a task with push switched off. The
-  # topic and the push identity exist only when the module above created them.
+  # All three are always supplied, and never empty: both binaries call
+  # `required()` on each at start-up, so an empty one is a task that refuses to
+  # start rather than a task with push switched off. The audience is derived
+  # above. The topic and the push identity are public identifiers of objects
+  # `infra/roots/production-google` owns, committed as variable defaults, so no
+  # value here is computed by a Google API and no plan of this root asks Google
+  # for anything.
   gmail_push_audience        = local.push_audience
-  gmail_push_topic           = var.enable_gmail_push ? one(module.pubsub[*].topic_id) : ""
-  gmail_push_service_account = var.enable_gmail_push ? one(module.pubsub[*].push_service_account_email) : ""
+  gmail_push_topic           = var.gmail_push_topic
+  gmail_push_service_account = var.gmail_push_service_account
 }

@@ -8,10 +8,9 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.60"
     }
-    google = {
-      source  = "hashicorp/google"
-      version = "~> 6.0"
-    }
+    # No Google provider. A required provider is a configured provider, and a
+    # configured Google provider is a Google login every production plan would
+    # need; `infra/roots/production-google` requires it instead (lane g85).
   }
 
   # Intentionally unconfigured here. Initialize with

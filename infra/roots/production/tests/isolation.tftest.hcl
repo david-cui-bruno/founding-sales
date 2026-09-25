@@ -53,28 +53,11 @@ mock_provider "aws" {
   }
 }
 
-# The Google mock keeps `plan`, deliberately, and it is the only one in `infra`
-# that does. The runs below assert that the topic id and the push identity this
-# root creates reach both task definitions, and those are values a real plan
-# does not know: with `override_during = apply` the assertions could not be
-# evaluated at all. The `count` on `module.pubsub` keys off a plain variable, so
-# the unknown-at-plan class this file otherwise guards against cannot hide here.
-# `docs/decisions/g12j-mock-providers-keep-computed-values-unknown.md`.
-mock_provider "google" {
-  override_during = plan
-
-  mock_resource "google_service_account" {
-    defaults = {
-      email = "fss-prod-gmail-push@fss-prod-example.iam.gserviceaccount.com"
-    }
-  }
-
-  mock_resource "google_pubsub_topic" {
-    defaults = {
-      id = "projects/fss-prod-example/topics/fss-prod-gmail-push"
-    }
-  }
-}
+# No `mock_provider "google"`, because there is no Google provider to mock. That
+# absence is the fix for audit O01: while this root required the provider, every
+# production plan needed a Google login. The push objects and their offline test
+# are `infra/roots/production-google`'s now.
+# `docs/decisions/g85-the-google-provider-has-its-own-root.md`.
 
 variables {
   aws_account_id      = "123456789012"
@@ -84,7 +67,6 @@ variables {
   worker_image        = "123456789012.dkr.ecr.us-east-1.amazonaws.com/fss-prod-worker@sha256:0000000000000000000000000000000000000000000000000000000000000002"
   api_schema_range    = { min = 1, max = 4 }
   worker_schema_range = { min = 1, max = 4 }
-  enable_gmail_push   = false
 }
 
 run "production_is_named_fss_prod_and_is_never_destroyable" {
@@ -448,11 +430,6 @@ run "a_rehearsal_deployment_role_is_refused" {
 run "gmail_push_wires_the_audience_the_webhook_must_require" {
   command = plan
 
-  variables {
-    enable_gmail_push = true
-    gcp_project_id    = "fss-prod-example"
-  }
-
   assert {
     condition     = output.gmail_push_audience == "https://api.example.invalid/integrations/gmail/push"
     error_message = "The audience the API must require is derived from the API hostname and published as an output."
@@ -475,34 +452,30 @@ run "gmail_push_wires_the_audience_the_webhook_must_require" {
     error_message = "The container must be told the same audience the subscription mints tokens for."
   }
 
+  # The topic `users.watch` names and the one identity the webhook accepts.
+  # Since lane g85 they are public identifiers of objects
+  # `infra/roots/production-google` owns, carried here as committed defaults,
+  # so a plan knows them without asking Google, and the literals below are the
+  # production ones rather than a mock's. These assertions are what proves the
+  # hop from the two variables into both task definitions.
   assert {
-    condition     = module.stack.api_environment["FSS_GMAIL_PUSH_SERVICE_ACCOUNT"] != ""
-    error_message = "The container must be told which service-account email to accept."
-  }
-
-  # The topic `users.watch` names. It was only a Terraform output, so the
-  # bootstraps had to read it out of the operator-written client secret
-  # (docs/decisions/g12-the-credentialed-bootstrap.md). It travels in the task
-  # environment now, to both services: the worker renews the watch and the API
-  # reports the configured topic.
-  #
-  # G12j moved `module.pubsub` from the stack into this root, so the string
-  # makes one hop it did not make before: out of the module, into
-  # `module.stack`'s `gmail_push_topic`, and into both task definitions. These
-  # two assertions are what proves the hop.
-  assert {
-    condition     = module.stack.api_environment["FSS_GMAIL_PUSH_TOPIC"] == output.gmail_push_topic_id
-    error_message = "The API must be told the topic the watch registers against."
-  }
-
-  assert {
-    condition     = module.stack.api_environment["FSS_GMAIL_PUSH_SERVICE_ACCOUNT"] == output.gmail_push_service_account
-    error_message = "The webhook accepts exactly one service account, and it is the one the subscription mints tokens for."
+    condition     = module.stack.api_environment["FSS_GMAIL_PUSH_TOPIC"] == "projects/callie-fss/topics/fss-prod-gmail-push"
+    error_message = "The API must be told the production topic the watch registers against."
   }
 
   assert {
     condition     = module.stack.worker_environment["FSS_GMAIL_PUSH_TOPIC"] == output.gmail_push_topic_id
-    error_message = "The worker renews the Gmail watch and must be told the same topic."
+    error_message = "The worker renews the Gmail watch and must be told the same topic the root publishes."
+  }
+
+  assert {
+    condition     = module.stack.api_environment["FSS_GMAIL_PUSH_SERVICE_ACCOUNT"] == "fss-prod-gmail-push@callie-fss.iam.gserviceaccount.com"
+    error_message = "The webhook accepts exactly one service account, and it is the production push identity."
+  }
+
+  assert {
+    condition     = module.stack.worker_environment["FSS_GMAIL_PUSH_SERVICE_ACCOUNT"] == output.gmail_push_service_account
+    error_message = "Both processes are told the same push identity the root publishes."
   }
 }
 
@@ -533,15 +506,47 @@ run "an_empty_hosted_domain_is_refused" {
   expect_failures = [var.google_hosted_domain]
 }
 
-run "gmail_push_cannot_be_turned_on_without_a_project" {
+# The rehearsal's placeholders are well-formed and unreal, and a production task
+# carrying either would register no watch and accept no push. Each is refused by
+# the variable that would carry it, as is a blank.
+run "the_rehearsal_placeholder_topic_is_refused" {
   command = plan
 
   variables {
-    enable_gmail_push = true
-    gcp_project_id    = ""
+    gmail_push_topic = "projects/fss-rehearsal-no-push/topics/fss-rehearsal-no-push"
   }
 
-  expect_failures = [var.gcp_project_id]
+  expect_failures = [var.gmail_push_topic]
+}
+
+run "an_empty_topic_is_refused" {
+  command = plan
+
+  variables {
+    gmail_push_topic = ""
+  }
+
+  expect_failures = [var.gmail_push_topic]
+}
+
+run "the_rehearsal_placeholder_service_account_is_refused" {
+  command = plan
+
+  variables {
+    gmail_push_service_account = "gmail-push@fss-rehearsal-no-push.invalid"
+  }
+
+  expect_failures = [var.gmail_push_service_account]
+}
+
+run "another_service_account_is_refused" {
+  command = plan
+
+  variables {
+    gmail_push_service_account = "someone-else@callie-fss.iam.gserviceaccount.com"
+  }
+
+  expect_failures = [var.gmail_push_service_account]
 }
 
 run "only_the_load_balancer_faces_the_internet" {
