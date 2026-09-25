@@ -155,6 +155,8 @@ const crm: CrmBridge = {
   openOpportunity: async () => await invokeCrm(CRM_IPC_CHANNELS.openOpportunity),
   enroll: async input => await invokeCrm(CRM_IPC_CHANNELS.enroll, input),
   confirmRoute: async input => await invokeCrm(CRM_IPC_CHANNELS.confirmRoute, input),
+  // Lane g90: Check again, on an address.
+  checkRoute: async input => await invokeCrm(CRM_IPC_CHANNELS.checkRoute, input),
 };
 
 const sequences: SequenceBridge = {

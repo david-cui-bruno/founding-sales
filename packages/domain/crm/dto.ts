@@ -79,6 +79,12 @@ export interface RouteDto {
   readonly eligibility: 'candidate' | 'usable' | 'invalid' | 'retired';
   /** The number the card shows and `authorizeDial` compares against (9.1). */
   readonly version: number;
+  /**
+   * The route's technical validation (7.4), present only when the read asked for it —
+   * the Firm page's second version (lane g90). An older desktop parses this object
+   * strictly and never asks.
+   */
+  readonly technicalValidation?: 'unknown' | 'passed' | 'failed';
 }
 
 export type FirmReadDto =
@@ -123,7 +129,11 @@ export function firmIdentityDtoOf(
  */
 export async function readFirmForActor(
   context: RepositoryContext,
-  input: { readonly firmId: string },
+  input: {
+    readonly firmId: string;
+    /** Lane g90: put each route's `technicalValidation` on it. Absent is the first shape exactly. */
+    readonly routeValidation?: boolean | undefined;
+  },
 ): Promise<CrmResult<FirmReadDto>> {
   const firm = await readFirm(context, input.firmId);
   if (firm === null) return refuse('firm_unknown');
@@ -178,20 +188,21 @@ export async function readFirmForActor(
         status: contact.status,
         isPrimary: contact.is_primary,
       })),
-      phoneRoutes: phoneRoutes.map(routeDto),
-      emailRoutes: emailRoutes.map(routeDto),
+      phoneRoutes: phoneRoutes.map(row => routeDto(row, input.routeValidation === true)),
+      emailRoutes: emailRoutes.map(row => routeDto(row, input.routeValidation === true)),
       aliases,
     },
   });
 }
 
-function routeDto(row: Readonly<Record<string, unknown>>): RouteDto {
+function routeDto(row: Readonly<Record<string, unknown>>, withValidation = false): RouteDto {
   return {
     id: String(row['id']),
     contactId: row['contact_id'] === null ? null : String(row['contact_id']),
     value: String(row['value'] ?? ''),
     eligibility: row['eligibility'] as RouteDto['eligibility'],
     version: Number(row['version']),
+    ...(withValidation ? { technicalValidation: row['technical_validation'] as NonNullable<RouteDto['technicalValidation']> } : {}),
   };
 }
 

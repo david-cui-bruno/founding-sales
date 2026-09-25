@@ -190,4 +190,14 @@ export const MUTATIONS = [
     because:
       'Lane g86: every API published https://callie.example/downloads/mac, production included. A production process does not reach a fallback by omission, and deployment.test.ts requires a live production deployment without FSS_DESKTOP_UPGRADE_URL to be refused MISSING.',
   },
+  // Lane g90: email technical validation (release-records.md 8.0aw).
+  {
+    name: 'the Firm page sends technicalValidation to a desktop that did not ask for it',
+    file: 'apps/api/src/routes/firmPage.ts',
+    find: '    routeValidation: parsed.data.pageVersion === FIRM_PAGE_VERSION,\n',
+    replace: '    routeValidation: true,\n',
+    suite: ['run', 'test', '--workspace', 'apps/api', '--', 'test/emailValidation.test.ts'],
+    because:
+      'The route DTO is a strict object and desktop 1.0.5 parses it with its own strict schema, so an unasked-for technicalValidation key breaks every Firm page on the installed build. emailValidation.test.ts parses the first version’s routes with 1.0.5’s schema and requires exactly its five keys; sending the key regardless, the suite has to go red.',
+  },
 ];

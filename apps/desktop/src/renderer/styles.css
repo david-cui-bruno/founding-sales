@@ -1169,3 +1169,10 @@ main#app .candidate-choice {
   display: flex;
   margin: 4px 0;
 }
+
+/* Lane g90: where an address's validation stands, beside its version. */
+.route-validation {
+  margin-left: 8px;
+  color: var(--ink-3);
+  font-size: 13px;
+}

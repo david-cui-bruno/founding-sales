@@ -996,7 +996,7 @@ terraform -chdir=infra/roots/production plan -out=pin.tfplan -var="expected_syst
 ## 8. What this document could not verify
 
 The records of what each credentialed run proved and refuted, and of what each lane's
-change did, 8.0 to 8.0av, are in [`release-records.md`](release-records.md), unchanged. A
+change did, 8.0 to 8.0aw, are in [`release-records.md`](release-records.md), unchanged. A
 numbered reference such as "8.0u", in this document or anywhere else, names one of them. From
 25 September 2026 a change is one line in [`changelog.md`](changelog.md) instead, and
 this section holds only what is still unverified.
@@ -1014,3 +1014,4 @@ Production is live: applied, deployed, bootstrapped and smoked at `66203322` on 
 7. **The first mailbox, read back.** The mailbox connected from desktop 1.0.1 between 18:00Z and 18:11Z on 24 September, and the worker inserted its first jobs at 18:11:37Z (8.0y). The "This Mac" card and `/gmail/status` readings after it are not recorded here, nor are the audit row `auth.provisional_user_adopted` and the absence of both warn lines that 5.2a asks for. `fss-prod-mailbox-heartbeat-missed` flapped on a healthy worker until lane g58 (8.0z); whether it and `fss-prod-gmail-watch-expiring` now stay clear is not recorded here.
 8. **Sending.** `FSS_SENDING_ENABLED` is `false` and section 6 has not been run, so nothing has been sent from production. 12.7's authentication checks, the six-week ramp, and the journal's first real write — item 2 above, which surfaces only as `SuppressionJournalWriteFailures` — are all unproved in production.
 9. **The exact rehearsal deployment policy, put back.** `fss-rh-deploy` still carries the discovery document of 8.0h: a wide allow on the services the tree uses, with guards, for one pass of `create`, `deploy` and `full`. The exact policy derived from the CloudTrail record of that pass is put back only after a `full` run has passed (`infra-apply-runbook.md` 1.1b, step 5). Run 36100448302 passed on 25 September; putting the exact document back is not recorded here, and until it is, no rehearsal run proves anything about the policy this release ships. `fss-prod-deploy` was never widened and the renderer refuses to widen it.
+10. **Email validation against real DNS.** Since PR 231 the worker checks each unchecked address's domain (`route.validate`, `docs/decisions/g90-email-technical-validation.md`). No test has asked a real DNS server: that the VPC resolver answers MX queries from the worker task, and that Node reports a null MX as an empty exchange, are inferred. After the deploy, `route.email.validated` audit events with `mx_present` or `implicit_mx` answer it; a run of `route.email.validation_deferred` events means the resolver is not answering.

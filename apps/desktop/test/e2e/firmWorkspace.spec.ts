@@ -1,6 +1,8 @@
 import { expect, test } from 'playwright/test';
 import {
+  CHECKING_ROUTE_ID,
   FIRM_ID,
+  addressesFirmPage,
   OPPORTUNITY_ID,
   SEQUENCE_VERSION_ID,
   assigneeFirmPage,
@@ -263,6 +265,40 @@ test('a candidate number is confirmed at the version on screen, and an address h
   await expect(page.getByTestId('route-eligibility').nth(1)).toHaveText('usable');
   await expect(page.getByTestId('route-version').nth(1)).toHaveText('v2');
   await expect(page.getByTestId('route-confirm')).toHaveCount(0);
+});
+
+// ------------------------------------------------------------ lane g90: an address's validation
+test('each address says where its validation stands, and one being checked can be checked again', async ({ page }) => {
+  server = await startCrmTestServer(crmState({ firm: addressesFirmPage(), sequences: firmSequences() }));
+  await page.goto(server.url);
+
+  const addresses = page.getByTestId('firm-routes-email');
+  await expect(addresses.getByTestId('route-validation')).toHaveText([
+    'Checking…',
+    'Deliverable domain — usable',
+    'Mail can’t reach this address — invalid',
+  ]);
+  // g88's sentence under the addresses is gone; the state beside each one replaced it.
+  await expect(page.getByTestId('routes-hint-email')).toHaveCount(0);
+  await expect(addresses.getByTestId('route-confirm')).toHaveCount(0);
+
+  // Only the address still being checked offers Check again.
+  await expect(addresses.getByTestId('route-check')).toHaveCount(1);
+  await addresses.getByTestId('route-check').click();
+  await expect(page.getByTestId('banner-info')).toHaveText(
+    'Callie will check that address again in a moment. Open the firm again to see the answer.',
+  );
+  expect(server.calls.find(entry => entry.method === 'checkRoute')?.argument).toEqual({
+    routeId: CHECKING_ROUTE_ID,
+    routeVersion: 1,
+  });
+});
+
+test('Check again is not pressable while the window may not change anything', async ({ page }) => {
+  server = await startCrmTestServer(crmState({ firm: addressesFirmPage(), mayMutate: false }));
+  await page.goto(server.url);
+  await expect(page.getByTestId('firm-routes-email').getByTestId('route-check')).toBeDisabled();
+  await expect(page.getByTestId('firm-routes-email').getByTestId('route-validation').first()).toHaveText('Checking…');
 });
 
 test('a contact is enrolled from the Firm page in a published sequence', async ({ page }) => {

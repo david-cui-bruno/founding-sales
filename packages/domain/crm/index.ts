@@ -216,3 +216,51 @@ export {
   type OpportunitySummaryDto,
   type StageEventDto,
 } from './firmPage.ts';
+
+// Lane g90: email technical validation (7.4). The rules and the job are
+// `routeValidation.ts`; the one write they make is `recordEmailRouteValidation`.
+export {
+  EMAIL_VALIDATION_ROUND_NEW,
+  emailValidationJob,
+  recordEmailRouteValidation,
+  type RecordEmailValidationInput,
+  type RecordEmailValidationOutcome,
+} from './routes.ts';
+
+export {
+  DNS_LOOKUP_DEADLINE_MILLISECONDS,
+  EMAIL_ADDRESS_MAXIMUM_LENGTH,
+  EMAIL_VALIDATION_DEFER_REASONS,
+  EMAIL_VALIDATION_FAIL_REASONS,
+  EMAIL_VALIDATION_PASS_REASONS,
+  EMAIL_VALIDATION_RULE_VERSION,
+  EMAIL_VALIDATION_SWEEP_AFTER_MINUTES,
+  EMAIL_VALIDATION_SWEEP_LIMIT,
+  MEMBER_ENTERED_SOURCES,
+  MEMBER_VOUCHED_CONFIDENCE,
+  RESERVED_MAIL_DOMAINS,
+  checkMailDomain,
+  emailValidationCheckRound,
+  emailValidationSweep,
+  emailValidationSweepRounds,
+  implicitMxVerdict,
+  isReservedMailDomain,
+  listEmailRoutesDueForValidation,
+  mxVerdict,
+  parseEmailAddress,
+  parseRouteValidationPayload,
+  requestEmailRouteValidation,
+  runEmailRouteValidation,
+  validateEmailAddress,
+  vouchedConfidenceFor,
+  type DnsLookup,
+  type EmailRouteDueForValidation,
+  type EmailValidationRequested,
+  type EmailValidationReport,
+  type EmailValidationVerdict,
+  type MailDomainResolver,
+  type MailExchangeRecord,
+  type ParsedEmailAddress,
+  type RequestEmailValidationInput,
+  type RouteValidationPayload,
+} from './routeValidation.ts';

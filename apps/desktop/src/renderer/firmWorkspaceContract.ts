@@ -149,6 +149,12 @@ export interface ConfirmRouteRequest {
   readonly routeVersion: number;
 }
 
+/** Check one address of the open Firm page again, at the version on screen (lane g90). */
+export interface CheckRouteRequest {
+  readonly routeId: string;
+  readonly routeVersion: number;
+}
+
 export interface ContactEdit {
   readonly contactId: string;
   readonly fullName: string;
@@ -194,6 +200,8 @@ export interface CrmBridge {
   openOpportunity(): Promise<CrmState>;
   enroll(input: EnrollRequest): Promise<CrmState>;
   confirmRoute(input: ConfirmRouteRequest): Promise<CrmState>;
+  /** Lane g90: queue one more check of an address that is still being checked. */
+  checkRoute(input: CheckRouteRequest): Promise<CrmState>;
 }
 
 declare global {

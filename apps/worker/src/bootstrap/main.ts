@@ -17,6 +17,7 @@ import type { SuppressionJournal } from '@fss/domain/suppression';
 import { mailHandlers, todayReplyPromoter, type MailWorkerOptions } from '../handlers/mail.ts';
 import { outboundSendHandoff } from '../handlers/outboundSendHandoff.ts';
 import { researchHandlers } from '../handlers/research.ts';
+import { routeValidateJobHandler, routeValidationSource, systemMailDomainResolver } from '../handlers/routeValidate.ts';
 import { sendDayCloseJobHandler, sendDayCloseSource } from '../handlers/sendDayClose.ts';
 import { sequenceActionJobHandler, sequenceActionSource } from '../handlers/sequenceAction.ts';
 import { retentionBatchJobHandler, retentionSource } from '../handlers/retention.ts';
@@ -109,6 +110,11 @@ function registerHandlers(
   registry.register(sendDayCloseJobHandler());
   // 7.4's providers have no live adapter in this repository, so the deployment
   // declares their absence rather than discovering it; see `deployment.ts`.
+  // Lane g90. An address's technical validation (7.4) asks the process's own DNS
+  // resolver for the domain's MX, and nothing else: no credential, no provider, no
+  // deployment switch to consult, so like `retention.batch` it is registered in every
+  // deployment. See `handlers/routeValidate.ts`.
+  registry.register(routeValidateJobHandler({ resolver: systemMailDomainResolver() }));
   for (const handler of researchHandlers({ providers: {} })) registry.register(handler);
   for (const handler of mailHandlers(composition.mail)) registry.register(handler);
   for (const handler of classifyHandlers(classifier)) registry.register(handler);
@@ -265,6 +271,7 @@ export function workerDueWorkSources(): readonly DueWorkSource[] {
     retentionSource(),
     ...mailSources(),
     classifyReplySource(),
+    routeValidationSource(),
   ];
 }
 

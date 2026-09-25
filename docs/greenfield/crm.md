@@ -25,6 +25,8 @@ packages/domain/crm/firms.ts                 create, update, reassign, resolve z
 packages/domain/crm/contacts.ts              create, update, the one active primary
 packages/domain/crm/routes.ts                add, verify, retire; the version rule
 packages/domain/crm/routePolicy.ts           the versioned eligibility thresholds
+packages/domain/crm/routeValidation.ts       what a passed email validation is (lane g90)
+apps/worker/src/handlers/routeValidate.ts    the route.validate job and its sweep
 packages/domain/crm/zone.ts                  the postal source behind G0's zone seam
 packages/domain/crm/evidence.ts              research evidence, idempotent per result
 packages/domain/crm/pipeline.ts              stages, stage changes, close, reopen
@@ -144,6 +146,43 @@ no recorded confidence, or no policy version.
 The same address at two firms stays two rows. Uniqueness is per *association*
 — `(workspace, firm, contact, value)` with `NULLS NOT DISTINCT` so a firm-level route
 collides with another firm-level route at the same firm.
+
+### Email technical validation (`email-validation.1`, lane g90)
+
+A phone number is confirmed by a person (lane g88). An address is checked by the worker:
+every email route created `unknown` enqueues a `route.validate` job in the same
+transaction, and the job's answer is written through `recordEmailRouteValidation`, a
+compare-and-set that only ever touches an unchecked `candidate` at the version the job
+names. `passed` means, in this order:
+
+| Check | Outcome |
+|---|---|
+| RFC 5321-sane syntax (≤ 254 characters; a dot-atom local part of 1–64 ASCII; LDH labels, a letter in the last) | else `failed`, `syntax_invalid` |
+| Not a special-use name (`test`, `example`, `invalid`, `localhost`, `example.com/net/org`, `local`, `onion`, `alt`, `arpa`, `internal`) | else `failed`, `domain_reserved` |
+| No other route in the workspace with the same address has *failed* validation | else `failed`, `known_bad_route` |
+| An MX with a real exchange | `passed`, `mx_present` |
+| Only a null MX (RFC 7505) | `failed`, `null_mx` |
+| NXDOMAIN | `failed`, `domain_not_found` |
+| No MX, an A or AAAA record (RFC 5321 5.1's implicit MX, accepted) | `passed`, `implicit_mx` |
+| No MX, no A, no AAAA | `failed`, `no_mail_host` |
+| Timeout, SERVFAIL, any other resolver error | stays `unknown`; asked again |
+
+Role mailboxes and disposable providers are not technical validation and are not
+checked. No SMTP callout, no third party, nothing is sent.
+
+Eligibility is still `decideRouteEligibility`'s, from the route's source and confidence.
+A passed address with no recorded confidence that a member entered themselves
+(`salesperson`, `import`) records confidence 1 — the person vouched for it — and so
+becomes usable; a research or website address with none stays a candidate. A failed one
+is `invalid`. Nothing here lowers a `usable` route: it is never an unchecked candidate.
+
+An unanswered address is asked about again by the `route-validation` source: ten minutes
+after its last change, then once an hour for its first day, then once a day, at most
+twenty addresses a pass. The Firm page's second version (`pageVersion: 2`) carries each
+route's `technicalValidation`; the page says **Checking…** (with **Check again**,
+`POST /contacts/routes/check`), **Deliverable domain — usable**, **Deliverable domain —
+not usable yet**, or **Mail can’t reach this address — invalid**.
+`docs/decisions/g90-email-technical-validation.md` has the reasons for every row.
 
 ### `pipeline_stages`
 

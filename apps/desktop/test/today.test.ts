@@ -658,7 +658,7 @@ describe('the CRM bridge G3b was waiting for', () => {
     expect(view.opportunityIdByFirmId[OTHER_FIRM_ID]).toBeUndefined();
   });
 
-  it('answers the methods G3b’s contract declares, and names fourteen channels (six, lane g84’s five, lane g88’s three)', async () => {
+  it('answers the methods G3b’s contract declares, and names fifteen channels (six, lane g84’s five, lane g88’s three, lane g90’s one)', async () => {
     // Lane G9 replaced the two reads this used to make with one board read that
     // carries the open opportunity id per firm the caller may change
     // (docs/decisions/g9-pipeline-board-read.md).
@@ -681,8 +681,8 @@ describe('the CRM bridge G3b was waiting for', () => {
     expect(answer.screen).toBe('pipeline');
     expect(answer.role).toBe('salesperson');
     expect(calls.map(call => call.path)).toEqual(['/pipeline/board']);
-    expect(Object.values(CRM_IPC_CHANNELS)).toHaveLength(14);
-    expect(new Set(Object.values(CRM_IPC_CHANNELS)).size).toBe(14);
+    expect(Object.values(CRM_IPC_CHANNELS)).toHaveLength(15);
+    expect(new Set(Object.values(CRM_IPC_CHANNELS)).size).toBe(15);
   });
 
   it('offers a stage change only for the firms the board read named', async () => {

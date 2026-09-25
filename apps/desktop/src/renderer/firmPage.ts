@@ -1,7 +1,14 @@
 import type { ContactDto, FirmDetailDto, FirmPageResponse, RouteDto } from '@fss/contracts';
 import { renderContactsEditor } from './contactsEditor.ts';
 import { button, describe, element, orDash } from './firmDom.ts';
-import type { ConfirmRouteRequest, ContactEdit, EnrollRequest, FirmSequencesView } from './firmWorkspaceContract.ts';
+import { EMAIL_VALIDATION_TEXT, emailValidationStateOf } from './firmWorkspaceView.ts';
+import type {
+  CheckRouteRequest,
+  ConfirmRouteRequest,
+  ContactEdit,
+  EnrollRequest,
+  FirmSequencesView,
+} from './firmWorkspaceContract.ts';
 
 /**
  * The Firm page (specification 7.2, 7.3, 8.1, 15, Appendix F).
@@ -35,17 +42,46 @@ export interface FirmPageOptions {
   readonly onConfirmRoute?: (request: ConfirmRouteRequest) => void;
   readonly onOpenOpportunity?: () => void;
   readonly onEnroll?: (request: EnrollRequest) => void;
+  /** Lane g90: "Check again" on an address still being checked. Absent draws no button. */
+  readonly onCheckRoute?: (request: CheckRouteRequest) => void;
 }
 
 /**
- * Why a number can be confirmed here and an address cannot (lane g88). Said once under
- * each section that has an unconfirmed route, so the button's absence on an address is
- * explained rather than puzzling.
+ * Why a number can be confirmed here (lane g88). Said once under the phone section when
+ * it has an unconfirmed number.
  */
 export const CONFIRM_NUMBER_HINT =
   'A number becomes callable once you confirm it reaches this firm. Callie records that you confirmed it, and when.';
-export const EMAIL_UNCONFIRMED_HINT =
-  'An address that is not usable yet needs a validation Callie cannot do by hand, so there is no confirm button for it.';
+
+// ---------------------------------------------------------------------------
+// Lane g90: an address says where its validation stands, in place of the sentence g88
+// put under the email section ("needs a validation Callie cannot do by hand"). The
+// worker checks every new address's domain now (`route.validate`), so each address
+// shows the answer, or that the answer is coming. The words are `firmWorkspaceView.ts`'s.
+// ---------------------------------------------------------------------------
+
+function appendEmailValidation(
+  item: HTMLElement,
+  route: RouteDto,
+  check: { readonly enabled: boolean; readonly onCheck: (request: CheckRouteRequest) => void } | null,
+): void {
+  const state = emailValidationStateOf(route);
+  if (state === null) return;
+  const line = element('span', {
+    className: `route-validation route-validation-${state}`,
+    testId: 'route-validation',
+    text: EMAIL_VALIDATION_TEXT[state],
+  });
+  item.append(line);
+  if (state === 'checking' && check !== null) {
+    const action = button('Check again', 'route-check', check.enabled);
+    action.addEventListener('click', () => {
+      check.onCheck({ routeId: route.id, routeVersion: route.version });
+    });
+    item.append(action);
+  }
+}
+// ---------------------------------------------------------------- end lane g90
 
 function renderIdentity(root: HTMLElement, page: FirmPageResponse, detail: FirmDetailDto | null): void {
   const firm = page.read.firm;
@@ -73,6 +109,7 @@ function renderRoutes(
   kind: 'Phone' | 'Email',
   routes: readonly RouteDto[],
   confirm: { readonly enabled: boolean; readonly onConfirm: (request: ConfirmRouteRequest) => void } | null,
+  check: { readonly enabled: boolean; readonly onCheck: (request: CheckRouteRequest) => void } | null = null,
 ): void {
   const panel = element('section', { className: 'firm-routes', testId: `firm-routes-${kind.toLowerCase()}` });
   panel.append(element('h2', { text: `${kind} routes` }));
@@ -89,6 +126,8 @@ function renderRoutes(
       element('span', { className: `route-eligibility route-${route.eligibility}`, testId: 'route-eligibility', text: route.eligibility }),
     );
     item.append(element('span', { className: 'route-version', testId: 'route-version', text: `v${String(route.version)}` }));
+    // Lane g90: an address's validation state, and Check again while it is being checked.
+    if (kind === 'Email') appendEmailValidation(item, route, check);
     // Lane g88: a candidate number can be confirmed by the person who knows it reaches
     // the firm. The version on screen travels with the command, so a number that changed
     // since this page was drawn is refused rather than confirmed.
@@ -102,12 +141,12 @@ function renderRoutes(
     list.append(item);
   }
   panel.append(list);
-  if (routes.some(route => route.eligibility === 'candidate')) {
+  if (confirm !== null && routes.some(route => route.eligibility === 'candidate')) {
     panel.append(
       element('p', {
         className: 'hint',
         testId: `routes-hint-${kind.toLowerCase()}`,
-        text: confirm !== null ? CONFIRM_NUMBER_HINT : EMAIL_UNCONFIRMED_HINT,
+        text: CONFIRM_NUMBER_HINT,
       }),
     );
   }
@@ -307,7 +346,14 @@ export function renderFirmPage(root: HTMLElement, options: FirmPageOptions): voi
     detail.phoneRoutes,
     onConfirm === undefined ? null : { enabled: options.actionsEnabled, onConfirm },
   );
-  renderRoutes(root, 'Email', detail.emailRoutes, null);
+  const onCheck = options.onCheckRoute;
+  renderRoutes(
+    root,
+    'Email',
+    detail.emailRoutes,
+    null,
+    onCheck === undefined ? null : { enabled: options.actionsEnabled, onCheck },
+  );
   renderContactsEditor(root, {
     contacts: detail.contacts,
     enabled: options.actionsEnabled,

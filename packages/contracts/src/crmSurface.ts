@@ -347,7 +347,18 @@ export type ExportResponse = z.infer<typeof exportResponseSchema>;
 // The Firm page read (7.2, 7.3, 8.1, 15)
 // ---------------------------------------------------------------------------
 
-export const firmPageRequestSchema = z.strictObject({ firmId: uuid });
+/**
+ * The Firm page read's second version (lane g90): each route carries its
+ * `technicalValidation`. Without `pageVersion` the answer is the first version exactly,
+ * which is what an installed 1.0.5 asks for and parses strictly; any other version is a
+ * malformed request rather than a guess.
+ */
+export const FIRM_PAGE_VERSION = 2;
+
+export const firmPageRequestSchema = z.strictObject({
+  firmId: uuid,
+  pageVersion: z.literal(FIRM_PAGE_VERSION).optional(),
+});
 
 export const stageEventDtoSchema = z.strictObject({
   id: uuid,

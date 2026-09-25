@@ -1,4 +1,4 @@
-import { IMPORT_ISSUE_CODES } from '@fss/contracts';
+import { IMPORT_ISSUE_CODES, type RouteDto } from '@fss/contracts';
 import type { CrmScreen, CrmState, MergeView } from './firmWorkspaceContract.ts';
 
 /**
@@ -87,6 +87,12 @@ export const CRM_NOTICES: Readonly<Record<string, string>> = Object.freeze({
   version_not_published: 'That sequence version is not published.',
   version_retired: 'That sequence version was retired.',
   version_has_no_steps: 'That sequence has no steps.',
+  // Lane g90: Check again, on an address.
+  route_check_queued: 'Callie will check that address again in a moment. Open the firm again to see the answer.',
+  address_changed: 'That address changed since this page was drawn. Look again before checking it.',
+  address_invalid: 'Mail can’t reach that address, so there is nothing to check again. Add the right address instead.',
+  address_retired: 'That address was retired.',
+  address_unknown: 'That address is no longer here.',
 });
 
 /** The line above a refused Add firm form: its fields say what is wrong with each. */
@@ -111,6 +117,7 @@ const INFO_NOTICES: ReadonlySet<string> = new Set([
   'route_confirmed',
   'opportunity_opened',
   'enrolled',
+  'route_check_queued',
 ]);
 
 /** The tone a notice is shown in. A refusal warns; an outcome informs. */
@@ -188,3 +195,30 @@ export function mergeSubmittable(
     return value !== undefined && offered.includes(value);
   });
 }
+
+// ---------------------------------------------------------------------------
+// Lane g90: where an address's validation stands, in the words the Firm page shows
+// beside it. Pure, so the release check reads the same words the page draws.
+// ---------------------------------------------------------------------------
+
+export type EmailValidationState = 'checking' | 'deliverable' | 'deliverable_unconfirmed' | 'undeliverable';
+
+/**
+ * Where an address's validation stands, from the two fields the Firm page's second
+ * version carries. Without `technicalValidation` (an API that predates g90) it is read
+ * from the eligibility alone. A retired address has no state: the chip says retired.
+ */
+export function emailValidationStateOf(route: RouteDto): EmailValidationState | null {
+  if (route.eligibility === 'retired') return null;
+  if (route.eligibility === 'usable') return 'deliverable';
+  if (route.eligibility === 'invalid' || route.technicalValidation === 'failed') return 'undeliverable';
+  if (route.technicalValidation === 'passed') return 'deliverable_unconfirmed';
+  return 'checking';
+}
+
+export const EMAIL_VALIDATION_TEXT: Readonly<Record<EmailValidationState, string>> = Object.freeze({
+  checking: 'Checking…',
+  deliverable: 'Deliverable domain — usable',
+  deliverable_unconfirmed: 'Deliverable domain — not usable yet: nothing says this address is this person’s',
+  undeliverable: 'Mail can’t reach this address — invalid',
+});

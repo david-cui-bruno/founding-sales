@@ -243,6 +243,30 @@ function confirmedFirmPage(page: NonNullable<CrmState['firm']>): NonNullable<Crm
   };
 }
 
+/**
+ * Lane g90: a Firm page whose three addresses stand at each point of their validation —
+ * still being checked, deliverable and usable, and one mail cannot reach.
+ */
+export const CHECKING_ROUTE_ID = 'abababab-abab-4bab-8bab-abababababab';
+export function addressesFirmPage(): NonNullable<CrmState['firm']> {
+  const page = assigneeFirmPage();
+  if (page.visibility !== 'assigned_or_admin' || page.read.visibility !== 'assigned_or_admin') return page;
+  return {
+    ...page,
+    read: {
+      ...page.read,
+      firm: {
+        ...page.read.firm,
+        emailRoutes: [
+          { id: CHECKING_ROUTE_ID, contactId: null, value: 'intake@northwind.example.test', eligibility: 'candidate', version: 1, technicalValidation: 'unknown' },
+          { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', contactId: null, value: 'reception@northwind.example.test', eligibility: 'usable', version: 2, technicalValidation: 'passed' },
+          { id: 'acacacac-acac-4cac-8cac-acacacacacac', contactId: null, value: 'old@northwind.example.test', eligibility: 'invalid', version: 2, technicalValidation: 'failed' },
+        ],
+      },
+    },
+  };
+}
+
 export function crmState(overrides: Partial<CrmState> = {}): CrmState {
   return {
     screen: 'firm',
@@ -274,6 +298,7 @@ globalThis.callieCrm = {
   async openOpportunity() { return await ask('openOpportunity'); },
   async enroll(input) { return await ask('enroll', input); },
   async confirmRoute(input) { return await ask('confirmRoute', input); },
+  async checkRoute(input) { return await ask('checkRoute', input); },
 };
 async function ask(method, argument) {
   const response = await fetch('/bridge/' + method, {
@@ -358,6 +383,8 @@ export async function startCrmTestServer(initial: CrmState): Promise<CrmTestServ
           state = { ...state, firm: confirmedFirmPage(state.firm), notice: 'route_confirmed' };
         }
         if (method === 'openOpportunity') state = { ...state, notice: 'opportunity_opened' };
+        // Lane g90: Check again queues a check; the address is still being checked.
+        if (method === 'checkRoute') state = { ...state, notice: 'route_check_queued' };
         if (method === 'enroll') {
           const input = argument as { contactId?: string } | null;
           state = {

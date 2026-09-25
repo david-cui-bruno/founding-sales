@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
+  FIRM_PAGE_VERSION,
   IMPORT_FILE_REFUSALS,
   addFirmRefusalSchema,
   addFirmResultSchema,
@@ -21,6 +22,7 @@ import {
 import type {
   AddFirmDraft,
   AddFirmView,
+  CheckRouteRequest,
   ConfirmRouteRequest,
   ContactEdit,
   CrmScreen,
@@ -83,6 +85,8 @@ export const CRM_IPC_CHANNELS = {
   openOpportunity: 'callie:crm:open-opportunity',
   enroll: 'callie:crm:enroll',
   confirmRoute: 'callie:crm:confirm-route',
+  // Lane g90: "Check again" on an address still being checked.
+  checkRoute: 'callie:crm:check-route',
 } as const;
 export type CrmIpcChannel = (typeof CRM_IPC_CHANNELS)[keyof typeof CRM_IPC_CHANNELS];
 
@@ -124,7 +128,19 @@ export interface CrmBridgeHost {
   openOpportunity(): Promise<CrmState>;
   enroll(input: EnrollRequest): Promise<CrmState>;
   confirmRoute(input: ConfirmRouteRequest): Promise<CrmState>;
+  checkRoute(input: CheckRouteRequest): Promise<CrmState>;
 }
+
+/**
+ * "Check again"'s refusals, said about an address (lane g90). The codes are the route's,
+ * shared with "Confirm this number", whose sentences name a number.
+ */
+const ADDRESS_REFUSAL_NOTICES: Readonly<Record<string, string>> = Object.freeze({
+  route_version_stale: 'address_changed',
+  route_invalid: 'address_invalid',
+  route_retired: 'address_retired',
+  route_unknown: 'address_unknown',
+});
 
 /** How many sequences the Firm page asks the versions of. A founder has a handful. */
 export const FIRM_PAGE_SEQUENCE_LIMIT = 20;
@@ -323,7 +339,11 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
   };
 
   const loadFirm = async (firmId: string): Promise<void> => {
-    const page = await deps.api.read('/crm/firm-page', value => firmPageResponseSchema.parse(value), { firmId });
+    // Lane g90: the second version, whose routes carry their technical validation.
+    const page = await deps.api.read('/crm/firm-page', value => firmPageResponseSchema.parse(value), {
+      firmId,
+      pageVersion: FIRM_PAGE_VERSION,
+    });
     if (!page.ok) {
       notice = page.reason;
       return;
@@ -548,6 +568,21 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
         () => null,
       );
       notice = answer.ok ? 'route_confirmed' : answer.reason;
+      if (firm !== null) await loadFirm(firm.read.firm.id);
+      return await snapshot();
+    },
+
+    /**
+     * "Check again" (lane g90): one more check of an address at the version the page
+     * showed. The route's own refusals are said about an address, not a number.
+     */
+    async checkRoute(input) {
+      const answer = await deps.api.command(
+        '/contacts/routes/check',
+        { routeKind: 'email', routeId: input.routeId, routeVersion: input.routeVersion },
+        () => null,
+      );
+      notice = answer.ok ? 'route_check_queued' : (ADDRESS_REFUSAL_NOTICES[answer.reason] ?? answer.reason);
       if (firm !== null) await loadFirm(firm.read.firm.id);
       return await snapshot();
     },

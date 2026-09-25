@@ -1,4 +1,6 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
+import { jobIdempotencyKey } from '../jobs/jobKinds.ts';
+import { enqueueJob, type JobSpecification } from '../jobs/jobStore.ts';
 import { decideFirmMutation } from './authorization.ts';
 import { recordCrmAuditEvent } from './audit.ts';
 import { emitCrmDomainEvent } from './events.ts';
@@ -7,6 +9,7 @@ import { decideRouteEligibility } from './routePolicy.ts';
 import {
   accept,
   refuse,
+  type CrmRefusalCode,
   type CrmResult,
   type RouteEligibility,
   type RouteKind,
@@ -146,7 +149,156 @@ async function addRoute(
     subjectId: created.id,
     detail: { firmId: input.firmId, eligibility: created.eligibility, source: input.source },
   });
+  // Lane g90: an address nobody has checked is checked by the worker, in this
+  // transaction's commit or not at all — an import row refused after this point takes
+  // its job back with it. A caller that brought its own verdict (`passed`, `failed`)
+  // is not second-guessed here.
+  if (kind === 'email' && created.eligibility === 'candidate' && created.technical_validation === 'unknown') {
+    await enqueueJob(
+      context.db,
+      emailValidationJob(context.scope.workspaceId, created.id, Number(created.version), EMAIL_VALIDATION_ROUND_NEW),
+    );
+  }
   return accept(created);
+}
+
+// ---------------------------------------------------------------------------
+// Lane g90: email technical validation — the job, and the one write it makes.
+// The rules are `routeValidation.ts`; `docs/decisions/g90-email-technical-validation.md`
+// says why they are these.
+// ---------------------------------------------------------------------------
+
+/** The round a route's own creation enqueues. */
+export const EMAIL_VALIDATION_ROUND_NEW = 'new';
+
+/**
+ * The `route.validate` job for one email route at one version.
+ *
+ * Built here and nowhere else, so the creation path, the scheduler's sweep and a
+ * person's "Check again" cannot disagree about the payload the handler parses.
+ */
+export function emailValidationJob(
+  workspaceId: string,
+  routeId: string,
+  routeVersion: number,
+  round: string,
+): JobSpecification {
+  return {
+    workspaceId,
+    kind: 'route.validate',
+    idempotencyKey: jobIdempotencyKey.routeValidate(routeId, routeVersion, round),
+    payload: { routeKind: 'email', routeId, routeVersion },
+    maxAttempts: 4,
+  };
+}
+
+export interface RecordEmailValidationInput {
+  readonly routeId: string;
+  /** The version the check was made against. A route that has moved since is left alone. */
+  readonly routeVersion: number;
+  /** A definite answer. A check that could not answer writes nothing at all. */
+  readonly technicalValidation: 'passed' | 'failed';
+  /**
+   * The association confidence to record when the route has none and the check passed,
+   * or null to record none. A recorded confidence is never replaced.
+   */
+  readonly vouchedConfidence: number | null;
+  /** Codes for the audit event: the rule version, the reason, the basis. Never the address. */
+  readonly detail: Readonly<Record<string, unknown>>;
+}
+
+export type RecordEmailValidationOutcome =
+  | { readonly written: true; readonly route: RouteRow }
+  | {
+      readonly written: false;
+      /**
+       * `superseded`: the route is no longer the unchecked candidate at the version the
+       * check was made for — it was checked already, re-decided, bounced, retired, or its
+       * version moved. Whatever it is now is newer than this answer.
+       */
+      readonly reason: 'route_unknown' | 'firm_unknown' | 'superseded' | CrmRefusalCode;
+    };
+
+/**
+ * Record a technical validation on an email route that nobody has checked yet
+ * (specification 7.4; lane g90).
+ *
+ * A compare-and-set. It writes only while the route is still `candidate`, still
+ * `technical_validation = 'unknown'` and still at `routeVersion`, under the route's row
+ * lock and then the firm's, the order every command in this file takes them. So a
+ * `usable` route is never touched here — nothing this function does can lower one — and
+ * a second run of the same job finds a route that has moved on.
+ *
+ * Eligibility is `decideRouteEligibility`'s, from the route's own source and its
+ * confidence: the recorded one, or when there is none and the check passed, the
+ * `vouchedConfidence` the caller's rule supplies for how the address got here. The
+ * version bumps, because the validation changed (the database's trigger insists).
+ */
+export async function recordEmailRouteValidation(
+  context: RepositoryContext,
+  input: RecordEmailValidationInput,
+): Promise<RecordEmailValidationOutcome> {
+  const loaded = await loadRouteForUpdate(context, 'email', input.routeId);
+  if (loaded === null) return { written: false, reason: 'route_unknown' };
+  const firm = await loadFirmForUpdate(context, loaded.firm_id);
+  if (firm === null) return { written: false, reason: 'firm_unknown' };
+  const decision = decideFirmMutation(context, firm);
+  if (!decision.permitted) return { written: false, reason: decision.reason };
+  if (
+    Number(loaded.version) !== input.routeVersion ||
+    loaded.eligibility !== 'candidate' ||
+    loaded.technical_validation !== 'unknown'
+  ) {
+    return { written: false, reason: 'superseded' };
+  }
+
+  const recorded = loaded.association_confidence === null ? null : Number(loaded.association_confidence);
+  const confidence = recorded ?? (input.technicalValidation === 'passed' ? input.vouchedConfidence : null);
+  const eligibility = decideRouteEligibility({
+    source: loaded.source,
+    technicalValidation: input.technicalValidation,
+    associationConfidence: confidence,
+  });
+
+  const { rows } = await context.db.query<RouteRow>(
+    `UPDATE email_addresses
+        SET technical_validation = $3,
+            association_confidence = $4,
+            eligibility = $5,
+            eligibility_policy_version = $6,
+            version = version + 1,
+            updated_at = now()
+      WHERE workspace_id = $1 AND id = $2 AND version = $7
+      RETURNING ${ROUTE_COLUMNS}`,
+    [
+      context.scope.workspaceId,
+      input.routeId,
+      input.technicalValidation,
+      confidence,
+      eligibility.eligibility,
+      eligibility.policyVersion,
+      input.routeVersion,
+    ],
+  );
+  const updated = rows[0];
+  if (updated === undefined) return { written: false, reason: 'superseded' };
+
+  await recordCrmAuditEvent(context, {
+    action: 'route.email.validated',
+    subjectKind: 'route',
+    subjectId: input.routeId,
+    detail: {
+      ...input.detail,
+      firmId: loaded.firm_id,
+      technicalValidation: updated.technical_validation,
+      eligibility: updated.eligibility,
+      policyVersion: updated.eligibility_policy_version,
+      confidenceBasis: recorded !== null ? 'recorded' : confidence !== null ? 'vouched' : 'none',
+      fromVersion: Number(loaded.version),
+      version: Number(updated.version),
+    },
+  });
+  return { written: true, route: updated };
 }
 
 export interface VerifyRouteInput {
