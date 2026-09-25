@@ -3,7 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { readRepositoryFile, repositoryPath } from './support/coverage.ts';
 
 /**
- * Where the release mutation check runs (lane g62, David's decision of 25 September 2026).
+ * Where the release mutation check runs (lane g62, David's decision of 25 September 2026;
+ * lane g93 took it out of the rehearsal the same evening).
  *
  * `npm run test:release:mutation` breaks every trap the release suite names and requires
  * the suite to go red. It ran as a step of the pull-request gate
@@ -14,12 +15,18 @@ import { readRepositoryFile, repositoryPath } from './support/coverage.ts';
  * the workspace tests and the release suite, and the check still runs locally exactly as
  * before.
  *
- * This file holds that shape: absent from the pull-request job and from the gate script
- * it runs, present in the nightly with its schedule, and loud there when it fails.
+ * Lane g93 took it out of the rehearsal as well. The `full` stage of
+ * `.github/workflows/greenfield-release.yml` ran it after the release suite, and at about
+ * 200 entries that was 45 minutes, half the run. A rehearsal now runs the release suite
+ * and nothing of the mutation check; the nightly is the only place it runs in CI.
+ *
+ * This file holds that shape: absent from the pull-request job, from the gate script it
+ * runs and from the rehearsal, present in the nightly with its schedule, and loud there
+ * when it fails.
  *
  * ## The vacuous-pass traps, named
  *
- * Three.
+ * Four.
  *
  * "The pull-request workflow does not mention the mutation check" is true of a reader
  * that found nothing, and of a check that came back through `gate:greenfield` in
@@ -27,6 +34,11 @@ import { readRepositoryFile, repositoryPath } from './support/coverage.ts';
  * the pull-request job's steps (the gate step among them, run as it is today) and by
  * reading the gate script too. A mutation appended to `scripts/releaseMutationCheck.mjs`
  * puts the check back on the pull-request gate step and requires this file to go red.
+ *
+ * "The rehearsal does not run it" has the same shape, and the same floor: the reader must
+ * find the rehearsal job's release-suite step, still running `npm run test:release` in
+ * the `full` stage, before its absence from that step and from the whole workflow means
+ * anything.
  *
  * A nightly that runs the check and cannot fail is quieter than no nightly: the check no
  * longer blocks anything, so a red run is only worth what it tells somebody. The step's
@@ -43,6 +55,7 @@ import { readRepositoryFile, repositoryPath } from './support/coverage.ts';
 
 const PULL_REQUEST_WORKFLOW = '.github/workflows/greenfield.yml';
 const NIGHTLY_WORKFLOW = '.github/workflows/greenfield-nightly.yml';
+const RELEASE_WORKFLOW = '.github/workflows/greenfield-release.yml';
 
 interface Step {
   readonly name: string;
@@ -178,6 +191,25 @@ describe('the pull-request gate no longer runs the release mutation check', () =
     }
     // Locally, exactly as before lane g62.
     expect(scripts['test:release:mutation']).toBe('node scripts/releaseMutationCheck.mjs');
+  });
+});
+
+describe('the rehearsal no longer runs the release mutation check', () => {
+  const job = readJob(RELEASE_WORKFLOW, 'rehearsal');
+
+  it('reads the job it is judging: the release suite, in the full stage, run as it is', () => {
+    // The floor. A reader that found no steps would find no mutation check in them.
+    expect(job.steps.length).toBeGreaterThanOrEqual(20);
+    const suite = job.steps.find(step => step.name === 'Release suite (recorded mode, runner)');
+    expect(suite?.condition).toBe("inputs.stage == 'full'");
+    expect(suite?.script).toBe('set -euo pipefail\nnpm ci --ignore-scripts --no-audit --no-fund\nnpm run test:release');
+  });
+
+  it('runs no step of the mutation check, in the job or anywhere in the workflow', () => {
+    for (const step of job.steps) {
+      expect(step.script ?? '', `step "${step.name}" runs the mutation check`).not.toMatch(RUNS_THE_CHECK);
+    }
+    expect(uncommented(readRepositoryFile(RELEASE_WORKFLOW))).not.toMatch(RUNS_THE_CHECK);
   });
 });
 

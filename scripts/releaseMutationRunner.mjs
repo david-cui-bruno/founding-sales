@@ -55,8 +55,29 @@
 // how many of the kills were each kind, so a total never reads as more behavioural
 // confidence than it holds. Any other `kind` is a malformed entry, reported like a
 // stale one.
+//
+// ## One file per area, not one list for every lane (lane g93, 25 September 2026)
+//
+// Until lane g93 every mutation lived in one `const MUTATIONS = [...]` in
+// `scripts/releaseMutationCheck.mjs`, 243 entries long when it was split, and every lane
+// appended to its end, so every pull request that added a trap conflicted with every other one. The
+// entries now live in `scripts/mutations/<area>.mjs`, each file exporting
+// `MUTATIONS`, and `loadMutations` below reads them all. Which file an entry belongs in
+// is decided by the file it edits, by `MUTATION_AREAS`: the first rule whose prefix the
+// entry's `file` starts with names the area. An entry in the wrong file, a file that is
+// not an area, an area file that exports no array, a name used twice, and a list that
+// comes back empty are each refused before anything runs: a loader that found nothing
+// would run nothing, and "0 mutation(s) killed, 0 problem(s)" is the vacuous pass this
+// whole check exists to catch.
+//
+// The order is by area file name, then the order within each file. Before g93 it was
+// the order lanes appended in; nothing in the check depends on the order across areas,
+// since each mutation is applied, judged and restored on its own.
 
 import { spawnSync } from 'node:child_process';
+import { readdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 /** The two kinds of mutation, and the one an entry without a `kind` is. */
 export const MUTATION_KINDS = Object.freeze(['behaviour', 'wiring']);
@@ -377,4 +398,82 @@ export async function runMutationCheck({ mutations, runSuite, readFile, writeFil
   );
   log(`\n${String(killed)} mutation(s) killed, ${String(problems)} problem(s).`);
   return { killed, killedByKind, problems, brokenRuns, interrupted };
+}
+
+/**
+ * One mutation, as each `scripts/mutations/<area>.mjs` exports it. The fields are
+ * described at the top of `scripts/releaseMutationCheck.mjs`.
+ *
+ * @typedef {{name: string, file: string, find: string, replace: string, suite: string[], because: string, kind?: 'behaviour' | 'wiring'}} Mutation
+ */
+
+/**
+ * Where a mutation's entry lives, by the file it edits: the first rule whose prefix the
+ * entry's `file` starts with. The more specific rules come first (`infra/scripts/` before
+ * `infra/`, each domain module before `packages/domain/`). A file no rule matches has no
+ * area, and its entry is refused until a rule is added here.
+ */
+export const MUTATION_AREAS = Object.freeze([
+  { area: 'workflows', prefixes: ['.github/workflows/'] },
+  { area: 'release-scripts', prefixes: ['infra/scripts/', 'scripts/', 'test/release/'] },
+  { area: 'infra', prefixes: ['infra/', 'Dockerfile.'] },
+  { area: 'api', prefixes: ['apps/api/'] },
+  { area: 'worker', prefixes: ['apps/worker/'] },
+  { area: 'desktop', prefixes: ['apps/desktop/'] },
+  { area: 'contracts', prefixes: ['packages/contracts/'] },
+  { area: 'domain-outbound', prefixes: ['packages/domain/outbound/', 'packages/domain/test/outbound/'] },
+  { area: 'domain-sequences', prefixes: ['packages/domain/sequences/', 'packages/domain/test/sequences/'] },
+  { area: 'domain-mail', prefixes: ['packages/domain/mail/', 'packages/domain/test/mail/'] },
+  { area: 'domain-crm', prefixes: ['packages/domain/crm/', 'packages/domain/test/crm/'] },
+  { area: 'domain-other', prefixes: ['packages/domain/'] },
+].map(rule => Object.freeze({ ...rule, prefixes: Object.freeze(rule.prefixes) })));
+
+/** The area a mutation of `file` belongs to, or null when no rule matches. */
+export function mutationArea(file) {
+  return MUTATION_AREAS.find(rule => rule.prefixes.some(prefix => file.startsWith(prefix)))?.area ?? null;
+}
+
+/**
+ * Every mutation, from the area files in `directory` (`scripts/mutations` in use), in
+ * area file name order and then in each file's own order. Throws, naming the file and
+ * the entry, when the list is malformed: see the section above.
+ *
+ * Returns `{ mutations, areas }`: the entries exactly as their files export them, and
+ * `[{ area, file, count }]` for each area file read.
+ */
+export async function loadMutations(directory) {
+  const known = new Set(MUTATION_AREAS.map(rule => rule.area));
+  const files = readdirSync(directory)
+    .filter(name => name.endsWith('.mjs'))
+    .sort();
+  if (files.length === 0) throw new Error(`no mutation area file in ${directory}: nothing would be checked`);
+  const mutations = [];
+  const areas = [];
+  const names = new Map();
+  for (const file of files) {
+    const area = file.slice(0, -'.mjs'.length);
+    if (!known.has(area)) {
+      throw new Error(
+        `${file} is not a mutation area; the areas are ${[...known].join(', ')} (MUTATION_AREAS in scripts/releaseMutationRunner.mjs)`,
+      );
+    }
+    const loaded = await import(pathToFileURL(join(directory, file)).href);
+    if (!Array.isArray(loaded.MUTATIONS)) throw new Error(`${file} does not export a MUTATIONS array`);
+    for (const mutation of loaded.MUTATIONS) {
+      const belongs = typeof mutation?.file === 'string' ? mutationArea(mutation.file) : null;
+      if (belongs !== area) {
+        throw new Error(
+          `${file}: "${String(mutation?.name)}" edits ${String(mutation?.file)}, which belongs in ` +
+            `${belongs === null ? 'no area (add a rule to MUTATION_AREAS)' : `${belongs}.mjs`}`,
+        );
+      }
+      const earlier = names.get(mutation.name);
+      if (earlier !== undefined) throw new Error(`${file}: "${String(mutation.name)}" is already the name of an entry in ${earlier}`);
+      names.set(mutation.name, file);
+      mutations.push(mutation);
+    }
+    areas.push({ area, file, count: loaded.MUTATIONS.length });
+  }
+  if (mutations.length === 0) throw new Error(`the mutation area files in ${directory} hold no entry: nothing would be checked`);
+  return { mutations, areas };
 }
