@@ -275,8 +275,11 @@ export const SCENARIOS: readonly Scenario[] = Object.freeze([
       // `update-service` calls; nothing anywhere applied a migration, so on a fresh
       // database both services would have refused to start for ever.
       'infra/scripts/release-deploy.sh',
+      // Lane g70: the stop runs before the apply, and the apply cannot undo it.
+      'infra/scripts/release-stop.sh',
       'infra/modules/cluster/main.tf',
       'infra/modules/cluster/tests/migration_identity.tftest.hcl',
+      'infra/modules/cluster/tests/release_owns_the_count.tftest.hcl',
     ),
     trap: 'With both ranges equal to the current version, "every pair is compatible" is true and vacuous; a deploy order that is a heading rather than a sequence of commands is an order nothing performs; and a launch whose exit code nobody reads measures nothing at all — the rehearsal step asserted a successful run-task API call rather than the container’s refusal, and ran a task definition nothing registers.',
     closedBy: 'The check computes the overlap from the declared ranges and, when there is none, asserts the refusal reason each side gives instead; it reads the shared deploy script for the positions of migrate, database-users, verify, worker and API, so an order that stopped being an order fails offline; and it drives the rehearsal script offline against a fake CLI — a first release with no previous image, a registered previous image, an image that accepts the stale range and a container that stops for another reason — so the launch is judged by the container’s exit code (12, configurationInvalid) through the one-off wrapper, with a mutation that puts the run-task reading back.',

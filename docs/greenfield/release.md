@@ -501,7 +501,7 @@ before it run:
 3. [plan] **Record the production inventory.** So that "teardown could not address production" is measured afterwards rather than asserted. This is the one rehearsal command that names a production resource on purpose, and on the first credentialed run (Actions 35548888865) the rehearsal's own guard refused it — `FAIL: a rehearsal command names a production resource: Key=Name,Values=fss-prod*` — before anything was created. It is now issued through one named function, `rehearsal_read_production_inventory` in `infra/scripts/rehearsal-common.sh`, which is the only caller exempt from the refusal, may issue only `resourcegroupstaggingapi get-resources`, and builds its own filter so no caller can push a name through it. Every other command naming `fss-prod` — including a mutating one wearing the same filter — is still refused. The dry run prints the read with an `exempt-read-only-production-inventory` marker and `infra/scripts/rehearsal-prefix-guard.sh <prefix> plan <file>` re-applies the refusal to that printed plan on every pull request, so a rehearsal that would refuse itself is red before a credential is spent.
 4. [plan, then create] **Plan, then create.** The variables the root requires are written to `run.auto.tfvars.json` beside the root, the backend is initialised against this run's own state key, and `terraform plan -out` is run with the whole `-var` list. The `create` stage then applies, and names **no variable of its own**: Terraform loads `run.auto.tfvars.json` automatically from the root directory, which is the same mechanism the teardown's `terraform destroy` depends on. One list in one place is what keeps the plan and the apply the same values. The apply creates the rehearsal root with the run prefix and `bootstrap=true`, deploying both digests from the stable `fss-rh-api` and `fss-rh-worker` repositories. **Both services are created at desired count zero.** A fresh environment's database has no schema, and both binaries refuse to start unless the applied schema version is exactly the range they declare — so an apply that started them would create two services crash-looping against an empty database while the task that would fix it had not been launched. The run creates no repository of its own and its teardown removes none; `infra/roots/rehearsal-registry` owns those two and was applied once, before the first push.
 5. [deploy] **Fill every secret entry.** Terraform creates every Secrets Manager entry empty and never holds a value. In production you fill these two by hand (5.1); a rehearsal is unattended and an hour long, so it fills its own: `migration-database` takes the RDS-managed master credentials, because on a database that has never been migrated there is no other login role that can run DDL, and `app-runtime-database` takes a password generated in the runner. Both are masked before they can reach a log. This needs `secretsmanager:PutSecretValue` on `fss-rh-*` secrets on `fss-rh-deploy` — see 8.1.
-6. [deploy] **Migrate, then deploy the worker, then the API.** `infra/scripts/release-deploy.sh infra/roots/rehearsal <prefix> --schema-change` — the *same script* you run locally for production (section 4.1). It scales to zero if anything is running, runs `fss migrate` as a one-off ECS task inside the VPC, then `fss admin database-users ensure`, then `fss verify`, then the worker to its declared count, then the API, then `fss verify` again against the running deployment. Never beside each other: the API's declared schema range needs the migration to have run. Until 21 September nothing in deployment ran a migration at all; the step was named for an order it did not perform.
+6. [deploy] **Migrate, then deploy the worker, then the API.** `infra/scripts/release-deploy.sh infra/roots/rehearsal <prefix> --schema-change` — the *same script* you run locally for production (section 4.1). It refuses unless both services are at zero — on a fresh stack the apply created them there, and on a stack that already stood the create step ran `release-stop.sh` before the apply (lane g70) — then runs `fss migrate` as a one-off ECS task inside the VPC, then `fss admin database-users ensure`, then `fss verify`, then the worker to its declared count, then the API, then `fss verify` again against the running deployment. Never beside each other: the API's declared schema range needs the migration to have run. Until 21 September nothing in deployment ran a migration at all; the step was named for an order it did not perform.
 
     [deploy] **Then the first workspace and its admin**, as its own step between this one and item 7: `infra/scripts/release-bootstrap-workspace.sh infra/roots/rehearsal <prefix> --worker-digest D --slug rehearsal --display-name Rehearsal --admin-email rehearsal-admin@usecallie.com`. A migrated database has no `workspaces` row, and the scheduler's canary is inserted once per workspace — so an environment without one publishes no `CanaryCompletionAgeSeconds`, the `canary_stale` alarm breaches, and item 8's smoke has nothing to judge. That is exactly how the eighth full run failed (8.0p). It is the same script production runs, with `--environment production` (5.1a) and different values.
 7. [full] **The declared ranges, against the deployed images** (`infra/scripts/rehearsal-schema-ranges.sh <prefix> --api-digest D --worker-digest D`): Appendix G 22's refusal cases, which only a real ECS task can answer. Each service image is launched as a one-off `--selftest` task through the same wrapper the deploy uses, with a declared schema range one below the one it was built with, and the *container* must refuse it — exit 12, `configurationInvalid` in both `API_EXIT_CODES` and `WORKER_EXIT_CODES`. The overlap case, the previous release's image against the current schema, runs **only when a `<prefix>-<service>-previous` task definition is actually registered**: nothing in this repository registers one and a first release has no previous image at all, so the report says `skipped_no_previous` rather than claiming a pass (8.0o).
@@ -582,7 +582,7 @@ There is also `extra_environment` (`map(string)`, empty) on both roots, for what
 ### 4.1 The order inside the apply, and the one command that performs it
 
 ```
-all eight entries filled  →  fss migrate  →  database users  →  fss verify  →  worker  →  API  →  fss verify
+[schema change: release-stop.sh]  →  terraform apply  →  all eight entries filled  →  fss migrate  →  database users  →  fss verify  →  worker  →  API  →  fss verify
 ```
 
 **Every entry first.** Terraform creates the eight Secrets Manager entries empty, and an
@@ -595,7 +595,22 @@ The rehearsal fills all eight in its own step, six of them with fixtures. The `p
 extension needs no step of its own: migration 0005 creates it, and it is a trusted
 extension the migration role may create.
 
-**You do not type those steps.** They are one script, and it is the same script CI runs for the rehearsal — the only differences are the root in argument one and the credentials in your shell:
+**A schema change stops the services before the apply (lane g70).** From migration 0006 every declared range is a strict `{N,N}`, so the task definitions a schema-change apply registers refuse the schema the database is still at: both binaries exit 12 at startup. An apply against running services repoints them at those definitions and ECS starts replacing working tasks with ones that refuse, before anything has migrated. That is what the 04:41Z deploy of schema 16 did on 25 September (8.0af). So a schema-change release on a standing environment is three commands, in this order:
+
+```bash
+# 1. Stop both services: the API, then the worker. Each is waited on and read back at zero.
+infra/scripts/release-stop.sh infra/roots/production fss-prod --environment production
+
+# 2. The apply, from the plan you read (infra-apply-runbook.md 3.2). It replaces the task
+#    definitions and starts nothing: both services ignore changes to their count.
+(cd infra/roots/production && terraform apply production.tfplan)
+
+# 3. Migrate, verify and start: the command below, with --schema-change.
+```
+
+`release-stop.sh` asks for `--environment production` because it takes production down on purpose, the same extra word `release-bootstrap-workspace.sh` asks for, and it refuses a root that is not the prefix's, a cluster in another account, region or namespace, and a cluster tagged as the other environment. Run twice, it does nothing the second time. Plan before the stop and apply after it: the plan does not depend on the counts, and the outage starts at step 1, so keep steps 1 to 3 together. A first apply (`bootstrap=true`) needs no stop, because it creates both services at zero.
+
+**You do not type the steps after the apply.** They are one script, and it is the same script CI runs for the rehearsal — the only differences are the root in argument one and the credentials in your shell:
 
 ```bash
 export AWS_PROFILE=<the profile that can assume fss-prod-deploy>
@@ -607,9 +622,11 @@ infra/scripts/release-deploy.sh infra/roots/production fss-prod \
   --worker-digest "$WORKER_DIGEST"
 ```
 
-Read it first, without a credential, exactly as CI's dry run does:
+Read both first, without a credential, exactly as CI's dry run does:
 
 ```bash
+FSS_REHEARSAL_DRY_RUN=1 FSS_REHEARSAL_REPORTS=/tmp/fss-plan \
+  infra/scripts/release-stop.sh infra/roots/production fss-prod --environment production
 FSS_REHEARSAL_DRY_RUN=1 FSS_REHEARSAL_REPORTS=/tmp/fss-plan \
   infra/scripts/release-deploy.sh infra/roots/production fss-prod \
     --schema-change --worker-digest "$WORKER_DIGEST"
@@ -619,13 +636,13 @@ Why a script rather than four commands you can see:
 
 - **The migration is a one-off ECS task, not something you can run.** The production database is private: `publicly_accessible = false`, no NAT gateway, no bastion. Nothing on your Mac has a route to it and nothing should. The only thing already inside the VPC that can reach PostgreSQL is the worker image, so `fss migrate` runs as a task using it, under a task role that exists for nothing else.
 - **Every launch is checked before it is made.** `infra/scripts/release-common.sh` refuses a bare cluster name, a wrong account, a wrong region, a cluster tagged as the other environment, a task definition whose image is not the digest this release is about, a network configuration that is not the root's own public subnets under the worker security group, and a task definition resolving a credential entry this release did not name. Afterwards it reads the `failures` array, refuses a task that never started, refuses a stopped task with no exit code (which is not a zero), prints `stopCode` and `stoppedReason`, waits out the log-stream race, and records the task ARN so a retry waits on the task that is already running rather than starting a second migration.
-- **The declared counts come from the plan.** The script scales the services to `terraform output deployment_plan`'s `declared_desired_count`, not to a number in a shell file that somebody has to keep in step with the root.
+- **The declared counts come from the plan.** The script scales the services to `terraform output deployment_plan`'s `declared_desired_count`, not to a number in a shell file that somebody has to keep in step with the root. Terraform sets a count only when it creates a service. After that both services ignore changes to `desired_count`, so an apply never moves one, and steps 5 and 6 of every deploy, rolling or schema, set the declared numbers explicitly.
 
-`--schema-change` is the flag that makes it stop the services first. Leave it off for a release that moves no migration; the migration task still runs, finds nothing to apply, and says so.
+`--schema-change` is the flag that makes it refuse unless both services are already at desired, running and pending zero. It no longer stops them itself: by the time it runs, the apply has registered the new task definitions, and a stop there is the defect 8.0af records. The refusal names the `release-stop.sh` command to run. Leave the flag off for a release that moves no migration. That is the rolling path and it is unchanged: the apply replaces the task definitions and ECS rolls the running services on to them at their current counts, the migration task finds nothing to apply and says so, and steps 5 and 6 set the declared counts.
 
 **The policy, and it is not negotiable.**
 
-- **Stop-during-migration.** From migration 0006 onwards every declared range is a strict `{N,N}`, so there is no build of this software that straddles a schema change and no honest way to migrate without an outage. The script scales the API to zero first — so no request reaches a schema that is about to move — then the worker, which is given time to release its job leases.
+- **Stop-during-migration.** From migration 0006 onwards every declared range is a strict `{N,N}`, so there is no build of this software that straddles a schema change and no honest way to migrate without an outage. `release-stop.sh` scales the API to zero first — so no request reaches a schema that is about to move — then the worker, which is given time to release its job leases, and it does so **before** the apply registers task definitions that refuse the current schema. `release-deploy.sh --schema-change` then refuses to migrate unless both are still at zero.
 - **The database never rolls back.** There is no down migration in this repository and there will not be one. `packages/domain/db/migrations` is forward-only and `loadMigrations` refuses a gap.
 - **After a successful migration and a failed deployment there are exactly two paths.** *Forward repair*: fix the code, build a new digest, deploy it. Or *the restore protocol*: `docs/greenfield/restore-drill.md`, all nine steps, with sending and dialing held until step 9. Redeploying the previous digests is only a rollback when their declared ranges accept the current schema version, which after a migration they usually do not — `infra/scripts/rehearsal-schema-ranges.sh` computed that during the rehearsal and told you. What is never a path is undoing the schema.
 
@@ -2664,6 +2681,48 @@ A 1.0.4 Mac against an API still publishing 1.0.3 is refused every sign-in, rene
 - The `code` field in CloudWatch and its effect on the Refusals metric filter, which reads `reason` and should be unaffected.
 
 Also unknown: which refusal the 25 September 409 was. The receipt in `command_receipts` holds it, and nothing here reads production.
+### 8.0af What lane g70 changed: a schema release stops before the apply, not after it (25 September)
+
+**The defect.** The independent review of 25 September (at `b2cc080b`, a P1 for the next schema deploy) found the order of a schema-change release backwards. `terraform apply` registers the release's task definitions, and it updated both live services in place to point at them, at their running counts. `release-deploy.sh --schema-change` scaled the services to zero only afterwards, in its step 1. From migration 0006 every declared range is a strict `{N,N}`, so those task definitions refuse the schema the database is still at: both binaries exit 12 (`configurationInvalid`) at startup.
+
+The schema-16 release of 25 September ran in exactly that order (8.0ab, steps 2 and 3). The apply at `3bb2249f` registered revision 9 of both service task definitions, declaring `{16, 16}`, and repointed both services while they were running against schema 15. The deploy's step 1 then scaled the API and the worker to zero at about 04:41Z, migrated, and the API was back at about 04:50Z. Between the apply and that step 1, ECS was starting tasks that could only refuse:
+
+- the worker's deployment replaces rather than overlaps (minimum healthy 0 %), so ECS could stop its only `{15, 15}` task before the `{16, 16}` replacement refused;
+- the API's rolling deployment (minimum healthy 100 %) kept its old tasks serving while the new ones failed beside them;
+- the deployment circuit breaker rolls a failed deployment back to the previous revision. A rollback racing the scale-down could leave a service on `{15, 15}`, and step 5 would then start it against schema 16.
+
+None of that was observed task by task. It is what the order does, and the log records only the 04:41Z to 04:50Z window. The migration itself ran with both services at zero, so nothing was written against the wrong schema. The failure was the stop arriving after the harm, not the migration.
+
+**The fix.**
+
+- **`infra/scripts/release-stop.sh <root> <prefix> [--environment production]`**, run before the apply. It scales the API to zero, waits for it to be stable and reads it back, then does the same for the worker. It fails naming the counts if either is not at desired, running and pending zero afterwards. A service already at zero is reported and left alone, so a second run does nothing. It carries the guards the other production-capable scripts carry: the prefix decides the environment, the root must agree, every call goes through the symmetric refusal, the cluster must be a full ARN in this account, region and namespace, and its `Environment` tag must agree. Production must be named out loud with `--environment production`.
+- **`ignore_changes = [desired_count]` on both services** (`infra/modules/cluster/main.tf`). Terraform sets a count when it creates a service and never afterwards, so the apply after the stop replaces the task definitions and starts nothing. This reverses the rejection recorded in `docs/decisions/g12h-bootstrap-is-a-root-variable.md`, which is amended to say why. `bootstrap` still creates a fresh environment at zero, and `bootstrap=true` against a standing one no longer scales it at all.
+- **`release-deploy.sh --schema-change` step 1 is now an assertion.** Both services must already be at desired, running and pending zero, or it refuses and prints the `release-stop.sh` command. It does not scale them: by then the harm has happened, and a quiet stop would make the wrong order look right. The assertion runs on a bootstrap too, where it passes without a stop, because `bootstrap=true` on a standing stack no longer zeroes anything. The rolling path, with no `--schema-change`, is unchanged.
+- **The rehearsal.** Every run creates a fresh stack, so there is nothing to stop. The create step reads its own plan: if both services already stand in the run's state, which happens only when `run_suffix` names a stack an earlier run left, it runs `release-stop.sh` before the apply. A plan that creates one service and not the other is refused.
+
+**Why `ignore_changes` is safe for a rolling release.** It ignores the count and nothing else. A new image or range still replaces the task definition, the service still references `aws_ecs_task_definition.<name>.arn`, and the apply still updates the service in place, so ECS rolls it on to the new revision at the count it is running. `release-deploy.sh` sets the declared counts explicitly in steps 5 and 6 of every deploy, as it already did. What changes: a new `api_desired_count` or `worker_desired_count` reaches the services at the next deploy, not at the apply. And `deployment_plan.planned_desired_count` reports the count Terraform last read from ECS.
+
+**Test evidence, offline only.** `infra/modules/cluster/tests/release_owns_the_count.tftest.hcl` applies a stack at zero, then a schema release's apply with the bootstrap off, new images and a `{16, 16}` range. Both counts stay at zero, the declared two and one still reach `deployment_plan`, and the task definitions carry the new images and ranges. `infra/roots/production/tests/schema_release_order.tftest.hcl` applies production at two and one, then again with new ranges and `bootstrap = true`, and the counts do not move. Both runs fail with the lifecycle removed. `test/release/scenario22.check.ts` drives both scripts against a fake ECS:
+
+- the deploy refuses with either service running, making no `update-service` and no `run-task`;
+- with both at zero, the deploy reaches the migration;
+- the stop scales the API before the worker and reads both back;
+- the stop is idempotent, fails when a service will not stop, and refuses production unless it is named.
+
+It also runs the workflow's classifier against four plans. Two mutations at the end of `scripts/releaseMutationCheck.mjs` must be killed: the refusal removed, and the lifecycle taken off the worker.
+
+**What the next schema release does in production.**
+
+1. Build and push both images (2.1). Read the ranges from the source (4).
+2. Plan to a file, and read it. The two service task definitions are replaced, the two services are updated in place for `task_definition` only, and no `desired_count` line appears (`infra-apply-runbook.md` 3.2).
+3. `infra/scripts/release-stop.sh infra/roots/production fss-prod --environment production`. The outage starts here.
+4. Apply the plan.
+5. `infra/scripts/release-deploy.sh infra/roots/production fss-prod --schema-change --api-digest … --worker-digest …`. It refuses unless step 3 happened, then migrates, verifies, and starts the worker and then the API.
+6. Smoke.
+
+A release with no migration keeps its order: plan, apply, `release-deploy.sh` without `--schema-change`, smoke.
+
+**Still unverified.** Nothing here has run in the cloud. Whether `update-service --desired-count 0` then `wait services-stable` stops the API inside the waiter's ten minutes with the target group's 30-second deregistration delay is expected and unmeasured. So is the claim that an apply against services at zero registers the new deployment and starts no task. So is a `describe-services` read by `fss-rh-deploy` and `fss-prod-deploy` from these scripts (both roles allow `ecs:Describe*`). A normal fresh `full` run exercises only the assertion's bootstrap branch; the standing-stack branch runs only when a run names a leftover stack. Under the release cadence this is an infrastructure and release-script change, so it needs a full rehearsal before production uses it.
 
 ### 8.1 Still unverified
 

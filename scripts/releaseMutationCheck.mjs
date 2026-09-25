@@ -1078,6 +1078,25 @@ const MUTATIONS = [
     because:
       'The renewal carries the membership’s current role, and a Mac that ignored it stayed a salesperson after an admin promoted it: no Domain row on Home, no sending section in Administration, until the next full sign-in. desktop.test.ts renews after a promotion and a demotion, reads the role in memory, on disk and through an open Administration bridge, and has to go red.',
   },
+  // Lane g70: a schema release stops before the apply, and the deploy refuses otherwise.
+  {
+    name: 'a schema-change deploy migrates under an API that is still running',
+    file: 'infra/scripts/release-deploy.sh',
+    find: '  release_require_service_stopped "$ENVIRONMENT" "$CLUSTER_ARN" "$API_SERVICE" || refuse_not_stopped "$API_SERVICE"\n',
+    replace: '',
+    suite: ['run', 'test:release'],
+    because:
+      'By the time release-deploy.sh runs, the apply has registered task definitions whose strict range refuses the schema the database is still at, which is the order the 25 September schema-16 deploy ran in (release.md 8.0af). Step 1 is the only thing between a running API and a migration under it, and it must refuse rather than scale. scenario22 drives the script against a fake ECS with the API running and requires no run-task; without this line the migration launches and it has to go red.',
+  },
+  {
+    name: 'an apply may move the worker\u2019s count again',
+    file: 'infra/modules/cluster/main.tf',
+    find: '  # As on the API service above: the apply replaces the task definition and leaves\n  # the count where the release scripts put it.\n  lifecycle {\n    ignore_changes = [desired_count]\n  }\n',
+    replace: '',
+    suite: ['run', 'test:release'],
+    because:
+      'release-stop.sh stops both services before a schema-change apply, and the apply after it puts the declared count back unless the service ignores changes to desired_count: the worker would start against the old schema and exit 12 before the migration. release_owns_the_count.tftest.hcl applies the difference but runs outside npm run test:release, so scenario22 reads the lifecycle inside each service block and has to go red.',
+  },
 ];
 
 // A listener on each of these keeps Node from exiting mid-mutation with a file still

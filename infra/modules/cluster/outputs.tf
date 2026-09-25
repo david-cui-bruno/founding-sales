@@ -131,6 +131,10 @@ output "deployment_plan" {
     is what this apply creates it at, which is zero on a bootstrap. The script's
     scale-up target is the declared number, so the count in the cloud and the
     count in the root cannot drift apart through a literal in a shell file.
+
+    After the first apply `planned_desired_count` is the count Terraform last
+    read from ECS rather than one it sets: both services ignore changes to
+    `desired_count` (lane g70), and the release scripts own it from there.
   EOT
   value = {
     bootstrap = var.bootstrap

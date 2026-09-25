@@ -323,10 +323,17 @@ variable "bootstrap" {
     The declared counts are left alone: a bootstrap changes what the services
     *are* right now, not what they are for, and `output.deployment_plan`
     reports both so the script's scale-up target is the root's own number
-    rather than a literal in a shell file. There is deliberately no
-    `ignore_changes` on `desired_count` — that would make the count untracked
-    for ever and take away Terraform's ability to scale to zero for the next
-    schema release.
+    rather than a literal in a shell file.
+
+    It decides the count a service is *created* at and nothing after that.
+    Both services carry `ignore_changes = [desired_count]` (lane g70), so a
+    later apply, with this true or false, replaces task definitions and leaves
+    the running count to `infra/scripts/release-stop.sh` and
+    `infra/scripts/release-deploy.sh`. Until 25 September there was no
+    `ignore_changes`, so that Terraform could scale to zero for a schema
+    release; in practice the apply repointed the running services at the new
+    task definitions before anything stopped them, which is the defect the
+    change closes (`docs/greenfield/release.md` 8.0af).
   EOT
   type        = bool
   default     = false

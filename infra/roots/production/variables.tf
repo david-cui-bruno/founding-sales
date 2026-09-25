@@ -419,11 +419,13 @@ variable "bootstrap" {
     them — worker, then API — after the migration task and `fss verify` have
     both succeeded.
 
-    Passing `true` to an environment that is already running scales both
-    services to zero. That is a real outage and never what an ordinary release
-    wants; a schema release stops the services through
-    `release-deploy.sh --schema-change`, which restores the declared counts at
-    the end of the same run.
+    It decides the count the services are created at and nothing after that:
+    both services ignore later changes to `desired_count` (lane g70), so
+    passing `true` to a running environment no longer scales it, and it is
+    still never what an ordinary release wants. A schema release stops the
+    services with `infra/scripts/release-stop.sh ... --environment production`
+    before the apply, and `release-deploy.sh --schema-change` restores the
+    declared counts after the migration.
   EOT
   type        = bool
   default     = false
