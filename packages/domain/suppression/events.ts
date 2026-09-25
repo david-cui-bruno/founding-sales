@@ -9,6 +9,7 @@ import { decideFirmMutation } from '../crm/authorization.ts';
 import { loadFirmForUpdate } from '../crm/firms.ts';
 import { databaseNow } from '../policy/clock.ts';
 import { openHold, releaseHoldsOfEvent } from '../policy/holds.ts';
+import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import { unionDuration } from '../src/rules/holds.ts';
 import {
   CANONICALIZER_VERSION,
@@ -169,6 +170,12 @@ export async function recordSuppression(
 ): Promise<SuppressionResult<RecordedSuppression>> {
   const actor = context.scope.actor;
   const actorUserId = actor.kind === 'user' ? actor.userId : null;
+
+  // A suppression is the strongest stop fact there is, so it takes the send gate
+  // before anything else (lane g77, `policy/sendGate.ts`): a dispatch claim that is
+  // re-checking right now finishes first, and one that starts after this commits sees
+  // the suppression. Before the firm lock, because the gate comes before rows.
+  await lockSendGateForStopFact(context);
 
   // A manual suppression is a person's, by definition: it is the only source with a
   // correction window, and the window belongs to the person who opened it.

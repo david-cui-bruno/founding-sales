@@ -266,20 +266,33 @@ export async function createOutboundWorld(): Promise<OutboundWorld> {
       // An override is honoured rather than replaced, because the scenario that puts
       // the same id in two workspaces is about exactly that id.
       const requested = overrides.stepExecutionId;
+      // The enrollment describes the same work as the fence (lane g77): the dispatch
+      // re-asks the step's eligibility and refuses a fence whose firm, opportunity or
+      // owner is not its enrollment's, so a firm override reaches the enrollment too.
+      const firmId = overrides.firmId ?? firm.firmId;
+      const opportunityId = overrides.opportunityId ?? (firmId === firm.firmId ? firm.opportunityId : undefined);
       const stepExecutionId = await makeStepExecution(world.database.session, {
         workspaceId: mailbox.workspace.workspaceId,
-        firmId: firm.firmId,
-        opportunityId: firm.opportunityId,
+        firmId,
+        ...(opportunityId === undefined || opportunityId === null ? {} : { opportunityId }),
         userId: mailbox.workspace.salesperson.userId,
         templateVersionId: mailbox.templateVersionId,
         ...(typeof requested === 'string' ? { id: requested } : {}),
       });
+      const enrollment = await world.database.session.query<{ enrollment_id: string; opportunity_id: string }>(
+        `SELECT e.enrollment_id, n.opportunity_id
+           FROM step_executions e
+           JOIN sequence_enrollments n ON n.workspace_id = e.workspace_id AND n.id = e.enrollment_id
+          WHERE e.workspace_id = $1 AND e.id = $2`,
+        [mailbox.workspace.workspaceId, stepExecutionId],
+      );
       const request: OutboundEmailRequest = {
         stepExecutionId,
-        enrollmentId: null,
-        firmId: firm.firmId,
+        // The fence names its enrollment, as `runEmailStep`'s request always does.
+        enrollmentId: enrollment.rows[0]?.enrollment_id ?? null,
+        firmId,
         contactId: firm.contactId,
-        opportunityId: firm.opportunityId,
+        opportunityId: enrollment.rows[0]?.opportunity_id ?? firm.opportunityId,
         ownerUserId: mailbox.workspace.salesperson.userId,
         templateVersionId: mailbox.templateVersionId,
         templateContentHash: mailbox.templateContentHash,

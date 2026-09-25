@@ -1,11 +1,12 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
-import { listApplicableHolds } from '../policy/holds.ts';
 import { attestedReleaseBinding } from '../release/records.ts';
 import { effectiveSendingEnabled } from '../settings/effective.ts';
 import { readSetting } from '../settings/store.ts';
 import { firstSuppressed } from '../suppression/effective.ts';
-import { EMAIL_WINDOW, localParts } from '../src/index.ts';
+import { localParts } from '../src/index.ts';
+import { businessDateOf } from '../today/snapshots.ts';
 import { effectiveDailyCap, ensureRamp, openSendDay, type RampRow, type SendDayRow } from './ramp.ts';
+import { decideStepPermission, dispatchHolidayCalendar, insideSendingWindow } from './stepPermission.ts';
 import {
   authenticationPasses,
   decideDomainGuard,
@@ -24,16 +25,23 @@ import type { OutboundFenceRow } from './fence.ts';
  * paranoid in three ways.
  *
  * **It re-reads everything.** Nothing here trusts a value the caller computed. The
- * window is re-derived from the firm's zone, the cap from the ramp, the suppression
- * from `effective_suppressions`, the holds from `active_holds` — all at the instant
- * of the send. Appendix G 3 and 6 are precisely the case where something committed
- * between the eligibility read and the dispatch, and a gate that trusted an earlier
- * answer would send after the reply linearized.
+ * window is re-derived from the firm's zone and the holiday calendars, the cap from the
+ * ramp on the business date of the decision itself, and the step's whole permission —
+ * suppression, control mode, the enrollment, every applicable hold, assignment, the
+ * frozen route and its version, proven mailbox coverage, the frozen template's approval
+ * — from `composeEligibility`, the one implementation the sequence engine also asks
+ * (`stepPermission.ts`). All at the instant of the decision. Appendix G 3 and 6 are
+ * precisely the case where something committed between the eligibility read and the
+ * dispatch, and a gate that trusted an earlier answer would send after the reply
+ * linearized.
  *
- * **It runs in the dispatching transaction.** The caller holds the fence's attempt
- * token and has not yet called Gmail. So a suppression committing during the gate
- * either commits before these reads see it — refusal — or after the send, which is
- * the same instant ordering a human would accept.
+ * **It runs in the claiming transaction, under the send gate.** `send.ts` calls it
+ * twice: once before the token refresh, to refuse early what can be refused early, and
+ * once inside the transaction that claims the fence — after taking the send gate
+ * shared and the fence and enrollment `FOR UPDATE` (lane g77). Every writer of a stop
+ * fact takes that gate exclusive (`policy/sendGate.ts`), so a reply, a suppression or a
+ * hold either committed before these reads — refusal — or cannot commit until the claim
+ * has, which is the one ordering Appendix B accepts.
  *
  * **Order matters, and cheapest-first is the wrong order.** The checks are ordered by
  * *consequence*: the ones that mean "this must never be sent to this person" come
@@ -97,7 +105,11 @@ export async function decideSend(
   fence: OutboundFenceRow,
   deps: SendGateDeps = {},
 ): Promise<SendResult<SendPlan>> {
-  const now = deps.now?.() ?? new Date();
+  // The decision instant. Injected by tests and the drill, which pin the sending
+  // window to a weekday morning; otherwise the database's clock at this statement,
+  // which inside the claiming transaction is the claim itself (Appendix D: "fence
+  // times ... Database UTC").
+  const now = deps.now?.() ?? (await decisionInstant(context));
 
   const mailboxRead = await context.db.query<MailboxRow>(
     'SELECT id, owner_user_id, email_address, status, sync_state FROM mailboxes WHERE workspace_id = $1 AND id = $2',
@@ -118,43 +130,19 @@ export async function decideSend(
     return refuseSend(suppressed.scope === 'firm' ? 'firm_suppressed' : 'handle_suppressed');
   }
 
-  // 12.3's bounce handling invalidates the frozen route. A fence whose route has
-  // been invalidated or retired since preparation must not be sent to: the address
-  // is known bad, and the hold on the step already says so.
-  if (fence.recipientRouteId !== null) {
-    const route = await context.db.query<{ eligibility: string; version: number }>(
-      'SELECT eligibility, version FROM email_addresses WHERE workspace_id = $1 AND id = $2',
-      [context.scope.workspaceId, fence.recipientRouteId],
-    );
-    const eligibility = route.rows[0]?.eligibility;
-    if (eligibility === undefined || eligibility === 'invalid' || eligibility === 'retired') {
-      return refuseSend('route_invalid', eligibility ?? 'missing');
-    }
-  }
-
-  // 4.2 and 12.6: every automated step kind is held while a mailbox's grant is
-  // revoked or its coverage unproved, and the hold is on the owner.
-  const holds = await listApplicableHolds(context, {
-    actionKind: 'email_send',
-    firmId: fence.firmId,
-    ownerUserId: mailbox.owner_user_id,
-    mailboxId: mailbox.id,
-    ...(fence.opportunityId === null ? {} : { opportunityId: fence.opportunityId }),
-    ...(fence.enrollmentId === null ? {} : { enrollmentId: fence.enrollmentId }),
-  });
-  if (holds.length > 0) {
-    const first = holds[0];
-    const reason = first?.reasonCode ?? 'coverage_incomplete';
-    return refuseSend(
-      reason === 'mailbox_disconnected'
-        ? 'grant_revoked'
-        : reason === 'coverage_incomplete'
-          ? 'coverage_incomplete'
-          : 'provider_refusal',
-      reason,
-    );
-  }
-  if (mailbox.sync_state !== 'ready') return refuseSend('coverage_incomplete', mailbox.sync_state);
+  // 11.2's re-read, whole (lane g77). The sequences lane's own eligibility — the
+  // function that prepared this fence — asked again about the fence: suppression of
+  // the contact, control mode, the enrollment, every applicable hold (4.2 and 12.6's
+  // owner holds among them), assignment, the route this fence froze and its version
+  // (12.3's bounce invalidates it), proven mailbox coverage rather than a `ready`
+  // flag, and the approval of the template the bytes came from.
+  const permission = await decideStepPermission(
+    context,
+    fence,
+    { id: mailbox.id, ownerUserId: mailbox.owner_user_id },
+    now,
+  );
+  if (!permission.ok) return permission;
 
   // ------------------------------------------------------------- not yet, then
   // 16.2: "Production sending remains disabled until all mandatory scenarios for the
@@ -196,18 +184,22 @@ export async function decideSend(
 
   // 11.2, re-derived rather than trusted. The fence's `send_at` is the schedule; the
   // window is the licence, and a fence that sat in the queue overnight because of a
-  // hold must not go out at 03:00 because its placement said so yesterday.
-  const local = localParts(now.toISOString(), fence.sourceZone);
-  const insideWindow =
-    local.weekday >= 1 &&
-    local.weekday <= 5 &&
-    local.minuteOfDay >= EMAIL_WINDOW.openMinute &&
-    local.minuteOfDay < EMAIL_WINDOW.closeMinute;
-  if (!insideWindow) return refuseSend('outside_email_window', `${fence.sourceZone} ${local.date}`);
+  // hold must not go out at 03:00 because its placement said so yesterday — nor on a
+  // holiday because it was prepared the evening before one (lane g77: the placement
+  // rule itself, holidays included, asked about this instant).
+  const calendar = await dispatchHolidayCalendar(context, permission.value.enrollment);
+  if (!insideSendingWindow(now, fence.sourceZone, calendar)) {
+    return refuseSend('outside_email_window', `${fence.sourceZone} ${localParts(now.toISOString(), fence.sourceZone).date}`);
+  }
 
+  // 12.7 and Appendix D: the cap counts per workspace business date — the date of
+  // *this* decision, which inside the claiming transaction is the date of the claim
+  // (lane g77). The fence's `business_date` is the date its placement planned; a fence
+  // held by yesterday's cap and sent today is today's send, and charging it to
+  // yesterday would both spend a closed day and leave today's allowance untouched.
   const ramp = await ensureRamp(context, mailbox.id);
   const cap = effectiveDailyCap(ramp);
-  const businessDate = fence.businessDate ?? local.date;
+  const businessDate = await businessDateOf(context, now.toISOString());
   const day = await openSendDay(context, { mailboxId: mailbox.id, businessDate, cap });
   if (day.automatedSent >= cap) return refuseSend('daily_cap', `${String(day.automatedSent)}/${String(cap)}`);
 
@@ -225,6 +217,18 @@ export async function decideSend(
     cap,
     guard,
   });
+}
+
+/**
+ * The database's clock, now — `clock_timestamp()` rather than `now()`, because inside
+ * the claiming transaction `now()` is the instant the transaction began, and the claim
+ * may have waited on the send gate since.
+ */
+async function decisionInstant(context: RepositoryContext): Promise<Date> {
+  const { rows } = await context.db.query<{ now: Date }>('SELECT clock_timestamp() AS now');
+  const now = rows[0]?.now;
+  if (now === undefined) throw new Error('the database did not answer with its clock');
+  return now;
 }
 
 /**
@@ -264,6 +268,11 @@ export function holdReasonForRefusal(
     case 'provider_refusal':
     case 'recipient_rejected':
       return 'provider_refusal';
+    // Lane g77: the step's own eligibility refused, so the blocker is already a hold
+    // or a state somebody else owns. A second row here would be a hold nobody's
+    // release matches.
+    case 'step_ineligible':
+      return null;
     default:
       return null;
   }

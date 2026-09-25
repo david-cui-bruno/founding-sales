@@ -82,6 +82,14 @@ not a step kind and is not blocked.
 hold unless `sync_state = 'ready'`. A caller cannot talk the database out of a hold it
 has not earned.
 
+`ready` alone is not proof, though (lane g77). A mailbox stays `ready` through any
+number of rate-limited history reads, and `recordSyncError` moves `last_synced_at` —
+the last *attempt* — as each one fails. What the send path and the sequence engine ask
+is `mail/coverage.ts`: connected, `ready`, and `coverage_watermark_at` — the last
+*success* — no older than `COVERAGE_FRESHNESS_SECONDS` on the database clock. A mailbox
+that has not proved its coverage in that window holds automated email as
+`coverage_incomplete`, exactly as one that never proved it does.
+
 A newly connected mailbox is `baseline_pending` with a `coverage_incomplete` hold from
 the moment the grant completes. It becomes `ready` only when the bounded baseline has
 processed its whole interval.

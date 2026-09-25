@@ -75,10 +75,12 @@ describe('the worker publishes ActiveEnrollments and HeldEnrollments on every pa
     );
     // A connected mailbox with proved coverage, so eligibility and the gate get as far
     // as the sending switch and it is the switch, not the mailbox, that holds the step.
+    // Proved means a fresh watermark, not `ready` alone (lane g77, mail/coverage.ts).
     await database.session.query(
       `INSERT INTO mailboxes (workspace_id, owner_user_id, email_address, sync_state,
-                              baseline_from_at, baseline_completed_at)
-       VALUES ($1, $2, 'sales@example.test', 'ready', now() - interval '30 days', now())`,
+                              baseline_from_at, baseline_completed_at, history_id, history_id_updated_at,
+                              coverage_watermark_at)
+       VALUES ($1, $2, 'sales@example.test', 'ready', now() - interval '30 days', now(), '1', now(), now())`,
       [workspaceId, userId],
     );
 

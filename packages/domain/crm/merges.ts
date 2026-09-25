@@ -1,4 +1,5 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
+import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import { decideFirmMutation } from './authorization.ts';
 import { recordCrmAuditEvent } from './audit.ts';
 import { emitCrmDomainEvent } from './events.ts';
@@ -463,6 +464,8 @@ async function preserveFirmSuppressions(
   targetFirmId: string,
   commandId: string | undefined,
 ): Promise<void> {
+  // The target inherits a stop fact, so the insert takes the send gate (lane g77).
+  await lockSendGateForStopFact(context);
   await context.db.query(
     `INSERT INTO suppression_events
        (workspace_id, event_id, scope, canonical_key, canonicalizer_version, source, actor_user_id, command_id)

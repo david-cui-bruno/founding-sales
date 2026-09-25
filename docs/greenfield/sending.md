@@ -33,13 +33,16 @@ is built around.
 | Domain | `packages/domain/outbound/**` |
 | The fence and its transitions | `outbound/fence.ts` |
 | Everything checked before a send | `outbound/gate.ts` |
-| The one Gmail call | `outbound/send.ts` |
+| The step's eligibility, asked again for a fence | `outbound/stepPermission.ts` (over `sequences/eligibility.ts`) |
+| The send gate every stop fact takes | `policy/sendGate.ts` |
+| Proven mailbox coverage | `mail/coverage.ts` |
+| The one Gmail call, and the claiming transaction | `outbound/send.ts` |
 | Sent-folder reconciliation | `outbound/reconcile.ts` |
 | 12.7's ramp and the daily counters | `outbound/ramp.ts` |
 | 12.6's guard, the DNS checklist and `registerSendingDomain` | `outbound/domainGuard.ts` |
 | Routes | `apps/api/src/routes/outbound.ts` |
 | Handler and source | `apps/worker/src/handlers/mail.ts`, `scheduler/mailSources.ts` |
-| Tests | `packages/domain/test/outbound/**`, `apps/api/test/outbound.test.ts`, `apps/api/test/sendingDomain.test.ts`, `apps/worker/test/mailHandlers.test.ts` |
+| Tests | `packages/domain/test/outbound/**`, `apps/api/test/outbound.test.ts`, `apps/api/test/sendingDomain.test.ts`, `apps/worker/test/mailHandlers.test.ts`, `apps/worker/test/sequenceActionDispatch.test.ts` |
 
 ## The eight rules a reader should carry
 
@@ -161,9 +164,13 @@ The day's counter is taken by `UPDATE ... WHERE automated_sent < cap`, in one
 statement. Read-compare-write would let two workers each read four, each decide four is
 under five, and each send — which is Appendix G 33 failing in the one way that matters.
 
-It is taken **before** the claim, deliberately: a process that dies between them has
-over-counted by one, and a mailbox that sends four instead of five is recoverable. The
-reverse order loses the count, and a cap that can be lost is not a cap.
+It is taken **in the claim's transaction** (lane g77, replacing G7-2's "count before
+claim"). The counter moves for the workspace business date of the claim itself, and the
+claim writes that date onto the fence, so the two commit together or not at all. A
+process that dies before the commit leaves neither, and there is nothing to refund.
+`claimedAutomatedSends` derives the counter from the fences. The count for a date is
+the number of fences whose dispatch began on it, and the send path cannot make the two
+disagree. A fence planned for Monday and held into Tuesday is Tuesday's send.
 
 ### 7. The domain guard counts the domain, not the mailbox
 
@@ -186,6 +193,74 @@ when recorded — because a resolver answer is a snapshot of a cache, and a gate
 opened because a cached TXT record looked right is worse than a person who looked and
 said so. `sending_domains_enable_requires_authentication` makes the gate a constraint
 rather than a check somebody remembers.
+
+## The dispatch sequence (lane g77)
+
+`dispatchOutboundMessage` runs in this order, and the order is the safety property.
+
+1. **Read the fence.** A `held` fence is released back to `prepared`, together with the
+   holds its last attempt opened, because every question is about to be decided again.
+2. **Precheck.** `decideSend`, outside any transaction, refuses early what can be refused
+   without Google.
+3. **OAuth.** The refresh token is exchanged for an access token *before* the claiming
+   transaction opens, so no lock is ever held across a network call. A revoked grant
+   holds the fence with nothing counted.
+4. **Recheck and claim, in one transaction.**
+   * Take the **send gate** shared.
+   * Lock the fence and its enrollment `FOR UPDATE`.
+   * Run `decideSend` again. This time the dispatch uses the fence the lock returned and
+     the database clock (`clock_timestamp()`).
+   * Reserve the day's capacity.
+   * Claim.
+   * `COMMIT`.
+
+   A refusal holds the fence inside the transaction, and its `active_holds` row is
+   opened after the commit.
+5. **Send.** The bytes are the claimed row's. A `prepared` envelope can still be
+   re-rendered until the token exists.
+6. **Record.** `sent` under the token, or `reconciling` and the Sent-folder search.
+
+The recheck is not a second copy of anything:
+
+* **The step's whole permission.** `decideStepPermission` asks `composeEligibility()`,
+  the function the sequence engine used to prepare the fence. That covers suppression,
+  control mode, the enrollment, every applicable hold (including the owner's mailbox
+  scope and the email channel), assignment, the frozen route and its version, proven
+  coverage, and the frozen template's approval. It also requires the fence and its
+  enrollment to name the same firm, opportunity and owner. A reply's hold, a pause,
+  manual mode, a stopped enrollment or a reassignment refuses as `step_ineligible`, with
+  the section 15 code as the detail, and opens no second hold.
+* **Coverage freshness.** Coverage is proven when the mailbox is `ready` and
+  `coverage_watermark_at` is no older than `COVERAGE_FRESHNESS_SECONDS` (15 minutes) on
+  the database clock. The watermark is the last *successful* sync. `last_synced_at` is
+  the last *attempt*, which a rate-limited failure also writes, and the send path never
+  reads it. See `mail/coverage.ts` for the constant's reasoning.
+* **The window.** `placeEmailSend` is asked about the decision instant, holidays
+  included. The calendar is the union of the one the enrollment froze and the current
+  one.
+* **The cap.** The cap counts on the workspace business date of the decision, which
+  inside the transaction is the claim's.
+
+**The send gate** is a per-workspace transaction advisory lock (`policy/sendGate.ts`).
+The claim holds it shared. Every writer of a restrictive stop fact takes it exclusive
+before it commits:
+
+* every hold (`openHold`, `reassignFirm`, `commitDeparture`);
+* every restrictive suppression event (`recordSuppression`, the journal replay, a
+  merge);
+* manual mode;
+* a stage change;
+* `stopEnrollments`.
+
+So a stop that committed first is read by the recheck, and a stop that arrives during a
+claim waits for the claim's commit. That is the linearization Appendix G 3 asks for. The
+gate comes before any row lock on both sides. `applyClassificationEffects` and the
+direct-send counter take it first thing for that reason.
+
+This section supersedes items 3 to 5 of *What the gate refuses* below: those are now one
+step, the complete eligibility. Items 7 and 8 now use the holiday-aware window and the
+claim's business date. `docs/decisions/g77-dispatch-rechecks-under-the-lock.md` has the
+reasoning and what it deliberately leaves out.
 
 ## How a sending domain comes to exist
 
@@ -284,8 +359,11 @@ Nothing in `packages/domain/outbound` imports anything of G8's.
 
 * `docs/decisions/g7-held-returns-to-prepared.md` — why the machine has one reverse
   edge, and why no other one would be safe.
-* `docs/decisions/g7-count-before-claim.md` — why the cap is counted before the fence
-  is claimed, and what each ordering loses.
+* `docs/decisions/g7-count-before-claim.md` — why the cap was counted before the fence
+  was claimed; superseded by g77.
+* `docs/decisions/g77-dispatch-rechecks-under-the-lock.md` — OAuth first, then the
+  recheck, the reservation and the claim in one transaction under the send gate;
+  coverage freshness; the claim's business date; holidays at dispatch.
 * `docs/decisions/g7-domain-guard-scope.md` — why the guard counts the domain and
   holds the firm, including the over-broad hold the scenario test caught.
 * `docs/decisions/g7-no-dns-lookup.md` — why 12.7's authentication gate is a person's
@@ -306,7 +384,7 @@ Nothing in `packages/domain/outbound` imports anything of G8's.
 ```
 npm --workspace @fss/domain run test -- test/outbound
 npm --workspace @fss/api run test -- test/outbound.test.ts test/sendingDomain.test.ts
-npm --workspace @fss/worker run test -- test/mailHandlers.test.ts
+npm --workspace @fss/worker run test -- test/mailHandlers.test.ts test/sequenceActionDispatch.test.ts
 ```
 
 Nothing opens a socket. The scenario suite injects the clock rather than reading the

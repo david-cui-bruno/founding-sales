@@ -1,5 +1,6 @@
 import type { BlockedActionKind, HoldReasonCode } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
+import { lockSendGateForStopFact } from './sendGate.ts';
 import type { OpenHold } from './types.ts';
 
 /**
@@ -148,8 +149,15 @@ export interface OpenHoldInput {
   readonly recoveryAction?: string | undefined;
 }
 
-/** Open one hold and return its id. The caller commits it with whatever caused it. */
+/**
+ * Open one hold and return its id. The caller commits it with whatever caused it.
+ *
+ * Every hold is a stop fact, so it takes the send gate first (lane g77,
+ * `sendGate.ts`): a dispatch claim in flight finishes before this hold can commit,
+ * and a claim that starts after it waits for the commit and then reads it.
+ */
 export async function openHold(context: RepositoryContext, input: OpenHoldInput): Promise<string> {
+  await lockSendGateForStopFact(context);
   const { rows } = await context.db.query<{ id: string }>(
     `INSERT INTO active_holds
        (workspace_id, scope_kind, scope_key, reason_code, blocked_action_kinds,

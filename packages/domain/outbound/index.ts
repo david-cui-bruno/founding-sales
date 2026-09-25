@@ -49,6 +49,7 @@ export {
   RAMP_MAX_OPT_OUT_RATE,
   RAMP_RATE_FLOOR,
   RAMP_SMALL_DAY_TOLERANCE,
+  claimedAutomatedSends,
   closeSendDay,
   countAutomatedSend,
   countDirectSend,
@@ -103,6 +104,7 @@ export {
   fenceForOutgoingMessage,
   holdFence,
   insertSentTombstone,
+  lockFenceForClaim,
   markUnknownTerminal,
   originatingSend,
   prepareOutboundMessage,
@@ -129,6 +131,14 @@ export {
 } from './fence.ts';
 
 export { decideSend, holdReasonForRefusal, type SendGateDeps, type SendPlan } from './gate.ts';
+
+export {
+  decideStepPermission,
+  dispatchHolidayCalendar,
+  insideSendingWindow,
+  sendRefusalForIneligibility,
+  type StepPermission,
+} from './stepPermission.ts';
 
 export {
   dispatchOutboundMessage,

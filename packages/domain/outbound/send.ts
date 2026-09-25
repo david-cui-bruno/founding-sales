@@ -1,38 +1,68 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { openHold } from '../policy/holds.ts';
+import { lockSendGateForDispatch } from '../policy/sendGate.ts';
 import { accessForMailbox, type EnvelopeCipher, type GmailClient, type GmailOAuthConfig } from '../mail/index.ts';
 import {
   beginReconciling,
   claimForDispatch,
   holdFence,
+  lockFenceForClaim,
   readFence,
   recordSent,
   releaseFence,
   type OutboundFenceRow,
 } from './fence.ts';
-import { decideSend, holdReasonForRefusal, type SendGateDeps } from './gate.ts';
+import { decideSend, holdReasonForRefusal, type SendGateDeps, type SendPlan } from './gate.ts';
 import { countAutomatedSend, recordDaySignal } from './ramp.ts';
 import { RECONCILE_WINDOW_HOURS, type SendRefusalCode } from './types.ts';
 
 /**
  * The dispatch path: the only code in FSS that sends an email (specification 12.5,
- * Appendix B, Appendix G 5, 12, 33).
+ * Appendix B, Appendix G 3, 5, 6, 12, 33).
  *
  * The whole file is one ordered sequence, and the order is the safety property.
  *
  *   1. Read the fence. If it is `held`, try to release it — a hold that has expired
  *      (yesterday's cap, last night's window) should not need a person.
- *   2. Run the gate. Every refusal lands here, before anything irreversible.
- *   3. Count the send against the day's cap, conditionally, in the database.
- *   4. Claim the fence: the atomic `prepared → dispatching` that mints the token.
+ *   2. Precheck: run the gate once, outside any transaction, so that everything that
+ *      can be refused without Gmail is refused without Gmail.
+ *   3. OAuth: exchange the refresh token for an access token. The one slow, networked
+ *      step before the send, and it happens *before* the claim transaction opens, so
+ *      no lock is ever held across a network call.
+ *   4. Recheck and claim, in **one transaction** (lane g77):
+ *        a. take the send gate SHARED (`policy/sendGate.ts`) — every reply, opt-out,
+ *           hold and manual-mode change takes it EXCLUSIVE before it commits;
+ *        b. lock the fence and its enrollment `FOR UPDATE`;
+ *        c. run the gate again — the complete eligibility, proven coverage, the
+ *           holiday-aware window and the cap on *today's* business date;
+ *        d. reserve the day's capacity: the conditional increment of the counter for
+ *           the business date of the claim;
+ *        e. claim: the atomic `prepared → dispatching` that mints the token and
+ *           records that same business date on the fence;
+ *      and commit. A refusal in (c) or (d) holds the fence in the same transaction.
  *   5. Call Gmail. Exactly once, ever, for this fence.
  *   6. Record the outcome.
  *
- * Steps 3 and 4 are in that order on purpose. The cap increment is reversible and
- * the claim is not, so a process that dies between them has over-counted the day by
- * one — a mailbox sends 4 instead of 5 — while the reverse order would leave a
- * claimed fence that never got counted, and a claimed fence can never be re-sent.
- * Losing one send is recoverable; losing the count is how a cap stops being a cap.
+ * ## Why the recheck and the claim share a transaction and a lock
+ *
+ * Before lane g77 the gate read, the counter moved, OAuth ran, and a state-only UPDATE
+ * claimed — four autocommit statements with a token refresh in the middle. A reply
+ * that committed during the refresh was never read, and the claim succeeded anyway:
+ * Appendix G 3 with a real window, and the release suite never entered it
+ * (`packages/domain/test/outbound/dispatchRace.test.ts` does now). Inside one
+ * transaction the recheck sees everything committed before the gate was granted, and
+ * nothing that stops a send can commit between the recheck and the claim, because
+ * committing one needs the gate the claim is holding.
+ *
+ * ## The reservation is the claim's
+ *
+ * The counter used to be incremented before OAuth and given back by hand on the two
+ * failure paths anybody had thought of; a process that died between the increment and
+ * the claim left a count no fence explained. Now the increment and the claim commit
+ * together or not at all, so every unit of `automated_sent` for a business date is a
+ * fence claimed on that date (`claimedAutomatedSends` in `ramp.ts` derives it), and a
+ * crash anywhere before the commit leaves neither. After the commit the count stands
+ * whatever Gmail says, because the message may have left.
  *
  * ## The one call
  *
@@ -81,9 +111,12 @@ export interface SendReport {
 /**
  * Dispatch one prepared fence.
  *
- * Called by G8's `sequence.action` handler, inside the runner's transaction, which is
- * what Appendix C means by giving that kind the protection `outbound_fence`: the
- * handler's at-most-once guarantee is this function's, not the job runner's.
+ * Called by G8's `sequence.action` handler *after* the step's own transaction has
+ * committed, which is what Appendix C means by giving that kind the protection
+ * `outbound_fence`: the handler's at-most-once guarantee is this function's, not the
+ * job runner's. It opens its own claiming transaction, and refuses to run inside a
+ * caller's (`assertOutsideTransaction`): a claim that did not commit before Gmail was
+ * called would be a claim a rollback could erase after the email had left.
  */
 export async function dispatchOutboundMessage(
   context: RepositoryContext,
@@ -133,55 +166,62 @@ export async function dispatchOutboundMessage(
     fence = released.value;
   }
 
-  const gate = await decideSend(context, fence, deps);
-  if (!gate.ok) return await hold(context, deps, fence, gate.reason, gate.detail);
-  const plan = gate.value;
+  // ------------------------------------------------------------- 2. precheck
+  const precheck = await decideSend(context, fence, deps);
+  if (!precheck.ok) return await hold(context, deps, fence, precheck.reason, precheck.detail);
 
-  // The cap, taken before the irreversible step and by a conditional UPDATE rather
-  // than a read-then-write, so two workers racing the last slot of the day cannot
-  // both win it (Appendix G 33).
-  const counted = await countAutomatedSend(context, {
-    mailboxId: plan.mailbox.id,
-    businessDate: plan.day.businessDate,
-    cap: plan.cap,
-  });
-  if (!counted) return await hold(context, deps, fence, 'daily_cap', `${String(plan.cap)}`);
-
+  // ------------------------------------------------------------- 3. OAuth first
+  // Before the claim transaction, never inside it: the send gate is not held across a
+  // network call, and a grant that went while we were deciding holds the fence with
+  // nothing counted, because nothing has been.
   const access = await accessForMailbox(
     context,
     { gmail: deps.gmail, oauth: deps.oauth, cipher: deps.cipher },
-    plan.mailbox.id,
+    precheck.value.mailbox.id,
   );
-  if (!access.ok) {
-    // The grant went while we were deciding. Nothing has been dispatched, so the
-    // fence may be held — and the day's count is released with it, because no
-    // message left.
-    await releaseCount(context, plan.mailbox.id, plan.day.businessDate);
-    return await hold(context, deps, fence, 'grant_revoked', access.reason);
-  }
+  if (!access.ok) return await hold(context, deps, fence, 'grant_revoked', access.reason);
 
-  const claim = await claimForDispatch(context, {
-    outboundMessageId: fence.id,
-    ...(deps.actor === undefined ? {} : { actor: deps.actor }),
-  });
-  if (!claim.ok) {
-    await releaseCount(context, plan.mailbox.id, plan.day.businessDate);
-    return { outcome: 'not_ready', outboundMessageId: fence.id, refusal: claim.reason };
+  // -------------------------------------------------- 4. recheck and claim, atomically
+  const claimed = await recheckAndClaim(context, deps, fence.id, precheck.value);
+  if (claimed.kind === 'not_ready') {
+    return {
+      outcome: 'not_ready',
+      outboundMessageId: fence.id,
+      ...(claimed.refusal === undefined ? {} : { refusal: claimed.refusal }),
+      ...(claimed.detail === undefined ? {} : { detail: claimed.detail }),
+    };
   }
+  if (claimed.kind === 'held') {
+    // The fence went `held` inside the claiming transaction, with the decision. The
+    // step's hold is opened now, outside it: `openHold` takes the send gate exclusive,
+    // and asking for that while holding it shared is how two claims deadlock.
+    await openStepHold(context, claimed.fence, claimed.reason);
+    return {
+      outcome: 'held',
+      outboundMessageId: fence.id,
+      refusal: claimed.reason,
+      ...(claimed.detail === undefined ? {} : { detail: claimed.detail }),
+    };
+  }
+  const { plan, claim } = claimed;
+  // The bytes are the claimed row's, not the ones read before OAuth: a `prepared`
+  // fence may still be re-rendered (migration 0010's trigger freezes the envelope only
+  // once the token exists), and what the recheck approved is what the claim locked.
+  const envelope = claim.fence;
 
   // ------------------------------------------------------------- the one call
   const sent = await deps.gmail.sendMessage(access.access, {
-    to: fence.recipientAddress,
+    to: envelope.recipientAddress,
     from: plan.mailbox.address,
-    subject: fence.subject,
-    body: fence.body,
-    rfcMessageId: fence.providerMessageIdHeader,
+    subject: envelope.subject,
+    body: envelope.body,
+    rfcMessageId: envelope.providerMessageIdHeader,
   });
 
   if (sent.ok) {
     const recorded = await recordSent(context, {
       outboundMessageId: fence.id,
-      attemptToken: claim.value.attemptToken,
+      attemptToken: claim.attemptToken,
       providerMessageId: sent.messageId,
       providerThreadId: sent.threadId,
       ...(deps.actor === undefined ? {} : { actor: deps.actor }),
@@ -218,7 +258,7 @@ export async function dispatchOutboundMessage(
   // The step is held while the fence is in doubt, so no successor runs on a maybe.
   await openHold(context, {
     scopeKind: 'firm',
-    scopeKey: fence.firmId,
+    scopeKey: envelope.firmId,
     reasonCode: 'send_unknown_reconciling',
     blockedActionKinds: ['email_send', 'enrollment_advance'],
     sourceEventKind: 'outbound_message',
@@ -245,23 +285,124 @@ function refusalOf(reason: string): SendRefusalCode {
   }
 }
 
+type ClaimOutcome =
+  | {
+      readonly kind: 'claimed';
+      readonly plan: SendPlan;
+      readonly claim: { readonly fence: OutboundFenceRow; readonly attemptToken: string };
+    }
+  | {
+      readonly kind: 'held';
+      readonly fence: OutboundFenceRow;
+      readonly reason: SendRefusalCode;
+      readonly detail?: string | undefined;
+    }
+  | { readonly kind: 'not_ready'; readonly refusal?: SendRefusalCode | undefined; readonly detail?: string | undefined };
+
 /**
- * Give back the slot a send did not use.
+ * Step 4: the recheck, the reservation and the claim, in one transaction under the
+ * send gate (lane g77). See the file header for why each is here.
  *
- * Only ever called before `claimForDispatch`, which is the last moment at which
- * "nothing was attempted" is still provable. After the claim the count stands
- * whatever happened, because the message may have gone.
+ * The locks, in order: the gate (shared), the fence, the enrollment. Nothing is locked
+ * before the gate, which is the order every stop-fact writer is asked to keep
+ * (`policy/sendGate.ts`). A refusal holds the fence inside the transaction, so the
+ * decision and the `held` it produces commit together; the transaction then commits
+ * rather than rolls back, and the counter was never touched on that path. Every other
+ * way out before COMMIT — a claim that loses, a thrown error, a process that dies — is
+ * a rollback, and takes the reservation with it.
  */
-async function releaseCount(
+async function recheckAndClaim(
   context: RepositoryContext,
-  mailboxId: string,
-  businessDate: string,
-): Promise<void> {
-  await context.db.query(
-    `UPDATE mailbox_send_days
-        SET automated_sent = greatest(automated_sent - 1, 0), updated_at = now()
-      WHERE workspace_id = $1 AND mailbox_id = $2 AND business_date = $3::date`,
-    [context.scope.workspaceId, mailboxId, businessDate],
+  deps: OutboundSendDeps,
+  outboundMessageId: string,
+  precheck: SendPlan,
+): Promise<ClaimOutcome> {
+  await assertOutsideTransaction(context);
+  await context.db.query('BEGIN');
+  try {
+    await lockSendGateForDispatch(context);
+    const fence = await lockFenceForClaim(context, outboundMessageId);
+    if (fence === null || fence.state !== 'prepared') {
+      await context.db.query('ROLLBACK');
+      return { kind: 'not_ready', refusal: fence === null ? 'fence_unknown' : 'fence_not_ready', detail: fence?.state };
+    }
+
+    // The recheck. `precheck` is the answer from before the token refresh, and it is
+    // not an answer to act on: a reply may have committed since. It is consulted for
+    // one thing only, below — which mailbox the access token was minted for.
+    const gate = await decideSend(context, fence, deps);
+    if (!gate.ok) {
+      const held = await holdFence(context, {
+        outboundMessageId: fence.id,
+        reason: gate.reason,
+        ...(deps.actor === undefined ? {} : { actor: deps.actor }),
+      });
+      await context.db.query('COMMIT');
+      return { kind: 'held', fence: held.ok ? held.value : fence, reason: gate.reason, detail: gate.detail };
+    }
+    const plan = gate.value;
+    if (plan.mailbox.id !== precheck.mailbox.id) {
+      // A `prepared` fence's envelope is still mutable, its mailbox included, and the
+      // token in hand belongs to the mailbox the precheck named. Sending another
+      // mailbox's fence with it would send from the wrong account.
+      await context.db.query('ROLLBACK');
+      return { kind: 'not_ready', refusal: 'fence_not_ready', detail: 'mailbox_changed' };
+    }
+
+    // The reservation: a conditional UPDATE rather than a read-then-write, so two
+    // workers racing the last slot of the day cannot both win it (Appendix G 33), on
+    // the business date of *this* decision (S05).
+    const reserved = await countAutomatedSend(context, {
+      mailboxId: plan.mailbox.id,
+      businessDate: plan.day.businessDate,
+      cap: plan.cap,
+    });
+    if (!reserved) {
+      const held = await holdFence(context, {
+        outboundMessageId: fence.id,
+        reason: 'daily_cap',
+        ...(deps.actor === undefined ? {} : { actor: deps.actor }),
+      });
+      await context.db.query('COMMIT');
+      return { kind: 'held', fence: held.ok ? held.value : fence, reason: 'daily_cap', detail: String(plan.cap) };
+    }
+
+    const claim = await claimForDispatch(context, {
+      outboundMessageId: fence.id,
+      businessDate: plan.day.businessDate,
+      ...(deps.actor === undefined ? {} : { actor: deps.actor }),
+    });
+    if (!claim.ok) {
+      // Unreachable while the row lock is held; a rollback takes the reservation back.
+      await context.db.query('ROLLBACK');
+      return { kind: 'not_ready', refusal: claim.reason, detail: claim.detail };
+    }
+    await context.db.query('COMMIT');
+    return { kind: 'claimed', plan, claim: claim.value };
+  } catch (error) {
+    await context.db.query('ROLLBACK');
+    throw error;
+  }
+}
+
+/**
+ * Refuse to run inside a caller's transaction.
+ *
+ * `SAVEPOINT` is an error outside a transaction block (SQLSTATE 25P01) and a no-op
+ * inside one, which makes it the one question PostgreSQL answers directly. A `BEGIN`
+ * issued inside a caller's transaction would only warn, and the `COMMIT` after it would
+ * commit the caller's work and leave the claim's durability up to whoever called.
+ */
+async function assertOutsideTransaction(context: RepositoryContext): Promise<void> {
+  try {
+    await context.db.query('SAVEPOINT fss_dispatch_outside_probe');
+  } catch (error) {
+    if ((error as { readonly code?: unknown }).code === '25P01') return;
+    throw error;
+  }
+  await context.db.query('RELEASE SAVEPOINT fss_dispatch_outside_probe');
+  throw new Error(
+    'dispatchOutboundMessage must run outside any transaction: its claim commits before Gmail is called (Appendix B)',
   );
 }
 
@@ -284,7 +425,16 @@ async function hold(
     reason,
     ...(deps.actor === undefined ? {} : { actor: deps.actor }),
   });
+  await openStepHold(context, fence, reason);
+  return { outcome: 'held', outboundMessageId: fence.id, refusal: reason, ...(detail === undefined ? {} : { detail }) };
+}
 
+/** The `active_holds` row a refusal opens, when it opens one (`holdReasonForRefusal`). */
+async function openStepHold(
+  context: RepositoryContext,
+  fence: OutboundFenceRow,
+  reason: SendRefusalCode,
+): Promise<void> {
   const holdReason = holdReasonForRefusal(reason);
   if (holdReason !== null) {
     await openHold(context, {
@@ -313,5 +463,4 @@ async function hold(
         : {}),
     });
   }
-  return { outcome: 'held', outboundMessageId: fence.id, refusal: reason, ...(detail === undefined ? {} : { detail }) };
 }

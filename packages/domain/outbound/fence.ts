@@ -378,6 +378,39 @@ export async function readFence(
   return row === undefined ? null : toFence(row);
 }
 
+/**
+ * The fence, and its enrollment, locked for the claiming transaction (lane g77).
+ *
+ * The fence `FOR UPDATE` so that its state and envelope cannot move under the recheck,
+ * and the enrollment `FOR UPDATE` because every command that ends, holds or
+ * reschedules an enrollment locks it first (`loadEnrollmentForUpdate`,
+ * `stopEnrollments`) — so a terminal stop and a claim serialize on the row as well as
+ * on the send gate. The enrollment is found through the step execution, which names
+ * it even where the fence's own `enrollment_id` is empty. Always after the gate.
+ */
+export async function lockFenceForClaim(
+  context: RepositoryContext,
+  outboundMessageId: string,
+): Promise<OutboundFenceRow | null> {
+  const { rows } = await context.db.query<FenceDbRow>(
+    `SELECT ${FENCE_COLUMNS} FROM outbound_messages WHERE workspace_id = $1 AND id = $2 FOR UPDATE`,
+    [context.scope.workspaceId, outboundMessageId],
+  );
+  const row = rows[0];
+  if (row === undefined) return null;
+  const fence = toFence(row);
+  if (fence.stepExecutionId !== null) {
+    await context.db.query(
+      `SELECT n.id FROM sequence_enrollments n
+         JOIN step_executions e ON e.workspace_id = n.workspace_id AND e.enrollment_id = n.id
+        WHERE e.workspace_id = $1 AND e.id = $2
+        FOR UPDATE OF n`,
+      [context.scope.workspaceId, fence.stepExecutionId],
+    );
+  }
+  return fence;
+}
+
 export async function readFenceByStepExecution(
   context: RepositoryContext,
   stepExecutionId: string,
@@ -791,20 +824,32 @@ export interface DispatchClaim {
  * gets `fence_not_ready` and must not call Gmail. There is no lease here and no
  * retry: Appendix B says "Dispatch ownership is irreversible and not lease-based",
  * and the absence of a way to un-claim is the feature.
+ *
+ * `businessDate` is the workspace business date the claim's capacity was reserved on
+ * (lane g77, S05 and C25). It is written with the transition, because 0010 names the
+ * column "the business date the cap counted this send against" and that is the date
+ * of the claim, not the date the placement planned. Absent keeps the planned one,
+ * which is what a caller that reserved nothing — a test driving the state machine by
+ * hand — should leave.
  */
 export async function claimForDispatch(
   context: RepositoryContext,
-  input: { readonly outboundMessageId: string; readonly actor?: string | undefined },
+  input: {
+    readonly outboundMessageId: string;
+    readonly actor?: string | undefined;
+    readonly businessDate?: string | undefined;
+  },
 ): Promise<SendResult<DispatchClaim>> {
   const { rows } = await context.db.query<FenceDbRow>(
     `UPDATE outbound_messages
         SET state = 'dispatching',
             attempt_token = gen_random_uuid(),
             dispatch_started_at = now(),
+            business_date = coalesce($3::date, business_date),
             updated_at = now()
       WHERE workspace_id = $1 AND id = $2 AND state = 'prepared'
       RETURNING ${FENCE_COLUMNS}`,
-    [context.scope.workspaceId, input.outboundMessageId],
+    [context.scope.workspaceId, input.outboundMessageId, input.businessDate ?? null],
   );
   const row = rows[0];
   if (row === undefined) {

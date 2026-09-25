@@ -1,9 +1,18 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { withTransaction } from '@fss/domain/db';
 import { decideSend, dispatchOutboundMessage, readFence } from '@fss/domain/outbound';
+import { openHold } from '@fss/domain/policy';
 import {
   createOutboundWorld,
   type OutboundWorld,
 } from '../../packages/domain/test/outbound/support/outboundWorld.ts';
+import {
+  openExtraSession,
+  pausingAtTokenRefresh,
+  prepareFor,
+  seedFirm,
+  type ExtraSession,
+} from '../../packages/domain/test/outbound/support/dispatchFixtures.ts';
 import { mustCover } from './support/coverage.ts';
 
 /**
@@ -14,91 +23,97 @@ import { mustCover } from './support/coverage.ts';
  * was eligible, something committed, and the worker woke up. Everything turns on whether
  * the decision it made earlier is still the decision it acts on.
  *
- * `packages/domain/outbound/gate.ts` answers it by construction — "nothing here trusts a
- * value the caller computed" — and `decideSend` runs inside the dispatching transaction.
- * But a comment is not a test, and no lane suite pauses *between* a successful decision
- * and the dispatch.
- *
  * ## The vacuous-pass trap
  *
- * Asserting only that a suppressed send is refused proves the gate reads suppressions. It
- * says nothing about whether an *earlier* answer can be reused, which is what this
- * scenario is about. A gate that cached its first decision would pass that test and fail
- * this one.
+ * Asserting only that a held send is refused proves the gate reads holds. Until lane
+ * g77 this check did exactly that: it committed the reply's hold and *then* called the
+ * dispatch, so the dispatch read the hold like any other and the window the scenario is
+ * about — between the dispatch's own eligibility read and its claim, where the token
+ * refresh sits — was never entered (audit T02). A dispatch that claimed on its first
+ * answer would have passed.
  *
- * Closed by deciding once and keeping the answer, committing the reply's hold, and then
- * dispatching the same fence: the first decision must have been `ok`, so the refusal
- * cannot be explained by a world that could never send, and the Gmail fake must have
- * recorded no send at all.
+ * Closed by pausing the real dispatch inside that window. The Gmail client's token
+ * refresh is step 3 of `dispatchOutboundMessage`: the precheck has read the world and
+ * found it sendable, and the claiming transaction has not begun. The reply's hold
+ * commits there, on another connection, and the check requires no send and the fence
+ * held for the reply's own reason. The control runs the identical pause committing
+ * nothing and requires the send, so the refusal is the reply and nothing else.
+ * `packages/domain/test/outbound/dispatchRace.test.ts` carries the rest: a confirmed
+ * reply, an opt-out, and the send gate serializing a claim with a reply in both orders.
  */
 
 let world: OutboundWorld;
+let replying: ExtraSession;
 
 beforeAll(async () => {
   world = await createOutboundWorld();
+  replying = await openExtraSession(world);
 }, 180_000);
 
 afterAll(async () => {
+  await replying?.close();
   await world?.stop();
 });
 
 describe('Appendix G 3: a reply that commits between the decision and the dispatch', () => {
-  mustCover(3, ['decideSend', 'It re-reads everything']);
+  mustCover(3, ['decideSend', 'It re-reads everything', 'lockSendGateForDispatch', 'pausingAtTokenRefresh']);
 
-  it('re-decides on the fence rather than acting on the answer it already had', async () => {
+  it('a reply committed inside the dispatch, after its eligibility read, stops the send', async () => {
     const workspaceId = world.alpha.workspace.workspaceId;
     const context = world.systemContext(workspaceId);
-    await world.clearHolds(workspaceId);
+    const firm = await seedFirm(world, world.alpha, 'scenario-3');
+    const fenceId = await prepareFor(world, world.alpha, firm);
 
-    const fenceId = await world.prepare(world.alpha);
-    const fence = await readFence(context, fenceId);
-    expect(fence).not.toBeNull();
-
-    // The eligibility read the worker made before it paused. This must be `ok`, or the
+    // The eligibility read the worker makes before it pauses must be `ok`, or the
     // refusal below would prove nothing: a world that can never send refuses for free.
-    const before = await decideSend(context, fence!, world.sendDeps(world.alpha));
-    expect(before.ok).toBe(true);
+    const fence = await readFence(context, fenceId);
+    expect((await decideSend(context, fence!, world.sendDeps(world.alpha))).ok).toBe(true);
 
-    // ... and now the reply linearizes: 12.4's "every possibly relevant incoming message
-    // creates a hold before classification can release anything".
-    await context.db.query(
-      `INSERT INTO active_holds
-         (workspace_id, scope_kind, scope_key, reason_code, blocked_action_kinds,
-          source_event_kind, source_event_id, started_at)
-       VALUES ($1, 'firm', $2, 'uncertain_reply', ARRAY['email_send','enrollment_advance'],
-               'mail_message', gen_random_uuid(), now())`,
-      [workspaceId, fence!.firmId],
-    );
+    const gmail = world.clientWith(world.alpha, {});
+    const paused = pausingAtTokenRefresh(gmail, async () => {
+      // ... and the reply linearizes, on another connection: 12.4's "every possibly
+      // relevant incoming message creates a hold before classification can release
+      // anything", through the same `openHold` the mail pipeline calls.
+      await withTransaction(replying.session, async () => {
+        await openHold(replying.context(workspaceId), {
+          scopeKind: 'opportunity',
+          scopeKey: firm.opportunityId,
+          reasonCode: 'uncertain_reply',
+          blockedActionKinds: ['email_send', 'enrollment_advance'],
+          sourceEventKind: 'mail_message',
+          recoveryAction: 'confirm_reply',
+        });
+      });
+    });
 
-    const sendsBefore = world.alpha.gmail.calls.filter(call => call.method === 'sendMessage').length;
-
-    // The worker resumes. It holds the same fence and the same earlier decision.
-    const after = await decideSend(context, fence!, world.sendDeps(world.alpha));
-    expect(after.ok).toBe(false);
-    expect(after.ok === false ? after.reason : null).toBe('provider_refusal');
-
-    const report = await dispatchOutboundMessage(context, world.sendDeps(world.alpha), {
+    const report = await dispatchOutboundMessage(context, world.sendDeps(world.alpha, { gmail: paused.client }), {
       outboundMessageId: fenceId,
     });
+
+    // The pause happened after the precheck passed: OAuth runs only for a sendable fence.
+    expect(paused.refreshes()).toBe(1);
     expect(report.outcome).toBe('held');
-
+    expect(report.refusal).toBe('step_ineligible');
+    expect(report.detail ?? '').toMatch(/^uncertain_reply/);
     // The assertion that matters: nothing left the process after the reply committed.
-    const sendsAfter = world.alpha.gmail.calls.filter(call => call.method === 'sendMessage').length;
-    expect(sendsAfter).toBe(sendsBefore);
-
-    const held = await readFence(context, fenceId);
-    expect(held?.state).toBe('held');
+    expect(gmail.sends).toHaveLength(0);
+    expect((await readFence(context, fenceId))?.state).toBe('held');
   });
 
-  it('and the fence is still sendable once the hold clears, so the refusal was the hold', async () => {
-    // The control that keeps the test above honest: if the fence had been broken rather
-    // than held, this would fail and the refusal would have meant something else.
+  it('and the same pause committing nothing sends, so the refusal was the reply', async () => {
     const workspaceId = world.alpha.workspace.workspaceId;
     const context = world.systemContext(workspaceId);
-    await world.clearHolds(workspaceId);
-    const fenceId = await world.prepare(world.alpha);
-    const fence = await readFence(context, fenceId);
-    const decision = await decideSend(context, fence!, world.sendDeps(world.alpha));
-    expect(decision.ok).toBe(true);
+    const firm = await seedFirm(world, world.alpha, 'scenario-3-control');
+    const fenceId = await prepareFor(world, world.alpha, firm);
+    const gmail = world.clientWith(world.alpha, {});
+    const paused = pausingAtTokenRefresh(gmail, async () => {
+      await Promise.resolve();
+    });
+    const report = await dispatchOutboundMessage(context, world.sendDeps(world.alpha, { gmail: paused.client }), {
+      outboundMessageId: fenceId,
+    });
+    expect(paused.refreshes()).toBe(1);
+    expect(report.outcome).toBe('sent');
+    expect(gmail.sends).toHaveLength(1);
   });
 });

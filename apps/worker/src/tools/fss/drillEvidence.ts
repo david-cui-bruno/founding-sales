@@ -29,11 +29,13 @@ import {
   insertOrReviveMailbox,
   laterHistoryId,
   processMessageIds,
+  readMailboxCoverage,
   readMailboxForOwner,
   recordedGmailClient,
   recordedSentMessageId,
   recordedSentThreadId,
   runMailRecovery,
+  runMailSync,
   startRecovery,
   storeRefreshToken,
   type GmailFixtureMessage,
@@ -831,6 +833,32 @@ async function ensureMailbox(
   }
   if (row.syncState !== 'ready') {
     throw new EvidenceRefusal('mailbox', `the mailbox is ${row.syncState} after its baseline recovery`);
+  }
+  // Lane g77: the send gate holds a mailbox whose coverage was last *proved* longer ago
+  // than `COVERAGE_FRESHNESS_SECONDS`, whatever its `ready` flag says, and the drill's
+  // phases run half an hour apart — the in-flight and after phases find the before
+  // phase's watermark. So a phase proves coverage again, the way the one-minute
+  // mailbox check does in production: one sync, over this phase's recorded inbox,
+  // which has read everything there is and raises the watermark to now.
+  const coverage = await readMailboxCoverage(context, { mailboxId: row.id });
+  if (coverage === null || !coverage.fresh) {
+    const mailbox = row;
+    const synced = await withTransaction(
+      session,
+      async () =>
+        await runMailSync(
+          context,
+          { gmail, oauth: mail.oauth, cipher: mail.cipher, journal: mail.journal, replyPromoter: mail.replyPromoter },
+          { mailboxId: mailbox.id },
+        ),
+    );
+    if (synced.outcome !== 'synced') {
+      throw new EvidenceRefusal('mailbox', `the coverage sync answered '${synced.outcome}' rather than proving coverage`);
+    }
+    const proved = await readMailboxCoverage(context, { mailboxId: row.id });
+    if (proved === null || !proved.fresh) {
+      throw new EvidenceRefusal('mailbox', 'the mailbox coverage is still unproved after its sync');
+    }
   }
   return { row, outcome };
 }

@@ -326,6 +326,12 @@ describe('at-most-once sending', () => {
 
     // Its own business date, so the earlier scenarios' sends are not this test's
     // counters. `cap_granted` never decreases, so the row is made here at one.
+    //
+    // The date is the *dispatch clock's* (lane g77, S05): the cap counts on the
+    // business date of the claim, not the one the placement planned, so the day this
+    // test is about is chosen by the instant it dispatches at — Thursday 24 September,
+    // 13:00 UTC, inside the fixture firm's window and on that date in the workspace's
+    // business zone too.
     const today = '2026-09-24';
     await ctx.db.query(
       `INSERT INTO mailbox_send_days (workspace_id, mailbox_id, business_date, cap_granted)
@@ -334,7 +340,7 @@ describe('at-most-once sending', () => {
     );
 
     const gmail = world.clientWith(world.alpha, {});
-    const deps = world.sendDeps(world.alpha, { gmail });
+    const deps = world.sendDeps(world.alpha, { gmail, now: () => new Date('2026-09-24T13:00:00.000Z') });
     const first = await dispatchOutboundMessage(ctx, deps, {
       outboundMessageId: await world.prepare(world.alpha, {
         businessDate: today,
