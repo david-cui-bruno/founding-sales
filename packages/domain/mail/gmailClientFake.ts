@@ -1,6 +1,8 @@
+import { createHash } from 'node:crypto';
 import {
   GmailClientError,
   directionOfLabels,
+  headerValue,
   type GmailAccessGrant,
   type GmailAccessOutcome,
   type GmailAttachmentReference,
@@ -121,6 +123,37 @@ export interface GmailFixture {
    * from an empty folder no Gmail mailbox would have.
    */
   readonly sentMessageIds?: readonly string[] | undefined;
+  /**
+   * The Sent folder's messages themselves, with their metadata (lane g73).
+   *
+   * `sentMessageIds` is enough for a search by Message-ID, which asks about a fence the
+   * database knows. Appendix E step 3 also has to *list* the folder, for the sends whose
+   * fence a restore lost, and a listing needs what Gmail returns for a message: an id, a
+   * thread, an internal date, and the allowlisted headers (`Message-ID`, `To`,
+   * `Subject`). Each one's `Message-ID` joins `sentMessageIds` for the search as well.
+   *
+   * Kept apart from `messages` on purpose: the inbox listing, the history replay and the
+   * recovery sync answer from `messages` exactly as they did before this lane, so a
+   * fixture that gains a Sent folder changes nothing any other read sees.
+   */
+  readonly sentMessages?: readonly GmailFixtureMessage[] | undefined;
+}
+
+/**
+ * The Gmail id this fake gives the message it delivers with a given Message-ID.
+ *
+ * Derived from the Message-ID rather than counted, so two processes that each deliver
+ * into "the same" recorded mailbox — a seed phase and the drill, which run as separate
+ * tasks and merge their recordings (lane g59) — can never give two messages one id, and
+ * a re-run can rebuild the recording of a message it did not send this time.
+ */
+export function recordedSentMessageId(rfcMessageId: string): string {
+  return `sent-${createHash('sha256').update(rfcMessageId, 'utf8').digest('hex').slice(0, 20)}`;
+}
+
+/** The thread the fake files that message in: its own, as a first touch is. */
+export function recordedSentThreadId(rfcMessageId: string): string {
+  return `thread-${recordedSentMessageId(rfcMessageId)}`;
 }
 
 export interface GmailFakeCall {
@@ -153,6 +186,11 @@ export interface RecordedGmailClient extends GmailClient {
    * was dropped). Not the refused or the indeterminate ones, which never arrived.
    */
   readonly sentMessageIds: readonly string[];
+  /**
+   * The Sent folder as a listing sees it (lane g73): the fixture's `sentMessages` and a
+   * message for every send this client delivered, oldest first.
+   */
+  readonly sentMessages: readonly GmailFixtureMessage[];
 }
 
 // `BigInt`, through `compareHistoryIds`: a fixture near 2^53 must order the way Gmail
@@ -168,6 +206,18 @@ export function recordedGmailClient(fixture: GmailFixture): RecordedGmailClient 
   const sentSearches: string[] = [];
   /** RFC Message-IDs the Sent folder holds, whatever the caller was told. */
   const sentFolder = new Set<string>(fixture.sentMessageIds ?? []);
+  /** The same folder's messages, by Gmail id, for the listing and the metadata read (g73). */
+  const sentStore = new Map<string, GmailFixtureMessage>();
+  for (const message of fixture.sentMessages ?? []) {
+    sentStore.set(message.id, message);
+    const header = headerValue(message.headers, 'Message-ID');
+    if (header !== undefined) sentFolder.add(header);
+  }
+  const bySentAt = (left: GmailFixtureMessage, right: GmailFixtureMessage): number =>
+    left.internalDateEpochMilliseconds - right.internalDateEpochMilliseconds || left.id.localeCompare(right.id);
+  const sentFolderMessages = (): readonly GmailFixtureMessage[] => [...sentStore.values()].sort(bySentAt);
+  const sentMessageFor = (rfcMessageId: string): GmailFixtureMessage | undefined =>
+    [...sentStore.values()].find(message => headerValue(message.headers, 'Message-ID') === rfcMessageId);
   const searchesFor = new Map<string, number>();
   const requestedHeaders = new Set<string>();
   const expired = new Set(fixture.expiredHistoryIds ?? []);
@@ -190,8 +240,10 @@ export function recordedGmailClient(fixture: GmailFixture): RecordedGmailClient 
     return null;
   };
 
+  // The Sent folder is searched after the inbox fixture, so a metadata read of a
+  // delivered message answers as Gmail would; nothing else lists those ids (lane g73).
   const find = (id: string): GmailFixtureMessage | undefined =>
-    vanished.has(id) ? undefined : currentMessages().find(message => message.id === id);
+    vanished.has(id) ? undefined : (currentMessages().find(message => message.id === id) ?? sentStore.get(id));
 
   return {
     calls,
@@ -204,6 +256,9 @@ export function recordedGmailClient(fixture: GmailFixture): RecordedGmailClient 
     },
     get sentMessageIds(): readonly string[] {
       return [...sentFolder];
+    },
+    get sentMessages(): readonly GmailFixtureMessage[] {
+      return sentFolderMessages();
     },
 
     authorizationUrl(config: GmailOAuthConfig, input): string {
@@ -404,14 +459,28 @@ export function recordedGmailClient(fixture: GmailFixture): RecordedGmailClient 
         return { ok: false, outcome: 'indeterminate', detail: 'the connection closed before a response' };
       }
       sentFolder.add(request.rfcMessageId);
+      // The delivered message, as the Sent folder will list it (lane g73). Its internal
+      // date is the wall clock, which is what Gmail stamps; its headers are the ones
+      // FSS wrote and a metadata read with the allowlist would return.
+      const messageId = recordedSentMessageId(request.rfcMessageId);
+      const threadId = recordedSentThreadId(request.rfcMessageId);
+      sentStore.set(messageId, {
+        id: messageId,
+        threadId,
+        internalDateEpochMilliseconds: Date.now(),
+        labelIds: ['SENT'],
+        headers: {
+          From: request.from,
+          To: request.to,
+          Subject: request.subject,
+          'Message-ID': request.rfcMessageId,
+        },
+        historyId: fixture.historyId,
+      });
       if (behaviour === 'indeterminate_but_delivered') {
         return { ok: false, outcome: 'indeterminate', detail: 'the response was dropped after delivery' };
       }
-      return {
-        ok: true,
-        messageId: `sent-${String(sends.length).padStart(4, '0')}`,
-        threadId: `thread-sent-${String(sends.length).padStart(4, '0')}`,
-      };
+      return { ok: true, messageId, threadId };
     },
 
     searchSentByMessageId: async (_access, rfcMessageId): Promise<GmailSentSearchOutcome> => {
@@ -425,12 +494,47 @@ export function recordedGmailClient(fixture: GmailFixture): RecordedGmailClient 
       // A miss is a real answer: the index has not caught up yet.
       if (attempt <= (fixture.sentIndexingDelay ?? 0)) return { ok: true, found: null };
       if (!sentFolder.has(rfcMessageId)) return { ok: true, found: null };
+      // The message's own ids when the folder holds it as a message, so a fence the
+      // search reconciles and the listing's message agree about which Gmail message it is.
+      const held = sentMessageFor(rfcMessageId);
       return {
         ok: true,
         found: {
-          messageId: `found-${rfcMessageId.replace(/[<>@.]/g, '-').slice(0, 40)}`,
-          threadId: `thread-found-${String(sentSearches.length).padStart(4, '0')}`,
+          messageId: held?.id ?? recordedSentMessageId(rfcMessageId),
+          threadId: held?.threadId ?? recordedSentThreadId(rfcMessageId),
         },
+      };
+    },
+
+    listSentMessageIds: async (_access, request: GmailListRequest): Promise<GmailListOutcome> => {
+      record('listSentMessageIds', {
+        afterEpochSeconds: request.afterEpochSeconds,
+        beforeEpochSeconds: request.beforeEpochSeconds,
+        maxResults: request.maxResults,
+        pageToken: request.pageToken ?? null,
+      });
+      await Promise.resolve();
+      const planned = refusal();
+      if (planned !== null) return { ok: false, reason: planned };
+
+      // Gmail's `after:`/`before:` with epoch seconds: the same second arithmetic the
+      // inbox listing uses above.
+      const inRange = sentFolderMessages().filter(message => {
+        if (vanished.has(message.id)) return false;
+        const seconds = Math.floor(message.internalDateEpochMilliseconds / 1000);
+        return seconds >= request.afterEpochSeconds && seconds < request.beforeEpochSeconds;
+      });
+      const offset = request.pageToken === undefined ? 0 : Number(request.pageToken);
+      if (!Number.isInteger(offset) || offset < 0) {
+        throw new GmailClientError('malformed_response', 'the fixture was given a page token it never issued');
+      }
+      const size = Math.min(request.maxResults, listPageSize);
+      const page = inRange.slice(offset, offset + size);
+      const nextOffset = offset + page.length;
+      return {
+        ok: true,
+        messageIds: page.map(message => message.id),
+        nextPageToken: nextOffset < inRange.length ? String(nextOffset) : null,
       };
     },
   };

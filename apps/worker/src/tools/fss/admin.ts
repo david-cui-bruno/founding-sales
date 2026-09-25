@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import {
   readSystemGeneration,
@@ -18,7 +19,7 @@ import {
   type GmailClient,
   type MailboxRow,
 } from '@fss/domain/mail';
-import { reconcileOutboundMessage } from '@fss/domain/outbound';
+import { reconcileOutboundMessage, scanSentFolder } from '@fss/domain/outbound';
 import { replaySuppressionJournal, type SuppressionJournalSource } from '@fss/domain/suppression';
 import {
   RESTORE_ACTOR,
@@ -33,7 +34,10 @@ import {
   newestCrmEditAt,
   readRestoreCounts,
   readUnresolvedExceptions,
+  recoverSentFolderMessage,
   verifyRestoreReport,
+  type SentMessageRecovery,
+  type UnresolvedSentFolderItem,
 } from '@fss/domain/restore';
 import type { HoldReasonCode } from '@fss/contracts';
 import { runSchedulerPass } from '../../scheduler/schedulerPass.ts';
@@ -451,21 +455,96 @@ function countingGmail(gmail: GmailClient): { readonly client: GmailClient; send
   return { client, sends: () => sends };
 }
 
+/**
+ * A Message-ID as a report may keep it (lane g73): the first sixteen hex digits of its
+ * SHA-256. The step 3 report is kept as a release artefact beyond the run, and an id
+ * that names a mailbox's domain and a fence has no business in one; the hash still lets
+ * an operator holding the Sent message match it to a line.
+ */
+export function redactedMessageId(rfcMessageId: string): string {
+  return createHash('sha256').update(rfcMessageId, 'utf8').digest('hex').slice(0, 16);
+}
+
+/** One Sent-folder send in the step 3 report: its hash, what it became, and why. */
+function missingFenceLine(workspaceId: string, mailboxId: string, message: string, recovery: SentMessageRecovery): Record<string, unknown> {
+  const base = { workspaceId, mailboxId, message, outcome: recovery.outcome };
+  switch (recovery.outcome) {
+    case 'present':
+      return { ...base, outboundMessageId: recovery.outboundMessageId, state: recovery.state };
+    case 'pre_dispatch_marked_sent':
+      return {
+        ...base,
+        outboundMessageId: recovery.outboundMessageId,
+        stepExecutionId: recovery.stepExecutionId,
+        stepCompleted: recovery.stepCompleted,
+      };
+    case 'tombstoned':
+      return {
+        ...base,
+        outboundMessageId: recovery.outboundMessageId,
+        stepExecutionId: recovery.stepExecutionId,
+        enrollmentId: recovery.enrollmentId,
+        stepCompleted: recovery.stepCompleted,
+      };
+    case 'unmatched':
+      return { ...base, reason: recovery.reason };
+    case 'unattached':
+      return { ...base, reason: recovery.reason, firmIds: recovery.firmIds };
+  }
+}
+
+/**
+ * `fss admin mailbox reconcile-sent --since <instant>`: Appendix E step 3, both halves.
+ *
+ * **The fences the restored copy holds.** Every fence in `dispatching` or `reconciling`
+ * started since `--since` goes through `reconcileOutboundMessage`, the sweep's own
+ * function: a Message-ID the Sent folder holds makes it `sent`. Counted as
+ * `fences_reconciled`, and as `tombstones`, the name the step 8 report and the release
+ * record have always read it by.
+ *
+ * **The fences it lost (lane g73).** Then each mailbox's Sent folder is listed from
+ * `--since` to now, and every message carrying FSS's marker for that mailbox is answered
+ * by `recoverSentFolderMessage`, one transaction each: a fence the restore lost is
+ * inserted as a `sent` tombstone on the step it was the send of
+ * (`missing_fences_tombstoned`); a fence left `prepared` or `held` is recorded sent
+ * (`pre_dispatch_fences_marked_sent`); a send nothing restored could repeat is reported
+ * (`missing_fences_unmatched`); and a send that cannot be tied to one step is an
+ * unresolved exception (`missing_fences_unattached`), which step 8 lists and step 9
+ * refuses to advance past. The reconciliation runs first so that a fence it settles is
+ * `present` to the scan rather than a second answer to the same question.
+ *
+ * `--since` is Appendix E.3's "restore point minus ten minutes", and it bounds both: the
+ * fences looked at, and the Sent folder read. The upper bound of the folder is the
+ * command's own clock, because Gmail stamps the folder with real time.
+ */
 export async function mailboxReconcileSentCommand(invocation: AdminInvocation): Promise<AdminOutcome> {
   const options = mailOptions(invocation);
   if (options === null) return refuse('gmail_unconfigured', 'this deployment was given no Gmail client');
   const since = invocation.options['--since'] ?? '';
+  if (!Number.isFinite(Date.parse(since))) {
+    return refuse('since_invalid', '--since is the instant the Sent folder is read from: the restore point minus ten minutes');
+  }
+  const until = new Date().toISOString();
   const counting = countingGmail(options.gmail);
   const deps = { gmail: counting.client, oauth: options.oauth, cipher: options.cipher, actor: 'fss-admin' };
 
   let tombstones = 0;
+  const outcomes = {
+    tombstoned: 0,
+    pre_dispatch_marked_sent: 0,
+    present: 0,
+    unmatched: 0,
+    unattached: 0,
+  };
+  let listed = 0;
+  let unscanned = 0;
+  const missingFences: Record<string, unknown>[] = [];
   const mailboxes: Record<string, unknown>[] = [];
   for (const { workspaceId, mailbox } of await chosenMailboxes(invocation)) {
     const context = repositoryContext(workspaceScope(workspaceId, RESTORE_ACTOR), invocation.session);
-    // `--since` is Appendix E.3's "restore point minus ten minutes" and bounds which
-    // fences are looked at; the Sent search's own window is the fence's 24 hours
-    // (Appendix B). `reconcileMailbox` has no lower bound, so the bound is applied here
-    // and each fence still goes through the one function that observes it.
+    // `--since` bounds which fences are looked at; the Sent search's own window is the
+    // fence's 24 hours (Appendix B). `reconcileMailbox` has no lower bound, so the bound
+    // is applied here and each fence still goes through the one function that observes it.
     const { rows } = await invocation.session.query<{ id: string }>(
       `SELECT id FROM outbound_messages
         WHERE workspace_id = $1 AND mailbox_id = $2
@@ -475,18 +554,93 @@ export async function mailboxReconcileSentCommand(invocation: AdminInvocation): 
         LIMIT 200`,
       [workspaceId, mailbox.id, since],
     );
-    const outcomes: string[] = [];
+    const fenceOutcomes: string[] = [];
     for (const row of rows) {
       const report = await withTransaction(invocation.session, async () =>
         reconcileOutboundMessage(context, deps, { outboundMessageId: row.id }),
       );
-      outcomes.push(report.outcome);
+      fenceOutcomes.push(report.outcome);
       if (report.outcome === 'sent') tombstones += 1;
     }
-    mailboxes.push({ workspaceId, mailboxId: mailbox.id, fences: rows.length, outcomes });
+
+    // Lane g73: the Sent folder itself, for the sends whose fence the restore lost.
+    const scan = await scanSentFolder(context, deps, { mailboxId: mailbox.id, since, until });
+    listed += scan.listed;
+    if (scan.outcome !== 'scanned') unscanned += 1;
+    for (const message of scan.messages) {
+      const recovery = await withTransaction(invocation.session, async () =>
+        recoverSentFolderMessage(context, {
+          mailbox: { id: mailbox.id, ownerUserId: mailbox.ownerUserId },
+          message,
+          actor: deps.actor,
+        }),
+      );
+      outcomes[recovery.outcome] += 1;
+      missingFences.push(missingFenceLine(workspaceId, mailbox.id, redactedMessageId(message.rfcMessageId), recovery));
+    }
+    mailboxes.push({
+      workspaceId,
+      mailboxId: mailbox.id,
+      fences: rows.length,
+      outcomes: fenceOutcomes,
+      sentFolder: { outcome: scan.outcome, listed: scan.listed, fssMessages: scan.messages.length },
+    });
   }
 
-  return accept({ since, tombstones, resent: counting.sends(), mailboxes });
+  return accept({
+    since,
+    until,
+    // The name step 8 and the release record read; the same number as fences_reconciled.
+    tombstones,
+    fences_reconciled: tombstones,
+    missing_fences_tombstoned: outcomes.tombstoned,
+    pre_dispatch_fences_marked_sent: outcomes.pre_dispatch_marked_sent,
+    missing_fences_unmatched: outcomes.unmatched,
+    missing_fences_unattached: outcomes.unattached,
+    sent_folder_listed: listed,
+    sent_folder_fss_messages: missingFences.length,
+    sent_folder_present: outcomes.present,
+    mailboxes_unscanned: unscanned,
+    resent: counting.sends(),
+    missing_fences: missingFences,
+    mailboxes,
+  });
+}
+
+/**
+ * Step 3's unsettled Sent-folder items, read back from its report for step 8 (lane g73).
+ *
+ * Read from the report rather than recomputed, for the reason step 9 reads step 8's: the
+ * report is what an operator read and what the release record keeps.
+ */
+export function unresolvedSentFolder(sent: Record<string, unknown> | null): readonly UnresolvedSentFolderItem[] {
+  if (sent === null) return [];
+  const items: UnresolvedSentFolderItem[] = [];
+  const lines = Array.isArray(sent['missing_fences']) ? (sent['missing_fences'] as Record<string, unknown>[]) : [];
+  for (const line of lines) {
+    if (line['outcome'] !== 'unattached') continue;
+    const firms = Array.isArray(line['firmIds']) ? (line['firmIds'] as unknown[]).map(String) : [];
+    items.push({
+      kind: 'unattached_sent_message',
+      workspaceId: String(line['workspaceId'] ?? ''),
+      id: String(line['message'] ?? ''),
+      detail: `mailbox ${String(line['mailboxId'] ?? '')}, ${String(line['reason'] ?? 'unattached')}${
+        firms.length === 0 ? '' : `, firms ${firms.join(' ')}`
+      }: an FSS send the restored database has no fence for and no single step to record it on`,
+    });
+  }
+  const mailboxes = Array.isArray(sent['mailboxes']) ? (sent['mailboxes'] as Record<string, unknown>[]) : [];
+  for (const mailbox of mailboxes) {
+    const folder = mailbox['sentFolder'] as Record<string, unknown> | undefined;
+    if (folder === undefined || folder['outcome'] === 'scanned') continue;
+    items.push({
+      kind: 'sent_folder_unscanned',
+      workspaceId: String(mailbox['workspaceId'] ?? ''),
+      id: String(mailbox['mailboxId'] ?? ''),
+      detail: `the Sent folder was not read to the end (${String(folder['outcome'])}), so a send the restore lost may be unrecorded`,
+    });
+  }
+  return items;
 }
 
 /** How many times one recovery is continued before the command gives up on it. */
@@ -698,6 +852,7 @@ export async function restoreReportCommand(invocation: AdminInvocation): Promise
     sendsRepeated: (await countRepeatedSends(invocation.session)) + resent,
     crmRpoSeconds: crmRecoveryPointSeconds(before.asOf, await newestCrmEditAt(invocation.session)),
     unresolved,
+    sentFolder: unresolvedSentFolder(sent),
   });
 
   return accept({
@@ -706,6 +861,7 @@ export async function restoreReportCommand(invocation: AdminInvocation): Promise
     inbox_replies: inbox?.['replies'] ?? null,
     inbox_opt_outs: inbox?.['opt_outs'] ?? null,
     sent_tombstones: sent?.['tombstones'] ?? null,
+    sent_missing_fences_tombstoned: sent?.['missing_fences_tombstoned'] ?? null,
   });
 }
 

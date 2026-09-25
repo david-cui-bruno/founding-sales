@@ -541,12 +541,18 @@ DRILL_REPORT="$REPORTS/drill.json"
 # `--mailbox-recording-json`, like the baseline. Nothing in it comes from the restored
 # database and nothing in it is a credential; it is one line, because
 # `release_run_task` reads the command one word per line.
+#
+# Lane g73: each phase also reports its Sent folder's messages (`sentMessages`: the
+# Message-ID, recipient, subject and instant a listing returns), because step 3 now
+# lists the folder for the sends whose fence the restore lost — the after phase's send
+# of a step the before phase enrolled is the one it must find. Merged by Gmail id, which
+# the recorded client derives from the Message-ID, so two phases cannot collide.
 merged_recording() { # merged_recording <reports directory>
   python3 - "$1" <<'PY'
 import json, pathlib, sys
 
 reports = pathlib.Path(sys.argv[1])
-address, history, sent, messages = None, 1, set(), {}
+address, history, sent, messages, sent_messages = None, 1, set(), {}, {}
 for phase in ("before", "in-flight", "after"):
     path = reports / ("drill-evidence-%s.json" % phase)
     if not path.is_file():
@@ -557,14 +563,21 @@ for phase in ("before", "in-flight", "after"):
     sent.update(mailbox.get("sentMessageIds") or [])
     for message in mailbox.get("messages") or []:
         messages[message["id"]] = message
-recording = {"historyId": str(history), "sentMessageIds": sorted(sent), "messages": list(messages.values())}
+    for message in mailbox.get("sentMessages") or []:
+        sent_messages[message["id"]] = message
+recording = {
+    "historyId": str(history),
+    "sentMessageIds": sorted(sent),
+    "messages": list(messages.values()),
+    "sentMessages": list(sent_messages.values()),
+}
 if address:
     recording["emailAddress"] = address
 print(json.dumps(recording, separators=(",", ":")))
 PY
 }
 MAILBOX_RECORDING_JSON="$(merged_recording "$REPORTS")"
-rehearsal_log "mailbox recording handed to the drill task: $(printf '%s' "$MAILBOX_RECORDING_JSON" | python3 -c 'import json, sys; r = json.load(sys.stdin); print("%d sent, %d messages" % (len(r["sentMessageIds"]), len(r["messages"])))')"
+rehearsal_log "mailbox recording handed to the drill task: $(printf '%s' "$MAILBOX_RECORDING_JSON" | python3 -c 'import json, sys; r = json.load(sys.stdin); print("%d sent, %d messages, %d Sent-folder messages listed" % (len(r["sentMessageIds"]), len(r["messages"]), len(r["sentMessages"])))')"
 
 if rehearsal_dry_run; then
   rehearsal_plan "fss drill --reports /tmp/fss-drill --baseline-json $BASELINE_JSON --at-failure-json $AT_FAILURE_JSON --mailbox-recording-json $MAILBOX_RECORDING_JSON --expected-generation $EXPECTED_GENERATION --admin-user $ADMIN_USER_ID --from $REPLAY_FROM --since $SENT_FROM --all-mailboxes (in-VPC task, drill, FSS_DATABASE_HOST=$RESTORED_HOST)"
@@ -586,10 +599,12 @@ if rehearsal_dry_run; then
     { "step": "step1-dial-refused", "ok": true, "report": { "allowed": false, "reason": "posture_missing", "holds": ["restore_in_progress"] } },
     { "step": "step2-journal-replay", "ok": true, "report": { "inserted": 1 } },
     { "step": "step2-journal-replay-second", "ok": true, "report": { "inserted": 0 } },
-    { "step": "step3-reconcile-sent", "ok": true, "report": { "tombstones": 1, "resent": 0 } },
+    { "step": "step3-reconcile-sent", "ok": true, "report": { "tombstones": 1, "fences_reconciled": 1, "missing_fences_tombstoned": 1, "missing_fences_unattached": 0, "mailboxes_unscanned": 0, "resent": 0 } },
+    { "step": "step3-missing-fence-tombstoned", "ok": true, "report": { "missing_fences_tombstoned": 1, "mailboxes_unscanned": 0, "tombstones": [{ "state": "sent", "reconciledFrom": "sent_folder_missing_fence", "fencesForStep": 1 }] } },
     { "step": "step4-inbox-recover", "ok": true, "report": { "replies": 1, "opt_outs": 1 } },
     { "step": "step5-jobs-discard", "ok": true, "report": { "discarded": 1 } },
     { "step": "step5-scheduler-run-once", "ok": true, "report": { "created": 1 } },
+    { "step": "step5-no-second-send", "ok": true, "report": { "sends": 0, "tombstones": [{ "state": "sent", "fencesForStep": 1, "fencesToRecipient": 1, "fencesToRecipientAtStep3": 1 }] } },
     { "step": "step6-watch-renew", "ok": true, "report": { "renewed": 1 } },
     { "step": "step6-coverage", "ok": true, "report": { "mailboxes": [{ "complete": true }] } },
     { "step": "step7-migrate", "ok": true, "report": { "schema": { "apiAccepts": true, "workerAccepts": true } } },
@@ -780,7 +795,9 @@ required = [
     "step2-journal-replay",
     "step2-journal-replay-second",
     "step3-reconcile-sent",
+    "step3-missing-fence-tombstoned",
     "step4-inbox-recover",
+    "step5-no-second-send",
     "step6-coverage",
     "step7-migrate",
     "step8-restore-report",
@@ -834,6 +851,22 @@ assert second.get("inserted", 0) == 0, f"the second replay was not idempotent: {
 sent = body("step3-reconcile-sent")
 assert sent.get("resent", 0) == 0, f"a send repeated: {sent}"
 assert sent.get("tombstones", 0) >= 1, f"no send was reconstructed, so nothing was proved: {sent}"
+# Lane g73: Appendix E.3's missing fences. `tombstones` counts fences the restored copy
+# still had, which is how the drill stayed green while a send made after the restore
+# point had nothing to find it. The after phase sends a step the before phase enrolled,
+# so the restored copy holds that step with no fence: step 3 must have tombstoned it,
+# read every Sent folder to the end, and left no send it could not attribute.
+assert sent.get("missing_fences_tombstoned", 0) >= 1, f"no send whose fence the restore lost was tombstoned: {sent}"
+assert sent.get("mailboxes_unscanned", 1) == 0, f"a Sent folder was not read to the end: {sent}"
+assert sent.get("missing_fences_unattached", 1) == 0, f"a send the restore lost could not be tied to a step: {sent}"
+missing = body("step3-missing-fence-tombstoned")
+assert missing.get("tombstones"), f"the drill read back no tombstone from the database: {missing}"
+assert all(entry.get("state") == "sent" and entry.get("reconciledFrom") == "sent_folder_missing_fence" and entry.get("fencesForStep") == 1 for entry in missing["tombstones"]), f"a tombstone is not one sent fence from the Sent folder: {missing}"
+# Step 5's half: the rematerialized jobs did not send a tombstoned step again.
+second = body("step5-no-second-send")
+assert second.get("sends", 1) == 0, f"the drill sent mail: {second}"
+assert second.get("tombstones"), f"no tombstoned step was checked for a second send: {second}"
+assert all(entry.get("fencesForStep") == 1 and entry.get("fencesToRecipient") == entry.get("fencesToRecipientAtStep3") for entry in second["tombstones"]), f"a tombstoned step gained a second fence: {second}"
 inbox = body("step4-inbox-recover")
 assert inbox.get("replies", 0) >= 1, f"no reply reapplied its effect: {inbox}"
 assert inbox.get("opt_outs", 0) >= 1, f"no opt-out reapplied: {inbox}"

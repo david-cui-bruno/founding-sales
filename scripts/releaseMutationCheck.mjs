@@ -1143,6 +1143,24 @@ const MUTATIONS = [
     because:
       'Audit item C08, lane g76: Gmail history ids are uint64 decimal strings, and Number ties 9007199254740992 with 9007199254740993, so a cursor can stall on a record it read or stand past one it did not. historyCursor.test.ts orders, maxes and syncs across those ids and has to go red.',
   },
+  {
+    name: 'step 3 reports a send whose fence the restore lost and inserts no tombstone for it',
+    file: 'packages/domain/restore/missingFences.ts',
+    find: "  if (only === undefined) return { outcome: 'unmatched', reason: 'no_live_enrollment' };\n",
+    replace: "  return { outcome: 'unmatched', reason: 'no_live_enrollment' };\n",
+    suite: ['run', 'test', '--workspace', 'packages/domain', '--', 'test/restore/missingFences.test.ts'],
+    because:
+      'This is the P1 the 25 September review found: after a point-in-time restore, a send made after the restore point has no fence in the restored copy, its step is pending again, and the sender’s one dedupe key is the fence that was lost. Step 3 reconciled only fences the copy still had, and the drill stayed green on the in-flight one. With the missing-fence branch gone every such send is reported and left, and missingFences.test.ts expects a tombstone on the pending step and has to go red.',
+  },
+  {
+    name: 'the Sent-folder marker accepts an fss.<uuid> Message-ID at any domain',
+    file: 'packages/domain/outbound/types.ts',
+    find: '  return domain === sendingDomain ? fenceId : null;\n',
+    replace: '  return fenceId;\n',
+    suite: ['run', 'test', '--workspace', 'packages/domain', '--', 'test/restore/missingFences.test.ts'],
+    because:
+      'The marker is the whole deterministic Message-ID, <fss.{fence}@{the sending mailbox’s domain}>, because a tombstone stops a real step from ever sending. A check that took the fss.<uuid> shape alone would tombstone a copy or another system’s message onto a prospect’s pending step. missingFences.test.ts puts that shape at another domain in the Sent folder beside a pending step, expects it ignored, and has to go red.',
+  },
 ];
 
 // A listener on each of these keeps Node from exiting mid-mutation with a file still

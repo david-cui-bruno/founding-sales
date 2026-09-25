@@ -230,6 +230,18 @@ export interface GmailClient {
     access: GmailAccessGrant,
     rfcMessageId: string,
   ): Promise<GmailSentSearchOutcome>;
+  /**
+   * The ids of the messages in the mailbox's Sent folder whose Gmail internal date falls
+   * in `[after, before)`, epoch seconds, trashed ones included (Appendix E step 3, lane
+   * g73).
+   *
+   * `searchSentByMessageId` asks about a fence the database knows. After a
+   * point-in-time restore the database may not know the fence at all — the send happened
+   * after the restore point — and the only way to find such a send is to list the folder
+   * and read each message's Message-ID. Ids only, like `listMessageIds`; the caller reads
+   * metadata for each with the header allowlist and never a body.
+   */
+  listSentMessageIds(access: GmailAccessGrant, request: GmailListRequest): Promise<GmailListOutcome>;
 }
 
 export interface GmailSendRequest {

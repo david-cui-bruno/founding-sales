@@ -34,6 +34,7 @@ export {
   acceptSend,
   deterministicMessageId,
   fenceIdOfMessageId,
+  fssFenceIdOfSentMessage,
   isPersonalGmailAddress,
   reconcileBackoffSeconds,
   refuseSend,
@@ -92,23 +93,33 @@ export {
 } from './domainGuard.ts';
 
 export {
+  SENT_FOLDER_PRE_DISPATCH_PROVENANCE,
+  SENT_TOMBSTONE_BODY,
+  SENT_TOMBSTONE_FALLBACK_SUBJECT,
+  SENT_TOMBSTONE_PROVENANCE,
+  SENT_TOMBSTONE_RULE_VERSION,
   beginReconciling,
   claimForDispatch,
   fenceForOutgoingMessage,
   holdFence,
+  insertSentTombstone,
   markUnknownTerminal,
   originatingSend,
   prepareOutboundMessage,
   readFence,
   readFenceByStepExecution,
   readFenceEvents,
+  readFenceForSentMessage,
   readOutboundOutcome,
   recordReconcileMiss,
   recordReconciledSent,
   recordSent,
+  markPreDispatchFenceSent,
   releaseFence,
   renderedHash,
   resolveUnknownTerminal,
+  tombstoneSubject,
+  type SentTombstoneInput,
   type DispatchClaim,
   type OutboundEmailRequest,
   type OutboundFenceRow,
@@ -138,6 +149,17 @@ export {
 } from './reconcile.ts';
 
 export { combinedRecoveryFloor, outboundRecoveryFloor } from './recoveryFloor.ts';
+
+export {
+  SENT_SCAN_HEADERS,
+  SENT_SCAN_PAGE_LIMIT,
+  SENT_SCAN_PAGE_SIZE,
+  scanSentFolder,
+  type SentFolderMessage,
+  type SentFolderScan,
+  type SentFolderScanDeps,
+  type SentFolderScanOutcome,
+} from './sentFolder.ts';
 
 export {
   MAILBOX_DISCONNECTED_ALARM_HOURS,

@@ -650,11 +650,15 @@ describe('Appendix G 11: the drill is handed the moment of failure, the mailbox 
     systemGeneration: 7,
   };
   /** A seed phase's report, as `release_captured_report` leaves it beside its .txt. */
-  const phaseReport = (sent: readonly string[], messages: readonly Record<string, unknown>[]): string =>
+  const phaseReport = (
+    sent: readonly string[],
+    messages: readonly Record<string, unknown>[],
+    sentMessages: readonly Record<string, unknown>[] = [],
+  ): string =>
     JSON.stringify({
       phase: 'x',
       adminUserId: '00000000-0000-4000-8000-00000000a0a0',
-      mailbox: { emailAddress: 'sales@drill-evidence.invalid', historyId: '12', sentMessageIds: sent, messages },
+      mailbox: { emailAddress: 'sales@drill-evidence.invalid', historyId: '12', sentMessageIds: sent, messages, sentMessages },
     });
   const message = (id: string): Record<string, unknown> => ({
     id,
@@ -734,24 +738,33 @@ describe('Appendix G 11: the drill is handed the moment of failure, the mailbox 
     const { code, output } = dryRun({
       'baseline.json': JSON.stringify(baseline),
       'drill-evidence-before.json': phaseReport(['<a@drill-evidence.invalid>'], [message('reply-1'), message('opt-out-1')]),
-      'drill-evidence-in-flight.json': phaseReport(['<b@drill-evidence.invalid>'], []),
-      'drill-evidence-after.json': phaseReport(['<c@drill-evidence.invalid>'], [message('opt-out-2')]),
+      'drill-evidence-in-flight.json': phaseReport(['<b@drill-evidence.invalid>'], [], [message('sent-b')]),
+      'drill-evidence-after.json': phaseReport(
+        ['<c@drill-evidence.invalid>', '<d@drill-evidence.invalid>'],
+        [message('opt-out-2')],
+        [message('sent-c'), message('sent-d')],
+      ),
     });
     expect(code, output).toBe(0);
     const recording = JSON.parse(planned(output, '--mailbox-recording-json')) as {
       sentMessageIds: string[];
       messages: { id: string }[];
+      sentMessages: { id: string }[];
       emailAddress: string;
     };
     expect(recording.sentMessageIds).toEqual([
       '<a@drill-evidence.invalid>',
       '<b@drill-evidence.invalid>',
       '<c@drill-evidence.invalid>',
+      '<d@drill-evidence.invalid>',
     ]);
     expect(recording.messages.map(entry => entry.id)).toEqual(['reply-1', 'opt-out-1', 'opt-out-2']);
+    // Lane g73: the Sent folder's messages too, merged across the phases, because step 3
+    // lists the folder for the after phase's send whose fence the restore loses.
+    expect(recording.sentMessages.map(entry => entry.id)).toEqual(['sent-b', 'sent-c', 'sent-d']);
     expect(recording.emailAddress).toBe('sales@drill-evidence.invalid');
     expect(planned(output, '--admin-user')).toBe('00000000-0000-4000-8000-00000000a0a0');
-    expect(output).toContain('mailbox recording handed to the drill task: 3 sent, 3 messages');
+    expect(output).toContain('mailbox recording handed to the drill task: 4 sent, 3 messages, 3 Sent-folder messages listed');
 
     // An operator drilling by hand names the admin instead.
     const named = dryRun(
@@ -795,9 +808,20 @@ describe('Appendix G 11: the drill is handed the moment of failure, the mailbox 
   });
 
   it('fails a step 8 report that was not measured against the moment of failure, or lost a suppression since it', () => {
+    // Lane g73: step 3's report as a passing drill writes it, with a fence the restore lost
+    // tombstoned beside the in-flight fence it reconciled.
+    const passingSent = {
+      tombstones: 1,
+      fences_reconciled: 1,
+      missing_fences_tombstoned: 1,
+      missing_fences_unattached: 0,
+      mailboxes_unscanned: 0,
+      resent: 0,
+    };
     const steps = (
       restore: Record<string, unknown>,
       dial: Record<string, unknown> = { allowed: false, reason: 'posture_missing', holds: ['restore_in_progress'] },
+      sent: Record<string, unknown> = passingSent,
     ): string =>
       JSON.stringify({
         ok: true,
@@ -809,8 +833,25 @@ describe('Appendix G 11: the drill is handed the moment of failure, the mailbox 
           { step: 'step1-dial-refused', ok: true, report: dial },
           { step: 'step2-journal-replay', ok: true, report: { inserted: 1 } },
           { step: 'step2-journal-replay-second', ok: true, report: { inserted: 0 } },
-          { step: 'step3-reconcile-sent', ok: true, report: { tombstones: 1, resent: 0 } },
+          { step: 'step3-reconcile-sent', ok: true, report: sent },
+          {
+            step: 'step3-missing-fence-tombstoned',
+            ok: true,
+            report: {
+              missing_fences_tombstoned: 1,
+              mailboxes_unscanned: 0,
+              tombstones: [{ state: 'sent', reconciledFrom: 'sent_folder_missing_fence', fencesForStep: 1 }],
+            },
+          },
           { step: 'step4-inbox-recover', ok: true, report: { replies: 1, opt_outs: 1 } },
+          {
+            step: 'step5-no-second-send',
+            ok: true,
+            report: {
+              sends: 0,
+              tombstones: [{ state: 'sent', fencesForStep: 1, fencesToRecipient: 1, fencesToRecipientAtStep3: 1 }],
+            },
+          },
           { step: 'step6-coverage', ok: true, report: { mailboxes: [{ complete: true }] } },
           { step: 'step7-migrate', ok: true, report: { schema: { apiAccepts: true, workerAccepts: true } } },
           { step: 'step8-restore-report', ok: true, report: restore },
@@ -867,6 +908,23 @@ describe('Appendix G 11: the drill is handed the moment of failure, the mailbox 
     );
     expect(unrelated.code).not.toBe(0);
     expect(unrelated.output).toContain('no restore hold applied to it');
+
+    // Lane g73: the report that stayed green through 25 September. Step 3 reconciled the
+    // in-flight fence the restored copy still had, and tombstoned nothing for the send
+    // whose fence it lost. `tombstones: 1` is not Appendix E.3's missing fence.
+    const survivingOnly = dryRun(
+      {
+        'baseline.json': JSON.stringify(baseline),
+        'drill.json': steps(
+          { ...base, suppressions_at_failure: 6, suppressions_after: 6 },
+          undefined,
+          { tombstones: 1, resent: 0 },
+        ),
+      },
+      { FSS_RELEASE_ALARM_HISTORY: alarm },
+    );
+    expect(survivingOnly.code).not.toBe(0);
+    expect(survivingOnly.output).toContain('no send whose fence the restore lost was tombstoned');
   });
 
   it('keeps the drill task’s own exit status and refuses it after reading the report', () => {

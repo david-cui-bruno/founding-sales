@@ -12,8 +12,10 @@ import { composeHandlers } from '../src/bootstrap/main.ts';
 import { main } from '../src/tools/fss.ts';
 import {
   mailboxWatchRenewCommand,
+  redactedMessageId,
   suppressionJournalReplayCommand,
   systemGenerationAdvanceCommand,
+  unresolvedSentFolder,
   type AdminInvocation,
 } from '../src/tools/fss/admin.ts';
 import { readToolConfig } from '../src/tools/fss/config.ts';
@@ -953,5 +955,39 @@ describe('fss admin workspace bootstrap', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+describe('step 3’s Sent-folder report, read back by step 8 (lane g73)', () => {
+  it('keeps a Message-ID only as a hash, and turns what step 3 could not settle into step 8’s exceptions', () => {
+    expect(redactedMessageId('<fss.00000000-0000-4000-8000-000000000001@example.test>')).toMatch(/^[0-9a-f]{16}$/u);
+    expect(redactedMessageId('<a@example.test>')).not.toBe(redactedMessageId('<b@example.test>'));
+
+    const items = unresolvedSentFolder({
+      missing_fences: [
+        { workspaceId: 'w', mailboxId: 'm', message: 'aaaaaaaaaaaaaaaa', outcome: 'tombstoned' },
+        { workspaceId: 'w', mailboxId: 'm', message: 'bbbbbbbbbbbbbbbb', outcome: 'unmatched', reason: 'no_live_enrollment' },
+        {
+          workspaceId: 'w',
+          mailboxId: 'm',
+          message: 'cccccccccccccccc',
+          outcome: 'unattached',
+          reason: 'several_live_enrollments',
+          firmIds: ['f1', 'f2'],
+        },
+      ],
+      mailboxes: [
+        { workspaceId: 'w', mailboxId: 'm', sentFolder: { outcome: 'scanned' } },
+        { workspaceId: 'w', mailboxId: 'n', sentFolder: { outcome: 'grant_revoked' } },
+      ],
+    });
+    expect(items.map(item => [item.kind, item.id])).toEqual([
+      ['unattached_sent_message', 'cccccccccccccccc'],
+      ['sent_folder_unscanned', 'n'],
+    ]);
+    expect(items[0]?.detail).toContain('several_live_enrollments');
+    // A report from before this lane, with neither list, settles nothing and holds nothing.
+    expect(unresolvedSentFolder({ tombstones: 1, resent: 0 })).toEqual([]);
+    expect(unresolvedSentFolder(null)).toEqual([]);
   });
 });

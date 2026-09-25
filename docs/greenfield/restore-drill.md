@@ -62,7 +62,7 @@ Those six are what the baseline refusal below counts. They are not everything th
 **The mailbox, across tasks.** Each phase and the drill are separate one-off tasks, and two things the drill shares with the seed do not survive a process by themselves. Each is handed over rather than faked:
 
 * *the envelope key.* A recorded deployment used to wrap refresh tokens under a master key made per process, so the drill could not unwrap the token the seed stored. A task that carries `FSS_ENVELOPE_KEY_ID` — every deployed rehearsal task does — now wraps through the production KMS wrapper under the encryption context `fss_envelope_seam = recorded`, and labels the row's key id `recorded-seam:<key>`. A live process names the bare key and asks KMS with no context, so it refuses such a row twice over. The drill task role gets `kms:Decrypt` under that context only, and only outside production (`infra/modules/cluster`, `drill_unwraps_recorded_envelopes`). A task without the variable — a laptop, a test — keeps the per-process key;
-* *the mailbox itself.* A recorded Gmail lives in the process that built it. Each phase's JSON report carries what its recorded mailbox holds — the Sent folder it delivered into and the inbound messages it delivered — and the runner merges the three reports and hands the drill `--mailbox-recording-json`. The drill's mail steps run against a recorded client built from that. Nothing in it is a credential, and nothing in it comes from the restored database.
+* *the mailbox itself.* A recorded Gmail lives in the process that built it. Each phase's JSON report carries what its recorded mailbox holds — the Sent folder it delivered into and the inbound messages it delivered — and the runner merges the three reports and hands the drill `--mailbox-recording-json`. The drill's mail steps run against a recorded client built from that. Nothing in it is a credential, and nothing in it comes from the restored database. Since lane g73 the Sent folder travels as messages as well as Message-IDs (`sentMessages`). Each one carries its Gmail id, instant, recipient and subject, because step 3 now *lists* the folder for sends whose fence the restore lost, and a list of ids cannot be listed.
 
 In a deployed environment one command, in three phases, produces all of it (lanes g40 and g59). The first:
 
@@ -81,7 +81,9 @@ a salesperson's own manual suppression, whose ten-minute correction window is st
 open when the drill runs minutes later; makes one ordinary CRM edit; and makes what the
 later steps need to find: the firm whose opt-out arrives after the target, a usable
 phone route, the admin's own calling number registered and attested through the domain
-(lane g60), and an administrative pause. Each item is reported `created` or
+(lane g60), an administrative pause, and (lane g73) an enrollment for a further contact,
+`restore-lost@drill-evidence.invalid`, in a one-step sequence due thirty days out, so
+that nothing but the `after` phase sends it. Each item is reported `created` or
 `existing`, and the report carries the same five counts `fss admin counts` reports —
 it calls the same code, so the numbers cannot drift from the ones the refusal below
 reads — along with the workspace admin it acted as and its mailbox recording. A second
@@ -153,7 +155,8 @@ aws rds restore-db-instance-to-point-in-time \
 **As soon as the restore has been requested**, write the work it is meant to lose, and count the source at the moment of failure (lane g59):
 
 ```bash
-# (FSS) on the source: a late prospect opt-out, a second accepted send, a second CRM edit
+# (FSS) on the source: a late prospect opt-out, a second accepted send, a second CRM edit,
+# and the send of the step the before phase enrolled (lane g73)
 fss admin drill seed-evidence --workspace-slug rehearsal --phase after --report /tmp/evidence-after.json
 # (FSS) on the source: the counts at the moment of failure, which step 8 compares against
 fss admin counts > /tmp/at-failure.json
@@ -167,10 +170,15 @@ journal, and step 4 recovers the message from the inbox and reapplies its effect
 suppressions' command ids are keyed on the provider's message id rather than the row's,
 so the event step 4 derives on the restored copy is the one step 2 replayed, not a
 second one that the drill task, which cannot append to the journal, would have to
-write. The send and the edit are lost with it; the edit is step 8's RPO, and the send
-is the case step 3 does not yet cover (below). Until lane g59 this phase added only the
-send and the edit and ran between the baseline and the request, so step 2 had nothing to
-replay, and the send could land on either side of the point RDS chose.
+write. The sends and the edit are lost with it, and the edit is step 8's RPO. There are
+two sends, and they are two different cases for step 3. The first goes to a firm this
+phase makes, so the restored copy knows neither the firm nor the send; nothing restored
+can repeat it, and step 3 reports it `unmatched`. The second (lane g73) is the send of the
+step the `before` phase enrolled. The restored copy holds that step pending with no
+fence, while the Sent folder holds its message: Appendix E.3's missing fence, which step 3
+must tombstone and step 5 must not send again. Until lane g59 this phase added only one
+send and the edit, and ran between the baseline and the request. Step 2 then had nothing
+to replay, and the send could land on either side of the point RDS chose.
 
 Note the actual restorable point RDS used. It may lag the requested target by up to about five minutes (spec 4.1), and that lag is part of what the drill measures:
 
@@ -281,30 +289,70 @@ print((target - datetime.timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ"))
 PY
 )
 
-# (FSS) for every connected mailbox, Gmail search on rfc822msgid: for FSS ids,
-# then insert a sent tombstone for any fence the restored database is missing.
+# (FSS) for every connected mailbox: an rfc822msgid: search for each fence the restored
+# copy holds in doubt, then a listing of the Sent folder from $SENT_FROM to now, and a
+# sent tombstone for every FSS message whose fence the restored database is missing.
 fss admin mailbox reconcile-sent --since "$SENT_FROM" --all-mailboxes --report /tmp/sent-reconcile.json
 ```
 
-The search uses `rfc822msgid:` on the sending mailbox, which needs `gmail.readonly`; `gmail.metadata` is insufficient (Appendix B).
+The search uses `rfc822msgid:` on the sending mailbox, and the listing uses `in:sent` with epoch-second bounds. Both need `gmail.readonly`; `gmail.metadata` is insufficient (Appendix B). The listing reads each message's metadata with three headers, `Message-ID`, `To` and `Subject`, and never a body.
 
 Assertions:
 
 - every send made after the restore point appears as a tombstone, and its enrollment does not re-dispatch it;
 - a fence in `dispatching` at the moment of failure never returns to `prepared`;
-- a fence whose Sent search finds nothing stays `reconciling` within its bounded 24-hour observation window rather than being resent.
+- a fence whose Sent search finds nothing stays `reconciling` within its bounded 24-hour observation window rather than being resent;
+- every mailbox's Sent folder was read to the end, and no FSS send was left that step 3 could not tie to one step.
 
 ```bash
 python3 -c "import json;r=json.load(open('/tmp/sent-reconcile.json'));assert r['resent']==0, r"
+python3 -c "import json;r=json.load(open('/tmp/sent-reconcile.json'));assert r['mailboxes_unscanned']==0 and r['missing_fences_unattached']==0, r"
 ```
 
-What the command does in this build: it reconciles the fences the restored copy holds in
+**What the command does (lane g73: Appendix E.3 implemented).** Step 3 has two halves.
+
+*The fences the copy still has.* It reconciles the fences the restored copy holds in
 `dispatching` or `reconciling`, started since `$SENT_FROM`, against the Sent folder, and
-tombstones each one the folder proves delivered. The drill measures that case with the
-in-flight send (0.1): one fence, one tombstone, nothing resent. A send whose fence the
-restored copy never had — the `after` phase's — has no row to tombstone, and inserting
-one for it, the first assertion above, is not implemented (`docs/greenfield/release.md`
-8.1). The drill does not claim it.
+records `sent` for each one the folder proves delivered. That is `fences_reconciled`,
+also reported as `tombstones`, the name step 8 reads. The drill measures it with the
+in-flight send (0.1).
+
+*The fences it lost.* It then lists each mailbox's Sent folder from `$SENT_FROM` to now.
+It keeps every message carrying FSS's marker for that mailbox: the whole deterministic
+Message-ID, `<fss.{fence}@{the mailbox's domain}>`, domain included. It answers each one:
+
+- **`missing_fences_tombstoned`** — the fence is missing, and exactly one step is the
+  send's. The recipient is a route of exactly one live enrollment's contact, that
+  enrollment belongs to the mailbox's owner, and its next unfinished step is an email step
+  with no fence. A `sent` fence is inserted on that step, under the lost fence's own id and
+  Message-ID, with Gmail's ids and instant and a ledger event reading `reconciled_from:
+  sent_folder_missing_fence`. The step is completed from the original send. The sender's
+  dedupe key is one fence per step, so the step is never sent again;
+- **`pre_dispatch_fences_marked_sent`** — the copy has the fence, but still `prepared` or
+  `held`, because the restore point fell between preparation and dispatch. It is recorded
+  sent from Gmail's evidence;
+- **`missing_fences_unmatched`** — the fence is missing, and no live enrollment reaches the
+  recipient, so nothing restored can repeat the send. It is reported and left. The
+  `after` phase's send to its own new firm is this case;
+- **`missing_fences_unattached`** — the fence is missing and something could still send to
+  the recipient, but no single step can be named. Nothing is guessed. Step 8 lists it as
+  an unresolved exception (`unattached_sent_message`), and step 9 refuses until an operator
+  has stopped or completed the enrollment it belongs to and re-run steps 3 and 8.
+
+A mailbox whose folder could not be read to the end is `mailboxes_unscanned`, and is
+the same kind of exception (`sent_folder_unscanned`). Each FSS message is one line of
+`missing_fences`, which names it only by a hash of its Message-ID, never by recipient.
+Running the command twice inserts nothing the second time. The window's ten minutes
+before the restore point are `RESTORE_SENT_SCAN_SKEW_SECONDS`
+(`docs/decisions/g73-missing-fences-are-recovered-from-sent.md` gives the reason).
+
+The drill checks the new half on its own, because `tombstones >= 1` passes on the in-flight
+fence alone, which is how the gap stayed green. `step3-missing-fence-tombstoned` needs at
+least one tombstone. It reads each one back from the database: one `sent` fence, alone
+on its step, with the Sent-folder provenance. It also needs every folder read to the end.
+After the jobs are rematerialized, `step5-no-second-send` checks each tombstoned step
+again. The step still has exactly its one fence, its recipient has no more fences than
+step 3 left, and nothing in the drill sent mail. The runner asserts both.
 
 ## Step 4. Reprocess every mailbox inbox from the same point
 
