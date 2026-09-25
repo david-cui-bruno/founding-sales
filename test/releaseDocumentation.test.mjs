@@ -39,15 +39,15 @@ describe('release verification documentation', () => {
     const packageJson = JSON.parse(
       readFileSync(join(projectRoot, 'package.json'), 'utf8'),
     );
-    expect(packageJson.scripts['verify:release']).toBe('node scripts/verifyRelease.mjs');
-    expect(packageJson.scripts['test:helpers:node']).toBe('node --test test/appleBridgeBuild.test.mjs test/verifyAppleBridgePackage.test.mjs');
-    expect(packageJson.scripts['test:backup:electron']).toBe('CALLIE_TEST_SYNTHETIC_ELECTRON=1 vitest run test/preReleaseElectronHost.test.mjs');
+    expect(packageJson.scripts['legacy:verify:release']).toBe('node scripts/verifyRelease.mjs');
+    expect(packageJson.scripts['legacy:test:helpers:node']).toBe('node --test test/appleBridgeBuild.test.mjs test/verifyAppleBridgePackage.test.mjs');
+    expect(packageJson.scripts['legacy:test:backup:electron']).toBe('CALLIE_TEST_SYNTHETIC_ELECTRON=1 vitest run test/preReleaseElectronHost.test.mjs');
     expect(releaseManual).toContain('two independent');
     expect(releaseManual).toContain('CALLIE_RELEASE_OUT_DIR');
     expect(releaseManual).toContain('CALLIE_E2E_OUT_DIR');
     expect(releaseManual).toContain('ASAR SHA256');
     expect(releaseManual).toContain('owned encrypted migration/transition fixtures');
-    expect(releaseManual).toContain('npm run verify:release');
+    expect(releaseManual).toContain('npm run legacy:verify:release');
     expect(releaseManual).toContain('CI never');
     expect(releaseManual).toMatch(/separately\s+authorized/);
   });
@@ -114,9 +114,9 @@ describe('source-only workflow policy', () => {
     expect(ci).toContain('pull_request:'); expect(ci).not.toContain('self-hosted');
     expect(release).toContain('workflow_dispatch:'); expect(release).toContain('audited_sha:'); expect(release).toContain('tag:');
     expect(release).toContain('ARM64'); expect(release).toContain('CALLIE_APPROVED_RELEASE_SHA'); expect(release).toContain('CALLIE_RELEASE_RUNNER_APPROVED');
-    expect(release).toContain('scripts/writeReleaseMarker.mjs --verify-ref'); expect(release).toContain('npm run verify:release');
-    expect(ci).toContain('npm run test:browser:native-desk');
-    expect(ci).toContain('npm run test:helpers:node');
+    expect(release).toContain('scripts/writeReleaseMarker.mjs --verify-ref'); expect(release).toContain('npm run legacy:verify:release');
+    expect(ci).toContain('npm run legacy:test:browser:native-desk');
+    expect(ci).toContain('npm run legacy:test:helpers:node');
     expect(release).toContain('test:swift');
     expect(release).toContain('test:backup:electron');
     expect(release).toContain('sw_vers'); expect(release).toContain('xcrun');

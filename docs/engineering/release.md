@@ -1,6 +1,8 @@
 # Release, gate and backup manual
 
-This is the operating manual for `npm run verify:release` and `npm run backup:pre-release`. It was moved verbatim from the repository `README.md` on 16 September 2026 (main `abfd259`) so that the README could become a short onboarding page; no sentence was changed, and the only edit is the relative link to the Apple feasibility procedure, rewritten for this directory. The current delivery state lives in [`docs/ROADMAP.md`](../ROADMAP.md) and the system map in [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md).
+This is the operating manual for `npm run legacy:verify:release` and `npm run legacy:backup:pre-release`. It was moved verbatim from the repository `README.md` on 16 September 2026 (main `abfd259`) so that the README could become a short onboarding page; no sentence was changed, and the only edit is the relative link to the Apple feasibility procedure, rewritten for this directory. The current delivery state lives in [`docs/ROADMAP.md`](../ROADMAP.md) and the system map in [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md).
+
+**Since 25 September 2026 (lane g89)** every root `npm` script for this app carries a `legacy:` prefix, because the root defaults now mean the greenfield product: a bare script name below (`verify:release`, `test:swift`, …) means its `legacy:` form, except `verify:secrets`, which guards the whole repository and kept its name; the commands are updated. `npm ci` no longer builds the native modules; run `npm run legacy:setup` once after it. What remains of this app and how to run it: [`docs/greenfield/legacy.md`](../greenfield/legacy.md).
 
 ## Apple Silicon development and verification
 
@@ -24,7 +26,7 @@ export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; 
 while IFS= read -r -d '' lock; do
   export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm ci --prefix "${lock%/package-lock.json}"
 done < <(git ls-files -z -- 'cloud/lambdas/*/package-lock.json')
-export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm run verify:release
+export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm run legacy:verify:release
 ```
 
 Install the matching Playwright Chromium browser and the reviewed
@@ -86,7 +88,7 @@ approval. A local package is neither an installation nor backup authorization.
 After authorization only:
 
 ```bash
-export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm run backup:pre-release
+export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm run legacy:backup:pre-release
 ```
 
 The no-argument launcher uses only the exact repository-relative
@@ -126,7 +128,7 @@ so nobody has to relaunch blind:
   `prepare`, `open`, `migrate`, `domain`, `health`, `compose`, `window`),
   `errorClass` (our own error names or `SqliteError`) and `code` (a domain fatal
   code or a SQLite result code). No message, path or value is written.
-- `npm run diagnose:startup` launches the same packaged executable as
+- `npm run legacy:diagnose:startup` launches the same packaged executable as
   `backup:pre-release` in its second reserved mode, `--callie-diagnose-startup`.
   It copies the workspace database (and any write-ahead log) into a private
   temporary directory, runs open, readiness, `migrateToLatest` and the domain
@@ -181,7 +183,7 @@ local ad-hoc package skips only Team-ID equality; both code objects must still
 have valid strict signatures and the helper must retain its entitlement. Ad-hoc
 verification does not establish permission persistence across rebuilds.
 
-`npm run test:e2e` covers the packaged company workflow: foundation health and
+`npm run legacy:test:e2e` covers the packaged company workflow: foundation health and
 the diagnostics screen, the composed shell booting to Today, the meeting-first
 workspace, local company preparation (create, reopen, restart), navigation
 continuity across Today, Accounts, Campaigns and Settings, the presentation
@@ -216,7 +218,7 @@ outside this foundation scope.
 
 ## Local code signing
 
-On macOS, `npm run package` signs with a stable local identity by default so
+On macOS, `npm run legacy:package` signs with a stable local identity by default so
 the app's code identity survives rebuilds and macOS Keychain "Always Allow"
 grants for safeStorage keep working without new password prompts. Resolution
 order:
@@ -231,7 +233,7 @@ order:
 For development, run:
 
 ```bash
-export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm run start
+export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm run legacy:start
 ```
 
 ## Local data and test isolation
@@ -265,7 +267,7 @@ will show `Encrypted SQLite ready`, `FTS5 available`, `Schema 1`, and the shared
 `$CALLIE_TEST_PROFILE/callie.sqlite3` path.
 
 ```bash
-export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm run package
+export PATH="/opt/homebrew/Cellar/node@24/24.20.0/bin:/opt/homebrew/bin:$PATH"; npm run legacy:package
 export CALLIE_PACKAGED_APP="$PWD/out/Callie Founder Sales System-darwin-arm64/Callie Founder Sales System.app"
 export CALLIE_TEST_PROFILE="$(mktemp -d -t callie-isolated-profile.XXXXXX)"
 "$CALLIE_PACKAGED_APP/Contents/MacOS/Callie Founder Sales System" --user-data-dir="$CALLIE_TEST_PROFILE"

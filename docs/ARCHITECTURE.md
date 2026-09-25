@@ -2,6 +2,8 @@
 
 Written 16 September 2026 against main `abfd259`. It describes what is in the tree, not what is planned: the plan is [`docs/ROADMAP.md`](ROADMAP.md), the release manual is [`docs/engineering/release.md`](engineering/release.md), and superseded designs are under [`docs/archive/`](archive/README.md). Paths are repository-relative.
 
+**Since 25 September 2026 (lane g89)** every root `npm` script for this app carries a `legacy:` prefix, because the root defaults now mean the greenfield product: a bare script name below (`verify:release`, `test:swift`, …) means its `legacy:` form, except `verify:secrets`, which guards the whole repository and kept its name; the commands are updated. `npm ci` no longer builds the native modules; run `npm run legacy:setup` once after it. What remains of this app and how to run it: [`docs/greenfield/legacy.md`](greenfield/legacy.md).
+
 ## 1. Process model
 
 FSS is an Electron 44 application for Apple Silicon macOS with one optional cloud worker and one bundled Swift helper.
@@ -56,25 +58,25 @@ Saving or approving is never sending, calling or booking. The manual channel (ca
 
 - One encrypted SQLite file per profile, `callie.sqlite3`, with the key envelope `callie.key-envelope.json` beside it under Electron's user-data directory (`src/main/applicationPaths.ts`). Driver `better-sqlite3-multiple-ciphers` (`src/main/db/sqliteDriver.ts`) with a fixed cipher profile (`src/main/db/sqliteDriverDecision.ts`) verified on every open (`src/main/db/databaseEncryption.ts`). The 32-byte workspace key is protected by macOS Keychain through Electron `safeStorage` (`src/main/security/safeStorageKeyProtector.ts`); there is no plaintext fallback, and the app refuses to mint a replacement key when any database or interrupted-conversion artifact exists.
 - `src/main/db/plaintextDatabaseUpgrade.ts` converts a pre-encryption schema-1 file with fsynced sibling markers and never deletes the only validated copy.
-- `src/main/backup/backupService.ts` writes verified `daily`, `manual` and `pre_release` copies into the profile's `backups/` directory with receipts in `backup_receipts` (`src/main/backup/verifiedBackup.ts`; retention in `src/main/backup/backupRetention.ts`). `npm run backup:pre-release` (`scripts/createPreReleaseBackup.mjs`) launches the packaged app in a reserved mode that takes the lock, copies, verifies and exits without opening a window. Holds and prerequisites: `docs/engineering/release.md`.
+- `src/main/backup/backupService.ts` writes verified `daily`, `manual` and `pre_release` copies into the profile's `backups/` directory with receipts in `backup_receipts` (`src/main/backup/verifiedBackup.ts`; retention in `src/main/backup/backupRetention.ts`). `npm run legacy:backup:pre-release` (`scripts/createPreReleaseBackup.mjs`) launches the packaged app in a reserved mode that takes the lock, copies, verifies and exits without opening a window. Holds and prerequisites: `docs/engineering/release.md`.
 - Provider and pairing secrets live in safeStorage-protected stores (`src/main/delegation/pairingStore.ts`, `src/main/outreach/providers/credentialStore.ts`), never in the database and never in the renderer.
 
 ## 7. Tests and gates
 
 Where tests live:
 
-- Root vitest (`vitest.config.mts`, `npm test`): `tests/main/` (main-process units and repositories), `tests/integration/` (real route, real domain, disposable encrypted database, and the worker handler harness), `tests/renderer/`, `tests/shared/`, `tests/infrastructure/` (Terraform source checks, route parity) and colocated `*.test.ts(x)` under `src/`. Some files import worker source, so the Lambda lockfiles must be installed first (see `README.md`).
-- `test/*.test.mjs`: release tooling (marker, package verifier, secret scan, backup host). Two run under `node --test` as `npm run test:helpers:node`; the rest are vitest files.
-- `tests/browser/*.spec.ts`: Playwright Chromium against real renderer components (fixtures in `tests/fixtures/`), 1440 and 1050 wide, light and dark. `npm run test:browser:native-desk` is the CI group; the other specs run in the local combined gate.
-- `tests/e2e/*.spec.ts`: packaged-app end-to-end with a temporary `--user-data-dir` (`npm run test:e2e`, helpers in `tests/support/`). Production founder data is never read by tests.
-- Worker: `cloud/lambdas/delegated-worker/test/` via `npm test` in that package; `npm run verify:lambdas` runs every tracked Lambda package in name order, today only `delegated-worker`, discovered from their manifests. Swift: `npm run test:swift` (`native/apple-bridge/Tests`).
+- Root vitest (`vitest.config.mts`, `npm run legacy:test`): `tests/main/` (main-process units and repositories), `tests/integration/` (real route, real domain, disposable encrypted database, and the worker handler harness), `tests/renderer/`, `tests/shared/`, `tests/infrastructure/` (Terraform source checks, route parity) and colocated `*.test.ts(x)` under `src/`. Some files import worker source, so the Lambda lockfiles must be installed first (see `README.md`).
+- `test/*.test.mjs`: release tooling (marker, package verifier, secret scan, backup host). Two run under `node --test` as `npm run legacy:test:helpers:node`; the rest are vitest files.
+- `tests/browser/*.spec.ts`: Playwright Chromium against real renderer components (fixtures in `tests/fixtures/`), 1440 and 1050 wide, light and dark. `npm run legacy:test:browser:native-desk` is the CI group; the other specs run in the local combined gate.
+- `tests/e2e/*.spec.ts`: packaged-app end-to-end with a temporary `--user-data-dir` (`npm run legacy:test:e2e`, helpers in `tests/support/`). Production founder data is never read by tests.
+- Worker: `cloud/lambdas/delegated-worker/test/` via `npm test` in that package; `npm run legacy:verify:lambdas` runs every tracked Lambda package in name order, today only `delegated-worker`, discovered from their manifests. Swift: `npm run legacy:test:swift` (`native/apple-bridge/Tests`).
 
 Gates:
 
-- **CI** (`.github/workflows/ci.yml`, hosted macOS, every PR and push to `main`): `verify:secrets`, `typecheck`, `lint:tracked`, `test`, `test:browser:native-desk`, `test:helpers:node`, `verify:lambdas`, `build:operational-tools`, then `verify:secrets` again over generated output.
+- **CI** (`.github/workflows/ci.yml`, hosted macOS, on a PR or push to `main` that changes a path outside the greenfield tree; the secret scan runs on every one): `verify:secrets`, `typecheck`, `lint:tracked`, `test`, `test:browser:native-desk`, `test:helpers:node`, `verify:lambdas`, `build:operational-tools`, then `verify:secrets` again over generated output.
 - **`verify:release`** (`scripts/verifyRelease.mjs`): the local release gate. Typecheck, lint, root tests, the browser group, Swift, helper tests, the synthetic Electron backup-host test, all Lambda gates, one package, package verification (`scripts/verifyPackage.mjs`), history and package secret scans (`scripts/verifySecrets.mjs`), packaged E2E against that same artifact, then marker and clean-HEAD checks (`scripts/writeReleaseMarker.mjs`). David runs it himself before an install. Manual: `docs/engineering/release.md`.
 - **Release workflow** (`.github/workflows/release.yml`): exact-SHA, dispatch-only, gate not publication.
-- **Combined lane gate** (coordinator, per batch): root `npm run verify`, worker test, typecheck and build, `verify:secrets`, the browser group plus the extra browser specs, on the merged candidate.
+- **Combined lane gate** (coordinator, per batch): root `npm run legacy:verify`, worker test, typecheck and build, `verify:secrets`, the browser group plus the extra browser specs, on the merged candidate.
 
 ## 8. Legacy sourcing stack (destroyed and removed)
 

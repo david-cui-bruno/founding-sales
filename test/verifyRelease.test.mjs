@@ -9,16 +9,16 @@ import { verifyRelease } from '../scripts/verifyRelease.mjs';
 const roots = [];
 it('runs every maintained browser spec serially in the browser stage', () => {
   const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
-  expect(manifest.scripts['test:browser:native-desk'].split(/\s+/)).toEqual(['playwright', 'test', '--workers=1', 'tests/browser']);
+  expect(manifest.scripts['legacy:test:browser:native-desk'].split(/\s+/)).toEqual(['playwright', 'test', '--workers=1', 'tests/browser']);
 });
 afterEach(() => { uncacheAll(); roots.splice(0).forEach(root => rmSync(root, { recursive: true, force: true })); });
 const commands = [
-  ['npm', ['run', 'typecheck']], ['npm', ['run', 'lint:tracked']], ['npm', ['run', 'test']],
-  ['npm', ['run', 'test:browser:native-desk']], ['npm', ['run', 'test:swift']],
-  ['npm', ['run', 'test:helpers:node']], ['npm', ['run', 'test:backup:electron']],
-  ['npm', ['run', 'verify:lambdas']], ['npm', ['run', 'package']],
+  ['npm', ['run', 'legacy:typecheck']], ['npm', ['run', 'legacy:lint:tracked']], ['npm', ['run', 'legacy:test']],
+  ['npm', ['run', 'legacy:test:browser:native-desk']], ['npm', ['run', 'legacy:test:swift']],
+  ['npm', ['run', 'legacy:test:helpers:node']], ['npm', ['run', 'legacy:test:backup:electron']],
+  ['npm', ['run', 'legacy:verify:lambdas']], ['npm', ['run', 'legacy:package']],
   ['node', ['scripts/verifyPackage.mjs', 'OUT']], ['npm', ['run', 'verify:secrets']],
-  ['node', ['scripts/verifySecrets.mjs', '--package', 'OUT']], ['npm', ['run', 'test:e2e']],
+  ['node', ['scripts/verifySecrets.mjs', '--package', 'OUT']], ['npm', ['run', 'legacy:test:e2e']],
   ['node', ['scripts/verifyPackage.mjs', 'OUT']],
 ];
 async function fixture(candidate = 'candidate') {
@@ -55,7 +55,7 @@ it.each(['candidate', ''])('owns all serial lanes and the exact %s artifact with
     expect(call.options.env.CALLIE_RELEASE_OUT_DIR).toBe(f.selected.outDirectory);
     expect(call.options.env.CALLIE_E2E_OUT_DIR).toBe(f.selected.outDirectory);
     expect(call.options.env.CALLIE_TEST_SYNTHETIC_ELECTRON).toBeUndefined();
-    if (call.args.includes('test:e2e')) expect(JSON.parse(call.options.env.CALLIE_E2E_EXPECTED_ARTIFACT)).toEqual(readArtifactIdentity(f.selected.appPath));
+    if (call.args.includes('legacy:test:e2e')) expect(JSON.parse(call.options.env.CALLIE_E2E_EXPECTED_ARTIFACT)).toEqual(readArtifactIdentity(f.selected.appPath));
     else expect(call.options.env.CALLIE_E2E_EXPECTED_ARTIFACT).toBeUndefined();
   }
   expect(r.git.filter(args => args[0] === 'status')).toHaveLength(2);

@@ -30,7 +30,7 @@ The one step that opens the old database. Read-only, and it refuses to run while
 
 ```
 cd <repository>
-npm run export:cutover
+npm run legacy:export:cutover
 ```
 
 **On success** it prints a JSON report and nothing else:

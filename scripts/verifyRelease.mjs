@@ -17,7 +17,7 @@ export function verifyRelease({ root = projectRoot, env = process.env, run = spa
     if (result.error || result.signal || result.status !== 0) throw new Error(`RELEASE_STAGE_FAILED: ${command} ${args.join(' ')}`);
   };
   const npm = (name, scopedEnv) => checked('npm', ['run', name], scopedEnv);
-  for (const stage of ['typecheck', 'lint:tracked', 'test', 'test:browser:native-desk', 'test:swift', 'test:helpers:node', 'test:backup:electron', 'verify:lambdas', 'package']) npm(stage);
+  for (const stage of ['legacy:typecheck', 'legacy:lint:tracked', 'legacy:test', 'legacy:test:browser:native-desk', 'legacy:test:swift', 'legacy:test:helpers:node', 'legacy:test:backup:electron', 'legacy:verify:lambdas', 'legacy:package']) npm(stage);
   checked(process.execPath, ['scripts/verifyPackage.mjs', artifact.outDirectory]);
   const identity = readArtifactIdentity(artifact.appPath);
   const marker = readReleaseMarker({ root });
@@ -26,7 +26,7 @@ export function verifyRelease({ root = projectRoot, env = process.env, run = spa
   npm('verify:secrets');
   checked(process.execPath, ['scripts/verifySecrets.mjs', '--package', artifact.outDirectory]);
   assertArtifactIdentity(artifact.executable, identity);
-  npm('test:e2e', { ...childEnv, CALLIE_E2E_EXPECTED_ARTIFACT: JSON.stringify(identity) });
+  npm('legacy:test:e2e', { ...childEnv, CALLIE_E2E_EXPECTED_ARTIFACT: JSON.stringify(identity) });
   checked(process.execPath, ['scripts/verifyPackage.mjs', artifact.outDirectory]);
   assertArtifactIdentity(artifact.executable, identity);
   assertCleanHead({ root, expectedSha: commitSha, run });

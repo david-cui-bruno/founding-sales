@@ -71,6 +71,9 @@ jobs:
         run: |
           set -euo pipefail
           npm ci
+          # The root postinstall no longer builds the old app's native modules
+          # (lane g89); this is the step it used to run after fetching Electron.
+          npm run legacy:setup
           while IFS= read -r -d '' lock; do
             npm ci --prefix "${lock%/package-lock.json}"
           done < <(git ls-files -z -- 'cloud/lambdas/*/package-lock.json')
@@ -78,11 +81,11 @@ jobs:
       - name: Require supported macOS and SDK
         run: |
           node --input-type=module -e "import {execFileSync} from 'node:child_process'; for (const [command,args] of [['sw_vers',['-productVersion']],['xcrun',['--sdk','macosx','--show-sdk-version']]]) { const [major,minor] = execFileSync(command,args,{encoding:'utf8'}).trim().split('.').map(Number); if (!(major > 26 || (major === 26 && minor >= 4))) process.exit(1); }"
-      # verify:release owns test:swift and test:backup:electron serially on this
+      # legacy:verify:release owns legacy:test:swift and legacy:test:backup:electron serially on this
       # supported host, plus browser/Node helper lanes and one selected artifact.
       - name: Exact ref and single-artifact full release gates
         run: |
           node scripts/writeReleaseMarker.mjs --verify-ref
-          npm run verify:release
+          npm run legacy:verify:release
           node scripts/writeReleaseMarker.mjs --verify-ref
           printf 'Verified exact SHA `%s`, tag `%s`. Package, scans, E2E and final ASAR marker gates passed.\n' "$AUDITED_SHA" "$RELEASE_TAG" >> "$GITHUB_STEP_SUMMARY"

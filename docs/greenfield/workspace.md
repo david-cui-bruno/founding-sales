@@ -2,7 +2,9 @@
 
 The new tree lives beside the old one in the same repository. The root
 `package.json` is the npm workspace root; the old trees (`src/`, `client/`, `cloud/`,
-`tests/`, `native/`) are untouched and keep their own gate.
+`tests/`, `native/`) are untouched and keep their own gate, which runs as
+`npm run legacy:*` and only in CI when a change touches them
+(`docs/greenfield/legacy.md`).
 
 ```
 apps/api          the API: health, request limits, redacted errors, scope wiring,
@@ -19,15 +21,20 @@ infra/            Terraform (G1 owns it)
 
 ```
 export PATH="/opt/homebrew/opt/node@24/bin:/opt/homebrew/bin:$PATH"
-npm install --ignore-scripts --no-audit --no-fund
-npm rebuild @embedded-postgres/darwin-arm64
+npm ci --no-audit --no-fund
 ```
 
-`--ignore-scripts` skips the old tree's `postinstall`, which downloads Electron and
-builds two native modules that nothing in the greenfield tree uses. The `npm rebuild`
-line runs one install script that *is* needed locally: the PostgreSQL 16 binaries ship
-as real files but their version symlinks (`libzstd.1.dylib` and friends) are created by
-that package's `postinstall`. Without it `postgres` fails with `Library not loaded`.
+Since lane g89 the root `postinstall` only fetches the Electron binary
+(`install-electron`, from the local cache when it is there), which
+`npm run test:desktop:host` needs; it no longer builds the old app's two native
+modules. The dependencies' own install scripts still run, and one of them is needed
+locally: the PostgreSQL 16 binaries ship as real files but their version symlinks
+(`libzstd.1.dylib` and friends) are created by `@embedded-postgres/darwin-arm64`'s
+`postinstall`. Without it `postgres` fails with `Library not loaded`.
+
+`npm install --ignore-scripts` still works, and is what CI runs; after it, run
+`npm rebuild @embedded-postgres/darwin-arm64` for a local gate and
+`node node_modules/electron/install.js` for the host tests.
 
 CI does not need the rebuild: it uses a `postgres:16` service container instead.
 
@@ -42,11 +49,15 @@ npm run test:desktop:e2e    # the window, in chromium; not part of the gate
 ```
 
 `test:desktop:e2e` is separate because it needs a chromium binary that
-`npx playwright install chromium` provides and the `--ignore-scripts` install above
-deliberately does not. See `docs/decisions/g2-desktop-test-layers.md`.
+`npx playwright install chromium` provides and no `npm` install fetches. See
+`docs/decisions/g2-desktop-test-layers.md`.
 
-The old gate (`npm run typecheck`, `npm test`, `npm run lint`, `npm run lint:tracked`)
-excludes `apps/` and `packages/` and behaves exactly as it did before.
+`npm run typecheck`, `npm run lint` and `npm test` are the greenfield defaults:
+`typecheck:greenfield`; `lint:greenfield` plus `lint:root-scripts` (the greenfield
+scripts at the root, under the root ESLint config that has always linted them); and
+`test:greenfield` plus `test:release`. The old gate is `npm run legacy:typecheck`,
+`legacy:test`, `legacy:lint` and `legacy:lint:tracked`; it excludes `apps/` and
+`packages/` and behaves exactly as it did before (`docs/greenfield/legacy.md`).
 
 ## The database harness
 
