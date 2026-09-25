@@ -4,8 +4,16 @@
 
 ## Symptoms
 
-Three consecutive one-minute windows with no mailbox check. Replies, opt-outs and
+Three consecutive one-minute windows in which no mailbox had been checked within the
+last 90 seconds: the check promised every minute, plus 30 seconds of grace for the time
+between the scheduler asking for it and a runner performing it. Replies, opt-outs and
 bounces may exist in Gmail and be unknown to FSS.
+
+Every connected, `ready` mailbox is checked once a minute whether or not it has new mail
+(`docs/greenfield/mail.md`, "The mailbox check, once a minute"), so a healthy worker
+never lets the heartbeat go 90 seconds stale. Before lane g58 the check ran every five
+minutes and this alarm fired between healthy checks; if it flaps on a build older than
+that, the build is the cause.
 
 ## First checks
 
@@ -21,6 +29,12 @@ The mailbox heartbeat is the only workspace-scoped one. Its absence means the
 one-minute reconciliation is not running for that mailbox, which is one of:
 
 - the worker is down (see `worker_heartbeat_missed`);
+- the worker is up but saturated: one runner slot by default, claiming in `run_at`
+  order, so a burst of other jobs queued ahead of the `mail.sync` delays the check for as
+  long as they take. `OldestRunnableJobAgeSeconds` rises with it (see
+  `oldest_runnable_job_*`);
+- the `mail.sync` job for that mailbox is `retryable` (waiting out a backoff after Gmail
+  failed) or `dead`, which the sweep will not revive (see `dead_job_unresolved`);
 - the grant was revoked, so every call fails and the mailbox is held;
 - the history cursor expired and a bounded full synchronization is in progress and
   failing;

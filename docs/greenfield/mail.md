@@ -188,6 +188,60 @@ Each run is bounded and its continuation is the one-minute scheduler, never itse
 reasoning is in `docs/decisions/g7-sync-transaction-shape.md` and it is the single
 easiest thing in this lane to get wrong.
 
+### The mailbox check, once a minute
+
+13.3 alarms on "three missed one-minute mailbox checks", and 12.3 calls the sweep a
+one-minute reconciliation. So the scheduler's `mail-sync-reconcile` source asks for one
+`mail.sync` of **every connected, `ready` mailbox on every pass**, whether or not a push
+synced it a few seconds earlier (`apps/worker/src/scheduler/mailSources.ts`,
+`listMailboxesDueForSync`). `coalesceMailSync` makes the ask free while a sync is already
+queued or running, and leaves a `dead` sync dead. A mailbox that is `baseline_pending` or
+`recovering` is checked by its `mail.recover`, which the recovery source re-arms every
+pass and which writes the same heartbeat.
+
+Every check writes the mailbox heartbeat, whatever its outcome: `recordMailboxHeartbeat`,
+instance key the mailbox id, `expected_interval_seconds` =
+`MAILBOX_CHECK_INTERVAL_SECONDS` = 60. The worker publishes `MailboxCheckHeartbeat` once a
+minute, 1 when a mailbox heartbeat is fresh and 0 when not, and
+`fss-<prefix>-mailbox-heartbeat-missed` is Sum < 1 for three of three one-minute periods.
+So one period is one promised check, and the alarm is three of them missed.
+
+A mailbox heartbeat counts as fresh up to **30 seconds past its promise**
+(`HEARTBEAT_GRACE_SECONDS.mailbox` in `packages/domain/jobs/heartbeats.ts`). The check is
+asked for by the scheduler pass, which waits 60 s after the previous pass *finishes*, and
+performed by a runner slot after a claim, up to a second later when the slot is idle and
+longer when it is finishing another job. Two healthy checks are therefore about 61 s
+apart, and the metrics loop, a third fixed-delay loop drifting slowly against the other
+two, would otherwise sometimes sample in that extra second, several minutes running.
+The API, scheduler and worker heartbeats beat on their own loops and have no grace.
+From the last check at t0, the alarm reaches ALARM between t0 + 210 s and t0 + 270 s.
+
+What one check costs when nothing is new: one KMS `Decrypt` of the stored refresh token,
+one refresh at Google's token endpoint, and one Gmail `users.history.list` from the
+stored cursor (2 quota units). That is 1,440 of each per mailbox per day from the sweep,
+plus one per push-driven sync; the watch has no label filter, so any change in the
+mailbox pushes. Two quota units a minute is about 0.01% of Gmail's per-user limit of
+15,000 a minute, and fifty mailboxes are 100 units a minute against a per-project limit
+of 1,200,000. KMS at $0.03 per 10,000 requests is about $0.13 per mailbox per month. The
+access token is not cached between checks; caching it for its hour would take the token
+refreshes and decrypts to 24 a day per mailbox, and is a later change, not a correctness
+one.
+
+Until lane g58 the sweep asked only for a mailbox five minutes past its last sync (288
+checks a day), while the heartbeat promised sixty seconds. Production's one mailbox,
+sending off, was fresh only when a push happened to arrive, and the alarm fired in every
+quiet three minutes (24 September 2026, `docs/greenfield/release.md` 8.0z).
+`test/release/mailboxHeartbeatCadence.check.ts` now reads the interval the heartbeat is
+written with, the scheduler's pass interval, the alarm's period and datapoints and the
+grace, and fails if they disagree.
+
+**Not yet per mailbox.** `MailboxCheckHeartbeat` is one datapoint for the component: 1
+if *any* mailbox heartbeat is fresh (`collectJobMetrics`). With one mailbox that is the
+mailbox. With several, a stuck mailbox hides behind a healthy one, and 13.3 says "every
+mailbox". The lane that connects a second mailbox owes a per-mailbox reading: every
+*connected* mailbox fresh, so that a disconnected one's stale row does not alarm for
+ever.
+
 An expired cursor (Gmail answers 404) is not a failure. It bumps the mailbox
 generation, sets `recovering`, opens `coverage_incomplete` and starts a recovery from
 **watermark minus one hour**, with epoch-second `after:`/`before:` bounds and 500 ids
@@ -200,6 +254,15 @@ A Gmail watch expires after seven days and a lapsed watch is *silent*.
 and bumping it does not supersede an in-flight recovery. `GmailWatchHoursToExpiry`
 reports **zero** for a connected mailbox with no live watch, because no watch is the
 state the alarm most needs to fire on.
+
+The watch is renewed **daily**, by its age: `listWatchesDue` returns a mailbox whose live
+watch was registered 24 hours ago or more, has less than 24 hours left, or does not
+exist. `GmailWatchHoursToExpiry` is read every minute but only moves when a renewal runs,
+so a daily renewal holds it between 144 and 168 hours, and the 48-hour alarm fires only
+after four days of failed renewals. Until lane g58 the source renewed only inside a
+watch's last day, which is day six of seven, so every connected mailbox would have held
+`fss-<prefix>-gmail-watch-expiring` in ALARM for the day before each renewal. A renewal
+is one `users.watch` call (100 quota units) a day per mailbox.
 
 ## Two workspaces, one address
 

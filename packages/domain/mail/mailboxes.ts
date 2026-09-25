@@ -120,18 +120,32 @@ export async function listConnectedMailboxes(context: RepositoryContext): Promis
 }
 
 /**
- * 12.3's reconciliation sweep: how long a connected mailbox may go unsynced before
- * the scheduler coalesces a `mail.sync` for it regardless of push.
+ * 13.3's mailbox check: one per connected mailbox per minute, and the interval its
+ * heartbeat promises.
  *
- * The sweep exists because push is a hint and not a guarantee. A notification can be
- * lost in three ordinary ways — the watch lapsed, Pub/Sub exhausted its retention
- * while the API was down, the webhook refused a token during a rotation — and each
- * one is silent. Without the sweep a mailbox stops importing mail and nothing says
- * so; with it the worst case is this many minutes of latency. It is also what
- * continues a run that stopped at its page cap, since a capped `mail.sync` cannot
- * re-arm itself from inside the runner's transaction.
+ * 12.3 is "one-minute reconciliation repairs delayed or dropped notifications", and
+ * 13.3 alarms on "three missed one-minute mailbox checks". Until lane g58 the sweep
+ * only coalesced a sync for a mailbox that had gone five minutes without one, so a
+ * mailbox with no new mail was checked every five minutes while its heartbeat promised
+ * sixty seconds. On 24 September 2026, with one connected mailbox and sending off,
+ * `MailboxCheckHeartbeat` was fresh only when a push happened to arrive — every two to
+ * four minutes — and `fss-prod-mailbox-heartbeat-missed` went ALARM and OK twice in an
+ * hour on a healthy worker.
+ *
+ * So the check is the scheduler pass itself: every pass asks for one `mail.sync` of
+ * every connected, `ready` mailbox, whether or not a push synced it a moment ago, and
+ * the coalescing upsert makes the ask a no-op while a check is already queued or
+ * running. A check with nothing new is one token refresh and one `history.list` from
+ * the stored cursor (two Gmail quota units): 1,440 a day per mailbox, two units a minute
+ * against Gmail's per-user limit of 15,000 a minute. `docs/greenfield/mail.md` has the
+ * numbers.
+ *
+ * The scheduler's pass interval (`SCHEDULER_PASS_INTERVAL_MILLISECONDS`, 13.1's "once
+ * per minute") and this constant are one number, and
+ * `test/release/mailboxHeartbeatCadence.check.ts` fails if they, the heartbeat this
+ * writes and the alarm's period ever disagree.
  */
-export const MAIL_RECONCILE_INTERVAL_MINUTES = 5;
+export const MAILBOX_CHECK_INTERVAL_SECONDS = 60;
 
 export interface MailboxDueRow {
   readonly workspaceId: string;
@@ -140,31 +154,31 @@ export interface MailboxDueRow {
 }
 
 /**
- * Every connected mailbox the reconciliation sweep should coalesce a sync for, across
- * every workspace.
+ * Every connected mailbox the reconciliation sweep checks on this pass, across every
+ * workspace: all of the `ready` ones, every pass.
+ *
+ * There is deliberately no "synced recently" filter. A filter on `last_synced_at` is
+ * what made the check a five-minute one, and any threshold at all couples the check to
+ * the push traffic: a push-driven sync ten seconds before a pass would make the pass
+ * skip the mailbox and stretch the gap to seventy seconds. Coalescing already makes a
+ * second ask for a queued or running sync free.
  *
  * Unscoped, and deliberately: the scheduler pass runs once for the deployment, not
  * once per workspace, and it holds an advisory lock while it does. The workspace id
  * comes back on each row so the job it inserts is scoped correctly.
  *
  * A mailbox that is `baseline_pending` or `recovering` is skipped. Both are already
- * covered by `mail.recover` and its own re-arm source, and a `mail.sync` against a
- * mailbox with no proven baseline would only re-open the recovery it is already in.
+ * covered by `mail.recover` and its own re-arm source, which re-arms every pass and
+ * records the same heartbeat, and a `mail.sync` against a mailbox with no proven
+ * baseline would only re-open the recovery it is already in.
  */
-export async function listMailboxesDueForSync(
-  db: Queryable,
-  nowIso: string,
-  intervalMinutes: number = MAIL_RECONCILE_INTERVAL_MINUTES,
-): Promise<readonly MailboxDueRow[]> {
+export async function listMailboxesDueForSync(db: Queryable): Promise<readonly MailboxDueRow[]> {
   const { rows } = await db.query<{ workspace_id: string; id: string; history_id: string | null }>(
     `SELECT workspace_id, id, history_id
        FROM mailboxes
       WHERE status = 'connected'
         AND sync_state = 'ready'
-        AND (last_synced_at IS NULL
-             OR last_synced_at <= $1::timestamptz - make_interval(mins => $2::integer))
       ORDER BY id`,
-    [nowIso, intervalMinutes],
   );
   return rows.map(row => ({ workspaceId: row.workspace_id, mailboxId: row.id, historyId: row.history_id }));
 }
@@ -419,6 +433,9 @@ export async function mailboxAutomationBlocked(
  *
  * The instance key is the mailbox id, so the alarm's "three missed one-minute
  * mailbox checks" is per mailbox and an operator can see which one went quiet.
+ *
+ * The interval is written explicitly rather than left to the heartbeat default: it is
+ * a promise about the check cadence above, and the release check reads it from here.
  */
 export async function recordMailboxHeartbeat(
   db: Queryable,
@@ -428,6 +445,7 @@ export async function recordMailboxHeartbeat(
     component: 'mailbox',
     workspaceId: input.workspaceId,
     instanceKey: input.mailboxId,
+    expectedIntervalSeconds: MAILBOX_CHECK_INTERVAL_SECONDS,
     ...(input.detail === undefined ? {} : { detail: input.detail }),
   });
 }

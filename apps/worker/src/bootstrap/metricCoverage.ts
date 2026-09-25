@@ -48,6 +48,9 @@ export const APPLICATION_RAISED_METRICS: Readonly<Record<string, ApplicationRais
   TodaySnapshotMissing: {
     raisedBy: 'later_lane',
     detail: 'today list',
-    why: 'no today_snapshots table exists yet; 13.3 alarms at 05:10 workspace time',
+    // `today_snapshots` exists (migration 0008) but no collector reads it, so the
+    // alarm, whose missing data is ignored, is INSUFFICIENT_DATA before and after the
+    // first 05:00 snapshot alike (docs/greenfield/release.md 8.0z).
+    why: 'nothing publishes it yet; 13.3 alarms when the 05:00 snapshot is absent at 05:10 workspace time',
   },
 });

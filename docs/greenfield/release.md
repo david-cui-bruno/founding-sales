@@ -2396,6 +2396,74 @@ metrics should come back on the new task's first metrics pass. `GmailWatchHoursT
 should read just under 168 hours, because a Gmail watch lasts seven days, and
 `fss-prod-gmail-watch-expiring` should clear. The task should stop being replaced.
 
+### 8.0z What the first mailbox's heartbeat proved: a five-minute check behind a one-minute alarm (24 September, evening)
+
+**The alarm flapped on a healthy worker.** With the g51 fix deployed and one mailbox
+connected (sending off), `fss-prod-mailbox-heartbeat-missed` went ALARM and back to OK at
+22:30–22:37Z and again at 22:52–22:53Z, e-mailing the operator each time, with no warning
+or error in the worker log. `MailboxCheckHeartbeat` in `FSS/fss-prod`, one datapoint a
+minute from 22:15Z to 22:55Z, read 1 only every two to four minutes, with runs of up to
+four zeros.
+
+**Why.** Three facts, each true on its own:
+
+* The alarm is Sum < 1 for three of three one-minute periods, and the heartbeat promises
+  sixty seconds: `recordMailboxHeartbeat` wrote the default `expected_interval_seconds`
+  of 60, and a beat is fresh while its age is within that.
+* Nothing checked a quiet mailbox every minute. The only unconditional check was the
+  scheduler's `mail-sync-reconcile` source, and it asked only for a mailbox whose
+  `last_synced_at` was five minutes old (`MAIL_RECONCILE_INTERVAL_MINUTES = 5`). Every
+  other `mail.sync` came from a Gmail push, and the watch has no label filter, so a push
+  arrives when anything in the mailbox changes: a message, a read, a label.
+* Each check makes the metric 1 for exactly one sample, because the metrics loop samples
+  once a minute and the beat is fresh for sixty seconds.
+
+So the metric was 1 once per push and at least once per five minutes, the longest runs of
+zeros were the sweep's four, and the alarm fired whenever three quiet minutes passed.
+
+**The fix (lane g58).**
+
+* The sweep asks for one `mail.sync` of every connected, `ready` mailbox on **every**
+  pass, with no `last_synced_at` filter; coalescing makes the ask free while a sync is
+  queued or running. The heartbeat writes `MAILBOX_CHECK_INTERVAL_SECONDS` (60)
+  explicitly. The alarm is unchanged.
+* A mailbox heartbeat is fresh up to 30 seconds past its promise
+  (`HEARTBEAT_GRACE_SECONDS`), because the check is asked for by one fixed-delay loop and
+  performed by another a claim later, and healthy checks are about 61 seconds apart. The
+  API, scheduler and worker heartbeats keep no grace.
+* Found beside it and fixed with it: the watch renewal waited for a watch's last day
+  (day six of seven) while `gmail_watch_expiring` fires below 48 hours, so every connected
+  mailbox would have held that critical alarm for the day before each renewal, first on
+  29 September. The watch is now renewed once it is a day old.
+
+A quiet mailbox now costs 1,440 checks a day instead of 288: each is one KMS `Decrypt`,
+one token refresh and one `users.history.list` (2 Gmail quota units).
+`docs/greenfield/mail.md`, "The mailbox check, once a minute", has the numbers.
+
+**What guards it now.** `test/release/mailboxHeartbeatCadence.check.ts` reads the
+interval `recordMailboxHeartbeat` writes, the scheduler's pass interval, the alarm's
+period and datapoints and the grace, and fails if they disagree.
+`apps/worker/test/mailHandlers.test.ts` syncs a mailbox with nothing new before each of
+three passes and requires every pass to check it again and leave a fresh sixty-second
+heartbeat, and requires a day-old watch with six days left to be renewed.
+`packages/domain/test/jobs/heartbeatFreshness.test.ts` holds the grace at 30 seconds for
+the mailbox and zero for the rest. Two mutations appended to
+`scripts/releaseMutationCheck.mjs` must be killed: the five-minute filter put back, and
+the mailbox alarm's period raised to 300.
+
+**Still open.** `MailboxCheckHeartbeat` is 1 when *any* mailbox is fresh, which is right
+for one mailbox and hides a stuck one among several. `TodaySnapshotMissing` is published
+by nothing at all (its owner is still `later_lane`), so `fss-prod-today-snapshot-absent`,
+with missing data ignored, stays INSUFFICIENT_DATA after the first 05:00 snapshot as well
+as before it. Both are written down in `docs/greenfield/mail.md` and here, not fixed.
+
+**To close it.** Build the worker image from the merge commit and redeploy the worker.
+No Terraform apply is needed: no alarm changed. On the new task, `MailboxCheckHeartbeat`
+should read 1 every minute, `fss-prod-mailbox-heartbeat-missed` should stay OK, and the
+`mail.sync` job for the mailbox should complete about once a minute. The first pass after
+the watch registered on 24 September turns a day old (on the new build) should renew it,
+and `GmailWatchHoursToExpiry` should read just under 168 again, and stay above 144.
+
 ### 8.1 Still unverified
 
 Production was applied, deployed, bootstrapped and smoked at `66203322`, and redeployed at `02da3dd5` between 05:50Z and 05:57Z on 24 September, which carries the sign-in fix (8.0v). The signed desktop build is published at `66203322` (8.0t), and thirteen rehearsal runs have existed (8.0s, 8.0t, 8.0v, 8.0w). The first real sign-in was attempted against the `66203322` deployment and refused by the API's own discovery rule (8.0u); the retry against the g45 fix succeeded at 15:08Z, and showed that desktop 1.0.0 has no way to connect the mailbox (8.0x). Desktop 1.0.1 connected the first mailbox at about 18:10Z on 24 September. From 18:11Z CloudWatch refused every worker metric publication over one unit, and ECS replaced the worker every few minutes for failed health checks. That blackout lasts until the g51 fix is deployed (8.0y). What follows is what that still does not settle. Items 1 to 10 were written before any of it ran, and each carries whatever a later run answered; items 11 to 18 are what is open on 24 September, and the first of them is the release record this release does not have.
