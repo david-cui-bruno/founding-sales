@@ -1,0 +1,210 @@
+name: Greenfield weekly full rehearsal
+
+# The accepted weekly full rehearsal, on a schedule (lane g74, audit O10).
+#
+# David's release cadence of 25 September keeps a full rehearsal for schema,
+# infrastructure and release-script changes, and a weekly one regardless, so the
+# drill, the teardown and the production-untouched guard are exercised even in a week
+# with no such change. Until g74 "weekly" was a person remembering to dispatch it.
+#
+# ## Three jobs
+#
+#   * `slot` — is this hour the slot? GitHub's `schedule` cannot read a variable and
+#     drops events when busy, so this workflow wakes every hour on Sunday (UTC) and
+#     `infra/scripts/ci-schedule.sh slot` decides: Sunday at the repository variable
+#     `FSS_WEEKLY_REHEARSAL_HOUR_UTC` (default 9; `off` pauses it), caught up by a later
+#     hour when GitHub dropped the slot's own event, and never twice for one Sunday.
+#   * `pin` — the three artifacts, pinned to the commit this run is at, or nothing runs:
+#       - the API and worker digests CI published for this commit's image inputs
+#         (`infra/scripts/release-images.sh pin`: the newest green `publish` run of
+#         `greenfield-images.yml` on main whose commit is an ancestor of this one and
+#         whose image inputs are byte-identical to this one's);
+#       - the desktop commit stamp, which is this commit, because the stamp is a fact
+#         about the commit rather than an output of a build
+#         (`docs/decisions/g13b-the-stamp-is-known-before-the-build.md`).
+#     A commit whose images CI has not published — a failed publish, or one older than
+#     the rehearsal repositories keep — is a refusal and a red run.
+#   * `rehearsal` — `greenfield-release.yml` itself, called at this same commit (a
+#     workflow called as `./.github/...` runs from the caller's commit, so the pin and
+#     the checkout cannot drift apart), with `stage: full`, the pinned digests, the
+#     stamp, and `pinned_commit`, which makes the called run refuse unless it checked
+#     out exactly that commit. Everything the release workflow guards it still guards:
+#     the `rehearsal` environment and `fss-rh-deploy`, the three session renewals, the
+#     teardown and the production-untouched guard on `always()`, the one-at-a-time
+#     concurrency group, and the release record and manifest written only when all of
+#     it passed.
+#
+# Production is never touched by this run. The only credential in it is the one the
+# called rehearsal job assumes, `fss-rh-deploy`, which cannot address `fss-prod*`; the
+# production-prefix guard measures that after every run.
+#
+# A manual dispatch defaults to `dry_run`: it runs `slot` and `pin` and prints what it
+# would rehearse, which is how a change to this file is tried before a Sunday.
+
+on:
+  schedule:
+    # Minute 23 of every hour on Sunday, UTC. Not minute 0: GitHub's queue is busiest at
+    # the top of the hour, and the nightly's 09:00 event of 25 September never fired.
+    - cron: '23 * * * 0'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Pin the artifacts and print them, but do not run the rehearsal'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+# One weekly run at a time. A different group from the release workflow's own
+# `greenfield-rehearsal`, which the called run still takes — a caller and a callee in
+# one group would wait for each other forever.
+concurrency:
+  group: greenfield-weekly-rehearsal
+  cancel-in-progress: false
+
+jobs:
+  slot:
+    name: Decide whether this hour is the weekly slot
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      due: ${{ steps.slot.outputs.due }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Is this the slot?
+        id: slot
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FSS_WEEKLY_REHEARSAL_HOUR_UTC: ${{ vars.FSS_WEEKLY_REHEARSAL_HOUR_UTC }}
+        run: |
+          set -euo pipefail
+          infra/scripts/ci-schedule.sh slot | tee -a "$GITHUB_OUTPUT"
+
+  pin:
+    name: Pin the three artifacts to this commit
+    needs: slot
+    if: needs.slot.outputs.due == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      api_digest: ${{ steps.images.outputs.api_digest }}
+      worker_digest: ${{ steps.images.outputs.worker_digest }}
+      images_run_id: ${{ steps.images.outputs.images_run_id }}
+      images_commit: ${{ steps.images.outputs.images_commit }}
+      desktop_commit_stamp: ${{ steps.stamp.outputs.desktop_commit_stamp }}
+      run_suffix: ${{ steps.stamp.outputs.run_suffix }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          # The pin compares this commit's history with the images run's commit.
+          fetch-depth: 0
+
+      - name: Refuse any ambient cloud credential
+        run: |
+          set -euo pipefail
+          # Pinning reads GitHub and nothing else.
+          for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN \
+                      AWS_PROFILE AWS_ROLE_ARN AWS_WEB_IDENTITY_TOKEN_FILE; do
+            if [ -n "${!name:-}" ]; then
+              echo "::error::$name is set. Pinning the weekly rehearsal's artifacts needs no cloud credential."
+              exit 1
+            fi
+          done
+
+      - name: Only main is rehearsed on a schedule
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF" != refs/heads/main ]; then
+            echo "::error::a weekly rehearsal runs at main, not $GITHUB_REF. Dispatch with dry_run to try another branch's pin."
+            exit 1
+          fi
+
+      - name: Pin the images CI published for this commit's image inputs
+        id: images
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          infra/scripts/release-images.sh pin "$GITHUB_SHA" "$RUNNER_TEMP/image-pin.json" | tee -a "$GITHUB_OUTPUT"
+          cat "$RUNNER_TEMP/image-pin.json"
+
+      - name: The desktop commit stamp is this commit
+        id: stamp
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::'$GITHUB_SHA' is not a commit"; exit 1; }
+          suffix="wk$(date -u +%Y%m%d%H%M)"
+          # The same guard every rehearsal prefix passes, before anything is called.
+          FSS_REHEARSAL_DRY_RUN=1 infra/scripts/rehearsal-prefix-guard.sh "fss-rh-${suffix}" before > /dev/null
+          {
+            echo "desktop_commit_stamp=${GITHUB_SHA}"
+            echo "run_suffix=${suffix}"
+          } | tee -a "$GITHUB_OUTPUT"
+
+      - name: Say what will be rehearsed
+        env:
+          API_DIGEST: ${{ steps.images.outputs.api_digest }}
+          WORKER_DIGEST: ${{ steps.images.outputs.worker_digest }}
+          IMAGES_RUN: ${{ steps.images.outputs.images_run_id }}
+          IMAGES_COMMIT: ${{ steps.images.outputs.images_commit }}
+          SUFFIX: ${{ steps.stamp.outputs.run_suffix }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          for value in "$API_DIGEST" "$WORKER_DIGEST"; do
+            [[ "$value" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::the pin produced '$value', not a digest"; exit 1; }
+          done
+          [ "$API_DIGEST" != "$WORKER_DIGEST" ] || { echo "::error::one image under both names"; exit 1; }
+          {
+            echo "### Weekly full rehearsal at \`${GITHUB_SHA}\`"
+            echo ''
+            echo "- api: \`${API_DIGEST}\`"
+            echo "- worker: \`${WORKER_DIGEST}\`"
+            echo "- images built by run ${IMAGES_RUN} at \`${IMAGES_COMMIT}\`, image inputs identical to this commit"
+            echo "- desktop commit stamp: \`${GITHUB_SHA}\`"
+            echo "- prefix: \`fss-rh-${SUFFIX}\`"
+            if [ "$DRY_RUN" = true ]; then
+              echo ''
+              echo '**Dry run:** nothing is rehearsed.'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  rehearsal:
+    name: Full rehearsal at the pinned commit
+    needs: pin
+    if: ${{ needs.pin.result == 'success' && !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
+    # The called rehearsal job asks for `id-token: write` to assume `fss-rh-deploy`;
+    # a called workflow can hold no more than its caller grants.
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/greenfield-release.yml
+    secrets: inherit
+    with:
+      stage: full
+      api_image_digest: ${{ needs.pin.outputs.api_digest }}
+      worker_image_digest: ${{ needs.pin.outputs.worker_digest }}
+      desktop_commit_stamp: ${{ github.sha }}
+      run_suffix: ${{ needs.pin.outputs.run_suffix }}
+      pinned_commit: ${{ github.sha }}
+      images_ci_run_id: ${{ needs.pin.outputs.images_run_id }}
+      images_ci_commit: ${{ needs.pin.outputs.images_commit }}

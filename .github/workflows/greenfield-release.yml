@@ -16,10 +16,12 @@ name: Greenfield release rehearsal
 #
 # ## Five rules this file keeps
 #
-# **CI never pushes an image.** `.github/workflows/greenfield-images.yml` builds and
-# prints digests; David pushes from his Mac against a directive. The digests are inputs
-# here, and the workflow refuses anything that is not `sha256:` plus 64 hex characters —
-# a mutable tag cannot carry the comparison the release gate exists to make.
+# **This workflow never pushes an image.** Since lane g74 the `publish` job of
+# `.github/workflows/greenfield-images.yml` pushes each main commit's images to the two
+# rehearsal repositories, by digest, and publishes the digests as the artifact
+# `fss-image-digests`; before it, David pushed from his Mac. Either way the digests are
+# inputs here, and the workflow refuses anything that is not `sha256:` plus 64 hex
+# characters — a mutable tag cannot carry the comparison the release gate exists to make.
 #
 # **Every AWS step is behind the `rehearsal` environment.** The job that touches the
 # cloud declares `environment: rehearsal`, which David enables and which carries the
@@ -78,6 +80,22 @@ name: Greenfield release rehearsal
 #                `run_suffix` is **required** for it, because an empty suffix becomes the
 #                current UTC timestamp and a teardown of a prefix that names nothing is
 #                a run that reports success for doing nothing.
+#
+# ## The weekly run, and the manifest (lane g74)
+#
+# `.github/workflows/greenfield-weekly-rehearsal.yml` calls this workflow
+# (`workflow_call`) every Sunday with `stage: full`, the digests CI published for the
+# commit it runs at, that commit as the desktop stamp, and `pinned_commit`, which makes
+# the run refuse unless it checked out exactly that commit. A called workflow runs from
+# its caller's commit, so the pin cannot drift from the checkout. Nothing else differs:
+# the same jobs, the same environment and role, the same guards.
+#
+# A green `full` run writes, after the release record, the **release manifest**
+# (`infra/scripts/release-manifest.sh`): the checkout, the run, both digests and where
+# they came from, the desktop stamp and app version, and the record's reference and
+# SHA-256. The record's own shape is unchanged, because production stores it. The
+# manifest is kept as the artifact `fss-release-manifest`, which is also how the
+# freshness check (`greenfield-freshness.yml`) knows when a full rehearsal last passed.
 
 on:
   workflow_dispatch:
@@ -114,7 +132,9 @@ on:
     paths:
       - '.github/workflows/greenfield-release.yml'
       - '.github/workflows/greenfield-rehearsal-registry.yml'
+      - '.github/workflows/greenfield-weekly-rehearsal.yml'
       - 'infra/scripts/rehearsal-*.sh'
+      - 'infra/scripts/release-*.sh'
       - 'infra/scripts/render-deployment-role-policy.sh'
       - 'infra/scripts/check-deployment-role.sh'
       - 'infra/policies/**'
@@ -125,10 +145,49 @@ on:
     paths:
       - '.github/workflows/greenfield-release.yml'
       - '.github/workflows/greenfield-rehearsal-registry.yml'
+      - '.github/workflows/greenfield-weekly-rehearsal.yml'
       - 'infra/scripts/rehearsal-*.sh'
+      - 'infra/scripts/release-*.sh'
       - 'infra/scripts/render-deployment-role-policy.sh'
       - 'infra/scripts/check-deployment-role.sh'
       - 'infra/policies/**'
+  # The weekly full rehearsal (lane g74). The same five inputs as a dispatch, and three
+  # only the weekly caller sets: the commit it pinned, and the CI run and commit that
+  # built its images. `stage` is a string here because `workflow_call` has no choice
+  # type; the caller passes `full`.
+  workflow_call:
+    inputs:
+      stage:
+        type: string
+        required: true
+      api_image_digest:
+        type: string
+        required: true
+      worker_image_digest:
+        type: string
+        required: true
+      desktop_commit_stamp:
+        type: string
+        required: true
+      run_suffix:
+        type: string
+        required: false
+        default: ''
+      pinned_commit:
+        description: 'The commit the caller pinned; the run refuses unless it checked out exactly this one'
+        type: string
+        required: false
+        default: ''
+      images_ci_run_id:
+        description: 'The greenfield-images.yml run that published the two digests'
+        type: string
+        required: false
+        default: ''
+      images_ci_commit:
+        description: 'The commit that run built'
+        type: string
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -459,6 +518,76 @@ jobs:
           refuse fss-rh-dryrun "$good_api" "$good_api" "$GITHUB_SHA" pass "$out"
           refuse fss-prod "$good_api" "$good_worker" "$GITHUB_SHA" pass "$out"
 
+      - name: The release manifest binds its record, and refuses what it must refuse
+        env:
+          FSS_REHEARSAL_DRY_RUN: '1'
+        run: |
+          set -euo pipefail
+          # Lane g74, audit O09. The manifest is written after the record on a green
+          # `full` run, which no pull request can reach, so it is exercised here from
+          # the dry run's own record: one it must write and verify, and the refusals.
+          reports="$RUNNER_TEMP/fss-manifest"
+          rm -rf "$reports"; mkdir -p "$reports"
+          for report in restore-drill.txt schema-ranges.txt prefix-guard.txt; do
+            echo "prefix=fss-rh-dryrun" > "$reports/$report"
+          done
+          echo 'carry_drill=skipped_no_watermark' > "$reports/carry-watermark.txt"
+          good_api="sha256:$(printf 'a%.0s' {1..64})"
+          good_worker="sha256:$(printf 'b%.0s' {1..64})"
+          FSS_REHEARSAL_REPORTS="$reports" infra/scripts/rehearsal-release-record.sh fss-rh-dryrun \
+            "$good_api" "$good_worker" "$GITHUB_SHA" pass "$reports/release-record.json" > /dev/null
+          write() {
+            infra/scripts/release-manifest.sh write "$reports/release-record.json" "$1" \
+              --checkout "$GITHUB_SHA" --run "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
+              --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+              --event workflow_dispatch "${@:2}"
+          }
+          write "$reports/release-manifest.json" --desktop-app-version 1.0.4 > /dev/null
+          infra/scripts/release-manifest.sh verify "$reports/release-manifest.json" "$reports/release-record.json"
+          cat "$reports/release-manifest.json"
+
+          # A record changed after the manifest was written, a pinned run that checked
+          # out another commit, and a pinned run that cannot say where its images came
+          # from: each is refused.
+          cp "$reports/release-record.json" "$reports/other-record.json"
+          sed -i 's/"enablesSending": false/"enablesSending": true/' "$reports/other-record.json"
+          if infra/scripts/release-manifest.sh verify "$reports/release-manifest.json" "$reports/other-record.json" 2>/dev/null; then
+            echo "::error::the manifest verified against a record it was not written for"
+            exit 1
+          fi
+          if write "$reports/pinned.json" --pinned-commit "$(printf '0%.0s' {1..40})" --images-run 1 --images-commit "$GITHUB_SHA" 2>/dev/null; then
+            echo "::error::the manifest accepted a pinned run that checked out another commit"
+            exit 1
+          fi
+          if write "$reports/pinned.json" --pinned-commit "$GITHUB_SHA" 2>/dev/null; then
+            echo "::error::the manifest accepted a pinned run that names no images run"
+            exit 1
+          fi
+
+      - name: The promotion to production prints its plan, and reads the rehearsal repositories only
+        env:
+          FSS_REHEARSAL_DRY_RUN: '1'
+        run: |
+          set -euo pipefail
+          # `release-promote.sh` is the operator's, never CI's; this prints what it would
+          # run with no credential. Every write it plans names a production repository
+          # as the destination and a rehearsal repository only as a digest source.
+          digests="$RUNNER_TEMP/fss-promote/image-digests.json"
+          infra/scripts/release-images.sh record "$GITHUB_SHA" "$GITHUB_RUN_ID" 1 \
+            "sha256:$(printf 'a%.0s' {1..64})" "sha256:$(printf 'b%.0s' {1..64})" "$digests" > /dev/null
+          plan="$(infra/scripts/release-promote.sh "$digests" --app-only)"
+          echo "$plan"
+          test "$(grep -c '^PLAN docker buildx imagetools create --tag <registry>/fss-prod-' <<<"$plan")" -eq 2
+          if grep '^PLAN docker' <<<"$plan" | grep -v 'imagetools create' | grep -v 'docker login'; then
+            echo "::error::the promotion plans a docker command other than the copy and the login"
+            exit 1
+          fi
+          # CI's digests without --app-only are a refusal: no rehearsal passed with them.
+          if infra/scripts/release-promote.sh "$digests" 2>/dev/null; then
+            echo "::error::the promotion accepted unrehearsed digests without --app-only"
+            exit 1
+          fi
+
       - name: Print the plan the rehearsal registry apply would run
         env:
           FSS_REHEARSAL_DRY_RUN: '1'
@@ -529,7 +658,9 @@ jobs:
   # ---------------------------------------------------------------------------
   rehearsal:
     name: Create, deploy, drill and destroy a rehearsal environment
-    if: github.event_name == 'workflow_dispatch'
+    # A dispatch, or the weekly caller (whose event this is when it is called: `schedule`,
+    # or `workflow_dispatch` when it was dispatched). Never a push or a pull request.
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     needs: dry-run
     runs-on: ubuntu-24.04
     timeout-minutes: 180
@@ -563,6 +694,8 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
+          # The manifest compares this commit with the commit CI built the images at.
+          fetch-depth: 0
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
@@ -587,6 +720,25 @@ jobs:
           if [ "${{ inputs.api_image_digest }}" = "${{ inputs.worker_image_digest }}" ]; then
             echo "::error::the two digests are identical; one image was pushed under both names"
             exit 1
+          fi
+          # The weekly caller pins all three artifacts to one commit (lane g74). A pinned
+          # run that checked out anything else, or whose desktop stamp is anything else,
+          # would rehearse code the pin never looked at, so it stops here.
+          pinned='${{ inputs.pinned_commit }}'
+          if [ -n "$pinned" ]; then
+            if [ "$GITHUB_SHA" != "$pinned" ]; then
+              echo "::error::this run was pinned to $pinned and checked out $GITHUB_SHA"
+              exit 1
+            fi
+            if [ '${{ inputs.desktop_commit_stamp }}' != "$pinned" ]; then
+              echo "::error::a pinned run's desktop commit stamp must be the pinned commit $pinned"
+              exit 1
+            fi
+            if [ '${{ inputs.stage }}' != full ]; then
+              echo "::error::a pinned run is the weekly full rehearsal; stage '${{ inputs.stage }}' is not full"
+              exit 1
+            fi
+            echo "pinned to $pinned: checkout, desktop stamp and the images' inputs are this commit's"
           fi
 
       - name: Decide the run prefix
@@ -1346,6 +1498,57 @@ jobs:
             pass \
             "$FSS_REHEARSAL_REPORTS/release-record.json"
           cat "$FSS_REHEARSAL_REPORTS/release-record.json" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Write the release manifest beside the record
+        if: inputs.stage == 'full'
+        env:
+          # Public: the version the desktop build from this commit carries.
+          DESKTOP_APP_VERSION: ${{ vars.FSS_DESKTOP_APP_VERSION }}
+        run: |
+          set -euo pipefail
+          # Audit O09: one file that binds the checkout, the run, both digests and where
+          # they came from, the desktop stamp and version, and the record — by its
+          # SHA-256, so neither can be replaced under the other. Written only after the
+          # record, so only for a run that passed everything; checked at once by the
+          # same script, so a manifest that disagrees with its record never leaves the run.
+          infra/scripts/release-manifest.sh write \
+            "$FSS_REHEARSAL_REPORTS/release-record.json" \
+            "$FSS_REHEARSAL_REPORTS/release-manifest.json" \
+            --checkout "$GITHUB_SHA" \
+            --run "$GITHUB_RUN_ID" \
+            --attempt "$GITHUB_RUN_ATTEMPT" \
+            --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            --event "$GITHUB_EVENT_NAME" \
+            --desktop-app-version "${DESKTOP_APP_VERSION:-}" \
+            --pinned-commit '${{ inputs.pinned_commit }}' \
+            --images-run '${{ inputs.images_ci_run_id }}' \
+            --images-commit '${{ inputs.images_ci_commit }}'
+          infra/scripts/release-manifest.sh verify \
+            "$FSS_REHEARSAL_REPORTS/release-manifest.json" \
+            "$FSS_REHEARSAL_REPORTS/release-record.json"
+          {
+            echo ''
+            echo '### Release manifest'
+            echo ''
+            echo '```json'
+            cat "$FSS_REHEARSAL_REPORTS/release-manifest.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # actions/upload-artifact v4. Its own artifact, with a fixed name, so the operator
+      # downloads one small thing to promote and deploy, and the freshness check can
+      # find the newest green full rehearsal by name.
+      - name: Keep the release manifest
+        if: inputs.stage == 'full'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: fss-release-manifest
+          path: |
+            ${{ env.FSS_REHEARSAL_REPORTS }}/release-manifest.json
+            ${{ env.FSS_REHEARSAL_REPORTS }}/release-record.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90
 
       # actions/upload-artifact v4
       - name: Keep the reports

@@ -2940,6 +2940,49 @@ Installed 1.0.0 to 1.0.4 keep working throughout. From then on a 1.x desktop pub
 
 **Unverified.** Nothing here has run against the deployed stack or a real Phone.app handoff: the evidence is the domain suite on embedded PostgreSQL (`test/policy/callsAndCallbacks.test.ts`), the API route tests, the desktop unit tests and the Home Playwright spec. Production has no firms or sequences yet, so no production call has exercised any of it. Whether a released pause or a retried call step is picked up again by the worker depends on audit item C02 (lane L-D): the execution is re-pended and re-timed here, and a call task is worked from Today, which reads the executions directly.
 
+### 8.0al What lane g74 changed: CI publishes the images, a weekly full rehearsal pins them, and a manifest binds the release (25 September)
+
+**The gaps.** Four items of the audit of 25 September (`GPT6-ASTRA-EXHAUSTIVE-20260925.md`):
+
+- O17: CI verified one build, and the operator pushed a second build of the same commit from a Mac.
+- O10: the accepted weekly full rehearsal had no schedule.
+- O09: the release record names what the dispatch said, and nothing bound it to the checkout, the run, the images' source or the deployment.
+- O11: on 25 September the nightly's first scheduled run never started, and nothing noticed.
+
+`docs/decisions/g74-ci-publishes-and-the-weekly-rehearsal-pins.md` has the reasoning.
+
+**What changed.**
+
+- **CI publishes the images.** `greenfield-images.yml` gains a `publish` job for pushes to main that change an image input. It uses the `rehearsal` environment and `fss-rh-deploy`, whose policy already holds `ecr:*` on `fss-rh*`, so IAM is unchanged. It pushes `fss-rh-api:ci-<commit>` and `fss-rh-worker:ci-<commit>` once each, pulls both back by digest, and verifies them (`infra/scripts/release-images.sh verify`). It publishes the digests as the artifact `fss-image-digests` (`fss.image-digests.v1`) and in the step summary. The pull-request job builds and verifies as before and holds no credential. `push.paths` now includes `certs/**`, which both images copy.
+- **Promotion to production is a copy, not a rebuild.** `infra/scripts/release-promote.sh <release-manifest.json>` copies both digests from `fss-rh-*` to `fss-prod-*` with `docker buildx imagetools create`, reads production back, and refuses a different digest. An existing tag naming another image, or a digest the rehearsal repository lacks, is also refused. CI's `image-digests.json` is accepted only with `--app-only`, the one release class the cadence lets reach production without a rehearsal. It is the operator's, with the admin profile, and it replaces `fss-prod-images.sh`.
+- **The weekly full rehearsal is scheduled.** `greenfield-weekly-rehearsal.yml` wakes at minute 23 of every Sunday hour. It rehearses at `FSS_WEEKLY_REHEARSAL_HOUR_UTC` (repository variable, default 9, `off` pauses). A later Sunday hour catches up only if no run since the slot pinned. It pins the digests CI published for the commit it runs at (`release-images.sh pin`), using the newest green publish run whose image inputs are byte-identical to that commit's. The desktop stamp is the commit itself. Then it calls `greenfield-release.yml` (`workflow_call`) with `stage: full` and `pinned_commit`, and the called run refuses unless it checked out exactly that commit. A commit whose images CI has not published is refused, and nothing runs. It holds no credential beyond the called rehearsal's `fss-rh-deploy`, so production is never touched.
+- **One manifest per green full run.** After the record, `infra/scripts/release-manifest.sh write` produces `release-manifest.json` (`fss.release-manifest.v1`), and `verify` checks it at once. It binds:
+  - the record's reference and SHA-256;
+  - the checkout, the run id, attempt and URL;
+  - both digests and whether CI built them from this code;
+  - the desktop stamp and `FSS_DESKTOP_APP_VERSION`.
+
+  The manifest and record are kept together as the artifact `fss-release-manifest`. The record's shape is unchanged.
+- **Nightly and weekly freshness.** `greenfield-freshness.yml` runs at 13:41Z and 21:41Z with `actions: read` and `issues: write` only. It fails when the newest successful nightly on main is over 30 hours old, or the newest `fss-release-manifest` from main is over eight days old. On failure it opens or updates one issue, mentions the owner, and asks GitHub to pin it. It closes the issue when both are fresh.
+- Eleven mutations appended to `scripts/releaseMutationCheck.mjs`, 136 → 147 on this branch, rebased on main `2d262695` (other lanes append concurrently). Each was applied by hand and turned its own check red.
+
+**What the operator does differently at the next release.**
+
+1. The digests come from the images run's `fss-image-digests` artifact, or from the rehearsal's `fss-release-manifest`. There is no local build.
+2. After a green `full` run, download `fss-release-manifest`. Run `infra/scripts/release-promote.sh release-manifest.json`, then deploy with the same two digests and `--release-record release-record.json`.
+3. After the deploy, run `infra/scripts/release-manifest.sh deployed release-manifest.json release-manifest.deployed.json`. It reads both production services and their task definitions, and records them only if they run the manifest's digests.
+
+**Release class.** Workflows and scripts only: no schema, no image change, no infrastructure. The first push to main after merge that touches an image input is the first `publish`. The first Sunday after merge is the first weekly run.
+
+**Still unverified.** Nothing here has run in GitHub or AWS. The first real runs will show:
+
+- whether `publish` pushes and reads back as written;
+- whether the called rehearsal behaves exactly as a dispatched one, including its concurrency group;
+- whether `GITHUB_TOKEN` may pin an issue (a warning if not);
+- whether the `rehearsal` environment makes either run wait for an approval.
+
+`release-promote.sh` and `release-manifest.sh deployed` have run only against stubs.
+
 ### 8.1 Still unverified
 
 Production was applied, deployed, bootstrapped and smoked at `66203322`, and redeployed at `02da3dd5` between 05:50Z and 05:57Z on 24 September, which carries the sign-in fix (8.0v). The signed desktop build is published at `66203322` (8.0t), and thirteen rehearsal runs have existed (8.0s, 8.0t, 8.0v, 8.0w). The first real sign-in was attempted against the `66203322` deployment and refused by the API's own discovery rule (8.0u); the retry against the g45 fix succeeded at 15:08Z, and showed that desktop 1.0.0 has no way to connect the mailbox (8.0x). Desktop 1.0.1 connected the first mailbox at about 18:10Z on 24 September. From 18:11Z CloudWatch refused every worker metric publication over one unit, and ECS replaced the worker every few minutes for failed health checks. That blackout lasts until the g51 fix is deployed (8.0y). What follows is what that still does not settle. Items 1 to 10 were written before any of it ran, and each carries whatever a later run answered; items 11 to 18 are what is open on 24 September, and the first of them is the release record this release does not have.
