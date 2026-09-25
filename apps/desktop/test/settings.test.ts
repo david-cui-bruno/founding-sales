@@ -33,6 +33,12 @@ function scriptedApi(answers: Readonly<Record<string, HttpAnswer>>): {
     send: async (url, init) => {
       const path = new URL(url).pathname;
       calls.push({ path, body: init.body === undefined ? null : JSON.parse(init.body) });
+      // The API's `/outbound/*` routes are POST-only, the read included; a GET is refused 405
+      // (`apps/api/src/routes/outbound.ts`). The fake refuses it the same way so a read sent
+      // without a body cannot pass here and fail in production.
+      if (path.startsWith('/outbound/') && init.method !== 'POST') {
+        return await Promise.resolve({ status: 405, body: { error: 'method_not_allowed' } });
+      }
       return await Promise.resolve(answers[path] ?? { status: 404, body: { error: 'not_found' } });
     },
   });

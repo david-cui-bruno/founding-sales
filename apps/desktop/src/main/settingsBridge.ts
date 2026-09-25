@@ -214,7 +214,11 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
       sendingAdmin = null;
       return;
     }
-    const status = await deps.api.read('/outbound/status', value => outboundStatusSchema.parse(value));
+    // Every `/outbound/*` path is a POST, the read included (`apps/api/src/routes/outbound.ts`):
+    // `read` sends GET when it is given no body, and the API answered that with 405 on every
+    // Administration open in production (25 September 2026), so this section never rendered.
+    // The empty body is what makes it the POST the route expects.
+    const status = await deps.api.read('/outbound/status', value => outboundStatusSchema.parse(value), {});
     if (!status.ok) {
       sendingAdmin = null;
       return;
