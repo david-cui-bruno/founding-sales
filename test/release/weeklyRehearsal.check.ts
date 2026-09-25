@@ -703,12 +703,27 @@ describe('the freshness workflow reads GitHub and nothing else', () => {
   });
 });
 
-describe('no workflow promotes to production', () => {
-  it('names release-promote.sh only in the release workflow’s credential-free dry run, in dry-run mode', () => {
+describe('one workflow promotes to production, and only an app-only change', () => {
+  it('names release-promote.sh in the release workflow’s credential-free dry run, and with a credential only in the deploy workflow', () => {
     const workflows = readdirSync(repositoryPath('.github/workflows')).filter(name => name.endsWith('.yml'));
     expect(workflows.length).toBeGreaterThanOrEqual(10);
+    expect(workflows).toContain('greenfield-deploy.yml');
     for (const name of workflows) {
       const text = uncommented(readRepositoryFile(`.github/workflows/${name}`));
+      // Lane g91: David's decision of 25 September 2026 that app-only changes deploy
+      // themselves. The one credentialed promotion is that workflow's, as
+      // fss-prod-ci-deploy through the production-deploy environment, with --app-only,
+      // and only after `ci-deploy-app.sh check` has decided the change is app-only
+      // (`test/release/ciDeploy.check.ts` holds the rest of its shape).
+      if (name === 'greenfield-deploy.yml') {
+        expect(text.match(/release-promote\.sh/gu), name).toHaveLength(1);
+        const step = text.slice(text.lastIndexOf('- name:', text.indexOf('release-promote.sh')));
+        expect(step.slice(0, step.indexOf('\n      - '))).toContain("if: steps.check.outputs.decision == 'deploy'");
+        expect(step).toMatch(/release-promote\.sh "[^"]+" --app-only\n/u);
+        expect(text).toContain('    environment: production-deploy');
+        expect(text).toContain('role-to-assume: ${{ secrets.FSS_PRODUCTION_CI_ROLE_ARN }}');
+        continue;
+      }
       if (name !== 'greenfield-release.yml') {
         expect(text, name).not.toContain('release-promote.sh');
         continue;

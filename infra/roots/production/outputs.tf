@@ -24,8 +24,18 @@ output "deployment_role_name" {
 }
 
 output "resource_names" {
-  description = "Every name this root claims in the shared account."
-  value       = module.stack.resource_names
+  description = "Every name this root claims in the shared account: the stack's, and the CI deploy role this root adds (lane g91)."
+  value       = concat(module.stack.resource_names, [aws_iam_role.ci_deploy.name])
+}
+
+output "ci_deploy_role_name" {
+  description = "The role .github/workflows/greenfield-deploy.yml assumes through the production-deploy environment. Never the role Terraform assumes."
+  value       = aws_iam_role.ci_deploy.name
+}
+
+output "ci_deploy_role_arn" {
+  description = "Public ARN for the production-deploy environment secret FSS_PRODUCTION_CI_ROLE_ARN."
+  value       = aws_iam_role.ci_deploy.arn
 }
 
 output "load_balancer_dns_name" {
