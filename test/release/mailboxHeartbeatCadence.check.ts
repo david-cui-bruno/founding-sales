@@ -221,7 +221,7 @@ describe('g58: the mailbox check, its heartbeat and its alarm agree', () => {
     expect(stackCall).not.toContain('heartbeat_missed_checks');
   });
 
-  it('allows a mailbox check less than one interval of lateness, and the other heartbeats none', async () => {
+  it('allows the mailbox check and the scheduler pass less than one interval of lateness, and the api and worker none', async () => {
     const written = await writtenMailboxInterval();
     const grace = HEARTBEAT_GRACE_SECONDS.mailbox;
     // More than a claim's worth, so a healthy check a second behind its pass is not a
@@ -231,11 +231,18 @@ describe('g58: the mailbox check, its heartbeat and its alarm agree', () => {
     expect(grace).toBeLessThan(written);
     expect(grace).toBeLessThanOrEqual(numeric(missed['period']) / 2);
 
-    // The three per-minute heartbeats beat on their own loops and keep the plain rule,
-    // on alarms of the same shape.
+    // The scheduler pass has the same shape as the check it asks for: one fixed-delay
+    // pass a minute, sampled by another fixed-delay loop. Same grace, same alarm shape.
+    // Without it the metric read a running scheduler as stale for six minutes at a
+    // stretch after each worker replacement (25 Sep 2026).
+    expect(HEARTBEAT_GRACE_SECONDS.scheduler).toBe(grace);
+    const scheduler = alarm('scheduler_heartbeat_missed');
+    expect(numeric(scheduler['period'])).toBe(60);
+    expect(scheduler['datapoints_to_alarm']).toBe('var.heartbeat_missed_checks');
+
+    // The API and worker heartbeats keep the plain rule, on alarms of the same shape.
     for (const [component, key] of [
       ['api', 'api_heartbeat_missed'],
-      ['scheduler', 'scheduler_heartbeat_missed'],
       ['worker', 'worker_heartbeat_missed'],
     ] as const) {
       expect(HEARTBEAT_GRACE_SECONDS[component], component).toBe(0);

@@ -290,7 +290,8 @@ performed by a runner slot after a claim, up to a second later when the slot is 
 longer when it is finishing another job. Two healthy checks are therefore about 61 s
 apart, and the metrics loop, a third fixed-delay loop drifting slowly against the other
 two, would otherwise sometimes sample in that extra second, several minutes running.
-The API, scheduler and worker heartbeats beat on their own loops and have no grace.
+The scheduler's own heartbeat has the same shape and, since 25 Sep 2026, the same grace;
+the API and worker heartbeats have none.
 From the last check at t0, the alarm reaches ALARM between t0 + 210 s and t0 + 270 s.
 
 What one check costs when nothing is new: one KMS `Decrypt` of the stored refresh token,

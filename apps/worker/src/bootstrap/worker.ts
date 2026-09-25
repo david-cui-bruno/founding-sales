@@ -152,6 +152,7 @@ export async function startWorker(options: WorkerProcessOptions): Promise<Worker
     intervalMilliseconds: config.schedulerIntervalMilliseconds,
     onError: onError('scheduler'),
     run: async () => {
+      const startedAt = Date.now();
       const report = await runSchedulerPass(sessions.scheduler, {
         sources: options.sources,
         now: now().toISOString(),
@@ -160,13 +161,15 @@ export async function startWorker(options: WorkerProcessOptions): Promise<Worker
         passTimeoutMilliseconds: config.passTimeoutMilliseconds,
       });
       liveness.report('scheduler', true);
-      if (report.inserted > 0 || report.outcome !== 'ran') {
-        log.log('info', 'scheduler_pass', {
-          outcome: report.outcome,
-          inserted: report.inserted,
-          already_present: report.alreadyPresent,
-        });
-      }
+      // Every pass, not only the ones that insert: one line a minute is what lets a
+      // stale-heartbeat alarm be read against what the scheduler actually did (25 Sep
+      // 2026, when nine silent passes looked like a scheduler that had not started).
+      log.log('info', 'scheduler_pass', {
+        outcome: report.outcome,
+        inserted: report.inserted,
+        already_present: report.alreadyPresent,
+        duration_ms: Date.now() - startedAt,
+      });
       // Always idle: the pass is on a fixed cadence, whatever it found.
       return 'idle';
     },
