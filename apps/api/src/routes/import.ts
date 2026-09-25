@@ -1,4 +1,10 @@
-import { importCommitRequestSchema, importPreviewRequestSchema, type ImportCommitResult } from '@fss/contracts';
+import {
+  IMPORT_COLUMNS,
+  importCommitRequestSchema,
+  importPreviewRequestSchema,
+  type ImportColumn,
+  type ImportCommitResult,
+} from '@fss/contracts';
 import { commitImportRow, previewCsvImport, type ImportPreviewRow } from '@fss/domain/crm';
 import { runCommand } from '../auth/index.ts';
 import { REFUSAL_STATUS, contextForPrincipal, redactError, requirePrincipal } from './crmSupport.ts';
@@ -24,6 +30,15 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  * it is why a retry of the whole file is safe, because the rows that landed replay
  * and the rows that did not are attempted again.
  *
+ * **Rows in order** (lane g84). A file has a row per contact, and the first row that
+ * names a firm creates it; the rows after it add their contacts to the firm that row
+ * committed. So the rows are committed in row order whatever order they were asked in,
+ * and each accepted row's firm id is handed to the rows after it.
+ *
+ * **A refusal says where.** A file refused whole names the header or the line at fault;
+ * a row refused names its column, and the receipt keeps the column beside the code so a
+ * replay says the same.
+ *
  * Both paths are admin-only, and the domain says so rather than this file: section
  * 5.2 gives import to an administrator, and `previewCsvImport` and `commitImportRow`
  * each ask `decideAdminOnly` before they look at anything.
@@ -31,9 +46,29 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
 export const IMPORT_PATHS = ['/import/preview', '/import/commit'] as const;
 
-/** The payload the receipt is hashed over: the row as the server re-derived it. */
+/**
+ * The payload the receipt is hashed over: the row's own content as the server re-derived
+ * it, and never its classification. A retry after the row's firm landed classifies the
+ * same row differently — it now matches the firm it created — and must still replay.
+ */
 function payloadOf(row: ImportPreviewRow): Readonly<Record<string, unknown>> {
   return { rowNumber: row.rowNumber, firm: row.firm, contact: row.contact, routes: row.routes };
+}
+
+function fileRefused(outcome: {
+  readonly reason: string;
+  readonly column: string | null;
+  readonly rowNumber: number | null;
+}): RouteResult {
+  return {
+    status: 409,
+    body: { status: 'refused', reason: outcome.reason, column: outcome.column, rowNumber: outcome.rowNumber },
+  };
+}
+
+function columnOf(details: Readonly<Record<string, unknown>> | undefined): ImportColumn | null {
+  const column = details?.['column'];
+  return IMPORT_COLUMNS.find(known => known === column) ?? null;
 }
 
 export async function routeImport(request: ApiRequest, options: RoutingOptions): Promise<RouteResult | null> {
@@ -54,7 +89,7 @@ export async function routeImport(request: ApiRequest, options: RoutingOptions):
     const parsed = importPreviewRequestSchema.safeParse(request.body);
     if (!parsed.success) return { status: REFUSAL_STATUS.malformed_body, body: redactError('malformed_body') };
     const preview = await previewCsvImport(scoped.context, { csv: parsed.data.csv });
-    if (!preview.ok) return { status: 409, body: { status: 'refused', reason: preview.reason } };
+    if (!preview.ok) return fileRefused(preview);
     return { status: 200, body: preview.value };
   }
 
@@ -63,51 +98,81 @@ export async function routeImport(request: ApiRequest, options: RoutingOptions):
 
   // Re-derived from the bytes, under the caller's own scope, before anything commits.
   const preview = await previewCsvImport(scoped.context, { csv: parsed.data.csv });
-  if (!preview.ok) return { status: 409, body: { status: 'refused', reason: preview.reason } };
+  if (!preview.ok) return fileRefused(preview);
   const byRowNumber = new Map(preview.value.rows.map(row => [row.rowNumber, row]));
 
+  const asked = [...parsed.data.rows].sort((left, right) => left.rowNumber - right.rowNumber);
+  const seen = new Set<number>();
+  /** Row number to the firm it committed, for the rows after it that belong to that firm. */
+  const committed = new Map<number, string>();
   const results: ImportCommitResult[] = [];
-  for (const asked of parsed.data.rows) {
-    const row = byRowNumber.get(asked.rowNumber);
-    if (row === undefined) {
-      results.push({ rowNumber: asked.rowNumber, status: 'refused', replayed: false, reason: 'row_unknown', firmId: null });
+  const refusedRow = (rowNumber: number, reason: string, replayed = false, column: ImportColumn | null = null): ImportCommitResult => ({
+    rowNumber,
+    status: 'refused',
+    replayed,
+    reason,
+    firmId: null,
+    column,
+    outcome: null,
+  });
+
+  for (const ask of asked) {
+    // One row, once. A second command for a row already committed in this request would
+    // be classified against a workspace the first one has since changed.
+    if (seen.has(ask.rowNumber)) {
+      results.push(refusedRow(ask.rowNumber, 'row_repeated'));
       continue;
     }
-    // Sequentially, not in a `Promise.all`: `auth.db` is one connection, each row is
-    // its own transaction on it, and two overlapping transactions on one backend is
-    // not a thing PostgreSQL offers.
+    seen.add(ask.rowNumber);
+    const row = byRowNumber.get(ask.rowNumber);
+    if (row === undefined) {
+      results.push(refusedRow(ask.rowNumber, 'row_unknown'));
+      continue;
+    }
+    // Sequentially, not in a `Promise.all`: each row is its own transaction on the
+    // request's one connection, and a later row may belong to the firm an earlier one
+    // creates.
     const outcome = await runCommand(
       auth,
       principal,
       {
-        commandId: asked.commandId,
+        commandId: ask.commandId,
         kind: 'crm.import_row',
         payload: payloadOf(row),
         clientVersion: parsed.data.clientVersion,
       },
       async context => {
-        const committed = await commitImportRow(context, row);
-        if (committed.ok) return { status: 'accepted', result: { firmId: committed.value.firmId } };
-        return { status: 'refused', reason: committed.reason };
+        const done = await commitImportRow(context, row, { committedFirmIds: committed });
+        if (done.ok) {
+          return {
+            status: 'accepted',
+            result: { firmId: done.value.firmId, contactId: done.value.contactId, outcome: done.value.outcome },
+          };
+        }
+        return {
+          status: 'refused',
+          reason: done.reason,
+          ...(done.column === null ? {} : { details: { column: done.column } }),
+        };
       },
     );
-    results.push(
-      outcome.status === 'accepted'
-        ? {
-            rowNumber: asked.rowNumber,
-            status: 'accepted',
-            replayed: outcome.replayed,
-            reason: null,
-            firmId: (outcome.result as { firmId: string } | null)?.firmId ?? null,
-          }
-        : {
-            rowNumber: asked.rowNumber,
-            status: 'refused',
-            replayed: outcome.replayed,
-            reason: outcome.reason,
-            firmId: null,
-          },
-    );
+    if (outcome.status === 'accepted') {
+      const result = outcome.result as { firmId?: unknown; outcome?: unknown } | null;
+      const firmId = typeof result?.firmId === 'string' ? result.firmId : null;
+      if (firmId !== null) committed.set(row.rowNumber, firmId);
+      results.push({
+        rowNumber: ask.rowNumber,
+        status: 'accepted',
+        replayed: outcome.replayed,
+        reason: null,
+        firmId,
+        column: null,
+        // A receipt written before lane g84 kept only the firm id.
+        outcome: result?.outcome === 'created' || result?.outcome === 'attached' ? result.outcome : null,
+      });
+    } else {
+      results.push(refusedRow(ask.rowNumber, outcome.reason, outcome.replayed, columnOf(outcome.details)));
+    }
   }
 
   return {

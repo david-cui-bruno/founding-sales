@@ -255,6 +255,11 @@ export interface HomeServerOptions {
   readonly figuresFail?: boolean;
   /** Lane g83: install `callieUpdate`, answering this state. Absent: the page has no update bridge. */
   readonly update?: UpdateStatus;
+  /**
+   * What `today.refresh` answers, given the list held and which read this is (1 for the
+   * first); by default the list held, unchanged (lane g84).
+   */
+  readonly onRefresh?: (today: TodayState, count: number) => TodayState;
 }
 
 export interface HomeTestServer {
@@ -284,7 +289,7 @@ globalThis.callieMailbox = {
   callieToday: `
 globalThis.callieToday = {
   async state() { return await ask('today.state'); },
-  async refresh() { return await ask('today.refresh'); },
+  async refresh(input) { return await ask('today.refresh', input); },
   async expand(input) { return await ask('today.expand', input); },
   async collapse() { return await ask('today.collapse'); },
   async snooze(input) { return await ask('today.snooze', input); },
@@ -389,6 +394,9 @@ export async function startHomeTestServer(options: HomeServerOptions = {}): Prom
         today = { ...today, expanded: firmId === FIRM_ID ? expandedFirm() : null, notice: null };
       }
       if (method === 'today.collapse') today = { ...today, expanded: null, notice: null };
+      if (method === 'today.refresh' && options.onRefresh !== undefined) {
+        today = options.onRefresh(today, calls.filter(call => call.method === 'today.refresh').length);
+      }
       if (method === 'today.snooze') {
         const itemId = (argument as { itemId?: string } | null)?.itemId;
         // 8.2: the *server* decides which of the two a task gets, from its own

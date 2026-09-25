@@ -1867,6 +1867,78 @@ const MUTATIONS = [
     because:
       'Lane g81: the worker journals the opt-outs mail sync records and logs its failures into the worker log group, so a filter on the API group alone never counts them. alarmIncidents.check.ts requires the worker entry to read the worker group; pointed at the API group it has to go red.',
   },
+  {
+    name: 'an imported row that is refused keeps the firm it created before the refusal',
+    file: 'packages/domain/crm/import.ts',
+    find: "  if (result.ok) await context.db.query(nested ? `RELEASE SAVEPOINT ${ROW_SAVEPOINT}` : 'COMMIT');\n  else await undo();\n",
+    replace: "  await context.db.query(nested ? `RELEASE SAVEPOINT ${ROW_SAVEPOINT}` : 'COMMIT');\n",
+    suite: ['run', 'test', '--workspace', 'packages/domain', '--', 'test/crm/capture.test.ts'],
+    because:
+      'Audit item G02: a row is a firm, a contact and their routes, and a row refused after its firm was written left a firm with nobody at it and a receipt saying refused. capture.test.ts refuses a row at its contact after the firm was created, requires the firm gone, and has to go red.',
+  },
+  {
+    name: 'the import commit takes the rows in the order they were asked, not the file’s',
+    file: 'apps/api/src/routes/import.ts',
+    find: '  const asked = [...parsed.data.rows].sort((left, right) => left.rowNumber - right.rowNumber);\n',
+    replace: '  const asked = [...parsed.data.rows];\n',
+    suite: ['run', 'test', '--workspace', 'apps/api', '--', 'test/capture.test.ts'],
+    because:
+      'Audit item G02: a contact row that attaches to a firm created on an earlier row must run after it, or it creates a second firm from its own columns. capture.test.ts (apps/api) asks for the rows backwards, requires the file’s order and one firm, and has to go red.',
+  },
+  {
+    name: 'a second posture for a state is answered 500 again',
+    file: 'apps/api/src/routes/postures.ts',
+    find: '  if (!result.ok) await context.db.query(`ROLLBACK TO SAVEPOINT ${RECORD_SAVEPOINT}`);\n',
+    replace: '',
+    suite: ['run', 'test', '--workspace', 'apps/api', '--', 'test/postureForm.test.ts'],
+    because:
+      'Lane g84: the exclusion constraint refuses an overlapping posture inside the command’s transaction, and without the savepoint the receipt insert after it failed and the route answered 500 where the domain meant posture_overlapping. The postures form is the first client that can send one. postureForm.test.ts requires a 409 with the reason and has to go red.',
+  },
+  {
+    name: 'a firm added or imported from the Mac is left unassigned',
+    file: 'packages/domain/crm/import.ts',
+    find: '      const owner = row.firm.ownerUserId ?? actorUserId(context);\n',
+    replace: '      const owner = row.firm.ownerUserId;\n',
+    suite: ['run', 'test', '--workspace', 'packages/domain', '--', 'test/crm/capture.test.ts'],
+    because:
+      'Audit item G02: dialing requires the firm to be assigned to the caller (dial/authorize.ts step 4, even for an admin), so an unassigned captured firm could never be called by anyone. capture.test.ts requires the importing admin and the adding salesperson as the assignee and has to go red.',
+  },
+  {
+    name: 'every read of Today’s list redraws the lanes again',
+    file: 'apps/desktop/src/renderer/todayView.ts',
+    find: "  return state === null ? 'null' : JSON.stringify({ ...state, asOf: null });\n",
+    replace: "  return state === null ? 'null' : JSON.stringify(state);\n",
+    suite: ['run', 'test', '--workspace', 'apps/desktop', '--', 'test/todayRefresh.test.ts'],
+    because:
+      'Audit item G05: every read changes asOf, and a focus read that redrew the lanes for it dropped whatever somebody was typing in a snooze reason or a call note. todayRefresh.test.ts requires the same lanes key for two states differing only in asOf and has to go red.',
+  },
+  {
+    name: 'the business day’s rollover no longer reads Today’s list',
+    file: 'apps/desktop/src/renderer/todayView.ts',
+    find: '  if (rollover !== null && input.lastAttempt < rollover) return true;\n',
+    replace: '',
+    suite: ['run', 'test', '--workspace', 'apps/desktop', '--', 'test/todayRefresh.test.ts'],
+    because:
+      'Audit item G05: a window left open overnight showed yesterday’s list at nine the next morning. todayRefresh.test.ts requires a read on the first tick after 05:00 and 05:10 in the business zone, and after a night asleep, and has to go red.',
+  },
+  {
+    name: 'a read Home makes by itself clears the notice on screen again',
+    file: 'apps/desktop/src/main/todayBridge.ts',
+    find: '      if (input.quiet === true) {\n',
+    replace: '      if (false) {\n',
+    suite: ['run', 'test', '--workspace', 'apps/desktop', '--', 'test/today.test.ts'],
+    because:
+      'Audit item G05: coming back to the window reads the list again, and a read that cleared “Call recorded.” made the person wonder whether it was. today.test.ts requires a quiet refresh to keep the notice and a pressed Refresh to clear it, and has to go red.',
+  },
+  {
+    name: 'the postures form sends a posture with a statement unticked',
+    file: 'apps/desktop/src/renderer/postureView.ts',
+    find: '  if (new Set(input.confirmedStatements).size < context.statementCount) {\n',
+    replace: '  if (false) {\n',
+    suite: ['run', 'test', '--workspace', 'apps/desktop', '--', 'test/postures.test.ts'],
+    because:
+      'Audit item G04: a posture is the founder confirming every statement statePosture.ts asks for, and the form says so before sending. postures.test.ts requires the statements issue for a partial confirmation and has to go red.',
+  },
 ];
 
 // A listener on each of these keeps Node from exiting mid-mutation with a file still

@@ -3159,6 +3159,38 @@ No IAM, no principal and no network change. The deployment role already holds `c
 
 **Still unverified.** Nothing here has run in the cloud. The Terraform assertions ran as `terraform validate` locally and run as `terraform test` in the infrastructure workflow. The actions-suppressor timing comes from the CloudWatch documentation and has not been observed. Nor has the ECS behaviour when every task fails readiness during a database outage.
 
+### 8.0aq What lane g84 changed: a founder adds and imports firms, records postures, and Today keeps itself current (25 September)
+
+**What was wrong.** Three items of the 25 September audit (`GPT6-ASTRA-EXHAUSTIVE-20260925.md`):
+
+- **G02.** An empty workspace could not be filled from the Mac. Nothing created a firm, a contact or a route, and `POST /import/*` had no screen.
+- **G04.** A call to a state with no posture is refused (9.2 step 6), and Settings printed `/postures — G4 policy` where the form should be.
+- **G05.** Home read Today's list only at sign-in and on Refresh, so a window left open overnight showed yesterday's list.
+
+**What changed.** `docs/decisions/g84-founder-capture-postures-and-refresh.md` has the rules; the import format is in `docs/greenfield/crm-surface.md`, "The CSV".
+
+- **Add firm** (Firms window, any member): firm name, website, time zone, and optionally the first contact's name, title, email and phone. One command, `POST /crm/firms/add`. A refusal names every field; a firm already here comes back with **Open the firm already here**.
+- **Import CSV** (Firms window, admins): one row per contact with the firm's columns repeated, header required. The screen previews every row as *New firm*, *Adds a contact*, *Already here* or *Fix*, with the column and reason, and imports nothing until **Import N rows**. Firms match by external id, then website domain, then name; contacts by email, else name. The commit decides each row again and refuses what changed since the preview, naming the row and column. A row is one transaction.
+- A captured firm is assigned to whoever captured it, its routes are `candidate` (the route policy's own starting state), and it is listed under **Not in the pipeline yet**.
+- **Calling postures** (Administration › Settings): the postures with their status and **Revoke**, and a form — state, takes effect, review by, one box per statement in `statePosture.ts`'s words, the rule quoted for the state, a note — with the JSON behind **Show as JSON**. The texts come from the new `GET /postures/reference`. An overlapping posture now answers 409 `posture_overlapping`; it was a 500.
+- **Today** reads again on focus when the last read is a minute old, and at 05:00 and 05:10 in the business zone, without clearing the notice and never while somebody is typing in the lanes. A line under the summary says *Updated just now* / *Updated 4 min ago*, and *Could not refresh.* with **Retry** when a read failed.
+
+**No migration.** The schema range is unchanged. This is an app-only API deployment (deploy and smoke), then a desktop release carrying the new windows. **The API goes first**: the new desktop calls `/crm/firms/add` and `/postures/reference` and reads the preview's `attach` outcome, which an older API does not have. The installed 1.0.4 sees nothing different: it never calls `/import/*` or `/postures*`, and no answer it parses changed. `CONTAINER_CLIENT_VERSIONS` is not changed.
+
+**Test evidence, offline only.**
+
+- `test/release/founderCapture.check.ts` drives the shipped CRM and Administration bridges through the real routes on embedded PostgreSQL. A salesperson adds a firm and it lands assigned to them with two `candidate` routes; the same website again is refused with the firm's id. An import is previewed, the same firm and contact are then added by hand, and the commit refuses row 2 at `contact_email` and attaches row 3 to that firm. A posture is recorded at midnight in the business zone, an overlap comes back as its sentence, and a revoke lets a new one in.
+- Domain: `packages/domain/test/crm/capture.test.ts`. API: `apps/api/test/capture.test.ts` and `postureForm.test.ts`, each asserting `wireDrift` is empty. Desktop units: `capture.test.ts`, `postures.test.ts`, `todayRefresh.test.ts`. Playwright: `capture.spec.ts`, `postures.spec.ts`, `todayRefresh.spec.ts`, the last on the page's own fake clock.
+
+Eight mutations are appended to `scripts/releaseMutationCheck.mjs` (200 → 208 at the rebase onto PR 222). Each was applied by hand and turned its own test red.
+
+**Still unverified.** Nothing here has run in Electron or against production. Unmeasured:
+
+- a real window's `focus` event after the phone app or the browser, and timers across a real sleep and wake;
+- the 05:00 build finishing before 05:10 on the production schedule;
+- a real spreadsheet export's quoting and encoding;
+- dialing a captured firm: its routes are `candidate`, and nothing on the Mac validates a route yet.
+
 ### 8.1 Still unverified
 
 Production was applied, deployed, bootstrapped and smoked at `66203322`, and redeployed at `02da3dd5` between 05:50Z and 05:57Z on 24 September, which carries the sign-in fix (8.0v). The signed desktop build is published at `66203322` (8.0t), and thirteen rehearsal runs have existed (8.0s, 8.0t, 8.0v, 8.0w). The first real sign-in was attempted against the `66203322` deployment and refused by the API's own discovery rule (8.0u); the retry against the g45 fix succeeded at 15:08Z, and showed that desktop 1.0.0 has no way to connect the mailbox (8.0x). Desktop 1.0.1 connected the first mailbox at about 18:10Z on 24 September. From 18:11Z CloudWatch refused every worker metric publication over one unit, and ECS replaced the worker every few minutes for failed health checks. That blackout lasts until the g51 fix is deployed (8.0y). What follows is what that still does not settle. Items 1 to 10 were written before any of it ran, and each carries whatever a later run answered; items 11 to 18 are what is open on 24 September, and the first of them is the release record this release does not have.

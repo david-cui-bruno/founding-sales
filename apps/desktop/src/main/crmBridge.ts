@@ -1,6 +1,13 @@
+import { randomUUID } from 'node:crypto';
 import {
+  IMPORT_FILE_REFUSALS,
+  addFirmRefusalSchema,
+  addFirmResultSchema,
   firmListResponseSchema,
   firmPageResponseSchema,
+  importCommitResponseSchema,
+  importFileRefusalResponseSchema,
+  importPreviewResponseSchema,
   mergeRefusalSchema,
   pipelineBoardResponseSchema,
   pipelineStagesResponseSchema,
@@ -9,9 +16,14 @@ import {
   type PipelineStageDto,
 } from '@fss/contracts';
 import type {
+  AddFirmDraft,
+  AddFirmView,
   ContactEdit,
   CrmScreen,
   CrmState,
+  ImportFile,
+  ImportFileRefusalView,
+  ImportView,
   MergeResolution,
   PipelineView,
   StageChange,
@@ -40,6 +52,12 @@ import type { AuthedClient } from './authedClient.ts';
  * keeps is the fallback: a Firm page still tells the bridge the id of the opportunity
  * it opened, so a board loaded before the endpoint answered still offers the control
  * for a firm the person has looked at.
+ *
+ * Lane g84 (audit item G02) added the two ways a firm gets in from the Mac: **Add firm**,
+ * one command (`POST /crm/firms/add`) for the firm, its first contact and that contact's
+ * address and number; and **Import**, the admin's CSV preview and commit. The file's text
+ * stays here, in the main process, between the preview and the commit, with one command
+ * id per row; the window is given what the server said about the file, never the file.
  */
 
 export const CRM_IPC_CHANNELS = {
@@ -49,6 +67,12 @@ export const CRM_IPC_CHANNELS = {
   saveContact: 'callie:crm:save-contact',
   changeStage: 'callie:crm:change-stage',
   resolveMerge: 'callie:crm:resolve-merge',
+  // Lane g84: Add firm and Import.
+  openAddFirm: 'callie:crm:open-add-firm',
+  addFirm: 'callie:crm:add-firm',
+  openImport: 'callie:crm:open-import',
+  previewImport: 'callie:crm:preview-import',
+  commitImport: 'callie:crm:commit-import',
 } as const;
 export type CrmIpcChannel = (typeof CRM_IPC_CHANNELS)[keyof typeof CRM_IPC_CHANNELS];
 
@@ -60,6 +84,12 @@ export type CrmIpcChannel = (typeof CRM_IPC_CHANNELS)[keyof typeof CRM_IPC_CHANN
 
 export interface CrmBridgeDeps {
   readonly api: AuthedClient;
+  /**
+   * The version this build announces (lane g84). The import commit carries one command id
+   * per row rather than one for the request, so it goes through `read` with its own
+   * envelope, and the version is the half of that envelope `command` would have added.
+   */
+  readonly clientVersion: string;
   readonly session: {
     state(): Promise<{
       readonly online: boolean;
@@ -76,6 +106,62 @@ export interface CrmBridgeHost {
   saveContact(input: ContactEdit): Promise<CrmState>;
   changeStage(input: StageChange): Promise<CrmState>;
   resolveMerge(input: MergeResolution): Promise<CrmState>;
+  openAddFirm(): Promise<CrmState>;
+  addFirm(input: AddFirmDraft): Promise<CrmState>;
+  openImport(): Promise<CrmState>;
+  previewImport(input: ImportFile): Promise<CrmState>;
+  commitImport(): Promise<CrmState>;
+}
+
+/** `importPreviewRequestSchema`'s bound on a file, in characters. */
+export const MAX_IMPORT_FILE_CHARACTERS = 512 * 1024;
+
+/** The Add firm form before anything is typed. */
+export const EMPTY_ADD_FIRM: AddFirmDraft = Object.freeze({
+  name: '',
+  website: '',
+  timeZone: '',
+  contactName: '',
+  contactTitle: '',
+  contactEmail: '',
+  contactPhone: '',
+});
+
+/**
+ * The form as `POST /crm/firms/add` takes it (lane g84): the values as typed, a blank
+ * field left out, and no contact at all when every contact field is blank. Nothing is
+ * checked or canonicalized here — a website, an address and a number are the domain's to
+ * read, and a Mac that "fixed" one would be a second implementation of the rule that
+ * refuses it.
+ */
+export function addFirmBody(draft: AddFirmDraft): Readonly<Record<string, unknown>> {
+  const given = (value: string): boolean => value.trim().length > 0;
+  const contactGiven = [draft.contactName, draft.contactTitle, draft.contactEmail, draft.contactPhone].some(given);
+  return {
+    firm: {
+      name: draft.name,
+      ...(given(draft.website) ? { website: draft.website } : {}),
+      ...(given(draft.timeZone) ? { timeZone: draft.timeZone } : {}),
+    },
+    ...(contactGiven
+      ? {
+          contact: {
+            fullName: draft.contactName,
+            ...(given(draft.contactTitle) ? { title: draft.contactTitle } : {}),
+            ...(given(draft.contactEmail) ? { email: draft.contactEmail } : {}),
+            ...(given(draft.contactPhone) ? { phone: draft.contactPhone } : {}),
+          },
+        }
+      : {}),
+  };
+}
+
+/** A refusal of the whole file, when the answer is one; otherwise null. */
+export function fileRefusalOf(body: unknown): ImportFileRefusalView | null {
+  const parsed = importFileRefusalResponseSchema.safeParse(body);
+  if (!parsed.success) return null;
+  if (!(IMPORT_FILE_REFUSALS as readonly string[]).includes(parsed.data.reason)) return null;
+  return { reason: parsed.data.reason, column: parsed.data.column, rowNumber: parsed.data.rowNumber };
 }
 
 /**
@@ -107,6 +193,11 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
   let pipeline: PipelineView | null = null;
   let merge: CrmState['merge'] = null;
   let notice: string | null = null;
+  let addFirmView: AddFirmView | null = null;
+  let importView: ImportView | null = null;
+  /** The previewed file's text and one command id per row it may commit (lane g84). */
+  let importCsv: string | null = null;
+  let importCommandIds = new Map<number, string>();
   /** Every opportunity id a Firm page has told this window about. */
   const opportunityIdByFirmId: Record<string, string> = {};
 
@@ -137,7 +228,17 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
       firm,
       pipeline,
       merge,
+      addFirm: addFirmView,
+      import: importView,
     };
+  };
+
+  /** Leave Add firm and Import, and let the file's text go. */
+  const leaveCapture = (): void => {
+    addFirmView = null;
+    importView = null;
+    importCsv = null;
+    importCommandIds = new Map();
   };
 
   const loadFirm = async (firmId: string): Promise<void> => {
@@ -165,6 +266,7 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
         // person has already opened, which is a firm they were already permitted
         // to see the opportunity of.
         opportunityIdByFirmId: { ...opportunityIdByFirmId, ...board.value.opportunityIdByFirmId },
+        unplacedFirms: board.value.unplacedFirms,
       };
       screen = 'pipeline';
       return;
@@ -191,13 +293,117 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
 
     async openFirm(input) {
       notice = null;
+      leaveCapture();
       await loadFirm(input.firmId);
       return await snapshot();
     },
 
     async openPipeline() {
       notice = null;
+      leaveCapture();
       await loadPipeline();
+      return await snapshot();
+    },
+
+    async openAddFirm() {
+      notice = null;
+      leaveCapture();
+      addFirmView = { draft: EMPTY_ADD_FIRM, issues: [], duplicateFirmId: null };
+      screen = 'add_firm';
+      return await snapshot();
+    },
+
+    async addFirm(input) {
+      const answer = await deps.api.command('/crm/firms/add', addFirmBody(input), value => addFirmResultSchema.parse(value));
+      if (answer.ok) {
+        // Added: the window moves to the new firm's page, which is the proof it exists.
+        addFirmView = null;
+        notice = 'firm_added';
+        await loadFirm(answer.value.firmId);
+        return await snapshot();
+      }
+      // Refused: the form comes back with what was typed and every field the server named.
+      const refusal = answer.offline ? null : addFirmRefusalSchema.safeParse(answer.refusal);
+      addFirmView = {
+        draft: input,
+        issues: refusal?.success === true ? (refusal.data.issues ?? []) : [],
+        duplicateFirmId: refusal?.success === true ? (refusal.data.firmId ?? null) : null,
+      };
+      notice = answer.reason;
+      screen = 'add_firm';
+      return await snapshot();
+    },
+
+    async openImport() {
+      notice = null;
+      leaveCapture();
+      importView = { fileName: null, preview: null, fileRefusal: null, results: null };
+      screen = 'import';
+      return await snapshot();
+    },
+
+    async previewImport(input) {
+      notice = null;
+      screen = 'import';
+      if (input.csv.length > MAX_IMPORT_FILE_CHARACTERS) {
+        // The API's own bound on the file (`importPreviewRequestSchema`), said before the
+        // file is sent rather than as a 400 about a body.
+        importCsv = null;
+        importCommandIds = new Map();
+        importView = { fileName: input.fileName, preview: null, fileRefusal: null, results: null };
+        notice = 'import_file_too_large';
+        return await snapshot();
+      }
+      const answer = await deps.api.read('/import/preview', value => importPreviewResponseSchema.parse(value), {
+        csv: input.csv,
+      });
+      if (answer.ok) {
+        importCsv = input.csv;
+        // One id per row that may commit, minted once per preview: pressing Import again on
+        // the same preview replays what landed rather than importing it twice (5.3).
+        importCommandIds = new Map(
+          answer.value.rows
+            .filter(row => row.outcome === 'create' || row.outcome === 'attach')
+            .map(row => [row.rowNumber, randomUUID()] as const),
+        );
+        importView = { fileName: input.fileName, preview: answer.value, fileRefusal: null, results: null };
+        return await snapshot();
+      }
+      importCsv = null;
+      importCommandIds = new Map();
+      const fileRefusal = answer.offline ? null : fileRefusalOf(answer.refusal);
+      importView = { fileName: input.fileName, preview: null, fileRefusal, results: null };
+      notice = fileRefusal === null ? answer.reason : null;
+      return await snapshot();
+    },
+
+    async commitImport() {
+      const preview = importView?.preview ?? null;
+      const rows =
+        preview === null
+          ? []
+          : preview.rows
+              .filter(row => row.outcome === 'create' || row.outcome === 'attach')
+              .map(row => ({ rowNumber: row.rowNumber, commandId: importCommandIds.get(row.rowNumber) ?? randomUUID() }));
+      if (importCsv === null || importView === null || rows.length === 0) {
+        notice = 'import_nothing_to_commit';
+        return await snapshot();
+      }
+      // Not `command`: the envelope is one command id per row, which the server hashes
+      // each row's receipt under, and a request-level id would be refused as malformed.
+      const answer = await deps.api.read('/import/commit', value => importCommitResponseSchema.parse(value), {
+        clientVersion: deps.clientVersion,
+        csv: importCsv,
+        rows,
+      });
+      if (!answer.ok) {
+        const fileRefusal = answer.offline ? null : fileRefusalOf(answer.refusal);
+        if (fileRefusal !== null) importView = { ...importView, fileRefusal };
+        notice = fileRefusal === null ? answer.reason : null;
+        return await snapshot();
+      }
+      importView = { ...importView, results: answer.value };
+      notice = answer.value.counts.refused === 0 ? 'imported' : 'imported_with_refusals';
       return await snapshot();
     },
 

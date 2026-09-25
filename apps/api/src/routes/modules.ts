@@ -1,6 +1,7 @@
 import { buildHealthReport } from '../health.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import type { BootstrapRequest, BootstrapResponse, RouteModule } from '../bootstrap/routeRegistry.ts';
+import { ADD_FIRM_PATHS, routeAddFirm } from './addFirm.ts';
 import { routeAuth } from './auth.ts';
 import { routeAdminDevices } from './admin/devices.ts';
 import { routeAdminMemberships } from './admin/memberships.ts';
@@ -143,6 +144,8 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     moduleOf('firm-page', { paths: FIRM_PAGE_PATHS }, routeFirmPage, routing),
     moduleOf('search', { paths: SEARCH_PATHS }, routeSearch, routing),
     moduleOf('import', { paths: IMPORT_PATHS }, routeImport, routing),
+    // Lane g84's Add firm form: one row of an import, typed. Exact, like its neighbours.
+    moduleOf('add-firm', { paths: ADD_FIRM_PATHS }, routeAddFirm, routing),
     moduleOf('export', { paths: EXPORT_PATHS }, routeExport, routing),
     // Lane G4's policy, suppression and dialing surface. Exact paths throughout, for
     // the reason above. `/dial/authorize` and `/dial/consume` are declared separately

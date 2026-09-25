@@ -183,5 +183,35 @@ export function registerAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
     return identityId === null ? await host.state() : await host.retireCallingNumber({ identityId });
   });
 
+  // Lane g84: the postures form. Shape only again: whether the statements are all of
+  // them, whether the state is a state and whether the dates are dates are the server's.
+  handleOnce(ADMIN_IPC_CHANNELS.recordPosture, async argument => {
+    const input = argument as Record<string, unknown> | null;
+    const statements = input?.['confirmedStatements'];
+    if (
+      input === null ||
+      typeof input['state'] !== 'string' ||
+      typeof input['effectiveFromDate'] !== 'string' ||
+      typeof input['reviewDate'] !== 'string' ||
+      typeof input['note'] !== 'string' ||
+      !Array.isArray(statements) ||
+      !statements.every(key => typeof key === 'string')
+    ) {
+      return await host.state();
+    }
+    return await host.recordPosture({
+      state: input['state'],
+      effectiveFromDate: input['effectiveFromDate'],
+      reviewDate: input['reviewDate'],
+      confirmedStatements: statements as string[],
+      note: input['note'],
+    });
+  });
+
+  handleOnce(ADMIN_IPC_CHANNELS.revokePosture, async argument => {
+    const postureId = text((argument as { postureId?: unknown } | null)?.postureId);
+    return postureId === null ? await host.state() : await host.revokePosture({ postureId });
+  });
+
   return host;
 }

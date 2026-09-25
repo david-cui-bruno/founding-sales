@@ -1,4 +1,5 @@
 import { DEFAULT_SETTING_VALUES, describeClientVersionMaximum } from '@fss/contracts';
+import { POSTURE_NOTICES, POSTURES_HEADING, businessZoneOf, postureSection, type PosturesSectionView } from './postureView.ts';
 import { readErrorSentence } from './readError.ts';
 import { SETTINGS_ELSEWHERE_FALLBACK } from './settingsElsewhere.ts';
 import type { AdminState, CallingNumberView } from './settingsContract.ts';
@@ -41,7 +42,15 @@ export interface ElsewhereRowView {
   readonly topic: string;
   readonly path: string;
   readonly ownedBy: string;
+  /**
+   * The section of this page that edits it now, or null (lane g84). A topic with a form
+   * here is named as that section rather than as an endpoint a person cannot press.
+   */
+  readonly editedHere: string | null;
 }
+
+/** The endpoints this page has a form for, and the section the form is in (lane g84). */
+const EDITED_HERE: Readonly<Record<string, string>> = Object.freeze({ '/postures': POSTURES_HEADING });
 
 export interface PanelView {
   readonly title: string;
@@ -186,6 +195,8 @@ export interface AdminView {
   readonly sendingUnread: SendingUnreadView | null;
   /** Lane g60's section, for every role. */
   readonly callingNumber: CallingNumberSectionView;
+  /** Lane g84's postures form, for every role and editable by an admin; null before the read. */
+  readonly postures: PosturesSectionView | null;
   /** G8's holiday calendar: what it is now, and whether this person may replace it. */
   readonly holidays: {
     readonly version: string;
@@ -296,7 +307,7 @@ function historySection(state: AdminState): SettingHistorySectionView | null {
   };
 }
 
-export function adminViewOf(state: AdminState): AdminView {
+export function adminViewOf(state: AdminState, now: Date = new Date()): AdminView {
   const reason = inertBecause(state);
   const editable = reason === null;
 
@@ -314,6 +325,7 @@ export function adminViewOf(state: AdminState): AdminView {
     topic: entry.topic,
     path: entry.path,
     ownedBy: entry.ownedBy,
+    editedHere: EDITED_HERE[entry.path] ?? null,
   }));
 
   // 16.2's two switches, read out rather than recombined.
@@ -342,7 +354,8 @@ export function adminViewOf(state: AdminState): AdminView {
 
   return {
     screen: state.screen,
-    notice: state.notice === null ? null : (CALLING_NUMBER_NOTICES[state.notice] ?? state.notice),
+    notice:
+      state.notice === null ? null : (CALLING_NUMBER_NOTICES[state.notice] ?? POSTURE_NOTICES[state.notice] ?? state.notice),
     banner: state.online ? null : 'Offline. This page is a snapshot and nothing can be changed.',
     settings,
     elsewhere,
@@ -353,6 +366,7 @@ export function adminViewOf(state: AdminState): AdminView {
         ? { line: `${SENDING_UNREAD} ${sendingReadSentence(state.sendingReadError)}` }
         : null,
     callingNumber: callingNumberSection(state),
+    postures: postureSection(state, businessZoneOf(state.settings), now),
     holidays:
       state.settings === null
         ? null

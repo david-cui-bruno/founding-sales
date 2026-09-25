@@ -4,12 +4,22 @@ import {
   setCallingWindowCommandSchema,
 } from '@fss/contracts';
 import {
+  FEDERAL_CITATIONS,
+  POSTURE_RULES_REVISION,
+  POSTURE_STATEMENTS,
+  STATE_POSTURE_RULES,
+  US_STATE_CODES,
+  US_STATE_NAMES,
+  type PostureCitation,
+} from '@fss/domain';
+import {
   currentCallingWindow,
   listStatePostures,
   recordStatePosture,
   revokeStatePosture,
   setCallingWindow,
 } from '@fss/domain/policy';
+import type { RepositoryContext } from '@fss/domain/db';
 import { REFUSAL_STATUS, contextForPrincipal, policyRouteDeps, redactError, runPolicyCommand } from './dialSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
@@ -25,8 +35,62 @@ export const POSTURE_PATHS: readonly string[] = [
   '/postures',
   '/postures/calling-window',
   '/postures/record',
+  '/postures/reference',
   '/postures/revoke',
 ];
+
+const RECORD_SAVEPOINT = 'posture_record';
+
+/**
+ * Run `recordStatePosture` in a savepoint (lane g84).
+ *
+ * `posture_overlapping` is the database's answer: the exclusion constraint in migration
+ * 0006 refuses the insert, and `recordStatePosture` turns SQLSTATE 23P01 into the
+ * refusal. Inside `runCommand` that error had already aborted the command's transaction,
+ * so the receipt insert after it failed and the API answered 500 where the domain meant
+ * `posture_overlapping`. Rolling back to a savepoint taken before the insert is what lets
+ * the refusal be recorded and answered. The postures form is the first client that can
+ * send a second posture for a state, which is why nobody met it before.
+ */
+async function inSavepoint<T extends { readonly ok: boolean }>(context: RepositoryContext, work: () => Promise<T>): Promise<T> {
+  await context.db.query(`SAVEPOINT ${RECORD_SAVEPOINT}`);
+  const result = await work();
+  if (!result.ok) await context.db.query(`ROLLBACK TO SAVEPOINT ${RECORD_SAVEPOINT}`);
+  await context.db.query(`RELEASE SAVEPOINT ${RECORD_SAVEPOINT}`);
+  return result;
+}
+
+function citation(entry: PostureCitation): { readonly title: string; readonly url: string; readonly quote: string } {
+  return { title: entry.title, url: entry.url, quote: entry.quote };
+}
+
+/**
+ * `GET /postures/reference` (lane g84, audit item G04): what the postures form shows
+ * beside its checkboxes. Every text is `statePosture.ts`'s, verbatim and in its order —
+ * the statements a posture confirms, the federal rules the business-to-business
+ * statement rests on, and each state with its quoted rule where the release carries one.
+ * The Mac reads them here rather than carrying a copy, for invariant 7's reason: the
+ * software records a posture and does not author its sources, so there is one text.
+ */
+export function postureReference(): Readonly<Record<string, unknown>> {
+  const rules = STATE_POSTURE_RULES as Readonly<Partial<Record<string, (typeof STATE_POSTURE_RULES)[keyof typeof STATE_POSTURE_RULES]>>>;
+  return {
+    rulesRevision: POSTURE_RULES_REVISION,
+    statements: Object.entries(POSTURE_STATEMENTS).map(([key, text]) => ({ key, text })),
+    federalCitations: FEDERAL_CITATIONS.map(citation),
+    states: US_STATE_CODES.map(state => {
+      const rule = rules[state];
+      return {
+        state,
+        name: US_STATE_NAMES[state],
+        rule:
+          rule === undefined
+            ? null
+            : { summary: rule.summary, citations: [rule.citation, ...rule.furtherCitations].map(citation) },
+      };
+    }),
+  };
+}
 
 /**
  * State postures and the configured calling window (specification 9.2, 10.1).
@@ -59,6 +123,7 @@ export async function routePostures(request: ApiRequest, options: RoutingOptions
     if (request.path === '/postures/calling-window') {
       return { status: 200, body: { callingWindow: await currentCallingWindow(scoped.context) } };
     }
+    if (request.path === '/postures/reference') return { status: 200, body: postureReference() };
     return { status: REFUSAL_STATUS.not_found, body: redactError('not_found') };
   }
 
@@ -73,14 +138,16 @@ export async function routePostures(request: ApiRequest, options: RoutingOptions
         recordStatePostureCommandSchema,
         'record_state_posture',
         async (repository, body) =>
-          await recordStatePosture(repository, {
-            state: body.state,
-            effectiveFrom: body.effectiveFrom,
-            ...(body.effectiveTo === undefined ? {} : { effectiveTo: body.effectiveTo }),
-            ...(body.reviewAt === undefined ? {} : { reviewAt: body.reviewAt }),
-            confirmedStatements: body.confirmedStatements,
-            ...(body.note === undefined ? {} : { note: body.note }),
-          }),
+          await inSavepoint(repository, async () =>
+            await recordStatePosture(repository, {
+              state: body.state,
+              effectiveFrom: body.effectiveFrom,
+              ...(body.effectiveTo === undefined ? {} : { effectiveTo: body.effectiveTo }),
+              ...(body.reviewAt === undefined ? {} : { reviewAt: body.reviewAt }),
+              confirmedStatements: body.confirmedStatements,
+              ...(body.note === undefined ? {} : { note: body.note }),
+            }),
+          ),
       );
     case '/postures/revoke':
       return await runPolicyCommand(

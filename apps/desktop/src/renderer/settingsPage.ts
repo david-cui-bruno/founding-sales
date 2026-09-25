@@ -1,6 +1,8 @@
+import { localParts } from '@fss/contracts';
 import { element } from './firmDom.ts';
+import { POSTURES_HEADING, POSTURE_HINT, postureFormIssues, type PosturesSectionView } from './postureView.ts';
 import { adminViewOf } from './settingsView.ts';
-import type { AdminBridge, AdminScreen, AdminState } from './settingsContract.ts';
+import type { AdminBridge, AdminScreen, AdminState, RecordPostureInput } from './settingsContract.ts';
 
 /**
  * The administration window: Settings, Dashboard, Diagnostics.
@@ -98,6 +100,8 @@ function renderHistory(root: HTMLElement, history: NonNullable<ReturnType<typeof
 function renderSettings(root: HTMLElement, view: ReturnType<typeof adminViewOf>): void {
   // First, because it is the one setting without which Today cannot call anybody.
   renderCallingNumber(root, view);
+  // Second, for the same reason: 9.2 step 6 refuses every call to a state without one.
+  renderPostures(root, view.postures, view.notice);
 
   if (view.sending !== null) {
     root.append(element('p', { className: 'sending', text: view.sending.line, testId: 'sending' }));
@@ -190,7 +194,14 @@ function renderSettings(root: HTMLElement, view: ReturnType<typeof adminViewOf>)
 
   const elsewhere = element('ul', { className: 'elsewhere', testId: 'elsewhere' });
   for (const entry of view.elsewhere) {
-    elsewhere.append(element('li', { text: `${entry.topic} — ${entry.path} (${entry.ownedBy})` }));
+    elsewhere.append(
+      element('li', {
+        text:
+          entry.editedHere === null
+            ? `${entry.topic} — ${entry.path} (${entry.ownedBy})`
+            : `${entry.topic} — edited on this page, under ${entry.editedHere}`,
+      }),
+    );
   }
   root.append(elsewhere);
 }
@@ -278,6 +289,223 @@ function renderCallingNumber(root: HTMLElement, view: ReturnType<typeof adminVie
   if (section.notEditableBecause !== null) {
     block.append(element('p', { className: 'inert', text: section.notEditableBecause }));
   }
+  root.append(block);
+}
+
+/**
+ * What the posture form last sent, kept so a refused form comes back filled in: every
+ * answer redraws the page, and a form redrawn empty would make the person tick the four
+ * statements again. Forgotten once a posture is recorded.
+ */
+let postureDraft: RecordPostureInput | null = null;
+
+/** Today's date in the business zone, as `YYYY-MM-DD`, for the form's first value. */
+function todayIn(zone: string): string {
+  try {
+    return localParts(Date.now(), zone).date;
+  } catch {
+    return new Date().toISOString().slice(0, 10);
+  }
+}
+
+/**
+ * State postures (9.2 step 6, 10.1; lane g84, audit item G04).
+ *
+ * Settings used to print `/postures — G4 policy` here, and a call to a state without a
+ * posture was refused with nothing on the Mac that could record one. This is the form:
+ * the state, the day it takes effect and when to review it, the statements
+ * `statePosture.ts` asks the founder to confirm — in its words, read from the API — the
+ * rule quoted for the state where the release carries one, and a note. It sends the same
+ * command the path named. What the form checks first is what the server would refuse;
+ * the server still decides, and its refusal is the notice.
+ *
+ * The recorded postures are listed above it with Revoke; the JSON the API answered is
+ * behind "Show as JSON", which is where the raw view went.
+ */
+function renderPostures(root: HTMLElement, section: PosturesSectionView | null, notice: string | null): void {
+  if (section === null) return;
+  if (notice === 'Posture recorded.') postureDraft = null;
+  const block = element('section', { className: 'postures', testId: 'postures' });
+  block.append(element('h2', { text: POSTURES_HEADING }));
+  block.append(element('p', { text: section.summary, testId: 'postures-summary' }));
+
+  if (section.unread !== null) {
+    block.append(element('p', { className: 'inert', text: section.unread, testId: 'postures-unread' }));
+    const retry = element('button', { text: 'Retry' });
+    retry.dataset['testid'] = 'postures-retry';
+    retry.addEventListener('click', () => {
+      apply(bridge().show({ screen: 'settings' }));
+    });
+    block.append(retry);
+  }
+
+  const rows = element('ul', { className: 'rows', testId: 'posture-rows' });
+  for (const row of section.rows) {
+    const item = element('li', { testId: 'posture-row' });
+    item.dataset['state'] = row.state;
+    const line = element('div', { className: 'row' });
+    const main = element('div', { className: 'row-main' });
+    main.append(element('span', { className: 'name', text: row.line, testId: 'posture-line' }));
+    line.append(main);
+    // One cell on the right, so the row stays the two columns `.row` lays out.
+    const side = element('div', { className: 'row-side' });
+    const tone = row.tag.tone === 'ok' ? 'tag tag-ok' : row.tag.tone === 'stop' ? 'tag tag-stop' : 'tag';
+    if (row.canRevoke) {
+      const actions = element('div', { className: 'row-actions' });
+      const revoke = element('button', { text: 'Revoke' });
+      revoke.dataset['testid'] = `posture-revoke-${row.id}`;
+      revoke.addEventListener('click', () => {
+        apply(bridge().revokePosture({ postureId: row.id }));
+      });
+      actions.append(revoke);
+      side.append(actions);
+    }
+    side.append(element('span', { className: tone, text: row.tag.text, testId: 'posture-status' }));
+    line.append(side);
+    item.append(line);
+    rows.append(item);
+  }
+  block.append(rows);
+
+  const form = element('div', { className: 'capture posture-form', testId: 'posture-form' });
+  form.append(element('h3', { text: 'Record a posture' }));
+  const draft = postureDraft;
+
+  const stateField = element('div', { className: 'field' });
+  const stateLabel = element('label', { text: 'State' });
+  stateLabel.htmlFor = 'posture-state';
+  const state = element('select', { testId: 'posture-state' });
+  state.id = 'posture-state';
+  state.disabled = !section.editable;
+  const none = element('option', { text: 'Choose a state' });
+  none.value = '';
+  state.append(none);
+  for (const option of section.stateOptions) {
+    const entry = element('option', { text: option.label });
+    entry.value = option.value;
+    state.append(entry);
+  }
+  state.value = draft?.state ?? '';
+  stateField.append(stateLabel, state);
+  form.append(stateField);
+
+  // The rule quoted for the chosen state, verbatim, or a line saying the release has none.
+  const rule = element('div', { className: 'posture-rule', testId: 'posture-rule' });
+  const showRule = (): void => {
+    rule.replaceChildren();
+    if (state.value === '') return;
+    const quoted = section.rules[state.value] ?? null;
+    if (quoted === null) {
+      rule.append(
+        element('p', {
+          text: 'This release quotes no rule for this state. Record a posture only after you, or counsel, have checked it.',
+          testId: 'posture-rule-none',
+        }),
+      );
+      return;
+    }
+    rule.append(element('p', { text: quoted.summary, testId: 'posture-rule-summary' }));
+    for (const citation of quoted.citations) {
+      rule.append(element('p', { className: 'quiet', text: `${citation.title} — ${citation.url}` }));
+      rule.append(element('blockquote', { text: citation.quote }));
+    }
+  };
+  state.addEventListener('change', showRule);
+  showRule();
+  form.append(rule);
+
+  const dateField = (id: string, label: string, value: string, hint: string | null): HTMLInputElement => {
+    const wrapper = element('div', { className: 'field' });
+    const caption = element('label', { text: label });
+    caption.htmlFor = id;
+    const input = element('input', { testId: id });
+    input.id = id;
+    input.type = 'date';
+    input.value = value;
+    input.disabled = !section.editable;
+    wrapper.append(caption, input);
+    if (hint !== null) wrapper.append(element('p', { className: 'hint', text: hint }));
+    form.append(wrapper);
+    return input;
+  };
+  const effectiveFrom = dateField('posture-effective-from', 'Takes effect', draft?.effectiveFromDate ?? todayIn(section.zone), null);
+  const review = dateField(
+    'posture-review',
+    'Review by',
+    draft?.reviewDate ?? '',
+    'Leave empty for one year after it takes effect.',
+  );
+
+  const statements = element('div', { className: 'posture-statements', testId: 'posture-statements' });
+  const boxes = section.statements.map(statement => {
+    const label = element('label', { className: 'posture-statement' });
+    const box = element('input', { testId: `posture-statement-${statement.key}` });
+    box.type = 'checkbox';
+    box.checked = draft?.confirmedStatements.includes(statement.key) ?? false;
+    box.disabled = !section.editable;
+    label.append(box, element('span', { text: statement.text }));
+    statements.append(label);
+    return [statement.key, box] as const;
+  });
+  form.append(statements);
+
+  const noteField = element('div', { className: 'field' });
+  const noteLabel = element('label', { text: 'Note (optional)' });
+  noteLabel.htmlFor = 'posture-note';
+  const note = element('textarea', { testId: 'posture-note' });
+  note.id = 'posture-note';
+  note.placeholder = 'Where you read it, or your registration number';
+  note.maxLength = 1000;
+  note.value = draft?.note ?? '';
+  note.disabled = !section.editable;
+  noteField.append(noteLabel, note);
+  form.append(noteField);
+
+  const issues = element('div', { className: 'posture-issues', testId: 'posture-issues' });
+  form.append(issues);
+
+  const actions = element('div', { className: 'form-actions' });
+  const record = element('button', { className: 'btn btn-primary', text: 'Record posture' });
+  record.dataset['testid'] = 'posture-record';
+  (record as HTMLButtonElement).disabled = !section.editable;
+  record.addEventListener('click', () => {
+    const input: RecordPostureInput = {
+      state: state.value,
+      effectiveFromDate: effectiveFrom.value,
+      reviewDate: review.value,
+      confirmedStatements: boxes.filter(([, box]) => box.checked).map(([key]) => key),
+      note: note.value,
+    };
+    const found = postureFormIssues(input, {
+      statementCount: section.statements.length,
+      records: section.recordsForCheck,
+      zone: section.zone,
+    });
+    issues.replaceChildren();
+    for (const control of [state, effectiveFrom, review, note]) control.removeAttribute('aria-invalid');
+    if (found.length > 0) {
+      for (const issue of found) {
+        issues.append(element('p', { className: 'field-issue', text: issue.text, testId: `posture-issue-${issue.field}` }));
+        const control =
+          issue.field === 'state' ? state : issue.field === 'effectiveFrom' ? effectiveFrom : issue.field === 'reviewDate' ? review : issue.field === 'note' ? note : null;
+        control?.setAttribute('aria-invalid', 'true');
+      }
+      return;
+    }
+    postureDraft = input;
+    apply(bridge().recordPosture(input));
+  });
+  actions.append(record);
+  form.append(actions);
+  form.append(element('p', { className: 'hint', text: POSTURE_HINT }));
+  if (section.notEditableBecause !== null) {
+    form.append(element('p', { className: 'inert', text: section.notEditableBecause, testId: 'posture-inert' }));
+  }
+  block.append(form);
+
+  const json = element('details', { className: 'postures-json', testId: 'postures-json' });
+  json.append(element('summary', { text: 'Show as JSON' }), element('pre', { text: section.json, testId: 'postures-json-body' }));
+  block.append(json);
   root.append(block);
 }
 

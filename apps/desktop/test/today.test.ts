@@ -318,6 +318,38 @@ describe('the Today bridge', () => {
     expect((await bridge.snooze({ itemId: ITEM_ID, reason: 'Closed this week', returnAt: '2026-09-24T09:00' })).notice).toBe('held');
   });
 
+  it('keeps the notice through a read Home makes by itself, and clears it on Refresh (lane g84)', async () => {
+    const { api, calls } = scriptedApi({
+      '/today/firm': { status: 200, body: firmPage() },
+      '/today/snooze': accepted(snoozedAnswer()),
+    });
+    let reads = 0;
+    const bridge = createTodayBridge({
+      api,
+      handoff: { checkSetup: async () => await Promise.resolve({ ready: true }), dial: async () => await Promise.resolve({ status: 'opened', e164: '+14015550187' }) },
+      session: {
+        state: async () => await Promise.resolve(sessionState()),
+        refreshToday: async () => {
+          reads += 1;
+          return await Promise.resolve(null);
+        },
+      },
+    });
+    await bridge.expand({ firmId: FIRM_ID });
+    expect((await bridge.snooze({ itemId: ITEM_ID, reason: 'Waiting on their board', returnAt: '2026-09-24T09:00' })).notice).toBe('snoozed');
+
+    const quiet = await bridge.refresh({ quiet: true });
+    expect(reads).toBe(1);
+    expect(quiet.notice).toBe('snoozed');
+    // The expansion is read again with the list, so its route versions stay current.
+    expect(quiet.expanded?.firmId).toBe(FIRM_ID);
+    expect(calls.filter(call => call.path === '/today/firm')).toHaveLength(3);
+
+    const pressed = await bridge.refresh();
+    expect(reads).toBe(2);
+    expect(pressed.notice).toBeNull();
+  });
+
   it('refuses to dial before the card has told it whose number to call from', async () => {
     const { api } = scriptedApi({});
     let dialled = 0;
@@ -626,7 +658,7 @@ describe('the CRM bridge G3b was waiting for', () => {
     expect(view.opportunityIdByFirmId[OTHER_FIRM_ID]).toBeUndefined();
   });
 
-  it('answers the six methods G3b’s contract declares, and names six channels', async () => {
+  it('answers the methods G3b’s contract declares, and names eleven channels (six, and lane g84’s five)', async () => {
     // Lane G9 replaced the two reads this used to make with one board read that
     // carries the open opportunity id per firm the caller may change
     // (docs/decisions/g9-pipeline-board-read.md).
@@ -642,13 +674,15 @@ describe('the CRM bridge G3b was waiting for', () => {
     });
     const bridge = createCrmBridge({
       api,
+      clientVersion: '1.0.5',
       session: { state: async () => await Promise.resolve(sessionState()) },
     });
     const answer = await bridge.state();
     expect(answer.screen).toBe('pipeline');
     expect(answer.role).toBe('salesperson');
     expect(calls.map(call => call.path)).toEqual(['/pipeline/board']);
-    expect(Object.values(CRM_IPC_CHANNELS)).toHaveLength(6);
+    expect(Object.values(CRM_IPC_CHANNELS)).toHaveLength(11);
+    expect(new Set(Object.values(CRM_IPC_CHANNELS)).size).toBe(11);
   });
 
   it('offers a stage change only for the firms the board read named', async () => {
@@ -688,6 +722,7 @@ describe('the CRM bridge G3b was waiting for', () => {
     });
     const bridge = createCrmBridge({
       api,
+      clientVersion: '1.0.5',
       session: { state: async () => await Promise.resolve(sessionState()) },
     });
     const answer = await bridge.state();
@@ -702,6 +737,7 @@ describe('the CRM bridge G3b was waiting for', () => {
     });
     const bridge = createCrmBridge({
       api,
+      clientVersion: '1.0.5',
       session: { state: async () => await Promise.resolve(sessionState()) },
     });
     const answer = await bridge.state();
@@ -720,6 +756,7 @@ describe('the CRM bridge G3b was waiting for', () => {
     });
     const bridge = createCrmBridge({
       api,
+      clientVersion: '1.0.5',
       session: { state: async () => await Promise.resolve(sessionState()) },
     });
     const answer = await bridge.saveContact({
@@ -760,7 +797,7 @@ describe('a refused merge reaches the conflict screen (lane g78, D05)', () => {
         '/merges/firms': { status: 409, body: { status: 'refused', replayed, reason: 'merge_conflicts', conflicts } },
         '/firms': { status: 200, body: { firms: [identity(FIRM_ID, 'Northwind Test Holdings'), identity(SOURCE_ID, 'Northwind (dup)')] } },
       });
-      const bridge = createCrmBridge({ api, session: { state: async () => await Promise.resolve(sessionState()) } });
+      const bridge = createCrmBridge({ api, clientVersion: '1.0.5', session: { state: async () => await Promise.resolve(sessionState()) } });
       const answer = await bridge.resolveMerge({ sourceFirmId: SOURCE_ID, targetFirmId: FIRM_ID, resolutions: {} });
       expect(answer.notice).toBe('merge_conflicts');
       expect(answer.screen).toBe('merge');
@@ -778,7 +815,7 @@ describe('a refused merge reaches the conflict screen (lane g78, D05)', () => {
     const { api } = scriptedApi({
       '/merges/firms': { status: 409, body: { status: 'refused', replayed: false, reason: 'merge_same_record' } },
     });
-    const bridge = createCrmBridge({ api, session: { state: async () => await Promise.resolve(sessionState()) } });
+    const bridge = createCrmBridge({ api, clientVersion: '1.0.5', session: { state: async () => await Promise.resolve(sessionState()) } });
     const answer = await bridge.resolveMerge({ sourceFirmId: FIRM_ID, targetFirmId: FIRM_ID, resolutions: {} });
     expect(answer.notice).toBe('merge_same_record');
     expect(answer.merge).toBeNull();

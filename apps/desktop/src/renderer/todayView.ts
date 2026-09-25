@@ -1,3 +1,4 @@
+import { callbackInstant, localParts } from '@fss/contracts';
 import type { TodayCard, TodayRoute, TodayState, TodayTask } from './todayContract.ts';
 
 /**
@@ -243,4 +244,112 @@ export function buildTodayView(state: TodayState): TodayScreenView {
     showingCachedList: state.stale && state.cards.length > 0,
     emptyMessage: state.cards.length > 0 ? null : state.online ? EMPTY_LIST : EMPTY_OFFLINE,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Keeping the list current (lane g84, audit item G05)
+// ---------------------------------------------------------------------------
+
+/**
+ * Home read the list at sign-in and on Refresh, and nowhere else, so a window left open
+ * overnight showed yesterday's list at nine the next morning and said nothing about its
+ * age. These are the rules that replace that, as values: when Home reads again by
+ * itself, and the line that says how old the list on screen is.
+ *
+ * **When.** On focus, when the last read is at least a minute old — coming back from the
+ * phone app or the browser is the moment the list may have moved. And at the business
+ * day's rollover: 05:00 in the workspace's business zone, when the day's list is built
+ * (8.2, "built at 05:00 in the configurable workspace zone"), and 05:10 again for a
+ * build that took longer than the minute. A Mac asleep through both reads on the first
+ * tick after it wakes, because the question is whether a rollover has passed since the
+ * last read, not whether it is 05:00 now.
+ *
+ * **Not over a person's typing.** Home defers either read while somebody is typing in
+ * the lanes; that rule needs the page, so it lives in `homePage.ts`.
+ */
+
+/** How old the last read must be before a focus reads again. */
+export const FOCUS_REFRESH_AFTER_MS = 60_000;
+/** How often Home looks at the clock: the "Updated" line's minutes, and the rollover. */
+export const TODAY_TICK_MS = 30_000;
+/** The business day's rollover, and the second look for a slow build. */
+export const ROLLOVER_TIMES: readonly string[] = Object.freeze(['05:00', '05:10']);
+
+/** The day before a `YYYY-MM-DD`, as one. */
+function previousDate(date: string): string {
+  const [year, month, day] = date.split('-').map(Number);
+  const before = new Date(Date.UTC(year ?? 1970, (month ?? 1) - 1, (day ?? 1) - 1));
+  return before.toISOString().slice(0, 10);
+}
+
+/**
+ * The most recent rollover at or before `now` in `zone`, as epoch milliseconds, or null
+ * when the zone is not one this Mac knows.
+ */
+export function latestRollover(now: number, zone: string): number | null {
+  let today: string;
+  try {
+    today = localParts(now, zone).date;
+  } catch {
+    return null;
+  }
+  let latest: number | null = null;
+  for (const date of [previousDate(today), today]) {
+    for (const time of ROLLOVER_TIMES) {
+      const instant = callbackInstant(date, time, zone);
+      const at = instant === null ? Number.NaN : Date.parse(instant);
+      if (Number.isFinite(at) && at <= now && (latest === null || at > latest)) latest = at;
+    }
+  }
+  return latest;
+}
+
+/**
+ * Whether Home should read the list again by itself. `lastAttempt` is when it last asked
+ * — at sign-in, on Refresh, on Retry or by itself — or null when it never has.
+ */
+export function refreshDue(input: {
+  readonly trigger: 'focus' | 'tick';
+  readonly now: number;
+  readonly lastAttempt: number | null;
+  readonly zone: string;
+}): boolean {
+  if (input.lastAttempt === null) return true;
+  const rollover = latestRollover(input.now, input.zone);
+  if (rollover !== null && input.lastAttempt < rollover) return true;
+  return input.trigger === 'focus' && input.now - input.lastAttempt >= FOCUS_REFRESH_AFTER_MS;
+}
+
+/**
+ * "Updated just now", "Updated 4 min ago": how old the list on screen is, from the
+ * instant the session says it was fetched. Null when there is no list. A clock a few
+ * seconds behind the server's is "just now", never "in the future".
+ */
+export function updatedLine(asOf: string | null, now: number): string | null {
+  if (asOf === null) return null;
+  const at = Date.parse(asOf);
+  if (!Number.isFinite(at)) return null;
+  const minutes = Math.floor((now - at) / 60_000);
+  if (minutes < 1) return 'Updated just now';
+  if (minutes < 60) return `Updated ${String(minutes)} min ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return hours === 1 ? 'Updated 1 hour ago' : `Updated ${String(hours)} hours ago`;
+  return 'Updated more than a day ago';
+}
+
+/**
+ * Whether the last read failed: the session fell back to the cache (stale), could not
+ * reach the server, or has no list at all. A read that succeeds always sets `asOf`.
+ */
+export function refreshFailed(state: TodayState): boolean {
+  return !state.online || state.stale || state.asOf === null;
+}
+
+/**
+ * The part of the state the lanes are drawn from, as text. `asOf` changes on every read
+ * and the lanes never show it, so it is left out: a focus read that found the same list
+ * must not redraw the lanes and drop what somebody was typing in them.
+ */
+export function lanesKey(state: TodayState | null): string {
+  return state === null ? 'null' : JSON.stringify({ ...state, asOf: null });
 }

@@ -3,7 +3,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
-import type { CrmState, PipelineView } from '../../../src/renderer/firmWorkspaceContract.ts';
+import type { CrmState, ImportView, PipelineView } from '../../../src/renderer/firmWorkspaceContract.ts';
 
 /**
  * The generated test server the CRM window specs run against.
@@ -59,6 +59,11 @@ const IDENTITY = {
   timeZone: 'America/New_York',
   timeZoneUnresolvedReason: null,
 };
+
+/** A firm with no open opportunity, which the board holds in no column (lane g84). */
+export function unplacedIdentity(id: string, name: string): NonNullable<PipelineView['unplacedFirms']>[number] {
+  return { ...IDENTITY, id, name, stageKey: null, opportunityStatus: null, controlMode: null, openedAt: null };
+}
 
 /** The Firm page as the assigned salesperson is given it (Appendix F row 2). */
 export function assigneeFirmPage(): NonNullable<CrmState['firm']> {
@@ -156,6 +161,60 @@ export function mergeView(): NonNullable<CrmState['merge']> {
   };
 }
 
+const PREVIEW_FIRM = {
+  name: 'Aspen Test Wealth',
+  website: 'https://aspen.example.test',
+  addressLine: null,
+  locality: null,
+  regionCode: null,
+  postalCode: null,
+  externalId: null,
+  ownerUserId: null,
+  timeZone: null,
+};
+
+/** The server's preview of a four-row file (lane g84): a new firm, a contact, a duplicate, a fault. */
+export function importPreviewView(): ImportView {
+  return {
+    fileName: 'prospects.csv',
+    fileRefusal: null,
+    results: null,
+    preview: {
+      rows: [
+        { rowNumber: 2, outcome: 'create', issues: [], firm: PREVIEW_FIRM, contact: { fullName: 'Kim Placeholder', title: 'Principal' }, routes: [{ kind: 'email', value: 'kim@aspen.example.test' }, { kind: 'phone', value: '+14015550121' }], match: null },
+        { rowNumber: 3, outcome: 'attach', issues: [], firm: PREVIEW_FIRM, contact: { fullName: 'Lee Placeholder', title: null }, routes: [], match: { kind: 'in_file', rowNumber: 2, matchedOn: 'domain' } },
+        { rowNumber: 4, outcome: 'duplicate', issues: [{ column: 'contact_email', code: 'duplicate_in_file' }], firm: PREVIEW_FIRM, contact: { fullName: 'Kim Again', title: null }, routes: [{ kind: 'email', value: 'kim@aspen.example.test' }], match: { kind: 'in_file', rowNumber: 2, matchedOn: 'domain' } },
+        { rowNumber: 5, outcome: 'invalid', issues: [{ column: 'contact_phone', code: 'phone_invalid' }], firm: { ...PREVIEW_FIRM, name: 'Quince Test Co', website: null }, contact: { fullName: 'Pat Placeholder', title: null }, routes: [], match: null },
+      ],
+      counts: { create: 1, attach: 1, duplicate: 1, invalid: 1 },
+    },
+  };
+}
+
+/** What the commit of that preview answered: row 2 in, row 3 refused at commit. */
+export function importResultsView(): ImportView {
+  return {
+    ...importPreviewView(),
+    results: {
+      results: [
+        { rowNumber: 2, status: 'accepted', replayed: false, reason: null, firmId: FIRM_ID, column: null, outcome: 'created' },
+        { rowNumber: 3, status: 'refused', replayed: false, reason: 'duplicate_in_workspace', firmId: null, column: 'contact_email', outcome: null },
+      ],
+      counts: { accepted: 1, refused: 1 },
+    },
+  };
+}
+
+export const EMPTY_DRAFT = {
+  name: '',
+  website: '',
+  timeZone: '',
+  contactName: '',
+  contactTitle: '',
+  contactEmail: '',
+  contactPhone: '',
+};
+
 export function crmState(overrides: Partial<CrmState> = {}): CrmState {
   return {
     screen: 'firm',
@@ -179,6 +238,11 @@ globalThis.callieCrm = {
   async saveContact(input) { return await ask('saveContact', input); },
   async changeStage(input) { return await ask('changeStage', input); },
   async resolveMerge(input) { return await ask('resolveMerge', input); },
+  async openAddFirm() { return await ask('openAddFirm'); },
+  async addFirm(input) { return await ask('addFirm', input); },
+  async openImport() { return await ask('openImport'); },
+  async previewImport(input) { return await ask('previewImport', input); },
+  async commitImport() { return await ask('commitImport'); },
 };
 async function ask(method, argument) {
   const response = await fetch('/bridge/' + method, {
@@ -248,6 +312,16 @@ export async function startCrmTestServer(initial: CrmState): Promise<CrmTestServ
         if (method === 'saveContact') state = { ...state, notice: 'saved' };
         if (method === 'changeStage') state = { ...state, notice: 'stage_changed' };
         if (method === 'resolveMerge') state = { ...state, notice: 'merged' };
+        // Lane g84: Add firm and Import.
+        if (method === 'openAddFirm') {
+          state = { ...state, screen: 'add_firm', notice: null, addFirm: { draft: EMPTY_DRAFT, issues: [], duplicateFirmId: null } };
+        }
+        if (method === 'addFirm') state = { ...state, screen: 'firm', firm: assigneeFirmPage(), addFirm: null, notice: 'firm_added' };
+        if (method === 'openImport') {
+          state = { ...state, screen: 'import', notice: null, import: { fileName: null, preview: null, fileRefusal: null, results: null } };
+        }
+        if (method === 'previewImport') state = { ...state, screen: 'import', notice: null, import: importPreviewView() };
+        if (method === 'commitImport') state = { ...state, notice: 'imported_with_refusals', import: importResultsView() };
         return send(200, 'application/json', JSON.stringify(state));
       }
       return send(404, 'text/plain', 'not found');

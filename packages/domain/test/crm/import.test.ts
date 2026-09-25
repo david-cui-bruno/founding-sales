@@ -38,7 +38,10 @@ describe('CSV import', () => {
 
   const context = (scope: WorkspaceScope): RepositoryContext => repositoryContext(scope, session);
 
-  const csv = (...rows: readonly string[]): string => [IMPORT_COLUMNS.join(','), ...rows].join('\n');
+  // The twelve columns the file had before lane g84 added `time_zone`: a file written to
+  // the old list is still a file this one reads, because a header may name any subset.
+  const csv = (...rows: readonly string[]): string =>
+    [IMPORT_COLUMNS.filter(column => column !== 'time_zone').join(','), ...rows].join('\n');
 
   beforeAll(async () => {
     database = await createTestDatabase();
@@ -148,7 +151,7 @@ describe('CSV import', () => {
     expect(byRow.get(7)?.outcome).toBe('invalid');
     expect(byRow.get(7)?.issues.map(issue => issue.code)).toEqual(['firm_name_missing']);
 
-    expect(preview.value.counts).toEqual({ create: 2, duplicate: 2, invalid: 2 });
+    expect(preview.value.counts).toEqual({ create: 2, attach: 0, duplicate: 2, invalid: 2 });
   });
 
   it('says nothing about the workspace next door, in the whole preview', async () => {
@@ -200,17 +203,23 @@ describe('CSV import', () => {
     expect(alias.rows.map(entry => entry.alias_value)).toEqual(['MAR-1']);
   });
 
-  it('refuses to commit a row the preview called invalid or duplicate', async () => {
+  it('refuses to commit a row the preview called invalid or duplicate, naming its code and column', async () => {
     const preview = await previewCsvImport(context(admin), {
-      csv: csv(',,,,,,,,,,,', `${crm.collidingFirmName},,,,,,,,,,,`),
+      csv: csv(',https://nameless.example.test,,,,,,,,,,', `${crm.collidingFirmName},,,,,,,,,,,`),
     });
     expect(preview.ok).toBe(true);
     if (!preview.ok) return;
+    const reasons: [number | null, string, string | null][] = [];
     for (const row of preview.value.rows) {
       const committed = await commitImportRow(context(admin), row);
       expect(committed.ok, String(row.rowNumber)).toBe(false);
-      if (!committed.ok) expect(committed.reason).toBe('invalid_input');
+      if (!committed.ok) reasons.push([committed.rowNumber, committed.reason, committed.column]);
     }
+    // Lane g84: the refusal is the row's own fault, where it is, rather than `invalid_input`.
+    expect(reasons).toEqual([
+      [2, 'firm_name_missing', 'firm_name'],
+      [3, 'duplicate_in_workspace', 'firm_name'],
+    ]);
   });
 
   it('rolls the whole row back when one of its parts fails, leaving no half-firm', async () => {

@@ -14,7 +14,15 @@ import {
 import type { AdminState } from './settingsContract.ts';
 import type { TodayState } from './todayContract.ts';
 import { renderLanes } from './todayLanes.ts';
-import { buildTodayView, type BannerView } from './todayView.ts';
+import {
+  TODAY_TICK_MS,
+  buildTodayView,
+  lanesKey,
+  refreshDue,
+  refreshFailed,
+  updatedLine,
+  type BannerView,
+} from './todayView.ts';
 
 /**
  * Home: what a signed-in person sees in the main window (lane g65; specification 8.2,
@@ -39,6 +47,14 @@ import { buildTodayView, type BannerView } from './todayView.ts';
  * typing — a snooze reason, a call note — so they are redrawn only when `callieToday`
  * answers with a list that differs from the one on screen, and are `aria-busy` while a
  * call to it is in flight.
+ *
+ * **The list keeps itself current (lane g84, audit item G05).** Home reads the list
+ * again when the window regains focus and the last read is a minute old, and at the
+ * business day's rollover (`refreshDue` in `todayView.ts` has the rules). The list on
+ * screen stays while the read is in flight; a line under the summary says how old it is
+ * — "Updated just now", "Updated 4 min ago" — and, when the read failed, says so beside
+ * a Retry, under the offline or stale line the column already shows. Neither read runs
+ * while somebody is typing in the lanes: it waits for the next tick.
  */
 
 export interface HomeContext {
@@ -67,6 +83,13 @@ let lanesDrawnFrom: string | undefined;
 /** `callieToday` calls not yet answered; the lanes are `aria-busy` while there are any. */
 let todayPending = 0;
 let redraw: () => void = () => undefined;
+/** When Home last asked for the list to be read again, by any trigger, or null. */
+let lastRefreshAt: number | null = null;
+/** Whether a read of the list has answered since sign-in; until then no failure is claimed. */
+let refreshAnswered = false;
+/** Whether somebody has typed or chosen in the lanes since they were last drawn. */
+let lanesEdited = false;
+let ticker: ReturnType<typeof setInterval> | null = null;
 
 /** `renderer.ts` says how to draw the window again when an answer arrives. */
 export function setHomeRedraw(next: () => void): void {
@@ -102,7 +125,7 @@ async function keep<T>(read: () => Promise<T>, store: (value: T) => void, failed
 }
 
 /** One `callieToday` call, counted while it is in flight. */
-async function keepToday(next: () => Promise<TodayState>): Promise<void> {
+async function keepToday(next: () => Promise<TodayState>, options: { readonly read?: boolean } = {}): Promise<void> {
   todayPending += 1;
   redraw();
   await keep(
@@ -115,6 +138,7 @@ async function keepToday(next: () => Promise<TodayState>): Promise<void> {
     },
     value => {
       today = value;
+      if (options.read === true) refreshAnswered = true;
     },
   );
 }
@@ -123,7 +147,54 @@ async function keepToday(next: () => Promise<TodayState>): Promise<void> {
 export async function loadHomeToday(refresh: boolean): Promise<void> {
   const bridge = globalThis.callieToday;
   if (bridge === undefined) return;
-  await keepToday(async () => (refresh ? await bridge.refresh() : await bridge.state()));
+  if (refresh) lastRefreshAt = Date.now();
+  await keepToday(async () => (refresh ? await bridge.refresh() : await bridge.state()), { read: refresh });
+}
+
+/**
+ * Whether somebody is in the middle of something in the lanes: a field there has focus,
+ * or they have typed or chosen since the lanes were drawn. A read that found a changed
+ * list would redraw the lanes and drop it, so the read waits.
+ */
+function personIsTyping(): boolean {
+  const lanes = document.querySelector('[data-region="today"]');
+  if (!(lanes instanceof HTMLElement)) return false;
+  const active = document.activeElement;
+  const focused = active instanceof HTMLElement && lanes.contains(active) && active.matches('input, textarea, select');
+  return focused || lanesEdited;
+}
+
+/**
+ * Read the list again if it is due (lane g84, G05): on focus when the last read is a
+ * minute old, and on the tick after the business day's rollover. Quiet, so the notice
+ * on screen stays; skipped while a read is in flight or somebody is typing in the lanes.
+ */
+export function autoRefreshToday(trigger: 'focus' | 'tick', now: number = Date.now()): void {
+  const bridge = globalThis.callieToday;
+  if (bridge === undefined || today === null || todayPending > 0) return;
+  const zone = today.businessTimeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+  if (!refreshDue({ trigger, now, lastAttempt: lastRefreshAt, zone })) return;
+  if (personIsTyping()) return;
+  lastRefreshAt = now;
+  void keepToday(async () => await bridge.refresh({ quiet: true }), { read: true });
+}
+
+/** The "Updated" line's words for the list on screen now. */
+function updatedText(): string {
+  return today === null ? '' : (updatedLine(today.asOf, Date.now()) ?? '');
+}
+
+/**
+ * Every thirty seconds: the "Updated" line's minutes, written into the line in place so
+ * nothing else on the page is redrawn, and the rollover check. Started once, at boot.
+ */
+export function startTodayTicker(): void {
+  if (ticker !== null) return;
+  ticker = setInterval(() => {
+    const text = document.querySelector('[data-testid="today-updated-text"]');
+    if (text !== null && text.textContent !== updatedText()) text.textContent = updatedText();
+    autoRefreshToday('tick');
+  }, TODAY_TICK_MS);
 }
 
 /**
@@ -166,6 +237,9 @@ export function forgetHome(): void {
   figures = { requested: null, answered: false, dashboard: null };
   thisMacOpen = false;
   lanesDrawnFrom = undefined;
+  lastRefreshAt = null;
+  refreshAnswered = false;
+  lanesEdited = false;
 }
 
 function applyToday(next: Promise<TodayState>): void {
@@ -244,6 +318,29 @@ function renderHeader(header: HTMLElement, view: HomeView, context: HomeContext)
   });
   line.append(refresh);
   header.append(line);
+  renderUpdated(header, context);
+}
+
+/**
+ * How old the list on screen is, and whether the last read failed (lane g84, G05). The
+ * failure is said once here, beside Retry; why it failed is the offline or stale line
+ * above the lanes, which the column already shows. While a read is in flight the line
+ * keeps what it said, so nothing flickers.
+ */
+function renderUpdated(header: HTMLElement, context: HomeContext): void {
+  if (today === null || globalThis.callieToday === undefined) return;
+  const line = element('p', { className: 'updated', testId: 'today-updated' });
+  line.append(element('span', { text: updatedText(), testId: 'today-updated-text' }));
+  if (refreshAnswered && refreshFailed(today)) {
+    line.append(element('span', { text: today.asOf === null ? 'Could not refresh.' : ' · Could not refresh.', testId: 'today-refresh-failed' }));
+    const retry = button('Retry', 'today-retry', true);
+    retry.className = 'btn btn-quiet';
+    retry.addEventListener('click', () => {
+      context.refresh();
+    });
+    line.append(retry);
+  }
+  header.append(line);
 }
 
 function renderNotices(notices: HTMLElement, view: HomeView): void {
@@ -257,9 +354,11 @@ function renderTodayRegion(region: HTMLElement, view: HomeView, todayView: Retur
   region.setAttribute('aria-busy', String(todayPending > 0));
   // Compared as text: the cached list and the fresh read are two objects with the same
   // content more often than not, and redrawing for that would drop a half-typed reason.
-  const drawnFrom = JSON.stringify(today);
+  // Without `asOf`, which every read changes and the lanes never show (lane g84).
+  const drawnFrom = lanesKey(today);
   if (lanesDrawnFrom === drawnFrom) return;
   lanesDrawnFrom = drawnFrom;
+  lanesEdited = false;
   region.replaceChildren();
   const bridge = globalThis.callieToday;
   if (view.lanes === null || bridge === undefined) {
@@ -363,6 +462,14 @@ function skeleton(root: HTMLElement): void {
   ] as const) {
     const part = element(tag, { className, testId });
     part.dataset['region'] = name;
+    if (name === 'today') {
+      // Anything typed or chosen in the lanes holds off a read Home would make by itself.
+      for (const kind of ['input', 'change']) {
+        part.addEventListener(kind, () => {
+          lanesEdited = true;
+        });
+      }
+    }
     column.append(part);
   }
   root.append(sidebar, column);

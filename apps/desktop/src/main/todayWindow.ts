@@ -55,7 +55,10 @@ export function resetWindowRegistrations(): void {
 export function registerTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
   const host = createTodayBridge(deps);
   handleOnce(TODAY_IPC_CHANNELS.state, async () => await host.state());
-  handleOnce(TODAY_IPC_CHANNELS.refresh, async () => await host.refresh());
+  // Only `quiet: true` is taken from the renderer; anything else is the plain Refresh.
+  handleOnce(TODAY_IPC_CHANNELS.refresh, async argument =>
+    await host.refresh({ quiet: (argument as { quiet?: unknown } | null)?.quiet === true }),
+  );
   handleOnce(TODAY_IPC_CHANNELS.expand, async argument => {
     // The renderer's word is never taken for a shape: a malformed request is the
     // current state back, not an argument passed on to the API.
@@ -180,6 +183,31 @@ export function registerCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
     }
     return await host.resolveMerge(input as unknown as Parameters<CrmBridgeHost['resolveMerge']>[0]);
   });
+  // Lane g84: Add firm and Import. The form's seven fields are strings or the call is
+  // refused here; a file is text and a name, and its size is the bridge's to judge.
+  handleOnce(CRM_IPC_CHANNELS.openAddFirm, async () => await host.openAddFirm());
+  handleOnce(CRM_IPC_CHANNELS.addFirm, async argument => {
+    const input = argument as Record<string, unknown> | null;
+    const fields = ['name', 'website', 'timeZone', 'contactName', 'contactTitle', 'contactEmail', 'contactPhone'] as const;
+    if (input === null || fields.some(field => typeof input[field] !== 'string')) return await host.state();
+    const text = (field: (typeof fields)[number]): string => input[field] as string;
+    return await host.addFirm({
+      name: text('name'),
+      website: text('website'),
+      timeZone: text('timeZone'),
+      contactName: text('contactName'),
+      contactTitle: text('contactTitle'),
+      contactEmail: text('contactEmail'),
+      contactPhone: text('contactPhone'),
+    });
+  });
+  handleOnce(CRM_IPC_CHANNELS.openImport, async () => await host.openImport());
+  handleOnce(CRM_IPC_CHANNELS.previewImport, async argument => {
+    const input = argument as { csv?: unknown; fileName?: unknown } | null;
+    if (typeof input?.csv !== 'string' || typeof input.fileName !== 'string') return await host.state();
+    return await host.previewImport({ csv: input.csv, fileName: input.fileName });
+  });
+  handleOnce(CRM_IPC_CHANNELS.commitImport, async () => await host.commitImport());
   return host;
 }
 

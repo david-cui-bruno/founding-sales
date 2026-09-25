@@ -1013,3 +1013,97 @@ main#app section label {
   padding: 6px 0;
   border-top: 1px solid var(--line);
 }
+
+/* ------------------------------------------------------------------------- */
+/* Lane g84: Add firm, Import, the postures form and Today's "Updated" line   */
+/* ------------------------------------------------------------------------- */
+
+.toolbar,
+.form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0 20px;
+}
+
+.form-actions {
+  margin: 12px 0 8px;
+}
+
+/* A label over its field, and the field's issue under it. */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: 440px;
+  margin: 6px 0;
+}
+
+main#app .field label {
+  display: block;
+  margin: 0;
+  font-size: 13px;
+}
+
+main#app .field input:not([type='checkbox'], [type='radio']),
+main#app .field select {
+  margin: 0;
+}
+
+.field-issue {
+  margin: 2px 0 0;
+  color: var(--stop);
+  font-size: 13px;
+}
+
+.import-chooser textarea {
+  min-height: 120px;
+  font: 12.5px/1.5 var(--mono);
+}
+
+.import-rows .row {
+  align-items: flex-start;
+}
+
+.import-rows .field-issue {
+  display: block;
+}
+
+.unplaced .rows button {
+  padding-left: 0;
+}
+
+/* A row's right-hand cell when it holds a tag and the hover actions together. */
+.row-side {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* The postures form: a statement per line, the box beside its words. */
+main#app .posture-statement {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  max-width: 680px;
+  margin: 6px 0;
+  color: var(--ink);
+  font-size: 13.5px;
+}
+
+main#app .posture-statement input {
+  margin-top: 3px;
+}
+
+.posture-rule {
+  max-width: 680px;
+  color: var(--ink-2);
+  font-size: 13.5px;
+}
+
+.updated {
+  margin: -14px 0 18px;
+  color: var(--ink-3);
+  font-size: 13px;
+}
