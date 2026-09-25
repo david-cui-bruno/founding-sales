@@ -1,5 +1,6 @@
 import {
   addRouteCommandSchema,
+  checkRouteCommandSchema,
   confirmRouteCommandSchema,
   createContactCommandSchema,
   retireRouteCommandSchema,
@@ -12,6 +13,7 @@ import {
   confirmPhoneRoute,
   createContact,
   listContacts,
+  requestEmailRouteValidation,
   retireRoute,
   updateContact,
   verifyRoute,
@@ -113,6 +115,16 @@ export async function routeContacts(request: ApiRequest, options: RoutingOptions
       // the confirmation makes the route, and the version moves with it.
       return await runCrmCommand(deps, confirmRouteCommandSchema, 'route.confirmed', async (repository, body) =>
         await confirmPhoneRoute(repository, { routeId: body.routeId, routeVersion: body.routeVersion }),
+      );
+    case '/contacts/routes/check':
+      // Lane g90: "Check again" on an address still being checked. It queues one more
+      // `route.validate` job and changes nothing about the route; the worker's answer does.
+      return await runCrmCommand(deps, checkRouteCommandSchema, 'route.check_requested', async (repository, body) =>
+        await requestEmailRouteValidation(repository, {
+          routeId: body.routeId,
+          routeVersion: body.routeVersion,
+          commandId: body.commandId,
+        }),
       );
     case '/contacts/routes/retire':
       return await runCrmCommand(deps, retireRouteCommandSchema, 'route.retired', async (repository, body) =>

@@ -237,8 +237,11 @@ clear non-actionable state" is a unit test rather than a screenshot.
   receipt plus the `route.phone.confirmed` audit event record who confirmed it and when.
   A version older than the page is refused `route_version_stale`, a failed number
   `route_invalid`. An email address is not confirmed by hand. Its validation is
-  deliverability, which a person cannot supply, and the page says so under an
-  unconfirmed address.
+  deliverability, which a person cannot supply; the worker checks it (lane g90), and
+  each address says where that stands — **Checking…** with **Check again**
+  (`POST /contacts/routes/check`), **Deliverable domain — usable**, or **Mail can’t
+  reach this address — invalid** (`docs/greenfield/crm.md`, "Email technical
+  validation").
 * **Sequences** (lane g88) — the enrolments running at this firm, by sequence name and
   version, and a contact and a published version to enrol (`/enrollments/enroll`, with the
   page's firm and open opportunity). A firm with no opportunity is offered **Add to

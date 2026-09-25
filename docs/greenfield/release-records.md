@@ -1,9 +1,10 @@
-# FSS release records 8.0 to 8.0av
+# FSS release records 8.0 to 8.0aw
 
 These are the records that were section 8 of `release.md` until 25 September 2026: what
 each credentialed run proved and refuted, and what each lane's change did. They moved
 here verbatim (lane g93) so that `release.md` is only the runbook, and nothing is added
-to them. A change is now one line in `changelog.md`.
+to them, except 8.0aw, which lane g90 wrote before the move and which landed after it
+(PR 231). A change is now one line in `changelog.md`.
 
 A reference anywhere in the repository such as "release.md 8.0u" or "release runbook
 8.0u" names the record of that number below, and one to an item of "8.1" from before
@@ -2453,6 +2454,46 @@ Fourteen mutations are appended to `scripts/releaseMutationCheck.mjs` (main + 14
 - The old tree's own pins of the renamed scripts, `test/verifyRelease.test.mjs` and `test/releaseDocumentation.test.mjs`, pass locally. `old-trees-changed` was run by hand for a pull request, a push, a zero `before` and an empty `before`.
 
 **Still unverified.** Whether `source` and `client` are required status checks, and so whether a skipped run satisfies branch protection as GitHub documents. The new jobs, `source` (with `legacy:setup` and the full old gate) and `client` passed on pull request 229 while `secrets` was still on macOS; the Linux `secrets` job's first run is the one after this record. The `linux_x64` checksum was supplied by the coordinator from the release's checksums file; this lane did not fetch it.
+
+### 8.0aw What lane g90 changed: an address is checked by the worker, and its domain decides (25 September)
+
+**The gap.** Lanes g84 and g88 found it. An email address added or imported from the Mac was created `technical_validation = 'unknown'`, `eligibility = 'candidate'`, and nothing ever changed either. `route-policy.1` makes a route usable only with a passed validation, so once sending opens on about 1 October every email step to such a contact would hold `route_candidate` at PR 216's frozen-route check. 8.0au left this open.
+
+**What g90 changes.** `docs/decisions/g90-email-technical-validation.md` has the reasoning, and `docs/greenfield/crm.md` ("Email technical validation") has the rules.
+
+- **What `passed` means (`email-validation.1`).** RFC 5321-sane syntax, not a special-use name, no failed twin in the workspace, and a domain with an MX, or with no MX and an A or AAAA record (RFC 5321's implicit MX, accepted). A null MX, NXDOMAIN, and no mail host at all are `failed`, and so the route is `invalid`. A timeout, SERVFAIL or any other resolver error writes nothing and is asked again. No SMTP callout, no third party, nothing sent.
+- **A new job kind, `route.validate`** (business uniqueness, key `route-validate:{route}:{version}:{round}`). `addEmailRoute` enqueues it in the creating command's transaction. The handler asks DNS before it locks anything, then writes through `recordEmailRouteValidation`, a compare-and-set on the unchecked candidate at the job's version, and writes `route.email.validated`. No answer writes `route.email.validation_deferred` and completes the job. Nothing here can lower a usable route.
+- **The resolver is the worker's own** (`node:dns/promises`, the VPC's resolver), registered in every deployment. No credential, no infrastructure change.
+- **The sweep, `route-validation`,** asks again about an unchecked address 10 minutes after its last change, then hourly for its first day, then daily, at most 20 a pass. It is also the backfill for every address the carry and the Mac left `unknown`.
+- **Association.** An address a member entered themselves (`salesperson`, `import`) records confidence 1 when it passes, and so becomes usable. A research or website address with no confidence stays a candidate. **This is a departure from the brief and David's to confirm** (decision doc, section 2).
+- **The Firm page.** g88's sentence under the addresses is replaced by a state beside each one: **Checking…** with **Check again** (`POST /contacts/routes/check`, one job per command), **Deliverable domain — usable**, **Deliverable domain — not usable yet**, or **Mail can’t reach this address — invalid**. The state is read from the route's `technicalValidation`, which the Firm page read now sends only when asked with `pageVersion: 2`, so desktop 1.0.5 keeps parsing.
+
+**Release class.** Application-only, with no migration and no schema range change. The API and the worker go together, because the API enqueues what the worker claims. The desktop goes after the API, because an older API refuses `pageVersion: 2`. Desktop 1.0.5 keeps working unchanged. Under the 25 September cadence this is deploy and smoke, with no rehearsal.
+
+**What the deploy should show.**
+
+1. `worker_configuration` as before. The first passes insert up to 20 `route.validate` jobs each for addresses already left unchecked (the carry's, and any added since), and those jobs complete rather than die.
+2. `route.email.validated` audit events with `reason` `mx_present` or `implicit_mx` for real firms' addresses, and those routes `usable` at version 2 with `association_confidence = 1`.
+3. `route.email.validation_deferred` events in any number would mean the VPC resolver is not answering. That is the thing to look at first.
+4. An address added from the Mac reads **Checking…** for a few seconds, then **Deliverable domain — usable** on the next open.
+
+**Tests.**
+
+- Release check: `test/release/emailValidation.check.ts` (2). An address imported through the Mac's bridge and the real routes is an unchecked candidate, and the worker's runner makes it usable with confidence 1 and route-policy.1. Its NXDOMAIN neighbour ends invalid, and the page the bridge fetches afterwards shows the usable state. A timed-out address from Add firm stays a candidate until Check again and the sweep ask again.
+- Domain: `packages/domain/test/crm/routeValidation.test.ts`, covering the decision table, each source's eligibility, the known-bad rule and the compare-and-set.
+- Worker: `apps/worker/test/routeValidate.test.ts`, covering MX, A-only, NXDOMAIN, a timeout re-asked by the sweep, hourly then daily rounds, the per-pass bound, and the stolen-lease probe.
+- API: `apps/api/test/emailValidation.test.ts`. It parses the first version with 1.0.5's schema, and covers Check again's receipt and refusals.
+- Desktop units: `emailValidation.test.ts`. Playwright: `firmWorkspace.spec.ts`.
+
+Six mutations are appended to `scripts/releaseMutationCheck.mjs` (main + 6). Each was applied by hand and turned its own suite red.
+
+**Still unverified.** Nothing here has asked a real DNS server. The fake resolver stands for Node's in every test.
+
+- Node's rendering of a null MX as an empty exchange is taken from its documentation, not observed.
+- The VPC resolver answering MX queries from the worker task is inferred from the network module, not measured.
+- A parked domain with an A record passes; the first bounce is what corrects it.
+- The sweep scans `email_addresses` without an index, since adding one is a migration. The decision doc names it.
+- Nothing has run in Electron.
 
 ### 8.1 Still unverified, as it stood on 25 September 2026
 

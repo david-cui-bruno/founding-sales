@@ -98,9 +98,13 @@ interface OpportunityRowShape {
 
 export async function readFirmPage(
   context: RepositoryContext,
-  input: { readonly firmId: string },
+  input: {
+    readonly firmId: string;
+    /** Lane g90: the second version, whose routes carry their technical validation. */
+    readonly routeValidation?: boolean | undefined;
+  },
 ): Promise<CrmResult<FirmPageDto>> {
-  const read = await readFirmForActor(context, { firmId: input.firmId });
+  const read = await readFirmForActor(context, { firmId: input.firmId, routeValidation: input.routeValidation });
   if (!read.ok) return read;
   if (read.value.visibility === 'any_active_member') {
     return accept({ visibility: 'any_active_member', read: read.value });

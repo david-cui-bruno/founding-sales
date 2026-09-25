@@ -68,6 +68,10 @@ export function render(state: CrmState | null): void {
       onConfirmRoute: request => {
         apply(bridge().confirmRoute(request));
       },
+      // Lane g90: Check again, on an address still being checked.
+      onCheckRoute: request => {
+        apply(bridge().checkRoute(request));
+      },
       onOpenOpportunity: () => {
         apply(bridge().openOpportunity());
       },

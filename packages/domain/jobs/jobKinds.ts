@@ -34,6 +34,7 @@ export const JOB_KINDS = [
   'outbound.close_send_day',
   'import.batch',
   'canary',
+  'route.validate',
 ] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 
@@ -89,6 +90,14 @@ export const JOB_KIND_PROTECTION: Readonly<Record<JobKind, IdempotencyProtection
   'import.batch': 'business_uniqueness',
   // The completion timestamp, written once.
   canary: 'business_uniqueness',
+  // Lane g90. Appendix C does not name this work, because revision 3's 7.4 says a route
+  // needs "technical validation" without saying which process performs it. The effect
+  // is one compare-and-set on the route: the handler writes only while the route is
+  // still the `candidate` at the version the job names, with `technical_validation =
+  // 'unknown'`, and the write bumps the version, so a second run finds a route that has
+  // moved on and writes nothing. That is business uniqueness in the same sense as
+  // `sequence.terminal_stop` above. See docs/decisions/g90-email-technical-validation.md.
+  'route.validate': 'business_uniqueness',
 });
 
 /** Appendix C, second column. Each builder produces the whole key, dotted prefix and all. */
@@ -129,6 +138,15 @@ export const jobIdempotencyKey = Object.freeze({
   importBatch: (batchId: string, rowNumber: number): string => `import:${batchId}:${String(rowNumber)}`,
   canary: (quarterHourIso: string): string => `canary:${quarterHourIso}`,
   classifyReply: (messageId: string): string => `classify-reply:${messageId}`,
+  /**
+   * One look at one email route at one version (lane g90). The round says which look:
+   * `new` when the route is created, `sweep-<UTC hour or day>` for the scheduler's retry
+   * of a route still unchecked, `check-<hash>` for a person's "Check again". A route that
+   * has moved to a new version is a new key, so nothing about an older version can
+   * block it.
+   */
+  routeValidate: (routeId: string, version: number, round: string): string =>
+    `route-validate:${routeId}:${String(version)}:${round}`,
 });
 
 /** Fifteen minutes in milliseconds; the canary's period (13.3). */

@@ -227,6 +227,12 @@ export function registerCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
     if (typeof input?.routeId !== 'string' || typeof input.routeVersion !== 'number') return await host.state();
     return await host.confirmRoute({ routeId: input.routeId, routeVersion: input.routeVersion });
   });
+  // Lane g90: "Check again" on an address, at the version on screen.
+  handleOnce(CRM_IPC_CHANNELS.checkRoute, async argument => {
+    const input = argument as { routeId?: unknown; routeVersion?: unknown } | null;
+    if (typeof input?.routeId !== 'string' || typeof input.routeVersion !== 'number') return await host.state();
+    return await host.checkRoute({ routeId: input.routeId, routeVersion: input.routeVersion });
+  });
   return host;
 }
 

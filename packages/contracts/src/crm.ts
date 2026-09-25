@@ -141,6 +141,13 @@ export const routeDtoSchema = z.strictObject({
   eligibility: routeEligibilitySchema,
   /** The version the card shows; `authorize_dial` compares against it (9.1). */
   version: z.number().int().min(1),
+  /*
+   * Lane g90: the route's technical validation (7.4), sent only in the Firm page's
+   * second version (`pageVersion: 2`). Optional so the first version still parses: a
+   * desktop released before g90 (1.0.5) parses this object strictly with a schema of its
+   * own, and the API answers it without the key.
+   */
+  technicalValidation: technicalValidationSchema.optional(),
 });
 export type RouteDto = z.infer<typeof routeDtoSchema>;
 
@@ -274,6 +281,20 @@ export const verifyRouteCommandSchema = z.strictObject({
 export const confirmRouteCommandSchema = z.strictObject({
   ...commandEnvelope,
   routeKind: z.literal('phone'),
+  routeId: uuid,
+  routeVersion: z.number().int().min(1),
+});
+
+/**
+ * "Check again" on an address nobody has checked yet (lane g90): one more `route.validate`
+ * job for the email route at the version the person was looking at. Email only — a number
+ * is confirmed by a person, not checked by the worker — and it changes nothing about the
+ * route itself; the worker's answer does. A route that has moved since is refused
+ * `route_version_stale`, one that failed is `route_invalid`.
+ */
+export const checkRouteCommandSchema = z.strictObject({
+  ...commandEnvelope,
+  routeKind: z.literal('email'),
   routeId: uuid,
   routeVersion: z.number().int().min(1),
 });
