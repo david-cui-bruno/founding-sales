@@ -118,8 +118,9 @@ async function aRoute(f: PolicyCaseFixture, firmId: string): Promise<string> {
 
 async function anIdentity(f: PolicyCaseFixture): Promise<string> {
   const { rows } = await f.session.query<{ id: string }>(
-    `INSERT INTO calling_identities (workspace_id, owner_user_id, e164, verification_status, enabled)
-     VALUES ($1, $2, $3, 'verified', true) RETURNING id`,
+    `INSERT INTO calling_identities (workspace_id, owner_user_id, e164, verification_status, enabled,
+                                     verified_at, verified_by_user_id, verification_method)
+     VALUES ($1, $2, $3, 'verified', true, now(), $2, 'owner_attestation') RETURNING id`,
     [workspace(f), salesperson(f), fictionalNumber()],
   );
   return rows[0]?.id ?? '';

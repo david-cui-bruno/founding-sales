@@ -442,10 +442,48 @@ thirty-day rule in `docs/greenfield/mail.md`). If the browser says "Gmail not
 connected", press **Refresh**, then Connect Gmail again. Release runbook 8.0x says how to
 read the refusal.
 
+### 5a — publish 1.0.2, and add your calling number
+
+Desktop 1.0.1 can connect Gmail and read Today, and it cannot call: every Today card has
+no Call button, because 9.2 refuses a dial unless the salesperson's own number is
+attested, and until lane g60 nothing could attest one (`docs/greenfield/release.md`
+8.0ab). 1.0.2 is the build with **Your calling number** on the Settings screen. Build it
+from a commit that carries lane g60.
+
+**First, the API, with its migration.** Lane g60 raises `CONTAINER_CLIENT_VERSIONS` to
+`{ minimum: 1.0.0, maximum: 1.0.2 }` and adds migration 0016, so this API is a schema
+release: apply with both schema ranges at `{16, 16}`, then deploy with
+`release-deploy.sh infra/roots/production fss-prod --schema-change`
+(`docs/greenfield/release.md` 4.1 and 8.0ab). Then confirm it:
+
+```bash
+curl -fsS https://api.usecallie.com/auth/client-version
+```
+
+**Expected:** `"supported":{"minimum":"1.0.0","maximum":"1.0.2"}`. If the maximum is still
+`1.0.1`, stop. Publishing now would offer every Mac an update that the API refuses.
+
+**Then the build.** The coordinator sets `FSS_DESKTOP_APP_VERSION` to `1.0.2`. Run
+*Greenfield desktop* with **release** ticked on the same commit the API was deployed
+from, with that commit as `desktop_commit_stamp`. Verify, download and publish it as in
+step 1, **zip first, manifest second**, and receive it on the Mac as in step 5.
+
+**Then add your number.** Open **Window › Administration** (⌘5). The Settings screen
+starts with **Your calling number**, which reads *"You have no calling number yet, so
+Today has no Call button."* Type the number you place your calls from, with the `+` and
+country code (for example `+1 401 555 0123`; spaces and dashes are fine), give it a name
+if you like, tick **This is the number I place my calls from.**, and press **Add
+number**. The section then reads *"Today calls from +1…"*, and the number's line says you
+attested it today. Open **Today** (⌘1) and expand a card whose firm has a usable phone
+number: it now has a **Call** button. A card still saying *"Callie has no attested number
+of yours to call from"* means the attestation did not land. Read the notice on the
+Settings screen: `number_invalid` means the `+` or the country code is missing.
+
 ### 6 — the adversarial half, which is the part worth doing
 
 Take the published `latest.json`, change **one character** of `releaseVersion` — make it
-`1.0.2` — and re-upload it with an invalidation. Do not re-sign it. Then quit Callie and
+one patch above what is published (`1.0.2` while 1.0.1 is current, `1.0.3` once 1.0.2
+is) — and re-upload it with an invalidation. Do not re-sign it. Then quit Callie and
 open it.
 
 **Expected: no prompt at all, and no message.** The app checks the Ed25519 signature
@@ -453,7 +491,7 @@ over a canonical encoding of the document against the public key compiled into t
 build, finds it no longer matches, and stops. It says nothing to the person, because
 there is nothing they could usefully do about it.
 
-**If it offers you 1.0.2, stop and report it.** The signature check is not doing
+**If it offers you the version you typed, stop and report it.** The signature check is not doing
 anything, which means the channel is a way onto that Mac and so is anything between the
 Mac and the channel.
 

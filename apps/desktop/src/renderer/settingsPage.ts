@@ -74,6 +74,9 @@ export function render(state: AdminState | null): void {
 }
 
 function renderSettings(root: HTMLElement, view: ReturnType<typeof adminViewOf>): void {
+  // First, because it is the one setting without which Today cannot call anybody.
+  renderCallingNumber(root, view);
+
   if (view.sending !== null) {
     root.append(element('p', { className: 'sending', text: view.sending.line, testId: 'sending' }));
   }
@@ -165,6 +168,92 @@ function renderSettings(root: HTMLElement, view: ReturnType<typeof adminViewOf>)
     elsewhere.append(element('li', { text: `${entry.topic} — ${entry.path} (${entry.ownedBy})` }));
   }
   root.append(elsewhere);
+}
+
+/**
+ * "Your calling number" (9.1; lane g60).
+ *
+ * Every role sees it: the number is the person's own, and 9.2 refuses a dial from
+ * anybody else's. Adding a number and attesting it are one press when the statement is
+ * ticked, and two commands underneath — the bridge sends the registration, then the
+ * attestation — because the server keeps a claim and a statement about it apart.
+ *
+ * The statement box starts unticked. It is the whole of version one's verification
+ * (`docs/decisions/g60-calling-identities-are-attested-in-version-one.md`), so it is
+ * something the person does, never something the page does for them. The number goes
+ * as typed; the server's `number_invalid` comes back as the notice.
+ */
+function renderCallingNumber(root: HTMLElement, view: ReturnType<typeof adminViewOf>): void {
+  const section = view.callingNumber;
+  const block = element('section', { className: 'calling-number', testId: 'calling-number' });
+  block.append(element('h2', { text: 'Your calling number' }));
+  block.append(element('p', { text: section.summary, testId: 'calling-number-summary' }));
+
+  const list = element('ul', { className: 'calling-numbers', testId: 'calling-numbers' });
+  for (const number of section.numbers) {
+    const item = element('li', { text: number.line });
+    item.dataset['testid'] = `calling-number-${number.id}`;
+    item.dataset['status'] = number.status;
+    if (number.canAttest) {
+      const attest = element('button', { text: `Attest: ${section.statement}` });
+      attest.dataset['testid'] = `calling-number-attest-${number.id}`;
+      attest.addEventListener('click', () => {
+        apply(bridge().attestCallingNumber({ identityId: number.id }));
+      });
+      item.append(attest);
+    }
+    if (number.canRetire) {
+      const retire = element('button', { text: 'Stop using this number' });
+      retire.dataset['testid'] = `calling-number-retire-${number.id}`;
+      retire.addEventListener('click', () => {
+        apply(bridge().retireCallingNumber({ identityId: number.id }));
+      });
+      item.append(retire);
+    }
+    list.append(item);
+  }
+  block.append(list);
+
+  const number = document.createElement('input');
+  number.type = 'tel';
+  number.placeholder = '+1 401 555 0123';
+  number.disabled = !section.canAdd;
+  number.dataset['testid'] = 'calling-number-e164';
+  block.append(number);
+
+  const label = document.createElement('input');
+  label.type = 'text';
+  label.placeholder = 'A name for it, such as Mobile (optional)';
+  label.maxLength = 80;
+  label.disabled = !section.canAdd;
+  label.dataset['testid'] = 'calling-number-label';
+  block.append(label);
+
+  const statement = element('label', { text: section.statement });
+  const attested = document.createElement('input');
+  attested.type = 'checkbox';
+  attested.disabled = !section.canAdd;
+  attested.dataset['testid'] = 'calling-number-attested';
+  statement.prepend(attested);
+  block.append(statement);
+
+  const add = element('button', { text: 'Add number' });
+  add.dataset['testid'] = 'calling-number-add';
+  (add as HTMLButtonElement).disabled = !section.canAdd;
+  add.addEventListener('click', () => {
+    if (number.value.trim() === '') {
+      number.setAttribute('aria-invalid', 'true');
+      return;
+    }
+    apply(bridge().addCallingNumber({ e164: number.value, label: label.value, attested: attested.checked }));
+  });
+  block.append(add);
+
+  block.append(element('p', { className: 'hint', text: section.hint }));
+  if (section.notEditableBecause !== null) {
+    block.append(element('p', { className: 'inert', text: section.notEditableBecause }));
+  }
+  root.append(block);
 }
 
 /**

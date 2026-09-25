@@ -40,17 +40,19 @@ import { createApiServer } from '../server.ts';
  * upgrade instruction and mutate nothing. The release lane replaces this constant
  * with the range of the signed builds it has actually shipped.
  *
- * The maximum is 1.0.1 because 1.0.1 is the build that carries the Mailbox row
- * (docs/greenfield/release.md 8.0x). A client *above* the maximum is
- * `api_behind_client`, which is refused exactly like one below the minimum — every
- * sign-in, renewal and command — so an API still publishing 1.0.0 would refuse the
- * very build that fixes the mailbox. This API must therefore be deployed before
- * desktop 1.0.1 is published to the channel. The minimum stays 1.0.0, so the
- * installed 1.0.0 keeps working until it takes the update.
+ * The maximum was raised to 1.0.1 for the build that carries the Mailbox row
+ * (docs/greenfield/release.md 8.0x), and to 1.0.2 for the build that carries "Your
+ * calling number" on the Settings screen (lane g60, 8.0ab) — the control without which
+ * no salesperson has a verified number and Today offers no Call button. A client
+ * *above* the maximum is `api_behind_client`, which is refused exactly like one below
+ * the minimum — every sign-in, renewal and command — so an API still publishing 1.0.1
+ * would refuse the very build that lets David call. This API must therefore be
+ * deployed before desktop 1.0.2 is published to the channel. The minimum stays 1.0.0,
+ * so the installed 1.0.0 and 1.0.1 keep working until they take the update.
  */
 export const CONTAINER_CLIENT_VERSIONS: ClientVersionRange = clientVersionRangeSchema.parse({
   minimum: '1.0.0',
-  maximum: '1.0.1',
+  maximum: '1.0.2',
 });
 
 export const API_EXIT_CODES = Object.freeze({

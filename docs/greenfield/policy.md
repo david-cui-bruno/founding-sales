@@ -23,12 +23,14 @@ packages/domain/policy/postures.ts             record, revoke, select the applic
 packages/domain/policy/callingWindows.ts       the configured narrowing of the floor
 packages/domain/policy/pauses.ts               administrative pauses and their holds
 packages/domain/dial/authorize.ts              the eight steps
+packages/domain/dial/identities.ts             register, attest, retire a calling number
 packages/domain/dial/tickets.ts                mint, consume, read
 packages/domain/dial/outcomes.ts               the 9.1 table, as a pure rule
 packages/domain/dial/calls.ts                  log a call and apply its effects
 packages/domain/dial/callbacks.ts              create on confirmation, complete
 packages/contracts/src/dial.ts                 the wire contract the Mac shares
 apps/api/src/routes/{postures,dial,calls,callbacks,pauses}.ts
+apps/api/src/routes/callingIdentities.ts       /calling-identities and its three commands
 apps/api/src/routes/dialSupport.ts             what the six route modules share
 apps/desktop/src/main/dialHandoff.ts           the tel: handoff and its setup proof
 apps/desktop/src/renderer/outcomeForm.ts       the outcome form, as a pure model
@@ -79,6 +81,48 @@ Section 15's vocabulary where it has a word, and a second closed set where it do
 not. See `docs/decisions/g4-dial-refusal-codes.md`; the short version is that "that
 identity is not yours" is not a hold, has no recovery action, and must not become a
 row in a table whose intervals shift a schedule.
+
+## Calling identities: the number a call leaves on
+
+Step 2 needs an "active verified calling identity owned by the actor", and until lane
+g60 nothing could make one. Now a salesperson registers their own number and attests
+it (`docs/decisions/g60-calling-identities-are-attested-in-version-one.md`):
+
+```
+POST /calling-identities/register   { e164, label?, ownerUserId? }   unverified, disabled
+POST /calling-identities/attest     { identityId, attested: true }   verified, enabled
+POST /calling-identities/disable    { identityId }                   retired, row kept
+GET  /calling-identities                                             the caller's own
+```
+
+* **Attestation is the verification in version one.** There is no telephony provider:
+  a call is a `tel:` handoff and nothing FSS runs sees the line. So the person states
+  that this is the number they place their calls from, and the row records who, how
+  (`owner_attestation`, or `admin_attestation` for an admin on a member's behalf) and
+  when. Migration 0016's `calling_identities_verification_recorded` refuses a verified
+  row without those, so an `INSERT` is not a second way in.
+* **The number is E.164 and no country is assumed.** `+`, a country code and the rest,
+  8 to 15 digits; spaces, dots, hyphens and parentheses are dropped. Anything else is
+  `number_invalid`.
+* **Your own number is yours; anybody else's is an admin's.** Registering, attesting or
+  retiring another member's number needs an admin, and the owner must be an active
+  member. A colleague's identity is `identity_unknown`, not "not yours".
+* **Registration is idempotent on the workspace and the number** and never changes an
+  existing row, so a retry cannot undo an attestation. A number another member holds is
+  `number_registered_to_another`.
+* **Null-owner rows stay disabled.** The shared line is deferred (9.1). A hand-written
+  one is refused attestation with `identity_shared_line_disabled`, the word step 2
+  already uses.
+* **Retirement keeps the row.** `call_logs` and `dial_tickets` reference it. Step 2
+  refuses a retired number `identity_disabled`. Attesting it again brings it back.
+* **The number Today dials from** is the most recently attested of the actor's
+  verified, enabled numbers (`currentCallingIdentityId`). The Today card and the
+  settings page ask the same function.
+
+The refusals are `CALLING_IDENTITY_REFUSAL_CODES` in `packages/contracts/src/dial.ts`:
+request refusals in the sense of `g4-dial-refusal-codes.md`, never holds, always a 409.
+On the Mac, the control is the Settings screen's **Your calling number** section
+(`docs/greenfield/settings.md`).
 
 ## Tickets
 
@@ -215,6 +259,8 @@ npm run gate:greenfield
 npm run test --workspace packages/domain -- test/policy/appendixG.test.ts   # G 17, 21, 29, 30
 npm run test --workspace packages/domain -- test/policy/policy.test.ts      # G 6, 25, 26
 npm run test --workspace apps/api -- test/dial.test.ts                      # the routes and the journal
+npm run test --workspace packages/domain -- test/policy/callingIdentities.test.ts  # register, attest, retire
+npm run test --workspace apps/api -- test/callingIdentities.test.ts         # no Call button to an authorized dial
 npm run test --workspace apps/worker -- test/suppressionFinalize.test.ts    # G 2 for this handler
 npm run test --workspace apps/desktop -- test/dial.test.ts                  # the handoff and the form
 ```

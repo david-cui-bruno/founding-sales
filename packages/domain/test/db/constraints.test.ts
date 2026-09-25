@@ -345,8 +345,12 @@ const cases: readonly Case[] = [
     constraint: 'calling_identities_shared_line_disabled',
     run: async f =>
       await f.session.query(
-        "INSERT INTO calling_identities (workspace_id, owner_user_id, e164, verification_status, enabled) VALUES ($1, NULL, '+14015550207', 'verified', true)",
-        [workspace(f)],
+        // With its attestation recorded (lane g60), so the missing owner is the only
+        // thing this row gets wrong.
+        `INSERT INTO calling_identities (workspace_id, owner_user_id, e164, verification_status, enabled,
+                                         verified_at, verified_by_user_id, verification_method)
+         VALUES ($1, NULL, '+14015550207', 'verified', true, now(), $2, 'admin_attestation')`,
+        [workspace(f), admin(f)],
       ),
   },
   {
@@ -354,6 +358,64 @@ const cases: readonly Case[] = [
     run: async f =>
       await f.session.query(
         "INSERT INTO calling_identities (workspace_id, owner_user_id, e164, verification_status, enabled) VALUES ($1, $2, '+14015550208', 'unverified', true)",
+        [workspace(f), admin(f)],
+      ),
+  },
+  // Migration 0016 (lane g60): who attested a number, how, and when it was retired.
+  {
+    // A verified number with nobody recorded as having verified it is the row a raw
+    // INSERT would make, and the one the drill seed refused to fake.
+    constraint: 'calling_identities_verification_recorded',
+    run: async f =>
+      await f.session.query(
+        "INSERT INTO calling_identities (workspace_id, owner_user_id, e164, verification_status, enabled) VALUES ($1, $2, '+14015550209', 'verified', true)",
+        [workspace(f), admin(f)],
+      ),
+  },
+  {
+    constraint: 'calling_identities_verification_method_known',
+    run: async f =>
+      await f.session.query(
+        `INSERT INTO calling_identities (workspace_id, owner_user_id, e164, verification_status, enabled,
+                                         verified_at, verified_by_user_id, verification_method)
+         VALUES ($1, $2, '+14015550210', 'verified', true, now(), $2, 'caller_id_looked_right')`,
+        [workspace(f), admin(f)],
+      ),
+  },
+  {
+    // The attester is a member of this workspace, never of another.
+    constraint: 'calling_identities_verified_by_fkey',
+    run: async f =>
+      await f.session.query(
+        `INSERT INTO calling_identities (workspace_id, owner_user_id, e164, verification_status, enabled,
+                                         verified_at, verified_by_user_id, verification_method)
+         VALUES ($1, $2, '+14015550211', 'verified', true, now(), $3, 'admin_attestation')`,
+        [workspace(f), admin(f), f.seeded.beta.admin.userId],
+      ),
+  },
+  {
+    constraint: 'calling_identities_disabled_by_fkey',
+    run: async f =>
+      await f.session.query(
+        `INSERT INTO calling_identities (workspace_id, owner_user_id, e164, disabled_at, disabled_by_user_id)
+         VALUES ($1, $2, '+14015550212', now(), $3)`,
+        [workspace(f), admin(f), f.seeded.beta.admin.userId],
+      ),
+  },
+  {
+    // A retirement names who and when, and a retired number is not enabled.
+    constraint: 'calling_identities_disable_recorded',
+    run: async f =>
+      await f.session.query(
+        "INSERT INTO calling_identities (workspace_id, owner_user_id, e164, disabled_at) VALUES ($1, $2, '+14015550213', now())",
+        [workspace(f), admin(f)],
+      ),
+  },
+  {
+    constraint: 'calling_identities_label_shape',
+    run: async f =>
+      await f.session.query(
+        "INSERT INTO calling_identities (workspace_id, owner_user_id, e164, label) VALUES ($1, $2, '+14015550214', '')",
         [workspace(f), admin(f)],
       ),
   },

@@ -224,6 +224,10 @@ describe('two workspaces with colliding external identifiers', () => {
         e164: seeded.collidingE164,
         verification_status: 'verified',
         enabled: true,
+        // Migration 0016: a verified number names who attested it, how and when.
+        verified_at: '2026-09-25T12:00:00.000Z',
+        verified_by_user_id: workspace.salesperson.userId,
+        verification_method: 'owner_attestation',
       });
     }
     const fromAlpha = await selectOne<{ owner_user_id: string }, 'calling_identities'>(alpha, 'calling_identities', {

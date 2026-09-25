@@ -256,9 +256,11 @@ async function anyDialSubject(session: SessionQueryable): Promise<DialSubject | 
  *
  * `no_dialable_subject` used to say only that the triple was missing, and the restore
  * drill stops on it: the refusal is the one place an operator reads what to fix, so it
- * names each half and how many of it exist. In every environment this build has made,
- * the second number is zero — nothing writes `calling_identities` or verifies one — and
- * the refusal says what the row it needs looks like rather than claiming why.
+ * names each half and how many of it exist, and — since lane g60 gave calling
+ * identities a creator — how the missing identity is made: the assignee registers and
+ * attests their own number (the desktop's "Your calling number", or
+ * `POST /calling-identities/register` then `/attest`), and in a rehearsal the drill
+ * seed's `before` phase does that for the rehearsal admin.
  */
 async function missingDialPrerequisites(session: SessionQueryable): Promise<string> {
   const { rows } = await session.query<{ routed_firms: string; identities: string }>(
@@ -276,8 +278,9 @@ async function missingDialPrerequisites(session: SessionQueryable): Promise<stri
     `${String(identities)} verified, enabled calling identit${identities === 1 ? 'y' : 'ies'}, and none of them ` +
     'belongs to such a firm\'s assignee; a dial probe needs both for the same person (9.1 steps 2 to 4): ' +
     `${routedFirms === 0 ? 'a usable phone route on an assigned firm, and ' : ''}` +
-    'a calling_identities row owned by that assignee with verification_status verified and enabled true. ' +
-    'A refusal without one would prove nothing'
+    'a calling_identities row owned by that assignee with verification_status verified and enabled true, ' +
+    'which the assignee makes by registering and attesting their own number (in a rehearsal, ' +
+    'fss admin drill seed-evidence --phase before). A refusal without one would prove nothing'
   );
 }
 

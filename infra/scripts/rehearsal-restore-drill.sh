@@ -583,7 +583,7 @@ if rehearsal_dry_run; then
   "steps": [
     { "step": "step1a-generation-check", "ok": true, "report": { "systemGeneration": ${OBSERVED_GENERATION}, "expectedGeneration": ${EXPECTED_GENERATION}, "mismatch": true, "holdsOpened": 1, "holdsAlreadyOpen": 0, "restoreHoldsInForce": 1 } },
     { "step": "step1-restore-holds", "ok": true, "report": { "count": 1 } },
-    { "step": "step1-dial-refused", "ok": true, "report": { "allowed": false } },
+    { "step": "step1-dial-refused", "ok": true, "report": { "allowed": false, "reason": "posture_missing", "holds": ["restore_in_progress"] } },
     { "step": "step2-journal-replay", "ok": true, "report": { "inserted": 1 } },
     { "step": "step2-journal-replay-second", "ok": true, "report": { "inserted": 0 } },
     { "step": "step3-reconcile-sent", "ok": true, "report": { "tombstones": 1, "resent": 0 } },
@@ -816,7 +816,13 @@ assert check.get("expectedGeneration") == expected_generation, f"the generation 
 assert check.get("mismatch") is True, f"the generation check found no mismatch: {check}"
 assert check.get("restoreHoldsInForce", 0) >= 1, f"the generation check held no workspace: {check}"
 assert body("step1-restore-holds").get("count", 0) >= 1, "the restored database opened no restore hold"
-assert body("step1-dial-refused").get("allowed") is False, "a dial was authorized while a restore was in progress"
+dial = body("step1-dial-refused")
+assert dial.get("allowed") is False, "a dial was authorized while a restore was in progress"
+# Lane g60: refused because of the restore. `authorizeDial` stops at its first refusal
+# and the restore hold is its eighth step, so a probe refused `posture_missing` or
+# `outside_calling_window` proves nothing about the restore unless the restore hold is
+# among the holds that apply to that same dial, which the probe reports beside it.
+assert "restore_in_progress" in (dial.get("holds") or []), f"the dial was refused ({dial.get('reason')}) but no restore hold applied to it, so the refusal says nothing about the restore: {dial}"
 
 # Step 2: the first replay must have done something, or the journal held nothing and
 # the idempotence of the second run is the idempotence of doing nothing twice.

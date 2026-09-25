@@ -46,6 +46,15 @@ export const TASK_LABELS: Readonly<Record<TodayTask['kind'], string>> = Object.f
   new_firm: 'Not yet contacted',
 });
 
+/**
+ * What a card with numbers and no calling identity says (lane g60). 9.1 requires the
+ * number a call leaves on to be the salesperson's own and attested, and until that
+ * exists the card has no Call button — so the card says where to add it rather than
+ * leaving a person to wonder why the button is missing.
+ */
+export const NO_CALLING_NUMBER =
+  'Callie has no attested number of yours to call from. Add it in Window › Administration, under Your calling number.';
+
 const NOTICES: Readonly<Record<string, string>> = Object.freeze({
   offline: 'Callie cannot reach the server.',
   not_signed_in: 'Sign in on the main window before working today’s list.',
@@ -67,7 +76,7 @@ const NOTICES: Readonly<Record<string, string>> = Object.freeze({
   handle_suppressed: 'That number is suppressed.',
   route_version_stale: 'This card is out of date. Refresh before dialing.',
   already_consumed: 'That authorization was already used. Ask for another.',
-  identity_not_verified: 'Callie has no verified number of yours to call from.',
+  identity_not_verified: NO_CALLING_NUMBER,
   refused: 'The server refused that.',
   unreadable_answer: 'Callie could not read the server’s answer.',
 });
@@ -140,6 +149,16 @@ export function buildTodayView(state: TodayState): TodayScreenView {
     });
   }
   if (state.notice !== null) banners.push({ tone: 'info', text: noticeSentence(state.notice) });
+  // A card with a number to dial and nothing to dial it from. Said once, and not again
+  // when the notice already says it.
+  if (
+    state.expanded !== null &&
+    state.expanded.callingIdentityId === null &&
+    state.expanded.routes.some(route => route.eligibility === 'usable') &&
+    state.notice !== 'identity_not_verified'
+  ) {
+    banners.push({ tone: 'info', text: NO_CALLING_NUMBER });
+  }
 
   const actionsEnabled = state.mayMutate && state.online && !state.stale;
   const expandEnabled = state.online && !state.stale;

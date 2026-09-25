@@ -618,7 +618,7 @@ const MUTATIONS = [
   {
     name: 'the API stops admitting the desktop build that carries the Mailbox row',
     file: 'apps/api/src/bootstrap/main.ts',
-    find: "  maximum: '1.0.1',\n",
+    find: "  maximum: '1.0.2',\n",
     replace: "  maximum: '1.0.0',\n",
     suite: ['run', 'test:release', '--', 'test/release/desktopMailbox.check.ts'],
     because:
@@ -899,6 +899,80 @@ const MUTATIONS = [
     suite: ['run', 'test', '--workspace', 'apps/worker', '--', 'test/drillEvidence.test.ts'],
     because:
       'Step 2 replays a suppression the restore lost, and the only one the after phase journals is the late opt-out; a phase that put the message in the mailbox without ingesting it journals nothing. drillEvidence.test.ts counts the after phase’s two journalled suppressions and has to go red.',
+  },
+  // Lane g60: calling identities have a creator, the Mac has a control, and the drill's
+  // dial probe has a subject.
+  {
+    name: 'the API stops admitting the desktop build that carries Your calling number',
+    file: 'apps/api/src/bootstrap/main.ts',
+    find: "  maximum: '1.0.2',\n",
+    replace: "  maximum: '1.0.1',\n",
+    suite: ['run', 'test:release', '--', 'test/release/callingNumber.check.ts'],
+    because:
+      'Desktop 1.0.2 is the build with the Your calling number section, without which no salesperson has a verified number and Today offers no Call button; an API still publishing 1.0.1 as its maximum refuses it every sign-in, renewal and command. callingNumber.check.ts reads the constant the container serves and has to go red.',
+  },
+  {
+    name: 'the preload stops exposing the calling-number control to the window',
+    file: 'apps/desktop/src/preload/preload.ts',
+    find: '  addCallingNumber: async input => await invokeAdmin(ADMIN_IPC_CHANNELS.addCallingNumber, input),\n',
+    replace: '',
+    suite: ['run', 'test:release', '--', 'test/release/callingNumber.check.ts'],
+    because:
+      'The bridge can be complete and tested and the Settings screen still have nothing to call, which is 24 September again from where David sits. The preload is Electron wiring the release suite cannot run, so callingNumber.check.ts asserts the exposure line itself and has to go red when it is gone.',
+  },
+  {
+    name: 'the Settings screen attests a number the person did not attest',
+    file: 'apps/desktop/src/main/settingsBridge.ts',
+    find: '      if (!registered.ok || !input.attested) return await afterCommand(registered, loadCallingNumbers);\n',
+    replace: '      if (!registered.ok) return await afterCommand(registered, loadCallingNumbers);\n',
+    suite: ['run', 'test:release', '--', 'test/release/callingNumber.check.ts'],
+    because:
+      'In version one the attestation is the whole of the verification, so a page that sent it for an unticked statement would be verifying the number on the person’s behalf. callingNumber.check.ts presses Add with the statement unticked and has to go red when an attestation is sent anyway.',
+  },
+  {
+    name: 'an attestation records the statement and leaves the number disabled',
+    file: 'packages/domain/dial/identities.ts',
+    find: '            enabled = true,\n',
+    replace: '            enabled = false,\n',
+    suite: ['run', 'test', '--workspace', 'packages/domain', '--', 'test/policy/callingIdentities.test.ts'],
+    because:
+      'A verified number that is not enabled is refused identity_disabled at 9.2’s second step and never reaches the Today card, so a salesperson who attested would still have no Call button. callingIdentities.test.ts authorizes a dial with the attested number and has to go red.',
+  },
+  {
+    name: 'the Today card stops carrying the actor’s calling number',
+    file: 'packages/domain/today/dto.ts',
+    find: '    callingIdentityId,\n',
+    replace: '    callingIdentityId: null,\n',
+    suite: ['run', 'test', '--workspace', 'apps/api', '--', 'test/callingIdentities.test.ts'],
+    because:
+      'The Mac offers a Call button only when the expanded card carries a calling identity, so an attested number the card never reports is production on 24 September with extra steps. callingIdentities.test.ts reads /today/firm before and after the attestation and has to go red.',
+  },
+  {
+    name: 'the drill seed registers the rehearsal admin’s number and never attests it',
+    file: 'apps/worker/src/tools/fss/drillEvidence.ts',
+    find: '    async () => await verifyCallingIdentity(context, { identityId: registered.value.identity.id }),\n',
+    replace: '    async () => await registerCallingIdentity(context, { e164: DRILL_CALLING_NUMBER }),\n',
+    suite: ['run', 'test', '--workspace', 'apps/worker', '--', 'test/drillEvidence.test.ts'],
+    because:
+      'An unverified number is no subject for the step 1 dial probe, which would go back to no_dialable_subject and leave the drill unanswered. drillEvidence.test.ts reads the identity back verified, enabled and attested by its owner and has to go red.',
+  },
+  {
+    name: 'step 1 accepts a dial refused for a reason that has nothing to do with the restore',
+    file: 'apps/worker/src/tools/fss/drill.ts',
+    find: "  return holds.includes('restore_in_progress')\n",
+    replace: '  return holds.length >= 0\n',
+    suite: ['run', 'test', '--workspace', 'apps/worker', '--', 'test/drillDialProbe.test.ts'],
+    because:
+      'authorizeDial stops at its first refusal and the restore hold is step 8, so a rehearsal probe is refused posture_missing whether or not a restore is in progress. drillDialProbe.test.ts hands the verdict a refusal with no restore hold behind it and has to go red.',
+  },
+  {
+    name: 'the drill runner accepts a dial refused with no restore hold behind it',
+    file: 'infra/scripts/rehearsal-restore-drill.sh',
+    find: 'assert "restore_in_progress" in (dial.get("holds") or []), f"the dial was refused ({dial.get(\'reason\')}) but no restore hold applied to it, so the refusal says nothing about the restore: {dial}"\n',
+    replace: '',
+    suite: ['run', 'test:release', '--', 'test/release/scenario11.check.ts'],
+    because:
+      'The runner reads the report and decides the pass so that a change to the tool cannot quietly relax the gate; a runner that asked only for allowed false would pass a probe refused at step 6. scenario11.check.ts hands the runner such a report and has to go red.',
   },
 ];
 

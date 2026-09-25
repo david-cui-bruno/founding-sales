@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { countsLabel, buildTodayView, noticeSentence } from '../src/renderer/todayView.ts';
+import { NO_CALLING_NUMBER, countsLabel, buildTodayView, noticeSentence } from '../src/renderer/todayView.ts';
 import { todayStateSchema, type TodayFirm, type TodayState } from '../src/renderer/todayContract.ts';
 import { createTodayBridge, localToInstant, TODAY_IPC_CHANNELS } from '../src/main/todayBridge.ts';
 import { CRM_IPC_CHANNELS, createCrmBridge, pipelineViewOf } from '../src/main/crmBridge.ts';
@@ -145,6 +145,32 @@ describe('the Today view model', () => {
     expect(
       buildTodayView(state({ expanded: firmPage({ callingIdentityId: null }) })).dialableRoutes,
     ).toEqual([]);
+  });
+
+  it('says where to add a calling number when a card has a number to dial and nothing to dial it from (lane g60)', () => {
+    const missing = buildTodayView(state({ expanded: firmPage({ callingIdentityId: null }) }));
+    expect(missing.banners).toContainEqual({ tone: 'info', text: NO_CALLING_NUMBER });
+    expect(NO_CALLING_NUMBER).toContain('Window › Administration');
+    // Not when the card has a number to call from, nor when there is nothing to dial.
+    expect(buildTodayView(state({ expanded: firmPage() })).banners.map(banner => banner.text)).not.toContain(
+      NO_CALLING_NUMBER,
+    );
+    expect(
+      buildTodayView(
+        state({
+          expanded: firmPage({
+            callingIdentityId: null,
+            routes: [{ routeId: ROUTE_ID, contactId: null, e164: '+14015550187', version: 1, eligibility: 'candidate' }],
+          }),
+        }),
+      ).banners.map(banner => banner.text),
+    ).not.toContain(NO_CALLING_NUMBER);
+    // And said once when the bridge's own refusal already says it.
+    expect(noticeSentence('identity_not_verified')).toBe(NO_CALLING_NUMBER);
+    const refused = buildTodayView(
+      state({ expanded: firmPage({ callingIdentityId: null }), notice: 'identity_not_verified' }),
+    );
+    expect(refused.banners.filter(banner => banner.text === NO_CALLING_NUMBER)).toHaveLength(1);
   });
 });
 

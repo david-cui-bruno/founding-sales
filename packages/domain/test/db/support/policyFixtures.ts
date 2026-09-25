@@ -51,19 +51,22 @@ async function seedOne(
   firmId: string,
 ): Promise<SeededPolicyWorkspace> {
   const identity = await session.query<{ id: string }>(
-    `INSERT INTO calling_identities (workspace_id, owner_user_id, e164, verification_status, enabled)
-     VALUES ($1, $2, $3, 'verified', true) RETURNING id`,
+    `INSERT INTO calling_identities (workspace_id, owner_user_id, e164, verification_status, enabled,
+                                     verified_at, verified_by_user_id, verification_method)
+     VALUES ($1, $2, $3, 'verified', true, now(), $2, 'owner_attestation') RETURNING id`,
     [workspace.workspaceId, workspace.salesperson.userId, IDENTITY_E164],
   );
   const otherIdentity = await session.query<{ id: string }>(
-    `INSERT INTO calling_identities (workspace_id, owner_user_id, e164, verification_status, enabled)
-     VALUES ($1, $2, $3, 'verified', true) RETURNING id`,
+    `INSERT INTO calling_identities (workspace_id, owner_user_id, e164, verification_status, enabled,
+                                     verified_at, verified_by_user_id, verification_method)
+     VALUES ($1, $2, $3, 'verified', true, now(), $2, 'owner_attestation') RETURNING id`,
     [workspace.workspaceId, workspace.admin.userId, ADMIN_IDENTITY_E164],
   );
   const sharedLine = await session.query<{ id: string }>(
-    `INSERT INTO calling_identities (workspace_id, owner_user_id, e164, verification_status, enabled)
-     VALUES ($1, NULL, $2, 'verified', false) RETURNING id`,
-    [workspace.workspaceId, SHARED_LINE_E164],
+    `INSERT INTO calling_identities (workspace_id, owner_user_id, e164, verification_status, enabled,
+                                     verified_at, verified_by_user_id, verification_method)
+     VALUES ($1, NULL, $2, 'verified', false, now(), $3, 'admin_attestation') RETURNING id`,
+    [workspace.workspaceId, SHARED_LINE_E164, workspace.admin.userId],
   );
 
   const posture = await session.query<{ id: string }>(

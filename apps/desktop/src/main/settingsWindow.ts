@@ -161,5 +161,27 @@ export function registerAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
     return await host.recordHolidayCalendar({ version, dates });
   });
 
+  // Lane g60. Shape only, as everywhere in this file: whether the number is a number,
+  // whose it is and whether the person may attest it are the server's answers.
+  handleOnce(ADMIN_IPC_CHANNELS.addCallingNumber, async argument => {
+    const input = argument as { e164?: unknown; label?: unknown; attested?: unknown } | null;
+    const e164 = text(input?.e164);
+    const label = input?.label;
+    if (e164 === null || typeof label !== 'string' || typeof input?.attested !== 'boolean') {
+      return await host.state();
+    }
+    return await host.addCallingNumber({ e164, label, attested: input.attested });
+  });
+
+  handleOnce(ADMIN_IPC_CHANNELS.attestCallingNumber, async argument => {
+    const identityId = text((argument as { identityId?: unknown } | null)?.identityId);
+    return identityId === null ? await host.state() : await host.attestCallingNumber({ identityId });
+  });
+
+  handleOnce(ADMIN_IPC_CHANNELS.retireCallingNumber, async argument => {
+    const identityId = text((argument as { identityId?: unknown } | null)?.identityId);
+    return identityId === null ? await host.state() : await host.retireCallingNumber({ identityId });
+  });
+
   return host;
 }

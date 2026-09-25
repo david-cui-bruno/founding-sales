@@ -795,7 +795,10 @@ describe('Appendix G 11: the drill is handed the moment of failure, the mailbox 
   });
 
   it('fails a step 8 report that was not measured against the moment of failure, or lost a suppression since it', () => {
-    const steps = (restore: Record<string, unknown>): string =>
+    const steps = (
+      restore: Record<string, unknown>,
+      dial: Record<string, unknown> = { allowed: false, reason: 'posture_missing', holds: ['restore_in_progress'] },
+    ): string =>
       JSON.stringify({
         ok: true,
         stoppedAt: null,
@@ -803,7 +806,7 @@ describe('Appendix G 11: the drill is handed the moment of failure, the mailbox 
         steps: [
           { step: 'step1a-generation-check', ok: true, report: { expectedGeneration: 8, mismatch: true, restoreHoldsInForce: 1 } },
           { step: 'step1-restore-holds', ok: true, report: { count: 1 } },
-          { step: 'step1-dial-refused', ok: true, report: { allowed: false } },
+          { step: 'step1-dial-refused', ok: true, report: dial },
           { step: 'step2-journal-replay', ok: true, report: { inserted: 1 } },
           { step: 'step2-journal-replay-second', ok: true, report: { inserted: 0 } },
           { step: 'step3-reconcile-sent', ok: true, report: { tombstones: 1, resent: 0 } },
@@ -848,6 +851,22 @@ describe('Appendix G 11: the drill is handed the moment of failure, the mailbox 
       { FSS_RELEASE_ALARM_HISTORY: alarm },
     );
     expect(kept.code, kept.output).toBe(0);
+
+    // Lane g60: the same passing report, except that the dial was refused for a reason
+    // of its own with no restore hold applying to it. Refused is not enough: the refusal
+    // has to be one the restore would have made.
+    const unrelated = dryRun(
+      {
+        'baseline.json': JSON.stringify(baseline),
+        'drill.json': steps(
+          { ...base, suppressions_at_failure: 6, suppressions_after: 6 },
+          { allowed: false, reason: 'posture_missing', holds: ['scoped_pause'] },
+        ),
+      },
+      { FSS_RELEASE_ALARM_HISTORY: alarm },
+    );
+    expect(unrelated.code).not.toBe(0);
+    expect(unrelated.output).toContain('no restore hold applied to it');
   });
 
   it('keeps the drill task’s own exit status and refuses it after reading the report', () => {

@@ -34,6 +34,7 @@ packages/domain/crm/board.ts                       the pipeline board read
 apps/api/src/routes/{settings,dashboard,diagnostics,pipeline}.ts
 apps/desktop/src/main/settingsBridge.ts            the window's half of the bridge
 apps/desktop/src/renderer/settingsView.ts          the window, as a value
+packages/domain/dial/identities.ts                 the calling numbers "Your calling number" edits
 docs/greenfield/runbooks/*.md                      one page per alarm
 ```
 
@@ -161,6 +162,38 @@ sending domain" control yet. Adding one means a new bridge channel and a new des
 build, which is a follow-up. Once the row exists, the current build shows the checklist
 with no change. `docs/greenfield/sending.md`, "How a sending domain comes to exist", has
 the rules.
+
+## Your calling number
+
+The first section of the Settings screen, for **every role**, because the number is the
+person's own and 9.2 refuses a dial from anybody else's (lane g60). Without an attested
+number the Today card has no Call button. Before this section existed nothing could make
+one, which is why production's only salesperson could not call.
+
+What the section shows:
+
+* **One sentence** naming the number Today calls from (*"Today calls from +1… (Mobile)."*),
+  or why there is no Call button (no number yet, or none attested). If the list could not
+  be read (offline, or an API older than the route), it says so and offers no Add. An
+  empty list would read as "you have no number" and invite a second registration.
+* **Each number** with its state. *In use* is the one Today calls from, chosen by the
+  server (`usedForCalls`). *Verified* is attested but not in use, because another was
+  attested more recently. *Not attested yet* and *retired* are the other two. Beside
+  each: **Attest: This is the number I place my calls from.** for a number not yet
+  attested or retired, and **Stop using this number** for one not retired.
+* **Add**: the number with `+` and country code (spaces and dashes are fine), an
+  optional name such as *Mobile*, the statement checkbox (unticked by default), and
+  **Add number**. With the box ticked the bridge sends
+  `POST /calling-identities/register`, then `/calling-identities/attest`. Unticked, it
+  registers the number unverified.
+
+The section is inert only offline or below the minimum client version. The page
+decides nothing. It sends the number as typed and shows `number_invalid`,
+`number_registered_to_another` and the other refusals as one sentence each.
+`docs/greenfield/policy.md` has the rules, and
+`docs/decisions/g60-calling-identities-are-attested-in-version-one.md` has why an
+attestation is what verification means in version one. The section ships in desktop
+**1.0.2**, which the API admits from the release that carries lane g60.
 
 ## Workspace holidays
 

@@ -10,7 +10,9 @@ import type {
  *
  * One window with three screens — Settings, Dashboard, Diagnostics — because they are
  * the three things a person opens when they are *not* selling: configuring, looking
- * at results, and finding out why something is not working. The Today window stays
+ * at results, and finding out why something is not working. The one personal setting
+ * lives here too: "Your calling number" (lane g60), without which Today has no Call
+ * button. The Today window stays
  * small and fast; this one is opened, used and closed, exactly as G3b said of the CRM
  * windows.
  *
@@ -44,6 +46,45 @@ export interface AdminState {
    * not ask and offers no control.
    */
   readonly sendingAdmin: SendingAdminView | null;
+  /**
+   * The person's own calling numbers (9.1; lane g60), as `GET /calling-identities`
+   * answered them. Every role has this section: a number is the person's own, and 9.2
+   * refuses a dial from anybody else's. Null when the read did not answer — offline,
+   * refused, or an API older than the route — which the section says rather than
+   * showing an empty list that would read as "you have no number".
+   */
+  readonly callingNumbers: readonly CallingNumberView[] | null;
+}
+
+/**
+ * One of the person's calling numbers, kept verbatim from the server.
+ *
+ * `usedForCalls` is the server's choice of which number Today dials from, so the page
+ * shows it rather than working it out from the dates.
+ */
+export interface CallingNumberView {
+  readonly id: string;
+  readonly e164: string;
+  readonly label: string | null;
+  readonly verificationStatus: 'unverified' | 'verified';
+  readonly enabled: boolean;
+  readonly verifiedAt: string | null;
+  readonly verificationMethod: 'owner_attestation' | 'admin_attestation' | null;
+  readonly disabledAt: string | null;
+  readonly usedForCalls: boolean;
+}
+
+/**
+ * Add a calling number, and attest it in the same press when the person ticked the
+ * statement. The number is sent as typed; the server normalizes it and refuses
+ * anything that is not `+`, a country code and the rest (`number_invalid`).
+ */
+export interface AddCallingNumberInput {
+  readonly e164: string;
+  /** Empty for no label. */
+  readonly label: string;
+  /** "This is the number I place calls from." Unticked adds the number unverified. */
+  readonly attested: boolean;
 }
 
 /**
@@ -145,6 +186,9 @@ export interface AdminBridge {
   setSendingCap(input: SetSendingCapInput): Promise<AdminState>;
   recordSendingAuthentication(input: RecordSendingAuthenticationInput): Promise<AdminState>;
   recordHolidayCalendar(input: RecordHolidayCalendarInput): Promise<AdminState>;
+  addCallingNumber(input: AddCallingNumberInput): Promise<AdminState>;
+  attestCallingNumber(input: { readonly identityId: string }): Promise<AdminState>;
+  retireCallingNumber(input: { readonly identityId: string }): Promise<AdminState>;
 }
 
 declare global {

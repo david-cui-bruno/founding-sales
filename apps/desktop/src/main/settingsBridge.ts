@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import {
+  callingIdentityDtoSchema,
+  callingIdentityListSchema,
   dashboardResponseSchema,
   diagnosticsResponseSchema,
   pipelineStageDtoSchema,
@@ -7,8 +9,10 @@ import {
   type SettingKey,
 } from '@fss/contracts';
 import type {
+  AddCallingNumberInput,
   AdminScreen,
   AdminState,
+  CallingNumberView,
   PipelineStageRowView,
   RecordHolidayCalendarInput,
   RecordSendingAuthenticationInput,
@@ -47,8 +51,25 @@ export const ADMIN_IPC_CHANNELS = {
   setSendingCap: 'callie:admin:set-sending-cap',
   recordSendingAuthentication: 'callie:admin:record-sending-authentication',
   recordHolidayCalendar: 'callie:admin:record-holiday-calendar',
+  addCallingNumber: 'callie:admin:add-calling-number',
+  attestCallingNumber: 'callie:admin:attest-calling-number',
+  retireCallingNumber: 'callie:admin:retire-calling-number',
 } as const;
 export type AdminIpcChannel = (typeof ADMIN_IPC_CHANNELS)[keyof typeof ADMIN_IPC_CHANNELS];
+
+/**
+ * The calling-number paths (lane g60), named once so the release suite can compare them
+ * with the API's own `CALLING_IDENTITY_PATHS` rather than with a second copy.
+ */
+export const CALLING_NUMBER_API_PATHS = {
+  list: '/calling-identities',
+  register: '/calling-identities/register',
+  attest: '/calling-identities/attest',
+  disable: '/calling-identities/disable',
+} as const;
+
+/** What a calling-number command answers: the outcome and the row as it now is. */
+const callingNumberChangeSchema = z.object({ outcome: z.string(), identity: callingIdentityDtoSchema });
 
 const stagesSchema = z.object({ stages: z.array(pipelineStageDtoSchema) });
 const historySchema = z.object({
@@ -130,6 +151,9 @@ export interface AdminBridgeHost {
   setSendingCap(input: SetSendingCapInput): Promise<AdminState>;
   recordSendingAuthentication(input: RecordSendingAuthenticationInput): Promise<AdminState>;
   recordHolidayCalendar(input: RecordHolidayCalendarInput): Promise<AdminState>;
+  addCallingNumber(input: AddCallingNumberInput): Promise<AdminState>;
+  attestCallingNumber(input: { readonly identityId: string }): Promise<AdminState>;
+  retireCallingNumber(input: { readonly identityId: string }): Promise<AdminState>;
 }
 
 /** The last 30 days, in UTC. A window the page shows and a person may change. */
@@ -149,6 +173,7 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
   let stages: readonly PipelineStageRowView[] = [];
   let history: AdminState['history'] = null;
   let sendingAdmin: AdminState['sendingAdmin'] = null;
+  let callingNumbers: AdminState['callingNumbers'] = null;
   let window = defaultWindow(clock());
 
   const snapshot = async (): Promise<AdminState> => {
@@ -165,6 +190,7 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
       stages,
       history,
       sendingAdmin,
+      callingNumbers,
     };
   };
 
@@ -238,10 +264,26 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
     };
   };
 
+  /**
+   * The person's own calling numbers (lane g60), for every role.
+   *
+   * A failure is not a notice, for `loadSending`'s reason: a person who opened the page
+   * to change something else should not be told about a read they did not ask for. The
+   * section says the list could not be read instead (`callingNumbers: null`), because
+   * an empty list would read as "you have no number" and invite a second registration.
+   */
+  const loadCallingNumbers = async (): Promise<void> => {
+    const answer = await deps.api.read(CALLING_NUMBER_API_PATHS.list, value => callingIdentityListSchema.parse(value));
+    callingNumbers = answer.ok ? answer.value.identities.map(viewOfNumber) : null;
+  };
+
   const loadSettings = async (): Promise<void> => {
     const answer = await deps.api.read('/settings', value => settingsSnapshotSchema.parse(value));
     if (!answer.ok) {
       notice = answer.reason;
+      // The calling number is the person's own and does not depend on the workspace
+      // settings: a page whose settings read failed still shows it (lane g60).
+      await loadCallingNumbers();
       return;
     }
     settings = answer.value;
@@ -256,6 +298,7 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
       }));
     }
     await loadSending();
+    await loadCallingNumbers();
   };
 
   const loadDashboardFor = async (next: { readonly from: string; readonly to: string }): Promise<void> => {
@@ -437,5 +480,67 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
       // carried: the page never patches its own copy from a command's answer.
       return await afterCommand(outcome, loadSettings);
     },
+
+    async addCallingNumber(input) {
+      // Two commands, because the server keeps them apart: a registration is a claim
+      // and the attestation is the person's statement about it, each with its own
+      // receipt. The number goes as typed — normalizing it is the server's, and a
+      // client that "fixed" a number would be a second implementation of 9.1's rule.
+      const registered = await deps.api.command(
+        CALLING_NUMBER_API_PATHS.register,
+        { e164: input.e164, ...(input.label.trim() === '' ? {} : { label: input.label }) },
+        value => callingNumberChangeSchema.parse(value),
+      );
+      if (!registered.ok || !input.attested) return await afterCommand(registered, loadCallingNumbers);
+      const attested = await deps.api.command(
+        CALLING_NUMBER_API_PATHS.attest,
+        { identityId: registered.value.identity.id, attested: true },
+        value => callingNumberChangeSchema.parse(value),
+      );
+      if (!attested.ok) {
+        // The registration committed and the attestation did not: the refusal is the
+        // notice, and the list is re-read so the unattested number is on screen with
+        // its own Attest button rather than looking as if nothing happened.
+        notice = attested.reason;
+        await loadCallingNumbers();
+        return await snapshot();
+      }
+      return await afterCommand(attested, loadCallingNumbers);
+    },
+
+    async attestCallingNumber(input) {
+      // 9.1's verification, in version one: the person saying this is the number they
+      // place calls from. `attested: true` is the statement; the server records who made
+      // it and when, and decides nothing else from the body.
+      const outcome = await deps.api.command(
+        CALLING_NUMBER_API_PATHS.attest,
+        { identityId: input.identityId, attested: true },
+        value => callingNumberChangeSchema.parse(value),
+      );
+      return await afterCommand(outcome, loadCallingNumbers);
+    },
+
+    async retireCallingNumber(input) {
+      const outcome = await deps.api.command(
+        CALLING_NUMBER_API_PATHS.disable,
+        { identityId: input.identityId },
+        value => callingNumberChangeSchema.parse(value),
+      );
+      return await afterCommand(outcome, loadCallingNumbers);
+    },
+  };
+}
+
+function viewOfNumber(row: z.infer<typeof callingIdentityDtoSchema>): CallingNumberView {
+  return {
+    id: row.id,
+    e164: row.e164,
+    label: row.label,
+    verificationStatus: row.verificationStatus,
+    enabled: row.enabled,
+    verifiedAt: row.verifiedAt,
+    verificationMethod: row.verificationMethod,
+    disabledAt: row.disabledAt,
+    usedForCalls: row.usedForCalls,
   };
 }
