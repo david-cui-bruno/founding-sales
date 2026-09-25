@@ -204,11 +204,13 @@ describe('every alarm metric has something that emits it', () => {
       "INSERT INTO workspace_memberships (workspace_id, user_id, role) VALUES ($1, $2, 'salesperson')",
       [mailWorkspace, departedUserId],
     );
+    // `revoked`, which is what a refused grant writes: since lane g81 a mailbox its
+    // owner disconnected on purpose (`disconnected`) is not counted.
     const departedMailbox = await database.session.query<{ id: string }>(
       `INSERT INTO mailboxes (workspace_id, owner_user_id, email_address, status, disconnected_at,
                               disconnect_reason)
-       VALUES ($1, $2, 'departed@example.test', 'disconnected', now() - interval '3 days',
-               'the grant was revoked')
+       VALUES ($1, $2, 'departed@example.test', 'revoked', now() - interval '3 days',
+               'the Gmail grant was revoked')
        RETURNING id`,
       [mailWorkspace, departedUserId],
     );

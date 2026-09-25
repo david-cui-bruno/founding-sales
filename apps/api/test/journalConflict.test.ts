@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { SuppressionJournalError, type SuppressionJournalRecord } from '@fss/domain/suppression';
 import { loadJournalPutObject, type S3JournalSdk } from '../src/bootstrap/deployment.ts';
+import { recordingLogger } from '../src/bootstrap/log.ts';
 import { resolveSuppressionJournal } from '../src/journal/index.ts';
 import { dispatch, type ApiRequest } from '../src/server.ts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from './support/authFixture.ts';
@@ -26,7 +27,15 @@ import { issueSessionFor } from './support/sessionFixture.ts';
  * and a plain success, and those must resolve; and the route test retries the same
  * command id against a fake that now accepts, and that retry must record the
  * suppression. The SDK is a fake: no test here reaches AWS.
+ *
+ * And the failure is loud (lane g81): every refusal but the `412` logs
+ * `suppression_journal_write_failed`, the event the immediately-critical
+ * `SuppressionJournalWriteFailures` metric filter counts and nothing logged before. A
+ * success and a `412` must log nothing, or the alarm would fire on every replay.
  */
+
+const failureLines = (lines: readonly Record<string, unknown>[]): Record<string, unknown>[] =>
+  lines.filter(line => line['event'] === 'suppression_journal_write_failed');
 
 interface SentCommand {
   readonly input: Record<string, unknown>;
@@ -80,24 +89,34 @@ const record: SuppressionJournalRecord = {
 describe('the S3 journal put (audit S12)', () => {
   it('writes conditionally, and reads a 412 as the object already durable', async () => {
     const { sdk, sent } = scriptedSdk(['ok', 'PreconditionFailed']);
-    const put = await loadJournalPutObject('us-east-1', sdk);
+    const log = recordingLogger();
+    const put = await loadJournalPutObject('us-east-1', { sdk, log });
     await expect(put(request)).resolves.toBe('written');
     await expect(put(request)).resolves.toBe('already_present');
     expect(sent.map(command => command.input['IfNoneMatch'])).toEqual(['*', '*']);
     expect(sent[0]?.input['Key']).toBe(request.key);
+    expect(failureLines(log.lines)).toEqual([]);
   });
 
-  it('refuses a 409 ConditionalRequestConflict rather than calling it present', async () => {
+  it('refuses a 409 ConditionalRequestConflict rather than calling it present, and logs the failure', async () => {
     const { sdk } = scriptedSdk(['ConditionalRequestConflict']);
-    const put = await loadJournalPutObject('us-east-1', sdk);
+    const log = recordingLogger();
+    const put = await loadJournalPutObject('us-east-1', { sdk, log });
     await expect(put(request)).rejects.toMatchObject({ name: 'ConditionalRequestConflict' });
+    const lines = failureLines(log.lines);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ level: 'error', writer: 'api', error_name: 'ConditionalRequestConflict' });
+    // The bucket and the key stay out of the line.
+    expect(JSON.stringify(lines[0])).not.toContain(request.bucket);
+    expect(JSON.stringify(lines[0])).not.toContain(request.key);
   });
 
   it('turns the conflict into JOURNAL_UNAVAILABLE for the command, and a 412 into success', async () => {
     const { sdk } = scriptedSdk(['ConditionalRequestConflict', 'PreconditionFailed', 'AccessDenied']);
+    const log = recordingLogger();
     const resolved = resolveSuppressionJournal({
       bucket: request.bucket,
-      putObject: await loadJournalPutObject('us-east-1', sdk),
+      putObject: await loadJournalPutObject('us-east-1', { sdk, log }),
     });
     expect(resolved.durable).toBe(true);
 
@@ -111,6 +130,8 @@ describe('the S3 journal put (audit S12)', () => {
 
     await expect(resolved.journal.append(record)).resolves.toBeUndefined();
     await expect(resolved.journal.append(record)).rejects.toBeInstanceOf(SuppressionJournalError);
+    // The conflict and the denial each logged once; the 412 did not.
+    expect(failureLines(log.lines).map(line => line['error_name'])).toEqual(['ConditionalRequestConflict', 'AccessDenied']);
   });
 });
 
@@ -119,6 +140,7 @@ describe('a suppression whose journal write meets a conflict', () => {
   let token: string;
   const scripted: ('ok' | 'PreconditionFailed' | 'ConditionalRequestConflict')[] = [];
   let journal: ReturnType<typeof resolveSuppressionJournal>['journal'];
+  const log = recordingLogger();
 
   const post = async (body: unknown): Promise<{ status: number; body: Record<string, unknown> }> => {
     const call: ApiRequest = {
@@ -146,7 +168,7 @@ describe('a suppression whose journal write meets a conflict', () => {
     const { sdk } = scriptedSdk(scripted);
     journal = resolveSuppressionJournal({
       bucket: request.bucket,
-      putObject: await loadJournalPutObject('us-east-1', sdk),
+      putObject: await loadJournalPutObject('us-east-1', { sdk, log }),
     }).journal;
   });
 
@@ -168,6 +190,7 @@ describe('a suppression whose journal write meets a conflict', () => {
     const failed = await post(body);
     expect(failed.status).toBe(503);
     expect(failed.body['error']).toBe('journal_unavailable');
+    expect(failureLines(log.lines)).toHaveLength(1);
 
     const events = await fixture.db.query<{ count: string }>(
       "SELECT count(*) AS count FROM suppression_events WHERE workspace_id = $1 AND canonical_key = '+14015550198'",
@@ -184,6 +207,7 @@ describe('a suppression whose journal write meets a conflict', () => {
     scripted.push('PreconditionFailed');
     const retried = await post(body);
     expect(retried.status).toBe(200);
+    expect(failureLines(log.lines)).toHaveLength(1);
     const recorded = await fixture.db.query<{ count: string }>(
       "SELECT count(*) AS count FROM suppression_events WHERE workspace_id = $1 AND canonical_key = '+14015550198'",
       [fixture.alpha.workspaceId],

@@ -3099,7 +3099,7 @@ One question is left open. Once sending is on, the worker sends only under a sto
 
 ### 8.0an What lane g81 changed: each critical condition e-mails, the load balancer asks readiness, each task gets its own secrets (25 September)
 
-**The gap.** The independent audit of 25 September (`GPT6-ASTRA-EXHAUSTIVE-20260925.md`) named six operations and safety items for this lane: O14, O15, O16, S12, S14 and S17. All six were real in code. One part of O15 is left open, below.
+**The gap.** The independent audit of 25 September (`GPT6-ASTRA-EXHAUSTIVE-20260925.md`) named six operations and safety items for this lane: O14, O15, O16, S12, S14 and S17. All six were real in code. The coordinator then asked for three more fixes in the same pull request, all found while checking these items.
 
 - **O14.** `fss-prod-critical` was one OR composite, and a composite e-mails only on its own transitions. The first critical alarm to trip hid every later one until all had cleared.
 - **O15.** `gmail-watch-expiring` treated a missing gauge as breaching, and the gauge exists only while a mailbox is connected. `MailboxCheckHeartbeat` was built from any mailbox heartbeat row. An environment with no mailbox, or one disconnected on purpose, sat in critical ALARM and held the roll-up there.
@@ -3107,6 +3107,7 @@ One question is left open. Once sending is on, the worker sends only under a sto
 - **S12.** Both journal writers read a `409 ConditionalRequestConflict` as a durable object. A conflict could acknowledge a suppression that no journal object recorded.
 - **S14.** The target group polled `/healthz`. A task on the wrong schema range or generation, or with no database connection free, was put in service.
 - **S17.** One secret map went to the API, the worker, the operations tool and the drill. Three processes that never sign anyone in held the session-signing key, the device pepper and the sign-in client.
+- **Found while checking.** The classifier reads `FSS_LLM_CLASSIFIER_API_KEY`, and the key was injected as `llm-classifier-api-key`, so the deployed worker never had a classifier. Nothing read `research-provider-credentials`. Nothing logged `suppression_journal_write_failed`, so its immediately-critical alarm could not fire. `MailboxDisconnectedHours` counted a mailbox its owner disconnected on purpose.
 
 **What g81 changes.** The reasoning is in three decision docs: `docs/decisions/g81-one-e-mail-per-critical-condition.md`, `g81-the-load-balancer-asks-readiness.md` and `g81-each-task-gets-its-own-secrets.md`.
 
@@ -3115,22 +3116,28 @@ One question is left open. Once sending is on, the worker sends only under a sto
 - **The watch alarm and the check heartbeat.** `gmail-watch-expiring` is not-breaching on missing data. The mail lane publishes `MailboxCheckHeartbeat` on every pass: 1 when every connected mailbox is checked on time or none is connected, 0 otherwise. The job lane no longer publishes it.
 - **The restore mismatch.** The worker's metric loop logs `restore_generation_mismatch` on every pass while the pin and the database differ (`continuing: true`). The alarm fires on one line and clears after three quiet minutes.
 - **The journal writers.** Only a `412 PreconditionFailed` is durable now. A 409 fails that write, and the command fails with 503 `journal_unavailable`. Its retry meets the object or writes it.
+- **The journal alarm can fire.** Both writers log `suppression_journal_write_failed` at level `error` on every refusal but the `412`, with the writer and the error name and nothing that identifies the suppression. The observability module now filters the worker's log group for it too, into the same metric.
 - **The target group.** It polls `/readyz`, and a 503 is unhealthy. That covers `database_busy`, which now takes a task out of service. The container check stays on `/healthz`.
-- **Per-process secrets.** Each runtime task definition carries the secrets its process reads. The authentication secrets reach the API alone, and the classifier and research keys reach the worker alone. A plan with an application secret no process reads is refused.
+- **Per-process secrets.** Each runtime task definition carries the secrets its process reads. The authentication secrets reach the API alone. A plan with an application secret no list names is refused.
+- **The classifier key, under the name the classifier reads.** The worker is handed `llm-classifier-api-key` as `FSS_LLM_CLASSIFIER_API_KEY`, in production only. The classifier has no recorded seam, and a rehearsal's entry holds a fixture. `research-provider-credentials` is handed to no task. The entry itself stays.
+- **Owner disconnect.** `MailboxDisconnectedHours` counts `status = 'revoked'` only: a refused grant or a departure. A mailbox its owner disconnected is no longer a critical alarm two days later.
 - **Coverage age, visible outside the Mac (coordinator addition).** Since lane g77 the send path holds an owner's automated email once their watermark is fifteen minutes old. Until now nothing but the Mac showed whether sync was advancing.
   - The worker publishes `MailboxCoverageAgeSeconds` on every pass: the stalest connected, `ready` mailbox's `coverage_watermark_at` age on `clock_timestamp()`, judged by the gate's own `coverageIsFresh`.
   - A watermark the gate cannot credit reads 901: none on a ready mailbox, or one more than five minutes ahead of the database clock. With no mailbox connected and `ready`, nothing is published.
   - The new warning `mailbox-coverage-stale` fires above 900 s for 3 of 3 minutes, is not-breaching on missing data, and is a member of the warning roll-up only. Its runbook is `docs/greenfield/runbooks/mailbox_coverage_stale.md`.
-- **Mutations.** Thirteen are appended to `scripts/releaseMutationCheck.mjs`, 147 on main at `837030c7` plus 13 is 160. Each went red when applied by hand to its own suite.
+- **Mutations.** Twenty are appended to `scripts/releaseMutationCheck.mjs`, 147 on main at `837030c7` plus 20 is 167. Each went red when applied by hand to its own suite.
 
 **What changes in the production plan.**
 
 - 13 new `aws_cloudwatch_composite_alarm.critical_condition` resources.
 - `fss-prod-critical` loses its alarm action.
 - One new metric alarm, `fss-prod-mailbox-coverage-stale`. `fss-prod-warning`'s rule gains it.
-- Two metric alarms are updated in place: `gmail-watch-expiring` (missing data) and `restore-generation-mismatch` (three evaluation periods).
+- Three metric alarms are updated in place: `gmail-watch-expiring` (missing data), `restore-generation-mismatch` (three evaluation periods) and `mailbox-disconnected` (description).
+- One new log metric filter, `fss-prod-suppression-journal-write-failed-worker`, on the worker log group.
 - The target group health check path is updated in place.
-- The API, worker, operations and drill task definitions are new revisions with fewer secrets, and both services roll.
+- The API, worker, operations and drill task definitions are new revisions with fewer secrets, and both services roll. The worker's revision gains `FSS_LLM_CLASSIFIER_API_KEY` and loses the logical-name copy.
+
+**Live behaviour this changes.** After the deploy the production worker composes the reply classifier. It claims `classify.reply` for replies that need a second opinion, within the workspace's daily cap, and sends each one to the provider under the key in `fss-prod/llm-classifier-api-key`. If that entry holds a real key, this is the designed behaviour, off since the cutover because of the name mismatch. If it holds a placeholder, every `classify.reply` dies and `dead_job_unresolved` warns an hour later. David should confirm which before the production apply. `FSS_CLASSIFIER=off` is the documented off switch, and no root sets it.
 
 No IAM, no principal and no network change. The deployment role already holds `cloudwatch:*` on `alarm:<prefix>*` and `PutCompositeAlarm` on `alarm:*`.
 
@@ -3142,13 +3149,12 @@ No IAM, no principal and no network change. The deployment role already holds `c
 2. The API service reaches steady state behind `/readyz`, and the rolling deploy completes.
 3. The restore drill still sees `<prefix>-restore-generation-mismatch` go to ALARM from the drill's one line.
 4. `fss verify` and the drill start with the narrower secret sets.
+5. The rehearsal worker starts with no classifier: its `worker_configuration` line reads `classifier_configured: false`.
 
 **Left open.**
 
-- **Owner-disconnected mailboxes and `MailboxDisconnectedHours`.** A mailbox its owner disconnected on purpose still raises that alarm after 48 hours if it sent in the last 30 days. The fix is `WHERE m.status = 'revoked'` in `packages/domain/outbound/metrics.ts`, which was outside this lane's files.
 - **Repetition.** 13.3's "repeated while critical and unacknowledged" still does not happen. Nothing raises a `critical_alerts` row, and the age metric would not cycle anyway.
-- **Stale text.** The 8.0ac table above and `docs/greenfield/processes.md` still name `fss-prod-critical` as the e-mail for every critical alarm and `/healthz` as the load balancer's path. So does the comment at the top of `apps/api/src/bootstrap/readiness.ts`.
-- **Classifier secret name.** The worker's classifier reads `FSS_LLM_CLASSIFIER_API_KEY`, and no task definition injects that name.
+- **Stale text.** The 8.0ac table above and `docs/greenfield/processes.md` still name `fss-prod-critical` as the e-mail for every critical alarm and `/healthz` as the load balancer's path, and `processes.md` still says every secret arrives under its logical name. So does the comment at the top of `apps/api/src/bootstrap/readiness.ts`.
 - **Dispatch readiness.** Ordinary API dispatch still does not enforce readiness, the other half of S14.
 
 **Still unverified.** Nothing here has run in the cloud. The Terraform assertions ran as `terraform validate` locally and run as `terraform test` in the infrastructure workflow. The actions-suppressor timing comes from the CloudWatch documentation and has not been observed. Nor has the ECS behaviour when every task fails readiness during a database outage.

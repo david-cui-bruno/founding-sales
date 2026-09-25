@@ -22,7 +22,7 @@ import {
   type GoogleOidcConfig,
   type SessionPolicy,
 } from '../auth/index.ts';
-import type { LogFields } from './log.ts';
+import { createLogger, type LogFields, type Logger } from './log.ts';
 import {
   journalBody,
   requireDurableJournal,
@@ -115,8 +115,8 @@ export const DEPLOYMENT_ENVIRONMENT_VARIABLES = Object.freeze({
   researchProviders: 'FSS_RESEARCH_PROVIDERS',
   gmailOAuthClient: 'google-gmail-oauth-client',
   oidcClient: 'google-oidc-client',
-  classifierApiKey: 'llm-classifier-api-key',
-  researchCredentials: 'research-provider-credentials',
+  // No classifier key and no research credential: the API reads neither, and since
+  // lane g81 its task definition is handed neither (`infra/modules/cluster`).
   // ---- the API's own ----
   sessionSigningKey: 'session-signing-key',
 } as const);
@@ -649,11 +649,22 @@ export interface S3JournalSdk {
  * recorded. It now throws like any other refusal, `createS3SuppressionJournal` turns
  * that into `JOURNAL_UNAVAILABLE`, and the command fails with 503 `journal_unavailable`
  * (`routes/dialSupport.ts`). Its retry meets the object (`412`) or writes it.
+ *
+ * Every refusal but the `412` logs `suppression_journal_write_failed` first (lane
+ * g81): the event `infra/modules/observability` turns into
+ * `SuppressionJournalWriteFailures`, immediately critical in 13.3, which nothing wrote
+ * until now. It names the writer and the error's name, never the bucket, the key or
+ * the event id. A caller that passes no `log` logs on stdout, as `bootstrap/main.ts`
+ * does today.
  */
-export async function loadJournalPutObject(region: string, sdk?: S3JournalSdk): Promise<JournalPutObject> {
+export async function loadJournalPutObject(
+  region: string,
+  options: { readonly sdk?: S3JournalSdk | undefined; readonly log?: Logger | undefined } = {},
+): Promise<JournalPutObject> {
   const specifier = '@aws-sdk/client-s3';
-  const loaded = sdk ?? ((await import(specifier)) as S3JournalSdk);
+  const loaded = options.sdk ?? ((await import(specifier)) as S3JournalSdk);
   const client = new loaded.S3Client({ region });
+  const log = options.log ?? createLogger({ component: 'api', instanceKey: 'suppression-journal' });
   return async request => {
     try {
       await client.send(
@@ -669,6 +680,8 @@ export async function loadJournalPutObject(region: string, sdk?: S3JournalSdk): 
     } catch (error) {
       const name = error instanceof Error ? error.name : 'unknown';
       if (name === 'PreconditionFailed') return 'already_present';
+      // The exact event the SuppressionJournalWriteFailures metric filter counts.
+      log.log('error', 'suppression_journal_write_failed', { writer: 'api', error_name: name });
       throw error;
     }
   };

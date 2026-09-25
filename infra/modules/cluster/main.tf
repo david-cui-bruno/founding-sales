@@ -99,27 +99,53 @@ locals {
   #     `google-oidc-client` (sign-in) and `session-signing-key`
   #     (`apps/api/src/bootstrap/deployment.ts`). `device-credential-pepper` is the
   #     API's too: nothing reads it yet, and if anything ever does it is sign-in.
-  #   * the worker reads `google-gmail-oauth-client` (`readGmailDeployment`). The
-  #     classifier and research keys are its lanes' — it is the only process that
-  #     runs `classify.reply` and the research jobs — so they stay with it.
+  #   * the worker reads `google-gmail-oauth-client` (`readGmailDeployment`) and the
+  #     reply classifier's key, which it is the only process to use
+  #     (`apps/worker/src/handlers/classify.ts`) — under `FSS_LLM_CLASSIFIER_API_KEY`,
+  #     not under its logical name (see `secret_environment_names`).
   #   * the operations tool and the drill read `google-gmail-oauth-client` through
   #     the same `readWorkerDeployment` the worker does, and nothing else.
+  #   * nothing reads `research-provider-credentials`: production allows research
+  #     `none` only and no adapter takes a credential. The entry is still created
+  #     and filled (`infra/modules/secrets`), and handed to no task until a process
+  #     reads it.
   #
   # The database entries are not in these lists: they arrive through the two named
   # inputs, as before, and the runtime one is added to each map below.
   api_secret_names        = ["device-credential-pepper", "google-gmail-oauth-client", "google-oidc-client", "session-signing-key"]
-  worker_secret_names     = ["google-gmail-oauth-client", "llm-classifier-api-key", "research-provider-credentials"]
+  worker_secret_names     = ["google-gmail-oauth-client", "llm-classifier-api-key"]
   operations_secret_names = ["google-gmail-oauth-client"]
+  unread_secret_names     = ["research-provider-credentials"]
+
+  # The environment variable a process reads a secret under, where that is not the
+  # secret's logical name (lane g81). The ECS `secrets` block names the variable, and
+  # until this lane the classifier's key arrived as `llm-classifier-api-key` while
+  # `CLASSIFIER_SECRET_ENVIRONMENT_VARIABLES` in
+  # `packages/domain/classification/anthropicClient.ts` reads
+  # `FSS_LLM_CLASSIFIER_API_KEY`, so the deployed worker never had a classifier.
+  secret_environment_names = {
+    "llm-classifier-api-key" = "FSS_LLM_CLASSIFIER_API_KEY"
+  }
+
+  # The classifier has no recorded seam: handed a key, the worker calls the
+  # provider. A rehearsal fills the entry with a fixture, so only an environment that
+  # says so is handed it (`worker_reads_classifier_key`); elsewhere `classify.reply`
+  # stays unclaimed, which is what a worker with no key does by design.
+  worker_injected_secret_names = [
+    for name in local.worker_secret_names : name
+    if name != "llm-classifier-api-key" || var.worker_reads_classifier_key
+  ]
 
   runtime_database_secret = { DATABASE_SECRET_ARN = var.app_runtime_database_secret_arn }
 
-  api_task_secrets        = merge({ for name, arn in var.secret_arns : name => arn if contains(local.api_secret_names, name) }, local.runtime_database_secret)
-  worker_task_secrets     = merge({ for name, arn in var.secret_arns : name => arn if contains(local.worker_secret_names, name) }, local.runtime_database_secret)
-  operations_task_secrets = merge({ for name, arn in var.secret_arns : name => arn if contains(local.operations_secret_names, name) }, local.runtime_database_secret)
+  api_task_secrets        = merge({ for name, arn in var.secret_arns : lookup(local.secret_environment_names, name, name) => arn if contains(local.api_secret_names, name) }, local.runtime_database_secret)
+  worker_task_secrets     = merge({ for name, arn in var.secret_arns : lookup(local.secret_environment_names, name, name) => arn if contains(local.worker_injected_secret_names, name) }, local.runtime_database_secret)
+  operations_task_secrets = merge({ for name, arn in var.secret_arns : lookup(local.secret_environment_names, name, name) => arn if contains(local.operations_secret_names, name) }, local.runtime_database_secret)
 
-  # An application secret no process reads would be one nobody gets; a new entry in
-  # `infra/modules/secrets` must be given to the process that reads it.
-  unassigned_secret_names = sort(setsubtract(keys(var.secret_arns), concat(local.api_secret_names, local.worker_secret_names, local.operations_secret_names)))
+  # An application secret no list names would be one nobody gets; a new entry in
+  # `infra/modules/secrets` must be given to the process that reads it, or named as
+  # read by nothing.
+  unassigned_secret_names = sort(setsubtract(keys(var.secret_arns), concat(local.api_secret_names, local.worker_secret_names, local.operations_secret_names, local.unread_secret_names)))
 
   # The migration task's two references, with the names the tool reads
   # (`apps/worker/src/tools/fss/config.ts`, `TOOL_ENVIRONMENT_VARIABLES`, and
@@ -642,7 +668,7 @@ resource "aws_ecs_task_definition" "api" {
     # give to its reader. Refused here rather than silently injected into nobody.
     precondition {
       condition     = length(local.unassigned_secret_names) == 0
-      error_message = "Every application secret must be read by some process: add it to the api, worker or operations list in infra/modules/cluster/main.tf. Unassigned: ${join(", ", local.unassigned_secret_names)}."
+      error_message = "Every application secret must be read by some process, or named as read by none: add it to the api, worker, operations or unread list in infra/modules/cluster/main.tf. Unassigned: ${join(", ", local.unassigned_secret_names)}."
     }
   }
 

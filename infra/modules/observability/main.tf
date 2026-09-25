@@ -39,8 +39,19 @@ locals {
       metric_name = "StepsHeld"
       dimensions  = { reason = "$.reason" }
     }
+    # Both processes write the journal (10.2): the API for the commands, the worker
+    # for the opt-outs mail sync records. Each logs the failure into its own log
+    # group, so each group has a filter, and both publish the one metric the alarm
+    # sums (lane g81). Until then only the API's group was filtered, and neither
+    # process logged the event at all.
     suppression_journal_write_failed = {
       service     = "api"
+      pattern     = "{ $.event = \"suppression_journal_write_failed\" }"
+      metric_name = "SuppressionJournalWriteFailures"
+      dimensions  = {}
+    }
+    suppression_journal_write_failed_worker = {
+      service     = "worker"
       pattern     = "{ $.event = \"suppression_journal_write_failed\" }"
       metric_name = "SuppressionJournalWriteFailures"
       dimensions  = {}

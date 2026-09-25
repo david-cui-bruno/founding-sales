@@ -14,7 +14,8 @@ import {
   type MailPublicConfig,
   type SecretProvider,
 } from '@fss/domain/mail';
-import type { LogFields } from './log.ts';
+import { CLASSIFIER_SECRET_ENVIRONMENT_VARIABLES } from '@fss/domain/classification';
+import { createLogger, type LogFields, type Logger } from './log.ts';
 import {
   SuppressionJournalError,
   journalObjectKey,
@@ -110,11 +111,18 @@ export const DEPLOYMENT_ENVIRONMENT_VARIABLES = Object.freeze({
   hostedDomain: 'FSS_GOOGLE_HOSTED_DOMAIN',
   sendingEnabled: 'FSS_SENDING_ENABLED',
   researchProviders: 'FSS_RESEARCH_PROVIDERS',
-  /** The ECS `secrets` block names each entry by its logical Secrets Manager name. */
+  /** The ECS `secrets` block names each entry by its logical Secrets Manager name, */
   gmailOAuthClient: 'google-gmail-oauth-client',
   oidcClient: 'google-oidc-client',
-  classifierApiKey: 'llm-classifier-api-key',
-  researchCredentials: 'research-provider-credentials',
+  /**
+   * except this one, which the classifier reads as `FSS_LLM_CLASSIFIER_API_KEY`
+   * (`environmentClassifierSecrets`). Until lane g81 this said
+   * `llm-classifier-api-key`, the task definition injected it under that name, and
+   * the deployed worker never had a classifier. `infra/modules/cluster` maps the
+   * entry to this name and `test/release/processSecrets.check.ts` holds the three
+   * equal. `research-provider-credentials` is gone from here: nothing reads it.
+   */
+  classifierApiKey: CLASSIFIER_SECRET_ENVIRONMENT_VARIABLES.llm_classifier_api_key,
 } as const);
 
 const VARIABLES = DEPLOYMENT_ENVIRONMENT_VARIABLES;
@@ -541,15 +549,26 @@ export function journalPutRefusalIsDurable(errorName: string): boolean {
  *
  * A `412 PreconditionFailed` is success and nothing else is: see
  * `journalPutRefusalIsDurable`.
+ *
+ * Every other refusal logs `suppression_journal_write_failed` before it throws (lane
+ * g81). That is the event `infra/modules/observability` turns into
+ * `SuppressionJournalWriteFailures`, which 13.3 makes immediately critical, and until
+ * this lane nothing wrote it, so the alarm could not fire. The line names the writer
+ * and the error's name and nothing else: not the bucket, not the key, and not the
+ * event id, which is a digest of the suppressed number or address. `log` is for
+ * tests; a process that passes none logs on stdout, which is what the awslogs driver
+ * reads.
  */
 export async function loadS3SuppressionJournal(options: {
   readonly bucket: string;
   readonly region: string;
   readonly sdk?: S3JournalSdk | undefined;
+  readonly log?: Logger | undefined;
 }): Promise<SuppressionJournal> {
   const specifier = '@aws-sdk/client-s3';
   const sdk = options.sdk ?? ((await import(specifier)) as S3JournalSdk);
   const client = new sdk.S3Client({ region: options.region });
+  const log = options.log ?? createLogger({ component: 'worker', instanceKey: 'suppression-journal' });
   return {
     append: async record => {
       try {
@@ -567,6 +586,8 @@ export async function loadS3SuppressionJournal(options: {
         // The object is already there, which is what a replay of a deterministic id
         // looks like and is indistinguishable from success for the caller.
         if (journalPutRefusalIsDurable(name)) return;
+        // The exact event the SuppressionJournalWriteFailures metric filter counts.
+        log.log('error', 'suppression_journal_write_failed', { writer: 'worker', error_name: name });
         // Redacted: the bucket and the key are operational detail, and the command's
         // caller learns only that the journal was unavailable.
         throw new SuppressionJournalError(

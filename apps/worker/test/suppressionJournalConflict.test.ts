@@ -3,6 +3,7 @@ import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing';
 import { repositoryContext, withTransaction, workspaceScope } from '@fss/domain/db';
 import { SuppressionJournalError, recordSuppression, type SuppressionJournalRecord } from '@fss/domain/suppression';
 import { journalPutRefusalIsDurable, loadS3SuppressionJournal, type S3JournalSdk } from '../src/bootstrap/deployment.ts';
+import { recordingLogger } from '../src/bootstrap/log.ts';
 
 /**
  * The worker's journal: a conditional-write conflict fails the write (audit S12, lane
@@ -21,7 +22,15 @@ import { journalPutRefusalIsDurable, loadS3SuppressionJournal, type S3JournalSdk
  * also answers success and `412`, both of which must resolve, and the database test
  * retries the same opt-out once the other writer has landed, which must record it.
  * The SDK is a fake: nothing here reaches AWS.
+ *
+ * And the failure is loud (lane g81): the refusal logs
+ * `suppression_journal_write_failed`, the event the immediately-critical
+ * `SuppressionJournalWriteFailures` metric filter counts, which nothing logged before;
+ * a success and a `412` log nothing.
  */
+
+const failureLines = (lines: readonly Record<string, unknown>[]): Record<string, unknown>[] =>
+  lines.filter(line => line['event'] === 'suppression_journal_write_failed');
 
 type Outcome = 'ok' | 'PreconditionFailed' | 'ConditionalRequestConflict';
 
@@ -68,10 +77,12 @@ describe('the worker S3 journal (audit S12)', () => {
 
   it('writes conditionally, accepts a 412, and refuses a 409', async () => {
     const { sdk, inputs } = scriptedSdk(['ok', 'PreconditionFailed', 'ConditionalRequestConflict']);
-    const journal = await loadS3SuppressionJournal({ bucket: 'fss-test-journal', region: 'us-east-1', sdk });
+    const log = recordingLogger();
+    const journal = await loadS3SuppressionJournal({ bucket: 'fss-test-journal', region: 'us-east-1', sdk, log });
 
     await expect(journal.append(record)).resolves.toBeUndefined();
     await expect(journal.append(record)).resolves.toBeUndefined();
+    expect(failureLines(log.lines)).toEqual([]);
     const conflict = await journal.append(record).then(
       () => null,
       (error: unknown) => error,
@@ -79,6 +90,11 @@ describe('the worker S3 journal (audit S12)', () => {
     expect(conflict).toBeInstanceOf(SuppressionJournalError);
     expect((conflict as SuppressionJournalError).code).toBe('JOURNAL_UNAVAILABLE');
     expect((conflict as Error).message).toContain('ConditionalRequestConflict');
+    const lines = failureLines(log.lines);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ level: 'error', writer: 'worker', error_name: 'ConditionalRequestConflict' });
+    expect(JSON.stringify(lines[0])).not.toContain('fss-test-journal');
+    expect(JSON.stringify(lines[0])).not.toContain(record.eventId);
 
     expect(inputs.map(input => input['IfNoneMatch'])).toEqual(['*', '*', '*']);
     expect(inputs[0]?.['Key']).toBe(`suppressions/${record.workspaceId}/${record.eventId}.json`);
@@ -112,7 +128,8 @@ describe('an opt-out whose journal write meets a conflict', () => {
   it('records nothing on the conflict, and records it on the retry', async () => {
     const outcomes: Outcome[] = ['ConditionalRequestConflict'];
     const { sdk } = scriptedSdk(outcomes);
-    const journal = await loadS3SuppressionJournal({ bucket: 'fss-test-journal', region: 'us-east-1', sdk });
+    const log = recordingLogger();
+    const journal = await loadS3SuppressionJournal({ bucket: 'fss-test-journal', region: 'us-east-1', sdk, log });
     const session = await database.appRuntimeSession();
     const context = repositoryContext(workspaceScope(workspaceId, { kind: 'system', component: 'worker' }), session);
     const optOut = {
@@ -127,11 +144,13 @@ describe('an opt-out whose journal write meets a conflict', () => {
       SuppressionJournalError,
     );
     expect(await countFor('dana@northwind.example.test')).toBe(0);
+    expect(failureLines(log.lines)).toHaveLength(1);
 
     // The other writer landed: the retry meets its object, which is this event.
     outcomes.push('PreconditionFailed');
     const retried = await withTransaction(session, async () => recordSuppression(context, optOut));
     expect(retried.ok).toBe(true);
     expect(await countFor('dana@northwind.example.test')).toBe(1);
+    expect(failureLines(log.lines)).toHaveLength(1);
   });
 });

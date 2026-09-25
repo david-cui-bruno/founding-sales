@@ -150,7 +150,7 @@ export async function mailboxDisconnectedHours(
   const { rows } = await db.query<{ hours: string | null }>(
     `SELECT extract(epoch FROM now() - min(disconnected_at)) / 3600 AS hours
        FROM mailboxes
-      WHERE status IN ('disconnected', 'revoked')
+      WHERE status = 'revoked'
         AND disconnected_at IS NOT NULL
         AND id = ANY ($1::uuid[])`,
     [[...recent]],

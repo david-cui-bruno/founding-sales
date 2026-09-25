@@ -100,15 +100,40 @@ Both held `<prefix>-critical` in ALARM, and that hid every other critical condit
 A revoked or failed grant is not a missed check. It is 12.6's `MailboxDisconnectedHours`,
 with its 48 hours.
 
-**Left open: owner disconnect and `MailboxDisconnectedHours`.** That metric still counts
-`status IN ('disconnected', 'revoked')`. A mailbox its owner disconnected on purpose, if
-it sent in the last 30 days, still raises the critical alarm after 48 hours. The
-correct fix is one line in `packages/domain/outbound/metrics.ts`,
-`WHERE m.status = 'revoked'`, plus its test. `disconnectMailbox` writes `disconnected`,
-and a failed grant (`holdForRevokedGrant`) or a departure writes `revoked`. This lane's
-brief keeps `packages/domain/outbound` off limits while PRs 216 to 218 are open, so the
-change is left for the lane that next owns that file. The alarm cannot make this
-distinction: the metric carries no dimension.
+**Owner disconnect and `MailboxDisconnectedHours`.** That metric counted
+`status IN ('disconnected', 'revoked')`, so a mailbox its owner disconnected on purpose
+still raised the critical alarm after 48 hours if it had sent in the last 30 days.
+`disconnectMailbox` writes `disconnected`. A refused grant (`holdForRevokedGrant`) and a
+departure write `revoked`. The alarm cannot make this distinction, because the metric
+carries no dimension, so the publisher does: `packages/domain/outbound/metrics.ts` now
+counts `status = 'revoked'` only. The mail lane's twin in `packages/domain/mail/metrics.ts`
+says the same. A departure still counts, because a departed owner's recently sending
+mailbox is exactly a mailbox whose replies nobody reads any more.
+`packages/domain/test/outbound/mailboxDisconnectedHours.test.ts` holds all three cases.
+
+## The suppression journal alarm could not fire
+
+`SuppressionJournalWriteFailures` is immediately critical and derived from the log event
+`suppression_journal_write_failed`. Nothing in `apps/` or `packages/` logged that event.
+A journal write that failed became a 503 `journal_unavailable` in the API, or a failed
+job in the worker, and the alarm never heard of it.
+
+**Decision.** Both writers log the event, at level `error`, on every refusal except the
+`412`, just before they throw:
+- `loadS3SuppressionJournal` in `apps/worker/src/bootstrap/deployment.ts`;
+- `loadJournalPutObject` in `apps/api/src/bootstrap/deployment.ts`.
+
+The line carries `writer` and `error_name`, and nothing that identifies what was
+suppressed. It leaves out the bucket, the key and the event id, because the event id is
+a digest of a phone number or an address. The caller may pass a logger. `bootstrap/main.ts`
+in the API is outside this lane and passes none, so each loader falls back to its
+process's stdout logger, which the awslogs driver ships.
+
+The metric filter used to read the API's log group alone. The worker journals the
+opt-outs that mail sync records, so `infra/modules/observability` now filters the worker
+group too, into the same metric. Both filters publish 0 on every non-matching line, and
+the alarm's `Sum >= 1` counts a failure from either process. The tests drive a fake S3
+client that answers 409 and require exactly one line, and none for a success or a `412`.
 
 ## O16: the restore-mismatch alarm cleared while the mismatch lasted
 

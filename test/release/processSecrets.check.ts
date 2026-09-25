@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { CLASSIFIER_SECRET_ENVIRONMENT_VARIABLES } from '@fss/domain/classification';
 import { DEPLOYMENT_ENVIRONMENT_VARIABLES as API_VARIABLES } from '../../apps/api/src/bootstrap/deployment.ts';
 import { DEPLOYMENT_ENVIRONMENT_VARIABLES as WORKER_VARIABLES } from '../../apps/worker/src/bootstrap/deployment.ts';
 import { readRepositoryFile } from './support/coverage.ts';
@@ -24,6 +25,16 @@ import { readRepositoryFile } from './support/coverage.ts';
  * refuse to start in the cloud. The per-process result is planned and read back from
  * the definitions in `infra/modules/cluster/tests/migration_identity.tftest.hcl` and
  * `infra/roots/production/tests/isolation.tftest.hcl`.
+ *
+ * ## The name a secret arrives under (lane g81)
+ *
+ * The ECS `secrets` block names the environment variable, and the classifier reads its
+ * key as `FSS_LLM_CLASSIFIER_API_KEY` (`CLASSIFIER_SECRET_ENVIRONMENT_VARIABLES`), not
+ * as `llm-classifier-api-key`. The key was injected under the logical name, so the
+ * deployed worker never had a classifier. The cluster's rename map must name exactly
+ * the variable the classifier reads, and the worker's deployment map must say the same;
+ * a rehearsal must not be handed the key at all, because the classifier has no recorded
+ * seam. `research-provider-credentials` is read by nothing and handed to nothing.
  */
 
 const CLUSTER = readRepositoryFile('infra/modules/cluster/main.tf');
@@ -55,12 +66,15 @@ const DEFAULT_SECRET_NAMES = ((): string[] => {
 const API = listLocal('api_secret_names');
 const WORKER = listLocal('worker_secret_names');
 const OPERATIONS = listLocal('operations_secret_names');
+const UNREAD = listLocal('unread_secret_names');
+const STACK = readRepositoryFile('infra/modules/stack/main.tf');
 
 describe('g81: every task gets the secrets its process reads', () => {
   it('still finds the three lists and the secrets module defaults', () => {
     expect(API.length).toBeGreaterThan(0);
     expect(WORKER.length).toBeGreaterThan(0);
     expect(OPERATIONS.length).toBeGreaterThan(0);
+    expect(UNREAD.length).toBeGreaterThan(0);
     expect(DEFAULT_SECRET_NAMES).toContain('app-runtime-database');
   });
 
@@ -72,11 +86,14 @@ describe('g81: every task gets the secrets its process reads', () => {
     expect(secretsMapOf('migration')).toBe('migration_task_secrets');
     expect(CLUSTER).not.toMatch(/local\.task_secrets\b/u);
     expect(CLUSTER).toContain('drill_task_secrets = merge(local.operations_task_secrets, {');
-    expect(CLUSTER).toMatch(/api_task_secrets\s+= merge\(\{ for name, arn in var\.secret_arns : name => arn if contains\(local\.api_secret_names, name\) \}/u);
-    expect(CLUSTER).toMatch(/worker_task_secrets\s+= merge\(\{ for name, arn in var\.secret_arns : name => arn if contains\(local\.worker_secret_names, name\) \}/u);
-    expect(CLUSTER).toMatch(
-      /operations_task_secrets\s+= merge\(\{ for name, arn in var\.secret_arns : name => arn if contains\(local\.operations_secret_names, name\) \}/u,
-    );
+    const built = (map: string, list: string): RegExp =>
+      new RegExp(
+        `${map}\\s+= merge\\(\\{ for name, arn in var\\.secret_arns : lookup\\(local\\.secret_environment_names, name, name\\) => arn if contains\\(local\\.${list}, name\\) \\}`,
+        'u',
+      );
+    expect(CLUSTER).toMatch(built('api_task_secrets', 'api_secret_names'));
+    expect(CLUSTER).toMatch(built('worker_task_secrets', 'worker_injected_secret_names'));
+    expect(CLUSTER).toMatch(built('operations_task_secrets', 'operations_secret_names'));
   });
 
   it('keeps the authentication secrets on the API alone', () => {
@@ -95,12 +112,31 @@ describe('g81: every task gets the secrets its process reads', () => {
     // client through `readWorkerDeployment`.
     expect(WORKER).toContain(WORKER_VARIABLES.gmailOAuthClient);
     expect(OPERATIONS).toContain(WORKER_VARIABLES.gmailOAuthClient);
+    expect(WORKER).toContain('llm-classifier-api-key');
+  });
+
+  it('hands the classifier key over under the name the classifier reads, and only in production', () => {
+    const reads = CLASSIFIER_SECRET_ENVIRONMENT_VARIABLES.llm_classifier_api_key;
+    expect(reads).toBe('FSS_LLM_CLASSIFIER_API_KEY');
+    expect(CLUSTER).toContain(`    "llm-classifier-api-key" = "${reads}"\n`);
+    expect(WORKER_VARIABLES.classifierApiKey).toBe(reads);
+    // Held back from the worker unless the root says it reads it, and the stack says
+    // so for production alone.
+    expect(CLUSTER).toContain('if name != "llm-classifier-api-key" || var.worker_reads_classifier_key');
+    expect(STACK).toContain('  worker_reads_classifier_key = local.is_production\n');
+  });
+
+  it('hands research-provider-credentials, which nothing reads, to no process', () => {
+    expect(UNREAD).toEqual(['research-provider-credentials']);
+    for (const list of [API, WORKER, OPERATIONS]) expect(list).not.toContain('research-provider-credentials');
+    expect(Object.keys(WORKER_VARIABLES)).not.toContain('researchCredentials');
+    expect(Object.keys(API_VARIABLES)).not.toContain('researchCredentials');
   });
 
   it('names only secrets the secrets module creates, and leaves none unassigned', () => {
     const application = DEFAULT_SECRET_NAMES.filter(name => name !== 'migration-database' && name !== 'app-runtime-database');
-    for (const name of [...API, ...WORKER, ...OPERATIONS]) expect(application, name).toContain(name);
-    for (const name of application) expect([...API, ...WORKER, ...OPERATIONS], name).toContain(name);
+    for (const name of [...API, ...WORKER, ...OPERATIONS, ...UNREAD]) expect(application, name).toContain(name);
+    for (const name of application) expect([...API, ...WORKER, ...OPERATIONS, ...UNREAD], name).toContain(name);
     expect(CLUSTER).toContain('condition     = length(local.unassigned_secret_names) == 0');
   });
 });

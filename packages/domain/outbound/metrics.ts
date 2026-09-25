@@ -18,6 +18,12 @@ import type { MetricDatum } from '../jobs/metrics.ts';
  * sends: a salesperson who writes their own mail from that mailbox every day is
  * exactly the person who will notice it has stopped importing, and 12.7 already
  * treats direct sends as real traffic.
+ *
+ * "Disconnected" here means the grant is gone without anyone choosing it: `revoked`,
+ * which is what a refused refresh (`holdForRevokedGrant`) and a departure write. A
+ * mailbox its owner disconnected with the disconnect command is `disconnected`, and is
+ * not a mailbox that stopped (lane g81, audit O15): until then it too alarmed as
+ * critical 48 hours after the owner chose it.
  */
 
 export const OUTBOUND_METRIC_NAMES: readonly string[] = Object.freeze(['MailboxDisconnectedHours']);
@@ -37,7 +43,7 @@ export async function mailboxDisconnectedHours(db: Queryable): Promise<number | 
   const { rows } = await db.query<{ hours: string | null }>(
     `SELECT extract(epoch FROM now() - min(m.disconnected_at)) / 3600 AS hours
        FROM mailboxes AS m
-      WHERE m.status IN ('disconnected', 'revoked')
+      WHERE m.status = 'revoked'
         AND m.disconnected_at IS NOT NULL
         AND (
           EXISTS (

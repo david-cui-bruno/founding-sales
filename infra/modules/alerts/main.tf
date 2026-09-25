@@ -184,7 +184,7 @@ locals {
       datapoints_to_alarm = 1
       treat_missing_data  = "notBreaching"
       severity            = "critical"
-      description         = "A mailbox that sent in the last 30 days has been disconnected for 48 hours."
+      description         = "A mailbox that sent in the last 30 days has had its Gmail grant revoked for 48 hours. A mailbox its owner disconnected is not counted."
     }
     # Lane g81. Since lane g77 the send path holds every automated email for an owner
     # whose coverage watermark is older than fifteen minutes, and nothing outside the

@@ -164,3 +164,31 @@ describe('g81: a stale coverage watermark is visible outside the Mac', () => {
     expect(gate).toContain('extract(epoch FROM (clock_timestamp() - coverage_watermark_at))::float8 AS age_seconds');
   });
 });
+
+describe('g81: a suppression journal failure can raise its alarm', () => {
+  it('filters the failure event out of both log groups into the one metric', () => {
+    const observability = readRepositoryFile('infra/modules/observability/main.tf');
+    for (const [key, service] of [
+      ['suppression_journal_write_failed', 'api'],
+      ['suppression_journal_write_failed_worker', 'worker'],
+    ] as const) {
+      const start = observability.indexOf(`\n    ${key} = {\n`);
+      expect(start, key).toBeGreaterThan(-1);
+      const block = observability.slice(start, observability.indexOf('\n    }\n', start));
+      expect(block, key).toContain(`service     = "${service}"`);
+      expect(block, key).toContain('pattern     = "{ $.event = \\"suppression_journal_write_failed\\" }"');
+      expect(block, key).toContain('metric_name = "SuppressionJournalWriteFailures"');
+    }
+  });
+
+  it('has both writers log exactly that event when a write fails', () => {
+    for (const [path, writer] of [
+      ['apps/worker/src/bootstrap/deployment.ts', 'worker'],
+      ['apps/api/src/bootstrap/deployment.ts', 'api'],
+    ] as const) {
+      expect(readRepositoryFile(path), path).toContain(
+        `log.log('error', 'suppression_journal_write_failed', { writer: '${writer}', error_name: name });`,
+      );
+    }
+  });
+});

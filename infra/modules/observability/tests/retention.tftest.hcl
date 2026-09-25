@@ -46,6 +46,16 @@ run "the_safety_metrics_the_alarms_need_exist" {
     error_message = "Every immediately critical alarm must have a metric filter behind it."
   }
 
+  # Lane g81: the API and the worker both write the suppression journal and both log
+  # its failure, so both log groups are filtered into the one metric.
+  assert {
+    condition = sort([
+      for filter in aws_cloudwatch_log_metric_filter.this : filter.log_group_name
+      if filter.metric_transformation[0].name == "SuppressionJournalWriteFailures"
+    ]) == tolist(["/fss/fss-test/api", "/fss/fss-test/worker"])
+    error_message = "A suppression journal write failure in either process reaches SuppressionJournalWriteFailures."
+  }
+
   # Non-empty first: `alltrue` over no filters is true, and would pass a module
   # that had stopped creating them.
   assert {

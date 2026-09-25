@@ -96,7 +96,7 @@ export const ALARM_RUNBOOKS: Readonly<Record<string, AlarmRunbook>> = Object.fre
   mailbox_disconnected: {
     metricName: 'MailboxDisconnectedHours',
     severity: 'critical',
-    summary: 'A mailbox that sent in the last 30 days has been disconnected for 48 hours.',
+    summary: 'A mailbox that sent in the last 30 days has had its Gmail grant revoked for 48 hours.',
   },
   mailbox_coverage_stale: {
     metricName: 'MailboxCoverageAgeSeconds',
