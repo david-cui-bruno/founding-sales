@@ -1,4 +1,4 @@
-import type { Queryable, SessionQueryable } from '@fss/domain/db';
+import type { SessionQueryable } from '@fss/domain/db';
 import type { VerifiedPrincipal } from '../scope.ts';
 
 /**
@@ -40,7 +40,12 @@ export interface BootstrapRequest {
    * does not ask cannot accidentally take a workspace id from a URL.
    */
   readonly query?: URLSearchParams | undefined;
-  readonly db: Queryable;
+  /**
+   * This request's own connection (lane g75): one backend from the first statement to
+   * the last, never shared with another request in flight, so a module may open a
+   * transaction or take a lock on it.
+   */
+  readonly db: SessionQueryable;
   readonly readiness: ReadinessInputs;
 }
 

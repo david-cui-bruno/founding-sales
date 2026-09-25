@@ -25,7 +25,9 @@ apps/api/src/bootstrap/
   dispatch.ts     find the module, or return null and let the caller refuse
   readiness.ts    /healthz and /readyz, which are different questions
   requestBody.ts  bytes counted as they arrive, not as Content-Length claims
+  connections.ts  the request pool: one connection per request, database_busy
   heartbeat.ts    the api heartbeat the worker turns into ApiHeartbeat
+  shutdown.ts     SIGTERM: stop accepting, drain the requests, end the pool
   server.ts       the container's HTTP surface
   main.ts         the container entry point
 
@@ -103,10 +105,47 @@ paths it owns; two modules claiming one path is refused when the registry is bui
 because the alternative is that one of them silently never runs and it might be the
 one with the authorization in it.
 
-**The heartbeat** is a separate connection. `ApiHeartbeat` is a
+**One connection per request** (lane g75). Requests are served from a `pg.Pool` of at
+most `API_POOL_MAX_CONNECTIONS` (8) per task, built by `createRequestPool` in
+`bootstrap/connections.ts`. `handle` opens a `requestConnection` for each request:
+nothing is checked out until the request's first statement, and from then on every
+statement — the principal, a renewal, the command receipt, the route, the receipt's
+commit — runs on that one backend, which `handle`'s `finally` gives back, on an error
+too. So `withTransaction`, `FOR UPDATE` and advisory locks mean what they say per
+request. Until 25 September 2026 the API served every request on one shared
+`pg.Client`, and two requests in flight at once ran inside each other's transactions:
+one's `ROLLBACK` discarded the other's answered-200 write
+(`docs/decisions/g75-one-connection-per-request.md`).
+
+* A checkout that waits longer than `API_POOL_CHECKOUT_TIMEOUT_MILLISECONDS` (5 s) is
+  answered **503 `database_busy`** with a `refusal` line carrying that reason, never a
+  hang. The checkout is the request's first statement, so nothing ran.
+* A connection that comes back still inside a transaction is destroyed rather than
+  lent to the next request (`api_connection_discarded`, `warn`).
+* An idle pooled connection whose backend dies is an `api_pool_client_error` line at
+  `warn`; the pool drops it and the next request connects afresh. It is not fatal.
+* `/healthz`, a refused envelope and a body still arriving hold no connection.
+* Startup checks connectivity once — a pooled client, `SELECT 1`, released — and a
+  database that cannot be reached at all fails startup, as it did before.
+* Some commands deliberately await an external call inside their transaction: the
+  suppression journal's S3 write in every suppression command and in the retention
+  deletions that record one (10.2: the journal is durable before the row), and
+  Google's refresh, `stopWatch` and revoke, with a KMS decrypt, in
+  `POST /gmail/disconnect`. On a connection of their own that is safe; it holds that
+  connection, and the transaction, for the call's duration.
+
+**The heartbeat** is a separate connection, outside the pool. `ApiHeartbeat` is a
 `treat_missing_data = "breaching"` alarm, so an API that stops writing that row pages
 someone after three minutes — including an API that is too busy to serve, which is the
-point.
+point. A heartbeat that waited for a free pool connection would report the queue.
+
+**Stopping** drains (`bootstrap/shutdown.ts`). `SIGTERM` stops accepting, closes each
+keep-alive socket as soon as its request has finished, waits for the requests in
+flight, stops the heartbeat, ends the pool — which waits for every checked-out
+connection to come back — and ends the heartbeat's connection, all inside
+`FSS_API_SHUTDOWN_TIMEOUT_MS` (20 s, under the task's 30 s `stopTimeout`). What is still
+out at the deadline is not waited for; `api_drained` says `drained: false` at `warn`.
+The exit code is 0 either way.
 
 ## Health, liveness, readiness
 
@@ -115,7 +154,7 @@ Three different questions, and the infrastructure asks all three:
 | Path | Asked by | Answers |
 |---|---|---|
 | `/healthz` | the load balancer target group (`infra/modules/edge`) and the container health check (`infra/modules/cluster`) | is this process running? No database is touched. |
-| `/readyz` | a deployment, and an operator | should this task be given traffic? 503 when the database cannot answer, when the schema is outside the range, or when the system generation is not the pinned one. |
+| `/readyz` | a deployment, and an operator | should this task be given traffic? 503 when the database cannot answer, when the pool has no connection free inside the checkout timeout (`database_busy`), when the schema is outside the range, or when the system generation is not the pinned one. It asks on a connection checked out from the pool for that request and gives it back. |
 | `/health` | an operator | the fuller report G0 wrote. 200 even when degraded. |
 
 A liveness check that queries the database restarts every task in the fleet the moment
@@ -425,11 +464,15 @@ database, exactly as both services' do.
 lane's duplicate while `server.ts` belonged to the identity lane, and it is gone;
 `bootstrap/main.ts` calls `createApiServer`.
 
-* `createApiServer` builds one registry per server —
+* `createApiServer` builds a registry —
   `createRouteRegistry(mountedRoutes([...apiRouteModules(routing), ...extraRoutes]))`
   — eagerly, so two modules claiming one path refuse when the server is created
   rather than on the first request that reaches them. `route()` and `dispatch()` get
-  the same registry from a `WeakMap` keyed on the options object.
+  their registry from a `WeakMap` keyed on the options object. Since lane g75 the
+  server's options carry `connections`, never a session, and each request runs under
+  `optionsForRequest` — the same options on that request's own connection — so the
+  modules, which close over their options, close over that request's connection; the
+  registry for it costs about 40 µs to build.
 * `apps/api/src/routes/modules.ts` is the declaration: which router owns which paths.
   Adding a route is one line there, or one entry in `ApiOptions.extraRoutes`.
 * `handle()` reads the body with `bootstrap/requestBody.ts` for body-carrying methods

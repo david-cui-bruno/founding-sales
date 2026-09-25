@@ -22,10 +22,12 @@ export {
 export {
   createApiServer,
   dispatch,
+  optionsForRequest,
   registryFor,
   route,
   type ApiOptions,
   type ApiRequest,
+  type ApiServerOptions,
   type RouteResult,
 } from './server.ts';
 export { apiRouteModules } from './routes/modules.ts';

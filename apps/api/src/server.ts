@@ -5,6 +5,12 @@ import type { SuppressionJournal } from '@fss/domain/suppression';
 import { MAX_REQUEST_BYTES, REFUSAL_STATUS, checkEnvelope, redactError, type RefusalCode } from './limits.ts';
 import { authenticate, type AuthDeps } from './auth/index.ts';
 import type { VerifiedPrincipal } from './scope.ts';
+import {
+  DatabaseBusyError,
+  requestConnection,
+  unconnectedSession,
+  type RequestConnections,
+} from './bootstrap/connections.ts';
 import { dispatch as dispatchMounted } from './bootstrap/dispatch.ts';
 import { errorFields, type Logger } from './bootstrap/log.ts';
 import { readBody } from './bootstrap/requestBody.ts';
@@ -43,9 +49,20 @@ import {
  * Identity arrives as `options.auth`. Without it the API serves `/health`, `/healthz`,
  * `/readyz` and the client-version notice and refuses the rest, which is what a
  * deployment that has not been given its Google configuration should do.
+ *
+ * **One connection per request** (lane g75). `createApiServer` is given a source of
+ * connections, never a connection: each request gets its own backend from the pool on
+ * its first statement, keeps it for every statement after — the principal, a renewal,
+ * the command receipt, the route and the receipt's commit — and gives it back in
+ * `handle`'s `finally`, on an error too. `dispatch` and `route` still take one
+ * `session`, which their callers (the route tests) promise is theirs alone for the call.
+ * Until this lane the server shared one `pg.Client` across every request in flight,
+ * and two overlapping commands committed or rolled back each other's work
+ * (`docs/decisions/g75-one-connection-per-request.md`).
  */
 
 export interface ApiOptions {
+  /** One backend for this call and nobody else's: transactions and locks are opened on it. */
   readonly session: SessionQueryable;
   readonly supportedClientVersions: ClientVersionRange;
   readonly sendingEnabled: boolean;
@@ -85,6 +102,25 @@ export interface ApiOptions {
   readonly imageDigest?: string | undefined;
 }
 
+/**
+ * What the HTTP server is built from: everything a request needs except its
+ * connection, which each request checks out for itself.
+ *
+ * `auth` comes without its `db` for the same reason — the identity functions run on
+ * the request's connection, which `optionsForRequest` adds. There is deliberately no
+ * way to hand the server one shared session.
+ */
+export interface ApiServerOptions extends Omit<ApiOptions, 'session' | 'auth'> {
+  readonly connections: RequestConnections;
+  readonly auth?: Omit<AuthDeps, 'db'> | undefined;
+}
+
+/** The options one request runs under: the server's, on that request's own connection. */
+export function optionsForRequest(options: ApiServerOptions, session: SessionQueryable): ApiOptions {
+  const { connections: _connections, auth, ...shared } = options;
+  return { ...shared, session, ...(auth === undefined ? {} : { auth: { ...auth, db: session } }) };
+}
+
 export type { ApiRequest, RouteResult } from './routes/types.ts';
 
 function routingOptions(options: ApiOptions): RoutingOptions {
@@ -103,13 +139,16 @@ function routingOptions(options: ApiOptions): RoutingOptions {
 }
 
 /**
- * One registry per server.
+ * One registry per `ApiOptions` value.
  *
  * The modules close over `RoutingOptions`, so the registry cannot be a module-level
- * constant; it is built once for each `ApiOptions` value and kept against it. A
- * server passes the same object for its whole life, so it is built once there, and
- * `createApiServer` builds it eagerly — a duplicate path claim should refuse when the
- * server is created, not on the first request that happens to reach it.
+ * constant; it is built once for each `ApiOptions` value and kept against it. A route
+ * test passes the same object for many calls and gets one registry. The server builds
+ * one per request, because each request's options carry that request's connection
+ * (`optionsForRequest`): the modules are closures over a session, and a closure over a
+ * shared one is the defect lane g75 removed. Building it is a few thousand string
+ * comparisons, and `createApiServer` still builds one eagerly — a duplicate path claim
+ * should refuse when the server is created, not on the first request that reaches it.
  */
 const registries = new WeakMap<ApiOptions, RouteRegistry>();
 
@@ -186,8 +225,10 @@ export async function route(
   );
 }
 
-export function createApiServer(options: ApiOptions): Server {
-  const registry = registryFor(options);
+export function createApiServer(options: ApiServerOptions): Server {
+  // For the refusal and the log line only. It is never dispatched, so its session has
+  // no connection behind it.
+  const registry = registryFor(optionsForRequest(options, unconnectedSession()));
   options.log?.log('info', 'routes_mounted', {
     paths: registry.paths().join(' '),
     prefixes: registry.prefixes().join(' '),
@@ -253,9 +294,13 @@ export function refusalCodeOf(body: unknown): string | null {
   return typeof code === 'string' && REFUSAL_CODE_SHAPE.test(code) ? code : null;
 }
 
-async function handle(request: IncomingMessage, response: ServerResponse, options: ApiOptions): Promise<void> {
+async function handle(request: IncomingMessage, response: ServerResponse, options: ApiServerOptions): Promise<void> {
   const method = request.method ?? 'GET';
   let path = '/';
+  // This request's connection. Nothing is checked out until its first statement, so a
+  // refused envelope, a body still arriving and `/healthz` hold no backend; from that
+  // statement on every one runs on the same backend, and `finally` gives it back.
+  const connection = requestConnection(options.connections);
   try {
     const url = new URL(request.url ?? '/', 'http://localhost');
     path = url.pathname;
@@ -290,7 +335,7 @@ async function handle(request: IncomingMessage, response: ServerResponse, option
         headers: request.headers as Readonly<Record<string, string | undefined>>,
         body,
       },
-      options,
+      optionsForRequest(options, connection.session),
     );
     if (result.status >= 400) {
       // `reason` stays the HTTP status: it is the Refusals metric's dimension. `code` is
@@ -303,9 +348,20 @@ async function handle(request: IncomingMessage, response: ServerResponse, option
     }
     send(response, result.status, result.body, result.contentType);
   } catch (error) {
+    if (error instanceof DatabaseBusyError) {
+      // Every connection was in use for the whole checkout timeout. The checkout is
+      // the request's first statement, so nothing ran; a 503 the caller may retry, not
+      // a hang and not an `internal_error`. Logged like the envelope refusals, with the
+      // code as the `reason`, and as the `code` lane g69's route refusals carry.
+      options.log?.log('info', 'refusal', { reason: 'database_busy', code: 'database_busy', path });
+      send(response, REFUSAL_STATUS.database_busy, redactError('database_busy'));
+      return;
+    }
     // `level: "error"` is the ApiErrors metric filter. The caller learns nothing
     // about why: the why may name a table, a path or a prospect.
     options.log?.log('error', 'request_failed', { path, ...errorFields(error) });
     send(response, REFUSAL_STATUS.internal_error, redactError('internal_error'));
+  } finally {
+    connection.release();
   }
 }

@@ -18,6 +18,21 @@ export {
   type ApiConfig,
   type ApiConfigErrorCode,
 } from './config.ts';
+export {
+  API_POOL_CHECKOUT_TIMEOUT_MILLISECONDS,
+  API_POOL_IDLE_TIMEOUT_MILLISECONDS,
+  API_POOL_MAX_CONNECTIONS,
+  DatabaseBusyError,
+  createRequestPool,
+  poolConnections,
+  requestConnection,
+  unconnectedSession,
+  verifyPoolConnectivity,
+  type CheckedOutConnection,
+  type RequestConnection,
+  type RequestConnections,
+  type RequestPoolOptions,
+} from './connections.ts';
 export { dispatch } from './dispatch.ts';
 export {
   DEFAULT_API_HEARTBEAT_INTERVAL_MILLISECONDS,
@@ -54,3 +69,4 @@ export {
   type RouteRegistry,
 } from './routeRegistry.ts';
 export { adminJobsModule, mountedRoutes } from './routes.ts';
+export { IDLE_SWEEP_MILLISECONDS, drainApi, type DrainParts, type DrainReport } from './shutdown.ts';

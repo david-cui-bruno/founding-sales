@@ -14,8 +14,10 @@ import {
 import { discoverImageDigest } from '@fss/domain/release';
 import type { AuthDeps } from '../auth/index.ts';
 import { JournalConfigurationError } from '../journal/index.ts';
+import { createRequestPool, poolConnections, verifyPoolConnectivity } from './connections.ts';
 import { startApiHeartbeat } from './heartbeat.ts';
 import { createLogger, errorFields } from './log.ts';
+import { drainApi } from './shutdown.ts';
 import { createApiServer } from '../server.ts';
 
 /**
@@ -151,25 +153,30 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
     image_digest_detail: identity.detail,
   });
 
-  // One connection for requests, one for the heartbeat: a heartbeat that waits behind
-  // a slow query is a heartbeat that reports the queue rather than the process.
-  const requestClient = new pg.Client({ connectionString: config.database.connectionString, application_name: 'fss-api' });
+  // A pool for requests, one connection of its own for the heartbeat: a heartbeat that
+  // waits behind a slow query — or for a free pool connection — is a heartbeat that
+  // reports the queue rather than the process.
+  //
+  // Each request checks out its own connection from the pool and holds it until it has
+  // answered (lane g75). Until then every request shared one `pg.Client`, and two
+  // requests in flight at once ran inside each other's transactions.
+  const pool = createRequestPool(config.database.connectionString, log);
   const heartbeatClient = new pg.Client({
     connectionString: config.database.connectionString,
     application_name: 'fss-api-heartbeat',
   });
-  await requestClient.connect();
+  await verifyPoolConnectivity(pool);
   await heartbeatClient.connect();
 
-  // 5.1: identity, assembled from what the deployment decided and the connection that
-  // was just opened. `deployment.auth` is absent only when `FSS_DEPENDENCIES=none`,
-  // which a production environment refuses, so a production API always mounts sign-in
-  // or never started.
-  const auth: AuthDeps | undefined =
+  // 5.1: identity, assembled from what the deployment decided. `deployment.auth` is
+  // absent only when `FSS_DEPENDENCIES=none`, which a production environment refuses,
+  // so a production API always mounts sign-in or never started. Its database is not
+  // here: `createApiServer` gives every request's identity work that request's own
+  // connection.
+  const auth: Omit<AuthDeps, 'db'> | undefined =
     deployment.auth === undefined
       ? undefined
       : {
-          db: asSession(requestClient),
           config: {
             oidc: deployment.auth.oidc,
             sessions: deployment.auth.sessions,
@@ -183,7 +190,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
         };
 
   const server = createApiServer({
-    session: asSession(requestClient),
+    connections: poolConnections(pool, log),
     expectedSystemGeneration: config.expectedSystemGeneration,
     supportedClientVersions: CONTAINER_CLIENT_VERSIONS,
     ...(auth === undefined ? {} : { auth }),
@@ -210,28 +217,28 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
   } catch (error) {
     log.log('error', 'api_listen_failed', { port: config.port, ...errorFields(error) });
     await heartbeat.stop();
-    await requestClient.end().catch(() => undefined);
+    await pool.end().catch(() => undefined);
     await heartbeatClient.end().catch(() => undefined);
     return API_EXIT_CODES.listenFailed;
   }
   log.log('info', 'api_listening', { port: config.port });
 
-  await new Promise<void>(resolve => {
-    const shutdown = (signal: NodeJS.Signals): void => {
-      log.log('info', 'api_stopping', { reason: signal });
-      // Stop accepting, let the requests in flight finish, then close the loop.
-      server.close(() => resolve());
-      const deadline = setTimeout(() => resolve(), config.shutdownTimeoutMilliseconds);
-      deadline.unref?.();
-    };
-    process.once('SIGTERM', shutdown);
-    process.once('SIGINT', shutdown);
+  const signal = await new Promise<NodeJS.Signals>(resolve => {
+    process.once('SIGTERM', resolve);
+    process.once('SIGINT', resolve);
   });
-
-  await heartbeat.stop();
-  await requestClient.end().catch(() => undefined);
-  await heartbeatClient.end().catch(() => undefined);
-  log.log('info', 'api_stopped', {});
+  log.log('info', 'api_stopping', { reason: signal });
+  // Stop accepting, let the requests in flight finish and give their connections
+  // back, then end the pool and the heartbeat — all inside the drain budget.
+  const { drained } = await drainApi({
+    server,
+    pool,
+    heartbeat,
+    heartbeatClient,
+    timeoutMilliseconds: config.shutdownTimeoutMilliseconds,
+    log,
+  });
+  log.log('info', 'api_stopped', { drained });
   return API_EXIT_CODES.ok;
 }
 
