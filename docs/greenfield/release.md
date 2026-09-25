@@ -3158,6 +3158,106 @@ No IAM, no principal and no network change. The deployment role already holds `c
 - **Dispatch readiness.** Ordinary API dispatch still does not enforce readiness, the other half of S14.
 
 **Still unverified.** Nothing here has run in the cloud. The Terraform assertions ran as `terraform validate` locally and run as `terraform test` in the infrastructure workflow. The actions-suppressor timing comes from the CloudWatch documentation and has not been observed. Nor has the ECS behaviour when every task fails readiness during a database outage.
+### 8.0ar What lane g85 changed: a production plan needs no Google login (25 September)
+
+**The gap (audit O01, P0).** `infra/roots/production` declared `provider "google"` for the
+four Gmail push objects: the topic, the push subscription, the push service account and
+Gmail's publisher grant. Terraform configures every provider a root requires before it
+plans anything, so every production plan, an image-only release included, needed
+application-default credentials for `callie@usecallie.com`. The Workspace
+reauthentication policy lapses those about every 17 hours, and a lapsed login held back
+the deployment of `b2cc080b`'s worker fix. David decided on 25 September to give the
+Google provider a root of its own. `docs/decisions/g85-the-google-provider-has-its-own-root.md`
+has the reasoning.
+
+**What changed.**
+
+- **`infra/roots/production-google`** is a fourth root. It holds the four objects and
+  nothing else:
+  - it has the Google provider and no AWS provider;
+  - its state key is `fss/greenfield/production-google/terraform.tfstate`, in the
+    production state bucket and lock table;
+  - `import` blocks adopt the four objects;
+  - its outputs are the topic id and name, the subscription name, the push service
+    account, the audience and the project.
+
+  It is planned only when a push object changes, and only with application-default
+  credentials.
+- **`infra/roots/production`** declares no Google provider and no `module.pubsub`, and
+  it has lost `enable_gmail_push`, `gcp_project_id` and `gcp_region`. It carries the
+  topic id and the push service account as the defaults of `gmail_push_topic` and
+  `gmail_push_service_account`. These are the rehearsal root's variable names, with the
+  production values. It still derives the audience from `api_hostname`. The task
+  definitions carry the same three strings as before.
+- **`removed { from = module.pubsub  lifecycle { destroy = false } }`** in the
+  production root. A production plan taken before the migration's state removal shows
+  the four objects as "will no longer be managed by Terraform", never as deletions.
+- **`test/release/googleRoot.check.ts`** requires the following. Three mutations are
+  appended to `scripts/releaseMutationCheck.mjs`, 168 → 171 at the rebase onto `9f10dbc0`:
+  the provider comes back, the topic default drifts, and the `removed` block destroys.
+  Each was applied by hand and turned the check red.
+  - Only the Google root and `infra/modules/pubsub` name Google.
+  - The production defaults equal what the Google root's own names produce.
+  - Both roots derive the audience with one expression from one path default.
+  - The Google root's key is unique and outside the rehearsal key space.
+  - The `removed` block says `destroy = false`.
+- The rehearsal root and `greenfield-release.yml` are unchanged. The rehearsal never
+  had a Google provider.
+
+**What the operator does, once, before the next production plan.** Follow
+`docs/greenfield/google-root-migration-runbook.md`. It needs the admin profile and
+application-default credentials, and it writes Terraform state only:
+
+1. Back up the production state.
+2. Check that the production state's recorded identifiers equal the new defaults.
+3. Plan the Google root and read it: `Plan: 4 to import, 0 to add, 0 to change, 0 to destroy`.
+   A label-only variant is acceptable.
+4. Apply that plan.
+5. `terraform state rm 'module.pubsub[0]'` in production.
+6. Plan production with every Google credential hidden, and read that it runs to the end
+   with no Google line.
+7. Read the objects back from Google and see them unchanged.
+
+The runbook has the rollback for each step, and fallback B for the one case where the
+import plan is refused.
+
+**What changes for every release after that.**
+
+- A production plan needs **no Google login**. **Do not pass
+  `-var="gcp_project_id=…"`** to `infra/roots/production` any more: Terraform refuses
+  it as an undeclared variable.
+- The following prose describes the tree before this lane, and this record supersedes
+  it:
+  - section 1.7 and the `gcp_project_id` row of section 4's root-variable table;
+  - the `FSS_GMAIL_PUSH_TOPIC` row that says the topic is derived from `module.pubsub`;
+  - `infra-apply-runbook.md` 1.3a and the `gcp_project_id` lines of its 3.0 and 3.2.
+- Application-default credentials are needed only to plan or apply
+  `infra/roots/production-google`, and to read the Google side back.
+
+**Release class.** Infrastructure, but no AWS resource and no Google object changes, and
+no production apply is part of it. The migration is state only. The next ordinary
+production plan must show no Google resource, and no change to `FSS_GMAIL_PUSH_*`. The
+cadence asks for a rehearsal only when the rehearsal root or the release scripts change,
+and neither did here.
+
+**Still unverified.** Nothing here has run against a real backend or Google. Checked
+offline:
+
+- `terraform fmt -check` and `terraform validate` pass for both roots, after
+  `init -backend=false`;
+- the production root's provider lock lists only `hashicorp/aws`;
+- the release suite passes.
+
+The two roots' `terraform test` runs are CI's (`greenfield-infra.yml`). The migration
+will show:
+
+- whether the Google provider imports the topic's and the subscription's labels as
+  empty, which is the label-only variant;
+- that the first production plan with no Google credential runs to the end.
+
+`infra/scripts/offline-gate.sh` belongs to lane g80. Its Google check still allows
+`infra/roots/production/` and must allow `infra/roots/production-google/` instead; the
+pull request carries the diff. Until then, a hand-run of that script flags the new root.
 
 ### 8.0aq What lane g84 changed: a founder adds and imports firms, records postures, and Today keeps itself current (25 September)
 

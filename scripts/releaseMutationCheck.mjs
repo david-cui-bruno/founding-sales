@@ -1939,6 +1939,34 @@ const MUTATIONS = [
     because:
       'Audit item G04: a posture is the founder confirming every statement statePosture.ts asks for, and the form says so before sending. postures.test.ts requires the statements issue for a partial confirmation and has to go red.',
   },
+  {
+    name: 'the production root declares the Google provider again',
+    file: 'infra/roots/production/providers.tf',
+    find: '# There is no Google provider here, and no plan of this root needs a Google login.\n',
+    replace:
+      'provider "google" {\n  project = "callie-fss"\n}\n\n# There is no Google provider here, and no plan of this root needs a Google login.\n',
+    suite: ['run', 'test:release', '--', 'test/release/googleRoot.check.ts'],
+    because:
+      'Audit O01: Terraform configures every provider a root declares before it plans anything, so one provider block is every production plan asking for application-default credentials that lapse about every 17 hours, which is what held back a worker fix. The Google provider belongs to infra/roots/production-google alone (lane g85), and googleRoot.check.ts has to go red.',
+  },
+  {
+    name: 'the production topic default drifts from the name the Google root gives the topic',
+    file: 'infra/roots/production/variables.tf',
+    find: '  default     = "projects/callie-fss/topics/fss-prod-gmail-push"\n',
+    replace: '  default     = "projects/callie-fss/topics/fss-prod-gmail-push-v2"\n',
+    suite: ['run', 'test:release', '--', 'test/release/googleRoot.check.ts'],
+    because:
+      'Since lane g85 the production root carries the topic id as a committed default rather than reading it from the object, so nothing but this check ties the two together. A drifted default is a worker renewing the Gmail watch on a topic that does not exist, found only when push stops. googleRoot.check.ts derives the id from the Google root’s project and prefix and the module’s naming, and has to go red.',
+  },
+  {
+    name: 'the production root destroys the push objects it used to manage instead of forgetting them',
+    file: 'infra/roots/production/main.tf',
+    find: '    destroy = false\n',
+    replace: '    destroy = true\n',
+    suite: ['run', 'test:release', '--', 'test/release/googleRoot.check.ts'],
+    because:
+      'Between the merge and the migration’s state rm, a production plan still sees module.pubsub[0] in state. With destroy = true it proposes deleting the topic, the subscription, the push identity and Gmail’s publisher grant, and the grant needed an organisation-policy exception to be made at all (release.md 8.0n). googleRoot.check.ts requires destroy = false and has to go red.',
+  },
 ];
 
 // A listener on each of these keeps Node from exiting mid-mutation with a file still

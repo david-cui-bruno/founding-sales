@@ -32,13 +32,15 @@ import { readRepositoryFile, repositoryPath } from './support/coverage.ts';
  * Two copies of an identifier agree by accident until one moves. Closed by deriving the
  * expected topic id and service-account email from the Google root's own project and
  * prefix defaults and the module's own naming expression, never from a literal in this
- * file, and comparing the production defaults with that. A mutation in
- * `scripts/releaseMutationCheck.mjs` moves the production default and requires this
- * file to go red.
+ * file, and comparing the production defaults with that.
  *
  * And a migration that removes four addresses from a state is a destroy if the net is
  * missing. Closed by requiring the production root's `removed` block to say
- * `destroy = false`, which a second mutation flips.
+ * `destroy = false`.
+ *
+ * `scripts/releaseMutationCheck.mjs` holds three mutations against this file: the
+ * production root declares the Google provider again, the production topic default
+ * drifts, and the `removed` block destroys. Each must turn this file red.
  */
 
 const PRODUCTION = 'infra/roots/production';
