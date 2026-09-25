@@ -188,6 +188,49 @@ Each run is bounded and its continuation is the one-minute scheduler, never itse
 reasoning is in `docs/decisions/g7-sync-transaction-shape.md` and it is the single
 easiest thing in this lane to get wrong.
 
+### The cursor stands on whole history records
+
+`users.history.list` answers `{ history, nextPageToken, historyId }`. Each entry of
+`history` is a Gmail `History` record whose own id is **`id`**, and one record can
+change several messages. `historyId` at the top is the mailbox's current record;
+`historyId` on a *message* is the last record that changed it. No record carries a
+`historyId` (https://developers.google.com/gmail/api/reference/rest/v1/users.history/list).
+
+A cursor can only stand on a record's id, because `startHistoryId` returns the records
+*after* an id and never the rest of one. So the cap is applied to whole records
+(`takeWholeRecords` in `mail/sync.ts`): a run takes records oldest first until it holds
+`DEFAULT_SYNC_MESSAGE_LIMIT` (50) distinct messages, and never part of a record. A
+capped run writes the id of the last record it took, and every message in every record
+at or before that id has been processed. A run can therefore process more than 50
+messages, by at most one record's worth less one, and the first record is always taken
+whole, however large, or a record bigger than the cap would stop the mailbox. A run
+that read to the end of the history (no `nextPageToken`) and took every record it read
+is not capped: it writes the top-level `historyId`, raises the watermark and may
+release `coverage_incomplete`, as before. A capped run raises nothing.
+
+History ids are uint64 decimal strings. They are compared only through
+`compareHistoryIds` and `laterHistoryId` (`mail/historyIds.ts`, `BigInt`), never through
+`Number`, which cannot tell `9007199254740992` from `9007199254740993`. `mailboxes.history_id`
+is `text` with `^[0-9]{1,20}$`, so the database holds exactly what Gmail sent, and the
+adapter refuses a record with no usable `id` as a malformed page rather than guess a
+cursor for it. The job queue's high-water merge compares as `numeric` in SQL and was
+already exact.
+
+Until lane g76 (25 September 2026, audit items C06 to C08) the adapter read each
+record's id from `historyId`, found nothing and used the start cursor. A run under the
+cap still wrote the right cursor, from the top-level `historyId`. A capped run wrote
+back the cursor it began from, so a mailbox with more than 50 new messages since its
+cursor re-read the same first 50 every minute and never reached the rest, until Gmail
+expired the cursor and a recovery re-read the interval. Its heartbeat stayed fresh
+throughout: the heartbeat proves a check ran, not that the cursor moved. What that
+looks like is a `mail.sync` heartbeat whose detail reads `more: true` pass after pass
+while `mailboxes.history_id` does not change. The old code never moved a cursor past a
+message it had not processed; it stalled instead of skipping. The first correct pass
+after the fix reads from the stale cursor, processes the backlog in whole records over
+consecutive one-minute passes, and re-reads the first 50 once, which the pipeline's
+idempotent writes make harmless (`mail/effects.ts`, "safe to run twice"). The reasoning is in
+`docs/decisions/g76-history-records-are-the-unit-of-progress.md`.
+
 ### The push token
 
 `POST /integrations/gmail/push` takes no session: the OIDC token Pub/Sub presents is its

@@ -4,6 +4,7 @@ import {
   type GmailAccessOutcome,
   type GmailAttachmentReference,
   type GmailClient,
+  type GmailHistoryChange,
   type GmailHistoryOutcome,
   type GmailHistoryRecord,
   type GmailHistoryRequest,
@@ -19,6 +20,7 @@ import {
   type GmailTokenOutcome,
   type GmailWatchOutcome,
 } from './gmailClient.ts';
+import { historyIdOf } from './historyIds.ts';
 
 /**
  * The Gmail API over HTTP.
@@ -325,7 +327,7 @@ export function createGmailHttpClient(options: GmailHttpOptions): GmailClient {
       }
       const json = parseJson(response.body);
       const emailAddress = asString(json?.['emailAddress']);
-      const historyId = asString(json?.['historyId']);
+      const historyId = historyIdOf(json?.['historyId']);
       if (emailAddress === null || historyId === null) {
         throw new GmailClientError('malformed_response', 'the Gmail profile had no address or history id');
       }
@@ -342,7 +344,7 @@ export function createGmailHttpClient(options: GmailHttpOptions): GmailClient {
         return { ok: false, reason: failure === 'grant_revoked' ? 'grant_revoked' : 'provider_refusal' };
       }
       const json = parseJson(response.body);
-      const historyId = asString(json?.['historyId']);
+      const historyId = historyIdOf(json?.['historyId']);
       const expiration = asString(json?.['expiration']);
       if (historyId === null || expiration === null) return { ok: false, reason: 'provider_refusal' };
       return {
@@ -374,12 +376,25 @@ export function createGmailHttpClient(options: GmailHttpOptions): GmailClient {
         if (failure === 'rate_limited') return { ok: false, reason: 'rate_limited' };
         throw new GmailClientError('unexpected_status', 'the Gmail history read failed', response.status);
       }
+      // `ListHistoryResponse` is `{ history: History[], nextPageToken, historyId }`, and
+      // a `History` is `{ id, messages, messagesAdded, messagesDeleted, labelsAdded,
+      // labelsRemoved }`: https://developers.google.com/gmail/api/reference/rest/v1/users.history/list
+      // and https://developers.google.com/gmail/api/reference/rest/v1/users.history#History.
+      // The record's own id is `id`. Until lane g76 this read `historyId`, which is a
+      // field of `Message` and never of `History`, found nothing, and fell back to the
+      // start cursor, so a capped sync wrote back the cursor it began from and read the
+      // same first fifty messages every minute (audit item C06). A record without a
+      // usable id is now a malformed page: there is no cursor it could safely stand for.
       const json = parseJson(response.body);
       const records: GmailHistoryRecord[] = [];
       for (const entry of Array.isArray(json?.['history']) ? (json['history'] as unknown[]) : []) {
         if (typeof entry !== 'object' || entry === null) continue;
         const item = entry as Json;
-        const historyId = asString(item['historyId']) ?? request.startHistoryId;
+        const recordId = historyIdOf(item['id']);
+        if (recordId === null) {
+          throw new GmailClientError('malformed_response', 'a Gmail history record had no id');
+        }
+        const changes: GmailHistoryChange[] = [];
         for (const [key, kind] of [
           ['messagesAdded', 'message_added'],
           ['labelsAdded', 'label_added'],
@@ -394,11 +409,14 @@ export function createGmailHttpClient(options: GmailHttpOptions): GmailClient {
             const labelIds = Array.isArray((message as Json)['labelIds'])
               ? ((message as Json)['labelIds'] as unknown[]).filter((label): label is string => typeof label === 'string')
               : [];
-            records.push({ historyId, messageId: id, threadId, kind, labelIds });
+            changes.push({ messageId: id, threadId, kind, labelIds });
           }
         }
+        records.push({ id: recordId, changes });
       }
-      const historyId = asString(json?.['historyId']) ?? request.startHistoryId;
+      // No usable current id means "no further than where this read began", which can
+      // never claim coverage the read did not have.
+      const historyId = historyIdOf(json?.['historyId']) ?? request.startHistoryId;
       return { ok: true, records, nextPageToken: asString(json?.['nextPageToken']), historyId };
     },
 

@@ -5,6 +5,7 @@ import {
   type GmailAccessOutcome,
   type GmailAttachmentReference,
   type GmailClient,
+  type GmailHistoryChange,
   type GmailHistoryOutcome,
   type GmailHistoryRecord,
   type GmailHistoryRequest,
@@ -20,6 +21,7 @@ import {
   type GmailTokenOutcome,
   type GmailWatchOutcome,
 } from './gmailClient.ts';
+import { compareHistoryIds } from './historyIds.ts';
 
 /**
  * The recorded-fixture Gmail client.
@@ -53,7 +55,11 @@ export interface GmailFixtureMessage {
   readonly body?: string | undefined;
   readonly bodyTruncated?: boolean | undefined;
   readonly attachments?: readonly GmailAttachmentReference[] | undefined;
-  /** The history id at which this message appeared. Orders the history replay. */
+  /**
+   * The id of the history record in which this message appeared. Orders the history
+   * replay, and messages that share one id are *one* record carrying several messages,
+   * as a Gmail `History` can.
+   */
   readonly historyId: string;
 }
 
@@ -149,8 +155,10 @@ export interface RecordedGmailClient extends GmailClient {
   readonly sentMessageIds: readonly string[];
 }
 
+// `BigInt`, through `compareHistoryIds`: a fixture near 2^53 must order the way Gmail
+// does, or a test of the sync's lossless comparison would be a test of the fake's.
 const byHistoryId = (left: GmailFixtureMessage, right: GmailFixtureMessage): number =>
-  Number(left.historyId) - Number(right.historyId);
+  compareHistoryIds(left.historyId, right.historyId);
 
 export function recordedGmailClient(fixture: GmailFixture): RecordedGmailClient {
   const calls: GmailFakeCall[] = [];
@@ -282,24 +290,36 @@ export function recordedGmailClient(fixture: GmailFixture): RecordedGmailClient 
       if (planned !== null) return { ok: false, reason: planned };
       if (expired.has(request.startHistoryId)) return { ok: false, reason: 'history_expired' };
 
-      const after = currentMessages().filter(message => Number(message.historyId) > Number(request.startHistoryId));
+      // Strictly after the start, as `startHistoryId` is documented: "Returns history
+      // records after the specified startHistoryId."
+      const after = currentMessages().filter(
+        message => compareHistoryIds(message.historyId, request.startHistoryId) > 0,
+      );
+      // One record per history id, and a page is whole records, as Gmail's are: a
+      // page boundary never falls inside a record.
+      const grouped = new Map<string, GmailHistoryChange[]>();
+      for (const message of after) {
+        const change: GmailHistoryChange = {
+          messageId: message.id,
+          threadId: message.threadId,
+          kind: 'message_added',
+          labelIds: message.labelIds ?? [],
+        };
+        const changes = grouped.get(message.historyId);
+        if (changes === undefined) grouped.set(message.historyId, [change]);
+        else changes.push(change);
+      }
+      const all: GmailHistoryRecord[] = [...grouped].map(([id, changes]) => ({ id, changes }));
       const offset = request.pageToken === undefined ? 0 : Number(request.pageToken);
       if (!Number.isInteger(offset) || offset < 0) {
         throw new GmailClientError('malformed_response', 'the fixture was given a page token it never issued');
       }
-      const page = after.slice(offset, offset + historyPageSize);
-      const records: GmailHistoryRecord[] = page.map(message => ({
-        historyId: message.historyId,
-        messageId: message.id,
-        threadId: message.threadId,
-        kind: 'message_added',
-        labelIds: message.labelIds ?? [],
-      }));
-      const nextOffset = offset + page.length;
+      const records = all.slice(offset, offset + historyPageSize);
+      const nextOffset = offset + records.length;
       return {
         ok: true,
         records,
-        nextPageToken: nextOffset < after.length ? String(nextOffset) : null,
+        nextPageToken: nextOffset < all.length ? String(nextOffset) : null,
         historyId: fixture.historyId,
       };
     },
