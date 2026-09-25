@@ -1,0 +1,149 @@
+name: Greenfield nightly mutation check
+on:
+  schedule:
+    # 09:00 UTC every day: 05:00 in New York in summer, 04:00 in winter, so the
+    # result is there before the working day. Scheduled runs always use the
+    # latest commit on the default branch, main. GitHub may start a scheduled
+    # run some minutes late when its queue is busy.
+    - cron: '0 9 * * *'
+  # The same check on demand. From the Actions tab it defaults to main; choosing
+  # a branch runs it against that branch, which is how a pull request that edits
+  # a trap or scripts/releaseMutationCheck.mjs gets checked before it merges.
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  mutation:
+    # The release mutation check, moved off the pull-request path (lane g62,
+    # David's decision of 25 September 2026). It is most of what the greenfield
+    # gate used to cost: run 36089059879 on main reported "129 suite run(s) in
+    # 940 s", about sixteen minutes of every pull request and every push. The
+    # pull-request job (`.github/workflows/greenfield.yml`) keeps typecheck, lint,
+    # the workspace tests and the release suite; this job runs the check once a
+    # day on main, and `npm run test:release:mutation` still runs it locally.
+    # The rehearsal's `full` stage (`greenfield-release.yml`) runs it as well.
+    #
+    # What that gives up: before G12b the check ran only in the rehearsal, so a
+    # pull request could land a trap that no longer closes and nobody heard until
+    # release day. A pull request can still land one; this job reports it the
+    # next morning. One that edits a trap or the mutation list can be checked
+    # before it merges by dispatching this workflow on its branch.
+    #
+    # What the check does: the traps the release suite names are only closed if
+    # breaking them turns the suite red, and a trap that stopped working looks
+    # exactly like one that works. `releaseMutationCheck.mjs` breaks each in
+    # turn and requires the suite to fail; it also fails when the text it edits
+    # has moved, so a refactor that outran a trap is reported rather than
+    # silently tolerated. Every distinct suite runs once unmutated first and must
+    # pass; then each mutation re-runs its own suite with --bail=1. A suite that
+    # is red before any mutation, or a run that ends without vitest reporting a
+    # failed test, is a problem, never a kill (`releaseMutationRunner.mjs`).
+    #
+    # The runner, the service container, the Node version and the install are
+    # copied from the pull-request job, and test/release/mutationSchedule.check.ts
+    # fails when the two drift apart: a nightly that ran on a different
+    # PostgreSQL or Node would be checking a different thing.
+    runs-on: ubuntu-24.04
+    # 60: the check alone took about sixteen minutes on main at 102 mutations, and
+    # each mutation that names the whole release suite adds about 15 s. The limit
+    # has room for the list to keep growing; a run that reaches it fails, which
+    # is loud.
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          # A throwaway credential for a container that exists for one job and is
+          # reachable only from it. Nothing in the repository depends on this value.
+          POSTGRES_PASSWORD: greenfield-ci
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      # The test harness adopts this cluster instead of starting embedded-postgres.
+      FSS_TEST_POSTGRES_URL: postgresql://postgres:greenfield-ci@127.0.0.1:5432/postgres
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.20.0'
+      - name: Assert the supported Node version
+        run: |
+          node -e "if (process.versions.node !== '24.20.0') process.exit(1)"
+      - name: Assert the service container is PostgreSQL 16
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends postgresql-client >/dev/null
+          version="$(psql "$FSS_TEST_POSTGRES_URL" -tAc 'SHOW server_version')"
+          echo "server_version=$version"
+          case "$version" in 16.*) ;; *) echo "expected PostgreSQL 16"; exit 1;; esac
+      - name: Install
+        # --ignore-scripts: the old trees' postinstall builds Electron and two native
+        # modules, none of which this job runs. The greenfield packages have no build
+        # step, and embedded-postgres is unused here because the service container is.
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund
+      - name: Release mutation check
+        # pipefail: `tee` keeps a copy for the summary step, and the step's status
+        # is still the check's. The check exits 1 on any problem — a mutation that
+        # survived, a mutation whose text moved, a suite red before mutation, an
+        # undecided run — so any of them fails the job. The runner prints to
+        # stderr, and its last line is always "N mutation(s) killed, M problem(s)."
+        run: |
+          set -euo pipefail
+          npm run test:release:mutation 2>&1 | tee "$RUNNER_TEMP/release-mutation-check.log"
+      - name: Mutation check summary
+        # Always, so a failed check still writes what it found. The summary line
+        # goes to the job summary, with every problem line the check printed, and
+        # on failure into an error annotation on the run as well.
+        if: always()
+        env:
+          SUMMARY_PATTERN: '^[0-9]+ mutation\(s\) killed, [0-9]+ problem\(s\)\.$'
+          PROBLEM_PATTERN: '^(MUTATION_STALE|SUITE_RED_BEFORE_MUTATION|MUTATION_NOT_RUN|MUTATION_SURVIVED|MUTATION_UNDECIDED|INTERRUPTED) '
+        run: |
+          set -euo pipefail
+          log="$RUNNER_TEMP/release-mutation-check.log"
+          summary=''
+          problems=''
+          if [ -f "$log" ]; then
+            summary="$(grep -E "$SUMMARY_PATTERN" "$log" | tail -n 1 || true)"
+            problems="$(grep -E "$PROBLEM_PATTERN" "$log" || true)"
+          fi
+          if [ -z "$summary" ]; then
+            summary='The mutation check printed no summary line: it did not run to the end (an install failure, a crash or the job timeout).'
+          fi
+          {
+            echo '## Release mutation check'
+            echo
+            echo "**${summary}**"
+            echo
+            echo "Commit \`${GITHUB_SHA}\` on \`${GITHUB_REF_NAME}\`."
+            if [ -n "$problems" ]; then
+              echo
+              echo '### Problems'
+              echo
+              echo '```'
+              printf '%s\n' "$problems"
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "$summary"
+          case "$summary" in
+            *' 0 problem(s).') ;;
+            *)
+              echo "::error title=Nightly release mutation check failed::${summary}"
+              exit 1
+              ;;
+          esac
