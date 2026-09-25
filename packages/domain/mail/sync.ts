@@ -1,6 +1,7 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import type { EnvelopeCipher } from './envelope.ts';
-import type { GmailAccessGrant, GmailClient, GmailOAuthConfig } from './gmailClient.ts';
+import type { GmailAccessGrant, GmailClient, GmailHistoryRecord, GmailOAuthConfig } from './gmailClient.ts';
+import { compareHistoryIds, laterHistoryId } from './historyIds.ts';
 import {
   advanceCursor,
   advanceGeneration,
@@ -47,6 +48,13 @@ import { RECOVERY_OVERLAP_SECONDS, type MailboxRow } from './types.ts';
  * minutes. The backlog is picked up by the one-minute reconciliation source, which is
  * 12.3's safety net doing the job it already exists for. See
  * `docs/decisions/g7-sync-transaction-shape.md`.
+ *
+ * **The cap counts messages but cuts between history records.** A cursor can only
+ * stand on a record's id, and one record can carry several messages, so a run takes
+ * whole records until it holds `maxMessages` distinct messages and never part of one:
+ * a cursor past a record means every message in it was processed. The price is that
+ * the last record may carry a run past the cap. See
+ * `docs/decisions/g76-history-records-are-the-unit-of-progress.md`.
  */
 
 export const DEFAULT_SYNC_MESSAGE_LIMIT = 50;
@@ -77,6 +85,55 @@ export interface MailSyncReport extends MessagePipelineReport {
   readonly coverageWatermarkAt: string | null;
   /** True when the cap was reached: the next reconciliation pass continues. */
   readonly moreToDo: boolean;
+}
+
+/** What one run takes from the history it read: whole records, oldest first. */
+export interface HistoryTake {
+  /** Distinct message ids, in the order their records came, first appearance kept. */
+  readonly messageIds: readonly string[];
+  readonly recordsTaken: number;
+  /** Records read but not taken. Non-zero means the cap was reached. */
+  readonly recordsLeft: number;
+  /** The latest id among the records taken, and `startHistoryId` when none was. */
+  readonly through: string;
+}
+
+/**
+ * Take whole history records, oldest first, until `maxMessages` distinct messages are
+ * held (audit item C07).
+ *
+ * A record is taken whole or not at all, so `through` — the cursor a capped run
+ * writes — is never past a record with a message the run did not process. The first
+ * record is always taken, however many messages it carries, or a record larger than
+ * the cap would stop the mailbox for ever.
+ *
+ * The records are ordered by `compareHistoryIds` first. Gmail returns them ascending,
+ * and a stable sort of an ascending list changes nothing; the sort is there because
+ * "take a prefix, then stand on its latest id" is only sound over an ascending list,
+ * and a `Number` comparison would tie `9007199254740992` and `9007199254740993` and
+ * could let the later record be taken while the earlier one waits (C08).
+ */
+export function takeWholeRecords(
+  startHistoryId: string,
+  records: readonly GmailHistoryRecord[],
+  maxMessages: number,
+): HistoryTake {
+  const ordered = [...records].sort((left, right) => compareHistoryIds(left.id, right.id));
+  const messageIds: string[] = [];
+  const held = new Set<string>();
+  let through = startHistoryId;
+  let recordsTaken = 0;
+  for (const record of ordered) {
+    if (recordsTaken > 0 && held.size >= maxMessages) break;
+    for (const change of record.changes) {
+      if (change.kind === 'message_deleted' || held.has(change.messageId)) continue;
+      held.add(change.messageId);
+      messageIds.push(change.messageId);
+    }
+    through = laterHistoryId(through, record.id);
+    recordsTaken += 1;
+  }
+  return { messageIds, recordsTaken, recordsLeft: ordered.length - recordsTaken, through };
 }
 
 function report(
@@ -174,11 +231,12 @@ export async function runMailSync(
   const maxMessages = deps.maxMessages ?? DEFAULT_SYNC_MESSAGE_LIMIT;
   const maxPages = deps.maxPages ?? DEFAULT_SYNC_PAGE_LIMIT;
 
-  // ---- Step 2: history, bounded, ids only. ----------------------------------
-  const seen = new Map<string, string>();
+  // ---- Step 2: history, bounded, whole records, ids only. -------------------
+  const records: GmailHistoryRecord[] = [];
+  const messagesRead = new Set<string>();
   let pageToken: string | undefined;
   let latestHistoryId = mailbox.historyId;
-  let moreToDo = false;
+  let historyExhausted = false;
 
   for (let page = 0; page < maxPages; page += 1) {
     const outcome = await deps.gmail.listHistory(access.access, {
@@ -198,32 +256,37 @@ export async function runMailSync(
     }
 
     for (const record of outcome.records) {
-      if (record.kind === 'message_deleted') continue;
-      if (!seen.has(record.messageId)) seen.set(record.messageId, record.historyId);
+      records.push(record);
+      for (const change of record.changes) {
+        if (change.kind !== 'message_deleted') messagesRead.add(change.messageId);
+      }
     }
     latestHistoryId = outcome.historyId;
-    if (seen.size >= maxMessages) {
-      moreToDo = true;
+    if (outcome.nextPageToken === null) {
+      historyExhausted = true;
       break;
     }
-    if (outcome.nextPageToken === null) break;
+    // Enough to fill the cap: stop reading pages. Leaving a page unread is safe, because
+    // the cursor this run writes is no later than the last record it takes.
+    if (messagesRead.size >= maxMessages) break;
     pageToken = outcome.nextPageToken;
-    if (page === maxPages - 1) moreToDo = true;
   }
 
   // A capped run must not claim coverage past what it processed, so the cursor it
-  // writes is the highest history id among the messages it took rather than the
-  // mailbox's current one.
-  const taken = [...seen.entries()].slice(0, maxMessages);
-  const cursorTo = moreToDo
-    ? taken.reduce((highest, [, id]) => (Number(id) > Number(highest) ? id : highest), mailbox.historyId)
-    : latestHistoryId;
+  // writes is the latest id among the whole records it took rather than the mailbox's
+  // current one. A run that read to the end of the history and took every record it
+  // read is not capped, and stands on the id Gmail says is current, as
+  // `users.history.list` documents: with no `nextPageToken`, "store the returned
+  // historyId for future requests".
+  const take = takeWholeRecords(mailbox.historyId, records, maxMessages);
+  const moreToDo = !historyExhausted || take.recordsLeft > 0;
+  const cursorTo = moreToDo ? take.through : latestHistoryId;
 
   // ---- Step 3: the shared pipeline. -----------------------------------------
   const pipeline = await processMessageIds(context, deps, {
     mailbox,
     access: access.access,
-    messageIds: taken.map(([messageId]) => messageId),
+    messageIds: take.messageIds,
   });
 
   // ---- Step 4: cursor and watermark, together, by compare-and-set. ----------

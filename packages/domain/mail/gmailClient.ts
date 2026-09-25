@@ -113,8 +113,8 @@ export interface GmailMessageBody {
   readonly truncated: boolean;
 }
 
-export interface GmailHistoryRecord {
-  readonly historyId: string;
+/** One message one history record changed, in the ways FSS asks `history.list` for. */
+export interface GmailHistoryChange {
   readonly messageId: string;
   readonly threadId: string;
   /** `messageAdded` for a new message either way; the direction comes from the labels. */
@@ -122,12 +122,29 @@ export interface GmailHistoryRecord {
   readonly labelIds: readonly string[];
 }
 
+/**
+ * One Gmail history record: Google's `History` resource.
+ *
+ * Its id is the resource's own `id` ("the mailbox sequence ID"), not `historyId`,
+ * which is a field of the `Message` resource. One record can change several messages
+ * ("Each history change may affect multiple messages in multiple ways"), and a record
+ * is the smallest unit a cursor can stand on: `startHistoryId` returns the records
+ * after an id, never the rest of one. So `mail.sync` takes whole records or none of a
+ * record (`docs/decisions/g76-history-records-are-the-unit-of-progress.md`).
+ */
+export interface GmailHistoryRecord {
+  /** `History.id`: a uint64 as a decimal string. Compare with `compareHistoryIds`. */
+  readonly id: string;
+  readonly changes: readonly GmailHistoryChange[];
+}
+
 export type GmailHistoryOutcome =
   | {
       readonly ok: true;
+      /** In the order Gmail returned them, which is ascending by id. */
       readonly records: readonly GmailHistoryRecord[];
       readonly nextPageToken: string | null;
-      /** The mailbox's history id after this page. The compare-and-set target. */
+      /** `ListHistoryResponse.historyId`: the mailbox's current history record. */
       readonly historyId: string;
     }
   | { readonly ok: false; readonly reason: 'history_expired' | 'grant_revoked' | 'rate_limited' };

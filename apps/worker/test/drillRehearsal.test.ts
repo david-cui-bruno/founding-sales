@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { repositoryContext, workspaceScope, type SessionQueryable } from '@fss/domain/db';
 import { CLUSTER_URL_ENVIRONMENT_VARIABLE, asSession } from '@fss/domain/db/testing';
 import { disableCallingIdentity } from '@fss/domain/dial';
-import type { KmsTransport } from '@fss/domain/mail';
+import { laterHistoryId, type KmsTransport } from '@fss/domain/mail';
 import {
   SuppressionJournalError,
   type SuppressionJournalRecord,
@@ -214,7 +214,7 @@ function mergedRecording(reports: readonly DrillEvidenceReport[]): MailboxRecord
   const byId = new Map(reports.flatMap(report => report.mailbox.messages).map(message => [message.id, message]));
   return {
     emailAddress: reports[0]?.mailbox.emailAddress ?? '',
-    historyId: String(Math.max(...reports.map(report => Number(report.mailbox.historyId)))),
+    historyId: reports.map(report => report.mailbox.historyId).reduce(laterHistoryId, '1'),
     sentMessageIds: [...new Set(reports.flatMap(report => report.mailbox.sentMessageIds))].sort(),
     messages: [...byId.values()],
   };

@@ -20,6 +20,13 @@ The handler runs inside the runner's transaction, and each run is **bounded**:
 pages. A run that hits either cap advances the cursor to what it actually processed,
 leaves the coverage hold open, and returns `moreToDo`.
 
+**Amended 25 September 2026 (lane g76).** "What it actually processed" is measured in
+whole Gmail history records: a run takes records until it holds 50 messages and never
+part of one, and its cursor is the last record's id, compared as a uint64. Until then
+the cursor a capped run wrote was the one it began from.
+`docs/decisions/g76-history-records-are-the-unit-of-progress.md` has the defects and
+the reasoning.
+
 The continuation is not the handler's job. It is the one-minute scheduler.
 
 ## Why the run cannot re-arm itself

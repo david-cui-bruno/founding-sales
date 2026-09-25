@@ -27,6 +27,7 @@ import { confirmReplyDisposition } from '@fss/domain/classification';
 import {
   accessForMailbox,
   insertOrReviveMailbox,
+  laterHistoryId,
   processMessageIds,
   readMailboxForOwner,
   recordedGmailClient,
@@ -1120,8 +1121,10 @@ async function deliverInbound(
 /** The recording a phase reports: the Sent folder it can vouch for and the messages it delivered. */
 function recordingOf(sent: Iterable<string>, messages: readonly GmailFixtureMessage[]): MailboxRecording {
   const sentMessageIds = [...new Set(sent)].sort();
-  const historyId = messages.reduce((highest, message) => Math.max(highest, Number(message.historyId)), 1);
-  return { emailAddress: MAILBOX_ADDRESS, historyId: String(historyId), sentMessageIds, messages: [...messages] };
+  // The mailbox's current id is the latest of its messages', compared as Gmail's uint64
+  // ids and never through `Number` (lane g76).
+  const historyId = messages.reduce((latest, message) => laterHistoryId(latest, message.historyId), '1');
+  return { emailAddress: MAILBOX_ADDRESS, historyId, sentMessageIds, messages: [...messages] };
 }
 
 export async function seedDrillEvidence(input: DrillEvidenceInput): Promise<DrillEvidenceResult> {

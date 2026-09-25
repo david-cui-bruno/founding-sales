@@ -50,6 +50,7 @@ export {
   type GmailAttachmentReference,
   type GmailAuthorizationGrant,
   type GmailClient,
+  type GmailHistoryChange,
   type GmailHistoryOutcome,
   type GmailHistoryRecord,
   type GmailHistoryRequest,
@@ -281,10 +282,14 @@ export {
   accessForMailbox,
   holdForRevokedGrant,
   runMailSync,
+  takeWholeRecords,
+  type HistoryTake,
   type MailSyncDeps,
   type MailSyncOutcome,
   type MailSyncReport,
 } from './sync.ts';
+
+export { HISTORY_ID_PATTERN, compareHistoryIds, historyIdOf, laterHistoryId } from './historyIds.ts';
 
 export {
   NO_RECOVERY_FLOOR,

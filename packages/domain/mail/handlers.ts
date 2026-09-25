@@ -42,7 +42,8 @@ export interface MailHandlerOptions {
 
 /**
  * Each mail handler talks to Gmail, so its lease is longer than the queue's default
- * sixty seconds: a bounded sync is fifty metadata reads and up to fifty body reads,
+ * sixty seconds: a bounded sync is about fifty metadata reads (it takes whole history
+ * records, so the last one may carry it past fifty) and at most as many body reads,
  * and a lease that expires mid-run only causes a second worker to redo work the
  * uniqueness will collapse. Five minutes is comfortably more than a bounded run and
  * comfortably less than a stuck worker's mean time to notice.

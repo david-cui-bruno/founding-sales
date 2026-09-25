@@ -222,26 +222,90 @@ describe('the Gmail HTTP client', () => {
     expect(revoked.ok === false && revoked.reason).toBe('grant_revoked');
   });
 
-  it('flattens a history page into message records and carries the page token', async () => {
-    answer('/gmail/v1/users/me/history', 200, {
-      history: [
-        {
-          historyId: '1010',
-          messagesAdded: [{ message: { id: 'm-3', threadId: 't-3', labelIds: ['INBOX'] } }],
-          labelsAdded: [{ message: { id: 'm-4', threadId: 't-4', labelIds: ['SENT'] } }],
-        },
-      ],
-      historyId: '1011',
-      nextPageToken: 'page-2',
-    });
+  /**
+   * A `users.history.list` answer in the shape Google documents, not the shape the
+   * adapter expects (lane g76, audit item C06).
+   *
+   * https://developers.google.com/gmail/api/reference/rest/v1/users.history/list —
+   * `ListHistoryResponse` is `{ history: History[], nextPageToken, historyId }`, where
+   * `historyId` is "the ID of the mailbox's current history record".
+   * https://developers.google.com/gmail/api/reference/rest/v1/users.history#History —
+   * a `History` is `{ id, messages, messagesAdded, messagesDeleted, labelsAdded,
+   * labelsRemoved }`; `id` is "the mailbox sequence ID", and "each history change may
+   * affect multiple messages in multiple ways". A `LabelAdded` is `{ message, labelIds }`.
+   * Messages in a history answer "will typically only have id and threadId fields
+   * populated", with `labelIds` alongside in practice. Every id is a uint64 decimal
+   * string (`"format": "uint64"` in the discovery document).
+   *
+   * No record here has a `historyId`. That field belongs to the `Message` resource, and
+   * the fixture this replaces put it on the record, which is the only reason the
+   * adapter that read it passed.
+   */
+  const documentedHistoryPage = {
+    history: [
+      {
+        id: '1010',
+        messages: [{ id: 'm-3', threadId: 't-3' }],
+        messagesAdded: [{ message: { id: 'm-3', threadId: 't-3', labelIds: ['INBOX', 'UNREAD'] } }],
+      },
+      {
+        id: '1017',
+        messages: [
+          { id: 'm-4', threadId: 't-4' },
+          { id: 'm-5', threadId: 't-5' },
+        ],
+        labelsAdded: [
+          { message: { id: 'm-4', threadId: 't-4', labelIds: ['SENT'] }, labelIds: ['SENT'] },
+          { message: { id: 'm-5', threadId: 't-5', labelIds: ['INBOX', 'IMPORTANT'] }, labelIds: ['IMPORTANT'] },
+        ],
+      },
+    ],
+    nextPageToken: 'page-2',
+    historyId: '1020',
+  };
+
+  it('reads each history record by its own id, keeps its messages together, and carries the page token', async () => {
+    answer('/gmail/v1/users/me/history', 200, documentedHistoryPage);
     const page = await client.listHistory(access, { startHistoryId: '1000', pageToken: 'page-1' });
     expect(page.ok).toBe(true);
     if (!page.ok) return;
-    expect(page.records.map(record => record.messageId)).toEqual(['m-3', 'm-4']);
-    expect(page.records[1]?.kind).toBe('label_added');
-    expect(page.historyId).toBe('1011');
+    // The record's `id`, never the start cursor: the old adapter answered '1000' twice.
+    expect(page.records.map(record => record.id)).toEqual(['1010', '1017']);
+    expect(page.records.map(record => record.changes.map(change => change.messageId))).toEqual([
+      ['m-3'],
+      ['m-4', 'm-5'],
+    ]);
+    expect(page.records[0]?.changes[0]?.kind).toBe('message_added');
+    expect(page.records[1]?.changes.map(change => change.kind)).toEqual(['label_added', 'label_added']);
+    expect(page.historyId).toBe('1020');
     expect(page.nextPageToken).toBe('page-2');
     expect(new URL(lastRequest().url, origin).searchParams.get('pageToken')).toBe('page-1');
+  });
+
+  it('keeps a uint64 history id exactly, digit for digit', async () => {
+    answer('/gmail/v1/users/me/history', 200, {
+      history: [
+        { id: '9007199254740993', messagesAdded: [{ message: { id: 'm-6', threadId: 't-6', labelIds: ['INBOX'] } }] },
+      ],
+      historyId: '18446744073709551615',
+    });
+    const page = await client.listHistory(access, { startHistoryId: '9007199254740992' });
+    expect(page.ok && page.records[0]?.id).toBe('9007199254740993');
+    expect(page.ok && page.historyId).toBe('18446744073709551615');
+    expect(page.ok && page.nextPageToken).toBeNull();
+  });
+
+  it('refuses a history record without an id instead of standing it on the start cursor', async () => {
+    // The shape the old fixture used. A record with no id has no cursor it could
+    // safely stand for, so the page is malformed and the run fails without writing.
+    answer('/gmail/v1/users/me/history', 200, {
+      history: [{ historyId: '1010', messagesAdded: [{ message: { id: 'm-7', threadId: 't-7' } }] }],
+      historyId: '1011',
+    });
+    await expect(client.listHistory(access, { startHistoryId: '1000' })).rejects.toMatchObject({
+      name: 'GmailClientError',
+      code: 'malformed_response',
+    });
   });
 
   it('Appendix D: the recovery listing is bounded by epoch seconds, never a date string', async () => {

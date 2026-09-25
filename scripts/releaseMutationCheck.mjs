@@ -1115,6 +1115,34 @@ const MUTATIONS = [
     because:
       'Excluding only terminal stops forgets that a plan which ran out is also over. Every completed enrollment then sits in the denominator forever, and the held fraction can never reach 1 once any sequence has finished, so the critical alarm is silenced by success. enrollmentGauges.test.ts completes one enrollment, stops another, expects one active and has to go red.',
   },
+  {
+    name: 'the Gmail history parser reads a record’s historyId again and falls back to the start cursor',
+    file: 'packages/domain/mail/gmailClientHttp.ts',
+    find: "        const recordId = historyIdOf(item['id']);\n",
+    replace: "        const recordId = historyIdOf(item['historyId']) ?? request.startHistoryId;\n",
+    suite: ['run', 'test', '--workspace', 'packages/domain', '--', 'test/mail/httpClient.test.ts'],
+    because:
+      'Audit item C06, lane g76: a Gmail History resource names its own id `id`; `historyId` is a field of Message. The adapter read `historyId`, found nothing, and stood every record on the start cursor, so a capped sync wrote back the cursor it began from and re-read the same first fifty messages every minute. The unit fixture carried the same wrong field. httpClient.test.ts now feeds the documented shape and has to go red.',
+  },
+  {
+    name: 'a capped mail.sync slices inside a history record again',
+    file: 'packages/domain/mail/sync.ts',
+    find: "      if (change.kind === 'message_deleted' || held.has(change.messageId)) continue;\n",
+    replace:
+      "      if (held.size >= maxMessages) break;\n      if (change.kind === 'message_deleted' || held.has(change.messageId)) continue;\n",
+    suite: ['run', 'test', '--workspace', 'packages/domain', '--', 'test/mail/historyCursor.test.ts'],
+    because:
+      'Audit item C07, lane g76: startHistoryId returns only the records after an id, so a cursor standing on a record whose messages the cap cut off skips them for ever. historyCursor.test.ts puts the cap inside a three-message record and expects all three processed before the cursor stands on it, and has to go red.',
+  },
+  {
+    name: 'Gmail history ids are compared through Number again',
+    file: 'packages/domain/mail/historyIds.ts',
+    find: '  const a = BigInt(left);\n  const b = BigInt(right);\n',
+    replace: '  const a = Number(left);\n  const b = Number(right);\n',
+    suite: ['run', 'test', '--workspace', 'packages/domain', '--', 'test/mail/historyCursor.test.ts'],
+    because:
+      'Audit item C08, lane g76: Gmail history ids are uint64 decimal strings, and Number ties 9007199254740992 with 9007199254740993, so a cursor can stall on a record it read or stand past one it did not. historyCursor.test.ts orders, maxes and syncs across those ids and has to go red.',
+  },
 ];
 
 // A listener on each of these keeps Node from exiting mid-mutation with a file still
