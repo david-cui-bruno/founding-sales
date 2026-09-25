@@ -10,7 +10,9 @@ import { readRepositoryFile } from './support/coverage.ts';
  * * **O14 — one open critical alarm hid the next.** One OR composite e-mailed on its
  *   own transitions only, so the second critical condition to trip while the first
  *   was open sent nothing. Each critical condition now has a composite of its own that
- *   e-mails when it trips; the roll-up sends the one all-clear.
+ *   changes state when it trips. Since lane g99 (the owner's decision 11C) no
+ *   composite e-mails at all: the daily digest lists every state change, and
+ *   `alarmDigest.check.ts` holds that half.
  * * **O15 — an unconnected mailbox read as critically broken.** The watch alarm
  *   treated a missing gauge as breaching, and the gauge is published only while a
  *   mailbox is connected; the check heartbeat was published from any mailbox heartbeat
@@ -53,26 +55,31 @@ const ROLL_UP = resourceBlock('aws_cloudwatch_composite_alarm', 'critical');
 const PER_CONDITION = resourceBlock('aws_cloudwatch_composite_alarm', 'critical_condition');
 const WARNING = resourceBlock('aws_cloudwatch_composite_alarm', 'warning');
 
-describe('g81 / O14: every critical condition e-mails when it trips', () => {
+describe('g81 / O14: every critical condition changes an alarm’s state when it trips', () => {
   it('still finds the three composites', () => {
     for (const block of [ROLL_UP, PER_CONDITION, WARNING]) expect(block).not.toBe('');
   });
 
-  it('gives each critical condition a composite over its own alarm, which e-mails on ALARM only', () => {
+  it('gives each critical condition a composite over its own alarm', () => {
     expect(PER_CONDITION).toContain('for_each = local.critical_condition_alarms');
     expect(PER_CONDITION).toContain('alarm_rule        = "ALARM(\\"${each.value}\\")"');
-    expect(PER_CONDITION).toContain('alarm_actions   = [aws_sns_topic.alerts.arn]');
-    expect(PER_CONDITION).toContain('ok_actions      = []');
     expect(ALERTS).toContain('{ for name in local.critical_alarm_keys : name => aws_cloudwatch_metric_alarm.this[name].alarm_name },');
     expect(ALERTS).toContain('{ all_sequences_held = aws_cloudwatch_metric_alarm.all_sequences_held.alarm_name },');
   });
 
-  it('leaves the roll-up the all-clear and nothing else, and the warning roll-up as it was', () => {
-    expect(ROLL_UP).toContain('alarm_actions   = []');
-    expect(ROLL_UP).toContain('ok_actions      = [aws_sns_topic.alerts.arn]');
-    expect(ROLL_UP).not.toContain('alarm_actions   = [aws_sns_topic.alerts.arn]');
-    expect(WARNING).toContain('alarm_actions   = [aws_sns_topic.alerts.arn]');
-    expect(WARNING).toContain('ok_actions      = [aws_sns_topic.alerts.arn]');
+  it('lets no composite e-mail: the daily digest is the one e-mail (g99)', () => {
+    // The old shape, asserted absent in each block that used to carry it: the roll-up's
+    // all-clear, each condition's ALARM, and the warning roll-up's two.
+    for (const [name, block] of [
+      ['critical', ROLL_UP],
+      ['critical_condition', PER_CONDITION],
+      ['warning', WARNING],
+    ] as const) {
+      expect(block, name).toContain('alarm_actions   = []');
+      expect(block, name).toContain('ok_actions      = []');
+      expect(block, name).not.toContain('aws_sns_topic.alerts.arn');
+      expect(block, name).not.toContain('insufficient_data_actions');
+    }
   });
 
   it('holds back only what the worker’s own silence trips, behind the worker’s heartbeat alarm', () => {

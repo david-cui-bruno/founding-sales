@@ -73,11 +73,12 @@ Six customer keys is a deliberate choice, not an accident. Spec 4.1 wants the en
 | CloudWatch Logs ingestion | GB ingested | API + worker structured logs, bodies and secrets excluded | application behaviour | small |
 | CloudWatch Logs storage | GB-month archived | 90-day retention | `log_retention_days` (stack) | 7 days |
 | CloudWatch custom metrics | Per metric-month | heartbeats, job age, canary age, watch expiry, mailbox state, held counts, plus the log metric filters | application behaviour | same |
-| CloudWatch alarms | Per standard alarm-month; metric-math and composite alarms are billed differently | 15 standard alarms + 1 metric-math alarm + 2 composite alarms | thresholds are variables in `infra/modules/alerts` | same |
-| SNS | Per million publishes; **email notifications are free** | one topic, one subscription per recipient | `alert_emails` | same |
+| CloudWatch alarms | Per standard alarm-month; metric-math and composite alarms are billed differently | 16 standard alarms + 1 metric-math alarm + 15 composite alarms (two roll-ups and 13 per critical condition), none with an action | thresholds are variables in `infra/modules/alerts` | same |
+| Lambda + EventBridge Scheduler | Per request and GB-second; per scheduled invocation | the daily alarm digest: one 128 MB invocation a day at 07:00 America/New_York, inside both free tiers | `infra/modules/alerts/digest.tf` | same |
+| SNS | Per million publishes; **email notifications are free** | one topic, one subscription per recipient, one digest publish a day | `alert_emails` | same |
 | RDS log exports | CloudWatch Logs ingestion for `postgresql` and `upgrade` | `log_min_duration_statement = 1000` ms and DDL only, so the volume is slow queries and migrations, not traffic | `database_log_min_duration_statement` | same |
 
-Email delivery through SNS is why "connected mailbox disconnected for 48 hours" can still reach David when every mailbox is disconnected. It does not use a Gmail grant. Each address must confirm its subscription once; the runbook has the check.
+Email delivery through SNS is why "connected mailbox disconnected for 48 hours" can still reach David when every mailbox is disconnected. It does not use a Gmail grant. Since lane g99 the one e-mail is the daily alarm digest at 07:00 America/New_York; no alarm e-mails when it trips (`docs/greenfield/runbooks/README.md`). Each address must confirm its subscription once; the runbook has the check.
 
 ## 6. Google Cloud
 
