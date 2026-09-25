@@ -53,12 +53,25 @@ describe('heartbeat freshness (13.3)', () => {
     );
   };
 
-  it('keeps the api, scheduler and worker at exactly their promise', () => {
-    for (const component of ['api', 'scheduler', 'worker'] as const) {
+  it('keeps the api and worker at exactly their promise', () => {
+    for (const component of ['api', 'worker'] as const) {
       expect(HEARTBEAT_GRACE_SECONDS[component], component).toBe(0);
       expect(heartbeatIsFresh({ component, ageSeconds: 60, expectedIntervalSeconds: 60 }), component).toBe(true);
       expect(heartbeatIsFresh({ component, ageSeconds: 60.5, expectedIntervalSeconds: 60 }), component).toBe(false);
     }
+  });
+
+  it('allows the scheduler half an interval past its promise, like the mailbox check it asks for', () => {
+    expect(HEARTBEAT_GRACE_SECONDS.scheduler).toBe(HEARTBEAT_GRACE_SECONDS.mailbox);
+    const check = (ageSeconds: number): boolean =>
+      heartbeatIsFresh({ component: 'scheduler', ageSeconds, expectedIntervalSeconds: 60 });
+    // Two passes are a minute plus a pass apart, and the metrics loop drifts through
+    // that extra second for minutes at a time: not a missed pass.
+    expect(check(61.5)).toBe(true);
+    expect(check(90)).toBe(true);
+    // A pass due at 60 s that has not committed by 90 s is a missed pass.
+    expect(check(90.5)).toBe(false);
+    expect(check(180)).toBe(false);
   });
 
   it('allows the mailbox check half an interval past its promise, and no more', () => {
@@ -106,11 +119,17 @@ describe('heartbeat freshness (13.3)', () => {
     expect(valueOf(await collectJobMetrics(database.session), 'MailboxCheckHeartbeat')).toBeUndefined();
   });
 
-  it('still publishes a scheduler beat 75 seconds old as a missed pass', async () => {
+  it('publishes a scheduler beat 75 seconds old as alive, and one 95 seconds old as a missed pass', async () => {
     await recordHeartbeat(database.session, { component: 'scheduler', instanceKey: 'scheduler-freshness' });
     expect(valueOf(await collectJobMetrics(database.session), 'SchedulerHeartbeat')).toBe(1);
 
+    // A minute plus a pass, sampled by a loop that drifted into the pass: still alive.
     await backdate('scheduler', 75);
+    const drifted = (await readHeartbeats(database.session)).find(beat => beat.component === 'scheduler');
+    expect(drifted?.fresh).toBe(true);
+    expect(valueOf(await collectJobMetrics(database.session), 'SchedulerHeartbeat')).toBe(1);
+
+    await backdate('scheduler', 95);
     const stale = (await readHeartbeats(database.session)).find(beat => beat.component === 'scheduler');
     expect(stale?.fresh).toBe(false);
     expect(valueOf(await collectJobMetrics(database.session), 'SchedulerHeartbeat')).toBe(0);

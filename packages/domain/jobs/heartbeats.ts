@@ -63,7 +63,12 @@ export const DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 60;
  */
 export const HEARTBEAT_GRACE_SECONDS: Readonly<Record<HeartbeatComponent, number>> = Object.freeze({
   api: 0,
-  scheduler: 0,
+  // The scheduler's own beat has the mailbox check's shape. A pass waits 60 s after the
+  // previous pass *finishes*, so two beats are a minute plus a pass apart, and the metrics
+  // loop that samples them is another fixed-delay loop drifting slowly against it. With
+  // no grace it read a running scheduler as stale for six minutes at a stretch after each
+  // worker replacement on 25 Sep 2026 (19:18Z, 21:51Z) and paged on it.
+  scheduler: 30,
   worker: 0,
   mailbox: 30,
 });
