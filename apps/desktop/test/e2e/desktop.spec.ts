@@ -1,4 +1,4 @@
-import { expect, test } from 'playwright/test';
+import { expect, test, type Page } from 'playwright/test';
 import {
   EXAMPLE_WORKSPACE,
   connectedMailbox,
@@ -14,9 +14,19 @@ import {
  *
  * The renderer is the shipped file; only the bridge is substituted, so what these
  * specs prove is what a person actually sees: the sign-in form, the device panel, the
- * stale banner with no actionable controls, and the upgrade screen with nothing to
+ * stale lines with no actionable controls, and the upgrade screen with nothing to
  * press.
+ *
+ * Signed in, the window is Home (lane g65). This server installs only `callie` and
+ * `callieMailbox`, so Home's lanes and figures say they are unavailable here; the device
+ * panel is "This Mac" at the foot of the sidebar, a `<details>` a spec opens before it
+ * presses anything in it. `home.spec.ts` drives Home with all four bridges.
  */
+
+/** "This Mac" is closed until somebody opens it. */
+async function openThisMac(page: Page): Promise<void> {
+  await page.getByTestId('this-mac-summary').click();
+}
 
 let server: TestServer;
 
@@ -35,10 +45,10 @@ test('signs in through the form and then shows this Mac', async ({ page }) => {
   await page.getByTestId('device-label').fill("David's MacBook");
   await page.getByTestId('sign-in').click();
 
-  await expect(page.getByTestId('heading')).toHaveText('Today');
+  // Home, headed by the business date of the list the session holds.
+  await expect(page.getByTestId('heading')).toHaveText('Monday, 21 September');
   await expect(page.getByTestId('device-panel')).toContainText("David's MacBook");
-  await expect(page.getByTestId('today-card')).toHaveCount(1);
-  await expect(page.getByTestId('card-action')).toBeEnabled();
+  await expect(page.getByTestId('today-unavailable')).toHaveText('Unavailable in this build');
   expect(server.calls).toContain('signIn');
 });
 
@@ -57,27 +67,27 @@ test('an outdated Mac sees only the upgrade instruction', async ({ page }) => {
   await expect(page.getByTestId('upgrade-only')).toBeVisible();
   // Nothing to press: no sign-in form, no card actions, no refresh.
   await expect(page.getByTestId('sign-in-form')).toHaveCount(0);
-  await expect(page.getByTestId('card-action')).toHaveCount(0);
+  await expect(page.getByTestId('card-expand')).toHaveCount(0);
   await expect(page.getByTestId('refresh')).toHaveCount(0);
 });
 
-test('an outage shows the cached list, marked stale, with its actions disabled', async ({ page }) => {
+test('an outage is said at the top of Home, marked stale, and in the sidebar', async ({ page }) => {
   server = await startTestServer(
     signedInState({ online: false, stale: true, mayMutate: false, asOf: '2026-09-21T09:05:00.000Z' }),
   );
   await page.goto(server.url);
 
-  await expect(page.getByTestId('heading')).toHaveText('Today');
+  await expect(page.getByTestId('heading')).toHaveText('Monday, 21 September');
   await expect(page.getByTestId('banner-warning').first()).toContainText('cannot reach the server');
   await expect(page.getByTestId('banner-warning').last()).toContainText('earlier read');
-  await expect(page.getByTestId('today-card')).toHaveCount(1);
-  // The list is readable and nothing on it can be acted on (specification 4.2, 14.2).
-  await expect(page.getByTestId('card-action')).toBeDisabled();
+  await expect(page.getByTestId('status-system')).toHaveText('Callie 1.4.0 · offline');
+  // The lanes' outage — readable, nothing pressable (4.2, 14.2) — is home.spec.ts's.
 });
 
 test('signing out returns to the sign-in form and says so', async ({ page }) => {
   server = await startTestServer(signedInState());
   await page.goto(server.url);
+  await openThisMac(page);
   await expect(page.getByTestId('device-panel')).toBeVisible();
 
   await page.getByTestId('sign-out').click();
@@ -87,20 +97,16 @@ test('signing out returns to the sign-in form and says so', async ({ page }) => 
   await expect(page.getByTestId('device-panel')).toHaveCount(0);
 });
 
-test('a firm name that looks like markup is shown as text', async ({ page }) => {
+test('a device name that looks like markup is shown as text', async ({ page }) => {
+  // A firm name is the lanes' case, in home.spec.ts; on this page it is the device's.
   const state = signedInState();
-  const card = state.today?.cards[0];
-  expect(card).toBeDefined();
   server = await startTestServer({
     ...state,
-    today:
-      state.today === null || card === undefined
-        ? null
-        : { ...state.today, cards: [{ ...card, firmName: '<img src=x onerror=alert(1)>' }] },
+    device: state.device === null ? null : { ...state.device, deviceLabel: '<img src=x onerror=alert(1)>' },
   });
   await page.goto(server.url);
 
-  await expect(page.getByTestId('today-card')).toContainText('<img src=x onerror=alert(1)>');
+  await expect(page.getByTestId('device-panel')).toContainText('<img src=x onerror=alert(1)>');
   await expect(page.locator('img')).toHaveCount(0);
 });
 
@@ -117,6 +123,7 @@ test('This Mac offers Connect Gmail, and a connected mailbox shows its address a
     void dialog.dismiss();
   });
   await page.goto(server.url);
+  await openThisMac(page);
 
   const panel = page.getByTestId('device-panel');
   await expect(panel.getByTestId('mailbox-status')).toHaveText('Not connected');
@@ -141,6 +148,7 @@ test('a refused connection is plain text on the card, never a dialog', async ({ 
     void dialog.dismiss();
   });
   await page.goto(server.url);
+  await openThisMac(page);
 
   await page.getByTestId('mailbox-connect').click();
 

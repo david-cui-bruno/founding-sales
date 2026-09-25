@@ -27,12 +27,14 @@ import type { AdminBridge, AdminState } from '../renderer/settingsContract.ts';
 /**
  * The bridges, and the whole of what a renderer can reach (specification 14.2).
  *
- * One preload script serves all six windows, because Electron gives a window one
- * preload and a window only ever calls the bridge it was built for. Installing all
- * seven bridges is not a widening: every channel below is answered by a main-process
- * handler that exists, and a window that never calls one has reached nothing.
- * `callieMailbox` is the seventh, and the only one that serves the same window as
- * `callie`: G2's page shows the Mailbox row on its "This Mac" card.
+ * One preload script serves all five windows, because Electron gives a window one
+ * preload. Installing all seven bridges is not a widening: every channel below is
+ * answered by a main-process handler that exists, and a window that never calls one has
+ * reached nothing. Since lane g65 the main window calls four of them: its Home reads
+ * `callie` for the session, `callieMailbox` for the Mailbox row, `callieToday` for the
+ * lanes and `callieAdmin` for the sidebar's status, the "Last 7 days" figures and the
+ * Needs-you list. The Today window that used to own `callieToday` is gone; Today is the
+ * main window's content now (`docs/decisions/g65-today-is-the-home.md`).
  *
  * Parsing on this side as well as on the main side is not paranoia about our own
  * code: it is what makes the renderer's type a guarantee rather than a hope, and it
@@ -91,6 +93,8 @@ const bridge: DesktopBridge = {
   signIn: async input => await invokeDesktop(IPC_CHANNELS.signIn, input),
   signOut: async () => await invokeDesktop(IPC_CHANNELS.signOut),
   refreshToday: async () => await invokeDesktop(IPC_CHANNELS.refreshToday),
+  // Lane g65: a window name, checked against WINDOW_TARGETS in the main process.
+  openWindow: async input => await invokeDesktop(IPC_CHANNELS.openWindow, input),
 };
 
 /**

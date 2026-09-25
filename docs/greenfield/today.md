@@ -32,11 +32,12 @@ packages/domain/today/dto.ts                  the list, the expanded card
 apps/worker/src/handlers/todayBuild.ts        the job and its scheduler source
 apps/api/src/routes/today.ts                  GET /today, POST /today/firm
 apps/api/src/routes/snooze.ts                 POST /today/snooze, /today/snooze/cancel
-apps/desktop/src/renderer/today*.ts           the window: contract, view model, page
+apps/desktop/src/renderer/today*.ts           the lanes: contract, view model, drawing (todayLanes.ts)
+apps/desktop/src/renderer/home*.ts            Home, the main window that shows them (lane g65)
 apps/desktop/src/main/todayBridge.ts          the main-process half of its bridge
 apps/desktop/src/main/telHandoff.ts           the tel: driver and the two dial commands
 apps/desktop/src/main/crmBridge.ts            G3b's CRM windows, wired
-apps/desktop/src/main/todayWindow.ts          both windows, their channels, the menu
+apps/desktop/src/main/todayWindow.ts          the other windows and their channels; the menu is windowMenu.ts
 ```
 
 ## The four rules a reader should carry
@@ -144,6 +145,13 @@ same string, and a test compares them.
 Three windows now: G2's sign-in and device page, G3b's CRM windows, and this lane's
 Today page. Three renderer entry points, one preload script that installs all three
 bridges, and one main process that answers their channels.
+
+**Since lane g65 there is no Today window.** The lanes are the main window's signed-in
+screen, Home, beside a status sidebar, the last seven days and a Needs-you list
+(`docs/decisions/g65-today-is-the-home.md`). `todayPage.ts` became `todayLanes.ts`,
+which Home calls; ⌘1 brings the main window forward. The bridge, the view model and
+every rule below are unchanged, and G6's Playwright scenarios run against Home in
+`apps/desktop/test/e2e/home.spec.ts`.
 
 **The cards are cached and the expansion is not.** `GET /today` returns exactly the
 shape of `cachedTodaySchema` in `apps/desktop/src/shared/contract.ts` — G2 wrote it as

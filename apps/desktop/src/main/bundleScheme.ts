@@ -66,13 +66,13 @@ export interface BundleWindow {
 /**
  * Every window the application can open.
  *
- * The order is the order the windows arrived, which is also the order of the Window
- * menu apart from sign-in.
+ * The order is the order the windows arrived. G6's `today.html` is not here: lane g65
+ * made Today the main window's Home, so `index.html` carries it
+ * (`docs/decisions/g65-today-is-the-home.md`).
  */
 export const BUNDLE_WINDOWS: readonly BundleWindow[] = Object.freeze([
-  { page: 'index.html', entry: 'renderer', ownedBy: 'G2 identity' },
+  { page: 'index.html', entry: 'renderer', ownedBy: 'G2 identity, g65 Home' },
   { page: 'firmWorkspace.html', entry: 'firmWorkspace', ownedBy: 'G3b CRM' },
-  { page: 'today.html', entry: 'todayPage', ownedBy: 'G6 today' },
   { page: 'replyCard.html', entry: 'replyPage', ownedBy: 'G7b classifier' },
   { page: 'sequenceEditor.html', entry: 'sequenceEditor', ownedBy: 'G8 sequences' },
   { page: 'settings.html', entry: 'settingsPage', ownedBy: 'G9 administration' },

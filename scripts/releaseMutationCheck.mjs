@@ -618,7 +618,7 @@ const MUTATIONS = [
   {
     name: 'the API stops admitting the desktop build that carries the Mailbox row',
     file: 'apps/api/src/bootstrap/main.ts',
-    find: "  maximum: '1.0.2',\n",
+    find: "  maximum: '1.0.3',\n",
     replace: "  maximum: '1.0.0',\n",
     suite: ['run', 'test:release', '--', 'test/release/desktopMailbox.check.ts'],
     because:
@@ -905,7 +905,7 @@ const MUTATIONS = [
   {
     name: 'the API stops admitting the desktop build that carries Your calling number',
     file: 'apps/api/src/bootstrap/main.ts',
-    find: "  maximum: '1.0.2',\n",
+    find: "  maximum: '1.0.3',\n",
     replace: "  maximum: '1.0.1',\n",
     suite: ['run', 'test:release', '--', 'test/release/callingNumber.check.ts'],
     because:
@@ -1001,6 +1001,34 @@ const MUTATIONS = [
     suite: ['run', 'test:release', '--', 'test/release/mutationSchedule.check.ts'],
     because:
       'Off the pull-request path the check blocks nothing, so a failure is only worth what it tells somebody. With continue-on-error the step goes red, the job goes green, and nobody is told that a trap stopped closing. mutationSchedule.check.ts refuses continue-on-error anywhere in the nightly, so it has to go red.',
+  },
+  // Lane g65: Today is the home, and the window says what needs you.
+  {
+    name: 'Home stops asking for a calling number when the person has none',
+    file: 'apps/desktop/src/renderer/homeView.ts',
+    find: '    if (admin.callingNumbers !== null && inUse(admin.callingNumbers) === null) {\n',
+    replace: '    if (admin.callingNumbers === null) {\n',
+    suite: ['run', 'test', '--workspace', 'apps/desktop', '--', 'test/home.test.ts'],
+    because:
+      'This is 24 September from where David sat: signed in, mailbox connected, and no Call button anywhere, because nothing had told him to attest a number. The Needs-you row is Home\u2019s way of saying so, and it must come from the server\u2019s usedForCalls answer rather than from a list nobody read. home.test.ts reads an empty list and a list with only a retired number, expects the row both times, and has to go red.',
+  },
+  {
+    name: 'the main window may ask the main process to open any window it names',
+    file: 'apps/desktop/src/shared/contract.ts',
+    find: '  return WINDOW_TARGETS.find(target => target === value) ?? null;\n',
+    replace: '  return typeof value === \'string\' ? (value as WindowTarget) : null;\n',
+    suite: ['run', 'test', '--workspace', 'apps/desktop', '--', 'test/desktop.test.ts'],
+    because:
+      'openWindow is the one channel a page uses to reach past itself, and registerBridge opens only what windowTargetOf returns. A check that accepted any string would hand the main process names it has no opener for \u2014 today, __proto__, a file name \u2014 and the renderer\u2019s word would be taken for a shape. desktop.test.ts sends each of those and has to go red.',
+  },
+  {
+    name: 'the Today lanes are re-sorted on the Mac instead of shown in the server\u2019s order',
+    file: 'apps/desktop/src/renderer/todayView.ts',
+    find: '  const cards = state.cards.map(card => ({\n',
+    replace: '  const cards = [...state.cards].sort((left, right) => Date.parse(left.dueAt) - Date.parse(right.dueAt)).map(card => ({\n',
+    suite: ['run', 'test', '--workspace', 'apps/desktop', '--', 'test/today.test.ts'],
+    because:
+      'Specification 8.2 orders the list by lane first and the snapshot decides it; Home draws its sections from runs of that order and never repairs it. A client sort by due instant is the plausible mistake \u2014 it puts a three-week-old new firm above today\u2019s callback \u2014 and a second implementation of 8.2 that would disagree with the first the day either changed. today.test.ts keeps the new firm second and has to go red.',
   },
 ];
 

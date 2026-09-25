@@ -136,6 +136,39 @@ export interface DesktopBridge {
   signIn(input: { readonly workspaceId: string; readonly deviceLabel: string }): Promise<DesktopState>;
   signOut(): Promise<DesktopState>;
   refreshToday(): Promise<DesktopState>;
+  /**
+   * Opens one of the other windows, or brings it forward (lane g65). Answers the current
+   * state, as every call here does; a window name outside `WINDOW_TARGETS` opens nothing.
+   */
+  openWindow(input: { readonly window: WindowTarget }): Promise<DesktopState>;
+}
+
+// ---------------------------------------------------------------------------
+// The windows Home opens (lane g65)
+// ---------------------------------------------------------------------------
+
+/**
+ * Every window Home's sidebar may ask the main process to open, as a closed set.
+ *
+ * Home is the main window, so it is not in the list: ⌘1 brings it forward from the
+ * menu. `dashboard` is the Administration window on its Dashboard screen, which is the
+ * menu's ⌘6. The page names a window; it never names a file, a URL or a screen of its
+ * own choosing, so nothing it sends can open anything else.
+ */
+export const WINDOW_TARGETS = ['replies', 'firms', 'sequences', 'dashboard', 'administration'] as const;
+export type WindowTarget = (typeof WINDOW_TARGETS)[number];
+
+/**
+ * The renderer's `{ window }`, or null for anything that is not exactly one of the five.
+ *
+ * Compared with each literal rather than looked up as a key, so `constructor`,
+ * `__proto__` and every other name an object happens to answer to are refused like any
+ * other string.
+ */
+export function windowTargetOf(argument: unknown): WindowTarget | null {
+  if (typeof argument !== 'object' || argument === null) return null;
+  const value: unknown = (argument as { readonly window?: unknown }).window;
+  return WINDOW_TARGETS.find(target => target === value) ?? null;
 }
 
 // ---------------------------------------------------------------------------

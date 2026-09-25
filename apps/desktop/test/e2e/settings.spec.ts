@@ -151,6 +151,17 @@ test('the dashboard says a figure is unavailable rather than showing it as zero'
   await expect(page.getByTestId('panel-holds')).toContainText('scoped_pause: 1');
 });
 
+test('opened from ⌘6 or Home’s Dashboard row, the window starts on the Dashboard screen', async ({ page }) => {
+  // Lane g65: the opener names the screen in the page's address, and the page asks the
+  // bridge for that screen once, as it loads. Without a query it asks for the state.
+  server = await startSettingsTestServer(adminState());
+  await page.goto(`${server.url}?screen=dashboard`);
+
+  await expect(page.getByTestId('tab-dashboard')).toHaveClass(/tab-current/u);
+  await expect(page.getByTestId('panel-calls')).toContainText('voicemail_left: 3');
+  expect(server.calls[0]).toEqual({ method: 'show', argument: { screen: 'dashboard' } });
+});
+
 test('Diagnostics names the restore mismatch and puts the runbook beside the alert', async ({ page }) => {
   server = await startSettingsTestServer(adminState());
   await page.goto(server.url);

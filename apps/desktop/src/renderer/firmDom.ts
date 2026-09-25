@@ -3,7 +3,7 @@
  *
  * `textContent`, never `innerHTML`, everywhere and without exception: a firm name,
  * a contact's title and a Lost reason are all text somebody typed, and one of them
- * will contain a tag. The Today window made the same choice and its Playwright spec
+ * will contain a tag. Home's Today lanes make the same choice and `home.spec.ts`
  * proves it with `<img src=x onerror=…>`; the CRM specs do the same.
  */
 

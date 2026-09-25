@@ -442,7 +442,20 @@ function renderPanels(root: HTMLElement, view: ReturnType<typeof adminViewOf>): 
   }
 }
 
+/**
+ * The screen the window was opened on, when its opener named one (lane g65).
+ *
+ * The Window menu's ⌘5 opens `settings.html?screen=settings` and ⌘6
+ * `settings.html?screen=dashboard`; Home's sidebar calls the same openers. Anything
+ * else, including no query at all, is the screen the bridge last showed.
+ */
+export function requestedScreen(search: string): AdminScreen | null {
+  const screen = new URLSearchParams(search).get('screen');
+  return screen === 'settings' || screen === 'dashboard' || screen === 'diagnostics' ? screen : null;
+}
+
 /** The window's entry point. Guarded so importing this module in a test is inert. */
 if (typeof document !== 'undefined' && document.querySelector('#app') !== null) {
-  apply(bridge().state());
+  const screen = requestedScreen(location.search);
+  apply(screen === null ? bridge().state() : bridge().show({ screen }));
 }

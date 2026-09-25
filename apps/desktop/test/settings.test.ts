@@ -3,7 +3,8 @@ import { DEFAULT_ALERT_THRESHOLDS } from '@fss/contracts';
 import { createAuthedClient } from '../src/main/authedClient.ts';
 import { ADMIN_IPC_CHANNELS, createAdminBridge } from '../src/main/settingsBridge.ts';
 import { adminViewOf } from '../src/renderer/settingsView.ts';
-import { windowMenuTemplate } from '../src/main/todayWindow.ts';
+import { windowMenuTemplate } from '../src/main/windowMenu.ts';
+import { requestedScreen } from '../src/renderer/settingsPage.ts';
 import type { AdminState, CallingNumberView } from '../src/renderer/settingsContract.ts';
 
 /**
@@ -241,6 +242,54 @@ describe('the administration bridge', () => {
     // The audience came back from the server; the client asked for nothing.
     expect(JSON.stringify(request)).not.toContain('audience');
     expect(state.dashboard?.audience).toBe('assigned');
+  });
+
+  it('reads Home’s window without moving the screen or the window Administration shows (lane g65)', async () => {
+    const answered = (window: { from: string; to: string }): HttpAnswer => ({
+      status: 200,
+      body: {
+        window,
+        audience: 'workspace',
+        firmsInScope: 3,
+        messages: { incomingMatched: 0, human: 0, uncertain: 0, automated: 0, bounces: 0, optOuts: 0 },
+        replyHandling: { replies: 0, handled: 0, medianSecondsToHandle: null, slowestSecondsToHandle: null },
+        calls: [],
+        stageMovement: [],
+        holds: { open: 0, byReason: [] },
+        suppressions: [],
+        sending: { available: false, owner: 'G7-2', reason: 'not in this build' },
+        enrollments: { available: false, owner: 'G8', reason: 'not in this build' },
+        classifier: { available: false, owner: 'G7b', reason: 'not in this build' },
+      },
+    });
+    const week = { from: '2026-09-18T12:00:00.000Z', to: '2026-09-25T12:00:00.000Z' };
+    const month = { from: '2026-08-26T12:00:00.000Z', to: '2026-09-25T12:00:00.000Z' };
+    let next = answered(week);
+    const { api, calls } = scriptedApi({
+      '/settings': { status: 200, body: settingsBody() },
+      '/pipeline/stages': { status: 200, body: stagesBody },
+      get '/dashboard'() {
+        return next;
+      },
+    });
+    const bridge = createAdminBridge({
+      api,
+      session: { state: async () => await Promise.resolve(session()) },
+      now: () => new Date('2026-09-25T12:00:00.000Z'),
+    });
+    await bridge.state();
+
+    // Home asks for the last seven days while Administration shows Settings.
+    const home = await bridge.loadDashboard(week);
+    expect(home.dashboard?.window).toEqual(week);
+    expect(home.screen).toBe('settings');
+
+    // Administration's own Dashboard still reads its thirty days, not Home's seven.
+    next = answered(month);
+    const own = await bridge.show({ screen: 'dashboard' });
+    const asked = calls.filter(call => call.path === '/dashboard').map(call => (call.body as { window: unknown }).window);
+    expect(asked).toEqual([week, month]);
+    expect(own.screen).toBe('dashboard');
   });
 
   it('records a refusal as its code and re-reads rather than patching local state', async () => {
@@ -815,6 +864,17 @@ describe('the window menu', () => {
       'Firms',
       'Sequences',
     ]);
+  });
+});
+
+describe('the screen the window opens on (lane g65)', () => {
+  it('is the one the opener named — ⌘5 Settings, ⌘6 Dashboard — and the last one shown otherwise', () => {
+    expect(requestedScreen('?screen=settings')).toBe('settings');
+    expect(requestedScreen('?screen=dashboard')).toBe('dashboard');
+    expect(requestedScreen('?screen=diagnostics')).toBe('diagnostics');
+    for (const search of ['', '?', '?screen=', '?screen=Dashboard', '?screen=history', '?other=dashboard']) {
+      expect(requestedScreen(search), search).toBeNull();
+    }
   });
 });
 

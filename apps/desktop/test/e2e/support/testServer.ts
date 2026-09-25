@@ -106,8 +106,10 @@ export function connectedMailbox(overrides: Partial<MailboxState> = {}): Mailbox
 }
 
 /**
- * The bridges the browser gets: the same four methods `callie` has in the preload
- * script, and the Mailbox row's three on `callieMailbox`.
+ * The bridges the browser gets: the same five methods `callie` has in the preload
+ * script, and the Mailbox row's three on `callieMailbox`. Nothing else: this page is
+ * built without `callieToday` and `callieAdmin`, so Home says so where they would be
+ * (`homeTestServer.ts` installs all four for `home.spec.ts`).
  */
 const BRIDGE_SCRIPT = `
 globalThis.callie = {
@@ -115,6 +117,7 @@ globalThis.callie = {
   async signIn(input) { return await ask('signIn', input); },
   async signOut() { return await ask('signOut'); },
   async refreshToday() { return await ask('refreshToday'); },
+  async openWindow(input) { return await ask('openWindow', input); },
 };
 globalThis.callieMailbox = {
   async state() { return await ask('mailboxState'); },

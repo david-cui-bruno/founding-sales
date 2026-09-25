@@ -11,7 +11,9 @@ import {
   keychainCommand,
 } from '../src/main/index.ts';
 import { buildScreenView } from '../src/renderer/viewModel.ts';
-import { desktopStateSchema } from '../src/shared/contract.ts';
+import { WINDOW_TARGETS, desktopStateSchema, windowTargetOf } from '../src/shared/contract.ts';
+import { IPC_CHANNELS } from '../src/main/ipc.ts';
+import { windowMenuTemplate } from '../src/main/windowMenu.ts';
 import {
   CLIENT_VERSION,
   createDesktopFixture,
@@ -271,5 +273,80 @@ describe('the state that crosses the bridge', () => {
     expect(() => desktopStateSchema.parse({ ...state, accessToken: 'anything' })).toThrow();
     expect(Object.keys(state)).not.toContain('accessToken');
     expect(Object.keys(state)).not.toContain('refreshCredential');
+  });
+});
+
+describe('opening the other windows from Home (lane g65)', () => {
+  it('opens exactly the five windows by name, and nothing for any other value', () => {
+    expect(WINDOW_TARGETS).toEqual(['replies', 'firms', 'sequences', 'dashboard', 'administration']);
+    for (const target of WINDOW_TARGETS) expect(windowTargetOf({ window: target })).toBe(target);
+    // `registerBridge` opens only what this returns, and answers the current state for
+    // everything else, as every handler on the bridge does for a malformed argument.
+    for (const malformed of [
+      null,
+      undefined,
+      'replies',
+      42,
+      [],
+      {},
+      { screen: 'dashboard' },
+      { window: 'today' },
+      { window: 'settings' },
+      { window: 'settings.html' },
+      { window: 'https://example.test/' },
+      { window: 'Replies' },
+      { window: ' replies' },
+      { window: '__proto__' },
+      { window: 'constructor' },
+      { window: 'toString' },
+      { window: ['replies'] },
+      { window: { toString: () => 'replies' } },
+    ]) {
+      expect(windowTargetOf(malformed), JSON.stringify(malformed) ?? String(malformed)).toBeNull();
+    }
+  });
+
+  it('adds one channel to the main window’s bridge', () => {
+    expect(Object.values(IPC_CHANNELS)).toEqual([
+      'callie:state',
+      'callie:sign-in',
+      'callie:sign-out',
+      'callie:refresh-today',
+      'callie:open-window',
+    ]);
+  });
+});
+
+describe('the Window menu (lane g65)', () => {
+  it('brings Home forward on ⌘1 and opens the Dashboard on ⌘6, beside Administration', () => {
+    const pressed: string[] = [];
+    const press = (name: string) => (): void => {
+      pressed.push(name);
+    };
+    const [menu] = windowMenuTemplate({
+      today: press('today'),
+      replies: press('replies'),
+      firms: press('firms'),
+      sequences: press('sequences'),
+      administration: press('administration'),
+      dashboard: press('dashboard'),
+    });
+    expect(menu?.label).toBe('Window');
+    expect(menu?.submenu.map(item => `${item.label} ${item.accelerator}`)).toEqual([
+      'Today CmdOrCtrl+1',
+      'Replies CmdOrCtrl+2',
+      'Firms CmdOrCtrl+3',
+      'Sequences CmdOrCtrl+4',
+      'Administration CmdOrCtrl+5',
+      'Dashboard CmdOrCtrl+6',
+    ]);
+    for (const item of menu?.submenu ?? []) item.click();
+    expect(pressed).toEqual(['today', 'replies', 'firms', 'sequences', 'administration', 'dashboard']);
+  });
+
+  it('offers the Dashboard only beside the window it is a screen of', () => {
+    const noop = (): void => undefined;
+    const [menu] = windowMenuTemplate({ today: noop, replies: noop, firms: noop, sequences: noop, dashboard: noop });
+    expect(menu?.submenu.map(item => item.label)).toEqual(['Today', 'Replies', 'Firms', 'Sequences']);
   });
 });
