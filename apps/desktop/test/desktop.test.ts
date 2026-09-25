@@ -6,11 +6,16 @@ import {
   DEVICE_FILE,
   DEVICE_SECRET_ACCOUNT,
   REFRESH_CREDENTIAL_ACCOUNT,
+  createDeviceStore,
   createOfflineCache,
   createMemoryVault,
+  createSessionManager,
   keychainCommand,
 } from '../src/main/index.ts';
 import { buildScreenView } from '../src/renderer/viewModel.ts';
+import { createAuthedClient } from '../src/main/authedClient.ts';
+import { createAdminBridge } from '../src/main/settingsBridge.ts';
+import { outboundStatusAnswer } from './support/outboundStatus.ts';
 import { WINDOW_TARGETS, desktopStateSchema, windowTargetOf } from '../src/shared/contract.ts';
 import { IPC_CHANNELS } from '../src/main/ipc.ts';
 import { windowMenuTemplate } from '../src/main/windowMenu.ts';
@@ -133,6 +138,92 @@ describe('serialised session renewal', () => {
     mac.advance(3_600_000 - 30_000);
     await mac.manager.refreshToday();
     expect(mac.script.calls.get('/auth/session/renew')).toBe(1);
+  });
+});
+
+describe('the role a renewal carries (lane g69)', () => {
+  it('applies the role the server now gives, keeps it on disk without a secret, and survives a restart', async () => {
+    const mac = await started();
+    const signedIn = await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'A Mac' });
+    expect(signedIn.device?.role).toBe('salesperson');
+
+    // An admin promotes this membership. The Mac learns it at its next renewal, not at
+    // its next sign-in: until g69 it kept `salesperson` until then, and Administration
+    // never asked for the sending posture.
+    mac.script.role('admin');
+    mac.advance(3_600_001);
+    await mac.manager.refreshToday();
+    expect(mac.script.calls.get('/auth/session/renew')).toBe(1);
+    expect((await mac.manager.state()).device?.role).toBe('admin');
+
+    const onDisk = JSON.parse(await readFile(join(mac.directory, DEVICE_FILE), 'utf8')) as { role: string };
+    expect(onDisk.role).toBe('admin');
+    const text = await readFile(join(mac.directory, DEVICE_FILE), 'utf8');
+    for (const value of mac.vault.entries.values()) expect(text).not.toContain(value);
+
+    // A second manager over the same directory is the app opened again.
+    const reopened = createSessionManager({
+      api: mac.api,
+      store: createDeviceStore({ directory: mac.directory, vault: mac.vault }),
+      cache: createOfflineCache({ directory: mac.directory, vault: mac.vault, now: () => new Date('2026-09-21T10:00:01.000Z') }),
+      clientVersion: CLIENT_VERSION,
+      now: () => new Date('2026-09-21T10:00:01.000Z'),
+      openInBrowser: async () => {
+        await Promise.resolve();
+      },
+    });
+    expect((await reopened.state()).device?.role).toBe('admin');
+  });
+
+  it('reaches an open Administration window: the posture a salesperson never asked for is read once the renewal says admin', async () => {
+    const mac = await started();
+    await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'A Mac' });
+    const asked: string[] = [];
+    const admin = createAdminBridge({
+      api: createAuthedClient({
+        baseUrl: 'https://api.fss.test',
+        clientVersion: CLIENT_VERSION,
+        accessToken: async () => await mac.manager.accessToken(),
+        send: async url => {
+          const path = new URL(url).pathname;
+          asked.push(path);
+          // Only the sending read answers here; everything else is an API older than it.
+          if (path === '/outbound/status') {
+            return await Promise.resolve({ status: 200, body: outboundStatusAnswer({ domain: null }) });
+          }
+          return await Promise.resolve({ status: 404, body: { error: 'not_found' } });
+        },
+      }),
+      session: mac.manager,
+    });
+
+    await admin.state();
+    expect(asked).not.toContain('/outbound/status');
+
+    mac.script.role('admin');
+    mac.advance(3_600_001);
+    await mac.manager.refreshToday();
+    const promoted = await admin.state();
+    expect(promoted.role).toBe('admin');
+    expect(asked).toContain('/outbound/status');
+    expect(promoted.sendingAdmin).toEqual({ domain: null, personalGmailRecipients: 0, ramps: [] });
+  });
+
+  it('applies a demotion the same way, and leaves the role alone when the renewal did not change it', async () => {
+    const mac = await started();
+    mac.script.role('admin');
+    await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'A Mac' });
+    expect((await mac.manager.state()).device?.role).toBe('admin');
+
+    mac.advance(3_600_001);
+    await mac.manager.refreshToday();
+    expect((await mac.manager.state()).device?.role).toBe('admin');
+
+    mac.script.role('salesperson');
+    mac.advance(3_600_001);
+    await mac.manager.refreshToday();
+    expect(mac.script.calls.get('/auth/session/renew')).toBe(2);
+    expect((await mac.manager.state()).device?.role).toBe('salesperson');
   });
 });
 

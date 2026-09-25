@@ -199,7 +199,7 @@ The desktop commit stamp **is that value**. It is not something a build produces
 
 **What checks the agreement.** The desktop workflow refuses a `desktop_commit_stamp` that is not the commit the run is on, before it builds; and after it builds it compares the commit in the signed manifest — which is read out of the stamp inside the asar, inside the code signature — with both. At enable time (section 6) you compare the release record's `artifacts.desktopCommitStamp` with the commit the run summary printed. They are the same forty characters or sending does not get enabled.
 
-**The API admits the desktop version first.** Every sign-in, renewal and command is checked against the API's published range (`CONTAINER_CLIENT_VERSIONS` in `apps/api/src/bootstrap/main.ts`), and a client *above* its maximum is refused exactly like one below its minimum. So a desktop build whose `FSS_DESKTOP_APP_VERSION` is newer than the deployed API's maximum is published only after an API that admits it has been deployed. Otherwise every Mac that takes the update is refused everything. 8.0x is the first time this mattered: 1.0.1 needs an API whose maximum is 1.0.1. 8.0ab is the second: 1.0.2, the build with **Your calling number**, needs an API whose maximum is 1.0.2, and that API carries migration 0016. 8.0ad is the third: 1.0.3, the Home build, needs an API whose maximum is 1.0.3, and carries no migration.
+**The API admits the desktop version first.** Every sign-in, renewal and command is checked against the API's published range (`CONTAINER_CLIENT_VERSIONS` in `apps/api/src/bootstrap/main.ts`), and a client *above* its maximum is refused exactly like one below its minimum. So a desktop build whose `FSS_DESKTOP_APP_VERSION` is newer than the deployed API's maximum is published only after an API that admits it has been deployed. Otherwise every Mac that takes the update is refused everything. 8.0x is the first time this mattered: 1.0.1 needs an API whose maximum is 1.0.1. 8.0ab is the second: 1.0.2, the build with **Your calling number**, needs an API whose maximum is 1.0.2, and that API carries migration 0016. 8.0ad is the third: 1.0.3, the Home build, needs an API whose maximum is 1.0.3, and carries no migration. 8.0ae is the fourth: 1.0.4, the sending-section fix, needs an API whose maximum is 1.0.4, and carries no migration.
 
 **The first release, today.** Eight of the nine desktop signing secrets are not set and this Mac holds only an Apple Development identity, so the release job fails closed at its first step and names them. That is the intended state. `docs/greenfield/install.md` lists every one.
 
@@ -841,7 +841,7 @@ The checklist needs the `sending_domains` row to exist. If Administration says *
 * **A mailbox connect**, on an API built at or after lane g57, registers the connected address's domain. A mailbox connected before that is not registered retroactively.
 * **5.1a with `--sending-domain usecallie.com`**, run with the worker digest of a release that includes g57. This is the backfill for `callie@usecallie.com`, which connected on 24 September 2026, before g57. The report should show `"sendingDomain": { "domain": "usecallie.com", "isPrimary": true, "outcome": "created" }` the first time and `"outcome": "existing"` after that.
 
-Once the row exists, reopen Settings: the installed desktop build shows the five checkboxes and **Record checklist**. No new desktop release is needed.
+Once the row exists, reopen Settings on desktop **1.0.4 or later**: the section shows the five checkboxes and **Record checklist**. No earlier build can. Desktop 1.0.2 and 1.0.3 fail to parse every `/outbound/status` answer, so on them the section is absent whether the row exists or not (8.0ae).
 
 **4. Flip the deployment flag.** `terraform apply -var="sending_enabled=true"` in the production root, then re-deploy (worker, then API). That puts `FSS_SENDING_ENABLED=true` on both task definitions; read the plan first, and expect it to change exactly the two task definitions and nothing else. This is the release process's statement that the gate passed on these digests.
 
@@ -2618,6 +2618,52 @@ If an alarm's actions were switched off by hand (`disable-alarm-actions`, 8.0r),
 **What David does on the Mac.** Take the update and open Callie. The window opens on today's list, headed by the date. Read the sidebar's **Status**: every dot green is a working setup. Work **Needs you** from the top. Hover a row and press its button: **Connect Gmail** starts the grant in the browser, as the Mailbox row always did. **Open** brings up Administration on Settings, where **Your calling number** and the domain checklist are. Expand a firm with **Open** on its row. The tasks, the Call button and the outcome form are under that row now, not in a separate window. **Refresh** reads the list, the mailbox and the figures again. ⌘2 to ⌘6 open the other windows, and the sidebar names them.
 
 **Still unverified.** Nothing here has run in Electron. The Playwright specs drive the shipped renderer with its bridges substituted (`apps/desktop/test/e2e/home.spec.ts`). The main-process half is untested outside a packaged build: the `openWindow` handler, ⌘1 finding or reopening the main window, and ⌘6 reloading an open Administration window with `?screen=dashboard`. So are the stylesheet's sticky sidebar and hover actions in a real window at its default 1100 × 760, and the auto-read at launch against production.
+
+### 8.0ae What lane g69 fixed: the sending section never parsed, and Home asked for a number that existed (25 September)
+
+**The gap.** In production, Administration's **Sending domain and caps** section never rendered for David, who is an admin. On that code path Home's sidebar reads *Domain not read*. The API logged no refusal. Separately, Home told anybody with a saved but unattested calling number that they had *No calling number*, and Needs you asked them to **Add your calling number**. The one related refusal in the log, `POST /calling-identities/register → 409` at 14:56Z, did not say which of five refusals it was.
+
+**The cause.** `POST /outbound/status` answers `personalGmailRecipients` as `{ automated, direct, total }` (`personalGmailRecipientsInWindow` in `packages/domain/outbound/domainGuard.ts`, passed through by `apps/api/src/routes/outbound.ts`), and always has. The desktop's `outboundStatusSchema` in `apps/desktop/src/main/settingsBridge.ts` declared `z.number()`. Every answer failed to parse. `AuthedClient.read` turned the failure into `unreadable_answer`, `loadSending` dropped it into `sendingAdmin = null`, and `settingsView.ts` renders no section for a null posture. The route had answered 200, so nothing was logged. Before PR 202 the read went out as a GET and the API answered 405. PR 202 made it a POST, and from then on it reached this parser and failed there. Either way, no published build has rendered the section. Three smaller defects sat beside it:
+
+- `loadSettings` returned before `loadSending` when `/settings` failed.
+- `sessionManager.ts`'s `renew` kept the credentials and dropped the role the renewal carries (`renewSession` in `apps/api/src/auth/sessions.ts`), so a promotion reached the Mac only at its next full sign-in.
+- `homeView.ts` read "no number in use" as "no number", so a saved, unattested number, which is exactly what an unticked Add leaves, was told to add itself again.
+
+**Why the tests missed it.** The desktop unit fixture in `apps/desktop/test/settings.test.ts` said `personalGmailRecipients: 1`, the same wrong number as the parser, so the suite agreed with itself. The Playwright specs substitute the bridge, so they never run a real API answer through the parser. The session fixture always answered `salesperson`. The Home fixtures carried an empty list or a verified number, never a saved unattested one.
+
+**What g69 changes.**
+
+- **The parser** reads the object (`.loose()`, like its siblings) and maps `total` into `SendingAdminView.personalGmailRecipients`, so *Personal-Gmail guard: 4000 per 24 hours, N used* keeps its meaning. `total` counts FSS's own sends and the direct ones the sync imported.
+- **Drift is now caught in the release suite.** `test/release/sendingSection.check.ts` runs the real route over a real database and session, feeds its answer to the real desktop bridge and view, and asserts the rendered section. It also holds the desktop's unit fixture, now `apps/desktop/test/support/outboundStatus.ts`, to the route's answer key for key and type for type. A field the route adds, drops or retypes fails there, before it can fail a parser in production.
+- **A failed sending read is visible.** The bridge keeps `sendingReadError`, the refusal code. For an admin the section then reads *Callie could not read the sending status.* plus a sentence naming the code, with **Retry**, which re-shows Settings. Sending is read even when `/settings` fails. `state()` asks again while an admin's posture is not held, so Home's focus and **Refresh** retry a failed read. Home's *Domain not read* row stays.
+- **A renewal applies the role.** The session manager puts the renewed role on the in-memory device and writes it to `device.json` through the new `DeviceStore.saveDevice`. That call writes public metadata only; the Keychain is untouched. When the role changes, the administration bridge drops the sending posture, the diagnostics and the dashboard, and the next read derives them under the new role.
+- **Home says what is missing.** With no number: **Add your calling number** and *No calling number*, as before. A saved, unattested number: **Attest your calling number**, detail *Your number is saved. Open Your calling number and attest it.*, and the amber status *Calling number needs attestation*. Only retired numbers: **Re-attest your calling number**. Each row opens Administration on Settings, where the saved row already has its own **Attest** button.
+- **The API logs the refusal code.** The `refusal` line keeps `reason` as the HTTP status, which is the Refusals metric's dimension. It adds `code` from the body's `reason` or `error` (`refusalCodeOf` in `apps/api/src/server.ts`). A value that is not code-shaped is dropped, and request bodies are never logged. Today's 409 would now read `code: number_invalid`, `number_registered_to_another` or whichever it was.
+- Three mutations, appended to `scripts/releaseMutationCheck.mjs` (110 → 113). The two existing `maximum` mutations now find `'1.0.4'`.
+
+**The version order: API 1.0.4 first, then desktop 1.0.4.** `CONTAINER_CLIENT_VERSIONS` is `{ minimum: 1.0.0, maximum: 1.0.4 }`. This is an app-only API release followed by a desktop-only one:
+
+1. Build both images at the release commit (2.1).
+2. Deploy with `release-deploy.sh infra/roots/production fss-prod --api-digest … --worker-digest …` and **no** `--schema-change` (4.1). The schema range stays `{16, 16}`.
+3. Smoke.
+4. Confirm `curl -fsS https://api.usecallie.com/auth/client-version` reports maximum `1.0.4`.
+5. Only then set `FSS_DESKTOP_APP_VERSION` to `1.0.4` and publish (`docs/greenfield/install.md`, "5c — publish 1.0.4").
+
+A 1.0.4 Mac against an API still publishing 1.0.3 is refused every sign-in, renewal and command. Installed 1.0.0 to 1.0.3 keep working, with the section still missing, until they take the update.
+
+**What David does on the Mac.** Take the update and open **Administration › Settings**.
+
+1. **Sending domain and caps** is there: *usecallie.com: …* with the checklist boxes, the guard line and one ramp line per connected mailbox. If it instead reads *Callie could not read the sending status.*, the sentence after it names the code. Press **Retry**. If it still fails, send the code.
+2. Record the checklist (5.1a and section 6 of this runbook). Home's sidebar should then read *Domain passes · usecallie.com*.
+3. On Home, a saved number now reads *Calling number needs attestation*, with **Attest your calling number** under Needs you. Press **Open**, then press the number's **Attest: This is the number I place my calls from.** on Settings. Do not add the number again.
+
+**Still unverified.** Nothing here has run in Electron or against production. The release check drives the real route and the real bridge in one process, with the socket replaced by `dispatch`. The Playwright specs still substitute the bridge. So these are unmeasured:
+
+- The section on David's Mac against production's data.
+- The role change across a real renewal, and whether the renderer's own device state picks it up before Home's next focus.
+- The `code` field in CloudWatch and its effect on the Refusals metric filter, which reads `reason` and should be unaffected.
+
+Also unknown: which refusal the 25 September 409 was. The receipt in `command_receipts` holds it, and nothing here reads production.
 
 ### 8.1 Still unverified
 

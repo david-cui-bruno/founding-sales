@@ -44,6 +44,12 @@ export interface ApiScript {
   /** Claims answer `handoff_unknown` until this is set. */
   browserFinished(value: boolean): void;
   latestCredential(): string | null;
+  /**
+   * The membership's role as the server holds it now. Every later claim and renewal
+   * answers with it; `salesperson` until a test says otherwise (lane g69: an admin
+   * promoting a salesperson is the case the renewal used to lose).
+   */
+  role(value: 'admin' | 'salesperson'): void;
 }
 
 export interface DesktopFixture {
@@ -97,6 +103,7 @@ export async function createDesktopFixture(
   let browserFinished = false;
   let generation = 1;
   let latest: string | null = null;
+  let role: 'admin' | 'salesperson' = 'salesperson';
   let todayValue: CachedToday = sampleToday(workspaceId);
   const refusals = new Map<string, string[]>();
   const calls = new Map<string, number>();
@@ -107,7 +114,7 @@ export async function createDesktopFixture(
     return {
       workspaceId: forWorkspace,
       userId,
-      role: 'salesperson',
+      role,
       deviceId,
       deviceSecret: secret(),
       accessToken: token(forWorkspace),
@@ -153,7 +160,7 @@ export async function createDesktopFixture(
         const renewal: SessionRenewal = {
           workspaceId,
           userId,
-          role: 'salesperson',
+          role,
           deviceId,
           accessToken: token(workspaceId),
           accessTokenExpiresAt: new Date(current + 3_600_000).toISOString(),
@@ -220,6 +227,9 @@ export async function createDesktopFixture(
         browserFinished = value;
       },
       latestCredential: () => latest,
+      role: value => {
+        role = value;
+      },
     },
     stop: async () => {
       await rm(directory, { recursive: true, force: true });

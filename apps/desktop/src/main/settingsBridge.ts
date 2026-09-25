@@ -93,8 +93,16 @@ const acknowledgedSchema = z.object({ acknowledged: z.literal(true), alertKey: z
  * description of the parts this window shows — `.loose()` so a field G7-2 adds does
  * not break the page, and every field this file reads is named, so one they remove
  * does.
+ *
+ * `personalGmailRecipients` is an object, `{ automated, direct, total }`
+ * (`personalGmailRecipientsInWindow` in `packages/domain/outbound/domainGuard.ts`), and
+ * always was. Until lane g69 this said `z.number()`, so every answer the API gave failed
+ * to parse, `loadSending` kept nothing, and the section never rendered for anybody
+ * (release.md 8.0ae). The unit fixture had the same wrong number, which is why nothing
+ * went red; `test/release/sendingSection.check.ts` now feeds this parser the real
+ * route's answer.
  */
-const outboundStatusSchema = z
+export const outboundStatusSchema = z
   .object({
     domain: z
       .object({
@@ -109,7 +117,9 @@ const outboundStatusSchema = z
       })
       .loose()
       .nullable(),
-    personalGmailRecipients: z.number(),
+    personalGmailRecipients: z
+      .object({ automated: z.number(), direct: z.number(), total: z.number() })
+      .loose(),
     ramp: z
       .object({
         mailboxId: z.string(),
@@ -173,14 +183,40 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
   let stages: readonly PipelineStageRowView[] = [];
   let history: AdminState['history'] = null;
   let sendingAdmin: AdminState['sendingAdmin'] = null;
+  let sendingReadError: AdminState['sendingReadError'] = null;
   let callingNumbers: AdminState['callingNumbers'] = null;
+  /** The role the state above was read under, or null before the first read. */
+  let roleSeen: AdminState['role'] | null = null;
   const window = defaultWindow(clock());
 
-  const snapshot = async (): Promise<AdminState> => {
+  /**
+   * The session's role, and the end of everything read under a different one (lane g69).
+   *
+   * A renewal carries the membership's current role and the session manager applies it,
+   * so the role can change under an open window. The sending posture, the diagnostics
+   * and the dashboard were each read, or not read, because of the old role: an admin
+   * demoted keeps an outbound posture they may no longer see, and a salesperson made
+   * admin keeps the "not read" the salesperson's page never asked for. So all three
+   * are dropped, and the next read derives them again under the role the server gave.
+   */
+  const currentRole = async (): Promise<{ readonly role: AdminState['role']; readonly online: boolean; readonly mayMutate: boolean }> => {
     const session = await deps.session.state();
+    const role = session.device?.role ?? 'salesperson';
+    if (roleSeen !== null && roleSeen !== role) {
+      sendingAdmin = null;
+      sendingReadError = null;
+      diagnostics = null;
+      dashboard = null;
+    }
+    roleSeen = role;
+    return { role, online: session.online, mayMutate: session.mayMutate };
+  };
+
+  const snapshot = async (): Promise<AdminState> => {
+    const session = await currentRole();
     return {
       screen,
-      role: session.device?.role ?? 'salesperson',
+      role: session.role,
       online: session.online,
       mayMutate: session.mayMutate,
       notice,
@@ -190,11 +226,12 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
       stages,
       history,
       sendingAdmin,
+      sendingReadError,
       callingNumbers,
     };
   };
 
-  const isAdmin = async (): Promise<boolean> => (await deps.session.state()).device?.role === 'admin';
+  const isAdmin = async (): Promise<boolean> => (await currentRole()).role === 'admin';
 
   /**
    * G7-2's sending posture, in three reads, for an admin only.
@@ -205,13 +242,18 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
    * `/diagnostics`, which already applies Appendix F row 3 to them, and each ramp is
    * asked for by id. `mailboxes_one_per_owner` bounds that at one per member.
    *
-   * A failure here is not a notice: the sending section simply does not appear. The
-   * settings page has ten other sections and a person who opened it to change the
-   * business time zone should not be told about an outbound read they did not ask for.
+   * A failure here is not a notice: the settings page has ten other sections and a
+   * person who opened it to change the business time zone should not be told about an
+   * outbound read they did not ask for. It is not silence either. Until lane g69 a
+   * failed read left `sendingAdmin` null and the section simply did not appear, which is
+   * how a parse failure on every answer went unseen in production (release.md 8.0ae). The
+   * refusal code is kept as `sendingReadError`, the section says it could not read the
+   * status and offers Retry, and `state()` asks again while it is set.
    */
   const loadSending = async (): Promise<void> => {
     if (!(await isAdmin())) {
       sendingAdmin = null;
+      sendingReadError = null;
       return;
     }
     // Every `/outbound/*` path is a POST, the read included (`apps/api/src/routes/outbound.ts`):
@@ -221,6 +263,7 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
     const status = await deps.api.read('/outbound/status', value => outboundStatusSchema.parse(value), {});
     if (!status.ok) {
       sendingAdmin = null;
+      sendingReadError = status.reason;
       return;
     }
     const report = await deps.api.read('/diagnostics', value => diagnosticsResponseSchema.parse(value));
@@ -263,9 +306,12 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
               automatedSendingEnabled: status.value.domain.automatedSendingEnabled,
               personalGmailGuardPer24h: status.value.domain.personalGmailGuardPer24h,
             },
-      personalGmailRecipients: status.value.personalGmailRecipients,
+      // The whole guard: FSS's own sends and the direct ones the sync imported (12.7,
+      // "All outgoing Gmail messages, including direct sends, count").
+      personalGmailRecipients: status.value.personalGmailRecipients.total,
       ramps: collected,
     };
+    sendingReadError = null;
   };
 
   /**
@@ -285,22 +331,22 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
     const answer = await deps.api.read('/settings', value => settingsSnapshotSchema.parse(value));
     if (!answer.ok) {
       notice = answer.reason;
-      // The calling number is the person's own and does not depend on the workspace
-      // settings: a page whose settings read failed still shows it (lane g60).
-      await loadCallingNumbers();
-      return;
+    } else {
+      settings = answer.value;
+      const stageAnswer = await deps.api.read('/pipeline/stages', value => stagesSchema.parse(value));
+      if (stageAnswer.ok) {
+        stages = stageAnswer.value.stages.map(stage => ({
+          key: stage.key,
+          displayName: stage.displayName,
+          position: stage.position,
+          terminalKind: stage.terminalKind,
+          retired: stage.retired,
+        }));
+      }
     }
-    settings = answer.value;
-    const stageAnswer = await deps.api.read('/pipeline/stages', value => stagesSchema.parse(value));
-    if (stageAnswer.ok) {
-      stages = stageAnswer.value.stages.map(stage => ({
-        key: stage.key,
-        displayName: stage.displayName,
-        position: stage.position,
-        terminalKind: stage.terminalKind,
-        retired: stage.retired,
-      }));
-    }
+    // Neither the sending posture nor the calling number depends on the workspace
+    // settings, so a page whose settings read failed still reads both (lanes g60, g69).
+    // Until g69 a failed `/settings` returned before the sending read was even asked.
     await loadSending();
     await loadCallingNumbers();
   };
@@ -342,7 +388,13 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
 
   return {
     async state() {
+      const { role } = await currentRole();
       if (settings === null) await loadSettings();
+      // Home reads through here on every focus and on Refresh. An admin's posture that
+      // is not held — the last read failed, or the role just became admin — is asked
+      // for again rather than left as the first answer (lane g69). A read that
+      // succeeded is not repeated: that is what `show` and the commands are for.
+      else if (role === 'admin' && sendingAdmin === null) await loadSending();
       return await snapshot();
     },
 

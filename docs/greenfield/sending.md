@@ -188,6 +188,12 @@ connected and SPF, DKIM, DMARC and Postmaster Tools all passed, but Administrati
 checklist only when `/outbound/status` returns a domain, and
 `recordAuthenticationChecklist` answers `domain_unknown` when the row is missing.
 
+A correction from lane g69 (release.md 8.0ae): no desktop build before 1.0.4 could render
+that section at all. The desktop parsed `personalGmailRecipients` as a number, and the
+route sends an object. So whatever Administration showed that day, it was not this
+section's line, and the checkboxes would have been missing even with the row in place.
+The missing row was real, and it is what g57 fixed. The section itself needs 1.0.4.
+
 `registerSendingDomain(context, { domain, registeredBy })` (`outbound/domainGuard.ts`)
 is now the only thing that creates the row. It has three callers:
 

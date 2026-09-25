@@ -67,6 +67,33 @@ test("an admin edits G7-2's checklist and cap, and the guard has no control", as
   expect(call?.argument).toEqual({ mailboxId: '44444444-4444-4444-8444-444444444444', raiseTo: 25 });
 });
 
+test('a sending read that failed says so where the section would be, and Retry reads it again (lane g69)', async ({ page }) => {
+  // Desktop 1.0.2 and 1.0.3 in production: every `/outbound/status` answer failed to
+  // parse and the section was simply absent. Now the section says it could not read.
+  server = await startSettingsTestServer(adminState({ sendingReadError: 'unreadable_answer' }));
+  await page.goto(server.url);
+
+  await expect(page.getByTestId('sending-admin').getByRole('heading')).toHaveText('Sending domain and caps');
+  await expect(page.getByTestId('sending-unread')).toHaveText(
+    'Callie could not read the sending status. The answer was not in the shape this version of Callie reads (unreadable_answer).',
+  );
+  await expect(page.getByTestId('sending-domain')).toHaveCount(0);
+  // Not a notice: the rest of the page reads as before.
+  await expect(page.getByTestId('notice')).toHaveCount(0);
+
+  await page.getByTestId('sending-retry').click();
+  await expect(page.getByTestId('sending-domain')).toContainText('dmarc');
+  await expect(page.getByTestId('sending-unread')).toHaveCount(0);
+  expect(server.calls.filter(call => call.method === 'show').map(call => call.argument)).toEqual([{ screen: 'settings' }]);
+});
+
+test('a salesperson is told nothing about a sending read their page never made (lane g69)', async ({ page }) => {
+  server = await startSettingsTestServer(adminState({ role: 'salesperson', sendingReadError: 'unreadable_answer' }));
+  await page.goto(server.url);
+  await expect(page.getByTestId('calling-number')).toBeVisible();
+  await expect(page.getByTestId('sending-admin')).toHaveCount(0);
+});
+
 test("replaces the holiday calendar through G8's command, by naming a new version", async ({ page }) => {
   server = await startSettingsTestServer(adminState());
   await page.goto(server.url);

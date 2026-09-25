@@ -155,6 +155,16 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
       };
       session = renewed;
       await options.store.saveRefreshCredential(renewed.refreshCredential);
+      // The renewal names the membership's role as it is now (`renewSession` in
+      // `apps/api/src/auth/sessions.ts`). Until lane g69 only the credentials were kept,
+      // so a Mac that signed in as a salesperson stayed one after an admin promoted it —
+      // no Domain row, no sending section — until it signed in again. The role is public
+      // metadata and goes to `device.json` with the rest; no secret moves.
+      if (device !== null && device.role !== outcome.value.role) {
+        const current: StoredDevice = { ...device, role: outcome.value.role };
+        device = current;
+        await options.store.saveDevice(current);
+      }
       return { ok: true, value: renewed };
     })();
     try {
