@@ -13,6 +13,7 @@ import {
 } from './bootstrap/connections.ts';
 import { dispatch as dispatchMounted } from './bootstrap/dispatch.ts';
 import { errorFields, type Logger } from './bootstrap/log.ts';
+import { createReadinessGate, type ReadinessGate } from './bootstrap/readinessGate.ts';
 import { readBody } from './bootstrap/requestBody.ts';
 import { createRouteRegistry, type RouteModule, type RouteRegistry } from './bootstrap/routeRegistry.ts';
 import { mountedRoutes } from './bootstrap/routes.ts';
@@ -42,8 +43,13 @@ import {
  *
  * 1. the envelope — method, content type, declared length — before a byte is read;
  * 2. the body, counted as it arrives, so a lying `Content-Length` is caught too;
- * 3. the principal, which `authenticate` produces and which is null without one;
- * 4. the route, which is mounted or the request is refused with a redacted
+ * 3. readiness (lane g86): unless the path is one of the four the load balancer, the
+ *    container check, an operator and an outdated Mac read, a task whose own readiness
+ *    check fails answers 503 `not_ready` here and runs nothing further. The verdict is
+ *    cached for a few seconds (`bootstrap/readinessGate.ts`), so this is not a database
+ *    round trip per request;
+ * 4. the principal, which `authenticate` produces and which is null without one;
+ * 5. the route, which is mounted or the request is refused with a redacted
  *    `not_found`.
  *
  * Identity arrives as `options.auth`. Without it the API serves `/health`, `/healthz`,
@@ -79,7 +85,10 @@ export interface ApiOptions {
    * given a Gmail client id, a Pub/Sub audience and an envelope key should do.
    */
   readonly mail?: MailRoutingDeps;
-  /** Where a person is told to get the current build. Defaults to the public page. */
+  /**
+   * What `/auth/client-version` publishes as `upgradeUrl`. The bootstrap passes the
+   * deployment's (`readUpgradeUrl`); absent is `DEFAULT_UPGRADE_URL`, the placeholder.
+   */
   readonly upgradeUrl?: string;
   /**
    * The object-locked suppression journal (10.2). A deployment without one falls
@@ -233,8 +242,11 @@ export function createApiServer(options: ApiServerOptions): Server {
     paths: registry.paths().join(' '),
     prefixes: registry.prefixes().join(' '),
   });
+  // One per process: the verdict it caches is about this task's database, not about a
+  // request.
+  const gate = createReadinessGate({ expectedSystemGeneration: options.expectedSystemGeneration, log: options.log });
   return createServer((request: IncomingMessage, response: ServerResponse) => {
-    void handle(request, response, options);
+    void handle(request, response, options, gate);
   });
 }
 
@@ -294,7 +306,12 @@ export function refusalCodeOf(body: unknown): string | null {
   return typeof code === 'string' && REFUSAL_CODE_SHAPE.test(code) ? code : null;
 }
 
-async function handle(request: IncomingMessage, response: ServerResponse, options: ApiServerOptions): Promise<void> {
+async function handle(
+  request: IncomingMessage,
+  response: ServerResponse,
+  options: ApiServerOptions,
+  gate: ReadinessGate,
+): Promise<void> {
   const method = request.method ?? 'GET';
   let path = '/';
   // This request's connection. Nothing is checked out until its first statement, so a
@@ -325,6 +342,21 @@ async function handle(request: IncomingMessage, response: ServerResponse, option
         return;
       }
       body = read.body;
+    }
+
+    // Lane g86, audit S14: a task that is not fit to serve does not serve, whatever the
+    // load balancer has noticed so far. A busy pool throws `DatabaseBusyError` here and is
+    // answered below like any other checkout that timed out.
+    const admission = await gate.admit(path, connection.session);
+    if (!admission.admitted) {
+      options.log?.log('info', 'refusal', {
+        reason: 'not_ready',
+        code: 'not_ready',
+        path,
+        not_ready_reason: admission.reason,
+      });
+      send(response, REFUSAL_STATUS.not_ready, redactError('not_ready'));
+      return;
     }
 
     const result = await dispatch(

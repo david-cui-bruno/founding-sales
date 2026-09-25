@@ -1,4 +1,9 @@
 {
   "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // Lane g86: the desktop's package step loads these files under Node's strip-only
+    // TypeScript, which refuses syntax that has to be compiled.
+    "erasableSyntaxOnly": true
+  },
   "include": ["src/**/*.ts", "test/**/*.ts", "vitest.config.ts"]
 }

@@ -286,6 +286,12 @@ module "cluster" {
     FSS_RESEARCH_PROVIDERS = var.research_providers
   }
 
+  # The upgrade notice's address is the API's alone (lane g86), and absent rather
+  # than empty when unset, so the API's own rule decides what an unset one means.
+  api_environment = var.desktop_upgrade_url == null ? {} : {
+    FSS_DESKTOP_UPGRADE_URL = var.desktop_upgrade_url
+  }
+
   environment = merge(var.extra_environment, {
     FSS_ENVIRONMENT = var.environment
     # The three deployment flags of 16.2 and G12's bootstrap. They are first-class
@@ -302,9 +308,9 @@ module "cluster" {
     FSS_PUBLIC_ORIGIN      = "https://${var.api_hostname}"
     # The three Gmail push identifiers are inputs, not resources this module
     # creates. The Pub/Sub topic and its push subscription live in
-    # `infra/roots/production`, which is the only root with a Google Cloud
-    # project, so this module requires no Google provider and a rehearsal plan
-    # needs no Google credential
+    # `infra/roots/production-google` (lane g85), the only root with a Google
+    # provider, so this module requires none and neither a rehearsal plan nor a
+    # production plan needs a Google credential
     # (`docs/decisions/g12j-the-rehearsal-has-no-google-provider.md`).
     #
     # All three are public identifiers, and all three are read by
@@ -354,7 +360,8 @@ module "updates" {
 # free: Terraform configures every provider a module *requires* during the plan,
 # so a rehearsal plan in CI asked for Google application-default credentials and
 # was refused before it reached AWS (David's third credentialed rehearsal, 21
-# September 2026). Only production has a Google Cloud project, so only
-# `infra/roots/production` calls the module, and it passes the topic id, the push
-# service account and the audience into this module as three strings.
-# `docs/decisions/g12j-the-rehearsal-has-no-google-provider.md`.
+# September 2026). Only production has a Google Cloud project, and since lane g85 only
+# `infra/roots/production-google` calls the module; `infra/roots/production` passes
+# the topic id, the push service account and the audience into this module as three
+# strings. `docs/decisions/g12j-the-rehearsal-has-no-google-provider.md` and
+# `docs/decisions/g85-the-google-provider-has-its-own-root.md`.

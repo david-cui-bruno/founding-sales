@@ -44,7 +44,28 @@
 // (`brokenRuns` below, and `broken run:` in the problem line), and like every broken
 // run it is a problem, so the nightly fails on it.
 
+// ## Wiring is not behaviour (lane g86, audit item T08)
+//
+// Some mutations break the release suite's own map rather than the product: a scenario
+// number in `test/release/support/scenarioMap.ts`, a script path, a step of a GitHub
+// workflow. They are worth running — a map that silently loses a scenario is a scenario
+// nobody runs — but a kill there proves the index is checked, not that a process
+// refuses what it should. So an entry may say `kind: 'wiring'`; one that says nothing is
+// `'behaviour'`. The counts and the closing line are unchanged; one line before it says
+// how many of the kills were each kind, so a total never reads as more behavioural
+// confidence than it holds. Any other `kind` is a malformed entry, reported like a
+// stale one.
+
 import { spawnSync } from 'node:child_process';
+
+/** The two kinds of mutation, and the one an entry without a `kind` is. */
+export const MUTATION_KINDS = Object.freeze(['behaviour', 'wiring']);
+export const DEFAULT_MUTATION_KIND = 'behaviour';
+
+/** An entry's kind: its own, or the default. Unknown values come back as they are. */
+export function mutationKind(mutation) {
+  return mutation.kind ?? DEFAULT_MUTATION_KIND;
+}
 
 /**
  * Appended to every suite invocation, the pristine run and the mutated runs alike, so
@@ -222,19 +243,22 @@ const INTERRUPTS = new Set(['SIGINT', 'SIGTERM', 'SIGHUP']);
 /**
  * Prove each mutation is killed by its suite.
  *
- *   mutations  — `{ name, file, find, replace, suite, because }[]`, `file` relative to the root;
+ *   mutations  — `{ name, file, find, replace, suite, because, kind? }[]`, `file` relative to the
+ *                root, `kind` `'behaviour'` (the default) or `'wiring'`;
  *   runSuite   — `suite => { verdict, reason, output, seconds, signal }`, `spawnSuite` in use;
  *   readFile / writeFile — relative path in, text in or out;
  *   log        — one line at a time;
  *   stopRequested — true once the process has been asked to stop.
  *
- * Returns `{ killed, problems, brokenRuns, interrupted }`. `brokenRuns` counts the
- * mutated runs that never executed a failing test (T01); each is also a problem. The
- * last line logged is always `N mutation(s) killed, M problem(s).`; CI and the
- * coordinator's records read it.
+ * Returns `{ killed, killedByKind, problems, brokenRuns, interrupted }`. `brokenRuns`
+ * counts the mutated runs that never executed a failing test (T01); each is also a
+ * problem. `killedByKind` splits `killed` into `behaviour` and `wiring` (T08) and always
+ * sums to it. The last line logged is always `N mutation(s) killed, M problem(s).`; CI
+ * and the coordinator's records read it.
  */
 export async function runMutationCheck({ mutations, runSuite, readFile, writeFile, log, stopRequested = () => false }) {
   let killed = 0;
+  const killedByKind = { behaviour: 0, wiring: 0 };
   let problems = 0;
   let brokenRuns = 0;
   let interrupted = false;
@@ -254,6 +278,12 @@ export async function runMutationCheck({ mutations, runSuite, readFile, writeFil
   // 1. Every mutation's text, before anything runs or is written.
   const ready = [];
   for (const mutation of mutations) {
+    if (!MUTATION_KINDS.includes(mutationKind(mutation))) {
+      problem(
+        `MUTATION_STALE ${mutation.name}: its kind is ${JSON.stringify(mutation.kind)}, and a mutation is ${MUTATION_KINDS.map(kind => `'${kind}'`).join(' or ')}`,
+      );
+      continue;
+    }
     const occurrences = readFile(mutation.file).split(mutation.find).length - 1;
     if (occurrences !== 1) {
       problem(
@@ -307,7 +337,8 @@ export async function runMutationCheck({ mutations, runSuite, readFile, writeFil
     }
     if (run.verdict === 'red') {
       killed += 1;
-      log(`killed (${seconds(run)}): ${mutation.name}`);
+      killedByKind[mutationKind(mutation)] += 1;
+      log(`killed (${seconds(run)}): ${mutationKind(mutation) === 'wiring' ? '[wiring] ' : ''}${mutation.name}`);
     } else if (run.verdict === 'green') {
       problem(
         `MUTATION_SURVIVED ${mutation.name}`,
@@ -340,6 +371,10 @@ export async function runMutationCheck({ mutations, runSuite, readFile, writeFil
   if (brokenRuns > 0) {
     log(`\n${String(brokenRuns)} broken run(s): a mutated suite that never executed a failing test is never a kill.`);
   }
+  log(
+    `\nOf the kills, ${String(killedByKind.behaviour)} broke product or release behaviour and ` +
+      `${String(killedByKind.wiring)} only the suite's wiring (the scenario map, script paths, workflow text).`,
+  );
   log(`\n${String(killed)} mutation(s) killed, ${String(problems)} problem(s).`);
-  return { killed, problems, brokenRuns, interrupted };
+  return { killed, killedByKind, problems, brokenRuns, interrupted };
 }

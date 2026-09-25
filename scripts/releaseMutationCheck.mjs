@@ -2129,6 +2129,136 @@ const MUTATIONS = [
     because:
       'Audit item G08: the sending slice’s reference is null or a trimmed non-empty string (sendingEnabledSettingSchema), and an empty box is null. founderGaps.test.ts round-trips every slice through its typed controls and has to go red.',
   },
+  {
+    name: 'the API runs a route on a task whose own readiness check fails',
+    file: 'apps/api/src/server.ts',
+    find: '    const admission = await gate.admit(path, connection.session);\n',
+    replace: '    const admission = { admitted: true } as { admitted: true } | { admitted: false; reason: string };\n',
+    suite: ['run', 'test', '--workspace', 'apps/api', '--', 'test/readinessGate.test.ts'],
+    because:
+      'Audit S14: the load balancer takes tens of seconds to drain a task whose /readyz fails, and until lane g86 every route ran meanwhile, including on a restored database whose generation is not the pinned one. readinessGate.test.ts starts a real server against such a database and requires 503 not_ready on /firms and on an admin command; with the gate bypassed they answer 404 and 401 and the suite has to go red.',
+  },
+  {
+    name: 'the readiness gate asks the database on every request',
+    file: 'apps/api/src/bootstrap/readinessGate.ts',
+    find: '    return age >= 0 && age < ttl ? verdict : null;\n',
+    replace: '    return age < 0 ? verdict : null;\n',
+    suite: ['run', 'test', '--workspace', 'apps/api', '--', 'test/readinessGate.test.ts'],
+    because:
+      'Lane g86: the gate must not add a database round trip per request. The verdict is kept for five seconds; readinessGate.test.ts counts the checks a fake clock allows and the checks a real server makes for five requests, and with the cache gone both count more than one.',
+  },
+  {
+    name: 'the readiness gate caches a busy pool as a refusal',
+    file: 'apps/api/src/bootstrap/readinessGate.ts',
+    find: "        if (report.reason === 'database_busy') {\n",
+    replace: "        if (report.reason === ('never' as string)) {\n",
+    suite: ['run', 'test', '--workspace', 'apps/api', '--', 'test/readinessGate.test.ts'],
+    because:
+      'Lane g86: a check that could not get a connection proves nothing about the schema or the generation. Cached, it would refuse every request for five seconds after the pool freed up. readinessGate.test.ts requires DatabaseBusyError and a fresh check on the very next request.',
+  },
+  {
+    name: 'an outdated Mac is refused the client-version notice while the task is not ready',
+    file: 'apps/api/src/bootstrap/readinessGate.ts',
+    find: "  '/auth/client-version',\n]);\n",
+    replace: ']);\n',
+    suite: ['run', 'test', '--workspace', 'apps/api', '--', 'test/readinessGate.test.ts'],
+    because:
+      '5.3: the upgrade instruction is what an outdated client may always read. readinessGate.test.ts requires the four exempt paths by name, and requires /auth/client-version to answer 200 from a task that refuses every route.',
+  },
+  {
+    name: 'a production API publishes the placeholder upgrade address when none is set',
+    file: 'apps/api/src/bootstrap/deployment.ts',
+    find: '    if (production) {\n      throw new DeploymentConfigError(\'MISSING\', `${name} is not set, and a production API does not publish the placeholder`);\n',
+    replace: '    if (production && raw === \'never\') {\n      throw new DeploymentConfigError(\'MISSING\', `${name} is not set, and a production API does not publish the placeholder`);\n',
+    suite: ['run', 'test', '--workspace', 'apps/api', '--', 'test/deployment.test.ts'],
+    because:
+      'Lane g86: every API published https://callie.example/downloads/mac, production included. A production process does not reach a fallback by omission, and deployment.test.ts requires a live production deployment without FSS_DESKTOP_UPGRADE_URL to be refused MISSING.',
+  },
+  {
+    name: 'the worker is handed the upgrade address too',
+    file: 'infra/modules/stack/main.tf',
+    find: '  worker_environment = {\n    FSS_RESEARCH_PROVIDERS = var.research_providers\n  }\n',
+    replace:
+      '  worker_environment = {\n    FSS_RESEARCH_PROVIDERS = var.research_providers\n    FSS_DESKTOP_UPGRADE_URL = var.desktop_upgrade_url\n  }\n',
+    suite: ['run', 'test:release', '--', 'test/release/upgradeUrl.check.ts'],
+    because:
+      'Lane g86: the upgrade notice is the API’s alone, and a variable a process never reads is a variable that drifts. upgradeUrl.check.ts reads the worker block of infra/modules/stack and requires it not to name FSS_DESKTOP_UPGRADE_URL.',
+  },
+  {
+    name: 'the production upgrade address stops pointing at the manifest the desktop reads',
+    file: 'infra/roots/production/variables.tf',
+    find: '  default     = "https://dlcmdaeskewt5.cloudfront.net/releases/darwin-arm64/latest.json"\n',
+    replace: '  default     = "https://dlcmdaeskewt5.cloudfront.net/downloads/mac"\n',
+    suite: ['run', 'test:release', '--', 'test/release/upgradeUrl.check.ts'],
+    because:
+      'Lane g86: the address production publishes is the signed manifest at CHANNEL_MANIFEST_PATH, releases/darwin-arm64/latest.json. upgradeUrl.check.ts compares the root default with the desktop constant, so a default at any other path has to go red.',
+  },
+  {
+    name: 'the critical job-age alarm waits five minutes past its threshold again',
+    file: 'infra/modules/alerts/main.tf',
+    find:
+      '      threshold           = var.oldest_job_age_critical_seconds\n      period              = 60\n      evaluation_periods  = 1\n      datapoints_to_alarm = 1\n',
+    replace:
+      '      threshold           = var.oldest_job_age_critical_seconds\n      period              = 60\n      evaluation_periods  = 5\n      datapoints_to_alarm = 5\n',
+    suite: ['run', 'test:release', '--', 'test/release/jobAgeAlarm.check.ts'],
+    because:
+      'Audit O18: 13.3 says fifteen minutes is critical, and five of five one-minute breaches fired at about twenty. The age only grows while a job waits, so one breach is the target. jobAgeAlarm.check.ts requires one of one and has to go red.',
+  },
+  {
+    name: 'the update channel offers a build to a macOS below its minimum again',
+    file: 'apps/desktop/src/main/updateChannel.ts',
+    find: "  if (compareVersions(manifest.minimumSystemVersion, system) > 0) return { kind: 'refused', reason: 'update_system_too_old' };\n",
+    replace: '',
+    suite: ['run', 'test', '--workspace', 'apps/desktop', '--', 'test/packaging/updateChannel.test.ts'],
+    because:
+      'Audit N07: the signed manifest carried minimumSystemVersion and nothing read it, so a Mac below it was handed a bundle that cannot start. updateChannel.test.ts signs a manifest asking for 15.5.0 and requires a 15.4.1 Mac to be refused update_system_too_old.',
+  },
+  {
+    name: 'the keychain error goes back to a constructor parameter property',
+    file: 'apps/desktop/src/main/keychain.ts',
+    find:
+      "  readonly reason: 'unavailable' | 'write_failed' | 'remove_failed';\n\n  constructor(reason: 'unavailable' | 'write_failed' | 'remove_failed') {\n    super(`keychain_${reason}`);\n    this.reason = reason;\n",
+    replace: "  constructor(readonly reason: 'unavailable' | 'write_failed' | 'remove_failed') {\n    super(`keychain_${reason}`);\n",
+    suite: ['run', 'test', '--workspace', 'apps/desktop', '--', 'test/packaging/stripOnly.test.ts'],
+    because:
+      'The package step runs main-process files under Node’s strip-only TypeScript, which refuses a parameter property, and vitest compiles it happily, so nothing but a Mac noticed. stripOnly.test.ts runs Node’s own stripper over every file the step can reach and has to go red.',
+  },
+  {
+    name: 'the mutation runner counts a wiring kill as a behaviour kill again',
+    file: 'scripts/releaseMutationRunner.mjs',
+    find: '      killedByKind[mutationKind(mutation)] += 1;\n',
+    replace: '      killedByKind.behaviour += 1;\n',
+    suite: ['run', 'test:release', '--', 'test/release/mutationRunner.check.ts'],
+    because:
+      'Audit T08: a kill of the scenario map, a script path or workflow text proves the index is checked, not that a process refuses anything, and reporting it as behaviour inflates the confidence the total reads as. mutationRunner.check.ts kills one of each kind and requires the split to say one and one.',
+  },
+  {
+    name: 'the promotion lets buildx wrap a bare manifest in a new index again',
+    file: 'infra/scripts/release-promote.sh',
+    find: '  promote_docker buildx imagetools create --tag "$destination_uri:$TAG" --prefer-index=false "$source_uri@$digest" >/dev/null\n',
+    replace: '  promote_docker buildx imagetools create --tag "$destination_uri:$TAG" "$source_uri@$digest" >/dev/null\n',
+    suite: ['run', 'test:release', '--', 'test/release/releaseManifest.check.ts'],
+    because:
+      'Lane g86: the images workflow pushes a bare OCI manifest, and imagetools create wraps a single bare source in a new index unless told --prefer-index=false, so the tag named another digest and the promotion of e220f468 was refused on 25 September. releaseManifest.check.ts runs the copy against a stub that wraps exactly as buildx does and requires a plain copy with nothing tagged in place.',
+  },
+  {
+    name: 'the promotion leaves the image a wrapping copy pushed untagged',
+    file: 'infra/scripts/release-promote.sh',
+    find: '    tagged="$(tag_in_place "$destination_repository" "$digest" "$media_type")"\n    rehearsal_log "$destination_repository:$tagged = $digest, the digest that passed ($TAG names the wrapper)"\n',
+    replace: '    tagged=$TAG\n    rehearsal_log "$destination_repository:$tagged = $digest, the digest that passed ($TAG names the wrapper)"\n',
+    suite: ['run', 'test:release', '--', 'test/release/releaseManifest.check.ts'],
+    because:
+      'Lane g86: after a wrapping copy the image itself is in production with no tag, and the lifecycle policy expires untagged images while a running task definition still names that digest. releaseManifest.check.ts requires the image to be tagged in place, by its own manifest and --image-digest, and read back.',
+  },
+  {
+    name: 'an untagged image already in production is taken for a finished copy',
+    file: 'infra/scripts/release-promote.sh',
+    find: '    held="$(tag_of_digest "$destination_repository" "$digest")"\n    if [ -n "$held" ]; then\n',
+    replace: '    held="$(tag_of_digest "$destination_repository" "$digest")"\n    if true; then\n',
+    suite: ['run', 'test:release', '--', 'test/release/releaseManifest.check.ts'],
+    because:
+      'Lane g86: the refused promotion of e220f468 left the API image in fss-prod-api untagged beside the wrapper, and a promotion that stops at "already present" would leave it to expire. releaseManifest.check.ts starts from that state and requires it tagged in place.',
+  },
 ];
 
 // A listener on each of these keeps Node from exiting mid-mutation with a file still

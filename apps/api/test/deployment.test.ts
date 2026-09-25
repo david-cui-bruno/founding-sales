@@ -10,7 +10,9 @@ import {
   googleOidcPushTokenVerifier,
   readApiDeployment,
   readSigningKey,
+  readUpgradeUrl,
 } from '../src/bootstrap/deployment.ts';
+import { DEFAULT_UPGRADE_URL } from '../src/routes/types.ts';
 import { JournalConfigurationError } from '../src/journal/index.ts';
 
 /**
@@ -46,6 +48,7 @@ function liveEnvironment(overrides: Record<string, string | undefined> = {}): Re
     [V.pushAudience]: 'https://api.example.test/integrations/gmail/push',
     [V.pushServiceAccount]: 'fss-prod-gmail-push@example.iam.gserviceaccount.test',
     [V.sendingEnabled]: 'false',
+    [V.upgradeUrl]: 'https://updates.example.test/releases/darwin-arm64/latest.json',
     [V.sessionSigningKey]: randomBytes(48).toString('base64'),
     // The shape after G12b: the two public identifiers arrive in the task
     // environment and each secret carries only its own client id and secret.
@@ -450,7 +453,10 @@ describe('the startup line', () => {
     expect(described).not.toContain(signInSecret);
     // Not the client id either: the line names parts, not values.
     expect(described).not.toContain('signin.apps.googleusercontent.test');
+    // Nor the upgrade address, which is public: its source is enough.
+    expect(described).not.toContain('updates.example.test');
     expect(JSON.parse(described)).toMatchObject({
+      upgrade_notice_source: 'environment',
       dependencies: 'live',
       gmail_client: 'https',
       envelope_key: 'kms',
@@ -465,5 +471,56 @@ describe('the startup line', () => {
       push_topic_source: 'environment',
       hosted_domain_source: 'environment',
     });
+  });
+});
+
+/**
+ * Lane g86: what `/auth/client-version` publishes as `upgradeUrl`.
+ *
+ * The trap is a reader that returns the placeholder whatever it is given, which every
+ * "outside production" case would pass. So the first case requires the configured value
+ * to come back, and the production cases require a refusal where the placeholder would
+ * otherwise have been published.
+ */
+describe('the upgrade notice address', () => {
+  const MANIFEST = 'https://updates.example.test/releases/darwin-arm64/latest.json';
+
+  it('publishes what the task environment says, and says where it came from', async () => {
+    expect(readUpgradeUrl({ [V.upgradeUrl]: ` ${MANIFEST} ` })).toEqual({ value: MANIFEST, source: 'environment' });
+    const deployment = await readApiDeployment(liveEnvironment(), { loadKms, putObject });
+    expect(deployment.upgradeUrl).toBe(MANIFEST);
+    expect(deployment.upgradeUrlSource).toBe('environment');
+  });
+
+  it('keeps the placeholder outside production, where nothing sets it', async () => {
+    expect(readUpgradeUrl({})).toEqual({ value: DEFAULT_UPGRADE_URL, source: 'placeholder' });
+    expect(readUpgradeUrl({ [V.environmentName]: 'rehearsal', [V.upgradeUrl]: '  ' })).toEqual({
+      value: DEFAULT_UPGRADE_URL,
+      source: 'placeholder',
+    });
+    const laptop = await readApiDeployment({});
+    expect(laptop.upgradeUrl).toBe(DEFAULT_UPGRADE_URL);
+    expect(describeDeployment(laptop)).toMatchObject({ upgrade_notice_source: 'placeholder' });
+  });
+
+  it('refuses to start in production without one, or with the placeholder', async () => {
+    await expect(
+      readApiDeployment(liveEnvironment({ [V.upgradeUrl]: undefined }), { loadKms, putObject }),
+    ).rejects.toMatchObject({ code: 'MISSING' });
+    expect(() => readUpgradeUrl({ [V.environmentName]: 'production', [V.upgradeUrl]: DEFAULT_UPGRADE_URL })).toThrow(
+      DeploymentConfigError,
+    );
+  });
+
+  it('refuses an address that is not plain https, anywhere', () => {
+    for (const bad of [
+      'not a url',
+      'http://updates.example.test/releases/darwin-arm64/latest.json',
+      `${MANIFEST}?X-Amz-Signature=abc`,
+      `${MANIFEST}#fragment`,
+      'https://someone:pw@updates.example.test/latest.json',
+    ]) {
+      expect(() => readUpgradeUrl({ [V.upgradeUrl]: bad }), bad).toThrow(DeploymentConfigError);
+    }
   });
 });

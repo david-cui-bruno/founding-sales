@@ -38,7 +38,11 @@ export interface RoutingOptions {
   readonly sendingEnabled: boolean;
   /** Absent in the health-only skeleton; present once identity is configured. */
   readonly auth?: AuthDeps;
-  /** Where a person is told to get the current build. A public URL. */
+  /**
+   * What `/auth/client-version` publishes as `upgradeUrl`: in production the signed
+   * update manifest the desktop reads (`FSS_DESKTOP_UPGRADE_URL`, lane g86), elsewhere
+   * `DEFAULT_UPGRADE_URL`. Machine-facing; the Mac shows a sentence, never this.
+   */
   readonly upgradeUrl: string;
   /**
    * The object-locked journal every suppression is written to before its row
@@ -80,4 +84,8 @@ export interface MailRoutingDeps extends MailGrantDeps {
   readonly pushVerifier: PushTokenVerifier;
 }
 
+/**
+ * The placeholder a laptop, a route test and a rehearsal publish. A production API
+ * refuses to start rather than publish it (`readUpgradeUrl` in `bootstrap/deployment.ts`).
+ */
 export const DEFAULT_UPGRADE_URL = 'https://callie.example/downloads/mac';

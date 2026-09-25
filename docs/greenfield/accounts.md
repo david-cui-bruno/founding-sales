@@ -47,7 +47,9 @@ that true.
 
 **Each root belongs to exactly one account.** `infra/roots/rehearsal` and
 `infra/roots/rehearsal-registry` run only in the rehearsal account;
-`infra/roots/production` runs only in the production account. That is why each root's
+`infra/roots/production` and `infra/roots/production-google` (lane g85: the Gmail push
+objects, with its state in production's bucket under a key of its own) run only in the
+production account. That is why each root's
 `backend.hcl` can be that account's backend file rather than a switch between several.
 
 ---
@@ -192,6 +194,7 @@ One commit in the repository. In each file, three values change and nothing else
 | `infra/roots/rehearsal/backend.hcl` | rehearsal |
 | `infra/roots/rehearsal-registry/backend.hcl` | rehearsal |
 | `infra/roots/production/backend.hcl` | production |
+| `infra/roots/production-google/backend.hcl` | production (the Google project does not move) |
 
 ```
 bucket         = "callie-tfstate-<that account id>"

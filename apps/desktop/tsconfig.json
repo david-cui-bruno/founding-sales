@@ -2,6 +2,10 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "baseUrl": ".",
+    // Lane g86: the package step runs main-process files under Node's strip-only
+    // TypeScript, which refuses syntax that has to be compiled (parameter properties,
+    // enums, namespaces). `test/packaging/stripOnly.test.ts` runs Node's own stripper too.
+    "erasableSyntaxOnly": true,
     // The renderer runs in a browser, so the DOM types are in scope alongside Node's.
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "paths": {

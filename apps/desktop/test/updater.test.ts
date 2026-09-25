@@ -102,6 +102,38 @@ describe('startUpdateWatch', () => {
     }
   });
 
+  it('hands the check this Mac’s macOS version, and none outside Electron (lane g86)', async () => {
+    const seen: string[] = [];
+    const told = startUpdateWatch({
+      currentVersion: '1.0.5',
+      systemVersion: '15.4.1',
+      channelBaseUrl: CHANNEL,
+      publicKey: 'compiled-in',
+      blocked: async () => await Promise.resolve(false),
+      check: async input => {
+        seen.push(input.systemVersion);
+        return await Promise.resolve({ kind: 'up_to_date' } as const);
+      },
+    });
+    await told.launch;
+    told.stop();
+    // Plain Node has no `process.getSystemVersion`: the empty string, which the channel
+    // refuses as unreadable, never a guess that the Mac is new enough.
+    const defaulted = startUpdateWatch({
+      currentVersion: '1.0.5',
+      channelBaseUrl: CHANNEL,
+      publicKey: 'compiled-in',
+      blocked: async () => await Promise.resolve(false),
+      check: async input => {
+        seen.push(input.systemVersion);
+        return await Promise.resolve({ kind: 'up_to_date' } as const);
+      },
+    });
+    await defaulted.launch;
+    defaulted.stop();
+    expect(seen).toEqual(['15.4.1', '']);
+  });
+
   it('keeps the periodic check', async () => {
     const checks: string[] = [];
     const watch = watching(25, checks);
@@ -235,6 +267,7 @@ describe('the real ports', () => {
     const updaterAt = (currentVersion: string, decision: UpdateDecision): ReturnType<typeof createUpdater> =>
       createUpdater({
         currentVersion,
+        systemVersion: '15.4.1',
         channelBaseUrl: CHANNEL,
         publicKey: 'compiled-in',
         host: { updateDirectory: updates, executablePath: exe, files: nodeUpdateFiles(), run: createFakeTools(store).run, now: () => new Date() },

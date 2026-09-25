@@ -14,9 +14,9 @@ Read section 1 before doing anything in section 3. Two steps in it take days of 
 
 | Step | Who | Why it cannot be the other one |
 |---|---|---|
-| Build the images | CI (`greenfield-images.yml`) | Reproducible, and it proves the production dependency set loads. |
-| **Push the images to ECR** | **David** | No AWS credential exists in this repository and none is wanted. `--push` prints the digest; that digest is the release's identity. |
-| **Apply the rehearsal registry — once, ever, before the first push** | **CI (`greenfield-rehearsal-registry.yml`), dispatched by David twice: plan, then apply** | Same reason as the row below: `fss-rh-deploy` is assumable only from the `rehearsal` environment. `infra-apply-runbook.md` 2.1. |
+| Build, push and verify the images | CI (`greenfield-images.yml`, its `publish` job on a push to main that changes an image input) | One build per commit, pushed to `fss-rh-api` and `fss-rh-worker` as `ci-<commit>`, pulled back by digest and verified, with the digests published as `fss-image-digests`. That digest is the release's identity (8.0al). |
+| **Promote the images to production** | **David, with the admin profile** | `infra/scripts/release-promote.sh` copies the two digests from `fss-rh-*` to `fss-prod-*` and reads production back. No CI job holds a production credential (8.0al). |
+| **Apply the rehearsal registry — once, ever** (done) | **CI (`greenfield-rehearsal-registry.yml`), dispatched by David twice: plan, then apply** | Same reason as the row below: `fss-rh-deploy` is assumable only from the `rehearsal` environment. `infra-apply-runbook.md` 2.1. |
 | Run the rehearsal | CI (`greenfield-release.yml`) | It needs the `fss-rh-deploy` role, which only the OIDC provider may assume, and it must tear the environment down even when a step fails. |
 | Write the release record | CI, last | So a record can only exist for a run that finished. |
 | Apply production Terraform | David | A plan should be read by a person before it is applied. |
@@ -148,7 +148,7 @@ They are **different clients**. 5.1 keeps sign-in (`openid email profile`) and t
 
 | Environment variable | Where the value comes from |
 |---|---|
-| `FSS_GMAIL_PUSH_TOPIC` | the production root's `module.pubsub` topic, the same string `terraform output gmail_push_topic_id` prints |
+| `FSS_GMAIL_PUSH_TOPIC` | the production root's `gmail_push_topic` variable, whose default is the topic `infra/roots/production-google` owns (8.0ar); `terraform output gmail_push_topic_id` prints it |
 | `FSS_GOOGLE_HOSTED_DOMAIN` | the `google_hosted_domain` root variable, `usecallie.com` |
 
 You set neither by hand; the apply does. The bootstraps still read `push_topic` and `hosted_domain` out of the secret JSON **if the environment does not carry them**, so a deployment written against the older shape still starts — for one release. `docs/decisions/g12b-two-public-identifiers-move-out-of-the-secret.md` says when that fallback goes and what has to be true first. The startup line reports which source each came from (`push_topic_source`, `hosted_domain_source`), so you can confirm the move landed without reading a task definition.
@@ -157,7 +157,7 @@ When neither source has one, the process refuses to start and names **both** pla
 
 ### 1.7 Google application-default credentials, on your Mac
 
-`infra/roots/production` is the only root that declares `provider "google"`, and Terraform configures every provider a configuration requires before it evaluates anything. So a **production** plan or apply needs a working Google credential even when `enable_gmail_push` is false, and without one it stops at provider configuration with "Attempted to load application default credentials … No credentials loaded."
+`infra/roots/production-google` is the only root that declares `provider "google"` (lane g85, 8.0ar). It holds the Gmail push objects and is planned only when one of them changes, and Terraform configures every provider a configuration requires before it evaluates anything, so a plan of it needs a working Google credential and without one stops at provider configuration with "Attempted to load application default credentials … No credentials loaded." A **production** plan needs none once the one-time migration (`docs/greenfield/google-root-migration-runbook.md`) has taken the four push objects out of the production state; until then it still does.
 
 Once per machine, as the account that administers `callie-fss`:
 
@@ -172,9 +172,9 @@ Nothing in the **rehearsal** needs this. The rehearsal root declares no Google p
 
 ---
 
-## 2. Build and push the images — David, from his Mac
+## 2. The images — CI publishes them, David promotes them
 
-CI never pushes. `greenfield-images.yml` builds both `linux/arm64` images on every relevant change and prints their digests; what it cannot do is put them in ECR.
+Nothing is built on a Mac. CI builds, pushes and verifies both `linux/arm64` images, and production receives a copy of those exact digests (8.0al).
 
 ### 2.0 The order, and why the desktop build is last
 
@@ -188,7 +188,7 @@ The desktop commit stamp **is that value**. It is not something a build produces
 
 | # | Step | Who | Why it is here and not earlier |
 |---|---|---|---|
-| 1 | Fix the release commit; push both images tagged with it (2.1 below) | David | The digests are the release's identity. |
+| 1 | Fix the release commit; take the two digests CI published for it (2.1 below) | CI publishes, David reads | The digests are the release's identity. |
 | 2 | Run the rehearsal with `desktop_commit_stamp` = the release commit (section 3) | CI | The record can name the commit before any Mac build exists, because the stamp is the commit. |
 | 3 | Apply production Terraform (section 4) | David | This is what creates the CloudFront distribution the Mac updates from. |
 | 4 | Set the repository variable `FSS_UPDATE_CHANNEL_URL` to `terraform output -raw` of `updates_distribution_domain_name`, as `https://<host>/` | David | It does not exist until step 3, and GitHub will not hold an empty variable. |
@@ -212,35 +212,18 @@ Until 8.0aj the maximum was the exact latest desktop, so every desktop release n
 
 ### 2.1 The images
 
-From a checkout of the **exact commit** you intend to release:
+1. **The digests come from CI.** Every push to main that changes an image input runs *Greenfield images*. Its `publish` job pushes `fss-rh-api:ci-<commit>` and `fss-rh-worker:ci-<commit>`, pulls both back by digest, runs `infra/scripts/release-images.sh verify` on what it pulled, and uploads the artifact `fss-image-digests` (`image-digests.json`, `fss.image-digests.v1`). A commit that changed no image input has the images of the last one that did; `release-images.sh pin <commit>` finds them, and the weekly rehearsal pins that way. The digests (`sha256:` and 64 hex characters), not the tags, are what everything downstream compares: `infra/modules/cluster` and `rehearsal-release-record.sh` both refuse a mutable tag.
+2. **The rehearsal deploys those digests** from `fss-rh-api` and `fss-rh-worker`, the two stable repositories `infra/roots/rehearsal-registry` owns. Dispatch it with the two digests (section 3).
+3. **Production gets a copy, never a rebuild.** With the admin profile, from a checkout of main:
 
-```bash
-export REGION=us-east-1 ACCOUNT=326255650484 GIT_SHA=$(git rev-parse HEAD)
-aws ecr get-login-password --region "$REGION" \
-  | docker login --username AWS --password-stdin "$ACCOUNT.dkr.ecr.$REGION.amazonaws.com"
+   ```bash
+   # After a green full rehearsal: its fss-release-manifest artifact.
+   infra/scripts/release-promote.sh release-manifest.json
+   # An app-only release, the one class the cadence lets skip the rehearsal: CI's digests.
+   infra/scripts/release-promote.sh image-digests.json --app-only
+   ```
 
-docker buildx build --platform linux/arm64 --file Dockerfile.api \
-  --build-arg "GIT_REVISION=$GIT_SHA" \
-  --tag "$ACCOUNT.dkr.ecr.$REGION.amazonaws.com/fss-prod-api:$GIT_SHA" --push .
-docker buildx build --platform linux/arm64 --file Dockerfile.worker \
-  --build-arg "GIT_REVISION=$GIT_SHA" \
-  --tag "$ACCOUNT.dkr.ecr.$REGION.amazonaws.com/fss-prod-worker:$GIT_SHA" --push .
-```
-
-`--push` prints the manifest digest for each. **Write both down.** They look like `sha256:` followed by 64 hex characters, and they — not the tags — are what everything downstream compares. `infra/modules/cluster` refuses a mutable tag by variable validation, and `rehearsal-release-record.sh` refuses one too.
-
-Push the same digests to the rehearsal repositories so the rehearsal deploys the exact artefacts production will:
-
-```bash
-docker tag "$ACCOUNT.dkr.ecr.$REGION.amazonaws.com/fss-prod-api:$GIT_SHA" \
-           "$ACCOUNT.dkr.ecr.$REGION.amazonaws.com/fss-rh-api:$GIT_SHA"
-docker push "$ACCOUNT.dkr.ecr.$REGION.amazonaws.com/fss-rh-api:$GIT_SHA"
-# ... and the worker.
-```
-
-**Before the first release only:** those two repositories do not exist until the registry root has been applied, and that apply is not a command — `fss-rh-deploy` is assumable only from the `rehearsal` environment. Run Actions → **Greenfield rehearsal registry apply** with `apply` unticked, read the plan in the summary, then run it again with `apply` ticked. `infra-apply-runbook.md` 2.1 has the detail. Every later release skips this: it happens once, ever.
-
-`fss-rh-api` and `fss-rh-worker` are **stable** repositories with no run in their names. They belong to `infra/roots/rehearsal-registry`, which is applied once (`infra-apply-runbook.md` 2.1) and never torn down; the per-run rehearsal root creates no repository at all. That is forced by this very step: you are pushing before the run exists, and the workflow's two repository secrets hold one value each. The rehearsal root refuses an image that does not come from those two repositories — `fss-rh-deploy` cannot read a production repository, so a plan-time refusal is better than an authorization error five minutes into a deployment.
+   Each digest is copied from `fss-rh-*` to `fss-prod-*` with `docker buildx imagetools create --prefer-index=false`, a carbon copy of CI's bare manifest, and the tag is read back. If the tag names anything else, the image itself must be in production, and it is tagged there by its own manifest (`<tag>-image` when the release's tag is taken) and read back again. A digest production already holds under a tag is not copied again; one it holds untagged is tagged in place. A tag that already names another image is never overwritten. `docs/decisions/g86-the-promotion-copies-a-bare-manifest-as-itself.md`.
 
 The **desktop commit stamp** is the release commit from 2.0 — the same `git rev-parse HEAD` you have been using — and the release record names it. You do not wait for a Mac build to learn it.
 
@@ -251,7 +234,7 @@ The **desktop commit stamp** is the release commit from 2.0 — the same `git re
 Actions → *Greenfield release rehearsal* → Run workflow, with:
 
 - `stage` — how far this run goes: `plan` (the default), `create`, `deploy`, `full`, or `teardown`. Only `full` is the release gate; read 3.0 before choosing anything else.
-- `api_image_digest` — from the push above;
+- `api_image_digest` — from CI's `fss-image-digests` for the release commit (2.1);
 - `worker_image_digest` — likewise;
 - `desktop_commit_stamp`;
 - `run_suffix` — optional, except for `teardown`; the prefix becomes `fss-rh-<suffix>`, or `fss-rh-<UTC timestamp>`.
@@ -565,7 +548,7 @@ and pass them as `api_schema_range` and `worker_schema_range`. A task definition
 | Root variable | Production value | Why it is here |
 |---|---|---|
 | `google_hosted_domain` | `usecallie.com` (the default) | 5.1 and 12.1. A public identifier, so it belongs in a plan an operator reads, not inside a secret. An empty one is refused by variable validation, because an empty `hd` restriction admits every Google account there is. |
-| `gcp_project_id` | `callie-fss` | The project that owns the Gmail push topic. |
+| `gmail_push_topic`, `gmail_push_service_account` | the defaults, which are production's topic and push identity | Public identifiers `infra/roots/production-google` outputs (8.0ar). The root validates both to the production names, and has no `gcp_project_id`. |
 | `alert_emails` | `["callie@usecallie.com"]` | Each address confirms once by hand (5.3 below). |
 
 **The deployment environment variables this release adds.** Both task definitions need them, and all five are Terraform's — there is nothing to type at apply time unless you are changing one:
@@ -575,7 +558,7 @@ and pass them as `api_schema_range` and `worker_schema_range`. A task definition
 | `FSS_DEPENDENCIES` | `live` | `dependencies_mode`, default `live` |
 | `FSS_RESEARCH_PROVIDERS` | `none` (worker only) | `research_providers`, default `none` |
 | `FSS_SENDING_ENABLED` | `false` until section 6 step 4 | `sending_enabled`, default `false` |
-| `FSS_GMAIL_PUSH_TOPIC` | the Pub/Sub topic id | none; derived from the production root's `module.pubsub` (G12j moved it out of the stack; the rehearsal passes a placeholder) |
+| `FSS_GMAIL_PUSH_TOPIC` | the Pub/Sub topic id | `gmail_push_topic`, whose default is production's (8.0ar; the rehearsal passes a placeholder) |
 | `FSS_GOOGLE_HOSTED_DOMAIN` | `usecallie.com` | `google_hosted_domain` |
 
 Until G12c none of the first three could be set at all: `extra_environment` existed on the stack module and no root exposed it, so an apply produced two services whose tasks exit at startup naming a variable no plan could set. `docs/decisions/g12c-the-deployment-flags-are-root-variables.md`.
@@ -619,6 +602,12 @@ infra/scripts/release-stop.sh infra/roots/production fss-prod --environment prod
 
 `release-stop.sh` asks for `--environment production` because it takes production down on purpose, the same extra word `release-bootstrap-workspace.sh` asks for, and it refuses a root that is not the prefix's, a cluster in another account, region or namespace, and a cluster tagged as the other environment. Run twice, it does nothing the second time. Plan before the stop and apply after it: the plan does not depend on the counts, and the outage starts at step 1, so keep steps 1 to 3 together. A first apply (`bootstrap=true`) needs no stop, because it creates both services at zero.
 
+**An app-only release is the rolling path** (8.0am): no stop, the apply, then `release-deploy.sh` without `--schema-change`:
+
+```
+terraform apply  →  worker count  →  API count  →  one wait  →  running-digest check
+```
+
 **You do not type the steps after the apply.** They are one script, and it is the same script CI runs for the rehearsal — the only differences are the root in argument one and the credentials in your shell:
 
 ```bash
@@ -638,7 +627,7 @@ FSS_REHEARSAL_DRY_RUN=1 FSS_REHEARSAL_REPORTS=/tmp/fss-plan \
   infra/scripts/release-stop.sh infra/roots/production fss-prod --environment production
 FSS_REHEARSAL_DRY_RUN=1 FSS_REHEARSAL_REPORTS=/tmp/fss-plan \
   infra/scripts/release-deploy.sh infra/roots/production fss-prod \
-    --schema-change --worker-digest "$WORKER_DIGEST"
+    --schema-change --api-digest "$API_DIGEST" --worker-digest "$WORKER_DIGEST"
 ```
 
 Why a script rather than four commands you can see:
@@ -647,7 +636,7 @@ Why a script rather than four commands you can see:
 - **Every launch is checked before it is made.** `infra/scripts/release-common.sh` refuses a bare cluster name, a wrong account, a wrong region, a cluster tagged as the other environment, a task definition whose image is not the digest this release is about, a network configuration that is not the root's own public subnets under the worker security group, and a task definition resolving a credential entry this release did not name. Afterwards it reads the `failures` array, refuses a task that never started, refuses a stopped task with no exit code (which is not a zero), prints `stopCode` and `stoppedReason`, waits out the log-stream race, and records the task ARN so a retry waits on the task that is already running rather than starting a second migration.
 - **The declared counts come from the plan.** The script scales the services to `terraform output deployment_plan`'s `declared_desired_count`, not to a number in a shell file that somebody has to keep in step with the root. Terraform sets a count only when it creates a service. After that both services ignore changes to `desired_count`, so an apply never moves one, and steps 5 and 6 of every deploy, rolling or schema, set the declared numbers explicitly.
 
-`--schema-change` is the flag that makes it refuse unless both services are already at desired, running and pending zero. It no longer stops them itself: by the time it runs, the apply has registered the new task definitions, and a stop there is the defect 8.0af records. The refusal names the `release-stop.sh` command to run. Leave the flag off for a release that moves no migration. That is the rolling path and it is unchanged: the apply replaces the task definitions and ECS rolls the running services on to them at their current counts, the migration task finds nothing to apply and says so, and steps 5 and 6 set the declared counts.
+`--schema-change` is the flag that makes it refuse unless both services are already at desired, running and pending zero. It no longer stops them itself: by the time it runs, the apply has registered the new task definitions, and a stop there is the defect 8.0af records. The refusal names the `release-stop.sh` command to run. Leave the flag off for a release that moves no migration: that is the rolling path. The apply replaces the two service task definitions and ECS rolls each service on to its new one at its current count. The script then launches no one-off task. It sets the worker's and then the API's declared count with `update-service --desired-count`, forcing no second deployment, waits once for both, and runs the running-digest check: each service has one deployment that did not fail, exactly its declared number of running tasks, every one on that deployment's task definition, and the release's digest in its container. A release that adds a migration but is deployed without `--schema-change` fails that check. Both `--api-digest` and `--worker-digest` are required on either path, and `bootstrap=true` without `--schema-change` is refused.
 
 `--release-record <release-record.json>` (lane g71) is optional. When given, after the final verify the script runs `fss admin release-record put` on the operations task and prints the stored record. Pass the file the green `full` rehearsal of these same digests wrote (section 3, step 15). Without it nothing about the deploy changes. Section 6 is where it matters: an enable of sending is refused unless its reference is a stored record naming the running API's digest.
 
@@ -3381,6 +3370,48 @@ Twelve mutations are appended to `scripts/releaseMutationCheck.mjs` (217 → 229
 - **Email routes still cannot become usable.** An email step to a contact whose only address is `candidate` will hold `route_candidate` once sending opens. A validator is the route policy's work and is owed before about 1 October.
 - Enrolment is from the Firm page only; Today has no enrol control.
 - The reply page's resolve is covered by the API, unit and Playwright tests, but not by a release check.
+### 8.0at What lane g86 changed: a task that is not ready serves nothing, the upgrade notice names the update channel, and a plan line nobody should skip is gone (25 September)
+
+**The items.** The tidy list after the 25 September audit fixes (`GPT6-ASTRA-EXHAUSTIVE-20260925.md`, `TRIAGE-20260925.md`):
+
+- **S14, the other half.** Since 8.0an the load balancer asks `/readyz`, but a request that reached a task whose readiness failed still ran its route.
+- **upgradeUrl.** `/auth/client-version` published `https://callie.example/downloads/mac` from production.
+- **The perpetual parameter-group diff** 8.0s left standing.
+- **Strip-only TypeScript.** `KeychainError` used a constructor parameter property, which Node's strip-only mode refuses and vitest compiles.
+- **N05, N07, O18, T08**, and **N06**, which needs a migration and is described below, not written.
+- **G12's prose.** Sections 0, 2.1 and 4.1 of this runbook, `processes.md`, `readiness.ts` and `infra-apply-runbook.md`'s rolling row still described the operator's image push, the old rolling path, the load balancer on `/healthz`, and secrets under their logical names. Lane g85's root split (8.0ar) left stale prose in `infra-apply-runbook.md` 1.3 and 1.3a, the 3.0 and 3.2 plans, 1.7 and section 4 here, `infra/README.md`, `accounts.md`, the stack's push-variable descriptions and `offline-gate.sh`'s Google check.
+
+**What changed.** Three decisions are recorded: `docs/decisions/g86-readiness-gates-every-request.md`, `g86-the-upgrade-notice-names-the-update-channel.md` and `g86-the-parameter-group-names-what-aws-holds.md`.
+
+- **Readiness gates every request.** `server.ts` asks `bootstrap/readinessGate.ts` before authentication. Not ready is **503 `not_ready`** (new in `REFUSAL_CODES`) with a `refusal` line naming the failed check. `/healthz`, `/readyz`, `/health` and `/auth/client-version` are exempt. The verdict is `/readyz`'s report, cached five seconds per process and shared by concurrent requests, so a request inside the window costs no database round trip. A busy pool caches nothing and answers `database_busy`. `api_readiness_changed` logs each change.
+- **The upgrade address.** `FSS_DESKTOP_UPGRADE_URL`, on the API task definition only, from the production root's new `desktop_upgrade_url`. Its default is the signed manifest, `https://dlcmdaeskewt5.cloudfront.net/releases/darwin-arm64/latest.json`, machine-facing, validated https-only with no placeholder. Unset outside production is the placeholder. Unset in production, or the placeholder, is a refusal to start. The desktop never showed the address and now has a test saying so.
+- **The parameter group** names `apply_method = "pending-reboot"` on `rds.force_ssl` and `log_autovacuum_min_duration`. That is what the saved production plan of 25 September shows AWS holding, and a method change alone is never registered.
+- **Strip-only.** `KeychainError` has an explicit field. `erasableSyntaxOnly` is on in the desktop and contracts `tsconfig.json`. `apps/desktop/test/packaging/stripOnly.test.ts` runs Node's own `stripTypeScriptTypes` over `packages/contracts/src`, `apps/desktop/src/main`, `src/shared` and `scripts`.
+- **N07.** `decideUpdate` checks the manifest's `minimumSystemVersion` against `process.getSystemVersion()`. A Mac below it is refused `update_system_too_old`, and an unreadable version is refused `update_system_version_unreadable`. An up-to-date Mac stays up to date.
+- **The promotion** (`release-promote.sh`). CI pushes a bare OCI manifest, and `imagetools create` wraps a single bare source in a new index by default, so the promotion of `e220f468` read back the wrapper's digest and was refused. The copy is `--prefer-index=false` now. If the read-back still differs, the image itself must be in production, and it is tagged there with `batch-get-image` and `put-image --image-digest`, then read back. An image in production with no tag, the child that refusal left behind, is tagged in place rather than taken as done. `docs/decisions/g86-the-promotion-copies-a-bare-manifest-as-itself.md`.
+- **O18.** Both job-age alarms fire on the first one-minute maximum above 300 s and 900 s, one of one instead of five of five, which fired at about ten and twenty minutes. The age only grows while a job waits. The labels say the threshold and the delay.
+- **T08.** An entry may say `kind: 'wiring'` (default `'behaviour'`). The runner prints the split before its unchanged closing line and returns `killedByKind`. The 18 entries that edit the scenario map or workflow text are tagged.
+- **N05.** The dashboard prose no longer calls live sources "not in this build". The unwired fallback says "not wired".
+
+**N06, not fixed: migration 0018.** `template_versions_no_unsubscribe_link` (0009), `outbound_messages_no_unsubscribe_link` (0010) and `sequence_steps_no_unsubscribe_link` (0012) refuse the *word*, so "reply unsubscribe" is refused as a link. A constraint cannot be edited in place. The fix is a migration 0018 that drops and re-adds all three with a link-shaped pattern: `unsubscrib` inside an `http(s)://` or `www.` token, or in the text of a Markdown or HTML link. It is looser, so existing rows pass without `NOT VALID`. `sequenceView.ts`'s check, `templates.ts`'s prose and the editor's sentence change in the same release, which is a `{18,18}` stop-migrate-start release. The renderer still mirrors the constraint as it stands: relaxing it first would offer an approval the server refuses.
+
+**Release class and the production plan.** API, desktop, infrastructure, a release script (`release-promote.sh`) and the mutation runner. Infrastructure means a full rehearsal before production relies on it. The production plan changes in three places:
+
+1. The recurring in-place update of `aws_db_parameter_group.main` disappears.
+2. `fss-prod-api`'s task definition is replaced, gaining `FSS_DESKTOP_UPGRADE_URL`, and the API service is updated in place.
+3. `fss-prod-oldest-runnable-job-warning` and `-critical` are updated in place: periods and datapoints to 1, and new descriptions.
+
+No other resource changes. The new API image refuses to start in production without the variable, so it is deployed with this commit's root, as every release is: the apply that registers the task definition carries it. The desktop change needs no API.
+
+Fourteen mutations are appended to `scripts/releaseMutationCheck.mjs` (main + 14: 217 → 231 at the rebase onto PR 226). Each was run through the runner against its own suite and killed by a failing test.
+
+**Still unverified.**
+
+- `terraform test` for the changed roots and modules (CI's `greenfield-infra.yml`). Locally only `fmt -check` and `validate` after an offline `init -backend=false`.
+- That `dlcmdaeskewt5.cloudfront.net` is production's updates distribution. The value is the coordinator's and was not read from AWS.
+- What `process.getSystemVersion()` returns on macOS 26.
+- The gate under a real load balancer drain.
+- `imagetools create --prefer-index=false` against ECR, and `batch-get-image` / `put-image` against a real wrapped copy. The stubs model both; the re-run of the `e220f468` promotion is the first real test.
 
 ### 8.1 Still unverified
 

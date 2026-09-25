@@ -121,7 +121,8 @@ test('Revoke sends the posture id, and the JSON is behind a disclosure', async (
   await expect(page.getByTestId('postures-json-body')).toContainText(`"id": "${POSTURE_ID}"`);
 
   await page.getByTestId(`posture-revoke-${POSTURE_ID}`).click();
-  expect(server.calls.at(-1)).toEqual({ method: 'revokePosture', argument: { postureId: POSTURE_ID } });
+  // The bridge call reaches the stub after the click resolves, so wait for it (lane g86).
+  await expect.poll(() => server.calls.at(-1)).toEqual({ method: 'revokePosture', argument: { postureId: POSTURE_ID } });
   await expect(page.getByTestId('posture-status')).toHaveText('Revoked');
   await expect(page.getByTestId(`posture-revoke-${POSTURE_ID}`)).toHaveCount(0);
 });

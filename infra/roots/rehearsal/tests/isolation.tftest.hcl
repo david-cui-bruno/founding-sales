@@ -582,3 +582,16 @@ run "a_rehearsal_generation_below_one_is_refused" {
 
   expect_failures = [var.expected_system_generation]
 }
+
+# Lane g86. The upgrade notice's address is production's: the rehearsal root has
+# no variable for it, so its API publishes the placeholder a non-production API
+# falls back to, and no worker is ever handed it.
+run "the_rehearsal_api_is_told_no_upgrade_address" {
+  command = plan
+
+  assert {
+    condition = (!contains(keys(module.stack.api_environment), "FSS_DESKTOP_UPGRADE_URL")
+    && !contains(keys(module.stack.worker_environment), "FSS_DESKTOP_UPGRADE_URL"))
+    error_message = "Only the production root sets FSS_DESKTOP_UPGRADE_URL, and only on the API."
+  }
+}

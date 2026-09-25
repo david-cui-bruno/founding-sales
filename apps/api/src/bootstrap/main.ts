@@ -209,6 +209,8 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
     // 10.2: a live deployment has a durable one or `readApiDeployment` refused above.
     suppressionJournal: deployment.suppressionJournal,
     ...(deployment.mail === undefined ? {} : { mail: deployment.mail }),
+    // Lane g86: the root's `desktop_upgrade_url` in production, the placeholder elsewhere.
+    upgradeUrl: deployment.upgradeUrl,
     log,
   });
   const heartbeat = startApiHeartbeat({

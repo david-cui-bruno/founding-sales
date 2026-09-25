@@ -58,6 +58,15 @@ export {
   type NotReadyReason,
   type ReadinessReport,
 } from './readiness.ts';
+export {
+  READINESS_EXEMPT_PATHS,
+  READINESS_GATE_TTL_MILLISECONDS,
+  createReadinessGate,
+  type GateRefusalReason,
+  type ReadinessAdmission,
+  type ReadinessGate,
+  type ReadinessGateOptions,
+} from './readinessGate.ts';
 export { readBody, type BodyOutcome, type BodySource } from './requestBody.ts';
 export {
   RouteRegistryError,

@@ -12,9 +12,9 @@ import { testRequestPool } from './support/poolFixture.ts';
 /**
  * The API's HTTP surface, over a real socket.
  *
- * The load balancer in `infra/modules/edge` health-checks `/healthz` and the container
- * health check in `infra/modules/cluster` calls the same path on the loopback address.
- * Both are asserted here against the server the image actually runs, because a
+ * The load balancer in `infra/modules/edge` health-checks `/readyz` (lane g81) and the
+ * container health check in `infra/modules/cluster` calls `/healthz` on the loopback
+ * address. Both are asserted here against the server the image actually runs, because a
  * readiness path that only exists in a unit test takes a whole service out of rotation.
  *
  * Until lane G3b this exercised a second server — `bootstrap/server.ts` — that existed

@@ -68,6 +68,15 @@ run "the_spec_values_are_the_defaults" {
     error_message = "Oldest runnable job warns at five minutes and is critical at fifteen."
   }
 
+  # Lane g86, audit O18: the age is the target, so the first sample above it alarms.
+  assert {
+    condition = alltrue([
+      for name in ["oldest_runnable_job_warning", "oldest_runnable_job_critical"] :
+      output.alarm_inventory[name].period == 60 && output.alarm_inventory[name].evaluation_periods == 1 && output.alarm_inventory[name].datapoints_to_alarm == 1
+    ])
+    error_message = "A job-age alarm fires on the first one-minute maximum above its threshold; five of five made the five-minute warning fire at about ten."
+  }
+
   assert {
     condition     = output.alarm_inventory["gmail_watch_expiring"].threshold == 48
     error_message = "Gmail watch alarms within two days of expiry."

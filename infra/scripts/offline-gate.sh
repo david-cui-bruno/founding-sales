@@ -91,17 +91,18 @@ check "a count or for_each must not test for null a value another apply computes
 # provider a module declares before it evaluates anything, so `module "pubsub"`
 # with `count = 0` in `infra/modules/stack` still made every rehearsal plan ask
 # for Google application-default credentials, and CI has none (David's third
-# credentialed rehearsal, 21 September 2026). `infra/roots/production` is the
-# only root with a Google Cloud project; `infra/modules/pubsub` is the module it
-# calls. Anywhere else, including a `mock_provider "google"` in a test file of
+# credentialed rehearsal, 21 September 2026). `infra/roots/production-google` is the
+# only root with a Google provider (lane g85, audit O01); `infra/modules/pubsub` is the
+# module it calls. The production root lost its Google provider in the same lane, so a
+# production plan asks for no Google credential either. Anywhere else, including a `mock_provider "google"` in a test file of
 # another root, is the refusal coming back.
 # `docs/decisions/g12j-the-rehearsal-has-no-google-provider.md`.
 google_files=$(grep -rIlE '^[^#]*(hashicorp/google|provider "google"|/pubsub")' \
   --include='*.tf' --include='*.tftest.hcl' infra \
   | grep -v '^infra/modules/pubsub/' \
-  | grep -v '^infra/roots/production/' || true)
+  | grep -v '^infra/roots/production-google/' || true)
 if [ -n "$google_files" ]; then
-  echo "FAIL: only infra/roots/production and infra/modules/pubsub may name the Google provider or the pubsub module"
+  echo "FAIL: only infra/roots/production-google and infra/modules/pubsub may name the Google provider or the pubsub module"
   echo "$google_files"
   fail=1
 fi
@@ -115,17 +116,19 @@ fi
 production_key=$(grep -E '^key ' infra/roots/production/backend.hcl | cut -d'"' -f2)
 rehearsal_key=$(grep -E '^key ' infra/roots/rehearsal/backend.hcl | cut -d'"' -f2)
 rehearsal_registry_key=$(grep -E '^key ' infra/roots/rehearsal-registry/backend.hcl | cut -d'"' -f2)
+production_google_key=$(grep -E '^key ' infra/roots/production-google/backend.hcl | cut -d'"' -f2)
 if [ "$production_key" = "$rehearsal_key" ]; then
   echo "FAIL: the two roots share a state key"
   fail=1
 fi
-if [ "$(printf '%s\n%s\n%s\n' "$production_key" "$rehearsal_key" "$rehearsal_registry_key" | sort -u | wc -l | tr -d ' ')" != "3" ]; then
-  echo "FAIL: the three roots do not have three distinct state keys"
+if [ "$(printf '%s\n%s\n%s\n%s\n' "$production_key" "$rehearsal_key" "$rehearsal_registry_key" "$production_google_key" | sort -u | wc -l | tr -d ' ')" != "4" ]; then
+  echo "FAIL: the four roots do not have four distinct state keys"
   fail=1
 fi
 case "$production_key" in fss/greenfield/production/*) ;; *) echo "FAIL: production state key is not under fss/greenfield/production/"; fail=1 ;; esac
 case "$rehearsal_key" in fss/greenfield/rehearsal/*) ;; *) echo "FAIL: rehearsal state key is not under fss/greenfield/rehearsal/"; fail=1 ;; esac
 case "$rehearsal_registry_key" in fss/greenfield/rehearsal-registry/*) ;; *) echo "FAIL: rehearsal registry state key is not under fss/greenfield/rehearsal-registry/"; fail=1 ;; esac
+case "$production_google_key" in fss/greenfield/production-google/*) ;; *) echo "FAIL: production Google state key is not under fss/greenfield/production-google/"; fail=1 ;; esac
 # The per-run key is fss/greenfield/rehearsal/<run>/terraform.tfstate and "registry"
 # is a legal run suffix, so the durable repositories must not live inside that space:
 # a run that collided with them would destroy them on teardown.

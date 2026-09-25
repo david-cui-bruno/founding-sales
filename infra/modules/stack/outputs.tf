@@ -259,9 +259,9 @@ output "updates_distribution_domain_name" {
 
 # The two Gmail push outputs are gone from this module: it no longer creates the
 # topic, so echoing back what it was told would only be a second place for the
-# same string to drift. `infra/roots/production` publishes them from
-# `module.pubsub`, which is where they are now created, and both are visible in
-# `api_environment` below either way.
+# same string to drift. `infra/roots/production-google` creates them and publishes
+# them (lane g85), `infra/roots/production` passes them in as validated variables and
+# echoes those, and both are visible in `api_environment` below either way.
 
 output "api_environment" {
   description = "Non-secret API container environment, for offline assertions."

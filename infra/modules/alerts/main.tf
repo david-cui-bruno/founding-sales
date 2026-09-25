@@ -108,17 +108,22 @@ locals {
       severity            = "critical"
       description         = "No Today snapshot for the workspace business date at 05:10 workspace time."
     }
+    # The age is the detection target itself (13.3: five minutes warns, fifteen is
+    # critical), so one one-minute maximum above it raises the alarm. A waiting job's
+    # age only grows until it is claimed, so a second consecutive breach confirms
+    # nothing the first did not. Until lane g86 (audit O18) both needed five of five,
+    # and fired when the oldest job had waited about ten and twenty minutes.
     oldest_runnable_job_warning = {
       metric_name         = "OldestRunnableJobAgeSeconds"
       statistic           = "Maximum"
       comparison          = "GreaterThanThreshold"
       threshold           = var.oldest_job_age_warning_seconds
       period              = 60
-      evaluation_periods  = 5
-      datapoints_to_alarm = 5
+      evaluation_periods  = 1
+      datapoints_to_alarm = 1
       treat_missing_data  = "notBreaching"
       severity            = "warning"
-      description         = "The oldest runnable job is older than the warning threshold."
+      description         = "A runnable job has waited longer than the warning threshold (five minutes by default). Raised by the first one-minute sample above it, one to two minutes after."
     }
     oldest_runnable_job_critical = {
       metric_name         = "OldestRunnableJobAgeSeconds"
@@ -126,11 +131,11 @@ locals {
       comparison          = "GreaterThanThreshold"
       threshold           = var.oldest_job_age_critical_seconds
       period              = 60
-      evaluation_periods  = 5
-      datapoints_to_alarm = 5
+      evaluation_periods  = 1
+      datapoints_to_alarm = 1
       treat_missing_data  = "notBreaching"
       severity            = "critical"
-      description         = "The oldest runnable job is older than the critical threshold."
+      description         = "A runnable job has waited longer than the critical threshold (fifteen minutes by default). Raised by the first one-minute sample above it, one to two minutes after."
     }
     # Published only while a mailbox is connected, and 0 for a connected mailbox
     # with no live watch — so the state this alarm exists for always has a

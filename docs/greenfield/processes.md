@@ -153,12 +153,22 @@ Three different questions, and the infrastructure asks all three:
 
 | Path | Asked by | Answers |
 |---|---|---|
-| `/healthz` | the load balancer target group (`infra/modules/edge`) and the container health check (`infra/modules/cluster`) | is this process running? No database is touched. |
-| `/readyz` | a deployment, and an operator | should this task be given traffic? 503 when the database cannot answer, when the pool has no connection free inside the checkout timeout (`database_busy`), when the schema is outside the range, or when the system generation is not the pinned one. It asks on a connection checked out from the pool for that request and gives it back. |
+| `/healthz` | the container health check (`infra/modules/cluster`) | is this process running? No database is touched. |
+| `/readyz` | the load balancer target group (`infra/modules/edge`, since lane g81), a deployment, and an operator | should this task be given traffic? 503 when the database cannot answer, when the pool has no connection free inside the checkout timeout (`database_busy`), when the schema is outside the range, or when the system generation is not the pinned one. It asks on a connection checked out from the pool for that request and gives it back. |
 | `/health` | an operator | the fuller report G0 wrote. 200 even when degraded. |
 
 A liveness check that queries the database restarts every task in the fleet the moment
 the database hiccups. That is why `/healthz` answers from the process alone.
+
+**Every other request asks readiness too** (lane g86, `bootstrap/readinessGate.ts`). A
+task that is not ready answers 503 `not_ready` on every path but `/healthz`, `/readyz`,
+`/health` and `/auth/client-version`, before authentication and before the route, so it
+serves nothing in the tens of seconds the load balancer takes to notice. The verdict is
+`/readyz`'s own report, cached for five seconds per process: one check per window on the
+connection of the request that found it stale, shared by requests arriving meanwhile, and
+none at all inside the window. A busy pool is no verdict; that request is answered
+`database_busy` and nothing is cached. `api_readiness_changed` (`warn` when it stops
+being ready, `info` when it recovers) says when and why, once per change.
 
 The worker has no HTTP surface, so its health check stats
 `/tmp/fss-worker-heartbeat`. The file is a statement rather than a timestamp: it is
@@ -192,6 +202,7 @@ startup line names every decision and no credential.
 | `FSS_SCHEDULER_INTERVAL_MS`, `FSS_METRICS_INTERVAL_MS`, `FSS_RUNNER_IDLE_MS`, `FSS_DRAIN_TIMEOUT_MS` | worker | the cadences. Defaults are the specification's. |
 | `FSS_WORKER_LIVENESS_FILE`, `FSS_LIVENESS_FAILURES` | worker | the health-check file and how many consecutive failures remove it. |
 | `PORT`, `FSS_HTTP_PORT` | api | the listening port. Default 8080. |
+| `FSS_DESKTOP_UPGRADE_URL` | api | the `upgradeUrl` `/auth/client-version` publishes (lane g86): in production the signed update manifest, from the root's `desktop_upgrade_url`. Unset elsewhere is the `callie.example` placeholder; unset in production is a refusal to start. |
 | `FSS_API_HEARTBEAT_MS`, `FSS_API_SHUTDOWN_TIMEOUT_MS` | api | the heartbeat cadence and the drain budget. |
 | `FSS_ENVIRONMENT`, `FSS_DEPENDENCIES` | ✓ | the deployment switch. `production` refuses anything but `live`, and refuses the switch being unset (`docs/decisions/g12-the-credentialed-bootstrap.md`). |
 | `FSS_PUBLIC_ORIGIN` | ✓ | the API's own origin. Both OAuth redirect URIs are derived from it rather than configured twice. |
@@ -209,11 +220,15 @@ Both bootstraps read the environment first and the secret second, for one releas
 report which source they used. `docs/decisions/g12b-two-public-identifiers-move-out-of-the-secret.md`
 says when the fallback goes.
 
-The secrets arrive under their logical Secrets Manager names — `google-gmail-oauth-client`,
-`google-oidc-client`, `session-signing-key`, `device-credential-pepper`,
-`llm-classifier-api-key`, `research-provider-credentials` — because that is what the ECS
-`secrets` block names them. None is ever logged; the startup line reports whether each
-is configured.
+Each task definition carries only the secrets its own process reads (lane g81,
+`infra/modules/cluster`): the API `google-gmail-oauth-client`, `google-oidc-client`,
+`session-signing-key` and `device-credential-pepper`; the worker
+`google-gmail-oauth-client` and, in production only, the classifier key; the operations
+and drill tasks `google-gmail-oauth-client`. Each arrives under its logical Secrets
+Manager name except the classifier key, which arrives as `FSS_LLM_CLASSIFIER_API_KEY`,
+the name the classifier reads. `research-provider-credentials` reaches no process,
+because none reads it. None is ever logged; the startup line reports whether each is
+configured.
 
 ## Metrics, and what is not published
 

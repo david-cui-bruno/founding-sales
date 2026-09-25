@@ -273,7 +273,13 @@ interface Runner {
     writeFile: (file: string, text: string) => void;
     log: (line: string) => void;
     stopRequested?: () => boolean;
-  }): Promise<{ killed: number; problems: number; brokenRuns: number; interrupted: boolean }>;
+  }): Promise<{
+    killed: number;
+    killedByKind: { behaviour: number; wiring: number };
+    problems: number;
+    brokenRuns: number;
+    interrupted: boolean;
+  }>;
 }
 
 // A computed specifier, as in mutationRunner.check.ts: plain ESM with no declarations.
@@ -329,7 +335,7 @@ describe("the nightly's summary step reads what the runner really prints", () =>
 
   it('finds the summary line, and only it, in a clean run', async () => {
     const { result, file } = await logFile([mutation('killed', 'test:kills')]);
-    expect(result).toEqual({ killed: 1, problems: 0, brokenRuns: 0, interrupted: false });
+    expect(result).toEqual({ killed: 1, killedByKind: { behaviour: 1, wiring: 0 }, problems: 0, brokenRuns: 0, interrupted: false });
     expect(file.filter(line => SUMMARY.test(line))).toEqual(['1 mutation(s) killed, 0 problem(s).']);
     expect(file.filter(line => PROBLEM.test(line))).toEqual([]);
   });
@@ -345,7 +351,7 @@ describe("the nightly's summary step reads what the runner really prints", () =>
     ]);
     // Stale, survived, undecided, a broken run, and the red suite twice: once for the
     // suite, once for the mutation it could not run.
-    expect(result).toEqual({ killed: 1, problems: 6, brokenRuns: 1, interrupted: false });
+    expect(result).toEqual({ killed: 1, killedByKind: { behaviour: 1, wiring: 0 }, problems: 6, brokenRuns: 1, interrupted: false });
     const problems = file.filter(line => PROBLEM.test(line));
     expect(problems).toHaveLength(result.problems);
     expect(problems.map(line => line.split(' ')[0]).sort()).toEqual([

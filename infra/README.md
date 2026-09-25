@@ -1,6 +1,6 @@
 # `infra/` — FSS greenfield Terraform
 
-Twelve reusable modules, three roots, and the two deployment roles' policies. The
+Twelve reusable modules, four roots, and the two deployment roles' policies. The
 modules and the roots have been applied once, on 21 September 2026, by a rehearsal that
 reported 25 errors and could not tear itself down (`docs/greenfield/release.md` 8.0d).
 
@@ -21,6 +21,7 @@ infra/
     stack           the composition every root uses, and the environment guard
   roots/
     production          environment = "production", destroyable = false, name_prefix = "fss-prod"
+    production-google   the four Gmail push objects in Google Cloud; the only Google provider (lane g85)
     rehearsal           environment = "rehearsal",  destroyable = true,  name_prefix = "fss-rh-<run>"
     rehearsal-registry  the two durable rehearsal ECR repositories, applied once, ever
   policies/

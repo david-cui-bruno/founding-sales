@@ -57,6 +57,7 @@ interface Mutation {
   replace: string;
   suite: string[];
   because: string;
+  kind?: string;
 }
 
 interface Runner {
@@ -70,7 +71,13 @@ interface Runner {
     writeFile: (file: string, text: string) => void;
     log: (line: string) => void;
     stopRequested?: () => boolean;
-  }): Promise<{ killed: number; problems: number; brokenRuns: number; interrupted: boolean }>;
+  }): Promise<{
+    killed: number;
+    killedByKind: { behaviour: number; wiring: number };
+    problems: number;
+    brokenRuns: number;
+    interrupted: boolean;
+  }>;
 }
 
 // A computed specifier: the module is plain ESM with no declarations, and this file
@@ -292,6 +299,7 @@ describe('the mutation runner reads a suite run by what vitest reported, not onl
 });
 
 describe('the mutation runner only counts a kill from a suite that was green before the mutation', () => {
+  const NO_KILLS = { behaviour: 0, wiring: 0 };
   const TARGET = 'src/target.ts';
   const PRISTINE = 'export const guard = true;\n';
 
@@ -342,7 +350,7 @@ describe('the mutation runner only counts a kill from a suite that was green bef
     const outcome = await check([mutation('usage error', ['run', 'test:green'])], (_suite, mutated) =>
       mutated ? NPM_UNKNOWN_COMMAND : ALL_PASSED,
     );
-    expect(outcome.result).toEqual({ killed: 0, problems: 1, brokenRuns: 0, interrupted: false });
+    expect(outcome.result).toEqual({ killed: 0, killedByKind: NO_KILLS, problems: 1, brokenRuns: 0, interrupted: false });
     expect(outcome.text).toBe(PRISTINE);
   });
 
@@ -350,7 +358,7 @@ describe('the mutation runner only counts a kill from a suite that was green bef
     const outcome = await check([mutation('malformed edit', ['run', 'test:green'])], (_suite, mutated) =>
       mutated ? TRANSFORM_FAILED : ALL_PASSED,
     );
-    expect(outcome.result).toEqual({ killed: 0, problems: 1, brokenRuns: 1, interrupted: false });
+    expect(outcome.result).toEqual({ killed: 0, killedByKind: NO_KILLS, problems: 1, brokenRuns: 1, interrupted: false });
     const text = outcome.lines.join('\n');
     expect(text).toContain('MUTATION_UNDECIDED malformed edit: broken run: a syntax or transform failure');
     expect(text).toContain('never executed a failing test');
@@ -364,7 +372,13 @@ describe('the mutation runner only counts a kill from a suite that was green bef
       [mutation('first', ['run', 'test:green']), mutation('second', ['run', 'test:green'])],
       (_suite, mutated) => (mutated ? A_TEST_FAILED : ALL_PASSED),
     );
-    expect(outcome.result).toEqual({ killed: 2, problems: 0, brokenRuns: 0, interrupted: false });
+    expect(outcome.result).toEqual({
+      killed: 2,
+      killedByKind: { behaviour: 2, wiring: 0 },
+      problems: 0,
+      brokenRuns: 0,
+      interrupted: false,
+    });
     expect(outcome.runs).toEqual([
       { suite: 'run test:green', mutated: false },
       { suite: 'run test:green', mutated: true },
@@ -376,11 +390,41 @@ describe('the mutation runner only counts a kill from a suite that was green bef
 
   it('reports a survivor and a stale edit as problems', async () => {
     const survivor = await check([mutation('survivor', ['run', 'test:green'])], () => ALL_PASSED);
-    expect(survivor.result).toEqual({ killed: 0, problems: 1, brokenRuns: 0, interrupted: false });
+    expect(survivor.result).toEqual({ killed: 0, killedByKind: NO_KILLS, problems: 1, brokenRuns: 0, interrupted: false });
     expect(survivor.lines.join('\n')).toContain('MUTATION_SURVIVED survivor');
 
     const stale = await check([{ ...mutation('stale', ['run', 'test:green']), find: 'not in the file' }], () => ALL_PASSED);
-    expect(stale.result).toEqual({ killed: 0, problems: 1, brokenRuns: 0, interrupted: false });
+    expect(stale.result).toEqual({ killed: 0, killedByKind: NO_KILLS, problems: 1, brokenRuns: 0, interrupted: false });
     expect(stale.runs).toEqual([]);
+  });
+
+  // Lane g86, audit T08. A kill of the suite's own map is reported apart from a kill of
+  // behaviour, and neither count nor the closing line changes. The trap is a split that
+  // always says zero wiring, so one wiring kill has to show up as exactly one.
+  it('reports wiring kills apart from behaviour kills, without changing the counts', async () => {
+    const outcome = await check(
+      [mutation('a guard', ['run', 'test:green']), { ...mutation('a map entry', ['run', 'test:green']), kind: 'wiring' }],
+      (_suite, mutated) => (mutated ? A_TEST_FAILED : ALL_PASSED),
+    );
+    expect(outcome.result).toEqual({
+      killed: 2,
+      killedByKind: { behaviour: 1, wiring: 1 },
+      problems: 0,
+      brokenRuns: 0,
+      interrupted: false,
+    });
+    expect(outcome.lines).toContain('killed (0.0 s): [wiring] a map entry');
+    expect(outcome.lines).toContain('killed (0.0 s): a guard');
+    expect(outcome.lines.at(-2)).toBe(
+      "\nOf the kills, 1 broke product or release behaviour and 1 only the suite's wiring (the scenario map, script paths, workflow text).",
+    );
+    expect(outcome.lines.at(-1)).toBe('\n2 mutation(s) killed, 0 problem(s).');
+  });
+
+  it('refuses a kind that is neither, as a stale entry, and runs nothing for it', async () => {
+    const outcome = await check([{ ...mutation('odd', ['run', 'test:green']), kind: 'cosmetic' }], () => ALL_PASSED);
+    expect(outcome.result).toEqual({ killed: 0, killedByKind: NO_KILLS, problems: 1, brokenRuns: 0, interrupted: false });
+    expect(outcome.lines.join('\n')).toContain('MUTATION_STALE odd: its kind is "cosmetic"');
+    expect(outcome.runs).toEqual([]);
   });
 });
