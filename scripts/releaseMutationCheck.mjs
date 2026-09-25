@@ -1290,6 +1290,105 @@ const MUTATIONS = [
     because:
       'Audit item C18: the Mac’s own converter put New York’s 02:30 on 8 March 2026 at 01:30 EST, an hour before the wall clock the person confirmed, where docs/decisions/g0-dst-gap-resolution.md resolves a gap forward to 03:30 EDT. Lane g79 made the Mac and the server share one implementation in @fss/contracts; dial.test.ts expects the outcome form to resolve that gap to 2026-03-08T07:30:00.000Z, and with the gap resolved to the earlier candidate it reads 06:30 and has to go red.',
   },
+  {
+    name: 'the weekly pin takes the newest ancestor’s images whatever its image inputs',
+    file: 'infra/scripts/release-images.sh',
+    find: '    if git diff --quiet "$head" "$commit" -- "${IMAGE_INPUTS[@]}"; then\n',
+    replace: '    if true; then\n',
+    suite: ['run', 'test:release', '--', 'test/release/weeklyRehearsal.check.ts'],
+    because:
+      'This is audit O10’s pinned-artifact rule (lane g74): the images workflow publishes only when an image input changes, so the weekly run may pin an earlier commit’s images only when every input is byte-identical to its own. Without the comparison a commit that changed packages/ and whose publish failed is rehearsed on the previous code’s images, and the manifest calls that a pass. weeklyRehearsal.check.ts pins an unpublished image change against a real history and has to go red.',
+  },
+  {
+    name: 'the weekly caller stamps the images’ commit instead of its own',
+    file: '.github/workflows/greenfield-weekly-rehearsal.yml',
+    find: '      desktop_commit_stamp: ${{ github.sha }}\n',
+    replace: '      desktop_commit_stamp: ${{ needs.pin.outputs.images_commit }}\n',
+    suite: ['run', 'test:release', '--', 'test/release/weeklyRehearsal.check.ts'],
+    because:
+      'The desktop commit stamp is a fact about the commit being released (g13b), and the weekly run pins all three artifacts to the commit it runs at. The images’ commit is often older — a documentation commit on top of the last image change — so a stamp taken from it names a desktop build of code the suite did not run. weeklyRehearsal.check.ts requires the stamp and the pin to be github.sha and has to go red.',
+  },
+  {
+    name: 'a pinned rehearsal stops refusing a checkout that is not its pin',
+    file: '.github/workflows/greenfield-release.yml',
+    find: '            if [ "$GITHUB_SHA" != "$pinned" ]; then\n',
+    replace: '            if false; then\n',
+    suite: ['run', 'test:release', '--', 'test/release/weeklyRehearsal.check.ts'],
+    because:
+      'A called workflow runs from its caller’s commit, so today the pin and the checkout agree by construction; the refusal is what keeps that true when somebody later dispatches or calls the release workflow with a pin some other way. weeklyRehearsal.check.ts extracts the digest step, runs it with GITHUB_SHA different from pinned_commit, and has to go red.',
+  },
+  {
+    name: 'the weekly slot runs again every hour after an earlier run already pinned',
+    file: 'infra/scripts/ci-schedule.sh',
+    find: '    if job.get("name") == os.environ["FSS_PIN_JOB"] and job.get("conclusion") != "skipped":\n',
+    replace: '    if False:\n',
+    suite: ['run', 'test:release', '--', 'test/release/weeklyRehearsal.check.ts'],
+    because:
+      'The weekly workflow wakes every hour on Sunday so that a dropped schedule event is caught up (the nightly’s 25 September event never fired). Without the earlier-attempt check every later hour starts another full rehearsal — up to fifteen of them, queued behind one concurrency group, each an hour of rehearsal spend. weeklyRehearsal.check.ts runs the slot after a run that pinned, failed or is still going and has to go red.',
+  },
+  {
+    name: 'the freshness check calls every nightly fresh whatever its age',
+    file: 'infra/scripts/ci-schedule.sh',
+    find: '        fresh = age <= limit\n',
+    replace: '        fresh = True\n',
+    suite: ['run', 'test:release', '--', 'test/release/weeklyRehearsal.check.ts'],
+    because:
+      'This is audit O11: a scheduled run that never started sends no failure e-mail, so the age comparison is the whole alarm. A check that cannot find anything stale is the silence of 25 September with a green tick beside it. weeklyRehearsal.check.ts gives it a nightly 36 hours old and requires a failure and one opened issue, and has to go red.',
+  },
+  {
+    name: 'the manifest verifies against a release record it was not written for',
+    file: 'infra/scripts/release-manifest.sh',
+    find: 'if bound.get("sha256") != env["FSS_RECORD_SHA256"]:\n',
+    replace: 'if False:\n',
+    suite: ['run', 'test:release', '--', 'test/release/releaseManifest.check.ts'],
+    because:
+      'This is audit O09: the manifest binds the release record by its SHA-256 so that neither file can be replaced under the other. Every other field it compares can agree while the record says something else — releaseManifest.check.ts flips one flag the other comparisons do not read — so without the hash the binding is the reference and two digests again. It has to go red.',
+  },
+  {
+    name: 'a pinned manifest stops comparing the images’ inputs with the checkout',
+    file: 'infra/scripts/release-manifest.sh',
+    find: '    git diff --quiet "$images_commit" "$checkout" -- "${inputs[@]}" \\\n',
+    replace: '    true \\\n',
+    suite: ['run', 'test:release', '--', 'test/release/releaseManifest.check.ts'],
+    because:
+      'A weekly manifest says inputsMatchCheckout: true, which is the claim that the suite ran the code inside the images. The pin checked it once; the manifest checks it again in the job that actually ran the suite, so a pin and a checkout that drifted apart cannot produce that sentence. releaseManifest.check.ts builds images before a certificate change and has to go red.',
+  },
+  {
+    name: 'the manifest records a production deployment that runs another image',
+    file: 'infra/scripts/release-manifest.sh',
+    find: '    elif digest != expected:\n',
+    replace: '    elif False:\n',
+    suite: ['run', 'test:release', '--', 'test/release/releaseManifest.check.ts'],
+    because:
+      'The deployed section is the last link of O09: what production runs, compared with what was rehearsed. Recording a mismatch as a deployment turns “the deployed digests match the rehearsal artifacts” (16.2) back into something a person reads. releaseManifest.check.ts answers describe-task-definition with another worker digest, requires nothing written, and has to go red.',
+  },
+  {
+    name: 'the promotion trusts the copy instead of reading production back',
+    file: 'infra/scripts/release-promote.sh',
+    find: '  if [ "$copied" != "$digest" ]; then\n',
+    replace: '  if false; then\n',
+    suite: ['run', 'test:release', '--', 'test/release/releaseManifest.check.ts'],
+    because:
+      'This is audit O17’s promise: the digest production deploys is the digest that passed. imagetools create re-serialises a manifest it is asked to change, and a tag can land on something else; the read-back is the only thing that notices. releaseManifest.check.ts makes the stubbed copy change the digest and has to go red.',
+  },
+  {
+    name: 'the images workflow stops publishing when only the certificate bundle changed',
+    file: '.github/workflows/greenfield-images.yml',
+    find: "      - 'certs/**'\n      - 'package.json'\n      - 'package-lock.json'\n      - '.github/workflows/greenfield-images.yml'\n\npermissions:\n",
+    replace: "      - 'package.json'\n      - 'package-lock.json'\n      - '.github/workflows/greenfield-images.yml'\n\npermissions:\n",
+    suite: ['run', 'test:release', '--', 'test/release/weeklyRehearsal.check.ts'],
+    because:
+      'Both images COPY certs/rds-global-bundle.pem, and before lane g74 the push paths missed it: a bundle refresh built nothing, and the next release rebuilt it by hand. Now a missing path is a main commit whose images nobody publishes and the weekly pin refuses. weeklyRehearsal.check.ts compares push.paths with release-images.sh inputs and has to go red.',
+  },
+  {
+    name: 'the release manifest is written by a stage that is not full',
+    file: '.github/workflows/greenfield-release.yml',
+    find: "      - name: Write the release manifest beside the record\n        if: inputs.stage == 'full'\n",
+    replace: '      - name: Write the release manifest beside the record\n',
+    suite: ['run', 'test:release', '--', 'test/release/releaseManifest.check.ts'],
+    because:
+      'Only full is the release gate (G12k), and the manifest is what the operator promotes and deploys from and what the freshness check counts as a passed rehearsal. A plan, create or deploy run that wrote one would be a rehearsal that proved nothing, filed as one that passed. releaseManifest.check.ts reads the step’s condition as a set of stages, requires exactly {full}, and has to go red.',
+  },
 ];
 
 // A listener on each of these keeps Node from exiting mid-mutation with a file still

@@ -1,0 +1,75 @@
+name: Greenfield schedule freshness
+
+# A scheduled run that never starts sends no failure e-mail (lane g74, audit O11).
+#
+# `greenfield-nightly.yml` is scheduled for 09:00 UTC, and on 25 September its first
+# scheduled run simply did not happen: GitHub drops or delays `schedule` events when
+# its queue is busy, and a run that does not exist cannot fail. Somebody had to notice.
+#
+# This workflow asks GitHub, with its own token and nothing else, when the two
+# scheduled things last succeeded — the nightly mutation check on main (limit 30 hours,
+# `FSS_NIGHTLY_MAX_AGE_HOURS`) and a green full rehearsal from main, weekly or
+# dispatched, as its `fss-release-manifest` artifact (limit eight days,
+# `FSS_WEEKLY_MAX_AGE_HOURS`) — and fails when either is older. A failure opens one
+# issue, or updates the one already open, mentioning the repository owner (or
+# `FSS_FRESHNESS_NOTIFY`) so the notice is an e-mail rather than a red dot, and asks
+# GitHub to pin it. The issue is closed when everything is fresh again.
+# `infra/scripts/ci-schedule.sh freshness` is the whole judgement.
+#
+# No cloud credential, no CloudWatch and no IAM: `actions: read` to list runs and
+# artifacts, `issues: write` for the one issue.
+#
+# Twice a day, at 13:41 and 21:41 UTC — hours after the nightly's 09:00, off the top of
+# the hour, and two of them so that GitHub dropping one of these does not hide the
+# other. With a 30-hour limit a nightly that did not run at 09:00 is reported by the
+# 21:41 check of the same day.
+
+on:
+  schedule:
+    - cron: '41 13 * * *'
+    - cron: '41 21 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: greenfield-freshness
+  cancel-in-progress: false
+
+jobs:
+  freshness:
+    name: The nightly and the weekly rehearsal ran recently enough
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Refuse any ambient cloud credential
+        run: |
+          set -euo pipefail
+          for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN \
+                      AWS_PROFILE AWS_ROLE_ARN AWS_WEB_IDENTITY_TOKEN_FILE; do
+            if [ -n "${!name:-}" ]; then
+              echo "::error::$name is set. The freshness check reads GitHub and nothing else."
+              exit 1
+            fi
+          done
+
+      - name: Check freshness, and open, update or close the one issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FSS_NIGHTLY_MAX_AGE_HOURS: ${{ vars.FSS_NIGHTLY_MAX_AGE_HOURS || '30' }}
+          FSS_WEEKLY_MAX_AGE_HOURS: ${{ vars.FSS_WEEKLY_MAX_AGE_HOURS || '192' }}
+          FSS_WEEKLY_REHEARSAL_HOUR_UTC: ${{ vars.FSS_WEEKLY_REHEARSAL_HOUR_UTC }}
+          FSS_FRESHNESS_NOTIFY: ${{ vars.FSS_FRESHNESS_NOTIFY || github.repository_owner }}
+        run: infra/scripts/ci-schedule.sh freshness
