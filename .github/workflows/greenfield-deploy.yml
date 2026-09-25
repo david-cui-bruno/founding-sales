@@ -1,0 +1,682 @@
+name: Greenfield deploy
+
+# Deploys an app-only change to production, by itself (lane g91).
+#
+# David's decision of 25 September 2026: "I'm a startup, I want to move fast." When
+# *Greenfield images* publishes the images of a push to main, this workflow deploys
+# them — unless any commit since the one production's images were built from is a
+# schema, infrastructure, release-script or workflow change, which keeps the manual
+# path of `docs/greenfield/release.md` section 4.
+#
+# ## Five jobs, and which of them may hold a credential
+#
+#   run      no checkout, no credential. The images run is a green publish of a push to
+#            main of this repository; its commit, id and attempt are this job's outputs,
+#            and every later job takes them from here.
+#   ranges   the images commit, no credential. The one job that runs code from it for a
+#            value: the two schema ranges the images declare, emitted as validated
+#            scalars. Anything it prints is re-validated where it is used.
+#   deploy   the only job with `id-token: write`, in the `production-deploy` environment.
+#            It checks out the images commit and runs nothing from it until an inline
+#            guard — this file's own code, not the repository's — has read the commit
+#            production's images were built from and found no protected path in any
+#            commit between the two. Then only `infra/scripts/`, which that guard has
+#            just proved identical to production's own commit, and never Node or
+#            anything under `apps/`, `packages/` or `scripts/`.
+#   smoke    the images commit, no credential: `scripts/productionSmoke.mjs` against the
+#            public origin, with the canary age the deploy job read as a scalar.
+#   summary  one line, whatever happened.
+#
+# ## Where it stops
+#
+#   * the guard: a protected path in any commit of the range, a production image with no
+#     commit tag, or a production commit that is not behind the images commit. The run
+#     is green, says `manual` and names the paths; nothing was touched. The operator
+#     releases that one by hand, after which production's commit is past the change and
+#     the next app merge deploys itself again (release.md 4.0);
+#   * `ci-deploy-app.sh check`: a different schema, a service not at its declared count,
+#     a session that is not exactly the CI role, a digest that is not the one the
+#     images run published;
+#   * `ci-deploy-app.sh deploy`: a registered revision that differs from the running one
+#     in more than the image, or a rollout ECS rolled back. The worker goes first and
+#     the API is not touched after a worker that failed.
+#
+# ## Two merges, and a rehearsal
+#
+# One workflow concurrency group, never cancelled in progress, so two deploys never
+# overlap; a waiting run is replaced by a newer one, whose range covers it. The deploy
+# job also shares `fss-production-inventory` with the rehearsal job of
+# `greenfield-release.yml`: every revision it registers is a new Name-tagged production
+# ARN, which a running rehearsal's inventory guard would see. A job pending in that
+# group is replaced by the next one to queue. The poll before the role is assumed and
+# the recheck before the first write are the fallback for a rehearsal that started
+# before the group existed.
+
+on:
+  workflow_run:
+    workflows: [Greenfield images]
+    types: [completed]
+    branches: [main]
+  # The first deploy, and any re-run: the operator names the images run.
+  workflow_dispatch:
+    inputs:
+      images_run_id:
+        description: 'The Greenfield images run (a green publish of a push to main) whose fss-image-digests to deploy'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fss-production-deploy
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.FSS_AWS_REGION || 'us-east-1' }}
+  FSS_PRODUCTION_ORIGIN: ${{ vars.FSS_PRODUCTION_ORIGIN || 'https://api.usecallie.com' }}
+
+jobs:
+  run:
+    name: The images run is a green publish of a push to main
+    if: >-
+      (github.event_name == 'workflow_run'
+        && github.event.workflow_run.conclusion == 'success'
+        && github.event.workflow_run.event == 'push'
+        && github.event.workflow_run.head_branch == 'main'
+        && github.event.workflow_run.head_repository.full_name == github.repository)
+      || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      commit: ${{ steps.images.outputs.commit }}
+      run_id: ${{ steps.images.outputs.run_id }}
+      run_attempt: ${{ steps.images.outputs.run_attempt }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Read and judge the images run
+        id: images
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || inputs.images_run_id }}
+        run: |
+          set -euo pipefail
+          [[ "$RUN_ID" =~ ^[0-9]{1,20}$ ]] || { echo "::error::'$RUN_ID' is not a workflow run id"; exit 1; }
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" > "$RUNNER_TEMP/images-run.json"
+          FSS_FILE="$RUNNER_TEMP/images-run.json" python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, re, sys
+          run = json.load(open(os.environ["FSS_FILE"], encoding="utf-8"))
+          problems = []
+          if str(run.get("path", "")).split("@")[0] != ".github/workflows/greenfield-images.yml":
+              problems.append("it is a run of {}, not of greenfield-images.yml".format(run.get("path")))
+          if run.get("event") != "push" or run.get("head_branch") != "main":
+              problems.append("it ran for a {} on {}, not a push to main".format(run.get("event"), run.get("head_branch")))
+          if run.get("conclusion") != "success":
+              problems.append("it concluded {}".format(run.get("conclusion")))
+          if (run.get("head_repository") or {}).get("full_name") != os.environ["GITHUB_REPOSITORY"]:
+              problems.append("it built another repository's commit")
+          if not re.fullmatch(r"[0-9a-f]{40}", str(run.get("head_sha", ""))):
+              problems.append("it names no commit")
+          if not re.fullmatch(r"[0-9]{1,4}", str(run.get("run_attempt", ""))):
+              problems.append("it names no attempt")
+          if problems:
+              sys.exit("the images run cannot be deployed: " + "; ".join(problems))
+          print("commit=" + run["head_sha"])
+          print("run_id=" + os.environ["RUN_ID"])
+          print("run_attempt=" + str(run["run_attempt"]))
+          PY
+          cat "$GITHUB_OUTPUT"
+
+  ranges:
+    name: Read the schema ranges the images declare, with no credential
+    needs: run
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # Code from the images commit runs here, so this job holds nothing worth taking.
+    permissions:
+      contents: read
+    outputs:
+      api_range: ${{ steps.ranges.outputs.api_range }}
+      worker_range: ${{ steps.ranges.outputs.worker_range }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ needs.run.outputs.commit }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.20.0'
+
+      - name: The two ranges, as validated scalars
+        id: ranges
+        run: |
+          set -euo pipefail
+          read_range() {
+            node --experimental-transform-types --disable-warning=ExperimentalWarning \
+              --input-type=module -e "
+                const module = await import('./packages/domain/db/schemaRange.ts');
+                const range = module['$1'];
+                process.stdout.write(String(range.minimum) + '-' + String(range.maximum));
+              "
+          }
+          api="$(read_range API_SCHEMA_RANGE)"
+          worker="$(read_range WORKER_SCHEMA_RANGE)"
+          for range in "$api" "$worker"; do
+            [[ "$range" =~ ^[0-9]{1,4}-[0-9]{1,4}$ ]] || { echo "::error::'$range' is not a schema range"; exit 1; }
+          done
+          echo "api_range=$api" >> "$GITHUB_OUTPUT"
+          echo "worker_range=$worker" >> "$GITHUB_OUTPUT"
+          echo "api $api, worker $worker"
+
+  deploy:
+    name: Deploy an app-only change to production
+    needs: [run, ranges]
+    runs-on: ubuntu-24.04
+    # Twice the worst rollout (two services, three ten-minute waits each), plus the
+    # rehearsal poll, the promotion and the checks. The credential is assumed after the
+    # poll and lasts two hours.
+    timeout-minutes: 150
+    # The one OIDC subject fss-prod-ci-deploy trusts. Its deployment-branch rule is main
+    # only; the `run` job refuses anything else as well.
+    environment: production-deploy
+    concurrency:
+      group: fss-production-inventory
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    outputs:
+      decision: ${{ steps.guard.outputs.decision == 'manual' && 'manual' || steps.check.outputs.decision }}
+      reason: ${{ steps.guard.outputs.decision == 'manual' && steps.guard.outputs.reason || steps.check.outputs.reason }}
+      worker_task_definition: ${{ steps.deploy.outputs.worker_task_definition }}
+      api_task_definition: ${{ steps.deploy.outputs.api_task_definition }}
+      previous_worker_task_definition: ${{ steps.deploy.outputs.previous_worker_task_definition }}
+      previous_api_task_definition: ${{ steps.deploy.outputs.previous_api_task_definition }}
+      observed: ${{ steps.observed.outputs.observed }}
+      expect_sending: ${{ steps.deploy.outputs.expect_sending }}
+      canary_age: ${{ steps.canary.outputs.age }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Refuse any ambient cloud credential before the role is assumed
+        run: |
+          set -euo pipefail
+          for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN \
+                      AWS_PROFILE AWS_ROLE_ARN AWS_WEB_IDENTITY_TOKEN_FILE; do
+            if [ -n "${!name:-}" ]; then
+              echo "::error::$name is set before the production CI deploy role was assumed."
+              exit 1
+            fi
+          done
+
+      - name: The scalars from the other jobs are what they claim to be
+        env:
+          COMMIT: ${{ needs.run.outputs.commit }}
+          RUN_ID: ${{ needs.run.outputs.run_id }}
+          RUN_ATTEMPT: ${{ needs.run.outputs.run_attempt }}
+          API_RANGE: ${{ needs.ranges.outputs.api_range }}
+          WORKER_RANGE: ${{ needs.ranges.outputs.worker_range }}
+        run: |
+          set -euo pipefail
+          [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::the images commit is not a commit"; exit 1; }
+          [[ "$RUN_ID" =~ ^[0-9]{1,20}$ ]] || { echo "::error::the images run id is not a run id"; exit 1; }
+          [[ "$RUN_ATTEMPT" =~ ^[0-9]{1,4}$ ]] || { echo "::error::the images run attempt is not an attempt"; exit 1; }
+          for range in "$API_RANGE" "$WORKER_RANGE"; do
+            [[ "$range" =~ ^[0-9]{1,4}-[0-9]{1,4}$ ]] || { echo "::error::'$range' is not a schema range"; exit 1; }
+          done
+
+      - name: No credentialed rehearsal is running
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WAIT_MINUTES: '20'
+        run: |
+          set -euo pipefail
+          # The fallback to the shared concurrency group: a rehearsal job in progress, which
+          # can only be one that started without the group. A rehearsal waiting on the
+          # group behind this job is not counted, or neither would ever run.
+          rehearsal_jobs_in_progress() {
+            local work="$RUNNER_TEMP/rehearsal-poll" status id
+            rm -rf "$work"
+            mkdir -p "$work"
+            for status in in_progress queued waiting requested pending; do
+              gh api "repos/$GITHUB_REPOSITORY/actions/runs?status=$status&per_page=100" > "$work/runs-$status.json"
+            done
+            for id in $(python3 - "$work" <<'PY'
+          import glob, json, sys
+          wanted = {".github/workflows/greenfield-release.yml", ".github/workflows/greenfield-weekly-rehearsal.yml"}
+          ids = set()
+          for path in glob.glob(sys.argv[1] + "/runs-*.json"):
+              for run in (json.load(open(path, encoding="utf-8")) or {}).get("workflow_runs") or []:
+                  if str(run.get("path", "")).split("@")[0] in wanted and str(run.get("id", "")).isdigit():
+                      ids.add(str(run["id"]))
+          print(" ".join(sorted(ids)))
+          PY
+            ); do
+              gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/jobs?per_page=100" > "$work/jobs.json"
+              if python3 - "$work/jobs.json" <<'PY'
+          import json, sys
+          jobs = (json.load(open(sys.argv[1], encoding="utf-8")) or {}).get("jobs") or []
+          sys.exit(0 if any("Create, deploy, drill and destroy a rehearsal environment" in str(job.get("name", ""))
+                            and job.get("status") == "in_progress" for job in jobs) else 1)
+          PY
+              then
+                printf ' %s' "$id"
+              fi
+            done
+          }
+          minute=0
+          while :; do
+            running="$(rehearsal_jobs_in_progress)"
+            if [ -z "$running" ]; then
+              echo "no rehearsal job is in progress"
+              exit 0
+            fi
+            if [ "$minute" -ge "$WAIT_MINUTES" ]; then
+              echo "::error::a rehearsal job is in progress (run$running). Nothing has been written; re-run this deploy when it has finished."
+              exit 1
+            fi
+            echo "a rehearsal job is in progress (run$running); waiting for it"
+            sleep 60
+            minute=$((minute + 1))
+          done
+
+      # The images commit, exactly, with the history the guard reads. Nothing in it runs
+      # until the guard below has passed.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ needs.run.outputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download the digests that run published
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ needs.run.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --name fss-image-digests \
+            --dir "$RUNNER_TEMP/fss-image-digests"
+          cat "$RUNNER_TEMP/fss-image-digests/image-digests.json"
+
+      # aws-actions/configure-aws-credentials v4, the pin every other workflow uses.
+      - name: Assume the production CI deploy role
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502
+        with:
+          role-to-assume: ${{ secrets.FSS_PRODUCTION_CI_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: fss-prod-ci-deploy-${{ github.run_id }}
+          role-duration-seconds: 7200
+
+      - name: The session is exactly the CI role, in the account its ARN names, in the region this deploys to
+        env:
+          ROLE_ARN: ${{ secrets.FSS_PRODUCTION_CI_ROLE_ARN }}
+          EXPECTED_REGION: ${{ vars.FSS_PRODUCTION_REGION || 'us-east-1' }}
+        run: |
+          set -euo pipefail
+          [[ "$ROLE_ARN" =~ ^arn:aws:iam::([0-9]{12}):role/fss-prod-ci-deploy$ ]] \
+            || { echo "::error::FSS_PRODUCTION_CI_ROLE_ARN is not arn:aws:iam::<account>:role/fss-prod-ci-deploy"; exit 1; }
+          account=${BASH_REMATCH[1]}
+          [ "$AWS_REGION" = "$EXPECTED_REGION" ] \
+            || { echo "::error::this job is configured for $AWS_REGION and production is in $EXPECTED_REGION"; exit 1; }
+          identity="$(aws sts get-caller-identity --query Arn --output text)"
+          [ "$identity" = "arn:aws:sts::${account}:assumed-role/fss-prod-ci-deploy/fss-prod-ci-deploy-${GITHUB_RUN_ID}" ] \
+            || { echo "::error::the session is $identity, not this run's session of $ROLE_ARN"; exit 1; }
+          echo "session $identity"
+
+      # The protected-path guard. This file's code, run before any of the repository's:
+      # the commit production's images were built from — read from the ci-<commit> tag
+      # the promotion gave each running digest in fss-prod-* — and every commit between
+      # it and the images commit, one by one, each classified. Per commit rather than as
+      # one net diff, so a protected change later reverted is still seen, and with rename
+      # detection off, so a moved file counts at both of its paths. A merge is judged
+      # against its first parent.
+      - name: Protected paths in any commit since production's
+        id: guard
+        env:
+          COMMIT: ${{ needs.run.outputs.commit }}
+        run: |
+          set -euo pipefail
+          identity="$(aws sts get-caller-identity --query Arn --output text)"
+          account="${identity#arn:aws:sts::}"
+          account="${account%%:*}"
+          [[ "$account" =~ ^[0-9]{12}$ ]] || { echo "::error::the session names no account"; exit 1; }
+          cluster="arn:aws:ecs:${AWS_REGION}:${account}:cluster/fss-prod-cluster"
+          work="$RUNNER_TEMP/guard"
+          mkdir -p "$work"
+          manual() {
+            echo "decision=manual" >> "$GITHUB_OUTPUT"
+            echo "reason=$1" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Not deployed by CI; the manual path applies::$1"
+            exit 0
+          }
+          # Which commits production's images were built from.
+          : > "$work/production-commits"
+          for service in worker api; do
+            aws ecs describe-services --cluster "$cluster" --services "fss-prod-$service" --output json > "$work/service.json"
+            definition="$(python3 -c 'import json, sys; s = (json.load(open(sys.argv[1])) or {}).get("services") or []; print(s[0].get("taskDefinition", "") if len(s) == 1 else "")' "$work/service.json")"
+            [ -n "$definition" ] || { echo "::error::ECS does not describe fss-prod-$service"; exit 1; }
+            aws ecs describe-task-definition --task-definition "$definition" --output json > "$work/definition.json"
+            digest="$(python3 -c '
+          import json, re, sys
+          containers = ((json.load(open(sys.argv[1])) or {}).get("taskDefinition") or {}).get("containerDefinitions") or []
+          image = next((c.get("image", "") for c in containers if c.get("name") == sys.argv[2]), "")
+          match = re.fullmatch(r"[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/fss-prod-[a-z]+@(sha256:[0-9a-f]{64})", image)
+          print(match.group(1) if match else "")
+          ' "$work/definition.json" "$service")"
+            [ -n "$digest" ] || { echo "::error::fss-prod-$service does not run an fss-prod image by digest"; exit 1; }
+            aws ecr describe-images --repository-name "fss-prod-$service" --image-ids "imageDigest=$digest" --output json > "$work/image.json"
+            commits="$(python3 -c '
+          import json, re, sys
+          details = (json.load(open(sys.argv[1])) or {}).get("imageDetails") or []
+          tags = details[0].get("imageTags") or [] if details else []
+          print(" ".join(sorted({m.group(1) for m in (re.fullmatch(r"(?:ci-)?([0-9a-f]{40})(?:-image)?", t) for t in tags) if m})))
+          ' "$work/image.json")"
+            [ -n "$commits" ] || manual "cannot tell which commit production's $service image was built from: fss-prod-$service@$digest carries no ci-<commit> or commit tag"
+            for built in $commits; do
+              git cat-file -e "${built}^{commit}" 2>/dev/null \
+                || manual "production's $service image was built from $built, which is not in this repository's history"
+              git merge-base --is-ancestor "$built" "$COMMIT" \
+                || manual "production's $service image was built from $built, which is not an ancestor of $COMMIT: these images would not move production forward"
+              echo "production's $service image was built from $built"
+              echo "$built" >> "$work/production-commits"
+            done
+          done
+          # Every path any commit of the range touched.
+          : > "$work/paths"
+          for built in $(sort -u "$work/production-commits"); do
+            git -c core.quotePath=false log --no-renames --no-ext-diff --no-textconv --format= --name-only \
+              --diff-merges=first-parent "$built..$COMMIT" >> "$work/paths"
+          done
+          sort -u "$work/paths" | sed '/^$/d' > "$work/touched"
+          echo "$(wc -l < "$work/touched" | tr -d ' ') path(s) touched by the commits since production's"
+          # The classification. Application code deploys; everything else, including a
+          # path this list has never met, takes the manual path.
+          : > "$work/protected"
+          while IFS= read -r path; do
+            case "$path" in
+              infra/*) why='infrastructure, and every release script in infra/scripts' ;;
+              packages/domain/db/migrations/*) why='a migration, which is a schema change' ;;
+              .github/*) why='a workflow' ;;
+              scripts/productionSmoke.mjs) why='the production smoke this deploy is judged by' ;;
+              scripts/releaseMutation*) why='' ;;
+              scripts/*[Rr]elease*) why='a release script' ;;
+              apps/* | packages/* | scripts/* | docs/* | test/* | tests/*) why='' ;;
+              Dockerfile.api | Dockerfile.worker | Dockerfile.api.dockerignore | Dockerfile.worker.dockerignore) why='' ;;
+              package.json | package-lock.json | certs/*) why='' ;;
+              tsconfig*.json | eslint*.mjs | README.md) why='' ;;
+              *) why='not an application path this deploy knows' ;;
+            esac
+            [ -z "$why" ] || printf '%s (%s)\n' "$path" "$why" >> "$work/protected"
+          done < "$work/touched"
+          if [ -s "$work/protected" ]; then
+            {
+              echo '### Paths that keep this release on the manual path'
+              echo ''
+              sed 's/^/- /' "$work/protected"
+            } >> "$GITHUB_STEP_SUMMARY"
+            count="$(wc -l < "$work/protected" | tr -d ' ')"
+            first="$(head -3 "$work/protected" | paste -sd ';' - | sed 's/;/; /g')"
+            manual "the commits since production's touch $count path(s) that are not application code: $first. Release this one by hand (release.md 4); the next app merge after it deploys itself"
+          fi
+          echo "decision=pass" >> "$GITHUB_OUTPUT"
+          echo "no protected path in any commit since production's"
+
+      - name: Decide - app-only, already running, or the manual path
+        id: check
+        if: steps.guard.outputs.decision == 'pass'
+        env:
+          COMMIT: ${{ needs.run.outputs.commit }}
+          RUN_ID: ${{ needs.run.outputs.run_id }}
+          RUN_ATTEMPT: ${{ needs.run.outputs.run_attempt }}
+          API_RANGE: ${{ needs.ranges.outputs.api_range }}
+          WORKER_RANGE: ${{ needs.ranges.outputs.worker_range }}
+        run: |
+          set -euo pipefail
+          infra/scripts/ci-deploy-app.sh check \
+            --digests "$RUNNER_TEMP/fss-image-digests/image-digests.json" \
+            --commit "$COMMIT" --run-id "$RUN_ID" --run-attempt "$RUN_ATTEMPT" \
+            --api-range "$API_RANGE" --worker-range "$WORKER_RANGE" \
+            --origin "$FSS_PRODUCTION_ORIGIN"
+
+      # The same script, waiting for nothing.
+      - name: Still no rehearsal job in progress, immediately before the first write
+        if: steps.check.outputs.decision == 'deploy'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WAIT_MINUTES: '0'
+        run: |
+          set -euo pipefail
+          # The fallback to the shared concurrency group: a rehearsal job in progress, which
+          # can only be one that started without the group. A rehearsal waiting on the
+          # group behind this job is not counted, or neither would ever run.
+          rehearsal_jobs_in_progress() {
+            local work="$RUNNER_TEMP/rehearsal-poll" status id
+            rm -rf "$work"
+            mkdir -p "$work"
+            for status in in_progress queued waiting requested pending; do
+              gh api "repos/$GITHUB_REPOSITORY/actions/runs?status=$status&per_page=100" > "$work/runs-$status.json"
+            done
+            for id in $(python3 - "$work" <<'PY'
+          import glob, json, sys
+          wanted = {".github/workflows/greenfield-release.yml", ".github/workflows/greenfield-weekly-rehearsal.yml"}
+          ids = set()
+          for path in glob.glob(sys.argv[1] + "/runs-*.json"):
+              for run in (json.load(open(path, encoding="utf-8")) or {}).get("workflow_runs") or []:
+                  if str(run.get("path", "")).split("@")[0] in wanted and str(run.get("id", "")).isdigit():
+                      ids.add(str(run["id"]))
+          print(" ".join(sorted(ids)))
+          PY
+            ); do
+              gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/jobs?per_page=100" > "$work/jobs.json"
+              if python3 - "$work/jobs.json" <<'PY'
+          import json, sys
+          jobs = (json.load(open(sys.argv[1], encoding="utf-8")) or {}).get("jobs") or []
+          sys.exit(0 if any("Create, deploy, drill and destroy a rehearsal environment" in str(job.get("name", ""))
+                            and job.get("status") == "in_progress" for job in jobs) else 1)
+          PY
+              then
+                printf ' %s' "$id"
+              fi
+            done
+          }
+          minute=0
+          while :; do
+            running="$(rehearsal_jobs_in_progress)"
+            if [ -z "$running" ]; then
+              echo "no rehearsal job is in progress"
+              exit 0
+            fi
+            if [ "$minute" -ge "$WAIT_MINUTES" ]; then
+              echo "::error::a rehearsal job is in progress (run$running). Nothing has been written; re-run this deploy when it has finished."
+              exit 1
+            fi
+            echo "a rehearsal job is in progress (run$running); waiting for it"
+            sleep 60
+            minute=$((minute + 1))
+          done
+
+      - name: Promote both images into the production repositories, by digest
+        if: steps.check.outputs.decision == 'deploy'
+        run: |
+          set -euo pipefail
+          infra/scripts/release-promote.sh "$RUNNER_TEMP/fss-image-digests/image-digests.json" --app-only
+
+      - name: Register, roll the worker and then the API, and hold each to its digest
+        id: deploy
+        if: steps.check.outputs.decision == 'deploy'
+        env:
+          COMMIT: ${{ needs.run.outputs.commit }}
+          RUN_ID: ${{ needs.run.outputs.run_id }}
+          RUN_ATTEMPT: ${{ needs.run.outputs.run_attempt }}
+          API_RANGE: ${{ needs.ranges.outputs.api_range }}
+          WORKER_RANGE: ${{ needs.ranges.outputs.worker_range }}
+        run: |
+          set -euo pipefail
+          infra/scripts/ci-deploy-app.sh deploy \
+            --digests "$RUNNER_TEMP/fss-image-digests/image-digests.json" \
+            --commit "$COMMIT" --run-id "$RUN_ID" --run-attempt "$RUN_ATTEMPT" \
+            --api-range "$API_RANGE" --worker-range "$WORKER_RANGE"
+
+      # HOOK (lane g96), NOT INTEGRATED: the release record for these digests.
+      # Lane g96 is building `infra/scripts/release-record-from-ci.sh`. This is where its
+      # record would be handed to `infra/scripts/release-deploy.sh ... --release-record`,
+      # after the rollout above has held both services to their digests and before the
+      # canary read, gated like the rollout on `steps.check.outputs.decision == 'deploy'`
+      # and `steps.deploy.outcome == 'success'`. It is a comment on purpose, because
+      # `fss-prod-ci-deploy` cannot do what that script does today: it reads the root's
+      # Terraform outputs, and this role has no state access; and the put runs on the
+      # operations task, which this role can neither run nor pass roles to. Wiring it
+      # means either those grants in `infra/roots/production/ci_deploy.tf` (state read,
+      # `ecs:RunTask` on the operations family, `iam:PassRole` on its two roles) or a
+      # put that needs none of them. The record must carry no secret value. Roughly:
+      #   record="$RUNNER_TEMP/release-record.json"
+      #   infra/scripts/release-record-from-ci.sh <arguments g96 defines> > "$record"
+      #   infra/scripts/release-deploy.sh infra/roots/production fss-prod \
+      #     --api-digest "<api digest>" --worker-digest "<worker digest>" --release-record "$record"
+
+      - name: Read the canary age the smoke judges
+        id: canary
+        if: steps.deploy.outcome == 'success'
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4 5; do
+            age="$(aws cloudwatch get-metric-statistics --namespace FSS/fss-prod \
+              --metric-name CanaryCompletionAgeSeconds --statistics Maximum \
+              --start-time "$(date -u -d '-1 hour' +%Y-%m-%dT%H:%M:%SZ)" \
+              --end-time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --period 300 \
+              --query 'reverse(sort_by(Datapoints,&Timestamp))[0].Maximum' --output text)"
+            if [[ "$age" =~ ^[0-9]{1,7}(\.[0-9]{1,6})?$ ]]; then
+              echo "age=$age" >> "$GITHUB_OUTPUT"
+              echo "canary age ${age}s"
+              exit 0
+            fi
+            echo "no CanaryCompletionAgeSeconds datapoint yet (attempt $attempt)"
+            sleep 60
+          done
+          echo "::error::production published no CanaryCompletionAgeSeconds datapoint; the smoke has nothing to judge"
+          exit 1
+
+      - name: The revisions each service names now
+        id: observed
+        if: always() && steps.guard.outcome != 'skipped'
+        run: |
+          set -euo pipefail
+          identity="$(aws sts get-caller-identity --query Arn --output text 2>/dev/null)" || { echo "observed=unreadable" >> "$GITHUB_OUTPUT"; exit 0; }
+          account="${identity#arn:aws:sts::}"
+          account="${account%%:*}"
+          observed=''
+          for service in worker api; do
+            revision="$(aws ecs describe-services --cluster "arn:aws:ecs:${AWS_REGION}:${account}:cluster/fss-prod-cluster" \
+              --services "fss-prod-$service" --query 'services[0].taskDefinition' --output text 2>/dev/null || echo unreadable)"
+            observed="$observed $service ${revision##*/}"
+          done
+          echo "observed=${observed# }" >> "$GITHUB_OUTPUT"
+          echo "observed:$observed"
+
+  smoke:
+    name: Production smoke, with no credential
+    needs: [run, deploy]
+    if: needs.deploy.result == 'success' && needs.deploy.outputs.decision == 'deploy'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # The images commit's smoke runs here, against the public origin only.
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: The two scalars from the deploy
+        env:
+          CANARY_AGE: ${{ needs.deploy.outputs.canary_age }}
+          EXPECT_SENDING: ${{ needs.deploy.outputs.expect_sending }}
+        run: |
+          set -euo pipefail
+          [[ "$CANARY_AGE" =~ ^[0-9]{1,7}(\.[0-9]{1,6})?$ ]] || { echo "::error::the canary age '$CANARY_AGE' is not a number"; exit 1; }
+          case "$EXPECT_SENDING" in
+            disabled | enabled) ;;
+            *) echo "::error::the deploy reported no sending state ('$EXPECT_SENDING')"; exit 1 ;;
+          esac
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ needs.run.outputs.commit }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.20.0'
+
+      - name: Six checks against the running API
+        env:
+          CANARY_AGE: ${{ needs.deploy.outputs.canary_age }}
+          EXPECT_SENDING: ${{ needs.deploy.outputs.expect_sending }}
+        run: |
+          set -euo pipefail
+          # The sending state the deployed task definition carries, which this deploy did
+          # not change: the new binaries must report the same.
+          for attempt in 1 2 3; do
+            if NODE_OPTIONS="--experimental-transform-types --disable-warning=ExperimentalWarning" \
+              node scripts/productionSmoke.mjs --origin "$FSS_PRODUCTION_ORIGIN" \
+                --canary-age-seconds "$CANARY_AGE" --expect-sending "$EXPECT_SENDING"; then
+              exit 0
+            fi
+            echo "smoke attempt $attempt of 3 did not pass"
+            [ "$attempt" -eq 3 ] || sleep 60
+          done
+          echo "::error::the production smoke did not pass. The new revisions are running; the summary names them."
+          exit 1
+
+  summary:
+    name: One line
+    needs: [run, ranges, deploy, smoke]
+    # Not for an images run that failed or was not a push to main: nothing was asked.
+    if: always() && needs.run.result != 'skipped'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: One line
+        env:
+          COMMIT: ${{ needs.run.outputs.commit }}
+          DEPLOY_RESULT: ${{ needs.deploy.result }}
+          SMOKE_RESULT: ${{ needs.smoke.result }}
+          DECISION: ${{ needs.deploy.outputs.decision }}
+          REASON: ${{ needs.deploy.outputs.reason }}
+          API_DEFINITION: ${{ needs.deploy.outputs.api_task_definition }}
+          WORKER_DEFINITION: ${{ needs.deploy.outputs.worker_task_definition }}
+          PREVIOUS_API: ${{ needs.deploy.outputs.previous_api_task_definition }}
+          PREVIOUS_WORKER: ${{ needs.deploy.outputs.previous_worker_task_definition }}
+          OBSERVED: ${{ needs.deploy.outputs.observed }}
+        run: |
+          set -euo pipefail
+          short="${COMMIT:0:8}"
+          if [ "$DEPLOY_RESULT" != success ] || { [ "$DECISION" = deploy ] && [ "$SMOKE_RESULT" != success ]; }; then
+            line="Production deploy of ${short:-an unknown commit} FAILED (deploy ${DEPLOY_RESULT:-not run}, smoke ${SMOKE_RESULT:-not run}, decision ${DECISION:-none})."
+            [ -z "$PREVIOUS_API$PREVIOUS_WORKER" ] || line="$line Before: worker ${PREVIOUS_WORKER##*/}, api ${PREVIOUS_API##*/}."
+            [ -z "$OBSERVED" ] || line="$line Observed now: $OBSERVED."
+            echo "::error::$line"
+          else
+            case "$DECISION" in
+              deploy) line="Deployed $short to production: worker ${WORKER_DEFINITION##*/}, api ${API_DEFINITION##*/}, each held to its digest, smoke passed. Observed now: $OBSERVED." ;;
+              current) line="Production already runs $short. Nothing deployed." ;;
+              manual) line="Not deployed: $REASON. The manual path applies (docs/greenfield/release.md 4)." ;;
+              *) line="Nothing decided." ;;
+            esac
+            echo "::notice::$line"
+          fi
+          echo "$line" >> "$GITHUB_STEP_SUMMARY"

@@ -665,6 +665,13 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     environment: rehearsal
+    # Shared with the deploy job of `greenfield-deploy.yml` (lane g91): this job records
+    # production's Name-tagged inventory before its run and compares it after, and every
+    # revision an app-only deploy registers is a new production ARN. So the two exclude
+    # each other. A job pending in the group is replaced by the next one to queue.
+    concurrency:
+      group: fss-production-inventory
+      cancel-in-progress: false
     permissions:
       contents: read
       id-token: write

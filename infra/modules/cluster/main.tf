@@ -616,6 +616,28 @@ resource "aws_ecs_task_definition" "api" {
   execution_role_arn       = aws_iam_role.api_execution.arn
   task_role_arn            = aws_iam_role.api_task.arn
 
+  # CI registers revisions of this family (lane g91). An app-only merge to main is
+  # deployed to production by `.github/workflows/greenfield-deploy.yml`, which
+  # registers the next revision of the running definition with only the image digest
+  # changed and points the service at it; Terraform is not run. `track_latest` makes
+  # Terraform read the newest ACTIVE revision of the family as this resource, rather
+  # than the revision it registered itself, so:
+  #
+  #   * a plan given the deployed digests (`infra/scripts/deployed-digests.sh`) shows
+  #     no change here and none to the service — Terraform does not fight CI;
+  #   * a plan that changes anything else here (an environment variable, a secret, the
+  #     schema range of a schema release) registers the next revision from those
+  #     digests, and the service below is re-pointed at it by the apply, as before;
+  #   * a plan given older digests would put the older image back, and shows that as
+  #     a replacement of this definition. Reading the deployed digests first is the
+  #     drift rule (`docs/greenfield/release.md` 4.0).
+  #
+  # The services deliberately do not ignore `task_definition`: the manual schema path
+  # depends on the apply re-pointing them (`release-deploy.sh --schema-change` scales
+  # whatever they name), and so does every infrastructure change to a definition. The
+  # one-off definitions below do not track: CI never registers them.
+  track_latest = true
+
   runtime_platform {
     operating_system_family = "LINUX"
     cpu_architecture        = var.cpu_architecture
@@ -683,6 +705,10 @@ resource "aws_ecs_task_definition" "worker" {
   memory                   = tostring(var.worker_memory)
   execution_role_arn       = aws_iam_role.worker_execution.arn
   task_role_arn            = aws_iam_role.worker_task.arn
+
+  # As on the API definition above: CI registers revisions of this family, and
+  # Terraform reads the newest ACTIVE one as its own (lane g91).
+  track_latest = true
 
   runtime_platform {
     operating_system_family = "LINUX"
@@ -939,6 +965,12 @@ resource "aws_ecs_service" "api" {
   # count (`output.deployment_plan`) in steps 5 and 6 of every deploy, rolling or
   # schema, so the number still comes from the root; it just no longer arrives
   # through the apply. `docs/decisions/g12h-bootstrap-is-a-root-variable.md`, "Amended".
+  #
+  # `task_definition` is not ignored, although CI moves it (lane g91): the task
+  # definition above tracks the newest revision of its family, so after a CI deploy
+  # the ARN this names *is* the revision the service runs and a plan shows nothing to
+  # change. Ignoring it instead would stop an apply from re-pointing the service at a
+  # revision the apply registered, and the schema path needs exactly that.
   lifecycle {
     ignore_changes = [desired_count]
   }

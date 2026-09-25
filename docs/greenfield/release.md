@@ -17,7 +17,8 @@ Read section 1 before doing anything in section 3. Two steps in it take days of 
 | Step | Who | Why it cannot be the other one |
 |---|---|---|
 | Build, push and verify the images | CI (`greenfield-images.yml`, its `publish` job on a push to main that changes an image input) | One build per commit, pushed to `fss-rh-api` and `fss-rh-worker` as `ci-<commit>`, pulled back by digest and verified, with the digests published as `fss-image-digests`. That digest is the release's identity (8.0al). |
-| **Promote the images to production** | **David, with the admin profile** | `infra/scripts/release-promote.sh` copies the two digests from `fss-rh-*` to `fss-prod-*` and reads production back. No CI job holds a production credential (8.0al). |
+| **Deploy an app-only change to production** | **CI (`greenfield-deploy.yml`, after `publish`), as `fss-prod-ci-deploy`** | David's decision of 25 September: app-only changes deploy themselves. It promotes by digest, registers the two service revisions, rolls, holds each to its digest and smokes; anything that is not application code, or expects another schema, answers "manual" and touches nothing (4.0). |
+| **Promote the images of a schema or infrastructure release** | **David, with the admin profile** | `infra/scripts/release-promote.sh release-manifest.json` copies the two digests of a green full rehearsal from `fss-rh-*` to `fss-prod-*` and reads production back (2.1). |
 | **Apply the rehearsal registry — once, ever** (done) | **CI (`greenfield-rehearsal-registry.yml`), dispatched by David twice: plan, then apply** | Same reason as the row below: `fss-rh-deploy` is assumable only from the `rehearsal` environment. `infra-apply-runbook.md` 2.1. |
 | Run the rehearsal | CI (`greenfield-release.yml`) | It needs the `fss-rh-deploy` role, which only the OIDC provider may assume, and it must tear the environment down even when a step fails. |
 | Write the release record | CI, last | So a record can only exist for a run that finished. |
@@ -221,9 +222,9 @@ Until 8.0aj the maximum was the exact latest desktop, so every desktop release n
    ```bash
    # After a green full rehearsal: its fss-release-manifest artifact.
    infra/scripts/release-promote.sh release-manifest.json
-   # An app-only release, the one class the cadence lets skip the rehearsal: CI's digests.
-   infra/scripts/release-promote.sh image-digests.json --app-only
    ```
+
+   An app-only change is not promoted by hand. *Greenfield deploy* runs `release-promote.sh image-digests.json --app-only` itself, as `fss-prod-ci-deploy`, once it has decided the change is app-only (4.0). The same command with the admin profile is the fallback when that workflow cannot run.
 
    Each digest is copied from `fss-rh-*` to `fss-prod-*` with `docker buildx imagetools create --prefer-index=false`, a carbon copy of CI's bare manifest, and the tag is read back. If the tag names anything else, the image itself must be in production, and it is tagged there by its own manifest (`<tag>-image` when the release's tag is taken) and read back again. A digest production already holds under a tag is not copied again; one it holds untagged is tagged in place. A tag that already names another image is never overwritten. `docs/decisions/g86-the-promotion-copies-a-bare-manifest-as-itself.md`.
 
@@ -522,6 +523,8 @@ FSS_REHEARSAL_DRY_RUN=1 FSS_REHEARSAL_REPORTS=/tmp/fss-rehearsal \
 
 ## 4. Production apply — David
 
+**An app-only change is not applied here: CI deploys it (4.0).** This section is the manual path, for a schema or an infrastructure change.
+
 Follow `docs/greenfield/infra-apply-runbook.md` section 3.2 for the plan and apply.
 
 **You pass no `assume_deployment_role` here.** It defaults to `true` in every root, which is what a person running a local apply wants: the provider assumes `fss-prod-deploy` for you. The flag is for a session that has already assumed its role — the two rehearsal workflows, and nothing else (`infra-apply-runbook.md` 1.1).
@@ -532,7 +535,7 @@ Follow `docs/greenfield/infra-apply-runbook.md` section 3.2 for the plan and app
 
 Three things belong to the release rather than to the infrastructure:
 
-**The digests.** `api_image` and `worker_image` are the digests from section 2, not the tags.
+**The digests.** For a schema release, `api_image` and `worker_image` are the release's digests from section 2, not the tags. For an infrastructure change they are the digests production runs, which `infra/scripts/deployed-digests.sh fss-prod` prints — never the ones in the last plan anybody applied, because CI has moved them since (4.0, the drift rule).
 
 **The schema ranges.** Read them from the source rather than typing them:
 
@@ -573,6 +576,76 @@ There is also `extra_environment` (`map(string)`, empty) on both roots, for what
 
 **A desktop release is not a reason for this section.** Since 8.0aj the API admits every 1.x desktop from its minimum up, so publishing a desktop build needs no apply and no deployment, unless 2.0 says the API goes first. Confirm the published range with `curl -fsS https://api.usecallie.com/auth/client-version`. After 8.0aj it reads `"supported":{"minimum":"1.0.0","maximum":"1.999.999"}`.
 
+### 4.0 App-only changes deploy themselves, and the two manual paths (lane g91)
+
+David's decision of 25 September 2026: *"I'm a startup, I want to move fast."* When *Greenfield images* publishes the images of a push to main, *Greenfield deploy* (`.github/workflows/greenfield-deploy.yml`) deploys them to production as `fss-prod-ci-deploy`, the role `infra/roots/production/ci_deploy.tf` declares. It trusts one OIDC subject, this repository's `production-deploy` environment, and holds no state, secret, database or IAM write.
+
+```
+run (no credential) → ranges (images commit, no credential) → deploy (credential): guard → check → promote → worker → API → canary age → smoke (images commit, no credential) → one line
+```
+
+- **Only one job holds a credential, and it runs no code from the images commit before its guard.** The schema ranges are read from the images commit by a job with no `id-token`, and reach the credentialed job as two validated scalars. The smoke runs from the images commit in another job without a credential; it is handed the canary age as a scalar. The credentialed job checks out the images commit exactly — never main's tip — and runs no Node at all.
+- **The guard** is the workflow's own inline code and runs before any of the repository's. It reads the commit production's images were built from: the `ci-<commit>` tag the promotion gave each running digest in `fss-prod-*`, or the bare commit an operator's own push was tagged with. Then it lists what every commit between that commit and the images commit touched. It reads commit by commit, so a change that was later reverted still counts. Rename detection is off, so a moved file counts at both its paths, and a merge is judged against its first parent. It answers `manual` — a notice and a list of paths in the summary, a green run, nothing touched — when any of these paths appears:
+  - `infra/**`, every script in `infra/scripts/` included;
+  - a migration;
+  - `scripts/productionSmoke.mjs` or another release script;
+  - `.github/**`;
+  - a path the list does not know.
+
+  It also answers `manual` when a running image has no commit tag, or when production's commit is not behind the images commit. It passes when every commit's paths are application code. Only then does anything from the checkout run, and that is `infra/scripts/`, which the guard has just shown is unchanged since production's own commit.
+- **check** (`infra/scripts/ci-deploy-app.sh check`) reads and writes nothing. It answers `manual` in two cases:
+  - the images declare a schema range the running task definitions do not, or `/health` reports a database version the images do not accept;
+  - a service is not running exactly its declared count with nothing pending: desired zero is a schema release, and running short is an outage.
+
+  It fails, touching nothing, in these cases:
+  - the session is not one of `fss-prod-ci-deploy` in account `326255650484`, or the region is not `us-east-1`;
+  - the cluster is not tagged `production`, or a service is mid-rollout;
+  - the digests file is not the images run's own (commit, run id and attempt);
+  - either digest differs from the one `fss-rh-<image>:ci-<commit>` names;
+  - `/health` does not answer.
+- **deploy** repeats every read and guard first. It registers the next revision of each service's running task definition with only the image digest changed, describes it back and compares it with the running one field by field. Anything but the image different, and it deregisters the revision before any service names it. It then points the service at the revision: the worker first, waited on and held to its digest on every running task, and only then the API. The circuit breaker stays on. When ECS rolls a revision back, the deploy fails, nothing after it is touched, and the rolled-back revision is deregistered, so the newest ACTIVE revision is again the one that runs. The run prints the stopped tasks' stop and exit codes, and only the `event`, `reason` and `code` fields of their structured log lines, never a raw line. It never changes a count.
+- **smoke** is `scripts/productionSmoke.mjs` at the images commit, with the canary age from `FSS/fss-prod`, expecting the sending state the task definition carries.
+
+**What this lane accepts.** A job holding the role can register a revision of `fss-prod-api` or `fss-prod-worker` with any image in their two repositories and roll it out. IAM has no condition on a task definition's contents, and a main-branch workflow can deploy whatever main contains; that is the price of continuous deployment, and the script narrows it by deriving every revision from the running one. The limits are the `production-deploy` environment restricted to main, no `id-token` in a job that runs images-commit code, the exact OIDC subject, ECR writes only to the two `fss-prod` repositories, and unchanged task roles, because `iam:PassRole` names only the two services' existing four. `UpdateService` needs a task definition of the service's own family, so a bare `--desired-count 0` is refused; IAM cannot also forbid a count on a call that names one, and the script never sends one.
+
+**Merges and rehearsals.** Deploys share one concurrency group and a running one always finishes; a waiting run replaced by a newer one is covered by the newer one's range. The deploy job and the rehearsal job of `greenfield-release.yml` share the group `fss-production-inventory`, so they exclude each other: every revision a deploy registers is a new `Name`-tagged production ARN, which a running rehearsal's inventory guard would see. GitHub replaces a job pending in a group with the next one to queue: a replaced rehearsal is dispatched again, and a replaced deploy is covered by the next. A poll before the role is assumed, and again before the first write, catches a rehearsal job that started without the group. The job allows 150 minutes and the credential two hours, twice the worst rollout of three ten-minute waits per service. A failed run's summary names the revisions each service had before and the ones it names now, as observed. `aws ecs update-service --cluster fss-prod-cluster --service fss-prod-<api|worker> --task-definition <previous>` puts one back.
+
+**After a protected change, the next release is by hand.** A protected change in the range keeps answering `manual` until production runs images built after it. An infrastructure-only merge builds no images. So the rule is: apply the infrastructure change by the manual path, then release the first app merge after it by hand — `release-promote.sh image-digests.json --app-only` with the admin profile, and the rolling path of 4.1. Production's commit tag is then past the change, and the next app merge deploys itself again. There is no switch that tells CI a change was applied.
+
+**CI puts no release record yet.** Lane g96 is building one, and the deploy job marks where it would go with a comment. With sending off, as it is today, that changes nothing. Once section 6 has run, the worker holds every send when the attested record does not name its image. So a CI deploy of a new worker digest holds sending until a record naming that digest is put and attested (section 6, step 2).
+
+**Terraform and CI share the two service task definitions.** Both carry `track_latest = true` (`infra/modules/cluster`), so Terraform reads the family's newest ACTIVE revision — CI's — as its own, and the services still re-point on an apply that registers a revision. The migration, operations and drill definitions do not track: they are Terraform's, and carry the worker image of the last apply until the next one.
+
+**The drift rule: every production plan starts from what production runs, and every apply checks it again.**
+
+```bash
+infra/scripts/deployed-digests.sh fss-prod      # api_image=… worker_image=… and the two schema ranges
+(cd infra/roots/production && terraform plan -out=production.tfplan \
+   $(../../scripts/deployed-digests.sh fss-prod --var-flags) \
+   -var="certificate_arn=<production acm arn>" -var="api_hostname=api.usecallie.com" ...)
+# immediately before the apply, with the two images the plan was made with:
+infra/scripts/deployed-digests.sh fss-prod --compare "<api_image>" "<worker_image>" \
+  && (cd infra/roots/production && terraform apply production.tfplan)
+```
+
+`deployed-digests.sh` refuses in three cases:
+- a service is mid-rollout;
+- a family's newest ACTIVE revision is not the one its service runs, which Terraform would otherwise read. Deregister the stray revision it names first;
+- with `--compare`, either image differs from the one running. A CI deploy has landed since the plan; plan again. A schema release plans with its own new images on purpose and passes `--allow-digest-change`.
+
+The two manual paths:
+
+1. **An infrastructure change.** Plan with exactly those four values. The plan shows no change to `aws_ecs_task_definition.api` or `.worker` or to either service. The exception is a change to a task definition, where it registers the next revision from the running images and re-points the service. **A plan that replaces either definition with an image other than the one `deployed-digests.sh` printed rolls production back: do not apply it.** After the apply, `release-deploy.sh infra/roots/production fss-prod --api-digest <deployed> --worker-digest <deployed>` holds the running tasks to those digests. Then release the next app merge by hand, as above.
+2. **A schema change.** The release's digests and ranges, `release-stop.sh` before the apply, and `release-deploy.sh --schema-change` after it (4.1). Pass `--compare … --allow-digest-change` before the apply. CI refuses to deploy while the services are stopped or the images' range differs from production's, so it cannot race a migration.
+
+**Set up once** (the operator, 25 September):
+1. Apply the role from a plan of this root, given the deployed digests. The plan should create `aws_iam_role.ci_deploy` and `aws_iam_role_policy.ci_deploy`, set `track_latest` in place on `aws_ecs_task_definition.api` and `.worker`, change the outputs, and replace nothing. A plan that replaces a task definition or touches a service is not this change.
+2. Create the `production-deploy` environment with `main` as its only deployment branch.
+3. Give it the secret `FSS_PRODUCTION_CI_ROLE_ARN`: the public ARN that `terraform output -raw ci_deploy_role_arn` prints.
+4. Dispatch *Greenfield deploy* once by hand with the id of the latest green *Greenfield images* run on main. That range holds this lane's own infrastructure and workflow, so expect `manual`: release that one by hand, and CI takes over from the next app merge.
+
+Optionally, customize the repository's OIDC subject claim to include the workflow, ref and event. Then change the trust's `sub` in `ci_deploy.tf` and its test to the exact new value together, in one pull request applied before the customization.
+
 ### 4.1 The order inside the apply, and the one command that performs it
 
 ```
@@ -604,7 +677,7 @@ infra/scripts/release-stop.sh infra/roots/production fss-prod --environment prod
 
 `release-stop.sh` asks for `--environment production` because it takes production down on purpose, the same extra word `release-bootstrap-workspace.sh` asks for, and it refuses a root that is not the prefix's, a cluster in another account, region or namespace, and a cluster tagged as the other environment. Run twice, it does nothing the second time. Plan before the stop and apply after it: the plan does not depend on the counts, and the outage starts at step 1, so keep steps 1 to 3 together. A first apply (`bootstrap=true`) needs no stop, because it creates both services at zero.
 
-**An app-only release is the rolling path** (8.0am): no stop, the apply, then `release-deploy.sh` without `--schema-change`:
+**An app-only release is CI's (4.0).** By hand — only when that workflow cannot run — it is the rolling path (8.0am): `release-promote.sh image-digests.json --app-only`, no stop, the apply with the release's digests, then `release-deploy.sh` without `--schema-change`:
 
 ```
 terraform apply  →  worker count  →  API count  →  one wait  →  running-digest check
@@ -1015,3 +1088,11 @@ Production is live: applied, deployed, bootstrapped and smoked at `66203322` on 
 8. **Sending.** `FSS_SENDING_ENABLED` is `false` and section 6 has not been run, so nothing has been sent from production. 12.7's authentication checks, the six-week ramp, and the journal's first real write — item 2 above, which surfaces only as `SuppressionJournalWriteFailures` — are all unproved in production.
 9. **The exact rehearsal deployment policy, put back.** `fss-rh-deploy` still carries the discovery document of 8.0h: a wide allow on the services the tree uses, with guards, for one pass of `create`, `deploy` and `full`. The exact policy derived from the CloudTrail record of that pass is put back only after a `full` run has passed (`infra-apply-runbook.md` 1.1b, step 5). Run 36100448302 passed on 25 September; putting the exact document back is not recorded here, and until it is, no rehearsal run proves anything about the policy this release ships. `fss-prod-deploy` was never widened and the renderer refuses to widen it.
 10. **Email validation against real DNS.** Since PR 231 the worker checks each unchecked address's domain (`route.validate`, `docs/decisions/g90-email-technical-validation.md`). No test has asked a real DNS server: that the VPC resolver answers MX queries from the worker task, and that Node reports a null MX as an empty exchange, are inferred. After the deploy, `route.email.validated` audit events with `mx_present` or `implicit_mx` answer it; a run of `route.email.validation_deferred` events means the resolver is not answering.
+11. **The CI deploy of an app-only change (lane g91) — unrun.** Nothing credentialed has run it. Still open:
+    - that GitHub issues this repository's jobs the legacy subject `repo:david-cui-bruno/founding-sales:environment:production-deploy`. A repository opted into immutable subjects uses owner and repository ids, and the trust would then match nothing;
+    - that ECS authorizes `ecs:RegisterTaskDefinition`, `ecs:DescribeTaskDefinition` and `ecs:DeregisterTaskDefinition` on `*` only (the first under the `NamePrefix` request tag, with `ecs:TagResource` for the tags), and `ecs:ListTasks` under `ecs:cluster`;
+    - that `UpdateService` carries `ecs:task-definition` in its request context, which the plain `ArnLike` now requires, so if it does not, every roll is refused;
+    - that `docker buildx imagetools create` from a runner copies into `fss-prod-*` with only the ECR actions the role holds;
+    - that the images production runs today carry a `ci-<commit>` or bare commit tag, without which every guard answers manual;
+    - that turning `track_latest` on is an in-place change with no replacement, and that it makes the first plan after a CI deploy show no change. Only a real plan of `infra/roots/production` can show these two;
+    - the shared concurrency group across a reusable-workflow call from the weekly rehearsal.
