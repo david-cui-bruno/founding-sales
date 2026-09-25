@@ -356,47 +356,29 @@ variable "google_hosted_domain" {
   }
 }
 
-variable "enable_gmail_push" {
-  description = <<-EOT
-    Create the Gmail push topic and subscription in the production Google Cloud
-    project. The default is true and a production deployment wants it: with push
-    off, `FSS_GMAIL_PUSH_TOPIC` and `FSS_GMAIL_PUSH_SERVICE_ACCOUNT` are empty,
-    and both binaries read them with `required()`, so the API and the worker
-    would refuse to start. Turning it off is for a plan you are reading, not for
-    an environment you intend to run.
-
-    It does not control whether the Google provider is configured. Terraform
-    configures every provider this root requires before it evaluates anything,
-    so a production plan needs application-default credentials either way;
-    `docs/greenfield/infra-apply-runbook.md` 1.3a.
-  EOT
-  type        = bool
-  default     = true
-}
-
-variable "gcp_project_id" {
-  description = "Production Google Cloud project that owns the Gmail push topic."
-  type        = string
-  default     = ""
-
-  validation {
-    condition     = !var.enable_gmail_push || var.gcp_project_id != ""
-    error_message = "Gmail push needs the production Google Cloud project id."
-  }
-}
-
-variable "gcp_region" {
-  description = "Google Cloud region for the provider."
-  type        = string
-  default     = "us-east1"
-}
+# ---------------------------------------------------------------------------
+# Gmail push, without a Google provider (lane g85, audit O01).
+#
+# `enable_gmail_push`, `gcp_project_id` and `gcp_region` are gone, with the
+# provider they configured. `infra/roots/production-google` owns the topic, the
+# subscription, the push service account and Gmail's publisher grant, and is
+# planned only when one of them changes. What remains here is what the two task
+# definitions carry: the audience, derived below from this root's own hostname,
+# and two public identifiers, committed as defaults because `infra/.gitignore`
+# keeps every tfvars file out of the repository
+# (`docs/decisions/g12c-the-topology-answers-are-root-defaults.md`). Passing
+# `-var="gcp_project_id=…"` to this root is now an "undeclared variable" error.
+# `docs/decisions/g85-the-google-provider-has-its-own-root.md`.
+# ---------------------------------------------------------------------------
 
 variable "gmail_push_path" {
   description = <<-EOT
     Path on the API that Pub/Sub pushes to. It is the same route in every
-    environment, and this root builds both the push endpoint and the audience
-    from it, so the subscription and the task definitions cannot disagree about
-    what the webhook will accept.
+    environment. This root builds the audience the webhook requires from it,
+    and `infra/roots/production-google` builds the subscription's push endpoint
+    and token audience from the same default with the same expression, so the
+    subscription and the task definitions cannot disagree about what the webhook
+    will accept.
   EOT
   type        = string
   default     = "/integrations/gmail/push"
@@ -404,6 +386,50 @@ variable "gmail_push_path" {
   validation {
     condition     = startswith(var.gmail_push_path, "/")
     error_message = "The push path is a path on the API, beginning with a slash."
+  }
+}
+
+variable "gmail_push_topic" {
+  description = <<-EOT
+    `FSS_GMAIL_PUSH_TOPIC` on both task definitions: the fully qualified topic
+    id `users.watch` registers against. The worker renews the watch on it and
+    the API reports it.
+
+    A public identifier of an object this root does not manage. It is
+    `infra/roots/production-google`'s `gmail_push_topic_id` output, and the
+    default is that value, the topic created on 23 September 2026. It changes
+    only when the Google root's topic does, in the same pull request, and
+    `test/release/googleRoot.check.ts` fails when the two disagree. The
+    validation refuses the rehearsal's no-push placeholder and anything that
+    is not the production topic's name in some project.
+  EOT
+  type        = string
+  default     = "projects/callie-fss/topics/fss-prod-gmail-push"
+
+  validation {
+    condition     = can(regex("^projects/[a-z][a-z0-9-]{5,29}/topics/fss-prod-gmail-push$", var.gmail_push_topic))
+    error_message = "gmail_push_topic is the production topic id, projects/<project>/topics/fss-prod-gmail-push: infra/roots/production-google's gmail_push_topic_id output."
+  }
+}
+
+variable "gmail_push_service_account" {
+  description = <<-EOT
+    `FSS_GMAIL_PUSH_SERVICE_ACCOUNT` on both task definitions: the one address
+    whose push token the webhook accepts, compared exactly.
+
+    A public identifier of an object this root does not manage. It is
+    `infra/roots/production-google`'s `gmail_push_service_account` output, and
+    the default is that value. A service account's email is fixed by its id and
+    its project, so it changes only with them, in the same pull request. The
+    validation refuses the rehearsal's `.invalid` placeholder, a blank, and any
+    identity that is not the production push service account.
+  EOT
+  type        = string
+  default     = "fss-prod-gmail-push@callie-fss.iam.gserviceaccount.com"
+
+  validation {
+    condition     = can(regex("^fss-prod-gmail-push@[a-z][a-z0-9-]{5,29}\\.iam\\.gserviceaccount\\.com$", var.gmail_push_service_account))
+    error_message = "gmail_push_service_account is the production push identity, fss-prod-gmail-push@<project>.iam.gserviceaccount.com: infra/roots/production-google's gmail_push_service_account output."
   }
 }
 

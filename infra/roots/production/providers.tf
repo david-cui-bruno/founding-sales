@@ -38,7 +38,12 @@ provider "aws" {
   }
 }
 
-provider "google" {
-  project = var.gcp_project_id == "" ? null : var.gcp_project_id
-  region  = var.gcp_region
-}
+# There is no Google provider here, and no plan of this root needs a Google login.
+#
+# Terraform configures every provider a root requires before it plans anything,
+# so the Google provider this root declared until lane g85 made every production
+# plan, an image-only release included, depend on application-default
+# credentials that lapse about every 17 hours. The Gmail push objects are
+# `infra/roots/production-google`'s now, planned rarely and with that login;
+# this root carries their identifiers as values (audit O01).
+# `docs/decisions/g85-the-google-provider-has-its-own-root.md`.
