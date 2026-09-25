@@ -3421,7 +3421,7 @@ Fourteen mutations are appended to `scripts/releaseMutationCheck.mjs` (main + 14
 
 - The bare `typecheck`, `lint` and `test` run the greenfield equivalents; there is no bare `start`. Every old script is `legacy:<its old name>`, except `verify:secrets`, which is shared. `gate:greenfield`, `test:desktop:e2e`, `package:desktop` and every script the `greenfield*.yml` workflows call are unchanged.
 - `postinstall` only fetches the Electron binary. The `safe-log-fs` build and the SQLite driver rebuilds are `npm run legacy:setup`, which `source` and `release.yml` run after `npm ci`.
-- `ci.yml` has a `secrets` job (the Gitleaks history and tree scan) and a `root-scripts` job (the old ESLint config over the four greenfield files at the root, on Linux), both on every change. `source` and `client` run only when `old-trees-changed` finds a changed path outside the greenfield-only list. Of the 73 pull requests merged between 20 and 25 September, one, a lock-file change, would have run them.
+- `ci.yml` has a `secrets` job (the Gitleaks history and tree scan, with the `linux_x64` Gitleaks 8.30.1 tarball pinned by SHA-256) and a `root-scripts` job (the old ESLint config over the four greenfield files at the root). Both run on Linux, on every change, so a greenfield change no longer waits for a macOS runner. `source` and `client` run only when `old-trees-changed` finds a changed path outside the greenfield-only list. Of the 73 pull requests merged between 20 and 25 September, one, a lock-file change, would have run them.
 - Nothing was deleted: the deletion map's "now" rows were deleted on 18 September, and its other rows each wait on a dependency or are kept.
 
 **No deployment.** Nothing here reaches a running process, an image or a desktop build.
@@ -3432,7 +3432,7 @@ Fourteen mutations are appended to `scripts/releaseMutationCheck.mjs` (main + 14
 - A fresh `npm ci` runs the root `postinstall` as `install-electron --no` only, with no node-gyp, `electron-rebuild` or staging step. `FSS_DESKTOP_PACKAGE_MODE=local-smoke npm run package:desktop` produced `Callie.app` after it, and again with `node_modules/electron/dist` moved aside, so packaging does not need `install-electron`; `docs/greenfield/install.md` says the host tests do.
 - The old tree's own pins of the renamed scripts, `test/verifyRelease.test.mjs` and `test/releaseDocumentation.test.mjs`, pass locally. `old-trees-changed` was run by hand for a pull request, a push, a zero `before` and an empty `before`.
 
-**Still unverified.** The first run of the new `ci.yml` on GitHub, including whether `source` and `client` are required status checks and so whether a skipped run satisfies branch protection as GitHub documents. The full old gate, since running it needs the native builds this lane was told not to run; this pull request changes `package.json` and `ci.yml`, so `source` and `client` run on it. The `secrets` job still waits for a macOS runner, because the only pinned Gitleaks checksum is the `darwin_arm64` tarball's.
+**Still unverified.** Whether `source` and `client` are required status checks, and so whether a skipped run satisfies branch protection as GitHub documents. The new jobs, `source` (with `legacy:setup` and the full old gate) and `client` passed on pull request 229 while `secrets` was still on macOS; the Linux `secrets` job's first run is the one after this record. The `linux_x64` checksum was supplied by the coordinator from the release's checksums file; this lane did not fetch it.
 
 ### 8.1 Still unverified
 

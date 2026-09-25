@@ -81,13 +81,19 @@ treating it as an old path would have kept the macOS wait on most of them. Inste
 `lint:root-scripts` runs the same config on the same four files, in its own Linux job
 on every change and in `npm run lint`.
 
-**6. The secret scan is its own job, on every change, still on macOS.** It is the
-unchanged `npm run verify:secrets` after `npm ci --ignore-scripts`. It needs a macOS
-runner only because the Gitleaks tarball pinned in the repository is the
-`darwin_arm64` one. Moving it to Linux needs the `linux_x64` tarball's SHA-256 from the
-v8.30.1 release's checksum file. This lane made no network calls and could not
-verify that value, so the move is left open. `source` keeps both of its scans; the
-second covers the generated operational tools.
+**6. The secret scan is its own job, on every change, on Linux.** It is the unchanged
+`npm run verify:secrets` after `npm ci --ignore-scripts`, with the same Gitleaks 8.30.1
+installed from the `linux_x64` tarball. That tarball is pinned by SHA-256
+`551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb`, and verified with
+`sha256sum -c` before the version check. The coordinator took the value from the
+v8.30.1 release's checksums file. The `darwin_arm64` line in that file matches the pin
+`source` and `release.yml` already carry, so both pins come from one source. This
+lane made no network call to check it again; a tarball that does not match fails the
+job. The job was first written on macOS for want of that value, and moved once the
+coordinator supplied it. `greenfield-infra.yml`'s own `secrets` job still installs the
+`darwin_arm64` tarball on `macos-15`. That file belongs to another lane, and it runs
+only on `infra/**` changes. `source` keeps both of its scans; the second covers the
+generated operational tools.
 
 **7. Nothing was deleted.** `DELETION-MAP-20260918.md`, in the coordinator's `.context/` notes, is the authority. Its
 "Safe to delete now" rows (D1a–D1f), and the LinkedIn, meetings and Apple spike and

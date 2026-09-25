@@ -111,9 +111,9 @@ Every old name and its new one:
 
 `.github/workflows/ci.yml` ("Source security gate") has five jobs:
 
-- `secrets`, every push and pull request: `npm run verify:secrets` over the full history
-  and the tracked tree. It needs a macOS runner only because the one pinned Gitleaks
-  checksum in the repository is the `darwin_arm64` tarball's.
+- `secrets`, every push and pull request, on Linux: `npm run verify:secrets` over the
+  full history and the tracked tree, with Gitleaks 8.30.1 from the `linux_x64` tarball,
+  pinned by its SHA-256.
 - `root-scripts`, every push and pull request, on Linux: `npm run lint:root-scripts`.
 - `old-trees-changed`, every push and pull request, on Linux: compares the change with
   the greenfield-only paths (`apps/`, `packages/`, `infra/`, `certs/`, `test/release/`,
