@@ -1,29 +1,39 @@
-import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { app, dialog, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
+import { UPDATE_IPC_CHANNELS, type UpdateStatus } from '../shared/updateContract.ts';
+import { checkForUpdate, downloadVerifiedArtifact } from './updateChannel.ts';
 import {
-  checkForUpdate,
-  downloadVerifiedArtifact,
-  type UpdateDecision,
-  type UpdateManifest,
-} from './updateChannel.ts';
+  createUpdater,
+  nodeUpdateFiles,
+  systemCommandRunner,
+  type UpdateOutcome,
+  type UpdaterOptions,
+} from './updateInstall.ts';
 
 /**
- * The part of the update channel a person sees.
+ * The part of the update channel that is Electron (lane g83).
  *
- * Everything that decides anything is in `updateChannel.ts` and is tested without
- * Electron. This file asks, shows, downloads and verifies — and the one thing it
- * never does is install something the verification refused. When the API has raised
- * the minimum client version, the app is already refusing every mutation (G2's
- * gate, specification 5.3), and that is exactly the moment when "just install it"
- * is most tempting and most dangerous, so the refusal path here is a dialog that
- * says what went wrong rather than a fallback that proceeds anyway.
+ * Everything that decides anything is in `updateChannel.ts` (may this answer be
+ * believed) and `updateInstall.ts` (may this bundle replace the running one, and when),
+ * and both are tested without Electron. This file binds them to macOS: the real
+ * filesystem, Apple's `codesign`, `ditto` and `plutil` by absolute path, the dialogs,
+ * `app.relaunch`, and the one line the page draws.
  *
- * It does not replace the running bundle in place. Squirrel.Mac can, and needs a
- * Developer ID signature to do it; no such signature exists yet, so an updater that
- * claimed to swap the app would be untested code on the one path that must not
- * fail. What this does is verify the download against the signed manifest and put
- * it in front of the person in Finder. `docs/decisions/g13-update-application.md`.
+ * Since g83 a verified update installs itself. At launch — right after `start(...)` has
+ * opened the window — the channel is read and anything it offers is downloaded,
+ * verified, put in place and relaunched, with "Updating Callie to 1.0.6…" in Home's
+ * sidebar while it happens and no question asked. While the app is in use, the six-hourly
+ * check downloads and stages an update and then shows "Restart to update" in the same
+ * place; the next launch installs it if the person does not. When the API has raised the
+ * minimum client version the app is already refusing every mutation (5.3), so that check
+ * installs at once instead of waiting.
+ *
+ * What did not change is the refusal: a manifest, a download or a bundle that does not
+ * verify is not installed, and the person is told so in the dialog every build since
+ * G13a has shown. An install that fails after verification leaves the running app where
+ * it was and hands the person the verified zip, as G13a's builds always did.
+ * `docs/decisions/g83-the-update-installs-itself.md` replaces
+ * `docs/decisions/g13-update-application.md`.
  */
 
 const SIX_HOURS = 6 * 60 * 60 * 1000;
@@ -33,93 +43,84 @@ export interface UpdateWatchOptions {
   readonly channelBaseUrl: string;
   /** Base64 SPKI DER, compiled in by the build. Empty means every update is refused. */
   readonly publicKey: string;
+  /** True when the API has raised the minimum above this build (5.3). */
+  readonly blocked: () => Promise<boolean>;
   readonly intervalMs?: number;
-  readonly check?: typeof checkForUpdate;
-  readonly download?: typeof downloadVerifiedArtifact;
-  readonly ask?: (manifest: UpdateManifest) => Promise<boolean>;
-  readonly tell?: (message: string, detail: string) => Promise<void>;
-  readonly reveal?: (path: string) => void;
+  /** Everything below is injected in tests of the binding; the defaults are macOS. */
+  readonly check?: UpdaterOptions['check'];
+  readonly download?: UpdaterOptions['download'];
+  readonly tell?: UpdaterOptions['tell'];
+  readonly reveal?: UpdaterOptions['reveal'];
   readonly downloadDirectory?: () => string;
 }
 
 export interface UpdateWatch {
-  checkNow(): Promise<UpdateDecision>;
+  /** The launch check, started by `startUpdateWatch` itself. */
+  readonly launch: Promise<UpdateOutcome>;
+  /** The in-use check, now. */
+  checkNow(): Promise<UpdateOutcome>;
+  restart(): Promise<UpdateOutcome>;
   stop(): void;
 }
 
 export function startUpdateWatch(options: UpdateWatchOptions): UpdateWatch {
-  const check = options.check ?? checkForUpdate;
-  const download = options.download ?? downloadVerifiedArtifact;
-  const ask = options.ask ?? defaultAsk;
-  const tell = options.tell ?? defaultTell;
-  const reveal = options.reveal ?? ((path: string) => { shell.showItemInFolder(path); });
-  const downloadDirectory = options.downloadDirectory ?? (() => app.getPath('downloads'));
-
-  // One prompt per version. A person who said "later" is not asked again until the
-  // channel offers something new.
-  const declined = new Set<string>();
-  let running = false;
-
-  const checkNow = async (): Promise<UpdateDecision> => {
-    if (running) return { kind: 'refused', reason: 'update_offline' };
-    running = true;
-    try {
-      const decision = await check({
-        currentVersion: options.currentVersion,
-        channelBaseUrl: options.channelBaseUrl,
-        publicKey: options.publicKey,
-      });
-      if (decision.kind === 'available' && !declined.has(decision.manifest.releaseVersion)) {
-        await offer(decision.manifest);
+  const updater = createUpdater({
+    currentVersion: options.currentVersion,
+    channelBaseUrl: options.channelBaseUrl,
+    publicKey: options.publicKey,
+    host: {
+      updateDirectory: join(app.getPath('userData'), 'updates'),
+      executablePath: app.getPath('exe'),
+      files: nodeUpdateFiles(),
+      run: systemCommandRunner(),
+      now: () => new Date(),
+    },
+    check: options.check ?? checkForUpdate,
+    download: options.download ?? (async manifest => await downloadVerifiedArtifact(manifest)),
+    blocked: options.blocked,
+    tell: options.tell ?? defaultTell,
+    reveal: options.reveal ?? ((path: string) => { shell.showItemInFolder(path); }),
+    downloadDirectory: options.downloadDirectory ?? (() => app.getPath('downloads')),
+    relaunch: executablePath => {
+      // The relauncher waits for this process to exit before it starts the new bundle,
+      // so the single-instance lock is free by the time the new one asks for it.
+      app.relaunch({ execPath: executablePath });
+      app.exit(0);
+    },
+    // A ping, not the state: the page asks for the state through the bridge, which
+    // parses it, so there is one way in for it rather than two.
+    publish: () => {
+      for (const window of BrowserWindow.getAllWindows()) {
+        if (!window.isDestroyed()) window.webContents.send(UPDATE_IPC_CHANNELS.changed);
       }
-      return decision;
-    } finally {
-      running = false;
-    }
-  };
+    },
+    log: line => {
+      console.error(line);
+    },
+  });
 
-  const offer = async (manifest: UpdateManifest): Promise<void> => {
-    if (!(await ask(manifest))) {
-      declined.add(manifest.releaseVersion);
-      return;
-    }
-    const downloaded = await download(manifest);
-    if (!downloaded.ok) {
-      // The signed manifest and the bytes disagree, or the channel stopped
-      // answering. Either way this build stays as it is.
-      await tell('Callie could not verify the update', `It has not been installed (${downloaded.reason}).`);
-      return;
-    }
-    const target = join(downloadDirectory(), `Callie-${manifest.releaseVersion}-arm64.zip`);
-    await writeFile(target, downloaded.bytes, { mode: 0o600 });
-    reveal(target);
-    await tell(
-      `Callie ${manifest.releaseVersion} is ready to install`,
-      'Unzip it and replace Callie in Applications, then open it again.',
-    );
-  };
+  // The page asks for the state, and for a restart; neither takes an argument, so
+  // whatever the renderer sent is ignored rather than read.
+  ipcMain.handle(UPDATE_IPC_CHANNELS.state, (): UpdateStatus => updater.status());
+  ipcMain.handle(UPDATE_IPC_CHANNELS.restart, async (): Promise<UpdateStatus> => {
+    await updater.restartToUpdate();
+    return updater.status();
+  });
 
+  const launch = updater.atLaunch();
   const timer = setInterval(() => {
-    void checkNow();
+    void updater.periodic();
   }, options.intervalMs ?? SIX_HOURS);
   timer.unref?.();
 
   return {
-    checkNow,
-    stop: () => { clearInterval(timer); },
+    launch,
+    checkNow: async () => await updater.periodic(),
+    restart: async () => await updater.restartToUpdate(),
+    stop: () => {
+      clearInterval(timer);
+    },
   };
-}
-
-async function defaultAsk(manifest: UpdateManifest): Promise<boolean> {
-  const answer = await dialog.showMessageBox({
-    type: 'info',
-    buttons: ['Download update', 'Later'],
-    defaultId: 0,
-    cancelId: 1,
-    message: `Callie ${manifest.releaseVersion} is available`,
-    detail: 'Callie checked its signature against the key this build was made with.',
-  });
-  return answer.response === 0;
 }
 
 async function defaultTell(message: string, detail: string): Promise<void> {

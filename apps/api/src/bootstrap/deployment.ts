@@ -22,7 +22,7 @@ import {
   type GoogleOidcConfig,
   type SessionPolicy,
 } from '../auth/index.ts';
-import type { LogFields } from './log.ts';
+import { createLogger, type LogFields, type Logger } from './log.ts';
 import {
   journalBody,
   requireDurableJournal,
@@ -115,8 +115,8 @@ export const DEPLOYMENT_ENVIRONMENT_VARIABLES = Object.freeze({
   researchProviders: 'FSS_RESEARCH_PROVIDERS',
   gmailOAuthClient: 'google-gmail-oauth-client',
   oidcClient: 'google-oidc-client',
-  classifierApiKey: 'llm-classifier-api-key',
-  researchCredentials: 'research-provider-credentials',
+  // No classifier key and no research credential: the API reads neither, and since
+  // lane g81 its task definition is handed neither (`infra/modules/cluster`).
   // ---- the API's own ----
   sessionSigningKey: 'session-signing-key',
 } as const);
@@ -626,23 +626,49 @@ export function describeDeployment(deployment: ApiDeployment): LogFields {
 }
 
 /**
+ * The two pieces of `@aws-sdk/client-s3` the journal put uses, narrowed so a test can
+ * hand in a fake client and prove what a refused put does without an AWS credential.
+ */
+export interface S3JournalSdk {
+  readonly S3Client: new (configuration: { region: string }) => { send(command: unknown): Promise<unknown> };
+  readonly PutObjectCommand: new (input: Record<string, unknown>) => unknown;
+}
+
+/**
  * The S3 put the journal is built over, loaded only by a process that has credentials.
  *
  * `apps/api/src/journal` deliberately imports no SDK; this is the "process with
- * credentials" that file's comment names. A `412` is success: `IfNoneMatch: '*'` means
- * a replayed deterministic id does not overwrite an object that is already durable.
+ * credentials" that file's comment names. `sdk` is for tests; production passes none.
+ *
+ * A `412 PreconditionFailed` is success: `IfNoneMatch: '*'` means a replayed
+ * deterministic id does not overwrite an object that is already durable, and the key
+ * *is* that id, so an object at it is this event. A `409 ConditionalRequestConflict`
+ * is not (audit S12, lane g81). It says another write to the same key was in flight,
+ * and that write may yet fail, so it proves nothing is durable. Until this lane both
+ * were `already_present`, which let a conflict acknowledge a suppression no object
+ * recorded. It now throws like any other refusal, `createS3SuppressionJournal` turns
+ * that into `JOURNAL_UNAVAILABLE`, and the command fails with 503 `journal_unavailable`
+ * (`routes/dialSupport.ts`). Its retry meets the object (`412`) or writes it.
+ *
+ * Every refusal but the `412` logs `suppression_journal_write_failed` first (lane
+ * g81): the event `infra/modules/observability` turns into
+ * `SuppressionJournalWriteFailures`, immediately critical in 13.3, which nothing wrote
+ * until now. It names the writer and the error's name, never the bucket, the key or
+ * the event id. A caller that passes no `log` logs on stdout, as `bootstrap/main.ts`
+ * does today.
  */
-export async function loadJournalPutObject(region: string): Promise<JournalPutObject> {
+export async function loadJournalPutObject(
+  region: string,
+  options: { readonly sdk?: S3JournalSdk | undefined; readonly log?: Logger | undefined } = {},
+): Promise<JournalPutObject> {
   const specifier = '@aws-sdk/client-s3';
-  const sdk = (await import(specifier)) as {
-    S3Client: new (configuration: { region: string }) => { send(command: unknown): Promise<unknown> };
-    PutObjectCommand: new (input: Record<string, unknown>) => unknown;
-  };
-  const client = new sdk.S3Client({ region });
+  const loaded = options.sdk ?? ((await import(specifier)) as S3JournalSdk);
+  const client = new loaded.S3Client({ region });
+  const log = options.log ?? createLogger({ component: 'api', instanceKey: 'suppression-journal' });
   return async request => {
     try {
       await client.send(
-        new sdk.PutObjectCommand({
+        new loaded.PutObjectCommand({
           Bucket: request.bucket,
           Key: request.key,
           Body: request.body,
@@ -653,7 +679,9 @@ export async function loadJournalPutObject(region: string): Promise<JournalPutOb
       return 'written';
     } catch (error) {
       const name = error instanceof Error ? error.name : 'unknown';
-      if (name === 'PreconditionFailed' || name === 'ConditionalRequestConflict') return 'already_present';
+      if (name === 'PreconditionFailed') return 'already_present';
+      // The exact event the SuppressionJournalWriteFailures metric filter counts.
+      log.log('error', 'suppression_journal_write_failed', { writer: 'api', error_name: name });
       throw error;
     }
   };

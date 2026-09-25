@@ -266,6 +266,11 @@ module "cluster" {
   # envelope grant; its plan is unchanged by this line.
   drill_unwraps_recorded_envelopes = !local.is_production
 
+  # Lane g81: the reply classifier's key reaches the worker in production only. A
+  # rehearsal's entry holds a fixture and the classifier has no recorded seam, so a
+  # rehearsal worker holding it would call the provider with a key that cannot work.
+  worker_reads_classifier_key = local.is_production
+
   metric_namespace       = local.metric_namespace
   container_insights     = var.container_insights
   enable_execute_command = var.enable_execute_command

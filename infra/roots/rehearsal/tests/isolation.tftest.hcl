@@ -350,6 +350,14 @@ run "the_rehearsal_deploys_on_live_dependencies_with_sending_off" {
     condition     = module.stack.worker_environment["FSS_RESEARCH_PROVIDERS"] == "none"
     error_message = "The rehearsal worker ships no live research adapter either."
   }
+
+  # Lane g81. Live dependencies, and still no classifier: the rehearsal fills the
+  # classifier entry with a fixture and the classifier has no recorded seam, so a
+  # rehearsal worker holding the key would send fixture replies to the provider.
+  assert {
+    condition     = module.stack.task_secret_names.worker == tolist(["DATABASE_SECRET_ARN", "google-gmail-oauth-client"])
+    error_message = "A rehearsal worker is handed the Gmail client and its database entry, and never the classifier key."
+  }
 }
 
 run "a_rehearsal_may_choose_the_recorded_dependencies_by_name" {

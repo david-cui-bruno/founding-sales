@@ -336,6 +336,24 @@ run "the_api_task_never_learns_a_secret_by_environment_value" {
   }
 }
 
+# Lane g81, audit S17: with the secrets production really creates, each task
+# definition carries what its process reads. The API's authentication material —
+# the session-signing key, the device-credential pepper and the sign-in client —
+# reaches the API alone.
+run "each_production_task_carries_only_the_secrets_its_process_reads" {
+  command = plan
+
+  assert {
+    condition = (
+      module.stack.task_secret_names.api == tolist(["DATABASE_SECRET_ARN", "device-credential-pepper", "google-gmail-oauth-client", "google-oidc-client", "session-signing-key"])
+      && module.stack.task_secret_names.worker == tolist(["DATABASE_SECRET_ARN", "FSS_LLM_CLASSIFIER_API_KEY", "google-gmail-oauth-client"])
+      && module.stack.task_secret_names.operations == tolist(["DATABASE_SECRET_ARN", "google-gmail-oauth-client"])
+      && module.stack.task_secret_names.drill == tolist(["DATABASE_SECRET_ARN", "MIGRATION_DATABASE_SECRET", "google-gmail-oauth-client"])
+    )
+    error_message = "Every production task definition carries the secrets its own process reads: the authentication secrets reach the API alone, the classifier key reaches the worker as FSS_LLM_CLASSIFIER_API_KEY, and research-provider-credentials reaches nothing."
+  }
+}
+
 # The three deployment flags both binaries refuse to start without, or refuse to
 # guess at. `infra/modules/stack` had `extra_environment` and neither root exposed
 # it, so there was no way to set them from an apply at all: the runbook told the

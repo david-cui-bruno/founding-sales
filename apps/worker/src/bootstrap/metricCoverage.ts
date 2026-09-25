@@ -34,7 +34,7 @@ export const APPLICATION_RAISED_METRICS: Readonly<Record<string, ApplicationRais
   SuppressionJournalWriteFailures: {
     raisedBy: 'log_event',
     detail: 'suppression_journal_write_failed',
-    why: 'the API writes the journal (10.2); the metric filter counts the failure event',
+    why: 'the API and the worker write the journal (10.2) and each logs the failure event; a metric filter on each log group counts it (lane g81)',
   },
   RestoreGenerationMismatches: {
     raisedBy: 'log_event',

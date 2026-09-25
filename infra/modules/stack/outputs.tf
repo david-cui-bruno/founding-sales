@@ -273,6 +273,11 @@ output "worker_environment" {
   value       = module.cluster.worker_environment
 }
 
+output "task_secret_names" {
+  description = "Per task definition, the environment variable names it resolves from Secrets Manager (lane g81). Names only, for offline assertions."
+  value       = module.cluster.task_secret_names
+}
+
 output "resource_names" {
   description = <<-EOT
     Every name this stack claims in the shared account, so a root test can
@@ -302,6 +307,7 @@ output "resource_names" {
     values(module.secrets.secret_names),
     values(module.observability.log_group_names),
     module.alerts.alarm_names,
+    values(module.alerts.critical_condition_alarm_names),
     module.cluster.one_off_task_families,
   )
 }

@@ -16,7 +16,9 @@ import {
   laneSections,
   maskedNumber,
   needsRows,
+  RESTART_TO_UPDATE,
   statusRows,
+  updateLine,
   summaryLine,
   type FiguresRead,
   type HomeInput,
@@ -588,5 +590,30 @@ describe('a page built without a bridge', () => {
     expect(view.needs.map(row => row.key)).toEqual(['connect_gmail']);
     expect(view.lanes?.sections).toHaveLength(4);
     expect(view.figures.line).toBe(UNAVAILABLE);
+  });
+});
+
+// Lane g83: one line under the version while an update is installing or staged.
+describe('the update line', () => {
+  it('draws nothing when there is nothing to say, or no bridge to say it', () => {
+    expect(statusRows(input()).map(row => row.key)).not.toContain('update');
+    expect(statusRows(input({ update: null })).map(row => row.key)).not.toContain('update');
+    expect(statusRows(input({ update: { kind: 'none' } })).map(row => row.key)).not.toContain('update');
+  });
+
+  it('says an install is under way, with nothing to press', () => {
+    const rows = statusRows(input({ update: { kind: 'installing', version: '1.0.6' } }));
+    expect(rows.at(-1)).toEqual({ key: 'update', tone: 'none', text: 'Updating Callie to 1.0.6…' });
+    expect(rows.at(-2)?.key).toBe('system');
+    expect(rows.filter(row => row.action !== undefined)).toEqual([]);
+  });
+
+  it('offers Restart to update once a verified update is staged, and nowhere else', () => {
+    const rows = statusRows(input({ update: { kind: 'ready', version: '1.0.6' } }));
+    expect(rows.at(-1)).toEqual({ key: 'update', tone: 'none', text: 'Callie 1.0.6 is ready', action: 'restart_to_update' });
+    expect(rows.filter(row => row.action !== undefined)).toHaveLength(1);
+    expect(RESTART_TO_UPDATE).toBe('Restart to update');
+    expect(updateLine({ kind: 'ready', version: '1.0.6' })).toBe('Callie 1.0.6 is ready');
+    expect(updateLine({ kind: 'none' })).toBeNull();
   });
 });

@@ -53,9 +53,17 @@ variable "container_port" {
 }
 
 variable "health_check_path" {
-  description = "Path the load balancer polls. It must not require authentication and must not touch business state."
+  description = <<-EOT
+    Path the load balancer polls. It must not require authentication and must not
+    touch business state. `/readyz` (lane g81, audit S14): a task is put in service
+    only once the database answers on a pooled connection, the applied schema is
+    inside the range the binary declares and the system generation is the pinned
+    one, and a 503 from it — `database_busy` included — takes the task out.
+    `/healthz` stays the container health check, so a database outage drains
+    traffic and does not by itself restart the process.
+  EOT
   type        = string
-  default     = "/healthz"
+  default     = "/readyz"
 }
 
 variable "ssl_policy" {

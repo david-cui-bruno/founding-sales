@@ -105,7 +105,6 @@ export const METRIC_OWNERS: Readonly<Record<string, MetricOwner>> = Object.freez
   ApiHeartbeat: 'jobs',
   SchedulerHeartbeat: 'jobs',
   WorkerHeartbeat: 'jobs',
-  MailboxCheckHeartbeat: 'jobs',
   OldestRunnableJobAgeSeconds: 'jobs',
   DeadJobOldestAgeSeconds: 'jobs',
   // The newest canary run's scheduler-to-worker latency — `completed_at - inserted_at`
@@ -124,6 +123,14 @@ export const METRIC_OWNERS: Readonly<Record<string, MetricOwner>> = Object.freez
   // watch expiry over connected mailboxes, published only while one is connected.
   // Labelled `later_lane` until g72, long after the mail lane began publishing it.
   GmailWatchHoursToExpiry: 'mail',
+  // Emitted by `collectMailMetrics` on every pass: 1 when every *connected* mailbox's
+  // check is on time (and when none is connected), 0 otherwise. It was this lane's
+  // until g81, read from every mailbox heartbeat row, so a mailbox nobody had
+  // connected, or one its owner disconnected, alarmed as a missed check (audit O15).
+  MailboxCheckHeartbeat: 'mail',
+  // Emitted by `collectMailMetrics` while a mailbox is connected and `ready`: the
+  // stalest coverage watermark's age by the send gate's freshness rule (lane g81).
+  MailboxCoverageAgeSeconds: 'mail',
   // Emitted by `collectOutboundMetrics` in `packages/domain/outbound/metrics.ts`, which
   // can ask 12.6's "sent in the last 30 days" of `outbound_messages`. The mail lane's
   // collector declares the name too but publishes it only when handed recent senders,
@@ -334,11 +341,13 @@ export async function collectJobMetrics(db: Queryable): Promise<MetricDatum[]> {
   }
 
   // One datapoint per component, not per instance: the alarms are `Sum < 1`, so "any
-  // instance of this component is alive" is the question they ask. Per-mailbox
-  // dimensions belong to the lane that connects mailboxes, which is also the lane that
-  // will want to know *which* one went quiet.
+  // instance of this component is alive" is the question they ask. The mailbox
+  // heartbeat is not here since lane g81: its question is "is every connected mailbox
+  // being checked", which needs the mailbox table, so the mail lane publishes it
+  // (`collectMailMetrics`).
   const freshest = new Map<HeartbeatComponent, boolean>();
   for (const heartbeat of await readHeartbeats(db)) {
+    if (heartbeat.component === 'mailbox') continue;
     freshest.set(heartbeat.component, (freshest.get(heartbeat.component) ?? false) || heartbeat.fresh);
   }
   for (const [component, fresh] of freshest) {

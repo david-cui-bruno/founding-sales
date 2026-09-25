@@ -113,9 +113,24 @@ run "the_health_check_is_unauthenticated_and_cheap" {
     error_message = "Fargate awsvpc tasks register by address on the container port."
   }
 
+  # Lane g81, audit S14: readiness, not liveness. `/readyz` answers 503 while the
+  # schema is out of range, the generation is not the pinned one or the database
+  # cannot answer, and the matcher is 200 alone, so such a task never takes traffic.
   assert {
-    condition     = aws_lb_target_group.api.health_check[0].path == "/healthz" && aws_lb_target_group.api.health_check[0].matcher == "200"
-    error_message = "The load balancer polls an unauthenticated health path."
+    condition     = aws_lb_target_group.api.health_check[0].path == "/readyz" && aws_lb_target_group.api.health_check[0].matcher == "200"
+    error_message = "The load balancer polls the unauthenticated readiness path and treats anything but 200 as unhealthy."
+  }
+
+  # A rolling deploy still completes: a new task passes twice in thirty seconds,
+  # inside the API service's sixty-second health-check grace, and an old one drains
+  # for thirty.
+  assert {
+    condition = (
+      aws_lb_target_group.api.health_check[0].healthy_threshold * aws_lb_target_group.api.health_check[0].interval <= 30
+      && aws_lb_target_group.api.health_check[0].timeout < aws_lb_target_group.api.health_check[0].interval
+      && tonumber(aws_lb_target_group.api.deregistration_delay) == 30
+    )
+    error_message = "The readiness check must put a healthy new task in service well inside the service's grace period."
   }
 }
 

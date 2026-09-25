@@ -4,9 +4,14 @@
 
 ## Symptoms
 
-A mailbox that sent in the last 30 days has been disconnected for 48 hours. Every
+A mailbox that sent in the last 30 days has had its Gmail grant revoked (`status =
+'revoked'`) for 48 hours: Google refused the refresh token, or the owner departed. Every
 automated step kind for that owner is held (12.6), and replies to mail FSS already sent
 are not being read.
+
+A mailbox its owner disconnected with the disconnect command (`status = 'disconnected'`)
+is not counted since lane g81: that was a choice, and the owner's work is held for it
+the same way without anyone being paged.
 
 ## First checks
 

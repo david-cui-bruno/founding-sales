@@ -499,7 +499,12 @@ describe('the worker opens the restore holds when the database is not on the pin
     expect(rows.map(row => row.workspace_id).sort()).toEqual([workspaces.alpha, workspaces.beta].sort());
     expect(rows.every(row => row.source_event_id === 'worker:1->2')).toBe(true);
 
-    const mismatch = log.lines.filter(line => line['event'] === 'restore_generation_mismatch');
+    // One startup line, which opened the holds. Since lane g81 (audit O16) the metric
+    // loop repeats the event on each pass while the mismatch lasts, marked
+    // `continuing`; `restoreGenerationContinuing.test.ts` holds that half.
+    const mismatch = log.lines.filter(
+      line => line['event'] === 'restore_generation_mismatch' && line['continuing'] === undefined,
+    );
     expect(mismatch).toHaveLength(1);
     expect(mismatch[0]).toMatchObject({
       level: 'error',

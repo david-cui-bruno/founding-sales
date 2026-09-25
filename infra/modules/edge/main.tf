@@ -167,6 +167,11 @@ resource "aws_lb_target_group" "api" {
 
   deregistration_delay = 30
 
+  # `/readyz` by default (lane g81): 200 only when this task can serve, 503 when it
+  # is alive and must not. The matcher is 200 alone, so the 503 is unhealthy. Two
+  # passes fifteen seconds apart put a new task in service in about thirty seconds,
+  # inside the service's sixty-second grace; three failures take it out in
+  # forty-five. docs/decisions/g81-the-load-balancer-asks-readiness.md.
   health_check {
     enabled             = true
     path                = var.health_check_path

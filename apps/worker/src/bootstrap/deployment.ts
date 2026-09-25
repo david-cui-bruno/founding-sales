@@ -14,7 +14,8 @@ import {
   type MailPublicConfig,
   type SecretProvider,
 } from '@fss/domain/mail';
-import type { LogFields } from './log.ts';
+import { CLASSIFIER_SECRET_ENVIRONMENT_VARIABLES } from '@fss/domain/classification';
+import { createLogger, type LogFields, type Logger } from './log.ts';
 import {
   SuppressionJournalError,
   journalObjectKey,
@@ -110,11 +111,18 @@ export const DEPLOYMENT_ENVIRONMENT_VARIABLES = Object.freeze({
   hostedDomain: 'FSS_GOOGLE_HOSTED_DOMAIN',
   sendingEnabled: 'FSS_SENDING_ENABLED',
   researchProviders: 'FSS_RESEARCH_PROVIDERS',
-  /** The ECS `secrets` block names each entry by its logical Secrets Manager name. */
+  /** The ECS `secrets` block names each entry by its logical Secrets Manager name, */
   gmailOAuthClient: 'google-gmail-oauth-client',
   oidcClient: 'google-oidc-client',
-  classifierApiKey: 'llm-classifier-api-key',
-  researchCredentials: 'research-provider-credentials',
+  /**
+   * except this one, which the classifier reads as `FSS_LLM_CLASSIFIER_API_KEY`
+   * (`environmentClassifierSecrets`). Until lane g81 this said
+   * `llm-classifier-api-key`, the task definition injected it under that name, and
+   * the deployed worker never had a classifier. `infra/modules/cluster` maps the
+   * entry to this name and `test/release/processSecrets.check.ts` holds the three
+   * equal. `research-provider-credentials` is gone from here: nothing reads it.
+   */
+  classifierApiKey: CLASSIFIER_SECRET_ENVIRONMENT_VARIABLES.llm_classifier_api_key,
 } as const);
 
 const VARIABLES = DEPLOYMENT_ENVIRONMENT_VARIABLES;
@@ -500,26 +508,67 @@ export function describeDeployment(deployment: WorkerDeployment): LogFields {
 }
 
 /**
+ * The two pieces of `@aws-sdk/client-s3` the journal uses, narrowed so a test can hand
+ * in a fake client and prove what a refused put does without an AWS credential.
+ */
+export interface S3JournalSdk {
+  readonly S3Client: new (configuration: { region: string }) => { send(command: unknown): Promise<unknown> };
+  readonly PutObjectCommand: new (input: Record<string, unknown>) => unknown;
+}
+
+/**
+ * What a conditional put's refusal proves about the object at the key (audit S12,
+ * lane g81).
+ *
+ * `IfNoneMatch: '*'` asks S3 to write only if nothing is at the key, and the key is the
+ * deterministic event id: the same suppression always lands on the same key. So:
+ *
+ * * **`412 PreconditionFailed`** means an object *is* at the key. That is what a replay
+ *   of the same event looks like — the append ran, the command's transaction rolled
+ *   back, the command was retried — and the object already written is durable, which
+ *   is the only thing the caller needed to know.
+ * * **`409 ConditionalRequestConflict`** means another write to the same key was in
+ *   flight when this one arrived. It proves nothing about whether an object exists:
+ *   the other write may yet fail. Until this lane both names were read as "already
+ *   durable", so a conflict could acknowledge a suppression that no object records,
+ *   and Appendix E's replay after a restore would lose it. It is now a failure of this
+ *   write, and the command fails; its retry meets either the object (`412`) or an
+ *   empty key it writes itself.
+ */
+export function journalPutRefusalIsDurable(errorName: string): boolean {
+  return errorName === 'PreconditionFailed';
+}
+
+/**
  * The S3 suppression journal the worker appends to, or null when none is configured.
  *
  * The SDK is loaded lazily and only here, exactly as `loadKmsTransport` and
  * `loadCloudWatchTransport` do: a process that never journals never imports it, and
- * this lane adds no client to any module that domain code imports.
+ * this lane adds no client to any module that domain code imports. `sdk` is for
+ * tests; production passes none.
  *
- * A `412 PreconditionFailed` is success. `IfNoneMatch: '*'` means a replay of the same
- * deterministic event id does not overwrite the object that is already durable, and
- * "already durable" is the only thing the caller needed to know.
+ * A `412 PreconditionFailed` is success and nothing else is: see
+ * `journalPutRefusalIsDurable`.
+ *
+ * Every other refusal logs `suppression_journal_write_failed` before it throws (lane
+ * g81). That is the event `infra/modules/observability` turns into
+ * `SuppressionJournalWriteFailures`, which 13.3 makes immediately critical, and until
+ * this lane nothing wrote it, so the alarm could not fire. The line names the writer
+ * and the error's name and nothing else: not the bucket, not the key, and not the
+ * event id, which is a digest of the suppressed number or address. `log` is for
+ * tests; a process that passes none logs on stdout, which is what the awslogs driver
+ * reads.
  */
 export async function loadS3SuppressionJournal(options: {
   readonly bucket: string;
   readonly region: string;
+  readonly sdk?: S3JournalSdk | undefined;
+  readonly log?: Logger | undefined;
 }): Promise<SuppressionJournal> {
   const specifier = '@aws-sdk/client-s3';
-  const sdk = (await import(specifier)) as {
-    S3Client: new (configuration: { region: string }) => { send(command: unknown): Promise<unknown> };
-    PutObjectCommand: new (input: Record<string, unknown>) => unknown;
-  };
+  const sdk = options.sdk ?? ((await import(specifier)) as S3JournalSdk);
   const client = new sdk.S3Client({ region: options.region });
+  const log = options.log ?? createLogger({ component: 'worker', instanceKey: 'suppression-journal' });
   return {
     append: async record => {
       try {
@@ -536,7 +585,9 @@ export async function loadS3SuppressionJournal(options: {
         const name = error instanceof Error ? error.name : 'unknown';
         // The object is already there, which is what a replay of a deterministic id
         // looks like and is indistinguishable from success for the caller.
-        if (name === 'PreconditionFailed' || name === 'ConditionalRequestConflict') return;
+        if (journalPutRefusalIsDurable(name)) return;
+        // The exact event the SuppressionJournalWriteFailures metric filter counts.
+        log.log('error', 'suppression_journal_write_failed', { writer: 'worker', error_name: name });
         // Redacted: the bucket and the key are operational detail, and the command's
         // caller learns only that the journal was unavailable.
         throw new SuppressionJournalError(

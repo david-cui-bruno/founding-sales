@@ -310,9 +310,15 @@ dialog — see `docs/decisions/g13-keychain-acl.md` for why that took a fix.
 
 ## How a Mac updates itself
 
-On launch and every six hours, the app reads one object:
-`https://<channel>/releases/darwin-arm64/latest.json`. It installs what it finds only
-if all of this holds:
+Since lane g83, Callie installs a verified update by itself
+(`docs/decisions/g83-the-update-installs-itself.md`). Builds without g83 (1.0.0 to
+1.0.4) keep the old way: a dialog, the zip in Downloads, and a replacement by hand. The
+running build's updater is the one that receives an update, so the update *to* the first
+g83 build arrives the old way and the update *from* it is the first automatic one.
+
+**When it checks.** At launch, as soon as the window is open, and every six hours after
+that. Each check reads one object, `https://<channel>/releases/darwin-arm64/latest.json`,
+and goes no further unless all of this holds:
 
 * a public key was compiled into this build (an empty one refuses everything);
 * the manifest parses exactly — an unknown field is a refusal, not a warning;
@@ -323,16 +329,81 @@ if all of this holds:
   and older is refused outright;
 * the downloaded bytes match the signed size and sha256 before anything writes them.
 
-Then a dialog offers the update once per version. Accepting it stages the verified zip
-in Downloads and reveals it in Finder; unzip it and replace `Callie` in Applications.
-It does not swap the running bundle in place — `docs/decisions/g13-update-application.md`
-says why not, and what would have to be true first.
+**What it proves about the app itself.** The zip is unpacked with `ditto` into
+`~/Library/Application Support/Callie/updates/staging/<version>/`, and the bundle there
+is installed only if:
 
-When the API has raised the minimum client version (specification 5.3), the app shows
-the upgrade screen and refuses every mutation, and the update prompt is the only thing
-left to do. If the channel cannot be verified at that moment, it stays refused: being
-stuck is not a reason to install something unsigned. That is Appendix G scenario 40,
-and it is a test — `apps/desktop/test/packaging/scenario40.test.ts`.
+* its `CFBundleShortVersionString` is the manifest's `releaseVersion`, above the running
+  version;
+* its `CFBundleIdentifier` is the running app's;
+* its Team ID (`codesign -dv`) is the running app's. A build with no Team ID, such as the
+  local smoke build, installs nothing;
+* `codesign --verify --deep --strict` passes against a requirement that the certificate
+  chain ends at Apple and names that team.
+
+**What you see.**
+
+* **Opening Callie when an update is out:** the sidebar's last status line reads
+  *Updating Callie to 1.0.6…* (on the sign-in or upgrade screen, a line under the
+  heading). Callie closes and opens again as 1.0.6, usually within a minute. Nothing asks.
+* **An update published while Callie is open:** within six hours the sidebar gains
+  *Callie 1.0.6 is ready* and a **Restart to update** link. Press it to install now, or
+  do nothing and the next launch installs it.
+* **When the API has raised the minimum version** (specification 5.3), Callie shows the
+  upgrade screen and refuses every change, so it installs the update as soon as it has
+  one, without waiting for Restart.
+* **An update that does not verify:** *Callie could not verify the update* and a code.
+  Nothing is installed, and a version refused once is not tried again until the next
+  launch. If the channel cannot be read, or its manifest is not signed by this build's
+  key, Callie says nothing (step 6 below).
+* **An update that verified but could not be put in place**, for example on a standard
+  account that cannot write to `/Applications`: Callie stays as it is and falls back to
+  the old way. The verified zip is in Downloads, Finder opens on it, and the dialog says
+  to unzip it and replace Callie in Applications.
+
+**How the replacement is done.** The new bundle is moved next to the running one as
+`/Applications/.Callie-1.0.6.incoming`. The running one becomes
+`/Applications/.Callie-1.0.5.previous`, and the new one becomes `/Applications/Callie.app`.
+A failure part-way is undone, so `/Applications/Callie.app` is always one whole version.
+The hidden names end without `.app`, so Launchpad, Spotlight and the `callie:` link see
+one Callie.
+
+The previous version stays as `.Callie-<version>.previous` until the new version has
+started once. That start writes `updates/launched.json` with its version, and only then
+is the previous bundle deleted.
+
+### If an update will not start
+
+If Callie crashes or will not open after an update, the previous version is still there.
+In Terminal:
+
+```bash
+ls -a /Applications | grep '^\.Callie-'           # .Callie-1.0.5.previous
+mv /Applications/Callie.app ~/.Trash/Callie-broken.app
+mv /Applications/.Callie-1.0.5.previous /Applications/Callie.app
+open /Applications/Callie.app
+```
+
+Use the version the `ls` printed. If it prints nothing, the new version started at least
+once and the previous one was removed. Install the version you want by hand from the
+channel (step 2 below). Callie never installs an older version, but a person can.
+
+Callie opens as the previous version and records that
+the newer one never started: `~/Library/Application Support/Callie/updates/held.json`
+lists it, and Callie will not install that version automatically again. A later release
+installs as usual. To take the held version anyway, install it by hand from the channel
+(step 2 below), or delete `held.json`.
+
+If `/Applications/Callie.app` is missing and `.Callie-<version>.previous` is present, the
+update stopped between two renames. Run only the second `mv`.
+
+**Scenario 40.** When the API has raised the minimum client version, the app shows the
+upgrade screen and refuses every mutation, and the update is the only thing left to do.
+If the channel cannot be verified at that moment, it stays refused: being stuck is not a
+reason to install something unsigned. That is Appendix G scenario 40, and it is a test,
+`apps/desktop/test/packaging/scenario40.test.ts`. The install itself is
+`apps/desktop/test/updateInstall.test.ts`: fake filesystem, fake `codesign`, fake
+relauncher.
 
 ## The throwaway build David runs once
 
@@ -430,7 +501,9 @@ zip is written to Downloads and Finder opens on it. Replace `Callie` in Applicat
 open it, and confirm the version.
 
 It does not swap the running bundle in place; `docs/decisions/g13-update-application.md`
-says why not.
+says why not. That is how 1.0.0 to 1.0.4 receive every update, including the one to the
+first build with lane g83. From that build on, quitting and opening Callie installs the
+update by itself ("How a Mac updates itself").
 
 **Then connect the mailbox.** The "This Mac" card now has a **Mailbox** row reading **Not
 connected** and a **Connect Gmail** button. Press it. Google's consent screen opens in

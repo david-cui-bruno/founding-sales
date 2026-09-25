@@ -268,6 +268,21 @@ variable "secrets_kms_key_arn" {
   type        = string
 }
 
+variable "worker_reads_classifier_key" {
+  description = <<-EOT
+    Whether the worker task definition is handed the reply classifier's provider
+    key, as FSS_LLM_CLASSIFIER_API_KEY (lane g81).
+
+    The classifier has no recorded seam: a worker that holds a key calls the
+    provider with it. A rehearsal fills the entry with a fixture, so a rehearsal
+    worker handed it would send its fixture replies to the provider under a key
+    that cannot work and fail every classify.reply. Production sets it; everywhere
+    else classify.reply stays unclaimed, which is what a worker with no key does.
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "drill_unwraps_recorded_envelopes" {
   description = <<-EOT
     Whether the drill task role may decrypt with the envelope key, and then only an

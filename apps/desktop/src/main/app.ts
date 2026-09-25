@@ -291,8 +291,14 @@ export function registerWindows(configuration: DesktopConfiguration, manager: Se
   return open;
 }
 
-/** The entry point. Kept tiny so that everything above it is testable without Electron. */
-export async function start(configuration: DesktopConfiguration): Promise<void> {
+/**
+ * The entry point. Kept tiny so that everything above it is testable without Electron.
+ *
+ * It answers the session manager so the updater can ask whether the API has raised the
+ * minimum above this build (lane g83): the one fact that decides whether a staged update
+ * waits for Restart or installs at once.
+ */
+export async function start(configuration: DesktopConfiguration): Promise<SessionManager> {
   await app.whenReady();
   const manager = buildSessionManager(configuration);
   const windows = registerWindows(configuration, manager);
@@ -301,6 +307,7 @@ export async function start(configuration: DesktopConfiguration): Promise<void> 
   app.on('window-all-closed', () => {
     app.quit();
   });
+  return manager;
 }
 
 export function defaultConfiguration(apiBaseUrl: string, clientVersion: string): DesktopConfiguration {

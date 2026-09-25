@@ -9,7 +9,7 @@ import {
   recordHeartbeat,
   type MetricDatum,
 } from '../../jobs/index.ts';
-import { MAILBOX_CHECK_INTERVAL_SECONDS, recordMailboxHeartbeat } from '../../mail/index.ts';
+import { MAILBOX_CHECK_INTERVAL_SECONDS, collectMailMetrics, recordMailboxHeartbeat } from '../../mail/index.ts';
 import { seedTwoWorkspaces } from '../db/support/fixtures.ts';
 
 /**
@@ -33,10 +33,13 @@ const valueOf = (data: readonly MetricDatum[], name: string): number | undefined
 describe('heartbeat freshness (13.3)', () => {
   let database: TestDatabase;
   let workspaceId: string;
+  let ownerUserId: string;
 
   beforeAll(async () => {
     database = await createTestDatabase();
-    workspaceId = (await seedTwoWorkspaces(database.session)).alpha.workspaceId;
+    const seeded = await seedTwoWorkspaces(database.session);
+    workspaceId = seeded.alpha.workspaceId;
+    ownerUserId = seeded.alpha.salesperson.userId;
   });
 
   afterAll(async () => {
@@ -80,18 +83,27 @@ describe('heartbeat freshness (13.3)', () => {
     expect(MAILBOX_CHECK_INTERVAL_SECONDS).toBe(60);
   });
 
-  it('publishes a late-but-healthy mailbox check as 1 and a missed one as 0', async () => {
-    await recordMailboxHeartbeat(database.session, { workspaceId, mailboxId: randomUUID() });
+  it('publishes a connected mailbox’s late-but-healthy check as 1 and a missed one as 0', async () => {
+    // Since lane g81 the mail lane publishes this, over connected mailboxes only.
+    const mailbox = await database.session.query<{ id: string }>(
+      `INSERT INTO mailboxes (workspace_id, owner_user_id, email_address, sync_state, baseline_from_at, baseline_completed_at)
+       VALUES ($1, $2, 'freshness@example.test', 'ready', now() - interval '30 days', now())
+       RETURNING id`,
+      [workspaceId, ownerUserId],
+    );
+    await recordMailboxHeartbeat(database.session, { workspaceId, mailboxId: mailbox.rows[0]?.id ?? '' });
 
     await backdate('mailbox', 75);
     const late = (await readHeartbeats(database.session)).filter(beat => beat.component === 'mailbox');
     expect(late.every(beat => beat.fresh && beat.ageSeconds >= 75)).toBe(true);
-    expect(valueOf(await collectJobMetrics(database.session), 'MailboxCheckHeartbeat')).toBe(1);
+    expect(valueOf(await collectMailMetrics(database.session), 'MailboxCheckHeartbeat')).toBe(1);
 
     await backdate('mailbox', 95);
     const missed = (await readHeartbeats(database.session)).filter(beat => beat.component === 'mailbox');
     expect(missed.some(beat => beat.fresh)).toBe(false);
-    expect(valueOf(await collectJobMetrics(database.session), 'MailboxCheckHeartbeat')).toBe(0);
+    expect(valueOf(await collectMailMetrics(database.session), 'MailboxCheckHeartbeat')).toBe(0);
+    // And the job lane no longer publishes it at all: one source per metric.
+    expect(valueOf(await collectJobMetrics(database.session), 'MailboxCheckHeartbeat')).toBeUndefined();
   });
 
   it('still publishes a scheduler beat 75 seconds old as a missed pass', async () => {
