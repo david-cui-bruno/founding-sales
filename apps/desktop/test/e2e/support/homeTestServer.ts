@@ -4,6 +4,7 @@ import type { AddressInfo } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import type { DesktopState, MailboxState } from '../../../src/shared/contract.ts';
+import type { UpdateStatus } from '../../../src/shared/updateContract.ts';
 import type { AdminState, CallingNumberView } from '../../../src/renderer/settingsContract.ts';
 import type { TodayFirm, TodayState } from '../../../src/renderer/todayContract.ts';
 import { adminState, dashboard, diagnostics, sendingPosture } from './settingsTestServer.ts';
@@ -252,12 +253,16 @@ export interface HomeServerOptions {
   readonly without?: readonly Bridge[];
   /** `loadDashboard` answers with no figures for the window asked, as a refused read does. */
   readonly figuresFail?: boolean;
+  /** Lane g83: install `callieUpdate`, answering this state. Absent: the page has no update bridge. */
+  readonly update?: UpdateStatus;
 }
 
 export interface HomeTestServer {
   readonly url: string;
   /** `bridge.method` in call order, with its argument. */
   readonly calls: { readonly method: string; readonly argument: unknown }[];
+  /** Lane g83: what `callieUpdate.state` answers from now on. The page hears of it on `onChange`. */
+  setUpdate(status: UpdateStatus): void;
   stop(): Promise<void>;
 }
 
@@ -295,6 +300,15 @@ globalThis.callieAdmin = {
   async loadDashboard(input) { return await ask('admin.loadDashboard', input); },
 };`,
 };
+
+// Lane g83. `onChange` keeps the page's listener where a spec can call it, which is what
+// the main process's ping does in the real app.
+const UPDATE_BRIDGE = `
+globalThis.callieUpdate = {
+  async state() { return await ask('update.state'); },
+  async restart() { return await ask('update.restart'); },
+  onChange(listener) { (globalThis.__updateListeners ??= []).push(listener); },
+};`;
 
 const ASK = `
 async function ask(method, argument) {
@@ -335,6 +349,7 @@ export async function startHomeTestServer(options: HomeServerOptions = {}): Prom
   const bridgeScript = [
     BRIDGES.callie,
     ...(['callieMailbox', 'callieToday', 'callieAdmin'] as const).filter(name => !without.has(name)).map(name => BRIDGES[name]),
+    ...(options.update === undefined ? [] : [UPDATE_BRIDGE]),
     ASK,
   ].join('\n');
   const html = (await readFile(`${rendererDirectory}index.html`, 'utf8'))
@@ -350,11 +365,17 @@ export async function startHomeTestServer(options: HomeServerOptions = {}): Prom
   let mailbox = options.mailbox ?? connectedMailbox();
   let today = options.today ?? todayState();
   let admin = options.admin ?? readyAdmin();
+  let update: UpdateStatus = options.update ?? { kind: 'none' };
   const calls: { method: string; argument: unknown }[] = [];
 
   const answer = (method: string, argument: unknown): unknown => {
     const [bridge] = method.split('.');
     if (bridge === 'callie') return desktop;
+    if (bridge === 'update') {
+      // The real main process installs and relaunches; the page sees the install begin.
+      if (method === 'update.restart' && update.kind === 'ready') update = { kind: 'installing', version: update.version };
+      return update;
+    }
     if (bridge === 'mailbox') {
       // The real main process holds `connect` open while the browser has the person;
       // here the grant lands at once, which is all a spec of the window can see.
@@ -431,6 +452,9 @@ export async function startHomeTestServer(options: HomeServerOptions = {}): Prom
   return {
     url: `http://127.0.0.1:${String(port)}/`,
     calls,
+    setUpdate: status => {
+      update = status;
+    },
     stop: async () => {
       // The page holds a keep-alive socket after its last request; closing the sockets
       // first is what lets the next spec file start (see `testServer.ts`).

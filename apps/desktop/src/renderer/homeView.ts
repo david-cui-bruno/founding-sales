@@ -1,5 +1,6 @@
 import type { DashboardResponse } from '@fss/contracts';
 import type { DesktopState, MailboxState, WindowTarget } from '../shared/contract.ts';
+import type { UpdateStatus } from '../shared/updateContract.ts';
 import type { AdminState, CallingNumberView } from './settingsContract.ts';
 import type { TodayCard, TodayLane, TodayState } from './todayContract.ts';
 import type { BannerView, CardView, TodayScreenView } from './todayView.ts';
@@ -96,14 +97,18 @@ export interface HomeInput {
   /** Null until `callieAdmin` has answered. */
   readonly admin: AdminState | null;
   readonly figures: FiguresRead;
+  /** Lane g83: what `callieUpdate` last said. Absent or null draws no update line. */
+  readonly update?: UpdateStatus | null;
 }
 
 export type Tone = 'ok' | 'warn' | 'stop' | 'none';
 
 export interface StatusRow {
-  readonly key: 'mailbox' | 'calling' | 'sending' | 'domain' | 'system';
+  readonly key: 'mailbox' | 'calling' | 'sending' | 'domain' | 'system' | 'update';
   readonly tone: Tone;
   readonly text: string;
+  /** Lane g83: the one row with a control, the staged update's Restart to update. */
+  readonly action?: 'restart_to_update';
 }
 
 export type NeedsAction =
@@ -377,8 +382,31 @@ function systemStatus(input: HomeInput): StatusRow {
   return { key: 'system', tone: 'ok', text: `${version} · online` };
 }
 
+// --- Lane g83: the update line -----------------------------------------------------
+// One row under the version, and only while there is something to say: an install under
+// way ("Updating Callie to 1.0.6…", which restarts by itself) or a verified update staged
+// while the app was in use ("Callie 1.0.6 is ready", with Restart to update). Grey, like
+// every row that is neither a problem nor a confirmation.
+export const RESTART_TO_UPDATE = 'Restart to update';
+
+export function updateLine(update: UpdateStatus | null | undefined): string | null {
+  if (update === null || update === undefined || update.kind === 'none') return null;
+  return update.kind === 'installing' ? `Updating Callie to ${update.version}…` : `Callie ${update.version} is ready`;
+}
+
+function updateStatus(input: HomeInput): readonly StatusRow[] {
+  const text = updateLine(input.update);
+  if (text === null) return [];
+  return [
+    input.update?.kind === 'ready'
+      ? { key: 'update', tone: 'none', text, action: 'restart_to_update' }
+      : { key: 'update', tone: 'none', text },
+  ];
+}
+// --- end of lane g83's update line ---------------------------------------------------
+
 export function statusRows(input: HomeInput): readonly StatusRow[] {
-  return [mailboxStatus(input), ...adminRows(input), systemStatus(input)];
+  return [mailboxStatus(input), ...adminRows(input), systemStatus(input), ...updateStatus(input)];
 }
 
 // ---------------------------------------------------------------------------

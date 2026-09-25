@@ -1,7 +1,9 @@
 import type { DesktopState, MailboxState, WindowTarget } from '../shared/contract.ts';
+import type { UpdateStatus } from '../shared/updateContract.ts';
 import { button, element } from './firmDom.ts';
 import {
   NAV_ROWS,
+  RESTART_TO_UPDATE,
   UNAVAILABLE,
   buildHomeView,
   figuresWindow,
@@ -49,6 +51,9 @@ export interface HomeContext {
   readonly thisMac: () => HTMLElement;
   readonly connectMailbox: () => void;
   readonly refresh: () => void;
+  /** Lane g83: what `callieUpdate` last said, and its Restart to update. */
+  readonly update?: UpdateStatus | null;
+  readonly restartToUpdate?: () => void;
 }
 
 let today: TodayState | null = null;
@@ -203,6 +208,17 @@ function renderSidebar(sidebar: HTMLElement, view: HomeView, context: HomeContex
     const item = element('li', { className: 'status-row', testId: `status-${row.key}` });
     item.dataset['tone'] = row.tone;
     item.append(element('span', { className: `dot dot-${row.tone}` }), element('span', { text: row.text }));
+    // Lane g83: the update row's one control. Nothing else in the status list is pressable.
+    if (row.action === 'restart_to_update') {
+      const restart = button(RESTART_TO_UPDATE, 'update-restart', context.restartToUpdate !== undefined);
+      restart.className = 'status-action';
+      item.classList.add('status-row-action');
+      restart.addEventListener('click', () => {
+        restart.disabled = true;
+        context.restartToUpdate?.();
+      });
+      item.append(restart);
+    }
     status.append(item);
   }
   sidebar.append(status);
@@ -370,6 +386,7 @@ export function renderHome(root: HTMLElement, context: HomeContext): void {
       mailboxWaiting: context.mailboxWaiting,
       admin,
       figures,
+      update: context.update ?? null,
     },
     context.desktopBanners,
   );

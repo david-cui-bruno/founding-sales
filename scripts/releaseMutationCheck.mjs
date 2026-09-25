@@ -1579,6 +1579,114 @@ const MUTATIONS = [
     because:
       'Audit item T01 exactly: "Test Files 1 failed" beside "Tests no tests", or beside only passing tests, is a test file that never loaded, and it was read as red. mutationRunner.check.ts gives the runner a file that failed to load beside passing ones, requires a broken run, and has to go red.',
   },
+  {
+    name: 'the updater stops checking at launch',
+    file: 'apps/desktop/src/main/updater.ts',
+    find: '  const launch = updater.atLaunch();\n',
+    replace: "  const launch = Promise.resolve({ kind: 'nothing', decision: null } as const);\n",
+    suite: ['run', 'test', '--workspace', 'apps/desktop', '--', 'test/updater.test.ts'],
+    because:
+      'Audit item G11: startUpdateWatch only armed a six-hour interval, so opening Callie never updated it. updater.test.ts starts the watch with an hour-long interval and expects the channel to have been asked once and the start recorded; with the launch check gone nothing asks and it has to go red.',
+  },
+  {
+    name: 'the deep signature check stops naming the running team',
+    file: 'apps/desktop/src/main/updateInstall.ts',
+    find: '  return `=anchor apple generic and certificate leaf[subject.OU] = "${teamIdentifier}"`;\n',
+    replace: "  return '=anchor apple generic';\n",
+    suite: ['run', 'test', '--workspace', 'apps/desktop', '--', 'test/updateInstall.test.ts'],
+    because:
+      'codesign --verify alone proves a seal is intact, not who made it, and a self-signed certificate can carry any Team ID; the requirement is what ties the chain to Apple and to this team. The fake codesign passes a verify only when the requirement names the bundle’s team, so every install in updateInstall.test.ts is refused and it has to go red.',
+  },
+  {
+    name: 'a bundle signed by another team is not compared with the running app',
+    file: 'apps/desktop/src/main/updateInstall.ts',
+    find: "  if ((await readTeamIdentifier(input.bundlePath, host.run)) !== runningTeam) return refuse('update_bundle_team_mismatch');\n",
+    replace: '',
+    suite: ['run', 'test', '--workspace', 'apps/desktop', '--', 'test/updateInstall.test.ts'],
+    because:
+      'The brief’s refusal is the Team ID from codesign -dv against the running app’s. updateInstall.test.ts offers a bundle signed by another team and an ad-hoc one and expects update_bundle_team_mismatch; without the comparison the refusal comes, if at all, from the deep verify under another name, and it has to go red.',
+  },
+  {
+    name: 'the bundle’s version is not compared with the manifest’s',
+    file: 'apps/desktop/src/main/updateInstall.ts',
+    find: "  if (version !== input.releaseVersion) return refuse('update_bundle_version_mismatch');\n",
+    replace: '',
+    suite: ['run', 'test', '--workspace', 'apps/desktop', '--', 'test/updateInstall.test.ts'],
+    because:
+      'A signed manifest for 1.0.6 must not install whatever bundle its zip holds. updateInstall.test.ts ships a 1.0.7 bundle under a 1.0.6 manifest and expects nothing renamed in Applications; without the comparison the newer bundle is swapped in and relaunched and it has to go red.',
+  },
+  {
+    name: 'a failed final rename does not put the running bundle back',
+    file: 'apps/desktop/src/main/updateInstall.ts',
+    find: '    const restored = await attempt(async () => { await host.files.rename(previous, running.path); });\n',
+    replace: '    const restored = true;\n',
+    suite: ['run', 'test', '--workspace', 'apps/desktop', '--', 'test/updateInstall.test.ts'],
+    because:
+      'The swap must never leave half an app: when the new bundle cannot be put in place, the running one goes back where it was. updateInstall.test.ts fails that rename and expects Callie 1.0.5 at /Applications/Callie.app and the undo in the rename log; without the undo Applications holds no Callie and it has to go red.',
+  },
+  {
+    name: 'the previous bundle is removed even when the start could not be recorded',
+    file: 'apps/desktop/src/main/updateInstall.ts',
+    find: '  if (!recorded) return { confirmed: null, held, removed: [] };\n',
+    replace: '',
+    suite: ['run', 'test', '--workspace', 'apps/desktop', '--', 'test/updateInstall.test.ts'],
+    because:
+      'The previous bundle is the manual restore, and it may go only after the new version has recorded a start. updateInstall.test.ts makes launched.json unwritable and expects .Callie-1.0.5.previous still there; without the guard it is swept anyway and it has to go red.',
+  },
+  {
+    name: 'the sweep beside the running bundle removes more than Callie’s own leftovers',
+    file: 'apps/desktop/src/main/updateInstall.ts',
+    find: '      if (!LEFTOVER_NAME.test(name)) continue;\n',
+    replace: '',
+    suite: ['run', 'test', '--workspace', 'apps/desktop', '--', 'test/updateInstall.test.ts'],
+    because:
+      'The sweep runs in /Applications. updateInstall.test.ts keeps another vendor’s app and a file named .Callie-notes beside Callie and expects both after the sweep; with the name filter gone the sweep deletes the whole folder, Callie included, and it has to go red.',
+  },
+  {
+    name: 'a restored build reinstalls the version that never started',
+    file: 'apps/desktop/src/main/updateInstall.ts',
+    find: "          if (held.includes(manifest.releaseVersion)) return { kind: 'held', version: manifest.releaseVersion };\n",
+    replace: '',
+    suite: ['run', 'test', '--workspace', 'apps/desktop', '--', 'test/updateInstall.test.ts'],
+    because:
+      'install.md’s restore is useless if the next launch puts the broken version straight back. updateInstall.test.ts restores 1.0.5 by hand after 1.0.6 never started and expects the launch to answer held with nothing downloaded; without the check 1.0.6 is installed again and it has to go red.',
+  },
+  {
+    name: 'a verified answer that withdrew the release leaves the staged copy installable',
+    file: 'apps/desktop/src/main/updateInstall.ts',
+    find: "  return decision.kind === 'up_to_date' || (decision.kind === 'refused' && decision.reason === 'update_downgrade_refused');\n",
+    replace: '  return false;\n',
+    suite: ['run', 'test', '--workspace', 'apps/desktop', '--', 'test/updateInstall.test.ts'],
+    because:
+      'The channel is the operator’s way to pull a release: a verified up_to_date after a hit means the staged copy is no longer offered. updateInstall.test.ts stages 1.0.6, then answers up_to_date at launch and expects Applications untouched; with the staged copy kept it is installed anyway and it has to go red.',
+  },
+  {
+    name: 'the in-use check installs at once instead of offering Restart',
+    file: 'apps/desktop/src/main/updateInstall.ts',
+    find: '        if (await options.blocked()) {\n',
+    replace: '        if (true) {\n',
+    suite: ['run', 'test', '--workspace', 'apps/desktop', '--', 'test/updateInstall.test.ts'],
+    because:
+      'While Callie is in use a staged update waits for Restart to update or the next launch; only a build the raised minimum has blocked installs at once. updateInstall.test.ts runs the periodic check unblocked and expects ready with Applications untouched; installing regardless relaunches a working app mid-call and it has to go red.',
+  },
+  {
+    name: 'a swap that failed relaunches anyway',
+    file: 'apps/desktop/src/main/updateInstall.ts',
+    find: "    if (swapped.kind === 'failed') {\n",
+    replace: "    if (swapped.kind === 'failed' && false) {\n",
+    suite: ['run', 'test', '--workspace', 'apps/desktop', '--', 'test/updateInstall.test.ts'],
+    because:
+      'An install that fails after verification falls back to the verified zip in Downloads and leaves the app running. updateInstall.test.ts fails each of the three renames and expects no relaunch, the zip revealed and G13a’s sentence; relaunching instead restarts into whatever the failed swap left and it has to go red.',
+  },
+  {
+    name: 'Home’s sidebar drops the update line',
+    file: 'apps/desktop/src/renderer/homeView.ts',
+    find: '  return [mailboxStatus(input), ...adminRows(input), systemStatus(input), ...updateStatus(input)];\n',
+    replace: '  return [mailboxStatus(input), ...adminRows(input), systemStatus(input)];\n',
+    suite: ['run', 'test', '--workspace', 'apps/desktop', '--', 'test/home.test.ts'],
+    because:
+      'The in-use path has one affordance, Restart to update under the version row, and the launch path one notice. home.test.ts expects both rows from the update state; without them a staged update is invisible until the next launch and it has to go red.',
+  },
 ];
 
 // A listener on each of these keeps Node from exiting mid-mutation with a file still

@@ -614,6 +614,22 @@ ol {
   margin-top: 0.5em;
 }
 
+/* Lane g83: the update row's Restart to update, a quiet link under its words. */
+.status-row-action {
+  flex-wrap: wrap;
+}
+
+button.status-action {
+  margin: 1px 0 0 15px;
+  padding: 0 2px;
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  background: transparent;
+  border: 0;
+  font-size: 13px;
+}
+
 .this-mac {
   margin-top: auto;
   padding: 10px 8px 4px;

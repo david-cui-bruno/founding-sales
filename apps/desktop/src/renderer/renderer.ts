@@ -1,5 +1,7 @@
 import type { DesktopBridge, DesktopState, MailboxBridge, MailboxState } from '../shared/contract.ts';
+import type { UpdateStatus } from '../shared/updateContract.ts';
 import { forgetHome, hasTodayBridge, loadHomeAdmin, loadHomeToday, renderHome, setHomeRedraw } from './homePage.ts';
+import { updateLine } from './homeView.ts';
 import { buildMailboxView, buildScreenView, MAILBOX_ROW_LABEL } from './viewModel.ts';
 
 /**
@@ -160,6 +162,40 @@ function refreshAll(): void {
 
 let lastState: DesktopState | null = null;
 let lastMailbox: MailboxState | null = null;
+
+// --- Lane g83: the update line -----------------------------------------------------
+// What `callieUpdate` last said. It belongs to the Mac, not to the person signed in, so
+// Sign out keeps it. Read at boot, when the window regains focus, and whenever the main
+// process says it changed; Home draws it in the sidebar, the other screens as one line.
+let lastUpdate: UpdateStatus | null = null;
+
+/** What the current screen draws of an update: Home any line, the other screens only an install. */
+const drawnUpdate = (status: UpdateStatus | null): string =>
+  status === null || status.kind === 'none' || (!signedIn() && status.kind !== 'installing')
+    ? ''
+    : `${status.kind} ${status.version}`;
+
+async function loadUpdate(): Promise<void> {
+  const update = globalThis.callieUpdate;
+  if (update === undefined) return;
+  const next = await update.state();
+  const before = drawnUpdate(lastUpdate);
+  lastUpdate = next;
+  // Drawn again only when the line changes: this runs on every focus, and redrawing the
+  // sign-in screen would empty the form the person is typing into.
+  if (drawnUpdate(next) !== before) render(null);
+}
+
+function restartToUpdate(): void {
+  const update = globalThis.callieUpdate;
+  if (update === undefined) return;
+  void (async () => {
+    lastUpdate = await update.restart();
+    render(null);
+  })();
+}
+// --- end of lane g83's update line ---------------------------------------------------
+
 /** True from the click on Connect Gmail until the main process answers it. */
 let mailboxWaiting = false;
 
@@ -238,6 +274,8 @@ export function render(state: DesktopState | null, options: { readonly busy?: bo
         void connectMailbox();
       },
       refresh: refreshAll,
+      update: lastUpdate,
+      restartToUpdate,
     });
     return;
   }
@@ -260,6 +298,11 @@ export function render(state: DesktopState | null, options: { readonly busy?: bo
     node.dataset['testid'] = `banner-${banner.tone}`;
     banners.append(node);
   }
+  // Lane g83: an install under way says so on every screen, including the upgrade screen
+  // it is about to clear. A staged update's Restart lives in Home's sidebar only.
+  if (lastUpdate?.kind === 'installing') {
+    banners.append(element('p', { className: 'banner banner-info', text: updateLine(lastUpdate) ?? '', testId: 'update-notice' }));
+  }
   root.append(banners);
 
   if (view.screen === 'upgrade_required') {
@@ -275,8 +318,11 @@ export async function boot(): Promise<void> {
   setHomeRedraw(() => {
     render(null);
   });
+  globalThis.callieUpdate?.onChange(() => {
+    void loadUpdate();
+  });
   render(await bridge().state());
-  await enterHome();
+  await Promise.all([loadUpdate(), enterHome()]);
 }
 
 if (typeof document !== 'undefined') {
@@ -285,6 +331,7 @@ if (typeof document !== 'undefined') {
   // administration bridge already holds it, and reading its state asks the API nothing.
   window.addEventListener('focus', () => {
     void loadMailbox();
+    void loadUpdate();
     if (signedIn()) void loadHomeAdmin();
   });
   void boot();

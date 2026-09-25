@@ -94,7 +94,7 @@ function main(): void {
       // The handler has to exist before the first window asks for a page, and
       // `protocol.handle` needs a ready app.
       serveBundle(rendererDirectory);
-      await start({
+      const manager = await start({
         apiBaseUrl,
         clientVersion: appVersion,
         keychainService: 'com.callie.fss.desktop',
@@ -103,7 +103,15 @@ function main(): void {
         rendererUrl: BUNDLE_ENTRY_URL,
         preloadEntry: join(import.meta.dirname, '..', 'preload', 'preload.cjs'),
       });
-      startUpdateWatch({ currentVersion: appVersion, channelBaseUrl: updateChannelUrl, publicKey: updatePublicKey });
+      // Lane g83: the update check runs now, at launch, as well as every six hours. It is
+      // after `start` so that this build has opened its window — the start that lets an
+      // updated build's predecessor be deleted — and it installs without asking.
+      startUpdateWatch({
+        currentVersion: appVersion,
+        channelBaseUrl: updateChannelUrl,
+        publicKey: updatePublicKey,
+        blocked: async () => (await manager.state()).screen === 'upgrade_required',
+      });
     })
     .catch((error: unknown) => {
       console.error(error);

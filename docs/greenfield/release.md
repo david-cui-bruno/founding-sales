@@ -3074,6 +3074,29 @@ The `fss-rh-deploy` and `fss-prod-deploy` policies allow `ecs:Describe*` and `ec
 
 One question is left open. Once sending is on, the worker sends only under a stored record carrying its own digest (8.0ag). An app-only release with a new worker digest, deployed without a rehearsal, holds every send until such a record exists.
 
+### 8.0ap What lane g83 changed: Callie updates itself when it is opened (25 September)
+
+**The gap.** Audit item G11. The updater checked the channel every six hours and never at launch. On a hit it asked, wrote the verified zip to Downloads, and told the person to unzip it and replace Callie in Applications. That was G13a's choice (`docs/decisions/g13-update-application.md`) when no Developer ID signature existed. Signed and notarized builds have existed since 1.0.0 (8.0t).
+
+**What g83 adds.** Desktop only: no route, no migration, no infrastructure, so the release is a desktop build and publish (2.1). `apps/desktop/src/main/updateInstall.ts` holds every decision and step, with Electron-free ports. `updater.ts` binds it to macOS, and `main.ts` starts it right after `start(...)`. `docs/decisions/g83-the-update-installs-itself.md` is the design.
+
+- **At launch** the channel is read at once. An update is downloaded, unpacked with `ditto` into `~/Library/Application Support/Callie/updates/staging/`, verified, swapped into place and relaunched (`app.relaunch` and `app.exit(0)`), without a question.
+- **While in use**, the six-hourly check stages a verified update and adds *Callie 1.0.6 is ready* and **Restart to update** under the version row in Home's sidebar. The next launch installs it if the person does not.
+- **A raised minimum client version** (5.3): the in-use check installs at once, because the app is refusing every mutation anyway.
+- **The bundle checks**, on top of the unchanged channel checks (signature, origin, version, size, sha256): `CFBundleShortVersionString` equals the manifest's `releaseVersion` and is newer; `CFBundleIdentifier` equals the running app's; the Team ID equals the running app's; and `codesign --verify --deep --strict -R '=anchor apple generic and certificate leaf[subject.OU] = "<team>"'` passes. A running build with no Team ID (the local smoke build) installs nothing.
+- **The swap** is three renames. The staged bundle moves into `/Applications` as `.Callie-<new>.incoming`, the running one becomes `.Callie-<current>.previous`, and the incoming one becomes `Callie.app`. A failure part-way is undone. Any failure after verification falls back to the zip in Downloads.
+- **The previous bundle** is deleted only after the new version has started once and written `updates/launched.json`. If the new version will not start, `install.md` "If an update will not start" restores the previous one by hand. The restored build then holds the version that failed (`updates/held.json`), so the next launch does not reinstall it.
+
+**The first automatic update.** The running build's updater is the one that receives an update, so the update *to* the first desktop build carrying g83 arrives the old way (dialog, Downloads, replace by hand). The update *from* that build is the first that installs itself. If 1.0.5 is built from a commit that carries g83, 1.0.4 → 1.0.5 is manual and 1.0.5 → 1.0.6 is the first automatic update.
+
+**What David sees, from that build on.** Opening Callie when a release is out: the sidebar's last line reads *Updating Callie to 1.0.6…*, and Callie closes and reopens as the new version. A release published while Callie is open: *Callie 1.0.6 is ready · Restart to update*. The refusal dialog (*Callie could not verify the update*) and the silence on a tampered manifest (install.md step 6) are unchanged.
+
+**Unverified.** No real signed install has run. The evidence is `apps/desktop/test/updateInstall.test.ts` (fake filesystem, fake `codesign`/`plutil`/`ditto`, fake relauncher), `test/updater.test.ts` (the Electron binding with Electron mocked, the real `node:fs` port, and the whole swap on a real temporary directory), the Home unit tests and `test/e2e/update.spec.ts`. The `codesign` requirement was checked by hand, read-only, against the installed 1.0.4 on David's Mac. Three things only the published 1.0.5 → 1.0.6 path can prove:
+
+- that macOS's App Management protection lets the app rename its own bundle in `/Applications` (if not, the first rename fails and the zip fallback runs);
+- that the relaunch starts the new bundle;
+- how long the deep verify takes on a real release bundle (about 18 seconds cold on 1.0.4).
+
 ### 8.1 Still unverified
 
 Production was applied, deployed, bootstrapped and smoked at `66203322`, and redeployed at `02da3dd5` between 05:50Z and 05:57Z on 24 September, which carries the sign-in fix (8.0v). The signed desktop build is published at `66203322` (8.0t), and thirteen rehearsal runs have existed (8.0s, 8.0t, 8.0v, 8.0w). The first real sign-in was attempted against the `66203322` deployment and refused by the API's own discovery rule (8.0u); the retry against the g45 fix succeeded at 15:08Z, and showed that desktop 1.0.0 has no way to connect the mailbox (8.0x). Desktop 1.0.1 connected the first mailbox at about 18:10Z on 24 September. From 18:11Z CloudWatch refused every worker metric publication over one unit, and ECS replaced the worker every few minutes for failed health checks. That blackout lasts until the g51 fix is deployed (8.0y). What follows is what that still does not settle. Items 1 to 10 were written before any of it ran, and each carries whatever a later run answered; items 11 to 18 are what is open on 24 September, and the first of them is the release record this release does not have.

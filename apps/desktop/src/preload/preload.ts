@@ -23,12 +23,13 @@ import {
   type SequenceState,
 } from '../renderer/sequenceContract.ts';
 import type { AdminBridge, AdminState } from '../renderer/settingsContract.ts';
+import { UPDATE_IPC_CHANNELS, updateStatusSchema, type UpdateBridge, type UpdateStatus } from '../shared/updateContract.ts';
 
 /**
  * The bridges, and the whole of what a renderer can reach (specification 14.2).
  *
  * One preload script serves all five windows, because Electron gives a window one
- * preload. Installing all seven bridges is not a widening: every channel below is
+ * preload. Installing all eight bridges is not a widening: every channel below is
  * answered by a main-process handler that exists, and a window that never calls one has
  * reached nothing. Since lane g65 the main window calls four of them: its Home reads
  * `callie` for the session, `callieMailbox` for the Mailbox row, `callieToday` for the
@@ -181,6 +182,24 @@ const admin: AdminBridge = {
   retireCallingNumber: async input => await invokeAdmin(ADMIN_IPC_CHANNELS.retireCallingNumber, input),
 };
 
+// Lane g83: the update line in Home's sidebar. Two calls with no argument and one
+// notification that carries nothing, so the page can neither choose what is installed nor
+// learn anything but a state and a version; the state is parsed here like every other.
+const invokeUpdate = async (channel: string): Promise<UpdateStatus> => {
+  const answer: unknown = await ipcRenderer.invoke(channel);
+  return updateStatusSchema.parse(answer);
+};
+
+const update: UpdateBridge = {
+  state: async () => await invokeUpdate(UPDATE_IPC_CHANNELS.state),
+  restart: async () => await invokeUpdate(UPDATE_IPC_CHANNELS.restart),
+  onChange: listener => {
+    ipcRenderer.on(UPDATE_IPC_CHANNELS.changed, () => {
+      listener();
+    });
+  },
+};
+
 contextBridge.exposeInMainWorld('callie', bridge);
 contextBridge.exposeInMainWorld('callieMailbox', mailbox);
 contextBridge.exposeInMainWorld('callieToday', today);
@@ -188,3 +207,4 @@ contextBridge.exposeInMainWorld('callieCrm', crm);
 contextBridge.exposeInMainWorld('callieReplies', replies);
 contextBridge.exposeInMainWorld('callieSequences', sequences);
 contextBridge.exposeInMainWorld('callieAdmin', admin);
+contextBridge.exposeInMainWorld('callieUpdate', update);
