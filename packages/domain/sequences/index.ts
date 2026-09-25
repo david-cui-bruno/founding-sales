@@ -149,9 +149,13 @@ export {
 
 export {
   holdsAffectingEnrollment,
+  previewResume,
   resumeAfterReview,
   resumeEnrollment,
   type ResumeOutcome,
+  type ResumePreview,
+  type ResumePreviewHold,
+  type ResumePreviewStep,
 } from './resume.ts';
 
 export {

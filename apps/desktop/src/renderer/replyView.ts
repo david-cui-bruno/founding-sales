@@ -90,6 +90,10 @@ const NOTICES: Readonly<Record<string, string>> = Object.freeze({
   message_unknown: 'That reply is no longer here.',
   not_classified: 'Callie has not read this message yet.',
   ambiguity_unresolved: 'Pick which conversation this reply belongs to first.',
+  // Lane g88: the candidate selector.
+  resolved: 'Linked to that conversation. Now say what the reply means.',
+  already_resolved: 'Somebody already chose the conversation for this reply.',
+  match_unknown: 'That conversation is not one of this reply’s candidates.',
   already_confirmed: 'Somebody already answered this reply.',
   callback_required: 'Enter the day and time to call back.',
   callback_not_permitted: 'A callback belongs with “asked me to follow up later”.',
@@ -150,6 +154,8 @@ export interface ReplyCardView {
   readonly nextAction: ReplyCard['nextAction'];
   /** Present only while an ambiguity is unresolved; resolving it is G7's command. */
   readonly ambiguity: readonly ReplyCandidate[];
+  /** Whether the candidate selector may send (lane g88): online, allowed to mutate, and allowed to read the reply. */
+  readonly resolveEnabled: boolean;
   readonly banners: readonly BannerView[];
 }
 
@@ -295,8 +301,15 @@ export function buildReplyCardView(
     confirmLabel: chosen === null ? 'Choose what this reply means' : `Confirm: ${DISPOSITION_LABELS[chosen]}`,
     nextAction: card.nextAction,
     ambiguity: card.nextAction === 'resolve_ambiguity' ? card.impact.candidates : [],
+    // A member who may not read the message is not asked which conversation it is.
+    resolveEnabled: mayAct && card.visibility === 'assigned_or_admin',
     banners,
   };
+}
+
+/** A candidate firm as the selector names it. A firm that could not be read is still a choice. */
+export function candidateLabel(candidate: ReplyCandidate): string {
+  return candidate.firmName.trim() === '' ? 'A firm Callie could not name' : candidate.firmName;
 }
 
 function summaryLine(card: ReplyCard): string {

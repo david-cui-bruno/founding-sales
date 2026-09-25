@@ -338,16 +338,22 @@ export async function nextUnfinishedExecution(
   return row === undefined ? null : toExecution(row);
 }
 
-/** Every execution of an enrollment that has not run yet. What a shift and a stop touch. */
+/**
+ * Every execution of an enrollment that has not run yet. What a shift and a stop touch.
+ *
+ * Locked by default, because every caller but one is about to move or cancel them. The
+ * one is the resume preview (lane g88), which only reads what a resume would move and
+ * must not hold a lock a read has no transaction for.
+ */
 export async function unexecutedExecutions(
   context: RepositoryContext,
   enrollmentId: string,
+  options: { readonly lock?: boolean } = {},
 ): Promise<readonly StepExecutionRow[]> {
   const { rows } = await context.db.query<ExecutionDbRow>(
     `SELECT ${EXECUTION_COLUMNS} FROM step_executions
       WHERE workspace_id = $1 AND enrollment_id = $2 AND state IN ('pending', 'held')
-      ORDER BY ordinal, id
-      FOR UPDATE`,
+      ORDER BY ordinal, id${options.lock === false ? '' : '\n      FOR UPDATE'}`,
     [context.scope.workspaceId, enrollmentId],
   );
   return rows.map(toExecution);

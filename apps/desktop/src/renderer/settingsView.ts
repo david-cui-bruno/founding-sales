@@ -1,4 +1,5 @@
-import { DEFAULT_SETTING_VALUES, describeClientVersionMaximum } from '@fss/contracts';
+import { DEFAULT_ALERT_THRESHOLDS, DEFAULT_SETTING_VALUES, describeClientVersionMaximum } from '@fss/contracts';
+import { TIME_ZONE_CHOICES } from './captureView.ts';
 import { POSTURE_NOTICES, POSTURES_HEADING, businessZoneOf, postureSection, type PosturesSectionView } from './postureView.ts';
 import { readErrorSentence } from './readError.ts';
 import { SETTINGS_ELSEWHERE_FALLBACK } from './settingsElsewhere.ts';
@@ -671,3 +672,176 @@ function diagnosticsPanels(state: AdminState): readonly PanelView[] {
     },
   ];
 }
+
+// ---------------------------------------------------------------------------
+// Lane g88: typed controls instead of JSON (audit G08)
+// ---------------------------------------------------------------------------
+
+/** Why a control is inert, as the sentence the page shows. The view keeps the code. */
+const INERT_SENTENCES: Readonly<Record<string, string>> = Object.freeze({
+  offline: 'Offline: nothing here can be changed until Callie is back online.',
+  upgrade_required: 'Update Callie to change this.',
+  admin_only: 'Only an admin can change this.',
+});
+
+export function inertSentence(code: string): string {
+  return INERT_SENTENCES[code] ?? code;
+}
+
+/** One typed control of a setting. `key` is the field of the slice's value it edits. */
+export type SettingField =
+  | { readonly kind: 'zone'; readonly key: string; readonly label: string; readonly value: string }
+  | { readonly kind: 'toggle'; readonly key: string; readonly label: string; readonly value: boolean }
+  | {
+      readonly kind: 'text';
+      readonly key: string;
+      readonly label: string;
+      readonly value: string;
+      readonly hint: string | null;
+    }
+  | {
+      readonly kind: 'number';
+      readonly key: string;
+      readonly label: string;
+      readonly value: number;
+      readonly min: number;
+      readonly max: number;
+      readonly step: number;
+    }
+  | { readonly kind: 'time'; readonly key: string; readonly label: string; readonly value: string };
+
+/** The four slices, the order they are drawn in, and which are behind "Advanced". */
+export const ROUTINE_SETTINGS: readonly string[] = Object.freeze(['business_time_zone', 'sending_enabled']);
+export const ADVANCED_SETTINGS: readonly string[] = Object.freeze(['alert_thresholds', 'client_version_range']);
+
+/** The zones the business-zone control offers: the same US zones Add firm offers. */
+export const BUSINESS_ZONE_CHOICES = TIME_ZONE_CHOICES.filter(choice => choice.value !== '');
+
+/** 13.3's thresholds with the words a person reads, their bounds, and their steps (`alertThresholdsSchema`). */
+const THRESHOLD_FIELDS: readonly {
+  readonly key: keyof typeof DEFAULT_ALERT_THRESHOLDS;
+  readonly label: string;
+  readonly min: number;
+  readonly max: number;
+  readonly step: number;
+}[] = Object.freeze([
+  { key: 'heartbeatMissedChecks', label: 'Missed one-minute checks before an alarm', min: 1, max: 10, step: 1 },
+  { key: 'oldestJobAgeWarningSeconds', label: 'Oldest waiting job: warn after (seconds)', min: 30, max: 86_400, step: 1 },
+  { key: 'oldestJobAgeCriticalSeconds', label: 'Oldest waiting job: critical after (seconds)', min: 30, max: 86_400, step: 1 },
+  { key: 'gmailWatchExpiryHours', label: 'Gmail watch expiring within (hours)', min: 1, max: 168, step: 1 },
+  { key: 'canaryStaleSeconds', label: 'Canary not completed within (seconds)', min: 60, max: 86_400, step: 1 },
+  { key: 'allSequencesHeldFraction', label: 'Share of sequences held that alarms (0.1 to 1)', min: 0.1, max: 1, step: 0.05 },
+  { key: 'deadJobUnresolvedSeconds', label: 'Dead job unresolved for (seconds)', min: 60, max: 604_800, step: 1 },
+  { key: 'mailboxDisconnectedHours', label: 'Mailbox disconnected for (hours)', min: 1, max: 720, step: 1 },
+  { key: 'unacknowledgedCriticalSeconds', label: 'Repeat an unacknowledged critical alarm after (seconds)', min: 300, max: 86_400, step: 1 },
+]);
+
+const record = (value: unknown): Readonly<Record<string, unknown>> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+const text = (value: unknown, fallback: string): string => (typeof value === 'string' ? value : fallback);
+const number = (value: unknown, fallback: number): number => (typeof value === 'number' ? value : fallback);
+
+/**
+ * A slice's typed controls, filled with its value (lane g88, audit G08). Null for a slice
+ * this build does not know, which the page then shows as JSON behind a disclosure — a
+ * slice the API gained is still editable, it is just not a form yet.
+ */
+export function settingFields(settingKey: string, value: unknown): readonly SettingField[] | null {
+  const current = record(value);
+  if (settingKey === 'business_time_zone') {
+    return [{ kind: 'zone', key: 'timeZone', label: 'Time zone', value: text(current['timeZone'], 'America/New_York') }];
+  }
+  if (settingKey === 'sending_enabled') {
+    return [
+      { kind: 'toggle', key: 'enabled', label: 'An admin has turned production sending on', value: current['enabled'] === true },
+      {
+        kind: 'text',
+        key: 'releaseGateReference',
+        label: 'Release gate reference',
+        value: text(current['releaseGateReference'], ''),
+        hint: 'Required to turn sending on: the release record whose rehearsal passed.',
+      },
+    ];
+  }
+  if (settingKey === 'client_version_range') {
+    return [
+      { kind: 'text', key: 'minimum', label: 'Oldest Callie version allowed', value: text(current['minimum'], '1.0.0'), hint: null },
+      { kind: 'text', key: 'maximum', label: 'Newest Callie version allowed', value: text(current['maximum'], '1.0.0'), hint: null },
+    ];
+  }
+  if (settingKey === 'alert_thresholds') {
+    return [
+      {
+        kind: 'time',
+        key: 'todaySnapshotDeadlineLocalTime',
+        label: 'Alarm if Today’s list is missing at',
+        value: text(current['todaySnapshotDeadlineLocalTime'], DEFAULT_ALERT_THRESHOLDS.todaySnapshotDeadlineLocalTime),
+      },
+      ...THRESHOLD_FIELDS.map(field => ({
+        kind: 'number' as const,
+        key: field.key,
+        label: field.label,
+        value: number(current[field.key], DEFAULT_ALERT_THRESHOLDS[field.key] as number),
+        min: field.min,
+        max: field.max,
+        step: field.step,
+      })),
+    ];
+  }
+  return null;
+}
+
+/**
+ * The value a slice's controls describe, or the field that cannot be read. Nothing is
+ * clamped or corrected: a number out of bounds goes to the server, whose `invalid_value`
+ * is the answer, the way every other refusal on this page is.
+ */
+export function settingValueFrom(
+  settingKey: string,
+  values: Readonly<Record<string, string | boolean>>,
+): { readonly ok: true; readonly value: unknown } | { readonly ok: false; readonly field: string } {
+  const read = (key: string): string => {
+    const entry = values[key];
+    return typeof entry === 'string' ? entry.trim() : '';
+  };
+  if (settingKey === 'business_time_zone') return { ok: true, value: { timeZone: read('timeZone') } };
+  if (settingKey === 'sending_enabled') {
+    const reference = read('releaseGateReference');
+    return { ok: true, value: { enabled: values['enabled'] === true, releaseGateReference: reference === '' ? null : reference } };
+  }
+  if (settingKey === 'client_version_range') return { ok: true, value: { minimum: read('minimum'), maximum: read('maximum') } };
+  if (settingKey === 'alert_thresholds') {
+    const value: Record<string, unknown> = { todaySnapshotDeadlineLocalTime: read('todaySnapshotDeadlineLocalTime') };
+    for (const field of THRESHOLD_FIELDS) {
+      const parsed = Number(read(field.key));
+      if (read(field.key) === '' || !Number.isFinite(parsed)) return { ok: false, field: field.key };
+      value[field.key] = parsed;
+    }
+    return { ok: true, value };
+  }
+  return { ok: false, field: settingKey };
+}
+
+/** A slice's value in words, the line under its heading (lane g88). */
+export function settingSummary(settingKey: string, value: unknown): string {
+  const current = record(value);
+  if (settingKey === 'business_time_zone') {
+    const zone = text(current['timeZone'], '');
+    return BUSINESS_ZONE_CHOICES.find(choice => choice.value === zone)?.label ?? zone;
+  }
+  if (settingKey === 'sending_enabled') return current['enabled'] === true ? 'On' : 'Off';
+  if (settingKey === 'client_version_range') {
+    return `Callie ${text(current['minimum'], '?')} to ${describeClientVersionMaximum(text(current['maximum'], '?'))}`;
+  }
+  if (settingKey === 'alert_thresholds') return 'The ten thresholds the alarms compare against.';
+  return '';
+}
+
+/** The sending checklist's facts, in words (12.7). The command's field names stay the test ids. */
+export const SENDING_CHECK_LABELS: Readonly<Record<string, string>> = Object.freeze({
+  spfPass: 'SPF passes',
+  dkimPass: 'DKIM passes',
+  dmarcPass: 'DMARC passes',
+  postmasterReviewed: 'Postmaster Tools reviewed',
+  automatedSendingEnabled: 'Automated sending enabled for this domain',
+});

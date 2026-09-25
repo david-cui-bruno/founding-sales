@@ -1,12 +1,17 @@
 import { z } from 'zod';
 import {
+  STEP_CHANNELS,
+  STEP_NO_ANSWER_ACTIONS,
   enrollmentDtoSchema,
   instant,
+  resumePreviewSchema,
+  sequenceDelaySchema,
   sequenceSummaryDtoSchema,
   sequenceVersionDtoSchema,
   templateVersionDtoSchema,
   uuid,
   type EnrollmentDto,
+  type ResumePreviewDto,
   type SequenceDelay as SequenceDelayDto,
   type SequenceStepDto,
   type SequenceSummaryDto,
@@ -15,7 +20,7 @@ import {
 } from '@fss/contracts';
 
 /**
- * What the sequence editor window is given, and the nine things it may ask for
+ * What the sequence editor window is given, and the things it may ask for
  * (specification 11.1, 11.3, 4.3, 14.2).
  *
  * A third contract beside G2's cache shape and G6's Today shape, for the reason G6
@@ -86,6 +91,50 @@ const readErrorSchema = z.string().min(1).max(80).nullable();
 export const SEQUENCE_READ_SLICES = ['sequences', 'versions', 'templates', 'enrollments'] as const;
 export type SequenceReadSlice = (typeof SEQUENCE_READ_SLICES)[number];
 
+/**
+ * One step of a draft, as the editor holds it and as it is sent (lane g88, audit G03).
+ *
+ * No ordinal: a step's number is its place in the list, assigned when the draft is saved,
+ * so a reorder can never leave the gap `publishVersion` refuses. No LinkedIn channel is
+ * offered by the editor — David dropped LinkedIn — but a draft copied from a version
+ * that had one still carries it, and the schema has to be able to say so, or saving that
+ * draft would silently delete a step.
+ */
+export const draftStepSchema = z.strictObject({
+  channel: z.enum(STEP_CHANNELS),
+  delay: sequenceDelaySchema,
+  onNoAnswer: z.enum(STEP_NO_ANSWER_ACTIONS).nullable(),
+  templateVersionId: uuid.nullable(),
+  linkedInMessage: z.string().min(1).max(1200).nullable(),
+});
+export type DraftStep = z.infer<typeof draftStepSchema>;
+
+/**
+ * A template version as the form writes it (lane g88). `body` is what the person typed;
+ * the sign-off and the stop line are appended by the bridge, so the footer 12.6 requires
+ * is always the last thing in the email and never something the person had to type.
+ */
+export interface TemplateDraft {
+  /** The template this is a new version of, or null for a new template. */
+  readonly templateId: string | null;
+  readonly name: string;
+  readonly subject: string;
+  readonly body: string;
+  readonly signOff: string;
+}
+
+/**
+ * What "Review and resume" shows (lane g88, audit G06): the server's preview of the
+ * resume, and the database time it was computed at. Present only while the person is
+ * looking at it; the confirmation is the one action it offers.
+ */
+export const resumeReviewSchema = z.strictObject({
+  asOf: instant,
+  preview: resumePreviewSchema,
+});
+export type ResumeReview = z.infer<typeof resumeReviewSchema>;
+export type ResumePreview = ResumePreviewDto;
+
 export const sequenceStateSchema = z.strictObject({
   online: z.boolean(),
   mayMutate: z.boolean(),
@@ -106,6 +155,8 @@ export const sequenceStateSchema = z.strictObject({
     enrollments: readErrorSchema,
   }),
   linkedInCard: linkedInCardSchema.nullable(),
+  /** The resume review the person opened, or null (lane g88). */
+  resumeReview: resumeReviewSchema.nullable(),
   notice: z.string().max(400).nullable(),
 });
 export type SequenceState = z.infer<typeof sequenceStateSchema>;
@@ -113,11 +164,13 @@ export type SequenceState = z.infer<typeof sequenceStateSchema>;
 export interface SequenceBridge {
   state(): Promise<SequenceState>;
   openSequence(input: { readonly sequenceId: string }): Promise<SequenceState>;
+  /** Lane g88: creates the sequence and its first, empty draft, and opens it. */
   createSequence(input: { readonly name: string }): Promise<SequenceState>;
-  saveDraft(input: {
-    readonly sequenceVersionId: string;
-    readonly steps: readonly Omit<SequenceStep, 'id' | 'sequenceVersionId'>[];
-  }): Promise<SequenceState>;
+  /** Lane g88: a new draft of a published sequence, copying its newest published steps. */
+  createDraft(input: { readonly sequenceId: string }): Promise<SequenceState>;
+  saveDraft(input: { readonly sequenceVersionId: string; readonly steps: readonly DraftStep[] }): Promise<SequenceState>;
+  /** Lane g88: writes an unapproved template version. Approval stays its own act. */
+  createTemplate(input: TemplateDraft): Promise<SequenceState>;
   publish(input: { readonly sequenceVersionId: string }): Promise<SequenceState>;
   retire(input: { readonly sequenceVersionId: string }): Promise<SequenceState>;
   approveTemplate(input: { readonly templateVersionId: string }): Promise<SequenceState>;
@@ -133,6 +186,13 @@ export interface SequenceBridge {
     readonly enrollmentId: string;
     readonly result: 'replied' | 'no_engagement';
   }): Promise<SequenceState>;
+  /** Lane g88: read the resume review for one held enrollment. */
+  reviewEnrollment(input: { readonly enrollmentId: string }): Promise<SequenceState>;
+  closeReview(): Promise<SequenceState>;
+  /**
+   * The confirmation. Since lane g88 it resumes only the enrollment whose review is on
+   * screen; asked for any other, it opens that one's review instead.
+   */
   resumeEnrollment(input: { readonly enrollmentId: string }): Promise<SequenceState>;
 }
 

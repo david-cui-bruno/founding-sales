@@ -8,6 +8,7 @@ import {
   enrollContact,
   listEnrollments,
   listStepExecutions,
+  previewResume,
   proposeEnrollmentMigration,
   recordLinkedInResult,
   resumeAfterReview,
@@ -45,6 +46,7 @@ export const ENROLLMENT_PATHS: readonly string[] = [
   '/enrollments/stop',
   '/enrollments/steps',
   '/enrollments/resume',
+  '/enrollments/resume/preview',
   '/enrollments/linkedin/complete',
   '/enrollments/linkedin/undo',
   '/enrollments/linkedin/result',
@@ -96,6 +98,8 @@ const listSchema = z.strictObject({
 
 const stepsSchema = z.strictObject({ enrollmentId: uuid });
 
+const previewSchema = z.strictObject({ enrollmentId: uuid });
+
 export async function routeEnrollments(
   request: ApiRequest,
   options: RoutingOptions,
@@ -145,6 +149,25 @@ export async function routeEnrollments(
       status: 200,
       body: { steps: await listStepExecutions(scoped.context, { enrollmentId: parsed.data.enrollmentId }) },
     };
+  }
+
+  if (request.path === '/enrollments/resume/preview') {
+    // "Review and resume" (4.3; lane g88, audit G06): the future steps and the dates a
+    // confirmation would give them, computed by the function the confirmation runs. A
+    // read — nothing is locked or written — so the person can look and walk away.
+    const parsed = previewSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return { status: REFUSAL_STATUS.malformed_body, body: redactError('malformed_body') };
+    }
+    const scoped = contextForPrincipal(deps.auth, deps.principal);
+    if (!scoped.ok) return scoped.result;
+    const preview = await previewResume(scoped.context, { enrollmentId: parsed.data.enrollmentId });
+    if (!preview.ok) {
+      return preview.reason === 'enrollment_unknown'
+        ? { status: REFUSAL_STATUS.not_found, body: redactError('not_found') }
+        : { status: 409, body: { status: 'refused', reason: preview.reason } };
+    }
+    return { status: 200, body: { asOf: await databaseNow(scoped.context), preview: preview.value } };
   }
 
   if (request.path === '/enrollments/enroll') {

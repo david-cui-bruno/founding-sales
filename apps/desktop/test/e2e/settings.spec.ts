@@ -138,7 +138,8 @@ test('a salesperson sees the same page with every control inert and a reason', a
 
   await expect(page.getByTestId('value-business_time_zone')).toBeDisabled();
   await expect(page.getByTestId('save-business_time_zone')).toBeDisabled();
-  await expect(page.getByTestId('setting-business_time_zone')).toContainText('admin_only');
+  // The reason in words (lane g88), not the code the view model carries.
+  await expect(page.getByTestId('setting-business_time_zone')).toContainText('Only an admin can change this.');
   // Reading is not refused: a salesperson whose send was refused by a cap should be
   // able to see the cap.
   await expect(page.getByTestId('setting-business_time_zone')).toContainText('Version 2');
@@ -151,7 +152,7 @@ test('offline is said once, at the top, and every control is inert', async ({ pa
   await expect(page.getByTestId('banner-offline')).toContainText('Offline');
   await expect(page.getByTestId('save-alert_thresholds')).toBeDisabled();
   // Offline comes first: an admin who is offline is told that, not "admin only".
-  await expect(page.getByTestId('setting-alert_thresholds')).toContainText('offline');
+  await expect(page.getByTestId('setting-alert_thresholds')).toContainText('Offline: nothing here can be changed');
 });
 
 test('a terminal stage is listed and offers no administration', async ({ page }) => {
@@ -244,4 +245,32 @@ test('History shows what each version changed, from and to, under its setting (l
   expect(server.calls.filter(call => call.method === 'openHistory').map(call => call.argument)).toEqual([
     { settingKey: 'business_time_zone' },
   ]);
+});
+
+// ------------------------------------------------------ lane g88: typed controls (G08)
+test('a setting is changed with a typed control, and its JSON and provenance are behind Details', async ({ page }) => {
+  server = await startSettingsTestServer(adminState());
+  await page.goto(server.url);
+
+  // No JSON on the face of the page: a zone picker, and the machinery behind Details.
+  await expect(page.getByTestId('setting-business_time_zone').locator('textarea')).toHaveCount(0);
+  await expect(page.getByTestId('json-business_time_zone')).toBeHidden();
+  await expect(page.getByTestId('summary-business_time_zone')).toHaveText('Central (Chicago)');
+  await page.getByTestId('field-business_time_zone-timeZone').selectOption('America/Denver');
+  await page.getByTestId('note-business_time_zone').fill('the office moved');
+  await page.getByTestId('save-business_time_zone').click();
+  await expect
+    .poll(() => server.calls.find(entry => entry.method === 'saveSetting')?.argument)
+    .toEqual({ settingKey: 'business_time_zone', value: { timeZone: 'America/Denver' }, changeNote: 'the office moved' });
+
+  // The thresholds are numbers, one click further away; one that is not a number is marked and not sent.
+  await page.getByText('Advanced: alarm thresholds and supported Callie versions').click();
+  await page.getByTestId('field-alert_thresholds-canaryStaleSeconds').fill('');
+  await page.getByTestId('save-alert_thresholds').click();
+  await expect(page.getByTestId('field-alert_thresholds-canaryStaleSeconds')).toHaveAttribute('aria-invalid', 'true');
+  expect(server.calls.filter(entry => entry.method === 'saveSetting')).toHaveLength(1);
+
+  // Where the other settings live, and which lane owns them, is support detail.
+  await expect(page.getByTestId('elsewhere-details')).not.toHaveAttribute('open', '');
+  await expect(page.getByText('/research/config')).toBeHidden();
 });

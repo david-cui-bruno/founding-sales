@@ -9,6 +9,7 @@ import {
   type ConfirmReplyRequest,
   type ReplyCard,
   type ReplyState,
+  type ResolveReplyRequest,
 } from '../renderer/replyContract.ts';
 import type { AuthedClient } from './authedClient.ts';
 import { localToInstant } from './todayBridge.ts';
@@ -51,6 +52,8 @@ export const REPLY_IPC_CHANNELS = {
   open: 'callie:replies:open',
   collapse: 'callie:replies:collapse',
   confirm: 'callie:replies:confirm',
+  // Lane g88 (audit G07): which conversation an ambiguous reply belongs to.
+  resolve: 'callie:replies:resolve',
 } as const;
 export type ReplyIpcChannel = (typeof REPLY_IPC_CHANNELS)[keyof typeof REPLY_IPC_CHANNELS];
 
@@ -79,6 +82,7 @@ export interface ReplyBridgeHost {
   open(input: { readonly messageId: string }): Promise<ReplyState>;
   collapse(): Promise<ReplyState>;
   confirm(input: ConfirmReplyRequest): Promise<ReplyState>;
+  resolve(input: ResolveReplyRequest): Promise<ReplyState>;
 }
 
 export function createReplyBridge(deps: ReplyBridgeDeps): ReplyBridgeHost {
@@ -204,6 +208,44 @@ export function createReplyBridge(deps: ReplyBridgeDeps): ReplyBridgeHost {
       await loadLane();
       notice = said;
       open = null;
+      return await snapshot();
+    },
+
+    /**
+     * Which conversation an ambiguous reply belongs to (12.3; lane g88, audit G07).
+     *
+     * G7's command, `/messages/resolve-ambiguity`, as `docs/decisions/g7b-ambiguity-stays-where-g7-put-it.md`
+     * says the window should send — there is one resolution per message and one path to
+     * it. `human` is false: choosing the conversation is not saying the reply is a
+     * person's, and the disposition the person confirms next is what sets the firm to
+     * manual and releases the reply's own hold. The only consequence here is 12.3's own:
+     * the other candidates' ambiguity holds are released after a fresh check, and the
+     * chosen one keeps a hold until the reply is answered.
+     *
+     * The card stays open and is read again, so the next thing on screen is the question
+     * the resolution unlocked.
+     */
+    async resolve(input) {
+      const card = open;
+      if (card === null || card.messageId !== input.messageId) {
+        notice = 'message_unknown';
+        return await snapshot();
+      }
+      if (!card.impact.candidates.some(candidate => candidate.opportunityId === input.opportunityId)) {
+        notice = 'match_unknown';
+        return await snapshot();
+      }
+      const answer = await deps.api.command(
+        '/messages/resolve-ambiguity',
+        { messageId: input.messageId, selectedOpportunityId: input.opportunityId, human: false },
+        () => null,
+      );
+      note(answer, 'resolved');
+      // The re-read must not swallow what the command said, as in `confirm`.
+      const said = notice;
+      await loadLane();
+      await loadCard(input.messageId);
+      notice = said;
       return await snapshot();
     },
   };

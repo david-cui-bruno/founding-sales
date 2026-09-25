@@ -1,4 +1,5 @@
 import type {
+  EnrollmentState,
   FirmIdentityDto,
   FirmPageResponse,
   ImportCommitResponse,
@@ -114,6 +115,38 @@ export interface CrmState {
   readonly addFirm?: AddFirmView | null;
   /** The Import screen, while the window shows it (lane g84). */
   readonly import?: ImportView | null;
+  /** The Firm page's Sequences section (lane g88): what it may be enrolled in, and what it is in. */
+  readonly sequences?: FirmSequencesView | null;
+}
+
+/**
+ * The Firm page's Sequences section (lane g88, audit G03): the published versions a
+ * contact here may be enrolled in, and the enrollments already running at the firm. Each
+ * is labelled with the sequence's name and version, which is what a person recognises.
+ */
+export interface FirmSequencesView {
+  readonly published: readonly { readonly sequenceVersionId: string; readonly label: string }[];
+  readonly enrollments: readonly {
+    readonly enrollmentId: string;
+    readonly contactId: string;
+    readonly label: string;
+    readonly state: EnrollmentState;
+    readonly startedAt: string;
+  }[];
+  /** The refusal code of a read that failed, or null. A failed read is not "none". */
+  readonly readError: string | null;
+}
+
+/** Enrol one contact of the open Firm page in one published version (lane g88). */
+export interface EnrollRequest {
+  readonly sequenceVersionId: string;
+  readonly contactId: string;
+}
+
+/** Confirm one phone number of the open Firm page, at the version on screen (lane g88). */
+export interface ConfirmRouteRequest {
+  readonly routeId: string;
+  readonly routeVersion: number;
 }
 
 export interface ContactEdit {
@@ -157,6 +190,10 @@ export interface CrmBridge {
   openImport(): Promise<CrmState>;
   previewImport(input: ImportFile): Promise<CrmState>;
   commitImport(): Promise<CrmState>;
+  /** Lane g88: put the open firm in the pipeline, enrol a contact, confirm a number. */
+  openOpportunity(): Promise<CrmState>;
+  enroll(input: EnrollRequest): Promise<CrmState>;
+  confirmRoute(input: ConfirmRouteRequest): Promise<CrmState>;
 }
 
 declare global {

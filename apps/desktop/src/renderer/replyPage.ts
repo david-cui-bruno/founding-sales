@@ -1,6 +1,6 @@
 import { button, element, orDash } from './firmDom.ts';
 import type { ReplyBridge, ReplyDisposition, ReplyState } from './replyContract.ts';
-import { buildReplyView, replyNotice, type ReplyCardView } from './replyView.ts';
+import { buildReplyView, candidateLabel, replyNotice, type ReplyCardView } from './replyView.ts';
 
 /**
  * The reply window (specification 8.3, 12.4, 14.2).
@@ -111,10 +111,44 @@ function renderImpact(panel: HTMLElement, card: ReplyCardView): void {
   const list = element('ul', { testId: 'impact-lines' });
   for (const line of card.impactLines) list.append(element('li', { text: line, testId: 'impact-line' }));
   box.append(list);
-  for (const candidate of card.ambiguity) {
-    box.append(element('p', { className: 'candidate', testId: 'ambiguity-candidate', text: candidate.firmName }));
-  }
+  renderCandidates(box, card);
   panel.append(box);
+}
+
+/**
+ * Which conversation the reply belongs to (lane g88, audit G07). One radio per candidate
+ * firm, nothing chosen until the person chooses, and a button that sends G7's resolution.
+ * The disposition form appears once the card comes back resolved.
+ */
+function renderCandidates(box: HTMLElement, card: ReplyCardView): void {
+  if (card.ambiguity.length === 0) return;
+  const form = element('form', { className: 'candidates', testId: 'candidate-form' });
+  form.append(element('h3', { text: 'Which conversation is this reply about?' }));
+  let picked: string | null = null;
+  const submit = button('This one', 'candidate-submit', false);
+  submit.type = 'submit';
+  for (const candidate of card.ambiguity) {
+    const label = element('label', { className: 'candidate-choice' });
+    label.dataset['testid'] = 'ambiguity-candidate';
+    const radio = element('input', { testId: 'candidate-choice' });
+    radio.type = 'radio';
+    radio.name = 'candidate';
+    radio.value = candidate.opportunityId;
+    radio.disabled = !card.resolveEnabled;
+    radio.addEventListener('change', () => {
+      picked = candidate.opportunityId;
+      submit.disabled = !card.resolveEnabled;
+    });
+    label.append(radio, element('span', { text: candidateLabel(candidate) }));
+    form.append(label);
+  }
+  form.addEventListener('submit', event => {
+    event.preventDefault();
+    if (picked === null) return;
+    apply(bridge().resolve({ messageId: card.messageId, opportunityId: picked }));
+  });
+  form.append(submit);
+  box.append(form);
 }
 
 function renderAnswer(panel: HTMLElement, card: ReplyCardView, state: ReplyState): void {

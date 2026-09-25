@@ -314,6 +314,54 @@ mode and left the sequence running, which is invariant 3. See
 `docs/decisions/g15-the-worker-drains-what-the-lanes-left.md` and
 `docs/decisions/g22-the-manual-mode-origin.md`.
 
+## Authoring and starting a sequence on the Mac (lane g88)
+
+The editor window (`apps/desktop/src/renderer/sequenceEditor.ts`, decisions in
+`sequenceView.ts`, commands in `apps/desktop/src/main/sequenceBridge.ts`) drives the
+existing commands in the order a founder meets them. There is no authoring endpoint of
+its own.
+
+1. **New sequence** — a name. Two commands: `/sequences/create`, then an empty draft
+   (`/sequences/versions/draft` with no steps), so the new sequence opens ready to type into.
+2. **Write the email** — **New template**: a name, a subject, the email and the sign-off.
+   The bridge appends the sign-off and 12.6's stop line, because the approval requires the
+   body to end with them. The declared variables are the ones the text names. The form
+   refuses, before sending, a variable Callie cannot fill (`TEMPLATE_VARIABLE_NAMES`, in
+   `@fss/contracts`), an unsubscribe link, and more than 89 words. **Approve** is a separate
+   press. A refused approval lists every issue, read from the refusal's body, because the
+   Mac's transport cuts a reason code at 80 characters.
+3. **Steps** — the draft's steps as typed controls: Call or Email, a delay in business
+   days or hours after enrolment, the template an email sends or what a call does when
+   nobody answers, with up, down and remove on hover. An empty draft offers **Start from
+   the suggested plan** (call on day 0, email on day 2, call on day 4), which fills the
+   editor and publishes nothing. Nothing is sent until **Save draft**, which numbers the
+   steps 1..n in list order. No LinkedIn step is offered. A copied step that has one is
+   marked "no longer offered" and can only be removed.
+4. **Publish** — disabled while the editor holds unsaved changes. A published version
+   offers **Edit as a new draft**.
+5. **Enrol** — on the firm's page, not here (`docs/greenfield/crm-surface.md`, "The
+   windows"). It needs an open opportunity, and the page offers **Add to pipeline** first.
+
+The stop conditions read as one sentence. The codes, a template's content hash, its footer
+and its declared variables are behind **Details**.
+
+### Review and resume
+
+`POST /enrollments/resume/preview { enrollmentId }` answers
+`{ asOf, preview: { kind, unionMilliseconds, shiftMilliseconds, openHoldIds, firmTimeZone,
+holds[], steps[] } }`. Each step has its
+`dueAt` now and the `proposedDueAt` a confirmation gives it. `previewResume` and
+`resumeEnrollment` share `resumeDecisionFor`: the same window since the last applied
+shift, the same composition and decision, and the same `shiftDueInstant`. The preview
+locks nothing and writes nothing, not even the `review_required` flag.
+
+**Review and resume** on a held enrollment opens that review. It shows what held the
+enrollment and each remaining step as *from → to* in the firm's zone, and **Resume with
+these dates** is the only control that resumes. The bridge refuses to resume an
+enrollment whose review is not on screen and opens the review instead. When a hold is
+still open, the review says so and offers no confirmation. The confirmation decides again
+under its lock. See `docs/decisions/g88-founder-authoring-and-review.md`.
+
 ## Adding a step channel, or a terminal condition
 
 1. Add the word to the CHECK in `sequence_steps_channel_known` and to `StepChannel`.
@@ -334,6 +382,8 @@ npm --workspace @fss/api run test -- test/sequences.test.ts # the routes and the
 npm --workspace @fss/worker run test -- test/sequenceAction.test.ts  # G 1 and G 2
 npm --workspace @fss/worker run test -- test/sequenceActionRearm.test.ts  # the wake, a killed worker, two wakes
 npm --workspace @fss/desktop run test -- test/sequences.test.ts      # the editor
+npm --workspace @fss/domain run test -- test/sequences/resumePreview.test.ts  # the review is the resume's arithmetic
+npm --workspace @fss/desktop run test -- test/founderGaps.test.ts    # authoring and the review, as view models
 ```
 
 Nothing in any of them opens a socket, and no fixture contains a real person, firm,

@@ -2,9 +2,11 @@ import { expect, test } from 'playwright/test';
 import {
   FIRM_ID,
   OPPORTUNITY_ID,
+  SEQUENCE_VERSION_ID,
   assigneeFirmPage,
   colleagueFirmPage,
   crmState,
+  firmSequences,
   mergeView,
   pipelineView,
   startCrmTestServer,
@@ -240,4 +242,66 @@ test('a salesperson sees the conflicts and cannot commit the merge', async ({ pa
   await expect(page.getByTestId('merge-conflict')).toHaveCount(2);
   await expect(page.locator('input[type=radio]').first()).toBeDisabled();
   await expect(page.getByTestId('merge-submit')).toBeDisabled();
+});
+
+// ------------------------------------------------------------ lane g88: the Firm page
+test('a candidate number is confirmed at the version on screen, and an address has no such button', async ({ page }) => {
+  server = await startCrmTestServer(crmState({ sequences: firmSequences() }));
+  await page.goto(server.url);
+
+  // One candidate number: one button, beside it, and the sentence saying what it does.
+  await expect(page.getByTestId('route-confirm')).toHaveCount(1);
+  await expect(page.getByTestId('routes-hint-phone')).toContainText('confirm it reaches this firm');
+  await expect(page.getByTestId('firm-routes-email').getByTestId('route-confirm')).toHaveCount(0);
+
+  await page.getByTestId('route-confirm').click();
+  await expect(page.getByTestId('banner-info')).toHaveText('Number confirmed. It can be called now.');
+  expect(server.calls.find(entry => entry.method === 'confirmRoute')?.argument).toEqual({
+    routeId: '99999999-9999-4999-8999-999999999999',
+    routeVersion: 1,
+  });
+  await expect(page.getByTestId('route-eligibility').nth(1)).toHaveText('usable');
+  await expect(page.getByTestId('route-version').nth(1)).toHaveText('v2');
+  await expect(page.getByTestId('route-confirm')).toHaveCount(0);
+});
+
+test('a contact is enrolled from the Firm page in a published sequence', async ({ page }) => {
+  server = await startCrmTestServer(crmState({ sequences: firmSequences() }));
+  await page.goto(server.url);
+
+  await expect(page.getByTestId('enroll-sequence').locator('option')).toHaveText(['Founder plan v1']);
+  await page.getByTestId('enroll-contact').selectOption({ label: 'Robin Placeholder' });
+  await page.getByTestId('enroll-submit').click();
+  await expect(page.getByTestId('banner-info')).toHaveText('Enrolled. The first step is on its way to Today.');
+  expect(server.calls.find(entry => entry.method === 'enroll')?.argument).toEqual({
+    sequenceVersionId: SEQUENCE_VERSION_ID,
+    contactId: '77777777-7777-4777-8777-777777777777',
+  });
+  await expect(page.getByTestId('firm-enrollment')).toContainText('Robin Placeholder — Founder plan v1');
+});
+
+test('a firm with no opportunity is offered "Add to pipeline" before any enrolment', async ({ page }) => {
+  const firm = assigneeFirmPage();
+  server = await startCrmTestServer(crmState({ firm: { ...firm, opportunity: null } as typeof firm, sequences: firmSequences() }));
+  await page.goto(server.url);
+
+  await expect(page.getByTestId('enroll-form')).toHaveCount(0);
+  await expect(page.getByTestId('enroll-needs-pipeline')).toHaveText('Put the firm in the pipeline before enrolling anybody here.');
+  await page.getByTestId('open-opportunity').click();
+  await expect(page.getByTestId('banner-info')).toHaveText('In the pipeline, at the first stage.');
+  expect(server.calls.some(entry => entry.method === 'openOpportunity')).toBe(true);
+});
+
+test('clearing a contact’s title sends the null that clears it', async ({ page }) => {
+  server = await startCrmTestServer(crmState());
+  await page.goto(server.url);
+  await page.getByTestId('contact-title').nth(0).fill('');
+  await page.getByTestId('contact-save').nth(0).click();
+  await expect(page.getByTestId('banner-info')).toContainText('Saved.');
+  expect(server.calls.find(entry => entry.method === 'saveContact')?.argument).toEqual({
+    contactId: '66666666-6666-4666-8666-666666666666',
+    fullName: 'Dana Example',
+    title: null,
+    makePrimary: false,
+  });
 });

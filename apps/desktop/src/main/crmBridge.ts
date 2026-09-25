@@ -3,6 +3,7 @@ import {
   IMPORT_FILE_REFUSALS,
   addFirmRefusalSchema,
   addFirmResultSchema,
+  enrollmentsResponseSchema,
   firmListResponseSchema,
   firmPageResponseSchema,
   importCommitResponseSchema,
@@ -11,6 +12,8 @@ import {
   mergeRefusalSchema,
   pipelineBoardResponseSchema,
   pipelineStagesResponseSchema,
+  sequenceVersionsResponseSchema,
+  sequencesResponseSchema,
   type FirmIdentityDto,
   type MergeConflict,
   type PipelineStageDto,
@@ -18,9 +21,12 @@ import {
 import type {
   AddFirmDraft,
   AddFirmView,
+  ConfirmRouteRequest,
   ContactEdit,
   CrmScreen,
   CrmState,
+  EnrollRequest,
+  FirmSequencesView,
   ImportFile,
   ImportFileRefusalView,
   ImportView,
@@ -73,6 +79,10 @@ export const CRM_IPC_CHANNELS = {
   openImport: 'callie:crm:open-import',
   previewImport: 'callie:crm:preview-import',
   commitImport: 'callie:crm:commit-import',
+  // Lane g88: the Firm page's pipeline start, enrolment and number confirmation.
+  openOpportunity: 'callie:crm:open-opportunity',
+  enroll: 'callie:crm:enroll',
+  confirmRoute: 'callie:crm:confirm-route',
 } as const;
 export type CrmIpcChannel = (typeof CRM_IPC_CHANNELS)[keyof typeof CRM_IPC_CHANNELS];
 
@@ -111,6 +121,30 @@ export interface CrmBridgeHost {
   openImport(): Promise<CrmState>;
   previewImport(input: ImportFile): Promise<CrmState>;
   commitImport(): Promise<CrmState>;
+  openOpportunity(): Promise<CrmState>;
+  enroll(input: EnrollRequest): Promise<CrmState>;
+  confirmRoute(input: ConfirmRouteRequest): Promise<CrmState>;
+}
+
+/** How many sequences the Firm page asks the versions of. A founder has a handful. */
+export const FIRM_PAGE_SEQUENCE_LIMIT = 20;
+
+/**
+ * The contact patch `/contacts/update` takes (lane g88, audit C20). The route's command is
+ * `{ contactId, patch }` and its patch is strict, and until g88 the bridge sent the fields
+ * beside `contactId` instead — every save was a 400 — and left an empty title out, which in
+ * a patch means "unchanged". An empty title is now the explicit `null` the patch reads as
+ * "clear it", and the promotion is sent only when asked for.
+ */
+export function contactPatchBody(input: ContactEdit): Readonly<Record<string, unknown>> {
+  return {
+    contactId: input.contactId,
+    patch: {
+      fullName: input.fullName,
+      title: input.title,
+      ...(input.makePrimary ? { isPrimary: true } : {}),
+    },
+  };
 }
 
 /** `importPreviewRequestSchema`'s bound on a file, in characters. */
@@ -198,6 +232,8 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
   /** The previewed file's text and one command id per row it may commit (lane g84). */
   let importCsv: string | null = null;
   let importCommandIds = new Map<number, string>();
+  /** The open Firm page's Sequences section (lane g88). */
+  let sequences: FirmSequencesView | null = null;
   /** Every opportunity id a Firm page has told this window about. */
   const opportunityIdByFirmId: Record<string, string> = {};
 
@@ -230,6 +266,51 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
       merge,
       addFirm: addFirmView,
       import: importView,
+      sequences: screen === 'firm' ? sequences : null,
+    };
+  };
+
+  /**
+   * The Firm page's Sequences section (lane g88, audit G03): the published versions, by
+   * the sequence's name, and the live enrollments at this firm. Three existing reads —
+   * `/sequences`, each sequence's `/sequences/versions`, and `/enrollments` for the firm —
+   * rather than a new endpoint, because a founder has a handful of sequences. A read that
+   * fails leaves the section saying so, never an empty list that reads as "none".
+   */
+  const loadSequences = async (firmId: string): Promise<void> => {
+    const list = await deps.api.read('/sequences', value => sequencesResponseSchema.parse(value));
+    const enrolled = await deps.api.read('/enrollments', value => enrollmentsResponseSchema.parse(value), { firmId });
+    if (!list.ok || !enrolled.ok) {
+      sequences = { published: [], enrollments: [], readError: list.ok ? (enrolled.ok ? null : enrolled.reason) : list.reason };
+      return;
+    }
+    const labels = new Map<string, string>();
+    const published: { sequenceVersionId: string; label: string }[] = [];
+    for (const sequence of list.value.sequences.slice(0, FIRM_PAGE_SEQUENCE_LIMIT)) {
+      if (sequence.archivedAt !== null) continue;
+      const versions = await deps.api.read('/sequences/versions', value => sequenceVersionsResponseSchema.parse(value), {
+        sequenceId: sequence.id,
+      });
+      if (!versions.ok) {
+        sequences = { published: [], enrollments: [], readError: versions.reason };
+        return;
+      }
+      for (const version of versions.value.versions) {
+        const label = `${sequence.name} v${String(version.version)}`;
+        labels.set(version.id, label);
+        if (version.state === 'published') published.push({ sequenceVersionId: version.id, label });
+      }
+    }
+    sequences = {
+      published,
+      enrollments: enrolled.value.enrollments.map(entry => ({
+        enrollmentId: entry.id,
+        contactId: entry.contactId,
+        label: labels.get(entry.sequenceVersionId) ?? 'A sequence',
+        state: entry.state,
+        startedAt: entry.startedAt,
+      })),
+      readError: null,
     };
   };
 
@@ -252,6 +333,8 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
       opportunityIdByFirmId[page.value.read.firm.id] = page.value.opportunity.id;
     }
     screen = 'firm';
+    sequences = null;
+    if (page.value.visibility === 'assigned_or_admin') await loadSequences(page.value.read.firm.id);
   };
 
   const loadPipeline = async (): Promise<void> => {
@@ -408,18 +491,64 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
     },
 
     async saveContact(input) {
+      const answer = await deps.api.command('/contacts/update', contactPatchBody(input), () => null);
+      notice = answer.ok ? 'saved' : answer.reason;
+      if (answer.ok && firm !== null) await loadFirm(firm.read.firm.id);
+      return await snapshot();
+    },
+
+    /**
+     * "Add to pipeline" (lane g88): open the firm's opportunity at the first stage. An
+     * enrolment serves an open opportunity (11.2), and a firm just added has none.
+     */
+    async openOpportunity() {
+      if (firm === null) {
+        notice = 'firm_unknown';
+        return await snapshot();
+      }
+      const firmId = firm.read.firm.id;
+      const answer = await deps.api.command('/opportunities/open', { firmId }, () => null);
+      notice = answer.ok ? 'opportunity_opened' : answer.reason;
+      await loadFirm(firmId);
+      return await snapshot();
+    },
+
+    /**
+     * Enrol a contact of the open Firm page (lane g88, audit G03). The firm and its open
+     * opportunity are the page's, never the window's word; the server decides everything
+     * else — the version is published, the contact has no live enrolment, the firm's zone
+     * is known — and its refusal is the notice.
+     */
+    async enroll(input) {
+      const page = firm;
+      if (page === null || page.visibility !== 'assigned_or_admin' || page.opportunity?.status !== 'open') {
+        notice = 'opportunity_not_open';
+        return await snapshot();
+      }
       const answer = await deps.api.command(
-        '/contacts/update',
+        '/enrollments/enroll',
         {
+          sequenceVersionId: input.sequenceVersionId,
+          opportunityId: page.opportunity.id,
+          firmId: page.read.firm.id,
           contactId: input.contactId,
-          fullName: input.fullName,
-          ...(input.title === null ? {} : { title: input.title }),
-          ...(input.makePrimary ? { isPrimary: true } : {}),
         },
         () => null,
       );
-      notice = answer.ok ? 'saved' : answer.reason;
-      if (answer.ok && firm !== null) await loadFirm(firm.read.firm.id);
+      notice = answer.ok ? 'enrolled' : answer.reason;
+      await loadFirm(page.read.firm.id);
+      return await snapshot();
+    },
+
+    /** "Confirm this number" (lane g88): the phone route at the version the page showed. */
+    async confirmRoute(input) {
+      const answer = await deps.api.command(
+        '/contacts/routes/confirm',
+        { routeKind: 'phone', routeId: input.routeId, routeVersion: input.routeVersion },
+        () => null,
+      );
+      notice = answer.ok ? 'route_confirmed' : answer.reason;
+      if (firm !== null) await loadFirm(firm.read.firm.id);
       return await snapshot();
     },
 

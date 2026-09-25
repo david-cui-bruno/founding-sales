@@ -76,6 +76,25 @@ The business zone is the one overlap, and deliberately:
 `workspaces.business_time_zone` stays the value every query reads and the setting row
 is the history of how it got there. The command writes both in one transaction.
 
+## How the page edits them (lane g88)
+
+Each setting has typed controls, built by `settingFields` in
+`apps/desktop/src/renderer/settingsView.ts` and read back by `settingValueFrom`:
+
+* The business zone is a picker of the US zones that Add firm offers.
+* Production sending is a switch and a release-gate reference.
+* The supported versions are two fields.
+* The ten alarm thresholds are labelled numbers and a time.
+
+Nothing is clamped on the Mac. The server's `invalid_value` is still the answer. The
+version and when it changed, and the value as JSON, are behind each setting's
+**Details**. Alarm thresholds and supported versions are behind **Advanced**.
+`elsewhere` is listed by topic, with endpoints and owning lanes behind **Where each is
+changed**. A reason reads as a sentence ("Only an admin can change this."), not a code. A
+slice this build does not recognise is edited as JSON under Details. This supersedes
+`docs/decisions/g9-settings-editing-is-json.md`. See
+`docs/decisions/g88-founder-authoring-and-review.md`.
+
 ## The three rules of the store
 
 **A change is a new version, never an edit.** `updateSetting` inserts version *n+1*

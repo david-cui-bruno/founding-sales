@@ -215,6 +215,34 @@ export const EMPTY_DRAFT = {
   contactPhone: '',
 };
 
+/** Lane g88: one published sequence, and nobody at the firm enrolled yet. */
+export const SEQUENCE_VERSION_ID = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+export function firmSequences(overrides: Partial<NonNullable<CrmState['sequences']>> = {}): NonNullable<CrmState['sequences']> {
+  return {
+    published: [{ sequenceVersionId: SEQUENCE_VERSION_ID, label: 'Founder plan v1' }],
+    enrollments: [],
+    readError: null,
+    ...overrides,
+  };
+}
+
+/** The Firm page after "Confirm this number": the candidate is usable, one version later. */
+function confirmedFirmPage(page: NonNullable<CrmState['firm']>): NonNullable<CrmState['firm']> {
+  if (page.visibility !== 'assigned_or_admin' || page.read.visibility !== 'assigned_or_admin') return page;
+  return {
+    ...page,
+    read: {
+      ...page.read,
+      firm: {
+        ...page.read.firm,
+        phoneRoutes: page.read.firm.phoneRoutes.map(route =>
+          route.eligibility === 'candidate' ? { ...route, eligibility: 'usable' as const, version: route.version + 1 } : route,
+        ),
+      },
+    },
+  };
+}
+
 export function crmState(overrides: Partial<CrmState> = {}): CrmState {
   return {
     screen: 'firm',
@@ -229,7 +257,7 @@ export function crmState(overrides: Partial<CrmState> = {}): CrmState {
   };
 }
 
-/** The bridge the browser gets. The same six methods the preload script exposes. */
+/** The bridge the browser gets. The same methods the preload script exposes. */
 const BRIDGE_SCRIPT = `
 globalThis.callieCrm = {
   async state() { return await ask('state'); },
@@ -243,6 +271,9 @@ globalThis.callieCrm = {
   async openImport() { return await ask('openImport'); },
   async previewImport(input) { return await ask('previewImport', input); },
   async commitImport() { return await ask('commitImport'); },
+  async openOpportunity() { return await ask('openOpportunity'); },
+  async enroll(input) { return await ask('enroll', input); },
+  async confirmRoute(input) { return await ask('confirmRoute', input); },
 };
 async function ask(method, argument) {
   const response = await fetch('/bridge/' + method, {
@@ -322,6 +353,29 @@ export async function startCrmTestServer(initial: CrmState): Promise<CrmTestServ
         }
         if (method === 'previewImport') state = { ...state, screen: 'import', notice: null, import: importPreviewView() };
         if (method === 'commitImport') state = { ...state, notice: 'imported_with_refusals', import: importResultsView() };
+        // Lane g88: Confirm this number, Add to pipeline, Enrol.
+        if (method === 'confirmRoute' && state.firm !== null) {
+          state = { ...state, firm: confirmedFirmPage(state.firm), notice: 'route_confirmed' };
+        }
+        if (method === 'openOpportunity') state = { ...state, notice: 'opportunity_opened' };
+        if (method === 'enroll') {
+          const input = argument as { contactId?: string } | null;
+          state = {
+            ...state,
+            notice: 'enrolled',
+            sequences: firmSequences({
+              enrollments: [
+                {
+                  enrollmentId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+                  contactId: input?.contactId ?? '',
+                  label: 'Founder plan v1',
+                  state: 'active',
+                  startedAt: '2026-09-25T13:00:00.000Z',
+                },
+              ],
+            }),
+          };
+        }
         return send(200, 'application/json', JSON.stringify(state));
       }
       return send(404, 'text/plain', 'not found');

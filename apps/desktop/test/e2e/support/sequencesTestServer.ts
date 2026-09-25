@@ -64,6 +64,18 @@ export function populatedSequenceState(overrides: Partial<SequenceState> = {}): 
   };
 }
 
+/**
+ * Lane g88: a sequence just created — its draft has no steps — beside one approved
+ * template, and nothing enrolled. What the founder sees before authoring anything.
+ */
+export function emptyDraftState(overrides: Partial<SequenceState> = {}): SequenceState {
+  return populatedSequenceState({
+    versions: [sequenceVersionAnswer([], { version: 1, state: 'draft' })],
+    heldEnrollments: [],
+    ...overrides,
+  });
+}
+
 /** The same window with three of its four reads failed, as the bridge reports them. */
 export function unreadSequenceState(): SequenceState {
   return populatedSequenceState({
@@ -75,13 +87,17 @@ export function unreadSequenceState(): SequenceState {
   });
 }
 
-/** The bridge the browser gets. The same twelve methods the preload script exposes. */
+/** The bridge the browser gets. The same methods the preload script exposes. */
 const BRIDGE_SCRIPT = `
 globalThis.callieSequences = {
   async state() { return await ask('state'); },
   async openSequence(input) { return await ask('openSequence', input); },
   async createSequence(input) { return await ask('createSequence', input); },
+  async createDraft(input) { return await ask('createDraft', input); },
   async saveDraft(input) { return await ask('saveDraft', input); },
+  async createTemplate(input) { return await ask('createTemplate', input); },
+  async reviewEnrollment(input) { return await ask('reviewEnrollment', input); },
+  async closeReview() { return await ask('closeReview'); },
   async publish(input) { return await ask('publish', input); },
   async retire(input) { return await ask('retire', input); },
   async approveTemplate(input) { return await ask('approveTemplate', input); },
@@ -126,9 +142,13 @@ async function readBody(request: IncomingMessage): Promise<unknown> {
 
 /**
  * `answers` is the sequence of states `state()` returns, one per call; the last one
- * repeats. Every other method answers the current state.
+ * repeats. Every other method answers the current state, unless `scripted` names the
+ * state that method moves the window to (lane g88: the review, a saved draft).
  */
-export async function startSequencesTestServer(answers: readonly SequenceState[]): Promise<SequencesTestServer> {
+export async function startSequencesTestServer(
+  answers: readonly SequenceState[],
+  scripted: Readonly<Partial<Record<string, SequenceState>>> = {},
+): Promise<SequencesTestServer> {
   const script = await transpile();
   const html = (await readFile(`${rendererDirectory}sequenceEditor.html`, 'utf8'))
     .replace('<script type="module"', '<script src="./bridge.js"></script>\n    <script type="module"')
@@ -161,6 +181,7 @@ export async function startSequencesTestServer(answers: readonly SequenceState[]
           state = answers[Math.min(served, answers.length - 1)] ?? state;
           served += 1;
         }
+        state = scripted[method] ?? state;
         return send(200, 'application/json', JSON.stringify(state));
       }
       return send(404, 'text/plain', 'not found');

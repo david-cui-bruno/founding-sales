@@ -1107,3 +1107,65 @@ main#app .posture-statement input {
   color: var(--ink-3);
   font-size: 13px;
 }
+
+/* ------------------------------------------------------------------------- */
+/* Lane g88: the step editor, the resume review, the disclosures              */
+/* ------------------------------------------------------------------------- */
+
+/* A step's fields sit on one line and wrap; up, down and remove appear on hover. */
+.row-main.step-fields {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+
+main#app .row-main.step-fields select,
+main#app .row-main.step-fields input {
+  margin: 0;
+}
+
+input.narrow {
+  width: 76px;
+}
+
+.steps.rows {
+  margin: 8px 0;
+}
+
+/* The review is indented under its row with a rule, never boxed. */
+.resume-review {
+  margin: 4px 0 12px;
+  padding-left: 12px;
+  border-left: 2px solid var(--line-strong);
+}
+
+.version-details,
+.template-details,
+.setting-details,
+.route-details {
+  margin: 4px 0 8px;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
+h3 .tag,
+.route-value + .tag {
+  margin-left: 8px;
+}
+
+/* Settings' typed controls: a label over each field, in a grid when there are many. */
+.setting-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 0 20px;
+  margin: 4px 0;
+  padding: 0;
+  border: 0;
+}
+
+/* The reply's candidate firms: one choice per line. */
+main#app .candidate-choice {
+  display: flex;
+  margin: 4px 0;
+}

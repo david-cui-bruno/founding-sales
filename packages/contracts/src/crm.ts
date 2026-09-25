@@ -31,6 +31,10 @@ export const CRM_REFUSAL_CODES = [
   'contact_merged',
   'route_unknown',
   'route_retired',
+  // Lane g88: `/contacts/routes/confirm` on a number that changed since it was shown,
+  // or on one whose validation failed.
+  'route_version_stale',
+  'route_invalid',
   'evidence_unknown',
   'not_assigned',
   'admin_only',
@@ -259,6 +263,19 @@ export const verifyRouteCommandSchema = z.strictObject({
   routeId: uuid,
   technicalValidation: technicalValidationSchema,
   associationConfidence: z.number().min(0).max(1).optional(),
+});
+
+/**
+ * A person confirms a phone number reaches the firm (lane g88). Phone only: the literal
+ * is the whole of that rule on the wire, and `docs/decisions/g88-founder-authoring-and-review.md`
+ * says why an email address is not confirmed by hand. `routeVersion` is the version the
+ * person was looking at; a route that has moved since is refused `route_version_stale`.
+ */
+export const confirmRouteCommandSchema = z.strictObject({
+  ...commandEnvelope,
+  routeKind: z.literal('phone'),
+  routeId: uuid,
+  routeVersion: z.number().int().min(1),
 });
 
 export const retireRouteCommandSchema = z.strictObject({

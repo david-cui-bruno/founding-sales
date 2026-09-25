@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ianaTimeZone, instant, sha256Hex, uuid } from './foundationRows.ts';
+import { holdReasonCodeSchema } from './reasonCodes.ts';
 
 /**
  * The wire contract of the sequence editor's reads: sequences, versions and their
@@ -211,3 +212,50 @@ export const linkedInHandoffResultSchema = z.object({
   undoUntil: instant,
 });
 export type LinkedInHandoffResult = z.infer<typeof linkedInHandoffResultSchema>;
+
+// ---------------------------------------------------------------------------
+// The resume review (lane g88, audit G06)
+// ---------------------------------------------------------------------------
+
+export const STEP_EXECUTION_STATES = ['pending', 'held', 'dispatched', 'completed', 'cancelled'] as const;
+
+/** `decideResume`'s three answers (`packages/domain/src/rules/holds.ts`). */
+export const RESUME_DECISION_KINDS = ['still_held', 'review_required', 'resume'] as const;
+export type ResumeDecisionKind = (typeof RESUME_DECISION_KINDS)[number];
+
+/** One unexecuted step: where it is due now, and where a confirmed resume puts it. */
+export const resumePreviewStepSchema = z.object({
+  stepExecutionId: uuid,
+  ordinal: z.number().int().min(1),
+  channel: z.enum(STEP_CHANNELS),
+  state: z.enum(STEP_EXECUTION_STATES),
+  originalDueAt: instant,
+  dueAt: instant,
+  proposedDueAt: instant,
+});
+export type ResumePreviewStepDto = z.infer<typeof resumePreviewStepSchema>;
+
+export const resumePreviewSchema = z.object({
+  enrollmentId: uuid,
+  kind: z.enum(RESUME_DECISION_KINDS),
+  unionMilliseconds: z.number().int().min(0),
+  shiftMilliseconds: z.number().int().min(0),
+  openHoldIds: z.array(uuid),
+  firmTimeZone: ianaTimeZone,
+  holds: z.array(
+    z.object({
+      reasonCode: holdReasonCodeSchema,
+      startedAt: instant,
+      releasedAt: instant.nullable(),
+    }),
+  ),
+  steps: z.array(resumePreviewStepSchema),
+});
+export type ResumePreviewDto = z.infer<typeof resumePreviewSchema>;
+
+/**
+ * `POST /enrollments/resume/preview`: what "Review and resume" shows, with the database
+ * time it was computed at. A read; the confirmation is `/enrollments/resume`.
+ */
+export const resumePreviewResponseSchema = z.object({ asOf: instant, preview: resumePreviewSchema });
+export type ResumePreviewResponse = z.infer<typeof resumePreviewResponseSchema>;

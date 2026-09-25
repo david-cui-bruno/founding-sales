@@ -72,6 +72,21 @@ export const CRM_NOTICES: Readonly<Record<string, string>> = Object.freeze({
   import_file_too_large: 'That file is larger than 512 KB. Split it and import each part.',
   duplicate_in_workspace: 'That firm is already here. Open it, or change the website or the name.',
   malformed_body: 'Callie could not send that. Check the fields and try again.',
+  // Lane g88: confirming a number, putting a firm in the pipeline, enrolling a contact.
+  route_confirmed: 'Number confirmed. It can be called now.',
+  route_version_stale: 'That number changed since this page was drawn. Look again before confirming it.',
+  route_invalid: 'That number failed validation, so it cannot be confirmed by hand. Add the right number instead.',
+  route_retired: 'That number was retired.',
+  route_unknown: 'That number is no longer here.',
+  opportunity_opened: 'In the pipeline, at the first stage.',
+  opportunity_open_exists: 'This firm is already in the pipeline.',
+  enrolled: 'Enrolled. The first step is on its way to Today.',
+  opportunity_not_open: 'This firm has no open opportunity. Add it to the pipeline first.',
+  contact_already_enrolled: 'That person is already in a sequence.',
+  firm_zone_unknown: 'Callie does not know this firm’s time zone yet, so it cannot schedule the steps.',
+  version_not_published: 'That sequence version is not published.',
+  version_retired: 'That sequence version was retired.',
+  version_has_no_steps: 'That sequence has no steps.',
 });
 
 /** The line above a refused Add firm form: its fields say what is wrong with each. */
@@ -87,7 +102,16 @@ export function noticeText(code: string): string {
   return GENERIC_NOTICE;
 }
 
-const INFO_NOTICES: ReadonlySet<string> = new Set(['saved', 'merged', 'stage_changed', 'firm_added', 'imported']);
+const INFO_NOTICES: ReadonlySet<string> = new Set([
+  'saved',
+  'merged',
+  'stage_changed',
+  'firm_added',
+  'imported',
+  'route_confirmed',
+  'opportunity_opened',
+  'enrolled',
+]);
 
 /** The tone a notice is shown in. A refusal warns; an outcome informs. */
 function toneOf(code: string): BannerView['tone'] {

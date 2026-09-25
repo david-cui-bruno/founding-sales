@@ -8,9 +8,16 @@ import {
   type ResumeDecision,
 } from '../src/index.ts';
 import { CHANNEL_ACTION_KINDS, CHANNEL_PAUSE_KEYS } from './eligibility.ts';
-import { loadEnrollmentForUpdate, unexecutedExecutions } from './rows.ts';
+import { loadEnrollmentForUpdate, readEnrollment, unexecutedExecutions } from './rows.ts';
 import { rescheduleExecution } from './shifts.ts';
-import { acceptSequence, refuseSequence, type SequenceResult, type StepChannel } from './types.ts';
+import {
+  acceptSequence,
+  refuseSequence,
+  type EnrollmentRow,
+  type SequenceResult,
+  type StepChannel,
+  type StepExecutionState,
+} from './types.ts';
 import { holdAppliesSql } from './wake.ts';
 
 /**
@@ -181,6 +188,46 @@ async function nextChannel(context: RepositoryContext, enrollmentId: string): Pr
   return rows[0]?.channel;
 }
 
+/**
+ * The holds, their composition and `decideResume`'s answer for one enrollment, now.
+ *
+ * One function, called by the resume and by its preview (lane g88), so that the dates a
+ * person reviews are the dates a confirmation applies: the same window, the same next
+ * channel, the same action kinds, the same database clock. A preview computed by a
+ * second copy of these lines would be a promise the resume need not keep.
+ */
+async function resumeDecisionFor(
+  context: RepositoryContext,
+  enrollment: EnrollmentRow,
+): Promise<{
+  readonly holds: readonly HoldRecord[];
+  readonly composition: ReturnType<typeof composeHolds>;
+  readonly decision: ResumeDecision;
+}> {
+  const { rows: clock } = await context.db.query<{ now: Date }>('SELECT now() AS now');
+  const now = (clock[0]?.now ?? new Date()).toISOString();
+
+  const channel = await nextChannel(context, enrollment.id);
+  const holds = await holdsAffectingEnrollment(context, {
+    enrollmentId: enrollment.id,
+    firmId: enrollment.firmId,
+    opportunityId: enrollment.opportunityId,
+    ownerUserId: enrollment.assignedUserId,
+    since: await resumeWindowStart(context, enrollment),
+    channel,
+  });
+  const composition = composeHolds({ holds, now, actionKinds: actionKindsOf(channel) });
+  return { holds, composition, decision: decideResume(composition) };
+}
+
+/**
+ * How far a confirmed resume moves the unexecuted steps: the decision's shift, or — after
+ * a person reviewed a long hold — the whole union the review was about.
+ */
+function confirmedShiftMilliseconds(decision: ResumeDecision, composition: ReturnType<typeof composeHolds>): number {
+  return decision.kind === 'resume' ? decision.shiftMilliseconds : composition.unionMilliseconds;
+}
+
 export interface ResumeOutcome {
   readonly kind: ResumeDecision['kind'];
   readonly shiftMilliseconds: number;
@@ -225,20 +272,7 @@ export async function resumeEnrollment(
   if (enrollment === null) return refuseSequence('enrollment_unknown');
   if (enrollment.endedAt !== null) return refuseSequence('enrollment_not_live');
 
-  const { rows: clock } = await context.db.query<{ now: Date }>('SELECT now() AS now');
-  const now = (clock[0]?.now ?? new Date()).toISOString();
-
-  const channel = await nextChannel(context, enrollment.id);
-  const holds = await holdsAffectingEnrollment(context, {
-    enrollmentId: enrollment.id,
-    firmId: enrollment.firmId,
-    opportunityId: enrollment.opportunityId,
-    ownerUserId: enrollment.assignedUserId,
-    since: await resumeWindowStart(context, enrollment),
-    channel,
-  });
-  const composition = composeHolds({ holds, now, actionKinds: actionKindsOf(channel) });
-  const decision = decideResume(composition);
+  const { composition, decision } = await resumeDecisionFor(context, enrollment);
 
   if (decision.kind === 'still_held') {
     return acceptSequence({
@@ -269,8 +303,7 @@ export async function resumeEnrollment(
     });
   }
 
-  const shiftMilliseconds =
-    decision.kind === 'resume' ? decision.shiftMilliseconds : composition.unionMilliseconds;
+  const shiftMilliseconds = confirmedShiftMilliseconds(decision, composition);
   const pending = await unexecutedExecutions(context, enrollment.id);
   let shifted = 0;
   for (const execution of pending) {
@@ -320,4 +353,93 @@ export async function resumeAfterReview(
   input: { readonly enrollmentId: string },
 ): Promise<SequenceResult<ResumeOutcome>> {
   return await resumeEnrollment(context, { enrollmentId: input.enrollmentId, afterReview: true });
+}
+
+/** One unexecuted step as the review shows it: where it is due now, and where a resume puts it. */
+export interface ResumePreviewStep {
+  readonly stepExecutionId: string;
+  readonly ordinal: number;
+  readonly channel: StepChannel;
+  readonly state: StepExecutionState;
+  /** The instant the step was first planned for, which no shift ever moves (11.2). */
+  readonly originalDueAt: string;
+  readonly dueAt: string;
+  /** Where a confirmed resume moves it. Equal to `dueAt` when nothing would move. */
+  readonly proposedDueAt: string;
+}
+
+/** A hold that delayed this enrollment's work in the window the resume would apply. */
+export interface ResumePreviewHold {
+  readonly reasonCode: HoldReasonCode;
+  readonly startedAt: string;
+  readonly releasedAt: string | null;
+}
+
+/**
+ * What "Review and resume" shows before anything is pressed (4.3; lane g88, audit G06).
+ *
+ * `kind` is `decideResume`'s answer. `still_held` means something is open and a resume
+ * would move nothing; `review_required` and `resume` both mean a confirmation would
+ * shift every unexecuted step by `shiftMilliseconds`, which `steps` has already applied.
+ */
+export interface ResumePreview {
+  readonly enrollmentId: string;
+  readonly kind: ResumeDecision['kind'];
+  readonly unionMilliseconds: number;
+  readonly shiftMilliseconds: number;
+  readonly openHoldIds: readonly string[];
+  /** The zone every due instant of this enrollment is resolved in, frozen at enrolment. */
+  readonly firmTimeZone: string;
+  readonly holds: readonly ResumePreviewHold[];
+  readonly steps: readonly ResumePreviewStep[];
+}
+
+/**
+ * The review 4.3 asks for: "a union longer than seven days requires the salesperson to
+ * review the rendered future steps and explicitly resume" (lane g88, audit G06).
+ *
+ * A read, and nothing else: no lock, no state change, not even the `review_required`
+ * flag an automatic reconsideration writes. It computes what `resumeAfterReview` would
+ * do at this instant with the same function that does it, and applies the shift to each
+ * unexecuted step with the same `shiftDueInstant`. The confirmation that follows runs
+ * the decision again under its lock, because a hold may open in between and the
+ * resume, not the preview, is the thing that has to be right.
+ *
+ * A salesperson may preview only their own enrollment; an admin any. The dates are due
+ * instants, not send times: an email still waits for its window and its cap.
+ */
+export async function previewResume(
+  context: RepositoryContext,
+  input: { readonly enrollmentId: string },
+): Promise<SequenceResult<ResumePreview>> {
+  const enrollment = await readEnrollment(context, { enrollmentId: input.enrollmentId });
+  if (enrollment === null) return refuseSequence('enrollment_unknown');
+  const actor = context.scope.actor;
+  if (actor.kind === 'user' && actor.role !== 'admin' && enrollment.assignedUserId !== actor.userId) {
+    return refuseSequence('not_assigned');
+  }
+  if (enrollment.endedAt !== null) return refuseSequence('enrollment_not_live');
+
+  const { holds, composition, decision } = await resumeDecisionFor(context, enrollment);
+  const shift = decision.kind === 'still_held' ? 0 : confirmedShiftMilliseconds(decision, composition);
+  const pending = await unexecutedExecutions(context, enrollment.id, { lock: false });
+
+  return acceptSequence({
+    enrollmentId: enrollment.id,
+    kind: decision.kind,
+    unionMilliseconds: composition.unionMilliseconds,
+    shiftMilliseconds: shift,
+    openHoldIds: decision.kind === 'still_held' ? decision.openHoldIds : [],
+    firmTimeZone: enrollment.firmTimeZone,
+    holds: holds.map(hold => ({ reasonCode: hold.reasonCode, startedAt: hold.startedAt, releasedAt: hold.releasedAt })),
+    steps: pending.map(execution => ({
+      stepExecutionId: execution.id,
+      ordinal: execution.ordinal,
+      channel: execution.channel,
+      state: execution.state,
+      originalDueAt: execution.originalDueAt,
+      dueAt: execution.dueAt,
+      proposedDueAt: shift > 0 ? shiftDueInstant(execution.dueAt, shift) : execution.dueAt,
+    })),
+  });
 }

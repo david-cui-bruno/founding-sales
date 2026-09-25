@@ -198,6 +198,20 @@ test('offers no disposition for an unresolved ambiguity, and names the candidate
     'Pick which conversation this reply belongs to first.',
   );
   await expect(page.getByTestId('ambiguity-candidate')).toHaveCount(2);
+
+  // Lane g88 (audit G07): the candidates are a choice, not paragraphs. Nothing is chosen
+  // until the person chooses, and "This one" sends G7's resolution for the one chosen.
+  await expect(page.getByTestId('candidate-submit')).toBeDisabled();
+  await page.getByTestId('candidate-choice').nth(1).check();
+  await page.getByTestId('candidate-submit').click();
+  await expect(page.getByTestId('banner-info')).toHaveText('Linked to that conversation. Now say what the reply means.');
+  expect(server.calls.find(entry => entry.method === 'resolve')?.argument).toEqual({
+    messageId: expect.any(String),
+    opportunityId: '66666666-6666-4666-8666-666666666666',
+  });
+  // Resolved, the card asks the next question.
+  await expect(page.getByTestId('disposition-form')).toBeVisible();
+  await expect(page.getByTestId('candidate-form')).toHaveCount(0);
 });
 
 test('is readable and unpressable when Callie cannot reach the server', async ({ page }) => {

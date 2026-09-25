@@ -122,8 +122,9 @@ const today: TodayBridge = {
 };
 
 /**
- * Five methods, and none of them closes an opportunity, records a suppression,
- * releases a hold or resumes automation. 12.4 gives those to the deterministic layer
+ * Six methods, and none of them closes an opportunity, records a suppression or resumes
+ * automation. The sixth (lane g88) is G7's ambiguity resolution, whose one consequence is
+ * 12.3's release of the other candidates' ambiguity holds. 12.4 gives those to the deterministic layer
  * or to a person on another surface, and a renderer that cannot name them cannot ask
  * for them however the page is edited later.
  */
@@ -133,6 +134,8 @@ const replies: ReplyBridge = {
   open: async input => await invokeReplies(REPLY_IPC_CHANNELS.open, input),
   collapse: async () => await invokeReplies(REPLY_IPC_CHANNELS.collapse),
   confirm: async input => await invokeReplies(REPLY_IPC_CHANNELS.confirm, input),
+  // Lane g88: which conversation an ambiguous reply belongs to.
+  resolve: async input => await invokeReplies(REPLY_IPC_CHANNELS.resolve, input),
 };
 
 const crm: CrmBridge = {
@@ -148,13 +151,22 @@ const crm: CrmBridge = {
   openImport: async () => await invokeCrm(CRM_IPC_CHANNELS.openImport),
   previewImport: async input => await invokeCrm(CRM_IPC_CHANNELS.previewImport, input),
   commitImport: async () => await invokeCrm(CRM_IPC_CHANNELS.commitImport),
+  // Lane g88: Add to pipeline, Enrol, Confirm this number.
+  openOpportunity: async () => await invokeCrm(CRM_IPC_CHANNELS.openOpportunity),
+  enroll: async input => await invokeCrm(CRM_IPC_CHANNELS.enroll, input),
+  confirmRoute: async input => await invokeCrm(CRM_IPC_CHANNELS.confirmRoute, input),
 };
 
 const sequences: SequenceBridge = {
   state: async () => await invokeSequences(SEQUENCE_IPC_CHANNELS.state),
   openSequence: async input => await invokeSequences(SEQUENCE_IPC_CHANNELS.openSequence, input),
   createSequence: async input => await invokeSequences(SEQUENCE_IPC_CHANNELS.createSequence, input),
+  // Lane g88: authoring and the resume review.
+  createDraft: async input => await invokeSequences(SEQUENCE_IPC_CHANNELS.createDraft, input),
   saveDraft: async input => await invokeSequences(SEQUENCE_IPC_CHANNELS.saveDraft, input),
+  createTemplate: async input => await invokeSequences(SEQUENCE_IPC_CHANNELS.createTemplate, input),
+  reviewEnrollment: async input => await invokeSequences(SEQUENCE_IPC_CHANNELS.reviewEnrollment, input),
+  closeReview: async () => await invokeSequences(SEQUENCE_IPC_CHANNELS.closeReview),
   publish: async input => await invokeSequences(SEQUENCE_IPC_CHANNELS.publish, input),
   retire: async input => await invokeSequences(SEQUENCE_IPC_CHANNELS.retire, input),
   approveTemplate: async input => await invokeSequences(SEQUENCE_IPC_CHANNELS.approveTemplate, input),

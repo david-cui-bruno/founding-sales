@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { replyCardSchema, replyStateSchema, type ReplyCard, type ReplyState } from '../src/renderer/replyContract.ts';
-import { buildReplyCardView, buildReplyView, replyNotice } from '../src/renderer/replyView.ts';
+import { buildReplyCardView, buildReplyView, candidateLabel, replyNotice } from '../src/renderer/replyView.ts';
 import { REPLY_IPC_CHANNELS, createReplyBridge } from '../src/main/replyBridge.ts';
 import { createAuthedClient } from '../src/main/authedClient.ts';
 import type { HttpAnswer } from '../src/main/apiClient.ts';
@@ -403,13 +403,15 @@ describe('the reply bridge', () => {
     });
     expect(after.notice).toBe('suggests_lost');
     expect(replyNotice('suggests_lost')).toContain('Callie will not do it for you');
-    // The bridge's whole surface, and none of it closes anything.
-    expect(Object.keys(bridge).sort()).toEqual(['collapse', 'confirm', 'open', 'refresh', 'state']);
+    // The bridge's whole surface, and none of it closes anything. `resolve` (lane g88) is
+    // G7's ambiguity resolution, which picks a conversation and answers nothing.
+    expect(Object.keys(bridge).sort()).toEqual(['collapse', 'confirm', 'open', 'refresh', 'resolve', 'state']);
     expect(Object.values(REPLY_IPC_CHANNELS).sort()).toEqual([
       'callie:replies:collapse',
       'callie:replies:confirm',
       'callie:replies:open',
       'callie:replies:refresh',
+      'callie:replies:resolve',
       'callie:replies:state',
     ]);
   });
@@ -452,5 +454,78 @@ describe('the classifier line at every effort the server accepts (lane g78, D03)
     });
     const after = await createReplyBridge({ api, session: session() }).refresh();
     expect(Object.keys(after.classifier ?? {}).sort()).toEqual(['effort', 'enabled', 'modelName']);
+  });
+});
+
+describe('the candidate selector (lane g88, audit G07)', () => {
+  const ambiguous = (): ReplyCard =>
+    card({
+      nextAction: 'resolve_ambiguity',
+      impact: {
+        controlMode: 'automated',
+        holds: [],
+        ambiguous: true,
+        candidates: [
+          { opportunityId: OPPORTUNITY_ID, firmId: FIRM_ID, firmName: 'Northwind Test Holdings', selected: null },
+          { opportunityId: OTHER_OPPORTUNITY_ID, firmId: OTHER_FIRM_ID, firmName: '', selected: null },
+        ],
+        contactsAtFirm: 1,
+      },
+    });
+
+  it('offers every candidate, names one it could not read, and only to a member who may read the reply', () => {
+    const view = buildReplyCardView(state(), ambiguous(), null);
+    expect(view.ambiguity.map(candidate => candidate.opportunityId)).toEqual([OPPORTUNITY_ID, OTHER_OPPORTUNITY_ID]);
+    expect(view.resolveEnabled).toBe(true);
+    expect(view.choices).toEqual([]);
+    expect(candidateLabel(view.ambiguity[1] ?? ambiguous().impact.candidates[0]!)).toBe('A firm Callie could not name');
+    expect(buildReplyCardView(state(), ambiguous(), null).confirmEnabled).toBe(false);
+    expect(buildReplyCardView(state({ mayMutate: false }), ambiguous(), null).resolveEnabled).toBe(false);
+    expect(buildReplyCardView(state(), { ...ambiguous(), visibility: 'any_active_member' }, null).resolveEnabled).toBe(false);
+  });
+
+  it('sends G7’s resolution with human false, keeps the card open and reads it again', async () => {
+    const answers: Record<string, HttpAnswer> = {
+      '/messages/resolve-ambiguity': { status: 200, body: { status: 'accepted', replayed: false, result: {} } },
+      '/replies': lane([ambiguous()]),
+      '/replies/settings': settings,
+      '/replies/card': { status: 200, body: ambiguous() },
+    };
+    const { api, calls } = scriptedApi(answers);
+    const bridge = createReplyBridge({ api, session: session() });
+    await bridge.refresh();
+    await bridge.open({ messageId: MESSAGE_ID });
+    // After the resolution the server answers with the resolved card.
+    answers['/replies'] = lane([card()]);
+    answers['/replies/card'] = { status: 200, body: card() };
+    const answer = await bridge.resolve({ messageId: MESSAGE_ID, opportunityId: OTHER_OPPORTUNITY_ID });
+    expect(calls.map(call => call.path)).toEqual([
+      '/replies',
+      '/replies/settings',
+      '/replies/card',
+      '/messages/resolve-ambiguity',
+      '/replies',
+      '/replies/settings',
+      '/replies/card',
+    ]);
+    const sent = calls.find(call => call.path === '/messages/resolve-ambiguity');
+    expect(sent?.body).toMatchObject({ messageId: MESSAGE_ID, selectedOpportunityId: OTHER_OPPORTUNITY_ID, human: false });
+    expect(typeof sent?.body?.['commandId']).toBe('string');
+    expect(answer.notice).toBe('resolved');
+    expect(answer.open?.nextAction).toBe('confirm_disposition');
+    expect(replyNotice('resolved')).toContain('Now say what the reply means');
+  });
+
+  it('sends nothing for an opportunity that is not one of the card’s candidates', async () => {
+    const { api, calls } = scriptedApi({
+      '/replies': lane([ambiguous()]),
+      '/replies/settings': settings,
+      '/replies/card': { status: 200, body: ambiguous() },
+    });
+    const bridge = createReplyBridge({ api, session: session() });
+    await bridge.open({ messageId: MESSAGE_ID });
+    const answer = await bridge.resolve({ messageId: MESSAGE_ID, opportunityId: HOLD_ID });
+    expect(answer.notice).toBe('match_unknown');
+    expect(calls.map(call => call.path)).not.toContain('/messages/resolve-ambiguity');
   });
 });
