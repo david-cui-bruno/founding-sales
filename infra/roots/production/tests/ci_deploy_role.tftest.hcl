@@ -9,7 +9,7 @@
 #
 # **The trust.** Exactly one statement: the account's GitHub OIDC provider, the
 # `AssumeRoleWithWebIdentity` action, and `StringEquals` on the audience and on the
-# one subject `repo:david-cui-bruno/founding-sales:environment:production-deploy`.
+# one subject `repo:david-cui-bruno@196666240/founding-sales@1351406527:environment:production-deploy`.
 # "The subject is right" is true of a policy that also carries a `StringLike` beside
 # it, so the condition operators are compared as a whole, and a wildcard anywhere in
 # the subject fails.
@@ -136,7 +136,7 @@ run "the_role_trusts_one_github_subject_and_nothing_else" {
   assert {
     condition = jsondecode(aws_iam_role.ci_deploy.assume_role_policy).Statement[0].Condition.StringEquals == {
       "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-      "token.actions.githubusercontent.com:sub" = "repo:david-cui-bruno/founding-sales:environment:production-deploy"
+      "token.actions.githubusercontent.com:sub" = "repo:david-cui-bruno@196666240/founding-sales@1351406527:environment:production-deploy"
     }
     error_message = "The audience is sts.amazonaws.com and the subject is exactly this repository's production-deploy environment."
   }
