@@ -53,7 +53,7 @@
 #
 # Only the GitHub Actions OIDC provider may assume the role, and only for a job of
 # this repository running in the `production-deploy` environment:
-# `repo:david-cui-bruno/founding-sales:environment:production-deploy`, compared with
+# `repo:david-cui-bruno@196666240/founding-sales@1351406527:environment:production-deploy`, compared with
 # `StringEquals`. GitHub puts the environment in the subject in place of the branch,
 # so the environment's deployment-branch rule — main only, set by the operator when
 # the environment is created — is what keeps a dispatch from another branch out, and
@@ -112,9 +112,14 @@ locals {
   # GitHub's OIDC issuer, the account's provider for it, and the one subject the
   # role trusts. The repository and the environment are literals on purpose: a
   # variable would be a way to widen the trust with one `-var`.
-  ci_deploy_oidc_issuer   = "token.actions.githubusercontent.com"
+  ci_deploy_oidc_issuer = "token.actions.githubusercontent.com"
+  # This repository issues immutable OIDC subjects (`use_immutable_subject`): the owner and
+  # repository carry their numeric ids, so a renamed or re-created repository cannot inherit
+  # the trust. The rehearsal role's trust uses the same form. The plain form
+  # `repo:david-cui-bruno/founding-sales:environment:production-deploy` was refused on the
+  # first run (25 Sep 2026 23:42Z, "Not authorized to perform sts:AssumeRoleWithWebIdentity").
   ci_deploy_oidc_provider = "arn:aws:iam::${var.aws_account_id}:oidc-provider/${local.ci_deploy_oidc_issuer}"
-  ci_deploy_subject       = "repo:david-cui-bruno/founding-sales:environment:production-deploy"
+  ci_deploy_subject       = "repo:david-cui-bruno@196666240/founding-sales@1351406527:environment:production-deploy"
 
   # Every name below comes from the stack's own outputs where the stack publishes it,
   # so a renamed cluster, service, task role or log group moves the policy with it.
