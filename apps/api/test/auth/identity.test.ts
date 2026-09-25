@@ -467,7 +467,10 @@ describe('the routes', () => {
   it('publishes the client-version notice without a session, at any version', async () => {
     const result = await route('GET', '/auth/client-version', options());
     expect(result.status).toBe(200);
-    expect(result.body).toMatchObject({ supported: { minimum: '1.2.0', maximum: '1.4.0' } });
+    // The fixture's policy is a `1.4.x` ceiling; the notice publishes its top as the
+    // maximum, in the strict two-key shape every installed Mac parses (lane g78).
+    expect(result.body).toMatchObject({ supported: { minimum: '1.2.0', maximum: '1.4.999' } });
+    expect(Object.keys((result.body as { supported: object }).supported).sort()).toEqual(['maximum', 'minimum']);
   });
 
   it('refuses a sign-in start from an outdated client with the upgrade instruction', async () => {

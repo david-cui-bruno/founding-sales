@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { alertAcknowledgedResponseSchema, wireDrift } from '@fss/contracts';
 import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing';
 import { claimJobs, enqueueJob, failJob, raiseCriticalAlert } from '@fss/domain/jobs';
 import { ADMIN_JOBS_PATHS, FORBIDDEN_STATUS, routeAdminJobs } from '../src/routes/admin/jobs.ts';
@@ -231,6 +232,8 @@ describe('admin job and alert routes', () => {
     });
     expect(acknowledged?.status).toBe(200);
     expect(acknowledged?.body).toEqual({ acknowledged: true, alertKey: 'dead_job_unresolved' });
+    // The Mac reads this answer with `@fss/contracts`' schema since lane g78.
+    expect(wireDrift(alertAcknowledgedResponseSchema, acknowledged?.body)).toEqual([]);
 
     const audit = await database.session.query<{ count: string }>(
       "SELECT count(*) AS count FROM audit_events WHERE workspace_id = $1 AND action = 'alert.acknowledge'",

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clientVersionRangeSchema } from '@fss/contracts';
+import { clientVersionPolicySchema } from '@fss/contracts';
 import type { SessionQueryable } from '@fss/domain/db';
 import { RouteRegistryError, createRouteRegistry, type RouteModule } from '../src/bootstrap/routeRegistry.ts';
 import { mountedRoutes } from '../src/bootstrap/routes.ts';
@@ -31,7 +31,7 @@ const NEVER_QUERIED: SessionQueryable = {
 function options(): ApiOptions {
   return {
     session: NEVER_QUERIED,
-    supportedClientVersions: clientVersionRangeSchema.parse({ minimum: '1.0.0', maximum: '1.0.0' }),
+    supportedClientVersions: clientVersionPolicySchema.parse({ minimum: '1.0.0', ceiling: '1.0.x', incompatible: [] }),
     sendingEnabled: false,
     expectedSystemGeneration: null,
   };
@@ -39,7 +39,7 @@ function options(): ApiOptions {
 
 const routing = {
   session: NEVER_QUERIED,
-  supportedClientVersions: clientVersionRangeSchema.parse({ minimum: '1.0.0', maximum: '1.0.0' }),
+  supportedClientVersions: clientVersionPolicySchema.parse({ minimum: '1.0.0', ceiling: '1.0.x', incompatible: [] }),
   sendingEnabled: false,
   upgradeUrl: DEFAULT_UPGRADE_URL,
   // Lane G4's routes take the suppression journal from here. The no-op is the right

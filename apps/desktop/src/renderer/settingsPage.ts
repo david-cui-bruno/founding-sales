@@ -73,6 +73,28 @@ export function render(state: AdminState | null): void {
   else renderPanels(root, view);
 }
 
+/**
+ * One slice's history, under the setting it belongs to (lane g78, D04): what is in
+ * force now, then each version with the note, and the value it changed from and to.
+ * Before g78 the History button fetched the versions and nothing drew them.
+ */
+function renderHistory(root: HTMLElement, history: NonNullable<ReturnType<typeof adminViewOf>['history']>): void {
+  const block = element('section', { className: 'setting-history', testId: 'setting-history' });
+  block.append(element('h3', { text: history.heading }));
+  block.append(element('p', { text: history.currentLine, testId: 'history-current' }));
+  const versions = element('ol', { className: 'history-versions' });
+  for (const entry of history.versions) {
+    const item = element('li', { className: entry.current ? 'history-version current' : 'history-version' });
+    item.dataset['testid'] = 'history-version';
+    item.append(element('p', { text: entry.line, testId: 'history-line' }));
+    item.append(element('p', { className: 'inert', text: `From ${entry.from}`, testId: 'history-from' }));
+    item.append(element('p', { text: `To ${entry.to}`, testId: 'history-to' }));
+    versions.append(item);
+  }
+  block.append(versions);
+  root.append(block);
+}
+
 function renderSettings(root: HTMLElement, view: ReturnType<typeof adminViewOf>): void {
   // First, because it is the one setting without which Today cannot call anybody.
   renderCallingNumber(root, view);
@@ -137,6 +159,9 @@ function renderSettings(root: HTMLElement, view: ReturnType<typeof adminViewOf>)
 
     if (row.notEditableBecause !== null) {
       item.append(element('p', { className: 'inert', text: row.notEditableBecause }));
+    }
+    if (view.history !== null && view.history.settingKey === row.settingKey) {
+      renderHistory(item, view.history);
     }
     list.append(item);
   }

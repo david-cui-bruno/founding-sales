@@ -5,6 +5,7 @@ import {
   attestCallingIdentityCommandSchema,
   compareVersions,
   mayMutate,
+  publishedClientVersions,
   registerCallingIdentityCommandSchema,
 } from '@fss/contracts';
 import { CALLING_IDENTITY_PATHS } from '../../apps/api/src/routes/callingIdentities.ts';
@@ -194,7 +195,7 @@ describe('9.1: a salesperson gives Callie the number they call from (lane g60)',
   });
 
   it('is a build the deployed API accepts', () => {
-    expect(compareVersions(CONTAINER_CLIENT_VERSIONS.maximum, FIRST_VERSION_WITH_THE_CONTROL)).toBeGreaterThanOrEqual(0);
+    expect(compareVersions(publishedClientVersions(CONTAINER_CLIENT_VERSIONS).maximum, FIRST_VERSION_WITH_THE_CONTROL)).toBeGreaterThanOrEqual(0);
     expect(mayMutate(CONTAINER_CLIENT_VERSIONS, FIRST_VERSION_WITH_THE_CONTROL)).toBe(true);
     // The installed 1.0.1 keeps working until it takes the update.
     expect(CONTAINER_CLIENT_VERSIONS.minimum).toBe('1.0.0');

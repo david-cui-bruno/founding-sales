@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import type { Server } from 'node:http';
 import pg from 'pg';
 import type { QueryResultRowLike, SessionQueryable } from '@fss/domain/db';
-import { clientVersionRangeSchema, type ClientVersionRange } from '@fss/contracts';
+import { clientVersionPolicySchema, type ClientVersionPolicy } from '@fss/contracts';
 import { ApiConfigError, describeApiConfig, readApiConfig, type ApiConfig } from './config.ts';
 import {
   DeploymentConfigError,
@@ -36,39 +36,45 @@ import { createApiServer } from '../server.ts';
  */
 
 /**
- * The client-version range this container publishes (5.3).
+ * The client versions this container admits (5.3), as a compatibility ceiling (lane
+ * g78, audit item O04; `docs/decisions/g78-version-ceiling.md`).
  *
- * The range is what `/auth/client-version` says, and since G12b wired sign-in it is
- * also what every command is checked against: a client outside it may read the
- * upgrade instruction and mutate nothing. The release lane replaces this constant
- * with the range of the signed builds it has actually shipped.
+ * Every sign-in, renewal and command is checked against this policy, and a client
+ * outside it may read the upgrade instruction and mutate nothing. It has three parts:
  *
- * The maximum was raised to 1.0.1 for the build that carries the Mailbox row
- * (docs/greenfield/release.md 8.0x), and to 1.0.2 for the build that carries "Your
- * calling number" on the Settings screen (lane g60, 8.0ab) — the control without which
- * no salesperson has a verified number and Today offers no Call button. A client
- * *above* the maximum is `api_behind_client`, which is refused exactly like one below
- * the minimum — every sign-in, renewal and command — so an API still publishing 1.0.1
- * would refuse the very build that lets David call. This API must therefore be
- * deployed before desktop 1.0.2 is published to the channel. The minimum stays 1.0.0,
- * so the installed 1.0.0 and 1.0.1 keep working until they take the update.
+ *   * `minimum` — below it, `upgrade_required`. Unchanged: raising it is how a release
+ *     forces every Mac onto a newer build.
+ *   * `ceiling` — the highest release line this API serves. `1.x` admits every 1.*
+ *     build from the minimum up, including ones built after this API was deployed. The
+ *     promise behind it is that this API keeps every route, and every response field,
+ *     that an admitted build reads; a change that cannot keep it moves the ceiling or
+ *     the minimum instead (`docs/decisions/g78-one-wire-contract.md`).
+ *   * `incompatible` — builds on the line that are known to be bad, refused exactly
+ *     like one below the minimum (`client_upgrade_required`) until the Mac takes the
+ *     next update. Empty today.
  *
- * 1.0.3 is the Home build (lane g65, 8.0ad): Today as the main window's first screen,
- * with the status sidebar, the last seven days and the Needs-you list. It needs no new
- * route and no migration, only this maximum, and the order is the same: the API that
- * publishes 1.0.3 is deployed first, and desktop 1.0.3 is published after it. Until
- * then 1.0.2 and older keep working, and a 1.0.3 Mac would be refused everything.
+ * What the API publishes is not this object but the range derived from it:
+ * `{ minimum: '1.0.0', maximum: '1.999.999' }` on `/auth/client-version`, in every
+ * sign-in and renewal grant, and on `/diagnostics`. Desktops 1.0.0 to 1.0.4 parse all
+ * three with a strict `{ minimum, maximum }` schema, so the ceiling reaches them as a
+ * maximum they already understand: 1.0.4 compares itself with `1.999.999`, finds itself
+ * admitted, and needs no change. The incompatible list is never published — an
+ * installed Mac could not parse the key, and the API refuses a listed build itself.
  *
- * 1.0.4 is the sending-section fix (lane g69, 8.0ae): Administration's "Sending domain
- * and caps" parses the API's `personalGmailRecipients` object at last, a failed sending
- * read says so with Retry, a renewal applies the role the server gives, and Home says
- * Attest when a number is saved. No route changes shape and no migration; the API's
- * only other change is the refusal code in its `refusal` log line. The order is the
- * same again: this API is deployed first, then desktop 1.0.4 is published.
+ * Until lane g78 this was `{ minimum, maximum }` with the maximum pinned to the exact
+ * latest desktop — 1.0.1 for the Mailbox row (release.md 8.0x), 1.0.2 for "Your
+ * calling number" (8.0ab), 1.0.3 for Home (8.0ad), 1.0.4 for the sending section
+ * (8.0ae) — so every desktop-only release needed an API deployment first, and a Mac
+ * one patch ahead of the API was refused everything. Desktop 1.0.5 is the last build
+ * that needs it: the API that carries this policy is deployed first, once, because the
+ * API in production still publishes 1.0.4 as its maximum. From then on a 1.x desktop
+ * publishes directly, and the API goes first only when a desktop needs a route or a
+ * field the deployed API does not have yet.
  */
-export const CONTAINER_CLIENT_VERSIONS: ClientVersionRange = clientVersionRangeSchema.parse({
+export const CONTAINER_CLIENT_VERSIONS: ClientVersionPolicy = clientVersionPolicySchema.parse({
   minimum: '1.0.0',
-  maximum: '1.0.4',
+  ceiling: '1.x',
+  incompatible: [],
 });
 
 export const API_EXIT_CODES = Object.freeze({

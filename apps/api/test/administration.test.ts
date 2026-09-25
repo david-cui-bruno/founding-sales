@@ -1,6 +1,15 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { DEFAULT_ALERT_THRESHOLDS, RELEASE_RECORD_SCHEMA_ID, SETTING_KEYS } from '@fss/contracts';
+import {
+  DEFAULT_ALERT_THRESHOLDS,
+  RELEASE_RECORD_SCHEMA_ID,
+  SETTING_KEYS,
+  pipelineBoardResponseSchema,
+  pipelineStagesResponseSchema,
+  publishedClientVersions,
+  settingHistoryResponseSchema,
+  wireDrift,
+} from '@fss/contracts';
 import { putReleaseRecord } from '@fss/domain/release';
 import { dispatch, type ApiRequest } from '../src/server.ts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from './support/authFixture.ts';
@@ -56,7 +65,8 @@ describe('the administration surface', () => {
       body,
     };
     const result = await dispatch(request, options(sendingEnabled, imageDigest));
-    return { status: result.status, body: result.body as Record<string, unknown> };
+    // What a socket carries: JSON, so an instant is a string here as it is on the Mac.
+    return { status: result.status, body: JSON.parse(JSON.stringify(result.body ?? null)) as Record<string, unknown> };
   };
 
   /** The release record a green rehearsal wrote, stored the way `fss admin release-record put` stores it. */
@@ -294,6 +304,12 @@ describe('the administration surface', () => {
 
     const history = await call('POST', '/settings/history', adminToken, { settingKey: 'client_version_range' });
     expect((history.body['versions'] as readonly unknown[]).length).toBe(1);
+    // D04: the value each version set and the value in force now are on the wire, and
+    // the contract declares both, so the Mac can show what changed and not only when.
+    expect(wireDrift(settingHistoryResponseSchema, history.body)).toEqual([]);
+    const parsed = settingHistoryResponseSchema.parse(history.body);
+    expect(parsed.versions[0]?.value).toEqual({ minimum: '1.0.0', maximum: '1.4.0' });
+    expect(parsed.current).toEqual({ value: { minimum: '1.0.0', maximum: '1.4.0' }, version: 1 });
   });
 
   it('refuses a value past a bound with a named reason and writes no version', async () => {
@@ -388,7 +404,7 @@ describe('the administration surface', () => {
     const answer = await call('GET', '/diagnostics', adminToken);
     expect(answer.status).toBe(200);
     expect(answer.body['schema']).toMatchObject({ accepted: true });
-    expect(answer.body['clientVersions']).toEqual(fixture.deps.config.supportedClientVersions);
+    expect(answer.body['clientVersions']).toEqual(publishedClientVersions(fixture.deps.config.supportedClientVersions));
     expect(answer.body['mailboxVisibility']).toBe('all');
     expect(answer.body['sending']).toMatchObject({ deploymentEnabled: false, effective: false });
 
@@ -425,6 +441,7 @@ describe('the administration surface', () => {
     expect(terminal.body).toMatchObject({ reason: 'stage_terminal' });
 
     const stages = await call('GET', '/pipeline/stages', salespersonToken);
+    expect(wireDrift(pipelineStagesResponseSchema, stages.body)).toEqual([]);
     const keys = (stages.body['stages'] as readonly { key: string }[]).map(entry => entry.key);
     expect(keys).toEqual(['new', 'contacting', 'engaged', 'qualified', 'proposal', 'demo', 'won', 'lost']);
   });
@@ -432,6 +449,7 @@ describe('the administration surface', () => {
   it('gives the board its columns and the opportunity ids the caller may act on', async () => {
     const answer = await call('POST', '/pipeline/board', salespersonToken, {});
     expect(answer.status).toBe(200);
+    expect(wireDrift(pipelineBoardResponseSchema, answer.body)).toEqual([]);
     const columns = answer.body['columns'] as readonly { stage: { key: string } }[];
     expect(columns.map(column => column.stage.key)).toEqual([
       'new',

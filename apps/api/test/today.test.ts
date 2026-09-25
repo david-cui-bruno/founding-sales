@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { todayFirmResponseSchema, todayListResponseSchema, todaySnoozeResultSchema, wireDrift } from '@fss/contracts';
 import { repositoryContext, workspaceScope } from '@fss/domain/db';
 import { buildTodaySnapshot, businessDateOf, promoteTodayItem } from '@fss/domain/today';
 import { localNoopSuppressionJournal } from '../src/journal/index.ts';
@@ -62,7 +63,7 @@ describe('the Today routes', () => {
       body,
     };
     const result = await dispatch(request, options());
-    return { status: result.status, body: result.body as Record<string, unknown> };
+    return { status: result.status, body: JSON.parse(JSON.stringify(result.body ?? null)) as Record<string, unknown> };
   };
 
   const get = async (path: string, token: string | null): Promise<{ status: number; body: Record<string, unknown> }> => {
@@ -76,7 +77,7 @@ describe('the Today routes', () => {
       },
       options(),
     );
-    return { status: result.status, body: result.body as Record<string, unknown> };
+    return { status: result.status, body: JSON.parse(JSON.stringify(result.body ?? null)) as Record<string, unknown> };
   };
 
   const command = (extra: Record<string, unknown> = {}): Record<string, unknown> => ({
@@ -168,6 +169,7 @@ describe('the Today routes', () => {
   it('answers the list in the shape the Mac caches, and nothing else', async () => {
     const answer = await get('/today', assigneeToken);
     expect(answer.status).toBe(200);
+    expect(wireDrift(todayListResponseSchema, answer.body)).toEqual([]);
     expect(Object.keys(answer.body).sort()).toEqual([
       'businessTimeZone',
       'cards',
@@ -188,6 +190,7 @@ describe('the Today routes', () => {
   it('expands a card into its contact tasks', async () => {
     const answer = await post('/today/firm', assigneeToken, { firmId });
     expect(answer.status).toBe(200);
+    expect(wireDrift(todayFirmResponseSchema, answer.body)).toEqual([]);
     const tasks = answer.body['tasks'] as Record<string, unknown>[];
     expect(tasks).toHaveLength(3);
     expect(tasks.filter(task => task['automated'] === true)).toHaveLength(1);
@@ -219,6 +222,7 @@ describe('the Today routes', () => {
     const first = await post('/today/snooze', assigneeToken, body);
     expect(first.status).toBe(200);
     expect(resultOf(first)['outcome']).toBe('snoozed');
+    expect(wireDrift(todaySnoozeResultSchema, resultOf(first))).toEqual([]);
 
     const replay = await post('/today/snooze', assigneeToken, body);
     expect(replay.status).toBe(200);

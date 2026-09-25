@@ -1,4 +1,4 @@
-import type { ClientVersionRange } from '@fss/contracts';
+import type { ClientVersionPolicy } from '@fss/contracts';
 import type { SessionQueryable } from '@fss/domain/db';
 import type { Logger } from '../bootstrap/log.ts';
 import type { GoogleClient } from './googleClient.ts';
@@ -42,7 +42,12 @@ export interface SessionPolicy {
 export interface AuthConfig {
   readonly oidc: GoogleOidcConfig;
   readonly sessions: SessionPolicy;
-  readonly supportedClientVersions: ClientVersionRange;
+  /**
+   * What this API admits: a minimum, a compatibility ceiling and the known-bad builds
+   * (lane g78). Every check reads the policy; every answer publishes the range derived
+   * from it (`publishedClientVersions`), because that is what a 1.0.x Mac parses.
+   */
+  readonly supportedClientVersions: ClientVersionPolicy;
   /**
    * The HMAC key the PKCE verifier is derived from. Deriving rather than storing is
    * what keeps the database free of anything presentable to Google; see

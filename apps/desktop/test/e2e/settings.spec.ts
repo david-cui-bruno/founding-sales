@@ -223,3 +223,25 @@ test('a refused save is shown as its code and the page is not edited optimistica
   await expect(page.getByTestId('setting-business_time_zone')).toContainText('Version 2');
   await expect(page.getByTestId('value-business_time_zone')).not.toContainText('Pacific/Auckland');
 });
+
+test('History shows what each version changed, from and to, under its setting (lane g78)', async ({ page }) => {
+  server = await startSettingsTestServer(adminState());
+  await page.goto(server.url);
+
+  // Before g78 the button fetched the versions and nothing drew them, and the values
+  // were stripped anyway (D04).
+  await expect(page.getByTestId('setting-history')).toHaveCount(0);
+  await page.getByTestId('history-business_time_zone').click();
+
+  const history = page.getByTestId('setting-business_time_zone').getByTestId('setting-history');
+  await expect(history).toContainText('History of Workspace business zone');
+  await expect(history.getByTestId('history-current')).toHaveText('In force now: version 2: {"timeZone":"America/Chicago"}');
+  await expect(history.getByTestId('history-version')).toHaveCount(2);
+  await expect(history.getByTestId('history-line').first()).toHaveText('Version 2, changed 2026-09-19T10:00:00.000Z: the office moved');
+  await expect(history.getByTestId('history-from').first()).toHaveText('From {"timeZone":"America/Denver"}');
+  await expect(history.getByTestId('history-to').first()).toHaveText('To {"timeZone":"America/Chicago"}');
+  await expect(history.getByTestId('history-from').nth(1)).toHaveText('From {"timeZone":"America/New_York"} (the default)');
+  expect(server.calls.filter(call => call.method === 'openHistory').map(call => call.argument)).toEqual([
+    { settingKey: 'business_time_zone' },
+  ]);
+});

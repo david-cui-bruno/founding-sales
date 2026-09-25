@@ -345,7 +345,8 @@ describe('Appendix G 40: a minimum-client-version increase blocks mutation', () 
     expect(started).toMatchObject({
       started: false,
       refusal: 'client_upgrade_required',
-      supportedClientVersions: { minimum: '1.2.0', maximum: '1.4.0' },
+      // The published range of the fixture's `1.4.x` ceiling (lane g78).
+      supportedClientVersions: { minimum: '1.2.0', maximum: '1.4.999' },
     });
   });
 

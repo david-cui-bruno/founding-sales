@@ -1,4 +1,4 @@
-import type { ClientVersionRange } from '@fss/contracts';
+import type { ClientVersionPolicy } from '@fss/contracts';
 import type { SessionQueryable } from '@fss/domain/db';
 import type { SuppressionJournal } from '@fss/domain/suppression';
 import type { MailGrantDeps, PushTokenVerifier } from '@fss/domain/mail';
@@ -33,7 +33,8 @@ export interface RouteResult {
 
 export interface RoutingOptions {
   readonly session: SessionQueryable;
-  readonly supportedClientVersions: ClientVersionRange;
+  /** The policy (lane g78). A route that answers with versions publishes `publishedClientVersions` of it. */
+  readonly supportedClientVersions: ClientVersionPolicy;
   readonly sendingEnabled: boolean;
   /** Absent in the health-only skeleton; present once identity is configured. */
   readonly auth?: AuthDeps;

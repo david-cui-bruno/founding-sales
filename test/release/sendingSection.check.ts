@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { compareVersions, mayMutate } from '@fss/contracts';
+import { compareVersions, mayMutate, outboundStatusResponseSchema, publishedClientVersions, wireDrift } from '@fss/contracts';
 import { CONTAINER_CLIENT_VERSIONS } from '../../apps/api/src/bootstrap/main.ts';
 import { localNoopSuppressionJournal } from '../../apps/api/src/journal/index.ts';
 import { dispatch, type ApiOptions } from '../../apps/api/src/server.ts';
@@ -7,7 +7,7 @@ import { createAuthFixture, type AuthFixture } from '../../apps/api/test/support
 import { issueSessionFor } from '../../apps/api/test/support/sessionFixture.ts';
 import type { HttpAnswer, HttpSend } from '../../apps/desktop/src/main/apiClient.ts';
 import { createAuthedClient } from '../../apps/desktop/src/main/authedClient.ts';
-import { createAdminBridge, outboundStatusSchema } from '../../apps/desktop/src/main/settingsBridge.ts';
+import { createAdminBridge } from '../../apps/desktop/src/main/settingsBridge.ts';
 import { adminViewOf } from '../../apps/desktop/src/renderer/settingsView.ts';
 import { outboundRampAnswer, outboundStatusAnswer } from '../../apps/desktop/test/support/outboundStatus.ts';
 
@@ -174,15 +174,15 @@ describe('8.0ae: the sending section parses the API’s own answer (lane g69)', 
 
   it('holds the desktop’s unit fixture to the route: the same keys, the same types, all the way down', async () => {
     const plain = await statusAnswer(adminToken, {});
-    expect(outboundStatusSchema.safeParse(plain).success).toBe(true);
+    expect(wireDrift(outboundStatusResponseSchema, plain)).toEqual([]);
     expect(shapeOf(plain)).toEqual(shapeOf(outboundStatusAnswer()));
 
     const named = await statusAnswer(adminToken, { mailboxId });
-    expect(outboundStatusSchema.safeParse(named).success).toBe(true);
+    expect(wireDrift(outboundStatusResponseSchema, named)).toEqual([]);
     expect(shapeOf(named)).toEqual(shapeOf(outboundStatusAnswer({ ramp: outboundRampAnswer(mailboxId) })));
 
     const none = await statusAnswer(noDomainToken, {});
-    expect(outboundStatusSchema.safeParse(none).success).toBe(true);
+    expect(wireDrift(outboundStatusResponseSchema, none)).toEqual([]);
     expect(shapeOf(none)).toEqual(shapeOf(outboundStatusAnswer({ domain: null })));
 
     // The one field the defect was about, said outright.
@@ -190,7 +190,7 @@ describe('8.0ae: the sending section parses the API’s own answer (lane g69)', 
   });
 
   it('is a build the deployed API accepts', () => {
-    expect(compareVersions(CONTAINER_CLIENT_VERSIONS.maximum, FIRST_VERSION_WITH_THE_FIX)).toBeGreaterThanOrEqual(0);
+    expect(compareVersions(publishedClientVersions(CONTAINER_CLIENT_VERSIONS).maximum, FIRST_VERSION_WITH_THE_FIX)).toBeGreaterThanOrEqual(0);
     expect(mayMutate(CONTAINER_CLIENT_VERSIONS, FIRST_VERSION_WITH_THE_FIX)).toBe(true);
     // The installed builds keep working until they take the update.
     expect(CONTAINER_CLIENT_VERSIONS.minimum).toBe('1.0.0');

@@ -2,6 +2,7 @@ import { withTransaction, type QueryResultRowLike } from '@fss/domain/db';
 import {
   PROVISIONAL_GOOGLE_SUB_PREFIX,
   clientCompatibility,
+  publishedClientVersions,
   type AuthRefusalCode,
   type ClientVersionRange,
   type SessionGrant,
@@ -52,12 +53,15 @@ export interface StartSignInInput {
 }
 
 export async function startSignIn(deps: AuthDeps, input: StartSignInInput): Promise<StartSignInOutcome> {
-  const { supportedClientVersions } = deps.config;
+  // What the refusal publishes is the range, never the policy: a 1.0.x Mac parses
+  // `{ minimum, maximum }` strictly (`docs/decisions/g78-version-ceiling.md`).
+  const supportedClientVersions = publishedClientVersions(deps.config.supportedClientVersions);
 
   // Starting a sign-in registers a device, which is a mutation, so an outdated client
   // is refused here as it is refused everywhere else (5.3, Appendix G 40). The
-  // client-version notice stays readable, which is the upgrade path.
-  if (clientCompatibility(supportedClientVersions, input.clientVersion).kind !== 'supported') {
+  // client-version notice stays readable, which is the upgrade path. A build the
+  // policy names as incompatible is refused the same way.
+  if (clientCompatibility(deps.config.supportedClientVersions, input.clientVersion).kind !== 'supported') {
     return { started: false, refusal: 'client_upgrade_required', supportedClientVersions };
   }
 
@@ -320,8 +324,8 @@ interface ClaimedRequest extends QueryResultRowLike {
 }
 
 export async function claimSignIn(deps: AuthDeps, input: ClaimInput): Promise<ClaimOutcome> {
-  const { supportedClientVersions } = deps.config;
-  if (clientCompatibility(supportedClientVersions, input.clientVersion).kind !== 'supported') {
+  const supportedClientVersions = publishedClientVersions(deps.config.supportedClientVersions);
+  if (clientCompatibility(deps.config.supportedClientVersions, input.clientVersion).kind !== 'supported') {
     return { claimed: false, refusal: 'client_upgrade_required' };
   }
 

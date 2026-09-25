@@ -53,6 +53,7 @@ export {
   type CommandOutcome,
   type CommandRequest,
   type CommandWorkResult,
+  type RefusalDetails,
 } from './commands.ts';
 export {
   actorOf,

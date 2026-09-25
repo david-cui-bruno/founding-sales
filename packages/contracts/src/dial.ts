@@ -151,6 +151,19 @@ export const callingIdentityListSchema = z.strictObject({
 });
 export type CallingIdentityList = z.infer<typeof callingIdentityListSchema>;
 
+/**
+ * What a calling-number command returns inside the command envelope: the outcome and
+ * the row as it now is (`apps/api/src/routes/callingIdentities.ts`; lane g78). The
+ * outcomes are the four `registerCallingIdentity`, `verifyCallingIdentity` and
+ * `disableCallingIdentity` in `packages/domain/dial/identities.ts` can return.
+ */
+export const CALLING_IDENTITY_CHANGE_OUTCOMES = ['created', 'existing', 'verified', 'disabled'] as const;
+export const callingIdentityChangeResultSchema = z.object({
+  outcome: z.enum(CALLING_IDENTITY_CHANGE_OUTCOMES),
+  identity: callingIdentityDtoSchema,
+});
+export type CallingIdentityChangeResult = z.infer<typeof callingIdentityChangeResultSchema>;
+
 // ---------------------------------------------------------------------------
 // Call outcomes (specification 9.1)
 // ---------------------------------------------------------------------------

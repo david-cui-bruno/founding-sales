@@ -80,7 +80,10 @@ is the history of how it got there. The command writes both in one transaction.
 
 **A change is a new version, never an edit.** `updateSetting` inserts version *n+1*
 and marks version *n* superseded. "Who lowered the sending cap, when, from what, and
-why" is a `SELECT`. `workspace_settings_current`, a partial unique index over
+why" is a `SELECT`. From desktop 1.0.5 it is also on screen: **History** under a setting
+draws each version's note and the value it changed *from* and *to*, from
+`POST /settings/history`'s `current` and per-version `value` (lane g78, release.md
+8.0aj). 1.0.4 and older stripped both values and drew nothing. `workspace_settings_current`, a partial unique index over
 `superseded_at IS NULL`, is the invariant: one current answer per key per workspace.
 
 **The key chooses the schema.** The command carries `settingKey` and an opaque

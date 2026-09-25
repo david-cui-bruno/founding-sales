@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { DEFAULT_ALERT_THRESHOLDS } from '@fss/contracts';
 import type { AdminState } from '../../../src/renderer/settingsContract.ts';
+import { settingHistoryAnswer } from '../../support/settingHistory.ts';
 
 /**
  * The generated test server the administration window specs run against.
@@ -276,6 +277,11 @@ export async function startSettingsTestServer(initial: AdminState): Promise<Sett
         // sentence. This is what a salesperson gets.
         if (method === 'saveSetting') {
           state = { ...state, notice: state.role === 'admin' ? null : 'admin_only' };
+        }
+        // The history the route answers (lane g78): values included, which is what
+        // the window draws as "from" and "to".
+        if (method === 'openHistory') {
+          state = { ...state, notice: null, history: settingHistoryAnswer() };
         }
         if (method === 'acknowledgeAlert') {
           state = {

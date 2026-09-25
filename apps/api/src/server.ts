@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { SessionQueryable } from '@fss/domain/db';
-import type { ClientVersionRange } from '@fss/contracts';
+import type { ClientVersionPolicy } from '@fss/contracts';
 import type { SuppressionJournal } from '@fss/domain/suppression';
 import { MAX_REQUEST_BYTES, REFUSAL_STATUS, checkEnvelope, redactError, type RefusalCode } from './limits.ts';
 import { authenticate, type AuthDeps } from './auth/index.ts';
@@ -64,7 +64,7 @@ import {
 export interface ApiOptions {
   /** One backend for this call and nobody else's: transactions and locks are opened on it. */
   readonly session: SessionQueryable;
-  readonly supportedClientVersions: ClientVersionRange;
+  readonly supportedClientVersions: ClientVersionPolicy;
   readonly sendingEnabled: boolean;
   /**
    * Appendix E step 1: the generation an operator pinned, or null when none is.

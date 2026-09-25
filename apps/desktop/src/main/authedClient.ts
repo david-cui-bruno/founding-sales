@@ -63,7 +63,11 @@ export function createAuthedClient(options: AuthedClientOptions): AuthedClient {
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
       if (answer.status < 200 || answer.status >= 300) {
-        return { ok: false, reason: refusalOf(answer.body, answer.status), offline: false };
+        // The body travels with the code (lane g78, D05). A refused merge's conflicts
+        // are the screen a person resolves; reducing the answer to its reason here is
+        // how that screen never appeared. It stays in the main process: a bridge
+        // parses what it needs out of it with a contract schema, or ignores it.
+        return { ok: false, reason: refusalOf(answer.body, answer.status), offline: false, refusal: answer.body };
       }
       return { ok: true, value: answer.body };
     } catch {

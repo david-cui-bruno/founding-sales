@@ -1,6 +1,7 @@
 import type {
   DashboardResponse,
   DiagnosticsResponse,
+  SettingHistoryResponse,
   SettingKey,
   SettingsSnapshot,
 } from '@fss/contracts';
@@ -163,15 +164,13 @@ export interface PipelineStageRowView {
   readonly retired: boolean;
 }
 
-export interface SettingHistoryView {
-  readonly settingKey: SettingKey;
-  readonly versions: readonly {
-    readonly version: number;
-    readonly changeNote: string | null;
-    readonly changedAt: string;
-    readonly supersededAt: string | null;
-  }[];
-}
+/**
+ * `POST /settings/history` as the API answered it, values included (lane g78, D04):
+ * the slice's current value and version, and every version with the value it set.
+ * Until g78 this carried four fields per version and no value at all, so History could
+ * say when something changed and never what.
+ */
+export type SettingHistoryView = SettingHistoryResponse;
 
 export interface SaveSettingInput {
   readonly settingKey: SettingKey;

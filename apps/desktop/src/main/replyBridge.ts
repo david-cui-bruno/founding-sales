@@ -1,6 +1,10 @@
-import { z } from 'zod';
 import {
-  replyCardSchema,
+  classifierSettingsResponseSchema,
+  confirmReplyResultSchema,
+  replyCardDtoSchema,
+  replyListResponseSchema,
+} from '@fss/contracts';
+import {
   replyStateSchema,
   type ConfirmReplyRequest,
   type ReplyCard,
@@ -50,24 +54,12 @@ export const REPLY_IPC_CHANNELS = {
 } as const;
 export type ReplyIpcChannel = (typeof REPLY_IPC_CHANNELS)[keyof typeof REPLY_IPC_CHANNELS];
 
-/** What `/replies` answers. */
-export const replyListSchema = z.object({
-  businessDate: z.iso.date(),
-  cards: z.array(replyCardSchema),
-});
-
-/** What `/replies/settings` answers. Extra fields are the server's business. */
-export const classifierSettingsSchema = z.object({
-  enabled: z.boolean(),
-  modelName: z.string().min(1).max(64),
-  effort: z.enum(['low', 'medium', 'high']),
-});
-
-/** What `/replies/confirm` answers, of which the window needs one field. */
-export const confirmationResultSchema = z.object({
-  suggestsLost: z.boolean(),
-  confirmation: z.object({ disposition: z.string().max(64) }),
-});
+/*
+ * `/replies`, `/replies/card`, `/replies/settings` and `/replies/confirm` are parsed with
+ * `@fss/contracts`' schemas (lane g78), the ones the routes' own tests hold the real
+ * answers to. Until g78 the settings schema here stopped the effort at `high`, so a
+ * workspace at `xhigh` or `max` read back as `classifier: null` (D03).
+ */
 
 export interface ReplyBridgeDeps {
   readonly api: AuthedClient;
@@ -120,7 +112,7 @@ export function createReplyBridge(deps: ReplyBridgeDeps): ReplyBridgeHost {
   };
 
   const loadLane = async (): Promise<void> => {
-    const lane = await deps.api.read('/replies', value => replyListSchema.parse(value), {});
+    const lane = await deps.api.read('/replies', value => replyListResponseSchema.parse(value), {});
     if (!lane.ok) {
       // 4.2: nothing here is cached, so an outage is an empty lane and a notice —
       // never a stale card somebody might answer.
@@ -132,12 +124,15 @@ export function createReplyBridge(deps: ReplyBridgeDeps): ReplyBridgeHost {
     cards = lane.value.cards;
     businessDate = lane.value.businessDate;
     notice = null;
-    const settings = await deps.api.read('/replies/settings', value => classifierSettingsSchema.parse(value), {});
-    classifier = settings.ok ? settings.value : null;
+    const settings = await deps.api.read('/replies/settings', value => classifierSettingsResponseSchema.parse(value), {});
+    // The three the window shows. The caps and who changed them last stay on the server.
+    classifier = settings.ok
+      ? { enabled: settings.value.enabled, modelName: settings.value.modelName, effort: settings.value.effort }
+      : null;
   };
 
   const loadCard = async (messageId: string): Promise<void> => {
-    const card = await deps.api.read('/replies/card', value => replyCardSchema.parse(value), { messageId });
+    const card = await deps.api.read('/replies/card', value => replyCardDtoSchema.parse(value), { messageId });
     if (!card.ok) {
       open = null;
       note(card, null);
@@ -194,7 +189,7 @@ export function createReplyBridge(deps: ReplyBridgeDeps): ReplyBridgeHost {
           ...(input.disposition === 'opt_out' ? { firmWideOptOut: input.firmWideOptOut } : {}),
           ...(input.note === '' ? {} : { note: input.note }),
         },
-        value => confirmationResultSchema.parse(value),
+        value => confirmReplyResultSchema.parse(value),
       );
       // `suggestsLost` is a suggestion and stays one: the window says so and offers
       // no button that would act on it (9.1). Closing the opportunity is a separate,

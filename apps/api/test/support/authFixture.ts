@@ -100,7 +100,9 @@ export function authConfigFor(google: GoogleStub): AuthConfig {
       fullSignInSeconds: 30 * 24 * 3600,
       authorizationRequestSeconds: 600,
     },
-    supportedClientVersions: { minimum: '1.2.0', maximum: '1.4.0' },
+    // A ceiling on the 1.4 line: 1.2.0 to 1.4.999 are admitted (lane g78). The fixture's
+    // current client is 1.4.0 and its outdated one 1.0.0, as before.
+    supportedClientVersions: { minimum: '1.2.0', ceiling: '1.4.x', incompatible: [] },
     stateSigningKey: randomBytes(32),
   };
 }

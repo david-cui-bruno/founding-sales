@@ -1,6 +1,6 @@
 import type { SessionQueryable } from '@fss/domain/db';
 import { API_SCHEMA_RANGE, checkSchemaRange, readSystemGeneration } from '@fss/domain/db';
-import type { ClientVersionRange } from '@fss/contracts';
+import { publishedClientVersions, type ClientVersionPolicy, type ClientVersionRange } from '@fss/contracts';
 
 /**
  * The health route (specification 4.2 and 5.3).
@@ -33,7 +33,7 @@ export interface HealthReport {
 
 export interface HealthInputs {
   readonly session: SessionQueryable;
-  readonly supportedClientVersions: ClientVersionRange;
+  readonly supportedClientVersions: ClientVersionPolicy;
   readonly sendingEnabled: boolean;
 }
 
@@ -52,7 +52,7 @@ export async function buildHealthReport(inputs: HealthInputs): Promise<HealthRep
         reason: check.accepted ? null : check.reason,
       },
       systemGeneration: generation,
-      supportedClientVersions: inputs.supportedClientVersions,
+      supportedClientVersions: publishedClientVersions(inputs.supportedClientVersions),
       sendingEnabled: inputs.sendingEnabled,
     };
   } catch {
@@ -63,7 +63,7 @@ export async function buildHealthReport(inputs: HealthInputs): Promise<HealthRep
       component: 'api',
       schema: { declaredRange, databaseVersion: null, accepted: false, reason: 'database_unreachable' },
       systemGeneration: null,
-      supportedClientVersions: inputs.supportedClientVersions,
+      supportedClientVersions: publishedClientVersions(inputs.supportedClientVersions),
       sendingEnabled: inputs.sendingEnabled,
     };
   }

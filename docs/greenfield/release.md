@@ -199,7 +199,14 @@ The desktop commit stamp **is that value**. It is not something a build produces
 
 **What checks the agreement.** The desktop workflow refuses a `desktop_commit_stamp` that is not the commit the run is on, before it builds; and after it builds it compares the commit in the signed manifest — which is read out of the stamp inside the asar, inside the code signature — with both. At enable time (section 6) you compare the release record's `artifacts.desktopCommitStamp` with the commit the run summary printed. They are the same forty characters or sending does not get enabled.
 
-**The API admits the desktop version first.** Every sign-in, renewal and command is checked against the API's published range (`CONTAINER_CLIENT_VERSIONS` in `apps/api/src/bootstrap/main.ts`), and a client *above* its maximum is refused exactly like one below its minimum. So a desktop build whose `FSS_DESKTOP_APP_VERSION` is newer than the deployed API's maximum is published only after an API that admits it has been deployed. Otherwise every Mac that takes the update is refused everything. 8.0x is the first time this mattered: 1.0.1 needs an API whose maximum is 1.0.1. 8.0ab is the second: 1.0.2, the build with **Your calling number**, needs an API whose maximum is 1.0.2, and that API carries migration 0016. 8.0ad is the third: 1.0.3, the Home build, needs an API whose maximum is 1.0.3, and carries no migration. 8.0ae is the fourth: 1.0.4, the sending-section fix, needs an API whose maximum is 1.0.4, and carries no migration.
+**The API admits the desktop by its release line, not by its number (since 8.0aj).** Every sign-in, renewal and command is checked against the API's client-version policy (`CONTAINER_CLIENT_VERSIONS` in `apps/api/src/bootstrap/main.ts`). It has a `minimum`, a compatibility `ceiling` such as `1.x`, and an `incompatible` list of known-bad builds. Any build from the minimum to the top of the line that is not listed is admitted, even one built after the API was deployed. The API publishes the line's top as the maximum, `1.999.999` for `1.x`, so the Macs already installed read it with no change. The order is:
+
+- **A desktop-only release publishes directly.** This is a new 1.x build that needs no route and no response field the deployed API lacks. There is no API deployment.
+- **The API goes first only when the desktop needs something the deployed API does not have**: a new route, a new response field the desktop reads, or a migration. Deploy the API, smoke, then publish the desktop.
+- **A new value in a closed vocabulary goes the other way.** Ship the desktop that knows it first; installed Macs refuse a value they do not know (`docs/decisions/g78-one-wire-contract.md`).
+- **A known-bad build** goes on `incompatible`, which is an API deployment. **A breaking change** raises the minimum or moves to a `2.x` line.
+
+Until 8.0aj the maximum was the exact latest desktop, so every desktop release needed an API first: 1.0.1 (8.0x), 1.0.2 with migration 0016 (8.0ab), 1.0.3 (8.0ad) and 1.0.4 (8.0ae). 1.0.5 is the last one. The API in production still publishes 1.0.4 as its maximum, so the API carrying the ceiling is deployed first, once (8.0aj). `docs/decisions/g78-version-ceiling.md` has the design.
 
 **The first release, today.** Eight of the nine desktop signing secrets are not set and this Mac holds only an Apple Development identity, so the release job fails closed at its first step and names them. That is the intended state. `docs/greenfield/install.md` lists every one.
 
@@ -578,6 +585,8 @@ Until G12c none of the first three could be set at all: `extra_environment` exis
 There is also `extra_environment` (`map(string)`, empty) on both roots, for whatever the next release needs before it earns a variable of its own. Never a credential: secrets reach a container only as a Secrets Manager reference, and the root test asserts no environment name looks like one.
 
 **What the API refuses to start without.** A live API now builds Google sign-in or exits with `api_deployment_refused`. The parts are the `google-oidc-client` secret, `FSS_PUBLIC_ORIGIN` (the redirect is `https://api.usecallie.com/auth/google/callback`, derived rather than configured twice), `FSS_GOOGLE_HOSTED_DOMAIN`, and `session-signing-key`. `--selftest` prints `sign_in`, `sign_in_client_configured`, `sign_in_redirect_configured`, `sign_in_hosted_domain_configured` and `session_signing_key_configured` — names and booleans, never a value. Before G12b the API started without any of it and refused every command; see `docs/decisions/g12b-sign-in-is-configured-or-the-api-refuses.md`.
+
+**A desktop release is not a reason for this section.** Since 8.0aj the API admits every 1.x desktop from its minimum up, so publishing a desktop build needs no apply and no deployment, unless 2.0 says the API goes first. Confirm the published range with `curl -fsS https://api.usecallie.com/auth/client-version`. After 8.0aj it reads `"supported":{"minimum":"1.0.0","maximum":"1.999.999"}`.
 
 ### 4.1 The order inside the apply, and the one command that performs it
 
@@ -2877,6 +2886,47 @@ Audit T02 applied too: `scenario03.check.ts` committed the reply before the disp
 4. No API command in the run logs a lock timeout or `40P01`. Holds and suppressions now wait for in-flight claims, which last milliseconds.
 
 **Still unverified.** Nothing here has run in the cloud. These are measured only on embedded PostgreSQL 16: the advisory lock's behaviour under the RDS parameter group, the deadlock-detector path the decision doc accepts, and the drill's re-sync on the rehearsal's recorded seam. The fifteen-minute window is reasoned, not measured: nobody has yet watched a production watermark's age through a Gmail 429.
+### 8.0aj What lane g78 changed: one wire contract for the desktop's reads, and the version gate as a ceiling (25 September)
+
+**The drift class.** The Mac parsed most API answers with schemas it wrote itself, and its unit fixtures were written to those same schemas. Each suite agreed with itself while the real answers drifted. The independent audit found six more cases after g69's sending section:
+
+- Every populated sequence version was unreadable: the step's `sequenceVersionId` was forbidden (D01).
+- Every populated enrollment list was unreadable: four of thirteen fields were missing (D02).
+- A classifier at `xhigh` or `max` read back as no classifier (D03).
+- Settings history stripped every value, and nothing drew it (D04).
+- A refused merge never reached the conflict screen, and a replay lost the conflicts (D05).
+- A failed sequence read looked like an empty workspace (D06).
+
+Production has no sequences or merges yet, which is why nobody saw them.
+
+**What g78 changes.** Every response the desktop reads is declared once, in `@fss/contracts`. Each route's test asserts `wireDrift(schema, answer)` is empty, and the desktop imports the same schema. The Mac's parse strips a key it does not know, so an API deployed ahead of a Mac cannot lock it out. The route's test is where an undeclared key fails. Closed vocabularies are the domain's own lists, compared in `apps/api/test/wireVocabulary.test.ts`. Four release checks drive the real route into the real bridge and view:
+
+- `sequences.check.ts`: a published two-step version, a held enrollment and a LinkedIn handoff;
+- `replies.check.ts`: the classifier at `max` and a card with its hold;
+- `settingsHistory.check.ts`: two versions with their from and to values;
+- `crmMerge.check.ts`: the conflict screen, and a replay that keeps its conflicts.
+
+Each check also holds the desktop's unit fixtures to the route. The sequence editor draws one grey line with **Retry** per failed read, and History under a setting shows *From …* and *To …* per version. `docs/decisions/g78-one-wire-contract.md`.
+
+**The ceiling.** `CONTAINER_CLIENT_VERSIONS` is now `{ minimum: '1.0.0', ceiling: '1.x', incompatible: [] }`. The API publishes `{ minimum: '1.0.0', maximum: '1.999.999' }`, which desktops 1.0.0 to 1.0.4 parse and read as admitting themselves. Diagnostics on 1.0.5 reads *Clients 1.0.0 to any 1.x.* `docs/decisions/g78-version-ceiling.md`.
+
+Mutations: three appended to `scripts/releaseMutationCheck.mjs` (120 → 123 at the rebase onto PR 214). Three existing entries were retargeted: the two `maximum` mutations now list 1.0.1 and 1.0.2 as incompatible, and the recipients mutation now edits `packages/contracts/src/outbound.ts`.
+
+**The version order: API first this once, then desktop 1.0.5.** This is an app-only API release, then a desktop-only one:
+
+1. Build both images at the release commit (2.1).
+2. Deploy with `release-deploy.sh infra/roots/production fss-prod --api-digest … --worker-digest …` and **no** `--schema-change` (4.1). The schema range is unchanged.
+3. Smoke.
+4. Confirm `curl -fsS https://api.usecallie.com/auth/client-version` reports maximum `1.999.999`.
+5. Set `FSS_DESKTOP_APP_VERSION` to `1.0.5` and publish (`docs/greenfield/install.md`, "5d — publish 1.0.5").
+
+Installed 1.0.0 to 1.0.4 keep working throughout. From then on a 1.x desktop publishes without an API deployment, unless 2.0 says the API goes first.
+
+**Still unverified.** Nothing here has run in Electron or against production. The release checks replace the socket with `dispatch`, and the Playwright specs substitute the bridge. Unmeasured:
+
+- 1.0.4 against the new API's `1.999.999` on a real Mac;
+- the merge screen on a real refusal: there is still no control that starts a merge, so it opens only from `resolveMerge`;
+- a receipt written with details, replayed across an API deployment.
 
 ### 8.1 Still unverified
 

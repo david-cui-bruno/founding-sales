@@ -1,11 +1,12 @@
-import { z } from 'zod';
 import {
-  firmIdentityDtoSchema,
+  firmListResponseSchema,
   firmPageResponseSchema,
-  mergeConflictSchema,
-  pipelineStageDtoSchema,
+  mergeRefusalSchema,
+  pipelineBoardResponseSchema,
+  pipelineStagesResponseSchema,
   type FirmIdentityDto,
   type MergeConflict,
+  type PipelineStageDto,
 } from '@fss/contracts';
 import type {
   ContactEdit,
@@ -51,15 +52,11 @@ export const CRM_IPC_CHANNELS = {
 } as const;
 export type CrmIpcChannel = (typeof CRM_IPC_CHANNELS)[keyof typeof CRM_IPC_CHANNELS];
 
-const stagesSchema = z.object({ stages: z.array(pipelineStageDtoSchema) });
-const firmsSchema = z.object({ firms: z.array(firmIdentityDtoSchema) });
-/** G9's board read: the columns, and the ids the caller may act on. */
-const boardSchema = z.object({
-  columns: z.array(z.object({ stage: pipelineStageDtoSchema, firms: z.array(firmIdentityDtoSchema) })),
-  opportunityIdByFirmId: z.record(z.string(), z.string()),
-  unplacedFirms: z.array(firmIdentityDtoSchema),
-});
-const mergeRefusalSchema = z.object({ conflicts: z.array(mergeConflictSchema) });
+/*
+ * The stage list, the firm list, G9's board and a refused merge are parsed with
+ * `@fss/contracts`' schemas for their routes (lane g78), the ones the routes' own tests
+ * hold the real answers to. The board's id map is ids to ids, not any strings.
+ */
 
 export interface CrmBridgeDeps {
   readonly api: AuthedClient;
@@ -91,7 +88,7 @@ export interface CrmBridgeHost {
  * below composes the same view from the stage list and the firm list.
  */
 export function pipelineViewOf(
-  stages: readonly z.infer<typeof pipelineStageDtoSchema>[],
+  stages: readonly PipelineStageDto[],
   firms: readonly FirmIdentityDto[],
   opportunityIdByFirmId: Readonly<Record<string, string>> = {},
 ): PipelineView {
@@ -112,6 +109,22 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
   let notice: string | null = null;
   /** Every opportunity id a Firm page has told this window about. */
   const opportunityIdByFirmId: Record<string, string> = {};
+
+  /**
+   * A firm's name for the merge screen: from what this window already holds — the merge
+   * it is showing, the Firm page, the board — and otherwise from one `/firms` read. The
+   * id itself only if the firm is in none of them, so the screen still says which two
+   * records it is about.
+   */
+  const firmNameOf = async (firmId: string): Promise<string> => {
+    if (merge?.sourceFirmId === firmId) return merge.sourceName;
+    if (merge?.targetFirmId === firmId) return merge.targetName;
+    if (firm?.read.firm.id === firmId) return firm.read.firm.name;
+    const onBoard = pipeline?.columns.flatMap(column => column.firms).find(entry => entry.id === firmId);
+    if (onBoard !== undefined) return onBoard.name;
+    const firms = await deps.api.read('/firms', value => firmListResponseSchema.parse(value));
+    return (firms.ok ? firms.value.firms.find(entry => entry.id === firmId)?.name : undefined) ?? firmId;
+  };
 
   const snapshot = async (): Promise<CrmState> => {
     const session = await deps.session.state();
@@ -143,7 +156,7 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
   const loadPipeline = async (): Promise<void> => {
     // One read. The API decides which firms are in it, which columns exist and which
     // ids this caller may act on; nothing here adds to any of the three.
-    const board = await deps.api.read('/pipeline/board', value => boardSchema.parse(value), {});
+    const board = await deps.api.read('/pipeline/board', value => pipelineBoardResponseSchema.parse(value), {});
     if (board.ok) {
       pipeline = {
         columns: board.value.columns.map(column => ({ stage: column.stage, firms: column.firms })),
@@ -160,12 +173,12 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
     // The board endpoint is not answering. Rather than show nothing, fall back to
     // the two reads that built this view before it existed; every column then
     // renders `stage-change-unavailable` except the firms already opened.
-    const stages = await deps.api.read('/pipeline/stages', value => stagesSchema.parse(value));
+    const stages = await deps.api.read('/pipeline/stages', value => pipelineStagesResponseSchema.parse(value));
     if (!stages.ok) {
       notice = stages.reason;
       return;
     }
-    const firms = await deps.api.read('/firms', value => firmsSchema.parse(value));
+    const firms = await deps.api.read('/firms', value => firmListResponseSchema.parse(value));
     pipeline = pipelineViewOf(stages.value.stages, firms.ok ? firms.value.firms : [], opportunityIdByFirmId);
     screen = 'pipeline';
   };
@@ -238,7 +251,22 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
       // A merge refused for conflicts is not an error: it is the screen. G3b's
       // `firmMerge.ts` renders the list and will not submit until every field has
       // been decided (7.2: "Conflicts are shown for resolution").
+      //
+      // Until lane g78 this line was all there was: the transport kept only the code,
+      // `merge` was never set, and the conflict screen could not appear (D05). The
+      // refusal's body now travels with it, and a replay carries the conflicts too.
       notice = answer.reason;
+      const conflicts = conflictsOf(answer.offline ? null : answer.refusal);
+      if (conflicts.length > 0) {
+        merge = {
+          sourceFirmId: input.sourceFirmId,
+          sourceName: await firmNameOf(input.sourceFirmId),
+          targetFirmId: input.targetFirmId,
+          targetName: await firmNameOf(input.targetFirmId),
+          conflicts,
+        };
+        screen = 'merge';
+      }
       return await snapshot();
     },
   };
@@ -247,5 +275,5 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
 /** Turn a refused merge body into the conflicts screen, when it carries them. */
 export function conflictsOf(body: unknown): readonly MergeConflict[] {
   const parsed = mergeRefusalSchema.safeParse(body);
-  return parsed.success ? parsed.data.conflicts : [];
+  return parsed.success ? (parsed.data.conflicts ?? []) : [];
 }

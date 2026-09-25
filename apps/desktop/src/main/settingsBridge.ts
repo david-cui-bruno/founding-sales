@@ -1,11 +1,14 @@
-import { z } from 'zod';
 import {
-  callingIdentityDtoSchema,
+  alertAcknowledgedResponseSchema,
+  callingIdentityChangeResultSchema,
   callingIdentityListSchema,
   dashboardResponseSchema,
   diagnosticsResponseSchema,
-  pipelineStageDtoSchema,
+  outboundStatusResponseSchema,
+  pipelineStagesResponseSchema,
+  settingHistoryResponseSchema,
   settingsSnapshotSchema,
+  type CallingIdentityDto,
   type SettingKey,
 } from '@fss/contracts';
 import type {
@@ -68,71 +71,18 @@ export const CALLING_NUMBER_API_PATHS = {
   disable: '/calling-identities/disable',
 } as const;
 
-/** What a calling-number command answers: the outcome and the row as it now is. */
-const callingNumberChangeSchema = z.object({ outcome: z.string(), identity: callingIdentityDtoSchema });
-
-const stagesSchema = z.object({ stages: z.array(pipelineStageDtoSchema) });
-const historySchema = z.object({
-  settingKey: z.string(),
-  versions: z.array(
-    z.object({
-      version: z.number(),
-      changeNote: z.string().nullable(),
-      changedAt: z.string(),
-      supersededAt: z.string().nullable(),
-    }),
-  ),
-});
-const acknowledgedSchema = z.object({ acknowledged: z.literal(true), alertKey: z.string() });
-
-/**
- * `POST /outbound/status`, G7-2's read.
+/*
+ * Every answer this window reads is parsed with `@fss/contracts`' schema for its route
+ * (lane g78): the calling-number change, the stages, the settings history, the alert
+ * acknowledgement and `POST /outbound/status`. The routes' own tests hold their real
+ * answers to the same schemas through `wireDrift`.
  *
- * Parsed here rather than imported from `@fss/contracts` because G7-2 built that
- * route's body inline and published no schema for it. This is the narrowest
- * description of the parts this window shows — `.loose()` so a field G7-2 adds does
- * not break the page, and every field this file reads is named, so one they remove
- * does.
- *
- * `personalGmailRecipients` is an object, `{ automated, direct, total }`
- * (`personalGmailRecipientsInWindow` in `packages/domain/outbound/domainGuard.ts`), and
- * always was. Until lane g69 this said `z.number()`, so every answer the API gave failed
- * to parse, `loadSending` kept nothing, and the section never rendered for anybody
- * (release.md 8.0ae). The unit fixture had the same wrong number, which is why nothing
- * went red; `test/release/sendingSection.check.ts` now feeds this parser the real
- * route's answer.
+ * Two of the copies that were here had cost something. The history schema kept four
+ * fields of each version and stripped `value` and `current`, so History showed dates
+ * and notes and never what changed (D04). The outbound schema was `.loose()` all the
+ * way down, which is how `personalGmailRecipients` could be read as a number for two
+ * releases while unchecked fields rode along (release.md 8.0ae, D07).
  */
-export const outboundStatusSchema = z
-  .object({
-    domain: z
-      .object({
-        domain: z.string(),
-        spfPass: z.boolean(),
-        dkimPass: z.boolean(),
-        dmarcPass: z.boolean(),
-        postmasterReviewedAt: z.string().nullable(),
-        authenticationPasses: z.boolean(),
-        automatedSendingEnabled: z.boolean(),
-        personalGmailGuardPer24h: z.number(),
-      })
-      .loose()
-      .nullable(),
-    personalGmailRecipients: z
-      .object({ automated: z.number(), direct: z.number(), total: z.number() })
-      .loose(),
-    ramp: z
-      .object({
-        mailboxId: z.string(),
-        healthySendingDays: z.number(),
-        effectiveCap: z.number(),
-        adminDailyCap: z.number().nullable(),
-        raisedDailyCap: z.number().nullable(),
-        lastHealthFailure: z.string().nullable(),
-      })
-      .loose()
-      .nullable(),
-  })
-  .loose();
 
 export interface AdminBridgeDeps {
   readonly api: AuthedClient;
@@ -260,7 +210,7 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
     // `read` sends GET when it is given no body, and the API answered that with 405 on every
     // Administration open in production (25 September 2026), so this section never rendered.
     // The empty body is what makes it the POST the route expects.
-    const status = await deps.api.read('/outbound/status', value => outboundStatusSchema.parse(value), {});
+    const status = await deps.api.read('/outbound/status', value => outboundStatusResponseSchema.parse(value), {});
     if (!status.ok) {
       sendingAdmin = null;
       sendingReadError = status.reason;
@@ -277,7 +227,7 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
     }[] = [];
     if (report.ok) {
       for (const mailbox of report.value.mailboxes) {
-        const one = await deps.api.read('/outbound/status', value => outboundStatusSchema.parse(value), {
+        const one = await deps.api.read('/outbound/status', value => outboundStatusResponseSchema.parse(value), {
           mailboxId: mailbox.mailboxId,
         });
         if (one.ok && one.value.ramp !== null) {
@@ -333,7 +283,7 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
       notice = answer.reason;
     } else {
       settings = answer.value;
-      const stageAnswer = await deps.api.read('/pipeline/stages', value => stagesSchema.parse(value));
+      const stageAnswer = await deps.api.read('/pipeline/stages', value => pipelineStagesResponseSchema.parse(value));
       if (stageAnswer.ok) {
         stages = stageAnswer.value.stages.map(stage => ({
           key: stage.key,
@@ -417,14 +367,16 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
     },
 
     async openHistory(input) {
-      const answer = await deps.api.read('/settings/history', value => historySchema.parse(value), {
+      const answer = await deps.api.read('/settings/history', value => settingHistoryResponseSchema.parse(value), {
         settingKey: input.settingKey,
       });
       if (!answer.ok) {
         notice = answer.reason;
         return await snapshot();
       }
-      history = { settingKey: input.settingKey, versions: answer.value.versions };
+      // The whole answer, values included (D04): what each version set, and what is in
+      // force now. The view decides how to show old and new; the bridge keeps both.
+      history = answer.value;
       return await snapshot();
     },
 
@@ -481,7 +433,7 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
       // G5's acknowledge is not a receipted command: it is admin-only, audited, and
       // answers `{ acknowledged: true, alertKey }`. Calling it through `command`
       // would add a command id the endpoint does not read.
-      const answer = await deps.api.read('/admin/alerts/acknowledge', value => acknowledgedSchema.parse(value), {
+      const answer = await deps.api.read('/admin/alerts/acknowledge', value => alertAcknowledgedResponseSchema.parse(value), {
         alertId: input.alertId,
       });
       return await afterCommand(
@@ -551,13 +503,13 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
       const registered = await deps.api.command(
         CALLING_NUMBER_API_PATHS.register,
         { e164: input.e164, ...(input.label.trim() === '' ? {} : { label: input.label }) },
-        value => callingNumberChangeSchema.parse(value),
+        value => callingIdentityChangeResultSchema.parse(value),
       );
       if (!registered.ok || !input.attested) return await afterCommand(registered, loadCallingNumbers);
       const attested = await deps.api.command(
         CALLING_NUMBER_API_PATHS.attest,
         { identityId: registered.value.identity.id, attested: true },
-        value => callingNumberChangeSchema.parse(value),
+        value => callingIdentityChangeResultSchema.parse(value),
       );
       if (!attested.ok) {
         // The registration committed and the attestation did not: the refusal is the
@@ -577,7 +529,7 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
       const outcome = await deps.api.command(
         CALLING_NUMBER_API_PATHS.attest,
         { identityId: input.identityId, attested: true },
-        value => callingNumberChangeSchema.parse(value),
+        value => callingIdentityChangeResultSchema.parse(value),
       );
       return await afterCommand(outcome, loadCallingNumbers);
     },
@@ -586,14 +538,14 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
       const outcome = await deps.api.command(
         CALLING_NUMBER_API_PATHS.disable,
         { identityId: input.identityId },
-        value => callingNumberChangeSchema.parse(value),
+        value => callingIdentityChangeResultSchema.parse(value),
       );
       return await afterCommand(outcome, loadCallingNumbers);
     },
   };
 }
 
-function viewOfNumber(row: z.infer<typeof callingIdentityDtoSchema>): CallingNumberView {
+function viewOfNumber(row: CallingIdentityDto): CallingNumberView {
   return {
     id: row.id,
     e164: row.e164,

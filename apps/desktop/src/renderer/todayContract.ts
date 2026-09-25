@@ -1,5 +1,14 @@
 import { z } from 'zod';
-import { instant, uuid, type CALL_OUTCOMES } from '@fss/contracts';
+import {
+  instant,
+  todayCardDtoSchema,
+  todayFirmResponseSchema,
+  type CALL_OUTCOMES,
+  type TodayCardDto,
+  type TodayFirmResponse,
+  type TodayRouteDto,
+  type TodayTaskDto,
+} from '@fss/contracts';
 
 /**
  * What the Today window is given, and the seven things it may ask for
@@ -21,81 +30,34 @@ import { instant, uuid, type CALL_OUTCOMES } from '@fss/contracts';
  * to disable what cannot be done.
  */
 
-export const TODAY_LANES = ['reply', 'callback', 'due_work', 'new_firm'] as const;
-export type TodayLane = (typeof TODAY_LANES)[number];
-
-export const todayCountsSchema = z.strictObject({
-  replies: z.number().int().min(0),
-  emailsDue: z.number().int().min(0),
-  callsDue: z.number().int().min(0),
-  linkedInDue: z.number().int().min(0),
-});
-
-export const todayCardSchema = z.strictObject({
-  firmId: uuid,
-  firmName: z.string().min(1).max(200),
-  lane: z.enum(TODAY_LANES),
-  dueAt: instant,
-  counts: todayCountsSchema,
-});
-export type TodayCard = z.infer<typeof todayCardSchema>;
-
-export const todayTaskSchema = z.strictObject({
-  itemId: uuid,
-  contactId: uuid.nullable(),
-  contactName: z.string().max(200).nullable(),
-  kind: z.enum(['reply', 'callback', 'email_due', 'call_due', 'linkedin_due', 'new_firm']),
-  lane: z.enum(TODAY_LANES),
-  dueAt: instant,
-  status: z.enum(['open', 'snoozed']),
-  automated: z.boolean(),
-  snoozeUntil: instant.nullable(),
-});
-export type TodayTask = z.infer<typeof todayTaskSchema>;
-
-/**
- * One dialable route on an expanded card (9.1, 9.2).
- *
- * The version is here because `authorizeDial` compares it: "Authorization uses the
- * route version displayed on the card, preventing a stale client from dialing a
- * replaced or retired number." A card that sent no version would be asking the server
- * to trust whatever number it happens to hold — and it arrives with the tasks, in one
- * read at one instant, so "the version the card displays" is a version the card was
- * given rather than one it remembered.
+/*
+ * The wire shapes are `@fss/contracts`' (`packages/contracts/src/today.ts`), and this
+ * file only names them for the window (lane g78). Until then the list was declared
+ * here and again in `todayBridge.ts`, a firm name was capped at 200 characters where a
+ * firm may have 300, and a route's number was any short string rather than E.164.
  */
-export const todayRouteSchema = z.strictObject({
-  routeId: uuid,
-  contactId: uuid.nullable(),
-  e164: z.string().min(2).max(20),
-  version: z.number().int().min(1),
-  eligibility: z.enum(['candidate', 'usable', 'invalid', 'retired']),
-});
-export type TodayRoute = z.infer<typeof todayRouteSchema>;
-
-export const todayFirmSchema = z.strictObject({
-  firmId: uuid,
-  firmName: z.string().min(1).max(200),
-  snapshotDate: z.iso.date(),
-  lane: z.enum(TODAY_LANES),
-  counts: todayCountsSchema,
-  tasks: z.array(todayTaskSchema),
-  routes: z.array(todayRouteSchema),
-  /**
-   * The acting salesperson's own verified number, or null. 9.1 requires the identity
-   * to be theirs, so the window is told which one rather than offered a choice; null
-   * is a card with no Call button.
-   */
-  callingIdentityId: uuid.nullable(),
-});
-export type TodayFirm = z.infer<typeof todayFirmSchema>;
+export { TODAY_LANES, type TodayLane } from '@fss/contracts';
+export type TodayCard = TodayCardDto;
+export type TodayTask = TodayTaskDto;
+/**
+ * One dialable route on an expanded card (9.1, 9.2). The version is the one
+ * `authorizeDial` compares, so a stale card cannot dial a replaced number.
+ */
+export type TodayRoute = TodayRouteDto;
+/**
+ * One card, expanded. `callingIdentityId` is the acting salesperson's own verified
+ * number, or null: 9.1 requires the identity to be theirs, so the window is told which
+ * one rather than offered a choice, and null is a card with no Call button.
+ */
+export type TodayFirm = TodayFirmResponse;
 
 export const todayStateSchema = z.strictObject({
   /** Null before the first read, and after a sign-out. */
   snapshotDate: z.iso.date().nullable(),
   businessTimeZone: z.string().max(64).nullable(),
-  cards: z.array(todayCardSchema),
+  cards: z.array(todayCardDtoSchema),
   /** The card the person expanded, or null. Never cached: it names contacts. */
-  expanded: todayFirmSchema.nullable(),
+  expanded: todayFirmResponseSchema.nullable(),
   /** Whether the cloud answered the last time we asked. */
   online: z.boolean(),
   /** True when the cards on screen came from the 24-hour cache rather than the API. */

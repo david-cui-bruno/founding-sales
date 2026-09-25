@@ -469,3 +469,36 @@ export const diagnosticsResponseSchema = z.object({
 export type DiagnosticsResponse = z.infer<typeof diagnosticsResponseSchema>;
 
 export const settingsResponseSchema = settingsSnapshotSchema;
+
+/**
+ * `POST /settings/history`: the slice's current value and every version, newest first
+ * (lane g78, audit item D04).
+ *
+ * The Mac's copy declared four fields of each version and stripped the rest, so the
+ * history showed dates and notes and never what changed. `value` is here, and `current`
+ * is the value in force now — for a slice nobody has set, the default at version 0.
+ * Each `value` is opaque to the wire: the server validated it against its key's schema
+ * when it was written, and the page renders it as JSON.
+ */
+export const settingHistoryResponseSchema = z.object({
+  settingKey: settingKeySchema,
+  current: z.object({ value: z.unknown(), version: z.number().int().min(0) }),
+  versions: z.array(
+    z.object({
+      settingKey: settingKeySchema,
+      version: z.number().int().min(1),
+      value: z.unknown(),
+      changeNote: z.string().nullable(),
+      changedByUserId: uuid.nullable(),
+      changedAt: instant,
+      supersededAt: instant.nullable(),
+    }),
+  ),
+});
+export type SettingHistoryResponse = z.infer<typeof settingHistoryResponseSchema>;
+
+/** `POST /admin/alerts/acknowledge`. Not a receipted command; admin-only and audited. */
+export const alertAcknowledgedResponseSchema = z.object({
+  acknowledged: z.literal(true),
+  alertKey: z.string().min(1),
+});

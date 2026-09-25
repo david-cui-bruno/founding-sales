@@ -1,7 +1,9 @@
 import { SENDING_STOP_LINE } from '@fss/contracts';
+import { readErrorSentence } from './readError.ts';
 import type {
   Enrollment,
   LinkedInCard,
+  SequenceReadSlice,
   SequenceState,
   SequenceStep,
   SequenceVersion,
@@ -62,7 +64,7 @@ export interface VersionPanel {
   readonly canPublish: boolean;
   readonly publishRefusal: PublishRefusal | null;
   readonly canRetire: boolean;
-  readonly stopConditions: readonly string[];
+  readonly stopConditions: readonly SequenceVersion['stopConditions'][number][];
 }
 
 export interface TemplatePanel {
@@ -102,8 +104,32 @@ export interface HoldReviewRow {
   readonly explanation: string;
 }
 
+/**
+ * A slice the window could not read (lane g78, D06): one grey line where the slice
+ * would be, and Retry.
+ *
+ * Until g78 a failed read was an empty list, so "this workspace has no sequences" and
+ * "Callie could not ask" looked the same — which is how a parse failure on every
+ * populated version went unseen. The slice stays empty (nothing stale is shown as
+ * current), and the line says which read failed and why.
+ */
+export interface SequenceUnreadLine {
+  readonly slice: SequenceReadSlice;
+  readonly line: string;
+}
+
+/** Each line's first sentence, fixed so a test and a person can both find it. */
+export const SEQUENCE_UNREAD: Readonly<Record<SequenceReadSlice, string>> = Object.freeze({
+  sequences: 'Callie could not read the sequences.',
+  versions: 'Callie could not read this sequence’s versions.',
+  templates: 'Callie could not read the templates.',
+  enrollments: 'Callie could not read the enrollments.',
+});
+
 export interface SequenceScreen {
   readonly banner: string | null;
+  /** The slices whose read failed, in the order the window draws them. */
+  readonly unread: readonly SequenceUnreadLine[];
   readonly sequences: readonly { readonly id: string; readonly name: string; readonly selected: boolean }[];
   readonly versions: readonly VersionPanel[];
   readonly templates: readonly TemplatePanel[];
@@ -278,6 +304,10 @@ export function sequenceScreen(state: SequenceState): SequenceScreen {
     banner: state.online
       ? null
       : 'Offline. Sequences are shown as they were; nothing can be published, approved or enrolled.',
+    unread: (['sequences', 'versions', 'templates', 'enrollments'] as const).flatMap(slice => {
+      const code = state.readErrors[slice];
+      return code === null ? [] : [{ slice, line: `${SEQUENCE_UNREAD[slice]} ${readErrorSentence(code)}` }];
+    }),
     sequences: state.sequences.map(sequence => ({
       id: sequence.id,
       name: sequence.name,
@@ -306,6 +336,7 @@ export const EMPTY_SEQUENCE_STATE: SequenceState = Object.freeze({
   versions: [],
   templates: [],
   heldEnrollments: [],
+  readErrors: { sequences: null, versions: null, templates: null, enrollments: null },
   linkedInCard: null,
   notice: null,
 });

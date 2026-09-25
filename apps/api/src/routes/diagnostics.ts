@@ -1,3 +1,4 @@
+import { publishedClientVersions } from '@fss/contracts';
 import { API_SCHEMA_RANGE, readAppliedSchemaVersion } from '@fss/domain/db';
 import { readDiagnostics } from '@fss/domain/dashboard';
 import { attestedReleaseBinding } from '@fss/domain/release';
@@ -39,7 +40,9 @@ export async function routeDiagnostics(request: ApiRequest, options: RoutingOpti
       appliedSchemaVersion,
       declaredRange: { minimum: API_SCHEMA_RANGE.minimum, maximum: API_SCHEMA_RANGE.maximum },
       expectedSystemGeneration: options.expectedSystemGeneration ?? null,
-      clientVersions: options.supportedClientVersions,
+      // The published range, not the policy: `/diagnostics` is parsed by every
+      // installed Mac with a strict `{ minimum, maximum }` (lane g78).
+      clientVersions: publishedClientVersions(options.supportedClientVersions),
       deploymentSendingEnabled: options.sendingEnabled,
       // Only the admin half. `effectiveSendingEnabled` ANDs them, and the DTO shows
       // all three so an operator can see which half is off. Since lane g71 the admin

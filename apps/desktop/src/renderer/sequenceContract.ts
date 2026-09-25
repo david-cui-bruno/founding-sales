@@ -1,5 +1,18 @@
 import { z } from 'zod';
-import { instant, uuid } from '@fss/contracts';
+import {
+  enrollmentDtoSchema,
+  instant,
+  sequenceSummaryDtoSchema,
+  sequenceVersionDtoSchema,
+  templateVersionDtoSchema,
+  uuid,
+  type EnrollmentDto,
+  type SequenceDelay as SequenceDelayDto,
+  type SequenceStepDto,
+  type SequenceSummaryDto,
+  type SequenceVersionDto,
+  type TemplateVersionDto,
+} from '@fss/contracts';
 
 /**
  * What the sequence editor window is given, and the nine things it may ask for
@@ -24,75 +37,23 @@ import { instant, uuid } from '@fss/contracts';
  *     an approver ought to be able to read the digest they are approving.
  */
 
-export const STEP_CHANNELS = ['email', 'call_task', 'linkedin_task'] as const;
-export type StepChannel = (typeof STEP_CHANNELS)[number];
-
-export const sequenceDelaySchema = z.union([
-  z.strictObject({ unit: z.literal('elapsed'), hours: z.number().int().min(0).max(8760) }),
-  z.strictObject({ unit: z.literal('business_days'), days: z.number().int().min(0).max(365) }),
-]);
-export type SequenceDelay = z.infer<typeof sequenceDelaySchema>;
-
-export const sequenceStepSchema = z.strictObject({
-  id: uuid,
-  ordinal: z.number().int().min(1),
-  channel: z.enum(STEP_CHANNELS),
-  delay: sequenceDelaySchema,
-  onNoAnswer: z.enum(['advance', 'retry_call']).nullable(),
-  templateVersionId: uuid.nullable(),
-  linkedInMessage: z.string().max(1200).nullable(),
-});
-export type SequenceStep = z.infer<typeof sequenceStepSchema>;
-
-export const sequenceVersionSchema = z.strictObject({
-  id: uuid,
-  sequenceId: uuid,
-  version: z.number().int().min(1),
-  state: z.enum(['draft', 'published', 'retired']),
-  stopConditions: z.array(z.string().min(1).max(40)),
-  publishedAt: instant.nullable(),
-  retiredAt: instant.nullable(),
-  steps: z.array(sequenceStepSchema),
-});
-export type SequenceVersion = z.infer<typeof sequenceVersionSchema>;
-
-export const sequenceSummarySchema = z.strictObject({
-  id: uuid,
-  name: z.string().min(1).max(200),
-  description: z.string().max(1000).nullable(),
-  archivedAt: instant.nullable(),
-});
-export type SequenceSummary = z.infer<typeof sequenceSummarySchema>;
-
-export const templateVersionSchema = z.strictObject({
-  id: uuid,
-  templateId: uuid,
-  version: z.number().int().min(1),
-  name: z.string().min(1).max(200),
-  subject: z.string().min(1).max(160),
-  body: z.string().min(1).max(4000),
-  contentHash: z.string().regex(/^[0-9a-f]{64}$/u),
-  footerSignOff: z.string().min(1).max(300),
-  requiredVariables: z.array(z.string().min(1).max(60)),
-  approvedAt: instant.nullable(),
-  retiredAt: instant.nullable(),
-  personalizationStrategy: z.string().max(40).nullable(),
-});
-export type TemplateVersion = z.infer<typeof templateVersionSchema>;
-
-/** One live enrollment on the Firm page's enrollment panel (11.2). */
-export const enrollmentSchema = z.strictObject({
-  id: uuid,
-  sequenceVersionId: uuid,
-  firmId: uuid,
-  contactId: uuid,
-  state: z.enum(['active', 'review_required', 'completed', 'stopped']),
-  startedAt: instant,
-  endedAt: instant.nullable(),
-  endReason: z.string().max(40).nullable(),
-  reviewUnionMilliseconds: z.number().int().min(0).nullable(),
-});
-export type Enrollment = z.infer<typeof enrollmentSchema>;
+/*
+ * The wire shapes are `@fss/contracts`' (`packages/contracts/src/sequences.ts`), and
+ * this file only names them for the window (lane g78). Until then it declared its own
+ * copies, strict, and they had drifted: the step schema forbade `sequenceVersionId`,
+ * which the API puts on every step, and the enrollment schema did not know four fields
+ * the API always sends. Every populated version and every populated enrollment list
+ * failed to parse, and the window showed empty lists as though there were none (D01,
+ * D02, D06). A copy here would be the same defect waiting for the next field.
+ */
+export { STEP_CHANNELS, type StepChannel } from '@fss/contracts';
+export type SequenceDelay = SequenceDelayDto;
+export type SequenceStep = SequenceStepDto;
+export type SequenceVersion = SequenceVersionDto;
+export type SequenceSummary = SequenceSummaryDto;
+export type TemplateVersion = TemplateVersionDto;
+/** One enrollment, as the Firm page's enrollment panel and the hold review read it (11.2). */
+export type Enrollment = EnrollmentDto;
 
 /**
  * The LinkedIn task card (11.3).
@@ -112,18 +73,38 @@ export const linkedInCardSchema = z.strictObject({
 });
 export type LinkedInCard = z.infer<typeof linkedInCardSchema>;
 
+/**
+ * Why one slice of the window could not be read, or null when it was (lane g78, D06).
+ *
+ * The refusal code, exactly as the bridge got it. A slice that failed is empty *and*
+ * says so: an empty list with no error is "there are none", an empty list with an
+ * error is "Callie could not ask", and the window renders the two differently, the way
+ * Administration's sending section does since lane g69.
+ */
+const readErrorSchema = z.string().min(1).max(80).nullable();
+
+export const SEQUENCE_READ_SLICES = ['sequences', 'versions', 'templates', 'enrollments'] as const;
+export type SequenceReadSlice = (typeof SEQUENCE_READ_SLICES)[number];
+
 export const sequenceStateSchema = z.strictObject({
   online: z.boolean(),
   mayMutate: z.boolean(),
   isAdmin: z.boolean(),
   /** Database time as of the last answer. Every deadline is compared against this. */
   asOf: instant.nullable(),
-  sequences: z.array(sequenceSummarySchema),
+  sequences: z.array(sequenceSummaryDtoSchema),
   selectedSequenceId: uuid.nullable(),
-  versions: z.array(sequenceVersionSchema),
-  templates: z.array(templateVersionSchema),
+  versions: z.array(sequenceVersionDtoSchema),
+  templates: z.array(templateVersionDtoSchema),
   /** Enrollments needing the long-hold review screen (4.3). */
-  heldEnrollments: z.array(enrollmentSchema),
+  heldEnrollments: z.array(enrollmentDtoSchema),
+  /** One per slice: the refusal code of the read that filled it, or null. */
+  readErrors: z.strictObject({
+    sequences: readErrorSchema,
+    versions: readErrorSchema,
+    templates: readErrorSchema,
+    enrollments: readErrorSchema,
+  }),
   linkedInCard: linkedInCardSchema.nullable(),
   notice: z.string().max(400).nullable(),
 });
@@ -135,7 +116,7 @@ export interface SequenceBridge {
   createSequence(input: { readonly name: string }): Promise<SequenceState>;
   saveDraft(input: {
     readonly sequenceVersionId: string;
-    readonly steps: readonly Omit<SequenceStep, 'id'>[];
+    readonly steps: readonly Omit<SequenceStep, 'id' | 'sequenceVersionId'>[];
   }): Promise<SequenceState>;
   publish(input: { readonly sequenceVersionId: string }): Promise<SequenceState>;
   retire(input: { readonly sequenceVersionId: string }): Promise<SequenceState>;

@@ -5,6 +5,7 @@ import { createTodayBridge, localToInstant, TODAY_IPC_CHANNELS } from '../src/ma
 import { CRM_IPC_CHANNELS, createCrmBridge, pipelineViewOf } from '../src/main/crmBridge.ts';
 import { createAuthedClient } from '../src/main/authedClient.ts';
 import type { ApiOutcome, HttpAnswer } from '../src/main/apiClient.ts';
+import { heldAnswer, snoozedAnswer } from './support/todayAnswers.ts';
 
 /**
  * The Today window and the two bridges behind it (specification 8.2, 9.2, 14.2).
@@ -244,7 +245,7 @@ describe('the Today bridge', () => {
   it('resolves a datetime-local snooze against the workspace zone before it leaves', async () => {
     const { api, calls } = scriptedApi({
       '/today/firm': { status: 200, body: firmPage() },
-      '/today/snooze': accepted({ outcome: 'snoozed' }),
+      '/today/snooze': accepted(snoozedAnswer()),
     });
     const bridge = createTodayBridge({
       api,
@@ -261,7 +262,7 @@ describe('the Today bridge', () => {
   it('reports the outcome the server chose, not the one the window asked for', async () => {
     const { api } = scriptedApi({
       '/today/firm': { status: 200, body: firmPage() },
-      '/today/snooze': accepted({ outcome: 'held' }),
+      '/today/snooze': accepted(heldAnswer()),
     });
     const bridge = createTodayBridge({
       api,
@@ -482,6 +483,72 @@ describe('the CRM bridge G3b was waiting for', () => {
       makePrimary: false,
     });
     expect(answer.notice).toBe('not_assigned');
+  });
+});
+
+describe('a refused merge reaches the conflict screen (lane g78, D05)', () => {
+  const SOURCE_ID = '88888888-8888-4888-8888-888888888888';
+  const conflicts = [
+    { field: 'website', source: 'https://dup.example.test', target: 'https://northwind.example.test' },
+    { field: 'locality', source: null, target: 'Providence' },
+  ];
+  const identity = (id: string, name: string) => ({
+    id,
+    name,
+    website: null,
+    locality: null,
+    regionCode: null,
+    status: 'active' as const,
+    assignedUserId: null,
+    stageKey: null,
+    opportunityStatus: null,
+    controlMode: null,
+    openedAt: null,
+    timeZone: null,
+    timeZoneUnresolvedReason: null,
+  });
+
+  for (const replayed of [false, true]) {
+    it(`opens the screen from a ${replayed ? 'replayed' : 'fresh'} refusal, with both firms named`, async () => {
+      const { api } = scriptedApi({
+        '/merges/firms': { status: 409, body: { status: 'refused', replayed, reason: 'merge_conflicts', conflicts } },
+        '/firms': { status: 200, body: { firms: [identity(FIRM_ID, 'Northwind Test Holdings'), identity(SOURCE_ID, 'Northwind (dup)')] } },
+      });
+      const bridge = createCrmBridge({ api, session: { state: async () => await Promise.resolve(sessionState()) } });
+      const answer = await bridge.resolveMerge({ sourceFirmId: SOURCE_ID, targetFirmId: FIRM_ID, resolutions: {} });
+      expect(answer.notice).toBe('merge_conflicts');
+      expect(answer.screen).toBe('merge');
+      expect(answer.merge).toEqual({
+        sourceFirmId: SOURCE_ID,
+        sourceName: 'Northwind (dup)',
+        targetFirmId: FIRM_ID,
+        targetName: 'Northwind Test Holdings',
+        conflicts,
+      });
+    });
+  }
+
+  it('stays where it was for a refusal that carries no conflicts', async () => {
+    const { api } = scriptedApi({
+      '/merges/firms': { status: 409, body: { status: 'refused', replayed: false, reason: 'merge_same_record' } },
+    });
+    const bridge = createCrmBridge({ api, session: { state: async () => await Promise.resolve(sessionState()) } });
+    const answer = await bridge.resolveMerge({ sourceFirmId: FIRM_ID, targetFirmId: FIRM_ID, resolutions: {} });
+    expect(answer.notice).toBe('merge_same_record');
+    expect(answer.merge).toBeNull();
+    expect(answer.screen).not.toBe('merge');
+  });
+
+  it('keeps the refusal’s body on the transport’s answer, and only there', async () => {
+    const body = { status: 'refused', replayed: true, reason: 'merge_conflicts', conflicts };
+    const api = createAuthedClient({
+      baseUrl: 'https://api.example.test/',
+      clientVersion: '1.4.0',
+      accessToken: async () => await Promise.resolve('token'),
+      send: async () => await Promise.resolve({ status: 409, body }),
+    });
+    const outcome = await api.command('/merges/firms', {}, value => value);
+    expect(outcome).toEqual({ ok: false, reason: 'merge_conflicts', offline: false, refusal: body });
   });
 });
 
