@@ -5,6 +5,7 @@ import { repositoryContext, workspaceScope, type RepositoryContext } from '../..
 import { databaseNow, listApplicableHolds } from '../../policy/index.ts';
 import { completeCallback, createCallback } from '../../dial/index.ts';
 import { reassignFirm } from '../../crm/index.ts';
+import { localParts } from '../../src/rules/localClock.ts';
 import {
   TODAY_ALGORITHM_VERSION,
   buildTodaySnapshot,
@@ -85,17 +86,25 @@ async function buildBoth(): Promise<void> {
   }
 }
 
-/** A confirmed callback, created the way section 9.1 creates one. */
+/**
+ * A confirmed callback, created the way section 9.1 creates one.
+ *
+ * The local fields are the due instant's own wall clock in the source zone. Until lane
+ * g79 this fixture sent 14:00 beside whatever instant the test wanted, and the server
+ * stored both without noticing they disagreed — audit item C18. `createCallback` now
+ * resolves the local fields itself and refuses a `dueAt` that is not their answer.
+ */
 async function seedCallback(
   context: RepositoryContext,
   input: { readonly firmId: string; readonly contactId?: string; readonly dueAt: string },
 ): Promise<string> {
+  const wall = localParts(input.dueAt, 'America/New_York');
   const created = await createCallback(context, {
     firmId: input.firmId,
     ...(input.contactId === undefined ? {} : { contactId: input.contactId }),
     assignedUserId: seeded.alpha.salesperson.userId,
-    localDate: businessDate,
-    localTime: '14:00',
+    localDate: wall.date,
+    localTime: `${String(wall.hour).padStart(2, '0')}:${String(wall.minute).padStart(2, '0')}`,
     sourceTimeZone: 'America/New_York',
     dueAt: input.dueAt,
   });
@@ -350,6 +359,13 @@ describe('snooze (8.2)', () => {
     ).toEqual({ ok: false, reason: 'snooze_return_not_future' });
   });
 
+  it('a manual task still needs its return instant', async () => {
+    expect(await snoozeTodayItem(salesperson(), { itemId: manualItemId, reason: 'Waiting on their board' })).toEqual({
+      ok: false,
+      reason: 'snooze_return_required',
+    });
+  });
+
   it('snoozes a manual task and takes it off the card until it returns', async () => {
     const outcome = await snoozeTodayItem(salesperson(), {
       itemId: manualItemId,
@@ -387,7 +403,18 @@ describe('snooze (8.2)', () => {
       [seeded.alpha.workspaceId],
     );
     expect(rows[0]?.count).toBe('0');
+
+    // Lane g79 (C22): a pause, not a hidden hold. The task stays on the card, marked
+    // with the hold its Resume control releases, and pressing Pause again answers with
+    // the same hold rather than stacking a second one.
+    const items = await listTodayItems(salesperson(), { businessDate, firmId: crm.alpha.firmId });
+    expect(items.find(item => item.id === automatedItemId)?.status).toBe('open');
+    const page = await readTodayFirm(salesperson(), { firmId: crm.alpha.firmId, now });
+    expect(page?.tasks.find(task => task.itemId === automatedItemId)?.pauseHoldId).toBe(held.holdId);
+    const again = await snoozeTodayItem(salesperson(), { itemId: automatedItemId, reason: 'Still closed' });
+    expect(again).toMatchObject({ ok: true, value: { outcome: 'held', holdId: held.holdId } });
   });
+
 
   it('survives a rebuild: a snoozed task does not come back before its return instant', async () => {
     await buildBoth();

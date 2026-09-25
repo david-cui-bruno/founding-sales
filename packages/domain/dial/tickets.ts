@@ -20,9 +20,10 @@ import { authorizeDial, type AuthorizeDialInput, type DialEvidence } from './aut
  *    the same command is refused by the database even if it reached this far — by a
  *    different device, say, or after a receipt was archived.
  *
- * Consumption is a single conditional `UPDATE`. Two Macs racing the same ticket:
- * one statement affects one row and the other affects none, and the second is told
- * `already_consumed`. There is no read-then-write and therefore no window.
+ * Consumption locks the ticket row, re-runs `authorizeDial` (lane g79, audit S10),
+ * then marks it consumed with a conditional `UPDATE`. Two Macs racing the same ticket
+ * serialize on the row lock: the second reads it consumed and is told
+ * `already_consumed`. The conditional update stays as the second guard.
  */
 
 export type DialResult<T> =
@@ -166,22 +167,79 @@ export interface ConsumedTicket {
   readonly telUri: string;
 }
 
+interface ConsumableTicketRow {
+  readonly id: string;
+  readonly device_id: string;
+  readonly firm_id: string;
+  readonly contact_id: string | null;
+  readonly phone_route_id: string;
+  readonly route_version: number;
+  readonly calling_identity_id: string;
+  readonly consumed_at: Date | null;
+  readonly expired: boolean;
+  readonly [column: string]: unknown;
+}
+
 /**
  * Consume a ticket, immediately before the local handoff (9.2).
  *
  * "A ticket is consumed immediately before local handoff. Failure to open the local
  * application permits requesting a new authorization but never reusing the ticket."
- * So there is no un-consume and no retry: the only refusals are unknown, expired,
- * the wrong device, and already consumed.
+ * So there is no un-consume and no retry.
  *
  * The device is checked because the ticket recorded one. A ticket minted for one Mac
  * and consumed by another is either a bug or a stolen session, and in both cases the
  * answer is no.
+ *
+ * ## The decision is taken again here (lane g79, audit item S10)
+ *
+ * G4 checked the workspace, the device, the expiry and prior consumption, and nothing
+ * else — so a suppression, a retired or replaced route, a disabled calling identity,
+ * a revoked posture, a pause or a restore hold that arrived in the ticket's sixty
+ * seconds was not seen, and the `tel:` URI was issued anyway. 9.2 makes
+ * `authorizeDial` "the only FSS source of an allow/refuse decision", and the last
+ * moment before the URI leaves the server is the moment that decision has to be true.
+ * So consumption locks the ticket, re-runs `authorizeDial` against exactly what the
+ * ticket recorded — the firm, the contact, the route *at the recorded version*, the
+ * calling identity — at database time, and issues the URI only on an allow. A refusal
+ * answers with the same code the authorization would have, and writes nothing: the
+ * ticket stays unconsumed, expires within the minute, and every further attempt to
+ * consume it is decided again.
+ *
+ * `at` is database time unless a test supplies the instant, exactly as
+ * `authorizeDialCommand` takes it (docs/decisions/g4-database-time-is-a-parameter.md).
  */
 export async function consumeDialTicket(
   context: RepositoryContext,
-  input: { readonly ticketId: string; readonly deviceId: string },
+  input: { readonly ticketId: string; readonly deviceId: string; readonly at?: string | undefined },
 ): Promise<DialResult<ConsumedTicket>> {
+  // Locked, so two Macs racing the same ticket serialize here: the second waits,
+  // then reads it consumed.
+  const { rows: found } = await context.db.query<ConsumableTicketRow>(
+    `SELECT id, device_id, firm_id, contact_id, phone_route_id, route_version, calling_identity_id,
+            consumed_at, (expires_at <= now()) AS expired
+       FROM dial_tickets
+      WHERE workspace_id = $1 AND id = $2
+      FOR UPDATE`,
+    [context.scope.workspaceId, input.ticketId],
+  );
+  const ticket = found[0];
+  if (ticket === undefined) return refuse('ticket_unknown');
+  if (ticket.device_id !== input.deviceId) return refuse('ticket_wrong_device');
+  if (ticket.consumed_at !== null) return refuse('already_consumed');
+  if (ticket.expired) return refuse('ticket_expired');
+
+  const at = input.at ?? (await databaseNow(context));
+  const decision = await authorizeDial(context, {
+    firmId: ticket.firm_id,
+    ...(ticket.contact_id === null ? {} : { contactId: ticket.contact_id }),
+    routeId: ticket.phone_route_id,
+    routeVersion: Number(ticket.route_version),
+    callingIdentityId: ticket.calling_identity_id,
+    at,
+  });
+  if (!decision.allowed) return refuse(decision.reason);
+
   const { rows } = await context.db.query<{ id: string; e164: string; consumed_at: Date }>(
     `UPDATE dial_tickets
         SET consumed_at = now()
@@ -191,24 +249,15 @@ export async function consumeDialTicket(
     [context.scope.workspaceId, input.ticketId, input.deviceId],
   );
   const row = rows[0];
-  if (row !== undefined) {
-    return accept({
-      ticketId: row.id,
-      e164: row.e164,
-      consumedAt: row.consumed_at.toISOString(),
-      telUri: `tel:${row.e164}`,
-    });
-  }
-
-  const state = await context.db.query<{ device_id: string; consumed_at: Date | null; expired: boolean }>(
-    'SELECT device_id, consumed_at, (expires_at <= now()) AS expired FROM dial_tickets WHERE workspace_id = $1 AND id = $2',
-    [context.scope.workspaceId, input.ticketId],
-  );
-  const ticket = state.rows[0];
-  if (ticket === undefined) return refuse('ticket_unknown');
-  if (ticket.device_id !== input.deviceId) return refuse('ticket_wrong_device');
-  if (ticket.consumed_at !== null) return refuse('already_consumed');
-  return refuse('ticket_expired');
+  if (row === undefined) return refuse('ticket_expired');
+  // The number dialed is the route's number now, which the version check has just
+  // proved is the number the ticket recorded.
+  return accept({
+    ticketId: row.id,
+    e164: row.e164,
+    consumedAt: row.consumed_at.toISOString(),
+    telUri: `tel:${row.e164}`,
+  });
 }
 
 export interface DialTicketState {

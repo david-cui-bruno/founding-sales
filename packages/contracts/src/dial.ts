@@ -356,6 +356,28 @@ export const consumeDialTicketCommandSchema = z.strictObject({
   ticketId: uuid,
 });
 
+/**
+ * Log a call (specification 9.1, Appendix A "Log call outcome"; lane g79).
+ *
+ * Four changes from G4's shape, all additive or relaxing, so a desktop that sends the
+ * old body is still understood:
+ *
+ *  * `occurredAt` is optional. Absent means "just now" and the server records its own
+ *    clock; a Mac whose clock ran a few seconds fast used to fail the database's
+ *    `recorded_at >= occurred_at` (audit item C15). Present is an explicitly entered
+ *    historical time, and the server refuses one further in the future than
+ *    `CALL_OCCURRED_AT_TOLERANCE_SECONDS` and reads one inside it as now.
+ *  * `itemId` names the Today task the call was placed for. The server resolves it to
+ *    the step execution or the callback behind it and applies the outcome to that —
+ *    the sequence step's configured successor or retry, read from the frozen step, or
+ *    the callback's completion (audit items C04, C17).
+ *  * `callback.dueAt` is optional. The server resolves the local date, time and zone
+ *    through the one calendar clock (`callbackInstant`) and refuses to commit a
+ *    callback whose supplied `dueAt` disagrees (audit item C18).
+ *  * `retryBehaviour` is still accepted, so an old body parses, and is ignored: what a
+ *    no-answer does comes from the sequence step the call belongs to and never from
+ *    the client (audit item C04).
+ */
 export const logCallOutcomeCommandSchema = z.strictObject({
   ...commandEnvelope,
   firmId: uuid,
@@ -363,22 +385,125 @@ export const logCallOutcomeCommandSchema = z.strictObject({
   routeId: uuid.optional(),
   ticketId: uuid.optional(),
   callingIdentityId: uuid.optional(),
+  /** The Today task this call was placed for, when it was placed from one. */
+  itemId: uuid.optional(),
   outcome: callOutcomeSchema,
-  occurredAt: instant,
+  /** Omit for "just now": the server's clock is used. Present only for an entered past time. */
+  occurredAt: instant.optional(),
   note: z.string().trim().min(1).max(2000).optional(),
-  /** `no_answer` and `busy` follow the step's configured behaviour (9.1). */
+  /** Accepted for old clients and ignored. The step's frozen configuration decides (9.1). */
   retryBehaviour: callRetryBehaviourSchema.optional(),
-  /** Required for `callback_requested`: the instant the salesperson confirmed. */
+  /**
+   * For `callback_requested`: the wall clock the salesperson confirmed. Without it the
+   * call is still recorded and a callback that needs a time goes on Today (C13).
+   */
   callback: z
     .strictObject({
       localDate: z.iso.date(),
       localTime: z.string().regex(/^([01][0-9]|2[0-3]):[0-5][0-9]$/u).optional(),
-      dueAt: instant,
+      /** What the client resolved and showed. Checked against the server's own resolution. */
+      dueAt: instant.optional(),
       sourceTimeZone: z.string().min(1).max(64),
     })
     .optional(),
   /** `do_not_call` suppresses the firm only when the request covered all Callie contact (9.1). */
   doNotCallCoversAllContact: z.boolean().optional(),
+});
+
+/**
+ * How far ahead of the server's clock an entered `occurredAt` may be and still be read
+ * as now. Two minutes covers an ordinary unsynchronised Mac; a time beyond it is a
+ * time that has not happened and is refused rather than silently moved.
+ */
+export const CALL_OCCURRED_AT_TOLERANCE_SECONDS = 120;
+
+/**
+ * What a recorded call still needs from a person (lane g79, audit items C13, C14).
+ *
+ * "Call logging always records what occurred ... it never refuses history." So an
+ * outcome whose consequence cannot be applied is recorded anyway, and what could not
+ * be done is said explicitly here rather than by refusing the call:
+ *
+ *  * `callback_time_needed` — a callback was asked for without a confirmed instant, or
+ *    with one the server resolved differently. A task "Callback — needs a time" is on
+ *    Today until a time is set or the callback is made.
+ *  * `route_not_named` — the outcome acts on the number (wrong number, do not call)
+ *    and no number was named, so nothing was retired or suppressed by number.
+ *  * `effects_not_applied` — applying the outcome was refused part-way. Every effect
+ *    was rolled back to a savepoint; the call itself is recorded.
+ */
+export const CALL_FOLLOW_UP_KINDS = ['callback_time_needed', 'route_not_named', 'effects_not_applied'] as const;
+export type CallFollowUpKind = (typeof CALL_FOLLOW_UP_KINDS)[number];
+
+export const callFollowUpSchema = z.object({
+  kind: z.enum(CALL_FOLLOW_UP_KINDS),
+  /** A stable code: `no_instant`, `instant_mismatch`, `instant_invalid`, or the refusal. */
+  reason: z.string().max(80),
+});
+export type CallFollowUp = z.infer<typeof callFollowUpSchema>;
+
+/**
+ * What the sequence step behind the call became (9.1).
+ *
+ *  * `completed` — the step is done and its configured successor exists (or the plan
+ *    ran out).
+ *  * `completed_and_stopped` — an engaged outcome: the step is done and every live
+ *    enrollment at the firm stopped, so no successor exists (Appendix G 26).
+ *  * `retry_scheduled` — the step's frozen `retry_call`: the same execution, due again.
+ *  * `not_completed` — wrong number or a failure to place the call: the task stays.
+ *  * `not_open` — the step had already finished; the call is history only.
+ */
+export const CALL_STEP_APPLICATIONS = [
+  'completed',
+  'completed_and_stopped',
+  'retry_scheduled',
+  'not_completed',
+  'not_open',
+] as const;
+export type CallStepApplication = (typeof CALL_STEP_APPLICATIONS)[number];
+
+/**
+ * The accepted answer to `POST /calls/log`. A plain object rather than a strict one, so
+ * a later field does not make an older Mac call a recorded call unreadable.
+ */
+export const loggedCallResultSchema = z.object({
+  callLogId: uuid,
+  outcome: callOutcomeSchema,
+  stepEffect: callStepEffectSchema,
+  occurredAt: instant,
+  /** Whether the call switched the opportunity to manual control (7.3). */
+  setManual: z.boolean(),
+  /** A close the salesperson must confirm, never applied by the call itself (9.1). */
+  suggestedStageKey: z.literal('lost').nullable(),
+  suppressionEventIds: z.array(uuid),
+  /** The number a wrong-number outcome retired. */
+  retiredRouteId: uuid.nullable(),
+  /** The callback this call created. */
+  callbackId: uuid.nullable(),
+  stepExecutionId: uuid.nullable(),
+  stepApplication: z.enum(CALL_STEP_APPLICATIONS).nullable(),
+  /** The step the application created: the successor, or null for a retry or none. */
+  successorExecutionId: uuid.nullable(),
+  /** The callback this call fulfilled (Appendix A "Callback confirm/complete"). */
+  completedCallbackId: uuid.nullable(),
+  followUps: z.array(callFollowUpSchema),
+});
+export type LoggedCallResult = z.infer<typeof loggedCallResultSchema>;
+
+/**
+ * Give a recorded "call me back" its time, later (lane g79, audit item C13).
+ *
+ * The call that asked for the callback is already history; this commits the instant
+ * the salesperson now confirms, beside that call, exactly as the outcome would have.
+ * `dueAt` is optional and checked against the server's resolution like the outcome's.
+ */
+export const scheduleCallbackCommandSchema = z.strictObject({
+  ...commandEnvelope,
+  callLogId: uuid,
+  localDate: z.iso.date(),
+  localTime: z.string().regex(/^([01][0-9]|2[0-3]):[0-5][0-9]$/u).optional(),
+  sourceTimeZone: z.string().min(1).max(64),
+  dueAt: instant.optional(),
 });
 
 export const recordSuppressionCommandSchema = z.strictObject({

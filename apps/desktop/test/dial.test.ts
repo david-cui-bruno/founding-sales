@@ -9,12 +9,15 @@ import {
 import {
   OUTCOME_LABELS,
   OUTCOME_ORDER,
+  callbackNeedsTime,
   emptyOutcomeDraft,
   logCallCommand,
   outcomeProblem,
   outcomeSuppresses,
+  resolvedCallbackInstant,
   type OutcomeDraft,
 } from '../src/renderer/outcomeForm.ts';
+import { localInstant } from '../../../packages/domain/src/rules/localClock.ts';
 
 /**
  * The Mac's half of 9.2 and 9.1.
@@ -75,6 +78,13 @@ function workingDriver(overrides: Partial<PhoneLaunchDriver> = {}): { driver: Ph
   return { driver, opened };
 }
 
+const HANDOFF_TICKET = {
+  ticketId: TICKET.ticketId,
+  callingIdentityId: TICKET.callingIdentityId,
+  routeId: TICKET.routeId,
+  contactId: null,
+} as const;
+
 const dialInput = {
   commandId: 'cmd-authorize',
   consumeCommandId: 'cmd-consume',
@@ -93,7 +103,8 @@ describe('the tel: handoff', () => {
     expect(await handoff.checkSetup()).toEqual({ ready: true });
     const outcome = await handoff.dial(dialInput);
 
-    expect(outcome).toEqual({ status: 'opened', e164: '+14015550123' });
+    // Lane g79 (C16): what authorized the call comes out of the handoff with it.
+    expect(outcome).toEqual({ status: 'opened', e164: '+14015550123', ticket: HANDOFF_TICKET });
     expect(opened).toEqual(['tel:+14015550123']);
     expect(calls).toEqual({ authorize: 1, consume: 1 });
   });
@@ -219,7 +230,7 @@ describe('the tel: handoff', () => {
     const { api } = workingApi();
     const handoff = createDialHandoff({ driver: rejecting.driver, api });
     await handoff.checkSetup();
-    expect(await handoff.dial(dialInput)).toEqual({ status: 'opened_unknown' });
+    expect(await handoff.dial(dialInput)).toEqual({ status: 'opened_unknown', ticket: HANDOFF_TICKET });
 
     const throwing = workingDriver({
       openTelUri: () => {
@@ -228,7 +239,7 @@ describe('the tel: handoff', () => {
     });
     const second = createDialHandoff({ driver: throwing.driver, api: workingApi().api });
     await second.checkSetup();
-    expect(await second.dial(dialInput)).toEqual({ status: 'opened_unknown' });
+    expect(await second.dial(dialInput)).toEqual({ status: 'opened_unknown', ticket: HANDOFF_TICKET });
   });
 
   it('states the limitation 9.2 asks the product to state', () => {
@@ -254,8 +265,21 @@ describe('the outcome form', () => {
     expect(outcomeProblem(emptyOutcomeDraft())).toBe('outcome_missing');
   });
 
-  it('refuses a callback without the day, the zone or the confirmed instant', () => {
-    expect(outcomeProblem(draftWith({ outcome: 'callback_requested' }))).toBe('callback_date_missing');
+  it('records a callback request with no day as one that needs a time (lane g79, C13)', () => {
+    const noDay = draftWith({ outcome: 'callback_requested' });
+    expect(outcomeProblem(noDay)).toBeNull();
+    expect(callbackNeedsTime(noDay)).toBe(true);
+    const built = logCallCommand({ commandId: 'cmd-0', clientVersion: '1.4.0', firmId: TICKET.firmId, draft: noDay });
+    if (!('command' in built)) throw new Error('expected a command');
+    // No callback travels, and no `occurredAt`: the server records it now (C15).
+    expect(built.command.callback).toBeUndefined();
+    expect(built.command.occurredAt).toBeUndefined();
+  });
+
+  it('refuses a time with no day, a day that is not one, and a zone it cannot place', () => {
+    expect(outcomeProblem(draftWith({ outcome: 'callback_requested', callbackLocalTime: '14:00' }))).toBe(
+      'callback_date_missing',
+    );
     expect(outcomeProblem(draftWith({ outcome: 'callback_requested', callbackLocalDate: 'next tuesday' }))).toBe(
       'callback_date_invalid',
     );
@@ -275,10 +299,28 @@ describe('the outcome form', () => {
           outcome: 'callback_requested',
           callbackLocalDate: '2026-09-22',
           callbackLocalTime: '14:00',
-          callbackTimeZone: 'America/New_York',
+          callbackTimeZone: 'Mars/Olympus',
         }),
       ),
     ).toBe('callback_instant_unconfirmed');
+  });
+
+  it('resolves a DST gap exactly as the domain clock does (lane g79, C18)', () => {
+    // 02:30 on 8 March 2026 does not exist in New York. The domain resolves it forward
+    // to 03:30 EDT (docs/decisions/g0-dst-gap-resolution.md); the Mac used to say 01:30.
+    const gap = draftWith({
+      outcome: 'callback_requested',
+      callbackLocalDate: '2026-03-08',
+      callbackLocalTime: '02:30',
+      callbackTimeZone: 'America/New_York',
+    });
+    const domain = localInstant('2026-03-08', { hour: 2, minute: 30 }, 'America/New_York');
+    expect(resolvedCallbackInstant(gap)).toBe(domain);
+    expect(resolvedCallbackInstant(gap)).toBe('2026-03-08T07:30:00.000Z');
+    // A day with no hour resolves at 09:00 local, the one constant both sides read.
+    expect(
+      resolvedCallbackInstant(draftWith({ ...gap, callbackLocalDate: '2026-09-22', callbackLocalTime: '' })),
+    ).toBe('2026-09-22T13:00:00.000Z');
   });
 
   it('accepts a confirmed callback and carries all four of Appendix D pieces', () => {
@@ -287,7 +329,6 @@ describe('the outcome form', () => {
       callbackLocalDate: '2026-09-22',
       callbackLocalTime: '14:00',
       callbackTimeZone: 'America/New_York',
-      callbackDueAt: '2026-09-22T18:00:00.000Z',
     });
     expect(outcomeProblem(draft)).toBeNull();
 
@@ -295,7 +336,7 @@ describe('the outcome form', () => {
       commandId: 'cmd-1',
       clientVersion: '1.4.0',
       firmId: TICKET.firmId,
-      occurredAt: '2026-09-16T14:05:00.000Z',
+      itemId: '55555555-5555-4555-8555-555555555555',
       draft,
     });
     expect('command' in built).toBe(true);
@@ -306,6 +347,7 @@ describe('the outcome form', () => {
       dueAt: '2026-09-22T18:00:00.000Z',
       sourceTimeZone: 'America/New_York',
     });
+    expect(built.command.itemId).toBe('55555555-5555-4555-8555-555555555555');
   });
 
   it('says how wide a do-not-call suppression will be, and sends the same answer', () => {

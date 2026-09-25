@@ -1,6 +1,12 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { cancelUnproducedItems, upsertTodayItem, workspaceBusinessTimeZone } from './snapshots.ts';
-import { TODAY_ALGORITHM_VERSION, type TodayItemKind, type TodaySourceKind } from './types.ts';
+import {
+  CALLBACK_TIME_NEEDED_KEY_PREFIX,
+  TODAY_ALGORITHM_VERSION,
+  callbackTimeNeededItemKey,
+  type TodayItemKind,
+  type TodaySourceKind,
+} from './types.ts';
 
 /**
  * Building one workspace business date's list (specification 8.2, Appendix C).
@@ -62,6 +68,14 @@ export interface TodaySource {
  * Every open callback due on or before the date being built. An overdue callback
  * moves on to today's list rather than staying on the day it was promised for, which
  * is the same rule `today_callback_changed` applies when one is confirmed.
+ *
+ * And every recorded "call me back" that has no callback yet (lane g79, audit C13):
+ * a `callback_requested` call with no `callbacks` row naming it, whose needs-a-time
+ * task nobody has finished. `logCallOutcome` promotes the task the moment the call is
+ * recorded; this carries it to each following day until a time is set (which creates
+ * the callback) or a call is recorded against it (which finishes the task). It is a
+ * `callback` source kind with no source id, because there is no callback row yet and
+ * the key — `callback-time:<call log id>` — is its identity.
  */
 export function callbackSource(): TodaySource {
   return {
@@ -84,15 +98,47 @@ export function callbackSource(): TodaySource {
           ORDER BY c.due_at, c.id`,
         [context.scope.workspaceId, input.businessTimeZone, input.businessDate],
       );
-      return rows.map(row => ({
-        firmId: row.firm_id,
-        ...(row.contact_id === null ? {} : { contactId: row.contact_id }),
-        itemKey: `callback:${row.id}`,
-        kind: 'callback' as const,
-        dueAt: row.due_at.toISOString(),
-        sourceKind: 'callback' as const,
-        sourceId: row.id,
-      }));
+      const { rows: needingTime } = await context.db.query<{
+        id: string;
+        firm_id: string;
+        contact_id: string | null;
+        recorded_at: Date;
+      }>(
+        `SELECT l.id, l.firm_id, l.contact_id, l.recorded_at
+           FROM call_logs l
+           JOIN firms f ON f.workspace_id = l.workspace_id AND f.id = l.firm_id
+          WHERE l.workspace_id = $1
+            AND l.outcome = 'callback_requested'
+            AND f.status = 'active'
+            AND (l.recorded_at AT TIME ZONE $2)::date <= $3::date
+            AND NOT EXISTS (
+              SELECT 1 FROM callbacks c WHERE c.workspace_id = l.workspace_id AND c.call_log_id = l.id)
+            AND NOT EXISTS (
+              SELECT 1 FROM today_items t
+               WHERE t.workspace_id = l.workspace_id AND t.firm_id = l.firm_id
+                 AND t.item_key = $4 || l.id::text AND t.status = 'completed')
+          ORDER BY l.recorded_at, l.id`,
+        [context.scope.workspaceId, input.businessTimeZone, input.businessDate, CALLBACK_TIME_NEEDED_KEY_PREFIX],
+      );
+      return [
+        ...rows.map(row => ({
+          firmId: row.firm_id,
+          ...(row.contact_id === null ? {} : { contactId: row.contact_id }),
+          itemKey: `callback:${row.id}`,
+          kind: 'callback' as const,
+          dueAt: row.due_at.toISOString(),
+          sourceKind: 'callback' as const,
+          sourceId: row.id,
+        })),
+        ...needingTime.map(row => ({
+          firmId: row.firm_id,
+          ...(row.contact_id === null ? {} : { contactId: row.contact_id }),
+          itemKey: callbackTimeNeededItemKey(row.id),
+          kind: 'callback' as const,
+          dueAt: row.recorded_at.toISOString(),
+          sourceKind: 'callback' as const,
+        })),
+      ];
     },
   };
 }

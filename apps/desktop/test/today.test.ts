@@ -134,9 +134,47 @@ describe('the Today view model', () => {
     expect(buildTodayView(state()).cards.map(entry => entry.card.firmId)).toEqual([FIRM_ID, OTHER_FIRM_ID]);
   });
 
-  it('offers a hold for an automated send and a snooze for a manual task', () => {
+  it('offers a pause for an automated send and a snooze for a manual task', () => {
     const view = buildTodayView(state({ expanded: firmPage() }));
-    expect(view.tasks.map(task => task.delayLabel)).toEqual(['Snooze', 'Hold this send']);
+    // Lane g79 (C22): "Pause", because it lasts until Resume, not until a time.
+    expect(view.tasks.map(task => task.delayLabel)).toEqual(['Snooze', 'Pause sending']);
+    expect(view.tasks.map(task => task.paused)).toEqual([false, false]);
+  });
+
+  it('shows a paused send as paused, and a callback that needs a time as one (lane g79)', () => {
+    const page = firmPage();
+    const [call, email] = page.tasks;
+    if (call === undefined || email === undefined) throw new Error('fixture');
+    const view = buildTodayView(
+      state({
+        expanded: firmPage({
+          tasks: [
+            { ...call, kind: 'callback', lane: 'callback', callLogId: '77777777-7777-4777-8777-777777777777' },
+            { ...email, pauseHoldId: '88888888-8888-4888-8888-888888888888' },
+          ],
+        }),
+      }),
+    );
+    expect(view.tasks.map(task => task.label)).toEqual(['Callback — needs a time', 'Email due']);
+    expect(view.tasks.map(task => task.needsTime)).toEqual([true, false]);
+    expect(view.tasks.map(task => task.paused)).toEqual([false, true]);
+    // The outcome form defaults to the one task a call can be recorded against.
+    expect(view.outcomeItemId).toBe(ITEM_ID);
+  });
+
+  it('defaults the outcome to the task of the contact just called', () => {
+    const contact = '99999999-9999-4999-8999-999999999999';
+    const page = firmPage();
+    const [call] = page.tasks;
+    if (call === undefined) throw new Error('fixture');
+    const second = { ...call, itemId: '12121212-1212-4121-8121-121212121212', contactId: contact };
+    const view = buildTodayView(
+      state({
+        expanded: firmPage({ tasks: [call, second] }),
+        lastCall: { firmId: FIRM_ID, routeId: ROUTE_ID, contactId: contact, e164: '+14015550187' },
+      }),
+    );
+    expect(view.outcomeItemId).toBe(second.itemId);
   });
 
   it('offers only a usable route, and none at all without a verified identity', () => {
@@ -186,6 +224,13 @@ describe('a local wall-clock instant becomes UTC in the main process', () => {
   it('refuses anything that is not a wall clock', () => {
     expect(localToInstant('tomorrow', 'America/New_York')).toBeNull();
     expect(localToInstant('2026-09-21T09:00', 'Mars/Olympus')).toBeNull();
+  });
+
+  it('resolves a DST gap forward, as the domain does, never to the hour before (lane g79, C18)', () => {
+    // The old two-step correction put 02:30 on 8 March 2026 at 01:30 EST.
+    expect(localToInstant('2026-03-08T02:30', 'America/New_York')).toBe('2026-03-08T07:30:00.000Z');
+    // And a fold is its first reading, still on daylight time.
+    expect(localToInstant('2026-11-01T01:30', 'America/New_York')).toBe('2026-11-01T05:30:00.000Z');
   });
 });
 
@@ -320,6 +365,205 @@ describe('the Today bridge', () => {
     expect(seen[0]?.commandId).not.toBe(seen[0]?.consumeCommandId);
   });
 
+  it('asks for the second card version, which carries each task’s step, callback and pause (lane g79)', async () => {
+    const { api, calls } = scriptedApi({ '/today/firm': { status: 200, body: firmPage() } });
+    const bridge = createTodayBridge({
+      api,
+      handoff: { checkSetup: async () => await Promise.resolve({ ready: true }), dial: async () => await Promise.resolve({ status: 'opened', e164: '+14015550187' }) },
+      session: { state: async () => await Promise.resolve(sessionState()), refreshToday: async () => await Promise.resolve(null) },
+    });
+    await bridge.expand({ firmId: FIRM_ID });
+    expect(calls.find(call => call.path === '/today/firm')?.body).toEqual({ firmId: FIRM_ID, cardVersion: 2 });
+  });
+
+  it('records the outcome against its task and the ticket the call used, on the server’s clock (C04, C15, C16)', async () => {
+    const ticket = {
+      ticketId: '99999999-9999-4999-8999-999999999999',
+      callingIdentityId: IDENTITY_ID,
+      routeId: ROUTE_ID,
+      contactId: '88888888-8888-4888-8888-888888888888',
+    };
+    const { api, calls } = scriptedApi({
+      '/today/firm': { status: 200, body: firmPage() },
+      '/calls/log': accepted({
+        callLogId: 'abababab-abab-4bab-8bab-abababababab',
+        outcome: 'voicemail_left',
+        stepEffect: 'complete_and_advance',
+        occurredAt: '2026-09-21T13:05:00.000Z',
+        setManual: false,
+        suggestedStageKey: null,
+        suppressionEventIds: [],
+        retiredRouteId: null,
+        successorExecutionId: null,
+        stepExecutionId: 'cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd',
+        stepApplication: 'completed',
+        callbackId: null,
+        completedCallbackId: null,
+        followUps: [],
+      }),
+    });
+    const bridge = createTodayBridge({
+      api,
+      handoff: {
+        checkSetup: async () => await Promise.resolve({ ready: true }),
+        dial: async () => await Promise.resolve({ status: 'opened' as const, e164: '+14015550187', ticket }),
+      },
+      session: { state: async () => await Promise.resolve(sessionState()), refreshToday: async () => await Promise.resolve(null) },
+    });
+    await bridge.expand({ firmId: FIRM_ID });
+    const dialled = await bridge.dial({ firmId: FIRM_ID, contactId: null, routeId: ROUTE_ID, routeVersion: 3 });
+    // The window is told which number, never the ticket.
+    expect(dialled.lastCall).toEqual({ firmId: FIRM_ID, routeId: ROUTE_ID, contactId: ticket.contactId, e164: '+14015550187' });
+    expect(JSON.stringify(dialled)).not.toContain(ticket.ticketId);
+
+    const answer = await bridge.recordOutcome({
+      firmId: FIRM_ID,
+      contactId: null,
+      routeId: null,
+      itemId: ITEM_ID,
+      outcome: 'voicemail_left',
+      note: '',
+      callback: null,
+      doNotCallCoversAllContact: false,
+    });
+    expect(answer.notice).toBe('outcome_recorded');
+    const sent = calls.find(call => call.path === '/calls/log')?.body as Record<string, unknown>;
+    expect(sent).toMatchObject({
+      firmId: FIRM_ID,
+      itemId: ITEM_ID,
+      routeId: ROUTE_ID,
+      contactId: ticket.contactId,
+      ticketId: ticket.ticketId,
+      callingIdentityId: IDENTITY_ID,
+      outcome: 'voicemail_left',
+    });
+    // "Just now" is the server's clock: the Mac sends none of its own.
+    expect(sent).not.toHaveProperty('occurredAt');
+    expect(sent).not.toHaveProperty('retryBehaviour');
+    // The ticket was used once; the next outcome is history unless another call is made.
+    expect(answer.lastCall).toBeNull();
+  });
+
+  it('says what a recorded call still needs, from the server’s follow-ups (C13)', async () => {
+    const { api, calls } = scriptedApi({
+      '/calls/log': accepted({
+        callLogId: 'abababab-abab-4bab-8bab-abababababab',
+        outcome: 'callback_requested',
+        stepEffect: 'complete_and_advance',
+        occurredAt: '2026-09-21T13:05:00.000Z',
+        setManual: false,
+        suggestedStageKey: null,
+        suppressionEventIds: [],
+        retiredRouteId: null,
+        successorExecutionId: null,
+        stepExecutionId: null,
+        stepApplication: null,
+        callbackId: null,
+        completedCallbackId: null,
+        followUps: [{ kind: 'callback_time_needed', reason: 'no_instant' }],
+      }),
+    });
+    const bridge = createTodayBridge({
+      api,
+      handoff: { checkSetup: async () => await Promise.resolve({ ready: true }), dial: async () => await Promise.resolve({ status: 'opened', e164: '+14015550187' }) },
+      session: { state: async () => await Promise.resolve(sessionState()), refreshToday: async () => await Promise.resolve(null) },
+    });
+    const answer = await bridge.recordOutcome({
+      firmId: FIRM_ID,
+      contactId: null,
+      routeId: null,
+      itemId: null,
+      outcome: 'callback_requested',
+      note: '',
+      callback: null,
+      doNotCallCoversAllContact: false,
+    });
+    expect(answer.notice).toBe('outcome_recorded_callback_time_needed');
+    expect(noticeSentence('outcome_recorded_callback_time_needed')).toContain('needs a time');
+    expect(calls.find(call => call.path === '/calls/log')?.body).not.toHaveProperty('callback');
+  });
+
+  it('sends a callback’s local fields with the instant the domain clock gives them (C18)', async () => {
+    const { api, calls } = scriptedApi({ '/calls/log': accepted(null) });
+    const bridge = createTodayBridge({
+      api,
+      handoff: { checkSetup: async () => await Promise.resolve({ ready: true }), dial: async () => await Promise.resolve({ status: 'opened', e164: '+14015550187' }) },
+      session: { state: async () => await Promise.resolve(sessionState()), refreshToday: async () => await Promise.resolve(null) },
+    });
+    await bridge.recordOutcome({
+      firmId: FIRM_ID,
+      contactId: null,
+      routeId: null,
+      itemId: null,
+      outcome: 'callback_requested',
+      note: '',
+      callback: { localDate: '2026-03-08', localTime: '02:30', dueAt: '', sourceTimeZone: '' },
+      doNotCallCoversAllContact: false,
+    });
+    const sent = calls.find(call => call.path === '/calls/log')?.body as Record<string, unknown>;
+    expect(sent['callback']).toEqual({
+      localDate: '2026-03-08',
+      localTime: '02:30',
+      sourceTimeZone: 'America/New_York',
+      dueAt: '2026-03-08T07:30:00.000Z',
+    });
+  });
+
+  it('sets a needs-a-time callback’s time, and releases a pause (C13, C22)', async () => {
+    const { api, calls } = scriptedApi({
+      '/callbacks/schedule': accepted({ id: 'efefefef-efef-4fef-8fef-efefefefefef' }),
+      '/today/pause/release': accepted({
+        holdId: '88888888-8888-4888-8888-888888888888',
+        releasedAt: '2026-09-21T13:10:00.000Z',
+        resume: 'resume',
+      }),
+    });
+    const bridge = createTodayBridge({
+      api,
+      handoff: { checkSetup: async () => await Promise.resolve({ ready: true }), dial: async () => await Promise.resolve({ status: 'opened', e164: '+14015550187' }) },
+      session: { state: async () => await Promise.resolve(sessionState()), refreshToday: async () => await Promise.resolve(null) },
+    });
+    const scheduled = await bridge.scheduleCallback({
+      callLogId: 'abababab-abab-4bab-8bab-abababababab',
+      localDate: '2026-09-22',
+      localTime: '14:00',
+    });
+    expect(scheduled.notice).toBe('callback_scheduled');
+    expect(calls.find(call => call.path === '/callbacks/schedule')?.body).toMatchObject({
+      callLogId: 'abababab-abab-4bab-8bab-abababababab',
+      localDate: '2026-09-22',
+      localTime: '14:00',
+      sourceTimeZone: 'America/New_York',
+      dueAt: '2026-09-22T18:00:00.000Z',
+    });
+
+    const released = await bridge.releasePause({ holdId: '88888888-8888-4888-8888-888888888888' });
+    expect(released.notice).toBe('pause_released');
+    expect(calls.find(call => call.path === '/today/pause/release')?.body).toMatchObject({
+      holdId: '88888888-8888-4888-8888-888888888888',
+    });
+  });
+
+  it('pauses an automated send with no return time at all (C22)', async () => {
+    const { api, calls } = scriptedApi({
+      '/today/snooze': accepted({
+        outcome: 'held',
+        holdId: '88888888-8888-4888-8888-888888888888',
+        blockedActionKind: 'email_send',
+        scope: 'enrollment',
+      }),
+    });
+    const bridge = createTodayBridge({
+      api,
+      handoff: { checkSetup: async () => await Promise.resolve({ ready: true }), dial: async () => await Promise.resolve({ status: 'opened', e164: '+14015550187' }) },
+      session: { state: async () => await Promise.resolve(sessionState()), refreshToday: async () => await Promise.resolve(null) },
+    });
+    const answer = await bridge.snooze({ itemId: ITEM_ID, reason: 'Their office is closed', returnAt: '' });
+    expect(answer.notice).toBe('held');
+    expect(noticeSentence('held')).toContain('Resume');
+    expect(calls.find(call => call.path === '/today/snooze')?.body).not.toHaveProperty('returnAt');
+  });
+
   it('turns an offline read into a state a person can still look at', async () => {
     const api = createAuthedClient({
       baseUrl: 'https://api.example.test/',
@@ -350,6 +594,8 @@ describe('the Today bridge', () => {
       'callie:today:snooze',
       'callie:today:dial',
       'callie:today:outcome',
+      'callie:today:schedule-callback',
+      'callie:today:release-pause',
     ]);
   });
 });

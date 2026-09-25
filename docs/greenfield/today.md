@@ -27,11 +27,13 @@ packages/domain/today/lanes.ts                8.2's ordering, as pure functions
 packages/domain/today/snapshots.ts            the reads and the one write path
 packages/domain/today/build.ts                the 05:00 build and its sources
 packages/domain/today/promotions.ts           the interface G7 and G8 call
-packages/domain/today/snooze.ts               snooze, and the hold an automated send gets
+packages/domain/today/snooze.ts               snooze, an automated send's pause, and its release (g79)
 packages/domain/today/dto.ts                  the list, the expanded card
 apps/worker/src/handlers/todayBuild.ts        the job and its scheduler source
 apps/api/src/routes/today.ts                  GET /today, POST /today/firm
-apps/api/src/routes/snooze.ts                 POST /today/snooze, /today/snooze/cancel
+apps/api/src/routes/snooze.ts                 POST /today/snooze, /today/snooze/cancel, /today/pause/release
+apps/api/src/routes/callbacks.ts              GET /callbacks, POST /callbacks/complete, /callbacks/schedule (g79)
+packages/domain/dial/calls.ts                 logging a call against its task (g79: decide, record, apply)
 apps/desktop/src/renderer/today*.ts           the lanes: contract, view model, drawing (todayLanes.ts)
 apps/desktop/src/renderer/home*.ts            Home, the main window that shows them (lane g65)
 apps/desktop/src/main/todayBridge.ts          the main-process half of its bridge
@@ -40,7 +42,7 @@ apps/desktop/src/main/crmBridge.ts            G3b's CRM windows, wired
 apps/desktop/src/main/todayWindow.ts          the other windows and their channels; the menu is windowMenu.ts
 ```
 
-## The four rules a reader should carry
+## The five rules a reader should carry
 
 ### 1. The card is derived, and nothing writes it
 
@@ -106,7 +108,7 @@ a rebuild leaves it alone.
 Two rules live in `today_upsert_item` and nowhere else: a finished task is never
 reopened by a rebuild, and an active snooze wins over a rebuild.
 
-### 4. An automated send is held, not snoozed, and the server decides which
+### 4. An automated send is paused, not snoozed, and the server decides which
 
 8.2: "Salespeople may snooze manual tasks with a required reason and explicit return
 instant. Automated sends are not snoozed ad hoc; delaying them creates a recorded hold."
@@ -118,10 +120,54 @@ before the task changed. The answer says which of the two happened and the windo
 renders that.
 
 A manual task becomes a `today_snoozes` row keyed by `item_key`, so it survives the
-05:00 rebuild. An automated one opens an `active_holds` row against the firm for the
-action kind the task belongs to, and the day's entry is closed: the send is not
-happening today, and what brings the work back is releasing the hold, not a clock. See
-`docs/decisions/g6-delaying-an-automated-send.md`.
+05:00 rebuild, and it needs its return instant (`snooze_return_required` without one).
+
+**An automated one is paused (lane g79, audit C22).** G6 opened a firm-wide hold,
+closed the day's task and kept the typed return instant only as audit metadata — so a
+"snooze until Thursday" was an indefinite pause of every email to the firm with nothing
+on screen to lift it. The hold model has no scheduled release, and a timer would shift
+the schedule by an interval nobody reviewed, so the action is named what it is:
+
+* the hold (`scoped_pause`, `source_event_kind = 'today.delay_requested'`) is scoped to
+  the task's **enrollment**, or to the firm only for a task with no enrollment behind it;
+* the task **stays open**, and the expanded card's version 2 carries `pauseHoldId` on it;
+  the Mac shows **Paused** and a **Resume** button where **Pause sending** was;
+* Resume is `POST /today/pause/release`: it releases exactly that hold — no other kind of
+  hold is reachable from it — and calls `resumeEnrollment`, which shifts the enrollment's
+  unexecuted steps by the union of its blocking intervals, or sends a pause longer than
+  seven days to review (4.3);
+* Pause asks for a reason and no return time. Pressing it again answers with the same
+  hold.
+
+See `docs/decisions/g6-delaying-an-automated-send.md` and
+`docs/decisions/g79-calls-carry-their-authorization.md`.
+
+### 5. A callback task is completed by the call that fulfils it (lane g79)
+
+Appendix A "Callback confirm/complete": the callback and its Today entry change together.
+`callbacks_today_promotion` has always finished the task when the callback completes; what
+was missing (audit C17) was any way for the Mac to say *which* callback a call fulfilled,
+because the task DTO dropped the callback id.
+
+The expanded card's version 2 carries `callbackId` on a callback task, and the outcome
+form names the task the call was for (`itemId`). Recording an outcome that reached
+somebody, or left a voicemail, against a callback task completes the callback in the call's
+transaction. A missed call (no answer, busy, wrong number, a failure to place it) leaves the
+callback open, and the task stays for another try.
+
+**"Callback — needs a time" (audit C13).** 9.1 creates a callback only "after salesperson
+confirmation of the instant", and "call logging ... never refuses history". So a call
+whose outcome is *callback requested* with no day — or with an instant the server resolves
+differently from the Mac (C18) — is recorded, and a task goes in the callback lane keyed
+`callback-time:<call log id>` (`source_kind = 'callback'`, `source_id` null). The callback
+source carries it from day to day until the time is set — `POST /callbacks/schedule`,
+which creates the callback beside the call that asked for it and finishes the task — or a
+call is recorded against it. The card shows it as *Callback — needs a time* with a day
+and time field; version 2 carries `callLogId` on it.
+
+A callback's instant is always the server's resolution of its local date, time and zone
+through the shared calendar clock (`callbackInstant` in `@fss/contracts`); a supplied
+`dueAt` that disagrees is refused as `callback_instant_mismatch`.
 
 ## The job
 
@@ -184,6 +230,19 @@ back a state with a notice. The calling identity is the one the server reported 
 card, because 9.1 requires it to be the actor's own and there is nothing there to
 choose.
 
+**A call is recorded against its task and its ticket (lane g79).** After a Call button
+hands a number to the phone app, the main process keeps the ticket id and calling identity
+the server issued (never shown to the renderer) and the window is told only which number
+was called (`lastCall`). The outcome form names the task the call was for — the call due
+or the callback of the contact just called, by default — and the next outcome recorded for
+that firm carries the task, the route, the contact, the ticket and the identity. It sends
+no time of its own: "just now" is the server's clock. The server applies the outcome to
+the step or callback behind the task and answers with `followUps` — a callback that needs a
+time, a number that was not named — which the window shows as the notice. The expansion is
+requested with `cardVersion: 2`; the API answers the older shape to a Mac that does not ask.
+Both versions, the paused answer and Resume's answer are `@fss/contracts`' (`today.ts`).
+See `docs/decisions/g79-calls-carry-their-authorization.md`.
+
 **The card needs the person's own attested number (lane g60).** `readTodayFirm` reports
 `callingIdentityId` from `currentCallingIdentityId`: the most recently attested of the
 actor's verified, enabled calling numbers. Until someone has registered and attested a
@@ -243,6 +302,7 @@ One thing the wiring cannot do yet, recorded rather than faked:
 ```
 npm run gate:greenfield
 npm run test --workspace packages/domain -- test/today            # G 8 and G 33, determinism
+npm run test --workspace packages/domain -- test/policy/callsAndCallbacks.test.ts  # lane g79
 npm run test --workspace apps/api -- test/today.test.ts           # the routes
 npm run test --workspace apps/worker -- test/todayBuild.test.ts   # G 1 and G 2 for this handler
 npm run test --workspace apps/desktop -- test/today.test.ts       # the view model and both bridges

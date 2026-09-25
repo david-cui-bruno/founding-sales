@@ -1261,6 +1261,35 @@ const MUTATIONS = [
     because:
       'Once the API admits a whole 1.x line (O04), the incompatible list is the only way to keep a known-bad build out, and it is never published — a 1.0.x Mac could not parse it — so nothing but the API enforces it. A policy that lists a version and still admits it passes every admits-a-build test. clientVersionCeiling.test.ts signs in, renews and commands as a listed build through the real dispatcher and has to go red.',
   },
+  // Lane g79: a ticket is re-authorized at consumption, a logged call applies its step,
+  // and the Mac resolves a DST gap with the domain's clock.
+  {
+    name: 'consuming a dial ticket stops re-running the dial decision',
+    file: 'packages/domain/dial/tickets.ts',
+    find: '  if (!decision.allowed) return refuse(decision.reason);\n\n  const { rows } = await context.db.query<{ id: string; e164: string; consumed_at: Date }>(\n',
+    replace: '  const { rows } = await context.db.query<{ id: string; e164: string; consumed_at: Date }>(\n',
+    suite: ['run', 'test', '--workspace', 'packages/domain', '--', 'test/policy/callsAndCallbacks.test.ts'],
+    because:
+      'Audit item S10 (25 September 2026): consumption checked the workspace, the device, the expiry and prior consumption only, so a pause, a restore hold, a disabled identity, a revoked posture, a suppression or a retired route that arrived inside the ticket’s sixty seconds was not seen and the tel: URI was issued anyway. callsAndCallbacks.test.ts authorizes, changes the world, then consumes, and expects each refusal code with the ticket left unconsumed; without the re-run every one of those consumptions succeeds and it has to go red.',
+  },
+  {
+    name: 'a logged call records its step and applies nothing to it',
+    file: 'packages/domain/dial/calls.ts',
+    find: '    if (bound !== null) {\n      const step = await applyCallToStep(context, {\n',
+    replace: '    if (bound !== null && bound.open === null) {\n      const step = await applyCallToStep(context, {\n',
+    suite: ['run', 'test', '--workspace', 'packages/domain', '--', 'test/policy/callsAndCallbacks.test.ts'],
+    because:
+      'Audit item C04: G4 recorded a step_effect on the call log and never applied it, so a logged voicemail left its call task on Today for ever and the cadence stalled behind it. callsAndCallbacks.test.ts logs a voicemail against a real enrollment’s call task and expects the step completed by call_log, the frozen version’s step 2 created, and a retry_call step re-armed with a retry_call shift; with the application skipped the step stays pending with no successor and it has to go red.',
+  },
+  {
+    name: 'the calling clock resolves a DST gap backwards again',
+    file: 'packages/contracts/src/localClock.ts',
+    find: '    result = Math.max(first, second);\n',
+    replace: '    result = Math.min(first, second);\n',
+    suite: ['run', 'test', '--workspace', 'apps/desktop', '--', 'test/dial.test.ts'],
+    because:
+      'Audit item C18: the Mac’s own converter put New York’s 02:30 on 8 March 2026 at 01:30 EST, an hour before the wall clock the person confirmed, where docs/decisions/g0-dst-gap-resolution.md resolves a gap forward to 03:30 EDT. Lane g79 made the Mac and the server share one implementation in @fss/contracts; dial.test.ts expects the outcome form to resolve that gap to 2026-03-08T07:30:00.000Z, and with the gap resolved to the earlier candidate it reads 06:30 and has to go red.',
+  },
 ];
 
 // A listener on each of these keeps Node from exiting mid-mutation with a file still

@@ -4,8 +4,8 @@ import { routeEligibilitySchema } from './crm.ts';
 import { businessDate, e164, ianaTimeZone, instant, uuid } from './foundationRows.ts';
 
 /**
- * The wire contract of Today: the list, one expanded firm, and the snooze answer
- * (specification 8.2; lane g78).
+ * The wire contract of Today: the list, one expanded firm, the snooze answer and the
+ * pause release (specification 8.2; lanes g78 and g79).
  *
  * The Mac declared these in `apps/desktop/src/renderer/todayContract.ts`, and the list
  * a second time in `apps/desktop/src/main/todayBridge.ts`. They matched the routes, but
@@ -67,8 +67,38 @@ export const todayTaskDtoSchema = z.object({
   /** True when FSS performs it. The Mac offers a hold rather than a snooze (8.2). */
   automated: z.boolean(),
   snoozeUntil: instant.nullable(),
+  /*
+   * The card's second version (lane g79), sent only to a request with
+   * `cardVersion: 2`. Optional so the first version still parses: a desktop released
+   * before g79 parses the task with a strict schema of its own, and the API answers it
+   * without these keys.
+   *
+   *  * `callbackId`: the callback behind a callback task. Recording the call against the
+   *    task completes it (Appendix A "Callback confirm/complete").
+   *  * `stepExecutionId`: the sequence step behind a due task. Recording the call
+   *    applies the frozen step's successor or retry (9.1).
+   *  * `callLogId`: "Callback — needs a time", and the recorded call that asked for it.
+   *  * `pauseHoldId`: a paused automated task, and the hold its Resume releases (8.2).
+   */
+  callbackId: uuid.nullable().optional(),
+  stepExecutionId: uuid.nullable().optional(),
+  callLogId: uuid.nullable().optional(),
+  pauseHoldId: uuid.nullable().optional(),
 });
 export type TodayTaskDto = z.infer<typeof todayTaskDtoSchema>;
+
+/** The card version that carries the four task identities above (lane g79). */
+export const TODAY_CARD_VERSION = 2;
+
+/**
+ * `POST /today/firm`'s request. Without `cardVersion` the card is G6's shape exactly;
+ * any version other than 2 is a malformed request rather than a guess.
+ */
+export const todayFirmRequestSchema = z.strictObject({
+  firmId: uuid,
+  cardVersion: z.literal(TODAY_CARD_VERSION).optional(),
+});
+export type TodayFirmRequest = z.infer<typeof todayFirmRequestSchema>;
 
 /**
  * One dialable route on an expanded card (9.1, 9.2). The version is the one
@@ -113,7 +143,30 @@ export const todaySnoozeResultSchema = z.discriminatedUnion('outcome', [
       cancelledAt: instant.nullable(),
     }),
   }),
-  /** An automated send is held rather than snoozed, with the hold that blocks it (4.3). */
-  z.object({ outcome: z.literal('held'), holdId: uuid, blockedActionKind: blockedActionKindSchema }),
+  /**
+   * An automated send is paused rather than snoozed, with the hold that blocks it (4.3).
+   * `scope` says what the pause covers: the task's own enrollment, or the firm when the
+   * task belongs to no enrollment (lane g79, C22). Optional so an answer from an API
+   * that predates it still parses.
+   */
+  z.object({
+    outcome: z.literal('held'),
+    holdId: uuid,
+    blockedActionKind: blockedActionKindSchema,
+    scope: z.enum(['enrollment', 'firm']).optional(),
+  }),
 ]);
 export type TodaySnoozeResult = z.infer<typeof todaySnoozeResultSchema>;
+
+/**
+ * What `/today/pause/release` returns inside the command envelope: the Resume control
+ * on a paused automated task (lane g79, C22). `resume` is what the enrollment did
+ * next under 4.3: resumed with its shift, still held by another hold, or sent to
+ * review; `not_applicable` for a firm-scoped pause.
+ */
+export const todayPauseReleaseResultSchema = z.object({
+  holdId: uuid,
+  releasedAt: instant,
+  resume: z.enum(['resume', 'still_held', 'review_required', 'not_applicable']),
+});
+export type TodayPauseReleaseResult = z.infer<typeof todayPauseReleaseResultSchema>;

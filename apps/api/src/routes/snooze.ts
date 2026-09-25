@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { commandIdSchema, instant, semanticVersionSchema, uuid } from '@fss/contracts';
-import { SNOOZE_REASON_MAX, cancelTodaySnooze, snoozeTodayItem } from '@fss/domain/today';
+import { SNOOZE_REASON_MAX, cancelTodaySnooze, releaseTodayPause, snoozeTodayItem } from '@fss/domain/today';
 import { REFUSAL_STATUS, policyRouteDeps, redactError, runPolicyCommand } from './dialSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
@@ -22,14 +22,26 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  * `reason` is required by the schema as well as by the domain, so a client that
  * forgot it is told its body is malformed rather than having a blank reason recorded.
  */
-export const SNOOZE_PATHS: readonly string[] = ['/today/snooze', '/today/snooze/cancel'];
+export const SNOOZE_PATHS: readonly string[] = ['/today/snooze', '/today/snooze/cancel', '/today/pause/release'];
 
+/**
+ * `returnAt` is optional since lane g79: a manual task still needs it (the domain
+ * refuses `snooze_return_required` without it), and an automated task's pause is
+ * released by a person rather than by a clock, so the Mac no longer asks for one.
+ */
 const snoozeCommandSchema = z.strictObject({
   commandId: commandIdSchema,
   clientVersion: semanticVersionSchema,
   itemId: uuid,
   reason: z.string().trim().min(1).max(SNOOZE_REASON_MAX),
-  returnAt: instant,
+  returnAt: instant.optional(),
+});
+
+/** The Resume control on a paused automated task (lane g79, audit C22). */
+const releasePauseCommandSchema = z.strictObject({
+  commandId: commandIdSchema,
+  clientVersion: semanticVersionSchema,
+  holdId: uuid,
 });
 
 const cancelSnoozeCommandSchema = z.strictObject({
@@ -39,7 +51,7 @@ const cancelSnoozeCommandSchema = z.strictObject({
 });
 
 export async function routeSnooze(request: ApiRequest, options: RoutingOptions): Promise<RouteResult | null> {
-  if (!request.path.startsWith('/today/snooze')) return null;
+  if (!SNOOZE_PATHS.includes(request.path)) return null;
   const prepared = await policyRouteDeps(request, options);
   if (!prepared.ok) return prepared.result;
   const deps = prepared.deps;
@@ -50,7 +62,17 @@ export async function routeSnooze(request: ApiRequest, options: RoutingOptions):
 
   if (request.path === '/today/snooze') {
     return await runPolicyCommand(deps, snoozeCommandSchema, 'snooze_today_item', async (context, body) =>
-      await snoozeTodayItem(context, { itemId: body.itemId, reason: body.reason, returnAt: body.returnAt }),
+      await snoozeTodayItem(context, {
+        itemId: body.itemId,
+        reason: body.reason,
+        ...(body.returnAt === undefined ? {} : { returnAt: body.returnAt }),
+      }),
+    );
+  }
+
+  if (request.path === '/today/pause/release') {
+    return await runPolicyCommand(deps, releasePauseCommandSchema, 'release_today_pause', async (context, body) =>
+      await releaseTodayPause(context, { holdId: body.holdId }),
     );
   }
 

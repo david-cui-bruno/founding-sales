@@ -1,5 +1,5 @@
-import { completeCallbackCommandSchema } from '@fss/contracts';
-import { completeCallback, listCallbacks } from '@fss/domain/dial';
+import { completeCallbackCommandSchema, scheduleCallbackCommandSchema } from '@fss/contracts';
+import { completeCallback, listCallbacks, scheduleCallbackForCall } from '@fss/domain/dial';
 import { REFUSAL_STATUS, contextForPrincipal, policyRouteDeps, redactError, runPolicyCommand } from './dialSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
@@ -14,6 +14,7 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 export const CALLBACK_PATHS: readonly string[] = [
   '/callbacks',
   '/callbacks/complete',
+  '/callbacks/schedule',
 ];
 
 /**
@@ -25,7 +26,13 @@ export const CALLBACK_PATHS: readonly string[] = [
  * without the call it belongs to, which is how a callback ends up with no record of
  * why it exists.
  *
- * So the surface is the list the Today lane reads and the completion. A salesperson
+ * `/callbacks/schedule` (lane g79) is not that second way. It gives a callback that a
+ * recorded call already asked for — "call me back", with no time confirmed yet — the
+ * instant the salesperson now confirms, beside that call. Without a recorded
+ * `callback_requested` call to name it refuses, so every callback still has the call
+ * it came from.
+ *
+ * So the surface is the list the Today lane reads, the completion and the scheduling. A salesperson
  * always gets their own: the query parameter is ignored for them rather than
  * refused, because a card asking for somebody else's callbacks is a bug in the
  * client and not an attack worth a 403.
@@ -54,6 +61,17 @@ export async function routeCallbacks(request: ApiRequest, options: RoutingOption
 
   if (request.method !== 'POST') {
     return { status: REFUSAL_STATUS.method_not_allowed, body: redactError('method_not_allowed') };
+  }
+  if (request.path === '/callbacks/schedule') {
+    return await runPolicyCommand(deps, scheduleCallbackCommandSchema, 'schedule_callback', async (repository, body) =>
+      await scheduleCallbackForCall(repository, {
+        callLogId: body.callLogId,
+        localDate: body.localDate,
+        ...(body.localTime === undefined ? {} : { localTime: body.localTime }),
+        sourceTimeZone: body.sourceTimeZone,
+        ...(body.dueAt === undefined ? {} : { dueAt: body.dueAt }),
+      }),
+    );
   }
   if (request.path !== '/callbacks/complete') {
     return { status: REFUSAL_STATUS.not_found, body: redactError('not_found') };

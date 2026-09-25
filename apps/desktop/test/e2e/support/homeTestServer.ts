@@ -285,6 +285,8 @@ globalThis.callieToday = {
   async snooze(input) { return await ask('today.snooze', input); },
   async dial(input) { return await ask('today.dial', input); },
   async recordOutcome(input) { return await ask('today.recordOutcome', input); },
+  async scheduleCallback(input) { return await ask('today.scheduleCallback', input); },
+  async releasePause(input) { return await ask('today.releasePause', input); },
 };`,
   callieAdmin: `
 globalThis.callieAdmin = {
@@ -373,7 +375,15 @@ export async function startHomeTestServer(options: HomeServerOptions = {}): Prom
         today = { ...today, notice: itemId === AUTOMATED_ITEM_ID ? 'held' : 'snoozed' };
       }
       if (method === 'today.dial') today = { ...today, notice: 'dial_opened' };
-      if (method === 'today.recordOutcome') today = { ...today, notice: 'outcome_recorded' };
+      if (method === 'today.recordOutcome') {
+        // Lane g79: a callback request with no day comes back recorded with its
+        // follow-up, as the real bridge reports the server's `followUps`.
+        const input = argument as { outcome?: string; callback?: unknown } | null;
+        const needsTime = input?.outcome === 'callback_requested' && input.callback === null;
+        today = { ...today, notice: needsTime ? 'outcome_recorded_callback_time_needed' : 'outcome_recorded' };
+      }
+      if (method === 'today.scheduleCallback') today = { ...today, notice: 'callback_scheduled' };
+      if (method === 'today.releasePause') today = { ...today, notice: 'pause_released' };
       return today;
     }
     if (method === 'admin.loadDashboard') {

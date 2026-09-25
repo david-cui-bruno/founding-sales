@@ -60,7 +60,26 @@ const NOTICES: Readonly<Record<string, string>> = Object.freeze({
   not_signed_in: 'Sign in on the main window before working today’s list.',
   client_upgrade_required: 'This version of Callie is out of date. Install the current build to continue.',
   snoozed: 'Snoozed.',
-  held: 'That send is automated, so Callie recorded a hold instead of a snooze.',
+  // Lane g79 (C22): an automated send is paused until somebody presses Resume, not
+  // until a time. The wire word is still `held`.
+  held: 'Paused. Callie will not send it until you press Resume on the task.',
+  pause_released: 'Resumed. Callie will send it at its next slot.',
+  pause_already_released: 'That send was already resumed.',
+  pause_unknown: 'That pause is no longer there.',
+  snooze_return_required: 'Pick when it should come back.',
+  outcome_recorded_callback_time_needed:
+    'Call recorded. The callback has no time yet, so “Callback — needs a time” is on today’s list.',
+  outcome_recorded_route_not_named:
+    'Call recorded. No number was chosen, so Callie did not retire or suppress one. Do that from the firm’s page.',
+  outcome_recorded_effects_not_applied:
+    'Call recorded, but Callie could not apply what it means. Nothing else changed; check the firm’s page.',
+  callback_scheduled: 'Callback scheduled.',
+  callback_time_invalid: 'That is not a day and time Callie can place a callback at.',
+  callback_already_scheduled: 'That call already has its callback.',
+  callback_instant_mismatch: 'The callback time changed while you were entering it. Check it and record it again.',
+  occurred_at_in_future: 'That call time is in the future.',
+  ticket_mismatch: 'That call does not match the number Callie dialed. Refresh and record it again.',
+  route_unknown: 'That number is not this firm’s. Refresh and record it again.',
   snooze_cancelled: 'Back on the list.',
   item_not_open: 'That task is already finished.',
   item_unknown: 'That task is no longer on today’s list.',
@@ -97,9 +116,15 @@ export interface CardView {
 export interface TaskView {
   readonly task: TodayTask;
   readonly label: string;
-  /** Automated work is held, not snoozed (8.2); the control says so. */
+  /** Automated work is paused, not snoozed (8.2); the control says so. */
   readonly delayLabel: string;
   readonly enabled: boolean;
+  /** A paused automated task: the card shows Resume instead of Pause (lane g79, C22). */
+  readonly paused: boolean;
+  /** "Callback — needs a time": the card offers a day and a time (lane g79, C13). */
+  readonly needsTime: boolean;
+  /** Whether a call's outcome can be recorded against this task (a call due or a callback). */
+  readonly callable: boolean;
 }
 
 export interface TodayScreenView {
@@ -107,6 +132,11 @@ export interface TodayScreenView {
   readonly banners: readonly BannerView[];
   readonly cards: readonly CardView[];
   readonly tasks: readonly TaskView[];
+  /**
+   * The task an outcome is recorded against by default: the callable task of the
+   * contact just called, else the first callable task, else none (lane g79).
+   */
+  readonly outcomeItemId: string | null;
   /** Routes that may be dialed right now, in the versions the server just sent. */
   readonly dialableRoutes: readonly TodayRoute[];
   /** Whether anything that would mutate cloud state may be offered at all. */
@@ -118,6 +148,8 @@ export interface TodayScreenView {
 }
 
 export const TODAY_HEADING = 'Today';
+/** A callback a recorded call asked for without a time (lane g79, C13). */
+export const NEEDS_TIME_LABEL = 'Callback — needs a time';
 const EMPTY_LIST = 'Nothing is due today.';
 const EMPTY_OFFLINE = 'Callie has no saved list for today.';
 
@@ -170,21 +202,35 @@ export function buildTodayView(state: TodayState): TodayScreenView {
     expanded: state.expanded?.firmId === card.firmId,
   }));
 
-  const tasks = (state.expanded?.tasks ?? []).map(task => ({
-    task,
-    label: TASK_LABELS[task.kind],
-    // 8.2: "Automated sends are not snoozed ad hoc; delaying them creates a recorded
-    // hold." The button says which of the two it will do, so nobody presses "snooze"
-    // and gets a hold they did not ask for.
-    delayLabel: task.automated ? 'Hold this send' : 'Snooze',
-    enabled: actionsEnabled && task.status === 'open',
-  }));
+  const tasks = (state.expanded?.tasks ?? []).map(task => {
+    const needsTime = typeof task.callLogId === 'string';
+    return {
+      task,
+      label: needsTime ? NEEDS_TIME_LABEL : TASK_LABELS[task.kind],
+      // 8.2: "Automated sends are not snoozed ad hoc; delaying them creates a recorded
+      // hold." The button says which of the two it will do, and since lane g79 it says
+      // "Pause", because the hold lasts until Resume rather than until a time.
+      delayLabel: task.automated ? 'Pause sending' : 'Snooze',
+      enabled: actionsEnabled && task.status === 'open',
+      paused: typeof task.pauseHoldId === 'string',
+      needsTime,
+      callable: task.status === 'open' && (task.kind === 'call_due' || task.kind === 'callback'),
+    };
+  });
+  const callable = tasks.filter(entry => entry.callable);
+  const lastCall = state.lastCall ?? null;
+  const calledContact =
+    lastCall !== null && lastCall.firmId === state.expanded?.firmId && lastCall.contactId !== null
+      ? callable.find(entry => entry.task.contactId === lastCall.contactId)
+      : undefined;
+  const outcomeItemId = (calledContact ?? callable[0])?.task.itemId ?? null;
 
   return {
     heading: TODAY_HEADING,
     banners,
     cards,
     tasks,
+    outcomeItemId,
     // 9.1: a route that is not `usable` is shown on the Firm page and is not dialable
     // from here. The server refuses it anyway; offering it would only be a button
     // whose whole purpose is to be refused.

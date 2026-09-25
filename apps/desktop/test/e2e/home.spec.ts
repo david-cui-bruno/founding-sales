@@ -264,14 +264,17 @@ test('expanding a card reveals one task per contact, under its own row', async (
   expect(called('today.expand')).toEqual([{ firmId: FIRM_ID }]);
 });
 
-test('a manual task is snoozed and an automated send is held, and the server decides which', async ({ page }) => {
+test('a manual task is snoozed and an automated send is paused, and the server decides which', async ({ page }) => {
   server = await startHomeTestServer({ today: todayState({ expanded: expandedFirm() }) });
   await page.goto(server.url);
   await settled(page);
 
   // The labels differ, so nobody presses "snooze" and gets a hold they did not want.
+  // Lane g79 (C22): the automated one says Pause, because it lasts until Resume.
   await expect(page.getByTestId('snooze-submit').nth(1)).toHaveText('Snooze');
-  await expect(page.getByTestId('snooze-submit').nth(2)).toHaveText('Hold this send');
+  await expect(page.getByTestId('snooze-submit').nth(2)).toHaveText('Pause sending');
+  // A pause asks why, not until when.
+  await expect(page.getByTestId('snooze-return').nth(2)).toBeHidden();
 
   // A reason and a return instant are both required before either can be pressed.
   await expect(page.getByTestId('snooze-submit').nth(1)).toBeDisabled();
@@ -287,18 +290,41 @@ test('a manual task is snoozed and an automated send is held, and the server dec
   ]);
 });
 
-test('the same request on an automated send comes back as a hold', async ({ page }) => {
+test('the same request on an automated send comes back as a pause', async ({ page }) => {
   server = await startHomeTestServer({ today: todayState({ expanded: expandedFirm() }) });
   await page.goto(server.url);
   await settled(page);
 
   await page.getByTestId('snooze-reason').nth(2).fill('Their office is closed this week');
-  await page.getByTestId('snooze-return').nth(2).fill('2026-09-24T09:00');
+  await expect(page.getByTestId('snooze-submit').nth(2)).toBeEnabled();
   await page.getByTestId('snooze-submit').nth(2).click();
 
-  await expect(page.getByTestId('banner-info')).toContainText('recorded a hold instead of a snooze');
-  const [sent] = called('today.snooze') as { itemId: string }[];
-  expect(sent?.itemId).toBe(AUTOMATED_ITEM_ID);
+  await expect(page.getByTestId('banner-info')).toContainText('until you press Resume');
+  expect(called('today.snooze')).toEqual([
+    { itemId: AUTOMATED_ITEM_ID, reason: 'Their office is closed this week', returnAt: '' },
+  ]);
+});
+
+test('a paused send shows Resume where Pause was, and Resume releases it (lane g79, C22)', async ({ page }) => {
+  const HOLD_ID = '12121212-1212-4121-8121-121212121212';
+  const base = expandedFirm();
+  server = await startHomeTestServer({
+    today: todayState({
+      expanded: {
+        ...base,
+        tasks: base.tasks.map(task => (task.itemId === AUTOMATED_ITEM_ID ? { ...task, pauseHoldId: HOLD_ID } : task)),
+      },
+    }),
+  });
+  await page.goto(server.url);
+  await settled(page);
+
+  const paused = page.getByTestId('today-task').nth(2);
+  await expect(paused.getByTestId('task-paused')).toHaveText('Paused');
+  await expect(paused.getByTestId('snooze-submit')).toHaveCount(0);
+  await paused.getByTestId('pause-release').click();
+  await expect(page.getByTestId('banner-info')).toContainText('Resumed.');
+  expect(called('today.releasePause')).toEqual([{ holdId: HOLD_ID }]);
 });
 
 test('what a person is typing survives the window regaining focus', async ({ page }) => {
@@ -346,17 +372,119 @@ test('an outcome will not record until it has everything it needs', async ({ pag
 
   await expect(page.getByTestId('outcome-submit')).toBeDisabled();
   await page.getByTestId('outcome-select').selectOption('callback_requested');
-  // 9.1: the callback is created "after salesperson confirmation of the instant", so
-  // the form asks for the day and refuses without it.
+  // 9.1: the callback is created "after salesperson confirmation of the instant", and
+  // call logging "never refuses history" (lane g79, C13): with no day at all the call
+  // is recorded and the callback waits on Today for its time.
   await expect(page.getByTestId('outcome-callback')).toBeVisible();
+  await expect(page.getByTestId('callback-resolved')).toContainText('needs a time');
+  await expect(page.getByTestId('outcome-submit')).toBeEnabled();
+
+  // A time with no day is a mistake the form still stops.
+  await page.getByTestId('callback-time').fill('14:00');
   await expect(page.getByTestId('outcome-submit')).toBeDisabled();
   await expect(page.getByTestId('outcome-problem')).toContainText('the day you promised');
 
+  // The instant is shown back as the domain's clock resolves it, then recorded (C18).
   await page.getByTestId('callback-date').fill('2026-09-24');
-  await page.getByTestId('callback-time').fill('14:00');
+  await expect(page.getByTestId('callback-resolved')).toHaveText('Callie will put the callback at Thu 24 Sep, 14:00.');
   await expect(page.getByTestId('outcome-submit')).toBeEnabled();
   await page.getByTestId('outcome-submit').click();
   await expect(page.getByTestId('banner-info')).toContainText('Call recorded.');
+  const [recorded] = called('today.recordOutcome') as Record<string, unknown>[];
+  expect(recorded).toMatchObject({
+    firmId: FIRM_ID,
+    outcome: 'callback_requested',
+    callback: { localDate: '2026-09-24', localTime: '14:00', dueAt: '2026-09-24T18:00:00.000Z', sourceTimeZone: 'America/New_York' },
+  });
+});
+
+test('the outcome names the task it was for and the number just called (lane g79, C04, C16, C17)', async ({ page }) => {
+  const CALLBACK_ITEM = '77777777-7777-4777-8777-777777777777';
+  server = await startHomeTestServer({
+    today: todayState({
+      expanded: expandedFirm(),
+      lastCall: { firmId: FIRM_ID, routeId: ROUTE_ID, contactId: null, e164: '+14015550187' },
+    }),
+  });
+  await page.goto(server.url);
+  await settled(page);
+
+  await expect(page.getByTestId('outcome-call')).toHaveText('The call to +14015550187.');
+  // The call due and the callback are the two tasks a call can be recorded against;
+  // the first is chosen, and "not for a task" is always there.
+  await expect(page.getByTestId('outcome-task').locator('option')).toHaveText([
+    'Not for a task on this card',
+    'Callback — Dana Example',
+    'Call due — Robin Placeholder',
+  ]);
+  await expect(page.getByTestId('outcome-task')).toHaveValue(CALLBACK_ITEM);
+  await page.getByTestId('outcome-select').selectOption('voicemail_left');
+  await page.getByTestId('outcome-submit').click();
+  expect(called('today.recordOutcome')).toEqual([
+    {
+      firmId: FIRM_ID,
+      // The number dialed is the firm's own line, so the person is the task's.
+      contactId: '88888888-8888-4888-8888-888888888888',
+      routeId: ROUTE_ID,
+      itemId: CALLBACK_ITEM,
+      outcome: 'voicemail_left',
+      note: '',
+      callback: null,
+      doNotCallCoversAllContact: false,
+    },
+  ]);
+});
+
+test('a callback asked for with no day waits on the card, and its time is set there (lane g79, C13)', async ({ page }) => {
+  const CALL_LOG_ID = '34343434-3434-4343-8343-343434343434';
+  const base = expandedFirm();
+  server = await startHomeTestServer({
+    today: todayState({
+      expanded: {
+        ...base,
+        tasks: [
+          {
+            itemId: '56565656-5656-4565-8565-565656565656',
+            contactId: '88888888-8888-4888-8888-888888888888',
+            contactName: 'Dana Example',
+            kind: 'callback',
+            lane: 'callback',
+            dueAt: '2026-09-21T12:00:00.000Z',
+            status: 'open',
+            automated: false,
+            snoozeUntil: null,
+            callLogId: CALL_LOG_ID,
+          },
+          ...base.tasks,
+        ],
+      },
+    }),
+  });
+  await page.goto(server.url);
+  await settled(page);
+
+  const waiting = page.getByTestId('today-task').nth(0);
+  await expect(waiting.getByTestId('task-kind')).toHaveText('Callback — needs a time');
+  await expect(waiting.getByTestId('schedule-submit')).toBeDisabled();
+  await waiting.getByTestId('schedule-date').fill('2026-09-24');
+  await waiting.getByTestId('schedule-time').fill('10:30');
+  await expect(waiting.getByTestId('schedule-resolved')).toHaveText('Callie will put the callback at Thu 24 Sep, 10:30.');
+  await waiting.getByTestId('schedule-submit').click();
+  await expect(page.getByTestId('banner-info')).toContainText('Callback scheduled.');
+  expect(called('today.scheduleCallback')).toEqual([
+    { callLogId: CALL_LOG_ID, localDate: '2026-09-24', localTime: '10:30' },
+  ]);
+});
+
+test('a callback recorded with no day says where it is waiting', async ({ page }) => {
+  server = await startHomeTestServer({ today: todayState({ expanded: expandedFirm() }) });
+  await page.goto(server.url);
+  await settled(page);
+  await page.getByTestId('outcome-select').selectOption('callback_requested');
+  await page.getByTestId('outcome-submit').click();
+  await expect(page.getByTestId('banner-info')).toContainText('“Callback — needs a time” is on today’s list');
+  const [recorded] = called('today.recordOutcome') as Record<string, unknown>[];
+  expect(recorded?.['callback']).toBeNull();
 });
 
 test('“do not call” says how wide the suppression is before it is recorded', async ({ page }) => {

@@ -48,6 +48,19 @@ export {
   completeCallback,
   createCallback,
   listCallbacks,
+  resolveConfirmedInstant,
+  scheduleCallbackForCall,
   type CallbackRow,
+  type ConfirmedInstant,
   type CreateCallbackInput,
+  type ScheduleCallbackForCallInput,
 } from './callbacks.ts';
+
+export {
+  CALL_ATTEMPT_LIMIT,
+  applyCallToStep,
+  effectsForBoundStep,
+  loadBoundCallStep,
+  type AppliedStep,
+  type BoundStep,
+} from './stepEffects.ts';

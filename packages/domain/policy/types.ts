@@ -21,6 +21,26 @@ export const POLICY_REFUSAL_CODES = [
   'callback_not_open',
   'window_not_narrower',
   'invalid_input',
+  // Lane g79: calls and callbacks. Each is a fact about the request, decided before
+  // anything is written, so a refusal never leaves a partial write behind (C14).
+  /** The supplied `dueAt` is not what the local date, time and zone resolve to (C18). */
+  'callback_instant_mismatch',
+  /** The call a callback is being scheduled for is not a recorded "call me back". */
+  'call_log_unknown',
+  /** That call already has its callback. */
+  'callback_already_scheduled',
+  /** The route is not this firm's, or not the named contact's, or not the ticket's (S15). */
+  'route_unknown',
+  /** The contact is not at this firm. */
+  'contact_unknown',
+  /** The ticket is not this workspace's, this firm's, this actor's, or this route's (C16, S15). */
+  'ticket_mismatch',
+  /** The calling identity is not the actor's own. */
+  'identity_unknown',
+  /** The Today task is not this firm's. */
+  'item_unknown',
+  /** An entered `occurredAt` further ahead of database time than the tolerance (C15). */
+  'occurred_at_in_future',
 ] as const;
 export type PolicyRefusalCode = (typeof POLICY_REFUSAL_CODES)[number];
 

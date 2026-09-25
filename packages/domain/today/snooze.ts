@@ -1,13 +1,18 @@
 import type { BlockedActionKind } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { recordCrmAuditEvent } from '../crm/audit.ts';
+import { decideFirmMutation } from '../crm/authorization.ts';
+import { loadFirmForUpdate } from '../crm/firms.ts';
 import { databaseNow } from '../policy/clock.ts';
-import { openHold } from '../policy/holds.ts';
+import { openHold, releaseHold } from '../policy/holds.ts';
+import { resumeEnrollment } from '../sequences/resume.ts';
 import { readTodayItem } from './snapshots.ts';
 import {
+  TODAY_PAUSE_SOURCE_EVENT_KIND,
   acceptToday,
   refuseToday,
   type TodayItemKind,
+  type TodayItemRow,
   type TodayResult,
   type TodaySnoozeRow,
 } from './types.ts';
@@ -30,15 +35,37 @@ import {
  * is a policy decision with a schedule consequence — section 4.3 shifts unexecuted
  * work by the union of the blocking intervals when the hold clears. A snooze row
  * cannot do that, and a snooze row that silently did not delay the send would be the
- * worst of the two. So the command opens an `active_holds` row against the firm for
- * the action kind the task belongs to, and the day's entry is closed: the send is not
- * happening today, and what brings it back is releasing the hold, not a clock.
+ * worst of the two. So the command opens an `active_holds` row for the action kind the
+ * task belongs to.
+ *
+ * ## A pause, not a timed snooze (lane g79, audit item C22)
+ *
+ * G6 opened that hold against the whole firm, closed the day's task, and kept the
+ * return instant the person typed only as audit metadata: a "snooze until Thursday"
+ * became an indefinite firm-wide pause with nothing on screen to lift it. The hold
+ * model has no scheduled release — `active_holds.released_at` is when a hold *was*
+ * released — and releasing on a timer would shift the schedule by an interval nobody
+ * reviewed (the reason G6 gave, and still true). So the action is named what it is, a
+ * **pause**, and it is made visible and reversible instead of timed:
+ *
+ *  * the hold is scoped to the task's own **enrollment** when the task is a sequence
+ *    step (the firm only for a task with no enrollment behind it), so pausing one
+ *    contact's email does not silence the firm;
+ *  * the task stays **open** on Today, and the expanded card carries the hold's id on
+ *    it (`pauseHoldId`) so the Mac shows "Paused" and a Resume control where the
+ *    Pause control was, tomorrow as well as today;
+ *  * `releaseTodayPause` is that control: it releases exactly this hold and asks the
+ *    enrollment to resume, which shifts unexecuted work by the union of its blocking
+ *    intervals or sends a long hold to review (4.3);
+ *  * a return instant is no longer required for it. One sent by an older Mac is
+ *    recorded in the audit event, as before, and acts on nothing.
  *
  * The hold is written directly rather than through `openPause`. An administrative
  * pause is an admin's configuration change scoped to a workspace, owner, mailbox,
- * opportunity or channel (10.1); this is one salesperson delaying one firm's automated
- * work, which is not any of those scopes and is not admin-only. See
- * `docs/decisions/g6-delaying-an-automated-send.md`.
+ * opportunity or channel (10.1); this is one salesperson pausing one contact's
+ * automated work, which is not admin-only. See
+ * `docs/decisions/g6-delaying-an-automated-send.md` and
+ * `docs/decisions/g79-calls-carry-their-authorization.md`.
  */
 
 const BLOCKED_KIND_OF_ITEM: Readonly<Record<TodayItemKind, BlockedActionKind | null>> = Object.freeze({
@@ -84,14 +111,41 @@ function toSnooze(row: SnoozeDbRow): TodaySnoozeRow {
 
 export type SnoozeOutcome =
   | { readonly outcome: 'snoozed'; readonly snooze: TodaySnoozeRow }
-  /** An automated send. Not snoozed: held, with the hold that blocks it (4.3). */
-  | { readonly outcome: 'held'; readonly holdId: string; readonly blockedActionKind: BlockedActionKind };
+  /**
+   * An automated send. Not snoozed: paused, with the hold that blocks it (4.3). The
+   * wire word stays `held`, which every Mac already parses; the Mac says "Paused".
+   */
+  | {
+      readonly outcome: 'held';
+      readonly holdId: string;
+      readonly blockedActionKind: BlockedActionKind;
+      readonly scope: 'enrollment' | 'firm';
+    };
 
 export interface SnoozeTodayItemInput {
   readonly itemId: string;
   readonly reason: string;
-  /** The explicit instant the task comes back. 8.2 requires one; there is no default. */
-  readonly returnAt: string;
+  /**
+   * The explicit instant a manual task comes back; 8.2 requires one and there is no
+   * default. Not required for an automated task, which is paused until released.
+   */
+  readonly returnAt?: string | undefined;
+}
+
+/** Where a pause of this task applies: its own enrollment, or the firm when it has none. */
+async function pauseScopeOf(
+  context: RepositoryContext,
+  item: TodayItemRow,
+): Promise<{ readonly scopeKind: 'enrollment' | 'firm'; readonly scopeKey: string }> {
+  if (item.sourceKind === 'step_execution' && item.sourceId !== null) {
+    const { rows } = await context.db.query<{ enrollment_id: string }>(
+      'SELECT enrollment_id FROM step_executions WHERE workspace_id = $1 AND id = $2 AND firm_id = $3',
+      [context.scope.workspaceId, item.sourceId, item.firmId],
+    );
+    const enrollmentId = rows[0]?.enrollment_id;
+    if (enrollmentId !== undefined) return { scopeKind: 'enrollment', scopeKey: enrollmentId };
+  }
+  return { scopeKind: 'firm', scopeKey: item.firmId };
 }
 
 export async function snoozeTodayItem(
@@ -104,16 +158,19 @@ export async function snoozeTodayItem(
   const reason = input.reason.trim();
   if (reason.length === 0) return refuseToday('snooze_reason_required');
   if (reason.length > SNOOZE_REASON_MAX) return refuseToday('invalid_input');
-  if (!Number.isFinite(Date.parse(input.returnAt))) return refuseToday('invalid_input');
+  if (input.returnAt !== undefined && !Number.isFinite(Date.parse(input.returnAt))) {
+    return refuseToday('invalid_input');
+  }
 
   const item = await readTodayItem(context, input.itemId);
   if (item === null) return refuseToday('item_unknown');
+  // A colleague's task is a mutation of a colleague's firm (Appendix G 7); the same
+  // answer as an unknown one, for the reason the card read gives.
+  const firm = await loadFirmForUpdate(context, item.firmId);
+  if (firm === null) return refuseToday('item_unknown');
+  const permitted = decideFirmMutation(context, firm);
+  if (!permitted.permitted) return refuseToday(permitted.reason === 'not_assigned' ? 'not_assigned' : 'item_unknown');
   if (item.status !== 'open') return refuseToday('item_not_open');
-
-  // Database time, never the caller's clock: the return instant is compared with the
-  // same clock every other deadline in the system is (docs/decisions/g4-database-time-is-a-parameter.md).
-  const now = await databaseNow(context);
-  if (Date.parse(input.returnAt) <= Date.parse(now)) return refuseToday('snooze_return_not_future');
 
   if (item.automated) {
     const blocked = BLOCKED_KIND_OF_ITEM[item.kind];
@@ -121,33 +178,55 @@ export async function snoozeTodayItem(
     // (`today_items_automated_is_due_work`); refusing rather than guessing one.
     if (blocked === null) return refuseToday('invalid_input');
 
+    const scope = await pauseScopeOf(context, item);
+    // One pause per task: pressing Pause on a task that is already paused answers with
+    // the hold that is already there rather than stacking a second one to release.
+    const { rows: existing } = await context.db.query<{ id: string }>(
+      `SELECT id FROM active_holds
+        WHERE workspace_id = $1 AND released_at IS NULL AND source_event_kind = $2
+          AND scope_kind = $3 AND scope_key = $4 AND $5 = ANY (blocked_action_kinds)
+        ORDER BY started_at, id
+        LIMIT 1`,
+      [context.scope.workspaceId, TODAY_PAUSE_SOURCE_EVENT_KIND, scope.scopeKind, scope.scopeKey, blocked],
+    );
+    const already = existing[0]?.id;
+    if (already !== undefined) {
+      return acceptToday({ outcome: 'held', holdId: already, blockedActionKind: blocked, scope: scope.scopeKind });
+    }
+
     const holdId = await openHold(context, {
-      scopeKind: 'firm',
-      scopeKey: item.firmId,
+      scopeKind: scope.scopeKind,
+      scopeKey: scope.scopeKey,
       reasonCode: 'scoped_pause',
       blockedActionKinds: [blocked],
-      sourceEventKind: 'today.delay_requested',
+      sourceEventKind: TODAY_PAUSE_SOURCE_EVENT_KIND,
       sourceEventId: item.id,
       recoveryAction: 'release_pause',
     });
 
-    // The day's entry is over: the send is not happening today, and what brings the
-    // work back is the hold being released, not the instant that was asked for.
-    await context.db.query(
-      `UPDATE today_items
-          SET status = 'cancelled', snooze_until = NULL, updated_at = greatest(now(), created_at)
-        WHERE workspace_id = $1 AND id = $2 AND status = 'open'`,
-      [context.scope.workspaceId, item.id],
-    );
-
+    // The task stays open. It is the one place the pause is visible, and the card
+    // puts the Resume control on it (`pauseHoldId` in the expanded card).
     await recordCrmAuditEvent(context, {
-      action: 'today.automated_delayed',
+      action: 'today.automated_paused',
       subjectKind: 'today_item',
       subjectId: item.id,
-      detail: { firmId: item.firmId, holdId, reason, requestedReturnAt: input.returnAt, blockedActionKind: blocked },
+      detail: {
+        firmId: item.firmId,
+        holdId,
+        reason,
+        scope: scope.scopeKind,
+        blockedActionKind: blocked,
+        ...(input.returnAt === undefined ? {} : { requestedReturnAt: input.returnAt }),
+      },
     });
-    return acceptToday({ outcome: 'held', holdId, blockedActionKind: blocked });
+    return acceptToday({ outcome: 'held', holdId, blockedActionKind: blocked, scope: scope.scopeKind });
   }
+
+  if (input.returnAt === undefined) return refuseToday('snooze_return_required');
+  // Database time, never the caller's clock: the return instant is compared with the
+  // same clock every other deadline in the system is (docs/decisions/g4-database-time-is-a-parameter.md).
+  const now = await databaseNow(context);
+  if (Date.parse(input.returnAt) <= Date.parse(now)) return refuseToday('snooze_return_not_future');
 
   const { rows } = await context.db.query<SnoozeDbRow>(
     `INSERT INTO today_snoozes
@@ -181,6 +260,78 @@ export async function snoozeTodayItem(
     detail: { firmId: item.firmId, itemKey: item.itemKey, returnAt: input.returnAt, reason },
   });
   return acceptToday({ outcome: 'snoozed', snooze: toSnooze(row) });
+}
+
+export interface ReleasedTodayPause {
+  readonly holdId: string;
+  readonly releasedAt: string;
+  /** What the enrollment did next (4.3): resumed and shifted, still held, or sent to review. */
+  readonly resume: 'resume' | 'still_held' | 'review_required' | 'not_applicable';
+}
+
+/**
+ * Release a paused automated task (lane g79, audit item C22).
+ *
+ * Exactly the hold a Today pause opened, and only such a hold: "clearing one hold
+ * never clears another" (4.3), so a mailbox hold, a suppression review or an admin's
+ * pause on the same work is out of reach of this control by construction — the
+ * `source_event_kind` is the filter. The enrollment is then asked to resume in the
+ * same transaction, which shifts its unexecuted steps by the union of the intervals
+ * that blocked it, leaves it held if something else still does, or sends a pause
+ * longer than seven days to review.
+ */
+export async function releaseTodayPause(
+  context: RepositoryContext,
+  input: { readonly holdId: string },
+): Promise<TodayResult<ReleasedTodayPause>> {
+  const actor = context.scope.actor;
+  if (actor.kind !== 'user') return refuseToday('invalid_input');
+
+  const { rows } = await context.db.query<{
+    scope_kind: string;
+    scope_key: string | null;
+    released_at: Date | null;
+  }>(
+    `SELECT scope_kind, scope_key, released_at FROM active_holds
+      WHERE workspace_id = $1 AND id = $2 AND source_event_kind = $3
+      FOR UPDATE`,
+    [context.scope.workspaceId, input.holdId, TODAY_PAUSE_SOURCE_EVENT_KIND],
+  );
+  const hold = rows[0];
+  if (hold === undefined || hold.scope_key === null) return refuseToday('pause_unknown');
+
+  let firmId: string | null = hold.scope_kind === 'firm' ? hold.scope_key : null;
+  const enrollmentId = hold.scope_kind === 'enrollment' ? hold.scope_key : null;
+  if (enrollmentId !== null) {
+    const { rows: enrollments } = await context.db.query<{ firm_id: string }>(
+      'SELECT firm_id FROM sequence_enrollments WHERE workspace_id = $1 AND id = $2',
+      [context.scope.workspaceId, enrollmentId],
+    );
+    firmId = enrollments[0]?.firm_id ?? null;
+  }
+  if (firmId === null) return refuseToday('pause_unknown');
+  const firm = await loadFirmForUpdate(context, firmId);
+  if (firm === null) return refuseToday('pause_unknown');
+  const permitted = decideFirmMutation(context, firm);
+  if (!permitted.permitted) return refuseToday(permitted.reason === 'not_assigned' ? 'not_assigned' : 'pause_unknown');
+  if (hold.released_at !== null) return refuseToday('pause_already_released');
+
+  const released = await releaseHold(context, input.holdId);
+  if (released === null) return refuseToday('pause_already_released');
+
+  let resume: ReleasedTodayPause['resume'] = 'not_applicable';
+  if (enrollmentId !== null) {
+    const resumed = await resumeEnrollment(context, { enrollmentId });
+    if (resumed.ok) resume = resumed.value.kind;
+  }
+
+  await recordCrmAuditEvent(context, {
+    action: 'today.pause_released',
+    subjectKind: 'active_hold',
+    subjectId: input.holdId,
+    detail: { firmId, scope: hold.scope_kind, resume },
+  });
+  return acceptToday({ holdId: input.holdId, releasedAt: released.releasedAt, resume });
 }
 
 /** Cancel a snooze and put its task back on today's list. */

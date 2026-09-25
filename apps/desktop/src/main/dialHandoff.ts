@@ -73,10 +73,23 @@ export type SetupProof =
   | { readonly ready: true }
   | { readonly ready: false; readonly reason: 'no_tel_handler' | 'handler_changed' };
 
+/**
+ * What the call was authorized with, carried out of the handoff so the outcome that
+ * records the call can name it (lane g79, audit item C16). The ticket id and the
+ * calling identity are the server's own values from the ticket it issued and this
+ * process consumed; the renderer never sees them.
+ */
+export interface HandoffTicket {
+  readonly ticketId: string;
+  readonly callingIdentityId: string;
+  readonly routeId: string;
+  readonly contactId: string | null;
+}
+
 export type HandoffOutcome =
-  | { readonly status: 'opened'; readonly e164: string }
+  | { readonly status: 'opened'; readonly e164: string; readonly ticket?: HandoffTicket | undefined }
   /** The open was invoked and may have reached the OS. The ticket is spent either way. */
-  | { readonly status: 'opened_unknown' }
+  | { readonly status: 'opened_unknown'; readonly ticket?: HandoffTicket | undefined }
   | { readonly status: 'refused'; readonly reason: DialRefusalCode | 'no_tel_handler' | 'handler_changed' | 'invalid_target' }
   | { readonly status: 'not_authorized'; readonly reason: string };
 
@@ -170,15 +183,21 @@ export function createDialHandoff(deps: { readonly driver: PhoneLaunchDriver; re
         return { status: 'refused', reason: 'invalid_target' };
       }
 
+      const ticket: HandoffTicket = {
+        ticketId: authorized.ticket.ticketId,
+        callingIdentityId: authorized.ticket.callingIdentityId,
+        routeId: authorized.ticket.routeId,
+        contactId: authorized.ticket.contactId,
+      };
       try {
         const pending = deps.driver.openTelUri(consumed.consumed.telUri);
         return await pending.then(
-          (): HandoffOutcome => ({ status: 'opened', e164: number }),
-          (): HandoffOutcome => ({ status: 'opened_unknown' }),
+          (): HandoffOutcome => ({ status: 'opened', e164: number, ticket }),
+          (): HandoffOutcome => ({ status: 'opened_unknown', ticket }),
         );
       } catch {
         // A synchronous throw may still have happened after the handoff began.
-        return { status: 'opened_unknown' };
+        return { status: 'opened_unknown', ticket };
       }
     },
   };

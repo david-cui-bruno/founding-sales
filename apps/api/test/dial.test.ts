@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { loggedCallResultSchema, wireDrift } from '@fss/contracts';
 import { POSTURE_STATEMENT_KEYS } from '@fss/domain';
 import { recordingSuppressionJournal, type RecordingSuppressionJournal } from '@fss/domain/suppression';
 import { dispatch, type ApiRequest } from '../src/server.ts';
@@ -338,14 +339,74 @@ describe('policy, suppression and dialing routes', () => {
     expect((theirs.body['calls'] as { note: string | null }[])[0]?.note).toBeNull();
   });
 
-  it('creates a callback only with a confirmed instant, and completes it once', async () => {
+  it('records a callback request without an instant, and puts the time on Today to set later (lane g79, C13)', async () => {
     const withoutInstant = await post(
       '/calls/log',
       assigneeToken,
-      command({ firmId, outcome: 'callback_requested', occurredAt: new Date().toISOString() }),
+      command({ firmId, outcome: 'callback_requested' }),
     );
-    expect(withoutInstant.status).toBe(409);
-    expect(withoutInstant.body['reason']).toBe('invalid_input');
+    // "Call logging ... never refuses history" (9.1): the call is recorded, and what it
+    // still needs is said rather than refused.
+    expect(withoutInstant.status).toBe(200);
+    const logged = resultOf(withoutInstant);
+    // Every key the route sends is one the contract declares (lane g78's wireDrift).
+    expect(wireDrift(loggedCallResultSchema, logged)).toEqual([]);
+    expect(logged['callbackId']).toBeNull();
+    expect(logged['followUps']).toEqual([{ kind: 'callback_time_needed', reason: 'no_instant' }]);
+    const callLogId = String(logged['callLogId']);
+
+    // The instant the salesperson now confirms is resolved by the server, and a dueAt
+    // that disagrees with it is refused (C18).
+    const wrong = await post(
+      '/callbacks/schedule',
+      assigneeToken,
+      command({
+        callLogId,
+        localDate: '2026-09-22',
+        localTime: '14:00',
+        sourceTimeZone: 'America/New_York',
+        dueAt: '2026-09-22T19:00:00.000Z',
+      }),
+    );
+    expect(wrong.status).toBe(409);
+    expect(wrong.body['reason']).toBe('callback_instant_mismatch');
+
+    const scheduled = await post(
+      '/callbacks/schedule',
+      assigneeToken,
+      command({ callLogId, localDate: '2026-09-22', localTime: '14:00', sourceTimeZone: 'America/New_York' }),
+    );
+    expect(scheduled.status).toBe(200);
+    expect(resultOf(scheduled)['dueAt']).toBe('2026-09-22T18:00:00.000Z');
+    const twice = await post(
+      '/callbacks/schedule',
+      assigneeToken,
+      command({ callLogId, localDate: '2026-09-23', sourceTimeZone: 'America/New_York' }),
+    );
+    expect(twice.status).toBe(409);
+    expect(twice.body['reason']).toBe('callback_already_scheduled');
+  });
+
+  it('creates a callback with a confirmed instant, refuses a disagreeing one, and completes it once', async () => {
+    const mismatched = await post(
+      '/calls/log',
+      assigneeToken,
+      command({
+        firmId,
+        contactId,
+        outcome: 'callback_requested',
+        callback: {
+          localDate: '2026-09-22',
+          localTime: '14:00',
+          // An hour off: what a client resolving on its own clock would have sent.
+          dueAt: '2026-09-22T17:00:00.000Z',
+          sourceTimeZone: 'America/New_York',
+        },
+      }),
+    );
+    expect(mismatched.status).toBe(200);
+    expect(resultOf(mismatched)['callbackId']).toBeNull();
+    expect(resultOf(mismatched)['followUps']).toEqual([{ kind: 'callback_time_needed', reason: 'instant_mismatch' }]);
 
     const withInstant = await post(
       '/calls/log',
@@ -354,7 +415,6 @@ describe('policy, suppression and dialing routes', () => {
         firmId,
         contactId,
         outcome: 'callback_requested',
-        occurredAt: new Date().toISOString(),
         callback: {
           localDate: '2026-09-22',
           localTime: '14:00',
@@ -366,14 +426,82 @@ describe('policy, suppression and dialing routes', () => {
     expect(withInstant.status).toBe(200);
     const callbackId = resultOf(withInstant)['callbackId'];
     expect(callbackId).not.toBeNull();
+    expect(resultOf(withInstant)['followUps']).toEqual([]);
 
     const listed = await get('/callbacks', assigneeToken, 'open=true');
     expect((listed.body['callbacks'] as { id: string }[]).some(row => row.id === callbackId)).toBe(true);
+
+    // A colleague cannot complete the assignee's callback (Appendix G 7).
+    const theirs = await post('/callbacks/complete', strangerToken, command({ callbackId }));
+    expect(theirs.status).toBe(409);
+    expect(theirs.body['reason']).toBe('not_assigned');
 
     expect((await post('/callbacks/complete', assigneeToken, command({ callbackId }))).status).toBe(200);
     const second = await post('/callbacks/complete', assigneeToken, command({ callbackId }));
     expect(second.status).toBe(409);
     expect(second.body['reason']).toBe('callback_not_open');
+  });
+
+  it('records "just now" on the server clock, and refuses a time that has not happened (lane g79, C15)', async () => {
+    const clock = await fixture.db.query<{ now: Date }>('SELECT now() AS now');
+    const before = (clock.rows[0]?.now ?? new Date()).getTime();
+    const justNow = await post('/calls/log', assigneeToken, command({ firmId, outcome: 'no_answer' }));
+    expect(justNow.status).toBe(200);
+    expect(Date.parse(String(resultOf(justNow)['occurredAt']))).toBeGreaterThanOrEqual(before);
+
+    // A Mac thirty seconds fast is an unsynchronised clock, read as now...
+    const fast = await post(
+      '/calls/log',
+      assigneeToken,
+      command({ firmId, outcome: 'busy', occurredAt: new Date(Date.now() + 30_000).toISOString() }),
+    );
+    expect(fast.status).toBe(200);
+    expect(Date.parse(String(resultOf(fast)['occurredAt']))).toBeLessThanOrEqual(Date.now() + 1_000);
+
+    // ...an hour ahead is a time that has not happened...
+    const future = await post(
+      '/calls/log',
+      assigneeToken,
+      command({ firmId, outcome: 'busy', occurredAt: new Date(Date.now() + 3_600_000).toISOString() }),
+    );
+    expect(future.status).toBe(409);
+    expect(future.body['reason']).toBe('occurred_at_in_future');
+
+    // ...and yesterday is history, kept as entered.
+    const yesterday = new Date(Date.now() - 86_400_000).toISOString();
+    const entered = await post('/calls/log', assigneeToken, command({ firmId, outcome: 'busy', occurredAt: yesterday }));
+    expect(entered.status).toBe(200);
+    expect(resultOf(entered)['occurredAt']).toBe(yesterday);
+  });
+
+  it('refuses a route from another firm before anything is written (lane g79, S15)', async () => {
+    const other = await post(
+      '/firms/create',
+      adminToken,
+      command({ name: 'Larkspur Test Foundry', regionCode: 'RI', postalCode: '02903', assignedUserId: assigneeUserId }),
+    );
+    const otherFirmId = String(resultOf(other)['id']);
+    const before = await fixture.db.query<{ count: string }>(
+      'SELECT count(*)::text AS count FROM call_logs WHERE workspace_id = $1',
+      [fixture.alpha.workspaceId],
+    );
+    const answer = await post(
+      '/calls/log',
+      assigneeToken,
+      command({ firmId: otherFirmId, routeId, outcome: 'wrong_number' }),
+    );
+    expect(answer.status).toBe(409);
+    expect(answer.body['reason']).toBe('route_unknown');
+    const after = await fixture.db.query<{ count: string }>(
+      'SELECT count(*)::text AS count FROM call_logs WHERE workspace_id = $1',
+      [fixture.alpha.workspaceId],
+    );
+    expect(after.rows[0]?.count).toBe(before.rows[0]?.count);
+    const route = await fixture.db.query<{ eligibility: string }>(
+      'SELECT eligibility FROM phone_routes WHERE workspace_id = $1 AND id = $2',
+      [fixture.alpha.workspaceId, routeId],
+    );
+    expect(route.rows[0]?.eligibility).not.toBe('retired');
   });
 
   it('keeps posture and pause administration to admins', async () => {

@@ -219,7 +219,12 @@ describe('the handoff, end to end through the real logic', () => {
       routeVersion: 3,
       callingIdentityId: IDENTITY_ID,
     });
-    expect(outcome).toEqual({ status: 'opened', e164: NUMBER });
+    // Lane g79 (C16): the handoff carries out what authorized the call, for the outcome.
+    expect(outcome).toEqual({
+      status: 'opened',
+      e164: NUMBER,
+      ticket: { ticketId: TICKET_ID, callingIdentityId: IDENTITY_ID, routeId: ROUTE_ID, contactId: null },
+    });
     expect(opened).toEqual([TEL]);
     expect(calls.map(call => call.path)).toEqual(['/dial/authorize', '/dial/consume']);
     expect(calls[0]?.body['commandId']).toBe('cmd-authorize');
@@ -273,6 +278,9 @@ describe('the handoff, end to end through the real logic', () => {
         routeVersion: 3,
         callingIdentityId: IDENTITY_ID,
       }),
-    ).toEqual({ status: 'opened_unknown' });
+    ).toEqual({
+      status: 'opened_unknown',
+      ticket: { ticketId: TICKET_ID, callingIdentityId: IDENTITY_ID, routeId: ROUTE_ID, contactId: null },
+    });
   });
 });

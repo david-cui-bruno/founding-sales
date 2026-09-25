@@ -1,7 +1,14 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { currentCallingIdentityId } from '../dial/identities.ts';
 import { businessDateOf, listTodayCards, listTodayItems, workspaceBusinessTimeZone } from './snapshots.ts';
-import type { TodayCounts, TodayItemKind, TodayLane } from './types.ts';
+import {
+  TODAY_PAUSE_SOURCE_EVENT_KIND,
+  callLogIdOfItemKey,
+  type TodayCounts,
+  type TodayItemKind,
+  type TodayItemRow,
+  type TodayLane,
+} from './types.ts';
 
 /**
  * What the API returns and the Mac shows (specification 8.2, 14.1, Appendix F).
@@ -46,9 +53,35 @@ export interface TodayTaskDto {
   readonly lane: TodayLane;
   readonly dueAt: string;
   readonly status: 'open' | 'snoozed';
-  /** True when FSS performs it. The Mac offers a hold rather than a snooze (8.2). */
+  /** True when FSS performs it. The Mac offers a pause rather than a snooze (8.2). */
   readonly automated: boolean;
   readonly snoozeUntil: string | null;
+}
+
+/**
+ * A task as the expanded card's second version carries it (lane g79).
+ *
+ * Four identities G6's task dropped, each of which a control needs:
+ *
+ *  * `callbackId` — the callback behind a callback task. Recording the call's outcome
+ *    against the task completes it (Appendix A "Callback confirm/complete"; C17).
+ *  * `stepExecutionId` — the sequence step behind a due task. A call logged against the
+ *    task applies the step's configured successor or retry (9.1; C04).
+ *  * `callLogId` — for "Callback — needs a time": the recorded call that asked for a
+ *    callback without a confirmed instant (C13). Setting the time schedules it.
+ *  * `pauseHoldId` — an automated task a person paused, and the hold the Resume
+ *    control releases (8.2; C22).
+ *
+ * A second version rather than four more fields on the first, because the Mac parses
+ * the expanded card with a strict schema: a desktop that has never heard of these
+ * fields would refuse the whole card. `readTodayFirm` returns this shape and the route
+ * projects it back to `TodayTaskDto` for a client that did not ask for version 2.
+ */
+export interface TodayTaskDtoV2 extends TodayTaskDto {
+  readonly callbackId: string | null;
+  readonly stepExecutionId: string | null;
+  readonly callLogId: string | null;
+  readonly pauseHoldId: string | null;
 }
 
 /**
@@ -68,13 +101,13 @@ export interface TodayRouteDto {
   readonly eligibility: string;
 }
 
-export interface TodayFirmDto {
+export interface TodayFirmDto<Task extends TodayTaskDto = TodayTaskDtoV2> {
   readonly firmId: string;
   readonly firmName: string;
   readonly snapshotDate: string;
   readonly lane: TodayLane;
   readonly counts: TodayCounts;
-  readonly tasks: readonly TodayTaskDto[];
+  readonly tasks: readonly Task[];
   readonly routes: readonly TodayRouteDto[];
   /**
    * The acting salesperson's own active verified number, or null.
@@ -87,6 +120,98 @@ export interface TodayFirmDto {
    */
   readonly callingIdentityId: string | null;
 }
+
+/**
+ * The expanded card in G6's first shape: every task without the four identities of
+ * `TodayTaskDtoV2`. What `/today/firm` answers a client that did not ask for version 2,
+ * so a desktop released before lane g79 keeps parsing the card it always parsed.
+ */
+export function todayFirmVersion1(page: TodayFirmDto): TodayFirmDto<TodayTaskDto> {
+  return {
+    ...page,
+    tasks: page.tasks.map(task => ({
+      itemId: task.itemId,
+      contactId: task.contactId,
+      contactName: task.contactName,
+      kind: task.kind,
+      lane: task.lane,
+      dueAt: task.dueAt,
+      status: task.status,
+      automated: task.automated,
+      snoozeUntil: task.snoozeUntil,
+    })),
+  };
+}
+
+/**
+ * The open Today pauses covering this firm's automated tasks, by the task they cover.
+ *
+ * A pause is a hold with `source_event_kind = 'today.delay_requested'`, scoped to the
+ * task's enrollment or — for a hold G6 opened — to the firm. One read of the holds and
+ * one of the executions, matched here: the hold's scope and blocked kind against the
+ * task's enrollment and kind.
+ */
+async function pausesByItem(
+  context: RepositoryContext,
+  firmId: string,
+  items: readonly TodayItemRow[],
+): Promise<ReadonlyMap<string, string>> {
+  const automated = items.filter(item => item.automated);
+  if (automated.length === 0) return new Map();
+  const { rows: holds } = await context.db.query<{
+    id: string;
+    scope_kind: string;
+    scope_key: string;
+    blocked_action_kinds: string[];
+  }>(
+    `SELECT h.id, h.scope_kind, h.scope_key, h.blocked_action_kinds
+       FROM active_holds h
+      WHERE h.workspace_id = $1
+        AND h.released_at IS NULL
+        AND h.source_event_kind = $2
+        AND ((h.scope_kind = 'firm' AND h.scope_key = ($3::uuid)::text)
+             OR (h.scope_kind = 'enrollment' AND h.scope_key IN (
+                   SELECT n.id::text FROM sequence_enrollments n
+                    WHERE n.workspace_id = $1 AND n.firm_id = $3::uuid)))
+      ORDER BY h.started_at, h.id`,
+    [context.scope.workspaceId, TODAY_PAUSE_SOURCE_EVENT_KIND, firmId],
+  );
+  if (holds.length === 0) return new Map();
+
+  const executionIds = automated
+    .filter(item => item.sourceKind === 'step_execution' && item.sourceId !== null)
+    .map(item => item.sourceId as string);
+  const { rows: executions } = await context.db.query<{ id: string; enrollment_id: string }>(
+    'SELECT id, enrollment_id FROM step_executions WHERE workspace_id = $1 AND id = ANY($2::uuid[])',
+    [context.scope.workspaceId, executionIds],
+  );
+  const enrollmentOf = new Map(executions.map(row => [row.id, row.enrollment_id]));
+
+  const found = new Map<string, string>();
+  for (const item of automated) {
+    const kind = PAUSED_ACTION_KIND[item.kind];
+    if (kind === null) continue;
+    const enrollmentId = item.sourceId === null ? undefined : enrollmentOf.get(item.sourceId);
+    const hold = holds.find(
+      row =>
+        row.blocked_action_kinds.includes(kind) &&
+        ((row.scope_kind === 'enrollment' && row.scope_key === enrollmentId) ||
+          (row.scope_kind === 'firm' && row.scope_key === item.firmId)),
+    );
+    if (hold !== undefined) found.set(item.id, hold.id);
+  }
+  return found;
+}
+
+/** The action kind a paused automated task blocks. The same table `snooze.ts` opens holds with. */
+const PAUSED_ACTION_KIND: Readonly<Record<TodayItemKind, string | null>> = Object.freeze({
+  reply: null,
+  callback: null,
+  email_due: 'email_send',
+  call_due: 'call_task',
+  linkedin_due: 'linkedin_task',
+  new_firm: null,
+});
 
 /** Which assignee's list a scope may read, or undefined for "every one". */
 function assigneeFilter(context: RepositoryContext): string | undefined {
@@ -147,6 +272,7 @@ export async function readTodayFirm(
   if (card === undefined) return null;
 
   const items = await listTodayItems(context, { businessDate: snapshotDate, firmId: input.firmId });
+  const pauses = await pausesByItem(context, input.firmId, items);
 
   // Unretired numbers at this firm, with the version `authorizeDial` will compare.
   // Candidates are included and marked rather than hidden: "no number" and "a number
@@ -187,6 +313,10 @@ export async function readTodayFirm(
       status: item.status === 'snoozed' ? 'snoozed' : 'open',
       automated: item.automated,
       snoozeUntil: item.snoozeUntil,
+      callbackId: item.sourceKind === 'callback' ? item.sourceId : null,
+      stepExecutionId: item.sourceKind === 'step_execution' ? item.sourceId : null,
+      callLogId: callLogIdOfItemKey(item.itemKey),
+      pauseHoldId: pauses.get(item.id) ?? null,
     })),
     routes: routes.rows.map(row => ({
       routeId: row.id,
