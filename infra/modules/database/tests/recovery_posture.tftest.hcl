@@ -123,10 +123,13 @@ run "parameter_group_logs_slow_statements_and_forces_tls" {
     error_message = "rds.force_ssl and log_autovacuum_min_duration are pending-reboot, which is what AWS holds for them."
   }
 
+  # The others leave apply_method unset. The provider fills in its default,
+  # "immediate", in its own plan, which a mocked plan never runs, so here an unset
+  # method is null and is read as that default.
   assert {
     condition = length([
       for parameter in aws_db_parameter_group.main.parameter :
-      parameter if !contains(["rds.force_ssl", "log_autovacuum_min_duration"], parameter.name) && parameter.apply_method != "immediate"
+      parameter if !contains(["rds.force_ssl", "log_autovacuum_min_duration"], parameter.name) && coalesce(parameter.apply_method, "immediate") != "immediate"
     ]) == 0
     error_message = "Every other parameter is immediate, which is what AWS holds for them."
   }
