@@ -11,7 +11,7 @@ import type { WorkerConfig } from './config.ts';
 import { createLiveness, type Liveness } from './liveness.ts';
 import { errorFields, type Logger } from './log.ts';
 import { drain, startLoop, type Loop } from './loop.ts';
-import { enforceRestoreGeneration } from './restoreGeneration.ts';
+import { enforceRestoreGeneration, observeRestoreGeneration } from './restoreGeneration.ts';
 
 /**
  * The worker process (specification 13, 4.2, Appendix E).
@@ -259,6 +259,16 @@ export async function startWorker(options: WorkerProcessOptions): Promise<Worker
     intervalMilliseconds: config.metricsIntervalMilliseconds,
     onError: error => logLoopFailure('metrics', error),
     run: async () => {
+      // Audit O16 (lane g81): a restore-generation mismatch is a condition, not an
+      // event. While it lasts, every pass logs it again, so the immediately-critical
+      // alarm over it stays in ALARM until the generation is reconciled rather than
+      // clearing a few minutes after startup. Before the collectors, and caught on its
+      // own, so a failed read here never costs the heartbeats their publication.
+      try {
+        await observeRestoreGeneration(sessions.metrics, { expectedGeneration: config.expectedSystemGeneration, log });
+      } catch (error) {
+        log.log('error', 'metrics_collect_failed', { collector: 'restore_generation', ...errorFields(error) });
+      }
       const data: MetricDatum[] = [];
       for (const [collector, collect] of collectors) {
         try {

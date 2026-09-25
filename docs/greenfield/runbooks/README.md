@@ -19,20 +19,23 @@ General facts that apply to every page:
 
 - Alerts arrive by SNS email, which does not depend on any salesperson Gmail grant.
 - **The e-mail comes from a composite alarm, never from the alarm a page is named
-  after** (lane g62). Two alarms notify: `<prefix>-critical`, over every critical alarm
-  and `all_sequences_held`, and `<prefix>-warning`, over `oldest_runnable_job_warning`,
-  `dead_job_unresolved` and `unacknowledged_critical_alert`. Each sends one e-mail when
-  it goes to `ALARM` and one when it returns to `OK`. The alarms these pages are named
-  after keep their state and send nothing. The composite's state-change reason names
-  the member that raised it, and that member's key is the page to open.
-- **A composite already in `ALARM` stays quiet when a second member trips**, and sends
-  its `OK` only when every member has cleared. So an e-mail tells you an incident
-  started, not everything that is wrong. List what is in `ALARM` now before deciding
+  after** (lanes g62 and g81). Each critical condition has its own composite,
+  `<prefix>-critical-<condition>`, which e-mails when that condition trips — even while
+  another critical condition is already open — and the page to open is the condition in
+  its name. `<prefix>-critical`, over every critical alarm and `all_sequences_held`,
+  sends one e-mail: the all-clear, when every critical condition has cleared.
+  `<prefix>-warning`, over the warnings, sends one e-mail when it goes to `ALARM` and
+  one when it returns to `OK`. The alarms these pages are named after keep their state
+  and send nothing.
+- **A dead worker is one e-mail.** The API, scheduler and mailbox heartbeats and the
+  canary are published by the worker and trip whenever it stops publishing. Their
+  composites stay quiet while `worker_heartbeat_missed` is in `ALARM`, and e-mail five
+  minutes after it clears only if they are still true.
+- **The warning roll-up still stays quiet when a second warning trips**, and sends its
+  `OK` only when every warning has cleared. List what is in `ALARM` now before deciding
   which page to work:
   `aws cloudwatch describe-alarms --state-value ALARM --alarm-name-prefix fss-prod
-  --query 'MetricAlarms[].AlarmName'`. A member that stays in `ALARM` for days (a dead
-  job nobody resolved, say) keeps its composite in `ALARM` and hides every later member
-  of it from the inbox until it clears.
+  --query 'MetricAlarms[].AlarmName'`.
 - Every alarm reads its own environment's CloudWatch namespace, `FSS/<prefix>`:
   `FSS/fss-prod` in production, `FSS/fss-rh-<run>` in a rehearsal. To read a metric
   by hand, name it: `aws cloudwatch get-metric-statistics --namespace FSS/fss-prod

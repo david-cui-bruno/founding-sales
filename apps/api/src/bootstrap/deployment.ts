@@ -626,23 +626,38 @@ export function describeDeployment(deployment: ApiDeployment): LogFields {
 }
 
 /**
+ * The two pieces of `@aws-sdk/client-s3` the journal put uses, narrowed so a test can
+ * hand in a fake client and prove what a refused put does without an AWS credential.
+ */
+export interface S3JournalSdk {
+  readonly S3Client: new (configuration: { region: string }) => { send(command: unknown): Promise<unknown> };
+  readonly PutObjectCommand: new (input: Record<string, unknown>) => unknown;
+}
+
+/**
  * The S3 put the journal is built over, loaded only by a process that has credentials.
  *
  * `apps/api/src/journal` deliberately imports no SDK; this is the "process with
- * credentials" that file's comment names. A `412` is success: `IfNoneMatch: '*'` means
- * a replayed deterministic id does not overwrite an object that is already durable.
+ * credentials" that file's comment names. `sdk` is for tests; production passes none.
+ *
+ * A `412 PreconditionFailed` is success: `IfNoneMatch: '*'` means a replayed
+ * deterministic id does not overwrite an object that is already durable, and the key
+ * *is* that id, so an object at it is this event. A `409 ConditionalRequestConflict`
+ * is not (audit S12, lane g81). It says another write to the same key was in flight,
+ * and that write may yet fail, so it proves nothing is durable. Until this lane both
+ * were `already_present`, which let a conflict acknowledge a suppression no object
+ * recorded. It now throws like any other refusal, `createS3SuppressionJournal` turns
+ * that into `JOURNAL_UNAVAILABLE`, and the command fails with 503 `journal_unavailable`
+ * (`routes/dialSupport.ts`). Its retry meets the object (`412`) or writes it.
  */
-export async function loadJournalPutObject(region: string): Promise<JournalPutObject> {
+export async function loadJournalPutObject(region: string, sdk?: S3JournalSdk): Promise<JournalPutObject> {
   const specifier = '@aws-sdk/client-s3';
-  const sdk = (await import(specifier)) as {
-    S3Client: new (configuration: { region: string }) => { send(command: unknown): Promise<unknown> };
-    PutObjectCommand: new (input: Record<string, unknown>) => unknown;
-  };
-  const client = new sdk.S3Client({ region });
+  const loaded = sdk ?? ((await import(specifier)) as S3JournalSdk);
+  const client = new loaded.S3Client({ region });
   return async request => {
     try {
       await client.send(
-        new sdk.PutObjectCommand({
+        new loaded.PutObjectCommand({
           Bucket: request.bucket,
           Key: request.key,
           Body: request.body,
@@ -653,7 +668,7 @@ export async function loadJournalPutObject(region: string): Promise<JournalPutOb
       return 'written';
     } catch (error) {
       const name = error instanceof Error ? error.name : 'unknown';
-      if (name === 'PreconditionFailed' || name === 'ConditionalRequestConflict') return 'already_present';
+      if (name === 'PreconditionFailed') return 'already_present';
       throw error;
     }
   };

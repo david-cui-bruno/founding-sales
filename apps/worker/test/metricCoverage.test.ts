@@ -159,10 +159,10 @@ describe('every alarm metric has something that emits it', () => {
     await recordHeartbeat(database.session, { component: 'api', instanceKey: 'api-test' });
 
     // A connected mailbox with a live watch, so the mail lane's gauges have
-    // something to report: GmailWatchHoursToExpiry and MailboxCheckHeartbeat. Both
-    // are deliberately silent when there is no mailbox — the alarms treat missing
-    // data as not breaching, and a deployment with no Gmail connected is not a
-    // deployment whose watch is about to lapse.
+    // something to report: GmailWatchHoursToExpiry and MailboxCheckHeartbeat. The
+    // watch gauge is silent when no mailbox is connected, and its alarm treats
+    // missing data as not breaching; the check heartbeat reads 1 then, because its
+    // alarm treats missing data as a missed check (lane g81, audit O15).
     const mailWorkspace = workspaces[0] ?? '';
     const user = await database.session.query<{ id: string }>(
       `INSERT INTO users (google_sub, email, display_name)
@@ -276,6 +276,9 @@ describe('every alarm metric has something that emits it', () => {
       'UnacknowledgedCriticalAlertAgeSeconds',
       'MailboxCheckHeartbeat',
       'GmailWatchHoursToExpiry',
+      // Published while a mailbox is connected and ready (lane g81); the fixture's has
+      // no watermark yet, which the gauge reads as one second past the window.
+      'MailboxCoverageAgeSeconds',
       'MailboxDisconnectedHours',
       // Published on every pass, 0 or 1, whatever the time of day (lane g67).
       'TodaySnapshotMissing',

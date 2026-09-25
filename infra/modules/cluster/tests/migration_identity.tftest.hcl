@@ -478,3 +478,70 @@ run "each_one_off_task_definition_carries_the_identity_it_is_for" {
     error_message = "Migration, operations and drill are three identities, not one address repeated."
   }
 }
+
+# Lane g81, audit S17: each task definition carries the application secrets its own
+# process reads and no others. The six names are the secrets module's defaults, which
+# is what the stack hands this module.
+run "each_task_definition_carries_only_the_secrets_its_process_reads" {
+  command = plan
+
+  variables {
+    secret_arns = {
+      "device-credential-pepper"      = "arn:aws:secretsmanager:us-east-1:123456789012:secret:fss-test/device-credential-pepper-dddddd"
+      "google-gmail-oauth-client"     = "arn:aws:secretsmanager:us-east-1:123456789012:secret:fss-test/google-gmail-oauth-client-eeeeee"
+      "google-oidc-client"            = "arn:aws:secretsmanager:us-east-1:123456789012:secret:fss-test/google-oidc-client-ffffff"
+      "llm-classifier-api-key"        = "arn:aws:secretsmanager:us-east-1:123456789012:secret:fss-test/llm-classifier-api-key-gggggg"
+      "research-provider-credentials" = "arn:aws:secretsmanager:us-east-1:123456789012:secret:fss-test/research-provider-credentials-hhhhhh"
+      "session-signing-key"           = "arn:aws:secretsmanager:us-east-1:123456789012:secret:fss-test/session-signing-key-aaaaaa"
+    }
+  }
+
+  assert {
+    condition = (
+      output.task_secret_names.api == tolist(["DATABASE_SECRET_ARN", "device-credential-pepper", "google-gmail-oauth-client", "google-oidc-client", "session-signing-key"])
+      && output.task_secret_names.worker == tolist(["DATABASE_SECRET_ARN", "google-gmail-oauth-client", "llm-classifier-api-key", "research-provider-credentials"])
+      && output.task_secret_names.operations == tolist(["DATABASE_SECRET_ARN", "google-gmail-oauth-client"])
+      && output.task_secret_names.drill == tolist(["DATABASE_SECRET_ARN", "MIGRATION_DATABASE_SECRET", "google-gmail-oauth-client"])
+      && output.task_secret_names.migration == tolist(["FSS_RUNTIME_DATABASE_SECRET_ARN", "MIGRATION_DATABASE_SECRET"])
+    )
+    error_message = "Each process gets the secrets it reads: the API its sign-in and session material, the worker, the operations tool and the drill the Gmail client, and the worker its own lanes' keys."
+  }
+
+  # Read from the definitions themselves, so the output cannot say one thing while
+  # the containers are given another.
+  assert {
+    condition = alltrue([
+      for pair in [
+        [aws_ecs_task_definition.api, output.task_secret_names.api],
+        [aws_ecs_task_definition.worker, output.task_secret_names.worker],
+        [aws_ecs_task_definition.operations, output.task_secret_names.operations],
+        [aws_ecs_task_definition.drill, output.task_secret_names.drill],
+      ] :
+      toset([for reference in jsondecode(pair[0].container_definitions)[0].secrets : reference.name]) == toset(pair[1])
+    ])
+    error_message = "The task definitions carry exactly the secret names the output reports."
+  }
+
+  assert {
+    condition = alltrue(flatten([
+      for definition in [aws_ecs_task_definition.worker, aws_ecs_task_definition.operations, aws_ecs_task_definition.drill] : [
+        for reference in jsondecode(definition.container_definitions)[0].secrets :
+        !contains(["session-signing-key", "device-credential-pepper", "google-oidc-client"], reference.name)
+      ]
+    ]))
+    error_message = "The session-signing key, the device-credential pepper and the sign-in client are the API's alone."
+  }
+}
+
+run "a_secret_no_process_reads_is_refused" {
+  command = plan
+
+  variables {
+    secret_arns = {
+      "session-signing-key" = "arn:aws:secretsmanager:us-east-1:123456789012:secret:fss-test/session-signing-key-aaaaaa"
+      "unclaimed-secret"    = "arn:aws:secretsmanager:us-east-1:123456789012:secret:fss-test/unclaimed-secret-iiiiii"
+    }
+  }
+
+  expect_failures = [aws_ecs_task_definition.api]
+}

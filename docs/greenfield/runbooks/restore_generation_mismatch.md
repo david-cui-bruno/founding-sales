@@ -5,7 +5,15 @@
 ## Symptoms
 
 The database's `system_generation` does not match the operator-controlled expected
-generation. Restore holds are blocking sending and dialing. `/readyz` fails closed.
+generation. Restore holds are blocking sending and dialing. `/readyz` fails closed, and
+since lane g81 the load balancer reads `/readyz`, so the API is out of service and ECS
+cycles its tasks until the generation is reconciled; step 9 runs from the operations
+task.
+
+The worker logs the event at startup and again on every metric pass while the mismatch
+lasts, so the alarm stays in `ALARM` until it is resolved and clears three quiet
+minutes after. A drill or `fss admin restore-holds open` logs it once, which trips the
+alarm for about three minutes.
 
 ## First checks
 

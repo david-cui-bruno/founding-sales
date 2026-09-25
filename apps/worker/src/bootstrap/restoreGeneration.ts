@@ -26,6 +26,20 @@ import { errorFields, type Logger } from './log.ts';
  * The line is written even when the write fails, and the failure is then thrown: the
  * alarm must not depend on the hold, and a process that could not hold a restored
  * database must not go on to act on it.
+ *
+ * ## While it persists (audit O16, lane g81)
+ *
+ * The startup line is one event, and the alarm over it is one datapoint of one minute
+ * with missing data not breaching, so a mismatch that was still there an hour later
+ * read OK three minutes after the worker started. `observeRestoreGeneration` below is
+ * the continuing half: the worker's metric loop calls it on every pass, and while the
+ * pinned generation and the database's still differ it writes the same event again,
+ * so `RestoreGenerationMismatches` reads one per pass for as long as the condition
+ * lasts and none once it is resolved. The alarm keeps the log-derived metric rather
+ * than a `PutMetricData` gauge for the reason the observability module gives for all
+ * three immediately-critical metrics — a task that cannot reach the metrics API still
+ * raises them through its log stream — and because `fss drill` and
+ * `fss admin restore-holds open`, which have no metric loop, raise it the same way.
  */
 
 export interface RestoreGenerationCheck {
@@ -102,4 +116,40 @@ export async function enforceRestoreGeneration(
     holdsAlreadyOpen: opened.alreadyHeld,
     restoreHoldsInForce: (await listOpenHolds(session, { reason: 'restore_in_progress' })).length,
   };
+}
+
+export interface RestoreGenerationObservation {
+  readonly expectedGeneration: number | null;
+  readonly observedGeneration: number | null;
+  readonly mismatch: boolean;
+}
+
+/**
+ * The mismatch as a continuing condition: read, compare and, while they differ, log
+ * `restore_generation_mismatch` again. Nothing is written to the database; the holds
+ * are `enforceRestoreGeneration`'s, opened once at startup.
+ *
+ * Unpinned, or a database that reports no generation, is not a restore this can name
+ * and is never a mismatch — the same rule as the startup check.
+ */
+export async function observeRestoreGeneration(
+  session: SessionQueryable,
+  options: { readonly expectedGeneration: number | null | undefined; readonly log: Logger },
+): Promise<RestoreGenerationObservation> {
+  const expectedGeneration = options.expectedGeneration ?? null;
+  if (expectedGeneration === null) return { expectedGeneration, observedGeneration: null, mismatch: false };
+  const observedGeneration = await readSystemGeneration(session);
+  if (observedGeneration === null || observedGeneration === expectedGeneration) {
+    return { expectedGeneration, observedGeneration, mismatch: false };
+  }
+  const inForce = (await listOpenHolds(session, { reason: 'restore_in_progress' })).length;
+  // The exact event infra/modules/observability/main.tf counts, once per pass while
+  // the condition lasts: this is what keeps the immediately-critical alarm in ALARM.
+  options.log.log('error', 'restore_generation_mismatch', {
+    expected_generation: expectedGeneration,
+    observed_generation: observedGeneration,
+    restore_holds_in_force: inForce,
+    continuing: true,
+  });
+  return { expectedGeneration, observedGeneration, mismatch: true };
 }

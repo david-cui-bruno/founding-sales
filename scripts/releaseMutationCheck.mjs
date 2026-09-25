@@ -1687,6 +1687,186 @@ const MUTATIONS = [
     because:
       'The in-use path has one affordance, Restart to update under the version row, and the launch path one notice. home.test.ts expects both rows from the update state; without them a staged update is invisible until the next launch and it has to go red.',
   },
+  {
+    name: 'the worker journal reads a 409 ConditionalRequestConflict as a durable suppression again',
+    file: 'apps/worker/src/bootstrap/deployment.ts',
+    find: "  return errorName === 'PreconditionFailed';\n",
+    replace: "  return errorName === 'PreconditionFailed' || errorName === 'ConditionalRequestConflict';\n",
+    suite: ['run', 'test', '--workspace', 'apps/worker', '--', 'test/suppressionJournalConflict.test.ts'],
+    because:
+      'This is audit S12 in the worker: a 409 says another write to the key was in flight and proves nothing is stored, and read as success it let mail sync commit an opt-out no journal object recorded, which a restore would lose. suppressionJournalConflict.test.ts drives the real loader over a fake S3 client that answers 409 and requires JOURNAL_UNAVAILABLE and no suppression_events row; with the conflict accepted the append resolves, the row commits, and the suite has to go red.',
+  },
+  {
+    name: 'the API journal put reads a 409 ConditionalRequestConflict as already present again',
+    file: 'apps/api/src/bootstrap/deployment.ts',
+    find: "      if (name === 'PreconditionFailed') return 'already_present';\n",
+    replace: "      if (name === 'PreconditionFailed' || name === 'ConditionalRequestConflict') return 'already_present';\n",
+    suite: ['run', 'test', '--workspace', 'apps/api', '--', 'test/journalConflict.test.ts'],
+    because:
+      'This is audit S12 in the API: a conflicting conditional write was reported already_present, so POST /suppressions/record answered 200 for a suppression the journal never held. journalConflict.test.ts answers the put with a 409 through a fake S3 client and requires the 503 journal_unavailable, no suppression_events row and no receipt; with the conflict accepted the command succeeds and the suite has to go red.',
+  },
+  {
+    name: 'the worker logs a restore-generation mismatch once at startup and never again',
+    file: 'apps/worker/src/bootstrap/worker.ts',
+    find: '        await observeRestoreGeneration(sessions.metrics, { expectedGeneration: config.expectedSystemGeneration, log });\n',
+    replace: '',
+    suite: ['run', 'test', '--workspace', 'apps/worker', '--', 'test/restoreGenerationContinuing.test.ts'],
+    because:
+      'This is audit O16: the alarm over RestoreGenerationMismatches is one line in its window with missing data not breaching, so a single startup line let it read OK minutes later while the database stayed on the wrong generation. restoreGenerationContinuing.test.ts starts a real worker pinned ahead of its database and waits for the event on three metric passes, then reconciles the generation and requires the lines to stop; without the per-pass call the continuing lines never come and the suite has to go red.',
+  },
+  {
+    name: 'the restore-mismatch alarm clears one quiet minute after the last line again',
+    file: 'infra/modules/alerts/main.tf',
+    find: '      evaluation_periods  = 3\n      datapoints_to_alarm = 1\n',
+    replace: '      evaluation_periods  = 1\n      datapoints_to_alarm = 1\n',
+    suite: ['run', 'test:release', '--', 'test/release/alarmIncidents.check.ts'],
+    because:
+      'This is audit O16 at the alarm: the worker logs the mismatch once per fixed-delay metric pass, a little over a minute apart, so one minute in many hundreds has no line, and a one-period alarm reads that minute OK and sends a second ALARM e-mail on the next. alarmIncidents.check.ts reads the restore_generation_mismatch entry of local.alarms and requires one datapoint in three; at one in one it has to go red.',
+  },
+  {
+    name: 'the mailbox check heartbeat counts a disconnected or revoked mailbox again',
+    file: 'packages/domain/mail/metrics.ts',
+    find: "      WHERE m.status = 'connected'\n      ORDER BY m.id`,\n",
+    replace: '      ORDER BY m.id`,\n',
+    suite: ['run', 'test', '--workspace', 'packages/domain', '--', 'test/mail/mailboxCheckMetric.test.ts'],
+    because:
+      'This is audit O15: a mailbox its owner disconnected, or whose grant was revoked, left a heartbeat row that aged into a missed check, and the critical mailbox-heartbeat alarm, and with it the critical roll-up, sat in ALARM over a mailbox nothing was meant to check. mailboxCheckMetric.test.ts ages a real heartbeat row for a disconnected and a revoked mailbox and requires 1; counting every mailbox it reads 0 and the suite has to go red.',
+  },
+  {
+    name: 'a missing Gmail watch gauge is a breaching datapoint again',
+    file: 'infra/modules/alerts/main.tf',
+    find: '      treat_missing_data  = "notBreaching"\n      severity            = "critical"\n      description         = "A Gmail watch is within two days of expiry. Push stops when it lapses."\n',
+    replace: '      treat_missing_data  = "breaching"\n      severity            = "critical"\n      description         = "A Gmail watch is within two days of expiry. Push stops when it lapses."\n',
+    suite: ['run', 'test:release', '--', 'test/release/alarmIncidents.check.ts'],
+    because:
+      'This is audit O15 at the alarm: GmailWatchHoursToExpiry is published only while a mailbox is connected, so a breaching missing datapoint put an environment with no mailbox, or one disconnected on purpose, in critical ALARM. alarmIncidents.check.ts reads the gmail_watch_expiring entry and requires notBreaching and not breaching; with breaching back it has to go red.',
+  },
+  {
+    name: 'each critical condition composite reads the whole roll-up instead of its own alarm',
+    file: 'infra/modules/alerts/main.tf',
+    find: '  alarm_rule        = "ALARM(\\"${each.value}\\")"\n',
+    replace: '  alarm_rule        = aws_cloudwatch_composite_alarm.critical.alarm_rule\n',
+    suite: ['run', 'test:release', '--', 'test/release/alarmIncidents.check.ts'],
+    because:
+      'This is audit O14: a composite over the OR of every critical alarm does not transition when a second member trips, so the second incident is silent while the first is open. alarmIncidents.check.ts requires each per-condition composite rule to be ALARM of its own alarm; built from the roll-up rule every one of them is the roll-up again and the suite has to go red.',
+  },
+  {
+    name: 'every critical condition is held back while the worker heartbeat alarm is open',
+    file: 'infra/modules/alerts/main.tf',
+    find: '    if alarm.severity == "critical" && alarm.treat_missing_data == "breaching" && name != "worker_heartbeat_missed"\n',
+    replace: '    if alarm.severity == "critical" && name != "worker_heartbeat_missed"\n',
+    suite: ['run', 'test:release', '--', 'test/release/alarmIncidents.check.ts'],
+    because:
+      'This is audit O14 from the other side: suppression is for the four conditions the worker’s own silence trips; held back behind the worker alarm, a journal failure, a restore mismatch or an invariant failure during a worker outage would wait for the worker to recover before anyone heard. alarmIncidents.check.ts requires the derivation to keep the breaching clause; without it the safety conditions are suppressed too and the suite has to go red.',
+  },
+  {
+    name: 'the load balancer polls liveness again',
+    file: 'infra/modules/edge/variables.tf',
+    find: '  default     = "/readyz"\n',
+    replace: '  default     = "/healthz"\n',
+    suite: ['run', 'test:release', '--', 'test/release/loadBalancerReadiness.check.ts'],
+    because:
+      'This is audit S14: /healthz answers 200 whenever the process runs, so a task on the wrong schema range or generation, or with no database connection free, was put in service. loadBalancerReadiness.check.ts compares the target group default with READINESS_PATH from apps/api/src/bootstrap/readiness.ts; back on /healthz it has to go red.',
+  },
+  {
+    name: 'the worker is handed the session-signing key again',
+    file: 'infra/modules/cluster/main.tf',
+    find: '  worker_secret_names     = ["google-gmail-oauth-client", "llm-classifier-api-key"]\n',
+    replace: '  worker_secret_names     = ["google-gmail-oauth-client", "llm-classifier-api-key", "session-signing-key"]\n',
+    suite: ['run', 'test:release', '--', 'test/release/processSecrets.check.ts'],
+    because:
+      'This is audit S17: the worker never signs a session, and a worker that holds the key can mint one. processSecrets.check.ts requires the session-signing key, the device-credential pepper and the sign-in client in the API list and in no other; with the key on the worker it has to go red.',
+  },
+  {
+    name: 'the worker task definition is built from the API secret map',
+    file: 'infra/modules/cluster/main.tf',
+    find: '      secrets = [for name in sort(keys(local.worker_task_secrets)) : {\n        name      = name\n        valueFrom = local.worker_task_secrets[name]\n',
+    replace: '      secrets = [for name in sort(keys(local.api_task_secrets)) : {\n        name      = name\n        valueFrom = local.api_task_secrets[name]\n',
+    suite: ['run', 'test:release', '--', 'test/release/processSecrets.check.ts'],
+    because:
+      'This is audit S17 at the definition: the lists are only true if each definition’s secrets block is built from its own map, and a worker built from the API map carries all of the API’s authentication material again. processSecrets.check.ts reads each task definition’s secrets block and requires its own map; built from api_task_secrets it has to go red.',
+  },
+  {
+    name: 'the coverage gauge reads a watermark the gate cannot credit as fresh',
+    file: 'packages/domain/mail/metrics.ts',
+    find: '    const reading = coverageIsFresh(age) ? Math.max(age ?? 0, 0) : Math.max(age ?? 0, COVERAGE_FRESHNESS_SECONDS + 1);\n',
+    replace: '    const reading = Math.max(age ?? 0, 0);\n',
+    suite: ['run', 'test', '--workspace', 'packages/domain', '--', 'test/mail/mailboxCoverageMetric.test.ts'],
+    because:
+      'Lane g81: the send gate holds an owner whose ready mailbox has no watermark, or one ten minutes in the future, and a gauge that read those as 0 would show a mailbox as healthy while every automated email for it waited. mailboxCoverageMetric.test.ts judges each case by the gauge and by readMailboxCoverage plus coverageRefusal on the same row and requires them to agree; reading the raw age puts those two cases under the window and the suite has to go red.',
+  },
+  {
+    name: 'the coverage warning waits half an hour while the gate holds after fifteen minutes',
+    file: 'infra/modules/alerts/variables.tf',
+    find: '  default     = 900\n\n  validation {\n    condition     = var.mailbox_coverage_stale_seconds > 0\n',
+    replace: '  default     = 1800\n\n  validation {\n    condition     = var.mailbox_coverage_stale_seconds > 0\n',
+    suite: ['run', 'test:release', '--', 'test/release/alarmIncidents.check.ts'],
+    because:
+      'Lane g81: the warning exists to say the send gate is holding for coverage, and a threshold other than COVERAGE_FRESHNESS_SECONDS would say it late, or say it while nothing is held. alarmIncidents.check.ts requires the variable default to equal the constant in packages/domain/mail/coverage.ts; at 1800 it has to go red.',
+  },
+  {
+    name: 'the classifier key is handed to the worker under its logical name again',
+    file: 'infra/modules/cluster/main.tf',
+    find: '    "llm-classifier-api-key" = "FSS_LLM_CLASSIFIER_API_KEY"\n',
+    replace: '    "llm-classifier-api-key" = "llm-classifier-api-key"\n',
+    suite: ['run', 'test:release', '--', 'test/release/processSecrets.check.ts'],
+    because:
+      'Lane g81: the ECS secrets block names the environment variable, and the classifier reads FSS_LLM_CLASSIFIER_API_KEY, so a key injected as llm-classifier-api-key left the deployed worker with no classifier and classify.reply unclaimed forever. processSecrets.check.ts requires the cluster rename to name exactly CLASSIFIER_SECRET_ENVIRONMENT_VARIABLES.llm_classifier_api_key; mapped to its own name it has to go red.',
+  },
+  {
+    name: 'a rehearsal worker is handed the classifier key',
+    file: 'infra/modules/stack/main.tf',
+    find: '  worker_reads_classifier_key = local.is_production\n',
+    replace: '  worker_reads_classifier_key = true\n',
+    suite: ['run', 'test:release', '--', 'test/release/processSecrets.check.ts'],
+    because:
+      'Lane g81: the classifier has no recorded seam and a rehearsal fills its entry with a fixture, so a rehearsal worker holding the key would send fixture replies to the provider under a key that cannot work and fail every classify.reply. processSecrets.check.ts requires the stack to hand it over in production alone; with true it has to go red.',
+  },
+  {
+    name: 'research-provider-credentials, which nothing reads, is handed to the worker again',
+    file: 'infra/modules/cluster/main.tf',
+    find: '  worker_secret_names     = ["google-gmail-oauth-client", "llm-classifier-api-key"]\n',
+    replace: '  worker_secret_names     = ["google-gmail-oauth-client", "llm-classifier-api-key", "research-provider-credentials"]\n',
+    suite: ['run', 'test:release', '--', 'test/release/processSecrets.check.ts'],
+    because:
+      'Lane g81, audit S17: no process reads the research credential, and a secret in a process that never reads it is one more thing that process can leak. processSecrets.check.ts requires it in the unread list and in no process list; back on the worker it has to go red.',
+  },
+  {
+    name: 'the worker journal fails a write without logging the event its alarm counts',
+    file: 'apps/worker/src/bootstrap/deployment.ts',
+    find: "        log.log('error', 'suppression_journal_write_failed', { writer: 'worker', error_name: name });\n",
+    replace: '',
+    suite: ['run', 'test', '--workspace', 'apps/worker', '--', 'test/suppressionJournalConflict.test.ts'],
+    because:
+      'Lane g81: SuppressionJournalWriteFailures is immediately critical and counted from the suppression_journal_write_failed log event, which nothing logged, so the alarm could never fire. suppressionJournalConflict.test.ts answers the put with a 409 through a fake S3 client and requires exactly one such line at level error naming the worker; without the call there is none and the suite has to go red.',
+  },
+  {
+    name: 'the API journal put fails a write without logging the event its alarm counts',
+    file: 'apps/api/src/bootstrap/deployment.ts',
+    find: "      log.log('error', 'suppression_journal_write_failed', { writer: 'api', error_name: name });\n",
+    replace: '',
+    suite: ['run', 'test', '--workspace', 'apps/api', '--', 'test/journalConflict.test.ts'],
+    because:
+      'Lane g81: the API refused a suppression with 503 journal_unavailable and logged nothing the SuppressionJournalWriteFailures filter counts, so the immediately-critical alarm never heard of it. journalConflict.test.ts requires one suppression_journal_write_failed line per refused put, 409 and denial alike, and none for a 412; without the call the suite has to go red.',
+  },
+  {
+    name: 'the disconnected-mailbox gauge counts a mailbox its owner disconnected again',
+    file: 'packages/domain/outbound/metrics.ts',
+    find: "      WHERE m.status = 'revoked'\n",
+    replace: "      WHERE m.status IN ('disconnected', 'revoked')\n",
+    suite: ['run', 'test', '--workspace', 'packages/domain', '--', 'test/outbound/mailboxDisconnectedHours.test.ts'],
+    because:
+      'Audit O15: the disconnect command writes disconnected, and counting it made a salesperson who disconnected their own mailbox raise the critical mailbox-disconnected alarm two days later. mailboxDisconnectedHours.test.ts disconnects a recently sending mailbox on purpose and requires no datapoint, beside a revoked one that must read its 50 hours; counting both statuses the owner case reads 50 and the suite has to go red.',
+  },
+  {
+    name: 'the worker log group is no longer filtered for suppression journal failures',
+    file: 'infra/modules/observability/main.tf',
+    find: '    suppression_journal_write_failed_worker = {\n      service     = "worker"\n',
+    replace: '    suppression_journal_write_failed_worker = {\n      service     = "api"\n',
+    suite: ['run', 'test:release', '--', 'test/release/alarmIncidents.check.ts'],
+    because:
+      'Lane g81: the worker journals the opt-outs mail sync records and logs its failures into the worker log group, so a filter on the API group alone never counts them. alarmIncidents.check.ts requires the worker entry to read the worker group; pointed at the API group it has to go red.',
+  },
 ];
 
 // A listener on each of these keeps Node from exiting mid-mutation with a file still

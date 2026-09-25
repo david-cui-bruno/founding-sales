@@ -500,25 +500,55 @@ export function describeDeployment(deployment: WorkerDeployment): LogFields {
 }
 
 /**
+ * The two pieces of `@aws-sdk/client-s3` the journal uses, narrowed so a test can hand
+ * in a fake client and prove what a refused put does without an AWS credential.
+ */
+export interface S3JournalSdk {
+  readonly S3Client: new (configuration: { region: string }) => { send(command: unknown): Promise<unknown> };
+  readonly PutObjectCommand: new (input: Record<string, unknown>) => unknown;
+}
+
+/**
+ * What a conditional put's refusal proves about the object at the key (audit S12,
+ * lane g81).
+ *
+ * `IfNoneMatch: '*'` asks S3 to write only if nothing is at the key, and the key is the
+ * deterministic event id: the same suppression always lands on the same key. So:
+ *
+ * * **`412 PreconditionFailed`** means an object *is* at the key. That is what a replay
+ *   of the same event looks like — the append ran, the command's transaction rolled
+ *   back, the command was retried — and the object already written is durable, which
+ *   is the only thing the caller needed to know.
+ * * **`409 ConditionalRequestConflict`** means another write to the same key was in
+ *   flight when this one arrived. It proves nothing about whether an object exists:
+ *   the other write may yet fail. Until this lane both names were read as "already
+ *   durable", so a conflict could acknowledge a suppression that no object records,
+ *   and Appendix E's replay after a restore would lose it. It is now a failure of this
+ *   write, and the command fails; its retry meets either the object (`412`) or an
+ *   empty key it writes itself.
+ */
+export function journalPutRefusalIsDurable(errorName: string): boolean {
+  return errorName === 'PreconditionFailed';
+}
+
+/**
  * The S3 suppression journal the worker appends to, or null when none is configured.
  *
  * The SDK is loaded lazily and only here, exactly as `loadKmsTransport` and
  * `loadCloudWatchTransport` do: a process that never journals never imports it, and
- * this lane adds no client to any module that domain code imports.
+ * this lane adds no client to any module that domain code imports. `sdk` is for
+ * tests; production passes none.
  *
- * A `412 PreconditionFailed` is success. `IfNoneMatch: '*'` means a replay of the same
- * deterministic event id does not overwrite the object that is already durable, and
- * "already durable" is the only thing the caller needed to know.
+ * A `412 PreconditionFailed` is success and nothing else is: see
+ * `journalPutRefusalIsDurable`.
  */
 export async function loadS3SuppressionJournal(options: {
   readonly bucket: string;
   readonly region: string;
+  readonly sdk?: S3JournalSdk | undefined;
 }): Promise<SuppressionJournal> {
   const specifier = '@aws-sdk/client-s3';
-  const sdk = (await import(specifier)) as {
-    S3Client: new (configuration: { region: string }) => { send(command: unknown): Promise<unknown> };
-    PutObjectCommand: new (input: Record<string, unknown>) => unknown;
-  };
+  const sdk = options.sdk ?? ((await import(specifier)) as S3JournalSdk);
   const client = new sdk.S3Client({ region: options.region });
   return {
     append: async record => {
@@ -536,7 +566,7 @@ export async function loadS3SuppressionJournal(options: {
         const name = error instanceof Error ? error.name : 'unknown';
         // The object is already there, which is what a replay of a deterministic id
         // looks like and is indistinguishable from success for the caller.
-        if (name === 'PreconditionFailed' || name === 'ConditionalRequestConflict') return;
+        if (journalPutRefusalIsDurable(name)) return;
         // Redacted: the bucket and the key are operational detail, and the command's
         // caller learns only that the journal was unavailable.
         throw new SuppressionJournalError(

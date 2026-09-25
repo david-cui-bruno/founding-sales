@@ -165,8 +165,19 @@ output "worker_environment" {
 }
 
 output "secret_environment_names" {
-  description = "Environment variable names resolved from Secrets Manager at task start."
-  value       = sort(keys(local.task_secrets))
+  description = "Environment variable names the API task resolves from Secrets Manager at task start."
+  value       = sort(keys(local.api_task_secrets))
+}
+
+output "task_secret_names" {
+  description = "Per task definition, the environment variable names resolved from Secrets Manager at task start (lane g81): each process gets the secrets it reads and no others. Names only, never an ARN or a value."
+  value = {
+    api        = sort(keys(local.api_task_secrets))
+    worker     = sort(keys(local.worker_task_secrets))
+    operations = sort(keys(local.operations_task_secrets))
+    drill      = sort(keys(local.drill_task_secrets))
+    migration  = sort(keys(local.migration_task_secrets))
+  }
 }
 
 output "service_shape" {

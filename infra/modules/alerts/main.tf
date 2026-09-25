@@ -4,19 +4,34 @@
 # applications emit, and the criticals roll up into one composite alarm so the
 # operator gets one notification for one incident rather than nine.
 #
-# Only the two composites notify (lane g62). Until then every metric alarm
-# notified the topic on ALARM and on OK beside the composite, so one incident
-# sent the composite's two e-mails plus two for every member it tripped: four
-# to six e-mails per flap on 24 September 2026. The metric alarms keep their
-# state, which is what the composites read, and send nothing themselves. Every
-# metric alarm is a member of exactly one composite: severity "critical" and
+# Only composites notify (lane g62). Until then every metric alarm notified the
+# topic on ALARM and on OK beside the composite, so one incident sent the
+# composite's two e-mails plus two for every member it tripped: four to six
+# e-mails per flap on 24 September 2026. The metric alarms keep their state,
+# which is what the composites read, and send nothing themselves. Every metric
+# alarm is a member of exactly one roll-up: severity "critical" and
 # all_sequences_held in <prefix>-critical, severity "warning" in
 # <prefix>-warning. tests/thresholds.tftest.hcl holds both halves.
 #
-# What that costs: a composite already in ALARM does not notify again when a
-# second member trips, and does not send its OK until every member is clear.
-# The composite's state-change reason names the member that raised it; which
-# members are in ALARM now is
+# One incident, one e-mail — and a second incident, a second e-mail (lane g81,
+# audit O14). A composite in ALARM does not transition when another member
+# trips, so with one OR composite the first critical condition hid every later
+# one until all of them had cleared. So each critical condition also has a
+# composite of its own, <prefix>-critical-<condition>, whose rule is that one
+# alarm: it e-mails when its condition enters ALARM, whatever else is already
+# open. <prefix>-critical keeps the roll-up and sends the one OK, when every
+# critical condition is clear. A single incident is still two e-mails; each
+# further condition that trips while it is open is one more.
+#
+# The four conditions the worker's own metric loop publishes and that treat
+# missing data as breaching — the API, scheduler and mailbox heartbeats and the
+# canary — go to ALARM whenever the worker stops publishing, whatever their own
+# state. While worker-heartbeat-missed is in ALARM their composites' e-mails are
+# held back (CloudWatch actions suppression); if one is still in ALARM five
+# minutes after the worker recovers it e-mails then. A dead worker is one
+# e-mail, not five. docs/decisions/g81-one-e-mail-per-critical-condition.md.
+#
+# Which members are in ALARM now is
 # `aws cloudwatch describe-alarms --state-value ALARM --alarm-name-prefix <prefix>`.
 #
 # Delivery is SNS email. That path is AWS-native: it does not use a salesperson
@@ -117,6 +132,12 @@ locals {
       severity            = "critical"
       description         = "The oldest runnable job is older than the critical threshold."
     }
+    # Published only while a mailbox is connected, and 0 for a connected mailbox
+    # with no live watch — so the state this alarm exists for always has a
+    # datapoint. Missing means no connected mailbox: never connected, or
+    # disconnected on purpose. Until lane g81 (audit O15) missing was breaching and
+    # an environment with no mailbox sat in critical ALARM; a worker that stopped
+    # publishing is the heartbeat alarms' to catch, and they still breach.
     gmail_watch_expiring = {
       metric_name         = "GmailWatchHoursToExpiry"
       statistic           = "Minimum"
@@ -125,7 +146,7 @@ locals {
       period              = 300
       evaluation_periods  = 2
       datapoints_to_alarm = 2
-      treat_missing_data  = "breaching"
+      treat_missing_data  = "notBreaching"
       severity            = "critical"
       description         = "A Gmail watch is within two days of expiry. Push stops when it lapses."
     }
@@ -165,6 +186,24 @@ locals {
       severity            = "critical"
       description         = "A mailbox that sent in the last 30 days has been disconnected for 48 hours."
     }
+    # Lane g81. Since lane g77 the send path holds every automated email for an owner
+    # whose coverage watermark is older than fifteen minutes, and nothing outside the
+    # Mac said whether sync was advancing. The worker publishes the stalest connected,
+    # ready mailbox's watermark age by the gate's own rule, and nothing when no mailbox
+    # is connected and ready; a warning, because the gate already holds the sends and
+    # nothing unsafe follows from a stale watermark on its own.
+    mailbox_coverage_stale = {
+      metric_name         = "MailboxCoverageAgeSeconds"
+      statistic           = "Maximum"
+      comparison          = "GreaterThanThreshold"
+      threshold           = var.mailbox_coverage_stale_seconds
+      period              = 60
+      evaluation_periods  = 3
+      datapoints_to_alarm = 3
+      treat_missing_data  = "notBreaching"
+      severity            = "warning"
+      description         = "A connected mailbox's coverage watermark has been older than fifteen minutes for three minutes. Automated email for its owner is held until sync proves coverage again."
+    }
     suppression_journal_failure = {
       metric_name         = "SuppressionJournalWriteFailures"
       statistic           = "Sum"
@@ -177,13 +216,19 @@ locals {
       severity            = "critical"
       description         = "A suppression journal write failed. Immediately critical."
     }
+    # One line fires it; it clears three quiet minutes after the last one (lane
+    # g81, audit O16). The worker writes the event on every metric pass while the
+    # generation it was pinned to and the database's differ, so the alarm holds for
+    # as long as the mismatch does. The pass is a fixed-delay loop, a little over
+    # a minute apart, so one minute in many hundreds has no line; one in three
+    # keeps that minute from reading OK and sending a second ALARM e-mail.
     restore_generation_mismatch = {
       metric_name         = "RestoreGenerationMismatches"
       statistic           = "Sum"
       comparison          = "GreaterThanOrEqualToThreshold"
       threshold           = 1
       period              = 60
-      evaluation_periods  = 1
+      evaluation_periods  = 3
       datapoints_to_alarm = 1
       treat_missing_data  = "notBreaching"
       severity            = "critical"
@@ -217,6 +262,22 @@ locals {
 
   critical_alarm_keys = sort([for name, alarm in local.alarms : name if alarm.severity == "critical"])
   warning_alarm_keys  = sort([for name, alarm in local.alarms : name if alarm.severity == "warning"])
+
+  # The worker's metric loop publishes every metric above that is not log-derived,
+  # so a critical alarm that treats missing data as breaching trips whenever that
+  # loop stops, whatever its own condition is doing. Those are the ones held back
+  # while worker-heartbeat-missed, which is the loop stopping, is in ALARM.
+  worker_published_breaching_keys = sort([
+    for name, alarm in local.alarms : name
+    if alarm.severity == "critical" && alarm.treat_missing_data == "breaching" && name != "worker_heartbeat_missed"
+  ])
+
+  # How long a held-back composite waits for the worker alarm to trip (the two
+  # evaluate the same missing minutes, so within one or two of each other), and how
+  # long after the worker recovers it waits for its own condition to clear before
+  # it e-mails what is still true.
+  worker_suppression_wait_seconds      = 120
+  worker_suppression_extension_seconds = 300
 
   topic_key_policy = {
     Version = "2012-10-17"
@@ -399,11 +460,17 @@ resource "aws_cloudwatch_metric_alarm" "all_sequences_held" {
   })
 }
 
-# The two composites are the only alarms that notify the topic, on ALARM and on
-# OK. Between them they name every metric alarm above exactly once.
+# Only composites notify the topic. The two roll-ups name every metric alarm
+# above exactly once between them; each critical condition also has a composite
+# of its own below.
+#
+# <prefix>-critical sends the all-clear and nothing else (lane g81): its ALARM is
+# the per-condition composites' to announce, one e-mail each, and its OK is the
+# one moment the roll-up knows something they do not — that every critical
+# condition is clear.
 resource "aws_cloudwatch_composite_alarm" "critical" {
   alarm_name        = "${var.name_prefix}-critical"
-  alarm_description = "Any immediately critical FSS condition. One notification per incident."
+  alarm_description = "Every immediately critical FSS condition. E-mails once, when all of them are clear; each condition's own composite e-mails when it trips."
 
   alarm_rule = join(" OR ", concat(
     [for name in local.critical_alarm_keys : "ALARM(\"${aws_cloudwatch_metric_alarm.this[name].alarm_name}\")"],
@@ -411,11 +478,54 @@ resource "aws_cloudwatch_composite_alarm" "critical" {
   ))
 
   actions_enabled = true
-  alarm_actions   = [aws_sns_topic.alerts.arn]
+  alarm_actions   = []
   ok_actions      = [aws_sns_topic.alerts.arn]
 
   tags = merge(var.tags, {
     Name     = "${var.name_prefix}-critical"
+    Severity = "critical"
+  })
+}
+
+# One composite per critical condition (lane g81, audit O14). Its rule is the one
+# alarm, so it enters ALARM when that condition does, even while another critical
+# condition already holds <prefix>-critical in ALARM, and e-mails the topic then.
+# It sends no OK: the all-clear is <prefix>-critical's, so a single incident is
+# still one e-mail in and one out.
+locals {
+  critical_condition_alarms = merge(
+    { for name in local.critical_alarm_keys : name => aws_cloudwatch_metric_alarm.this[name].alarm_name },
+    { all_sequences_held = aws_cloudwatch_metric_alarm.all_sequences_held.alarm_name },
+  )
+}
+
+resource "aws_cloudwatch_composite_alarm" "critical_condition" {
+  for_each = local.critical_condition_alarms
+
+  alarm_name        = "${var.name_prefix}-critical-${replace(each.key, "_", "-")}"
+  alarm_description = "One immediately critical FSS condition: ${each.value}. E-mails when it trips, even while another critical condition is open."
+  alarm_rule        = "ALARM(\"${each.value}\")"
+
+  actions_enabled = true
+  alarm_actions   = [aws_sns_topic.alerts.arn]
+  ok_actions      = []
+
+  # Held back while the worker's own heartbeat alarm is in ALARM, for the four
+  # conditions that trip merely because the worker stopped publishing (see the top
+  # of this file). CloudWatch performs the action afterwards if the condition is
+  # still in ALARM when the extension ends, so nothing true is lost.
+  dynamic "actions_suppressor" {
+    for_each = contains(local.worker_published_breaching_keys, each.key) ? [aws_cloudwatch_metric_alarm.this["worker_heartbeat_missed"].alarm_name] : []
+
+    content {
+      alarm            = actions_suppressor.value
+      wait_period      = local.worker_suppression_wait_seconds
+      extension_period = local.worker_suppression_extension_seconds
+    }
+  }
+
+  tags = merge(var.tags, {
+    Name     = "${var.name_prefix}-critical-${replace(each.key, "_", "-")}"
     Severity = "critical"
   })
 }

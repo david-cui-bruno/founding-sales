@@ -340,4 +340,4 @@ export {
   type MailHandlerOptions,
 } from './handlers.ts';
 
-export { MAIL_METRIC_NAMES, collectMailMetrics, mailboxDisconnectedHours } from './metrics.ts';
+export { MAIL_METRIC_NAMES, collectMailMetrics, mailboxCoverageAgeSeconds, mailboxDisconnectedHours } from './metrics.ts';

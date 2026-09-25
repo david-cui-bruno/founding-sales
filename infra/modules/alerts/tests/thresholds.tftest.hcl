@@ -96,11 +96,158 @@ run "the_three_immediately_critical_conditions_alarm_on_one_datapoint" {
     condition = alltrue([
       for name in ["suppression_journal_failure", "restore_generation_mismatch", "outbound_invariant_failure"] :
       output.alarm_inventory[name].threshold == 1
-      && output.alarm_inventory[name].evaluation_periods == 1
       && output.alarm_inventory[name].datapoints_to_alarm == 1
       && output.alarm_inventory[name].severity == "critical"
     ])
-    error_message = "Journal failure, restore-generation mismatch and outbound invariant failure are immediately critical."
+    error_message = "Journal failure, restore-generation mismatch and outbound invariant failure are immediately critical: one datapoint of one line trips each."
+  }
+
+  assert {
+    condition = alltrue([
+      for name in ["suppression_journal_failure", "outbound_invariant_failure"] :
+      output.alarm_inventory[name].evaluation_periods == 1
+    ])
+    error_message = "The journal failure and the invariant failure are events, judged one minute at a time."
+  }
+}
+
+# Lane g81, audit O16. The mismatch is a condition, and the worker logs it on every
+# metric pass while it lasts; the alarm clears only after three quiet minutes, so the
+# one minute in many hundreds that a fixed-delay pass skips does not read OK.
+run "the_restore_mismatch_alarm_holds_while_the_mismatch_lasts" {
+  command = plan
+
+  assert {
+    condition = (
+      output.alarm_inventory["restore_generation_mismatch"].evaluation_periods == 3
+      && output.alarm_inventory["restore_generation_mismatch"].datapoints_to_alarm == 1
+      && output.alarm_inventory["restore_generation_mismatch"].period == 60
+      && output.alarm_inventory["restore_generation_mismatch"].treat_missing_data == "notBreaching"
+    )
+    error_message = "One line in three minutes holds the restore-generation alarm in ALARM, and three quiet minutes clear it."
+  }
+}
+
+# Lane g81, audit O15. No connected mailbox is not a watch about to lapse: the gauge
+# is absent then, and 0 for a connected mailbox with no live watch. The heartbeats
+# and the canary still breach on missing data, which is what catches a worker that
+# stopped publishing.
+run "no_connected_mailbox_is_not_a_critical_watch" {
+  command = plan
+
+  assert {
+    condition     = output.alarm_inventory["gmail_watch_expiring"].treat_missing_data == "notBreaching"
+    error_message = "An environment with no connected mailbox must not sit in critical ALARM over a watch it does not have."
+  }
+
+  assert {
+    condition = alltrue([
+      for name in ["api_heartbeat_missed", "scheduler_heartbeat_missed", "worker_heartbeat_missed", "mailbox_heartbeat_missed", "canary_stale"] :
+      output.alarm_inventory[name].treat_missing_data == "breaching"
+    ])
+    error_message = "The heartbeats and the canary still treat a missing datapoint as a failure."
+  }
+}
+
+# Lane g81. The send path holds an owner's automated email once their mailbox's
+# coverage watermark is fifteen minutes old (packages/domain/mail/coverage.ts). This
+# warning says so from outside the Mac, over the same fifteen minutes, and reaches the
+# inbox through the warning roll-up only.
+run "a_stale_coverage_watermark_is_a_warning" {
+  command = plan
+
+  assert {
+    condition = (
+      output.alarm_inventory["mailbox_coverage_stale"].metric_name == "MailboxCoverageAgeSeconds"
+      && output.alarm_inventory["mailbox_coverage_stale"].threshold == 900
+      && output.alarm_inventory["mailbox_coverage_stale"].comparison == "GreaterThanThreshold"
+      && output.alarm_inventory["mailbox_coverage_stale"].period == 60
+      && output.alarm_inventory["mailbox_coverage_stale"].evaluation_periods == 3
+      && output.alarm_inventory["mailbox_coverage_stale"].datapoints_to_alarm == 3
+      && output.alarm_inventory["mailbox_coverage_stale"].treat_missing_data == "notBreaching"
+      && output.alarm_inventory["mailbox_coverage_stale"].severity == "warning"
+    )
+    error_message = "Coverage older than fifteen minutes for three consecutive minutes is a warning; no connected, ready mailbox is no datapoint and not a breach."
+  }
+
+  assert {
+    condition = (
+      strcontains(aws_cloudwatch_composite_alarm.warning.alarm_rule, "ALARM(\"fss-test-mailbox-coverage-stale\")")
+      && !strcontains(aws_cloudwatch_composite_alarm.critical.alarm_rule, "fss-test-mailbox-coverage-stale")
+      && !contains(keys(aws_cloudwatch_composite_alarm.critical_condition), "mailbox_coverage_stale")
+    )
+    error_message = "The coverage warning reaches the inbox through the warning roll-up and nothing else."
+  }
+}
+
+# Lane g81, audit O14. One OR composite in ALARM hides every later critical
+# condition, so each critical condition has a composite of its own whose rule is
+# that one alarm, and nothing else does.
+run "every_critical_condition_has_a_composite_of_its_own" {
+  command = plan
+
+  assert {
+    condition = length(aws_cloudwatch_composite_alarm.critical_condition) == length([
+      for name, alarm in output.alarm_inventory : name if alarm.severity == "critical"
+    ]) + 1
+    error_message = "One composite per critical metric alarm, and one for all_sequences_held."
+  }
+
+  assert {
+    condition = alltrue([
+      for name, alarm in output.alarm_inventory :
+      aws_cloudwatch_composite_alarm.critical_condition[name].alarm_rule == "ALARM(\"fss-test-${replace(name, "_", "-")}\")"
+      && aws_cloudwatch_composite_alarm.critical_condition[name].alarm_name == "fss-test-critical-${replace(name, "_", "-")}"
+      if alarm.severity == "critical"
+    ])
+    error_message = "Each critical condition's composite reads exactly its own alarm, so it trips whatever else is open."
+  }
+
+  assert {
+    condition     = aws_cloudwatch_composite_alarm.critical_condition["all_sequences_held"].alarm_rule == "ALARM(\"fss-test-all-sequences-held\")"
+    error_message = "The metric-math alarm has a composite of its own too."
+  }
+
+  assert {
+    condition = alltrue([
+      for name, alarm in output.alarm_inventory :
+      !contains(keys(aws_cloudwatch_composite_alarm.critical_condition), name)
+      if alarm.severity == "warning"
+    ])
+    error_message = "A warning has no per-condition composite; the warning roll-up is its only e-mail."
+  }
+}
+
+# The four conditions the worker's own metric loop publishes with missing data
+# breaching trip whenever the worker stops publishing. Their e-mails wait while
+# worker-heartbeat-missed is in ALARM; nothing else waits on anything.
+run "a_dead_worker_is_one_e_mail_not_five" {
+  command = plan
+
+  assert {
+    condition = sort([
+      for name, composite in aws_cloudwatch_composite_alarm.critical_condition : name
+      if length(composite.actions_suppressor) > 0
+    ]) == tolist(["api_heartbeat_missed", "canary_stale", "mailbox_heartbeat_missed", "scheduler_heartbeat_missed"])
+    error_message = "Exactly the API, scheduler and mailbox heartbeats and the canary are held back while the worker is down."
+  }
+
+  assert {
+    condition = alltrue(flatten([
+      for composite in aws_cloudwatch_composite_alarm.critical_condition : [
+        for suppressor in composite.actions_suppressor :
+        suppressor.alarm == "fss-test-worker-heartbeat-missed" && suppressor.wait_period == 120 && suppressor.extension_period == 300
+      ]
+    ]))
+    error_message = "The suppressor is the worker's heartbeat alarm, with a two-minute wait and a five-minute extension."
+  }
+
+  assert {
+    condition = alltrue([
+      for name in ["worker_heartbeat_missed", "suppression_journal_failure", "restore_generation_mismatch", "outbound_invariant_failure", "all_sequences_held"] :
+      length(aws_cloudwatch_composite_alarm.critical_condition[name].actions_suppressor) == 0
+    ])
+    error_message = "The worker's own alarm and the safety conditions are never held back."
   }
 }
 
@@ -132,13 +279,35 @@ run "criticals_roll_up_into_one_composite_that_notifies_the_topic" {
   }
 
   assert {
-    condition = alltrue([
-      for composite in [aws_cloudwatch_composite_alarm.critical, aws_cloudwatch_composite_alarm.warning] :
+    condition = (
+      aws_cloudwatch_composite_alarm.warning.actions_enabled
+      && aws_cloudwatch_composite_alarm.warning.alarm_actions == toset([aws_sns_topic.alerts.arn])
+      && aws_cloudwatch_composite_alarm.warning.ok_actions == toset([aws_sns_topic.alerts.arn])
+    )
+    error_message = "The warning composite notifies the alert topic, and only it, on ALARM and on OK."
+  }
+
+  # Lane g81: the critical roll-up sends the all-clear only, and each critical
+  # condition's own composite sends its ALARM only, so one incident is still one
+  # e-mail in and one out and a second incident is one more in.
+  assert {
+    condition = (
+      aws_cloudwatch_composite_alarm.critical.actions_enabled
+      && length(aws_cloudwatch_composite_alarm.critical.alarm_actions) == 0
+      && aws_cloudwatch_composite_alarm.critical.ok_actions == toset([aws_sns_topic.alerts.arn])
+    )
+    error_message = "The critical roll-up e-mails the topic once, when every critical condition is clear."
+  }
+
+  assert {
+    condition = length(aws_cloudwatch_composite_alarm.critical_condition) > 0 && alltrue([
+      for composite in aws_cloudwatch_composite_alarm.critical_condition :
       composite.actions_enabled
       && composite.alarm_actions == toset([aws_sns_topic.alerts.arn])
-      && composite.ok_actions == toset([aws_sns_topic.alerts.arn])
+      && length(composite.ok_actions) == 0
+      && try(length(composite.insufficient_data_actions), 0) == 0
     ])
-    error_message = "Both composites notify the alert topic, and only it, on ALARM and on OK."
+    error_message = "Each critical condition's composite e-mails the alert topic, and only it, when it trips."
   }
 
   assert {
@@ -159,8 +328,9 @@ run "criticals_roll_up_into_one_composite_that_notifies_the_topic" {
 }
 
 # A metric alarm that sends nothing and belongs to no composite would be an
-# alarm nobody hears. So every one is named by exactly one composite, the one
-# its severity says, and the composites name nothing else.
+# alarm nobody hears. So every one is named by exactly one roll-up, the one its
+# severity says, and the roll-ups name nothing else. (A critical one is also named
+# by its own per-condition composite; that run is above.)
 run "every_metric_alarm_feeds_exactly_one_composite" {
   command = plan
 

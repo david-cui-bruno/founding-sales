@@ -89,7 +89,37 @@ locals {
   # What the worker *service* runs with: the one-off environment plus the pin.
   worker_service_environment = merge(local.worker_environment, local.generation_environment)
 
-  task_secrets = merge(var.secret_arns, { DATABASE_SECRET_ARN = var.app_runtime_database_secret_arn })
+  # Each task definition carries the application secrets its own process reads, by
+  # the name it reads them under, and no others (lane g81, audit S17). Until then one
+  # map went to all four runtime definitions, so the worker, the operations tool and
+  # the drill each held the session-signing key, the device-credential pepper and the
+  # sign-in client — the API's authentication material, which none of them reads.
+  #
+  #   * the API reads `google-gmail-oauth-client` (the Gmail callback),
+  #     `google-oidc-client` (sign-in) and `session-signing-key`
+  #     (`apps/api/src/bootstrap/deployment.ts`). `device-credential-pepper` is the
+  #     API's too: nothing reads it yet, and if anything ever does it is sign-in.
+  #   * the worker reads `google-gmail-oauth-client` (`readGmailDeployment`). The
+  #     classifier and research keys are its lanes' — it is the only process that
+  #     runs `classify.reply` and the research jobs — so they stay with it.
+  #   * the operations tool and the drill read `google-gmail-oauth-client` through
+  #     the same `readWorkerDeployment` the worker does, and nothing else.
+  #
+  # The database entries are not in these lists: they arrive through the two named
+  # inputs, as before, and the runtime one is added to each map below.
+  api_secret_names        = ["device-credential-pepper", "google-gmail-oauth-client", "google-oidc-client", "session-signing-key"]
+  worker_secret_names     = ["google-gmail-oauth-client", "llm-classifier-api-key", "research-provider-credentials"]
+  operations_secret_names = ["google-gmail-oauth-client"]
+
+  runtime_database_secret = { DATABASE_SECRET_ARN = var.app_runtime_database_secret_arn }
+
+  api_task_secrets        = merge({ for name, arn in var.secret_arns : name => arn if contains(local.api_secret_names, name) }, local.runtime_database_secret)
+  worker_task_secrets     = merge({ for name, arn in var.secret_arns : name => arn if contains(local.worker_secret_names, name) }, local.runtime_database_secret)
+  operations_task_secrets = merge({ for name, arn in var.secret_arns : name => arn if contains(local.operations_secret_names, name) }, local.runtime_database_secret)
+
+  # An application secret no process reads would be one nobody gets; a new entry in
+  # `infra/modules/secrets` must be given to the process that reads it.
+  unassigned_secret_names = sort(setsubtract(keys(var.secret_arns), concat(local.api_secret_names, local.worker_secret_names, local.operations_secret_names)))
 
   # The migration task's two references, with the names the tool reads
   # (`apps/worker/src/tools/fss/config.ts`, `TOOL_ENVIRONMENT_VARIABLES`, and
@@ -118,7 +148,7 @@ locals {
   # definition under its own identity rather than either of the other two — the
   # migration role must stay unable to reach the journal, and the worker service's
   # role must stay unable to reach a DDL credential (David's condition 1).
-  drill_task_secrets = merge(local.task_secrets, {
+  drill_task_secrets = merge(local.operations_task_secrets, {
     MIGRATION_DATABASE_SECRET = var.migration_database_secret_arn
   })
 
@@ -581,9 +611,9 @@ resource "aws_ecs_task_definition" "api" {
         value = local.api_environment[name]
       }]
 
-      secrets = [for name in sort(keys(local.task_secrets)) : {
+      secrets = [for name in sort(keys(local.api_task_secrets)) : {
         name      = name
-        valueFrom = local.task_secrets[name]
+        valueFrom = local.api_task_secrets[name]
       }]
 
       healthCheck = {
@@ -606,6 +636,15 @@ resource "aws_ecs_task_definition" "api" {
       stopTimeout = 30
     },
   ])
+
+  lifecycle {
+    # Lane g81: a secret handed to no process is one somebody added and forgot to
+    # give to its reader. Refused here rather than silently injected into nobody.
+    precondition {
+      condition     = length(local.unassigned_secret_names) == 0
+      error_message = "Every application secret must be read by some process: add it to the api, worker or operations list in infra/modules/cluster/main.tf. Unassigned: ${join(", ", local.unassigned_secret_names)}."
+    }
+  }
 
   tags = merge(var.tags, { Name = "${var.name_prefix}-api" })
 }
@@ -635,9 +674,9 @@ resource "aws_ecs_task_definition" "worker" {
         value = local.worker_service_environment[name]
       }]
 
-      secrets = [for name in sort(keys(local.task_secrets)) : {
+      secrets = [for name in sort(keys(local.worker_task_secrets)) : {
         name      = name
-        valueFrom = local.task_secrets[name]
+        valueFrom = local.worker_task_secrets[name]
       }]
 
       healthCheck = {
@@ -758,9 +797,9 @@ resource "aws_ecs_task_definition" "operations" {
         value = local.operations_environment[name]
       }]
 
-      secrets = [for name in sort(keys(local.task_secrets)) : {
+      secrets = [for name in sort(keys(local.operations_task_secrets)) : {
         name      = name
-        valueFrom = local.task_secrets[name]
+        valueFrom = local.operations_task_secrets[name]
       }]
 
       logConfiguration = {

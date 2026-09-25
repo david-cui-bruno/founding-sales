@@ -3097,6 +3097,62 @@ One question is left open. Once sending is on, the worker sends only under a sto
 - that the relaunch starts the new bundle;
 - how long the deep verify takes on a real release bundle (about 18 seconds cold on 1.0.4).
 
+### 8.0an What lane g81 changed: each critical condition e-mails, the load balancer asks readiness, each task gets its own secrets (25 September)
+
+**The gap.** The independent audit of 25 September (`GPT6-ASTRA-EXHAUSTIVE-20260925.md`) named six operations and safety items for this lane: O14, O15, O16, S12, S14 and S17. All six were real in code. One part of O15 is left open, below.
+
+- **O14.** `fss-prod-critical` was one OR composite, and a composite e-mails only on its own transitions. The first critical alarm to trip hid every later one until all had cleared.
+- **O15.** `gmail-watch-expiring` treated a missing gauge as breaching, and the gauge exists only while a mailbox is connected. `MailboxCheckHeartbeat` was built from any mailbox heartbeat row. An environment with no mailbox, or one disconnected on purpose, sat in critical ALARM and held the roll-up there.
+- **O16.** The worker logged `restore_generation_mismatch` once, at startup. The one-minute alarm over it read OK soon after, while the mismatch lasted.
+- **S12.** Both journal writers read a `409 ConditionalRequestConflict` as a durable object. A conflict could acknowledge a suppression that no journal object recorded.
+- **S14.** The target group polled `/healthz`. A task on the wrong schema range or generation, or with no database connection free, was put in service.
+- **S17.** One secret map went to the API, the worker, the operations tool and the drill. Three processes that never sign anyone in held the session-signing key, the device pepper and the sign-in client.
+
+**What g81 changes.** The reasoning is in three decision docs: `docs/decisions/g81-one-e-mail-per-critical-condition.md`, `g81-the-load-balancer-asks-readiness.md` and `g81-each-task-gets-its-own-secrets.md`.
+
+- **A composite per critical condition.** Each of the 13 critical conditions gets `<prefix>-critical-<condition>`, which e-mails on ALARM only. `<prefix>-critical` now sends only the all-clear. The warning roll-up is unchanged. A single incident is still two e-mails, and each further condition that trips while it is open adds one.
+- **Held-back e-mails while the worker is down.** The API, scheduler and mailbox heartbeat composites and the canary composite are held back while `worker-heartbeat-missed` is in ALARM, because the worker's silence trips all four (wait 120 s, extension 300 s). A dead worker is one e-mail, not five.
+- **The watch alarm and the check heartbeat.** `gmail-watch-expiring` is not-breaching on missing data. The mail lane publishes `MailboxCheckHeartbeat` on every pass: 1 when every connected mailbox is checked on time or none is connected, 0 otherwise. The job lane no longer publishes it.
+- **The restore mismatch.** The worker's metric loop logs `restore_generation_mismatch` on every pass while the pin and the database differ (`continuing: true`). The alarm fires on one line and clears after three quiet minutes.
+- **The journal writers.** Only a `412 PreconditionFailed` is durable now. A 409 fails that write, and the command fails with 503 `journal_unavailable`. Its retry meets the object or writes it.
+- **The target group.** It polls `/readyz`, and a 503 is unhealthy. That covers `database_busy`, which now takes a task out of service. The container check stays on `/healthz`.
+- **Per-process secrets.** Each runtime task definition carries the secrets its process reads. The authentication secrets reach the API alone, and the classifier and research keys reach the worker alone. A plan with an application secret no process reads is refused.
+- **Coverage age, visible outside the Mac (coordinator addition).** Since lane g77 the send path holds an owner's automated email once their watermark is fifteen minutes old. Until now nothing but the Mac showed whether sync was advancing.
+  - The worker publishes `MailboxCoverageAgeSeconds` on every pass: the stalest connected, `ready` mailbox's `coverage_watermark_at` age on `clock_timestamp()`, judged by the gate's own `coverageIsFresh`.
+  - A watermark the gate cannot credit reads 901: none on a ready mailbox, or one more than five minutes ahead of the database clock. With no mailbox connected and `ready`, nothing is published.
+  - The new warning `mailbox-coverage-stale` fires above 900 s for 3 of 3 minutes, is not-breaching on missing data, and is a member of the warning roll-up only. Its runbook is `docs/greenfield/runbooks/mailbox_coverage_stale.md`.
+- **Mutations.** Thirteen are appended to `scripts/releaseMutationCheck.mjs`, 147 on main at `837030c7` plus 13 is 160. Each went red when applied by hand to its own suite.
+
+**What changes in the production plan.**
+
+- 13 new `aws_cloudwatch_composite_alarm.critical_condition` resources.
+- `fss-prod-critical` loses its alarm action.
+- One new metric alarm, `fss-prod-mailbox-coverage-stale`. `fss-prod-warning`'s rule gains it.
+- Two metric alarms are updated in place: `gmail-watch-expiring` (missing data) and `restore-generation-mismatch` (three evaluation periods).
+- The target group health check path is updated in place.
+- The API, worker, operations and drill task definitions are new revisions with fewer secrets, and both services roll.
+
+No IAM, no principal and no network change. The deployment role already holds `cloudwatch:*` on `alarm:<prefix>*` and `PutCompositeAlarm` on `alarm:*`.
+
+**Release class.** This changes infrastructure, so it takes a `full` rehearsal before production. Both images change as well: the journal writers, the metric loop, and the mail collector's two gauges.
+
+**What the `full` rehearsal should prove.**
+
+1. The create and deploy stages apply 13 per-condition composites, four of them with an actions suppressor, and CloudWatch accepts them.
+2. The API service reaches steady state behind `/readyz`, and the rolling deploy completes.
+3. The restore drill still sees `<prefix>-restore-generation-mismatch` go to ALARM from the drill's one line.
+4. `fss verify` and the drill start with the narrower secret sets.
+
+**Left open.**
+
+- **Owner-disconnected mailboxes and `MailboxDisconnectedHours`.** A mailbox its owner disconnected on purpose still raises that alarm after 48 hours if it sent in the last 30 days. The fix is `WHERE m.status = 'revoked'` in `packages/domain/outbound/metrics.ts`, which was outside this lane's files.
+- **Repetition.** 13.3's "repeated while critical and unacknowledged" still does not happen. Nothing raises a `critical_alerts` row, and the age metric would not cycle anyway.
+- **Stale text.** The 8.0ac table above and `docs/greenfield/processes.md` still name `fss-prod-critical` as the e-mail for every critical alarm and `/healthz` as the load balancer's path. So does the comment at the top of `apps/api/src/bootstrap/readiness.ts`.
+- **Classifier secret name.** The worker's classifier reads `FSS_LLM_CLASSIFIER_API_KEY`, and no task definition injects that name.
+- **Dispatch readiness.** Ordinary API dispatch still does not enforce readiness, the other half of S14.
+
+**Still unverified.** Nothing here has run in the cloud. The Terraform assertions ran as `terraform validate` locally and run as `terraform test` in the infrastructure workflow. The actions-suppressor timing comes from the CloudWatch documentation and has not been observed. Nor has the ECS behaviour when every task fails readiness during a database outage.
+
 ### 8.1 Still unverified
 
 Production was applied, deployed, bootstrapped and smoked at `66203322`, and redeployed at `02da3dd5` between 05:50Z and 05:57Z on 24 September, which carries the sign-in fix (8.0v). The signed desktop build is published at `66203322` (8.0t), and thirteen rehearsal runs have existed (8.0s, 8.0t, 8.0v, 8.0w). The first real sign-in was attempted against the `66203322` deployment and refused by the API's own discovery rule (8.0u); the retry against the g45 fix succeeded at 15:08Z, and showed that desktop 1.0.0 has no way to connect the mailbox (8.0x). Desktop 1.0.1 connected the first mailbox at about 18:10Z on 24 September. From 18:11Z CloudWatch refused every worker metric publication over one unit, and ECS replaced the worker every few minutes for failed health checks. That blackout lasts until the g51 fix is deployed (8.0y). What follows is what that still does not settle. Items 1 to 10 were written before any of it ran, and each carries whatever a later run answered; items 11 to 18 are what is open on 24 September, and the first of them is the release record this release does not have.

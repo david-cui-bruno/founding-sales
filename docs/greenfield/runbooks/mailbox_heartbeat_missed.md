@@ -4,10 +4,15 @@
 
 ## Symptoms
 
-Three consecutive one-minute windows in which no mailbox had been checked within the
-last 90 seconds: the check promised every minute, plus 30 seconds of grace for the time
-between the scheduler asking for it and a runner performing it. Replies, opt-outs and
-bounces may exist in Gmail and be unknown to FSS.
+Three consecutive one-minute windows in which a connected mailbox had not been checked
+within the last 90 seconds: the check promised every minute, plus 30 seconds of grace
+for the time between the scheduler asking for it and a runner performing it. Replies,
+opt-outs and bounces may exist in Gmail and be unknown to FSS.
+
+Since lane g81 the gauge asks only about connected mailboxes and reads 1 when none is
+connected. A mailbox its owner disconnected, or whose grant was revoked, is not checked
+and does not trip this alarm; a revoked grant is `mailbox_disconnected`'s, after 48
+hours. No datapoint at all still means the worker is not publishing.
 
 Every connected, `ready` mailbox is checked once a minute whether or not it has new mail
 (`docs/greenfield/mail.md`, "The mailbox check, once a minute"), so a healthy worker

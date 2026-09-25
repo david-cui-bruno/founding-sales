@@ -97,6 +97,23 @@ variable "mailbox_disconnected_hours" {
   default     = 48
 }
 
+variable "mailbox_coverage_stale_seconds" {
+  description = <<-EOT
+    Seconds a connected, ready mailbox's coverage watermark may age before the
+    warning mailbox_coverage_stale (lane g81). The same fifteen minutes as
+    COVERAGE_FRESHNESS_SECONDS in packages/domain/mail/coverage.ts, past which the
+    send path holds that owner's automated email; test/release/alarmIncidents.check.ts
+    keeps the two equal.
+  EOT
+  type        = number
+  default     = 900
+
+  validation {
+    condition     = var.mailbox_coverage_stale_seconds > 0
+    error_message = "mailbox_coverage_stale_seconds must be a positive number of seconds."
+  }
+}
+
 variable "unacknowledged_critical_seconds" {
   description = <<-EOT
     Seconds a critical alert may stay unacknowledged before it is re-raised.
