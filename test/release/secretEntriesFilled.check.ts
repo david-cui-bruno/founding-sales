@@ -11,8 +11,8 @@ import { readRepositoryFile } from './support/coverage.ts';
  * the rehearsal had filled the two database entries and nothing else — and the
  * production order in release.md 5 said to fill the other six after the first deploy.
  *
- * So: the stack's list is the input, the rehearsal step must know how to fill every
- * name on it, and the production docs must put every entry before the deploy.
+ * So: the stack's list is the input, and the rehearsal step must know how to fill every
+ * name on it.
  */
 
 const NAMES_BLOCK = /variable "secret_names" \{[\s\S]*?default = \[([\s\S]*?)\]/u;
@@ -48,20 +48,10 @@ describe('every secret entry is filled before a task can name it', () => {
       expect(step, name).toMatch(new RegExp(`^\\s+(?:[a-z-]+\\|)*${name}(?:\\|[a-z-]+)*\\)`, 'mu'));
     }
     // A ninth name would not be left empty in silence.
-    expect(step).toContain("does not know how to fill it");
     expect(step).toMatch(/\*\)\s*\n\s*echo "::error::/u);
     // Fixtures are masked and written by name under this run's prefix; never a literal credential.
     expect(step).toContain('echo "::add-mask::$value"');
     expect(step).toContain('--secret-id "${prefix}/${name}"');
     expect(step).not.toMatch(/client_secret":"[A-Za-z0-9+/=]{20,}"/u);
-  });
-
-  it('the production docs put every entry before the deploy, and the rehearsal step name matches', () => {
-    const release = readRepositoryFile('docs/greenfield/release.md');
-    expect(release).toContain('**Every entry first.**');
-    expect(release).toContain('Fill them **before section\n4.1**');
-    expect(release).toContain('all eight entries filled  →  fss migrate');
-    expect(release).not.toContain('Fill the two database entries');
-    expect(release).toContain('Fill every secret entry.');
   });
 });

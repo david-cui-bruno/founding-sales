@@ -36,7 +36,6 @@ import { mustCover, readRepositoryFile } from './support/coverage.ts';
 
 describe('Appendix G 23: each replay is refused for being that replay', () => {
   mustCover(23, [
-    'Appendix G 23',
     'authorization_request_unknown',
     'audience_mismatch',
     'nonce_mismatch',

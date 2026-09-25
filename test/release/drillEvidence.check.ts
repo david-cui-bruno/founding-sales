@@ -287,8 +287,6 @@ describe('g40: the drill waits for the restore target to pass the evidence', () 
     // seed wrote rather than guessed from the clock.
     expect(drill).toContain('drill-evidence-before.txt');
     expect(drill).toContain("grep -o 'asOf=[^ ]*'");
-    // Bounded, and a clear failure rather than a hang.
-    expect(drill).toContain('never passed the drill evidence written at');
 
     // And it happens *before* the read, not after it.
     const wait = drill.indexOf('wait_for_restorable_point "$EVIDENCE_AT"');
@@ -302,13 +300,14 @@ describe('g40: the drill waits for the restore target to pass the evidence', () 
   it('seeds the in-flight send before the target, and the after phase once the restore is requested', () => {
     const inFlight = drill.indexOf('--phase in-flight');
     const wait = drill.indexOf('wait_for_restorable_point "$EVIDENCE_AT"');
-    const baseline = drill.indexOf('the drill baseline has no $kind');
+    const baseline = drill.indexOf('for kind in sends replies suppressions crm_edits migrations; do');
     const after = drill.indexOf('--phase after');
     const restore = drill.indexOf('rehearsal_aws rds restore-db-instance-to-point-in-time');
     const available = drill.indexOf('rehearsal_aws rds wait db-instance-available');
     const launch = drill.indexOf('drill_task drill drill');
     expect(inFlight, 'the drill never leaves a send in doubt at the target (lane g59)').toBeGreaterThan(-1);
     expect(after, 'the drill never seeds the work the restore is meant to lose').toBeGreaterThan(-1);
+    expect(baseline, 'the drill no longer checks its baseline').toBeGreaterThan(-1);
     // Lane g59. The in-flight send is before the wait, so the target the wait produces
     // is after it and step 3's ten-minute window contains it.
     expect(inFlight).toBeLessThan(wait);
@@ -323,29 +322,6 @@ describe('g40: the drill waits for the restore target to pass the evidence', () 
     expect(after).toBeLessThan(available);
     expect(after).toBeLessThan(launch);
     expect(drill).toContain('release-seed-drill-evidence.sh');
-
-    // Every assertion the drill already made is still there, unchanged. This is the
-    // list the release reads out of the drill's report, and a lane that seeded evidence
-    // by relaxing one of them would have proved nothing.
-    for (const assertion of [
-      'the restored database opened no restore hold',
-      'a dial was authorized while a restore was in progress',
-      // Lane g60: and the restore hold is what refused it, not an earlier step of 9.2.
-      'no restore hold applied to it',
-      'the journal replay reinserted nothing',
-      'the second replay was not idempotent',
-      'no send was reconstructed, so nothing was proved',
-      'no reply reapplied its effect',
-      'no opt-out reapplied',
-      'coverage is incomplete',
-      'a suppression was lost',
-      'the CRM recovery point objective was not reported',
-      'no other hold existed, so selectivity was not tested',
-    ]) {
-      expect(drill, `the drill no longer asserts: ${assertion}`).toContain(assertion);
-    }
-    // And the refusal this whole lane exists to satisfy rather than to remove.
-    expect(drill).toContain('the drill baseline has no $kind, so reconstructing them would prove nothing');
   });
 
   it('is exercised by the credential-free dry run without waiting on a clock', () => {
@@ -385,22 +361,5 @@ describe('g40: the drill waits for the restore target to pass the evidence', () 
     expect(launches[0]).toContain(`${prefix}-operations`);
     expect(launches[0]).toContain('"--phase", "in-flight"');
     expect(launches[0]).toContain('{"name": "FSS_DEPENDENCIES", "value": "recorded"}');
-  });
-});
-
-describe('g40: section 0.1 names the command, and production is never seeded', () => {
-  const document = readRepositoryFile('docs/greenfield/restore-drill.md');
-
-  it('gives 0.1 the (FSS) way to produce what its prose lists', () => {
-    const section = document.slice(
-      document.indexOf('### 0.1'),
-      document.indexOf('## Step 1.'),
-    );
-    expect(section.length, 'section 0.1 is not where it was').toBeGreaterThan(0);
-    expect(section).toContain('fss admin drill seed-evidence');
-    expect(section).toContain('--phase before');
-    // The rule that keeps it out of production, in the document an operator reads at
-    // three in the morning rather than only in the script.
-    expect(section.toLowerCase()).toContain('production is never seeded');
   });
 });

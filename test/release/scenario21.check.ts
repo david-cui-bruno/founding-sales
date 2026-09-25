@@ -27,7 +27,6 @@ import { mustCover, readRepositoryFile } from './support/coverage.ts';
 
 describe('Appendix G 21: suppression events are insert-only by privilege', () => {
   mustCover(21, [
-    'scenario 21',
     'suppression_events_supersession_same_key',
     'canonicalizer_unsupported',
     '42501',

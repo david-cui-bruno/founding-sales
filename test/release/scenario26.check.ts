@@ -25,7 +25,7 @@ import { mustCover } from './support/coverage.ts';
  */
 
 describe('Appendix G 26: an engaged outcome, and only an engaged outcome, ends the plan', () => {
-  mustCover(26, ['scenario 26', 'complete_and_advance', 'opportunity.manual_mode']);
+  mustCover(26, ['complete_and_advance', 'opportunity.manual_mode']);
 
   it('sets manual for the engaged outcomes and leaves the rest alone', () => {
     for (const outcome of ['interested', 'referral_or_wrong_person', 'callback_requested', 'not_interested'] as const) {

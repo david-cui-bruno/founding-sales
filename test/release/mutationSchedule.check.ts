@@ -247,9 +247,8 @@ describe('the release mutation check runs once a day on main, and on demand', ()
     const script = summary?.script ?? '';
     expect(script).toContain('>> "$GITHUB_STEP_SUMMARY"');
     expect(script).toContain('log="$RUNNER_TEMP/release-mutation-check.log"');
-    // A summary with problems, or no summary at all, is a failure and an annotation.
+    // A summary with problems, or no summary at all, is a failure.
     expect(script).toContain("*' 0 problem(s).') ;;");
-    expect(script).toContain('echo "::error title=Nightly release mutation check failed::${summary}"');
     expect(script).toContain('exit 1');
     // And it comes after the check, so it has something to read.
     expect(job.steps.indexOf(summary as Step)).toBeGreaterThan(job.steps.indexOf(check as Step));

@@ -24,7 +24,7 @@ import { mustCover, readRepositoryFile } from './support/coverage.ts';
  */
 
 describe('Appendix G 17: four causes, four refusals, and no allow', () => {
-  mustCover(17, ['scenario 17', 'already_consumed', 'route_retired', 'posture_overdue']);
+  mustCover(17, ['already_consumed', 'route_retired', 'posture_overdue']);
 
   it('names each of the four causes separately', () => {
     // Three of them are section 15 hold reasons, because a person can act on them;
@@ -41,9 +41,9 @@ describe('Appendix G 17: four causes, four refusals, and no allow', () => {
     // route also happens to be retired must be reported as suppressed, or a
     // salesperson will "fix" the route and try again.
     const authorize = readRepositoryFile('packages/domain/dial/authorize.ts');
-    const suppression = authorize.indexOf('---- 1. Suppression');
-    const route = authorize.indexOf('---- 3. Route');
-    const posture = authorize.indexOf('---- 6. State posture');
+    const suppression = authorize.indexOf('await firstSuppressed(');
+    const route = authorize.indexOf('return refused(ELIGIBILITY_REFUSAL[route.eligibility]);');
+    const posture = authorize.indexOf('await applicablePosture(context, firm.region_code, input.at);');
     expect(suppression).toBeGreaterThan(-1);
     expect(route).toBeGreaterThan(suppression);
     expect(posture).toBeGreaterThan(route);

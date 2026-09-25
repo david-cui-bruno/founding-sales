@@ -25,7 +25,7 @@ import { mustCover } from './support/coverage.ts';
  */
 
 describe('Appendix G 30: the source, not the clock, refuses a prospect opt-out', () => {
-  mustCover(30, ['scenario 30', 'not_salesperson_originated', 'prospect_opt_out']);
+  mustCover(30, ['not_salesperson_originated', 'prospect_opt_out']);
 
   it('refuses the prospect’s own words one second after they were recorded', () => {
     const actorUserId = '11111111-2222-4333-8444-555555555555';

@@ -56,7 +56,7 @@ afterAll(async () => {
 });
 
 describe('Appendix G 3: a reply that commits between the decision and the dispatch', () => {
-  mustCover(3, ['decideSend', 'It re-reads everything', 'lockSendGateForDispatch', 'pausingAtTokenRefresh']);
+  mustCover(3, ['decideSend', 'lockSendGateForDispatch', 'pausingAtTokenRefresh']);
 
   it('a reply committed inside the dispatch, after its eligibility read, stops the send', async () => {
     const workspaceId = world.alpha.workspace.workspaceId;

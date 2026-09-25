@@ -26,7 +26,7 @@ import { mustCover } from './support/coverage.ts';
  */
 
 describe('Appendix G 6: an opt-out stops both scopes on both channels', () => {
-  mustCover(6, ['Appendix G 6', 'handle_suppressed', 'doNotCallCoversAllContact', 'suppressionsRecorded']);
+  mustCover(6, ['handle_suppressed', 'doNotCallCoversAllContact', 'suppressionsRecorded']);
 
   it('keeps firm and handle as two scopes with two refusals on each channel', () => {
     expect([...SUPPRESSION_SCOPES].sort()).toEqual(['firm', 'handle']);

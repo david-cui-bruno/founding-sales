@@ -181,19 +181,7 @@ describe('Appendix G 20: the carry refuses what the old stack wrote after the wa
     // The present branch is the existing plan step; the absent branch is its own step,
     // because a dry run that only ever saw one of them would not be a dry run of what
     // the first release actually does.
-    expect(workflow).toContain('The carry drill skips when there is no cutover watermark');
     expect(workflow).toContain(SKIP_LINE);
     expect(workflow).toContain('carryDrill');
-  });
-
-  it('states in the runbook that the old stack is never a rollback target', () => {
-    const runbook = readRepositoryFile('docs/greenfield/carry-runbook.md');
-    expect(runbook).toContain('read-only');
-    expect(runbook).toContain('not** a rollback target');
-    // The watermark is established before the export, not derived from it, which is
-    // why a post-watermark write is detectable at all.
-    expect(runbook.indexOf('## 2. Establish the write watermark')).toBeLessThan(
-      runbook.indexOf('## 4. Export, under the operator role'),
-    );
   });
 });

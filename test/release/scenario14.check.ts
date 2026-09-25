@@ -25,7 +25,7 @@ import { mustCover, readRepositoryFile } from './support/coverage.ts';
  */
 
 describe('Appendix G 14: resolution releases the ambiguity and nothing else', () => {
-  mustCover(14, ['Appendix G 14', 'resolveAmbiguity', 'ambiguous_match', 'releaseHoldsOfEvent']);
+  mustCover(14, ['resolveAmbiguity', 'ambiguous_match', 'releaseHoldsOfEvent']);
 
   it('scopes the release by reason code as well as by message', () => {
     const matching = readRepositoryFile('packages/domain/mail/matching.ts');

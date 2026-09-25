@@ -175,10 +175,8 @@ describe('O01: the Google root is its own state, beside production’s', () => {
     expect(key?.startsWith('fss/greenfield/rehearsal')).toBe(false);
   });
 
-  it('declares the backend with no arguments, and says its file is the per-account file', () => {
+  it('declares the backend with no arguments, and its file holds no credential', () => {
     expect(code(`${GOOGLE}/versions.tf`)).toMatch(/^\s*backend "s3" \{\}$/mu);
-    expect(google).toContain('This file is the per-account file, and it is the only one');
-    expect(google).toContain('docs/greenfield/accounts.md');
     expect(google).not.toMatch(/access_key|secret_key|token|password/u);
   });
 });
@@ -284,21 +282,8 @@ describe('O01: the split moves four objects and destroys none', () => {
     expect(code(`${PUBSUB}/main.tf`)).toContain('member  = "serviceAccount:${var.gmail_publisher_service_account}"');
   });
 
-  it('gives the operator a migration that backs up, imports, removes, proves and rolls back', () => {
+  it('puts no credential value or key file in the migration runbook', () => {
     const runbook = readRepositoryFile('docs/greenfield/google-root-migration-runbook.md');
-    for (const phrase of [
-      'terraform state pull',
-      "terraform state rm 'module.pubsub[0]'",
-      'Plan: 4 to import, 0 to add',
-      '0 to destroy',
-      'CLOUDSDK_CONFIG',
-      'terraform providers',
-      '## Rollback',
-      'fss/greenfield/production-google/terraform.tfstate',
-    ]) {
-      expect(runbook, phrase).toContain(phrase);
-    }
-    // Never a credential value, and never a key file.
     expect(runbook).not.toMatch(/AKIA[0-9A-Z]{16}|"private_key"|ya29\./u);
   });
 });

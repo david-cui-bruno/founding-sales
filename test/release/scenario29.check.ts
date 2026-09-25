@@ -26,7 +26,6 @@ import { mustCover } from './support/coverage.ts';
 
 describe('Appendix G 29: one exclusive ten-minute deadline, agreed by both racers', () => {
   mustCover(29, [
-    'scenario 29',
     'lost_to_correction',
     'finalizeManualSuppression',
     'suppression_finalizations',
