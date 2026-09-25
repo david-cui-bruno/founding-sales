@@ -24,6 +24,16 @@ import { fileURLToPath } from 'node:url';
  * returns sets over that. A check that iterates the ladder where it meant the choices
  * would silently stop asking about `teardown`, so both are exported and both are used.
  *
+ * ## And two modes on the top rung (lane g97)
+ *
+ * `mode` — `schema` (the default) or `full` — says what a `full` run is for. A step only
+ * the restore drill and the release gate need carries
+ * `inputs.stage == 'full' && inputs.mode == 'full'`; every other condition ignores the
+ * mode. `modesForCondition` reads that clause, `stagesForCondition` reads the stage half
+ * of the same condition, and `stepsForStage` takes the mode as its third argument,
+ * defaulting to `full` so that every statement written before g97 is still a statement
+ * about the whole gate.
+ *
  * ## Why a parser and not a YAML library
  *
  * `js-yaml` and `yaml` are both in `node_modules`, and neither is a declared
@@ -58,6 +68,34 @@ export const REHEARSAL_STAGES = ['plan', 'create', 'deploy', 'full'] as const;
 export const REHEARSAL_STAGE_CHOICES = [...REHEARSAL_STAGES, 'teardown'] as const;
 
 export type RehearsalStage = (typeof REHEARSAL_STAGE_CHOICES)[number];
+
+/** The two values of the `mode` input, the default first. */
+export const REHEARSAL_MODES = ['schema', 'full'] as const;
+
+export type RehearsalMode = (typeof REHEARSAL_MODES)[number];
+
+/** The one mode clause the workflow uses, appended to a stage condition. */
+const MODE_CLAUSE = / && inputs\.mode == '([a-z]+)'$/u;
+
+function isMode(value: string): value is RehearsalMode {
+  return (REHEARSAL_MODES as readonly string[]).includes(value);
+}
+
+/**
+ * The modes a step runs in: both, unless its condition ends in
+ * `&& inputs.mode == '<mode>'`. A condition that mentions the mode in any other shape
+ * is refused, for the same reason `stagesForCondition` refuses one it cannot read.
+ */
+export function modesForCondition(condition: string | null): ReadonlySet<RehearsalMode> {
+  if (condition === null || !condition.includes('inputs.mode')) return new Set(REHEARSAL_MODES);
+  const clause = MODE_CLAUSE.exec(condition.trim());
+  const mode = clause?.[1];
+  if (mode === undefined || !condition.includes('inputs.stage')) {
+    throw new Error(`the release workflow has a mode condition this check cannot read: ${condition.trim()}`);
+  }
+  if (!isMode(mode)) throw new Error(`\`${condition.trim()}\` names a mode that does not exist`);
+  return new Set([mode]);
+}
 
 /** The ladder stages a condition admits, in ladder order, ignoring `teardown`. */
 export function ladderStagesForCondition(condition: string | null): readonly RehearsalStage[] {
@@ -138,7 +176,8 @@ export function rehearsalJobSteps(): readonly WorkflowStep[] {
  */
 export function stagesForCondition(condition: string | null): ReadonlySet<RehearsalStage> {
   if (condition === null || !condition.includes('inputs.stage')) return new Set(REHEARSAL_STAGE_CHOICES);
-  const trimmed = condition.trim();
+  // The mode half is `modesForCondition`'s; what is left is one of the two grammars.
+  const trimmed = condition.trim().replace(MODE_CLAUSE, '');
 
   const equality = /^inputs\.stage == '([a-z]+)'$/u.exec(trimmed);
   if (equality?.[1] !== undefined) {
@@ -168,9 +207,15 @@ export function stagesForCondition(condition: string | null): ReadonlySet<Rehear
   );
 }
 
-/** The steps a dispatch of `stage` would run, in order. */
-export function stepsForStage(stage: RehearsalStage, steps?: readonly WorkflowStep[]): readonly WorkflowStep[] {
-  return (steps ?? rehearsalJobSteps()).filter(step => stagesForCondition(step.condition).has(stage));
+/** The steps a dispatch of `stage` would run in `mode` (`full` unless said), in order. */
+export function stepsForStage(
+  stage: RehearsalStage,
+  steps?: readonly WorkflowStep[],
+  mode: RehearsalMode = 'full',
+): readonly WorkflowStep[] {
+  return (steps ?? rehearsalJobSteps()).filter(
+    step => stagesForCondition(step.condition).has(stage) && modesForCondition(step.condition).has(mode),
+  );
 }
 
 /**

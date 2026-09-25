@@ -260,4 +260,4 @@ else
 fi
 
 rehearsal_write_report "teardown.txt" "prefix=$PREFIX destroyed=${DESTROYED} journal_bucket=${JOURNAL_BUCKET_STATE}"
-rehearsal_log "torn down; run rehearsal-prefix-guard.sh $PREFIX after to prove production was untouched"
+rehearsal_log "torn down; run rehearsal-prefix-guard.sh $PREFIX after to prove nothing named for the run was left and nothing production's was addressed"

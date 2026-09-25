@@ -9,28 +9,38 @@
 # The offline half of this scenario is `infra/roots/*/tests/isolation.tftest.hcl`,
 # which pins the state-key prefixes and the name-prefix refusals against mocked
 # providers. That proves the *plans* differ. It cannot prove the last clause, which is
-# about what a real teardown could reach.
+# about what a real run could reach.
 #
-# This is the other half, and it is deliberately an assertion about absence: after the
-# rehearsal run has been destroyed, nothing carrying the production prefix may have
-# been touched. It is checked three ways, because one way is a coincidence:
+# This is the other half, and it runs after the teardown on every run. It checks:
 #
 #   1. every resource the rehearsal state ever held is named `fss-rh-<run>`;
-#   2. the deployment role the run assumed is `fss-rh-deploy`, not `fss-prod-deploy`;
-#   3. the durable production resources that existed before the run still exist
-#      afterwards, with the same identifiers — so "teardown could not address them" is
-#      measured rather than asserted. Durable means everything but ECS tasks and their
-#      network interfaces, which come and go with the tasks (`durable_inventory`, below).
+#   2. the deployment role the run assumed is `fss-rh-deploy`, not `fss-prod-deploy` —
+#      and `fss-rh-deploy`'s policy cannot address `fss-prod*` at all;
+#   3. the run's own resources — everything whose `Name` tag is the run prefix or begins
+#      `<prefix>-` — are compared against what stood before creation: every durable one
+#      the run created is gone. Durable means everything but what AWS keeps listing
+#      after it accepted a deletion (`durable_inventory`, below).
 #
-# `before` records the production inventory; `after` compares. The comparison is the
-# test; recording alone proves nothing, and the script says so if `after` is run with
-# no `before` to compare against.
+# ## Why it no longer compares production (lane g97, 25 September 2026)
 #
-# The inventory read is the one rehearsal command that names production on purpose, and
-# the shared guard refused it on the first credentialed run (Actions 35548888865). It is
-# now issued through `rehearsal_read_production_inventory`, the single exempt caller;
-# see the long comment in `rehearsal-common.sh` for what keeps the exemption to one
-# read-only command.
+# Until g97, step 3 read the *production* inventory before the run and compared it
+# afterwards, so that "teardown could not address production" was a diff. The diff was
+# of a thing that moves for reasons of its own. It had already been taught that ECS
+# forgets a stopped task (run 35962272085) and that a replaced task takes its network
+# interface with it (run 36032732128); on the night of 25 September it failed a rehearsal
+# only because the operator applied production while the rehearsal ran. A comparison
+# that fails whenever production is legitimately changed measures the operator's diary.
+# What the run itself touches is what carries its own prefix, and that is what is
+# compared now. That nothing production's was addressed rests on the three things that
+# made it true before as well: no command a rehearsal issues names production (the plan
+# phase below holds the printed plan to that, and `rehearsal_refuse_production_arguments`
+# refuses at the moment of the call), the session is `fss-rh-deploy`, and that role's
+# policy is scoped to `fss-rh-*`. The read is no longer an exemption from the refusal:
+# it names nothing but the run.
+#
+# `before` records the run's own resources, before anything is created — `[]` for a
+# fresh run, the orphan's resources for a `teardown` run. `after` compares. A missing
+# `before` is a failure, not a skip.
 #
 # `plan` is the third phase and the one that runs on every pull request: it re-applies
 # the production-name refusal to the plan the dry run printed, so a rehearsal whose own
@@ -44,58 +54,36 @@ PREFIX=${1:-}
 PHASE=${2:-after}
 rehearsal_require_prefix "$PREFIX"
 
-INVENTORY="$(rehearsal_report_dir)/production-inventory.json"
+INVENTORY="$(rehearsal_report_dir)/run-inventory.json"
 
-production_inventory() {
-  # Read-only describes over the *production* namespace, through the single exempt
-  # caller. The rehearsal deployment role may not make them, which is the point: this
-  # runs under the workflow's read-only inventory role, and if it cannot read
-  # production either the scenario still passes, because "could not address" is the
-  # claim — but then the comparison is between two errors, so the read is a refusal
-  # rather than an empty list when it fails.
-  rehearsal_read_production_inventory resourcegroupstaggingapi get-resources
-}
+# The tagging API lags a deletion it has accepted, so a leftover is read again before
+# it is called one. Seams for the offline checks, which set the wait to zero.
+SETTLE_READS=${FSS_REHEARSAL_SETTLE_READS:-5}
+SETTLE_SECONDS=${FSS_REHEARSAL_SETTLE_SECONDS:-60}
 
-# The inventory minus what comes and goes with an ECS task.
+# The inventory minus what AWS keeps listing after it accepted a deletion.
 #
 #   durable_inventory <which side> < inventory.json
 #
-# The tagging API lists ECS *tasks*, because a service's tasks carry its propagated tags,
-# and a task is not a durable resource: a stopped one stays visible for about an hour and
-# then ECS forgets it. Run 35962272085 (24 September 2026, prefix fss-rh-202609240558)
-# failed this comparison with exactly twelve deleted lines, every one
-# `arn:aws:ecs:us-east-1:…:task/fss-prod-cluster/<id>` — the old service tasks and the
-# one-off migrate, users, verify and bootstrap tasks of the production redeploy at
-# 05:50–05:57Z, recorded at 05:59Z while ECS still showed them and aged out by 07:10Z.
-# Production had not moved: both services stayed stable on revision 4 throughout.
+# The run's own resources, after its teardown, still show up in the tagging API in four
+# shapes that are not leftovers:
 #
-# A task's elastic network interface is the same kind of thing one level down. A Fargate
-# task gets its own interface when it starts and loses it when it stops, and the
-# interface carries the task's propagated tags, so the tagging API lists it too. Run
-# 36032732128 (24 September 2026, prefix fss-rh-202609241713) failed this comparison
-# with exactly one changed line, `arn:aws:ec2:us-east-1:…:network-interface/eni-0d67…`
-# before and `…/eni-0e2f…` after: ECS had replaced the production worker task during
-# the run, because its liveness check was failing and ECS restarts a task whose check
-# fails, and the old task's interface went with it. That is no more a production touch
-# than the task was.
+#   * every `ecs` ARN — a stopped task stays visible for about an hour (run 35962272085
+#     saw twelve), a deleted service or cluster is INACTIVE for a while, and a
+#     deregistered task-definition revision is INACTIVE for good. None of them runs or
+#     bills;
+#   * an `ec2` ARN whose resource part begins `network-interface/` — a Fargate task's
+#     interface carries its propagated tags and goes with the task (run 36032732128);
+#   * a `kms` ARN whose resource part begins `key/` — a key cannot be deleted at once,
+#     only scheduled for deletion after its window;
+#   * an `rds` ARN whose resource part begins `auto-backup:` — `infra/modules/database`
+#     keeps an instance's automated backups for their retention period when it is
+#     deleted (`delete_automated_backups = false`).
 #
-# So the comparison is between durable resources, and this is the one place that says
-# what durable means: every ARN except one whose service is `ecs` and whose resource
-# part begins `task/`, or whose service is `ec2` and whose resource part begins
-# `network-interface/`. Parsed rather than matched as a substring, so
-# `task-definition/fss-prod-api:5` is kept — a new task-definition revision is a
-# production touch and must still fail the guard — and so are the cluster, the
-# services, the log groups, the alarms, the buckets and the roles; and so is every
-# other `ec2` resource — the VPC, the subnets, the security groups, the route tables,
-# the internet gateway — which is where an interface lives and what it wears. A task
-# the rehearsal itself launched into production is not measured here, and neither is
-# its interface; that direction is refused per launch by
-# `release_refuse_foreign_arguments` in `release-common.sh` (Appendix G 39, the
-# symmetric refusal) and by the identity assertion in step 2.
-#
-# Applied to **both** sides at comparison time, not only to the read, so a `before`
-# file recorded by an older guard — one that kept its tasks — compares correctly too.
-# The recorded file itself stays the raw read: it is the evidence of what existed.
+# Parsed rather than matched as a substring, and each class is counted in the log. Every
+# other resource is compared: the database instance and its snapshots, the buckets, the
+# load balancer, the log groups, the alarms, the secrets, the VPC, the subnets and the
+# security groups.
 durable_inventory() {
   FSS_INVENTORY_SIDE="${1:-inventory}" python3 -c '
 import json, os, sys
@@ -104,10 +92,10 @@ side = os.environ["FSS_INVENTORY_SIDE"]
 try:
     arns = json.load(sys.stdin)
 except ValueError as error:
-    sys.stderr.write("FAIL: the production inventory %s is not JSON: %s\n" % (side, error))
+    sys.stderr.write("FAIL: the run inventory %s is not JSON: %s\n" % (side, error))
     sys.exit(1)
 if not isinstance(arns, list):
-    sys.stderr.write("FAIL: the production inventory %s is not a list of ARNs\n" % side)
+    sys.stderr.write("FAIL: the run inventory %s is not a list of ARNs\n" % side)
     sys.exit(1)
 
 def arn_parts(arn):
@@ -115,45 +103,67 @@ def arn_parts(arn):
     parts = arn.split(":", 5) if isinstance(arn, str) else []
     return parts if len(parts) == 6 and parts[0] == "arn" else None
 
-def is_ecs_task(arn):
+def lingering(arn):
     parts = arn_parts(arn)
-    return parts is not None and parts[2] == "ecs" and parts[5].startswith("task/")
+    if parts is None:
+        return None
+    service, resource = parts[2], parts[5]
+    if service == "ecs":
+        return "ECS"
+    if service == "ec2" and resource.startswith("network-interface/"):
+        return "network interface"
+    if service == "kms" and resource.startswith("key/"):
+        return "KMS key"
+    if service == "rds" and resource.startswith("auto-backup:"):
+        return "retained automated backup"
+    return None
 
-def is_network_interface(arn):
-    parts = arn_parts(arn)
-    return parts is not None and parts[2] == "ec2" and parts[5].startswith("network-interface/")
-
-tasks = [arn for arn in arns if is_ecs_task(arn)]
-interfaces = [arn for arn in arns if is_network_interface(arn)]
-durable = [arn for arn in arns if arn not in tasks and arn not in interfaces]
-if tasks or interfaces:
+counts = {}
+durable = []
+for arn in arns:
+    kind = lingering(arn)
+    if kind is None:
+        durable.append(arn)
+    else:
+        counts[kind] = counts.get(kind, 0) + 1
+if counts:
     sys.stderr.write(
-        "the production inventory %s: %d ECS task ARN(s), %d network interface ARN(s) set aside,"
-        " because ECS forgets a stopped task and Fargate deletes the network interface with it\n"
-        % (side, len(tasks), len(interfaces))
+        "the run inventory %s: set aside %s, because AWS keeps listing them after it accepted the deletion\n"
+        % (side, ", ".join("%d %s ARN(s)" % (counts[kind], kind) for kind in sorted(counts)))
     )
-json.dump(durable, sys.stdout, indent=2)
+json.dump(sorted(durable), sys.stdout, indent=2)
 sys.stdout.write("\n")
+'
+}
+
+# Durable ARNs in the second list that the first does not hold, one per line.
+left_behind() {
+  FSS_RECORDED="$1" FSS_CURRENT="$2" python3 -c '
+import json, os
+recorded = set(json.loads(os.environ["FSS_RECORDED"]))
+for arn in json.loads(os.environ["FSS_CURRENT"]):
+    if arn not in recorded:
+        print(arn)
 '
 }
 
 case "$PHASE" in
   before)
-    rehearsal_log "recording the production inventory before the rehearsal run"
+    rehearsal_log "recording the resources named for ${PREFIX} before anything is created"
     mkdir -p "$(rehearsal_report_dir)"
     # Dry mode records the sentinel rather than `[]`: the workflow runs this phase in
-    # dry mode when it decides the run prefix, and an `after` that compared real
-    # production against a fabricated empty list would pass by construction.
+    # dry mode when it decides the run prefix, and an `after` that compared against a
+    # fabricated empty list would pass by construction.
     if rehearsal_dry_run; then
-      production_inventory
+      rehearsal_read_run_inventory "$PREFIX"
       printf '%s\n' "$REHEARSAL_DRY_RUN_INVENTORY" > "$INVENTORY"
     else
-      production_inventory > "$INVENTORY"
+      rehearsal_read_run_inventory "$PREFIX" > "$INVENTORY"
     fi
     rehearsal_log "recorded $(wc -l < "$INVENTORY" | tr -d ' ') lines"
     ;;
   after)
-    rehearsal_log "asserting the rehearsal run touched nothing with the production prefix"
+    rehearsal_log "asserting the rehearsal run touched nothing with the production prefix and left nothing of its own"
 
     # 0. The names a rehearsal may address, classified rather than assumed.
     #
@@ -184,8 +194,8 @@ case "$PHASE" in
     if rehearsal_dry_run; then
       rehearsal_plan "terraform state list | grep -v '$PREFIX' -> expect empty"
       rehearsal_plan "aws sts get-caller-identity -> expect an fss-rh- role"
-      rehearsal_plan "compare the durable production inventory (ECS tasks and network interfaces set aside, both sides) with $INVENTORY"
-      production_inventory
+      rehearsal_plan "compare the durable resources named for $PREFIX (ECS, network interfaces, KMS keys and retained backups set aside) with $INVENTORY"
+      rehearsal_read_run_inventory "$PREFIX"
     else
       # A state that cannot be listed is the shape a run that created nothing takes:
       # the creation step never ran, so the root was never initialised. That is a pass
@@ -222,85 +232,70 @@ case "$PHASE" in
           ;;
       esac
 
-      # 3. Production is exactly as it was. A missing `before` is a failure, not a
-      #    skip: a comparison with nothing is the vacuous pass this script exists to
-      #    avoid.
+      # 3. The run's own resources, against what stood before creation. A missing
+      #    `before` is a failure, not a skip: a comparison with nothing is the vacuous
+      #    pass this script exists to avoid.
       if [ ! -f "$INVENTORY" ]; then
-        echo "FAIL: no production inventory was recorded before the run, so nothing can be compared" >&2
+        echo "FAIL: nothing was recorded before the run was created, so nothing can be compared" >&2
         exit 1
       fi
       # The workflow runs the `before` phase twice: once in dry mode, to validate the
       # prefix it just decided, and once for real. If only the dry one ran, the file
-      # holds the sentinel, and comparing production against it would be a pass nobody
-      # earned.
-      if grep -qF 'dry-run: no production inventory was read' "$INVENTORY"; then
+      # holds the sentinel, and comparing against it would be a pass nobody earned.
+      if grep -qF 'dry-run: no inventory was read' "$INVENTORY"; then
         echo "FAIL: the only inventory recorded was a dry run's, so there is nothing to compare against" >&2
         exit 1
       fi
-      # Durable resources only, on both sides (`durable_inventory` above says why).
       recorded="$(durable_inventory 'recorded before the run' < "$INVENTORY")"
-      current="$(production_inventory | durable_inventory 'read now')"
-      if [ "$current" != "$recorded" ]; then
-        echo "FAIL: the production inventory changed during the rehearsal run" >&2
-        diff <(printf '%s\n' "$recorded") <(printf '%s\n' "$current") >&2 || true
-        exit 1
-      fi
+      reads=0
+      while :; do
+        reads=$((reads + 1))
+        current="$(rehearsal_read_run_inventory "$PREFIX" | durable_inventory 'read now')"
+        left="$(left_behind "$recorded" "$current")"
+        [ -n "$left" ] || break
+        if [ "$reads" -gt "$SETTLE_READS" ]; then
+          echo "FAIL: the rehearsal run left resources named for ${PREFIX} behind after its teardown:" >&2
+          printf '%s\n' "$left" >&2
+          exit 1
+        fi
+        rehearsal_log "$(printf '%s\n' "$left" | wc -l | tr -d ' ') resource(s) named for ${PREFIX} still listed; reading again in ${SETTLE_SECONDS}s (${reads} of $((SETTLE_READS + 1)))"
+        sleep "$SETTLE_SECONDS"
+      done
     fi
 
     rehearsal_write_report "prefix-guard.txt" \
-      "prefix=$PREFIX production_untouched=true stable_repositories=rehearsal state_read=${state_read:-dry-run}"
-    rehearsal_log "pass: nothing with the production prefix was addressed"
+      "prefix=$PREFIX production_untouched=true run_resources_left=0 stable_repositories=rehearsal state_read=${state_read:-dry-run}"
+    rehearsal_log "pass: nothing with the production prefix was addressed, and nothing named for ${PREFIX} was left"
     ;;
   plan)
     # The same refusal, applied to the plan the credential-free dry run printed.
     #
     # `rehearsal_refuse_production_arguments` fails at the moment a command is issued,
-    # which means a command nothing on a pull request issues — the inventory read, or
-    # anything a later edit adds to a real-only branch — is first judged on a
-    # credentialed run. That is how the first rehearsal refused itself. So the plan is
-    # re-read here: every printed command that names production must be the one exempt
-    # read, and the exempt read must be present, because a plan that quietly stopped
-    # reading the inventory would pass a scan for the absence of a string.
+    # which means a command nothing on a pull request issues — anything a later edit
+    # adds to a real-only branch — is first judged on a credentialed run. That is how
+    # the first rehearsal refused itself (Actions 35548888865). So the plan is re-read
+    # here: no printed command may name production at all, and the read of the run's
+    # own resources must be present, because a plan that quietly stopped reading them
+    # would pass a scan for the absence of a string.
     PLAN_FILE=${3:-}
     if [ -z "$PLAN_FILE" ] || [ ! -f "$PLAN_FILE" ]; then
       echo "FAIL: the plan phase needs the file the dry run printed: ...prefix-guard.sh $PREFIX plan <file>" >&2
       exit 1
     fi
 
-    exempt=0
+    run_reads=0
     offending=0
     while IFS= read -r line; do
       case "$line" in
-        *"$PRODUCTION_PREFIX"*) : ;;
-        *) continue ;;
-      esac
-      case "$line" in
-        *"$REHEARSAL_INVENTORY_MARKER"*)
-          # Marked, so it claims the exemption. It has to earn it: the one read-only
-          # operation, and no mutating verb anywhere on the line.
-          case "$line" in
-            *"resourcegroupstaggingapi get-resources"*) : ;;
-            *)
-              echo "FAIL: a plan line claims the inventory exemption without being the inventory read: $line" >&2
-              offending=$((offending + 1))
-              continue
-              ;;
-          esac
-          for verb in create delete destroy put update modify remove restore terminate write set-; do
-            case "$line" in
-              *" $verb"*|*"-$verb"*)
-                echo "FAIL: the exempt inventory read names a mutating verb ('$verb'): $line" >&2
-                offending=$((offending + 1))
-                continue 2
-                ;;
-            esac
-          done
-          exempt=$((exempt + 1))
-          rehearsal_log "exempt: $line"
-          ;;
-        *)
+        *"$PRODUCTION_PREFIX"*)
           echo "FAIL: a rehearsal command names a production resource: $line" >&2
           offending=$((offending + 1))
+          continue
+          ;;
+      esac
+      case "$line" in
+        *"resourcegroupstaggingapi get-resources"*"$REHEARSAL_RUN_INVENTORY_MARKER $PREFIX")
+          run_reads=$((run_reads + 1))
           ;;
       esac
     done < "$PLAN_FILE"
@@ -309,12 +304,12 @@ case "$PHASE" in
       echo "FAIL: $offending planned command(s) would be refused by the rehearsal's own guard" >&2
       exit 1
     fi
-    if [ "$exempt" -lt 1 ]; then
-      echo "FAIL: the plan contains no production-inventory read, so 'teardown could not address" >&2
-      echo "      production' would be asserted rather than measured" >&2
+    if [ "$run_reads" -lt 1 ]; then
+      echo "FAIL: the plan contains no read of the resources named for $PREFIX, so 'the teardown" >&2
+      echo "      left nothing behind' would be asserted rather than measured" >&2
       exit 1
     fi
-    rehearsal_log "pass: $exempt exempt inventory read(s), no other planned command names production"
+    rehearsal_log "pass: $run_reads read(s) of the run's own resources, and no planned command names production"
     ;;
   *)
     echo "FAIL: phase must be before, after or plan" >&2

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # The two judgements the scheduled workflows make with nothing but the GitHub API
-# (lane g74; audit O10 and O11).
+# (lane g74, audit O10 and O11; monthly since lane g97).
 #
-#   infra/scripts/ci-schedule.sh slot        # greenfield-weekly-rehearsal.yml: is this hour the weekly slot?
+#   infra/scripts/ci-schedule.sh slot        # greenfield-monthly-drill.yml: is this hour the monthly slot?
 #   infra/scripts/ci-schedule.sh freshness   # greenfield-freshness.yml: did the scheduled checks run?
 #
 # Neither needs a cloud credential and neither may have one: the workflows that run this
@@ -11,17 +11,18 @@
 #
 # ## `slot`
 #
-# GitHub's `schedule` cannot read a repository variable, and it drops or delays events
-# when its queue is busy — on 25 September the nightly's 09:00 event never fired at all.
-# So the weekly workflow wakes every hour on Sunday (UTC) and asks this script. The slot
-# is Sunday at `FSS_WEEKLY_REHEARSAL_HOUR_UTC` (default 9, `off` pauses the schedule).
+# GitHub's `schedule` cannot read a repository variable, cannot say "the first Sunday of
+# the month", and drops or delays events when its queue is busy — on 25 September the
+# nightly's 09:00 event never fired at all. So the monthly drill wakes at 06:00 and every
+# hour on Sunday (UTC) and asks this script. The slot is the first Sunday of the month
+# (day 1 to 7) at `FSS_MONTHLY_DRILL_HOUR_UTC` (default 6, `off` pauses the schedule).
 # It prints `due=true` when:
 #
 #   * the workflow was dispatched by hand (`GITHUB_EVENT_NAME=workflow_dispatch`); or
-#   * it is Sunday, the slot hour has come, and no earlier run of this workflow since
-#     the slot began got as far as pinning its artifacts — so an hour whose event GitHub
-#     dropped is caught up by the next one, and a slot that already ran, passed or
-#     failed, is not run twice.
+#   * it is the first Sunday of the month, the slot hour has come, and no earlier run of
+#     this workflow since the slot began got as far as pinning its artifacts — so an hour
+#     whose event GitHub dropped is caught up by the next one, and a slot that already
+#     ran, passed or failed, is not run twice.
 #
 # Otherwise `due=false`, with the reason on stderr. A value of the variable that is
 # neither `off` nor an hour is a failure, not a quiet skip.
@@ -33,10 +34,12 @@
 #
 #   * the nightly release mutation check (`greenfield-nightly.yml`): its newest
 #     successful run on main must be younger than `FSS_NIGHTLY_MAX_AGE_HOURS` (30);
-#   * a green full rehearsal, weekly or dispatched: its newest `fss-release-manifest`
-#     artifact from main must be younger than `FSS_WEEKLY_MAX_AGE_HOURS` (192, eight days),
-#     unless the weekly schedule is paused (`FSS_WEEKLY_REHEARSAL_HOUR_UTC=off`), when the
-#     age is reported and not alarmed.
+#   * a green full-mode rehearsal, the monthly drill or a dispatched one: its newest
+#     `fss-release-manifest` artifact from main must be younger than
+#     `FSS_DRILL_MAX_AGE_HOURS` (864, thirty-six days: first Sundays are at most five
+#     weeks apart, and a day more for the run and the rerun), unless the monthly schedule
+#     is paused (`FSS_MONTHLY_DRILL_HOUR_UTC=off`), when the age is reported and not
+#     alarmed.
 #
 # "Never" counts as stale once the workflow has existed longer than the threshold. Any
 # stale check fails the run and opens — or, if one is open, updates — a single issue
@@ -46,12 +49,12 @@
 # added only when the set of stale checks changes, so twice a day is not twice a day of
 # notifications. When everything is fresh again the issue is closed with a comment.
 #
-# Seams, for `test/release/weeklyRehearsal.check.ts`: FSS_GH_COMMAND (default `gh`)
+# Seams, for `test/release/rehearsalCadence.check.ts`: FSS_GH_COMMAND (default `gh`)
 # and FSS_NOW (an ISO instant to use as the present).
 
 set -euo pipefail
 
-WEEKLY_WORKFLOW='greenfield-weekly-rehearsal.yml'
+DRILL_WORKFLOW='greenfield-monthly-drill.yml'
 NIGHTLY_WORKFLOW='greenfield-nightly.yml'
 MANIFEST_ARTIFACT='fss-release-manifest'
 PIN_JOB_NAME='Pin the three artifacts to this commit'
@@ -83,10 +86,10 @@ now_iso() {
 # ---------------------------------------------------------------------------
 subcommand_slot() {
   require_repository
-  local hour=${FSS_WEEKLY_REHEARSAL_HOUR_UTC:-} event=${GITHUB_EVENT_NAME:-} now decision work runs
-  hour=${hour:-9}
+  local hour=${FSS_MONTHLY_DRILL_HOUR_UTC:-} event=${GITHUB_EVENT_NAME:-} now decision work runs
+  hour=${hour:-6}
   if [ "$hour" = off ]; then
-    echo "the weekly rehearsal is paused (FSS_WEEKLY_REHEARSAL_HOUR_UTC=off)" >&2
+    echo "the monthly drill is paused (FSS_MONTHLY_DRILL_HOUR_UTC=off)" >&2
     if [ "$event" = workflow_dispatch ]; then
       echo "dispatched by hand, so it runs anyway" >&2
       echo "due=true"
@@ -95,7 +98,7 @@ subcommand_slot() {
     echo "due=false"
     return 0
   fi
-  [[ "$hour" =~ ^([01]?[0-9]|2[0-3])$ ]] || schedule_fail "FSS_WEEKLY_REHEARSAL_HOUR_UTC is '$hour'; it must be an hour from 0 to 23, or off"
+  [[ "$hour" =~ ^([01]?[0-9]|2[0-3])$ ]] || schedule_fail "FSS_MONTHLY_DRILL_HOUR_UTC is '$hour'; it must be an hour from 0 to 23, or off"
   if [ "$event" = workflow_dispatch ]; then
     echo "dispatched by hand: due whatever the hour" >&2
     echo "due=true"
@@ -103,7 +106,7 @@ subcommand_slot() {
   fi
 
   now="$(now_iso)"
-  # Before the slot, or not Sunday: no API call at all.
+  # Before the slot, or not the first Sunday of the month: no API call at all.
   decision="$(FSS_NOW_ISO="$now" FSS_HOUR="$hour" python3 - <<'PY'
 import datetime, os
 now = datetime.datetime.strptime(os.environ["FSS_NOW_ISO"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
@@ -111,6 +114,8 @@ hour = int(os.environ["FSS_HOUR"])
 slot = now.replace(hour=hour, minute=0, second=0, microsecond=0)
 if now.weekday() != 6:
     print("skip not Sunday (UTC)")
+elif now.day > 7:
+    print("skip not the first Sunday of the month (UTC)")
 elif now < slot:
     print("skip before the slot, {}".format(slot.strftime("%Y-%m-%dT%H:%M:%SZ")))
 else:
@@ -130,8 +135,8 @@ PY
   # shellcheck disable=SC2064 # the path is fixed now; the local is gone by the time EXIT runs
   trap "rm -rf '$work'" EXIT
   runs="$work/runs.json"
-  schedule_gh api -X GET "repos/$GITHUB_REPOSITORY/actions/workflows/$WEEKLY_WORKFLOW/runs" -f per_page=50 > "$runs" \
-    || schedule_fail "the weekly workflow's runs could not be listed"
+  schedule_gh api -X GET "repos/$GITHUB_REPOSITORY/actions/workflows/$DRILL_WORKFLOW/runs" -f per_page=50 > "$runs" \
+    || schedule_fail "the monthly drill's runs could not be listed"
   local earlier id
   earlier="$(FSS_FILE="$runs" FSS_SLOT="$slot" FSS_SELF="${GITHUB_RUN_ID:-}" python3 - <<'PY'
 import json, os
@@ -157,7 +162,7 @@ for job in document.get("jobs") or []:
 sys.exit(1)
 PY
     then
-      echo "not due: run $id already attempted this week's slot ($slot)" >&2
+      echo "not due: run $id already attempted this month's slot ($slot)" >&2
       echo "due=false"
       return 0
     fi
@@ -171,10 +176,10 @@ PY
 # ---------------------------------------------------------------------------
 subcommand_freshness() {
   require_repository
-  local nightly_hours=${FSS_NIGHTLY_MAX_AGE_HOURS:-30} weekly_hours=${FSS_WEEKLY_MAX_AGE_HOURS:-192}
+  local nightly_hours=${FSS_NIGHTLY_MAX_AGE_HOURS:-30} drill_hours=${FSS_DRILL_MAX_AGE_HOURS:-864}
   local notify=${FSS_FRESHNESS_NOTIFY:-${GITHUB_REPOSITORY_OWNER:-}}
   [[ "$nightly_hours" =~ ^[0-9]+$ && "$nightly_hours" -gt 0 ]] || schedule_fail "FSS_NIGHTLY_MAX_AGE_HOURS is not a positive number of hours"
-  [[ "$weekly_hours" =~ ^[0-9]+$ && "$weekly_hours" -gt 0 ]] || schedule_fail "FSS_WEEKLY_MAX_AGE_HOURS is not a positive number of hours"
+  [[ "$drill_hours" =~ ^[0-9]+$ && "$drill_hours" -gt 0 ]] || schedule_fail "FSS_DRILL_MAX_AGE_HOURS is not a positive number of hours"
   [[ -z "$notify" || "$notify" =~ ^[A-Za-z0-9-]+$ ]] || schedule_fail "FSS_FRESHNESS_NOTIFY is not a GitHub login"
 
   local work
@@ -186,8 +191,8 @@ subcommand_freshness() {
   schedule_gh api -X GET "repos/$GITHUB_REPOSITORY/actions/workflows/$NIGHTLY_WORKFLOW/runs" \
     -f branch=main -f status=success -f per_page=20 > "$work/nightly-runs.json" \
     || schedule_fail "the nightly workflow's runs could not be listed"
-  schedule_gh api -X GET "repos/$GITHUB_REPOSITORY/actions/workflows/$WEEKLY_WORKFLOW" > "$work/weekly-workflow.json" \
-    || schedule_fail "the weekly workflow could not be read"
+  schedule_gh api -X GET "repos/$GITHUB_REPOSITORY/actions/workflows/$DRILL_WORKFLOW" > "$work/drill-workflow.json" \
+    || schedule_fail "the monthly drill workflow could not be read"
   schedule_gh api -X GET "repos/$GITHUB_REPOSITORY/actions/artifacts" \
     -f name="$MANIFEST_ARTIFACT" -f per_page=50 > "$work/manifests.json" \
     || schedule_fail "the release manifests could not be listed"
@@ -196,9 +201,9 @@ subcommand_freshness() {
 
   # One program decides; it prints the verdict and writes the issue text for the shell.
   local verdict
-  verdict="$(FSS_WORK="$work" FSS_NOW_ISO="$(now_iso)" FSS_NIGHTLY_HOURS="$nightly_hours" FSS_WEEKLY_HOURS="$weekly_hours" \
+  verdict="$(FSS_WORK="$work" FSS_NOW_ISO="$(now_iso)" FSS_NIGHTLY_HOURS="$nightly_hours" FSS_DRILL_HOURS="$drill_hours" \
     FSS_NOTIFY="$notify" FSS_MARKER="$FRESHNESS_MARKER" FSS_REPOSITORY="$GITHUB_REPOSITORY" \
-    FSS_WEEKLY_PAUSED="$([ "${FSS_WEEKLY_REHEARSAL_HOUR_UTC:-}" = off ] && echo yes || echo no)" \
+    FSS_DRILL_PAUSED="$([ "${FSS_MONTHLY_DRILL_HOUR_UTC:-}" = off ] && echo yes || echo no)" \
     FSS_SERVER="${GITHUB_SERVER_URL:-https://github.com}" python3 - <<'PY'
 # ci-schedule-freshness
 import datetime, json, os, re
@@ -245,14 +250,14 @@ manifests = [
     if artifact.get("name") == "fss-release-manifest" and not artifact.get("expired")
     and (artifact.get("workflow_run") or {}).get("head_branch") == "main"
 ]
-weekly_newest = max((instant(artifact.get("created_at")) for artifact in manifests), default=None)
-weekly = judge("full rehearsal", weekly_newest, instant(load("weekly-workflow.json").get("created_at")),
-               int(env["FSS_WEEKLY_HOURS"]), "green full rehearsal (release manifest) from main")
-if env["FSS_WEEKLY_PAUSED"] == "yes" and not weekly["fresh"]:
-    # Paused on purpose (FSS_WEEKLY_REHEARSAL_HOUR_UTC=off): reported, not alarmed.
-    weekly = {"name": weekly["name"], "fresh": True, "detail": weekly["detail"] + "; the weekly schedule is paused"}
+drill_newest = max((instant(artifact.get("created_at")) for artifact in manifests), default=None)
+drill = judge("full rehearsal", drill_newest, instant(load("drill-workflow.json").get("created_at")),
+              int(env["FSS_DRILL_HOURS"]), "green full rehearsal (release manifest) from main")
+if env["FSS_DRILL_PAUSED"] == "yes" and not drill["fresh"]:
+    # Paused on purpose (FSS_MONTHLY_DRILL_HOUR_UTC=off): reported, not alarmed.
+    drill = {"name": drill["name"], "fresh": True, "detail": drill["detail"] + "; the monthly schedule is paused"}
 
-checks = [nightly, weekly]
+checks = [nightly, drill]
 stale = [check["name"] for check in checks if not check["fresh"]]
 
 issue = None

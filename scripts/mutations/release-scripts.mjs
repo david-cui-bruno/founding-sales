@@ -119,15 +119,6 @@ export const MUTATIONS = [
       'Every rehearsal terraform command runs with -var=assume_deployment_role=false, so the job\'s ambient credentials are what the apply acts as. A pattern that matches anything would accept a user, another role, or a role whose name merely starts the same way — which is exactly what the old `*fss-rh-*` check did — and scenario 39 has to notice.',
   },
   {
-    name: "the inventory exemption stops being read-only",
-    file: 'infra/scripts/rehearsal-common.sh',
-    find: '  if [ "$matched" -ne 1 ]; then',
-    replace: '  if false; then',
-    suite: ['run', 'test:release'],
-    because:
-      'The production-inventory read is the one rehearsal command allowed to name production, and the only thing keeping that from being a hole is the check that it is resourcegroupstaggingapi get-resources and nothing else. Remove it and the same function will issue rds delete-db-instance against fss-prod, so scenario 39 has to go red.',
-  },
-  {
     name: 'the dry run stops reading the plan it printed',
     file: 'infra/scripts/rehearsal-prefix-guard.sh',
     find: '    if [ "$offending" -gt 0 ]; then',
@@ -135,51 +126,6 @@ export const MUTATIONS = [
     suite: ['run', 'test:release'],
     because:
       "The first credentialed rehearsal refused its own inventory read, and no pull request could have caught it because the refusal only happens when the command is issued. The plan scan is the offline half; a scan that refuses nothing would let the next self-refusal through to the next credentialed run.",
-  },
-  {
-    name: 'the production guard compares ECS tasks again',
-    file: 'infra/scripts/rehearsal-prefix-guard.sh',
-    find: 'tasks = [arn for arn in arns if is_ecs_task(arn)]\n',
-    replace: 'tasks = []\n',
-    suite: ['run', 'test:release'],
-    because:
-      'This is run 35962272085 exactly (24 September 2026): twelve production tasks the redeploy had stopped were recorded at 05:59Z and forgotten by ECS before the 07:10Z comparison, and the guard reported a production touch that never happened. The tagging API lists tasks because they carry propagated tags, and ECS drops a stopped task after about an hour, so scenario 39 runs the guard against that shape and has to go red when tasks are compared again.',
-  },
-  {
-    name: 'the production guard sets aside task-definition revisions with the tasks',
-    file: 'infra/scripts/rehearsal-prefix-guard.sh',
-    find: 'parts[5].startswith("task/")',
-    replace: 'parts[5].startswith("task")',
-    suite: ['run', 'test:release'],
-    because:
-      'A new task-definition revision is what a production deploy leaves behind, so it is a production touch and the guard must still see it. `task-definition/…` and `task/…` differ by one character after `task`. A filter that matched the prefix without the slash would quietly stop measuring the one ECS resource that proves a deploy happened, and scenario 39 has to go red when it does.',
-  },
-  {
-    name: 'the production guard compares task network interfaces again',
-    file: 'infra/scripts/rehearsal-prefix-guard.sh',
-    find: 'interfaces = [arn for arn in arns if is_network_interface(arn)]\n',
-    replace: 'interfaces = []\n',
-    suite: ['run', 'test:release'],
-    because:
-      'This is run 36032732128 exactly (24 September 2026): ECS replaced the production worker task during the run, and the guard failed on one changed line, network-interface/eni-0d67\u2026 before and eni-0e2f\u2026 after. A Fargate task\u2019s elastic network interface is created and deleted with the task and carries its propagated tags, so the tagging API lists it; scenario 39 runs the guard against that shape and has to go red when interfaces are compared again.',
-  },
-  {
-    name: 'the production guard sets aside every ec2 resource with the network interfaces',
-    file: 'infra/scripts/rehearsal-prefix-guard.sh',
-    find: 'parts[2] == "ec2" and parts[5].startswith("network-interface/")',
-    replace: 'parts[2] == "ec2"',
-    suite: ['run', 'test:release'],
-    because:
-      'The VPC, the subnets, the security groups, the route tables and the internet gateway are all ec2 ARNs, and they are the durable resources an interface lives in and wears. A filter that matched the service without the resource type would quietly stop measuring the production network, and scenario 39 has to go red when a replaced VPC, subnet or security group passes the guard.',
-  },
-  {
-    name: 'the production guard stops filtering the inventory it recorded',
-    file: 'infra/scripts/rehearsal-prefix-guard.sh',
-    find: `      recorded="$(durable_inventory 'recorded before the run' < "$INVENTORY")"\n`,
-    replace: '      recorded="$(cat "$INVENTORY")"\n',
-    suite: ['run', 'test:release'],
-    because:
-      'The recorded file is the raw read, tasks included, so that it stays evidence of what existed and so that a file an older guard recorded compares correctly. The filter therefore has to be applied to the recorded side at comparison time as well as to the fresh read. Filter only one side and the twelve stopped tasks of run 35962272085 fail the guard again.',
   },
   {
     name: 'the teardown starts treating every failure as an absence',
@@ -364,31 +310,31 @@ export const MUTATIONS = [
       'The production operator passes the green rehearsal record to the deploy, and the enable rule refuses a reference no stored record carries, so a deploy that accepted the flag and skipped the put would leave sending impossible to enable with nothing saying why. scenario42.check.ts dry-runs the deploy with the flag and requires the put after the final verify, and has to go red.',
   },
   {
-    name: 'the weekly pin takes the newest ancestor’s images whatever its image inputs',
+    name: 'the monthly pin takes the newest ancestor’s images whatever its image inputs',
     file: 'infra/scripts/release-images.sh',
     find: '    if git diff --quiet "$head" "$commit" -- "${IMAGE_INPUTS[@]}"; then\n',
     replace: '    if true; then\n',
-    suite: ['run', 'test:release', '--', 'test/release/weeklyRehearsal.check.ts'],
+    suite: ['run', 'test:release', '--', 'test/release/rehearsalCadence.check.ts'],
     because:
-      'This is audit O10’s pinned-artifact rule (lane g74): the images workflow publishes only when an image input changes, so the weekly run may pin an earlier commit’s images only when every input is byte-identical to its own. Without the comparison a commit that changed packages/ and whose publish failed is rehearsed on the previous code’s images, and the manifest calls that a pass. weeklyRehearsal.check.ts pins an unpublished image change against a real history and has to go red.',
+      'This is audit O10’s pinned-artifact rule (lane g74): the images workflow publishes only when an image input changes, so the monthly run may pin an earlier commit’s images only when every input is byte-identical to its own. Without the comparison a commit that changed packages/ and whose publish failed is rehearsed on the previous code’s images, and the manifest calls that a pass. rehearsalCadence.check.ts pins an unpublished image change against a real history and has to go red.',
   },
   {
-    name: 'the weekly slot runs again every hour after an earlier run already pinned',
+    name: 'the monthly slot runs again every hour after an earlier run already pinned',
     file: 'infra/scripts/ci-schedule.sh',
     find: '    if job.get("name") == os.environ["FSS_PIN_JOB"] and job.get("conclusion") != "skipped":\n',
     replace: '    if False:\n',
-    suite: ['run', 'test:release', '--', 'test/release/weeklyRehearsal.check.ts'],
+    suite: ['run', 'test:release', '--', 'test/release/rehearsalCadence.check.ts'],
     because:
-      'The weekly workflow wakes every hour on Sunday so that a dropped schedule event is caught up (the nightly’s 25 September event never fired). Without the earlier-attempt check every later hour starts another full rehearsal — up to fifteen of them, queued behind one concurrency group, each an hour of rehearsal spend. weeklyRehearsal.check.ts runs the slot after a run that pinned, failed or is still going and has to go red.',
+      'The monthly drill wakes every hour on Sunday so that a dropped schedule event is caught up (the nightly’s 25 September event never fired). Without the earlier-attempt check every later hour starts another full rehearsal — up to fifteen of them, queued behind one concurrency group, each an hour of rehearsal spend. rehearsalCadence.check.ts runs the slot after a run that pinned, failed or is still going and has to go red.',
   },
   {
     name: 'the freshness check calls every nightly fresh whatever its age',
     file: 'infra/scripts/ci-schedule.sh',
     find: '        fresh = age <= limit\n',
     replace: '        fresh = True\n',
-    suite: ['run', 'test:release', '--', 'test/release/weeklyRehearsal.check.ts'],
+    suite: ['run', 'test:release', '--', 'test/release/rehearsalCadence.check.ts'],
     because:
-      'This is audit O11: a scheduled run that never started sends no failure e-mail, so the age comparison is the whole alarm. A check that cannot find anything stale is the silence of 25 September with a green tick beside it. weeklyRehearsal.check.ts gives it a nightly 36 hours old and requires a failure and one opened issue, and has to go red.',
+      'This is audit O11: a scheduled run that never started sends no failure e-mail, so the age comparison is the whole alarm. A check that cannot find anything stale is the silence of 25 September with a green tick beside it. rehearsalCadence.check.ts gives it a nightly 36 hours old and requires a failure and one opened issue, and has to go red.',
   },
   {
     name: 'the manifest verifies against a release record it was not written for',

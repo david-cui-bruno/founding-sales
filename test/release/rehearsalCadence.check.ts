@@ -5,16 +5,29 @@ import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { readRepositoryFile, repositoryPath } from './support/coverage.ts';
 import { ghStub, type Stub } from './support/cliStubs.ts';
-import { rehearsalJobSteps, stepScript } from './support/releaseWorkflow.ts';
+import { rehearsalJobSteps, stepScript, stepsForStage } from './support/releaseWorkflow.ts';
 
 /**
- * Lane g74: the weekly full rehearsal runs on a schedule with pinned artifacts (audit
- * O10), CI is where the image digests come from (O17), and a scheduled check that never
- * ran is noticed (O11).
+ * The rehearsal's cadence. Lane g97 (David's decision of 25 September 2026, axiom 1C):
+ * the rehearsal a schema change gets is the trimmed `mode: schema` run, the weekly
+ * scheduled full rehearsal is switched off, and the full run — the restore drill and the
+ * release gate — runs monthly. Lane g74 before it: the full rehearsal runs on a schedule
+ * with pinned artifacts (audit O10), CI is where the image digests come from (O17), and a
+ * scheduled check that never ran is noticed (O11).
  *
  * ## The vacuous-pass traps, named
  *
- * **A pin that pins nothing.** "The weekly run passes digests to the rehearsal" is true
+ * **A trimmed run that trims nothing, or too much.** "Schema mode skips the drill" is
+ * true of a mode nothing reads, and of one that also skips the schema ranges. So the
+ * step list of a `schema` run is derived from the `if:` conditions and compared with
+ * the exact list the decision names, the skipped steps with the exact list it skips, and
+ * the `full` run is required to be a strict superset of it.
+ *
+ * **A schedule that is still weekly.** The weekly workflow is required to be gone, the
+ * release workflow to have no schedule of its own, the monthly drill to be the only
+ * caller, and the slot to refuse every Sunday but the first.
+ *
+ * **A pin that pins nothing.** "The monthly run passes digests to the rehearsal" is true
  * of a pin that takes the newest images run whatever it built. So `release-images.sh
  * pin` is run against a real git history and a stubbed GitHub: a documentation commit
  * on top of an image change must pin that change's images, an image change nobody
@@ -22,7 +35,7 @@ import { rehearsalJobSteps, stepScript } from './support/releaseWorkflow.ts';
  * artifact that names another commit, or one image under both names, must be refused.
  * A mutation removes the input comparison and requires this file to go red.
  *
- * **A stamp that is not the commit.** The weekly caller must hand the rehearsal the
+ * **A stamp that is not the commit.** The monthly caller must hand the rehearsal the
  * commit it runs at as the desktop stamp and as `pinned_commit`, and the called run must
  * refuse unless it checked out exactly that commit. The refusal is extracted from the
  * workflow and run, pinned and unpinned, rather than read.
@@ -32,7 +45,7 @@ import { rehearsalJobSteps, stepScript } from './support/releaseWorkflow.ts';
  * paused, and dispatched. A mutation makes the catch-up ignore earlier attempts.
  *
  * **A freshness check that cannot fail.** It is run against a stubbed GitHub at a fixed
- * present with a stale nightly, a fresh one, a never-run one, a paused weekly, and an
+ * present with a stale nightly, a fresh one, a never-run one, a paused drill, and an
  * open issue; it must fail and open exactly one issue when stale, update rather than
  * open a second, and close it when fresh. A mutation inverts the age comparison.
  *
@@ -41,7 +54,7 @@ import { rehearsalJobSteps, stepScript } from './support/releaseWorkflow.ts';
  * changes an image and publishes nothing cannot pass unnoticed.
  */
 
-const WEEKLY = '.github/workflows/greenfield-weekly-rehearsal.yml';
+const DRILL = '.github/workflows/greenfield-monthly-drill.yml';
 const IMAGES = '.github/workflows/greenfield-images.yml';
 const FRESHNESS = '.github/workflows/greenfield-freshness.yml';
 const RELEASE = '.github/workflows/greenfield-release.yml';
@@ -87,23 +100,24 @@ function run(
   return { code: result.status ?? 1, stdout: result.stdout, stderr: result.stderr };
 }
 
-describe('the weekly full rehearsal is scheduled, and pins what it rehearses (O10)', () => {
-  const workflow = readRepositoryFile(WEEKLY);
+describe('the monthly drill is scheduled, and pins what it rehearses (O10)', () => {
+  const workflow = readRepositoryFile(DRILL);
   const on = block(workflow, 'on:');
   const pin = block(workflow, '  pin:');
   const call = block(workflow, '  rehearsal:');
 
-  it('wakes every hour on Sunday, and can be dispatched, dry by default', () => {
-    expect(uncommented(on).match(/- cron: /gu)).toHaveLength(1);
+  it('wakes at 06:00 and hourly on Sunday, and can be dispatched, dry by default', () => {
+    expect(uncommented(on).match(/- cron: /gu)).toHaveLength(2);
+    expect(on).toContain("    - cron: '0 6 * * 0'");
     expect(on).toContain("    - cron: '23 * * * 0'");
     expect(on).toContain('  workflow_dispatch:');
     expect(on).toMatch(/dry_run:[\s\S]*?type: boolean[\s\S]*?default: true/u);
     expect(on).not.toMatch(/^ {2}(push|pull_request|pull_request_target):/mu);
   });
 
-  it('takes the slot hour from a repository variable, defaulting to 09:00 UTC', () => {
-    expect(workflow).toContain('FSS_WEEKLY_REHEARSAL_HOUR_UTC: ${{ vars.FSS_WEEKLY_REHEARSAL_HOUR_UTC }}');
-    expect(readFileSync(SCHEDULE_SCRIPT, 'utf8')).toContain('hour=${hour:-9}');
+  it('takes the slot hour from a repository variable, defaulting to 06:00 UTC', () => {
+    expect(workflow).toContain('FSS_MONTHLY_DRILL_HOUR_UTC: ${{ vars.FSS_MONTHLY_DRILL_HOUR_UTC }}');
+    expect(readFileSync(SCHEDULE_SCRIPT, 'utf8')).toContain('hour=${hour:-6}');
   });
 
   it('pins with no cloud credential: no environment, no id-token, and a refusal of any ambient one', () => {
@@ -112,16 +126,17 @@ describe('the weekly full rehearsal is scheduled, and pins what it rehearses (O1
     expect(pin).not.toContain('id-token');
     expect(pin).toContain('fetch-depth: 0');
     expect(pin).toContain('infra/scripts/release-images.sh pin "$GITHUB_SHA"');
-    expect(pin).toContain('Pinning the weekly rehearsal\'s artifacts needs no cloud credential');
+    expect(pin).toContain('for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN');
     // And the job's name is the one the slot decision looks for in earlier runs.
     expect(pin).toContain('    name: Pin the three artifacts to this commit');
     expect(readFileSync(SCHEDULE_SCRIPT, 'utf8')).toContain("PIN_JOB_NAME='Pin the three artifacts to this commit'");
   });
 
-  it('calls the release workflow itself at this commit, full, with the three pinned artifacts', () => {
+  it('calls the release workflow itself at this commit, full stage and full mode, with the three pinned artifacts', () => {
     expect(call).toContain('    uses: ./.github/workflows/greenfield-release.yml');
     expect(call).toContain('    secrets: inherit');
     expect(call).toContain('      stage: full');
+    expect(call).toContain('      mode: full');
     expect(call).toContain('      api_image_digest: ${{ needs.pin.outputs.api_digest }}');
     expect(call).toContain('      worker_image_digest: ${{ needs.pin.outputs.worker_digest }}');
     // The stamp and the pin are the commit this run is at, never something the pin computed.
@@ -139,14 +154,14 @@ describe('the weekly full rehearsal is scheduled, and pins what it rehearses (O1
   it('never names production, and takes a concurrency group that is not the release workflow’s own', () => {
     expect(uncommented(workflow)).not.toContain('fss-prod');
     expect(uncommented(workflow)).not.toContain('release-promote.sh');
-    expect(workflow).toContain('  group: greenfield-weekly-rehearsal');
+    expect(workflow).toContain('  group: greenfield-monthly-drill');
     expect(workflow).toContain('cancel-in-progress: false');
     expect(uncommented(workflow)).not.toContain('group: greenfield-rehearsal\n');
   });
 
   it('pins actions by the same commit the release workflow pins', () => {
     const release = readRepositoryFile(RELEASE);
-    for (const file of [WEEKLY, IMAGES, FRESHNESS]) {
+    for (const file of [DRILL, IMAGES, FRESHNESS]) {
       const references = [...readRepositoryFile(file).matchAll(/uses:\s*(\S+)/gu)]
         .map(match => match[1] ?? '')
         .filter(reference => !reference.startsWith('./'));
@@ -159,12 +174,13 @@ describe('the weekly full rehearsal is scheduled, and pins what it rehearses (O1
   });
 });
 
-describe('the release workflow can be called weekly, and refuses a pin it did not check out', () => {
+describe('the release workflow can be called monthly, and refuses a pin it did not check out', () => {
   const release = readRepositoryFile(RELEASE);
 
-  it('declares workflow_call with every dispatch input and the three the weekly caller adds', () => {
+  it('declares workflow_call with every dispatch input and the three the monthly caller adds', () => {
     const called = block(release, '  workflow_call:');
     for (const name of [
+      'mode',
       'stage',
       'api_image_digest',
       'worker_image_digest',
@@ -178,7 +194,7 @@ describe('the release workflow can be called weekly, and refuses a pin it did no
     }
   });
 
-  it('runs the credentialed job on a dispatch or the weekly call, and never on a push or a pull request', () => {
+  it('runs the credentialed job on a dispatch or the monthly call, and never on a push or a pull request', () => {
     const job = release.slice(release.indexOf('\n  rehearsal:\n'));
     expect(job).toContain("    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'\n");
     expect(job).toContain('    environment: rehearsal');
@@ -200,6 +216,7 @@ describe('the release workflow can be called weekly, and refuses a pin it did no
     worker_image_digest: digest('b'),
     desktop_commit_stamp: sha,
     stage: 'full',
+    mode: 'full',
     pinned_commit: sha,
   };
 
@@ -215,9 +232,12 @@ describe('the release workflow can be called weekly, and refuses a pin it did no
     expect(output).toContain('was pinned to');
   });
 
-  it('refuses a pinned run whose desktop stamp is not the pin, or that is not full', () => {
+  it('refuses a pinned run whose desktop stamp is not the pin, or that is not the full stage in full mode', () => {
     expect(refusal({ ...base, desktop_commit_stamp: 'e'.repeat(40) }, sha).code).not.toBe(0);
     expect(refusal({ ...base, stage: 'deploy' }, sha).code).not.toBe(0);
+    const schema = refusal({ ...base, mode: 'schema' }, sha);
+    expect(schema.code).not.toBe(0);
+    expect(schema.output).toContain("mode 'schema' is not full");
   });
 
   it('leaves a dispatched run alone: no pin, any stamp', () => {
@@ -228,6 +248,128 @@ describe('the release workflow can be called weekly, and refuses a pin it did no
   it('checks out the whole history, which the manifest’s comparison needs', () => {
     const steps = rehearsalJobSteps();
     expect(steps[0]?.text).toContain('fetch-depth: 0');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The two modes, and no weekly schedule (lane g97).
+// ---------------------------------------------------------------------------
+
+/**
+ * What a `mode: schema` run does, in order — create → deploy and migrate → ranges →
+ * smoke → destroy → guard — each step found by the code it runs, not by its name.
+ */
+const SCHEMA_RUN: readonly string[] = [
+  'terraform plan -input=false',
+  'terraform apply -auto-approve -input=false',
+  'aws secretsmanager put-secret-value',
+  'infra/scripts/release-deploy.sh infra/roots/rehearsal',
+  'infra/scripts/release-bootstrap-workspace.sh infra/roots/rehearsal',
+  'infra/scripts/rehearsal-schema-ranges.sh',
+  'node scripts/productionSmoke.mjs',
+  'run: ../../scripts/rehearsal-teardown.sh',
+  "rehearsal-prefix-guard.sh '${{ steps.prefix.outputs.prefix }}' after",
+];
+
+/** What only `mode: full` adds — the drill, the suite and the gate — by the code each runs. */
+const FULL_ONLY: readonly string[] = [
+  'infra/scripts/release-seed-drill-evidence.sh',
+  'npm run test:release',
+  'infra/scripts/rehearsal-restore-drill.sh',
+  'journal-replay.json',
+  'infra/scripts/rehearsal-carry-watermark.sh',
+  'infra/scripts/rehearsal-release-record.sh',
+  'infra/scripts/release-manifest.sh write',
+  'name: fss-release-manifest',
+];
+
+describe('the rehearsal is a trimmed schema run unless the full one is chosen, and nothing runs it weekly (g97)', () => {
+  const release = readRepositoryFile(RELEASE);
+  const steps = rehearsalJobSteps();
+
+  it('offers `mode` with the two values, `schema` by default, and a stage that runs the whole mode by default', () => {
+    const dispatch = block(block(release, 'on:'), '  workflow_dispatch:');
+    const mode = block(dispatch, '      mode:');
+    expect(mode).toContain('type: choice');
+    expect(mode).toContain("default: 'schema'");
+    expect([...mode.matchAll(/^ {10}- ([a-z]+)$/gmu)].map(match => match[1])).toEqual(['schema', 'full']);
+    const stage = block(dispatch, '      stage:');
+    expect(stage).toContain("default: 'full'");
+    // A caller that names no mode gets the trimmed run too.
+    const called = block(block(release, '  workflow_call:'), '      mode:');
+    expect(called).toContain("default: 'schema'");
+  });
+
+  /** The one step whose code contains `needle`, or a failure: an anchor that matches two steps anchors nothing. */
+  function stepRunning(needle: string): (typeof steps)[number] {
+    const found = steps.filter(step => step.text.includes(needle));
+    expect(found.map(step => step.name), needle).toHaveLength(1);
+    return found[0] as (typeof steps)[number];
+  }
+
+  it('runs create, deploy and migrate, the ranges, the smoke, the teardown and the guard in schema mode, in that order', () => {
+    const schema = stepsForStage('full', steps, 'schema');
+    const at = SCHEMA_RUN.map(needle => schema.indexOf(stepRunning(needle)));
+    for (const [index, needle] of SCHEMA_RUN.entries()) expect(at[index], `schema mode skips ${needle}`).toBeGreaterThan(-1);
+    expect([...at].sort((a, b) => a - b)).toEqual(at);
+    // And none of the drill, the suite or the gate.
+    for (const needle of FULL_ONLY) expect(schema, `schema mode runs ${needle}`).not.toContain(stepRunning(needle));
+  });
+
+  it('adds exactly the drill, the suite, the renewal before the drill and the gate in full mode, and nothing else changes', () => {
+    const schema = stepsForStage('full', steps, 'schema');
+    const full = stepsForStage('full', steps, 'full');
+    for (const step of schema) expect(full, `full mode skips ${step.name}`).toContain(step);
+    const added = full.filter(step => !schema.includes(step));
+    // The eight above, and the renewal before the drill with its identity check: the two
+    // steps whose only purpose is to give the drill a fresh session.
+    const renewal = added.filter(step => !FULL_ONLY.some(needle => step.text.includes(needle)));
+    expect(renewal).toHaveLength(2);
+    expect(renewal[0]?.text).toContain('uses: aws-actions/configure-aws-credentials@');
+    expect(renewal[1]?.text).toContain('infra/scripts/rehearsal-caller-identity.sh fss-rh-deploy');
+    expect(added.map(step => step.index).sort((a, b) => a - b)).toEqual(
+      [...FULL_ONLY.map(needle => stepRunning(needle).index), ...renewal.map(step => step.index)].sort((a, b) => a - b),
+    );
+    for (const step of added) expect(step.condition, step.name).toBe("inputs.stage == 'full' && inputs.mode == 'full'");
+    // And below the top rung the mode changes nothing: a plan is a plan in either.
+    for (const stage of ['plan', 'create', 'deploy', 'teardown'] as const) {
+      expect(stepsForStage(stage, steps, 'schema'), stage).toEqual(stepsForStage(stage, steps, 'full'));
+    }
+  });
+
+  it('shrinks the run’s timeouts to the mode, and caps each long step so the teardown keeps its time', () => {
+    const job = release.slice(release.indexOf('\n  rehearsal:\n'));
+    expect(job).toContain("    timeout-minutes: ${{ inputs.mode == 'full' && 180 || 90 }}\n");
+    const caps: Record<string, number> = {
+      'terraform plan -input=false': 15,
+      'terraform apply -auto-approve -input=false': 35,
+      'aws secretsmanager put-secret-value': 5,
+      'infra/scripts/release-deploy.sh infra/roots/rehearsal': 30,
+      'infra/scripts/release-bootstrap-workspace.sh infra/roots/rehearsal': 10,
+      'infra/scripts/rehearsal-schema-ranges.sh': 15,
+      'node scripts/productionSmoke.mjs': 15,
+    };
+    for (const [needle, minutes] of Object.entries(caps)) {
+      expect(stepRunning(needle).text, needle).toContain(`        timeout-minutes: ${String(minutes)}\n`);
+    }
+    // The cleanup is capped by nothing but the job: a teardown cut short is an orphan.
+    for (const needle of ['run: ../../scripts/rehearsal-teardown.sh', "rehearsal-prefix-guard.sh '${{ steps.prefix.outputs.prefix }}' after"]) {
+      expect(stepRunning(needle).text, needle).not.toContain('timeout-minutes');
+    }
+  });
+
+  it('has no weekly workflow, no schedule on the release workflow, and the monthly drill as its only caller', () => {
+    const workflows = readdirSync(repositoryPath('.github/workflows')).filter(name => name.endsWith('.yml'));
+    expect(workflows).not.toContain('greenfield-weekly-rehearsal.yml');
+    expect(workflows).toContain('greenfield-monthly-drill.yml');
+    expect(block(release, 'on:')).not.toMatch(/^ {2}schedule:/mu);
+    const callers = workflows.filter(name =>
+      uncommented(readRepositoryFile(`.github/workflows/${name}`)).includes('uses: ./.github/workflows/greenfield-release.yml'),
+    );
+    expect(callers).toEqual(['greenfield-monthly-drill.yml']);
+    // The release workflow's own triggers follow the rename.
+    expect(release).not.toContain('greenfield-weekly-rehearsal.yml');
+    expect(release).toContain("      - '.github/workflows/greenfield-monthly-drill.yml'");
   });
 });
 
@@ -454,7 +596,7 @@ describe('the images CI publishes are the images of exactly the inputs the pin c
 // The slot.
 // ---------------------------------------------------------------------------
 
-const WEEKLY_RUNS_ROUTE = `GET repos/${REPOSITORY}/actions/workflows/greenfield-weekly-rehearsal.yml/runs`;
+const DRILL_RUNS_ROUTE = `GET repos/${REPOSITORY}/actions/workflows/greenfield-monthly-drill.yml/runs`;
 
 function slot(
   now: string,
@@ -465,7 +607,7 @@ function slot(
     readonly jobs?: Readonly<Record<string, readonly Record<string, unknown>[]>>;
   } = {},
 ): { readonly code: number; readonly due: string; readonly stderr: string; readonly gh: Stub } {
-  const routes: Record<string, unknown> = { [WEEKLY_RUNS_ROUTE]: { workflow_runs: options.runs ?? [] } };
+  const routes: Record<string, unknown> = { [DRILL_RUNS_ROUTE]: { workflow_runs: options.runs ?? [] } };
   for (const [id, jobs] of Object.entries(options.jobs ?? {})) {
     routes[`GET repos/${REPOSITORY}/actions/runs/${id}/jobs`] = { jobs };
   }
@@ -476,7 +618,7 @@ function slot(
     GITHUB_EVENT_NAME: options.event ?? 'schedule',
     GITHUB_RUN_ID: '900',
     FSS_NOW: now,
-    FSS_WEEKLY_REHEARSAL_HOUR_UTC: options.hour ?? '',
+    FSS_MONTHLY_DRILL_HOUR_UTC: options.hour ?? '',
   };
   const result = run(SCHEDULE_SCRIPT, ['slot'], env);
   return { code: result.code, due: result.stdout.trim(), stderr: result.stderr, gh };
@@ -484,26 +626,37 @@ function slot(
 
 const PIN_JOB = 'Pin the three artifacts to this commit';
 
-describe('the weekly slot is Sunday at the configured hour, caught up once, and never run twice (O10)', () => {
-  // 27 September 2026 is a Sunday.
-  it('is not due before the hour, or on another day, and asks GitHub nothing then', () => {
-    for (const now of ['2026-09-27T08:23:00Z', '2026-09-26T09:23:00Z', '2026-09-28T09:23:00Z']) {
+describe('the monthly slot is the first Sunday at the configured hour, caught up once, and never run twice (O10)', () => {
+  // 4 October 2026 is the first Sunday of October; 27 September and 11 October are Sundays too.
+  it('is not due before the hour, on another day, or on any Sunday but the first, and asks GitHub nothing then', () => {
+    for (const now of [
+      '2026-10-04T05:23:00Z',
+      '2026-10-03T06:23:00Z',
+      '2026-10-05T06:23:00Z',
+      '2026-09-27T06:23:00Z',
+      '2026-10-11T06:23:00Z',
+      '2026-10-25T06:00:00Z',
+    ]) {
       const result = slot(now);
       expect(result.due, now).toBe('due=false');
       expect(result.gh.calls(), now).toHaveLength(0);
     }
+    expect(slot('2026-10-11T06:23:00Z').stderr).toContain('not the first Sunday of the month');
   });
 
-  it('is due at the hour when nothing has run since the slot began', () => {
-    const result = slot('2026-09-27T09:23:00Z', {
-      runs: [{ id: 800, created_at: '2026-09-27T08:23:00Z' }],
+  it('is due at the hour when nothing has run since the slot began, on day 1 and on day 7 alike', () => {
+    const result = slot('2026-10-04T06:00:00Z', {
+      runs: [{ id: 800, created_at: '2026-10-04T05:23:00Z' }],
     });
     expect(result.due, result.stderr).toBe('due=true');
+    // 1 November and 7 June 2026 are first Sundays at either end of the week.
+    expect(slot('2026-11-01T06:23:00Z').due).toBe('due=true');
+    expect(slot('2026-06-07T06:23:00Z').due).toBe('due=true');
   });
 
   it('catches up a later hour when the slot’s own run never pinned', () => {
-    const result = slot('2026-09-27T11:23:00Z', {
-      runs: [{ id: 801, created_at: '2026-09-27T10:23:00Z' }],
+    const result = slot('2026-10-04T08:23:00Z', {
+      runs: [{ id: 801, created_at: '2026-10-04T07:23:00Z' }],
       jobs: { '801': [{ name: PIN_JOB, conclusion: 'skipped' }] },
     });
     expect(result.due, result.stderr).toBe('due=true');
@@ -511,9 +664,9 @@ describe('the weekly slot is Sunday at the configured hour, caught up once, and 
 
   it('is not due again once a run since the slot pinned, passed, failed or is still going', () => {
     for (const conclusion of ['success', 'failure', null]) {
-      const result = slot('2026-09-27T12:23:00Z', {
-        runs: [{ id: 802, created_at: '2026-09-27T09:24:00Z' }],
-        jobs: { '802': [{ name: 'Decide whether this hour is the weekly slot', conclusion: 'success' }, { name: PIN_JOB, conclusion }] },
+      const result = slot('2026-10-04T12:23:00Z', {
+        runs: [{ id: 802, created_at: '2026-10-04T06:01:00Z' }],
+        jobs: { '802': [{ name: 'Decide whether this hour is the monthly slot', conclusion: 'success' }, { name: PIN_JOB, conclusion }] },
       });
       expect(result.due, String(conclusion)).toBe('due=false');
       expect(result.stderr).toContain('already attempted');
@@ -521,18 +674,18 @@ describe('the weekly slot is Sunday at the configured hour, caught up once, and 
   });
 
   it('does not count its own run as an earlier attempt', () => {
-    const result = slot('2026-09-27T09:23:00Z', {
-      runs: [{ id: 900, created_at: '2026-09-27T09:23:00Z' }],
+    const result = slot('2026-10-04T06:00:00Z', {
+      runs: [{ id: 900, created_at: '2026-10-04T06:00:00Z' }],
       jobs: { '900': [{ name: PIN_JOB, conclusion: null }] },
     });
     expect(result.due).toBe('due=true');
   });
 
   it('follows the variable: another hour, paused, and a value that is neither is a failure', () => {
-    expect(slot('2026-09-27T09:23:00Z', { hour: '14' }).due).toBe('due=false');
-    expect(slot('2026-09-27T14:23:00Z', { hour: '14' }).due).toBe('due=true');
-    expect(slot('2026-09-27T09:23:00Z', { hour: 'off' }).due).toBe('due=false');
-    expect(slot('2026-09-27T09:23:00Z', { hour: '25' }).code).not.toBe(0);
+    expect(slot('2026-10-04T06:23:00Z', { hour: '14' }).due).toBe('due=false');
+    expect(slot('2026-10-04T14:23:00Z', { hour: '14' }).due).toBe('due=true');
+    expect(slot('2026-10-04T06:23:00Z', { hour: 'off' }).due).toBe('due=false');
+    expect(slot('2026-10-04T06:23:00Z', { hour: '25' }).code).not.toBe(0);
   });
 
   it('is due whenever it is dispatched by hand, even paused', () => {
@@ -553,7 +706,7 @@ function freshness(options: {
   readonly manifests?: readonly Record<string, unknown>[];
   readonly issues?: readonly Record<string, unknown>[];
   readonly nightlyCreated?: string;
-  readonly weeklyCreated?: string;
+  readonly drillCreated?: string;
   readonly paused?: boolean;
 }): { readonly code: number; readonly stdout: string; readonly stderr: string; readonly gh: Stub } {
   const base = `repos/${REPOSITORY}`;
@@ -561,7 +714,7 @@ function freshness(options: {
     routes: {
       [`GET ${base}/actions/workflows/greenfield-nightly.yml`]: { created_at: options.nightlyCreated ?? '2026-09-25T05:00:00Z' },
       [`GET ${base}/actions/workflows/greenfield-nightly.yml/runs`]: { workflow_runs: options.nightly ?? [] },
-      [`GET ${base}/actions/workflows/greenfield-weekly-rehearsal.yml`]: { created_at: options.weeklyCreated ?? '2026-09-25T18:00:00Z' },
+      [`GET ${base}/actions/workflows/greenfield-monthly-drill.yml`]: { created_at: options.drillCreated ?? '2026-09-25T18:00:00Z' },
       [`GET ${base}/actions/artifacts`]: { artifacts: options.manifests ?? [] },
       [`GET ${base}/issues`]: options.issues ?? [],
       [`POST ${base}/issues`]: { number: 31, node_id: 'I_kwDOexample' },
@@ -577,9 +730,9 @@ function freshness(options: {
     GITHUB_REPOSITORY_OWNER: 'example-owner',
     GITHUB_STEP_SUMMARY: summary,
     FSS_NOW: NOW,
-    FSS_WEEKLY_REHEARSAL_HOUR_UTC: options.paused === true ? 'off' : '',
+    FSS_MONTHLY_DRILL_HOUR_UTC: options.paused === true ? 'off' : '',
     FSS_NIGHTLY_MAX_AGE_HOURS: '30',
-    FSS_WEEKLY_MAX_AGE_HOURS: '192',
+    FSS_DRILL_MAX_AGE_HOURS: '864',
     FSS_FRESHNESS_NOTIFY: '',
   });
   return { ...result, gh };
@@ -611,7 +764,7 @@ describe('a scheduled check that did not run is noticed, once, by an issue (O11)
   const freshNightly = [nightlyRun('2026-09-26T09:05:00Z')];
   const freshManifest = [manifest('2026-09-24T11:00:00Z')];
 
-  it('passes quietly when the nightly ran today and a full rehearsal passed this week', () => {
+  it('passes quietly when the nightly ran today and a full rehearsal passed this month', () => {
     const result = freshness({ nightly: freshNightly, manifests: freshManifest });
     expect(result.code, result.stderr).toBe(0);
     expect(writes(result.gh)).toEqual([]);
@@ -643,14 +796,17 @@ describe('a scheduled check that did not run is noticed, once, by an issue (O11)
     expect(freshness({ manifests: freshManifest, nightlyCreated: '2026-09-20T05:00:00Z' }).code).not.toBe(0);
   });
 
-  it('alarms on a full rehearsal older than eight days, unless the weekly schedule is paused', () => {
-    const old = [manifest('2026-09-17T11:00:00Z')];
-    const stale = freshness({ nightly: freshNightly, manifests: old, weeklyCreated: '2026-09-10T00:00:00Z' });
+  it('alarms on a full rehearsal older than thirty-six days, unless the monthly schedule is paused', () => {
+    // Nine days old was stale under the weekly schedule; under the monthly one it is fresh.
+    const lastWeek = freshness({ nightly: freshNightly, manifests: [manifest('2026-09-17T11:00:00Z')], drillCreated: '2026-07-01T00:00:00Z' });
+    expect(lastWeek.code, lastWeek.stderr).toBe(0);
+    const old = [manifest('2026-08-20T11:00:00Z')];
+    const stale = freshness({ nightly: freshNightly, manifests: old, drillCreated: '2026-07-01T00:00:00Z' });
     expect(stale.code).not.toBe(0);
     expect(stale.stdout).toContain('| full rehearsal | **no** |');
-    const branch = freshness({ nightly: freshNightly, manifests: [manifest('2026-09-25T11:00:00Z', 'side')], weeklyCreated: '2026-09-10T00:00:00Z' });
+    const branch = freshness({ nightly: freshNightly, manifests: [manifest('2026-09-25T11:00:00Z', 'side')], drillCreated: '2026-07-01T00:00:00Z' });
     expect(branch.code).not.toBe(0);
-    const paused = freshness({ nightly: freshNightly, manifests: old, weeklyCreated: '2026-09-10T00:00:00Z', paused: true });
+    const paused = freshness({ nightly: freshNightly, manifests: old, drillCreated: '2026-07-01T00:00:00Z', paused: true });
     expect(paused.code, paused.stderr).toBe(0);
     expect(paused.stdout).toContain('paused');
   });
@@ -662,8 +818,8 @@ describe('a scheduled check that did not run is noticed, once, by an issue (O11)
     expect(writes(same.gh)).toEqual([`PATCH repos/${REPOSITORY}/issues/31`]);
     const more = freshness({
       nightly: [nightlyRun('2026-09-25T09:05:00Z')],
-      manifests: [manifest('2026-09-10T11:00:00Z')],
-      weeklyCreated: '2026-09-01T00:00:00Z',
+      manifests: [manifest('2026-08-01T11:00:00Z')],
+      drillCreated: '2026-07-01T00:00:00Z',
       issues: [open('nightly mutation check')],
     });
     expect(writes(more.gh)).toEqual([`PATCH repos/${REPOSITORY}/issues/31`, `POST repos/${REPOSITORY}/issues/31/comments`]);
@@ -700,6 +856,9 @@ describe('the freshness workflow reads GitHub and nothing else', () => {
     expect(uncommented(workflow)).not.toMatch(/aws |cloudwatch|configure-aws-credentials/u);
     expect(job).toContain('run: infra/scripts/ci-schedule.sh freshness');
     expect(job).toContain("FSS_NIGHTLY_MAX_AGE_HOURS: ${{ vars.FSS_NIGHTLY_MAX_AGE_HOURS || '30' }}");
+    expect(job).toContain("FSS_DRILL_MAX_AGE_HOURS: ${{ vars.FSS_DRILL_MAX_AGE_HOURS || '864' }}");
+    expect(job).toContain('FSS_MONTHLY_DRILL_HOUR_UTC: ${{ vars.FSS_MONTHLY_DRILL_HOUR_UTC }}');
+    expect(job).not.toContain('FSS_WEEKLY');
   });
 });
 

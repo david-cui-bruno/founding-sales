@@ -197,11 +197,12 @@ describe('the pull-request gate no longer runs the release mutation check', () =
 describe('the rehearsal no longer runs the release mutation check', () => {
   const job = readJob(RELEASE_WORKFLOW, 'rehearsal');
 
-  it('reads the job it is judging: the release suite, in the full stage, run as it is', () => {
+  it('reads the job it is judging: the release suite, in the full stage of the full mode, run as it is', () => {
     // The floor. A reader that found no steps would find no mutation check in them.
     expect(job.steps.length).toBeGreaterThanOrEqual(20);
     const suite = job.steps.find(step => step.name === 'Release suite (recorded mode, runner)');
-    expect(suite?.condition).toBe("inputs.stage == 'full'");
+    // Lane g97: a `mode: schema` rehearsal skips it; the pull-request gate runs it.
+    expect(suite?.condition).toBe("inputs.stage == 'full' && inputs.mode == 'full'");
     expect(suite?.script).toBe('set -euo pipefail\nnpm ci --ignore-scripts --no-audit --no-fund\nnpm run test:release');
   });
 

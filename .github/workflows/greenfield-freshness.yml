@@ -8,9 +8,10 @@ name: Greenfield schedule freshness
 #
 # This workflow asks GitHub, with its own token and nothing else, when the two
 # scheduled things last succeeded — the nightly mutation check on main (limit 30 hours,
-# `FSS_NIGHTLY_MAX_AGE_HOURS`) and a green full rehearsal from main, weekly or
-# dispatched, as its `fss-release-manifest` artifact (limit eight days,
-# `FSS_WEEKLY_MAX_AGE_HOURS`) — and fails when either is older. A failure opens one
+# `FSS_NIGHTLY_MAX_AGE_HOURS`) and a green full-mode rehearsal from main, the monthly
+# drill or a dispatched one, as its `fss-release-manifest` artifact (limit thirty-six
+# days, `FSS_DRILL_MAX_AGE_HOURS`; monthly since lane g97, weekly before it) — and fails
+# when either is older. A failure opens one
 # issue, or updates the one already open, mentioning the repository owner (or
 # `FSS_FRESHNESS_NOTIFY`) so the notice is an e-mail rather than a red dot, and asks
 # GitHub to pin it. The issue is closed when everything is fresh again.
@@ -39,7 +40,7 @@ concurrency:
 
 jobs:
   freshness:
-    name: The nightly and the weekly rehearsal ran recently enough
+    name: The nightly and the monthly drill ran recently enough
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -69,7 +70,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           FSS_NIGHTLY_MAX_AGE_HOURS: ${{ vars.FSS_NIGHTLY_MAX_AGE_HOURS || '30' }}
-          FSS_WEEKLY_MAX_AGE_HOURS: ${{ vars.FSS_WEEKLY_MAX_AGE_HOURS || '192' }}
-          FSS_WEEKLY_REHEARSAL_HOUR_UTC: ${{ vars.FSS_WEEKLY_REHEARSAL_HOUR_UTC }}
+          FSS_DRILL_MAX_AGE_HOURS: ${{ vars.FSS_DRILL_MAX_AGE_HOURS || '864' }}
+          FSS_MONTHLY_DRILL_HOUR_UTC: ${{ vars.FSS_MONTHLY_DRILL_HOUR_UTC }}
           FSS_FRESHNESS_NOTIFY: ${{ vars.FSS_FRESHNESS_NOTIFY || github.repository_owner }}
         run: infra/scripts/ci-schedule.sh freshness
