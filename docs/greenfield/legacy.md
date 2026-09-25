@@ -119,7 +119,8 @@ Every old name and its new one:
   the greenfield-only paths (`apps/`, `packages/`, `infra/`, `certs/`, `test/release/`,
   `docs/greenfield/`, `docs/decisions/`, the `greenfield*.yml` workflows, the two
   Dockerfiles and their ignore files, `tsconfig.base.json`, `eslint.greenfield.mjs`, the
-  three greenfield scripts, and the root `README.md`).
+  three greenfield scripts, the mutation area files `scripts/mutations/*.mjs`, and the
+  root `README.md`).
 - `source` and `client`, the old gates, only when `old-trees-changed` finds a changed
   path outside that list. A path the list does not know about runs them, and so does a
   push with no readable base commit. A skipped job reports success to a required status
