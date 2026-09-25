@@ -2,7 +2,7 @@ import { connect, type AddressInfo } from 'node:net';
 import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing';
-import { clientVersionRangeSchema } from '@fss/contracts';
+import { clientVersionPolicySchema } from '@fss/contracts';
 import { MAX_REQUEST_BYTES } from '../src/limits.ts';
 import { createApiServer } from '../src/server.ts';
 import { poolConnections } from '../src/bootstrap/connections.ts';
@@ -36,7 +36,7 @@ describe('the API server over a socket', () => {
     const server = createApiServer({
       connections: poolConnections(pool),
       expectedSystemGeneration: null,
-      supportedClientVersions: clientVersionRangeSchema.parse({ minimum: '1.0.0', maximum: '1.0.0' }),
+      supportedClientVersions: clientVersionPolicySchema.parse({ minimum: '1.0.0', ceiling: '1.0.x', incompatible: [] }),
       sendingEnabled: false,
       log: recordingLogger(),
     });

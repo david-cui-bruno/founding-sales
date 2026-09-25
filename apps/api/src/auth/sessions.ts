@@ -1,5 +1,5 @@
 import { withTransaction, type QueryResultRowLike } from '@fss/domain/db';
-import { clientCompatibility, type AuthRefusalCode, type SessionRenewal } from '@fss/contracts';
+import { clientCompatibility, publishedClientVersions, type AuthRefusalCode, type SessionRenewal } from '@fss/contracts';
 import type { AuthDeps } from './config.ts';
 import { recordAuditEvent } from './audit.ts';
 import {
@@ -394,7 +394,7 @@ export async function renewSession(deps: AuthDeps, input: RenewInput): Promise<R
         accessTokenExpiresAt: session.accessTokenExpiresAt,
         refreshCredential: session.refreshCredential,
         reauthenticateAfter: session.reauthenticateAfter,
-        supportedClientVersions: deps.config.supportedClientVersions,
+        supportedClientVersions: publishedClientVersions(deps.config.supportedClientVersions),
       },
     };
   });

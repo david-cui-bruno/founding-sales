@@ -1,3 +1,5 @@
+import { DEFAULT_SETTING_VALUES, describeClientVersionMaximum } from '@fss/contracts';
+import { readErrorSentence } from './readError.ts';
 import { SETTINGS_ELSEWHERE_FALLBACK } from './settingsElsewhere.ts';
 import type { AdminState, CallingNumberView } from './settingsContract.ts';
 
@@ -87,18 +89,10 @@ export const SENDING_UNREAD = 'Callie could not read the sending status.';
 
 /**
  * The second sentence, for the codes a person can do something about. Any other code
- * is named as it is, so the line is something an operator can search the logs for.
+ * is named as it is. Shared with the sequence editor's unread slices since lane g78
+ * (`./readError.ts`), so a code reads the same in both windows.
  */
-const SENDING_READ_SENTENCES: Readonly<Record<string, string>> = Object.freeze({
-  offline: 'The server did not answer',
-  not_signed_in: 'This Mac is not signed in',
-  unreadable_answer: 'The answer was not in the shape this version of Callie reads',
-});
-
-export function sendingReadSentence(code: string): string {
-  const sentence = SENDING_READ_SENTENCES[code];
-  return sentence === undefined ? `The server answered ${code}.` : `${sentence} (${code}).`;
-}
+export const sendingReadSentence = readErrorSentence;
 
 /**
  * "Your calling number" (9.1; lane g60): the person's own numbers and which one Today
@@ -154,6 +148,31 @@ export const CALLING_NUMBER_HINT =
 const GUARD_READ_ONLY =
   'Section 12.6 makes changing the personal-Gmail guard a reviewed policy change, so there is no control for it here.';
 
+/**
+ * One slice's history, as a person reads it (lane g78, D04): what is in force now, and
+ * for every version what it changed the value from and to.
+ *
+ * The values are JSON, the same spelling the editor above shows, so a person can
+ * compare a version with the textarea without translating. "From" is the version
+ * before it in the answer; for version 1 it is the slice's default, which is what was
+ * in force before anybody set it. A version whose predecessor is older than the answer
+ * reaches says so rather than guessing.
+ */
+export interface SettingHistorySectionView {
+  readonly settingKey: string;
+  readonly heading: string;
+  readonly currentLine: string;
+  readonly versions: readonly {
+    readonly version: number;
+    /** "Version 3, changed 2026-09-25T14:00:00.000Z: the note", or without the note. */
+    readonly line: string;
+    readonly from: string;
+    readonly to: string;
+    /** True for the version in force now. */
+    readonly current: boolean;
+  }[];
+}
+
 export interface AdminView {
   readonly screen: AdminState['screen'];
   readonly notice: string | null;
@@ -181,6 +200,8 @@ export interface AdminView {
     readonly administrable: boolean;
     readonly note: string | null;
   }[];
+  /** The history a person opened, or null (lane g78). */
+  readonly history: SettingHistorySectionView | null;
   readonly panels: readonly PanelView[];
   readonly alerts: readonly {
     readonly alertId: string;
@@ -237,6 +258,42 @@ function driftLine(facts: Readonly<Record<string, unknown>>): string {
   const rate = facts['correctionRate'];
   const percent = typeof rate === 'number' ? `${String(Math.round(rate * 100))}%` : 'unknown';
   return `${String(facts['corrected'])} corrected of ${String(confirmations)} confirmed (${percent}). By suggester: ${keyed(facts['correctedBySuggester'])}.`;
+}
+
+/** A setting's value as one line of JSON, the editor's spelling without its indentation. */
+function valueText(value: unknown): string {
+  return value === undefined ? '—' : JSON.stringify(value);
+}
+
+function historySection(state: AdminState): SettingHistorySectionView | null {
+  const history = state.history;
+  if (history === null) return null;
+  const label = LABELS[history.settingKey] ?? history.settingKey;
+  const byVersion = new Map(history.versions.map(entry => [entry.version, entry.value] as const));
+  return {
+    settingKey: history.settingKey,
+    heading: `History of ${label}`,
+    currentLine:
+      history.current.version === 0
+        ? `In force now: the default, never configured: ${valueText(history.current.value)}`
+        : `In force now: version ${String(history.current.version)}: ${valueText(history.current.value)}`,
+    versions: history.versions.map(entry => {
+      const previous =
+        entry.version === 1
+          ? `${valueText(DEFAULT_SETTING_VALUES[history.settingKey])} (the default)`
+          : byVersion.has(entry.version - 1)
+            ? valueText(byVersion.get(entry.version - 1))
+            : `version ${String(entry.version - 1)}, older than this list`;
+      const when = `Version ${String(entry.version)}, changed ${entry.changedAt}`;
+      return {
+        version: entry.version,
+        line: entry.changeNote === null ? `${when}.` : `${when}: ${entry.changeNote}`,
+        from: previous,
+        to: valueText(entry.value),
+        current: entry.supersededAt === null,
+      };
+    }),
+  };
 }
 
 export function adminViewOf(state: AdminState): AdminView {
@@ -313,6 +370,7 @@ export function adminViewOf(state: AdminState): AdminView {
             notEditableBecause: reason,
           },
     stages,
+    history: historySection(state),
     panels: [...dashboardPanels(state), ...diagnosticsPanels(state)],
     alerts: (state.diagnostics?.alerts ?? []).map(alert => ({
       alertId: alert.id,
@@ -543,7 +601,8 @@ function diagnosticsPanels(state: AdminState): readonly PanelView[] {
       lines: [
         `Database at version ${String(report.schema.appliedVersion)}; this API accepts ${String(report.schema.declaredRange.minimum)}–${String(report.schema.declaredRange.maximum)}.`,
         report.schema.accepted ? 'Accepted.' : 'The database is outside the accepted range.',
-        `Clients ${report.clientVersions.minimum} to ${report.clientVersions.maximum}.`,
+        // A ceiling's maximum is `1.999.999`; it reads as "any 1.x" (lane g78).
+        `Clients ${report.clientVersions.minimum} to ${describeClientVersionMaximum(report.clientVersions.maximum)}.`,
       ],
       unavailable: null,
     },

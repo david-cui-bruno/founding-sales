@@ -1,7 +1,7 @@
 import { mergeContactsCommandSchema, mergeFirmsCommandSchema } from '@fss/contracts';
 import { mergeContacts, mergeFirms } from '@fss/domain/crm';
 import { REFUSAL_STATUS, contextForPrincipal, crmReply, redactError, requirePrincipal } from './crmSupport.ts';
-import { runCommand } from '../auth/index.ts';
+import { runCommand, type RefusalDetails } from '../auth/index.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
 /**
@@ -35,7 +35,6 @@ export async function routeMerges(request: ApiRequest, options: RoutingOptions):
     const parsed = mergeFirmsCommandSchema.safeParse(request.body);
     if (!parsed.success) return { status: REFUSAL_STATUS.malformed_body, body: redactError('malformed_body') };
     const body = parsed.data;
-    let conflicts: unknown = undefined;
     const outcome = await runCommand(
       auth,
       principal,
@@ -53,18 +52,18 @@ export async function routeMerges(request: ApiRequest, options: RoutingOptions):
           commandId: body.commandId,
         });
         if (result.ok) return { status: 'accepted', result: result.value };
-        conflicts = result.conflicts;
-        return { status: 'refused', reason: result.reason };
+        return result.conflicts === undefined
+          ? { status: 'refused', reason: result.reason }
+          : { status: 'refused', reason: result.reason, details: { conflicts: result.conflicts } };
       },
     );
-    return withConflicts(crmReply(outcome), conflicts);
+    return withConflicts(crmReply(outcome), outcome);
   }
 
   if (request.path === '/merges/contacts') {
     const parsed = mergeContactsCommandSchema.safeParse(request.body);
     if (!parsed.success) return { status: REFUSAL_STATUS.malformed_body, body: redactError('malformed_body') };
     const body = parsed.data;
-    let conflicts: unknown = undefined;
     const outcome = await runCommand(
       auth,
       principal,
@@ -86,24 +85,29 @@ export async function routeMerges(request: ApiRequest, options: RoutingOptions):
           commandId: body.commandId,
         });
         if (result.ok) return { status: 'accepted', result: result.value };
-        conflicts = result.conflicts;
-        return { status: 'refused', reason: result.reason };
+        return result.conflicts === undefined
+          ? { status: 'refused', reason: result.reason }
+          : { status: 'refused', reason: result.reason, details: { conflicts: result.conflicts } };
       },
     );
-    return withConflicts(crmReply(outcome), conflicts);
+    return withConflicts(crmReply(outcome), outcome);
   }
 
   return { status: REFUSAL_STATUS.not_found, body: redactError('not_found') };
 }
 
 /**
- * Attach the conflicts to a refusal body.
+ * Attach the conflicts to a refusal body — a fresh one and, since lane g78, a replayed
+ * one too (audit item D05).
  *
- * Only on a fresh refusal: a *replayed* refusal answers from the receipt, which
- * records the reason and not the conflicts, and inventing them again on replay would
- * mean recomputing a merge the command middleware already decided the answer to.
+ * Until g78 a replay answered from the receipt, which kept the reason and not the
+ * conflicts, so a Mac that retried the same command id got `merge_conflicts` with
+ * nothing to resolve. The receipt now keeps the conflicts beside the reason
+ * (`RefusalDetails` in `../auth/commands.ts`), so the replay answers exactly what the
+ * first refusal did, without recomputing a merge the middleware already decided.
  */
-function withConflicts(reply: RouteResult, conflicts: unknown): RouteResult {
+function withConflicts(reply: RouteResult, outcome: { readonly status: string; readonly details?: RefusalDetails }): RouteResult {
+  const conflicts = outcome.status === 'refused' ? outcome.details?.['conflicts'] : undefined;
   if (conflicts === undefined) return reply;
   const body = reply.body as { readonly status?: string };
   if (body.status !== 'refused') return reply;

@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing';
 import { API_SCHEMA_RANGE, CURRENT_SCHEMA_VERSION } from '@fss/domain/db';
-import { clientVersionRangeSchema } from '@fss/contracts';
+import { clientVersionPolicySchema } from '@fss/contracts';
 import {
   MAX_REQUEST_BYTES,
   REFUSAL_STATUS,
@@ -15,7 +15,7 @@ import {
   type VerifiedPrincipal,
 } from '../src/index.ts';
 
-const CLIENT_VERSIONS = clientVersionRangeSchema.parse({ minimum: '1.0.0', maximum: '1.0.0' });
+const CLIENT_VERSIONS = clientVersionPolicySchema.parse({ minimum: '1.0.0', ceiling: '1.0.x', incompatible: [] });
 
 const PRINCIPAL: VerifiedPrincipal = {
   workspaceId: '11111111-1111-4111-8111-111111111111',
@@ -129,7 +129,8 @@ describe('the health route against a real database', () => {
         reason: null,
       },
       systemGeneration: 1,
-      supportedClientVersions: CLIENT_VERSIONS,
+      // The published range, not the policy: `1.0.x` tops out at 1.0.999 (lane g78).
+      supportedClientVersions: { minimum: '1.0.0', maximum: '1.0.999' },
       sendingEnabled: false,
     });
   });

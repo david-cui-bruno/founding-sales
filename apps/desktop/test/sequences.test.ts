@@ -1,15 +1,27 @@
 import { describe, expect, it } from 'vitest';
 import { SENDING_STOP_LINE } from '@fss/contracts';
 import type { ApiOutcome } from '../src/main/apiClient.ts';
-import type { AuthedClient } from '../src/main/authedClient.ts';
+import { createAuthedClient, type AuthedClient } from '../src/main/authedClient.ts';
 import { createSequenceBridge, isOpenableProfile } from '../src/main/sequenceBridge.ts';
-import type { SequenceState, TemplateVersion } from '../src/renderer/sequenceContract.ts';
+import type { SequenceState, SequenceStep, TemplateVersion } from '../src/renderer/sequenceContract.ts';
 import {
   EMPTY_SEQUENCE_STATE,
+  SEQUENCE_UNREAD,
   publishRefusalFor,
   remainingUndoMilliseconds,
   sequenceScreen,
 } from '../src/renderer/sequenceView.ts';
+import {
+  FOOTER_SIGN_OFF,
+  SEQUENCE_IDS,
+  emailStepAnswer,
+  enrollmentAnswer,
+  linkedInHandoffAnswer,
+  linkedInStepAnswer,
+  sequenceSummaryAnswer,
+  sequenceVersionAnswer,
+  templateVersionAnswer,
+} from './support/sequenceAnswers.ts';
 
 /**
  * The sequence editor's rules, without Electron and without a database
@@ -19,51 +31,27 @@ import {
  * bridge takes its API and its two side effects as ports, so the LinkedIn handoff is
  * a recorded clipboard write and a recorded browser open.
  *
+ * The answers are the routes' shapes, from `./support/sequenceAnswers.ts`, which the
+ * release suite holds to the real routes (lane g78). Until g78 this file built its own:
+ * steps with no `sequenceVersionId` and enrollments missing four fields — the
+ * desktop's wrong DTO, so the suite passed while every populated answer failed (T04).
+ *
  * No real person, firm or profile appears. `example.test` is reserved by RFC 6761,
  * and the one LinkedIn URL is an obviously fictional path.
  */
 
 const HASH = 'a'.repeat(64);
-const FOOTER_SIGN_OFF = 'Sam Example';
 /** Imported rather than typed, so the panel and the server's rule cannot disagree. */
 const STOP_LINE = SENDING_STOP_LINE;
 
-const template = (patch: Partial<TemplateVersion> = {}): TemplateVersion => ({
-  id: '11111111-1111-4111-8111-111111111111',
-  templateId: '22222222-2222-4222-8222-222222222222',
-  version: 1,
-  name: 'First touch',
-  subject: 'A question',
-  body: `Hello,\n\n${FOOTER_SIGN_OFF}\n${STOP_LINE}`,
-  contentHash: HASH,
-  footerSignOff: FOOTER_SIGN_OFF,
-  requiredVariables: [],
-  approvedAt: '2026-09-01T12:00:00.000Z',
-  retiredAt: null,
-  personalizationStrategy: 'deterministic',
-  ...patch,
-});
+const template = (patch: Partial<TemplateVersion> = {}): TemplateVersion =>
+  templateVersionAnswer({ personalizationStrategy: 'deterministic', ...patch });
 
-const draftVersion = (steps: SequenceState['versions'][number]['steps']) => ({
-  id: '33333333-3333-4333-8333-333333333333',
-  sequenceId: '44444444-4444-4444-8444-444444444444',
-  version: 2,
-  state: 'draft' as const,
-  stopConditions: ['human_reply', 'stage_closed'],
-  publishedAt: null,
-  retiredAt: null,
-  steps,
-});
+const draftVersion = (steps: readonly SequenceStep[]) =>
+  sequenceVersionAnswer(steps, { stopConditions: ['human_reply', 'stage_closed'] });
 
-const emailStep = (templateVersionId: string | null, ordinal = 1) => ({
-  id: `55555555-5555-4555-8555-55555555555${String(ordinal)}`,
-  ordinal,
-  channel: 'email' as const,
-  delay: { unit: 'elapsed' as const, hours: 0 },
-  onNoAnswer: null,
-  templateVersionId,
-  linkedInMessage: null,
-});
+const emailStep = (templateVersionId: string | null, ordinal = 1): SequenceStep =>
+  emailStepAnswer(templateVersionId, ordinal);
 
 describe('what the editor will and will not let a person publish (11.1)', () => {
   const options = { isAdmin: true, online: true };
@@ -195,28 +183,11 @@ describe('the hold review screen (4.3, G 31)', () => {
       online: true,
       mayMutate: true,
       heldEnrollments: [
-        {
-          id: '88888888-8888-4888-8888-888888888888',
-          sequenceVersionId: '33333333-3333-4333-8333-333333333333',
-          firmId: '99999999-9999-4999-8999-999999999999',
-          contactId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-          state: 'review_required',
-          startedAt: '2026-09-01T12:00:00.000Z',
-          endedAt: null,
-          endReason: null,
-          reviewUnionMilliseconds: 9 * 86_400_000,
-        },
-        {
+        enrollmentAnswer({ state: 'review_required', reviewUnionMilliseconds: 9 * 86_400_000 }),
+        enrollmentAnswer({
           id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
-          sequenceVersionId: '33333333-3333-4333-8333-333333333333',
-          firmId: '99999999-9999-4999-8999-999999999999',
           contactId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
-          state: 'active',
-          startedAt: '2026-09-01T12:00:00.000Z',
-          endedAt: null,
-          endReason: null,
-          reviewUnionMilliseconds: null,
-        },
+        }),
       ],
     });
     expect(screen.holdReview).toHaveLength(1);
@@ -264,15 +235,7 @@ describe('the bridge copies and opens after the server has recorded the handoff'
       ok: true,
       value: { asOf: '2026-09-21T13:00:00.000Z', enrollments: [] },
     });
-    answers.set('/enrollments/linkedin/complete', {
-      ok: true,
-      value: {
-        stepExecutionId: '66666666-6666-4666-8666-666666666666',
-        linkedInUrl: 'https://www.linkedin.com/in/dana-example-000',
-        message: 'A short note.',
-        undoUntil: '2026-09-21T13:10:00.000Z',
-      },
-    });
+    answers.set('/enrollments/linkedin/complete', { ok: true, value: linkedInHandoffAnswer() });
 
     const host = bridge();
     const state = await host.completeLinkedIn({
@@ -339,5 +302,123 @@ describe('the bridge copies and opens after the server has recorded the handoff'
     expect(state.online).toBe(false);
     expect(state.sequences).toEqual([]);
     expect(sequenceScreen(state).banner).toContain('Offline');
+  });
+});
+
+describe('the bridge reads what the routes answer (lane g78)', () => {
+  /** The real transport, over a table of answers: the parse is the shipped one. */
+  const bridgeOver = (answers: Readonly<Record<string, { status: number; body: unknown } | 'offline'>>) =>
+    createSequenceBridge({
+      api: createAuthedClient({
+        baseUrl: 'https://api.example.test/',
+        clientVersion: '1.0.5',
+        accessToken: async () => await Promise.resolve('token'),
+        send: async url => {
+          const answer = answers[new URL(url).pathname];
+          if (answer === 'offline') throw new Error('no route to host');
+          return await Promise.resolve(answer ?? { status: 404, body: { error: 'not_found' } });
+        },
+      }),
+      session: {
+        state: async () => await Promise.resolve({ online: true, mayMutate: true, device: { role: 'admin' as const } }),
+      },
+      copyToClipboard: () => undefined,
+      openExternally: async () => {
+        await Promise.resolve();
+      },
+    });
+
+  const populated = {
+    '/sequences': { status: 200, body: { sequences: [sequenceSummaryAnswer()] } },
+    '/sequences/versions': {
+      status: 200,
+      body: { versions: [sequenceVersionAnswer([emailStepAnswer(SEQUENCE_IDS.template), linkedInStepAnswer()])] },
+    },
+    '/templates': { status: 200, body: { templates: [templateVersionAnswer()] } },
+    '/enrollments': {
+      status: 200,
+      body: {
+        asOf: '2026-09-21T13:00:00.000Z',
+        enrollments: [enrollmentAnswer(), enrollmentAnswer({ id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', state: 'review_required', reviewUnionMilliseconds: 86_400_000 })],
+      },
+    },
+  } as const;
+
+  it('shows a populated version and the held enrollment, which 1.0.4 refused to parse (D01, D02)', async () => {
+    const state = await bridgeOver(populated).state();
+    expect(state.readErrors).toEqual({ sequences: null, versions: null, templates: null, enrollments: null });
+    expect(state.versions).toHaveLength(1);
+    expect(state.versions[0]?.steps.map(step => [step.ordinal, step.channel, step.sequenceVersionId])).toEqual([
+      [1, 'email', SEQUENCE_IDS.version],
+      [2, 'linkedin_task', SEQUENCE_IDS.version],
+    ]);
+    expect(state.heldEnrollments.map(entry => [entry.id, entry.opportunityId, entry.firmTimeZone])).toEqual([
+      ['bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', SEQUENCE_IDS.opportunity, 'America/New_York'],
+    ]);
+
+    const screen = sequenceScreen(state);
+    expect(screen.unread).toEqual([]);
+    expect(screen.versions[0]?.steps.map(step => step.detail)).toEqual([
+      'Template email',
+      'LinkedIn task, opened and copied by hand',
+    ]);
+    expect(screen.holdReview).toHaveLength(1);
+  });
+
+  it('says which read failed and why, instead of drawing an empty list (D06)', async () => {
+    const withoutVersionIds = sequenceVersionAnswer([emailStepAnswer(SEQUENCE_IDS.template)]);
+    const { sequenceVersionId: _dropped, ...oldStep } = withoutVersionIds.steps[0] ?? emailStepAnswer(null);
+    const state = await bridgeOver({
+      ...populated,
+      // The shape 1.0.4's own schema expected: a step without its version id.
+      '/sequences/versions': { status: 200, body: { versions: [{ ...withoutVersionIds, steps: [oldStep] }] } },
+      '/templates': { status: 503, body: { error: 'service_unavailable' } },
+      '/enrollments': 'offline',
+    }).state();
+
+    expect(state.versions).toEqual([]);
+    expect(state.readErrors).toEqual({
+      sequences: null,
+      versions: 'unreadable_answer',
+      templates: 'service_unavailable',
+      enrollments: 'offline',
+    });
+    // No enrollments, so no server clock: the undo is measured against nothing rather than this Mac.
+    expect(state.asOf).toBeNull();
+
+    const screen = sequenceScreen(state);
+    expect(screen.unread).toEqual([
+      {
+        slice: 'versions',
+        line: `${SEQUENCE_UNREAD.versions} The answer was not in the shape this version of Callie reads (unreadable_answer).`,
+      },
+      { slice: 'templates', line: `${SEQUENCE_UNREAD.templates} The server answered service_unavailable.` },
+      { slice: 'enrollments', line: `${SEQUENCE_UNREAD.enrollments} The server did not answer (offline).` },
+    ]);
+  });
+
+  it('reads an empty workspace as empty, with nothing unread', async () => {
+    const state = await bridgeOver({
+      '/sequences': { status: 200, body: { sequences: [] } },
+      '/templates': { status: 200, body: { templates: [] } },
+      '/enrollments': { status: 200, body: { asOf: '2026-09-21T13:00:00.000Z', enrollments: [] } },
+    }).state();
+    expect(state.sequences).toEqual([]);
+    expect(sequenceScreen(state).unread).toEqual([]);
+  });
+
+  it('keeps reading a field the API adds later, rather than refusing the whole answer', async () => {
+    const version = sequenceVersionAnswer([emailStepAnswer(SEQUENCE_IDS.template)]);
+    const state = await bridgeOver({
+      ...populated,
+      '/sequences/versions': {
+        status: 200,
+        body: { versions: [{ ...version, laterField: 1, steps: version.steps.map(step => ({ ...step, laterField: 'x' })) }] },
+      },
+    }).state();
+    expect(state.readErrors.versions).toBeNull();
+    expect(state.versions[0]?.steps).toHaveLength(1);
+    // Stripped, not carried: the window cannot show what the contract does not declare.
+    expect(JSON.stringify(state.versions)).not.toContain('laterField');
   });
 });

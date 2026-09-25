@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { callingIdentityDtoSchema, callingIdentityListSchema } from '@fss/contracts';
+import { callingIdentityChangeResultSchema, callingIdentityDtoSchema, callingIdentityListSchema, wireDrift } from '@fss/contracts';
 import { POSTURE_STATEMENT_KEYS } from '@fss/domain';
 import { repositoryContext, workspaceScope } from '@fss/domain/db';
 import { buildTodaySnapshot, businessDateOf, promoteTodayItem } from '@fss/domain/today';
@@ -68,7 +68,7 @@ describe('the calling-number routes', () => {
       body,
     };
     const result = await dispatch(request, options());
-    return { status: result.status, body: result.body as Record<string, unknown> };
+    return { status: result.status, body: JSON.parse(JSON.stringify(result.body ?? null)) as Record<string, unknown> };
   };
   const post = async (path: string, token: string | null, body: unknown) => await send('POST', path, token, body);
 
@@ -209,6 +209,8 @@ describe('the calling-number routes', () => {
     );
     expect(registered.status, JSON.stringify(registered.body)).toBe(200);
     expect(resultOf(registered)['outcome']).toBe('created');
+    // The Mac reads a calling-number change with `@fss/contracts`' schema since lane g78.
+    expect(wireDrift(callingIdentityChangeResultSchema, resultOf(registered))).toEqual([]);
     const identity = identityOf(registered);
     expect(identity).toMatchObject({
       ownerUserId: salespersonUserId,
@@ -231,6 +233,7 @@ describe('the calling-number routes', () => {
     const attestCommand = command({ identityId: identity.id, attested: true });
     const attested = await post('/calling-identities/attest', salespersonToken, attestCommand);
     expect(attested.status, JSON.stringify(attested.body)).toBe(200);
+    expect(wireDrift(callingIdentityChangeResultSchema, resultOf(attested))).toEqual([]);
     expect(identityOf(attested)).toMatchObject({
       verificationStatus: 'verified',
       enabled: true,

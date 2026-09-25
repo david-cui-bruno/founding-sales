@@ -1,5 +1,5 @@
 import { button, element } from './firmDom.ts';
-import type { SequenceBridge, SequenceState } from './sequenceContract.ts';
+import type { SequenceBridge, SequenceReadSlice, SequenceState } from './sequenceContract.ts';
 import { EMPTY_SEQUENCE_STATE, sequenceScreen } from './sequenceView.ts';
 
 /**
@@ -204,6 +204,25 @@ function renderHoldReview(root: HTMLElement, screen: ReturnType<typeof sequenceS
   root.append(section);
 }
 
+/**
+ * One slice the window could not read (lane g78, D06): its grey line and Retry, drawn
+ * where the slice would have been. Retry re-reads the whole window — `state()` asks all
+ * four reads again — so it needs no channel of its own, the way Administration's
+ * sending Retry re-shows Settings.
+ */
+function renderUnread(root: HTMLElement, screen: ReturnType<typeof sequenceScreen>, slice: SequenceReadSlice): void {
+  const unread = screen.unread.find(entry => entry.slice === slice);
+  if (unread === undefined) return;
+  const block = element('div', { className: 'sequence-unread', testId: `sequence-unread-${slice}` });
+  block.append(element('p', { className: 'inert', text: unread.line, testId: 'sequence-unread-line' }));
+  const retry = button('Retry', `sequence-retry-${slice}`, true);
+  retry.addEventListener('click', () => {
+    apply(bridge().state());
+  });
+  block.append(retry);
+  root.append(block);
+}
+
 export function render(state: SequenceState): void {
   const root = document.querySelector('#app');
   if (root === null) return;
@@ -217,10 +236,14 @@ export function render(state: SequenceState): void {
   if (screen.notice !== null) {
     host.append(element('p', { className: 'notice', text: screen.notice, testId: 'sequence-notice' }));
   }
+  renderUnread(host, screen, 'sequences');
   renderSequences(host, screen);
+  renderUnread(host, screen, 'versions');
   renderVersions(host, screen);
+  renderUnread(host, screen, 'templates');
   renderTemplates(host, screen);
   renderLinkedIn(host, screen);
+  renderUnread(host, screen, 'enrollments');
   renderHoldReview(host, screen);
 }
 

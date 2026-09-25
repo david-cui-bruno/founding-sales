@@ -618,11 +618,11 @@ const MUTATIONS = [
   {
     name: 'the API stops admitting the desktop build that carries the Mailbox row',
     file: 'apps/api/src/bootstrap/main.ts',
-    find: "  maximum: '1.0.4',\n",
-    replace: "  maximum: '1.0.0',\n",
+    find: "  incompatible: [],\n",
+    replace: "  incompatible: ['1.0.1'],\n",
     suite: ['run', 'test:release', '--', 'test/release/desktopMailbox.check.ts'],
     because:
-      'A client above the published maximum is api_behind_client, and runCommand, sign-in and renewal refuse it client_upgrade_required exactly as they refuse one below the minimum. Desktop 1.0.1 is the build with Connect Gmail, so an API still publishing 1.0.0 as its maximum refuses the fix outright; desktopMailbox.check.ts reads the constant the container serves and has to go red.',
+      'Since lane g78 the container admits a policy rather than an exact maximum, and a build on its incompatible list is refused client_upgrade_required by runCommand, sign-in and renewal exactly as one below the minimum is. Desktop 1.0.1 is the build with Connect Gmail, so a policy that lists it refuses the fix outright; desktopMailbox.check.ts reads the policy the container serves and has to go red.',
   },
   {
     name: 'the Gmail watch gauge goes back to a unit CloudWatch does not have',
@@ -905,11 +905,11 @@ const MUTATIONS = [
   {
     name: 'the API stops admitting the desktop build that carries Your calling number',
     file: 'apps/api/src/bootstrap/main.ts',
-    find: "  maximum: '1.0.4',\n",
-    replace: "  maximum: '1.0.1',\n",
+    find: "  incompatible: [],\n",
+    replace: "  incompatible: ['1.0.2'],\n",
     suite: ['run', 'test:release', '--', 'test/release/callingNumber.check.ts'],
     because:
-      'Desktop 1.0.2 is the build with the Your calling number section, without which no salesperson has a verified number and Today offers no Call button; an API still publishing 1.0.1 as its maximum refuses it every sign-in, renewal and command. callingNumber.check.ts reads the constant the container serves and has to go red.',
+      'Desktop 1.0.2 is the build with the Your calling number section, without which no salesperson has a verified number and Today offers no Call button; a policy that lists it as incompatible refuses it every sign-in, renewal and command (lane g78 replaced the exact maximum with that list). callingNumber.check.ts reads the policy the container serves and has to go red.',
   },
   {
     name: 'the preload stops exposing the calling-number control to the window',
@@ -1053,9 +1053,9 @@ const MUTATIONS = [
   // the role the server gives, and Home says Attest when a number is saved.
   {
     name: 'the Administration window parses the personal-Gmail recipients as a number again',
-    file: 'apps/desktop/src/main/settingsBridge.ts',
-    find: '    personalGmailRecipients: z\n      .object({ automated: z.number(), direct: z.number(), total: z.number() })\n      .loose(),\n',
-    replace: '    personalGmailRecipients: z.number(),\n',
+    file: 'packages/contracts/src/outbound.ts',
+    find: '  personalGmailRecipients: personalGmailRecipientsSchema,\n',
+    replace: '  personalGmailRecipients: z.number(),\n',
     suite: ['run', 'test:release', '--', 'test/release/sendingSection.check.ts'],
     because:
       'This is desktop 1.0.2 and 1.0.3 in production: POST /outbound/status has always answered the recipients as { automated, direct, total }, a z.number() parser refused every answer as unreadable_answer, and the sending section never rendered, with nothing logged because the API had answered 200. The unit fixture carried the same wrong number, so only a check that feeds the real route’s answer to the real parser can see it. sendingSection.check.ts does, and has to go red.',
@@ -1233,6 +1233,33 @@ const MUTATIONS = [
     suite: ['run', 'test', '--workspace', 'packages/domain', '--', 'test/outbound/dispatchRecheck.test.ts'],
     because:
       'This is audit S05: a fence held overnight kept the date its placement planned, so today’s send spent yesterday’s allowance (or waited behind yesterday’s full cap) and today’s counter never moved. dispatchRecheck.test.ts plans a fence for Monday, holds it past Monday’s window and sends it Tuesday, and requires Tuesday’s counter to move, Monday’s not to, and the fence to record Tuesday; charged to the planned date it records Monday and has to go red.',
+  },
+  {
+    name: 'the sequence step schema forbids sequenceVersionId again',
+    file: 'packages/contracts/src/sequences.ts',
+    find: 'export const sequenceStepDtoSchema = z.object({\n  id: uuid,\n  /** On every step, because the step table is keyed by it. D01 was a Mac that forbade it. */\n  sequenceVersionId: uuid,\n',
+    replace: 'export const sequenceStepDtoSchema = z.strictObject({\n  id: uuid,\n',
+    suite: ['run', 'test:release', '--', 'test/release/sequences.check.ts'],
+    because:
+      'This is desktop 1.0.4’s step schema: strict, and without the key toStep puts on every step, so every populated version was unreadable_answer and the editor drew a sequence with no versions (D01). The unit fixture agreed with it, so only the real route’s answer through the real bridge could see it. sequences.check.ts renders a published two-step version from the route and has to go red.',
+  },
+  {
+    name: 'the enrollment schema drops one of the fields the route sends',
+    file: 'packages/contracts/src/sequences.ts',
+    find: '  opportunityId: uuid,\n',
+    replace: '',
+    suite: ['run', 'test:release', '--', 'test/release/sequences.check.ts'],
+    because:
+      'Desktop 1.0.4 knew nine of the thirteen enrollment fields and refused every populated list (D02). With the contract stripping rather than refusing, a dropped field no longer fails the Mac’s parse at all — it silently disappears, which is the drift wireDrift exists to name. sequences.check.ts holds the route’s answer to the contract and reads the held enrollment’s opportunity, and has to go red.',
+  },
+  {
+    name: 'the ceiling admits a build the policy lists as incompatible',
+    file: 'packages/contracts/src/clientVersion.ts',
+    find: "  if ('incompatible' in gate && gate.incompatible.includes(version)) {\n",
+    replace: '  if (false) {\n',
+    suite: ['run', 'test', '--workspace', 'apps/api', '--', 'test/clientVersionCeiling.test.ts'],
+    because:
+      'Once the API admits a whole 1.x line (O04), the incompatible list is the only way to keep a known-bad build out, and it is never published — a 1.0.x Mac could not parse it — so nothing but the API enforces it. A policy that lists a version and still admits it passes every admits-a-build test. clientVersionCeiling.test.ts signs in, renews and commands as a listed build through the real dispatcher and has to go red.',
   },
 ];
 

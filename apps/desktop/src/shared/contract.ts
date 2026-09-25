@@ -2,14 +2,16 @@ import { z } from 'zod';
 import {
   MAILBOX_STATUSES,
   MAILBOX_SYNC_STATES,
+  TODAY_LANES,
   accessTokenSchema,
   clientVersionRangeSchema,
   deviceSecretSchema,
-  handoffSecretSchema,
   instant,
   membershipRoleSchema,
   refreshCredentialSchema,
+  signInStartResponseSchema,
   uuid,
+  type SignInStartResponse,
 } from '@fss/contracts';
 
 /**
@@ -52,12 +54,12 @@ export const storedSessionSchema = z.strictObject({
 });
 export type StoredSession = z.infer<typeof storedSessionSchema>;
 
-export const signInHandoffSchema = z.strictObject({
-  authorizationUrl: z.url(),
-  handoffSecret: handoffSecretSchema,
-  expiresAt: instant,
-});
-export type SignInHandoff = z.infer<typeof signInHandoffSchema>;
+/**
+ * `POST /auth/sign-in/start`'s answer: `@fss/contracts`' `signInStartResponseSchema`,
+ * named for the Mac (lane g78). It was a second copy of the same three fields.
+ */
+export const signInHandoffSchema = signInStartResponseSchema;
+export type SignInHandoff = SignInStartResponse;
 
 export { deviceSecretSchema };
 
@@ -69,11 +71,17 @@ export { deviceSecretSchema };
  * The only shape the cache may hold. `strictObject` all the way down is the
  * enforcement of "no message bodies, drafts, attachments, or mailbox diagnostics":
  * a field that could carry one does not exist, so writing one is a parse failure.
+ *
+ * This is the Mac's retention rule, not the wire. `/today` is read with
+ * `@fss/contracts`' `todayListResponseSchema` first (lane g78), which drops any key the
+ * contract does not declare, and the result is then held to this. So an API that adds
+ * a field to the list is still readable here, and nothing it adds can reach the disk.
+ * The lanes and the 300-character firm name are the contract's.
  */
 export const cachedTodayCardSchema = z.strictObject({
   firmId: uuid,
-  firmName: z.string().min(1).max(200),
-  lane: z.enum(['reply', 'callback', 'due_work', 'new_firm']),
+  firmName: z.string().min(1).max(300),
+  lane: z.enum(TODAY_LANES),
   dueAt: instant,
   counts: z.strictObject({
     replies: z.number().int().min(0),

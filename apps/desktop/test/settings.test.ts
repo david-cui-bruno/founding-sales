@@ -7,6 +7,7 @@ import { windowMenuTemplate } from '../src/main/windowMenu.ts';
 import { requestedScreen } from '../src/renderer/settingsPage.ts';
 import type { AdminState, CallingNumberView } from '../src/renderer/settingsContract.ts';
 import { outboundRampAnswer, outboundStatusAnswer } from './support/outboundStatus.ts';
+import { settingHistoryAnswer } from './support/settingHistory.ts';
 
 /**
  * The administration window: its bridge and its view model
@@ -748,6 +749,72 @@ describe('the administration bridge', () => {
     });
     expect(calls.find(call => call.path === '/calling-identities/disable')?.body).toMatchObject({ identityId: IDENTITY_ID });
     expect(calls.find(call => call.path === '/calling-identities/disable')?.body).not.toHaveProperty('attested');
+  });
+});
+
+describe('a setting’s history shows what changed, not only when (lane g78, D04)', () => {
+  it('keeps the values the route sends, and the value in force now', async () => {
+    const { api, calls } = scriptedApi({
+      '/settings': { status: 200, body: settingsBody() },
+      '/pipeline/stages': { status: 200, body: stagesBody },
+      '/settings/history': { status: 200, body: settingHistoryAnswer() },
+    });
+    const bridge = createAdminBridge({ api, session: { state: async () => await Promise.resolve(session()) } });
+    const state = await bridge.openHistory({ settingKey: 'business_time_zone' });
+    expect(calls.find(call => call.path === '/settings/history')?.body).toEqual({ settingKey: 'business_time_zone' });
+    expect(state.history?.current).toEqual({ value: { timeZone: 'America/Chicago' }, version: 2 });
+    expect(state.history?.versions.map(entry => entry.value)).toEqual([
+      { timeZone: 'America/Chicago' },
+      { timeZone: 'America/Denver' },
+    ]);
+  });
+
+  it('draws each version from the one before it, and version 1 from the default', () => {
+    const view = adminViewOf(emptyState({ history: settingHistoryAnswer() }));
+    expect(view.history?.heading).toBe('History of Workspace business zone');
+    expect(view.history?.currentLine).toBe('In force now: version 2: {"timeZone":"America/Chicago"}');
+    expect(view.history?.versions).toEqual([
+      {
+        version: 2,
+        line: 'Version 2, changed 2026-09-19T10:00:00.000Z: the office moved',
+        from: '{"timeZone":"America/Denver"}',
+        to: '{"timeZone":"America/Chicago"}',
+        current: true,
+      },
+      {
+        version: 1,
+        line: 'Version 1, changed 2026-09-18T10:00:00.000Z: first configuration',
+        from: '{"timeZone":"America/New_York"} (the default)',
+        to: '{"timeZone":"America/Denver"}',
+        current: false,
+      },
+    ]);
+  });
+
+  it('says when the version before is older than the list, and names a slice nobody set', () => {
+    const [newest] = settingHistoryAnswer().versions;
+    const trimmed = adminViewOf(
+      emptyState({ history: settingHistoryAnswer({ versions: newest === undefined ? [] : [newest] }) }),
+    );
+    expect(trimmed.history?.versions[0]?.from).toBe('version 1, older than this list');
+
+    const never = adminViewOf(
+      emptyState({
+        history: settingHistoryAnswer({ current: { value: { timeZone: 'America/New_York' }, version: 0 }, versions: [] }),
+      }),
+    );
+    expect(never.history?.currentLine).toBe('In force now: the default, never configured: {"timeZone":"America/New_York"}');
+  });
+
+  it('reads a ceiling’s published maximum as a release line on Diagnostics (lane g78)', () => {
+    const report = diagnosticsBody(MAILBOX_ID);
+    const view = adminViewOf(
+      emptyState({
+        screen: 'diagnostics',
+        diagnostics: { ...report, clientVersions: { minimum: '1.0.0', maximum: '1.999.999' } } as AdminState['diagnostics'],
+      }),
+    );
+    expect(JSON.stringify(view.panels)).toContain('Clients 1.0.0 to any 1.x.');
   });
 });
 

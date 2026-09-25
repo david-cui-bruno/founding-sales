@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { firmListResponseSchema, mergeRefusalSchema, wireDrift } from '@fss/contracts';
 import { dispatch, type ApiRequest } from '../src/server.ts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, OUTDATED_CLIENT_VERSION, type AuthFixture } from './support/authFixture.ts';
 import { issueSessionFor } from './support/sessionFixture.ts';
@@ -44,7 +45,7 @@ describe('CRM routes', () => {
       body,
     };
     const result = await dispatch(request, options());
-    return { status: result.status, body: result.body as Record<string, unknown> };
+    return { status: result.status, body: JSON.parse(JSON.stringify(result.body ?? null)) as Record<string, unknown> };
   };
 
   const get = async (path: string, token: string): Promise<{ status: number; body: Record<string, unknown> }> => {
@@ -52,7 +53,7 @@ describe('CRM routes', () => {
       { method: 'GET', path, query: new URLSearchParams(), headers: { authorization: `Bearer ${token}` }, body: undefined },
       options(),
     );
-    return { status: result.status, body: result.body as Record<string, unknown> };
+    return { status: result.status, body: JSON.parse(JSON.stringify(result.body ?? null)) as Record<string, unknown> };
   };
 
   const command = (extra: Record<string, unknown> = {}): Record<string, unknown> => ({
@@ -242,14 +243,21 @@ describe('CRM routes', () => {
     const duplicateId = (duplicate.body['result'] as { id: string }).id;
     await post('/firms/update', assigneeToken, command({ firmId, patch: { website: 'https://northwind.example.test' } }));
 
-    const conflicted = await post(
-      '/merges/firms',
-      assigneeToken,
-      command({ sourceFirmId: duplicateId, targetFirmId: firmId }),
-    );
+    const attempt = command({ sourceFirmId: duplicateId, targetFirmId: firmId });
+    const conflicted = await post('/merges/firms', assigneeToken, attempt);
     expect(conflicted.status).toBe(409);
     expect(conflicted.body['reason']).toBe('merge_conflicts');
     expect((conflicted.body['conflicts'] as { field: string }[]).map(conflict => conflict.field)).toContain('website');
+    expect(wireDrift(mergeRefusalSchema, conflicted.body)).toEqual([]);
+
+    // D05: the same command id again is a replay, answered from the receipt — and the
+    // receipt keeps the conflicts beside the reason (lane g78), so the replay carries
+    // the same list rather than a bare code the conflict screen cannot be drawn from.
+    const replayed = await post('/merges/firms', assigneeToken, attempt);
+    expect(replayed.status).toBe(409);
+    expect(replayed.body['replayed']).toBe(true);
+    expect(replayed.body['conflicts']).toEqual(conflicted.body['conflicts']);
+    expect(wireDrift(mergeRefusalSchema, replayed.body)).toEqual([]);
 
     const resolved = await post(
       '/merges/firms',
@@ -271,5 +279,8 @@ describe('CRM routes', () => {
 
     const list = await get('/firms', betaAdmin.accessToken);
     expect((list.body['firms'] as unknown[]).length).toBe(0);
+    const ours = await get('/firms', adminToken);
+    expect((ours.body['firms'] as unknown[]).length).toBeGreaterThan(0);
+    expect(wireDrift(firmListResponseSchema, ours.body)).toEqual([]);
   });
 });

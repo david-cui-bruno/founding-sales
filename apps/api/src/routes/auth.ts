@@ -1,5 +1,6 @@
 import {
   clientVersionNoticeSchema,
+  publishedClientVersions,
   signInClaimRequestSchema,
   signInStartRequestSchema,
   sessionRenewRequestSchema,
@@ -42,7 +43,9 @@ const REFUSED_PAGE = CALLBACK_PAGE('Sign-in refused', 'Return to Callie; it will
 
 function notice(options: RoutingOptions): ClientVersionNotice {
   return clientVersionNoticeSchema.parse({
-    supported: options.supportedClientVersions,
+    // The range a 1.0.x Mac can parse: the policy's minimum and its ceiling's top
+    // (lane g78). The incompatible list is enforced here, never published.
+    supported: publishedClientVersions(options.supportedClientVersions),
     upgradeUrl: options.upgradeUrl,
     instruction:
       'This version of Callie is no longer supported. Install the current build, then sign in again.',

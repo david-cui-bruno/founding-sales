@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { compareVersions, connectMailboxCommandSchema, mayMutate } from '@fss/contracts';
+import { compareVersions, connectMailboxCommandSchema, mayMutate, publishedClientVersions } from '@fss/contracts';
 import { GMAIL_PATHS } from '../../apps/api/src/routes/gmail.ts';
 import { CONTAINER_CLIENT_VERSIONS } from '../../apps/api/src/bootstrap/main.ts';
 import { createAuthedClient } from '../../apps/desktop/src/main/authedClient.ts';
@@ -167,7 +167,10 @@ describe('8.0x: the Mac client connects the mailbox', () => {
   });
 
   it('is a build the deployed API accepts', () => {
-    expect(compareVersions(CONTAINER_CLIENT_VERSIONS.maximum, FIRST_VERSION_WITH_THE_ROW)).toBeGreaterThanOrEqual(0);
-    expect(mayMutate(CONTAINER_CLIENT_VERSIONS, CONTAINER_CLIENT_VERSIONS.maximum)).toBe(true);
+    // Since lane g78 the container holds a policy — a minimum, a `1.x` ceiling and a
+    // list of known-bad builds — and publishes the range derived from it. The build with
+    // the row is inside the published range and not on the incompatible list.
+    expect(compareVersions(publishedClientVersions(CONTAINER_CLIENT_VERSIONS).maximum, FIRST_VERSION_WITH_THE_ROW)).toBeGreaterThanOrEqual(0);
+    expect(mayMutate(CONTAINER_CLIENT_VERSIONS, FIRST_VERSION_WITH_THE_ROW)).toBe(true);
   });
 });

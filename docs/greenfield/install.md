@@ -553,11 +553,63 @@ should read *Callie 1.0.4 · online*. A saved number that is not attested reads
 *Calling number needs attestation*. Press **Open** on **Attest your calling number** and
 attest the existing row. Do not add it again.
 
+### 5d — publish 1.0.5, the last build that needs the API first
+
+1.0.5 reads the sequence editor, the reply window, Settings history and the merge screen
+with the same schemas the API's own tests hold the routes to
+(`docs/greenfield/release.md` 8.0aj):
+
+- a populated sequence version and its enrollments render, where 1.0.4 showed empty
+  lists;
+- a read that fails says so, with **Retry**;
+- the reply window reads a classifier set to `xhigh` or `max`;
+- **History** under a setting shows what each version changed from and to;
+- a refused merge opens the conflict screen.
+
+Build it from a commit that carries lane g78.
+
+**First, the API, this one last time.** Lane g78 replaces the exact maximum with a
+compatibility ceiling: `CONTAINER_CLIENT_VERSIONS` is
+`{ minimum: 1.0.0, ceiling: 1.x, incompatible: [] }`, published as the range
+`{ minimum: 1.0.0, maximum: 1.999.999 }`. The API in production still publishes 1.0.4 as
+its maximum and would refuse 1.0.5 everything, so it goes first. There is no migration,
+so this is an app-only release: build both images at the release commit and deploy with
+`release-deploy.sh infra/roots/production fss-prod --api-digest … --worker-digest …` and
+no `--schema-change` (`docs/greenfield/release.md` 2.1, 4.1 and 8.0aj). Smoke, then
+confirm it:
+
+```bash
+curl -fsS https://api.usecallie.com/auth/client-version
+```
+
+**Expected:** `"supported":{"minimum":"1.0.0","maximum":"1.999.999"}`. If the maximum is
+still `1.0.4`, stop: publishing now would offer every Mac an update that the API
+refuses. Installed 1.0.0 to 1.0.4 keep working against the new API. They parse the same
+two keys and find themselves inside the range.
+
+**Then the build.** The coordinator sets `FSS_DESKTOP_APP_VERSION` to `1.0.5`. Run
+*Greenfield desktop* with **release** ticked on the same commit the API was deployed
+from, with that commit as `desktop_commit_stamp`. Verify, download and publish it as in
+step 1, **zip first, manifest second**, and receive it on the Mac as in step 5.
+
+**Then look.** On the Mac:
+
+1. Home's last row reads *Callie 1.0.5 · online*.
+2. In **Administration › Settings**, press **History** on *Workspace business zone*.
+   Each version shows *From …* and *To …*.
+3. In **Diagnostics**, the client line reads *Clients 1.0.0 to any 1.x.*
+4. The Sequences window shows no grey *Callie could not read …* line. Production has no
+   sequences yet, so it is otherwise empty.
+
+**From now on** a 1.x desktop build publishes without an API deployment, unless
+`docs/greenfield/release.md` 2.0 says the API goes first: a new route, a new response
+field the desktop reads, or a migration.
+
 ### 6 — the adversarial half, which is the part worth doing
 
 Take the published `latest.json`, change **one character** of `releaseVersion` — make it
 one patch above what is published (`1.0.2` while 1.0.1 is current, `1.0.3` once 1.0.2
-is, `1.0.4` once 1.0.3 is, `1.0.5` once 1.0.4 is) — and re-upload it with an invalidation. Do not re-sign it. Then quit Callie and
+is, `1.0.4` once 1.0.3 is, `1.0.5` once 1.0.4 is, `1.0.6` once 1.0.5 is) — and re-upload it with an invalidation. Do not re-sign it. Then quit Callie and
 open it.
 
 **Expected: no prompt at all, and no message.** The app checks the Ed25519 signature

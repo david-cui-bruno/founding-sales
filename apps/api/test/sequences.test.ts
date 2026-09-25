@@ -1,5 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import {
+  enrollmentsResponseSchema,
+  linkedInHandoffResultSchema,
+  sequenceVersionsResponseSchema,
+  sequencesResponseSchema,
+  templateVersionsResponseSchema,
+  wireDrift,
+} from '@fss/contracts';
 import { SENDING_STOP_LINE } from '@fss/domain';
 import { localNoopSuppressionJournal } from '../src/journal/index.ts';
 import { dispatch, type ApiRequest } from '../src/server.ts';
@@ -54,16 +62,18 @@ describe('the sequence, template and enrollment routes', () => {
     path: string,
     token: string | null,
     body: unknown,
+    method: 'GET' | 'POST' = 'POST',
   ): Promise<{ status: number; body: Record<string, unknown> }> => {
     const request: ApiRequest = {
-      method: 'POST',
+      method,
       path,
       query: new URLSearchParams(),
       headers: token === null ? {} : { authorization: `Bearer ${token}` },
       body,
     };
     const result = await dispatch(request, options());
-    return { status: result.status, body: result.body as Record<string, unknown> };
+    // What a socket carries: JSON, so an instant is a string here as it is on the Mac.
+    return { status: result.status, body: JSON.parse(JSON.stringify(result.body ?? null)) as Record<string, unknown> };
   };
 
   const command = (extra: Record<string, unknown> = {}): Record<string, unknown> => ({
@@ -265,6 +275,62 @@ describe('the sequence, template and enrollment routes', () => {
     );
     expect(again.status).toBe(409);
     expect(again.body['reason']).toBe('contact_already_enrolled');
+  });
+
+  it('answers every read the sequence editor makes in exactly the shape @fss/contracts declares (lane g78)', async () => {
+    // D01 and D02: the Mac's own copies refused every populated version (the step's
+    // `sequenceVersionId`) and every populated enrollment list (four missing fields).
+    // `wireDrift` is the contract's parse plus the keys a stripping parse would drop, so
+    // an undeclared key, a missing one or a value outside a vocabulary fails here.
+    const sequences = await post('/sequences', adminToken, undefined, 'GET');
+    expect(sequences.status).toBe(200);
+    expect(wireDrift(sequencesResponseSchema, sequences.body)).toEqual([]);
+
+    const versions = await post('/sequences/versions', adminToken, { sequenceId });
+    expect(versions.status).toBe(200);
+    expect(wireDrift(sequenceVersionsResponseSchema, versions.body)).toEqual([]);
+    const steps = sequenceVersionsResponseSchema.parse(versions.body).versions.flatMap(version => version.steps);
+    // A populated version, or this proves nothing about the step.
+    expect(steps.length).toBeGreaterThan(0);
+    expect(steps.every(step => step.sequenceVersionId === sequenceVersionId)).toBe(true);
+
+    const templates = await post('/templates', adminToken, {});
+    expect(templates.status).toBe(200);
+    expect(wireDrift(templateVersionsResponseSchema, templates.body)).toEqual([]);
+
+    const enrollments = await post('/enrollments', salespersonToken, {});
+    expect(enrollments.status).toBe(200);
+    expect(wireDrift(enrollmentsResponseSchema, enrollments.body)).toEqual([]);
+    expect(enrollmentsResponseSchema.parse(enrollments.body).enrollments.length).toBeGreaterThan(0);
+  });
+
+  it('answers a LinkedIn handoff in the shape @fss/contracts declares (lane g78)', async () => {
+    const contact = await post('/contacts/create', salespersonToken, command({ firmId, fullName: 'Lee Example' }));
+    expect(contact.status).toBe(200);
+    const created = await post('/sequences/create', adminToken, command({ name: 'LinkedIn first' }));
+    const linkedInSequenceId = String(resultOf(created)['id']);
+    const draft = await post(
+      '/sequences/versions/draft',
+      adminToken,
+      command({
+        sequenceId: linkedInSequenceId,
+        steps: [{ ordinal: 1, channel: 'linkedin_task', delay: { unit: 'elapsed', hours: 0 }, linkedInMessage: 'Hello.' }],
+      }),
+    );
+    const versionId = String(resultOf(draft)['sequenceVersionId']);
+    expect((await post('/sequences/versions/publish', adminToken, command({ sequenceVersionId: versionId }))).status).toBe(200);
+    const enrolled = await post(
+      '/enrollments/enroll',
+      salespersonToken,
+      command({ sequenceVersionId: versionId, opportunityId, firmId, contactId: String(resultOf(contact)['id']) }),
+    );
+    expect(enrolled.status).toBe(200);
+    const executions = await post('/enrollments/steps', salespersonToken, { enrollmentId: String(resultOf(enrolled)['enrollmentId']) });
+    const stepExecutionId = String((executions.body['steps'] as { id: string }[])[0]?.id ?? '');
+
+    const handoff = await post('/enrollments/linkedin/complete', salespersonToken, command({ stepExecutionId }));
+    expect(handoff.status).toBe(200);
+    expect(wireDrift(linkedInHandoffResultSchema, resultOf(handoff))).toEqual([]);
   });
 
   it('answers a path nobody mounted under these roots with not_found', async () => {

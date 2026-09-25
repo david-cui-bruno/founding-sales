@@ -327,5 +327,45 @@ export const mergeConflictSchema = z.strictObject({
 });
 export type MergeConflict = z.infer<typeof mergeConflictSchema>;
 
+// ---------------------------------------------------------------------------
+// What the Mac parses back (lane g78)
+//
+// The wrappers around the DTOs above. The CRM window and Administration each declared
+// their own copy of the first three; the board's id map was a record of any strings.
+// Stripping objects, held to the routes by `wireDrift` (`./wire.ts`).
+// ---------------------------------------------------------------------------
+
+/** `GET /pipeline/stages`. */
+export const pipelineStagesResponseSchema = z.object({ stages: z.array(pipelineStageDtoSchema) });
+export type PipelineStagesResponse = z.infer<typeof pipelineStagesResponseSchema>;
+
+/** `GET /firms`: Appendix F row 1 for every firm the caller may list. */
+export const firmListResponseSchema = z.object({ firms: z.array(firmIdentityDtoSchema) });
+export type FirmListResponse = z.infer<typeof firmListResponseSchema>;
+
+/** `POST /pipeline/board`: `PipelineBoardDto` in `packages/domain/crm/board.ts`. */
+export const pipelineBoardResponseSchema = z.object({
+  columns: z.array(z.object({ stage: pipelineStageDtoSchema, firms: z.array(firmIdentityDtoSchema) })),
+  /** Firm id to its open opportunity id, only for the firms this caller may change. */
+  opportunityIdByFirmId: z.record(uuid, uuid),
+  unplacedFirms: z.array(firmIdentityDtoSchema),
+});
+export type PipelineBoardResponse = z.infer<typeof pipelineBoardResponseSchema>;
+
+/**
+ * A refused `POST /merges/firms` or `/merges/contacts` (audit item D05).
+ *
+ * `conflicts` is present when the refusal is `merge_conflicts`, on the first answer and,
+ * since lane g78, on a replay too: the receipt keeps the conflicts beside the reason, so
+ * a Mac that retries the same command id still reaches the conflict screen.
+ */
+export const mergeRefusalSchema = z.object({
+  status: z.literal('refused'),
+  replayed: z.boolean(),
+  reason: z.string().min(1).max(80),
+  conflicts: z.array(mergeConflictSchema).optional(),
+});
+export type MergeRefusal = z.infer<typeof mergeRefusalSchema>;
+
 /** Kept exported so a caller can assert a value is really an E.164 route. */
 export { e164 as phoneRouteValueSchema };

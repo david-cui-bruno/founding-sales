@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { outboundStatusResponseSchema, wireDrift } from '@fss/contracts';
 import { dispatch, type ApiRequest } from '../src/server.ts';
 import {
   createAuthFixture,
@@ -46,7 +47,7 @@ describe('the outbound admin routes', () => {
       body,
     };
     const result = await dispatch(request, options());
-    return { status: result.status, body: result.body as Record<string, unknown> };
+    return { status: result.status, body: JSON.parse(JSON.stringify(result.body ?? null)) as Record<string, unknown> };
   };
 
   const command = (extra: Record<string, unknown> = {}): Record<string, unknown> => ({
@@ -191,6 +192,8 @@ describe('the outbound admin routes', () => {
   it('reports the domain, the guard headroom and the doubt, and no message content', async () => {
     const status = await post('/outbound/status', adminToken, {});
     expect(status.status).toBe(200);
+    // The whole answer, in the shape `@fss/contracts` declares since lane g78.
+    expect(wireDrift(outboundStatusResponseSchema, status.body)).toEqual([]);
     const body = status.body as {
       domain: { domain: string; automatedSendingEnabled: boolean };
       guard: { guard: number; headroom: number; applies: boolean };

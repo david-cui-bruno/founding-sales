@@ -4,6 +4,7 @@ import { buildReplyCardView, buildReplyView, replyNotice } from '../src/renderer
 import { REPLY_IPC_CHANNELS, createReplyBridge } from '../src/main/replyBridge.ts';
 import { createAuthedClient } from '../src/main/authedClient.ts';
 import type { HttpAnswer } from '../src/main/apiClient.ts';
+import { classifierSettingsAnswer, confirmReplyResultAnswer, replyConfirmationAnswer } from './support/replyAnswers.ts';
 
 /**
  * The reply card window and the bridge behind it (specification 8.3, 12.4, 14.2).
@@ -52,8 +53,8 @@ function card(overrides: Partial<ReplyCard> = {}): ReplyCard {
           holdId: HOLD_ID,
           opportunityId: OPPORTUNITY_ID,
           reasonCode: 'uncertain_reply',
-          blockedActionKinds: ['email'],
-          recoveryAction: 'confirm_disposition',
+          blockedActionKinds: ['email_send'],
+          recoveryAction: 'confirm_reply',
           recoverable: true,
           startedAt: '2026-09-21T13:00:05.000Z',
         },
@@ -293,17 +294,10 @@ const lane = (cards: readonly ReplyCard[]): HttpAnswer => ({
   status: 200,
   body: { businessDate: '2026-09-21', cards },
 });
-const settings: HttpAnswer = {
-  status: 200,
-  body: { enabled: true, modelName: 'claude-opus-5', effort: 'low' },
-};
+const settings: HttpAnswer = { status: 200, body: classifierSettingsAnswer() };
 const confirmed: HttpAnswer = {
   status: 200,
-  body: {
-    status: 'accepted',
-    replayed: false,
-    result: { suggestsLost: false, confirmation: { disposition: 'follow_up_later' } },
-  },
+  body: { status: 'accepted', replayed: false, result: confirmReplyResultAnswer() },
 };
 
 describe('the reply bridge', () => {
@@ -392,7 +386,10 @@ describe('the reply bridge', () => {
         body: {
           status: 'accepted',
           replayed: false,
-          result: { suggestsLost: true, confirmation: { disposition: 'not_interested' } },
+          result: confirmReplyResultAnswer({
+            suggestsLost: true,
+            confirmation: replyConfirmationAnswer({ disposition: 'not_interested' }),
+          }),
         },
       },
     });
@@ -429,5 +426,31 @@ describe('the reply bridge', () => {
     expect(after.open).toBeNull();
     expect(after.notice).toBe('already_confirmed');
     expect(replyNotice(after.notice ?? '')).toBe('Somebody already answered this reply.');
+  });
+});
+
+describe('the classifier line at every effort the server accepts (lane g78, D03)', () => {
+  it('reads xhigh and max, which 1.0.4 turned into "no classifier"', async () => {
+    for (const effort of ['low', 'medium', 'high', 'xhigh', 'max'] as const) {
+      const { api } = scriptedApi({
+        '/replies': lane([card()]),
+        '/replies/settings': { status: 200, body: classifierSettingsAnswer({ effort }) },
+      });
+      const after = await createReplyBridge({ api, session: session() }).refresh();
+      expect(after.classifier, effort).toEqual({ enabled: true, modelName: 'claude-opus-5', effort });
+      expect(buildReplyView(after, null).classifierLine, effort).toBe(`Suggestions come from claude-opus-5 at ${effort} effort.`);
+    }
+  });
+
+  it('keeps the caps and the update metadata on the server', async () => {
+    const { api } = scriptedApi({
+      '/replies': lane([card()]),
+      '/replies/settings': {
+        status: 200,
+        body: classifierSettingsAnswer({ effort: 'max', updatedByUserId: USER_ID, updatedAt: '2026-09-21T12:00:00.000Z' }),
+      },
+    });
+    const after = await createReplyBridge({ api, session: session() }).refresh();
+    expect(Object.keys(after.classifier ?? {}).sort()).toEqual(['effort', 'enabled', 'modelName']);
   });
 });

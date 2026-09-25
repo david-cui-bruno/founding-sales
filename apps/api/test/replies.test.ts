@@ -1,5 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import {
+  classifierSettingsResponseSchema,
+  confirmReplyResultSchema,
+  replyCardDtoSchema,
+  replyListResponseSchema,
+  wireDrift,
+} from '@fss/contracts';
 import { dispatch, type ApiRequest } from '../src/server.ts';
 import { localNoopSuppressionJournal } from '../src/journal/index.ts';
 import {
@@ -48,7 +55,8 @@ describe('reply card routes', () => {
       body,
     };
     const result = await dispatch(request, options());
-    return { status: result.status, body: result.body as Record<string, unknown> };
+    // What a socket carries: JSON, so an instant is a string here as it is on the Mac.
+    return { status: result.status, body: JSON.parse(JSON.stringify(result.body ?? null)) as Record<string, unknown> };
   };
 
   const command = (extra: Record<string, unknown> = {}): Record<string, unknown> => ({
@@ -193,12 +201,30 @@ describe('reply card routes', () => {
     expect(unknownModel.status).toBe(400);
   });
 
+  it('answers the card, the lane and the settings at every effort in the shape @fss/contracts declares (lane g78)', async () => {
+    const card = await post('/replies/card', assigneeToken, { messageId });
+    expect(wireDrift(replyCardDtoSchema, card.body)).toEqual([]);
+    const list = await post('/replies', assigneeToken, {});
+    expect(wireDrift(replyListResponseSchema, list.body)).toEqual([]);
+
+    // D03: the Mac's copy stopped at `high`, so a workspace at `xhigh` or `max` read back
+    // as no classifier at all. Every effort the command accepts has to read back.
+    for (const effort of ['low', 'medium', 'high', 'xhigh', 'max'] as const) {
+      expect((await post('/replies/settings/update', adminToken, command({ effort }))).status, effort).toBe(200);
+      const read = await post('/replies/settings', assigneeToken, {});
+      expect(wireDrift(classifierSettingsResponseSchema, read.body), effort).toEqual([]);
+      expect(read.body['effort'], effort).toBe(effort);
+    }
+    expect((await post('/replies/settings/update', adminToken, command({ effort: 'low' }))).status).toBe(200);
+  });
+
   it('confirms once: a replayed command id returns the original result rather than confirming twice', async () => {
     const body = command({ messageId, disposition: 'interested' });
     const first = await post('/replies/confirm', assigneeToken, body);
     expect(first.status).toBe(200);
     expect(first.body['replayed']).toBe(false);
     const result = first.body['result'] as Record<string, unknown>;
+    expect(wireDrift(confirmReplyResultSchema, result)).toEqual([]);
     expect((result['confirmation'] as Record<string, unknown>)['disposition']).toBe('interested');
     expect(result['suggestsLost']).toBe(false);
 
@@ -212,6 +238,8 @@ describe('reply card routes', () => {
     expect(second.body['reason']).toBe('already_confirmed');
 
     const after = await post('/replies/card', assigneeToken, { messageId });
+    // A card with its confirmation on it, in the contract's shape too.
+    expect(wireDrift(replyCardDtoSchema, after.body)).toEqual([]);
     expect(after.body['nextAction']).toBe('nothing_to_do');
     // The person accepted the model's preselection, so this is a confirmation and
     // not a correction — which is what 12.4 asks the audit to be able to tell apart.

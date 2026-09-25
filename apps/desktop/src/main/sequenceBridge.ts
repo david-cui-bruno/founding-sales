@@ -1,13 +1,11 @@
-import { z } from 'zod';
 import {
-  enrollmentSchema,
-  linkedInCardSchema,
-  sequenceSummarySchema,
-  sequenceVersionSchema,
-  templateVersionSchema,
-  type LinkedInCard,
-  type SequenceState,
-} from '../renderer/sequenceContract.ts';
+  enrollmentsResponseSchema,
+  linkedInHandoffResultSchema,
+  sequenceVersionsResponseSchema,
+  sequencesResponseSchema,
+  templateVersionsResponseSchema,
+} from '@fss/contracts';
+import { linkedInCardSchema, type LinkedInCard, type SequenceState } from '../renderer/sequenceContract.ts';
 import { EMPTY_SEQUENCE_STATE } from '../renderer/sequenceView.ts';
 import type { AuthedClient } from './authedClient.ts';
 
@@ -51,21 +49,12 @@ export const SEQUENCE_IPC_CHANNELS = {
 } as const;
 export type SequenceIpcChannel = (typeof SEQUENCE_IPC_CHANNELS)[keyof typeof SEQUENCE_IPC_CHANNELS];
 
-const sequencesAnswer = z.object({ sequences: z.array(sequenceSummarySchema) });
-const versionsAnswer = z.object({ versions: z.array(sequenceVersionSchema) });
-const templatesAnswer = z.object({ templates: z.array(templateVersionSchema) });
-const enrollmentsAnswer = z.object({
-  asOf: z.string().min(1),
-  enrollments: z.array(enrollmentSchema),
-});
-
-/** What `/enrollments/linkedin/complete` returns inside the command envelope. */
-const linkedInHandoffSchema = z.object({
-  stepExecutionId: z.string(),
-  linkedInUrl: z.string().nullable(),
-  message: z.string(),
-  undoUntil: z.string().nullable(),
-});
+/*
+ * Every answer is parsed with `@fss/contracts`' schema for its route (lane g78), the one
+ * the route's own test holds the real answer to. The window's projection — which
+ * enrollments are held, which clock the undo is compared with — is made below, from a
+ * parse that already agrees with the server.
+ */
 
 export interface SequenceBridgeDeps {
   readonly api: AuthedClient;
@@ -127,6 +116,12 @@ export function createSequenceBridge(deps: SequenceBridgeDeps): SequenceBridgeHo
    * rule is that the client shows what it has and fails mutations closed, and a
    * window that went blank because one list was unavailable would be worse than one
    * that shows three of four.
+   *
+   * Empty is not the same as unavailable, though (lane g78, D06). Until g78 a failed
+   * read became an empty list and nothing else, so every version and enrollment
+   * list the Mac could not parse looked exactly like a workspace with none. Each
+   * slice now carries its read's refusal code in `readErrors`, and the window says
+   * it could not read that part, with Retry, instead of drawing an empty list.
    */
   const compose = async (): Promise<SequenceState> => {
     const session = await deps.session.state();
@@ -135,18 +130,18 @@ export function createSequenceBridge(deps: SequenceBridgeDeps): SequenceBridgeHo
       return { ...EMPTY_SEQUENCE_STATE, isAdmin, notice, linkedInCard };
     }
 
-    const sequences = await deps.api.read('/sequences', value => sequencesAnswer.parse(value));
+    const sequences = await deps.api.read('/sequences', value => sequencesResponseSchema.parse(value));
     const list = sequences.ok ? sequences.value.sequences : [];
     const chosen = selectedSequenceId ?? list[0]?.id ?? null;
 
     const versions =
       chosen === null
         ? null
-        : await deps.api.read('/sequences/versions', value => versionsAnswer.parse(value), {
+        : await deps.api.read('/sequences/versions', value => sequenceVersionsResponseSchema.parse(value), {
             sequenceId: chosen,
           });
-    const templates = await deps.api.read('/templates', value => templatesAnswer.parse(value), {});
-    const enrollments = await deps.api.read('/enrollments', value => enrollmentsAnswer.parse(value), {});
+    const templates = await deps.api.read('/templates', value => templateVersionsResponseSchema.parse(value), {});
+    const enrollments = await deps.api.read('/enrollments', value => enrollmentsResponseSchema.parse(value), {});
 
     return {
       online: true,
@@ -161,6 +156,12 @@ export function createSequenceBridge(deps: SequenceBridgeDeps): SequenceBridgeHo
       heldEnrollments: enrollments.ok
         ? enrollments.value.enrollments.filter(entry => entry.state === 'review_required')
         : [],
+      readErrors: {
+        sequences: sequences.ok ? null : sequences.reason,
+        versions: versions === null || versions.ok ? null : versions.reason,
+        templates: templates.ok ? null : templates.reason,
+        enrollments: enrollments.ok ? null : enrollments.reason,
+      },
       linkedInCard,
       notice,
     };
@@ -202,7 +203,7 @@ export function createSequenceBridge(deps: SequenceBridgeDeps): SequenceBridgeHo
       const answer = await deps.api.command(
         '/enrollments/linkedin/complete',
         input,
-        value => linkedInHandoffSchema.parse(value),
+        value => linkedInHandoffResultSchema.parse(value),
       );
       if (!answer.ok) {
         notice = answer.reason;

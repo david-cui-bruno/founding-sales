@@ -30,13 +30,44 @@ import { payloadHashOf } from './tokens.ts';
  * id and it is still free. That is the preserved upgrade path of Appendix G 40.
  */
 
+/**
+ * What a refusal may carry beside its code: the typed facts a person needs to act on
+ * it, such as a merge's conflicts (lane g78, audit item D05). Kept on the receipt with
+ * the reason, so a replay of the same command id answers with the same details rather
+ * than with a bare code the Mac cannot draw a screen from.
+ */
+export type RefusalDetails = Readonly<Record<string, unknown>>;
+
 export type CommandWorkResult<T> =
   | { readonly status: 'accepted'; readonly result: T }
-  | { readonly status: 'refused'; readonly reason: string };
+  | { readonly status: 'refused'; readonly reason: string; readonly details?: RefusalDetails };
 
 export type CommandOutcome<T> =
   | { readonly status: 'accepted'; readonly result: T; readonly replayed: boolean }
-  | { readonly status: 'refused'; readonly reason: string; readonly replayed: boolean };
+  | { readonly status: 'refused'; readonly reason: string; readonly replayed: boolean; readonly details?: RefusalDetails };
+
+/**
+ * The receipt's `result` for a refusal: the reason as a JSON string, as every receipt
+ * before lane g78 stored it, or `{ reason, details }` when the refusal carried details.
+ * Both are read back by `refusalOfReceipt`, so the old receipts replay unchanged.
+ */
+function storedRefusal(reason: string, details: RefusalDetails | undefined): string {
+  return JSON.stringify(details === undefined ? reason : { reason, details });
+}
+
+function refusalOfReceipt(result: unknown): { readonly reason: string; readonly details?: RefusalDetails } {
+  if (typeof result === 'string') return { reason: result };
+  if (typeof result === 'object' && result !== null && !Array.isArray(result)) {
+    const stored = result as { reason?: unknown; details?: unknown };
+    if (typeof stored.reason === 'string') {
+      const details = stored.details;
+      return typeof details === 'object' && details !== null && !Array.isArray(details)
+        ? { reason: stored.reason, details: details as RefusalDetails }
+        : { reason: stored.reason };
+    }
+  }
+  return { reason: 'refused' };
+}
 
 export interface CommandRequest {
   readonly commandId: string;
@@ -93,8 +124,7 @@ export async function runCommand<T>(
       return { status: 'refused', reason: 'command_kind_mismatch', replayed: false };
     }
     if (row.result_status === 'refused') {
-      const reason = typeof row.result === 'string' ? row.result : 'refused';
-      return { status: 'refused', reason, replayed: true };
+      return { status: 'refused', ...refusalOfReceipt(row.result), replayed: true };
     }
     return { status: 'accepted', result: row.result as T, replayed: true };
   };
@@ -110,7 +140,7 @@ export async function runCommand<T>(
           ? NON_ACTIONABLE_REPLAY_KINDS.has(request.kind)
             ? null
             : JSON.stringify(outcome.result ?? null)
-          : JSON.stringify(outcome.reason);
+          : storedRefusal(outcome.reason, outcome.details);
       await deps.db.query(
         `INSERT INTO command_receipts (workspace_id, device_id, command_id, command_kind, payload_hash, result_status, result)
          VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)`,
@@ -126,7 +156,12 @@ export async function runCommand<T>(
       );
       return outcome.status === 'accepted'
         ? { status: 'accepted', result: outcome.result, replayed: false }
-        : { status: 'refused', reason: outcome.reason, replayed: false };
+        : {
+            status: 'refused',
+            reason: outcome.reason,
+            replayed: false,
+            ...(outcome.details === undefined ? {} : { details: outcome.details }),
+          };
     });
   } catch (error) {
     // Two commands with one id raced. The transaction rolled back, so at most one

@@ -1,8 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { z } from 'zod';
+import { todayFirmResponseSchema, todaySnoozeResultSchema } from '@fss/contracts';
 import {
-  todayCardSchema,
-  todayFirmSchema,
   todayStateSchema,
   type DialRequest,
   type OutcomeRequest,
@@ -49,12 +47,11 @@ export const TODAY_IPC_CHANNELS = {
 } as const;
 export type TodayIpcChannel = (typeof TODAY_IPC_CHANNELS)[keyof typeof TODAY_IPC_CHANNELS];
 
-/** The list shape, for a caller that reads `/today` directly rather than the cache. */
-export const todayListSchema = z.object({
-  snapshotDate: z.iso.date(),
-  businessTimeZone: z.string().min(1).max(64),
-  cards: z.array(todayCardSchema),
-});
+/*
+ * `/today/firm` and the snooze result are parsed with `@fss/contracts`' schemas (lane
+ * g78). The list itself is read by the session manager, through `apiClient.today`, into
+ * the cache; the second copy of its schema that stood here was used by nothing.
+ */
 
 /** What the bridge needs from the rest of the process. All of it injectable. */
 export interface TodayBridgeDeps {
@@ -155,7 +152,7 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
   const loadExpansion = async (firmId: string): Promise<void> => {
     // One read: the tasks, the routes with the versions `authorizeDial` will compare,
     // and the actor's own calling identity, all at one instant (9.2 step 3).
-    const page = await deps.api.read('/today/firm', value => todayFirmSchema.parse(value), { firmId });
+    const page = await deps.api.read('/today/firm', value => todayFirmResponseSchema.parse(value), { firmId });
     if (!page.ok) {
       expanded = null;
       note(page, null);
@@ -202,7 +199,7 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
       const answer = await deps.api.command(
         '/today/snooze',
         { itemId: input.itemId, reason: input.reason, returnAt },
-        value => z.object({ outcome: z.enum(['snoozed', 'held']) }).parse(value),
+        value => todaySnoozeResultSchema.parse(value),
       );
       if (note(answer, null) && answer.ok) notice = answer.value.outcome;
       if (expanded !== null) await loadExpansion(expanded.firmId);

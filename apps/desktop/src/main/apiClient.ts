@@ -2,6 +2,7 @@ import {
   clientVersionNoticeSchema,
   sessionGrantSchema,
   sessionRenewalSchema,
+  todayListResponseSchema,
   type ClientVersionNotice,
   type SessionGrant,
   type SessionRenewal,
@@ -20,8 +21,12 @@ import { cachedTodaySchema, signInHandoffSchema, type CachedToday, type SignInHa
 
 export type ApiOutcome<T> =
   | { readonly ok: true; readonly value: T }
-  /** The API answered and refused, with one of its stable codes. */
-  | { readonly ok: false; readonly reason: string; readonly offline: false }
+  /**
+   * The API answered and refused, with one of its stable codes. `refusal` is the
+   * refusal's whole body, unparsed, for the one caller that has typed details to read
+   * out of it — a merge's conflicts (lane g78, D05). Everyone else reads `reason`.
+   */
+  | { readonly ok: false; readonly reason: string; readonly offline: false; readonly refusal?: unknown }
   /** The API did not answer at all. The client may show its cache, marked stale. */
   | { readonly ok: false; readonly reason: 'offline'; readonly offline: true };
 
@@ -134,7 +139,13 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
       return outcome.ok ? { ok: true, value: null } : outcome;
     },
     async today(accessToken) {
-      return parsed(await call('/today', { method: 'GET', accessToken }), value => cachedTodaySchema.parse(value));
+      // The wire contract first, which drops a key the API added and this build does not
+      // know; then the cache's own strict shape, which is what may be written to disk
+      // (lane g78). Before g78 the cache schema read the wire directly, so any field the
+      // API added would have made every Mac refuse its own Today list.
+      return parsed(await call('/today', { method: 'GET', accessToken }), value =>
+        cachedTodaySchema.parse(todayListResponseSchema.parse(value)),
+      );
     },
   };
 }
